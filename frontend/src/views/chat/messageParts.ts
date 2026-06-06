@@ -1,0 +1,667 @@
+/**
+ * 会话消息 content.parts 与 UI 对齐（PRD：聊天记录 / SSE）
+ */
+
+export type ToolRunStatus = 'running' | 'success' | 'error'
+
+export interface TextUiPart {
+  id: string
+  type: 'text'
+  content: string
+  status?: string
+  parentTaskCallId?: string
+}
+
+export interface ReasoningUiPart {
+  id: string
+  type: 'reasoning'
+  content: string
+  status?: string
+  parentTaskCallId?: string
+}
+
+export interface ToolUiPart {
+  id: string
+  type: 'tool'
+  toolCallId?: string
+  toolName: string
+  input: Record<string, unknown>
+  output: string
+  status: ToolRunStatus
+  error?: string | null
+  durationMs?: number
+  /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
+  parentTaskCallId?: string
+}
+
+export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart
+
+export function partParentTaskCallId(part: UiPart): string | undefined {
+  const raw = part.parentTaskCallId
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+}
+
+export interface MessageContentV1 {
+  version: 1
+  parts: UiPart[]
+}
+
+export function genPartId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
+}
+
+export function emptyMessageContent(): MessageContentV1 {
+  return { version: 1, parts: [] }
+}
+
+const REDACTED_OPEN = '<think>'
+const REDACTED_CLOSE = '</think>'
+
+function coerceToolStatus(p: Record<string, unknown>): ToolRunStatus {
+  if (p.status === 'error' || p.error != null) {
+    return 'error'
+  }
+  if (p.status === 'running' || p.status === 'streaming') {
+    return 'running'
+  }
+  return 'success'
+}
+
+/** 将已落库的整段 text（含成对标签）拆成 text / reasoning 部件，供历史列表与折叠 UI 使用 */
+function expandRedactedThinkingInPlainText(text: string): Array<{ kind: 'text' | 'reasoning', value: string }> {
+  const segments: Array<{ kind: 'text' | 'reasoning', value: string }> = []
+  let mode: 'text' | 'thinking' = 'text'
+  let buf = text
+  while (buf.length > 0) {
+    if (mode === 'text') {
+      const idx = buf.indexOf(REDACTED_OPEN)
+      if (idx === -1) {
+        segments.push({ kind: 'text', value: buf })
+        break
+      }
+      if (idx > 0) {
+        segments.push({ kind: 'text', value: buf.slice(0, idx) })
+      }
+      buf = buf.slice(idx + REDACTED_OPEN.length)
+      mode = 'thinking'
+      continue
+    }
+    const idx = buf.indexOf(REDACTED_CLOSE)
+    if (idx === -1) {
+      segments.push({ kind: 'reasoning', value: buf })
+      break
+    }
+    if (idx > 0) {
+      segments.push({ kind: 'reasoning', value: buf.slice(0, idx) })
+    }
+    buf = buf.slice(idx + REDACTED_CLOSE.length)
+    mode = 'text'
+  }
+  return segments.filter((s) => s.value.length > 0)
+}
+
+function expandRedactedThinkingInParts(parts: UiPart[]): UiPart[] {
+  const out: UiPart[] = []
+  for (const p of parts) {
+    if (p.type !== 'text' || !p.content.includes(REDACTED_OPEN)) {
+      out.push(p)
+      continue
+    }
+    const status = p.status || 'completed'
+    const segs = expandRedactedThinkingInPlainText(p.content)
+    if (segs.length === 0) {
+      const stripped = p.content.replace(/<think>\s*<\/redacted_thinking>/g, '')
+      out.push(stripped === p.content ? p : { ...p, content: stripped })
+      continue
+    }
+    for (const seg of segs) {
+      if (seg.kind === 'text') {
+        out.push({
+          id: genPartId('text'),
+          type: 'text',
+          content: seg.value,
+          status,
+        })
+      } else {
+        out.push({
+          id: genPartId('reasoning'),
+          type: 'reasoning',
+          content: seg.value,
+          status: 'completed',
+        })
+      }
+    }
+  }
+  return out
+}
+
+/** 将流式思考段标为已完成（redacted 闭合或 SSE reasoning-end） */
+export function completeLastReasoningPart(parts: UiPart[]): UiPart[] {
+  const next = parts.map((q) => ({ ...q })) as UiPart[]
+  for (let i = next.length - 1; i >= 0; i--) {
+    const cur = next[i]
+    if (cur.type === 'reasoning') {
+      const r = cur as ReasoningUiPart
+      if (r.status !== 'completed') {
+        next[i] = { ...r, status: 'completed' }
+      }
+      return next
+    }
+  }
+  return next
+}
+
+/** API 落库可能把 list 等放在 input/arguments，统一包成 Record 便于 UI 展示 */
+function normalizeToolPartInput(inputRaw: unknown): Record<string, unknown> {
+  if (inputRaw == null) {
+    return {}
+  }
+  if (typeof inputRaw === 'string') {
+    const t = inputRaw.trim()
+    if (!t) {
+      return {}
+    }
+    try {
+      const parsed = JSON.parse(t) as unknown
+      return normalizeToolPartInput(parsed)
+    } catch {
+      return { _tw_raw: inputRaw }
+    }
+  }
+  if (Array.isArray(inputRaw)) {
+    return { _tw_args: inputRaw }
+  }
+  if (typeof inputRaw === 'object') {
+    return inputRaw as Record<string, unknown>
+  }
+  return { _tw_value: inputRaw }
+}
+
+export function normalizeApiContent(raw: unknown): MessageContentV1 {
+  let obj: any = raw
+  if (typeof raw === 'string') {
+    try {
+      obj = JSON.parse(raw)
+    } catch {
+      if (raw.trim()) {
+        const parts = expandRedactedThinkingInParts([
+          { id: genPartId('text'), type: 'text', content: raw, status: 'completed' },
+        ])
+        return { version: 1, parts }
+      }
+      return emptyMessageContent()
+    }
+  }
+  if (obj == null || typeof obj !== 'object') {
+    return emptyMessageContent()
+  }
+
+  const partsIn = obj.parts
+  if (!Array.isArray(partsIn)) {
+    return emptyMessageContent()
+  }
+
+  const parts: UiPart[] = []
+  for (const p of partsIn) {
+    if (!p || typeof p !== 'object') {
+      continue
+    }
+    const rec = p as Record<string, unknown>
+    const id = typeof rec.id === 'string' && rec.id ? rec.id : genPartId(String(rec.type || 'p'))
+    const parentTaskCallId = (() => {
+      const raw = rec.parentTaskCallId ?? rec.parent_task_call_id
+      return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+    })()
+    if (rec.type === 'text') {
+      parts.push({
+        id,
+        type: 'text',
+        content: String(rec.content ?? ''),
+        status: String(rec.status || 'completed'),
+        ...(parentTaskCallId ? { parentTaskCallId } : {}),
+      })
+    } else if (rec.type === 'reasoning') {
+      parts.push({
+        id,
+        type: 'reasoning',
+        content: String(rec.content ?? ''),
+        status: String(rec.status || 'completed'),
+        ...(parentTaskCallId ? { parentTaskCallId } : {}),
+      })
+    } else if (rec.type === 'tool') {
+      const inputRaw = rec.input ?? rec.arguments
+      const input = normalizeToolPartInput(inputRaw)
+      const hasOutput = typeof rec.output === 'string' && rec.output.length > 0
+      let status = coerceToolStatus(rec)
+      if (status === 'running' && hasOutput) {
+        status = 'success'
+      }
+      parts.push({
+        id,
+        type: 'tool',
+        toolCallId: (rec.toolCallId ?? rec.tool_call_id) as string | undefined,
+        toolName: String(rec.toolName ?? rec.name ?? rec.tool ?? ''),
+        input,
+        output: typeof rec.output === 'string' ? rec.output : '',
+        status,
+        error: rec.error != null ? String(rec.error) : null,
+        durationMs: rec.durationMs != null
+          ? Number(rec.durationMs)
+          : rec.duration_ms != null
+            ? Number(rec.duration_ms)
+            : undefined,
+        parentTaskCallId: (() => {
+          const raw = rec.parentTaskCallId ?? rec.parent_task_call_id
+          return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+        })(),
+      })
+    }
+  }
+  return { version: 1, parts: expandRedactedThinkingInParts(parts) }
+}
+
+export function syncLegacyFieldsFromParts(parts: UiPart[]): { content: string, reasoning?: string } {
+  let content = ''
+  let reasoning = ''
+  for (const p of parts) {
+    if (p.type === 'text') {
+      content += p.content
+    }
+    if (p.type === 'reasoning') {
+      reasoning += p.content
+    }
+  }
+  return { content, reasoning: reasoning || undefined }
+}
+
+/** 是否仍有流式中的正文 / 思考 / 运行中的工具（用于统一气泡底部工具栏仅在结束时展示） */
+export function assistantPartsStillStreaming(parts: UiPart[]): boolean {
+  return parts.some((p) => {
+    if (p.type === 'text' && p.status === 'streaming') {
+      return true
+    }
+    if (p.type === 'reasoning' && p.status === 'streaming') {
+      return true
+    }
+    if (p.type === 'tool' && p.status === 'running') {
+      return true
+    }
+    return false
+  })
+}
+
+export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
+  return parts.map((p) => {
+    if (p.type === 'text' && p.status === 'streaming') {
+      return { ...p, status: 'completed' }
+    }
+    if (p.type === 'reasoning' && p.status === 'streaming') {
+      return { ...p, status: 'completed' }
+    }
+    if (p.type === 'tool' && p.status === 'running') {
+      return { ...p, status: 'success' }
+    }
+    return p
+  }) as UiPart[]
+}
+
+export interface TokenUsageSummary {
+  input_tokens: number
+  output_tokens: number
+  total_tokens?: number
+}
+
+export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
+  if (!usage || typeof usage !== 'object') {
+    return false
+  }
+  const u = usage as Record<string, unknown>
+  const input = Number(u.input_tokens ?? 0)
+  const output = Number(u.output_tokens ?? 0)
+  return input > 0 || output > 0
+}
+
+export function formatTokenCount(n: number): string {
+  if (n >= 1000) {
+    return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`
+  }
+  return String(n)
+}
+
+export function formatDurationMs(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`
+  }
+  const sec = ms / 1000
+  return sec >= 10 ? `${Math.round(sec)}s` : `${sec.toFixed(1)}s`
+}
+
+export function formatUsageSummary(usage: TokenUsageSummary): string {
+  const total = usage.total_tokens ?? usage.input_tokens + usage.output_tokens
+  return `↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
+}
+
+/** 连接/超时类错误：不向用户展示原始英文栈或重复长文案 */
+export function isConnectionOrTimeoutError(raw: string): boolean {
+  const t = raw.trim().toLowerCase().replace(/\s+/g, ' ')
+  if (!t) {
+    return true
+  }
+  if (/^(?:connection error|failed to fetch|networkerror|network request failed|load failed|fetch error|typeerror:\s*failed to fetch)$/.test(t.replace(/[.。…!！]+$/g, '').trim())) {
+    return true
+  }
+  return /request timed out|timed out|\btimeout\b|apitimeout|connecterror|connection refused|econnrefused|network is unreachable|socket hang up|无法连接|网络异常|网络错误|网络或服务异常/.test(t)
+}
+
+/** LangGraph 递归步数触顶 */
+export function isRecursionLimitError(raw: string): boolean {
+  const t = raw.trim().toLowerCase()
+  return /recursion limit|graphrecursionerror|recursion_limit|已达到最大处理步数/.test(t)
+}
+
+/** 将 SSE/流式错误转为气泡内展示文案；null 表示不追加说明 */
+export function getStreamFailureNoticeText(detail: string | undefined, hasProse: boolean): string | null {
+  const raw = detail?.trim() ?? ''
+  if (isConnectionOrTimeoutError(raw)) {
+    return null
+  }
+  if (isRecursionLimitError(raw)) {
+    return hasProse
+      ? '（已达到最大处理步数，后续内容未能继续生成。）'
+      : '已达到最大处理步数，任务已停止。请精简问题后重试。'
+  }
+  if (!raw) {
+    return hasProse ? null : '生成失败，请稍后重试。'
+  }
+  const DETAIL_MAX = 160
+  const clipped = raw.length > DETAIL_MAX ? `${raw.slice(0, DETAIL_MAX)}…` : raw
+  const head = '生成过程中出现问题，请稍后重试。'
+  return hasProse ? `（后续内容未能生成）\n\n${clipped}` : `${head}\n\n${clipped}`
+}
+
+/** 气泡外：全局 Toast 限制长度，避免异常对象串进提示 */
+export function shortenChatErrorToast(msg: string, maxLen = 72): string {
+  const raw = msg.trim()
+  if (!raw) {
+    return '请求失败'
+  }
+  if (isConnectionOrTimeoutError(raw)) {
+    return '网络异常，请稍后重试'
+  }
+  if (isRecursionLimitError(raw)) {
+    return '已达到最大处理步数'
+  }
+  if (raw.length <= maxLen) {
+    return raw
+  }
+  return `${raw.slice(0, maxLen - 1)}…`
+}
+
+/** 流式失败时在助手气泡内补充可读说明（保留已有正文 / 工具块） */
+export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiPart[] {
+  const completed = markStreamingPartsComplete(parts)
+
+  const hasProse = completed.some((p) => {
+    if (p.type === 'text' || p.type === 'reasoning') {
+      return String((p as TextUiPart | ReasoningUiPart).content ?? '').trim().length > 0
+    }
+    return false
+  })
+
+  const notice = getStreamFailureNoticeText(detail, hasProse)
+  if (notice === null) {
+    return completed
+  }
+
+  if (!hasProse) {
+    if (completed.length === 0) {
+      return [
+        {
+          id: genPartId('text'),
+          type: 'text',
+          content: notice,
+          status: 'completed',
+        },
+      ]
+    }
+    return [
+      ...completed,
+      {
+        id: genPartId('text'),
+        type: 'text',
+        content: notice,
+        status: 'completed',
+      },
+    ]
+  }
+
+  const tail = notice.startsWith('（')
+    ? `\n\n---\n\n*${notice}*`
+    : `\n\n---\n\n*（后续内容未能生成，请稍后重试。）*\n\n${notice}`
+
+  return [
+    ...completed,
+    {
+      id: genPartId('text'),
+      type: 'text',
+      content: tail,
+      status: 'completed',
+    },
+  ]
+}
+
+export function appendTextDelta(
+  parts: UiPart[],
+  delta: string,
+  parentTaskCallId?: string,
+): UiPart[] {
+  const parentId = parentTaskCallId?.trim() || undefined
+  const next = parts.map((p) => ({ ...p })) as UiPart[]
+  const last = next[next.length - 1]
+  if (last?.type === 'text' && partParentTaskCallId(last) === parentId) {
+    const t = last
+    next[next.length - 1] = {
+      ...t,
+      content: t.content + delta,
+      status: t.status === 'completed' ? 'streaming' : (t.status || 'streaming'),
+    }
+    return next
+  }
+  next.push({
+    id: genPartId('text'),
+    type: 'text',
+    content: delta,
+    status: 'streaming',
+    ...(parentId ? { parentTaskCallId: parentId } : {}),
+  })
+  return next
+}
+
+export type RedactedThinkingStreamMode = 'text' | 'thinking'
+
+/** 与 {@link appendTextDeltaWithRedactedThinking} 配合，跨 text-delta 缓冲可能被拆开的标签 */
+export interface RedactedThinkingStreamCtx {
+  mode: RedactedThinkingStreamMode
+  pending: string
+}
+
+export function createRedactedThinkingStreamCtx(): RedactedThinkingStreamCtx {
+  return { mode: 'text', pending: '' }
+}
+
+/** 若末尾可能是完整 token 的真前缀，则暂不输出，留待与下一 chunk 拼接 */
+function takeEmitAndHoldForToken(s: string, token: string): { emit: string, hold: string } {
+  const maxCheck = Math.min(s.length, token.length - 1)
+  for (let k = maxCheck; k >= 1; k--) {
+    const suf = s.slice(-k)
+    if (token.startsWith(suf)) {
+      return { emit: s.slice(0, s.length - k), hold: suf }
+    }
+  }
+  return { emit: s, hold: '' }
+}
+
+/**
+ * 将正文流中的 `<think>…</think>` 拆成 reasoning 部件（折叠展示），其余仍走 text。
+ * 标签可跨多个 SSE chunk；ctx 须在每条助手流开始时 reset，结束时 {@link flushRedactedThinkingStreamCtx}。
+ */
+export function appendTextDeltaWithRedactedThinking(
+  parts: UiPart[],
+  delta: string,
+  ctx: RedactedThinkingStreamCtx,
+  parentTaskCallId?: string,
+): UiPart[] {
+  let out = parts
+  let s = ctx.pending + delta
+  ctx.pending = ''
+
+  while (s.length > 0) {
+    if (ctx.mode === 'text') {
+      const idx = s.indexOf(REDACTED_OPEN)
+      if (idx !== -1) {
+        const before = s.slice(0, idx)
+        if (before) {
+          out = appendTextDelta(out, before, parentTaskCallId)
+        }
+        s = s.slice(idx + REDACTED_OPEN.length)
+        ctx.mode = 'thinking'
+        continue
+      }
+      const { emit, hold } = takeEmitAndHoldForToken(s, REDACTED_OPEN)
+      if (emit) {
+        out = appendTextDelta(out, emit, parentTaskCallId)
+      }
+      ctx.pending = hold
+      return out
+    }
+    const idx = s.indexOf(REDACTED_CLOSE)
+    if (idx !== -1) {
+      const before = s.slice(0, idx)
+      if (before) {
+        out = appendReasoningDelta(out, before, parentTaskCallId)
+      }
+      out = completeLastReasoningPart(out)
+      s = s.slice(idx + REDACTED_CLOSE.length)
+      ctx.mode = 'text'
+      continue
+    }
+    const { emit, hold } = takeEmitAndHoldForToken(s, REDACTED_CLOSE)
+    if (emit) {
+      out = appendReasoningDelta(out, emit, parentTaskCallId)
+    }
+    ctx.pending = hold
+    return out
+  }
+  return out
+}
+
+/** 流结束或中断时把 pending 写入对应部件并回到 text 模式 */
+export function flushRedactedThinkingStreamCtx(
+  parts: UiPart[],
+  ctx: RedactedThinkingStreamCtx,
+): UiPart[] {
+  let out = parts
+  if (ctx.pending) {
+    if (ctx.mode === 'text') {
+      out = appendTextDelta(out, ctx.pending)
+    } else {
+      out = appendReasoningDelta(out, ctx.pending)
+    }
+    ctx.pending = ''
+  }
+  ctx.mode = 'text'
+  return out
+}
+
+export function appendReasoningDelta(
+  parts: UiPart[],
+  delta: string,
+  parentTaskCallId?: string,
+): UiPart[] {
+  const parentId = parentTaskCallId?.trim() || undefined
+  const next = parts.map((p) => ({ ...p })) as UiPart[]
+  const last = next[next.length - 1]
+  if (last?.type === 'reasoning' && partParentTaskCallId(last) === parentId) {
+    const r = last
+    next[next.length - 1] = {
+      ...r,
+      content: r.content + delta,
+      status: 'streaming',
+    }
+    return next
+  }
+  next.push({
+    id: genPartId('reasoning'),
+    type: 'reasoning',
+    content: delta,
+    status: 'streaming',
+    ...(parentId ? { parentTaskCallId: parentId } : {}),
+  })
+  return next
+}
+
+export function upsertToolInputPart(
+  parts: UiPart[],
+  toolCallId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  parentTaskCallId?: string,
+): UiPart[] {
+  const next = parts.map((p) => ({ ...p })) as UiPart[]
+  const idx = next.findIndex((p) => p.type === 'tool' && p.toolCallId === toolCallId)
+  const parentId = parentTaskCallId?.trim() || undefined
+  if (idx !== -1) {
+    const tp = next[idx] as ToolUiPart
+    next[idx] = {
+      ...tp,
+      toolName: toolName || tp.toolName,
+      input,
+      ...(parentId ? { parentTaskCallId: parentId } : {}),
+    }
+    return next
+  }
+  next.push({
+    id: genPartId('tool'),
+    type: 'tool',
+    toolCallId,
+    toolName,
+    input,
+    output: '',
+    status: 'running',
+    ...(parentId ? { parentTaskCallId: parentId } : {}),
+  })
+  return next
+}
+
+export function applyToolOutput(
+  parts: UiPart[],
+  toolCallId: string,
+  payload: { output: string, error?: string, status: 'success' | 'error', durationMs?: number },
+): UiPart[] {
+  const next = parts.map((p) => ({ ...p })) as UiPart[]
+  const idx = next.findIndex((p) => p.type === 'tool' && p.toolCallId === toolCallId)
+  const status: ToolRunStatus = payload.status === 'error' ? 'error' : 'success'
+  if (idx === -1) {
+    next.push({
+      id: genPartId('tool'),
+      type: 'tool',
+      toolCallId,
+      toolName: '',
+      input: {},
+      output: payload.output,
+      status,
+      error: payload.error,
+      durationMs: payload.durationMs,
+    })
+    return next
+  }
+  const tp = next[idx] as ToolUiPart
+  next[idx] = {
+    ...tp,
+    output: payload.output,
+    error: payload.error,
+    status,
+    durationMs: payload.durationMs ?? tp.durationMs,
+  }
+  return next
+}

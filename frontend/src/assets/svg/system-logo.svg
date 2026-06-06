@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5B7CFF"/>
+      <stop offset="100%" stop-color="#3F5EF7"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="512" cy="512" r="430" fill="url(#bg)"/>
+
+  <!-- Hex frame -->
+  <polygon points="512,250 700,358 700,574 512,682 324,574 324,358"
+           fill="none" stroke="white" stroke-width="42" stroke-linejoin="round"/>
+
+  <!-- Central hub -->
+  <circle cx="512" cy="512" r="72" fill="none" stroke="white" stroke-width="36"/>
+
+  <!-- Connections -->
+  <line x1="512" y1="440" x2="512" y2="340" stroke="white" stroke-width="28" stroke-linecap="round"/>
+  <line x1="448" y1="548" x2="360" y2="610" stroke="white" stroke-width="28" stroke-linecap="round"/>
+  <line x1="576" y1="548" x2="664" y2="610" stroke="white" stroke-width="28" stroke-linecap="round"/>
+
+  <circle cx="512" cy="320" r="26" fill="white"/>
+  <circle cx="340" cy="624" r="26" fill="white"/>
+  <circle cx="684" cy="624" r="26" fill="white"/>
+</svg>

@@ -1,0 +1,201 @@
+"""非敏感运行时配置：从 config.yaml 加载（参考 deer-flow）。"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import yaml
+from pydantic import BaseModel, Field
+
+from utils.log_util import logger
+
+
+def _backend_dir() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def resolve_config_path() -> Path:
+    if custom := os.getenv("NOESIS_CONFIG_PATH"):
+        return Path(custom).expanduser().resolve()
+
+    backend = _backend_dir()
+    app_env = os.getenv("APP_ENV", "dev").strip().lower()
+    if app_env == "prod":
+        prod_path = backend / "config.prod.yaml"
+        if prod_path.is_file():
+            return prod_path
+    return backend / "config.yaml"
+
+
+def resolve_env_variables(value: Any) -> Any:
+    """支持 ``$ENV_VAR`` 引用（与 deer-flow 一致）。"""
+    if isinstance(value, str):
+        if value.startswith("$"):
+            env_name = value[1:]
+            resolved = os.getenv(env_name)
+            if resolved is None:
+                raise ValueError(f"环境变量 {env_name} 未设置（config 引用 {value}）")
+            return resolved
+        return value
+    if isinstance(value, dict):
+        return {k: resolve_env_variables(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [resolve_env_variables(item) for item in value]
+    return value
+
+
+class AppYamlSection(BaseModel):
+    name: str = "Noesis-FastAPI"
+    root_path: str = ""
+    host: str = "0.0.0.0"
+    port: int = 8089
+    version: str = "1.0.0"
+    reload: bool = True
+
+
+class JwtYamlSection(BaseModel):
+    algorithm: str = "HS256"
+    expire_minutes: int = 1440
+    redis_expire_minutes: int = 30
+
+
+class DatabaseYamlSection(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = 3306
+    user: str = "root"
+    database: str = "noesis"
+    echo: bool = True
+    max_overflow: int = 10
+    pool_size: int = 50
+    pool_recycle: int = 3600
+    pool_timeout: int = 30
+
+
+class ModelGenerationYamlSection(BaseModel):
+    max_tokens: int = Field(default=32000, ge=1)
+    top_p: float = 0.8
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+    streaming: bool = True
+
+
+class ModelYamlSection(BaseModel):
+    type: str = "qwen"
+    name: str = "qwen-plus"
+    temperature: float = 0.75
+    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_model_name: str = "text-embedding-v4"
+    rerank_model_name: str = "gte-rerank-v2"
+    show_thinking_process: bool = True
+    request_timeout: float = Field(default=30.0, gt=0)
+    max_retries: int = Field(default=2, ge=0)
+    generation: ModelGenerationYamlSection = Field(default_factory=ModelGenerationYamlSection)
+
+
+class SummarizationModelYamlSection(BaseModel):
+    type: str = ""
+    name: str = ""
+    base_url: str = ""
+    temperature: float = 0.0
+
+
+class SummarizationYamlSection(BaseModel):
+    enabled: bool = True
+    model: SummarizationModelYamlSection = Field(default_factory=SummarizationModelYamlSection)
+    trigger_fraction: float = Field(default=0.85, gt=0, le=1)
+    max_input_tokens: int = Field(default=0, ge=0)
+    tool_offload_threshold: int = Field(default=1000, ge=1)
+    max_retention_ratio: float = Field(default=0.6, gt=0, le=1)
+    messages_to_keep: int = Field(default=20, ge=1)
+    max_tokens_before_summary: int = Field(default=4000, ge=1)
+
+
+class LoopDetectionYamlSection(BaseModel):
+    enabled: bool = True
+    warn_threshold: int = Field(default=3, ge=1)
+    hard_limit: int = Field(default=5, ge=2)
+    window_size: int = Field(default=20, ge=1)
+    max_tracked_threads: int = Field(default=100, ge=1)
+    tool_freq_warn: int = Field(default=30, ge=1)
+    tool_freq_hard_limit: int = Field(default=50, ge=1)
+
+
+class ToolCallLimitYamlSection(BaseModel):
+    enabled: bool = True
+    thread_limit: int | None = Field(default=200, ge=1)
+    run_limit: int | None = Field(default=None, ge=1)
+    exit_behavior: str = "continue"
+    task_run_limit: int | None = Field(default=10, ge=1)
+
+
+class AgentRuntimeYamlSection(BaseModel):
+    dangling_tool_call_repair_enabled: bool = True
+    tool_call_limit: ToolCallLimitYamlSection = Field(default_factory=ToolCallLimitYamlSection)
+
+
+class StreamYamlSection(BaseModel):
+    sse_keepalive_interval_seconds: float = Field(default=25.0, ge=0)
+
+
+class QdrantYamlSection(BaseModel):
+    host: str = "localhost"
+    port: int = 6333
+    timeout: int = 5
+    grpc_port: int = 6334
+    prefer_grpc: bool = False
+    default_collection: str = "knowledge_base"
+    requirement_docs_collection: str = "requirement_docs"
+    test_case_docs_collection: str = "test_case_docs"
+    test_case_upload_collection: str = ""
+    case_rag_historical_requirements_enabled: bool = False
+
+
+class LangfuseYamlSection(BaseModel):
+    tracing_enabled: bool = False
+    base_url: str = ""
+
+
+class OtherYamlSection(BaseModel):
+    skills_filesystem_root: str = ""
+
+
+class WebToolsYamlSection(BaseModel):
+    max_search_results: int = Field(default=8, ge=1, le=20)
+    fetch_max_chars: int = Field(default=4096, ge=1)
+    fetch_timeout_seconds: int = Field(default=30, ge=1)
+
+
+class AppYamlConfig(BaseModel):
+    config_version: int = 1
+    app: AppYamlSection = Field(default_factory=AppYamlSection)
+    jwt: JwtYamlSection = Field(default_factory=JwtYamlSection)
+    database: DatabaseYamlSection = Field(default_factory=DatabaseYamlSection)
+    model: ModelYamlSection = Field(default_factory=ModelYamlSection)
+    summarization: SummarizationYamlSection = Field(default_factory=SummarizationYamlSection)
+    loop_detection: LoopDetectionYamlSection = Field(default_factory=LoopDetectionYamlSection)
+    agent_runtime: AgentRuntimeYamlSection = Field(default_factory=AgentRuntimeYamlSection)
+    stream: StreamYamlSection = Field(default_factory=StreamYamlSection)
+    qdrant: QdrantYamlSection = Field(default_factory=QdrantYamlSection)
+    langfuse: LangfuseYamlSection = Field(default_factory=LangfuseYamlSection)
+    other: OtherYamlSection = Field(default_factory=OtherYamlSection)
+    web_tools: WebToolsYamlSection = Field(default_factory=WebToolsYamlSection)
+
+
+@lru_cache
+def load_app_yaml() -> AppYamlConfig:
+    path = resolve_config_path()
+    if not path.is_file():
+        logger.warning(
+            "未找到 config.yaml（{}），使用内置默认；可复制 config.example.yaml",
+            path,
+        )
+        return AppYamlConfig()
+
+    with path.open(encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+
+    resolved = resolve_env_variables(raw)
+    return AppYamlConfig.model_validate(resolved)

@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    wget \
+    ca-certificates \
+    build-essential \
+    pkg-config \
+    default-libmysqlclient-dev \
+    python3-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PYTHONPATH=/app
+
+COPY backend/pyproject.toml backend/uv.lock ./
+
+RUN uv sync --frozen --no-install-project
+
+COPY backend/ ./
+
+RUN uv sync --frozen
+
+EXPOSE 8089
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=90s --retries=5 \
+  CMD wget -qO- http://127.0.0.1:8089/health >/dev/null || exit 1
+
+CMD ["uv", "run", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8089"]

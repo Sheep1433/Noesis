@@ -1,0 +1,47 @@
+# Python-generated files
+__pycache__/
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+dev-tools/
+
+
+.idea
+
+README.assets
+
+# AI IDE 本地配置（不提交）
+.cursor/
+.claude/
+.codex/
+*cache*/
+*.omc/
+*logs*/
+node_modules/
+e2e-tests/node_modules/
+
+
+e2e-tests/
+backend/checkpoints/
+qdrant_storage/
+
+# Agent 离线评测产物
+results/
+
+# Docker 本地环境（从 deploy/.env.docker.example 复制）
+deploy/.env.docker
+
+# 后端本地敏感配置（示例文件 *.example 可提交）
+backend/.env
+backend/.env.prod
+backend/.env.*
+!backend/.env.example
+!backend/.env.prod.example
+backend/config.yaml
+backend/config.prod.yaml
+
+research/
+docs/

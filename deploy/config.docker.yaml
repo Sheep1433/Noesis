@@ -1,0 +1,98 @@
+# Docker Compose 运行时配置（无密钥；挂载到容器 /app/config.yaml）
+
+config_version: 1
+
+app:
+  name: Noesis-FastAPI
+  root_path: ""
+  host: 0.0.0.0
+  port: 8089
+  version: 1.0.0
+  reload: false
+
+jwt:
+  algorithm: HS256
+  expire_minutes: 1440
+  redis_expire_minutes: 30
+
+database:
+  host: host.docker.internal
+  port: 3306
+  user: root
+  database: noesis
+  echo: false
+  max_overflow: 10
+  pool_size: 50
+  pool_recycle: 3600
+  pool_timeout: 30
+
+model:
+  type: qwen
+  name: qwen-plus
+  temperature: 0.75
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  embedding_model_name: text-embedding-v4
+  rerank_model_name: gte-rerank-v2
+  show_thinking_process: true
+  request_timeout: 120
+  max_retries: 2
+  generation:
+    max_tokens: 32000
+    top_p: 0.8
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    streaming: true
+
+summarization:
+  enabled: true
+  model:
+    type: ""
+    name: ""
+    base_url: ""
+    temperature: 0.0
+  trigger_fraction: 0.85
+  max_input_tokens: 0
+  tool_offload_threshold: 1000
+  max_retention_ratio: 0.6
+  messages_to_keep: 20
+  max_tokens_before_summary: 4000
+
+loop_detection:
+  enabled: true
+  warn_threshold: 3
+  hard_limit: 5
+  window_size: 20
+  max_tracked_threads: 100
+  tool_freq_warn: 30
+  tool_freq_hard_limit: 50
+
+agent_runtime:
+  dangling_tool_call_repair_enabled: true
+
+stream:
+  sse_keepalive_interval_seconds: 25
+
+qdrant:
+  host: qdrant
+  port: 6333
+  timeout: 5
+  grpc_port: 6334
+  prefer_grpc: false
+  default_collection: knowledge_base
+  requirement_docs_collection: requirement_docs
+  test_case_docs_collection: test_case_docs
+  test_case_upload_collection: ""
+  case_rag_historical_requirements_enabled: false
+
+langfuse:
+  tracing_enabled: false
+  base_url: http://host.docker.internal:3000
+
+other:
+  skills_filesystem_root: ""
+
+# Web 检索工具（COMMON_QA / DEEP_RESEARCH；TAVILY_API_KEY 见 deploy/.env.docker）
+web_tools:
+  max_search_results: 8
+  fetch_max_chars: 4096
+  fetch_timeout_seconds: 30

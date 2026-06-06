@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-docker-ssh"
+version = "0.1.0"
+description = "MCP Docker SSH tools for remote server operations via pure ssh commands"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=0.1.0",
+    "pyyaml>=6.0",
+    "docker>=7.0.0",
+    "loguru>=0.7.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_docker_ssh"]
+
+[dependency-groups]
+dev = []

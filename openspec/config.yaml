@@ -1,0 +1,30 @@
+schema: spec-driven
+
+# 写入 AI 指令与变更提案时的项目约束（勿在此存放密钥；敏感项仅描述来源如 .env）
+context: |
+  项目：Noesis — Vue 3 + Vite + TypeScript + Naive UI 前端，FastAPI + LangGraph + SQLAlchemy(异步) + MySQL 后端，向量检索 Qdrant，LLM 默认 DashScope 兼容 OpenAI 接口。
+
+  后端分层：api/* → services/* → agent/utils；API 禁止裸 JSON，统一 utils.response_util.ResponseUtil；数据库访问仅在 Service；配置在 config/env.py + pydantic-settings，禁止硬编码密钥。
+
+  前端：Pinia（userStore token 于 sessionStorage）、路由 requiresAuth、聊天 SSE 与 MarkdownPreview；问答类型 qa_type 对齐后端 IntentEnum：COMMON_QA、FAULT_OPERATION_QA、TEST_CASE_QA、DEEP_RESEARCH_QA。
+
+  验证：后端改动后 `uv run app.py`；前端 `pnpm lint` / `pnpm build` 按影响范围执行。HTTP 业务 code 与状态码需一致（404/409 等见仓库 AGENTS.md）。
+
+  OpenSpec：主规格位于 openspec/specs/<capability>/spec.md；变更内 delta 规格在 openspec/changes/<name>/specs/，归档时与主规格对齐。
+
+  主规格目录结构（能力 id = 目录名）：
+  - 4 个 Agent 场景：agent-common-qa、agent-fault-operation、agent-test-case、agent-deep-research
+  - 平台聊天：platform-chat（会话、SSE 桥接、chat 通用 UI、LLM 工厂、qa_type 路由表）
+  - 模块：knowledge-base（含入库分块策略）、skills-filesystem、user-auth、container-deployment、agent-reasoning-observability
+
+rules:
+  proposal:
+    - 用中文撰写；说明背景、目标与非目标；列出受影响的能力 id（openspec/specs 下的目录名）。
+    - 涉及 API/SSE 时写明路径前缀（如 /api/chat）与是否破坏兼容。
+  specs:
+    - 每个 Requirement 使用「系统 SHALL / 用户 SHALL」等可验收表述；Scenario 使用 **WHEN** / **THEN** / **AND**。
+    - Purpose 不少于 50 字符；不复制本 config 中的密钥或示例默认值。
+  design:
+    - 指向具体文件路径与模块；说明数据流、错误与回滚；SSE/Agent 变更需写明事件或状态机约定。
+  tasks:
+    - 任务可独立验证；含前后端时标注接口与 UI 触点；高风险区（JWT、MCP、Qdrant、消息持久化）单列检查项。

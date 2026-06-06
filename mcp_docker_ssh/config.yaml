@@ -1,0 +1,28 @@
+docker:
+  image: "ubuntu:latest"
+
+# Claude Code aligned per-tool limits
+tool_limits:
+  grep_head_limit: 250
+  grep_max_result_chars: 20000
+  glob_max_files: 100
+  glob_max_result_chars: 100000
+  bash_max_result_chars: 30000
+  bash_default_timeout_ms: 120000
+  read_max_line_chars: 5000
+  read_default_limit: 2000
+
+execution:
+  timeout: 30
+  connect_timeout: 10
+  max_output_size: 1048576
+  max_output_lines: 5000
+
+container:
+  ssh_dir: "~/.ssh"
+  max_lifetime_seconds: 3600
+
+ssh:
+  default_user: "root"
+  default_port: 22
+  strict_host_key_checking: false

@@ -1,0 +1,697 @@
+"""
+LangGraph / LangChain astream_events → Noesis 标准 SSE，并同步累积 AssistantMessageBuilder。
+
+仅保留 astream 原始事件 + 少量 __tw_* 控制哨兵（见 base_agent）。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Set
+
+from config.env import ModelConfig
+from utils.langgraph_sse.reasoning import extract_reasoning_delta
+from utils.log_util import logger
+from utils.message_builder import AssistantMessageBuilder
+
+
+def _show_thinking_process_enabled() -> bool:
+    return str(ModelConfig.show_thinking_process).strip().lower() in ("true", "1", "yes")
+
+_TOOL_EXIT_SUFFIX = re.compile(r"\s*\[Command succeeded with exit code \d+\]\s*$")
+_TOOL_INPUT_MAX = 65536
+TASK_TOOL_NAME = "task"
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def _format_sse(event: str, data: Dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _format_done() -> str:
+    return "data: [DONE]\n\n"
+
+
+def _normalize_tool_input(raw: Any) -> tuple[Dict[str, Any], Optional[str]]:
+    """SSE / builder 统一使用 dict 形态的 input；返回 (dict, 原始 JSON 字符串供前端 inputText)。"""
+    if raw is None or raw == {}:
+        return {}, None
+    if isinstance(raw, dict):
+        return raw, json.dumps(raw, ensure_ascii=False)
+    try:
+        dumped = json.dumps(raw, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        dumped = str(raw)
+    if len(dumped) > _TOOL_INPUT_MAX:
+        dumped = f"{dumped[:_TOOL_INPUT_MAX]}..."
+    return {"_tw_tool_input": raw if not isinstance(raw, (set,)) else list(raw)}, dumped
+
+
+def _tool_output_value(raw_out: Any) -> str:
+    if raw_out is None:
+        return ""
+    return raw_out.content if hasattr(raw_out, "content") else str(raw_out)
+
+
+def _normalize_usage(raw: Any) -> Dict[str, int]:
+    """将 provider usage_metadata 统一为 input_tokens / output_tokens / total_tokens。"""
+    if not raw or not isinstance(raw, dict):
+        return {}
+    key_map = {
+        "input_tokens": ("input_tokens", "inputTokens", "prompt_tokens", "promptTokens"),
+        "output_tokens": ("output_tokens", "outputTokens", "completion_tokens", "completionTokens"),
+        "total_tokens": ("total_tokens", "totalTokens"),
+    }
+    out: Dict[str, int] = {}
+    for canonical, aliases in key_map.items():
+        for k in aliases:
+            v = raw.get(k)
+            if v is not None:
+                try:
+                    out[canonical] = int(v)
+                except (TypeError, ValueError):
+                    pass
+                break
+    if "total_tokens" not in out and "input_tokens" in out and "output_tokens" in out:
+        out["total_tokens"] = out["input_tokens"] + out["output_tokens"]
+    return out
+
+
+def _resolve_tool_call_id(item: Dict[str, Any], data: Dict[str, Any]) -> str:
+    """
+    依次尝试：data.tool_call_id → input 内 ToolCall id → run_id（callback 系统强制注入）。
+    实践中 run_id 必然存在，最终 fallback 用随机 id 兜底防御。
+    """
+    tid = data.get("tool_call_id") or data.get("toolCallId")
+    if tid and str(tid).strip():
+        return str(tid)
+    inp = data.get("input")
+    if isinstance(inp, dict):
+        tid2 = inp.get("tool_call_id") or inp.get("id")
+        if tid2 and str(tid2).strip():
+            return str(tid2)
+    rid = item.get("run_id")
+    if rid and str(rid).strip():
+        return str(rid)
+    return _new_id("tool")
+
+
+class LangGraphSseBridge:
+    """LangGraph 流事件 → SSE 字符串；可选同步写入 builder。"""
+
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        emit_langfuse_session_hint: bool = False,
+    ) -> None:
+        self.session_id = session_id or ""
+        self._emit_langfuse_session_hint = bool(emit_langfuse_session_hint)
+        self.assistant_message_id = str(uuid.uuid4())
+        self._message_started = False
+        self._text_open = False
+        self._current_text_part_id: Optional[str] = None
+        self._reasoning_open = False
+        self._current_reasoning_part_id: Optional[str] = None
+        self._show_thinking = _show_thinking_process_enabled()
+        self._tool_part_ids: Dict[str, str] = {}
+        self._current_text_parent_task_call_id: Optional[str] = None
+        self._current_reasoning_parent_task_call_id: Optional[str] = None
+        self._finish_emitted = False
+        self._persist_tick = False
+        self.last_finish_usage: Dict[str, Any] = {}
+        self.last_finish_reason: str = ""
+        self.last_error_message: str = ""
+        self._usage_cumulative: Dict[str, int] = {}
+
+    # ---------- metrics ctx ----------
+
+    @staticmethod
+    def _ensure_metrics_ctx(ctx: Dict[str, Any]) -> None:
+        if "tool_start_times" not in ctx:
+            ctx["tool_start_times"] = {}
+        if "usage_cumulative" not in ctx:
+            ctx["usage_cumulative"] = {"input_tokens": 0, "output_tokens": 0}
+        if "usage_seen_run_ids" not in ctx:
+            ctx["usage_seen_run_ids"]: Set[str] = set()
+
+    @staticmethod
+    def _ensure_subagent_ctx(ctx: Dict[str, Any]) -> None:
+        if "run_id_to_tool_call_id" not in ctx:
+            ctx["run_id_to_tool_call_id"] = {}
+        if "task_tool_call_stack" not in ctx:
+            ctx["task_tool_call_stack"] = []
+
+    @staticmethod
+    def _resolve_parent_task_call_id(item: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[str]:
+        """子 Agent 内部 tool 归属到当前活跃的 task toolCallId（支持 parent_ids 与并行 task）。"""
+        LangGraphSseBridge._ensure_subagent_ctx(ctx)
+        stack: List[str] = ctx["task_tool_call_stack"]
+        if not stack:
+            return None
+        run_map: Dict[str, str] = ctx["run_id_to_tool_call_id"]
+        stack_set = set(stack)
+        parent_ids = item.get("parent_ids")
+        if isinstance(parent_ids, (list, tuple)):
+            for pid in reversed(parent_ids):
+                if pid is None:
+                    continue
+                tid = run_map.get(str(pid))
+                if tid and tid in stack_set:
+                    return tid
+        return stack[-1]
+
+    def _register_tool_run(self, item: Dict[str, Any], tool_call_id: str, ctx: Dict[str, Any]) -> None:
+        self._ensure_subagent_ctx(ctx)
+        run_id = item.get("run_id")
+        if run_id and str(run_id).strip():
+            ctx["run_id_to_tool_call_id"][str(run_id)] = tool_call_id
+
+    def _on_task_tool_start(self, tool_call_id: str, ctx: Dict[str, Any]) -> None:
+        self._ensure_subagent_ctx(ctx)
+        ctx["task_tool_call_stack"].append(tool_call_id)
+
+    def _on_task_tool_end(self, tool_call_id: str, ctx: Dict[str, Any]) -> None:
+        self._ensure_subagent_ctx(ctx)
+        stack: List[str] = ctx["task_tool_call_stack"]
+        if not stack:
+            return
+        if stack[-1] == tool_call_id:
+            stack.pop()
+            return
+        if tool_call_id in stack:
+            stack.remove(tool_call_id)
+
+    def _cumulative_usage(self, ctx: Dict[str, Any]) -> Dict[str, int]:
+        self._ensure_metrics_ctx(ctx)
+        return dict(ctx["usage_cumulative"])
+
+    def _build_usage_payload(self, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
+        if ctx is not None:
+            cum = self._cumulative_usage(ctx)
+        else:
+            cum = dict(self._usage_cumulative)
+        if not cum or (cum.get("input_tokens", 0) == 0 and cum.get("output_tokens", 0) == 0):
+            return {}
+        return cum
+
+    def _emit_usage_update(self, ctx: Dict[str, Any], out: List[str]) -> None:
+        usage = self._build_usage_payload(ctx)
+        if not usage:
+            return
+        self._usage_cumulative = dict(usage)
+        out.append(_format_sse("usage-update", {
+            "type": "usage-update",
+            "messageId": self.assistant_message_id,
+            "usage": usage,
+        }))
+
+    def _accumulate_usage(
+        self,
+        ctx: Dict[str, Any],
+        run_id: Optional[str],
+        raw_usage: Any,
+        out: List[str],
+    ) -> None:
+        usage = _normalize_usage(raw_usage)
+        if not usage:
+            return
+        self._ensure_metrics_ctx(ctx)
+        rid = str(run_id or "").strip()
+        if rid:
+            seen: Set[str] = ctx["usage_seen_run_ids"]
+            if rid in seen:
+                return
+            seen.add(rid)
+        cum: Dict[str, int] = ctx["usage_cumulative"]
+        cum["input_tokens"] = cum.get("input_tokens", 0) + usage.get("input_tokens", 0)
+        cum["output_tokens"] = cum.get("output_tokens", 0) + usage.get("output_tokens", 0)
+        if "total_tokens" in usage:
+            cum["total_tokens"] = cum.get("total_tokens", 0) + usage["total_tokens"]
+        elif cum.get("input_tokens") or cum.get("output_tokens"):
+            cum["total_tokens"] = cum.get("input_tokens", 0) + cum.get("output_tokens", 0)
+        self._usage_cumulative = dict(cum)
+        self._emit_usage_update(ctx, out)
+
+    def _tool_duration_ms(self, ctx: Dict[str, Any], tool_call_id: str) -> Optional[int]:
+        self._ensure_metrics_ctx(ctx)
+        start = ctx["tool_start_times"].pop(tool_call_id, None)
+        if start is None:
+            return None
+        return max(0, int((time.perf_counter() - start) * 1000))
+
+    # ---------- emit helpers ----------
+
+    def _ensure_started(self, out: List[str]) -> None:
+        if self._message_started:
+            return
+        self._message_started = True
+        payload: Dict[str, Any] = {
+            "type": "message-start",
+            "sessionId": self.session_id,
+            "assistantMessageId": self.assistant_message_id,
+        }
+        if self._emit_langfuse_session_hint and self.session_id:
+            payload["langfuseSessionId"] = self.session_id
+        out.append(_format_sse("message-start", payload))
+
+    def _close_text(self, out: List[str], *, record_checkpoint: bool = True) -> None:
+        if not self._text_open or not self._current_text_part_id:
+            return
+        out.append(_format_sse("text-end", {
+            "type": "text-end",
+            "messageId": self.assistant_message_id,
+            "partId": self._current_text_part_id,
+        }))
+        self._text_open = False
+        self._current_text_part_id = None
+        self._current_text_parent_task_call_id = None
+        if record_checkpoint:
+            self._persist_tick = True
+
+    def _close_reasoning(self, out: List[str], *, record_checkpoint: bool = True) -> None:
+        if not self._reasoning_open or not self._current_reasoning_part_id:
+            return
+        out.append(_format_sse("reasoning-end", {
+            "type": "reasoning-end",
+            "messageId": self.assistant_message_id,
+            "partId": self._current_reasoning_part_id,
+        }))
+        self._reasoning_open = False
+        self._current_reasoning_part_id = None
+        self._current_reasoning_parent_task_call_id = None
+        if record_checkpoint:
+            self._persist_tick = True
+
+    @staticmethod
+    def _sse_parent_field(parent_task_call_id: Optional[str]) -> Dict[str, str]:
+        if parent_task_call_id:
+            return {"parentTaskCallId": parent_task_call_id}
+        return {}
+
+    def consume_persist_tick(self) -> bool:
+        """供 QaService 在 part 边界将 builder 快照写库；消费后清零。"""
+        if self._persist_tick:
+            self._persist_tick = False
+            return True
+        return False
+
+    def _emit_reasoning_delta(
+        self,
+        content: str,
+        out: List[str],
+        parent_task_call_id: Optional[str] = None,
+    ) -> None:
+        if not content or not self._show_thinking:
+            return
+        self._ensure_started(out)
+        if (
+            self._reasoning_open
+            and parent_task_call_id != self._current_reasoning_parent_task_call_id
+        ):
+            self._close_reasoning(out)
+        if not self._reasoning_open:
+            self._current_reasoning_part_id = _new_id("part-reasoning")
+            self._current_reasoning_parent_task_call_id = parent_task_call_id
+            out.append(_format_sse("reasoning-start", {
+                "type": "reasoning-start",
+                "messageId": self.assistant_message_id,
+                "partId": self._current_reasoning_part_id,
+                **self._sse_parent_field(parent_task_call_id),
+            }))
+            self._reasoning_open = True
+        out.append(_format_sse("reasoning-delta", {
+            "type": "reasoning-delta",
+            "messageId": self.assistant_message_id,
+            "partId": self._current_reasoning_part_id,
+            "textDelta": content,
+            **self._sse_parent_field(parent_task_call_id),
+        }))
+
+    def _emit_text_delta(
+        self,
+        content: str,
+        out: List[str],
+        parent_task_call_id: Optional[str] = None,
+    ) -> None:
+        if not content:
+            return
+        self._close_reasoning(out)
+        self._ensure_started(out)
+        if self._text_open and parent_task_call_id != self._current_text_parent_task_call_id:
+            self._close_text(out)
+        if not self._text_open:
+            self._current_text_part_id = _new_id("part-text")
+            self._current_text_parent_task_call_id = parent_task_call_id
+            out.append(_format_sse("text-start", {
+                "type": "text-start",
+                "messageId": self.assistant_message_id,
+                "partId": self._current_text_part_id,
+                **self._sse_parent_field(parent_task_call_id),
+            }))
+            self._text_open = True
+        out.append(_format_sse("text-delta", {
+            "type": "text-delta",
+            "messageId": self.assistant_message_id,
+            "partId": self._current_text_part_id,
+            "textDelta": content,
+            **self._sse_parent_field(parent_task_call_id),
+        }))
+
+    def _emit_tool_output(self, out: List[str], part_id: str, tool_call_id: str,
+                          output: str, status: str, error: Optional[str],
+                          duration_ms: Optional[int] = None) -> None:
+        payload: Dict[str, Any] = {
+            "type": "tool-output-available",
+            "messageId": self.assistant_message_id,
+            "partId": part_id,
+            "toolCallId": tool_call_id,
+            "output": output,
+            "status": status,
+            "error": error,
+        }
+        if duration_ms is not None:
+            payload["durationMs"] = duration_ms
+        out.append(_format_sse("tool-output-available", payload))
+        self._persist_tick = True
+
+    def _emit_finish(self, out: List[str], payload: Dict[str, Any]) -> None:
+        self._ensure_started(out)
+        self._close_reasoning(out, record_checkpoint=False)
+        self._close_text(out, record_checkpoint=False)
+        self.last_finish_usage = payload.get("usage") or {}
+        self.last_finish_reason = str(
+            payload.get("finishReason") or payload.get("finish_reason") or "stop"
+        )
+        out.append(_format_sse("finish", payload))
+        self._finish_emitted = True
+
+    def _flush_text_buffer(self, builder: Optional[AssistantMessageBuilder], ctx: Dict[str, Any]) -> None:
+        buf = ctx.get("text_buffer") or ""
+        parent = ctx.get("text_buffer_parent_task_call_id")
+        if builder and buf:
+            builder.append_text(buf, parent_task_call_id=parent)
+        ctx["text_buffer"] = ""
+        ctx["text_buffer_parent_task_call_id"] = None
+
+    def _safe_append_tool_output(self, builder: AssistantMessageBuilder, tool_name: str,
+                                 output: str, tool_call_id: Optional[str],
+                                 duration_ms: Optional[int] = None) -> bool:
+        try:
+            builder.append_tool_output(tool_name, output, tool_call_id, duration_ms=duration_ms)
+            return True
+        except ValueError as e:
+            logger.warning(
+                f"append_tool_output failed: tool={tool_name}, tool_call_id={tool_call_id}, err={e}"
+            )
+            return False
+
+    # ---------- entry ----------
+
+    def process_item(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
+                     ctx: Dict[str, Any]) -> List[str]:
+        """单条上游事件 → 多条 SSE 行。"""
+        out: List[str] = []
+        lc_kind = item.get("event")
+        if isinstance(lc_kind, str) and lc_kind:
+            self._handle_langchain(lc_kind, item, builder, ctx, out)
+        else:
+            self._handle_tw_or_business(item, builder, ctx, out)
+        return out
+
+    def finalize(self) -> List[str]:
+        """流结束：保证至少发一次 finish，再发 [DONE]。"""
+        out: List[str] = []
+        had_finish_before = self._finish_emitted
+        if not self._finish_emitted:
+            usage = self._build_usage_payload()
+            self._emit_finish(out, {
+                "type": "finish",
+                "messageId": self.assistant_message_id,
+                "finishReason": "stop",
+                "usage": usage,
+            })
+        out.append(_format_done())
+        logger.info(
+            f"SSE bridge finalize session_id={self.session_id} assistant_message_id={self.assistant_message_id} "
+            f"synthesized_finish={not had_finish_before}"
+        )
+        return out
+
+    # ---------- Noesis / 业务事件 ----------
+
+    def _handle_tw_or_business(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
+                               ctx: Dict[str, Any], out: List[str]) -> None:
+        t = item.get("type")
+
+        if t == "__tw_finish__":
+            item_usage = item.get("usage") or {}
+            usage = item_usage if item_usage else self._build_usage_payload(ctx)
+            self._emit_finish(out, {
+                "type": "finish",
+                "messageId": self.assistant_message_id,
+                "finishReason": item.get("finish_reason") or item.get("finishReason") or "stop",
+                "usage": usage,
+            })
+            return
+
+        if t in ("__tw_abort__", "abort"):
+            self._ensure_started(out)
+            self._close_reasoning(out, record_checkpoint=False)
+            self._close_text(out, record_checkpoint=False)
+            out.append(_format_sse("abort", {"type": "abort", "messageId": self.assistant_message_id}))
+            logger.info(
+                f"SSE bridge 发出 abort session_id={self.session_id} assistant_message_id={self.assistant_message_id} "
+                f"upstream_type={t}"
+            )
+            return
+
+        if t in ("__tw_error__", "error"):
+            self._ensure_started(out)
+            self._close_reasoning(out, record_checkpoint=False)
+            self._close_text(out, record_checkpoint=False)
+            msg = item.get("error") or item.get("content") or "unknown error"
+            self.last_error_message = str(msg)
+            logger.warning(
+                f"SSE bridge 发出 error session_id={self.session_id} assistant_message_id={self.assistant_message_id} "
+                f"detail={str(msg)[:500]}"
+            )
+            out.append(_format_sse("error", {
+                "type": "error",
+                "messageId": self.assistant_message_id,
+                "error": str(msg),
+            }))
+            return
+
+        if t == "text-delta":
+            delta = str(item.get("textDelta") or item.get("delta") or "")
+            if delta:
+                if builder is not None:
+                    ctx["text_buffer"] = (ctx.get("text_buffer") or "") + delta
+                self._emit_text_delta(delta, out)
+            return
+
+        if t == "finish":
+            payload = dict(item)
+            payload.setdefault("type", "finish")
+            payload.setdefault("messageId", self.assistant_message_id)
+            if not payload.get("usage"):
+                payload["usage"] = self._build_usage_payload(ctx)
+            self._emit_finish(out, payload)
+            return
+
+        if t in ("phase-start", "phase-delta", "phase-end"):
+            self._ensure_started(out)
+            payload = dict(item)
+            payload.setdefault("type", str(t))
+            payload.setdefault("messageId", self.assistant_message_id)
+            if t == "phase-end":
+                payload.setdefault("ok", True)
+                self._persist_tick = True
+            out.append(_format_sse(str(t), payload))
+            return
+
+        if t and t not in ("ai", "tool"):
+            self._ensure_started(out)
+            out.append(_format_sse(str(t), dict(item)))
+
+    # ---------- LangChain astream_events ----------
+
+    def _handle_langchain(self, lc_kind: str, item: Dict[str, Any],
+                          builder: Optional[AssistantMessageBuilder],
+                          ctx: Dict[str, Any], out: List[str]) -> None:
+        if lc_kind == "on_chat_model_start":
+            self._close_reasoning(out, record_checkpoint=False)
+            self._close_text(out, record_checkpoint=False)
+            return
+
+        if lc_kind == "on_chat_model_stream":
+            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
+            chunk = (item.get("data") or {}).get("chunk")
+            if self._show_thinking and chunk is not None:
+                reasoning_delta = extract_reasoning_delta(chunk)
+                if reasoning_delta:
+                    if builder is not None:
+                        builder.append_reasoning_delta(
+                            reasoning_delta,
+                            parent_task_call_id=parent_task_call_id,
+                        )
+                    self._emit_reasoning_delta(reasoning_delta, out, parent_task_call_id)
+            content = str(getattr(chunk, "content", "") or "") if chunk is not None else ""
+            if content:
+                if builder is not None:
+                    ctx["text_buffer"] = (ctx.get("text_buffer") or "") + content
+                    ctx["text_buffer_parent_task_call_id"] = parent_task_call_id
+                self._emit_text_delta(content, out, parent_task_call_id)
+            if chunk is not None:
+                usage_meta = getattr(chunk, "usage_metadata", None)
+                if usage_meta:
+                    self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out)
+            return
+
+        if lc_kind == "on_chat_model_end":
+            data = item.get("data") or {}
+            output = data.get("output")
+            usage_meta = getattr(output, "usage_metadata", None) if output is not None else None
+            if not usage_meta and isinstance(output, dict):
+                usage_meta = output.get("usage_metadata")
+            if usage_meta:
+                self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out)
+            return
+
+        if lc_kind == "on_tool_start":
+            self._on_tool_start(item, builder, ctx, out)
+            return
+
+        if lc_kind == "on_tool_end":
+            self._on_tool_end(item, builder, ctx, out)
+            return
+
+        if lc_kind == "on_tool_error":
+            self._on_tool_error(item, builder, ctx, out)
+            return
+
+    def _on_tool_start(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
+                       ctx: Dict[str, Any], out: List[str]) -> None:
+        self._ensure_started(out)
+        self._close_reasoning(out)
+        self._close_text(out)
+        if builder is not None:
+            self._flush_text_buffer(builder, ctx)
+
+        data = item.get("data") or {}
+        tool_name = item.get("name") or ""
+        input_obj, input_text = _normalize_tool_input(data.get("input", {}))
+        tool_call_id = _resolve_tool_call_id(item, data)
+        self._register_tool_run(item, tool_call_id, ctx)
+
+        parent_task_call_id: Optional[str] = None
+        if tool_name == TASK_TOOL_NAME:
+            self._on_task_tool_start(tool_call_id, ctx)
+        else:
+            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
+
+        self._ensure_metrics_ctx(ctx)
+        ctx["tool_start_times"][tool_call_id] = time.perf_counter()
+
+        ctx["current_tool_name"] = tool_name
+        ctx["current_tool_call_id"] = tool_call_id
+
+        if builder is not None:
+            builder.append_tool(
+                tool_name,
+                input_obj,
+                tool_call_id,
+                parent_task_call_id=parent_task_call_id,
+            )
+
+        part_id = _new_id("part-tool")
+        if tool_call_id:
+            self._tool_part_ids[tool_call_id] = part_id
+
+        start_payload: Dict[str, Any] = {
+            "type": "tool-input-start",
+            "messageId": self.assistant_message_id,
+            "partId": part_id,
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+        }
+        if parent_task_call_id:
+            start_payload["parentTaskCallId"] = parent_task_call_id
+        out.append(_format_sse("tool-input-start", start_payload))
+        avail: Dict[str, Any] = {
+            "type": "tool-input-available",
+            "messageId": self.assistant_message_id,
+            "partId": part_id,
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "input": input_obj,
+        }
+        if parent_task_call_id:
+            avail["parentTaskCallId"] = parent_task_call_id
+        if input_text is not None:
+            avail["inputText"] = input_text
+        out.append(_format_sse("tool-input-available", avail))
+
+    def _on_tool_end(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
+                     ctx: Dict[str, Any], out: List[str]) -> None:
+        self._ensure_started(out)
+        self._close_reasoning(out)
+        self._close_text(out)
+
+        data = item.get("data") or {}
+        raw_output = _tool_output_value(data.get("output"))
+        clean_output = _TOOL_EXIT_SUFFIX.sub("", str(raw_output)) if raw_output else ""
+        tool_call_id = _resolve_tool_call_id(item, data)
+        tool_name = item.get("name") or ctx.get("current_tool_name") or ""
+        ctx["current_tool_name"] = tool_name
+        ctx["current_tool_call_id"] = tool_call_id
+
+        duration_ms = self._tool_duration_ms(ctx, tool_call_id)
+
+        if builder is not None:
+            self._safe_append_tool_output(
+                builder, tool_name, clean_output, tool_call_id, duration_ms=duration_ms,
+            )
+
+        if tool_name == TASK_TOOL_NAME:
+            self._on_task_tool_end(tool_call_id, ctx)
+
+        part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
+        self._emit_tool_output(
+            out, part_id, tool_call_id, clean_output, "success", None, duration_ms,
+        )
+
+    def _on_tool_error(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
+                       ctx: Dict[str, Any], out: List[str]) -> None:
+        self._ensure_started(out)
+        self._close_reasoning(out)
+        self._close_text(out)
+
+        data = item.get("data") or {}
+        err_s = f"Tool error: {data.get('error', '')!s}"
+        tool_call_id = _resolve_tool_call_id(item, data)
+        tool_name = item.get("name") or ctx.get("current_tool_name") or ""
+        ctx["current_tool_name"] = tool_name
+        ctx["current_tool_call_id"] = tool_call_id
+
+        duration_ms = self._tool_duration_ms(ctx, tool_call_id)
+
+        if builder is not None:
+            ok = self._safe_append_tool_output(
+                builder, tool_name, err_s, tool_call_id, duration_ms=duration_ms,
+            )
+            if not ok:
+                builder.append_text(err_s)
+
+        if tool_name == TASK_TOOL_NAME:
+            self._on_task_tool_end(tool_call_id, ctx)
+
+        part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
+        self._emit_tool_output(out, part_id, tool_call_id, "", "error", err_s, duration_ms)

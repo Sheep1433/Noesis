@@ -1,0 +1,2037 @@
+<script lang="tsx" setup>
+import type { InputInst, UploadFileInfo } from 'naive-ui'
+import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
+import { UAParser } from 'ua-parser-js'
+import * as GlobalAPI from '@/api'
+import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
+import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
+import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
+import TodoList from '@/components/TodoList/index.vue'
+import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
+import { langfuseUiOrigin } from '@/config'
+import { buildDisplayParts } from '@/utils/groupAssistantParts'
+import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
+import {
+  appendReasoningDelta,
+  appendStreamFailureNotice,
+  appendTextDelta,
+  appendTextDeltaWithRedactedThinking,
+  applyToolOutput,
+  assistantPartsStillStreaming,
+  completeLastReasoningPart,
+  createRedactedThinkingStreamCtx,
+  emptyMessageContent,
+  flushRedactedThinkingStreamCtx,
+  formatUsageSummary,
+  hasValidUsage,
+  markStreamingPartsComplete,
+  shortenChatErrorToast,
+  syncLegacyFieldsFromParts,
+  upsertToolInputPart,
+} from '@/views/chat/messageParts'
+import { useSSEStream } from '@/views/chat/useSSEStream'
+import DefaultPage from './DefaultPage.vue'
+import FileListItem from './FileListItem.vue'
+import FileUploadManager from './FileUploadManager.vue'
+import SuggestedView from './SuggestedPage.vue'
+import TableModal from './TableModal.vue'
+
+// 显示默认页面
+const showDefaultPage = ref(true)
+
+// 全局存储
+const businessStore = useBusinessStore()
+const router = useRouter()
+const route = useRoute()
+
+// 是否是刚登录到系统 批量渲染对话记录
+const isInit = ref(false)
+
+// 是否查看历史消息标识
+const isView = ref(false)
+
+// 使用 onMounted 生命周期钩子加载历史对话
+// 新增：加载历史对话的状态
+const isLoadingHistory = ref(false)
+
+// 使用 onMounted 生命周期钩子加载历史对话
+onBeforeMount(() => {
+  try {
+    if (businessStore.qa_type === 'TEST_CASE_QA') {
+      businessStore.update_qa_type('COMMON_QA')
+    }
+    applyWelcomeRouteQaType()
+    // 开始加载历史对话
+    isLoadingHistory.value = true
+    isInit.value = true
+    fetchConversationHistory(isInit, conversationItems, tableData, currentRenderIndex, null, '')
+  } catch (error) {
+    console.error('加载历史对话失败:', error)
+    window.$ModalMessage.error('加载历史对话失败，请重试')
+  } finally {
+    // 加载完成
+    isLoadingHistory.value = false
+  }
+})
+
+// 管理对话
+const isModalOpen = ref(false)
+function openModal() {
+  isModalOpen.value = true
+}
+// 模态框关闭
+function handleModalClose(value) {
+  isModalOpen.value = value
+  isInit.value = true
+  // 重新加载对话记录
+  fetchConversationHistory(
+    isInit,
+    conversationItems,
+    tableData,
+    currentRenderIndex,
+    null,
+    '',
+  )
+  showDefaultPage.value = true
+}
+
+// 新建对话
+function newChat() {
+  backgroundColorVariable.value = '#ffffff'
+
+  if (showDefaultPage.value) {
+    window.$ModalMessage.success(`已经是最新对话`)
+    return
+  }
+  showDefaultPage.value = true
+  isInit.value = true
+  conversationItems.value = []
+  stylizingLoading.value = false
+  suggested_array.value = []
+
+  // 清除表格选中状态
+  currentIndex.value = null
+
+  // 清理 Todo 列表（PRD：仅在当前会话生效，会话结束后不持久化）
+  businessStore.todos = []
+
+  // 新增：生成当前问答类型的新uuid
+  uuids.value[qa_type.value] = uuidv4()
+}
+
+/**
+ * 默认大模型（已移除，使用 useChat）
+ */
+// currentChatId 已移除，使用 useChat 管理 sessionId
+
+
+// 对话等待提示词图标
+const stylizingLoading = ref(false)
+
+// 输入字符串
+const inputTextString = ref('')
+const refInputTextString = ref<InputInst | null>()
+
+// 输出字符串 Reader 流（已移除，使用 useChat）
+
+// markdown对象（已移除）
+
+// 主内容区域
+const messagesContainer = ref<HTMLElement | null>(null)
+
+// 读取失败
+const onFailedReader = (index: number) => {
+  stylizingLoading.value = false
+  if (index > 0 && conversationItems.value[index - 1]?.role === 'user') {
+    contentLoadingStates.value[index - 1] = false
+  }
+  window.$ModalMessage.error('请求失败，请重试')
+  setTimeout(() => {
+    if (refInputTextString.value) {
+      refInputTextString.value.select()
+    }
+  })
+}
+
+/** 仅聚焦输入框；全局加载态由 SSE onFinish/onError 与 stopChatStream 控制，避免 Markdown 片段挂载误触结束 */
+const onCompletedReader = (_index: number) => {
+  setTimeout(() => {
+    if (refInputTextString.value) {
+      refInputTextString.value.select()
+    }
+  })
+}
+
+function isLastAssistantMessage(index: number): boolean {
+  for (let i = conversationItems.value.length - 1; i >= 0; i--) {
+    if (conversationItems.value[i]?.role === 'assistant') {
+      return i === index
+    }
+  }
+  return false
+}
+
+/** 助手回复卡片下方转圈：整轮 SSE 未结束前保持（含多步工具间隙） */
+function showAssistantReplyLoading(index: number, role: string): boolean {
+  return role === 'assistant' && isLastAssistantMessage(index) && stylizingLoading.value
+}
+
+// 当前索引位置
+const currentRenderIndex = ref(0)
+
+const onRecycleQa = async (index: number) => {
+  // 设置当前选中的问答类型
+  const item = conversationItems.value[index - 1]
+  onAqtiveChange(item.qa_type, item.chat_id)
+
+
+  // 清空推荐列表
+  suggested_array.value = []
+  // 发送问题重新生成
+  handleCreateStylized(item.question, item.file_key)
+  scrollToBottom()
+}
+
+// 赞 结果反馈
+const onPraiseFeadBack = async (index: number) => {
+  const item = conversationItems.value[index]
+  const res = await GlobalAPI.fead_back(item.chat_id, 'like')
+  if (res.ok) {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.success('感谢反馈', {
+      duration: 1500,
+    })
+  }
+}
+
+// 开始输出时隐藏加载提示
+const onBeginRead = async (index: number) => {
+  // 设置最上面的滚动提示图标隐藏
+  contentLoadingStates.value[currentRenderIndex.value - 1] = false
+}
+
+// 踩 结果反馈
+const onBelittleFeedback = async (index: number) => {
+  const item = conversationItems.value[index]
+  const res = await GlobalAPI.fead_back(item.chat_id, 'dislike')
+  if (res.ok) {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.success('感谢反馈', {
+      duration: 1500,
+    })
+  }
+}
+
+// 侧边栏对话历史
+interface TableItem {
+  uuid: string
+  key: string
+  chat_id: string
+  qa_type: string
+}
+
+function sessionQaIconClass(qt: string) {
+  switch (qt) {
+    case 'DEEP_RESEARCH_QA':
+      return 'i-hugeicons:search-01 text-[#5c7cfa]'
+    case 'FAULT_OPERATION_QA':
+      return 'i-hugeicons:settings-01 text-[#e67e22]'
+    case 'TEST_CASE_QA':
+      return 'i-hugeicons:note-edit text-[#16a085]'
+    default:
+      return 'i-hugeicons:ai-chat-02 text-[#692ee6]'
+  }
+}
+
+function sessionQaTooltip(qt: string) {
+  const m: Record<string, string> = {
+    COMMON_QA: '智能问答',
+    DEEP_RESEARCH_QA: '深度研究',
+    FAULT_OPERATION_QA: '故障运维',
+    TEST_CASE_QA: '测试用例',
+  }
+  return m[qt] || '智能问答'
+}
+
+const historySidebarColumns = computed(() => [
+  {
+    key: 'key',
+    align: 'left' as const,
+    ellipsis: { tooltip: false },
+    render(row: TableItem) {
+      return h(
+        'div',
+        { class: 'flex items-center gap-8px min-w-0 pr-4px' },
+        [
+          h('div', {
+            class: ['size-18px shrink-0 inline-flex items-center justify-center', sessionQaIconClass(row.qa_type)],
+            title: sessionQaTooltip(row.qa_type),
+          }),
+          h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
+        ],
+      )
+    },
+  },
+])
+
+const tableData = ref<TableItem[]>([])
+const tableRef = ref(null)
+
+// 保存对话历史记录
+const conversationItems = ref<
+  Array<{
+    uuid: string
+    chat_id: string
+    qa_type: string
+    question: string
+    role: 'user' | 'assistant'
+    content: string
+    reasoning?: string
+    file_key: {
+      source_file_key: string
+      parse_file_key: string
+      file_size: string
+    }[]
+    tool_calls?: any[]
+    messageContent?: MessageContentV1
+    msg_metadata?: any
+    reader?: ReadableStreamDefaultReader | null
+    parent_id?: string | null
+    message_id?: string
+    /** 与后端 Langfuse metadata.langfuse_session_id 一致（chat_id） */
+    langfuse_session_id?: string
+  }>
+>([])
+
+function patchLastAssistantParts(mut: (parts: UiPart[]) => UiPart[]) {
+  const lastAssistantIndex = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+  if (lastAssistantIndex === -1) {
+    return
+  }
+  const prev = conversationItems.value[lastAssistantIndex]
+  const base = prev.messageContent?.version === 1 ? prev.messageContent : emptyMessageContent()
+  const newParts = mut([...base.parts])
+  const { content, reasoning } = syncLegacyFieldsFromParts(newParts)
+  const updated = {
+    ...prev,
+    messageContent: { version: 1 as const, parts: newParts },
+    content,
+    reasoning,
+  }
+  conversationItems.value = [
+    ...conversationItems.value.slice(0, lastAssistantIndex),
+    updated,
+    ...conversationItems.value.slice(lastAssistantIndex + 1),
+  ]
+}
+
+// 强制依赖追踪 - 使用 watchEffect + ref
+const conversationItemsSnapshot = ref([])
+
+// 监听 conversationItems 变化并更新 snapshot
+watchEffect(() => {
+  const items = conversationItems.value
+  conversationItemsSnapshot.value = items.slice()
+})
+
+// 添加 watch 验证 conversationItems 变化
+watch(() => conversationItems.value.length, (newLen) => {
+  // debug: length changed
+})
+
+// 这里控制内容加载状态
+const contentLoadingStates = ref(
+  conversationItemsSnapshot.value.map(() => false),
+)
+
+/** 解析正文流内 `<think>…</think>`，跨 chunk 缓冲标签片段 */
+const redactedThinkingStreamCtx = createRedactedThinkingStreamCtx()
+/** 本轮已收到后端 reasoning-* 时，不再对 text-delta 做标签拆分 */
+const nativeReasoningSeen = ref(false)
+
+// 改为对象存储不同问答类型的uuid
+const uuids = ref<Record<string, string>>({})
+
+// SSE：依赖 conversationItems / uuids / qa_type，须放在其后
+const sseStream = useSSEStream({
+  onMessageStart: (data) => {
+    nativeReasoningSeen.value = false
+    Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
+    const aid = String(data.assistantMessageId ?? '')
+    const lfRaw = data.langfuseSessionId
+    const lf = typeof lfRaw === 'string' && lfRaw.trim() ? lfRaw.trim() : ''
+    const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+    if (lastIdx === -1) {
+      return
+    }
+    const cur = conversationItems.value[lastIdx]
+    conversationItems.value[lastIdx] = {
+      ...cur,
+      ...(aid ? { message_id: aid } : {}),
+      ...(lf ? { langfuse_session_id: lf } : {}),
+    }
+  },
+  onTextDelta: (text, parentTaskCallId) =>
+    patchLastAssistantParts((parts) =>
+      nativeReasoningSeen.value
+        ? appendTextDelta(parts, text, parentTaskCallId)
+        : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parentTaskCallId),
+    ),
+  onReasoningStart: () => {
+    nativeReasoningSeen.value = true
+  },
+  onReasoningDelta: (delta, parentTaskCallId) => {
+    nativeReasoningSeen.value = true
+    patchLastAssistantParts((parts) => appendReasoningDelta(parts, delta, parentTaskCallId))
+  },
+  onReasoningEnd: () => {
+    patchLastAssistantParts((parts) => completeLastReasoningPart(parts))
+  },
+  onToolCall: (name, args, toolCallId, parentTaskCallId) => {
+    patchLastAssistantParts((parts) =>
+      upsertToolInputPart(parts, toolCallId, name, args, parentTaskCallId),
+    )
+    if (shouldApplyWriteTodos(name, args)) {
+      const parsed = parseWriteTodosInput(args)
+      if (parsed !== null) {
+        businessStore.update_todos(parsed)
+      }
+    }
+  },
+  onToolResult: (toolCallId, payload) => {
+    patchLastAssistantParts((parts) => applyToolOutput(parts, toolCallId, payload))
+  },
+  onFinish: () => {
+    stylizingLoading.value = false
+    patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
+    const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+    if (lastIdx !== -1) {
+      const prev = conversationItems.value[lastIdx]
+      if (prev.messageContent?.version === 1) {
+        const parts = markStreamingPartsComplete(prev.messageContent.parts)
+        const { content, reasoning } = syncLegacyFieldsFromParts(parts)
+        conversationItems.value = [
+          ...conversationItems.value.slice(0, lastIdx),
+          { ...prev, messageContent: { version: 1, parts }, content, reasoning },
+          ...conversationItems.value.slice(lastIdx + 1),
+        ]
+      }
+    }
+    const lastUserIdx = conversationItems.value.findLastIndex((item) => item.role === 'user')
+    if (lastUserIdx !== -1) {
+      contentLoadingStates.value[lastUserIdx] = false
+    }
+    onCompletedReader(conversationItems.value.length - 1)
+    scrollToBottom()
+  },
+  onTitleUpdate: (title: string) => {
+    const currentUuid = uuids.value[qa_type.value]
+    if (currentUuid && tableData.value.length > 0) {
+      const sessionIndex = tableData.value.findIndex((s) => s.chat_id === currentUuid)
+      if (sessionIndex !== -1) {
+        const row = tableData.value[sessionIndex]
+        const currentKey = (row.key || '').trim()
+        // 会话标题仅在首条消息时确定，后续轮次不再覆盖
+        if (currentKey && currentKey !== '新对话') {
+          return
+        }
+        tableData.value[sessionIndex].key = title
+      }
+    }
+  },
+  onUsageUpdate: (usage) => {
+    const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+    if (lastIdx === -1) {
+      return
+    }
+    const prev = conversationItems.value[lastIdx]
+    conversationItems.value[lastIdx] = {
+      ...prev,
+      msg_metadata: { ...(prev.msg_metadata || {}), usage },
+    }
+  },
+  onError: (msg) => {
+    stylizingLoading.value = false
+    patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
+    const lastAssistantIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+    if (lastAssistantIdx !== -1) {
+      const prev = conversationItems.value[lastAssistantIdx]
+      if (prev.messageContent?.version === 1) {
+        const parts = appendStreamFailureNotice(prev.messageContent.parts, msg)
+        const { content, reasoning } = syncLegacyFieldsFromParts(parts)
+        conversationItems.value = [
+          ...conversationItems.value.slice(0, lastAssistantIdx),
+          { ...prev, messageContent: { version: 1, parts }, content, reasoning },
+          ...conversationItems.value.slice(lastAssistantIdx + 1),
+        ]
+      }
+    }
+    const lastUserIdx = conversationItems.value.findLastIndex((item) => item.role === 'user')
+    if (lastUserIdx !== -1) {
+      contentLoadingStates.value[lastUserIdx] = false
+    }
+    window.$ModalMessage.error(shortenChatErrorToast(msg || '请求失败'))
+    onCompletedReader(conversationItems.value.length - 1)
+    scrollToBottom()
+  },
+})
+
+function stopChatStream() {
+  sseStream.stop()
+  stylizingLoading.value = false
+}
+
+// 校验文件上传状态和业务处理逻辑
+const checkAllFilesUploaded = () => {
+  const pendingFiles = fileUploadRef.value?.pendingUploadFileInfoList || []
+
+  if (qa_type.value === 'FAULT_OPERATION_QA' && pendingFiles.length > 0) {
+    window.$ModalMessage.warning('故障运维暂不支持文件上传')
+    return false
+  }
+
+  for (const file of pendingFiles) {
+    if (file.status !== 'finished') {
+      window.$ModalMessage.warning('存在未完成上传或解析失败的文件，请检查后重试')
+      return false
+    }
+  }
+  return true
+}
+
+
+// 提交对话
+const handleCreateStylized = async (send_text = '', file_key = []) => {
+  // 设置背景颜色
+  backgroundColorVariable.value = '#f6f7fb'
+
+  // 滚动到底部
+  scrollToBottom()
+
+  // 设置初始化数据标识为false
+  isInit.value = false
+
+  // 设置查看历史消息标识为false
+  isView.value = false
+
+  // 清空推荐列表
+  suggested_array.value = []
+
+  // 若正在加载，则点击后恢复初始状态
+  if (stylizingLoading.value) {
+    // 停止对话
+    stopChatStream()
+    onCompletedReader(conversationItems.value.length - 1)
+    // 隐藏加载提示动画
+    contentLoadingStates.value = contentLoadingStates.value.map(() => false)
+    return
+  }
+
+  // 如果输入为空，则直接返回
+  if (send_text === '') {
+    if (refInputTextString.value && !inputTextString.value.trim()) {
+      inputTextString.value = ''
+      refInputTextString.value?.select()
+      return
+    }
+  }
+
+  let upload_file_list
+  // 判断是否有未上传的文件
+  if (fileUploadRef.value?.pendingUploadFileInfoList && fileUploadRef.value.pendingUploadFileInfoList.length > 0) {
+    // 有一个文件解析失败不允许提交
+    if (!checkAllFilesUploaded()) {
+      return
+    }
+    upload_file_list = businessStore.file_list
+  }
+
+  // 点击重新跑时 如果有文件key 则使用文件key
+  if (file_key.length > 0) {
+    upload_file_list = file_key
+  }
+
+  if (showDefaultPage.value) {
+    // 新建对话 时输入新问题 清空历史数据
+    conversationItems.value = []
+    showDefaultPage.value = false
+
+    // 清空文件上传列表
+    pendingUploadFileInfoList.value = []
+    businessStore.clear_file_list()
+  }
+
+  // 自定义id
+  const uuid_str = uuidv4()
+  // 加入对话历史用于左边表格渲染
+  const newItem = {
+    uuid: uuid_str,
+    key: inputTextString.value ? inputTextString.value : send_text,
+    chat_id: uuids.value[qa_type.value],
+    qa_type: qa_type.value,
+  }
+
+  // 如果有相同的chat_id 则不添加 使用 unshift 方法将新元素添加到数组的最前面
+  const hasSameChatId = tableData.value.some((item) => item.chat_id === uuids.value[qa_type.value])
+  if (!hasSameChatId) {
+    tableData.value.unshift(newItem)
+  }
+
+  // 新一轮用户提问：清空上一轮的 Todo 面板（流结束后保留，便于对照报告）
+  businessStore.todos = []
+
+  // 调用大模型后台服务接口
+  stylizingLoading.value = true
+  const textContent = inputTextString.value
+    ? inputTextString.value
+    : send_text
+  inputTextString.value = ''
+
+  if (!uuids.value[qa_type.value]) {
+    uuids.value[qa_type.value] = uuidv4()
+  }
+
+  // 存储该轮用户对话消息
+  if (textContent) {
+    conversationItems.value.push({
+      uuid: uuid_str,
+      chat_id: uuids.value[qa_type.value],
+      qa_type: qa_type.value,
+      question: textContent,
+      content: '',
+      file_key: upload_file_list,
+      role: 'user',
+    })
+    // 更新 currentRenderIndex 以包含新添加的项
+    currentRenderIndex.value = conversationItems.value.length - 1
+
+    // 清空文件上传列表
+    pendingUploadFileInfoList.value = []
+    businessStore.clear_file_list()
+  }
+
+  // 存储该轮AI回复的消息（初始为空）
+  nativeReasoningSeen.value = false
+  Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
+  conversationItems.value.push({
+    uuid: uuid_str,
+    chat_id: uuids.value[qa_type.value],
+    qa_type: qa_type.value,
+    question: textContent,
+    content: '',
+    file_key: [],
+    role: 'assistant',
+    messageContent: emptyMessageContent(),
+  })
+
+  // 更新 currentRenderIndex 以包含新添加的项
+  currentRenderIndex.value = conversationItems.value.length - 1
+
+  // 使用 useSSEStream composable
+  await sseStream.sendMessage(
+    uuids.value[qa_type.value],
+    textContent,
+    {
+      qa_type: qa_type.value,
+      file_dict: upload_file_list,
+    },
+  )
+
+  // 滚动到底部
+  scrollToBottom()
+}
+
+// 滚动到底部
+const scrollToBottom = () => {
+  if (isView.value === false) {
+    nextTick(() => {
+      if (messagesContainer.value) {
+        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+      }
+    })
+  }
+}
+
+const keys = useMagicKeys()
+const enterCommand = keys.Enter
+const enterCtrl = keys.Enter
+
+const activeElement = useActiveElement()
+const notUsingInput = computed(
+  () => activeElement.value?.tagName !== 'TEXTAREA',
+)
+
+const parser = new UAParser()
+const isMacos = parser.getOS().name.includes('Mac')
+
+const placeholder = computed(() => {
+  if (stylizingLoading.value) {
+    return `输入任意问题...`
+  }
+  return `输入任意问题, 按 ${
+    isMacos ? 'Command' : 'Ctrl'
+  } + Enter 键快捷开始...`
+})
+
+const generateRandomSuffix = function () {
+  return Math.floor(Math.random() * 10000) // 生成0到9999之间的随机整数
+}
+
+watch(
+  () => enterCommand.value,
+  () => {
+    if (!isMacos || notUsingInput.value) {
+      return
+    }
+
+    if (stylizingLoading.value) {
+      return
+    }
+
+    if (!enterCommand.value) {
+      handleCreateStylized()
+    }
+  },
+  {
+    deep: true,
+  },
+)
+
+watch(
+  () => enterCtrl.value,
+  () => {
+    if (isMacos || notUsingInput.value) {
+      return
+    }
+
+    if (stylizingLoading.value) {
+      return
+    }
+
+    if (!enterCtrl.value) {
+      handleCreateStylized()
+    }
+  },
+  {
+    deep: true,
+  },
+)
+
+// 重置状态
+const handleResetState = () => {
+  inputTextString.value = ''
+
+  stylizingLoading.value = false
+  nextTick(() => {
+    refInputTextString.value?.select()
+  })
+}
+handleResetState()
+
+
+// 下面方法用于左侧对话列表点击 右侧内容滚动
+// 用于存储每个 MarkdownPreview 容器的引用
+// const markdownPreviews = ref<Array<HTMLElement | null>>([]) // 初始化为空数组
+const markdownPreviews = ref<Map<string, HTMLElement | null>>(new Map())
+
+
+// 表格行点击事件
+const currentIndex = ref<number | null>(null)
+const rowProps = (row: any) => {
+  return {
+    class: [
+      'cursor-pointer select-none',
+      currentIndex.value === row.uuid && 'selected-row',
+    ].join(' '),
+    onClick: async () => {
+      backgroundColorVariable.value = '#f6f7fb'
+
+      currentIndex.value = row.uuid
+      suggested_array.value = []
+      businessStore.todos = []
+
+      isInit.value = false
+      isView.value = true
+
+      // 先关闭默认页面（如果还没关闭）
+      if (showDefaultPage.value) {
+        showDefaultPage.value = false
+      }
+
+      // 这里根据chat_id 过滤同一轮对话数据
+      await fetchConversationHistory(
+        isInit,
+        conversationItems,
+        tableData,
+        currentRenderIndex,
+        row,
+        '',
+      )
+
+      // 与顶栏切换不同：从历史会话点入时已拉取 messages，不能再因 qa_type 不一致而清空列表并打开默认页
+      onAqtiveChange(row.qa_type, row.chat_id, true)
+    },
+  }
+}
+
+// 递归查找最底层的元素
+const findDeepestElement = (element: HTMLElement): HTMLElement => {
+  if (element.children.length === 0) {
+    return element
+  }
+  return findDeepestElement(element.lastElementChild as HTMLElement)
+}
+
+// 设置 markdownPreviews 数组中的元素
+const setMarkdownPreview = (uuid: string, role: string, el: any) => {
+  if (role === 'user') {
+    if (el && el instanceof HTMLElement) {
+      // 查找最下面的元素
+      const deepestElement = findDeepestElement(el)
+      markdownPreviews.value.set(uuid, deepestElement)
+    }
+  }
+}
+
+// 滚动到指定位置的方法
+const scrollToItem = async (uuid: string) => {
+  // 等待 DOM 更新完成
+  await nextTick()
+  await nextTick()
+
+  const element = markdownPreviews.value.get(uuid)
+
+  if (element && element instanceof HTMLElement) {
+    try {
+      // 强制重排，确保元素位置和尺寸正确
+      void element.offsetWidth
+      element.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      })
+    } catch (error) {
+      console.error('滚动到指定元素时出错:', error)
+    }
+  }
+}
+
+// 默认选中的对话类型
+const qa_type = ref('COMMON_QA')
+/**
+ * @param fromHistorySelection 为 true 时表示从左侧历史会话点入：已加载该会话 messages，仅同步 qa_type / uuid，不得清空 conversationItems 或切回默认页
+ */
+const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
+  businessStore.todos = []
+
+  // 切换到不同问答类型时，清空聊天记录（顶栏切换）；历史会话点入时跳过，否则会覆盖刚加载的 messages
+  if (qa_type.value !== val) {
+    suggested_array.value = []
+    if (!fromHistorySelection) {
+      conversationItems.value = []
+      showDefaultPage.value = true
+      currentIndex.value = null
+    }
+  }
+
+  qa_type.value = val
+  businessStore.update_qa_type(val)
+
+  // 切换类型时生成新uuid
+  if (chat_id) {
+    uuids.value[val] = chat_id
+  } else {
+    uuids.value[val] = uuidv4()
+  }
+
+  // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
+  if (val === 'TEST_CASE_QA' && route.name !== 'TestCaseGenerate') {
+    router.push({ name: 'TestCaseGenerate' })
+  }
+}
+
+const WELCOME_QA_TYPES = ['COMMON_QA', 'DEEP_RESEARCH_QA', 'FAULT_OPERATION_QA', 'TEST_CASE_QA'] as const
+
+/** 从 URL 同步问答类型（不触发清空逻辑，避免首屏与历史加载打架） */
+function applyWelcomeRouteQaType() {
+  const q = route.query.qa_type
+  if (typeof q !== 'string' || !(WELCOME_QA_TYPES as readonly string[]).includes(q)) {
+    return
+  }
+  // 测试用例在独立路由完成；从 URL 同步 TEST_CASE_QA 会误触发跳转，导致无法停留在对话页
+  if (q === 'TEST_CASE_QA') {
+    return
+  }
+  if (qa_type.value !== q) {
+    qa_type.value = q
+    businessStore.update_qa_type(q)
+    if (!uuids.value[q]) {
+      uuids.value[q] = uuidv4()
+    }
+  }
+}
+
+// 获取建议问题
+const suggested_array = ref([])
+// const query_dify_suggested = async () => {
+//   if (!isInit.value) {
+//     const res = await GlobalAPI.dify_suggested(uuids.value[qa_type.value])
+//     const json = await res.json()
+//     if (json?.data?.data !== undefined) {
+//       suggested_array.value = json.data.data
+//     }
+//   }
+
+//   // 滚动到底部
+//   scrollToBottom()
+// }
+// 建议问题点击事件
+const onSuggested = (index: number) => {
+  handleCreateStylized(suggested_array.value[index])
+}
+
+// 侧边表格滚动条数 动态显示隐藏设置
+const scrollableContainer = useTemplateRef('scrollableContainer')
+
+const showScrollbar = () => {
+  if (
+    scrollableContainer.value
+    && scrollableContainer.value.$el
+    && scrollableContainer.value.$el.firstElementChild
+  ) {
+    scrollableContainer.value.$el.firstElementChild.style.overflowY = 'auto'
+  }
+}
+
+const hideScrollbar = () => {
+  if (
+    scrollableContainer.value
+    && scrollableContainer.value.$el
+    && scrollableContainer.value.$el.firstElementChild
+  ) {
+    scrollableContainer.value.$el.firstElementChild.style.overflowY
+            = 'hidden'
+  }
+}
+
+const searchText = ref('')
+const searchChatRef = useTemplateRef('searchChatRef')
+const isFocusSearchChat = ref(false)
+const onFocusSearchChat = () => {
+  if (!showDefaultPage.value) {
+    newChat()
+  }
+  isFocusSearchChat.value = true
+  nextTick(() => {
+    searchChatRef.value?.focus()
+  })
+}
+const onBlurSearchChat = () => {
+  if (searchText.value) {
+    return
+  }
+  isFocusSearchChat.value = false
+}
+
+// 在script部分添加搜索处理函数
+const handleSearch = () => {
+  tableData.value = []
+  fetchConversationHistory(
+    isInit,
+    conversationItems,
+    tableData,
+    currentRenderIndex,
+    null,
+    searchText.value,
+  )
+}
+
+const handleClear = () => {
+  if (!showDefaultPage.value) {
+    newChat()
+  }
+}
+
+const collapsed = useLocalStorage(
+  'collapsed-chat-menu',
+  ref(false),
+)
+
+// 背景颜色 默认页面和内容页面动态调整
+const backgroundColorVariable = ref('#ffffff')
+
+
+// 添加一键滚动到底部功能的相关代码
+const showScrollToBottom = ref(false)
+const scrollThreshold = 1000 // 滚动超过100px时显示按钮
+
+// 用户点击图标滚动到底部
+const clickScrollToBottom = () => {
+  nextTick(() => {
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+      showScrollToBottom.value = false // 滚动到底部后隐藏按钮
+    }
+  })
+}
+
+// ======新增：检查是否需要显示滚动到底部按钮==========//
+const checkScrollPosition = () => {
+  if (messagesContainer.value) {
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainer.value
+    const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10 // 10px的容差
+    showScrollToBottom.value = !isAtBottom && scrollTop > scrollThreshold
+  }
+}
+// 新增：监听滚动事件
+const handleScroll = () => {
+  checkScrollPosition()
+}
+
+// 在 onMounted 或 onBeforeMount 中添加事件监听
+onMounted(() => {
+  if (messagesContainer.value) {
+    messagesContainer.value.addEventListener('scroll', handleScroll)
+  }
+})
+
+// 在组件卸载前移除事件监听
+onBeforeUnmount(() => {
+  if (messagesContainer.value) {
+    messagesContainer.value.removeEventListener('scroll', handleScroll)
+  }
+})
+
+// ============================== 文件上传 ============================//
+interface FileUploadRef {
+  pendingUploadFileInfoList: UploadFileInfo[] | null | undefined
+  options?: any[]
+  reset?: () => void
+}
+const fileUploadRef = ref<FileUploadRef | null>(null)
+
+// 用于绑定文件上传信息列表
+const pendingUploadFileInfoList = ref([])
+</script>
+
+<template>
+  <div
+    class="flex justify-between items-center h-full"
+  >
+    <n-layout
+      ref="scrollableContainer"
+      class="custom-layout h-full"
+      has-sider
+      :native-scrollbar="true"
+      @mouseenter="showScrollbar"
+      @mouseleave="hideScrollbar"
+    >
+      <n-layout-sider
+        v-model:collapsed="collapsed"
+        collapse-mode="width"
+        :collapsed-width="0"
+        :width="260"
+        :show-collapsed-content="false"
+        show-trigger="arrow-circle"
+        bordered
+      >
+        <div
+          h-full
+          class="content"
+          flex="~ col"
+        >
+          <div
+            class="header p-20"
+            :style="{
+              'display': `flex`, /* 使用Flexbox布局 */
+              'align-items': `center`, /* 垂直居中对齐 */
+              'justify-content': `start`, /* 水平分布空间 */
+              'flex-shrink': `0`,
+              'position': `sticky`,
+              'top': `0`,
+              'z-index': `1`,
+            }"
+          >
+            <div
+              class="create-chat-box"
+              :class="{
+                hide: isFocusSearchChat,
+              }"
+            >
+              <n-button
+                type="primary"
+                icon-placement="left"
+                color="#5c7cfa"
+                strong
+                class="create-chat"
+                :disabled="stylizingLoading"
+                @click="newChat"
+              >
+                <template #icon>
+                  <n-icon>
+                    <div class="i-hugeicons:add-01"></div>
+                  </n-icon>
+                </template>
+                新建对话
+              </n-button>
+            </div>
+            <n-input
+              ref="searchChatRef"
+              v-model:value="searchText"
+              placeholder="搜索"
+              class="search-chat"
+              clearable
+              :class="{
+                focus: isFocusSearchChat,
+              }"
+              @click="onFocusSearchChat()"
+              @blur="onBlurSearchChat()"
+              @input="handleSearch()"
+              @keyup.enter="handleSearch()"
+              @clear="handleClear()"
+            >
+              <template #prefix>
+                <div class="i-hugeicons:search-01"></div>
+              </template>
+            </n-input>
+          </div>
+          <div flex="1 ~ col" class="scrollable-table-container">
+            <n-data-table
+              ref="tableRef"
+              class="custom-table"
+              :style="{
+                'font-size': `20px`,
+                'fontcolor': `red`,
+                '--n-td-color': `#ffffff`,
+                'font-family': `-apple-system, BlinkMacSystemFont,'Segoe UI', Roboto, 'Helvetica Neue', Arial,sans-serif`,
+              }"
+              size="small"
+              :bordered="false"
+              :bottom-bordered="false"
+              :single-line="false"
+              :columns="historySidebarColumns"
+              :data="tableData"
+              :loading="isLoadingHistory"
+              :row-props="rowProps"
+            />
+          </div>
+          <div
+            class="footer"
+            style="flex-shrink: 0"
+          >
+            <n-divider
+              style="width: calc(100% - 60px); margin-left: 25px; margin-right: 35px;
+
+--n-color: #e8eaf2;"
+            />
+            <n-button
+              quaternary
+              icon-placement="left"
+              type="primary"
+              strong
+              :style="{
+                'width': `200px`,
+                'height': `38px`,
+                'margin-left': `20px`,
+                'margin-bottom': `10px`,
+                'align-self': `center`,
+                'text-align': `center`,
+                'font-family': `-apple-system, BlinkMacSystemFont,
+            'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+            sans-serif`,
+                'font-size': `14px`,
+              }"
+              @click="openModal"
+            >
+              <template #icon>
+                <n-icon>
+                  <div class="i-hugeicons:voice-id"></div>
+                </n-icon>
+              </template>
+              管理对话
+            </n-button>
+
+            <TableModal
+              :show="isModalOpen"
+              @update:show="handleModalClose"
+            />
+          </div>
+        </div>
+      </n-layout-sider>
+      <n-layout-content class="content">
+        <!-- 内容区域 -->
+        <div
+          flex="~ 1 col"
+          min-w-0
+          h-full
+        >
+          <div flex="~ justify-between items-center">
+            <NavigationNavBar :background-color="backgroundColorVariable" />
+          </div>
+
+          <!-- 这里循环渲染即可实现多轮对话 -->
+          <div
+            ref="messagesContainer"
+            flex="1 ~ col"
+            min-h-0
+            pb-20
+            class="scrollable-container"
+            :style="{ backgroundColor: backgroundColorVariable }"
+            @scroll="handleScroll"
+          >
+            <!-- 默认对话页面 -->
+            <transition name="fade">
+              <div v-if="showDefaultPage">
+                <DefaultPage :qa-type="qa_type" />
+              </div>
+            </transition>
+
+            <template
+              v-if="!showDefaultPage"
+            >
+              <div
+                v-for="(item, index) in conversationItemsSnapshot"
+                :key="`${item.uuid}-${index}`"
+                class="mb-4"
+              >
+                <div v-if="item.role === 'user'" class="flex flex-col items-end space-y-2 w-full">
+                  <!-- 用户消息 -->
+                  <div
+                    :style="{
+                      'margin-left': `10%`,
+                      'margin-right': `10%`,
+                      'padding': `15px`,
+                      'border-radius': `5px`,
+                      'text-align': `center`,
+                      'max-width': '80%', // 控制宽度避免撑满
+                    }"
+                  >
+                    <n-space>
+                      <n-tag
+                        size="large"
+                        :bordered="false"
+                        :round="true"
+                        :style="{
+                          'fontSize': '16px',
+                          'fontFamily': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
+                          'fontWeight': '400',
+                          'color': '#26244c',
+                          'max-width': '600px',
+                          'text-align': 'left',
+                          'padding': '5px 18px',
+                          'height': 'auto',
+                          'line-height': 1.5,
+                          'word-wrap': 'break-word',
+                          'word-break': 'break-all',
+                          'white-space': 'pre-wrap',
+                          'overflow': 'visible',
+                        }"
+                        :color="{
+                          color: '#e0dfff',
+                          borderColor: '#e0dfff',
+                        }"
+                      >
+                        <template #avatar>
+                          <div class="size-25 i-my-svg:user-avatar"></div>
+                        </template>
+                        {{ item.question }}
+                      </n-tag>
+                    </n-space>
+                  </div>
+
+                  <!-- 用户上传的文件列表 -->
+                  <div
+                    v-if="item.file_key && item.file_key.length > 0"
+                    class="upload-wrapper-list flex flex-wrap gap-10 items-center pb-5"
+                    style="margin-left: 10%; margin-right: 10.5%; width: 80%; justify-content: flex-end;"
+                  >
+                    <FileListItem
+                      v-for="(file, fileIndex) in item.file_key"
+                      :key="fileIndex"
+                      :file="file"
+                    />
+                  </div>
+
+                  <!-- 加载动画：紧跟在消息下方，但对齐到左边 -->
+                  <div
+                    v-if="contentLoadingStates[index]"
+                    class="i-svg-spinners:bars-scale"
+                    :style="{
+                      'width': `24px`,
+                      'height': `24px`,
+                      'color': `#b1adf3`,
+                      'border-left-color': `#b1adf3`,
+                      'animation': `spin 1s linear infinite`,
+                      'margin-top': '10px',
+                      'align-self': 'flex-start', // 让此元素在交叉轴（水平轴）上靠左对齐
+                      'margin-left': '12%', // 与上面的消息保持一致的缩进
+                    }"
+                  ></div>
+                </div>
+
+                <div v-if="item.role === 'assistant'">
+                  <template v-if="item.messageContent?.version === 1">
+                    <div class="assistant-unified-card">
+                      <template
+                        v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
+                        :key="entry.kind === 'subagent'
+                          ? (entry.part.toolCallId ?? entry.part.id ?? pi)
+                          : (entry.part.id ?? pi)"
+                      >
+                        <ReasoningBlock
+                          v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
+                          :reasoning="entry.part.content"
+                          :defaultOpen="false"
+                          :streaming="entry.part.status === 'streaming'"
+                          appearance="light"
+                        />
+                        <SubagentCollapse
+                          v-else-if="entry.kind === 'subagent'"
+                          appearance="light"
+                          :input="entry.part.input"
+                          :output="entry.part.output"
+                          :status="entry.part.status"
+                          :error="entry.part.error"
+                          :duration-ms="entry.part.durationMs"
+                          :child-parts="entry.childParts"
+                        />
+                        <ToolCallCollapse
+                          v-else-if="entry.kind === 'part' && entry.part.type === 'tool'"
+                          appearance="light"
+                          :toolName="entry.part.toolName"
+                          :arguments="entry.part.input"
+                          :result="entry.part.status === 'error' ? (entry.part.error || entry.part.output || '') : entry.part.output"
+                          :status="entry.part.status"
+                          :duration-ms="entry.part.durationMs"
+                        />
+                        <MarkdownPreview
+                          v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
+                          :content="entry.part.content || ''"
+                          :toolCalls="null"
+                          :msgMetadata="item.msg_metadata"
+                          :isInit="isInit"
+                          :isView="isView"
+                          :show-action-bar="false"
+                          variant="segment"
+                          :qa-type="item.qa_type || 'COMMON_QA'"
+                          :parentScollBottomMethod="scrollToBottom"
+                          @failed="() => onFailedReader(index)"
+                          @recycleQa="() => onRecycleQa(index)"
+                          @praiseFeadBack="() => onPraiseFeadBack(index)"
+                          @belittleFeedback="() => onBelittleFeedback(index)"
+                        />
+                      </template>
+                      <div
+                        v-if="hasValidUsage(item.msg_metadata?.usage)"
+                        class="assistant-usage-summary"
+                      >
+                        {{ formatUsageSummary(item.msg_metadata!.usage!) }}
+                      </div>
+                      <AssistantReplyToolbar
+                        v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
+                        :qa-type="item.qa_type || 'COMMON_QA'"
+                        :copy-text="[item.reasoning, item.content].filter((s) => s && String(s).trim()).join('\n\n')"
+                        :langfuse-session-id="item.langfuse_session_id"
+                        :langfuse-ui-origin="langfuseUiOrigin"
+                        @praise-fead-back="() => onPraiseFeadBack(index)"
+                        @belittle-feedback="() => onBelittleFeedback(index)"
+                        @recycle-qa="() => onRecycleQa(index)"
+                      />
+                      <AssistantStreamingIndicator
+                        v-if="showAssistantReplyLoading(index, item.role)"
+                        embedded
+                      />
+                    </div>
+                  </template>
+                  <template v-else>
+                    <ReasoningBlock
+                      v-if="item.reasoning"
+                      :reasoning="item.reasoning"
+                      :defaultOpen="false"
+                      appearance="light"
+                    />
+                    <MarkdownPreview
+                      :content="item.content || ''"
+                      :toolCalls="item.tool_calls"
+                      :msgMetadata="item.msg_metadata"
+                      :isInit="isInit"
+                      :isView="isView"
+                      :qa-type="item.qa_type || 'COMMON_QA'"
+                      :parentScollBottomMethod="scrollToBottom"
+                      @failed="() => onFailedReader(index)"
+                      @completed="() => onCompletedReader(index)"
+                      @recycleQa="() => onRecycleQa(index)"
+                      @praiseFeadBack="() => onPraiseFeadBack(index)"
+                      @belittleFeedback="() => onBelittleFeedback(index)"
+                      @beginRead="() => onBeginRead(index)"
+                    />
+                    <AssistantStreamingIndicator
+                      v-if="showAssistantReplyLoading(index, item.role)"
+                    />
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <div
+              v-if="!isInit && !stylizingLoading"
+              class="w-70% ml-11% mt-[-20] bg-#f6f7fb"
+            >
+              <SuggestedView
+                :labels="suggested_array"
+                @suggested="onSuggested"
+              />
+            </div>
+          </div>
+
+          <div
+            v-show="showScrollToBottom"
+            class="scroll-to-bottom-btn"
+            @click="clickScrollToBottom"
+          >
+            <div class="i-mingcute:arrow-down-fill"></div>
+          </div>
+
+          <div
+            :class="['items-center', 'shrink-0', `bg-${backgroundColorVariable}`]"
+          >
+            <div class="flex-1 w-full p-1em chat-input-footer">
+              <n-space
+                vertical
+                class="mx-10%"
+              >
+                <!-- 文档流内、与输入区同宽，避免 absolute 遮挡消息区 -->
+                <TodoList
+                  :todos="businessStore.todos"
+                />
+                <div
+                  flex="~ gap-10"
+                  class="h-40"
+                >
+                  <n-button
+                    type="default"
+                    :class="[
+                      qa_type === 'COMMON_QA' && 'active-tab',
+                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                    ]"
+                    @click="onAqtiveChange('COMMON_QA', '')"
+                  >
+                    <template #icon>
+                      <n-icon size="16">
+                        <svg
+                          t="1742194713465"
+                          class="icon"
+                          viewBox="0 0 1024 1024"
+                          version="1.1"
+                          xmlns="http://www.w3.org/2000/svg"
+                          p-id="8188"
+                          width="60"
+                          height="60"
+                        >
+                          <path
+                            d="M80.867881 469.76534l0.916659 0.916659 79.711097-79.711097L160.655367 389.901467a162.210364 162.210364 0 0 1 229.164631-229.164631l236.345122 236.345122L706.028994 317.332667l-236.345123-236.803452a275.112139 275.112139 0 0 0-388.81599 389.27432z m472.690245-388.81599l-0.916658 0.916659 79.711097 79.711097 0.916659-0.916658A162.210364 162.210364 0 0 1 862.663019 389.901467l-236.345122 236.345122 79.711097 79.711098 236.803452-236.345123a275.112139 275.112139 0 0 0-389.27432-388.81599z m-84.027031 861.506236l0.916659-0.916659-79.711098-79.711097-0.916658 0.916658a162.210364 162.210364 0 0 1-229.164631-229.431989l236.345122-236.345123L317.251198 317.332667l-236.803452 236.345122a275.112139 275.112139 0 0 0 389.27432 388.815991z m99.801197-372.736272a81.811773 81.811773 0 0 0 21.197728-78.794439 80.895115 80.895115 0 0 0-57.59671-57.596711 81.620803 81.620803 0 1 0 36.398982 136.352956z m373.156407-15.659583l-0.916659-0.916659-79.711097 79.711097 0.916658 0.916659a162.248559 162.248559 0 0 1-229.431989 229.431989L396.885907 626.704918 317.251198 706.568792l236.345122 236.803452A275.073945 275.073945 0 0 0 942.374117 554.136119z"
+                            fill="#297CE9"
+                            p-id="8189"
+                          />
+                        </svg>
+                      </n-icon>
+                    </template>
+                    智能问答
+                  </n-button>
+                  <n-button
+                    type="default"
+                    :class="[
+                      qa_type === 'DEEP_RESEARCH_QA' && 'active-tab',
+                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                    ]"
+                    @click="onAqtiveChange('DEEP_RESEARCH_QA', '')"
+                  >
+                    <template #icon>
+                      <n-icon size="18">
+                        <svg
+                          t="1732528323504"
+                          class="icon"
+                          viewBox="0 0 1024 1024"
+                          version="1.1"
+                          xmlns="http://www.w3.org/2000/svg"
+                          p-id="41739"
+                          width="64"
+                          height="64"
+                        >
+                          <path
+                            d="M96 896c-8 0-15.5-3.1-21.2-8.8C69.1 881.6 66 874 66 866V445c0-5.5 4.5-10 10-10s10 4.5 10 10v421c0 2.7 1 5.2 2.9 7.1 1.9 1.9 4.4 2.9 7.1 2.9h612c5.5 0 10 4.5 10 10s-4.5 10-10 10H96z m748 0v-20c2.7 0 5.2-1 7.1-2.9 1.9-1.9 2.9-4.4 2.9-7.1v-80c0-5.5 4.5-10 10-10s10 4.5 10 10v80c0 8-3.1 15.5-8.8 21.2-5.6 5.7-13.2 8.8-21.2 8.8z m20-450c-5.5 0-10-4.5-10-10V126c0-5.5-4.5-10-10-10H96c-5.5 0-10 4.5-10 10v193c0 5.5-4.5 10-10 10s-10-4.5-10-10V126c0-16.5 13.4-30 30-30h748c16.5 0 30 13.4 30 30v310c0 5.5-4.5 10-10 10z"
+                            fill="#222222"
+                            p-id="41740"
+                          />
+                          <path
+                            d="M781 886m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
+                            fill="#222222"
+                            p-id="41741"
+                          />
+                          <path
+                            d="M76 383m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
+                            fill="#222222"
+                            p-id="41742"
+                          />
+                          <path
+                            d="M84 226h775v20H84zM750 826c-57.2 0-110.9-22.3-151.3-62.7C558.3 722.9 536 669.2 536 612s22.3-110.9 62.7-151.3C639.1 420.3 692.8 398 750 398s110.9 22.3 151.3 62.7C941.7 501.1 964 554.8 964 612s-22.3 110.9-62.7 151.3C860.9 803.7 807.2 826 750 826z m0-408c-107 0-194 87-194 194s87 194 194 194 194-87 194-194-87-194-194-194z"
+                            fill="#222222"
+                            p-id="41743"
+                          />
+                          <path
+                            d="M901.7 753.2c-1 0-2.1-0.2-3.1-0.5-4.1-1.3-6.9-5.2-6.9-9.5V478.8c0-4.3 2.8-8.2 6.9-9.5 4.1-1.3 8.6 0.1 11.2 3.6 24.9 34 51.4 75.6 51.4 139.1 0 62-22.3 97.3-51.4 137.1-1.9 2.7-4.9 4.1-8.1 4.1z m10.1-241.9v200c17.9-28 29.5-56.4 29.5-99.3-0.1-40.2-11-70.5-29.5-100.7z"
+                            fill="#222222"
+                            p-id="41744"
+                          />
+                          <path
+                            d="M859 788l93 130"
+                            fill="#358AFE"
+                            p-id="41745"
+                          />
+                          <path
+                            d="M952 928c-3.1 0-6.2-1.5-8.1-4.2l-93-130c-3.2-4.5-2.2-10.7 2.3-14 4.5-3.2 10.7-2.2 14 2.3l93 130c3.2 4.5 2.2 10.7-2.3 14-1.8 1.3-3.9 1.9-5.9 1.9zM482.4 468.4H171.6c-8.8 0-16-7.2-16-16v-89.8c0-8.8 7.2-16 16-16h310.8c8.8 0 16 7.2 16 16v89.8c0 8.8-7.2 16-16 16z m-306.8-20h302.8v-81.8H175.6v81.8z m306.8-81.8zM384 580H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h219c5.5 0 10 4.5 10 10s-4.5 10-10 10zM455 690H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h290c5.5 0 10 4.5 10 10s-4.5 10-10 10zM525 800H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h360c5.5 0 10 4.5 10 10s-4.5 10-10 10zM183 146c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z"
+                            fill="#222222"
+                            p-id="41746"
+                          />
+                        </svg>
+                      </n-icon>
+                    </template>
+                    深度研究
+                  </n-button>
+                  <n-button
+                    type="default"
+                    :class="[
+                      qa_type === 'FAULT_OPERATION_QA' && 'active-tab',
+                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                    ]"
+                    @click="onAqtiveChange('FAULT_OPERATION_QA', '')"
+                  >
+                    <template #icon>
+                      <n-icon size="18">
+                        <svg
+                          t="1743292000000"
+                          class="icon"
+                          viewBox="0 0 1024 1024"
+                          version="1.1"
+                          xmlns="http://www.w3.org/2000/svg"
+                          p-id="8849"
+                          width="64"
+                          height="64"
+                        >
+                          <path
+                            d="M512 160c-35.3 0-64 28.7-64 64v32c0 35.3 28.7 64 64 64s64-28.7 64-64v-32c0-35.3-28.7-64-64-64z"
+                            fill="#222222"
+                            p-id="8850"
+                          />
+                          <path
+                            d="M480 384h64v320h-64z"
+                            fill="#222222"
+                            p-id="8851"
+                          />
+                          <path
+                            d="M448 704h128v32c0 17.7-14.3 32-32 32H480c-17.7 0-32-14.3-32-32v-32z"
+                            fill="#222222"
+                            p-id="8852"
+                          />
+                          <path
+                            d="M416 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
+                            fill="#222222"
+                            p-id="8853"
+                          />
+                          <path
+                            d="M608 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
+                            fill="#222222"
+                            p-id="8854"
+                          />
+                          <path
+                            d="M448 144c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40h128c22.1 0 40-17.9 40-40v-24c0-22.1-17.9-40-40-40H448z"
+                            fill="#222222"
+                            p-id="8855"
+                          />
+                          <path
+                            d="M848 512c0-141.4-114.6-256-256-256S336 370.6 336 512c0 44.2 11.2 85.8 31.1 122.9L224 768h576l-143.1-133.1C880.8 597.8 896 556.2 896 512zM592 768H432l144-160h144l-128 160z"
+                            fill="#222222"
+                            p-id="8856"
+                          />
+                          <path
+                            d="M512 320c-105.6 0-192 86.4-192 192s86.4 192 192 192 192-86.4 192-192-86.4-192-192-192z"
+                            fill="#222222"
+                            p-id="8857"
+                          />
+                        </svg>
+                      </n-icon>
+                    </template>
+                    故障运维
+                  </n-button>
+                  <n-button
+                    type="default"
+                    :class="[
+                      qa_type === 'TEST_CASE_QA' && 'active-tab',
+                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                    ]"
+                    @click="onAqtiveChange('TEST_CASE_QA', '')"
+                  >
+                    <template #icon>
+                      <n-icon size="18">
+                        <svg
+                          t="1743292000001"
+                          class="icon"
+                          viewBox="0 0 1024 1024"
+                          version="1.1"
+                          xmlns="http://www.w3.org/2000/svg"
+                          p-id="88501"
+                          width="64"
+                          height="64"
+                        >
+                          <path
+                            d="M896 128H128c-35.2 0-64 28.8-64 64v640c0 35.2 28.8 64 64 64h768c35.2 0 64-28.8 64-64V192c0-35.2-28.8-64-64-64z"
+                            fill="none"
+                            stroke="#222222"
+                            stroke-width="32"
+                            p-id="88502"
+                          />
+                          <path
+                            d="M320 320h384M320 448h384M320 576h256"
+                            fill="none"
+                            stroke="#222222"
+                            stroke-width="24"
+                            stroke-linecap="round"
+                            p-id="88503"
+                          />
+                          <path
+                            d="M704 640l-96 96-32-32-64 64"
+                            fill="none"
+                            stroke="#4CAF50"
+                            stroke-width="24"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            p-id="88504"
+                          />
+                        </svg>
+                      </n-icon>
+                    </template>
+                    测试用例
+                  </n-button>
+                </div>
+                <div
+                  :class="[
+                    'relative b b-solid b-primary bg-white',
+                    'rounded-10px p-12',
+                  ]"
+                >
+                  <FileUploadManager
+                    ref="fileUploadRef"
+                    v-model="pendingUploadFileInfoList"
+                  />
+
+                  <n-input
+                    ref="refInputTextString"
+                    v-model:value="inputTextString"
+                    type="textarea"
+                    class="textarea-resize-none w-full text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
+                    :style="{
+                      '--n-border-radius': '15px',
+                      'align': 'center',
+                      'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
+                      'font-size': '16px',
+                      'line-height': '1.5',
+                    }"
+                    :placeholder="placeholder"
+                    :autosize="{
+                      minRows: 1,
+                      maxRows: 10,
+                    }"
+                  >
+                    <template
+                      #prefix
+                    >
+                      <n-dropdown
+                        :options="fileUploadRef?.options || []"
+                      >
+                        <div flex="~ items-center justify-center" class="rounded-50% p-7 hover:bg-primary/5 transition-all-300 bg-primary/1" b="~ solid primary/20">
+                          <div class="text-20  i-uil:upload cursor-pointer"></div>
+                        </div>
+                        <!-- <n-icon size="30">
+                          <svg
+                            t="1729566080604"
+                            class="icon"
+                            viewBox="0 0 1024 1024"
+                            version="1.1"
+                            xmlns="http://www.w3.org/2000/svg"
+                            p-id="38910"
+                            width="64"
+                            height="64"
+                          >
+                            <path
+                              d="M856.448 606.72v191.744a31.552 31.552 0 0 1-31.488 31.488H194.624a31.552 31.552 0 0 1-31.488-31.488V606.72a31.488 31.488 0 1 1 62.976 0v160.256h567.36V606.72a31.488 31.488 0 1 1 62.976 0zM359.872 381.248c-8.192 0-10.56-5.184-5.376-11.392L500.48 193.152a11.776 11.776 0 0 1 18.752 0l145.856 176.704c5.184 6.272 2.752 11.392-5.376 11.392H359.872z"
+                              fill="#838384"
+                              p-id="38911"
+                            />
+                            <path
+                              d="M540.288 637.248a30.464 30.464 0 1 1-61.056 0V342.656a30.464 30.464 0 1 1 61.056 0v294.592z"
+                              fill="#838384"
+                              p-id="38912"
+                            />
+                          </svg>
+                        </n-icon> -->
+                      </n-dropdown>
+                    </template>
+                  </n-input>
+
+                  <n-float-button
+                    position="absolute"
+                    :type="stylizingLoading ? 'primary' : 'default'"
+                    color
+                    bottom="10px"
+                    right="8px"
+                    :class="[
+                      stylizingLoading && 'opacity-90',
+                      'text-20',
+                    ]"
+                    @click.stop="handleCreateStylized()"
+                  >
+                    <div
+                      v-if="stylizingLoading"
+                      class="i-svg-spinners:pulse-2 c-#fff text-20"
+                    ></div>
+                    <div
+                      v-else
+                      class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
+                    ></div>
+                  </n-float-button>
+                </div>
+              </n-space>
+            </div>
+          </div>
+        </div>
+      </n-layout-content>
+    </n-layout>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.create-chat-box {
+  width: 168px;
+  overflow: hidden;
+  transition: all 0.3s;
+  margin-right: 10px;
+
+  &.hide {
+    width: 0;
+    margin-right: 0;
+  }
+}
+
+.create-chat {
+  width: 100%;
+  height: 36px;
+  text-align: center;
+  font-family: Arial;
+  font-weight: bold;
+  font-size: 14px;
+  border-radius: 20px;
+}
+
+.search-chat {
+  width: 36px;
+  height: 36px;
+  text-align: center;
+  font-family: Arial;
+  font-weight: bold;
+  font-size: 14px;
+  border-radius: 50%;
+  cursor: pointer;
+
+  &.focus {
+    width: 100%;
+    border-radius: 20px;
+  }
+}
+
+.scrollable-container {
+  overflow-y: auto; // 添加纵向滚动条
+  height: 100%;
+  padding-bottom: 20px; // 底部内边距，防止内容被遮挡
+  background-color: #f6f7fb;
+
+  // background: linear-gradient(to bottom, #f0effe, #f6f7fb);
+}
+
+/* 滚动条整体部分 */
+
+::-webkit-scrollbar {
+  width: 4px; /* 竖向滚动条宽度 */
+  height: 4px; /* 横向滚动条高度 */
+}
+
+/* 滚动条的轨道 */
+
+::-webkit-scrollbar-track {
+  background: #fff; /* 轨道背景色 */
+}
+
+/* 滚动条的滑块 */
+
+::-webkit-scrollbar-thumb {
+  background: #cac9f9; /* 滑块颜色 */
+  border-radius: 10px; /* 滑块圆角 */
+}
+
+/* 滚动条的滑块在悬停状态下的样式 */
+
+::-webkit-scrollbar-thumb:hover {
+  background: #cac9f9; /* 悬停时滑块颜色 */
+}
+
+:deep(.custom-table .n-data-table-thead) {
+  display: none;
+}
+
+:deep(.custom-table .n-data-table-table) {
+  border-collapse: collapse;
+}
+
+:deep(.custom-table .n-data-table-th),
+:deep(.custom-table .n-data-table-td) {
+  border: none;
+}
+
+:deep(.custom-table td) {
+  color: #113;
+  padding: 12px 30px;
+  background-color:  #fff;
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 优化后的系统字体栈：优先使用系统原生字体 */
+
+  font-family:
+    /* macOS */ -apple-system,
+    /* Windows */ BlinkMacSystemFont,
+    /* 通用系统UI */ 'Segoe UI',
+    /* 开源跨平台 */ Roboto,
+    /* Linux */ Oxygen, Ubuntu, Cantarell,
+    /* fallback */ 'Open Sans', 'Helvetica Neue', Arial,
+    /* 终极兜底 */ sans-serif,
+    /* 现代浏览器推荐 */ system-ui,
+    /* 苹果新字体支持 */ "SF Pro Text";
+
+  /* 可选：基础字体大小与行高，提升可读性 */
+
+  font-size: 14px;
+
+  /* 优化字体渲染 */
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizelegibility;
+}
+
+:deep(.custom-table .selected-row td) {
+  color: #615ced !important;
+  font-weight: bold;
+  padding: 12px 30px !important;
+  background: linear-gradient(to bottom, #fff, #f9f9ff);
+  transform: scale(1.001);
+  transition: all 0.3s ease;
+}
+
+.default-page {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh; /* 使容器高度占满整个视口 */
+  background-color: #f6f7fb; /* 可选：设置背景颜色 */
+}
+
+.active-tab {
+  // background: linear-gradient(to left, #f3f2ff, #e1e7fe);
+
+  background: linear-gradient(to left, #f0effe, #d4eefc);
+  border-color: #635eed;
+  color: #635eed;
+}
+
+/* 新建对话框的淡入淡出动画样式 */
+
+.fade-enter-active {
+  transition: opacity 1s; /* 出现时较慢 */
+}
+
+.fade-leave-active {
+  transition: opacity 0s; /* 隐藏时较快 */
+}
+
+.fade-enter, .fade-leave-to /* .fade-leave-active in <2.1.8 */ {
+  opacity: 0;
+}
+
+@keyframes spin {
+
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.custom-layout {
+  border-top-left-radius: 10px;
+  background-color: #fff;
+}
+
+.header,
+.footer {
+  background-color: #fff;
+}
+
+.content {
+  border-right:1px solid #f6f7fb;
+  background-color: #fff;
+
+  // padding: 8px;
+}
+
+.footer {
+  border-bottom-left-radius: 10px;
+}
+
+.icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px; /* 可根据需要调整 */
+  height: 38px; /* 与宽度相同，形成圆形 */
+  border-radius: 100%; /* 圆形 */
+  border: 1px solid #e8eaf3;
+  background-color: #fff; /* 按钮背景颜色 */
+  cursor: pointer;
+  transition: background-color 0.3s; /* 平滑过渡效果 */
+  position: relative; /* 相对定位 */
+}
+
+.icon-button.selected {
+  border: 1px solid #a48ef4;
+}
+
+.icon-button:hover {
+  border: 1px solid #a48ef4; /* 鼠标悬停时的颜色 */
+}
+
+
+/** 自定义对话历史表格滚动条样式 */
+
+.scrollable-table-container {
+  overflow-y: hidden; /* 默认隐藏滚动条 */
+  height: 100%; /* 根据实际情况调整高度 */
+  background-color: #fff;
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.scrollable-table-container:hover {
+  overflow-y: auto; /* 鼠标悬停时显示滚动条 */
+}
+
+/* 隐藏滚动条轨道 */
+
+.scrollable-table-container::-webkit-scrollbar {
+  width: 5px; /* 滚动条宽度 */
+}
+
+.scrollable-table-container::-webkit-scrollbar-track {
+  background: transparent; /* 滚动条轨道背景透明 */
+}
+
+.scrollable-table-container::-webkit-scrollbar-thumb {
+  background-color: #e8eaf3; /* 滚动条颜色 */
+  border-radius: 4px; /* 滚动条圆角 */
+}
+
+/* 一键到底部按钮样式，底部居中显示 */
+
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 145px; /* 距离底部的距离 */
+  left: 50%;
+  transform: translateX(-50%); /* 水平居中 */
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: #fff;
+  box-shadow: 0 4px 15px rgb(0 0 0 / 20%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 100;
+  transition: all 0.3s ease;
+  border: 1px solid #e8eaf3;
+  backdrop-filter: blur(5px);
+}
+
+.scroll-to-bottom-btn:hover {
+  background-color: #f6f7fb;
+  transform: translateX(-50%) scale(1.1); /* 悬停时放大 */
+  box-shadow: 0 6px 20px rgb(0 0 0 / 25%);
+}
+
+.scroll-to-bottom-btn::before {
+  content: "";
+  position: absolute;
+  width: 200%;
+  height: 200%;
+  top: -50%;
+  left: -50%;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+
+  50% {
+    transform: scale(1);
+    opacity: 0.2;
+  }
+
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+.upload-wrapper-list {
+  --at-apply: flex flex-wrap gap-10 items-center;
+  --at-apply: pb-12;
+}
+
+.chat-input-footer {
+  flex-shrink: 0;
+}
+
+.assistant-unified-card {
+  width: 80%;
+  margin-left: 10%;
+  margin-right: 10%;
+  background: #ffffff;
+  border: 1px solid #e8eaf0;
+  border-radius: 16px;
+  /* 勿用 overflow:hidden，会裁切内嵌工具条右侧状态标签与阴影 */
+  overflow: visible;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+
+.assistant-usage-summary {
+  padding: 4px 16px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #94a3b8;
+  font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
+  letter-spacing: 0.02em;
+}
+</style>
