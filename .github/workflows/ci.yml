@@ -24,6 +24,8 @@ env:
   JWT_SECRET_KEY: ci-jwt-secret
   MYSQL_PASSWORD: ci-mysql-password
   MODEL_API_KEY: sk-ci-placeholder
+  EMBEDDING_MODEL_API_KEY: sk-ci-placeholder
+  DASHSCOPE_API_KEY: sk-ci-placeholder
 
 jobs:
   backend:
