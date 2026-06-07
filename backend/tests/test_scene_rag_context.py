@@ -1,8 +1,11 @@
 """场景级多知识库 RAG 组装单测（mock KbRetrievalService）。"""
 
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from config.env import LangfuseConfig, QdrantConfig
 
 from agent.case_generate.rag import (
     CHANNEL_CURRENT_REQUIREMENT,
@@ -39,8 +42,9 @@ async def test_build_scene_rag_context_three_channel_order_and_sections():
         call_specs.append((self.collection_name, filters))
         return [_hit(f"{self.collection_name}-1", f"content-{self.collection_name}")]
 
+    qdrant_cfg = replace(QdrantConfig, case_rag_historical_requirements_enabled=True)
     with patch.object(_HybridRetriever, "search", new=_side_effect):
-        with patch("config.env.QdrantConfig.case_rag_historical_requirements_enabled", True):
+        with patch("agent.case_generate.rag.QdrantConfig", qdrant_cfg):
             context, trace = await build_scene_rag_context(
                 SCENE,
                 adopted_point_names=["密码错误提示"],
@@ -119,7 +123,8 @@ async def test_build_scene_rag_context_langfuse_spans_when_enabled():
     async def _side_effect(self, query, *, limit=3, filters=None, vector_dimension=1024):
         return [_hit(f"{self.collection_name}-1", f"content-{self.collection_name}")]
 
-    with patch("config.env.LangfuseConfig.langfuse_tracing_enabled", True):
+    langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=True)
+    with patch("config.env.LangfuseConfig", langfuse_cfg):
         with patch("langfuse.get_client", return_value=mock_client):
             with patch.object(_HybridRetriever, "search", new=_side_effect):
                 from utils.langfuse_tracing import langfuse_workflow_context

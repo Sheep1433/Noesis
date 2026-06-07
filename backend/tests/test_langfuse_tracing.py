@@ -1,8 +1,14 @@
 """Langfuse RunnableConfig 合并单元测试（不依赖真实 Langfuse 服务）。"""
 
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
+from config.env import LangfuseConfig
 from utils import langfuse_tracing
+
+
+def _langfuse_config(*, tracing_enabled: bool) -> LangfuseConfig:
+    return replace(LangfuseConfig, langfuse_tracing_enabled=tracing_enabled)
 
 
 def test_merge_langfuse_disabled_no_callbacks():
@@ -108,7 +114,7 @@ def test_langfuse_session_id_from_config():
 
 def test_langfuse_workflow_context_disabled_is_noop():
     run_config = {"metadata": {"langfuse_session_id": "chat-1"}}
-    with patch("config.env.LangfuseConfig.langfuse_tracing_enabled", False):
+    with patch("config.env.LangfuseConfig", _langfuse_config(tracing_enabled=False)):
         with langfuse_tracing.langfuse_workflow_context(run_config):
             assert langfuse_tracing._lf_session_id.get() is None
 
@@ -124,7 +130,7 @@ def test_langfuse_workflow_context_propagates_from_run_config():
     mock_propagate = MagicMock()
     mock_propagate.__enter__ = MagicMock(return_value=None)
     mock_propagate.__exit__ = MagicMock(return_value=False)
-    with patch("config.env.LangfuseConfig.langfuse_tracing_enabled", True):
+    with patch("config.env.LangfuseConfig", _langfuse_config(tracing_enabled=True)):
         with patch("langfuse.propagate_attributes", return_value=mock_propagate) as pa:
             with langfuse_tracing.langfuse_workflow_context(run_config):
                 assert langfuse_tracing._lf_session_id.get() == "chat-1"
@@ -157,7 +163,7 @@ def test_langfuse_retrieval_observation_reads_workflow_context():
             "langfuse_trace_id": "trace-1",
         }
     }
-    with patch("config.env.LangfuseConfig.langfuse_tracing_enabled", True):
+    with patch("config.env.LangfuseConfig", _langfuse_config(tracing_enabled=True)):
         with patch("langfuse.get_client", return_value=mock_client):
             with langfuse_tracing.langfuse_workflow_context(run_config):
                 with langfuse_tracing.langfuse_retrieval_observation(

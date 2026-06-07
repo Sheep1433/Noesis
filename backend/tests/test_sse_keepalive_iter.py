@@ -38,8 +38,10 @@ async def test_keepalive_disabled_zero_interval() -> None:
 @pytest.mark.asyncio
 async def test_test_case_coordinator_stream_langfuse_context_with_keepalive() -> None:
     """Langfuse workflow context 在 qa_service 消费层包裹，保活多帧不应触发 ContextVar reset 异常。"""
+    from dataclasses import replace
     from unittest.mock import MagicMock, patch
 
+    from config.env import LangfuseConfig
     from services.qa_service import _iter_test_case_coordinator_stream
 
     async def gen():
@@ -52,7 +54,11 @@ async def test_test_case_coordinator_stream_langfuse_context_with_keepalive() ->
     mock_cm.__enter__ = MagicMock(return_value=None)
     mock_cm.__exit__ = MagicMock(return_value=False)
     session_uuid = "d5f2c3f4-729c-4779-8dbe-307467f276e3"
-    with patch("config.env.LangfuseConfig.langfuse_tracing_enabled", True):
+    langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=True)
+    with (
+        patch("config.env.LangfuseConfig", langfuse_cfg),
+        patch("services.qa_service.LangfuseConfig", langfuse_cfg),
+    ):
         with patch("langfuse.propagate_attributes", return_value=mock_cm):
             async for item in _iter_test_case_coordinator_stream(
                 gen(),
