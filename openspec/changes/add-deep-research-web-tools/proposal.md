@@ -1,6 +1,6 @@
 ## Why
 
-深度研究 Agent（`DEEP_RESEARCH_QA`）当前仅依赖 `FilesystemMiddleware`（含 `execute`）与 `backend/skills` 中的协议指引：`deep-research-v2` 通过 OpenAlex `curl` 做学术检索、`baoyu-url-to-markdown` 抓取已知 URL，但**缺少通用 Web 关键词搜索**，无法完成行业/竞品/政策类「从 query 发现 URL」的多源检索（Phase 2）。对标 deer-flow、Hermes、OpenClaw 等成熟 Agent  harness，联网检索应采用**本地 LangChain Tool + 可插拔 Provider**，而非 Tavily MCP 或 Anthropic Server Tool（Noesis 使用 DashScope/Qwen，不具备后者运行时）。
+深度研究 Agent（`DEEP_RESEARCH_QA`）当前仅依赖 `FilesystemMiddleware`（含 `execute`）与 `backend/skills` 中的协议指引：`deep-research-v2` 通过 OpenAlex `curl` 做学术检索、`baoyu-url-to-markdown` 抓取已知 URL，但**缺少通用 Web 关键词搜索**，无法完成行业/竞品/政策类「从 query 发现 URL」的多源检索（Phase 2）。对标业界成熟 Agent harness，联网检索应采用**本地 LangChain Tool + 可插拔 Provider**，而非 Tavily MCP 或 Anthropic Server Tool（Noesis 使用 DashScope/Qwen，不具备后者运行时）。
 
 调研结论见同目录 `research-report.md`。
 
@@ -34,5 +34,5 @@
 
 - **后端**：`backend/agent/tools/`、`backend/agent/deep_research_agent.py`、`backend/config/env.py`、`backend/skills/deep-research-v2/SKILL.md`、`backend/pyproject.toml`（`ddgs`、可选 `tavily-python`）。
 - **API/SSE**：无破坏性变更；`POST /api/chat/sessions/stream` 在 `qa_type=DEEP_RESEARCH_QA` 时 Agent 工具集扩展，前端 `ToolCallCollapse` 按现有 `toolName` 规则展示 `web_search` / `web_fetch`。
-- **依赖**：新增 `tavily-python`（主）、`ddgs`（搜索回退）；参考 deer-flow `community/tavily/tools.py`。
+- **依赖**：新增 `tavily-python`（主）、`ddgs`（搜索回退）。
 - **文档**：`research-report.md`（本 change 内调研归档）；实现后更新 `AGENTS.md` 深度研究工具说明（归档时）。

@@ -1,6 +1,6 @@
 ## Purpose
 
-本能力规定 Noesis 在后端通过 **Langfuse** 对 LangGraph/LangChain Agent 推理与工具链路进行可选追踪的验收标准：配置项与 Aix-DB 对齐、延迟加载 SDK、主业务流程在遥测失败时仍可完成，且不在仓库中要求记录生产密钥。
+本能力规定 Noesis 在后端通过 **Langfuse** 对 LangGraph/LangChain Agent 推理与工具链路进行可选追踪的验收标准：配置项与 Langfuse 标准集成一致、延迟加载 SDK、主业务流程在遥测失败时仍可完成，且不在仓库中要求记录生产密钥。
 
 ## ADDED Requirements
 

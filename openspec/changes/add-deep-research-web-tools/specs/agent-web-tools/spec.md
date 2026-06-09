@@ -26,7 +26,7 @@
 `web_search` 工具 SHALL：
 
 - 接受参数 `query`（必填字符串）与可选 `limit`（整数，默认 8，范围 1–20）。
-- 当 `TAVILY_API_KEY` 已配置且可用时，SHALL 使用 `tavily-python` 的 `TavilyClient.search()` 执行检索（参考 deer-flow `community/tavily/tools.py`）。
+- 当 `TAVILY_API_KEY` 已配置且可用时，SHALL 使用 `tavily-python` 的 `TavilyClient.search()` 执行检索。
 - 当 `TAVILY_API_KEY` 未配置，或 Tavily 调用抛出可恢复异常时，SHALL 自动回退至 `ddgs` 执行检索，并记录 `warning` 日志。
 - 成功时返回 JSON 字符串，结构含 `query`、`provider`（`"tavily"` 或 `"ddg"`）、`total_results`、`results[]`，每项含 `title`、`url`、`snippet`（或等价字段）。
 - 当 Tavily 与 DDG 均失败时，返回含 `error` 字段的 JSON 字符串，**SHALL NOT** 因未捕获异常中断 Agent 整轮执行。

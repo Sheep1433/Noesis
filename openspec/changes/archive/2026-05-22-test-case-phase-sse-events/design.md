@@ -1,7 +1,7 @@
 ## Context
 
-- 对照阅读：`docs/readings/compare/aix-db-vs-noesis-backend-analysis.md` 建议 Noesis 在统一 SSE 协议上增加「业务阶段进度事件」；`docs/readings/compare/deerflow_vs_noesis_backend_analysis.md` 强调 SSE 运行时事件序列完整性。
-- **现状**：`CaseCoordinator` 已产出若干测试用例专用帧（如 `scenario-start`、`scenes-testpoints-ready`、`testpoints-confirm-required`、`case-start`、`case-end`），与通用 `LangGraphSseBridge` 事件并列；前端若要做「解析需求 → 生成测试点 → 待确认 → 并行生成」的**统一阶段模型**，需在协议层引入与 Aix-DB 对齐的 **`phase-*` 三件套**，避免各场景自定义零散 type 名称。
+- 对照阅读：`docs/readings/compare/` 下对比分析建议 Noesis 在统一 SSE 协议上增加「业务阶段进度事件」，并强调 SSE 运行时事件序列完整性。
+- **现状**：`CaseCoordinator` 已产出若干测试用例专用帧（如 `scenario-start`、`scenes-testpoints-ready`、`testpoints-confirm-required`、`case-start`、`case-end`），与通用 `LangGraphSseBridge` 事件并列；前端若要做「解析需求 → 生成测试点 → 待确认 → 并行生成」的**统一阶段模型**，需在协议层引入统一的 **`phase-*` 三件套**，避免各场景自定义零散 type 名称。
 - **约束**：仅 `TEST_CASE_QA` 与 `test-case/resume`；其它 `qa_type` 不改变；不引入第二套并行协议。
 
 ## Goals / Non-Goals
@@ -16,7 +16,7 @@
 **Non-Goals:**
 
 - 故障运维、深度研究等其它类型的 `phase-*`。
-- Redis Run 回放、`Last-Event-ID` 级别的断线恢复（可参考 DeerFlow，但不在本变更范围）。
+- Redis Run 回放、`Last-Event-ID` 级别的断线恢复（不在本变更范围）。
 - 单独 `phase-error` 帧（阶段失败继续统一走既有 `error`/`abort`，在 `phase-end` 中通过 `ok: false` 收敛可选）。
 
 ## Decisions
@@ -34,7 +34,7 @@
 
 ### 备选方案（未采纳）
 
-- **仅用现有业务事件拼装阶段**：省去 `phase-*`，但无法与 Aix-DB / 统一的「阶段契约」对齐，跨 Agent 扩展时仍会碎片化。
+- **仅用现有业务事件拼装阶段**：省去 `phase-*`，但无法与统一的「阶段契约」对齐，跨 Agent 扩展时仍会碎片化。
 - **用 `reasoning-*` 冒充阶段**：污染推理语义，前端难以区分模型思考与业务阶段。
 
 ## Risks / Trade-offs

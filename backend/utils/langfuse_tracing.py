@@ -1,4 +1,4 @@
-"""Langfuse + LangChain RunnableConfig 合并（可选，对齐 Aix-DB CallbackHandler）。"""
+"""Langfuse + LangChain RunnableConfig 合并（可选 CallbackHandler）。"""
 
 from __future__ import annotations
 

@@ -3,7 +3,7 @@
 - [x] 1.1 在 `backend/pyproject.toml`（或项目等价依赖文件）增加 `langfuse`，版本与现有 LangChain/LangGraph 栈兼容，`uv lock` / `uv sync` 可解析
 - [x] 1.2 在 `backend/config/env.py` 增加 `LANGFUSE_TRACING_ENABLED`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_BASE_URL`，默认关闭；禁止在仓库中提交真实密钥默认值
 
-## 2. Agent 回调（对齐 Aix-DB）
+## 2. Agent 回调
 
 - [x] 2.1 在 `backend/agent/base/base_agent.py`（或统一工厂）实现：仅当开关为真时延迟 `from langfuse.langchain import CallbackHandler`，构造 `config["callbacks"]` 与 `config["metadata"]["langfuse_session_id"]`
 - [x] 2.2 对 `GeneralQAAgent`、`FaultOperationAgent`、`DeepResearchAgent`、`CaseCoordinator`（及任何独立 `create_agent`/`compile().ainvoke` 路径）逐一确认 `config` 透传，避免遗漏 `qa_type` 主路径
@@ -21,5 +21,5 @@
 
 ## 5. 文档
 
-- [x] 5.1 在 `README.md` 或 `docs/` 增加「Langfuse 追踪（可选）」：四项环境变量、自托管链接（与 Aix-DB / Langfuse 官方文档一致即可）、Docker 访问宿主的提示
+- [x] 5.1 在 `README.md` 或 `docs/` 增加「Langfuse 追踪（可选）」：四项环境变量、自托管链接（与 Langfuse 官方文档一致即可）、Docker 访问宿主的提示
 - [x] 5.2 OpenSpec 归档时将本变更 `specs/agent-reasoning-observability/spec.md` 与 `specs/chat-sessions-and-streaming/spec.md` 合并入 `openspec/specs/` 对应主规格

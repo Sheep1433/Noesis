@@ -29,7 +29,7 @@
 
 **理由**：
 - 前端只消费 Noesis SSE，与 Agent 类型（create_agent / deepagents / StateGraph）无关。
-- deer-flow 的 `TokenUsageMiddleware` 仅打日志，UI 仍依赖 message 上的 metadata；Noesis 无 LangGraph SDK 消息列表，SSE 是唯一实时通道。
+- 常见 `TokenUsageMiddleware` 仅打日志，UI 仍依赖 message 上的 metadata；Noesis 无 LangGraph SDK 消息列表，SSE 是唯一实时通道。
 
 **未采纳**：AgentMiddleware 写 state 再由 service 读 — 需每个 Agent 类型重复接线，StateGraph 不适用。
 
@@ -41,7 +41,7 @@
 
 **理由**：最小 UI 仅一行 token；用户关心「这条回复一共多少 token」。与 PRD 已有 `finish.usage` 消息级语义一致。
 
-**去重**：用 `ctx["usage_seen_run_ids"]: Set[str]`，同一 `run_id` 的 usage 只计一次（stream 末 chunk 与 `on_chat_model_end` 可能重复，参考 deer-flow `counted_usage_ids`）。
+**去重**：用 `ctx["usage_seen_run_ids"]: Set[str]`，同一 `run_id` 的 usage 只计一次（stream 末 chunk 与 `on_chat_model_end` 可能重复）。
 
 ### 3. SSE 事件与字段扩展
 

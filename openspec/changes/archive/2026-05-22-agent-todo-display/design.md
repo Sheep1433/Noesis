@@ -16,7 +16,7 @@
 **Non-Goals:**
 
 - 新增 SSE 事件、`langgraph_sse_bridge.py` 修改。
-- todo 落库、checkpoint 恢复、deer-flow TodoMiddleware。
+- todo 落库、checkpoint 恢复、独立 TodoMiddleware。
 - TestAssistant 阶段条改造。
 
 ## Decisions

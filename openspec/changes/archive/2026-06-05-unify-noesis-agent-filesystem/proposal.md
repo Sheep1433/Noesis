@@ -2,7 +2,7 @@
 
 ## Why
 
-故障运维、深度研究、通用问答三套 Agent 创建路径需统一；文件系统与 Skills 与 YuXi 对齐，**复用 PyPI `deepagents`**，不在仓库内 vendoring。
+故障运维、深度研究、通用问答三套 Agent 创建路径需统一；文件系统与 Skills **复用 PyPI `deepagents`**，不在仓库内 vendoring。
 
 ## What
 

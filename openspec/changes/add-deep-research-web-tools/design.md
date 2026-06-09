@@ -2,7 +2,7 @@
 
 - `DeepResearchAgent` 经 `create_noesis_agent(tools=[], ...)` 创建，文件系统工具由 `FilesystemMiddleware` 注入；Skills 由 `SkillsMiddleware` 只读挂载 `/skills/`。
 - `GeneralQAAgent` 已有 `build_kb_search_tools()` 条件挂载先例（`agent-common-qa` 规格）。
-- 外部调研（Claude Code、`cloud-code` 还原源码、deer-flow、Hermes、OpenClaw、OpenCode）结论：**Noesis 应采纳 deer-flow/Hermes 本地 Tool 模式**，详见 `research-report.md`。
+- 外部调研（Claude Code、`cloud-code` 还原源码、Hermes、OpenClaw、OpenCode 等）结论：**Noesis 应采纳本地 LangChain Tool + 可插拔 Provider 模式**，详见 `research-report.md`。
 
 ## Goals / Non-Goals
 
@@ -53,7 +53,7 @@ web_fetch:
 
 | 能力 | 主 Provider | 回退 Provider | 参考实现 |
 |------|-------------|---------------|----------|
-| `web_search` | Tavily | DDG（`ddgs`） | deer-flow `community/tavily/tools.py`、`ddg_search/tools.py` |
+| `web_search` | Tavily | DDG（`ddgs`） | Tavily SDK、`ddgs` 官方示例 |
 | `web_fetch` | Tavily extract | local（httpx + Readability） | 同上 + OpenCode `webfetch.ts` |
 
 工具返回 JSON **SHALL** 含 `provider` 字段（`"tavily"` | `"ddg"` | `"local"`），便于日志与调试。

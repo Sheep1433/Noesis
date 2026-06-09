@@ -1,6 +1,6 @@
 ## Why
 
-Noesis 已在 `chat.vue` 挂载 `TodoList` 组件并在 Pinia 中预留 `todos` 状态，但前端从未在流式路径上消费 `write_todos`。`create_deep_agent` 默认带 `TodoListMiddleware`，桥接层对 `write_todos` 已按既有协议发出 **`tool-input-available`**（`toolName` + `input.todos`），数据已在 SSE 中，缺的是 chat 页解析与 `update_todos` 接线。参考 deer-flow 底部 Todo 面板交互，在**不新增 SSE 事件类型**的前提下补齐「工具输入 → TodoList」即可。
+Noesis 已在 `chat.vue` 挂载 `TodoList` 组件并在 Pinia 中预留 `todos` 状态，但前端从未在流式路径上消费 `write_todos`。`create_deep_agent` 默认带 `TodoListMiddleware`，桥接层对 `write_todos` 已按既有协议发出 **`tool-input-available`**（`toolName` + `input.todos`），数据已在 SSE 中，缺的是 chat 页解析与 `update_todos` 接线。在**不新增 SSE 事件类型**的前提下补齐「工具输入 → TodoList」即可。
 
 ## What Changes
 
@@ -11,7 +11,7 @@ Noesis 已在 `chat.vue` 挂载 `TodoList` 组件并在 Pinia 中预留 `todos` 
 - **生命周期**：新会话、切换会话、流结束清理时清空 `todos`；**不持久化**、刷新或重进历史**不恢复**面板（消息内 tool part 仍可回看）。
 - **深度研究 prompt（可选）**：引导多步任务调用 `write_todos`，提高面板出现概率。
 - **文档**：在 `docs/prd/platform/SSE流式数据设计.md` 补充「`write_todos` 与 TodoList 的消费约定」（非新事件，为前端语义说明）。
-- **非目标**：`LangGraphSseBridge` 改动；`todos-update` 事件；deer-flow `plan_mode` / 完成前拦截；Yuxi `agent_state`；TestAssistant `phase-*`；todo 落库。
+- **非目标**：`LangGraphSseBridge` 改动；`todos-update` 事件；`plan_mode` / 完成前拦截；`agent_state`；TestAssistant `phase-*`；todo 落库。
 
 ## Capabilities
 

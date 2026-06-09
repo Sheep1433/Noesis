@@ -1,4 +1,4 @@
-# Design: 统一 Agent 工厂与文件系统集成（YuXi 对齐）
+# Design: 统一 Agent 工厂与文件系统集成
 
 ## 架构
 
@@ -9,7 +9,7 @@ create_noesis_agent
   ├─ extra_middleware（Skills 等由调用方按需挂载）
   └─ build_noesis_runtime_middleware()
         ├─ DanglingToolCallMiddleware
-        ├─ SummarizationOffloadMiddleware（YuXi 风格，StateBackend 来自 deepagents）
+        ├─ SummarizationOffloadMiddleware（StateBackend 来自 deepagents）
         ├─ ContextEditingMiddleware
         ├─ LoopDetectionMiddleware
         └─ ToolCallLimitMiddleware (optional)
@@ -18,7 +18,7 @@ create_noesis_agent
 ## 文件系统
 
 - **不 vendoring**：直接 `pip install deepagents`
-- 与 YuXi 相同：工具面用 `FilesystemMiddleware`，存储面用 `BackendProtocol` 实现（Noesis 深度研究为本地 `LocalShellBackend` + `CompositeBackend`）
+- 工具面用 `FilesystemMiddleware`，存储面用 `BackendProtocol` 实现（Noesis 深度研究为本地 `LocalShellBackend` + `CompositeBackend`）
 
 ## Agent 映射
 

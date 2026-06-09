@@ -15,8 +15,8 @@
 
 **Non-Goals:**
 
-- 不实现 SSE `id:` / `Last-Event-ID` 断线续传（deer-flow 能力，与当前 `fetch` 客户端不匹配）。
-- 不把 Noesis 业务帧改为 deer-flow 的 LangGraph Platform 多 mode 事件名。
+- 不实现 SSE `id:` / `Last-Event-ID` 断线续传（与当前 `fetch` 客户端不匹配）。
+- 不把 Noesis 业务帧改为 LangGraph Platform 多 mode 事件名。
 - 不替换 WebSocket；不改动 stop 接口语义路径。
 
 ## Decisions
@@ -45,7 +45,7 @@
 
 **做法**：pytest 直接调用 `LangGraphSseBridge.process_item` / `_format_sse` 或对 `format_done` 拼接结果做快照；不强制启动全 LLM。
 
-**理由**：与 holmesgpt / deer-flow 的帧形状测试同阶，CI 稳定。
+**理由**：与业界同类帧形状测试同阶，CI 稳定。
 
 ## Risks / Trade-offs
 

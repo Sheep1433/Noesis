@@ -4,7 +4,7 @@
 - **事件冒泡（实测）**：`BaseAgent._stream_agent_response` 使用 `agent.astream_events(...)`，**子图内的 `on_tool_start` / `on_tool_end` 会冒泡到同一流**。`LangGraphSseBridge._handle_langchain` 对全部 tool 事件发 SSE 并写入 assistant `content.parts`，**未按 `parent_ids` 过滤**。
 - **首版 UI 现状（已实现）**：`toolName === "task"` → `SubagentCollapse`；其它 tool → `ToolCallCollapse`。子 Agent 内部的 read/bash 等因此与 `task` 卡片**同级平铺**在主气泡时间线中，归属不清。
 - **后端预留**：`t_chat_session.parent_id`、`GET /api/chat/sessions/{id}/children` 已存在，Agent 流式路径**未**在委派时写子会话；drill-down 为二期。
-- **参考**：deer-flow 用 LangGraph SDK 多 message + `assistant:subagent` 分组 + `SubtaskCard`；Noesis 为单条 assistant 的 flat `parts`，用 **`parentTaskCallId`** 在 parts 上模拟分组。
+- **参考**：LangGraph SDK 多 message + `assistant:subagent` 分组 + `SubtaskCard` 模式；Noesis 为单条 assistant 的 flat `parts`，用 **`parentTaskCallId`** 在 parts 上模拟分组。
 
 ## Goals / Non-Goals
 

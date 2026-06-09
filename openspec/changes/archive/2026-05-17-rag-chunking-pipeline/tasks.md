@@ -30,4 +30,4 @@
 
 ## 7. （可选二期）类 RAGFlow 多 Parser
 
-- [x] 7.1 已落地轻量策略 **`markdown_headers`**：`chunk_text_for_kb` 在 `strategy=markdown_headers` 时复用 `DocumentParser.split_markdown_with_headers`；失败或非空块不可得时回退滑窗。未整包搬运 Yuxi `ragflow_like` 目录，后续可继续按文档类型扩展分支。
+- [x] 7.1 已落地轻量策略 **`markdown_headers`**：`chunk_text_for_kb` 在 `strategy=markdown_headers` 时复用 `DocumentParser.split_markdown_with_headers`；失败或非空块不可得时回退滑窗。未整包 vendor 第三方多 parser 目录，后续可继续按文档类型扩展分支。

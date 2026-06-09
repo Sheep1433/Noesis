@@ -1,12 +1,12 @@
 ## Why
 
-Noesis 聊天主路径依赖 `POST /api/chat/sessions/stream` 的长连接 SSE。工具调用或模型首包前长时间无业务帧时，易被反向代理/浏览器按空闲掐断，引发 `CancelledError`、assistant 落库竞态与半截 UI；TCP 分片还会导致尾帧解析遗漏。仓库已在 `docs/prd/platform/SSE流式数据设计.md` §6 与主规格中沉淀约定，本变更将其落实为可交付的实现与验证闭环，并与 deer-flow / Aix-DB 等项目的工程经验对齐（不引入第二套前端协议）。
+Noesis 聊天主路径依赖 `POST /api/chat/sessions/stream` 的长连接 SSE。工具调用或模型首包前长时间无业务帧时，易被反向代理/浏览器按空闲掐断，引发 `CancelledError`、assistant 落库竞态与半截 UI；TCP 分片还会导致尾帧解析遗漏。仓库已在 `docs/prd/platform/SSE流式数据设计.md` §6 与主规格中沉淀约定，本变更将其落实为可交付的实现与验证闭环（不引入第二套前端协议）。
 
 ## What Changes
 
 - 在流式生成路径上增加 **SSE 注释行保活**（例如 `: keepalive`），间隔与 `config`/环境变量可对齐，默认落在 15–30s 量级；**不**改变现有 `event:`/`data:` JSON 业务帧形状，**不破坏**前端 `useSSEStream` 解析契约。
 - **全链路超时对齐**：在 `config/env.py`（或等价）中声明可配置的流式读超时/保活间隔；文档或部署说明中明确 Nginx `proxy_read_timeout`、Uvicorn 与上游 LLM/MCP 超时与保活的关系。
-- **写入侧断开语义**：向已断开客户端写入时，将典型连接类异常与业务异常区分日志级别，避免 BrokenPipe 刷屏为未分类 ERROR（对齐 Aix-DB `_safe_write` 思路，不改变对外 API）。
+- **写入侧断开语义**：向已断开客户端写入时，将典型连接类异常与业务异常区分日志级别，避免 BrokenPipe 刷屏为未分类 ERROR（不改变对外 API）。
 - **契约测试**：为关键 SSE 帧（如 `message-start`、`text-delta`、`finish`、`error`、`[DONE]` 收尾）增加最小 golden 或黑盒用例，防止 `LangGraphSseBridge` 回归静默破坏前端。
 - （可选）前端对保活注释行的 **显式忽略** 单测或注释说明，防止未来解析器误把注释当 `data:`。
 

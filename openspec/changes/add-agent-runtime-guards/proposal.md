@@ -2,17 +2,17 @@
 
 Noesis 当前已经在 `backend/agent/common_react_agent.py` 为通用问答接入了基础 `SummarizationMiddleware` 与 `ContextEditingMiddleware`，但整体 Agent 运行时仍缺少三类关键防护：
 
-- **长上下文摘要成本治理不足**：现有 summarization 直接与主模型绑定，无法像 YuXi / DeerFlow 一样将摘要工作卸载到更便宜、更稳定的 summarizer 路径，长会话下成本与延迟都不可控。
+- **长上下文摘要成本治理不足**：现有 summarization 直接与主模型绑定，无法将摘要工作卸载到更便宜、更稳定的 summarizer 路径，长会话下成本与延迟都不可控。
 - **工具循环缺少主动制动**：当前仅依赖 `recursion_limit=50` 做最终兜底，无法在“同类工具反复空转”或“相同工具集重复执行”时提前告警并强制收敛。
 - **Dangling tool call 无自愈**：当 SSE 中断、页面刷新或任务取消发生在 `AIMessage.tool_calls` 已生成但 `ToolMessage` 尚未补齐的窗口，下一轮调用可能因消息历史不完整而失败。
 
 仓库内已有对比与事故分析文档：
 
-- `docs/readings/compare/noesis-vs-yuxi-backend.md`
-- `docs/readings/compare/deerflow_vs_noesis_backend_analysis.md`
+- `docs/readings/compare/` 下后端对比分析
+- `docs/readings/compare/` 下 SSE 运行时对比分析
 - `docs/readings/sse-dangling-tool-call-analysis.md`
 
-这些文档已经明确指出：对于 Noesis 这类以 SSE 会话为核心的产品，优先补齐 **runtime guard** 比直接引入完整 run 平台更划算。因此需要新增一项变更，把 YuXi / DeerFlow 中已经验证过的三类防护以 Noesis 现有架构可承受的方式引入。
+这些文档已经明确指出：对于 Noesis 这类以 SSE 会话为核心的产品，优先补齐 **runtime guard** 比直接引入完整 run 平台更划算。因此需要新增一项变更，将三类防护以 Noesis 现有架构可承受的方式引入。
 
 ## What Changes
 

@@ -1,4 +1,4 @@
-"""知识库入库/检索参数合并单测（yuxi-inspired-rag-pipeline）。"""
+"""知识库入库/检索参数合并单测（rag-chunking-pipeline）。"""
 from kb.chunk import (
     KB_CHUNK_STRATEGY,
     chunk,

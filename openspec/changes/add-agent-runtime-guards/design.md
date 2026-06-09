@@ -15,7 +15,7 @@
 
 **Non-Goals**
 
-- 不实现 DeerFlow 的完整 RunManager / StreamBridge / replay。
+- 不实现完整的 RunManager / StreamBridge / replay。
 - 不重构现有 `LangGraphSseBridge` 事件类型。
 - 不在本 change 内推广到所有 Agent 的定制 prompt/图状态重构。
 
@@ -51,7 +51,7 @@
 - summarization 发生在正常上下文裁剪阶段；
 - loop detection 靠近模型决策末端，更适合基于最新消息与 tool 轨迹判断是否收敛。
 
-### 2. Summarization offload（YuXi 风格，`before_model`）
+### 2. Summarization offload（`before_model`）
 
 `SummarizationOffloadMiddleware` 在 `before_model` 中按 token 占比触发（默认 `summarization_trigger_fraction=0.85`，基准为 `summarization_max_input_tokens` / `MAX_TOKENS`）：
 

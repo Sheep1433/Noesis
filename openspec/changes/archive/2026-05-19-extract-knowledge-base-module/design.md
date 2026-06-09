@@ -39,7 +39,7 @@ Noesis 知识库当前形态：
 |------|------|------|------|
 | **Qdrant** | 已集成；运维轻；支持 dense + **sparse vector**（可持久化 BM25 类稀疏向量）；与现有 `retrieval_util` 一致 | 大规模集群能力弱于 Milvus；BM25 若仍用内存方案则多实例有问题 | **选用** |
 | **Milvus** | 大规模、原生 hybrid、生态成熟 | 部署重（依赖组件多）；需全量迁移索引；团队无现网经验 | **否决**（成本 > 收益，与 demo 定位不符） |
-| **PostgreSQL**（pgvector + tsvector） | 向量 + 全文同一库；事务一致性好 | Noesis 业务库为 **MySQL**，另起 PG 仅服务 KB 增加运维面；与 Yuxi 全栈 PG 不同，无法复用现有 MySQL 会话模型 | **否决**（除非未来全栈迁 PG，非本变更范围） |
+| **PostgreSQL**（pgvector + tsvector） | 向量 + 全文同一库；事务一致性好 | Noesis 业务库为 **MySQL**，另起 PG 仅服务 KB 增加运维面，无法复用现有 MySQL 会话模型 | **否决**（除非未来全栈迁 PG，非本变更范围） |
 
 **Rationale：** 迁移到 Milvus/PG 的收益不足以抵消数据迁移与双库运维成本；在现有 Qdrant 上完成模块边界与检索模式暴露即可交付 80% 价值。
 
