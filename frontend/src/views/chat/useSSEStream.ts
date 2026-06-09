@@ -204,6 +204,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           total_tokens: usage.total_tokens != null ? Number(usage.total_tokens) : undefined,
         })
       }
+      const finishReason = String(data.finishReason ?? data.finish_reason ?? 'stop')
+      if (finishReason === 'error') {
+        const errMsg = typeof data.error === 'string' && data.error.trim()
+          ? data.error.trim()
+          : '生成失败'
+        settleFailure(errMsg)
+        return
+      }
       settleSuccess()
       return
     }

@@ -1,10 +1,43 @@
-"""流式失败说明：与前端 messageParts.appendStreamFailureNotice 语义对齐，供持久化落库。"""
+"""流式错误展示与落库：脱敏、失败说明文案（与前端 messageParts 语义对齐）。"""
 
 from __future__ import annotations
 
 import re
 import uuid
 from typing import Any, Dict, List, Optional
+
+# ---------- 用户可见错误脱敏（SSE / 中间件 / 落库共用）----------
+
+_INTERNAL_MARKERS = (
+    re.compile(r"\[INTERNAL_ERROR\]", re.I),
+    re.compile(r"docker image .+ not found", re.I),
+    re.compile(r"\bdocker pull\b", re.I),
+    re.compile(r"sandbox.*not (?:ready|available)", re.I),
+)
+
+
+def strip_tool_error_prefix(raw: str) -> str:
+    s = (raw or "").strip()
+    if s.lower().startswith("tool error:"):
+        return s[11:].strip()
+    return s
+
+
+def is_internal_infrastructure_error(raw: str) -> bool:
+    s = strip_tool_error_prefix(raw)
+    return any(p.search(s) for p in _INTERNAL_MARKERS)
+
+
+def sanitize_user_facing_error(raw: str, *, default: str = "操作失败，请稍后重试。") -> str:
+    s = strip_tool_error_prefix(raw)
+    if not s:
+        return default
+    if is_internal_infrastructure_error(s):
+        return "工具执行环境不可用，请联系管理员检查 MCP 或沙箱配置。"
+    return s
+
+
+# ---------- 失败说明文案 ----------
 
 
 def is_recursion_limit_error(raw: str) -> bool:
@@ -37,11 +70,16 @@ def is_connection_or_timeout_error(raw: str) -> bool:
     )
 
 
+def _has_tool_error_part(parts: List[Dict[str, Any]]) -> bool:
+    return any(p.get("type") == "tool" and p.get("status") == "error" for p in parts)
+
+
 def get_stream_failure_notice_text(
     detail: Optional[str],
     has_prose: bool,
+    parts: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    raw = (detail or "").strip()
+    raw = sanitize_user_facing_error((detail or "").strip(), default="")
     if is_connection_or_timeout_error(raw):
         return None
     if is_recursion_limit_error(raw):
@@ -50,10 +88,14 @@ def get_stream_failure_notice_text(
             if has_prose
             else "已达到最大处理步数，任务已停止。请精简问题后重试。"
         )
+    if parts and _has_tool_error_part(parts):
+        return "（后续内容未能生成）" if has_prose else None
     if not raw:
         return None if has_prose else "生成失败，请稍后重试。"
     clipped = raw if len(raw) <= 160 else f"{raw[:160]}…"
     head = "生成过程中出现问题，请稍后重试。"
+    if is_internal_infrastructure_error(detail or ""):
+        clipped = sanitize_user_facing_error(detail or "")
     return f"（后续内容未能生成）\n\n{clipped}" if has_prose else f"{head}\n\n{clipped}"
 
 
@@ -70,7 +112,12 @@ def append_stream_failure_notice_to_content(
     detail: Optional[str],
 ) -> Dict[str, Any]:
     parts: List[Dict[str, Any]] = list(content_dict.get("parts") or [])
-    notice = get_stream_failure_notice_text(detail, _has_prose(parts))
+    for p in parts:
+        if p.get("type") == "tool" and p.get("status") == "running":
+            p["status"] = "error"
+            if not p.get("error"):
+                p["error"] = "工具未返回结果"
+    notice = get_stream_failure_notice_text(detail, _has_prose(parts), parts)
     if notice is None:
         return content_dict
 

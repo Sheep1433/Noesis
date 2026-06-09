@@ -1,4 +1,4 @@
-"""Summarization + tool-result offload middleware (YuXi-style, before_model).
+"""Summarization + tool-result offload middleware (`before_model`).
 
 When context usage reaches the configured fraction (default 85% of max input):
 1. Offload oversized ToolMessage bodies to filesystem when available, else discard.

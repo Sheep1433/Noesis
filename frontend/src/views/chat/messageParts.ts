@@ -290,7 +290,7 @@ export function assistantPartsStillStreaming(parts: UiPart[]): boolean {
   })
 }
 
-export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
+function finalizeStreamingParts(parts: UiPart[], toolRunningAs: 'success' | 'error'): UiPart[] {
   return parts.map((p) => {
     if (p.type === 'text' && p.status === 'streaming') {
       return { ...p, status: 'completed' }
@@ -299,10 +299,30 @@ export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
       return { ...p, status: 'completed' }
     }
     if (p.type === 'tool' && p.status === 'running') {
+      if (toolRunningAs === 'error') {
+        return {
+          ...p,
+          status: 'error',
+          error: p.error || '工具未返回结果',
+        }
+      }
       return { ...p, status: 'success' }
     }
     return p
   }) as UiPart[]
+}
+
+export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
+  return finalizeStreamingParts(parts, 'success')
+}
+
+/** 流式失败收尾：未完成工具标为 error，避免误显示「完成」。 */
+export function finalizePartsOnStreamError(parts: UiPart[]): UiPart[] {
+  return finalizeStreamingParts(parts, 'error')
+}
+
+function hasToolErrorPart(parts: UiPart[]): boolean {
+  return parts.some((p) => p.type === 'tool' && p.status === 'error')
 }
 
 export interface TokenUsageSummary {
@@ -360,7 +380,11 @@ export function isRecursionLimitError(raw: string): boolean {
 }
 
 /** 将 SSE/流式错误转为气泡内展示文案；null 表示不追加说明 */
-export function getStreamFailureNoticeText(detail: string | undefined, hasProse: boolean): string | null {
+export function getStreamFailureNoticeText(
+  detail: string | undefined,
+  hasProse: boolean,
+  parts?: UiPart[],
+): string | null {
   const raw = detail?.trim() ?? ''
   if (isConnectionOrTimeoutError(raw)) {
     return null
@@ -370,7 +394,10 @@ export function getStreamFailureNoticeText(detail: string | undefined, hasProse:
       ? '（已达到最大处理步数，后续内容未能继续生成。）'
       : '已达到最大处理步数，任务已停止。请精简问题后重试。'
   }
-  if (!raw) {
+  if (parts && hasToolErrorPart(parts)) {
+    return hasProse ? '（后续内容未能生成）' : null
+  }
+  if (!raw || raw === '操作失败，请稍后重试。') {
     return hasProse ? null : '生成失败，请稍后重试。'
   }
   const DETAIL_MAX = 160
@@ -399,7 +426,7 @@ export function shortenChatErrorToast(msg: string, maxLen = 72): string {
 
 /** 流式失败时在助手气泡内补充可读说明（保留已有正文 / 工具块） */
 export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiPart[] {
-  const completed = markStreamingPartsComplete(parts)
+  const completed = finalizePartsOnStreamError(parts)
 
   const hasProse = completed.some((p) => {
     if (p.type === 'text' || p.type === 'reasoning') {
@@ -408,7 +435,7 @@ export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiP
     return false
   })
 
-  const notice = getStreamFailureNoticeText(detail, hasProse)
+  const notice = getStreamFailureNoticeText(detail, hasProse, completed)
   if (notice === null) {
     return completed
   }

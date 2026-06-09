@@ -9,6 +9,7 @@ from agent.middlewares import (
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
     SummarizationOffloadMiddleware,
+    ToolErrorHandlingMiddleware,
 )
 from langchain_core.messages import AIMessage
 
@@ -34,7 +35,9 @@ def test_runtime_stack_includes_guards_when_enabled() -> None:
     assert DanglingToolCallMiddleware in types
     assert SummarizationOffloadMiddleware in types
     assert LoopDetectionMiddleware in types
+    assert ToolErrorHandlingMiddleware in types
     assert types.index(DanglingToolCallMiddleware) < types.index(LoopDetectionMiddleware)
+    assert types.index(LoopDetectionMiddleware) < types.index(ToolErrorHandlingMiddleware)
 
 
 def test_runtime_stack_respects_disable_flags() -> None:

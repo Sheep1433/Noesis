@@ -19,6 +19,7 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from agent.middlewares import (
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
+    ToolErrorHandlingMiddleware,
     create_summary_offload_middleware,
 )
 from config.env import ModelConfig
@@ -26,9 +27,9 @@ from llm import get_llm
 
 ExitBehavior = Literal["continue", "error", "end"]
 
-# 中间件顺序（能力层 + extra + deer-flow 运行时防护 + ToolCallLimit 尾栈）:
+# 中间件顺序（能力层 + extra + 运行时防护 + ToolCallLimit 尾栈）:
 #   Filesystem → SubAgent → AsyncSubAgent → extra_middleware → runtime guards → ToolCallLimit
-# Skills 等能力由调用方通过 extra_middleware 自行挂载（与 YuXi 一致）。
+# Skills 等能力由调用方通过 extra_middleware 自行挂载。
 
 
 def build_subagent_default_middleware(
@@ -44,7 +45,7 @@ def build_noesis_runtime_middleware(
     *,
     include_tool_call_limits: bool = True,
 ) -> list[AgentMiddleware]:
-    """Noesis 运行时防护中间件（deer-flow 风格：repair → offload → context → loop → limit）。"""
+    """Noesis 运行时防护中间件（repair → offload → context → loop → limit）。"""
     middleware: list[AgentMiddleware] = []
 
     if ModelConfig.dangling_tool_call_repair_enabled:
@@ -69,6 +70,8 @@ def build_noesis_runtime_middleware(
                 hard_limit=ModelConfig.loop_detection_hard_limit,
             )
         )
+
+    middleware.append(ToolErrorHandlingMiddleware())
 
     if include_tool_call_limits:
         middleware.extend(build_tool_call_limit_middleware())
@@ -158,6 +161,7 @@ def create_noesis_agent(
         → AsyncSubAgentMiddleware (optional)
         → extra_middleware（如 SkillsMiddleware，由调用方按需传入）
         → DanglingToolCall / SummarizationOffload / ContextEditing / LoopDetection
+        → ToolErrorHandlingMiddleware
         → ToolCallLimitMiddleware (optional, tail)
 
     Args:

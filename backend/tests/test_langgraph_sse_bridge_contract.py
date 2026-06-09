@@ -6,7 +6,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from utils.langgraph_sse_bridge import TASK_TOOL_NAME, LangGraphSseBridge
+from utils.langgraph_sse_bridge import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
+from utils.stream_bridge import END_SENTINEL, HEARTBEAT_SENTINEL
 from utils.message_builder import AssistantMessageBuilder, ToolPart
 
 
@@ -494,6 +495,63 @@ def test_parallel_tasks_parent_task_call_id_not_cross_wired() -> None:
         if p.get("toolName") == TASK_TOOL_NAME and p.get("input", {}).get("description") == "任务 B"
     )
     assert read_saved["parentTaskCallId"] == task_b["toolCallId"]
+
+
+def test_bridge_raw_to_sse_lines_skips_end_sentinel() -> None:
+    bridge = LangGraphSseBridge("sess-sentinel")
+    ctx = _ctx()
+    assert bridge_raw_to_sse_lines(
+        END_SENTINEL, bridge, None, ctx, keepalive_comment=": keepalive\n\n",
+    ) is None
+    assert bridge_raw_to_sse_lines(
+        HEARTBEAT_SENTINEL, bridge, None, ctx, keepalive_comment=": keepalive\n\n",
+    ) == [": keepalive\n\n"]
+
+
+def test_tool_error_uses_inflight_tool_call_id() -> None:
+    """on_tool_error 的 toolCallId 应与 tool-input 一致，避免前端出现孤儿工具块。"""
+    bridge = LangGraphSseBridge("sess-tool-err")
+    builder = AssistantMessageBuilder(session_id="sess-tool-err", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    model_call_id = "019eaab7-3401-79d0-bdea-59f545d0f087"
+    mcp_call_id = "call_27021b357bb0419f9b65d3d3"
+
+    parts: list[str] = []
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_tool_start",
+                "name": "bash",
+                "run_id": "run-start",
+                "data": {"input": {"command": "uptime", "ip": "192.0.2.1"}, "tool_call_id": model_call_id},
+            },
+            builder,
+            ctx,
+        )
+    )
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_tool_error",
+                "name": "bash",
+                "run_id": "run-err",
+                "data": {
+                    "error": RuntimeError(
+                        "[INTERNAL_ERROR] Docker image ubuntu:latest not found"
+                    ),
+                    "tool_call_id": mcp_call_id,
+                },
+            },
+            builder,
+            ctx,
+        )
+    )
+    objs = _data_json_objects("".join(parts))
+    outputs = [o for o in objs if o.get("type") == "tool-output-available"]
+    assert len(outputs) == 1
+    assert outputs[0]["toolCallId"] == model_call_id
+    assert outputs[0]["status"] == "error"
+    assert "MCP" in outputs[0]["error"]
 
 
 def test_reasoning_disabled_when_show_thinking_off() -> None:

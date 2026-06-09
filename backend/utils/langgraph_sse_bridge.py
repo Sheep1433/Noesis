@@ -16,6 +16,8 @@ from config.env import ModelConfig
 from utils.langgraph_sse.reasoning import extract_reasoning_delta
 from utils.log_util import logger
 from utils.message_builder import AssistantMessageBuilder
+from utils.stream_bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
+from utils.stream_failure_notice import sanitize_user_facing_error
 
 
 def _show_thinking_process_enabled() -> bool:
@@ -100,6 +102,34 @@ def _resolve_tool_call_id(item: Dict[str, Any], data: Dict[str, Any]) -> str:
     if rid and str(rid).strip():
         return str(rid)
     return _new_id("tool")
+
+
+def _resolve_tool_output_call_id(
+    item: Dict[str, Any],
+    data: Dict[str, Any],
+    ctx: Dict[str, Any],
+    tool_part_ids: Dict[str, str],
+) -> str:
+    """tool-output / tool-error 与 tool-input 对齐。"""
+    resolved = _resolve_tool_call_id(item, data)
+    if resolved in tool_part_ids:
+        return resolved
+
+    current = ctx.get("current_tool_call_id")
+    current_s = str(current).strip() if current else ""
+    event_name = str(item.get("name") or "")
+    current_name = str(ctx.get("current_tool_name") or "")
+    # MCP on_tool_error 等场景：回调 id 与模型 tool_call_id 不一致，但工具名一致
+    if (
+        current_s
+        and current_s in tool_part_ids
+        and event_name
+        and event_name == current_name
+    ):
+        return current_s
+    if current_s:
+        return current_s
+    return resolved
 
 
 class LangGraphSseBridge:
@@ -476,8 +506,10 @@ class LangGraphSseBridge:
             self._ensure_started(out)
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
-            msg = item.get("error") or item.get("content") or "unknown error"
-            self.last_error_message = str(msg)
+            msg = sanitize_user_facing_error(
+                str(item.get("error") or item.get("content") or "unknown error")
+            )
+            self.last_error_message = msg
             logger.warning(
                 f"SSE bridge 发出 error session_id={self.session_id} assistant_message_id={self.assistant_message_id} "
                 f"detail={str(msg)[:500]}"
@@ -646,18 +678,27 @@ class LangGraphSseBridge:
         self._close_text(out)
 
         data = item.get("data") or {}
-        raw_output = _tool_output_value(data.get("output"))
-        clean_output = _TOOL_EXIT_SUFFIX.sub("", str(raw_output)) if raw_output else ""
-        tool_call_id = _resolve_tool_call_id(item, data)
+        raw_output = data.get("output")
+        clean_output = _TOOL_EXIT_SUFFIX.sub("", _tool_output_value(raw_output)) if raw_output else ""
+        tool_call_id = _resolve_tool_output_call_id(item, data, ctx, self._tool_part_ids)
         tool_name = item.get("name") or ctx.get("current_tool_name") or ""
         ctx["current_tool_name"] = tool_name
         ctx["current_tool_call_id"] = tool_call_id
 
         duration_ms = self._tool_duration_ms(ctx, tool_call_id)
+        output_status = getattr(raw_output, "status", None) if raw_output is not None else None
+        is_error = output_status == "error"
+        err_s = sanitize_user_facing_error(clean_output) if is_error else None
+        sse_status = "error" if is_error else "success"
+        display_output = "" if is_error else clean_output
 
         if builder is not None:
             self._safe_append_tool_output(
-                builder, tool_name, clean_output, tool_call_id, duration_ms=duration_ms,
+                builder,
+                tool_name,
+                err_s if is_error else clean_output,
+                tool_call_id,
+                duration_ms=duration_ms,
             )
 
         if tool_name == TASK_TOOL_NAME:
@@ -665,7 +706,7 @@ class LangGraphSseBridge:
 
         part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
         self._emit_tool_output(
-            out, part_id, tool_call_id, clean_output, "success", None, duration_ms,
+            out, part_id, tool_call_id, display_output, sse_status, err_s, duration_ms,
         )
 
     def _on_tool_error(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
@@ -675,8 +716,8 @@ class LangGraphSseBridge:
         self._close_text(out)
 
         data = item.get("data") or {}
-        err_s = f"Tool error: {data.get('error', '')!s}"
-        tool_call_id = _resolve_tool_call_id(item, data)
+        err_s = sanitize_user_facing_error(f"Tool error: {data.get('error', '')!s}")
+        tool_call_id = _resolve_tool_output_call_id(item, data, ctx, self._tool_part_ids)
         tool_name = item.get("name") or ctx.get("current_tool_name") or ""
         ctx["current_tool_name"] = tool_name
         ctx["current_tool_call_id"] = tool_call_id
@@ -695,3 +736,21 @@ class LangGraphSseBridge:
 
         part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
         self._emit_tool_output(out, part_id, tool_call_id, "", "error", err_s, duration_ms)
+
+
+def bridge_raw_to_sse_lines(
+    raw: Any,
+    bridge: LangGraphSseBridge,
+    builder: Optional[AssistantMessageBuilder],
+    ctx: Dict[str, Any],
+    *,
+    keepalive_comment: str,
+) -> Optional[List[str]]:
+    """将 MemoryStreamBridge 单条原始事件转为 SSE 行；``None`` 表示结束哨兵应跳过。"""
+    if raw is HEARTBEAT_SENTINEL:
+        return [keepalive_comment]
+    if raw is END_SENTINEL:
+        return None
+    if isinstance(raw, StreamBridgeError):
+        raise raw.exc
+    return bridge.process_item(raw, builder, ctx)

@@ -1,7 +1,4 @@
-"""Middleware to fix dangling tool calls in message history.
-
-Copied and minimally adapted from deer-flow.
-"""
+"""Middleware to fix dangling tool calls in message history."""
 
 import json
 import logging

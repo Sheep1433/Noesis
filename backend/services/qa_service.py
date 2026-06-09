@@ -22,9 +22,10 @@ from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QaQueryRequest
 from services.chat_service import ChatService
 from utils.langfuse_tracing import langfuse_workflow_context, merge_langfuse_runnable_config
-from utils.langgraph_sse_bridge import LangGraphSseBridge
+from utils.langgraph_sse_bridge import LangGraphSseBridge, bridge_raw_to_sse_lines
 from utils.log_util import logger
 from utils.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from utils.stream_bridge import MemoryStreamBridge, iter_bridge_events
 from utils.stream_failure_notice import append_stream_failure_notice_to_content
 
 
@@ -36,77 +37,53 @@ case_coordinator = CaseCoordinator()
 SSE_COMMENT_KEEPALIVE = ": keepalive\n\n"
 
 
-class _KeepaliveTick:
-    """``exec_query`` 空闲保活占位，与上游 item 区分。"""
-
-
-KEEPALIVE_TICK = _KeepaliveTick()
-
-
-async def _iter_agent_items_with_keepalive(
-    agent_generator: AsyncGenerator[Any, None],
-    keepalive_seconds: float,
-) -> AsyncGenerator[Any, None]:
-    """
-    在「下一上游事件」与固定 sleep 之间竞速；sleep 先完成时产出 ``KEEPALIVE_TICK``。
-
-    对进行中的 ``__anext__`` 使用 ``asyncio.shield``，超时只发保活、不取消上游，
-    且同一 ``__anext__`` 在超时后复用同一 Future（避免每帧 ``create_task`` 切换 Context）。
-
-    ``keepalive_seconds <= 0`` 时关闭保活，等价于 ``async for`` 透传。
-    """
-    if keepalive_seconds <= 0:
-        async for item in agent_generator:
-            yield item
-        return
-
-    agen = agent_generator.__aiter__()
-    pending: Optional[asyncio.Future[Any]] = None
-    try:
-        while True:
-            if pending is None:
-                pending = asyncio.ensure_future(agen.__anext__())
-            try:
-                item = await asyncio.wait_for(
-                    asyncio.shield(pending),
-                    timeout=keepalive_seconds,
-                )
-            except asyncio.TimeoutError:
-                yield KEEPALIVE_TICK
-                continue
-            except StopAsyncIteration:
-                break
-            pending = None
-            yield item
-    finally:
-        if pending is not None and not pending.done():
-            pending.cancel()
-            try:
-                await pending
-            except (asyncio.CancelledError, StopAsyncIteration):
-                pass
-
-
-async def _iter_test_case_coordinator_stream(
-    agent_generator: AsyncGenerator[Any, None],
+def _langfuse_stream_context(
     session_id: str,
     qa_type: str,
-    keepalive_seconds: float,
-) -> AsyncGenerator[Any, None]:
-    """
-    测试用例协调器 SSE 上游：Langfuse workflow context 须在消费 Task 内设置，
-    不可放在 CaseCoordinator async generator 内（与保活 ``__anext__`` 跨 Task 冲突）。
-    """
+    *,
+    thread_id: Optional[str] = None,
+):
+    """为生产者 Task 构建 Langfuse workflow context（未启用时返回 None）。"""
+    if not LangfuseConfig.langfuse_tracing_enabled:
+        return None
+    tid = thread_id or session_id
     lf_config = merge_langfuse_runnable_config(
-        {"configurable": {"thread_id": f"case_graph_{session_id}"}},
+        {"configurable": {"thread_id": tid}},
         langfuse_session_id=session_id,
         qa_type=qa_type,
-        enabled=LangfuseConfig.langfuse_tracing_enabled,
+        enabled=True,
         langfuse_trace_id=session_id,
     )
-    with langfuse_workflow_context(lf_config):
-        async for raw in _iter_agent_items_with_keepalive(agent_generator, keepalive_seconds):
-            yield raw
+    return langfuse_workflow_context(lf_config)
+
+
+def _bridge_run_id(session_id: str, assistant_message_id: str) -> str:
+    return f"{session_id}:{assistant_message_id}"
+
+
+async def _iter_agent_stream_via_bridge(
+    agent_generator: AsyncGenerator[Any, None],
+    *,
+    session_id: str,
+    assistant_message_id: str,
+    qa_type: str,
+    keepalive_seconds: float,
+    langfuse_thread_id: Optional[str] = None,
+) -> AsyncGenerator[Any, None]:
+    """生产者 Task 发布事件，SSE 侧订阅；心跳来自订阅空闲超时。"""
+    bridge = MemoryStreamBridge()
+    run_id = _bridge_run_id(session_id, assistant_message_id)
+    lf_ctx = _langfuse_stream_context(
+        session_id, qa_type, thread_id=langfuse_thread_id
+    )
+    async for event in iter_bridge_events(
+        bridge,
+        run_id,
+        agent_generator,
+        keepalive_seconds=keepalive_seconds,
+        langfuse_context=lf_ctx,
+    ):
+        yield event
 
 
 def _assistant_content_snapshot(builder: Optional[AssistantMessageBuilder]) -> Dict[str, Any]:
@@ -213,6 +190,88 @@ async def _insert_streaming_assistant_skeleton(
         return False
 
 
+def _new_stream_ctx() -> Dict[str, Any]:
+    return {
+        "text_buffer": "",
+        "current_tool_name": None,
+        "current_tool_call_id": None,
+        "tool_start_times": {},
+        "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
+        "usage_seen_run_ids": set(),
+        "_assistant_db_id": None,
+    }
+
+
+async def _persist_stream_checkpoint(
+    bridge: LangGraphSseBridge,
+    ctx: Dict[str, Any],
+    builder: AssistantMessageBuilder,
+    session_id: str,
+    user_id: str,
+) -> None:
+    if not bridge.consume_persist_tick() or not ctx.get("_assistant_db_id"):
+        return
+    try:
+        await _persist_assistant(
+            _assistant_content_snapshot(builder),
+            session_id,
+            user_id,
+            status="streaming",
+            assistant_message_id=ctx["_assistant_db_id"],
+        )
+    except Exception:
+        logger.exception(f"assistant 流式检查点落库失败 session_id={session_id}")
+
+
+async def _yield_sse_from_agent_bridge(
+    agent_generator: AsyncGenerator[Any, None],
+    *,
+    bridge: LangGraphSseBridge,
+    builder: AssistantMessageBuilder,
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+    qa_type: str,
+    keepalive_seconds: float,
+    langfuse_thread_id: Optional[str] = None,
+) -> AsyncGenerator[str, None]:
+    async for raw in _iter_agent_stream_via_bridge(
+        agent_generator,
+        session_id=session_id,
+        assistant_message_id=bridge.assistant_message_id,
+        qa_type=qa_type,
+        keepalive_seconds=keepalive_seconds,
+        langfuse_thread_id=langfuse_thread_id,
+    ):
+        lines = bridge_raw_to_sse_lines(
+            raw,
+            bridge,
+            builder,
+            ctx,
+            keepalive_comment=SSE_COMMENT_KEEPALIVE,
+        )
+        if lines is None:
+            continue
+        for sse_line in lines:
+            yield sse_line
+        await _persist_stream_checkpoint(bridge, ctx, builder, session_id, user_id)
+
+
+async def _finalize_sse_bridge_stream(
+    bridge: LangGraphSseBridge,
+    builder: AssistantMessageBuilder,
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+) -> AsyncGenerator[str, None]:
+    if ctx.get("text_buffer"):
+        builder.append_text(ctx["text_buffer"])
+        ctx["text_buffer"] = ""
+    for sse_line in bridge.finalize():
+        yield sse_line
+        await _persist_stream_checkpoint(bridge, ctx, builder, session_id, user_id)
+
+
 class QaService:
     # 保存 session_id -> builder 的映射，用于 stop 时保存未完成的消息
     _current_builders: Dict[str, AssistantMessageBuilder] = {}
@@ -274,6 +333,7 @@ class QaService:
                     clean_query, session_id, None,
                     current_user, req_obj.file_dict,
                     qa_type=req_obj.qa_type,
+                    db=db,
                 )
             elif req_obj.qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
                 agent_generator = fault_agent.run_agent(
@@ -318,67 +378,35 @@ class QaService:
                 message_id=bridge.assistant_message_id,
             )
             cls._current_builders[session_id] = builder
-            ctx = {
-                "text_buffer": "",
-                "current_tool_name": None,
-                "current_tool_call_id": None,
-                "tool_start_times": {},
-                "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-                "usage_seen_run_ids": set(),
-                "_assistant_db_id": None,
-            }
+            ctx = _new_stream_ctx()
             if await _insert_streaming_assistant_skeleton(
                 bridge.assistant_message_id, session_id, current_user.user_id
             ):
                 ctx["_assistant_db_id"] = bridge.assistant_message_id
 
             ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
-            if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
-                upstream = _iter_test_case_coordinator_stream(
-                    agent_generator, session_id, req_obj.qa_type, ka_sec
-                )
-            else:
-                upstream = _iter_agent_items_with_keepalive(agent_generator, ka_sec)
-            async for raw in upstream:
-                if raw is KEEPALIVE_TICK:
-                    yield SSE_COMMENT_KEEPALIVE
-                    continue
-                item = raw
-                for sse_line in bridge.process_item(item, builder, ctx):
-                    yield sse_line
-                if bridge.consume_persist_tick() and ctx.get("_assistant_db_id"):
-                    try:
-                        await _persist_assistant(
-                            _assistant_content_snapshot(builder),
-                            session_id,
-                            current_user.user_id,
-                            status="streaming",
-                            assistant_message_id=ctx["_assistant_db_id"],
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"assistant 流式检查点落库失败 session_id={session_id}"
-                        )
-
-            if ctx.get("text_buffer"):
-                builder.append_text(ctx["text_buffer"])
-                ctx["text_buffer"] = ""
-
-            for sse_line in bridge.finalize():
+            lf_thread = (
+                f"case_graph_{session_id}"
+                if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]
+                else None
+            )
+            async for sse_line in _yield_sse_from_agent_bridge(
+                agent_generator,
+                bridge=bridge,
+                builder=builder,
+                ctx=ctx,
+                session_id=session_id,
+                user_id=current_user.user_id,
+                qa_type=req_obj.qa_type,
+                keepalive_seconds=ka_sec,
+                langfuse_thread_id=lf_thread,
+            ):
                 yield sse_line
-                if bridge.consume_persist_tick() and ctx.get("_assistant_db_id"):
-                    try:
-                        await _persist_assistant(
-                            _assistant_content_snapshot(builder),
-                            session_id,
-                            current_user.user_id,
-                            status="streaming",
-                            assistant_message_id=ctx["_assistant_db_id"],
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"assistant 流式检查点落库失败 session_id={session_id}"
-                        )
+
+            async for sse_line in _finalize_sse_bridge_stream(
+                bridge, builder, ctx, session_id, current_user.user_id
+            ):
+                yield sse_line
 
             if not task_cancelled:
                 await _finalize_streaming_assistant(
@@ -569,66 +597,31 @@ class QaService:
                 message_id=bridge.assistant_message_id,
             )
             cls._current_builders[session_id] = builder
-            ctx = {
-                "text_buffer": "",
-                "current_tool_name": None,
-                "current_tool_call_id": None,
-                "tool_start_times": {},
-                "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-                "usage_seen_run_ids": set(),
-                "_assistant_db_id": None,
-            }
+            ctx = _new_stream_ctx()
             if await _insert_streaming_assistant_skeleton(
                 bridge.assistant_message_id, session_id, current_user.user_id
             ):
                 ctx["_assistant_db_id"] = bridge.assistant_message_id
 
             ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
-            async for raw in _iter_test_case_coordinator_stream(
+            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
+            async for sse_line in _yield_sse_from_agent_bridge(
                 agent_generator,
-                session_id,
-                IntentEnum.TEST_CASE_QA.value[0],
-                ka_sec,
+                bridge=bridge,
+                builder=builder,
+                ctx=ctx,
+                session_id=session_id,
+                user_id=current_user.user_id,
+                qa_type=tc_qa,
+                keepalive_seconds=ka_sec,
+                langfuse_thread_id=f"case_graph_{session_id}",
             ):
-                if raw is KEEPALIVE_TICK:
-                    yield SSE_COMMENT_KEEPALIVE
-                    continue
-                item = raw
-                for sse_line in bridge.process_item(item, builder, ctx):
-                    yield sse_line
-                if bridge.consume_persist_tick() and ctx.get("_assistant_db_id"):
-                    try:
-                        await _persist_assistant(
-                            _assistant_content_snapshot(builder),
-                            session_id,
-                            current_user.user_id,
-                            status="streaming",
-                            assistant_message_id=ctx["_assistant_db_id"],
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"assistant 流式检查点落库失败 session_id={session_id}"
-                        )
-
-            if ctx.get("text_buffer"):
-                builder.append_text(ctx["text_buffer"])
-                ctx["text_buffer"] = ""
-
-            for sse_line in bridge.finalize():
                 yield sse_line
-                if bridge.consume_persist_tick() and ctx.get("_assistant_db_id"):
-                    try:
-                        await _persist_assistant(
-                            _assistant_content_snapshot(builder),
-                            session_id,
-                            current_user.user_id,
-                            status="streaming",
-                            assistant_message_id=ctx["_assistant_db_id"],
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"assistant 流式检查点落库失败 session_id={session_id}"
-                        )
+
+            async for sse_line in _finalize_sse_bridge_stream(
+                bridge, builder, ctx, session_id, current_user.user_id
+            ):
+                yield sse_line
 
             if not task_cancelled:
                 await _finalize_streaming_assistant(
@@ -637,7 +630,7 @@ class QaService:
                     ctx=ctx,
                     session_id=session_id,
                     user_id=current_user.user_id,
-                    qa_type=IntentEnum.TEST_CASE_QA.value[0],
+                    qa_type=tc_qa,
                 )
 
             logger.info(
