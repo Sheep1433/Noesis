@@ -5,7 +5,15 @@ import type { PropType } from 'vue'
 // 定义 props
 const props = defineProps({
   file: {
-    type: Object as PropType<{ source_file_key: string, parse_file_key: string, file_size: string }>,
+    type: Object as PropType<{
+      file_name?: string
+      kind?: 'document' | 'image'
+      artifact_url?: string | null
+      preview_base64?: string | null
+      source_file_key: string
+      parse_file_key: string
+      file_size: string
+    }>,
     required: true,
   },
 })
@@ -18,8 +26,26 @@ const getFileName = (fileKey: string) => {
   return fileKey.split('/').pop() || fileKey
 }
 
+const isImage = computed(() => {
+  if (props.file.kind === 'image') {
+    return true
+  }
+  const name = props.file.file_name || props.file.source_file_key
+  return /\.(?:png|jpe?g|gif|webp)$/i.test(name)
+})
+
+const imageSrc = computed(() => {
+  if (props.file.artifact_url) {
+    return props.file.artifact_url
+  }
+  if (props.file.preview_base64) {
+    return `data:image/png;base64,${props.file.preview_base64}`
+  }
+  return ''
+})
+
 // 计算文件名
-const fileName = computed(() => getFileName(props.file.source_file_key))
+const fileName = computed(() => props.file.file_name || getFileName(props.file.source_file_key))
 
 // 获取文件图标类名
 const getFileIconClass = (fileKey: string) => {
@@ -53,7 +79,14 @@ const iconClass = computed(() => getFileIconClass(props.file.source_file_key))
     flex="~ gap-5 items-center"
   >
     <div class="size-30 ml--8">
+      <img
+        v-if="isImage && imageSrc"
+        :src="imageSrc"
+        class="size-full object-contain rounded-4"
+        alt=""
+      >
       <div
+        v-else
         :class="[
           iconClass,
           'size-full opacity-80',

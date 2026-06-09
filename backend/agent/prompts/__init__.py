@@ -23,12 +23,20 @@ class PromptProfile(StrEnum):
     SIMPLE_MCP = "simple_mcp"
 
 
-def build_prompt(profile: PromptProfile | str, *, kb_enabled: bool = False) -> str:
-    """按 profile 组装 system prompt。仅 common_qa 支持 kb_enabled 扩展段。"""
+def build_prompt(
+    profile: PromptProfile | str,
+    *,
+    kb_enabled: bool = False,
+    attachments_enabled: bool = False,
+) -> str:
+    """按 profile 组装 system prompt。common_qa 支持 kb_enabled / attachments_enabled 扩展段。"""
     key = profile.value if isinstance(profile, PromptProfile) else profile
 
     builders = {
-        PromptProfile.COMMON_QA.value: lambda: build_common_qa_prompt(kb_enabled=kb_enabled),
+        PromptProfile.COMMON_QA.value: lambda: build_common_qa_prompt(
+            kb_enabled=kb_enabled,
+            attachments_enabled=attachments_enabled,
+        ),
         PromptProfile.FAULT_OPERATION.value: build_fault_operation_prompt,
         PromptProfile.FAULT_OPERATION_SUB.value: build_fault_operation_sub_prompt,
         PromptProfile.DEEP_RESEARCH.value: build_deep_research_prompt,

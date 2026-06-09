@@ -106,3 +106,19 @@ web_tools:
   max_search_results: 8
   fetch_max_chars: 4096
   fetch_timeout_seconds: 30
+
+# 聊天会话附件（COMMON_QA；敏感项无）
+chat_attachment:
+  enabled: true
+  dir: ./data/chat_attachments
+  ttl_days: 7
+  max_file_mb: 20
+  max_count_per_session: 10
+  auto_convert: true
+  max_image_mb: 5
+  vision_enabled: true
+  reinject_session_images: true
+  max_images_per_message: 3
+  tiny_inline_chars: 4096
+  read_page_lines: 2000
+  preview_chars: 500

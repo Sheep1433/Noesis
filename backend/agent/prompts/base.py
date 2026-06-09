@@ -1,7 +1,7 @@
 """Noesis Agent 通用 system prompt 片段与组装逻辑。
 
 分区顺序（prefix cache 友好）：core/thinking → 场景 sections → output。
-借鉴 deer-flow 的 XML 分区结构，保留骨架、去掉过度约束。
+采用 XML 分区结构，保留骨架、去掉过度约束。
 """
 
 from __future__ import annotations

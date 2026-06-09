@@ -1,4 +1,4 @@
-"""非敏感运行时配置：从 config.yaml 加载（参考 deer-flow）。"""
+"""非敏感运行时配置：从 config.yaml 加载。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def resolve_config_path() -> Path:
 
 
 def resolve_env_variables(value: Any) -> Any:
-    """支持 ``$ENV_VAR`` 引用（与 deer-flow 一致）。"""
+    """支持 ``$ENV_VAR`` 环境变量引用。"""
     if isinstance(value, str):
         if value.startswith("$"):
             env_name = value[1:]
@@ -168,6 +168,22 @@ class WebToolsYamlSection(BaseModel):
     fetch_timeout_seconds: int = Field(default=30, ge=1)
 
 
+class ChatAttachmentYamlSection(BaseModel):
+    enabled: bool = True
+    dir: str = "./data/chat_attachments"
+    ttl_days: int = Field(default=7, ge=1)
+    max_file_mb: int = Field(default=20, ge=1)
+    max_count_per_session: int = Field(default=10, ge=1)
+    auto_convert: bool = True
+    max_image_mb: int = Field(default=5, ge=1)
+    vision_enabled: bool = True
+    reinject_session_images: bool = True
+    max_images_per_message: int = Field(default=3, ge=1)
+    tiny_inline_chars: int = Field(default=4096, ge=0)
+    read_page_lines: int = Field(default=2000, ge=1)
+    preview_chars: int = Field(default=500, ge=1)
+
+
 class AppYamlConfig(BaseModel):
     config_version: int = 1
     app: AppYamlSection = Field(default_factory=AppYamlSection)
@@ -182,6 +198,7 @@ class AppYamlConfig(BaseModel):
     langfuse: LangfuseYamlSection = Field(default_factory=LangfuseYamlSection)
     other: OtherYamlSection = Field(default_factory=OtherYamlSection)
     web_tools: WebToolsYamlSection = Field(default_factory=WebToolsYamlSection)
+    chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)
 
 
 @lru_cache

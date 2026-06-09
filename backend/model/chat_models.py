@@ -65,3 +65,34 @@ class TChatMessage(Base):
     status: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, default='completed', comment='状态: completed | partial | error | streaming')
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000), comment='创建时间戳（Unix 毫秒）')
     deleted_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='软删时间戳（NULL=未删除）')
+
+
+class TChatAttachment(Base):
+    """聊天会话附件元数据（正文存磁盘，不进 BLOB）。"""
+    __tablename__ = "t_chat_attachment"
+    __table_args__ = (
+        Index('idx_attachment_session', 'session_id', 'created_at'),
+        Index('idx_attachment_expires', 'expires_at'),
+        {'comment': '聊天会话附件表'}
+    )
+
+    id: Mapped[str] = mapped_column(VARCHAR(36), primary_key=True, comment='UUID attachment_id')
+    session_id: Mapped[str] = mapped_column(
+        VARCHAR(36), ForeignKey('t_chat_session.id', ondelete='CASCADE'), nullable=False, comment='所属会话'
+    )
+    user_id: Mapped[str] = mapped_column(VARCHAR(36), nullable=False, comment='用户 ID')
+    file_name: Mapped[str] = mapped_column(VARCHAR(500), nullable=False, comment='原始文件名')
+    kind: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, comment='document | image')
+    original_path: Mapped[str] = mapped_column(VARCHAR(1000), nullable=False, comment='原文件相对路径')
+    markdown_path: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(1000), nullable=True, comment='解析后 Markdown 相对路径'
+    )
+    mime_type: Mapped[Optional[str]] = mapped_column(VARCHAR(100), nullable=True, comment='MIME 类型')
+    virtual_path: Mapped[str] = mapped_column(VARCHAR(1000), nullable=False, comment='Agent 工具逻辑路径')
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment='Markdown 字符数')
+    status: Mapped[str] = mapped_column(
+        VARCHAR(20), nullable=False, default='uploaded', comment='uploaded | parsed | failed'
+    )
+    preview_base64: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='图片缩略图 base64（可选）')
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='创建时间戳（毫秒）')
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='过期时间戳（毫秒）')

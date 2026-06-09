@@ -7,7 +7,14 @@ from config.get_db import init_create_table
 from config.database import async_engine
 from utils.log_util import logger
 from utils.langfuse_tracing import sync_langfuse_env_from_app_config
-from api import login_router, user_router, chat_router, knowledge_base_router, skill_router
+from api import (
+    login_router,
+    user_router,
+    chat_router,
+    knowledge_base_router,
+    skill_router,
+    chat_attachment_router,
+)
 from services.qdrant_service import init_qdrant_client, close_qdrant_client
 from kb.seed_collections import ensure_default_kb_collections
 
@@ -46,6 +53,7 @@ controller_list = [
     {'router':  chat_router, 'tags': ['聊天历史模块']},
     {'router':  knowledge_base_router, 'tags': ['知识库模块']},
     {'router':  skill_router, 'tags': ['Skill 模块']},
+    {'router':  chat_attachment_router, 'tags': ['聊天附件模块']},
 ]
 
 for controller in controller_list:

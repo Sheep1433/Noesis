@@ -1,5 +1,6 @@
 <script lang="tsx" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
+import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { UAParser } from 'ua-parser-js'
 import * as GlobalAPI from '@/api'
@@ -30,6 +31,7 @@ import {
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
 import { useSSEStream } from '@/views/chat/useSSEStream'
+import { buildFileDict } from '@/config/chat'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
 import FileUploadManager from './FileUploadManager.vue'
@@ -287,11 +289,7 @@ const conversationItems = ref<
     role: 'user' | 'assistant'
     content: string
     reasoning?: string
-    file_key: {
-      source_file_key: string
-      parse_file_key: string
-      file_size: string
-    }[]
+    file_key: ChatAttachmentItem[]
     tool_calls?: any[]
     messageContent?: MessageContentV1
     msg_metadata?: any
@@ -482,6 +480,13 @@ function stopChatStream() {
 }
 
 // 校验文件上传状态和业务处理逻辑
+const getChatSessionId = () => {
+  if (!uuids.value[qa_type.value]) {
+    uuids.value[qa_type.value] = uuidv4()
+  }
+  return uuids.value[qa_type.value]
+}
+
 const checkAllFilesUploaded = () => {
   const pendingFiles = fileUploadRef.value?.pendingUploadFileInfoList || []
 
@@ -536,19 +541,20 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     }
   }
 
-  let upload_file_list
-  // 判断是否有未上传的文件
+  let upload_file_key: ChatAttachmentItem[] = []
+  let file_dict: Record<string, string> | undefined
+
   if (fileUploadRef.value?.pendingUploadFileInfoList && fileUploadRef.value.pendingUploadFileInfoList.length > 0) {
-    // 有一个文件解析失败不允许提交
     if (!checkAllFilesUploaded()) {
       return
     }
-    upload_file_list = businessStore.file_list
+    upload_file_key = [...businessStore.file_list]
+    file_dict = buildFileDict(upload_file_key)
   }
 
-  // 点击重新跑时 如果有文件key 则使用文件key
   if (file_key.length > 0) {
-    upload_file_list = file_key
+    upload_file_key = file_key as ChatAttachmentItem[]
+    file_dict = buildFileDict(upload_file_key)
   }
 
   if (showDefaultPage.value) {
@@ -599,7 +605,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
       qa_type: qa_type.value,
       question: textContent,
       content: '',
-      file_key: upload_file_list,
+      file_key: upload_file_key,
       role: 'user',
     })
     // 更新 currentRenderIndex 以包含新添加的项
@@ -633,7 +639,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     textContent,
     {
       qa_type: qa_type.value,
-      file_dict: upload_file_list,
+      file_dict,
     },
   )
 
@@ -1622,6 +1628,8 @@ const pendingUploadFileInfoList = ref([])
                   <FileUploadManager
                     ref="fileUploadRef"
                     v-model="pendingUploadFileInfoList"
+                    :upload-mode="qa_type === 'COMMON_QA' ? 'chat' : 'kb'"
+                    :get-session-id="getChatSessionId"
                   />
 
                   <n-input
@@ -1678,27 +1686,35 @@ const pendingUploadFileInfoList = ref([])
                     </template>
                   </n-input>
 
-                  <n-float-button
-                    position="absolute"
-                    :type="stylizingLoading ? 'primary' : 'default'"
-                    color
-                    bottom="10px"
-                    right="8px"
-                    :class="[
-                      stylizingLoading && 'opacity-90',
-                      'text-20',
-                    ]"
-                    @click.stop="handleCreateStylized()"
-                  >
-                    <div
-                      v-if="stylizingLoading"
-                      class="i-svg-spinners:pulse-2 c-#fff text-20"
-                    ></div>
-                    <div
-                      v-else
-                      class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
-                    ></div>
-                  </n-float-button>
+                  <div class="chat-send-btn-wrap">
+                    <n-tooltip
+                      :disabled="!stylizingLoading"
+                      placement="top"
+                    >
+                      <template #trigger>
+                        <n-float-button
+                          :type="stylizingLoading ? 'primary' : 'default'"
+                          color
+                          :class="[
+                            'chat-send-btn',
+                            stylizingLoading && 'chat-send-btn--stop',
+                          ]"
+                          @click.stop="handleCreateStylized()"
+                        >
+                          <span
+                            v-if="stylizingLoading"
+                            class="chat-stop-icon"
+                            aria-label="停止生成"
+                          />
+                          <div
+                            v-else
+                            class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
+                          />
+                        </n-float-button>
+                      </template>
+                      停止生成
+                    </n-tooltip>
+                  </div>
                 </div>
               </n-space>
             </div>
@@ -1710,6 +1726,25 @@ const pendingUploadFileInfoList = ref([])
 </template>
 
 <style lang="scss" scoped>
+.chat-send-btn-wrap {
+  position: absolute;
+  right: 8px;
+  bottom: 10px;
+  z-index: 1;
+}
+
+.chat-send-btn--stop {
+  box-shadow: 0 0 0 2px rgb(97 92 237 / 25%);
+}
+
+.chat-stop-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  background-color: #fff;
+  border-radius: 2px;
+}
+
 .create-chat-box {
   width: 168px;
   overflow: hidden;

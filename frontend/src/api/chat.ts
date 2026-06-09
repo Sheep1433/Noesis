@@ -112,6 +112,25 @@ export interface GetSessionMessagesParams {
   before_id?: string
 }
 
+/** 会话附件响应 */
+export interface ChatAttachmentResponse {
+  attachment_id: string
+  file_name: string
+  kind: 'document' | 'image'
+  mime_type?: string | null
+  status: string
+  char_count: number
+  preview?: string | null
+  virtual_path: string
+  artifact_url?: string | null
+  parse_error?: string | null
+}
+
+export interface ChatAttachmentListResponse {
+  attachments: ChatAttachmentResponse[]
+  total: number
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -200,6 +219,62 @@ export async function updateSessionTitle(
 export async function getSessionChildren(id: string): Promise<SessionListResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${id}/children`)
   return parseResponse<SessionListResponse>(await fetch(req))
+}
+
+// ============================================================================
+// Session Attachments API
+// ============================================================================
+
+function makeUploadRequest(url: string, formData: FormData): Request {
+  const userStore = useUserStore()
+  const token = userStore.getUserToken()
+  return new Request(url, {
+    mode: 'cors',
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token ?? ''}`,
+    },
+    body: formData,
+  })
+}
+
+/** 上传会话附件 POST /api/chat/sessions/{sessionId}/attachments */
+export async function uploadSessionAttachment(
+  sessionId: string,
+  file: File,
+): Promise<ChatAttachmentResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const req = makeUploadRequest(
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/attachments`,
+    formData,
+  )
+  const res = await fetch(req)
+  const json = await res.json()
+  if (json.code !== 200) {
+    throw new Error(json.msg ?? `上传失败（${json.code}）`)
+  }
+  return json.data as ChatAttachmentResponse
+}
+
+/** 列出会话附件 GET /api/chat/sessions/{sessionId}/attachments */
+export async function listSessionAttachments(
+  sessionId: string,
+): Promise<ChatAttachmentListResponse> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/attachments`)
+  return parseResponse<ChatAttachmentListResponse>(await fetch(req))
+}
+
+/** 删除会话附件 DELETE /api/chat/sessions/{sessionId}/attachments/{attachmentId} */
+export async function deleteSessionAttachment(
+  sessionId: string,
+  attachmentId: string,
+): Promise<void> {
+  const req = makeRequest(
+    'DELETE',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
+  )
+  await parseResponse<void>(await fetch(req))
 }
 
 // ============================================================================

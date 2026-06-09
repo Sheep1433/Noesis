@@ -190,13 +190,22 @@ async function loadSessionMessages(
           if (msg.role === 'user') {
             const userQaType = msg.extra?.qa_type || msg.msg_metadata?.qa_type || 'COMMON_QA'
             lastUserQaType = userQaType
-            // 将 file_dict 转换为 file_key 格式
             const fileDict = msg.extra?.file_dict || msg.msg_metadata?.file_dict || {}
-            const fileKey = Object.values(fileDict).map((value: any) => ({
-              source_file_key: value,
-              parse_file_key: value,
-              file_size: '',
-            }))
+            const fileKey = Object.entries(fileDict).map(([fileName, value]) => {
+              const strVal = String(value ?? '')
+              const refPrefix = '__CHAT_ATTACHMENT__:'
+              const isChatRef = strVal.startsWith(refPrefix)
+              const attachmentId = isChatRef ? strVal.slice(refPrefix.length) : ''
+              const isImage = /\.(?:png|jpe?g|gif|webp)$/i.test(fileName)
+              return {
+                file_name: fileName,
+                attachment_id: attachmentId,
+                kind: isImage ? 'image' : 'document',
+                source_file_key: fileName,
+                parse_file_key: strVal,
+                file_size: '',
+              }
+            })
             return {
               uuid: msg.id || `user-${index}`,
               chat_id: sessionId,
