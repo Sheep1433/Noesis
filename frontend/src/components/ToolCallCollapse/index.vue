@@ -5,11 +5,11 @@ import { computed } from 'vue'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 interface Props {
-  toolName: string
+  name: string
   arguments?: any
   result?: string
   status?: 'running' | 'success' | 'error'
-  durationMs?: number
+  duration_ms?: number
   defaultOpen?: boolean
   /** dark：独立深色块；light：嵌入助手气泡、与正文对齐的浅色样式 */
   appearance?: 'dark' | 'light'
@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<Props>(), {
   arguments: null,
   result: '',
   status: undefined,
-  durationMs: undefined,
+  duration_ms: undefined,
   defaultOpen: false,
   appearance: 'dark',
 })
@@ -140,16 +140,16 @@ const headerSummary = computed(() => {
 })
 
 const durationDisplay = computed(() => {
-  if (props.durationMs == null || props.durationMs < 0) {
+  if (props.duration_ms == null || props.duration_ms < 0) {
     return ''
   }
-  return formatDurationMs(props.durationMs)
+  return formatDurationMs(props.duration_ms)
 })
 </script>
 
 <template>
   <n-collapse class="tool-call" :class="{ 'tool-call--light': appearance === 'light' }">
-    <n-collapse-item :name="toolName" :default-expanded="defaultOpen">
+    <n-collapse-item :name="name" :default-expanded="defaultOpen">
       <template #header>
         <div class="tool-header">
           <div class="tool-header__icon">
@@ -158,7 +158,7 @@ const durationDisplay = computed(() => {
             </n-icon>
           </div>
           <div class="tool-header__middle">
-            <span class="tool-name" :class="{ 'tool-name--with-summary': !!headerSummary }">{{ toolName }}</span>
+            <span class="tool-name" :class="{ 'tool-name--with-summary': !!headerSummary }">{{ name }}</span>
             <span
               v-if="headerSummary"
               class="tool-summary"

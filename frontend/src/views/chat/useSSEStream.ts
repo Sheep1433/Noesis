@@ -9,25 +9,25 @@ import { useUserStore } from '@/store/business/userStore'
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
   onUsageUpdate?: (usage: { input_tokens: number, output_tokens: number, total_tokens?: number }) => void
-  onTextDelta?: (text: string, parentTaskCallId?: string) => void
-  onReasoningDelta?: (reasoning: string, parentTaskCallId?: string) => void
+  onTextDelta?: (text: string, parent_task_call_id?: string) => void
+  onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
   onReasoningStart?: (data: Record<string, unknown>) => void
   onReasoningEnd?: (data: Record<string, unknown>) => void
   onToolCall?: (
     name: string,
     args: Record<string, unknown>,
-    toolCallId: string,
-    parentTaskCallId?: string,
+    tool_call_id: string,
+    parent_task_call_id?: string,
   ) => void
   onToolResult?: (
-    toolCallId: string,
-    payload: { output: string, error?: string, status: 'success' | 'error', durationMs?: number },
+    tool_call_id: string,
+    payload: { output: string, error?: string, status: 'success' | 'error', duration_ms?: number },
   ) => void
   /** 测试用例等扩展 SSE（event 名与 data.type 一致） */
   onCustomEvent?: (eventType: string, data: Record<string, unknown>) => void
-  /** message-start 帧（含 assistantMessageId、可选 langfuseSessionId） */
+  /** message-start 帧（含 assistant_message_id、可选 langfuse_session_id） */
   onMessageStart?: (data: Record<string, unknown>) => void
-  onFinish?: () => void
+  onFinish?: (detail?: { finish_reason?: string }) => void
   onError?: (msg: string) => void
 }
 
@@ -70,10 +70,10 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
 
   const isLoading = ref(false)
   const error = ref<string | null>(null)
-  let abortController: AbortController | null = null
   let removeBeforeUnload: (() => void) | null = null
+  let lastFinishReason: string | undefined
 
-  const toolNameByCallId = new Map<string, string>()
+  const tool_name_by_call_id = new Map<string, string>()
 
   function setupBeforeUnload(sessionId: string, qaType: string) {
     cleanupBeforeUnload()
@@ -111,22 +111,22 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       onMessageStart?.(data)
       return
     }
-    if (t === 'text-delta' && typeof data.textDelta === 'string') {
-      const parentTaskCallId = typeof data.parentTaskCallId === 'string' && data.parentTaskCallId.trim()
-        ? data.parentTaskCallId.trim()
+    if (t === 'text-delta' && typeof data.text_delta === 'string') {
+      const parent_task_call_id = typeof data.parent_task_call_id === 'string' && data.parent_task_call_id.trim()
+        ? data.parent_task_call_id.trim()
         : undefined
-      onTextDelta?.(data.textDelta, parentTaskCallId)
+      onTextDelta?.(data.text_delta, parent_task_call_id)
       return
     }
     if (t === 'reasoning-start') {
       onReasoningStart?.(data)
       return
     }
-    if (t === 'reasoning-delta' && typeof data.textDelta === 'string') {
-      const parentTaskCallId = typeof data.parentTaskCallId === 'string' && data.parentTaskCallId.trim()
-        ? data.parentTaskCallId.trim()
+    if (t === 'reasoning-delta' && typeof data.text_delta === 'string') {
+      const parent_task_call_id = typeof data.parent_task_call_id === 'string' && data.parent_task_call_id.trim()
+        ? data.parent_task_call_id.trim()
         : undefined
-      onReasoningDelta?.(data.textDelta, parentTaskCallId)
+      onReasoningDelta?.(data.text_delta, parent_task_call_id)
       return
     }
     if (t === 'reasoning-end') {
@@ -134,38 +134,38 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     if (t === 'tool-input-start') {
-      const id = String(data.toolCallId ?? '')
-      const name = String(data.toolName ?? '')
+      const id = String(data.tool_call_id ?? '')
+      const name = String(data.name ?? '')
       if (id) {
-        toolNameByCallId.set(id, name)
+        tool_name_by_call_id.set(id, name)
       }
       return
     }
     if (t === 'tool-input-available') {
-      const id = String(data.toolCallId ?? '')
-      const nameFromFrame = typeof data.toolName === 'string' ? data.toolName : ''
-      const name = nameFromFrame || toolNameByCallId.get(id) || ''
+      const id = String(data.tool_call_id ?? '')
+      const nameFromFrame = typeof data.name === 'string' ? data.name : ''
+      const name = nameFromFrame || tool_name_by_call_id.get(id) || ''
       if (id && nameFromFrame) {
-        toolNameByCallId.set(id, nameFromFrame)
+        tool_name_by_call_id.set(id, nameFromFrame)
       }
       const input = (data.input as Record<string, unknown>) || {}
-      const parentTaskCallId = typeof data.parentTaskCallId === 'string' && data.parentTaskCallId.trim()
-        ? data.parentTaskCallId.trim()
+      const parent_task_call_id = typeof data.parent_task_call_id === 'string' && data.parent_task_call_id.trim()
+        ? data.parent_task_call_id.trim()
         : undefined
-      onToolCall?.(name, input, id, parentTaskCallId)
+      onToolCall?.(name, input, id, parent_task_call_id)
       return
     }
     if (t === 'tool-output-available') {
-      const id = String(data.toolCallId ?? '')
+      const id = String(data.tool_call_id ?? '')
       const status = String(data.status ?? 'success')
       const out = typeof data.output === 'string' ? data.output : ''
       const err = data.error != null ? String(data.error) : ''
-      const durationMs = data.durationMs != null ? Number(data.durationMs) : undefined
+      const duration_ms = data.duration_ms != null ? Number(data.duration_ms) : undefined
       onToolResult?.(id, {
         output: out,
         error: err || undefined,
         status: status === 'error' ? 'error' : 'success',
-        durationMs: durationMs != null && !Number.isNaN(durationMs) ? durationMs : undefined,
+        duration_ms: duration_ms != null && !Number.isNaN(duration_ms) ? duration_ms : undefined,
       })
       return
     }
@@ -204,15 +204,16 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           total_tokens: usage.total_tokens != null ? Number(usage.total_tokens) : undefined,
         })
       }
-      const finishReason = String(data.finishReason ?? data.finish_reason ?? 'stop')
-      if (finishReason === 'error') {
+      const finish_reason = String(data.finish_reason ?? 'stop')
+      lastFinishReason = finish_reason
+      if (finish_reason === 'error') {
         const errMsg = typeof data.error === 'string' && data.error.trim()
           ? data.error.trim()
           : '生成失败'
         settleFailure(errMsg)
         return
       }
-      settleSuccess()
+      settleSuccess(finish_reason)
       return
     }
     if (t === 'error') {
@@ -221,17 +222,18 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     if (t === 'abort') {
-      settleSuccess()
+      // 等待后续 finish / [DONE]，不在此结束流
     }
   }
 
   let streamSettled = false
-  function settleSuccess() {
+  function settleSuccess(finishReason?: string) {
     if (streamSettled) {
       return
     }
     streamSettled = true
-    onFinish?.()
+    const reason = finishReason ?? lastFinishReason
+    onFinish?.(reason ? { finish_reason: reason } : undefined)
   }
   function settleFailure(msg: string) {
     if (streamSettled) {
@@ -250,14 +252,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
 
-    toolNameByCallId.clear()
+    tool_name_by_call_id.clear()
     error.value = null
     streamSettled = false
+    lastFinishReason = undefined
     isLoading.value = true
 
     const qaType = (extra?.qa_type as string) || 'COMMON_QA'
     setupBeforeUnload(sessionId, qaType)
-    abortController = new AbortController()
 
     try {
       const userStore = useUserStore()
@@ -274,7 +276,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           content,
           extra: extra || {},
         }),
-        signal: abortController.signal,
       })
 
       if (!res.ok) {
@@ -313,7 +314,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         }
       }
 
-      // 连接已关闭：若末尾帧没有以 \n\n 结束，会留在 rawBuffer 中从未被解析
       if (rawBuffer.trim()) {
         const flush = `${rawBuffer}\n\n`
         const { frames: tailFrames } = parseSseFrames(flush)
@@ -322,19 +322,13 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         }
         rawBuffer = ''
       }
-      // 未收到 finish/abort/error/[DONE] 时仍结束加载（例如上游漏发 finish）
       settleSuccess()
     } catch (err: unknown) {
-      const e = err as { name?: string, message?: string }
-      if (e.name === 'AbortError') {
-        settleSuccess()
-      } else {
-        error.value = e.message ?? '未知错误'
-        settleFailure(e.message ?? '未知错误')
-      }
+      const e = err as { message?: string }
+      error.value = e.message ?? '未知错误'
+      settleFailure(e.message ?? '未知错误')
     } finally {
       isLoading.value = false
-      abortController = null
       cleanupBeforeUnload()
     }
   }
@@ -344,14 +338,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
 
-    toolNameByCallId.clear()
+    tool_name_by_call_id.clear()
     error.value = null
     streamSettled = false
+    lastFinishReason = undefined
     isLoading.value = true
 
     const qaType = 'TEST_CASE_QA'
     setupBeforeUnload(sessionId, qaType)
-    abortController = new AbortController()
 
     try {
       const userStore = useUserStore()
@@ -364,7 +358,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           'Authorization': `Bearer ${token ?? ''}`,
         },
         body: JSON.stringify({ selected_point_names: selectedPointNames }),
-        signal: abortController.signal,
       })
 
       if (!res.ok) {
@@ -413,23 +406,13 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       }
       settleSuccess()
     } catch (err: unknown) {
-      const e = err as { name?: string, message?: string }
-      if (e.name === 'AbortError') {
-        settleSuccess()
-      } else {
-        error.value = e.message ?? '未知错误'
-        settleFailure(e.message ?? '未知错误')
-      }
+      const e = err as { message?: string }
+      error.value = e.message ?? '未知错误'
+      settleFailure(e.message ?? '未知错误')
     } finally {
       isLoading.value = false
-      abortController = null
       cleanupBeforeUnload()
     }
-  }
-
-  function stop() {
-    abortController?.abort()
-    abortController = null
   }
 
   return {
@@ -437,6 +420,5 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     error,
     sendMessage,
     resumeTestCase,
-    stop,
   }
 }

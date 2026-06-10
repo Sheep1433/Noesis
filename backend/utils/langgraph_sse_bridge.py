@@ -41,7 +41,7 @@ def _format_done() -> str:
 
 
 def _normalize_tool_input(raw: Any) -> tuple[Dict[str, Any], Optional[str]]:
-    """SSE / builder 统一使用 dict 形态的 input；返回 (dict, 原始 JSON 字符串供前端 inputText)。"""
+    """SSE / builder 统一使用 dict 形态的 input；返回 (dict, 原始 JSON 字符串供前端 input_text)。"""
     if raw is None or raw == {}:
         return {}, None
     if isinstance(raw, dict):
@@ -90,7 +90,7 @@ def _resolve_tool_call_id(item: Dict[str, Any], data: Dict[str, Any]) -> str:
     依次尝试：data.tool_call_id → input 内 ToolCall id → run_id（callback 系统强制注入）。
     实践中 run_id 必然存在，最终 fallback 用随机 id 兜底防御。
     """
-    tid = data.get("tool_call_id") or data.get("toolCallId")
+    tid = data.get("tool_call_id")
     if tid and str(tid).strip():
         return str(tid)
     inp = data.get("input")
@@ -180,7 +180,7 @@ class LangGraphSseBridge:
 
     @staticmethod
     def _resolve_parent_task_call_id(item: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[str]:
-        """子 Agent 内部 tool 归属到当前活跃的 task toolCallId（支持 parent_ids 与并行 task）。"""
+        """子 Agent 内部 tool 归属到当前活跃的 task tool_call_id（支持 parent_ids 与并行 task）。"""
         LangGraphSseBridge._ensure_subagent_ctx(ctx)
         stack: List[str] = ctx["task_tool_call_stack"]
         if not stack:
@@ -238,7 +238,7 @@ class LangGraphSseBridge:
         self._usage_cumulative = dict(usage)
         out.append(_format_sse("usage-update", {
             "type": "usage-update",
-            "messageId": self.assistant_message_id,
+            "message_id": self.assistant_message_id,
             "usage": usage,
         }))
 
@@ -284,11 +284,11 @@ class LangGraphSseBridge:
         self._message_started = True
         payload: Dict[str, Any] = {
             "type": "message-start",
-            "sessionId": self.session_id,
-            "assistantMessageId": self.assistant_message_id,
+            "session_id": self.session_id,
+            "assistant_message_id": self.assistant_message_id,
         }
         if self._emit_langfuse_session_hint and self.session_id:
-            payload["langfuseSessionId"] = self.session_id
+            payload["langfuse_session_id"] = self.session_id
         out.append(_format_sse("message-start", payload))
 
     def _close_text(self, out: List[str], *, record_checkpoint: bool = True) -> None:
@@ -296,8 +296,8 @@ class LangGraphSseBridge:
             return
         out.append(_format_sse("text-end", {
             "type": "text-end",
-            "messageId": self.assistant_message_id,
-            "partId": self._current_text_part_id,
+            "message_id": self.assistant_message_id,
+            "part_id": self._current_text_part_id,
         }))
         self._text_open = False
         self._current_text_part_id = None
@@ -310,8 +310,8 @@ class LangGraphSseBridge:
             return
         out.append(_format_sse("reasoning-end", {
             "type": "reasoning-end",
-            "messageId": self.assistant_message_id,
-            "partId": self._current_reasoning_part_id,
+            "message_id": self.assistant_message_id,
+            "part_id": self._current_reasoning_part_id,
         }))
         self._reasoning_open = False
         self._current_reasoning_part_id = None
@@ -322,7 +322,7 @@ class LangGraphSseBridge:
     @staticmethod
     def _sse_parent_field(parent_task_call_id: Optional[str]) -> Dict[str, str]:
         if parent_task_call_id:
-            return {"parentTaskCallId": parent_task_call_id}
+            return {"parent_task_call_id": parent_task_call_id}
         return {}
 
     def consume_persist_tick(self) -> bool:
@@ -351,16 +351,16 @@ class LangGraphSseBridge:
             self._current_reasoning_parent_task_call_id = parent_task_call_id
             out.append(_format_sse("reasoning-start", {
                 "type": "reasoning-start",
-                "messageId": self.assistant_message_id,
-                "partId": self._current_reasoning_part_id,
+                "message_id": self.assistant_message_id,
+                "part_id": self._current_reasoning_part_id,
                 **self._sse_parent_field(parent_task_call_id),
             }))
             self._reasoning_open = True
         out.append(_format_sse("reasoning-delta", {
             "type": "reasoning-delta",
-            "messageId": self.assistant_message_id,
-            "partId": self._current_reasoning_part_id,
-            "textDelta": content,
+            "message_id": self.assistant_message_id,
+            "part_id": self._current_reasoning_part_id,
+            "text_delta": content,
             **self._sse_parent_field(parent_task_call_id),
         }))
 
@@ -381,16 +381,16 @@ class LangGraphSseBridge:
             self._current_text_parent_task_call_id = parent_task_call_id
             out.append(_format_sse("text-start", {
                 "type": "text-start",
-                "messageId": self.assistant_message_id,
-                "partId": self._current_text_part_id,
+                "message_id": self.assistant_message_id,
+                "part_id": self._current_text_part_id,
                 **self._sse_parent_field(parent_task_call_id),
             }))
             self._text_open = True
         out.append(_format_sse("text-delta", {
             "type": "text-delta",
-            "messageId": self.assistant_message_id,
-            "partId": self._current_text_part_id,
-            "textDelta": content,
+            "message_id": self.assistant_message_id,
+            "part_id": self._current_text_part_id,
+            "text_delta": content,
             **self._sse_parent_field(parent_task_call_id),
         }))
 
@@ -399,15 +399,15 @@ class LangGraphSseBridge:
                           duration_ms: Optional[int] = None) -> None:
         payload: Dict[str, Any] = {
             "type": "tool-output-available",
-            "messageId": self.assistant_message_id,
-            "partId": part_id,
-            "toolCallId": tool_call_id,
+            "message_id": self.assistant_message_id,
+            "part_id": part_id,
+            "tool_call_id": tool_call_id,
             "output": output,
             "status": status,
             "error": error,
         }
         if duration_ms is not None:
-            payload["durationMs"] = duration_ms
+            payload["duration_ms"] = duration_ms
         out.append(_format_sse("tool-output-available", payload))
         self._persist_tick = True
 
@@ -416,9 +416,7 @@ class LangGraphSseBridge:
         self._close_reasoning(out, record_checkpoint=False)
         self._close_text(out, record_checkpoint=False)
         self.last_finish_usage = payload.get("usage") or {}
-        self.last_finish_reason = str(
-            payload.get("finishReason") or payload.get("finish_reason") or "stop"
-        )
+        self.last_finish_reason = str(payload.get("finish_reason") or "stop")
         out.append(_format_sse("finish", payload))
         self._finish_emitted = True
 
@@ -430,11 +428,26 @@ class LangGraphSseBridge:
         ctx["text_buffer"] = ""
         ctx["text_buffer_parent_task_call_id"] = None
 
-    def _safe_append_tool_output(self, builder: AssistantMessageBuilder, tool_name: str,
-                                 output: str, tool_call_id: Optional[str],
-                                 duration_ms: Optional[int] = None) -> bool:
+    def _safe_append_tool_output(
+        self,
+        builder: AssistantMessageBuilder,
+        tool_name: str,
+        output: str,
+        tool_call_id: Optional[str],
+        duration_ms: Optional[int] = None,
+        *,
+        status: str = "success",
+        error: Optional[str] = None,
+    ) -> bool:
         try:
-            builder.append_tool_output(tool_name, output, tool_call_id, duration_ms=duration_ms)
+            builder.append_tool_output(
+                tool_name,
+                output,
+                tool_call_id,
+                duration_ms=duration_ms,
+                status=status,
+                error=error,
+            )
             return True
         except ValueError as e:
             logger.warning(
@@ -455,7 +468,7 @@ class LangGraphSseBridge:
             self._handle_tw_or_business(item, builder, ctx, out)
         return out
 
-    def finalize(self) -> List[str]:
+    def finalize(self, *, finish_reason: Optional[str] = None) -> List[str]:
         """流结束：保证至少发一次 finish，再发 [DONE]。"""
         out: List[str] = []
         had_finish_before = self._finish_emitted
@@ -463,8 +476,8 @@ class LangGraphSseBridge:
             usage = self._build_usage_payload()
             self._emit_finish(out, {
                 "type": "finish",
-                "messageId": self.assistant_message_id,
-                "finishReason": "stop",
+                "message_id": self.assistant_message_id,
+                "finish_reason": finish_reason or "stop",
                 "usage": usage,
             })
         out.append(_format_done())
@@ -485,8 +498,8 @@ class LangGraphSseBridge:
             usage = item_usage if item_usage else self._build_usage_payload(ctx)
             self._emit_finish(out, {
                 "type": "finish",
-                "messageId": self.assistant_message_id,
-                "finishReason": item.get("finish_reason") or item.get("finishReason") or "stop",
+                "message_id": self.assistant_message_id,
+                "finish_reason": item.get("finish_reason") or "stop",
                 "usage": usage,
             })
             return
@@ -495,7 +508,7 @@ class LangGraphSseBridge:
             self._ensure_started(out)
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
-            out.append(_format_sse("abort", {"type": "abort", "messageId": self.assistant_message_id}))
+            out.append(_format_sse("abort", {"type": "abort", "message_id": self.assistant_message_id}))
             logger.info(
                 f"SSE bridge 发出 abort session_id={self.session_id} assistant_message_id={self.assistant_message_id} "
                 f"upstream_type={t}"
@@ -516,13 +529,13 @@ class LangGraphSseBridge:
             )
             out.append(_format_sse("error", {
                 "type": "error",
-                "messageId": self.assistant_message_id,
+                "message_id": self.assistant_message_id,
                 "error": str(msg),
             }))
             return
 
         if t == "text-delta":
-            delta = str(item.get("textDelta") or item.get("delta") or "")
+            delta = str(item.get("text_delta") or "")
             if delta:
                 if builder is not None:
                     ctx["text_buffer"] = (ctx.get("text_buffer") or "") + delta
@@ -532,7 +545,7 @@ class LangGraphSseBridge:
         if t == "finish":
             payload = dict(item)
             payload.setdefault("type", "finish")
-            payload.setdefault("messageId", self.assistant_message_id)
+            payload.setdefault("message_id", self.assistant_message_id)
             if not payload.get("usage"):
                 payload["usage"] = self._build_usage_payload(ctx)
             self._emit_finish(out, payload)
@@ -542,7 +555,7 @@ class LangGraphSseBridge:
             self._ensure_started(out)
             payload = dict(item)
             payload.setdefault("type", str(t))
-            payload.setdefault("messageId", self.assistant_message_id)
+            payload.setdefault("message_id", self.assistant_message_id)
             if t == "phase-end":
                 payload.setdefault("ok", True)
                 self._persist_tick = True
@@ -649,26 +662,26 @@ class LangGraphSseBridge:
 
         start_payload: Dict[str, Any] = {
             "type": "tool-input-start",
-            "messageId": self.assistant_message_id,
-            "partId": part_id,
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
+            "message_id": self.assistant_message_id,
+            "part_id": part_id,
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
         }
         if parent_task_call_id:
-            start_payload["parentTaskCallId"] = parent_task_call_id
+            start_payload["parent_task_call_id"] = parent_task_call_id
         out.append(_format_sse("tool-input-start", start_payload))
         avail: Dict[str, Any] = {
             "type": "tool-input-available",
-            "messageId": self.assistant_message_id,
-            "partId": part_id,
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
+            "message_id": self.assistant_message_id,
+            "part_id": part_id,
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
             "input": input_obj,
         }
         if parent_task_call_id:
-            avail["parentTaskCallId"] = parent_task_call_id
+            avail["parent_task_call_id"] = parent_task_call_id
         if input_text is not None:
-            avail["inputText"] = input_text
+            avail["input_text"] = input_text
         out.append(_format_sse("tool-input-available", avail))
 
     def _on_tool_end(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
@@ -699,6 +712,8 @@ class LangGraphSseBridge:
                 err_s if is_error else clean_output,
                 tool_call_id,
                 duration_ms=duration_ms,
+                status="error" if is_error else "success",
+                error=err_s if is_error else None,
             )
 
         if tool_name == TASK_TOOL_NAME:
@@ -726,7 +741,13 @@ class LangGraphSseBridge:
 
         if builder is not None:
             ok = self._safe_append_tool_output(
-                builder, tool_name, err_s, tool_call_id, duration_ms=duration_ms,
+                builder,
+                tool_name,
+                err_s,
+                tool_call_id,
+                duration_ms=duration_ms,
+                status="error",
+                error=err_s,
             )
             if not ok:
                 builder.append_text(err_s)

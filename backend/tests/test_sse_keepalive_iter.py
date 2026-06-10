@@ -16,7 +16,7 @@ from utils.stream_bridge import HEARTBEAT_SENTINEL, StreamBridgeError
 async def test_keepalive_from_bridge_subscribe_timeout() -> None:
     async def slow_gen():
         await asyncio.sleep(0.12)
-        yield {"type": "finish", "finishReason": "stop", "usage": {}}
+        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
 
     seen: list = []
     async for item in _iter_agent_stream_via_bridge(
@@ -35,7 +35,7 @@ async def test_keepalive_from_bridge_subscribe_timeout() -> None:
 @pytest.mark.asyncio
 async def test_keepalive_disabled_zero_interval() -> None:
     async def gen():
-        yield {"type": "finish", "finishReason": "stop", "usage": {}}
+        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
 
     seen: list = []
     async for item in _iter_agent_stream_via_bridge(
@@ -85,7 +85,7 @@ async def test_test_case_stream_langfuse_context_with_bridge_keepalive() -> None
     async def gen():
         yield {"type": "phase-start"}
         await asyncio.sleep(0.06)
-        yield {"type": "finish", "finishReason": "stop", "usage": {}}
+        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
 
     seen: list = []
     mock_cm = MagicMock()
@@ -140,7 +140,7 @@ async def test_test_case_phase_frames_through_bridge() -> None:
     async def case_gen():
         yield {"type": "phase-start", "phase": "scenes_testpoints"}
         yield {"type": "testpoints-confirm-required", "scenes": []}
-        yield {"type": "finish", "finishReason": "stop", "usage": {}}
+        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
 
     seen: list = []
     async for item in _iter_agent_stream_via_bridge(
@@ -167,7 +167,7 @@ async def test_test_case_resume_scene_cases_through_bridge() -> None:
             "sceneName": "上传",
             "cases": [{"case_id": "TC-001", "test_steps": ["s1"]}],
         }
-        yield {"type": "finish", "finishReason": "stop", "total": 1, "usage": {}}
+        yield {"type": "finish", "finish_reason": "stop", "total": 1, "usage": {}}
 
     seen: list = []
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=False)

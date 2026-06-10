@@ -143,7 +143,7 @@ onMounted(() => {
               />
               <ToolCallCollapse
                 v-else
-                :toolName="call.name"
+                :name="call.name"
                 :arguments="call.arguments"
                 :result="call.result"
                 :status="call.status || 'success'"

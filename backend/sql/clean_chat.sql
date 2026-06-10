@@ -10,6 +10,7 @@ USE `noesis`;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- 按依赖关系顺序清空表（子表先清）
+TRUNCATE TABLE `t_chat_attachment`;
 TRUNCATE TABLE `t_chat_message`;
 TRUNCATE TABLE `t_chat_session`;
 

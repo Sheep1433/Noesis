@@ -15,9 +15,9 @@ CREATE TABLE t_user (
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
--- 演示账号（开源/本地初始化）：用户名 admin，密码 ChangeMe123! — 部署后请立即修改
+-- 演示账号（本地初始化）：用户名 admin，密码 123456 — 部署后请立即修改
 INSERT INTO t_user (id, username, password, mobile, create_time, update_time)
-VALUES (1, 'admin', '$2b$12$o03ZpU4PRCGU8h4Ra1JrQOZn/npzuXpBXnakhCgKWaxuP.BEufgkK', NULL, NOW(), NOW());
+VALUES (1, 'admin', '$2b$12$aZVFQokpDhbSA7/jjo573OAQ.CV11QmpT8kBLHL0lmEyBKsyMQhAa', NULL, NOW(), NOW());
 
 -- ============================================================================
 -- 会话表 v2.1

@@ -1,6 +1,7 @@
 <script lang="tsx" setup>
 import type { UploadFileInfo } from 'naive-ui'
 import type { PropType } from 'vue'
+import type { ChatAttachmentItem } from '@/store/business'
 import { deleteSessionAttachment, uploadSessionAttachment } from '@/api/chat'
 
 const props = defineProps({
@@ -25,10 +26,63 @@ interface ExtendedUploadFileInfo extends UploadFileInfo {
   attachmentId?: string
 }
 
+const deferUpload = computed(() => props.uploadMode === 'chat')
+
 // 定义模型，用于双向绑定上传文件列表
 const pendingUploadFileInfoList = defineModel<ExtendedUploadFileInfo[]>({ default: () => [] })
 
 const imageAccept = 'image/jpeg,image/png,image/webp,image/gif'
+const documentExtensions = ['doc', 'docx', 'ppt', 'pptx', 'pdf', 'txt', 'xlsx', 'csv', 'md']
+
+function isDocumentFile(file: File): boolean {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  return !!ext && documentExtensions.includes(ext)
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith('image/')
+    || /\.(?:jpe?g|png|webp|gif)$/i.test(file.name)
+}
+
+function createUploadFileInfo(file: File): ExtendedUploadFileInfo {
+  const name = file.name.trim()
+    || (isImageFile(file) ? `paste-${Date.now()}.png` : `file-${Date.now()}`)
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name,
+    status: 'pending',
+    file,
+    type: file.type,
+    percentage: 0,
+  }
+}
+
+function enqueueFiles(raw: File[] | FileList) {
+  const files = Array.from(raw)
+  if (!files.length) {
+    return
+  }
+
+  for (const file of files) {
+    const doc = isDocumentFile(file)
+    const img = isImageFile(file)
+    if (!doc && !img) {
+      window.$ModalMessage.warning(`不支持的文件类型：${file.name || file.type || '未知文件'}`)
+      continue
+    }
+    if (img && props.uploadMode !== 'chat') {
+      window.$ModalMessage.info('当前模式暂不支持图片上传')
+      continue
+    }
+
+    const fileInfo = createUploadFileInfo(file)
+    pendingUploadFileInfoList.value.push(fileInfo)
+    if (deferUpload.value) {
+      continue
+    }
+    handleFileUpload(fileInfo)
+  }
+}
 
 const uploadChatAttachment = async (fileInfo: ExtendedUploadFileInfo) => {
   const sessionId = props.getSessionId?.()
@@ -94,7 +148,9 @@ const handleFileUpload = async (fileInfo: ExtendedUploadFileInfo) => {
       pendingUploadFileInfoList.value[index].status = 'finished'
       pendingUploadFileInfoList.value[index].percentage = 100
     }
-    window.$ModalMessage.success('文件上传成功')
+    if (!deferUpload.value) {
+      window.$ModalMessage.success('文件上传成功')
+    }
   } catch (error) {
     const index = pendingUploadFileInfoList.value.findIndex((f) => f.id === fileInfo.id)
     if (index !== -1) {
@@ -130,6 +186,50 @@ const handleRemove = async (index: number) => {
   pendingUploadFileInfoList.value.splice(index, 1)
 }
 
+async function uploadAllPendingFiles(): Promise<ChatAttachmentItem[]> {
+  if (!deferUpload.value) {
+    throw new Error('uploadAllPendingFiles 仅用于 chat 模式')
+  }
+  const sessionId = props.getSessionId?.()
+  if (!sessionId) {
+    throw new Error('会话无效')
+  }
+  businessStore.clear_file_list()
+  const uploaded: ChatAttachmentItem[] = []
+
+  for (const fileInfo of [...pendingUploadFileInfoList.value]) {
+    if (!fileInfo.file) {
+      continue
+    }
+    fileInfo.status = 'uploading'
+    try {
+      await uploadChatAttachment(fileInfo)
+      const index = pendingUploadFileInfoList.value.findIndex((f) => f.id === fileInfo.id)
+      if (index !== -1) {
+        pendingUploadFileInfoList.value[index].status = 'finished'
+        pendingUploadFileInfoList.value[index].percentage = 100
+      }
+      const last = businessStore.file_list[businessStore.file_list.length - 1]
+      if (last) {
+        uploaded.push(last)
+      }
+    } catch (error) {
+      const index = pendingUploadFileInfoList.value.findIndex((f) => f.id === fileInfo.id)
+      if (index !== -1) {
+        pendingUploadFileInfoList.value[index].status = 'error'
+        pendingUploadFileInfoList.value[index].error = error instanceof Error ? error : new Error(String(error))
+      }
+      throw error
+    }
+  }
+  return uploaded
+}
+
+function clearQueue() {
+  pendingUploadFileInfoList.value = []
+  businessStore.clear_file_list()
+}
+
 // 上传附件 下拉菜单的选项
 const options = computed(() => {
   const items = [
@@ -144,8 +244,9 @@ const options = computed(() => {
             show-file-list={false}
             multiple={false}
             onChange={(res) => {
-              pendingUploadFileInfoList.value.push(res.file)
-              handleFileUpload(res.file)
+              if (res.file.file) {
+                enqueueFiles([res.file.file])
+              }
             }}
           >
             <div class="px-4">
@@ -175,8 +276,9 @@ const options = computed(() => {
             show-file-list={false}
             multiple={false}
             onChange={(res) => {
-              pendingUploadFileInfoList.value.push(res.file)
-              handleFileUpload(res.file)
+              if (res.file.file) {
+                enqueueFiles([res.file.file])
+              }
             }}
           >
             <div class="px-4">
@@ -228,19 +330,30 @@ const UploadWrapperItem = defineComponent({
       type: Object as PropType<UploadFileInfo>,
       default: () => null,
     },
+    deferUpload: {
+      type: Boolean,
+      default: false,
+    },
   },
   emits: ['remove'],
   setup(props, { emit }) {
     const statusList = ref([
-      { status: 'parsing', text: '解析中...', icon: 'i-svg-spinners:6-dots-rotate' },
-      { status: 'failed', text: '解析失败', icon: 'i-carbon:error c-red' },
-      { status: 'success', text: '解析完成', icon: 'i-carbon:checkmark' },
+      { status: 'queued', text: '待发送', icon: 'i-carbon:document-blank' },
+      { status: 'parsing', text: '上传中...', icon: 'i-svg-spinners:6-dots-rotate' },
+      { status: 'failed', text: '失败', icon: 'i-carbon:error c-red' },
+      { status: 'success', text: '已就绪', icon: 'i-carbon:checkmark' },
     ])
 
     const _status = computed(() => {
+      if (props.fileInfo.status === 'uploading') {
+        return 'parsing'
+      }
+      if (props.deferUpload && props.fileInfo.status === 'pending') {
+        return 'queued'
+      }
       if (props.fileInfo.status === 'finished') {
         if ((props.fileInfo as ExtendedUploadFileInfo).percentage === 100 && !(props.fileInfo as ExtendedUploadFileInfo).error) {
-          return 'success'
+          return props.deferUpload ? 'success' : 'success'
         } else if ((props.fileInfo as ExtendedUploadFileInfo).error) {
           return 'failed'
         }
@@ -248,7 +361,7 @@ const UploadWrapperItem = defineComponent({
       } else if (props.fileInfo.status === 'error') {
         return 'failed'
       }
-      return 'parsing'
+      return props.deferUpload ? 'queued' : 'parsing'
     })
 
     const isImage = computed(() => props.fileInfo.type?.includes('image'))
@@ -335,6 +448,9 @@ defineExpose({
   options,
   pendingUploadFileInfoList,
   UploadWrapperItem,
+  enqueueFiles,
+  uploadAllPendingFiles,
+  clearQueue,
 })
 </script>
 
@@ -348,6 +464,7 @@ defineExpose({
         v-for="(pendingUploadFileInfo, index) in pendingUploadFileInfoList"
         :key="pendingUploadFileInfo.id"
         :file-info="pendingUploadFileInfo"
+        :defer-upload="deferUpload"
         @remove="() => handleRemove(index)"
       />
     </div>

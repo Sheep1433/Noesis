@@ -7,6 +7,7 @@ import asyncio
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +27,11 @@ from utils.langgraph_sse_bridge import LangGraphSseBridge, bridge_raw_to_sse_lin
 from utils.log_util import logger
 from utils.message_builder import AssistantMessageBuilder, UserMessageBuilder
 from utils.stream_bridge import MemoryStreamBridge, iter_bridge_events
-from utils.stream_failure_notice import append_stream_failure_notice_to_content
+from utils.stream_failure_notice import (
+    append_disconnect_partial_content,
+    append_stream_failure_notice_to_content,
+    append_user_stop_notice_to_content,
+)
 
 
 common_agent = GeneralQAAgent()
@@ -169,7 +174,7 @@ async def _insert_streaming_assistant_skeleton(
     session_id: str,
     user_id: str,
 ) -> bool:
-    """流开始前插入 assistant 骨架行（与 SSE assistantMessageId 同 id）。"""
+    """流开始前插入 assistant 骨架行（与 SSE assistant_message_id 同 id）。"""
     try:
         async with AsyncSessionLocal() as persist_db:
             await ChatService.save_message(
@@ -264,17 +269,79 @@ async def _finalize_sse_bridge_stream(
     session_id: str,
     user_id: str,
 ) -> AsyncGenerator[str, None]:
-    if ctx.get("text_buffer"):
-        builder.append_text(ctx["text_buffer"])
-        ctx["text_buffer"] = ""
-    for sse_line in bridge.finalize():
+    _flush_ctx_text_buffer(ctx, builder)
+    finish_reason = "stopped" if ctx.get("user_stopped") else None
+    for sse_line in bridge.finalize(finish_reason=finish_reason):
         yield sse_line
         await _persist_stream_checkpoint(bridge, ctx, builder, session_id, user_id)
 
 
+@dataclass
+class _ActiveStreamState:
+    builder: AssistantMessageBuilder
+    ctx: Dict[str, Any]
+    qa_type: str
+    user_stopped: bool = False
+
+
+def _flush_ctx_text_buffer(
+    ctx: Dict[str, Any],
+    builder: Optional[AssistantMessageBuilder],
+) -> None:
+    buf = ctx.get("text_buffer") or ""
+    if not buf or builder is None:
+        return
+    parent = ctx.get("text_buffer_parent_task_call_id")
+    builder.append_text(buf, parent_task_call_id=parent)
+    ctx["text_buffer"] = ""
+    ctx["text_buffer_parent_task_call_id"] = None
+
+
+async def _persist_disconnect_partial(
+    *,
+    builder: Optional[AssistantMessageBuilder],
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+    qa_type: str,
+    assistant_message_id: Optional[str],
+) -> None:
+    """连接意外断开：partial 落库，无用户中断文案。"""
+    _flush_ctx_text_buffer(ctx, builder)
+    if builder and not builder.is_empty():
+        content = append_disconnect_partial_content(builder.to_dict())
+        try:
+            await _persist_assistant(
+                content,
+                session_id,
+                user_id,
+                status="partial",
+                extra={"qa_type": qa_type},
+                assistant_message_id=assistant_message_id,
+            )
+        except Exception:
+            logger.exception(
+                f"连接中断 assistant 消息落库失败: session_id={session_id} user_id={user_id}"
+            )
+    elif assistant_message_id:
+        try:
+            await _persist_assistant(
+                {"version": 1, "parts": []},
+                session_id,
+                user_id,
+                status="partial",
+                extra={"qa_type": qa_type},
+                assistant_message_id=assistant_message_id,
+            )
+        except Exception:
+            logger.exception(
+                f"连接中断 assistant 空内容落库失败: session_id={session_id} user_id={user_id}"
+            )
+
+
 class QaService:
-    # 保存 session_id -> builder 的映射，用于 stop 时保存未完成的消息
-    _current_builders: Dict[str, AssistantMessageBuilder] = {}
+    # session_id -> 流式状态（stop 时权威落库）
+    _active_streams: Dict[str, _ActiveStreamState] = {}
 
     @classmethod
     async def exec_query(
@@ -363,7 +430,7 @@ class QaService:
                 ctx_err: Dict[str, Any] = {}
                 for line in br.process_item({"type": "error", "content": "未知的qa_type"}, None, ctx_err):
                     yield line
-                for line in br.process_item({"type": "finish", "finishReason": "error", "usage": {}}, None, ctx_err):
+                for line in br.process_item({"type": "finish", "finish_reason": "error", "usage": {}}, None, ctx_err):
                     yield line
                 for line in br.finalize():
                     yield line
@@ -377,8 +444,12 @@ class QaService:
                 session_id=session_id,
                 message_id=bridge.assistant_message_id,
             )
-            cls._current_builders[session_id] = builder
             ctx = _new_stream_ctx()
+            cls._active_streams[session_id] = _ActiveStreamState(
+                builder=builder,
+                ctx=ctx,
+                qa_type=req_obj.qa_type,
+            )
             if await _insert_streaming_assistant_skeleton(
                 bridge.assistant_message_id, session_id, current_user.user_id
             ):
@@ -408,7 +479,7 @@ class QaService:
             ):
                 yield sse_line
 
-            if not task_cancelled:
+            if not task_cancelled and not ctx.get("user_stopped"):
                 await _finalize_streaming_assistant(
                     builder=builder,
                     bridge=bridge,
@@ -424,60 +495,36 @@ class QaService:
                 f"finish_reason={bridge.last_finish_reason if bridge else ''}"
             )
 
-            cls._current_builders.pop(session_id, None)
+            cls._active_streams.pop(session_id, None)
 
         except asyncio.CancelledError:
             task_cancelled = True
             logger.info(
                 f"exec_query 流式任务被取消(CancelledError) session_id={session_id} qa_type={req_obj.qa_type} "
-                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
+                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
+                f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
             )
             aid = (ctx or {}).get("_assistant_db_id")
-            if session_id in cls._current_builders:
-                builder = cls._current_builders[session_id]
-                if ctx.get("text_buffer") and builder:
-                    builder.append_text(ctx["text_buffer"])
-                    ctx["text_buffer"] = ""
-                if builder and not builder.is_empty():
-                    try:
-                        await _persist_assistant(
-                            builder.to_dict(),
-                            session_id,
-                            current_user.user_id,
-                            status="partial",
-                            extra={"qa_type": req_obj.qa_type},
-                            assistant_message_id=aid,
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"取消 SSE 时 assistant 消息落库失败: session_id={session_id} user_id={current_user.user_id}"
-                        )
-                elif aid:
-                    try:
-                        await _persist_assistant(
-                            {"version": 1, "parts": []},
-                            session_id,
-                            current_user.user_id,
-                            status="partial",
-                            extra={"qa_type": req_obj.qa_type},
-                            assistant_message_id=aid,
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"取消 SSE 时 assistant 空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
-                        )
-            cls._current_builders.pop(session_id, None)
+            stream_state = cls._active_streams.get(session_id)
+            persist_b = stream_state.builder if stream_state else builder
+            if not (ctx or {}).get("user_stopped"):
+                await _persist_disconnect_partial(
+                    builder=persist_b,
+                    ctx=ctx or {},
+                    session_id=session_id,
+                    user_id=current_user.user_id,
+                    qa_type=req_obj.qa_type,
+                    assistant_message_id=aid,
+                )
+            cls._active_streams.pop(session_id, None)
             raise
 
         except Exception as e:
             logging.exception(f"QA服务异常: {e}")
             aid = (ctx or {}).get("_assistant_db_id")
-            persist_b = builder
-            if persist_b is None and session_id in cls._current_builders:
-                persist_b = cls._current_builders[session_id]
-            if ctx.get("text_buffer") and persist_b is not None:
-                persist_b.append_text(ctx["text_buffer"])
-                ctx["text_buffer"] = ""
+            stream_state = cls._active_streams.get(session_id)
+            persist_b = stream_state.builder if stream_state else builder
+            _flush_ctx_text_buffer(ctx, persist_b)
             err_text = str(e)[:8000]
             if persist_b is not None and not persist_b.is_empty():
                 try:
@@ -514,7 +561,7 @@ class QaService:
                         f"QA 异常路径 assistant 空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
                     )
             if bridge is not None:
-                b = builder if builder is not None else AssistantMessageBuilder(session_id=session_id)
+                b = persist_b if persist_b is not None else AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
                     "text_buffer": "",
                     "current_tool_name": None,
@@ -536,7 +583,7 @@ class QaService:
                         yield line
                 except Exception:
                     logging.exception("failed to emit SSE after QA exception")
-            cls._current_builders.pop(session_id, None)
+            cls._active_streams.pop(session_id, None)
 
     @classmethod
     async def exec_test_case_resume(
@@ -596,15 +643,19 @@ class QaService:
                 session_id=session_id,
                 message_id=bridge.assistant_message_id,
             )
-            cls._current_builders[session_id] = builder
             ctx = _new_stream_ctx()
+            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
+            cls._active_streams[session_id] = _ActiveStreamState(
+                builder=builder,
+                ctx=ctx,
+                qa_type=tc_qa,
+            )
             if await _insert_streaming_assistant_skeleton(
                 bridge.assistant_message_id, session_id, current_user.user_id
             ):
                 ctx["_assistant_db_id"] = bridge.assistant_message_id
 
             ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
-            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
             async for sse_line in _yield_sse_from_agent_bridge(
                 agent_generator,
                 bridge=bridge,
@@ -623,7 +674,7 @@ class QaService:
             ):
                 yield sse_line
 
-            if not task_cancelled:
+            if not task_cancelled and not ctx.get("user_stopped"):
                 await _finalize_streaming_assistant(
                     builder=builder,
                     bridge=bridge,
@@ -639,62 +690,38 @@ class QaService:
                 f"finish_reason={bridge.last_finish_reason if bridge else ''}"
             )
 
-            cls._current_builders.pop(session_id, None)
+            cls._active_streams.pop(session_id, None)
 
         except asyncio.CancelledError:
             task_cancelled = True
             logger.info(
                 f"exec_test_case_resume 流式被取消(CancelledError) session_id={session_id} "
-                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
+                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
+                f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
             )
             aid = (ctx or {}).get("_assistant_db_id")
             tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            if session_id in cls._current_builders:
-                builder = cls._current_builders[session_id]
-                if ctx.get("text_buffer") and builder:
-                    builder.append_text(ctx["text_buffer"])
-                    ctx["text_buffer"] = ""
-                if builder and not builder.is_empty():
-                    try:
-                        await _persist_assistant(
-                            builder.to_dict(),
-                            session_id,
-                            current_user.user_id,
-                            status="partial",
-                            extra={"qa_type": tc_qa},
-                            assistant_message_id=aid,
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"测试用例 resume 取消时 assistant 消息落库失败: session_id={session_id} user_id={current_user.user_id}"
-                        )
-                elif aid:
-                    try:
-                        await _persist_assistant(
-                            {"version": 1, "parts": []},
-                            session_id,
-                            current_user.user_id,
-                            status="partial",
-                            extra={"qa_type": tc_qa},
-                            assistant_message_id=aid,
-                        )
-                    except Exception:
-                        logger.exception(
-                            f"测试用例 resume 取消时空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
-                        )
-            cls._current_builders.pop(session_id, None)
+            stream_state = cls._active_streams.get(session_id)
+            persist_b = stream_state.builder if stream_state else builder
+            if not (ctx or {}).get("user_stopped"):
+                await _persist_disconnect_partial(
+                    builder=persist_b,
+                    ctx=ctx or {},
+                    session_id=session_id,
+                    user_id=current_user.user_id,
+                    qa_type=tc_qa,
+                    assistant_message_id=aid,
+                )
+            cls._active_streams.pop(session_id, None)
             raise
 
         except Exception as e:
             logging.exception(f"测试用例 resume 异常: {e}")
             aid = (ctx or {}).get("_assistant_db_id")
             tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            persist_b = builder
-            if persist_b is None and session_id in cls._current_builders:
-                persist_b = cls._current_builders[session_id]
-            if ctx.get("text_buffer") and persist_b is not None:
-                persist_b.append_text(ctx["text_buffer"])
-                ctx["text_buffer"] = ""
+            stream_state = cls._active_streams.get(session_id)
+            persist_b = stream_state.builder if stream_state else builder
+            _flush_ctx_text_buffer(ctx, persist_b)
             err_text = str(e)[:8000]
             if persist_b is not None and not persist_b.is_empty():
                 try:
@@ -731,7 +758,7 @@ class QaService:
                         f"测试用例 resume 异常路径空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
                     )
             if bridge is not None:
-                b = builder if builder is not None else AssistantMessageBuilder(session_id=session_id)
+                b = persist_b if persist_b is not None else AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
                     "text_buffer": "",
                     "current_tool_name": None,
@@ -753,7 +780,7 @@ class QaService:
                         yield line
                 except Exception:
                     logging.exception("failed to emit SSE after test case resume exception")
-            cls._current_builders.pop(session_id, None)
+            cls._active_streams.pop(session_id, None)
 
     @classmethod
     async def export_test_case_markdown(
@@ -798,48 +825,76 @@ class QaService:
 
     @classmethod
     async def stop_chat(cls, session_id, qa_type, current_user: CurrentUser):
-        """停止问答任务并保存当前累积的消息"""
-        builder = cls._current_builders.get(session_id)
+        """用户主动停止：权威落库后 cancel_task；流式协程见 ctx.user_stopped 跳过二次落库。"""
+        stream_state = cls._active_streams.get(session_id)
+        builder = stream_state.builder if stream_state else None
+        ctx = stream_state.ctx if stream_state else {}
+        if stream_state is not None:
+            stream_state.user_stopped = True
+            ctx["user_stopped"] = True
+
         logger.info(
             f"stop_chat 处理 session_id={session_id} qa_type={qa_type} user_id={current_user.user_id} "
-            f"has_active_builder={builder is not None}"
+            f"has_active_stream={stream_state is not None}"
         )
-        aid = (getattr(builder, "message_id", None) or None) if builder else None
+
+        aid = (
+            (getattr(builder, "message_id", None) or None)
+            if builder
+            else ctx.get("_assistant_db_id")
+        )
+        _flush_ctx_text_buffer(ctx, builder)
+
+        persist_extra = {"qa_type": qa_type, "finish_reason": "stopped"}
         if builder and (aid or not builder.is_empty()):
             try:
+                snapshot = builder.to_dict() if not builder.is_empty() else {"version": 1, "parts": []}
+                content = append_user_stop_notice_to_content(snapshot)
                 await _persist_assistant(
-                    _assistant_content_snapshot(builder),
+                    content,
                     session_id,
                     current_user.user_id,
                     status="partial",
-                    extra={"qa_type": qa_type},
+                    extra=persist_extra,
                     assistant_message_id=aid,
                 )
             except Exception:
                 logger.exception(
                     f"stop_chat 时 assistant 消息落库失败: session_id={session_id} user_id={current_user.user_id}"
                 )
+        elif aid:
+            try:
+                content = append_user_stop_notice_to_content({"version": 1, "parts": []})
+                await _persist_assistant(
+                    content,
+                    session_id,
+                    current_user.user_id,
+                    status="partial",
+                    extra=persist_extra,
+                    assistant_message_id=aid,
+                )
+            except Exception:
+                logger.exception(
+                    f"stop_chat 时 assistant 空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
+                )
 
-        # 2. 根据 qa_type 取消对应任务
         if qa_type == IntentEnum.COMMON_QA.value[0]:
             status = await common_agent.cancel_task(session_id)
             logger.info(f"stop_chat cancel_task COMMON_QA session_id={session_id} marked={status}")
             return status, "停止成功"
-        elif qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
+        if qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
             status = await fault_agent.cancel_task(session_id)
             logger.info(f"stop_chat cancel_task FAULT_OPERATION session_id={session_id} marked={status}")
             return status, "停止成功"
-        elif qa_type == IntentEnum.TEST_CASE_QA.value[0]:
+        if qa_type == IntentEnum.TEST_CASE_QA.value[0]:
             status, msg = await case_coordinator.cancel_task(session_id)
             logger.info(f"stop_chat cancel_task TEST_CASE session_id={session_id} ok={status} msg={msg}")
             return status, msg
-        elif qa_type == IntentEnum.DEEP_RESEARCH_QA.value[0]:
+        if qa_type == IntentEnum.DEEP_RESEARCH_QA.value[0]:
             status = await deep_research_agent.cancel_task(session_id)
             logger.info(f"stop_chat cancel_task DEEP_RESEARCH session_id={session_id} marked={status}")
             return status, "停止成功"
 
-        # 3. 清理 builder
-        cls._current_builders.pop(session_id, None)
         logger.warning(f"stop_chat 未知 qa_type session_id={session_id} qa_type={qa_type}")
         return False, "未知的 qa_type"
 

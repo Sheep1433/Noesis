@@ -43,7 +43,7 @@ def test_message_start_and_text_delta_shapes() -> None:
     builder = AssistantMessageBuilder(session_id="sess-1", message_id=bridge.assistant_message_id)
     ctx = _ctx()
     chunks: List[str] = []
-    chunks.extend(bridge.process_item({"type": "text-delta", "textDelta": "hi"}, builder, ctx))
+    chunks.extend(bridge.process_item({"type": "text-delta", "text_delta": "hi"}, builder, ctx))
     text = "".join(chunks)
     assert text.endswith("\n\n")
     assert "event: message-start\n" in text
@@ -51,22 +51,22 @@ def test_message_start_and_text_delta_shapes() -> None:
     assert "event: text-delta\n" in text
     objs = _data_json_objects(text)
     assert objs[0]["type"] == "message-start"
-    assert objs[0]["sessionId"] == "sess-1"
-    assert objs[0]["assistantMessageId"] == bridge.assistant_message_id
-    assert "langfuseSessionId" not in objs[0]
+    assert objs[0]["session_id"] == "sess-1"
+    assert objs[0]["assistant_message_id"] == bridge.assistant_message_id
+    assert "langfuse_session_id" not in objs[0]
     td = [o for o in objs if o["type"] == "text-delta"][0]
-    assert td["textDelta"] == "hi"
-    assert "partId" in td
+    assert td["text_delta"] == "hi"
+    assert "part_id" in td
 
 
 def test_message_start_with_langfuse_hint() -> None:
     bridge = LangGraphSseBridge("sess-lf", emit_langfuse_session_hint=True)
     builder = AssistantMessageBuilder(session_id="sess-lf", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    text = "".join(bridge.process_item({"type": "text-delta", "textDelta": "x"}, builder, ctx))
+    text = "".join(bridge.process_item({"type": "text-delta", "text_delta": "x"}, builder, ctx))
     objs = _data_json_objects(text)
     assert objs[0]["type"] == "message-start"
-    assert objs[0]["langfuseSessionId"] == "sess-lf"
+    assert objs[0]["langfuse_session_id"] == "sess-lf"
 
 
 def test_finish_usage_and_done() -> None:
@@ -74,12 +74,12 @@ def test_finish_usage_and_done() -> None:
     builder = AssistantMessageBuilder(session_id="sess-2", message_id=bridge.assistant_message_id)
     ctx = _ctx()
     parts: List[str] = []
-    parts.extend(bridge.process_item({"type": "text-delta", "textDelta": "x"}, builder, ctx))
+    parts.extend(bridge.process_item({"type": "text-delta", "text_delta": "x"}, builder, ctx))
     parts.extend(
         bridge.process_item(
             {
                 "type": "finish",
-                "finishReason": "stop",
+                "finish_reason": "stop",
                 "usage": {"inputTokens": 3, "outputTokens": 4},
             },
             builder,
@@ -92,7 +92,7 @@ def test_finish_usage_and_done() -> None:
     finish_objs = [o for o in _data_json_objects(blob) if o.get("type") == "finish"]
     assert finish_objs
     fin = finish_objs[-1]
-    assert fin["finishReason"] == "stop"
+    assert fin["finish_reason"] == "stop"
     assert fin["usage"]["inputTokens"] == 3
     assert fin["usage"]["outputTokens"] == 4
 
@@ -105,7 +105,7 @@ def test_error_event_type() -> None:
     assert "event: error\n" in blob
     err = [o for o in _data_json_objects(blob) if o.get("type") == "error"][0]
     assert err["error"] == "oops"
-    assert err["messageId"] == bridge.assistant_message_id
+    assert err["message_id"] == bridge.assistant_message_id
 
 
 def test_phase_start_end_through_bridge() -> None:
@@ -115,7 +115,7 @@ def test_phase_start_end_through_bridge() -> None:
     parts: List[str] = []
     parts.extend(
         bridge.process_item(
-            {"type": "phase-start", "phaseId": "parse_requirements", "title": "解析需求"},
+            {"type": "phase-start", "phase_id": "parse_requirements", "title": "解析需求"},
             builder,
             ctx,
         )
@@ -124,8 +124,8 @@ def test_phase_start_end_through_bridge() -> None:
         bridge.process_item(
             {
                 "type": "phase-delta",
-                "phaseId": "parse_requirements",
-                "textDelta": "上下文已就绪",
+                "phase_id": "parse_requirements",
+                "text_delta": "上下文已就绪",
             },
             builder,
             ctx,
@@ -133,7 +133,7 @@ def test_phase_start_end_through_bridge() -> None:
     )
     parts.extend(
         bridge.process_item(
-            {"type": "phase-end", "phaseId": "parse_requirements", "ok": True},
+            {"type": "phase-end", "phase_id": "parse_requirements", "ok": True},
             builder,
             ctx,
         )
@@ -141,14 +141,14 @@ def test_phase_start_end_through_bridge() -> None:
     blob = "".join(parts)
     objs = _data_json_objects(blob)
     ps = [o for o in objs if o.get("type") == "phase-start"][0]
-    assert ps["phaseId"] == "parse_requirements"
+    assert ps["phase_id"] == "parse_requirements"
     assert ps["title"] == "解析需求"
-    assert ps["messageId"] == bridge.assistant_message_id
+    assert ps["message_id"] == bridge.assistant_message_id
     pd = [o for o in objs if o.get("type") == "phase-delta"][0]
-    assert pd["textDelta"] == "上下文已就绪"
-    assert pd["phaseId"] == "parse_requirements"
+    assert pd["text_delta"] == "上下文已就绪"
+    assert pd["phase_id"] == "parse_requirements"
     pend = [o for o in objs if o.get("type") == "phase-end"][0]
-    assert pend["phaseId"] == "parse_requirements"
+    assert pend["phase_id"] == "parse_requirements"
     assert pend["ok"] is True
 
 
@@ -185,8 +185,8 @@ def test_tool_output_duration_ms() -> None:
     blob = "".join(parts)
     tool_out = [o for o in _data_json_objects(blob) if o.get("type") == "tool-output-available"]
     assert tool_out
-    assert isinstance(tool_out[0]["durationMs"], int)
-    assert tool_out[0]["durationMs"] >= 0
+    assert isinstance(tool_out[0]["duration_ms"], int)
+    assert tool_out[0]["duration_ms"] >= 0
     tool_parts = [p for p in builder.to_dict()["parts"] if p.get("type") == "tool"]
     assert tool_parts[0].get("duration_ms") is not None
 
@@ -321,7 +321,7 @@ def test_reasoning_stream_then_text_closes_reasoning() -> None:
     types = [o["type"] for o in objs]
     assert "reasoning-start" in types
     rd = [o for o in objs if o["type"] == "reasoning-delta"]
-    assert rd and rd[0]["textDelta"] == "think-a"
+    assert rd and rd[0]["text_delta"] == "think-a"
     re_idx = types.index("reasoning-end")
     td_idx = types.index("text-delta")
     assert re_idx < td_idx
@@ -372,14 +372,14 @@ def test_subagent_child_tool_gets_parent_task_call_id() -> None:
     )
     objs = _data_json_objects("".join(parts))
     avail = [o for o in objs if o["type"] == "tool-input-available"]
-    task_avail = next(o for o in avail if o["toolName"] == TASK_TOOL_NAME)
-    read_avail = next(o for o in avail if o["toolName"] == "read")
-    assert "parentTaskCallId" not in task_avail
-    assert read_avail.get("parentTaskCallId") == task_avail["toolCallId"]
+    task_avail = next(o for o in avail if o["name"] == TASK_TOOL_NAME)
+    read_avail = next(o for o in avail if o["name"] == "read")
+    assert "parent_task_call_id" not in task_avail
+    assert read_avail.get("parent_task_call_id") == task_avail["tool_call_id"]
 
     tool_parts = [p for p in builder._content.parts if isinstance(p, ToolPart)]  # noqa: SLF001
     read_part = next(p for p in tool_parts if p.name == "read")
-    assert read_part.parent_task_call_id == task_avail["toolCallId"]
+    assert read_part.parent_task_call_id == task_avail["tool_call_id"]
 
     parts.extend(
         bridge.process_item(
@@ -438,7 +438,7 @@ def test_subagent_text_delta_gets_parent_task_call_id() -> None:
     td = [o for o in objs if o["type"] == "text-delta"]
     assert td
     task_tc = ctx["run_id_to_tool_call_id"][task_run]
-    assert td[0].get("parentTaskCallId") == task_tc
+    assert td[0].get("parent_task_call_id") == task_tc
     assert ctx.get("text_buffer")
     assert ctx.get("text_buffer_parent_task_call_id") == task_tc
 
@@ -485,16 +485,16 @@ def test_parallel_tasks_parent_task_call_id_not_cross_wired() -> None:
         ctx,
     )
     serialized = builder.serialize()
-    assert '"parentTaskCallId"' in serialized
+    assert '"parent_task_call_id"' in serialized
     import json as _json
 
     parts = _json.loads(serialized)["parts"]
-    read_saved = next(p for p in parts if p.get("toolName") == "read")
+    read_saved = next(p for p in parts if p.get("name") == "read")
     task_b = next(
         p for p in parts
-        if p.get("toolName") == TASK_TOOL_NAME and p.get("input", {}).get("description") == "任务 B"
+        if p.get("name") == TASK_TOOL_NAME and p.get("input", {}).get("description") == "任务 B"
     )
-    assert read_saved["parentTaskCallId"] == task_b["toolCallId"]
+    assert read_saved["parent_task_call_id"] == task_b["tool_call_id"]
 
 
 def test_bridge_raw_to_sse_lines_skips_end_sentinel() -> None:
@@ -509,7 +509,7 @@ def test_bridge_raw_to_sse_lines_skips_end_sentinel() -> None:
 
 
 def test_tool_error_uses_inflight_tool_call_id() -> None:
-    """on_tool_error 的 toolCallId 应与 tool-input 一致，避免前端出现孤儿工具块。"""
+    """on_tool_error 的 tool_call_id 应与 tool-input 一致，避免前端出现孤儿工具块。"""
     bridge = LangGraphSseBridge("sess-tool-err")
     builder = AssistantMessageBuilder(session_id="sess-tool-err", message_id=bridge.assistant_message_id)
     ctx = _ctx()
@@ -549,9 +549,16 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
     objs = _data_json_objects("".join(parts))
     outputs = [o for o in objs if o.get("type") == "tool-output-available"]
     assert len(outputs) == 1
-    assert outputs[0]["toolCallId"] == model_call_id
+    assert outputs[0]["tool_call_id"] == model_call_id
     assert outputs[0]["status"] == "error"
     assert "MCP" in outputs[0]["error"]
+
+    saved = builder.to_dict()["parts"][0]
+    assert saved["tool_call_id"] == model_call_id
+    assert saved["status"] == "error"
+    assert saved["error"]
+    assert "toolCallId" not in saved
+    assert "durationMs" not in saved
 
 
 def test_reasoning_disabled_when_show_thinking_off() -> None:

@@ -1,6 +1,6 @@
 import type { Todo } from '@/components/TodoList/types'
 
-/** LangChain TodoListMiddleware 工具名，与 SSE tool-input-available.toolName 一致 */
+/** LangChain TodoListMiddleware 工具名，与 SSE tool-input-available.name 一致 */
 export const WRITE_TODOS_TOOL_NAME = 'write_todos'
 
 const TODO_STATUSES = new Set<Todo['status']>(['pending', 'in_progress', 'completed'])
@@ -67,11 +67,11 @@ export function parseWriteTodosInput(input: Record<string, unknown>): Todo[] | n
 
 /** 根据工具名或 input 形态决定是否更新 TodoList */
 export function shouldApplyWriteTodos(
-  toolName: string,
+  name: string,
   input: Record<string, unknown>,
 ): boolean {
-  if (toolName === WRITE_TODOS_TOOL_NAME) {
+  if (name === WRITE_TODOS_TOOL_NAME) {
     return true
   }
-  return !toolName && isWriteTodosLikeInput(input)
+  return !name && isWriteTodosLikeInput(input)
 }

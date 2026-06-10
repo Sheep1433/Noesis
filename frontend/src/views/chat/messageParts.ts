@@ -9,7 +9,7 @@ export interface TextUiPart {
   type: 'text'
   content: string
   status?: string
-  parentTaskCallId?: string
+  parent_task_call_id?: string
 }
 
 export interface ReasoningUiPart {
@@ -17,27 +17,27 @@ export interface ReasoningUiPart {
   type: 'reasoning'
   content: string
   status?: string
-  parentTaskCallId?: string
+  parent_task_call_id?: string
 }
 
 export interface ToolUiPart {
   id: string
   type: 'tool'
-  toolCallId?: string
-  toolName: string
+  tool_call_id?: string
+  name: string
   input: Record<string, unknown>
   output: string
   status: ToolRunStatus
   error?: string | null
-  durationMs?: number
+  duration_ms?: number
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
-  parentTaskCallId?: string
+  parent_task_call_id?: string
 }
 
 export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart
 
-export function partParentTaskCallId(part: UiPart): string | undefined {
-  const raw = part.parentTaskCallId
+export function part_parent_task_call_id(part: UiPart): string | undefined {
+  const raw = part.parent_task_call_id
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
 }
 
@@ -208,8 +208,8 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
     }
     const rec = p as Record<string, unknown>
     const id = typeof rec.id === 'string' && rec.id ? rec.id : genPartId(String(rec.type || 'p'))
-    const parentTaskCallId = (() => {
-      const raw = rec.parentTaskCallId ?? rec.parent_task_call_id
+    const parent_task_call_id = (() => {
+      const raw = rec.parent_task_call_id
       return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
     })()
     if (rec.type === 'text') {
@@ -218,7 +218,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         type: 'text',
         content: String(rec.content ?? ''),
         status: String(rec.status || 'completed'),
-        ...(parentTaskCallId ? { parentTaskCallId } : {}),
+        ...(parent_task_call_id ? { parent_task_call_id } : {}),
       })
     } else if (rec.type === 'reasoning') {
       parts.push({
@@ -226,34 +226,21 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         type: 'reasoning',
         content: String(rec.content ?? ''),
         status: String(rec.status || 'completed'),
-        ...(parentTaskCallId ? { parentTaskCallId } : {}),
+        ...(parent_task_call_id ? { parent_task_call_id } : {}),
       })
     } else if (rec.type === 'tool') {
-      const inputRaw = rec.input ?? rec.arguments
-      const input = normalizeToolPartInput(inputRaw)
-      const hasOutput = typeof rec.output === 'string' && rec.output.length > 0
-      let status = coerceToolStatus(rec)
-      if (status === 'running' && hasOutput) {
-        status = 'success'
-      }
+      const input = normalizeToolPartInput(rec.input)
       parts.push({
         id,
         type: 'tool',
-        toolCallId: (rec.toolCallId ?? rec.tool_call_id) as string | undefined,
-        toolName: String(rec.toolName ?? rec.name ?? rec.tool ?? ''),
+        tool_call_id: typeof rec.tool_call_id === 'string' ? rec.tool_call_id : undefined,
+        name: String(rec.name ?? ''),
         input,
         output: typeof rec.output === 'string' ? rec.output : '',
-        status,
+        status: coerceToolStatus(rec),
         error: rec.error != null ? String(rec.error) : null,
-        durationMs: rec.durationMs != null
-          ? Number(rec.durationMs)
-          : rec.duration_ms != null
-            ? Number(rec.duration_ms)
-            : undefined,
-        parentTaskCallId: (() => {
-          const raw = rec.parentTaskCallId ?? rec.parent_task_call_id
-          return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
-        })(),
+        duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
+        ...(parent_task_call_id ? { parent_task_call_id } : {}),
       })
     }
   }
@@ -314,6 +301,74 @@ function finalizeStreamingParts(parts: UiPart[], toolRunningAs: 'success' | 'err
 
 export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
   return finalizeStreamingParts(parts, 'success')
+}
+
+const USER_STOP_TOOL_ERROR = '用户已停止生成'
+const USER_STOP_NOTICE_PLAIN = '本轮回复已被用户中断。'
+const USER_STOP_NOTICE_INLINE = '（本轮回复已被用户中断。）'
+
+function partsContainUserStopNotice(parts: UiPart[]): boolean {
+  return parts.some((p) => {
+    if (p.type !== 'text') {
+      return false
+    }
+    const c = String(p.content ?? '')
+    return c.includes(USER_STOP_NOTICE_PLAIN) || c.includes(USER_STOP_NOTICE_INLINE)
+  })
+}
+
+/** 用户主动停止：与后端 append_user_stop_notice_to_content 文案对齐 */
+export function appendUserStopNotice(parts: UiPart[]): UiPart[] {
+  if (partsContainUserStopNotice(parts)) {
+    return parts
+  }
+  const completed = finalizePartsOnStreamError(parts).map((p) => {
+    if (p.type === 'tool' && p.status === 'error' && p.error === '工具未返回结果') {
+      return { ...p, error: USER_STOP_TOOL_ERROR }
+    }
+    return p
+  }) as UiPart[]
+
+  const hasProse = completed.some((p) => {
+    if (p.type === 'text' || p.type === 'reasoning') {
+      return String((p as TextUiPart | ReasoningUiPart).content ?? '').trim().length > 0
+    }
+    return false
+  })
+
+  const notice = hasProse ? USER_STOP_NOTICE_INLINE : USER_STOP_NOTICE_PLAIN
+
+  if (!hasProse) {
+    if (completed.length === 0) {
+      return [
+        {
+          id: genPartId('text'),
+          type: 'text',
+          content: notice,
+          status: 'completed',
+        },
+      ]
+    }
+    return [
+      ...completed,
+      {
+        id: genPartId('text'),
+        type: 'text',
+        content: notice,
+        status: 'completed',
+      },
+    ]
+  }
+
+  return [
+    ...completed,
+    {
+      id: genPartId('text'),
+      type: 'text',
+      content: `\n\n---\n\n*${notice}*`,
+      status: 'completed',
+    },
+  ]
 }
 
 /** 流式失败收尾：未完成工具标为 error，避免误显示「完成」。 */
@@ -480,12 +535,12 @@ export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiP
 export function appendTextDelta(
   parts: UiPart[],
   delta: string,
-  parentTaskCallId?: string,
+  parent_task_call_id?: string,
 ): UiPart[] {
-  const parentId = parentTaskCallId?.trim() || undefined
+  const parentId = parent_task_call_id?.trim() || undefined
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const last = next[next.length - 1]
-  if (last?.type === 'text' && partParentTaskCallId(last) === parentId) {
+  if (last?.type === 'text' && part_parent_task_call_id(last) === parentId) {
     const t = last
     next[next.length - 1] = {
       ...t,
@@ -499,7 +554,7 @@ export function appendTextDelta(
     type: 'text',
     content: delta,
     status: 'streaming',
-    ...(parentId ? { parentTaskCallId: parentId } : {}),
+    ...(parentId ? { parent_task_call_id: parentId } : {}),
   })
   return next
 }
@@ -536,7 +591,7 @@ export function appendTextDeltaWithRedactedThinking(
   parts: UiPart[],
   delta: string,
   ctx: RedactedThinkingStreamCtx,
-  parentTaskCallId?: string,
+  parent_task_call_id?: string,
 ): UiPart[] {
   let out = parts
   let s = ctx.pending + delta
@@ -548,7 +603,7 @@ export function appendTextDeltaWithRedactedThinking(
       if (idx !== -1) {
         const before = s.slice(0, idx)
         if (before) {
-          out = appendTextDelta(out, before, parentTaskCallId)
+          out = appendTextDelta(out, before, parent_task_call_id)
         }
         s = s.slice(idx + REDACTED_OPEN.length)
         ctx.mode = 'thinking'
@@ -556,7 +611,7 @@ export function appendTextDeltaWithRedactedThinking(
       }
       const { emit, hold } = takeEmitAndHoldForToken(s, REDACTED_OPEN)
       if (emit) {
-        out = appendTextDelta(out, emit, parentTaskCallId)
+        out = appendTextDelta(out, emit, parent_task_call_id)
       }
       ctx.pending = hold
       return out
@@ -565,7 +620,7 @@ export function appendTextDeltaWithRedactedThinking(
     if (idx !== -1) {
       const before = s.slice(0, idx)
       if (before) {
-        out = appendReasoningDelta(out, before, parentTaskCallId)
+        out = appendReasoningDelta(out, before, parent_task_call_id)
       }
       out = completeLastReasoningPart(out)
       s = s.slice(idx + REDACTED_CLOSE.length)
@@ -574,7 +629,7 @@ export function appendTextDeltaWithRedactedThinking(
     }
     const { emit, hold } = takeEmitAndHoldForToken(s, REDACTED_CLOSE)
     if (emit) {
-      out = appendReasoningDelta(out, emit, parentTaskCallId)
+      out = appendReasoningDelta(out, emit, parent_task_call_id)
     }
     ctx.pending = hold
     return out
@@ -603,12 +658,12 @@ export function flushRedactedThinkingStreamCtx(
 export function appendReasoningDelta(
   parts: UiPart[],
   delta: string,
-  parentTaskCallId?: string,
+  parent_task_call_id?: string,
 ): UiPart[] {
-  const parentId = parentTaskCallId?.trim() || undefined
+  const parentId = parent_task_call_id?.trim() || undefined
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const last = next[next.length - 1]
-  if (last?.type === 'reasoning' && partParentTaskCallId(last) === parentId) {
+  if (last?.type === 'reasoning' && part_parent_task_call_id(last) === parentId) {
     const r = last
     next[next.length - 1] = {
       ...r,
@@ -622,63 +677,63 @@ export function appendReasoningDelta(
     type: 'reasoning',
     content: delta,
     status: 'streaming',
-    ...(parentId ? { parentTaskCallId: parentId } : {}),
+    ...(parentId ? { parent_task_call_id: parentId } : {}),
   })
   return next
 }
 
 export function upsertToolInputPart(
   parts: UiPart[],
-  toolCallId: string,
-  toolName: string,
+  tool_call_id: string,
+  name: string,
   input: Record<string, unknown>,
-  parentTaskCallId?: string,
+  parent_task_call_id?: string,
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
-  const idx = next.findIndex((p) => p.type === 'tool' && p.toolCallId === toolCallId)
-  const parentId = parentTaskCallId?.trim() || undefined
+  const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
+  const parentId = parent_task_call_id?.trim() || undefined
   if (idx !== -1) {
     const tp = next[idx] as ToolUiPart
     next[idx] = {
       ...tp,
-      toolName: toolName || tp.toolName,
+      name: name || tp.name,
       input,
-      ...(parentId ? { parentTaskCallId: parentId } : {}),
+      ...(parentId ? { parent_task_call_id: parentId } : {}),
     }
     return next
   }
   next.push({
     id: genPartId('tool'),
     type: 'tool',
-    toolCallId,
-    toolName,
+    tool_call_id,
+    name,
     input,
     output: '',
     status: 'running',
-    ...(parentId ? { parentTaskCallId: parentId } : {}),
+    ...(parentId ? { parent_task_call_id: parentId } : {}),
   })
   return next
 }
 
 export function applyToolOutput(
   parts: UiPart[],
-  toolCallId: string,
-  payload: { output: string, error?: string, status: 'success' | 'error', durationMs?: number },
+  tool_call_id: string,
+  payload: { output: string, error?: string, status: 'success' | 'error', duration_ms?: number },
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
-  const idx = next.findIndex((p) => p.type === 'tool' && p.toolCallId === toolCallId)
+  const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
   const status: ToolRunStatus = payload.status === 'error' ? 'error' : 'success'
   if (idx === -1) {
     next.push({
       id: genPartId('tool'),
       type: 'tool',
-      toolCallId,
-      toolName: '',
+      tool_call_id,
+      name: '',
       input: {},
       output: payload.output,
       status,
       error: payload.error,
-      durationMs: payload.durationMs,
+      duration_ms: payload.duration_ms,
     })
     return next
   }
@@ -688,7 +743,7 @@ export function applyToolOutput(
     output: payload.output,
     error: payload.error,
     status,
-    durationMs: payload.durationMs ?? tp.durationMs,
+    duration_ms: payload.duration_ms ?? tp.duration_ms,
   }
   return next
 }

@@ -4,12 +4,14 @@ import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { UAParser } from 'ua-parser-js'
 import * as GlobalAPI from '@/api'
+import { ensureSession, stopChat } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
+import { buildFileDict } from '@/config/chat'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import {
@@ -17,6 +19,7 @@ import {
   appendStreamFailureNotice,
   appendTextDelta,
   appendTextDeltaWithRedactedThinking,
+  appendUserStopNotice,
   applyToolOutput,
   assistantPartsStillStreaming,
   completeLastReasoningPart,
@@ -31,7 +34,6 @@ import {
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
 import { useSSEStream } from '@/views/chat/useSSEStream'
-import { buildFileDict } from '@/config/chat'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
 import FileUploadManager from './FileUploadManager.vue'
@@ -117,6 +119,9 @@ function newChat() {
   // 清理 Todo 列表（PRD：仅在当前会话生效，会话结束后不持久化）
   businessStore.todos = []
 
+  clearComposerQueue()
+  inputTextString.value = ''
+
   // 新增：生成当前问答类型的新uuid
   uuids.value[qa_type.value] = uuidv4()
 }
@@ -133,6 +138,17 @@ const stylizingLoading = ref(false)
 // 输入字符串
 const inputTextString = ref('')
 const refInputTextString = ref<InputInst | null>()
+
+interface FileUploadRef {
+  pendingUploadFileInfoList: UploadFileInfo[] | null | undefined
+  options?: any[]
+  reset?: () => void
+  enqueueFiles?: (files: File[] | FileList) => void
+  uploadAllPendingFiles?: () => Promise<ChatAttachmentItem[]>
+  clearQueue?: () => void
+}
+const fileUploadRef = ref<FileUploadRef | null>(null)
+const pendingUploadFileInfoList = ref([])
 
 // 输出字符串 Reader 流（已移除，使用 useChat）
 
@@ -355,8 +371,8 @@ const sseStream = useSSEStream({
   onMessageStart: (data) => {
     nativeReasoningSeen.value = false
     Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
-    const aid = String(data.assistantMessageId ?? '')
-    const lfRaw = data.langfuseSessionId
+    const aid = String(data.assistant_message_id ?? '')
+    const lfRaw = data.langfuse_session_id
     const lf = typeof lfRaw === 'string' && lfRaw.trim() ? lfRaw.trim() : ''
     const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
     if (lastIdx === -1) {
@@ -369,25 +385,25 @@ const sseStream = useSSEStream({
       ...(lf ? { langfuse_session_id: lf } : {}),
     }
   },
-  onTextDelta: (text, parentTaskCallId) =>
+  onTextDelta: (text, parent_task_call_id) =>
     patchLastAssistantParts((parts) =>
       nativeReasoningSeen.value
-        ? appendTextDelta(parts, text, parentTaskCallId)
-        : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parentTaskCallId),
+        ? appendTextDelta(parts, text, parent_task_call_id)
+        : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parent_task_call_id),
     ),
   onReasoningStart: () => {
     nativeReasoningSeen.value = true
   },
-  onReasoningDelta: (delta, parentTaskCallId) => {
+  onReasoningDelta: (delta, parent_task_call_id) => {
     nativeReasoningSeen.value = true
-    patchLastAssistantParts((parts) => appendReasoningDelta(parts, delta, parentTaskCallId))
+    patchLastAssistantParts((parts) => appendReasoningDelta(parts, delta, parent_task_call_id))
   },
   onReasoningEnd: () => {
     patchLastAssistantParts((parts) => completeLastReasoningPart(parts))
   },
-  onToolCall: (name, args, toolCallId, parentTaskCallId) => {
+  onToolCall: (name, args, tool_call_id, parent_task_call_id) => {
     patchLastAssistantParts((parts) =>
-      upsertToolInputPart(parts, toolCallId, name, args, parentTaskCallId),
+      upsertToolInputPart(parts, tool_call_id, name, args, parent_task_call_id),
     )
     if (shouldApplyWriteTodos(name, args)) {
       const parsed = parseWriteTodosInput(args)
@@ -396,17 +412,19 @@ const sseStream = useSSEStream({
       }
     }
   },
-  onToolResult: (toolCallId, payload) => {
-    patchLastAssistantParts((parts) => applyToolOutput(parts, toolCallId, payload))
+  onToolResult: (tool_call_id, payload) => {
+    patchLastAssistantParts((parts) => applyToolOutput(parts, tool_call_id, payload))
   },
-  onFinish: () => {
+  onFinish: (detail) => {
     stylizingLoading.value = false
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
     const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
     if (lastIdx !== -1) {
       const prev = conversationItems.value[lastIdx]
       if (prev.messageContent?.version === 1) {
-        const parts = markStreamingPartsComplete(prev.messageContent.parts)
+        const parts = detail?.finish_reason === 'stopped'
+          ? appendUserStopNotice(prev.messageContent.parts)
+          : markStreamingPartsComplete(prev.messageContent.parts)
         const { content, reasoning } = syncLegacyFieldsFromParts(parts)
         conversationItems.value = [
           ...conversationItems.value.slice(0, lastIdx),
@@ -474,9 +492,13 @@ const sseStream = useSSEStream({
   },
 })
 
-function stopChatStream() {
-  sseStream.stop()
-  stylizingLoading.value = false
+async function stopChatStream() {
+  const sessionId = getChatSessionId()
+  try {
+    await stopChat(sessionId, qa_type.value)
+  } catch {
+    // 仍等待 SSE finish/stopped；失败时由 onError 或用户重试处理
+  }
 }
 
 // 校验文件上传状态和业务处理逻辑
@@ -495,6 +517,10 @@ const checkAllFilesUploaded = () => {
     return false
   }
 
+  if (qa_type.value === 'COMMON_QA') {
+    return true
+  }
+
   for (const file of pendingFiles) {
     if (file.status !== 'finished') {
       window.$ModalMessage.warning('存在未完成上传或解析失败的文件，请检查后重试')
@@ -502,6 +528,59 @@ const checkAllFilesUploaded = () => {
     }
   }
   return true
+}
+
+const uploadingOnSend = ref(false)
+
+const sendDisabled = computed(() => {
+  if (uploadingOnSend.value) {
+    return true
+  }
+  const pendingCount = pendingUploadFileInfoList.value?.length ?? 0
+  if (qa_type.value === 'FAULT_OPERATION_QA' && pendingCount > 0) {
+    return true
+  }
+  return !inputTextString.value.trim()
+})
+
+function clearComposerQueue() {
+  pendingUploadFileInfoList.value = []
+  businessStore.clear_file_list()
+  fileUploadRef.value?.clearQueue?.()
+}
+
+async function resolveAttachmentsForSend(): Promise<{
+  upload_file_key: ChatAttachmentItem[]
+  file_dict: Record<string, string> | undefined
+}> {
+  const pendingCount = fileUploadRef.value?.pendingUploadFileInfoList?.length ?? 0
+  if (!pendingCount) {
+    return { upload_file_key: [], file_dict: undefined }
+  }
+
+  if (qa_type.value === 'COMMON_QA') {
+    uploadingOnSend.value = true
+    try {
+      const sessionId = getChatSessionId()
+      await ensureSession(sessionId, { extra: { qa_type: qa_type.value } })
+      const uploaded = await fileUploadRef.value!.uploadAllPendingFiles!()
+      return {
+        upload_file_key: uploaded,
+        file_dict: buildFileDict(uploaded),
+      }
+    } finally {
+      uploadingOnSend.value = false
+    }
+  }
+
+  if (!checkAllFilesUploaded()) {
+    throw new Error('pending_upload')
+  }
+  const upload_file_key = [...businessStore.file_list]
+  return {
+    upload_file_key,
+    file_dict: buildFileDict(upload_file_key),
+  }
 }
 
 
@@ -524,32 +603,34 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
 
   // 若正在加载，则点击后恢复初始状态
   if (stylizingLoading.value) {
-    // 停止对话
-    stopChatStream()
-    onCompletedReader(conversationItems.value.length - 1)
-    // 隐藏加载提示动画
-    contentLoadingStates.value = contentLoadingStates.value.map(() => false)
+    void stopChatStream()
     return
   }
 
-  // 如果输入为空，则直接返回
-  if (send_text === '') {
-    if (refInputTextString.value && !inputTextString.value.trim()) {
+  const textContent = inputTextString.value
+    ? inputTextString.value
+    : send_text
+
+  if (!textContent.trim()) {
+    if (refInputTextString.value && !send_text) {
       inputTextString.value = ''
       refInputTextString.value?.select()
-      return
     }
+    return
   }
 
   let upload_file_key: ChatAttachmentItem[] = []
   let file_dict: Record<string, string> | undefined
 
-  if (fileUploadRef.value?.pendingUploadFileInfoList && fileUploadRef.value.pendingUploadFileInfoList.length > 0) {
-    if (!checkAllFilesUploaded()) {
-      return
+  try {
+    const attachmentResult = await resolveAttachmentsForSend()
+    upload_file_key = attachmentResult.upload_file_key
+    file_dict = attachmentResult.file_dict
+  } catch (error) {
+    if (error instanceof Error && error.message !== 'pending_upload') {
+      window.$ModalMessage.error(`附件上传失败: ${error.message}`)
     }
-    upload_file_key = [...businessStore.file_list]
-    file_dict = buildFileDict(upload_file_key)
+    return
   }
 
   if (file_key.length > 0) {
@@ -561,10 +642,6 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     // 新建对话 时输入新问题 清空历史数据
     conversationItems.value = []
     showDefaultPage.value = false
-
-    // 清空文件上传列表
-    pendingUploadFileInfoList.value = []
-    businessStore.clear_file_list()
   }
 
   // 自定义id
@@ -588,9 +665,6 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
 
   // 调用大模型后台服务接口
   stylizingLoading.value = true
-  const textContent = inputTextString.value
-    ? inputTextString.value
-    : send_text
   inputTextString.value = ''
 
   if (!uuids.value[qa_type.value]) {
@@ -671,6 +745,9 @@ const parser = new UAParser()
 const isMacos = parser.getOS().name.includes('Mac')
 
 const placeholder = computed(() => {
+  if (uploadingOnSend.value) {
+    return '附件上传中...'
+  }
   if (stylizingLoading.value) {
     return `输入任意问题...`
   }
@@ -690,7 +767,7 @@ watch(
       return
     }
 
-    if (stylizingLoading.value) {
+    if (stylizingLoading.value || sendDisabled.value) {
       return
     }
 
@@ -710,7 +787,7 @@ watch(
       return
     }
 
-    if (stylizingLoading.value) {
+    if (stylizingLoading.value || sendDisabled.value) {
       return
     }
 
@@ -726,6 +803,7 @@ watch(
 // 重置状态
 const handleResetState = () => {
   inputTextString.value = ''
+  clearComposerQueue()
 
   stylizingLoading.value = false
   nextTick(() => {
@@ -755,6 +833,7 @@ const rowProps = (row: any) => {
       currentIndex.value = row.uuid
       suggested_array.value = []
       businessStore.todos = []
+      clearComposerQueue()
 
       isInit.value = false
       isView.value = true
@@ -837,6 +916,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
       conversationItems.value = []
       showDefaultPage.value = true
       currentIndex.value = null
+      clearComposerQueue()
     }
   }
 
@@ -1009,15 +1089,79 @@ onBeforeUnmount(() => {
 })
 
 // ============================== 文件上传 ============================//
-interface FileUploadRef {
-  pendingUploadFileInfoList: UploadFileInfo[] | null | undefined
-  options?: any[]
-  reset?: () => void
-}
-const fileUploadRef = ref<FileUploadRef | null>(null)
+const composerDragOver = ref(false)
 
-// 用于绑定文件上传信息列表
-const pendingUploadFileInfoList = ref([])
+function canUploadComposerFiles(): boolean {
+  if (qa_type.value === 'FAULT_OPERATION_QA') {
+    window.$ModalMessage.warning('故障运维暂不支持文件上传')
+    return false
+  }
+  return true
+}
+
+function onComposerDragEnter(e: DragEvent) {
+  if (!e.dataTransfer?.types.includes('Files')) {
+    return
+  }
+  e.preventDefault()
+  composerDragOver.value = true
+}
+
+function onComposerDragOver(e: DragEvent) {
+  if (!e.dataTransfer?.types.includes('Files')) {
+    return
+  }
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'copy'
+  composerDragOver.value = true
+}
+
+function onComposerDragLeave(e: DragEvent) {
+  const related = e.relatedTarget as Node | null
+  const current = e.currentTarget as HTMLElement
+  if (related && current.contains(related)) {
+    return
+  }
+  composerDragOver.value = false
+}
+
+function onComposerDrop(e: DragEvent) {
+  composerDragOver.value = false
+  if (!canUploadComposerFiles()) {
+    return
+  }
+  const files = e.dataTransfer?.files
+  if (!files?.length) {
+    return
+  }
+  fileUploadRef.value?.enqueueFiles?.(files)
+}
+
+function onComposerPaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items?.length) {
+    return
+  }
+
+  const imageFiles: File[] = []
+  for (const item of items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) {
+        imageFiles.push(file)
+      }
+    }
+  }
+  if (!imageFiles.length) {
+    return
+  }
+
+  e.preventDefault()
+  if (!canUploadComposerFiles()) {
+    return
+  }
+  fileUploadRef.value?.enqueueFiles?.(imageFiles)
+}
 </script>
 
 <template>
@@ -1281,7 +1425,7 @@ const pendingUploadFileInfoList = ref([])
                       <template
                         v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
                         :key="entry.kind === 'subagent'
-                          ? (entry.part.toolCallId ?? entry.part.id ?? pi)
+                          ? (entry.part.tool_call_id ?? entry.part.id ?? pi)
                           : (entry.part.id ?? pi)"
                       >
                         <ReasoningBlock
@@ -1298,17 +1442,17 @@ const pendingUploadFileInfoList = ref([])
                           :output="entry.part.output"
                           :status="entry.part.status"
                           :error="entry.part.error"
-                          :duration-ms="entry.part.durationMs"
+                          :duration_ms="entry.part.duration_ms"
                           :child-parts="entry.childParts"
                         />
                         <ToolCallCollapse
                           v-else-if="entry.kind === 'part' && entry.part.type === 'tool'"
                           appearance="light"
-                          :toolName="entry.part.toolName"
+                          :name="entry.part.name"
                           :arguments="entry.part.input"
                           :result="entry.part.status === 'error' ? (entry.part.error || entry.part.output || '') : entry.part.output"
                           :status="entry.part.status"
-                          :duration-ms="entry.part.durationMs"
+                          :duration_ms="entry.part.duration_ms"
                         />
                         <MarkdownPreview
                           v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
@@ -1337,7 +1481,7 @@ const pendingUploadFileInfoList = ref([])
                         v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
                         :qa-type="item.qa_type || 'COMMON_QA'"
                         :copy-text="[item.reasoning, item.content].filter((s) => s && String(s).trim()).join('\n\n')"
-                        :langfuse-session-id="item.langfuse_session_id"
+                        :langfuse_session_id="item.langfuse_session_id"
                         :langfuse-ui-origin="langfuseUiOrigin"
                         @praise-fead-back="() => onPraiseFeadBack(index)"
                         @belittle-feedback="() => onBelittleFeedback(index)"
@@ -1621,10 +1765,22 @@ const pendingUploadFileInfoList = ref([])
                 </div>
                 <div
                   :class="[
-                    'relative b b-solid b-primary bg-white',
+                    'chat-composer relative b b-solid b-primary bg-white',
                     'rounded-10px p-12',
+                    composerDragOver && 'chat-composer--dragover',
                   ]"
+                  @dragenter="onComposerDragEnter"
+                  @dragover="onComposerDragOver"
+                  @dragleave="onComposerDragLeave"
+                  @drop="onComposerDrop"
                 >
+                  <div
+                    v-if="composerDragOver"
+                    class="chat-composer-drop-hint"
+                  >
+                    松开鼠标上传文件
+                  </div>
+
                   <FileUploadManager
                     ref="fileUploadRef"
                     v-model="pendingUploadFileInfoList"
@@ -1632,88 +1788,71 @@ const pendingUploadFileInfoList = ref([])
                     :get-session-id="getChatSessionId"
                   />
 
-                  <n-input
-                    ref="refInputTextString"
-                    v-model:value="inputTextString"
-                    type="textarea"
-                    class="textarea-resize-none w-full text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
-                    :style="{
-                      '--n-border-radius': '15px',
-                      'align': 'center',
-                      'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
-                      'font-size': '16px',
-                      'line-height': '1.5',
-                    }"
-                    :placeholder="placeholder"
-                    :autosize="{
-                      minRows: 1,
-                      maxRows: 10,
-                    }"
-                  >
-                    <template
-                      #prefix
+                  <div class="chat-composer-row flex items-center gap-8">
+                    <n-dropdown
+                      :options="fileUploadRef?.options || []"
                     >
-                      <n-dropdown
-                        :options="fileUploadRef?.options || []"
+                      <div
+                        flex="~ items-center justify-center"
+                        class="shrink-0 rounded-50% p-7 hover:bg-primary/5 transition-all-300 bg-primary/1"
+                        b="~ solid primary/20"
                       >
-                        <div flex="~ items-center justify-center" class="rounded-50% p-7 hover:bg-primary/5 transition-all-300 bg-primary/1" b="~ solid primary/20">
-                          <div class="text-20  i-uil:upload cursor-pointer"></div>
-                        </div>
-                        <!-- <n-icon size="30">
-                          <svg
-                            t="1729566080604"
-                            class="icon"
-                            viewBox="0 0 1024 1024"
-                            version="1.1"
-                            xmlns="http://www.w3.org/2000/svg"
-                            p-id="38910"
-                            width="64"
-                            height="64"
-                          >
-                            <path
-                              d="M856.448 606.72v191.744a31.552 31.552 0 0 1-31.488 31.488H194.624a31.552 31.552 0 0 1-31.488-31.488V606.72a31.488 31.488 0 1 1 62.976 0v160.256h567.36V606.72a31.488 31.488 0 1 1 62.976 0zM359.872 381.248c-8.192 0-10.56-5.184-5.376-11.392L500.48 193.152a11.776 11.776 0 0 1 18.752 0l145.856 176.704c5.184 6.272 2.752 11.392-5.376 11.392H359.872z"
-                              fill="#838384"
-                              p-id="38911"
-                            />
-                            <path
-                              d="M540.288 637.248a30.464 30.464 0 1 1-61.056 0V342.656a30.464 30.464 0 1 1 61.056 0v294.592z"
-                              fill="#838384"
-                              p-id="38912"
-                            />
-                          </svg>
-                        </n-icon> -->
-                      </n-dropdown>
-                    </template>
-                  </n-input>
+                        <div class="text-20 i-uil:upload cursor-pointer"></div>
+                      </div>
+                    </n-dropdown>
 
-                  <div class="chat-send-btn-wrap">
-                    <n-tooltip
-                      :disabled="!stylizingLoading"
-                      placement="top"
-                    >
-                      <template #trigger>
-                        <n-float-button
-                          :type="stylizingLoading ? 'primary' : 'default'"
-                          color
-                          :class="[
-                            'chat-send-btn',
-                            stylizingLoading && 'chat-send-btn--stop',
-                          ]"
-                          @click.stop="handleCreateStylized()"
-                        >
-                          <span
-                            v-if="stylizingLoading"
-                            class="chat-stop-icon"
-                            aria-label="停止生成"
-                          />
-                          <div
-                            v-else
-                            class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
-                          />
-                        </n-float-button>
-                      </template>
-                      停止生成
-                    </n-tooltip>
+                    <n-input
+                      ref="refInputTextString"
+                      v-model:value="inputTextString"
+                      type="textarea"
+                      class="textarea-resize-none flex-1 min-w-0 text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
+                      :style="{
+                        '--n-border-radius': '15px',
+                        'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
+                        'font-size': '16px',
+                        'line-height': '1.5',
+                      }"
+                      :placeholder="placeholder"
+                      :autosize="{
+                        minRows: 1,
+                        maxRows: 10,
+                      }"
+                      @paste="onComposerPaste"
+                    />
+
+                    <div class="chat-send-btn-wrap shrink-0">
+                      <n-tooltip
+                        :disabled="!stylizingLoading"
+                        placement="top"
+                      >
+                        <template #trigger>
+                          <n-float-button
+                            position="relative"
+                            :width="36"
+                            :height="36"
+                            :disabled="!stylizingLoading && sendDisabled"
+                            :type="stylizingLoading ? 'primary' : 'default'"
+                            color
+                            :class="[
+                              'chat-send-btn',
+                              stylizingLoading && 'chat-send-btn--stop',
+                            ]"
+                            @click.stop="handleCreateStylized()"
+                          >
+                            <span
+                              v-if="stylizingLoading"
+                              class="chat-stop-icon"
+                              aria-label="停止生成"
+                            ></span>
+                            <div
+                              v-else
+                              class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
+                            ></div>
+                          </n-float-button>
+                        </template>
+                        停止生成
+                      </n-tooltip>
+                    </div>
                   </div>
                 </div>
               </n-space>
@@ -1726,11 +1865,38 @@ const pendingUploadFileInfoList = ref([])
 </template>
 
 <style lang="scss" scoped>
-.chat-send-btn-wrap {
+.chat-composer--dragover {
+  border-color: #615ced;
+  background: rgb(97 92 237 / 4%);
+}
+
+.chat-composer-drop-hint {
   position: absolute;
-  right: 8px;
-  bottom: 10px;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 92%);
+  font-size: 14px;
+  color: #615ced;
+  pointer-events: none;
+}
+
+.chat-composer-row {
+  min-height: 36px;
+}
+
+.chat-send-btn-wrap {
   z-index: 1;
+  display: flex;
+  align-items: center;
+}
+
+.chat-send-btn-wrap :deep(.n-float-button) {
+  position: relative !important;
+  inset: auto !important;
 }
 
 .chat-send-btn--stop {

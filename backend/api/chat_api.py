@@ -21,6 +21,7 @@ from config.get_db import get_db
 from schemas.login_vo import CurrentUser
 from schemas.chat_vo import (
     CreateSessionRequest,
+    EnsureSessionRequest,
     UpdateSessionTitleRequest,
     ChatSessionResponse,
     ChatMessageResponse,
@@ -152,6 +153,29 @@ async def create_session(
     return ResponseUtil.success(
         msg='创建会话成功',
         data=_session_to_response(session).model_dump()
+    )
+
+
+@chat_router.put("/sessions/{session_id}/ensure", summary="幂等物化会话")
+async def ensure_session(
+    session_id: str,
+    request: EnsureSessionRequest = Body(default=EnsureSessionRequest()),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    按 client 提供的 session_id 获取或创建会话，供发送前 upload 附件使用。
+    """
+    session = await ChatService.get_or_create_session(
+        user_id=str(current_user.user_id),
+        session_id=session_id,
+        title=request.title,
+        extra=request.extra,
+        db=db,
+    )
+    return ResponseUtil.success(
+        msg='会话已就绪',
+        data=_session_to_response(session).model_dump(),
     )
 
 
@@ -383,8 +407,8 @@ async def send_message_stream(
         logger.exception(e)
         return StreamingResponse(
             iter([
-                'event: error\ndata: {"type":"error","messageId":"","error":"服务异常"}\n\n',
-                'event: finish\ndata: {"type":"finish","messageId":"","finishReason":"error","usage":{}}\n\n',
+                'event: error\ndata: {"type":"error","message_id":"","error":"服务异常"}\n\n',
+                'event: finish\ndata: {"type":"finish","message_id":"","finish_reason":"error","usage":{}}\n\n',
                 'data: [DONE]\n\n',
             ]),
             media_type="text/event-stream",
@@ -424,8 +448,8 @@ async def resume_test_case_stream(
         logger.exception(e)
         return StreamingResponse(
             iter([
-                'event: error\ndata: {"type":"error","messageId":"","error":"服务异常"}\n\n',
-                'event: finish\ndata: {"type":"finish","messageId":"","finishReason":"error","usage":{}}\n\n',
+                'event: error\ndata: {"type":"error","message_id":"","error":"服务异常"}\n\n',
+                'event: finish\ndata: {"type":"finish","message_id":"","finish_reason":"error","usage":{}}\n\n',
                 'data: [DONE]\n\n',
             ]),
             media_type="text/event-stream",

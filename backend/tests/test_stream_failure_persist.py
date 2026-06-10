@@ -4,7 +4,10 @@ from __future__ import annotations
 import pytest
 
 from utils.stream_failure_notice import (
+    USER_STOP_NOTICE_PLAIN,
+    append_disconnect_partial_content,
     append_stream_failure_notice_to_content,
+    append_user_stop_notice_to_content,
     get_stream_failure_notice_text,
     is_recursion_limit_error,
 )
@@ -47,6 +50,18 @@ def test_assistant_status_for_finish() -> None:
 
     assert _assistant_status_for_finish("error") == "error"
     assert _assistant_status_for_finish("stop") == "completed"
+
+
+def test_user_stop_and_disconnect_notice_are_distinct() -> None:
+    running_tool = {
+        "version": 1,
+        "parts": [{"type": "tool", "name": "t", "status": "running", "input": {}}],
+    }
+    stopped = append_user_stop_notice_to_content(running_tool)
+    disconnected = append_disconnect_partial_content(running_tool)
+    assert USER_STOP_NOTICE_PLAIN in str(stopped)
+    assert USER_STOP_NOTICE_PLAIN not in str(disconnected)
+    assert not any(p.get("type") == "text" for p in disconnected["parts"])
 
 
 def test_build_assistant_persist_extra_includes_qa_type() -> None:

@@ -17,8 +17,8 @@ interface Props {
   output?: string
   status?: ToolRunStatus
   error?: string | null
-  durationMs?: number
-  /** 子 Agent 内部 parts（text / reasoning / tool，带 parentTaskCallId） */
+  duration_ms?: number
+  /** 子 Agent 内部 parts（text / reasoning / tool，带 parent_task_call_id） */
   childParts?: UiPart[]
   defaultOpen?: boolean
   /** dark：独立深色块；light：嵌入助手气泡、与 ToolCallCollapse 对齐 */
@@ -30,7 +30,7 @@ const props = withDefaults(defineProps<Props>(), {
   output: '',
   status: undefined,
   error: null,
-  durationMs: undefined,
+  duration_ms: undefined,
   childParts: () => [],
   defaultOpen: false,
   appearance: 'light',
@@ -86,10 +86,10 @@ const promptDisplay = computed(() => {
 const subagentTypeLabel = computed(() => parsedInput.value.subagent_type)
 
 const durationDisplay = computed(() => {
-  if (props.durationMs == null || props.durationMs < 0) {
+  if (props.duration_ms == null || props.duration_ms < 0) {
     return ''
   }
-  return formatDurationMs(props.durationMs)
+  return formatDurationMs(props.duration_ms)
 })
 </script>
 
@@ -155,11 +155,11 @@ const durationDisplay = computed(() => {
               <ToolCallCollapse
                 v-else-if="child.type === 'tool'"
                 appearance="light"
-                :toolName="child.toolName"
+                :name="child.name"
                 :arguments="child.input"
                 :result="child.status === 'error' ? (child.error || child.output || '') : child.output"
                 :status="child.status"
-                :duration-ms="child.durationMs"
+                :duration_ms="child.duration_ms"
               />
             </template>
           </div>

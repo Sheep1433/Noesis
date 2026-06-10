@@ -415,7 +415,7 @@ const tcPhaseRailIndex = ref(-1)
 const sse = useSSEStream({
   onCustomEvent(type, data) {
     if (type === 'phase-start') {
-      const pid = typeof data.phaseId === 'string' ? data.phaseId : ''
+      const pid = typeof data.phase_id === 'string' ? data.phase_id : ''
       const idx = phaseIdToRailIndex(pid)
       if (idx >= 0) {
         tcPhaseRailIndex.value = idx
@@ -425,13 +425,13 @@ const sse = useSSEStream({
         tcStatusText.value = ttl
       }
     }
-    if (type === 'phase-delta' && typeof data.textDelta === 'string' && data.textDelta.trim()) {
-      tcStatusText.value = data.textDelta.trim()
+    if (type === 'phase-delta' && typeof data.text_delta === 'string' && data.text_delta.trim()) {
+      tcStatusText.value = data.text_delta.trim()
     }
     if (type === 'phase-end') {
       const ok = data.ok !== false
-      if (!ok && typeof data.phaseId === 'string') {
-        tcStatusText.value = `阶段中断：${data.phaseId}`
+      if (!ok && typeof data.phase_id === 'string') {
+        tcStatusText.value = `阶段中断：${data.phase_id}`
       }
     }
     if (type === 'scenario-start') {

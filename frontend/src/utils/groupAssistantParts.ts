@@ -1,5 +1,5 @@
 import type { ToolUiPart, UiPart } from '@/views/chat/messageParts'
-import { partParentTaskCallId } from '@/views/chat/messageParts'
+import { part_parent_task_call_id } from '@/views/chat/messageParts'
 import { shouldRenderSubagentPart } from '@/utils/parseTaskTool'
 
 export type DisplayPartEntry =
@@ -8,7 +8,7 @@ export type DisplayPartEntry =
 
 /** 子 Agent 内部 part（text / reasoning / tool），不含 task 本身 */
 export function isNestedSubagentChild(part: UiPart): boolean {
-  const parentId = partParentTaskCallId(part)
+  const parentId = part_parent_task_call_id(part)
   if (!parentId) {
     return false
   }
@@ -28,7 +28,7 @@ export function buildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
     if (!isNestedSubagentChild(p)) {
       continue
     }
-    const parentId = partParentTaskCallId(p)!
+    const parentId = part_parent_task_call_id(p)!
     const list = childByParent.get(parentId) ?? []
     list.push(p)
     childByParent.set(parentId, list)
@@ -40,7 +40,7 @@ export function buildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
       continue
     }
     if (p.type === 'tool' && shouldRenderSubagentPart(p)) {
-      const taskId = p.toolCallId?.trim() ?? ''
+      const taskId = p.tool_call_id?.trim() ?? ''
       out.push({
         kind: 'subagent',
         part: p,

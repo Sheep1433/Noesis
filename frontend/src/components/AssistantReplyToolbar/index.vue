@@ -6,14 +6,14 @@ import QatypeIcon from '@/components/IconFont/QatypeIcon.vue'
 const props = withDefaults(defineProps<{
   qaType?: string
   copyText?: string
-  /** 与 SSE message-start.langfuseSessionId 一致 */
-  langfuseSessionId?: string
+  /** 与 SSE message-start.langfuse_session_id 一致 */
+  langfuse_session_id?: string
   /** VITE_LANGFUSE_UI_ORIGIN，非空时显示「观测」 */
   langfuseUiOrigin?: string
 }>(), {
   qaType: 'COMMON_QA',
   copyText: '',
-  langfuseSessionId: '',
+  langfuse_session_id: '',
   langfuseUiOrigin: '',
 })
 
@@ -24,7 +24,7 @@ const emit = defineEmits<{
 }>()
 
 const showLangfuse = computed(
-  () => Boolean(props.langfuseSessionId?.trim() && props.langfuseUiOrigin?.trim()),
+  () => Boolean(props.langfuse_session_id?.trim() && props.langfuseUiOrigin?.trim()),
 )
 
 function openLangfuseUi() {
@@ -74,7 +74,7 @@ const handlePassClip = async () => {
           </n-button>
         </template>
         <div style="max-width: 280px; font-size: 12px; line-height: 1.5">
-          Langfuse 会话 ID：<span style="word-break: break-all">{{ langfuseSessionId }}</span>
+          Langfuse 会话 ID：<span style="word-break: break-all">{{ langfuse_session_id }}</span>
           。点击打开控制台后在 Session / Traces 中检索。
         </div>
       </n-tooltip>

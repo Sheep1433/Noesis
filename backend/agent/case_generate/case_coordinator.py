@@ -207,7 +207,7 @@ class CaseCoordinator:
             yield self._event(
                 EVENT_SCENARIO_START,
                 {
-                    "messageId": thread_id,
+                    "message_id": thread_id,
                     "message": "正在生成测试场景与测试点…",
                 },
             )
@@ -232,14 +232,14 @@ class CaseCoordinator:
                     for ev in self._sse_phase_abort_any(cur_sse_phase):
                         yield ev
                     yield self._event(EVENT_ERROR, {"error": "任务已取消"})
-                    yield self._event(EVENT_FINISH, {"finishReason": "stop", "usage": {}})
+                    yield self._event(EVENT_FINISH, {"finish_reason": "stop", "usage": {}})
                     break
 
                 if event.get("error"):
                     for ev in self._sse_phase_abort_any(cur_sse_phase):
                         yield ev
                     yield self._event(EVENT_ERROR, {"error": event["error"]})
-                    yield self._event(EVENT_FINISH, {"finishReason": "error", "usage": {}})
+                    yield self._event(EVENT_FINISH, {"finish_reason": "error", "usage": {}})
                     return
 
                 if phase == "testpoints_confirm":
@@ -265,13 +265,13 @@ class CaseCoordinator:
             for ev in self._sse_phase_abort_any(cur_sse_phase):
                 yield ev
             yield self._event(EVENT_ERROR, {"error": "任务已停止"})
-            yield self._event(EVENT_FINISH, {"finishReason": "stop", "usage": {}})
+            yield self._event(EVENT_FINISH, {"finish_reason": "stop", "usage": {}})
         except Exception as e:
             logger.exception(f"[CaseCoordinator] 异常: {e}")
             for ev in self._sse_phase_abort_any(cur_sse_phase):
                 yield ev
             yield self._event(EVENT_ERROR, {"error": f"协调器异常: {str(e)}"})
-            yield self._event(EVENT_FINISH, {"finishReason": "error", "usage": {}})
+            yield self._event(EVENT_FINISH, {"finish_reason": "error", "usage": {}})
         finally:
             if thread_id in self.running_tasks:
                 del self.running_tasks[thread_id]
@@ -298,13 +298,13 @@ class CaseCoordinator:
                 f"[CaseCoordinator] resume_agent 入口即 cancelled thread_id={thread_id}"
             )
             yield self._event(EVENT_ERROR, {"error": "任务已取消"})
-            yield self._event(EVENT_FINISH, {"finishReason": "stop", "usage": {}})
+            yield self._event(EVENT_FINISH, {"finish_reason": "stop", "usage": {}})
             return
 
         app_info = self._graph_instances.get(thread_id)
         if not app_info:
             yield self._event(EVENT_ERROR, {"error": "会话不存在或已过期，请重新开始"})
-            yield self._event(EVENT_FINISH, {"finishReason": "error", "usage": {}})
+            yield self._event(EVENT_FINISH, {"finish_reason": "error", "usage": {}})
             return
 
         app = app_info["app"]
@@ -319,7 +319,7 @@ class CaseCoordinator:
             if current_phase == "testpoints_confirm" and selected_point_names is not None:
                 if not selected_point_names:
                     yield self._event(EVENT_ERROR, {"error": "请至少选择一个测试点后重试"})
-                    yield self._event(EVENT_FINISH, {"finishReason": "error", "usage": {}})
+                    yield self._event(EVENT_FINISH, {"finish_reason": "error", "usage": {}})
                     return
 
                 logger.info(f"[CaseCoordinator] resume 测试点确认，thread_id: {thread_id}")
@@ -373,7 +373,7 @@ class CaseCoordinator:
                         for ev in self._sse_phase_abort_any(cur_resume_phase):
                             yield ev
                         yield self._event(EVENT_ERROR, {"error": "任务已取消"})
-                        yield self._event(EVENT_FINISH, {"finishReason": "stop", "usage": {}})
+                        yield self._event(EVENT_FINISH, {"finish_reason": "stop", "usage": {}})
                         return
 
                     if mode == "custom":
@@ -397,7 +397,7 @@ class CaseCoordinator:
                         for ev in self._sse_phase_abort_any(cur_resume_phase):
                             yield ev
                         yield self._event(EVENT_ERROR, {"error": event["error"]})
-                        yield self._event(EVENT_FINISH, {"finishReason": "error", "usage": {}})
+                        yield self._event(EVENT_FINISH, {"finish_reason": "error", "usage": {}})
                         return
 
                     if event.get("current_phase") == "finish":
@@ -412,7 +412,7 @@ class CaseCoordinator:
                             )
                         yield self._event(
                             EVENT_FINISH,
-                            {"finishReason": "stop", "usage": {}, "total": len(test_cases)},
+                            {"finish_reason": "stop", "usage": {}, "total": len(test_cases)},
                         )
                         return
             else:
@@ -420,20 +420,20 @@ class CaseCoordinator:
                     EVENT_ERROR,
                     {"error": "当前会话状态不允许恢复，请重新发起测试用例生成"},
                 )
-                yield self._event(EVENT_FINISH, {"finishReason": "error", "usage": {}})
+                yield self._event(EVENT_FINISH, {"finish_reason": "error", "usage": {}})
 
         except asyncio.CancelledError:
             logger.info(f"[CaseCoordinator] resume_agent CancelledError thread_id={thread_id}")
             for ev in self._sse_phase_abort_any(cur_resume_phase):
                 yield ev
             yield self._event(EVENT_ERROR, {"error": "任务已停止"})
-            yield self._event(EVENT_FINISH, {"finishReason": "stop", "usage": {}})
+            yield self._event(EVENT_FINISH, {"finish_reason": "stop", "usage": {}})
         except Exception as e:
             logger.exception(f"[CaseCoordinator] resume 异常: {e}")
             for ev in self._sse_phase_abort_any(cur_resume_phase):
                 yield ev
             yield self._event(EVENT_ERROR, {"error": f"恢复执行异常: {str(e)}"})
-            yield self._event(EVENT_FINISH, {"finishReason": "error", "usage": {}})
+            yield self._event(EVENT_FINISH, {"finish_reason": "error", "usage": {}})
         finally:
             if thread_id in self.running_tasks:
                 del self.running_tasks[thread_id]
@@ -450,23 +450,23 @@ class CaseCoordinator:
         if not pid:
             return []
         cur["id"] = None
-        return [{"type": "phase-end", "phaseId": pid, "ok": False}]
+        return [{"type": "phase-end", "phase_id": pid, "ok": False}]
 
     def _sse_phase_start(self, cur: Dict[str, Optional[str]], phase_id: str) -> Dict[str, Any]:
         cur["id"] = phase_id
         return {
             "type": "phase-start",
-            "phaseId": phase_id,
+            "phase_id": phase_id,
             "title": _PHASE_TITLES.get(phase_id, phase_id),
         }
 
     def _sse_phase_delta(self, phase_id: str, text_delta: str) -> Dict[str, Any]:
-        return {"type": "phase-delta", "phaseId": phase_id, "textDelta": text_delta}
+        return {"type": "phase-delta", "phase_id": phase_id, "text_delta": text_delta}
 
     def _sse_phase_end(self, cur: Dict[str, Optional[str]], phase_id: str, *, ok: bool) -> Dict[str, Any]:
         if cur.get("id") == phase_id:
             cur["id"] = None
-        return {"type": "phase-end", "phaseId": phase_id, "ok": ok}
+        return {"type": "phase-end", "phase_id": phase_id, "ok": ok}
 
     def _scene_progress_to_sse(
         self,

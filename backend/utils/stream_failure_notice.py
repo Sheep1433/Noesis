@@ -107,16 +107,83 @@ def _has_prose(parts: List[Dict[str, Any]]) -> bool:
     return False
 
 
+USER_STOP_TOOL_ERROR = "用户已停止生成"
+USER_STOP_NOTICE_PLAIN = "本轮回复已被用户中断。"
+USER_STOP_NOTICE_INLINE = "（本轮回复已被用户中断。）"
+
+
+def _mark_running_tools_error(
+    parts: List[Dict[str, Any]],
+    *,
+    error_message: str,
+) -> None:
+    for p in parts:
+        if p.get("type") == "tool" and p.get("status") == "running":
+            p["status"] = "error"
+            if not p.get("error"):
+                p["error"] = error_message
+
+
+def get_user_stop_notice_text(has_prose: bool) -> str:
+    return USER_STOP_NOTICE_INLINE if has_prose else USER_STOP_NOTICE_PLAIN
+
+
+def append_user_stop_notice_to_content(
+    content_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """用户主动停止：running 工具标 error，追加可读中断说明。"""
+    parts: List[Dict[str, Any]] = list(content_dict.get("parts") or [])
+    _mark_running_tools_error(parts, error_message=USER_STOP_TOOL_ERROR)
+    has_prose = _has_prose(parts)
+    notice = get_user_stop_notice_text(has_prose)
+
+    if not has_prose:
+        if not parts:
+            parts = [
+                {
+                    "id": f"part-text-{uuid.uuid4().hex[:12]}",
+                    "type": "text",
+                    "content": notice,
+                    "status": "completed",
+                }
+            ]
+        else:
+            parts.append(
+                {
+                    "id": f"part-text-{uuid.uuid4().hex[:12]}",
+                    "type": "text",
+                    "content": notice,
+                    "status": "completed",
+                }
+            )
+    else:
+        parts.append(
+            {
+                "id": f"part-text-{uuid.uuid4().hex[:12]}",
+                "type": "text",
+                "content": f"\n\n---\n\n*{notice}*",
+                "status": "completed",
+            }
+        )
+
+    return {"version": content_dict.get("version", 1), "parts": parts}
+
+
+def append_disconnect_partial_content(
+    content_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """连接中断落库：仅将 running 工具标 error，不追加用户中断说明。"""
+    parts: List[Dict[str, Any]] = list(content_dict.get("parts") or [])
+    _mark_running_tools_error(parts, error_message="工具未返回结果")
+    return {"version": content_dict.get("version", 1), "parts": parts}
+
+
 def append_stream_failure_notice_to_content(
     content_dict: Dict[str, Any],
     detail: Optional[str],
 ) -> Dict[str, Any]:
     parts: List[Dict[str, Any]] = list(content_dict.get("parts") or [])
-    for p in parts:
-        if p.get("type") == "tool" and p.get("status") == "running":
-            p["status"] = "error"
-            if not p.get("error"):
-                p["error"] = "工具未返回结果"
+    _mark_running_tools_error(parts, error_message="工具未返回结果")
     notice = get_stream_failure_notice_text(detail, _has_prose(parts), parts)
     if notice is None:
         return content_dict

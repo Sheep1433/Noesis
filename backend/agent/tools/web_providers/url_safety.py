@@ -20,7 +20,7 @@ def _is_private_ip(ip_str: str) -> bool:
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
-        return True
+        return False
     return (
         addr.is_private
         or addr.is_loopback
@@ -48,12 +48,9 @@ def validate_fetch_url(url: str) -> tuple[bool, str]:
     if hostname in _BLOCKED_HOSTNAMES:
         return False, f"禁止访问的主机: {hostname}"
 
-    # 字面量 IP
-    try:
-        if _is_private_ip(hostname):
-            return False, f"禁止访问私有或保留地址: {hostname}"
-    except ValueError:
-        pass
+    # 字面量 IP（域名跳过，由下方 DNS 检查）
+    if _is_private_ip(hostname):
+        return False, f"禁止访问私有或保留地址: {hostname}"
 
     # DNS 解析后检查（防域名指向内网）
     try:

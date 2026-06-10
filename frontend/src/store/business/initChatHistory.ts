@@ -1,5 +1,5 @@
 import * as GlobalAPI from '@/api'
-import { appendStreamFailureNotice, normalizeApiContent, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
+import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -96,8 +96,8 @@ function extractToolCalls(content: any): any[] | undefined {
     return undefined
   }
   return toolParts.map((p: any) => ({
-    name: p.name || p.tool || '',
-    arguments: p.arguments || p.input || {},
+    name: p.name || '',
+    arguments: p.input || {},
     // tool output 已包含在 content.text 中，此处不重复提取 result
     result: '',
   }))
@@ -231,6 +231,10 @@ async function loadSessionMessages(
               && !partsText.includes('后续内容未能生成')
             if (noticeMissing) {
               const parts = appendStreamFailureNotice(messageContent.parts, errMsg)
+              messageContent = { version: 1, parts }
+            }
+            if (finishReason === 'stopped') {
+              const parts = appendUserStopNotice(messageContent.parts)
               messageContent = { version: 1, parts }
             }
             const { content, reasoning } = syncLegacyFieldsFromParts(messageContent.parts)

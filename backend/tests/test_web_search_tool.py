@@ -1,5 +1,6 @@
 """web_search / web_fetch Tool 单元测试。"""
 import json
+import socket
 from unittest.mock import MagicMock, patch
 
 from agent.tools.web_providers.url_safety import validate_fetch_url
@@ -116,3 +117,23 @@ def test_validate_fetch_url_rejects_non_http_scheme():
     ok, err = validate_fetch_url("file:///etc/passwd")
     assert ok is False
     assert "scheme" in err.lower() or "不支持" in err
+
+
+@patch("agent.tools.web_providers.url_safety.socket.getaddrinfo")
+def test_validate_fetch_url_allows_public_domain(mock_getaddrinfo):
+    mock_getaddrinfo.return_value = [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+    ]
+    ok, err = validate_fetch_url("https://hermesagents.net/")
+    assert ok is True
+    assert err == ""
+
+
+@patch("agent.tools.web_providers.url_safety.socket.getaddrinfo")
+def test_validate_fetch_url_rejects_domain_resolving_to_private(mock_getaddrinfo):
+    mock_getaddrinfo.return_value = [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 0)),
+    ]
+    ok, err = validate_fetch_url("https://internal.example.com/")
+    assert ok is False
+    assert "私有地址" in err

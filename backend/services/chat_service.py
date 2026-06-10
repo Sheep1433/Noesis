@@ -242,7 +242,7 @@ class ChatService:
         :param extra: 元数据（model, tokens, finish_reason, error）
         :param parent_id: 父消息 ID
         :param status: 状态: completed | partial | error | streaming（与聊天记录 PRD 一致）
-        :param message_id: 指定主键 UUID（流式 assistant 与 SSE assistantMessageId 对齐）；默认自动生成
+        :param message_id: 指定主键 UUID（流式 assistant 与 SSE assistant_message_id 对齐）；默认自动生成
         :param db: 数据库会话
         :return: 创建的消息对象
         """

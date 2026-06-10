@@ -191,6 +191,26 @@ export async function createSession(params: CreateSessionParams = {}): Promise<C
   return parseResponse<ChatSessionResponse>(await fetch(req))
 }
 
+export interface EnsureSessionParams {
+  title?: string
+  extra?: Record<string, unknown>
+}
+
+/**
+ * 幂等物化会话 PUT /api/chat/sessions/{sessionId}/ensure
+ */
+export async function ensureSession(
+  sessionId: string,
+  params: EnsureSessionParams = {},
+): Promise<ChatSessionResponse> {
+  const req = makeRequest(
+    'PUT',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/ensure`,
+    params,
+  )
+  return parseResponse<ChatSessionResponse>(await fetch(req))
+}
+
 /**
  * 删除会话（软删）
  * DELETE /api/chat/sessions/{id}

@@ -1,7 +1,10 @@
 """会话附件：outline、哨兵解析与 kind 检测。"""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
+from services.chat_attachment_service import ChatAttachmentService
 from utils.attachment_tool import (
     CHAT_ATTACHMENT_REF,
     attachment_id_from_ref,
@@ -45,3 +48,20 @@ def test_detect_kind_document():
 
     assert _detect_kind("report.pdf", None) == "document"
     assert _detect_kind("photo.png", "image/png") == "image"
+
+
+@pytest.mark.asyncio
+async def test_upload_requires_existing_session():
+    db = AsyncMock()
+    with patch(
+        "services.chat_attachment_service.ChatService.get_session_by_id",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        from fastapi import HTTPException
+
+        from services.chat_attachment_service import ChatAttachmentService
+
+        with pytest.raises(HTTPException) as exc:
+            await ChatAttachmentService._ensure_session_owned("sess-missing", "user-1", db)
+        assert exc.value.status_code == 404

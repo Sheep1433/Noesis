@@ -28,10 +28,7 @@ class MessagePart:
 def _part_parent_fields(parent_task_call_id: Optional[str]) -> Dict[str, Any]:
     if not parent_task_call_id:
         return {}
-    return {
-        "parent_task_call_id": parent_task_call_id,
-        "parentTaskCallId": parent_task_call_id,
-    }
+    return {"parent_task_call_id": parent_task_call_id}
 
 
 @dataclass
@@ -66,44 +63,45 @@ class ToolPart(MessagePart):
     tool_call_id: Optional[str] = None
     duration_ms: Optional[int] = None
     parent_task_call_id: Optional[str] = None
+    status: str = "running"
+    error: Optional[str] = None
     type: str = "tool"
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
             "type": self.type,
             "name": self.name,
-            "toolName": self.name,
-            "arguments": self.arguments,
             "input": self.arguments,
             "output": self.output,
             "tool_call_id": self.tool_call_id,
-            "toolCallId": self.tool_call_id,
+            "status": self.status,
         }
         if self.duration_ms is not None:
             out["duration_ms"] = self.duration_ms
-            out["durationMs"] = self.duration_ms
+        if self.error:
+            out["error"] = self.error
         if self.parent_task_call_id:
             out["parent_task_call_id"] = self.parent_task_call_id
-            out["parentTaskCallId"] = self.parent_task_call_id
         return out
 
 
 def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
     part_type = data.get("type")
-    parent = data.get("parent_task_call_id") or data.get("parentTaskCallId")
+    parent = data.get("parent_task_call_id")
     if part_type == "text":
         return TextPart(content=data.get("content", ""), parent_task_call_id=parent)
     if part_type == "reasoning":
         return ReasoningPart(content=data.get("content", ""), parent_task_call_id=parent)
     if part_type == "tool":
-        args = data.get("arguments")
         return ToolPart(
-            name=data.get("name") or data.get("tool") or data.get("toolName") or "",
-            arguments=args if args is not None else data.get("input"),
+            name=data.get("name") or "",
+            arguments=data.get("input"),
             output=data.get("output"),
-            tool_call_id=data.get("tool_call_id") or data.get("toolCallId"),
-            duration_ms=data.get("duration_ms") if data.get("duration_ms") is not None else data.get("durationMs"),
-            parent_task_call_id=data.get("parent_task_call_id") or data.get("parentTaskCallId"),
+            tool_call_id=data.get("tool_call_id"),
+            duration_ms=data.get("duration_ms"),
+            parent_task_call_id=parent,
+            status=data.get("status") or "running",
+            error=data.get("error"),
         )
     raise ValueError(f"Unknown part type: {part_type}")
 
@@ -192,6 +190,7 @@ class AssistantMessageBuilder:
             arguments=tool_input,
             tool_call_id=tool_call_id,
             parent_task_call_id=parent_task_call_id,
+            status="running",
         )
         self._content.parts.append(part)
         self._last_tool = part
@@ -204,6 +203,9 @@ class AssistantMessageBuilder:
         output: str,
         tool_call_id: Optional[str] = None,
         duration_ms: Optional[int] = None,
+        *,
+        status: str = "success",
+        error: Optional[str] = None,
     ) -> None:
         """优先按 tool_call_id 定位（支持并行 / 乱序），否则回退到最近一次 append_tool。"""
         target = (
@@ -218,6 +220,8 @@ class AssistantMessageBuilder:
             )
 
         target.output = output
+        target.status = status
+        target.error = error
         if duration_ms is not None:
             target.duration_ms = duration_ms
         if tool_call_id:

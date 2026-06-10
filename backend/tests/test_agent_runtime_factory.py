@@ -8,6 +8,7 @@ from agent.factory import build_noesis_runtime_middleware
 from agent.middlewares import (
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
+    SessionClockMiddleware,
     SummarizationOffloadMiddleware,
     ToolErrorHandlingMiddleware,
 )
@@ -32,6 +33,7 @@ def test_runtime_stack_includes_guards_when_enabled() -> None:
         stack = build_noesis_runtime_middleware(include_tool_call_limits=False)
 
     types = [type(m) for m in stack]
+    assert types[0] is SessionClockMiddleware
     assert DanglingToolCallMiddleware in types
     assert SummarizationOffloadMiddleware in types
     assert LoopDetectionMiddleware in types
@@ -59,7 +61,7 @@ def test_dangling_repair_does_not_mutate_persisted_parts_shape() -> None:
     """synthetic repair 仅补丁模型输入，不改变 content.parts 结构约定。"""
     persisted = {
         "version": 1,
-        "parts": [{"type": "tool", "toolCallId": "call_1", "status": "streaming"}],
+        "parts": [{"type": "tool", "tool_call_id": "call_1", "status": "streaming"}],
     }
     mw = DTM()
     msgs = [
@@ -72,5 +74,5 @@ def test_dangling_repair_does_not_mutate_persisted_parts_shape() -> None:
     assert patched is not None
     assert persisted == {
         "version": 1,
-        "parts": [{"type": "tool", "toolCallId": "call_1", "status": "streaming"}],
+        "parts": [{"type": "tool", "tool_call_id": "call_1", "status": "streaming"}],
     }

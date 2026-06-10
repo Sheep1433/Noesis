@@ -13,6 +13,12 @@ class CreateSessionRequest(BaseModel):
     extra: Optional[Dict[str, Any]] = Field(None, description='会话元数据')
 
 
+class EnsureSessionRequest(BaseModel):
+    """幂等物化会话（client session_id + get_or_create）"""
+    title: Optional[str] = Field(None, description='会话标题，不传则使用默认标题')
+    extra: Optional[Dict[str, Any]] = Field(None, description='会话元数据，如 qa_type')
+
+
 class UpdateSessionTitleRequest(BaseModel):
     """更新会话标题请求"""
     title: str = Field(..., description='会话标题')
@@ -45,9 +51,13 @@ class MessagePart(BaseModel):
     type: Literal['text', 'reasoning', 'tool'] = Field(..., description='片段类型')
     content: Optional[str] = Field(None, description='文本内容或推理内容')
     name: Optional[str] = Field(None, description='工具名称')
-    arguments: Optional[Dict[str, Any]] = Field(None, description='工具输入参数')
+    input: Optional[Dict[str, Any]] = Field(None, description='工具输入参数')
     output: Optional[str] = Field(None, description='工具输出结果')
     tool_call_id: Optional[str] = Field(None, description='工具调用ID')
+    status: Optional[str] = Field(None, description='工具运行状态: running | success | error')
+    error: Optional[str] = Field(None, description='工具错误信息')
+    duration_ms: Optional[int] = Field(None, description='工具执行耗时（毫秒）')
+    parent_task_call_id: Optional[str] = Field(None, description='归属的 task 工具调用 ID')
 
 
 class MessageContent(BaseModel):

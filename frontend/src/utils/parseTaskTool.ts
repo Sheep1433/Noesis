@@ -1,4 +1,4 @@
-/** DeepAgents SubAgentMiddleware 工具名，与 SSE tool-input-available.toolName 一致 */
+/** DeepAgents SubAgentMiddleware 工具名，与 SSE tool-input-available.name 一致 */
 export const TASK_TOOL_NAME = 'task'
 
 export const TASK_SUCCEEDED_PREFIX = 'Task Succeeded. Result:'
@@ -95,7 +95,7 @@ export function parseTaskToolOutput(ctx: TaskToolOutputContext): ParsedTaskToolO
 /** 是否应对该 part 使用 SubagentCollapse 而非 ToolCallCollapse */
 export function shouldRenderSubagentPart(part: {
   type?: string
-  toolName?: string
+  name?: string
 }): boolean {
-  return part.type === 'tool' && part.toolName === TASK_TOOL_NAME
+  return part.type === 'tool' && part.name === TASK_TOOL_NAME
 }
