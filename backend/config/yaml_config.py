@@ -60,6 +60,7 @@ class JwtYamlSection(BaseModel):
     algorithm: str = "HS256"
     expire_minutes: int = 1440
     redis_expire_minutes: int = 30
+    stop_token_expire_minutes: int = 15
 
 
 class DatabaseYamlSection(BaseModel):
@@ -100,6 +101,11 @@ class SummarizationModelYamlSection(BaseModel):
     name: str = ""
     base_url: str = ""
     temperature: float = 0.0
+
+
+class ContextYamlSection(BaseModel):
+    max_input_tokens: int = Field(default=0, ge=0)
+    display_enabled: bool = True
 
 
 class SummarizationYamlSection(BaseModel):
@@ -190,6 +196,7 @@ class AppYamlConfig(BaseModel):
     jwt: JwtYamlSection = Field(default_factory=JwtYamlSection)
     database: DatabaseYamlSection = Field(default_factory=DatabaseYamlSection)
     model: ModelYamlSection = Field(default_factory=ModelYamlSection)
+    context: ContextYamlSection = Field(default_factory=ContextYamlSection)
     summarization: SummarizationYamlSection = Field(default_factory=SummarizationYamlSection)
     loop_detection: LoopDetectionYamlSection = Field(default_factory=LoopDetectionYamlSection)
     agent_runtime: AgentRuntimeYamlSection = Field(default_factory=AgentRuntimeYamlSection)

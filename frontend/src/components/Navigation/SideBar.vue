@@ -172,8 +172,8 @@ const sidebarItems = ref([
 ])
 
 
-const handleLogout = () => {
-  userStore.logout()
+const handleLogout = async () => {
+  await userStore.logout()
   setTimeout(() => {
     router.replace('/login')
   }, 500)

@@ -4,11 +4,12 @@
  */
 
 import { ref } from 'vue'
-import { useUserStore } from '@/store/business/userStore'
+import { applyRefreshToken, getAuthHeaders } from '@/utils/authHttp'
 
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
   onUsageUpdate?: (usage: { input_tokens: number, output_tokens: number, total_tokens?: number }) => void
+  onContextUpdate?: (context: { current_tokens: number, max_tokens: number, used_percentage: number }) => void
   onTextDelta?: (text: string, parent_task_call_id?: string) => void
   onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
   onReasoningStart?: (data: Record<string, unknown>) => void
@@ -56,6 +57,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   const {
     onTitleUpdate,
     onUsageUpdate,
+    onContextUpdate,
     onTextDelta,
     onReasoningDelta,
     onReasoningStart,
@@ -70,6 +72,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
 
   const isLoading = ref(false)
   const error = ref<string | null>(null)
+  const currentStopToken = ref<string | null>(null)
   let removeBeforeUnload: (() => void) | null = null
   let lastFinishReason: string | undefined
 
@@ -79,8 +82,13 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     cleanupBeforeUnload()
     const handleBeforeUnload = () => {
       if (isLoading.value && sessionId) {
-        const payload = JSON.stringify({ qa_type: qaType })
-        navigator.sendBeacon(`/api/chat/sessions/${sessionId}/stop`, payload)
+        const payload = JSON.stringify({
+          session_id: sessionId,
+          qa_type: qaType,
+          ...(currentStopToken.value ? { stop_token: currentStopToken.value } : {}),
+        })
+        const blob = new Blob([payload], { type: 'application/json' })
+        navigator.sendBeacon(`/api/chat/sessions/${sessionId}/stop`, blob)
       }
     }
     window.addEventListener('beforeunload', handleBeforeUnload)
@@ -108,6 +116,10 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     const t = (data.type as string) || eventName
 
     if (t === 'message-start') {
+      const stopRaw = data.stop_token
+      currentStopToken.value = typeof stopRaw === 'string' && stopRaw.trim()
+        ? stopRaw.trim()
+        : null
       onMessageStart?.(data)
       return
     }
@@ -176,6 +188,21 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           input_tokens: Number(usage.input_tokens ?? 0),
           output_tokens: Number(usage.output_tokens ?? 0),
           total_tokens: usage.total_tokens != null ? Number(usage.total_tokens) : undefined,
+        })
+      }
+      return
+    }
+    if (t === 'context-update') {
+      const context = data.context as {
+        current_tokens?: number
+        max_tokens?: number
+        used_percentage?: number
+      } | undefined
+      if (context && context.max_tokens != null && Number(context.max_tokens) > 0) {
+        onContextUpdate?.({
+          current_tokens: Number(context.current_tokens ?? 0),
+          max_tokens: Number(context.max_tokens),
+          used_percentage: Number(context.used_percentage ?? 0),
         })
       }
       return
@@ -254,6 +281,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
 
     tool_name_by_call_id.clear()
     error.value = null
+    currentStopToken.value = null
     streamSettled = false
     lastFinishReason = undefined
     isLoading.value = true
@@ -262,14 +290,12 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     setupBeforeUnload(sessionId, qaType)
 
     try {
-      const userStore = useUserStore()
-      const token = userStore.getUserToken()
-
       const res = await fetch('/api/chat/sessions/stream', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token ?? ''}`,
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           session_id: sessionId,
@@ -277,6 +303,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           extra: extra || {},
         }),
       })
+      applyRefreshToken(res)
 
       if (!res.ok) {
         const status = res.status
@@ -340,6 +367,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
 
     tool_name_by_call_id.clear()
     error.value = null
+    currentStopToken.value = null
     streamSettled = false
     lastFinishReason = undefined
     isLoading.value = true
@@ -348,17 +376,16 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     setupBeforeUnload(sessionId, qaType)
 
     try {
-      const userStore = useUserStore()
-      const token = userStore.getUserToken()
-
       const res = await fetch(`/api/chat/sessions/${sessionId}/test-case/resume`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token ?? ''}`,
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({ selected_point_names: selectedPointNames }),
       })
+      applyRefreshToken(res)
 
       if (!res.ok) {
         const status = res.status
@@ -415,10 +442,15 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     }
   }
 
+  function getStopToken(): string | null {
+    return currentStopToken.value
+  }
+
   return {
     isLoading,
     error,
     sendMessage,
     resumeTestCase,
+    getStopToken,
   }
 }

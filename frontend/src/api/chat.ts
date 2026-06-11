@@ -4,7 +4,12 @@
  * 封装所有 /api/chat/* 接口，参考 backend/api/chat_api.py
  */
 
-import { useUserStore } from '@/store/business/userStore'
+import {
+  authFetch,
+  getAuthHeaders,
+  parseAuthJson,
+  STOP_TOKEN_HEADER,
+} from '@/utils/authHttp'
 import { downloadFile } from '@/utils/request'
 
 // ============================================================================
@@ -142,15 +147,15 @@ function makeRequest(
   method: string,
   url: string,
   body?: unknown,
+  extraHeaders: Record<string, string> = {},
 ): Request {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   return new Request(url, {
     mode: 'cors',
+    credentials: 'include',
     method,
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token ?? ''}`,
+      ...getAuthHeaders(extraHeaders),
     },
     body: body != null ? JSON.stringify(body) : undefined,
   })
@@ -158,11 +163,7 @@ function makeRequest(
 
 /** 解析响应 JSON，提取 data 字段 */
 async function parseResponse<T>(res: Response): Promise<T> {
-  const json = await res.json()
-  if (json.code !== 200) {
-    throw new Error(json.message ?? `API error: ${json.code}`)
-  }
-  return json.data as T
+  return parseAuthJson<T>(res)
 }
 
 // ============================================================================
@@ -179,7 +180,7 @@ export async function getChatSessions(status?: string): Promise<SessionListRespo
     url.searchParams.set('status', status)
   }
   const req = makeRequest('GET', url.toString())
-  return parseResponse<SessionListResponse>(await fetch(req))
+  return parseResponse<SessionListResponse>(await authFetch(req))
 }
 
 /**
@@ -188,7 +189,7 @@ export async function getChatSessions(status?: string): Promise<SessionListRespo
  */
 export async function createSession(params: CreateSessionParams = {}): Promise<ChatSessionResponse> {
   const req = makeRequest('POST', `${location.origin}${BASE}/sessions`, params)
-  return parseResponse<ChatSessionResponse>(await fetch(req))
+  return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
 export interface EnsureSessionParams {
@@ -208,7 +209,16 @@ export async function ensureSession(
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/ensure`,
     params,
   )
-  return parseResponse<ChatSessionResponse>(await fetch(req))
+  return parseResponse<ChatSessionResponse>(await authFetch(req))
+}
+
+/**
+ * 获取会话详情
+ * GET /api/chat/sessions/{id}
+ */
+export async function getSession(id: string): Promise<ChatSessionResponse> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(id)}`)
+  return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
 /**
@@ -217,7 +227,7 @@ export async function ensureSession(
  */
 export async function deleteSession(id: string): Promise<void> {
   const req = makeRequest('DELETE', `${location.origin}${BASE}/sessions/${id}`)
-  await parseResponse<void>(await fetch(req))
+  await parseResponse<void>(await authFetch(req))
 }
 
 /**
@@ -229,7 +239,7 @@ export async function updateSessionTitle(
   params: UpdateSessionTitleParams,
 ): Promise<ChatSessionResponse> {
   const req = makeRequest('PATCH', `${location.origin}${BASE}/sessions/${id}/title`, params)
-  return parseResponse<ChatSessionResponse>(await fetch(req))
+  return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
 /**
@@ -238,7 +248,7 @@ export async function updateSessionTitle(
  */
 export async function getSessionChildren(id: string): Promise<SessionListResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${id}/children`)
-  return parseResponse<SessionListResponse>(await fetch(req))
+  return parseResponse<SessionListResponse>(await authFetch(req))
 }
 
 // ============================================================================
@@ -246,14 +256,11 @@ export async function getSessionChildren(id: string): Promise<SessionListRespons
 // ============================================================================
 
 function makeUploadRequest(url: string, formData: FormData): Request {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   return new Request(url, {
     mode: 'cors',
+    credentials: 'include',
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token ?? ''}`,
-    },
+    headers: getAuthHeaders(),
     body: formData,
   })
 }
@@ -269,7 +276,7 @@ export async function uploadSessionAttachment(
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/attachments`,
     formData,
   )
-  const res = await fetch(req)
+  const res = await authFetch(req)
   const json = await res.json()
   if (json.code !== 200) {
     throw new Error(json.msg ?? `上传失败（${json.code}）`)
@@ -282,7 +289,7 @@ export async function listSessionAttachments(
   sessionId: string,
 ): Promise<ChatAttachmentListResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/attachments`)
-  return parseResponse<ChatAttachmentListResponse>(await fetch(req))
+  return parseResponse<ChatAttachmentListResponse>(await authFetch(req))
 }
 
 /** 删除会话附件 DELETE /api/chat/sessions/{sessionId}/attachments/{attachmentId} */
@@ -294,7 +301,7 @@ export async function deleteSessionAttachment(
     'DELETE',
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
   )
-  await parseResponse<void>(await fetch(req))
+  await parseResponse<void>(await authFetch(req))
 }
 
 // ============================================================================
@@ -317,7 +324,7 @@ export async function getSessionMessages(
     url.searchParams.set('before_id', params.before_id)
   }
   const req = makeRequest('GET', url.toString())
-  return parseResponse<MessageListResponse>(await fetch(req))
+  return parseResponse<MessageListResponse>(await authFetch(req))
 }
 
 /**
@@ -329,7 +336,7 @@ export async function sendMessage(
   params: SendMessageParams,
 ): Promise<SendMessageResponse> {
   const req = makeRequest('POST', `${location.origin}${BASE}/sessions/${sessionId}/messages`, params)
-  return parseResponse<SendMessageResponse>(await fetch(req))
+  return parseResponse<SendMessageResponse>(await authFetch(req))
 }
 
 /**
@@ -338,19 +345,34 @@ export async function sendMessage(
  */
 export async function getMessage(messageId: string): Promise<ChatMessageResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/messages/${messageId}`)
-  return parseResponse<ChatMessageResponse>(await fetch(req))
+  return parseResponse<ChatMessageResponse>(await authFetch(req))
 }
 
 /**
  * 停止对话
  * POST /api/chat/sessions/{sessionId}/stop
  */
-export async function stopChat(sessionId: string, qaType: string): Promise<void> {
-  const req = makeRequest('POST', `${location.origin}${BASE}/sessions/${sessionId}/stop`, {
+export async function stopChat(
+  sessionId: string,
+  qaType: string,
+  stopToken?: string | null,
+): Promise<void> {
+  const body: Record<string, string> = {
     session_id: sessionId,
     qa_type: qaType,
-  })
-  await parseResponse<void>(await fetch(req))
+  }
+  const extraHeaders: Record<string, string> = {}
+  if (stopToken) {
+    body.stop_token = stopToken
+    extraHeaders[STOP_TOKEN_HEADER] = stopToken
+  }
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/sessions/${sessionId}/stop`,
+    body,
+    extraHeaders,
+  )
+  await parseResponse<void>(await authFetch(req))
 }
 
 /** 导出用例条目（与后端 TestCaseExportCaseItem 对齐） */
@@ -399,7 +421,7 @@ export async function exportTestCaseMarkdown(
     `${location.origin}${BASE}/sessions/${sessionId}/test-case/export`,
     params,
   )
-  const res = await fetch(req)
+  const res = await authFetch(req)
   if (res.status === 404) {
     throw new Error('暂无可导出的测试用例，请先生成用例')
   }

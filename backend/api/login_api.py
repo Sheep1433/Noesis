@@ -3,11 +3,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from schemas.login_vo import Token, UserLogin
+from schemas.login_vo import CurrentUser, Token, UserLogin
 from config.get_db import get_db
 from config.env import JwtConfig
 from services.login_service import LoginService
 from utils.log_util import logger
+from utils.auth_token_service import AuthTokenService
 from utils.response_util import ResponseUtil
 
 login_router = APIRouter(prefix="/api/user")
@@ -26,4 +27,11 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
         expires_delta=access_token_expires,
     )
     logger.info('登录成功')
-    return ResponseUtil.success(msg='登录成功', data={'token': access_token})
+    response = ResponseUtil.success(msg='登录成功', data={'token': access_token})
+    AuthTokenService.attach_auth_cookie(response, access_token)
+    request.state.auth_user = CurrentUser(
+        user_id=result.id,
+        username=result.username,
+        mobile=result.mobile,
+    )
+    return response

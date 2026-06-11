@@ -541,6 +541,47 @@ class ChatService:
         return session_obj
 
     @classmethod
+    async def merge_session_extra(
+            cls,
+            session_id: str,
+            user_id: str,
+            patch: Dict[str, Any],
+            db: AsyncSession = None,
+    ) -> None:
+        """浅合并会话 extra，不覆盖未出现在 patch 中的顶层键。"""
+        if not patch:
+            return
+        result = await db.execute(
+            select(TChatSession).where(
+                and_(
+                    TChatSession.id == session_id,
+                    TChatSession.user_id == user_id,
+                    TChatSession.deleted_at.is_(None),
+                )
+            )
+        )
+        session_obj = result.scalar_one_or_none()
+        if not session_obj:
+            return
+
+        extra: Dict[str, Any] = dict(session_obj.extra or {})
+        for key, value in patch.items():
+            if isinstance(value, dict) and isinstance(extra.get(key), dict):
+                merged = dict(extra[key])
+                merged.update(value)
+                extra[key] = merged
+            else:
+                extra[key] = value
+
+        now = _now_ms()
+        await db.execute(
+            update(TChatSession)
+            .where(TChatSession.id == session_id)
+            .values(extra=extra, updated_at=now)
+        )
+        await db.commit()
+
+    @classmethod
     async def get_user_sessions(
             cls,
             user_id: str,

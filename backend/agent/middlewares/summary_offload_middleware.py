@@ -26,6 +26,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 from typing_extensions import override
 
+from agent.middlewares.context_metrics import get_agent_token_counter, resolve_context_max_tokens
 from config.env import ModelConfig
 from llm import get_llm
 from utils.log_util import logger
@@ -205,10 +206,7 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
 
     @override
     def _get_profile_limits(self) -> int | None:
-        configured = ModelConfig.summarization_max_input_tokens
-        if configured > 0:
-            return configured
-        return super()._get_profile_limits()
+        return resolve_context_max_tokens()
 
     def _get_token_trigger_value(self) -> int | None:
         if not self._trigger_conditions:
@@ -336,18 +334,12 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
         return await asyncio.to_thread(self._run_before_model, state, runtime)
 
 
-def _default_max_input_tokens() -> int:
-    if ModelConfig.summarization_max_input_tokens > 0:
-        return ModelConfig.summarization_max_input_tokens
-    return max(1, int(ModelConfig.max_tokens))
-
-
 def create_summary_offload_middleware() -> SummarizationOffloadMiddleware | None:
     if not ModelConfig.summarization_enabled:
         return None
 
     model = get_llm(purpose="summarization")
-    max_input = ModelConfig.summarization_max_input_tokens or _default_max_input_tokens()
+    max_input = resolve_context_max_tokens()
 
     if not getattr(model, "profile", None):
         model.profile = {"max_input_tokens": max_input}
@@ -357,6 +349,7 @@ def create_summary_offload_middleware() -> SummarizationOffloadMiddleware | None
         model,
         trigger=("fraction", fraction),
         keep=("messages", ModelConfig.summarization_messages_to_keep),
+        token_counter=get_agent_token_counter(),
         tool_offload_threshold=ModelConfig.summarization_tool_offload_threshold,
         max_retention_ratio=ModelConfig.summarization_max_retention_ratio,
     )

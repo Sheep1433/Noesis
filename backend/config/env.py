@@ -101,6 +101,7 @@ class JwtSettings:
     jwt_algorithm: str
     jwt_expire_minutes: int
     jwt_redis_expire_minutes: int
+    jwt_stop_token_expire_minutes: int
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,8 @@ class ModelSettings:
     frequency_penalty: float
     presence_penalty: float
     streaming: bool
+    context_max_input_tokens: int
+    context_display_enabled: bool
     summarization_enabled: bool
     summarization_model_type: str
     summarization_model_name: str
@@ -270,6 +273,9 @@ def _build_jwt(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> JwtSettings:
         jwt_redis_expire_minutes=_legacy_env_int(
             "JWT_REDIS_EXPIRE_MINUTES", jwt.redis_expire_minutes
         ),
+        jwt_stop_token_expire_minutes=_legacy_env_int(
+            "JWT_STOP_TOKEN_EXPIRE_MINUTES", jwt.stop_token_expire_minutes
+        ),
     )
 
 
@@ -292,6 +298,7 @@ def _build_database(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> DataBaseSet
 def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
     m = yaml_cfg.model
     gen = m.generation
+    ctx = yaml_cfg.context
     s = yaml_cfg.summarization
     sm = s.model
     loop = yaml_cfg.loop_detection
@@ -315,6 +322,8 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         frequency_penalty=_legacy_env_float("FREQUENCY_PENALTY", gen.frequency_penalty),
         presence_penalty=_legacy_env_float("PRESENCE_PENALTY", gen.presence_penalty),
         streaming=_legacy_env_bool("STREAMING", gen.streaming),
+        context_max_input_tokens=_legacy_env_int("CONTEXT_MAX_INPUT_TOKENS", ctx.max_input_tokens),
+        context_display_enabled=_legacy_env_bool("CONTEXT_DISPLAY_ENABLED", ctx.display_enabled),
         summarization_enabled=_legacy_env_bool("SUMMARIZATION_ENABLED", s.enabled),
         summarization_model_type=_legacy_env("SUMMARIZATION_MODEL_TYPE", sm.type),
         summarization_model_name=_legacy_env("SUMMARIZATION_MODEL_NAME", sm.name),

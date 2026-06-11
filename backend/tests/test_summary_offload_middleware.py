@@ -21,7 +21,8 @@ def test_create_summary_offload_disabled() -> None:
 def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
     cfg = SimpleNamespace(
         summarization_enabled=True,
-        summarization_max_input_tokens=8000,
+        context_max_input_tokens=8000,
+        summarization_max_input_tokens=0,
         summarization_trigger_fraction=0.85,
         summarization_messages_to_keep=6,
         summarization_tool_offload_threshold=1000,
@@ -33,6 +34,7 @@ def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
 
     with (
         patch("agent.middlewares.summary_offload_middleware.ModelConfig", cfg),
+        patch("agent.middlewares.context_metrics.ModelConfig", cfg),
         patch(
             "agent.middlewares.summary_offload_middleware.get_llm",
             return_value=mock_model,

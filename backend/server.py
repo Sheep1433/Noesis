@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from exceptions.handle import handle_exception
+from middleware.sliding_auth_middleware import SlidingAuthMiddleware
 from config.env import AppConfig
 from config.get_db import init_create_table
 from config.database import async_engine
@@ -45,6 +46,7 @@ app = FastAPI(
 )
 
 handle_exception(app)
+app.add_middleware(SlidingAuthMiddleware)
 
 # 加载路由列表
 controller_list = [

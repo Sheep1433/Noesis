@@ -7,6 +7,7 @@ import asyncio
 import logging
 import re
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,7 @@ from utils.langgraph_sse_bridge import LangGraphSseBridge, bridge_raw_to_sse_lin
 from utils.log_util import logger
 from utils.message_builder import AssistantMessageBuilder, UserMessageBuilder
 from utils.stream_bridge import MemoryStreamBridge, iter_bridge_events
+from utils.stop_token_service import StopTokenService
 from utils.stream_failure_notice import (
     append_disconnect_partial_content,
     append_stream_failure_notice_to_content,
@@ -214,6 +216,8 @@ async def _persist_stream_checkpoint(
     session_id: str,
     user_id: str,
 ) -> None:
+    if bridge.consume_session_context_tick():
+        await _persist_session_context_snapshot(bridge, session_id, user_id)
     if not bridge.consume_persist_tick() or not ctx.get("_assistant_db_id"):
         return
     try:
@@ -226,6 +230,30 @@ async def _persist_stream_checkpoint(
         )
     except Exception:
         logger.exception(f"assistant 流式检查点落库失败 session_id={session_id}")
+
+
+async def _persist_session_context_snapshot(
+    bridge: LangGraphSseBridge,
+    session_id: str,
+    user_id: str,
+) -> None:
+    snapshot = bridge.last_context_snapshot
+    if not snapshot or not snapshot.get("max_tokens"):
+        return
+    payload = {
+        **snapshot,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        async with AsyncSessionLocal() as db:
+            await ChatService.merge_session_extra(
+                session_id,
+                user_id,
+                {"context": payload},
+                db=db,
+            )
+    except Exception:
+        logger.exception(f"会话 context 快照落库失败 session_id={session_id}")
 
 
 async def _yield_sse_from_agent_bridge(
@@ -439,6 +467,7 @@ class QaService:
             bridge = LangGraphSseBridge(
                 session_id,
                 emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
+                stop_token=StopTokenService.create(session_id, int(current_user.user_id)),
             )
             builder = AssistantMessageBuilder(
                 session_id=session_id,
@@ -638,6 +667,7 @@ class QaService:
             bridge = LangGraphSseBridge(
                 session_id,
                 emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
+                stop_token=StopTokenService.create(session_id, int(current_user.user_id)),
             )
             builder = AssistantMessageBuilder(
                 session_id=session_id,

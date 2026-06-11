@@ -12,6 +12,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Set
 
+from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
 from config.env import ModelConfig
 from utils.langgraph_sse.reasoning import extract_reasoning_delta
 from utils.log_util import logger
@@ -140,9 +141,11 @@ class LangGraphSseBridge:
         session_id: str,
         *,
         emit_langfuse_session_hint: bool = False,
+        stop_token: Optional[str] = None,
     ) -> None:
         self.session_id = session_id or ""
         self._emit_langfuse_session_hint = bool(emit_langfuse_session_hint)
+        self._stop_token = stop_token
         self.assistant_message_id = str(uuid.uuid4())
         self._message_started = False
         self._text_open = False
@@ -159,6 +162,8 @@ class LangGraphSseBridge:
         self.last_finish_reason: str = ""
         self.last_error_message: str = ""
         self._usage_cumulative: Dict[str, int] = {}
+        self.last_context_snapshot: Dict[str, int] = {}
+        self._session_context_tick = False
 
     # ---------- metrics ctx ----------
 
@@ -289,6 +294,8 @@ class LangGraphSseBridge:
         }
         if self._emit_langfuse_session_hint and self.session_id:
             payload["langfuse_session_id"] = self.session_id
+        if self._stop_token:
+            payload["stop_token"] = self._stop_token
         out.append(_format_sse("message-start", payload))
 
     def _close_text(self, out: List[str], *, record_checkpoint: bool = True) -> None:
@@ -331,6 +338,34 @@ class LangGraphSseBridge:
             self._persist_tick = False
             return True
         return False
+
+    def consume_session_context_tick(self) -> bool:
+        if self._session_context_tick:
+            self._session_context_tick = False
+            return True
+        return False
+
+    def _emit_context_update(self, snapshot: Dict[str, int], ctx: Dict[str, Any], out: List[str]) -> None:
+        if not ModelConfig.context_display_enabled:
+            return
+        if not snapshot or not snapshot.get("max_tokens"):
+            return
+        self.last_context_snapshot = dict(snapshot)
+        ctx["context_snapshot"] = dict(snapshot)
+        self._session_context_tick = True
+        self._ensure_started(out)
+        out.append(_format_sse("context-update", {
+            "type": "context-update",
+            "message_id": self.assistant_message_id,
+            "context": snapshot,
+        }))
+
+    def _emit_context_update_from_registry(self, ctx: Dict[str, Any], out: List[str]) -> None:
+        snapshot = ContextMetricsRegistry.pop(self.session_id)
+        if not snapshot:
+            snapshot = ContextMetricsRegistry.peek(self.session_id)
+        if snapshot:
+            self._emit_context_update(snapshot, ctx, out)
 
     def _emit_reasoning_delta(
         self,
@@ -562,6 +597,18 @@ class LangGraphSseBridge:
             out.append(_format_sse(str(t), payload))
             return
 
+        if t == "context-update":
+            raw_ctx = item.get("context")
+            if isinstance(raw_ctx, dict):
+                snapshot = {
+                    "current_tokens": int(raw_ctx.get("current_tokens", 0)),
+                    "max_tokens": int(raw_ctx.get("max_tokens", 0)),
+                    "used_percentage": int(raw_ctx.get("used_percentage", 0)),
+                }
+                if snapshot["max_tokens"] > 0:
+                    self._emit_context_update(snapshot, ctx, out)
+            return
+
         if t and t not in ("ai", "tool"):
             self._ensure_started(out)
             out.append(_format_sse(str(t), dict(item)))
@@ -574,6 +621,14 @@ class LangGraphSseBridge:
         if lc_kind == "on_chat_model_start":
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
+            self._emit_context_update_from_registry(ctx, out)
+            return
+
+        if lc_kind == "on_custom_event":
+            data = item.get("data") or {}
+            payload = data.get("data") if isinstance(data.get("data"), dict) else data
+            if isinstance(payload, dict) and payload.get("type") == "context-update":
+                self._handle_tw_or_business(payload, builder, ctx, out)
             return
 
         if lc_kind == "on_chat_model_stream":

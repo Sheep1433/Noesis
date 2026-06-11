@@ -1,3 +1,9 @@
+import {
+  applyRefreshToken,
+  authFetch,
+  getAuthHeaders,
+} from '@/utils/authHttp'
+
 /**
  * 用户登录
  * @param username
@@ -7,39 +13,37 @@
 export async function login(username, password) {
   const url = new URL(`${location.origin}/api/user/login`)
 
-  // 构造表单数据
   const formData = new URLSearchParams()
   formData.append('username', username)
   formData.append('password', password)
 
   const req = new Request(url, {
     mode: 'cors',
+    credentials: 'include',
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded', // 改为表单类型
+      'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: formData, // 直接传入 URLSearchParams 对象
+    body: formData,
   })
 
-  return fetch(req)
+  const res = await fetch(req)
+  applyRefreshToken(res)
+  return res
 }
 
 /**
  * 查询用户对话历史
- * @param page
- * @param limit
- * @returns
  */
 export async function query_user_qa_record(page, limit, search_text, chat_id) {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const url = new URL(`${location.origin}/api/user/query_user_record`)
   const req = new Request(url, {
     mode: 'cors',
+    credentials: 'include',
     method: 'post',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`, // 添加 token 到头部
+      ...getAuthHeaders(),
     },
     body: JSON.stringify({
       page,
@@ -48,66 +52,53 @@ export async function query_user_qa_record(page, limit, search_text, chat_id) {
       chat_id,
     }),
   })
-  return fetch(req)
+  return authFetch(req)
 }
 
 /**
  * 获取会话消息历史
- * @param session_id 会话ID
- * @returns 消息列表
  */
 export async function get_session_messages(session_id: string) {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const url = new URL(`${location.origin}/api/chat/sessions/${session_id}/messages`)
   const req = new Request(url, {
     mode: 'cors',
+    credentials: 'include',
     method: 'get',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers: getAuthHeaders(),
   })
-  return fetch(req)
+  return authFetch(req)
 }
 
 /**
  * 获取会话列表
- * @returns 会话列表
  */
 export async function get_chat_sessions() {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const url = new URL(`${location.origin}/api/chat/sessions`)
   const req = new Request(url, {
     mode: 'cors',
+    credentials: 'include',
     method: 'get',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers: getAuthHeaders(),
   })
-  return fetch(req)
+  return authFetch(req)
 }
 
 /**
  * 删除对话历史记录
- * @param page
- * @param limit
- * @returns
  */
 export async function delete_user_record(ids) {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const url = new URL(`${location.origin}/api/chat/sessions/batch-delete`)
   const req = new Request(url, {
     mode: 'cors',
+    credentials: 'include',
     method: 'post',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`, // 添加 token 到头部
+      ...getAuthHeaders(),
     },
     body: JSON.stringify({ session_ids: ids }),
   })
-  return fetch(req)
+  return authFetch(req)
 }
 
 /**

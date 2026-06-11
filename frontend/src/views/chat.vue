@@ -4,14 +4,16 @@ import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { UAParser } from 'ua-parser-js'
 import * as GlobalAPI from '@/api'
-import { ensureSession, stopChat } from '@/api/chat'
+import { ensureSession, getSession, stopChat } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
+import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
+import { isUnauthorizedError } from '@/utils/authHttp'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import {
@@ -27,6 +29,7 @@ import {
   emptyMessageContent,
   flushRedactedThinkingStreamCtx,
   formatUsageSummary,
+  hasValidContextWindow,
   hasValidUsage,
   markStreamingPartsComplete,
   shortenChatErrorToast,
@@ -366,6 +369,25 @@ const nativeReasoningSeen = ref(false)
 // 改为对象存储不同问答类型的uuid
 const uuids = ref<Record<string, string>>({})
 
+const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
+const showContextIndicator = computed(
+  () => qa_type.value !== 'TEST_CASE_QA' && hasValidContextWindow(sessionContext.value),
+)
+
+async function loadSessionContext(sessionId: string) {
+  if (!sessionId || qa_type.value === 'TEST_CASE_QA') {
+    sessionContext.value = null
+    return
+  }
+  try {
+    const session = await getSession(sessionId)
+    const raw = session.extra?.context
+    sessionContext.value = hasValidContextWindow(raw) ? raw : null
+  } catch {
+    sessionContext.value = null
+  }
+}
+
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
 const sseStream = useSSEStream({
   onMessageStart: (data) => {
@@ -466,6 +488,9 @@ const sseStream = useSSEStream({
       msg_metadata: { ...(prev.msg_metadata || {}), usage },
     }
   },
+  onContextUpdate: (context) => {
+    sessionContext.value = context
+  },
   onError: (msg) => {
     stylizingLoading.value = false
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
@@ -495,9 +520,12 @@ const sseStream = useSSEStream({
 async function stopChatStream() {
   const sessionId = getChatSessionId()
   try {
-    await stopChat(sessionId, qa_type.value)
-  } catch {
-    // 仍等待 SSE finish/stopped；失败时由 onError 或用户重试处理
+    await stopChat(sessionId, qa_type.value, sseStream.getStopToken())
+  } catch (err) {
+    // 401 已由 authHttp 统一跳转登录；其余错误仍等待 SSE finish/stopped
+    if (!isUnauthorizedError(err)) {
+      window.$ModalMessage.warning('停止请求失败，请稍后重试或重新登录')
+    }
   }
 }
 
@@ -926,8 +954,10 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   // 切换类型时生成新uuid
   if (chat_id) {
     uuids.value[val] = chat_id
+    void loadSessionContext(chat_id)
   } else {
     uuids.value[val] = uuidv4()
+    sessionContext.value = null
   }
 
   // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
@@ -1855,6 +1885,12 @@ function onComposerPaste(e: ClipboardEvent) {
                     </div>
                   </div>
                 </div>
+                <div
+                  v-if="showContextIndicator"
+                  class="chat-composer-status flex justify-end items-center pt-6"
+                >
+                  <ContextWindowIndicator :context="sessionContext!" />
+                </div>
               </n-space>
             </div>
           </div>
@@ -1865,6 +1901,10 @@ function onComposerPaste(e: ClipboardEvent) {
 </template>
 
 <style lang="scss" scoped>
+.chat-composer-status {
+  min-height: 20px;
+}
+
 .chat-composer--dragover {
   border-color: #615ced;
   background: rgb(97 92 237 / 4%);

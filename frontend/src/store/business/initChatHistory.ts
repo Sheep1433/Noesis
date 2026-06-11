@@ -131,12 +131,7 @@ export const fetchConversationHistory = async function fetchConversationHistory(
 ) {
   try {
     const res = await GlobalAPI.query_user_qa_record(1, 999999, searchText, row?.chat_id)
-    if (res.status === 401) {
-      userStore.logout()
-      setTimeout(() => {
-        router.replace('/login')
-      }, 500)
-    } else if (res.ok) {
+    if (res.ok) {
       const data = await res.json()
       if (data && Array.isArray(data.data?.records)) {
         const records = data.data.records

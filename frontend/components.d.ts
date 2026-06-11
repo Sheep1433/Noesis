@@ -12,6 +12,7 @@ declare module 'vue' {
     AssistantReplyToolbar: typeof import('./src/components/AssistantReplyToolbar/index.vue')['default']
     AssistantStreamingIndicator: typeof import('./src/components/AssistantStreamingIndicator/index.vue')['default']
     ClipBoard: typeof import('./src/components/ClipBoard/index.vue')['default']
+    ContextWindowIndicator: typeof import('./src/components/ContextWindowIndicator/index.vue')['default']
     IconFont: typeof import('./src/components/IconFont/index.vue')['default']
     IconFontQatypeIcon: typeof import('./src/components/IconFont/QatypeIcon.vue')['default']
     IconifyIcon: typeof import('./src/components/IconifyIcon/index.vue')['default']

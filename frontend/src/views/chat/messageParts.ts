@@ -386,6 +386,28 @@ export interface TokenUsageSummary {
   total_tokens?: number
 }
 
+export interface ContextWindowSnapshot {
+  current_tokens: number
+  max_tokens: number
+  used_percentage: number
+  updated_at?: string
+}
+
+export function hasValidContextWindow(context: unknown): context is ContextWindowSnapshot {
+  if (!context || typeof context !== 'object') {
+    return false
+  }
+  const c = context as Record<string, unknown>
+  const max = Number(c.max_tokens ?? 0)
+  const current = Number(c.current_tokens ?? 0)
+  const pct = Number(c.used_percentage ?? Number.NaN)
+  return max > 0 && current >= 0 && !Number.isNaN(pct)
+}
+
+export function formatContextWindowTooltip(context: ContextWindowSnapshot): string {
+  return `${formatTokenCount(context.current_tokens)} / ${formatTokenCount(context.max_tokens)}`
+}
+
 export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
   if (!usage || typeof usage !== 'object') {
     return false

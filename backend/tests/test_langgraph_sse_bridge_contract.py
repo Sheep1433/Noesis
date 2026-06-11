@@ -59,6 +59,16 @@ def test_message_start_and_text_delta_shapes() -> None:
     assert "part_id" in td
 
 
+def test_message_start_includes_stop_token() -> None:
+    bridge = LangGraphSseBridge("sess-stop", stop_token="tok-stop-1")
+    builder = AssistantMessageBuilder(session_id="sess-stop", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    text = "".join(bridge.process_item({"type": "text-delta", "text_delta": "x"}, builder, ctx))
+    objs = _data_json_objects(text)
+    assert objs[0]["type"] == "message-start"
+    assert objs[0]["stop_token"] == "tok-stop-1"
+
+
 def test_message_start_with_langfuse_hint() -> None:
     bridge = LangGraphSseBridge("sess-lf", emit_langfuse_session_hint=True)
     builder = AssistantMessageBuilder(session_id="sess-lf", message_id=bridge.assistant_message_id)
@@ -67,6 +77,53 @@ def test_message_start_with_langfuse_hint() -> None:
     objs = _data_json_objects(text)
     assert objs[0]["type"] == "message-start"
     assert objs[0]["langfuse_session_id"] == "sess-lf"
+
+
+def test_context_update_event_shape() -> None:
+    bridge = LangGraphSseBridge("sess-ctx")
+    builder = AssistantMessageBuilder(session_id="sess-ctx", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    blob = "".join(
+        bridge.process_item(
+            {
+                "type": "context-update",
+                "context": {
+                    "current_tokens": 87040,
+                    "max_tokens": 128000,
+                    "used_percentage": 68,
+                },
+            },
+            builder,
+            ctx,
+        )
+    )
+    assert "event: context-update\n" in blob
+    cu = [o for o in _data_json_objects(blob) if o.get("type") == "context-update"][0]
+    assert cu["message_id"] == bridge.assistant_message_id
+    assert cu["context"]["current_tokens"] == 87040
+    assert cu["context"]["max_tokens"] == 128000
+    assert cu["context"]["used_percentage"] == 68
+    assert ctx.get("context_snapshot", {}).get("used_percentage") == 68
+    assert bridge.consume_session_context_tick() is True
+
+
+def test_context_update_from_registry_on_chat_model_start() -> None:
+    from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
+
+    bridge = LangGraphSseBridge("sess-reg")
+    builder = AssistantMessageBuilder(session_id="sess-reg", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    ContextMetricsRegistry.put(
+        "sess-reg",
+        {"current_tokens": 29000, "max_tokens": 128000, "used_percentage": 23},
+    )
+    blob = "".join(
+        bridge.process_item({"event": "on_chat_model_start", "data": {}}, builder, ctx)
+    )
+    cu = [o for o in _data_json_objects(blob) if o.get("type") == "context-update"]
+    assert cu
+    assert cu[0]["context"]["used_percentage"] == 23
+    ContextMetricsRegistry.clear("sess-reg")
 
 
 def test_finish_usage_and_done() -> None:

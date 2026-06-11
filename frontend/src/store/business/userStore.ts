@@ -8,16 +8,27 @@ export const useUserStore = defineStore('user', {
   actions: {
     login(user: { token: string }) {
       this.user = user
-      // 将用户信息存储到 sessionStorage
       sessionStorage.setItem('user', JSON.stringify(user))
     },
-    logout() {
+    setToken(token: string) {
+      this.login({ token })
+    },
+    logoutLocal() {
       this.user = null
-      // 清除 sessionStorage 中的用户信息
       sessionStorage.removeItem('user')
     },
+    async logout() {
+      try {
+        await fetch(`${location.origin}/api/user/logout`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+      } catch {
+        // 网络失败时仍清除本地态
+      }
+      this.logoutLocal()
+    },
     init() {
-      // 从 sessionStorage 中恢复用户信息
       const storedUser = sessionStorage.getItem('user')
       if (storedUser) {
         this.user = JSON.parse(storedUser)

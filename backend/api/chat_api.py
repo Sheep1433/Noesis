@@ -534,23 +534,23 @@ async def get_message(
 @chat_router.post("/sessions/{session_id}/stop", summary="停止流式生成")
 async def stop_stream(
     session_id: str,
-    request: QaStopRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    stop_payload: QaStopRequest,
+    current_user: CurrentUser = Depends(UserService.get_user_for_stop),
 ):
     """
     停止指定会话的流式生成任务
     """
     logger.info(
-        f"停止流式生成请求 session_id={session_id} qa_type={request.qa_type} user_id={current_user.user_id}"
+        f"停止流式生成请求 session_id={session_id} qa_type={stop_payload.qa_type} "
+        f"user_id={current_user.user_id}"
     )
-    status, msg = await QaService.stop_chat(session_id, request.qa_type, current_user)
+    _status, msg = await QaService.stop_chat(session_id, stop_payload.qa_type, current_user)
     logger.info(
-        f"停止流式生成结果 session_id={session_id} ok={status} msg={msg}"
+        f"停止流式生成结果 session_id={session_id} msg={msg}"
     )
-    if status:
-        return ResponseUtil.success(msg=msg)
-    else:
+    if msg == "未知的 qa_type":
         return ResponseUtil.failure(msg=msg)
+    return ResponseUtil.success(msg=msg)
 
 
 class BatchDeleteRequest(BaseModel):

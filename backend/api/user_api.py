@@ -1,6 +1,6 @@
 import math
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.get_db import get_db
@@ -8,9 +8,18 @@ from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QueryUserRecordRequest
 from services.chat_service import ChatService
 from services.user_service import UserService
+from utils.auth_token_service import AuthTokenService
 from utils.response_util import ResponseUtil
 
 user_router = APIRouter(prefix="/api/user")
+
+
+@user_router.post("/logout", summary="退出登录")
+async def logout(request: Request):
+    """清除 HttpOnly 鉴权 Cookie。"""
+    response = ResponseUtil.success(msg="已退出登录")
+    AuthTokenService.clear_auth_cookie(response)
+    return response
 
 
 @user_router.post("/query_user_record", summary="查询用户记录")

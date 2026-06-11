@@ -17,6 +17,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from deepagents.backends import BackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from agent.middlewares import (
+    ContextMetricsMiddleware,
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
     SessionClockMiddleware,
@@ -47,8 +48,11 @@ def build_noesis_runtime_middleware(
     *,
     include_tool_call_limits: bool = True,
 ) -> list[AgentMiddleware]:
-    """Noesis 运行时防护中间件（clock → repair → offload → context → loop → limit）。"""
+    """Noesis 运行时防护中间件（clock → metrics → repair → offload → context → loop → limit）。"""
     middleware: list[AgentMiddleware] = [SessionClockMiddleware()]
+
+    if ModelConfig.context_display_enabled:
+        middleware.append(ContextMetricsMiddleware())
 
     if ModelConfig.dangling_tool_call_repair_enabled:
         middleware.append(DanglingToolCallMiddleware())
