@@ -12,6 +12,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Set
 
+from langchain_core.messages import convert_to_messages
+
 from agent.middlewares.context_metrics import build_context_snapshot
 from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
 from config.env import ModelConfig
@@ -370,7 +372,8 @@ class LangGraphSseBridge:
         if not messages:
             return {}
         try:
-            return build_context_snapshot(messages)
+            normalized = convert_to_messages(messages)
+            return build_context_snapshot(normalized)
         except Exception:
             logger.debug("on_chat_model_start 上下文估算失败", exc_info=True)
             return {}

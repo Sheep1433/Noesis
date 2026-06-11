@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Awaitable, Callable
 from threading import Lock
 from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware, AgentState
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
 from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 from typing_extensions import override
@@ -76,23 +77,30 @@ def _try_emit_stream_writer(snapshot: dict[str, int]) -> None:
 
 
 class ContextMetricsMiddleware(AgentMiddleware):
-    """Record context fill level before each model invocation."""
+    """Record context fill level on each model call (after SessionClock patches)."""
 
-    def _record(self, state: AgentState, runtime: Runtime) -> None:
+    def _record(self, request: ModelRequest) -> None:
         if not ModelConfig.context_display_enabled:
             return
-        messages = state.get("messages") or []
-        snapshot = build_context_snapshot(messages)
-        thread_id = _thread_id_from_runtime(runtime)
+        snapshot = build_context_snapshot(list(request.messages))
+        thread_id = _thread_id_from_runtime(request.runtime)
         ContextMetricsRegistry.put(thread_id, snapshot)
         _try_emit_stream_writer(snapshot)
 
     @override
-    def before_model(self, state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-        self._record(state, runtime)
-        return None
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelCallResult:
+        self._record(request)
+        return handler(request)
 
     @override
-    async def abefore_model(self, state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-        await asyncio.to_thread(self._record, state, runtime)
-        return None
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelCallResult:
+        self._record(request)
+        return await handler(request)

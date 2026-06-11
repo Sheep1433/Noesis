@@ -374,17 +374,51 @@ const showContextIndicator = computed(
   () => qa_type.value !== 'TEST_CASE_QA' && hasValidContextWindow(sessionContext.value),
 )
 
+const SESSION_CONTEXT_CACHE_PREFIX = 'noesis_session_context:'
+
+function cacheSessionContext(sessionId: string, context: import('@/views/chat/messageParts').ContextWindowSnapshot) {
+  try {
+    sessionStorage.setItem(`${SESSION_CONTEXT_CACHE_PREFIX}${sessionId}`, JSON.stringify(context))
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function readCachedSessionContext(sessionId: string) {
+  try {
+    const raw = sessionStorage.getItem(`${SESSION_CONTEXT_CACHE_PREFIX}${sessionId}`)
+    if (!raw) {
+      return null
+    }
+    const parsed = JSON.parse(raw) as unknown
+    return hasValidContextWindow(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 async function loadSessionContext(sessionId: string) {
   if (!sessionId || qa_type.value === 'TEST_CASE_QA') {
     sessionContext.value = null
     return
   }
+  const cached = readCachedSessionContext(sessionId)
+  if (cached) {
+    sessionContext.value = cached
+  }
   try {
     const session = await getSession(sessionId)
     const raw = session.extra?.context
-    sessionContext.value = hasValidContextWindow(raw) ? raw : null
+    if (hasValidContextWindow(raw)) {
+      sessionContext.value = raw
+      cacheSessionContext(sessionId, raw)
+    } else if (!cached) {
+      sessionContext.value = null
+    }
   } catch {
-    sessionContext.value = null
+    if (!cached) {
+      sessionContext.value = null
+    }
   }
 }
 
@@ -461,6 +495,7 @@ const sseStream = useSSEStream({
     }
     onCompletedReader(conversationItems.value.length - 1)
     scrollToBottom()
+    void loadSessionContext(getChatSessionId())
   },
   onTitleUpdate: (title: string) => {
     const currentUuid = uuids.value[qa_type.value]
@@ -490,6 +525,10 @@ const sseStream = useSSEStream({
   },
   onContextUpdate: (context) => {
     sessionContext.value = context
+    const sessionId = uuids.value[qa_type.value]
+    if (sessionId) {
+      cacheSessionContext(sessionId, context)
+    }
   },
   onError: (msg) => {
     stylizingLoading.value = false
@@ -519,8 +558,10 @@ const sseStream = useSSEStream({
 
 async function stopChatStream() {
   const sessionId = getChatSessionId()
+  const stopToken = sseStream.getStopToken()
+  sseStream.abortStream()
   try {
-    await stopChat(sessionId, qa_type.value, sseStream.getStopToken())
+    await stopChat(sessionId, qa_type.value, stopToken)
   } catch (err) {
     // 401 已由 authHttp 统一跳转登录；其余错误仍等待 SSE finish/stopped
     if (!isUnauthorizedError(err)) {
@@ -1850,6 +1891,12 @@ function onComposerPaste(e: ClipboardEvent) {
                       @paste="onComposerPaste"
                     />
 
+                    <ContextWindowIndicator
+                      v-if="showContextIndicator"
+                      class="shrink-0"
+                      :context="sessionContext!"
+                    />
+
                     <div class="chat-send-btn-wrap shrink-0">
                       <n-tooltip
                         :disabled="!stylizingLoading"
@@ -1885,12 +1932,6 @@ function onComposerPaste(e: ClipboardEvent) {
                     </div>
                   </div>
                 </div>
-                <div
-                  v-if="showContextIndicator"
-                  class="chat-composer-status flex justify-end items-center pt-6"
-                >
-                  <ContextWindowIndicator :context="sessionContext!" />
-                </div>
               </n-space>
             </div>
           </div>
@@ -1901,10 +1942,6 @@ function onComposerPaste(e: ClipboardEvent) {
 </template>
 
 <style lang="scss" scoped>
-.chat-composer-status {
-  min-height: 20px;
-}
-
 .chat-composer--dragover {
   border-color: #615ced;
   background: rgb(97 92 237 / 4%);

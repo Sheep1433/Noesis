@@ -11,6 +11,8 @@ from agent.middlewares.context_metrics import (
     build_context_snapshot,
     resolve_context_max_tokens,
 )
+from langchain.agents.middleware.types import ModelRequest
+
 from agent.middlewares.context_metrics_middleware import (
     ContextMetricsMiddleware,
     ContextMetricsRegistry,
@@ -47,11 +49,15 @@ def test_build_context_snapshot_percentage() -> None:
 def test_context_metrics_middleware_records_registry() -> None:
     cfg = SimpleNamespace(context_display_enabled=True)
     mw = ContextMetricsMiddleware()
-    state = {"messages": [HumanMessage(content="hello world")]}
     runtime = MagicMock()
     runtime.context = {"thread_id": "sess-ctx-1"}
+    request = ModelRequest(
+        model=MagicMock(),
+        messages=[HumanMessage(content="hello world")],
+        runtime=runtime,
+    )
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
-        mw.before_model(state, runtime)
+        mw.wrap_model_call(request, lambda req: MagicMock())
     snap = ContextMetricsRegistry.peek("sess-ctx-1")
     assert snap is not None
     assert snap["max_tokens"] > 0
@@ -61,9 +67,13 @@ def test_context_metrics_middleware_records_registry() -> None:
 def test_context_metrics_middleware_skips_when_display_disabled() -> None:
     cfg = SimpleNamespace(context_display_enabled=False)
     mw = ContextMetricsMiddleware()
-    state = {"messages": [HumanMessage(content="hello")]}
     runtime = MagicMock()
     runtime.context = {"thread_id": "sess-ctx-2"}
+    request = ModelRequest(
+        model=MagicMock(),
+        messages=[HumanMessage(content="hello")],
+        runtime=runtime,
+    )
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
-        mw.before_model(state, runtime)
+        mw.wrap_model_call(request, lambda req: MagicMock())
     assert ContextMetricsRegistry.peek("sess-ctx-2") is None
