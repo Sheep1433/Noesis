@@ -145,6 +145,7 @@ class ModelSettings:
     summarization_model_api_key: str
     summarization_model_temperature: float
     summarization_max_tokens_before_summary: int
+    summarization_trigger_tokens: int
     summarization_trigger_fraction: float
     summarization_max_input_tokens: int
     summarization_tool_offload_threshold: int
@@ -339,6 +340,9 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         ),
         summarization_max_tokens_before_summary=_legacy_env_int(
             "SUMMARIZATION_MAX_TOKENS_BEFORE_SUMMARY", s.max_tokens_before_summary
+        ),
+        summarization_trigger_tokens=_legacy_env_int(
+            "SUMMARIZATION_TRIGGER_TOKENS", s.trigger_tokens
         ),
         summarization_trigger_fraction=_legacy_env_float(
             "SUMMARIZATION_TRIGGER_FRACTION", s.trigger_fraction

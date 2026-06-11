@@ -59,6 +59,7 @@ summarization:
     name: ""
     base_url: ""
     temperature: 0.0
+  trigger_tokens: 50000
   trigger_fraction: 0.85
   max_input_tokens: 0
   tool_offload_threshold: 1000

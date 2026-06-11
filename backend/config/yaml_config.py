@@ -111,6 +111,7 @@ class ContextYamlSection(BaseModel):
 class SummarizationYamlSection(BaseModel):
     enabled: bool = True
     model: SummarizationModelYamlSection = Field(default_factory=SummarizationModelYamlSection)
+    trigger_tokens: int = Field(default=0, ge=0)
     trigger_fraction: float = Field(default=0.85, gt=0, le=1)
     max_input_tokens: int = Field(default=0, ge=0)
     tool_offload_threshold: int = Field(default=1000, ge=1)

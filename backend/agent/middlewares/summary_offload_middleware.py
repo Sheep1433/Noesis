@@ -344,10 +344,14 @@ def create_summary_offload_middleware() -> SummarizationOffloadMiddleware | None
     if not getattr(model, "profile", None):
         model.profile = {"max_input_tokens": max_input}
 
-    fraction = ModelConfig.summarization_trigger_fraction
+    trigger_tokens = int(ModelConfig.summarization_trigger_tokens)
+    if trigger_tokens > 0:
+        trigger: tuple[str, float | int] = ("tokens", trigger_tokens)
+    else:
+        trigger = ("fraction", ModelConfig.summarization_trigger_fraction)
     return SummarizationOffloadMiddleware(
         model,
-        trigger=("fraction", fraction),
+        trigger=trigger,
         keep=("messages", ModelConfig.summarization_messages_to_keep),
         token_counter=get_agent_token_counter(),
         tool_offload_threshold=ModelConfig.summarization_tool_offload_threshold,

@@ -23,6 +23,7 @@ def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
         summarization_enabled=True,
         context_max_input_tokens=8000,
         summarization_max_input_tokens=0,
+        summarization_trigger_tokens=50000,
         summarization_trigger_fraction=0.85,
         summarization_messages_to_keep=6,
         summarization_tool_offload_threshold=1000,
@@ -45,6 +46,7 @@ def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
     get_llm.assert_called_once_with(purpose="summarization")
     assert isinstance(mw, SummarizationOffloadMiddleware)
     assert mock_model.profile == {"max_input_tokens": 8000}
+    assert mw._get_token_trigger_value() == 50000
 
 
 def test_get_llm_summarization_falls_back_to_main_model() -> None:
