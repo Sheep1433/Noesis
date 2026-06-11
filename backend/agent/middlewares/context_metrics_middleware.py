@@ -53,10 +53,10 @@ class ContextMetricsRegistry:
 
 
 def _thread_id_from_runtime(runtime: Runtime) -> str:
+    """与 LoopDetectionMiddleware 一致：thread_id 在 runtime.context 中。"""
     try:
-        config = runtime.config or {}
-        configurable = config.get("configurable") or {}
-        thread_id = configurable.get("thread_id")
+        ctx = runtime.context or {}
+        thread_id = ctx.get("thread_id")
         if thread_id:
             return str(thread_id)
     except Exception:

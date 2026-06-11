@@ -12,6 +12,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Set
 
+from agent.middlewares.context_metrics import build_context_snapshot
 from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
 from config.env import ModelConfig
 from utils.langgraph_sse.reasoning import extract_reasoning_delta
@@ -360,10 +361,26 @@ class LangGraphSseBridge:
             "context": snapshot,
         }))
 
-    def _emit_context_update_from_registry(self, ctx: Dict[str, Any], out: List[str]) -> None:
+    def _snapshot_from_chat_model_start(self, item: Dict[str, Any]) -> Dict[str, int]:
+        data = item.get("data") or {}
+        raw_input = data.get("input")
+        messages = None
+        if isinstance(raw_input, dict):
+            messages = raw_input.get("messages")
+        if not messages:
+            return {}
+        try:
+            return build_context_snapshot(messages)
+        except Exception:
+            logger.debug("on_chat_model_start 上下文估算失败", exc_info=True)
+            return {}
+
+    def _emit_context_update_from_registry(self, item: Dict[str, Any], ctx: Dict[str, Any], out: List[str]) -> None:
         snapshot = ContextMetricsRegistry.pop(self.session_id)
         if not snapshot:
             snapshot = ContextMetricsRegistry.peek(self.session_id)
+        if not snapshot:
+            snapshot = self._snapshot_from_chat_model_start(item)
         if snapshot:
             self._emit_context_update(snapshot, ctx, out)
 
@@ -621,7 +638,7 @@ class LangGraphSseBridge:
         if lc_kind == "on_chat_model_start":
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
-            self._emit_context_update_from_registry(ctx, out)
+            self._emit_context_update_from_registry(item, ctx, out)
             return
 
         if lc_kind == "on_custom_event":

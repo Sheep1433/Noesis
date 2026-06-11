@@ -118,12 +118,51 @@ def test_context_update_from_registry_on_chat_model_start() -> None:
         {"current_tokens": 29000, "max_tokens": 128000, "used_percentage": 23},
     )
     blob = "".join(
-        bridge.process_item({"event": "on_chat_model_start", "data": {}}, builder, ctx)
+        bridge.process_item(
+            {
+                "event": "on_chat_model_start",
+                "data": {
+                    "input": {
+                        "messages": [
+                            {"type": "human", "content": "hello " * 500},
+                        ],
+                    },
+                },
+            },
+            builder,
+            ctx,
+        )
     )
     cu = [o for o in _data_json_objects(blob) if o.get("type") == "context-update"]
     assert cu
     assert cu[0]["context"]["used_percentage"] == 23
     ContextMetricsRegistry.clear("sess-reg")
+
+
+def test_context_update_from_chat_model_start_input_fallback() -> None:
+    bridge = LangGraphSseBridge("sess-fallback")
+    builder = AssistantMessageBuilder(session_id="sess-fallback", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    blob = "".join(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_start",
+                "data": {
+                    "input": {
+                        "messages": [
+                            {"type": "human", "content": "x " * 2000},
+                        ],
+                    },
+                },
+            },
+            builder,
+            ctx,
+        )
+    )
+    cu = [o for o in _data_json_objects(blob) if o.get("type") == "context-update"]
+    assert cu
+    assert cu[0]["context"]["current_tokens"] > 0
+    assert cu[0]["context"]["max_tokens"] > 0
 
 
 def test_finish_usage_and_done() -> None:

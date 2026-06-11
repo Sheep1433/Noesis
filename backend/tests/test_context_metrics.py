@@ -49,7 +49,7 @@ def test_context_metrics_middleware_records_registry() -> None:
     mw = ContextMetricsMiddleware()
     state = {"messages": [HumanMessage(content="hello world")]}
     runtime = MagicMock()
-    runtime.config = {"configurable": {"thread_id": "sess-ctx-1"}}
+    runtime.context = {"thread_id": "sess-ctx-1"}
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
         mw.before_model(state, runtime)
     snap = ContextMetricsRegistry.peek("sess-ctx-1")
@@ -63,7 +63,7 @@ def test_context_metrics_middleware_skips_when_display_disabled() -> None:
     mw = ContextMetricsMiddleware()
     state = {"messages": [HumanMessage(content="hello")]}
     runtime = MagicMock()
-    runtime.config = {"configurable": {"thread_id": "sess-ctx-2"}}
+    runtime.context = {"thread_id": "sess-ctx-2"}
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
         mw.before_model(state, runtime)
     assert ContextMetricsRegistry.peek("sess-ctx-2") is None
