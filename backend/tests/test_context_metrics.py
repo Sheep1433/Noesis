@@ -4,27 +4,40 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from langchain.agents.middleware.types import ModelRequest
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from agent.middlewares.context_metrics import (
     DEFAULT_CONTEXT_MAX_INPUT_TOKENS,
     build_context_snapshot,
     build_context_snapshot_from_request,
+    compute_used_percentage,
     resolve_context_max_tokens,
 )
 from agent.middlewares.context_metrics_middleware import (
     ContextMetricsMiddleware,
     ContextMetricsRegistry,
+    resolve_session_id_for_request,
 )
+
+
+def _runtime_with_thread(thread_id: str) -> MagicMock:
+    runtime = MagicMock()
+    runtime.execution_info = MagicMock(thread_id=thread_id)
+    return runtime
 
 
 def test_resolve_context_max_tokens_from_config() -> None:
     cfg = SimpleNamespace(context_max_input_tokens=64000)
     with patch("agent.middlewares.context_metrics.ModelConfig", cfg):
         assert resolve_context_max_tokens() == 64000
+
+
+def test_compute_used_percentage_minimum_one_when_nonzero() -> None:
+    assert compute_used_percentage(630, 128_000) == 1
+    assert compute_used_percentage(0, 128_000) == 0
+    assert compute_used_percentage(68_000, 128_000) == 53
 
 
 def test_resolve_context_max_tokens_default_when_unset() -> None:
@@ -57,7 +70,7 @@ def test_build_context_snapshot_from_request_includes_system_and_tools() -> None
         system_message=SystemMessage(content="system prompt " * 50),
         messages=[HumanMessage(content="你好")],
         tools=[demo_search],
-        runtime=MagicMock(),
+        runtime=_runtime_with_thread("sess-tools"),
     )
     with patch("agent.middlewares.context_metrics.ModelConfig", cfg):
         snap = build_context_snapshot_from_request(request)
@@ -68,6 +81,26 @@ def test_build_context_snapshot_from_request_includes_system_and_tools() -> None
     assert "demo_search" in payload
 
 
+def test_resolve_session_id_from_execution_info() -> None:
+    request = ModelRequest(
+        model=MagicMock(),
+        messages=[HumanMessage(content="hello")],
+        runtime=_runtime_with_thread("sess-from-thread"),
+    )
+    assert resolve_session_id_for_request(request) == "sess-from-thread"
+
+
+def test_resolve_session_id_missing_execution_info() -> None:
+    runtime = MagicMock()
+    runtime.execution_info = None
+    request = ModelRequest(
+        model=MagicMock(),
+        messages=[HumanMessage(content="hello")],
+        runtime=runtime,
+    )
+    assert resolve_session_id_for_request(request) == ""
+
+
 def test_context_metrics_middleware_records_registry() -> None:
     cfg = SimpleNamespace(context_display_enabled=True)
     mw = ContextMetricsMiddleware()
@@ -76,14 +109,9 @@ def test_context_metrics_middleware_records_registry() -> None:
     request = ModelRequest(
         model=model,
         system_message=SystemMessage(content="noesis system"),
-        messages=[
-            HumanMessage(
-                content="hello world",
-                additional_kwargs={"noesis_attachments": {"session_id": "sess-ctx-1"}},
-            ),
-        ],
+        messages=[HumanMessage(content="hello world")],
         tools=[],
-        runtime=MagicMock(),
+        runtime=_runtime_with_thread("sess-ctx-1"),
     )
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
         mw.wrap_model_call(request, lambda req: MagicMock())
@@ -100,7 +128,7 @@ def test_context_metrics_middleware_skips_when_display_disabled() -> None:
     request = ModelRequest(
         model=MagicMock(),
         messages=[HumanMessage(content="hello")],
-        runtime=MagicMock(),
+        runtime=_runtime_with_thread("sess-ctx-2"),
     )
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
         mw.wrap_model_call(request, lambda req: MagicMock())

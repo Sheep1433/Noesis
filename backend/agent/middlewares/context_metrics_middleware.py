@@ -44,18 +44,16 @@ class ContextMetricsRegistry:
             cls._store.pop(session_id, None)
 
 
-def _session_id_from_messages(messages: list) -> str:
-    """从 HumanMessage.noesis_attachments 解析会话 id（与 common_react_agent 注入一致）。"""
-    for msg in reversed(messages):
-        kwargs = getattr(msg, "additional_kwargs", None) or {}
-        if not isinstance(kwargs, dict):
-            continue
-        att = kwargs.get("noesis_attachments") or {}
-        if isinstance(att, dict):
-            sid = att.get("session_id")
-            if sid:
-                return str(sid)
-    return ""
+def resolve_session_id_for_request(request: ModelRequest) -> str:
+    """会话键 = LangGraph execution_info.thread_id（Agent 配置为 Noesis session_id）。"""
+    runtime = request.runtime
+    if runtime is None:
+        return ""
+    exec_info = getattr(runtime, "execution_info", None)
+    if exec_info is None:
+        return ""
+    thread_id = getattr(exec_info, "thread_id", None)
+    return str(thread_id) if thread_id else ""
 
 
 class ContextMetricsMiddleware(AgentMiddleware):
@@ -64,9 +62,11 @@ class ContextMetricsMiddleware(AgentMiddleware):
     def _record(self, request: ModelRequest) -> None:
         if not ModelConfig.context_display_enabled:
             return
-        session_id = _session_id_from_messages(list(request.messages))
+        session_id = resolve_session_id_for_request(request)
         if not session_id:
-            logger.warning("[context_metrics] 无法从消息解析 session_id，跳过上下文快照写入")
+            logger.warning(
+                "[context_metrics] runtime.execution_info.thread_id 缺失，跳过上下文快照写入"
+            )
             return
         ContextMetricsRegistry.put(session_id, build_context_snapshot_from_request(request))
 

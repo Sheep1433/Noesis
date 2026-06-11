@@ -62,34 +62,38 @@ def _estimate_tools_tokens_approx(tools: list[Any]) -> int:
     return int(count_tokens_approximately([SystemMessage(content=blob)]))
 
 
+def _serialize_request_payload(messages: list[Any], tools: list[Any]) -> str:
+    payload: dict[str, Any] = {"messages": convert_to_openai_messages(messages)}
+    if tools:
+        payload["tools"] = _openai_tool_defs(tools)
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def estimate_model_request_input_tokens(request: ModelRequest) -> int:
-    """估算单次模型调用的输入 token（对话 + system + tools），尽量贴近实际 API 请求。"""
+    """估算单次模型调用的输入 token（对话 + system + tools）。"""
     messages = _messages_with_system(list(request.messages), request.system_message)
     tools = list(request.tools or [])
-
     get_num_tokens = getattr(request.model, "get_num_tokens", None)
     if callable(get_num_tokens):
-        try:
-            payload: dict[str, Any] = {"messages": convert_to_openai_messages(messages)}
-            if tools:
-                payload["tools"] = _openai_tool_defs(tools)
-            return int(get_num_tokens(json.dumps(payload, ensure_ascii=False)))
-        except Exception:
-            logger.debug("model.get_num_tokens 估算失败，回退近似计数", exc_info=True)
+        return int(get_num_tokens(_serialize_request_payload(messages, tools)))
+    return int(get_agent_token_counter()(messages)) + _estimate_tools_tokens_approx(tools)
 
-    total = int(get_agent_token_counter()(messages))
-    total += _estimate_tools_tokens_approx(tools)
-    return total
+
+def compute_used_percentage(current_tokens: int, max_tokens: int) -> int:
+    """占用百分比；有占用但四舍五入为 0 时显示 1%，避免圆环长期为 0%。"""
+    if max_tokens <= 0 or current_tokens <= 0:
+        return 0
+    pct = round(current_tokens / max_tokens * 100)
+    if pct == 0:
+        return 1
+    return min(100, pct)
 
 
 def build_context_snapshot(messages: list[Any]) -> dict[str, int]:
     """仅基于消息列表的粗估（摘要触发等内部逻辑使用）。"""
     current_tokens = int(get_agent_token_counter()(messages))
     max_tokens = resolve_context_max_tokens()
-    if max_tokens <= 0:
-        used_percentage = 0
-    else:
-        used_percentage = min(100, round(current_tokens / max_tokens * 100))
+    used_percentage = compute_used_percentage(current_tokens, max_tokens)
     return {
         "current_tokens": current_tokens,
         "max_tokens": max_tokens,
@@ -101,10 +105,7 @@ def build_context_snapshot_from_request(request: ModelRequest) -> dict[str, int]
     """Composer 上下文指示器：对齐即将发往模型的有效输入规模。"""
     current_tokens = estimate_model_request_input_tokens(request)
     max_tokens = resolve_context_max_tokens()
-    if max_tokens <= 0:
-        used_percentage = 0
-    else:
-        used_percentage = min(100, round(current_tokens / max_tokens * 100))
+    used_percentage = compute_used_percentage(current_tokens, max_tokens)
     return {
         "current_tokens": current_tokens,
         "max_tokens": max_tokens,

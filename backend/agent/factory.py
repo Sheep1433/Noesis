@@ -7,11 +7,7 @@ from typing import Any, Literal, cast
 from deepagents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
 from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    ClearToolUsesEdit,
-    ContextEditingMiddleware,
-    ToolCallLimitMiddleware,
-)
+from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 
 from deepagents.backends import BackendProtocol
@@ -57,14 +53,6 @@ def build_noesis_runtime_middleware(
     summary_middleware = create_summary_offload_middleware()
     if summary_middleware is not None:
         middleware.append(summary_middleware)
-
-    middleware.append(
-        ContextEditingMiddleware(
-            edits=[
-                ClearToolUsesEdit(trigger=10000),
-            ],
-        )
-    )
 
     if ModelConfig.loop_detection_enabled:
         middleware.append(
@@ -167,9 +155,10 @@ def create_noesis_agent(
         → AsyncSubAgentMiddleware (optional)
         → extra_middleware（如 SkillsMiddleware，由调用方按需传入）
         → SessionClockMiddleware
-        → DanglingToolCall / SummarizationOffload / ContextEditing / LoopDetection
+        → DanglingToolCall / SummarizationOffload / LoopDetection
         → ToolErrorHandlingMiddleware
-        → ToolCallLimitMiddleware (optional, tail)
+        → ToolCallLimitMiddleware (optional)
+        → ContextMetricsMiddleware (tail, ``wrap_model_call`` 末端)
 
     Args:
         system_prompt: 系统提示词。
