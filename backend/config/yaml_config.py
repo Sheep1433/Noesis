@@ -174,6 +174,10 @@ class WebToolsYamlSection(BaseModel):
     fetch_timeout_seconds: int = Field(default=30, ge=1)
 
 
+class CheckpointYamlSection(BaseModel):
+    db_path: str = "./data/langgraph_checkpoints.sqlite"
+
+
 class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
     dir: str = "./data/chat_attachments"
@@ -205,6 +209,7 @@ class AppYamlConfig(BaseModel):
     langfuse: LangfuseYamlSection = Field(default_factory=LangfuseYamlSection)
     other: OtherYamlSection = Field(default_factory=OtherYamlSection)
     web_tools: WebToolsYamlSection = Field(default_factory=WebToolsYamlSection)
+    checkpoint: CheckpointYamlSection = Field(default_factory=CheckpointYamlSection)
     chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)
 
 

@@ -48,11 +48,8 @@ def build_noesis_runtime_middleware(
     *,
     include_tool_call_limits: bool = True,
 ) -> list[AgentMiddleware]:
-    """Noesis 运行时防护中间件（clock → metrics → repair → offload → context → loop → limit）。"""
+    """Noesis 运行时防护中间件（clock → repair → offload → loop → limit → metrics）。"""
     middleware: list[AgentMiddleware] = [SessionClockMiddleware()]
-
-    if ModelConfig.context_display_enabled:
-        middleware.append(ContextMetricsMiddleware())
 
     if ModelConfig.dangling_tool_call_repair_enabled:
         middleware.append(DanglingToolCallMiddleware())
@@ -81,6 +78,9 @@ def build_noesis_runtime_middleware(
 
     if include_tool_call_limits:
         middleware.extend(build_tool_call_limit_middleware())
+
+    if ModelConfig.context_display_enabled:
+        middleware.append(ContextMetricsMiddleware())
 
     return middleware
 

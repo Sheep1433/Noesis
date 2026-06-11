@@ -75,6 +75,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   const currentStopToken = ref<string | null>(null)
   let removeBeforeUnload: (() => void) | null = null
   let lastFinishReason: string | undefined
+  let abortController: AbortController | null = null
+  let userAborted = false
 
   const tool_name_by_call_id = new Map<string, string>()
 
@@ -101,6 +103,9 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   }
 
   function dispatchFrame(eventName: string, dataStr: string) {
+    if (userAborted) {
+      return
+    }
     if (dataStr === '[DONE]') {
       settleSuccess()
       return
@@ -284,6 +289,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     currentStopToken.value = null
     streamSettled = false
     lastFinishReason = undefined
+    userAborted = false
+    abortController = new AbortController()
     isLoading.value = true
 
     const qaType = (extra?.qa_type as string) || 'COMMON_QA'
@@ -293,6 +300,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       const res = await fetch('/api/chat/sessions/stream', {
         method: 'POST',
         credentials: 'include',
+        signal: abortController.signal,
         headers: {
           'Content-Type': 'application/json',
           ...getAuthHeaders(),
@@ -349,13 +357,20 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         }
         rawBuffer = ''
       }
-      settleSuccess()
+      if (!userAborted) {
+        settleSuccess()
+      }
     } catch (err: unknown) {
-      const e = err as { message?: string }
+      if (userAborted) {
+        settleSuccess('stopped')
+        return
+      }
+      const e = err as { message?: string, name?: string }
       error.value = e.message ?? '未知错误'
       settleFailure(e.message ?? '未知错误')
     } finally {
       isLoading.value = false
+      abortController = null
       cleanupBeforeUnload()
     }
   }
@@ -370,6 +385,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     currentStopToken.value = null
     streamSettled = false
     lastFinishReason = undefined
+    userAborted = false
+    abortController = new AbortController()
     isLoading.value = true
 
     const qaType = 'TEST_CASE_QA'
@@ -379,6 +396,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       const res = await fetch(`/api/chat/sessions/${sessionId}/test-case/resume`, {
         method: 'POST',
         credentials: 'include',
+        signal: abortController.signal,
         headers: {
           'Content-Type': 'application/json',
           ...getAuthHeaders(),
@@ -431,15 +449,30 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         }
         rawBuffer = ''
       }
-      settleSuccess()
+      if (!userAborted) {
+        settleSuccess()
+      }
     } catch (err: unknown) {
+      if (userAborted) {
+        settleSuccess('stopped')
+        return
+      }
       const e = err as { message?: string }
       error.value = e.message ?? '未知错误'
       settleFailure(e.message ?? '未知错误')
     } finally {
       isLoading.value = false
+      abortController = null
       cleanupBeforeUnload()
     }
+  }
+
+  function abortStream() {
+    if (!isLoading.value || userAborted) {
+      return
+    }
+    userAborted = true
+    abortController?.abort()
   }
 
   function getStopToken(): string | null {
@@ -451,6 +484,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     error,
     sendMessage,
     resumeTestCase,
+    abortStream,
     getStopToken,
   }
 }

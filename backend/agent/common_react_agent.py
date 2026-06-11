@@ -31,18 +31,17 @@ class GeneralQAAgent(BaseAgent):
     async def run_agent(
         self,
         query: str,
+        *,
         session_id: Optional[str] = None,
-        conversation_id: str = None,
         current_user=None,
         file_list: dict = None,
         qa_type: Optional[str] = None,
         kb_collections: Optional[list] = None,
         db: Optional[AsyncSession] = None,
     ) -> AsyncGenerator[dict, None]:
-        task_id = conversation_id if conversation_id else str(uuid.uuid4())
+        task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
-        task_context = {"cancelled": False}
-        self.running_tasks[task_id] = task_context
+        self.running_tasks[task_id] = {"cancelled": False}
 
         kb_tools = build_kb_search_tools()
         web_tools = build_web_search_tools()
@@ -85,8 +84,7 @@ class GeneralQAAgent(BaseAgent):
                 ]
 
         try:
-            thread_id = session_id if session_id else "default_thread"
-            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
+            config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
 
             agent = create_noesis_agent(
                 tools=tools,

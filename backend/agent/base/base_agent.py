@@ -1,7 +1,7 @@
 from collections.abc import AsyncGenerator
 
-from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import convert_to_messages
+from config.checkpointer import get_checkpointer
 from config.env import LangfuseConfig
 from utils.langfuse_tracing import merge_langfuse_runnable_config
 from utils.log_util import logger
@@ -36,8 +36,11 @@ class BaseAgent:
     """
 
     def __init__(self):
-        self.checkpointer = InMemorySaver()
         self.running_tasks = {}
+
+    @property
+    def checkpointer(self):
+        return get_checkpointer()
 
     async def cancel_task(self, task_id: str) -> bool:
         """取消指定的任务"""

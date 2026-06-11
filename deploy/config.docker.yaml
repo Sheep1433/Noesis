@@ -91,6 +91,9 @@ langfuse:
 other:
   skills_filesystem_root: ""
 
+checkpoint:
+  db_path: ./data/langgraph_checkpoints.sqlite
+
 # Web 检索工具（COMMON_QA / DEEP_RESEARCH；TAVILY_API_KEY 见 deploy/.env.docker）
 web_tools:
   max_search_results: 8

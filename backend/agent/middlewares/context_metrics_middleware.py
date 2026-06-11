@@ -8,61 +8,40 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
-from langgraph.config import get_stream_writer
-from langgraph.runtime import Runtime
 from typing_extensions import override
 
-from agent.middlewares.context_metrics import build_context_snapshot
+from agent.middlewares.context_metrics import build_context_snapshot_from_request
 from config.env import ModelConfig
 from utils.log_util import logger
 
 
 class ContextMetricsRegistry:
-    """Thread-scoped latest context snapshot (thread_id == session_id)."""
+    """按 session_id 暂存最近一次上下文快照，供 SSE bridge 在 usage-update 时读取。"""
 
     _lock = Lock()
     _store: dict[str, dict[str, int]] = {}
 
     @classmethod
-    def put(cls, thread_id: str, snapshot: dict[str, int]) -> None:
-        if not thread_id:
+    def put(cls, session_id: str, snapshot: dict[str, int]) -> None:
+        if not session_id:
             return
         with cls._lock:
-            cls._store[thread_id] = dict(snapshot)
+            cls._store[session_id] = dict(snapshot)
 
     @classmethod
-    def pop(cls, thread_id: str) -> dict[str, int] | None:
-        if not thread_id:
+    def peek(cls, session_id: str) -> dict[str, int] | None:
+        if not session_id:
             return None
         with cls._lock:
-            return cls._store.pop(thread_id, None)
-
-    @classmethod
-    def peek(cls, thread_id: str) -> dict[str, int] | None:
-        if not thread_id:
-            return None
-        with cls._lock:
-            snap = cls._store.get(thread_id)
+            snap = cls._store.get(session_id)
             return dict(snap) if snap else None
 
     @classmethod
-    def clear(cls, thread_id: str) -> None:
-        if not thread_id:
+    def clear(cls, session_id: str) -> None:
+        if not session_id:
             return
         with cls._lock:
-            cls._store.pop(thread_id, None)
-
-
-def _thread_id_from_runtime(runtime: Runtime) -> str:
-    """与 LoopDetectionMiddleware 一致：thread_id 在 runtime.context 中。"""
-    try:
-        ctx = runtime.context or {}
-        thread_id = ctx.get("thread_id")
-        if thread_id:
-            return str(thread_id)
-    except Exception:
-        pass
-    return ""
+            cls._store.pop(session_id, None)
 
 
 def _session_id_from_messages(messages: list) -> str:
@@ -79,42 +58,17 @@ def _session_id_from_messages(messages: list) -> str:
     return ""
 
 
-def _registry_keys_for_request(request: ModelRequest) -> list[str]:
-    keys: list[str] = []
-    sid = _session_id_from_messages(list(request.messages))
-    if sid:
-        keys.append(sid)
-    tid = _thread_id_from_runtime(request.runtime)
-    if tid and tid not in keys:
-        keys.append(tid)
-    return keys
-
-
-def _try_emit_stream_writer(snapshot: dict[str, int]) -> None:
-    try:
-        writer = get_stream_writer()
-    except RuntimeError:
-        return
-    try:
-        writer({"type": "context-update", "context": snapshot})
-    except Exception:
-        logger.debug("context-update custom stream 写入失败", exc_info=True)
-
-
 class ContextMetricsMiddleware(AgentMiddleware):
-    """Record context fill level on each model call (after SessionClock patches)."""
+    """Record context fill level immediately before model invoke (final ModelRequest)."""
 
     def _record(self, request: ModelRequest) -> None:
         if not ModelConfig.context_display_enabled:
             return
-        snapshot = build_context_snapshot(list(request.messages))
-        keys = _registry_keys_for_request(request)
-        if not keys:
-            logger.warning("[context_metrics] 无法解析 registry 键，跳过上下文快照写入")
+        session_id = _session_id_from_messages(list(request.messages))
+        if not session_id:
+            logger.warning("[context_metrics] 无法从消息解析 session_id，跳过上下文快照写入")
             return
-        for key in keys:
-            ContextMetricsRegistry.put(key, snapshot)
-        _try_emit_stream_writer(snapshot)
+        ContextMetricsRegistry.put(session_id, build_context_snapshot_from_request(request))
 
     @override
     def wrap_model_call(

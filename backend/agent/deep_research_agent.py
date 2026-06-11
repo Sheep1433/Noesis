@@ -15,7 +15,8 @@ from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.tools import build_web_search_tools
-from deepagents.backends import CompositeBackend, LocalShellBackend
+from agent.backends import create_local_shell_backend
+from deepagents.backends import CompositeBackend
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
@@ -29,8 +30,8 @@ _SKILLS_ROUTE = "/skills/"
 
 def _build_research_backend() -> CompositeBackend:
     """工作区与 Skills 分盘：默认路径写入 .agent_workspace，/skills/ 只读映射 backend/skills。"""
-    workspace_backend = LocalShellBackend(root_dir=_WORKSPACE_DIR, virtual_mode=True)
-    skills_backend = LocalShellBackend(root_dir=_SKILLS_DIR, virtual_mode=True)
+    workspace_backend = create_local_shell_backend(_WORKSPACE_DIR, virtual_mode=True)
+    skills_backend = create_local_shell_backend(_SKILLS_DIR, virtual_mode=True)
     return CompositeBackend(
         default=workspace_backend,
         routes={_SKILLS_ROUTE: skills_backend},
@@ -72,20 +73,18 @@ class DeepResearchAgent(BaseAgent):
     async def run_agent(
         self,
         query: str,
+        *,
         session_id: Optional[str] = None,
-        conversation_id: str = None,
         current_user=None,
         file_list: dict = None,
         qa_type: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
-        task_id = conversation_id if conversation_id else str(uuid.uuid4())
+        task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
-        task_context = {"cancelled": False}
-        self.running_tasks[task_id] = task_context
+        self.running_tasks[task_id] = {"cancelled": False}
 
         try:
-            thread_id = session_id if session_id else "default_thread"
-            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
+            config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
 
             backend = _build_research_backend()
             web_tools = build_web_search_tools()

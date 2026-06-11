@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from exceptions.handle import handle_exception
 from middleware.sliding_auth_middleware import SlidingAuthMiddleware
 from config.env import AppConfig
+from config.checkpointer import close_checkpointer, init_checkpointer
 from config.get_db import init_create_table
 from config.database import async_engine
 from utils.log_util import logger
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     logger.info(f'⏰️ {AppConfig.app_name}开始启动')
     sync_langfuse_env_from_app_config()
     await init_create_table()
+    await init_checkpointer()
     # 初始化 Qdrant 连接
     await init_qdrant_client()
     await ensure_default_kb_collections()
@@ -32,6 +34,7 @@ async def lifespan(app: FastAPI):
     yield
     # 关闭 Qdrant 连接
     await close_qdrant_client()
+    await close_checkpointer()
     # 关闭数据库连接池（等待现有连接完成，避免 CancelledError）
     logger.info("正在关闭数据库连接池...")
     await async_engine.dispose()

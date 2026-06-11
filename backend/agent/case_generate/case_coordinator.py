@@ -15,7 +15,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any, Dict, List, Optional
 
-from langgraph.checkpoint.memory import MemorySaver
+from config.checkpointer import get_checkpointer
 from langgraph.types import Command
 
 from agent.base.base_agent import DEFAULT_RECURSION_LIMIT
@@ -153,8 +153,7 @@ class CaseCoordinator:
         task_context: Dict[str, Any] = {"cancelled": False}
         self.running_tasks[thread_id] = task_context
 
-        # 初始化 checkpoint saver 和 graph
-        checkpointer = MemorySaver()
+        checkpointer = get_checkpointer()
         graph = build_test_case_graph()
         app = graph.compile(
             checkpointer=checkpointer,

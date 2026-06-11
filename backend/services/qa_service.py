@@ -425,15 +425,18 @@ class QaService:
             # 根据 qa_type 选择 agent 并执行
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
                 agent_generator = common_agent.run_agent(
-                    clean_query, session_id, None,
-                    current_user, req_obj.file_dict,
+                    clean_query,
+                    session_id=session_id,
+                    current_user=current_user,
+                    file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     db=db,
                 )
             elif req_obj.qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
                 agent_generator = fault_agent.run_agent(
-                    clean_query, session_id, None,
-                    req_obj.file_dict,
+                    clean_query,
+                    session_id=session_id,
+                    file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                 )
             elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
@@ -445,8 +448,10 @@ class QaService:
                 )
             elif req_obj.qa_type == IntentEnum.DEEP_RESEARCH_QA.value[0]:
                 agent_generator = deep_research_agent.run_agent(
-                    clean_query, session_id, None,
-                    current_user, req_obj.file_dict,
+                    clean_query,
+                    session_id=session_id,
+                    current_user=current_user,
+                    file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                 )
             else:

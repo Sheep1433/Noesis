@@ -6,38 +6,35 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from langchain.agents.middleware.types import ModelRequest
+from langchain_core.tools import tool
+
 from agent.middlewares.context_metrics import (
     DEFAULT_CONTEXT_MAX_INPUT_TOKENS,
     build_context_snapshot,
+    build_context_snapshot_from_request,
     resolve_context_max_tokens,
 )
-from langchain.agents.middleware.types import ModelRequest
-
 from agent.middlewares.context_metrics_middleware import (
     ContextMetricsMiddleware,
     ContextMetricsRegistry,
 )
 
 
-def test_resolve_context_max_tokens_prefers_context_config() -> None:
-    cfg = SimpleNamespace(context_max_input_tokens=64000, summarization_max_input_tokens=8000)
+def test_resolve_context_max_tokens_from_config() -> None:
+    cfg = SimpleNamespace(context_max_input_tokens=64000)
     with patch("agent.middlewares.context_metrics.ModelConfig", cfg):
         assert resolve_context_max_tokens() == 64000
 
 
 def test_resolve_context_max_tokens_default_when_unset() -> None:
-    cfg = SimpleNamespace(context_max_input_tokens=0, summarization_max_input_tokens=0)
-    mock_model = MagicMock()
-    mock_model.profile = None
-    with (
-        patch("agent.middlewares.context_metrics.ModelConfig", cfg),
-        patch("agent.middlewares.context_metrics.get_llm", return_value=mock_model),
-    ):
+    cfg = SimpleNamespace(context_max_input_tokens=0)
+    with patch("agent.middlewares.context_metrics.ModelConfig", cfg):
         assert resolve_context_max_tokens() == DEFAULT_CONTEXT_MAX_INPUT_TOKENS
 
 
 def test_build_context_snapshot_percentage() -> None:
-    cfg = SimpleNamespace(context_max_input_tokens=1000, summarization_max_input_tokens=0)
+    cfg = SimpleNamespace(context_max_input_tokens=1000)
     messages = [SystemMessage(content="x" * 4000), HumanMessage(content="y" * 4000)]
     with patch("agent.middlewares.context_metrics.ModelConfig", cfg):
         snap = build_context_snapshot(messages)
@@ -46,25 +43,53 @@ def test_build_context_snapshot_percentage() -> None:
     assert 0 <= snap["used_percentage"] <= 100
 
 
+def test_build_context_snapshot_from_request_includes_system_and_tools() -> None:
+    @tool
+    def demo_search(query: str) -> str:
+        """Search the knowledge base for relevant documents."""
+        return query
+
+    model = MagicMock()
+    model.get_num_tokens.return_value = 900
+    cfg = SimpleNamespace(context_max_input_tokens=128000)
+    request = ModelRequest(
+        model=model,
+        system_message=SystemMessage(content="system prompt " * 50),
+        messages=[HumanMessage(content="你好")],
+        tools=[demo_search],
+        runtime=MagicMock(),
+    )
+    with patch("agent.middlewares.context_metrics.ModelConfig", cfg):
+        snap = build_context_snapshot_from_request(request)
+    assert snap["current_tokens"] == 900
+    model.get_num_tokens.assert_called_once()
+    payload = model.get_num_tokens.call_args[0][0]
+    assert "system prompt" in payload
+    assert "demo_search" in payload
+
+
 def test_context_metrics_middleware_records_registry() -> None:
     cfg = SimpleNamespace(context_display_enabled=True)
     mw = ContextMetricsMiddleware()
-    runtime = MagicMock()
-    runtime.context = {"thread_id": "sess-ctx-1"}
+    model = MagicMock()
+    model.get_num_tokens.return_value = 512
     request = ModelRequest(
-        model=MagicMock(),
+        model=model,
+        system_message=SystemMessage(content="noesis system"),
         messages=[
             HumanMessage(
                 content="hello world",
                 additional_kwargs={"noesis_attachments": {"session_id": "sess-ctx-1"}},
             ),
         ],
-        runtime=runtime,
+        tools=[],
+        runtime=MagicMock(),
     )
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
         mw.wrap_model_call(request, lambda req: MagicMock())
     snap = ContextMetricsRegistry.peek("sess-ctx-1")
     assert snap is not None
+    assert snap["current_tokens"] == 512
     assert snap["max_tokens"] > 0
     ContextMetricsRegistry.clear("sess-ctx-1")
 
@@ -72,12 +97,10 @@ def test_context_metrics_middleware_records_registry() -> None:
 def test_context_metrics_middleware_skips_when_display_disabled() -> None:
     cfg = SimpleNamespace(context_display_enabled=False)
     mw = ContextMetricsMiddleware()
-    runtime = MagicMock()
-    runtime.context = {"thread_id": "sess-ctx-2"}
     request = ModelRequest(
         model=MagicMock(),
         messages=[HumanMessage(content="hello")],
-        runtime=runtime,
+        runtime=MagicMock(),
     )
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
         mw.wrap_model_call(request, lambda req: MagicMock())

@@ -775,7 +775,7 @@ class ChatService:
             db: AsyncSession = None
     ) -> Optional[Dict[str, Any]]:
         """
-        从数据库加载会话及其消息（用于 InMemorySaver 初始化）
+        从数据库加载会话及其消息
 
         :param session_id: 会话 ID
         :param db: 数据库会话

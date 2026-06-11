@@ -146,7 +146,8 @@ curl -s "https://api.openalex.org/works?search=YOUR_KEYWORDS&per_page=10" | head
 | 关键词搜索 | `web_search`（Tavily 优先，无 Key 回退 DuckDuckGo） |
 | 网页正文 | `web_fetch`（Tavily extract 优先，无 Key 回退本地 HTTP）；复杂/反爬页用 `/skills/baoyu-url-to-markdown` |
 | 文件读写 | `read_file` / `write_file` / `edit_file`，路径以 `/research/` 或 `/skills/` 开头 |
-| 公开 API | `execute` + `curl`（OpenAlex 等） |
+| 公开 API | `execute` + `curl`（OpenAlex 等；arXiv 须用 `https://` 或 `curl -sSL`） |
+| GitHub 检索 | `execute` + `gh`（如 `gh search repos <query> --limit 10 --json name,url`） |
 | JSON 处理 | `execute` + Python 或写入后编辑 |
 | 质量评分 | `execute`：`python3 /skills/deep-research-v2/scripts/quality-score.py`（可选） |
 

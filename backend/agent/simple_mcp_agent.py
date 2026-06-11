@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import uuid
 from typing import AsyncGenerator, Optional
 
 from langchain_core.messages import HumanMessage
@@ -25,13 +26,14 @@ class SimpleMCPAgent(BaseAgent):
     async def run_agent(
         self,
         query: str,
+        *,
         session_id: Optional[str] = None,
-        conversation_id: str = None,
         file_list: dict = None,
     ) -> AsyncGenerator[dict, None]:
         """运行 Agent 并返回流式响应"""
-        thread_id = session_id if session_id else "default"
-        self.running_tasks[thread_id] = {"cancelled": False}
+        task_id = session_id or str(uuid.uuid4())
+        message_id = f"msg_{uuid.uuid4().hex[:16]}"
+        self.running_tasks[task_id] = {"cancelled": False}
 
         try:
             # 连接 MCP 服务器
@@ -58,7 +60,7 @@ class SimpleMCPAgent(BaseAgent):
                 return
 
             config = {
-                "configurable": {"thread_id": thread_id},
+                "configurable": {"thread_id": task_id},
                 "recursion_limit": DEFAULT_RECURSION_LIMIT
             }
 
@@ -76,19 +78,21 @@ class SimpleMCPAgent(BaseAgent):
             }
 
             async for chunk in self._stream_agent_response(
-                agent, stream_args, thread_id, thread_id
+                agent, stream_args, task_id, message_id
             ):
                 yield chunk
 
         except asyncio.CancelledError:
-            logger.info(f"SimpleMCPAgent CancelledError thread_id={thread_id}")
+            logger.info(
+                f"SimpleMCPAgent CancelledError task_id={task_id} session_id={session_id}"
+            )
             yield {"type": "abort", "content": "", "tool_call": None, "reasoning": None, "finish_reason": "stop", "usage": {}}
         except Exception as e:
             logger.exception(f"SimpleMCPAgent error: {e}")
             yield {"type": "abort", "content": "", "tool_call": None, "reasoning": None, "finish_reason": "error", "usage": {}}
         finally:
-            if thread_id in self.running_tasks:
-                del self.running_tasks[thread_id]
+            if task_id in self.running_tasks:
+                del self.running_tasks[task_id]
 
 
 # 独立运行测试

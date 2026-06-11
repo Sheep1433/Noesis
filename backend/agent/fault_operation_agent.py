@@ -5,6 +5,7 @@
 
 import asyncio
 import os
+import uuid
 from typing import Any, AsyncGenerator, Optional
 
 from langchain_core.messages import HumanMessage
@@ -13,6 +14,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
+from agent.backends import create_local_shell_backend
 from deepagents.backends import LocalShellBackend
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
@@ -28,7 +30,7 @@ _FAULT_WORKSPACE_DIR = os.path.join(_BACKEND_DIR, ".agent_workspace", "fault_ops
 def _build_fault_backend() -> LocalShellBackend:
     """本地工作区：存放排查笔记、临时脚本等；并满足 SubAgentMiddleware 对 backend 的要求。"""
     os.makedirs(_FAULT_WORKSPACE_DIR, exist_ok=True)
-    return LocalShellBackend(root_dir=_FAULT_WORKSPACE_DIR, virtual_mode=True)
+    return create_local_shell_backend(_FAULT_WORKSPACE_DIR, virtual_mode=True)
 
 
 def _build_fault_operation_subagents(
@@ -74,18 +76,19 @@ class FaultOperationAgent(BaseAgent):
     async def run_agent(
         self,
         query: str,
+        *,
         session_id: Optional[str] = None,
-        conversation_id: str = None,
         file_list: dict = None,
         qa_type: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """运行 Agent 并返回流式响应"""
-        thread_id = session_id if session_id else "default"
-        self.running_tasks[thread_id] = {"cancelled": False}
+        task_id = session_id or str(uuid.uuid4())
+        message_id = f"msg_{uuid.uuid4().hex[:16]}"
+        self.running_tasks[task_id] = {"cancelled": False}
 
         try:
             config = {
-                "configurable": {"thread_id": thread_id},
+                "configurable": {"thread_id": task_id},
                 "recursion_limit": DEFAULT_RECURSION_LIMIT,
             }
 
@@ -109,16 +112,18 @@ class FaultOperationAgent(BaseAgent):
             }
 
             async for chunk in self._stream_agent_response(
-                agent, stream_args, thread_id, thread_id
+                agent, stream_args, task_id, message_id
             ):
                 yield chunk
 
         except asyncio.CancelledError:
-            logger.info(f"FaultOperationAgent CancelledError thread_id={thread_id}")
+            logger.info(
+                f"FaultOperationAgent CancelledError task_id={task_id} session_id={session_id}"
+            )
             yield {"type": "abort", "content": "", "tool_call": None, "reasoning": None, "finish_reason": "stop", "usage": {}}
         except Exception as e:
             logger.exception(f"FaultAgent error: {e}")
             yield {"type": "abort", "content": "", "tool_call": None, "reasoning": None, "finish_reason": "error", "usage": {}}
         finally:
-            if thread_id in self.running_tasks:
-                del self.running_tasks[thread_id]
+            if task_id in self.running_tasks:
+                del self.running_tasks[task_id]

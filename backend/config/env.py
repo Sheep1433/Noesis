@@ -207,6 +207,11 @@ class WebToolsSettings:
 
 
 @dataclass(frozen=True)
+class CheckpointSettings:
+    db_path: str
+
+
+@dataclass(frozen=True)
 class ChatAttachmentSettings:
     enabled: bool
     dir: str
@@ -454,6 +459,13 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
     )
 
 
+def _build_checkpoint(yaml_cfg: AppYamlConfig) -> CheckpointSettings:
+    cp = yaml_cfg.checkpoint
+    return CheckpointSettings(
+        db_path=_legacy_env("LANGGRAPH_CHECKPOINT_DB_PATH", cp.db_path),
+    )
+
+
 def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
     ca = yaml_cfg.chat_attachment
     return ChatAttachmentSettings(
@@ -530,6 +542,10 @@ class GetConfig:
         return _build_web_tools(self._secrets, self._yaml)
 
     @lru_cache
+    def get_checkpoint_config(self) -> CheckpointSettings:
+        return _build_checkpoint(self._yaml)
+
+    @lru_cache
     def get_chat_attachment_config(self) -> ChatAttachmentSettings:
         return _build_chat_attachment(self._yaml)
 
@@ -566,4 +582,5 @@ QdrantConfig = get_config.get_qdrant_config()
 StreamConfig = get_config.get_stream_config()
 LangfuseConfig = get_config.get_langfuse_config()
 WebToolsConfig = get_config.get_web_tools_config()
+CheckpointConfig = get_config.get_checkpoint_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()

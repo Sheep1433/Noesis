@@ -16,7 +16,7 @@ _SKILLS = """<skills>
 Skills 位于 /skills/，按需渐进加载（先读主文件，再按需读引用资源）。
 复杂调研优先匹配 deep-research-v2 等专用 skill。
 行业/竞品/政策类多源检索：优先 web_search 发现 URL，再用 web_fetch 或 /skills/baoyu-url-to-markdown 获取正文。
-学术论文检索可继续使用 execute + OpenAlex API。
+学术论文检索可继续使用 execute + OpenAlex API；GitHub 仓库检索可用 execute + gh（如 gh search repos）。
 </skills>"""
 
 _SUBAGENT_TYPES = """<subagent_types>
