@@ -249,6 +249,7 @@ class LangGraphSseBridge:
             "message_id": self.assistant_message_id,
             "usage": usage,
         }))
+        self._maybe_emit_context_update(ctx, out)
 
     def _accumulate_usage(
         self,
@@ -378,14 +379,29 @@ class LangGraphSseBridge:
             logger.debug("on_chat_model_start 上下文估算失败", exc_info=True)
             return {}
 
-    def _emit_context_update_from_registry(self, item: Dict[str, Any], ctx: Dict[str, Any], out: List[str]) -> None:
-        snapshot = ContextMetricsRegistry.pop(self.session_id)
-        if not snapshot:
-            snapshot = ContextMetricsRegistry.peek(self.session_id)
-        if not snapshot:
-            snapshot = self._snapshot_from_chat_model_start(item)
+    def _resolve_context_snapshot(self, item: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
+        for key in (self.session_id, "default"):
+            if not key:
+                continue
+            snapshot = ContextMetricsRegistry.peek(key)
+            if snapshot:
+                return snapshot
+        if item is not None:
+            return self._snapshot_from_chat_model_start(item)
+        return {}
+
+    def _maybe_emit_context_update(
+        self,
+        ctx: Dict[str, Any],
+        out: List[str],
+        item: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        snapshot = self._resolve_context_snapshot(item)
         if snapshot:
             self._emit_context_update(snapshot, ctx, out)
+
+    def _emit_context_update_from_registry(self, item: Dict[str, Any], ctx: Dict[str, Any], out: List[str]) -> None:
+        self._maybe_emit_context_update(ctx, out, item)
 
     def _emit_reasoning_delta(
         self,
@@ -683,6 +699,8 @@ class LangGraphSseBridge:
                 usage_meta = output.get("usage_metadata")
             if usage_meta:
                 self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out)
+            else:
+                self._maybe_emit_context_update(ctx, out, item)
             return
 
         if lc_kind == "on_tool_start":

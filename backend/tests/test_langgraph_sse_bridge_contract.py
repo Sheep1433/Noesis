@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -77,6 +78,34 @@ def test_message_start_with_langfuse_hint() -> None:
     objs = _data_json_objects(text)
     assert objs[0]["type"] == "message-start"
     assert objs[0]["langfuse_session_id"] == "sess-lf"
+
+
+def test_context_update_emitted_with_usage_update() -> None:
+    from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
+
+    bridge = LangGraphSseBridge("sess-usage-ctx")
+    builder = AssistantMessageBuilder(session_id="sess-usage-ctx", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    ContextMetricsRegistry.put(
+        "sess-usage-ctx",
+        {"current_tokens": 1200, "max_tokens": 128000, "used_percentage": 1},
+    )
+    parts: List[str] = []
+    parts.extend(bridge.process_item({"type": "text-delta", "text_delta": "hi"}, builder, ctx))
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": MagicMock(usage_metadata={"input_tokens": 10, "output_tokens": 5})},
+            },
+            builder,
+            ctx,
+        )
+    )
+    blob = "".join(parts)
+    assert "event: usage-update\n" in blob
+    assert "event: context-update\n" in blob
+    ContextMetricsRegistry.clear("sess-usage-ctx")
 
 
 def test_context_update_event_shape() -> None:

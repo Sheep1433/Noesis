@@ -65,6 +65,31 @@ def _thread_id_from_runtime(runtime: Runtime) -> str:
     return ""
 
 
+def _session_id_from_messages(messages: list) -> str:
+    """从 HumanMessage.noesis_attachments 解析会话 id（与 common_react_agent 注入一致）。"""
+    for msg in reversed(messages):
+        kwargs = getattr(msg, "additional_kwargs", None) or {}
+        if not isinstance(kwargs, dict):
+            continue
+        att = kwargs.get("noesis_attachments") or {}
+        if isinstance(att, dict):
+            sid = att.get("session_id")
+            if sid:
+                return str(sid)
+    return ""
+
+
+def _registry_keys_for_request(request: ModelRequest) -> list[str]:
+    keys: list[str] = []
+    sid = _session_id_from_messages(list(request.messages))
+    if sid:
+        keys.append(sid)
+    tid = _thread_id_from_runtime(request.runtime)
+    if tid and tid not in keys:
+        keys.append(tid)
+    return keys
+
+
 def _try_emit_stream_writer(snapshot: dict[str, int]) -> None:
     try:
         writer = get_stream_writer()
@@ -83,8 +108,12 @@ class ContextMetricsMiddleware(AgentMiddleware):
         if not ModelConfig.context_display_enabled:
             return
         snapshot = build_context_snapshot(list(request.messages))
-        thread_id = _thread_id_from_runtime(request.runtime)
-        ContextMetricsRegistry.put(thread_id, snapshot)
+        keys = _registry_keys_for_request(request)
+        if not keys:
+            logger.warning("[context_metrics] 无法解析 registry 键，跳过上下文快照写入")
+            return
+        for key in keys:
+            ContextMetricsRegistry.put(key, snapshot)
         _try_emit_stream_writer(snapshot)
 
     @override

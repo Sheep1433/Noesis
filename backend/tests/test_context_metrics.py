@@ -53,7 +53,12 @@ def test_context_metrics_middleware_records_registry() -> None:
     runtime.context = {"thread_id": "sess-ctx-1"}
     request = ModelRequest(
         model=MagicMock(),
-        messages=[HumanMessage(content="hello world")],
+        messages=[
+            HumanMessage(
+                content="hello world",
+                additional_kwargs={"noesis_attachments": {"session_id": "sess-ctx-1"}},
+            ),
+        ],
         runtime=runtime,
     )
     with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
