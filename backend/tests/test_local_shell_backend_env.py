@@ -35,19 +35,23 @@ def test_build_shell_execute_env_strips_secrets_keeps_gh_token(monkeypatch: pyte
     assert "/opt/homebrew/bin" in env["PATH"].split(":")
 
 
-def test_create_local_shell_backend_can_resolve_gh() -> None:
+def test_create_local_shell_backend_can_resolve_gh(tmp_path) -> None:
     if shutil.which("gh") is None:
         pytest.skip("gh not installed on host")
 
-    backend = create_local_shell_backend(".agent_workspace", virtual_mode=True)
+    workspace = tmp_path / "agent_workspace"
+    workspace.mkdir()
+    backend = create_local_shell_backend(workspace, virtual_mode=True)
     result = backend.execute("gh --version")
 
     assert result.exit_code == 0
     assert "gh version" in result.output
 
 
-def test_create_local_shell_backend_https_curl_returns_body() -> None:
-    backend = create_local_shell_backend(".agent_workspace", virtual_mode=True)
+def test_create_local_shell_backend_https_curl_returns_body(tmp_path) -> None:
+    workspace = tmp_path / "agent_workspace"
+    workspace.mkdir()
+    backend = create_local_shell_backend(workspace, virtual_mode=True)
     result = backend.execute(
         'curl -sS "https://export.arxiv.org/api/query?search_query=all:AI&max_results=1" | head -c 200'
     )

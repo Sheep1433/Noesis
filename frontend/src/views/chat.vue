@@ -3,7 +3,6 @@ import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { UAParser } from 'ua-parser-js'
-import * as GlobalAPI from '@/api'
 import { ensureSession, getSession, stopChat } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
@@ -104,6 +103,7 @@ function handleModalClose(value) {
 
 // 新建对话
 function newChat() {
+  sessionContext.value = null
   backgroundColorVariable.value = '#ffffff'
 
   if (showDefaultPage.value) {
@@ -213,16 +213,10 @@ const onRecycleQa = async (index: number) => {
   scrollToBottom()
 }
 
-// 赞 结果反馈
-const onPraiseFeadBack = async (index: number) => {
-  const item = conversationItems.value[index]
-  const res = await GlobalAPI.fead_back(item.chat_id, 'like')
-  if (res.ok) {
-    window.$ModalMessage.destroyAll()
-    window.$ModalMessage.success('感谢反馈', {
-      duration: 1500,
-    })
-  }
+// 赞（后端反馈接口未接入，仅本地提示）
+const onPraiseFeadBack = (_index: number) => {
+  window.$ModalMessage.destroyAll()
+  window.$ModalMessage.success('感谢反馈', { duration: 1500 })
 }
 
 // 开始输出时隐藏加载提示
@@ -231,16 +225,10 @@ const onBeginRead = async (index: number) => {
   contentLoadingStates.value[currentRenderIndex.value - 1] = false
 }
 
-// 踩 结果反馈
-const onBelittleFeedback = async (index: number) => {
-  const item = conversationItems.value[index]
-  const res = await GlobalAPI.fead_back(item.chat_id, 'dislike')
-  if (res.ok) {
-    window.$ModalMessage.destroyAll()
-    window.$ModalMessage.success('感谢反馈', {
-      duration: 1500,
-    })
-  }
+// 踩（后端反馈接口未接入，仅本地提示）
+const onBelittleFeedback = (_index: number) => {
+  window.$ModalMessage.destroyAll()
+  window.$ModalMessage.success('感谢反馈', { duration: 1500 })
 }
 
 // 侧边栏对话历史

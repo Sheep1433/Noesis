@@ -19,6 +19,7 @@ from agent.middlewares.dangling_tool_call_middleware import DanglingToolCallMidd
 
 def test_runtime_stack_includes_guards_when_enabled() -> None:
     cfg = SimpleNamespace(
+        context_display_enabled=False,
         dangling_tool_call_repair_enabled=True,
         loop_detection_enabled=True,
         loop_detection_warn_threshold=3,
@@ -44,6 +45,7 @@ def test_runtime_stack_includes_guards_when_enabled() -> None:
 
 def test_runtime_stack_respects_disable_flags() -> None:
     cfg = SimpleNamespace(
+        context_display_enabled=False,
         dangling_tool_call_repair_enabled=False,
         loop_detection_enabled=False,
     )

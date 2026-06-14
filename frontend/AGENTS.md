@@ -24,7 +24,7 @@ pnpm stylelint      # 样式检查
 
 ### 路由
 
-- `src/router/index.ts` — 路由模式由 `isMockDevelopment` 切换 hash/history
+- `src/router/index.ts` — 路由模式由 `VITE_ROUTER_MODE=hash` 切换 hash/history
 - `src/router/routes.ts`、`child-routes.ts`、`permission.ts`
 
 ### 状态管理（Pinia）
@@ -41,8 +41,8 @@ pnpm stylelint      # 样式检查
 
 ### API 层
 
-- `src/api/client.ts`、`chat.ts`、`knowledgeBase.ts`、`skills.ts`
-- 原生 Fetch + `userStore.getUserToken()` 鉴权
+- `src/api/user.ts`（登录、历史记录）、`chat.ts`、`knowledgeBase.ts`、`skills.ts`
+- 统一经 `src/utils/authHttp.ts`（`authFetch` / `getAuthHeaders` / `parseAuthJson`）鉴权
 
 ### 主要页面
 
@@ -61,7 +61,8 @@ pnpm stylelint      # 样式检查
 
 ### 配置
 
-`src/config/env.ts` — `isMockDevelopment`：`true` 用模拟数据，`false` 调真实后端。
+- `src/config/env.ts` — `langfuseUiOrigin` 等运行时配置
+- `.env.template` — 本地环境变量模板（复制为 `.env.local`）
 
 ## 技术要点
 

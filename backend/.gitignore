@@ -71,3 +71,4 @@ Thumbs.db
 config.yaml
 config.yaml.bak
 config.prod.yaml
+data/

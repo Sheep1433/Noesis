@@ -1,4 +1,5 @@
-import * as GlobalAPI from '@/api'
+import { query_user_qa_record } from '@/api'
+import { getSessionMessages } from '@/api/chat'
 import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
 const userStore = useUserStore()
@@ -130,7 +131,7 @@ export const fetchConversationHistory = async function fetchConversationHistory(
   searchText: string,
 ) {
   try {
-    const res = await GlobalAPI.query_user_qa_record(1, 999999, searchText, row?.chat_id)
+    const res = await query_user_qa_record(1, 999999, searchText, row?.chat_id)
     if (res.ok) {
       const data = await res.json()
       if (data && Array.isArray(data.data?.records)) {
@@ -172,91 +173,84 @@ async function loadSessionMessages(
   currentRenderIndex: Ref<number>,
 ) {
   try {
-    const res = await GlobalAPI.get_session_messages(sessionId)
-    if (res.ok) {
-      const data = await res.json()
-      if (data?.data?.messages) {
-        const messages = data.data.messages
-
-        // 将消息历史转换为 conversationItems 格式
-        let lastUserQaType = 'COMMON_QA'
-        const items = messages.map((msg: any, index: number) => {
-          // 根据 role 决定是用户消息还是助手消息
-          if (msg.role === 'user') {
-            const userQaType = msg.extra?.qa_type || msg.msg_metadata?.qa_type || 'COMMON_QA'
-            lastUserQaType = userQaType
-            const fileDict = msg.extra?.file_dict || msg.msg_metadata?.file_dict || {}
-            const fileKey = Object.entries(fileDict).map(([fileName, value]) => {
-              const strVal = String(value ?? '')
-              const refPrefix = '__CHAT_ATTACHMENT__:'
-              const isChatRef = strVal.startsWith(refPrefix)
-              const attachmentId = isChatRef ? strVal.slice(refPrefix.length) : ''
-              const isImage = /\.(?:png|jpe?g|gif|webp)$/i.test(fileName)
-              return {
-                file_name: fileName,
-                attachment_id: attachmentId,
-                kind: isImage ? 'image' : 'document',
-                source_file_key: fileName,
-                parse_file_key: strVal,
-                file_size: '',
-              }
-            })
+    const { messages } = await getSessionMessages(sessionId, { limit: 500 })
+    if (messages?.length) {
+      // 将消息历史转换为 conversationItems 格式
+      let lastUserQaType = 'COMMON_QA'
+      const items = messages.map((msg: any, index: number) => {
+        // 根据 role 决定是用户消息还是助手消息
+        if (msg.role === 'user') {
+          const userQaType = msg.extra?.qa_type || msg.msg_metadata?.qa_type || 'COMMON_QA'
+          lastUserQaType = userQaType
+          const fileDict = msg.extra?.file_dict || msg.msg_metadata?.file_dict || {}
+          const fileKey = Object.entries(fileDict).map(([fileName, value]) => {
+            const strVal = String(value ?? '')
+            const refPrefix = '__CHAT_ATTACHMENT__:'
+            const isChatRef = strVal.startsWith(refPrefix)
+            const attachmentId = isChatRef ? strVal.slice(refPrefix.length) : ''
+            const isImage = /\.(?:png|jpe?g|gif|webp)$/i.test(fileName)
             return {
-              uuid: msg.id || `user-${index}`,
-              chat_id: sessionId,
-              qa_type: userQaType,
-              question: extractContent(msg.content, msg.role),
-              file_key: fileKey,
-              role: 'user' as const,
-              reader: null,
-              parent_id: msg.parent_id,
-              message_id: msg.id,
+              file_name: fileName,
+              attachment_id: attachmentId,
+              kind: isImage ? 'image' : 'document',
+              source_file_key: fileName,
+              parse_file_key: strVal,
+              file_size: '',
             }
-          } else {
-            // assistant 消息（tool 调用结果已合并到 content.parts 中）
-            const assistantQaType = msg.extra?.qa_type || lastUserQaType || 'COMMON_QA'
-            let messageContent = normalizeApiContent(msg.content)
-            const errMsg = typeof msg.extra?.error_message === 'string' ? msg.extra.error_message : ''
-            const finishReason = msg.extra?.finish_reason
-            const partsText = messageContent.parts.map((p) => String((p as { content?: string }).content ?? '')).join('\n')
-            const noticeMissing = finishReason === 'error'
-              && errMsg
-              && !partsText.includes('已达到最大处理步数')
-              && !partsText.includes('后续内容未能继续生成')
-              && !partsText.includes('后续内容未能生成')
-            if (noticeMissing) {
-              const parts = appendStreamFailureNotice(messageContent.parts, errMsg)
-              messageContent = { version: 1, parts }
-            }
-            if (finishReason === 'stopped') {
-              const parts = appendUserStopNotice(messageContent.parts)
-              messageContent = { version: 1, parts }
-            }
-            const { content, reasoning } = syncLegacyFieldsFromParts(messageContent.parts)
-            return {
-              uuid: msg.id || `assistant-${index}`,
-              chat_id: sessionId,
-              qa_type: assistantQaType,
-              question: '',
-              content,
-              file_key: [],
-              role: 'assistant' as const,
-              reader: null,
-              messageContent,
-              tool_calls: extractToolCalls(msg.content),
-              reasoning,
-              msg_metadata: msg.extra,
-              parent_id: msg.parent_id,
-              message_id: msg.id,
-            }
+          })
+          return {
+            uuid: msg.id || `user-${index}`,
+            chat_id: sessionId,
+            qa_type: userQaType,
+            question: extractContent(msg.content, msg.role),
+            file_key: fileKey,
+            role: 'user' as const,
+            reader: null,
+            parent_id: msg.parent_id,
+            message_id: msg.id,
           }
-        })
+        }
 
-        conversationItems.value.splice(0, conversationItems.value.length, ...items)
-        currentRenderIndex.value = items.length > 0 ? items.length - 1 : 0
-      }
-    } else {
-      // debug: failed to load session messages
+        // assistant 消息（tool 调用结果已合并到 content.parts 中）
+        const assistantQaType = msg.extra?.qa_type || lastUserQaType || 'COMMON_QA'
+        let messageContent = normalizeApiContent(msg.content)
+        const errMsg = typeof msg.extra?.error_message === 'string' ? msg.extra.error_message : ''
+        const finishReason = msg.extra?.finish_reason
+        const partsText = messageContent.parts.map((p) => String((p as { content?: string }).content ?? '')).join('\n')
+        const noticeMissing = finishReason === 'error'
+          && errMsg
+          && !partsText.includes('已达到最大处理步数')
+          && !partsText.includes('后续内容未能继续生成')
+          && !partsText.includes('后续内容未能生成')
+        if (noticeMissing) {
+          const parts = appendStreamFailureNotice(messageContent.parts, errMsg)
+          messageContent = { version: 1, parts }
+        }
+        if (finishReason === 'stopped') {
+          const parts = appendUserStopNotice(messageContent.parts)
+          messageContent = { version: 1, parts }
+        }
+        const { content, reasoning } = syncLegacyFieldsFromParts(messageContent.parts)
+        return {
+          uuid: msg.id || `assistant-${index}`,
+          chat_id: sessionId,
+          qa_type: assistantQaType,
+          question: '',
+          content,
+          file_key: [],
+          role: 'assistant' as const,
+          reader: null,
+          messageContent,
+          tool_calls: extractToolCalls(msg.content),
+          reasoning,
+          msg_metadata: msg.extra,
+          parent_id: msg.parent_id,
+          message_id: msg.id,
+        }
+      })
+
+      conversationItems.value.splice(0, conversationItems.value.length, ...items)
+      currentRenderIndex.value = items.length > 0 ? items.length - 1 : 0
     }
   } catch (error) {
     // debug: error loading session messages

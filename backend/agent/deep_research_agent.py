@@ -9,6 +9,7 @@ import os
 import uuid
 from typing import AsyncGenerator, Optional
 
+from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage
 
 from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
@@ -95,6 +96,7 @@ class DeepResearchAgent(BaseAgent):
                 backend=backend,
                 subagents=_build_deep_research_subagents(backend, web_tools),
                 extra_middleware=[
+                    TodoListMiddleware(),
                     SkillsMiddleware(backend=backend, sources=[_SKILLS_ROUTE]),
                 ],
             )

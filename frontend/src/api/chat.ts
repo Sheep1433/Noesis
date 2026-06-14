@@ -10,7 +10,7 @@ import {
   parseAuthJson,
   STOP_TOKEN_HEADER,
 } from '@/utils/authHttp'
-import { downloadFile } from '@/utils/request'
+import { downloadFile } from '@/utils/download'
 
 // ============================================================================
 // Types

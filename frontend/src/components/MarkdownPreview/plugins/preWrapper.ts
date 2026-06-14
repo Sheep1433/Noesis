@@ -1,60 +1,46 @@
 import type MarkdownIt from 'markdown-it'
-import PrismJsComponents from 'prismjs/components'
 
 export interface Options {
   codeCopyButtonTitle: string
   hasSingleTheme: boolean
 }
 
-// 使用正则表达式匹配字符串的第一个字符，并将其转换为大写
-function capitalizeFirstLetter(str) {
+const LANG_LABELS: Record<string, string> = {
+  bash: 'Bash',
+  c: 'C',
+  cpp: 'C++',
+  css: 'CSS',
+  go: 'Go',
+  html: 'HTML',
+  java: 'Java',
+  javascript: 'JavaScript',
+  js: 'JavaScript',
+  json: 'JSON',
+  markdown: 'Markdown',
+  md: 'Markdown',
+  python: 'Python',
+  py: 'Python',
+  rust: 'Rust',
+  scss: 'SCSS',
+  sh: 'Shell',
+  shell: 'Shell',
+  sql: 'SQL',
+  ts: 'TypeScript',
+  tsx: 'TSX',
+  typescript: 'TypeScript',
+  vue: 'Vue',
+  xml: 'XML',
+  yaml: 'YAML',
+  yml: 'YAML',
+}
+
+function capitalizeFirstLetter(str: string) {
   return str.replace(/^\w/, (match) => match.toUpperCase())
 }
 
-const getBaseLanguageName = (nameOrAlias, components = PrismJsComponents) => {
-  const _nameOrAlias = nameOrAlias.toLowerCase()
-
-  const allLanguages = components.languages
-  const allLanguageKeys = Object.keys(allLanguages)
-
-  const lang = {
-    value: capitalizeFirstLetter(nameOrAlias || 'markdown'),
-  }
-
-  for (let index = 0; index < allLanguageKeys.length; index++) {
-    const languageKey = allLanguageKeys[index]
-    const languageItem = allLanguages[languageKey]
-
-    const { title, alias, aliasTitles } = languageItem
-
-    if (languageKey === _nameOrAlias) {
-      lang.value = title
-      break
-    }
-
-    if (!alias) {
-      continue
-    }
-
-    if (Array.isArray(alias)) {
-      if (aliasTitles && aliasTitles[_nameOrAlias]) {
-        lang.value = aliasTitles[_nameOrAlias]
-        break
-      }
-
-      if (alias.includes(_nameOrAlias)) {
-        lang.value = title
-        break
-      }
-    } else {
-      if (alias === _nameOrAlias) {
-        lang.value = title
-        break
-      }
-    }
-  }
-
-  return lang.value
+function getBaseLanguageName(lang: string) {
+  const key = lang.toLowerCase()
+  return LANG_LABELS[key] || capitalizeFirstLetter(lang || 'markdown')
 }
 
 export function preWrapperPlugin(md: MarkdownIt, options: Options) {
@@ -63,10 +49,9 @@ export function preWrapperPlugin(md: MarkdownIt, options: Options) {
     const [tokens, idx] = args
     const token = tokens[idx]
 
-    // remove title from info
     token.info = token.info.replace(/\[.*\]/, '')
 
-    const active = / active( |$)/.test(token.info) ? ' active' : ''
+    const active = / active(?: |$)/.test(token.info) ? ' active' : ''
     token.info = token.info.replace(/ active$/, '').replace(/ active /, ' ')
 
     const lang = extractLang(token.info)
@@ -106,9 +91,9 @@ export function extractTitle(info: string, html = false) {
 function extractLang(info: string) {
   return info
     .trim()
-    .replace(/=(\d*)/, '')
-    .replace(/:(no-)?line-numbers(\{| |$|=\d*).*/, '')
-    .replace(/(-vue|\{| ).*$/, '')
+    .replace(/=\d*/, '')
+    .replace(/:(?:no-)?line-numbers(?:\{| |$|=?\d*).*/, '')
+    .replace(/(?:-vue|\{| ).*$/, '')
     .replace(/^vue-html$/, 'template')
     .replace(/^ansi$/, '')
 }

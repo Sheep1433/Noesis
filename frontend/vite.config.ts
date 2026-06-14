@@ -15,34 +15,12 @@ import raw from 'vite-raw-plugin'
 
 export default defineConfig(({ mode }) => {
   const devProxy = {
-    '/spark': {
-      target: 'https://spark-api-open.xf-yun.com',
-      changeOrigin: true,
-      ws: true,
-      rewrite: (path) => path.replace(/^\/spark/, ''),
-    },
-    '/siliconflow': {
-      target: 'https://api.siliconflow.cn',
-      changeOrigin: true,
-      ws: true,
-      rewrite: (path) => path.replace(/^\/siliconflow/, ''),
-    },
-    // 仅 REST/SSE 经 /api 转发；勿开 ws，否则部分环境下大文件 multipart 会与 WS 升级逻辑冲突
+    // REST/SSE 经 /api 转发；勿开 ws，否则部分环境下大文件 multipart 会与 WS 升级逻辑冲突
     '/api': {
       target: 'http://127.0.0.1:8089',
       changeOrigin: true,
       ws: false,
       timeout: 600_000,
-    },
-    '/sse': {
-      target: 'http://127.0.0.1:3300',
-      ws: true,
-      rewrite: (path) => path.replace(/^\/sse/, 'sse'),
-    },
-    '/messages': {
-      target: 'http://127.0.0.1:3300',
-      ws: true,
-      rewrite: (path) => path.replace(/^\/messages/, 'messages'),
     },
   }
 
@@ -127,7 +105,6 @@ export default defineConfig(({ mode }) => {
         dirs: [
           './src/hooks',
           './src/store/business',
-          './src/store/transform',
           './src/store/hooks/**',
         ],
         dts: './auto-imports.d.ts',

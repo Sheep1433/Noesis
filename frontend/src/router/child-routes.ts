@@ -1,5 +1,3 @@
-const LayoutDefault = () => import('@/components/Layout/default.vue')
-
 const childrenRoutes: Array<RouteRecordRaw> = [
   {
     path: 'chat',
