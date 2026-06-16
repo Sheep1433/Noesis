@@ -8,7 +8,7 @@ FastAPI + LangGraph 后端：多场景 Agent 问答、知识库 RAG、SSE 流式
 - **Agent**：LangGraph（`create_noesis_agent` 统一工厂）
 - **数据库**：MySQL（SQLAlchemy 异步）
 - **向量库**：Qdrant
-- **LLM**：DashScope（Qwen）/ OpenAI 兼容接口
+- **LLM**：DashScope（Qwen）/ OpenAI 兼容接口 / OpenCode Zen
 - **认证**：JWT
 
 ## 项目结构

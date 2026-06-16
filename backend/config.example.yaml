@@ -36,10 +36,15 @@ model:
   name: qwen-plus
   temperature: 0.75
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # OpenCode Zen 免费模型示例（.env 中 MODEL_API_KEY=public）：
+  # type: opencode
+  # name: deepseek-v4-flash-free
+  # base_url: https://opencode.ai/zen/v1
   embedding_model_name: text-embedding-v4
   rerank_model_name: gte-rerank-v2
   show_thinking_process: true
-  request_timeout: 30
+  # 单次 LLM HTTP 读超时（秒）：流式为相邻 chunk 间隔上限；深度研究建议 ≥120
+  request_timeout: 120
   max_retries: 2
   generation:
     max_tokens: 32000

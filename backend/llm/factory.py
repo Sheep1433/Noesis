@@ -4,6 +4,12 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
 from config.env import ModelConfig
 
+_OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
+_OPENCODE_DEFAULT_HEADERS = {
+    "HTTP-Referer": "https://opencode.ai/",
+    "X-Title": "opencode",
+}
+
 
 def _llm_http_timeout() -> httpx.Timeout:
     """读超时 = 无响应间隔上限；连接超时单独限制避免内网挂死过久。"""
@@ -38,6 +44,15 @@ def _build_chat_model(
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
+        ),
+        "opencode": lambda: ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            base_url=model_base_url or _OPENCODE_DEFAULT_BASE_URL,
+            api_key=model_api_key,
+            timeout=timeout,
+            max_retries=max_retries,
+            default_headers=_OPENCODE_DEFAULT_HEADERS,
         ),
         "qwen": lambda: ChatQwen(
             model=model_name,

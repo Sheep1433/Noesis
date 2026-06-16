@@ -28,6 +28,7 @@ from typing_extensions import override
 
 from agent.middlewares.context_metrics import get_agent_token_counter, resolve_context_max_tokens
 from config.env import ModelConfig
+from deepagents.backends.protocol import BackendProtocol
 from llm import get_llm
 from utils.log_util import logger
 
@@ -72,8 +73,21 @@ def _format_offload_placeholder(file_path: str, content_sample: str) -> str:
     )
 
 
-def _resolve_filesystem_backend(runtime: Runtime, state: AgentState) -> Any | None:
-    """Resolve filesystem BackendProtocol when the agent graph has filesystem support."""
+def _resolve_filesystem_backend(
+    runtime: Runtime,
+    state: AgentState,
+    *,
+    injected: BackendProtocol | None = None,
+) -> Any | None:
+    """Resolve filesystem backend for offload writes (must match ``read_file``).
+
+    Priority: factory-injected backend (same as ``FilesystemMiddleware``) →
+    runtime context → ``StateBackend`` only when no injected backend and state
+    has a ``files`` channel (pure in-memory filesystem agents).
+    """
+    if injected is not None:
+        return injected
+
     context = getattr(runtime, "context", None)
     if context is not None:
         backend = getattr(context, "backend", None)
@@ -160,8 +174,10 @@ def _offload_tool_results(
     token_counter: TokenCounter,
     runtime: Runtime,
     state: AgentState,
+    *,
+    filesystem_backend: BackendProtocol | None = None,
 ) -> tuple[dict[str, Any], list[AnyMessage]]:
-    backend = _resolve_filesystem_backend(runtime, state)
+    backend = _resolve_filesystem_backend(runtime, state, injected=filesystem_backend)
     files_update: dict[str, Any] = {}
     modified_messages: list[AnyMessage] = []
 
@@ -188,11 +204,13 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
         self,
         model,
         *,
+        filesystem_backend: BackendProtocol | None = None,
         tool_offload_threshold: int | None = None,
         max_retention_ratio: float | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(model, **kwargs)
+        self._filesystem_backend = filesystem_backend
         self.tool_offload_threshold = (
             tool_offload_threshold
             if tool_offload_threshold is not None
@@ -258,6 +276,7 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
             self.token_counter,
             runtime,
             state,
+            filesystem_backend=self._filesystem_backend,
         )
 
         current_tokens = self.token_counter(messages)
@@ -334,7 +353,10 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
         return await asyncio.to_thread(self._run_before_model, state, runtime)
 
 
-def create_summary_offload_middleware() -> SummarizationOffloadMiddleware | None:
+def create_summary_offload_middleware(
+    *,
+    filesystem_backend: BackendProtocol | None = None,
+) -> SummarizationOffloadMiddleware | None:
     if not ModelConfig.summarization_enabled:
         return None
 
@@ -351,6 +373,7 @@ def create_summary_offload_middleware() -> SummarizationOffloadMiddleware | None
         trigger = ("fraction", ModelConfig.summarization_trigger_fraction)
     return SummarizationOffloadMiddleware(
         model,
+        filesystem_backend=filesystem_backend,
         trigger=trigger,
         keep=("messages", ModelConfig.summarization_messages_to_keep),
         token_counter=get_agent_token_counter(),

@@ -50,9 +50,43 @@ def is_recursion_limit_error(raw: str) -> bool:
     )
 
 
+_MODEL_API_TIMEOUT_MARKERS = re.compile(
+    r"readtimeout|writetimeout|connecttimeout|pooltimeout|"
+    r"streamchunktimeouterror|stream_chunk_timeout|"
+    r"apitimeout|request timed out|timed out waiting",
+    re.I,
+)
+
+_NETWORK_TIMEOUT_MARKERS = re.compile(
+    r"request timed out|timed out|\btimeout\b|apitimeout|connecterror|"
+    r"connection refused|econnrefused|network is unreachable|socket hang up|"
+    r"无法连接|网络异常|网络错误|网络或服务异常",
+    re.I,
+)
+
+
+def is_model_api_timeout_error(raw: str) -> bool:
+    """上游 LLM HTTP 流式读超时（如 httpx.ReadTimeout），与浏览器网络错误区分。"""
+    t = raw.strip()
+    if not t:
+        return False
+    return bool(_MODEL_API_TIMEOUT_MARKERS.search(t))
+
+
+def get_model_api_timeout_notice_text(has_prose: bool) -> str:
+    if has_prose:
+        return (
+            "（模型响应超时，后续内容未能继续生成。"
+            "请稍后重试，或尝试精简问题、缩短对话上下文。）"
+        )
+    return "模型响应超时，请稍后重试。"
+
+
 def is_connection_or_timeout_error(raw: str) -> bool:
     t = raw.strip().lower().replace(" ", " ")
     if not t:
+        return True
+    if is_model_api_timeout_error(raw):
         return True
     if re.match(
         r"^(?:connection error|failed to fetch|networkerror|network request failed|"
@@ -60,14 +94,7 @@ def is_connection_or_timeout_error(raw: str) -> bool:
         re.sub(r"[.。…!！]+$", "", t).strip(),
     ):
         return True
-    return bool(
-        re.search(
-            r"request timed out|timed out|\btimeout\b|apitimeout|connecterror|"
-            r"connection refused|econnrefused|network is unreachable|socket hang up|"
-            r"无法连接|网络异常|网络错误|网络或服务异常",
-            t,
-        )
-    )
+    return bool(_NETWORK_TIMEOUT_MARKERS.search(t))
 
 
 def _has_tool_error_part(parts: List[Dict[str, Any]]) -> bool:
@@ -80,6 +107,8 @@ def get_stream_failure_notice_text(
     parts: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[str]:
     raw = sanitize_user_facing_error((detail or "").strip(), default="")
+    if is_model_api_timeout_error(raw):
+        return get_model_api_timeout_notice_text(has_prose)
     if is_connection_or_timeout_error(raw):
         return None
     if is_recursion_limit_error(raw):

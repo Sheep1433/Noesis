@@ -8,7 +8,9 @@ from utils.stream_failure_notice import (
     append_disconnect_partial_content,
     append_stream_failure_notice_to_content,
     append_user_stop_notice_to_content,
+    get_model_api_timeout_notice_text,
     get_stream_failure_notice_text,
+    is_model_api_timeout_error,
     is_recursion_limit_error,
 )
 
@@ -17,6 +19,19 @@ def test_is_recursion_limit_error() -> None:
     assert is_recursion_limit_error("Recursion limit of 40 reached")
     assert is_recursion_limit_error("已达到最大处理步数，任务已自动停止。")
     assert not is_recursion_limit_error("network timeout")
+
+
+def test_is_model_api_timeout_error() -> None:
+    assert is_model_api_timeout_error("ReadTimeout")
+    assert is_model_api_timeout_error("httpx.ReadTimeout")
+    assert not is_model_api_timeout_error("network timeout")
+
+
+def test_readtimeout_notice_with_prose() -> None:
+    notice = get_stream_failure_notice_text("ReadTimeout", True)
+    assert notice == get_model_api_timeout_notice_text(True)
+    assert "模型响应超时" in notice
+    assert "ReadTimeout" not in notice
 
 
 def test_append_notice_with_existing_prose() -> None:

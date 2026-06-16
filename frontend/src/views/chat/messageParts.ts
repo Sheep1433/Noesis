@@ -438,16 +438,38 @@ export function formatUsageSummary(usage: TokenUsageSummary): string {
   return `↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
 }
 
+const MODEL_API_TIMEOUT_RE = /readtimeout|writetimeout|connecttimeout|pooltimeout|streamchunktimeouterror|stream_chunk_timeout|apitimeout|request timed out|timed out waiting/i
+
+const NETWORK_TIMEOUT_RE = /request timed out|timed out|\btimeout\b|apitimeout|connecterror|connection refused|econnrefused|network is unreachable|socket hang up|无法连接|网络异常|网络错误|网络或服务异常/i
+
+/** 上游 LLM HTTP 流式读超时（如 ReadTimeout），与浏览器网络错误区分 */
+export function isModelApiTimeoutError(raw: string): boolean {
+  const t = raw.trim()
+  if (!t) {
+    return false
+  }
+  return MODEL_API_TIMEOUT_RE.test(t)
+}
+
+export function getModelApiTimeoutNoticeText(hasProse: boolean): string {
+  return hasProse
+    ? '（模型响应超时，后续内容未能继续生成。请稍后重试，或尝试精简问题、缩短对话上下文。）'
+    : '模型响应超时，请稍后重试。'
+}
+
 /** 连接/超时类错误：不向用户展示原始英文栈或重复长文案 */
 export function isConnectionOrTimeoutError(raw: string): boolean {
   const t = raw.trim().toLowerCase().replace(/\s+/g, ' ')
   if (!t) {
     return true
   }
+  if (isModelApiTimeoutError(raw)) {
+    return true
+  }
   if (/^(?:connection error|failed to fetch|networkerror|network request failed|load failed|fetch error|typeerror:\s*failed to fetch)$/.test(t.replace(/[.。…!！]+$/g, '').trim())) {
     return true
   }
-  return /request timed out|timed out|\btimeout\b|apitimeout|connecterror|connection refused|econnrefused|network is unreachable|socket hang up|无法连接|网络异常|网络错误|网络或服务异常/.test(t)
+  return NETWORK_TIMEOUT_RE.test(t)
 }
 
 /** LangGraph 递归步数触顶 */
@@ -463,6 +485,9 @@ export function getStreamFailureNoticeText(
   parts?: UiPart[],
 ): string | null {
   const raw = detail?.trim() ?? ''
+  if (isModelApiTimeoutError(raw)) {
+    return getModelApiTimeoutNoticeText(hasProse)
+  }
   if (isConnectionOrTimeoutError(raw)) {
     return null
   }
@@ -488,6 +513,9 @@ export function shortenChatErrorToast(msg: string, maxLen = 72): string {
   const raw = msg.trim()
   if (!raw) {
     return '请求失败'
+  }
+  if (isModelApiTimeoutError(raw)) {
+    return '模型响应超时，请稍后重试'
   }
   if (isConnectionOrTimeoutError(raw)) {
     return '网络异常，请稍后重试'

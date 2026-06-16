@@ -36,13 +36,19 @@ def build_subagent_default_middleware(
 ) -> list[AgentMiddleware]:
     """子 Agent 默认中间件栈（Filesystem + 运行时防护）。"""
     stack: list[AgentMiddleware] = [FilesystemMiddleware(backend=backend)]
-    stack.extend(build_noesis_runtime_middleware(include_tool_call_limits=False))
+    stack.extend(
+        build_noesis_runtime_middleware(
+            include_tool_call_limits=False,
+            backend=backend,
+        )
+    )
     return stack
 
 
 def build_noesis_runtime_middleware(
     *,
     include_tool_call_limits: bool = True,
+    backend: BackendProtocol | None = None,
 ) -> list[AgentMiddleware]:
     """Noesis 运行时防护中间件（clock → repair → offload → loop → limit → metrics）。"""
     middleware: list[AgentMiddleware] = [SessionClockMiddleware()]
@@ -50,7 +56,7 @@ def build_noesis_runtime_middleware(
     if ModelConfig.dangling_tool_call_repair_enabled:
         middleware.append(DanglingToolCallMiddleware())
 
-    summary_middleware = create_summary_offload_middleware()
+    summary_middleware = create_summary_offload_middleware(filesystem_backend=backend)
     if summary_middleware is not None:
         middleware.append(summary_middleware)
 
@@ -180,7 +186,7 @@ def create_noesis_agent(
     )
     if extra_middleware:
         middleware.extend(extra_middleware)
-    middleware.extend(build_noesis_runtime_middleware())
+    middleware.extend(build_noesis_runtime_middleware(backend=backend))
 
     return create_agent(
         model=get_llm(),

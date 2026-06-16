@@ -4,7 +4,7 @@ import type { ToolRunStatus, ToolUiPart, UiPart } from '@/views/chat/messagePart
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
-import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
+import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
 import {
   parseTaskToolInput,
@@ -85,6 +85,19 @@ const promptDisplay = computed(() => {
 
 const subagentTypeLabel = computed(() => parsedInput.value.subagent_type)
 
+const TITLE_TOOLTIP_MAX = 500
+
+const descriptionTooltip = computed(() => {
+  const raw = parsedInput.value.description?.trim()
+  if (!raw) {
+    return ''
+  }
+  if (raw.length <= TITLE_TOOLTIP_MAX) {
+    return raw
+  }
+  return `${raw.slice(0, TITLE_TOOLTIP_MAX)}…`
+})
+
 const durationDisplay = computed(() => {
   if (props.duration_ms == null || props.duration_ms < 0) {
     return ''
@@ -104,7 +117,17 @@ const durationDisplay = computed(() => {
             </n-icon>
           </div>
           <div class="subagent-header__middle">
-            <span class="subagent-title">{{ parsedInput.description }}</span>
+            <n-tooltip
+              placement="top"
+              :delay="2000"
+              :disabled="!descriptionTooltip"
+              :style="{ maxWidth: '420px' }"
+            >
+              <template #trigger>
+                <span class="subagent-title">{{ parsedInput.description }}</span>
+              </template>
+              {{ descriptionTooltip }}
+            </n-tooltip>
             <div class="subagent-header__tags">
               <span v-if="durationDisplay" class="subagent-duration">{{ durationDisplay }}</span>
               <n-tag type="info" size="small" round bordered>{{ subagentTypeLabel }}</n-tag>
