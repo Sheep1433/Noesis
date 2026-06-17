@@ -1,6 +1,7 @@
 import type { ToolUiPart, UiPart } from '@/views/chat/messageParts'
 import { part_parent_task_call_id } from '@/views/chat/messageParts'
 import { shouldRenderSubagentPart } from '@/utils/parseTaskTool'
+import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
 
 export type DisplayPartEntry =
   | { kind: 'part', part: UiPart }
@@ -28,6 +29,9 @@ export function buildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
     if (!isNestedSubagentChild(p)) {
       continue
     }
+    if (p.type === 'tool' && !shouldRenderToolCallCollapse(p.name, p.input)) {
+      continue
+    }
     const parentId = part_parent_task_call_id(p)!
     const list = childByParent.get(parentId) ?? []
     list.push(p)
@@ -37,6 +41,9 @@ export function buildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
   const out: DisplayPartEntry[] = []
   for (const p of parts) {
     if (isNestedSubagentChild(p)) {
+      continue
+    }
+    if (p.type === 'tool' && !shouldRenderToolCallCollapse(p.name, p.input)) {
       continue
     }
     if (p.type === 'tool' && shouldRenderSubagentPart(p)) {

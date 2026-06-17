@@ -6,6 +6,7 @@ import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
+import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
 import {
   parseTaskToolInput,
   parseTaskToolOutput,
@@ -176,7 +177,7 @@ const durationDisplay = computed(() => {
                 appearance="light"
               />
               <ToolCallCollapse
-                v-else-if="child.type === 'tool'"
+                v-else-if="child.type === 'tool' && shouldRenderToolCallCollapse(child.name, child.input)"
                 appearance="light"
                 :name="child.name"
                 :arguments="child.input"

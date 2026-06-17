@@ -3,6 +3,7 @@ import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { TASK_TOOL_NAME } from '@/utils/parseTaskTool'
+import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
 import MarkdownInstance from './plugins/markdown'
 
 // code高亮语法样式
@@ -142,7 +143,7 @@ onMounted(() => {
                 :defaultOpen="false"
               />
               <ToolCallCollapse
-                v-else
+                v-else-if="shouldRenderToolCallCollapse(call.name, call.arguments)"
                 :name="call.name"
                 :arguments="call.arguments"
                 :result="call.result"

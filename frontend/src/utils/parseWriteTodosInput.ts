@@ -75,3 +75,17 @@ export function shouldApplyWriteTodos(
   }
   return !name && isWriteTodosLikeInput(input)
 }
+
+/** write_todos 由输入框上方 TodoList 展示，消息内不渲染 ToolCallCollapse */
+export function shouldRenderToolCallCollapse(
+  name: string | undefined,
+  input?: Record<string, unknown>,
+): boolean {
+  if (name === WRITE_TODOS_TOOL_NAME) {
+    return false
+  }
+  if (!name?.trim() && input && isWriteTodosLikeInput(input)) {
+    return false
+  }
+  return true
+}
