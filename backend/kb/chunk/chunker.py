@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 from kb.chunk.markdown_splitter import MarkdownChunker
 from kb.chunk.params import _normalize_chunk_params, _fixed_window_chunks
 from kb.document_parse.models import ParsedFile
+from kb.embedding import embedding_not_configured_message, is_embedding_configured
 from common.logging import logger
 
 ChunkInput = Union[ParsedFile, str]
@@ -134,6 +135,9 @@ def chunk(
     - ParsedFile：parse 层输出（含表格行、raw/clean Markdown 对）
     - str：已有 Markdown 文本（跳过 parse，如内存片段）
     """
+    if not is_embedding_configured():
+        logger.warning(embedding_not_configured_message())
+
     if isinstance(content, ParsedFile):
         return _chunk_parsed_file(content, effective_params=effective_params)
     return _chunk_markdown_text(

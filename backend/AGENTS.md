@@ -42,7 +42,7 @@ backend/
 │   │   ├── attachments/         # 附件解析、Markdown outline、Vision 判定
 │   │   └── streaming/           # SSE 桥接、流错误展示
 │   └── observability/langfuse.py
-├── http_middleware/             # FastAPI / Starlette HTTP 中间件
+├── middleware/                    # FastAPI / Starlette HTTP 中间件
 ├── llm/                         # LLM 工厂（get_llm）
 ├── evals/                       # Agent 评测（runners、scorers、promptfoo）
 ├── config/                      # env.py、database.py、yaml 合并
@@ -71,7 +71,7 @@ backend/
 | `common/` | 3+ 无关模块共用、无业务语义（日志、HTTP 响应、路径、序列化） |
 | `domain/` | 有明确业务域（鉴权、聊天流式、可观测性） |
 | `agent/middlewares/` | LangGraph Agent 运行时钩子 |
-| `http_middleware/` | HTTP 请求/响应链（鉴权 Cookie 续期等） |
+| `middleware/` | HTTP 请求/响应链（鉴权 Cookie 续期等） |
 | `services/` | 跨领域编排 |
 
 ## 核心规范

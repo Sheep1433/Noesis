@@ -573,8 +573,14 @@ class QdrantService:
             texts = [(d.page_content or "").strip() for d in documents]
             logger.info(f"文档 {file_name} 解析完成，共 {len(texts)} 个分片")
 
-            # 4. 生成真实向量（DashScope 通义文本向量）
-            from kb.embedding import get_embedding
+            from kb.embedding import embedding_not_configured_message, get_embedding, is_embedding_configured
+
+            if not is_embedding_configured():
+                return {
+                    'success': False,
+                    'message': embedding_not_configured_message(),
+                    'shards_created': 0,
+                }
 
             embedding = get_embedding()
             embeddings = embedding.embed_documents(texts)

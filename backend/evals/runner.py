@@ -14,10 +14,29 @@ from agent.case_generate.case_graph import (
     generate_test_cases_node,
 )
 from config.env import LangfuseConfig
-from evals.item_fields import collect_all_point_names, item_scenario_query
-from evals.runners.base import resolve_document_context
+from evals.dataset import resolve_document_context
 
 EvalScope = Literal["testpoints", "cases", "full"]
+
+
+def item_scenario_query(item: Dict[str, Any]) -> str:
+    for key in ("scenario_description", "query"):
+        val = item.get(key)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def collect_all_point_names(scenes_testpoints: List[Dict[str, Any]]) -> List[str]:
+    names: List[str] = []
+    seen: set[str] = set()
+    for scene in scenes_testpoints or []:
+        for tp in scene.get("test_points") or []:
+            n = str(tp.get("point_name") or "").strip()
+            if n and n not in seen:
+                seen.add(n)
+                names.append(n)
+    return names
 
 
 def _merge_command(state: Dict[str, Any], command: Command) -> Dict[str, Any]:
@@ -41,21 +60,15 @@ def _initial_state(query: str, document_context: str, source_file_names: Optiona
     }
 
 
-def _eval_tracing_note(
-    eval_run_id: str,
-    dataset_item_id: str,
-) -> Dict[str, str]:
-    """离线节点不经 RunnableConfig；将 eval 关联信息写入产出供对账 / 后续 Langfuse 对齐。"""
-    note = {
+def _eval_tracing_note(eval_run_id: str, dataset_item_id: str) -> Dict[str, str]:
+    return {
         "eval_run_id": eval_run_id,
         "dataset_item_id": dataset_item_id,
         "langfuse_tracing_enabled": str(LangfuseConfig.langfuse_tracing_enabled).lower(),
     }
-    return note
 
 
 def _apply_fixture_scenes(state: Dict[str, Any], item: Dict[str, Any]) -> bool:
-    """cases scope 可选预置 scenes，跳过阶段 A LLM。"""
     fixture = item.get("fixture_scenes_testpoints")
     if not isinstance(fixture, list) or not fixture:
         return False
@@ -72,14 +85,6 @@ def run_test_case_item(
     eval_run_id: str,
     scope: EvalScope = "full",
 ) -> Dict[str, Any]:
-    """
-    执行单条 dataset item。
-
-    scope:
-      - testpoints: 仅阶段 A
-      - cases: 阶段 B（无 fixture 时先跑阶段 A）
-      - full: 阶段 A → 全量采纳测试点 → 阶段 B
-    """
     t0 = time.perf_counter()
     document_context = resolve_document_context(item, dataset_dir)
     query = item_scenario_query(item)
@@ -97,7 +102,6 @@ def run_test_case_item(
         cmd1 = generate_scenes_testpoints_node(state)  # type: ignore[arg-type]
         state = _merge_command(state, cmd1)
         latency_testpoints_ms = int((time.perf_counter() - t_tp) * 1000)
-
         if state.get("error"):
             return _build_result(
                 item=item,
@@ -127,9 +131,7 @@ def run_test_case_item(
             )
 
     if run_cases:
-        state["selected_point_names"] = collect_all_point_names(
-            state.get("scenes_testpoints") or [],
-        )
+        state["selected_point_names"] = collect_all_point_names(state.get("scenes_testpoints") or [])
         state["current_phase"] = "test_cases"
         t_cases = time.perf_counter()
         cmd2 = asyncio.run(generate_test_cases_node(state))  # type: ignore[arg-type]

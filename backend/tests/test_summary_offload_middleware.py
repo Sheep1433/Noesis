@@ -93,5 +93,6 @@ def test_get_llm_summarization_uses_dedicated_model_name() -> None:
 
     kwargs = build.call_args.kwargs
     assert kwargs["model_name"] == "qwen-summary"
-    assert kwargs["model_api_key"] == "summary-key"
-    assert kwargs["model_base_url"] == "https://summary.example/v1"
+    assert kwargs["model_api_key"] == "main-key"
+    assert kwargs["model_base_url"] == "https://main.example/v1"
+    assert kwargs["model_type"] == "openai"

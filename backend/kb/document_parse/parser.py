@@ -235,44 +235,48 @@ class DocumentParser:
     @staticmethod
     def _replace_images_with_descriptions(markdown_content: str) -> str:
         """
-        将 markdown 中的 data URI 图片替换为 VL 模型生成的文字描述。
-        找不到图片或调用失败时，替换为占位文本。
+        将 markdown 中的 data URI 图片替换为 VLM 生成的文字描述。
+        未配置 VLM 时静默跳过，保留原始图片内容。
         """
+        from kb.embedding import is_vlm_configured
+
+        if not is_vlm_configured():
+            return markdown_content
+
         # 匹配 markdown 图片语法中的 data URI：![...](data:image/...;base64,...)
         img_pattern = re.compile(
             r'!\[([^\]]*)\]\((data:image/[^;]+;base64,[A-Za-z0-9+/=]+)\)'
         )
 
         def replace_one(match: re.Match) -> str:
-            logger.warning("哈哈哈---------开始处理图片")
             alt_text = match.group(1)
             data_uri = match.group(2)
-            logger.warning(f"发现 data URI 图片，alt='{alt_text}', 大小={len(data_uri)} 字节")
+            logger.info(f"发现 data URI 图片，alt='{alt_text}', 大小={len(data_uri)} 字节")
             try:
                 description = DocumentParser._call_vl_model(data_uri)
                 logger.info(f"图片描述生成成功，alt='{alt_text}'，描述长度={len(description)}")
                 return f"\n\n[图片描述]: {description}\n\n"
             except BaseException as e:
-                logger.warning(f"VL 模型调用失败，使用占位文本: {type(e).__name__}: {e}")
+                logger.warning(f"VLM 调用失败，使用占位文本: {type(e).__name__}: {e}")
                 return f"\n\n[图片描述]: （图片内容，alt={alt_text}）\n\n"
 
         return img_pattern.sub(replace_one, markdown_content)
 
     @staticmethod
     def _call_vl_model(data_uri: str) -> str:
-        """调用 VL 模型对图片生成文字描述（mermaid 或自然语言）"""
+        """调用 VLM 对图片生成文字描述（mermaid 或自然语言）。"""
         import httpx
         from openai import OpenAI
         from markitdown import MarkItDown
         from common.network.proxy import set_proxy
         from config.env import ModelConfig
+        from kb.embedding import is_vlm_configured
+
+        if not is_vlm_configured():
+            raise ValueError("VLM 未配置")
 
         set_proxy()
         api_key = ModelConfig.vlm_model_api_key.strip()
-        if not api_key:
-            raise ValueError(
-                "VLM 模型需要配置 VLM_MODEL_API_KEY（见 backend/.env.example）"
-            )
         logger.info(f"开始调用 VLM 模型，data_uri 大小={len(data_uri)} 字节")
         client = OpenAI(
             api_key=api_key,

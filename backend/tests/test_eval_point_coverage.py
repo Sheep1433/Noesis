@@ -1,6 +1,6 @@
 """coverage scorer（mock LLM Judge，无 DashScope）。"""
 
-from evals.scorers.coverage import score_coverage
+from evals.scoring import score_coverage
 
 
 def _mock_judge_all_covered(golden, scenes):

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from exceptions.handle import handle_exception
-from http_middleware.sliding_auth import SlidingAuthMiddleware
+from middleware.sliding_auth import SlidingAuthMiddleware
 from config.env import AppConfig
 from config.checkpointer import close_checkpointer, init_checkpointer
 from config.get_db import init_create_table

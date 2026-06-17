@@ -1,6 +1,6 @@
 """评测数据集加载测试。"""
 
-from evals.runners.base import DEFAULT_DATASET, load_dataset, resolve_document_context
+from evals.dataset import DEFAULT_DATASET, load_dataset, resolve_document_context
 
 
 def test_load_dataset_count_and_unique_ids():

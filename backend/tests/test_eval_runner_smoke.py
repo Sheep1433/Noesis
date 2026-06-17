@@ -6,12 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from evals.report import compute_item_passed
-from evals.runners.base import DEFAULT_DATASET, load_dataset
-from evals.runners.test_case import run_test_case_item
-from evals.scorers.coverage import score_coverage
-from evals.scorers.l0_structure import score_l0
-from evals.scorers.rag_hit import score_rag
+from evals.dataset import DEFAULT_DATASET, load_dataset
+from evals.runner import run_test_case_item
+from evals.scoring import score_coverage, score_l0, score_rag
 from schemas.case_generate_vo import SceneTestCasesOutput, ScenesTestPointsOutput
 
 SCENES_JSON = [
@@ -142,13 +139,9 @@ def test_run_test_case_item_smoke(mock_case_deps):
             for g in golden
         ]
 
-    scores = {
-        "l0": score_l0(out),
-        "coverage": score_coverage(out, gt, judge_fn=_mock_cov_judge),
-        "rag": score_rag(out, gt),
-    }
-    scores["passed"] = compute_item_passed(scores, gt)
+    l0 = score_l0(out)
+    coverage = score_coverage(out, gt, judge_fn=_mock_cov_judge)
+    rag = score_rag(out, gt)
 
-    assert scores["l0"]["passed"] is True
-    assert scores["coverage"]["point_coverage_recall"] == 1.0
-    assert scores["passed"] is True
+    assert l0["passed"] is True
+    assert coverage["point_coverage_recall"] == 1.0

@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: Noesis 测试用例 Agent 离线评测（L0 / coverage / rag）
+
+prompts:
+  - "{{scenario_description}}"
+
+providers:
+  - id: file://provider.py
+    label: test-case-agent
+    config:
+      pythonExecutable: ./run-python.sh
+
+tests:
+  - path: file://tests.py:generate_tests
+    config:
+      pythonExecutable: ./run-python.sh
+
+evaluateOptions:
+  maxConcurrency: 1
+
+defaultTest:
+  options:
+    provider: test-case-agent
