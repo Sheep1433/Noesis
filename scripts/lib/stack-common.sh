@@ -4,7 +4,8 @@
 : "${ROOT:?ROOT must be set before sourcing stack-common.sh}"
 BACKEND_DIR="${BACKEND_DIR:-$ROOT/backend}"
 FRONTEND_DIR="${FRONTEND_DIR:-$ROOT/frontend}"
-MCP_DIR="${MCP_DIR:-$ROOT/mcp_docker_ssh}"
+EXTENSIONS_DIR="${EXTENSIONS_DIR:-$ROOT/extensions}"
+MCP_DIR="${MCP_DIR:-$EXTENSIONS_DIR/mcp/docker-ssh}"
 QDRANT_CONTAINER="${QDRANT_CONTAINER:-noesis-qdrant}"
 QDRANT_STORAGE="${QDRANT_STORAGE:-$ROOT/qdrant_storage}"
 
@@ -71,10 +72,20 @@ start_langfuse() {
 }
 
 start_mcp() {
-  local enable="${START_MCP:-1}"
+  local enable="${START_MCP:-0}"
   if [[ "$enable" != "1" && "$enable" != "true" ]]; then
-    log_info "MCP 未启动（故障运维等能力不可用）。需要时: START_MCP=1"
+    log_info "MCP 未启动（故障运维等能力不可用）。需要时: START_MCP=1 ./scripts/run.sh <dev|prod>"
     return 0
+  fi
+
+  if command -v docker &>/dev/null; then
+    local mcp_image="noesis/mcp-ubuntu-ssh:latest"
+    if ! docker image inspect "$mcp_image" &>/dev/null; then
+      log_info "构建 MCP 沙箱镜像 ($mcp_image)..."
+      docker build -t "$mcp_image" -f "$ROOT/deploy/mcp/Dockerfile" "$ROOT/deploy/mcp"
+    fi
+  else
+    log_warn "Docker 未安装，MCP 远程 SSH 沙箱可能无法工作。"
   fi
 
   log_info "启动 MCP server..."

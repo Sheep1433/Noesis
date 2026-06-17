@@ -20,19 +20,19 @@ from agent.backends import create_local_shell_backend
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgent
+from config.extensions_paths import skills_root
 from llm import get_llm
 from utils.log_util import logger
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _WORKSPACE_DIR = os.path.join(_BACKEND_DIR, ".agent_workspace")
-_SKILLS_DIR = os.path.join(_BACKEND_DIR, "skills")
 _SKILLS_ROUTE = "/skills/"
 
 
 def _build_research_backend() -> CompositeBackend:
-    """工作区与 Skills 分盘：默认路径写入 .agent_workspace，/skills/ 只读映射 backend/skills。"""
+    """工作区与 Skills 分盘：默认路径写入 .agent_workspace，/skills/ 只读映射 extensions/skills。"""
     workspace_backend = create_local_shell_backend(_WORKSPACE_DIR, virtual_mode=True)
-    skills_backend = create_local_shell_backend(_SKILLS_DIR, virtual_mode=True)
+    skills_backend = create_local_shell_backend(str(skills_root()), virtual_mode=True)
     return CompositeBackend(
         default=workspace_backend,
         routes={_SKILLS_ROUTE: skills_backend},

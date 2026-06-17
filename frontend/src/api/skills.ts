@@ -1,5 +1,5 @@
 /**
- * Skills 文件目录 API（磁盘 backend/skills，见配置 skills_filesystem_root）
+ * Skills 文件目录 API（磁盘 extensions/skills，见配置 skills_filesystem_root）
  */
 import { useUserStore } from '@/store/business/userStore'
 
@@ -27,7 +27,7 @@ export interface SkillFsFileContent {
 }
 
 /**
- * 获取 Skills 文件目录树（默认仓库 backend/skills，可用配置 skills_filesystem_root 覆盖）
+ * 获取 Skills 文件目录树（默认 extensions/skills，可用配置 skills_filesystem_root 覆盖）
  */
 export async function getSkillsFsTree(): Promise<SkillFsTreeResponse> {
   const userStore = useUserStore()

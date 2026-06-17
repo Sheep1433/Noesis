@@ -167,7 +167,7 @@ async function confirmZipUpload() {
       <div class="hint-lines">
         <div>
           <n-text depth="3">展示的是服务器上配置的 Skills 根目录（默认仓库内 </n-text>
-          <n-text code>backend/skills</n-text>
+          <n-text code>extensions/skills</n-text>
           <n-text depth="3">）。新增或修改 skill 请在该目录下操作，或点击「上传 skill」将 ZIP 解压到该根目录；修改后点击「刷新」。</n-text>
         </div>
         <div class="root-path">

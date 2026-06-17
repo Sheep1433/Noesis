@@ -23,7 +23,7 @@ async def get_skills_fs_tree(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """
-    列出配置的 Skills 文件目录（默认仓库 backend/skills）树形结构
+    列出配置的 Skills 文件目录（默认 extensions/skills）树形结构
     """
     _ = current_user
     return SkillFsService.get_tree()

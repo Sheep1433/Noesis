@@ -110,7 +110,7 @@ langfuse:
   base_url: http://127.0.0.1:3000
 
 other:
-  skills_filesystem_root: ""
+  skills_filesystem_root: ""  # 空则默认 extensions/skills；可填绝对路径或相对仓库根的路径
 
 # LangGraph Agent checkpoint（SQLite 持久化）
 checkpoint:

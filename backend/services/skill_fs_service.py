@@ -1,17 +1,13 @@
 """
-Skills 文件目录（仓库 skills 文件夹）浏览与 ZIP 导入
+Skills 文件目录（extensions/skills）浏览与 ZIP 导入
 """
 import os
 import zipfile
 from typing import List, Tuple
 
-from config.env import OtherConfig
+from config.extensions_paths import skills_root
 from schemas.skill_vo import SkillFsTreeNode, SkillFsTreeResponse
 from utils.log_util import logger
-
-_SERVICES_DIR = os.path.dirname(os.path.abspath(__file__))
-_BACKEND_DIR = os.path.dirname(_SERVICES_DIR)
-_REPO_ROOT = os.path.dirname(_BACKEND_DIR)
 
 _MAX_READ_BYTES = 512 * 1024
 _MAX_ZIP_BYTES = 10 * 1024 * 1024
@@ -21,17 +17,8 @@ class SkillFsService:
     """扫描配置的 skills 根目录，提供树形结构与安全读文件"""
 
     @classmethod
-    def _configured_raw(cls) -> str:
-        return (OtherConfig.skills_filesystem_root or '').strip()
-
-    @classmethod
     def get_root_path(cls) -> str:
-        raw = cls._configured_raw()
-        if not raw:
-            return os.path.abspath(os.path.join(_REPO_ROOT, 'backend', 'skills'))
-        if os.path.isabs(raw):
-            return os.path.abspath(raw)
-        return os.path.abspath(os.path.join(_REPO_ROOT, raw))
+        return str(skills_root())
 
     @classmethod
     def _safe_join(cls, rel: str) -> str:

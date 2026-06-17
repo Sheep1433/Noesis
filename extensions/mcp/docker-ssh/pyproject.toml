@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["mcp_docker_ssh"]
+packages = ["."]
 
 [dependency-groups]
 dev = []

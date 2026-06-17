@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# Noesis 后端生产镜像（由 deploy/docker-compose.yml 引用，构建上下文为仓库根目录）
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update \
@@ -26,6 +27,9 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-install-project
 
 COPY backend/ ./
+
+# Skills 包（深度研究 / Skills 管理 API）
+COPY extensions/skills ./extensions/skills
 
 RUN uv sync --frozen
 

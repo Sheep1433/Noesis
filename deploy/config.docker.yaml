@@ -90,7 +90,7 @@ langfuse:
   base_url: http://host.docker.internal:3000
 
 other:
-  skills_filesystem_root: ""
+  skills_filesystem_root: ""  # 空则默认 extensions/skills（Docker 镜像内为 /app/extensions/skills）
 
 checkpoint:
   db_path: ./data/langgraph_checkpoints.sqlite

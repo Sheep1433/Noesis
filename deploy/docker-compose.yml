@@ -1,3 +1,6 @@
+# Noesis 生产栈：nginx + backend + qdrant
+# 在仓库根目录执行: docker compose -f deploy/docker-compose.yml up -d
+
 name: noesis
 
 services:
@@ -12,16 +15,16 @@ services:
 
   backend:
     build:
-      context: .
-      dockerfile: deploy/Dockerfile.backend
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
     restart: unless-stopped
     env_file:
-      - deploy/.env.docker
+      - .env.docker
     environment:
       APP_ENV: prod
       NOESIS_CONFIG_PATH: /app/config.yaml
     volumes:
-      - ./deploy/config.docker.yaml:/app/config.yaml:ro
+      - ./config.docker.yaml:/app/config.yaml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -36,8 +39,8 @@ services:
 
   nginx:
     build:
-      context: .
-      dockerfile: deploy/Dockerfile.frontend
+      context: ..
+      dockerfile: deploy/frontend/Dockerfile
     restart: unless-stopped
     ports:
       - "80:80"

@@ -20,6 +20,8 @@
 Noesis/
 ├── frontend/          → frontend/AGENTS.md
 ├── backend/           → backend/AGENTS.md
+├── extensions/        → Skills 包 + MCP 服务（见 extensions/README.md）
+├── deploy/            → Docker Compose、镜像定义、生产配置
 ├── scripts/run.sh     # dev | prod | docker
 ├── openspec/          # 变更提案与规格
 └── docs/              # PRD、Bug、调试笔记
@@ -27,6 +29,7 @@ Noesis/
 
 | 区域 | 入口 |
 |------|------|
+| 容器部署 | `deploy/docker-compose.yml`、`deploy/backend/Dockerfile`、`deploy/frontend/Dockerfile` |
 | 前端应用 | `frontend/src/main.ts`、`frontend/src/views/chat.vue` |
 | 前端 SSE | `frontend/src/views/chat/useSSEStream.ts` |
 | 后端启动 | `backend/app.py`、`backend/server.py` |

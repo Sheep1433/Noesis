@@ -30,3 +30,5 @@ qdrant_storage
 **/logs
 README.assets
 dev-tools
+
+# 部署制品统一在 deploy/（backend/Dockerfile、frontend/Dockerfile、mcp/Dockerfile）

@@ -1,5 +1,6 @@
 docker:
-  image: "ubuntu:latest"
+  # 镜像定义见 deploy/mcp/Dockerfile；START_MCP=1 时 run.sh 会自动构建
+  image: "noesis/mcp-ubuntu-ssh:latest"
 
 # Claude Code aligned per-tool limits
 tool_limits:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地全栈开发：Qdrant +（可选）MCP + 后端 + 前端 dev server
+# 本地全栈开发：Qdrant +（可选）extensions/mcp/docker-ssh + 后端 + 前端 dev server
 # 由 ./scripts/run.sh dev 调用
 
 set -euo pipefail

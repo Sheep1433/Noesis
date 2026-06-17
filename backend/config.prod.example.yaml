@@ -96,7 +96,7 @@ langfuse:
   base_url: http://127.0.0.1:3000
 
 other:
-  skills_filesystem_root: ""
+  skills_filesystem_root: ""  # 空则默认 extensions/skills
 
 checkpoint:
   db_path: ./data/langgraph_checkpoints.sqlite

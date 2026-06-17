@@ -99,6 +99,8 @@ async def login(
 | prod | `backend/.env.prod` | `backend/config.prod.yaml` |
 | docker | `deploy/.env.docker` | `deploy/config.docker.yaml` |
 
+Docker 制品目录：`deploy/`（`docker-compose.yml`、`backend/Dockerfile`、`frontend/Dockerfile`、`mcp/Dockerfile`）
+
 - `config/env.py` 合并 env + yaml → `ModelConfig` 等
 - `NOESIS_CONFIG_PATH` / `APP_ENV=prod` 可自动选中 `config.prod.yaml`
 - **禁止在代码中硬编码配置值**

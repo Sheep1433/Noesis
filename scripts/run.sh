@@ -15,6 +15,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BACKEND="$ROOT/backend"
 DEPLOY="$ROOT/deploy"
+COMPOSE_FILE="$DEPLOY/docker-compose.yml"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -44,8 +45,8 @@ usage() {
 Noesis 启动脚本（统一入口）
 
 部署方式（三选一）:
-  dev      本地开发：Qdrant + MCP(默认) + 后端热重载 + Vite :2048
-  prod     裸机验收：Qdrant + MCP(默认) + uvicorn + pnpm build + preview :4173
+  dev      本地开发：Qdrant + 后端热重载 + Vite :2048（MCP 默认关）
+  prod     裸机验收：Qdrant + uvicorn + pnpm build + preview :4173（MCP 默认关）
   docker   生产推荐：Compose 启动 nginx(:80) + backend + qdrant
 
 子命令:
@@ -57,7 +58,7 @@ Noesis 启动脚本（统一入口）
   ./scripts/run.sh docker:logs         # backend 日志
 
 环境变量（dev / prod 共用）:
-  START_MCP=0|1           是否启动 MCP（默认 1）
+  START_MCP=0|1           是否启动 extensions/mcp/docker-ssh（默认 0，故障运维需显式开启）
   START_LANGFUSE=0|1      是否启动 Langfuse 栈（默认 0）
   NOESIS_CONFIG_PATH        覆盖 yaml 路径
 
@@ -70,6 +71,8 @@ prod 额外:
   dev      | backend/.env          | backend/config.yaml
   prod     | backend/.env.prod     | backend/config.prod.yaml
   docker   | deploy/.env.docker    | deploy/config.docker.yaml
+
+Compose 文件: deploy/docker-compose.yml
 EOF
 }
 
@@ -97,26 +100,26 @@ mode_docker() {
   if [[ ! -f "$DEPLOY/config.docker.yaml" ]]; then
     die "缺少 $DEPLOY/config.docker.yaml"
   fi
-  log "模式=docker | env=$DEPLOY/.env.docker"
+  log "模式=docker | compose=$COMPOSE_FILE | env=$DEPLOY/.env.docker"
   cd "$ROOT"
-  docker compose up -d "$@"
+  docker compose -f "$COMPOSE_FILE" up -d "$@"
   log "访问 http://localhost | 健康: curl -sS http://localhost/health"
 }
 
 mode_docker_build() {
   ensure_file "$DEPLOY/.env.docker" "$DEPLOY/.env.docker.example"
   cd "$ROOT"
-  docker compose build "$@"
+  docker compose -f "$COMPOSE_FILE" build "$@"
 }
 
 mode_docker_down() {
   cd "$ROOT"
-  docker compose down "$@"
+  docker compose -f "$COMPOSE_FILE" down "$@"
 }
 
 mode_docker_logs() {
   cd "$ROOT"
-  docker compose logs -f backend "$@"
+  docker compose -f "$COMPOSE_FILE" logs -f backend "$@"
 }
 
 main() {
