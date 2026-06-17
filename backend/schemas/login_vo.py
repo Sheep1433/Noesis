@@ -7,6 +7,12 @@ class UserLogin(BaseModel):
     password: str = Field(description='用户密码')
 
 
+class UserRegister(BaseModel):
+    username: str = Field(min_length=3, max_length=50, description='用户名称')
+    password: str = Field(min_length=6, max_length=32, description='用户密码')
+    mobile: Optional[str] = Field(default=None, max_length=20, description='手机号')
+
+
 class Token(BaseModel):
     access_token: str = Field(description='token信息')
     token_type: str = Field(description='token类型')

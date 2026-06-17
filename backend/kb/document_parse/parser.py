@@ -10,7 +10,7 @@ import pandas as pd
 from docx import Document as DocxDocument
 from langchain_core.documents import Document
 
-from utils.log_util import logger
+from common.logging import logger
 
 _MARKDOWN_EXTENSIONS = frozenset({".md", ".markdown", ".mdown"})
 _WORD_EXTENSIONS = frozenset({".docx", ".doc"})
@@ -264,26 +264,26 @@ class DocumentParser:
         import httpx
         from openai import OpenAI
         from markitdown import MarkItDown
-        from utils.proxy_util import set_proxy
+        from common.network.proxy import set_proxy
         from config.env import ModelConfig
 
         set_proxy()
-        api_key = (os.getenv("VL_MODEL_API_KEY") or "").strip() or ModelConfig.model_api_key
+        api_key = ModelConfig.vlm_model_api_key.strip()
         if not api_key:
             raise ValueError(
-                "VL 模型需要配置 MODEL_API_KEY 或 VL_MODEL_API_KEY（见 backend/.env.example）"
+                "VLM 模型需要配置 VLM_MODEL_API_KEY（见 backend/.env.example）"
             )
-        logger.info(f"开始调用 VL 模型，data_uri 大小={len(data_uri)} 字节")
+        logger.info(f"开始调用 VLM 模型，data_uri 大小={len(data_uri)} 字节")
         client = OpenAI(
             api_key=api_key,
-            base_url=ModelConfig.model_base_url,
+            base_url=ModelConfig.vlm_model_base_url,
             http_client=httpx.Client(
                 verify=False,
                 timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10),
             ),
         )
-        vl_model = os.getenv("VL_MODEL_NAME", "Qwen3-VL-32B-Instruct")
-        logger.info(f"使用 VL 模型: {vl_model}")
+        vl_model = ModelConfig.vlm_model_name
+        logger.info(f"使用 VLM 模型: {vl_model}")
         md = MarkItDown(
             llm_client=client,
             llm_model=vl_model,

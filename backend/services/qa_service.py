@@ -23,13 +23,13 @@ from constants.code_enum import IntentEnum
 from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QaQueryRequest
 from services.chat_service import ChatService
-from utils.langfuse_tracing import langfuse_workflow_context, merge_langfuse_runnable_config
-from utils.langgraph_sse_bridge import LangGraphSseBridge, bridge_raw_to_sse_lines
-from utils.log_util import logger
-from utils.message_builder import AssistantMessageBuilder, UserMessageBuilder
-from utils.stream_bridge import MemoryStreamBridge, iter_bridge_events
-from utils.stop_token_service import StopTokenService
-from utils.stream_failure_notice import (
+from domain.observability.langfuse import langfuse_workflow_context, merge_langfuse_runnable_config
+from domain.chat.streaming.langgraph_sse import LangGraphSseBridge, bridge_raw_to_sse_lines
+from common.logging import logger
+from domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from domain.chat.streaming.bridge import MemoryStreamBridge, iter_bridge_events
+from domain.auth.stop_token import StopTokenService
+from domain.chat.streaming.failure_notice import (
     append_disconnect_partial_content,
     append_stream_failure_notice_to_content,
     append_user_stop_notice_to_content,
@@ -436,6 +436,7 @@ class QaService:
                 agent_generator = fault_agent.run_agent(
                     clean_query,
                     session_id=session_id,
+                    current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                 )

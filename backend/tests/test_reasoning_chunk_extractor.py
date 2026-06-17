@@ -1,7 +1,7 @@
 """langgraph_sse.reasoning 单元测试。"""
 from types import SimpleNamespace
 
-from utils.langgraph_sse.reasoning import extract_reasoning_delta
+from domain.chat.streaming.reasoning import extract_reasoning_delta
 
 
 def test_extract_from_additional_kwargs_reasoning_content() -> None:

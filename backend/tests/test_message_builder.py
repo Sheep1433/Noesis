@@ -1,6 +1,6 @@
 """message_builder 落库格式。"""
 
-from utils.message_builder import AssistantMessageBuilder, ToolPart
+from domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 
 
 def test_tool_part_to_dict_snake_case_only() -> None:

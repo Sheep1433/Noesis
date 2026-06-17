@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 
-from utils.log_util import logger
+from common.logging import logger
 
 
 class MarkdownChunker:

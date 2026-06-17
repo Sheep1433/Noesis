@@ -22,7 +22,13 @@ export interface SSEStreamOptions {
   ) => void
   onToolResult?: (
     tool_call_id: string,
-    payload: { output: string, error?: string, status: 'success' | 'error', duration_ms?: number },
+    payload: {
+      output: string
+      error?: string
+      status: 'success' | 'error'
+      duration_ms?: number
+      errorCategory?: string
+    },
   ) => void
   /** 测试用例等扩展 SSE（event 名与 data.type 一致） */
   onCustomEvent?: (eventType: string, data: Record<string, unknown>) => void
@@ -178,11 +184,15 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       const out = typeof data.output === 'string' ? data.output : ''
       const err = data.error != null ? String(data.error) : ''
       const duration_ms = data.duration_ms != null ? Number(data.duration_ms) : undefined
+      const errorCategory = typeof data.errorCategory === 'string' && data.errorCategory.trim()
+        ? data.errorCategory.trim()
+        : undefined
       onToolResult?.(id, {
         output: out,
         error: err || undefined,
         status: status === 'error' ? 'error' : 'success',
         duration_ms: duration_ms != null && !Number.isNaN(duration_ms) ? duration_ms : undefined,
+        errorCategory,
       })
       return
     }

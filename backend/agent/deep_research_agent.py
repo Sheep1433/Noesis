@@ -5,7 +5,6 @@ DeepResearchAgent - 深度调研智能体
 """
 
 import asyncio
-import os
 import uuid
 from typing import AsyncGenerator, Optional
 
@@ -17,21 +16,28 @@ from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.tools import build_web_search_tools
 from agent.backends import create_local_shell_backend
+from config.agent_workspace_paths import ensure_workspace_dir
+from config.extensions_paths import skills_root
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgent
-from config.extensions_paths import skills_root
 from llm import get_llm
-from utils.log_util import logger
+from common.logging import logger
 
-_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_WORKSPACE_DIR = os.path.join(_BACKEND_DIR, ".agent_workspace")
 _SKILLS_ROUTE = "/skills/"
 
 
-def _build_research_backend() -> CompositeBackend:
-    """工作区与 Skills 分盘：默认路径写入 .agent_workspace，/skills/ 只读映射 extensions/skills。"""
-    workspace_backend = create_local_shell_backend(_WORKSPACE_DIR, virtual_mode=True)
+def _resolve_user_id(current_user) -> Optional[str]:
+    if current_user is None:
+        return None
+    uid = getattr(current_user, "user_id", None)
+    return str(uid) if uid is not None else None
+
+
+def _build_research_backend(user_id: str, session_id: str) -> CompositeBackend:
+    """工作区与 Skills 分盘：会话级 workspace，/skills/ 只读映射 extensions/skills。"""
+    workspace_dir = ensure_workspace_dir(user_id, session_id)
+    workspace_backend = create_local_shell_backend(str(workspace_dir), virtual_mode=True)
     skills_backend = create_local_shell_backend(str(skills_root()), virtual_mode=True)
     return CompositeBackend(
         default=workspace_backend,
@@ -84,10 +90,26 @@ class DeepResearchAgent(BaseAgent):
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         self.running_tasks[task_id] = {"cancelled": False}
 
+        user_id = _resolve_user_id(current_user)
+        if not session_id or not user_id:
+            logger.warning(
+                "DeepResearchAgent 缺少 session_id 或 user_id，拒绝挂载可写 backend "
+                f"session_id={session_id!r} user_id={user_id!r}"
+            )
+            yield {
+                "type": "abort",
+                "content": "",
+                "tool_call": None,
+                "reasoning": None,
+                "finish_reason": "error",
+                "usage": {},
+            }
+            return
+
         try:
             config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
 
-            backend = _build_research_backend()
+            backend = _build_research_backend(user_id, session_id)
             web_tools = build_web_search_tools()
             agent = create_noesis_agent(
                 tools=web_tools,

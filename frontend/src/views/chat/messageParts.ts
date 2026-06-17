@@ -29,6 +29,7 @@ export interface ToolUiPart {
   output: string
   status: ToolRunStatus
   error?: string | null
+  errorCategory?: string | null
   duration_ms?: number
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
   parent_task_call_id?: string
@@ -239,6 +240,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         output: typeof rec.output === 'string' ? rec.output : '',
         status: coerceToolStatus(rec),
         error: rec.error != null ? String(rec.error) : null,
+        errorCategory: rec.errorCategory != null ? String(rec.errorCategory) : null,
         duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
       })
@@ -768,7 +770,13 @@ export function upsertToolInputPart(
 export function applyToolOutput(
   parts: UiPart[],
   tool_call_id: string,
-  payload: { output: string, error?: string, status: 'success' | 'error', duration_ms?: number },
+  payload: {
+    output: string
+    error?: string
+    status: 'success' | 'error'
+    duration_ms?: number
+    errorCategory?: string
+  },
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
@@ -783,6 +791,7 @@ export function applyToolOutput(
       output: payload.output,
       status,
       error: payload.error,
+      errorCategory: payload.errorCategory,
       duration_ms: payload.duration_ms,
     })
     return next
@@ -792,6 +801,7 @@ export function applyToolOutput(
     ...tp,
     output: payload.output,
     error: payload.error,
+    errorCategory: payload.errorCategory ?? tp.errorCategory,
     status,
     duration_ms: payload.duration_ms ?? tp.duration_ms,
   }

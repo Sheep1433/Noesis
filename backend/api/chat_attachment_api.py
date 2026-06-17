@@ -12,7 +12,7 @@ from schemas.chat_attachment_vo import AttachmentListResponse
 from schemas.login_vo import CurrentUser
 from services.chat_attachment_service import ChatAttachmentService
 from services.user_service import UserService
-from utils.response_util import ResponseUtil
+from common.http.response import ResponseUtil
 
 chat_attachment_router = APIRouter(prefix="/api/chat")
 

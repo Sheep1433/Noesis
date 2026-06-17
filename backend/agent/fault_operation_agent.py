@@ -4,7 +4,6 @@
 """
 
 import asyncio
-import os
 import uuid
 from typing import Any, AsyncGenerator, Optional
 
@@ -15,22 +14,27 @@ from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.backends import create_local_shell_backend
+from config.agent_workspace_paths import ensure_workspace_dir
 from deepagents.backends import LocalShellBackend
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
-from utils.log_util import logger
+from common.logging import logger
 
 # 故障运维 MCP 端点（与 SimpleMCPAgent 调试地址一致，按需改代码）
 FAULT_MCP_URL = "http://localhost:8000/mcp"
 
-_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_FAULT_WORKSPACE_DIR = os.path.join(_BACKEND_DIR, ".agent_workspace", "fault_ops")
+
+def _resolve_user_id(current_user) -> Optional[str]:
+    if current_user is None:
+        return None
+    uid = getattr(current_user, "user_id", None)
+    return str(uid) if uid is not None else None
 
 
-def _build_fault_backend() -> LocalShellBackend:
+def _build_fault_backend(user_id: str, session_id: str) -> LocalShellBackend:
     """本地工作区：存放排查笔记、临时脚本等；并满足 SubAgentMiddleware 对 backend 的要求。"""
-    os.makedirs(_FAULT_WORKSPACE_DIR, exist_ok=True)
-    return create_local_shell_backend(_FAULT_WORKSPACE_DIR, virtual_mode=True)
+    workspace_dir = ensure_workspace_dir(user_id, session_id)
+    return create_local_shell_backend(str(workspace_dir), virtual_mode=True)
 
 
 def _build_fault_operation_subagents(
@@ -78,6 +82,7 @@ class FaultOperationAgent(BaseAgent):
         query: str,
         *,
         session_id: Optional[str] = None,
+        current_user=None,
         file_list: dict = None,
         qa_type: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
@@ -86,6 +91,22 @@ class FaultOperationAgent(BaseAgent):
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         self.running_tasks[task_id] = {"cancelled": False}
 
+        user_id = _resolve_user_id(current_user)
+        if not session_id or not user_id:
+            logger.warning(
+                "FaultOperationAgent 缺少 session_id 或 user_id，拒绝挂载可写 backend "
+                f"session_id={session_id!r} user_id={user_id!r}"
+            )
+            yield {
+                "type": "abort",
+                "content": "",
+                "tool_call": None,
+                "reasoning": None,
+                "finish_reason": "error",
+                "usage": {},
+            }
+            return
+
         try:
             config = {
                 "configurable": {"thread_id": task_id},
@@ -93,7 +114,7 @@ class FaultOperationAgent(BaseAgent):
             }
 
             mcp_tools = await self._load_mcp_tools()
-            backend = _build_fault_backend()
+            backend = _build_fault_backend(user_id, session_id)
 
             agent = create_noesis_agent(
                 tools=mcp_tools,

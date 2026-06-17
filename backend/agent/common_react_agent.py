@@ -18,8 +18,8 @@ from agent.tools import build_kb_search_tools, build_web_search_tools, list_qdra
 from agent.tools.chat_attachment_tools import build_attachment_tools
 from config.env import ChatAttachmentConfig
 from services.chat_attachment_service import ChatAttachmentService
-from utils.log_util import logger
-from utils.vision_util import is_vision_available
+from common.logging import logger
+from domain.chat.attachments.vision import is_vision_available
 
 
 class GeneralQAAgent(BaseAgent):

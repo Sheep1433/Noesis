@@ -1,6 +1,6 @@
 from sqlalchemy import text
 from config.database import async_engine, AsyncSessionLocal, Base, AsyncDatabaseInspector, inspector
-from utils.log_util import logger
+from common.logging import logger
 
 
 async def get_db():
@@ -23,8 +23,8 @@ async def init_create_table():
 
     :return:
     """
-    import model.chat_models  # noqa: F401
-    import model.db_models  # noqa: F401
+    import models.chat_models  # noqa: F401
+    import models.db_models  # noqa: F401
 
     logger.info('🔎 初始化数据库连接...')
     async with async_engine.begin() as conn:

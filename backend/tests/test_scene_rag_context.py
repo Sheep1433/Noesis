@@ -127,7 +127,7 @@ async def test_build_scene_rag_context_langfuse_spans_when_enabled():
     with patch("config.env.LangfuseConfig", langfuse_cfg):
         with patch("langfuse.get_client", return_value=mock_client):
             with patch.object(_HybridRetriever, "search", new=_side_effect):
-                from utils.langfuse_tracing import langfuse_workflow_context
+                from domain.observability.langfuse import langfuse_workflow_context
 
                 run_config = {
                     "metadata": {

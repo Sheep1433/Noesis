@@ -4,7 +4,7 @@ from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 from config.env import LangfuseConfig
-from utils import langfuse_tracing
+from domain.observability import langfuse as langfuse_tracing
 
 
 def _langfuse_config(*, tracing_enabled: bool) -> LangfuseConfig:

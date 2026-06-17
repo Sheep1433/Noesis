@@ -26,10 +26,16 @@ e2e-tests/node_modules/
 
 e2e-tests/
 backend/checkpoints/
+
+# 本地运行时数据（见 common/paths.py）
+.data/
+
+# 已废弃路径（若本地残留可安全删除）
 qdrant_storage/
 
 # Agent 离线评测产物
 results/
+.promptfoo/
 
 # Docker 本地环境（从 deploy/.env.docker.example 复制）
 deploy/.env.docker

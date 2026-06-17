@@ -69,7 +69,8 @@ class EnvSecrets(BaseSettings):
 
     model_api_key: str = Field(default="", alias="MODEL_API_KEY")
     embedding_model_api_key: str = Field(default="", alias="EMBEDDING_MODEL_API_KEY")
-    summarization_model_api_key: str = Field(default="", alias="SUMMARIZATION_MODEL_API_KEY")
+    rerank_model_api_key: str = Field(default="", alias="RERANK_MODEL_API_KEY")
+    vlm_model_api_key: str = Field(default="", alias="VLM_MODEL_API_KEY")
 
     qdrant_api_key: str = Field(default="", alias="QDRANT_API_KEY")
 
@@ -125,9 +126,15 @@ class ModelSettings:
     model_temperature: float
     model_base_url: str
     model_api_key: str
-    embedding_model_api_key: str
     embedding_model_name: str
+    embedding_model_base_url: str
+    embedding_model_api_key: str
     rerank_model_name: str
+    rerank_model_base_url: str
+    rerank_model_api_key: str
+    vlm_model_name: str
+    vlm_model_base_url: str
+    vlm_model_api_key: str
     show_thinking_process: str
     request_timeout: float
     max_retries: int
@@ -139,10 +146,7 @@ class ModelSettings:
     context_max_input_tokens: int
     context_display_enabled: bool
     summarization_enabled: bool
-    summarization_model_type: str
     summarization_model_name: str
-    summarization_model_base_url: str
-    summarization_model_api_key: str
     summarization_model_temperature: float
     summarization_max_tokens_before_summary: int
     summarization_trigger_tokens: int
@@ -306,18 +310,27 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
     gen = m.generation
     ctx = yaml_cfg.context
     s = yaml_cfg.summarization
-    sm = s.model
+    emb = yaml_cfg.embedding
+    rerank = yaml_cfg.rerank
+    vlm = yaml_cfg.vlm
     loop = yaml_cfg.loop_detection
     runtime = yaml_cfg.agent_runtime
+    vlm_api_key = secrets.vlm_model_api_key or _legacy_env("VL_MODEL_API_KEY", "")
     return ModelSettings(
         model_type=_legacy_env("MODEL_TYPE", m.type),
         model_name=_legacy_env("MODEL_NAME", m.name),
         model_temperature=_legacy_env_float("MODEL_TEMPERATURE", m.temperature),
         model_base_url=_legacy_env("MODEL_BASE_URL", m.base_url),
         model_api_key=secrets.model_api_key,
+        embedding_model_name=_legacy_env("EMBEDDING_MODEL_NAME", emb.name),
+        embedding_model_base_url=_legacy_env("EMBEDDING_MODEL_BASE_URL", emb.base_url),
         embedding_model_api_key=secrets.embedding_model_api_key,
-        embedding_model_name=_legacy_env("EMBEDDING_MODEL_NAME", m.embedding_model_name),
-        rerank_model_name=_legacy_env("RERANK_MODEL_NAME", m.rerank_model_name),
+        rerank_model_name=_legacy_env("RERANK_MODEL_NAME", rerank.name),
+        rerank_model_base_url=_legacy_env("RERANK_MODEL_BASE_URL", rerank.base_url),
+        rerank_model_api_key=secrets.rerank_model_api_key,
+        vlm_model_name=_legacy_env("VLM_MODEL_NAME", vlm.name),
+        vlm_model_base_url=_legacy_env("VLM_MODEL_BASE_URL", vlm.base_url),
+        vlm_model_api_key=vlm_api_key,
         show_thinking_process=_legacy_env(
             "SHOW_THINKING_PROCESS", "true" if m.show_thinking_process else "false"
         ),
@@ -331,12 +344,9 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         context_max_input_tokens=_legacy_env_int("CONTEXT_MAX_INPUT_TOKENS", ctx.max_input_tokens),
         context_display_enabled=_legacy_env_bool("CONTEXT_DISPLAY_ENABLED", ctx.display_enabled),
         summarization_enabled=_legacy_env_bool("SUMMARIZATION_ENABLED", s.enabled),
-        summarization_model_type=_legacy_env("SUMMARIZATION_MODEL_TYPE", sm.type),
-        summarization_model_name=_legacy_env("SUMMARIZATION_MODEL_NAME", sm.name),
-        summarization_model_base_url=_legacy_env("SUMMARIZATION_MODEL_BASE_URL", sm.base_url),
-        summarization_model_api_key=secrets.summarization_model_api_key,
+        summarization_model_name=_legacy_env("SUMMARIZATION_MODEL_NAME", s.model_name),
         summarization_model_temperature=_legacy_env_float(
-            "SUMMARIZATION_MODEL_TEMPERATURE", sm.temperature
+            "SUMMARIZATION_MODEL_TEMPERATURE", s.temperature
         ),
         summarization_max_tokens_before_summary=_legacy_env_int(
             "SUMMARIZATION_MAX_TOKENS_BEFORE_SUMMARY", s.max_tokens_before_summary

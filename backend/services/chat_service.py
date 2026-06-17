@@ -17,10 +17,11 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy import select, and_, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from model.chat_models import TChatSession, TChatMessage
+from models.chat_models import TChatSession, TChatMessage
 from exceptions.exception import ServiceException
-from utils.log_util import logger
-from utils.message_builder import AssistantMessageBuilder
+from config.agent_workspace_paths import delete_session_workspace
+from common.logging import logger
+from domain.chat.message_builder import AssistantMessageBuilder
 
 # ============================================================================
 # 加载锁：服务启动从 MySQL 恢复检查点完成前，业务写入须等待
@@ -496,6 +497,7 @@ class ChatService:
             .values(deleted_at=now)
         )
         await db.commit()
+        delete_session_workspace(user_id, session_id)
         logger.info(f'软删会话成功: session_id={session_id}, user_id={user_id}（已级联软删消息）')
         return True
 

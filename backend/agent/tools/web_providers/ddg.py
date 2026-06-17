@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from utils.log_util import logger
+from common.logging import logger
 
 
 def search_with_ddg(query: str, limit: int, timeout: int = 30) -> dict[str, Any]:

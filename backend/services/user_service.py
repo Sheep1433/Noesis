@@ -7,13 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.get_db import get_db
 from exceptions.exception import AuthException, LoginException
-from model.db_models import TUser
+from models.db_models import TUser
 from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QaStopRequest
-from utils.auth_token_service import AUTH_COOKIE_NAME
-from utils.log_util import logger
-from utils.pwd_util import PwdUtil
-from utils.stop_token_service import STOP_TOKEN_HEADER, StopTokenService
+from domain.auth.token_service import AUTH_COOKIE_NAME
+from common.logging import logger
+from domain.auth.password import PwdUtil
+from domain.auth.stop_token import STOP_TOKEN_HEADER, StopTokenService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 

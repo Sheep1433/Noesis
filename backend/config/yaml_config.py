@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-from utils.log_util import logger
+from common.logging import logger
 
 
 def _backend_dir() -> Path:
@@ -84,23 +84,38 @@ class ModelGenerationYamlSection(BaseModel):
 
 
 class ModelYamlSection(BaseModel):
+    """主对话 LLM：type / name / base_url；api_key 在 .env MODEL_API_KEY。"""
+
     type: str = "qwen"
     name: str = "qwen-plus"
     temperature: float = 0.75
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    embedding_model_name: str = "text-embedding-v4"
-    rerank_model_name: str = "gte-rerank-v2"
     show_thinking_process: bool = True
     request_timeout: float = Field(default=30.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
     generation: ModelGenerationYamlSection = Field(default_factory=ModelGenerationYamlSection)
 
 
-class SummarizationModelYamlSection(BaseModel):
-    type: str = ""
+class RemoteModelYamlSection(BaseModel):
+    """远程模型端点：name + base_url；api_key 在 .env 对应变量。"""
+
     name: str = ""
     base_url: str = ""
-    temperature: float = 0.0
+
+
+class EmbeddingYamlSection(RemoteModelYamlSection):
+    name: str = "text-embedding-v4"
+    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+class RerankYamlSection(RemoteModelYamlSection):
+    name: str = "gte-rerank-v2"
+    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+class VlmYamlSection(RemoteModelYamlSection):
+    name: str = "Qwen3-VL-32B-Instruct"
+    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 class ContextYamlSection(BaseModel):
@@ -110,7 +125,9 @@ class ContextYamlSection(BaseModel):
 
 class SummarizationYamlSection(BaseModel):
     enabled: bool = True
-    model: SummarizationModelYamlSection = Field(default_factory=SummarizationModelYamlSection)
+    # 仅模型名单独配置；type / base_url / api_key 与 model 层一致
+    model_name: str = ""
+    temperature: float = 0.0
     trigger_tokens: int = Field(default=0, ge=0)
     trigger_fraction: float = Field(default=0.85, gt=0, le=1)
     max_input_tokens: int = Field(default=0, ge=0)
@@ -176,12 +193,12 @@ class WebToolsYamlSection(BaseModel):
 
 
 class CheckpointYamlSection(BaseModel):
-    db_path: str = "./data/langgraph_checkpoints.sqlite"
+    db_path: str = "../.data/checkpoints/langgraph_checkpoints.sqlite"
 
 
 class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
-    dir: str = "./data/chat_attachments"
+    dir: str = "../.data/chat_attachments"
     ttl_days: int = Field(default=7, ge=1)
     max_file_mb: int = Field(default=20, ge=1)
     max_count_per_session: int = Field(default=10, ge=1)
@@ -201,6 +218,9 @@ class AppYamlConfig(BaseModel):
     jwt: JwtYamlSection = Field(default_factory=JwtYamlSection)
     database: DatabaseYamlSection = Field(default_factory=DatabaseYamlSection)
     model: ModelYamlSection = Field(default_factory=ModelYamlSection)
+    embedding: EmbeddingYamlSection = Field(default_factory=EmbeddingYamlSection)
+    rerank: RerankYamlSection = Field(default_factory=RerankYamlSection)
+    vlm: VlmYamlSection = Field(default_factory=VlmYamlSection)
     context: ContextYamlSection = Field(default_factory=ContextYamlSection)
     summarization: SummarizationYamlSection = Field(default_factory=SummarizationYamlSection)
     loop_detection: LoopDetectionYamlSection = Field(default_factory=LoopDetectionYamlSection)

@@ -1,20 +1,29 @@
 # 测试用例 Agent 离线评测
 
-三层指标：**L0**（结构门禁）、**coverage**（测试点覆盖）、**rag**（RAG Hit@3）。
+基于 [promptfoo](https://www.promptfoo.dev/) 编排：**L0**（结构门禁）、**coverage**（测试点覆盖）、**rag**（RAG Hit@3）。
 
 ## 目录
 
 ```
 evals/
+  promptfoo/
+    promptfooconfig.yaml   # promptfoo 主配置
+    provider.py            # 调用 case_graph 离线 runner
+    tests.py               # 从 dataset.jsonl 生成测试用例
+    asserts/               # L0 / coverage / rag Python 断言
   datasets/test_case/dataset.jsonl
   datasets/test_case/documents/
   eval_targets.json
-  runners/
-  scorers/          # l0_structure.py, coverage.py, rag_hit.py
-  report.py
+  scorers/                 # 评分逻辑（断言复用）
+  runners/                 # Agent 离线 runner（provider 复用）
 ```
 
-产物：`results/<run_id>/`（已 gitignore）。
+产物：promptfoo 默认写入 `backend/evals/promptfoo/.promptfoo/`；可用 `-o` 导出 JSON。
+
+## 前置
+
+- Node.js（`npx`）
+- `backend/.env` 配置 LLM；`scope=cases|full` 时需 Qdrant
 
 ## Dataset
 
@@ -24,30 +33,55 @@ evals/
 | `scenario_description` | 是 | 写入 Agent `query`（兼容 `query`） |
 | `document_path` | 是 | 相对 `datasets/test_case/` 的 Markdown |
 | `ground_truth.golden_test_points` | 是 | `[{scene_name, point_name}]` |
-| `ground_truth.expected_rag` | 可选 | 评 RAG 时必填，channel：`current_requirement` / `historical_requirements` / `historical_test_cases` |
+| `ground_truth.expected_rag` | 可选 | 评 RAG 时必填 |
 
 ## 跑分
 
 ```bash
 cd backend
-uv run python -m evals --tag baseline              # scope=full，需 Qdrant + LLM
+
+# 全量（需 Qdrant + LLM）
+uv run python -m evals --tag baseline
+
+# 仅测测试点生成
 uv run python -m evals --tag cov --scope testpoints
+
+# 单条调试
 uv run python -m evals --tag debug --item-id tc_login_001
-uv run python -m evals --tag v2 --baseline ../results/<run_id>
+
+# mock Judge（不调 DashScope，适合本地冒烟）
+uv run python -m evals --tag smoke --item-id tc_login_001 --mock-judge
+
+# 与历史结果对比
+uv run python -m evals --tag v2 --baseline path/to/output.json
+
+# 直接使用 promptfoo CLI
+cd evals/promptfoo
+PROMPTFOO_PYTHON=./run-python.sh NOESIS_EVAL_SCOPE=full NOESIS_EVAL_TAG=baseline \
+  npx promptfoo@latest eval
 ```
+
+环境变量（`python -m evals` 会自动设置）：
+
+| 变量 | 说明 |
+|------|------|
+| `NOESIS_EVAL_TAG` | run 标签 |
+| `NOESIS_EVAL_SCOPE` | `testpoints` / `cases` / `full` |
+| `NOESIS_EVAL_ITEM_ID` | 仅跑指定 id |
+| `NOESIS_EVAL_LIMIT` | 仅跑前 N 条 |
+| `NOESIS_EVAL_MOCK_JUDGE` | `1` 时 coverage 用名称匹配 mock |
+| `NOESIS_EVAL_DATASET` | 自定义 dataset.jsonl 路径 |
 
 ## 指标
 
-| 指标 | 含义 | 何时计算 |
-|------|------|----------|
-| **L0** | 无 error、JSON 字段齐全 | 始终 |
-| **coverage** | `point_coverage_recall`（LLM Judge） | `testpoints` / `full` |
-| **rag** | `rag_hit_at_3` | `cases` / `full`，需 `expected_rag` |
+| 指标 | promptfoo metric | 含义 | 何时计算 |
+|------|------------------|------|----------|
+| **L0** | `l0` | 无 error、JSON 字段齐全 | 始终 |
+| **coverage** | `point_coverage_recall` | LLM Judge → recall | `testpoints` / `full` |
+| **rag** | `rag_hit_at_3` | retrieval_trace vs expected_rag | `cases` / `full` |
 
-汇总：`aggregate.json` → `l0_pass_rate`、`coverage.*`、`rag.*`、`dataset_size_warning`。
-
-质量门：`passed` = L0 通过且 coverage ≥ `eval_targets.json` 中的 `point_coverage_recall_min`。
+阈值见 `eval_targets.json`（`point_coverage_recall_min`、`rag_hit_at_3_min`）。
 
 ## CI
 
-`pytest tests/test_eval_*.py` 使用 mock Judge / mock trace，不调 DashScope。
+`pytest tests/test_eval_*.py` 直接测 scorer / runner，不调 DashScope、不依赖 promptfoo。

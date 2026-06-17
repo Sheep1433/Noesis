@@ -15,7 +15,7 @@ context: |
   主规格目录结构（能力 id = 目录名）：
   - 4 个 Agent 场景：agent-common-qa、agent-fault-operation、agent-test-case、agent-deep-research
   - 平台聊天：platform-chat（会话、SSE 桥接、chat 通用 UI、LLM 工厂、qa_type 路由表）
-  - 模块：knowledge-base（含入库分块策略）、skills-filesystem、user-auth、container-deployment、agent-reasoning-observability
+  - 模块：knowledge-base（含入库分块策略）、skills-filesystem、agent-workspace、user-auth、container-deployment、agent-reasoning-observability
 
 rules:
   proposal:

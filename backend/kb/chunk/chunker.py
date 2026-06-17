@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from kb.chunk.markdown_splitter import MarkdownChunker
 from kb.chunk.params import _normalize_chunk_params, _fixed_window_chunks
 from kb.document_parse.models import ParsedFile
-from utils.log_util import logger
+from common.logging import logger
 
 ChunkInput = Union[ParsedFile, str]
 

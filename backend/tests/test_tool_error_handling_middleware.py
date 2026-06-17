@@ -9,6 +9,7 @@ from langgraph.types import Command
 from unittest.mock import MagicMock
 
 from agent.middlewares.tool_error_handling_middleware import ToolErrorHandlingMiddleware
+from domain.chat.streaming.tool_failure import ToolFailureCategory
 
 
 def _request() -> ToolCallRequest:
@@ -30,6 +31,7 @@ def test_wrap_tool_call_returns_error_tool_message() -> None:
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
     assert result.tool_call_id == "call_abc"
+    assert result.content.startswith("[tool_error category=network_unreachable")
     assert "connection refused" in result.content
 
 
@@ -43,6 +45,42 @@ def test_wrap_tool_call_preserves_graph_bubble_up() -> None:
         mw.wrap_tool_call(_request(), _interrupt)
 
 
+def test_wrap_tool_call_reclassifies_handler_error_status() -> None:
+    mw = ToolErrorHandlingMiddleware()
+
+    def _error_msg(_req: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(
+            content="ValidationError: missing field ip",
+            tool_call_id="call_abc",
+            name="bash",
+            status="error",
+        )
+
+    result = mw.wrap_tool_call(_request(), _error_msg)
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "[tool_error category=invalid_arguments" in result.content
+
+
+def test_wrap_tool_call_passthrough_prefixed_error_content() -> None:
+    mw = ToolErrorHandlingMiddleware()
+    original = (
+        "[tool_error category=subagent_failure retryable=false]\n"
+        "Tool 'task' failed: child tool broke"
+    )
+
+    def _prefixed(_req: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(
+            content=original,
+            tool_call_id="call_abc",
+            name="task",
+            status="error",
+        )
+
+    result = mw.wrap_tool_call(_request(), _prefixed)
+    assert result.content == original
+
+
 @pytest.mark.asyncio
 async def test_awrap_tool_call_returns_error_tool_message() -> None:
     mw = ToolErrorHandlingMiddleware()
@@ -53,4 +91,5 @@ async def test_awrap_tool_call_returns_error_tool_message() -> None:
     result = await mw.awrap_tool_call(_request(), _boom)
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
-    assert "工具执行环境不可用" in result.content
+    assert "[tool_error category=infrastructure" in result.content
+    assert ToolFailureCategory.INFRASTRUCTURE.value in result.content

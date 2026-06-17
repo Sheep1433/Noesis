@@ -8,14 +8,15 @@ import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from config.env import get_config
-from utils.log_util import logger
+from common.logging import logger
+from common.paths import resolve_backend_relative
 
 _conn: aiosqlite.Connection | None = None
 _saver: AsyncSqliteSaver | None = None
 
 
 def resolve_checkpoint_db_path() -> Path:
-    path = Path(get_config.get_checkpoint_config().db_path).expanduser().resolve()
+    path = resolve_backend_relative(get_config.get_checkpoint_config().db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

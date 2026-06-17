@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from config.env import WebToolsConfig
-from utils.log_util import logger
+from common.logging import logger
 
 
 def _get_client():

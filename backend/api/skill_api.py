@@ -13,7 +13,7 @@ from schemas.skill_vo import (
 )
 from services.skill_fs_service import SkillFsService, max_zip_bytes
 from services.user_service import UserService
-from utils.response_util import ResponseUtil
+from common.http.response import ResponseUtil
 
 skill_router = APIRouter(prefix='/api/skills', tags=['Skill 模块'])
 

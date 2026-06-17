@@ -12,7 +12,7 @@ from typing_extensions import override
 
 from agent.middlewares.context_metrics import build_context_snapshot_from_request
 from config.env import ModelConfig
-from utils.log_util import logger
+from common.logging import logger
 
 
 class ContextMetricsRegistry:

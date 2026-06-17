@@ -5,13 +5,14 @@ from fastapi.encoders import jsonable_encoder
 from pydantic_validation_decorator import FieldValidationError
 from exceptions.exception import (
     AuthException,
+    ConflictException,
     LoginException,
     ModelValidatorException,
     ServiceException,
     ServiceWarning,
 )
-from utils.log_util import logger
-from utils.response_util import ResponseUtil
+from common.logging import logger
+from common.http.response import ResponseUtil
 
 
 def handle_exception(app: FastAPI):
@@ -28,6 +29,11 @@ def handle_exception(app: FastAPI):
     @app.exception_handler(LoginException)
     async def login_exception_handler(request: Request, exc: LoginException):
         return ResponseUtil.failure(data=exc.data, msg=exc.message)
+
+    # 资源冲突（如用户名已存在）
+    @app.exception_handler(ConflictException)
+    async def conflict_exception_handler(request: Request, exc: ConflictException):
+        return ResponseUtil.conflict(data=exc.data, msg=exc.message)
 
     # 自定义模型检验异常
     @app.exception_handler(ModelValidatorException)

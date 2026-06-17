@@ -25,6 +25,7 @@ services:
       NOESIS_CONFIG_PATH: /app/config.yaml
     volumes:
       - ./config.docker.yaml:/app/config.yaml:ro
+      - backend_runtime:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -50,3 +51,4 @@ services:
 
 volumes:
   qdrant_storage:
+  backend_runtime:

@@ -9,7 +9,7 @@ import pytest
 
 from config.env import LangfuseConfig
 from services.qa_service import SSE_COMMENT_KEEPALIVE, _iter_agent_stream_via_bridge
-from utils.stream_bridge import HEARTBEAT_SENTINEL, StreamBridgeError
+from domain.chat.streaming.bridge import HEARTBEAT_SENTINEL, StreamBridgeError
 
 
 @pytest.mark.asyncio

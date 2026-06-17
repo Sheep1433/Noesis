@@ -75,7 +75,7 @@ MCP 工具集 SHALL 至少覆盖以下语义分层（具体工具名以实现注
 - `tools`：MCP 动态加载的工具列表
 - `system_prompt`：故障运维角色提示（中文、Markdown 输出、排查流程与委派规则）
 - `checkpointer`：继承自 `BaseAgent` 的会话检查点
-- `backend`：`LocalShellBackend`，根目录为 `backend/.agent_workspace/fault_ops`，`virtual_mode=True`
+- `backend`：`LocalShellBackend`，根目录为 `{REPO_ROOT}/.data/agent_workspace/users/{user_id}/sessions/{session_id}/workspace/`，`virtual_mode=True`；`user_id` 与 `session_id` 来自 `run_agent` 的 `current_user` 与 `session_id`；构建前 SHALL 调用 `ensure_workspace_dir`（见 `agent-workspace` 规格）
 - `subagents`：至少包含名为 `general-purpose` 的子 Agent，具备与主 Agent 相同的 MCP 工具集与 `build_subagent_default_middleware(backend)` 中间件栈
 
 工厂 SHALL 按 `agent/factory.py` 约定挂载中间件顺序：`FilesystemMiddleware` → `SubAgentMiddleware` → 运行时防护（`DanglingToolCallMiddleware`、`ContextEditingMiddleware`、`LoopDetectionMiddleware`、`ToolCallLimitMiddleware` 等，受 `ModelConfig` 开关控制）→ `create_agent(model=get_llm(), ...)`。
@@ -84,8 +84,8 @@ MCP 工具集 SHALL 至少覆盖以下语义分层（具体工具名以实现注
 
 #### Scenario: 本地工作区隔离
 
-- **WHEN** Agent 通过 `FilesystemMiddleware` 读写排查笔记或临时脚本
-- **THEN** 文件操作 SHALL 限制在 `fault_ops` 工作区根目录内（`virtual_mode`），不得越界写入宿主机任意路径
+- **WHEN** Agent 通过 `FilesystemMiddleware` 读写排查笔记或临时脚本，且 `run_agent` 传入有效 `session_id` 与 `current_user`
+- **THEN** 文件操作 SHALL 限制在当前会话 `.data/agent_workspace/users/{user_id}/sessions/{session_id}/workspace/` 内（`virtual_mode`），不得越界写入宿主机任意路径，**SHALL NOT** 写入遗留全局 `backend/.agent_workspace/fault_ops` 目录
 
 #### Scenario: 子 Agent 委派
 
@@ -103,7 +103,7 @@ MCP 工具集 SHALL 至少覆盖以下语义分层（具体工具名以实现注
 
 1. **远程 MCP（SSH）**：MCP Server 在隔离环境（如 Docker 容器）内发起 SSH，连接用户指定的目标 `ip`；工具以**只读诊断**为设计目标——`read`/`grep`/`glob` 天然只读，`bash` 仅用于诊断命令（如 `df`、`ps`、`kubectl get` 等），SHALL NOT 用于写文件、修改配置或重启服务。命令风险防控（白名单、黑名单、LLM 二次判断等）由 MCP 侧与 `docs/prd/agent-fault-operation/故障运维设计.md` §4 约定，Agent 侧 SHALL NOT 假设可执行任意 shell。
 
-2. **本地工作区**：`LocalShellBackend` 仅供 Agent 存放排查笔记与中间产物；与远程 MCP 执行面隔离，不得将本地工作区路径作为 MCP `read`/`bash` 的默认目标。
+2. **本地工作区**：`LocalShellBackend` 仅供 Agent 存放**当前会话**排查笔记与中间产物，根目录为 `.data/agent_workspace/users/{user_id}/sessions/{session_id}/workspace/`；与远程 MCP 执行面隔离，不得将本地工作区路径作为 MCP `read`/`bash` 的默认目标。
 
 SSH 凭据（`username`/`password`）SHALL 由 MCP 服务配置或调用参数提供，**禁止**在 Noesis 仓库提交的源码或配置中包含生产环境明文密码。MCP 端点 URL SHALL 可配置，默认可指向本地调试地址，生产部署须通过网络策略限制 MCP 服务可达范围。
 

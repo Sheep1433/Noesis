@@ -21,6 +21,7 @@ Noesis/
 ├── frontend/          → frontend/AGENTS.md
 ├── backend/           → backend/AGENTS.md
 ├── extensions/        → Skills 包 + MCP 服务（见 extensions/README.md）
+├── .data/             → 本地运行时数据（gitignore：Qdrant、checkpoint、附件、工作区、日志）
 ├── deploy/            → Docker Compose、镜像定义、生产配置
 ├── scripts/run.sh     # dev | prod | docker
 ├── openspec/          # 变更提案与规格
@@ -35,7 +36,7 @@ Noesis/
 | 后端启动 | `backend/app.py`、`backend/server.py` |
 | 问答编排 | `backend/services/qa_service.py` |
 | Agent 工厂 | `backend/agent/factory.py` |
-| SSE 桥接 | `backend/utils/langgraph_sse_bridge.py` |
+| SSE 桥接 | `backend/domain/chat/streaming/langgraph_sse.py` |
 | 配置 | `backend/config/env.py` + `backend/config.yaml` |
 
 ## 跨端技术要点
@@ -71,7 +72,7 @@ cd frontend && pnpm lint        # 前端按影响范围 lint / build
 
 - Python 统一 `uv run`，禁止裸 `python`
 - 测试目录：`backend/tests/`、`frontend/tests/`
-- 依赖链：`API → Service → Utils/Agent`；API 禁止直连数据库
+- 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库
 - SSE、Agent、Qdrant、消息持久化相关改动优先补回归测试
 
 ### 后端硬性约定（摘要）

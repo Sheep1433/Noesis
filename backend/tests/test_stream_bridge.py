@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from utils.stream_bridge import (
+from domain.chat.streaming.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
     StreamBridgeError,

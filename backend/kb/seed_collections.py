@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from config.env import QdrantConfig
 from services.qdrant_service import QdrantService, is_qdrant_connected
-from utils.log_util import logger
+from common.logging import logger
 
 _VECTOR_DIM = 1024
 

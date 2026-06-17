@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from services.chat_attachment_service import ChatAttachmentService
-from utils.attachment_tool import (
+from domain.chat.attachments.resolver import (
     CHAT_ATTACHMENT_REF,
     attachment_id_from_ref,
     is_chat_attachment_ref,
 )
-from utils.markdown_outline import extract_outline, extract_preview, read_line_range
+from domain.chat.attachments.markdown import extract_outline, extract_preview, read_line_range
 
 
 def test_chat_attachment_ref_parsing():

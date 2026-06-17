@@ -1,6 +1,6 @@
 ## Purpose
 
-本能力规定 Noesis 第 4 类问答场景 **深度研究（`DEEP_RESEARCH_QA`）** 的后端 Agent 实现：`DeepResearchAgent` 经统一工厂 `create_noesis_agent` 装配 deepagents 的 **FilesystemMiddleware**、**SkillsMiddleware** 与 **SubAgentMiddleware**；工作区写入 `backend/.agent_workspace`，Skills 以 `/skills/` 路由只读挂载 `backend/skills`；主 Agent 可通过 `task` 工具委派 `research-worker` 子 Agent 并行调研，流式输出与前端子任务展示遵循平台聊天规格。
+本能力规定 Noesis 第 4 类问答场景 **深度研究（`DEEP_RESEARCH_QA`）** 的后端 Agent 实现：`DeepResearchAgent` 经统一工厂 `create_noesis_agent` 装配 deepagents 的 **FilesystemMiddleware**、**SkillsMiddleware** 与 **SubAgentMiddleware**；工作区写入 `.data/agent_workspace/users/{user_id}/sessions/{session_id}/workspace/`（见 `agent-workspace` 规格），Skills 以 `/skills/` 路由只读挂载 `extensions/skills`；主 Agent 可通过 `task` 工具委派 `research-worker` 子 Agent 并行调研，流式输出与前端子任务展示遵循平台聊天规格。
 
 ## Requirements
 
@@ -50,19 +50,21 @@
 
 深度研究文件系统 SHALL 使用 deepagents `CompositeBackend`，满足：
 
-- **默认盘**：`LocalShellBackend(root_dir=backend/.agent_workspace, virtual_mode=True)`，供 Agent 读写研究工作产物；
-- **Skills 路由**：路径前缀 `/skills/` 映射至 `LocalShellBackend(root_dir=backend/skills, virtual_mode=True)`；
+- **默认盘**：`LocalShellBackend(root_dir={REPO_ROOT}/.data/agent_workspace/users/{user_id}/sessions/{session_id}/workspace/, virtual_mode=True)`，其中 `user_id` 来自 `current_user`，`session_id` 来自 `run_agent` 参数；目录 SHALL 在构建 backend 前通过 `ensure_workspace_dir` 创建；
+- **Skills 路由**：路径前缀 `/skills/` 映射至 `LocalShellBackend(root_dir=extensions/skills（或 skills_filesystem_root 配置）, virtual_mode=True)`；
 - Agent 侧对 `/skills/` 的访问语义为 **只读技能包挂载**（写入行为由 deepagents 后端与系统提示约束，**SHALL NOT** 依赖 HTTP 技能 API）。
+
+系统 **SHALL NOT** 将遗留全局 `backend/.agent_workspace` 或 `.data/agent_workspace` 根目录本身（无 `users/.../sessions/...` 段）作为单次运行的可写 backend 根。
 
 #### Scenario: 工作区路径写入
 
-- **WHEN** 主 Agent 或子 Agent 通过文件系统工具在默认路径创建或修改文件
-- **THEN** 变更 SHALL 落在 `backend/.agent_workspace` 虚拟根下，**SHALL NOT** 直接写入 `backend/skills` 默认盘
+- **WHEN** 主 Agent 或子 Agent 通过文件系统工具在默认路径创建或修改文件，且 `run_agent` 传入 `session_id=s1` 与有效 `current_user`
+- **THEN** 变更 SHALL 落在 `.data/agent_workspace/users/{user_id}/sessions/s1/workspace/` 虚拟根下，**SHALL NOT** 直接写入 `extensions/skills`，**SHALL NOT** 写入遗留 `backend/.agent_workspace`
 
 #### Scenario: 读取 Skills 下 skill 目录
 
 - **WHEN** Agent 通过文件系统工具访问以 `/skills/` 开头的路径（如 `/skills/deep-research-v2/SKILL.md`）
-- **THEN** 系统 SHALL 从 `backend/skills` 对应相对路径读取内容，供 `SkillsMiddleware` 与 Agent 提示词引用
+- **THEN** 系统 SHALL 从 `extensions/skills`（或配置覆盖路径）对应相对路径读取内容，供 `SkillsMiddleware` 与 Agent 提示词引用
 
 #### Scenario: 无 backend 时不得挂载子 Agent
 
@@ -117,14 +119,14 @@
 |------|----------------------------------|---------------------|
 | 消费方 | LangGraph Agent / deepagents 中间件 | 前端 Skills 管理页、运维上传 |
 | 访问面 | `FilesystemMiddleware` + `SkillsMiddleware` 虚拟路径 | `GET/POST /api/skills/fs/*` REST |
-| 写入范围 | 仅 `.agent_workspace` 工作区 | ZIP 上传解压至技能根目录 |
+| 写入范围 | 当前会话 `.data/agent_workspace/users/.../workspace/` | ZIP 上传解压至技能根目录 |
 | 认证 | 继承聊天会话 JWT 链路的 Agent 进程内访问 | 接口级 JWT 校验 |
 
 本规格 **SHALL NOT** 复制 `skills-filesystem` 中的 API 路径、响应字段或 ZIP 大小限制细节；当 Agent 需读取 skill 内容时，**SHALL** 通过 `/skills/` 路由与 `SkillsMiddleware` 完成，**SHALL NOT** 在 Agent 代码中直接调用 `/api/skills/fs/file`。
 
 #### Scenario: 运维上传新 skill 后 Agent 可见
 
-- **WHEN** 运维经 `skills-filesystem` 约定 API 向 `backend/skills` 写入新 skill 包
+- **WHEN** 运维经 `skills-filesystem` 约定 API 向 `extensions/skills` 写入新 skill 包
 - **THEN** 后续 `DEEP_RESEARCH_QA` 会话中 Agent **SHALL** 能在 `/skills/` 路径下发现该 skill，无需修改 `DeepResearchAgent` 代码
 
 #### Scenario: Agent 规格不定义 HTTP 树接口

@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from agent.tools.web_providers.url_safety import validate_fetch_url
-from utils.log_util import logger
+from common.logging import logger
 
 _STRIP_TAGS = frozenset({"script", "style", "noscript", "svg", "iframe"})
 

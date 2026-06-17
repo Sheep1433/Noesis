@@ -40,8 +40,6 @@ model:
   # type: opencode
   # name: deepseek-v4-flash-free
   # base_url: https://opencode.ai/zen/v1
-  embedding_model_name: text-embedding-v4
-  rerank_model_name: gte-rerank-v2
   show_thinking_process: true
   # 单次 LLM HTTP 读超时（秒）：流式为相邻 chunk 间隔上限；深度研究建议 ≥120
   request_timeout: 120
@@ -53,17 +51,27 @@ model:
     presence_penalty: 0.0
     streaming: true
 
+embedding:
+  name: text-embedding-v4
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+rerank:
+  name: gte-rerank-v2
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+vlm:
+  name: Qwen3-VL-32B-Instruct
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
 context:
   max_input_tokens: 128000
   display_enabled: true
 
 summarization:
   enabled: true
-  model:
-    type: ""
-    name: ""
-    base_url: ""
-    temperature: 0.0
+  # 仅 model_name 单独配置；type / base_url / api_key 与 model 层一致
+  model_name: ""
+  temperature: 0.0
   trigger_tokens: 50000
   trigger_fraction: 0.85
   max_input_tokens: 0
@@ -114,7 +122,7 @@ other:
 
 # LangGraph Agent checkpoint（SQLite 持久化）
 checkpoint:
-  db_path: ./data/langgraph_checkpoints.sqlite
+  db_path: ../.data/checkpoints/langgraph_checkpoints.sqlite
 
 # Web 检索工具（COMMON_QA / DEEP_RESEARCH；TAVILY_API_KEY 见 .env）
 web_tools:
@@ -125,7 +133,7 @@ web_tools:
 # 聊天会话附件（COMMON_QA；敏感项无）
 chat_attachment:
   enabled: true
-  dir: ./data/chat_attachments
+  dir: ../.data/chat_attachments
   ttl_days: 7
   max_file_mb: 20
   max_count_per_session: 10

@@ -32,7 +32,7 @@ from kb.chunk import (
     normalize_mysql_query_params,
 )
 from config.env import QdrantConfig
-from utils.response_util import ResponseUtil
+from common.http.response import ResponseUtil
 
 
 logger = logging.getLogger(__name__)

@@ -8,8 +8,8 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from agent.middlewares.chat_attachments_middleware import ChatAttachmentsMiddleware
-from model.chat_models import TChatAttachment
-from utils.attachment_tool import CHAT_ATTACHMENT_REF
+from models.chat_models import TChatAttachment
+from domain.chat.attachments.resolver import CHAT_ATTACHMENT_REF
 
 
 def _doc_row(**overrides) -> TChatAttachment:

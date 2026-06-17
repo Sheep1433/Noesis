@@ -23,7 +23,7 @@ from langgraph.types import Command
 from agent.case_generate.rag import build_scene_rag_context
 from llm import get_llm
 from schemas.case_generate_vo import SceneTestCasesOutput, ScenesTestPointsOutput, TestCaseOutput
-from utils.log_util import logger
+from common.logging import logger
 
 
 class TestCaseState(TypedDict):

@@ -33,9 +33,9 @@ from schemas.chat_vo import (
 from services.chat_service import ChatService
 from services.user_service import UserService
 from services.qa_service import QaService
-from utils.response_util import ResponseUtil
-from utils.message_builder import UserMessageBuilder
-from utils.log_util import logger
+from common.http.response import ResponseUtil
+from domain.chat.message_builder import UserMessageBuilder
+from common.logging import logger
 from constants.code_enum import IntentEnum
 from schemas.qa_vo import QaStopRequest, TestCaseExportRequest, TestCaseResumeRequest
 
@@ -506,7 +506,7 @@ async def get_message(
     # 先获取消息（需要查询 session 来验证权限）
     # 这里简化处理，实际应该通过 ChatService 获取
     from sqlalchemy import select
-    from model.chat_models import TChatMessage, TChatSession
+    from models.chat_models import TChatMessage, TChatSession
 
     result = await db.execute(
         select(TChatMessage).where(TChatMessage.id == message_id)

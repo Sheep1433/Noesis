@@ -2,13 +2,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from exceptions.handle import handle_exception
-from middleware.sliding_auth_middleware import SlidingAuthMiddleware
+from http_middleware.sliding_auth import SlidingAuthMiddleware
 from config.env import AppConfig
 from config.checkpointer import close_checkpointer, init_checkpointer
 from config.get_db import init_create_table
 from config.database import async_engine
-from utils.log_util import logger
-from utils.langfuse_tracing import sync_langfuse_env_from_app_config
+from common.logging import logger
+from domain.observability.langfuse import sync_langfuse_env_from_app_config
 from api import (
     login_router,
     user_router,

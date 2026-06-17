@@ -8,7 +8,7 @@ from qdrant_client.models import PointIdsList, Distance, VectorParams
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from config.env import QdrantConfig
-from utils.log_util import logger
+from common.logging import logger
 from kb.document_parse import DocumentParser
 from kb.chunk import chunk, fixed_processing_params
 from kb.retrieval.payload import documents_to_points

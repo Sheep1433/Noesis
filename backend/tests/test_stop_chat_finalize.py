@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from services.qa_service import QaService, _ActiveStreamState
-from utils.message_builder import AssistantMessageBuilder
-from utils.stream_failure_notice import (
+from domain.chat.message_builder import AssistantMessageBuilder
+from domain.chat.streaming.failure_notice import (
     USER_STOP_NOTICE_PLAIN,
     USER_STOP_TOOL_ERROR,
     append_disconnect_partial_content,

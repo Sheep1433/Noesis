@@ -3,15 +3,24 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from schemas.login_vo import CurrentUser, Token, UserLogin
+from schemas.login_vo import CurrentUser, Token, UserLogin, UserRegister
 from config.get_db import get_db
 from config.env import JwtConfig
 from services.login_service import LoginService
-from utils.log_util import logger
-from utils.auth_token_service import AuthTokenService
-from utils.response_util import ResponseUtil
+from common.logging import logger
+from domain.auth.token_service import AuthTokenService
+from common.http.response import ResponseUtil
 
 login_router = APIRouter(prefix="/api/user")
+
+
+@login_router.post('/register', summary='用户注册')
+async def register(register_body: UserRegister, db: AsyncSession = Depends(get_db)):
+    user = await LoginService.register_user(db, register_body)
+    return ResponseUtil.success(
+        msg='注册成功',
+        data={'user_id': user.id, 'username': user.username},
+    )
 
 
 @login_router.post('/login', response_model=Token)

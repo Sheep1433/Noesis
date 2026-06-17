@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 from config.env import QdrantConfig
 from kb.retrieval.filters import document_matches_post_filter, split_search_filters
 from services.qdrant_service import get_qdrant_client, is_qdrant_connected
-from utils.log_util import logger
+from common.logging import logger
 
 _VALID_MODES = frozenset({"vector", "bm25", "hybrid"})
 

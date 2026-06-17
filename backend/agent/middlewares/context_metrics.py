@@ -12,7 +12,7 @@ from langchain_core.messages.utils import convert_to_openai_messages
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from config.env import ModelConfig
-from utils.log_util import logger
+from common.logging import logger
 
 DEFAULT_CONTEXT_MAX_INPUT_TOKENS = 128_000
 

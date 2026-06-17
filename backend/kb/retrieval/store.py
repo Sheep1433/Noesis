@@ -25,7 +25,7 @@ from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
 
 from kb.embedding import get_embedding
-from utils.log_util import logger
+from common.logging import logger
 
 
 def kb_bm25_preprocess(text: str) -> List[str]:

@@ -181,7 +181,8 @@ const durationDisplay = computed(() => {
                 appearance="light"
                 :name="child.name"
                 :arguments="child.input"
-                :result="child.status === 'error' ? (child.error || child.output || '') : child.output"
+                :result="child.output"
+                :error="child.error"
                 :status="child.status"
                 :duration_ms="child.duration_ms"
               />

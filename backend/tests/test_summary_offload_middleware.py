@@ -50,11 +50,9 @@ def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
 
 
 def test_get_llm_summarization_falls_back_to_main_model() -> None:
-    """未配置独立摘要模型时，purpose=summarization 使用主模型参数。"""
+    """未配置独立摘要模型名时，purpose=summarization 使用主模型参数。"""
     cfg = SimpleNamespace(
-        summarization_model_type="",
         summarization_model_name="",
-        summarization_model_api_key="",
         model_type="openai",
         model_name="qwen-main",
         model_temperature="0.2",
@@ -74,15 +72,14 @@ def test_get_llm_summarization_falls_back_to_main_model() -> None:
     assert kwargs["model_api_key"] == "main-key"
 
 
-def test_get_llm_summarization_uses_dedicated_model() -> None:
+def test_get_llm_summarization_uses_dedicated_model_name() -> None:
+    """摘要仅换模型名；type / base_url / api_key 与主模型一致。"""
     cfg = SimpleNamespace(
-        summarization_model_type="openai",
         summarization_model_name="qwen-summary",
-        summarization_model_api_key="summary-key",
-        summarization_model_temperature="0.1",
-        summarization_model_base_url="https://summary.example/v1",
+        summarization_model_temperature=0.1,
         model_type="openai",
         model_name="qwen-main",
+        model_temperature="0.2",
         model_api_key="main-key",
         model_base_url="https://main.example/v1",
     )

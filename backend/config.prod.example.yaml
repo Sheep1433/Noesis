@@ -33,8 +33,6 @@ model:
   name: deepseek-v4-flash
   temperature: 0.75
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  embedding_model_name: text-embedding-v4
-  rerank_model_name: gte-rerank-v2
   show_thinking_process: true
   request_timeout: 120
   max_retries: 2
@@ -45,17 +43,26 @@ model:
     presence_penalty: 0.0
     streaming: true
 
+embedding:
+  name: text-embedding-v4
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+rerank:
+  name: gte-rerank-v2
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+vlm:
+  name: Qwen3-VL-32B-Instruct
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
 context:
   max_input_tokens: 128000
   display_enabled: true
 
 summarization:
   enabled: true
-  model:
-    type: ""
-    name: ""
-    base_url: ""
-    temperature: 0.0
+  model_name: ""
+  temperature: 0.0
   trigger_tokens: 50000
   trigger_fraction: 0.85
   max_input_tokens: 0
@@ -99,7 +106,23 @@ other:
   skills_filesystem_root: ""  # 空则默认 extensions/skills
 
 checkpoint:
-  db_path: ./data/langgraph_checkpoints.sqlite
+  db_path: ../.data/checkpoints/langgraph_checkpoints.sqlite
+
+# 聊天会话附件（COMMON_QA；敏感项无）
+chat_attachment:
+  enabled: true
+  dir: ../.data/chat_attachments
+  ttl_days: 7
+  max_file_mb: 20
+  max_count_per_session: 10
+  auto_convert: true
+  max_image_mb: 5
+  vision_enabled: true
+  reinject_session_images: true
+  max_images_per_message: 3
+  tiny_inline_chars: 4096
+  read_page_lines: 2000
+  preview_chars: 500
 
 # Web 检索工具（COMMON_QA / DEEP_RESEARCH；TAVILY_API_KEY 见 .env.prod）
 web_tools:

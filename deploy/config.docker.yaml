@@ -31,8 +31,6 @@ model:
   name: qwen-plus
   temperature: 0.75
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  embedding_model_name: text-embedding-v4
-  rerank_model_name: gte-rerank-v2
   show_thinking_process: true
   request_timeout: 120
   max_retries: 2
@@ -43,13 +41,22 @@ model:
     presence_penalty: 0.0
     streaming: true
 
+embedding:
+  name: text-embedding-v4
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+rerank:
+  name: gte-rerank-v2
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+vlm:
+  name: Qwen3-VL-32B-Instruct
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
 summarization:
   enabled: true
-  model:
-    type: ""
-    name: ""
-    base_url: ""
-    temperature: 0.0
+  model_name: ""
+  temperature: 0.0
   trigger_tokens: 50000
   trigger_fraction: 0.85
   max_input_tokens: 0
@@ -92,8 +99,24 @@ langfuse:
 other:
   skills_filesystem_root: ""  # 空则默认 extensions/skills（Docker 镜像内为 /app/extensions/skills）
 
+# 容器内路径基于 /app（backend/）；持久化见 docker-compose backend_runtime 卷
 checkpoint:
-  db_path: ./data/langgraph_checkpoints.sqlite
+  db_path: ./data/checkpoints/langgraph_checkpoints.sqlite
+
+chat_attachment:
+  enabled: true
+  dir: ./data/chat_attachments
+  ttl_days: 7
+  max_file_mb: 20
+  max_count_per_session: 10
+  auto_convert: true
+  max_image_mb: 5
+  vision_enabled: true
+  reinject_session_images: true
+  max_images_per_message: 3
+  tiny_inline_chars: 4096
+  read_page_lines: 2000
+  preview_chars: 500
 
 # Web 检索工具（COMMON_QA / DEEP_RESEARCH；TAVILY_API_KEY 见 deploy/.env.docker）
 web_tools:

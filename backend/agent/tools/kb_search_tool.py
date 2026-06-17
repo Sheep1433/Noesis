@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from kb.chunk import DEFAULT_COLLECTION_QUERY, merge_query_execution_params
 from kb.retrieval.service import KbRetrievalService, KbSearchHit
 from services.qdrant_service import QdrantService, is_qdrant_connected
-from utils.log_util import logger
+from common.logging import logger
 
 
 class KbSearchInput(BaseModel):

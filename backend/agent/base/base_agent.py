@@ -3,8 +3,8 @@ from collections.abc import AsyncGenerator
 from langchain_core.messages import convert_to_messages
 from config.checkpointer import get_checkpointer
 from config.env import LangfuseConfig
-from utils.langfuse_tracing import merge_langfuse_runnable_config
-from utils.log_util import logger
+from domain.observability.langfuse import merge_langfuse_runnable_config
+from common.logging import logger
 
 DEFAULT_RECURSION_LIMIT = 200
 

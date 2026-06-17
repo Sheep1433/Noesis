@@ -8,8 +8,8 @@ from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QueryUserRecordRequest
 from services.chat_service import ChatService
 from services.user_service import UserService
-from utils.auth_token_service import AuthTokenService
-from utils.response_util import ResponseUtil
+from domain.auth.token_service import AuthTokenService
+from common.http.response import ResponseUtil
 
 user_router = APIRouter(prefix="/api/user")
 

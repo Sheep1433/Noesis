@@ -1471,7 +1471,8 @@ function onComposerPaste(e: ClipboardEvent) {
                           appearance="light"
                           :name="entry.part.name"
                           :arguments="entry.part.input"
-                          :result="entry.part.status === 'error' ? (entry.part.error || entry.part.output || '') : entry.part.output"
+                          :result="entry.part.output"
+                          :error="entry.part.error"
                           :status="entry.part.status"
                           :duration_ms="entry.part.duration_ms"
                         />

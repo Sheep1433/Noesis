@@ -8,6 +8,14 @@ class LoginException(Exception):
         self.message = message
 
 
+class ConflictException(Exception):
+    """资源冲突（如用户名已存在）"""
+
+    def __init__(self, data: str = None, message: str = None):
+        self.data = data
+        self.message = message
+
+
 class AuthException(Exception):
     """
     自定义令牌异常AuthException

@@ -11,8 +11,8 @@ from fastapi import Request
 from config.env import JwtConfig
 from schemas.qa_vo import QaStopRequest
 from services.user_service import UserService
-from utils.auth_token_service import AUTH_COOKIE_NAME, AuthTokenService
-from utils.stop_token_service import StopTokenService
+from domain.auth.token_service import AUTH_COOKIE_NAME, AuthTokenService
+from domain.auth.stop_token import StopTokenService
 
 
 def _make_request(

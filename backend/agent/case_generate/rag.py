@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.env import QdrantConfig
 from kb.retrieval import KbSearchHit
-from utils.langfuse_tracing import hits_to_langfuse_payload, langfuse_retrieval_observation
-from utils.log_util import logger
+from domain.observability.langfuse import hits_to_langfuse_payload, langfuse_retrieval_observation
+from common.logging import logger
 
 # file_dict 值为该哨兵时，以 key 作为 file_name 从 requirement_docs 拉取整篇
 TEST_CASE_KB_FILE_DICT_REF = "__FROM_KB__"

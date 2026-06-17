@@ -24,6 +24,25 @@ export async function login(username: string, password: string) {
   return res
 }
 
+/** 用户注册 */
+export async function register(username: string, password: string, mobile?: string) {
+  const url = new URL(`${location.origin}/api/user/register`)
+  const res = await fetch(url, {
+    mode: 'cors',
+    credentials: 'include',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      username,
+      password,
+      mobile: mobile || null,
+    }),
+  })
+  return res
+}
+
 /** 分页查询用户对话历史（侧边栏 / 管理弹窗） */
 export async function query_user_qa_record(
   page: number,

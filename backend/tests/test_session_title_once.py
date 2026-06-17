@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from model.chat_models import TChatSession
+from models.chat_models import TChatSession
 
 
 def _session(title: str) -> TChatSession:

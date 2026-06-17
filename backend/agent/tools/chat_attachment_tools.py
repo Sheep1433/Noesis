@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.env import ChatAttachmentConfig
 from services.chat_attachment_service import ChatAttachmentService
-from utils.markdown_outline import read_line_range
+from domain.chat.attachments.markdown import read_line_range
 
 
 class ReadAttachmentInput(BaseModel):

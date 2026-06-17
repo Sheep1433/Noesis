@@ -7,7 +7,7 @@ from typing import Any
 
 from agent.tools.web_providers import ddg, local_fetch, tavily
 from config.env import WebToolsConfig
-from utils.log_util import logger
+from common.logging import logger
 
 
 def _clamp_limit(limit: int) -> int:

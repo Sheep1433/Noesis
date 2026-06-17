@@ -13,7 +13,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
-from utils.log_util import logger
+from common.logging import logger
 
 
 class SimpleMCPAgent(BaseAgent):

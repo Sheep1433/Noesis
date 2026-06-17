@@ -19,11 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config.env import ChatAttachmentConfig
 from exceptions.exception import ServiceWarning
 from kb.document_parse import DocumentParser
-from model.chat_models import TChatAttachment
+from models.chat_models import TChatAttachment
 from schemas.chat_attachment_vo import AttachmentResponse
 from services.chat_service import ChatService
-from utils.log_util import logger
-from utils.markdown_outline import extract_preview
+from common.logging import logger
+from common.paths import resolve_backend_relative
+from domain.chat.attachments.markdown import extract_preview
 
 _DOCUMENT_EXTENSIONS = frozenset({
     ".doc", ".docx", ".pdf", ".txt", ".xlsx", ".csv", ".ppt", ".pptx", ".md",
@@ -50,7 +51,7 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _attachment_root() -> Path:
-    root = Path(ChatAttachmentConfig.dir).expanduser().resolve()
+    root = resolve_backend_relative(ChatAttachmentConfig.dir)
     root.mkdir(parents=True, exist_ok=True)
     return root
 

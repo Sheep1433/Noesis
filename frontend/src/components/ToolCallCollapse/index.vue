@@ -8,6 +8,7 @@ interface Props {
   name: string
   arguments?: any
   result?: string
+  error?: string | null
   status?: 'running' | 'success' | 'error'
   duration_ms?: number
   defaultOpen?: boolean
@@ -18,6 +19,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   arguments: null,
   result: '',
+  error: null,
   status: undefined,
   duration_ms: undefined,
   defaultOpen: false,
@@ -67,6 +69,14 @@ const argumentsDisplay = computed(() => {
     return ''
   }
   return truncateForDisplay(raw, DISPLAY_MAX)
+})
+
+const errorDisplay = computed(() => {
+  const raw = props.error?.trim() || (props.status === 'error' ? props.result?.trim() : '')
+  if (!raw) {
+    return props.status === 'error' ? '执行失败' : ''
+  }
+  return raw
 })
 
 const resultDisplay = computed(() => {
@@ -181,7 +191,13 @@ const durationDisplay = computed(() => {
             <pre>{{ argumentsDisplay }}</pre>
           </div>
         </div>
-        <div v-if="resultDisplay" class="tool-section tool-section--result">
+        <div v-if="errorDisplay && status === 'error'" class="tool-section tool-section--error">
+          <div class="tool-section__label">错误</div>
+          <div class="tool-section__body">
+            <pre>{{ errorDisplay }}</pre>
+          </div>
+        </div>
+        <div v-if="resultDisplay && status !== 'error'" class="tool-section tool-section--result">
           <div class="tool-section__label">输出</div>
           <div class="tool-section__body">
             <pre>{{ resultDisplay }}</pre>

@@ -13,12 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing_extensions import override
 
 from config.env import ChatAttachmentConfig
-from model.chat_models import TChatAttachment
+from models.chat_models import TChatAttachment
 from services.chat_attachment_service import ChatAttachmentService
-from utils.attachment_tool import attachment_id_from_ref, is_chat_attachment_ref
-from utils.log_util import logger
-from utils.markdown_outline import extract_outline
-from utils.vision_util import is_vision_available
+from domain.chat.attachments.resolver import attachment_id_from_ref, is_chat_attachment_ref
+from common.logging import logger
+from domain.chat.attachments.markdown import extract_outline
+from domain.chat.attachments.vision import is_vision_available
 
 
 def _human_text(content: Any) -> str:

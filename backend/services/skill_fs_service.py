@@ -7,7 +7,7 @@ from typing import List, Tuple
 
 from config.extensions_paths import skills_root
 from schemas.skill_vo import SkillFsTreeNode, SkillFsTreeResponse
-from utils.log_util import logger
+from common.logging import logger
 
 _MAX_READ_BYTES = 512 * 1024
 _MAX_ZIP_BYTES = 10 * 1024 * 1024

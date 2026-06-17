@@ -30,7 +30,7 @@ from agent.middlewares.context_metrics import get_agent_token_counter, resolve_c
 from config.env import ModelConfig
 from deepagents.backends.protocol import BackendProtocol
 from llm import get_llm
-from utils.log_util import logger
+from common.logging import logger
 
 _OFFLOAD_DIR = "summary_offload"
 _OFFLOAD_PATH_PREFIX = f"/{_OFFLOAD_DIR}"

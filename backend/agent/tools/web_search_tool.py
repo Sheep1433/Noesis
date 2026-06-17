@@ -8,7 +8,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from agent.tools.web_providers.resolver import resolve_web_fetch, resolve_web_search
-from utils.log_util import logger
+from common.logging import logger
 
 
 class WebSearchInput(BaseModel):

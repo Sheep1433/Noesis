@@ -26,6 +26,7 @@ deploy/.env.docker
 # 体积与无关目录
 e2e-tests
 qdrant_storage
+.data
 *.omc
 **/logs
 README.assets

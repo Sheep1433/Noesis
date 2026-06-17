@@ -7,9 +7,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from utils.langgraph_sse_bridge import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
-from utils.stream_bridge import END_SENTINEL, HEARTBEAT_SENTINEL
-from utils.message_builder import AssistantMessageBuilder, ToolPart
+from domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
+from domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
+from domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 
 
 def _ctx() -> Dict[str, Any]:
@@ -620,7 +620,8 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
     assert len(outputs) == 1
     assert outputs[0]["tool_call_id"] == model_call_id
     assert outputs[0]["status"] == "error"
-    assert "MCP" in outputs[0]["error"]
+    assert outputs[0]["error"] == "环境不可用"
+    assert outputs[0]["errorCategory"] == "infrastructure"
 
     saved = builder.to_dict()["parts"][0]
     assert saved["tool_call_id"] == model_call_id
@@ -628,6 +629,94 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
     assert saved["error"]
     assert "toolCallId" not in saved
     assert "durationMs" not in saved
+    assert saved.get("errorCategory") == "infrastructure"
+
+
+def test_tool_output_error_frame_golden_fields() -> None:
+    """error 帧须携带固定用户短句与 errorCategory。"""
+    bridge = LangGraphSseBridge("sess-err-golden")
+    builder = AssistantMessageBuilder(
+        session_id="sess-err-golden",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    run_id = "run-timeout"
+
+    class _ErrOutput:
+        content = "command timed out after 30s"
+        status = "error"
+
+    parts: list[str] = []
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_tool_start",
+                "name": "bash",
+                "run_id": run_id,
+                "data": {"input": {"command": "sleep 99"}},
+            },
+            builder,
+            ctx,
+        )
+    )
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_tool_end",
+                "name": "bash",
+                "run_id": run_id,
+                "data": {"output": _ErrOutput()},
+            },
+            builder,
+            ctx,
+        )
+    )
+    out = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "tool-output-available"][-1]
+    assert out["status"] == "error"
+    assert out["error"] == "执行超时"
+    assert out["errorCategory"] == "execution_timeout"
+    assert out["output"] == ""
+
+    saved = builder.to_dict()["parts"][0]
+    assert saved["error"] == "执行超时"
+    assert saved["errorCategory"] == "execution_timeout"
+
+
+def test_task_tool_failed_maps_subagent_failure() -> None:
+    bridge = LangGraphSseBridge("sess-task-fail")
+    builder = AssistantMessageBuilder(
+        session_id="sess-task-fail",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    task_run = "run-task-fail"
+
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": TASK_TOOL_NAME,
+            "run_id": task_run,
+            "data": {"input": {"description": "子任务", "prompt": "x"}},
+        },
+        builder,
+        ctx,
+    )
+    blob = "".join(
+        bridge.process_item(
+            {
+                "event": "on_tool_end",
+                "name": TASK_TOOL_NAME,
+                "run_id": task_run,
+                "data": {"output": "Task failed. bash: connection refused"},
+            },
+            builder,
+            ctx,
+        )
+    )
+    out = [o for o in _data_json_objects(blob) if o.get("type") == "tool-output-available"][-1]
+    assert out["status"] == "error"
+    assert out["errorCategory"] == "subagent_failure"
+    assert out["error"] == "执行失败"
 
 
 def test_reasoning_disabled_when_show_thinking_off() -> None:
