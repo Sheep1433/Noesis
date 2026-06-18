@@ -15,12 +15,8 @@ login_router = APIRouter(prefix="/api/user")
 
 
 @login_router.post('/register', summary='用户注册')
-async def register(register_body: UserRegister, db: AsyncSession = Depends(get_db)):
-    user = await LoginService.register_user(db, register_body)
-    return ResponseUtil.success(
-        msg='注册成功',
-        data={'user_id': user.id, 'username': user.username},
-    )
+async def register(_register_body: UserRegister, _db: AsyncSession = Depends(get_db)):
+    return ResponseUtil.failure(msg='当前系统暂不支持注册')
 
 
 @login_router.post('/login', response_model=Token)

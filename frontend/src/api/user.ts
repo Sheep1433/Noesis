@@ -25,7 +25,7 @@ export async function login(username: string, password: string) {
 }
 
 /** 用户注册 */
-export async function register(username: string, password: string, mobile?: string) {
+export async function register(username: string, password: string) {
   const url = new URL(`${location.origin}/api/user/register`)
   const res = await fetch(url, {
     mode: 'cors',
@@ -37,7 +37,6 @@ export async function register(username: string, password: string, mobile?: stri
     body: JSON.stringify({
       username,
       password,
-      mobile: mobile || null,
     }),
   })
   return res

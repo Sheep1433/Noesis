@@ -7,9 +7,6 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    ports:
-      - "6333:6333"
-      - "6334:6334"
     volumes:
       - qdrant_storage:/qdrant/storage
 
@@ -44,7 +41,7 @@ services:
       dockerfile: deploy/frontend/Dockerfile
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "28468:80"
     depends_on:
       backend:
         condition: service_healthy

@@ -1,0 +1,95 @@
+# main 分支 CI 通过后，SSH 到生产服务器执行 scripts/deploy-remote.sh。
+#
+# 请在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置：
+#   DEPLOY_HOST        服务器地址（IP 或域名）
+#   DEPLOY_USER        SSH 用户名
+#   SSH_PRIVATE_KEY    部署用 SSH 私钥（对应公钥需写入服务器 authorized_keys）
+#   DEPLOY_PATH        仓库在服务器上的绝对路径（如 /opt/noesis）
+#   DEPLOY_SSH_PORT    （可选）SSH 端口，未设置时默认 22
+#
+# 服务器首次需手动完成：克隆仓库、安装 Docker、创建 deploy/.env.docker。
+# 勿将 IP、密钥、密码写入本文件或仓库任意 tracked 文件。
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    steps:
+      - name: Validate deploy secrets
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          missing=()
+          [[ -n "${DEPLOY_HOST}" ]] || missing+=("DEPLOY_HOST")
+          [[ -n "${DEPLOY_USER}" ]] || missing+=("DEPLOY_USER")
+          [[ -n "${SSH_PRIVATE_KEY}" ]] || missing+=("SSH_PRIVATE_KEY")
+          [[ -n "${DEPLOY_PATH}" ]] || missing+=("DEPLOY_PATH")
+          if ((${#missing[@]} > 0)); then
+            echo "缺少 GitHub Secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          PORT="${DEPLOY_SSH_PORT:-22}"
+          ssh-keyscan -p "${PORT}" "${DEPLOY_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+        run: |
+          PORT="${DEPLOY_SSH_PORT:-22}"
+          ssh -i ~/.ssh/deploy_key \
+            -p "${PORT}" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd '${DEPLOY_PATH}' && bash ./scripts/deploy-remote.sh"
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

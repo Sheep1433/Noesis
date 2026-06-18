@@ -5,10 +5,9 @@ import * as GlobalAPI from '@/api'
 type AuthMode = 'login' | 'register'
 
 const form = ref({
-  username: '',
-  password: '',
+  username: 'admin',
+  password: '123456',
   confirmPassword: '',
-  mobile: '',
 })
 const mode = ref<AuthMode>('login')
 const formRef = ref(null)
@@ -69,7 +68,6 @@ async function handleRegister() {
     const res = await GlobalAPI.register(
       form.value.username,
       form.value.password,
-      form.value.mobile || undefined,
     )
     const responseData = await parseResponse(res)
     if (responseData.code === 200) {
@@ -97,7 +95,13 @@ function handleSubmit() {
 
 function switchMode(next: AuthMode) {
   mode.value = next
-  form.value.password = ''
+  if (next === 'login') {
+    form.value.username = 'admin'
+    form.value.password = '123456'
+  } else {
+    form.value.username = ''
+    form.value.password = ''
+  }
   form.value.confirmPassword = ''
 }
 </script>
@@ -148,16 +152,6 @@ function switchMode(next: AuthMode) {
               type="password"
               show-password-on="click"
               placeholder="请再次输入密码"
-            />
-          </n-form-item>
-          <n-form-item
-            v-if="mode === 'register'"
-            label="手机号"
-            path="mobile"
-          >
-            <n-input
-              v-model:value="form.mobile"
-              placeholder="选填"
             />
           </n-form-item>
           <n-form-item>
