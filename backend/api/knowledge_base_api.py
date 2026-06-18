@@ -6,8 +6,9 @@ import os
 import tempfile
 from typing import List
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
+from schemas.login_vo import CurrentUser
 from schemas.knowledge_base_schema import (
     CollectionInfo,
     CollectionDetail,
@@ -33,6 +34,7 @@ from kb.chunk import (
 )
 from config.env import QdrantConfig
 from common.http.response import ResponseUtil
+from services.user_service import UserService
 
 
 logger = logging.getLogger(__name__)
@@ -45,8 +47,11 @@ def _global_query_defaults():
 
 
 @knowledge_base_router.get('/status', response_model=KnowledgeBaseStatus)
-async def get_status():
+async def get_status(
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """获取向量库连接状态"""
+    _ = current_user
     connected = is_qdrant_connected()
     client = get_qdrant_client()
     collections_count = 0
@@ -66,8 +71,11 @@ async def get_status():
 
 
 @knowledge_base_router.get('/collections', response_model=List[CollectionInfo])
-async def get_collections():
+async def get_collections(
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """获取所有 Collection 列表（数据来自 Qdrant）"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -88,8 +96,12 @@ async def get_collections():
 
 
 @knowledge_base_router.post('/collections', response_model=CreateCollectionResponse)
-async def create_collection(request: CreateCollectionRequest):
+async def create_collection(
+    request: CreateCollectionRequest,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """创建 Collection（仅写入 Qdrant）"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -112,8 +124,12 @@ async def create_collection(request: CreateCollectionRequest):
 
 
 @knowledge_base_router.delete('/collections/{collection_name}')
-async def delete_collection(collection_name: str):
+async def delete_collection(
+    collection_name: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """删除 Collection（仅操作 Qdrant）"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -127,8 +143,12 @@ async def delete_collection(collection_name: str):
 
 
 @knowledge_base_router.get('/collections/{collection_name}', response_model=CollectionDetail)
-async def get_collection(collection_name: str):
+async def get_collection(
+    collection_name: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """获取指定 Collection 详情（数据来自 Qdrant）"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -149,8 +169,12 @@ async def get_collection(collection_name: str):
 
 
 @knowledge_base_router.get('/collections/{collection_name}/documents', response_model=List[DocumentInfo])
-async def get_documents(collection_name: str):
+async def get_documents(
+    collection_name: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """获取 Collection 下的文档列表"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -162,8 +186,13 @@ async def get_documents(collection_name: str):
     '/collections/{collection_name}/documents/{file_name}/shards',
     response_model=List[ShardInfo],
 )
-async def get_shards(collection_name: str, file_name: str):
+async def get_shards(
+    collection_name: str,
+    file_name: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """获取文档的分片列表"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -175,8 +204,13 @@ async def get_shards(collection_name: str, file_name: str):
     '/collections/{collection_name}/shards/{shard_id}',
     response_model=ShardDetail,
 )
-async def get_shard_detail(collection_name: str, shard_id: str):
+async def get_shard_detail(
+    collection_name: str,
+    shard_id: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """获取分片详情"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -204,8 +238,13 @@ async def get_shard_detail(collection_name: str, shard_id: str):
     '/collections/{collection_name}/documents/{file_name}',
     response_model=DeleteResponse,
 )
-async def delete_document(collection_name: str, file_name: str):
+async def delete_document(
+    collection_name: str,
+    file_name: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
     """删除文档及其所有分片"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -229,8 +268,10 @@ async def delete_document(collection_name: str, file_name: str):
 async def upload_document(
     collection_name: str,
     file: UploadFile = File(...),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """上传文档：DocumentParser 统一解析分块后写入 Qdrant。"""
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 
@@ -282,11 +323,13 @@ async def upload_document(
 async def search_collection(
     collection_name: str,
     body: SearchCollectionBody,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """
     知识库检索：支持 vector / bm25 / hybrid（RRF）与可选 filters。
     集合由路径 collection_name 指定；未传的 limit/score_threshold 使用平台代码默认值。
     """
+    _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
 

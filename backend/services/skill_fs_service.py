@@ -6,6 +6,7 @@ import zipfile
 from typing import List, Tuple
 
 from config.extensions_paths import skills_root
+from config.user_skills_paths import ensure_user_skills_dir
 from schemas.skill_vo import SkillFsTreeNode, SkillFsTreeResponse
 from common.logging import logger
 
@@ -100,12 +101,23 @@ class SkillFsService:
 
     @classmethod
     def extract_zip_to_root(cls, zip_path: str) -> Tuple[bool, str]:
-        """将 ZIP 内容解压到 Skills 根目录（保持包内相对路径，如 my-skill/SKILL.md）。"""
-        root = os.path.abspath(cls.get_root_path())
+        """将 ZIP 内容解压到共享 Skills 根目录（extensions/skills）。"""
+        return cls._extract_zip(zip_path, os.path.abspath(cls.get_root_path()))
+
+    @classmethod
+    def extract_zip_to_user_dir(cls, zip_path: str, user_id: str | int) -> Tuple[bool, str]:
+        """将 ZIP 内容解压到当前用户的私有 Skills 目录（.data/user_skills/users/{user_id}/）。"""
+        root = str(ensure_user_skills_dir(user_id))
+        return cls._extract_zip(zip_path, root)
+
+    @classmethod
+    def _extract_zip(cls, zip_path: str, root: str) -> Tuple[bool, str]:
+        """将 ZIP 内容解压到指定根目录（保持包内相对路径）。"""
+        root = os.path.abspath(root)
         try:
             os.makedirs(root, exist_ok=True)
         except OSError as e:
-            return False, f'无法创建或访问 Skills 根目录: {e}'
+            return False, f'无法创建或访问 Skills 目录: {e}'
         try:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 for info in zf.infolist():

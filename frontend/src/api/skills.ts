@@ -72,7 +72,7 @@ export async function getSkillsFsFile(relPath: string): Promise<SkillFsFileConte
 }
 
 /**
- * 上传 skill：将 ZIP 解压到当前 Skills 根目录
+ * 上传 skill：将 ZIP 解压到当前用户的私有目录（.data/user_skills/users/{user_id}/）
  */
 export async function uploadSkillsFsZip(
   file: File,

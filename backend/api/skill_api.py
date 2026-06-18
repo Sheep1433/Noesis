@@ -51,9 +51,9 @@ async def upload_skills_fs_zip(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """
-    上传 skill：将 ZIP 解压到当前 Skills 根目录（不新建额外子目录名；包内若有子目录则原样落盘）。
+    上传 skill：将 ZIP 解压到当前登录用户的私有 Skills 目录（.data/user_skills/users/{user_id}/）。
+    extensions/skills 为平台共享目录，仅支持浏览，不可通过此接口写入。
     """
-    _ = current_user
     zip_path = None
     try:
         raw = await file.read()
@@ -64,7 +64,7 @@ async def upload_skills_fs_zip(
             tmp.write(raw)
             zip_path = tmp.name
 
-        ok, msg = SkillFsService.extract_zip_to_root(zip_path)
+        ok, msg = SkillFsService.extract_zip_to_user_dir(zip_path, current_user.user_id)
         if not ok:
             raise HTTPException(status_code=400, detail=msg)
         return ResponseUtil.success(msg=msg)

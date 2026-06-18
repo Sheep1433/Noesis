@@ -203,6 +203,11 @@ class ChatService:
         """
         wait_for_load()
 
+        if parent_id:
+            parent = await cls.get_session_by_id(parent_id, user_id=user_id, db=db)
+            if not parent:
+                raise ServiceException(message='父会话不存在')
+
         session_id = str(uuid.uuid4())
         now = _now_ms()
         session = TChatSession(
@@ -744,6 +749,29 @@ class ChatService:
             select(TChatSession).where(and_(*conditions))
         )
         return result.scalar_one_or_none()
+
+    @classmethod
+    async def is_session_owned_by_other(
+            cls,
+            session_id: str,
+            user_id: str,
+            db: AsyncSession,
+    ) -> bool:
+        """
+        会话是否已存在且属于其他用户（写操作前置校验；不存在则返回 False）。
+        """
+        result = await db.execute(
+            select(TChatSession.user_id).where(
+                and_(
+                    TChatSession.id == session_id,
+                    TChatSession.deleted_at.is_(None),
+                )
+            )
+        )
+        owner_id = result.scalar_one_or_none()
+        if owner_id is None:
+            return False
+        return owner_id != user_id
 
     @classmethod
     async def get_child_sessions(

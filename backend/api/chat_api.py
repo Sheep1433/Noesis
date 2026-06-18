@@ -45,6 +45,23 @@ chat_router = APIRouter(prefix="/api/chat")
 _EXPORT_FALLBACK_FILENAME = "test-cases-export.md"
 
 
+async def _deny_foreign_session(
+    session_id: str,
+    current_user: CurrentUser,
+    db: AsyncSession,
+):
+    """会话已存在且不属于当前用户时返回 404 响应，否则返回 None。"""
+    if not session_id:
+        return None
+    if await ChatService.is_session_owned_by_other(
+        session_id,
+        str(current_user.user_id),
+        db,
+    ):
+        return ResponseUtil.not_found(msg='会话不存在')
+    return None
+
+
 def _attachment_content_disposition(filename: str) -> str:
     """Content-Disposition：filename 仅 ASCII，中文等非 ASCII 走 filename* UTF-8。"""
     encoded = quote(filename, safe="")
@@ -142,6 +159,15 @@ async def create_session(
     """
     创建新会话（可指定 parent_id 创建子会话）
     """
+    if request.parent_id:
+        parent = await ChatService.get_session_by_id(
+            session_id=request.parent_id,
+            user_id=str(current_user.user_id),
+            db=db,
+        )
+        if not parent:
+            return ResponseUtil.not_found(msg='父会话不存在')
+
     session = await ChatService.create_session(
         user_id=str(current_user.user_id),
         title=request.title,
@@ -166,6 +192,10 @@ async def ensure_session(
     """
     按 client 提供的 session_id 获取或创建会话，供发送前 upload 附件使用。
     """
+    denied = await _deny_foreign_session(session_id, current_user, db)
+    if denied:
+        return denied
+
     session = await ChatService.get_or_create_session(
         user_id=str(current_user.user_id),
         session_id=session_id,
@@ -253,6 +283,14 @@ async def get_child_sessions(
     """
     获取子会话列表（subagent 场景）
     """
+    session = await ChatService.get_session_by_id(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if not session:
+        return ResponseUtil.not_found(msg='会话不存在')
+
     sessions = await ChatService.get_child_sessions(
         parent_id=session_id,
         db=db
@@ -281,6 +319,14 @@ async def get_session_messages(
     """
     获取会话消息历史（按 created_at 升序排序，支持分页）
     """
+    session = await ChatService.get_session_by_id(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if not session:
+        return ResponseUtil.not_found(msg='会话不存在')
+
     messages = await ChatService.get_session_messages(
         session_id=session_id,
         db=db,
@@ -306,6 +352,14 @@ async def send_message(
     """
     发送消息（创建用户消息）
     """
+    session = await ChatService.get_session_by_id(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if not session:
+        return ResponseUtil.not_found(msg='会话不存在')
+
     # 构建消息内容
     builder = UserMessageBuilder(content=request.content)
     content = builder.serialize()
@@ -313,7 +367,7 @@ async def send_message(
     message = await ChatService.save_message(
         session_id=session_id,
         user_id=str(current_user.user_id),
-        role=request.role,
+        role='user',
         content=content,
         extra=request.extra,
         parent_id=request.parent_id,
@@ -387,6 +441,11 @@ async def send_message_stream(
     qa_type = (request.extra or {}).get("qa_type", IntentEnum.COMMON_QA.value[0])
     file_dict = (request.extra or {}).get("file_dict")
 
+    if session_id:
+        denied = await _deny_foreign_session(session_id, current_user, db)
+        if denied:
+            return denied
+
     qa_req = QaQueryRequest(
         query=request.content,
         qa_type=qa_type,
@@ -428,6 +487,14 @@ async def resume_test_case_stream(
     """
     if not request.selected_point_names:
         return ResponseUtil.failure(msg="请至少选择一个测试点")
+
+    session = await ChatService.get_session_by_id(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if not session:
+        return ResponseUtil.not_found(msg='会话不存在')
 
     try:
         logger.info(
@@ -536,10 +603,19 @@ async def stop_stream(
     session_id: str,
     stop_payload: QaStopRequest,
     current_user: CurrentUser = Depends(UserService.get_user_for_stop),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     停止指定会话的流式生成任务
     """
+    session = await ChatService.get_session_by_id(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if not session:
+        return ResponseUtil.not_found(msg='会话不存在')
+
     logger.info(
         f"停止流式生成请求 session_id={session_id} qa_type={stop_payload.qa_type} "
         f"user_id={current_user.user_id}"
