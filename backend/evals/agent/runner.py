@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from agent.deep_research_agent import DeepResearchAgent
 from config.agent_workspace_paths import ensure_workspace_dir, get_workspace_dir
 from evals.agent.dataset import resolve_workspace_seed
+from evals.bootstrap import eval_runtime
 
 EVAL_USER_ID = "eval"
 DEFAULT_TIME_BUDGET_SECONDS = 600
@@ -82,25 +83,26 @@ async def _run_agent_async(
     session_id: str,
     time_budget_seconds: int,
 ) -> StreamCollector:
-    agent = DeepResearchAgent()
-    current_user = SimpleNamespace(user_id=EVAL_USER_ID)
-    collector = StreamCollector()
+    async with eval_runtime():
+        agent = DeepResearchAgent()
+        current_user = SimpleNamespace(user_id=EVAL_USER_ID)
+        collector = StreamCollector()
 
-    async def _consume() -> None:
-        async for chunk in agent.run_agent(
-            query,
-            session_id=session_id,
-            current_user=current_user,
-            qa_type="DEEP_RESEARCH_QA",
-        ):
-            collector.consume(chunk)
+        async def _consume() -> None:
+            async for chunk in agent.run_agent(
+                query,
+                session_id=session_id,
+                current_user=current_user,
+                qa_type="DEEP_RESEARCH_QA",
+            ):
+                collector.consume(chunk)
 
-    try:
-        await asyncio.wait_for(_consume(), timeout=time_budget_seconds)
-    except asyncio.TimeoutError:
-        await agent.cancel_task(session_id)
-        collector.error = f"timeout after {time_budget_seconds}s"
-        collector.completed = False
+        try:
+            await asyncio.wait_for(_consume(), timeout=time_budget_seconds)
+        except asyncio.TimeoutError:
+            await agent.cancel_task(session_id)
+            collector.error = f"timeout after {time_budget_seconds}s"
+            collector.completed = False
 
     return collector
 
