@@ -11,6 +11,7 @@ import httpx
 
 from agent.tools.web_providers.url_safety import validate_fetch_url
 from common.logging import logger
+from domain.chat.streaming.tool_errors import ToolValidationError
 
 _STRIP_TAGS = frozenset({"script", "style", "noscript", "svg", "iframe"})
 
@@ -69,7 +70,7 @@ def _extract_html(page_html: str) -> tuple[str, str]:
 def fetch_with_local(url: str, max_chars: int, timeout: int) -> dict[str, Any]:
     ok, err = validate_fetch_url(url)
     if not ok:
-        raise ValueError(err)
+        raise ToolValidationError(err or "URL 校验失败")
 
     headers = {
         "User-Agent": (
@@ -86,7 +87,7 @@ def fetch_with_local(url: str, max_chars: int, timeout: int) -> dict[str, Any]:
             final_url = str(resp.url)
             ok_final, err_final = validate_fetch_url(final_url)
             if not ok_final:
-                raise ValueError(f"重定向目标被拒绝: {err_final}")
+                raise ToolValidationError(f"重定向目标被拒绝: {err_final}")
             content_type = (resp.headers.get("content-type") or "").lower()
             raw = resp.text
     except httpx.HTTPError as e:

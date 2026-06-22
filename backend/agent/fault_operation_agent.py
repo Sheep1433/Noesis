@@ -13,6 +13,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
+from agent.tools.mcp_invoke_wrapper import wrap_mcp_tools
 from agent.backends import create_local_shell_backend
 from config.agent_workspace_paths import ensure_workspace_dir
 from deepagents.backends import LocalShellBackend
@@ -73,7 +74,7 @@ class FaultOperationAgent(BaseAgent):
                 }
             }
         )
-        tools = await mcp_client.get_tools()
+        tools = wrap_mcp_tools(await mcp_client.get_tools())
         logger.info(f"FaultOperationAgent 加载 MCP 工具 {len(tools)} 个")
         return tools
 

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
+from domain.chat.streaming.tool_errors import ToolInfrastructureError
 from domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
 from domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 
@@ -605,7 +606,7 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
                 "name": "bash",
                 "run_id": "run-err",
                 "data": {
-                    "error": RuntimeError(
+                    "error": ToolInfrastructureError(
                         "[INTERNAL_ERROR] Docker image ubuntu:latest not found"
                     ),
                     "tool_call_id": mcp_call_id,
@@ -673,13 +674,75 @@ def test_tool_output_error_frame_golden_fields() -> None:
     )
     out = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "tool-output-available"][-1]
     assert out["status"] == "error"
-    assert out["error"] == "执行超时"
-    assert out["errorCategory"] == "execution_timeout"
+    assert out["error"] == "执行失败"
+    assert out["errorCategory"] == "unknown"
     assert out["output"] == ""
 
     saved = builder.to_dict()["parts"][0]
-    assert saved["error"] == "执行超时"
-    assert saved["errorCategory"] == "execution_timeout"
+    assert saved["error"] == "执行失败"
+    assert saved["errorCategory"] == "unknown"
+
+
+def test_task_tool_subagent_child_error_maps_subagent_failure() -> None:
+    """子图含 error tool 时，task 结束应标 subagent_failure（不依赖 Task failed. 前缀）。"""
+    bridge = LangGraphSseBridge("sess-task-child-err")
+    builder = AssistantMessageBuilder(
+        session_id="sess-task-child-err",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    task_run = "run-task-child"
+    child_run = "run-bash-child"
+
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": TASK_TOOL_NAME,
+            "run_id": task_run,
+            "data": {"input": {"description": "子任务", "prompt": "x"}},
+        },
+        builder,
+        ctx,
+    )
+    task_tc = ctx["run_id_to_tool_call_id"][task_run]
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "bash",
+            "run_id": child_run,
+            "parent_ids": [task_run],
+            "data": {"input": {"command": "false"}},
+        },
+        builder,
+        ctx,
+    )
+    bridge.process_item(
+        {
+            "event": "on_tool_error",
+            "name": "bash",
+            "run_id": child_run,
+            "parent_ids": [task_run],
+            "data": {"error": RuntimeError("child broke")},
+        },
+        builder,
+        ctx,
+    )
+    blob = "".join(
+        bridge.process_item(
+            {
+                "event": "on_tool_end",
+                "name": TASK_TOOL_NAME,
+                "run_id": task_run,
+                "data": {"output": "Task Succeeded. Result: partial"},
+            },
+            builder,
+            ctx,
+        )
+    )
+    out = [o for o in _data_json_objects(blob) if o.get("type") == "tool-output-available"][-1]
+    assert out["status"] == "error"
+    assert out["errorCategory"] == "subagent_failure"
+    assert out["error"] == "执行失败"
 
 
 def test_task_tool_failed_maps_subagent_failure() -> None:

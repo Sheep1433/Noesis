@@ -7,9 +7,8 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from domain.chat.streaming.tool_failure import (
-    ToolFailureCategory,
+    DEFAULT_USER_TOOL_ERROR,
     classify_tool_failure,
-    is_infrastructure_failure,
 )
 
 # ---------- 用户可见错误脱敏（SSE / 中间件 / 落库共用）----------
@@ -23,19 +22,38 @@ def strip_tool_error_prefix(raw: str) -> str:
 
 
 def is_internal_infrastructure_error(raw: str) -> bool:
-    return is_infrastructure_failure(strip_tool_error_prefix(raw))
+    """整轮流错误路径：仅 [INTERNAL_ERROR] 前缀检测，不用宽泛正则。"""
+    s = strip_tool_error_prefix(raw).strip()
+    return s.startswith("[INTERNAL_ERROR]")
 
 
-def sanitize_user_facing_error(raw: str, *, default: str = "操作失败，请稍后重试。") -> str:
+def sanitize_tool_error(raw: str, *, default: str = DEFAULT_USER_TOOL_ERROR) -> str:
+    """单 tool 失败：委托 classify_tool_failure。"""
     s = strip_tool_error_prefix(raw)
     if not s:
         return default
-    failure = classify_tool_failure(None, raw=s)
-    if failure.category != ToolFailureCategory.UNKNOWN:
-        return failure.message_for_user
+    return classify_tool_failure(None, raw=s).message_for_user
+
+
+def sanitize_stream_error(raw: str, *, default: str = "操作失败，请稍后重试。") -> str:
+    """整轮 SSE error 事件：独立规则，不委托 tool 文本分类器。"""
+    s = strip_tool_error_prefix(raw)
+    if not s:
+        return default
     if is_internal_infrastructure_error(s):
-        return classify_tool_failure(None, raw=s).message_for_user
+        return "环境不可用"
+    if is_recursion_limit_error(s):
+        return (
+            "已达到最大处理步数，任务已停止。请精简问题后重试。"
+        )
+    if is_model_api_timeout_error(s):
+        return "模型响应超时，请稍后重试。"
     return s
+
+
+def sanitize_user_facing_error(raw: str, *, default: str = "操作失败，请稍后重试。") -> str:
+    """兼容别名：新代码应显式选用 sanitize_tool_error 或 sanitize_stream_error。"""
+    return sanitize_stream_error(raw, default=default)
 
 
 # ---------- 失败说明文案 ----------
@@ -107,7 +125,7 @@ def get_stream_failure_notice_text(
     has_prose: bool,
     parts: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    raw = sanitize_user_facing_error((detail or "").strip(), default="")
+    raw = sanitize_stream_error((detail or "").strip(), default="")
     if is_model_api_timeout_error(raw):
         return get_model_api_timeout_notice_text(has_prose)
     if is_connection_or_timeout_error(raw):
@@ -125,7 +143,7 @@ def get_stream_failure_notice_text(
     clipped = raw if len(raw) <= 160 else f"{raw[:160]}…"
     head = "生成过程中出现问题，请稍后重试。"
     if is_internal_infrastructure_error(detail or ""):
-        clipped = sanitize_user_facing_error(detail or "")
+        clipped = sanitize_stream_error(detail or "")
     return f"（后续内容未能生成）\n\n{clipped}" if has_prose else f"{head}\n\n{clipped}"
 
 

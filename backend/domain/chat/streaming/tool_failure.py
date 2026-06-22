@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import re
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Optional
 
+import httpx
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
+from pydantic import ValidationError
+
+from domain.chat.streaming.tool_errors import (
+    ToolCancelledError,
+    ToolFailureCategory,
+    ToolFailureError,
+    ToolInfrastructureError,
+    ToolValidationError,
+)
 
 TOOL_ERROR_PREFIX = "[tool_error"
 _TOOL_ERROR_HEADER_RE = re.compile(
@@ -16,64 +27,7 @@ _TOOL_ERROR_HEADER_RE = re.compile(
     re.I,
 )
 
-# ---------- 基础设施标记（failure_notice 共用）----------
-
-INTERNAL_INFRASTRUCTURE_MARKERS = (
-    re.compile(r"\[INTERNAL_ERROR\]", re.I),
-    re.compile(r"docker image .+ not found", re.I),
-    re.compile(r"\bdocker pull\b", re.I),
-    re.compile(r"sandbox.*not (?:ready|available)", re.I),
-)
-
-_NETWORK_UNREACHABLE_MARKERS = re.compile(
-    r"connection refused|econnrefused|network is unreachable|"
-    r"host is unreachable|no route to host|name or service not known|"
-    r"无法连接|主机不可达|连接被拒绝",
-    re.I,
-)
-
-_NETWORK_TIMEOUT_MARKERS = re.compile(
-    r"connecttimeout|connection timed out|timed out while connecting|"
-    r"socket hang up|readtimeout.*connect|connect error.*timeout|"
-    r"连接超时",
-    re.I,
-)
-
-_EXECUTION_TIMEOUT_MARKERS = re.compile(
-    r"\bTimeoutError\b|execution timed out|command timed out|"
-    r"tool execution timed out|asyncio\.timeouts|"
-    r"执行超时|操作超时",
-    re.I,
-)
-
-_INVALID_ARGUMENTS_MARKERS = re.compile(
-    r"ValidationError|validation error|invalid argument|invalid params|"
-    r"invalid parameter|pydantic|field required|type error.*argument|"
-    r"参数错误|参数校验|非法参数",
-    re.I,
-)
-
-_TOOL_NOT_FOUND_MARKERS = re.compile(
-    r"tool not found|unknown tool|no tool named|is not a valid tool|"
-    r"工具不存在|未注册的工具",
-    re.I,
-)
-
-_PERMISSION_DENIED_MARKERS = re.compile(
-    r"permission denied|access denied|\b403\b|forbidden|not authorized|"
-    r"权限不足|拒绝访问",
-    re.I,
-)
-
-_CANCELLED_MARKERS = re.compile(
-    r"user stop|stop_chat|cancelled|canceled|用户已停止|已停止生成",
-    re.I,
-)
-
-_SUBAGENT_FAILURE_MARKERS = re.compile(
-    r"^Task failed\.|^Task timed out|\[tool_error\s+category=subagent_failure",
-    re.I,
-)
+_DETAIL_MAX_LEN = 10_000
 
 USER_TOOL_ERROR_MESSAGES: dict[str, str] = {
     "network_unreachable": "连接失败",
@@ -92,18 +46,12 @@ _RETRYABLE_CATEGORIES = frozenset({
     "infrastructure",
 })
 
-
-class ToolFailureCategory(str, Enum):
-    NETWORK_UNREACHABLE = "network_unreachable"
-    NETWORK_TIMEOUT = "network_timeout"
-    EXECUTION_TIMEOUT = "execution_timeout"
-    INVALID_ARGUMENTS = "invalid_arguments"
-    TOOL_NOT_FOUND = "tool_not_found"
-    PERMISSION_DENIED = "permission_denied"
-    INFRASTRUCTURE = "infrastructure"
-    SUBAGENT_FAILURE = "subagent_failure"
-    CANCELLED = "cancelled"
-    UNKNOWN = "unknown"
+_NETWORK_ERRNOS = frozenset({
+    errno.ECONNREFUSED,
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.ENETDOWN,
+})
 
 
 @dataclass(frozen=True)
@@ -114,25 +62,29 @@ class ToolFailure:
     retryable: bool
 
 
-def is_infrastructure_failure(raw: str) -> bool:
-    s = (raw or "").strip()
-    if not s:
-        return False
-    return any(p.search(s) for p in INTERNAL_INFRASTRUCTURE_MARKERS)
-
-
 def _user_message_for_category(category: ToolFailureCategory) -> str:
     return USER_TOOL_ERROR_MESSAGES.get(category.value, DEFAULT_USER_TOOL_ERROR)
 
 
-def _extract_text(exc: BaseException | None, raw: str) -> str:
+def _default_retryable(category: ToolFailureCategory) -> bool:
+    return category.value in _RETRYABLE_CATEGORIES
+
+
+def format_tool_error_detail(exc: BaseException | None, raw: str = "") -> str:
+    """合并异常与 raw 文本，截断至 10k，附带类型名。"""
     parts: list[str] = []
     if exc is not None:
-        parts.append(str(exc).strip())
+        exc_text = str(exc).strip()
+        if exc_text:
+            parts.append(exc_text)
         parts.append(exc.__class__.__name__)
-    if raw:
-        parts.append(raw.strip())
-    return "\n".join(p for p in parts if p)
+    raw_text = (raw or "").strip()
+    if raw_text:
+        parts.append(raw_text)
+    detail = "\n".join(p for p in parts if p)
+    if len(detail) > _DETAIL_MAX_LEN:
+        return detail[:_DETAIL_MAX_LEN] + "…"
+    return detail
 
 
 def _parse_tool_error_header(raw: str) -> tuple[Optional[ToolFailureCategory], Optional[bool], str]:
@@ -151,41 +103,81 @@ def _parse_tool_error_header(raw: str) -> tuple[Optional[ToolFailureCategory], O
     return category, retryable, remainder
 
 
-def _classify_from_text(text: str, *, tool_name: str = "") -> ToolFailureCategory:
-    t = text.strip()
-    if not t:
-        return ToolFailureCategory.UNKNOWN
+def _iter_exception_chain(exc: BaseException, *, max_depth: int = 2):
+    """深度受限遍历 __cause__ / __context__，去重。"""
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    depth = 0
+    while stack and depth < max_depth:
+        current = stack.pop(0)
+        node_id = id(current)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        yield current
+        depth += 1
+        cause = current.__cause__
+        context = current.__context__
+        if cause is not None and id(cause) not in seen:
+            stack.append(cause)
+        if (
+            context is not None
+            and id(context) not in seen
+            and context is not cause
+        ):
+            stack.append(context)
 
-    parsed_cat, _, body = _parse_tool_error_header(t)
-    if parsed_cat is not None:
-        return parsed_cat
 
-    if _SUBAGENT_FAILURE_MARKERS.search(t) or (
-        tool_name == "task" and t.lower().startswith(("task failed.", "task timed out"))
-    ):
+def _map_exception(node: BaseException) -> tuple[ToolFailureCategory, bool] | None:
+    """仅按 type(node) 与 errno 映射，不解析 str(exc)。"""
+    if isinstance(node, ToolFailureError):
+        return node.category, node.retryable
+    if isinstance(node, ValidationError) or isinstance(node, ToolValidationError):
+        return ToolFailureCategory.INVALID_ARGUMENTS, False
+    if isinstance(node, ToolInfrastructureError):
+        return ToolFailureCategory.INFRASTRUCTURE, True
+    if isinstance(node, (asyncio.TimeoutError, TimeoutError)):
+        return ToolFailureCategory.EXECUTION_TIMEOUT, True
+    if isinstance(node, httpx.ConnectTimeout):
+        return ToolFailureCategory.NETWORK_TIMEOUT, True
+    if isinstance(node, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+        return ToolFailureCategory.EXECUTION_TIMEOUT, True
+    if isinstance(node, (httpx.ConnectError, ConnectionRefusedError)):
+        return ToolFailureCategory.NETWORK_UNREACHABLE, True
+    if isinstance(node, PermissionError):
+        return ToolFailureCategory.PERMISSION_DENIED, False
+    if isinstance(node, (asyncio.CancelledError, KeyboardInterrupt, ToolCancelledError)):
+        return ToolFailureCategory.CANCELLED, False
+    if isinstance(node, OSError):
+        err = node.errno
+        if err in _NETWORK_ERRNOS:
+            return ToolFailureCategory.NETWORK_UNREACHABLE, True
+        if err == errno.ETIMEDOUT:
+            return ToolFailureCategory.NETWORK_TIMEOUT, True
+        if err in (errno.EACCES, errno.EPERM):
+            return ToolFailureCategory.PERMISSION_DENIED, False
+    if isinstance(node, ConnectionError) and not isinstance(node, OSError):
+        return ToolFailureCategory.NETWORK_UNREACHABLE, True
+    return None
+
+
+def _classify_from_exception_chain(
+    exc: BaseException,
+) -> tuple[ToolFailureCategory, bool] | None:
+    for node in _iter_exception_chain(exc):
+        mapped = _map_exception(node)
+        if mapped is not None:
+            return mapped
+    return None
+
+
+def _classify_task_prefix(raw: str, tool_name: str) -> ToolFailureCategory | None:
+    if tool_name != "task":
+        return None
+    t = (raw or "").strip()
+    if t.startswith("Task failed.") or t.startswith("Task timed out"):
         return ToolFailureCategory.SUBAGENT_FAILURE
-    if is_infrastructure_failure(t):
-        return ToolFailureCategory.INFRASTRUCTURE
-    if _CANCELLED_MARKERS.search(t):
-        return ToolFailureCategory.CANCELLED
-    if _INVALID_ARGUMENTS_MARKERS.search(t):
-        return ToolFailureCategory.INVALID_ARGUMENTS
-    if _TOOL_NOT_FOUND_MARKERS.search(t):
-        return ToolFailureCategory.TOOL_NOT_FOUND
-    if _PERMISSION_DENIED_MARKERS.search(t):
-        return ToolFailureCategory.PERMISSION_DENIED
-    if _NETWORK_UNREACHABLE_MARKERS.search(t):
-        return ToolFailureCategory.NETWORK_UNREACHABLE
-    if _NETWORK_TIMEOUT_MARKERS.search(t):
-        return ToolFailureCategory.NETWORK_TIMEOUT
-    if _EXECUTION_TIMEOUT_MARKERS.search(t):
-        return ToolFailureCategory.EXECUTION_TIMEOUT
-    if "timed out" in t.lower() or "timeout" in t.lower():
-        if "connect" in t.lower() or "connection" in t.lower():
-            return ToolFailureCategory.NETWORK_TIMEOUT
-        return ToolFailureCategory.EXECUTION_TIMEOUT
-
-    return ToolFailureCategory.UNKNOWN
+    return None
 
 
 def _suggestion_for_category(category: ToolFailureCategory, tool_name: str) -> str:
@@ -241,89 +233,90 @@ def _build_llm_message(
     )
 
 
+def _failure_from_parts(
+    category: ToolFailureCategory,
+    *,
+    tool_name: str,
+    detail: str,
+    retryable: bool,
+) -> ToolFailure:
+    name = tool_name or "unknown_tool"
+    return ToolFailure(
+        category=category,
+        message_for_llm=_build_llm_message(
+            category,
+            tool_name=name,
+            detail=detail,
+            retryable=retryable,
+        ),
+        message_for_user=_user_message_for_category(category),
+        retryable=retryable,
+    )
+
+
 def classify_tool_failure(
     exc: BaseException | None,
     *,
     raw: str = "",
     tool_name: str = "",
 ) -> ToolFailure:
-    """单一分类入口：异常和/或原始文本 → ToolFailure。"""
-    if exc is not None:
-        exc_name = exc.__class__.__name__
-        if exc_name == "ValidationError":
-            category = ToolFailureCategory.INVALID_ARGUMENTS
-            text = _extract_text(exc, raw)
-            retryable = False
-            return ToolFailure(
-                category=category,
-                message_for_llm=_build_llm_message(
-                    category,
-                    tool_name=tool_name or "unknown_tool",
-                    detail=text,
-                    retryable=retryable,
-                ),
-                message_for_user=_user_message_for_category(category),
-                retryable=retryable,
-            )
-        if exc_name in ("TimeoutError", "ReadTimeout", "WriteTimeout", "ConnectTimeout"):
-            category = ToolFailureCategory.EXECUTION_TIMEOUT
-            if "connect" in str(exc).lower():
-                category = ToolFailureCategory.NETWORK_TIMEOUT
-            text = _extract_text(exc, raw)
-            retryable = category.value in _RETRYABLE_CATEGORIES
-            return ToolFailure(
-                category=category,
-                message_for_llm=_build_llm_message(
-                    category,
-                    tool_name=tool_name or "unknown_tool",
-                    detail=text,
-                    retryable=retryable,
-                ),
-                message_for_user=_user_message_for_category(category),
-                retryable=retryable,
-            )
-        if exc_name in ("CancelledError", "KeyboardInterrupt"):
-            category = ToolFailureCategory.CANCELLED
-            text = _extract_text(exc, raw)
-            return ToolFailure(
-                category=category,
-                message_for_llm=_build_llm_message(
-                    category,
-                    tool_name=tool_name or "unknown_tool",
-                    detail=text,
-                    retryable=False,
-                ),
-                message_for_user=_user_message_for_category(category),
-                retryable=False,
-            )
+    """单一分类入口：异常和/或原始文本 → ToolFailure（类型优先，禁止文本正则推断）。"""
+    name = tool_name or "unknown_tool"
 
-    text = _extract_text(exc, raw)
-    parsed_cat, parsed_retry, body = _parse_tool_error_header(text)
+    if isinstance(exc, ToolFailureError):
+        return _failure_from_parts(
+            exc.category,
+            tool_name=name,
+            detail=exc.detail or format_tool_error_detail(exc, raw),
+            retryable=exc.retryable,
+        )
+
+    chain_result: tuple[ToolFailureCategory, bool] | None = None
+    if exc is not None:
+        chain_result = _classify_from_exception_chain(exc)
+
+    parsed_cat, parsed_retry, body = _parse_tool_error_header(raw)
+    task_prefix = _classify_task_prefix(raw, tool_name)
+
+    if chain_result is not None:
+        category, retryable = chain_result
+        detail = format_tool_error_detail(exc, raw)
+        return _failure_from_parts(
+            category,
+            tool_name=name,
+            detail=detail,
+            retryable=retryable,
+        )
+
     if parsed_cat is not None:
         category = parsed_cat
-        detail = body or text
+        detail = body or format_tool_error_detail(exc, raw)
         retryable = (
             parsed_retry
             if parsed_retry is not None
-            else category.value in _RETRYABLE_CATEGORIES
+            else _default_retryable(category)
         )
-    else:
-        category = _classify_from_text(text, tool_name=tool_name)
-        detail = text
-        retryable = category.value in _RETRYABLE_CATEGORIES
+        return _failure_from_parts(
+            category,
+            tool_name=name,
+            detail=detail,
+            retryable=retryable,
+        )
 
-    name = tool_name or "unknown_tool"
-    message_for_llm = _build_llm_message(
-        category,
+    if task_prefix is not None:
+        return _failure_from_parts(
+            task_prefix,
+            tool_name=name,
+            detail=format_tool_error_detail(exc, raw),
+            retryable=False,
+        )
+
+    detail = format_tool_error_detail(exc, raw)
+    return _failure_from_parts(
+        ToolFailureCategory.UNKNOWN,
         tool_name=name,
         detail=detail,
-        retryable=retryable,
-    )
-    return ToolFailure(
-        category=category,
-        message_for_llm=message_for_llm,
-        message_for_user=_user_message_for_category(category),
-        retryable=retryable,
+        retryable=False,
     )
 
 
@@ -355,3 +348,10 @@ def classify_task_tool_output(raw_output: str) -> Optional[ToolFailure]:
     if trimmed.startswith("Task failed.") or trimmed.startswith("Task timed out"):
         return classify_tool_failure(None, raw=trimmed, tool_name="task")
     return None
+
+
+def subagent_failure_from_context(detail: str = "") -> ToolFailure:
+    """子图含 error tool 时构造 subagent_failure。"""
+    header = "[tool_error category=subagent_failure retryable=false]"
+    raw = f"{header}\n{detail}".strip() if detail else header
+    return classify_tool_failure(None, raw=raw, tool_name="task")

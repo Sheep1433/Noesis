@@ -13,6 +13,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
+from agent.tools.mcp_invoke_wrapper import wrap_mcp_tools
 from common.logging import logger
 
 
@@ -45,7 +46,7 @@ class SimpleMCPAgent(BaseAgent):
             })
 
             try:
-                all_tools = await mcp_client.get_tools()
+                all_tools = wrap_mcp_tools(await mcp_client.get_tools())
                 logger.info(f"获取到 {len(all_tools)} 个 MCP 工具")
             except Exception as e:
                 logger.error(f"获取 MCP 工具失败: {e}")

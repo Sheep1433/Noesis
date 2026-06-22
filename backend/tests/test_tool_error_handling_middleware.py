@@ -1,6 +1,7 @@
 """ToolErrorHandlingMiddleware：工具异常转 ToolMessage。"""
 from __future__ import annotations
 
+import httpx
 import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.errors import GraphBubbleUp
@@ -9,7 +10,10 @@ from langgraph.types import Command
 from unittest.mock import MagicMock
 
 from agent.middlewares.tool_error_handling_middleware import ToolErrorHandlingMiddleware
-from domain.chat.streaming.tool_failure import ToolFailureCategory
+from domain.chat.streaming.tool_errors import (
+    ToolFailureCategory,
+    ToolInfrastructureError,
+)
 
 
 def _request() -> ToolCallRequest:
@@ -21,7 +25,23 @@ def _request() -> ToolCallRequest:
     )
 
 
-def test_wrap_tool_call_returns_error_tool_message() -> None:
+def test_wrap_tool_call_returns_error_tool_message_from_httpx_cause() -> None:
+    mw = ToolErrorHandlingMiddleware()
+
+    def _boom(_req: ToolCallRequest) -> ToolMessage:
+        try:
+            raise httpx.ConnectError("connection refused")
+        except httpx.ConnectError as cause:
+            raise RuntimeError("页面抓取失败") from cause
+
+    result = mw.wrap_tool_call(_request(), _boom)
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert result.tool_call_id == "call_abc"
+    assert "[tool_error category=network_unreachable" in result.content
+
+
+def test_wrap_tool_call_unknown_for_bare_runtime_error_text() -> None:
     mw = ToolErrorHandlingMiddleware()
 
     def _boom(_req: ToolCallRequest) -> ToolMessage:
@@ -29,10 +49,7 @@ def test_wrap_tool_call_returns_error_tool_message() -> None:
 
     result = mw.wrap_tool_call(_request(), _boom)
     assert isinstance(result, ToolMessage)
-    assert result.status == "error"
-    assert result.tool_call_id == "call_abc"
-    assert result.content.startswith("[tool_error category=network_unreachable")
-    assert "connection refused" in result.content
+    assert "[tool_error category=unknown" in result.content
 
 
 def test_wrap_tool_call_preserves_graph_bubble_up() -> None:
@@ -59,7 +76,7 @@ def test_wrap_tool_call_reclassifies_handler_error_status() -> None:
     result = mw.wrap_tool_call(_request(), _error_msg)
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
-    assert "[tool_error category=invalid_arguments" in result.content
+    assert "[tool_error category=unknown" in result.content
 
 
 def test_wrap_tool_call_passthrough_prefixed_error_content() -> None:
@@ -82,7 +99,21 @@ def test_wrap_tool_call_passthrough_prefixed_error_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_awrap_tool_call_returns_error_tool_message() -> None:
+async def test_awrap_tool_call_infrastructure_error() -> None:
+    mw = ToolErrorHandlingMiddleware()
+
+    async def _boom(_req: ToolCallRequest) -> ToolMessage:
+        raise ToolInfrastructureError("[INTERNAL_ERROR] Docker image ubuntu:latest not found")
+
+    result = await mw.awrap_tool_call(_request(), _boom)
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "[tool_error category=infrastructure" in result.content
+    assert ToolFailureCategory.INFRASTRUCTURE.value in result.content
+
+
+@pytest.mark.asyncio
+async def test_awrap_tool_call_internal_error_text_without_typed_exc_is_unknown() -> None:
     mw = ToolErrorHandlingMiddleware()
 
     async def _boom(_req: ToolCallRequest) -> ToolMessage:
@@ -90,6 +121,4 @@ async def test_awrap_tool_call_returns_error_tool_message() -> None:
 
     result = await mw.awrap_tool_call(_request(), _boom)
     assert isinstance(result, ToolMessage)
-    assert result.status == "error"
-    assert "[tool_error category=infrastructure" in result.content
-    assert ToolFailureCategory.INFRASTRUCTURE.value in result.content
+    assert "[tool_error category=unknown" in result.content

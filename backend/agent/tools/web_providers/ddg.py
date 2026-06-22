@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from common.logging import logger
+from domain.chat.streaming.tool_errors import ToolInfrastructureError
 
 
 def search_with_ddg(query: str, limit: int, timeout: int = 30) -> dict[str, Any]:
@@ -12,7 +13,7 @@ def search_with_ddg(query: str, limit: int, timeout: int = 30) -> dict[str, Any]
         from ddgs import DDGS
     except ImportError as e:
         logger.error("ddgs 未安装: %s", e)
-        raise RuntimeError("ddgs 库未安装") from e
+        raise ToolInfrastructureError("ddgs 库未安装") from e
 
     ddgs = DDGS(timeout=timeout)
     try:

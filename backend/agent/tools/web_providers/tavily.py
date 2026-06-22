@@ -6,6 +6,7 @@ from typing import Any
 
 from config.env import WebToolsConfig
 from common.logging import logger
+from domain.chat.streaming.tool_errors import ToolValidationError
 
 
 def _get_client():
@@ -13,7 +14,7 @@ def _get_client():
 
     api_key = (WebToolsConfig.tavily_api_key or "").strip()
     if not api_key:
-        raise ValueError("TAVILY_API_KEY 未配置")
+        raise ToolValidationError("TAVILY_API_KEY 未配置")
     return TavilyClient(api_key=api_key)
 
 

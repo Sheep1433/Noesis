@@ -16,14 +16,15 @@ from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
 from config.env import ModelConfig
 from domain.chat.streaming.reasoning import extract_reasoning_delta
 from common.logging import logger
-from domain.chat.message_builder import AssistantMessageBuilder
+from domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 from domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
-from domain.chat.streaming.failure_notice import sanitize_user_facing_error
+from domain.chat.streaming.failure_notice import sanitize_stream_error, sanitize_tool_error
 from domain.chat.streaming.tool_failure import (
     ToolFailure,
     classify_task_tool_output,
     classify_tool_failure,
     failure_to_sse_error_fields,
+    subagent_failure_from_context,
 )
 
 
@@ -497,6 +498,22 @@ class LangGraphSseBridge:
             )
             return False
 
+    def _task_has_subagent_tool_error(
+        self,
+        builder: Optional[AssistantMessageBuilder],
+        task_tool_call_id: str,
+    ) -> bool:
+        if builder is None or not task_tool_call_id:
+            return False
+        for part in builder._content.parts:  # noqa: SLF001 — bridge 需读累积 parts
+            if (
+                isinstance(part, ToolPart)
+                and part.parent_task_call_id == task_tool_call_id
+                and part.status == "error"
+            ):
+                return True
+        return False
+
     def _resolve_tool_failure(
         self,
         *,
@@ -504,11 +521,16 @@ class LangGraphSseBridge:
         clean_output: str,
         output_status: Optional[str],
         exc: Optional[BaseException] = None,
+        builder: Optional[AssistantMessageBuilder] = None,
+        task_tool_call_id: Optional[str] = None,
     ) -> Optional[ToolFailure]:
-        if tool_name == TASK_TOOL_NAME and clean_output and output_status != "error":
-            task_failure = classify_task_tool_output(clean_output)
-            if task_failure is not None:
-                return task_failure
+        if tool_name == TASK_TOOL_NAME:
+            if self._task_has_subagent_tool_error(builder, task_tool_call_id or ""):
+                return subagent_failure_from_context(clean_output)
+            if clean_output and output_status != "error":
+                task_failure = classify_task_tool_output(clean_output)
+                if task_failure is not None:
+                    return task_failure
         if output_status == "error" or exc is not None:
             return classify_tool_failure(exc, raw=clean_output, tool_name=tool_name)
         return None
@@ -577,7 +599,7 @@ class LangGraphSseBridge:
             self._ensure_started(out)
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
-            msg = sanitize_user_facing_error(
+            msg = sanitize_stream_error(
                 str(item.get("error") or item.get("content") or "unknown error")
             )
             self.last_error_message = msg
@@ -762,13 +784,15 @@ class LangGraphSseBridge:
             tool_name=tool_name,
             clean_output=clean_output,
             output_status=output_status,
+            builder=builder,
+            task_tool_call_id=tool_call_id if tool_name == TASK_TOOL_NAME else None,
         )
         is_error = failure is not None or output_status == "error"
         err_fields = failure_to_sse_error_fields(failure) if failure else {}
         err_s = err_fields.get("error") if is_error else None
         err_cat = err_fields.get("errorCategory") if is_error else None
         if is_error and not err_s:
-            err_s = sanitize_user_facing_error(clean_output)
+            err_s = sanitize_tool_error(clean_output)
         sse_status = "error" if is_error else "success"
         display_output = "" if is_error else clean_output
         builder_output = clean_output if not is_error else (failure.message_for_llm if failure else clean_output)
@@ -814,9 +838,11 @@ class LangGraphSseBridge:
             clean_output=err_text,
             output_status="error",
             exc=exc,
+            builder=builder,
+            task_tool_call_id=tool_call_id if tool_name == TASK_TOOL_NAME else None,
         )
         err_fields = failure_to_sse_error_fields(failure) if failure else {}
-        err_s = err_fields.get("error") or sanitize_user_facing_error(f"Tool error: {err_text}")
+        err_s = err_fields.get("error") or sanitize_tool_error(f"Tool error: {err_text}")
         err_cat = err_fields.get("errorCategory")
         duration_ms = self._tool_duration_ms(ctx, tool_call_id)
 
