@@ -566,9 +566,15 @@ class GetConfig:
     @staticmethod
     def parse_cli_args() -> None:
         is_pytest = "pytest" in sys.modules or "pytest" in sys.argv[0]
-        is_evals_cli = "evals/__main__" in sys.argv[0] or (
-            len(sys.argv) > 1 and "--tag" in sys.argv[1:]
-        )
+        is_evals_cli = any(
+            marker in sys.argv[0]
+            for marker in (
+                "evals/__main__",
+                "evals/agent",
+                "evals/case",
+                "evals/compression",
+            )
+        ) or (len(sys.argv) > 1 and "--tag" in sys.argv[1:])
         if "uvicorn" not in sys.argv[0] and not is_pytest and not is_evals_cli:
             parser = argparse.ArgumentParser(description="命令行参数")
             parser.add_argument("--env", type=str, default="", help="运行环境")

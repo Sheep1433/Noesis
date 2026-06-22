@@ -68,6 +68,7 @@ htmlcov/
 Thumbs.db
 .env
 .env.prod
+evals/.env
 config.yaml
 config.yaml.bak
 config.prod.yaml

@@ -1,1 +1,1 @@
-# 测试用例 Agent 离线评测（promptfoo）
+# 评测子包：按场景使用 python -m evals.<scene>

@@ -44,7 +44,7 @@ backend/
 │   └── observability/langfuse.py
 ├── middleware/                    # FastAPI / Starlette HTTP 中间件
 ├── llm/                         # LLM 工厂（get_llm）
-├── evals/                       # Agent 评测（runners、scorers、promptfoo）
+├── evals/                       # 评测包根（evals.case / evals.agent / evals.compression）
 ├── config/                      # env.py、database.py、yaml 合并
 ├── constants/                   # 枚举
 ├── exceptions/
