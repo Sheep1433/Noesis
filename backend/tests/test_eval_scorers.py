@@ -1,6 +1,6 @@
 """L0 / coverage / rag 评分器测试（无真实 LLM）。"""
 
-from evals.scoring import score_coverage, score_l0, score_rag
+from evals.case.scoring import score_coverage, score_l0, score_rag
 
 
 def _sample_state():

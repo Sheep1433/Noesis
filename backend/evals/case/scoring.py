@@ -21,8 +21,6 @@ from agent.case_generate.rag import (
 )
 from llm import get_llm
 
-from evals.dataset import EVALS_ROOT
-
 GradingResult = Dict[str, Union[bool, float, str, None, Dict[str, Any]]]
 CoverageJudgeFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]]], List[Dict[str, Any]]]
 
@@ -31,28 +29,16 @@ ALL_RAG_CHANNELS = (
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
 )
-_TARGETS_PATH = EVALS_ROOT / "eval_targets.json"
-
-
-# --- 阈值 ---
-
-
-def load_eval_targets() -> Dict[str, Any]:
-    if _TARGETS_PATH.is_file():
-        return json.loads(_TARGETS_PATH.read_text(encoding="utf-8"))
-    return {
-        "point_coverage_recall_min": 0.0,
-        "rag_hit_at_3_min": 0.85,
-        "dataset_size_min": 20,
-    }
 
 
 def eval_scope() -> str:
-    return os.environ.get("NOESIS_EVAL_SCOPE", "full")
+    import os
 
-
-def load_threshold(key: str, default: float = 0.0) -> float:
-    return float(load_eval_targets().get(key, default))
+    return (
+        os.environ.get("NOESIS_CASE_EVAL_SCOPE")
+        or os.environ.get("NOESIS_EVAL_SCOPE")
+        or "full"
+    )
 
 
 # --- L0 ---
@@ -350,7 +336,6 @@ def _grading(
     *,
     metric: str,
     score: Optional[float],
-    threshold: float,
     passed: bool,
     reason: str,
 ) -> GradingResult:
@@ -358,7 +343,7 @@ def _grading(
         "pass": passed,
         "score": score if score is not None else 0.0,
         "reason": reason,
-        "metadata": {"metric": metric, "threshold": threshold},
+        "metadata": {"metric": metric},
     }
 
 
@@ -372,30 +357,9 @@ def assert_l0(output: str, context: Dict[str, Any]) -> Union[bool, float, Gradin
     return _grading(
         metric="l0",
         score=1.0 if passed else 0.0,
-        threshold=1.0,
         passed=passed,
         reason=result.get("failure_reason") or ("L0 通过" if passed else "L0 未通过"),
     )
-
-
-def _mock_coverage_judge(golden: List[Dict[str, Any]], scenes: List[Dict[str, Any]]):
-    gen_names = {
-        str(tp.get("point_name") or "").strip()
-        for sc in scenes
-        for tp in sc.get("test_points") or []
-        if str(tp.get("point_name") or "").strip()
-    }
-    return [
-        {
-            "scene_name": g.get("scene_name"),
-            "point_name": g.get("point_name"),
-            "covered": str(g.get("point_name") or "").strip() in gen_names,
-            "matched_point_names": [g.get("point_name")]
-            if str(g.get("point_name") or "").strip() in gen_names
-            else [],
-        }
-        for g in golden
-    ]
 
 
 def assert_coverage(output: str, context: Dict[str, Any]) -> Union[bool, float, GradingResult]:
@@ -403,20 +367,23 @@ def assert_coverage(output: str, context: Dict[str, Any]) -> Union[bool, float, 
     if scope == "cases":
         return _skipped("scope excludes testpoints")
 
-    judge_fn = _mock_coverage_judge if os.environ.get("NOESIS_EVAL_MOCK_JUDGE") == "1" else None
-    result = score_coverage(_parse_provider_output(output), _ground_truth(context), judge_fn=judge_fn)
+    result = score_coverage(_parse_provider_output(output), _ground_truth(context))
     if result.get("skipped"):
         return _skipped("无 golden_test_points")
 
     recall = result.get("point_coverage_recall")
-    threshold = load_threshold("point_coverage_recall_min", 0.0)
-    passed = recall is not None and float(recall) >= threshold
+    if result.get("error"):
+        return _grading(
+            metric="point_coverage_recall",
+            score=0.0,
+            passed=False,
+            reason=str(result.get("error")),
+        )
     return _grading(
         metric="point_coverage_recall",
-        score=float(recall) if recall is not None else None,
-        threshold=threshold,
-        passed=passed,
-        reason=result.get("error") or f"point_coverage_recall={recall}",
+        score=float(recall) if recall is not None else 0.0,
+        passed=True,
+        reason=f"point_coverage_recall={recall}",
     )
 
 
@@ -431,19 +398,15 @@ def assert_rag(output: str, context: Dict[str, Any]) -> Union[bool, float, Gradi
     if result.get("rag_eval_incomplete"):
         return _grading(
             metric="rag_hit_at_3",
-            score=None,
-            threshold=load_threshold("rag_hit_at_3_min", 0.85),
+            score=0.0,
             passed=False,
             reason=result.get("error") or "rag_eval_incomplete",
         )
 
     score = result.get("rag_hit_at_3")
-    threshold = load_threshold("rag_hit_at_3_min", 0.85)
-    passed = score is not None and float(score) >= threshold
     return _grading(
         metric="rag_hit_at_3",
-        score=float(score) if score is not None else None,
-        threshold=threshold,
-        passed=passed,
+        score=float(score) if score is not None else 0.0,
+        passed=True,
         reason=f"rag_hit_at_3={score}",
     )

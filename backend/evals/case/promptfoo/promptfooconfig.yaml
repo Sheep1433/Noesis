@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: Noesis 测试用例 Agent 离线评测（L0 / coverage / rag）
+description: Noesis 测试用例 Agent 离线评测（evals.case：L0 / coverage / rag）
 
 prompts:
   - "{{scenario_description}}"

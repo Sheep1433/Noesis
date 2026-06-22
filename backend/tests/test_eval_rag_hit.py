@@ -5,7 +5,7 @@ from agent.case_generate.rag import (
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
 )
-from evals.scoring import score_rag
+from evals.case.scoring import score_rag
 
 
 def _trace_hit():

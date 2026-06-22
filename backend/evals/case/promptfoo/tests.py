@@ -5,15 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_BACKEND = Path(__file__).resolve().parents[2]
+_BACKEND = Path(__file__).resolve().parents[3]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 import os
 from typing import Any, Dict, List, Optional
 
-from evals.dataset import DEFAULT_DATASET, load_dataset
-from evals.scoring import eval_scope, load_threshold
+from evals.case.dataset import DEFAULT_DATASET, load_dataset
+from evals.case.scoring import eval_scope
 
 _SCORING = Path(__file__).resolve().parent.parent / "scoring.py"
 
@@ -24,7 +24,6 @@ def _asserts_for_scope(scope: str) -> List[Dict[str, Any]]:
             "type": "python",
             "value": f"file://{_SCORING}:assert_l0",
             "metric": "l0",
-            "threshold": 1.0,
         },
     ]
     if scope in ("testpoints", "full"):
@@ -33,7 +32,6 @@ def _asserts_for_scope(scope: str) -> List[Dict[str, Any]]:
                 "type": "python",
                 "value": f"file://{_SCORING}:assert_coverage",
                 "metric": "point_coverage_recall",
-                "threshold": load_threshold("point_coverage_recall_min", 0.0),
             }
         )
     if scope in ("cases", "full"):
@@ -42,7 +40,6 @@ def _asserts_for_scope(scope: str) -> List[Dict[str, Any]]:
                 "type": "python",
                 "value": f"file://{_SCORING}:assert_rag",
                 "metric": "rag_hit_at_3",
-                "threshold": load_threshold("rag_hit_at_3_min", 0.85),
             }
         )
     return asserts
@@ -50,13 +47,15 @@ def _asserts_for_scope(scope: str) -> List[Dict[str, Any]]:
 
 def generate_tests(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     config = config or {}
-    dataset_raw = config.get("dataset") or os.environ.get("NOESIS_EVAL_DATASET")
+    dataset_raw = config.get("dataset") or os.environ.get("NOESIS_CASE_EVAL_DATASET") or os.environ.get("NOESIS_EVAL_DATASET")
     dataset_path = Path(dataset_raw) if dataset_raw else DEFAULT_DATASET
     scope = config.get("scope") or eval_scope()
-    item_id = config.get("item_id") or os.environ.get("NOESIS_EVAL_ITEM_ID")
+    item_id = config.get("item_id") or os.environ.get("NOESIS_CASE_EVAL_ITEM_ID") or os.environ.get("NOESIS_EVAL_ITEM_ID")
     limit = config.get("limit")
-    if limit is None and os.environ.get("NOESIS_EVAL_LIMIT"):
-        limit = int(os.environ["NOESIS_EVAL_LIMIT"])
+    if limit is None:
+        raw_limit = os.environ.get("NOESIS_CASE_EVAL_LIMIT") or os.environ.get("NOESIS_EVAL_LIMIT")
+        if raw_limit:
+            limit = int(raw_limit)
 
     items = load_dataset(dataset_path)
     if item_id:

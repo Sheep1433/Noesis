@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-EVALS_ROOT = Path(__file__).resolve().parent
-DEFAULT_DATASET = EVALS_ROOT / "datasets" / "test_case" / "dataset.jsonl"
+CASE_ROOT = Path(__file__).resolve().parent
+DEFAULT_DATASET = CASE_ROOT / "datasets" / "test_case" / "dataset.jsonl"
 
 
 def load_dataset(path: Optional[Path] = None) -> List[Dict[str, Any]]:

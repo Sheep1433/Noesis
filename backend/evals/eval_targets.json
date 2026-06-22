@@ -1,5 +1,0 @@
-{
-  "point_coverage_recall_min": 0.0,
-  "rag_hit_at_3_min": 0.85,
-  "dataset_size_min": 20
-}

@@ -14,7 +14,8 @@ from agent.case_generate.case_graph import (
     generate_test_cases_node,
 )
 from config.env import LangfuseConfig
-from evals.dataset import resolve_document_context
+from evals.langfuse_env import load_eval_langfuse_settings
+from evals.case.dataset import resolve_document_context
 
 EvalScope = Literal["testpoints", "cases", "full"]
 
@@ -61,10 +62,14 @@ def _initial_state(query: str, document_context: str, source_file_names: Optiona
 
 
 def _eval_tracing_note(eval_run_id: str, dataset_item_id: str) -> Dict[str, str]:
+    eval_lf = load_eval_langfuse_settings()
     return {
         "eval_run_id": eval_run_id,
         "dataset_item_id": dataset_item_id,
-        "langfuse_tracing_enabled": str(LangfuseConfig.langfuse_tracing_enabled).lower(),
+        "langfuse_tracing_enabled": str(
+            eval_lf.tracing_enabled if eval_lf else LangfuseConfig.langfuse_tracing_enabled
+        ).lower(),
+        "langfuse_source": "evals/.env" if eval_lf else "app",
     }
 
 
