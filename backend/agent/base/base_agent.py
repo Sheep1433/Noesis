@@ -2,8 +2,7 @@ from collections.abc import AsyncGenerator
 
 from langchain_core.messages import convert_to_messages
 from config.checkpointer import get_checkpointer
-from config.env import LangfuseConfig
-from domain.observability.langfuse import merge_langfuse_runnable_config
+from domain.observability.langfuse import langfuse_tracing_enabled, merge_langfuse_runnable_config
 from common.logging import logger
 
 DEFAULT_RECURSION_LIMIT = 200
@@ -82,7 +81,7 @@ class BaseAgent:
             agent_config,
             langfuse_session_id=stream_args.get("langfuse_session_id"),
             qa_type=stream_args.get("qa_type"),
-            enabled=LangfuseConfig.langfuse_tracing_enabled,
+            enabled=langfuse_tracing_enabled(),
         )
 
         try:

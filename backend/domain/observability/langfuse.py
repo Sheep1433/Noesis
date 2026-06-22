@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional
 
 from common.logging import logger
@@ -14,6 +15,131 @@ _lf_trace_context: ContextVar[Optional[Dict[str, str]]] = ContextVar(
     "lf_trace_context", default=None
 )
 _lf_session_id: ContextVar[Optional[str]] = ContextVar("lf_session_id", default=None)
+
+_EVAL_LANGFUSE_ENV_KEYS = (
+    "LANGFUSE_TRACING_ENABLED",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_HOST",
+)
+
+
+@dataclass(frozen=True)
+class _EvalLangfuseActive:
+    line: str
+    tag: str
+    session_id: str
+    trace_id: str
+
+
+_eval_langfuse_active: ContextVar[Optional[_EvalLangfuseActive]] = ContextVar(
+    "eval_langfuse_active", default=None
+)
+
+
+def langfuse_tracing_enabled() -> bool:
+    """线上 Langfuse 开关；评测 with 块内若激活 evals/.env 则视为开启。"""
+    if _eval_langfuse_active.get() is not None:
+        return True
+    from config.env import LangfuseConfig
+
+    return bool(LangfuseConfig.langfuse_tracing_enabled)
+
+
+def eval_langfuse_metadata() -> Dict[str, str]:
+    active = _eval_langfuse_active.get()
+    if not active:
+        return {}
+    return {
+        "source": "noesis-eval",
+        "eval_line": active.line,
+        "eval_tag": active.tag,
+        "eval_session_id": active.session_id,
+    }
+
+
+@contextmanager
+def activate_eval_langfuse(
+    *,
+    settings: Any,
+    line: str,
+    tag: str,
+    session_id: str,
+    trace_id: str,
+) -> Iterator[None]:
+    """
+    临时注入评测 Langfuse 凭据（仅 with 块内），供 CallbackHandler / get_client 使用。
+    settings 须含 tracing_enabled, public_key, secret_key, base_url 属性。
+    """
+    if not settings.tracing_enabled:
+        yield
+        return
+
+    saved_env = {key: os.environ.get(key) for key in _EVAL_LANGFUSE_ENV_KEYS}
+    normalized_trace_id = normalize_langfuse_trace_id(trace_id) or trace_id
+    active = _EvalLangfuseActive(
+        line=line,
+        tag=tag,
+        session_id=session_id,
+        trace_id=normalized_trace_id,
+    )
+    tok_active = _eval_langfuse_active.set(active)
+    tok_trace = _lf_trace_context.set({"trace_id": normalized_trace_id})
+    tok_session = _lf_session_id.set(session_id)
+    try:
+        os.environ["LANGFUSE_TRACING_ENABLED"] = "true"
+        os.environ["LANGFUSE_PUBLIC_KEY"] = settings.public_key
+        os.environ["LANGFUSE_SECRET_KEY"] = settings.secret_key
+        if settings.base_url:
+            os.environ["LANGFUSE_BASE_URL"] = settings.base_url
+            os.environ["LANGFUSE_HOST"] = settings.base_url
+        yield
+    finally:
+        _eval_langfuse_active.reset(tok_active)
+        _lf_trace_context.reset(tok_trace)
+        _lf_session_id.reset(tok_session)
+        for key in _EVAL_LANGFUSE_ENV_KEYS:
+            prev = saved_env.get(key)
+            if prev is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev
+
+
+@contextmanager
+def eval_langfuse_observation(
+    *,
+    name: str,
+    input_data: Optional[Dict[str, Any]] = None,
+) -> Iterator[Any]:
+    """评测 fixture / item 级根 span（压缩线等无 LangChain callback 时使用）。"""
+    if not langfuse_tracing_enabled():
+        yield None
+        return
+    trace_context = _lf_trace_context.get()
+    session_id = _lf_session_id.get()
+    meta = eval_langfuse_metadata()
+    try:
+        from langfuse import get_client
+
+        client = get_client()
+        if _eval_langfuse_active.get() is not None:
+            public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+            if public_key:
+                client = get_client(public_key=public_key)
+        with client.start_as_current_observation(
+            name=name,
+            as_type="span",
+            input={**(input_data or {}), **meta},
+            trace_context=trace_context,
+        ) as span:
+            if span is not None and session_id:
+                span.update_trace(session_id=str(session_id), metadata=meta)
+            yield span
+    except Exception:
+        logger.warning("评测 Langfuse observation 失败，降级继续", exc_info=True)
+        yield None
 
 
 def normalize_langfuse_trace_id(raw: Optional[str]) -> Optional[str]:
@@ -110,11 +236,17 @@ def _langfuse_config_patch(
         trace_context = None
         if normalized_trace_id:
             trace_context = {"trace_id": normalized_trace_id}
-        handler = CallbackHandler(trace_context=trace_context)
+        handler_kwargs: Dict[str, Any] = {"trace_context": trace_context}
+        if _eval_langfuse_active.get() is not None:
+            public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+            if public_key:
+                handler_kwargs["public_key"] = public_key
+        handler = CallbackHandler(**handler_kwargs)
     except Exception:
         logger.warning("Langfuse CallbackHandler 初始化失败，跳过本次链路追踪", exc_info=True)
         return {}
     metadata: Dict[str, str] = {"langfuse_session_id": str(langfuse_session_id)}
+    metadata.update(eval_langfuse_metadata())
     if qa_type:
         metadata["qa_type"] = str(qa_type)
     if normalized_trace_id:
@@ -160,7 +292,7 @@ def langfuse_workflow_context(
 
     from config.env import LangfuseConfig
 
-    if not LangfuseConfig.langfuse_tracing_enabled:
+    if not langfuse_tracing_enabled():
         yield
         return
 
@@ -178,9 +310,11 @@ def langfuse_workflow_context(
     try:
         from langfuse import propagate_attributes
 
-        propagate_meta: Optional[Dict[str, str]] = None
+        propagate_meta: Optional[Dict[str, str]] = dict(eval_langfuse_metadata())
         if qa_type:
-            propagate_meta = {"qa_type": str(qa_type)}
+            propagate_meta["qa_type"] = str(qa_type)
+        if not propagate_meta:
+            propagate_meta = None
         with propagate_attributes(session_id=str(session_id), metadata=propagate_meta):
             yield
     except Exception:
@@ -228,9 +362,7 @@ def langfuse_retrieval_observation(
     可选 Langfuse retrieval span；trace/session id 从 langfuse_workflow_context 自动读取。
     """
     if enabled is None:
-        from config.env import LangfuseConfig
-
-        enabled = LangfuseConfig.langfuse_tracing_enabled
+        enabled = langfuse_tracing_enabled()
     if not enabled:
         yield None
         return
@@ -242,6 +374,10 @@ def langfuse_retrieval_observation(
         from langfuse import get_client
 
         langfuse = get_client()
+        if _eval_langfuse_active.get() is not None:
+            public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+            if public_key:
+                langfuse = get_client(public_key=public_key)
         with langfuse.start_as_current_observation(
             name=name,
             as_type="retrieval",
