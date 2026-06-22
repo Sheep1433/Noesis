@@ -1,0 +1,65 @@
+{
+  "fixture_id": "debug_session",
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "question": "我们最终定位的根因是什么？",
+      "reference_answer": "连接池 max_size 配置为 0"
+    },
+    {
+      "id": "p2",
+      "type": "artifact",
+      "question": "修改的是哪个配置文件？",
+      "reference_answer": "config/database.yaml"
+    },
+    {
+      "id": "p3",
+      "type": "decision",
+      "question": "为什么放弃回滚而是热修复？",
+      "reference_answer": "今晚不能回滚，选择热修复调 max_size"
+    },
+    {
+      "id": "p4",
+      "type": "continuation",
+      "question": "下一步验证步骤是什么？",
+      "reference_answer": "跑 smoke 测试验证连接池恢复"
+    },
+    {
+      "id": "p5",
+      "type": "recall",
+      "question": "应用日志里反复出现什么错误？",
+      "reference_answer": "connection reset by peer / pool exhausted"
+    },
+    {
+      "id": "p6",
+      "type": "artifact",
+      "question": "热修复把 max_size 调到多少？",
+      "reference_answer": "20"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "question": "当前 database 配置 host 是什么？",
+      "reference_answer": "db.internal"
+    },
+    {
+      "id": "p8",
+      "type": "decision",
+      "question": "是否建议滚动重启 worker？",
+      "reference_answer": "是"
+    },
+    {
+      "id": "p9",
+      "type": "continuation",
+      "question": "若 smoke 仍失败还应检查什么？",
+      "reference_answer": "连接池配置是否生效、worker 是否加载新配置"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "question": "用户最初报告的症状是什么？",
+      "reference_answer": "API 间歇 503"
+    }
+  ]
+}

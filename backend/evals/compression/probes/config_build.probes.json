@@ -1,0 +1,65 @@
+{
+  "fixture_id": "config_build",
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "question": "当前 trigger_fraction 是多少？",
+      "reference_answer": "0.85"
+    },
+    {
+      "id": "p2",
+      "type": "recall",
+      "question": "建议的新 trigger_fraction？",
+      "reference_answer": "0.9"
+    },
+    {
+      "id": "p3",
+      "type": "recall",
+      "question": "建议保留多少条近期消息？",
+      "reference_answer": "8"
+    },
+    {
+      "id": "p4",
+      "type": "decision",
+      "question": "prod 是否立即应用？",
+      "reference_answer": "否，先 staging"
+    },
+    {
+      "id": "p5",
+      "type": "artifact",
+      "question": "staging 配置文件名？",
+      "reference_answer": "config.staging.yaml"
+    },
+    {
+      "id": "p6",
+      "type": "decision",
+      "question": "为何提高 retention？",
+      "reference_answer": "希望保留更多近期 tool 输出"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "question": "max_retention_ratio 原值？",
+      "reference_answer": "0.6"
+    },
+    {
+      "id": "p8",
+      "type": "continuation",
+      "question": "staging 通过后下一步？",
+      "reference_answer": "再在 prod 应用 summarization 调参"
+    },
+    {
+      "id": "p9",
+      "type": "artifact",
+      "question": "草稿写在哪个文件？",
+      "reference_answer": "config.prod.yaml"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "question": "建议的新 retention 比例？",
+      "reference_answer": "0.7"
+    }
+  ]
+}

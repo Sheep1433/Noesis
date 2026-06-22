@@ -1,0 +1,65 @@
+{
+  "fixture_id": "feature_impl",
+  "probes": [
+    {
+      "id": "p1",
+      "type": "artifact",
+      "question": "后端导出接口路径是什么？",
+      "reference_answer": "/api/v1/export"
+    },
+    {
+      "id": "p2",
+      "type": "artifact",
+      "question": "修改了哪些后端文件？",
+      "reference_answer": "backend/api/export.py 与 backend/services/export_service.py"
+    },
+    {
+      "id": "p3",
+      "type": "artifact",
+      "question": "前端按钮加在哪个文件？",
+      "reference_answer": "frontend/src/views/orders.vue"
+    },
+    {
+      "id": "p4",
+      "type": "recall",
+      "question": "CSV 需要哪些字段？",
+      "reference_answer": "id, amount, status"
+    },
+    {
+      "id": "p5",
+      "type": "decision",
+      "question": "谁可以导出？",
+      "reference_answer": "仅 admin"
+    },
+    {
+      "id": "p6",
+      "type": "continuation",
+      "question": "还缺什么才能算完成？",
+      "reference_answer": "前端下载按钮与 admin 守卫均已落地，测试通过"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "question": "初始 export 接口状态码？",
+      "reference_answer": "501"
+    },
+    {
+      "id": "p8",
+      "type": "recall",
+      "question": "使用什么格式写 CSV？",
+      "reference_answer": "csv.writer"
+    },
+    {
+      "id": "p9",
+      "type": "artifact",
+      "question": "权限守卫加在哪里？",
+      "reference_answer": "export.py require_role('admin')"
+    },
+    {
+      "id": "p10",
+      "type": "continuation",
+      "question": "若 QA 失败下一步？",
+      "reference_answer": "修复 export 测试或前端下载链路"
+    }
+  ]
+}

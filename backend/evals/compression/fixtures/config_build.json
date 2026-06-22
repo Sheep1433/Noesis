@@ -1,0 +1,46 @@
+{
+  "id": "config_build",
+  "description": "配置构建：讨论 summarization 阈值与 retention 取舍",
+  "compress_options": {
+    "force": true,
+    "summarization_messages_to_keep": 4
+  },
+  "messages": [
+    {
+      "type": "human",
+      "content": "长会话摘要太激进，想调 summarization 参数。"
+    },
+    {
+      "type": "ai",
+      "content": "当前 trigger_fraction=0.85, max_retention_ratio=0.6。"
+    },
+    {
+      "type": "tool",
+      "name": "read_file",
+      "tool_call_id": "b1",
+      "content": "=== config.yaml summarization section ===\nline 0: connection reset by peer pool exhausted\nline 1: connection reset by peer pool exhausted\nline 2: connection reset by peer pool exhausted\nline 3: connection reset by peer pool exhausted\nline 4: connection reset by peer pool exhausted\nline 5: connection reset by peer pool exhausted\nline 6: connection reset by peer pool exhausted\nline 7: connection reset by peer pool exhausted\nline 8: connection reset by peer pool exhausted\nline 9: connection reset by peer pool exhausted\nline 10: connection reset by peer pool exhausted\nline 11: connection reset by peer pool exhausted\nline 12: connection reset by peer pool exhausted\nline 13: connection reset by peer pool exhausted\nline 14: connection reset by peer pool exhausted\nline 15: connection reset by peer pool exhausted\nline 16: connection reset by peer pool exhausted\nline 17: connection reset by peer pool exhausted\nline 18: connection reset by peer pool exhausted\nline 19: connection reset by peer pool exhausted\nline 20: connection reset by peer pool exhausted\nline 21: connection reset by peer pool exhausted\nline 22: connection reset by peer pool exhausted\nline 23: connection reset by peer pool exhausted\nline 24: connection reset by peer pool exhausted\nline 25: connection reset by peer pool exhausted\nline 26: connection reset by peer pool exhausted\nline 27: connection reset by peer pool exhausted\nline 28: connection reset by peer pool exhausted\nline 29: connection reset by peer pool exhausted\nline 30: connection reset by peer pool exhausted\nline 31: connection reset by peer pool exhausted\nline 32: connection reset by peer pool exhausted\nline 33: connection reset by peer pool exhausted\nline 34: connection reset by peer pool exhausted\nline 35: connection reset by peer pool exhausted\nline 36: connection reset by peer pool exhausted\nline 37: connection reset by peer pool exhausted\nline 38: connection reset by peer pool exhausted\nline 39: connection reset by peer pool exhausted\nline 40: connection reset by peer pool exhausted\nline 41: connection reset by peer pool exhausted\nline 42: connection reset by peer pool exhausted\nline 43: connection reset by peer pool exhausted\nline 44: connection reset by peer pool exhausted\nline 45: connection reset by peer pool exhausted\nline 46: connection reset by peer pool exhausted\nline 47: connection reset by peer pool exhausted\nline 48: connection reset by peer pool exhausted\nline 49: connection reset by peer pool exhausted\nline 50: connection reset by peer pool exhausted\nline 51: connection reset by peer pool exhausted\nline 52: connection reset by peer pool exhausted\nline 53: connection reset by peer pool exhausted\nline 54: connection reset by peer pool exhausted\nline 55: connection reset by peer pool exhausted\nline 56: connection reset by peer pool exhausted\nline 57: connection reset by peer pool exhausted\nline 58: connection reset by peer pool exhausted\nline 59: connection reset by peer pool exhausted\nline 60: connection reset by peer pool exhausted\nline 61: connection reset by peer pool exhausted\nline 62: connection reset by peer pool exhausted\nline 63: connection reset by peer pool exhausted\nline 64: connection reset by peer pool exhausted\nline 65: connection reset by peer pool exhausted\nline 66: connection reset by peer pool exhausted\nline 67: connection reset by peer pool exhausted\nline 68: connection reset by peer pool exhausted\nline 69: connection reset by peer pool exhausted\nline 70: connection reset by peer pool exhausted\nline 71: connection reset by peer pool exhausted\nline 72: connection reset by peer pool exhausted\nline 73: connection reset by peer pool exhausted\nline 74: connection reset by peer pool exhausted\nline 75: connection reset by peer pool exhausted\nline 76: connection reset by peer pool exhausted\nline 77: connection reset by peer pool exhausted\nline 78: connection reset by peer pool exhausted\nline 79: connection reset by peer pool exhausted\nline 80: connection reset by peer pool exhausted\nline 81: connection reset by peer pool exhausted\nline 82: connection reset by peer pool exhausted\nline 83: connection reset by peer pool exhausted\nline 84: connection reset by peer pool exhausted\nline 85: connection reset by peer pool exhausted\nline 86: connection reset by peer pool exhausted\nline 87: connection reset by peer pool exhausted\nline 88: connection reset by peer pool exhausted\nline 89: connection reset by peer pool exhausted\nline 90: connection reset by peer pool exhausted\nline 91: connection reset by peer pool exhausted\nline 92: connection reset by peer pool exhausted\nline 93: connection reset by peer pool exhausted\nline 94: connection reset by peer pool exhausted\nline 95: connection reset by peer pool exhausted\nline 96: connection reset by peer pool exhausted\nline 97: connection reset by peer pool exhausted\nline 98: connection reset by peer pool exhausted\nline 99: connection reset by peer pool exhausted\nline 100: connection reset by peer pool exhausted\nline 101: connection reset by peer pool exhausted\nline 102: connection reset by peer pool exhausted\nline 103: connection reset by peer pool exhausted\nline 104: connection reset by peer pool exhausted\nline 105: connection reset by peer pool exhausted\nline 106: connection reset by peer pool exhausted\nline 107: connection reset by peer pool exhausted\nline 108: connection reset by peer pool exhausted\nline 109: connection reset by peer pool exhausted\nline 110: connection reset by peer pool exhausted\nline 111: connection reset by peer pool exhausted\nline 112: connection reset by peer pool exhausted\nline 113: connection reset by peer pool exhausted\nline 114: connection reset by peer pool exhausted\nline 115: connection reset by peer pool exhausted\nline 116: connection reset by peer pool exhausted\nline 117: connection reset by peer pool exhausted\nline 118: connection reset by peer pool exhausted\nline 119: connection reset by peer pool exhausted"
+    },
+    {
+      "type": "human",
+      "content": "希望保留更多近期 tool 输出，能接受更高 token。"
+    },
+    {
+      "type": "ai",
+      "content": "建议：trigger_fraction 0.9，messages_to_keep 8，retention 0.7。"
+    },
+    {
+      "type": "tool",
+      "name": "write_file",
+      "tool_call_id": "b2",
+      "content": "draft config.prod.yaml summarization block updated"
+    },
+    {
+      "type": "human",
+      "content": "staging 先验证，不要直接上 prod。"
+    },
+    {
+      "type": "ai",
+      "content": "决策：仅在 config.staging.yaml 应用；prod 待 staging 压测通过。"
+    }
+  ]
+}
