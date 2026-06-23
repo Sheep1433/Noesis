@@ -196,6 +196,18 @@ class CheckpointYamlSection(BaseModel):
     db_path: str = "../.data/checkpoints/langgraph_checkpoints.sqlite"
 
 
+class SandboxYamlSection(BaseModel):
+    enabled: bool = True
+    runner_url: str = "http://127.0.0.1:8090"
+    aio_image: str = "ghcr.io/agent-infra/sandbox:latest"
+    aio_port: int = Field(default=8080, ge=1, le=65535)
+    idle_ttl_seconds: int = Field(default=1800, ge=60)
+    max_replicas: int = Field(default=20, ge=1)
+    execute_timeout_seconds: int = Field(default=120, ge=1)
+    # SDK agent-sandbox==0.0.30 对应 SANDBOX_AIO_IMAGE 默认 tag latest
+    sdk_version: str = "0.0.30"
+
+
 class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
     dir: str = "../.data/chat_attachments"
@@ -232,6 +244,7 @@ class AppYamlConfig(BaseModel):
     web_tools: WebToolsYamlSection = Field(default_factory=WebToolsYamlSection)
     checkpoint: CheckpointYamlSection = Field(default_factory=CheckpointYamlSection)
     chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)
+    sandbox: SandboxYamlSection = Field(default_factory=SandboxYamlSection)
 
 
 @lru_cache

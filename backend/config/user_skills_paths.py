@@ -1,23 +1,18 @@
-"""用户私有 Skills 目录（`.data/user_skills/users/{user_id}/`）。"""
+"""用户私有 Skills 目录（委托 `user_data_paths`）。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from common.paths import DATA_DIR
-from config.agent_workspace_paths import validate_segment
-
-_USER_SKILLS_ROOT = DATA_DIR / "user_skills"
+from config.user_data_paths import ensure_user_skills_dir as _ensure_user_skills_dir
+from config.user_data_paths import get_user_skills_dir as _get_user_skills_dir
 
 
 def get_user_skills_dir(user_id: str | int) -> Path:
-    """返回用户 Skills 目录（不创建）。"""
-    uid = validate_segment(str(user_id), kind="user_id")
-    return _USER_SKILLS_ROOT / "users" / uid
+    """返回 `.data/users/{user_id}/skills/`（不创建）。"""
+    return _get_user_skills_dir(user_id)
 
 
 def ensure_user_skills_dir(user_id: str | int) -> Path:
     """创建并返回用户 Skills 目录。"""
-    path = get_user_skills_dir(user_id)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return _ensure_user_skills_dir(user_id)

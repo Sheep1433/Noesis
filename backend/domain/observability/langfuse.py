@@ -87,6 +87,7 @@ def activate_eval_langfuse(
     tok_active = _eval_langfuse_active.set(active)
     tok_trace = _lf_trace_context.set({"trace_id": normalized_trace_id})
     tok_session = _lf_session_id.set(session_id)
+    eval_client = None
     try:
         os.environ["LANGFUSE_TRACING_ENABLED"] = "true"
         os.environ["LANGFUSE_PUBLIC_KEY"] = settings.public_key
@@ -94,8 +95,24 @@ def activate_eval_langfuse(
         if settings.base_url:
             os.environ["LANGFUSE_BASE_URL"] = settings.base_url
             os.environ["LANGFUSE_HOST"] = settings.base_url
+        # 须先注册 Langfuse 客户端，再创建 CallbackHandler / @observe；
+        # 否则 get_client(public_key=...) 会降级为 disabled fake client 且不上报 trace。
+        from langfuse import Langfuse
+
+        client_kwargs: Dict[str, Any] = {
+            "public_key": settings.public_key,
+            "secret_key": settings.secret_key,
+        }
+        if settings.base_url:
+            client_kwargs["host"] = settings.base_url
+        eval_client = Langfuse(**client_kwargs)
         yield
     finally:
+        if eval_client is not None:
+            try:
+                eval_client.flush()
+            except Exception:
+                logger.warning("评测 Langfuse flush 失败", exc_info=True)
         _eval_langfuse_active.reset(tok_active)
         _lf_trace_context.reset(tok_trace)
         _lf_session_id.reset(tok_session)

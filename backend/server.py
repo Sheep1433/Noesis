@@ -18,6 +18,7 @@ from api import (
     chat_attachment_router,
 )
 from services.qdrant_service import init_qdrant_client, close_qdrant_client
+from services.sandbox_service import shutdown_sandboxes
 from kb.seed_collections import ensure_default_kb_collections
 
 
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
     # 关闭 Qdrant 连接
     await close_qdrant_client()
     await close_checkpointer()
+    await shutdown_sandboxes()
     # 关闭数据库连接池（等待现有连接完成，避免 CancelledError）
     logger.info("正在关闭数据库连接池...")
     await async_engine.dispose()

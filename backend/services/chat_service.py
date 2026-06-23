@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.chat_models import TChatSession, TChatMessage
 from exceptions.exception import ServiceException
 from config.agent_workspace_paths import delete_session_workspace
+from services.agent_lifecycle import cancel_session_agent_runs
 from common.logging import logger
 from domain.chat.message_builder import AssistantMessageBuilder
 
@@ -487,6 +488,8 @@ class ChatService:
         session_obj = result.scalar_one_or_none()
         if not session_obj:
             raise ServiceException(message='会话不存在')
+
+        await cancel_session_agent_runs(session_id)
 
         # 软删：更新 deleted_at（cascade 软删消息）
         now = _now_ms()

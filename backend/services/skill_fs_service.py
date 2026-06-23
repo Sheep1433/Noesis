@@ -1,29 +1,35 @@
 """
-Skills 文件目录（extensions/skills）浏览与 ZIP 导入
+Skills 文件目录（平台 extensions/skills + 用户 .data/users/{uid}/skills/）
 """
 import os
 import zipfile
-from typing import List, Tuple
+from typing import List, Literal, Tuple
 
 from config.extensions_paths import skills_root
-from config.user_skills_paths import ensure_user_skills_dir
-from schemas.skill_vo import SkillFsTreeNode, SkillFsTreeResponse
+from config.user_data_paths import ensure_user_skills_dir, get_user_skills_dir
+from schemas.skill_vo import SkillFsSourceSection, SkillFsTreeNode, SkillFsTreeResponse
 from common.logging import logger
 
 _MAX_READ_BYTES = 512 * 1024
 _MAX_ZIP_BYTES = 10 * 1024 * 1024
 
+SkillSource = Literal["platform", "user"]
+
 
 class SkillFsService:
-    """扫描配置的 skills 根目录，提供树形结构与安全读文件"""
+    """扫描平台与用户 Skills 目录，提供树形结构与安全读文件"""
 
     @classmethod
-    def get_root_path(cls) -> str:
+    def get_platform_root_path(cls) -> str:
         return str(skills_root())
 
     @classmethod
-    def _safe_join(cls, rel: str) -> str:
-        root = os.path.abspath(cls.get_root_path())
+    def get_user_root_path(cls, user_id: str | int) -> str:
+        return str(get_user_skills_dir(user_id))
+
+    @classmethod
+    def _safe_join(cls, root: str, rel: str) -> str:
+        root = os.path.abspath(root)
         rel = rel.replace('\\', '/').strip('/')
         if rel == '.' or rel.startswith('..') or '/../' in f'/{rel}/':
             raise ValueError('非法路径')
@@ -41,8 +47,15 @@ class SkillFsService:
         return sorted(nodes, key=lambda n: (n.isLeaf, n.label.lower()))
 
     @classmethod
-    def _scan_dir(cls, rel: str) -> List[SkillFsTreeNode]:
-        full = cls._safe_join(rel)
+    def _scan_dir(
+        cls,
+        root: str,
+        rel: str,
+        *,
+        source: SkillSource,
+        key_prefix: str,
+    ) -> List[SkillFsTreeNode]:
+        full = cls._safe_join(root, rel)
         if not os.path.isdir(full):
             return []
         entries: List[SkillFsTreeNode] = []
@@ -56,35 +69,114 @@ class SkillFsService:
                 continue
             entry_rel = f'{rel}/{name}' if rel else name
             entry_full = os.path.join(full, name)
+            node_key = f'{key_prefix}{entry_rel}'
             try:
                 if os.path.isdir(entry_full):
-                    children = cls._scan_dir(entry_rel)
+                    children = cls._scan_dir(
+                        root, entry_rel, source=source, key_prefix=key_prefix,
+                    )
                     entries.append(
-                        SkillFsTreeNode(key=entry_rel, label=name, isLeaf=False, children=children),
+                        SkillFsTreeNode(
+                            key=node_key,
+                            label=name,
+                            isLeaf=False,
+                            children=children,
+                            source=source,
+                        ),
                     )
                 elif os.path.isfile(entry_full):
                     entries.append(
-                        SkillFsTreeNode(key=entry_rel, label=name, isLeaf=True, children=None),
+                        SkillFsTreeNode(
+                            key=node_key,
+                            label=name,
+                            isLeaf=True,
+                            children=None,
+                            source=source,
+                        ),
                     )
             except ValueError:
                 continue
         return cls._sort_nodes(entries)
 
     @classmethod
-    def get_tree(cls) -> SkillFsTreeResponse:
-        root = cls.get_root_path()
+    def _build_source_section(
+        cls,
+        root: str,
+        *,
+        source: SkillSource,
+    ) -> SkillFsSourceSection:
         exists = os.path.isdir(root)
-        tree = cls._scan_dir('') if exists else []
+        key_prefix = f'{source}:'
+        tree = cls._scan_dir(root, '', source=source, key_prefix=key_prefix) if exists else []
         if not exists:
             logger.warning(f'Skills 目录不存在，将返回空树: {root}')
-        return SkillFsTreeResponse(root_path=root, root_exists=exists, tree=tree)
+        return SkillFsSourceSection(
+            root_path=root,
+            root_exists=exists,
+            tree=tree,
+        )
 
     @classmethod
-    def read_file(cls, rel_path: str) -> Tuple[bool, str, str]:
+    def get_tree(cls, user_id: str | int) -> SkillFsTreeResponse:
+        platform_root = cls.get_platform_root_path()
+        user_root = cls.get_user_root_path(user_id)
+        platform = cls._build_source_section(platform_root, source='platform')
+        user = cls._build_source_section(user_root, source='user')
+
+        merged: List[SkillFsTreeNode] = []
+        if platform.tree or platform.root_exists:
+            merged.append(
+                SkillFsTreeNode(
+                    key='platform:',
+                    label='平台技能',
+                    isLeaf=False,
+                    children=platform.tree,
+                    source='platform',
+                ),
+            )
+        merged.append(
+            SkillFsTreeNode(
+                key='user:',
+                label='我的技能',
+                isLeaf=False,
+                children=user.tree,
+                source='user',
+            ),
+        )
+        return SkillFsTreeResponse(
+            platform=platform,
+            user=user,
+            tree=merged,
+        )
+
+    @classmethod
+    def _resolve_root(cls, source: SkillSource, user_id: str | int) -> str:
+        if source == 'platform':
+            return cls.get_platform_root_path()
+        return str(ensure_user_skills_dir(user_id))
+
+    @classmethod
+    def read_file(
+        cls,
+        rel_path: str,
+        *,
+        source: SkillSource = 'platform',
+        user_id: str | int | None = None,
+    ) -> Tuple[bool, str, str]:
         if not rel_path or not rel_path.strip():
             return False, '路径不能为空', ''
+        rel = rel_path.strip()
+        if rel.startswith('platform:'):
+            rel = rel[len('platform:'):]
+            source = 'platform'
+        elif rel.startswith('user:'):
+            rel = rel[len('user:'):]
+            source = 'user'
+        if source == 'user' and user_id is None:
+            return False, '缺少用户上下文', ''
         try:
-            full = cls._safe_join(rel_path.strip())
+            root = cls._resolve_root(source, user_id or '')
+            full = cls._safe_join(root, rel)
         except ValueError:
             return False, '非法路径', ''
         if not os.path.isfile(full):
@@ -100,19 +192,13 @@ class SkillFsService:
         return True, '', content
 
     @classmethod
-    def extract_zip_to_root(cls, zip_path: str) -> Tuple[bool, str]:
-        """将 ZIP 内容解压到共享 Skills 根目录（extensions/skills）。"""
-        return cls._extract_zip(zip_path, os.path.abspath(cls.get_root_path()))
-
-    @classmethod
     def extract_zip_to_user_dir(cls, zip_path: str, user_id: str | int) -> Tuple[bool, str]:
-        """将 ZIP 内容解压到当前用户的私有 Skills 目录（.data/user_skills/users/{user_id}/）。"""
+        """将 ZIP 内容解压到 `.data/users/{user_id}/skills/`。"""
         root = str(ensure_user_skills_dir(user_id))
         return cls._extract_zip(zip_path, root)
 
     @classmethod
     def _extract_zip(cls, zip_path: str, root: str) -> Tuple[bool, str]:
-        """将 ZIP 内容解压到指定根目录（保持包内相对路径）。"""
         root = os.path.abspath(root)
         try:
             os.makedirs(root, exist_ok=True)
@@ -132,6 +218,7 @@ class SkillFsService:
         except OSError as e:
             return False, f'解压失败: {e}'
         return True, '解压成功'
+
 
 def max_zip_bytes() -> int:
     return _MAX_ZIP_BYTES

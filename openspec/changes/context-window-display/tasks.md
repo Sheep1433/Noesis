@@ -27,8 +27,8 @@
 
 ## 5. 文档与验收
 
-- [ ] 5.1 更新 `docs/prd/platform/SSE流式数据设计.md`（或等价 PRD）补充 `context-update` 字段说明
-- [ ] 5.2 手动验收：`COMMON_QA` 长对话 + 工具大结果时百分比上升；hover 见 `87K / 128K`；刷新后会话指示器恢复
+- [x] 5.1 更新 `docs/prd/platform/SSE流式数据设计.md`（或等价 PRD）补充 `context-update` 字段说明
+- [x] 5.2 手动验收：`COMMON_QA` 长对话 + 工具大结果时百分比上升；hover 见 `87K / 128K`；刷新后会话指示器恢复
 - [x] 5.3 运行 `uv run app.py` 与 `pnpm lint`（影响范围）确认无回归
 
 ## 6. 高风险检查

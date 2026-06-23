@@ -25,4 +25,4 @@
 ## 5. 规格归档准备
 
 - [x] 5.1 实现完成后运行 `openspec validate add-deep-research-web-tools`。
-- [ ] 5.2 归档时合并 delta 至 `openspec/specs/agent-web-tools/spec.md`（新建）与 `openspec/specs/agent-deep-research/spec.md`。
+- [x] 5.2 归档时合并 delta 至 `openspec/specs/agent-web-tools/spec.md`（新建）与 `openspec/specs/agent-deep-research/spec.md`。

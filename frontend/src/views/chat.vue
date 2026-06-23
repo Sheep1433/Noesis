@@ -36,14 +36,18 @@ import {
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
 import { useSSEStream } from '@/views/chat/useSSEStream'
+import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
 import FileUploadManager from './FileUploadManager.vue'
 import SuggestedView from './SuggestedPage.vue'
 import TableModal from './TableModal.vue'
 
-// 显示默认页面
-const showDefaultPage = ref(true)
+const sessionFilesPanelRef = ref<InstanceType<typeof SessionContextPanel> | null>(null)
+
+function reloadSessionFilesPanel() {
+  sessionFilesPanelRef.value?.reload()
+}
 
 // 全局存储
 const businessStore = useBusinessStore()
@@ -450,6 +454,7 @@ const sseStream = useSSEStream({
     onCompletedReader(conversationItems.value.length - 1)
     scrollToBottom()
     void loadSessionContext(getChatSessionId())
+    reloadSessionFilesPanel()
   },
   onTitleUpdate: (title: string) => {
     const currentUuid = uuids.value[qa_type.value]
@@ -946,6 +951,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   if (chat_id) {
     uuids.value[val] = chat_id
     void loadSessionContext(chat_id)
+    reloadSessionFilesPanel()
   } else {
     uuids.value[val] = uuidv4()
     sessionContext.value = null
@@ -1330,6 +1336,8 @@ function onComposerPaste(e: ClipboardEvent) {
         </div>
       </n-layout-sider>
       <n-layout-content class="content">
+        <n-layout has-sider class="chat-main-layout h-full">
+          <n-layout-content class="chat-main-inner">
         <!-- 内容区域 -->
         <div
           flex="~ 1 col"
@@ -1887,6 +1895,22 @@ function onComposerPaste(e: ClipboardEvent) {
             </div>
           </div>
         </div>
+          </n-layout-content>
+          <n-layout-sider
+            v-if="!showDefaultPage && uuids[qa_type]"
+            class="session-context-sider"
+            bordered
+            collapse-mode="width"
+            :collapsed-width="0"
+            :width="300"
+            show-trigger="bar"
+          >
+            <SessionContextPanel
+              ref="sessionFilesPanelRef"
+              :session-id="uuids[qa_type] || ''"
+            />
+          </n-layout-sider>
+        </n-layout>
       </n-layout-content>
     </n-layout>
   </div>

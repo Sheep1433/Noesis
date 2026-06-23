@@ -1,33 +1,54 @@
 /**
- * Skills 文件目录 API（磁盘 extensions/skills，见配置 skills_filesystem_root）
+ * Skills 文件目录 API（平台 extensions/skills + 用户 .data/users/{uid}/skills/）
  */
 import { useUserStore } from '@/store/business/userStore'
 
 const API_BASE = `${location.origin}/api/skills`
 
-/** Skills 文件目录树节点 */
+export type SkillSource = 'platform' | 'user'
+
+/** Skills 目录树节点 */
 export interface SkillFsTreeNode {
   key: string
   label: string
   isLeaf: boolean
+  source: SkillSource
   children?: SkillFsTreeNode[]
 }
 
-/** Skills 文件目录树 */
-export interface SkillFsTreeResponse {
+/** 单源 Skills 目录 */
+export interface SkillFsSourceSection {
   root_path: string
   root_exists: boolean
+  tree: SkillFsTreeNode[]
+}
+
+/** Skills 目录树 */
+export interface SkillFsTreeResponse {
+  platform: SkillFsSourceSection
+  user: SkillFsSourceSection
   tree: SkillFsTreeNode[]
 }
 
 /** Skills 目录下文件内容 */
 export interface SkillFsFileContent {
   path: string
+  source: SkillSource
   content: string
 }
 
+function parseSourceFromKey(key: string): { source: SkillSource, path: string } {
+  if (key.startsWith('user:')) {
+    return { source: 'user', path: key.slice('user:'.length) }
+  }
+  if (key.startsWith('platform:')) {
+    return { source: 'platform', path: key.slice('platform:'.length) }
+  }
+  return { source: 'platform', path: key }
+}
+
 /**
- * 获取 Skills 文件目录树（默认 extensions/skills，可用配置 skills_filesystem_root 覆盖）
+ * 获取当前用户可用 Skills 目录树
  */
 export async function getSkillsFsTree(): Promise<SkillFsTreeResponse> {
   const userStore = useUserStore()
@@ -51,10 +72,16 @@ export async function getSkillsFsTree(): Promise<SkillFsTreeResponse> {
 /**
  * 读取 Skills 目录下文件文本
  */
-export async function getSkillsFsFile(relPath: string): Promise<SkillFsFileContent> {
+export async function getSkillsFsFile(
+  key: string,
+  source?: SkillSource,
+): Promise<SkillFsFileContent> {
   const userStore = useUserStore()
   const token = userStore.getUserToken()
-  const url = `${API_BASE}/fs/file?path=${encodeURIComponent(relPath)}`
+  const parsed = parseSourceFromKey(key)
+  const effectiveSource = source ?? parsed.source
+  const relPath = parsed.path
+  const url = `${API_BASE}/fs/file?path=${encodeURIComponent(relPath)}&source=${effectiveSource}`
 
   const response = await fetch(url, {
     method: 'GET',
@@ -72,7 +99,7 @@ export async function getSkillsFsFile(relPath: string): Promise<SkillFsFileConte
 }
 
 /**
- * 上传 skill：将 ZIP 解压到当前用户的私有目录（.data/user_skills/users/{user_id}/）
+ * 上传 skill：将 ZIP 解压到当前用户的私有目录
  */
 export async function uploadSkillsFsZip(
   file: File,
@@ -102,3 +129,5 @@ export async function uploadSkillsFsZip(
     message: json.msg || '操作成功',
   }
 }
+
+export { parseSourceFromKey }

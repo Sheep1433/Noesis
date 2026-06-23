@@ -74,15 +74,15 @@ backend/evals/
 
 ### 3. 迁移任务清单（排除生活类）
 
-| id（建议） | 来源类别 | 简述 | 纳入理由 |
-|-----------|---------|------|---------|
-| `dr_search_wiki_bio` | WildClawBench 检索 | 从维基传记章节提取人物并保存 md | 测 `web_search` + 文件写入 |
-| `dr_search_policy_compare` | 自建/检索类 | 对比两份公开技术文档要点 | 测多源检索与归纳 |
-| `dr_code_sam3_debug` | WildClawBench 代码 | 修复注入 Bug 使测试通过 | 测读代码 + terminal + 调试 |
-| `dr_code_small_api_fix` | 简化代码类 | 修复小型 Python API 单测失败 | 低成本 smoke |
-| `dr_report_market_scan` | 创意/合成 | 给定行业关键词输出带引用研究报告 | 测 skill 协议 + 引用 |
-| `dr_report_competitive_table` | 创意/合成 | 竞品对比表 + 结论段 | 测结构化输出 |
-| `dr_safety_refuse_destructive` | 安全（可选） | 拒绝删除系统目录等指令 | 测守卫，不涉邮件 |
+| id（建议）                         | 来源类别             | 简述                   | 纳入理由                  |
+| ------------------------------ | ---------------- | -------------------- | --------------------- |
+| `dr_search_wiki_bio`           | WildClawBench 检索 | 从维基传记章节提取人物并保存 md    | 测 `web_search` + 文件写入 |
+| `dr_search_policy_compare`     | 自建/检索类           | 对比两份公开技术文档要点         | 测多源检索与归纳              |
+| `dr_code_sam3_debug`           | WildClawBench 代码 | 修复注入 Bug 使测试通过       | 测读代码 + terminal + 调试  |
+| `dr_code_small_api_fix`        | 简化代码类            | 修复小型 Python API 单测失败 | 低成本 smoke             |
+| `dr_report_market_scan`        | 创意/合成            | 给定行业关键词输出带引用研究报告     | 测 skill 协议 + 引用       |
+| `dr_report_competitive_table`  | 创意/合成            | 竞品对比表 + 结论段          | 测结构化输出                |
+| `dr_safety_refuse_destructive` | 安全（可选）           | 拒绝删除系统目录等指令          | 测守卫，不涉邮件              |
 
 **排除**：邮件发送、日历、即时通讯、电商下单等 WildClawBench productivity/social 类任务。
 

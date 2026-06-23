@@ -79,6 +79,8 @@ class EnvSecrets(BaseSettings):
 
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
 
+    sandbox_runner_token: str = Field(default="", alias="SANDBOX_RUNNER_TOKEN")
+
 
 # ---------------------------------------------------------------------------
 # 合并后的运行时视图（保持原有 import 名称）
@@ -209,6 +211,20 @@ class WebToolsSettings:
     fetch_max_chars: int
     fetch_timeout_seconds: int
     tavily_api_key: str
+
+
+@dataclass(frozen=True)
+class SandboxSettings:
+    enabled: bool
+    runner_url: str
+    runner_token: str
+    aio_image: str
+    aio_port: int
+    idle_ttl_seconds: int
+    max_replicas: int
+    execute_timeout_seconds: int
+    host_data_dir: str
+    sdk_version: str
 
 
 @dataclass(frozen=True)
@@ -473,6 +489,27 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
     )
 
 
+def _build_sandbox(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> SandboxSettings:
+    sb = yaml_cfg.sandbox
+    from common.paths import DATA_DIR
+
+    default_host_data = str(DATA_DIR)
+    return SandboxSettings(
+        enabled=_legacy_env_bool("SANDBOX_ENABLED", sb.enabled),
+        runner_url=_legacy_env("SANDBOX_RUNNER_URL", sb.runner_url),
+        runner_token=secrets.sandbox_runner_token or _legacy_env("SANDBOX_RUNNER_TOKEN", ""),
+        aio_image=_legacy_env("SANDBOX_AIO_IMAGE", sb.aio_image),
+        aio_port=_legacy_env_int("SANDBOX_AIO_PORT", sb.aio_port),
+        idle_ttl_seconds=_legacy_env_int("SANDBOX_IDLE_TTL_SECONDS", sb.idle_ttl_seconds),
+        max_replicas=_legacy_env_int("SANDBOX_MAX_REPLICAS", sb.max_replicas),
+        execute_timeout_seconds=_legacy_env_int(
+            "SANDBOX_EXECUTE_TIMEOUT_SECONDS", sb.execute_timeout_seconds
+        ),
+        host_data_dir=_legacy_env("NOESIS_HOST_DATA_DIR", default_host_data),
+        sdk_version=_legacy_env("SANDBOX_SDK_VERSION", sb.sdk_version),
+    )
+
+
 def _build_checkpoint(yaml_cfg: AppYamlConfig) -> CheckpointSettings:
     cp = yaml_cfg.checkpoint
     return CheckpointSettings(
@@ -482,7 +519,7 @@ def _build_checkpoint(yaml_cfg: AppYamlConfig) -> CheckpointSettings:
 
 def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
     ca = yaml_cfg.chat_attachment
-    return ChatAttachmentSettings(
+    settings = ChatAttachmentSettings(
         enabled=_legacy_env_bool("CHAT_ATTACHMENT_ENABLED", ca.enabled),
         dir=_legacy_env("CHAT_ATTACHMENT_DIR", ca.dir),
         ttl_days=_legacy_env_int("CHAT_ATTACHMENT_TTL_DAYS", ca.ttl_days),
@@ -507,6 +544,7 @@ def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
         ),
         preview_chars=_legacy_env_int("CHAT_ATTACHMENT_PREVIEW_CHARS", ca.preview_chars),
     )
+    return settings
 
 
 class GetConfig:
@@ -556,6 +594,10 @@ class GetConfig:
         return _build_web_tools(self._secrets, self._yaml)
 
     @lru_cache
+    def get_sandbox_config(self) -> SandboxSettings:
+        return _build_sandbox(self._secrets, self._yaml)
+
+    @lru_cache
     def get_checkpoint_config(self) -> CheckpointSettings:
         return _build_checkpoint(self._yaml)
 
@@ -603,4 +645,5 @@ StreamConfig = get_config.get_stream_config()
 LangfuseConfig = get_config.get_langfuse_config()
 WebToolsConfig = get_config.get_web_tools_config()
 CheckpointConfig = get_config.get_checkpoint_config()
+SandboxConfig = get_config.get_sandbox_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()

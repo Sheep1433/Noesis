@@ -50,6 +50,7 @@ dependencies = [
     "deepagents>=0.6.7",
     "tavily-python>=0.5.0",
     "ddgs>=9.0.0",
+    "agent-sandbox==0.0.30",
 ]
 
 [tool.pytest.ini_options]

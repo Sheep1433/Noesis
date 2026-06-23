@@ -32,6 +32,32 @@ def test_eval_langfuse_run_restores_process_env(monkeypatch):
     assert os.environ.get("LANGFUSE_PUBLIC_KEY") == "pk-main"
 
 
+def test_eval_langfuse_run_initializes_client(monkeypatch):
+    settings = EvalLangfuseSettings(
+        tracing_enabled=True,
+        public_key="pk-eval",
+        secret_key="sk-eval",
+        base_url="http://lf-eval.test",
+    )
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+
+    with patch("evals.langfuse_env.load_eval_langfuse_settings", return_value=settings):
+        with patch("langfuse.langchain.CallbackHandler") as handler_cls:
+            handler_cls.return_value = object()
+            with eval_langfuse_run(line="agent", tag="t1", session_id="sess-1") as active:
+                assert active is True
+                from langfuse._client.resource_manager import LangfuseResourceManager
+
+                assert "pk-eval" in LangfuseResourceManager._instances
+                patch_result = lf._langfuse_config_patch(
+                    langfuse_session_id="sess-1",
+                    qa_type="DEEP_RESEARCH_QA",
+                    enabled=True,
+                    langfuse_trace_id="sess-1",
+                )
+                assert patch_result.get("callbacks")
+
+
 def test_eval_langfuse_run_noop_without_settings():
     with patch("evals.langfuse_env.load_eval_langfuse_settings", return_value=None):
         with eval_langfuse_run(line="case", tag="t", session_id="s") as active:

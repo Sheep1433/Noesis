@@ -112,9 +112,10 @@ def run_agent_item(
     *,
     dataset_dir: Path,
     eval_run_id: str,
+    run_id: str | None = None,
 ) -> Dict[str, Any]:
     item_id = item["id"]
-    run_id = uuid.uuid4().hex[:12]
+    run_id = run_id or uuid.uuid4().hex[:12]
     session_id = _eval_session_id(item_id, run_id)
     time_budget = int(item.get("time_budget_seconds") or DEFAULT_TIME_BUDGET_SECONDS)
 

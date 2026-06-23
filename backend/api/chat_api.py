@@ -30,7 +30,8 @@ from schemas.chat_vo import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from services.chat_service import ChatService
+from schemas.session_context_vo import SessionContextResponse, WorkspaceFileContent
+from services.session_context_service import SessionContextService
 from services.user_service import UserService
 from services.qa_service import QaService
 from common.http.response import ResponseUtil
@@ -340,6 +341,56 @@ async def get_session_messages(
         msg='获取消息历史成功',
         data=MessageListResponse(messages=message_responses, total=len(message_responses)).model_dump()
     )
+
+
+@chat_router.get(
+    "/sessions/{session_id}/context",
+    response_model=SessionContextResponse,
+    summary="获取会话上下文（工作区产物 + 附件）",
+)
+async def get_session_context(
+    session_id: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        payload = await SessionContextService.get_context(
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            db=db,
+        )
+        return payload
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return ResponseUtil.not_found(msg=str(exc.detail))
+        raise
+
+
+@chat_router.get(
+    "/sessions/{session_id}/workspace/file",
+    response_model=WorkspaceFileContent,
+    summary="读取会话工作区文本文件",
+)
+async def get_session_workspace_file(
+    session_id: str,
+    path: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        rel, content = await SessionContextService.read_workspace_file(
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            rel_path=path,
+            db=db,
+        )
+        return WorkspaceFileContent(path=rel, content=content)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return ResponseUtil.not_found(msg=str(exc.detail))
+        if exc.status_code == 400:
+            return ResponseUtil.failure(msg=str(exc.detail))
+        raise
 
 
 @chat_router.post("/sessions/{session_id}/messages", summary="发送消息")

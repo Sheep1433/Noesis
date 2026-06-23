@@ -136,6 +136,26 @@ export interface ChatAttachmentListResponse {
   total: number
 }
 
+/** 工作区 / 附件上下文树节点 */
+export interface SessionFsTreeNode {
+  key: string
+  label: string
+  isLeaf: boolean
+  children?: SessionFsTreeNode[]
+}
+
+export interface SessionContextResponse {
+  workspace: SessionFsTreeNode[]
+  attachments: ChatAttachmentResponse[]
+  workspace_root_exists: boolean
+  workspace_root_path: string
+}
+
+export interface WorkspaceFileContent {
+  path: string
+  content: string
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -302,6 +322,37 @@ export async function deleteSessionAttachment(
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
   )
   await parseResponse<void>(await authFetch(req))
+}
+
+/** 会话上下文（工作区 + 附件） GET /api/chat/sessions/{sessionId}/context */
+export async function getSessionContext(sessionId: string): Promise<SessionContextResponse> {
+  const req = makeRequest(
+    'GET',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/context`,
+  )
+  const res = await authFetch(req)
+  if (!res.ok) {
+    throw new Error(`获取会话上下文失败: ${res.status}`)
+  }
+  return res.json() as Promise<SessionContextResponse>
+}
+
+/** 读取工作区文件 GET /api/chat/sessions/{sessionId}/workspace/file */
+export async function getWorkspaceFile(
+  sessionId: string,
+  path: string,
+): Promise<WorkspaceFileContent> {
+  const url = new URL(
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/workspace/file`,
+  )
+  url.searchParams.set('path', path)
+  const req = makeRequest('GET', url.toString())
+  const res = await authFetch(req)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { msg?: string }).msg || `读取失败: ${res.status}`)
+  }
+  return res.json() as Promise<WorkspaceFileContent>
 }
 
 // ============================================================================

@@ -1,5 +1,8 @@
-# Noesis 生产栈：nginx + backend + qdrant
+# Noesis 生产栈：nginx + backend + qdrant + sandbox-runner
 # 在仓库根目录执行: docker compose -f deploy/docker-compose.yml up -d
+#
+# 首次部署前请预拉 AIO 镜像（与 backend agent-sandbox SDK 0.0.30 配套）:
+#   docker pull ghcr.io/agent-infra/sandbox:latest
 
 name: noesis
 
@@ -9,6 +12,34 @@ services:
     restart: unless-stopped
     volumes:
       - qdrant_storage:/qdrant/storage
+
+  sandbox-runner:
+    build:
+      context: ..
+      dockerfile: deploy/sandbox-runner/Dockerfile
+    restart: unless-stopped
+    environment:
+      SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      SANDBOX_AIO_IMAGE: ${SANDBOX_AIO_IMAGE:-ghcr.io/agent-infra/sandbox:latest}
+      SANDBOX_AIO_PORT: "8080"
+      SANDBOX_DOCKER_NETWORK: noesis_default
+      NOESIS_HOST_DATA_DIR: /data/noesis
+      SANDBOX_SKILLS_HOST_DIR: /data/skills
+      SANDBOX_MAX_REPLICAS: "20"
+      SANDBOX_IDLE_TTL_SECONDS: "1800"
+      SANDBOX_HEADLESS: "1"
+    volumes:
+      - noesis_data:/data/noesis
+      - ../extensions/skills:/data/skills:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - default
 
   backend:
     build:
@@ -20,14 +51,21 @@ services:
     environment:
       APP_ENV: prod
       NOESIS_CONFIG_PATH: /app/config.yaml
+      NOESIS_HOST_DATA_DIR: /data/noesis
+      SANDBOX_RUNNER_URL: http://sandbox-runner:8090
+      SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      SANDBOX_SKIP_DOCKER_CHECK: "1"
     volumes:
       - ./config.docker.yaml:/app/config.yaml:ro
+      - noesis_data:/data/noesis
       - backend_runtime:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       qdrant:
         condition: service_started
+      sandbox-runner:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8089/health"]
       interval: 15s
@@ -46,6 +84,11 @@ services:
       backend:
         condition: service_healthy
 
+networks:
+  default:
+    name: noesis_default
+
 volumes:
   qdrant_storage:
   backend_runtime:
+  noesis_data:

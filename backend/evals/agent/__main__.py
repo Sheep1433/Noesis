@@ -59,10 +59,16 @@ def run_eval(args: argparse.Namespace) -> int:
     print(f"Agent eval tag={tag} items={len(items)} dataset={dataset_path}")
     for item in items:
         item_id_str = item["id"]
+        run_id = uuid.uuid4().hex[:12]
+        session_id = f"eval-{item_id_str}-{run_id}"
         print(f"  running {item_id_str} ...", flush=True)
-        session_id = f"eval-{item_id_str}-{eval_run_id}"
         with eval_langfuse_run(line="agent", tag=tag, session_id=session_id):
-            run_output = run_agent_item(item, dataset_dir=dataset_dir, eval_run_id=eval_run_id)
+            run_output = run_agent_item(
+                item,
+                dataset_dir=dataset_dir,
+                eval_run_id=eval_run_id,
+                run_id=run_id,
+            )
             workspace_path = Path(run_output["workspace_path"])
             scoring = score_item(
                 run_output,

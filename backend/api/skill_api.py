@@ -1,5 +1,5 @@
 """
-Skill API — 仅 Skills 文件目录（磁盘），不再使用 MySQL 用户 Skill 表
+Skill API — Skills 文件目录（平台 + 用户）
 """
 import os
 import tempfile
@@ -10,6 +10,7 @@ from schemas.login_vo import CurrentUser
 from schemas.skill_vo import (
     SkillFsTreeResponse,
     SkillFsFileContent,
+    SkillSource,
 )
 from services.skill_fs_service import SkillFsService, max_zip_bytes
 from services.user_service import UserService
@@ -23,26 +24,30 @@ async def get_skills_fs_tree(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """
-    列出配置的 Skills 文件目录（默认 extensions/skills）树形结构
+    列出当前用户可用的 Skills（平台 extensions/skills + 用户目录）
     """
-    _ = current_user
-    return SkillFsService.get_tree()
+    return SkillFsService.get_tree(current_user.user_id)
 
 
 @skill_router.get('/fs/file', response_model=SkillFsFileContent)
 async def get_skills_fs_file(
     path: str,
+    source: SkillSource = 'platform',
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """
-    读取 Skills 目录下文本文件内容（相对根路径）
+    读取 Skills 目录下文本文件；source=platform|user
     """
-    _ = current_user
     rel = path.strip()
-    ok, err, content = SkillFsService.read_file(rel)
+    ok, err, content = SkillFsService.read_file(
+        rel, source=source, user_id=current_user.user_id,
+    )
     if not ok:
         raise HTTPException(status_code=400, detail=err)
-    return SkillFsFileContent(path=rel, content=content)
+    display = rel
+    if not display.startswith(('platform:', 'user:')):
+        display = f'{source}:{rel}'
+    return SkillFsFileContent(path=display, source=source, content=content)
 
 
 @skill_router.post('/fs/upload-zip')
@@ -51,8 +56,7 @@ async def upload_skills_fs_zip(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """
-    上传 skill：将 ZIP 解压到当前登录用户的私有 Skills 目录（.data/user_skills/users/{user_id}/）。
-    extensions/skills 为平台共享目录，仅支持浏览，不可通过此接口写入。
+    上传 skill：将 ZIP 解压到当前登录用户的 Skills 目录（.data/users/{user_id}/skills/）。
     """
     zip_path = None
     try:

@@ -21,7 +21,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
-import { getSkillsFsFile, getSkillsFsTree, uploadSkillsFsZip } from '@/api/skills'
+import { getSkillsFsFile, getSkillsFsTree, parseSourceFromKey, uploadSkillsFsZip } from '@/api/skills'
 
 const message = useMessage()
 
@@ -97,7 +97,8 @@ async function onUpdateSelectedKeys(keys: Array<string | number>) {
   previewPath.value = key
   previewContent.value = ''
   try {
-    const res = await getSkillsFsFile(key)
+    const { source, path } = parseSourceFromKey(key)
+    const res = await getSkillsFsFile(path, source)
     previewContent.value = res.content
   } catch (e: any) {
     message.error(e.message || '读取失败')
@@ -166,24 +167,32 @@ async function confirmZipUpload() {
     <n-alert v-if="treePayload" type="info" class="hint-alert" :show-icon="false">
       <div class="hint-lines">
         <div>
-          <n-text depth="3">展示的是服务器上配置的 Skills 根目录（默认仓库内 </n-text>
+          <n-text depth="3">展示当前用户可用的 Skills：</n-text>
+          <n-text code>平台技能</n-text>
+          <n-text depth="3">（仓库 </n-text>
           <n-text code>extensions/skills</n-text>
-          <n-text depth="3">）。新增或修改 skill 请在该目录下操作，或点击「上传 skill」将 ZIP 解压到该根目录；修改后点击「刷新」。</n-text>
+          <n-text depth="3">，只读）与 </n-text>
+          <n-text code>我的技能</n-text>
+          <n-text depth="3">（您上传的 ZIP，写入个人目录）。</n-text>
         </div>
         <div class="root-path">
-          <n-text depth="3">当前根路径：</n-text>
-          <n-text code>{{ treePayload.root_path }}</n-text>
+          <n-text depth="3">平台路径：</n-text>
+          <n-text code>{{ treePayload.platform.root_path }}</n-text>
+        </div>
+        <div class="root-path">
+          <n-text depth="3">我的路径：</n-text>
+          <n-text code>{{ treePayload.user.root_path }}</n-text>
         </div>
       </div>
     </n-alert>
 
     <n-alert
-      v-if="treePayload && !treePayload.root_exists"
+      v-if="treePayload && !treePayload.platform.root_exists && !treePayload.user.root_exists"
       type="warning"
       title="目录尚未创建"
       class="missing-alert"
     >
-      请在服务器上创建该路径，或点击「上传 skill」上传 ZIP（会在根路径下解压，不存在时会尝试创建根目录）。
+      请点击「上传 skill」将 ZIP 解压到您的个人 Skills 目录；平台技能由运维在仓库内维护。
     </n-alert>
 
     <div v-if="loading" class="loading">
@@ -238,7 +247,7 @@ async function confirmZipUpload() {
       style="width: 480px"
     >
       <n-form label-placement="top">
-        <n-form-item label="ZIP 文件（解压到当前配置的 Skills 根目录，包内目录结构保留）" required>
+        <n-form-item label="ZIP 文件（解压到「我的技能」目录，包内目录结构保留）" required>
           <n-upload accept=".zip" :max="1" @change="handleZipFileChange">
             <n-button>选择 ZIP</n-button>
           </n-upload>

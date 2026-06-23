@@ -17,13 +17,17 @@ from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.env import ChatAttachmentConfig
+from config.user_data_paths import (
+    ensure_session_attachments_dir,
+    ensure_session_uploads_dir,
+    get_session_root,
+)
 from exceptions.exception import ServiceWarning
 from kb.document_parse import DocumentParser
 from models.chat_models import TChatAttachment
 from schemas.chat_attachment_vo import AttachmentResponse
 from services.chat_service import ChatService
 from common.logging import logger
-from common.paths import resolve_backend_relative
 from domain.chat.attachments.markdown import extract_preview
 
 _DOCUMENT_EXTENSIONS = frozenset({
@@ -50,34 +54,33 @@ def _sanitize_filename(name: str) -> str:
     return base or "file"
 
 
-def _attachment_root() -> Path:
-    root = resolve_backend_relative(ChatAttachmentConfig.dir)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def _session_dir(user_id: str, session_id: str) -> Path:
+    return get_session_root(user_id, session_id)
 
 
-def _session_dir(session_id: str) -> Path:
-    return _attachment_root() / "sessions" / session_id
+def _uploads_dir(user_id: str, session_id: str) -> Path:
+    return ensure_session_uploads_dir(user_id, session_id)
 
 
-def _uploads_dir(session_id: str) -> Path:
-    path = _session_dir(session_id) / "uploads"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def _attachments_dir(user_id: str, session_id: str) -> Path:
+    return ensure_session_attachments_dir(user_id, session_id)
 
 
-def _attachments_dir(session_id: str) -> Path:
-    path = _session_dir(session_id) / "attachments"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def _rel_path(absolute: Path, user_id: str, session_id: str) -> str:
+    session_root = _session_dir(user_id, session_id).resolve()
+    return str(absolute.resolve().relative_to(session_root))
 
 
-def _rel_path(absolute: Path) -> str:
-    return str(absolute.relative_to(_attachment_root()))
+def _abs_path(relative: str, user_id: str, session_id: str) -> Path:
+    rel = relative.replace("\\", "/").strip("/")
+    if not rel or ".." in rel.split("/"):
+        raise ValueError("非法路径")
 
-
-def _abs_path(relative: str) -> Path:
-    return (_attachment_root() / relative).resolve()
+    session_root = _session_dir(user_id, session_id).resolve()
+    candidate = (session_root / rel).resolve()
+    if not str(candidate).startswith(str(session_root)):
+        raise ValueError("非法路径")
+    return candidate
 
 
 def _detect_kind(filename: str, mime_type: Optional[str]) -> Optional[str]:
@@ -165,7 +168,10 @@ class ChatAttachmentService:
         for rel in (row.original_path, row.markdown_path):
             if not rel:
                 continue
-            path = _abs_path(rel)
+            try:
+                path = _abs_path(rel, row.user_id, row.session_id)
+            except ValueError:
+                continue
             try:
                 if path.is_file():
                     path.unlink()
@@ -216,11 +222,12 @@ class ChatAttachmentService:
 
     @classmethod
     def _read_document_text(cls, row: TChatAttachment) -> Tuple[str, Path]:
+        uid, sid = row.user_id, row.session_id
         if row.markdown_path:
-            path = _abs_path(row.markdown_path)
+            path = _abs_path(row.markdown_path, uid, sid)
             if path.is_file():
                 return path.read_text(encoding="utf-8", errors="replace"), path
-        path = _abs_path(row.original_path)
+        path = _abs_path(row.original_path, uid, sid)
         if not path.is_file():
             return "", path
         ext = path.suffix.lower()
@@ -231,7 +238,7 @@ class ChatAttachmentService:
 
     @classmethod
     def read_image_bytes(cls, row: TChatAttachment) -> Tuple[bytes, str]:
-        path = _abs_path(row.original_path)
+        path = _abs_path(row.original_path, row.user_id, row.session_id)
         if not path.is_file():
             raise FileNotFoundError(row.original_path)
         mime = row.mime_type or mimetypes.guess_type(row.file_name)[0] or "application/octet-stream"
@@ -271,9 +278,9 @@ class ChatAttachmentService:
             )
 
         attachment_id = str(uuid.uuid4())
-        upload_path = _uploads_dir(session_id) / safe_name
+        upload_path = _uploads_dir(user_id, session_id) / safe_name
         upload_path.write_bytes(content)
-        original_rel = _rel_path(upload_path)
+        original_rel = _rel_path(upload_path, user_id, session_id)
 
         resolved_mime = mime_type or mimetypes.guess_type(safe_name)[0]
         char_count = 0
@@ -295,14 +302,16 @@ class ChatAttachmentService:
                     md_text = DocumentParser.convert_file_to_markdown(str(upload_path))
                 md_text = (md_text or "").strip()
                 if not md_text:
-                    cls._delete_disk_files_from_paths(original_rel, None)
+                    cls._delete_disk_files_from_paths(
+                        user_id, session_id, original_rel, None
+                    )
                     raise HTTPException(
                         status_code=422,
                         detail="文档解析后正文为空，请检查文件是否为扫描件或格式损坏",
                     )
-                md_path = _attachments_dir(session_id) / f"{stem}.md"
+                md_path = _attachments_dir(user_id, session_id) / f"{stem}.md"
                 md_path.write_text(md_text, encoding="utf-8")
-                markdown_rel = _rel_path(md_path)
+                markdown_rel = _rel_path(md_path, user_id, session_id)
                 char_count = len(md_text)
                 status = "parsed"
                 preview = extract_preview(md_text, ChatAttachmentConfig.preview_chars)
@@ -342,12 +351,19 @@ class ChatAttachmentService:
 
     @classmethod
     def _delete_disk_files_from_paths(
-        cls, original_rel: str, markdown_rel: Optional[str]
+        cls,
+        user_id: str,
+        session_id: str,
+        original_rel: str,
+        markdown_rel: Optional[str],
     ) -> None:
         for rel in (original_rel, markdown_rel):
             if not rel:
                 continue
-            path = _abs_path(rel)
+            try:
+                path = _abs_path(rel, user_id, session_id)
+            except ValueError:
+                continue
             try:
                 if path.is_file():
                     path.unlink()
@@ -418,12 +434,16 @@ class ChatAttachmentService:
         if ".." in relative_path or relative_path.startswith("/"):
             raise HTTPException(status_code=400, detail="非法路径")
 
-        abs_path = _abs_path(relative_path)
+        abs_path = _abs_path(relative_path, user_id, session_id)
         if not abs_path.is_file():
             raise HTTPException(status_code=404, detail="文件不存在")
 
-        prefix = f"sessions/{session_id}/"
-        if not relative_path.replace("\\", "/").startswith(prefix):
+        norm = relative_path.replace("\\", "/")
+        if not norm.startswith(("uploads/", "attachments/")):
+            raise HTTPException(status_code=403, detail="无权访问该文件")
+
+        session_root = _session_dir(user_id, session_id).resolve()
+        if not str(abs_path.resolve()).startswith(str(session_root)):
             raise HTTPException(status_code=403, detail="无权访问该文件")
 
         mime = mimetypes.guess_type(abs_path.name)[0] or "application/octet-stream"

@@ -1,7 +1,7 @@
 """
 DeepResearchAgent - 深度调研智能体
 
-基于 create_noesis_agent + CompositeBackend（工作区 + Skills 只读挂载）。
+基于 create_noesis_agent + CompositeBackend（AIO 工作区 + Skills 只读挂载）。
 """
 
 import asyncio
@@ -15,16 +15,17 @@ from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.tools import build_web_search_tools
-from agent.backends import create_local_shell_backend
-from config.agent_workspace_paths import ensure_workspace_dir
-from config.extensions_paths import skills_root
+from agent.backends.aio_sandbox import create_user_sandbox_backend
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
 from common.logging import logger
+from services.sandbox_service import user_sandbox_run
 
 _SKILLS_ROUTE = "/skills/"
+_USER_SKILLS_ROUTE = "/user-skills/"
+_SKILL_SOURCES = [_SKILLS_ROUTE, _USER_SKILLS_ROUTE]
 
 
 def _resolve_user_id(current_user) -> Optional[str]:
@@ -34,17 +35,6 @@ def _resolve_user_id(current_user) -> Optional[str]:
     return str(uid) if uid is not None else None
 
 
-def _build_research_backend(user_id: str, session_id: str) -> CompositeBackend:
-    """工作区与 Skills 分盘：会话级 workspace，/skills/ 只读映射 extensions/skills。"""
-    workspace_dir = ensure_workspace_dir(user_id, session_id)
-    workspace_backend = create_local_shell_backend(str(workspace_dir), virtual_mode=True)
-    skills_backend = create_local_shell_backend(str(skills_root()), virtual_mode=True)
-    return CompositeBackend(
-        default=workspace_backend,
-        routes={_SKILLS_ROUTE: skills_backend},
-    )
-
-
 def _build_deep_research_subagents(
     backend: CompositeBackend,
     web_tools: list,
@@ -52,7 +42,7 @@ def _build_deep_research_subagents(
     """深度研究子 Agent：独立上下文内执行单课题调研（filesystem + skills + web）。"""
     subagent_middleware = [
         *build_subagent_default_middleware(backend),
-        SkillsMiddleware(backend=backend, sources=[_SKILLS_ROUTE]),
+        SkillsMiddleware(backend=backend, sources=_SKILL_SOURCES),
     ]
     return [
         {
@@ -66,7 +56,7 @@ def _build_deep_research_subagents(
             "model": get_llm(),
             "tools": web_tools,
             "middleware": subagent_middleware,
-            "skills": [_SKILLS_ROUTE],
+            "skills": _SKILL_SOURCES,
         },
     ]
 
@@ -109,32 +99,33 @@ class DeepResearchAgent(BaseAgent):
         try:
             config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
 
-            backend = _build_research_backend(user_id, session_id)
-            web_tools = build_web_search_tools()
-            agent = create_noesis_agent(
-                tools=web_tools,
-                system_prompt=build_prompt(PromptProfile.DEEP_RESEARCH),
-                checkpointer=self.checkpointer,
-                backend=backend,
-                subagents=_build_deep_research_subagents(backend, web_tools),
-                extra_middleware=[
-                    TodoListMiddleware(),
-                    SkillsMiddleware(backend=backend, sources=[_SKILLS_ROUTE]),
-                ],
-            )
+            async with user_sandbox_run(user_id, session_id):
+                backend = await create_user_sandbox_backend(user_id, session_id)
+                web_tools = build_web_search_tools()
+                agent = create_noesis_agent(
+                    tools=web_tools,
+                    system_prompt=build_prompt(PromptProfile.DEEP_RESEARCH),
+                    checkpointer=self.checkpointer,
+                    backend=backend,
+                    subagents=_build_deep_research_subagents(backend, web_tools),
+                    extra_middleware=[
+                        TodoListMiddleware(),
+                        SkillsMiddleware(backend=backend, sources=_SKILL_SOURCES),
+                    ],
+                )
 
-            stream_args = {
-                "input": {"messages": [HumanMessage(content=query)]},
-                "config": config,
-                "stream_mode": "messages",
-                "langfuse_session_id": session_id,
-                "qa_type": qa_type,
-            }
+                stream_args = {
+                    "input": {"messages": [HumanMessage(content=query)]},
+                    "config": config,
+                    "stream_mode": "messages",
+                    "langfuse_session_id": session_id,
+                    "qa_type": qa_type,
+                }
 
-            async for chunk in self._stream_agent_response(
-                agent, stream_args, task_id, message_id
-            ):
-                yield chunk
+                async for chunk in self._stream_agent_response(
+                    agent, stream_args, task_id, message_id
+                ):
+                    yield chunk
 
         except asyncio.CancelledError:
             logger.info(

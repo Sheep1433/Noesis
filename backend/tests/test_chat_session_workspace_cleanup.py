@@ -20,9 +20,10 @@ def _session(user_id: str, session_id: str) -> TChatSession:
 @pytest.mark.asyncio
 async def test_delete_session_removes_workspace(tmp_path: Path) -> None:
     from config import agent_workspace_paths as paths
+    from config import user_data_paths as udp
     from services.chat_service import ChatService
 
-    root = tmp_path / "ws"
+    users_root = tmp_path / "users"
     user_id = "u1"
     session_id = "sess-del-1"
 
@@ -32,9 +33,12 @@ async def test_delete_session_removes_workspace(tmp_path: Path) -> None:
     db.execute = AsyncMock(return_value=result_mock)
     db.commit = AsyncMock()
 
-    with patch.object(paths, "_resolve_root", return_value=root):
+    with (
+        patch.object(udp, "_USERS_ROOT", users_root),
+        patch("services.chat_service.cancel_session_agent_runs", new_callable=AsyncMock),
+    ):
         paths.ensure_workspace_dir(user_id, session_id)
-        session_dir = root / "users" / user_id / "sessions" / session_id
+        session_dir = users_root / user_id / "sessions" / session_id
         assert session_dir.is_dir()
 
         ok = await ChatService.delete_session(session_id, user_id, db=db)
