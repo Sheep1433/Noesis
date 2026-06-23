@@ -14,7 +14,7 @@
 - **WHEN** 用户 `u1` 与 `u2` 均有 `session_id=abc`
 - **THEN** 工作区路径与 AIO 容器 **SHALL** 均隔离
 
-### Requirement: 会话软删 SHALL 同步删除 Agent 工作区且保留用户沙箱
+### Requirement: 会话软删 SHALL 同步删除 Agent 工作区
 
 软删 session 前 **SHALL** cancel 进行中 Agent run；**SHALL** `delete_session_workspace`；**SHALL NOT** `destroy_user_sandbox`。
 

@@ -13,7 +13,6 @@
 **不在本 spec 重复**：平台级通用 SSE 基础设施（注释保活、半包解析、`LangGraphSseBridge` golden 断言、`[DONE]` 收尾等），见 `platform-chat`。
 
 **合并来源**（已归档至本 spec）：原 `test-case-generation-rag`、`test-assistant-mindmap-workflow`、`test-case-agent-eval`（冻结版），以及原 `chat-sessions-and-streaming` 中 TEST_CASE_QA 相关的 phase SSE、resume、scenes-testpoints-ready 条款。
-
 ## Requirements
 
 <!-- 1. 流水线 -->
@@ -311,7 +310,7 @@
 
 ### Requirement: 金标准数据集
 
-系统 SHALL 在 `backend/evals/datasets/test_case/dataset.jsonl` 维护数据集。每条 item SHALL 含：`id`、`scenario_description`、`document_path`、`ground_truth.golden_test_points`。评 RAG 的 item MAY 含 `ground_truth.expected_rag`（channel：`current_requirement`、`historical_requirements`、`historical_test_cases`）；未标注时 rag scorer 跳过该项。
+系统 SHALL 在 `backend/evals/case/datasets/test_case/dataset.jsonl` 维护数据集。每条 item SHALL 含：`id`、`scenario_description`、`document_path`、`ground_truth.golden_test_points`。评 RAG 的 item MAY 含 `ground_truth.expected_rag`（channel：`current_requirement`、`historical_requirements`、`historical_test_cases`）；未标注时 rag scorer 跳过该项。
 
 #### Scenario: 数据集规模不强制扩展
 
@@ -320,7 +319,7 @@
 
 ### Requirement: 离线 runner
 
-系统 SHALL 支持 `--scope testpoints|cases|full`，直调 `case_graph` 节点，不经 SSE。`cases`/`full` SHALL 采纳全部 `point_name`。
+系统 SHALL 通过 `uv run python -m evals.case` 启动离线评测，并支持 `--scope testpoints|cases|full`，直调 `case_graph` 节点，不经 SSE。`cases`/`full` SHALL 采纳全部 `point_name`。
 
 #### Scenario: testpoints scope 仅评阶段 A
 
@@ -371,3 +370,4 @@
 
 - **WHEN** 审查测试设计文档
 - **THEN** SHALL 列出上述三项评测点及 mock 策略说明
+

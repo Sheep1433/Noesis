@@ -53,7 +53,7 @@
 
 ## MODIFIED Requirements
 
-### Requirement: 流式问答与 SSE 契约
+### Requirement: 流式问答与 SSE 核心契约
 
 系统 SHALL 通过 `POST /api/chat/sessions/stream`（及设计文档中约定的同前缀端点）以 `text/event-stream` 输出 Noesis SSE 帧；事件流由 `LangGraphSseBridge` 从 LangGraph `astream_events` 转换，包含推理与文本增量、工具调用与输出、错误与结束标记，并以 `data: [DONE]` 收尾。
 

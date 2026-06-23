@@ -3,9 +3,7 @@
 本能力规定 Noesis **聊天会话级附件**（含文档与图片）的端到端行为：用户上传的文件经解析或原样存储与会话绑定，由 **ChatAttachmentsMiddleware** 统一消费；**SHALL NOT** 写入 Qdrant 企业 Collection。
 
 上传时机遵循 **`chat-composer-send-upload`**：COMMON_QA 在**发送时** upload，发送前须 **`PUT .../ensure`** 物化会话。
-
 ## Requirements
-
 ### Requirement: 系统 SHALL 提供会话 ensure 与会话附件上传 API
 
 系统 SHALL 提供幂等 **`PUT /api/chat/sessions/{session_id}/ensure`**：
@@ -25,6 +23,8 @@
 
 - **上传时**：`session_id` **SHALL** 对应已物化的 `t_chat_session` 记录。若会话不存在，**SHALL** 返回 HTTP 404，**SHALL NOT** 在 upload 接口内隐式创建空会话。
 - **越权**：`session_id` 不属于当前用户 **SHALL** 返回 404。
+
+**磁盘布局**：原文件 SHALL 存于 `.data/users/{user_id}/sessions/{session_id}/uploads/`；解析成功的 Markdown 副本 SHALL 存于同会话下 `attachments/`。系统 **SHALL NOT** 再向 `.data/chat_attachments/sessions/{session_id}/` 写入新附件。
 
 #### Scenario: ensure 创建新会话
 
@@ -47,7 +47,7 @@
 
 - **WHEN** 用户在对已 ensure 的本人会话提交合法 PNG
 - **THEN** 响应 SHALL 含 `kind=image`、`attachment_id`、`mime_type`
-- **AND** 原图 SHALL 存于会话 `uploads/` 目录
+- **AND** 原图 SHALL 存于 `.data/users/{user_id}/sessions/{session_id}/uploads/`
 
 #### Scenario: 文档上传成功
 
@@ -64,6 +64,8 @@
 ### Requirement: 附件 SHALL 与会话绑定并具备 TTL
 
 每条附件记录 SHALL 关联 `session_id`、`user_id`、`file_name`、`content_path`（或等价存储键）、`char_count`、`created_at`、`expires_at`。
+
+磁盘相对路径 SHALL 相对于 `.data/users/{user_id}/sessions/{session_id}/`。
 
 `expires_at` SHALL 为 `created_at + CHAT_ATTACHMENT_TTL_DAYS`（配置项，默认 7 天）。
 
@@ -113,3 +115,4 @@
 
 - **WHEN** Agent 调用 `read_attachment(path, offset=0, limit=2000)`
 - **THEN** 工具 SHALL 返回 Markdown 指定行范围文本
+

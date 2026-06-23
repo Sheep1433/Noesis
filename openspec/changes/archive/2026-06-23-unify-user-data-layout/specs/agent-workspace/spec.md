@@ -88,6 +88,7 @@
 
 ### Requirement: Agent 工作区与 skills-filesystem、chat-session-attachments 边界
 
+系统 SHALL 维持下表所列 Agent 工作区、Skills 与聊天附件三者的职责分离；Agent **SHALL NOT** 将附件目录作为默认可写 backend 根。
 | 维度 | `agent-workspace` | `skills-filesystem` | `chat-session-attachments` |
 |------|-------------------|---------------------|----------------------------|
 | 消费方 | `FilesystemMiddleware` Agent | Skills 管理 API + Agent `/skills/`、`/user-skills/` | `GeneralQAAgent` 附件 |
