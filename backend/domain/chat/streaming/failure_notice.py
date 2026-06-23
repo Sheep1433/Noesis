@@ -125,7 +125,10 @@ def get_stream_failure_notice_text(
     has_prose: bool,
     parts: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    raw = sanitize_stream_error((detail or "").strip(), default="")
+    original = (detail or "").strip()
+    if is_model_api_timeout_error(original):
+        return get_model_api_timeout_notice_text(has_prose)
+    raw = sanitize_stream_error(original, default="")
     if is_model_api_timeout_error(raw):
         return get_model_api_timeout_notice_text(has_prose)
     if is_connection_or_timeout_error(raw):

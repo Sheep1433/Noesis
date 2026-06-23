@@ -32,6 +32,7 @@ from schemas.chat_vo import (
 )
 from schemas.session_context_vo import SessionContextResponse, WorkspaceFileContent
 from services.session_context_service import SessionContextService
+from services.chat_service import ChatService
 from services.user_service import UserService
 from services.qa_service import QaService
 from common.http.response import ResponseUtil
