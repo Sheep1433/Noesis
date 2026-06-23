@@ -25,11 +25,18 @@ async def test_ensure_session_creates_or_gets():
     mock_user.user_id = "user-1"
     db = AsyncMock()
 
-    with patch(
-        "api.chat_api.ChatService.get_or_create_session",
-        new_callable=AsyncMock,
-        return_value=mock_session,
-    ) as mock_goc:
+    with (
+        patch(
+            "api.chat_api.ChatService.is_session_owned_by_other",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "api.chat_api.ChatService.get_or_create_session",
+            new_callable=AsyncMock,
+            return_value=mock_session,
+        ) as mock_goc,
+    ):
         resp = await ensure_session(
             session_id="sess-1",
             request=EnsureSessionRequest(extra={"qa_type": "COMMON_QA"}),
