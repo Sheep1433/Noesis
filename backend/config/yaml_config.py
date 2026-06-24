@@ -197,15 +197,10 @@ class CheckpointYamlSection(BaseModel):
 
 
 class SandboxYamlSection(BaseModel):
-    enabled: bool = True
+    # aio：经 sandbox-runner 起 AIO 容器（生产推荐）；local_shell：宿主机进程内执行
+    backend: str = "aio"
     runner_url: str = "http://127.0.0.1:8090"
-    aio_image: str = "ghcr.io/agent-infra/sandbox:latest"
-    aio_port: int = Field(default=8080, ge=1, le=65535)
-    idle_ttl_seconds: int = Field(default=1800, ge=60)
-    max_replicas: int = Field(default=20, ge=1)
     execute_timeout_seconds: int = Field(default=120, ge=1)
-    # SDK agent-sandbox==0.0.30 对应 SANDBOX_AIO_IMAGE 默认 tag latest
-    sdk_version: str = "0.0.30"
 
 
 class ChatAttachmentYamlSection(BaseModel):

@@ -11,7 +11,7 @@ import httpx
 
 from common.logging import logger
 from config.agent_workspace_paths import ensure_workspace_dir, get_user_workspace_root
-from config.env import SandboxConfig
+from config.env import SandboxConfig, get_sandbox_runner_token
 from domain.chat.streaming.tool_errors import ToolInfrastructureError
 
 _BASE_URL_CACHE: dict[str, str] = {}
@@ -22,8 +22,9 @@ _IN_FLIGHT_LOCK = asyncio.Lock()
 
 def _runner_headers() -> dict[str, str]:
     headers: dict[str, str] = {}
-    if SandboxConfig.runner_token:
-        headers["Authorization"] = f"Bearer {SandboxConfig.runner_token}"
+    token = get_sandbox_runner_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
@@ -56,8 +57,11 @@ async def _runner_request(method: str, path: str, **kwargs) -> httpx.Response:
 
 async def ensure_user_sandbox(user_id: str) -> str:
     """确保用户 AIO 沙箱存在，返回 base_url。"""
-    if not SandboxConfig.enabled:
-        raise ToolInfrastructureError("[INTERNAL_ERROR] 沙箱功能未启用（sandbox.enabled=false）")
+    if SandboxConfig.backend != "aio":
+        raise ToolInfrastructureError(
+            f"[INTERNAL_ERROR] sandbox.backend={SandboxConfig.backend!r}，"
+            "仅 aio 模式经 runner 创建容器"
+        )
     if not _docker_available():
         raise ToolInfrastructureError(
             "[INTERNAL_ERROR] 未检测到 Docker（/var/run/docker.sock），无法创建 AIO 沙箱"

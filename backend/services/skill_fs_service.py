@@ -2,6 +2,7 @@
 Skills 文件目录（平台 extensions/skills + 用户 .data/users/{uid}/skills/）
 """
 import os
+import shutil
 import zipfile
 from typing import List, Literal, Tuple
 
@@ -45,6 +46,10 @@ class SkillFsService:
     @classmethod
     def _sort_nodes(cls, nodes: List[SkillFsTreeNode]) -> List[SkillFsTreeNode]:
         return sorted(nodes, key=lambda n: (n.isLeaf, n.label.lower()))
+
+    @classmethod
+    def _count_skill_packages(cls, tree: List[SkillFsTreeNode]) -> int:
+        return sum(1 for node in tree if not node.isLeaf)
 
     @classmethod
     def _scan_dir(
@@ -111,8 +116,9 @@ class SkillFsService:
         if not exists:
             logger.warning(f'Skills 目录不存在，将返回空树: {root}')
         return SkillFsSourceSection(
-            root_path=root,
             root_exists=exists,
+            writable=source == 'user',
+            skill_count=cls._count_skill_packages(tree),
             tree=tree,
         )
 
@@ -128,7 +134,7 @@ class SkillFsService:
             merged.append(
                 SkillFsTreeNode(
                     key='platform:',
-                    label='平台技能',
+                    label='平台预置',
                     isLeaf=False,
                     children=platform.tree,
                     source='platform',
@@ -137,7 +143,7 @@ class SkillFsService:
         merged.append(
             SkillFsTreeNode(
                 key='user:',
-                label='我的技能',
+                label='个人技能',
                 isLeaf=False,
                 children=user.tree,
                 source='user',
@@ -218,6 +224,39 @@ class SkillFsService:
         except OSError as e:
             return False, f'解压失败: {e}'
         return True, '解压成功'
+
+    @classmethod
+    def _is_top_level_package_name(cls, package_name: str) -> bool:
+        name = package_name.strip().replace('\\', '/')
+        if not name or '/' in name or name in ('.', '..') or name.startswith('.'):
+            return False
+        return True
+
+    @classmethod
+    def delete_user_skill_package(
+        cls,
+        package_name: str,
+        user_id: str | int,
+    ) -> Tuple[bool, str]:
+        """删除当前用户个人技能库下的顶层技能目录（仅单段目录名）。"""
+        if not cls._is_top_level_package_name(package_name):
+            return False, '只能删除个人技能下的顶层技能目录'
+        name = package_name.strip().replace('\\', '/')
+        try:
+            root = str(ensure_user_skills_dir(user_id))
+            target = cls._safe_join(root, name)
+        except ValueError:
+            return False, '非法路径'
+        if os.path.abspath(target) == os.path.abspath(root):
+            return False, '不能删除根目录'
+        if not os.path.isdir(target):
+            return False, '技能目录不存在'
+        try:
+            shutil.rmtree(target)
+        except OSError as e:
+            logger.error(f'删除技能目录失败 {target}: {e}')
+            return False, f'删除失败: {e}'
+        return True, f'已删除技能「{name}」'
 
 
 def max_zip_bytes() -> int:

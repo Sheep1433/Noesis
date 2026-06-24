@@ -124,13 +124,8 @@ web_tools:
   fetch_max_chars: 4096
   fetch_timeout_seconds: 30
 
-# AIO 沙箱（深度研究 / 故障运维）；SDK agent-sandbox==0.0.30 对应 SANDBOX_AIO_IMAGE
+# AIO 沙箱（深度研究 / 故障运维）；runner 镜像/回收等见 deploy/docker-compose.yml
 sandbox:
-  enabled: true
+  backend: aio
   runner_url: http://sandbox-runner:8090
-  aio_image: ghcr.io/agent-infra/sandbox:latest
-  aio_port: 8080
-  idle_ttl_seconds: 1800
-  max_replicas: 20
   execute_timeout_seconds: 120
-  sdk_version: "0.0.30"

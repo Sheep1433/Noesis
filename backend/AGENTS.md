@@ -70,7 +70,7 @@ backend/
 
 - **产品模型**：每个 `user_id` **一个** AIO 容器（同用户多 session 复用）；磁盘工作区仍 **per-session**（`users/{uid}/sessions/{sid}/workspace`）。
 - **接入**：`AioSandboxBackend(BaseSandbox)` + PyPI `agent-sandbox`（当前 **0.0.30**，与 `SANDBOX_AIO_IMAGE` 配套）。
-- **工厂**：`create_user_sandbox_backend(user_id, session_id)` → `CompositeBackend`（virtual `/` = 当前 session workspace，`/skills/` 平台只读，`/user-skills/` 用户只读）。
+- **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（virtual `/` = 当前 session workspace，`/skills/` 平台只读，`/user-skills/` 用户只读）。
 - **生命周期**：`services/sandbox_service.py` 经内网 `sandbox-runner` 起停容器；`user_sandbox_run` 维护 per-user in-flight；**删 session 不 destroy 用户沙箱**。
 - **跨 session**：容器 rw mount 整棵 `users/{uid}/`；filesystem 默认盘仍 confine 当前 session；`execute` 可读 `/workspace/sessions/{other_sid}/...`（同用户）。
 - **并发**：对 `(user_id, session_id)` mutex 串行 AIO HTTP（单 shell 会话）。

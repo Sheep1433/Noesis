@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import socket
 import threading
 import time
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ from pathlib import Path
 import docker
 import httpx
 from docker.errors import DockerException, NotFound
+
+from paths import resolve_host_data_dir, resolve_skills_host_dir
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -26,6 +29,48 @@ def _validate_user_id(user_id: str) -> str:
 def _container_name(user_id: str) -> str:
     digest = hashlib.sha256(user_id.encode()).hexdigest()[:12]
     return f"noesis-aio-{digest}"
+
+
+def _public_host() -> str:
+    """backend 访问 AIO 时使用的主机名（本地 dev 默认 127.0.0.1）。"""
+    return os.environ.get("SANDBOX_PUBLIC_HOST", "127.0.0.1").strip() or "127.0.0.1"
+
+
+def _host_port_base() -> int:
+    return int(os.environ.get("SANDBOX_HOST_PORT_BASE", "18080"))
+
+
+def _find_free_host_port(*, start: int | None = None) -> int:
+    base = start if start is not None else _host_port_base()
+    for port in range(base, base + 2000):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(f"无可用宿主机端口（起始于 {base}）")
+
+
+def _extract_host_port(container: docker.models.containers.Container, container_port: int) -> int | None:
+    container.reload()
+    labels = container.labels or {}
+    label_port = labels.get("noesis.host_port")
+    if label_port:
+        try:
+            return int(label_port)
+        except ValueError:
+            pass
+    ports = (container.attrs.get("NetworkSettings") or {}).get("Ports") or {}
+    bindings = ports.get(f"{container_port}/tcp") or []
+    if bindings and bindings[0].get("HostPort"):
+        return int(bindings[0]["HostPort"])
+    return None
+
+
+def _published_base_url(host_port: int) -> str:
+    return f"http://{_public_host()}:{host_port}"
 
 
 @dataclass
@@ -47,13 +92,10 @@ class SandboxManager:
             "SANDBOX_AIO_IMAGE", "ghcr.io/agent-infra/sandbox:latest"
         )
         self._aio_port = int(os.environ.get("SANDBOX_AIO_PORT", "8080"))
-        self._docker_network = os.environ.get("SANDBOX_DOCKER_NETWORK", "noesis_default")
-        self._host_data_dir = Path(
-            os.environ.get("NOESIS_HOST_DATA_DIR", "/data/noesis")
-        ).resolve()
-        self._skills_host_dir = Path(
-            os.environ.get("SANDBOX_SKILLS_HOST_DIR", "/data/skills")
-        ).resolve()
+        self._docker_network = os.environ.get("SANDBOX_DOCKER_NETWORK", "").strip()
+        self._host_port_base = _host_port_base()
+        self._host_data_dir = resolve_host_data_dir()
+        self._skills_host_dir = resolve_skills_host_dir()
         self._max_replicas = int(os.environ.get("SANDBOX_MAX_REPLICAS", "20"))
         self._idle_ttl_seconds = int(os.environ.get("SANDBOX_IDLE_TTL_SECONDS", "1800"))
         self._headless = os.environ.get("SANDBOX_HEADLESS", "1")
@@ -94,20 +136,29 @@ class SandboxManager:
         if self._skills_host_dir.is_dir():
             volumes[str(self._skills_host_dir)] = {"bind": "/skills", "mode": "ro"}
 
-        container = self._docker.containers.run(
-            image=self._aio_image,
-            name=name,
-            detach=True,
-            network=self._docker_network,
-            volumes=volumes,
-            environment={
+        host_port = _find_free_host_port(start=self._host_port_base)
+        run_kwargs: dict = {
+            "image": self._aio_image,
+            "name": name,
+            "detach": True,
+            "ports": {f"{self._aio_port}/tcp": host_port},
+            "volumes": volumes,
+            "environment": {
                 "SANDBOX_HEADLESS": self._headless,
                 "URL_CHROME_PATH": self._chrome_path,
             },
-            labels={"noesis.user_id": user_id, "noesis.managed": "true"},
-            restart_policy={"Name": "unless-stopped"},
-        )
-        base_url = f"http://{name}:{self._aio_port}"
+            "labels": {
+                "noesis.user_id": user_id,
+                "noesis.managed": "true",
+                "noesis.host_port": str(host_port),
+            },
+            "restart_policy": {"Name": "unless-stopped"},
+        }
+        if self._docker_network:
+            run_kwargs["network"] = self._docker_network
+
+        container = self._docker.containers.run(**run_kwargs)
+        base_url = _published_base_url(host_port)
         self._wait_aio_ready(base_url)
         return SandboxRecord(
             user_id=user_id,
@@ -127,11 +178,13 @@ class SandboxManager:
             container.reload()
             if container.status != "running":
                 return None
-        base_url = f"http://{name}:{self._aio_port}"
+        host_port = _extract_host_port(container, self._aio_port)
+        if host_port is None:
+            return None
         return SandboxRecord(
             user_id=user_id,
             container_id=container.id,
-            base_url=base_url,
+            base_url=_published_base_url(host_port),
         )
 
     def ensure(self, user_id: str) -> str:

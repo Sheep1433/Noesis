@@ -23,9 +23,7 @@ skill_router = APIRouter(prefix='/api/skills', tags=['Skill 模块'])
 async def get_skills_fs_tree(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    """
-    列出当前用户可用的 Skills（平台 extensions/skills + 用户目录）
-    """
+    """列出当前用户可用的 Skills（平台预置 + 个人上传）。"""
     return SkillFsService.get_tree(current_user.user_id)
 
 
@@ -44,10 +42,12 @@ async def get_skills_fs_file(
     )
     if not ok:
         raise HTTPException(status_code=400, detail=err)
-    display = rel
-    if not display.startswith(('platform:', 'user:')):
-        display = f'{source}:{rel}'
-    return SkillFsFileContent(path=display, source=source, content=content)
+    return SkillFsFileContent(
+        rel_path=rel,
+        filename=os.path.basename(rel) or rel,
+        source=source,
+        content=content,
+    )
 
 
 @skill_router.post('/fs/upload-zip')
@@ -55,9 +55,7 @@ async def upload_skills_fs_zip(
     file: UploadFile = File(...),
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    """
-    上传 skill：将 ZIP 解压到当前登录用户的 Skills 目录（.data/users/{user_id}/skills/）。
-    """
+    """上传个人技能：将 ZIP 解压到当前登录用户的私有目录。"""
     zip_path = None
     try:
         raw = await file.read()
@@ -75,3 +73,15 @@ async def upload_skills_fs_zip(
     finally:
         if zip_path and os.path.exists(zip_path):
             os.unlink(zip_path)
+
+
+@skill_router.delete('/fs/package')
+async def delete_user_skill_package(
+    path: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """删除当前用户上传的顶层技能目录。"""
+    ok, msg = SkillFsService.delete_user_skill_package(path, current_user.user_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return ResponseUtil.success(msg=msg)

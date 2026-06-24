@@ -1,10 +1,15 @@
-"""Agent 文件系统 / Shell 后端工厂。"""
+"""Agent 文件系统 / Shell 后端（对外仅暴露统一工厂）。"""
 
-from agent.backends.aio_sandbox import AioSandboxBackend, create_user_sandbox_backend
-from agent.backends.local_shell import create_local_shell_backend
+from agent.backends.factory import (
+    SKILL_SOURCES,
+    agent_sandbox_session,
+    create_agent_backend,
+    uses_aio_sandbox,
+)
 
 __all__ = [
-    "AioSandboxBackend",
-    "create_local_shell_backend",
-    "create_user_sandbox_backend",
+    "SKILL_SOURCES",
+    "agent_sandbox_session",
+    "create_agent_backend",
+    "uses_aio_sandbox",
 ]

@@ -20,9 +20,10 @@ class SkillFsTreeNode(BaseModel):
 
 
 class SkillFsSourceSection(BaseModel):
-    """单源 Skills 目录"""
-    root_path: str = Field(description='根目录绝对路径')
-    root_exists: bool = Field(description='根路径是否为已存在的目录')
+    """单源 Skills 目录摘要（不含服务器路径）"""
+    root_exists: bool = Field(description='该分类下是否有可用目录')
+    writable: bool = Field(description='当前用户是否可写入')
+    skill_count: int = Field(default=0, description='顶层技能包数量')
     tree: List[SkillFsTreeNode] = Field(default_factory=list, description='该源下树')
 
 
@@ -32,12 +33,13 @@ class SkillFsTreeResponse(BaseModel):
     user: SkillFsSourceSection = Field(description='当前用户 Skills')
     tree: List[SkillFsTreeNode] = Field(
         default_factory=list,
-        description='合并展示树（顶层「平台技能」「我的技能」）',
+        description='合并展示树（顶层「平台预置」「个人技能」）',
     )
 
 
 class SkillFsFileContent(BaseModel):
     """Skills 目录下文件内容"""
-    path: str = Field(description='请求路径（含 source 前缀）')
+    rel_path: str = Field(description='技能包内相对路径，如 arxiv/SKILL.md')
+    filename: str = Field(description='文件名')
     source: SkillSource = Field(description='platform 或 user')
     content: str = Field(description='文件文本内容')

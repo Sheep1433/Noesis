@@ -1,4 +1,4 @@
-"""当前会话上下文：工作区文件树 + 附件列表。"""
+"""当前会话上下文：按 sessions/{id}/ 目录树展示。"""
 
 from __future__ import annotations
 
@@ -8,14 +8,18 @@ from typing import List
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.user_data_paths import get_workspace_dir
-from schemas.chat_attachment_vo import AttachmentResponse
+from config.user_data_paths import (
+    get_session_root,
+    get_session_uploads_dir,
+    get_workspace_dir,
+)
 from schemas.session_context_vo import FsTreeNode, SessionContextResponse
-from services.chat_attachment_service import ChatAttachmentService
 from services.chat_service import ChatService
 from services.skill_fs_service import SkillFsService
 
 _MAX_READ_BYTES = 512 * 1024
+_SESSION_PANEL_SUBDIRS = ('workspace', 'uploads')
+_ALLOWED_READ_PREFIXES = ('workspace', 'uploads', 'attachments')
 
 
 class SessionContextService:
@@ -26,26 +30,25 @@ class SessionContextService:
             raise HTTPException(status_code=404, detail="会话不存在")
 
     @classmethod
-    def _scan_workspace(cls, root: str, rel: str) -> List[FsTreeNode]:
-        full = SkillFsService._safe_join(root, rel)
-        if not os.path.isdir(full):
+    def _scan_directory(cls, dir_path: str, key_prefix: str) -> List[FsTreeNode]:
+        if not os.path.isdir(dir_path):
             return []
         entries: List[FsTreeNode] = []
         try:
-            names = sorted(os.listdir(full), key=lambda x: x.lower())
+            names = sorted(os.listdir(dir_path), key=lambda x: x.lower())
         except OSError:
             return []
         for name in names:
             if name.startswith('.'):
                 continue
-            entry_rel = f'{rel}/{name}' if rel else name
-            entry_full = os.path.join(full, name)
+            entry_key = f'{key_prefix}/{name}'
+            entry_full = os.path.join(dir_path, name)
             try:
                 if os.path.isdir(entry_full):
-                    children = cls._scan_workspace(root, entry_rel)
+                    children = cls._scan_directory(entry_full, entry_key)
                     entries.append(
                         FsTreeNode(
-                            key=entry_rel,
+                            key=entry_key,
                             label=name,
                             isLeaf=False,
                             children=children or None,
@@ -53,7 +56,7 @@ class SessionContextService:
                     )
                 elif os.path.isfile(entry_full):
                     entries.append(
-                        FsTreeNode(key=entry_rel, label=name, isLeaf=True, children=None),
+                        FsTreeNode(key=entry_key, label=name, isLeaf=True, children=None),
                     )
             except ValueError:
                 continue
@@ -67,20 +70,48 @@ class SessionContextService:
         db: AsyncSession,
     ) -> SessionContextResponse:
         await cls._ensure_owned(session_id, user_id, db)
-        ws_dir = get_workspace_dir(user_id, session_id)
-        ws_exists = ws_dir.is_dir()
-        workspace_tree = cls._scan_workspace(str(ws_dir), '') if ws_exists else []
-        attachments: List[AttachmentResponse] = await ChatAttachmentService.list_attachments(
-            session_id=session_id,
-            user_id=user_id,
-            db=db,
-        )
+        session_root = get_session_root(user_id, session_id)
+        subdirs: List[FsTreeNode] = []
+        for name in _SESSION_PANEL_SUBDIRS:
+            if name == 'workspace':
+                sub_path = get_workspace_dir(user_id, session_id)
+            else:
+                sub_path = get_session_uploads_dir(user_id, session_id)
+            if not sub_path.is_dir():
+                continue
+            children = cls._scan_directory(str(sub_path), name)
+            if not children:
+                continue
+            subdirs.append(
+                FsTreeNode(
+                    key=name,
+                    label=name,
+                    isLeaf=False,
+                    children=children,
+                ),
+            )
+        root_label = f'sessions/{session_id}'
+        tree = [
+            FsTreeNode(
+                key=root_label,
+                label=root_label,
+                isLeaf=False,
+                children=subdirs or None,
+            ),
+        ]
         return SessionContextResponse(
-            workspace=workspace_tree,
-            attachments=attachments,
-            workspace_root_exists=ws_exists,
-            workspace_root_path=str(ws_dir),
+            tree=tree,
+            session_root_path=str(session_root),
         )
+
+    @classmethod
+    def _normalize_session_rel_path(cls, rel_path: str) -> str:
+        norm = rel_path.strip().replace('\\', '/')
+        if not norm or '..' in norm.split('/'):
+            raise HTTPException(status_code=400, detail='非法路径')
+        if not norm.startswith(_ALLOWED_READ_PREFIXES):
+            raise HTTPException(status_code=400, detail='非法路径')
+        return norm
 
     @classmethod
     async def read_workspace_file(
@@ -91,13 +122,12 @@ class SessionContextService:
         db: AsyncSession,
     ) -> tuple[str, str]:
         await cls._ensure_owned(session_id, user_id, db)
-        if not rel_path or not rel_path.strip():
-            raise HTTPException(status_code=400, detail="路径不能为空")
-        root = str(get_workspace_dir(user_id, session_id))
+        rel_norm = cls._normalize_session_rel_path(rel_path)
+        root = str(get_session_root(user_id, session_id))
         try:
-            full = SkillFsService._safe_join(root, rel_path.strip())
+            full = SkillFsService._safe_join(root, rel_norm)
         except ValueError:
-            raise HTTPException(status_code=400, detail="非法路径")
+            raise HTTPException(status_code=400, detail='非法路径')
         if not os.path.isfile(full):
             raise HTTPException(status_code=404, detail="不是文件或不存在")
         size = os.path.getsize(full)
@@ -108,6 +138,6 @@ class SessionContextService:
             )
         try:
             with open(full, 'r', encoding='utf-8', errors='replace') as handle:
-                return rel_path.strip(), handle.read()
+                return rel_norm, handle.read()
         except OSError as exc:
             raise HTTPException(status_code=400, detail=f"读取失败: {exc}") from exc

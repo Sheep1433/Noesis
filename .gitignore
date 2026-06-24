@@ -1,38 +1,25 @@
-# Python-generated files
+# Python
 __pycache__/
 build/
 dist/
 wheels/
 *.egg-info
 
-# Virtual environments
-dev-tools/
-
-
+# IDE
 .idea
-
-README.assets
 
 # AI IDE 本地配置（不提交）
 .cursor/
 .claude/
 .codex/
-AGENTS.local.md
+docs/
+# 缓存与依赖
 *cache*/
-*.omc/
 *logs*/
 node_modules/
-e2e-tests/node_modules/
-
-
-e2e-tests/
-backend/checkpoints/
 
 # 本地运行时数据（见 common/paths.py）
 .data/
-
-# 已废弃路径（若本地残留可安全删除）
-qdrant_storage/
 
 # Agent 离线评测产物
 results/
@@ -49,6 +36,3 @@ backend/.env.*
 !backend/.env.prod.example
 backend/config.yaml
 backend/config.prod.yaml
-
-research/
-docs/

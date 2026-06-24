@@ -24,27 +24,33 @@ docker pull ghcr.io/agent-infra/sandbox:latest
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-## 沙箱相关环境变量
+## 沙箱配置分工
 
-| 变量 | 说明 |
-|------|------|
-| `NOESIS_HOST_DATA_DIR` | 宿主机数据根（compose 卷 `noesis_data`）；runner bind `users/{uid}/` → 容器 `/workspace` |
-| `SANDBOX_RUNNER_URL` | backend 访问 runner 的内网地址（compose 默认 `http://sandbox-runner:8090`） |
-| `SANDBOX_RUNNER_TOKEN` | runner 与 backend 共享 Bearer token |
-| `SANDBOX_AIO_IMAGE` | AIO 容器镜像（默认 `ghcr.io/agent-infra/sandbox:latest`） |
-| `SANDBOX_MAX_REPLICAS` | 并发用户沙箱上限 |
-| `SANDBOX_IDLE_TTL_SECONDS` | 用户全 session idle 后回收容器 |
+| 配置位置 | 内容 |
+|----------|------|
+| `backend/config.yaml` → `sandbox.backend` | `aio` / `local_shell` |
+| `backend/config.yaml` → `sandbox.runner_url` | backend 访问 runner 地址 |
+| `deploy/docker-compose.yml` → `sandbox-runner` 环境变量 | 镜像、回收、挂载卷等 runner 运维参数 |
+| `.env` → `SANDBOX_RUNNER_TOKEN` | runner 与 backend 共享 Bearer token（可选） |
 
-## 本地开发（sandbox-runner）
+## 本地开发
+
+**推荐**（自动启动 Qdrant、sandbox-runner、前后端）：
 
 ```bash
-# 终端 1：runner（需 Docker）
-export NOESIS_HOST_DATA_DIR="$(pwd)/.data"
-export SANDBOX_SKILLS_HOST_DIR="$(pwd)/extensions/skills"
-python deploy/sandbox-runner/main.py
+./scripts/run.sh dev
+```
 
-# 终端 2：backend
+也可单独启动后端（`sandbox.backend=aio` 时会自动尝试拉起 runner，路径自动对齐仓库 `.data/` 与 `extensions/skills`）：
+
+```bash
 cd backend && uv run app.py
 ```
 
-未启动 runner 或无 Docker 时，深度研究 / 故障运维 Agent 将返回明确 sandbox 失败，**不会**回退 `LocalShellBackend`。
+`local_shell` 模式无需 Docker / runner：
+
+```yaml
+# backend/config.yaml
+sandbox:
+  backend: local_shell
+```

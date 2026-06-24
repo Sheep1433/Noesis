@@ -1,5 +1,5 @@
 /**
- * Skills 文件目录 API（平台 extensions/skills + 用户 .data/users/{uid}/skills/）
+ * Skills 文件目录 API（平台预置 + 个人上传）
  */
 import { useUserStore } from '@/store/business/userStore'
 
@@ -16,10 +16,11 @@ export interface SkillFsTreeNode {
   children?: SkillFsTreeNode[]
 }
 
-/** 单源 Skills 目录 */
+/** 单源 Skills 目录摘要 */
 export interface SkillFsSourceSection {
-  root_path: string
   root_exists: boolean
+  writable: boolean
+  skill_count: number
   tree: SkillFsTreeNode[]
 }
 
@@ -32,7 +33,8 @@ export interface SkillFsTreeResponse {
 
 /** Skills 目录下文件内容 */
 export interface SkillFsFileContent {
-  path: string
+  rel_path: string
+  filename: string
   source: SkillSource
   content: string
 }
@@ -128,6 +130,42 @@ export async function uploadSkillsFsZip(
     success: Boolean(json.success),
     message: json.msg || '操作成功',
   }
+}
+
+/**
+ * 删除个人技能顶层目录
+ */
+export async function deleteUserSkillPackage(
+  packageName: string,
+): Promise<{ success: boolean, message: string }> {
+  const userStore = useUserStore()
+  const token = userStore.getUserToken()
+  const url = `${API_BASE}/fs/package?path=${encodeURIComponent(packageName)}`
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  const json = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(json.detail || json.msg || `删除失败: ${response.status}`)
+  }
+
+  return {
+    success: Boolean(json.success),
+    message: json.msg || '删除成功',
+  }
+}
+
+export function isDeletableUserSkillPackage(node: SkillFsTreeNode): boolean {
+  if (node.isLeaf || node.source !== 'user') {
+    return false
+  }
+  const { path } = parseSourceFromKey(node.key)
+  return path.length > 0 && !path.includes('/')
 }
 
 export { parseSourceFromKey }

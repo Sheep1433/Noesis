@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
-import time
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -17,9 +17,38 @@ RUNNER_HOST = os.environ.get("SANDBOX_RUNNER_HOST", "0.0.0.0")
 RUNNER_PORT = int(os.environ.get("SANDBOX_RUNNER_PORT", "8090"))
 REAP_INTERVAL = int(os.environ.get("SANDBOX_REAP_INTERVAL_SECONDS", "60"))
 
-app = FastAPI(title="Noesis Sandbox Runner", docs_url=None, redoc_url=None)
 _manager: SandboxManager | None = None
 _reap_stop = threading.Event()
+
+
+def _reap_loop() -> None:
+    while not _reap_stop.wait(REAP_INTERVAL):
+        try:
+            removed = get_manager().reap_idle()
+            if removed:
+                print(f"[sandbox-runner] idle 回收 {removed} 个用户沙箱")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sandbox-runner] idle 回收失败: {exc}")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    global _manager
+    _manager = SandboxManager()
+    thread = threading.Thread(target=_reap_loop, name="sandbox-reaper", daemon=True)
+    thread.start()
+    yield
+    _reap_stop.set()
+    if _manager is not None:
+        _manager.shutdown_all()
+
+
+app = FastAPI(
+    title="Noesis Sandbox Runner",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=_lifespan,
+)
 
 
 def get_manager() -> SandboxManager:
@@ -82,31 +111,6 @@ def adjust_in_flight(user_id: str, body: InFlightRequest) -> dict[str, str]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok"}
-
-
-def _reap_loop() -> None:
-    while not _reap_stop.wait(REAP_INTERVAL):
-        try:
-            removed = get_manager().reap_idle()
-            if removed:
-                print(f"[sandbox-runner] idle 回收 {removed} 个用户沙箱")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[sandbox-runner] idle 回收失败: {exc}")
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    global _manager
-    _manager = SandboxManager()
-    thread = threading.Thread(target=_reap_loop, name="sandbox-reaper", daemon=True)
-    thread.start()
-
-
-@app.on_event("shutdown")
-def on_shutdown() -> None:
-    _reap_stop.set()
-    if _manager is not None:
-        _manager.shutdown_all()
 
 
 if __name__ == "__main__":

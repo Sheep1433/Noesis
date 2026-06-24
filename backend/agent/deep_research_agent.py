@@ -1,7 +1,7 @@
 """
 DeepResearchAgent - 深度调研智能体
 
-基于 create_noesis_agent + CompositeBackend（AIO 工作区 + Skills 只读挂载）。
+基于 create_noesis_agent + CompositeBackend（工作区 + Skills 只读挂载；backend 见 sandbox.backend）。
 """
 
 import asyncio
@@ -15,17 +15,12 @@ from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.tools import build_web_search_tools
-from agent.backends.aio_sandbox import create_user_sandbox_backend
+from agent.backends import SKILL_SOURCES, agent_sandbox_session, create_agent_backend
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
 from common.logging import logger
-from services.sandbox_service import user_sandbox_run
-
-_SKILLS_ROUTE = "/skills/"
-_USER_SKILLS_ROUTE = "/user-skills/"
-_SKILL_SOURCES = [_SKILLS_ROUTE, _USER_SKILLS_ROUTE]
 
 
 def _resolve_user_id(current_user) -> Optional[str]:
@@ -42,7 +37,7 @@ def _build_deep_research_subagents(
     """深度研究子 Agent：独立上下文内执行单课题调研（filesystem + skills + web）。"""
     subagent_middleware = [
         *build_subagent_default_middleware(backend),
-        SkillsMiddleware(backend=backend, sources=_SKILL_SOURCES),
+        SkillsMiddleware(backend=backend, sources=list(SKILL_SOURCES)),
     ]
     return [
         {
@@ -56,7 +51,7 @@ def _build_deep_research_subagents(
             "model": get_llm(),
             "tools": web_tools,
             "middleware": subagent_middleware,
-            "skills": _SKILL_SOURCES,
+            "skills": list(SKILL_SOURCES),
         },
     ]
 
@@ -99,8 +94,8 @@ class DeepResearchAgent(BaseAgent):
         try:
             config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
 
-            async with user_sandbox_run(user_id, session_id):
-                backend = await create_user_sandbox_backend(user_id, session_id)
+            async with agent_sandbox_session(user_id, session_id):
+                backend = await create_agent_backend(user_id, session_id)
                 web_tools = build_web_search_tools()
                 agent = create_noesis_agent(
                     tools=web_tools,
@@ -110,7 +105,7 @@ class DeepResearchAgent(BaseAgent):
                     subagents=_build_deep_research_subagents(backend, web_tools),
                     extra_middleware=[
                         TodoListMiddleware(),
-                        SkillsMiddleware(backend=backend, sources=_SKILL_SOURCES),
+                        SkillsMiddleware(backend=backend, sources=list(SKILL_SOURCES)),
                     ],
                 )
 

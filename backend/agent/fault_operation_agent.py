@@ -14,11 +14,11 @@ from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.tools.mcp_invoke_wrapper import wrap_mcp_tools
-from agent.backends.aio_sandbox import AioSandboxBackend, create_user_workspace_backend
+from agent.backends import SKILL_SOURCES, agent_sandbox_session, create_agent_backend
+from deepagents.backends import CompositeBackend
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
 from common.logging import logger
-from services.sandbox_service import user_sandbox_run
 
 # 故障运维 MCP 端点（与 SimpleMCPAgent 调试地址一致，按需改代码）
 FAULT_MCP_URL = "http://localhost:8000/mcp"
@@ -32,7 +32,7 @@ def _resolve_user_id(current_user) -> Optional[str]:
 
 
 def _build_fault_operation_subagents(
-    backend: AioSandboxBackend,
+    backend: CompositeBackend,
     mcp_tools: list[Any],
 ) -> list[SubAgent]:
     """与 deepagents 默认 general-purpose 对齐：独立上下文内执行多步 MCP 运维子任务。"""
@@ -107,9 +107,9 @@ class FaultOperationAgent(BaseAgent):
                 "recursion_limit": DEFAULT_RECURSION_LIMIT,
             }
 
-            async with user_sandbox_run(user_id, session_id):
+            async with agent_sandbox_session(user_id, session_id):
                 mcp_tools = await self._load_mcp_tools()
-                backend = await create_user_workspace_backend(user_id, session_id)
+                backend = await create_agent_backend(user_id, session_id)
 
                 agent = create_noesis_agent(
                     tools=mcp_tools,

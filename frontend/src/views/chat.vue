@@ -44,10 +44,31 @@ import SuggestedView from './SuggestedPage.vue'
 import TableModal from './TableModal.vue'
 
 const sessionFilesPanelRef = ref<InstanceType<typeof SessionContextPanel> | null>(null)
+/** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
+const sessionFilesPanelOpen = ref(false)
+
+/** 是否显示欢迎/默认页（未进入具体会话对话流） */
+const showDefaultPage = ref(true)
 
 function reloadSessionFilesPanel() {
+  if (!sessionFilesPanelOpen.value) {
+    return
+  }
   sessionFilesPanelRef.value?.reload()
 }
+
+function toggleSessionFilesPanel() {
+  sessionFilesPanelOpen.value = !sessionFilesPanelOpen.value
+  if (sessionFilesPanelOpen.value) {
+    nextTick(() => reloadSessionFilesPanel())
+  }
+}
+
+watch(showDefaultPage, (isDefault) => {
+  if (isDefault) {
+    sessionFilesPanelOpen.value = false
+  }
+})
 
 // 全局存储
 const businessStore = useBusinessStore()
@@ -1335,17 +1356,34 @@ function onComposerPaste(e: ClipboardEvent) {
           </div>
         </div>
       </n-layout-sider>
-      <n-layout-content class="content">
-        <n-layout has-sider class="chat-main-layout h-full">
-          <n-layout-content class="chat-main-inner">
+      <n-layout-content class="content" :style="{ backgroundColor: backgroundColorVariable }">
+        <div class="chat-main-layout h-full flex min-w-0">
+          <div class="chat-main-inner flex-1 min-w-0 min-h-0 flex flex-col">
         <!-- 内容区域 -->
         <div
           flex="~ 1 col"
           min-w-0
           h-full
         >
-          <div flex="~ justify-between items-center">
-            <NavigationNavBar :background-color="backgroundColorVariable" />
+          <div flex="~ justify-between items-center" class="chat-top-bar">
+            <NavigationNavBar
+              class="flex-1 min-w-0"
+              :background-color="backgroundColorVariable"
+            />
+            <button
+              v-if="!showDefaultPage && uuids[qa_type]"
+              type="button"
+              class="session-panel-toggle"
+              :class="{ 'session-panel-toggle--active': sessionFilesPanelOpen }"
+              title="Files"
+              aria-label="Toggle files panel"
+              @click="toggleSessionFilesPanel"
+            >
+              <span
+                class="session-panel-toggle__icon"
+                :class="sessionFilesPanelOpen ? 'i-carbon:side-panel-close' : 'i-carbon:side-panel-open'"
+              />
+            </button>
           </div>
 
           <!-- 这里循环渲染即可实现多轮对话 -->
@@ -1895,22 +1933,19 @@ function onComposerPaste(e: ClipboardEvent) {
             </div>
           </div>
         </div>
-          </n-layout-content>
-          <n-layout-sider
-            v-if="!showDefaultPage && uuids[qa_type]"
-            class="session-context-sider"
-            bordered
-            collapse-mode="width"
-            :collapsed-width="0"
-            :width="300"
-            show-trigger="bar"
+          </div>
+          <aside
+            v-if="sessionFilesPanelOpen && !showDefaultPage && uuids[qa_type]"
+            class="session-context-aside"
+            :style="{ backgroundColor: backgroundColorVariable }"
           >
             <SessionContextPanel
               ref="sessionFilesPanelRef"
               :session-id="uuids[qa_type] || ''"
+              :background-color="backgroundColorVariable"
             />
-          </n-layout-sider>
-        </n-layout>
+          </aside>
+        </div>
       </n-layout-content>
     </n-layout>
   </div>
@@ -2140,10 +2175,19 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .content {
-  border-right:1px solid #f6f7fb;
-  background-color: #fff;
+  border-right: 1px solid #f6f7fb;
+}
 
-  // padding: 8px;
+.chat-main-layout {
+  background-color: v-bind(backgroundColorVariable);
+}
+
+.session-context-aside {
+  flex-shrink: 0;
+  width: 320px;
+  min-height: 0;
+  border-left: 1px solid rgb(0 0 0 / 6%);
+  overflow: hidden;
 }
 
 .footer {
@@ -2286,5 +2330,41 @@ function onComposerPaste(e: ClipboardEvent) {
   color: #94a3b8;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
   letter-spacing: 0.02em;
+}
+
+.chat-top-bar {
+  flex-shrink: 0;
+  padding-right: 12px;
+}
+
+.session-panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin-left: 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: #71717a;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.session-panel-toggle:hover {
+  background: rgb(0 0 0 / 5%);
+  color: #3f3f46;
+}
+
+.session-panel-toggle--active {
+  background: rgb(0 0 0 / 5%);
+  color: #475569;
+}
+
+.session-panel-toggle__icon {
+  width: 18px;
+  height: 18px;
 }
 </style>

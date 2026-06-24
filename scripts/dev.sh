@@ -30,6 +30,7 @@ main() {
   start_qdrant
   start_langfuse
   start_mcp
+  start_sandbox_runner
 
   log_info "启动后端 (app.py, reload 见 config.yaml) ..."
   cd "$BACKEND_DIR"
@@ -54,6 +55,9 @@ main() {
   fi
   if [[ -n "$MCP_PID" ]]; then
     log_info "  - MCP:      PID $MCP_PID"
+  fi
+  if [[ -n "$SANDBOX_RUNNER_PID" ]]; then
+    log_info "  - Sandbox:  PID $SANDBOX_RUNNER_PID (AIO runner)"
   fi
   log_info "=========================================="
   log_info "按 Ctrl+C 停止应用进程"

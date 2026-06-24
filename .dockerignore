@@ -3,7 +3,9 @@
 .github
 .cursor
 .claude
+.codex
 **/.DS_Store
+.idea
 
 # 前端
 **/node_modules
@@ -15,7 +17,6 @@ frontend/dist
 **/.pytest_cache
 **/.venv
 **/.mypy_cache
-backend/checkpoints
 
 # 本地密钥（示例文件在 deploy/ 下单独跟踪）
 **/.env
@@ -23,13 +24,11 @@ backend/checkpoints
 !deploy/.env.docker.example
 deploy/.env.docker
 
-# 体积与无关目录
-e2e-tests
-qdrant_storage
+# 本地运行时与评测产物
 .data
-*.omc
 **/logs
-README.assets
-dev-tools
+results/
+.promptfoo/
+AGENTS.local.md
 
 # 部署制品统一在 deploy/（backend/Dockerfile、frontend/Dockerfile、mcp/Dockerfile）

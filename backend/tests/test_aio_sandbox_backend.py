@@ -141,16 +141,16 @@ async def test_ensure_user_sandbox_fails_without_docker(_mock: MagicMock) -> Non
 
 
 @pytest.mark.asyncio
-async def test_create_user_sandbox_backend_has_user_skills_route() -> None:
+async def test_create_aio_agent_backend_has_user_skills_route() -> None:
     from unittest.mock import AsyncMock
 
-    from agent.backends.aio_sandbox import create_user_sandbox_backend
+    from agent.backends.aio_sandbox import create_aio_agent_backend
 
     with patch(
         "services.sandbox_service.ensure_user_sandbox",
         new_callable=AsyncMock,
         return_value="http://aio:8080",
     ):
-        backend = await create_user_sandbox_backend("u1", "s1")
+        backend = await create_aio_agent_backend("u1", "s1")
     assert "/skills/" in backend.routes
     assert "/user-skills/" in backend.routes

@@ -1,5 +1,6 @@
 import { query_user_qa_record } from '@/api'
 import { getSessionMessages } from '@/api/chat'
+import { isImagePreviewPath } from '@/utils/filePreview'
 import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
 const userStore = useUserStore()
@@ -188,7 +189,7 @@ async function loadSessionMessages(
             const refPrefix = '__CHAT_ATTACHMENT__:'
             const isChatRef = strVal.startsWith(refPrefix)
             const attachmentId = isChatRef ? strVal.slice(refPrefix.length) : ''
-            const isImage = /\.(?:png|jpe?g|gif|webp)$/i.test(fileName)
+            const isImage = isImagePreviewPath(fileName)
             return {
               file_name: fileName,
               attachment_id: attachmentId,

@@ -3,6 +3,7 @@ import type { UploadFileInfo } from 'naive-ui'
 import type { PropType } from 'vue'
 import type { ChatAttachmentItem } from '@/store/business'
 import { deleteSessionAttachment, uploadSessionAttachment } from '@/api/chat'
+import { getFileTypeIconClass, isImagePreviewPath, isImageUploadFile } from '@/utils/filePreview'
 
 const props = defineProps({
   /** kb：知识库 tmp；chat：会话附件 API（COMMON_QA） */
@@ -40,8 +41,7 @@ function isDocumentFile(file: File): boolean {
 }
 
 function isImageFile(file: File): boolean {
-  return file.type.startsWith('image/')
-    || /\.(?:jpe?g|png|webp|gif)$/i.test(file.name)
+  return isImageUploadFile(file)
 }
 
 function createUploadFileInfo(file: File): ExtendedUploadFileInfo {
@@ -364,35 +364,26 @@ const UploadWrapperItem = defineComponent({
       return props.deferUpload ? 'queued' : 'parsing'
     })
 
-    const isImage = computed(() => props.fileInfo.type?.includes('image'))
+    const isImage = computed(() => {
+      const file = props.fileInfo.file
+      if (file) {
+        return isImageUploadFile(file)
+      }
+      return isImagePreviewPath(props.fileInfo.name || '')
+    })
     const fileName = computed(() => props.fileInfo.name || '')
     const previewImageUrl = ref('')
 
     watchEffect(() => {
       const file = props.fileInfo.file
-      if (file && isImage.value) {
+      if (file && isImageUploadFile(file)) {
         previewImageUrl.value = URL.createObjectURL(file)
       }
     })
 
     const currentStatus = computed(() => statusList.value.find((item) => item.status === _status.value))
 
-    const fileTypeIconMap = ref({
-      xlsx: 'i-vscode-icons:file-type-excel2',
-      xls: 'i-vscode-icons:file-type-excel2',
-      csv: 'i-vscode-icons:file-type-excel2',
-      docx: 'i-vscode-icons:file-type-word',
-      doc: 'i-vscode-icons:file-type-word',
-      pdf: 'i-vscode-icons:file-type-pdf2',
-      pptx: 'i-vscode-icons:file-type-powerpoint',
-      ppt: 'i-vscode-icons:file-type-powerpoint',
-      md: 'i-vscode-icons:file-type-markdown',
-    })
-
-    const fileIcon = computed(() => {
-      const fileExtension = fileName.value.split('.').pop()?.toLowerCase()
-      return fileTypeIconMap.value[fileExtension as keyof typeof fileTypeIconMap.value]
-    })
+    const fileIcon = computed(() => getFileTypeIconClass(fileName.value))
 
     return {
       isImage,

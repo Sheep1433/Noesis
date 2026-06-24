@@ -215,16 +215,9 @@ class WebToolsSettings:
 
 @dataclass(frozen=True)
 class SandboxSettings:
-    enabled: bool
+    backend: str
     runner_url: str
-    runner_token: str
-    aio_image: str
-    aio_port: int
-    idle_ttl_seconds: int
-    max_replicas: int
     execute_timeout_seconds: int
-    host_data_dir: str
-    sdk_version: str
 
 
 @dataclass(frozen=True)
@@ -491,23 +484,23 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
 
 def _build_sandbox(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> SandboxSettings:
     sb = yaml_cfg.sandbox
-    from common.paths import DATA_DIR
-
-    default_host_data = str(DATA_DIR)
+    backend = _legacy_env("SANDBOX_BACKEND", sb.backend).strip().lower() or "aio"
+    if backend not in ("aio", "local_shell"):
+        backend = "aio"
     return SandboxSettings(
-        enabled=_legacy_env_bool("SANDBOX_ENABLED", sb.enabled),
+        backend=backend,
         runner_url=_legacy_env("SANDBOX_RUNNER_URL", sb.runner_url),
-        runner_token=secrets.sandbox_runner_token or _legacy_env("SANDBOX_RUNNER_TOKEN", ""),
-        aio_image=_legacy_env("SANDBOX_AIO_IMAGE", sb.aio_image),
-        aio_port=_legacy_env_int("SANDBOX_AIO_PORT", sb.aio_port),
-        idle_ttl_seconds=_legacy_env_int("SANDBOX_IDLE_TTL_SECONDS", sb.idle_ttl_seconds),
-        max_replicas=_legacy_env_int("SANDBOX_MAX_REPLICAS", sb.max_replicas),
         execute_timeout_seconds=_legacy_env_int(
             "SANDBOX_EXECUTE_TIMEOUT_SECONDS", sb.execute_timeout_seconds
         ),
-        host_data_dir=_legacy_env("NOESIS_HOST_DATA_DIR", default_host_data),
-        sdk_version=_legacy_env("SANDBOX_SDK_VERSION", sb.sdk_version),
     )
+
+
+def get_sandbox_runner_token(secrets: EnvSecrets | None = None) -> str:
+    """runner 鉴权 token（仅 .env，不进 config.yaml）。"""
+    if secrets is None:
+        secrets = EnvSecrets()
+    return secrets.sandbox_runner_token or _legacy_env("SANDBOX_RUNNER_TOKEN", "")
 
 
 def _build_checkpoint(yaml_cfg: AppYamlConfig) -> CheckpointSettings:

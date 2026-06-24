@@ -8,6 +8,7 @@ import threading
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
+from deepagents.backends import CompositeBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
     FileDownloadResponse,
@@ -204,24 +205,8 @@ class AioSandboxBackend(BaseSandbox):
         return super().glob(pattern, path=self._resolve_path(path))
 
 
-async def create_user_workspace_backend(user_id: str, session_id: str) -> AioSandboxBackend:
-    """仅 session workspace 的 AIO backend（故障运维等）。"""
-    from services.sandbox_service import ensure_user_sandbox
-
-    base_url = await ensure_user_sandbox(user_id)
-    return AioSandboxBackend(
-        base_url=base_url,
-        user_id=user_id,
-        session_id=session_id,
-        root_dir=f"/workspace/sessions/{session_id}/workspace",
-        inject_browser_env=True,
-    )
-
-
-async def create_user_sandbox_backend(user_id: str, session_id: str):
-    """创建 CompositeBackend：session workspace + 平台 /skills/ + 用户 /user-skills/。"""
-    from deepagents.backends import CompositeBackend
-
+async def create_aio_agent_backend(user_id: str, session_id: str) -> CompositeBackend:
+    """AIO CompositeBackend：session workspace + 平台 /skills/ + 用户 /user-skills/。"""
     from services.sandbox_service import ensure_user_sandbox
 
     base_url = await ensure_user_sandbox(user_id)

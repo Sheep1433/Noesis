@@ -12,6 +12,7 @@ QDRANT_STORAGE="${QDRANT_STORAGE:-$ROOT/.data/qdrant}"
 MCP_PID=""
 BACKEND_PID=""
 FRONTEND_PID=""
+SANDBOX_RUNNER_PID=""
 
 log_info() { echo -e "${GREEN:-}[INFO]${NC:-} $*"; }
 log_warn() { echo -e "${YELLOW:-}[WARN]${NC:-} $*"; }
@@ -95,8 +96,80 @@ start_mcp() {
   log_info "MCP server started (PID: $MCP_PID)"
 }
 
+_should_start_sandbox_runner() {
+  if [[ "${SANDBOX_BACKEND:-}" == "local_shell" ]]; then
+    return 1
+  fi
+  local config="${NOESIS_CONFIG_PATH:-$BACKEND_DIR/config.yaml}"
+  if [[ -f "$config" ]] && grep -A8 '^sandbox:' "$config" | grep -qE 'backend:[[:space:]]*local_shell'; then
+    return 1
+  fi
+  return 0
+}
+
+_sandbox_runner_health_url() {
+  local config="${NOESIS_CONFIG_PATH:-$BACKEND_DIR/config.yaml}"
+  local url="http://127.0.0.1:8090"
+  if [[ -f "$config" ]]; then
+    local parsed
+    parsed="$(grep -A8 '^sandbox:' "$config" | grep -E 'runner_url:' | head -1 | sed -E 's/.*runner_url:[[:space:]]*//; s/[[:space:]]+#.*//; s/^"//; s/"$//')"
+    if [[ -n "$parsed" ]]; then
+      url="${parsed%/}"
+    fi
+  fi
+  echo "$url"
+}
+
+wait_sandbox_runner() {
+  local base url
+  base="$(_sandbox_runner_health_url)"
+  for _ in $(seq 1 30); do
+    if curl -fsS "${base}/health" &>/dev/null; then
+      log_info "sandbox-runner 就绪: ${base}"
+      return 0
+    fi
+    sleep 1
+  done
+  log_warn "sandbox-runner 健康检查超时 (${base})"
+  return 1
+}
+
+start_sandbox_runner() {
+  if ! _should_start_sandbox_runner; then
+    log_info "sandbox.backend=local_shell，跳过 sandbox-runner"
+    return 0
+  fi
+
+  local base
+  base="$(_sandbox_runner_health_url)"
+  if curl -fsS "${base}/health" &>/dev/null; then
+    log_info "sandbox-runner 已在运行 (${base})"
+    return 0
+  fi
+
+  if ! command -v docker &>/dev/null; then
+    log_warn "Docker 未安装，无法启动 sandbox-runner（AIO 沙箱不可用）"
+    return 0
+  fi
+
+  if ! command -v uv &>/dev/null; then
+    log_warn "uv 未安装，无法自动启动 sandbox-runner"
+    return 0
+  fi
+
+  log_info "启动 sandbox-runner（路径自动对齐仓库 .data/ 与 extensions/skills）..."
+  cd "$ROOT/deploy/sandbox-runner"
+  uv run python main.py &
+  SANDBOX_RUNNER_PID=$!
+  log_info "sandbox-runner started (PID: $SANDBOX_RUNNER_PID)"
+  wait_sandbox_runner || true
+}
+
 stack_cleanup() {
   log_info "Stopping app processes..."
+  if [[ -n "$SANDBOX_RUNNER_PID" ]]; then
+    kill "$SANDBOX_RUNNER_PID" 2>/dev/null || true
+  fi
   if [[ -n "$MCP_PID" ]]; then
     kill "$MCP_PID" 2>/dev/null || true
   fi

@@ -1,8 +1,11 @@
-<!-- src/components/FileListItem.vue -->
 <script setup lang="ts">
 import type { PropType } from 'vue'
+import {
+  getFileBaseName,
+  getFileTypeIconClass,
+  isImageAttachment,
+} from '@/utils/filePreview'
 
-// 定义 props
 const props = defineProps({
   file: {
     type: Object as PropType<{
@@ -18,20 +21,12 @@ const props = defineProps({
   },
 })
 
-// 提取文件名
-const getFileName = (fileKey: string) => {
-  if (!fileKey) {
-    return ''
-  }
-  return fileKey.split('/').pop() || fileKey
-}
+const displayName = computed(() => {
+  return props.file.file_name || getFileBaseName(props.file.source_file_key)
+})
 
 const isImage = computed(() => {
-  if (props.file.kind === 'image') {
-    return true
-  }
-  const name = props.file.file_name || props.file.source_file_key
-  return /\.(?:png|jpe?g|gif|webp)$/i.test(name)
+  return isImageAttachment(props.file.kind, displayName.value)
 })
 
 const imageSrc = computed(() => {
@@ -44,33 +39,9 @@ const imageSrc = computed(() => {
   return ''
 })
 
-// 计算文件名
-const fileName = computed(() => props.file.file_name || getFileName(props.file.source_file_key))
-
-// 获取文件图标类名
-const getFileIconClass = (fileKey: string) => {
-  if (!fileKey) {
-    return ''
-  }
-  const name = getFileName(fileKey)
-  const extension = name.split('.').pop()?.toLowerCase() || ''
-
-  const fileTypeIconMap: Record<string, string> = {
-    xlsx: 'i-vscode-icons:file-type-excel2',
-    xls: 'i-vscode-icons:file-type-excel2',
-    csv: 'i-vscode-icons:file-type-excel2',
-    docx: 'i-vscode-icons:file-type-word',
-    doc: 'i-vscode-icons:file-type-word',
-    pdf: 'i-vscode-icons:file-type-pdf2',
-    pptx: 'i-vscode-icons:file-type-powerpoint',
-    ppt: 'i-vscode-icons:file-type-powerpoint',
-  }
-
-  return fileTypeIconMap[extension] || 'i-material-symbols:file-open-outline'
-}
-
-// 计算图标类名
-const iconClass = computed(() => getFileIconClass(props.file.source_file_key))
+const iconClass = computed(() => {
+  return getFileTypeIconClass(props.file.source_file_key || displayName.value)
+})
 </script>
 
 <template>
@@ -104,7 +75,7 @@ const iconClass = computed(() => getFileIconClass(props.file.source_file_key))
           'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
         }"
       >
-        {{ fileName }}
+        {{ displayName }}
       </n-ellipsis>
 
       <div

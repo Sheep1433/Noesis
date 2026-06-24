@@ -49,6 +49,7 @@ main() {
   start_qdrant
   start_langfuse
   start_mcp
+  start_sandbox_runner
 
   read -r HOST PORT < <(
     cd "$BACKEND_DIR" && uv run python -c "from config.env import AppConfig; print(AppConfig.app_host, AppConfig.app_port)"
@@ -85,6 +86,9 @@ main() {
   fi
   if [[ -n "$MCP_PID" ]]; then
     log_info "  - MCP:      PID $MCP_PID"
+  fi
+  if [[ -n "$SANDBOX_RUNNER_PID" ]]; then
+    log_info "  - Sandbox:  PID $SANDBOX_RUNNER_PID (AIO runner)"
   fi
   log_info "=========================================="
   log_info "推荐生产部署: ./scripts/run.sh docker（nginx + 静态资源）"

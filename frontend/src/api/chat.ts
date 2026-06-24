@@ -145,10 +145,8 @@ export interface SessionFsTreeNode {
 }
 
 export interface SessionContextResponse {
-  workspace: SessionFsTreeNode[]
-  attachments: ChatAttachmentResponse[]
-  workspace_root_exists: boolean
-  workspace_root_path: string
+  tree: SessionFsTreeNode[]
+  session_root_path: string
 }
 
 export interface WorkspaceFileContent {
@@ -325,12 +323,16 @@ export async function deleteSessionAttachment(
 }
 
 /** 会话上下文（工作区 + 附件） GET /api/chat/sessions/{sessionId}/context */
-export async function getSessionContext(sessionId: string): Promise<SessionContextResponse> {
+/** 会话尚未物化时返回 null（HTTP 404），不视为错误 */
+export async function getSessionContext(sessionId: string): Promise<SessionContextResponse | null> {
   const req = makeRequest(
     'GET',
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/context`,
   )
   const res = await authFetch(req)
+  if (res.status === 404) {
+    return null
+  }
   if (!res.ok) {
     throw new Error(`获取会话上下文失败: ${res.status}`)
   }
