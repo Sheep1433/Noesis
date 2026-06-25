@@ -32,28 +32,26 @@ cp backend/evals/.env.example backend/evals/.env
 
 ## 1. 测试用例（`evals.case` + promptfoo）
 
-指标：**L0**、**coverage**、**rag**。手动离线跑分，需 Qdrant（cases/full）+ LLM。
+指标：**L0**、**coverage**、**rag**。每次跑分执行完整流程（场景测试点 → 测试用例），需 Qdrant + LLM。
 
 ```
 evals/case/
-  dataset.py
   runner.py
-  scoring.py
+  scoring.py              # L0 / rag 的 python 断言
   promptfoo/
-  datasets/test_case/
+    promptfooconfig.yaml    # 单文件：prompts + providers + defaultTest.assert + tests
+    coverage_rubric.txt
+    provider.py
+    judge_provider.py
+  datasets/test_case/       # 需求文档（document_path 引用）
 ```
 
 ```bash
 uv run python -m evals.case --tag baseline
-uv run python -m evals.case --tag debug --item-id tc_login_001 --scope testpoints
+uv run python -m evals.case --tag debug --item-id tc_login_001
 ```
 
-环境变量（推荐 `NOESIS_CASE_EVAL_*`，兼容旧 `NOESIS_EVAL_*`）：
-
-- `NOESIS_CASE_EVAL_TAG` / `NOESIS_CASE_EVAL_SCOPE`
-- `NOESIS_CASE_EVAL_ITEM_ID` / `NOESIS_CASE_EVAL_LIMIT` / `NOESIS_CASE_EVAL_DATASET`
-
-coverage 使用真实 LLM Judge；可用 `--compare` 与历史 promptfoo 结果对比。
+coverage 走 promptfoo **llm-rubric**（`coverage_rubric.txt` + `judge_provider.py`）；Judge 不列入顶层 `providers`。
 
 ---
 

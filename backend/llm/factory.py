@@ -36,6 +36,7 @@ def _build_chat_model(
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
+            streaming=ModelConfig.streaming,
         ),
         "minimax": lambda: ChatOpenAI(
             model=model_name,
@@ -44,6 +45,7 @@ def _build_chat_model(
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
+            streaming=ModelConfig.streaming,
         ),
         "opencode": lambda: ChatOpenAI(
             model=model_name,
@@ -52,6 +54,7 @@ def _build_chat_model(
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
+            streaming=ModelConfig.streaming,
             default_headers=_OPENCODE_DEFAULT_HEADERS,
         ),
         "qwen": lambda: ChatQwen(
@@ -74,6 +77,7 @@ def _build_chat_model(
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
+            streaming=ModelConfig.streaming,
         ),
     }
 

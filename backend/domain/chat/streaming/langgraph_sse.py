@@ -14,7 +14,11 @@ from typing import Any, Dict, List, Optional, Set
 
 from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
 from config.env import ModelConfig
-from domain.chat.streaming.reasoning import extract_reasoning_delta
+from domain.chat.streaming.reasoning import (
+    extract_reasoning_delta,
+    extract_text_content,
+    unsent_text_suffix,
+)
 from common.logging import logger
 from domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 from domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
@@ -667,8 +671,9 @@ class LangGraphSseBridge:
                             reasoning_delta,
                             parent_task_call_id=parent_task_call_id,
                         )
+                    ctx["reasoning_buffer"] = (ctx.get("reasoning_buffer") or "") + reasoning_delta
                     self._emit_reasoning_delta(reasoning_delta, out, parent_task_call_id)
-            content = str(getattr(chunk, "content", "") or "") if chunk is not None else ""
+            content = extract_text_content(chunk) if chunk is not None else ""
             if content:
                 if builder is not None:
                     ctx["text_buffer"] = (ctx.get("text_buffer") or "") + content
@@ -683,6 +688,29 @@ class LangGraphSseBridge:
         if lc_kind == "on_chat_model_end":
             data = item.get("data") or {}
             output = data.get("output")
+            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
+            if output is not None:
+                if self._show_thinking:
+                    final_reasoning = extract_reasoning_delta(output)
+                    reasoning_delta = unsent_text_suffix(
+                        final_reasoning or "",
+                        str(ctx.get("reasoning_buffer") or ""),
+                    )
+                    if reasoning_delta:
+                        if builder is not None:
+                            builder.append_reasoning_delta(
+                                reasoning_delta,
+                                parent_task_call_id=parent_task_call_id,
+                            )
+                        ctx["reasoning_buffer"] = (ctx.get("reasoning_buffer") or "") + reasoning_delta
+                        self._emit_reasoning_delta(reasoning_delta, out, parent_task_call_id)
+                final_text = extract_text_content(output)
+                text_delta = unsent_text_suffix(final_text, str(ctx.get("text_buffer") or ""))
+                if text_delta:
+                    if builder is not None:
+                        ctx["text_buffer"] = (ctx.get("text_buffer") or "") + text_delta
+                        ctx["text_buffer_parent_task_call_id"] = parent_task_call_id
+                    self._emit_text_delta(text_delta, out, parent_task_call_id)
             usage_meta = getattr(output, "usage_metadata", None) if output is not None else None
             if not usage_meta and isinstance(output, dict):
                 usage_meta = output.get("usage_metadata")

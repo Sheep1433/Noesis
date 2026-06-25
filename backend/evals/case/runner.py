@@ -1,10 +1,10 @@
-"""测试用例 Agent 离线 runner（直接调用 case_graph 节点）。"""
+"""测试用例 Agent 离线 runner（直调 case_graph：场景测试点 → 测试用例）。"""
 
 from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from langgraph.types import Command
 
@@ -16,8 +16,6 @@ from agent.case_generate.case_graph import (
 from config.env import LangfuseConfig
 from evals.langfuse_env import load_eval_langfuse_settings
 from evals.case.dataset import resolve_document_context
-
-EvalScope = Literal["testpoints", "cases", "full"]
 
 
 def item_scenario_query(item: Dict[str, Any]) -> str:
@@ -73,82 +71,44 @@ def _eval_tracing_note(eval_run_id: str, dataset_item_id: str) -> Dict[str, str]
     }
 
 
-def _apply_fixture_scenes(state: Dict[str, Any], item: Dict[str, Any]) -> bool:
-    fixture = item.get("fixture_scenes_testpoints")
-    if not isinstance(fixture, list) or not fixture:
-        return False
-    state["scenes_testpoints"] = fixture
-    state["error"] = None
-    state["current_phase"] = "testpoints_confirm"
-    return True
-
-
 def run_test_case_item(
     item: Dict[str, Any],
     *,
     dataset_dir,
     eval_run_id: str,
-    scope: EvalScope = "full",
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
     document_context = resolve_document_context(item, dataset_dir)
     query = item_scenario_query(item)
     state: Dict[str, Any] = _initial_state(query=query, document_context=document_context)
-
     tracing = _eval_tracing_note(eval_run_id, item["id"])
-    latency_testpoints_ms: Optional[int] = None
-    latency_cases_ms: Optional[int] = None
 
-    run_testpoints = scope in ("testpoints", "full", "cases")
-    run_cases = scope in ("cases", "full")
+    t_tp = time.perf_counter()
+    cmd1 = generate_scenes_testpoints_node(state)  # type: ignore[arg-type]
+    state = _merge_command(state, cmd1)
+    latency_testpoints_ms = int((time.perf_counter() - t_tp) * 1000)
+    if state.get("error"):
+        return _build_result(
+            item=item,
+            state=state,
+            tracing=tracing,
+            t0=t0,
+            latency_testpoints_ms=latency_testpoints_ms,
+            latency_cases_ms=None,
+        )
 
-    if run_testpoints and scope != "cases":
-        t_tp = time.perf_counter()
-        cmd1 = generate_scenes_testpoints_node(state)  # type: ignore[arg-type]
-        state = _merge_command(state, cmd1)
-        latency_testpoints_ms = int((time.perf_counter() - t_tp) * 1000)
-        if state.get("error"):
-            return _build_result(
-                item=item,
-                state=state,
-                tracing=tracing,
-                t0=t0,
-                scope=scope,
-                latency_testpoints_ms=latency_testpoints_ms,
-                latency_cases_ms=None,
-            )
-    elif run_cases and _apply_fixture_scenes(state, item):
-        latency_testpoints_ms = 0
-    elif run_cases:
-        t_tp = time.perf_counter()
-        cmd1 = generate_scenes_testpoints_node(state)  # type: ignore[arg-type]
-        state = _merge_command(state, cmd1)
-        latency_testpoints_ms = int((time.perf_counter() - t_tp) * 1000)
-        if state.get("error"):
-            return _build_result(
-                item=item,
-                state=state,
-                tracing=tracing,
-                t0=t0,
-                scope=scope,
-                latency_testpoints_ms=latency_testpoints_ms,
-                latency_cases_ms=None,
-            )
-
-    if run_cases:
-        state["selected_point_names"] = collect_all_point_names(state.get("scenes_testpoints") or [])
-        state["current_phase"] = "test_cases"
-        t_cases = time.perf_counter()
-        cmd2 = asyncio.run(generate_test_cases_node(state))  # type: ignore[arg-type]
-        state = _merge_command(state, cmd2)
-        latency_cases_ms = int((time.perf_counter() - t_cases) * 1000)
+    state["selected_point_names"] = collect_all_point_names(state.get("scenes_testpoints") or [])
+    state["current_phase"] = "test_cases"
+    t_cases = time.perf_counter()
+    cmd2 = asyncio.run(generate_test_cases_node(state))  # type: ignore[arg-type]
+    state = _merge_command(state, cmd2)
+    latency_cases_ms = int((time.perf_counter() - t_cases) * 1000)
 
     return _build_result(
         item=item,
         state=state,
         tracing=tracing,
         t0=t0,
-        scope=scope,
         latency_testpoints_ms=latency_testpoints_ms,
         latency_cases_ms=latency_cases_ms,
     )
@@ -160,13 +120,11 @@ def _build_result(
     state: Dict[str, Any],
     tracing: Dict[str, str],
     t0: float,
-    scope: EvalScope,
     latency_testpoints_ms: Optional[int],
     latency_cases_ms: Optional[int],
 ) -> Dict[str, Any]:
     return {
         "dataset_item_id": item["id"],
-        "scope": scope,
         "tracing": tracing,
         "state": _public_state(state),
         "latency_ms": int((time.perf_counter() - t0) * 1000),

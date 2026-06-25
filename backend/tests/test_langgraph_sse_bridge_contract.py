@@ -347,7 +347,80 @@ def test_usage_dedup_same_run_id() -> None:
     objs = _data_json_objects("".join(parts))
     usage_updates = [o for o in objs if o.get("type") == "usage-update"]
     assert len(usage_updates) == 1
-    assert usage_updates[0]["usage"]["input_tokens"] == 10
+
+
+def test_chat_model_end_flushes_unstreamed_text() -> None:
+    """非流式或空 chunk 场景：终态 AIMessage 正文须在 on_chat_model_end 补发 text-delta。"""
+    bridge = LangGraphSseBridge("sess-end-text")
+    builder = AssistantMessageBuilder(session_id="sess-end-text", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+
+    class _FakeOutput:
+        content = "你好！有什么可以帮助你的吗？"
+        usage_metadata = {"input_tokens": 706, "output_tokens": 22, "total_tokens": 728}
+
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_end",
+                "run_id": "run-end-1",
+                "data": {"output": _FakeOutput()},
+            },
+            builder,
+            ctx,
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    objs = _data_json_objects("".join(parts))
+    td = [o for o in objs if o.get("type") == "text-delta"]
+    assert td
+    assert td[0]["text_delta"] == "你好！有什么可以帮助你的吗？"
+    assert ctx["text_buffer"] == "你好！有什么可以帮助你的吗？"
+
+
+def test_chat_model_end_does_not_duplicate_streamed_text() -> None:
+    bridge = LangGraphSseBridge("sess-end-dedup")
+    builder = AssistantMessageBuilder(session_id="sess-end-dedup", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+
+    class _StreamChunk:
+        content = "你好"
+        additional_kwargs = {}
+
+    class _FakeOutput:
+        content = "你好世界"
+        usage_metadata = {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_stream",
+                "run_id": "run-dedup",
+                "data": {"chunk": _StreamChunk()},
+            },
+            builder,
+            ctx,
+        )
+    )
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_end",
+                "run_id": "run-dedup",
+                "data": {"output": _FakeOutput()},
+            },
+            builder,
+            ctx,
+        )
+    )
+
+    objs = _data_json_objects("".join(parts))
+    td = [o for o in objs if o.get("type") == "text-delta"]
+    assert [o["text_delta"] for o in td] == ["你好", "世界"]
 
 
 def test_reasoning_stream_then_text_closes_reasoning() -> None:

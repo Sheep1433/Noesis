@@ -16,24 +16,41 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from evals.case.dataset import resolve_document_context
-from evals.case.runner import EvalScope, run_test_case_item
+from evals.case.dataset import DEFAULT_DATASET, load_dataset, resolve_document_context
+from evals.case.runner import run_test_case_item
 from evals.langfuse_env import eval_langfuse_run
 
 CASE_DATASET_DIR = Path(__file__).resolve().parents[1] / "datasets" / "test_case"
 
 
-def _resolve_scope(options: Optional[Dict[str, Any]]) -> EvalScope:
-    config = (options or {}).get("config") or {}
-    scope = (
-        config.get("scope")
-        or os.environ.get("NOESIS_CASE_EVAL_SCOPE")
-        or os.environ.get("NOESIS_EVAL_SCOPE")
-        or "full"
-    )
-    if scope not in ("testpoints", "cases", "full"):
-        raise ValueError(f"无效 scope: {scope}")
-    return scope  # type: ignore[return-value]
+def _resolve_dataset_path() -> Path:
+    raw = os.environ.get("NOESIS_CASE_EVAL_DATASET") or os.environ.get("NOESIS_EVAL_DATASET")
+    return Path(raw).resolve() if raw else DEFAULT_DATASET
+
+
+def _resolve_item(context: Dict[str, Any]) -> Dict[str, Any]:
+    vars_ = context.get("vars") or {}
+    item = vars_.get("item")
+    if isinstance(item, dict):
+        return item
+
+    item_id = vars_.get("item_id")
+    if not item_id:
+        raise ValueError("测试用例缺少 vars.item_id")
+
+    document_path = vars_.get("document_path")
+    if document_path:
+        return {
+            "id": item_id,
+            "scenario_description": vars_.get("scenario_description") or "",
+            "document_path": document_path,
+            "ground_truth": vars_.get("ground_truth") or {},
+        }
+
+    for row in load_dataset(_resolve_dataset_path()):
+        if row.get("id") == item_id:
+            return row
+    raise ValueError(f"未找到 item: {item_id}")
 
 
 def _eval_run_id(tag: str) -> str:
@@ -43,26 +60,20 @@ def _eval_run_id(tag: str) -> str:
     return f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{tag}_{uuid.uuid4().hex[:8]}"
 
 
-def _ensure_qdrant(scope: EvalScope) -> None:
-    if scope not in ("cases", "full"):
-        return
+def _ensure_qdrant() -> None:
     from services.qdrant_service import init_qdrant_client
 
     if not asyncio.run(init_qdrant_client()):
         raise RuntimeError(
-            "Qdrant 连接失败：scope=cases/full 需要向量库。"
+            "Qdrant 连接失败：测试用例生成需要向量库。"
             "请确认 Qdrant 已启动且 .env 中 qdrant_host/qdrant_port 正确。"
         )
 
 
 def call_api(prompt: str, options: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None):
     context = context or {}
-    item = (context.get("vars") or {}).get("item")
-    if not isinstance(item, dict):
-        raise ValueError("测试用例缺少 vars.item")
-
-    scope = _resolve_scope(options)
-    _ensure_qdrant(scope)
+    item = _resolve_item(context)
+    _ensure_qdrant()
 
     tag = (
         os.environ.get("NOESIS_CASE_EVAL_TAG")
@@ -77,14 +88,12 @@ def call_api(prompt: str, options: Optional[Dict[str, Any]] = None, context: Opt
             item,
             dataset_dir=CASE_DATASET_DIR,
             eval_run_id=eval_run_id,
-            scope=scope,
         )
 
     return {
         "output": json.dumps(run_output, ensure_ascii=False),
         "metadata": {
             "dataset_item_id": item.get("id"),
-            "scope": scope,
             "eval_run_id": eval_run_id,
             "latency_ms": run_output.get("latency_ms"),
             "document_context_chars": len(resolve_document_context(item, CASE_DATASET_DIR)),

@@ -1,23 +1,171 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: Noesis 测试用例 Agent 离线评测（evals.case：L0 / coverage / rag）
-
+# prompts + providers + defaultTest.assert + tests（官方单文件结构）
+description: Noesis 测试用例 Agent 离线评测（L0 + coverage + rag）
 prompts:
-  - "{{scenario_description}}"
-
+- '{{scenario_description}}'
 providers:
-  - id: file://provider.py
-    label: test-case-agent
-    config:
-      pythonExecutable: ./run-python.sh
-
-tests:
-  - path: file://tests.py:generate_tests
-    config:
-      pythonExecutable: ./run-python.sh
-
+- id: file://provider.py
+  label: test-case-agent
+  config:
+    pythonExecutable: ./run-python.sh
 evaluateOptions:
   maxConcurrency: 1
-
 defaultTest:
   options:
     provider: test-case-agent
+  assert:
+  - type: python
+    value: file://../scoring.py:assert_l0
+    metric: l0
+  - type: llm-rubric
+    value: file://coverage_rubric.txt
+    metric: point_coverage_recall
+    provider:
+      id: file://judge_provider.py
+      config:
+        pythonExecutable: ./run-python.sh
+  - type: python
+    value: file://../scoring.py:assert_rag
+    metric: rag_hit_at_3
+tests:
+- description: tc_login_001
+  metadata:
+    item_id: tc_login_001
+  vars:
+    item_id: tc_login_001
+    scenario_description: 重点覆盖登录失败与验证码场景
+    document_path: documents/tc_login_001.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 用户登录
+        point_name: 用户名密码错误提示
+      - scene_name: 用户登录
+        point_name: 验证码过期刷新
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"用户登录\",\n    \"point_name\"\
+      : \"用户名密码错误提示\"\n  },\n  {\n    \"scene_name\": \"用户登录\",\n    \"point_name\"\
+      : \"验证码过期刷新\"\n  }\n]\n"
+- description: tc_login_002
+  metadata:
+    item_id: tc_login_002
+  vars:
+    item_id: tc_login_002
+    scenario_description: 覆盖扫码与绑定异常
+    document_path: documents/tc_login_002.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 扫码登录
+        point_name: 企业微信扫码登录成功
+      - scene_name: 账号绑定
+        point_name: 首次绑定本地账号
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\"\
+      : \"企业微信扫码登录成功\"\n  },\n  {\n    \"scene_name\": \"账号绑定\",\n    \"point_name\"\
+      : \"首次绑定本地账号\"\n  }\n]\n"
+- description: tc_login_003
+  metadata:
+    item_id: tc_login_003
+  vars:
+    item_id: tc_login_003
+    scenario_description: 记住我与登出
+    document_path: documents/tc_login_003.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 会话管理
+        point_name: 记住我7天免登录
+      - scene_name: 会话管理
+        point_name: 登出后其它标签页失效
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"会话管理\",\n    \"point_name\"\
+      : \"记住我7天免登录\"\n  },\n  {\n    \"scene_name\": \"会话管理\",\n    \"point_name\"\
+      : \"登出后其它标签页失效\"\n  }\n]\n"
+- description: tc_upload_001
+  metadata:
+    item_id: tc_upload_001
+  vars:
+    item_id: tc_upload_001
+    scenario_description: 格式与大小限制
+    document_path: documents/tc_upload_001.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 文件上传
+        point_name: 不支持格式提示
+      - scene_name: 文件上传
+        point_name: 超过20MB拦截
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"文件上传\",\n    \"point_name\"\
+      : \"不支持格式提示\"\n  },\n  {\n    \"scene_name\": \"文件上传\",\n    \"point_name\"\
+      : \"超过20MB拦截\"\n  }\n]\n"
+- description: tc_upload_002
+  metadata:
+    item_id: tc_upload_002
+  vars:
+    item_id: tc_upload_002
+    scenario_description: 分片与断点续传
+    document_path: documents/tc_upload_002.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 大文件上传
+        point_name: 超过5MB启用分片
+      - scene_name: 大文件上传
+        point_name: 合并失败可重试
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"大文件上传\",\n    \"point_name\"\
+      : \"超过5MB启用分片\"\n  },\n  {\n    \"scene_name\": \"大文件上传\",\n    \"point_name\"\
+      : \"合并失败可重试\"\n  }\n]\n"
+- description: tc_upload_003
+  metadata:
+    item_id: tc_upload_003
+  vars:
+    item_id: tc_upload_003
+    scenario_description: 扫描与隔离
+    document_path: documents/tc_upload_003.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 安全扫描
+        point_name: 高危文件隔离
+      - scene_name: 安全扫描
+        point_name: 隔离文件不可下载
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"安全扫描\",\n    \"point_name\"\
+      : \"高危文件隔离\"\n  },\n  {\n    \"scene_name\": \"安全扫描\",\n    \"point_name\":\
+      \ \"隔离文件不可下载\"\n  }\n]\n"
+- description: tc_approval_001
+  metadata:
+    item_id: tc_approval_001
+  vars:
+    item_id: tc_approval_001
+    scenario_description: 请假审批全流程
+    document_path: documents/tc_approval_001.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 请假审批
+        point_name: 年假提前1天提交
+      - scene_name: 请假审批
+        point_name: 驳回须填原因
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"请假审批\",\n    \"point_name\"\
+      : \"年假提前1天提交\"\n  },\n  {\n    \"scene_name\": \"请假审批\",\n    \"point_name\"\
+      : \"驳回须填原因\"\n  }\n]\n"
+- description: tc_approval_002
+  metadata:
+    item_id: tc_approval_002
+  vars:
+    item_id: tc_approval_002
+    scenario_description: 采购金额分级
+    document_path: documents/tc_approval_002.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 采购审批
+        point_name: 1万以下部门经理审批
+      - scene_name: 采购审批
+        point_name: 必须上传报价单PDF
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"采购审批\",\n    \"point_name\"\
+      : \"1万以下部门经理审批\"\n  },\n  {\n    \"scene_name\": \"采购审批\",\n    \"point_name\"\
+      : \"必须上传报价单PDF\"\n  }\n]\n"
+- description: tc_sparse_001
+  metadata:
+    item_id: tc_sparse_001
+  vars:
+    item_id: tc_sparse_001
+    scenario_description: 请根据现有信息设计测试范围
+    document_path: documents/tc_sparse_001.md
+    ground_truth:
+      golden_test_points:
+      - scene_name: 需求澄清
+        point_name: 信息不足时的合理假设
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"需求澄清\",\n    \"point_name\"\
+      : \"信息不足时的合理假设\"\n  }\n]\n"

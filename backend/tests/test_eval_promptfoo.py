@@ -1,17 +1,53 @@
-"""promptfoo 测试生成与断言（无 LLM / 无 promptfoo CLI）。"""
+"""promptfoo 配置与断言（无 LLM / 无 promptfoo CLI）。"""
+
+from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import yaml
 
 from evals.case.dataset import DEFAULT_DATASET, load_dataset
-from evals.case.promptfoo.tests import generate_tests
 from evals.case.scoring import assert_l0
 
+PROMPTFOO_DIR = Path(__file__).resolve().parents[1] / "evals" / "case" / "promptfoo"
 
-def test_generate_tests_default():
-    tests = generate_tests({"scope": "testpoints", "limit": 1})
-    assert len(tests) == 1
-    assert tests[0]["vars"]["item_id"]
-    assert any(a.get("metric") == "l0" for a in tests[0]["assert"])
+
+def _load_config() -> dict:
+    return yaml.safe_load((PROMPTFOO_DIR / "promptfooconfig.yaml").read_text(encoding="utf-8"))
+
+
+def test_promptfooconfig_has_cases():
+    cfg = _load_config()
+    tests = cfg.get("tests") or []
+    assert len(tests) >= 1
+    first = tests[0]
+    assert first.get("description")
+    assert first["vars"]["item_id"]
+    assert first["vars"]["scenario_description"]
+    assert first["vars"]["document_path"]
+    assert "item" not in first["vars"]
+
+
+def test_promptfooconfig_uses_llm_rubric_for_coverage():
+    asserts = (cfg := _load_config()).get("defaultTest", {}).get("assert") or []
+    types = [a.get("type") for a in asserts]
+    assert "llm-rubric" in types
+    coverage = [a for a in asserts if a.get("metric") == "point_coverage_recall"][0]
+    assert coverage["value"].endswith("coverage_rubric.txt")
+    assert coverage["provider"]["id"].endswith("judge_provider.py")
+
+
+def test_promptfooconfig_includes_all_metrics():
+    asserts = (_load_config().get("defaultTest") or {}).get("assert") or []
+    assert {a.get("metric") for a in asserts} == {"l0", "point_coverage_recall", "rag_hit_at_3"}
+
+
+def test_promptfooconfig_aligns_with_dataset_ids():
+    tests = _load_config().get("tests") or []
+    yaml_ids = {t["vars"]["item_id"] for t in tests}
+    dataset_ids = {i["id"] for i in load_dataset(DEFAULT_DATASET)}
+    assert yaml_ids == dataset_ids
 
 
 def test_assert_l0_on_valid_output():
@@ -37,5 +73,5 @@ def test_assert_l0_on_valid_output():
         },
         ensure_ascii=False,
     )
-    result = assert_l0(output, {"vars": {"item": item}})
+    result = assert_l0(output, {"vars": {"ground_truth": item.get("ground_truth") or {}}})
     assert result["pass"] is True
