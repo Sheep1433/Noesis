@@ -15,7 +15,7 @@ from agent.case_generate.case_graph import (
 )
 from config.env import LangfuseConfig
 from evals.langfuse_env import load_eval_langfuse_settings
-from evals.case.dataset import resolve_document_context
+from evals.case.fixtures import resolve_document_context
 
 
 def item_scenario_query(item: Dict[str, Any]) -> str:
@@ -74,11 +74,10 @@ def _eval_tracing_note(eval_run_id: str, dataset_item_id: str) -> Dict[str, str]
 def run_test_case_item(
     item: Dict[str, Any],
     *,
-    dataset_dir,
     eval_run_id: str,
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
-    document_context = resolve_document_context(item, dataset_dir)
+    document_context = resolve_document_context(item)
     query = item_scenario_query(item)
     state: Dict[str, Any] = _initial_state(query=query, document_context=document_context)
     tracing = _eval_tracing_note(eval_run_id, item["id"])

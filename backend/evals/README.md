@@ -37,13 +37,14 @@ cp backend/evals/.env.example backend/evals/.env
 ```
 evals/case/
   runner.py
+  fixtures.py             # 需求文档路径解析
   scoring.py              # L0 / rag 的 python 断言
   promptfoo/
     promptfooconfig.yaml    # 单文件：prompts + providers + defaultTest.assert + tests
+    fixtures/documents/   # 各用例需求 Markdown
     coverage_rubric.txt
     provider.py
     judge_provider.py
-  datasets/test_case/       # 需求文档（document_path 引用）
 ```
 
 ```bash

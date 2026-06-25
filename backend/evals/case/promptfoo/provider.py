@@ -16,41 +16,25 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from evals.case.dataset import DEFAULT_DATASET, load_dataset, resolve_document_context
+from evals.case.fixtures import resolve_document_context
 from evals.case.runner import run_test_case_item
 from evals.langfuse_env import eval_langfuse_run
-
-CASE_DATASET_DIR = Path(__file__).resolve().parents[1] / "datasets" / "test_case"
-
-
-def _resolve_dataset_path() -> Path:
-    raw = os.environ.get("NOESIS_CASE_EVAL_DATASET") or os.environ.get("NOESIS_EVAL_DATASET")
-    return Path(raw).resolve() if raw else DEFAULT_DATASET
 
 
 def _resolve_item(context: Dict[str, Any]) -> Dict[str, Any]:
     vars_ = context.get("vars") or {}
-    item = vars_.get("item")
-    if isinstance(item, dict):
-        return item
-
     item_id = vars_.get("item_id")
     if not item_id:
         raise ValueError("测试用例缺少 vars.item_id")
-
     document_path = vars_.get("document_path")
-    if document_path:
-        return {
-            "id": item_id,
-            "scenario_description": vars_.get("scenario_description") or "",
-            "document_path": document_path,
-            "ground_truth": vars_.get("ground_truth") or {},
-        }
-
-    for row in load_dataset(_resolve_dataset_path()):
-        if row.get("id") == item_id:
-            return row
-    raise ValueError(f"未找到 item: {item_id}")
+    if not document_path:
+        raise ValueError(f"测试用例 {item_id} 缺少 vars.document_path")
+    return {
+        "id": item_id,
+        "scenario_description": vars_.get("scenario_description") or "",
+        "document_path": document_path,
+        "ground_truth": vars_.get("ground_truth") or {},
+    }
 
 
 def _eval_run_id(tag: str) -> str:
@@ -84,11 +68,7 @@ def call_api(prompt: str, options: Optional[Dict[str, Any]] = None, context: Opt
 
     session_id = f"eval-case-{item.get('id')}-{eval_run_id}"
     with eval_langfuse_run(line="case", tag=tag, session_id=session_id):
-        run_output = run_test_case_item(
-            item,
-            dataset_dir=CASE_DATASET_DIR,
-            eval_run_id=eval_run_id,
-        )
+        run_output = run_test_case_item(item, eval_run_id=eval_run_id)
 
     return {
         "output": json.dumps(run_output, ensure_ascii=False),
@@ -96,6 +76,6 @@ def call_api(prompt: str, options: Optional[Dict[str, Any]] = None, context: Opt
             "dataset_item_id": item.get("id"),
             "eval_run_id": eval_run_id,
             "latency_ms": run_output.get("latency_ms"),
-            "document_context_chars": len(resolve_document_context(item, CASE_DATASET_DIR)),
+            "document_context_chars": len(resolve_document_context(item)),
         },
     }

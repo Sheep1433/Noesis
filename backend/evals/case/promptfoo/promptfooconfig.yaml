@@ -34,7 +34,7 @@ tests:
   vars:
     item_id: tc_login_001
     scenario_description: 重点覆盖登录失败与验证码场景
-    document_path: documents/tc_login_001.md
+    document_path: fixtures/documents/tc_login_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 用户登录
@@ -50,7 +50,7 @@ tests:
   vars:
     item_id: tc_login_002
     scenario_description: 覆盖扫码与绑定异常
-    document_path: documents/tc_login_002.md
+    document_path: fixtures/documents/tc_login_002.md
     ground_truth:
       golden_test_points:
       - scene_name: 扫码登录
@@ -66,7 +66,7 @@ tests:
   vars:
     item_id: tc_login_003
     scenario_description: 记住我与登出
-    document_path: documents/tc_login_003.md
+    document_path: fixtures/documents/tc_login_003.md
     ground_truth:
       golden_test_points:
       - scene_name: 会话管理
@@ -82,7 +82,7 @@ tests:
   vars:
     item_id: tc_upload_001
     scenario_description: 格式与大小限制
-    document_path: documents/tc_upload_001.md
+    document_path: fixtures/documents/tc_upload_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 文件上传
@@ -98,7 +98,7 @@ tests:
   vars:
     item_id: tc_upload_002
     scenario_description: 分片与断点续传
-    document_path: documents/tc_upload_002.md
+    document_path: fixtures/documents/tc_upload_002.md
     ground_truth:
       golden_test_points:
       - scene_name: 大文件上传
@@ -114,7 +114,7 @@ tests:
   vars:
     item_id: tc_upload_003
     scenario_description: 扫描与隔离
-    document_path: documents/tc_upload_003.md
+    document_path: fixtures/documents/tc_upload_003.md
     ground_truth:
       golden_test_points:
       - scene_name: 安全扫描
@@ -130,7 +130,7 @@ tests:
   vars:
     item_id: tc_approval_001
     scenario_description: 请假审批全流程
-    document_path: documents/tc_approval_001.md
+    document_path: fixtures/documents/tc_approval_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 请假审批
@@ -146,7 +146,7 @@ tests:
   vars:
     item_id: tc_approval_002
     scenario_description: 采购金额分级
-    document_path: documents/tc_approval_002.md
+    document_path: fixtures/documents/tc_approval_002.md
     ground_truth:
       golden_test_points:
       - scene_name: 采购审批
@@ -162,7 +162,7 @@ tests:
   vars:
     item_id: tc_sparse_001
     scenario_description: 请根据现有信息设计测试范围
-    document_path: documents/tc_sparse_001.md
+    document_path: fixtures/documents/tc_sparse_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 需求澄清
