@@ -2,10 +2,7 @@
 测试用例生成 — 知识库引用约定与场景级 RAG 召回。
 
 - 阶段 A：file_dict 哨兵 + requirement collection 解析（供 case_coordinator 拉整篇文档）
-- 阶段 B：按场景三路 hybrid 召回并拼接 prompt 上下文
-  1. 当前需求文档（requirement_docs + file_name 过滤）
-  2. 历史相关需求（同 collection，排除当前文档；可配置开关）
-  3. 历史测试用例（test_case_docs）
+- 阶段 B：按场景两路 hybrid 召回（历史需求 + 历史用例）；当前需求由 document_context 全文注入 prompt
 """
 from __future__ import annotations
 
@@ -17,9 +14,9 @@ from kb.retrieval import KbSearchHit
 from domain.observability.langfuse import hits_to_langfuse_payload, langfuse_retrieval_observation
 from common.logging import logger
 
-# file_dict 值为该哨兵时，以 key 作为 file_name 从 requirement_docs 拉取整篇
 TEST_CASE_KB_FILE_DICT_REF = "__FROM_KB__"
 
+# 保留常量供评测/迁移引用；阶段 B trace 不再写入 current_requirement
 CHANNEL_CURRENT_REQUIREMENT = "current_requirement"
 CHANNEL_HISTORICAL_REQUIREMENT = "historical_requirements"
 CHANNEL_HISTORICAL_TEST_CASES = "historical_test_cases"
@@ -52,18 +49,10 @@ def extract_source_file_names(file_list: Optional[Dict[str, Any]]) -> List[str]:
     return names
 
 
-def _current_requirement_filters(source_file_names: List[str]) -> Optional[Dict[str, Any]]:
-    if not source_file_names:
-        return None
-    if len(source_file_names) == 1:
-        return {"file_name": source_file_names[0]}
-    return {"file_name_in": list(source_file_names)}
-
-
-def _historical_requirement_filters(source_file_names: List[str]) -> Optional[Dict[str, Any]]:
+def _historical_requirement_filters(source_file_names: List[str]) -> Dict[str, Any]:
     if source_file_names:
         return {"exclude_file_names": list(source_file_names)}
-    return None
+    return {}
 
 
 class _HybridRetriever:
@@ -190,23 +179,9 @@ async def _build_scene_rag_context_impl(
     req_retriever = _HybridRetriever(collection_name=req_coll)
     tc_retriever = _HybridRetriever(collection_name=tc_coll)
 
-    current_filters = _current_requirement_filters(source_names)
     historical_enabled = bool(QdrantConfig.case_rag_historical_requirements_enabled)
-    historical_filters = (
-        _historical_requirement_filters(source_names) if historical_enabled else None
-    )
+    historical_filters = _historical_requirement_filters(source_names) if historical_enabled else None
 
-    current_coro = (
-        _search_channel(
-            req_retriever,
-            query=query,
-            channel_key=CHANNEL_CURRENT_REQUIREMENT,
-            section_title="当前需求文档片段",
-            filters=current_filters,
-        )
-        if current_filters
-        else _empty_channel()
-    )
     historical_coro = (
         _search_channel(
             req_retriever,
@@ -215,7 +190,7 @@ async def _build_scene_rag_context_impl(
             section_title="历史相关需求片段",
             filters=historical_filters,
         )
-        if historical_filters is not None
+        if historical_enabled
         else _empty_channel()
     )
     test_cases_coro = _search_channel(
@@ -226,26 +201,16 @@ async def _build_scene_rag_context_impl(
     )
 
     (
-        (current_section, current_hits, current_trace),
         (historical_section, historical_hits, historical_trace),
         (tc_section, tc_hits, tc_trace),
-    ) = await asyncio.gather(current_coro, historical_coro, test_cases_coro)
+    ) = await asyncio.gather(historical_coro, test_cases_coro)
 
     sections: List[str] = []
     channels: Dict[str, Dict[str, Any]] = {}
 
-    if current_filters:
-        if current_section:
-            sections.append(current_section)
-        channels[CHANNEL_CURRENT_REQUIREMENT] = current_trace
-        logger.info(
-            f"[CaseRAG] scene={scene_name} channel={CHANNEL_CURRENT_REQUIREMENT} "
-            f"hits={len(current_hits)} collection={req_coll} files={source_names}"
-        )
-
     if historical_section:
         sections.append(historical_section)
-    if historical_filters is not None:
+    if historical_enabled:
         channels[CHANNEL_HISTORICAL_REQUIREMENT] = historical_trace
         logger.info(
             f"[CaseRAG] scene={scene_name} channel={CHANNEL_HISTORICAL_REQUIREMENT} "
@@ -274,7 +239,7 @@ async def build_scene_rag_context(
     source_file_names: Optional[List[str]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    对单个场景执行三路 hybrid 召回并拼接 Markdown 上下文。
+    对单个场景执行两路 hybrid 召回并拼接 Markdown 上下文（不含当前需求；当前需求全文由 case_graph 注入）。
 
     Returns:
         (scene_rag_context, trace_entry) — trace_entry 含 scene_name 与各 channel hit_ids。

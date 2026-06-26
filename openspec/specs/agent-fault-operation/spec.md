@@ -6,7 +6,7 @@
 
 ## Non-Goals
 
-以下能力**未实现**，**不属于**本基线规格的 SHALL 范围；未来实现见 pending change `openspec/changes/fault-operation-agent-experience-learning/`（规格：`specs/fault-operation-experience-learning/spec.md`）：
+以下能力**未实现**，**不属于**本基线规格的 SHALL 范围；未来实现见 pending change `openspec/changes/fault-operation-agent-experience-learning/`：
 
 - 运维经验采集、生命周期治理（`draft`/`active`/`disabled`）
 - 故障对话结束后的经验写入准入与显式「可沉淀」信号

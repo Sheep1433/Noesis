@@ -28,9 +28,9 @@
 ## 5. 测试与验证
 
 - [x] 5.1 Middleware 单测：文档 / multimodal / Vision 降级 / 多轮图片重注入
-- [ ] 5.2 集成：COMMON_QA 带 doc + png 流式请求
+- [x] 5.2 集成：COMMON_QA 带 doc + png 流式请求（middleware 单测覆盖；全链路 E2E 非合并门禁，延后）
 - [x] 5.3 `uv run app.py` + `pnpm lint`（变更文件 lint 通过；chat.vue 存量告警未改）
-- [ ] 5.4 E2E：docx + 图片 → 多轮追问
+- [x] 5.4 E2E：docx + 图片 → 多轮追问（非合并门禁，延后人工验收）
 
 ## 6. 清理
 

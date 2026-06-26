@@ -23,11 +23,10 @@ def test_workspace_backend_root_dir_matches_session(tmp_path: Path) -> None:
             base_url="http://aio:8080",
             user_id="u1",
             session_id="fault-sess-1",
-            root_dir="/workspace/sessions/fault-sess-1/workspace",
             client=fake_client,
         )
 
-    assert backend._root_dir == "/workspace/sessions/fault-sess-1/workspace"
+    assert backend._session_workspace == "/workspace/sessions/fault-sess-1/workspace"
     assert (users_root / "u1" / "sessions" / "fault-sess-1" / "workspace").is_dir()
 
 

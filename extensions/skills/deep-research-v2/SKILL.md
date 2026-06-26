@@ -11,16 +11,17 @@ version: 2.0.0
 
 ## Noesis 运行环境
 
-本 skill 在 DeepResearchAgent 中运行，路径均为 **backend 虚拟路径**（非宿主机绝对路径）：
+本 skill 在 DeepResearchAgent 中运行，路径均为 **沙箱内绝对路径**（`/workspace/...`）：
 
-| 用途 | 虚拟路径 | 说明 |
-|------|----------|------|
-| 工作区（读写） | `/research/<主题-slug>/` | 所有研究产出写在此树下 |
-| 本 skill | `/skills/deep-research-v2/` | 只读 |
-| 网页抓取 | `/skills/baoyu-url-to-markdown/SKILL.md` | 抓取 URL 为 Markdown 时先读此 skill |
-| 文本摘要 | `/skills/summarize/SKILL.md` | 音视频/长文摘要备选 |
+| 用途 | 路径 | 说明 |
+|------|------|------|
+| 工作区（读写） | `/workspace/sessions/<session_id>/workspace/workspace/sessions/<session_id>/workspace/research/<主题-slug>/` | 所有研究产出写在此树下 |
+| Skills（平台+用户） | `/workspace/workspace/skills/` | 平台 skill 为符号链接，与用户上传同目录 |
+| 本 skill | `/workspace/workspace/skills/deep-research-v2/` | 只读（平台链接） |
+| 网页抓取 | `/workspace/workspace/skills/baoyu-url-to-markdown/SKILL.md` | 抓取 URL 为 Markdown 时先读此 skill |
+| 文本摘要 | `/workspace/workspace/skills/summarize/SKILL.md` | 音视频/长文摘要备选 |
 
-**禁止**向 `/skills/` 写入；**禁止**使用 `/Users/...` 等 host 路径。
+**禁止**修改平台 skill 符号链接指向的内容；**禁止**使用 `/Users/...` 等 host 路径。
 
 `<主题-slug>` 规则：小写、连字符分隔、简短英文或拼音，如 `ai-agent-roadmap`。
 
@@ -39,19 +40,19 @@ version: 2.0.0
 ### Phase 1: 研究规划 (Research Planning)
 
 **目标**：明确研究问题、定义边界、设计检索策略  
-**输出**：`/research/<主题-slug>/research-plan.md`
+**输出**：`/workspace/sessions/<session_id>/workspace/research/<主题-slug>/research-plan.md`
 
 必须包含：核心研究问题（3–5 个）、检索关键词矩阵、数据源清单、质量评估标准、预期产出结构。  
-详细协议见 `/skills/deep-research-v2/RESEARCH_PROTOCOL.md`。
+详细协议见 `/workspace/skills/deep-research-v2/RESEARCH_PROTOCOL.md`。
 
 ### Phase 2: 多源检索 (Multi-Source Retrieval)
 
 **目标**：从多源获取信息，避免单一来源偏见  
-**输出**：`/research/<主题-slug>/sources/raw-sources.json`
+**输出**：`/workspace/sessions/<session_id>/workspace/research/<主题-slug>/sources/raw-sources.json`
 
 必须包含：URL、发布时间、作者/机构、摘要。建议来源类型：
 
-- **行业/竞品/政策（首选）**：`web_search` 发现 URL → `web_fetch` 或 `/skills/baoyu-url-to-markdown` 抓取正文
+- **行业/竞品/政策（首选）**：`web_search` 发现 URL → `web_fetch` 或 `/workspace/skills/baoyu-url-to-markdown` 抓取正文
 - **学术**：OpenAlex 公开 API（`execute` + `curl`）、PubMed 检索页
 - **行业**：公司官网、行业报告（复杂页经 baoyu-url-to-markdown 抓取）
 - **政策/专利**：官方站点（如适用）
@@ -62,45 +63,45 @@ OpenAlex 示例（在 `execute` 中运行）：
 curl -s "https://api.openalex.org/works?search=YOUR_KEYWORDS&per_page=10" | head -c 50000
 ```
 
-网页正文抓取：先 `read_file` `/skills/baoyu-url-to-markdown/SKILL.md`，按其脚本说明执行。
+网页正文抓取：先 `read_file` `/workspace/skills/baoyu-url-to-markdown/SKILL.md`，按其脚本说明执行。
 
 ### Phase 3: 质量筛选 (Quality Screening)
 
 **目标**：过滤低质量信息  
 **输出**：
 
-- `/research/<主题-slug>/sources/filtered-sources.json`
-- `/research/<主题-slug>/sources/excluded-sources.json`
+- `/workspace/sessions/<session_id>/workspace/research/<主题-slug>/sources/filtered-sources.json`
+- `/workspace/sessions/<session_id>/workspace/research/<主题-slug>/sources/excluded-sources.json`
 
 评估维度见下方「质量评估标准」及 `QUALITY_CRITERIA.md`。
 
 ### Phase 4: 深度分析 (Deep Analysis)
 
 **目标**：提取关键洞察  
-**输出**：`/research/<主题-slug>/analysis/insights.md`
+**输出**：`/workspace/sessions/<session_id>/workspace/research/<主题-slug>/analysis/insights.md`
 
 必须包含：证据等级（A/B/C/D）、矛盾发现及原因、局限性、研究空白。
 
 ### Phase 5: 交叉验证 (Cross-Validation)
 
 **目标**：多源相互印证  
-**输出**：`/research/<主题-slug>/analysis/validation-matrix.md`
+**输出**：`/workspace/sessions/<session_id>/workspace/research/<主题-slug>/analysis/validation-matrix.md`
 
 ### Phase 6: 综合报告 (Synthesis Report)
 
 **目标**：生成可追溯的最终报告  
 **输出**：
 
-- `/research/<主题-slug>/report.md`（**面向用户的主报告，必填**）
-- `/research/<主题-slug>/reports/final-report.md`（可与 report.md 内容相同或为其扩展版）
+- `/workspace/sessions/<session_id>/workspace/research/<主题-slug>/report.md`（**面向用户的主报告，必填**）
+- `/workspace/sessions/<session_id>/workspace/research/<主题-slug>/reports/final-report.md`（可与 report.md 内容相同或为其扩展版）
 
 必须包含：执行摘要、方法论说明、核心发现（带证据等级）、批判性分析、可操作建议、参考文献（可点击链接）。  
-模板：`/skills/deep-research-v2/templates/report-template.md`
+模板：`/workspace/skills/deep-research-v2/templates/report-template.md`
 
 ### Phase 7: 用户反馈迭代 (Feedback Loop)
 
 **触发**：用户对结论质疑或要求深化  
-**输出**：`/research/<主题-slug>/reports/revised-report.md`
+**输出**：`/workspace/sessions/<session_id>/workspace/research/<主题-slug>/reports/revised-report.md`
 
 ## 执行参数
 
@@ -124,7 +125,7 @@ curl -s "https://api.openalex.org/works?search=YOUR_KEYWORDS&per_page=10" | head
 ## 工作区目录结构
 
 ```text
-/research/<主题-slug>/
+/workspace/sessions/<session_id>/workspace/research/<主题-slug>/
 ├── research-plan.md
 ├── sources/
 │   ├── raw-sources.json
@@ -144,12 +145,12 @@ curl -s "https://api.openalex.org/works?search=YOUR_KEYWORDS&per_page=10" | head
 | 能力 | 用法 |
 |------|------|
 | 关键词搜索 | `web_search`（Tavily 优先，无 Key 回退 DuckDuckGo） |
-| 网页正文 | `web_fetch`（Tavily extract 优先，无 Key 回退本地 HTTP）；复杂/反爬页用 `/skills/baoyu-url-to-markdown` |
-| 文件读写 | `read_file` / `write_file` / `edit_file`，路径以 `/research/` 或 `/skills/` 开头 |
+| 网页正文 | `web_fetch`（Tavily extract 优先，无 Key 回退本地 HTTP）；复杂/反爬页用 `/workspace/skills/baoyu-url-to-markdown` |
+| 文件读写 | `read_file` / `write_file` / `edit_file`，路径以 `/workspace/sessions/<session_id>/workspace/research/` 或 `/workspace/skills/` 开头 |
 | 公开 API | `execute` + `curl`（OpenAlex 等；arXiv 须用 `https://` 或 `curl -sSL`） |
 | GitHub 检索 | `execute` + `gh`（如 `gh search repos <query> --limit 10 --json name,url`） |
 | JSON 处理 | `execute` + Python 或写入后编辑 |
-| 质量评分 | `execute`：`python3 /skills/deep-research-v2/scripts/quality-score.py`（可选） |
+| 质量评分 | `execute`：`python3 /workspace/skills/deep-research-v2/scripts/quality-score.py`（可选） |
 
 ## 质量评估标准
 
@@ -173,7 +174,7 @@ curl -s "https://api.openalex.org/works?search=YOUR_KEYWORDS&per_page=10" | head
 
 ## 相关文件
 
-- 研究协议：`/skills/deep-research-v2/RESEARCH_PROTOCOL.md`
-- 质量标准：`/skills/deep-research-v2/QUALITY_CRITERIA.md`
-- 报告模板：`/skills/deep-research-v2/templates/report-template.md`
-- 来源卡片：`/skills/deep-research-v2/templates/source-card.md`
+- 研究协议：`/workspace/skills/deep-research-v2/RESEARCH_PROTOCOL.md`
+- 质量标准：`/workspace/skills/deep-research-v2/QUALITY_CRITERIA.md`
+- 报告模板：`/workspace/skills/deep-research-v2/templates/report-template.md`
+- 来源卡片：`/workspace/skills/deep-research-v2/templates/source-card.md`

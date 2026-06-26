@@ -1,7 +1,7 @@
 """
 DeepResearchAgent - 深度调研智能体
 
-基于 create_noesis_agent + CompositeBackend（工作区 + Skills 只读挂载；backend 见 sandbox.backend）。
+基于 create_noesis_agent + 沙箱 backend（AIO 单盘或 local_shell CompositeBackend）。
 """
 
 import asyncio
@@ -16,7 +16,7 @@ from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.tools import build_web_search_tools
 from agent.backends import SKILL_SOURCES, agent_sandbox_session, create_agent_backend
-from deepagents.backends import CompositeBackend
+from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
@@ -31,7 +31,7 @@ def _resolve_user_id(current_user) -> Optional[str]:
 
 
 def _build_deep_research_subagents(
-    backend: CompositeBackend,
+    backend: BackendProtocol,
     web_tools: list,
 ) -> list[SubAgent]:
     """深度研究子 Agent：独立上下文内执行单课题调研（filesystem + skills + web）。"""
@@ -43,7 +43,7 @@ def _build_deep_research_subagents(
         {
             "name": "research-worker",
             "description": (
-                "在独立上下文中完成单课题深度调研：阅读 /skills/ 相关 skill（含 deep-research-v2）、"
+                "在独立上下文中完成单课题深度调研：阅读 `/workspace/skills/` 相关 skill（含 deep-research-v2）、"
                 "使用 web_search/web_fetch 检索互联网、在工作区读写与归纳文件，多步后返回结构化小结。"
                 "适合可并行、上下文较重的子任务。"
             ),

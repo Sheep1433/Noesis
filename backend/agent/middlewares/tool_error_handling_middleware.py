@@ -34,7 +34,7 @@ class ToolErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         tool_name = self._tool_name(request)
         failure = classify_tool_failure(exc, tool_name=tool_name)
         logger.exception(
-            "Tool execution failed: name=%s id=%s tool_failure_category=%s tool_failure_detail=%s",
+            "Tool execution failed: name={} id={} tool_failure_category={} tool_failure_detail={}",
             request.tool_call.get("name"),
             request.tool_call.get("id"),
             failure.category.value,
@@ -53,7 +53,7 @@ class ToolErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         tool_name = self._tool_name(request)
         failure = classify_tool_failure(None, raw=content, tool_name=tool_name)
         logger.warning(
-            "Tool returned status=error: name=%s id=%s tool_failure_category=%s tool_failure_detail=%s",
+            "Tool returned status=error: name={} id={} tool_failure_category={} tool_failure_detail={}",
             request.tool_call.get("name"),
             request.tool_call.get("id"),
             failure.category.value,

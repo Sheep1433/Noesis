@@ -31,7 +31,7 @@ def web_search(query: str, limit: int = 8) -> str:
         result = resolve_web_search(query, limit)
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        logger.warning("web_search 未预期异常: %s", e)
+        logger.warning("web_search 未预期异常: {}", e)
         return json.dumps(
             {"error": "搜索失败", "query": query or ""},
             ensure_ascii=False,
@@ -43,7 +43,7 @@ def web_fetch(url: str) -> str:
     try:
         return resolve_web_fetch(url)
     except Exception as e:
-        logger.warning("web_fetch 未预期异常: %s", e)
+        logger.warning("web_fetch 未预期异常: {}", e)
         raw_url = (url or "").strip()
         return json.dumps(
             {"error": "页面抓取失败", "url": raw_url},

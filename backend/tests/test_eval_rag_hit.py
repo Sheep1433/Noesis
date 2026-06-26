@@ -1,11 +1,10 @@
-"""rag scorer（mock retrieval_trace，无 Qdrant）。"""
+"""阶段 B RAG Recall@K scorer（mock retrieval_trace，无 Qdrant）。"""
 
 from agent.case_generate.rag import (
-    CHANNEL_CURRENT_REQUIREMENT,
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
 )
-from evals.case.scoring import score_rag
+from evals.case.shared.assertions import score_stage_b_channel
 
 
 def _trace_hit():
@@ -13,53 +12,72 @@ def _trace_hit():
         "用户登录": {
             "scene_name": "用户登录",
             "channels": {
-                CHANNEL_CURRENT_REQUIREMENT: {"hit_ids": ["req-chunk-1", "req-chunk-2"]},
-                CHANNEL_HISTORICAL_REQUIREMENT: {"hit_ids": ["req-hist-1"]},
+                CHANNEL_HISTORICAL_REQUIREMENT: {"hit_ids": ["req-hist-1", "req-hist-2"]},
                 CHANNEL_HISTORICAL_TEST_CASES: {"hit_ids": ["tc-ref-9"]},
             },
         }
     }
 
 
-def test_rag_hit_at_3_all_hit():
-    gt = {
-        "expected_rag": {
-            "用户登录": {
-                CHANNEL_CURRENT_REQUIREMENT: {"expected_ids": ["req-chunk-1"]},
-                CHANNEL_HISTORICAL_TEST_CASES: {"expected_ids": ["tc-ref-9"]},
-            }
-        }
+def _scene_cfg(**rag):
+    return {
+        "scene_name": "用户登录",
+        "expected_rag": rag,
     }
-    result = score_rag({"state": {"retrieval_trace": _trace_hit()}}, gt)
-    assert result["rag_hit_at_3"] == 1.0
-    assert result["rag_eval_incomplete"] is False
 
 
-def test_rag_hit_partial():
-    gt = {
-        "expected_rag": {
-            "用户登录": {
-                CHANNEL_CURRENT_REQUIREMENT: {"expected_ids": ["missing-id"]},
-                CHANNEL_HISTORICAL_TEST_CASES: {"expected_ids": ["tc-ref-9"]},
-            }
+def test_recall_at_3_all_hit():
+    scene = _scene_cfg(
+        **{
+            CHANNEL_HISTORICAL_TEST_CASES: {"relevant_ids": ["tc-ref-9"], "k": 3},
         }
-    }
-    result = score_rag({"state": {"retrieval_trace": _trace_hit()}}, gt)
-    assert result["rag_hit_at_3"] == 0.5
+    )
+    result = score_stage_b_channel(
+        {"retrieval_trace": _trace_hit()},
+        scene,
+        CHANNEL_HISTORICAL_TEST_CASES,
+    )
+    assert result["recall_at_k"] == 1.0
+    assert result["hit_at_k"] == 1.0
 
 
-def test_rag_skipped_no_expected():
-    result = score_rag({"state": {"retrieval_trace": _trace_hit()}}, {})
+def test_recall_at_3_partial():
+    scene = _scene_cfg(
+        **{
+            CHANNEL_HISTORICAL_REQUIREMENT: {
+                "relevant_ids": ["missing-id", "req-hist-1"],
+                "k": 3,
+            },
+        }
+    )
+    result = score_stage_b_channel(
+        {"retrieval_trace": _trace_hit()},
+        scene,
+        CHANNEL_HISTORICAL_REQUIREMENT,
+    )
+    assert result["recall_at_k"] == 0.5
+    assert result["hit_at_k"] == 1.0
+
+
+def test_channel_skipped_no_relevant_ids():
+    scene = _scene_cfg(
+        **{CHANNEL_HISTORICAL_TEST_CASES: {"relevant_ids": [], "k": 3}}
+    )
+    result = score_stage_b_channel(
+        {"retrieval_trace": _trace_hit()},
+        scene,
+        CHANNEL_HISTORICAL_TEST_CASES,
+    )
     assert result["skipped"] is True
 
 
-def test_rag_incomplete_empty_trace():
-    gt = {
-        "expected_rag": {
-            "用户登录": {
-                CHANNEL_CURRENT_REQUIREMENT: {"expected_ids": ["req-chunk-1"]},
-            }
-        }
-    }
-    result = score_rag({"state": {"retrieval_trace": {}}}, gt)
-    assert result["rag_eval_incomplete"] is True
+def test_incomplete_empty_trace():
+    scene = _scene_cfg(
+        **{CHANNEL_HISTORICAL_REQUIREMENT: {"relevant_ids": ["req-hist-1"], "k": 3}}
+    )
+    result = score_stage_b_channel(
+        {"retrieval_trace": {}},
+        scene,
+        CHANNEL_HISTORICAL_REQUIREMENT,
+    )
+    assert result["incomplete"] is True

@@ -32,7 +32,7 @@ def _runner_healthy() -> bool:
 def _spawn_runner() -> subprocess.Popen[bytes] | None:
     main_py = _RUNNER_DIR / "main.py"
     if not main_py.is_file():
-        logger.warning("未找到 sandbox-runner: %s", main_py)
+        logger.warning("未找到 sandbox-runner: {}", main_py)
         return None
 
     uv = shutil.which("uv")
@@ -70,8 +70,8 @@ def ensure_sandbox_runner_process() -> None:
 
     for _ in range(30):
         if _runner_healthy():
-            logger.info("sandbox-runner 已自动启动 (%s)", SandboxConfig.runner_url)
+            logger.info("sandbox-runner 已自动启动 ({})", SandboxConfig.runner_url)
             return
         time.sleep(1)
 
-    logger.warning("sandbox-runner 自动启动超时 (%s)", SandboxConfig.runner_url)
+    logger.warning("sandbox-runner 自动启动超时 ({})", SandboxConfig.runner_url)

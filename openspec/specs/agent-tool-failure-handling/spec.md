@@ -1,127 +1,342 @@
 # agent-tool-failure-handling
 
-工具失败分类、middleware 转换、LLM/用户双通道文案、子 Agent 错误传播约定。
+## Purpose
+
+本能力规定 Agent 工具调用的**双层语义**：调用层（invoke）失败分类与用户可见脱敏文案；执行层（outcome）表达命令退出、超时、空输出等「工具已返回」场景。后端分类与解析供 middleware、SSE 桥接、落库共用；**前端 `tool-output-available` 展示契约见 `platform-chat` 规格**。
 
 ## Requirements
 
-### Requirement: 系统 SHALL 对工具失败进行统一分类
+### Requirement: 本规格 SHALL 限定适用范围
 
-系统在 Agent 运行时（经 `create_noesis_agent` 工厂装配的全部 `qa_type` 路径）中，SHALL 将每一次工具失败（异常抛出或 `ToolMessage.status=error`）映射到下列互斥分类之一：`network_unreachable`、`network_timeout`、`execution_timeout`、`invalid_arguments`、`tool_not_found`、`permission_denied`、`infrastructure`、`subagent_failure`、`cancelled`、`unknown`。
+本规格 **SHALL** 仅约束同时满足下列条件的工具结束路径：
 
-`ToolFailureCategory` 枚举与 `ToolFailureError` 异常层次 SHALL 定义于 `backend/domain/chat/streaming/tool_errors.py`；分类与文案组装 SHALL 集中于 `backend/domain/chat/streaming/tool_failure.py`。供 `ToolErrorHandlingMiddleware`、`LangGraphSseBridge` 与 `failure_notice.sanitize_tool_error` 共用；禁止各 Agent 或 `agent/tools/*` 自行维护平行正则表。
+1. 上游为 LangChain `astream_events` 的 `on_tool_end` / `on_tool_error`；
+2. 经 `LangGraphSseBridge` 发出 `tool-output-available`；
+3. 工具调用链装配了 `ToolErrorHandlingMiddleware`（经 `create_noesis_agent` 的 Agent 路径）。
 
-分类 SHALL 按下列优先级决策，**不得**对任意错误自由文本做正则推断 category：
+**In scope（示例）**：`COMMON_QA`、`FAULT_OPERATION_QA`、`DEEP_RESEARCH_QA` 的 ReAct Agent 工具调用。
 
-1. `ToolFailureError`（含子类）→ 使用其 `category`；
-2. 对 `exc` 及 `__cause__` / `__context__` 剥链（深度 ≤ 2）应用标准库 / httpx 类型映射表（仅 `type(node)` 与 `errno`，不解析 `str(exc)` 子串）；若映射非 `unknown` 则采用；
+**Out of scope（显式排除）**：
+
+- `TEST_CASE_QA` 的 `CaseCoordinator` / `build_test_case_graph`：产出 `phase-*` 等自定义事件，**不**产出 `tool-output-available`，**不受**本规格 outcome / `errorCategory` 约束；
+- 整轮 SSE `error` / `abort`（由 `failure_notice.sanitize_stream_error` 处理，见下文分流 Requirement）；
+- 前端 UI 标签与占位文案（权威来源：`platform-chat`）。
+
+#### Scenario: 测试用例流不走双层模型
+
+- **WHEN** `qa_type=TEST_CASE_QA` 且 `CaseCoordinator.run_agent` 产出 `phase-start`
+- **THEN** 该路径 **SHALL NOT** 要求 `outcome` 或 `errorCategory` 字段
+
+#### Scenario: 深度研究 execute 在范围内
+
+- **WHEN** `DEEP_RESEARCH_QA` 经 `create_noesis_agent` 调用 `execute` 且 bridge 处理 `on_tool_end`
+- **THEN** 本规格 **SHALL** 适用
+
+### Requirement: 系统 SHALL 区分调用层 status 与执行层 outcome
+
+对 **in-scope** 的每次工具结束，系统 SHALL 拆为两层语义：
+
+| 层 | 字段 | 取值 | 含义 |
+|----|------|------|------|
+| 调用层 | `status` | `success` \| `error` | 工具处理器是否**未抛异常**地返回（对齐 LangGraph `ToolMessage.status`） |
+| 执行层 | `outcome` | 见下表 | **仅当** `status=success` 时评估 |
+
+`outcome` 枚举（互斥，**仅** `status=success`）：
+
+| `outcome` | 含义 |
+|-----------|------|
+| `ok` | 有可展示用户正文，且（进程类）`exit_code == 0` 且 `timed_out != true` |
+| `empty` | 调用成功但无可展示正文（stdout/stderr/文本均为空或仅空白） |
+| `command_failed` | 进程类：`exit_code != 0` 且 `timed_out != true` |
+| `timed_out` | 进程类：工具返回体中 `timed_out == true`（**调用仍成功**） |
+
+**超时双轨（有意区分，不得混用字段）**：
+
+| 路径 | `status` | 机器字段 | 说明 |
+|------|----------|----------|------|
+| A：工具边界抛 `ToolTimeoutError` / 读超时等 | `error` | `errorCategory=execution_timeout` | Agent 收到 error `ToolMessage` |
+| B：MCP `bash` 等返回 `timed_out: true` | `success` | `outcome=timed_out` | Agent 收到 success + 结构化 JSON |
+
+路径 A **SHALL NOT** 携带 `outcome`；路径 B **SHALL NOT** 使用 `errorCategory=execution_timeout`。
+
+当 `status=error` 时，系统 **SHALL NOT** 写入 `outcome`；用户侧以 `error` + `errorCategory` 为准。
+
+**Non-Goal**：本规格 **不** 统一上述双轨的监控埋点或报表口径；运维统计 MAY 在日志层将 `execution_timeout` 与 `outcome=timed_out` 映射为同一业务标签，**不在** SSE/part 协议层合并。
+
+`ToolOutcome` 解析与用户展示格式化 SHALL 集中于 `backend/domain/chat/streaming/tool_outcome.py`；调用失败分类 SHALL 集中于 `tool_failure.py`（`ToolFailureCategory` 于 `tool_errors.py`）。
+
+#### Scenario: 沙箱超时走路径 A
+
+- **WHEN** `AioSandboxBackend.execute` 抛出 `ToolTimeoutError`
+- **THEN** SSE SHALL `status=error`、`errorCategory=execution_timeout`、用户 `error` 为「执行超时」
+- **AND** SHALL NOT 含 `outcome`
+
+#### Scenario: MCP bash 超时走路径 B
+
+- **WHEN** MCP `bash` 返回 `{ "timed_out": true, ... }` 且未抛异常
+- **THEN** SSE SHALL `status=success`、`outcome=timed_out`、`timed_out=true`
+- **AND** SHALL NOT 含 `errorCategory`
+
+#### Scenario: execute 命令非零退出
+
+- **WHEN** `execute` 返回 `{ "stderr": "not found", "exit_code": 127, "timed_out": false }` 且未抛异常
+- **THEN** `status=success`、`outcome=command_failed`、`exit_code=127`
+- **AND** Agent `ToolMessage` SHALL 保留完整 JSON
+
+### Requirement: SSE 与落库字段 SHALL 使用 snake_case
+
+`tool-output-available` 的 `data:` JSON 与 assistant `content.parts` 中 tool part **SHALL** 对新增语义字段使用 **snake_case**，与既有 `duration_ms`、`tool_call_id`、`error_category`（若落库用 snake_case 则写作 `error_category`；SSE 现有实现为 `errorCategory` 时 **保持 camelCase 仅该键**，见下表）对齐：
+
+| 字段 | SSE JSON 键 | 落库 part 键 | 说明 |
+|------|-------------|--------------|------|
+| 耗时 | `duration_ms` | `duration_ms` | 已有 |
+| 失败分类 | `errorCategory` | `errorCategory` | 已有 camelCase，保持不变 |
+| 执行结果 | `outcome` | `outcome` | 新增 |
+| 退出码 | `exit_code` | `exit_code` | 新增 |
+| 超时标记 | `timed_out` | `timed_out` | 新增 |
+| 截断标记 | `truncated` | `truncated` | 新增 |
+| 用户可见正文 | `output` | `output` | 见「用户 output 格式化」Requirement |
+
+**SHALL NOT** 引入 `exitCode`、`timedOut`、`durationMs` 等 camelCase 变体。
+
+#### Scenario: SSE 与落库 exit_code 一致
+
+- **WHEN** bridge 发出 `outcome=command_failed` 且 `exit_code=2`
+- **THEN** 落库 part SHALL 含 `exit_code: 2`（整数）
+
+### Requirement: classify_tool_failure SHALL 仅负责调用失败分类
+
+`classify_tool_failure(exc, *, raw, tool_name)`（`tool_failure.py`）**SHALL** 仅在 `status=error` 路径使用。分类优先级：
+
+1. `ToolFailureError`（含子类）→ `category`；
+2. 对 `exc` 沿 `__cause__`（优先）、`__context__`（若与 cause 不同）剥链，**最多检查 4 个异常节点**（非「图深度」，而是 BFS 访问节点数上限），对每个节点仅按 `type(node)` 与 `errno` 映射；
 3. `raw` 以 `[tool_error category=...]` 开头 → 解析头；
-4. `tool_name == "task"` 且 `raw` 以 `Task failed.` / `Task timed out` 开头 → `subagent_failure`（向后兼容）；
+4. `tool_name == "task"` 且 `raw` 以 `Task failed.` / `Task timed out` 开头 → `subagent_failure`（**仅**文案兜底，**不**读 builder 状态）；
 5. 其它 → `unknown`。
 
-步骤 2 得到 `unknown` 时 SHALL 继续步骤 3～4；步骤 2 已得非 `unknown` 时 SHALL NOT 被 `raw` 覆盖 category。
+**SHALL NOT** 在 `classify_tool_failure` 内访问 `AssistantMessageBuilder`、子图 parts 或 SSE 上下文。子图 error tool 判定 **SHALL** 仅由 Bridge 层完成（见下条 Requirement）。
 
-#### Scenario: 连接被拒绝映射为 network_unreachable
+步骤 2 得 `unknown` 时继续 3～4；步骤 2 得非 `unknown` 时 **SHALL NOT** 被 `raw` 覆盖 category。
 
-- **WHEN** 工具执行抛出 `httpx.ConnectError`、`ConnectionRefusedError`，或 `OSError` 且 `errno` 为 `ECONNREFUSED`
-- **THEN** 系统 SHALL 将该失败分类为 `network_unreachable`
+#### Scenario: 连接被拒绝
 
-#### Scenario: 包装异常经 cause 链映射
+- **WHEN** 抛出 `httpx.ConnectError`
+- **THEN** `errorCategory=network_unreachable`
 
-- **WHEN** 工具抛出 `RuntimeError("页面抓取失败")`，且 `__cause__` 为 `httpx.ConnectError`
-- **THEN** 系统 SHALL 分类为 `network_unreachable`，SHALL NOT 因外层为 `RuntimeError` 而归为 `unknown`
+#### Scenario: 自由文本不得误分类
 
-#### Scenario: 入参校验失败映射为 invalid_arguments
+- **WHEN** `status=error` 且 content 为 `HTTP 403 Forbidden in response body`，无类型化异常
+- **THEN** `errorCategory=unknown`，SHALL NOT 为 `permission_denied`
 
-- **WHEN** 工具执行因 Pydantic `ValidationError` 或 `ToolValidationError` 终止
-- **THEN** 系统 SHALL 将该失败分类为 `invalid_arguments`
+#### Scenario: 深层 cause 链在节点上限内可映射
 
-#### Scenario: 显式 ToolFailureError 优先于文本内容
+- **WHEN** `RuntimeError` → `WrapperError` → `httpx.ConnectError`（共 3 节点）且均在剥链上限内
+- **THEN** `errorCategory=network_unreachable`
 
-- **WHEN** 工具抛出 `ToolInfrastructureError`，且其 `detail` 不含任何基础设施关键字
-- **THEN** 系统 SHALL 分类为 `infrastructure`，SHALL NOT 因 detail 文本缺失关键字而降为 `unknown`
+### Requirement: LangGraphSseBridge SHALL 负责 outcome 解析与子 Agent 汇总
 
-#### Scenario: 自由文本含敏感子串不得误分类
+Bridge 在 `on_tool_end` **SHALL**：
 
-- **WHEN** 工具以 `status=error` 返回 content 为 `HTTP 403 Forbidden in response body`，且不含 `[tool_error category=...]` 头，且无类型化异常
-- **THEN** 系统 SHALL 分类为 `unknown`，用户侧 `error` SHALL 为「执行失败」，SHALL NOT 分类为 `permission_denied`
+**Success 路径**（`ToolMessage.status != error` 且无调用失败异常）：
 
-#### Scenario: 无法确定时映射为 unknown
+1. 调用 `parse_tool_outcome(tool_name, raw_output)`（**仅**对进程类工具名白名单 `execute`、`bash` 解析 `exit_code` / `timed_out`；其它工具按纯文本 empty/ok）；
+2. **SHALL** 写入 `outcome`（新消息不得省略；见缺省归一化）及可选 `exit_code`、`timed_out`、`truncated`；
+3. 调用 `format_user_tool_output(raw_output, outcome)` 生成用户可见 `output`（**非**向用户透传原始 JSON，见专条 Requirement）；
+4. `builder` 侧 `append_tool_output` 的模型用字段 **SHALL** 保留 `raw_output` 全文。
 
-- **WHEN** 工具执行失败且不满足类型映射、剥链、显式头或 task 约定前缀
-- **THEN** 系统 SHALL 分类为 `unknown`；LLM 侧 SHALL 包含 `format_tool_error_detail` 全文；用户侧 `error` SHALL 为「执行失败」
+**Error 路径**：
 
-### Requirement: 工具边界 SHALL 通过 ToolFailureError 显式分类
+1. 调用 `classify_tool_failure` 得 `error` / `errorCategory`；
+2. **SHALL NOT** 写入 `outcome`；
+3. 用户 `output` SHALL 为空字符串。
 
-`agent/tools/*`、MCP 包装层及基础设施调用方在**能够确定失败原因**时，SHALL 抛出 `ToolFailureError` 或其子类，SHALL NOT 依赖 middleware 从 `RuntimeError` 消息文本推断 category。允许 `raise RuntimeError("...") from <typed_exc>` 以保留剥链。
+**`task` 工具（Bridge 专节，依赖 builder 状态）**：
 
-#### Scenario: 网络抓取超时
+在调用 `classify_tool_failure` 之前，若 `tool_name == "task"`：
 
-- **WHEN** `web_fetch` 因连接超时失败
-- **THEN** 实现 SHALL 抛出 `ToolTimeoutError` / `ToolNetworkError`，或 `raise ... from httpx.ConnectTimeout`，SHALL NOT 抛出裸 `RuntimeError("timed out")` 且无 cause
+1. 若 `_task_has_subagent_tool_error(builder, task_call_id)` 为真（扫描 `builder` 内 `parent_task_call_id` 匹配且 `status=error` 的嵌套 parts）→ `subagent_failure`；
+2. 否则若 output 匹配 `classify_task_tool_output` 失败前缀 → `subagent_failure`；
+3. 否则按普通工具处理。
+
+**事件顺序假设**：嵌套 tool 的 `on_tool_end` **SHALL** 在对应 `task` 的 `on_tool_end` 之前进入 builder（LangGraph 默认嵌套完成顺序）。若漏标，**MAY** 在 `bridge.finalize()` 对仍为 `running`/`success` 的 task parts 做一次 reconcile 扫描；本规格不强制二次 reconcile，但单测 **SHALL** 覆盖「子 tool 先落库」主路径。
+
+#### Scenario: 子图含 error tool 标 subagent_failure
+
+- **WHEN** `task` 的 `on_tool_end` 时 builder 已有嵌套 `web_fetch` part 为 `status=error`
+- **THEN** task part SHALL `status=error`、`errorCategory=subagent_failure`
+
+#### Scenario: web_fetch 空正文
+
+- **WHEN** 非进程类 `web_fetch` 返回 `""`
+- **THEN** `status=success`、`outcome=empty`
+
+#### Scenario: 错误帧无 outcome
+
+- **WHEN** `errorCategory=network_unreachable`
+- **THEN** SHALL NOT 含 `outcome`
+
+### Requirement: 进程类工具白名单与结构化返回 SHALL 限定解析范围
+
+系统 SHALL 维护进程类工具名白名单（`PROCESS_TOOL_NAMES`：`execute`、`bash`），并仅对其实施结构化 outcome 解析。
+
+其它工具（含 MCP 返回 JSON 的 RAG、检索、自定义工具）**SHALL** 按纯文本处理：`trim` 后非空 → `outcome=ok`，否则 → `outcome=empty`；**SHALL NOT** 因 JSON 内误含 `exit_code` 字段而 `command_failed`。
+
+`AioSandboxBackend.execute`：
+
+- 超时 → 抛 `ToolTimeoutError`（路径 A）；
+- 基础设施错误 → 抛 `ToolInfrastructureError`；
+- 正常 → `ExecuteResponse`，由上层 `execute` 工具序列化为 JSON 字符串。
+
+#### Scenario: RAG JSON 不误判 command_failed
+
+- **WHEN** `hybrid_search` 返回 `{"exit_code":0,"chunks":[...]}`（非进程类工具名）
+- **THEN** `outcome=ok`（有可读文本时），SHALL NOT `command_failed`
+
+#### Scenario: 沙箱超时不得空 success
+
+- **WHEN** AIO `shell.exec_command` 超时
+- **THEN** SHALL 抛 `ToolTimeoutError`，SHALL NOT `status=success` + `outcome=empty`
+
+### Requirement: 用户 output SHALL 与 Agent 原始输出分离格式化
+
+系统 SHALL 按 `outcome` 为用户 `output`（SSE/part）与 Agent `ToolMessage` 内容采用不同格式化策略。
+
+对 `status=success`：
+
+| `outcome` | 用户 `output`（SSE/part） | Agent / `ToolMessage` |
+|-----------|---------------------------|------------------------|
+| `ok` / `empty` | `format_user_tool_output`：纯文本或「（无输出）」占位 | 原始工具返回全文 |
+| `command_failed` | 优先 `stderr`，其次 `stdout`，再拼接 `退出码: {exit_code}`；均空则仅「退出码: N」 | 原始 JSON |
+| `timed_out` | 已有 stdout/stderr 正文 + 固定行「执行已超时」 | 原始 JSON |
+
+对 `status=error`：用户 `output` SHALL 为空；技术详情仅在 Agent `ToolMessage.content`。
+
+`format_user_tool_output` **SHALL** 与 `parse_tool_outcome` 同置于 `tool_outcome.py`。
+
+#### Scenario: S-05 用户见 stderr 非 JSON
+
+- **WHEN** `execute` 返回 JSON 含 `stderr: "command not found"`、`exit_code: 127`
+- **THEN** 用户 `output` SHALL 含 `command not found` 与 `退出码: 127`
+- **AND** Agent 侧 SHALL 仍为完整 JSON 字符串
+
+### Requirement: outcome 缺省归一化 SHALL 兼容历史消息
+
+系统 SHALL 对无 `outcome` 字段的历史 tool part 按下列规则归一化展示语义：
+
+| 条件 | 归一化 `outcome` |
+|------|------------------|
+| 新流式消息，`status=success` | bridge **SHALL** 显式写入 `outcome` |
+| 历史 part：有 `outcome` | 直接使用 |
+| 历史 part：无 `outcome`、`status=success`、有非空 `output` | 前端视为 `ok` |
+| 历史 part：无 `outcome`、`status=success`、无 `output` | 前端视为 `empty` 并展示「（无输出）」 |
+| `status=error` | 不读 `outcome` |
+
+#### Scenario: 旧消息无 outcome 有空 output
+
+- **WHEN** 加载历史 tool part：`status=success`、有 `output`、无 `outcome`
+- **THEN** 前端 SHALL 按 `ok` 渲染，SHALL NOT 崩溃
+
+### Requirement: 工具边界 SHALL 显式抛出 ToolFailureError
+
+`agent/tools/*`、MCP 包装、`AioSandboxBackend` 在能确定调用失败原因时 **SHALL** 抛 `ToolFailureError` 子类；允许 `raise ... from <typed_exc>`。禁止将超时/基础设施伪装为 success 空输出。
 
 #### Scenario: 沙箱不可用
 
-- **WHEN** 沙箱或 MCP 环境未就绪
-- **THEN** 实现 SHALL 抛出 `ToolInfrastructureError`；用户侧仅展示「环境不可用」
+- **WHEN** 沙箱 runner 未就绪
+- **THEN** `ToolInfrastructureError`；用户 `error`「环境不可用」
 
 ### Requirement: 整轮流错误与单 tool 错误 SHALL 分流脱敏
 
-`failure_notice` SHALL 提供：
+系统 SHALL 对整轮 SSE `error` 与单 tool `error` 使用不同脱敏函数，**SHALL NOT** 混用分类器。
 
-- `sanitize_tool_error(raw)` — 委托 `classify_tool_failure`，用于 tool part / `tool-output-available.error`；
-- `sanitize_stream_error(raw)` — 用于整轮 SSE `error` 事件与 `get_stream_failure_notice_text`，SHALL NOT 委托 tool 文本正则分类器。
+- `sanitize_tool_error` → `classify_tool_failure`，用于 tool `error`；
+- `sanitize_stream_error` → 整轮 SSE `error`，**SHALL NOT** 委托 tool 分类器。
 
-`sanitize_stream_error` SHALL 对 `[INTERNAL_ERROR]` 做前缀级基础设施脱敏（用户文案「环境不可用」），并保留模型 API 超时、recursion 等整轮专用判断。`LangGraphSseBridge` 处理 `__tw_error__` / `error` 业务帧 SHALL 调用 `sanitize_stream_error`。
+#### Scenario: 整轮 infrastructure 脱敏
 
-#### Scenario: 整轮 infrastructure 脱敏不依赖 tool 分类器
+- **WHEN** 整轮 `error` detail 为 `[INTERNAL_ERROR] Docker image not found`
+- **THEN** 用户文案「环境不可用」
 
-- **WHEN** SSE bridge 发出整轮 `error`，detail 为 `[INTERNAL_ERROR] Docker image not found`
-- **THEN** 用户可见文案 SHALL 为「环境不可用」，即使该字符串未经 `ToolInfrastructureError` 抛出
+### Requirement: 调用失败 SHALL 转为可续推的 error ToolMessage
 
-#### Scenario: 整轮连接错误不误走 tool 正则
-
-- **WHEN** 整轮 abort detail 为 `connection refused`，且非单 tool `tool-output-available`
-- **THEN** `sanitize_stream_error` SHALL 按 stream 规则处理，SHALL NOT 调用 `classify_tool_failure` 将自由文本标为 `network_unreachable`
-
-### Requirement: 工具失败 SHALL 转为可续推的 error ToolMessage
-
-当工具调用在 `ToolErrorHandlingMiddleware` 作用域内抛出异常（`GraphBubbleUp` 除外）时，系统 SHALL 捕获异常并返回 `status=error` 的 `ToolMessage`，`tool_call_id` 与触发调用一致，content 含 `[tool_error category=...]` 与技术 detail。
-
-`ToolMessage(status=error)` 且 content 已含 `[tool_error` 前缀时 SHALL 透传；否则 SHALL 重写（通常 `unknown` + 全文 detail）。
-
-#### Scenario: 网络超时后 Agent 可继续推理
-
-- **WHEN** 工具因 `httpx.ConnectTimeout` 失败且 middleware 已转为 error `ToolMessage`
-- **THEN** 同轮 Agent SHALL 可继续后续模型调用
+`ToolErrorHandlingMiddleware` **SHALL** 捕获工具调用异常（`GraphBubbleUp` 除外）并转为 `status=error` 的 `ToolMessage`，content 含 `[tool_error category=...]`。**Non-Goal**：SSE/part **不**携带 `retryable`；`retryable` **仅**出现在 Agent 侧 `[tool_error ... retryable=...]` 供模型决策。
 
 #### Scenario: GraphBubbleUp 不被吞掉
 
-- **WHEN** 工具处理器抛出 `GraphBubbleUp`
-- **THEN** middleware SHALL 原样重新抛出
+- **WHEN** 抛出 `GraphBubbleUp`
+- **THEN** middleware 原样重抛
 
-### Requirement: 子 Agent 工具失败 SHALL 可向上归类
+### Requirement: 用户 error 短句 SHALL 固定且刻意粗粒度
 
-主 Agent 通过 `task` 工具委派子 Agent 时，`subagent_failure` 的**主判定** SHALL 在 `LangGraphSseBridge._resolve_tool_failure`（或等价 bridge 逻辑）结合子图 `status=error` tool parts / `task_tool_call_stack` 完成，SHALL NOT 仅依赖 deepagents 输出固定文案。
+系统 SHALL 对 `status=error` 的用户可见 `error` 使用下表固定短句（**SHALL NOT** 暴露堆栈或内部路径）：
 
-兼容：`Task failed.` / `Task timed out` 行首前缀仍可解析为 `subagent_failure`。推荐向主 Agent 回写 `[tool_error category=subagent_failure retryable=false]` 开头的内容。
+| `errorCategory` | 用户 `error` | 说明 |
+|-----------------|-------------|------|
+| `network_unreachable`, `network_timeout` | 连接失败 | |
+| `execution_timeout` | 执行超时 | 路径 A |
+| `invalid_arguments` | 参数错误 | |
+| `infrastructure` | 环境不可用 | 脱敏 |
+| `cancelled` | 已停止 | |
+| `tool_not_found`, `permission_denied`, `subagent_failure`, `unknown` | 执行失败 | **有意**不暴露细分类，避免泄露内部路径/权限细节；排障用 `errorCategory`（支持人员可见）与日志 `tool_failure_detail` |
 
-#### Scenario: task 子图含 error tool
+执行层 `command_failed` / `timed_out`（路径 B）**SHALL NOT** 使用 `error` 字段；UI 由 `platform-chat` 按 `outcome` 展示。
 
-- **WHEN** `task` 执行期间子 Agent 内至少一个 tool part 为 `status=error`
-- **THEN** bridge SHALL 将对应 task 的 `errorCategory` 标为 `subagent_failure`，task tool part SHALL 为 `status=error`
+#### Scenario: 命令失败无 error 字段
 
-### Requirement: LLM 可读详情与用户可见文案 SHALL 分离
+- **WHEN** `status=success`、`outcome=command_failed`
+- **THEN** part `error` SHALL 缺省
 
-对每个已分类的工具失败，系统 SHALL 同时生成模型侧结构化 `ToolMessage.content` 与用户侧固定短句（SSE / 落库 `error`）。`unknown` 时模型侧 SHALL 透传 `format_tool_error_detail` 全文；用户侧 SHALL 为「执行失败」。
+### Requirement: 工具调用场景目录 SHALL 作为验收矩阵
 
-基础设施类失败的用户侧文案 SHALL 为「环境不可用」。入参错误用户侧 SHALL 为「参数错误」。
+实现与单测 **SHALL** 以本节为覆盖率基准。字段命名遵循 snake_case Requirement；UI 行为遵循 `platform-chat`。
 
-#### Scenario: 基础设施错误脱敏（tool 路径）
+**调用成功（S-）**
 
-- **WHEN** 工具抛出 `ToolInfrastructureError` 或解析到 `[tool_error category=infrastructure]`
-- **THEN** 用户侧 `error` SHALL 为「环境不可用」，SHALL NOT 暴露 Docker/MCP 内部细节
+| ID | 要点 | `status` | `outcome` |
+|----|------|----------|-----------|
+| S-01 | 文本工具有内容 | success | ok |
+| S-02 | 文本工具空 | success | empty |
+| S-03 | execute exit=0 有 stdout | success | ok |
+| S-04 | execute exit=0 无输出 | success | empty |
+| S-05 | execute exit=127 有 stderr | success | command_failed |
+| S-06 | stderr 含 Permission denied | success | command_failed（非 permission_denied 类） |
+| S-07 | MCP bash `timed_out:true` | success | timed_out |
+| S-08 | truncated + exit=0 | success | ok |
+| S-09 | truncated + exit≠0 | success | command_failed |
+| S-10 | hybrid_search 命中 | success | ok |
+| S-11 | 非进程类 JSON 含 exit_code | success | ok/empty（不走进程规则） |
 
-#### Scenario: 入参错误用户文案固定
+**调用失败（E-）**
 
-- **WHEN** 工具失败分类为 `invalid_arguments`
-- **THEN** 用户侧 `error` SHALL 为「参数错误」；字段级修正提示 SHALL 仅出现在模型侧 content
+| ID | errorCategory | 用户 error |
+|----|---------------|------------|
+| E-01 | network_unreachable | 连接失败 |
+| E-02 | network_timeout | 连接失败 |
+| E-03 | execution_timeout | 执行超时 |
+| E-04 | invalid_arguments | 参数错误 |
+| E-05 | tool_not_found | 执行失败 |
+| E-06 | permission_denied | 执行失败 |
+| E-07 | infrastructure | 环境不可用 |
+| E-08 | subagent_failure（Bridge 子图） | 执行失败 |
+| E-09 | subagent_failure（Task 文案兜底） | 执行失败 |
+| E-10 | task 成功 | success / ok |
+| E-11 | cancelled | 已停止 |
+| E-12 | unknown | 执行失败 |
+| E-13 | cause 链 ConnectError | network_unreachable |
+| E-14 | ToolMessage error 无头 | middleware 重写 |
+| E-15 | on_tool_error | 同 error 帧 + duration_ms |
+
+**网络辨析（N-）**：N-01 ConnectTimeout→network_timeout；N-02 ReadTimeout→execution_timeout；N-03 ConnectError→network_unreachable。
+
+**子 Agent（T-）**：T-01 全成功；T-02 嵌套网络失败→task subagent_failure；T-03 嵌套 command_failed 但 task 仍 success；T-04 parentTaskCallId UI；T-05 Task timed out 文案。
+
+**并行（P-）**：P-01 并行不错位；P-02 GraphBubbleUp；P-03 unknown 可续推。
+
+**整轮流（F-）**：F-01 sanitize_stream_error；F-02 整轮 infrastructure；F-03 单 tool 错误不必然整轮 error。
+
+**反例（A-）**：A-01 403 文案→unknown；A-02 stderr permission→非 category；A-03 日志 tool not found→unknown；A-04 配置 timeout 字样→不推断；A-05 无 cause RuntimeError→unknown；A-06 command_failed 不用 error 字段。
+
+#### Scenario: 场景目录覆盖 E-03 与 S-07 超时双轨
+
+- **WHEN** 单测断言 E-03 与 S-07
+- **THEN** E-03 SHALL 仅 `status=error` + `execution_timeout`；S-07 SHALL 仅 `status=success` + `outcome=timed_out`

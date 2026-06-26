@@ -46,3 +46,35 @@ def test_delete_user_skill_package_rejects_missing(users_root: Path) -> None:
 
     assert ok is False
     assert "不存在" in msg
+
+
+def test_user_tree_skips_platform_skill_symlinks(users_root: Path, tmp_path: Path) -> None:
+    platform = tmp_path / "platform-skills"
+    platform.mkdir()
+    (platform / "deep-research-v2").mkdir()
+    (platform / "deep-research-v2" / "SKILL.md").write_text("# platform", encoding="utf-8")
+
+    user_skills = paths.ensure_user_skills_dir("u1")
+    (user_skills / "my-skill").mkdir()
+    (user_skills / "my-skill" / "SKILL.md").write_text("# user", encoding="utf-8")
+    (user_skills / "deep-research-v2").symlink_to(
+        platform / "deep-research-v2", target_is_directory=True
+    )
+
+    tree = SkillFsService.get_tree("u1")
+    user_labels = [node.label for node in tree.user.tree]
+
+    assert user_labels == ["my-skill"]
+
+
+def test_delete_user_skill_package_rejects_symlink(users_root: Path, tmp_path: Path) -> None:
+    platform = tmp_path / "platform-skills" / "linked-skill"
+    platform.mkdir(parents=True)
+    link = paths.ensure_user_skills_dir("u1") / "linked-skill"
+    link.symlink_to(platform, target_is_directory=True)
+
+    ok, msg = SkillFsService.delete_user_skill_package("linked-skill", "u1")
+
+    assert ok is False
+    assert "链接" in msg
+    assert link.is_symlink()

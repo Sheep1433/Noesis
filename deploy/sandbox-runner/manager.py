@@ -15,7 +15,8 @@ import docker
 import httpx
 from docker.errors import DockerException, NotFound
 
-from paths import resolve_host_data_dir, resolve_skills_host_dir
+from paths import ensure_sandbox_mount_readable, resolve_host_data_dir
+from skills_catalog import ensure_user_skills_catalog
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -95,9 +96,8 @@ class SandboxManager:
         self._docker_network = os.environ.get("SANDBOX_DOCKER_NETWORK", "").strip()
         self._host_port_base = _host_port_base()
         self._host_data_dir = resolve_host_data_dir()
-        self._skills_host_dir = resolve_skills_host_dir()
         self._max_replicas = int(os.environ.get("SANDBOX_MAX_REPLICAS", "20"))
-        self._idle_ttl_seconds = int(os.environ.get("SANDBOX_IDLE_TTL_SECONDS", "1800"))
+        self._idle_ttl_seconds = int(os.environ.get("SANDBOX_IDLE_TTL_SECONDS", str(72 * 3600)))
         self._headless = os.environ.get("SANDBOX_HEADLESS", "1")
         self._chrome_path = os.environ.get(
             "URL_CHROME_PATH", "/usr/bin/google-chrome-stable"
@@ -129,12 +129,14 @@ class SandboxManager:
         name = _container_name(user_id)
         user_ws = self._user_workspace_host(user_id)
         user_ws.mkdir(parents=True, exist_ok=True)
+        ensure_sandbox_mount_readable(user_ws)
+        user_skills = user_ws / "skills"
+        ensure_user_skills_catalog(user_skills)
+        ensure_sandbox_mount_readable(user_skills, recursive=True)
 
         volumes = {
             str(user_ws): {"bind": "/workspace", "mode": "rw"},
         }
-        if self._skills_host_dir.is_dir():
-            volumes[str(self._skills_host_dir)] = {"bind": "/skills", "mode": "ro"}
 
         host_port = _find_free_host_port(start=self._host_port_base)
         run_kwargs: dict = {

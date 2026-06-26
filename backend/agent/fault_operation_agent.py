@@ -15,7 +15,7 @@ from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.prompts import PromptProfile, build_prompt
 from agent.tools.mcp_invoke_wrapper import wrap_mcp_tools
 from agent.backends import SKILL_SOURCES, agent_sandbox_session, create_agent_backend
-from deepagents.backends import CompositeBackend
+from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
 from common.logging import logger
@@ -32,7 +32,7 @@ def _resolve_user_id(current_user) -> Optional[str]:
 
 
 def _build_fault_operation_subagents(
-    backend: CompositeBackend,
+    backend: BackendProtocol,
     mcp_tools: list[Any],
 ) -> list[SubAgent]:
     """与 deepagents 默认 general-purpose 对齐：独立上下文内执行多步 MCP 运维子任务。"""

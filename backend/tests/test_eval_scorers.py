@@ -1,6 +1,6 @@
-"""L0 / rag 评分器测试（无真实 LLM）。"""
+"""L0 评分器测试（无真实 LLM）。"""
 
-from evals.case.scoring import score_l0, score_rag
+from evals.case.shared.assertions import score_l0
 
 
 def _sample_state():

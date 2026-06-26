@@ -1,32 +1,54 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# prompts + providers + defaultTest.assert + tests（官方单文件结构）
-description: Noesis 测试用例 Agent 离线评测（L0 + coverage + rag）
+description: Noesis 测试用例 Agent 测试点 评测（L0 + point_coverage_recall + scene_name_recall）
 prompts:
 - '{{scenario_description}}'
 providers:
 - id: file://provider.py
-  label: test-case-agent
+  label: test-case-testpoints
   config:
-    pythonExecutable: ./run-python.sh
+    pythonExecutable: ../shared/run-python.sh
 evaluateOptions:
   maxConcurrency: 1
 defaultTest:
   options:
-    provider: test-case-agent
+    provider: test-case-testpoints
   assert:
   - type: python
-    value: file://../scoring.py:assert_l0
+    value: file://../shared/assertions.py:assert_l0
     metric: l0
   - type: llm-rubric
-    value: file://coverage_rubric.txt
+    value: |
+      你是测试设计评审员。根据 Agent 输出与金标准测试点，计算 **point_coverage_recall**（测试点覆盖召回率）。
+
+      ## Agent 输出（JSON）
+      {{output}}
+
+      ## 金标准测试点
+      {{golden_test_points_json}}
+
+      ## 评分规则
+      1. 从 Agent 输出的 JSON 中读取 `state.scenes_testpoints` 作为「生成测试点」；若为空或解析失败，score=0.0。
+      2. 判断「生成测试点」是否**语义覆盖**每条金标准测试点（允许多个生成点共同覆盖一条；scene_name 可不完全一致）。
+      3. **score** = 已覆盖金标准条数 / 金标准总条数，取值 0.0～1.0。
+      4. **pass** 始终为 true（本指标仅汇报分数，不设通过阈值门禁）。
+      5. 在 reason 中简要说明覆盖情况与 recall 计算依据。
+
+      仅输出 JSON（不要其它文字）：
+      ```json
+      {
+        "reason": "<覆盖分析>",
+        "score": 0.0,
+        "pass": true
+      }
+      ```
     metric: point_coverage_recall
     provider:
-      id: file://judge_provider.py
+      id: file://../shared/judge.py
       config:
-        pythonExecutable: ./run-python.sh
+        pythonExecutable: ../shared/run-python.sh
   - type: python
-    value: file://../scoring.py:assert_rag
-    metric: rag_hit_at_3
+    value: file://../shared/assertions.py:assert_scene_name_recall
+    metric: scene_name_recall
 tests:
 - description: tc_login_001
   metadata:
@@ -34,7 +56,7 @@ tests:
   vars:
     item_id: tc_login_001
     scenario_description: 重点覆盖登录失败与验证码场景
-    document_path: fixtures/documents/tc_login_001.md
+    document_path: documents/tc_login_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 用户登录
@@ -50,7 +72,7 @@ tests:
   vars:
     item_id: tc_login_002
     scenario_description: 覆盖扫码与绑定异常
-    document_path: fixtures/documents/tc_login_002.md
+    document_path: documents/tc_login_002.md
     ground_truth:
       golden_test_points:
       - scene_name: 扫码登录
@@ -66,7 +88,7 @@ tests:
   vars:
     item_id: tc_login_003
     scenario_description: 记住我与登出
-    document_path: fixtures/documents/tc_login_003.md
+    document_path: documents/tc_login_003.md
     ground_truth:
       golden_test_points:
       - scene_name: 会话管理
@@ -82,7 +104,7 @@ tests:
   vars:
     item_id: tc_upload_001
     scenario_description: 格式与大小限制
-    document_path: fixtures/documents/tc_upload_001.md
+    document_path: documents/tc_upload_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 文件上传
@@ -98,7 +120,7 @@ tests:
   vars:
     item_id: tc_upload_002
     scenario_description: 分片与断点续传
-    document_path: fixtures/documents/tc_upload_002.md
+    document_path: documents/tc_upload_002.md
     ground_truth:
       golden_test_points:
       - scene_name: 大文件上传
@@ -114,7 +136,7 @@ tests:
   vars:
     item_id: tc_upload_003
     scenario_description: 扫描与隔离
-    document_path: fixtures/documents/tc_upload_003.md
+    document_path: documents/tc_upload_003.md
     ground_truth:
       golden_test_points:
       - scene_name: 安全扫描
@@ -130,7 +152,7 @@ tests:
   vars:
     item_id: tc_approval_001
     scenario_description: 请假审批全流程
-    document_path: fixtures/documents/tc_approval_001.md
+    document_path: documents/tc_approval_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 请假审批
@@ -146,7 +168,7 @@ tests:
   vars:
     item_id: tc_approval_002
     scenario_description: 采购金额分级
-    document_path: fixtures/documents/tc_approval_002.md
+    document_path: documents/tc_approval_002.md
     ground_truth:
       golden_test_points:
       - scene_name: 采购审批
@@ -162,7 +184,7 @@ tests:
   vars:
     item_id: tc_sparse_001
     scenario_description: 请根据现有信息设计测试范围
-    document_path: fixtures/documents/tc_sparse_001.md
+    document_path: documents/tc_sparse_001.md
     ground_truth:
       golden_test_points:
       - scene_name: 需求澄清

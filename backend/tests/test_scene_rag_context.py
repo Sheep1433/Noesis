@@ -1,4 +1,4 @@
-"""场景级多知识库 RAG 组装单测（mock KbRetrievalService）。"""
+"""场景级两路 RAG 组装单测（mock KbRetrievalService）。"""
 
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
@@ -14,6 +14,7 @@ from agent.case_generate.rag import (
     _HybridRetriever,
     build_scene_rag_context,
 )
+from agent.case_generate.case_graph import _build_scene_cases_prompt
 from kb.retrieval import KbSearchHit
 
 
@@ -34,8 +35,8 @@ SCENE = {
 
 
 @pytest.mark.asyncio
-async def test_build_scene_rag_context_three_channel_order_and_sections():
-    """三路通道并行召回，Markdown 小节按 当前需求 → 历史需求 → 历史用例 顺序拼接。"""
+async def test_build_scene_rag_context_two_channel_order():
+    """两路通道：历史需求 → 历史用例；不含当前需求检索。"""
     call_specs: list[tuple[str, dict | None]] = []
 
     async def _side_effect(self, query, *, limit=3, filters=None, vector_dimension=1024):
@@ -51,38 +52,22 @@ async def test_build_scene_rag_context_three_channel_order_and_sections():
                 source_file_names=["login.md"],
             )
 
-    assert ("requirement_docs", {"file_name": "login.md"}) in call_specs
     assert ("requirement_docs", {"exclude_file_names": ["login.md"]}) in call_specs
     assert ("test_case_docs", None) in call_specs
-    assert context.index("当前需求文档片段") < context.index("历史相关需求片段")
+    assert "当前需求文档片段" not in context
     assert context.index("历史相关需求片段") < context.index("历史测试用例参考")
     assert trace["scene_name"] == "用户登录"
-    assert trace["channels"][CHANNEL_CURRENT_REQUIREMENT]["hit_ids"] == ["requirement_docs-1"]
+    assert CHANNEL_CURRENT_REQUIREMENT not in trace["channels"]
     assert trace["channels"][CHANNEL_HISTORICAL_REQUIREMENT]["hit_ids"] == ["requirement_docs-1"]
     assert trace["channels"][CHANNEL_HISTORICAL_TEST_CASES]["hit_ids"] == ["test_case_docs-1"]
 
 
 @pytest.mark.asyncio
-async def test_build_scene_rag_context_skips_current_without_source_files():
-    """无 source_file_names 时不召回当前需求通道。"""
+async def test_build_scene_rag_context_historical_disabled():
+    """历史需求通道关闭时仅历史用例通道。"""
 
     async def _side_effect(self, query, *, limit=3, filters=None, vector_dimension=1024):
         return [_hit(f"{self.collection_name}-1", "x")]
-
-    with patch.object(_HybridRetriever, "search", new=_side_effect):
-        context, trace = await build_scene_rag_context(SCENE)
-
-    assert "当前需求文档片段" not in context
-    assert CHANNEL_CURRENT_REQUIREMENT not in trace["channels"]
-    assert CHANNEL_HISTORICAL_TEST_CASES in trace["channels"]
-
-
-@pytest.mark.asyncio
-async def test_build_scene_rag_context_historical_channel_disabled_by_default():
-    """历史相关需求通道默认关闭。"""
-
-    async def _side_effect(self, query, *, limit=3, filters=None, vector_dimension=1024):
-        return []
 
     with patch.object(_HybridRetriever, "search", new=_side_effect):
         context, trace = await build_scene_rag_context(
@@ -92,6 +77,19 @@ async def test_build_scene_rag_context_historical_channel_disabled_by_default():
 
     assert "历史相关需求片段" not in context
     assert CHANNEL_HISTORICAL_REQUIREMENT not in trace["channels"]
+    assert CHANNEL_HISTORICAL_TEST_CASES in trace["channels"]
+
+
+def test_build_scene_cases_prompt_injects_document_context():
+    prompt = _build_scene_cases_prompt(
+        "用户登录",
+        [{"point_name": "密码错误", "point_level": "P1", "point_type": "functional"}],
+        "## 历史相关需求片段\nfoo",
+        document_context="当前需求全文内容",
+    )
+    assert "## 当前需求文档" in prompt
+    assert "当前需求全文内容" in prompt
+    assert prompt.index("当前需求文档") < prompt.index("参考文档片段")
 
 
 @pytest.mark.asyncio
@@ -111,7 +109,6 @@ async def test_build_scene_rag_context_langfuse_spans_when_enabled():
             return False
 
     mock_client = MagicMock()
-    mock_client.start_as_current_observation.return_value = _FakeCtx()
     observed_trace_contexts: list = []
 
     def _record_observation(**kwargs):
@@ -124,24 +121,26 @@ async def test_build_scene_rag_context_langfuse_spans_when_enabled():
         return [_hit(f"{self.collection_name}-1", f"content-{self.collection_name}")]
 
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=True)
+    qdrant_cfg = replace(QdrantConfig, case_rag_historical_requirements_enabled=True)
     with patch("config.env.LangfuseConfig", langfuse_cfg):
         with patch("langfuse.get_client", return_value=mock_client):
             with patch.object(_HybridRetriever, "search", new=_side_effect):
-                from domain.observability.langfuse import langfuse_workflow_context
+                with patch("agent.case_generate.rag.QdrantConfig", qdrant_cfg):
+                    from domain.observability.langfuse import langfuse_workflow_context
 
-                run_config = {
-                    "metadata": {
-                        "langfuse_session_id": "chat-abc",
-                        "langfuse_trace_id": "chat-abc",
+                    run_config = {
+                        "metadata": {
+                            "langfuse_session_id": "chat-abc",
+                            "langfuse_trace_id": "chat-abc",
+                        }
                     }
-                }
-                with langfuse_workflow_context(run_config):
-                    context, trace = await build_scene_rag_context(
-                        SCENE,
-                        source_file_names=["login.md"],
-                    )
+                    with langfuse_workflow_context(run_config):
+                        context, trace = await build_scene_rag_context(
+                            SCENE,
+                            source_file_names=["login.md"],
+                        )
 
     assert context
     assert trace["scene_name"] == "用户登录"
-    assert mock_client.start_as_current_observation.call_count >= 3
+    assert mock_client.start_as_current_observation.call_count >= 2
     assert all(ctx == {"trace_id": "chat-abc"} for ctx in observed_trace_contexts)

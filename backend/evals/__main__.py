@@ -12,7 +12,9 @@ import sys
 
 MODULES = (
     ("evals.case", "测试用例 Agent（promptfoo + L0/coverage/rag）"),
-    ("evals.agent", "深度研究 Agent（DeepResearchAgent）端到端评测"),
+    ("evals.agent.browsecomp", "Agent / BrowseComp"),
+    ("evals.agent.wildclaw", "Agent / WildClawBench"),
+    ("evals.agent.legacy", "Agent / 本地开发集"),
     ("evals.compression", "SummarizationOffload 消息压缩评测"),
 )
 

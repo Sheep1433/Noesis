@@ -29,12 +29,12 @@ def resolve_web_search(query: str, limit: int | None = None) -> dict[str, Any]:
         try:
             return tavily.search_with_tavily(q, effective_limit)
         except Exception as e:
-            logger.warning("Tavily search 失败，回退 DDG: %s", e)
+            logger.warning("Tavily search 失败，回退 DDG: {}", e)
 
     try:
         return ddg.search_with_ddg(q, effective_limit, timeout=timeout)
     except Exception as e:
-        logger.warning("DDG search 失败: %s", e)
+        logger.warning("DDG search 失败: {}", e)
         return {"error": "搜索失败", "query": q}
 
 
@@ -52,7 +52,7 @@ def resolve_web_fetch(url: str) -> str:
             result = tavily.fetch_with_tavily(raw_url, max_chars)
             return result["markdown"]
         except Exception as e:
-            logger.warning("Tavily extract 失败，回退 local: %s", e)
+            logger.warning("Tavily extract 失败，回退 local: {}", e)
 
     try:
         result = local_fetch.fetch_with_local(raw_url, max_chars, timeout)
@@ -60,5 +60,5 @@ def resolve_web_fetch(url: str) -> str:
     except ValueError as e:
         return json.dumps({"error": str(e), "url": raw_url}, ensure_ascii=False)
     except Exception as e:
-        logger.warning("local_fetch 失败 url=%s: %s", raw_url, e)
+        logger.warning("local_fetch 失败 url={}: {}", raw_url, e)
         return json.dumps({"error": "页面抓取失败", "url": raw_url}, ensure_ascii=False)

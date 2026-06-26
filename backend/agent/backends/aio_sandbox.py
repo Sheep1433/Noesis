@@ -8,21 +8,25 @@ import threading
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
-from deepagents.backends import CompositeBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
     FileDownloadResponse,
     FileUploadResponse,
+    LsResult,
 )
 from deepagents.backends.sandbox import BaseSandbox
 
 from config.env import SandboxConfig
+from config.skills_catalog import is_platform_skill_entry
 
 if TYPE_CHECKING:
     from agent_sandbox import Sandbox
 
 _MUTEX_REGISTRY: dict[tuple[str, str], threading.Lock] = {}
 _MUTEX_REGISTRY_LOCK = threading.Lock()
+
+_CONTAINER_WORKSPACE = "/workspace"
+_CONTAINER_SKILLS = "/workspace/skills"
 
 
 def _session_mutex(user_id: str, session_id: str) -> threading.Lock:
@@ -50,7 +54,7 @@ def _session_browser_env(session_id: str) -> dict[str, str]:
 
 
 class AioSandboxBackend(BaseSandbox):
-    """用户 AIO 容器内的 BaseSandbox 适配层（virtual `/` = session workspace）。"""
+    """用户 AIO 沙箱：工具路径统一为容器内 `/workspace/...` 绝对路径。"""
 
     def __init__(
         self,
@@ -58,7 +62,6 @@ class AioSandboxBackend(BaseSandbox):
         base_url: str,
         user_id: str,
         session_id: str,
-        root_dir: str,
         inject_browser_env: bool = True,
         client: Sandbox | None = None,
     ) -> None:
@@ -73,7 +76,7 @@ class AioSandboxBackend(BaseSandbox):
         self._base_url = base_url
         self._user_id = user_id
         self._session_id = session_id
-        self._root_dir = root_dir.rstrip("/") or "/"
+        self._session_workspace = f"/workspace/sessions/{session_id}/workspace"
         self._inject_browser_env = inject_browser_env
         self._mutex = _session_mutex(user_id, session_id)
         self._default_timeout = SandboxConfig.execute_timeout_seconds
@@ -82,18 +85,47 @@ class AioSandboxBackend(BaseSandbox):
     def id(self) -> str:
         return f"aio-{self._user_id}-{self._session_id}"
 
-    def _resolve_path(self, key: str) -> str:
-        vpath = key if key.startswith("/") else f"/{key}"
-        if ".." in vpath or vpath.startswith("~"):
+    @staticmethod
+    def _normalize_path(key: str) -> str:
+        if not key.startswith("/"):
+            msg = "Path must be absolute under /workspace"
+            raise ValueError(msg)
+        if ".." in key or key.startswith("~"):
             msg = "Path traversal not allowed"
             raise ValueError(msg)
-        full = str(PurePosixPath(self._root_dir) / vpath.lstrip("/"))
-        root = PurePosixPath(self._root_dir)
-        resolved = PurePosixPath(full)
-        if not str(resolved).startswith(str(root)):
-            msg = f"Path:{full} outside root directory: {self._root_dir}"
+        return str(PurePosixPath(key))
+
+    def _assert_in_workspace_mount(self, container_path: str) -> None:
+        normalized = str(PurePosixPath(container_path))
+        if normalized == _CONTAINER_WORKSPACE or normalized.startswith(
+            f"{_CONTAINER_WORKSPACE}/"
+        ):
+            return
+        msg = f"Path outside /workspace mount: {container_path}"
+        raise ValueError(msg)
+
+    def _is_platform_skill_path(self, container_path: str) -> bool:
+        normalized = str(PurePosixPath(container_path))
+        prefix = f"{_CONTAINER_SKILLS}/"
+        if not normalized.startswith(prefix):
+            return False
+        rel = PurePosixPath(normalized).relative_to(_CONTAINER_SKILLS)
+        if not rel.parts:
+            return False
+        return is_platform_skill_entry(self._user_id, rel.parts[0])
+
+    def _resolve_read_path(self, key: str) -> str:
+        container = self._normalize_path(key)
+        self._assert_in_workspace_mount(container)
+        return container
+
+    def _resolve_write_path(self, key: str) -> str:
+        container = self._normalize_path(key)
+        self._assert_in_workspace_mount(container)
+        if self._is_platform_skill_path(container):
+            msg = "Platform skill symlink is read-only"
             raise ValueError(msg)
-        return full
+        return container
 
     def _with_env(self, command: str) -> str:
         if not self._inject_browser_env:
@@ -109,7 +141,7 @@ class AioSandboxBackend(BaseSandbox):
             try:
                 result = self._client.shell.exec_command(
                     command=wrapped,
-                    exec_dir=self._root_dir,
+                    exec_dir=_CONTAINER_WORKSPACE,
                     timeout=float(effective_timeout),
                 )
             except Exception as exc:
@@ -129,8 +161,8 @@ class AioSandboxBackend(BaseSandbox):
         with self._mutex:
             for path, content in files:
                 try:
-                    abs_path = self._resolve_path(path)
-                except ValueError as exc:
+                    abs_path = self._resolve_write_path(path)
+                except ValueError:
                     responses.append(FileUploadResponse(path=path, error="invalid_path"))
                     continue
                 try:
@@ -145,7 +177,7 @@ class AioSandboxBackend(BaseSandbox):
         with self._mutex:
             for path in paths:
                 try:
-                    abs_path = self._resolve_path(path)
+                    abs_path = self._resolve_read_path(path)
                 except ValueError:
                     responses.append(
                         FileDownloadResponse(path=path, content=None, error="invalid_path")
@@ -174,14 +206,16 @@ class AioSandboxBackend(BaseSandbox):
                     )
         return responses
 
-    def ls(self, path: str) -> object:
-        return super().ls(self._resolve_path(path))
+    def ls(self, path: str) -> LsResult:
+        return super().ls(self._resolve_read_path(path))
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> object:
-        return super().read(self._resolve_path(file_path), offset=offset, limit=limit)
+        return super().read(
+            self._resolve_read_path(file_path), offset=offset, limit=limit
+        )
 
     def write(self, file_path: str, content: str) -> object:
-        return super().write(self._resolve_path(file_path), content)
+        return super().write(self._resolve_write_path(file_path), content)
 
     def edit(
         self,
@@ -191,51 +225,37 @@ class AioSandboxBackend(BaseSandbox):
         replace_all: bool = False,
     ) -> object:
         return super().edit(
-            self._resolve_path(file_path),
+            self._resolve_write_path(file_path),
             old_string,
             new_string,
             replace_all=replace_all,
         )
 
     def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> object:
-        resolved = self._resolve_path(path) if path else self._root_dir
+        resolved = (
+            _CONTAINER_WORKSPACE
+            if path is None
+            else self._resolve_read_path(path)
+        )
         return super().grep(pattern, path=resolved, glob=glob)
 
     def glob(self, pattern: str, path: str = "/") -> object:
-        return super().glob(pattern, path=self._resolve_path(path))
+        resolved = (
+            _CONTAINER_WORKSPACE
+            if path == "/"
+            else self._resolve_read_path(path)
+        )
+        return super().glob(pattern, path=resolved)
 
 
-async def create_aio_agent_backend(user_id: str, session_id: str) -> CompositeBackend:
-    """AIO CompositeBackend：session workspace + 平台 /skills/ + 用户 /user-skills/。"""
+async def create_aio_agent_backend(user_id: str, session_id: str) -> AioSandboxBackend:
+    """单盘 AIO backend，路径统一为 `/workspace/...` 绝对路径。"""
     from services.sandbox_service import ensure_user_sandbox
 
     base_url = await ensure_user_sandbox(user_id)
-    workspace_root = f"/workspace/sessions/{session_id}/workspace"
-    workspace_backend = AioSandboxBackend(
+    return AioSandboxBackend(
         base_url=base_url,
         user_id=user_id,
         session_id=session_id,
-        root_dir=workspace_root,
         inject_browser_env=True,
-    )
-    platform_skills_backend = AioSandboxBackend(
-        base_url=base_url,
-        user_id=user_id,
-        session_id=session_id,
-        root_dir="/skills",
-        inject_browser_env=False,
-    )
-    user_skills_backend = AioSandboxBackend(
-        base_url=base_url,
-        user_id=user_id,
-        session_id=session_id,
-        root_dir="/workspace/skills",
-        inject_browser_env=False,
-    )
-    return CompositeBackend(
-        default=workspace_backend,
-        routes={
-            "/skills/": platform_skills_backend,
-            "/user-skills/": user_skills_backend,
-        },
     )

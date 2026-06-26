@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: Noesis 测试用例 Agent RAG 检索评测（历史需求 + 历史用例 Recall@3）
+prompts:
+- '{{query}}'
+providers:
+- id: file://provider.py
+  label: test-case-rag
+  config:
+    pythonExecutable: ../shared/run-python.sh
+evaluateOptions:
+  maxConcurrency: 1
+defaultTest:
+  options:
+    provider: test-case-rag
+  assert:
+  - type: python
+    value: file://../shared/assertions.py:assert_historical_requirements_recall_at_3
+    metric: historical_requirements_recall_at_3
+  - type: python
+    value: file://../shared/assertions.py:assert_historical_requirements_hit_at_3
+    metric: historical_requirements_hit_at_3
+  - type: python
+    value: file://../shared/assertions.py:assert_historical_test_cases_recall_at_3
+    metric: historical_test_cases_recall_at_3
+  - type: python
+    value: file://../shared/assertions.py:assert_historical_test_cases_hit_at_3
+    metric: historical_test_cases_hit_at_3
+  - type: python
+    value: file://../shared/assertions.py:assert_document_context_present
+    metric: document_context_present
+tests:
+- description: tc_login_001_stage_b
+  metadata:
+    item_id: tc_login_001_stage_b
+  vars:
+    item_id: tc_login_001_stage_b
+    query: 用户登录 账号密码登录与验证码
+    document_path: ../testpoints/documents/tc_login_001.md
+    rag_scene:
+      scene_name: 用户登录
+      scene_description: 账号密码登录与验证码
+      adopted_point_names:
+      - 用户名密码错误提示
+      - 验证码过期刷新
+      source_file_names:
+      - tc_login_001.md
+      expected_rag:
+        historical_requirements:
+          relevant_ids:
+          - d19dadaa-b91a-5ef0-89aa-4c60aea4e4b7
+          - 0c2fcfed-a8a4-568b-9892-70cbdfdade7c
+          k: 3
+        historical_test_cases:
+          relevant_ids:
+          - 03f52dee-412d-5ee8-b5bd-8863494da0c5
+          - ff1ccc5b-4d10-5e74-9826-0b828da5e284
+          k: 3

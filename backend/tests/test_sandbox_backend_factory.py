@@ -1,11 +1,12 @@
 """sandbox.backend 工厂：local_shell 与 aio 统一 create_agent_backend。"""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from agent.backends import create_agent_backend, uses_aio_sandbox
+from agent.backends.aio_sandbox import AioSandboxBackend
 from config.agent_workspace_paths import ensure_workspace_dir
 
 
@@ -38,17 +39,17 @@ async def test_create_agent_backend_local_shell(
     from config import user_data_paths as user_paths
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    platform = tmp_path / "platform-skills"
+    platform.mkdir()
     monkeypatch.setattr(
-        "agent.backends.factory.skills_root",
-        lambda: tmp_path / "skills",
+        "config.skills_catalog.skills_root",
+        lambda: platform,
     )
-    (tmp_path / "skills").mkdir()
 
     backend = await create_agent_backend("u1", "s1")
-    assert "/skills/" in backend.routes
-    assert "/user-skills/" in backend.routes
     ws = ensure_workspace_dir("u1", "s1")
-    result = backend.write("/notes.md", "hello")
+    target = "/workspace/sessions/s1/workspace/notes.md"
+    result = backend.write(target, "hello")
     assert result.error is None
     assert ws.joinpath("notes.md").read_text(encoding="utf-8") == "hello"
 
@@ -58,8 +59,9 @@ async def test_create_agent_backend_aio(aio_backend: None) -> None:
     with patch(
         "agent.backends.factory.create_aio_agent_backend",
         new_callable=AsyncMock,
-        return_value="composite-backend",
     ) as mock_create:
+        mock_backend = MagicMock(spec=AioSandboxBackend)
+        mock_create.return_value = mock_backend
         got = await create_agent_backend("u1", "s1")
     mock_create.assert_awaited_once_with("u1", "s1")
-    assert got == "composite-backend"
+    assert got is mock_backend

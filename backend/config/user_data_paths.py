@@ -13,6 +13,23 @@ _USERS_ROOT = DATA_DIR / "users"
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# AIO 容器进程用户 gem 通常为 uid=1000；挂载目录至少 755 以便非属主可读。
+_SANDBOX_DIR_MODE = 0o755
+
+
+def _chmod_sandbox_dir(path: Path) -> None:
+    try:
+        if path.is_dir():
+            path.chmod(_SANDBOX_DIR_MODE)
+    except OSError:
+        pass
+
+
+def _ensure_sandbox_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    _chmod_sandbox_dir(path)
+    return path
+
 
 def validate_segment(name: str, *, kind: str = "segment") -> str:
     """校验路径段仅含 [A-Za-z0-9_-]，防止目录穿越。"""
@@ -27,6 +44,11 @@ def get_user_root(user_id: str | int) -> Path:
     return _USERS_ROOT / uid
 
 
+def ensure_user_root(user_id: str | int) -> Path:
+    """创建并返回用户数据根，权限对 AIO gem 用户可读。"""
+    return _ensure_sandbox_dir(get_user_root(user_id))
+
+
 def get_user_skills_dir(user_id: str | int) -> Path:
     """返回用户 Skills 目录 `.data/users/{user_id}/skills/`（不创建）。"""
     return get_user_root(user_id) / "skills"
@@ -35,7 +57,7 @@ def get_user_skills_dir(user_id: str | int) -> Path:
 def ensure_user_skills_dir(user_id: str | int) -> Path:
     """创建并返回用户 Skills 目录。"""
     path = get_user_skills_dir(user_id)
-    path.mkdir(parents=True, exist_ok=True)
+    _ensure_sandbox_dir(path)
     return path
 
 
@@ -54,7 +76,10 @@ def get_workspace_dir(user_id: str | int, session_id: str) -> Path:
 def ensure_workspace_dir(user_id: str | int, session_id: str) -> Path:
     """创建并返回 Agent 工作区目录。"""
     path = get_workspace_dir(user_id, session_id)
-    path.mkdir(parents=True, exist_ok=True)
+    _ensure_sandbox_dir(path)
+    _chmod_sandbox_dir(path.parent)
+    _chmod_sandbox_dir(path.parent.parent)
+    _chmod_sandbox_dir(get_user_root(user_id))
     return path
 
 
@@ -87,7 +112,7 @@ def delete_session_data(user_id: str | int, session_id: str) -> None:
         return
     shutil.rmtree(session_dir)
     logger.info(
-        "已删除会话数据 user_id=%s session_id=%s path=%s",
+        "已删除会话数据 user_id={} session_id={} path={}",
         user_id,
         session_id,
         session_dir,

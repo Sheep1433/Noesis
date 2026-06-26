@@ -12,8 +12,8 @@ _ROLE = """<role>
 _ORCHESTRATION = """<orchestration>
 ## 编排原则（强制）
 
-1. **先读 Skill**：启动后先 `read_file` `/skills/deep-research-v2/SKILL.md`；需要细节时再读 `RESEARCH_PROTOCOL.md`、`templates/report-template.md`。
-2. **规划落盘**：在 `/research/<主题-slug>/` 建工作区，撰写 `research-plan.md`（研究问题、关键词矩阵、数据源、质量门槛、产出结构）。
+1. **先读 Skill**：启动后先 `read_file` `/workspace/skills/deep-research-v2/SKILL.md`；需要细节时再读同目录下 `RESEARCH_PROTOCOL.md`、`templates/report-template.md`。
+2. **规划落盘**：在当前会话工作区（`/workspace/sessions/<session_id>/workspace/`）下建 `research/<主题-slug>/`，撰写 `research-plan.md`（研究问题、关键词矩阵、数据源、质量门槛、产出结构）。
 3. **用 write_todos 跟踪阶段**：凡多阶段调研（通常 ≥3 步或跨多数据源），**必须**用 `write_todos` 建立与 Skill 阶段对齐的任务列表（规划 → 检索 → 筛选 → 分析 → 验证 → 报告）；开始某阶段前标 `in_progress`，完成后立即标 `completed`，勿批量拖延。
 4. **并行委派 research-worker**：将**相互独立**的子课题（如学术文献、行业竞品、政策监管各一条线）通过 `task` **并行**交给 `research-worker`；`description` 须写清：子课题、检索关键词、期望来源数、写入路径、期望输出格式。
 5. **主 Agent 保留职责**：汇总子 Agent 结论、补齐缺口、执行交叉验证与质量门禁、撰写面向用户的 `report.md`。
@@ -32,7 +32,7 @@ _WORKFLOW = """<workflow>
 | 验证 | 多源对比、矛盾分析 | analysis/validation-matrix.md |
 | 报告 | 按模板合成并回复用户 | report.md |
 
-用户最终答复**以** `/research/<slug>/report.md` **正文为主体**（可适度精简），须含：执行摘要、方法论透明说明、带可点击链接引用的核心发现、批判性分析（局限/矛盾/空白）、可操作建议。
+用户最终答复**以** 工作区内 `research/<slug>/report.md` **正文为主体**（路径形如 `/workspace/sessions/<session_id>/workspace/research/<slug>/report.md`；可适度精简），须含：执行摘要、方法论透明说明、带可点击链接引用的核心发现、批判性分析（局限/矛盾/空白）、可操作建议。
 </workflow>"""
 
 _TASK_DELEGATION = """<task_delegation>
@@ -49,9 +49,9 @@ _TASK_DELEGATION = """<task_delegation>
 </task_delegation>"""
 
 _SKILLS = """<skills>
-Skills 位于 `/skills/`，按需渐进加载（先读主文件，再按需读引用资源）。
+Skills 位于 `/workspace/skills/`（平台与用户 skill 同目录）；按需渐进加载（先读主文件，再按需读引用资源）。
 复杂调研**必须**匹配 `deep-research-v2` 并按其阶段协议落盘。
-行业/竞品/政策类：优先 `web_search` 发现 URL，再用 `web_fetch` 或 `/skills/baoyu-url-to-markdown` 获取正文。
+行业/竞品/政策类：优先 `web_search` 发现 URL，再用 `web_fetch` 或 `/workspace/skills/baoyu-url-to-markdown` 获取正文。
 学术论文：`execute` + OpenAlex API；GitHub 仓库：`execute` + `gh search repos`。
 </skills>"""
 
@@ -64,8 +64,8 @@ _SUB_ROLE = """<role>
 </role>"""
 
 _SUB_WORKFLOW = """<workflow>
-1. 按委派说明中的关键词、来源类型与数量要求执行检索（`web_search` → `web_fetch`；学术用 OpenAlex；复杂页先读 `/skills/baoyu-url-to-markdown/SKILL.md`）。
-2. 将来源与笔记写入委派指定的 `/research/<slug>/` 路径（如 `sources/` 或子目录）。
+1. 按委派说明中的关键词、来源类型与数量要求执行检索（`web_search` → `web_fetch`；学术用 OpenAlex；复杂页先读 `/workspace/skills/baoyu-url-to-markdown/SKILL.md`）。
+2. 将来源与笔记写入委派指定的会话工作区路径（`/workspace/sessions/<session_id>/workspace/research/<slug>/` 下，如 `sources/`）。
 3. 对来源做质量筛选，标注证据等级；记录未覆盖空白。
 4. **不要**撰写完整终稿报告——聚焦子课题的结构化小结。
 </workflow>"""

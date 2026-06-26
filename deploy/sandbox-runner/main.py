@@ -15,7 +15,7 @@ from manager import SandboxManager
 RUNNER_TOKEN = os.environ.get("SANDBOX_RUNNER_TOKEN", "")
 RUNNER_HOST = os.environ.get("SANDBOX_RUNNER_HOST", "0.0.0.0")
 RUNNER_PORT = int(os.environ.get("SANDBOX_RUNNER_PORT", "8090"))
-REAP_INTERVAL = int(os.environ.get("SANDBOX_REAP_INTERVAL_SECONDS", "60"))
+REAP_INTERVAL = int(os.environ.get("SANDBOX_REAP_INTERVAL_SECONDS", str(3600)))
 
 _manager: SandboxManager | None = None
 _reap_stop = threading.Event()

@@ -10,12 +10,15 @@ context: |
 
   验证：后端改动后 `uv run app.py`；前端 `pnpm lint` / `pnpm build` 按影响范围执行。HTTP 业务 code 与状态码需一致（404/409 等见仓库 AGENTS.md）。
 
-  OpenSpec：主规格位于 openspec/specs/<capability>/spec.md；变更内 delta 规格在 openspec/changes/<name>/specs/，归档时与主规格对齐。
+  OpenSpec：主规格位于 openspec/specs/<capability>/spec.md；变更内 delta 在 openspec/changes/<name>/specs/，归档时与主规格对齐。模块导航见 openspec/README.md。
 
-  主规格目录结构（能力 id = 目录名）：
-  - 4 个 Agent 场景：agent-common-qa、agent-fault-operation、agent-test-case、agent-deep-research
-  - 平台聊天：platform-chat（会话、SSE 桥接、chat 通用 UI、LLM 工厂、qa_type 路由表）
-  - 模块：knowledge-base（含入库分块策略）、skills-filesystem、agent-workspace、user-auth、container-deployment、agent-reasoning-observability
+  能力 id 按域分组（目录名 = 能力 id）：
+  - 平台聊天：platform-chat、chat-session-attachments、chat-composer-send-upload、chat-session-context-panel、agent-reasoning-observability
+  - Agent 场景：agent-common-qa、agent-fault-operation、agent-test-case、agent-deep-research、agent-web-tools、agent-tool-failure-handling
+  - 运行时：agent-runtime-paths（权威路径；user-data-layout / agent-workspace 已合并占位）、agent-sandbox、skills-filesystem
+  - 知识库：knowledge-base
+  - 离线评测：test-case-agent-eval、agent-offline-eval、message-compression-eval
+  - 部署认证：container-deployment、user-auth
 
 rules:
   proposal:

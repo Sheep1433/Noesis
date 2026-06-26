@@ -1,7 +1,8 @@
 # agent-web-tools Specification
 
 ## Purpose
-TBD - created by archiving change add-deep-research-web-tools. Update Purpose after archive.
+
+本能力规定 Noesis **联网工具**（`web_search`、`web_fetch`）的装配、Provider 回退链路与配置：`build_web_search_tools()` 供 `COMMON_QA` 与 `DEEP_RESEARCH_QA` 挂载；Tavily 为主、DDG/local 为回退；配置经 `env.py` 管理，不扩展 REST/SSE 契约。
 ## Requirements
 ### Requirement: build_web_search_tools SHALL 提供固定双工具并由指定 Agent 挂载
 

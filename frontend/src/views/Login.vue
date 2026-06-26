@@ -51,38 +51,7 @@ async function handleLogin() {
 }
 
 async function handleRegister() {
-  if (!form.value.username || !form.value.password || !form.value.confirmPassword) {
-    message.error('请填写完整信息')
-    return
-  }
-  if (form.value.password !== form.value.confirmPassword) {
-    message.error('两次输入的密码不一致')
-    return
-  }
-  if (form.value.password.length < 6) {
-    message.error('密码长度至少 6 位')
-    return
-  }
-  loading.value = true
-  try {
-    const res = await GlobalAPI.register(
-      form.value.username,
-      form.value.password,
-    )
-    const responseData = await parseResponse(res)
-    if (responseData.code === 200) {
-      message.success('注册成功，请登录')
-      mode.value = 'login'
-      form.value.password = ''
-      form.value.confirmPassword = ''
-    } else {
-      message.error(responseData.msg ?? '注册失败')
-    }
-  } catch {
-    message.error('注册失败，请稍后重试')
-  } finally {
-    loading.value = false
-  }
+  message.warning('当前系统不支持自己注册，请联系管理员')
 }
 
 function handleSubmit() {

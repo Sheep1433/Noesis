@@ -1,4 +1,4 @@
-"""promptfoo 评分 Provider：复用 Noesis get_llm() 供 llm-rubric 断言调用。"""
+"""promptfoo llm-rubric 评分：复用 Noesis get_llm()。"""
 
 from __future__ import annotations
 

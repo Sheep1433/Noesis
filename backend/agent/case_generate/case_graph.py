@@ -170,6 +170,7 @@ def _try_stream_writer() -> Optional[SceneProgressEmitter]:
 async def _generate_cases_streaming(
     scenes_map: Dict[str, Dict[str, Any]],
     *,
+    document_context: str = "",
     source_file_names: Optional[List[str]] = None,
     emit: Optional[SceneProgressEmitter] = None,
     config: RunnableConfig | None = None,
@@ -230,6 +231,7 @@ async def _generate_cases_streaming(
                     points,
                     scene_rag_context,
                     case_idx["n"],
+                    document_context=document_context,
                     config=config,
                 )
             case_idx["n"] += len(cases)
@@ -332,6 +334,7 @@ async def generate_test_cases_node(
     emit = _try_stream_writer()
     test_cases, retrieval_trace = await _generate_cases_streaming(
         scenes_map,
+        document_context=str(state.get("document_context") or ""),
         source_file_names=state.get("source_file_names") or [],
         emit=emit,
         config=config,
@@ -437,12 +440,16 @@ def _build_scene_cases_prompt(
     scene_name: str,
     points: List[Dict[str, Any]],
     scene_rag_context: str,
+    document_context: str = "",
 ) -> str:
-    context_section = (
+    doc_text = (document_context or "").strip()
+    doc_section = f"\n\n## 当前需求文档\n{doc_text}" if doc_text else ""
+    rag_section = (
         f"\n\n## 参考文档片段（本场景共享）\n{scene_rag_context}"
         if scene_rag_context
         else ""
     )
+    context_section = doc_section + rag_section
     points_block = _format_scene_points_block(points)
     return f"""
 # Role: 测试用例生成专家
@@ -556,6 +563,7 @@ async def _generate_scene_cases(
     context: str,
     case_id_start: int,
     *,
+    document_context: str = "",
     config: RunnableConfig | None = None,
 ) -> tuple[List[Dict[str, Any]], Optional[str]]:
     """单场景一次 LLM 调用，批量生成该场景全部采纳测试点的用例。"""
@@ -563,7 +571,9 @@ async def _generate_scene_cases(
         return [], None
     try:
         llm = get_llm()
-        prompt = _build_scene_cases_prompt(scene_name, points, context)
+        prompt = _build_scene_cases_prompt(
+            scene_name, points, context, document_context=document_context
+        )
         structured_llm = llm.with_structured_output(SceneTestCasesOutput, include_raw=True)
         run_config = dict(config or {})
         run_config.setdefault("run_name", f"case_generate:{scene_name}")

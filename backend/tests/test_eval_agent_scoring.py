@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from evals.agent.scoring import evaluate_criterion, score_item, score_rule_criteria
+from evals.agent.legacy.scoring import evaluate_criterion, score_item, score_rule_criteria
 
 
 def test_file_exists_and_contains(tmp_path: Path):

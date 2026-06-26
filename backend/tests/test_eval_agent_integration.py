@@ -4,9 +4,9 @@ import os
 
 import pytest
 
-from evals.agent.dataset import DEFAULT_DATASET, filter_items, load_dataset
-from evals.agent.runner import run_agent_item
-from evals.agent.scoring import score_item
+from evals.agent.legacy.dataset import DEFAULT_DATASET, filter_items, load_dataset
+from evals.agent.legacy.runner import run_agent_item
+from evals.agent.legacy.scoring import score_item
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("NOESIS_AGENT_EVAL_INTEGRATION") != "1",

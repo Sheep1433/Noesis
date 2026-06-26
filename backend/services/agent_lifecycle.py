@@ -18,4 +18,4 @@ async def cancel_session_agent_runs(session_id: str) -> None:
     await fault_agent.cancel_task(session_id)
     await deep_research_agent.cancel_task(session_id)
     await case_coordinator.cancel_task(session_id)
-    logger.info("已请求取消 session Agent runs session_id=%s", session_id)
+    logger.info("已请求取消 session Agent runs session_id={}", session_id)

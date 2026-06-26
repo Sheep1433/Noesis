@@ -133,7 +133,7 @@ COMMON_QA 路径 SHALL NOT 挂载 MCP 工具、文件系统 `FilesystemMiddlewar
 
 ### Requirement: COMMON_QA 流式路径 SHALL 依赖平台 SSE 基础设施
 
-COMMON_QA 的 `astream_events` 输出 SHALL 经 `qa_service` 中的 `LangGraphSseBridge` 与 `AssistantMessageBuilder` 转换为 SSE 并持久化 assistant 消息；帧类型（`text-delta`、`tool-input-available`、`tool-output-available`、`reasoning-*`、`finish`、`[DONE]` 等）、保活策略、token 累计、`durationMs` 与前端 `useSSEStream` 消费规则 **SHALL** 以 `openspec/specs/platform-chat/spec.md` 为单一事实来源。
+COMMON_QA 的 `astream_events` 输出 SHALL 经 `qa_service` 中的 `LangGraphSseBridge` 与 `AssistantMessageBuilder` 转换为 SSE 并持久化 assistant 消息；帧类型（`text-delta`、`tool-input-available`、`tool-output-available`、`reasoning-*`、`finish`、`[DONE]` 等）、保活策略、token 累计、`duration_ms` 与前端 `useSSEStream` 消费规则 **SHALL** 以 `openspec/specs/platform-chat/spec.md` 为单一事实来源。
 
 本能力 **SHALL NOT** 要求 COMMON_QA 路径发射 `phase-start` / `phase-delta` / `phase-end` 事件（该契约仅适用于 `TEST_CASE_QA`）。
 

@@ -1,0 +1,785 @@
+{
+  "fixture_version": "2026-06-26-v1",
+  "requirement_collection": "requirement_docs_eval",
+  "test_case_collection": "test_case_docs_eval",
+  "requirements": [
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 0,
+      "content_hash": "9e66aed64a070dd8ccba1093a672f641",
+      "point_id": "f953a182-9434-5add-9bd7-fd7bab75b87b",
+      "header_path": "员工请假审批流程需求（虚构） > 1. 业务背景",
+      "content_preview": "# 员工请假审批流程需求（虚构）   ## 1. 业务背景   HR 系统需支持员工在线提交请假单，经直属主管 **审批** 后生效，并同步考勤系统。本期覆盖事假、病假、年假三种类型，不含薪资计算与 **文件上传** 附件病毒扫描（附件走通"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 1,
+      "content_hash": "34562a22a933a7f63a4fbeb6980f952e",
+      "point_id": "4df63efb-fb67-5e5f-8780-171dd46afad3",
+      "header_path": "员工请假审批流程需求（虚构） > 2. 流程概览",
+      "content_preview": "## 2. 流程概览   ``` 员工起草 → 提交 → 直属主管审批 → （年假）HR 备案 → 结束 ↘ 驳回 → 员工修改重提 ```"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 2,
+      "content_hash": "d4efdcc95bf7d4d1c1d8ea207a78ef5b",
+      "point_id": "70dbdde9-74b0-56a8-9004-efb623244f20",
+      "header_path": "员工请假审批流程需求（虚构） > 3. 请假类型与规则",
+      "content_preview": "## 3. 请假类型与规则   | 类型 | 规则 | |------|------| | 事假 | 提前 0.5 个工作日提交；单次不超过 5 天 | | 病假 | 超过 3 天须上传医院证明（附件可选） | | 年假 | **年假提前 "
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 3,
+      "content_hash": "34c62802c6783d552605881395a8b6d8",
+      "point_id": "37ee0f23-4f26-554c-a37a-d1df69f0dc62",
+      "header_path": "员工请假审批流程需求（虚构） > 4. 审批操作",
+      "content_preview": "## 4. 审批操作   - **通过**：填写可选意见，状态 `approved`，写入考勤 - **驳回**：**驳回须填原因**，原因必填且 5–200 字；状态 `rejected`，通知员工   员工收到驳回后可修改除「工号、姓名"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 4,
+      "content_hash": "cf6a984c0a31c738372c109e95503a13",
+      "point_id": "f7364e50-d440-5cdd-adb0-b7fb5190562e",
+      "header_path": "员工请假审批流程需求（虚构） > 5. 状态机",
+      "content_preview": "## 5. 状态机   `draft` → `pending` → `approved` | `rejected` `rejected` → 修改后 → `pending`   - `pending` 超过 72 小时未处理，系统提醒审批人"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 5,
+      "content_hash": "c8b005659a6414a3234620663f831670",
+      "point_id": "b18a3b21-e014-5e16-b99c-27ac8bd1a74f",
+      "header_path": "员工请假审批流程需求（虚构） > 6. 通知",
+      "content_preview": "## 6. 通知   - 提交、通过、驳回均发送邮件+站内信 - 抄送 HR（仅年假备案节点）"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 6,
+      "content_hash": "4b400631e8909305bb5418c71904ae06",
+      "point_id": "9abf6f5a-7eb1-5347-a86b-b27d46f81726",
+      "header_path": "员工请假审批流程需求（虚构） > 7. 权限",
+      "content_preview": "## 7. 权限   - 员工仅查看本人单据 - 主管查看下属待办与已办 - HR 可查看全租户统计，不可篡改已审批记录"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 7,
+      "content_hash": "d1b5d109df491a37749f27840208aa15",
+      "point_id": "8f0db062-9b01-57bf-ba2f-a2b28b8c95e6",
+      "header_path": "员工请假审批流程需求（虚构） > 8. 非功能",
+      "content_preview": "## 8. 非功能   - 提交接口幂等 - 审批操作须记录操作人、时间、IP"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 8,
+      "content_hash": "26b603f346d540f74538e386694796a5",
+      "point_id": "4ee42c48-552e-55e8-9ee3-9b5602d25134",
+      "header_path": "员工请假审批流程需求（虚构） > 9. 界面要点（草案）",
+      "content_preview": "## 9. 界面要点（草案）   - 待办列表按提交时间倒序，支持按类型筛选 - 详情页展示审批轨迹时间轴 - 移动端仅支持审批与查看，不支持批量导入年假余额"
+    },
+    {
+      "file_name": "tc_approval_001.md",
+      "chunk_index": 9,
+      "content_hash": "8cdb327ea142b550220e2b12f35dfe1d",
+      "point_id": "e4b5873c-d837-5cc9-bd12-a1e18915bfc4",
+      "header_path": "员工请假审批流程需求（虚构） > 10. 不在范围",
+      "content_preview": "## 10. 不在范围   采购申请、报销单、加班调休（另立项）。"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 0,
+      "content_hash": "9f4432dd21cab103c7333fd12bd176cc",
+      "point_id": "4d43347a-48da-5e40-987e-0cae3dda18af",
+      "header_path": "采购申请审批需求（虚构） > 1. 概述",
+      "content_preview": "# 采购申请审批需求（虚构）   ## 1. 概述   行政部门线上化 **采购** 申请，按金额分级走不同 **审批** 链，并强制上传报价证明材料。系统不提供图形 **验证码** 模块（登录侧已有），不与登录需求重复描述。"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 1,
+      "content_hash": "5f9095b951466d7a213a00e346636f7c",
+      "point_id": "a1357647-29b4-5a30-b2af-38b2b09e9899",
+      "header_path": "采购申请审批需求（虚构） > 2. 申请表单字段",
+      "content_preview": "## 2. 申请表单字段   - 申请人、部门、采购事由（必填，20–500 字） - 物品清单：名称、规格、数量、预估单价 - 合计金额（系统自动汇总，禁止手改总额） - 期望到货日 - 附件：**必须上传报价单 PDF**（至少 1 个"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 2,
+      "content_hash": "2be722abfe94cfc1ff11f324c4a35ca6",
+      "point_id": "4efa40f1-adf4-5ec6-953d-d14bfdb26d5a",
+      "header_path": "采购申请审批需求（虚构） > 3. 金额分级审批链",
+      "content_preview": "## 3. 金额分级审批链   | 金额（人民币） | 审批节点 | |----------------|----------| | **1 万以下** | **部门经理审批** 即完成 | | 1 万（含）～10 万 | 部门经理 → 财"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 3,
+      "content_hash": "82477b0481e4aa9c5b3a81a87dd72964",
+      "point_id": "5ced66cd-7363-5157-9797-719d0b41a22e",
+      "header_path": "采购申请审批需求（虚构） > 4. 状态与时效",
+      "content_preview": "## 4. 状态与时效   `draft` → `pending` → 各级 `approving` → `approved` / `rejected` pending 超过 5 个工作日自动提醒；不自动审批"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 4,
+      "content_hash": "51f026883bea966037a2fa43f6ba9b23",
+      "point_id": "8fd26ca4-e42f-549f-ba0f-111ec3b8fa40",
+      "header_path": "采购申请审批需求（虚构） > 5. 预算校验（简版）",
+      "content_preview": "## 5. 预算校验（简版）   - 提交时校验部门季度预算余额，不足则禁止提交并提示「预算不足」 - 预算数据由财务每月初导入，本需求不描述导入细节"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 5,
+      "content_hash": "43815e545206eb76628a869b9973df03",
+      "point_id": "163e5ec3-59f2-55a4-9cf9-23cb86764995",
+      "header_path": "采购申请审批需求（虚构） > 6. 审计与归档",
+      "content_preview": "## 6. 审计与归档   - 审批完成后生成 PDF 归档包：表单+审批记录+附件哈希 - 保留 7 年，不可物理删除，仅可标记作废"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 6,
+      "content_hash": "1f1a814f8a6f653e2604e7ca9f270bf4",
+      "point_id": "c861e91e-391a-5af2-ac0b-a000641e6b03",
+      "header_path": "采购申请审批需求（虚构） > 7. 接口要点",
+      "content_preview": "## 7. 接口要点   - `POST /procurement/requests` 创建 - `POST /procurement/requests/{id}/approve` 需 `action=approve|reject` - 附"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 7,
+      "content_hash": "0e162daebd36431197a7947099cafaef",
+      "point_id": "46d55b38-17a2-5a01-9976-2601860b2a5b",
+      "header_path": "采购申请审批需求（虚构） > 8. 验收关注点",
+      "content_preview": "## 8. 验收关注点   - 金额边界：9999.99 与 10000.00 走不同链路 - 缺少 PDF 附件无法进入 pending"
+    },
+    {
+      "file_name": "tc_approval_002.md",
+      "chunk_index": 8,
+      "content_hash": "8715e7044cbb4af86e446afe9742d0bc",
+      "point_id": "741d6a03-61f7-573d-9472-21bc1aa2601f",
+      "header_path": "采购申请审批需求（虚构） > 9. 报表（本期仅查询）",
+      "content_preview": "## 9. 报表（本期仅查询）   - 部门按月采购金额汇总导出 Excel - 不支持在线编辑已审批单据，作废须走管理员工单"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 0,
+      "content_hash": "6b39f3ad1eb1df98b432790c0548ffa5",
+      "point_id": "56f49437-55f5-585f-8c86-969120d18e6c",
+      "header_path": "用户登录模块需求规格说明（虚构）",
+      "content_preview": "# 用户登录模块需求规格说明（虚构）   | 版本 | 日期 | 作者 | |------|------|------| | V1.2 | 2026-03-01 | 产品组 |"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 1,
+      "content_hash": "0f6d74b356af5a38b2c6db7ccdfed9a2",
+      "point_id": "3d313365-7f57-5544-80f6-48b0ccd871a1",
+      "header_path": "用户登录模块需求规格说明（虚构） > 1. 背景与目标",
+      "content_preview": "## 1. 背景与目标   统一身份认证网关面向 ToB 企业客户，需支持账号密码登录，并通过图形验证码降低撞库与暴力破解风险。本模块不包含注册、找回密码（另见 UAM-REG 文档），也不涉及支付、订单等业务流程。"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 2,
+      "content_hash": "4c2fccd778227883c89bce57317bb809",
+      "point_id": "936e0e31-887d-56a4-b355-07d56e0f78f1",
+      "header_path": "用户登录模块需求规格说明（虚构） > 2. 功能范围 > 2.1 登录入口",
+      "content_preview": "## 2. 功能范围   ### 2.1 登录入口   - Web 端登录页路径：`/login` - 必填项：用户名（支持手机号或工号）、密码、图形验证码 - 可选：「记住我」勾选框（会话策略见 UAM-SESSION 文档，本模块仅透传"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 3,
+      "content_hash": "f4275288821aa9fc18c8b76d34b0d4bc",
+      "point_id": "0c2fcfed-a8a4-568b-9892-70cbdfdade7c",
+      "header_path": "用户登录模块需求规格说明（虚构） > 2. 功能范围 > 2.2 正常登录流程",
+      "content_preview": "### 2.2 正常登录流程   1. 用户打开登录页，系统生成 4 位字母数字混合验证码图片，同时下发 `captcha_id`（有效期 5 分钟） 2. 用户填写用户名、密码、验证码后点击「登录」 3. 服务端校验：验证码未过期 → 用"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 4,
+      "content_hash": "1e405cff1f5f177d6056859debb48d1a",
+      "point_id": "d19dadaa-b91a-5ef0-89aa-4c60aea4e4b7",
+      "header_path": "用户登录模块需求规格说明（虚构） > 2. 功能范围 > 2.3 异常与提示文案（须严格一致）",
+      "content_preview": "### 2.3 异常与提示文案（须严格一致）   | 场景 | 提示 | |------|------| | 用户名或密码任一错误 | 「用户名或密码错误」（不得提示「用户名不存在」或「密码错误」） | | 验证码输入错误 | 「验证码错误"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 5,
+      "content_hash": "ea0df7d4c44ccd42b5fbb19c64375bab",
+      "point_id": "de08c72e-83c8-5279-a154-af63d8f4c14f",
+      "header_path": "用户登录模块需求规格说明（虚构） > 2. 功能范围 > 2.4 安全策略",
+      "content_preview": "### 2.4 安全策略   - 同一用户名连续登录失败 **5 次**（含密码错误、验证码错误均计入），锁定 **15 分钟** - 锁定期间即使密码正确亦拒绝登录 - 密码传输须 HTTPS；后端仅存加盐哈希，日志禁止打印明文密码"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 6,
+      "content_hash": "b6b961e682a9ad0d257e12d87bcf005b",
+      "point_id": "c238d764-0a8c-5f40-b503-11e42321b1cf",
+      "header_path": "用户登录模块需求规格说明（虚构） > 3. 非功能需求",
+      "content_preview": "## 3. 非功能需求   - 登录接口 P99 响应 &lt; 800ms（不含短信） - 验证码图片须可被屏幕阅读器识别为「验证码图片」并支持刷新按钮无障碍标签"
+    },
+    {
+      "file_name": "tc_login_001.md",
+      "chunk_index": 7,
+      "content_hash": "e350d6e1e869ccfb94885e03ab82e2a1",
+      "point_id": "dc3c4553-a8e9-5ebb-a198-4bb96769d667",
+      "header_path": "用户登录模块需求规格说明（虚构） > 4. 不在范围",
+      "content_preview": "## 4. 不在范围   支付回调、订单查询、第三方 OAuth（见 UAM-OAUTH）。"
+    },
+    {
+      "file_name": "tc_login_002.md",
+      "chunk_index": 0,
+      "content_hash": "4437783e71952ca0a7710f914590f2d9",
+      "point_id": "c010a0f7-e41f-50c3-b516-57c16e578cb4",
+      "header_path": "企业微信 OAuth 登录需求（虚构） > 1. 概述",
+      "content_preview": "# 企业微信 OAuth 登录需求（虚构）   ## 1. 概述   为满足企业客户「扫码即用」习惯，系统在保留账号密码登录的前提下，新增 **企业微信扫码登录**。用户使用手机企业微信扫描二维码后，由本系统完成 OAuth2 授权码换票、"
+    },
+    {
+      "file_name": "tc_login_002.md",
+      "chunk_index": 1,
+      "content_hash": "350a5a46c510615ec3f7aee2063094ba",
+      "point_id": "08c55cfb-f453-55c0-bdb9-efd96fa4cade",
+      "header_path": "企业微信 OAuth 登录需求（虚构） > 2. 角色与前置条件",
+      "content_preview": "## 2. 角色与前置条件   - **企业管理员**：在管理后台完成 CorpID、AgentID、Secret 配置并启用「企业微信登录」 - **终端用户**：已安装企业微信且加入对应企业通讯录；若首次使用须完成 **绑定本地账号**"
+    },
+    {
+      "file_name": "tc_login_002.md",
+      "chunk_index": 2,
+      "content_hash": "058c7a6f6b3a12200c7cf9cafefdb975",
+      "point_id": "db321a50-b8fa-5f12-aa04-03cc92948476",
+      "header_path": "企业微信 OAuth 登录需求（虚构） > 3. 主流程：扫码登录",
+      "content_preview": "## 3. 主流程：扫码登录   1. 登录页展示「企业微信扫码登录」二维码（有效期 2 分钟，超时自动刷新） 2. 用户使用企业微信扫一扫，确认授权 3. 回调携带 `code`，后端向企业微信接口换取 `userid`、姓名、部门等 4"
+    },
+    {
+      "file_name": "tc_login_002.md",
+      "chunk_index": 3,
+      "content_hash": "8ce2bb022c95c9f1b4dd7e6138fdad40",
+      "point_id": "9076b49b-2a8a-5cb6-ac46-5bce8bf3d613",
+      "header_path": "企业微信 OAuth 登录需求（虚构） > 4. 异常流程",
+      "content_preview": "## 4. 异常流程   | 编号 | 场景 | 期望行为 | |------|------|------| | E1 | 用户取消扫码 | 返回登录页，Toast「已取消扫码」 | | E2 | 二维码过期 | 提示「二维码已过期，请刷新"
+    },
+    {
+      "file_name": "tc_login_002.md",
+      "chunk_index": 4,
+      "content_hash": "358efb1439b8c474d6c5740a72fc8aab",
+      "point_id": "651bd154-b6fa-5ea3-9cbe-400307f0db95",
+      "header_path": "企业微信 OAuth 登录需求（虚构） > 5. 安全与审计",
+      "content_preview": "## 5. 安全与审计   - `code` 一次性使用，5 分钟内有效 - 绑定操作须二次验证本地密码 - 审计日志记录：扫码时间、userid、绑定结果、IP"
+    },
+    {
+      "file_name": "tc_login_002.md",
+      "chunk_index": 5,
+      "content_hash": "5399140787e5ae8b24ec2f8c1b268535",
+      "point_id": "0dba81b5-e6f7-592f-b711-354e78bad503",
+      "header_path": "企业微信 OAuth 登录需求（虚构） > 6. 接口与兼容",
+      "content_preview": "## 6. 接口与兼容   - 回调 URL 固定为 `https://{domain}/api/auth/wework/callback` - 须兼容 Chrome 90+、Edge 90+；移动端 H5 同流程"
+    },
+    {
+      "file_name": "tc_login_002.md",
+      "chunk_index": 6,
+      "content_hash": "21c7afa891cfd21edc6371b763d19c15",
+      "point_id": "ccf366f8-dbad-57f0-8eb0-5148f5785c74",
+      "header_path": "企业微信 OAuth 登录需求（虚构） > 7. 验收标准摘要",
+      "content_preview": "## 7. 验收标准摘要   - 已绑定用户扫码后 3 步内进入首页 - 未绑定用户必须完成绑定才能访问业务接口 - 全流程文案为中文，关键按钮具备加载态防止重复提交"
+    },
+    {
+      "file_name": "tc_login_003.md",
+      "chunk_index": 0,
+      "content_hash": "96658df737952a08f042a69b874edd34",
+      "point_id": "3fe56967-2814-5c45-a845-3f7d84d65543",
+      "header_path": "会话保持与登出需求（虚构） > 1. 文档目的",
+      "content_preview": "# 会话保持与登出需求（虚构）   ## 1. 文档目的   定义用户登录后的 **会话（Session）** 生命周期：「记住我」长期登录、浏览器关闭行为、主动登出及多标签页一致性。本文档不描述文件上传、审批等业务模块。"
+    },
+    {
+      "file_name": "tc_login_003.md",
+      "chunk_index": 1,
+      "content_hash": "25d35d2907438f2621b1f47db2024ca6",
+      "point_id": "74f2af9d-9214-5363-af21-411633f5bdaa",
+      "header_path": "会话保持与登出需求（虚构） > 2. 术语",
+      "content_preview": "## 2. 术语   - **会话令牌**：HttpOnly Cookie 中的 `session_token`，或由前端持有的等价凭证（实现可选 JWT + Refresh） - **记住我**：用户勾选后延长会话有效期；未勾选则为浏览器"
+    },
+    {
+      "file_name": "tc_login_003.md",
+      "chunk_index": 2,
+      "content_hash": "f635680eb6d10c3d2ee6bfb05cd406ba",
+      "point_id": "55a14d9d-de62-5249-9aa9-756a3d7d4577",
+      "header_path": "会话保持与登出需求（虚构） > 3. 记住我",
+      "content_preview": "## 3. 记住我   | 勾选状态 | 会话有效期 | 说明 | |----------|------------|------| | 未勾选 | 浏览器关闭即失效 | 不写入持久化 Cookie | | 已勾选 | **7 天** | "
+    },
+    {
+      "file_name": "tc_login_003.md",
+      "chunk_index": 3,
+      "content_hash": "3e5d1757b5011dbfe324e2d983fa145a",
+      "point_id": "f88a490f-0ad0-5735-a70e-2db413a230e8",
+      "header_path": "会话保持与登出需求（虚构） > 4. 主动登出",
+      "content_preview": "## 4. 主动登出   1. 用户在设置页点击「退出登录」 2. 服务端将当前 `session_token` 加入黑名单，清除服务端会话 3. 前端清除本地缓存（含 Pinia/LocalStorage 中的用户概要，如有） 4. **"
+    },
+    {
+      "file_name": "tc_login_003.md",
+      "chunk_index": 4,
+      "content_hash": "97edf8000010f191f778527693ee0b19",
+      "point_id": "5bc90e1e-1f01-5173-862d-058d32e5e3bd",
+      "header_path": "会话保持与登出需求（虚构） > 5. 多标签与并发",
+      "content_preview": "## 5. 多标签与并发   - 同一账号允许多端同时在线（默认最多 5 端，可配置） - 登出仅失效当前端会话时，须在需求澄清会确认；**本版本要求：单端登出失效当前 token，其它标签共享同一 token 则一并失效**"
+    },
+    {
+      "file_name": "tc_login_003.md",
+      "chunk_index": 5,
+      "content_hash": "7f608c95289f65812a642ee59fc062f9",
+      "point_id": "7c3d2dc3-2c1a-57de-89f4-4efcfdaf6af3",
+      "header_path": "会话保持与登出需求（虚构） > 6. 异常与边界",
+      "content_preview": "## 6. 异常与边界   - 会话被管理员强制下线：返回 401，文案「账号已被管理员下线」 - 时钟 skew：服务端以 UTC 校验过期时间，容忍客户端 ±120 秒"
+    },
+    {
+      "file_name": "tc_login_003.md",
+      "chunk_index": 6,
+      "content_hash": "ecc6fcf49bd1c63dff5ccc83256bc774",
+      "point_id": "0ef95a9d-7707-56db-9721-05479fe9652c",
+      "header_path": "会话保持与登出需求（虚构） > 7. 非功能",
+      "content_preview": "## 7. 非功能   - 登出接口须幂等，重复调用仍返回 200 - 会话状态变更须在 1 秒内对网关可见（避免登出后仍能调用旧接口）"
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 0,
+      "content_hash": "06db519b6bdab82d646058ebf4684129",
+      "point_id": "fac68ed9-3d4d-54bc-bb3c-97376ac0a0b7",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整）",
+      "content_preview": "# 【草稿】内部工具模块需求（虚构 · 信息不完整）   > 状态：需求调研中，以下内容为会议纪要摘录，**大量细节待产品补充**。测试设计时可做 **合理假设**，并在测试点中明确标注「假设」。"
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 1,
+      "content_hash": "d7b7c41d45de18004eef68cf8cf623a6",
+      "point_id": "e7e5d05c-9a7b-56f6-8d45-5a12c04056d7",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整） > 已知信息",
+      "content_preview": "## 已知信息   - 模块代号：ToolHub（内部效率工具集合） - 目标用户：公司内部研发与运维，预计首期 200 人试用 - 希望支持：快捷入口聚合、常用脚本一键执行（具体脚本清单 **TBD**） - 管理层要求 Q3 上线，但 "
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 2,
+      "content_hash": "e640448a80e9c41e03c30f5f2d9ad378",
+      "point_id": "0f06eb5b-e668-5fcf-aca3-7c755a687b42",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整） > 会议纪要片段（2026-02-20）",
+      "content_preview": "## 会议纪要片段（2026-02-20）   1. 首页要有可配置的卡片，拖拽排序「可能有，待确认」 2. 执行脚本必须走审批吗？—— **会议未定论**，开发倾向「只读脚本免审批，写操作要审批」 3. 权限模型：可能复用现有 RBAC，"
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 3,
+      "content_hash": "d9f5ad90c25a5a16471a23886d722aed",
+      "point_id": "633c6395-cf61-5946-8fc5-9a60e7b27b01",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整） > 非功能（初步想法，未评审）",
+      "content_preview": "## 非功能（初步想法，未评审）   - 可用性 99.5%？ - 页面加载「尽量快」—— 无具体指标"
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 4,
+      "content_hash": "0a4c2190b225b50bf067b10b99aec7e8",
+      "point_id": "c5064730-4d4b-58a6-a5e3-141d1ff77817",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整） > 测试设计指引（给 QA / Agent）",
+      "content_preview": "## 测试设计指引（给 QA / Agent）   - 在信息不足处列出 **假设** 前提（如：默认只读脚本、默认沿用 RBAC） - 对未定义项不要编造业务规则写入正式用例，可标为「待需求确认后补充」 - 至少覆盖：配置缺失时的空状态、"
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 5,
+      "content_hash": "fdf5c5ff73626350110fc7311a78fc22",
+      "point_id": "3a41bdb0-a8f9-54a5-b2d7-89c7c2bd099c",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整） > 待补充清单（Product Backlog）",
+      "content_preview": "## 待补充清单（Product Backlog）   - [ ] 完整用户故事与线框图 - [ ] 脚本白名单接口规范 - [ ] 审批流是否接入现有 OA - [ ] 错误码表与文案规范"
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 6,
+      "content_hash": "7de8c11aae3b4abd0f36f7c3f328c254",
+      "point_id": "85253adf-81a4-5fd0-9160-84ca37dcff78",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整） > 风险与依赖（未评估）",
+      "content_preview": "## 风险与依赖（未评估）   - 依赖统一网关的 SSO，但 SSO 超时处理规则 **未写入** 本文档 - 脚本执行环境是容器还是 SSH 跳板机 **未决**，影响安全测试范围 - 若复用 RBAC，角色「工具管理员」是否新建 **"
+    },
+    {
+      "file_name": "tc_sparse_001.md",
+      "chunk_index": 7,
+      "content_hash": "1fd03aa06665801777e4765aa1f4d2f4",
+      "point_id": "ab230cc4-309f-595e-af41-423669436b63",
+      "header_path": "【草稿】内部工具模块需求（虚构 · 信息不完整） > 给测试 Agent 的示例假设（可引用）",
+      "content_preview": "## 给测试 Agent 的示例假设（可引用）   - **假设 A**：首期仅只读脚本，写操作按钮置灰 - **假设 B**：无配置时首页展示空状态引导联系管理员 - **假设 C**：权限不足统一返回 403 页面，不暴露脚本列表   "
+    },
+    {
+      "file_name": "tc_upload_001.md",
+      "chunk_index": 0,
+      "content_hash": "2161a23a95d9c70d46dabcc0cf48e9b3",
+      "point_id": "ee29d701-49df-5c5d-b000-6512769f0149",
+      "header_path": "单文件上传需求（虚构） > 1. 背景",
+      "content_preview": "# 单文件上传需求（虚构）   ## 1. 背景   知识库与工单模块需要统一的 **文件上传** 能力，供用户提交需求文档、截图与附件。本期为单文件同步上传接口，大文件分片见 UPLOAD-CHUNK 文档，病毒扫描见 UPLOAD-AV"
+    },
+    {
+      "file_name": "tc_upload_001.md",
+      "chunk_index": 1,
+      "content_hash": "e63136893cedc7fe9da0e8161de58ac0",
+      "point_id": "ae7d1dc8-e6d7-5b29-b230-52037ace6dd3",
+      "header_path": "单文件上传需求（虚构） > 2. 支持格式与大小",
+      "content_preview": "## 2. 支持格式与大小   | 类型 | 扩展名 | 单文件上限 | |------|--------|------------| | 文档 | PDF、DOCX、Markdown（.md） | **20MB** | | 图片 | PN"
+    },
+    {
+      "file_name": "tc_upload_001.md",
+      "chunk_index": 2,
+      "content_hash": "c3d282169ed274681a9a165f02248a12",
+      "point_id": "6abceb5e-b7f0-5041-a8c9-cdd5371a624b",
+      "header_path": "单文件上传需求（虚构） > 3. 上传流程",
+      "content_preview": "## 3. 上传流程   1. 用户在选择文件后看到本地文件名、大小预览 2. 点击「上传」，显示进度条（0–100%） 3. 成功：返回 `file_id`、`file_name`、`size`、`checksum`（SHA256） 4."
+    },
+    {
+      "file_name": "tc_upload_001.md",
+      "chunk_index": 3,
+      "content_hash": "bf0b0d3b649535a517bb6ded7650283b",
+      "point_id": "392f9f3f-e7ef-5283-8c57-bca946b04e0c",
+      "header_path": "单文件上传需求（虚构） > 4. 异常处理",
+      "content_preview": "## 4. 异常处理   | 场景 | 处理 | |------|------| | 不支持格式 | **不支持格式提示**：列出允许的类型，如「仅支持 PDF、DOCX、Markdown」 | | 超过大小限制 | 前后端一致拦截，错误码"
+    },
+    {
+      "file_name": "tc_upload_001.md",
+      "chunk_index": 4,
+      "content_hash": "cf4aaa75d25c14ebcb19a6d66ec050a4",
+      "point_id": "70198810-428f-5a75-b701-d78d16dec0ca",
+      "header_path": "单文件上传需求（虚构） > 5. 存储与权限",
+      "content_preview": "## 5. 存储与权限   - 对象存储路径：`/{tenant_id}/uploads/{yyyy}/{mm}/{file_id}` - 下载须带签名 URL，有效期 15 分钟 - 仅上传者及同租户管理员可删除"
+    },
+    {
+      "file_name": "tc_upload_001.md",
+      "chunk_index": 5,
+      "content_hash": "5931302d78edfddac2ed602b00120a5a",
+      "point_id": "9a0ee55a-f2aa-5bb5-b8ae-d1f0e57891d3",
+      "header_path": "单文件上传需求（虚构） > 6. 审计",
+      "content_preview": "## 6. 审计   记录：操作人、原始文件名、大小、上传时间、关联业务 ID（可选）"
+    },
+    {
+      "file_name": "tc_upload_001.md",
+      "chunk_index": 6,
+      "content_hash": "e628abbae8331adf7ae20f85dd409d15",
+      "point_id": "3d49ac25-f041-54b7-9901-6e6155b62137",
+      "header_path": "单文件上传需求（虚构） > 7. 性能指标",
+      "content_preview": "## 7. 性能指标   - 20MB 文件在 100Mbps 内网环境 P95 完成时间 &lt; 30 秒 - 接口支持 Idempotency-Key 防止重复提交"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 0,
+      "content_hash": "f84460eceb92bf694328b26d1f3844d6",
+      "point_id": "3b69b718-346b-5917-b4f6-4cb64744f4c3",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 1. 范围说明",
+      "content_preview": "# 大文件分片上传与断点续传需求（虚构）   ## 1. 范围说明   当单文件超过 **5MB** 时，客户端 **启用分片上传**；小于等于 5MB 仍走直传接口（见 UPLOAD-SINGLE）。合并、校验、续传状态机由本服务统一编排"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 1,
+      "content_hash": "e16d5b3ddb0bf0e98f6d75dc69770ace",
+      "point_id": "28659cbb-7b46-5d7e-bd0b-964c182931c3",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 2. 分片规则",
+      "content_preview": "## 2. 分片规则   - 默认分片大小：5MB（可配置 2–10MB） - 每个分片上传须携带：`upload_id`、`part_number`（从 1 开始）、`total_parts` - 单片失败可单独重传，不影响已完成分片 -"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 2,
+      "content_hash": "787d976be297d705ff3b6aca39578e45",
+      "point_id": "1f8fa5d7-c994-5ec8-91b5-5f7b6f4b3ddf",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 3. 流程 > 3.1 初始化",
+      "content_preview": "## 3. 流程   ### 3.1 初始化   `POST /upload/multipart/init` → 返回 `upload_id`、建议 `part_size`"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 3,
+      "content_hash": "f5666bfd79cc2b54e0bb55212e226f18",
+      "point_id": "ef1b31e0-981d-5d49-a96b-ce879ca48046",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 3. 流程 > 3.2 上传分片",
+      "content_preview": "### 3.2 上传分片   `PUT /upload/multipart/{upload_id}/parts/{part_number}`，Body 为二进制；响应含 `etag`"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 4,
+      "content_hash": "fcf91c1222ed695d41a3031acfa67ea5",
+      "point_id": "97a37ab8-a4de-55e6-9655-952ab8c3803f",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 3. 流程 > 3.3 合并",
+      "content_preview": "### 3.3 合并   全部 part 成功后调用 `POST /upload/multipart/{upload_id}/complete`，服务端按序 **合并** 并计算整体 SHA256   - **合并失败可重试**：若合并超时"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 5,
+      "content_hash": "73104b66eabbae80cbc634b187a2881f",
+      "point_id": "95c9969d-2a1e-5a0c-9e2a-74e1ccacde64",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 3. 流程 > 3.4 取消",
+      "content_preview": "### 3.4 取消   `DELETE /upload/multipart/{upload_id}` 释放临时空间"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 6,
+      "content_hash": "6084fba4e16abad42ac795d9703786fe",
+      "point_id": "639566c8-ce9f-54f7-a819-66d8e0d1ab29",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 4. 断点续传场景",
+      "content_preview": "## 4. 断点续传场景   用户关闭页面后再次选择同一文件（按文件名+大小+最后修改时间匹配，或用户手动选择「继续上传」）：   1. 客户端查询 `GET /upload/multipart/{upload_id}/status` 2."
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 7,
+      "content_hash": "a466b15ab4ee68b091e56d9f484285ac",
+      "point_id": "ed22d1c4-cfc4-5785-bc4f-af98b1706661",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 5. 异常与限制",
+      "content_preview": "## 5. 异常与限制   | 场景 | 要求 | |------|------| | 分片顺序错乱 | 服务端拒绝 complete | | 单片 MD5 不匹配 | 返回 400，要求重传该 part | | 总大小超过租户配额 | 拒"
+    },
+    {
+      "file_name": "tc_upload_002.md",
+      "chunk_index": 8,
+      "content_hash": "6fb5b616526cefa6c770fa3836c61a66",
+      "point_id": "6a593a97-2e0a-53a0-b1d0-be26223e775a",
+      "header_path": "大文件分片上传与断点续传需求（虚构） > 6. 非功能",
+      "content_preview": "## 6. 非功能   - 单租户并发分片上传不超过 10 路 - 合并操作异步化时，须轮询或 WebSocket 通知最终 `file_id`"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 0,
+      "content_hash": "09de27b6a958855e948b4c5b386c09ba",
+      "point_id": "c7a720f3-27c8-54cf-a3e4-f7a1a73dfa49",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 1. 目标",
+      "content_preview": "# 上传文件病毒扫描与隔离需求（虚构）   ## 1. 目标   所有经上传通道进入对象存储的文件，在可被业务引用或 **下载** 之前，必须经过异步 **病毒扫描** 与策略引擎判定，防止恶意样本进入知识库与工单系统。本模块与用户 **登"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 1,
+      "content_hash": "8888c43aa3dace5f53f0b10353665d5b",
+      "point_id": "f2f8ae22-b30e-59d3-9338-775e4425c15f",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 2. 扫描流程",
+      "content_preview": "## 2. 扫描流程   1. 文件直传或分片合并完成后，写入「待扫描」队列，业务侧 `file_status=pending_scan` 2. 扫描引擎（对接虚构 AV-Agent）拉取对象，返回：clean / infected / e"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 2,
+      "content_hash": "546f1c2927505bf0612da6c49f272a8c",
+      "point_id": "60002dad-48d9-5389-925d-a4c4dda51ee8",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 3. 隔离策略",
+      "content_preview": "## 3. 隔离策略   - **高危文件隔离**：判定为木马、勒索、宏病毒等，立即隔离，不可被任何业务 API 引用 - 隔离对象移至独立 bucket 前缀 `/quarantine/`，原路径失效 - 用户侧列表展示状态「审核中」或「"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 3,
+      "content_hash": "c075725524ac34e4ee2c7d7266d81b08",
+      "point_id": "a6f233e0-41d3-56f8-8d9c-b240602d903a",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 4. 通知与申诉",
+      "content_preview": "## 4. 通知与申诉   - 上传者收到站内信：文件名、时间、处理结果 - 企业管理员可在后台查看隔离列表，支持误报申诉（二期人工放行，本期仅记录工单号）"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 4,
+      "content_hash": "25a107e7152434e77ad1c17c3947419f",
+      "point_id": "a19b6c45-4ac2-550d-8c37-1bd4499f6061",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 5. 性能与 SLA",
+      "content_preview": "## 5. 性能与 SLA   - 50MB 以内文件，扫描完成 P95 &lt; 3 分钟 - 队列堆积超过 1000 须告警"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 5,
+      "content_hash": "ee5baf9956c951e4553aa4bb4cb60ed8",
+      "point_id": "57746201-e53e-55d2-86c9-baaf5f83f858",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 6. 合规",
+      "content_preview": "## 6. 合规   - 扫描日志保留 180 天：file_id、hash、结果、引擎版本 - 不得将文件内容外传至境外节点（部署约束）"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 6,
+      "content_hash": "f2c009dec4a4f36d0786a9b0f6aed7b9",
+      "point_id": "1e9f87e6-ecef-5662-939a-f7e6af353e21",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 7. 接口约束",
+      "content_preview": "## 7. 接口约束   - `GET /files/{id}/download` 须校验 `file_status==available` - 预览接口与下载接口规则一致"
+    },
+    {
+      "file_name": "tc_upload_003.md",
+      "chunk_index": 7,
+      "content_hash": "be0b7a5a3b25f2ca0255b6ff27c1cc85",
+      "point_id": "dd565979-fc20-5b63-973b-424249479f0c",
+      "header_path": "上传文件病毒扫描与隔离需求（虚构） > 8. 与上传模块衔接",
+      "content_preview": "## 8. 与上传模块衔接   - 直传与分片合并完成事件均须投递同一扫描队列 - 扫描中的文件在业务侧展示「处理中」，禁止关联到知识库索引任务"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 0,
+      "content_hash": "ad235444b3a2591c2b98da997b3f940e",
+      "point_id": "986a2c83-f2da-5f82-9967-d16fb3b4f452",
+      "header_path": "商品下单功能设计文档 > 1. 概述 > 1.1 功能简介",
+      "content_preview": "# 商品下单功能设计文档   ## 1. 概述   ### 1.1 功能简介   商品下单模块负责管理用户的购物车和订单创建，支持添加商品、修改数量、确认订单、支付等完整购物流程。"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 1,
+      "content_hash": "a9b7072a04fad429d0acf6b2a4060dbe",
+      "point_id": "1d1e899e-817e-5c0d-87bb-8eeaefc59aa4",
+      "header_path": "商品下单功能设计文档 > 1. 概述 > 1.2 核心特性",
+      "content_preview": "### 1.2 核心特性   | 特性 | 说明 | |------|------| | 购物车管理 | 添加/删除/修改商品数量 | | 订单创建 | 从购物车确认生成正式订单 | | 库存扣减 | 下单时实时扣减库存 | | 订单状态 "
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 2,
+      "content_hash": "eac77075385d8fd2d7efd44d02c316e1",
+      "point_id": "e90b19f8-becb-544c-8d3d-1598d766603d",
+      "header_path": "商品下单功能设计文档 > 2. 技术架构 > 2.1 整体架构",
+      "content_preview": "## 2. 技术架构   ### 2.1 整体架构   ``` ┌─────────────────────────────────────────────────────────────────┐ │                   "
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 3,
+      "content_hash": "07e579a9151d317d9560421fad4ec9c3",
+      "point_id": "17811d8a-4712-55ea-9fc4-938b8b231755",
+      "header_path": "商品下单功能设计文档 > 2. 技术架构 > 2.1 整体架构",
+      "content_preview": "│                   │                     │ ▼                   ▼                     ▼ ┌───────────────────────────────"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 4,
+      "content_hash": "f3b57c01fa50f0bb8dba6a67c237af67",
+      "point_id": "6d739375-23f9-55d6-9f83-0734d4317e85",
+      "header_path": "商品下单功能设计文档 > 2. 技术架构 > 2.1 整体架构",
+      "content_preview": "│                         │                     │ ▼                         ▼                     ▼ ┌───────────────────"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 5,
+      "content_hash": "13c04734d15695388c538fc44982513d",
+      "point_id": "f77dc4d7-9336-5d65-b10b-324a18c11196",
+      "header_path": "商品下单功能设计文档 > 2. 技术架构 > 2.1 整体架构",
+      "content_preview": "▼                         ▼                      ▼ ┌─────────────────────────────────────────────────────────────────┐ │"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 6,
+      "content_hash": "543ee32738bd63d748b43f3c4117363e",
+      "point_id": "6dd6cc71-7711-5da9-b827-bd716062bd85",
+      "header_path": "商品下单功能设计文档 > 2. 技术架构 > 2.1 整体架构",
+      "content_preview": "│  (购物车商品表)         │  (订单商品表)         │  (库存表)          │ └────────────────────────────────────────────────────────────"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 7,
+      "content_hash": "d7bf8c29093f88064f63d19580fed267",
+      "point_id": "c87cfb70-262d-5a44-aa29-bdb3cc56c268",
+      "header_path": "商品下单功能设计文档 > 2. 技术架构 > 2.2 数据流向",
+      "content_preview": "### 2.2 数据流向   ``` 用户选择商品 → 加入购物车 → 确认订单 → 支付 → 扣减库存 → 生成订单 │              │            │           │          │        "
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 8,
+      "content_hash": "38b25121558a99d0d2235b12ba0de3de",
+      "point_id": "097aa269-c628-5ed2-a8b6-772e6081d3af",
+      "header_path": "商品下单功能设计文档 > 3. 数据库设计 > 3.1 购物车表 t_cart",
+      "content_preview": "## 3. 数据库设计   ### 3.1 购物车表 t_cart   | 字段 | 类型 | 说明 | |------|------|------| | id | VARCHAR(36) | UUID 主键 | | user_id | V"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 9,
+      "content_hash": "051b3474221455ebc196440d6061833d",
+      "point_id": "c86c21ca-8a74-527d-bcdf-d018682f6303",
+      "header_path": "商品下单功能设计文档 > 3. 数据库设计 > 3.2 购物车商品表 t_cart_item",
+      "content_preview": "### 3.2 购物车商品表 t_cart_item   | 字段 | 类型 | 说明 | |------|------|------| | id | VARCHAR(36) | UUID 主键 | | cart_id | VARCHAR("
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 10,
+      "content_hash": "d6aa6ea174b096b7195547f42a5af703",
+      "point_id": "07b75d2c-46a7-501e-8ee8-509b7ae1b078",
+      "header_path": "商品下单功能设计文档 > 3. 数据库设计 > 3.3 订单表 t_order",
+      "content_preview": "### 3.3 订单表 t_order   | 字段 | 类型 | 说明 | |------|------|------| | id | VARCHAR(36) | UUID 主键 | | order_no | VARCHAR(64) | "
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 11,
+      "content_hash": "293b09e137c548aa06555aaa4b93b1b2",
+      "point_id": "66104d16-db4a-5d28-98ff-727380d87619",
+      "header_path": "商品下单功能设计文档 > 3. 数据库设计 > 3.4 订单商品表 t_order_item",
+      "content_preview": "### 3.4 订单商品表 t_order_item   | 字段 | 类型 | 说明 | |------|------|------| | id | VARCHAR(36) | UUID 主键 | | order_id | VARCHAR"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 12,
+      "content_hash": "bdcd7648642331004f2aef2841ff69ab",
+      "point_id": "ddbde489-3869-54da-9a85-bfa6b27dcdcc",
+      "header_path": "商品下单功能设计文档 > 3. 数据库设计 > 3.5 商品表 t_product",
+      "content_preview": "### 3.5 商品表 t_product   | 字段 | 类型 | 说明 | |------|------|------| | id | VARCHAR(36) | UUID 主键 | | name | VARCHAR(200) | 商"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 13,
+      "content_hash": "97f9bc41af1dceff60ebd2c44caaf7a6",
+      "point_id": "2cedf961-d2d2-536e-9336-ec26f9d8b505",
+      "header_path": "商品下单功能设计文档 > 4. API 设计 > 4.1 购物车相关",
+      "content_preview": "## 4. API 设计   ### 4.1 购物车相关   #### GET /api/cart 获取当前用户购物车。   **响应：** ```json { \"code\": 200, \"msg\": \"获取购物车成功\", \"data\": "
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 14,
+      "content_hash": "3feb34013e971e79653ab515832a3f65",
+      "point_id": "1d89bfdc-7322-573e-8201-150a1b07f033",
+      "header_path": "商品下单功能设计文档 > 4. API 设计 > 4.1 购物车相关",
+      "content_preview": "**请求体：** ```json { \"quantity\": 3 } ```   #### DELETE /api/cart/items/{item_id} 删除购物车商品。"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 15,
+      "content_hash": "23572faf92c48f2697ea2968cf0e492a",
+      "point_id": "2cc55811-d37d-5968-843d-db5d03117fea",
+      "header_path": "商品下单功能设计文档 > 4. API 设计 > 4.2 订单相关",
+      "content_preview": "### 4.2 订单相关   #### POST /api/orders 创建订单（从购物车确认）。   **请求体：** ```json { \"cart_id\": \"cart-uuid\" } ```   **响应：** ```json {"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 16,
+      "content_hash": "80f983ffedfca32675faec8210597064",
+      "point_id": "b29d5d1b-2702-5674-9ab1-c3dbde87d1d2",
+      "header_path": "商品下单功能设计文档 > 5. 核心功能流程 > 5.1 添加购物车流程",
+      "content_preview": "## 5. 核心功能流程   ### 5.1 添加购物车流程   ``` 1. 用户点击\"加入购物车\" │ 2. 前端调用 POST /api/cart/items │ 3. 后端检查商品库存是否充足 │ 4. 检查购物车是否已有该商品 │"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 17,
+      "content_hash": "6c78614f067f73ead008898d1ef720c0",
+      "point_id": "c0203726-371e-5a25-b912-cf082fd4fe6e",
+      "header_path": "商品下单功能设计文档 > 5. 核心功能流程 > 5.1 添加购物车流程",
+      "content_preview": "# 检查是否已存在 existing = await db.execute( select(TCartItem).where( TCartItem.cart_id == cart_id, TCartItem.product_id == pr"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 18,
+      "content_hash": "f6eda10a84370671df0aaa5c518c8c4e",
+      "point_id": "349963de-3403-53d4-879e-80979d03d859",
+      "header_path": "商品下单功能设计文档 > 5. 核心功能流程 > 5.2 创建订单流程",
+      "content_preview": "### 5.2 创建订单流程   ``` 1. 用户确认购物车商品，点击\"提交订单\" │ 2. 前端调用 POST /api/orders │ 3. 后端开启事务 │ 4. 锁定购物车商品，生成订单号 │ 5. 遍历购物车商品： │   ├"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 19,
+      "content_hash": "249f21c753a144dc920c04ef9e21b715",
+      "point_id": "528e05c3-e9b8-56e8-afa4-056128202244",
+      "header_path": "商品下单功能设计文档 > 5. 核心功能流程 > 5.2 创建订单流程",
+      "content_preview": "# 创建订单 order = TOrder( id=str(uuid.uuid4()), order_no=order_no, user_id=user_id, total_amount=0, status='pending' ) db.a"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 20,
+      "content_hash": "bac3049a2c1f3c0b60ac8e589deee11c",
+      "point_id": "b9e15e54-7d5c-54d4-b4af-9306af31ee7f",
+      "header_path": "商品下单功能设计文档 > 5. 核心功能流程 > 5.2 创建订单流程",
+      "content_preview": "# 创建订单商品 order_item = TOrderItem( id=str(uuid.uuid4()), order_id=order.id, product_id=item.product_id, product_name=item"
+    },
+    {
+      "file_name": "商品下单设计.md",
+      "chunk_index": 21,
+      "content_hash": "b735d8595d960672634f05ec70f60585",
+      "point_id": "3d568ed9-e7ba-59b5-8eb3-88567244d461",
+      "header_path": "商品下单功能设计文档 > 5. 核心功能流程 > 5.3 订单支付流程",
+      "content_preview": "### 5.3 订单支付流程   ``` 1. 用户选择支付方式，点击\"支付\" │ 2. 前端调用 PUT /api/orders/{order_id}/pay │ 3. 后端检查订单状态是否为 pending │ 4. 调用支付网关（模拟"
+    }
+  ],
+  "test_cases": [
+    {
+      "file_name": "tc_login_hist_001.md",
+      "chunk_index": 0,
+      "content_hash": "0ab865022c086822860e69f835ec84d7",
+      "point_id": "03f52dee-412d-5ee8-b5bd-8863494da0c5",
+      "header_path": "历史测试用例：用户登录模块 > 场景：用户登录 > TC-LOGIN-HIST-001 用户名密码错误提示",
+      "content_preview": "# 历史测试用例：用户登录模块   ## 场景：用户登录   ### TC-LOGIN-HIST-001 用户名密码错误提示   - **优先级**：P0 - **前置条件**：用户已打开登录页 - **步骤**： 1. 输入正确用户名、错"
+    },
+    {
+      "file_name": "tc_login_hist_001.md",
+      "chunk_index": 1,
+      "content_hash": "4d77d3d41ce8a1f202817c46a7dc6225",
+      "point_id": "ff1ccc5b-4d10-5e74-9826-0b828da5e284",
+      "header_path": "历史测试用例：用户登录模块 > 场景：用户登录 > TC-LOGIN-HIST-002 验证码过期刷新",
+      "content_preview": "### TC-LOGIN-HIST-002 验证码过期刷新   - **优先级**：P1 - **前置条件**：验证码已展示超过 5 分钟 - **步骤**： 1. 输入任意用户名密码与过期验证码 2. 点击登录 - **预期**：提示验证"
+    }
+  ]
+}

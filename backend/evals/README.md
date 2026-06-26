@@ -5,7 +5,9 @@
 | 场景 | 命令 | 状态 |
 |------|------|------|
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
-| 深度研究 Agent | `uv run python -m evals.agent` | 已实现 |
+| Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
+| Agent / WildClawBench | `uv run python -m evals.agent.wildclaw` | 已实现 |
+| Agent / 本地开发集 | `uv run python -m evals.agent.legacy` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 
 ```bash
@@ -13,7 +15,7 @@ cd backend
 uv run python -m evals    # 仅打印上表说明
 ```
 
-OpenSpec：`openspec/changes/add-agent-offline-eval/`
+OpenSpec：`openspec/specs/agent-offline-eval/spec.md`、`openspec/specs/test-case-agent-eval/spec.md`
 
 ## Langfuse（评测专用项目）
 
@@ -32,60 +34,78 @@ cp backend/evals/.env.example backend/evals/.env
 
 ## 1. 测试用例（`evals.case` + promptfoo）
 
-指标：**L0**、**coverage**、**rag**。每次跑分执行完整流程（场景测试点 → 测试用例），需 Qdrant + LLM。
+指标：**阶段 A**（L0、`point_coverage_recall`、`scene_name_recall`）、**阶段 B**（两路 RAG Recall@3/Hit@3、`document_context_present`）。
 
 ```
 evals/case/
-  runner.py
-  fixtures.py             # 需求文档路径解析
-  scoring.py              # L0 / rag 的 python 断言
-  promptfoo/
-    promptfooconfig.yaml    # 单文件：prompts + providers + defaultTest.assert + tests
-    fixtures/documents/   # 各用例需求 Markdown
-    coverage_rubric.txt
-    provider.py
-    judge_provider.py
+  README.md                 # 目录说明（评测集 / 文档在哪）
+  testpoints/               # 测试点评测
+    promptfooconfig.yaml    # 评测集 + 金标准
+    documents/              # 输入需求 PRD
+  rag/                      # RAG 检索评测
+    promptfooconfig.yaml
+    corpus/test_cases/      # 历史用例语料
+    ingest.py
+  shared/                   # assertions、judge
 ```
 
 ```bash
-uv run python -m evals.case --tag baseline
+uv run python -m evals.case --phase testpoints --tag baseline
+uv run python -m evals.case --phase rag --tag rb-baseline
+uv run python -m evals.case.rag.ingest --map-only
+uv run python -m evals.case.rag.ingest --reset
 uv run python -m evals.case --tag debug --item-id tc_login_001
 ```
 
-coverage 走 promptfoo **llm-rubric**（`coverage_rubric.txt` + `judge_provider.py`）；Judge 不列入顶层 `providers`。
+用例与金标准写在 `testpoints/promptfooconfig.yaml` 或 `rag/promptfooconfig.yaml` 的 `tests` 段，**不**使用单独的 `dataset.jsonl`。
+
+coverage 走 promptfoo **llm-rubric**（`shared/judge.py` → `get_llm()`）。详见 `evals/case/README.md`。
 
 ---
 
-## 2. 深度研究 Agent（`evals.agent`）
+## 2. Agent 评测（按 benchmark 分子模块）
 
-评测 `DeepResearchAgent`（`DEEP_RESEARCH_QA`）。数据集：`evals/agent/datasets/deep_research/`（8 条，含检索 / 代码 / 报告 / 安全类）。
+与 `evals.case` 相同：**每个官方评测集一个目录、一个入口**，无中间编排层。
 
 ```
 evals/agent/
-  dataset.py
-  runner.py
-  scoring.py
-  report.py
-  datasets/deep_research/
-    dataset.jsonl
-    workspaces/
-  results/<tag>/
+  _agent.py                 # DeepResearchAgent 共用执行
+  browsecomp/
+    official.py               # openai/simple-evals BrowseComp（vendored）
+    __main__.py               # uv run python -m evals.agent.browsecomp
+    results/<tag>/
+  wildclaw/
+    __main__.py               # 调官方 script/run.sh noesis
+    worker.py                 # WildClawBench backend 回调
+    noesis_agent.py           # 打入 vendor 的 agent 文件
+    results/<tag>/
+  legacy/                     # 本地 8 题，不对标
+    datasets/deep_research/
+    __main__.py
+    results/<tag>/
 ```
 
+### BrowseComp
+
 ```bash
-uv run python -m evals.agent --tag dr-baseline
-uv run python -m evals.agent --tag debug --item-id dr_code_sam3_debug
-uv run python -m evals.agent --tag try1 --limit 3 --compare-to results/dr-baseline
+uv run python -m evals.agent.browsecomp --tag bc-smoke --num-examples 5
 ```
 
-环境变量：`NOESIS_AGENT_EVAL_TAG`、`NOESIS_AGENT_EVAL_ITEM_ID`、`NOESIS_AGENT_EVAL_LIMIT`、`NOESIS_AGENT_EVAL_DATASET`。
+官方 CSV + `BrowseCompEval` + 官方 `GRADER_TEMPLATE` → 指标 **accuracy**。结果：`browsecomp/results/<tag>/summary.json`。
 
-混合评分：规则 criteria（`file_exists` / `file_contains` / `json_field_min` / `file_not_exists`）占 70%，`semantic_rubric` LLM Judge 占 30%。Judge **始终**调用真实 `get_llm()`，无 mock 开关。
-
-集成测试（默认 skip）：
+### WildClawBench
 
 ```bash
-NOESIS_AGENT_EVAL_INTEGRATION=1 uv run pytest tests/test_eval_agent_integration.py -q
+git clone https://github.com/InternLM/WildClawBench vendor/WildClawBench
+uv run python -m evals.agent.wildclaw --tag wc -- --category 02_Code_Intelligence --parallel 1
+```
+
+自动打入 `noesis` backend，评分走上游 Docker grader。结果：`wildclaw/results/<tag>/`。
+
+### legacy（不对标）
+
+```bash
+uv run python -m evals.agent.legacy --tag dev --limit 1
 ```
 
 ---

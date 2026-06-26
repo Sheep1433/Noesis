@@ -1,7 +1,8 @@
 # chat-session-context-panel Specification
 
 ## Purpose
-TBD - created by archiving change unify-user-data-layout. Update Purpose after archive.
+
+本能力规定 chat 页 **会话上下文面板**与配套 API：聚合展示当前会话的 workspace 目录树与未过期附件列表，支持只读查看 workspace 文本文件；不提供编辑/上传/删除 workspace 的 UI（附件删除仍走 composer 与附件 API）。
 ## Requirements
 ### Requirement: 系统 SHALL 提供会话上下文聚合 API
 

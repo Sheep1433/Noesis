@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config.user_data_paths import (
     delete_session_data,
+    ensure_user_root,
     ensure_workspace_dir,
     get_user_root,
     get_workspace_dir,
@@ -17,6 +18,7 @@ __all__ = [
     "get_user_workspace_root",
     "get_workspace_dir",
     "ensure_workspace_dir",
+    "ensure_user_root",
     "delete_session_workspace",
     "delete_session_data",
 ]

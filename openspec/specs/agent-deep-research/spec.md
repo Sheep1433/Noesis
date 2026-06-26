@@ -1,6 +1,6 @@
 ## Purpose
 
-本能力规定 Noesis 第 4 类问答场景 **深度研究（`DEEP_RESEARCH_QA`）** 的后端 Agent 实现：`DeepResearchAgent` 经统一工厂 `create_noesis_agent` 装配 deepagents 的 **FilesystemMiddleware**、**SkillsMiddleware** 与 **SubAgentMiddleware**；工作区写入 `.data/agent_workspace/users/{user_id}/sessions/{session_id}/workspace/`（见 `agent-workspace` 规格），Skills 以 `/skills/` 路由只读挂载 `extensions/skills`；主 Agent 可通过 `task` 工具委派 `research-worker` 子 Agent 并行调研，流式输出与前端子任务展示遵循平台聊天规格。
+本能力规定 Noesis 第 4 类问答场景 **深度研究（`DEEP_RESEARCH_QA`）** 的后端 Agent 实现：`DeepResearchAgent` 经统一工厂 `create_noesis_agent` 装配 deepagents 的 **FilesystemMiddleware**、**SkillsMiddleware** 与 **SubAgentMiddleware**；工作区写入 `.data/users/{user_id}/sessions/{session_id}/workspace/`（见 `agent-runtime-paths` 规格），Skills 以 `/skills/` 路由只读挂载 `extensions/skills`；主 Agent 可通过 `task` 工具委派 `research-worker` 子 Agent 并行调研，流式输出与前端子任务展示遵循平台聊天规格。
 ## Requirements
 ### Requirement: qa_type 路由至 DeepResearchAgent
 
@@ -112,7 +112,7 @@
 |------|----------------------------------|---------------------|
 | 消费方 | LangGraph Agent / deepagents 中间件 | 前端 Skills 管理页、运维上传 |
 | 访问面 | `FilesystemMiddleware` + `SkillsMiddleware` 虚拟路径 | `GET/POST /api/skills/fs/*` REST |
-| 写入范围 | 当前会话 `.data/agent_workspace/users/.../workspace/` | ZIP 上传解压至技能根目录 |
+| 写入范围 | 当前会话 `.data/users/{uid}/sessions/{sid}/workspace/` | ZIP 上传解压至技能根目录 |
 | 认证 | 继承聊天会话 JWT 链路的 Agent 进程内访问 | 接口级 JWT 校验 |
 
 本规格 **SHALL NOT** 复制 `skills-filesystem` 中的 API 路径、响应字段或 ZIP 大小限制细节；当 Agent 需读取 skill 内容时，**SHALL** 通过 `/skills/` 路由与 `SkillsMiddleware` 完成，**SHALL NOT** 在 Agent 代码中直接调用 `/api/skills/fs/file`。

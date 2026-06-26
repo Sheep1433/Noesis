@@ -76,6 +76,8 @@ class SkillFsService:
             entry_full = os.path.join(full, name)
             node_key = f'{key_prefix}{entry_rel}'
             try:
+                if source == 'user' and os.path.islink(entry_full):
+                    continue
                 if os.path.isdir(entry_full):
                     children = cls._scan_dir(
                         root, entry_rel, source=source, key_prefix=key_prefix,
@@ -251,6 +253,8 @@ class SkillFsService:
             return False, '不能删除根目录'
         if not os.path.isdir(target):
             return False, '技能目录不存在'
+        if os.path.islink(target):
+            return False, '不能删除平台预置技能链接'
         try:
             shutil.rmtree(target)
         except OSError as e:

@@ -1,12 +1,15 @@
 <script setup lang="ts">
-/** 助手回复流式进行中：嵌入 unified card 底栏，或独立块（旧版消息结构） */
+/** 助手回复流式进行中：卡片内工具栏上方(section)、卡片底栏(embedded)、或独立块 */
 withDefaults(
   defineProps<{
     embedded?: boolean
+    /** 卡片内、用量/工具栏上方 */
+    section?: boolean
     label?: string
   }>(),
   {
     embedded: false,
+    section: false,
     label: '正在继续生成',
   },
 )
@@ -15,7 +18,10 @@ withDefaults(
 <template>
   <div
     class="assistant-streaming-indicator"
-    :class="{ 'assistant-streaming-indicator--embedded': embedded }"
+    :class="{
+      'assistant-streaming-indicator--embedded': embedded,
+      'assistant-streaming-indicator--section': section,
+    }"
     role="status"
     aria-live="polite"
     :aria-label="label"
@@ -76,6 +82,22 @@ withDefaults(
   border-left: none;
   border-radius: 0 0 15px 15px;
   box-shadow: none;
+}
+
+.assistant-streaming-indicator--section {
+  width: 100%;
+  margin: 0;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, rgb(248 250 253 / 0%) 0%, #f6f8fc 100%);
+  border: none;
+  border-top: 1px solid #eef1f6;
+  border-left: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.assistant-streaming-indicator--section::before {
+  display: none;
 }
 
 .assistant-streaming-indicator__dots {

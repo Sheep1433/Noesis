@@ -1,6 +1,6 @@
 ## Purpose
 
-本能力规定 Noesis 第 3 个 Agent 场景 **测试用例生成（`TEST_CASE_QA`）** 的端到端验收标准，覆盖后端流水线、SSE 业务事件、恢复接口、测试助手 UI 与离线评测（冻结）。
+本能力规定 Noesis 第 3 个 Agent 场景 **测试用例生成（`TEST_CASE_QA`）** 的端到端验收标准，覆盖后端流水线、SSE 业务事件、恢复接口与测试助手 UI。
 
 文档按以下章节组织（各章内以 `### Requirement` 表述 SHALL/Scenario）：
 
@@ -8,11 +8,13 @@
 2. **SSE 业务事件** — `phase-*`、`scenes-testpoints-ready`、`testpoints-confirm-required` 等 TEST_CASE_QA 专用帧
 3. **恢复接口** — `POST /api/chat/sessions/{session_id}/test-case/resume`
 4. **测试助手 UI** — `TestAssistant.vue` 状态机、脑图、勾选
-5. **离线评测（冻结）** — L0 / coverage / rag；数据集规模以仓库现有 `dataset.jsonl` 为准
 
-**不在本 spec 重复**：平台级通用 SSE 基础设施（注释保活、半包解析、`LangGraphSseBridge` golden 断言、`[DONE]` 收尾等），见 `platform-chat`。
+**不在本 spec 重复**：
 
-**合并来源**（已归档至本 spec）：原 `test-case-generation-rag`、`test-assistant-mindmap-workflow`、`test-case-agent-eval`（冻结版），以及原 `chat-sessions-and-streaming` 中 TEST_CASE_QA 相关的 phase SSE、resume、scenes-testpoints-ready 条款。
+- 平台级通用 SSE 基础设施（注释保活、半包解析、`LangGraphSseBridge` golden 断言、`[DONE]` 收尾等），见 `platform-chat`
+- 离线评测（`evals.case` 两阶段 promptfoo），见 `test-case-agent-eval`
+
+**合并来源**（已归档至本 spec）：原 `test-case-generation-rag`、`test-assistant-mindmap-workflow`，以及原 `chat-sessions-and-streaming` 中 TEST_CASE_QA 相关的 phase SSE、resume、scenes-testpoints-ready 条款。
 ## Requirements
 
 <!-- 1. 流水线 -->
@@ -128,7 +130,7 @@
 
 ### Requirement: 召回可观测 trace
 
-系统 SHALL 在 `retrieval_trace` 中以 `scene_name` 为主键记录各 channel 的 `hit_ids`（供离线评测 `rag_hit_at_k`）。**SHALL NOT** 要求 per-point trace 作为 RAG 验收依据。
+系统 SHALL 在 `retrieval_trace` 中以 `scene_name` 为主键记录各 channel 的 `hit_ids`（供离线评测阶段 B 的 Recall@K / Hit@K 对账，见 `test-case-agent-eval`）。**SHALL NOT** 要求 per-point trace 作为 RAG 验收依据。
 
 #### Scenario: eval 按场景对账
 
@@ -304,70 +306,7 @@
 
 ---
 
-<!-- 5. 离线评测（冻结） -->
+<!-- 5. 离线评测：见 test-case-agent-eval -->
 
-> **冻结说明**：本章节以当前实现为准；数据集规模以仓库现有 `backend/evals/datasets/test_case/dataset.jsonl` 为准，**不**要求扩至 20 条，**不**要求 live Qdrant baseline。
-
-### Requirement: 金标准数据集
-
-系统 SHALL 在 `backend/evals/case/datasets/test_case/dataset.jsonl` 维护数据集。每条 item SHALL 含：`id`、`scenario_description`、`document_path`、`ground_truth.golden_test_points`。评 RAG 的 item MAY 含 `ground_truth.expected_rag`（channel：`current_requirement`、`historical_requirements`、`historical_test_cases`）；未标注时 rag scorer 跳过该项。
-
-#### Scenario: 数据集规模不强制扩展
-
-- **WHEN** 审查离线评测数据集
-- **THEN** SHALL 以仓库现有条目为准验收，**SHALL NOT** 将「至少 20 条」作为通过条件
-
-### Requirement: 离线 runner
-
-系统 SHALL 通过 `uv run python -m evals.case` 启动离线评测，并支持 `--scope testpoints|cases|full`，直调 `case_graph` 节点，不经 SSE。`cases`/`full` SHALL 采纳全部 `point_name`。
-
-#### Scenario: testpoints scope 仅评阶段 A
-
-- **WHEN** runner 以 `--scope testpoints` 执行
-- **THEN** SHALL 仅调用 `generate_scenes_testpoints` 相关路径，**SHALL NOT** 依赖 resume 或用户交互
-
-### Requirement: L0 结构门禁
-
-系统 SHALL 校验 `scenes_testpoints` / `test_cases` 字段完整性且无 `error`。
-
-#### Scenario: 缺字段判失败
-
-- **WHEN** 产出 JSON 缺少必选字段（如 `point_name`）或含 `error` 键
-- **THEN** L0 scorer SHALL 标记该项不通过
-
-### Requirement: coverage（测试点覆盖准确率）
-
-系统 SHALL 用 LLM Judge 计算 `point_coverage_recall` = 已覆盖金标准数 / |golden_test_points|。pytest SHALL 使用 mock Judge，默认 CI 不调 DashScope。
-
-#### Scenario: CI 默认 mock Judge
-
-- **WHEN** pytest 运行 coverage 相关用例且未配置 live Judge
-- **THEN** SHALL 使用 mock，**SHALL NOT** 调用 DashScope API
-
-### Requirement: rag（RAG Hit@3）
-
-系统 SHALL 按 `scene_name` 对账 `retrieval_trace` 与 `expected_rag`，Top-3 `hit_ids` 交集非空为 hit。无 `expected_rag` 时 skipped；无 trace 时 `rag_eval_incomplete`。
-
-#### Scenario: 无 expected_rag 跳过 RAG 项
-
-- **WHEN** dataset item 未标注 `ground_truth.expected_rag`
-- **THEN** rag scorer SHALL 跳过该项而非记为失败
-
-### Requirement: 报告
-
-`aggregate.json` SHALL 含 `l0_pass_rate`、`coverage.point_coverage_recall_mean`、`rag.rag_hit_at_3_mean`（若有）。支持 `--baseline` delta。
-
-#### Scenario: full scope 聚合三类指标
-
-- **WHEN** runner 以 `--scope full` 完成
-- **THEN** `aggregate.json` SHALL 同时包含 L0、coverage、rag（有标注项时）汇总字段
-
-### Requirement: CI 登记
-
-系统 SHALL 在 `docs/test/test_tdd_design.md` 登记 L0、coverage、rag 三项；默认 pytest 不调 DashScope。
-
-#### Scenario: 文档与用例对齐
-
-- **WHEN** 审查测试设计文档
-- **THEN** SHALL 列出上述三项评测点及 mock 策略说明
+> 测试用例离线评测（`evals.case` 两阶段 promptfoo、L0 / coverage / RAG 指标）的单一事实来源为 [`openspec/specs/test-case-agent-eval/spec.md`](../test-case-agent-eval/spec.md)。
 

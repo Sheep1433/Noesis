@@ -1,7 +1,8 @@
 # agent-sandbox Specification
 
 ## Purpose
-TBD - created by archiving change add-agent-sandbox-isolation. Update Purpose after archive.
+
+本能力规定 Noesis **AIO 沙箱**的隔离与生命周期：每用户一个 AIO 容器、session 级 virtual workspace 根、`sandbox-runner` 内网 API、rw/ro 挂载策略，以及与 `agent-runtime-paths` 路径布局的对齐。删 session **SHALL NOT** 销毁用户沙箱。
 ## Requirements
 ### Requirement: 系统 SHALL 为每个用户提供独立 AIO 沙箱
 
@@ -34,7 +35,7 @@ TBD - created by archiving change add-agent-sandbox-isolation. Update Purpose af
 #### Scenario: Prompt 路径不变
 
 - **WHEN** Agent `write_file` 写入 `/research/demo/report.md`（当前 session `s1`）
-- **THEN** 文件 SHALL 落在 `.data/agent_workspace/users/{uid}/sessions/s1/workspace/research/demo/report.md`
+- **THEN** 文件 SHALL 落在 `.data/users/{uid}/sessions/s1/workspace/research/demo/report.md`
 
 #### Scenario: Skills 路径不变
 
@@ -61,11 +62,11 @@ TBD - created by archiving change add-agent-sandbox-isolation. Update Purpose af
 - **WHEN** session `s1` 内两个 `execute` 几乎同时到达
 - **THEN** backend SHALL 串行转发至 AIO
 
-### Requirement: 沙箱挂载 SHALL 为用户 agent_workspace 树
+### Requirement: 沙箱挂载 SHALL 为 users/{user_id} 树
 
 AIO 容器 **SHALL** rw mount：
 
-- `{host}/agent_workspace/users/{user_id}/` → `/workspace`
+- `{NOESIS_HOST_DATA_DIR}/users/{user_id}/` → `/workspace`
 
 **SHALL** ro mount：
 
@@ -141,7 +142,7 @@ runner **SHALL NOT** 因 idle TTL 停止用户沙箱，当该 user in-flight **>
 
 ### Requirement: 软删 session SHALL NOT 销毁用户沙箱
 
-软删 session **SHALL** cancel run 并 `delete_session_workspace`；**SHALL NOT** 调用 `destroy_user_sandbox`（除非该 user 无其它 session 且产品另行规定——默认 **不** destroy）。
+软删 session **SHALL** cancel run 并 `delete_session_data`（见 `agent-runtime-paths`）；**SHALL NOT** 调用 `destroy_user_sandbox`（除非该 user 无其它 session 且产品另行规定——默认 **不** destroy）。
 
 #### Scenario: 删 session 保留用户沙箱
 

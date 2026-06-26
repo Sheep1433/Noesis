@@ -53,6 +53,11 @@ dependencies = [
     "agent-sandbox==0.0.30",
 ]
 
+[project.optional-dependencies]
+loadtest = [
+    "locust>=2.31.0",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"

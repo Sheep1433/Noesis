@@ -10,7 +10,8 @@ from typing import AsyncIterator
 import httpx
 
 from common.logging import logger
-from config.agent_workspace_paths import ensure_workspace_dir, get_user_workspace_root
+from config.agent_workspace_paths import ensure_workspace_dir, ensure_user_root
+from config.skills_catalog import ensure_user_skills_catalog
 from config.env import SandboxConfig, get_sandbox_runner_token
 from domain.chat.streaming.tool_errors import ToolInfrastructureError
 
@@ -76,7 +77,8 @@ async def ensure_user_sandbox(user_id: str) -> str:
         if cached:
             return cached
 
-        get_user_workspace_root(user_id).mkdir(parents=True, exist_ok=True)
+        ensure_user_root(user_id)
+        ensure_user_skills_catalog(user_id)
         resp = await _runner_request("PUT", f"/internal/sandboxes/{user_id}")
         if resp.status_code == 401:
             raise ToolInfrastructureError("[INTERNAL_ERROR] sandbox-runner 鉴权失败")
@@ -90,7 +92,7 @@ async def ensure_user_sandbox(user_id: str) -> str:
         if not base_url:
             raise ToolInfrastructureError("[INTERNAL_ERROR] sandbox-runner 未返回 base_url")
         _BASE_URL_CACHE[user_id] = base_url
-        logger.info("用户沙箱就绪 user_id=%s base_url=%s", user_id, base_url)
+        logger.info("用户沙箱就绪 user_id={} base_url={}", user_id, base_url)
         return base_url
 
 
@@ -101,13 +103,13 @@ async def destroy_user_sandbox(user_id: str) -> None:
         resp = await _runner_request("DELETE", f"/internal/sandboxes/{user_id}")
         if resp.status_code >= 400 and resp.status_code != 404:
             logger.warning(
-                "destroy_user_sandbox 失败 user_id=%s status=%s body=%s",
+                "destroy_user_sandbox 失败 user_id={} status={} body={}",
                 user_id,
                 resp.status_code,
                 resp.text[:200],
             )
     except ToolInfrastructureError:
-        logger.warning("destroy_user_sandbox runner 不可达 user_id=%s", user_id)
+        logger.warning("destroy_user_sandbox runner 不可达 user_id={}", user_id)
 
 
 async def _notify_runner_in_flight(user_id: str, delta: int) -> None:

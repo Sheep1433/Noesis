@@ -91,7 +91,7 @@ def fetch_with_local(url: str, max_chars: int, timeout: int) -> dict[str, Any]:
             content_type = (resp.headers.get("content-type") or "").lower()
             raw = resp.text
     except httpx.HTTPError as e:
-        logger.warning("local_fetch HTTP 失败 url=%s: %s", url, e)
+        logger.warning("local_fetch HTTP 失败 url={}: {}", url, e)
         raise RuntimeError("页面抓取失败") from e
 
     if "html" in content_type or "<html" in raw[:500].lower():

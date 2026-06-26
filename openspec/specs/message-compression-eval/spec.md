@@ -1,7 +1,8 @@
 # message-compression-eval Specification
 
 ## Purpose
-TBD - created by archiving change add-agent-offline-eval. Update Purpose after archive.
+
+本能力规定 Noesis **消息压缩离线评测**（`backend/evals/compression/`）的验收标准：对 fixture 消息列表复现线上 `SummarizationOffloadMiddleware` 摘要路径，经 probe + Judge 五维 rubric 评分，CLI 入口为 `uv run python -m evals.compression`，且与 `evals.case`、`evals.agent` 目录隔离。
 ## Requirements
 ### Requirement: 消息压缩评测独立入口与目录
 

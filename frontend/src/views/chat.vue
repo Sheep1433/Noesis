@@ -217,7 +217,7 @@ function isLastAssistantMessage(index: number): boolean {
   return false
 }
 
-/** 助手回复卡片下方转圈：整轮 SSE 未结束前保持（含多步工具间隙） */
+/** 助手回复卡片内流式指示：整轮 SSE 未结束前保持（含多步工具间隙） */
 function showAssistantReplyLoading(index: number, role: string): boolean {
   return role === 'assistant' && isLastAssistantMessage(index) && stylizingLoading.value
 }
@@ -1539,6 +1539,10 @@ function onComposerPaste(e: ClipboardEvent) {
                           @belittleFeedback="() => onBelittleFeedback(index)"
                         />
                       </template>
+                      <AssistantStreamingIndicator
+                        v-if="showAssistantReplyLoading(index, item.role)"
+                        section
+                      />
                       <div
                         v-if="hasValidUsage(item.msg_metadata?.usage)"
                         class="assistant-usage-summary"
@@ -1554,10 +1558,6 @@ function onComposerPaste(e: ClipboardEvent) {
                         @praise-fead-back="() => onPraiseFeadBack(index)"
                         @belittle-feedback="() => onBelittleFeedback(index)"
                         @recycle-qa="() => onRecycleQa(index)"
-                      />
-                      <AssistantStreamingIndicator
-                        v-if="showAssistantReplyLoading(index, item.role)"
-                        embedded
                       />
                     </div>
                   </template>

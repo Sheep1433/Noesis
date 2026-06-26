@@ -495,7 +495,7 @@ class LangGraphSseBridge:
             return True
         except ValueError as e:
             logger.warning(
-                "append_tool_output failed: tool=%s tool_call_id=%s err=%s",
+                "append_tool_output failed: tool={} tool_call_id={} err={}",
                 tool_name,
                 tool_call_id,
                 e,

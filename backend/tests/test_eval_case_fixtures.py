@@ -1,17 +1,19 @@
-"""评测 fixture 文档加载测试。"""
+"""评测文档 fixture 测试。"""
 
-from evals.case.fixtures import FIXTURES_DOCUMENTS_DIR, resolve_document_context
+from pathlib import Path
+
+from evals.case.shared.provider_common import resolve_document_context
+
+_TESTPOINTS_DIR = Path(__file__).resolve().parents[1] / "evals" / "case" / "testpoints"
 
 
-def test_fixtures_documents_exist():
-    md_files = list(FIXTURES_DOCUMENTS_DIR.glob("tc_*.md"))
-    assert len(md_files) >= 8
+def test_documents_exist():
+    assert len(list((_TESTPOINTS_DIR / "documents").glob("tc_*.md"))) >= 8
 
 
 def test_resolve_document_context():
-    item = {
-        "id": "tc_login_001",
-        "document_path": "fixtures/documents/tc_login_001.md",
-    }
-    text = resolve_document_context(item)
+    text = resolve_document_context(
+        {"document_path": "documents/tc_login_001.md"},
+        base_dir=_TESTPOINTS_DIR,
+    )
     assert "验证码" in text

@@ -1,24 +1,24 @@
-"""AioSandboxBackend：mock agent_sandbox、mutex 与 virtual 路径。"""
+"""AioSandboxBackend：mock agent_sandbox、mutex 与绝对路径。"""
 
 from __future__ import annotations
 
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent.backends.aio_sandbox import AioSandboxBackend, _session_mutex
+from agent.backends.aio_sandbox import AioSandboxBackend, _session_mutex, create_aio_agent_backend
 
 
 class _FakeShell:
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        self.calls: list[tuple[str, str | None]] = []
         self._lock = threading.Lock()
 
     def exec_command(self, *, command: str, exec_dir: str | None = None, timeout: float | None = None):
         with self._lock:
-            self.calls.append(command)
+            self.calls.append((command, exec_dir))
         return SimpleNamespace(
             data=SimpleNamespace(output="ok\n", exit_code=0, truncated=False),
         )
@@ -45,112 +45,71 @@ def fake_client() -> MagicMock:
     return client
 
 
-def test_resolve_path_maps_virtual_root(fake_client: MagicMock) -> None:
-    backend = AioSandboxBackend(
+@pytest.fixture
+def backend(fake_client: MagicMock) -> AioSandboxBackend:
+    return AioSandboxBackend(
         base_url="http://aio:8080",
         user_id="u1",
         session_id="s1",
-        root_dir="/workspace/sessions/s1/workspace",
         client=fake_client,
-    )
-    assert backend._resolve_path("/notes.md") == (
-        "/workspace/sessions/s1/workspace/notes.md"
     )
 
 
-def test_resolve_path_blocks_traversal(fake_client: MagicMock) -> None:
-    backend = AioSandboxBackend(
-        base_url="http://aio:8080",
-        user_id="u1",
-        session_id="s1",
-        root_dir="/workspace/sessions/s1/workspace",
-        client=fake_client,
-    )
+def test_resolve_read_requires_workspace_absolute_path(backend: AioSandboxBackend) -> None:
+    path = "/workspace/sessions/s1/workspace/research/report.md"
+    assert backend._resolve_read_path(path) == path
+
+
+def test_resolve_read_skills_under_workspace(backend: AioSandboxBackend) -> None:
+    path = "/workspace/skills/deep-research-v2/SKILL.md"
+    assert backend._resolve_read_path(path) == path
+
+
+def test_resolve_read_rejects_non_absolute(backend: AioSandboxBackend) -> None:
+    with pytest.raises(ValueError, match="absolute"):
+        backend._resolve_read_path("research/report.md")
+
+
+def test_resolve_write_allows_any_workspace_path(backend: AioSandboxBackend) -> None:
+    path = "/workspace/sessions/s2/workspace/report.md"
+    assert backend._resolve_write_path(path) == path
+
+
+@patch("agent.backends.aio_sandbox.is_platform_skill_entry", return_value=True)
+def test_resolve_write_blocks_platform_skill_symlink(
+    _mock: MagicMock, backend: AioSandboxBackend
+) -> None:
+    with pytest.raises(ValueError, match="read-only"):
+        backend._resolve_write_path("/workspace/skills/deep-research-v2/SKILL.md")
+
+
+def test_resolve_read_blocks_traversal(backend: AioSandboxBackend) -> None:
     with pytest.raises(ValueError, match="traversal"):
-        backend._resolve_path("/../etc/passwd")
+        backend._resolve_read_path("/workspace/../etc/passwd")
 
 
-def test_execute_serializes_same_session(fake_client: MagicMock) -> None:
-    backend = AioSandboxBackend(
-        base_url="http://aio:8080",
-        user_id="u1",
-        session_id="s1",
-        root_dir="/workspace/sessions/s1/workspace",
-        client=fake_client,
-    )
-    order: list[int] = []
-    barrier = threading.Barrier(2, timeout=2)
+def test_execute_uses_workspace_exec_dir(backend: AioSandboxBackend) -> None:
+    backend.execute("echo hi")
+    assert backend._client.shell.calls[0][1] == "/workspace"
 
-    def run_one(tag: int) -> None:
-        barrier.wait()
-        backend.execute(f"echo {tag}")
-        order.append(tag)
 
-    t1 = threading.Thread(target=run_one, args=(1,))
-    t2 = threading.Thread(target=run_one, args=(2,))
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
-    assert len(fake_client.shell.calls) == 2
-    assert len(order) == 2
+def test_upload_uses_absolute_workspace_path(backend: AioSandboxBackend) -> None:
+    path = "/workspace/sessions/s1/workspace/notes.md"
+    result = backend.upload_files([(path, b"hello")])
+    assert result[0].error is None
+    assert path in backend._client.file.files
 
 
 def test_different_sessions_may_use_parallel_mutex_keys() -> None:
     assert _session_mutex("u1", "s1") is not _session_mutex("u1", "s2")
 
 
-def test_upload_uses_container_absolute_path(fake_client: MagicMock) -> None:
-    backend = AioSandboxBackend(
-        base_url="http://aio:8080",
-        user_id="u1",
-        session_id="s1",
-        root_dir="/workspace/sessions/s1/workspace",
-        client=fake_client,
-    )
-    result = backend.upload_files([("/notes.md", b"hello")])
-    assert result[0].error is None
-    assert "/workspace/sessions/s1/workspace/notes.md" in fake_client.file.files
-
-
-def test_execute_injects_browser_env(fake_client: MagicMock) -> None:
-    backend = AioSandboxBackend(
-        base_url="http://aio:8080",
-        user_id="u1",
-        session_id="s1",
-        root_dir="/workspace/sessions/s1/workspace",
-        inject_browser_env=True,
-        client=fake_client,
-    )
-    backend.execute("echo hi")
-    cmd = fake_client.shell.calls[0]
-    assert "SANDBOX_HEADLESS=1" in cmd
-    assert "BAOYU_CHROME_PROFILE_DIR=/workspace/sessions/s1/workspace/.chrome-profile" in cmd
-    assert "SANDBOX_CDP_PORT=" in cmd
-
-
-@patch("services.sandbox_service._docker_available", return_value=False)
 @pytest.mark.asyncio
-async def test_ensure_user_sandbox_fails_without_docker(_mock: MagicMock) -> None:
-    from domain.chat.streaming.tool_errors import ToolInfrastructureError
-    from services import sandbox_service
-
-    sandbox_service._BASE_URL_CACHE.clear()
-    with pytest.raises(ToolInfrastructureError, match="Docker"):
-        await sandbox_service.ensure_user_sandbox("u1")
-
-
-@pytest.mark.asyncio
-async def test_create_aio_agent_backend_has_user_skills_route() -> None:
-    from unittest.mock import AsyncMock
-
-    from agent.backends.aio_sandbox import create_aio_agent_backend
-
+async def test_create_aio_agent_backend_returns_single_backend() -> None:
     with patch(
         "services.sandbox_service.ensure_user_sandbox",
         new_callable=AsyncMock,
         return_value="http://aio:8080",
     ):
         backend = await create_aio_agent_backend("u1", "s1")
-    assert "/skills/" in backend.routes
-    assert "/user-skills/" in backend.routes
+    assert isinstance(backend, AioSandboxBackend)
