@@ -11,7 +11,7 @@ import httpx
 
 from common.logging import logger
 from config.agent_workspace_paths import ensure_workspace_dir, ensure_user_root
-from config.skills_catalog import ensure_user_skills_catalog
+from config.user_data_paths import ensure_user_skills_dir
 from config.env import SandboxConfig, get_sandbox_runner_token
 from domain.chat.streaming.tool_errors import ToolInfrastructureError
 
@@ -78,7 +78,7 @@ async def ensure_user_sandbox(user_id: str) -> str:
             return cached
 
         ensure_user_root(user_id)
-        ensure_user_skills_catalog(user_id)
+        ensure_user_skills_dir(user_id)
         resp = await _runner_request("PUT", f"/internal/sandboxes/{user_id}")
         if resp.status_code == 401:
             raise ToolInfrastructureError("[INTERNAL_ERROR] sandbox-runner 鉴权失败")

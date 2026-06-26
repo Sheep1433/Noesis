@@ -16,8 +16,13 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.sandbox import BaseSandbox
 
+from agent.backends.mount_paths import (
+    AGENT_CUSTOM_SKILLS_ROUTE,
+    CUSTOM_SKILLS_CONTAINER_PREFIX,
+    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+)
 from config.env import SandboxConfig
-from config.skills_catalog import is_platform_skill_entry
+from config.user_data_paths import get_user_skills_dir
 
 if TYPE_CHECKING:
     from agent_sandbox import Sandbox
@@ -26,7 +31,10 @@ _MUTEX_REGISTRY: dict[tuple[str, str], threading.Lock] = {}
 _MUTEX_REGISTRY_LOCK = threading.Lock()
 
 _CONTAINER_WORKSPACE = "/workspace"
-_CONTAINER_SKILLS = "/workspace/skills"
+_ALLOWED_READ_PREFIXES = (
+    _CONTAINER_WORKSPACE,
+    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+)
 
 
 def _session_mutex(user_id: str, session_id: str) -> threading.Lock:
@@ -54,7 +62,7 @@ def _session_browser_env(session_id: str) -> dict[str, str]:
 
 
 class AioSandboxBackend(BaseSandbox):
-    """用户 AIO 沙箱：工具路径统一为容器内 `/workspace/...` 绝对路径。"""
+    """用户 AIO 沙箱：仅处理容器内绝对路径（由 agent_filesystem 映射）。"""
 
     def __init__(
         self,
@@ -88,42 +96,43 @@ class AioSandboxBackend(BaseSandbox):
     @staticmethod
     def _normalize_path(key: str) -> str:
         if not key.startswith("/"):
-            msg = "Path must be absolute under /workspace"
+            msg = "Path must be absolute"
             raise ValueError(msg)
         if ".." in key or key.startswith("~"):
             msg = "Path traversal not allowed"
             raise ValueError(msg)
         return str(PurePosixPath(key))
 
-    def _assert_in_workspace_mount(self, container_path: str) -> None:
+    def _assert_readable(self, container_path: str) -> None:
         normalized = str(PurePosixPath(container_path))
-        if normalized == _CONTAINER_WORKSPACE or normalized.startswith(
-            f"{_CONTAINER_WORKSPACE}/"
-        ):
-            return
-        msg = f"Path outside /workspace mount: {container_path}"
+        for prefix in _ALLOWED_READ_PREFIXES:
+            if normalized == prefix or normalized.startswith(f"{prefix}/"):
+                return
+        msg = f"Path outside sandbox mounts: {container_path}"
         raise ValueError(msg)
-
-    def _is_platform_skill_path(self, container_path: str) -> bool:
-        normalized = str(PurePosixPath(container_path))
-        prefix = f"{_CONTAINER_SKILLS}/"
-        if not normalized.startswith(prefix):
-            return False
-        rel = PurePosixPath(normalized).relative_to(_CONTAINER_SKILLS)
-        if not rel.parts:
-            return False
-        return is_platform_skill_entry(self._user_id, rel.parts[0])
 
     def _resolve_read_path(self, key: str) -> str:
         container = self._normalize_path(key)
-        self._assert_in_workspace_mount(container)
+        self._assert_readable(container)
         return container
 
     def _resolve_write_path(self, key: str) -> str:
         container = self._normalize_path(key)
-        self._assert_in_workspace_mount(container)
-        if self._is_platform_skill_path(container):
-            msg = "Platform skill symlink is read-only"
+        if container.startswith(f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/") or container == (
+            EXTENSIONS_SKILLS_CONTAINER_PREFIX
+        ):
+            msg = "Platform skills are read-only"
+            raise ValueError(msg)
+        if not (
+            container == _CONTAINER_WORKSPACE
+            or container.startswith(f"{_CONTAINER_WORKSPACE}/")
+        ):
+            msg = f"Path outside /workspace mount: {container}"
+            raise ValueError(msg)
+        if container.startswith(f"{CUSTOM_SKILLS_CONTAINER_PREFIX}/") or container == (
+            CUSTOM_SKILLS_CONTAINER_PREFIX
+        ):
+            msg = "Skills directory is read-only for agents"
             raise ValueError(msg)
         return container
 
@@ -134,14 +143,28 @@ class AioSandboxBackend(BaseSandbox):
         prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
         return f"env {prefix} {command}"
 
+    def _rewrite_custom_skill_paths_in_command(self, command: str) -> str:
+        """`execute` 不经 Composite 路由：自定义 skill 脚本路径须映射到容器内 `/workspace/skills/`。"""
+        user_root = get_user_skills_dir(self._user_id)
+        if not user_root.is_dir():
+            return command
+        rewritten = command
+        for child in sorted(user_root.iterdir()):
+            if not child.is_dir() or child.name.startswith(".") or child.is_symlink():
+                continue
+            agent_prefix = f"{AGENT_CUSTOM_SKILLS_ROUTE.rstrip('/')}/{child.name}"
+            container_prefix = f"{CUSTOM_SKILLS_CONTAINER_PREFIX}/{child.name}"
+            rewritten = rewritten.replace(agent_prefix, container_prefix)
+        return rewritten
+
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         effective_timeout = timeout if timeout is not None else self._default_timeout
-        wrapped = self._with_env(command)
+        wrapped = self._with_env(self._rewrite_custom_skill_paths_in_command(command))
         with self._mutex:
             try:
                 result = self._client.shell.exec_command(
                     command=wrapped,
-                    exec_dir=_CONTAINER_WORKSPACE,
+                    exec_dir=self._session_workspace,
                     timeout=float(effective_timeout),
                 )
             except Exception as exc:
@@ -233,7 +256,7 @@ class AioSandboxBackend(BaseSandbox):
 
     def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> object:
         resolved = (
-            _CONTAINER_WORKSPACE
+            self._session_workspace
             if path is None
             else self._resolve_read_path(path)
         )
@@ -241,15 +264,15 @@ class AioSandboxBackend(BaseSandbox):
 
     def glob(self, pattern: str, path: str = "/") -> object:
         resolved = (
-            _CONTAINER_WORKSPACE
+            self._session_workspace
             if path == "/"
             else self._resolve_read_path(path)
         )
         return super().glob(pattern, path=resolved)
 
 
-async def create_aio_agent_backend(user_id: str, session_id: str) -> AioSandboxBackend:
-    """单盘 AIO backend，路径统一为 `/workspace/...` 绝对路径。"""
+async def create_aio_sandbox_backend(user_id: str, session_id: str) -> AioSandboxBackend:
+    """创建裸 AIO 沙箱 backend（容器路径由 agent_filesystem 映射）。"""
     from services.sandbox_service import ensure_user_sandbox
 
     base_url = await ensure_user_sandbox(user_id)

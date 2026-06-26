@@ -268,21 +268,19 @@ class DocumentParser:
         import httpx
         from openai import OpenAI
         from markitdown import MarkItDown
-        from common.network.proxy import set_proxy
+        from common.network.proxy import create_sync_client
         from config.env import ModelConfig
         from kb.embedding import is_vlm_configured
 
         if not is_vlm_configured():
             raise ValueError("VLM 未配置")
 
-        set_proxy()
         api_key = ModelConfig.vlm_model_api_key.strip()
         logger.info(f"开始调用 VLM 模型，data_uri 大小={len(data_uri)} 字节")
         client = OpenAI(
             api_key=api_key,
             base_url=ModelConfig.vlm_model_base_url,
-            http_client=httpx.Client(
-                verify=False,
+            http_client=create_sync_client(
                 timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10),
             ),
         )

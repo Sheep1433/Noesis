@@ -60,6 +60,22 @@ def test_append_notice_without_prose() -> None:
     )
 
 
+def test_append_notice_is_idempotent_when_notice_already_present() -> None:
+    content = {
+        "version": 1,
+        "parts": [
+            {
+                "type": "text",
+                "content": "生成过程中出现问题，请稍后重试。\n\nAttributeError: boom",
+                "status": "completed",
+            }
+        ],
+    }
+    out = append_stream_failure_notice_to_content(content, "AttributeError: boom")
+    assert len(out["parts"]) == 1
+    assert out["parts"][0]["content"] == content["parts"][0]["content"]
+
+
 def test_assistant_status_for_finish() -> None:
     from services.qa_service import _assistant_status_for_finish
 

@@ -2,6 +2,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
+from common.network.proxy import create_async_client, create_sync_client
 from config.env import ModelConfig
 
 _OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
@@ -17,6 +18,14 @@ def _llm_http_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=10.0, read=read_sec, write=read_sec, pool=10.0)
 
 
+def _llm_http_clients() -> dict[str, httpx.Client | httpx.AsyncClient]:
+    timeout = _llm_http_timeout()
+    return {
+        "http_client": create_sync_client(timeout=timeout),
+        "http_async_client": create_async_client(timeout=timeout),
+    }
+
+
 def _build_chat_model(
     *,
     model_type: str,
@@ -27,6 +36,7 @@ def _build_chat_model(
 ):
     timeout = _llm_http_timeout()
     max_retries = int(ModelConfig.max_retries)
+    http_clients = _llm_http_clients()
 
     model_map = {
         "openai": lambda: ChatOpenAI(
@@ -37,6 +47,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_clients,
         ),
         "minimax": lambda: ChatOpenAI(
             model=model_name,
@@ -46,6 +57,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_clients,
         ),
         "opencode": lambda: ChatOpenAI(
             model=model_name,
@@ -56,6 +68,7 @@ def _build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             default_headers=_OPENCODE_DEFAULT_HEADERS,
+            **http_clients,
         ),
         "qwen": lambda: ChatQwen(
             model=model_name,
@@ -69,6 +82,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_clients,
         ),
         "deepseek": lambda: ChatDeepSeek(
             model=model_name,
@@ -78,6 +92,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_clients,
         ),
     }
 

@@ -15,8 +15,11 @@ import docker
 import httpx
 from docker.errors import DockerException, NotFound
 
-from paths import ensure_sandbox_mount_readable, resolve_host_data_dir
-from skills_catalog import ensure_user_skills_catalog
+from paths import (
+    ensure_sandbox_mount_readable,
+    resolve_host_data_dir,
+    resolve_skills_host_dir,
+)
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -131,11 +134,15 @@ class SandboxManager:
         user_ws.mkdir(parents=True, exist_ok=True)
         ensure_sandbox_mount_readable(user_ws)
         user_skills = user_ws / "skills"
-        ensure_user_skills_catalog(user_skills)
+        user_skills.mkdir(parents=True, exist_ok=True)
         ensure_sandbox_mount_readable(user_skills, recursive=True)
+
+        skills_host = resolve_skills_host_dir()
+        ensure_sandbox_mount_readable(skills_host, recursive=True)
 
         volumes = {
             str(user_ws): {"bind": "/workspace", "mode": "rw"},
+            str(skills_host): {"bind": "/skills", "mode": "ro"},
         }
 
         host_port = _find_free_host_port(start=self._host_port_base)

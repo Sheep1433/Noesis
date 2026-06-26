@@ -14,8 +14,9 @@ MODULES = (
     ("evals.case", "测试用例 Agent（promptfoo + L0/coverage/rag）"),
     ("evals.agent.browsecomp", "Agent / BrowseComp"),
     ("evals.agent.wildclaw", "Agent / WildClawBench"),
-    ("evals.agent.legacy", "Agent / 本地开发集"),
+    ("evals.agent.perf", "Agent / 性能回归集"),
     ("evals.compression", "SummarizationOffload 消息压缩评测"),
+    ("evals.loadtest", "深度研究 HTTP 负载测试（Locust）"),
 )
 
 

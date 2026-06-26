@@ -8,6 +8,7 @@ from config.checkpointer import close_checkpointer, init_checkpointer
 from config.get_db import init_create_table
 from config.database import async_engine
 from common.logging import logger
+from common.network.proxy import set_proxy
 from domain.observability.langfuse import sync_langfuse_env_from_app_config
 from api import (
     login_router,
@@ -25,6 +26,7 @@ from kb.seed_collections import ensure_default_kb_collections
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f'⏰️ {AppConfig.app_name}开始启动')
+    set_proxy()
     sync_langfuse_env_from_app_config()
     await init_create_table()
     await init_checkpointer()

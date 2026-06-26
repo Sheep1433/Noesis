@@ -2,7 +2,7 @@
 
   uv run python -m evals.agent.browsecomp --tag <name>
   uv run python -m evals.agent.wildclaw   --tag <name>
-  uv run python -m evals.agent.legacy   --tag <name>
+  uv run python -m evals.agent.perf     --tag <name>
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sys
 MODULES = (
     ("evals.agent.browsecomp", "BrowseComp（openai/simple-evals 官方流程）"),
     ("evals.agent.wildclaw", "WildClawBench（官方 script/run.sh + Docker grader）"),
-    ("evals.agent.legacy", "本地开发集（不对标 leaderboard）"),
+    ("evals.agent.perf", "性能回归集（自研题集，非官方 benchmark）"),
 )
 
 

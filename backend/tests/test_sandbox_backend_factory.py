@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent.backends import create_agent_backend, uses_aio_sandbox
-from agent.backends.aio_sandbox import AioSandboxBackend
 from config.agent_workspace_paths import ensure_workspace_dir
+from deepagents.backends.composite import CompositeBackend
 
 
 @pytest.fixture
@@ -42,26 +42,39 @@ async def test_create_agent_backend_local_shell(
     platform = tmp_path / "platform-skills"
     platform.mkdir()
     monkeypatch.setattr(
-        "config.skills_catalog.skills_root",
+        "agent.backends.agent_filesystem.skills_root",
         lambda: platform,
     )
 
     backend = await create_agent_backend("u1", "s1")
     ws = ensure_workspace_dir("u1", "s1")
-    target = "/workspace/sessions/s1/workspace/notes.md"
+    target = "/research/notes.md"
     result = backend.write(target, "hello")
     assert result.error is None
-    assert ws.joinpath("notes.md").read_text(encoding="utf-8") == "hello"
+    assert (ws / "research" / "notes.md").read_text(encoding="utf-8") == "hello"
 
 
 @pytest.mark.asyncio
 async def test_create_agent_backend_aio(aio_backend: None) -> None:
     with patch(
-        "agent.backends.factory.create_aio_agent_backend",
+        "agent.backends.factory.create_aio_sandbox_backend",
         new_callable=AsyncMock,
     ) as mock_create:
-        mock_backend = MagicMock(spec=AioSandboxBackend)
-        mock_create.return_value = mock_backend
+        mock_sandbox = MagicMock()
+        mock_create.return_value = mock_sandbox
         got = await create_agent_backend("u1", "s1")
     mock_create.assert_awaited_once_with("u1", "s1")
-    assert got is mock_backend
+    assert isinstance(got, CompositeBackend)
+
+
+def test_skill_sources_use_extensions_and_custom_routes() -> None:
+    from agent.backends import SKILL_SOURCES
+    from agent.backends.mount_paths import (
+        AGENT_CUSTOM_SKILLS_ROUTE,
+        AGENT_EXTENSIONS_SKILLS_ROUTE,
+    )
+
+    assert SKILL_SOURCES == (
+        (AGENT_EXTENSIONS_SKILLS_ROUTE, "Extensions"),
+        (AGENT_CUSTOM_SKILLS_ROUTE, "Custom"),
+    )

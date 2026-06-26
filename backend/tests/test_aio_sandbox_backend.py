@@ -1,4 +1,4 @@
-"""AioSandboxBackend：mock agent_sandbox、mutex 与绝对路径。"""
+"""AioSandboxBackend：mock agent_sandbox、mutex 与容器路径校验。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent.backends.aio_sandbox import AioSandboxBackend, _session_mutex, create_aio_agent_backend
+from agent.backends.aio_sandbox import (
+    AioSandboxBackend,
+    _session_mutex,
+    create_aio_sandbox_backend,
+)
+from agent.backends.mount_paths import (
+    AGENT_CUSTOM_SKILLS_ROUTE,
+    AGENT_EXTENSIONS_SKILLS_ROUTE,
+    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+)
 
 
 class _FakeShell:
@@ -55,13 +64,27 @@ def backend(fake_client: MagicMock) -> AioSandboxBackend:
     )
 
 
-def test_resolve_read_requires_workspace_absolute_path(backend: AioSandboxBackend) -> None:
+def test_resolve_read_session_workspace(backend: AioSandboxBackend) -> None:
     path = "/workspace/sessions/s1/workspace/research/report.md"
     assert backend._resolve_read_path(path) == path
 
 
-def test_resolve_read_skills_under_workspace(backend: AioSandboxBackend) -> None:
-    path = "/workspace/skills/deep-research-v2/SKILL.md"
+def test_execute_rewrites_custom_skill_paths(
+    backend: AioSandboxBackend, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from config import user_data_paths as paths
+
+    users_root = tmp_path / "users"
+    monkeypatch.setattr(paths, "_USERS_ROOT", users_root)
+    user_skills = paths.ensure_user_skills_dir("u1")
+    (user_skills / "my-tool").mkdir()
+    backend.execute("python3 /skills/custom/my-tool/run.py")
+    cmd = backend._client.shell.calls[-1][0]
+    assert "/workspace/skills/my-tool/run.py" in cmd
+
+
+def test_resolve_read_extensions_skills_mount(backend: AioSandboxBackend) -> None:
+    path = f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
     assert backend._resolve_read_path(path) == path
 
 
@@ -70,17 +93,16 @@ def test_resolve_read_rejects_non_absolute(backend: AioSandboxBackend) -> None:
         backend._resolve_read_path("research/report.md")
 
 
-def test_resolve_write_allows_any_workspace_path(backend: AioSandboxBackend) -> None:
-    path = "/workspace/sessions/s2/workspace/report.md"
-    assert backend._resolve_write_path(path) == path
-
-
-@patch("agent.backends.aio_sandbox.is_platform_skill_entry", return_value=True)
-def test_resolve_write_blocks_platform_skill_symlink(
-    _mock: MagicMock, backend: AioSandboxBackend
-) -> None:
+def test_resolve_write_blocks_extensions_skills(backend: AioSandboxBackend) -> None:
     with pytest.raises(ValueError, match="read-only"):
-        backend._resolve_write_path("/workspace/skills/deep-research-v2/SKILL.md")
+        backend._resolve_write_path(
+            f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
+        )
+
+
+def test_resolve_write_blocks_custom_skills_mount(backend: AioSandboxBackend) -> None:
+    with pytest.raises(ValueError, match="read-only"):
+        backend._resolve_write_path("/workspace/skills/my-upload/SKILL.md")
 
 
 def test_resolve_read_blocks_traversal(backend: AioSandboxBackend) -> None:
@@ -88,9 +110,9 @@ def test_resolve_read_blocks_traversal(backend: AioSandboxBackend) -> None:
         backend._resolve_read_path("/workspace/../etc/passwd")
 
 
-def test_execute_uses_workspace_exec_dir(backend: AioSandboxBackend) -> None:
+def test_execute_uses_session_workspace_exec_dir(backend: AioSandboxBackend) -> None:
     backend.execute("echo hi")
-    assert backend._client.shell.calls[0][1] == "/workspace"
+    assert backend._client.shell.calls[0][1] == "/workspace/sessions/s1/workspace"
 
 
 def test_upload_uses_absolute_workspace_path(backend: AioSandboxBackend) -> None:
@@ -105,11 +127,11 @@ def test_different_sessions_may_use_parallel_mutex_keys() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_aio_agent_backend_returns_single_backend() -> None:
+async def test_create_aio_sandbox_backend_returns_backend() -> None:
     with patch(
         "services.sandbox_service.ensure_user_sandbox",
         new_callable=AsyncMock,
         return_value="http://aio:8080",
     ):
-        backend = await create_aio_agent_backend("u1", "s1")
+        backend = await create_aio_sandbox_backend("u1", "s1")
     assert isinstance(backend, AioSandboxBackend)

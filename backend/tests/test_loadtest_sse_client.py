@@ -1,6 +1,6 @@
 """SSE 客户端解析单测。"""
 
-from loadtest.sse_client import consume_sse_stream
+from evals.loadtest.sse_client import consume_sse_stream
 
 
 def _lines(*parts: str):

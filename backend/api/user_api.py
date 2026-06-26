@@ -35,7 +35,7 @@ async def query_user_qa_record(
         user_id=str(current_user.user_id),
         db=db,
         search_text=request.search_text,
-        session_id=request.chat_id or request.session_id,
+        session_id=request.chat_id,
         page=request.page,
         limit=request.limit,
     )

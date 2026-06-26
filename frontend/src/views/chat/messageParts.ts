@@ -480,6 +480,27 @@ export function isRecursionLimitError(raw: string): boolean {
   return /recursion limit|graphrecursionerror|recursion_limit|已达到最大处理步数/.test(t)
 }
 
+/** 与后端 get_stream_failure_notice_text / append_stream_failure_notice_to_content 文案对齐 */
+const STREAM_FAILURE_NOTICE_MARKERS = [
+  '生成过程中出现问题',
+  '后续内容未能生成',
+  '后续内容未能继续生成',
+  '已达到最大处理步数',
+  '模型响应超时',
+  '生成失败，请稍后重试',
+] as const
+
+/** 历史回放 / 流式 onError：避免对已落库的失败说明重复追加 */
+export function partsContainStreamFailureNotice(parts: UiPart[]): boolean {
+  return parts.some((p) => {
+    if (p.type !== 'text') {
+      return false
+    }
+    const c = String(p.content ?? '')
+    return STREAM_FAILURE_NOTICE_MARKERS.some((marker) => c.includes(marker))
+  })
+}
+
 /** 将 SSE/流式错误转为气泡内展示文案；null 表示不追加说明 */
 export function getStreamFailureNoticeText(
   detail: string | undefined,
@@ -533,6 +554,9 @@ export function shortenChatErrorToast(msg: string, maxLen = 72): string {
 
 /** 流式失败时在助手气泡内补充可读说明（保留已有正文 / 工具块） */
 export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiPart[] {
+  if (partsContainStreamFailureNotice(parts)) {
+    return finalizePartsOnStreamError(parts)
+  }
   const completed = finalizePartsOnStreamError(parts)
 
   const hasProse = completed.some((p) => {

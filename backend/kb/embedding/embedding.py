@@ -40,6 +40,7 @@ def get_embedding(model: str | None = None):
         raise ValueError(embedding_not_configured_message())
 
     from langchain_openai import OpenAIEmbeddings
+    from common.network.proxy import create_async_client, create_sync_client
 
     model_name = (model or ModelConfig.embedding_model_name).strip()
     api_key = ModelConfig.embedding_model_api_key.strip()
@@ -48,4 +49,6 @@ def get_embedding(model: str | None = None):
         model=model_name,
         openai_api_key=api_key,
         openai_api_base=base_url,
+        http_client=create_sync_client(),
+        http_async_client=create_async_client(),
     )

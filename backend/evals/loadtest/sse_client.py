@@ -47,7 +47,7 @@ def consume_sse_stream(
     started_at: Optional[float] = None,
     deadline: Optional[float] = None,
 ) -> SseStreamMetrics:
-    """逐行读取 SSE 响应，直到 [DONE]、finish(error) 或超时。"""
+    """逐行读取 SSE 响应，直到 [DONE] 或 finish/error/abort。"""
     metrics = SseStreamMetrics()
     started_at = started_at or time.perf_counter()
     buffer = ""

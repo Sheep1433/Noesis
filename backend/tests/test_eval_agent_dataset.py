@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from evals.agent.legacy.dataset import DEFAULT_DATASET, filter_items, load_dataset, resolve_workspace_seed
+from evals.agent.perf.dataset import DEFAULT_DATASET, filter_items, load_dataset, resolve_workspace_seed
 
 CATEGORIES = {
     "search_retrieval",

@@ -7,8 +7,9 @@
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
 | Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
 | Agent / WildClawBench | `uv run python -m evals.agent.wildclaw` | 已实现 |
-| Agent / 本地开发集 | `uv run python -m evals.agent.legacy` | 已实现 |
+| Agent / 性能回归集 | `uv run python -m evals.agent.perf` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
+| 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
 
 ```bash
 cd backend
@@ -79,7 +80,7 @@ evals/agent/
     worker.py                 # WildClawBench backend 回调
     noesis_agent.py           # 打入 vendor 的 agent 文件
     results/<tag>/
-  legacy/                     # 本地 8 题，不对标
+  perf/                       # 性能回归 8 题（自研题集）
     datasets/deep_research/
     __main__.py
     results/<tag>/
@@ -102,10 +103,12 @@ uv run python -m evals.agent.wildclaw --tag wc -- --category 02_Code_Intelligenc
 
 自动打入 `noesis` backend，评分走上游 Docker grader。结果：`wildclaw/results/<tag>/`。
 
-### legacy（不对标）
+### perf（性能回归集）
+
+自研 8 题，用于 Agent 离线回归与性能基线对比（非 BrowseComp / WildClawBench 官方流程）。
 
 ```bash
-uv run python -m evals.agent.legacy --tag dev --limit 1
+uv run python -m evals.agent.perf --tag dev --limit 1
 ```
 
 ---
@@ -149,3 +152,28 @@ NOESIS_COMPRESSION_EVAL_INTEGRATION=1 uv run pytest tests/test_eval_compression_
 ```
 
 可选：从真实会话 JSONL 脱敏导出 fixture 可自建脚本（参考 hermes `scrub_fixtures.py`），非阻塞。
+
+---
+
+## 4. 深度研究负载测试（`evals.loadtest` + Locust）
+
+对运行中的后端发 HTTP 请求，压测 `DEEP_RESEARCH_QA` SSE 链路（与离线 eval 不同，走真实 API）。
+
+```
+evals/loadtest/
+  locustfile.py
+  sse_client.py
+  queries.py
+  data/queries.jsonl    # 5 条压测 query
+  __main__.py           # 打印运行说明
+```
+
+```bash
+uv sync --extra loadtest
+uv run python -m evals.loadtest
+uv run locust -f evals/loadtest/locustfile.py --host=http://127.0.0.1:8089
+uv run locust -f evals/loadtest/locustfile.py --host=http://127.0.0.1:8089 \
+  --headless -u 1 -r 1 --run-time 30m --only-summary
+```
+
+单用户（admin）、每请求新 session；客户端不设超时，等后端 SSE 自然结束。指标：`deep_research_stream`（端到端）、`deep_research_ttft`、`deep_research_tool_calls`。

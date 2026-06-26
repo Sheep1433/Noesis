@@ -1,4 +1,4 @@
-"""本地开发集（不对标 leaderboard）：uv run python -m evals.agent.legacy --tag <name>"""
+"""Agent 性能回归集：uv run python -m evals.agent.perf --tag <name>"""
 
 from __future__ import annotations
 
@@ -8,23 +8,21 @@ import sys
 import uuid
 from pathlib import Path
 
-from evals.agent.legacy.dataset import DEFAULT_DATASET, filter_items, load_dataset
-from evals.agent.legacy.report import build_summary, results_dir_for_tag, write_run_result, write_summary
-from evals.agent.legacy.runner import run_agent_item
-from evals.agent.legacy.scoring import score_item
+from evals.agent.perf.dataset import DEFAULT_DATASET, filter_items, load_dataset
+from evals.agent.perf.report import build_summary, results_dir_for_tag, write_run_result, write_summary
+from evals.agent.perf.runner import run_agent_item
+from evals.agent.perf.scoring import score_item
 from evals.langfuse_env import eval_langfuse_run
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Agent 本地 legacy 评测（非官方 benchmark）")
+    p = argparse.ArgumentParser(description="Agent 性能回归评测（自研题集，非官方 benchmark）")
     p.add_argument("--tag", required=True)
     p.add_argument("--item-id", default=None)
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--dataset", type=Path, default=None)
     p.add_argument("--compare-to", type=Path, default=None)
     args = p.parse_args(argv)
-
-    print("警告: legacy 集不对标 WildClawBench/BrowseComp leaderboard。", file=sys.stderr)
 
     dataset_path = args.dataset.resolve() if args.dataset else DEFAULT_DATASET
     if not args.dataset and os.environ.get("NOESIS_AGENT_EVAL_DATASET"):

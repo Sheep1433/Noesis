@@ -16,38 +16,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from config.yaml_config import AppYamlConfig, load_app_yaml
 
 
-def _legacy_env(name: str, default: str) -> str:
-    """迁移期：config.yaml 未覆盖时仍可读旧 .env 变量。"""
-    return os.getenv(name, default)
-
-
-def _legacy_env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("true", "1", "yes")
-
-
-def _legacy_env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _legacy_env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
 # ---------------------------------------------------------------------------
 # .env：仅敏感 / 环境相关
 # ---------------------------------------------------------------------------

@@ -6,7 +6,10 @@ from agent.prompts import PromptProfile, build_prompt
 def test_deep_research_prompt_orchestration_sections():
     prompt = build_prompt(PromptProfile.DEEP_RESEARCH)
     for section in (
+        "<interaction>",
+        "禁止调用任何工具",
         "<orchestration>",
+        "正式调研时强制",
         "write_todos",
         "research-worker",
         "report.md",

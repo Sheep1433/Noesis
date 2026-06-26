@@ -45,9 +45,6 @@ class QueryUserRecordRequest(BaseModel):
     limit: int = Field(10, ge=1, le=1_000_000, description="每页条数")
     search_text: Optional[str] = Field(None, description="按会话标题模糊搜索")
     chat_id: Optional[str] = Field(None, description="仅返回指定会话")
-    session_id: Optional[str] = Field(
-        None, description="与 chat_id 等价，兼容旧请求体字段名"
-    )
 
 
 class QaStopRequest(BaseModel):

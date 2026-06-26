@@ -1,7 +1,7 @@
 import { query_user_qa_record } from '@/api'
 import { getSessionMessages } from '@/api/chat'
 import { isImagePreviewPath } from '@/utils/filePreview'
-import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
+import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, partsContainStreamFailureNotice, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -217,12 +217,9 @@ async function loadSessionMessages(
         let messageContent = normalizeApiContent(msg.content)
         const errMsg = typeof msg.extra?.error_message === 'string' ? msg.extra.error_message : ''
         const finishReason = msg.extra?.finish_reason
-        const partsText = messageContent.parts.map((p) => String((p as { content?: string }).content ?? '')).join('\n')
         const noticeMissing = finishReason === 'error'
           && errMsg
-          && !partsText.includes('已达到最大处理步数')
-          && !partsText.includes('后续内容未能继续生成')
-          && !partsText.includes('后续内容未能生成')
+          && !partsContainStreamFailureNotice(messageContent.parts)
         if (noticeMissing) {
           const parts = appendStreamFailureNotice(messageContent.parts, errMsg)
           messageContent = { version: 1, parts }

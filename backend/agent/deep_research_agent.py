@@ -1,7 +1,7 @@
 """
 DeepResearchAgent - 深度调研智能体
 
-基于 create_noesis_agent + 沙箱 backend（AIO 单盘或 local_shell CompositeBackend）。
+基于 create_noesis_agent + CompositeBackend（`/research/` 工作区 + `/skills/extensions|custom/`）。
 """
 
 import asyncio
@@ -43,7 +43,7 @@ def _build_deep_research_subagents(
         {
             "name": "research-worker",
             "description": (
-                "在独立上下文中完成单课题深度调研：阅读 `/workspace/skills/` 相关 skill（含 deep-research-v2）、"
+                "在独立上下文中完成单课题深度调研：阅读 `/skills/extensions/` 与 `/skills/custom/` 相关 skill（含 deep-research-v2）、"
                 "使用 web_search/web_fetch 检索互联网、在工作区读写与归纳文件，多步后返回结构化小结。"
                 "适合可并行、上下文较重的子任务。"
             ),

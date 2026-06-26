@@ -1,4 +1,4 @@
-"""DeepResearchAgent 离线 runner（legacy benchmark 路径）。"""
+"""DeepResearchAgent 离线 runner（性能回归题集）。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 from config.agent_workspace_paths import ensure_workspace_dir, get_workspace_dir
 from evals.agent._agent import run_deep_research
-from evals.agent.legacy.dataset import resolve_workspace_seed
+from evals.agent.perf.dataset import resolve_workspace_seed
 
 EVAL_USER_ID = "eval"
 DEFAULT_TIME_BUDGET_SECONDS = 600

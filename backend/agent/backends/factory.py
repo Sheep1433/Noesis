@@ -1,20 +1,28 @@
-"""Agent 沙箱后端：AIO 与 local_shell 均映射用户盘 `/workspace/...` 绝对路径。"""
+"""Agent 沙箱后端：CompositeBackend + `/research/` 工作区 + `/skills/extensions|custom/`。"""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Literal, Union
+from typing import AsyncIterator, Literal
 
-from agent.backends.aio_sandbox import AioSandboxBackend, create_aio_agent_backend
-from agent.backends.local_shell import create_user_disk_backend
+from deepagents.backends.composite import CompositeBackend
+from deepagents.middleware.skills import SkillSource
+
+from agent.backends.agent_filesystem import build_agent_filesystem_backend
+from agent.backends.aio_sandbox import create_aio_sandbox_backend
+from agent.backends.mount_paths import (
+    AGENT_CUSTOM_SKILLS_ROUTE,
+    AGENT_EXTENSIONS_SKILLS_ROUTE,
+)
 from config.agent_workspace_paths import ensure_workspace_dir
 from config.env import get_config
-from config.skills_catalog import ensure_user_skills_catalog
-from config.user_data_paths import get_user_root
+from config.user_data_paths import ensure_user_skills_dir
 from services.sandbox_service import user_sandbox_run
 
-# 平台 + 用户 skill 已合并至 `.data/users/{uid}/skills/`（容器内 `/workspace/skills/`）
-SKILL_SOURCES: tuple[str, ...] = ("/workspace/skills/",)
+SKILL_SOURCES: tuple[SkillSource, ...] = (
+    (AGENT_EXTENSIONS_SKILLS_ROUTE, "Extensions"),
+    (AGENT_CUSTOM_SKILLS_ROUTE, "Custom"),
+)
 
 SandboxBackendKind = Literal["aio", "local_shell"]
 
@@ -40,21 +48,11 @@ def _shell_timeout() -> int:
     return _sandbox_settings().execute_timeout_seconds
 
 
-def _create_local_agent_backend(user_id: str, session_id: str):
-    ensure_user_skills_catalog(user_id)
-    ensure_workspace_dir(user_id, session_id)
-    return create_user_disk_backend(
-        user_id,
-        root_dir=get_user_root(user_id),
-        timeout=_shell_timeout(),
-    )
-
-
 @asynccontextmanager
 async def agent_sandbox_session(user_id: str, session_id: str) -> AsyncIterator[None]:
-    """AIO 模式维护 runner lifecycle；local_shell 仅确保 workspace 存在。"""
+    """AIO 模式维护 runner lifecycle；local_shell 仅确保目录存在。"""
     ensure_workspace_dir(user_id, session_id)
-    ensure_user_skills_catalog(user_id)
+    ensure_user_skills_dir(user_id)
     if uses_aio_sandbox():
         async with user_sandbox_run(user_id, session_id):
             yield
@@ -62,10 +60,14 @@ async def agent_sandbox_session(user_id: str, session_id: str) -> AsyncIterator[
         yield
 
 
-async def create_agent_backend(
-    user_id: str, session_id: str
-) -> Union[AioSandboxBackend, object]:
-    """创建 Agent backend：virtual 根为 `.data/users/{uid}/`，工具路径用 `/workspace/...`。"""
+async def create_agent_backend(user_id: str, session_id: str) -> CompositeBackend:
+    """Agent 文件系统：虚拟 `/research/` 工作区 + extensions/custom 只读 Skills。"""
+    sandbox = None
     if uses_aio_sandbox():
-        return await create_aio_agent_backend(user_id, session_id)
-    return _create_local_agent_backend(user_id, session_id)
+        sandbox = await create_aio_sandbox_backend(user_id, session_id)
+    return build_agent_filesystem_backend(
+        user_id=user_id,
+        session_id=session_id,
+        sandbox=sandbox,
+        shell_timeout=_shell_timeout(),
+    )

@@ -254,7 +254,7 @@ class SkillFsService:
         if not os.path.isdir(target):
             return False, '技能目录不存在'
         if os.path.islink(target):
-            return False, '不能删除平台预置技能链接'
+            return False, '不能删除符号链接'
         try:
             shutil.rmtree(target)
         except OSError as e:
