@@ -10,6 +10,9 @@
 # 推荐：由 run.sh 一并拉起（含沙箱镜像自动构建）
 START_MCP=1 ./scripts/run.sh dev
 
+# 国内网络 Docker Hub 超时时，指定基础镜像源
+MCP_BASE_IMAGE=docker.m.daocloud.io/library/ubuntu:24.04 START_MCP=1 ./scripts/run.sh dev
+
 # 或手动
 docker build -t noesis/mcp-ubuntu-ssh:latest -f deploy/mcp/Dockerfile deploy/mcp
 cd extensions/mcp/docker-ssh && uv run python server.py --transport http --port 8000

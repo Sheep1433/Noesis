@@ -83,7 +83,16 @@ start_mcp() {
     local mcp_image="noesis/mcp-ubuntu-ssh:latest"
     if ! docker image inspect "$mcp_image" &>/dev/null; then
       log_info "构建 MCP 沙箱镜像 ($mcp_image)..."
-      docker build -t "$mcp_image" -f "$ROOT/deploy/mcp/Dockerfile" "$ROOT/deploy/mcp"
+      local build_args=()
+      if [[ -n "${MCP_BASE_IMAGE:-}" ]]; then
+        build_args+=(--build-arg "BASE_IMAGE=$MCP_BASE_IMAGE")
+      fi
+      if ! docker build "${build_args[@]}" -t "$mcp_image" -f "$ROOT/deploy/mcp/Dockerfile" "$ROOT/deploy/mcp"; then
+        log_warn "MCP 沙箱镜像构建失败（常见原因：无法访问 Docker Hub）。"
+        log_warn "  可尝试: MCP_BASE_IMAGE=docker.m.daocloud.io/library/ubuntu:24.04 START_MCP=1 ./scripts/run.sh dev"
+        log_warn "  或在 Docker Desktop → Settings → Docker Engine 配置 registry-mirrors 后重试。"
+        log_warn "MCP server 仍会启动，但远程 SSH 沙箱能力可能不可用。"
+      fi
     fi
   else
     log_warn "Docker 未安装，MCP 远程 SSH 沙箱可能无法工作。"
