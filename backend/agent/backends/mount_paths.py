@@ -5,6 +5,7 @@ EXTENSIONS_SKILLS_CONTAINER_PREFIX = "/skills"
 CUSTOM_SKILLS_CONTAINER_PREFIX = "/workspace/skills"
 
 # Agent 虚拟路径（CompositeBackend route + SkillsMiddleware sources）
+AGENT_SKILLS_INDEX_ROUTE = "/skills/"
 AGENT_EXTENSIONS_SKILLS_ROUTE = "/skills/extensions/"
 AGENT_CUSTOM_SKILLS_ROUTE = "/skills/custom/"
 

@@ -1,4 +1,9 @@
-"""Agent 虚拟路径：`/research/` 工作区 + `/skills/extensions|custom/` 只读 Skills。"""
+"""Agent 虚拟路径：`/research/` 工作区 + `/skills/extensions|custom/` 只读 Skills。
+
+CompositeBackend 约定：route 子 backend 的 ls/glob/grep 返回的路径须相对 route 根（如 `/foo/`），
+由 Composite 再拼上 `/skills/extensions/` 等前缀。AIO 内层返回容器绝对路径，须经 PrefixBackend
+做双向映射（map_in / map_out）。
+"""
 
 from __future__ import annotations
 
@@ -10,8 +15,10 @@ from deepagents.backends.protocol import (
     EditResult,
     ExecuteResponse,
     FileDownloadResponse,
+    FileInfo,
     FileUploadResponse,
     GlobResult,
+    GrepMatch,
     GrepResult,
     LsResult,
     ReadResult,
@@ -24,6 +31,7 @@ from agent.backends.local_shell import create_local_shell_backend
 from agent.backends.mount_paths import (
     AGENT_CUSTOM_SKILLS_ROUTE,
     AGENT_EXTENSIONS_SKILLS_ROUTE,
+    AGENT_SKILLS_INDEX_ROUTE,
     CUSTOM_SKILLS_CONTAINER_PREFIX,
     EXTENSIONS_SKILLS_CONTAINER_PREFIX,
 )
@@ -37,8 +45,51 @@ def _agent_path(path: str) -> str:
     return path if path.startswith("/") else f"/{path}"
 
 
+class SkillsIndexBackend(BackendProtocol):
+    """`/skills/` 索引：仅列出 `extensions/` 与 `custom/` 两个子路由（只读）。"""
+
+    _ENTRIES: tuple[FileInfo, ...] = (
+        {"path": "/extensions/", "is_dir": True},
+        {"path": "/custom/", "is_dir": True},
+    )
+
+    def ls(self, path: str) -> LsResult:
+        if _agent_path(path) in ("/", ""):
+            return LsResult(entries=list(self._ENTRIES))
+        return LsResult(entries=None, error=f"Path '{AGENT_SKILLS_INDEX_ROUTE}{path.lstrip('/')}': path_not_found")
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return ReadResult(error=_READ_ONLY_SKILLS_ERROR)
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(error=_READ_ONLY_SKILLS_ERROR)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        return EditResult(error=_READ_ONLY_SKILLS_ERROR)
+
+    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+        return GrepResult(matches=[])
+
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        return GlobResult(matches=[])
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        return [FileUploadResponse(path=path, error="permission_denied") for path, _ in files]
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        return [
+            FileDownloadResponse(path=path, content=None, error="file_not_found") for path in paths
+        ]
+
+
 class PrefixBackend(SandboxBackendProtocol):
-    """将 Composite 剥前缀后的 agent 路径映射到 inner backend（可选容器绝对前缀）。"""
+    """Composite route 适配：route 内相对路径 ↔ inner（local 虚拟路径或容器绝对路径）。"""
 
     def __init__(
         self,
@@ -59,8 +110,34 @@ class PrefixBackend(SandboxBackendProtocol):
             return self._container_prefix
         return f"{self._container_prefix}{agent}"
 
+    def _map_out(self, inner_path: str) -> str:
+        """内层路径 → route 内相对路径，供 CompositeBackend 再拼 route 前缀。"""
+        normalized = inner_path.replace("\\", "/")
+        if self._container_prefix is None:
+            return _agent_path(normalized)
+        prefix = self._container_prefix
+        if normalized == prefix:
+            return "/"
+        if normalized.startswith(f"{prefix}/"):
+            return _agent_path(normalized[len(prefix) :])
+        return _agent_path(normalized)
+
+    def _normalize_file_info(self, entry: FileInfo) -> FileInfo:
+        raw_path = entry["path"]
+        is_dir = bool(entry.get("is_dir"))
+        rel = self._map_out(raw_path.rstrip("/") if is_dir else raw_path)
+        if is_dir:
+            rel = f"{rel.rstrip('/')}/"
+        return {**entry, "path": rel}
+
+    def _normalize_grep_match(self, match: GrepMatch) -> GrepMatch:
+        return {**match, "path": self._map_out(match["path"])}
+
     def ls(self, path: str) -> LsResult:
-        return self._inner.ls(self._map_in(path))
+        result = self._inner.ls(self._map_in(path))
+        if result.error or not result.entries:
+            return result
+        return LsResult(entries=[self._normalize_file_info(entry) for entry in result.entries])
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         return self._inner.read(self._map_in(file_path), offset=offset, limit=limit)
@@ -91,14 +168,20 @@ class PrefixBackend(SandboxBackendProtocol):
             mapped = self._container_prefix if self._container_prefix is not None else path
         else:
             mapped = self._map_in(path)
-        return self._inner.grep(pattern, path=mapped, glob=glob)
+        result = self._inner.grep(pattern, path=mapped, glob=glob)
+        if result.error or not result.matches:
+            return result
+        return GrepResult(
+            matches=[self._normalize_grep_match(match) for match in result.matches],
+        )
 
     def glob(self, pattern: str, path: str = "/") -> GlobResult:
-        if path == "/" and self._container_prefix is not None:
-            mapped = path
-        else:
-            mapped = self._map_in(path)
-        return self._inner.glob(pattern, path=mapped)
+        result = self._inner.glob(pattern, path=self._map_in(path))
+        if result.error or not result.matches:
+            return result
+        return GlobResult(
+            matches=[self._normalize_file_info(match) for match in result.matches],
+        )
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         if self._read_only:
@@ -204,6 +287,7 @@ def build_agent_filesystem_backend(
     return CompositeBackend(
         default=workspace,
         routes={
+            AGENT_SKILLS_INDEX_ROUTE: SkillsIndexBackend(),
             AGENT_EXTENSIONS_SKILLS_ROUTE: extensions,
             AGENT_CUSTOM_SKILLS_ROUTE: custom,
         },

@@ -11,6 +11,7 @@ from agent.backends.agent_filesystem import PrefixBackend, build_agent_filesyste
 from agent.backends.mount_paths import (
     AGENT_CUSTOM_SKILLS_ROUTE,
     AGENT_EXTENSIONS_SKILLS_ROUTE,
+    AGENT_SKILLS_INDEX_ROUTE,
     EXTENSIONS_SKILLS_CONTAINER_PREFIX,
 )
 from deepagents.backends.protocol import (
@@ -69,6 +70,77 @@ def test_prefix_backend_maps_container_prefix() -> None:
     assert inner.read_calls == ["/skills/deep-research-v2/SKILL.md"]
 
 
+def test_prefix_backend_map_out_strips_container_prefix() -> None:
+    backend = PrefixBackend(_StubBackend("inner"), container_prefix="/workspace/skills")
+    assert backend._map_out("/workspace/skills/my-tool") == "/my-tool"
+    assert backend._map_out("/workspace/skills") == "/"
+
+
+def test_prefix_backend_ls_normalizes_aio_absolute_entries() -> None:
+    inner = _StubBackend("inner")
+
+    def ls(path: str) -> LsResult:
+        assert path == "/workspace/skills"
+        return LsResult(
+            entries=[
+                {"path": "/workspace/skills/my-tool", "is_dir": True},
+            ]
+        )
+
+    inner.ls = ls  # type: ignore[method-assign]
+    backend = PrefixBackend(inner, container_prefix="/workspace/skills", read_only=True)
+    result = backend.ls("/")
+    assert result.error is None
+    assert result.entries == [{"path": "/my-tool/", "is_dir": True}]
+
+
+@pytest.mark.asyncio
+async def test_aio_composite_ls_extensions_paths_are_not_doubled() -> None:
+    sandbox = _StubSandbox("sandbox")
+
+    def ls(path: str) -> LsResult:
+        if path == "/skills":
+            return LsResult(
+                entries=[
+                    {"path": "/skills/deep-research-v2", "is_dir": True},
+                ]
+            )
+        return LsResult(entries=[])
+
+    sandbox.ls = ls  # type: ignore[method-assign]
+    composite = build_agent_filesystem_backend(
+        user_id="u1",
+        session_id="s1",
+        sandbox=sandbox,  # type: ignore[arg-type]
+        shell_timeout=30,
+    )
+    result = await composite.als("/skills/extensions")
+    paths = {entry["path"].rstrip("/") for entry in result.entries or []}
+    assert "/skills/extensions/deep-research-v2" in paths
+    assert "/skills/extensions/skills" not in "".join(paths)
+
+
+@pytest.mark.asyncio
+async def test_aio_composite_ls_custom_workspace_is_not_session_workspace() -> None:
+    """Agent 误用 /skills/custom/workspace 时，映射到容器内不存在的 skill 目录。"""
+    sandbox = _StubSandbox("sandbox")
+
+    def ls(path: str) -> LsResult:
+        if path == "/workspace/skills/workspace":
+            return LsResult(entries=None, error="Path '/workspace/skills/workspace': path_not_found")
+        return LsResult(entries=[])
+
+    sandbox.ls = ls  # type: ignore[method-assign]
+    composite = build_agent_filesystem_backend(
+        user_id="u1",
+        session_id="s1",
+        sandbox=sandbox,  # type: ignore[arg-type]
+        shell_timeout=30,
+    )
+    result = await composite.als("/skills/custom/workspace")
+    assert result.error is not None
+
+
 def test_prefix_backend_read_only_rejects_write() -> None:
     inner = _StubBackend("inner")
     backend = PrefixBackend(inner, read_only=True)
@@ -84,6 +156,66 @@ async def test_prefix_backend_als_delegates_to_ls() -> None:
     result = await backend.als("/")
     assert result.error is None
     assert inner.ls_calls == ["/"]
+
+
+@pytest.mark.asyncio
+async def test_ls_skills_index_lists_extensions_and_custom(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from config import user_data_paths as user_paths
+
+    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
+    from config.env import get_config
+
+    get_config.get_sandbox_config.cache_clear()
+
+    users_root = tmp_path / "users"
+    platform = tmp_path / "platform-skills"
+    platform.mkdir()
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
+    monkeypatch.setattr(
+        "agent.backends.agent_filesystem.skills_root",
+        lambda: platform,
+    )
+
+    from agent.backends.factory import create_agent_backend
+
+    backend = await create_agent_backend("u1", "s1")
+    for path in ("/skills", "/skills/"):
+        result = await backend.als(path)
+        assert result.error is None, path
+        names = {entry["path"].rstrip("/") for entry in result.entries or []}
+        assert names == {"/skills/extensions", "/skills/custom"}
+
+
+@pytest.mark.asyncio
+async def test_aio_ls_skills_index_does_not_hit_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _StubSandbox("sandbox")
+    workspace_ls_calls: list[str] = []
+
+    def ls(path: str) -> LsResult:
+        if path.startswith("/workspace/sessions/"):
+            workspace_ls_calls.append(path)
+            return LsResult(entries=None, error=f"unexpected workspace ls: {path}")
+        if path == "/skills":
+            return LsResult(entries=[{"path": "/skills/deep-research-v2", "is_dir": True}])
+        return LsResult(entries=[])
+
+    sandbox.ls = ls  # type: ignore[method-assign]
+    composite = build_agent_filesystem_backend(
+        user_id="u1",
+        session_id="s1",
+        sandbox=sandbox,  # type: ignore[arg-type]
+        shell_timeout=30,
+    )
+    result = await composite.als("/skills")
+    assert result.error is None
+    assert workspace_ls_calls == []
+    names = {entry["path"].rstrip("/") for entry in result.entries or []}
+    assert names == {"/skills/extensions", "/skills/custom"}
 
 
 @pytest.mark.asyncio
@@ -275,6 +407,7 @@ async def test_create_agent_backend_aio_uses_composite(
         backend = await create_agent_backend("u1", "s1")
 
     assert isinstance(backend, CompositeBackend)
+    assert AGENT_SKILLS_INDEX_ROUTE in backend.routes
     assert AGENT_EXTENSIONS_SKILLS_ROUTE in backend.routes
     assert AGENT_CUSTOM_SKILLS_ROUTE in backend.routes
     mock_create.assert_awaited_once_with("u1", "s1")
