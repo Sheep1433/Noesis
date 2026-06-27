@@ -184,6 +184,7 @@ class LangfuseYamlSection(BaseModel):
 
 class OtherYamlSection(BaseModel):
     skills_filesystem_root: str = ""
+    mcp_config_path: str = ""  # 空则默认 extensions/mcp/mcp.json
 
 
 class WebToolsYamlSection(BaseModel):

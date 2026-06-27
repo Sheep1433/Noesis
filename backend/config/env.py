@@ -148,6 +148,7 @@ class StreamSettings:
 @dataclass(frozen=True)
 class OtherSettings:
     skills_filesystem_root: str
+    mcp_config_path: str
 
 
 @dataclass(frozen=True)
@@ -401,6 +402,7 @@ def _build_other(yaml_cfg: AppYamlConfig) -> OtherSettings:
     other = yaml_cfg.other
     return OtherSettings(
         skills_filesystem_root=_legacy_env("SKILLS_FILESYSTEM_ROOT", other.skills_filesystem_root),
+        mcp_config_path=_legacy_env("MCP_CONFIG_PATH", other.mcp_config_path),
     )
 
 

@@ -1,6 +1,7 @@
 """故障运维智能体 - FaultOperationAgent
 
 基于 create_noesis_agent + MCP 运维工具 + SubAgentMiddleware（general-purpose 子 Agent）。
+MCP 连接见 extensions/mcp/mcp.json（profile: fault_operation）。
 """
 
 import asyncio
@@ -8,20 +9,17 @@ import uuid
 from typing import Any, AsyncGenerator, Optional
 
 from langchain_core.messages import HumanMessage
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
+from agent.mcp.loader import load_mcp_tools
 from agent.prompts import PromptProfile, build_prompt
-from agent.tools.mcp_invoke_wrapper import wrap_mcp_tools
 from agent.backends import SKILL_SOURCES, agent_sandbox_session, create_agent_backend
+from config.mcp_config import MCP_PROFILE_FAULT_OPERATION
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.subagents import SubAgent
 from llm import get_llm
 from common.logging import logger
-
-# 故障运维 MCP 端点（与 SimpleMCPAgent 调试地址一致，按需改代码）
-FAULT_MCP_URL = "http://localhost:8000/mcp"
 
 
 def _resolve_user_id(current_user) -> Optional[str]:
@@ -54,22 +52,12 @@ def _build_fault_operation_subagents(
 class FaultOperationAgent(BaseAgent):
     """故障运维智能体 - MCP 工具 + create_noesis_agent"""
 
-    def __init__(self, mcp_url: str = FAULT_MCP_URL):
+    def __init__(self, mcp_profile: str = MCP_PROFILE_FAULT_OPERATION):
         super().__init__()
-        self.mcp_url = mcp_url
+        self.mcp_profile = mcp_profile
 
     async def _load_mcp_tools(self) -> list:
-        mcp_client = MultiServerMCPClient(
-            {
-                "fault_ops": {
-                    "url": self.mcp_url,
-                    "transport": "streamable_http",
-                }
-            }
-        )
-        tools = wrap_mcp_tools(await mcp_client.get_tools())
-        logger.info(f"FaultOperationAgent 加载 MCP 工具 {len(tools)} 个")
-        return tools
+        return await load_mcp_tools(self.mcp_profile)
 
     async def run_agent(
         self,

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "fault_ops": {
+      "transport": "streamable_http",
+      "url": "http://localhost:8000/mcp"
+    },
+    "ssh": {
+      "transport": "streamable_http",
+      "url": "http://localhost:8000/mcp"
+    }
+  },
+  "profiles": {
+    "fault_operation": ["fault_ops"],
+    "simple_mcp": ["ssh"]
+  }
+}

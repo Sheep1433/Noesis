@@ -1,6 +1,7 @@
 """简单 MCP 集成 Agent - SimpleMCPAgent（调试用）
 
 基于 create_noesis_agent；用于本地调试 MCP 连接，无数据库依赖。
+MCP 连接见 extensions/mcp/mcp.json（profile: simple_mcp）。
 """
 
 import asyncio
@@ -8,21 +9,21 @@ import uuid
 from typing import AsyncGenerator, Optional
 
 from langchain_core.messages import HumanMessage
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import create_noesis_agent
+from agent.mcp.loader import load_mcp_tools
 from agent.prompts import PromptProfile, build_prompt
-from agent.tools.mcp_invoke_wrapper import wrap_mcp_tools
+from config.mcp_config import MCP_PROFILE_SIMPLE_MCP
 from common.logging import logger
 
 
 class SimpleMCPAgent(BaseAgent):
     """简单的 MCP 集成 Agent"""
 
-    def __init__(self, mcp_url: str = "http://localhost:8000/mcp"):
+    def __init__(self, mcp_profile: str = MCP_PROFILE_SIMPLE_MCP):
         super().__init__()
-        self.mcp_url = mcp_url
+        self.mcp_profile = mcp_profile
 
     async def run_agent(
         self,
@@ -37,16 +38,8 @@ class SimpleMCPAgent(BaseAgent):
         self.running_tasks[task_id] = {"cancelled": False}
 
         try:
-            # 连接 MCP 服务器
-            mcp_client = MultiServerMCPClient({
-                "ssh": {
-                    "url": self.mcp_url,
-                    "transport": "streamable_http",
-                }
-            })
-
             try:
-                all_tools = wrap_mcp_tools(await mcp_client.get_tools())
+                all_tools = await load_mcp_tools(self.mcp_profile)
                 logger.info(f"获取到 {len(all_tools)} 个 MCP 工具")
             except Exception as e:
                 logger.error(f"获取 MCP 工具失败: {e}")
@@ -101,7 +94,7 @@ if __name__ == "__main__":
     import asyncio
 
     async def test():
-        agent = SimpleMCPAgent(mcp_url="http://localhost:8000/mcp")
+        agent = SimpleMCPAgent()
         async for chunk in agent.run_agent("你好，列出可用的工具"):
             print(chunk)
 
