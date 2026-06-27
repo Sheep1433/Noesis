@@ -7,7 +7,6 @@
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
 | Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
 | Agent / WildClawBench | `uv run python -m evals.agent.wildclaw` | 已实现 |
-| Agent / 性能回归集 | `uv run python -m evals.agent.perf` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
 
@@ -80,10 +79,6 @@ evals/agent/
     worker.py                 # WildClawBench backend 回调
     noesis_agent.py           # 打入 vendor 的 agent 文件
     results/<tag>/
-  perf/                       # 性能回归 8 题（自研题集）
-    datasets/deep_research/
-    __main__.py
-    results/<tag>/
 ```
 
 ### BrowseComp
@@ -102,14 +97,6 @@ uv run python -m evals.agent.wildclaw --tag wc -- --category 02_Code_Intelligenc
 ```
 
 自动打入 `noesis` backend，评分走上游 Docker grader。结果：`wildclaw/results/<tag>/`。
-
-### perf（性能回归集）
-
-自研 8 题，用于 Agent 离线回归与性能基线对比（非 BrowseComp / WildClawBench 官方流程）。
-
-```bash
-uv run python -m evals.agent.perf --tag dev --limit 1
-```
 
 ---
 

@@ -268,7 +268,6 @@ class DocumentParser:
         import httpx
         from openai import OpenAI
         from markitdown import MarkItDown
-        from common.network.proxy import create_sync_client
         from config.env import ModelConfig
         from kb.embedding import is_vlm_configured
 
@@ -280,7 +279,7 @@ class DocumentParser:
         client = OpenAI(
             api_key=api_key,
             base_url=ModelConfig.vlm_model_base_url,
-            http_client=create_sync_client(
+            http_client=httpx.Client(
                 timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10),
             ),
         )

@@ -1,13 +1,13 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_openai import ChatOpenAI
+from langchain_deepseek import ChatDeepSeek
 
 from llm.factory import _OPENCODE_DEFAULT_BASE_URL, _OPENCODE_DEFAULT_HEADERS, _build_chat_model
 
 
 def test_build_chat_model_opencode_uses_required_headers() -> None:
-    with patch("llm.factory.ChatOpenAI", return_value=MagicMock()) as chat_openai:
+    with patch("llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
         _build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
@@ -16,16 +16,16 @@ def test_build_chat_model_opencode_uses_required_headers() -> None:
             model_api_key="public",
         )
 
-    chat_openai.assert_called_once()
-    kwargs = chat_openai.call_args.kwargs
+    chat_deepseek.assert_called_once()
+    kwargs = chat_deepseek.call_args.kwargs
     assert kwargs["model"] == "deepseek-v4-flash-free"
-    assert kwargs["base_url"] == "https://opencode.ai/zen/v1"
+    assert kwargs["api_base"] == "https://opencode.ai/zen/v1"
     assert kwargs["api_key"] == "public"
     assert kwargs["default_headers"] == _OPENCODE_DEFAULT_HEADERS
 
 
 def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:
-    with patch("llm.factory.ChatOpenAI", return_value=MagicMock()) as chat_openai:
+    with patch("llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
         _build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
@@ -34,13 +34,14 @@ def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:
             model_api_key="public",
         )
 
-    assert chat_openai.call_args.kwargs["base_url"] == _OPENCODE_DEFAULT_BASE_URL
+    assert chat_deepseek.call_args.kwargs["api_base"] == _OPENCODE_DEFAULT_BASE_URL
 
 
-def test_build_chat_model_opencode_returns_chat_openai_instance() -> None:
+def test_build_chat_model_opencode_returns_chat_deepseek_instance() -> None:
     with patch("llm.factory.ModelConfig") as model_config:
         model_config.max_retries = 2
         model_config.request_timeout = 30.0
+        model_config.streaming = True
         model = _build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
@@ -49,7 +50,7 @@ def test_build_chat_model_opencode_returns_chat_openai_instance() -> None:
             model_api_key="public",
         )
 
-    assert isinstance(model, ChatOpenAI)
+    assert isinstance(model, ChatDeepSeek)
 
 
 def test_build_chat_model_unsupported_type_raises() -> None:

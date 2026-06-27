@@ -278,9 +278,9 @@ onMounted(() => {
   width: 80%;
   margin-left: 10%;
   margin-right: 10%;
-  margin-top: 16px;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 </style>

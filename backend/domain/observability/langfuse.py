@@ -10,6 +10,8 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from common.logging import logger
 
+_otel_exporter_direct_http_patched = False
+
 # 入口 merge_langfuse_runnable_config + langfuse_workflow_context 写入，下游只读
 _lf_trace_context: ContextVar[Optional[Dict[str, str]]] = ContextVar(
     "lf_trace_context", default=None
@@ -89,6 +91,7 @@ def activate_eval_langfuse(
     tok_session = _lf_session_id.set(session_id)
     eval_client = None
     try:
+        _patch_langfuse_otel_direct_http()
         os.environ["LANGFUSE_TRACING_ENABLED"] = "true"
         os.environ["LANGFUSE_PUBLIC_KEY"] = settings.public_key
         os.environ["LANGFUSE_SECRET_KEY"] = settings.secret_key
@@ -102,6 +105,7 @@ def activate_eval_langfuse(
         client_kwargs: Dict[str, Any] = {
             "public_key": settings.public_key,
             "secret_key": settings.secret_key,
+            "httpx_client": _langfuse_direct_httpx_client(),
         }
         if settings.base_url:
             client_kwargs["host"] = settings.base_url
@@ -173,6 +177,57 @@ def normalize_langfuse_trace_id(raw: Optional[str]) -> Optional[str]:
     return s
 
 
+def _langfuse_direct_httpx_client(**kwargs: Any) -> Any:
+    import httpx
+
+    return httpx.Client(trust_env=False, **kwargs)
+
+
+def _patch_langfuse_otel_direct_http() -> None:
+    """
+    Langfuse OTEL exporter 默认 requests.Session 会读取系统网络设置（如 macOS 10810）。
+    注入 trust_env=False 的 session，与业务侧「全部直连」一致。
+    """
+    global _otel_exporter_direct_http_patched
+    if _otel_exporter_direct_http_patched:
+        return
+
+    import requests
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+        OTLPSpanExporter,
+    )
+
+    original_init = OTLPSpanExporter.__init__
+
+    def patched_init(
+        self: Any,
+        *args: Any,
+        session: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+        original_init(self, *args, session=session, **kwargs)
+
+    OTLPSpanExporter.__init__ = patched_init  # type: ignore[method-assign]
+    _otel_exporter_direct_http_patched = True
+
+
+def _register_langfuse_client_from_config() -> None:
+    from config.env import LangfuseConfig
+    from langfuse import Langfuse
+
+    client_kwargs: Dict[str, Any] = {
+        "public_key": LangfuseConfig.langfuse_public_key,
+        "secret_key": LangfuseConfig.langfuse_secret_key,
+        "httpx_client": _langfuse_direct_httpx_client(),
+    }
+    if LangfuseConfig.langfuse_base_url:
+        client_kwargs["host"] = LangfuseConfig.langfuse_base_url
+    Langfuse(**client_kwargs)
+
+
 def sync_langfuse_env_from_app_config() -> None:
     """
     将 pydantic 中的 Langfuse 配置同步到进程环境，供 Langfuse SDK 读取。
@@ -184,6 +239,7 @@ def sync_langfuse_env_from_app_config() -> None:
         os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
         return
 
+    _patch_langfuse_otel_direct_http()
     os.environ["LANGFUSE_TRACING_ENABLED"] = "true"
     if LangfuseConfig.langfuse_secret_key:
         os.environ.setdefault(
@@ -197,6 +253,12 @@ def sync_langfuse_env_from_app_config() -> None:
         os.environ.setdefault(
             "LANGFUSE_BASE_URL", LangfuseConfig.langfuse_base_url
         )
+
+    if (
+        LangfuseConfig.langfuse_public_key
+        and LangfuseConfig.langfuse_secret_key
+    ):
+        _register_langfuse_client_from_config()
 
 
 def merge_langfuse_runnable_config(

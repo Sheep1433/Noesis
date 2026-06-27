@@ -9,8 +9,6 @@ from typing import Any
 
 import httpx
 
-from common.network.proxy import create_sync_client
-
 from agent.tools.web_providers.url_safety import validate_fetch_url
 from common.logging import logger
 from domain.chat.streaming.tool_errors import ToolValidationError
@@ -82,7 +80,7 @@ def fetch_with_local(url: str, max_chars: int, timeout: int) -> dict[str, Any]:
     }
 
     try:
-        with create_sync_client(timeout=timeout, follow_redirects=True) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             resp = client.get(url, headers=headers)
             resp.raise_for_status()
             # 重定向后再次校验最终 URL

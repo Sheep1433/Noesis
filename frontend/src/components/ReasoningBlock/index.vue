@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { BulbOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
+import { collapseCompactStyle } from '@/utils/collapseCompact'
 
 interface Props {
   reasoning?: string
@@ -20,12 +21,16 @@ withDefaults(defineProps<Props>(), {
 </script>
 
 <template>
-  <n-collapse class="reasoning-call" :class="{ 'reasoning-call--light': appearance === 'light', 'reasoning-call--dark': appearance === 'dark' }">
+  <n-collapse
+    class="reasoning-call"
+    :class="{ 'reasoning-call--light': appearance === 'light', 'reasoning-call--dark': appearance === 'dark' }"
+    :style="collapseCompactStyle"
+  >
     <n-collapse-item name="reasoning" :default-expanded="defaultOpen">
       <template #header>
         <div class="reasoning-header">
           <div class="reasoning-header__icon">
-            <n-icon :size="17" :color="appearance === 'light' ? '#3d5a80' : '#8bd9f0'">
+            <n-icon :size="14" :color="appearance === 'light' ? '#3d5a80' : '#8bd9f0'">
               <BulbOutline />
             </n-icon>
           </div>
@@ -40,11 +45,8 @@ withDefaults(defineProps<Props>(), {
       </template>
 
       <div class="reasoning-content">
-        <div class="reasoning-section reasoning-section--body">
-          <div class="reasoning-section__label">内容</div>
-          <div class="reasoning-section__body">
-            <pre>{{ reasoning }}</pre>
-          </div>
+        <div class="reasoning-section__body">
+          <pre>{{ reasoning }}</pre>
         </div>
       </div>
     </n-collapse-item>
@@ -57,38 +59,39 @@ withDefaults(defineProps<Props>(), {
   --reasoning-accent: #5ec8eb;
   background: linear-gradient(165deg, #252830 0%, #1a1d24 100%);
   border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 12px;
-  margin: 10px 0;
+  border-radius: 8px;
+  margin: 3px 0;
   box-shadow:
     0 1px 0 rgb(255 255 255 / 6%) inset,
-    0 8px 24px rgb(0 0 0 / 28%);
-  border-left: 3px solid var(--reasoning-accent);
+    0 4px 12px rgb(0 0 0 / 20%);
+  border-left: 2px solid var(--reasoning-accent);
 }
 
 .reasoning-call--light {
   --reasoning-accent: #5b8bd9;
   box-sizing: border-box;
-  width: 90%;
+  width: 100%;
   max-width: 100%;
-  margin: 8px auto;
+  margin: 5px 0;
   background: linear-gradient(180deg, #fbfcfe 0%, #f4f6fb 100%);
   border: 1px solid #e1e6ef;
-  border-radius: 12px;
-  border-left: 3px solid var(--reasoning-accent);
-  box-shadow: 0 1px 2px rgb(15 23 42 / 5%);
+  border-radius: 10px;
+  border-left: 2px solid var(--reasoning-accent);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
 }
 
 .reasoning-call :deep(.n-collapse-item) {
-  margin: 0;
+  margin: 0 !important;
 }
 
 .reasoning-call :deep(.n-collapse-item__header) {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
-  padding: 0 10px 0 0;
+  min-height: 0;
+  padding: 0 6px 0 0 !important;
 }
 
 .reasoning-call :deep(.n-collapse-item__header-main) {
@@ -96,20 +99,17 @@ withDefaults(defineProps<Props>(), {
   align-items: center;
   flex: 1;
   min-width: 0;
-}
-
-.reasoning-call :deep(.n-collapse-item__header-extra) {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
+  min-height: 0;
 }
 
 .reasoning-call :deep(.n-collapse-item-arrow) {
   flex-shrink: 0;
+  font-size: 14px !important;
+  margin-right: 4px !important;
 }
 
 .reasoning-call :deep(.n-collapse-item__content-inner) {
-  padding-top: 0;
+  padding-top: 0 !important;
 }
 
 .reasoning-call :deep(.n-collapse-item__content-wrapper) {
@@ -123,22 +123,23 @@ withDefaults(defineProps<Props>(), {
 .reasoning-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
   color: #a8dff5;
-  font-size: 13px;
-  padding: 11px 14px 11px 12px;
+  font-size: 12px;
+  padding: 7px 10px 7px 8px;
   cursor: pointer;
   transition: background 0.15s ease;
+  line-height: 1.3;
 }
 
 .reasoning-header__middle {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
 }
@@ -153,9 +154,9 @@ withDefaults(defineProps<Props>(), {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   background: rgb(94 200 235 / 12%);
   flex-shrink: 0;
 }
@@ -180,7 +181,7 @@ withDefaults(defineProps<Props>(), {
   font-weight: 600;
   letter-spacing: 0.01em;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
-  font-size: 12.5px;
+  font-size: 12px;
   color: #e8f4ff;
   min-width: 0;
   flex: 1 1 0;
@@ -194,27 +195,12 @@ withDefaults(defineProps<Props>(), {
 }
 
 .reasoning-content {
-  padding: 0 14px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.reasoning-section__label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: rgb(168 223 245 / 55%);
-  margin-bottom: 6px;
-}
-
-.reasoning-call--light .reasoning-section__label {
-  color: #64748b;
+  padding: 0 10px 10px;
 }
 
 .reasoning-section__body {
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 7px;
+  padding: 8px 10px;
   border: 1px solid rgb(255 255 255 / 7%);
   background: rgb(0 0 0 / 22%);
   border-color: rgb(94 200 235 / 15%);
@@ -226,7 +212,7 @@ withDefaults(defineProps<Props>(), {
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.45;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 

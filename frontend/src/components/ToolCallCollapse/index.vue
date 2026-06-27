@@ -2,6 +2,7 @@
 import { BuildOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { computed } from 'vue'
+import { collapseCompactStyle } from '@/utils/collapseCompact'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 interface Props {
@@ -158,12 +159,16 @@ const durationDisplay = computed(() => {
 </script>
 
 <template>
-  <n-collapse class="tool-call" :class="{ 'tool-call--light': appearance === 'light' }">
+  <n-collapse
+    class="tool-call"
+    :class="{ 'tool-call--light': appearance === 'light' }"
+    :style="collapseCompactStyle"
+  >
     <n-collapse-item :name="name" :default-expanded="defaultOpen">
       <template #header>
         <div class="tool-header">
           <div class="tool-header__icon">
-            <n-icon :size="17" :color="appearance === 'light' ? '#3d5a80' : '#8bd9f0'">
+            <n-icon :size="14" :color="appearance === 'light' ? '#3d5a80' : '#8bd9f0'">
               <BuildOutline />
             </n-icon>
           </div>
@@ -213,39 +218,40 @@ const durationDisplay = computed(() => {
   --tool-accent: #5ec8eb;
   background: linear-gradient(165deg, #252830 0%, #1a1d24 100%);
   border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 12px;
-  margin: 10px 0;
+  border-radius: 8px;
+  margin: 3px 0;
   box-shadow:
     0 1px 0 rgb(255 255 255 / 6%) inset,
-    0 8px 24px rgb(0 0 0 / 28%);
+    0 4px 12px rgb(0 0 0 / 20%);
   /* 勿用 overflow:hidden，会裁切右侧 header-extra（状态标签「完成」等） */
-  border-left: 3px solid var(--tool-accent);
+  border-left: 2px solid var(--tool-accent);
 }
 
 .tool-call--light {
   --tool-accent: #5b8bd9;
   box-sizing: border-box;
-  width: 90%;
+  width: 100%;
   max-width: 100%;
-  margin: 8px auto;
+  margin: 5px 0;
   background: linear-gradient(180deg, #fbfcfe 0%, #f4f6fb 100%);
   border: 1px solid #e1e6ef;
-  border-radius: 12px;
-  border-left: 3px solid var(--tool-accent);
-  box-shadow: 0 1px 2px rgb(15 23 42 / 5%);
+  border-radius: 10px;
+  border-left: 2px solid var(--tool-accent);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
 }
 
 .tool-call :deep(.n-collapse-item) {
-  margin: 0;
+  margin: 0 !important;
 }
 
 .tool-call :deep(.n-collapse-item__header) {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
-  padding: 0 10px 0 0;
+  min-height: 0;
+  padding: 0 6px 0 0 !important;
 }
 
 .tool-call :deep(.n-collapse-item__header-main) {
@@ -253,6 +259,7 @@ const durationDisplay = computed(() => {
   align-items: center;
   flex: 1;
   min-width: 0;
+  min-height: 0;
 }
 
 .tool-call :deep(.n-collapse-item__header-extra) {
@@ -263,10 +270,12 @@ const durationDisplay = computed(() => {
 
 .tool-call :deep(.n-collapse-item-arrow) {
   flex-shrink: 0;
+  font-size: 14px !important;
+  margin-right: 4px !important;
 }
 
 .tool-call :deep(.n-collapse-item__content-inner) {
-  padding-top: 0;
+  padding-top: 0 !important;
 }
 
 .tool-call :deep(.n-collapse-item__content-wrapper) {
@@ -280,22 +289,23 @@ const durationDisplay = computed(() => {
 .tool-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
   color: #a8dff5;
-  font-size: 13px;
-  padding: 11px 14px 11px 12px;
+  font-size: 12px;
+  padding: 7px 10px 7px 8px;
   cursor: pointer;
   transition: background 0.15s ease;
+  line-height: 1.3;
 }
 
 .tool-header__middle {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   flex: 1;
   min-width: 0;
 }
@@ -304,7 +314,7 @@ const durationDisplay = computed(() => {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tool-duration {
@@ -322,9 +332,9 @@ const durationDisplay = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   background: rgb(94 200 235 / 12%);
   flex-shrink: 0;
 }
@@ -349,7 +359,7 @@ const durationDisplay = computed(() => {
   font-weight: 600;
   letter-spacing: 0.01em;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
-  font-size: 12.5px;
+  font-size: 12px;
   color: #e8f4ff;
   min-width: 0;
   flex: 1 1 0;
@@ -360,7 +370,7 @@ const durationDisplay = computed(() => {
 
 .tool-name--with-summary {
   flex: 0 1 auto;
-  max-width: 38%;
+  max-width: 34%;
 }
 
 .tool-summary {
@@ -370,7 +380,7 @@ const durationDisplay = computed(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: rgb(168 223 245 / 88%);
 }
@@ -384,10 +394,10 @@ const durationDisplay = computed(() => {
 }
 
 .tool-content {
-  padding: 0 14px 14px;
+  padding: 0 10px 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .tool-section__label {
@@ -395,7 +405,7 @@ const durationDisplay = computed(() => {
   font-weight: 600;
   letter-spacing: 0.04em;
   color: rgb(168 223 245 / 55%);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .tool-call--light .tool-section__label {
@@ -403,8 +413,8 @@ const durationDisplay = computed(() => {
 }
 
 .tool-section__body {
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 7px;
+  padding: 8px 10px;
   border: 1px solid rgb(255 255 255 / 7%);
   background: rgb(0 0 0 / 22%);
 }
@@ -424,7 +434,7 @@ const durationDisplay = computed(() => {
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.45;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 

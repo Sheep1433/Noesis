@@ -4,29 +4,41 @@
 
 ## CI 自动部署
 
-| 分支 | Workflow | GitHub Environment | 端口 | MySQL 库 |
-|------|----------|-------------------|------|----------|
-| `main` | `.github/workflows/deploy.yml` | `production` | 28468 | `noesis` |
-| `dev` | `.github/workflows/deploy-dev.yml` | `development` | 28469 | `noesis_dev` |
+| 分支 | Workflow | 说明 |
+|------|----------|------|
+| `main` | `.github/workflows/deploy.yml` | CI 通过后自动部署生产 |
 
-**同机双栈**（推荐 zzqroot 场景）：IP 与 SSH 用户相同，用不同 `DEPLOY_PATH` 与端口区分；`development` Environment 仅需覆盖 `DEPLOY_PATH`（如 `/root/zzq/code/noesis-dev`），其余 Secrets 继承仓库级配置。
+线上 **仅一套** Docker Compose（`:28468`），目录示例 `/root/zzq/code/noesis`。`dev` 分支不自动部署；偶尔线上调试时 SSH 手动执行（见下）。
 
-| 栈 | 目录 | `COMPOSE_PROJECT_NAME` |
-|----|------|------------------------|
-| 生产 | `/root/zzq/code/noesis` | `noesis` |
-| 开发 | `/root/zzq/code/noesis-dev` | `noesis-dev` |
+## 偶尔线上调试 dev
+
+与生产共用同一 compose，**只换 Git 分支 + MySQL 库名**（数据隔离）：
+
+```bash
+cd /root/zzq/code/noesis
+
+# 1. 编辑 deploy/.env.docker
+#    MYSQL_DATABASE=noesis_dev
+#    APP_ENV=dev          # 可选
+
+# 2. 部署 dev 分支
+DEPLOY_BRANCH=dev bash ./scripts/deploy-remote.sh
+
+# 3. 调试结束后恢复生产
+#    改回 MYSQL_DATABASE=noesis、APP_ENV=prod
+DEPLOY_BRANCH=main bash ./scripts/deploy-remote.sh
+```
+
+首次调试前在 MySQL 创建开发库：`CREATE DATABASE noesis_dev ...`（可与生产共用同一 MySQL 实例）。
 
 服务器首次准备：
 
-1. 安装 Docker，克隆两份仓库到上表目录（生产跟踪 `main`，开发跟踪 `dev`）。
-2. 各目录复制 `deploy/.env.docker.example` → `deploy/.env.docker`；开发栈额外设置 `APP_ENV=dev`、`MYSQL_DATABASE=noesis_dev`。
-3. 在 MySQL 创建开发库：`CREATE DATABASE noesis_dev ...`（可与生产共用同一 MySQL 实例）。
-4. 预拉 AIO 镜像：`docker pull ghcr.io/agent-infra/sandbox:latest`。
-5. 推送对应分支后，CI 通过即自动执行 `scripts/deploy-remote.sh`。
+1. 安装 Docker，克隆仓库到 `DEPLOY_PATH`（如 `/root/zzq/code/noesis`）。
+2. 复制 `deploy/.env.docker.example` → `deploy/.env.docker`，生产默认 `MYSQL_DATABASE=noesis`。
+3. 预拉 AIO 镜像：`docker pull ghcr.io/agent-infra/sandbox:latest`。
+4. `main` 推送且 CI 通过后自动部署。
 
-手动触发：Actions 页选择 **Deploy** 或 **Deploy Dev** → **Run workflow**。
-
-> **勿使用**仓库根目录旧版 `docker-compose.yml` 或 `deploy/Dockerfile.backend`；CI 与 `deploy-remote.sh` 仅认 `deploy/docker-compose.yml`。
+> **勿使用**仓库根目录旧版 `docker-compose.yml`；CI 与 `deploy-remote.sh` 仅认 `deploy/docker-compose.yml`。
 
 ## 服务拓扑
 

@@ -187,3 +187,16 @@ def test_hits_to_langfuse_payload():
     assert payload == [
         {"id": "h1", "score": 0.9, "file_name": "a.md", "content": "正文"}
     ]
+
+
+def test_otel_exporter_uses_direct_http_session() -> None:
+    import requests
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+        OTLPSpanExporter,
+    )
+
+    langfuse_tracing._otel_exporter_direct_http_patched = False
+    langfuse_tracing._patch_langfuse_otel_direct_http()
+    exporter = OTLPSpanExporter(endpoint="http://127.0.0.1:3000/api/public/otel/v1/traces")
+    assert isinstance(exporter._session, requests.Session)
+    assert exporter._session.trust_env is False

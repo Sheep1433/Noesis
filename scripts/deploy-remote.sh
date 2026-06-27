@@ -3,22 +3,16 @@
 # 密钥与服务器地址由服务器本地 deploy/.env.docker 承载，勿写入本脚本或 CI。
 #
 # 环境变量：
-#   DEPLOY_BRANCH       部署分支，默认 main（生产）；开发环境传 dev
-#   COMPOSE_PROJECT_NAME / NOESIS_HTTP_PORT  由分支自动推导，一般无需手改
+#   DEPLOY_BRANCH   部署分支，默认 main（生产）；偶尔线上调试 dev 时传 dev
+#
+# 线上仅一套 compose（:28468）。生产 / 调试通过 deploy/.env.docker 区 MySQL 库：
+#   生产  MYSQL_DATABASE=noesis
+#   调试  MYSQL_DATABASE=noesis_dev  （部署前手动改，调试完改回）
 set -euo pipefail
 
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
-
-case "$DEPLOY_BRANCH" in
-  dev)
-    export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-noesis-dev}"
-    export NOESIS_HTTP_PORT="${NOESIS_HTTP_PORT:-28469}"
-    ;;
-  main|*)
-    export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-noesis}"
-    export NOESIS_HTTP_PORT="${NOESIS_HTTP_PORT:-28468}"
-    ;;
-esac
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-noesis}"
+export NOESIS_HTTP_PORT="${NOESIS_HTTP_PORT:-28468}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE_FILE="$ROOT/deploy/docker-compose.yml"

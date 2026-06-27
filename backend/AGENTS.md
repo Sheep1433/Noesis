@@ -40,7 +40,6 @@ backend/
 │   ├── paths.py                 # REPO_ROOT、.data/ 路径解析
 │   ├── serialization.py
 │   ├── http/response.py
-│   └── network/proxy.py
 ├── domain/                      # 有业务语义的领域模块
 │   ├── auth/                    # 密码、访问令牌、stop token
 │   ├── chat/
