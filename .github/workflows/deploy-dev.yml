@@ -1,26 +1,24 @@
-# main 分支 CI 通过后，SSH 到生产服务器执行 scripts/deploy-remote.sh（DEPLOY_BRANCH=main）。
+# dev 分支 CI 通过后，SSH 到开发栈目录执行 scripts/deploy-remote.sh（DEPLOY_BRANCH=dev）。
 #
-# 请在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置：
-#   DEPLOY_HOST        服务器地址（IP 或域名）
-#   DEPLOY_USER        SSH 用户名
-#   SSH_PRIVATE_KEY    部署用 SSH 私钥（对应公钥需写入服务器 authorized_keys）
-#   DEPLOY_PATH        仓库在服务器上的绝对路径（生产示例 /root/zzq/code/noesis）
-#   DEPLOY_SSH_PORT    （可选）SSH 端口，未设置时默认 22
+# 与 production 可共用同一台机器（同 IP / SSH 用户），通过不同目录与 HTTP 端口区分：
+#   production  DEPLOY_PATH=/root/zzq/code/noesis      → :28468，MySQL 库 noesis
+#   development DEPLOY_PATH=/root/zzq/code/noesis-dev → :28469，MySQL 库 noesis_dev
 #
-# 服务器首次需手动完成：克隆仓库、安装 Docker、创建 deploy/.env.docker。
-# 勿将 IP、密钥、密码写入本文件或仓库任意 tracked 文件。
+# 请在 GitHub Settings → Environments → development 中至少配置：
+#   DEPLOY_PATH        开发栈仓库绝对路径（与 production 不同）
+# 其余 Secrets（DEPLOY_HOST / DEPLOY_USER / SSH_PRIVATE_KEY）可沿用仓库级配置。
 
-name: Deploy
+name: Deploy Dev
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [main]
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
-  group: deploy-production
+  group: deploy-development
   cancel-in-progress: false
 
 permissions:
@@ -37,11 +35,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (
         github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_branch == 'main'
+        github.event.workflow_run.head_branch == 'dev'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: production
+    environment: development
 
     steps:
       - name: Validate deploy secrets
@@ -57,7 +55,7 @@ jobs:
           [[ -n "${SSH_PRIVATE_KEY}" ]] || missing+=("SSH_PRIVATE_KEY")
           [[ -n "${DEPLOY_PATH}" ]] || missing+=("DEPLOY_PATH")
           if ((${#missing[@]} > 0)); then
-            echo "缺少 GitHub Secrets: ${missing[*]}" >&2
+            echo "缺少 GitHub Secrets（development 环境）: ${missing[*]}" >&2
             exit 1
           fi
 
@@ -75,7 +73,7 @@ jobs:
           ssh-keyscan -p "${PORT}" "${DEPLOY_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 644 ~/.ssh/known_hosts
 
-      - name: Deploy to server
+      - name: Deploy to dev server
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -88,7 +86,7 @@ jobs:
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd '${DEPLOY_PATH}' && DEPLOY_BRANCH=main bash ./scripts/deploy-remote.sh"
+            "cd '${DEPLOY_PATH}' && DEPLOY_BRANCH=dev bash ./scripts/deploy-remote.sh"
 
       - name: Remove SSH key
         if: always()
