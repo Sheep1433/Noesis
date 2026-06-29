@@ -1,0 +1,38 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_010
+scenes:
+- scene_name: 购物车
+  test_points:
+  - point_name: 同一SKU合并数量上限99
+  - point_name: 下架商品灰色展示不可勾选
+  - point_name: 无货商品灰色展示不可勾选
+  - point_name: 支持全选与反选
+  - point_name: 结算前校验勾选项库存
+- scene_name: 库存
+  test_points:
+  - point_name: 提交订单预占库存15分钟
+  - point_name: 预占超时自动释放库存
+  - point_name: 库存不足提示并调整数量
+  - point_name: 库存不足回写可买上限
+  - point_name: 秒杀SKU走独立库存池
+- scene_name: 优惠券
+  test_points:
+  - point_name: 每单最多1张店铺券加1张平台券
+  - point_name: 两种满减类优惠券互斥
+  - point_name: 过期券不可选自动过滤
+- scene_name: 收货地址
+  test_points:
+  - point_name: 地址须含省市区详细地址手机号
+  - point_name: 手机号11位格式校验
+  - point_name: 港澳台地址提示不支持配送
+- scene_name: 订单快照
+  test_points:
+  - point_name: 保存商品标题单价主图URL规格快照
+  - point_name: 快照不随后台改价变化
+- scene_name: 可靠性与NFR
+  test_points:
+  - point_name: 创建订单支持Idempotency-Key幂等
+  - point_name: 幂等键防重复下单
+  - point_name: 创建订单接口P99小于500ms
+  - point_name: 支持App小程序H5渠道

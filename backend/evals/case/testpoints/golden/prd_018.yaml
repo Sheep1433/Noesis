@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_018
+scenes:
+- scene_name: 签署流程
+  test_points:
+  - point_name: 上传PDF指定签署方与顺序
+  - point_name: 支持顺序签与会签并行
+  - point_name: 顺序签前一方未完成后一方不可见
+  - point_name: 各方签署完成后归档存证
+- scene_name: 意愿认证
+  test_points:
+  - point_name: 企业对公打款0.01元验证
+  - point_name: 企业法人刷脸验证
+  - point_name: 个人短信OTP或刷脸二选一
+  - point_name: 认证失败5次锁定24小时
+- scene_name: 签章
+  test_points:
+  - point_name: 企业公章合同章法人章位置拖拽
+  - point_name: 骑缝章自动按PDF页数分割
+- scene_name: 作废
+  test_points:
+  - point_name: 发起方全员签署前可作废
+  - point_name: 已完成合同作废须全员同意
+  - point_name: 作废须留存作废协议
+- scene_name: 存证合规
+  test_points:
+  - point_name: 合同哈希上链联盟链
+  - point_name: 提供出证报告PDF
+  - point_name: 文件AES加密存储
+  - point_name: 密钥KMS托管
+  - point_name: 符合电子签名法可靠电子签名要求
+  - point_name: 使用第三方CA SaaS服务
+  - point_name: 顺序签与会签模式切换验证

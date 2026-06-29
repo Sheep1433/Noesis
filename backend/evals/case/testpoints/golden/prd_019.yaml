@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_019
+scenes:
+- scene_name: 限流维度
+  test_points:
+  - point_name: 全局限流集群10万QPS
+  - point_name: 免费租户100次每分钟配额
+  - point_name: Pro租户2000次每分钟配额
+  - point_name: 单用户60次每分钟防刷
+  - point_name: 未登录IP 30次每分钟
+- scene_name: 限流算法
+  test_points:
+  - point_name: 滑动窗口计数Redis Lua原子
+  - point_name: 超限返回429状态码
+  - point_name: 429响应含Retry-After头秒数
+- scene_name: 熔断
+  test_points:
+  - point_name: 下游错误率超50%且QPS大于100触发
+  - point_name: 10秒窗口打开熔断30秒
+  - point_name: 半开探测允许10%流量
+  - point_name: 熔断响应503统一JSON
+- scene_name: 降级
+  test_points:
+  - point_name: 推荐统计等非核心接口可降级stub
+  - point_name: 核心写接口禁止降级
+- scene_name: 白名单观测
+  test_points:
+  - point_name: 内部服务mTLS绕过租户限流
+  - point_name: 运维临时提额须ticket审批
+  - point_name: 临时提额最长24小时
+  - point_name: Prometheus记录rate_limit_drop_total
+  - point_name: Prometheus记录circuit_open指标
+  - point_name: 租户连续429超100次每小时告警

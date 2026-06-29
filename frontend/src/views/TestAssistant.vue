@@ -10,6 +10,7 @@ import type { TestCaseExportCaseItem } from '@/api/chat'
 import { query_user_qa_record } from '@/api'
 import { getCollections, uploadDocument } from '@/api/knowledgeBase'
 import { KB_FILE_DICT_REF, TEST_CASE_UPLOAD_COLLECTION } from '@/config/knowledge'
+import { cssVar, themeCssVar } from '@/config/theme'
 import { normalizeApiContent } from '@/views/chat/messageParts'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import {
@@ -1021,7 +1022,7 @@ onBeforeUnmount(() => {
     rounded="10"
     overflow="hidden"
     bg-white
-    b="1 solid #e8eaf3"
+    b="1 solid border"
   >
     <!-- 左：测试设计会话列表 -->
     <aside
@@ -1030,7 +1031,7 @@ onBeforeUnmount(() => {
       h-full
       w="272px"
       min-w-0
-      b-r="1 solid #e8eaf3"
+      b-r="1 solid border"
       bg="#fafbff"
     >
       <div class="tc-panel-title">
@@ -1059,7 +1060,7 @@ onBeforeUnmount(() => {
       flex="1 ~ col"
       min-w-0
       min-h-0
-      bg="#f6f7fb"
+      bg="bgcolor"
       relative
     >
       <div
@@ -1068,7 +1069,6 @@ onBeforeUnmount(() => {
       >
         <n-button
           type="primary"
-          color="#5c7cfa"
           :loading="exportLoading"
           :disabled="portalBusy"
           @click="handleExportCases"
@@ -1103,7 +1103,7 @@ onBeforeUnmount(() => {
       h-full
       w="400px"
       min-w-0
-      b-l="1 solid #e8eaf3"
+      b-l="1 solid border"
     >
       <div class="tc-panel-title">
         测试助手
@@ -1189,7 +1189,6 @@ onBeforeUnmount(() => {
                 </p>
                 <n-button
                   type="primary"
-                  color="#5c7cfa"
                   strong
                   block
                   class="rounded-20"
@@ -1278,7 +1277,6 @@ onBeforeUnmount(() => {
                   <template #trigger>
                     <n-button
                       type="primary"
-                      color="#5c7cfa"
                       strong
                       block
                       class="mt-12 rounded-20"
@@ -1358,7 +1356,7 @@ onBeforeUnmount(() => {
   font-size: 15px;
   font-weight: 600;
   color: #26244c;
-  border-bottom: 1px solid #e8eaf3;
+  border-bottom: 1px solid var(--noesis-color-border);
   background: #fff;
 }
 
@@ -1369,7 +1367,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 10px 16px;
   background: #fff;
-  border-bottom: 1px solid #e8eaf3;
+  border-bottom: 1px solid var(--noesis-color-border);
   box-shadow: 0 1px 0 rgb(92 124 250 / 6%);
 }
 
@@ -1379,16 +1377,16 @@ onBeforeUnmount(() => {
 }
 
 .tc-right-aside {
-  background: #f6f7fb;
+  background: var(--noesis-color-bg);
 }
 
 .tc-chat-scroll {
-  background: #f6f7fb;
+  background: var(--noesis-color-bg);
 }
 
 .tc-chat-pad {
   padding: 16px 8px 20px;
-  background: #f6f7fb;
+  background: var(--noesis-color-bg);
   min-height: 100%;
 }
 
@@ -1479,7 +1477,7 @@ onBeforeUnmount(() => {
 }
 
 .tc-case-progress-item--generating .tc-case-progress-dot {
-  background: #5c7cfa;
+  background: var(--noesis-color-primary);
   animation: tc-pulse 1s ease-in-out infinite;
 }
 
@@ -1622,7 +1620,7 @@ onBeforeUnmount(() => {
   margin-left: 4%;
   margin-right: 4%;
   background: #fff;
-  border: 1px solid #e8eaf0;
+  border: 1px solid var(--noesis-color-border-subtle);
   border-radius: 16px;
   box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
   padding: 12px 14px;
@@ -1648,7 +1646,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   box-sizing: border-box;
   padding: 12px 12px 16px;
-  background: #f6f7fb;
+  background: var(--noesis-color-bg);
 }
 
 .tc-composer-box {
@@ -1680,7 +1678,7 @@ onBeforeUnmount(() => {
 }
 
 .tc-markmap-wrap {
-  background: #f6f7fb;
+  background: var(--noesis-color-bg);
 }
 
 .tc-empty-hint {

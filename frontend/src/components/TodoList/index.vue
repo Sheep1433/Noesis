@@ -2,12 +2,15 @@
 import type { Todo } from './types'
 import { ChevronDown, ChevronUp, ListOutline } from '@vicons/ionicons-v5'
 import { NBadge, NIcon } from 'naive-ui'
+import { useNaivePresetColors } from '@/hooks/useThemePreset'
 
 import { computed, ref } from 'vue'
 
 const props = defineProps<{
   todos: Todo[]
 }>()
+
+const naivePresetColors = useNaivePresetColors()
 
 const collapsed = ref(false)
 
@@ -32,7 +35,7 @@ const completedTodos = computed(() => props.todos.filter((t) => t.status === 'co
   <div v-if="shouldShow" class="todo-list">
     <div class="todo-header" @click="collapsed = !collapsed">
       <n-space align="center" :size="8">
-        <n-icon :size="16" color="#5c7cfa">
+        <n-icon :size="16" :color="naivePresetColors.primary">
           <ListOutline />
         </n-icon>
         <span class="todo-title">待处理事项</span>
@@ -178,7 +181,7 @@ const completedTodos = computed(() => props.todos.filter((t) => t.status === 'co
 }
 
 .todo-dot.in_progress {
-  color: #5c7cfa;
+  color: var(--noesis-color-primary);
   animation: pulse 1.5s ease-in-out infinite;
 }
 

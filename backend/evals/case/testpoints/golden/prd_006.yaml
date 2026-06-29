@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_006
+scenes:
+- scene_name: 扫描流程
+  test_points:
+  - point_name: merge完成后文件进入扫描队列
+  - point_name: 扫描完成前状态为scanning
+  - point_name: scanning状态禁止下载
+- scene_name: 扫描结果
+  test_points:
+  - point_name: 清洁文件状态active可下载预览
+  - point_name: 可疑文件状态quarantine待复核文案
+  - point_name: 高危文件状态isolated隔离文案
+- scene_name: 隔离策略
+  test_points:
+  - point_name: 命中木马宏病毒双后缀executable高危隔离
+  - point_name: 隔离文件移入隔离桶保留file_id
+  - point_name: isolated状态下载返回403统一文案
+  - point_name: isolated状态分享链接失效
+- scene_name: 管理端
+  test_points:
+  - point_name: 安全管理员可放行或永久删除
+  - point_name: 放行须填写原因
+  - point_name: 放行须二次审批两人规则
+- scene_name: SLA与审计
+  test_points:
+  - point_name: 50MB以内5分钟内出扫描结果
+  - point_name: 扫描失败重试3次
+  - point_name: 仍失败标记scan_failed人工介入
+  - point_name: 记录file_id规则名引擎版本
+  - point_name: 记录扫描操作人
+  - point_name: 扫描中预览接口同样拦截
+  - point_name: quarantine状态用户可见待复核提示

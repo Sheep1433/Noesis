@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_015
+scenes:
+- scene_name: 查询分页
+  test_points:
+  - point_name: 列表分页单页最大500行
+  - point_name: 复杂报表走OLAP引擎
+  - point_name: 查询超时60s提示缩小范围或导出
+- scene_name: 异步导出
+  test_points:
+  - point_name: 预估超5000行强制异步导出
+  - point_name: 异步完成站内信通知下载链接
+  - point_name: 导出任务队列FIFO
+  - point_name: 单用户最多2个并发导出任务
+  - point_name: 支持xlsx与csv格式
+  - point_name: 大文件自动zip压缩
+- scene_name: 文件生命周期
+  test_points:
+  - point_name: 下载链接72小时有效
+  - point_name: 链接过期须重新申请导出
+  - point_name: OSS文件7天后物理删除
+- scene_name: 脱敏水印
+  test_points:
+  - point_name: 手机号中间4位星号脱敏
+  - point_name: 身份证仅展示后4位
+  - point_name: 导出文件含水印工号加时间
+  - point_name: PDF可选禁止复制
+- scene_name: 权限限流
+  test_points:
+  - point_name: 导出字段受列级权限控制
+  - point_name: 无权限列不出现在导出文件
+  - point_name: 导出动作记录audit_log
+  - point_name: 同一报表5分钟内重复导出返回429

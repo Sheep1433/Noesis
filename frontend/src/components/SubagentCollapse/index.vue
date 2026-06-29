@@ -12,6 +12,7 @@ import {
   parseTaskToolOutput,
 } from '@/utils/parseTaskTool'
 import { formatDurationMs } from '@/views/chat/messageParts'
+import { themeColors } from '@/config/theme'
 
 interface Props {
   input?: Record<string, unknown>
@@ -113,7 +114,7 @@ const durationDisplay = computed(() => {
       <template #header>
         <div class="subagent-header">
           <div class="subagent-header__icon">
-            <n-icon :size="17" :color="appearance === 'light' ? '#3d5a80' : '#8bd9f0'">
+            <n-icon :size="17" :color="appearance === 'light' ? themeColors.blockLightIcon : themeColors.blockDarkIcon">
               <GitNetworkOutline />
             </n-icon>
           </div>
@@ -196,28 +197,26 @@ const durationDisplay = computed(() => {
 
 <style scoped>
 .subagent-call {
-  --tool-accent: #5ec8eb;
-  background: linear-gradient(165deg, #252830 0%, #1a1d24 100%);
-  border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 12px;
+  --tool-accent: var(--noesis-block-dark-accent);
+  background: var(--noesis-block-dark-bg);
+  border: 1px solid var(--noesis-block-dark-border);
+  border-radius: var(--noesis-radius-lg);
   margin: 10px 0;
-  box-shadow:
-    0 1px 0 rgb(255 255 255 / 6%) inset,
-    0 8px 24px rgb(0 0 0 / 28%);
+  box-shadow: var(--noesis-shadow-block-dark-lg);
   border-left: 3px solid var(--tool-accent);
 }
 
 .subagent-call--light {
-  --tool-accent: #5b8bd9;
+  --tool-accent: var(--noesis-block-light-accent);
   box-sizing: border-box;
   width: 90%;
   max-width: 100%;
   margin: 8px auto;
-  background: linear-gradient(180deg, #fbfcfe 0%, #f4f6fb 100%);
-  border: 1px solid #e1e6ef;
-  border-radius: 12px;
+  background: var(--noesis-block-light-bg);
+  border: 1px solid var(--noesis-block-light-border);
+  border-radius: var(--noesis-radius-lg);
   border-left: 3px solid var(--tool-accent);
-  box-shadow: 0 1px 2px rgb(15 23 42 / 5%);
+  box-shadow: var(--noesis-shadow-sm);
 }
 
 .subagent-call :deep(.n-collapse-item) {
@@ -245,11 +244,11 @@ const durationDisplay = computed(() => {
 }
 
 .subagent-call :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid rgb(255 255 255 / 6%);
+  border-top: 1px solid var(--noesis-block-dark-border-inner);
 }
 
 .subagent-call--light :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid #e8ecf2;
+  border-top: 1px solid var(--noesis-color-border-divider);
 }
 
 .subagent-header {
@@ -260,7 +259,7 @@ const durationDisplay = computed(() => {
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  color: #a8dff5;
+  color: var(--noesis-block-dark-text);
   font-size: 13px;
   padding: 11px 14px 11px 12px;
   cursor: pointer;
@@ -285,12 +284,12 @@ const durationDisplay = computed(() => {
 .subagent-duration {
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
   font-size: 11px;
-  color: rgb(168 223 245 / 70%);
+  color: var(--noesis-block-dark-text-muted);
   flex-shrink: 0;
 }
 
 .subagent-call--light .subagent-duration {
-  color: #64748b;
+  color: var(--noesis-color-text-muted);
 }
 
 .subagent-header__icon {
@@ -299,32 +298,32 @@ const durationDisplay = computed(() => {
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  background: rgb(94 200 235 / 12%);
+  border-radius: var(--noesis-radius-md);
+  background: var(--noesis-block-dark-bg-icon);
   flex-shrink: 0;
 }
 
 .subagent-header:hover {
-  background: rgb(255 255 255 / 4%);
+  background: var(--noesis-block-dark-bg-hover);
 }
 
 .subagent-call--light .subagent-header {
-  color: #334e68;
+  color: var(--noesis-block-light-text);
 }
 
 .subagent-call--light .subagent-header__icon {
-  background: rgb(91 139 217 / 12%);
+  background: var(--noesis-color-primary-bg-icon);
 }
 
 .subagent-call--light .subagent-header:hover {
-  background: rgb(91 139 217 / 8%);
+  background: var(--noesis-color-primary-bg-hover);
 }
 
 .subagent-title {
   font-weight: 600;
   letter-spacing: 0.01em;
   font-size: 13px;
-  color: #e8f4ff;
+  color: var(--noesis-block-dark-text-name);
   min-width: 0;
   flex: 1 1 0;
   overflow: hidden;
@@ -333,7 +332,7 @@ const durationDisplay = computed(() => {
 }
 
 .subagent-call--light .subagent-title {
-  color: #1e3a5f;
+  color: var(--noesis-block-light-text-name);
 }
 
 .subagent-content {
@@ -347,38 +346,38 @@ const durationDisplay = computed(() => {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: rgb(168 223 245 / 55%);
+  color: var(--noesis-block-dark-text-label);
   margin-bottom: 6px;
 }
 
 .subagent-call--light .subagent-section__label {
-  color: #64748b;
+  color: var(--noesis-color-text-muted);
 }
 
 .subagent-section__body {
   border-radius: 8px;
   padding: 10px 12px;
-  border: 1px solid rgb(255 255 255 / 7%);
-  background: rgb(0 0 0 / 22%);
+  border: 1px solid var(--noesis-block-dark-border-section);
+  background: var(--noesis-block-dark-bg-section);
 }
 
 .subagent-section--prompt .subagent-section__body {
-  border-color: rgb(94 200 235 / 15%);
+  border-color: var(--noesis-block-dark-border-args);
 }
 
 .subagent-section--result .subagent-section__body {
-  border-color: rgb(152 195 121 / 18%);
-  background: rgb(20 28 22 / 55%);
+  border-color: var(--noesis-block-dark-border-result);
+  background: var(--noesis-block-dark-bg-result);
 }
 
 .subagent-section--error .subagent-section__body {
-  border-color: rgb(239 68 68 / 25%);
-  background: rgb(40 20 20 / 55%);
+  border-color: var(--noesis-block-dark-border-error);
+  background: var(--noesis-block-dark-bg-error);
 }
 
 .subagent-content pre {
   margin: 0;
-  color: #d0d8e0;
+  color: var(--noesis-block-dark-text-code);
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
@@ -387,42 +386,42 @@ const durationDisplay = computed(() => {
 }
 
 .subagent-section--result pre {
-  color: #a8d997;
+  color: var(--noesis-block-dark-text-result);
 }
 
 .subagent-section--error pre {
-  color: #fca5a5;
+  color: var(--noesis-block-dark-text-error);
 }
 
 .subagent-call--light .subagent-section__body {
-  background: #fff;
-  border: 1px solid #e5e9f0;
+  background: var(--noesis-color-bg-elevated);
+  border: 1px solid var(--noesis-color-border-code);
 }
 
 .subagent-call--light .subagent-section--prompt .subagent-section__body {
-  border-color: #d8e2f0;
+  border-color: var(--noesis-color-border-args);
 }
 
 .subagent-call--light .subagent-content pre {
-  color: #334155;
+  color: var(--noesis-block-light-text-code);
 }
 
 .subagent-call--light .subagent-section--result .subagent-section__body {
-  border-color: #c5e4d0;
-  background: linear-gradient(180deg, #f8fdf9 0%, #f1faf3 100%);
+  border-color: var(--noesis-color-border-result);
+  background: var(--noesis-block-light-bg-result);
 }
 
 .subagent-call--light .subagent-section--result pre {
-  color: #166534;
+  color: var(--noesis-block-light-text-result);
 }
 
 .subagent-call--light .subagent-section--error .subagent-section__body {
-  border-color: #fecaca;
-  background: linear-gradient(180deg, #fffbfb 0%, #fef2f2 100%);
+  border-color: var(--noesis-color-border-error);
+  background: var(--noesis-block-light-bg-error);
 }
 
 .subagent-call--light .subagent-section--error pre {
-  color: #b91c1c;
+  color: var(--noesis-block-light-text-error);
 }
 
 .subagent-timeline {
@@ -439,18 +438,18 @@ const durationDisplay = computed(() => {
 .subagent-narrative {
   border-radius: 8px;
   padding: 10px 12px;
-  border: 1px solid #e5e9f0;
-  background: #fff;
+  border: 1px solid var(--noesis-color-border-code);
+  background: var(--noesis-color-bg-elevated);
 }
 
 .subagent-call--light .subagent-narrative {
-  border-color: #e1e6ef;
-  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+  border-color: var(--noesis-block-light-border);
+  background: var(--noesis-block-light-bg-narrative);
 }
 
 .subagent-narrative pre {
   margin: 0;
-  color: #334155;
+  color: var(--noesis-block-light-text-code);
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;

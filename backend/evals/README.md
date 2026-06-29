@@ -7,6 +7,7 @@
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
 | Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
 | Agent / WildClawBench | `uv run python -m evals.agent.wildclaw` | 已实现 |
+| Agent / Terminal-Bench | `./evals/agent/harbor/run.sh` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
 
@@ -34,30 +35,39 @@ cp backend/evals/.env.example backend/evals/.env
 
 ## 1. 测试用例（`evals.case` + promptfoo）
 
-指标：**阶段 A**（L0、`point_coverage_recall`、`scene_name_recall`）、**阶段 B**（两路 RAG Recall@3/Hit@3、`document_context_present`）。
+指标：**阶段 A**（L0、`point_coverage_recall`、`point_coverage_precision`）、**阶段 B**（两路 RAG Recall@3/Hit@3、`document_context_present`）。
 
 ```
 evals/case/
-  README.md                 # 目录说明（评测集 / 文档在哪）
-  testpoints/               # 测试点评测
-    promptfooconfig.yaml    # 评测集 + 金标准
-    documents/              # 输入需求 PRD
-  rag/                      # RAG 检索评测
+  README.md
+  report.py                   # 跑分后汇总指标、写 summary
+  results/<tag>/              # 默认 promptfoo JSON + *-summary.json
+  testpoints/
+    golden/                   # 金标准源（prd_*.yaml）
+    golden_loader.py
+    generate_eval_dataset.py  # 生成 documents + promptfooconfig
+    promptfooconfig.yaml      # 运行时配置（由脚本生成）
+    documents/
+  rag/
     promptfooconfig.yaml
-    corpus/test_cases/      # 历史用例语料
+    corpus/test_cases/
     ingest.py
-  shared/                   # assertions、judge
+  shared/                     # assertions、judge
 ```
 
 ```bash
 uv run python -m evals.case --phase testpoints --tag baseline
+uv run python -m evals.case --phase stage-a --tag baseline   # 同上别名
 uv run python -m evals.case --phase rag --tag rb-baseline
+uv run python -m evals.case --phase stage-b --tag rb-baseline # 同上别名
 uv run python -m evals.case.rag.ingest --map-only
 uv run python -m evals.case.rag.ingest --reset
-uv run python -m evals.case --tag debug --item-id tc_login_001
+uv run python -m evals.case --phase testpoints --tag debug --item-id prd_001
 ```
 
-用例与金标准写在 `testpoints/promptfooconfig.yaml` 或 `rag/promptfooconfig.yaml` 的 `tests` 段，**不**使用单独的 `dataset.jsonl`。
+阶段 A 金标准源在 `testpoints/golden/*.yaml`；运行时写入 `promptfooconfig.yaml` 的 `golden_test_points_json`。**不**使用 `dataset.jsonl`。跑分结束后默认写入 `results/<tag>/` 并在控制台打印 recall/precision 汇总。
+
+RAG 集成测（pytest，默认 skip）：`NOESIS_CASE_RAG_EVAL=1` + 先 `evals.case.rag.ingest`。
 
 coverage 走 promptfoo **llm-rubric**（`shared/judge.py` → `get_llm()`）。详见 `evals/case/README.md`。
 
@@ -79,6 +89,9 @@ evals/agent/
     worker.py                 # WildClawBench backend 回调
     noesis_agent.py           # 打入 vendor 的 agent 文件
     results/<tag>/
+  harbor/
+    run.sh                    # Harbor + Claude Code → terminal-bench@2.0
+    README.md
 ```
 
 ### BrowseComp
@@ -97,6 +110,16 @@ uv run python -m evals.agent.wildclaw --tag wc -- --category 02_Code_Intelligenc
 ```
 
 自动打入 `noesis` backend，评分走上游 Docker grader。结果：`wildclaw/results/<tag>/`。
+
+### Terminal-Bench（Harbor + Claude Code）
+
+```bash
+cd backend
+./evals/agent/harbor/run.sh --n-tasks 1 --job-name smoke
+./evals/agent/harbor/run.sh --n-tasks 10 --job-name tbench-10
+```
+
+前置：Docker、`uv tool install harbor`、本机 `claude` CLI、`~/.claude/settings.json`。产物：`evals/agent/harbor/results/<job-name>/`。
 
 ---
 

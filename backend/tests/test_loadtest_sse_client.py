@@ -21,7 +21,19 @@ def test_consume_sse_stream_success() -> None:
     assert metrics.event_counts["text-delta"] == 1
 
 
-def test_consume_sse_stream_error() -> None:
+def test_consume_sse_stream_waits_for_done_after_finish() -> None:
+    """收到 finish 后须继续读到 [DONE]，不可提前结束。"""
+    frames = (
+        'event: finish\ndata: {"type":"finish","finish_reason":"stop","usage":{}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    metrics = consume_sse_stream(_lines(frames))
+    assert metrics.succeeded
+    assert metrics.finish_reason == "stop"
+    assert metrics.error_message is None
+
+
+def test_consume_sse_stream_error_without_done() -> None:
     frames = 'event: error\ndata: {"type":"error","error":"boom"}\n\n'
     metrics = consume_sse_stream(_lines(frames))
     assert not metrics.succeeded

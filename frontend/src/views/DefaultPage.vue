@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { welcomeGradientStyle } from '@/config/theme'
 
 const props = withDefaults(
   defineProps<{
@@ -51,21 +52,21 @@ const currentPanel = computed(() => {
         title: '深度研究',
         subtitle: '面向调研与报告类问题的检索增强问答',
         items: cardReportItems,
-        gradient: 'linear-gradient(135deg, #eef6ff 0%, #e8f4fc 50%, #f0effe 100%)',
+        gradientStyle: welcomeGradientStyle('DEEP_RESEARCH_QA'),
       }
     case 'FAULT_OPERATION_QA':
       return {
         title: '故障运维',
         subtitle: '基于 LangGraph 与 MCP 的故障诊断与运维智能体',
         items: cardFaultItems,
-        gradient: 'linear-gradient(135deg, #f0effe 0%, #e4f0ff 45%, #d4eefc 100%)',
+        gradientStyle: welcomeGradientStyle('FAULT_OPERATION_QA'),
       }
     case 'TEST_CASE_QA':
       return {
         title: '测试用例生成',
         subtitle: '基于 Multi-Agent 的用例生成（在独立页面中完成）',
         items: cardTestItems,
-        gradient: 'linear-gradient(135deg, #f5fff8 0%, #eef6ff 55%, #f0effe 100%)',
+        gradientStyle: welcomeGradientStyle('TEST_CASE_QA'),
       }
     case 'COMMON_QA':
     default:
@@ -73,7 +74,7 @@ const currentPanel = computed(() => {
         title: '智能问答',
         subtitle: '基于 RAG 与向量检索的通用智能问答',
         items: cardOneItems,
-        gradient: 'linear-gradient(135deg, #f8f9ff 0%, #eef2ff 40%, #e8f4fc 100%)',
+        gradientStyle: welcomeGradientStyle('COMMON_QA'),
       }
   }
 })
@@ -98,7 +99,7 @@ function openTestCasePage() {
 
     <div
       class="detail-card detail-card--below-header"
-      :style="{ background: currentPanel.gradient }"
+      :style="currentPanel.gradientStyle"
     >
       <div class="detail-card__lead">
         <h2 class="detail-card__title">
@@ -143,10 +144,10 @@ function openTestCasePage() {
   align-items: center;
   gap: 16px;
   padding: 16px 18px;
-  background: #fff;
-  border-radius: 12px;
+  background: var(--noesis-color-bg-elevated);
+  border-radius: var(--noesis-radius-lg);
   margin-top: 4%;
-  box-shadow: 0 1px 3px rgb(15 23 42 / 6%);
+  box-shadow: var(--noesis-shadow-md);
 }
 
 .logo-wrap {
@@ -178,7 +179,7 @@ function openTestCasePage() {
   margin: 0;
   font-size: 1.35rem;
   font-weight: 600;
-  color: #1a1d33;
+  color: var(--noesis-color-text);
 }
 
 .detail-card--below-header {
@@ -191,9 +192,9 @@ function openTestCasePage() {
   align-items: stretch;
   gap: 20px 28px;
   padding: 20px 22px;
-  border-radius: 14px;
+  border-radius: var(--noesis-radius-xl);
   border: 1px solid rgb(255 255 255 / 60%);
-  box-shadow: 0 4px 24px rgb(15 23 42 / 8%);
+  box-shadow: var(--noesis-shadow-lg);
   flex-wrap: wrap;
 }
 
@@ -206,14 +207,14 @@ function openTestCasePage() {
   margin: 0 0 8px;
   font-size: 1.15rem;
   font-weight: 600;
-  color: #14162b;
+  color: var(--noesis-color-text-heading);
 }
 
 .detail-card__subtitle {
   margin: 0;
   font-size: 0.85rem;
   line-height: 1.55;
-  color: #4a5068;
+  color: var(--noesis-color-text-secondary);
 }
 
 .detail-card__cta {
@@ -226,14 +227,14 @@ function openTestCasePage() {
   background: none;
   font-size: 0.85rem;
   font-weight: 600;
-  color: #5c7cfa;
+  color: var(--noesis-color-primary);
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
 .link-btn:hover {
-  color: #3d5ae6;
+  color: var(--noesis-color-primary-hover);
 }
 
 .detail-card__points {
@@ -250,7 +251,7 @@ function openTestCasePage() {
 .detail-point {
   font-size: 0.8rem;
   line-height: 1.45;
-  color: #3d4159;
+  color: var(--noesis-color-text-body);
   padding-left: 0;
 }
 

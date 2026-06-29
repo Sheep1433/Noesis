@@ -1,0 +1,37 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_013
+scenes:
+- scene_name: 消息发送
+  test_points:
+  - point_name: 支持交易审批营销系统消息类型
+  - point_name: 营销类默认关闭Push需opt-in
+  - point_name: 业务方调用notify send接口
+  - point_name: 路由渠道后模板渲染
+  - point_name: 队列异步发送
+- scene_name: 模板
+  test_points:
+  - point_name: 模板变量userName缺失fail-fast不发送
+  - point_name: 模板变量orderId缺失fail-fast不发送
+  - point_name: 短信模板须含工信部备案号
+- scene_name: 免打扰
+  test_points:
+  - point_name: 用户可设22点到08点免打扰
+  - point_name: 时段内非交易类延迟到08:00发送
+  - point_name: 交易类支付成功消息不受限
+- scene_name: 重试可靠性
+  test_points:
+  - point_name: 短信失败指数退避重试3次
+  - point_name: Push失败指数退避重试3次
+  - point_name: 邮件失败进dead-letter人工补发
+- scene_name: 收件箱
+  test_points:
+  - point_name: 站内信90天归档
+  - point_name: 支持批量已读
+  - point_name: 支持批量删除
+  - point_name: 未读角标上限99+
+- scene_name: 合规
+  test_points:
+  - point_name: 营销短信含退订指令回T退订
+  - point_name: 用户注销后30天内停止一切触达
+  - point_name: 支持站内信邮件短信App Push渠道

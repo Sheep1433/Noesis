@@ -69,6 +69,11 @@ def _usable_test_point_count(scenes: List[Dict]) -> int:
     return n
 
 
+def _structured_output(llm, schema, **kwargs):
+    """结构化输出：OpenCode Zen 等代理不接受 tool_choice=required，须用 auto。"""
+    return llm.with_structured_output(schema, **kwargs).bind(tool_choice="auto")
+
+
 def generate_scenes_testpoints_node(
     state: TestCaseState,
     config: RunnableConfig | None = None,
@@ -84,7 +89,7 @@ def generate_scenes_testpoints_node(
     try:
         llm = get_llm()
         prompt = _build_scenes_testpoints_prompt(query, document_context)
-        structured_llm = llm.with_structured_output(ScenesTestPointsOutput)
+        structured_llm = _structured_output(llm, ScenesTestPointsOutput)
         run_config = dict(config or {})
         run_config.setdefault("run_name", "case_generate:scenes_testpoints")
         result: ScenesTestPointsOutput = structured_llm.invoke(prompt, config=run_config)
@@ -574,7 +579,7 @@ async def _generate_scene_cases(
         prompt = _build_scene_cases_prompt(
             scene_name, points, context, document_context=document_context
         )
-        structured_llm = llm.with_structured_output(SceneTestCasesOutput, include_raw=True)
+        structured_llm = _structured_output(llm, SceneTestCasesOutput, include_raw=True)
         run_config = dict(config or {})
         run_config.setdefault("run_name", f"case_generate:{scene_name}")
         resp = await structured_llm.ainvoke(prompt, config=run_config)

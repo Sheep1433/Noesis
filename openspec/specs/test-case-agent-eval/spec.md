@@ -35,8 +35,12 @@ CLI **SHALL** 支持 `--tag`（必填）、`--item-id`、`--limit`、`--baseline
 
 | 路径 | 职责 |
 |------|------|
-| `testpoints/promptfooconfig.yaml` | 阶段 A 评测集与金标准（`tests:` 段） |
+| `testpoints/golden/` | 阶段 A 金标准源（`prd_*.yaml`） |
+| `testpoints/golden_loader.py`、`generate_eval_dataset.py` | 读取 golden、生成 PRD 与 promptfooconfig |
+| `testpoints/promptfooconfig.yaml` | 阶段 A 运行时配置（`golden_test_points_json` 由脚本生成） |
 | `testpoints/documents/` | 输入需求 PRD |
+| `report.py` | 跑分后解析 promptfoo JSON、打印/写入 summary |
+| `results/<tag>/` | 默认 `--output` 与 `*-summary.json` |
 | `rag/promptfooconfig.yaml` | 阶段 B RAG 评测集与 `relevant_ids` 金标准 |
 | `rag/corpus/test_cases/` | RAG 灌库历史用例语料 |
 | `rag/ingest.py` | Qdrant 灌库 |
@@ -47,11 +51,11 @@ CLI **SHALL** 支持 `--tag`（必填）、`--item-id`、`--limit`、`--baseline
 #### Scenario: 评测集在 promptfooconfig
 
 - **WHEN** 审查默认评测数据
-- **THEN** 金标准 **SHALL** 定义于各阶段 `promptfooconfig.yaml` 的 `tests:` 段
+- **THEN** 阶段 A 金标准源 **SHALL** 位于 `testpoints/golden/*.yaml`；运行时 **SHALL** 由生成脚本写入 `promptfooconfig.yaml` 的 `tests[].vars.golden_test_points_json`
 
 ### Requirement: 阶段 A 指标
 
-阶段 A（`testpoints`）SHALL 至少汇报：L0 结构门禁、`point_coverage_recall`、`scene_name_recall`（以 `shared/assertions.py` 实现为准）。
+阶段 A（`testpoints`）SHALL 至少汇报：L0 结构门禁、`point_coverage_recall`、`point_coverage_precision`（以 `shared/assertions.py` 与 promptfoo rubric 为准）。
 
 #### Scenario: L0 结构失败
 

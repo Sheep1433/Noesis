@@ -1,0 +1,37 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_004
+scenes:
+- scene_name: 格式校验
+  test_points:
+  - point_name: 白名单扩展名pdf doc xls png等
+  - point_name: 不支持格式提示文案
+  - point_name: 双重扩展名report.pdf.exe按最后段拒绝
+  - point_name: 扩展名小写匹配白名单
+- scene_name: 大小限制
+  test_points:
+  - point_name: 普通上传单文件上限20MB
+  - point_name: 超过20MB前端阻止并Toast提示
+  - point_name: 批量最多10个文件
+  - point_name: 批量合计上限100MB
+  - point_name: 头像上传上限2MB
+  - point_name: 头像仅允许1个文件
+- scene_name: 边界异常
+  test_points:
+  - point_name: 空文件0字节拒绝提示
+  - point_name: 文件名超过200字符默认拒绝
+  - point_name: 上传中断展示失败态
+  - point_name: 上传中断支持重试同一文件
+- scene_name: 服务端校验
+  test_points:
+  - point_name: Content-Length二次校验超限返回413
+- scene_name: 存储返回
+  test_points:
+  - point_name: 对象存储路径含tenant_id与日期
+  - point_name: 返回file_id mime size sha256
+- scene_name: 非功能
+  test_points:
+  - point_name: 20MB文件上传P99小于30s
+  - point_name: 进度条精度1%
+  - point_name: 上传过程支持取消
+  - point_name: 不包含病毒扫描能力

@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: Noesis 测试用例 Agent 测试点 评测（L0 + point_coverage_recall + scene_name_recall）
+description: Noesis 测试用例 Agent 测试点 评测（L0 + point_coverage recall/precision）
 prompts:
-- '{{scenario_description}}'
+- '请根据需求文档生成测试场景与测试点'
 providers:
 - id: file://provider.py
   label: test-case-testpoints
@@ -21,17 +21,18 @@ defaultTest:
       你是测试设计评审员。根据 Agent 输出与金标准测试点，计算 **point_coverage_recall**（测试点覆盖召回率）。
 
       ## Agent 输出（JSON）
-      {{output}}
+      {output}
 
       ## 金标准测试点
-      {{golden_test_points_json}}
+      {golden_test_points_json}
 
       ## 评分规则
       1. 从 Agent 输出的 JSON 中读取 `state.scenes_testpoints` 作为「生成测试点」；若为空或解析失败，score=0.0。
-      2. 判断「生成测试点」是否**语义覆盖**每条金标准测试点（允许多个生成点共同覆盖一条；scene_name 可不完全一致）。
-      3. **score** = 已覆盖金标准条数 / 金标准总条数，取值 0.0～1.0。
-      4. **pass** 始终为 true（本指标仅汇报分数，不设通过阈值门禁）。
-      5. 在 reason 中简要说明覆盖情况与 recall 计算依据。
+      2. 对每条金标准测试点，判断是否存在至少一条「生成测试点」在 **point_name 语义上覆盖** 该金标准所表达的 PRD 需求（scene_name 不一致可接受，但生成点须能反映同一需求点）。
+      3. **无部分计分**：每条金标准要么计为已覆盖（1），要么未覆盖（0），不允许 0.5 等部分覆盖。
+      4. **score** = 已覆盖金标准条数 / 金标准总条数，取值 0.0～1.0。
+      5. **pass** 始终为 true（本指标仅汇报分数，不设通过阈值门禁）。
+      6. 在 reason 中简要说明覆盖情况与 recall 计算依据。
 
       仅输出 JSON（不要其它文字）：
       ```json
@@ -46,148 +47,177 @@ defaultTest:
       id: file://../shared/judge.py
       config:
         pythonExecutable: ../shared/run-python.sh
-  - type: python
-    value: file://../shared/assertions.py:assert_scene_name_recall
-    metric: scene_name_recall
+  - type: llm-rubric
+    value: |
+      你是测试设计评审员。根据 Agent 输出与金标准测试点，计算 **point_coverage_precision**（测试点覆盖精确率）。
+
+      ## Agent 输出（JSON）
+      {output}
+
+      ## 金标准测试点
+      {golden_test_points_json}
+
+      ## 评分规则
+      1. 从 Agent 输出的 JSON 中读取 `state.scenes_testpoints`，展平各 scene 的 `test_points` 作为「生成测试点」；若为空或解析失败，score=0.0。
+      2. 判断每条「生成测试点」是否**有效**（须满足其一）：
+         - 语义上能对应至少一条金标准测试点；或
+         - 被 PRD 文档内容**明确支持**（非泛泛而谈、非仅重复同一意图的变体）
+      3. **无效情形**：仅与金标准属同一业务域但无法对应具体需求；与其它生成点明显重复；凭空编造 PRD 未提及的规则。
+      4. **score** = 有效生成测试点条数 / 生成测试点总条数，取值 0.0～1.0。
+      5. **pass** 始终为 true（本指标仅汇报分数，不设通过阈值门禁）。
+      6. 在 reason 中简要说明有效/无效判定与 precision 计算依据。
+
+      仅输出 JSON（不要其它文字）：
+      ```json
+      {
+        "reason": "<精确率分析>",
+        "score": 0.0,
+        "pass": true
+      }
+      ```
+    metric: point_coverage_precision
+    provider:
+      id: file://../shared/judge.py
+      config:
+        pythonExecutable: ../shared/run-python.sh
 tests:
-- description: tc_login_001
+- description: prd_001
   metadata:
-    item_id: tc_login_001
+    item_id: prd_001
   vars:
-    item_id: tc_login_001
-    scenario_description: 重点覆盖登录失败与验证码场景
-    document_path: documents/tc_login_001.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 用户登录
-        point_name: 用户名密码错误提示
-      - scene_name: 用户登录
-        point_name: 验证码过期刷新
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"用户登录\",\n    \"point_name\"\
-      : \"用户名密码错误提示\"\n  },\n  {\n    \"scene_name\": \"用户登录\",\n    \"point_name\"\
-      : \"验证码过期刷新\"\n  }\n]\n"
-- description: tc_login_002
+    item_id: prd_001
+    document_path: documents/prd_001.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"登录页展示\",\n    \"point_name\": \"用户名密码验证码必填校验\"\n  },\n  {\n    \"scene_name\": \"登录页展示\",\n    \"point_name\": \"记住我默认不勾选\"\n  },\n  {\n    \"scene_name\": \"登录页展示\",\n    \"point_name\": \"隐私政策与用户协议链接展示\"\n  },\n  {\n    \"scene_name\": \"登录页展示\",\n    \"point_name\": \"用户名支持手机号或工号\"\n  },\n  {\n    \"scene_name\": \"登录页展示\",\n    \"point_name\": \"4位字母数字混合图形验证码\"\n  },\n  {\n    \"scene_name\": \"正常登录流程\",\n    \"point_name\": \"打开登录页下发captcha_id与验证码图片\"\n  },\n  {\n    \"scene_name\": \"正常登录流程\",\n    \"point_name\": \"验证码未过期校验通过后签发JWT\"\n  },\n  {\n    \"scene_name\": \"正常登录流程\",\n    \"point_name\": \"登录成功跳转dashboard\"\n  },\n  {\n    \"scene_name\": \"正常登录流程\",\n    \"point_name\": \"captcha_id五分钟有效\"\n  },\n  {\n    \"scene_name\": \"正常登录流程\",\n    \"point_name\": \"记住我勾选参数透传会话服务\"\n  },\n  {\n    \"scene_name\": \"异常提示\",\n    \"point_name\": \"用户名或密码错误统一提示文案\"\n  },\n  {\n    \"scene_name\": \"异常提示\",\n    \"point_name\": \"验证码错误提示文案\"\n  },\n  {\n    \"scene_name\": \"异常提示\",\n    \"point_name\": \"验证码过期提示与刷新按钮\"\n  },\n  {\n    \"scene_name\": \"异常提示\",\n    \"point_name\": \"禁止区分用户名不存在与密码错误\"\n  },\n  {\n    \"scene_name\": \"异常提示\",\n    \"point_name\": \"验证码过期须刷新后重新输入\"\n  },\n  {\n    \"scene_name\": \"安全锁定\",\n    \"point_name\": \"连续失败5次锁定15分钟\"\n  },\n  {\n    \"scene_name\": \"安全锁定\",\n    \"point_name\": \"密码错误计入失败次数\"\n  },\n  {\n    \"scene_name\": \"安全锁定\",\n    \"point_name\": \"验证码错误计入失败次数\"\n  },\n  {\n    \"scene_name\": \"安全锁定\",\n    \"point_name\": \"锁定期间正确密码仍拒绝登录\"\n  },\n  {\n    \"scene_name\": \"安全锁定\",\n    \"point_name\": \"传输强制HTTPS\"\n  },\n  {\n    \"scene_name\": \"安全锁定\",\n    \"point_name\": \"日志禁止明文密码\"\n  },\n  {\n    \"scene_name\": \"安全锁定\",\n    \"point_name\": \"密码后端bcrypt存储\"\n  },\n  {\n    \"scene_name\": \"审计与NFR\",\n    \"point_name\": \"登录成功写入审计日志含时间与IP\"\n  },\n  {\n    \"scene_name\": \"审计与NFR\",\n    \"point_name\": \"审计含设备指纹脱敏\"\n  },\n  {\n    \"scene_name\": \"审计与NFR\",\n    \"point_name\": \"审计记录登录方式password\"\n  },\n  {\n    \"scene_name\": \"审计与NFR\",\n    \"point_name\": \"登录接口P99小于800ms\"\n  },\n  {\n    \"scene_name\": \"审计与NFR\",\n    \"point_name\": \"验证码图片alt文本为验证码图片\"\n  },\n  {\n    \"scene_name\": \"审计与NFR\",\n    \"point_name\": \"刷新按钮aria-label为刷新验证码\"\n  },\n  {\n    \"scene_name\": \"审计与NFR\",\n    \"point_name\": \"支持Chrome90+Edge90+Safari15+\"\n  }\n]\n"
+- description: prd_002
   metadata:
-    item_id: tc_login_002
+    item_id: prd_002
   vars:
-    item_id: tc_login_002
-    scenario_description: 覆盖扫码与绑定异常
-    document_path: documents/tc_login_002.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 扫码登录
-        point_name: 企业微信扫码登录成功
-      - scene_name: 账号绑定
-        point_name: 首次绑定本地账号
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\"\
-      : \"企业微信扫码登录成功\"\n  },\n  {\n    \"scene_name\": \"账号绑定\",\n    \"point_name\"\
-      : \"首次绑定本地账号\"\n  }\n]\n"
-- description: tc_login_003
+    item_id: prd_002
+    document_path: documents/prd_002.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\": \"登录页展示企业微信二维码\"\n  },\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\": \"二维码2分钟过期自动刷新\"\n  },\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\": \"企业微信扫码确认授权\"\n  },\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\": \"回调接口处理OAuth code\"\n  },\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\": \"code换userid后已绑定直接登录\"\n  },\n  {\n    \"scene_name\": \"扫码登录\",\n    \"point_name\": \"已绑定用户3步内进入首页\"\n  },\n  {\n    \"scene_name\": \"账号绑定\",\n    \"point_name\": \"未绑定用户跳转绑定页\"\n  },\n  {\n    \"scene_name\": \"账号绑定\",\n    \"point_name\": \"首次绑定输入工号与本地密码\"\n  },\n  {\n    \"scene_name\": \"账号绑定\",\n    \"point_name\": \"绑定须二次验证本地密码\"\n  },\n  {\n    \"scene_name\": \"账号绑定\",\n    \"point_name\": \"绑定成功后自动登录\"\n  },\n  {\n    \"scene_name\": \"账号绑定\",\n    \"point_name\": \"未绑定完成无法访问业务API返回401\"\n  },\n  {\n    \"scene_name\": \"异常处理\",\n    \"point_name\": \"用户取消扫码Toast已取消扫码\"\n  },\n  {\n    \"scene_name\": \"异常处理\",\n    \"point_name\": \"二维码过期提示请刷新\"\n  },\n  {\n    \"scene_name\": \"异常处理\",\n    \"point_name\": \"工号不存在或密码错误明确提示\"\n  },\n  {\n    \"scene_name\": \"异常处理\",\n    \"point_name\": \"企业未开通应用提示企业未授权\"\n  },\n  {\n    \"scene_name\": \"异常处理\",\n    \"point_name\": \"错误提示不泄露他人信息\"\n  },\n  {\n    \"scene_name\": \"安全合规\",\n    \"point_name\": \"code一次性5分钟内有效\"\n  },\n  {\n    \"scene_name\": \"安全合规\",\n    \"point_name\": \"回调URL白名单校验\"\n  },\n  {\n    \"scene_name\": \"安全合规\",\n    \"point_name\": \"扫码时间写入审计日志\"\n  },\n  {\n    \"scene_name\": \"安全合规\",\n    \"point_name\": \"绑定结果与userid写入审计\"\n  },\n  {\n    \"scene_name\": \"安全合规\",\n    \"point_name\": \"扫码登录写IP审计\"\n  },\n  {\n    \"scene_name\": \"企业配置\",\n    \"point_name\": \"企业管理员配置CorpID与Secret\"\n  },\n  {\n    \"scene_name\": \"企业配置\",\n    \"point_name\": \"启用企业微信登录开关\"\n  },\n  {\n    \"scene_name\": \"企业配置\",\n    \"point_name\": \"保留账号密码登录方式\"\n  },\n  {\n    \"scene_name\": \"企业配置\",\n    \"point_name\": \"终端用户须在企业通讯录\"\n  }\n]\n"
+- description: prd_003
   metadata:
-    item_id: tc_login_003
+    item_id: prd_003
   vars:
-    item_id: tc_login_003
-    scenario_description: 记住我与登出
-    document_path: documents/tc_login_003.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 会话管理
-        point_name: 记住我7天免登录
-      - scene_name: 会话管理
-        point_name: 登出后其它标签页失效
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"会话管理\",\n    \"point_name\"\
-      : \"记住我7天免登录\"\n  },\n  {\n    \"scene_name\": \"会话管理\",\n    \"point_name\"\
-      : \"登出后其它标签页失效\"\n  }\n]\n"
-- description: tc_upload_001
+    item_id: prd_003
+    document_path: documents/prd_003.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"会话策略\",\n    \"point_name\": \"默认Access Token有效期2小时\"\n  },\n  {\n    \"scene_name\": \"会话策略\",\n    \"point_name\": \"默认Refresh Token有效期7天\"\n  },\n  {\n    \"scene_name\": \"会话策略\",\n    \"point_name\": \"记住我Refresh Token延长至30天\"\n  },\n  {\n    \"scene_name\": \"会话策略\",\n    \"point_name\": \"记住我7天免登录对外文案\"\n  },\n  {\n    \"scene_name\": \"会话策略\",\n    \"point_name\": \"Cookie设置HttpOnly Secure SameSite\"\n  },\n  {\n    \"scene_name\": \"会话策略\",\n    \"point_name\": \"Access Token过期前5分钟静默刷新\"\n  },\n  {\n    \"scene_name\": \"主动登出\",\n    \"point_name\": \"点击退出登录吊销当前Refresh Token\"\n  },\n  {\n    \"scene_name\": \"主动登出\",\n    \"point_name\": \"登出后其它标签页下次请求401\"\n  },\n  {\n    \"scene_name\": \"主动登出\",\n    \"point_name\": \"其它标签页401跳转登录页\"\n  },\n  {\n    \"scene_name\": \"主动登出\",\n    \"point_name\": \"移动端同步清除本地Token\"\n  },\n  {\n    \"scene_name\": \"主动登出\",\n    \"point_name\": \"登出接口幂等重复调用返回204\"\n  },\n  {\n    \"scene_name\": \"被动失效\",\n    \"point_name\": \"管理员强制下线5分钟内全端失效\"\n  },\n  {\n    \"scene_name\": \"被动失效\",\n    \"point_name\": \"密码修改吊销全部Refresh Token\"\n  },\n  {\n    \"scene_name\": \"并发会话\",\n    \"point_name\": \"同一账号最多5个活跃Refresh Token\"\n  },\n  {\n    \"scene_name\": \"并发会话\",\n    \"point_name\": \"第6次登录踢掉最早未活跃设备\"\n  },\n  {\n    \"scene_name\": \"并发会话\",\n    \"point_name\": \"踢设备后邮件通知用户\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"Token刷新接口P99小于200ms\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"Web控制台与H5共用账号体系\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"不包含单点登录联邦能力\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"不包含LDAP同步能力\"\n  }\n]\n"
+- description: prd_004
   metadata:
-    item_id: tc_upload_001
+    item_id: prd_004
   vars:
-    item_id: tc_upload_001
-    scenario_description: 格式与大小限制
-    document_path: documents/tc_upload_001.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 文件上传
-        point_name: 不支持格式提示
-      - scene_name: 文件上传
-        point_name: 超过20MB拦截
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"文件上传\",\n    \"point_name\"\
-      : \"不支持格式提示\"\n  },\n  {\n    \"scene_name\": \"文件上传\",\n    \"point_name\"\
-      : \"超过20MB拦截\"\n  }\n]\n"
-- description: tc_upload_002
+    item_id: prd_004
+    document_path: documents/prd_004.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"格式校验\",\n    \"point_name\": \"白名单扩展名pdf doc xls png等\"\n  },\n  {\n    \"scene_name\": \"格式校验\",\n    \"point_name\": \"不支持格式提示文案\"\n  },\n  {\n    \"scene_name\": \"格式校验\",\n    \"point_name\": \"双重扩展名report.pdf.exe按最后段拒绝\"\n  },\n  {\n    \"scene_name\": \"格式校验\",\n    \"point_name\": \"扩展名小写匹配白名单\"\n  },\n  {\n    \"scene_name\": \"大小限制\",\n    \"point_name\": \"普通上传单文件上限20MB\"\n  },\n  {\n    \"scene_name\": \"大小限制\",\n    \"point_name\": \"超过20MB前端阻止并Toast提示\"\n  },\n  {\n    \"scene_name\": \"大小限制\",\n    \"point_name\": \"批量最多10个文件\"\n  },\n  {\n    \"scene_name\": \"大小限制\",\n    \"point_name\": \"批量合计上限100MB\"\n  },\n  {\n    \"scene_name\": \"大小限制\",\n    \"point_name\": \"头像上传上限2MB\"\n  },\n  {\n    \"scene_name\": \"大小限制\",\n    \"point_name\": \"头像仅允许1个文件\"\n  },\n  {\n    \"scene_name\": \"边界异常\",\n    \"point_name\": \"空文件0字节拒绝提示\"\n  },\n  {\n    \"scene_name\": \"边界异常\",\n    \"point_name\": \"文件名超过200字符默认拒绝\"\n  },\n  {\n    \"scene_name\": \"边界异常\",\n    \"point_name\": \"上传中断展示失败态\"\n  },\n  {\n    \"scene_name\": \"边界异常\",\n    \"point_name\": \"上传中断支持重试同一文件\"\n  },\n  {\n    \"scene_name\": \"服务端校验\",\n    \"point_name\": \"Content-Length二次校验超限返回413\"\n  },\n  {\n    \"scene_name\": \"存储返回\",\n    \"point_name\": \"对象存储路径含tenant_id与日期\"\n  },\n  {\n    \"scene_name\": \"存储返回\",\n    \"point_name\": \"返回file_id mime size sha256\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"20MB文件上传P99小于30s\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"进度条精度1%\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"上传过程支持取消\"\n  },\n  {\n    \"scene_name\": \"非功能\",\n    \"point_name\": \"不包含病毒扫描能力\"\n  }\n]\n"
+- description: prd_005
   metadata:
-    item_id: tc_upload_002
+    item_id: prd_005
   vars:
-    item_id: tc_upload_002
-    scenario_description: 分片与断点续传
-    document_path: documents/tc_upload_002.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 大文件上传
-        point_name: 超过5MB启用分片
-      - scene_name: 大文件上传
-        point_name: 合并失败可重试
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"大文件上传\",\n    \"point_name\"\
-      : \"超过5MB启用分片\"\n  },\n  {\n    \"scene_name\": \"大文件上传\",\n    \"point_name\"\
-      : \"合并失败可重试\"\n  }\n]\n"
-- description: tc_upload_003
+    item_id: prd_005
+    document_path: documents/prd_005.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"分片策略\",\n    \"point_name\": \"单文件超过5MB自动启用分片\"\n  },\n  {\n    \"scene_name\": \"分片策略\",\n    \"point_name\": \"小文件仍走直传\"\n  },\n  {\n    \"scene_name\": \"分片策略\",\n    \"point_name\": \"分片大小5MB最后一片可小于5MB\"\n  },\n  {\n    \"scene_name\": \"分片策略\",\n    \"point_name\": \"默认并发上传3个分片\"\n  },\n  {\n    \"scene_name\": \"分片策略\",\n    \"point_name\": \"并发分片数可配置1到5\"\n  },\n  {\n    \"scene_name\": \"分片策略\",\n    \"point_name\": \"UI展示已传片数与总片数\"\n  },\n  {\n    \"scene_name\": \"分片策略\",\n    \"point_name\": \"客户端计算whole-file MD5并上报init\"\n  },\n  {\n    \"scene_name\": \"断点续传\",\n    \"point_name\": \"init返回upload_id记录已收分片\"\n  },\n  {\n    \"scene_name\": \"断点续传\",\n    \"point_name\": \"网络中断后仅补传缺失分片\"\n  },\n  {\n    \"scene_name\": \"断点续传\",\n    \"point_name\": \"upload_id 24小时过期须重新init\"\n  },\n  {\n    \"scene_name\": \"合并校验\",\n    \"point_name\": \"全部分片成功后调用merge\"\n  },\n  {\n    \"scene_name\": \"合并校验\",\n    \"point_name\": \"合并失败最多重试3次指数退避\"\n  },\n  {\n    \"scene_name\": \"合并校验\",\n    \"point_name\": \"合并仍失败提示文件合并失败请重新上传\"\n  },\n  {\n    \"scene_name\": \"合并校验\",\n    \"point_name\": \"merge成功后校验MD5\"\n  },\n  {\n    \"scene_name\": \"合并校验\",\n    \"point_name\": \"MD5不一致删除对象并报错\"\n  },\n  {\n    \"scene_name\": \"取消清理\",\n    \"point_name\": \"用户取消abort upload_id\"\n  },\n  {\n    \"scene_name\": \"取消清理\",\n    \"point_name\": \"取消后异步清理已传分片\"\n  },\n  {\n    \"scene_name\": \"取消清理\",\n    \"point_name\": \"定时清理超48h未完成upload_id\"\n  },\n  {\n    \"scene_name\": \"性能指标\",\n    \"point_name\": \"100MB文件内网P99完成小于3min\"\n  },\n  {\n    \"scene_name\": \"性能指标\",\n    \"point_name\": \"单片失败自动重试2次\"\n  }\n]\n"
+- description: prd_006
   metadata:
-    item_id: tc_upload_003
+    item_id: prd_006
   vars:
-    item_id: tc_upload_003
-    scenario_description: 扫描与隔离
-    document_path: documents/tc_upload_003.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 安全扫描
-        point_name: 高危文件隔离
-      - scene_name: 安全扫描
-        point_name: 隔离文件不可下载
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"安全扫描\",\n    \"point_name\"\
-      : \"高危文件隔离\"\n  },\n  {\n    \"scene_name\": \"安全扫描\",\n    \"point_name\":\
-      \ \"隔离文件不可下载\"\n  }\n]\n"
-- description: tc_approval_001
+    item_id: prd_006
+    document_path: documents/prd_006.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"扫描流程\",\n    \"point_name\": \"merge完成后文件进入扫描队列\"\n  },\n  {\n    \"scene_name\": \"扫描流程\",\n    \"point_name\": \"扫描完成前状态为scanning\"\n  },\n  {\n    \"scene_name\": \"扫描流程\",\n    \"point_name\": \"scanning状态禁止下载\"\n  },\n  {\n    \"scene_name\": \"扫描结果\",\n    \"point_name\": \"清洁文件状态active可下载预览\"\n  },\n  {\n    \"scene_name\": \"扫描结果\",\n    \"point_name\": \"可疑文件状态quarantine待复核文案\"\n  },\n  {\n    \"scene_name\": \"扫描结果\",\n    \"point_name\": \"高危文件状态isolated隔离文案\"\n  },\n  {\n    \"scene_name\": \"隔离策略\",\n    \"point_name\": \"命中木马宏病毒双后缀executable高危隔离\"\n  },\n  {\n    \"scene_name\": \"隔离策略\",\n    \"point_name\": \"隔离文件移入隔离桶保留file_id\"\n  },\n  {\n    \"scene_name\": \"隔离策略\",\n    \"point_name\": \"isolated状态下载返回403统一文案\"\n  },\n  {\n    \"scene_name\": \"隔离策略\",\n    \"point_name\": \"isolated状态分享链接失效\"\n  },\n  {\n    \"scene_name\": \"管理端\",\n    \"point_name\": \"安全管理员可放行或永久删除\"\n  },\n  {\n    \"scene_name\": \"管理端\",\n    \"point_name\": \"放行须填写原因\"\n  },\n  {\n    \"scene_name\": \"管理端\",\n    \"point_name\": \"放行须二次审批两人规则\"\n  },\n  {\n    \"scene_name\": \"SLA与审计\",\n    \"point_name\": \"50MB以内5分钟内出扫描结果\"\n  },\n  {\n    \"scene_name\": \"SLA与审计\",\n    \"point_name\": \"扫描失败重试3次\"\n  },\n  {\n    \"scene_name\": \"SLA与审计\",\n    \"point_name\": \"仍失败标记scan_failed人工介入\"\n  },\n  {\n    \"scene_name\": \"SLA与审计\",\n    \"point_name\": \"记录file_id规则名引擎版本\"\n  },\n  {\n    \"scene_name\": \"SLA与审计\",\n    \"point_name\": \"记录扫描操作人\"\n  },\n  {\n    \"scene_name\": \"SLA与审计\",\n    \"point_name\": \"扫描中预览接口同样拦截\"\n  },\n  {\n    \"scene_name\": \"SLA与审计\",\n    \"point_name\": \"quarantine状态用户可见待复核提示\"\n  }\n]\n"
+- description: prd_007
   metadata:
-    item_id: tc_approval_001
+    item_id: prd_007
   vars:
-    item_id: tc_approval_001
-    scenario_description: 请假审批全流程
-    document_path: documents/tc_approval_001.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 请假审批
-        point_name: 年假提前1天提交
-      - scene_name: 请假审批
-        point_name: 驳回须填原因
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"请假审批\",\n    \"point_name\"\
-      : \"年假提前1天提交\"\n  },\n  {\n    \"scene_name\": \"请假审批\",\n    \"point_name\"\
-      : \"驳回须填原因\"\n  }\n]\n"
-- description: tc_approval_002
+    item_id: prd_007
+    document_path: documents/prd_007.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"请假类型\",\n    \"point_name\": \"支持年假事假病假调休类型\"\n  },\n  {\n    \"scene_name\": \"请假类型\",\n    \"point_name\": \"各类型余额由HR系统每日02:00同步\"\n  },\n  {\n    \"scene_name\": \"提交规则\",\n    \"point_name\": \"年假须至少提前1个工作日申请\"\n  },\n  {\n    \"scene_name\": \"提交规则\",\n    \"point_name\": \"年假开始日期早于当前自然日拒绝\"\n  },\n  {\n    \"scene_name\": \"提交规则\",\n    \"point_name\": \"年假单次最多15天\"\n  },\n  {\n    \"scene_name\": \"提交规则\",\n    \"point_name\": \"病假超3天须上传病假单PDF或JPG\"\n  },\n  {\n    \"scene_name\": \"审批链\",\n    \"point_name\": \"3天及以下直属主管审批\"\n  },\n  {\n    \"scene_name\": \"审批链\",\n    \"point_name\": \"4到10天主管加部门经理审批\"\n  },\n  {\n    \"scene_name\": \"审批链\",\n    \"point_name\": \"超10天主管部门经理加HRBP审批\"\n  },\n  {\n    \"scene_name\": \"审批链\",\n    \"point_name\": \"驳回须填原因至少5字\"\n  },\n  {\n    \"scene_name\": \"审批链\",\n    \"point_name\": \"驳回后申请人可修改重新提交v2\"\n  },\n  {\n    \"scene_name\": \"冲突检测\",\n    \"point_name\": \"与已有approved pending请假重叠拒绝\"\n  },\n  {\n    \"scene_name\": \"冲突检测\",\n    \"point_name\": \"重叠提示所选日期与已有请假冲突\"\n  },\n  {\n    \"scene_name\": \"冲突检测\",\n    \"point_name\": \"关键岗位值守冲突警告可强制提交\"\n  },\n  {\n    \"scene_name\": \"冲突检测\",\n    \"point_name\": \"强制提交须填写备注\"\n  },\n  {\n    \"scene_name\": \"通知\",\n    \"point_name\": \"提交发站内信与邮件\"\n  },\n  {\n    \"scene_name\": \"通知\",\n    \"point_name\": \"审批通过发站内信与邮件\"\n  },\n  {\n    \"scene_name\": \"通知\",\n    \"point_name\": \"驳回发站内信与邮件\"\n  },\n  {\n    \"scene_name\": \"通知\",\n    \"point_name\": \"撤销发站内信与邮件\"\n  },\n  {\n    \"scene_name\": \"通知\",\n    \"point_name\": \"邮件通知可配置关闭\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"不包含薪酬扣减计算\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"不包含考勤打卡硬件对接\"\n  }\n]\n"
+- description: prd_008
   metadata:
-    item_id: tc_approval_002
+    item_id: prd_008
   vars:
-    item_id: tc_approval_002
-    scenario_description: 采购金额分级
-    document_path: documents/tc_approval_002.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 采购审批
-        point_name: 1万以下部门经理审批
-      - scene_name: 采购审批
-        point_name: 必须上传报价单PDF
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"采购审批\",\n    \"point_name\"\
-      : \"1万以下部门经理审批\"\n  },\n  {\n    \"scene_name\": \"采购审批\",\n    \"point_name\"\
-      : \"必须上传报价单PDF\"\n  }\n]\n"
-- description: tc_sparse_001
+    item_id: prd_008
+    document_path: documents/prd_008.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"表单字段\",\n    \"point_name\": \"物品名称规格数量单价必填\"\n  },\n  {\n    \"scene_name\": \"表单字段\",\n    \"point_name\": \"币种默认CNY\"\n  },\n  {\n    \"scene_name\": \"表单字段\",\n    \"point_name\": \"用途说明至少20字\"\n  },\n  {\n    \"scene_name\": \"表单字段\",\n    \"point_name\": \"期望交付日期必填\"\n  },\n  {\n    \"scene_name\": \"表单字段\",\n    \"point_name\": \"供应商为可选字段\"\n  },\n  {\n    \"scene_name\": \"分级审批\",\n    \"point_name\": \"1万以下部门经理审批\"\n  },\n  {\n    \"scene_name\": \"分级审批\",\n    \"point_name\": \"1万到5万部门经理加财务专员\"\n  },\n  {\n    \"scene_name\": \"分级审批\",\n    \"point_name\": \"5万到20万加财务经理与分管副总\"\n  },\n  {\n    \"scene_name\": \"分级审批\",\n    \"point_name\": \"超20万加CEO审批\"\n  },\n  {\n    \"scene_name\": \"附件要求\",\n    \"point_name\": \"金额5000以上必须上传报价单PDF\"\n  },\n  {\n    \"scene_name\": \"附件要求\",\n    \"point_name\": \"可上传多家比价单zip\"\n  },\n  {\n    \"scene_name\": \"附件要求\",\n    \"point_name\": \"单附件不超过10MB\"\n  },\n  {\n    \"scene_name\": \"附件要求\",\n    \"point_name\": \"最多上传5个附件\"\n  },\n  {\n    \"scene_name\": \"预算管理\",\n    \"point_name\": \"提交时预占用预算\"\n  },\n  {\n    \"scene_name\": \"预算管理\",\n    \"point_name\": \"驳回释放预算\"\n  },\n  {\n    \"scene_name\": \"预算管理\",\n    \"point_name\": \"撤回释放预算\"\n  },\n  {\n    \"scene_name\": \"预算管理\",\n    \"point_name\": \"超预算拒绝并提示剩余金额\"\n  },\n  {\n    \"scene_name\": \"加签转办\",\n    \"point_name\": \"审批人可加签一人\"\n  },\n  {\n    \"scene_name\": \"加签转办\",\n    \"point_name\": \"加签不改变原超时SLA\"\n  },\n  {\n    \"scene_name\": \"加签转办\",\n    \"point_name\": \"转办须在同一审批级别内\"\n  },\n  {\n    \"scene_name\": \"验收\",\n    \"point_name\": \"审批全程留痕不可删\"\n  },\n  {\n    \"scene_name\": \"验收\",\n    \"point_name\": \"导出PDF含水印与审批时间轴\"\n  }\n]\n"
+- description: prd_009
   metadata:
-    item_id: tc_sparse_001
+    item_id: prd_009
   vars:
-    item_id: tc_sparse_001
-    scenario_description: 请根据现有信息设计测试范围
-    document_path: documents/tc_sparse_001.md
-    ground_truth:
-      golden_test_points:
-      - scene_name: 需求澄清
-        point_name: 信息不足时的合理假设
-    golden_test_points_json: "[\n  {\n    \"scene_name\": \"需求澄清\",\n    \"point_name\"\
-      : \"信息不足时的合理假设\"\n  }\n]\n"
+    item_id: prd_009
+    document_path: documents/prd_009.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"需求澄清\",\n    \"point_name\": \"信息不足处标注合理假设\"\n  },\n  {\n    \"scene_name\": \"需求澄清\",\n    \"point_name\": \"未定义规则标注待需求确认\"\n  },\n  {\n    \"scene_name\": \"需求澄清\",\n    \"point_name\": \"脚本审批未定论按只读免审批假设\"\n  },\n  {\n    \"scene_name\": \"需求澄清\",\n    \"point_name\": \"权限模型待定时沿用RBAC假设\"\n  },\n  {\n    \"scene_name\": \"需求澄清\",\n    \"point_name\": \"SSO超时处理未写入时标注缺口\"\n  },\n  {\n    \"scene_name\": \"空状态\",\n    \"point_name\": \"无配置卡片时空状态引导联系管理员\"\n  },\n  {\n    \"scene_name\": \"空状态\",\n    \"point_name\": \"首页卡片拖拽排序待确认时标注\"\n  },\n  {\n    \"scene_name\": \"空状态\",\n    \"point_name\": \"脚本清单TBD时展示空列表引导\"\n  },\n  {\n    \"scene_name\": \"权限边界\",\n    \"point_name\": \"无权限返回403\"\n  },\n  {\n    \"scene_name\": \"权限边界\",\n    \"point_name\": \"403不暴露脚本列表详情\"\n  },\n  {\n    \"scene_name\": \"权限边界\",\n    \"point_name\": \"首期200人用户规模边界\"\n  },\n  {\n    \"scene_name\": \"脚本执行\",\n    \"point_name\": \"假设首期仅只读脚本可执行\"\n  },\n  {\n    \"scene_name\": \"脚本执行\",\n    \"point_name\": \"写操作脚本默认置灰或需审批\"\n  },\n  {\n    \"scene_name\": \"脚本执行\",\n    \"point_name\": \"快捷入口聚合能力覆盖\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"明确不包含支付收银对公付款\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"日志保留90天未签字时标注假设\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"可用性99.5%未评审时标注\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"页面加载无指标时标注NFR缺口\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"勿编造未定义业务规则\"\n  },\n  {\n    \"scene_name\": \"范围约束\",\n    \"point_name\": \"至少覆盖空状态无权限未知入口\"\n  }\n]\n"
+- description: prd_010
+  metadata:
+    item_id: prd_010
+  vars:
+    item_id: prd_010
+    document_path: documents/prd_010.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"购物车\",\n    \"point_name\": \"同一SKU合并数量上限99\"\n  },\n  {\n    \"scene_name\": \"购物车\",\n    \"point_name\": \"下架商品灰色展示不可勾选\"\n  },\n  {\n    \"scene_name\": \"购物车\",\n    \"point_name\": \"无货商品灰色展示不可勾选\"\n  },\n  {\n    \"scene_name\": \"购物车\",\n    \"point_name\": \"支持全选与反选\"\n  },\n  {\n    \"scene_name\": \"购物车\",\n    \"point_name\": \"结算前校验勾选项库存\"\n  },\n  {\n    \"scene_name\": \"库存\",\n    \"point_name\": \"提交订单预占库存15分钟\"\n  },\n  {\n    \"scene_name\": \"库存\",\n    \"point_name\": \"预占超时自动释放库存\"\n  },\n  {\n    \"scene_name\": \"库存\",\n    \"point_name\": \"库存不足提示并调整数量\"\n  },\n  {\n    \"scene_name\": \"库存\",\n    \"point_name\": \"库存不足回写可买上限\"\n  },\n  {\n    \"scene_name\": \"库存\",\n    \"point_name\": \"秒杀SKU走独立库存池\"\n  },\n  {\n    \"scene_name\": \"优惠券\",\n    \"point_name\": \"每单最多1张店铺券加1张平台券\"\n  },\n  {\n    \"scene_name\": \"优惠券\",\n    \"point_name\": \"两种满减类优惠券互斥\"\n  },\n  {\n    \"scene_name\": \"优惠券\",\n    \"point_name\": \"过期券不可选自动过滤\"\n  },\n  {\n    \"scene_name\": \"收货地址\",\n    \"point_name\": \"地址须含省市区详细地址手机号\"\n  },\n  {\n    \"scene_name\": \"收货地址\",\n    \"point_name\": \"手机号11位格式校验\"\n  },\n  {\n    \"scene_name\": \"收货地址\",\n    \"point_name\": \"港澳台地址提示不支持配送\"\n  },\n  {\n    \"scene_name\": \"订单快照\",\n    \"point_name\": \"保存商品标题单价主图URL规格快照\"\n  },\n  {\n    \"scene_name\": \"订单快照\",\n    \"point_name\": \"快照不随后台改价变化\"\n  },\n  {\n    \"scene_name\": \"可靠性与NFR\",\n    \"point_name\": \"创建订单支持Idempotency-Key幂等\"\n  },\n  {\n    \"scene_name\": \"可靠性与NFR\",\n    \"point_name\": \"幂等键防重复下单\"\n  },\n  {\n    \"scene_name\": \"可靠性与NFR\",\n    \"point_name\": \"创建订单接口P99小于500ms\"\n  },\n  {\n    \"scene_name\": \"可靠性与NFR\",\n    \"point_name\": \"支持App小程序H5渠道\"\n  }\n]\n"
+- description: prd_011
+  metadata:
+    item_id: prd_011
+  vars:
+    item_id: prd_011
+    document_path: documents/prd_011.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"支付方式\",\n    \"point_name\": \"支持微信支付App JSAPI Native\"\n  },\n  {\n    \"scene_name\": \"支付方式\",\n    \"point_name\": \"支持支付宝App WAP\"\n  },\n  {\n    \"scene_name\": \"支付方式\",\n    \"point_name\": \"支持企业对公转账人工确认\"\n  },\n  {\n    \"scene_name\": \"支付流程\",\n    \"point_name\": \"创建支付单金额与订单应付一致\"\n  },\n  {\n    \"scene_name\": \"支付流程\",\n    \"point_name\": \"支付金额单位为分\"\n  },\n  {\n    \"scene_name\": \"支付流程\",\n    \"point_name\": \"调起收银台等待渠道回调\"\n  },\n  {\n    \"scene_name\": \"支付流程\",\n    \"point_name\": \"回调验签后更新订单为paid\"\n  },\n  {\n    \"scene_name\": \"支付流程\",\n    \"point_name\": \"支付成功后通知履约\"\n  },\n  {\n    \"scene_name\": \"支付超时\",\n    \"point_name\": \"待支付订单30分钟未付自动关单\"\n  },\n  {\n    \"scene_name\": \"支付超时\",\n    \"point_name\": \"关单释放预占库存\"\n  },\n  {\n    \"scene_name\": \"支付超时\",\n    \"point_name\": \"关单释放已用优惠券\"\n  },\n  {\n    \"scene_name\": \"退款\",\n    \"point_name\": \"发货前可发起整单退款\"\n  },\n  {\n    \"scene_name\": \"退款\",\n    \"point_name\": \"已发货部分退款须财务审核\"\n  },\n  {\n    \"scene_name\": \"退款\",\n    \"point_name\": \"部分退款支持退差价或部分商品\"\n  },\n  {\n    \"scene_name\": \"退款\",\n    \"point_name\": \"原路退回7个工作日文案提示\"\n  },\n  {\n    \"scene_name\": \"退款\",\n    \"point_name\": \"重复退款请求幂等同一refund_no只处理一次\"\n  },\n  {\n    \"scene_name\": \"异常对账\",\n    \"point_name\": \"回调延迟主动查单补偿最多24h\"\n  },\n  {\n    \"scene_name\": \"异常对账\",\n    \"point_name\": \"支付金额不一致拒绝入账并告警\"\n  },\n  {\n    \"scene_name\": \"异常对账\",\n    \"point_name\": \"每日02:00拉渠道账单核对\"\n  },\n  {\n    \"scene_name\": \"异常对账\",\n    \"point_name\": \"差异单进入reconciliation工单\"\n  },\n  {\n    \"scene_name\": \"安全\",\n    \"point_name\": \"回调IP白名单校验\"\n  },\n  {\n    \"scene_name\": \"安全\",\n    \"point_name\": \"回调签名验证\"\n  },\n  {\n    \"scene_name\": \"安全\",\n    \"point_name\": \"禁止客户端传入支付金额\"\n  }\n]\n"
+- description: prd_012
+  metadata:
+    item_id: prd_012
+  vars:
+    item_id: prd_012
+    document_path: documents/prd_012.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"积分获取\",\n    \"point_name\": \"消费1元等于1基础积分\"\n  },\n  {\n    \"scene_name\": \"积分获取\",\n    \"point_name\": \"积分完成支付后T+1到账\"\n  },\n  {\n    \"scene_name\": \"积分获取\",\n    \"point_name\": \"银卡等级倍率1.2\"\n  },\n  {\n    \"scene_name\": \"积分获取\",\n    \"point_name\": \"金卡等级倍率1.5\"\n  },\n  {\n    \"scene_name\": \"积分获取\",\n    \"point_name\": \"黑卡等级倍率2.0\"\n  },\n  {\n    \"scene_name\": \"积分获取\",\n    \"point_name\": \"签到活动赠送走campaign子账户\"\n  },\n  {\n    \"scene_name\": \"积分过期\",\n    \"point_name\": \"每年12月31日清除上年度未用积分\"\n  },\n  {\n    \"scene_name\": \"积分过期\",\n    \"point_name\": \"提前30天站内信提醒即将过期\"\n  },\n  {\n    \"scene_name\": \"积分抵扣\",\n    \"point_name\": \"下单积分可抵现金\"\n  },\n  {\n    \"scene_name\": \"积分抵扣\",\n    \"point_name\": \"抵扣不超过应付金额50%\"\n  },\n  {\n    \"scene_name\": \"积分抵扣\",\n    \"point_name\": \"最低使用100积分起\"\n  },\n  {\n    \"scene_name\": \"积分抵扣\",\n    \"point_name\": \"积分与部分券互斥按配置表\"\n  },\n  {\n    \"scene_name\": \"回滚\",\n    \"point_name\": \"全额退款退回已用积分\"\n  },\n  {\n    \"scene_name\": \"回滚\",\n    \"point_name\": \"全额退款撤销已发积分不足扣至0\"\n  },\n  {\n    \"scene_name\": \"回滚\",\n    \"point_name\": \"部分退款按比例回滚积分\"\n  },\n  {\n    \"scene_name\": \"账户审计\",\n    \"point_name\": \"积分流水不可删除仅可冲正\"\n  },\n  {\n    \"scene_name\": \"账户审计\",\n    \"point_name\": \"黑卡人工调账须双人复核\"\n  },\n  {\n    \"scene_name\": \"查询展示\",\n    \"point_name\": \"用户端展示可用积分\"\n  },\n  {\n    \"scene_name\": \"查询展示\",\n    \"point_name\": \"展示30天内即将过期积分\"\n  },\n  {\n    \"scene_name\": \"查询展示\",\n    \"point_name\": \"积分明细支持筛选\"\n  },\n  {\n    \"scene_name\": \"查询展示\",\n    \"point_name\": \"campaign子账户可设有效期\"\n  }\n]\n"
+- description: prd_013
+  metadata:
+    item_id: prd_013
+  vars:
+    item_id: prd_013
+    document_path: documents/prd_013.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"消息发送\",\n    \"point_name\": \"支持交易审批营销系统消息类型\"\n  },\n  {\n    \"scene_name\": \"消息发送\",\n    \"point_name\": \"营销类默认关闭Push需opt-in\"\n  },\n  {\n    \"scene_name\": \"消息发送\",\n    \"point_name\": \"业务方调用notify send接口\"\n  },\n  {\n    \"scene_name\": \"消息发送\",\n    \"point_name\": \"路由渠道后模板渲染\"\n  },\n  {\n    \"scene_name\": \"消息发送\",\n    \"point_name\": \"队列异步发送\"\n  },\n  {\n    \"scene_name\": \"模板\",\n    \"point_name\": \"模板变量userName缺失fail-fast不发送\"\n  },\n  {\n    \"scene_name\": \"模板\",\n    \"point_name\": \"模板变量orderId缺失fail-fast不发送\"\n  },\n  {\n    \"scene_name\": \"模板\",\n    \"point_name\": \"短信模板须含工信部备案号\"\n  },\n  {\n    \"scene_name\": \"免打扰\",\n    \"point_name\": \"用户可设22点到08点免打扰\"\n  },\n  {\n    \"scene_name\": \"免打扰\",\n    \"point_name\": \"时段内非交易类延迟到08:00发送\"\n  },\n  {\n    \"scene_name\": \"免打扰\",\n    \"point_name\": \"交易类支付成功消息不受限\"\n  },\n  {\n    \"scene_name\": \"重试可靠性\",\n    \"point_name\": \"短信失败指数退避重试3次\"\n  },\n  {\n    \"scene_name\": \"重试可靠性\",\n    \"point_name\": \"Push失败指数退避重试3次\"\n  },\n  {\n    \"scene_name\": \"重试可靠性\",\n    \"point_name\": \"邮件失败进dead-letter人工补发\"\n  },\n  {\n    \"scene_name\": \"收件箱\",\n    \"point_name\": \"站内信90天归档\"\n  },\n  {\n    \"scene_name\": \"收件箱\",\n    \"point_name\": \"支持批量已读\"\n  },\n  {\n    \"scene_name\": \"收件箱\",\n    \"point_name\": \"支持批量删除\"\n  },\n  {\n    \"scene_name\": \"收件箱\",\n    \"point_name\": \"未读角标上限99+\"\n  },\n  {\n    \"scene_name\": \"合规\",\n    \"point_name\": \"营销短信含退订指令回T退订\"\n  },\n  {\n    \"scene_name\": \"合规\",\n    \"point_name\": \"用户注销后30天内停止一切触达\"\n  },\n  {\n    \"scene_name\": \"合规\",\n    \"point_name\": \"支持站内信邮件短信App Push渠道\"\n  }\n]\n"
+- description: prd_014
+  metadata:
+    item_id: prd_014
+  vars:
+    item_id: prd_014
+    document_path: documents/prd_014.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"角色管理\",\n    \"point_name\": \"预置超级管理员租户管理员普通成员只读审计\"\n  },\n  {\n    \"scene_name\": \"角色管理\",\n    \"point_name\": \"租户可自定义角色从预置集合勾选\"\n  },\n  {\n    \"scene_name\": \"角色管理\",\n    \"point_name\": \"子角色权限是父角色子集\"\n  },\n  {\n    \"scene_name\": \"角色管理\",\n    \"point_name\": \"禁止权限提升绕过继承\"\n  },\n  {\n    \"scene_name\": \"数据范围\",\n    \"point_name\": \"ALL级别可见租户全部数据\"\n  },\n  {\n    \"scene_name\": \"数据范围\",\n    \"point_name\": \"DEPT级别可见本部门及下级\"\n  },\n  {\n    \"scene_name\": \"数据范围\",\n    \"point_name\": \"SELF级别仅本人创建数据\"\n  },\n  {\n    \"scene_name\": \"数据范围\",\n    \"point_name\": \"列表API自动注入scope SQL\"\n  },\n  {\n    \"scene_name\": \"数据范围\",\n    \"point_name\": \"禁止客户端传scope参数覆盖\"\n  },\n  {\n    \"scene_name\": \"越权防护\",\n    \"point_name\": \"水平越权访问他人resource_id返回404\"\n  },\n  {\n    \"scene_name\": \"越权防护\",\n    \"point_name\": \"404响应防资源枚举\"\n  },\n  {\n    \"scene_name\": \"越权防护\",\n    \"point_name\": \"垂直越权无permission返回403\"\n  },\n  {\n    \"scene_name\": \"越权防护\",\n    \"point_name\": \"403返回统一文案\"\n  },\n  {\n    \"scene_name\": \"缓存\",\n    \"point_name\": \"用户权限Redis缓存5分钟\"\n  },\n  {\n    \"scene_name\": \"缓存\",\n    \"point_name\": \"角色变更立即失效该用户权限缓存\"\n  },\n  {\n    \"scene_name\": \"缓存\",\n    \"point_name\": \"角色变更失效同角色在线会话缓存\"\n  },\n  {\n    \"scene_name\": \"审计\",\n    \"point_name\": \"拒绝访问记录user_id uri required_permission\"\n  },\n  {\n    \"scene_name\": \"审计\",\n    \"point_name\": \"导出敏感数据须data export权限\"\n  },\n  {\n    \"scene_name\": \"审计\",\n    \"point_name\": \"敏感导出须二次验证\"\n  },\n  {\n    \"scene_name\": \"迁移\",\n    \"point_name\": \"旧版ACL一次性迁移脚本\"\n  },\n  {\n    \"scene_name\": \"迁移\",\n    \"point_name\": \"迁移脚本须支持回滚\"\n  }\n]\n"
+- description: prd_015
+  metadata:
+    item_id: prd_015
+  vars:
+    item_id: prd_015
+    document_path: documents/prd_015.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"查询分页\",\n    \"point_name\": \"列表分页单页最大500行\"\n  },\n  {\n    \"scene_name\": \"查询分页\",\n    \"point_name\": \"复杂报表走OLAP引擎\"\n  },\n  {\n    \"scene_name\": \"查询分页\",\n    \"point_name\": \"查询超时60s提示缩小范围或导出\"\n  },\n  {\n    \"scene_name\": \"异步导出\",\n    \"point_name\": \"预估超5000行强制异步导出\"\n  },\n  {\n    \"scene_name\": \"异步导出\",\n    \"point_name\": \"异步完成站内信通知下载链接\"\n  },\n  {\n    \"scene_name\": \"异步导出\",\n    \"point_name\": \"导出任务队列FIFO\"\n  },\n  {\n    \"scene_name\": \"异步导出\",\n    \"point_name\": \"单用户最多2个并发导出任务\"\n  },\n  {\n    \"scene_name\": \"异步导出\",\n    \"point_name\": \"支持xlsx与csv格式\"\n  },\n  {\n    \"scene_name\": \"异步导出\",\n    \"point_name\": \"大文件自动zip压缩\"\n  },\n  {\n    \"scene_name\": \"文件生命周期\",\n    \"point_name\": \"下载链接72小时有效\"\n  },\n  {\n    \"scene_name\": \"文件生命周期\",\n    \"point_name\": \"链接过期须重新申请导出\"\n  },\n  {\n    \"scene_name\": \"文件生命周期\",\n    \"point_name\": \"OSS文件7天后物理删除\"\n  },\n  {\n    \"scene_name\": \"脱敏水印\",\n    \"point_name\": \"手机号中间4位星号脱敏\"\n  },\n  {\n    \"scene_name\": \"脱敏水印\",\n    \"point_name\": \"身份证仅展示后4位\"\n  },\n  {\n    \"scene_name\": \"脱敏水印\",\n    \"point_name\": \"导出文件含水印工号加时间\"\n  },\n  {\n    \"scene_name\": \"脱敏水印\",\n    \"point_name\": \"PDF可选禁止复制\"\n  },\n  {\n    \"scene_name\": \"权限限流\",\n    \"point_name\": \"导出字段受列级权限控制\"\n  },\n  {\n    \"scene_name\": \"权限限流\",\n    \"point_name\": \"无权限列不出现在导出文件\"\n  },\n  {\n    \"scene_name\": \"权限限流\",\n    \"point_name\": \"导出动作记录audit_log\"\n  },\n  {\n    \"scene_name\": \"权限限流\",\n    \"point_name\": \"同一报表5分钟内重复导出返回429\"\n  }\n]\n"
+- description: prd_016
+  metadata:
+    item_id: prd_016
+  vars:
+    item_id: prd_016
+    document_path: documents/prd_016.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"库存模型\",\n    \"point_name\": \"SKU乘仓库维度管理库存\"\n  },\n  {\n    \"scene_name\": \"库存模型\",\n    \"point_name\": \"字段含可用预占在途冻结\"\n  },\n  {\n    \"scene_name\": \"库存模型\",\n    \"point_name\": \"可用等于实物减预占减冻结\"\n  },\n  {\n    \"scene_name\": \"安全库存\",\n    \"point_name\": \"每个SKU可设安全库存阈值\"\n  },\n  {\n    \"scene_name\": \"安全库存\",\n    \"point_name\": \"支持批量导入安全库存阈值\"\n  },\n  {\n    \"scene_name\": \"安全库存\",\n    \"point_name\": \"可用低于安全库存触发低库存预警\"\n  },\n  {\n    \"scene_name\": \"安全库存\",\n    \"point_name\": \"低库存预警邮件加站内通知采购\"\n  },\n  {\n    \"scene_name\": \"安全库存\",\n    \"point_name\": \"支持按销量自动建议阈值Beta可关闭\"\n  },\n  {\n    \"scene_name\": \"调拨\",\n    \"point_name\": \"中心仓到区域仓调拨单流程\"\n  },\n  {\n    \"scene_name\": \"调拨\",\n    \"point_name\": \"在途期间区域仓不可售\"\n  },\n  {\n    \"scene_name\": \"调拨\",\n    \"point_name\": \"收货确认后可用库存增加\"\n  },\n  {\n    \"scene_name\": \"调拨\",\n    \"point_name\": \"调拨拒收后库存回滚\"\n  },\n  {\n    \"scene_name\": \"盘点\",\n    \"point_name\": \"盘点期间冻结仓库SKU出入库\"\n  },\n  {\n    \"scene_name\": \"盘点\",\n    \"point_name\": \"盘盈盘亏须审批\"\n  },\n  {\n    \"scene_name\": \"盘点\",\n    \"point_name\": \"差异超0.5%自动升级财务\"\n  },\n  {\n    \"scene_name\": \"并发对接\",\n    \"point_name\": \"扣减使用乐观锁version字段\"\n  },\n  {\n    \"scene_name\": \"并发对接\",\n    \"point_name\": \"乐观锁冲突重试3次\"\n  },\n  {\n    \"scene_name\": \"并发对接\",\n    \"point_name\": \"默认禁止负库存\"\n  },\n  {\n    \"scene_name\": \"并发对接\",\n    \"point_name\": \"超卖开关可配置默认关闭\"\n  },\n  {\n    \"scene_name\": \"并发对接\",\n    \"point_name\": \"订单采购退货统一走inventory-service API\"\n  }\n]\n"
+- description: prd_017
+  metadata:
+    item_id: prd_017
+  vars:
+    item_id: prd_017
+    document_path: documents/prd_017.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"工单生命周期\",\n    \"point_name\": \"新建到待分派到处理中到待确认到关闭\"\n  },\n  {\n    \"scene_name\": \"工单生命周期\",\n    \"point_name\": \"支持已取消状态\"\n  },\n  {\n    \"scene_name\": \"SLA\",\n    \"point_name\": \"P0首次响应15分钟\"\n  },\n  {\n    \"scene_name\": \"SLA\",\n    \"point_name\": \"P0解决时限4小时\"\n  },\n  {\n    \"scene_name\": \"SLA\",\n    \"point_name\": \"P1首次响应1小时解决24小时\"\n  },\n  {\n    \"scene_name\": \"SLA\",\n    \"point_name\": \"P2首次响应4小时解决72小时\"\n  },\n  {\n    \"scene_name\": \"SLA\",\n    \"point_name\": \"SLA超时标红并升级值班长\"\n  },\n  {\n    \"scene_name\": \"SLA\",\n    \"point_name\": \"非工作时间P0仍计时轮班\"\n  },\n  {\n    \"scene_name\": \"分派转派\",\n    \"point_name\": \"自动分派按技能组负载均衡\"\n  },\n  {\n    \"scene_name\": \"分派转派\",\n    \"point_name\": \"转派须填写原因\"\n  },\n  {\n    \"scene_name\": \"分派转派\",\n    \"point_name\": \"同一工单转派不超过5次\"\n  },\n  {\n    \"scene_name\": \"用户侧\",\n    \"point_name\": \"关闭前须用户确认\"\n  },\n  {\n    \"scene_name\": \"用户侧\",\n    \"point_name\": \"48小时无回复自动关闭\"\n  },\n  {\n    \"scene_name\": \"用户侧\",\n    \"point_name\": \"关闭后推送满意度评价1到5星\"\n  },\n  {\n    \"scene_name\": \"用户侧\",\n    \"point_name\": \"满意度评价支持可选文字\"\n  },\n  {\n    \"scene_name\": \"关联质检\",\n    \"point_name\": \"工单可关联订单号与用户ID\"\n  },\n  {\n    \"scene_name\": \"关联质检\",\n    \"point_name\": \"订单页一键建单带上下文\"\n  },\n  {\n    \"scene_name\": \"关联质检\",\n    \"point_name\": \"10%工单随机抽检\"\n  },\n  {\n    \"scene_name\": \"关联质检\",\n    \"point_name\": \"敏感词检测辱骂升级\"\n  },\n  {\n    \"scene_name\": \"关联质检\",\n    \"point_name\": \"支持在线chat邮件电话渠道接入\"\n  }\n]\n"
+- description: prd_018
+  metadata:
+    item_id: prd_018
+  vars:
+    item_id: prd_018
+    document_path: documents/prd_018.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"签署流程\",\n    \"point_name\": \"上传PDF指定签署方与顺序\"\n  },\n  {\n    \"scene_name\": \"签署流程\",\n    \"point_name\": \"支持顺序签与会签并行\"\n  },\n  {\n    \"scene_name\": \"签署流程\",\n    \"point_name\": \"顺序签前一方未完成后一方不可见\"\n  },\n  {\n    \"scene_name\": \"签署流程\",\n    \"point_name\": \"各方签署完成后归档存证\"\n  },\n  {\n    \"scene_name\": \"意愿认证\",\n    \"point_name\": \"企业对公打款0.01元验证\"\n  },\n  {\n    \"scene_name\": \"意愿认证\",\n    \"point_name\": \"企业法人刷脸验证\"\n  },\n  {\n    \"scene_name\": \"意愿认证\",\n    \"point_name\": \"个人短信OTP或刷脸二选一\"\n  },\n  {\n    \"scene_name\": \"意愿认证\",\n    \"point_name\": \"认证失败5次锁定24小时\"\n  },\n  {\n    \"scene_name\": \"签章\",\n    \"point_name\": \"企业公章合同章法人章位置拖拽\"\n  },\n  {\n    \"scene_name\": \"签章\",\n    \"point_name\": \"骑缝章自动按PDF页数分割\"\n  },\n  {\n    \"scene_name\": \"作废\",\n    \"point_name\": \"发起方全员签署前可作废\"\n  },\n  {\n    \"scene_name\": \"作废\",\n    \"point_name\": \"已完成合同作废须全员同意\"\n  },\n  {\n    \"scene_name\": \"作废\",\n    \"point_name\": \"作废须留存作废协议\"\n  },\n  {\n    \"scene_name\": \"存证合规\",\n    \"point_name\": \"合同哈希上链联盟链\"\n  },\n  {\n    \"scene_name\": \"存证合规\",\n    \"point_name\": \"提供出证报告PDF\"\n  },\n  {\n    \"scene_name\": \"存证合规\",\n    \"point_name\": \"文件AES加密存储\"\n  },\n  {\n    \"scene_name\": \"存证合规\",\n    \"point_name\": \"密钥KMS托管\"\n  },\n  {\n    \"scene_name\": \"存证合规\",\n    \"point_name\": \"符合电子签名法可靠电子签名要求\"\n  },\n  {\n    \"scene_name\": \"存证合规\",\n    \"point_name\": \"使用第三方CA SaaS服务\"\n  },\n  {\n    \"scene_name\": \"存证合规\",\n    \"point_name\": \"顺序签与会签模式切换验证\"\n  }\n]\n"
+- description: prd_019
+  metadata:
+    item_id: prd_019
+  vars:
+    item_id: prd_019
+    document_path: documents/prd_019.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"限流维度\",\n    \"point_name\": \"全局限流集群10万QPS\"\n  },\n  {\n    \"scene_name\": \"限流维度\",\n    \"point_name\": \"免费租户100次每分钟配额\"\n  },\n  {\n    \"scene_name\": \"限流维度\",\n    \"point_name\": \"Pro租户2000次每分钟配额\"\n  },\n  {\n    \"scene_name\": \"限流维度\",\n    \"point_name\": \"单用户60次每分钟防刷\"\n  },\n  {\n    \"scene_name\": \"限流维度\",\n    \"point_name\": \"未登录IP 30次每分钟\"\n  },\n  {\n    \"scene_name\": \"限流算法\",\n    \"point_name\": \"滑动窗口计数Redis Lua原子\"\n  },\n  {\n    \"scene_name\": \"限流算法\",\n    \"point_name\": \"超限返回429状态码\"\n  },\n  {\n    \"scene_name\": \"限流算法\",\n    \"point_name\": \"429响应含Retry-After头秒数\"\n  },\n  {\n    \"scene_name\": \"熔断\",\n    \"point_name\": \"下游错误率超50%且QPS大于100触发\"\n  },\n  {\n    \"scene_name\": \"熔断\",\n    \"point_name\": \"10秒窗口打开熔断30秒\"\n  },\n  {\n    \"scene_name\": \"熔断\",\n    \"point_name\": \"半开探测允许10%流量\"\n  },\n  {\n    \"scene_name\": \"熔断\",\n    \"point_name\": \"熔断响应503统一JSON\"\n  },\n  {\n    \"scene_name\": \"降级\",\n    \"point_name\": \"推荐统计等非核心接口可降级stub\"\n  },\n  {\n    \"scene_name\": \"降级\",\n    \"point_name\": \"核心写接口禁止降级\"\n  },\n  {\n    \"scene_name\": \"白名单观测\",\n    \"point_name\": \"内部服务mTLS绕过租户限流\"\n  },\n  {\n    \"scene_name\": \"白名单观测\",\n    \"point_name\": \"运维临时提额须ticket审批\"\n  },\n  {\n    \"scene_name\": \"白名单观测\",\n    \"point_name\": \"临时提额最长24小时\"\n  },\n  {\n    \"scene_name\": \"白名单观测\",\n    \"point_name\": \"Prometheus记录rate_limit_drop_total\"\n  },\n  {\n    \"scene_name\": \"白名单观测\",\n    \"point_name\": \"Prometheus记录circuit_open指标\"\n  },\n  {\n    \"scene_name\": \"白名单观测\",\n    \"point_name\": \"租户连续429超100次每小时告警\"\n  }\n]\n"
+- description: prd_020
+  metadata:
+    item_id: prd_020
+  vars:
+    item_id: prd_020
+    document_path: documents/prd_020.md
+    golden_test_points_json: "[\n  {\n    \"scene_name\": \"租户上下文\",\n    \"point_name\": \"API从JWT tenant_id注入上下文\"\n  },\n  {\n    \"scene_name\": \"租户上下文\",\n    \"point_name\": \"禁止请求体传tenant_id切换租户\"\n  },\n  {\n    \"scene_name\": \"租户上下文\",\n    \"point_name\": \"后台job须显式setTenant\"\n  },\n  {\n    \"scene_name\": \"数据隔离\",\n    \"point_name\": \"ORM全局Filter tenant_id等于当前\"\n  },\n  {\n    \"scene_name\": \"数据隔离\",\n    \"point_name\": \"跨租户访问返回404\"\n  },\n  {\n    \"scene_name\": \"数据隔离\",\n    \"point_name\": \"缓存key前缀t加tenant_id\"\n  },\n  {\n    \"scene_name\": \"资源配额\",\n    \"point_name\": \"免费套餐用户数上限10\"\n  },\n  {\n    \"scene_name\": \"资源配额\",\n    \"point_name\": \"企业套餐用户数不限\"\n  },\n  {\n    \"scene_name\": \"资源配额\",\n    \"point_name\": \"免费套餐存储上限5GB\"\n  },\n  {\n    \"scene_name\": \"资源配额\",\n    \"point_name\": \"超配额创建拒绝并引导升级\"\n  },\n  {\n    \"scene_name\": \"资源配额\",\n    \"point_name\": \"API配额见LIMIT-001\"\n  },\n  {\n    \"scene_name\": \"定制注销\",\n    \"point_name\": \"租户级branding Logo主题色CNAME\"\n  },\n  {\n    \"scene_name\": \"定制注销\",\n    \"point_name\": \"租户配置互不可见\"\n  },\n  {\n    \"scene_name\": \"定制注销\",\n    \"point_name\": \"注销租户软删30天\"\n  },\n  {\n    \"scene_name\": \"定制注销\",\n    \"point_name\": \"软删期满后硬删\"\n  },\n  {\n    \"scene_name\": \"定制注销\",\n    \"point_name\": \"数据导出提供JSON加文件打包\"\n  },\n  {\n    \"scene_name\": \"定制注销\",\n    \"point_name\": \"数据导出72小时内生成\"\n  },\n  {\n    \"scene_name\": \"合规\",\n    \"point_name\": \"租户数据驻留区域可选cn或eu\"\n  },\n  {\n    \"scene_name\": \"合规\",\n    \"point_name\": \"数据不可跨驻留区域复制\"\n  },\n  {\n    \"scene_name\": \"合规\",\n    \"point_name\": \"审计日志含tenant_id保留180天\"\n  },\n  {\n    \"scene_name\": \"合规\",\n    \"point_name\": \"共享库tenant_id行级隔离模型\"\n  }\n]\n"

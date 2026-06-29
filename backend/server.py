@@ -5,7 +5,7 @@ from exceptions.handle import handle_exception
 from middleware.sliding_auth import SlidingAuthMiddleware
 from config.env import AppConfig
 from config.checkpointer import close_checkpointer, init_checkpointer
-from config.get_db import init_create_table
+from config.get_db import init_database
 from config.database import async_engine
 from common.logging import logger
 from domain.observability.langfuse import sync_langfuse_env_from_app_config
@@ -26,7 +26,7 @@ from kb.seed_collections import ensure_default_kb_collections
 async def lifespan(app: FastAPI):
     logger.info(f'⏰️ {AppConfig.app_name}开始启动')
     sync_langfuse_env_from_app_config()
-    await init_create_table()
+    await init_database()
     await init_checkpointer()
     # 初始化 Qdrant 连接
     await init_qdrant_client()

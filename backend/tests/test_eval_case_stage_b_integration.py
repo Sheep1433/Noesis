@@ -21,8 +21,8 @@ from evals.case.shared.assertions import (
 RAG_DIR = Path(__file__).resolve().parents[1] / "evals" / "case" / "rag"
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("NOESIS_CASE_STAGE_B_EVAL") != "1",
-    reason="integration: set NOESIS_CASE_STAGE_B_EVAL=1 and run evals.case.rag.ingest first",
+    os.environ.get("NOESIS_CASE_RAG_EVAL") != "1",
+    reason="integration: set NOESIS_CASE_RAG_EVAL=1 and run evals.case.rag.ingest first",
 )
 
 

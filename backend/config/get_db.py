@@ -1,5 +1,6 @@
 from sqlalchemy import text
-from config.database import async_engine, AsyncSessionLocal, Base, AsyncDatabaseInspector, inspector
+from config.database import async_engine, AsyncSessionLocal, AsyncDatabaseInspector, inspector
+from config.migrate import run_migrations
 from common.logging import logger
 
 
@@ -17,16 +18,10 @@ def get_inspector() -> AsyncDatabaseInspector:
     return inspector
 
 
-async def init_create_table():
-    """
-    应用启动时初始化数据库连接
-
-    :return:
-    """
-    import models.chat_models  # noqa: F401
-    import models.db_models  # noqa: F401
-
+async def init_database():
+    """应用启动时执行 Alembic 迁移并校验数据库连接。"""
     logger.info('🔎 初始化数据库连接...')
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        logger.info('✅️ 数据库连接成功')
+    run_migrations()
+    async with async_engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+    logger.info('✅️ 数据库连接成功')

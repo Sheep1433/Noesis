@@ -29,26 +29,26 @@ defaultTest:
     value: file://../shared/assertions.py:assert_document_context_present
     metric: document_context_present
 tests:
-- description: tc_login_001_stage_b
+- description: prd_001_rag
   metadata:
-    item_id: tc_login_001_stage_b
+    item_id: prd_001_rag
   vars:
-    item_id: tc_login_001_stage_b
+    item_id: prd_001_rag
     query: 用户登录 账号密码登录与验证码
-    document_path: ../testpoints/documents/tc_login_001.md
+    document_path: ../testpoints/documents/prd_001.md
     rag_scene:
       scene_name: 用户登录
       scene_description: 账号密码登录与验证码
       adopted_point_names:
-      - 用户名密码错误提示
+      - 用户名密码错误统一提示
       - 验证码过期刷新
       source_file_names:
-      - tc_login_001.md
+      - prd_001.md
       expected_rag:
         historical_requirements:
           relevant_ids:
-          - d19dadaa-b91a-5ef0-89aa-4c60aea4e4b7
-          - 0c2fcfed-a8a4-568b-9892-70cbdfdade7c
+          - 52b11505-2605-54d8-b49a-49ab544d3a9c
+          - b1a14936-3566-525c-ad47-4e4defad38e4
           k: 3
         historical_test_cases:
           relevant_ids:

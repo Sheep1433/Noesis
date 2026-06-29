@@ -56,9 +56,11 @@ async def test_generate_scene_cases_single_llm_invoke():
         ]
     )
     mock_llm = MagicMock()
-    mock_structured = AsyncMock()
-    mock_structured.ainvoke.return_value = {"parsed": mock_result, "raw": MagicMock()}
-    mock_llm.with_structured_output.return_value = mock_structured
+    mock_bound = AsyncMock()
+    mock_bound.ainvoke.return_value = {"parsed": mock_result, "raw": MagicMock()}
+    mock_chain = MagicMock()
+    mock_chain.bind.return_value = mock_bound
+    mock_llm.with_structured_output.return_value = mock_chain
 
     with patch("agent.case_generate.case_graph.get_llm", return_value=mock_llm):
         cases, err = await _generate_scene_cases("登录", points, "ctx", 0)
@@ -68,7 +70,8 @@ async def test_generate_scene_cases_single_llm_invoke():
     mock_llm.with_structured_output.assert_called_once_with(
         SceneTestCasesOutput, include_raw=True
     )
-    mock_structured.ainvoke.assert_awaited_once()
+    mock_chain.bind.assert_called_once_with(tool_choice="auto")
+    mock_bound.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -97,13 +100,15 @@ async def test_generate_scene_cases_repairs_stringified_malformed_cases():
         ],
     )
     mock_llm = MagicMock()
-    mock_structured = AsyncMock()
-    mock_structured.ainvoke.return_value = {
+    mock_bound = AsyncMock()
+    mock_bound.ainvoke.return_value = {
         "parsed": None,
         "raw": raw_msg,
         "parsing_error": None,
     }
-    mock_llm.with_structured_output.return_value = mock_structured
+    mock_chain = MagicMock()
+    mock_chain.bind.return_value = mock_bound
+    mock_llm.with_structured_output.return_value = mock_chain
 
     with patch("agent.case_generate.case_graph.get_llm", return_value=mock_llm):
         cases, err = await _generate_scene_cases("无障碍", points, "ctx", 0)

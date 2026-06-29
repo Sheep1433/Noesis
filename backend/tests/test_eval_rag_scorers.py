@@ -1,10 +1,10 @@
-"""阶段 B RAG Recall@K scorer（mock retrieval_trace，无 Qdrant）。"""
+"""RAG Recall@K scorer（mock retrieval_trace，无 Qdrant）。"""
 
 from agent.case_generate.rag import (
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
 )
-from evals.case.shared.assertions import score_stage_b_channel
+from evals.case.shared.assertions import score_rag_channel
 
 
 def _trace_hit():
@@ -32,7 +32,7 @@ def test_recall_at_3_all_hit():
             CHANNEL_HISTORICAL_TEST_CASES: {"relevant_ids": ["tc-ref-9"], "k": 3},
         }
     )
-    result = score_stage_b_channel(
+    result = score_rag_channel(
         {"retrieval_trace": _trace_hit()},
         scene,
         CHANNEL_HISTORICAL_TEST_CASES,
@@ -50,7 +50,7 @@ def test_recall_at_3_partial():
             },
         }
     )
-    result = score_stage_b_channel(
+    result = score_rag_channel(
         {"retrieval_trace": _trace_hit()},
         scene,
         CHANNEL_HISTORICAL_REQUIREMENT,
@@ -63,7 +63,7 @@ def test_channel_skipped_no_relevant_ids():
     scene = _scene_cfg(
         **{CHANNEL_HISTORICAL_TEST_CASES: {"relevant_ids": [], "k": 3}}
     )
-    result = score_stage_b_channel(
+    result = score_rag_channel(
         {"retrieval_trace": _trace_hit()},
         scene,
         CHANNEL_HISTORICAL_TEST_CASES,
@@ -75,7 +75,7 @@ def test_incomplete_empty_trace():
     scene = _scene_cfg(
         **{CHANNEL_HISTORICAL_REQUIREMENT: {"relevant_ids": ["req-hist-1"], "k": 3}}
     )
-    result = score_stage_b_channel(
+    result = score_rag_channel(
         {"retrieval_trace": {}},
         scene,
         CHANNEL_HISTORICAL_REQUIREMENT,

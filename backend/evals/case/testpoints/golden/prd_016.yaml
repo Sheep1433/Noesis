@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_016
+scenes:
+- scene_name: 库存模型
+  test_points:
+  - point_name: SKU乘仓库维度管理库存
+  - point_name: 字段含可用预占在途冻结
+  - point_name: 可用等于实物减预占减冻结
+- scene_name: 安全库存
+  test_points:
+  - point_name: 每个SKU可设安全库存阈值
+  - point_name: 支持批量导入安全库存阈值
+  - point_name: 可用低于安全库存触发低库存预警
+  - point_name: 低库存预警邮件加站内通知采购
+  - point_name: 支持按销量自动建议阈值Beta可关闭
+- scene_name: 调拨
+  test_points:
+  - point_name: 中心仓到区域仓调拨单流程
+  - point_name: 在途期间区域仓不可售
+  - point_name: 收货确认后可用库存增加
+  - point_name: 调拨拒收后库存回滚
+- scene_name: 盘点
+  test_points:
+  - point_name: 盘点期间冻结仓库SKU出入库
+  - point_name: 盘盈盘亏须审批
+  - point_name: 差异超0.5%自动升级财务
+- scene_name: 并发对接
+  test_points:
+  - point_name: 扣减使用乐观锁version字段
+  - point_name: 乐观锁冲突重试3次
+  - point_name: 默认禁止负库存
+  - point_name: 超卖开关可配置默认关闭
+  - point_name: 订单采购退货统一走inventory-service API

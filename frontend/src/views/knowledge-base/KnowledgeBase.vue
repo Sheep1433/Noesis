@@ -234,29 +234,29 @@ async function handleCreate() {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  background: #f5f5f5;
-  border-radius: 20px;
+  background: var(--noesis-color-bg-muted);
+  border-radius: var(--noesis-radius-pill);
   font-size: 14px;
 }
 
 .status-indicator.connected {
-  background: #f0f9f0;
-  color: #52c41a;
+  background: rgb(81 207 102 / 12%);
+  color: var(--noesis-color-success);
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
-  background: #ff4d4f;
+  border-radius: var(--noesis-radius-round);
+  background: var(--noesis-color-danger);
 }
 
 .status-indicator.connected .status-dot {
-  background: #52c41a;
+  background: var(--noesis-color-success);
 }
 
 .status-info {
-  color: #666;
+  color: var(--noesis-color-text-muted);
   margin-left: 8px;
 }
 
@@ -267,7 +267,7 @@ async function handleCreate() {
   justify-content: center;
   height: 300px;
   gap: 16px;
-  color: #666;
+  color: var(--noesis-color-text-muted);
 }
 
 .error {
@@ -282,17 +282,17 @@ async function handleCreate() {
 }
 
 .collection-card {
-  background: #fff;
-  border: 1px solid #f0f0f0;
-  border-radius: 8px;
+  background: var(--noesis-color-bg-elevated);
+  border: 1px solid var(--noesis-color-border);
+  border-radius: var(--noesis-radius-sm);
   padding: 16px;
   cursor: pointer;
   transition: all 0.3s;
 }
 
 .collection-card:hover {
-  border-color: #40a9ff;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  border-color: var(--noesis-color-primary);
+  box-shadow: var(--noesis-shadow-md);
 }
 
 .card-header {
@@ -306,7 +306,7 @@ async function handleCreate() {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--noesis-color-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -322,9 +322,9 @@ async function handleCreate() {
 
 .card-desc {
   font-size: 12px;
-  color: #40a9ff;
+  color: var(--noesis-color-primary);
   padding: 4px 8px;
-  background: #e6f7ff;
+  background: var(--noesis-color-primary-bg-subtle);
   border-radius: 4px;
   display: inline-block;
 }
@@ -342,11 +342,11 @@ async function handleCreate() {
 }
 
 .stat-label {
-  color: #999;
+  color: var(--noesis-color-text-placeholder);
 }
 
 .stat-value {
-  color: #333;
+  color: var(--noesis-color-text);
   font-weight: 500;
 }
 
@@ -356,7 +356,7 @@ async function handleCreate() {
 }
 
 .hint-text {
-  color: #999;
+  color: var(--noesis-color-text-placeholder);
   font-size: 14px;
 }
 </style>

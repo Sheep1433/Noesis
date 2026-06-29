@@ -216,6 +216,7 @@ async def _persist_stream_checkpoint(
     session_id: str,
     user_id: str,
 ) -> None:
+    _flush_ctx_text_buffer(ctx, builder)
     if bridge.consume_session_context_tick():
         await _persist_session_context_snapshot(bridge, session_id, user_id)
     if not bridge.consume_persist_tick() or not ctx.get("_assistant_db_id"):
@@ -365,6 +366,50 @@ async def _persist_disconnect_partial(
             logger.exception(
                 f"连接中断 assistant 空内容落库失败: session_id={session_id} user_id={user_id}"
             )
+
+
+async def _handle_stream_client_disconnect(
+    *,
+    session_id: str,
+    qa_type: str,
+    user_id: str,
+    ctx: Dict[str, Any],
+    builder: Optional[AssistantMessageBuilder],
+    log_label: str,
+) -> None:
+    """客户端断开连接：将已生成内容 partial 落库（shield 避免 CancelledError 打断 commit）。"""
+    if (ctx or {}).get("user_stopped"):
+        return
+    aid = (ctx or {}).get("_assistant_db_id")
+    stream_state = QaService._active_streams.get(session_id)
+    persist_b = stream_state.builder if stream_state else builder
+    try:
+        await asyncio.shield(
+            _persist_disconnect_partial(
+                builder=persist_b,
+                ctx=ctx or {},
+                session_id=session_id,
+                user_id=user_id,
+                qa_type=qa_type,
+                assistant_message_id=aid,
+            )
+        )
+    except asyncio.CancelledError:
+        logger.warning(
+            f"{log_label} 断开落库被取消，尝试 detached 落库 session_id={session_id} "
+            f"assistant_db_id={aid}"
+        )
+        asyncio.create_task(
+            _persist_disconnect_partial(
+                builder=persist_b,
+                ctx=ctx or {},
+                session_id=session_id,
+                user_id=user_id,
+                qa_type=qa_type,
+                assistant_message_id=aid,
+            )
+        )
+        raise
 
 
 class QaService:
@@ -539,18 +584,31 @@ class QaService:
                 f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
                 f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
             )
-            aid = (ctx or {}).get("_assistant_db_id")
-            stream_state = cls._active_streams.get(session_id)
-            persist_b = stream_state.builder if stream_state else builder
-            if not (ctx or {}).get("user_stopped"):
-                await _persist_disconnect_partial(
-                    builder=persist_b,
-                    ctx=ctx or {},
-                    session_id=session_id,
-                    user_id=current_user.user_id,
-                    qa_type=req_obj.qa_type,
-                    assistant_message_id=aid,
-                )
+            await _handle_stream_client_disconnect(
+                session_id=session_id,
+                qa_type=req_obj.qa_type,
+                user_id=current_user.user_id,
+                ctx=ctx or {},
+                builder=builder,
+                log_label="exec_query",
+            )
+            cls._active_streams.pop(session_id, None)
+            raise
+
+        except GeneratorExit:
+            task_cancelled = True
+            logger.info(
+                f"exec_query 流式消费者断开(GeneratorExit) session_id={session_id} qa_type={req_obj.qa_type} "
+                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
+            )
+            await _handle_stream_client_disconnect(
+                session_id=session_id,
+                qa_type=req_obj.qa_type,
+                user_id=current_user.user_id,
+                ctx=ctx or {},
+                builder=builder,
+                log_label="exec_query",
+            )
             cls._active_streams.pop(session_id, None)
             raise
 
@@ -735,19 +793,33 @@ class QaService:
                 f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
                 f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
             )
-            aid = (ctx or {}).get("_assistant_db_id")
             tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            stream_state = cls._active_streams.get(session_id)
-            persist_b = stream_state.builder if stream_state else builder
-            if not (ctx or {}).get("user_stopped"):
-                await _persist_disconnect_partial(
-                    builder=persist_b,
-                    ctx=ctx or {},
-                    session_id=session_id,
-                    user_id=current_user.user_id,
-                    qa_type=tc_qa,
-                    assistant_message_id=aid,
-                )
+            await _handle_stream_client_disconnect(
+                session_id=session_id,
+                qa_type=tc_qa,
+                user_id=current_user.user_id,
+                ctx=ctx or {},
+                builder=builder,
+                log_label="exec_test_case_resume",
+            )
+            cls._active_streams.pop(session_id, None)
+            raise
+
+        except GeneratorExit:
+            task_cancelled = True
+            logger.info(
+                f"exec_test_case_resume 流式消费者断开(GeneratorExit) session_id={session_id} "
+                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
+            )
+            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
+            await _handle_stream_client_disconnect(
+                session_id=session_id,
+                qa_type=tc_qa,
+                user_id=current_user.user_id,
+                ctx=ctx or {},
+                builder=builder,
+                log_label="exec_test_case_resume",
+            )
             cls._active_streams.pop(session_id, None)
             raise
 

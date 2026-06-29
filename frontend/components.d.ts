@@ -66,6 +66,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SubagentCollapse: typeof import('./src/components/SubagentCollapse/index.vue')['default']
+    ThemeSwitcher: typeof import('./src/components/ThemeSwitcher/index.vue')['default']
     TodoList: typeof import('./src/components/TodoList/index.vue')['default']
     ToolCallCollapse: typeof import('./src/components/ToolCallCollapse/index.vue')['default']
   }

@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_017
+scenes:
+- scene_name: 工单生命周期
+  test_points:
+  - point_name: 新建到待分派到处理中到待确认到关闭
+  - point_name: 支持已取消状态
+- scene_name: SLA
+  test_points:
+  - point_name: P0首次响应15分钟
+  - point_name: P0解决时限4小时
+  - point_name: P1首次响应1小时解决24小时
+  - point_name: P2首次响应4小时解决72小时
+  - point_name: SLA超时标红并升级值班长
+  - point_name: 非工作时间P0仍计时轮班
+- scene_name: 分派转派
+  test_points:
+  - point_name: 自动分派按技能组负载均衡
+  - point_name: 转派须填写原因
+  - point_name: 同一工单转派不超过5次
+- scene_name: 用户侧
+  test_points:
+  - point_name: 关闭前须用户确认
+  - point_name: 48小时无回复自动关闭
+  - point_name: 关闭后推送满意度评价1到5星
+  - point_name: 满意度评价支持可选文字
+- scene_name: 关联质检
+  test_points:
+  - point_name: 工单可关联订单号与用户ID
+  - point_name: 订单页一键建单带上下文
+  - point_name: 10%工单随机抽检
+  - point_name: 敏感词检测辱骂升级
+  - point_name: 支持在线chat邮件电话渠道接入

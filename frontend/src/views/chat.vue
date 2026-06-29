@@ -12,6 +12,7 @@ import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
+import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
@@ -74,6 +75,7 @@ watch(showDefaultPage, (isDefault) => {
 const businessStore = useBusinessStore()
 const router = useRouter()
 const route = useRoute()
+const naivePresetColors = useNaivePresetColors()
 
 // 是否是刚登录到系统 批量渲染对话记录
 const isInit = ref(false)
@@ -129,7 +131,7 @@ function handleModalClose(value) {
 // 新建对话
 function newChat() {
   sessionContext.value = null
-  backgroundColorVariable.value = '#ffffff'
+  backgroundColorVariable.value = cssVar(themeCssVar.bgElevated)
 
   if (showDefaultPage.value) {
     window.$ModalMessage.success(`已经是最新对话`)
@@ -267,13 +269,24 @@ interface TableItem {
 function sessionQaIconClass(qt: string) {
   switch (qt) {
     case 'DEEP_RESEARCH_QA':
-      return 'i-hugeicons:search-01 text-[#5c7cfa]'
+      return 'i-hugeicons:search-01'
     case 'FAULT_OPERATION_QA':
-      return 'i-hugeicons:settings-01 text-[#e67e22]'
+      return 'i-hugeicons:settings-01'
     case 'TEST_CASE_QA':
-      return 'i-hugeicons:note-edit text-[#16a085]'
+      return 'i-hugeicons:note-edit'
     default:
-      return 'i-hugeicons:ai-chat-02 text-[#692ee6]'
+      return 'i-hugeicons:ai-chat-02'
+  }
+}
+
+function sessionQaIconColor(qt: string) {
+  switch (qt) {
+    case 'FAULT_OPERATION_QA':
+      return themeColors.qaFault
+    case 'TEST_CASE_QA':
+      return themeColors.qaTest
+    default:
+      return naivePresetColors.value.primary
   }
 }
 
@@ -299,6 +312,7 @@ const historySidebarColumns = computed(() => [
         [
           h('div', {
             class: ['size-18px shrink-0 inline-flex items-center justify-center', sessionQaIconClass(row.qa_type)],
+            style: { color: sessionQaIconColor(row.qa_type) },
             title: sessionQaTooltip(row.qa_type),
           }),
           h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
@@ -632,7 +646,7 @@ async function resolveAttachmentsForSend(): Promise<{
 // 提交对话
 const handleCreateStylized = async (send_text = '', file_key = []) => {
   // 设置背景颜色
-  backgroundColorVariable.value = '#f6f7fb'
+  backgroundColorVariable.value = cssVar(themeCssVar.bg)
 
   // 滚动到底部
   scrollToBottom()
@@ -865,7 +879,7 @@ const markdownPreviews = ref<Map<string, HTMLElement | null>>(new Map())
 
 
 // 表格行点击事件
-const currentIndex = ref<number | null>(null)
+const currentIndex = ref<string | null>(null)
 const rowProps = (row: any) => {
   return {
     class: [
@@ -873,7 +887,7 @@ const rowProps = (row: any) => {
       currentIndex.value === row.uuid && 'selected-row',
     ].join(' '),
     onClick: async () => {
-      backgroundColorVariable.value = '#f6f7fb'
+      backgroundColorVariable.value = cssVar(themeCssVar.bg)
 
       currentIndex.value = row.uuid
       suggested_array.value = []
@@ -1092,7 +1106,7 @@ const collapsed = useLocalStorage(
 )
 
 // 背景颜色 默认页面和内容页面动态调整
-const backgroundColorVariable = ref('#ffffff')
+const backgroundColorVariable = ref(cssVar(themeCssVar.bgElevated))
 
 
 // 添加一键滚动到底部功能的相关代码
@@ -1238,18 +1252,7 @@ function onComposerPaste(e: ClipboardEvent) {
           class="content"
           flex="~ col"
         >
-          <div
-            class="header p-20"
-            :style="{
-              'display': `flex`, /* 使用Flexbox布局 */
-              'align-items': `center`, /* 垂直居中对齐 */
-              'justify-content': `start`, /* 水平分布空间 */
-              'flex-shrink': `0`,
-              'position': `sticky`,
-              'top': `0`,
-              'z-index': `1`,
-            }"
-          >
+          <div class="sidebar-header-toolbar header p-20">
             <div
               class="create-chat-box"
               :class="{
@@ -1259,7 +1262,6 @@ function onComposerPaste(e: ClipboardEvent) {
               <n-button
                 type="primary"
                 icon-placement="left"
-                color="#5c7cfa"
                 strong
                 class="create-chat"
                 :disabled="stylizingLoading"
@@ -1273,23 +1275,29 @@ function onComposerPaste(e: ClipboardEvent) {
                 新建对话
               </n-button>
             </div>
+            <button
+              v-if="!isFocusSearchChat"
+              type="button"
+              class="search-chat-trigger"
+              aria-label="搜索对话"
+              @click="onFocusSearchChat"
+            >
+              <span class="search-chat-trigger__icon i-hugeicons:search-01" aria-hidden="true" />
+            </button>
             <n-input
+              v-else
               ref="searchChatRef"
               v-model:value="searchText"
               placeholder="搜索"
-              class="search-chat"
+              class="search-chat-input"
               clearable
-              :class="{
-                focus: isFocusSearchChat,
-              }"
-              @click="onFocusSearchChat()"
               @blur="onBlurSearchChat()"
               @input="handleSearch()"
               @keyup.enter="handleSearch()"
               @clear="handleClear()"
             >
               <template #prefix>
-                <div class="i-hugeicons:search-01"></div>
+                <span class="search-chat-input__icon i-hugeicons:search-01" aria-hidden="true" />
               </template>
             </n-input>
           </div>
@@ -1298,9 +1306,8 @@ function onComposerPaste(e: ClipboardEvent) {
               ref="tableRef"
               class="custom-table"
               :style="{
-                'font-size': `20px`,
-                'fontcolor': `red`,
-                '--n-td-color': `#ffffff`,
+                'font-size': `14px`,
+                '--n-td-color': cssVar(themeCssVar.bgElevated),
                 'font-family': `-apple-system, BlinkMacSystemFont,'Segoe UI', Roboto, 'Helvetica Neue', Arial,sans-serif`,
               }"
               size="small"
@@ -1320,7 +1327,7 @@ function onComposerPaste(e: ClipboardEvent) {
             <n-divider
               style="width: calc(100% - 60px); margin-left: 25px; margin-right: 35px;
 
---n-color: #e8eaf2;"
+--n-color: var(--noesis-color-bg-muted);"
             />
             <n-button
               quaternary
@@ -1432,7 +1439,7 @@ function onComposerPaste(e: ClipboardEvent) {
                           'fontSize': '16px',
                           'fontFamily': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
                           'fontWeight': '400',
-                          'color': '#26244c',
+                          'color': cssVar(themeCssVar.textNav),
                           'max-width': '600px',
                           'text-align': 'left',
                           'padding': '5px 18px',
@@ -1444,8 +1451,8 @@ function onComposerPaste(e: ClipboardEvent) {
                           'overflow': 'visible',
                         }"
                         :color="{
-                          color: '#e0dfff',
-                          borderColor: '#e0dfff',
+                          color: naivePresetColors.primaryBorderSoft,
+                          borderColor: naivePresetColors.primaryBorderSoft,
                         }"
                       >
                         <template #avatar>
@@ -1476,8 +1483,8 @@ function onComposerPaste(e: ClipboardEvent) {
                     :style="{
                       'width': `24px`,
                       'height': `24px`,
-                      'color': `#b1adf3`,
-                      'border-left-color': `#b1adf3`,
+                      'color': cssVar(themeCssVar.primaryTextSoft),
+                      'border-left-color': cssVar(themeCssVar.primaryTextSoft),
                       'animation': `spin 1s linear infinite`,
                       'margin-top': '10px',
                       'align-self': 'flex-start', // 让此元素在交叉轴（水平轴）上靠左对齐
@@ -1593,7 +1600,7 @@ function onComposerPaste(e: ClipboardEvent) {
 
             <div
               v-if="!isInit && !stylizingLoading"
-              class="w-70% ml-11% mt-[-20] bg-#f6f7fb"
+              class="w-70% ml-11% mt-[-20] bg-bgcolor"
             >
               <SuggestedView
                 :labels="suggested_array"
@@ -1611,7 +1618,8 @@ function onComposerPaste(e: ClipboardEvent) {
           </div>
 
           <div
-            :class="['items-center', 'shrink-0', `bg-${backgroundColorVariable}`]"
+            :style="{ backgroundColor: backgroundColorVariable }"
+            class="items-center shrink-0 chat-input-footer-bar"
           >
             <div class="flex-1 w-full p-1em chat-input-footer">
               <n-space
@@ -1630,7 +1638,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     type="default"
                     :class="[
                       qa_type === 'COMMON_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
                     ]"
                     @click="onAqtiveChange('COMMON_QA', '')"
                   >
@@ -1660,7 +1668,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     type="default"
                     :class="[
                       qa_type === 'DEEP_RESEARCH_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
                     ]"
                     @click="onAqtiveChange('DEEP_RESEARCH_QA', '')"
                   >
@@ -1720,7 +1728,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     type="default"
                     :class="[
                       qa_type === 'FAULT_OPERATION_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
                     ]"
                     @click="onAqtiveChange('FAULT_OPERATION_QA', '')"
                   >
@@ -1785,7 +1793,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     type="default"
                     :class="[
                       qa_type === 'TEST_CASE_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 c-#585a73',
+                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
                     ]"
                     @click="onAqtiveChange('TEST_CASE_QA', '')"
                   >
@@ -1953,8 +1961,8 @@ function onComposerPaste(e: ClipboardEvent) {
 
 <style lang="scss" scoped>
 .chat-composer--dragover {
-  border-color: #615ced;
-  background: rgb(97 92 237 / 4%);
+  border-color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
 .chat-composer-drop-hint {
@@ -1964,10 +1972,10 @@ function onComposerPaste(e: ClipboardEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border-radius: var(--noesis-radius-md);
   background: rgb(255 255 255 / 92%);
   font-size: 14px;
-  color: #615ced;
+  color: var(--noesis-color-primary);
   pointer-events: none;
 }
 
@@ -1987,26 +1995,29 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .chat-send-btn--stop {
-  box-shadow: 0 0 0 2px rgb(97 92 237 / 25%);
+  box-shadow: 0 0 0 2px var(--noesis-color-primary-ring);
 }
 
 .chat-stop-icon {
   display: block;
   width: 12px;
   height: 12px;
-  background-color: #fff;
+  background-color: var(--noesis-color-bg-elevated);
   border-radius: 2px;
 }
 
 .create-chat-box {
-  width: 168px;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  transition: all 0.3s;
-  margin-right: 10px;
+  transition: flex 0.25s ease, opacity 0.25s ease, margin 0.25s ease;
 
   &.hide {
+    flex: 0 0 0;
     width: 0;
-    margin-right: 0;
+    margin: 0;
+    opacity: 0;
+    pointer-events: none;
   }
 }
 
@@ -2017,32 +2028,73 @@ function onComposerPaste(e: ClipboardEvent) {
   font-family: Arial;
   font-weight: bold;
   font-size: 14px;
-  border-radius: 20px;
+  border-radius: var(--noesis-radius-pill);
 }
 
-.search-chat {
+.sidebar-header-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.search-chat-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   width: 36px;
   height: 36px;
-  text-align: center;
-  font-family: Arial;
-  font-weight: bold;
-  font-size: 14px;
-  border-radius: 50%;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--noesis-color-border, #e8eaf3);
+  border-radius: var(--noesis-radius-round);
+  background: var(--noesis-color-bg-elevated, #fff);
+  color: var(--noesis-color-text-muted, #64748b);
   cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
+}
 
-  &.focus {
-    width: 100%;
-    border-radius: 20px;
-  }
+.search-chat-trigger:hover {
+  color: var(--noesis-color-primary, #5c7cfa);
+  border-color: var(--noesis-color-primary-muted, #a48ef4);
+  background: var(--noesis-color-primary-bg-subtle, rgb(92 124 250 / 4%));
+}
+
+.search-chat-trigger__icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.search-chat-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-chat-input :deep(.n-input-wrapper) {
+  height: 36px;
+  border-radius: var(--noesis-radius-pill);
+}
+
+.search-chat-input__icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  color: var(--noesis-color-text-muted, #64748b);
 }
 
 .scrollable-container {
-  overflow-y: auto; // 添加纵向滚动条
+  overflow-y: auto;
   height: 100%;
-  padding-bottom: 20px; // 底部内边距，防止内容被遮挡
-  background-color: #f6f7fb;
-
-  // background: linear-gradient(to bottom, #f0effe, #f6f7fb);
+  padding-bottom: 20px;
+  background-color: var(--noesis-color-bg);
 }
 
 /* 滚动条整体部分 */
@@ -2055,20 +2107,16 @@ function onComposerPaste(e: ClipboardEvent) {
 /* 滚动条的轨道 */
 
 ::-webkit-scrollbar-track {
-  background: #fff; /* 轨道背景色 */
+  background: var(--noesis-scrollbar-track);
 }
-
-/* 滚动条的滑块 */
 
 ::-webkit-scrollbar-thumb {
-  background: #cac9f9; /* 滑块颜色 */
-  border-radius: 10px; /* 滑块圆角 */
+  background: var(--noesis-scrollbar-thumb);
+  border-radius: var(--noesis-radius-md);
 }
 
-/* 滚动条的滑块在悬停状态下的样式 */
-
 ::-webkit-scrollbar-thumb:hover {
-  background: #cac9f9; /* 悬停时滑块颜色 */
+  background: var(--noesis-scrollbar-thumb);
 }
 
 :deep(.custom-table .n-data-table-thead) {
@@ -2085,9 +2133,9 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 :deep(.custom-table td) {
-  color: #113;
-  padding: 12px 30px;
-  background-color:  #fff;
+  color: var(--noesis-color-text, #1a1d33);
+  padding: 12px 16px;
+  background-color: var(--noesis-color-bg-elevated, #fff);
   transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 
   /* 优化后的系统字体栈：优先使用系统原生字体 */
@@ -2115,10 +2163,10 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 :deep(.custom-table .selected-row td) {
-  color: #615ced !important;
+  color: var(--noesis-color-primary) !important;
   font-weight: bold;
   padding: 12px 30px !important;
-  background: linear-gradient(to bottom, #fff, #f9f9ff);
+  background: var(--noesis-chat-selected-row-bg);
   transform: scale(1.001);
   transition: all 0.3s ease;
 }
@@ -2127,16 +2175,14 @@ function onComposerPaste(e: ClipboardEvent) {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100vh; /* 使容器高度占满整个视口 */
-  background-color: #f6f7fb; /* 可选：设置背景颜色 */
+  height: 100vh;
+  background-color: var(--noesis-color-bg);
 }
 
 .active-tab {
-  // background: linear-gradient(to left, #f3f2ff, #e1e7fe);
-
-  background: linear-gradient(to left, #f0effe, #d4eefc);
-  border-color: #635eed;
-  color: #635eed;
+  background: var(--noesis-chat-tab-active-bg);
+  border-color: var(--noesis-color-primary);
+  color: var(--noesis-color-primary);
 }
 
 /* 新建对话框的淡入淡出动画样式 */
@@ -2165,17 +2211,17 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .custom-layout {
-  border-top-left-radius: 10px;
-  background-color: #fff;
+  border-top-left-radius: var(--noesis-chat-layout-radius);
+  background-color: var(--noesis-color-bg-elevated);
 }
 
 .header,
 .footer {
-  background-color: #fff;
+  background-color: var(--noesis-color-bg-elevated);
 }
 
 .content {
-  border-right: 1px solid #f6f7fb;
+  border-right: 1px solid var(--noesis-color-bg);
 }
 
 .chat-main-layout {
@@ -2186,7 +2232,7 @@ function onComposerPaste(e: ClipboardEvent) {
   flex-shrink: 0;
   width: 320px;
   min-height: 0;
-  border-left: 1px solid rgb(0 0 0 / 6%);
+  border-left: 1px solid var(--noesis-color-border-aside);
   overflow: hidden;
 }
 
@@ -2198,31 +2244,31 @@ function onComposerPaste(e: ClipboardEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 38px; /* 可根据需要调整 */
-  height: 38px; /* 与宽度相同，形成圆形 */
-  border-radius: 100%; /* 圆形 */
-  border: 1px solid #e8eaf3;
-  background-color: #fff; /* 按钮背景颜色 */
+  width: 38px;
+  height: 38px;
+  border-radius: var(--noesis-radius-round);
+  border: 1px solid var(--noesis-color-border);
+  background-color: var(--noesis-color-bg-elevated);
   cursor: pointer;
-  transition: background-color 0.3s; /* 平滑过渡效果 */
-  position: relative; /* 相对定位 */
+  transition: background-color 0.3s;
+  position: relative;
 }
 
 .icon-button.selected {
-  border: 1px solid #a48ef4;
+  border: 1px solid var(--noesis-color-primary-muted);
 }
 
 .icon-button:hover {
-  border: 1px solid #a48ef4; /* 鼠标悬停时的颜色 */
+  border: 1px solid var(--noesis-color-primary-muted);
 }
 
 
 /** 自定义对话历史表格滚动条样式 */
 
 .scrollable-table-container {
-  overflow-y: hidden; /* 默认隐藏滚动条 */
-  height: 100%; /* 根据实际情况调整高度 */
-  background-color: #fff;
+  overflow-y: hidden;
+  height: 100%;
+  background-color: var(--noesis-color-bg-elevated);
   transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -2241,35 +2287,35 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .scrollable-table-container::-webkit-scrollbar-thumb {
-  background-color: #e8eaf3; /* 滚动条颜色 */
-  border-radius: 4px; /* 滚动条圆角 */
+  background-color: var(--noesis-scrollbar-thumb-muted);
+  border-radius: 4px;
 }
 
 /* 一键到底部按钮样式，底部居中显示 */
 
 .scroll-to-bottom-btn {
   position: absolute;
-  bottom: 145px; /* 距离底部的距离 */
+  bottom: 145px;
   left: 50%;
-  transform: translateX(-50%); /* 水平居中 */
+  transform: translateX(-50%);
   width: 30px;
   height: 30px;
-  border-radius: 50%;
-  background-color: #fff;
-  box-shadow: 0 4px 15px rgb(0 0 0 / 20%);
+  border-radius: var(--noesis-radius-round);
+  background-color: var(--noesis-color-bg-elevated);
+  box-shadow: var(--noesis-shadow-float);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   z-index: 100;
   transition: all 0.3s ease;
-  border: 1px solid #e8eaf3;
+  border: 1px solid var(--noesis-color-border);
   backdrop-filter: blur(5px);
 }
 
 .scroll-to-bottom-btn:hover {
-  background-color: #f6f7fb;
-  transform: translateX(-50%) scale(1.1); /* 悬停时放大 */
+  background-color: var(--noesis-color-bg);
+  transform: translateX(-50%) scale(1.1);
   box-shadow: 0 6px 20px rgb(0 0 0 / 25%);
 }
 
@@ -2315,19 +2361,18 @@ function onComposerPaste(e: ClipboardEvent) {
   width: 80%;
   margin-left: 10%;
   margin-right: 10%;
-  background: #ffffff;
-  border: 1px solid #e8eaf0;
+  background: var(--noesis-color-bg-elevated);
+  border: 1px solid var(--noesis-color-border-subtle);
   border-radius: 16px;
-  /* 勿用 overflow:hidden，会裁切内嵌工具条右侧状态标签与阴影 */
   overflow: visible;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  box-shadow: var(--noesis-shadow-sm);
 }
 
 .assistant-usage-summary {
   padding: 4px 16px 8px;
   font-size: 11px;
   line-height: 1.4;
-  color: #94a3b8;
+  color: var(--noesis-color-text-hint);
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
   letter-spacing: 0.02em;
 }
@@ -2349,18 +2394,18 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
-  color: #71717a;
+  color: var(--noesis-color-text-dim);
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .session-panel-toggle:hover {
   background: rgb(0 0 0 / 5%);
-  color: #3f3f46;
+  color: var(--noesis-color-text-code);
 }
 
 .session-panel-toggle--active {
   background: rgb(0 0 0 / 5%);
-  color: #475569;
+  color: var(--noesis-color-text-code-muted);
 }
 
 .session-panel-toggle__icon {

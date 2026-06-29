@@ -95,7 +95,7 @@ onMounted(() => {
     :show="false"
     :rotate="false"
     :class="[
-      variant === 'full' ? 'bg-#f6f7fb' : 'bg-transparent',
+      variant === 'full' ? 'bg-bgcolor' : 'bg-transparent',
     ]"
     :style="{ '--n-opacity-spinning': '0.3' }"
   >
@@ -162,11 +162,11 @@ onMounted(() => {
 .markdown-wrapper {
   margin-left: 10%;
   margin-right: 10%;
-  background-color: #fff;
+  background-color: var(--noesis-color-bg-elevated);
   padding: 1px 18px;
   border-top-right-radius: 16px;
   border-top-left-radius: 16px;
-  color: #113;
+  color: var(--noesis-color-text-table);
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell,
     'Open Sans', 'Helvetica Neue', Arial, sans-serif, system-ui, "SF Pro Text";
@@ -178,7 +178,7 @@ onMounted(() => {
   text-rendering: optimizelegibility;
 
   h1 { font-size: 2em; }
-  h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid #f6f7fb; }
+  h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--noesis-markdown-heading-border); }
   h3 { font-size: 1.25em; }
   h4 { font-size: 1em; }
   h5 { font-size: 0.875em; }
@@ -232,9 +232,9 @@ onMounted(() => {
   blockquote {
     padding: 10px;
     margin: 20px 0;
-    border-left: 5px solid #ccc;
-    background-color: #f9f9f9;
-    color: #555;
+    border-left: 5px solid var(--noesis-color-border);
+    background-color: var(--noesis-color-bg-hover);
+    color: var(--noesis-color-text-secondary);
     & > p { margin: 0; }
   }
 
@@ -244,12 +244,12 @@ onMounted(() => {
   }
 
   th, td {
-    border: 1px solid #f6f7fb;
+    border: 1px solid var(--noesis-color-bg);
     padding: 8px;
     text-align: left;
   }
 
-  th { background-color: #f2f2f2; }
+  th { background-color: var(--noesis-color-bg-muted); }
 
   img {
     width: 95%;
@@ -260,9 +260,9 @@ onMounted(() => {
   }
 
   .active-tab {
-    background: linear-gradient(to left, #f0effe, #d4eefc);
-    border-color: #635eed;
-    color: #635eed;
+    background: var(--noesis-chat-tab-active-bg);
+    border-color: var(--noesis-color-primary);
+    color: var(--noesis-color-primary);
   }
 }
 

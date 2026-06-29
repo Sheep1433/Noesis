@@ -53,7 +53,7 @@ backend/
 ├── config/                      # env.py、database.py、yaml 合并
 ├── constants/                   # 枚举
 ├── exceptions/
-├── sql/                         # 初始化 SQL 与脚本
+├── sql/                         # Alembic 迁移说明与 SQL 工具脚本
 ├── tests/
 ├── server.py
 └── app.py
@@ -130,6 +130,7 @@ async def login(
 - 继承 `config.database.Base`
 - 使用 `Mapped[...] = mapped_column(...)` 语法
 - 时间戳使用 `server_default=text("CURRENT_TIMESTAMP")`
+- **表结构变更**：修改模型后 `uv run alembic revision --autogenerate -m "..."`，详见 `sql/README.md`
 
 ### 5. 配置与启动
 

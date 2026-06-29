@@ -1,0 +1,39 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_002
+scenes:
+- scene_name: 扫码登录
+  test_points:
+  - point_name: 登录页展示企业微信二维码
+  - point_name: 二维码2分钟过期自动刷新
+  - point_name: 企业微信扫码确认授权
+  - point_name: 回调接口处理OAuth code
+  - point_name: code换userid后已绑定直接登录
+  - point_name: 已绑定用户3步内进入首页
+- scene_name: 账号绑定
+  test_points:
+  - point_name: 未绑定用户跳转绑定页
+  - point_name: 首次绑定输入工号与本地密码
+  - point_name: 绑定须二次验证本地密码
+  - point_name: 绑定成功后自动登录
+  - point_name: 未绑定完成无法访问业务API返回401
+- scene_name: 异常处理
+  test_points:
+  - point_name: 用户取消扫码Toast已取消扫码
+  - point_name: 二维码过期提示请刷新
+  - point_name: 工号不存在或密码错误明确提示
+  - point_name: 企业未开通应用提示企业未授权
+  - point_name: 错误提示不泄露他人信息
+- scene_name: 安全合规
+  test_points:
+  - point_name: code一次性5分钟内有效
+  - point_name: 回调URL白名单校验
+  - point_name: 扫码时间写入审计日志
+  - point_name: 绑定结果与userid写入审计
+  - point_name: 扫码登录写IP审计
+- scene_name: 企业配置
+  test_points:
+  - point_name: 企业管理员配置CorpID与Secret
+  - point_name: 启用企业微信登录开关
+  - point_name: 保留账号密码登录方式
+  - point_name: 终端用户须在企业通讯录

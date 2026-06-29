@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_009
+scenes:
+- scene_name: 需求澄清
+  test_points:
+  - point_name: 信息不足处标注合理假设
+  - point_name: 未定义规则标注待需求确认
+  - point_name: 脚本审批未定论按只读免审批假设
+  - point_name: 权限模型待定时沿用RBAC假设
+  - point_name: SSO超时处理未写入时标注缺口
+- scene_name: 空状态
+  test_points:
+  - point_name: 无配置卡片时空状态引导联系管理员
+  - point_name: 首页卡片拖拽排序待确认时标注
+  - point_name: 脚本清单TBD时展示空列表引导
+- scene_name: 权限边界
+  test_points:
+  - point_name: 无权限返回403
+  - point_name: 403不暴露脚本列表详情
+  - point_name: 首期200人用户规模边界
+- scene_name: 脚本执行
+  test_points:
+  - point_name: 假设首期仅只读脚本可执行
+  - point_name: 写操作脚本默认置灰或需审批
+  - point_name: 快捷入口聚合能力覆盖
+- scene_name: 范围约束
+  test_points:
+  - point_name: 明确不包含支付收银对公付款
+  - point_name: 日志保留90天未签字时标注假设
+  - point_name: 可用性99.5%未评审时标注
+  - point_name: 页面加载无指标时标注NFR缺口
+  - point_name: 勿编造未定义业务规则
+  - point_name: 至少覆盖空状态无权限未知入口

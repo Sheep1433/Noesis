@@ -18,11 +18,17 @@ MODULES = (
     ("evals.loadtest", "深度研究 HTTP 负载测试（Locust）"),
 )
 
+SHELL_MODULES = (
+    ("evals/agent/harbor/run.sh", "Agent / Terminal-Bench（Harbor + Claude Code）"),
+)
+
 
 def main() -> int:
     print("Noesis 离线评测：请使用场景子模块运行，例如：\n")
     for mod, desc in MODULES:
         print(f"  uv run python -m {mod} --help    # {desc}")
+    for script, desc in SHELL_MODULES:
+        print(f"  ./{script} --n-tasks 1 --job-name smoke  # {desc}")
     print("\n详见 backend/evals/README.md")
     return 0 if len(sys.argv) <= 1 else 1
 

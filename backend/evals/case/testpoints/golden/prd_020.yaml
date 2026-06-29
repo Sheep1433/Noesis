@@ -1,0 +1,35 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_020
+scenes:
+- scene_name: 租户上下文
+  test_points:
+  - point_name: API从JWT tenant_id注入上下文
+  - point_name: 禁止请求体传tenant_id切换租户
+  - point_name: 后台job须显式setTenant
+- scene_name: 数据隔离
+  test_points:
+  - point_name: ORM全局Filter tenant_id等于当前
+  - point_name: 跨租户访问返回404
+  - point_name: 缓存key前缀t加tenant_id
+- scene_name: 资源配额
+  test_points:
+  - point_name: 免费套餐用户数上限10
+  - point_name: 企业套餐用户数不限
+  - point_name: 免费套餐存储上限5GB
+  - point_name: 超配额创建拒绝并引导升级
+  - point_name: API配额见LIMIT-001
+- scene_name: 定制注销
+  test_points:
+  - point_name: 租户级branding Logo主题色CNAME
+  - point_name: 租户配置互不可见
+  - point_name: 注销租户软删30天
+  - point_name: 软删期满后硬删
+  - point_name: 数据导出提供JSON加文件打包
+  - point_name: 数据导出72小时内生成
+- scene_name: 合规
+  test_points:
+  - point_name: 租户数据驻留区域可选cn或eu
+  - point_name: 数据不可跨驻留区域复制
+  - point_name: 审计日志含tenant_id保留180天
+  - point_name: 共享库tenant_id行级隔离模型

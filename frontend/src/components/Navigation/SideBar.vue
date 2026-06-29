@@ -1,4 +1,6 @@
 <script lang="tsx" setup>
+import ThemeSwitcher from '@/components/ThemeSwitcher/index.vue'
+
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
@@ -185,14 +187,11 @@ const handleLogout = async () => {
     flex="~ col justify-between"
     w-70
     h-full
-    overflow-hidden
+    overflow-x: hidden;
+    overflow-y: auto;
     relative
     :style="{
-      background: `linear-gradient(
-        to bottom,
-        #f8f9fa,
-        #e9ecef
-      )`,
+      background: 'var(--noesis-sidebar-bg)',
     }"
   >
     <!-- 最侧边图标设置 -->
@@ -212,7 +211,9 @@ const handleLogout = async () => {
       </SideBarItem>
     </div>
 
-    <n-popover
+    <div flex="~ col items-center" pb-16>
+      <ThemeSwitcher />
+      <n-popover
       trigger="hover"
       placement="right-start"
     >
@@ -231,6 +232,7 @@ const handleLogout = async () => {
         退出登录
       </n-button>
     </n-popover>
+    </div>
   </section>
 </template>
 

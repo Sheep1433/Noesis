@@ -1,0 +1,38 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_007
+scenes:
+- scene_name: 请假类型
+  test_points:
+  - point_name: 支持年假事假病假调休类型
+  - point_name: 各类型余额由HR系统每日02:00同步
+- scene_name: 提交规则
+  test_points:
+  - point_name: 年假须至少提前1个工作日申请
+  - point_name: 年假开始日期早于当前自然日拒绝
+  - point_name: 年假单次最多15天
+  - point_name: 病假超3天须上传病假单PDF或JPG
+- scene_name: 审批链
+  test_points:
+  - point_name: 3天及以下直属主管审批
+  - point_name: 4到10天主管加部门经理审批
+  - point_name: 超10天主管部门经理加HRBP审批
+  - point_name: 驳回须填原因至少5字
+  - point_name: 驳回后申请人可修改重新提交v2
+- scene_name: 冲突检测
+  test_points:
+  - point_name: 与已有approved pending请假重叠拒绝
+  - point_name: 重叠提示所选日期与已有请假冲突
+  - point_name: 关键岗位值守冲突警告可强制提交
+  - point_name: 强制提交须填写备注
+- scene_name: 通知
+  test_points:
+  - point_name: 提交发站内信与邮件
+  - point_name: 审批通过发站内信与邮件
+  - point_name: 驳回发站内信与邮件
+  - point_name: 撤销发站内信与邮件
+  - point_name: 邮件通知可配置关闭
+- scene_name: 范围约束
+  test_points:
+  - point_name: 不包含薪酬扣减计算
+  - point_name: 不包含考勤打卡硬件对接

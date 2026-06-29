@@ -46,11 +46,11 @@ withDefaults(
   margin: 8px 10% 0;
   padding: 10px 14px;
   overflow: hidden;
-  background: linear-gradient(180deg, #fbfcfe 0%, #f4f6fb 100%);
-  border: 1px solid #e1e6ef;
-  border-radius: 12px;
-  border-left: 3px solid #5b8bd9;
-  box-shadow: 0 1px 2px rgb(15 23 42 / 5%);
+  background: var(--noesis-block-light-bg);
+  border: 1px solid var(--noesis-block-light-border);
+  border-radius: var(--noesis-radius-lg);
+  border-left: 3px solid var(--noesis-block-light-accent);
+  box-shadow: var(--noesis-shadow-sm);
 }
 
 .assistant-streaming-indicator::before {
@@ -76,11 +76,11 @@ withDefaults(
   width: 100%;
   margin: 0;
   padding: 10px 16px 12px;
-  background: linear-gradient(180deg, rgb(248 250 253 / 0%) 0%, #f6f8fc 100%);
+  background: linear-gradient(180deg, rgb(248 250 253 / 0%) 0%, var(--noesis-color-bg-composer) 100%);
   border: none;
-  border-top: 1px solid #eef1f6;
+  border-top: 1px solid var(--noesis-streaming-border);
   border-left: none;
-  border-radius: 0 0 15px 15px;
+  border-radius: 0 0 var(--noesis-radius-composer) var(--noesis-radius-composer);
   box-shadow: none;
 }
 
@@ -88,9 +88,9 @@ withDefaults(
   width: 100%;
   margin: 0;
   padding: 10px 16px;
-  background: linear-gradient(180deg, rgb(248 250 253 / 0%) 0%, #f6f8fc 100%);
+  background: linear-gradient(180deg, rgb(248 250 253 / 0%) 0%, var(--noesis-color-bg-composer) 100%);
   border: none;
-  border-top: 1px solid #eef1f6;
+  border-top: 1px solid var(--noesis-streaming-border);
   border-left: none;
   border-radius: 0;
   box-shadow: none;
@@ -111,7 +111,7 @@ withDefaults(
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #5b8bd9;
+  background: var(--noesis-block-light-accent);
   animation: assistant-stream-dot 1.1s ease-in-out infinite;
 }
 
@@ -126,7 +126,7 @@ withDefaults(
 .assistant-streaming-indicator__label {
   font-size: 13px;
   line-height: 1.4;
-  color: #5c6b82;
+  color: var(--noesis-streaming-text);
   letter-spacing: 0.02em;
 }
 

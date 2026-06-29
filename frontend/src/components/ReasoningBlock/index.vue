@@ -2,6 +2,7 @@
 import { BulbOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { collapseCompactStyle } from '@/utils/collapseCompact'
+import { themeColors } from '@/config/theme'
 
 interface Props {
   reasoning?: string
@@ -30,7 +31,7 @@ withDefaults(defineProps<Props>(), {
       <template #header>
         <div class="reasoning-header">
           <div class="reasoning-header__icon">
-            <n-icon :size="14" :color="appearance === 'light' ? '#3d5a80' : '#8bd9f0'">
+            <n-icon :size="14" :color="appearance === 'light' ? themeColors.blockLightIcon : themeColors.blockDarkIcon">
               <BulbOutline />
             </n-icon>
           </div>
@@ -54,30 +55,27 @@ withDefaults(defineProps<Props>(), {
 </template>
 
 <style scoped>
-/* 布局与 ToolCallCollapse（tool-call / tool-call--light）一致；浅色主题复用工具块同款色板，仅图标区分语义 */
 .reasoning-call {
-  --reasoning-accent: #5ec8eb;
-  background: linear-gradient(165deg, #252830 0%, #1a1d24 100%);
-  border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 8px;
+  --reasoning-accent: var(--noesis-block-dark-accent);
+  background: var(--noesis-block-dark-bg);
+  border: 1px solid var(--noesis-block-dark-border);
+  border-radius: var(--noesis-radius-sm);
   margin: 3px 0;
-  box-shadow:
-    0 1px 0 rgb(255 255 255 / 6%) inset,
-    0 4px 12px rgb(0 0 0 / 20%);
+  box-shadow: var(--noesis-shadow-block-dark);
   border-left: 2px solid var(--reasoning-accent);
 }
 
 .reasoning-call--light {
-  --reasoning-accent: #5b8bd9;
+  --reasoning-accent: var(--noesis-block-light-accent);
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   margin: 5px 0;
-  background: linear-gradient(180deg, #fbfcfe 0%, #f4f6fb 100%);
-  border: 1px solid #e1e6ef;
-  border-radius: 10px;
+  background: var(--noesis-block-light-bg);
+  border: 1px solid var(--noesis-block-light-border);
+  border-radius: var(--noesis-radius-md);
   border-left: 2px solid var(--reasoning-accent);
-  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+  box-shadow: var(--noesis-shadow-sm);
 }
 
 .reasoning-call :deep(.n-collapse-item) {
@@ -113,11 +111,11 @@ withDefaults(defineProps<Props>(), {
 }
 
 .reasoning-call :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid rgb(255 255 255 / 6%);
+  border-top: 1px solid var(--noesis-block-dark-border-inner);
 }
 
 .reasoning-call--light :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid #e8ecf2;
+  border-top: 1px solid var(--noesis-color-border-divider);
 }
 
 .reasoning-header {
@@ -128,7 +126,7 @@ withDefaults(defineProps<Props>(), {
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  color: #a8dff5;
+  color: var(--noesis-block-dark-text);
   font-size: 12px;
   padding: 7px 10px 7px 8px;
   cursor: pointer;
@@ -157,24 +155,24 @@ withDefaults(defineProps<Props>(), {
   width: 26px;
   height: 26px;
   border-radius: 7px;
-  background: rgb(94 200 235 / 12%);
+  background: var(--noesis-block-dark-bg-icon);
   flex-shrink: 0;
 }
 
 .reasoning-header:hover {
-  background: rgb(255 255 255 / 4%);
+  background: var(--noesis-block-dark-bg-hover);
 }
 
 .reasoning-call--light .reasoning-header {
-  color: #334e68;
+  color: var(--noesis-block-light-text);
 }
 
 .reasoning-call--light .reasoning-header__icon {
-  background: rgb(91 139 217 / 12%);
+  background: var(--noesis-color-primary-bg-icon);
 }
 
 .reasoning-call--light .reasoning-header:hover {
-  background: rgb(91 139 217 / 8%);
+  background: var(--noesis-color-primary-bg-hover);
 }
 
 .reasoning-name {
@@ -182,7 +180,7 @@ withDefaults(defineProps<Props>(), {
   letter-spacing: 0.01em;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
   font-size: 12px;
-  color: #e8f4ff;
+  color: var(--noesis-block-dark-text-name);
   min-width: 0;
   flex: 1 1 0;
   overflow: hidden;
@@ -191,7 +189,7 @@ withDefaults(defineProps<Props>(), {
 }
 
 .reasoning-call--light .reasoning-name {
-  color: #1e3a5f;
+  color: var(--noesis-block-light-text-name);
 }
 
 .reasoning-content {
@@ -201,14 +199,14 @@ withDefaults(defineProps<Props>(), {
 .reasoning-section__body {
   border-radius: 7px;
   padding: 8px 10px;
-  border: 1px solid rgb(255 255 255 / 7%);
-  background: rgb(0 0 0 / 22%);
-  border-color: rgb(94 200 235 / 15%);
+  border: 1px solid var(--noesis-block-dark-border-section);
+  background: var(--noesis-block-dark-bg-section);
+  border-color: var(--noesis-block-dark-border-args);
 }
 
 .reasoning-content pre {
   margin: 0;
-  color: #d0d8e0;
+  color: var(--noesis-block-dark-text-code);
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
@@ -217,12 +215,12 @@ withDefaults(defineProps<Props>(), {
 }
 
 .reasoning-call--light .reasoning-section__body {
-  background: #fff;
-  border: 1px solid #e5e9f0;
-  border-color: #d8e2f0;
+  background: var(--noesis-color-bg-elevated);
+  border: 1px solid var(--noesis-color-border-code);
+  border-color: var(--noesis-color-border-args);
 }
 
 .reasoning-call--light .reasoning-content pre {
-  color: #334155;
+  color: var(--noesis-block-light-text-code);
 }
 </style>

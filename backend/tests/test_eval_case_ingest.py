@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from evals.case.rag.ingest import FIXTURE_VERSION, build_id_map, pick_relevant_by_keywords
-from evals.case.shared.assertions import score_stage_b_channel
+from evals.case.shared.assertions import score_rag_channel
 from agent.case_generate.rag import CHANNEL_HISTORICAL_REQUIREMENT, CHANNEL_HISTORICAL_TEST_CASES
 
 CASE_ROOT = Path(__file__).resolve().parents[1] / "evals" / "case"
@@ -19,12 +19,12 @@ RAG_YAML = RAG_DIR / "promptfooconfig.yaml"
 
 def test_map_only_produces_stable_login_chunk_ids():
     id_map = build_id_map(upload=False, reset=False)
-    login_23 = next(
+    login_ex = next(
         e for e in id_map["requirements"]
-        if e["file_name"] == "tc_login_001.md"
-        and "2.3 异常与提示" in str(e.get("header_path") or "")
+        if e["file_name"] == "prd_001.md"
+        and "3.3 异常与文案" in str(e.get("header_path") or "")
     )
-    assert login_23["point_id"] == "d19dadaa-b91a-5ef0-89aa-4c60aea4e4b7"
+    assert login_ex["point_id"] == "52b11505-2605-54d8-b49a-49ab544d3a9c"
 
 
 def test_id_map_file_matches_fixture_version():
@@ -74,6 +74,6 @@ def test_rag_gold_ids_align_with_yaml_trace_mock():
         },
     }
     for channel in (CHANNEL_HISTORICAL_REQUIREMENT, CHANNEL_HISTORICAL_TEST_CASES):
-        result = score_stage_b_channel({"retrieval_trace": trace}, scene, channel)
+        result = score_rag_channel({"retrieval_trace": trace}, scene, channel)
         assert result.get("skipped") is not True
         assert result["recall_at_k"] == 1.0

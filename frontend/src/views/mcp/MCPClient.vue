@@ -6,7 +6,9 @@
   <n-layout class="main-layout" style="height: 100vh">
     <div class="promotion-page">
       <div class="content-wrapper">
-        <h1 class="main-title animate-fade-in-down">通用智能体场景</h1>
+        <h1 class="main-title animate-fade-in-down">
+          通用智能体场景
+        </h1>
         <div class="development-status animate-fade-in-up">
           <span class="status-text">正在开发中</span>
           <div class="pulse-dot"></div>
@@ -28,8 +30,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #6e8efb, #a777e3);
-  border-radius: 8px;
+  background: var(--noesis-mcp-hero-bg);
+  border-radius: var(--noesis-radius-sm);
   position: relative;
   overflow: hidden;
 }
@@ -41,7 +43,7 @@
   left: -50%;
   width: 200%;
   height: 200%;
-  background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%);
+  background: radial-gradient(circle, rgb(255 255 255 / 10%) 0%, rgb(255 255 255 / 0%) 70%);
   animation: rotate 15s linear infinite;
   z-index: 0;
 }
@@ -57,8 +59,8 @@
   font-size: 3rem;
   font-weight: 700;
   margin-bottom: 30px;
-  color: #ffffff;
-  text-shadow: 0 4px 8px rgba(0,0,0,0.2);
+  color: var(--noesis-color-text-inverse);
+  text-shadow: 0 4px 8px rgb(0 0 0 / 20%);
 }
 
 .development-status {
@@ -71,30 +73,32 @@
 .status-text {
   font-size: 1.5rem;
   margin-right: 15px;
-  color: #f8f9fa;
+  color: rgb(255 255 255 / 92%);
   font-weight: 500;
 }
 
 .pulse-dot {
   width: 15px;
   height: 15px;
-  background-color: #ffeb3b;
-  border-radius: 50%;
+  background-color: var(--noesis-color-warning);
+  border-radius: var(--noesis-radius-round);
   animation: pulse 1.5s infinite;
 }
 
 @keyframes pulse {
   0% {
     transform: scale(0.9);
-    box-shadow: 0 0 0 0 rgba(255, 235, 59, 0.7);
+    box-shadow: 0 0 0 0 rgb(250 176 5 / 70%);
   }
+
   70% {
     transform: scale(1);
-    box-shadow: 0 0 0 10px rgba(255, 235, 59, 0);
+    box-shadow: 0 0 0 10px rgb(250 176 5 / 0%);
   }
+
   100% {
     transform: scale(0.9);
-    box-shadow: 0 0 0 0 rgba(255, 235, 59, 0);
+    box-shadow: 0 0 0 0 rgb(250 176 5 / 0%);
   }
 }
 
@@ -102,6 +106,7 @@
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -112,7 +117,7 @@
   line-height: 1.6;
   max-width: 600px;
   margin: 0 auto;
-  color: #f1f3f5;
+  color: rgb(255 255 255 / 88%);
 }
 
 .description p {
@@ -120,11 +125,10 @@
 }
 
 .main-layout {
-  background-color: #fff;
-  border-radius: 10px;
+  background-color: var(--noesis-color-bg-elevated);
+  border-radius: var(--noesis-radius-md);
 }
 
-/* 添加动画类 */
 .animate-fade-in-down {
   animation: fade-in-down 1s ease-out forwards;
   opacity: 0;

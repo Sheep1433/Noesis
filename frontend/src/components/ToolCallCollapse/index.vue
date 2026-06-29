@@ -3,6 +3,7 @@ import { BuildOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { computed } from 'vue'
 import { collapseCompactStyle } from '@/utils/collapseCompact'
+import { themeColors } from '@/config/theme'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 interface Props {
@@ -168,7 +169,7 @@ const durationDisplay = computed(() => {
       <template #header>
         <div class="tool-header">
           <div class="tool-header__icon">
-            <n-icon :size="14" :color="appearance === 'light' ? '#3d5a80' : '#8bd9f0'">
+            <n-icon :size="14" :color="appearance === 'light' ? themeColors.blockLightIcon : themeColors.blockDarkIcon">
               <BuildOutline />
             </n-icon>
           </div>
@@ -215,29 +216,26 @@ const durationDisplay = computed(() => {
 
 <style scoped>
 .tool-call {
-  --tool-accent: #5ec8eb;
-  background: linear-gradient(165deg, #252830 0%, #1a1d24 100%);
-  border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 8px;
+  --tool-accent: var(--noesis-block-dark-accent);
+  background: var(--noesis-block-dark-bg);
+  border: 1px solid var(--noesis-block-dark-border);
+  border-radius: var(--noesis-radius-sm);
   margin: 3px 0;
-  box-shadow:
-    0 1px 0 rgb(255 255 255 / 6%) inset,
-    0 4px 12px rgb(0 0 0 / 20%);
-  /* 勿用 overflow:hidden，会裁切右侧 header-extra（状态标签「完成」等） */
+  box-shadow: var(--noesis-shadow-block-dark);
   border-left: 2px solid var(--tool-accent);
 }
 
 .tool-call--light {
-  --tool-accent: #5b8bd9;
+  --tool-accent: var(--noesis-block-light-accent);
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   margin: 5px 0;
-  background: linear-gradient(180deg, #fbfcfe 0%, #f4f6fb 100%);
-  border: 1px solid #e1e6ef;
-  border-radius: 10px;
+  background: var(--noesis-block-light-bg);
+  border: 1px solid var(--noesis-block-light-border);
+  border-radius: var(--noesis-radius-md);
   border-left: 2px solid var(--tool-accent);
-  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+  box-shadow: var(--noesis-shadow-sm);
 }
 
 .tool-call :deep(.n-collapse-item) {
@@ -279,11 +277,11 @@ const durationDisplay = computed(() => {
 }
 
 .tool-call :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid rgb(255 255 255 / 6%);
+  border-top: 1px solid var(--noesis-block-dark-border-inner);
 }
 
 .tool-call--light :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid #e8ecf2;
+  border-top: 1px solid var(--noesis-color-border-divider);
 }
 
 .tool-header {
@@ -294,7 +292,7 @@ const durationDisplay = computed(() => {
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  color: #a8dff5;
+  color: var(--noesis-block-dark-text);
   font-size: 12px;
   padding: 7px 10px 7px 8px;
   cursor: pointer;
@@ -320,12 +318,12 @@ const durationDisplay = computed(() => {
 .tool-duration {
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
   font-size: 11px;
-  color: rgb(168 223 245 / 70%);
+  color: var(--noesis-block-dark-text-muted);
   flex-shrink: 0;
 }
 
 .tool-call--light .tool-duration {
-  color: #64748b;
+  color: var(--noesis-color-text-muted);
 }
 
 .tool-header__icon {
@@ -335,24 +333,24 @@ const durationDisplay = computed(() => {
   width: 26px;
   height: 26px;
   border-radius: 7px;
-  background: rgb(94 200 235 / 12%);
+  background: var(--noesis-block-dark-bg-icon);
   flex-shrink: 0;
 }
 
 .tool-header:hover {
-  background: rgb(255 255 255 / 4%);
+  background: var(--noesis-block-dark-bg-hover);
 }
 
 .tool-call--light .tool-header {
-  color: #334e68;
+  color: var(--noesis-block-light-text);
 }
 
 .tool-call--light .tool-header__icon {
-  background: rgb(91 139 217 / 12%);
+  background: var(--noesis-color-primary-bg-icon);
 }
 
 .tool-call--light .tool-header:hover {
-  background: rgb(91 139 217 / 8%);
+  background: var(--noesis-color-primary-bg-hover);
 }
 
 .tool-name {
@@ -360,7 +358,7 @@ const durationDisplay = computed(() => {
   letter-spacing: 0.01em;
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
   font-size: 12px;
-  color: #e8f4ff;
+  color: var(--noesis-block-dark-text-name);
   min-width: 0;
   flex: 1 1 0;
   overflow: hidden;
@@ -382,15 +380,15 @@ const durationDisplay = computed(() => {
   font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
   font-size: 11px;
   font-weight: 500;
-  color: rgb(168 223 245 / 88%);
+  color: var(--noesis-block-dark-text-summary);
 }
 
 .tool-call--light .tool-name {
-  color: #1e3a5f;
+  color: var(--noesis-block-light-text-name);
 }
 
 .tool-call--light .tool-summary {
-  color: #475569;
+  color: var(--noesis-color-text-muted);
 }
 
 .tool-content {
@@ -404,33 +402,33 @@ const durationDisplay = computed(() => {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: rgb(168 223 245 / 55%);
+  color: var(--noesis-block-dark-text-label);
   margin-bottom: 4px;
 }
 
 .tool-call--light .tool-section__label {
-  color: #64748b;
+  color: var(--noesis-color-text-muted);
 }
 
 .tool-section__body {
   border-radius: 7px;
   padding: 8px 10px;
-  border: 1px solid rgb(255 255 255 / 7%);
-  background: rgb(0 0 0 / 22%);
+  border: 1px solid var(--noesis-block-dark-border-section);
+  background: var(--noesis-block-dark-bg-section);
 }
 
 .tool-section--args .tool-section__body {
-  border-color: rgb(94 200 235 / 15%);
+  border-color: var(--noesis-block-dark-border-args);
 }
 
 .tool-section--result .tool-section__body {
-  border-color: rgb(152 195 121 / 18%);
-  background: rgb(20 28 22 / 55%);
+  border-color: var(--noesis-block-dark-border-result);
+  background: var(--noesis-block-dark-bg-result);
 }
 
 .tool-content pre {
   margin: 0;
-  color: #d0d8e0;
+  color: var(--noesis-block-dark-text-code);
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
@@ -439,28 +437,28 @@ const durationDisplay = computed(() => {
 }
 
 .tool-section--result pre {
-  color: #a8d997;
+  color: var(--noesis-block-dark-text-result);
 }
 
 .tool-call--light .tool-section__body {
-  background: #fff;
-  border: 1px solid #e5e9f0;
+  background: var(--noesis-color-bg-elevated);
+  border: 1px solid var(--noesis-color-border-code);
 }
 
 .tool-call--light .tool-section--args .tool-section__body {
-  border-color: #d8e2f0;
+  border-color: var(--noesis-color-border-args);
 }
 
 .tool-call--light .tool-content pre {
-  color: #334155;
+  color: var(--noesis-block-light-text-code);
 }
 
 .tool-call--light .tool-section--result .tool-section__body {
-  border-color: #c5e4d0;
-  background: linear-gradient(180deg, #f8fdf9 0%, #f1faf3 100%);
+  border-color: var(--noesis-color-border-result);
+  background: var(--noesis-block-light-bg-result);
 }
 
 .tool-call--light .tool-section--result pre {
-  color: #166534;
+  color: var(--noesis-block-light-text-result);
 }
 </style>

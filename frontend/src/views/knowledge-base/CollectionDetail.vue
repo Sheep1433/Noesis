@@ -359,7 +359,7 @@ async function handleUpload() {
 .page-desc {
   margin: 6px 0 0;
   font-size: 13px;
-  color: #8c8c8c;
+  color: var(--noesis-color-info);
   line-height: 1.5;
 }
 
@@ -381,7 +381,7 @@ async function handleUpload() {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: #8c8c8c;
+  color: var(--noesis-color-info);
 }
 
 .split-layout {
@@ -393,9 +393,9 @@ async function handleUpload() {
 }
 
 .panel {
-  background: #fff;
-  border: 1px solid #f0f0f0;
-  border-radius: 10px;
+  background: var(--noesis-color-bg-elevated);
+  border: 1px solid var(--noesis-color-border);
+  border-radius: var(--noesis-radius-md);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -407,7 +407,7 @@ async function handleUpload() {
   align-items: baseline;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid var(--noesis-color-border);
   flex-shrink: 0;
 }
 
@@ -419,7 +419,7 @@ async function handleUpload() {
 
 .panel-sub {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--noesis-color-info);
 }
 
 .panel-search {
@@ -448,7 +448,7 @@ async function handleUpload() {
 }
 
 .doc-row:hover {
-  background: #fafafa;
+  background: var(--noesis-color-bg-hover);
 }
 
 .doc-name {
@@ -456,7 +456,7 @@ async function handleUpload() {
   background: none;
   padding: 0;
   text-align: left;
-  color: #1890ff;
+  color: var(--noesis-color-primary);
   cursor: pointer;
   font-size: 13px;
   overflow: hidden;
@@ -466,14 +466,14 @@ async function handleUpload() {
 
 .doc-meta {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--noesis-color-info);
   white-space: nowrap;
 }
 
 .results-block {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px dashed #f0f0f0;
+  border-top: 1px dashed var(--noesis-color-border);
 }
 
 @media (max-width: 960px) {

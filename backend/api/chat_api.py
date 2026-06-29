@@ -440,6 +440,7 @@ async def send_message(
 async def _event_generator(generator, session_id: str):
     """将 QaService 产出的 SSE 文本帧编码为 UTF-8 字节流。"""
     completed_normally = False
+    client_disconnected = False
     try:
         async for sse_str in generator:
             try:
@@ -448,12 +449,14 @@ async def _event_generator(generator, session_id: str):
                 logger.info(
                     f"SSE 客户端已断开（连接重置），停止写入 session_id={session_id}"
                 )
+                client_disconnected = True
                 return
             except OSError as exc:
                 if getattr(exc, "errno", None) in (errno.EPIPE, errno.ECONNRESET):
                     logger.info(
                         f"SSE 客户端已断开 errno={exc.errno} session_id={session_id}"
                     )
+                    client_disconnected = True
                     return
                 raise
         completed_normally = True
@@ -468,6 +471,8 @@ async def _event_generator(generator, session_id: str):
         )
         raise
     finally:
+        if client_disconnected:
+            await generator.aclose()
         if completed_normally:
             logger.info(f"SSE StreamingResponse 已完整发送 session_id={session_id}")
 

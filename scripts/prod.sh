@@ -34,6 +34,25 @@ ensure_file() {
 
 trap stack_cleanup EXIT INT TERM
 
+wait_for_backend() {
+  local label="$1"
+  local url="http://127.0.0.1:${PORT}/health"
+  log_info "等待后端就绪 (${label}) ..."
+  for _ in $(seq 1 90); do
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+      log_error "后端进程已退出 (PID: ${BACKEND_PID})"
+      exit 1
+    fi
+    if curl -fsS "$url" &>/dev/null; then
+      log_info "后端已就绪"
+      return 0
+    fi
+    sleep 1
+  done
+  log_error "后端超时未就绪: ${url}"
+  exit 1
+}
+
 main() {
   export APP_ENV=prod
   export NOESIS_CONFIG_PATH="${NOESIS_CONFIG_PATH:-$BACKEND_DIR/config.prod.yaml}"
@@ -60,6 +79,7 @@ main() {
   uv run uvicorn server:app --host "$HOST" --port "$PORT" &
   BACKEND_PID=$!
   log_info "Backend started (PID: $BACKEND_PID)"
+  wait_for_backend "启动后"
 
   cd "$FRONTEND_DIR"
   if [[ "${SKIP_FRONTEND_BUILD:-0}" != "1" ]]; then
@@ -68,6 +88,7 @@ main() {
   else
     log_warn "SKIP_FRONTEND_BUILD=1，跳过 pnpm build"
   fi
+  wait_for_backend "构建后"
 
   log_info "启动前端预览 ${FRONTEND_PORT} (pnpm preview, /api → 127.0.0.1:${PORT}) ..."
   export FRONTEND_PREVIEW_PORT="$FRONTEND_PORT"

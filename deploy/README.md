@@ -64,6 +64,8 @@ docker pull ghcr.io/agent-infra/sandbox:latest
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
+首次部署或发版时，后端容器启动会自动执行 Alembic 迁移（`server.py` → `init_database()`）。全新环境需先建库：在宿主机执行 `cd backend && uv run python sql/initialize_mysql.py`，详见 `backend/sql/README.md`。
+
 ## 沙箱配置分工
 
 | 配置位置 | 内容 |

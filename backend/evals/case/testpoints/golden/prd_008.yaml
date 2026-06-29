@@ -1,0 +1,38 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_008
+scenes:
+- scene_name: 表单字段
+  test_points:
+  - point_name: 物品名称规格数量单价必填
+  - point_name: 币种默认CNY
+  - point_name: 用途说明至少20字
+  - point_name: 期望交付日期必填
+  - point_name: 供应商为可选字段
+- scene_name: 分级审批
+  test_points:
+  - point_name: 1万以下部门经理审批
+  - point_name: 1万到5万部门经理加财务专员
+  - point_name: 5万到20万加财务经理与分管副总
+  - point_name: 超20万加CEO审批
+- scene_name: 附件要求
+  test_points:
+  - point_name: 金额5000以上必须上传报价单PDF
+  - point_name: 可上传多家比价单zip
+  - point_name: 单附件不超过10MB
+  - point_name: 最多上传5个附件
+- scene_name: 预算管理
+  test_points:
+  - point_name: 提交时预占用预算
+  - point_name: 驳回释放预算
+  - point_name: 撤回释放预算
+  - point_name: 超预算拒绝并提示剩余金额
+- scene_name: 加签转办
+  test_points:
+  - point_name: 审批人可加签一人
+  - point_name: 加签不改变原超时SLA
+  - point_name: 转办须在同一审批级别内
+- scene_name: 验收
+  test_points:
+  - point_name: 审批全程留痕不可删
+  - point_name: 导出PDF含水印与审批时间轴

@@ -85,40 +85,6 @@ def score_l0(run_output: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _golden_scene_names(ground_truth: Dict[str, Any]) -> List[str]:
-    explicit = ground_truth.get("golden_scene_names")
-    if isinstance(explicit, list) and explicit:
-        return sorted({str(x).strip() for x in explicit if str(x).strip()})
-    names: set[str] = set()
-    for tp in ground_truth.get("golden_test_points") or []:
-        if isinstance(tp, dict):
-            n = str(tp.get("scene_name") or "").strip()
-            if n:
-                names.add(n)
-    return sorted(names)
-
-
-def score_scene_name_recall(run_output: Dict[str, Any], ground_truth: Dict[str, Any]) -> Dict[str, Any]:
-    golden = _golden_scene_names(ground_truth)
-    if not golden:
-        return {"skipped": True, "scene_name_recall": None}
-
-    generated: set[str] = set()
-    for scene in (run_output.get("state") or {}).get("scenes_testpoints") or []:
-        if isinstance(scene, dict):
-            n = str(scene.get("scene_name") or "").strip()
-            if n:
-                generated.add(n)
-
-    hits = sum(1 for n in golden if n in generated)
-    return {
-        "skipped": False,
-        "scene_name_recall": round(hits / len(golden), 4),
-        "golden_scene_names": golden,
-        "generated_scene_names": sorted(generated),
-    }
-
-
 def _channel_metrics(
     hit_ids: List[str],
     relevant_ids: List[str],
@@ -145,12 +111,12 @@ def _channel_metrics(
     }
 
 
-def score_stage_b_channel(
+def score_rag_channel(
     run_output: Dict[str, Any],
-    stage_b_scene: Dict[str, Any],
+    rag_scene: Dict[str, Any],
     channel: str,
 ) -> Dict[str, Any]:
-    expected_rag = stage_b_scene.get("expected_rag") or {}
+    expected_rag = rag_scene.get("expected_rag") or {}
     ch_exp = expected_rag.get(channel) if isinstance(expected_rag, dict) else None
     if not isinstance(ch_exp, dict):
         return {"skipped": True, "reason": f"无 {channel} 标注"}
@@ -160,7 +126,7 @@ def score_stage_b_channel(
         return {"skipped": True, "reason": f"{channel} relevant_ids 为空"}
 
     k = int(ch_exp.get("k") or 3)
-    scene_name = str(stage_b_scene.get("scene_name") or "").strip()
+    scene_name = str(rag_scene.get("scene_name") or "").strip()
     trace_root = run_output.get("retrieval_trace") or {}
     trace_entry = trace_root.get(scene_name) or {}
     channels_trace = trace_entry.get("channels") or {}
@@ -186,13 +152,6 @@ def score_stage_b_channel(
 def _parse_output(output: str) -> Dict[str, Any]:
     text = (output or "").strip()
     return json.loads(text) if text else {}
-
-
-def _ground_truth(context: Dict[str, Any]) -> Dict[str, Any]:
-    gt = (context.get("vars") or {}).get("ground_truth")
-    if isinstance(gt, dict):
-        return dict(gt)
-    return {}
 
 
 def _rag_scene(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -223,19 +182,6 @@ def assert_l0(output: str, context: Dict[str, Any]) -> Union[bool, float, Gradin
     )
 
 
-def assert_scene_name_recall(output: str, context: Dict[str, Any]) -> Union[bool, float, GradingResult]:
-    result = score_scene_name_recall(_parse_output(output), _ground_truth(context))
-    if result.get("skipped"):
-        return {"pass": True, "score": 1.0, "reason": "无 golden_scene_names"}
-    score = float(result.get("scene_name_recall") or 0.0)
-    return _grading(
-        metric="scene_name_recall",
-        score=score,
-        passed=True,
-        reason=f"scene_name_recall={score}",
-    )
-
-
 def _assert_channel_metric(
     output: str,
     context: Dict[str, Any],
@@ -245,7 +191,7 @@ def _assert_channel_metric(
 ) -> GradingResult:
     run_output = _parse_output(output)
     scene = _rag_scene(context)
-    result = score_stage_b_channel(run_output, scene, channel)
+    result = score_rag_channel(run_output, scene, channel)
     metric = f"{channel}_{metric_suffix}"
 
     if result.get("skipped"):

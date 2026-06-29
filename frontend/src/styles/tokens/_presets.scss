@@ -1,0 +1,143 @@
+/* 主题预设 — designprompts 风格化三套方案 */
+
+/* 深度 · Modern Dark / Minimal Dark */
+[data-theme="deep"] {
+  color-scheme: dark;
+
+  --noesis-color-primary: #818cf8;
+  --noesis-color-primary-hover: #6366f1;
+  --noesis-color-primary-muted: #a5b4fc;
+  --noesis-color-primary-subtle: #4338ca;
+  --noesis-color-primary-ring: rgb(129 140 248 / 30%);
+  --noesis-color-primary-bg-subtle: rgb(129 140 248 / 10%);
+  --noesis-color-primary-bg-hover: rgb(129 140 248 / 16%);
+  --noesis-color-primary-bg-icon: rgb(129 140 248 / 18%);
+  --noesis-color-primary-border-soft: #312e81;
+  --noesis-color-primary-text-soft: #a5b4fc;
+
+  --noesis-color-bg: #0f1117;
+  --noesis-color-bg-elevated: #1a1d27;
+  --noesis-color-bg-muted: #252a38;
+  --noesis-color-bg-subtle: #1e2230;
+  --noesis-color-bg-hover: #222838;
+  --noesis-color-bg-composer: #161922;
+
+  --noesis-color-border: #2d3348;
+  --noesis-color-border-subtle: #333a50;
+  --noesis-color-border-light: #3d4663;
+  --noesis-color-border-divider: #2d3348;
+  --noesis-color-border-code: #3d4663;
+  --noesis-color-border-args: #3d4663;
+  --noesis-color-border-aside: rgb(255 255 255 / 8%);
+
+  --noesis-color-text: #e8eaed;
+  --noesis-color-text-heading: #f8fafc;
+  --noesis-color-text-body: #cbd5e1;
+  --noesis-color-text-secondary: #94a3b8;
+  --noesis-color-text-muted: #64748b;
+  --noesis-color-text-tab: #94a3b8;
+  --noesis-color-text-nav: #e2e8f0;
+  --noesis-color-text-hint: #64748b;
+  --noesis-color-text-dim: #94a3b8;
+  --noesis-color-text-code: #cbd5e1;
+  --noesis-color-text-code-muted: #94a3b8;
+  --noesis-color-text-table: #e2e8f0;
+
+  --noesis-shadow-sm: 0 1px 2px rgb(0 0 0 / 35%);
+  --noesis-shadow-md: 0 2px 8px rgb(0 0 0 / 40%);
+  --noesis-shadow-lg: 0 8px 32px rgb(0 0 0 / 45%);
+
+  --noesis-scrollbar-thumb: #4338ca;
+  --noesis-scrollbar-track: #1a1d27;
+  --noesis-scrollbar-thumb-muted: #333a50;
+
+  --noesis-block-light-accent: #818cf8;
+  --noesis-block-light-bg: linear-gradient(180deg, #1e2230 0%, #181c28 100%);
+  --noesis-block-light-border: #3d4663;
+  --noesis-block-light-text: #c8d0e0;
+  --noesis-block-light-text-name: #e2e8f0;
+  --noesis-block-light-text-code: #cbd5e1;
+  --noesis-block-light-bg-result: linear-gradient(180deg, #152018 0%, #121a16 100%);
+  --noesis-block-light-bg-narrative: linear-gradient(180deg, #1e2230 0%, #181c28 100%);
+
+  --noesis-chat-tab-active-bg: linear-gradient(to left, #1e2230, #312e81);
+  --noesis-chat-selected-row-bg: linear-gradient(to bottom, #1a1d27, #222838);
+  --noesis-chat-layout-radius: 10px;
+
+  --noesis-welcome-gradient-common: linear-gradient(135deg, #1a1d27 0%, #1e2230 45%, #252a38 100%);
+  --noesis-welcome-gradient-research: linear-gradient(135deg, #1e2230 0%, #252a38 50%, #312e81 100%);
+  --noesis-welcome-gradient-fault: linear-gradient(135deg, #1a1d27 0%, #252a38 45%, #1e293b 100%);
+  --noesis-welcome-gradient-test: linear-gradient(135deg, #152018 0%, #1e2230 55%, #252a38 100%);
+
+  --noesis-streaming-border: #2d3348;
+  --noesis-streaming-text: #94a3b8;
+
+  --noesis-sidebar-bg: linear-gradient(to bottom, #141820, #0f1117);
+  --noesis-mcp-hero-bg: linear-gradient(135deg, #312e81, #4338ca);
+  --noesis-markdown-heading-border: #252a38;
+}
+
+/* 花哨 · Playful Geometric / Neo Brutalism */
+[data-theme="fancy"] {
+  --noesis-color-primary: #7c3aed;
+  --noesis-color-primary-hover: #6d28d9;
+  --noesis-color-primary-muted: #c084fc;
+  --noesis-color-primary-subtle: #e9d5ff;
+  --noesis-color-primary-ring: rgb(124 58 237 / 28%);
+  --noesis-color-primary-bg-subtle: rgb(124 58 237 / 8%);
+  --noesis-color-primary-bg-hover: rgb(124 58 237 / 14%);
+  --noesis-color-primary-bg-icon: rgb(236 72 153 / 14%);
+  --noesis-color-primary-border-soft: #f0abfc;
+  --noesis-color-primary-text-soft: #c084fc;
+
+  --noesis-color-bg: #fff8fb;
+  --noesis-color-bg-elevated: #fff;
+  --noesis-color-bg-muted: #fce7f3;
+  --noesis-color-bg-subtle: #fdf4ff;
+  --noesis-color-bg-hover: #faf5ff;
+  --noesis-color-bg-composer: #fff7fb;
+
+  --noesis-color-border: #1a1d33;
+  --noesis-color-border-subtle: #312e81;
+  --noesis-color-border-light: #c084fc;
+  --noesis-color-border-focus: #7c3aed;
+
+  --noesis-color-text: #1a1d33;
+  --noesis-color-text-heading: #4c1d95;
+  --noesis-color-text-secondary: #6b21a8;
+
+  --noesis-radius-sm: 8px;
+  --noesis-radius-md: 14px;
+  --noesis-radius-lg: 18px;
+  --noesis-radius-xl: 22px;
+  --noesis-radius-pill: 999px;
+  --noesis-radius-composer: 18px;
+
+  --noesis-shadow-sm: 2px 2px 0 #1a1d33;
+  --noesis-shadow-md: 3px 3px 0 #1a1d33;
+  --noesis-shadow-lg: 4px 4px 0 #1a1d33;
+  --noesis-shadow-float: 4px 4px 0 rgb(26 29 51 / 35%);
+
+  --noesis-block-light-accent: #ec4899;
+  --noesis-block-light-bg: linear-gradient(135deg, #fdf4ff 0%, #fce7f3 50%, #fef3c7 100%);
+  --noesis-block-light-border: #1a1d33;
+  --noesis-block-light-text: #581c87;
+  --noesis-block-light-text-name: #4c1d95;
+  --noesis-block-light-bg-result: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  --noesis-block-light-bg-narrative: linear-gradient(135deg, #fff 0%, #fdf4ff 100%);
+
+  --noesis-chat-tab-active-bg: linear-gradient(135deg, #fce7f3, #ede9fe, #fef3c7);
+  --noesis-chat-selected-row-bg: linear-gradient(to bottom, #fff, #fdf4ff);
+  --noesis-chat-layout-radius: 16px;
+
+  --noesis-welcome-gradient-common: linear-gradient(135deg, #fdf4ff 0%, #ede9fe 30%, #fce7f3 65%, #fef3c7 100%);
+  --noesis-welcome-gradient-research: linear-gradient(135deg, #ede9fe 0%, #dbeafe 45%, #fce7f3 100%);
+  --noesis-welcome-gradient-fault: linear-gradient(135deg, #fef3c7 0%, #fce7f3 45%, #ede9fe 100%);
+  --noesis-welcome-gradient-test: linear-gradient(135deg, #ecfdf5 0%, #ede9fe 55%, #fdf4ff 100%);
+
+  --noesis-streaming-border: #f0abfc;
+  --noesis-streaming-text: #7c3aed;
+
+  --noesis-sidebar-bg: linear-gradient(160deg, #fdf4ff 0%, #fce7f3 40%, #fef3c7 100%);
+  --noesis-mcp-hero-bg: linear-gradient(135deg, #7c3aed, #ec4899, #f59e0b);
+}

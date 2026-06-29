@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定 Noesis **Agent 端到端离线评测**（`backend/evals/agent/`）的验收标准：按 benchmark 分子模块（BrowseComp、WildClawBench）、共用 `DeepResearchAgent` 执行、工作区隔离、评分与结果持久化，以及与 `evals.case`、`evals.compression` 的目录隔离。
+本能力规定 Noesis **Agent 端到端离线评测**（`backend/evals/agent/`）的验收标准：按 benchmark 分子模块（BrowseComp、WildClawBench、Terminal-Bench/Harbor）、共用 `DeepResearchAgent` 执行（Harbor 线除外，见各子模块 README）、工作区隔离、评分与结果持久化，以及与 `evals.case`、`evals.compression` 的目录隔离。
 
 ## Requirements
 
@@ -16,6 +16,7 @@ Agent 评测 **SHALL NOT** 与 `evals/case/` 或 `evals/compression/` 共用 run
 |--------|----------|------|
 | `evals.agent.browsecomp` | `uv run python -m evals.agent.browsecomp --tag bc-smoke` | BrowseComp 官方流程 |
 | `evals.agent.wildclaw` | `uv run python -m evals.agent.wildclaw --tag wc` | WildClawBench + Docker grader |
+| `evals/agent/harbor/run.sh` | `./evals/agent/harbor/run.sh --n-tasks 1 --job-name smoke` | Terminal-Bench（Harbor + Claude Code） |
 
 测试用例评测入口 SHALL 为 `uv run python -m evals.case`（见 `test-case-agent-eval`）。
 

@@ -1,0 +1,37 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_014
+scenes:
+- scene_name: 角色管理
+  test_points:
+  - point_name: 预置超级管理员租户管理员普通成员只读审计
+  - point_name: 租户可自定义角色从预置集合勾选
+  - point_name: 子角色权限是父角色子集
+  - point_name: 禁止权限提升绕过继承
+- scene_name: 数据范围
+  test_points:
+  - point_name: ALL级别可见租户全部数据
+  - point_name: DEPT级别可见本部门及下级
+  - point_name: SELF级别仅本人创建数据
+  - point_name: 列表API自动注入scope SQL
+  - point_name: 禁止客户端传scope参数覆盖
+- scene_name: 越权防护
+  test_points:
+  - point_name: 水平越权访问他人resource_id返回404
+  - point_name: 404响应防资源枚举
+  - point_name: 垂直越权无permission返回403
+  - point_name: 403返回统一文案
+- scene_name: 缓存
+  test_points:
+  - point_name: 用户权限Redis缓存5分钟
+  - point_name: 角色变更立即失效该用户权限缓存
+  - point_name: 角色变更失效同角色在线会话缓存
+- scene_name: 审计
+  test_points:
+  - point_name: 拒绝访问记录user_id uri required_permission
+  - point_name: 导出敏感数据须data export权限
+  - point_name: 敏感导出须二次验证
+- scene_name: 迁移
+  test_points:
+  - point_name: 旧版ACL一次性迁移脚本
+  - point_name: 迁移脚本须支持回滚

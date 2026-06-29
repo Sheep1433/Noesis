@@ -1,3 +1,4 @@
+@use "./tokens/index.scss";
 @use "./global.scss";
 @use "./theme.scss";
 @use "./markdown.scss";
@@ -10,8 +11,8 @@ body {
   text-rendering: optimizelegibility;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 
-  --at-apply: c-#303133;
-  --at-apply: bg-#fff;
+  color: var(--noesis-color-text-code);
+  background-color: var(--noesis-color-bg-elevated);
 }
 
 html {

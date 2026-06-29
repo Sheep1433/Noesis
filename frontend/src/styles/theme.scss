@@ -1,15 +1,15 @@
-@use "highlight.js/styles/lightfair.css" as *;
+@use "@/styles/tokens/index.scss";
 @use "@/styles/naive-variables.scss" as *;
 
 #nprogress .bar {
-  background: $color-primary !important;
+  background: var(--noesis-color-primary) !important;
 }
 
 #nprogress .peg {
-  box-shadow: 0 0 10px $color-primary, 0 0 5px $color-primary !important;
+  box-shadow: 0 0 10px var(--noesis-color-primary), 0 0 5px var(--noesis-color-primary) !important;
 }
 
 #nprogress .spinner-icon {
-  border-top-color: $color-primary;
-  border-left-color: $color-primary;
+  border-top-color: var(--noesis-color-primary);
+  border-left-color: var(--noesis-color-primary);
 }

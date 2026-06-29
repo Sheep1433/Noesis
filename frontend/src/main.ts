@@ -1,11 +1,14 @@
 import App from '@/App.vue'
 
 import InstallGlobalComponents from '@/components'
+import { initThemePreset } from '@/hooks/useThemePreset'
 import { setupRouter } from '@/router'
 
 import { setupStore } from '@/store'
 
 import 'virtual:uno.css'
+
+initThemePreset()
 
 const app = createApp(App)
 

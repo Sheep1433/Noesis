@@ -1,0 +1,37 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_012
+scenes:
+- scene_name: 积分获取
+  test_points:
+  - point_name: 消费1元等于1基础积分
+  - point_name: 积分完成支付后T+1到账
+  - point_name: 银卡等级倍率1.2
+  - point_name: 金卡等级倍率1.5
+  - point_name: 黑卡等级倍率2.0
+  - point_name: 签到活动赠送走campaign子账户
+- scene_name: 积分过期
+  test_points:
+  - point_name: 每年12月31日清除上年度未用积分
+  - point_name: 提前30天站内信提醒即将过期
+- scene_name: 积分抵扣
+  test_points:
+  - point_name: 下单积分可抵现金
+  - point_name: 抵扣不超过应付金额50%
+  - point_name: 最低使用100积分起
+  - point_name: 积分与部分券互斥按配置表
+- scene_name: 回滚
+  test_points:
+  - point_name: 全额退款退回已用积分
+  - point_name: 全额退款撤销已发积分不足扣至0
+  - point_name: 部分退款按比例回滚积分
+- scene_name: 账户审计
+  test_points:
+  - point_name: 积分流水不可删除仅可冲正
+  - point_name: 黑卡人工调账须双人复核
+- scene_name: 查询展示
+  test_points:
+  - point_name: 用户端展示可用积分
+  - point_name: 展示30天内即将过期积分
+  - point_name: 积分明细支持筛选
+  - point_name: campaign子账户可设有效期

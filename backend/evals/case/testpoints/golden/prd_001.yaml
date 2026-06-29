@@ -1,0 +1,43 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_001
+scenes:
+- scene_name: 登录页展示
+  test_points:
+  - point_name: 用户名密码验证码必填校验
+  - point_name: 记住我默认不勾选
+  - point_name: 隐私政策与用户协议链接展示
+  - point_name: 用户名支持手机号或工号
+  - point_name: 4位字母数字混合图形验证码
+- scene_name: 正常登录流程
+  test_points:
+  - point_name: 打开登录页下发captcha_id与验证码图片
+  - point_name: 验证码未过期校验通过后签发JWT
+  - point_name: 登录成功跳转dashboard
+  - point_name: captcha_id五分钟有效
+  - point_name: 记住我勾选参数透传会话服务
+- scene_name: 异常提示
+  test_points:
+  - point_name: 用户名或密码错误统一提示文案
+  - point_name: 验证码错误提示文案
+  - point_name: 验证码过期提示与刷新按钮
+  - point_name: 禁止区分用户名不存在与密码错误
+  - point_name: 验证码过期须刷新后重新输入
+- scene_name: 安全锁定
+  test_points:
+  - point_name: 连续失败5次锁定15分钟
+  - point_name: 密码错误计入失败次数
+  - point_name: 验证码错误计入失败次数
+  - point_name: 锁定期间正确密码仍拒绝登录
+  - point_name: 传输强制HTTPS
+  - point_name: 日志禁止明文密码
+  - point_name: 密码后端bcrypt存储
+- scene_name: 审计与NFR
+  test_points:
+  - point_name: 登录成功写入审计日志含时间与IP
+  - point_name: 审计含设备指纹脱敏
+  - point_name: 审计记录登录方式password
+  - point_name: 登录接口P99小于800ms
+  - point_name: 验证码图片alt文本为验证码图片
+  - point_name: 刷新按钮aria-label为刷新验证码
+  - point_name: 支持Chrome90+Edge90+Safari15+

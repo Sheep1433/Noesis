@@ -1,0 +1,34 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_005
+scenes:
+- scene_name: 分片策略
+  test_points:
+  - point_name: 单文件超过5MB自动启用分片
+  - point_name: 小文件仍走直传
+  - point_name: 分片大小5MB最后一片可小于5MB
+  - point_name: 默认并发上传3个分片
+  - point_name: 并发分片数可配置1到5
+  - point_name: UI展示已传片数与总片数
+  - point_name: 客户端计算whole-file MD5并上报init
+- scene_name: 断点续传
+  test_points:
+  - point_name: init返回upload_id记录已收分片
+  - point_name: 网络中断后仅补传缺失分片
+  - point_name: upload_id 24小时过期须重新init
+- scene_name: 合并校验
+  test_points:
+  - point_name: 全部分片成功后调用merge
+  - point_name: 合并失败最多重试3次指数退避
+  - point_name: 合并仍失败提示文件合并失败请重新上传
+  - point_name: merge成功后校验MD5
+  - point_name: MD5不一致删除对象并报错
+- scene_name: 取消清理
+  test_points:
+  - point_name: 用户取消abort upload_id
+  - point_name: 取消后异步清理已传分片
+  - point_name: 定时清理超48h未完成upload_id
+- scene_name: 性能指标
+  test_points:
+  - point_name: 100MB文件内网P99完成小于3min
+  - point_name: 单片失败自动重试2次

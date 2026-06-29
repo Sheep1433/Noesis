@@ -62,7 +62,16 @@ pnpm stylelint      # 样式检查
 ### 配置
 
 - `src/config/env.ts` — `langfuseUiOrigin` 等运行时配置
+- `src/config/theme.ts` — 设计 token（TS 侧常量，与 CSS 变量对齐）
+- `src/styles/tokens/_semantic.scss` — `--noesis-*` CSS 变量唯一来源
 - `.env.template` — 本地环境变量模板（复制为 `.env.local`）
+
+### 样式约定
+
+- **颜色/圆角/阴影**：组件内使用 `var(--noesis-*)`，禁止新增散落 hex
+- **Naive UI**：`useTheme` + `themeOverrides` 使用 hex 色值（`:color` / `primaryColor` 禁止传 CSS var，seemly 无法解析）；页面样式仍用 CSS 变量
+- **UnoCSS**：`uno.config.ts` 的 `theme.colors` 引用同一套 CSS 变量
+- **主题预设**：`light` / `deep` / `fancy`；侧栏调色盘切换，定义见 `styles/tokens/_presets.scss`
 
 ## 技术要点
 

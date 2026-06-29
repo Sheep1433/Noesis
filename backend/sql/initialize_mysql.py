@@ -1,80 +1,69 @@
 #!/usr/bin/env python3
 """
-数据库初始化脚本
+初始化 MySQL：创建库（若不存在）+ Alembic migrate。
 
-用法：
-    python initialize_mysql.py                    # 执行 init_sql.sql
-    python initialize_mysql.py --dry-run        # 仅打印 SQL 不执行
-
-执行前请确保：
-1. MySQL 服务已启动
-2. 配置正确（见 config/env.py）
-3. 用户有创建数据库和表的权限
+用法（在 backend/ 目录）：
+    uv run python sql/initialize_mysql.py
+    uv run python sql/initialize_mysql.py --dry-run
 """
 
+from __future__ import annotations
+
 import argparse
-import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote_plus
 
-# 项目根目录
-PROJECT_ROOT = Path(__file__).parent.parent
-SQL_FILE = PROJECT_ROOT / "sql" / "init_sql.sql"
+from sqlalchemy import create_engine, text
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from config.env import DataBaseConfig  # noqa: E402
+from config.migrate import run_migrations  # noqa: E402
 
 
-def main():
-    parser = argparse.ArgumentParser(description="初始化 MySQL 数据库")
-    parser.add_argument("--dry-run", action="store_true", help="仅打印 SQL 不执行")
-    args = parser.parse_args()
+def _server_url() -> str:
+    return (
+        f"mysql+pymysql://{DataBaseConfig.mysql_user}:"
+        f"{quote_plus(DataBaseConfig.mysql_password)}@"
+        f"{DataBaseConfig.mysql_host}:{DataBaseConfig.mysql_port}/"
+    )
 
-    # 检查 SQL 文件是否存在
-    if not SQL_FILE.exists():
-        print(f"错误: SQL 文件不存在: {SQL_FILE}", file=sys.stderr)
-        sys.exit(1)
 
-    # 读取 SQL 文件
-    sql_content = SQL_FILE.read_text(encoding="utf-8")
-
-    if args.dry_run:
-        print("=" * 60)
-        print("DRY-RUN 模式：仅打印 SQL")
-        print("=" * 60)
-        print(f"文件: {SQL_FILE}")
-        print("=" * 60)
-        print(sql_content)
-        print("=" * 60)
-        print("DRY-RUN 完成，未执行任何操作")
+def ensure_database(*, dry_run: bool) -> None:
+    db_name = DataBaseConfig.mysql_database
+    ddl = (
+        f"CREATE DATABASE IF NOT EXISTS `{db_name}` "
+        "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+    )
+    if dry_run:
+        print(f"[dry-run] {ddl}")
         return
 
-    # 执行 SQL
-    print(f"正在执行 SQL 文件: {SQL_FILE}")
-    print("=" * 60)
-
+    engine = create_engine(_server_url(), pool_pre_ping=True)
     try:
-        # 使用 mysql 命令行工具执行
-        # 注意：实际使用时需要配置正确的连接参数
-        result = subprocess.run(
-            ["mysql", "-u", "root", "-p", "--default-character-set=utf8mb4"],
-            input=sql_content,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        print("SQL 执行成功！")
-        if result.stdout:
-            print("输出:", result.stdout)
+        with engine.connect() as conn:
+            conn.execute(text(ddl))
+            conn.commit()
+    finally:
+        engine.dispose()
+    print(f"数据库已就绪: {db_name}")
 
-    except subprocess.CalledProcessError as e:
-        print(f"SQL 执行失败: {e}", file=sys.stderr)
-        print(f"错误输出: {e.stderr}", file=sys.stderr)
-        sys.exit(1)
-    except FileNotFoundError:
-        print("错误: 未找到 mysql 命令", file=sys.stderr)
-        print("请确保 MySQL 客户端已安装并配置在 PATH 中", file=sys.stderr)
-        print()
-        print("或者手动执行 SQL 文件:")
-        print(f"    mysql -u root -p --default-character-set=utf8mb4 < {SQL_FILE}")
-        sys.exit(1)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="初始化 MySQL（建库 + Alembic）")
+    parser.add_argument("--dry-run", action="store_true", help="仅打印建库语句，不执行迁移")
+    args = parser.parse_args()
+
+    ensure_database(dry_run=args.dry_run)
+    if args.dry_run:
+        print("[dry-run] 跳过 alembic upgrade head")
+        return
+
+    run_migrations()
+    print("Alembic 迁移完成（含演示账号 admin / 123456，部署后请修改密码）")
 
 
 if __name__ == "__main__":

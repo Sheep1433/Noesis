@@ -1,5 +1,8 @@
 <script lang="tsx" setup>
 import { systemTitle } from '@/base'
+import { useNaivePresetColors } from '@/hooks/useThemePreset'
+
+const naivePresetColors = useNaivePresetColors()
 
 interface Props {
   transparent?: boolean
@@ -9,7 +12,7 @@ interface Props {
 withDefaults(defineProps<Props>(), {
   transparent: true,
   hasBorder: true,
-  backgroundColor: '#ffffff',
+  backgroundColor: 'var(--noesis-color-bg-elevated)',
 })
 
 const handleToRepo = () => {
@@ -37,7 +40,7 @@ const handleToRepo = () => {
               sans-serif`,
             'font-size': `17px`,
             'font-weight': `bold`,
-            'color': `#6a30e6`,
+            'color': naivePresetColors.primary,
           }"
           select-none
           cursor-pointer
@@ -82,9 +85,7 @@ const handleToRepo = () => {
     // background-color: #f0effe;
     // background: linear-gradient(to right, #f0effe, #ddeefe);
 
-    background-color: #ffffff;
-
-    // 替换为你的颜色
+    background-color: var(--noesis-color-bg-elevated, #fff);
   }
 
   &.bg-transparent {

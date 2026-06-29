@@ -8,12 +8,12 @@ _TESTPOINTS_DIR = Path(__file__).resolve().parents[1] / "evals" / "case" / "test
 
 
 def test_documents_exist():
-    assert len(list((_TESTPOINTS_DIR / "documents").glob("tc_*.md"))) >= 8
+    assert len(list((_TESTPOINTS_DIR / "documents").glob("prd_*.md"))) == 20
 
 
 def test_resolve_document_context():
     text = resolve_document_context(
-        {"document_path": "documents/tc_login_001.md"},
+        {"document_path": "documents/prd_001.md"},
         base_dir=_TESTPOINTS_DIR,
     )
     assert "验证码" in text

@@ -1,0 +1,39 @@
+# 金标准测试点：Judge 在评测时用 Agent 输出与本文件对比，计算 point_coverage_recall / point_coverage_precision。
+# 本文件不包含 recall、precision 预置分数；二者为运行时指标，非标注数据。
+item_id: prd_011
+scenes:
+- scene_name: 支付方式
+  test_points:
+  - point_name: 支持微信支付App JSAPI Native
+  - point_name: 支持支付宝App WAP
+  - point_name: 支持企业对公转账人工确认
+- scene_name: 支付流程
+  test_points:
+  - point_name: 创建支付单金额与订单应付一致
+  - point_name: 支付金额单位为分
+  - point_name: 调起收银台等待渠道回调
+  - point_name: 回调验签后更新订单为paid
+  - point_name: 支付成功后通知履约
+- scene_name: 支付超时
+  test_points:
+  - point_name: 待支付订单30分钟未付自动关单
+  - point_name: 关单释放预占库存
+  - point_name: 关单释放已用优惠券
+- scene_name: 退款
+  test_points:
+  - point_name: 发货前可发起整单退款
+  - point_name: 已发货部分退款须财务审核
+  - point_name: 部分退款支持退差价或部分商品
+  - point_name: 原路退回7个工作日文案提示
+  - point_name: 重复退款请求幂等同一refund_no只处理一次
+- scene_name: 异常对账
+  test_points:
+  - point_name: 回调延迟主动查单补偿最多24h
+  - point_name: 支付金额不一致拒绝入账并告警
+  - point_name: 每日02:00拉渠道账单核对
+  - point_name: 差异单进入reconciliation工单
+- scene_name: 安全
+  test_points:
+  - point_name: 回调IP白名单校验
+  - point_name: 回调签名验证
+  - point_name: 禁止客户端传入支付金额

@@ -453,10 +453,18 @@ class LangGraphSseBridge:
         out.append(_format_sse("tool-output-available", payload))
         self._persist_tick = True
 
-    def _emit_finish(self, out: List[str], payload: Dict[str, Any]) -> None:
+    def _emit_finish(
+        self,
+        out: List[str],
+        payload: Dict[str, Any],
+        builder: Optional[AssistantMessageBuilder] = None,
+        ctx: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self._ensure_started(out)
         self._close_reasoning(out, record_checkpoint=False)
         self._close_text(out, record_checkpoint=False)
+        if builder is not None and ctx is not None:
+            self._flush_text_buffer(builder, ctx)
         self.last_finish_usage = payload.get("usage") or {}
         self.last_finish_reason = str(payload.get("finish_reason") or "stop")
         out.append(_format_sse("finish", payload))
@@ -585,7 +593,7 @@ class LangGraphSseBridge:
                 "message_id": self.assistant_message_id,
                 "finish_reason": item.get("finish_reason") or "stop",
                 "usage": usage,
-            })
+            }, builder=builder, ctx=ctx)
             return
 
         if t in ("__tw_abort__", "abort"):
@@ -632,7 +640,7 @@ class LangGraphSseBridge:
             payload.setdefault("message_id", self.assistant_message_id)
             if not payload.get("usage"):
                 payload["usage"] = self._build_usage_payload(ctx)
-            self._emit_finish(out, payload)
+            self._emit_finish(out, payload, builder=builder, ctx=ctx)
             return
 
         if t in ("phase-start", "phase-delta", "phase-end"):

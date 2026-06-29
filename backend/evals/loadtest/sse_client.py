@@ -47,7 +47,10 @@ def consume_sse_stream(
     started_at: Optional[float] = None,
     deadline: Optional[float] = None,
 ) -> SseStreamMetrics:
-    """逐行读取 SSE 响应，直到 [DONE] 或 finish/error/abort。"""
+    """逐行读取 SSE 响应，直到 ``data: [DONE]``（与前端 useSSEStream 一致）。
+
+    ``finish`` / ``error`` / ``abort`` 仅记录指标，不提前关闭连接。
+    """
     metrics = SseStreamMetrics()
     started_at = started_at or time.perf_counter()
     buffer = ""
@@ -75,20 +78,17 @@ def consume_sse_stream(
 
         if event_type == "finish":
             metrics.finish_reason = str(payload.get("finish_reason") or "")
-            metrics.total_ms = (time.perf_counter() - started_at) * 1000
             if metrics.finish_reason != "stop":
                 metrics.error_message = str(payload.get("error") or metrics.finish_reason)
-            return True
+            return False
 
         if event_type == "error":
             metrics.error_message = str(payload.get("error") or payload.get("message") or "stream error")
-            metrics.total_ms = (time.perf_counter() - started_at) * 1000
-            return True
+            return False
 
         if event_type == "abort":
             metrics.error_message = str(payload.get("content") or "aborted")
-            metrics.total_ms = (time.perf_counter() - started_at) * 1000
-            return True
+            return False
 
         return False
 
@@ -117,6 +117,8 @@ def consume_sse_stream(
             _handle_data(event_name, data_line)
 
     metrics.total_ms = (time.perf_counter() - started_at) * 1000
-    if metrics.error_message is None and metrics.finish_reason != "stop":
-        metrics.error_message = metrics.finish_reason or "stream ended without finish"
+    if metrics.finish_reason is None:
+        metrics.error_message = metrics.error_message or "stream ended without [DONE]"
+    elif metrics.error_message is None and metrics.finish_reason != "stop":
+        metrics.error_message = metrics.finish_reason
     return metrics

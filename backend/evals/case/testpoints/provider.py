@@ -50,18 +50,16 @@ def _resolve_item(context: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError(f"测试用例 {item_id} 缺少 vars.document_path")
     return {
         "id": item_id,
-        "scenario_description": vars_.get("scenario_description") or "",
         "document_path": document_path,
-        "ground_truth": vars_.get("ground_truth") or {},
     }
 
 
 _EVAL_DIR = Path(__file__).resolve().parent
 
 
-def run_testpoints(item: Dict[str, Any], *, eval_run_id: str) -> Dict[str, Any]:
+def run_testpoints(item: Dict[str, Any], *, query: str, eval_run_id: str) -> Dict[str, Any]:
     t0 = time.perf_counter()
-    query = str(item.get("scenario_description") or "").strip()
+    query = str(query or "").strip()
     document_context = resolve_document_context(item, base_dir=_EVAL_DIR)
     state: Dict[str, Any] = _initial_state(query=query, document_context=document_context)
     tracing = tracing_note(eval_run_id, item["id"])
@@ -95,7 +93,7 @@ def call_api(
     session_id = f"eval-case-tp-{item['id']}-{run_id}"
 
     with eval_langfuse_run(line="case", tag=tag, session_id=session_id):
-        run_output = run_testpoints(item, eval_run_id=run_id)
+        run_output = run_testpoints(item, query=prompt, eval_run_id=run_id)
 
     return {
         "output": json.dumps(run_output, ensure_ascii=False),

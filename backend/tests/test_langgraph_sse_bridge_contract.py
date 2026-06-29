@@ -378,7 +378,10 @@ def test_chat_model_end_flushes_unstreamed_text() -> None:
     td = [o for o in objs if o.get("type") == "text-delta"]
     assert td
     assert td[0]["text_delta"] == "你好！有什么可以帮助你的吗？"
-    assert ctx["text_buffer"] == "你好！有什么可以帮助你的吗？"
+    assert ctx["text_buffer"] == ""
+    text_parts = [p for p in builder.to_dict()["parts"] if p.get("type") == "text"]
+    assert text_parts
+    assert "你好！有什么可以帮助你的吗？" in text_parts[0]["content"]
 
 
 def test_chat_model_end_does_not_duplicate_streamed_text() -> None:
