@@ -10,29 +10,29 @@ export interface ThemePresetOption {
 
 export const THEME_PRESET_OPTIONS: ThemePresetOption[] = [
   {
+    id: 'newsprint',
+    label: '纸墨',
+    description: 'Newsprint · 纸感米色 · 衬线排版 · 报刊质感',
+  },
+  {
     id: 'light',
     label: '浅色',
     description: 'Material You · 薰衣草紫 · 药丸按钮 · 色调表面',
   },
   {
     id: 'deep',
-    label: '深度',
+    label: '深色',
     description: 'Minimalist Dark · 石板层叠 · 琥珀光晕 · 玻璃质感',
-  },
-  {
-    id: 'newsprint',
-    label: '纸墨',
-    description: 'Newsprint · 纸感米色 · 衬线排版 · 报刊质感',
   },
 ]
 
-export const DEFAULT_THEME_PRESET: ThemePresetId = 'light'
+export const DEFAULT_THEME_PRESET: ThemePresetId = 'newsprint'
 
 export const THEME_PRESET_STORAGE_KEY = 'noesis-theme-preset'
 
 /** 旧版预设 id → 新版映射 */
 export const LEGACY_THEME_PRESET_MAP: Record<string, ThemePresetId> = {
-  default: 'light',
+  default: 'newsprint',
   saas: 'light',
   enterprise: 'deep',
   fancy: 'newsprint',

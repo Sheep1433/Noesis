@@ -73,7 +73,7 @@ pnpm stylelint      # 样式检查
 - **颜色/圆角/阴影**：组件内使用 `var(--noesis-*)`，禁止新增散落 hex
 - **Naive UI**：`useTheme` + `themeOverrides` 使用 hex 色值（`:color` / `primaryColor` 禁止传 CSS var，seemly 无法解析）；页面样式仍用 CSS 变量
 - **UnoCSS**：`uno.config.ts` 的 `theme.colors` 引用同一套 CSS 变量；`presetIcons.collections` 须用 `() => require('@iconify-json/…')` 函数形式，否则 prod 不生成 Iconify 图标 CSS
-- **主题预设**：`light`（Material You）/ `deep`（Minimalist Dark）/ `newsprint`（纸墨）；侧栏调色盘切换，定义见 `styles/tokens/_semantic.scss`（浅色）与 `_presets.scss`（深/纸墨）
+- **主题预设**：`newsprint`（纸墨，默认）/ `light`（Material You）/ `deep`（深色）；侧栏调色盘切换，定义见 `styles/tokens/_semantic.scss`（纸墨 `:root`）与 `_presets.scss`（浅/深色）
 
 ## 技术要点
 

@@ -1,6 +1,6 @@
 /* 主题预设 — designprompts 风格化三套方案 */
 
-/* 浅色 · Material You — :root token 的补充交互（无 data-theme 时生效） */
+/* 默认 · 纸墨 — 无 data-theme 时生效 */
 html:not([data-theme]) {
   background-color: var(--noesis-color-bg);
 }
@@ -13,16 +13,141 @@ html:not([data-theme]) body {
 
 html:not([data-theme]) .welcome-header,
 html:not([data-theme]) .detail-card {
+  border: 1px solid var(--noesis-color-border);
+  box-shadow: none;
+}
+
+html:not([data-theme]) .chat-composer {
+  background: var(--noesis-color-bg-composer) !important;
+  border-color: var(--noesis-color-border) !important;
+  border-radius: var(--noesis-radius-composer);
+}
+
+/* 浅色 · Material You — seed #6750A4 */
+[data-theme="light"] {
+  --noesis-color-primary: #6750a4;
+  --noesis-color-primary-hover: #5e4896;
+  --noesis-color-primary-muted: #958da5;
+  --noesis-color-primary-subtle: #e8def8;
+  --noesis-color-primary-ring: rgb(103 80 164 / 25%);
+  --noesis-color-primary-bg-subtle: rgb(103 80 164 / 5%);
+  --noesis-color-primary-bg-hover: rgb(103 80 164 / 10%);
+  --noesis-color-primary-bg-icon: rgb(103 80 164 / 12%);
+  --noesis-color-primary-border-soft: #cac4d0;
+  --noesis-color-primary-text-soft: #6750a4;
+
+  --noesis-color-secondary-container: #e8def8;
+  --noesis-color-on-secondary-container: #1d192b;
+  --noesis-color-tertiary: #7d5260;
+
+  --noesis-color-bg: #fffbfe;
+  --noesis-color-bg-elevated: #f3edf7;
+  --noesis-color-bg-muted: #e7e0ec;
+  --noesis-color-bg-subtle: #f3edf7;
+  --noesis-color-bg-hover: rgb(103 80 164 / 5%);
+  --noesis-color-bg-composer: #e7e0ec;
+
+  --noesis-color-border: #cac4d0;
+  --noesis-color-border-subtle: #e7e0ec;
+  --noesis-color-border-light: #cac4d0;
+  --noesis-color-border-divider: #e7e0ec;
+  --noesis-color-border-code: #cac4d0;
+  --noesis-color-border-args: #cac4d0;
+  --noesis-color-border-focus: #6750a4;
+  --noesis-color-border-aside: rgb(28 27 31 / 6%);
+
+  --noesis-color-text: #1c1b1f;
+  --noesis-color-text-heading: #1c1b1f;
+  --noesis-color-text-body: #1c1b1f;
+  --noesis-color-text-secondary: #49454f;
+  --noesis-color-text-muted: #49454f;
+  --noesis-color-text-tab: #49454f;
+  --noesis-color-text-placeholder: #79747e;
+  --noesis-color-text-table: #1c1b1f;
+  --noesis-color-text-inverse: #ffffff;
+  --noesis-color-text-nav: #1c1b1f;
+  --noesis-color-text-hint: #79747e;
+  --noesis-color-text-dim: #49454f;
+  --noesis-color-text-code: #1c1b1f;
+  --noesis-color-text-code-muted: #49454f;
+
+  --noesis-radius-sm: 8px;
+  --noesis-radius-md: 12px;
+  --noesis-radius-lg: 16px;
+  --noesis-radius-xl: 24px;
+  --noesis-radius-pill: 9999px;
+  --noesis-radius-composer: 24px;
+
+  --noesis-shadow-sm: 0 1px 2px rgb(28 27 31 / 6%);
+  --noesis-shadow-md: 0 2px 6px rgb(28 27 31 / 8%);
+  --noesis-shadow-lg: 0 4px 12px rgb(28 27 31 / 10%);
+  --noesis-shadow-float: 0 4px 12px rgb(28 27 31 / 12%);
+
+  --noesis-font-body: "Roboto", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+  --noesis-scrollbar-thumb: #cac4d0;
+  --noesis-scrollbar-track: #f3edf7;
+  --noesis-scrollbar-thumb-muted: #e7e0ec;
+
+  --noesis-chat-tab-active-bg: #e8def8;
+  --noesis-chat-tab-active-color: #6750a4;
+  --noesis-chat-tab-active-border: transparent;
+  --noesis-chat-tab-active-shadow: none;
+  --noesis-composer-upload-bg: rgb(103 80 164 / 8%);
+  --noesis-composer-upload-border: #cac4d0;
+  --noesis-composer-upload-icon: #6750a4;
+  --noesis-chat-selected-row-bg: linear-gradient(to bottom, #f3edf7, #e8def8);
+  --noesis-chat-layout-radius: 16px;
+
+  --noesis-welcome-gradient-common: radial-gradient(circle at top right, rgb(232 222 248 / 70%) 0%, transparent 50%), linear-gradient(180deg, #f3edf7 0%, #fffbfe 100%);
+  --noesis-welcome-gradient-research: radial-gradient(circle at top left, rgb(232 222 248 / 55%) 0%, transparent 45%), linear-gradient(180deg, #e8def8 0%, #fffbfe 100%);
+  --noesis-welcome-gradient-fault: radial-gradient(circle at top, rgb(125 82 96 / 8%) 0%, transparent 50%), linear-gradient(180deg, #f3edf7 0%, #fffbfe 100%);
+  --noesis-welcome-gradient-test: radial-gradient(circle at top right, rgb(232 222 248 / 45%) 0%, transparent 45%), linear-gradient(180deg, #f3edf7 0%, #e8def8 40%, #fffbfe 100%);
+
+  --noesis-block-light-accent: #6750a4;
+  --noesis-block-light-bg: linear-gradient(180deg, #f3edf7 0%, #e8def8 35%, #fffbfe 100%);
+  --noesis-block-light-border: var(--noesis-color-border-subtle);
+  --noesis-block-light-text: #49454f;
+  --noesis-block-light-text-name: #1c1b1f;
+  --noesis-block-light-text-code: #49454f;
+  --noesis-block-light-text-result: #166534;
+  --noesis-block-light-text-error: #b91c1c;
+  --noesis-block-light-icon: #6750a4;
+  --noesis-block-light-bg-result: linear-gradient(180deg, #f8fdf9 0%, #f1faf3 100%);
+  --noesis-block-light-bg-error: linear-gradient(180deg, #fffbfb 0%, #fef2f2 100%);
+  --noesis-block-light-bg-narrative: linear-gradient(180deg, #f3edf7 0%, #fffbfe 100%);
+
+  --noesis-streaming-border: #e7e0ec;
+  --noesis-streaming-text: #49454f;
+
+  --noesis-sidebar-bg: linear-gradient(180deg, #fffbfe 0%, #f3edf7 100%);
+  --noesis-layout-shell-bg: linear-gradient(180deg, #fffbfe 0%, #f3edf7 100%);
+  --noesis-mcp-hero-bg: linear-gradient(135deg, #6750a4, #958da5);
+  --noesis-markdown-heading-border: var(--noesis-color-border-subtle);
+}
+
+html[data-theme="light"] {
+  background-color: var(--noesis-color-bg);
+}
+
+html[data-theme="light"] body {
+  font-family: var(--noesis-font-body);
+  background-color: var(--noesis-color-bg);
+  color: var(--noesis-color-text-body);
+}
+
+html[data-theme="light"] .welcome-header,
+html[data-theme="light"] .detail-card {
   border: none;
   box-shadow: var(--noesis-shadow-sm);
   transition: box-shadow var(--noesis-motion-duration) var(--noesis-motion-ease);
 }
 
-html:not([data-theme]) .detail-card:hover {
+html[data-theme="light"] .detail-card:hover {
   box-shadow: var(--noesis-shadow-md);
 }
 
-html:not([data-theme]) .chat-composer {
+html[data-theme="light"] .chat-composer {
   background: var(--noesis-color-bg-composer) !important;
   border-color: var(--noesis-color-border-subtle) !important;
   border-radius: var(--noesis-radius-xl);
@@ -32,30 +157,30 @@ html:not([data-theme]) .chat-composer {
     border-color 200ms ease;
 }
 
-html:not([data-theme]) .chat-composer:focus-within {
+html[data-theme="light"] .chat-composer:focus-within {
   border-color: var(--noesis-color-primary) !important;
   box-shadow: var(--noesis-shadow-md), 0 0 0 2px rgb(103 80 164 / 12%);
 }
 
-html:not([data-theme]) .n-button {
+html[data-theme="light"] .n-button {
   transition: all var(--noesis-motion-duration) var(--noesis-motion-ease);
 }
 
-html:not([data-theme]) .n-button--primary-type,
-html:not([data-theme]) .n-button--default-type {
+html[data-theme="light"] .n-button--primary-type,
+html[data-theme="light"] .n-button--default-type {
   border-radius: 9999px !important;
 }
 
-html:not([data-theme]) .n-button--primary-type:active {
+html[data-theme="light"] .n-button--primary-type:active {
   transform: scale(0.98);
 }
 
-html:not([data-theme]) .active-tab,
-html:not([data-theme]) :deep(.n-button.active-tab) {
+html[data-theme="light"] .active-tab,
+html[data-theme="light"] :deep(.n-button.active-tab) {
   border-radius: 9999px;
 }
 
-/* 深度 · Minimalist Dark — 层叠石板 + 琥珀光晕 + 玻璃质感 */
+/* 深色 · Minimalist Dark — 层叠石板 + 琥珀光晕 + 玻璃质感 */
 [data-theme="deep"] {
   color-scheme: dark;
 
@@ -219,98 +344,4 @@ html[data-theme="deep"] .n-button--primary-type {
 
 html[data-theme="deep"] .n-button--primary-type:hover {
   box-shadow: 0 0 20px rgb(245 158 11 / 40%);
-}
-
-/* 报章 · Newsprint（designprompts #03）— 纸感、墨黑、细线框、衬线排版 */
-[data-theme="newsprint"] {
-  --noesis-color-primary: #111111;
-  --noesis-color-primary-hover: #000000;
-  --noesis-color-primary-muted: #525252;
-  --noesis-color-primary-subtle: #a3a3a3;
-  --noesis-color-primary-ring: rgb(17 17 17 / 18%);
-  --noesis-color-primary-bg-subtle: rgb(17 17 17 / 4%);
-  --noesis-color-primary-bg-hover: rgb(17 17 17 / 7%);
-  --noesis-color-primary-bg-icon: rgb(17 17 17 / 8%);
-  --noesis-color-primary-border-soft: #d4d0c8;
-  --noesis-color-primary-text-soft: #525252;
-
-  /* 报刊「Breaking News」点缀红，仅用于 QA 图标等语义色也可保留原 token */
-  --noesis-color-accent: #b91c1c;
-
-  --noesis-color-bg: #f4f1ea;
-  --noesis-color-bg-elevated: #faf8f3;
-  --noesis-color-bg-muted: #ebe6dc;
-  --noesis-color-bg-subtle: #f0ebe3;
-  --noesis-color-bg-hover: #f7f4ed;
-  --noesis-color-bg-composer: #faf8f3;
-
-  --noesis-color-border: #1a1a1a;
-  --noesis-color-border-subtle: #c4bdb0;
-  --noesis-color-border-light: #d4d0c8;
-  --noesis-color-border-divider: #1a1a1a;
-  --noesis-color-border-code: #c4bdb0;
-  --noesis-color-border-args: #c4bdb0;
-  --noesis-color-border-aside: #1a1a1a;
-
-  --noesis-color-text: #111111;
-  --noesis-color-text-heading: #000000;
-  --noesis-color-text-body: #262626;
-  --noesis-color-text-secondary: #404040;
-  --noesis-color-text-muted: #737373;
-  --noesis-color-text-tab: #404040;
-  --noesis-color-text-nav: #111111;
-  --noesis-color-text-hint: #737373;
-  --noesis-color-text-dim: #525252;
-  --noesis-color-text-code: #262626;
-  --noesis-color-text-table: #111111;
-
-  --noesis-radius-sm: 2px;
-  --noesis-radius-md: 3px;
-  --noesis-radius-lg: 4px;
-  --noesis-radius-xl: 4px;
-  --noesis-radius-pill: 3px;
-  --noesis-radius-composer: 3px;
-
-  --noesis-shadow-sm: none;
-  --noesis-shadow-md: 0 1px 0 #1a1a1a;
-  --noesis-shadow-lg: 0 2px 0 #1a1a1a;
-  --noesis-shadow-float: 2px 2px 0 rgb(26 26 26 / 25%);
-
-  --noesis-block-light-accent: #111111;
-  --noesis-block-light-bg: #faf8f3;
-  --noesis-block-light-border: #1a1a1a;
-  --noesis-block-light-text: #262626;
-  --noesis-block-light-text-name: #000000;
-  --noesis-block-light-text-code: #404040;
-  --noesis-block-light-bg-result: #f7f4ed;
-  --noesis-block-light-bg-narrative: #faf8f3;
-
-  --noesis-chat-tab-active-bg: #e5dfd3;
-  --noesis-chat-tab-active-color: #111111;
-  --noesis-chat-tab-active-border: #1a1a1a;
-  --noesis-chat-tab-active-shadow: inset 0 -2px 0 #1a1a1a;
-
-  --noesis-composer-upload-bg: #faf8f3;
-  --noesis-composer-upload-border: #737373;
-  --noesis-composer-upload-icon: #111111;
-  --noesis-chat-selected-row-bg: linear-gradient(to bottom, #faf8f3, #f0ebe3);
-  --noesis-chat-layout-radius: 4px;
-
-  --noesis-welcome-gradient-common: linear-gradient(180deg, #faf8f3 0%, #f4f1ea 55%, #ebe6dc 100%);
-  --noesis-welcome-gradient-research: linear-gradient(180deg, #f7f4ed 0%, #f0ebe3 100%);
-  --noesis-welcome-gradient-fault: linear-gradient(180deg, #faf8f3 0%, #ebe6dc 100%);
-  --noesis-welcome-gradient-test: linear-gradient(180deg, #f7f4ed 0%, #f4f1ea 100%);
-
-  --noesis-streaming-border: #1a1a1a;
-  --noesis-streaming-text: #404040;
-
-  --noesis-sidebar-bg: #f0ebe3;
-  --noesis-mcp-hero-bg: linear-gradient(135deg, #111111, #404040);
-  --noesis-markdown-heading-border: #1a1a1a;
-
-  --noesis-font-body: Georgia, "Times New Roman", "Songti SC", "Noto Serif SC", serif;
-}
-
-html[data-theme="newsprint"] body {
-  font-family: var(--noesis-font-body);
 }

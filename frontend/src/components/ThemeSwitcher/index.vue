@@ -3,7 +3,7 @@ import { ColorPaletteOutline } from '@vicons/ionicons-v5'
 import type { DropdownOption } from 'naive-ui'
 import { NDropdown, NIcon } from 'naive-ui'
 import { computed } from 'vue'
-import type { ThemePresetId } from '@/config/themePresets'
+import { DEFAULT_THEME_PRESET, type ThemePresetId } from '@/config/themePresets'
 import { useThemePreset } from '@/hooks/useThemePreset'
 
 const { presetId, presets, applyThemePreset } = useThemePreset()
@@ -33,9 +33,9 @@ function handleSelect(key: string | number) {
     <button
       type="button"
       class="theme-switcher-trigger"
-      :class="{ 'theme-switcher-trigger--active': presetId !== 'light' }"
+      :class="{ 'theme-switcher-trigger--active': presetId !== DEFAULT_THEME_PRESET }"
       aria-label="切换界面风格"
-      :title="`界面风格：${presets.find(p => p.id === presetId)?.label ?? '浅色'}`"
+      :title="`界面风格：${presets.find(p => p.id === presetId)?.label ?? '纸墨'}`"
     >
       <n-icon :size="20">
         <ColorPaletteOutline />
