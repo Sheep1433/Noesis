@@ -1,5 +1,5 @@
 """
-Noesis 深度研究（DEEP_RESEARCH_QA）Locust 性能测试。
+Noesis 超级智能体（SUPER_AGENT_QA）Locust 性能测试。
 
 单用户（admin）、多 session；客户端不设超时，等后端 SSE 自然结束。
 
@@ -31,7 +31,7 @@ from locust.exception import StopUser
 from evals.loadtest.queries import load_dataset_queries, pick_query
 from evals.loadtest.sse_client import consume_sse_stream
 
-QA_TYPE = "DEEP_RESEARCH_QA"
+QA_TYPE = "SUPER_AGENT_QA"
 LOGIN_USERNAME = "admin"
 LOGIN_PASSWORD = "123456"
 _QUERY_POOL = load_dataset_queries()

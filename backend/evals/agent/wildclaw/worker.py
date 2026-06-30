@@ -8,7 +8,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from evals.agent._agent import run_deep_research
+from evals.agent._agent import run_super_agent
 from config.agent_workspace_paths import ensure_workspace_dir
 
 EVAL_USER = "eval-wildclaw"
@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 shutil.copy2(entry, dest)
 
-    run = run_deep_research(
+    run = run_super_agent(
         query=str(spec.get("prompt") or ""),
         session_id=sid,
         user_id=EVAL_USER,

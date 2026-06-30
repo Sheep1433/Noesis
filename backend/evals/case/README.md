@@ -10,7 +10,7 @@ evals/case/
       prd_001.yaml
     documents/                ← 输入需求文档（PRD）
     golden_loader.py          ← 读取 golden/*.yaml
-    generate_eval_dataset.py  ← 生成 documents + promptfooconfig
+    generate_eval_dataset.py  ← 从 documents/ + golden/ 生成 promptfooconfig
     provider.py
   rag/                        ← RAG 检索评测（找这里）
     promptfooconfig.yaml      ← 评测集 + relevant_ids 金标准
@@ -26,7 +26,7 @@ evals/case/
 
 ## 评测集在哪？
 
-**金标准源数据**在 `testpoints/golden/prd_*.yaml`（按场景列出测试点）；**跑评测时**由脚本写入 `promptfooconfig.yaml` 的 `tests:` 段。共 **20** 条样本、**428** 条金标准测试点。recall/precision **不在 golden 里预置**，由 promptfoo llm-rubric 在运行时计算。
+**金标准源数据**在 `testpoints/golden/prd_*.yaml`（按场景列出测试点）；**跑评测时**由脚本写入 `promptfooconfig.yaml` 的 `tests:` 段。共 **20** 条样本、**428** 条金标准测试点。recall/precision 由 `shared/coverage_scorer.py` 确定性打分（token 对齐）；borderline 可选 LLM 仲裁（`NOESIS_CASE_COVERAGE_LLM_BORDERLINE=1`，默认开启）。
 
 | 想看什么 | 打开 |
 |----------|------|
@@ -46,7 +46,7 @@ evals/case/
 
 ```bash
 cd backend
-# 改 PRD 正文 → generate_eval_dataset.py DATASET
+# 改 PRD 正文 → testpoints/documents/prd_*.md
 # 改金标准 → testpoints/golden/prd_*.yaml
 uv run python evals/case/testpoints/generate_eval_dataset.py
 uv run python -m evals.case --phase testpoints --tag baseline

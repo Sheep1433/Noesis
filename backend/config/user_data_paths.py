@@ -49,6 +49,44 @@ def ensure_user_root(user_id: str | int) -> Path:
     return _ensure_sandbox_dir(get_user_root(user_id))
 
 
+_AGENTS_MD_SEED = """<!-- Noesis 用户记忆：Agent 会在你明确要求「记住」时更新此文件 -->
+
+## 关于我
+（待补充）
+
+## 工作偏好
+（待补充）
+"""
+
+_USER_MD_SEED = """<!-- Noesis 用户画像：由设置页或管理员维护，Agent 只读 -->
+
+## 基本信息
+（待补充）
+"""
+
+
+def get_user_agents_md_path(user_id: str | int) -> Path:
+    """返回用户 AGENTS.md 路径（跨会话，不创建）。"""
+    return get_user_root(user_id) / "AGENTS.md"
+
+
+def get_user_profile_md_path(user_id: str | int) -> Path:
+    """返回用户 USER.md 路径（跨会话，不创建）。"""
+    return get_user_root(user_id) / "USER.md"
+
+
+def ensure_user_memory_files(user_id: str | int) -> Path:
+    """创建用户根目录并 seed AGENTS.md / USER.md（若不存在）。"""
+    root = ensure_user_root(user_id)
+    agents = get_user_agents_md_path(user_id)
+    if not agents.is_file():
+        agents.write_text(_AGENTS_MD_SEED, encoding="utf-8")
+    profile = get_user_profile_md_path(user_id)
+    if not profile.is_file():
+        profile.write_text(_USER_MD_SEED, encoding="utf-8")
+    return root
+
+
 def get_user_skills_dir(user_id: str | int) -> Path:
     """返回用户 Skills 目录 `.data/users/{user_id}/skills/`（不创建）。"""
     return get_user_root(user_id) / "skills"

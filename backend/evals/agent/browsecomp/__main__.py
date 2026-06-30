@@ -13,7 +13,7 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage
 
-from evals.agent._agent import run_deep_research
+from evals.agent._agent import run_super_agent
 from evals.agent.browsecomp.official import BrowseCompEval, MessageList, SamplerBase, SamplerResponse
 from evals.langfuse_env import eval_langfuse_run
 from llm import get_llm
@@ -29,7 +29,7 @@ class _AgentSampler(SamplerBase):
     def __call__(self, message_list: MessageList) -> SamplerResponse:
         prompt = str(message_list[-1].get("content") or "").strip()
         sid = f"browsecomp-{uuid.uuid4().hex[:12]}"
-        run = run_deep_research(query=prompt, session_id=sid, user_id="eval-browsecomp", time_budget_seconds=self.time_budget)
+        run = run_super_agent(query=prompt, session_id=sid, user_id="eval-browsecomp", time_budget_seconds=self.time_budget)
         text = run.get("final_text") or ""
         if not text and run.get("error"):
             text = f"Error: {run['error']}"

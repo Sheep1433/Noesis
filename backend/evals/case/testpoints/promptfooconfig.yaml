@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: Noesis 测试用例 Agent 测试点 评测（L0 + point_coverage recall/precision）
+description: Noesis 测试用例 Agent 测试点评测（L0 + point_coverage recall/precision）
 prompts:
 - '请根据需求文档生成测试场景与测试点'
 providers:
@@ -16,70 +16,12 @@ defaultTest:
   - type: python
     value: file://../shared/assertions.py:assert_l0
     metric: l0
-  - type: llm-rubric
-    value: |
-      你是测试设计评审员。根据 Agent 输出与金标准测试点，计算 **point_coverage_recall**（测试点覆盖召回率）。
-
-      ## Agent 输出（JSON）
-      {output}
-
-      ## 金标准测试点
-      {golden_test_points_json}
-
-      ## 评分规则
-      1. 从 Agent 输出的 JSON 中读取 `state.scenes_testpoints` 作为「生成测试点」；若为空或解析失败，score=0.0。
-      2. 对每条金标准测试点，判断是否存在至少一条「生成测试点」在 **point_name 语义上覆盖** 该金标准所表达的 PRD 需求（scene_name 不一致可接受，但生成点须能反映同一需求点）。
-      3. **无部分计分**：每条金标准要么计为已覆盖（1），要么未覆盖（0），不允许 0.5 等部分覆盖。
-      4. **score** = 已覆盖金标准条数 / 金标准总条数，取值 0.0～1.0。
-      5. **pass** 始终为 true（本指标仅汇报分数，不设通过阈值门禁）。
-      6. 在 reason 中简要说明覆盖情况与 recall 计算依据。
-
-      仅输出 JSON（不要其它文字）：
-      ```json
-      {
-        "reason": "<覆盖分析>",
-        "score": 0.0,
-        "pass": true
-      }
-      ```
+  - type: python
+    value: file://../shared/assertions.py:assert_point_coverage_recall
     metric: point_coverage_recall
-    provider:
-      id: file://../shared/judge.py
-      config:
-        pythonExecutable: ../shared/run-python.sh
-  - type: llm-rubric
-    value: |
-      你是测试设计评审员。根据 Agent 输出与金标准测试点，计算 **point_coverage_precision**（测试点覆盖精确率）。
-
-      ## Agent 输出（JSON）
-      {output}
-
-      ## 金标准测试点
-      {golden_test_points_json}
-
-      ## 评分规则
-      1. 从 Agent 输出的 JSON 中读取 `state.scenes_testpoints`，展平各 scene 的 `test_points` 作为「生成测试点」；若为空或解析失败，score=0.0。
-      2. 判断每条「生成测试点」是否**有效**（须满足其一）：
-         - 语义上能对应至少一条金标准测试点；或
-         - 被 PRD 文档内容**明确支持**（非泛泛而谈、非仅重复同一意图的变体）
-      3. **无效情形**：仅与金标准属同一业务域但无法对应具体需求；与其它生成点明显重复；凭空编造 PRD 未提及的规则。
-      4. **score** = 有效生成测试点条数 / 生成测试点总条数，取值 0.0～1.0。
-      5. **pass** 始终为 true（本指标仅汇报分数，不设通过阈值门禁）。
-      6. 在 reason 中简要说明有效/无效判定与 precision 计算依据。
-
-      仅输出 JSON（不要其它文字）：
-      ```json
-      {
-        "reason": "<精确率分析>",
-        "score": 0.0,
-        "pass": true
-      }
-      ```
+  - type: python
+    value: file://../shared/assertions.py:assert_point_coverage_precision
     metric: point_coverage_precision
-    provider:
-      id: file://../shared/judge.py
-      config:
-        pythonExecutable: ../shared/run-python.sh
 tests:
 - description: prd_001
   metadata:

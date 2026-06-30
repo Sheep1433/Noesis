@@ -45,7 +45,7 @@ evals/case/
   testpoints/
     golden/                   # 金标准源（prd_*.yaml）
     golden_loader.py
-    generate_eval_dataset.py  # 生成 documents + promptfooconfig
+    generate_eval_dataset.py  # 从 documents/ + golden/ 生成 promptfooconfig
     promptfooconfig.yaml      # 运行时配置（由脚本生成）
     documents/
   rag/
@@ -69,7 +69,7 @@ uv run python -m evals.case --phase testpoints --tag debug --item-id prd_001
 
 RAG 集成测（pytest，默认 skip）：`NOESIS_CASE_RAG_EVAL=1` + 先 `evals.case.rag.ingest`。
 
-coverage 走 promptfoo **llm-rubric**（`shared/judge.py` → `get_llm()`）。详见 `evals/case/README.md`。
+coverage 走 Python 确定性 scorer（`shared/coverage_scorer.py`）；borderline 可启用 LLM 仲裁。详见 `evals/case/README.md`。
 
 ---
 
@@ -187,3 +187,5 @@ uv run locust -f evals/loadtest/locustfile.py --host=http://127.0.0.1:8089 \
 ```
 
 单用户（admin）、每请求新 session；客户端不设超时，等后端 SSE 自然结束。指标：`deep_research_stream`（端到端）、`deep_research_ttft`、`deep_research_tool_calls`。
+
+`sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/prd/platform/SSE流式数据设计.md` §3.3、§6.4）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。

@@ -14,6 +14,7 @@ import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { isUnauthorizedError } from '@/utils/authHttp'
+import { qaTypeLabel } from '@/utils/qaType'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import {
@@ -36,8 +37,8 @@ import {
   syncLegacyFieldsFromParts,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
-import { useSSEStream } from '@/views/chat/useSSEStream'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
+import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
 import FileUploadManager from './FileUploadManager.vue'
@@ -268,6 +269,7 @@ interface TableItem {
 
 function sessionQaIconClass(qt: string) {
   switch (qt) {
+    case 'SUPER_AGENT_QA':
     case 'DEEP_RESEARCH_QA':
       return 'i-hugeicons:search-01'
     case 'FAULT_OPERATION_QA':
@@ -291,13 +293,7 @@ function sessionQaIconColor(qt: string) {
 }
 
 function sessionQaTooltip(qt: string) {
-  const m: Record<string, string> = {
-    COMMON_QA: '智能问答',
-    DEEP_RESEARCH_QA: '深度研究',
-    FAULT_OPERATION_QA: '故障运维',
-    TEST_CASE_QA: '测试用例',
-  }
-  return m[qt] || '智能问答'
+  return qaTypeLabel(qt)
 }
 
 const historySidebarColumns = computed(() => [
@@ -998,7 +994,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   }
 }
 
-const WELCOME_QA_TYPES = ['COMMON_QA', 'DEEP_RESEARCH_QA', 'FAULT_OPERATION_QA', 'TEST_CASE_QA'] as const
+const WELCOME_QA_TYPES = ['COMMON_QA', 'SUPER_AGENT_QA', 'FAULT_OPERATION_QA', 'TEST_CASE_QA'] as const
 
 /** 从 URL 同步问答类型（不触发清空逻辑，避免首屏与历史加载打架） */
 function applyWelcomeRouteQaType() {
@@ -1240,6 +1236,7 @@ function onComposerPaste(e: ClipboardEvent) {
     >
       <n-layout-sider
         v-model:collapsed="collapsed"
+        class="chat-history-sider"
         collapse-mode="width"
         :collapsed-width="0"
         :width="260"
@@ -1377,20 +1374,6 @@ function onComposerPaste(e: ClipboardEvent) {
               class="flex-1 min-w-0"
               :background-color="backgroundColorVariable"
             />
-            <button
-              v-if="!showDefaultPage && uuids[qa_type]"
-              type="button"
-              class="session-panel-toggle"
-              :class="{ 'session-panel-toggle--active': sessionFilesPanelOpen }"
-              title="Files"
-              aria-label="Toggle files panel"
-              @click="toggleSessionFilesPanel"
-            >
-              <span
-                class="session-panel-toggle__icon"
-                :class="sessionFilesPanelOpen ? 'i-carbon:side-panel-close' : 'i-carbon:side-panel-open'"
-              />
-            </button>
           </div>
 
           <!-- 这里循环渲染即可实现多轮对话 -->
@@ -1456,7 +1439,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         }"
                       >
                         <template #avatar>
-                          <div class="size-25 i-my-svg:user-avatar"></div>
+                          <div class="size-25 text-primary i-my-svg:user-avatar" />
                         </template>
                         {{ item.question }}
                       </n-tag>
@@ -1667,10 +1650,10 @@ function onComposerPaste(e: ClipboardEvent) {
                   <n-button
                     type="default"
                     :class="[
-                      qa_type === 'DEEP_RESEARCH_QA' && 'active-tab',
+                      qa_type === 'SUPER_AGENT_QA' && 'active-tab',
                       'rounded-100 w-120 h-36 p-15 text-13 text-tab',
                     ]"
-                    @click="onAqtiveChange('DEEP_RESEARCH_QA', '')"
+                    @click="onAqtiveChange('SUPER_AGENT_QA', '')"
                   >
                     <template #icon>
                       <n-icon size="18">
@@ -1722,7 +1705,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         </svg>
                       </n-icon>
                     </template>
-                    深度研究
+                    智能体
                   </n-button>
                   <n-button
                     type="default"
@@ -1841,8 +1824,7 @@ function onComposerPaste(e: ClipboardEvent) {
                 </div>
                 <div
                   :class="[
-                    'chat-composer relative b b-solid b-primary bg-white',
-                    'rounded-10px p-12',
+                    'chat-composer relative b b-solid p-12',
                     composerDragOver && 'chat-composer--dragover',
                   ]"
                   @dragenter="onComposerDragEnter"
@@ -1870,8 +1852,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     >
                       <div
                         flex="~ items-center justify-center"
-                        class="shrink-0 rounded-50% p-7 hover:bg-primary/5 transition-all-300 bg-primary/1"
-                        b="~ solid primary/20"
+                        class="chat-composer-upload-trigger shrink-0"
                       >
                         <div class="text-20 i-uil:upload cursor-pointer"></div>
                       </div>
@@ -1953,6 +1934,20 @@ function onComposerPaste(e: ClipboardEvent) {
               :background-color="backgroundColorVariable"
             />
           </aside>
+          <button
+            v-if="!showDefaultPage && uuids[qa_type]"
+            type="button"
+            class="session-files-toggle"
+            :class="{ 'session-files-toggle--open': sessionFilesPanelOpen }"
+            :title="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
+            :aria-label="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
+            @click="toggleSessionFilesPanel"
+          >
+            <span
+              class="session-files-toggle__icon"
+              :class="sessionFilesPanelOpen ? 'i-carbon:side-panel-close' : 'i-carbon:side-panel-open'"
+            />
+          </button>
         </div>
       </n-layout-content>
     </n-layout>
@@ -1973,7 +1968,7 @@ function onComposerPaste(e: ClipboardEvent) {
   align-items: center;
   justify-content: center;
   border-radius: var(--noesis-radius-md);
-  background: rgb(255 255 255 / 92%);
+  background: color-mix(in srgb, var(--noesis-color-bg-elevated) 92%, transparent);
   font-size: 14px;
   color: var(--noesis-color-primary);
   pointer-events: none;
@@ -2023,10 +2018,10 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .create-chat {
   width: 100%;
-  height: 36px;
+  height: 40px;
   text-align: center;
-  font-family: Arial;
-  font-weight: bold;
+  font-family: inherit;
+  font-weight: 500;
   font-size: 14px;
   border-radius: var(--noesis-radius-pill);
 }
@@ -2039,6 +2034,20 @@ function onComposerPaste(e: ClipboardEvent) {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+/* 聊天记录侧栏折叠钮 — 使用 Naive 右缘定位，仅对齐主题色 */
+.chat-history-sider :deep(.n-layout-toggle-button) {
+  border-color: var(--noesis-color-border);
+  background: var(--noesis-color-bg-elevated);
+  box-shadow: var(--noesis-shadow-sm);
+  color: var(--noesis-color-text-secondary);
+}
+
+.chat-history-sider :deep(.n-layout-toggle-button:hover) {
+  color: var(--noesis-color-primary);
+  border-color: var(--noesis-color-primary-muted);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
 .search-chat-trigger {
@@ -2065,11 +2074,13 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .search-chat-trigger__icon {
-  display: block;
+  display: inline-block;
   width: 18px;
   height: 18px;
   font-size: 18px;
   line-height: 1;
+  color: var(--noesis-color-text-secondary);
+  flex-shrink: 0;
 }
 
 .search-chat-input {
@@ -2083,11 +2094,12 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .search-chat-input__icon {
-  display: block;
+  display: inline-block;
   width: 16px;
   height: 16px;
   font-size: 16px;
-  color: var(--noesis-color-text-muted, #64748b);
+  color: var(--noesis-color-text-secondary);
+  flex-shrink: 0;
 }
 
 .scrollable-container {
@@ -2179,10 +2191,13 @@ function onComposerPaste(e: ClipboardEvent) {
   background-color: var(--noesis-color-bg);
 }
 
-.active-tab {
-  background: var(--noesis-chat-tab-active-bg);
-  border-color: var(--noesis-color-primary);
-  color: var(--noesis-color-primary);
+.active-tab,
+:deep(.n-button.active-tab) {
+  background: var(--noesis-chat-tab-active-bg) !important;
+  border-color: var(--noesis-chat-tab-active-border, var(--noesis-color-primary)) !important;
+  color: var(--noesis-chat-tab-active-color, var(--noesis-color-primary)) !important;
+  box-shadow: var(--noesis-chat-tab-active-shadow, none);
+  font-weight: 600;
 }
 
 /* 新建对话框的淡入淡出动画样式 */
@@ -2234,6 +2249,51 @@ function onComposerPaste(e: ClipboardEvent) {
   min-height: 0;
   border-left: 1px solid var(--noesis-color-border-aside);
   overflow: hidden;
+}
+
+/* 文件区折叠钮 — 尺寸与左侧 Naive layout-toggle-button 对齐 */
+.session-files-toggle {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--noesis-color-border);
+  border-radius: 50%;
+  background: var(--noesis-color-bg-elevated);
+  box-shadow: var(--noesis-shadow-sm);
+  color: var(--noesis-color-text-secondary);
+  cursor: pointer;
+  transform: translate(50%, -50%);
+  transition:
+    right 0.25s ease,
+    transform 0.25s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.session-files-toggle:hover {
+  color: var(--noesis-color-primary);
+  border-color: var(--noesis-color-primary-muted);
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
+.session-files-toggle--open {
+  right: 320px;
+}
+
+.session-files-toggle__icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .footer {
@@ -2380,36 +2440,5 @@ function onComposerPaste(e: ClipboardEvent) {
 .chat-top-bar {
   flex-shrink: 0;
   padding-right: 12px;
-}
-
-.session-panel-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  margin-left: 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-  color: var(--noesis-color-text-dim);
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.session-panel-toggle:hover {
-  background: rgb(0 0 0 / 5%);
-  color: var(--noesis-color-text-code);
-}
-
-.session-panel-toggle--active {
-  background: rgb(0 0 0 / 5%);
-  color: var(--noesis-color-text-code-muted);
-}
-
-.session-panel-toggle__icon {
-  width: 18px;
-  height: 18px;
 }
 </style>

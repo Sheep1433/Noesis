@@ -1139,7 +1139,7 @@ onBeforeUnmount(() => {
                 }"
               >
                 <template #avatar>
-                  <div class="size-25 i-my-svg:user-avatar"></div>
+                  <div class="size-25 text-primary i-my-svg:user-avatar" />
                 </template>
                 {{ m.text }}
               </n-tag>
@@ -1316,8 +1316,7 @@ onBeforeUnmount(() => {
                 >
                   <div
                     flex="~ items-center justify-center"
-                    class="rounded-50% p-7 transition-all-300 bg-primary/1 hover:bg-primary/5"
-                    b="~ solid primary/20"
+                    class="chat-composer-upload-trigger"
                   >
                     <div class="text-20 i-uil:upload cursor-pointer"></div>
                   </div>

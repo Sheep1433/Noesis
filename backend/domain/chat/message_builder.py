@@ -160,6 +160,26 @@ class AssistantMessageBuilder:
             TextPart(content=text, parent_task_call_id=parent_task_call_id),
         )
 
+    def append_text_delta(
+        self,
+        text: str,
+        parent_task_call_id: Optional[str] = None,
+    ) -> None:
+        """流式正文增量：合并进最后一个 text part，否则新建。"""
+        if not text:
+            return
+        if (
+            self._content.parts
+            and isinstance(self._content.parts[-1], TextPart)
+            and self._content.parts[-1].parent_task_call_id == parent_task_call_id
+        ):
+            last = self._content.parts[-1]
+            last.content = (last.content or "") + text
+        else:
+            self._content.parts.append(
+                TextPart(content=text, parent_task_call_id=parent_task_call_id),
+            )
+
     def append_reasoning(self, reasoning: str, parent_task_call_id: Optional[str] = None) -> None:
         self._content.parts.append(
             ReasoningPart(content=reasoning, parent_task_call_id=parent_task_call_id),

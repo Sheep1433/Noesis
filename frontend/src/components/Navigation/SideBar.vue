@@ -30,7 +30,7 @@ const SideBarItem = defineComponent({
   setup(props, { emit }) {
     const computedWrapperClassName = computed(() => {
       if (props.fill) {
-        return 'c-slate-700'
+        return 'c-[var(--noesis-color-text)]'
       }
 
       if (props.disabled) {
@@ -40,8 +40,8 @@ const SideBarItem = defineComponent({
       }
 
       return [
-        'c-slate-500 hover:c-slate-700',
-        props.active && 'c-slate-700',
+        'c-[var(--noesis-color-text-secondary)] hover:c-[var(--noesis-color-text)]',
+        props.active && 'c-[var(--noesis-color-text)]',
       ]
     })
 
@@ -51,8 +51,8 @@ const SideBarItem = defineComponent({
       }
 
       return [
-        'p-10 rouned-50%',
-        props.active && 'bg-slate-200',
+        'p-10 rounded-50%',
+        props.active && 'bg-[var(--noesis-color-primary-bg-hover)]',
       ]
     })
 
@@ -87,7 +87,8 @@ const SideBarItem = defineComponent({
           class={[
             'transition-all-260',
             'size-40 rounded-50%',
-            '[&>*]:size-full [&>*]:bg-no-repeat [&>*]:bg-center [&>*]:bg-cover',
+            '[&_.sidebar-nav-icon]:size-full',
+            '[&_.brand-mark]:size-full',
             this.computedInnerClassName,
           ]}
         >
@@ -125,7 +126,7 @@ const sidebarItems = ref([
     },
     renderIcon() {
       return (
-        <div class="i-my-svg:chat-index"></div>
+        <div class="sidebar-nav-icon i-my-svg:chat-index"></div>
       )
     },
   },
@@ -139,7 +140,7 @@ const sidebarItems = ref([
     },
     renderIcon() {
       return (
-        <div class="i-mdi:clipboard-text-outline"></div>
+        <div class="sidebar-nav-icon i-mdi:clipboard-text-outline"></div>
       )
     },
   },
@@ -153,7 +154,7 @@ const sidebarItems = ref([
     },
     renderIcon() {
       return (
-        <div class="i-my-svg:chat-knowledge"></div>
+        <div class="sidebar-nav-icon i-my-svg:chat-knowledge"></div>
       )
     },
   },
@@ -167,7 +168,7 @@ const sidebarItems = ref([
     },
     renderIcon() {
       return (
-        <div class="i-my-svg:chat-skill"></div>
+        <div class="sidebar-nav-icon i-my-svg:chat-skill"></div>
       )
     },
   },
@@ -221,7 +222,7 @@ const handleLogout = async () => {
         <SideBarItem
           fill
         >
-          <div class="size-35 i-my-svg:avatar"></div>
+          <div class="sidebar-nav-icon size-35 i-my-svg:avatar" />
         </SideBarItem>
       </template>
       <n-button
@@ -245,5 +246,10 @@ const handleLogout = async () => {
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
+}
+
+.sidebar-nav-icon {
+  display: inline-block;
+  flex-shrink: 0;
 }
 </style>

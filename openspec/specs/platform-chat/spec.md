@@ -111,6 +111,49 @@
 
 - **WHEN** `StreamingResponse` 消费循环在 `yield` 编码后的 SSE 字节时抛出 `BrokenPipeError` 或 `ConnectionResetError`
 - **THEN** 系统 SHALL 结束该次流的写入循环，并采用 INFO 或 WARNING 记录断开事实
+- **AND** SHALL 调用 `QaService.exec_query`（或等价生成器）的 `aclose()`，触发断连 partial 落库（见「流式 assistant 消息持久化」Requirement）
+
+### Requirement: 流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库
+
+`QaService.exec_query`（及 `exec_test_case_resume` 等等价流式入口）SHALL 在服务端 authoritative 持久化 assistant 消息；**SHALL NOT** 依赖客户端是否收到 `data: [DONE]` 作为入库条件。`[DONE]` 仅为 SSE 协议结束符，供前端 `useSSEStream` 与压测客户端识别流结束。
+
+同一轮流式 assistant **SHALL** 对应数据库中的**单行**记录，主键 `message_id` **SHALL** 与 SSE `message-start.assistant_message_id` 一致。持久化分三阶段：
+
+1. **骨架（streaming）**：流开始前 INSERT 空 multipart 行，`status=streaming`，`message_id=bridge.assistant_message_id`；**流式过程中不 UPDATE 正文**。
+2. **终态**：流正常结束时 `_finalize_streaming_assistant` UPDATE 为 `completed` 或 `error`（一次性写入合并后的 parts）；连接意外断开时 `_handle_stream_client_disconnect` UPDATE 为 `partial`；用户 `/stop` 时 `stop_chat` 为唯一权威 partial 落库。
+3. **会话 context（可选）**：流式过程中 `_persist_stream_checkpoint` **仅** merge 会话 `extra.context`，**不得**按 token/part 增量 UPDATE assistant 正文。
+
+终态落库的主键解析 **SHALL** 使用 `_resolve_assistant_message_id(ctx, builder)`：优先 `ctx["_assistant_db_id"]`，回退 `builder.message_id`。**SHALL NOT** 在已有骨架 id 时 INSERT 新 UUID 行。
+
+任一终态落库（completed / partial / error）完成后，流式上下文 **SHALL** 设置 `ctx["_stream_persist_finalized"]=True`；后续 `CancelledError` / `GeneratorExit` / 重复断连收尾 **SHALL NOT** 再次写入 assistant 行。`user_stopped` 为真时 **SHALL** 跳过 `_finalize_streaming_assistant` 与断连落库（与 `stop_chat` 互斥）。
+
+`chat_api._event_generator` 在检测到客户端写入失败（`BrokenPipeError` 等）时 **SHALL** 停止向 socket 写入并 `await generator.aclose()`，以便上述断连落库生效；**SHALL NOT** 将 `[DONE]` 是否送达客户端作为是否落库的前置条件。
+
+#### Scenario: 流式正常结束单次 completed 落库
+
+- **WHEN** Agent 产出完毕且 SSE 已发出 `finish` 与 `data: [DONE]`，且未发生 `user_stopped` 或连接中断
+- **THEN** 系统 SHALL 对 skeleton 同一 `message_id` 执行一次终态 UPDATE（`status=completed` 或 `error`）
+- **AND** SHALL NOT 再 INSERT 第二条 assistant 消息
+
+#### Scenario: 客户端未读 DONE 即断开仍 partial 落库
+
+- **WHEN** 客户端在收到 `finish` 后提前关闭连接、未读 `data: [DONE]`，且未调用 `/stop`
+- **THEN** 服务端 SHALL 将已生成内容以 `status=partial` UPDATE 至 skeleton 同一行
+- **AND** 落库内容 SHALL NOT 含用户中断说明（与 `/stop` 区分）
+- **AND** 若此后流式协程已写入终态（`_stream_persist_finalized`），SHALL NOT 二次落库
+
+#### Scenario: 用户停止与断连、正常结束互斥
+
+- **WHEN** 用户已通过 `/stop` 完成权威落库（`user_stopped=true`）
+- **THEN** `_finalize_streaming_assistant` 与 `_handle_stream_client_disconnect` **SHALL NOT** 覆盖 `stop_chat` 已写入内容
+
+- **WHEN** `_finalize_streaming_assistant` 已成功写入 completed 终态
+- **THEN** 随后的 `CancelledError` 或 `GeneratorExit` 断连收尾 **SHALL NOT** 再次调用 `_persist_assistant`
+
+#### Scenario: 幂等回归测试
+
+- **WHEN** 运行 `backend/tests/test_stream_persist_idempotency.py`
+- **THEN** finalize 后断连、断连后 finalize、双次断连 handler 等路径 **SHALL** 仅触发一次 `_persist_assistant`
 
 ### Requirement: SSE 对外契约 SHALL 具备自动化回归覆盖
 

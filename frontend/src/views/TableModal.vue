@@ -1,5 +1,6 @@
 <script setup>
 import * as GlobalAPI from '@/api'
+import { qaTypeLabel } from '@/utils/qaType'
 
 const props = defineProps({
   show: Boolean,
@@ -10,15 +11,8 @@ const emit = defineEmits(['update:show', 'delete'])
 const localShow = ref(props.show)
 const tableData = ref([])
 
-const QA_TYPE_LABEL = {
-  COMMON_QA: '智能问答',
-  DEEP_RESEARCH_QA: '深度研究',
-  FAULT_OPERATION_QA: '故障运维',
-  TEST_CASE_QA: '测试用例',
-}
-
-function qaTypeLabel(qt) {
-  return QA_TYPE_LABEL[qt] || '智能问答'
+function qaTypeLabelLocal(qt) {
+  return qaTypeLabel(qt)
 }
 
 const columns = ref([
@@ -36,7 +30,7 @@ const columns = ref([
     width: 120,
     ellipsis: { tooltip: true },
     render(row) {
-      return qaTypeLabel(row.qa_type)
+      return qaTypeLabelLocal(row.qa_type)
     },
   },
   {

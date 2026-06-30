@@ -15,6 +15,13 @@ from agent.case_generate.rag import (
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
 )
+from evals.case.shared.coverage_scorer import (
+    parse_golden_from_context,
+    scenes_from_run_output,
+    score_point_coverage_precision,
+    score_point_coverage_recall,
+)
+from evals.case.shared.provider_common import resolve_document_context
 
 GradingResult = Dict[str, Union[bool, float, str, None, Dict[str, Any]]]
 
@@ -179,6 +186,50 @@ def assert_l0(output: str, context: Dict[str, Any]) -> Union[bool, float, Gradin
         score=1.0 if passed else 0.0,
         passed=passed,
         reason=result.get("failure_reason") or ("L0 通过" if passed else "L0 未通过"),
+    )
+
+
+def _coverage_context(context: Dict[str, Any]) -> tuple[list[dict[str, str]], str]:
+    vars_ = context.get("vars") or {}
+    golden = parse_golden_from_context(context)
+    if not golden:
+        raise ValueError("缺少 vars.golden_test_points_json 或格式非法")
+    base_dir = Path(__file__).resolve().parents[1] / "testpoints"
+    doc_path = vars_.get("document_path")
+    document_text = ""
+    if doc_path:
+        document_text = resolve_document_context(
+            {"document_path": doc_path},
+            base_dir=base_dir,
+        )
+    return golden, document_text
+
+
+def assert_point_coverage_recall(output: str, context: Dict[str, Any]) -> GradingResult:
+    run_output = _parse_output(output)
+    scenes = scenes_from_run_output(run_output)
+    golden, _doc = _coverage_context(context)
+    result = score_point_coverage_recall(scenes, golden)
+    score = float(result.get("score") or 0.0)
+    return _grading(
+        metric="point_coverage_recall",
+        score=score,
+        passed=True,
+        reason=str(result.get("reason") or ""),
+    )
+
+
+def assert_point_coverage_precision(output: str, context: Dict[str, Any]) -> GradingResult:
+    run_output = _parse_output(output)
+    scenes = scenes_from_run_output(run_output)
+    golden, document_text = _coverage_context(context)
+    result = score_point_coverage_precision(scenes, golden, document_text)
+    score = float(result.get("score") or 0.0)
+    return _grading(
+        metric="point_coverage_precision",
+        score=score,
+        passed=True,
+        reason=str(result.get("reason") or ""),
     )
 
 

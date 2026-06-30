@@ -1,6 +1,6 @@
 /** 可切换的主题预设 — 视觉差异由 styles/tokens/_presets.scss 的 data-theme 覆盖 */
 
-export type ThemePresetId = 'light' | 'deep' | 'fancy'
+export type ThemePresetId = 'light' | 'deep' | 'newsprint'
 
 export interface ThemePresetOption {
   id: ThemePresetId
@@ -8,22 +8,21 @@ export interface ThemePresetOption {
   description: string
 }
 
-/** 浅色 · Swiss Minimalist / Flat Design */
 export const THEME_PRESET_OPTIONS: ThemePresetOption[] = [
   {
     id: 'light',
     label: '浅色',
-    description: '素净留白 · 柔和蓝 · 日常办公',
+    description: 'Material You · 薰衣草紫 · 药丸按钮 · 色调表面',
   },
   {
     id: 'deep',
     label: '深度',
-    description: '暗色沉浸 · 高对比 · 长时间盯屏',
+    description: 'Minimalist Dark · 石板层叠 · 琥珀光晕 · 玻璃质感',
   },
   {
-    id: 'fancy',
-    label: '花哨',
-    description: '渐变撞色 · 粗边框 · 几何活泼',
+    id: 'newsprint',
+    label: '纸墨',
+    description: 'Newsprint · 纸感米色 · 衬线排版 · 报刊质感',
   },
 ]
 
@@ -36,6 +35,7 @@ export const LEGACY_THEME_PRESET_MAP: Record<string, ThemePresetId> = {
   default: 'light',
   saas: 'light',
   enterprise: 'deep',
+  fancy: 'newsprint',
 }
 
 /** Naive UI 须用真实 hex（seemly 无法解析 CSS var）— 与 _presets.scss 对齐 */
@@ -49,25 +49,25 @@ export interface PresetNaiveColors {
 
 export const PRESET_NAIVE_COLORS: Record<ThemePresetId, PresetNaiveColors> = {
   light: {
-    primary: '#5c7cfa',
-    primaryHover: '#3d5ae6',
-    primaryMuted: '#a48ef4',
-    primaryBorderSoft: '#e0dfff',
-    textPlaceholder: '#a8aeb8',
+    primary: '#6750A4',
+    primaryHover: '#5E4896',
+    primaryMuted: '#958DA5',
+    primaryBorderSoft: '#CAC4D0',
+    textPlaceholder: '#79747E',
   },
   deep: {
-    primary: '#818cf8',
-    primaryHover: '#6366f1',
-    primaryMuted: '#a5b4fc',
-    primaryBorderSoft: '#312e81',
-    textPlaceholder: '#64748b',
+    primary: '#F59E0B',
+    primaryHover: '#FBBF24',
+    primaryMuted: '#FCD34D',
+    primaryBorderSoft: '#422006',
+    textPlaceholder: '#71717A',
   },
-  fancy: {
-    primary: '#7c3aed',
-    primaryHover: '#6d28d9',
-    primaryMuted: '#c084fc',
-    primaryBorderSoft: '#f0abfc',
-    textPlaceholder: '#a78bfa',
+  newsprint: {
+    primary: '#111111',
+    primaryHover: '#000000',
+    primaryMuted: '#525252',
+    primaryBorderSoft: '#d4d0c8',
+    textPlaceholder: '#9ca3af',
   },
 }
 

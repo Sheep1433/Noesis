@@ -1,4 +1,4 @@
-"""DeepResearchAgent 执行（各 benchmark 共用）。"""
+"""SuperAgent 执行（各 benchmark 共用）。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from agent.deep_research_agent import DeepResearchAgent
+from agent.super_agent import SuperAgent
 from config.agent_workspace_paths import ensure_workspace_dir
 from evals.bootstrap import eval_runtime
 
@@ -66,7 +66,7 @@ async def _run_async(
 ) -> StreamCollector:
     ensure_workspace_dir(user_id, session_id)
     async with eval_runtime():
-        agent = DeepResearchAgent()
+        agent = SuperAgent()
         user = SimpleNamespace(user_id=user_id)
         collector = StreamCollector()
 
@@ -75,7 +75,7 @@ async def _run_async(
                 query,
                 session_id=session_id,
                 current_user=user,
-                qa_type="DEEP_RESEARCH_QA",
+                qa_type="SUPER_AGENT_QA",
             ):
                 collector.consume(chunk)
 
@@ -88,7 +88,7 @@ async def _run_async(
     return collector
 
 
-def run_deep_research(
+def run_super_agent(
     *,
     query: str,
     session_id: str,

@@ -30,7 +30,7 @@ setTimeout(() => {
           content-class="w-full h-full flex"
           :show="appStore.areaLoading"
           :rotate="false"
-          class="bg-#ffffff"
+          class="bg-surface"
           :style="{
             '--n-opacity-spinning': '0',
           }"
@@ -52,7 +52,7 @@ setTimeout(() => {
             overflow-hidden
             py-10
             pr-10
-            style="background: linear-gradient(to bottom, #f8f9fa, #e9ecef)"
+            :style="{ background: 'var(--noesis-layout-shell-bg)' }"
           >
             <div
               size-full

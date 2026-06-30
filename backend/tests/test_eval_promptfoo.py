@@ -65,14 +65,17 @@ def test_golden_yaml_counts():
         assert 20 <= len(points) <= 50, f"{item_id}: {len(points)} points"
 
 
-def test_testpoints_uses_llm_rubric_for_coverage():
+def test_testpoints_uses_python_for_coverage():
     asserts = (_load_config("testpoints").get("defaultTest") or {}).get("assert") or []
     types = [a.get("type") for a in asserts]
-    assert types.count("llm-rubric") == 2
+    assert types.count("python") == 3
+    assert types.count("llm-rubric") == 0
     recall = [a for a in asserts if a.get("metric") == "point_coverage_recall"][0]
     precision = [a for a in asserts if a.get("metric") == "point_coverage_precision"][0]
-    assert recall["type"] == "llm-rubric"
-    assert precision["type"] == "llm-rubric"
+    assert recall["type"] == "python"
+    assert precision["type"] == "python"
+    assert "assert_point_coverage_recall" in recall["value"]
+    assert "assert_point_coverage_precision" in precision["value"]
 
 
 def test_testpoints_includes_metrics():

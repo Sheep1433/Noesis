@@ -4,13 +4,13 @@ from __future__ import annotations
 import pytest
 
 from agent.common_react_agent import GeneralQAAgent
-from agent.deep_research_agent import DeepResearchAgent
+from agent.super_agent import SuperAgent
 from agent.fault_operation_agent import FaultOperationAgent
 
 
 @pytest.mark.parametrize(
     "agent_cls",
-    [GeneralQAAgent, DeepResearchAgent, FaultOperationAgent],
+    [GeneralQAAgent, SuperAgent, FaultOperationAgent],
 )
 @pytest.mark.asyncio
 async def test_cancel_task_matches_session_id(agent_cls) -> None:

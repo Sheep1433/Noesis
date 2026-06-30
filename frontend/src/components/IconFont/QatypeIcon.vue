@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import { qaTypeLabel } from '@/utils/qaType'
+
 // 定义 props
 const props = defineProps({
   qa_type: {
@@ -7,18 +9,7 @@ const props = defineProps({
   },
 })
 
-const buttonLabel = computed(() => {
-  switch (props.qa_type) {
-    case 'DEEP_RESEARCH_QA':
-      return '深度研究'
-    case 'FAULT_OPERATION_QA':
-      return '故障运维'
-    case 'TEST_CASE_QA':
-      return '测试用例'
-    default:
-      return '智能问答'
-  }
-})
+const buttonLabel = computed(() => qaTypeLabel(props.qa_type))
 </script>
 
 <template>
@@ -55,7 +46,7 @@ const buttonLabel = computed(() => {
         </svg>
       </n-icon>
     </template>
-    <template v-if="props.qa_type === 'DEEP_RESEARCH_QA'" #icon>
+    <template v-if="props.qa_type === 'SUPER_AGENT_QA' || props.qa_type === 'DEEP_RESEARCH_QA'" #icon>
       <n-icon size="14">
         <svg
           t="1732528323504"

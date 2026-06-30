@@ -39,6 +39,8 @@ pnpm stylelint      # 样式检查
 - `src/views/chat/messageParts.ts` — 消息部件组装
 - `src/components/MarkdownPreview/` — 流式 Markdown 渲染
 
+**持久化边界**：assistant 消息由后端 `QaService` 落库；前端仅 reduce SSE 到内存中的 `content.parts` 做实时渲染。`[DONE]` / `finish` 用于结束 loading 与 UI 收尾，**不是**入库条件。刷新后以 `GET .../messages` 读库为准。
+
 ### API 层
 
 - `src/api/user.ts`（登录、历史记录）、`chat.ts`、`knowledgeBase.ts`、`skills.ts`
@@ -70,8 +72,8 @@ pnpm stylelint      # 样式检查
 
 - **颜色/圆角/阴影**：组件内使用 `var(--noesis-*)`，禁止新增散落 hex
 - **Naive UI**：`useTheme` + `themeOverrides` 使用 hex 色值（`:color` / `primaryColor` 禁止传 CSS var，seemly 无法解析）；页面样式仍用 CSS 变量
-- **UnoCSS**：`uno.config.ts` 的 `theme.colors` 引用同一套 CSS 变量
-- **主题预设**：`light` / `deep` / `fancy`；侧栏调色盘切换，定义见 `styles/tokens/_presets.scss`
+- **UnoCSS**：`uno.config.ts` 的 `theme.colors` 引用同一套 CSS 变量；`presetIcons.collections` 须用 `() => require('@iconify-json/…')` 函数形式，否则 prod 不生成 Iconify 图标 CSS
+- **主题预设**：`light`（Material You）/ `deep`（Minimalist Dark）/ `newsprint`（纸墨）；侧栏调色盘切换，定义见 `styles/tokens/_semantic.scss`（浅色）与 `_presets.scss`（深/纸墨）
 
 ## 技术要点
 

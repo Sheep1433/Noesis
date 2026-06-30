@@ -1,4 +1,4 @@
-"""Agent 沙箱后端：CompositeBackend + `/research/` 工作区 + `/skills/extensions|custom/`。"""
+"""Agent 沙箱后端：CompositeBackend + `/research/` 工作区 + `/memory/` + `/skills/`。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from agent.backends.mount_paths import (
 )
 from config.agent_workspace_paths import ensure_workspace_dir
 from config.env import get_config
-from config.user_data_paths import ensure_user_skills_dir
+from config.user_data_paths import ensure_user_memory_files, ensure_user_skills_dir
 from services.sandbox_service import user_sandbox_run
 
 SKILL_SOURCES: tuple[SkillSource, ...] = (
@@ -53,6 +53,7 @@ async def agent_sandbox_session(user_id: str, session_id: str) -> AsyncIterator[
     """AIO 模式维护 runner lifecycle；local_shell 仅确保目录存在。"""
     ensure_workspace_dir(user_id, session_id)
     ensure_user_skills_dir(user_id)
+    ensure_user_memory_files(user_id)
     if uses_aio_sandbox():
         async with user_sandbox_run(user_id, session_id):
             yield
@@ -61,7 +62,7 @@ async def agent_sandbox_session(user_id: str, session_id: str) -> AsyncIterator[
 
 
 async def create_agent_backend(user_id: str, session_id: str) -> CompositeBackend:
-    """Agent 文件系统：虚拟 `/research/` 工作区 + extensions/custom 只读 Skills。"""
+    """Agent 文件系统：session `/research/` + 用户 `/memory/` + 只读 Skills。"""
     sandbox = None
     if uses_aio_sandbox():
         sandbox = await create_aio_sandbox_backend(user_id, session_id)

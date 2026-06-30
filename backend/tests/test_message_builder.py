@@ -28,6 +28,28 @@ def test_tool_part_to_dict_snake_case_only() -> None:
     assert "durationMs" not in d
 
 
+def test_append_text_delta_merges_same_parent() -> None:
+    builder = AssistantMessageBuilder()
+    builder.append_text_delta("你")
+    builder.append_text_delta("好")
+    builder.append_text_delta("！")
+    parts = builder.to_dict()["parts"]
+    assert len(parts) == 1
+    assert parts[0]["type"] == "text"
+    assert parts[0]["content"] == "你好！"
+
+
+def test_append_text_delta_new_part_when_parent_changes() -> None:
+    builder = AssistantMessageBuilder()
+    builder.append_text_delta("主", parent_task_call_id=None)
+    builder.append_text_delta("子", parent_task_call_id="task-1")
+    parts = builder.to_dict()["parts"]
+    assert len(parts) == 2
+    assert parts[0]["content"] == "主"
+    assert parts[1]["content"] == "子"
+    assert parts[1]["parent_task_call_id"] == "task-1"
+
+
 def test_append_tool_output_persists_error_status() -> None:
     builder = AssistantMessageBuilder()
     builder.append_tool("bash", {"command": "uptime"}, tool_call_id="tc-1")

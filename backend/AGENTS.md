@@ -24,7 +24,7 @@ backend/
 │   ├── factory.py               # create_noesis_agent
 │   ├── common_react_agent.py    # 通用问答（RAG）
 │   ├── fault_operation_agent.py # 故障运维（MCP + AIO 沙箱）
-│   ├── deep_research_agent.py   # 深度研究（AIO 沙箱 + Skills）
+│   ├── super_agent.py           # 通用超级智能体（AIO 沙箱 + Skills + 用户记忆）
 │   ├── backends/
 │   │   ├── factory.py           # create_agent_backend（唯一入口）
 │   │   ├── agent_filesystem.py  # CompositeBackend + PrefixBackend
@@ -72,7 +72,7 @@ backend/
 
 - **产品模型**：每个 `user_id` **一个** AIO 容器（同用户多 session 复用）；磁盘工作区仍 **per-session**（`users/{uid}/sessions/{sid}/workspace`）。
 - **接入**：`AioSandboxBackend(BaseSandbox)` + PyPI `agent-sandbox`（当前 **0.0.30**，与 `SANDBOX_AIO_IMAGE` 配套）。
-- **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（`/research/` = 当前 session workspace，`/skills/extensions/` + `/skills/custom/` 只读）。
+- **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（`/research/` = session workspace，`/memory/` = 用户记忆，`/skills/extensions|` + `/skills/custom/` 只读）。
 - **生命周期**：`services/sandbox_service.py` 经内网 `sandbox-runner` 起停容器；`user_sandbox_run` 维护 per-user in-flight；**删 session 不 destroy 用户沙箱**。
 - **并发**：对 `(user_id, session_id)` mutex 串行 AIO HTTP（单 shell 会话）。
 - **配置**：`config.yaml` → `sandbox.*`；密钥 `SANDBOX_RUNNER_TOKEN`；Docker bind 根 `NOESIS_HOST_DATA_DIR`。
@@ -182,6 +182,18 @@ Domain → Common
 - 编排入口：`services/qa_service.py`
 - 事件桥接：`domain/chat/streaming/langgraph_sse.py`（`agent.astream_events()`）
 - 核心事件：`reasoning-*`、`text-*`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`
+
+**assistant 落库（同一 `message_id` 单行）**：
+
+| 阶段 | 时机 | `status` |
+|------|------|----------|
+| 骨架 | 流开始前 | `streaming`（空 parts，流式中不 UPDATE 正文） |
+| 终态 completed | `_finalize_streaming_assistant` | `completed` / `error` |
+| 终态 partial | `/stop` → `stop_chat` | `partial` + `finish_reason=stopped` |
+| 终态 partial | 意外断连 → `_handle_stream_client_disconnect` | `partial`（无用户中断文案） |
+
+流式过程中 **不** 按 token/part 增量写 assistant；`_persist_stream_checkpoint` 仅 merge 会话 `extra.context`。
+
 - 跨端约定见 [../AGENTS.md](../AGENTS.md)
 
 ## 安全规范

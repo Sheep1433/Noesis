@@ -31,14 +31,22 @@ from agent.backends.local_shell import create_local_shell_backend
 from agent.backends.mount_paths import (
     AGENT_CUSTOM_SKILLS_ROUTE,
     AGENT_EXTENSIONS_SKILLS_ROUTE,
+    AGENT_MEMORY_ROUTE,
     AGENT_SKILLS_INDEX_ROUTE,
     CUSTOM_SKILLS_CONTAINER_PREFIX,
     EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+    USER_DATA_CONTAINER_PREFIX,
 )
 from config.extensions_paths import skills_root
-from config.user_data_paths import get_user_skills_dir, get_workspace_dir
+from config.user_data_paths import (
+    get_user_agents_md_path,
+    get_user_profile_md_path,
+    get_user_skills_dir,
+    get_workspace_dir,
+)
 
 _READ_ONLY_SKILLS_ERROR = "Skills directory is read-only"
+_READ_ONLY_USER_PROFILE_ERROR = "USER.md is read-only; update via user settings"
 
 
 def _agent_path(path: str) -> str:
@@ -86,6 +94,120 @@ class SkillsIndexBackend(BackendProtocol):
         return [
             FileDownloadResponse(path=path, content=None, error="file_not_found") for path in paths
         ]
+
+
+class UserMemoryBackend(BackendProtocol):
+    """`/memory/` 路由：AGENTS.md 可写，USER.md 只读。"""
+
+    _AGENTS_NAME = "AGENTS.md"
+    _USER_NAME = "USER.md"
+
+    def __init__(self, *, agents_path: Path, user_path: Path) -> None:
+        self._agents_path = agents_path
+        self._user_path = user_path
+
+    def _normalize(self, file_path: str) -> str:
+        path = _agent_path(file_path)
+        name = path.lstrip("/")
+        if name in (self._AGENTS_NAME, self._USER_NAME):
+            return name
+        return ""
+
+    def ls(self, path: str) -> LsResult:
+        if _agent_path(path) not in ("/", ""):
+            return LsResult(entries=None, error="path_not_found")
+        entries: list[FileInfo] = []
+        if self._agents_path.is_file():
+            entries.append({"path": f"/{self._AGENTS_NAME}", "is_dir": False})
+        if self._user_path.is_file():
+            entries.append({"path": f"/{self._USER_NAME}", "is_dir": False})
+        return LsResult(entries=entries)
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        name = self._normalize(file_path)
+        if not name:
+            return ReadResult(error="file_not_found")
+        disk = self._agents_path if name == self._AGENTS_NAME else self._user_path
+        if not disk.is_file():
+            return ReadResult(error="file_not_found")
+        text = disk.read_text(encoding="utf-8")
+        lines = text.splitlines(keepends=True)
+        chunk = "".join(lines[offset : offset + limit])
+        return ReadResult(file_data={"content": chunk, "encoding": "utf-8"})
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        name = self._normalize(file_path)
+        if name == self._USER_NAME:
+            return WriteResult(error=_READ_ONLY_USER_PROFILE_ERROR)
+        if name != self._AGENTS_NAME:
+            return WriteResult(error="file_not_found")
+        self._agents_path.parent.mkdir(parents=True, exist_ok=True)
+        self._agents_path.write_text(content, encoding="utf-8")
+        return WriteResult(path=f"/{self._AGENTS_NAME}")
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        name = self._normalize(file_path)
+        if name == self._USER_NAME:
+            return EditResult(error=_READ_ONLY_USER_PROFILE_ERROR)
+        if name != self._AGENTS_NAME:
+            return EditResult(error="file_not_found")
+        if not self._agents_path.is_file():
+            return EditResult(error="file_not_found")
+        text = self._agents_path.read_text(encoding="utf-8")
+        if old_string not in text:
+            return EditResult(error="old_string not found in file")
+        if replace_all:
+            updated = text.replace(old_string, new_string)
+        else:
+            updated = text.replace(old_string, new_string, 1)
+        self._agents_path.write_text(updated, encoding="utf-8")
+        return EditResult(path=f"/{self._AGENTS_NAME}")
+
+    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+        return GrepResult(matches=[])
+
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        return GlobResult(matches=[])
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        responses: list[FileUploadResponse] = []
+        for agent_path, _ in files:
+            name = self._normalize(agent_path)
+            if name == self._USER_NAME:
+                responses.append(FileUploadResponse(path=agent_path, error="permission_denied"))
+            else:
+                responses.append(FileUploadResponse(path=agent_path, error="file_not_found"))
+        return responses
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        responses: list[FileDownloadResponse] = []
+        for agent_path in paths:
+            name = self._normalize(agent_path)
+            if not name:
+                responses.append(
+                    FileDownloadResponse(path=agent_path, content=None, error="file_not_found")
+                )
+                continue
+            disk = self._agents_path if name == self._AGENTS_NAME else self._user_path
+            if not disk.is_file():
+                responses.append(
+                    FileDownloadResponse(path=agent_path, content=None, error="file_not_found")
+                )
+                continue
+            responses.append(
+                FileDownloadResponse(
+                    path=agent_path,
+                    content=disk.read_bytes(),
+                    error=None,
+                )
+            )
+        return responses
 
 
 class PrefixBackend(SandboxBackendProtocol):
@@ -284,11 +406,17 @@ def build_agent_filesystem_backend(
         shell_timeout=shell_timeout,
     )
 
+    memory = UserMemoryBackend(
+        agents_path=get_user_agents_md_path(user_id),
+        user_path=get_user_profile_md_path(user_id),
+    )
+
     return CompositeBackend(
         default=workspace,
         routes={
             AGENT_SKILLS_INDEX_ROUTE: SkillsIndexBackend(),
             AGENT_EXTENSIONS_SKILLS_ROUTE: extensions,
             AGENT_CUSTOM_SKILLS_ROUTE: custom,
+            AGENT_MEMORY_ROUTE: memory,
         },
     )

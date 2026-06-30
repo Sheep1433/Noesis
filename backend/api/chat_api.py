@@ -486,9 +486,9 @@ async def send_message_stream(
 ):
     """
     会话级流式问答接口：
-    1. 创建用户消息记录
-    2. 根据 qa_type 调用对应 Agent 流式返回
-    3. 流结束后保存 assistant 消息
+    1. 由 QaService.exec_query 写入 user 消息并驱动 Agent SSE
+    2. assistant 在 qa_service 内按骨架—检查点—终态 UPDATE 同一 message_id（不依赖客户端收到 [DONE]）
+    3. 客户端断连时 _event_generator 触发 generator.aclose() 做 partial 落库
 
     返回 SSE 格式事件流
     """

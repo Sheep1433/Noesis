@@ -59,6 +59,8 @@ Noesis/
 
 `reasoning-start/delta/end`、`text-start/delta/end`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`
 
+**assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/prd/platform/SSE流式数据设计.md` §3.3。
+
 ### 认证
 
 Token 存 `sessionStorage`；路由 `meta.requiresAuth`；401 跳转登录。

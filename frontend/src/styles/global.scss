@@ -60,3 +60,30 @@
     resize: none !important;
   }
 }
+
+/* Uno Iconify mask 图标需要 inline-block + currentColor */
+.sidebar-nav-icon,
+.search-chat-trigger__icon,
+.search-chat-input__icon {
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* 上传按钮 — 勿用 Uno bg-primary/N（CSS var 透明度会渲染成纯黑） */
+.chat-composer-upload-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--noesis-composer-upload-border);
+  background: var(--noesis-composer-upload-bg);
+  color: var(--noesis-composer-upload-icon);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.chat-composer-upload-trigger:hover {
+  background: var(--noesis-color-primary-bg-hover);
+  border-color: var(--noesis-color-primary-muted);
+}

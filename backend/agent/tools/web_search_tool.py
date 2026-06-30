@@ -52,7 +52,7 @@ def web_fetch(url: str) -> str:
 
 
 def build_web_search_tools() -> list:
-    """构建 web_search + web_fetch；由 COMMON_QA / DEEP_RESEARCH Agent 按需挂载。"""
+    """构建 web_search + web_fetch；由 COMMON_QA / SUPER_AGENT Agent 按需挂载。"""
     return [
         StructuredTool.from_function(
             func=web_search,

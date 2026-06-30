@@ -474,7 +474,7 @@ class LangGraphSseBridge:
         buf = ctx.get("text_buffer") or ""
         parent = ctx.get("text_buffer_parent_task_call_id")
         if builder and buf:
-            builder.append_text(buf, parent_task_call_id=parent)
+            builder.append_text_delta(buf, parent_task_call_id=parent)
         ctx["text_buffer"] = ""
         ctx["text_buffer_parent_task_call_id"] = None
 

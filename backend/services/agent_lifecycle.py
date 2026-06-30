@@ -10,12 +10,12 @@ async def cancel_session_agent_runs(session_id: str) -> None:
     from services.qa_service import (
         case_coordinator,
         common_agent,
-        deep_research_agent,
+        super_agent,
         fault_agent,
     )
 
     await common_agent.cancel_task(session_id)
     await fault_agent.cancel_task(session_id)
-    await deep_research_agent.cancel_task(session_id)
+    await super_agent.cancel_task(session_id)
     await case_coordinator.cancel_task(session_id)
     logger.info("已请求取消 session Agent runs session_id={}", session_id)

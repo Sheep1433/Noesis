@@ -146,7 +146,8 @@ COMMON_QA 的 `astream_events` 输出 SHALL 经 `qa_service` 中的 `LangGraphSs
 #### Scenario: 用户消息与 assistant 骨架由平台层处理
 
 - **WHEN** 流式连接建立且用户问题非空
-- **THEN** user 消息持久化与 assistant `streaming` 骨架插入 SHALL 由 `qa_service` 平台逻辑完成（见平台聊天 spec）
+- **THEN** user 消息持久化与 assistant `streaming` 骨架插入 SHALL 由 `qa_service` 平台逻辑完成（见平台聊天 spec「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」）
+- **AND** 终态落库 SHALL 为同一 `message_id` 的 UPDATE，SHALL NOT 因断连与正常结束重复 INSERT
 - **AND** `GeneralQAAgent` SHALL NOT 自行写入数据库
 
 ### Requirement: COMMON_QA 停止生成 SHALL 取消 GeneralQAAgent 任务

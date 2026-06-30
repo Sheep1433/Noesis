@@ -13,7 +13,7 @@ class IntentEnum(Enum):
 
     COMMON_QA = ("COMMON_QA", "智能问答")
 
-    DEEP_RESEARCH_QA = ("DEEP_RESEARCH_QA", "深度研究")
+    SUPER_AGENT_QA = ("SUPER_AGENT_QA", "智能体")
 
     FAULT_OPERATION_QA = ("FAULT_OPERATION_QA", "故障运维")
 

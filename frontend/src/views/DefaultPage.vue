@@ -47,12 +47,13 @@ const cardTestItems = [
 
 const currentPanel = computed(() => {
   switch (props.qaType) {
+    case 'SUPER_AGENT_QA':
     case 'DEEP_RESEARCH_QA':
       return {
-        title: '深度研究',
-        subtitle: '面向调研与报告类问题的检索增强问答',
+        title: '智能体',
+        subtitle: '通用超级智能体：调研、检索、分析与多步任务编排',
         items: cardReportItems,
-        gradientStyle: welcomeGradientStyle('DEEP_RESEARCH_QA'),
+        gradientStyle: welcomeGradientStyle('SUPER_AGENT_QA'),
       }
     case 'FAULT_OPERATION_QA':
       return {
@@ -86,6 +87,12 @@ function openTestCasePage() {
 
 <template>
   <div class="welcome-root">
+    <div class="welcome-atmosphere" aria-hidden="true">
+      <div class="welcome-blob welcome-blob--primary" />
+      <div class="welcome-blob welcome-blob--secondary" />
+      <div class="welcome-blob welcome-blob--tertiary" />
+    </div>
+
     <header class="welcome-header">
       <div class="logo-wrap">
         <div class="brand-mark i-my-svg:system-logo"></div>
@@ -132,11 +139,58 @@ function openTestCasePage() {
 
 <style scoped>
 .welcome-root {
+  position: relative;
   width: 100%;
   max-width: 960px;
   margin: 0 auto;
   padding: 16px 20px 24px;
   box-sizing: border-box;
+  overflow: hidden;
+}
+
+.welcome-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.welcome-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(64px);
+  opacity: 0.22;
+}
+
+.welcome-blob--primary {
+  top: -12%;
+  right: -8%;
+  width: 280px;
+  height: 280px;
+  background: var(--noesis-color-primary);
+}
+
+.welcome-blob--secondary {
+  top: 28%;
+  left: -14%;
+  width: 220px;
+  height: 220px;
+  background: var(--noesis-color-secondary-container);
+}
+
+.welcome-blob--tertiary {
+  bottom: -6%;
+  right: 18%;
+  width: 180px;
+  height: 180px;
+  background: var(--noesis-color-tertiary);
+  opacity: 0.14;
+}
+
+.welcome-header,
+.detail-card {
+  position: relative;
+  z-index: 1;
 }
 
 .welcome-header {
@@ -145,9 +199,9 @@ function openTestCasePage() {
   gap: 16px;
   padding: 16px 18px;
   background: var(--noesis-color-bg-elevated);
-  border-radius: var(--noesis-radius-lg);
+  border-radius: var(--noesis-radius-xl);
   margin-top: 4%;
-  box-shadow: var(--noesis-shadow-md);
+  box-shadow: var(--noesis-shadow-sm);
 }
 
 .logo-wrap {
@@ -193,9 +247,17 @@ function openTestCasePage() {
   gap: 20px 28px;
   padding: 20px 22px;
   border-radius: var(--noesis-radius-xl);
-  border: 1px solid rgb(255 255 255 / 60%);
-  box-shadow: var(--noesis-shadow-lg);
+  border: none;
+  box-shadow: var(--noesis-shadow-sm);
   flex-wrap: wrap;
+  transition:
+    box-shadow var(--noesis-motion-duration) var(--noesis-motion-ease),
+    transform var(--noesis-motion-duration) var(--noesis-motion-ease);
+}
+
+.detail-card:hover {
+  box-shadow: var(--noesis-shadow-md);
+  transform: scale(1.01);
 }
 
 .detail-card__lead {
@@ -222,19 +284,34 @@ function openTestCasePage() {
 }
 
 .link-btn {
-  padding: 0;
+  padding: 6px 14px;
   border: none;
-  background: none;
+  background: var(--noesis-color-primary-bg-hover);
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--noesis-color-primary);
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  border-radius: var(--noesis-radius-pill);
+  transition: all var(--noesis-motion-duration) var(--noesis-motion-ease);
 }
 
 .link-btn:hover {
   color: var(--noesis-color-primary-hover);
+  background: rgb(103 80 164 / 14%);
+}
+
+.link-btn:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-card:hover {
+    transform: none;
+  }
+
+  .link-btn:active {
+    transform: none;
+  }
 }
 
 .detail-card__points {

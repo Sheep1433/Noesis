@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.common_react_agent import GeneralQAAgent
 from agent.fault_operation_agent import FaultOperationAgent
-from agent.deep_research_agent import DeepResearchAgent
+from agent.super_agent import SuperAgent
 from agent.case_generate.case_coordinator import CaseCoordinator
 
 from config.database import AsyncSessionLocal
@@ -38,7 +38,7 @@ from domain.chat.streaming.failure_notice import (
 
 common_agent = GeneralQAAgent()
 fault_agent = FaultOperationAgent()
-deep_research_agent = DeepResearchAgent()
+super_agent = SuperAgent()
 case_coordinator = CaseCoordinator()
 
 SSE_COMMENT_KEEPALIVE = ": keepalive\n\n"
@@ -134,6 +134,29 @@ def _assistant_content_for_persist(
     return content
 
 
+def _resolve_assistant_message_id(
+    ctx: Dict[str, Any],
+    builder: Optional[AssistantMessageBuilder],
+) -> Optional[str]:
+    """流式落库主键：优先 ctx 骨架 id，其次 builder.message_id（与 SSE assistant_message_id 对齐）。"""
+    aid = ctx.get("_assistant_db_id")
+    if aid:
+        return str(aid)
+    if builder is not None:
+        mid = getattr(builder, "message_id", None)
+        if mid:
+            return str(mid)
+    return None
+
+
+def _stream_terminal_persist_done(ctx: Dict[str, Any]) -> bool:
+    return bool(ctx.get("user_stopped") or ctx.get("_stream_persist_finalized"))
+
+
+def _mark_stream_persist_finalized(ctx: Dict[str, Any]) -> None:
+    ctx["_stream_persist_finalized"] = True
+
+
 async def _finalize_streaming_assistant(
     *,
     builder: Optional[AssistantMessageBuilder],
@@ -143,32 +166,32 @@ async def _finalize_streaming_assistant(
     user_id: str,
     qa_type: str,
 ) -> None:
+    if _stream_terminal_persist_done(ctx):
+        return
     if ctx.get("text_buffer") and builder:
-        builder.append_text(ctx["text_buffer"])
+        builder.append_text_delta(
+            ctx["text_buffer"],
+            parent_task_call_id=ctx.get("text_buffer_parent_task_call_id"),
+        )
         ctx["text_buffer"] = ""
+        ctx["text_buffer_parent_task_call_id"] = None
     fin_reason = bridge.last_finish_reason or "stop"
     status = _assistant_status_for_finish(fin_reason)
     error_detail = bridge.last_error_message if fin_reason == "error" else ""
     content = _assistant_content_for_persist(builder, error_detail=error_detail)
     extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge)
-    aid = ctx.get("_assistant_db_id")
-    if aid:
-        await _persist_assistant(
-            content,
-            session_id,
-            user_id,
-            status=status,
-            extra=extra,
-            assistant_message_id=aid,
-        )
-    elif builder and not builder.is_empty():
-        await _persist_assistant(
-            content,
-            session_id,
-            user_id,
-            status=status,
-            extra=extra,
-        )
+    aid = _resolve_assistant_message_id(ctx, builder)
+    if not aid and (not builder or builder.is_empty()):
+        return
+    await _persist_assistant(
+        content,
+        session_id,
+        user_id,
+        status=status,
+        extra=extra,
+        assistant_message_id=aid,
+    )
+    _mark_stream_persist_finalized(ctx)
 
 
 async def _insert_streaming_assistant_skeleton(
@@ -216,21 +239,11 @@ async def _persist_stream_checkpoint(
     session_id: str,
     user_id: str,
 ) -> None:
-    _flush_ctx_text_buffer(ctx, builder)
+    """流式过程中仅落库会话 context 快照；assistant 正文在终态/断连时一次性写入。"""
     if bridge.consume_session_context_tick():
         await _persist_session_context_snapshot(bridge, session_id, user_id)
-    if not bridge.consume_persist_tick() or not ctx.get("_assistant_db_id"):
-        return
-    try:
-        await _persist_assistant(
-            _assistant_content_snapshot(builder),
-            session_id,
-            user_id,
-            status="streaming",
-            assistant_message_id=ctx["_assistant_db_id"],
-        )
-    except Exception:
-        logger.exception(f"assistant 流式检查点落库失败 session_id={session_id}")
+    if bridge.consume_persist_tick():
+        pass  # 丢弃 part 边界 tick，避免误触中间态 assistant 落库
 
 
 async def _persist_session_context_snapshot(
@@ -298,7 +311,6 @@ async def _finalize_sse_bridge_stream(
     session_id: str,
     user_id: str,
 ) -> AsyncGenerator[str, None]:
-    _flush_ctx_text_buffer(ctx, builder)
     finish_reason = "stopped" if ctx.get("user_stopped") else None
     for sse_line in bridge.finalize(finish_reason=finish_reason):
         yield sse_line
@@ -321,7 +333,7 @@ def _flush_ctx_text_buffer(
     if not buf or builder is None:
         return
     parent = ctx.get("text_buffer_parent_task_call_id")
-    builder.append_text(buf, parent_task_call_id=parent)
+    builder.append_text_delta(buf, parent_task_call_id=parent)
     ctx["text_buffer"] = ""
     ctx["text_buffer_parent_task_call_id"] = None
 
@@ -336,6 +348,8 @@ async def _persist_disconnect_partial(
     assistant_message_id: Optional[str],
 ) -> None:
     """连接意外断开：partial 落库，无用户中断文案。"""
+    if _stream_terminal_persist_done(ctx):
+        return
     _flush_ctx_text_buffer(ctx, builder)
     if builder and not builder.is_empty():
         content = append_disconnect_partial_content(builder.to_dict())
@@ -366,6 +380,7 @@ async def _persist_disconnect_partial(
             logger.exception(
                 f"连接中断 assistant 空内容落库失败: session_id={session_id} user_id={user_id}"
             )
+    _mark_stream_persist_finalized(ctx)
 
 
 async def _handle_stream_client_disconnect(
@@ -378,16 +393,17 @@ async def _handle_stream_client_disconnect(
     log_label: str,
 ) -> None:
     """客户端断开连接：将已生成内容 partial 落库（shield 避免 CancelledError 打断 commit）。"""
-    if (ctx or {}).get("user_stopped"):
+    stream_ctx = ctx or {}
+    if _stream_terminal_persist_done(stream_ctx):
         return
-    aid = (ctx or {}).get("_assistant_db_id")
     stream_state = QaService._active_streams.get(session_id)
     persist_b = stream_state.builder if stream_state else builder
+    aid = _resolve_assistant_message_id(stream_ctx, persist_b)
     try:
         await asyncio.shield(
             _persist_disconnect_partial(
                 builder=persist_b,
-                ctx=ctx or {},
+                ctx=stream_ctx,
                 session_id=session_id,
                 user_id=user_id,
                 qa_type=qa_type,
@@ -395,6 +411,8 @@ async def _handle_stream_client_disconnect(
             )
         )
     except asyncio.CancelledError:
+        if _stream_terminal_persist_done(stream_ctx):
+            raise
         logger.warning(
             f"{log_label} 断开落库被取消，尝试 detached 落库 session_id={session_id} "
             f"assistant_db_id={aid}"
@@ -402,7 +420,7 @@ async def _handle_stream_client_disconnect(
         asyncio.create_task(
             _persist_disconnect_partial(
                 builder=persist_b,
-                ctx=ctx or {},
+                ctx=stream_ctx,
                 session_id=session_id,
                 user_id=user_id,
                 qa_type=qa_type,
@@ -492,8 +510,8 @@ class QaService:
                     req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                 )
-            elif req_obj.qa_type == IntentEnum.DEEP_RESEARCH_QA.value[0]:
-                agent_generator = deep_research_agent.run_agent(
+            elif req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
+                agent_generator = super_agent.run_agent(
                     clean_query,
                     session_id=session_id,
                     current_user=current_user,
@@ -632,6 +650,7 @@ class QaService:
                         ),
                         assistant_message_id=aid,
                     )
+                    _mark_stream_persist_finalized(ctx)
                 except Exception:
                     logger.exception(
                         f"QA 异常路径 assistant 落库失败: session_id={session_id} user_id={current_user.user_id}"
@@ -649,6 +668,7 @@ class QaService:
                         ),
                         assistant_message_id=aid,
                     )
+                    _mark_stream_persist_finalized(ctx)
                 except Exception:
                     logger.exception(
                         f"QA 异常路径 assistant 空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
@@ -844,6 +864,7 @@ class QaService:
                         ),
                         assistant_message_id=aid,
                     )
+                    _mark_stream_persist_finalized(ctx)
                 except Exception:
                     logger.exception(
                         f"测试用例 resume 异常路径 assistant 落库失败: session_id={session_id} user_id={current_user.user_id}"
@@ -861,6 +882,7 @@ class QaService:
                         ),
                         assistant_message_id=aid,
                     )
+                    _mark_stream_persist_finalized(ctx)
                 except Exception:
                     logger.exception(
                         f"测试用例 resume 异常路径空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
@@ -998,9 +1020,9 @@ class QaService:
             status, msg = await case_coordinator.cancel_task(session_id)
             logger.info(f"stop_chat cancel_task TEST_CASE session_id={session_id} ok={status} msg={msg}")
             return status, msg
-        if qa_type == IntentEnum.DEEP_RESEARCH_QA.value[0]:
-            status = await deep_research_agent.cancel_task(session_id)
-            logger.info(f"stop_chat cancel_task DEEP_RESEARCH session_id={session_id} marked={status}")
+        if qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
+            status = await super_agent.cancel_task(session_id)
+            logger.info(f"stop_chat cancel_task SUPER_AGENT session_id={session_id} marked={status}")
             return status, "停止成功"
 
         logger.warning(f"stop_chat 未知 qa_type session_id={session_id} qa_type={qa_type}")

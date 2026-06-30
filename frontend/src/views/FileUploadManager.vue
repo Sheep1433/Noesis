@@ -374,64 +374,140 @@ const UploadWrapperItem = defineComponent({
     const fileName = computed(() => props.fileInfo.name || '')
     const previewImageUrl = ref('')
 
-    watchEffect(() => {
+    watchEffect((onCleanup) => {
       const file = props.fileInfo.file
       if (file && isImageUploadFile(file)) {
-        previewImageUrl.value = URL.createObjectURL(file)
+        const url = URL.createObjectURL(file)
+        previewImageUrl.value = url
+        onCleanup(() => URL.revokeObjectURL(url))
+      } else {
+        previewImageUrl.value = ''
       }
     })
 
     const currentStatus = computed(() => statusList.value.find((item) => item.status === _status.value))
 
+    const showStatus = computed(() => {
+      const status = _status.value
+      if (status === 'failed' || status === 'parsing') {
+        return true
+      }
+      // chat 模式 pending / 已就绪不展示状态行，避免「待发送」误解
+      if (props.deferUpload) {
+        return false
+      }
+      return status === 'success'
+    })
+
+    const deferTooltip = computed(() => {
+      if (!props.deferUpload || _status.value !== 'queued') {
+        return ''
+      }
+      return '发送消息时会上传'
+    })
+
     const fileIcon = computed(() => getFileTypeIconClass(fileName.value))
+
+    const removeButton = () => (
+      <div class="absolute z-2 top--6 right--6 group-hover:opacity-100 opacity-0 transition-all-300">
+        <div
+          class="text-18 c-info cursor-pointer i-famicons:remove-circle-outline transition-all-300 hover:c-primary bg-white rounded-50%"
+          onClick={(e: Event) => {
+            e.stopPropagation()
+            emit('remove')
+          }}
+        >
+        </div>
+      </div>
+    )
 
     return {
       isImage,
       previewImageUrl,
       fileName,
       currentStatus,
+      showStatus,
+      deferTooltip,
       fileIcon,
       removeFile: () => emit('remove'),
+      removeButton,
     }
   },
   render() {
-    return (
+    if (this.isImage && this.previewImageUrl) {
+      const imageChip = (
+        <div
+          class={[
+            'relative size-52 shrink-0 b b-solid b-bgcolor rounded-8 overflow-hidden group transition-all-300',
+            this.currentStatus?.status === 'failed' ? 'b-red-400' : '',
+            this.currentStatus?.status === 'parsing' ? 'opacity-70' : '',
+          ]}
+        >
+          {this.removeButton()}
+          <n-image
+            width={52}
+            height={52}
+            src={this.previewImageUrl}
+            previewSrc={this.previewImageUrl}
+            objectFit="cover"
+            class="size-full cursor-pointer"
+            alt={this.fileName}
+          />
+          {this.currentStatus?.status === 'parsing'
+            ? (
+                <div class="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
+                  <span class="text-16 c-white i-svg-spinners:6-dots-rotate"></span>
+                </div>
+              )
+            : null}
+        </div>
+      )
+
+      if (this.deferTooltip) {
+        return (
+          <n-tooltip trigger="hover">
+            {{
+              trigger: () => imageChip,
+              default: () => this.deferTooltip,
+            }}
+          </n-tooltip>
+        )
+      }
+      return imageChip
+    }
+
+    const docChip = (
       <div
-        class="relative w-200 px-16 py-5 b b-solid b-bgcolor rounded-8 group transition-all-300"
+        class={[
+          'relative w-200 px-16 py-5 b b-solid b-bgcolor rounded-8 group transition-all-300',
+          this.currentStatus?.status === 'failed' ? 'b-red-400' : '',
+        ]}
         flex="~ gap-5 items-center"
       >
-        <div class="absolute z-1 top--9 right--9 group-hover:opacity-100 opacity-0 transition-all-300">
-          <div
-            class="text-20 c-info cursor-pointer i-famicons:remove-circle-outline transition-all-300 hover:c-primary"
-            onClick={this.removeFile}
-          >
-          </div>
-        </div>
-        <div class="size-30">
-          {
-            this.isImage
-              ? (
-                  <img src={this.previewImageUrl} class="size-full object-contain" />
-                )
-              : (
-                  <div class={[this.fileIcon, 'size-full opacity-80']}></div>
-                )
-          }
+        {this.removeButton()}
+        <div class="size-40 shrink-0">
+          <div class={[this.fileIcon, 'size-full opacity-80']}></div>
         </div>
         <div flex="1 ~ col gap-2" class="min-w-0 text-13 overflow-x-hidden">
           <n-ellipsis tooltip>
             {{
               default: () => this.fileName,
-              tooltip: () => this.fileName,
+              tooltip: () => this.deferTooltip || this.fileName,
             }}
           </n-ellipsis>
-          <div flex="~ gap-3 items-center" class="text-[#999]">
-            <span class={['text-12', this.currentStatus?.icon]}></span>
-            <span class="text-11">{this.currentStatus?.text}</span>
-          </div>
+          {this.showStatus
+            ? (
+                <div flex="~ gap-3 items-center" class="text-[#999]">
+                  <span class={['text-12', this.currentStatus?.icon]}></span>
+                  <span class="text-11">{this.currentStatus?.text}</span>
+                </div>
+              )
+            : null}
         </div>
       </div>
     )
+
+    return docChip
   },
 })
 

@@ -4,29 +4,29 @@
  */
 
 export const themeColors = {
-  primary: '#5c7cfa',
-  primaryHover: '#3d5ae6',
-  primaryMuted: '#a48ef4',
-  primarySubtle: '#cac9f9',
+  primary: '#6750A4',
+  primaryHover: '#5E4896',
+  primaryMuted: '#958DA5',
+  primarySubtle: '#E8DEF8',
   success: '#51cf66',
   warning: '#fab005',
   danger: '#ff6b6b',
   info: '#868e96',
-  bg: '#f6f7fb',
-  bgElevated: '#ffffff',
-  bgMuted: '#e8eaf2',
-  border: '#e8eaf3',
-  text: '#1a1d33',
-  textHeading: '#14162b',
-  textSecondary: '#4a5068',
-  textBody: '#3d4159',
-  textTab: '#585a73',
-  textNav: '#26244c',
-  primaryBorderSoft: '#e0dfff',
-  primaryTextSoft: '#b1adf3',
+  bg: '#FFFBFE',
+  bgElevated: '#F3EDF7',
+  bgMuted: '#E7E0EC',
+  border: '#CAC4D0',
+  text: '#1C1B1F',
+  textHeading: '#1C1B1F',
+  textSecondary: '#49454F',
+  textBody: '#1C1B1F',
+  textTab: '#49454F',
+  textNav: '#1C1B1F',
+  primaryBorderSoft: '#CAC4D0',
+  primaryTextSoft: '#6750A4',
   qaFault: '#e67e22',
   qaTest: '#16a085',
-  blockLightIcon: '#3d5a80',
+  blockLightIcon: '#6750A4',
   blockDarkIcon: '#8bd9f0',
 } as const
 
@@ -45,11 +45,17 @@ export const themeCssVar = {
   sidebarBg: '--noesis-sidebar-bg',
 } as const
 
-export type QaTypeKey = 'COMMON_QA' | 'DEEP_RESEARCH_QA' | 'FAULT_OPERATION_QA' | 'TEST_CASE_QA'
+export type QaTypeKey =
+  | 'COMMON_QA'
+  | 'SUPER_AGENT_QA'
+  | 'DEEP_RESEARCH_QA'
+  | 'FAULT_OPERATION_QA'
+  | 'TEST_CASE_QA'
 
 /** 欢迎页 QA 卡片 — 对应 CSS 变量名 */
 export const welcomeGradientVar: Record<QaTypeKey, string> = {
   COMMON_QA: '--noesis-welcome-gradient-common',
+  SUPER_AGENT_QA: '--noesis-welcome-gradient-research',
   DEEP_RESEARCH_QA: '--noesis-welcome-gradient-research',
   FAULT_OPERATION_QA: '--noesis-welcome-gradient-fault',
   TEST_CASE_QA: '--noesis-welcome-gradient-test',
