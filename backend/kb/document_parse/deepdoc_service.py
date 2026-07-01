@@ -194,12 +194,13 @@ def _parse_txt(file_path: str) -> List[DeepDocBlock]:
 def parse_file_with_deepdoc(
     file_path: str,
     *,
+    source_file_name: Optional[str] = None,
     domain: Optional[str] = None,
     business: Optional[str] = None,
 ) -> DeepDocParseResult:
     ensure_deepdoc_bootstrap()
     ext = os.path.splitext(file_path)[-1].lower()
-    file_name = os.path.basename(file_path)
+    file_name = (source_file_name or "").strip() or os.path.basename(file_path)
     file_type = ext.lstrip(".")
     update_time = datetime.now().isoformat()
 

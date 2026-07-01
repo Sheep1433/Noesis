@@ -581,6 +581,7 @@ class QdrantService:
                     file_path,
                     collection_name=collection_name,
                     file_hash=file_hash,
+                    source_file_name=file_name,
                     parser_id=parser_id,
                 )
                 if parsed.deepdoc_result and parsed.deepdoc_result.deepdoc_version:

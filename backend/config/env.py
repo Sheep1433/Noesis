@@ -300,6 +300,7 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
     loop = yaml_cfg.loop_detection
     runtime = yaml_cfg.agent_runtime
     vlm_api_key = secrets.vlm_model_api_key or _legacy_env("VL_MODEL_API_KEY", "")
+    rerank_api_key = (secrets.rerank_model_api_key or secrets.embedding_model_api_key or "").strip()
     return ModelSettings(
         model_type=_legacy_env("MODEL_TYPE", m.type),
         model_name=_legacy_env("MODEL_NAME", m.name),
@@ -311,7 +312,7 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         embedding_model_api_key=secrets.embedding_model_api_key,
         rerank_model_name=_legacy_env("RERANK_MODEL_NAME", rerank.name),
         rerank_model_base_url=_legacy_env("RERANK_MODEL_BASE_URL", rerank.base_url),
-        rerank_model_api_key=secrets.rerank_model_api_key,
+        rerank_model_api_key=rerank_api_key,
         vlm_model_name=_legacy_env("VLM_MODEL_NAME", vlm.name),
         vlm_model_base_url=_legacy_env("VLM_MODEL_BASE_URL", vlm.base_url),
         vlm_model_api_key=vlm_api_key,

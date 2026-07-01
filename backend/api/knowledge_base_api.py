@@ -3,8 +3,6 @@
 """
 import json
 import logging
-import os
-import tempfile
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -37,6 +35,7 @@ from kb.chunk import (
     normalize_query_execution_params,
     resolve_effective_processing_params,
 )
+from kb.document_parse.staging import sanitize_kb_filename, write_staging
 from config.env import QdrantConfig
 from config.get_db import get_db
 from common.http.response import ResponseUtil
@@ -369,11 +368,9 @@ async def upload_document(
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail=f"processing_params JSON 无效: {exc}") from exc
 
-    suffix = os.path.splitext(file.filename)[1] if file.filename else '.tmp'
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-        content = await file.read()
-        tmp_file.write(content)
-        tmp_path = tmp_file.name
+    original_name = sanitize_kb_filename(file.filename or "unknown")
+    content = await file.read()
+    staging_path, _file_hash = write_staging(collection_name, content, original_name)
 
     try:
         service = QdrantService()
@@ -389,8 +386,8 @@ async def upload_document(
 
         result = service.upload_document(
             collection_name=collection_name,
-            file_name=file.filename or 'unknown',
-            file_path=tmp_path,
+            file_name=original_name,
+            file_path=str(staging_path),
             vector_dim=vector_dim,
             effective_processing_params=effective,
         )
@@ -404,7 +401,7 @@ async def upload_document(
         return UploadResponse(
             success=True,
             message=result['message'],
-            file_name=file.filename,
+            file_name=original_name,
             shards_created=result['shards_created'],
             extracted_markdown=result.get('extracted_markdown'),
         )
@@ -414,8 +411,8 @@ async def upload_document(
         logger.error(f"上传文档失败: {e}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}") from e
     finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        if staging_path.exists():
+            staging_path.unlink()
 
 
 @knowledge_base_router.post('/collections/{collection_name}/search')

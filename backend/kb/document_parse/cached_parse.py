@@ -7,6 +7,7 @@ from kb.document_parse.factory import ParserFactory
 from kb.document_parse.models import ParsedFile
 from kb.document_parse.parse_cache import load_parse_cache, save_parse_cache
 from kb.document_parse.deepdoc_service import parse_file_with_deepdoc
+from kb.document_parse.source_name import apply_source_file_name
 
 
 def parse_file_cached(
@@ -14,6 +15,7 @@ def parse_file_cached(
     *,
     collection_name: str,
     file_hash: str,
+    source_file_name: Optional[str] = None,
     domain: Optional[str] = None,
     business: Optional[str] = None,
     parser_id: Optional[str] = None,
@@ -26,10 +28,19 @@ def parse_file_cached(
     if use_cache and file_hash:
         cached = load_parse_cache(collection_name, file_hash)
         if cached is not None:
+            if source_file_name:
+                cached.source_file_name = source_file_name.strip()
             cached.file_path = file_path
-            return ParserFactory.from_deepdoc_result(cached)
+            parsed = ParserFactory.from_deepdoc_result(cached)
+            return apply_source_file_name(parsed, source_file_name or parsed.file_name)
 
-    result = parse_file_with_deepdoc(file_path, domain=domain, business=business)
+    result = parse_file_with_deepdoc(
+        file_path,
+        source_file_name=source_file_name,
+        domain=domain,
+        business=business,
+    )
     if file_hash:
         save_parse_cache(collection_name, file_hash, result)
-    return ParserFactory.from_deepdoc_result(result)
+    parsed = ParserFactory.from_deepdoc_result(result)
+    return apply_source_file_name(parsed, source_file_name or parsed.file_name)

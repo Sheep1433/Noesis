@@ -47,7 +47,7 @@ import DocumentDrawer from '@/components/KnowledgeBase/DocumentDrawer.vue'
 import KbSearchPanel from '@/components/KnowledgeBase/KbSearchPanel.vue'
 import KbSearchResults from '@/components/KnowledgeBase/KbSearchResults.vue'
 import ShardDetail from '@/components/KnowledgeBase/ShardDetail.vue'
-import { DEEPDOC_FORMATS, fileTypeLabel, formatKbDate, shortHash } from '@/utils/kbFormat'
+import { fileTypeLabel, formatKbDate, shortHash, SUPPORTED_DOC_FORMATS } from '@/utils/kbFormat'
 
 const router = useRouter()
 const route = useRoute()
@@ -98,7 +98,6 @@ const configUseReranker = ref<boolean | null>(null)
 const configScoreThreshold = ref<number | null>(null)
 const configRrfK = ref<number | null>(null)
 
-const parserId = computed(() => collectionConfig.value?.processing_params?.parser_id || 'deepdoc')
 const chunkPreset = computed(() =>
   collectionConfig.value?.processing_params?.chunk_preset_id
   || collectionConfig.value?.processing_params?.chunk_template_id
@@ -442,7 +441,7 @@ async function saveCollectionConfig() {
         <h1>{{ collectionName }}</h1>
         <div v-if="collectionDetail" class="detail-meta">
           <n-tag size="small" type="success" :bordered="false">
-            DeepDoc
+            智能解析
           </n-tag>
           <n-tag size="small" :bordered="false">
             维度 {{ collectionDetail.vector_dimension }}
@@ -455,7 +454,7 @@ async function saveCollectionConfig() {
           </n-tag>
         </div>
         <p class="pipeline-hint">
-          入库流水线：DeepDoc 解析 → {{ chunkPreset }} 分块 → Embedding → Qdrant
+          入库流程：版式解析 → {{ chunkPreset }} 分块 → 向量化 → 入库
         </p>
       </div>
       <n-space>
@@ -513,7 +512,7 @@ async function saveCollectionConfig() {
           </n-icon>
           检索调试
         </template>
-        <div class="tab-panel">
+        <div class="tab-panel tab-panel--search">
           <KbSearchPanel
             v-model:query="searchQuery"
             v-model:search-mode="searchMode"
@@ -530,12 +529,13 @@ async function saveCollectionConfig() {
             :default-rrf-k="defaultRrfK as number"
             @search="handleSearch"
           />
-          <KbSearchResults
-            class="search-results"
-            :results="searchResults"
-            :loading="searching"
-            @view-shard="openShardDetail"
-          />
+          <div class="search-results-scroll">
+            <KbSearchResults
+              :results="searchResults"
+              :loading="searching"
+              @view-shard="openShardDetail"
+            />
+          </div>
         </div>
       </n-tab-pane>
 
@@ -548,16 +548,13 @@ async function saveCollectionConfig() {
         </template>
         <div class="tab-panel config-layout">
           <section class="config-section">
-            <h3>解析引擎</h3>
+            <h3>文档解析</h3>
             <p class="section-desc">
-              当前平台固定使用 DeepDoc 进行版式解析与表格提取，PDF 需预先下载 ONNX 模型权重。
+              自动识别版式、表格与标题结构；首次解析 PDF 时可能需下载模型文件。
             </p>
             <div class="readonly-tags">
               <n-tag :bordered="false">
-                parser: {{ parserId }}
-              </n-tag>
-              <n-tag :bordered="false">
-                preset: {{ chunkPreset }}
+                分块模板：{{ chunkPreset }}
               </n-tag>
             </div>
           </section>
@@ -636,9 +633,9 @@ async function saveCollectionConfig() {
 
     <n-modal v-model:show="showUploadModal" preset="card" title="上传文档" style="width: 560px" @after-leave="closeUploadModal">
       <div class="upload-intro">
-        <p>DeepDoc 将自动解析版式、表格与标题结构，再分块写入向量库。</p>
+        <p>上传后将自动解析版式、表格与标题结构，再分块写入知识库。</p>
         <div class="format-grid">
-          <div v-for="fmt in DEEPDOC_FORMATS" :key="fmt.ext" class="format-item">
+          <div v-for="fmt in SUPPORTED_DOC_FORMATS" :key="fmt.ext" class="format-item">
             <strong>{{ fmt.ext }}</strong>
             <span>{{ fmt.desc }}</span>
           </div>
@@ -741,13 +738,46 @@ async function saveCollectionConfig() {
   flex-direction: column;
 }
 
+.detail-tabs :deep(.n-tabs) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
 .detail-tabs :deep(.n-tabs-pane-wrapper) {
   flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+}
+
+.detail-tabs :deep(.n-tab-pane) {
+  height: 100%;
 }
 
 .tab-panel {
   padding: 12px 4px 20px;
+}
+
+.tab-panel--search {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  padding-bottom: 0;
+}
+
+.search-results-scroll {
+  flex: 1;
+  min-height: 0;
+  margin-top: 16px;
+  padding: 16px 0 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-top: 1px dashed var(--noesis-color-border);
+  -webkit-overflow-scrolling: touch;
 }
 
 .tab-panel :deep(.doc-link),
@@ -764,12 +794,6 @@ async function saveCollectionConfig() {
 .tab-panel :deep(.hash-link) {
   font-family: ui-monospace, monospace;
   font-size: 12px;
-}
-
-.search-results {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px dashed var(--noesis-color-border);
 }
 
 .config-layout {

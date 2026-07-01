@@ -263,7 +263,7 @@ export async function deleteCollection(collectionName: string): Promise<{ succes
   return response.json()
 }
 
-/** 上传文档（DeepDoc 解析入库） */
+/** 上传文档（解析分块后写入知识库） */
 export async function uploadDocument(
   collectionName: string,
   file: File,

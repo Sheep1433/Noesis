@@ -168,7 +168,6 @@ function scoreBreakdown(result: SearchResult): string {
   border: 1px solid var(--noesis-color-border);
   border-radius: var(--noesis-radius-sm);
   margin-bottom: 10px;
-  overflow: hidden;
   background: var(--noesis-color-bg-elevated);
 }
 
@@ -183,6 +182,7 @@ function scoreBreakdown(result: SearchResult): string {
   cursor: pointer;
   text-align: left;
   font-size: 13px;
+  border-radius: var(--noesis-radius-sm) var(--noesis-radius-sm) 0 0;
 }
 
 .file-group-header:hover {

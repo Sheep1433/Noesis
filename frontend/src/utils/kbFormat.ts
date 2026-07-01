@@ -51,7 +51,8 @@ export function shortHash(hash: string | null | undefined, len = 8): string {
   return hash.length > len * 2 ? `${hash.slice(0, len)}…` : hash
 }
 
-export const DEEPDOC_FORMATS = [
+/** 知识库上传支持的文档格式（界面展示用） */
+export const SUPPORTED_DOC_FORMATS = [
   { ext: 'PDF', desc: '版式/OCR 解析' },
   { ext: 'Word', desc: 'DOCX / DOC' },
   { ext: 'Excel', desc: 'XLSX / XLS / CSV' },

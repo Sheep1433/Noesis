@@ -88,7 +88,7 @@ function handlePageChange(newPage: number) {
 
       <div v-else-if="allShards.length > 0" class="shards-container">
         <div class="shards-header">
-          <span class="shards-count">共 {{ allShards.length }} 个分片（DeepDoc 结构分块）</span>
+          <span class="shards-count">共 {{ allShards.length }} 个分片</span>
         </div>
 
         <div class="shards-grid">

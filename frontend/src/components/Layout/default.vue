@@ -6,6 +6,13 @@ defineOptions({
 
 <template>
   <router-view v-slot="{ Component }">
-    <Component :is="Component" />
+    <component :is="Component" class="layout-page" />
   </router-view>
 </template>
+
+<style scoped>
+.layout-page {
+  height: 100%;
+  min-height: 0;
+}
+</style>

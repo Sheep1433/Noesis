@@ -57,7 +57,7 @@ embedding:
 
 rerank:
   name: gte-rerank-v2
-  # 精排走 DashScope text-rerank API；密钥见 .env RERANK_MODEL_API_KEY
+  # 精排走 DashScope text-rerank API；密钥默认复用 .env 中 EMBEDDING_MODEL_API_KEY
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
 vlm:

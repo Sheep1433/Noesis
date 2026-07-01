@@ -137,7 +137,7 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
           知识库
         </h1>
         <p class="kb-subtitle">
-          DeepDoc 文档解析 · 结构分块 · Hybrid 检索 · 向量精排
+          智能文档解析 · 结构分块 · 混合检索 · 向量精排
         </p>
       </div>
       <n-space>
@@ -233,7 +233,7 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
           </div>
           <div class="kb-card-tags">
             <n-tag size="small" :bordered="false" type="success">
-              DeepDoc
+              智能解析
             </n-tag>
             <n-tag size="small" :bordered="false">
               dim {{ collection.vector_dimension }}
