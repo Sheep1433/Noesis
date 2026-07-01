@@ -1,6 +1,6 @@
 """Summarization + tool-result offload middleware (`before_model`).
 
-When context usage reaches the configured fraction (default 85% of max input):
+When context usage reaches the configured trigger (default 75% of max input via trigger_tokens):
 1. Offload oversized ToolMessage bodies to filesystem when available, else discard.
 2. If still above retention ratio, run LLM summarization via LangChain base class.
 """

@@ -1374,6 +1374,20 @@ function onComposerPaste(e: ClipboardEvent) {
               class="flex-1 min-w-0"
               :background-color="backgroundColorVariable"
             />
+            <button
+              v-if="!showDefaultPage && uuids[qa_type]"
+              type="button"
+              class="session-files-toggle"
+              :class="{ 'session-files-toggle--open': sessionFilesPanelOpen }"
+              :title="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
+              :aria-label="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
+              @click="toggleSessionFilesPanel"
+            >
+              <span
+                class="session-files-toggle__icon"
+                :class="sessionFilesPanelOpen ? 'i-carbon:side-panel-close' : 'i-carbon:side-panel-open'"
+              />
+            </button>
           </div>
 
           <!-- 这里循环渲染即可实现多轮对话 -->
@@ -1934,20 +1948,6 @@ function onComposerPaste(e: ClipboardEvent) {
               :background-color="backgroundColorVariable"
             />
           </aside>
-          <button
-            v-if="!showDefaultPage && uuids[qa_type]"
-            type="button"
-            class="session-files-toggle"
-            :class="{ 'session-files-toggle--open': sessionFilesPanelOpen }"
-            :title="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
-            :aria-label="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
-            @click="toggleSessionFilesPanel"
-          >
-            <span
-              class="session-files-toggle__icon"
-              :class="sessionFilesPanelOpen ? 'i-carbon:side-panel-close' : 'i-carbon:side-panel-open'"
-            />
-          </button>
         </div>
       </n-layout-content>
     </n-layout>
@@ -2251,15 +2251,12 @@ function onComposerPaste(e: ClipboardEvent) {
   overflow: hidden;
 }
 
-/* 文件区折叠钮 — 尺寸与左侧 Naive layout-toggle-button 对齐 */
+/* 文件区折叠钮 — 顶栏右上角，尺寸与左侧 Naive layout-toggle-button 对齐 */
 .session-files-toggle {
-  position: fixed;
-  top: 50%;
-  right: 0;
-  z-index: 1100;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 24px;
   height: 24px;
   margin: 0;
@@ -2270,23 +2267,17 @@ function onComposerPaste(e: ClipboardEvent) {
   box-shadow: var(--noesis-shadow-sm);
   color: var(--noesis-color-text-secondary);
   cursor: pointer;
-  transform: translate(50%, -50%);
   transition:
-    right 0.25s ease,
-    transform 0.25s ease,
     color 0.15s ease,
     border-color 0.15s ease,
     background-color 0.15s ease;
 }
 
-.session-files-toggle:hover {
+.session-files-toggle:hover,
+.session-files-toggle--open {
   color: var(--noesis-color-primary);
   border-color: var(--noesis-color-primary-muted);
   background: var(--noesis-color-primary-bg-subtle);
-}
-
-.session-files-toggle--open {
-  right: 320px;
 }
 
 .session-files-toggle__icon {
@@ -2439,6 +2430,7 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .chat-top-bar {
   flex-shrink: 0;
+  gap: 8px;
   padding-right: 12px;
 }
 </style>

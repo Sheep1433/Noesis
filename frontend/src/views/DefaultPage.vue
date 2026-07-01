@@ -297,7 +297,7 @@ function openTestCasePage() {
 
 .link-btn:hover {
   color: var(--noesis-color-primary-hover);
-  background: rgb(103 80 164 / 14%);
+  background: var(--noesis-color-primary-bg-hover);
 }
 
 .link-btn:active {

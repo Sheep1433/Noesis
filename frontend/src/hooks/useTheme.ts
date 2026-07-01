@@ -12,22 +12,22 @@ const baseThemeOverrides: GlobalThemeOverrides = {
   },
 }
 
-/** Material You — 色调表面 + 药丸按钮 */
+/** Flat Design — 纯色块、无阴影、几何圆角 */
 const LIGHT_NAIVE_COMMON: GlobalThemeOverrides['common'] = {
-  bodyColor: '#FFFBFE',
-  cardColor: '#F3EDF7',
-  modalColor: '#F3EDF7',
-  popoverColor: '#F3EDF7',
-  tableColor: '#FFFBFE',
-  borderColor: '#CAC4D0',
-  dividerColor: '#E7E0EC',
-  textColor1: '#1C1B1F',
-  textColor2: '#49454F',
-  textColor3: '#79747E',
-  hoverColor: 'rgba(103, 80, 164, 0.05)',
-  pressedColor: 'rgba(103, 80, 164, 0.08)',
-  borderRadius: '16px',
-  borderRadiusSmall: '8px',
+  bodyColor: '#FFFFFF',
+  cardColor: '#F3F4F6',
+  modalColor: '#FFFFFF',
+  popoverColor: '#FFFFFF',
+  tableColor: '#FFFFFF',
+  borderColor: '#E5E7EB',
+  dividerColor: '#E5E7EB',
+  textColor1: '#111827',
+  textColor2: '#4B5563',
+  textColor3: '#9CA3AF',
+  hoverColor: 'rgba(59, 130, 246, 0.08)',
+  pressedColor: 'rgba(59, 130, 246, 0.12)',
+  borderRadius: '8px',
+  borderRadiusSmall: '6px',
 }
 
 /** Minimalist Dark — Naive 暗色面板与玻璃卡片对齐 */
@@ -60,16 +60,16 @@ function presetNaiveOverrides(presetId: ThemePresetId): GlobalThemeOverrides {
         primaryColorSuppl: naiveColors.primaryMuted,
       },
       Button: {
-        borderRadiusTiny: '9999px',
-        borderRadiusSmall: '9999px',
-        borderRadiusMedium: '9999px',
-        borderRadiusLarge: '9999px',
+        borderRadiusTiny: '6px',
+        borderRadiusSmall: '6px',
+        borderRadiusMedium: '8px',
+        borderRadiusLarge: '8px',
         heightMedium: '40px',
       },
       Input: {
-        color: '#E7E0EC',
-        border: '1px solid transparent',
-        borderRadius: '12px',
+        color: '#F3F4F6',
+        border: '2px solid transparent',
+        borderRadius: '8px',
         placeholderColor: naiveColors.textPlaceholder,
       },
     }

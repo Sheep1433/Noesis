@@ -12,7 +12,7 @@ CORE = """<core>
 </core>"""
 
 THINKING = """<thinking>
-- 先理解任务再行动；复杂任务可拆解步骤
+- 先理解任务再行动；能直接完成时不要叠加重流程
 - 思考用于规划，最终回复须给出实际结论
 </thinking>"""
 
@@ -22,8 +22,7 @@ OUTPUT = """<output>
 </output>"""
 
 SUBAGENT = """<subagent>
-复杂、可拆分的多步任务可用 task 委派子 Agent；简单一两步任务直接完成。
-委派时说明目标与期望输出，汇总子 Agent 结论后回复用户。
+仅当子任务彼此独立且上下文很重时，可用 task 委派 task-worker；链式搜证与多跳检索由主 Agent 自行完成。
 </subagent>"""
 
 def build_base_prompt(*sections: str) -> str:

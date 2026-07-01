@@ -2,7 +2,7 @@
 
 用法：
   uv run python -m evals.case         # 测试用例 Agent
-  uv run python -m evals.agent        # 深度研究 Agent
+  uv run python -m evals.agent        # Agent 评测（BrowseComp / Harbor）
   uv run python -m evals.compression  # 消息压缩
 """
 
@@ -13,7 +13,6 @@ import sys
 MODULES = (
     ("evals.case", "测试用例 Agent（promptfoo + L0/coverage/rag）"),
     ("evals.agent.browsecomp", "Agent / BrowseComp"),
-    ("evals.agent.wildclaw", "Agent / WildClawBench"),
     ("evals.compression", "SummarizationOffload 消息压缩评测"),
     ("evals.loadtest", "深度研究 HTTP 负载测试（Locust）"),
 )

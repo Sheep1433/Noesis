@@ -31,7 +31,7 @@
 
 ## 6. 评测与配置
 
-- [ ] 6.1 `evals/agent/_agent.py`：`run_super_agent`；wildclaw/browsecomp/loadtest qa_type
+- [ ] 6.1 `evals/agent/_agent.py`：`run_super_agent`；browsecomp/loadtest qa_type
 - [ ] 6.2 `.env.example`、`config.example.yaml`、README/evals 文档中的 DEEP_RESEARCH 措辞
 
 ## 7. 规格与验证

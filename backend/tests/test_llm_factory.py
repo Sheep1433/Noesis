@@ -22,6 +22,16 @@ def test_build_chat_model_opencode_uses_required_headers() -> None:
     assert kwargs["api_base"] == "https://opencode.ai/zen/v1"
     assert kwargs["api_key"] == "public"
     assert kwargs["default_headers"] == _OPENCODE_DEFAULT_HEADERS
+    assert kwargs["http_client"]._trust_env is False
+    assert kwargs["http_async_client"]._trust_env is False
+
+
+def test_llm_http_clients_bypass_system_proxy() -> None:
+    from llm.factory import _llm_http_clients
+
+    sync_client, async_client = _llm_http_clients()
+    assert sync_client._trust_env is False
+    assert async_client._trust_env is False
 
 
 def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:

@@ -96,4 +96,4 @@ pytest 回归 **MAY** 对 Judge 使用 mock 以隔离 DashScope；**SHALL NOT** 
 #### Scenario: case 不启动 DeepResearchAgent 全链路 benchmark
 
 - **WHEN** 开发者运行 `uv run python -m evals.case`
-- **THEN** 系统 SHALL 直调 `case_graph` 或 promptfoo provider，**SHALL NOT** 调用 `evals.agent.browsecomp` 或 `evals.agent.wildclaw`
+- **THEN** 系统 SHALL 直调 `case_graph` 或 promptfoo provider，**SHALL NOT** 调用 `evals.agent.browsecomp`

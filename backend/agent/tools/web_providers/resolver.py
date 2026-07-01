@@ -29,12 +29,16 @@ def resolve_web_search(query: str, limit: int | None = None) -> dict[str, Any]:
         try:
             return tavily.search_with_tavily(q, effective_limit)
         except Exception as e:
-            logger.warning("Tavily search 失败，回退 DDG: {}", e)
+            logger.info(
+                "Tavily search 不可用（{}），改用 DuckDuckGo query={!r}",
+                e,
+                q,
+            )
 
     try:
         return ddg.search_with_ddg(q, effective_limit, timeout=timeout)
     except Exception as e:
-        logger.warning("DDG search 失败: {}", e)
+        logger.warning("web_search 全部 provider 失败（DuckDuckGo）query={!r}: {}", q, e)
         return {"error": "搜索失败", "query": q}
 
 
@@ -52,7 +56,11 @@ def resolve_web_fetch(url: str) -> str:
             result = tavily.fetch_with_tavily(raw_url, max_chars)
             return result["markdown"]
         except Exception as e:
-            logger.warning("Tavily extract 失败，回退 local: {}", e)
+            logger.info(
+                "Tavily extract 未返回内容（{}），改用 local_fetch url={}",
+                e,
+                raw_url,
+            )
 
     try:
         result = local_fetch.fetch_with_local(raw_url, max_chars, timeout)
@@ -60,5 +68,5 @@ def resolve_web_fetch(url: str) -> str:
     except ValueError as e:
         return json.dumps({"error": str(e), "url": raw_url}, ensure_ascii=False)
     except Exception as e:
-        logger.warning("local_fetch 失败 url={}: {}", raw_url, e)
+        logger.warning("web_fetch 全部 provider 失败（local_fetch）url={}: {}", raw_url, e)
         return json.dumps({"error": "页面抓取失败", "url": raw_url}, ensure_ascii=False)

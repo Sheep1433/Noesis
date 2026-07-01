@@ -23,107 +23,113 @@ html:not([data-theme]) .chat-composer {
   border-radius: var(--noesis-radius-composer);
 }
 
-/* 浅色 · Material You — seed #6750A4 */
+/* 浅色 · Flat Design — 纯色块、零阴影、Outfit 几何排版 */
 [data-theme="light"] {
-  --noesis-color-primary: #6750a4;
-  --noesis-color-primary-hover: #5e4896;
-  --noesis-color-primary-muted: #958da5;
-  --noesis-color-primary-subtle: #e8def8;
-  --noesis-color-primary-ring: rgb(103 80 164 / 25%);
-  --noesis-color-primary-bg-subtle: rgb(103 80 164 / 5%);
-  --noesis-color-primary-bg-hover: rgb(103 80 164 / 10%);
-  --noesis-color-primary-bg-icon: rgb(103 80 164 / 12%);
-  --noesis-color-primary-border-soft: #cac4d0;
-  --noesis-color-primary-text-soft: #6750a4;
+  --noesis-color-primary: #3b82f6;
+  --noesis-color-primary-hover: #2563eb;
+  --noesis-color-primary-muted: #60a5fa;
+  --noesis-color-primary-subtle: #dbeafe;
+  --noesis-color-primary-ring: rgb(59 130 246 / 35%);
+  --noesis-color-primary-bg-subtle: #eff6ff;
+  --noesis-color-primary-bg-hover: #dbeafe;
+  --noesis-color-primary-bg-icon: #eff6ff;
+  --noesis-color-primary-border-soft: #bfdbfe;
+  --noesis-color-primary-text-soft: #3b82f6;
 
-  --noesis-color-secondary-container: #e8def8;
-  --noesis-color-on-secondary-container: #1d192b;
-  --noesis-color-tertiary: #7d5260;
+  --noesis-color-secondary: #10b981;
+  --noesis-color-accent: #f59e0b;
+  --noesis-color-secondary-container: #d1fae5;
+  --noesis-color-on-secondary-container: #065f46;
+  --noesis-color-tertiary: #fef3c7;
 
-  --noesis-color-bg: #fffbfe;
-  --noesis-color-bg-elevated: #f3edf7;
-  --noesis-color-bg-muted: #e7e0ec;
-  --noesis-color-bg-subtle: #f3edf7;
-  --noesis-color-bg-hover: rgb(103 80 164 / 5%);
-  --noesis-color-bg-composer: #e7e0ec;
+  --noesis-color-bg: #ffffff;
+  --noesis-color-bg-elevated: #ffffff;
+  --noesis-color-bg-muted: #f3f4f6;
+  --noesis-color-bg-subtle: #f3f4f6;
+  --noesis-color-bg-hover: #f3f4f6;
+  --noesis-color-bg-composer: #f3f4f6;
 
-  --noesis-color-border: #cac4d0;
-  --noesis-color-border-subtle: #e7e0ec;
-  --noesis-color-border-light: #cac4d0;
-  --noesis-color-border-divider: #e7e0ec;
-  --noesis-color-border-code: #cac4d0;
-  --noesis-color-border-args: #cac4d0;
-  --noesis-color-border-focus: #6750a4;
-  --noesis-color-border-aside: rgb(28 27 31 / 6%);
+  --noesis-color-border: #e5e7eb;
+  --noesis-color-border-subtle: #f3f4f6;
+  --noesis-color-border-light: #e5e7eb;
+  --noesis-color-border-divider: #e5e7eb;
+  --noesis-color-border-code: #e5e7eb;
+  --noesis-color-border-args: #e5e7eb;
+  --noesis-color-border-focus: #3b82f6;
+  --noesis-color-border-aside: #e5e7eb;
 
-  --noesis-color-text: #1c1b1f;
-  --noesis-color-text-heading: #1c1b1f;
-  --noesis-color-text-body: #1c1b1f;
-  --noesis-color-text-secondary: #49454f;
-  --noesis-color-text-muted: #49454f;
-  --noesis-color-text-tab: #49454f;
-  --noesis-color-text-placeholder: #79747e;
-  --noesis-color-text-table: #1c1b1f;
+  --noesis-color-text: #111827;
+  --noesis-color-text-heading: #111827;
+  --noesis-color-text-body: #111827;
+  --noesis-color-text-secondary: #4b5563;
+  --noesis-color-text-muted: #6b7280;
+  --noesis-color-text-tab: #4b5563;
+  --noesis-color-text-placeholder: #9ca3af;
+  --noesis-color-text-table: #111827;
   --noesis-color-text-inverse: #ffffff;
-  --noesis-color-text-nav: #1c1b1f;
-  --noesis-color-text-hint: #79747e;
-  --noesis-color-text-dim: #49454f;
-  --noesis-color-text-code: #1c1b1f;
-  --noesis-color-text-code-muted: #49454f;
+  --noesis-color-text-nav: #111827;
+  --noesis-color-text-hint: #6b7280;
+  --noesis-color-text-dim: #4b5563;
+  --noesis-color-text-code: #111827;
+  --noesis-color-text-code-muted: #4b5563;
 
-  --noesis-radius-sm: 8px;
-  --noesis-radius-md: 12px;
-  --noesis-radius-lg: 16px;
-  --noesis-radius-xl: 24px;
-  --noesis-radius-pill: 9999px;
-  --noesis-radius-composer: 24px;
+  --noesis-radius-sm: 4px;
+  --noesis-radius-md: 6px;
+  --noesis-radius-lg: 8px;
+  --noesis-radius-xl: 8px;
+  --noesis-radius-pill: 8px;
+  --noesis-radius-composer: 8px;
 
-  --noesis-shadow-sm: 0 1px 2px rgb(28 27 31 / 6%);
-  --noesis-shadow-md: 0 2px 6px rgb(28 27 31 / 8%);
-  --noesis-shadow-lg: 0 4px 12px rgb(28 27 31 / 10%);
-  --noesis-shadow-float: 0 4px 12px rgb(28 27 31 / 12%);
+  --noesis-shadow-sm: none;
+  --noesis-shadow-md: none;
+  --noesis-shadow-lg: none;
+  --noesis-shadow-float: none;
 
-  --noesis-font-body: "Roboto", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --noesis-motion-duration: 200ms;
+  --noesis-motion-ease: ease;
 
-  --noesis-scrollbar-thumb: #cac4d0;
-  --noesis-scrollbar-track: #f3edf7;
-  --noesis-scrollbar-thumb-muted: #e7e0ec;
+  --noesis-font-body: "Outfit", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --noesis-font-display: "Outfit", system-ui, sans-serif;
 
-  --noesis-chat-tab-active-bg: #e8def8;
-  --noesis-chat-tab-active-color: #6750a4;
+  --noesis-scrollbar-thumb: #d1d5db;
+  --noesis-scrollbar-track: #f3f4f6;
+  --noesis-scrollbar-thumb-muted: #e5e7eb;
+
+  --noesis-chat-tab-active-bg: #3b82f6;
+  --noesis-chat-tab-active-color: #ffffff;
   --noesis-chat-tab-active-border: transparent;
   --noesis-chat-tab-active-shadow: none;
-  --noesis-composer-upload-bg: rgb(103 80 164 / 8%);
-  --noesis-composer-upload-border: #cac4d0;
-  --noesis-composer-upload-icon: #6750a4;
-  --noesis-chat-selected-row-bg: linear-gradient(to bottom, #f3edf7, #e8def8);
-  --noesis-chat-layout-radius: 16px;
+  --noesis-composer-upload-bg: #eff6ff;
+  --noesis-composer-upload-border: #bfdbfe;
+  --noesis-composer-upload-icon: #3b82f6;
+  --noesis-chat-selected-row-bg: #eff6ff;
+  --noesis-chat-layout-radius: 8px;
 
-  --noesis-welcome-gradient-common: radial-gradient(circle at top right, rgb(232 222 248 / 70%) 0%, transparent 50%), linear-gradient(180deg, #f3edf7 0%, #fffbfe 100%);
-  --noesis-welcome-gradient-research: radial-gradient(circle at top left, rgb(232 222 248 / 55%) 0%, transparent 45%), linear-gradient(180deg, #e8def8 0%, #fffbfe 100%);
-  --noesis-welcome-gradient-fault: radial-gradient(circle at top, rgb(125 82 96 / 8%) 0%, transparent 50%), linear-gradient(180deg, #f3edf7 0%, #fffbfe 100%);
-  --noesis-welcome-gradient-test: radial-gradient(circle at top right, rgb(232 222 248 / 45%) 0%, transparent 45%), linear-gradient(180deg, #f3edf7 0%, #e8def8 40%, #fffbfe 100%);
+  --noesis-welcome-gradient-common: #f3f4f6;
+  --noesis-welcome-gradient-research: #eff6ff;
+  --noesis-welcome-gradient-fault: #fffbeb;
+  --noesis-welcome-gradient-test: #ecfdf5;
 
-  --noesis-block-light-accent: #6750a4;
-  --noesis-block-light-bg: linear-gradient(180deg, #f3edf7 0%, #e8def8 35%, #fffbfe 100%);
-  --noesis-block-light-border: var(--noesis-color-border-subtle);
-  --noesis-block-light-text: #49454f;
-  --noesis-block-light-text-name: #1c1b1f;
-  --noesis-block-light-text-code: #49454f;
-  --noesis-block-light-text-result: #166534;
-  --noesis-block-light-text-error: #b91c1c;
-  --noesis-block-light-icon: #6750a4;
-  --noesis-block-light-bg-result: linear-gradient(180deg, #f8fdf9 0%, #f1faf3 100%);
-  --noesis-block-light-bg-error: linear-gradient(180deg, #fffbfb 0%, #fef2f2 100%);
-  --noesis-block-light-bg-narrative: linear-gradient(180deg, #f3edf7 0%, #fffbfe 100%);
+  --noesis-block-light-accent: #3b82f6;
+  --noesis-block-light-bg: #f3f4f6;
+  --noesis-block-light-border: transparent;
+  --noesis-block-light-text: #4b5563;
+  --noesis-block-light-text-name: #111827;
+  --noesis-block-light-text-code: #374151;
+  --noesis-block-light-text-result: #047857;
+  --noesis-block-light-text-error: #dc2626;
+  --noesis-block-light-icon: #3b82f6;
+  --noesis-block-light-bg-result: #ecfdf5;
+  --noesis-block-light-bg-error: #fef2f2;
+  --noesis-block-light-bg-narrative: #f9fafb;
 
-  --noesis-streaming-border: #e7e0ec;
-  --noesis-streaming-text: #49454f;
+  --noesis-streaming-border: #e5e7eb;
+  --noesis-streaming-text: #4b5563;
 
-  --noesis-sidebar-bg: linear-gradient(180deg, #fffbfe 0%, #f3edf7 100%);
-  --noesis-layout-shell-bg: linear-gradient(180deg, #fffbfe 0%, #f3edf7 100%);
-  --noesis-mcp-hero-bg: linear-gradient(135deg, #6750a4, #958da5);
-  --noesis-markdown-heading-border: var(--noesis-color-border-subtle);
+  --noesis-sidebar-bg: #ffffff;
+  --noesis-layout-shell-bg: #ffffff;
+  --noesis-mcp-hero-bg: #3b82f6;
+  --noesis-markdown-heading-border: #e5e7eb;
 }
 
 html[data-theme="light"] {
@@ -136,30 +142,58 @@ html[data-theme="light"] body {
   color: var(--noesis-color-text-body);
 }
 
+html[data-theme="light"] .welcome-title,
+html[data-theme="light"] .detail-card__title,
+html[data-theme="light"] h1,
+html[data-theme="light"] h2 {
+  font-family: var(--noesis-font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
 html[data-theme="light"] .welcome-header,
 html[data-theme="light"] .detail-card {
   border: none;
-  box-shadow: var(--noesis-shadow-sm);
-  transition: box-shadow var(--noesis-motion-duration) var(--noesis-motion-ease);
+  box-shadow: none;
+  transition: transform var(--noesis-motion-duration) var(--noesis-motion-ease);
 }
 
 html[data-theme="light"] .detail-card:hover {
-  box-shadow: var(--noesis-shadow-md);
+  box-shadow: none;
+  transform: scale(1.02);
+}
+
+html[data-theme="light"] .welcome-blob {
+  filter: none;
+  opacity: 0.07;
+}
+
+html[data-theme="light"] .welcome-blob--secondary {
+  border-radius: var(--noesis-radius-lg);
+  transform: rotate(12deg);
+}
+
+html[data-theme="light"] .welcome-blob--tertiary {
+  border-radius: var(--noesis-radius-sm);
+  transform: rotate(-8deg);
+  opacity: 0.1;
 }
 
 html[data-theme="light"] .chat-composer {
   background: var(--noesis-color-bg-composer) !important;
-  border-color: var(--noesis-color-border-subtle) !important;
-  border-radius: var(--noesis-radius-xl);
-  box-shadow: var(--noesis-shadow-sm);
+  border: 2px solid transparent !important;
+  border-radius: var(--noesis-radius-lg);
+  box-shadow: none;
   transition:
-    box-shadow var(--noesis-motion-duration) var(--noesis-motion-ease),
-    border-color 200ms ease;
+    transform var(--noesis-motion-duration) var(--noesis-motion-ease),
+    background-color var(--noesis-motion-duration) var(--noesis-motion-ease),
+    border-color var(--noesis-motion-duration) var(--noesis-motion-ease);
 }
 
 html[data-theme="light"] .chat-composer:focus-within {
+  background: #ffffff !important;
   border-color: var(--noesis-color-primary) !important;
-  box-shadow: var(--noesis-shadow-md), 0 0 0 2px rgb(103 80 164 / 12%);
+  box-shadow: none;
 }
 
 html[data-theme="light"] .n-button {
@@ -168,7 +202,13 @@ html[data-theme="light"] .n-button {
 
 html[data-theme="light"] .n-button--primary-type,
 html[data-theme="light"] .n-button--default-type {
-  border-radius: 9999px !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="light"] .n-button--primary-type:hover,
+html[data-theme="light"] .n-button--default-type:hover {
+  transform: scale(1.05);
 }
 
 html[data-theme="light"] .n-button--primary-type:active {
@@ -176,8 +216,44 @@ html[data-theme="light"] .n-button--primary-type:active {
 }
 
 html[data-theme="light"] .active-tab,
-html[data-theme="light"] :deep(.n-button.active-tab) {
-  border-radius: 9999px;
+html[data-theme="light"] .active-tab.n-button {
+  border-radius: 8px;
+}
+
+html[data-theme="light"] .create-chat {
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+html[data-theme="light"] .assistant-unified-card,
+html[data-theme="light"] .scroll-to-bottom-btn,
+html[data-theme="light"] .session-files-toggle,
+html[data-theme="light"] .chat-history-sider .n-layout-toggle-button {
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-theme="light"] .assistant-unified-card {
+  border: none;
+  background: var(--noesis-color-bg-muted);
+}
+
+html[data-theme="light"] .link-btn {
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+html[data-theme="light"] .link-btn:hover {
+  background: var(--noesis-color-primary-bg-hover);
+  color: var(--noesis-color-primary-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="light"] .detail-card:hover,
+  html[data-theme="light"] .n-button--primary-type:hover,
+  html[data-theme="light"] .n-button--default-type:hover {
+    transform: none;
+  }
 }
 
 /* 深色 · Minimalist Dark — 层叠石板 + 琥珀光晕 + 玻璃质感 */

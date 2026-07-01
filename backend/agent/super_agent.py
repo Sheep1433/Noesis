@@ -20,6 +20,7 @@ from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.middlewares.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
 from agent.middlewares.memory_sync_middleware import MemorySyncMiddleware
 from agent.prompts import PromptProfile, build_prompt
+from agent.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from agent.tools import build_web_search_tools
 from common.logging import logger
 from config.user_data_paths import ensure_user_memory_files
@@ -52,7 +53,11 @@ def _build_task_worker_subagents(
 ) -> list[SubAgent]:
     subagent_middleware = [
         *build_subagent_default_middleware(backend),
-        SkillsMiddleware(backend=backend, sources=list(SKILL_SOURCES)),
+        SkillsMiddleware(
+            backend=backend,
+            sources=list(SKILL_SOURCES),
+            system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+        ),
     ]
     return [
         {
@@ -112,16 +117,17 @@ class SuperAgent(BaseAgent):
                 web_tools = build_web_search_tools()
                 agent = create_noesis_agent(
                     tools=web_tools,
-                    system_prompt=build_prompt(
-                        PromptProfile.SUPER_AGENT,
-                        user_id=user_id,
-                    ),
+                    system_prompt=build_prompt(PromptProfile.SUPER_AGENT),
                     checkpointer=self.checkpointer,
                     backend=backend,
                     subagents=_build_task_worker_subagents(backend, web_tools),
                     extra_middleware=[
                         TodoListMiddleware(),
-                        SkillsMiddleware(backend=backend, sources=list(SKILL_SOURCES)),
+                        SkillsMiddleware(
+                            backend=backend,
+                            sources=list(SKILL_SOURCES),
+                            system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+                        ),
                         *_build_memory_middleware(backend),
                     ],
                 )

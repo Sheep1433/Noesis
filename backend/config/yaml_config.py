@@ -128,13 +128,13 @@ class SummarizationYamlSection(BaseModel):
     # 仅模型名单独配置；type / base_url / api_key 与 model 层一致
     model_name: str = ""
     temperature: float = 0.0
-    trigger_tokens: int = Field(default=0, ge=0)
-    trigger_fraction: float = Field(default=0.85, gt=0, le=1)
+    # trigger_tokens > 0 时优先；为 0 时用 trigger_fraction × context.max_input_tokens
+    trigger_tokens: int = Field(default=96000, ge=0)
+    trigger_fraction: float = Field(default=0.75, gt=0, le=1)
     max_input_tokens: int = Field(default=0, ge=0)
-    tool_offload_threshold: int = Field(default=1000, ge=1)
-    max_retention_ratio: float = Field(default=0.6, gt=0, le=1)
-    messages_to_keep: int = Field(default=20, ge=1)
-    max_tokens_before_summary: int = Field(default=4000, ge=1)
+    tool_offload_threshold: int = Field(default=6000, ge=1)
+    max_retention_ratio: float = Field(default=0.65, gt=0, le=1)
+    messages_to_keep: int = Field(default=28, ge=1)
 
 
 class LoopDetectionYamlSection(BaseModel):
@@ -220,6 +220,20 @@ class ChatAttachmentYamlSection(BaseModel):
     preview_chars: int = Field(default=500, ge=1)
 
 
+class KbDeepDocYamlSection(BaseModel):
+    enabled: bool = True
+    model_dir: str = "../.data/rag/res/deepdoc"
+
+
+class KbParserYamlSection(BaseModel):
+    default: str = "deepdoc"
+
+
+class KbYamlSection(BaseModel):
+    deepdoc: KbDeepDocYamlSection = Field(default_factory=KbDeepDocYamlSection)
+    parser: KbParserYamlSection = Field(default_factory=KbParserYamlSection)
+
+
 class AppYamlConfig(BaseModel):
     config_version: int = 1
     app: AppYamlSection = Field(default_factory=AppYamlSection)
@@ -241,6 +255,7 @@ class AppYamlConfig(BaseModel):
     checkpoint: CheckpointYamlSection = Field(default_factory=CheckpointYamlSection)
     chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)
     sandbox: SandboxYamlSection = Field(default_factory=SandboxYamlSection)
+    kb: KbYamlSection = Field(default_factory=KbYamlSection)
 
 
 @lru_cache

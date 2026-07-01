@@ -118,7 +118,6 @@ class ModelSettings:
     summarization_enabled: bool
     summarization_model_name: str
     summarization_model_temperature: float
-    summarization_max_tokens_before_summary: int
     summarization_trigger_tokens: int
     summarization_trigger_fraction: float
     summarization_max_input_tokens: int
@@ -209,6 +208,13 @@ class ChatAttachmentSettings:
     tiny_inline_chars: int
     read_page_lines: int
     preview_chars: int
+
+
+@dataclass(frozen=True)
+class KbSettings:
+    deepdoc_enabled: bool
+    deepdoc_model_dir: str
+    parser_default: str
 
 
 def _legacy_env(key: str, default: str) -> str:
@@ -325,9 +331,6 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         summarization_model_name=_legacy_env("SUMMARIZATION_MODEL_NAME", s.model_name),
         summarization_model_temperature=_legacy_env_float(
             "SUMMARIZATION_MODEL_TEMPERATURE", s.temperature
-        ),
-        summarization_max_tokens_before_summary=_legacy_env_int(
-            "SUMMARIZATION_MAX_TOKENS_BEFORE_SUMMARY", s.max_tokens_before_summary
         ),
         summarization_trigger_tokens=_legacy_env_int(
             "SUMMARIZATION_TRIGGER_TOKENS", s.trigger_tokens
@@ -510,6 +513,15 @@ def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
     return settings
 
 
+def _build_kb(yaml_cfg: AppYamlConfig) -> KbSettings:
+    kb = yaml_cfg.kb
+    return KbSettings(
+        deepdoc_enabled=_legacy_env_bool("KB_DEEPDOC_ENABLED", kb.deepdoc.enabled),
+        deepdoc_model_dir=_legacy_env("KB_DEEPDOC_MODEL_DIR", kb.deepdoc.model_dir),
+        parser_default=_legacy_env("KB_PARSER_DEFAULT", kb.parser.default).strip().lower() or "deepdoc",
+    )
+
+
 class GetConfig:
     def __init__(self):
         self.parse_cli_args()
@@ -568,6 +580,10 @@ class GetConfig:
     def get_chat_attachment_config(self) -> ChatAttachmentSettings:
         return _build_chat_attachment(self._yaml)
 
+    @lru_cache
+    def get_kb_config(self) -> KbSettings:
+        return _build_kb(self._yaml)
+
     @staticmethod
     def parse_cli_args() -> None:
         is_pytest = "pytest" in sys.modules or "pytest" in sys.argv[0]
@@ -610,3 +626,4 @@ WebToolsConfig = get_config.get_web_tools_config()
 CheckpointConfig = get_config.get_checkpoint_config()
 SandboxConfig = get_config.get_sandbox_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
+KbConfig = get_config.get_kb_config()

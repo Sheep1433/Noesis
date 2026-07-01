@@ -40,7 +40,7 @@ def build_prompt(
         ),
         PromptProfile.FAULT_OPERATION.value: build_fault_operation_prompt,
         PromptProfile.FAULT_OPERATION_SUB.value: build_fault_operation_sub_prompt,
-        PromptProfile.SUPER_AGENT.value: lambda: build_super_agent_prompt(user_id=user_id),
+        PromptProfile.SUPER_AGENT.value: build_super_agent_prompt,
         PromptProfile.SUPER_AGENT_SUB.value: build_super_agent_sub_prompt,
         PromptProfile.SIMPLE_MCP.value: build_simple_mcp_prompt,
     }

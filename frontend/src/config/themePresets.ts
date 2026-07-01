@@ -17,7 +17,7 @@ export const THEME_PRESET_OPTIONS: ThemePresetOption[] = [
   {
     id: 'light',
     label: '浅色',
-    description: 'Material You · 薰衣草紫 · 药丸按钮 · 色调表面',
+    description: 'Flat Design · 几何无阴影 · 蓝绿琥珀色块 · Outfit',
   },
   {
     id: 'deep',
@@ -49,11 +49,11 @@ export interface PresetNaiveColors {
 
 export const PRESET_NAIVE_COLORS: Record<ThemePresetId, PresetNaiveColors> = {
   light: {
-    primary: '#6750A4',
-    primaryHover: '#5E4896',
-    primaryMuted: '#958DA5',
-    primaryBorderSoft: '#CAC4D0',
-    textPlaceholder: '#79747E',
+    primary: '#3B82F6',
+    primaryHover: '#2563EB',
+    primaryMuted: '#60A5FA',
+    primaryBorderSoft: '#E5E7EB',
+    textPlaceholder: '#9CA3AF',
   },
   deep: {
     primary: '#F59E0B',

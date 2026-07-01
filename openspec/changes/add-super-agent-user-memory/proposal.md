@@ -43,6 +43,6 @@
 | 中间件 | `MemoryMiddleware` + 中文 `NOESIS_MEMORY_SYSTEM_PROMPT` |
 | 常量 | `constants/code_enum.py`：`SUPER_AGENT_QA` |
 | 前端 | `chat.vue`、`DefaultPage.vue`、`theme.ts`、`QatypeIcon` 等 qa_type 与文案 |
-| 评测 | `evals/agent/_agent.py`、`wildclaw`、`browsecomp`、`loadtest` |
+| 评测 | `evals/agent/_agent.py`、`browsecomp`、`loadtest` |
 | 规格 | 新建 `agent-super-agent`、`agent-user-memory`；delta `agent-runtime-paths`、`platform-chat`、`agent-sandbox` |
 | 测试 | `test_deep_research_prompt.py` → `test_super_agent_prompt.py`；filesystem / memory 集成测 |

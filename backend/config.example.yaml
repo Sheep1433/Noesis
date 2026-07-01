@@ -57,6 +57,7 @@ embedding:
 
 rerank:
   name: gte-rerank-v2
+  # 精排走 DashScope text-rerank API；密钥见 .env RERANK_MODEL_API_KEY
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
 vlm:
@@ -72,13 +73,14 @@ summarization:
   # 仅 model_name 单独配置；type / base_url / api_key 与 model 层一致
   model_name: ""
   temperature: 0.0
-  trigger_tokens: 50000
-  trigger_fraction: 0.85
+  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × context.max_input_tokens
+  trigger_tokens: 96000
+  trigger_fraction: 0.75
   max_input_tokens: 0
-  tool_offload_threshold: 1000
-  max_retention_ratio: 0.6
-  messages_to_keep: 20
-  max_tokens_before_summary: 4000
+  # 仅卸載单条 ToolMessage 超过此阈值的正文（典型 web_search ~2.7k，保留在上下文中）
+  tool_offload_threshold: 6000
+  max_retention_ratio: 0.65
+  messages_to_keep: 28
 
 loop_detection:
   enabled: true

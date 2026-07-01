@@ -57,13 +57,12 @@ summarization:
   enabled: true
   model_name: ""
   temperature: 0.0
-  trigger_tokens: 50000
-  trigger_fraction: 0.85
+  trigger_tokens: 96000
+  trigger_fraction: 0.75
   max_input_tokens: 0
-  tool_offload_threshold: 1000
-  max_retention_ratio: 0.6
-  messages_to_keep: 20
-  max_tokens_before_summary: 4000
+  tool_offload_threshold: 6000
+  max_retention_ratio: 0.65
+  messages_to_keep: 28
 
 loop_detection:
   enabled: true

@@ -69,6 +69,7 @@ Thumbs.db
 .env
 .env.prod
 evals/.env
+evals/agent/browsecomp/data/*.csv
 config.yaml
 config.yaml.bak
 config.prod.yaml

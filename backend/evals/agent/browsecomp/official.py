@@ -12,13 +12,16 @@ import random
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
+import httpx
 import pandas
 
 BROWSECOMP_CSV_URL = (
     "https://openaipublic.blob.core.windows.net/simple-evals/browse_comp_test_set.csv"
 )
+BROWSECOMP_CSV_CACHE = Path(__file__).resolve().parent / "data" / "browse_comp_test_set.csv"
 
 Message = dict[str, Any]
 MessageList = list[Message]
@@ -99,6 +102,43 @@ def decrypt(ciphertext_b64: str, password: str) -> str:
     return bytes(a ^ b for a, b in zip(encrypted, key)).decode()
 
 
+def resolve_browsecomp_csv_path(csv_url: str | None = None) -> Path:
+    """解析 BrowseComp CSV 路径：环境变量 / 本地缓存 / 远程下载。"""
+    env_path = (os.environ.get("BROWSECOMP_CSV_PATH") or "").strip()
+    if env_path:
+        path = Path(env_path).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"BROWSECOMP_CSV_PATH 不存在: {path}")
+        return path
+
+    if csv_url and not csv_url.startswith(("http://", "https://")):
+        path = Path(csv_url).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"BrowseComp CSV 不存在: {path}")
+        return path
+
+    if BROWSECOMP_CSV_CACHE.is_file():
+        return BROWSECOMP_CSV_CACHE
+
+    remote_url = csv_url or BROWSECOMP_CSV_URL
+    try:
+        BROWSECOMP_CSV_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+            resp = client.get(remote_url)
+            resp.raise_for_status()
+            BROWSECOMP_CSV_CACHE.write_bytes(resp.content)
+        return BROWSECOMP_CSV_CACHE
+    except Exception as e:
+        raise RuntimeError(
+            "无法下载 BrowseComp 数据集（DNS/网络问题或目标不可达）。\n"
+            f"  URL: {remote_url}\n"
+            f"  原因: {e}\n"
+            "请检查网络后重试，或手动下载 CSV 到：\n"
+            f"  {BROWSECOMP_CSV_CACHE}\n"
+            "也可设置环境变量 BROWSECOMP_CSV_PATH 指向本地文件。"
+        ) from e
+
+
 def _map_items(f: Callable, xs: list[Any]) -> list[Any]:
     if not xs:
         return []
@@ -139,7 +179,8 @@ class BrowseCompEval:
         if examples is not None:
             rows = examples
         else:
-            df = pandas.read_csv(csv_url or BROWSECOMP_CSV_URL)
+            csv_path = resolve_browsecomp_csv_path(csv_url)
+            df = pandas.read_csv(csv_path)
             rows = [row.to_dict() for _, row in df.iterrows()]
         if num_examples:
             rows = random.Random(0).sample(rows, num_examples)

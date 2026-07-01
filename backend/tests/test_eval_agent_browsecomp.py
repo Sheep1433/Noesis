@@ -38,3 +38,25 @@ def test_decrypt_roundtrip():
     encrypted = bytes(a ^ b for a, b in zip(plain.encode(), key))
     b64 = base64.b64encode(encrypted).decode()
     assert decrypt(b64, canary) == plain
+
+
+def test_resolve_browsecomp_csv_path_uses_env(tmp_path, monkeypatch):
+    csv_file = tmp_path / "custom.csv"
+    csv_file.write_text("problem,answer,canary\n", encoding="utf-8")
+    monkeypatch.setenv("BROWSECOMP_CSV_PATH", str(csv_file))
+    from evals.agent.browsecomp.official import resolve_browsecomp_csv_path
+
+    assert resolve_browsecomp_csv_path() == csv_file
+
+
+def test_resolve_browsecomp_csv_path_uses_cache(tmp_path, monkeypatch):
+    monkeypatch.delenv("BROWSECOMP_CSV_PATH", raising=False)
+    cache = tmp_path / "browse_comp_test_set.csv"
+    cache.write_text("problem,answer,canary\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "evals.agent.browsecomp.official.BROWSECOMP_CSV_CACHE",
+        cache,
+    )
+    from evals.agent.browsecomp.official import resolve_browsecomp_csv_path
+
+    assert resolve_browsecomp_csv_path() == cache

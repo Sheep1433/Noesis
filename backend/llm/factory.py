@@ -17,6 +17,18 @@ def _llm_http_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=10.0, read=read_sec, write=read_sec, pool=10.0)
 
 
+def _llm_http_clients() -> tuple[httpx.Client, httpx.AsyncClient]:
+    """
+    与 Langfuse OTEL 一致：trust_env=False，不走 macOS/Shell 系统代理（如 10810）。
+    避免代理进程挂掉或长连接被掐时 OpenCode/DashScope 报 APIConnectionError。
+    """
+    timeout = _llm_http_timeout()
+    return (
+        httpx.Client(timeout=timeout, trust_env=False),
+        httpx.AsyncClient(timeout=timeout, trust_env=False),
+    )
+
+
 def _build_chat_model(
     *,
     model_type: str,
@@ -27,6 +39,11 @@ def _build_chat_model(
 ):
     timeout = _llm_http_timeout()
     max_retries = int(ModelConfig.max_retries)
+    http_client, http_async_client = _llm_http_clients()
+    http_kwargs = {
+        "http_client": http_client,
+        "http_async_client": http_async_client,
+    }
 
     model_map = {
         "openai": lambda: ChatOpenAI(
@@ -37,6 +54,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_kwargs,
         ),
         "minimax": lambda: ChatOpenAI(
             model=model_name,
@@ -46,6 +64,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_kwargs,
         ),
         "opencode": lambda: ChatDeepSeek(
             model=model_name,
@@ -56,6 +75,7 @@ def _build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             default_headers=_OPENCODE_DEFAULT_HEADERS,
+            **http_kwargs,
         ),
         "qwen": lambda: ChatQwen(
             model=model_name,
@@ -69,6 +89,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_kwargs,
         ),
         "deepseek": lambda: ChatDeepSeek(
             model=model_name,
@@ -78,6 +99,7 @@ def _build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **http_kwargs,
         ),
     }
 
