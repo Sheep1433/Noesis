@@ -128,3 +128,11 @@ sandbox:
   backend: aio
   runner_url: http://sandbox-runner:8090
   execute_timeout_seconds: 120
+
+# 知识库 DeepDoc（权重挂载至 noesis_data:/data/noesis/rag/res/deepdoc）
+kb:
+  deepdoc:
+    enabled: true
+    model_dir: /data/noesis/rag/res/deepdoc
+  parser:
+    default: deepdoc

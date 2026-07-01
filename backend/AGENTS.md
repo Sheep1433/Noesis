@@ -19,7 +19,12 @@ backend/
 ├── services/                    # 业务编排（qa_service、chat_service 等）
 ├── schemas/                     # Pydantic 模型
 ├── models/                      # ORM（db_models.py、chat_models.py）
-├── kb/                          # 解析 / 分块 / 嵌入 / 检索
+├── kb/                          # 解析 / 分块 / 嵌入 / 检索 / rerank
+│   ├── document_parse/          # DeepDoc + ParserFactory
+│   ├── chunk/                   # general 标题切分；params 合并
+│   ├── retrieval/               # KbRetrievalService 门面（hybrid→rerank）
+│   ├── rerank/                  # DashScope cross-encoder
+│   └── embedding/
 ├── agent/
 │   ├── factory.py               # create_noesis_agent
 │   ├── common_react_agent.py    # 通用问答（RAG）
@@ -124,6 +129,14 @@ async def login(
 
 - 使用 Pydantic `BaseModel`，必须声明 `Field(description=...)`
 - 按业务拆分独立文件（登录、问答、知识库、附件等）
+
+### 知识库 RAG 底座（`enterprise-kb-retrieval-foundation`）
+
+- **配置**：MySQL `kb_collection_config`（`processing_params` / `query_params`）；Qdrant 仅存向量与分片
+- **入库**：`DocumentParser` → `chunk()`（`chunk_preset_id=general`）→ embed → upsert；payload 含 `effective_processing_params`
+- **检索**：统一 `KbRetrievalService.search()`：`recall_top_k` → rerank（可降级）→ `score_threshold` → `final_top_k`；默认 `search_mode=hybrid`
+- **API**：`GET/PATCH /api/knowledge_base/collections/{name}/config`；检索/上传参数与 Agent 共用 `kb/chunk/params.py` 合并函数
+- **评测**：`uv run python -m evals.kb.run --collection <name>`
 
 ### 4. 数据库模型 (`models/`)
 

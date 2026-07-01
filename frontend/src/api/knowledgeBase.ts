@@ -1,7 +1,7 @@
 /**
  * 知识库管理 API
  */
-import { useUserStore } from '@/store/business/userStore'
+import { authFetch } from '@/utils/authHttp'
 
 const API_BASE = `${location.origin}/api/knowledge_base`
 
@@ -20,6 +20,9 @@ export interface KbSearchFilters {
 
 export interface KbQueryParams {
   limit?: number
+  final_top_k?: number
+  recall_top_k?: number
+  use_reranker?: boolean
   score_threshold?: number | null
   search_mode?: KbSearchMode
   rrf_k?: number
@@ -27,8 +30,28 @@ export interface KbQueryParams {
 }
 
 export const KB_DEFAULT_QUERY: KbQueryParams = {
-  limit: 10,
+  final_top_k: 10,
+  recall_top_k: 50,
+  search_mode: 'hybrid',
+  use_reranker: true,
   score_threshold: null,
+  rrf_k: 60,
+}
+
+export interface KbProcessingParams {
+  chunk_preset_id?: string
+  chunk_template_id?: string
+  parser_id?: string
+  chunk_parser_config?: {
+    chunk_size?: number
+    chunk_overlap?: number
+  }
+}
+
+export interface CollectionConfig {
+  collection_name: string
+  processing_params: KbProcessingParams
+  query_params: KbQueryParams
 }
 
 interface CollectionInfo {
@@ -54,6 +77,7 @@ interface DocumentInfo {
   file_name: string
   shard_count: number
   uploaded_at: string | null
+  file_hash?: string | null
 }
 
 interface ShardInfo {
@@ -65,7 +89,7 @@ interface ShardInfo {
   chunk_index?: number | null
 }
 
-interface ShardDetail {
+export interface ShardDetail {
   id: string
   content: string
   char_length: number
@@ -76,6 +100,7 @@ interface ShardDetail {
   Header_2?: string | null
   Header_3?: string | null
   chunk_index?: number | null
+  effective_processing_params?: Record<string, unknown> | null
 }
 
 interface DeleteResponse {
@@ -93,6 +118,9 @@ interface CreateCollectionRequest {
 export interface SearchCollectionRequest {
   query: string
   limit?: number
+  final_top_k?: number
+  recall_top_k?: number
+  use_reranker?: boolean
   score_threshold?: number | null
   search_mode?: KbSearchMode
   filters?: KbSearchFilters
@@ -106,6 +134,8 @@ export interface SearchResult {
   file_name: string
   search_mode?: string
   header_path?: string | null
+  recall_score?: number | null
+  rerank_score?: number | null
 }
 
 interface CreateCollectionResponse {
@@ -131,25 +161,19 @@ async function throwKnowledgeBaseError(response: Response, fallback: string): Pr
   throw new Error(serverMsg || fallback)
 }
 
+async function kbRequest(url: string, init?: RequestInit): Promise<Response> {
+  const response = await authFetch(url, init)
+  if (!response.ok) {
+    await throwKnowledgeBaseError(response, '请求失败')
+  }
+  return response
+}
+
 /**
  * 获取知识库连接状态
  */
 export async function getKnowledgeBaseStatus(): Promise<KnowledgeBaseStatus> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/status`
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '获取知识库状态失败')
-  }
-
+  const response = await kbRequest(`${API_BASE}/status`, { method: 'GET' })
   return response.json()
 }
 
@@ -157,21 +181,7 @@ export async function getKnowledgeBaseStatus(): Promise<KnowledgeBaseStatus> {
  * 获取 Collection 列表
  */
 export async function getCollections(): Promise<CollectionInfo[]> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections`
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '获取 Collection 列表失败')
-  }
-
+  const response = await kbRequest(`${API_BASE}/collections`, { method: 'GET' })
   return response.json()
 }
 
@@ -179,21 +189,10 @@ export async function getCollections(): Promise<CollectionInfo[]> {
  * 获取 Collection 详情
  */
 export async function getCollection(name: string): Promise<CollectionDetail> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(name)}`
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '获取 Collection 详情失败')
-  }
-
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(name)}`,
+    { method: 'GET' },
+  )
   return response.json()
 }
 
@@ -201,21 +200,10 @@ export async function getCollection(name: string): Promise<CollectionDetail> {
  * 获取 Collection 下的文档列表
  */
 export async function getDocuments(collectionName: string): Promise<DocumentInfo[]> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents`
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '获取文档列表失败')
-  }
-
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents`,
+    { method: 'GET' },
+  )
   return response.json()
 }
 
@@ -223,21 +211,10 @@ export async function getDocuments(collectionName: string): Promise<DocumentInfo
  * 获取文档的分片列表
  */
 export async function getDocumentShards(collectionName: string, fileName: string): Promise<ShardInfo[]> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}/shards`
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '获取分片列表失败')
-  }
-
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}/shards`,
+    { method: 'GET' },
+  )
   return response.json()
 }
 
@@ -245,21 +222,10 @@ export async function getDocumentShards(collectionName: string, fileName: string
  * 获取分片详情
  */
 export async function getShardDetail(collectionName: string, shardId: string): Promise<ShardDetail> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(collectionName)}/shards/${encodeURIComponent(shardId)}`
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '获取分片详情失败')
-  }
-
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/shards/${encodeURIComponent(shardId)}`,
+    { method: 'GET' },
+  )
   return response.json()
 }
 
@@ -267,21 +233,10 @@ export async function getShardDetail(collectionName: string, shardId: string): P
  * 删除文档
  */
 export async function deleteDocument(collectionName: string, fileName: string): Promise<DeleteResponse> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}`
-
-  const response = await fetch(url, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '删除文档失败')
-  }
-
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}`,
+    { method: 'DELETE' },
+  )
   return response.json()
 }
 
@@ -289,23 +244,11 @@ export async function deleteDocument(collectionName: string, fileName: string): 
  * 创建 Collection
  */
 export async function createCollection(request: CreateCollectionRequest): Promise<CreateCollectionResponse> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections`
-
-  const response = await fetch(url, {
+  const response = await kbRequest(`${API_BASE}/collections`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '创建 Collection 失败')
-  }
-
   return response.json()
 }
 
@@ -313,51 +256,34 @@ export async function createCollection(request: CreateCollectionRequest): Promis
  * 删除 Collection
  */
 export async function deleteCollection(collectionName: string): Promise<{ success: boolean, message: string }> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(collectionName)}`
-
-  const response = await fetch(url, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '删除 Collection 失败')
-  }
-
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}`,
+    { method: 'DELETE' },
+  )
   return response.json()
 }
 
-/** 上传文档（平台固定 Markdown 标题分块） */
+/** 上传文档（DeepDoc 解析入库） */
 export async function uploadDocument(
   collectionName: string,
   file: File,
-): Promise<{ success: boolean, message: string, shards_created?: number, extracted_markdown?: string | null }> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(collectionName)}/upload`
-
+  processingParams?: KbProcessingParams,
+): Promise<{ success: boolean, message: string, file_name?: string, shards_created?: number, extracted_markdown?: string | null }> {
   const formData = new FormData()
   formData.append('file', file)
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    body: formData,
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '上传文档失败')
+  if (processingParams && Object.keys(processingParams).length > 0) {
+    formData.append('processing_params', JSON.stringify(processingParams))
   }
+
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/upload`,
+    { method: 'POST', body: formData },
+  )
 
   return response.json() as Promise<{
     success: boolean
     message: string
+    file_name?: string
     shards_created?: number
     extracted_markdown?: string | null
   }>
@@ -367,16 +293,22 @@ export async function uploadDocument(
  * 知识库检索；不传 limit / score_threshold 时使用集合默认值
  */
 export async function searchCollection(collectionName: string, body: SearchCollectionRequest): Promise<SearchResult[]> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
-  const url = `${API_BASE}/collections/${encodeURIComponent(collectionName)}/search`
-
   const payload: Record<string, unknown> = {
     query: body.query,
-    search_mode: body.search_mode ?? 'vector',
   }
-  if (body.limit !== undefined && body.limit !== null) {
+  if (body.search_mode) {
+    payload.search_mode = body.search_mode
+  }
+  if (body.final_top_k !== undefined && body.final_top_k !== null) {
+    payload.final_top_k = body.final_top_k
+  } else if (body.limit !== undefined && body.limit !== null) {
     payload.limit = body.limit
+  }
+  if (body.recall_top_k !== undefined && body.recall_top_k !== null) {
+    payload.recall_top_k = body.recall_top_k
+  }
+  if (body.use_reranker !== undefined) {
+    payload.use_reranker = body.use_reranker
   }
   if (body.score_threshold !== undefined) {
     payload.score_threshold = body.score_threshold
@@ -388,18 +320,14 @@ export async function searchCollection(collectionName: string, body: SearchColle
     payload.rrf_k = body.rrf_k
   }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/search`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  })
-
-  if (!response.ok) {
-    await throwKnowledgeBaseError(response, '检索失败')
-  }
+  )
 
   const json = await response.json() as { data?: SearchResult[] } | SearchResult[]
   if (Array.isArray(json)) {
@@ -411,7 +339,31 @@ export async function searchCollection(collectionName: string, body: SearchColle
   return []
 }
 
+export async function getCollectionConfig(collectionName: string): Promise<CollectionConfig> {
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/config`,
+    { method: 'GET' },
+  )
+  return response.json()
+}
+
+export async function patchCollectionConfig(
+  collectionName: string,
+  patch: { processing_params?: KbProcessingParams, query_params?: KbQueryParams },
+): Promise<CollectionConfig> {
+  const response = await kbRequest(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/config`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  )
+  return response.json()
+}
+
 export type {
+  CollectionConfig,
   CollectionDetail,
   CollectionInfo,
   CreateCollectionRequest,
@@ -420,6 +372,5 @@ export type {
   DocumentInfo,
   KnowledgeBaseStatus,
   SearchResult,
-  ShardDetail,
   ShardInfo,
 }

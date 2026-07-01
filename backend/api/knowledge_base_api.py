@@ -1,17 +1,21 @@
 """
-知识库管理 API（集合、文档、分片、检索均仅依赖 Qdrant）
+知识库管理 API：Qdrant 向量数据 + MySQL 集合配置
 """
+import json
 import logging
 import os
 import tempfile
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from schemas.login_vo import CurrentUser
 from schemas.knowledge_base_schema import (
     CollectionInfo,
     CollectionDetail,
+    CollectionConfigResponse,
+    PatchCollectionConfigRequest,
     DocumentInfo,
     ShardInfo,
     ShardDetail,
@@ -28,11 +32,13 @@ from services.qdrant_service import (
     is_qdrant_connected,
     get_qdrant_client,
 )
+from services.kb_collection_config_service import KbCollectionConfigService
 from kb.chunk import (
-    merge_query_execution_params,
-    normalize_mysql_query_params,
+    normalize_query_execution_params,
+    resolve_effective_processing_params,
 )
 from config.env import QdrantConfig
+from config.get_db import get_db
 from common.http.response import ResponseUtil
 from services.user_service import UserService
 
@@ -41,9 +47,26 @@ logger = logging.getLogger(__name__)
 knowledge_base_router = APIRouter(prefix='/api/knowledge_base', tags=['知识库模块'])
 
 
-def _global_query_defaults():
-    """平台级检索默认（代码常量，不读 MySQL）。"""
-    return normalize_mysql_query_params({})
+async def _require_collection_in_qdrant(service: QdrantService, collection_name: str) -> dict:
+    col_info = service.get_collection(collection_name)
+    if not col_info:
+        raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' 不存在")
+    return col_info
+
+
+async def _require_collection_config(
+    db: AsyncSession,
+    service: QdrantService,
+    collection_name: str,
+) -> dict:
+    await _require_collection_in_qdrant(service, collection_name)
+    cfg = await KbCollectionConfigService.get_config(db, collection_name)
+    if cfg is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Collection '{collection_name}' 配置不存在",
+        )
+    return cfg
 
 
 @knowledge_base_router.get('/status', response_model=KnowledgeBaseStatus)
@@ -99,8 +122,9 @@ async def get_collections(
 async def create_collection(
     request: CreateCollectionRequest,
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """创建 Collection（仅写入 Qdrant）"""
+    """创建 Collection（Qdrant + MySQL 默认配置）"""
     _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
@@ -116,6 +140,9 @@ async def create_collection(
         http_code = int(result.get('code', 400))
         raise HTTPException(status_code=http_code, detail=result['message'])
 
+    await KbCollectionConfigService.create_default(db, request.name)
+    await db.commit()
+
     return CreateCollectionResponse(
         success=True,
         message=result['message'],
@@ -127,8 +154,9 @@ async def create_collection(
 async def delete_collection(
     collection_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """删除 Collection（仅操作 Qdrant）"""
+    """删除 Collection（Qdrant + MySQL 配置）"""
     _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
@@ -138,6 +166,9 @@ async def delete_collection(
 
     if not result['success']:
         raise HTTPException(status_code=400, detail=result['message'])
+
+    await KbCollectionConfigService.delete_config(db, collection_name)
+    await db.commit()
 
     return result
 
@@ -166,6 +197,57 @@ async def get_collection(
         created_at=collection.get("created_at"),
         status=collection.get("status"),
     )
+
+
+@knowledge_base_router.get(
+    '/collections/{collection_name}/config',
+    response_model=CollectionConfigResponse,
+)
+async def get_collection_config(
+    collection_name: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """读取集合 MySQL 配置"""
+    _ = current_user
+    service = QdrantService()
+    cfg = await _require_collection_config(db, service, collection_name)
+    return CollectionConfigResponse(**cfg)
+
+
+@knowledge_base_router.patch(
+    '/collections/{collection_name}/config',
+    response_model=CollectionConfigResponse,
+)
+async def patch_collection_config(
+    collection_name: str,
+    body: PatchCollectionConfigRequest,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """部分更新集合配置（deep-merge）"""
+    _ = current_user
+    service = QdrantService()
+    await _require_collection_in_qdrant(service, collection_name)
+
+    updated = await KbCollectionConfigService.patch_config(
+        db,
+        collection_name,
+        processing_params=body.processing_params,
+        query_params=body.query_params,
+    )
+    if updated is None:
+        await KbCollectionConfigService.create_default(db, collection_name)
+        updated = await KbCollectionConfigService.patch_config(
+            db,
+            collection_name,
+            processing_params=body.processing_params,
+            query_params=body.query_params,
+        )
+    await db.commit()
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' 配置不存在")
+    return CollectionConfigResponse(**updated)
 
 
 @knowledge_base_router.get('/collections/{collection_name}/documents', response_model=List[DocumentInfo])
@@ -231,6 +313,7 @@ async def get_shard_detail(
         Header_2=shard.get("Header_2"),
         Header_3=shard.get("Header_3"),
         chunk_index=shard.get("chunk_index"),
+        effective_processing_params=shard.get("effective_processing_params"),
     )
 
 
@@ -268,12 +351,23 @@ async def delete_document(
 async def upload_document(
     collection_name: str,
     file: UploadFile = File(...),
+    processing_params: Optional[str] = Form(
+        None, description="可选 JSON：当次入库 processing_params 覆盖"
+    ),
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """上传文档：DocumentParser 统一解析分块后写入 Qdrant。"""
+    """上传文档：解析分块后写入 Qdrant。"""
     _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
+
+    request_once = None
+    if processing_params and processing_params.strip():
+        try:
+            request_once = json.loads(processing_params)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"processing_params JSON 无效: {exc}") from exc
 
     suffix = os.path.splitext(file.filename)[1] if file.filename else '.tmp'
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -283,17 +377,22 @@ async def upload_document(
 
     try:
         service = QdrantService()
-        collection_info = service.get_collection(collection_name)
-        if not collection_info:
-            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' 不存在")
+        col_info = await _require_collection_in_qdrant(service, collection_name)
+        vector_dim = int(col_info.get('vector_dimension', 1024))
 
-        vector_dim = int(collection_info.get('vector_dimension', 1024))
+        cfg = await KbCollectionConfigService.get_config(db, collection_name)
+        collection_defaults = (cfg or {}).get("processing_params") or {}
+        effective = resolve_effective_processing_params(
+            collection_defaults=collection_defaults,
+            request_once=request_once,
+        )
 
         result = service.upload_document(
             collection_name=collection_name,
             file_name=file.filename or 'unknown',
             file_path=tmp_path,
             vector_dim=vector_dim,
+            effective_processing_params=effective,
         )
 
         if not result['success']:
@@ -324,11 +423,9 @@ async def search_collection(
     collection_name: str,
     body: SearchCollectionBody,
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    知识库检索：支持 vector / bm25 / hybrid（RRF）与可选 filters。
-    集合由路径 collection_name 指定；未传的 limit/score_threshold 使用平台代码默认值。
-    """
+    """知识库检索：hybrid 默认 + recall → rerank → final_top_k。"""
     _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
@@ -340,48 +437,38 @@ async def search_collection(
 
     try:
         service = QdrantService()
-        col_info = service.get_collection(collection_name)
-        if not col_info:
-            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' 不存在")
+        col_info = await _require_collection_in_qdrant(service, collection_name)
         vd = int(col_info.get("vector_dimension", 1024))
+
+        cfg = await KbCollectionConfigService.get_config(db, collection_name)
+        collection_query = (cfg or {}).get("query_params")
 
         raw_body = nb.model_dump(exclude_unset=True)
         overrides = {
             k: raw_body[k]
-            for k in ("limit", "score_threshold", "search_mode", "rrf_k")
+            for k in (
+                "limit",
+                "final_top_k",
+                "recall_top_k",
+                "use_reranker",
+                "score_threshold",
+                "search_mode",
+                "rrf_k",
+            )
             if k in raw_body
         }
-        exec_params = merge_query_execution_params(
-            persisted=_global_query_defaults(),
+        exec_params = normalize_query_execution_params(
+            collection_query=collection_query,
             request_overrides=overrides,
         )
-        lim = exec_params.get("limit")
-        try:
-            lim_i = max(1, int(lim if lim is not None else 10))
-        except (TypeError, ValueError):
-            lim_i = 10
-        st = exec_params.get("score_threshold")
-        score_threshold = float(st) if isinstance(st, (float, int)) else None
-
-        search_mode = str(exec_params.get("search_mode") or nb.search_mode or "vector")
-        rrf_k_raw = exec_params.get("rrf_k")
-        if rrf_k_raw is None and nb.rrf_k is not None:
-            rrf_k_raw = nb.rrf_k
-        try:
-            rrf_k = max(1, int(rrf_k_raw if rrf_k_raw is not None else 60))
-        except (TypeError, ValueError):
-            rrf_k = 60
 
         from kb.retrieval import KbRetrievalService
 
         hits = KbRetrievalService.search(
             collection_name=collection_name,
             query=query.strip(),
-            search_mode=search_mode,
-            limit=lim_i,
-            score_threshold=score_threshold,
+            query_execution_params=exec_params,
             filters=nb.filters,
-            rrf_k=rrf_k,
             vector_dimension=vd,
         )
 
@@ -393,6 +480,8 @@ async def search_collection(
                 file_name=h.file_name,
                 search_mode=h.search_mode,
                 header_path=h.header_path,
+                recall_score=h.recall_score,
+                rerank_score=h.rerank_score,
             ).model_dump()
             for h in hits
         ]

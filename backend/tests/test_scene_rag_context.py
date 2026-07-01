@@ -35,11 +35,11 @@ SCENE = {
 
 
 @pytest.mark.asyncio
-async def test_build_scene_rag_context_two_channel_order():
-    """两路通道：历史需求 → 历史用例；不含当前需求检索。"""
+async def test_build_scene_rag_context_three_channel_order():
+    """三路通道：当前需求 → 历史需求 → 历史用例。"""
     call_specs: list[tuple[str, dict | None]] = []
 
-    async def _side_effect(self, query, *, limit=3, filters=None, vector_dimension=1024):
+    async def _side_effect(self, query, *, limit=3, filters=None, vector_dimension=1024, channel_overrides=None):
         call_specs.append((self.collection_name, filters))
         return [_hit(f"{self.collection_name}-1", f"content-{self.collection_name}")]
 
@@ -52,12 +52,13 @@ async def test_build_scene_rag_context_two_channel_order():
                 source_file_names=["login.md"],
             )
 
+    assert ("requirement_docs", {"file_name_in": ["login.md"]}) in call_specs
     assert ("requirement_docs", {"exclude_file_names": ["login.md"]}) in call_specs
     assert ("test_case_docs", None) in call_specs
-    assert "当前需求文档片段" not in context
+    assert context.index("当前需求文档片段") < context.index("历史相关需求片段")
     assert context.index("历史相关需求片段") < context.index("历史测试用例参考")
     assert trace["scene_name"] == "用户登录"
-    assert CHANNEL_CURRENT_REQUIREMENT not in trace["channels"]
+    assert trace["channels"][CHANNEL_CURRENT_REQUIREMENT]["hit_ids"] == ["requirement_docs-1"]
     assert trace["channels"][CHANNEL_HISTORICAL_REQUIREMENT]["hit_ids"] == ["requirement_docs-1"]
     assert trace["channels"][CHANNEL_HISTORICAL_TEST_CASES]["hit_ids"] == ["test_case_docs-1"]
 

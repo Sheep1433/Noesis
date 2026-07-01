@@ -3,10 +3,12 @@ import type { UploadFileInfo } from 'naive-ui'
 import type { PropType } from 'vue'
 import type { ChatAttachmentItem } from '@/store/business'
 import { deleteSessionAttachment, uploadSessionAttachment } from '@/api/chat'
+import { uploadDocument } from '@/api/knowledgeBase'
+import { KB_FILE_DICT_REF, TEST_CASE_UPLOAD_COLLECTION } from '@/config/knowledge'
 import { getFileTypeIconClass, isImagePreviewPath, isImageUploadFile } from '@/utils/filePreview'
 
 const props = defineProps({
-  /** kb：知识库 tmp；chat：会话附件 API（COMMON_QA） */
+  /** kb：测试用例等场景写入 requirement_docs；chat：会话附件 API */
   uploadMode: {
     type: String as PropType<'kb' | 'chat'>,
     default: 'kb',
@@ -110,24 +112,20 @@ const uploadChatAttachment = async (fileInfo: ExtendedUploadFileInfo) => {
 }
 
 const uploadKbDocument = async (fileInfo: ExtendedUploadFileInfo) => {
-  const formData = new FormData()
-  if (fileInfo.file) {
-    formData.append('file', fileInfo.file)
+  if (!fileInfo.file) {
+    throw new Error('文件无效')
   }
-  const response = await fetch('/api/knowledge_base/collections/tmp/upload', {
-    method: 'POST',
-    body: formData,
-  })
-  const result = await response.json()
-  if (result.success !== true) {
+  const result = await uploadDocument(TEST_CASE_UPLOAD_COLLECTION, fileInfo.file)
+  if (!result.success) {
     throw new Error(result.message || '上传失败')
   }
+  const fileName = result.file_name || fileInfo.name || 'file'
   businessStore.add_file({
-    file_name: result.file_name || fileInfo.name || 'file',
-    attachment_id: result.file_name || '',
+    file_name: fileName,
+    attachment_id: KB_FILE_DICT_REF,
     kind: 'document',
-    source_file_key: result.file_name,
-    parse_file_key: result.file_name,
+    source_file_key: fileName,
+    parse_file_key: fileName,
     file_size: '',
   })
   if (result.message === '文档已存在，无需重复上传') {

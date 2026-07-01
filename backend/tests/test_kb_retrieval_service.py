@@ -115,6 +115,7 @@ def test_search_hybrid_uses_rrf(mock_get_retrieval, _mock_connected, mock_retrie
         query="q",
         search_mode="hybrid",
         limit=5,
+        recall_top_k=5,
         rrf_k=60,
         vector_dimension=1024,
     )

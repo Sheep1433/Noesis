@@ -2,7 +2,9 @@
 
 主规格目录：`openspec/specs/<capability>/spec.md`。变更 delta 在 `openspec/changes/<name>/specs/`，归档后与主规格对齐。
 
-**读 spec 时只看 `openspec/specs/`**，`changes/archive/` 为历史决策链，日常开发不必翻阅。
+**读 spec 时以 `openspec/specs/` 为主**；`changes/archive/` 为历史决策链。
+
+**例外 — 知识库 RAG 底座**：`openspec/specs/knowledge-base/` **已删除**；实现与验收 **一律以** [`changes/enterprise-kb-retrieval-foundation/`](changes/enterprise-kb-retrieval-foundation/README.md) **及** [`docs/prd/knowledge-base/知识库RAG底座详细设计.md`](../docs/prd/knowledge-base/知识库RAG底座详细设计.md) **为准**。
 
 ## 能力目录（20 个有效 spec + 2 个合并占位）
 
@@ -24,7 +26,7 @@
 | | `skills-filesystem` | Skills 只读挂载与用户 ZIP |
 | | ~~`user-data-layout`~~ | → 已合并至 `agent-runtime-paths` |
 | | ~~`agent-workspace`~~ | → 已合并至 `agent-runtime-paths` |
-| **知识库** | `knowledge-base` | 入库、分块、检索 |
+| **知识库** | — | **→ change `enterprise-kb-retrieval-foundation` + [PRD](../docs/prd/knowledge-base/知识库RAG底座详细设计.md)**（归档前无主 spec 目录） |
 | **离线评测** | `test-case-agent-eval` | `evals.case` 两阶段 promptfoo |
 | | `agent-offline-eval` | `evals.agent.*` benchmark |
 | | `message-compression-eval` | `evals.compression` |
@@ -35,6 +37,7 @@
 
 | Change | 状态 | 说明 |
 |--------|------|------|
+| **`enterprise-kb-retrieval-foundation`** | **规格完整，实现进行中** | **知识库 RAG 底座唯一跟踪入口**；多 preset 分块、MySQL 集合配置、hybrid+rerank、evals/kb |
 | `refine-tool-outcome-handling` | **规格已入主 spec，实现未完成** | `platform-chat` / `agent-tool-failure-handling` 已写 outcome 契约；`tool_outcome.py` 与前端 ToolCallCollapse 待实现 |
 | `fault-operation-agent-experience-learning` | **未开始** | 故障运维经验沉淀，见 change proposal |
 
@@ -49,6 +52,8 @@
 | 工作区 / 删会话磁盘 | `agent-runtime-paths` | `agent-sandbox` |
 | 跑测试用例评测 | `test-case-agent-eval` | `backend/evals/case/README.md` |
 | 跑 Agent benchmark | `agent-offline-eval` | `backend/evals/README.md` |
+| 知识库入库/检索/调参 | [PRD 详细设计](../docs/prd/knowledge-base/知识库RAG底座详细设计.md) | [`enterprise-kb-retrieval-foundation`](changes/enterprise-kb-retrieval-foundation/README.md) spec |
+| 单集合 KB 检索评测 | change 内 `kb-evaluation` | `evals/kb/`（与 `evals.case --phase rag` 互补） |
 
 ## qa_type 路由
 
@@ -67,4 +72,5 @@
 | Agent | `backend/agent/` |
 | 运行时路径 | `backend/config/user_data_paths.py` |
 | 评测 | `backend/evals/` |
+| 知识库 | `backend/kb/`、`api/knowledge_base_api.py` |
 | 部署 | `deploy/` |

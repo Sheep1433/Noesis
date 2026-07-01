@@ -1,39 +1,59 @@
 ## Purpose
 
-本能力定义 Noesis **知识库检索离线评测** 行为：对指定集合与基准问答集计算 Recall@K、Hit@K 等指标，支撑分块与检索参数调优回归，并与测试用例 Agent 评测中的 RAG 命中指标语义对齐。
+本能力定义 Noesis **知识库检索离线评测**（`evals/kb/`）：对**单个 collection** 与 JSONL 基准集计算 Recall@K、Hit@K，支撑分块与检索参数调优。**与 `test-case-agent-eval` 互补**：本能力测通用 KB 检索链；后者测 TEST_CASE_QA 场景 RAG 端到端（两路 historical 通道、K=3）。
 
-## ADDED Requirements
+## Requirements
+
+### Requirement: 与 test-case-agent-eval 的边界
+
+| 维度 | `kb-evaluation`（本能力） | `test-case-agent-eval` 阶段 B |
+|------|---------------------------|-------------------------------|
+| 入口 | `uv run python -m evals.kb.run` | `uv run python -m evals.case --phase rag` |
+| 范围 | 单 collection、通用 query | 场景级两路 RAG + Agent 流水线 |
+| 金标准 | `relevant_chunk_ids` 或 file+header | `relevant_ids` + 场景 trace |
+| 默认 K | `final_top_k` 或 `--k` | 固定 Recall@3 / Hit@3 |
+| 断言复用 | MAY 与 `evals/case/shared/assertions.py` 共用 Recall/Hit 计算函数 | 已有 |
+
+本能力 **SHALL NOT** 替代 `evals.case --phase rag`；两者 SHALL 共用 `KbRetrievalService` 与相同 `merge_query_execution_params` 语义。
+
+#### Scenario: 评测与生产检索链一致
+
+- **WHEN** 运行 `evals.kb.run` 且未传 `--query-params`
+- **THEN** SHALL 读取目标集合 MySQL `query_params` 并调用 `KbRetrievalService`
 
 ### Requirement: 基准数据集格式
 
-系统 SHALL 支持 JSONL 基准文件，每行至少含：`query`（字符串）及 `relevant_chunk_ids`（字符串数组）或等价定位字段（`file_name` + `header_path` / `gold_snippet`）。
+系统 SHALL 支持 JSONL，每行至少含 `query` 及 `relevant_chunk_ids`（字符串数组）或等价定位（`file_name` + `header_path` / `gold_snippet`）。
 
 #### Scenario: 合法 JSONL 加载
 
-- **WHEN** 提供符合格式的 JSONL 路径
-- **THEN** 评测入口 SHALL 成功加载全部样本行
+- **WHEN** 提供符合格式的 JSONL
+- **THEN** 评测入口 SHALL 成功加载全部有效行
 
 #### Scenario: 缺少标注字段
 
-- **WHEN** 某行缺少 `query` 或任一相关定位字段
-- **THEN** 系统 SHALL 跳过该行并记录 warning，且 SHALL NOT 中断整次评测
+- **WHEN** 某行缺少 `query` 或定位字段
+- **THEN** 系统 SHALL 跳过该行并记录 warning，不中断整次评测
 
 ### Requirement: 评测执行入口
 
-系统 SHALL 提供命令行入口（例如 `uv run python -m evals.kb.run`），接受 `--dataset`、`--collection`、可选 `--query-params` JSON 覆盖，并对每条 `query` 调用 `KbRetrievalService` 执行与生产一致的检索链。
+系统 SHALL 提供 `uv run python -m evals.kb.run`，接受 `--dataset`、`--collection`、可选 `--query-params` JSON、可选 `--k`。
 
 #### Scenario: 对单集合跑通评测
 
 - **WHEN** 集合存在且基准集非空
-- **THEN** 命令 SHALL 输出每条样本的命中情况汇总及聚合指标
+- **THEN** 命令 SHALL 输出聚合指标与失败样本列表
 
 ### Requirement: 检索指标
 
-系统 SHALL 至少计算 **Recall@K** 与 **Hit@K**（K 取自 `final_top_k` 或 CLI `--k`）。Hit@K 定义为 top-k 结果中是否出现任一 `relevant_chunk_ids`；Recall@K 定义为相关 id 被召回比例（多样本平均）。
+系统 SHALL 计算 **Recall@K** 与 **Hit@K**（K 默认取有效 `final_top_k`，CLI `--k` 可覆盖）。
+
+- Hit@K：top-k 中是否出现任一 `relevant_chunk_ids`
+- Recall@K：`|relevant ∩ topK| / |relevant|`（逐样本平均）
 
 #### Scenario: 全命中样本
 
-- **WHEN** 某 query 的 `relevant_chunk_ids` 全部出现在 top-k
+- **WHEN** 某 query 的全部 `relevant_chunk_ids` 出现在 top-k
 - **THEN** 该样本 Recall@K SHALL 为 1.0
 
 #### Scenario: 无相关标注
@@ -43,27 +63,27 @@
 
 ### Requirement: 评测报告
 
-评测结束 SHALL 输出机器可读 JSON 摘要（总样本数、平均 Recall@K、Hit@K、失败样本列表）及人类可读控制台摘要。
+评测结束 SHALL 输出 JSON 摘要（`recall_at_k`、`hit_at_k`、样本数、失败列表）及控制台人类可读摘要。
 
 #### Scenario: 报告含聚合指标
 
 - **WHEN** 评测成功完成
-- **THEN** JSON 输出 SHALL 含 `recall_at_k` 与 `hit_at_k` 数值字段
-
-### Requirement: 与生产检索参数一致
-
-评测 SHALL 默认读取目标集合 MySQL `query_params`；CLI 传入的 `--query-params` SHALL 按与 HTTP 相同的合并语义覆盖持久化默认。
-
-#### Scenario: 评测使用集合 rerank 配置
-
-- **WHEN** 集合配置 `use_reranker=true`
-- **THEN** 评测检索链 SHALL 启用 rerank（在 rerank 可用前提下）
+- **THEN** JSON SHALL 含 `recall_at_k` 与 `hit_at_k` 数值字段
 
 ### Requirement: 可选 LLM Judge
 
-系统 MAY 支持 `--judge` 对 top 文档片段与 `gold_answer` 做二元正确性判定；该路径为可选，缺省评测 SHALL 仅依赖检索指标。
+系统 MAY 支持 `--judge` 对 top 片段与 `gold_answer` 做二元判定；缺省 **SHALL NOT** 调用 LLM。
 
 #### Scenario: 未启用 judge
 
 - **WHEN** 未传入 `--judge`
-- **THEN** 评测 SHALL 不调用 LLM，仅输出检索指标
+- **THEN** 评测 SHALL 仅输出检索指标
+
+### Requirement: 固定 fixture 样例
+
+系统 SHALL 提供 `evals/kb/fixtures/sample.jsonl` 与 DeepDoc/markdown 降级路径冒烟样例。
+
+#### Scenario: CI 冒烟
+
+- **WHEN** 对测试 collection 运行 fixtures 评测
+- **THEN** SHALL 产出非空 JSON 报告且 exit code 为 0

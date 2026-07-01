@@ -97,9 +97,9 @@ class MarkdownChunker:
         if clean_markdown is None:
             clean_markdown = raw_markdown
 
-        # 预处理：确保代码块中的 # 不被识别为标题
-        # raw_markdown = MarkdownChunker._normalize_markdown_code_blocks(raw_markdown)
-        # clean_markdown = MarkdownChunker._normalize_markdown_code_blocks(clean_markdown)
+        # 预处理：规范化围栏代码块，配合 MarkdownHeaderTextSplitter 避免 # 被误识别为标题
+        raw_markdown = MarkdownChunker._normalize_markdown_code_blocks(raw_markdown)
+        clean_markdown = MarkdownChunker._normalize_markdown_code_blocks(clean_markdown)
 
         headers_to_split_on = [
             ("#", "Header_1"),

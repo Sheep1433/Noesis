@@ -1,34 +1,55 @@
-"""
-文档解析工具
-"""
+"""文档解析工具"""
+from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+import shutil
+import tempfile
 from typing import List, Tuple, Optional
-import pandas as pd
 from docx import Document as DocxDocument
-from langchain_core.documents import Document
 
 from common.logging import logger
 
-_MARKDOWN_EXTENSIONS = frozenset({".md", ".markdown", ".mdown"})
-_WORD_EXTENSIONS = frozenset({".docx", ".doc"})
-_EXCEL_EXTENSIONS = frozenset({".xlsx", ".xls"})
+from kb.document_parse.factory import ParserFactory
 
 
 class DocumentParser:
     @staticmethod
+    def parse_file(
+        file_path: str,
+        domain: Optional[str] = None,
+        business: Optional[str] = None,
+        process_images: bool = False,
+        parser_id: Optional[str] = None,
+    ):
+        """
+        知识库统一文档解析入口（仅 parse，不分块）。唯一实现：DeepDoc。
+        """
+        _ = process_images  # DeepDoc 路径暂不使用 markitdown VLM 预处理
+        return ParserFactory.parse(
+            file_path,
+            domain=domain,
+            business=business,
+            parser_id=parser_id,
+        )
+
+    @staticmethod
     def convert_file_to_markdown(file_path: str) -> str:
-        """将文件转为 Markdown 文本；.md 直接读取，其余格式走 markitdown。"""
+        """聊天附件等场景：优先 DeepDoc，失败时保留 markitdown 轻量转换。"""
         ext = os.path.splitext(file_path)[1].lower()
-        if ext in _MARKDOWN_EXTENSIONS:
+        if ext in {".md", ".markdown", ".mdown"}:
             return DocumentParser._read_markdown_file(file_path)
+        try:
+            parsed = DocumentParser.parse_file(file_path)
+            text = (parsed.clean_markdown or parsed.raw_markdown or "").strip()
+            if text:
+                return text
+        except Exception as exc:
+            logger.warning(f"[DocumentParser] DeepDoc 转 Markdown 失败，尝试 markitdown: {exc}")
         try:
             from markitdown import MarkItDown
 
-            md = MarkItDown()
-            result = md.convert(file_path)
+            result = MarkItDown().convert(file_path)
             return result.text_content or ""
         except Exception as exc:
             logger.error(f"文档转 Markdown 失败 {file_path}: {exc}")
@@ -50,125 +71,12 @@ class DocumentParser:
         return text or ""
 
     @staticmethod
-    def _load_excel_rows(
+    def enhance_docx_to_markdown(
         file_path: str,
-        file_name: str,
-        file_type: str,
-        update_time: str,
-    ) -> List[Document]:
-        df = pd.read_excel(file_path)
-        documents: List[Document] = []
-        for index, row in df.iterrows():
-            parts = [
-                f"{col}: {val}"
-                for col, val in row.items()
-                if pd.notna(val) and str(val).strip()
-            ]
-            content = " ".join(parts).strip()
-            if not content:
-                continue
-            documents.append(
-                Document(
-                    page_content=content,
-                    metadata={
-                        "file_name": file_name,
-                        "source": file_path,
-                        "file_type": file_type,
-                        "element_type": "table",
-                        "raw_text": content,
-                        "clean_text": content,
-                        "update_time": update_time,
-                        "row": int(index),
-                    },
-                )
-            )
-        return documents
-
-    @staticmethod
-    def parse_file(
-        file_path: str,
-        domain: Optional[str] = None,
-        business: Optional[str] = None,
         process_images: bool = False,
-    ) -> "ParsedFile":
-        """
-        知识库统一文档解析入口（仅 parse，不分块）。
-
-        - Excel/CSV：每行一个 Document（表格型 parse 结果）
-        - Word/Markdown/其他：输出 raw/clean Markdown
-        """
-        from kb.document_parse.models import ParsedFile
-
-        file_extension = os.path.splitext(file_path)[-1].lower()
-        file_name = os.path.basename(file_path)
-        file_type = file_extension.lstrip(".")
-        update_time = datetime.now().isoformat()
-        base = dict(
-            file_path=file_path,
-            file_name=file_name,
-            file_type=file_type,
-            update_time=update_time,
-            domain=domain,
-            business=business,
-        )
-
-        if file_extension in _EXCEL_EXTENSIONS:
-            return ParsedFile(
-                **base,
-                row_documents=DocumentParser._load_excel_rows(
-                    file_path, file_name, file_type, update_time
-                ),
-            )
-
-        if file_extension in _WORD_EXTENSIONS:
-            raw_markdown, clean_markdown = DocumentParser.enhance_docx_to_markdown(
-                file_path, process_images=process_images
-            )
-            md_file_path = os.path.splitext(file_path)[0] + ".md"
-            with open(md_file_path, "w", encoding="utf-8") as f:
-                f.write(clean_markdown)
-            return ParsedFile(
-                **base,
-                raw_markdown=raw_markdown,
-                clean_markdown=clean_markdown,
-            )
-
-        if file_extension in _MARKDOWN_EXTENSIONS:
-            raw_markdown = DocumentParser._read_markdown_file(file_path)
-            return ParsedFile(
-                **base,
-                raw_markdown=raw_markdown,
-                clean_markdown=raw_markdown,
-            )
-
-        if file_extension == ".csv":
-            from langchain_community.document_loaders import CSVLoader
-
-            loader = CSVLoader(file_path)
-            documents = loader.load()
-            for doc in documents:
-                doc.metadata.update({
-                    "file_name": file_name,
-                    "source": file_path,
-                    "file_type": "csv",
-                    "element_type": "table",
-                    "raw_text": doc.page_content,
-                    "clean_text": doc.page_content,
-                    "update_time": update_time,
-                })
-            return ParsedFile(**base, row_documents=documents)
-
-        markdown = DocumentParser.convert_file_to_markdown(file_path)
-        if not markdown.strip():
-            raise ValueError(f"文档解析失败或内容为空: {file_extension or file_path}")
-        return ParsedFile(
-            **base,
-            raw_markdown=markdown,
-            clean_markdown=markdown,
-        )
-
-    @staticmethod
-    def enhance_docx_to_markdown(file_path: str, process_images: bool = False) -> Tuple[str, str]:
+        *,
+        mutate_original: bool = True,
+    ) -> Tuple[str, str]:
         """
         将 docx 文件转换为 markdown，并清理目录区域。
         
@@ -180,53 +88,60 @@ class DocumentParser:
             raw_markdown: 保留 data URI 的原始 markdown（用于溯源）
             clean_markdown: 图片替换为描述后的 markdown（用于 RAG 检索）
         """
-        DocumentParser.wrap_code_blocks_in_docx(file_path)
-        from markitdown import MarkItDown
+        work_path = file_path
+        temp_path: Optional[str] = None
+        if not mutate_original:
+            fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(file_path)[1] or ".docx")
+            os.close(fd)
+            shutil.copy2(file_path, temp_path)
+            work_path = temp_path
 
-        if process_images:
-            md = MarkItDown()
-            result = md.convert(file_path, keep_data_uris=True)
-        else:
-            md = MarkItDown()
-            result = md.convert(file_path)
+        try:
+            DocumentParser.wrap_code_blocks_in_docx(work_path)
+            from markitdown import MarkItDown
 
-        raw_markdown = result.text_content
-        raw_markdown = DocumentParser.clean_table_of_contents(raw_markdown)
+            if process_images:
+                md = MarkItDown()
+                result = md.convert(work_path, keep_data_uris=True)
+            else:
+                md = MarkItDown()
+                result = md.convert(work_path)
 
-        if not process_images:
-            return raw_markdown, raw_markdown
+            raw_markdown = result.text_content
+            raw_markdown = DocumentParser.clean_table_of_contents(raw_markdown)
 
-        # 提取所有 data URI 图片并用 VL 描述替换
-        clean_markdown = DocumentParser._replace_images_with_descriptions(raw_markdown)
-        return raw_markdown, clean_markdown
+            if not process_images:
+                return raw_markdown, raw_markdown
+
+            clean_markdown = DocumentParser._replace_images_with_descriptions(raw_markdown)
+            return raw_markdown, clean_markdown
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     @staticmethod
-    def wrap_code_blocks_in_docx(file_path):
+    def wrap_code_blocks_in_docx(file_path: str) -> None:
         doc = DocxDocument(file_path)
         in_code_block = False
 
-        # 从后往前遍历，避免插入后索引变化影响后续处理
         for i in range(len(doc.paragraphs) - 1, -1, -1):
             para = doc.paragraphs[i]
-            is_terminal = (para.style.name == 'Terminal Display')
+            is_terminal = para.style.name == 'Terminal Display'
 
             if is_terminal and not in_code_block:
-                # 代码块开始：在当前 Terminal 段落前插入 ```
                 para.insert_paragraph_before("```")
                 in_code_block = True
-
             elif not is_terminal and in_code_block:
-                # 代码块结束：在当前非 Terminal 段落前插入 ```
                 para.insert_paragraph_before("```")
                 in_code_block = False
 
-        # 处理文档以 Terminal 结尾的情况（需要闭合代码块）
         if in_code_block:
             doc.paragraphs[0].insert_paragraph_before("```")
 
         doc.save(file_path)
-        print(f"处理完成！已保存至: {file_path}")
+        logger.info(f"docx 代码围栏处理完成: {file_path}")
 
+    @staticmethod
     def _extract_data_uris(text: str) -> List[str]:
         """从 markdown 文本中提取所有 data URI"""
         pattern = r'data:image/[^;]+;base64,[A-Za-z0-9+/=]+'

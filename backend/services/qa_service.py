@@ -517,6 +517,7 @@ class QaService:
                     current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
+                    db=db,
                 )
             else:
                 # 即时代码路径，连续产出多帧 SSE，无长时间阻塞，无需注释保活。

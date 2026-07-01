@@ -35,6 +35,9 @@ def get_embedding(model: str | None = None):
 
     模型名与 base_url 读 embedding 配置段；api_key 读 EMBEDDING_MODEL_API_KEY。
     未完整配置时抛出 ValueError（不回退主模型或 DASHSCOPE_API_KEY）。
+
+    DashScope 兼容接口只接受 str / list[str] 作为 input，不接受 tiktoken 整数序列；
+    因此关闭 check_embedding_ctx_length。text-embedding-v4 单请求 batch 上限为 10。
     """
     if not is_embedding_configured():
         raise ValueError(embedding_not_configured_message())
@@ -44,8 +47,12 @@ def get_embedding(model: str | None = None):
     model_name = (model or ModelConfig.embedding_model_name).strip()
     api_key = ModelConfig.embedding_model_api_key.strip()
     base_url = ModelConfig.embedding_model_base_url.strip()
-    return OpenAIEmbeddings(
-        model=model_name,
-        openai_api_key=api_key,
-        openai_api_base=base_url,
-    )
+    kwargs: dict = {
+        "model": model_name,
+        "openai_api_key": api_key,
+        "openai_api_base": base_url,
+        "check_embedding_ctx_length": False,
+    }
+    if "dashscope" in base_url.lower():
+        kwargs["chunk_size"] = 10
+    return OpenAIEmbeddings(**kwargs)

@@ -16,7 +16,7 @@ context: |
   - 平台聊天：platform-chat、chat-session-attachments、chat-composer-send-upload、chat-session-context-panel、agent-reasoning-observability
   - Agent 场景：agent-common-qa、agent-fault-operation、agent-test-case、agent-deep-research、agent-web-tools、agent-tool-failure-handling
   - 运行时：agent-runtime-paths（权威路径；user-data-layout / agent-workspace 已合并占位）、agent-sandbox、skills-filesystem
-  - 知识库：knowledge-base
+  - 知识库（无主 spec 目录，见 change enterprise-kb-retrieval-foundation + docs/prd/knowledge-base/）：knowledge-base、kb-chunking、kb-retrieval、kb-document-parse、kb-evaluation
   - 离线评测：test-case-agent-eval、agent-offline-eval、message-compression-eval
   - 部署认证：container-deployment、user-auth
 

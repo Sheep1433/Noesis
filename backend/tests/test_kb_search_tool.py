@@ -9,12 +9,13 @@ from agent.tools.kb_search_tool import (
 from kb.retrieval import KbSearchHit
 
 
+@patch("agent.tools.kb_search_tool.KbCollectionConfigService.load_query_params_sync", return_value={"search_mode": "hybrid"})
 @patch("agent.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("agent.tools.kb_search_tool.list_qdrant_collection_names", return_value=["req_docs", "kb_other"])
 @patch("agent.tools.kb_search_tool.QdrantService")
 @patch("agent.tools.kb_search_tool.KbRetrievalService.search")
 def test_search_all_collections_hybrid_and_merge(
-    mock_search, mock_qdrant_cls, _names, _connected
+    mock_search, mock_qdrant_cls, _names, _connected, _load_qp
 ):
     mock_qdrant_cls.return_value.get_collection.return_value = {
         "name": "x",
@@ -41,7 +42,8 @@ def test_search_all_collections_hybrid_and_merge(
     assert data["hits"][0]["collection_name"] == "req_docs"
     assert mock_search.call_count == 2
     for call in mock_search.call_args_list:
-        assert call.kwargs["search_mode"] == "hybrid"
+        params = call.kwargs.get("query_execution_params") or {}
+        assert params.get("search_mode", "hybrid") == "hybrid"
 
 
 @patch("agent.tools.kb_search_tool.is_qdrant_connected", return_value=True)

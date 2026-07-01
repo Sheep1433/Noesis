@@ -8,8 +8,9 @@ from typing import List, Tuple
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from kb.chunk import DEFAULT_COLLECTION_QUERY, merge_query_execution_params
+from kb.chunk import normalize_query_execution_params
 from kb.retrieval.service import KbRetrievalService, KbSearchHit
+from services.kb_collection_config_service import KbCollectionConfigService
 from services.qdrant_service import QdrantService, is_qdrant_connected
 from common.logging import logger
 
@@ -48,6 +49,8 @@ def _format_hits(scored: List[Tuple[str, KbSearchHit]]) -> str:
                 "collection_name": collection_name,
                 "file_name": hit.file_name,
                 "score": round(hit.score, 4),
+                "recall_score": round(hit.recall_score, 4) if hit.recall_score is not None else None,
+                "rerank_score": round(hit.rerank_score, 4) if hit.rerank_score is not None else None,
                 "search_mode": hit.search_mode,
                 "header_path": hit.header_path,
                 "content": hit.content,
@@ -71,13 +74,7 @@ def search_knowledge_bases_all(query: str, limit: int = 10) -> str:
             ensure_ascii=False,
         )
 
-    exec_params = merge_query_execution_params(
-        persisted=dict(DEFAULT_COLLECTION_QUERY),
-        request_overrides={"limit": limit},
-    )
-    global_limit = max(1, min(20, int(exec_params.get("limit") or 10)))
-    score_threshold = exec_params.get("score_threshold")
-
+    global_limit = max(1, min(20, int(limit or 10)))
     per_collection = max(3, (global_limit + len(collections) - 1) // len(collections))
 
     merged: List[Tuple[str, KbSearchHit]] = []
@@ -89,12 +86,15 @@ def search_knowledge_bases_all(query: str, limit: int = 10) -> str:
             if not col:
                 continue
             vd = int(col.get("vector_dimension") or 1024)
+            collection_query = KbCollectionConfigService.load_query_params_sync(name)
+            exec_params = normalize_query_execution_params(
+                collection_query=collection_query,
+                request_overrides={"final_top_k": per_collection},
+            )
             hits = KbRetrievalService.search(
                 collection_name=name,
                 query=query,
-                search_mode="hybrid",
-                limit=per_collection,
-                score_threshold=score_threshold,
+                query_execution_params=exec_params,
                 vector_dimension=vd,
             )
             for hit in hits:

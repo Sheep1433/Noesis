@@ -10,7 +10,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from config.env import QdrantConfig
 from common.logging import logger
 from kb.document_parse import DocumentParser
-from kb.chunk import chunk, fixed_processing_params
+from kb.chunk import chunk, build_effective_processing_snapshot, fixed_processing_params
 from kb.retrieval.payload import documents_to_points
 
 # 全局 Qdrant 客户端实例
@@ -262,6 +262,9 @@ class QdrantService:
 
         try:
             self.client.delete_collection(collection_name=collection_name)
+            from kb.retrieval import KbRetrievalService
+
+            KbRetrievalService.invalidate_cache(collection_name)
             logger.info(f"删除 Collection 成功: {collection_name}")
             return {'success': True, 'message': f"Collection '{collection_name}' 已删除"}
 
@@ -400,6 +403,7 @@ class QdrantService:
                 'Header_2': payload.get('Header_2') or None,
                 'Header_3': payload.get('Header_3') or None,
                 'chunk_index': payload.get('chunk_index'),
+                'effective_processing_params': payload.get('effective_processing_params'),
             }
             
         except Exception as e:
@@ -486,6 +490,9 @@ class QdrantService:
                     collection_name=collection_name,
                     points_selector=PointIdsList(points=ids_to_delete),
                 )
+                from kb.retrieval import KbRetrievalService
+
+                KbRetrievalService.invalidate_cache(collection_name)
                 logger.info(f"成功删除文档 {file_name}，共 {len(ids_to_delete)} 个分片")
                 return {'success': True, 'message': f'文档 {file_name} 已删除', 'deleted_count': len(ids_to_delete)}
             
@@ -533,6 +540,7 @@ class QdrantService:
         file_name: str,
         file_path: str,
         vector_dim: int = 1024,
+        effective_processing_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """上传文档：DocumentParser 统一解析分块后写入 Qdrant。"""
         if not self.client:
@@ -558,17 +566,38 @@ class QdrantService:
                     }
 
             # 2. parse → chunk 两步流水线
-            ef_params = fixed_processing_params()
+            ef_params = effective_processing_params or fixed_processing_params()
+            parser_id = str(ef_params.get("parser_id") or "deepdoc").strip().lower()
+            if parser_id != "deepdoc":
+                return {
+                    'success': False,
+                    'message': f'仅支持 parser_id=deepdoc，收到: {parser_id}',
+                    'shards_created': 0,
+                }
             try:
-                parsed = DocumentParser.parse_file(file_path)
+                from kb.document_parse.cached_parse import parse_file_cached
+
+                parsed = parse_file_cached(
+                    file_path,
+                    collection_name=collection_name,
+                    file_hash=file_hash,
+                    parser_id=parser_id,
+                )
+                if parsed.deepdoc_result and parsed.deepdoc_result.deepdoc_version:
+                    ef_params = dict(ef_params)
+                    ef_params["deepdoc_version"] = parsed.deepdoc_result.deepdoc_version
                 documents = chunk(parsed, effective_params=ef_params)
             except ValueError as exc:
+                return {'success': False, 'message': str(exc), 'shards_created': 0}
+            except RuntimeError as exc:
                 return {'success': False, 'message': str(exc), 'shards_created': 0}
 
             if not documents:
                 return {'success': False, 'message': '文档解析失败或内容为空', 'shards_created': 0}
 
-            content = self.parse_document(file_path)
+            content = (parsed.clean_markdown or parsed.raw_markdown or "").strip()
+            if not content:
+                content = self.parse_document(file_path)
 
             texts = [(d.page_content or "").strip() for d in documents]
             logger.info(f"文档 {file_name} 解析完成，共 {len(texts)} 个分片")
@@ -619,7 +648,7 @@ class QdrantService:
                 documents,
                 embeddings,
                 file_hash=file_hash,
-                effective_processing_params=ef_params,
+                effective_processing_params=build_effective_processing_snapshot(ef_params),
             )
             if not points:
                 return {'success': False, 'message': '文档分片失败', 'shards_created': 0}

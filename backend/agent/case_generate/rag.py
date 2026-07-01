@@ -10,6 +10,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from config.env import QdrantConfig
+from kb.chunk import normalize_query_execution_params
 from kb.retrieval import KbSearchHit
 from domain.observability.langfuse import hits_to_langfuse_payload, langfuse_retrieval_observation
 from common.logging import logger
@@ -22,6 +23,7 @@ CHANNEL_HISTORICAL_REQUIREMENT = "historical_requirements"
 CHANNEL_HISTORICAL_TEST_CASES = "historical_test_cases"
 
 DEFAULT_TOP_K = 3
+_CHANNEL_QUERY_OVERRIDE = {"final_top_k": DEFAULT_TOP_K}
 _DEFAULT_TIMEOUT = 10.0
 _LANGFUSE_CONTEXT_PREVIEW = 2000
 
@@ -69,18 +71,31 @@ class _HybridRetriever:
         limit: int = DEFAULT_TOP_K,
         filters: Optional[Dict[str, Any]] = None,
         vector_dimension: int = 1024,
+        channel_overrides: Optional[Dict[str, Any]] = None,
     ) -> List[KbSearchHit]:
         if not query or not str(query).strip():
             return []
 
         def _run() -> List[KbSearchHit]:
             from kb.retrieval import KbRetrievalService
+            from services.kb_collection_config_service import KbCollectionConfigService
 
+            collection_query = KbCollectionConfigService.load_query_params_sync(
+                self.collection_name
+            )
+            overrides = dict(_CHANNEL_QUERY_OVERRIDE)
+            if channel_overrides:
+                overrides.update(channel_overrides)
+            if limit != DEFAULT_TOP_K:
+                overrides["final_top_k"] = limit
+            exec_params = normalize_query_execution_params(
+                collection_query=collection_query,
+                request_overrides=overrides,
+            )
             return KbRetrievalService.search(
                 collection_name=self.collection_name,
                 query=query.strip(),
-                search_mode="hybrid",
-                limit=limit,
+                query_execution_params=exec_params,
                 filters=filters,
                 vector_dimension=vector_dimension,
             )
@@ -182,6 +197,17 @@ async def _build_scene_rag_context_impl(
     historical_enabled = bool(QdrantConfig.case_rag_historical_requirements_enabled)
     historical_filters = _historical_requirement_filters(source_names) if historical_enabled else None
 
+    current_coro = (
+        _search_channel(
+            req_retriever,
+            query=query,
+            channel_key=CHANNEL_CURRENT_REQUIREMENT,
+            section_title="当前需求文档片段",
+            filters={"file_name_in": source_names} if source_names else None,
+        )
+        if source_names
+        else _empty_channel()
+    )
     historical_coro = (
         _search_channel(
             req_retriever,
@@ -201,12 +227,22 @@ async def _build_scene_rag_context_impl(
     )
 
     (
+        (current_section, current_hits, current_trace),
         (historical_section, historical_hits, historical_trace),
         (tc_section, tc_hits, tc_trace),
-    ) = await asyncio.gather(historical_coro, test_cases_coro)
+    ) = await asyncio.gather(current_coro, historical_coro, test_cases_coro)
 
     sections: List[str] = []
     channels: Dict[str, Dict[str, Any]] = {}
+
+    if current_section:
+        sections.append(current_section)
+    if source_names:
+        channels[CHANNEL_CURRENT_REQUIREMENT] = current_trace
+        logger.info(
+            f"[CaseRAG] scene={scene_name} channel={CHANNEL_CURRENT_REQUIREMENT} "
+            f"hits={len(current_hits)} collection={req_coll}"
+        )
 
     if historical_section:
         sections.append(historical_section)
@@ -239,7 +275,7 @@ async def build_scene_rag_context(
     source_file_names: Optional[List[str]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    对单个场景执行两路 hybrid 召回并拼接 Markdown 上下文（不含当前需求；当前需求全文由 case_graph 注入）。
+    对单个场景执行三路 hybrid 召回并拼接 Markdown 上下文。
 
     Returns:
         (scene_rag_context, trace_entry) — trace_entry 含 scene_name 与各 channel hit_ids。

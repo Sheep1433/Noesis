@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 from langchain_core.documents import Document
 
@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from kb.retrieval.store import Retrieval
 
 from config.env import QdrantConfig
+from kb.chunk.params import normalize_query_execution_params
+from kb.rerank import is_rerank_available, rerank_documents
 from kb.retrieval.filters import document_matches_post_filter, split_search_filters
 from services.qdrant_service import get_qdrant_client, is_qdrant_connected
 from common.logging import logger
@@ -27,10 +29,12 @@ class KbSearchHit:
     file_name: str
     search_mode: str
     header_path: Optional[str] = None
+    recall_score: Optional[float] = None
+    rerank_score: Optional[float] = None
 
 
 class KbRetrievalService:
-    """集合内检索：search_mode + filters + 平台默认 query 参数与请求体合并。"""
+    """集合内检索：recall → rerank → score_threshold → final_top_k。"""
 
     @classmethod
     def qdrant_url(cls) -> str:
@@ -68,53 +72,153 @@ class KbRetrievalService:
         *,
         collection_name: str,
         query: str,
-        search_mode: str = "vector",
-        limit: int = 10,
-        score_threshold: Optional[float] = None,
+        query_execution_params: Optional[Mapping[str, Any]] = None,
+        collection_query_defaults: Optional[Mapping[str, Any]] = None,
         filters: Optional[Dict[str, Any]] = None,
-        rrf_k: int = 60,
         vector_dimension: int = 1024,
+        # legacy kwargs（测试与旧调用方）
+        search_mode: Optional[str] = None,
+        limit: Optional[int] = None,
+        score_threshold: Optional[float] = None,
+        rrf_k: Optional[int] = None,
+        use_reranker: Optional[bool] = None,
+        recall_top_k: Optional[int] = None,
+        final_top_k: Optional[int] = None,
     ) -> List[KbSearchHit]:
         if not is_qdrant_connected():
             raise RuntimeError("向量库未连接")
 
-        mode = (search_mode or "vector").strip().lower()
+        legacy_overrides: Dict[str, Any] = {}
+        if search_mode is not None:
+            legacy_overrides["search_mode"] = search_mode
+        if limit is not None:
+            legacy_overrides["limit"] = limit
+        if final_top_k is not None:
+            legacy_overrides["final_top_k"] = final_top_k
+        if score_threshold is not None:
+            legacy_overrides["score_threshold"] = score_threshold
+        if rrf_k is not None:
+            legacy_overrides["rrf_k"] = rrf_k
+        if use_reranker is not None:
+            legacy_overrides["use_reranker"] = use_reranker
+        if recall_top_k is not None:
+            legacy_overrides["recall_top_k"] = recall_top_k
+        if query_execution_params:
+            legacy_overrides.update(
+                {k: v for k, v in dict(query_execution_params).items() if v is not None}
+            )
+
+        params = normalize_query_execution_params(
+            collection_query=collection_query_defaults,
+            request_overrides=legacy_overrides or None,
+        )
+
+        mode = str(params.get("search_mode") or "hybrid").strip().lower()
         if mode not in _VALID_MODES:
-            raise ValueError(f"不支持的 search_mode: {search_mode}")
+            raise ValueError(f"不支持的 search_mode: {mode}")
+
+        try:
+            recall_k = max(1, int(params.get("recall_top_k") or 50))
+        except (TypeError, ValueError):
+            recall_k = 50
+        try:
+            final_k = max(1, int(params.get("final_top_k") or 10))
+        except (TypeError, ValueError):
+            final_k = 10
+        try:
+            rrf_k_i = max(1, int(params.get("rrf_k") or 60))
+        except (TypeError, ValueError):
+            rrf_k_i = 60
+
+        st_raw = params.get("score_threshold")
+        threshold: Optional[float] = None
+        if isinstance(st_raw, (int, float)):
+            threshold = float(st_raw)
+
+        use_rerank = bool(params.get("use_reranker", True))
 
         qdrant_filter, post_filter = split_search_filters(filters)
         retrieval = cls._get_retrieval(collection_name, vector_dimension)
 
+        recall_limit = recall_k
+        if post_filter:
+            recall_limit = max(recall_k, recall_k * 3)
+
         if mode == "vector":
             scored = retrieval.vector_search(
                 query,
-                k=limit,
-                score_threshold=score_threshold,
+                k=recall_limit,
+                score_threshold=None,
                 metadata_filter=qdrant_filter,
             )
-            return cls._hits_from_scored(scored, mode, post_filter, limit)
-
-        if mode == "bm25":
-            scored = retrieval.bm25_search_with_scores(
-                query, k=limit * 3 if post_filter else limit
+        elif mode == "bm25":
+            scored = retrieval.bm25_search_with_scores(query, k=recall_limit)
+        else:
+            scored = retrieval.hybrid_search_with_scores(
+                query,
+                k=recall_limit,
+                rrf_k=rrf_k_i,
+                metadata_filter=qdrant_filter,
             )
-            return cls._hits_from_scored(scored, mode, post_filter, limit)
 
-        scored = retrieval.hybrid_search_with_scores(
-            query,
-            k=limit * 3 if post_filter else limit,
-            rrf_k=rrf_k,
-            metadata_filter=qdrant_filter,
+        hits = cls._hits_from_scored(
+            scored, mode, post_filter, recall_limit, qdrant_filter=qdrant_filter
         )
-        return cls._hits_from_scored(scored, mode, post_filter, limit)
+
+        if use_rerank and hits and is_rerank_available():
+            hits = cls._apply_rerank(query, hits)
+        elif use_rerank and hits and not is_rerank_available():
+            logger.warning("[KbRetrievalService] use_reranker=true 但 rerank 未配置，降级 recall 排序")
+
+        if threshold is not None:
+            hits = [h for h in hits if h.score >= threshold]
+
+        hits.sort(key=lambda h: h.score, reverse=True)
+        return hits[:final_k]
+
+    @classmethod
+    def _apply_rerank(cls, query: str, hits: List[KbSearchHit]) -> List[KbSearchHit]:
+        documents = [h.content for h in hits]
+        try:
+            ranked = rerank_documents(query, documents, top_n=len(documents))
+        except Exception as exc:
+            logger.warning(f"[KbRetrievalService] rerank 失败，降级 recall 排序: {exc}")
+            return hits
+
+        by_index = {i: h for i, h in enumerate(hits)}
+        reranked: List[KbSearchHit] = []
+        for idx, rerank_score in ranked:
+            if idx not in by_index:
+                continue
+            hit = by_index[idx]
+            recall_score = hit.recall_score if hit.recall_score is not None else hit.score
+            reranked.append(
+                KbSearchHit(
+                    id=hit.id,
+                    score=float(rerank_score),
+                    content=hit.content,
+                    file_name=hit.file_name,
+                    search_mode=hit.search_mode,
+                    header_path=hit.header_path,
+                    recall_score=recall_score,
+                    rerank_score=float(rerank_score),
+                )
+            )
+        return reranked or hits
 
     @staticmethod
-    def _apply_post_filter_docs(
-        documents: List[Document], post_filter: Dict[str, Any]
-    ) -> List[Document]:
-        if not post_filter:
-            return documents
-        return [d for d in documents if document_matches_post_filter(d.metadata, post_filter)]
+    def _matches_qdrant_filter(
+        metadata: Dict[str, Any], qdrant_filter: Optional[Dict[str, Any]]
+    ) -> bool:
+        if not qdrant_filter:
+            return True
+        for key, value in qdrant_filter.items():
+            meta_val = metadata.get(key)
+            if key in ("file_name", "source_name") and meta_val is None:
+                meta_val = metadata.get("file_name") or metadata.get("source_name")
+            if str(meta_val or "") != str(value):
+                return False
+        return True
 
     @staticmethod
     def _hits_from_scored(
@@ -122,23 +226,22 @@ class KbRetrievalService:
         mode: str,
         post_filter: Dict[str, Any],
         limit: int,
+        *,
+        qdrant_filter: Optional[Dict[str, Any]] = None,
     ) -> List[KbSearchHit]:
         hits: List[KbSearchHit] = []
         for doc, score in scored:
-            if not document_matches_post_filter(doc.metadata, post_filter):
+            meta = doc.metadata or {}
+            if not KbRetrievalService._matches_qdrant_filter(meta, qdrant_filter):
                 continue
-            hits.append(KbRetrievalService._doc_to_hit(doc, score, mode))
+            if not document_matches_post_filter(meta, post_filter):
+                continue
+            hit = KbRetrievalService._doc_to_hit(doc, score, mode)
+            hit.recall_score = float(score)
+            hits.append(hit)
             if len(hits) >= limit:
                 break
         return hits
-
-    @staticmethod
-    def _hits_from_docs(
-        documents: List[Document], mode: str, default_score: float
-    ) -> List[KbSearchHit]:
-        return [
-            KbRetrievalService._doc_to_hit(doc, default_score, mode) for doc in documents
-        ]
 
     @staticmethod
     def _doc_to_hit(doc: Document, score: float, mode: str) -> KbSearchHit:

@@ -20,6 +20,7 @@ class ParsedFile:
     raw_markdown: Optional[str] = None
     clean_markdown: Optional[str] = None
     row_documents: Optional[List[Document]] = field(default=None)
+    deepdoc_result: Optional["DeepDocParseResult"] = field(default=None)
 
     @property
     def is_tabular(self) -> bool:

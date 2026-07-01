@@ -43,6 +43,29 @@ def test_chunk_parsed_markdown_file(tmp_path):
     assert docs[0].metadata.get("file_name") == "req.md"
     assert docs[0].metadata.get("chunk_index") == 0
 
+def test_chunk_fenced_code_hash_not_treated_as_header():
+    md = """# 真实章节
+
+正文
+
+```python
+# 这不是标题
+x = 1
+```
+
+## 下一节
+"""
+    docs = chunk(
+        md,
+        effective_params={"chunk_size": 500, "chunk_overlap": 50},
+        source_hint="doc.md",
+    )
+    assert docs
+    # 不应仅因代码块内 # 行而拆出「这不是标题」为独立 header 章节
+    header_paths = [d.metadata.get("header_path") or "" for d in docs]
+    assert not any("这不是标题" in hp for hp in header_paths)
+    assert any("真实章节" in hp for hp in header_paths)
+
 
 def test_chunk_parsed_excel_rows(tmp_path):
     pytest.importorskip("openpyxl")

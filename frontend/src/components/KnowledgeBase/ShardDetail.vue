@@ -12,8 +12,9 @@ import {
   NSpin,
   useMessage,
 } from 'naive-ui'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { getShardDetail } from '@/api/knowledgeBase'
+import { formatKbDate } from '@/utils/kbFormat'
 
 const props = defineProps<{
   show: boolean
@@ -33,6 +34,18 @@ const detail = ref<ShardDetailType | null>(null)
 const showModal = computed({
   get: () => props.show,
   set: (val) => emit('update:show', val),
+})
+
+const processingSnapshot = computed(() => {
+  const raw = detail.value?.effective_processing_params
+  if (!raw || typeof raw !== 'object') {
+    return ''
+  }
+  try {
+    return JSON.stringify(raw, null, 2)
+  } catch {
+    return String(raw)
+  }
 })
 
 watch(
@@ -68,18 +81,6 @@ function truncateId(id: string): string {
   return id
 }
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) {
-    return '-'
-  }
-  try {
-    const date = new Date(dateStr)
-    return date.toLocaleString('zh-CN')
-  } catch {
-    return dateStr
-  }
-}
-
 async function copyContent() {
   if (!detail.value) {
     return
@@ -99,7 +100,7 @@ async function copyContent() {
     v-model:show="showModal"
     preset="card"
     :title="`分片详情 ${shardId ? `(${truncateId(shardId)})` : ''}`"
-    style="width: 600px"
+    style="width: 680px"
   >
     <template v-if="loading">
       <div class="loading">
@@ -124,7 +125,7 @@ async function copyContent() {
             {{ detail.char_length }}
           </n-descriptions-item>
           <n-descriptions-item label="创建时间">
-            {{ formatDate(detail.created_at) }}
+            {{ formatKbDate(detail.created_at) }}
           </n-descriptions-item>
           <n-descriptions-item v-if="detail.chunk_index !== null && detail.chunk_index !== undefined" label="分片序号">
             {{ detail.chunk_index }}
@@ -132,10 +133,21 @@ async function copyContent() {
           <n-descriptions-item v-if="detail.header_path" label="标题路径" :span="2">
             {{ detail.header_path }}
           </n-descriptions-item>
+          <n-descriptions-item v-if="detail.Header_1" label="一级标题">
+            {{ detail.Header_1 }}
+          </n-descriptions-item>
           <n-descriptions-item v-if="detail.Header_2" label="二级标题">
             {{ detail.Header_2 }}
           </n-descriptions-item>
+          <n-descriptions-item v-if="detail.Header_3" label="三级标题">
+            {{ detail.Header_3 }}
+          </n-descriptions-item>
         </n-descriptions>
+
+        <div v-if="processingSnapshot" class="snapshot-block">
+          <h4>入库参数快照</h4>
+          <pre class="json-snapshot">{{ processingSnapshot }}</pre>
+        </div>
 
         <div class="content-preview">
           <div class="preview-header">
@@ -173,6 +185,12 @@ async function copyContent() {
   gap: 16px;
 }
 
+.snapshot-block h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .content-preview {
   margin-top: 8px;
 }
@@ -183,7 +201,7 @@ async function copyContent() {
   align-items: center;
   margin-bottom: 8px;
   font-size: 14px;
-  color: #666;
+  color: var(--noesis-color-text-muted);
 }
 
 code {
@@ -198,9 +216,9 @@ code {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  background: #f6f8fa;
+  background: var(--noesis-color-bg-muted);
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--noesis-radius-sm);
   max-height: 160px;
   overflow-y: auto;
 }

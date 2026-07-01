@@ -11,11 +11,15 @@ import {
   NInputNumber,
   NRadioButton,
   NRadioGroup,
+  NSwitch,
 } from 'naive-ui'
 
 const props = defineProps<{
   loading?: boolean
   defaultLimit?: number
+  defaultRecallTopK?: number
+  defaultUseReranker?: boolean
+  defaultRrfK?: number
 }>()
 
 const emit = defineEmits<{
@@ -23,9 +27,12 @@ const emit = defineEmits<{
 }>()
 
 const query = defineModel<string>('query', { default: '' })
-const searchMode = defineModel<KbSearchMode>('searchMode', { default: 'vector' })
-/** 仅当需要覆盖集合默认 limit 时填写 */
-const limitOverride = defineModel<number | null>('limitOverride', { default: null })
+const searchMode = defineModel<KbSearchMode>('searchMode', { default: 'hybrid' })
+const finalTopKOverride = defineModel<number | null>('finalTopKOverride', { default: null })
+const recallTopKOverride = defineModel<number | null>('recallTopKOverride', { default: null })
+const useRerankerOverride = defineModel<boolean | null>('useRerankerOverride', { default: null })
+const scoreThresholdOverride = defineModel<number | null>('scoreThresholdOverride', { default: null })
+const rrfKOverride = defineModel<number | null>('rrfKOverride', { default: null })
 const filterFileName = defineModel<string>('filterFileName', { default: '' })
 
 function onSearch() {
@@ -38,7 +45,7 @@ function onSearch() {
     <n-input
       v-model:value="query"
       type="textarea"
-      placeholder="输入问题，测试本知识库的检索效果…"
+      placeholder="输入问题，测试本知识库的 Hybrid 检索与 Rerank 效果…"
       :autosize="{ minRows: 3, maxRows: 6 }"
       @keydown.enter.exact.prevent="onSearch"
     />
@@ -67,11 +74,11 @@ function onSearch() {
       </n-button>
     </div>
     <n-collapse>
-      <n-collapse-item title="高级选项（一般可省略）" name="advanced">
+      <n-collapse-item title="高级参数（单次调试覆盖）" name="advanced">
         <div class="advanced-grid">
-          <n-form-item label="条数上限" :show-feedback="false">
+          <n-form-item label="final_top_k" :show-feedback="false">
             <n-input-number
-              v-model:value="limitOverride"
+              v-model:value="finalTopKOverride"
               :min="1"
               :max="50"
               clearable
@@ -79,11 +86,48 @@ function onSearch() {
               style="width: 100%"
             />
           </n-form-item>
-          <n-form-item label="限定文档" :show-feedback="false">
+          <n-form-item label="recall_top_k" :show-feedback="false">
+            <n-input-number
+              v-model:value="recallTopKOverride"
+              :min="1"
+              :max="200"
+              clearable
+              :placeholder="`默认 ${props.defaultRecallTopK ?? 50}`"
+              style="width: 100%"
+            />
+          </n-form-item>
+          <n-form-item label="rrf_k" :show-feedback="false">
+            <n-input-number
+              v-model:value="rrfKOverride"
+              :min="1"
+              :max="500"
+              clearable
+              :placeholder="`默认 ${props.defaultRrfK ?? 60}`"
+              style="width: 100%"
+            />
+          </n-form-item>
+          <n-form-item label="score_threshold" :show-feedback="false">
+            <n-input-number
+              v-model:value="scoreThresholdOverride"
+              :min="0"
+              :max="1"
+              :step="0.01"
+              clearable
+              placeholder="使用集合默认"
+              style="width: 100%"
+            />
+          </n-form-item>
+          <n-form-item label="use_reranker" :show-feedback="false">
+            <n-switch
+              :value="useRerankerOverride ?? props.defaultUseReranker ?? true"
+              @update:value="useRerankerOverride = $event"
+            />
+          </n-form-item>
+          <n-form-item label="限定文档 file_name" :show-feedback="false">
             <n-input
               v-model:value="filterFileName"
               clearable
-              placeholder="文件名，精确匹配"
+              placeholder="精确匹配文件名"
             />
           </n-form-item>
         </div>

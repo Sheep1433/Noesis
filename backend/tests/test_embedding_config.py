@@ -51,6 +51,36 @@ def test_get_embedding_raises_when_not_configured() -> None:
             get_embedding()
 
 
+def test_get_embedding_dashscope_compat_kwargs() -> None:
+    with patch("kb.embedding.embedding.ModelConfig", _model_cfg()):
+        with patch("langchain_openai.OpenAIEmbeddings") as mock_cls:
+            mock_cls.return_value = object()
+            get_embedding()
+    mock_cls.assert_called_once_with(
+        model="text-embedding-v4",
+        openai_api_key="emb-key",
+        openai_api_base="https://example.com/v1",
+        check_embedding_ctx_length=False,
+    )
+
+
+def test_get_embedding_dashscope_batch_size() -> None:
+    with patch(
+        "kb.embedding.embedding.ModelConfig",
+        _model_cfg(embedding_model_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    ):
+        with patch("langchain_openai.OpenAIEmbeddings") as mock_cls:
+            mock_cls.return_value = object()
+            get_embedding()
+    mock_cls.assert_called_once_with(
+        model="text-embedding-v4",
+        openai_api_key="emb-key",
+        openai_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        check_embedding_ctx_length=False,
+        chunk_size=10,
+    )
+
+
 def test_chunk_warns_when_embedding_not_configured() -> None:
     with (
         patch("kb.chunk.chunker.is_embedding_configured", return_value=False),

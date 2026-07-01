@@ -66,6 +66,30 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 首次部署或发版时，后端容器启动会自动执行 Alembic 迁移（`server.py` → `init_database()`）。全新环境需先建库：在宿主机执行 `cd backend && uv run python sql/initialize_mysql.py`，详见 `backend/sql/README.md`。
 
+### DeepDoc 模型（知识库 PDF 解析）
+
+知识库入库使用 RAGFlow DeepDoc，ONNX 权重 **不包含在镜像内**。Compose 已将 `noesis_data` 卷挂载到容器 `/data/noesis`；`deploy/config.docker.yaml` 中：
+
+```yaml
+kb:
+  deepdoc:
+    model_dir: /data/noesis/rag/res/deepdoc
+```
+
+**首次部署**在宿主机或容器内下载权重（需网络访问 HuggingFace，或设置 `HF_ENDPOINT`）：
+
+```bash
+# 宿主机（推荐：写入 noesis_data 卷对应目录）
+mkdir -p /var/lib/docker/volumes/noesis_noesis_data/_data/rag/res/deepdoc
+cd backend && uv run python -m kb.download_models /path/to/above/dir
+
+# 或进入 backend 容器
+docker compose -f deploy/docker-compose.yml exec backend \
+  uv run python -m kb.download_models /data/noesis/rag/res/deepdoc
+```
+
+CPU 即可运行；macOS 开发机解析 PDF 需 `brew install libomp`（xgboost 依赖）。详见 `backend/kb/README.md`。
+
 ## 沙箱配置分工
 
 | 配置位置 | 内容 |

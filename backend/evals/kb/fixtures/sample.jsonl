@@ -1,0 +1,2 @@
+{"query": "用户登录流程", "relevant_chunk_ids": ["example-chunk-1"], "file_name": "login.md", "header_path": "login.md > 登录"}
+{"query": "密码重置", "relevant_chunk_ids": ["example-chunk-2"]}

@@ -613,7 +613,7 @@ async function resolveAttachmentsForSend(): Promise<{
     return { upload_file_key: [], file_dict: undefined }
   }
 
-  if (qa_type.value === 'COMMON_QA') {
+  if (usesSessionAttachmentUpload(qa_type.value)) {
     uploadingOnSend.value = true
     try {
       const sessionId = getChatSessionId()
@@ -636,6 +636,10 @@ async function resolveAttachmentsForSend(): Promise<{
     upload_file_key,
     file_dict: buildFileDict(upload_file_key),
   }
+}
+
+function usesSessionAttachmentUpload(mode: string): boolean {
+  return mode === 'COMMON_QA' || mode === 'SUPER_AGENT_QA' || mode === 'DEEP_RESEARCH_QA'
 }
 
 
@@ -1856,7 +1860,7 @@ function onComposerPaste(e: ClipboardEvent) {
                   <FileUploadManager
                     ref="fileUploadRef"
                     v-model="pendingUploadFileInfoList"
-                    :upload-mode="qa_type === 'COMMON_QA' ? 'chat' : 'kb'"
+                    :upload-mode="usesSessionAttachmentUpload(qa_type) ? 'chat' : 'kb'"
                     :get-session-id="getChatSessionId"
                   />
 

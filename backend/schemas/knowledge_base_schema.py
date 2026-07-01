@@ -25,6 +25,23 @@ class CollectionDetail(BaseModel):
     status: Optional[str] = None
 
 
+class CollectionConfigResponse(BaseModel):
+    """集合 MySQL 配置"""
+    collection_name: str
+    processing_params: Dict[str, Any] = Field(default_factory=dict)
+    query_params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PatchCollectionConfigRequest(BaseModel):
+    """PATCH 集合配置（deep-merge）"""
+    processing_params: Optional[Dict[str, Any]] = Field(
+        None, description="入库参数片段，与现有配置 deep-merge"
+    )
+    query_params: Optional[Dict[str, Any]] = Field(
+        None, description="检索参数片段，与现有配置 deep-merge"
+    )
+
+
 class DocumentInfo(BaseModel):
     """文档信息"""
     file_name: str
@@ -55,14 +72,21 @@ class ShardDetail(BaseModel):
     Header_2: Optional[str] = Field(None, description="二级标题")
     Header_3: Optional[str] = Field(None, description="三级标题")
     chunk_index: Optional[int] = Field(None, description="文档内分片序号")
+    effective_processing_params: Optional[Dict[str, Any]] = Field(
+        None, description="入库时生效的处理参数快照"
+    )
+
+
 class SearchResult(BaseModel):
     """检索结果"""
     id: str
     score: float
     content: str
     file_name: str
-    search_mode: str = Field(default="vector", description="本次使用的检索模式")
-    header_path: Optional[str] = Field(None, description="分片标题路径（markdown_headers 入库时有值）")
+    search_mode: str = Field(default="hybrid", description="本次使用的检索模式")
+    header_path: Optional[str] = Field(None, description="分片标题路径")
+    recall_score: Optional[float] = Field(None, description="召回阶段分数")
+    rerank_score: Optional[float] = Field(None, description="rerank 分数（启用时）")
 
 
 class KnowledgeBaseStatus(BaseModel):
@@ -106,27 +130,41 @@ class CreateCollectionResponse(BaseModel):
     name: str
 
 
+class ProcessingParamsBody(BaseModel):
+    """当次上传可选 processing_params"""
+    chunk_preset_id: Optional[str] = Field(None, description="固定 general")
+    parser_id: Optional[str] = Field(None, description="固定 deepdoc")
+    chunk_parser_config: Optional[Dict[str, Any]] = Field(
+        None, description="chunk_size / chunk_overlap"
+    )
+
+
 class SearchCollectionBody(BaseModel):
     """POST /search 请求体"""
     query: str = Field(..., description='查询文本')
-    limit: Optional[int] = Field(None, description='单次检索条数上限，不传则用集合默认值')
-    score_threshold: Optional[float] = Field(
-        None, description='向量相似度阈值；不传则用集合默认值；显式清除需后续扩展'
+    limit: Optional[int] = Field(
+        None, description='deprecated 别名，等价 final_top_k'
     )
-    search_mode: Literal["vector", "bm25", "hybrid"] = Field(
-        default="vector",
-        description="检索模式：vector | bm25 | hybrid",
+    final_top_k: Optional[int] = Field(None, description='最终返回条数上限')
+    recall_top_k: Optional[int] = Field(None, description='召回阶段候选上限')
+    use_reranker: Optional[bool] = Field(None, description='是否 cross-encoder 精排')
+    score_threshold: Optional[float] = Field(
+        None, description='rerank 之后的分数过滤阈值'
+    )
+    search_mode: Optional[Literal["vector", "bm25", "hybrid"]] = Field(
+        default=None,
+        description="检索模式；缺省使用集合 MySQL 默认（hybrid）",
     )
     filters: Optional[Dict[str, Any]] = Field(
         None,
         description=(
             "元数据过滤：file_name/source_name/Header_1~4 精确匹配；"
-            "header_path_prefix 为 header_path 前缀"
+            "header_path_prefix 为 header_path 前缀；file_name_in 为文件名列表"
         ),
     )
     rrf_k: Optional[int] = Field(
         None,
         ge=1,
         le=500,
-        description="混合检索 RRF 平滑常数（默认 60）；score=Σ1/(rrf_k+rank+1)",
+        description="混合检索 RRF 平滑常数（默认 60）",
     )

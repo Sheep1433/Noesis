@@ -6,6 +6,7 @@ from typing import List, Mapping, Optional, Union
 from langchain_core.documents import Document
 
 from kb.chunk.markdown_splitter import MarkdownChunker
+from kb.chunk.deepdoc_adapter import adapt_deepdoc_to_documents
 from kb.chunk.params import _normalize_chunk_params, _fixed_window_chunks
 from kb.document_parse.models import ParsedFile
 from kb.embedding import embedding_not_configured_message, is_embedding_configured
@@ -39,7 +40,16 @@ def _chunk_parsed_file(
     effective_params: Mapping[str, object],
 ) -> List[Document]:
     if parsed.is_tabular:
+        if parsed.deepdoc_result is not None:
+            docs = adapt_deepdoc_to_documents(parsed, effective_params=effective_params)
+            if docs:
+                return _finalize_documents(parsed, docs)
         return _finalize_documents(parsed, list(parsed.row_documents or []))
+
+    if parsed.deepdoc_result is not None:
+        docs = adapt_deepdoc_to_documents(parsed, effective_params=effective_params)
+        if docs:
+            return _finalize_documents(parsed, docs)
 
     text = (parsed.clean_markdown or parsed.raw_markdown or "").strip()
     if not text:

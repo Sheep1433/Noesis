@@ -1,74 +1,91 @@
 ## Purpose
 
-本能力定义 Noesis **知识库分块（chunking）** 模块行为：在 Markdown 中间态上按场景 preset 切分文本、合并入库处理参数、产出可写入 Qdrant 的分片记录，并保证生效参数可追溯。供 `knowledge-base` 入库流水线与离线评测复用。
+本能力定义 Noesis **知识库分块** 模块：消费 **DeepDoc 解析产物**，经 `DeepDocChunkAdapter` 转为可嵌入的 `Document` 列表。Phase 1 默认模板 `general`（结构/标题感知合并）；**预留** `chunk_template_id` 对接 RAGFlow 更多分块模板（book、paper、laws 等，后续变更）。**不提供 markitdown 降级分块路径**（聊天附件等场景仍 MAY 使用 Markdown 标题切分，但不属于知识库入库主路径）。
 
-## ADDED Requirements
+## Requirements
 
-### Requirement: 分块 preset 枚举
+### Requirement: 默认分块路径 DeepDocChunkAdapter
 
-系统 SHALL 支持以下 `chunk_preset_id`：`general`（默认）、`qa`、`book`、`laws`。系统 SHALL 将历史值 `markdown_headers` 规范化为 `general` 的标题感知路径，且 SHALL NOT 因传入 `markdown_headers` 而采用与 `general` 不一致的独立算法。
+当 `parser_id=deepdoc`（默认）时，系统 SHALL 经 `DeepDocChunkAdapter` 将 `DeepDocParseResult` 转为分片列表，而非对整篇 Markdown 做简单 `#` 行首切分。
 
-#### Scenario: 未指定 preset 时使用 general
+Adapter SHALL：
 
-- **WHEN** 合并后的 `processing_params` 未包含 `chunk_preset_id`
-- **THEN** 系统 SHALL 使用 `general` preset 执行分块
+- 合并 DeepDoc `blocks` 为语义连贯 chunk（尊重 `layout_type`、标题层级、token/`chunk_size` 上限）
+- 表格 SHALL 尽量保持完整或按 DeepDoc 表格单元语义切分，**SHALL NOT** 无脑打散为纯文本行（除非 template 指定）
+- 每条 chunk metadata SHALL 含：`chunk_index`、`file_name`、**MAY** 含 `page_no`、`bbox`、`layout_type`、`header_path`（若能从结构推断）
 
-#### Scenario: markdown_headers 别名兼容
+#### Scenario: DeepDoc 解析后产出非空分片
 
-- **WHEN** `chunk_preset_id` 为 `markdown_headers`
-- **THEN** 系统 SHALL 按 `general` preset 处理，且写入 payload 的 `effective_processing_params.chunk_preset_id` SHALL 为 `general`
+- **WHEN** `DeepDocParseResult` 含非空 `blocks`
+- **THEN** Adapter SHALL 返回至少一个非空 `content` 分片
 
-### Requirement: processing_params 三层合并
+#### Scenario: 表格块完整性
 
-系统 SHALL 通过 `resolve_effective_processing_params` 按优先级合并入库参数：**集合默认（MySQL）** → **文档持久化覆盖** → **当次 ingest 的 request_once**。同一键名高层 SHALL 覆盖低层。仅当次覆盖 SHALL NOT 写回文档级持久化默认值。
+- **WHEN** parse 结果含单个逻辑表格
+- **THEN** 默认 template `general` SHALL 尽量使该表格处于同一 chunk 或带明确表格标记的相邻 chunk
 
-#### Scenario: 当次上传覆盖 preset
+### Requirement: 内存 Markdown 文本分块（非入库主路径）
 
-- **WHEN** 集合默认为 `general`，当次上传请求指定 `chunk_preset_id=qa`
-- **THEN** 该次入库 SHALL 使用 `qa` 分块
-- **AND** 集合默认配置 SHALL 保持 `general`
+当 `chunk()` 输入为 **str**（非 `ParsedFile` / DeepDoc 产物）时，系统 MAY 使用 `MarkdownChunker.split_markdown_with_headers` 供测试或聊天附件；**知识库入库 SHALL 经 DeepDoc → DeepDocChunkAdapter**。
 
-### Requirement: 分块单一调度入口
+#### Scenario: 字符串输入标题 metadata
 
-系统 SHALL 提供 `chunk_text_for_kb`（或等价函数），输入为 Markdown 文本、`file_id`、`filename` 与合并后的 `effective_params`，输出为分片记录列表。每条记录 SHALL 至少含 `content`、`chunk_index`、`file_id`、`filename`；MAY 含 `header_path`、`start_char_pos`、`end_char_pos`。
+- **WHEN** 直接对 Markdown 字符串分块且含 `# 章节`
+- **THEN** 分片 MAY 含 `header_path` 或 `Header_n`
 
-#### Scenario: general preset 产出非空分片
+### Requirement: chunk_template_id 与 Phase 1 范围
 
-- **WHEN** 输入为非空 Markdown 且 preset 为 `general`
-- **THEN** 系统 SHALL 返回至少一个非空 `content` 的分片记录
+`processing_params.chunk_template_id`（与 legacy `chunk_preset_id` 合并为同一字段）：
 
-#### Scenario: 未知 preset 回退
+| 值 | Phase 1 |
+|----|---------|
+| `general`（默认） | **实现** — DeepDoc adapter 默认策略 |
+| `book` / `paper` / `laws` / `qa` 等 | **预留** — 规格占位，实现返回 501 或 warning 回退 `general` |
 
-- **WHEN** `chunk_preset_id` 为系统不识别的字符串
-- **THEN** 系统 SHALL 回退 `general` 并记录 warning 日志
+`strategy=markdown_headers` SHALL 规范化为 `chunk_template_id=general`。
 
-### Requirement: preset 语义边界
+#### Scenario: 未指定 template
 
-- `general` SHALL 支持按分隔符与 token 上限合并（`naive_merge` 语义），并保留 Markdown 标题路径元数据。
-- `qa` SHALL 优先识别问答对结构（问题-答案），适合 FAQ、题库类文本。
-- `book` SHALL 强化章节标题识别与层级合并，适合长章节文档。
-- `laws` SHALL 按法条层级组织与合并，适合制度、法规类文本。
+- **WHEN** 未传 `chunk_template_id`
+- **THEN** SHALL 使用 `general`
 
-#### Scenario: qa preset 对 FAQ 文本
+#### Scenario: 预留 template 回退
 
-- **WHEN** 文本含明确「问：」「答：」或等价格式且 preset 为 `qa`
-- **THEN** 产出分片 SHALL 尽量保持一问一答在同一 chunk 或相邻可追溯 chunk 内
+- **WHEN** `chunk_template_id=book` 且 Phase 1 未实现
+- **THEN** SHALL 回退 `general` 并 warning（除非配置 strict 模式）
 
-### Requirement: 生效参数写入 payload
+### Requirement: Excel 路径
 
-对本能力落地后新索引的 Qdrant 点，系统 SHALL 在 payload 写入 `effective_processing_params` 快照（含 `chunk_preset_id`、`chunk_parser_config`、`chunk_engine_version`）。旧分片 MAY 无该字段，SHALL NOT 因此被拒绝检索。
+`.xlsx` / `.xls` / `.csv`：
 
-#### Scenario: 新索引分片含 preset 快照
+- **优先**：DeepDoc Excel parser（与 upstream 对齐）
+- **降级**：现有 pandas / CSVLoader 行级一片
 
-- **WHEN** 使用 `book` preset 完成入库
-- **THEN** 分片 payload 的 `effective_processing_params.chunk_preset_id` SHALL 为 `book`
+行级结果 **SHALL NOT** 再经 Markdown 标题切分。
 
-### Requirement: 分块失败回退
+#### Scenario: DeepDoc 解析 Excel
 
-当 preset 分块抛出异常或返回空列表时，系统 SHALL 使用内置滑窗分块（基于 `chunk_size` / `chunk_overlap`）完成入库，并 SHALL 记录 warning 级日志。
+- **WHEN** DeepDoc 可用且上传 `.xlsx`
+- **THEN** SHALL 经 DeepDoc Excel 路径或降级 pandas，且 `is_tabular` 语义保持一行一片
 
-#### Scenario: 异常时滑窗回退
+### Requirement: processing_params 合并
 
-- **WHEN** preset 分块因异常中断
-- **THEN** 系统 SHALL 仍写入至少一个分片（除非源文本为空）
-- **AND** SHALL 记录包含 preset 名称的 warning
+合并顺序：**MySQL 集合默认** → **文档覆盖** → **当次 upload**。可配置：`chunk_template_id`、`chunk_parser_config`（`chunk_size`、`chunk_overlap`）、`parser_id`。
+
+### Requirement: payload 快照
+
+新索引点 SHALL 写入 `effective_processing_params`：`parser_id`、`chunk_template_id`、`chunk_parser_config`、`deepdoc_version`（若适用）、`chunk_engine_version`。
+
+#### Scenario: DeepDoc 入库快照
+
+- **WHEN** 经 DeepDoc + general template 入库
+- **THEN** payload SHALL 含 `parser_id=deepdoc` 与 `chunk_template_id=general`
+
+### Requirement: 单一分块入口
+
+对外 SHALL 保持 `chunk(parsed_or_result, effective_params)` 单一入口；内部分派 DeepDoc adapter 或 MarkdownChunker。
+
+#### Scenario: 入库流水线
+
+- **WHEN** `qdrant_service` 执行文档入库
+- **THEN** SHALL 经上述入口，且 **SHALL NOT** 在 Service 层重复实现分块逻辑
