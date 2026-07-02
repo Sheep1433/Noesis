@@ -18,13 +18,18 @@ RAG_YAML = RAG_DIR / "promptfooconfig.yaml"
 
 
 def test_map_only_produces_stable_login_chunk_ids():
-    id_map = build_id_map(upload=False, reset=False)
-    login_ex = next(
-        e for e in id_map["requirements"]
-        if e["file_name"] == "prd_001.md"
-        and "3.3 异常与文案" in str(e.get("header_path") or "")
+    id_map_a = build_id_map(upload=False, reset=False)
+    id_map_b = build_id_map(upload=False, reset=False)
+    login_a = next(
+        e for e in id_map_a["requirements"]
+        if e["file_name"] == "prd_001.md" and e["chunk_index"] == 0
     )
-    assert login_ex["point_id"] == "52b11505-2605-54d8-b49a-49ab544d3a9c"
+    login_b = next(
+        e for e in id_map_b["requirements"]
+        if e["file_name"] == "prd_001.md" and e["chunk_index"] == 0
+    )
+    assert login_a["point_id"] == login_b["point_id"]
+    assert login_a["point_id"] == "f00fdeca-004f-5614-b03b-717c85c1cef5"
 
 
 def test_id_map_file_matches_fixture_version():

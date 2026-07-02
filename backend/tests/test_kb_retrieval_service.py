@@ -68,9 +68,12 @@ def test_search_with_filters_splits_prefix(mock_get_retrieval, _mock_connected, 
     assert kwargs.get("metadata_filter") == {"file_name": "a.md"}
 
 
+@patch("kb.retrieval.service.is_rerank_available", return_value=False)
 @patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
 @patch.object(KbRetrievalService, "_get_retrieval")
-def test_search_bm25_returns_nonzero_scores(mock_get_retrieval, _mock_connected, mock_retrieval):
+def test_search_bm25_returns_nonzero_scores(
+    mock_get_retrieval, _mock_connected, _mock_rerank, mock_retrieval
+):
     mock_retrieval.bm25_search_with_scores.return_value = [
         (
             Document(
