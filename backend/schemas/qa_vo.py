@@ -8,6 +8,10 @@ class QaQueryRequest(BaseModel):
     qa_type: str = Field(..., description="问答类型")
     chat_id: Optional[str] = Field(None, description="对话ID，标识同一会话")
     file_dict: Optional[Dict[str, str]] = Field(None, description="文件列表")
+    kb_collections: Optional[List[str]] = Field(
+        None,
+        description="限定检索的知识库 Collection 列表；空列表表示不限制（检索全部可用库）",
+    )
 
 
 class TestCaseResumeRequest(BaseModel):

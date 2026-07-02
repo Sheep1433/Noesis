@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定 Noesis **通用智能问答**（`qa_type=COMMON_QA`）场景的端到端行为：前端经聊天入口提交问题后，`qa_service` 按 `qa_type` 路由至 `GeneralQAAgent`；Agent 通过统一工厂 `create_noesis_agent`（底层 LangChain `create_agent`）装配 LLM 与可选 RAG 工具 `search_knowledge_base`，在向量库可用时对企业全部知识库 Collection 执行 hybrid 检索并据检索结果生成 Markdown 结构化回答。会话创建、消息持久化、SSE 帧契约、停止生成接口等**平台级聊天基础设施**由 `openspec/specs/platform-chat/spec.md` 统一定义，本 spec 仅描述 COMMON_QA 专属路由、Agent 装配、知识库工具与提示词策略，不重复平台层细节。
+本能力规定 Noesis **通用智能问答**（`qa_type=COMMON_QA`）场景的端到端行为：前端经聊天入口提交问题后，`qa_service` 按 `qa_type` 路由至 `GeneralQAAgent`；Agent 通过统一工厂 `create_noesis_agent` 装配 LLM 与可选知识库 Tool（`list_knowledge_bases`、`search_knowledge_base`、`get_knowledge_document`），在向量库可用时对**会话选定或工具指定**的知识库 Collection 并行 hybrid 检索并据检索结果生成 Markdown 结构化回答。会话创建、消息持久化、SSE 帧契约、停止生成接口等**平台级聊天基础设施**由 `openspec/specs/platform-chat/spec.md` 统一定义，本 spec 仅描述 COMMON_QA 专属路由、Agent 装配、知识库工具与提示词策略，不重复平台层细节。
 
 ## Requirements
 
@@ -63,48 +63,45 @@ COMMON_QA 路径 SHALL NOT 挂载 MCP 工具、文件系统 `FilesystemMiddlewar
 - **THEN** `kb_tools` SHALL 为空列表
 - **AND** 系统提示词 SHALL NOT 包含知识库检索强制条款
 
-### Requirement: search_knowledge_base 工具 SHALL 按条件挂载
+### Requirement: 知识库 Tool SHALL 按条件挂载（三工具）
 
-系统 SHALL 通过 `build_kb_search_tools()`（`backend/agent/tools/kb_search_tool.py`）决定是否向 COMMON_QA Agent 挂载 RAG 工具：
+系统 SHALL 通过 `build_kb_search_tools(default_collection_names=...)` 决定是否向 COMMON_QA Agent 挂载知识库 Tool：
 
-- 当 `is_qdrant_connected()` 为假，或 `list_qdrant_collection_names()` 返回空（无已连接且 `points_count > 0` 的 Collection）时，SHALL 返回空列表，不挂载工具。
-- 否则 SHALL 挂载唯一工具 `search_knowledge_base`（`StructuredTool`），参数 schema 为 `KbSearchInput`：`query`（必填，检索关键词或问题改写）、`limit`（可选，默认 10，范围 1–20）。
+- 当 `is_qdrant_connected()` 为假，或 `list_qdrant_collection_names()` 返回空时，SHALL 返回空列表。
+- 否则 SHALL 挂载：`list_knowledge_bases`、`search_knowledge_base`（`KbSearchInput`：`query`、`collection_names?`、`limit`）、`get_knowledge_document`（`collection_name`、`file_name`）。
 
-工具描述 SHALL 说明：在企业全部知识库中执行 hybrid 检索（向量 + BM25 融合，跨 Collection 合并排序）；回答需要事实或文档依据时必须先调用本工具。
+检索范围优先级：**工具 `collection_names`** > **会话 `extra.kb_collections`（非空）** > **全部可用 Collection**。空列表 `kb_collections` 表示不限制（全部库）。
 
-#### Scenario: 有可用 Collection 时挂载工具
+#### Scenario: 有可用 Collection 时挂载三工具
 
 - **WHEN** Qdrant 已连接且至少一个 Collection 的 `points_count > 0`
-- **THEN** `GeneralQAAgent` 的 `kb_tools` SHALL 含名为 `search_knowledge_base` 的工具
-- **AND** 启动日志 MAY 记录可检索 Collection 名称列表
+- **THEN** `GeneralQAAgent` 的 `kb_tools` SHALL 含 `list_knowledge_bases`、`search_knowledge_base`、`get_knowledge_document`
 
-#### Scenario: 无可用 Collection 时不挂载
-
-- **WHEN** Qdrant 未连接或全部 Collection 无点数据
-- **THEN** `build_kb_search_tools()` SHALL 返回 `[]`
-- **AND** Agent SHALL 仍可正常完成纯 LLM 流式问答
-
-### Requirement: search_knowledge_base SHALL 跨全部 Collection 执行 hybrid 检索
+### Requirement: search_knowledge_base SHALL 在解析范围内并行 hybrid 检索
 
 工具实现 `search_knowledge_bases_all` SHALL：
 
-1. 枚举当前可检索的全部 Collection 名称（`list_qdrant_collection_names`）。
-2. 使用 `merge_query_execution_params` 合并 `DEFAULT_COLLECTION_QUERY` 与请求级 `limit` 覆盖，得到全局 `global_limit`（1–20）与可选 `score_threshold`。
-3. 对每个 Collection 调用 `KbRetrievalService.search`，`search_mode` 固定为 `hybrid`，单库召回上限为 `per_collection = max(3, ceil(global_limit / collection_count))`。
-4. 合并各库命中后按 `score` 降序排序，取全局 Top-K（`global_limit`）。
-5. 单库检索异常 SHALL 记录 warning 并跳过该 Collection，不得导致整次工具调用崩溃。
+1. 经 `resolve_search_collections` 解析目标 Collection 列表。
+2. 计算 `global_limit = min(tool.limit, 20)`。
+3. 对每个 Collection **并行**调用 `KbRetrievalService.search`，请求覆盖 `final_top_k=global_limit`（每库独立 `query_params`）。
+4. 合并各库命中后按 `score` 降序取全局 Top `global_limit`。
+5. 单库异常 SHALL 记录 warning 并跳过。
 
-#### Scenario: 多库合并取 Top-K
+#### Scenario: 会话限定单库
 
-- **WHEN** 存在 Collection A、B 且工具以 `limit=10` 被调用
-- **THEN** 系统 SHALL 分别对 A、B 执行 hybrid 检索
-- **AND** 返回结果 SHALL 为全局 score 最高的至多 10 条命中
+- **WHEN** 会话 `extra.kb_collections=["A"]` 且工具未传 `collection_names`
+- **THEN** 系统 SHALL 仅检索 Collection A
 
-#### Scenario: 单库失败不阻断其它库
+#### Scenario: 多库并行合并取 Top-K
 
-- **WHEN** 对某一 Collection 的检索抛出异常
-- **THEN** 系统 SHALL 跳过该 Collection 并继续检索其余 Collection
-- **AND** 若其它库有命中，工具 SHALL 仍返回合并后的 Top-K
+- **WHEN** 范围含 Collection A、B 且 `limit=10`
+- **THEN** 系统 SHALL 并行对 A、B 检索并返回全局 score 最高的至多 10 条
+
+### Requirement: 会话 SHALL 持久化 kb_collections
+
+- 客户端 MAY 在 `POST /api/chat/sessions/stream` 的 `extra.kb_collections` 传入 string 数组。
+- `qa_service` SHALL 在请求显式携带该字段时 merge 至会话 `extra.kb_collections`；否则读取会话已有值。
+- COMMON_QA 前端 SHALL 提供多选 UI（`KbScopeSelector`）写回会话 extra。
 
 ### Requirement: 工具输出 SHALL 为结构化 JSON 字符串
 

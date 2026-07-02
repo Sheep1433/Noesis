@@ -1,11 +1,11 @@
 """
 通用智能问答 Agent - GeneralQAAgent
 
-基于 create_noesis_agent；向量库可用时挂载 search_knowledge_base（跨全部 Collection hybrid 检索）。
+基于 create_noesis_agent；向量库可用时挂载知识库 Tool（可选范围 hybrid 检索）。
 """
 import asyncio
 import uuid
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, List, Optional
 
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,20 @@ from config.env import ChatAttachmentConfig
 from services.chat_attachment_service import ChatAttachmentService
 from common.logging import logger
 from domain.chat.attachments.vision import is_vision_available
+
+
+def _normalize_kb_collections(raw: Optional[List[str]]) -> List[str]:
+    if not raw:
+        return []
+    seen: set[str] = set()
+    out: List[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
 
 
 class GeneralQAAgent(BaseAgent):
@@ -43,13 +57,17 @@ class GeneralQAAgent(BaseAgent):
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         self.running_tasks[task_id] = {"cancelled": False}
 
-        kb_tools = build_kb_search_tools()
+        scoped_collections = _normalize_kb_collections(kb_collections)
+        kb_tools = build_kb_search_tools(
+            default_collection_names=scoped_collections or None,
+        )
         web_tools = build_web_search_tools()
         tools = kb_tools + web_tools
         kb_enabled = len(kb_tools) > 0
         if kb_enabled:
+            scope_label = scoped_collections or list_qdrant_collection_names()
             logger.info(
-                f"GeneralQAAgent kb_search collections={list_qdrant_collection_names()}"
+                f"GeneralQAAgent kb_tools={len(kb_tools)} scope={scope_label}"
             )
 
         user_id = str(getattr(current_user, "user_id", "") or "")
@@ -92,6 +110,7 @@ class GeneralQAAgent(BaseAgent):
                     PromptProfile.COMMON_QA,
                     kb_enabled=kb_enabled,
                     attachments_enabled=attachments_enabled,
+                    kb_scope_collections=scoped_collections or None,
                 ),
                 checkpointer=self.checkpointer,
                 extra_middleware=extra_middleware,

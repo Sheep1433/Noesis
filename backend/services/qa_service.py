@@ -36,6 +36,48 @@ from domain.chat.streaming.failure_notice import (
 )
 
 
+def _normalize_kb_collections(raw: Any) -> List[str]:
+    if not isinstance(raw, list):
+        return []
+    seen: set[str] = set()
+    out: List[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+async def _resolve_kb_collections_for_query(
+    *,
+    session_id: str,
+    user_id: str,
+    request_kb_collections: Optional[List[str]],
+    db: AsyncSession,
+) -> List[str]:
+    """请求显式携带 kb_collections 时写入会话；否则读会话 extra。"""
+    if request_kb_collections is not None:
+        normalized = _normalize_kb_collections(request_kb_collections)
+        await ChatService.merge_session_extra(
+            session_id,
+            user_id,
+            {"kb_collections": normalized},
+            db=db,
+        )
+        return normalized
+
+    session = await ChatService.get_session_by_id(
+        session_id,
+        user_id=user_id,
+        db=db,
+    )
+    if not session or not session.extra:
+        return []
+    return _normalize_kb_collections(session.extra.get("kb_collections"))
+
+
 common_agent = GeneralQAAgent()
 fault_agent = FaultOperationAgent()
 super_agent = SuperAgent()
@@ -486,6 +528,15 @@ class QaService:
             )
 
             # 根据 qa_type 选择 agent 并执行
+            kb_collections: List[str] = []
+            if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
+                kb_collections = await _resolve_kb_collections_for_query(
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    request_kb_collections=req_obj.kb_collections,
+                    db=db,
+                )
+
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
                 agent_generator = common_agent.run_agent(
                     clean_query,
@@ -493,6 +544,7 @@ class QaService:
                     current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
+                    kb_collections=kb_collections or None,
                     db=db,
                 )
             elif req_obj.qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:

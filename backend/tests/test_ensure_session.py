@@ -36,6 +36,15 @@ async def test_ensure_session_creates_or_gets():
             new_callable=AsyncMock,
             return_value=mock_session,
         ) as mock_goc,
+        patch(
+            "api.chat_api.ChatService.merge_session_extra",
+            new_callable=AsyncMock,
+        ) as mock_merge,
+        patch(
+            "api.chat_api.ChatService.get_session_by_id",
+            new_callable=AsyncMock,
+            return_value=mock_session,
+        ),
     ):
         resp = await ensure_session(
             session_id="sess-1",
@@ -49,6 +58,12 @@ async def test_ensure_session_creates_or_gets():
             session_id="sess-1",
             title=None,
             extra={"qa_type": "COMMON_QA"},
+            db=db,
+        )
+        mock_merge.assert_awaited_once_with(
+            "sess-1",
+            "user-1",
+            {"qa_type": "COMMON_QA"},
             db=db,
         )
         assert resp.status_code == 200

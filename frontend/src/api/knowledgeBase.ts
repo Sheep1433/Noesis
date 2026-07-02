@@ -54,7 +54,7 @@ export interface CollectionConfig {
   query_params: KbQueryParams
 }
 
-interface CollectionInfo {
+export interface CollectionInfo {
   name: string
   vector_dimension: number
   documents_count: number

@@ -205,6 +205,20 @@ async def ensure_session(
         extra=request.extra,
         db=db,
     )
+    if request.extra:
+        await ChatService.merge_session_extra(
+            session_id,
+            str(current_user.user_id),
+            request.extra,
+            db=db,
+        )
+        refreshed = await ChatService.get_session_by_id(
+            session_id,
+            user_id=str(current_user.user_id),
+            db=db,
+        )
+        if refreshed is not None:
+            session = refreshed
     return ResponseUtil.success(
         msg='会话已就绪',
         data=_session_to_response(session).model_dump(),
@@ -497,6 +511,7 @@ async def send_message_stream(
     session_id = request.session_id or ""
     qa_type = (request.extra or {}).get("qa_type", IntentEnum.COMMON_QA.value[0])
     file_dict = (request.extra or {}).get("file_dict")
+    kb_collections = (request.extra or {}).get("kb_collections")
 
     if session_id:
         denied = await _deny_foreign_session(session_id, current_user, db)
@@ -508,6 +523,7 @@ async def send_message_stream(
         qa_type=qa_type,
         chat_id=session_id,
         file_dict=file_dict,
+        kb_collections=kb_collections if isinstance(kb_collections, list) else None,
     )
 
     try:

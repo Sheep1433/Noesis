@@ -38,6 +38,7 @@ import {
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
+import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
@@ -393,6 +394,25 @@ const nativeReasoningSeen = ref(false)
 const uuids = ref<Record<string, string>>({})
 
 const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
+const selectedKbCollections = ref<string[]>([])
+
+function normalizeKbCollections(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of raw) {
+    const name = String(item ?? '').trim()
+    if (!name || seen.has(name)) {
+      continue
+    }
+    seen.add(name)
+    out.push(name)
+  }
+  return out
+}
+
 const showContextIndicator = computed(
   () => qa_type.value !== 'TEST_CASE_QA' && hasValidContextWindow(sessionContext.value),
 )
@@ -406,8 +426,10 @@ async function loadSessionContext(sessionId: string) {
     const session = await getSession(sessionId)
     const raw = session.extra?.context
     sessionContext.value = hasValidContextWindow(raw) ? raw : null
+    selectedKbCollections.value = normalizeKbCollections(session.extra?.kb_collections)
   } catch {
     sessionContext.value = null
+    selectedKbCollections.value = []
   }
 }
 
@@ -541,6 +563,9 @@ const sseStream = useSSEStream({
     scrollToBottom()
   },
 })
+
+/** 顶层 ref 供模板自动解包；嵌在 sseStream 对象里的 isLoading 不会解包，会导致选择器一直 disabled */
+const sseIsLoading = sseStream.isLoading
 
 async function stopChatStream() {
   const sessionId = getChatSessionId()
@@ -767,13 +792,17 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   currentRenderIndex.value = conversationItems.value.length - 1
 
   // 使用 useSSEStream composable
+  const streamExtra: Record<string, unknown> = {
+    qa_type: qa_type.value,
+    file_dict,
+  }
+  if (qa_type.value === 'COMMON_QA') {
+    streamExtra.kb_collections = selectedKbCollections.value
+  }
   await sseStream.sendMessage(
     uuids.value[qa_type.value],
     textContent,
-    {
-      qa_type: qa_type.value,
-      file_dict,
-    },
+    streamExtra,
   )
 
   // 滚动到底部
@@ -962,6 +991,15 @@ const scrollToItem = async (uuid: string) => {
 
 // 默认选中的对话类型
 const qa_type = ref('COMMON_QA')
+
+function ensureActiveSessionId() {
+  const qt = qa_type.value
+  if (!uuids.value[qt]) {
+    uuids.value[qt] = uuidv4()
+  }
+}
+
+watch(qa_type, ensureActiveSessionId, { immediate: true })
 /**
  * @param fromHistorySelection 为 true 时表示从左侧历史会话点入：已加载该会话 messages，仅同步 qa_type / uuid，不得清空 conversationItems 或切回默认页
  */
@@ -990,6 +1028,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   } else {
     uuids.value[val] = uuidv4()
     sessionContext.value = null
+    selectedKbCollections.value = []
   }
 
   // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
@@ -1862,6 +1901,14 @@ function onComposerPaste(e: ClipboardEvent) {
                     v-model="pendingUploadFileInfoList"
                     :upload-mode="usesSessionAttachmentUpload(qa_type) ? 'chat' : 'kb'"
                     :get-session-id="getChatSessionId"
+                  />
+
+                  <KbScopeSelector
+                    v-if="qa_type === 'COMMON_QA'"
+                    v-model="selectedKbCollections"
+                    :session-id="uuids[qa_type] ?? ''"
+                    :disabled="sseIsLoading"
+                    class="mb-8"
                   />
 
                   <div class="chat-composer-row flex items-center gap-8">

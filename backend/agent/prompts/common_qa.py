@@ -14,7 +14,8 @@ _WORKFLOW = """<workflow>
 </workflow>"""
 
 _KB_EXTENSION = """<knowledge_base>
-通过 search_knowledge_base 跨库检索；回答前先检索，引用注明来源（collection_name、file_name）。
+工具：list_knowledge_bases（了解可用库）、search_knowledge_base（片段 hybrid 检索）、get_knowledge_document（片段不足时拉整篇）。
+事实性问题先 search；可传 collection_names 限定库，未传则用会话默认范围或全部库。引用注明 collection_name、file_name。
 检索无结果时说明「知识库未覆盖」，可结合通用知识并标注不确定性。
 </knowledge_base>"""
 
@@ -30,10 +31,17 @@ def build_common_qa_prompt(
     *,
     kb_enabled: bool = False,
     attachments_enabled: bool = False,
+    kb_scope_collections: list[str] | None = None,
 ) -> str:
     sections: list[str] = [_ROLE, _WORKFLOW]
     if attachments_enabled:
         sections.append(_ATTACHMENTS)
     if kb_enabled:
         sections.append(_KB_EXTENSION)
+        if kb_scope_collections:
+            joined = "、".join(kb_scope_collections)
+            sections.append(
+                f"<kb_scope>\n当前会话默认检索范围：{joined}。"
+                "search_knowledge_base 未传 collection_names 时仅在此范围内检索。\n</kb_scope>"
+            )
     return build_base_prompt(*sections)

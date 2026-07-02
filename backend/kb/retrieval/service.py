@@ -1,6 +1,7 @@
 """知识库统一检索门面。"""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
@@ -88,6 +89,8 @@ class KbRetrievalService:
         if not is_qdrant_connected():
             raise RuntimeError("向量库未连接")
 
+        t_total = time.perf_counter()
+
         legacy_overrides: Dict[str, Any] = {}
         if search_mode is not None:
             legacy_overrides["search_mode"] = search_mode
@@ -144,6 +147,7 @@ class KbRetrievalService:
         if post_filter:
             recall_limit = max(recall_k, recall_k * 3)
 
+        t_recall = time.perf_counter()
         if mode == "vector":
             scored = retrieval.vector_search(
                 query,
@@ -160,21 +164,44 @@ class KbRetrievalService:
                 rrf_k=rrf_k_i,
                 metadata_filter=qdrant_filter,
             )
+        recall_ms = (time.perf_counter() - t_recall) * 1000
 
+        t_parse = time.perf_counter()
         hits = cls._hits_from_scored(
             scored, mode, post_filter, recall_limit, qdrant_filter=qdrant_filter
         )
+        parse_ms = (time.perf_counter() - t_parse) * 1000
+        recall_hit_count = len(hits)
 
+        rerank_ms = 0.0
+        rerank_applied = False
         if use_rerank and hits and is_rerank_available():
+            t_rerank = time.perf_counter()
             hits = cls._apply_rerank(query, hits)
+            rerank_ms = (time.perf_counter() - t_rerank) * 1000
+            rerank_applied = True
         elif use_rerank and hits and not is_rerank_available():
             logger.warning("[KbRetrievalService] use_reranker=true 但 rerank 未配置，降级 recall 排序")
 
+        t_post = time.perf_counter()
         if threshold is not None:
             hits = [h for h in hits if h.score >= threshold]
 
         hits.sort(key=lambda h: h.score, reverse=True)
-        return hits[:final_k]
+        final_hits = hits[:final_k]
+        post_ms = (time.perf_counter() - t_post) * 1000
+        total_ms = (time.perf_counter() - t_total) * 1000
+
+        logger.info(
+            "[KbRetrievalService] search "
+            f"collection={collection_name} mode={mode} "
+            f"recall_ms={recall_ms:.1f} parse_ms={parse_ms:.1f} "
+            f"rerank_ms={rerank_ms:.1f} rerank_applied={rerank_applied} "
+            f"post_ms={post_ms:.1f} recall_hits={recall_hit_count} "
+            f"final_hits={len(final_hits)} recall_top_k={recall_k} final_top_k={final_k} "
+            f"total_ms={total_ms:.1f}"
+        )
+        return final_hits
 
     @classmethod
     def _apply_rerank(cls, query: str, hits: List[KbSearchHit]) -> List[KbSearchHit]:

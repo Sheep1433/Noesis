@@ -28,6 +28,7 @@ def build_prompt(
     *,
     kb_enabled: bool = False,
     attachments_enabled: bool = False,
+    kb_scope_collections: list[str] | None = None,
     user_id: str | None = None,
 ) -> str:
     """按 profile 组装 system prompt。common_qa 支持 kb_enabled / attachments_enabled 扩展段。"""
@@ -37,6 +38,7 @@ def build_prompt(
         PromptProfile.COMMON_QA.value: lambda: build_common_qa_prompt(
             kb_enabled=kb_enabled,
             attachments_enabled=attachments_enabled,
+            kb_scope_collections=kb_scope_collections,
         ),
         PromptProfile.FAULT_OPERATION.value: build_fault_operation_prompt,
         PromptProfile.FAULT_OPERATION_SUB.value: build_fault_operation_sub_prompt,
