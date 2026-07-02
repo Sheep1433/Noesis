@@ -12,6 +12,10 @@ class QaQueryRequest(BaseModel):
         None,
         description="限定检索的知识库 Collection 列表；空列表表示不限制（检索全部可用库）",
     )
+    model_id: Optional[str] = Field(
+        None,
+        description="对话模型目录 id；省略时使用会话 extra 或默认模型",
+    )
 
 
 class TestCaseResumeRequest(BaseModel):

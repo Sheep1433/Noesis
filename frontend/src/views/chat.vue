@@ -38,7 +38,7 @@ import {
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
-import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
+import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
@@ -395,6 +395,7 @@ const uuids = ref<Record<string, string>>({})
 
 const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
 const selectedKbCollections = ref<string[]>([])
+const selectedModelId = ref('')
 
 function normalizeKbCollections(raw: unknown): string[] {
   if (!Array.isArray(raw)) {
@@ -427,9 +428,12 @@ async function loadSessionContext(sessionId: string) {
     const raw = session.extra?.context
     sessionContext.value = hasValidContextWindow(raw) ? raw : null
     selectedKbCollections.value = normalizeKbCollections(session.extra?.kb_collections)
+    const storedModelId = String(session.extra?.model_id ?? '').trim()
+    selectedModelId.value = storedModelId
   } catch {
     sessionContext.value = null
     selectedKbCollections.value = []
+    selectedModelId.value = ''
   }
 }
 
@@ -799,6 +803,9 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   if (qa_type.value === 'COMMON_QA') {
     streamExtra.kb_collections = selectedKbCollections.value
   }
+  if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
+    streamExtra.model_id = selectedModelId.value
+  }
   await sseStream.sendMessage(
     uuids.value[qa_type.value],
     textContent,
@@ -1029,6 +1036,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
     uuids.value[val] = uuidv4()
     sessionContext.value = null
     selectedKbCollections.value = []
+    selectedModelId.value = ''
   }
 
   // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
@@ -1589,6 +1597,8 @@ function onComposerPaste(e: ClipboardEvent) {
                       <AssistantStreamingIndicator
                         v-if="showAssistantReplyLoading(index, item.role)"
                         section
+                        :divided="buildDisplayParts(item.messageContent.parts).length > 0"
+                        :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
                       />
                       <div
                         v-if="hasValidUsage(item.msg_metadata?.usage)"
@@ -1903,85 +1913,75 @@ function onComposerPaste(e: ClipboardEvent) {
                     :get-session-id="getChatSessionId"
                   />
 
-                  <KbScopeSelector
-                    v-if="qa_type === 'COMMON_QA'"
-                    v-model="selectedKbCollections"
-                    :session-id="uuids[qa_type] ?? ''"
-                    :disabled="sseIsLoading"
-                    class="mb-8"
+                  <n-input
+                    ref="refInputTextString"
+                    v-model:value="inputTextString"
+                    type="textarea"
+                    class="textarea-resize-none w-full text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
+                    :style="{
+                      '--n-border-radius': '15px',
+                      'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
+                      'font-size': '16px',
+                      'line-height': '1.5',
+                    }"
+                    :placeholder="placeholder"
+                    :autosize="{
+                      minRows: 1,
+                      maxRows: 10,
+                    }"
+                    @paste="onComposerPaste"
                   />
 
-                  <div class="chat-composer-row flex items-center gap-8">
-                    <n-dropdown
-                      :options="fileUploadRef?.options || []"
-                    >
-                      <div
-                        flex="~ items-center justify-center"
-                        class="chat-composer-upload-trigger shrink-0"
-                      >
-                        <div class="text-20 i-uil:upload cursor-pointer"></div>
+                  <ChatComposerToolbar
+                    v-model:model-id="selectedModelId"
+                    v-model:kb-collections="selectedKbCollections"
+                    :qa-type="qa_type"
+                    :session-id="uuids[qa_type] ?? ''"
+                    :disabled="sseIsLoading"
+                    :file-upload-ref="fileUploadRef"
+                  >
+                    <template #right>
+                      <ContextWindowIndicator
+                        v-if="showContextIndicator"
+                        class="shrink-0"
+                        :context="sessionContext!"
+                      />
+
+                      <div class="chat-send-btn-wrap shrink-0">
+                        <n-tooltip
+                          :disabled="!stylizingLoading"
+                          placement="top"
+                        >
+                          <template #trigger>
+                            <n-float-button
+                              position="relative"
+                              :width="36"
+                              :height="36"
+                              :disabled="!stylizingLoading && sendDisabled"
+                              :type="stylizingLoading ? 'primary' : 'default'"
+                              color
+                              :class="[
+                                'chat-send-btn',
+                                stylizingLoading && 'chat-send-btn--stop',
+                              ]"
+                              @click.stop="handleCreateStylized()"
+                            >
+                              <span
+                                v-if="stylizingLoading"
+                                class="chat-stop-icon"
+                                aria-label="停止生成"
+                              ></span>
+                              <div
+                                v-else
+                                class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
+                              ></div>
+                            </n-float-button>
+                          </template>
+                          停止生成
+                        </n-tooltip>
                       </div>
-                    </n-dropdown>
-
-                    <n-input
-                      ref="refInputTextString"
-                      v-model:value="inputTextString"
-                      type="textarea"
-                      class="textarea-resize-none flex-1 min-w-0 text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
-                      :style="{
-                        '--n-border-radius': '15px',
-                        'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
-                        'font-size': '16px',
-                        'line-height': '1.5',
-                      }"
-                      :placeholder="placeholder"
-                      :autosize="{
-                        minRows: 1,
-                        maxRows: 10,
-                      }"
-                      @paste="onComposerPaste"
-                    />
-
-                    <ContextWindowIndicator
-                      v-if="showContextIndicator"
-                      class="shrink-0"
-                      :context="sessionContext!"
-                    />
-
-                    <div class="chat-send-btn-wrap shrink-0">
-                      <n-tooltip
-                        :disabled="!stylizingLoading"
-                        placement="top"
-                      >
-                        <template #trigger>
-                          <n-float-button
-                            position="relative"
-                            :width="36"
-                            :height="36"
-                            :disabled="!stylizingLoading && sendDisabled"
-                            :type="stylizingLoading ? 'primary' : 'default'"
-                            color
-                            :class="[
-                              'chat-send-btn',
-                              stylizingLoading && 'chat-send-btn--stop',
-                            ]"
-                            @click.stop="handleCreateStylized()"
-                          >
-                            <span
-                              v-if="stylizingLoading"
-                              class="chat-stop-icon"
-                              aria-label="停止生成"
-                            ></span>
-                            <div
-                              v-else
-                              class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
-                            ></div>
-                          </n-float-button>
-                        </template>
-                        停止生成
-                      </n-tooltip>
-                    </div>
-                  </div>
+                    </template>
+                  </ChatComposerToolbar>
                 </div>
               </n-space>
             </div>
@@ -2055,7 +2055,7 @@ function onComposerPaste(e: ClipboardEvent) {
 .create-chat-box {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   transition: flex 0.25s ease, opacity 0.25s ease, margin 0.25s ease;
 
   &.hide {
@@ -2063,6 +2063,7 @@ function onComposerPaste(e: ClipboardEvent) {
     width: 0;
     margin: 0;
     opacity: 0;
+    overflow: hidden;
     pointer-events: none;
   }
 }
@@ -2075,6 +2076,11 @@ function onComposerPaste(e: ClipboardEvent) {
   font-weight: 500;
   font-size: 14px;
   border-radius: var(--noesis-radius-pill);
+
+  &:deep(.n-button__border),
+  &:deep(.n-button__state-border) {
+    border-radius: inherit !important;
+  }
 }
 
 .sidebar-header-toolbar {

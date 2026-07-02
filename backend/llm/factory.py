@@ -111,21 +111,31 @@ def _build_chat_model(
     )
 
 
-def get_llm(purpose: str | None = None):
+def get_llm(purpose: str | None = None, *, model_id: str | None = None):
+    from llm.catalog import resolve_catalog_entry
+
     use_summary_model = purpose == "summarization" and bool(
         ModelConfig.summarization_model_name.strip()
     )
 
-    model_type = ModelConfig.model_type.strip().lower()
-    model_api_key = ModelConfig.model_api_key
-    model_base_url = ModelConfig.model_base_url
-
     if use_summary_model:
+        model_type = ModelConfig.model_type.strip().lower()
         model_name = ModelConfig.summarization_model_name.strip()
         temperature_str = str(ModelConfig.summarization_model_temperature)
+        model_base_url = ModelConfig.model_base_url
+    elif model_id:
+        entry = resolve_catalog_entry(model_id)
+        model_type = entry.model_type
+        model_name = entry.model_name
+        temperature_str = str(entry.temperature)
+        model_base_url = entry.base_url
     else:
+        model_type = ModelConfig.model_type.strip().lower()
         model_name = ModelConfig.model_name
         temperature_str = ModelConfig.model_temperature
+        model_base_url = ModelConfig.model_base_url
+
+    model_api_key = ModelConfig.model_api_key
 
     if not model_type:
         raise ValueError("MODEL_TYPE environment variable is not set.")

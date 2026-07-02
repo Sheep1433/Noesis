@@ -51,6 +51,7 @@ class GeneralQAAgent(BaseAgent):
         file_list: dict = None,
         qa_type: Optional[str] = None,
         kb_collections: Optional[list] = None,
+        model_id: Optional[str] = None,
         db: Optional[AsyncSession] = None,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
@@ -114,6 +115,7 @@ class GeneralQAAgent(BaseAgent):
                 ),
                 checkpointer=self.checkpointer,
                 extra_middleware=extra_middleware,
+                model_id=model_id,
             )
 
             human_kwargs = {}

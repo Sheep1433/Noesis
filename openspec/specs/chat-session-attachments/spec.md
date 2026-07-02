@@ -24,7 +24,7 @@
 - **上传时**：`session_id` **SHALL** 对应已物化的 `t_chat_session` 记录。若会话不存在，**SHALL** 返回 HTTP 404，**SHALL NOT** 在 upload 接口内隐式创建空会话。
 - **越权**：`session_id` 不属于当前用户 **SHALL** 返回 404。
 
-**磁盘布局**：原文件 SHALL 存于 `.data/users/{user_id}/sessions/{session_id}/uploads/`；解析成功的 Markdown 副本 SHALL 存于同会话下 `attachments/`。系统 **SHALL NOT** 再向 `.data/chat_attachments/sessions/{session_id}/` 写入新附件。
+**磁盘布局**：原文件 SHALL 存于 `.data/users/{user_id}/sessions/{session_id}/uploads/`；解析成功的 Markdown 副本 SHALL 存于同会话下 `attachments/`。
 
 #### Scenario: ensure 创建新会话
 

@@ -2,9 +2,7 @@
 
 ## Purpose
 
-本能力规定 Noesis **用户运行时数据**的统一磁盘布局与路径解析：权威根为 `{REPO_ROOT}/.data/users/{user_id}/`；会话子树含 Agent 工作区、聊天附件与跨会话用户 Skills；提供集中式路径 API、会话软删时的磁盘清理、遗留布局迁移，以及与 `agent-sandbox`、`skills-filesystem`、`chat-session-attachments` 的职责边界。
-
-**合并来源**：原 `user-data-layout` 与 `agent-workspace`（2026-06 统一用户数据布局后二者语义重叠，合并为单一事实来源）。
+本能力规定 Noesis **用户运行时数据**的统一磁盘布局与路径解析：权威根为 `{REPO_ROOT}/.data/users/{user_id}/`；会话子树含 Agent 工作区、聊天附件、用户记忆与跨会话用户 Skills；提供集中式路径 API、会话软删时的磁盘清理，以及与 `agent-sandbox`、`skills-filesystem`、`chat-session-attachments` 的职责边界。
 
 ## 路径命名说明
 
@@ -16,12 +14,8 @@
 | `{REPO_ROOT}/.data/users/{user_id}/sessions/{session_id}/uploads/` | 附件原文件 |
 | `{REPO_ROOT}/.data/users/{user_id}/sessions/{session_id}/attachments/` | 附件 Markdown 副本 |
 | `{REPO_ROOT}/.data/users/{user_id}/skills/` | 用户 Skills（跨会话） |
-
-**已废弃、不得再写入新数据**：
-
-- `{REPO_ROOT}/.data/agent_workspace/`（旧工作区根）
-- `{REPO_ROOT}/.data/chat_attachments/`（旧附件根）
-- `backend/.agent_workspace`（遗留开发路径）
+| `{REPO_ROOT}/.data/users/{user_id}/AGENTS.md` | 用户 Agent 记忆（跨会话） |
+| `{REPO_ROOT}/.data/users/{user_id}/USER.md` | 用户画像（跨会话） |
 
 ## Requirements
 
@@ -67,20 +61,9 @@
 - **WHEN** 调用 `get_user_skills_dir("42")`
 - **THEN** 返回路径 SHALL 等于 `{REPO_ROOT}/.data/users/42/skills`
 
-### Requirement: 系统 SHALL NOT 再向遗留路径写入
-
-新会话首次写入 workspace、附件或用户 Skills 时，文件 **SHALL** 落在 `.data/users/{uid}/...` 下，**SHALL NOT** 落在 `.data/agent_workspace/` 或 `.data/chat_attachments/`。
-
-`config/agent_workspace_paths.py` **MAY** 保留为薄封装，但权威路径 **SHALL** 来自 `user_data_paths`。
-
-#### Scenario: 不使用遗留 backend 全局目录
-
-- **WHEN** 任意 Agent 挂载可写 backend
-- **THEN** **SHALL NOT** 写入 `backend/.agent_workspace` 或 `backend/.agent_workspace/fault_ops`
-
 ### Requirement: 系统 SHALL 提供集中式路径与会话数据删除 API
 
-模块 SHALL 提供（可直接或经 `agent_workspace_paths` 委托）：
+路径权威模块为 `config/user_data_paths.py`，SHALL 提供：
 
 - `get_workspace_dir(user_id, session_id)`
 - `ensure_workspace_dir(user_id, session_id)`
@@ -176,17 +159,3 @@ runner **SHALL** 将宿主机 `{NOESIS_HOST_DATA_DIR}/users/{user_id}/` rw mount
 
 - **WHEN** Agent 经 AIO filesystem 工具访问路径
 - **THEN** 默认 **SHALL NOT** 将 `uploads/`、`attachments/` 作为可写根；附件消费 **SHALL** 经 `chat-session-attachments` 工具链
-
-### Requirement: 系统 SHALL 提供遗留布局迁移脚本
-
-仓库 SHALL 提供 `scripts/migrate_user_data_layout.py`，支持：
-
-- 自 `.data/agent_workspace/users/{uid}/sessions/{sid}/` 迁移至 `.data/users/{uid}/sessions/{sid}/workspace/`；
-- 自 `.data/chat_attachments/sessions/{sid}/` 迁移至 `.data/users/{uid}/sessions/{sid}/`（`user_id` 来自 `t_chat_attachment` 或 `t_chat_session`）；
-- 自 `.data/user_skills/users/{uid}/` 迁移至 `.data/users/{uid}/skills/`；
-- `--dry-run` 仅打印计划而不写入。
-
-#### Scenario: dry-run 不修改磁盘
-
-- **WHEN** 运维执行迁移脚本并传入 `--dry-run`
-- **THEN** SHALL 输出拟迁移项列表且 **SHALL NOT** 创建或移动目标文件

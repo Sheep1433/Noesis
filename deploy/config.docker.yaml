@@ -104,7 +104,6 @@ checkpoint:
 
 chat_attachment:
   enabled: true
-  dir: ./data/chat_attachments
   ttl_days: 7
   max_file_mb: 20
   max_count_per_session: 10

@@ -84,10 +84,18 @@ async def close_qdrant_client() -> None:
 
 class QdrantService:
     """Qdrant 服务封装类"""
-    
+
     def __init__(self):
         self.client = _qdrant_client
-    
+
+    @staticmethod
+    def _shard_chunk_sort_key(shard: Dict[str, Any]) -> int:
+        raw = shard.get('chunk_index')
+        try:
+            return int(raw) if raw is not None else 10**9
+        except (TypeError, ValueError):
+            return 10**9
+
     def get_collections(self) -> List[Dict[str, Any]]:
         """
         获取所有 Collection 列表
@@ -358,7 +366,8 @@ class QdrantService:
                         'header_path': payload.get('header_path') or None,
                         'chunk_index': payload.get('chunk_index'),
                     })
-            
+
+            shards.sort(key=self._shard_chunk_sort_key)
             return shards
             
         except Exception as e:

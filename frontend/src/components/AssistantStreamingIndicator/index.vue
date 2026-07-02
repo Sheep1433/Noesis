@@ -5,11 +5,14 @@ withDefaults(
     embedded?: boolean
     /** 卡片内、用量/工具栏上方 */
     section?: boolean
+    /** section 模式：上方已有正文/工具块时显示轻分隔 */
+    divided?: boolean
     label?: string
   }>(),
   {
     embedded: false,
     section: false,
+    divided: false,
     label: '正在继续生成',
   },
 )
@@ -21,6 +24,7 @@ withDefaults(
     :class="{
       'assistant-streaming-indicator--embedded': embedded,
       'assistant-streaming-indicator--section': section,
+      'assistant-streaming-indicator--divided': section && divided,
     }"
     role="status"
     aria-live="polite"
@@ -87,17 +91,38 @@ withDefaults(
 .assistant-streaming-indicator--section {
   width: 100%;
   margin: 0;
-  padding: 10px 16px;
-  background: linear-gradient(180deg, rgb(248 250 253 / 0%) 0%, var(--noesis-color-bg-composer) 100%);
+  padding: 12px 16px 14px;
+  background: transparent;
   border: none;
-  border-top: 1px solid var(--noesis-streaming-border);
   border-left: none;
   border-radius: 0;
   box-shadow: none;
+  gap: 8px;
+}
+
+.assistant-streaming-indicator--section:not(.assistant-streaming-indicator--divided) {
+  padding: 14px 16px 16px;
+}
+
+.assistant-streaming-indicator--section.assistant-streaming-indicator--divided {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--noesis-color-border-subtle);
 }
 
 .assistant-streaming-indicator--section::before {
   display: none;
+}
+
+.assistant-streaming-indicator--section .assistant-streaming-indicator__dot {
+  width: 5px;
+  height: 5px;
+  background: var(--noesis-color-text-hint);
+}
+
+.assistant-streaming-indicator--section .assistant-streaming-indicator__label {
+  font-size: 12px;
+  color: var(--noesis-color-text-hint);
 }
 
 .assistant-streaming-indicator__dots {

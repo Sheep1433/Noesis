@@ -150,6 +150,8 @@ def create_noesis_agent(
     subagents: list[SubAgent | CompiledSubAgent] | None = None,
     async_subagents: list[AsyncSubAgent] | None = None,
     extra_middleware: list[AgentMiddleware] | None = None,
+    model=None,
+    model_id: str | None = None,
     **create_agent_kwargs: Any,
 ):
     """创建 Noesis Agent：LangChain ``create_agent`` + 能力中间件 + 运行时防护。
@@ -189,7 +191,7 @@ def create_noesis_agent(
     middleware.extend(build_noesis_runtime_middleware(backend=backend))
 
     return create_agent(
-        model=get_llm(),
+        model=model if model is not None else get_llm(model_id=model_id),
         tools=tools or [],
         system_prompt=system_prompt,
         checkpointer=checkpointer,

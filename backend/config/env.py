@@ -196,7 +196,6 @@ class CheckpointSettings:
 @dataclass(frozen=True)
 class ChatAttachmentSettings:
     enabled: bool
-    dir: str
     ttl_days: int
     max_file_mb: int
     max_count_per_session: int
@@ -488,7 +487,6 @@ def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
     ca = yaml_cfg.chat_attachment
     settings = ChatAttachmentSettings(
         enabled=_legacy_env_bool("CHAT_ATTACHMENT_ENABLED", ca.enabled),
-        dir=_legacy_env("CHAT_ATTACHMENT_DIR", ca.dir),
         ttl_days=_legacy_env_int("CHAT_ATTACHMENT_TTL_DAYS", ca.ttl_days),
         max_file_mb=_legacy_env_int("CHAT_ATTACHMENT_MAX_FILE_MB", ca.max_file_mb),
         max_count_per_session=_legacy_env_int(

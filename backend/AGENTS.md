@@ -70,8 +70,13 @@ backend/
 |--------|------|
 | `.data/qdrant/` | 本地 Qdrant 容器卷（`scripts/run.sh` 默认） |
 | `.data/checkpoints/` | LangGraph SQLite checkpoint |
-| `.data/users/{user_id}/` | 用户 Skills、`sessions/{sid}/workspace|uploads|attachments` |
+| `.data/users/{user_id}/` | 用户记忆、`skills/`、`sessions/{sid}/workspace\|uploads\|attachments` |
+| `.data/kb_uploads/` | 知识库上传暂存（解析后删除） |
+| `.data/kb_parse/` | DeepDoc 解析结果缓存 |
+| `.data/rag/res/deepdoc/` | DeepDoc 模型权重 |
 | `.data/logs/` | 后端错误日志 |
+
+路径权威模块：`config/user_data_paths.py`（`agent_workspace_paths.py` 为兼容 import 的薄封装）。
 
 ### Agent AIO 沙箱（单用户单容器）
 

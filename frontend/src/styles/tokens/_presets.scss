@@ -225,6 +225,11 @@ html[data-theme="light"] .create-chat {
   font-weight: 600;
 }
 
+html[data-theme="light"] .create-chat.n-button--primary-type:hover,
+html[data-theme="light"] .create-chat.n-button--primary-type:active {
+  transform: none;
+}
+
 html[data-theme="light"] .assistant-unified-card,
 html[data-theme="light"] .scroll-to-bottom-btn,
 html[data-theme="light"] .session-files-toggle,

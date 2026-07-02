@@ -16,6 +16,7 @@ from api import (
     knowledge_base_router,
     skill_router,
     chat_attachment_router,
+    model_router,
 )
 from services.qdrant_service import init_qdrant_client, close_qdrant_client
 from services.sandbox_service import shutdown_sandboxes
@@ -61,6 +62,7 @@ controller_list = [
     {'router':  knowledge_base_router, 'tags': ['知识库模块']},
     {'router':  skill_router, 'tags': ['Skill 模块']},
     {'router':  chat_attachment_router, 'tags': ['聊天附件模块']},
+    {'router':  model_router, 'tags': ['模型模块']},
 ]
 
 for controller in controller_list:

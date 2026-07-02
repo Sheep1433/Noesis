@@ -32,6 +32,8 @@ def _resolve_user_id(current_user) -> Optional[str]:
 def _build_fault_operation_subagents(
     backend: BackendProtocol,
     mcp_tools: list[Any],
+    *,
+    model_id: str | None = None,
 ) -> list[SubAgent]:
     """与 deepagents 默认 general-purpose 对齐：独立上下文内执行多步 MCP 运维子任务。"""
     return [
@@ -42,7 +44,7 @@ def _build_fault_operation_subagents(
                 "配置读取等），具备与主 Agent 相同的 MCP 工具。适合可并行、上下文较重的排查子任务。"
             ),
             "system_prompt": build_prompt(PromptProfile.FAULT_OPERATION_SUB),
-            "model": get_llm(),
+            "model": get_llm(model_id=model_id),
             "tools": mcp_tools,
             "middleware": build_subagent_default_middleware(backend),
         },
@@ -67,6 +69,7 @@ class FaultOperationAgent(BaseAgent):
         current_user=None,
         file_list: dict = None,
         qa_type: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """运行 Agent 并返回流式响应"""
         task_id = session_id or str(uuid.uuid4())
@@ -104,7 +107,8 @@ class FaultOperationAgent(BaseAgent):
                     system_prompt=build_prompt(PromptProfile.FAULT_OPERATION),
                     checkpointer=self.checkpointer,
                     backend=backend,
-                    subagents=_build_fault_operation_subagents(backend, mcp_tools),
+                    subagents=_build_fault_operation_subagents(backend, mcp_tools, model_id=model_id),
+                    model_id=model_id,
                 )
 
                 stream_args = {

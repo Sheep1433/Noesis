@@ -56,6 +56,8 @@ def _build_memory_middleware(backend: BackendProtocol) -> list:
 def _build_task_worker_subagents(
     backend: BackendProtocol,
     web_tools: list,
+    *,
+    model_id: str | None = None,
 ) -> list[SubAgent]:
     subagent_middleware = [
         *build_subagent_default_middleware(backend),
@@ -74,7 +76,7 @@ def _build_task_worker_subagents(
                 "适合可并行、上下文较重的子任务（调研子课题、多源检索、批量读文件等）。"
             ),
             "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
-            "model": get_llm(),
+            "model": get_llm(model_id=model_id),
             "tools": web_tools,
             "middleware": subagent_middleware,
             "skills": list(SKILL_SOURCES),
@@ -93,6 +95,7 @@ class SuperAgent(BaseAgent):
         current_user=None,
         file_list: dict = None,
         qa_type: Optional[str] = None,
+        model_id: Optional[str] = None,
         db: Optional[AsyncSession] = None,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
@@ -165,8 +168,9 @@ class SuperAgent(BaseAgent):
                     system_prompt=build_prompt(PromptProfile.SUPER_AGENT),
                     checkpointer=self.checkpointer,
                     backend=backend,
-                    subagents=_build_task_worker_subagents(backend, web_tools),
+                    subagents=_build_task_worker_subagents(backend, web_tools, model_id=model_id),
                     extra_middleware=extra_middleware,
+                    model_id=model_id,
                 )
 
                 human_kwargs = {}

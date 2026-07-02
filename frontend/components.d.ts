@@ -11,6 +11,8 @@ declare module 'vue' {
     404: typeof import('./src/components/404.vue')['default']
     AssistantReplyToolbar: typeof import('./src/components/AssistantReplyToolbar/index.vue')['default']
     AssistantStreamingIndicator: typeof import('./src/components/AssistantStreamingIndicator/index.vue')['default']
+    ChatComposerToolbar: typeof import('./src/components/Chat/ChatComposerToolbar.vue')['default']
+    ChatModelSelector: typeof import('./src/components/Chat/ModelSelector.vue')['default']
     ContextWindowIndicator: typeof import('./src/components/ContextWindowIndicator/index.vue')['default']
     FilePreview: typeof import('./src/components/FilePreview/index.vue')['default']
     IconFont: typeof import('./src/components/IconFont/index.vue')['default']

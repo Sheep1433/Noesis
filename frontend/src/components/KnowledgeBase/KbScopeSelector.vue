@@ -5,6 +5,7 @@ import { getCollections } from '@/api/knowledgeBase'
 const props = defineProps<{
   sessionId: string
   disabled?: boolean
+  embedded?: boolean
 }>()
 
 const modelValue = defineModel<string[]>({ default: () => [] })
@@ -61,7 +62,7 @@ async function persistScope(names: string[]) {
       extra: { kb_collections: names },
     })
   } catch (e) {
-    console.warn('保存知识库范围失败', e)
+    console.warn('保存知识库失败', e)
   }
 }
 
@@ -83,8 +84,14 @@ watch(
 </script>
 
 <template>
-  <div class="kb-scope-selector flex flex-col gap-4 min-w-0">
-    <div class="flex items-center gap-6 min-w-0">
+  <div
+    class="kb-scope-selector flex flex-col gap-4 min-w-0"
+    :class="embedded ? 'kb-scope-selector--embedded' : ''"
+  >
+    <div
+      v-if="!embedded"
+      class="flex items-center gap-6 min-w-0"
+    >
       <span class="kb-scope-label shrink-0 text-12 opacity-70">知识库</span>
       <n-select
         :value="modelValue"
@@ -101,8 +108,36 @@ watch(
         @update:value="onUpdate"
       />
     </div>
+    <div
+      v-else
+      class="kb-scope-embedded px-4 py-2"
+    >
+      <div class="kb-scope-embedded__title text-12 font-medium mb-8">
+        知识库
+      </div>
+      <n-select
+        :value="modelValue"
+        :options="options"
+        :loading="loading"
+        :disabled="disabled || !sessionId"
+        multiple
+        clearable
+        filterable
+        size="small"
+        class="kb-scope-select w-full"
+        placeholder="不选则检索全部可用库"
+        max-tag-count="responsive"
+        @update:value="onUpdate"
+      />
+      <p
+        v-if="emptyHint"
+        class="kb-scope-hint m-0 mt-6 text-12 opacity-70"
+      >
+        {{ emptyHint }}
+      </p>
+    </div>
     <p
-      v-if="emptyHint"
+      v-if="emptyHint && !embedded"
       class="kb-scope-hint m-0 text-12 opacity-70"
     >
       {{ emptyHint }}
@@ -113,6 +148,18 @@ watch(
 <style scoped>
 .kb-scope-select {
   max-width: 320px;
+}
+
+.kb-scope-selector--embedded .kb-scope-select {
+  max-width: none;
+}
+
+.kb-scope-embedded {
+  width: 280px;
+}
+
+.kb-scope-embedded__title {
+  color: var(--noesis-text-primary, #111);
 }
 
 .kb-scope-label,

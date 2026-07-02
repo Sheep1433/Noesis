@@ -83,6 +83,17 @@ class ModelGenerationYamlSection(BaseModel):
     streaming: bool = True
 
 
+class ModelCatalogEntryYamlSection(BaseModel):
+    """可选对话模型；未填字段继承 model 层默认。"""
+
+    id: str = ""
+    label: str = ""
+    type: str = ""
+    name: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+
+
 class ModelYamlSection(BaseModel):
     """主对话 LLM：type / name / base_url；api_key 在 .env MODEL_API_KEY。"""
 
@@ -94,6 +105,8 @@ class ModelYamlSection(BaseModel):
     request_timeout: float = Field(default=30.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
     generation: ModelGenerationYamlSection = Field(default_factory=ModelGenerationYamlSection)
+    default_catalog_id: str = ""
+    catalog: list[ModelCatalogEntryYamlSection] = Field(default_factory=list)
 
 
 class RemoteModelYamlSection(BaseModel):
@@ -206,7 +219,6 @@ class SandboxYamlSection(BaseModel):
 
 class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
-    dir: str = "../.data/chat_attachments"
     ttl_days: int = Field(default=7, ge=1)
     max_file_mb: int = Field(default=20, ge=1)
     max_count_per_session: int = Field(default=10, ge=1)

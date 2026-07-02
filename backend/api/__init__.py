@@ -4,6 +4,7 @@ from .chat_api import chat_router as chat_router
 from .knowledge_base_api import knowledge_base_router as knowledge_base_router
 from .skill_api import skill_router as skill_router
 from .chat_attachment_api import chat_attachment_router as chat_attachment_router
+from .model_api import model_router as model_router
 
 __all__ = [
     "login_router",
@@ -12,4 +13,5 @@ __all__ = [
     "knowledge_base_router",
     "skill_router",
     "chat_attachment_router",
+    "model_router",
 ]

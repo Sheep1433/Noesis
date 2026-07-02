@@ -34,6 +34,7 @@ from domain.chat.streaming.failure_notice import (
     append_stream_failure_notice_to_content,
     append_user_stop_notice_to_content,
 )
+from llm.catalog import get_default_model_id, resolve_catalog_entry
 
 
 def _normalize_kb_collections(raw: Any) -> List[str]:
@@ -76,6 +77,46 @@ async def _resolve_kb_collections_for_query(
     if not session or not session.extra:
         return []
     return _normalize_kb_collections(session.extra.get("kb_collections"))
+
+
+def _normalize_model_id(raw: Any) -> Optional[str]:
+    model_id = str(raw or "").strip()
+    return model_id or None
+
+
+async def _resolve_model_for_query(
+    *,
+    session_id: str,
+    user_id: str,
+    request_model_id: Optional[str],
+    db: AsyncSession,
+) -> str:
+    """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。"""
+    if request_model_id is not None:
+        normalized = _normalize_model_id(request_model_id)
+        resolved = resolve_catalog_entry(normalized).id
+        await ChatService.merge_session_extra(
+            session_id,
+            user_id,
+            {"model_id": resolved},
+            db=db,
+        )
+        return resolved
+
+    session = await ChatService.get_session_by_id(
+        session_id,
+        user_id=user_id,
+        db=db,
+    )
+    if session and session.extra:
+        stored = _normalize_model_id(session.extra.get("model_id"))
+        if stored:
+            return resolve_catalog_entry(stored).id
+    return get_default_model_id()
+
+
+def _resolved_model_name(model_id: str) -> str:
+    return resolve_catalog_entry(model_id).model_name
 
 
 common_agent = GeneralQAAgent()
@@ -150,8 +191,11 @@ def _build_assistant_persist_extra(
     qa_type: str,
     bridge: Optional[LangGraphSseBridge] = None,
     error_message: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     extra: Dict[str, Any] = {"qa_type": qa_type}
+    if model:
+        extra["model"] = model
     if bridge is not None:
         if bridge.last_finish_usage:
             extra["usage"] = bridge.last_finish_usage
@@ -207,6 +251,7 @@ async def _finalize_streaming_assistant(
     session_id: str,
     user_id: str,
     qa_type: str,
+    model: Optional[str] = None,
 ) -> None:
     if _stream_terminal_persist_done(ctx):
         return
@@ -221,7 +266,7 @@ async def _finalize_streaming_assistant(
     status = _assistant_status_for_finish(fin_reason)
     error_detail = bridge.last_error_message if fin_reason == "error" else ""
     content = _assistant_content_for_persist(builder, error_detail=error_detail)
-    extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge)
+    extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge, model=model)
     aid = _resolve_assistant_message_id(ctx, builder)
     if not aid and (not builder or builder.is_empty()):
         return
@@ -364,6 +409,7 @@ class _ActiveStreamState:
     builder: AssistantMessageBuilder
     ctx: Dict[str, Any]
     qa_type: str
+    model_name: str = ""
     user_stopped: bool = False
 
 
@@ -527,6 +573,17 @@ class QaService:
                 f"exec_query 流式上游开始 session_id={session_id} qa_type={req_obj.qa_type} user_id={current_user.user_id}"
             )
 
+            resolved_model_id = get_default_model_id()
+            resolved_model_name = _resolved_model_name(resolved_model_id)
+            if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]:
+                resolved_model_id = await _resolve_model_for_query(
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    request_model_id=req_obj.model_id,
+                    db=db,
+                )
+                resolved_model_name = _resolved_model_name(resolved_model_id)
+
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
@@ -545,6 +602,7 @@ class QaService:
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     kb_collections=kb_collections or None,
+                    model_id=resolved_model_id,
                     db=db,
                 )
             elif req_obj.qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
@@ -554,6 +612,7 @@ class QaService:
                     current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
+                    model_id=resolved_model_id,
                 )
             elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
                 agent_generator = case_coordinator.run_agent(
@@ -569,6 +628,7 @@ class QaService:
                     current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
+                    model_id=resolved_model_id,
                     db=db,
                 )
             else:
@@ -600,6 +660,7 @@ class QaService:
                 builder=builder,
                 ctx=ctx,
                 qa_type=req_obj.qa_type,
+                model_name=resolved_model_name,
             )
             if await _insert_streaming_assistant_skeleton(
                 bridge.assistant_message_id, session_id, current_user.user_id
@@ -638,6 +699,7 @@ class QaService:
                     session_id=session_id,
                     user_id=current_user.user_id,
                     qa_type=req_obj.qa_type,
+                    model=resolved_model_name,
                 )
 
             logger.info(
@@ -688,6 +750,7 @@ class QaService:
             aid = (ctx or {}).get("_assistant_db_id")
             stream_state = cls._active_streams.get(session_id)
             persist_b = stream_state.builder if stream_state else builder
+            persist_model = stream_state.model_name if stream_state else None
             _flush_ctx_text_buffer(ctx, persist_b)
             err_text = str(e)[:8000]
             if persist_b is not None and not persist_b.is_empty():
@@ -700,6 +763,7 @@ class QaService:
                         extra=_build_assistant_persist_extra(
                             qa_type=req_obj.qa_type,
                             error_message=err_text,
+                            model=persist_model,
                         ),
                         assistant_message_id=aid,
                     )
@@ -718,6 +782,7 @@ class QaService:
                         extra=_build_assistant_persist_extra(
                             qa_type=req_obj.qa_type,
                             error_message=err_text,
+                            model=persist_model,
                         ),
                         assistant_message_id=aid,
                     )
