@@ -27,11 +27,33 @@ database:
   pool_timeout: 30
 
 model:
-  type: qwen
-  name: qwen-plus
+  type: opencode
+  name: deepseek-v4-flash-free
   temperature: 0.75
-  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  base_url: https://opencode.ai/zen/v1
   show_thinking_process: true
+  default_catalog_id: flash
+  # OpenCode Zen 免费模型目录（models.dev cost.input=0；.env MODEL_API_KEY=public）
+  catalog:
+    - id: flash
+      label: DeepSeek V4 Flash
+      name: deepseek-v4-flash-free
+    - id: big-pickle
+      label: Big Pickle
+      name: big-pickle
+      temperature: 0.7
+    - id: mimo
+      label: MiMo V2.5
+      name: mimo-v2.5-free
+      temperature: 0.7
+    - id: nemotron
+      label: Nemotron 3 Ultra
+      name: nemotron-3-ultra-free
+      temperature: 0.6
+    - id: north
+      label: North Mini Code
+      name: north-mini-code-free
+      temperature: 0.5
   request_timeout: 120
   max_retries: 2
   generation:
@@ -92,8 +114,8 @@ qdrant:
   case_rag_historical_requirements_enabled: false
 
 langfuse:
-  tracing_enabled: false
-  base_url: http://host.docker.internal:3000
+  tracing_enabled: true
+  base_url: http://host.docker.internal:8888
 
 other:
   skills_filesystem_root: ""  # 空则默认 extensions/skills（Docker 镜像内为 /app/extensions/skills）

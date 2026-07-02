@@ -40,6 +40,23 @@ echo "==> 同步 ${DEPLOY_BRANCH} 分支 (stack=${COMPOSE_PROJECT_NAME}, port=${
 git fetch origin "${DEPLOY_BRANCH}"
 git reset --hard "origin/${DEPLOY_BRANCH}"
 
+echo "==> 部署前释放磁盘（避免 docker build 因 no space left on device 失败）"
+avail_kb="$(df --output=avail / | tail -1 | tr -d ' ')"
+echo "deploy-remote: 根分区可用 ${avail_kb}KB"
+if docker info >/dev/null 2>&1; then
+  docker builder prune -af >/dev/null 2>&1 || true
+  docker image prune -f >/dev/null 2>&1 || true
+else
+  sudo docker builder prune -af >/dev/null 2>&1 || true
+  sudo docker image prune -f >/dev/null 2>&1 || true
+fi
+# Langfuse ClickHouse 异常时会狂写 json-file 日志，部署前截断超大日志
+while IFS= read -r logfile; do
+  [[ -n "${logfile}" ]] || continue
+  echo "deploy-remote: 截断超大容器日志 ${logfile}"
+  truncate -s 0 "${logfile}"
+done < <(find /var/lib/docker/containers -name '*-json.log' -size +200M 2>/dev/null || true)
+
 echo "==> 构建镜像"
 compose build
 
