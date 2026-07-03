@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { SearchResult } from '@/api/knowledgeBase'
+import type { SearchResult, SearchTiming } from '@/api/knowledgeBase'
 import { ChevronDown, ChevronForward } from '@vicons/ionicons-v5'
 import { NButton, NEmpty, NIcon, NTag } from 'naive-ui'
 import { computed, ref } from 'vue'
 
 const props = defineProps<{
   results: SearchResult[]
+  timing?: SearchTiming | null
   loading?: boolean
 }>()
 
@@ -79,6 +80,56 @@ function scoreBreakdown(result: SearchResult): string {
   }
   return parts.join(' · ')
 }
+
+function formatMs(ms: number) {
+  if (ms < 1) {
+    return '<1ms'
+  }
+  if (ms < 100) {
+    return `${ms.toFixed(1)}ms`
+  }
+  return `${Math.round(ms)}ms`
+}
+
+const timingStages = computed(() => {
+  const t = props.timing
+  if (!t) {
+    return []
+  }
+  const stages: Array<{ key: string, label: string, detail: string }> = [
+    {
+      key: 'prepare',
+      label: '准备',
+      detail: formatMs(t.prepare_ms ?? 0),
+    },
+    {
+      key: 'recall',
+      label: '召回',
+      detail: `${formatMs(t.recall_ms)} · ${t.recall_hits} 条`,
+    },
+    {
+      key: 'parse',
+      label: '组装',
+      detail: formatMs(t.parse_ms),
+    },
+    {
+      key: 'rerank',
+      label: '精排',
+      detail: t.rerank_applied ? formatMs(t.rerank_ms) : '跳过',
+    },
+    {
+      key: 'post',
+      label: '过滤截断',
+      detail: `${formatMs(t.post_ms)} · ${t.final_hits} 条`,
+    },
+    {
+      key: 'total',
+      label: '总计',
+      detail: formatMs(t.total_ms),
+    },
+  ]
+  return stages
+})
 </script>
 
 <template>
@@ -88,6 +139,21 @@ function scoreBreakdown(result: SearchResult): string {
     </div>
     <n-empty v-else-if="results.length === 0" description="输入问题后点击检索，验证召回与精排效果" size="small" />
     <template v-else>
+      <div v-if="timingStages.length" class="timing-bar">
+        <span class="timing-title">阶段耗时</span>
+        <div class="timing-stages">
+          <div
+            v-for="(stage, idx) in timingStages"
+            :key="stage.key"
+            class="timing-stage"
+            :class="{ 'timing-stage--total': stage.key === 'total' }"
+          >
+            <span class="timing-label">{{ stage.label }}</span>
+            <span class="timing-value">{{ stage.detail }}</span>
+            <span v-if="idx < timingStages.length - 1" class="timing-arrow">→</span>
+          </div>
+        </div>
+      </div>
       <div class="results-meta">
         共 {{ results.length }} 条命中 · {{ grouped.length }} 个文档
       </div>
@@ -162,6 +228,60 @@ function scoreBreakdown(result: SearchResult): string {
   font-size: 12px;
   color: var(--noesis-color-text-muted);
   margin-bottom: 12px;
+}
+
+.timing-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-color-bg-muted);
+  border: 1px solid var(--noesis-color-border);
+}
+
+.timing-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--noesis-color-text);
+  flex-shrink: 0;
+}
+
+.timing-stages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 4px;
+}
+
+.timing-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.timing-stage--total .timing-label,
+.timing-stage--total .timing-value {
+  font-weight: 600;
+  color: var(--noesis-color-primary);
+}
+
+.timing-label {
+  color: var(--noesis-color-text-muted);
+}
+
+.timing-value {
+  color: var(--noesis-color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.timing-arrow {
+  margin: 0 2px 0 4px;
+  color: var(--noesis-color-text-muted);
+  font-size: 11px;
 }
 
 .file-group {

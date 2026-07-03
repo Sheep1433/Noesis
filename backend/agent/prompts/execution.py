@@ -30,10 +30,14 @@ PARALLEL_TOOL_CALL = """<parallel_tool_calls>
 MODEL_OPERATIONAL = """<model_operational>
 ## 操作规范
 
-- 文件操作使用 Agent 虚拟路径的**绝对路径**（如 `/research/...`、`/skills/extensions/...`）。
+- 文件操作使用 Agent 虚拟路径的**绝对路径**（如 `/research/...`、`/skills/extensions/...`、`/skills/custom/...`、`/memory/AGENTS.md`）。
+- Shell 每次 `execute` 的 cwd 为 session workspace 根；`/research/foo` 等价于相对路径 `research/foo`；workspace 根文件可用 `/notes.md` 或 `notes.md`。
+- 依赖 `cd` 的后续命令**须在同一 command 内**用 `&&` 链接（如 `cd /research/demo && make`）；跨次 `execute` 的 `cd` 不保留。
+- 用户记忆文件使用 `/memory/AGENTS.md`、`/memory/USER.md`（勿用 `/workspace/AGENTS.md` 等物理路径）。
 - 修改或引用文件前先 `read_file` / `grep` 确认内容，不要猜测。
 - 沙箱命令使用非交互 flag（如 `-y`、`--yes`），避免 CLI 挂起等待输入。
 - 任务未验证完成前不要提前收尾。
+- **已知限制**：`pwd` 可能输出物理路径 `/workspace/sessions/{sid}/workspace`；直接 `cat /workspace/AGENTS.md` 可能成功，但规范路径仍是 `/memory/AGENTS.md`。
 </model_operational>"""
 
 

@@ -1,0 +1,123 @@
+{
+  "source": "shibing624/medical/pretrain/medical_book_zh.json",
+  "language": "zh",
+  "format": "long-form textbook excerpts (merged chunks)",
+  "focus": [
+    "肠胃癌",
+    "皮炎",
+    "孕期",
+    "营养学"
+  ],
+  "excluded": [
+    "妇科感染/性病等短百科条目"
+  ],
+  "category_counts": {
+    "肠胃癌": 3,
+    "皮炎": 2,
+    "孕期": 3,
+    "营养学": 2
+  },
+  "documents": [
+    {
+      "file": "01_胃食管反流病与食管癌.md",
+      "title": "胃食管反流病与食管癌",
+      "category": "肠胃癌",
+      "start_chunk": 1359,
+      "chunk_count": 10,
+      "chars": 20498,
+      "pages_est": 13.7
+    },
+    {
+      "file": "02_胃癌.md",
+      "title": "胃癌",
+      "category": "肠胃癌",
+      "start_chunk": 1368,
+      "chunk_count": 10,
+      "chars": 20498,
+      "pages_est": 13.7
+    },
+    {
+      "file": "03_大肠癌与结直肠癌.md",
+      "title": "大肠癌与结直肠癌",
+      "category": "肠胃癌",
+      "start_chunk": 1374,
+      "chunk_count": 10,
+      "chars": 20498,
+      "pages_est": 13.7
+    },
+    {
+      "file": "04_皮肤病变检查与诊断.md",
+      "title": "皮肤病变检查与诊断",
+      "category": "皮炎",
+      "start_chunk": 7887,
+      "chunk_count": 12,
+      "chars": 15893,
+      "pages_est": 10.6
+    },
+    {
+      "file": "05_I型超敏反应与过敏性皮肤病.md",
+      "title": "I型超敏反应与过敏性皮肤病",
+      "category": "皮炎",
+      "start_chunk": 1910,
+      "chunk_count": 10,
+      "chars": 20498,
+      "pages_est": 13.7
+    },
+    {
+      "file": "06_妊娠生理.md",
+      "title": "妊娠生理",
+      "category": "孕期",
+      "start_chunk": 4547,
+      "chunk_count": 12,
+      "chars": 20896,
+      "pages_est": 13.9
+    },
+    {
+      "file": "07_月经周期与生殖内分泌.md",
+      "title": "月经周期与生殖内分泌",
+      "category": "孕期",
+      "start_chunk": 4540,
+      "chunk_count": 10,
+      "chars": 18397,
+      "pages_est": 12.3
+    },
+    {
+      "file": "08_围生医学与新生儿营养.md",
+      "title": "围生医学与新生儿营养",
+      "category": "孕期",
+      "start_chunk": 868,
+      "chunk_count": 10,
+      "chars": 20498,
+      "pages_est": 13.7
+    },
+    {
+      "file": "09_维生素与矿物质营养.md",
+      "title": "维生素与矿物质营养",
+      "category": "营养学",
+      "start_chunk": 325,
+      "chunk_count": 14,
+      "chars": 17990,
+      "pages_est": 12.0
+    },
+    {
+      "file": "10_脂类碳水化合物与膳食纤维.md",
+      "title": "脂类碳水化合物与膳食纤维",
+      "category": "营养学",
+      "start_chunk": 8300,
+      "chunk_count": 12,
+      "chars": 21213,
+      "pages_est": 14.1
+    }
+  ],
+  "suggested_common_qa_questions": [
+    "我国食管癌最常见的病理类型是什么？",
+    "胃癌的高危人群和危险因素有哪些？",
+    "结直肠癌发生的途径有哪几条？",
+    "银屑病在体格检查中皮肤脱屑有什么特点？",
+    "I型超敏反应常见的变应原有哪些？",
+    "妊娠期子宫有哪些变化？",
+    "围生医学主要研究什么？",
+    "水溶性维生素和脂溶性维生素在体内贮存有何不同？",
+    "膳食纤维有哪些生理功能？"
+  ]
+}

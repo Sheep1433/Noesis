@@ -34,9 +34,17 @@ const columns = ref([
     },
   },
   {
+    title: '更新时间',
+    key: 'update_time',
+    width: 168,
+    render(row) {
+      return formatTime(row.update_time)
+    },
+  },
+  {
     title: '创建时间',
     key: 'create_time',
-    width: 178,
+    width: 168,
     render(row) {
       return formatTime(row.create_time)
     },
@@ -55,7 +63,7 @@ const pagination = ref({
   onUpdatePageSize: (pageSize) => handlePageSizeChange(pageSize),
 })
 
-/** 后端 create_time 为 Unix 毫秒 BIGINT，接口 JSON 中为 number */
+/** 后端 create_time / update_time 为 Unix 毫秒 BIGINT，接口 JSON 中为 number */
 function formatTime(time) {
   if (time == null || time === '') {
     return '-'
@@ -120,20 +128,44 @@ function close() {
   localShow.value = false
   emit('update:show', false)
   pagination.value.page = 1
+  resetSelection()
 }
 
-const rowKey = (row) => row.session_id ?? row.chat_id
+function resetSelection() {
+  checkedRowKeys.value = []
+}
+
+const rowKey = (row) => row.session_id ?? row.id ?? row.chat_id
 
 function handleCheck(rowKeys) {
   checkedRowKeys.value = rowKeys
 }
 
 async function deleteSelectedData() {
-  if (checkedRowKeys.value.length === 0) {
+  const ids = [...new Set(checkedRowKeys.value.filter(Boolean))]
+  if (ids.length === 0) {
     return
   }
-  const res = await GlobalAPI.delete_user_record(checkedRowKeys.value)
+  const res = await GlobalAPI.delete_user_record(ids)
   if (res.ok) {
+    resetSelection()
+    fetchData()
+    try {
+      const data = await res.json()
+      window.$ModalMessage?.success(data.msg ?? '删除成功')
+    } catch {
+      window.$ModalMessage?.success('删除成功')
+    }
+  } else {
+    let msg = '删除失败'
+    try {
+      const data = await res.json()
+      msg = data.msg ?? msg
+    } catch {
+      // ignore parse errors
+    }
+    window.$ModalMessage?.error(msg)
+    resetSelection()
     fetchData()
   }
 }
@@ -159,6 +191,7 @@ watch(
     if (newVal !== localShow.value) {
       localShow.value = newVal
       if (newVal) {
+        resetSelection()
         fetchData()
       }
     }
@@ -175,7 +208,7 @@ const tableRef = useTemplateRef('tableRef')
     :on-after-leave="close"
     preset="card"
     :title="modalTitle"
-    class="w-900 h-600 flex flex-col"
+    class="w-1100 h-600 flex flex-col"
   >
     <div
       class="modal-content"

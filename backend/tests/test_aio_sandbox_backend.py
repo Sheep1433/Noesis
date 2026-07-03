@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,11 +14,7 @@ from agent.backends.aio_sandbox import (
     _session_mutex,
     create_aio_sandbox_backend,
 )
-from agent.backends.mount_paths import (
-    AGENT_CUSTOM_SKILLS_ROUTE,
-    AGENT_EXTENSIONS_SKILLS_ROUTE,
-    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
-)
+from agent.backends.mount_paths import EXTENSIONS_SKILLS_CONTAINER_PREFIX
 
 
 class _FakeShell:
@@ -37,8 +34,11 @@ class _FakeFile:
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
 
-    def write_file(self, *, file: str, content: bytes) -> None:
-        self.files[file] = content
+    def write_file(self, *, file: str, content: str, encoding: str | None = None) -> None:
+        if encoding == "base64":
+            self.files[file] = base64.b64decode(content)
+        else:
+            self.files[file] = content.encode("utf-8")
 
     def read_file(self, *, file: str):
         if file not in self.files:
@@ -67,20 +67,6 @@ def backend(fake_client: MagicMock) -> AioSandboxBackend:
 def test_resolve_read_session_workspace(backend: AioSandboxBackend) -> None:
     path = "/workspace/sessions/s1/workspace/research/report.md"
     assert backend._resolve_read_path(path) == path
-
-
-def test_execute_rewrites_custom_skill_paths(
-    backend: AioSandboxBackend, tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from config import user_data_paths as paths
-
-    users_root = tmp_path / "users"
-    monkeypatch.setattr(paths, "_USERS_ROOT", users_root)
-    user_skills = paths.ensure_user_skills_dir("u1")
-    (user_skills / "my-tool").mkdir()
-    backend.execute("python3 /skills/custom/my-tool/run.py")
-    cmd = backend._client.shell.calls[-1][0]
-    assert "/workspace/skills/my-tool/run.py" in cmd
 
 
 def test_resolve_read_extensions_skills_mount(backend: AioSandboxBackend) -> None:
@@ -120,6 +106,16 @@ def test_upload_uses_absolute_workspace_path(backend: AioSandboxBackend) -> None
     result = backend.upload_files([(path, b"hello")])
     assert result[0].error is None
     assert path in backend._client.file.files
+
+
+def test_upload_writes_utf8_text_not_base64_literal(backend: AioSandboxBackend) -> None:
+    path = "/workspace/sessions/s1/workspace/research/plan.md"
+    markdown = "# 研究规划\n\n中文正文"
+    result = backend.upload_files([(path, markdown.encode("utf-8"))])
+    assert result[0].error is None
+    stored = backend._client.file.files[path]
+    assert stored == markdown.encode("utf-8")
+    assert not stored.decode("ascii", errors="ignore").startswith("IyD")
 
 
 def test_different_sessions_may_use_parallel_mutex_keys() -> None:

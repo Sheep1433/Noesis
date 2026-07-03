@@ -9,7 +9,7 @@ from agent.tools.kb_search_tool import (
     resolve_search_collections,
     search_knowledge_bases_all,
 )
-from kb.retrieval import KbSearchHit
+from kb.retrieval import KbSearchHit, KbSearchResult, KbSearchTiming
 
 
 @patch("agent.tools.kb_search_tool.KbCollectionConfigService.load_query_params_sync", return_value={"search_mode": "hybrid"})
@@ -27,15 +27,29 @@ def test_search_all_collections_hybrid_and_merge(
 
     def _side_effect(*, collection_name: str, **kwargs):
         score = 0.9 if collection_name == "req_docs" else 0.5
-        return [
-            KbSearchHit(
-                id="p1",
-                score=score,
-                content=f"片段-{collection_name}",
-                file_name="doc.md",
+        return KbSearchResult(
+            hits=[
+                KbSearchHit(
+                    id="p1",
+                    score=score,
+                    content=f"片段-{collection_name}",
+                    file_name="doc.md",
+                    search_mode="hybrid",
+                )
+            ],
+            timing=KbSearchTiming(
+                prepare_ms=0.0,
+                recall_ms=1.0,
+                parse_ms=0.1,
+                rerank_ms=0.0,
+                post_ms=0.1,
+                total_ms=1.2,
+                rerank_applied=False,
+                recall_hits=1,
+                final_hits=1,
                 search_mode="hybrid",
-            )
-        ]
+            ),
+        )
 
     mock_search.side_effect = _side_effect
 
@@ -82,15 +96,29 @@ def test_search_scoped_collection_only(
         "name": "x",
         "vector_dimension": 1024,
     }
-    mock_search.return_value = [
-        KbSearchHit(
-            id="p1",
-            score=0.8,
-            content="片段",
-            file_name="doc.md",
+    mock_search.return_value = KbSearchResult(
+        hits=[
+            KbSearchHit(
+                id="p1",
+                score=0.8,
+                content="片段",
+                file_name="doc.md",
+                search_mode="hybrid",
+            )
+        ],
+        timing=KbSearchTiming(
+            prepare_ms=0.0,
+            recall_ms=1.0,
+            parse_ms=0.1,
+            rerank_ms=0.0,
+            post_ms=0.1,
+            total_ms=1.2,
+            rerank_applied=False,
+            recall_hits=1,
+            final_hits=1,
             search_mode="hybrid",
-        )
-    ]
+        ),
+    )
 
     raw = search_knowledge_bases_all(
         "登录",

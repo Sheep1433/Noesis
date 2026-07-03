@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,8 @@ _EXCEL_EXTENSIONS = frozenset({".xlsx", ".xls"})
 _PDF_EXTENSIONS = frozenset({".pdf"})
 _PPT_EXTENSIONS = frozenset({".pptx", ".ppt"})
 _TEXT_EXTENSIONS = frozenset({".txt", ".csv"})
+# 与 RAGFlow rag/app/naive.py 默认 delimiter 一致
+_DEFAULT_MARKDOWN_DELIMITER = "\n!?;。；！？"
 
 
 class DeepDocUnavailableError(RuntimeError):
@@ -176,6 +179,65 @@ def _parse_ppt(file_path: str) -> List[DeepDocBlock]:
     ]
 
 
+def _layout_type_for_markdown_section(section: object) -> str:
+    if isinstance(section, dict):
+        elem_type = (section.get("type") or "").lower()
+        content = (section.get("content") or "").strip()
+    else:
+        elem_type = ""
+        content = (str(section) or "").strip()
+    if elem_type == "header" or re.match(r"^#{1,6}\s+\S", content):
+        return "section-header"
+    return "text"
+
+
+def _parse_markdown(
+    file_path: str,
+) -> Tuple[List[DeepDocBlock], List[DeepDocTable], List[DeepDocBlock]]:
+    """经 vendored RAGFlowMarkdownParser 拆段，对齐 upstream naive.py 的 .md 路径。"""
+    mod = _load_deepdoc_parser_module("markdown_parser")
+    markdown_parser = mod.RAGFlowMarkdownParser()
+    markdown_element_extractor = mod.MarkdownElementExtractor
+
+    text = _read_markdown_file(file_path)
+    if not text.strip():
+        return [], [], []
+
+    remainder, raw_tables = markdown_parser.extract_tables_and_remainder(
+        f"{text}\n",
+        separate_tables=True,
+    )
+    extractor = markdown_element_extractor(remainder)
+    sections = extractor.extract_elements(_DEFAULT_MARKDOWN_DELIMITER, include_meta=True)
+
+    blocks: List[DeepDocBlock] = []
+    for section in sections or []:
+        if isinstance(section, dict):
+            content = (section.get("content") or "").strip()
+        else:
+            content = (str(section) or "").strip()
+        if not content:
+            continue
+        blocks.append(
+            DeepDocBlock(
+                content=content,
+                layout_type=_layout_type_for_markdown_section(section),
+            )
+        )
+
+    tables: List[DeepDocTable] = []
+    for table in raw_tables or []:
+        table_text = (table or "").strip()
+        if table_text:
+            tables.append(
+                DeepDocTable(content=table_text, metadata={"source": "markdown_table"})
+            )
+
+    if not blocks and not tables:
+        blocks = [DeepDocBlock(content=text.strip(), layout_type="markdown")]
+    return blocks, tables, []
+
+
 def _parse_txt(file_path: str) -> List[DeepDocBlock]:
     mod = _load_deepdoc_parser_module("txt_parser")
     chunks = mod.RAGFlowTxtParser()(file_path, chunk_token_num=128)
@@ -217,9 +279,7 @@ def parse_file_with_deepdoc(
     elif ext in _PPT_EXTENSIONS:
         blocks = _parse_ppt(file_path)
     elif ext in _MARKDOWN_EXTENSIONS:
-        text = _read_markdown_file(file_path)
-        if text.strip():
-            blocks = [DeepDocBlock(content=text, layout_type="markdown")]
+        blocks, tables, figures = _parse_markdown(file_path)
     elif ext in _TEXT_EXTENSIONS:
         blocks = _parse_txt(file_path)
     else:

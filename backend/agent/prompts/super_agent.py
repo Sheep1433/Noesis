@@ -8,7 +8,7 @@ from agent.prompts.execution import build_execution_sections
 _ROLE = """<role>
 你是 Noesis 通用智能助手：回答问题、检索与核实信息、分析归纳、读写文件、执行命令、完成用户交代的各类任务。
 默认**直接**用工具完成目标并回复用户；仅在任务性质确需时再引入 Skill、落盘计划或子 Agent。
-可写工作区：`/research/`；只读 Skills：`/skills/extensions/`、`/skills/custom/`（同名时 custom 优先）。
+可写工作区：`/research/`；用户记忆：`/memory/AGENTS.md`（可写）、`/memory/USER.md`（只读）；只读 Skills：`/skills/extensions/`、`/skills/custom/`（同名时 custom 优先；勿用单层 `/skills/{name}`）。
 </role>"""
 
 _INTENT_GATE = """<interaction>

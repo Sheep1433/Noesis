@@ -9,6 +9,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from config.env import QdrantConfig
 from common.logging import logger
+from services.qdrant_shard_fields import payload_created_at, vector_length
 from kb.document_parse import DocumentParser
 from kb.chunk import chunk, build_effective_processing_snapshot, fixed_processing_params
 from kb.retrieval.payload import documents_to_points
@@ -95,6 +96,17 @@ class QdrantService:
             return int(raw) if raw is not None else 10**9
         except (TypeError, ValueError):
             return 10**9
+
+    def _collection_vector_dimension(self, collection_name: str) -> int:
+        if not self.client:
+            return 0
+        try:
+            info = self.client.get_collection(collection_name)
+            if info.config and info.config.params and info.config.params.vectors:
+                return int(info.config.params.vectors.size or 0)
+        except Exception as e:
+            logger.warning(f"获取 Collection {collection_name} 向量维度失败: {e}")
+        return 0
 
     def get_collections(self) -> List[Dict[str, Any]]:
         """
@@ -319,7 +331,7 @@ class QdrantService:
                 documents_map[file_name]['shard_count'] += 1
 
                 # 使用最早的分片时间作为上传时间（从 payload 中获取）
-                created_at = payload.get('created_at')
+                created_at = payload_created_at(payload)
                 if created_at:
                     if not documents_map[file_name]['uploaded_at']:
                         documents_map[file_name]['uploaded_at'] = created_at
@@ -362,7 +374,7 @@ class QdrantService:
                         'id': str(point.id),
                         'content': content,
                         'char_length': len(content or ''),
-                        'created_at': payload.get('created_at'),
+                        'created_at': payload_created_at(payload),
                         'header_path': payload.get('header_path') or None,
                         'chunk_index': payload.get('chunk_index'),
                     })
@@ -393,6 +405,7 @@ class QdrantService:
                 collection_name=collection_name,
                 ids=[shard_id],
                 with_payload=True,
+                with_vectors=True,
             )
             if not points:
                 logger.warning(f"分片 {shard_id} 不存在")
@@ -401,12 +414,15 @@ class QdrantService:
             
             payload = point.payload or {}
             content = payload.get('page_content') or payload.get('content', '')
+            vector_dimension = vector_length(point.vector)
+            if not vector_dimension:
+                vector_dimension = self._collection_vector_dimension(collection_name)
             return {
                 'id': str(point.id),
                 'content': content,
                 'char_length': len(content or ''),
-                'vector_dimension': len(point.vector) if point.vector else 0,
-                'created_at': payload.get('created_at'),
+                'vector_dimension': vector_dimension,
+                'created_at': payload_created_at(payload),
                 'header_path': payload.get('header_path') or None,
                 'Header_1': payload.get('Header_1') or None,
                 'Header_2': payload.get('Header_2') or None,

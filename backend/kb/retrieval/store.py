@@ -317,6 +317,7 @@ class VectorStore:
                 "file_type": metadata.get("file_type", ""),
                 "raw_text": raw_text,
                 "clean_text": metadata.get("clean_text", text),
+                "created_at": metadata.get("created_at", now),
                 "update_time": metadata.get("update_time", now),
                 "element_type": element_type,
                 "domain": metadata.get("domain", ""),

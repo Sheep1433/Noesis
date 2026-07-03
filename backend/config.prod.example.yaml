@@ -145,6 +145,7 @@ web_tools:
   max_search_results: 8
   fetch_max_chars: 4096
   fetch_timeout_seconds: 30
+  ddg_backends: mojeek,yandex
 
 # Agent 沙箱（深度研究 / 故障运维）
 # backend: aio（推荐）| local_shell（宿主机执行）；生产裸机须单独部署 sandbox-runner

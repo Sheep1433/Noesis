@@ -12,7 +12,26 @@ def _configure_web_tools(*mocks, **overrides) -> None:
         mock_cfg.max_search_results = overrides.get("max_search_results", 8)
         mock_cfg.fetch_max_chars = overrides.get("fetch_max_chars", 4096)
         mock_cfg.fetch_timeout_seconds = overrides.get("fetch_timeout_seconds", 30)
+        mock_cfg.ddg_backends = overrides.get("ddg_backends", "mojeek,yandex")
         mock_cfg.tavily_api_key = overrides.get("tavily_api_key", "")
+
+
+@patch("ddgs.DDGS")
+def test_ddg_search_uses_configured_backends(mock_ddgs_cls):
+    mock_ddgs = mock_ddgs_cls.return_value
+    mock_ddgs.text.return_value = [
+        {"title": "T", "href": "https://t.com", "body": "snippet"},
+    ]
+
+    from agent.tools.web_providers.ddg import search_with_ddg
+
+    with patch("agent.tools.web_providers.ddg.WebToolsConfig") as mock_cfg:
+        mock_cfg.ddg_backends = "mojeek,yandex"
+        result = search_with_ddg("q", 3, timeout=15)
+
+    mock_ddgs.text.assert_called_once_with("q", max_results=3, backend="mojeek,yandex")
+    assert result["ddg_backends"] == "mojeek,yandex"
+    assert result["total_results"] == 1
 
 
 @patch("agent.tools.web_providers.resolver.WebToolsConfig")

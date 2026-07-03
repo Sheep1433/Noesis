@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import shlex
 import threading
@@ -17,12 +18,10 @@ from deepagents.backends.protocol import (
 from deepagents.backends.sandbox import BaseSandbox
 
 from agent.backends.mount_paths import (
-    AGENT_CUSTOM_SKILLS_ROUTE,
     CUSTOM_SKILLS_CONTAINER_PREFIX,
     EXTENSIONS_SKILLS_CONTAINER_PREFIX,
 )
 from config.env import SandboxConfig
-from config.user_data_paths import get_user_skills_dir
 
 if TYPE_CHECKING:
     from agent_sandbox import Sandbox
@@ -59,6 +58,14 @@ def _session_browser_env(session_id: str) -> dict[str, str]:
         "BAOYU_CHROME_PROFILE_DIR": profile,
         "SANDBOX_CDP_PORT": str(_cdp_port_for_session(session_id)),
     }
+
+
+def _prepare_write_file_payload(content: bytes) -> tuple[str, str | None]:
+    """deepagents upload_files 传 bytes；agent_sandbox write_file 要 str + encoding。"""
+    try:
+        return content.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return base64.b64encode(content).decode("ascii"), "base64"
 
 
 class AioSandboxBackend(BaseSandbox):
@@ -143,23 +150,9 @@ class AioSandboxBackend(BaseSandbox):
         prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
         return f"env {prefix} {command}"
 
-    def _rewrite_custom_skill_paths_in_command(self, command: str) -> str:
-        """`execute` 不经 Composite 路由：自定义 skill 脚本路径须映射到容器内 `/workspace/skills/`。"""
-        user_root = get_user_skills_dir(self._user_id)
-        if not user_root.is_dir():
-            return command
-        rewritten = command
-        for child in sorted(user_root.iterdir()):
-            if not child.is_dir() or child.name.startswith(".") or child.is_symlink():
-                continue
-            agent_prefix = f"{AGENT_CUSTOM_SKILLS_ROUTE.rstrip('/')}/{child.name}"
-            container_prefix = f"{CUSTOM_SKILLS_CONTAINER_PREFIX}/{child.name}"
-            rewritten = rewritten.replace(agent_prefix, container_prefix)
-        return rewritten
-
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         effective_timeout = timeout if timeout is not None else self._default_timeout
-        wrapped = self._with_env(self._rewrite_custom_skill_paths_in_command(command))
+        wrapped = self._with_env(command)
         with self._mutex:
             try:
                 result = self._client.shell.exec_command(
@@ -189,7 +182,14 @@ class AioSandboxBackend(BaseSandbox):
                     responses.append(FileUploadResponse(path=path, error="invalid_path"))
                     continue
                 try:
-                    self._client.file.write_file(file=abs_path, content=content)
+                    text, encoding = _prepare_write_file_payload(content)
+                    write_kwargs: dict[str, object] = {
+                        "file": abs_path,
+                        "content": text,
+                    }
+                    if encoding is not None:
+                        write_kwargs["encoding"] = encoding
+                    self._client.file.write_file(**write_kwargs)
                     responses.append(FileUploadResponse(path=path, error=None))
                 except Exception:
                     responses.append(FileUploadResponse(path=path, error="permission_denied"))

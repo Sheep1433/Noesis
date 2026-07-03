@@ -1,11 +1,12 @@
 """知识库集合 MySQL 配置服务。"""
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, Mapping, Optional
 
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session, sessionmaker
 
 from kb.chunk.params import (
     deep_merge_mapping,
@@ -15,6 +16,29 @@ from kb.chunk.params import (
 from models.kb_models import TKbCollectionConfig
 from services.qdrant_service import QdrantService, is_qdrant_connected
 from common.logging import logger
+
+_sync_engine: Engine | None = None
+_SyncSessionLocal: sessionmaker[Session] | None = None
+
+
+def _get_sync_session() -> Session:
+    """Agent 工具线程内读取 MySQL 配置；避免 asyncio.run 与全局 async 引擎跨 loop 冲突。"""
+    global _sync_engine, _SyncSessionLocal
+    if _SyncSessionLocal is None:
+        from config.database import SYNC_SQLALCHEMY_DATABASE_URL
+        from config.env import DataBaseConfig
+
+        _sync_engine = create_engine(
+            SYNC_SQLALCHEMY_DATABASE_URL,
+            echo=DataBaseConfig.db_echo,
+            pool_pre_ping=True,
+            pool_size=2,
+            max_overflow=2,
+            pool_recycle=DataBaseConfig.db_pool_recycle,
+            pool_timeout=DataBaseConfig.db_pool_timeout,
+        )
+        _SyncSessionLocal = sessionmaker(bind=_sync_engine, autocommit=False, autoflush=False)
+    return _SyncSessionLocal()
 
 
 class KbCollectionConfigService:
@@ -137,20 +161,21 @@ class KbCollectionConfigService:
         return created
 
     @classmethod
-    async def _load_query_params_async(cls, collection_name: str) -> Dict[str, Any]:
-        from config.database import AsyncSessionLocal
-
-        async with AsyncSessionLocal() as db:
-            cfg = await cls.get_config(db, collection_name)
-            if cfg is None:
+    def _load_query_params_sync_db(cls, collection_name: str) -> Dict[str, Any]:
+        name = (collection_name or "").strip()
+        with _get_sync_session() as db:
+            row = db.execute(
+                select(TKbCollectionConfig).where(TKbCollectionConfig.collection_name == name)
+            ).scalar_one_or_none()
+            if row is None:
                 return cls.platform_query_defaults()
-            return cfg["query_params"]
+            return normalize_mysql_query_params(row.query_params)
 
     @classmethod
     def load_query_params_sync(cls, collection_name: str) -> Dict[str, Any]:
         """Agent 同步上下文读取集合 query_params；失败时回退平台默认。"""
         try:
-            return asyncio.run(cls._load_query_params_async(collection_name))
+            return cls._load_query_params_sync_db(collection_name)
         except Exception as exc:
             logger.warning(
                 f"[KbCollectionConfig] 同步读取 query_params 失败 collection={collection_name}: {exc}"
@@ -158,19 +183,20 @@ class KbCollectionConfigService:
             return cls.platform_query_defaults()
 
     @classmethod
-    async def _load_processing_params_async(cls, collection_name: str) -> Dict[str, Any]:
-        from config.database import AsyncSessionLocal
-
-        async with AsyncSessionLocal() as db:
-            cfg = await cls.get_config(db, collection_name)
-            if cfg is None:
+    def _load_processing_params_sync_db(cls, collection_name: str) -> Dict[str, Any]:
+        name = (collection_name or "").strip()
+        with _get_sync_session() as db:
+            row = db.execute(
+                select(TKbCollectionConfig).where(TKbCollectionConfig.collection_name == name)
+            ).scalar_one_or_none()
+            if row is None:
                 return cls.platform_processing_defaults()
-            return cfg["processing_params"]
+            return normalize_mysql_processing_params(row.processing_params)
 
     @classmethod
     def load_processing_params_sync(cls, collection_name: str) -> Dict[str, Any]:
         try:
-            return asyncio.run(cls._load_processing_params_async(collection_name))
+            return cls._load_processing_params_sync_db(collection_name)
         except Exception as exc:
             logger.warning(
                 f"[KbCollectionConfig] 同步读取 processing_params 失败 collection={collection_name}: {exc}"

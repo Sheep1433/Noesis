@@ -34,6 +34,7 @@ backend/
 │   │   ├── factory.py           # create_agent_backend（唯一入口）
 │   │   ├── agent_filesystem.py  # CompositeBackend + PrefixBackend
 │   │   ├── mount_paths.py       # Agent / 容器路径常量
+│   │   ├── path_rewrite.py      # execute 虚拟路径 → 物理路径 rewrite
 │   │   ├── aio_sandbox.py       # 裸容器 I/O（不面向 Agent 路径）
 │   │   └── local_shell.py       # local_shell 子 backend
 │   ├── case_generate/           # 测试用例 StateGraph

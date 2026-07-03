@@ -204,6 +204,8 @@ class WebToolsYamlSection(BaseModel):
     max_search_results: int = Field(default=8, ge=1, le=20)
     fetch_max_chars: int = Field(default=4096, ge=1)
     fetch_timeout_seconds: int = Field(default=30, ge=1)
+    # DDG 回退时使用的引擎列表（逗号分隔）；避免 auto 轮询不可达源导致 N×timeout 延迟
+    ddg_backends: str = Field(default="mojeek,yandex")
 
 
 class CheckpointYamlSection(BaseModel):

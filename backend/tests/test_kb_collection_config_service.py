@@ -57,3 +57,21 @@ async def test_ensure_defaults_for_qdrant_collections():
                     n = await KbCollectionConfigService.ensure_defaults_for_qdrant_collections(db)
     assert n == 1
     mock_create.assert_awaited_once()
+
+
+def test_load_query_params_sync_reads_mysql_row():
+    row = MagicMock()
+    row.query_params = {"search_mode": "hybrid", "recall_top_k": 30}
+    session = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = row
+    session.__enter__ = MagicMock(return_value=session)
+    session.__exit__ = MagicMock(return_value=False)
+
+    with patch(
+        "services.kb_collection_config_service._get_sync_session",
+        return_value=session,
+    ):
+        params = KbCollectionConfigService.load_query_params_sync("medical")
+
+    assert params["search_mode"] == "hybrid"
+    assert params["recall_top_k"] == 30

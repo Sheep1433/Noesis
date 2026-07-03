@@ -510,6 +510,75 @@ class ChatService:
         return True
 
     @classmethod
+    async def batch_delete_sessions(
+            cls,
+            session_ids: List[str],
+            user_id: str,
+            db: AsyncSession,
+    ) -> int:
+        """
+        批量软删会话：去重后一次事务落库，跳过不存在/已删/非本人会话。
+
+        :return: 实际删除的会话数量
+        """
+        uid = str(user_id)
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for raw in session_ids:
+            sid = (raw or "").strip()
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            normalized.append(sid)
+
+        if not normalized:
+            raise ServiceException(message='请选择要删除的会话')
+
+        result = await db.execute(
+            select(TChatSession).where(
+                and_(
+                    TChatSession.id.in_(normalized),
+                    TChatSession.user_id == uid,
+                    TChatSession.deleted_at.is_(None),
+                )
+            )
+        )
+        sessions = list(result.scalars().all())
+        if not sessions:
+            raise ServiceException(message='会话不存在')
+
+        missing = set(normalized) - {s.id for s in sessions}
+        if missing:
+            logger.warning(
+                f'batch_delete_sessions 跳过无效或已删会话 user_id={uid} session_ids={sorted(missing)}'
+            )
+
+        found_ids = [s.id for s in sessions]
+        for sid in found_ids:
+            await cancel_session_agent_runs(sid)
+
+        now = _now_ms()
+        await db.execute(
+            update(TChatSession)
+            .where(TChatSession.id.in_(found_ids))
+            .values(deleted_at=now)
+        )
+        await db.execute(
+            update(TChatMessage)
+            .where(TChatMessage.session_id.in_(found_ids))
+            .values(deleted_at=now)
+        )
+        await db.commit()
+
+        for sid in found_ids:
+            delete_session_workspace(uid, sid)
+
+        logger.info(
+            f'批量软删会话成功: user_id={uid}, count={len(found_ids)}, session_ids={found_ids}'
+        )
+        return len(found_ids)
+
+    @classmethod
     async def update_session_title(
             cls,
             session_id: str,

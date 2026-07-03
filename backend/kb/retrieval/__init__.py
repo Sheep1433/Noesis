@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from kb.retrieval.filters import document_matches_post_filter, split_search_filters
 from kb.retrieval.payload import build_payload, documents_to_points
-from kb.retrieval.service import KbRetrievalService, KbSearchHit
+from kb.retrieval.service import KbRetrievalService, KbSearchHit, KbSearchResult, KbSearchTiming
 from kb.retrieval.store import (
     Retrieval,
     VectorStore,
@@ -16,6 +16,8 @@ from kb.retrieval.store import (
 __all__ = [
     "KbRetrievalService",
     "KbSearchHit",
+    "KbSearchResult",
+    "KbSearchTiming",
     "Retrieval",
     "VectorStore",
     "build_payload",

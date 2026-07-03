@@ -178,6 +178,7 @@ class WebToolsSettings:
     max_search_results: int
     fetch_max_chars: int
     fetch_timeout_seconds: int
+    ddg_backends: str
     tavily_api_key: str
 
 
@@ -451,6 +452,7 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
         max_search_results=_legacy_env_int("WEB_MAX_SEARCH_RESULTS", wt.max_search_results),
         fetch_max_chars=_legacy_env_int("WEB_FETCH_MAX_CHARS", wt.fetch_max_chars),
         fetch_timeout_seconds=_legacy_env_int("WEB_FETCH_TIMEOUT_SECONDS", wt.fetch_timeout_seconds),
+        ddg_backends=_legacy_env("WEB_DDG_BACKENDS", wt.ddg_backends).strip() or "mojeek,yandex",
         tavily_api_key=secrets.tavily_api_key,
     )
 

@@ -28,6 +28,7 @@ from deepagents.backends.protocol import (
 
 from agent.backends.aio_sandbox import AioSandboxBackend
 from agent.backends.local_shell import create_local_shell_backend
+from agent.backends.path_rewrite import PathRewriteContext, build_path_rewrite_context, rewrite_virtual_paths_in_command
 from agent.backends.mount_paths import (
     AGENT_CUSTOM_SKILLS_ROUTE,
     AGENT_EXTENSIONS_SKILLS_ROUTE,
@@ -35,7 +36,6 @@ from agent.backends.mount_paths import (
     AGENT_SKILLS_INDEX_ROUTE,
     CUSTOM_SKILLS_CONTAINER_PREFIX,
     EXTENSIONS_SKILLS_CONTAINER_PREFIX,
-    USER_DATA_CONTAINER_PREFIX,
 )
 from config.extensions_paths import skills_root
 from config.user_data_paths import (
@@ -219,10 +219,12 @@ class PrefixBackend(SandboxBackendProtocol):
         *,
         container_prefix: str | None = None,
         read_only: bool = False,
+        rewrite_ctx: PathRewriteContext | None = None,
     ) -> None:
         self._inner = inner
         self._container_prefix = container_prefix.rstrip("/") if container_prefix else None
         self._read_only = read_only
+        self._rewrite_ctx = rewrite_ctx
 
     def _map_in(self, path: str) -> str:
         if self._container_prefix is None:
@@ -333,7 +335,10 @@ class PrefixBackend(SandboxBackendProtocol):
         if not isinstance(self._inner, SandboxBackendProtocol):
             msg = "Inner backend does not support command execution"
             raise NotImplementedError(msg)
-        return self._inner.execute(command, timeout=timeout)
+        effective = command
+        if self._rewrite_ctx is not None:
+            effective = rewrite_virtual_paths_in_command(command, ctx=self._rewrite_ctx)
+        return self._inner.execute(effective, timeout=timeout)
 
     @property
     def id(self) -> str:
@@ -376,12 +381,18 @@ def build_agent_filesystem_backend(
     """构建 Agent 文件系统：default=工作区，routes=extensions/custom skills（只读）。"""
     extensions_root = skills_root()
     custom_root = get_user_skills_dir(user_id)
+    rewrite_ctx = build_path_rewrite_context(
+        user_id=user_id,
+        session_id=session_id,
+        sandbox=sandbox,
+    )
 
     if sandbox is not None:
         workspace_inner: SandboxBackendProtocol = sandbox
         workspace = PrefixBackend(
             workspace_inner,
             container_prefix=f"/workspace/sessions/{session_id}/workspace",
+            rewrite_ctx=rewrite_ctx,
         )
     else:
         session_ws = get_workspace_dir(user_id, session_id)
@@ -391,6 +402,7 @@ def build_agent_filesystem_backend(
                 virtual_mode=True,
                 timeout=shell_timeout,
             ),
+            rewrite_ctx=rewrite_ctx,
         )
 
     extensions = _skills_route_backend(

@@ -162,7 +162,7 @@ def _search_one_collection(
         query_execution_params=exec_params,
         vector_dimension=vd,
     )
-    return [(name, hit) for hit in hits]
+    return [(name, hit) for hit in hits.hits]
 
 
 def search_knowledge_bases_all(

@@ -163,6 +163,8 @@ web_tools:
   max_search_results: 8
   fetch_max_chars: 4096
   fetch_timeout_seconds: 30
+  # DDG 回退引擎（逗号分隔）；勿用 auto，否则会轮询不可达源导致 N×timeout 延迟
+  ddg_backends: mojeek,yandex
 
 # Agent 沙箱（深度研究 / 故障运维）
 # backend: aio（推荐，./scripts/run.sh dev 会自动启动 sandbox-runner）| local_shell（宿主机执行）

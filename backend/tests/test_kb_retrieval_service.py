@@ -35,7 +35,7 @@ def mock_retrieval():
 def test_search_vector_mode(mock_get_retrieval, _mock_connected, mock_retrieval):
     mock_get_retrieval.return_value = mock_retrieval
 
-    hits = KbRetrievalService.search(
+    result = KbRetrievalService.search(
         collection_name="kb1",
         query="test",
         search_mode="vector",
@@ -43,10 +43,14 @@ def test_search_vector_mode(mock_get_retrieval, _mock_connected, mock_retrieval)
         vector_dimension=1024,
     )
 
+    hits = result.hits
     assert len(hits) == 1
     assert hits[0].search_mode == "vector"
     assert hits[0].file_name == "a.md"
     assert hits[0].header_path == "a.md > Sec"
+    assert result.timing.total_ms >= 0
+    assert result.timing.recall_hits == 1
+    assert result.timing.final_hits == 1
     mock_retrieval.vector_search.assert_called_once()
 
 
@@ -85,7 +89,7 @@ def test_search_bm25_returns_nonzero_scores(
     ]
     mock_get_retrieval.return_value = mock_retrieval
 
-    hits = KbRetrievalService.search(
+    result = KbRetrievalService.search(
         collection_name="kb1",
         query="keyword",
         search_mode="bm25",
@@ -93,6 +97,7 @@ def test_search_bm25_returns_nonzero_scores(
         vector_dimension=1024,
     )
 
+    hits = result.hits
     assert len(hits) == 1
     assert hits[0].search_mode == "bm25"
     assert hits[0].score == 2.5
@@ -113,7 +118,7 @@ def test_search_hybrid_uses_rrf(mock_get_retrieval, _mock_connected, mock_retrie
     ]
     mock_get_retrieval.return_value = mock_retrieval
 
-    hits = KbRetrievalService.search(
+    result = KbRetrievalService.search(
         collection_name="kb1",
         query="q",
         search_mode="hybrid",
@@ -123,6 +128,7 @@ def test_search_hybrid_uses_rrf(mock_get_retrieval, _mock_connected, mock_retrie
         vector_dimension=1024,
     )
 
+    hits = result.hits
     assert len(hits) == 1
     assert hits[0].search_mode == "hybrid"
     assert hits[0].score > 0

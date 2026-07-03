@@ -6,10 +6,18 @@
 # 本地 Langfuse 栈：下列 *secret 默认值为开发占位，禁止用于生产。
 name: noesis-langfuse
 
+# ClickHouse 故障时会狂写 json-file 日志，必须限制单文件大小（生产同理）
+x-logging: &langfuse-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   langfuse-worker:
     image: docker.io/langfuse/langfuse-worker:3
     restart: unless-stopped
+    logging: *langfuse-logging
     depends_on: &langfuse-depends-on
       postgres:
         condition: service_healthy
@@ -56,6 +64,7 @@ services:
   langfuse-web:
     image: docker.io/langfuse/langfuse:3
     restart: unless-stopped
+    logging: *langfuse-logging
     depends_on: *langfuse-depends-on
     ports:
       - 3000:3000
@@ -75,6 +84,7 @@ services:
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server
     restart: unless-stopped
+    logging: *langfuse-logging
     user: "101:101"
     environment:
       CLICKHOUSE_DB: default
@@ -96,6 +106,7 @@ services:
   minio:
     image: cgr.dev/chainguard/minio
     restart: unless-stopped
+    logging: *langfuse-logging
     entrypoint: sh
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
@@ -116,6 +127,7 @@ services:
   redis:
     image: docker.io/redis:7
     restart: unless-stopped
+    logging: *langfuse-logging
     command: >
       --requirepass ${REDIS_AUTH:-myredissecret}
       --maxmemory-policy noeviction
@@ -132,6 +144,7 @@ services:
   postgres:
     image: docker.io/postgres:17
     restart: unless-stopped
+    logging: *langfuse-logging
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 3s

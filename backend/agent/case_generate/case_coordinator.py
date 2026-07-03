@@ -20,6 +20,7 @@ from langgraph.types import Command
 
 from agent.base.base_agent import DEFAULT_RECURSION_LIMIT
 from agent.case_generate.case_graph import TestCaseState, build_test_case_graph
+from agent.case_generate.rag import extract_source_file_names
 from config.env import LangfuseConfig
 from domain.observability.langfuse import merge_langfuse_runnable_config
 from common.logging import logger
@@ -49,7 +50,6 @@ async def resolve_document_context(file_list: Optional[Dict[str, Any]]) -> str:
     """
     from agent.case_generate.rag import (
         TEST_CASE_KB_FILE_DICT_REF,
-        extract_source_file_names,
         requirement_collection_name,
     )
     from kb.retrieval import KbRetrievalService

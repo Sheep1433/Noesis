@@ -71,6 +71,11 @@ export function isImagePreviewPath(path: string): boolean {
   return (IMAGE_PREVIEW_EXTENSIONS as readonly string[]).includes(ext)
 }
 
+export function isMarkdownPreviewPath(path: string): boolean {
+  const ext = getPathExtension(path)
+  return ext === '.md' || ext === '.markdown'
+}
+
 export function isInlinePreviewPath(path: string): boolean {
   return isTextPreviewPath(path) || isImagePreviewPath(path)
 }

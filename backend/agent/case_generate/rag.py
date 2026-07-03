@@ -98,7 +98,7 @@ class _HybridRetriever:
                 query_execution_params=exec_params,
                 filters=filters,
                 vector_dimension=vector_dimension,
-            )
+            ).hits
 
         try:
             return await asyncio.wait_for(asyncio.to_thread(_run), timeout=self.timeout)

@@ -5,6 +5,7 @@ Harbor 跑 Terminal-Bench 2.0。提供两条 Agent 路线：
 | 脚本 | Agent | 模型 | 场景 |
 |------|-------|------|------|
 | `run-opencode.sh` | OpenCode | `opencode/deepseek-v4-flash-free` | **推荐**：评 deepseek-v4-flash-free，容器直连 OpenCode Zen |
+| `run-noesis.sh` | Noesis SuperAgent | `opencode/deepseek-v4-flash-free`（可覆盖） | Host 侧 Agent + 容器 exec 桥接，对标 OpenCode baseline |
 | `run.sh` | Claude Code | `deepseek-v4-flash` | 本机 cc-switch 代理；容器内需 `host.docker.internal` |
 
 ## 前置
@@ -37,6 +38,24 @@ HARBOR_DATASET=terminal-bench-sample@2.0 ./evals/agent/harbor/run-opencode.sh --
 ```bash
 export OPENCODE_API_KEY=sk-... && ./evals/agent/harbor/run-opencode.sh ...
 ```
+
+### Noesis SuperAgent（Harbor 适配 PoC）
+
+```bash
+cd backend
+chmod +x evals/agent/harbor/run-noesis.sh
+
+# 单题冒烟（本地 CLI 集）
+HARBOR_TASKS_PATH=evals/agent/harbor/datasets/terminal-bench-cli-10 \
+  ./evals/agent/harbor/run-noesis.sh \
+  --include-task-name fix-git --job-name smoke-noesis
+
+# 与 OpenCode baseline 同模型
+export OPENCODE_API_KEY=public
+export HARBOR_NOESIS_MODEL=opencode/deepseek-v4-flash-free
+```
+
+产物：`results/<job>/*/agent/trajectory.json`（ATIF）、`noesis.txt`（摘要）、`noesis-worker.log`（子进程日志）。查看：`harbor view evals/agent/harbor/results/<job>`。
 
 ### Claude Code + cc-switch
 

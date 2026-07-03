@@ -138,6 +138,24 @@ export interface SearchResult {
   rerank_score?: number | null
 }
 
+export interface SearchTiming {
+  prepare_ms: number
+  recall_ms: number
+  parse_ms: number
+  rerank_ms: number
+  post_ms: number
+  total_ms: number
+  rerank_applied: boolean
+  recall_hits: number
+  final_hits: number
+  search_mode: string
+}
+
+export interface SearchCollectionResponse {
+  results: SearchResult[]
+  timing: SearchTiming
+}
+
 interface CreateCollectionResponse {
   success: boolean
   message: string
@@ -292,7 +310,10 @@ export async function uploadDocument(
 /**
  * 知识库检索；不传 limit / score_threshold 时使用集合默认值
  */
-export async function searchCollection(collectionName: string, body: SearchCollectionRequest): Promise<SearchResult[]> {
+export async function searchCollection(
+  collectionName: string,
+  body: SearchCollectionRequest,
+): Promise<SearchCollectionResponse> {
   const payload: Record<string, unknown> = {
     query: body.query,
   }
@@ -329,14 +350,48 @@ export async function searchCollection(collectionName: string, body: SearchColle
     },
   )
 
-  const json = await response.json() as { data?: SearchResult[] } | SearchResult[]
+  const json = await response.json() as {
+    data?: SearchCollectionResponse | SearchResult[]
+    results?: SearchResult[]
+    timing?: SearchTiming
+  } | SearchResult[]
+
   if (Array.isArray(json)) {
-    return json
+    return { results: json, timing: emptySearchTiming() }
   }
-  if (json && Array.isArray(json.data)) {
-    return json.data
+
+  const data = json.data
+  if (data && !Array.isArray(data) && Array.isArray(data.results)) {
+    return {
+      results: data.results,
+      timing: data.timing ?? emptySearchTiming(),
+    }
   }
-  return []
+  if (data && Array.isArray(data)) {
+    return { results: data, timing: emptySearchTiming() }
+  }
+  if (json && Array.isArray(json.results)) {
+    return {
+      results: json.results,
+      timing: json.timing ?? emptySearchTiming(),
+    }
+  }
+  return { results: [], timing: emptySearchTiming() }
+}
+
+function emptySearchTiming(): SearchTiming {
+  return {
+    prepare_ms: 0,
+    recall_ms: 0,
+    parse_ms: 0,
+    rerank_ms: 0,
+    post_ms: 0,
+    total_ms: 0,
+    rerank_applied: false,
+    recall_hits: 0,
+    final_hits: 0,
+    search_mode: 'hybrid',
+  }
 }
 
 export async function getCollectionConfig(collectionName: string): Promise<CollectionConfig> {
@@ -371,6 +426,8 @@ export type {
   DeleteResponse,
   DocumentInfo,
   KnowledgeBaseStatus,
+  SearchCollectionResponse,
   SearchResult,
+  SearchTiming,
   ShardInfo,
 }

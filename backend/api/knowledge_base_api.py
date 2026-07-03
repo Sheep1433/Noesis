@@ -19,6 +19,8 @@ from schemas.knowledge_base_schema import (
     ShardDetail,
     KnowledgeBaseStatus,
     SearchResult,
+    SearchTiming,
+    SearchCollectionResponse,
     UploadResponse,
     DeleteResponse,
     CreateCollectionRequest,
@@ -461,7 +463,7 @@ async def search_collection(
 
         from kb.retrieval import KbRetrievalService
 
-        hits = KbRetrievalService.search(
+        search_result = KbRetrievalService.search(
             collection_name=collection_name,
             query=query.strip(),
             query_execution_params=exec_params,
@@ -480,9 +482,22 @@ async def search_collection(
                 recall_score=h.recall_score,
                 rerank_score=h.rerank_score,
             ).model_dump()
-            for h in hits
+            for h in search_result.hits
         ]
-        return ResponseUtil.success(msg="检索成功", data=results)
+        timing = SearchTiming(
+            prepare_ms=search_result.timing.prepare_ms,
+            recall_ms=search_result.timing.recall_ms,
+            parse_ms=search_result.timing.parse_ms,
+            rerank_ms=search_result.timing.rerank_ms,
+            post_ms=search_result.timing.post_ms,
+            total_ms=search_result.timing.total_ms,
+            rerank_applied=search_result.timing.rerank_applied,
+            recall_hits=search_result.timing.recall_hits,
+            final_hits=search_result.timing.final_hits,
+            search_mode=search_result.timing.search_mode,
+        ).model_dump()
+        payload = SearchCollectionResponse(results=results, timing=timing).model_dump()
+        return ResponseUtil.success(msg="检索成功", data=payload)
     except HTTPException:
         raise
     except ValueError as e:

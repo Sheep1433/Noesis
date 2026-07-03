@@ -1,7 +1,7 @@
 """
 知识库相关 Pydantic 模型
 """
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -87,6 +87,26 @@ class SearchResult(BaseModel):
     header_path: Optional[str] = Field(None, description="分片标题路径")
     recall_score: Optional[float] = Field(None, description="召回阶段分数")
     rerank_score: Optional[float] = Field(None, description="rerank 分数（启用时）")
+
+
+class SearchTiming(BaseModel):
+    """检索各阶段耗时（毫秒）"""
+    prepare_ms: float = Field(..., description="检索实例准备耗时（含首次 BM25 索引加载）")
+    recall_ms: float = Field(..., description="召回阶段耗时")
+    parse_ms: float = Field(..., description="命中组装耗时")
+    rerank_ms: float = Field(..., description="重排序耗时")
+    post_ms: float = Field(..., description="阈值过滤与截断耗时")
+    total_ms: float = Field(..., description="总耗时")
+    rerank_applied: bool = Field(..., description="是否实际执行 rerank")
+    recall_hits: int = Field(..., description="召回命中数")
+    final_hits: int = Field(..., description="最终返回条数")
+    search_mode: str = Field(..., description="本次检索模式")
+
+
+class SearchCollectionResponse(BaseModel):
+    """POST /search 响应 data"""
+    results: List[SearchResult]
+    timing: SearchTiming
 
 
 class KnowledgeBaseStatus(BaseModel):

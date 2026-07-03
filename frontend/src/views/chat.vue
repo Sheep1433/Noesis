@@ -2302,7 +2302,8 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .session-context-aside {
   flex-shrink: 0;
-  width: 320px;
+  width: min(480px, 42vw);
+  min-width: 360px;
   min-height: 0;
   border-left: 1px solid var(--noesis-color-border-aside);
   overflow: hidden;

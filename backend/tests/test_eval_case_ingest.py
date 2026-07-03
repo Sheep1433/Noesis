@@ -29,7 +29,7 @@ def test_map_only_produces_stable_login_chunk_ids():
         if e["file_name"] == "prd_001.md" and e["chunk_index"] == 0
     )
     assert login_a["point_id"] == login_b["point_id"]
-    assert login_a["point_id"] == "f00fdeca-004f-5614-b03b-717c85c1cef5"
+    assert login_a["point_id"] == "89a3dea1-1006-5c3f-9189-ce92ab8f3eb9"
 
 
 def test_id_map_file_matches_fixture_version():

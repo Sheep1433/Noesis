@@ -50,7 +50,7 @@ uuid5(NAMESPACE_URL, "noesis:citation:" + collection_name + "\0" + file_name + "
 登记与工具输出中的 `shard_id` SHALL 按下列优先级解析，**SHALL NOT** 使用裸 `content_hash` 字符串冒充 point id：
 
 1. `Document.metadata["point_id"]`（检索命中时由向量库写入）；
-2. `hash_to_uuid(metadata["content_hash"])`（与 `add_vectors` 入库规则一致）；
+2. `VectorStorage.hash_to_uuid(metadata["content_hash"])`（SHALL 调用 `kb/retrieval/store.py` 内同一静态方法，禁止自实现）；
 3. 均不可用 → `shard_id` 为 null，Citation 仍登记，原文查看走文档级 fallback。
 
 `KbRetrievalService._doc_to_hit` SHALL 将上述结果写入 `KbSearchHit.id` 供工具层透出。
@@ -64,7 +64,12 @@ uuid5(NAMESPACE_URL, "noesis:citation:" + collection_name + "\0" + file_name + "
 #### Scenario: 无 point_id 时有 content_hash
 
 - **WHEN** metadata 无 `point_id` 但含 `content_hash`
-- **THEN** `shard_id` SHALL 为 `hash_to_uuid(content_hash)` 的字符串形式
+- **THEN** `shard_id` SHALL 为 `VectorStorage.hash_to_uuid(content_hash)` 的字符串形式
+
+#### Scenario: hybrid 检索集成可 retrieve
+
+- **WHEN** 对真实 Collection 执行 `search_mode=hybrid` 的 `search_knowledge_base` 且命中非空
+- **THEN** 至少一条 hit 的 `shard_id` SHALL 使 `GET .../shards/{shard_id}` 返回 200，或 SHALL 为 null 且抽屉 fallback 用例通过
 
 #### Scenario: shard_id 为空时抽屉 fallback
 
@@ -89,7 +94,9 @@ uuid5(NAMESPACE_URL, "noesis:citation:" + collection_name + "\0" + file_name + "
 3. 产出 `items`：候选中 `index ∈ cited_indices`，按 `index` 升序；
 4. 若存在候选且 `cited_indices` 为空，SHALL 取 score Top-5，`citation_fallback=true`。
 
-**merged_text** SHALL 仅由本轮 assistant 消息中所有 **`type=text`** part 的 `content` 按顺序拼接；**SHALL NOT** 包含 `reasoning` 或 `tool` 内容。
+**merged_text** SHALL 仅由本轮 assistant 消息中 **`type=text` 且 `parent_task_call_id` 为空** 的 part 按顺序拼接；**SHALL NOT** 包含 `reasoning`、`tool` 或子 Agent 嵌套 text。
+
+`CitationCollector.register_hits` **SHALL** 仅在 `kb_search_tool._format_hits`（主线程，并行 `ThreadPoolExecutor` 完成之后）调用；**SHALL NOT** 在 `_search_one_collection` worker 内调用。
 
 **角标解析** SHALL：
 
@@ -121,12 +128,13 @@ uuid5(NAMESPACE_URL, "noesis:citation:" + collection_name + "\0" + file_name + "
 
 ### Requirement: partial 与 stop 终态 SHALL 持久化 citations part
 
-当 `status` 为 `partial`（用户 `/stop` 或意外断连）且本轮 `CitationCollector` 已登记候选时，落库路径 **SHALL** 与正常结束相同地调用 `finalize(merged_text)` 并 `append_citations`（若 `items` 非空）。
+当 `status` 为 `partial`（用户 `/stop` 或意外断连）且本轮 `CitationCollector` 已登记候选时，落库路径 **SHALL** 调用 `finalize(merged_text)` 并 `append_citations`（若 `items` 非空）。
 
-- `stop_chat`：在 `builder.to_dict()` **之前** 执行 citations finalize；
-- `_persist_disconnect_partial`：同上。
+**调用顺序（硬约束）**：`_flush_ctx_text_buffer` → `_finalize_citations` → `builder.to_dict()` →（仅 stop）`append_user_stop_notice_to_content` → persist。`citations` part SHALL 位于用户停止提示 text 之前。
 
-意外断连时 **MAY** 无法再向客户端发送 `citations-available` SSE；刷新后 **SHALL** 仍可从 DB 读取 `citations` part。
+- `stop_chat`、`_persist_disconnect_partial` 均须遵守上述顺序。
+
+**SSE**：仅 **正常 `finish`**（bridge）**保证**发出 `citations-available`。**`/stop` 与意外断连首版不保证**流式过程中收到该帧；用户 **SHALL** 可通过刷新会话从 DB 读取 `citations` part。
 
 #### Scenario: 用户停止后刷新仍有来源列表
 
@@ -138,6 +146,30 @@ uuid5(NAMESPACE_URL, "noesis:citation:" + collection_name + "\0" + file_name + "
 
 - **WHEN** 流意外断开前已完成检索与部分正文，且 collector 可 finalize 出 items
 - **THEN** `_persist_disconnect_partial` 写入的消息 SHALL 含 `citations` part
+
+#### Scenario: stop 时流式过程可无来源列表
+
+- **WHEN** 用户 `/stop` 且 SSE 连接在 finalize 前结束
+- **THEN** 客户端 **MAY** 未收到 `citations-available`
+- **AND** 刷新后 **SHALL** 仍展示来源列表
+
+### Requirement: citation_fallback SHALL 向用户明示语义
+
+当 `citation_fallback=true` 时，UI SHALL 说明：未检测到文内 `[n]` 角标，文末列表为检索相关来源，**不代表**模型逐条引用了这些分片。
+
+#### Scenario: fallback 文案展示
+
+- **WHEN** `citations` part 含 `citation_fallback: true`
+- **THEN** CitationList 上方 SHALL 展示上述含义的简短说明
+
+### Requirement: 首版能力边界 SHALL 被文档与验收承认
+
+本能力 **SHALL NOT** 承诺：审计级逐句归因、`get_knowledge_document` 自动产生 citation、非半角角标（如 `【1】`）、PDF 页码级高亮。LLM 长期不写 `[n]` 时体验上限为 fallback 列表 + 工具折叠内原始 hits——须在 `design.md` §难度评估 与验收指标中跟踪。
+
+#### Scenario: 验收记录 fallback 占比
+
+- **WHEN** 完成首版手工验收（≥3 个固定问题）
+- **THEN** 团队 SHALL 记录 `citation_fallback` 出现次数占比并写入验收备注
 
 ### Requirement: chat 页 SHALL 渲染文末来源列表
 

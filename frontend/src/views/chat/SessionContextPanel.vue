@@ -153,22 +153,35 @@ defineExpose({ reload })
     </div>
 
     <n-spin :show="loading" class="panel-body">
-      <WorkspaceFileTree
-        v-if="context?.tree?.length"
-        :nodes="context.tree"
-        :selected-key="selectedKey"
-        @select="onSelectFile"
-      />
+      <div class="panel-split">
+        <aside class="panel-tree">
+          <WorkspaceFileTree
+            v-if="context?.tree?.length"
+            :nodes="context.tree"
+            :selected-key="selectedKey"
+            @select="onSelectFile"
+          />
+          <div v-else class="panel-empty-hint">
+            暂无文件
+          </div>
+        </aside>
 
-      <FilePreview
-        v-if="previewPath"
-        :path="previewPath"
-        :content="previewContent"
-        :image-src="previewImageSrc"
-        :loading="previewLoading"
-        density="compact"
-        class="session-file-preview"
-      />
+        <section class="panel-preview">
+          <FilePreview
+            v-if="previewPath"
+            :path="previewPath"
+            :content="previewContent"
+            :image-src="previewImageSrc"
+            :loading="previewLoading"
+            density="compact"
+            fill-height
+            class="session-file-preview"
+          />
+          <div v-else class="panel-empty-hint panel-empty-hint--preview">
+            选择文件以查看内容
+          </div>
+        </section>
+      </div>
     </n-spin>
   </div>
 </template>
@@ -194,18 +207,63 @@ defineExpose({ reload })
 .panel-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 4px 0 12px;
+  overflow: hidden;
+  padding: 0;
   background-color: inherit;
 }
 
-.panel-body :deep(.n-spin-container),
-.panel-body :deep(.n-spin-content) {
+.panel-body :deep(.n-spin-container) {
+  height: 100%;
   background-color: inherit;
+}
+
+.panel-body :deep(.n-spin-content) {
+  height: 100%;
+  background-color: inherit;
+}
+
+.panel-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panel-tree {
+  flex: 0 0 132px;
+  min-width: 120px;
+  overflow: auto;
+  padding: 4px 0 8px;
+  border-right: 1px solid var(--noesis-color-border-aside);
+}
+
+.panel-preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-empty-hint {
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--noesis-color-text-tertiary, #94a3b8);
+  text-align: center;
+}
+
+.panel-empty-hint--preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 16px;
 }
 
 .session-file-preview {
-  margin: 8px 8px 0;
+  flex: 1;
+  min-height: 0;
 }
 
 .session-file-preview :deep(.n-code) {

@@ -143,6 +143,7 @@ web_tools:
   max_search_results: 8
   fetch_max_chars: 4096
   fetch_timeout_seconds: 30
+  ddg_backends: mojeek,yandex
 
 # AIO 沙箱（深度研究 / 故障运维）；runner 镜像/回收等见 deploy/docker-compose.yml
 sandbox:

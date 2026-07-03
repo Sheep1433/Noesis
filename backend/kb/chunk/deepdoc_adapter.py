@@ -105,6 +105,23 @@ def _chunk_blocks(
             if doc:
                 documents.append(doc)
             continue
+        if len(text) > chunk_size:
+            if buffer:
+                emit()
+            for part in _fixed_window_chunks(
+                text, chunk_size=chunk_size, overlap=chunk_overlap
+            ):
+                doc = _flush_chunk(
+                    [part],
+                    parsed=parsed,
+                    chunk_index=len(documents),
+                    page_no=block.page_no,
+                    layout_type=layout,
+                    header_path=header_path,
+                )
+                if doc:
+                    documents.append(doc)
+            continue
         if layout in {"table", "figure", "figure caption", "image"} or size + len(text) > chunk_size:
             if buffer:
                 emit()

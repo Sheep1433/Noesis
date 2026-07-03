@@ -184,6 +184,27 @@ async def create_session(
     )
 
 
+class BatchDeleteRequest(BaseModel):
+    session_ids: list[str] = Field(description="会话ID列表")
+
+
+@chat_router.post("/sessions/batch-delete", summary="批量删除会话")
+async def batch_delete_sessions(
+    request: BatchDeleteRequest,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    批量删除会话（软删）
+    """
+    deleted = await ChatService.batch_delete_sessions(
+        session_ids=request.session_ids,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    return ResponseUtil.success(msg=f'已删除 {deleted} 个会话')
+
+
 @chat_router.put("/sessions/{session_id}/ensure", summary="幂等物化会话")
 async def ensure_session(
     session_id: str,
@@ -705,19 +726,3 @@ async def stop_stream(
     return ResponseUtil.success(msg=msg)
 
 
-class BatchDeleteRequest(BaseModel):
-    session_ids: list[str] = Field(description="会话ID列表")
-
-
-@chat_router.post("/sessions/batch-delete", summary="批量删除会话")
-async def batch_delete_sessions(
-    request: BatchDeleteRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    批量删除会话（软删）
-    """
-    for session_id in request.session_ids:
-        await ChatService.delete_session(session_id, current_user.user_id, db)
-    return ResponseUtil.success(msg='删除成功')

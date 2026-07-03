@@ -58,7 +58,8 @@ while IFS= read -r logfile; do
 done < <(find /var/lib/docker/containers -name '*-json.log' -size +200M 2>/dev/null || true)
 
 echo "==> 构建镜像"
-compose build
+# --progress=plain 持续输出构建日志，避免 CI SSH 长时间无输出被断开（Broken pipe）
+compose build --progress=plain
 
 echo "==> 启动栈"
 compose up -d --remove-orphans

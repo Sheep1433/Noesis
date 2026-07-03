@@ -7,6 +7,7 @@ import type {
   KbSearchMode,
   SearchCollectionRequest,
   SearchResult,
+  SearchTiming,
 } from '@/api/knowledgeBase'
 import { ArrowBack, CloudUpload, DocumentTextOutline, Refresh, Search, SettingsOutline } from '@vicons/ionicons-v5'
 import {
@@ -87,6 +88,7 @@ const searchScoreThresholdOverride = ref<number | null>(null)
 const searchRrfKOverride = ref<number | null>(null)
 const searchFilterFileName = ref('')
 const searchResults = ref<SearchResult[]>([])
+const searchTiming = ref<SearchTiming | null>(null)
 
 const collectionConfig = ref<CollectionConfig | null>(null)
 const configSaving = ref(false)
@@ -298,6 +300,7 @@ async function handleSearch() {
 
   searching.value = true
   searchResults.value = []
+  searchTiming.value = null
 
   try {
     const body: SearchCollectionRequest = {
@@ -322,8 +325,9 @@ async function handleSearch() {
     if (searchFilterFileName.value.trim()) {
       body.filters = { file_name: searchFilterFileName.value.trim() }
     }
-    const results = await searchCollection(collectionName.value, body)
+    const { results, timing } = await searchCollection(collectionName.value, body)
     searchResults.value = results
+    searchTiming.value = timing
     if (results.length === 0) {
       message.warning('未找到相关结果')
     }
@@ -532,6 +536,7 @@ async function saveCollectionConfig() {
           <div class="search-results-scroll">
             <KbSearchResults
               :results="searchResults"
+              :timing="searchTiming"
               :loading="searching"
               @view-shard="openShardDetail"
             />

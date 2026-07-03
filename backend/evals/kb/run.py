@@ -139,7 +139,7 @@ async def _run_eval(args: argparse.Namespace) -> int:
                 query=query,
                 query_execution_params=exec_params,
                 vector_dimension=vd,
-            )
+            ).hits
         except Exception as exc:
             print(f"[error] query={query!r}: {exc}")
             failures.append({"query": query, "error": str(exc)})

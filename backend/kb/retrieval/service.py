@@ -34,6 +34,28 @@ class KbSearchHit:
     rerank_score: Optional[float] = None
 
 
+@dataclass
+class KbSearchTiming:
+    """检索各阶段耗时（毫秒），供调试面板展示。"""
+
+    prepare_ms: float
+    recall_ms: float
+    parse_ms: float
+    rerank_ms: float
+    post_ms: float
+    total_ms: float
+    rerank_applied: bool
+    recall_hits: int
+    final_hits: int
+    search_mode: str
+
+
+@dataclass
+class KbSearchResult:
+    hits: List[KbSearchHit]
+    timing: KbSearchTiming
+
+
 class KbRetrievalService:
     """集合内检索：recall → rerank → score_threshold → final_top_k。"""
 
@@ -85,11 +107,12 @@ class KbRetrievalService:
         use_reranker: Optional[bool] = None,
         recall_top_k: Optional[int] = None,
         final_top_k: Optional[int] = None,
-    ) -> List[KbSearchHit]:
+    ) -> KbSearchResult:
         if not is_qdrant_connected():
             raise RuntimeError("向量库未连接")
 
         t_total = time.perf_counter()
+        t_prepare = time.perf_counter()
 
         legacy_overrides: Dict[str, Any] = {}
         if search_mode is not None:
@@ -142,6 +165,7 @@ class KbRetrievalService:
 
         qdrant_filter, post_filter = split_search_filters(filters)
         retrieval = cls._get_retrieval(collection_name, vector_dimension)
+        prepare_ms = (time.perf_counter() - t_prepare) * 1000
 
         recall_limit = recall_k
         if post_filter:
@@ -192,16 +216,29 @@ class KbRetrievalService:
         post_ms = (time.perf_counter() - t_post) * 1000
         total_ms = (time.perf_counter() - t_total) * 1000
 
+        timing = KbSearchTiming(
+            prepare_ms=prepare_ms,
+            recall_ms=recall_ms,
+            parse_ms=parse_ms,
+            rerank_ms=rerank_ms,
+            post_ms=post_ms,
+            total_ms=total_ms,
+            rerank_applied=rerank_applied,
+            recall_hits=recall_hit_count,
+            final_hits=len(final_hits),
+            search_mode=mode,
+        )
+
         logger.info(
             "[KbRetrievalService] search "
             f"collection={collection_name} mode={mode} "
-            f"recall_ms={recall_ms:.1f} parse_ms={parse_ms:.1f} "
+            f"prepare_ms={prepare_ms:.1f} recall_ms={recall_ms:.1f} parse_ms={parse_ms:.1f} "
             f"rerank_ms={rerank_ms:.1f} rerank_applied={rerank_applied} "
             f"post_ms={post_ms:.1f} recall_hits={recall_hit_count} "
             f"final_hits={len(final_hits)} recall_top_k={recall_k} final_top_k={final_k} "
             f"total_ms={total_ms:.1f}"
         )
-        return final_hits
+        return KbSearchResult(hits=final_hits, timing=timing)
 
     @classmethod
     def _apply_rerank(cls, query: str, hits: List[KbSearchHit]) -> List[KbSearchHit]:

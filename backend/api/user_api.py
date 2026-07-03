@@ -46,6 +46,7 @@ async def query_user_qa_record(
         {
             "id": s.id,
             "session_id": s.id,
+            "chat_id": s.id,
             "title": s.title,
             "qa_type": resolved_qa.get(s.id),
             "create_time": s.created_at,

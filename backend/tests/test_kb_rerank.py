@@ -63,11 +63,12 @@ def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _conn, _svc_av
     ]
     mock_get_retrieval.return_value = retrieval
 
-    hits = KbRetrievalService.search(
+    result = KbRetrievalService.search(
         collection_name="kb1",
         query="test",
         query_execution_params={"use_reranker": True, "final_top_k": 2, "recall_top_k": 10},
         vector_dimension=1024,
     )
+    hits = result.hits
     assert len(hits) == 2
     assert hits[0].score >= hits[1].score or hits[0].file_name == "b.md"
