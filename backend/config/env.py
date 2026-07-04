@@ -459,9 +459,9 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
 
 def _build_sandbox(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> SandboxSettings:
     sb = yaml_cfg.sandbox
-    backend = _legacy_env("SANDBOX_BACKEND", sb.backend).strip().lower() or "aio"
-    if backend not in ("aio", "local_shell"):
-        backend = "aio"
+    backend = _legacy_env("SANDBOX_BACKEND", sb.backend).strip().lower() or "docker"
+    if backend not in ("docker", "aio", "local_shell"):
+        backend = "docker"
     return SandboxSettings(
         backend=backend,
         runner_url=_legacy_env("SANDBOX_RUNNER_URL", sb.runner_url),
@@ -476,6 +476,15 @@ def get_sandbox_runner_token(secrets: EnvSecrets | None = None) -> str:
     if secrets is None:
         secrets = EnvSecrets()
     return secrets.sandbox_runner_token or _legacy_env("SANDBOX_RUNNER_TOKEN", "")
+
+
+def sandbox_runner_headers() -> dict[str, str]:
+    """sandbox-runner 内网 API 鉴权头。"""
+    headers: dict[str, str] = {}
+    token = get_sandbox_runner_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _build_checkpoint(yaml_cfg: AppYamlConfig) -> CheckpointSettings:

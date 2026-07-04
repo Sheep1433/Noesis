@@ -1,6 +1,6 @@
 """
-MCP Docker SSH server - FastMCP 入口，工具注册（L1 原子工具 + L2 场景工具）
-通过 Docker 容器内 ssh 命令执行远程操作（免密登录，见 setup_passwordless_login）。
+MCP SSH server - FastMCP 入口，工具注册（L1 原子工具 + L2 场景工具）
+经宿主机 openssh 客户端执行远程操作（免密登录，见 setup_passwordless_login）。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from tools.scenarios import playbook_log as _playbook_log_scenario
 
 GrepOutputMode = Literal["content", "files_with_matches", "count"]
 
-mcp = FastMCP("docker-ssh")
+mcp = FastMCP("ssh")
 
 
 @mcp.tool()
@@ -216,7 +216,7 @@ def playbook_log(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="MCP Docker SSH Server")
+    parser = argparse.ArgumentParser(description="MCP SSH Server")
     parser.add_argument("--transport", default="http", choices=["stdio", "http"], help="Transport type")
     parser.add_argument("--host", default="0.0.0.0", help="HTTP bind host (only for http transport)")
     parser.add_argument("--port", type=int, default=8000, help="HTTP port (only for http transport)")

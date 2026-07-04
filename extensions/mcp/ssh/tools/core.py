@@ -10,15 +10,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 from config import VCS_DIRECTORIES_TO_EXCLUDE, get_config
-from executor import build_ssh_command, exec_in_container
+from executor import exec_remote
 from utils.errors import (
     CommandExecutionError,
-    ContainerNotRunningError,
     InternalError,
     PathNotFoundError,
-    SSHAuthFailedError,
-    SSHAuthRequiredError,
-    SSHConnectionFailedError,
 )
 from utils.output_handler import (
     CommandResult,
@@ -65,60 +61,6 @@ GREP_TYPE_INCLUDES: Dict[str, str] = {
 }
 
 
-def _classify_ssh_error(stderr: str) -> Optional[Exception]:
-    """Map OpenSSH client stderr to typed MCP errors."""
-    if not stderr:
-        return None
-    text = stderr.strip()
-    lower = text.lower()
-    if not lower.startswith("ssh:"):
-        if "permission denied (publickey" in lower and "password" in lower:
-            return SSHAuthRequiredError(text)
-        return None
-
-    if "permission denied (publickey" in lower and "password" in lower:
-        return SSHAuthRequiredError(text)
-    if "permission denied" in lower:
-        return SSHAuthFailedError(text)
-    if any(kw in lower for kw in ("connection refused", "could not resolve hostname", "no route to host")):
-        return SSHConnectionFailedError(text)
-    if "connection timed out" in lower or "operation timed out" in lower:
-        return SSHConnectionFailedError(text)
-    return None
-
-
-def _exec_remote(
-    host: str,
-    user: str,
-    port: int,
-    command: str,
-    timeout: Optional[int] = None,
-) -> CommandResult:
-    """Execute a command on the remote host via ssh inside the container."""
-    cfg = get_config()
-    if timeout is None:
-        timeout = cfg.execution.timeout
-
-    ssh_cmd = build_ssh_command(host, user, port, command)
-
-    last_error: Optional[Exception] = None
-    for _ in range(2):
-        try:
-            exit_code, stdout, stderr = exec_in_container(ssh_cmd, timeout=timeout)
-            result = CommandResult(stdout=stdout, stderr=stderr, exit_code=exit_code)
-
-            if result.exit_code != 0:
-                ssh_error = _classify_ssh_error(result.stderr)
-                if ssh_error:
-                    raise ssh_error
-
-            return result
-        except ContainerNotRunningError as exc:
-            last_error = exc
-
-    raise last_error  # type: ignore[misc]
-
-
 def _require_ip(ip: str) -> None:
     if not ip:
         raise InternalError("ip is required")
@@ -139,7 +81,7 @@ def _is_text_mime(mime: str) -> bool:
 
 def _assert_text_file(path: str, ip: str, user: str, port: int) -> None:
     """Reject binary/non-text files before reading."""
-    probe = _exec_remote(
+    probe = exec_remote(
         ip,
         user,
         port,
@@ -237,7 +179,7 @@ def read(
         f"tail -n +{start_line} '{path}' | head -n {effective_limit}"
     )
 
-    result = _exec_remote(ip, user, port, command)
+    result = exec_remote(ip, user, port, command)
 
     stderr_lower = result.stderr.lower()
     if result.exit_code != 0 and any(
@@ -325,7 +267,7 @@ def grep(
     else:
         command = f"{grep_cmd} '{path}'"
 
-    result = _exec_remote(ip, user, port, command)
+    result = exec_remote(ip, user, port, command)
 
     if result.exit_code == 1:
         return success_result(_empty_grep_data(output_mode), empty=True)
@@ -441,7 +383,7 @@ def glob(
         f"find '{path}' {_find_vcs_prune_expr()} -type f -name '{pattern}' -print 2>/dev/null | "
         f"head -n {max_files + 1}"
     )
-    result = _exec_remote(ip, user, port, command)
+    result = exec_remote(ip, user, port, command)
 
     raw = result.stdout.strip()
     all_files = raw.splitlines() if raw else []
@@ -479,7 +421,7 @@ def bash(
     )
     timeout_sec = max(1, (effective_timeout_ms + 999) // 1000)
 
-    result = _exec_remote(ip, user, port, command, timeout=timeout_sec)
+    result = exec_remote(ip, user, port, command, timeout=timeout_sec)
 
     stdout, stdout_truncated = truncate_chars(result.stdout, cfg.tool_limits.bash_max_result_chars)
     stderr, stderr_truncated = truncate_chars(result.stderr, cfg.tool_limits.bash_max_result_chars)

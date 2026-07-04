@@ -66,11 +66,3 @@ class PathNotFoundError(MCPError):
     error_code = "PATH_NOT_FOUND"
     message = "File or directory not found"
     retryable = False
-
-
-class ContainerNotRunningError(MCPError):
-    """Internal error: container not running. Signals transparent retry, not returned to client."""
-
-    error_code = "CONTAINER_NOT_RUNNING"
-    message = "Container is not running"
-    retryable = True

@@ -1,8 +1,8 @@
 # Noesis 生产栈：nginx + backend + qdrant + sandbox-runner
 # 在仓库根目录执行: docker compose -f deploy/docker-compose.yml up -d
 #
-# 首次部署前请预拉 AIO 镜像（与 backend agent-sandbox SDK 0.0.30 配套）:
-#   docker pull ghcr.io/agent-infra/sandbox:latest
+# 默认 docker exec + slim 镜像。构建 slim: docker build -t noesis/sandbox-slim:latest -f deploy/sandbox-slim/Dockerfile .
+# 若仍用全量 AIO：SANDBOX_RUNTIME=aio + docker pull ghcr.io/agent-infra/sandbox:latest
 
 name: ${COMPOSE_PROJECT_NAME:-noesis}
 
@@ -20,6 +20,8 @@ services:
     restart: unless-stopped
     environment:
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-docker}
+      SANDBOX_DOCKER_IMAGE: ${SANDBOX_DOCKER_IMAGE:-noesis/sandbox-slim:latest}
       SANDBOX_AIO_IMAGE: ${SANDBOX_AIO_IMAGE:-ghcr.io/agent-infra/sandbox:latest}
       SANDBOX_AIO_PORT: "8080"
       SANDBOX_PUBLIC_HOST: host.docker.internal

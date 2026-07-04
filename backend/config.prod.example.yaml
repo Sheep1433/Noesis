@@ -148,11 +148,19 @@ web_tools:
   ddg_backends: mojeek,yandex
 
 # Agent 沙箱（深度研究 / 故障运维）
-# backend: aio（推荐）| local_shell（宿主机执行）；生产裸机须单独部署 sandbox-runner
+# backend: docker（推荐 slim 镜像 + docker exec）| aio（全量 AIO 镜像，需 uv sync --extra aio）| local_shell（宿主机）
 sandbox:
-  backend: aio
+  backend: docker
   runner_url: http://127.0.0.1:8090
   execute_timeout_seconds: 120
+
+# 知识库 DeepDoc（ONNX 权重需单独下载，见 backend/kb/README.md）
+kb:
+  deepdoc:
+    enabled: true
+    model_dir: ../.data/rag/res/deepdoc
+  parser:
+    default: deepdoc
 
 # 聊天会话附件（COMMON_QA；敏感项无）
 chat_attachment:

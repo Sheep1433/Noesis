@@ -55,11 +55,22 @@ async function handleRegister() {
 }
 
 function handleSubmit() {
-  if (mode.value === 'login') {
-    handleLogin()
-  } else {
-    handleRegister()
+  if (loading.value) {
+    return
   }
+  if (mode.value === 'login') {
+    void handleLogin()
+  } else {
+    void handleRegister()
+  }
+}
+
+function onEnterSubmit(e: KeyboardEvent) {
+  if (e.isComposing) {
+    return
+  }
+  e.preventDefault()
+  handleSubmit()
 }
 
 function switchMode(next: AuthMode) {
@@ -101,6 +112,7 @@ function switchMode(next: AuthMode) {
             <n-input
               v-model:value="form.username"
               placeholder="请输入用户名（3-50 字符）"
+              @keydown.enter="onEnterSubmit"
             />
           </n-form-item>
           <n-form-item label="密码" path="password">
@@ -109,6 +121,7 @@ function switchMode(next: AuthMode) {
               type="password"
               show-password-on="click"
               :placeholder="mode === 'login' ? '请输入密码' : '至少 6 位'"
+              @keydown.enter="onEnterSubmit"
             />
           </n-form-item>
           <n-form-item
@@ -121,14 +134,15 @@ function switchMode(next: AuthMode) {
               type="password"
               show-password-on="click"
               placeholder="请再次输入密码"
+              @keydown.enter="onEnterSubmit"
             />
           </n-form-item>
           <n-form-item>
             <n-button
               type="primary"
+              attr-type="submit"
               :loading="loading"
               :block="true"
-              @click="handleSubmit"
             >
               {{ mode === 'login' ? '登录' : '注册' }}
             </n-button>

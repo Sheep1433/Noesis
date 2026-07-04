@@ -1,5 +1,5 @@
 """
-仓库扩展目录路径解析（extensions/skills、extensions/mcp/docker-ssh）。
+仓库扩展目录路径解析（extensions/skills、extensions/mcp/ssh）。
 
 skills_filesystem_root 配置项仍可完整覆盖 Skills 根路径；
 MCP 启动脚本可通过 MCP_DIR 环境变量覆盖。
@@ -15,7 +15,7 @@ _CONFIG_DIR = Path(__file__).resolve().parent
 _BACKEND_DIR = _CONFIG_DIR.parent
 
 _SKILLS_SUBDIR = Path("skills")
-_MCP_DOCKER_SSH_SUBDIR = Path("mcp") / "docker-ssh"
+_MCP_SSH_SUBDIR = Path("mcp") / "ssh"
 
 
 def repo_root() -> Path:
@@ -44,10 +44,10 @@ def skills_root() -> Path:
     return (extensions_root() / _SKILLS_SUBDIR).resolve()
 
 
-def mcp_docker_ssh_dir() -> Path:
-    """MCP docker-ssh 服务目录（含 server.py）。"""
+def mcp_ssh_dir() -> Path:
+    """MCP SSH 服务目录（含 server.py）。"""
     raw = (os.environ.get("MCP_DIR") or "").strip()
     if raw:
         p = Path(raw)
         return p.resolve() if p.is_absolute() else (repo_root() / raw).resolve()
-    return (extensions_root() / _MCP_DOCKER_SSH_SUBDIR).resolve()
+    return (extensions_root() / _MCP_SSH_SUBDIR).resolve()

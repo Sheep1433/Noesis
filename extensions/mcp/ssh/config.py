@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -16,11 +15,6 @@ VCS_DIRECTORIES_TO_EXCLUDE = (
     ".jj",
     ".sl",
 )
-
-
-@dataclass
-class DockerConfig:
-    image: str = "python:3.11-slim"
 
 
 @dataclass
@@ -46,24 +40,16 @@ class ExecutionConfig:
 
 
 @dataclass
-class ContainerConfig:
-    ssh_dir: str = "/home/mcp/.ssh"
-    max_lifetime_seconds: int = 3600
-
-
-@dataclass
 class SSHConfig:
     default_user: str = "root"
     default_port: int = 22
-    strict_host_key_checking: bool = False
+    ssh_dir: str = "~/.ssh"
 
 
 @dataclass
 class MCPConfig:
-    docker: DockerConfig = field(default_factory=DockerConfig)
     tool_limits: ToolLimitsConfig = field(default_factory=ToolLimitsConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
-    container: ContainerConfig = field(default_factory=ContainerConfig)
     ssh: SSHConfig = field(default_factory=SSHConfig)
 
     @classmethod
@@ -76,10 +62,8 @@ class MCPConfig:
             raw = yaml.safe_load(f) or {}
 
         return cls(
-            docker=DockerConfig(**raw.get("docker", {})),
             tool_limits=ToolLimitsConfig(**raw.get("tool_limits", {})),
             execution=ExecutionConfig(**raw.get("execution", {})),
-            container=ContainerConfig(**raw.get("container", {})),
             ssh=SSHConfig(**raw.get("ssh", {})),
         )
 
@@ -90,6 +74,8 @@ def _apply_env_overrides(cfg: MCPConfig) -> MCPConfig:
         cfg.ssh.default_user = os.environ["MCP_SSH_DEFAULT_USER"]
     if os.environ.get("MCP_SSH_DEFAULT_PORT"):
         cfg.ssh.default_port = int(os.environ["MCP_SSH_DEFAULT_PORT"])
+    if os.environ.get("MCP_SSH_DIR"):
+        cfg.ssh.ssh_dir = os.environ["MCP_SSH_DIR"]
     if os.environ.get("MCP_EXECUTION_TIMEOUT"):
         cfg.execution.timeout = int(os.environ["MCP_EXECUTION_TIMEOUT"])
     if os.environ.get("BASH_DEFAULT_TIMEOUT_MS"):
@@ -97,10 +83,10 @@ def _apply_env_overrides(cfg: MCPConfig) -> MCPConfig:
     return cfg
 
 
-def resolved_container_ssh_dir(cfg: MCPConfig | None = None) -> str:
-    """Expand ~ in container SSH mount path."""
+def resolved_ssh_dir(cfg: MCPConfig | None = None) -> str:
+    """Expand ~ in MCP host SSH key directory."""
     cfg = cfg or get_config()
-    return os.path.expanduser(cfg.container.ssh_dir)
+    return os.path.expanduser(cfg.ssh.ssh_dir)
 
 
 def get_config() -> MCPConfig:

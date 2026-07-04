@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 生产裸机全栈：Qdrant +（可选）extensions/mcp/docker-ssh + 后端 uvicorn + 前端 build + preview
+# 生产裸机全栈：Qdrant +（可选）extensions/mcp/ssh + 后端 uvicorn + 前端 build + preview
 # 由 ./scripts/run.sh prod 调用
 
 set -euo pipefail

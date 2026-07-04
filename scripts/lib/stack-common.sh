@@ -5,7 +5,7 @@
 BACKEND_DIR="${BACKEND_DIR:-$ROOT/backend}"
 FRONTEND_DIR="${FRONTEND_DIR:-$ROOT/frontend}"
 EXTENSIONS_DIR="${EXTENSIONS_DIR:-$ROOT/extensions}"
-MCP_DIR="${MCP_DIR:-$EXTENSIONS_DIR/mcp/docker-ssh}"
+MCP_DIR="${MCP_DIR:-$EXTENSIONS_DIR/mcp/ssh}"
 QDRANT_CONTAINER="${QDRANT_CONTAINER:-noesis-qdrant}"
 QDRANT_STORAGE="${QDRANT_STORAGE:-$ROOT/.data/qdrant}"
 
@@ -79,23 +79,10 @@ start_mcp() {
     return 0
   fi
 
-  if command -v docker &>/dev/null; then
-    local mcp_image="noesis/mcp-ubuntu-ssh:latest"
-    if ! docker image inspect "$mcp_image" &>/dev/null; then
-      log_info "构建 MCP 沙箱镜像 ($mcp_image)..."
-      local build_args=()
-      if [[ -n "${MCP_BASE_IMAGE:-}" ]]; then
-        build_args+=(--build-arg "BASE_IMAGE=$MCP_BASE_IMAGE")
-      fi
-      if ! docker build "${build_args[@]}" -t "$mcp_image" -f "$ROOT/deploy/mcp/Dockerfile" "$ROOT/deploy/mcp"; then
-        log_warn "MCP 沙箱镜像构建失败（常见原因：无法访问 Docker Hub）。"
-        log_warn "  可尝试: MCP_BASE_IMAGE=docker.m.daocloud.io/library/ubuntu:24.04 START_MCP=1 ./scripts/run.sh dev"
-        log_warn "  或在 Docker Desktop → Settings → Docker Engine 配置 registry-mirrors 后重试。"
-        log_warn "MCP server 仍会启动，但远程 SSH 沙箱能力可能不可用。"
-      fi
-    fi
-  else
-    log_warn "Docker 未安装，MCP 远程 SSH 沙箱可能无法工作。"
+  if ! command -v ssh &>/dev/null; then
+    log_warn "未找到 ssh 客户端，MCP 远程诊断不可用。请安装 openssh-client。"
+  elif ! command -v sshpass &>/dev/null; then
+    log_warn "未找到 sshpass；setup_passwordless_login 不可用（read/bash/grep 仍可用）。"
   fi
 
   log_info "启动 MCP server..."
@@ -161,6 +148,16 @@ start_sandbox_runner() {
     return 0
   fi
 
+  if [[ "${SANDBOX_RUNTIME:-docker}" == "docker" ]]; then
+    local slim_image="${SANDBOX_DOCKER_IMAGE:-noesis/sandbox-slim:latest}"
+    if ! docker image inspect "$slim_image" &>/dev/null; then
+      log_info "本地无沙箱镜像 ${slim_image}，开始构建..."
+      if ! docker build -t "$slim_image" -f "$ROOT/deploy/sandbox-slim/Dockerfile" "$ROOT"; then
+        log_warn "沙箱镜像构建失败，docker 沙箱模式将不可用（可改用 sandbox.backend=local_shell）"
+      fi
+    fi
+  fi
+
   if ! command -v uv &>/dev/null; then
     log_warn "uv 未安装，无法自动启动 sandbox-runner"
     return 0
@@ -168,6 +165,8 @@ start_sandbox_runner() {
 
   log_info "启动 sandbox-runner（路径自动对齐仓库 .data/ 与 extensions/skills）..."
   cd "$ROOT/deploy/sandbox-runner"
+  export SANDBOX_RUNTIME="${SANDBOX_RUNTIME:-docker}"
+  export SANDBOX_DOCKER_IMAGE="${SANDBOX_DOCKER_IMAGE:-noesis/sandbox-slim:latest}"
   uv run python main.py &
   SANDBOX_RUNNER_PID=$!
   log_info "sandbox-runner started (PID: $SANDBOX_RUNNER_PID)"

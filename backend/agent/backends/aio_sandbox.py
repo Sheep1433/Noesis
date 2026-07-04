@@ -5,8 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import shlex
-import threading
-from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from deepagents.backends.protocol import (
@@ -17,33 +15,15 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.sandbox import BaseSandbox
 
-from agent.backends.mount_paths import (
-    CUSTOM_SKILLS_CONTAINER_PREFIX,
-    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+from agent.backends.sandbox_common import prepare_write_file_payload, session_mutex
+from agent.backends.sandbox_mount_policy import (
+    resolve_read_container_path,
+    resolve_write_container_path,
 )
 from config.env import SandboxConfig
 
 if TYPE_CHECKING:
     from agent_sandbox import Sandbox
-
-_MUTEX_REGISTRY: dict[tuple[str, str], threading.Lock] = {}
-_MUTEX_REGISTRY_LOCK = threading.Lock()
-
-_CONTAINER_WORKSPACE = "/workspace"
-_ALLOWED_READ_PREFIXES = (
-    _CONTAINER_WORKSPACE,
-    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
-)
-
-
-def _session_mutex(user_id: str, session_id: str) -> threading.Lock:
-    key = (user_id, session_id)
-    with _MUTEX_REGISTRY_LOCK:
-        lock = _MUTEX_REGISTRY.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _MUTEX_REGISTRY[key] = lock
-        return lock
 
 
 def _cdp_port_for_session(session_id: str) -> int:
@@ -58,14 +38,6 @@ def _session_browser_env(session_id: str) -> dict[str, str]:
         "BAOYU_CHROME_PROFILE_DIR": profile,
         "SANDBOX_CDP_PORT": str(_cdp_port_for_session(session_id)),
     }
-
-
-def _prepare_write_file_payload(content: bytes) -> tuple[str, str | None]:
-    """deepagents upload_files 传 bytes；agent_sandbox write_file 要 str + encoding。"""
-    try:
-        return content.decode("utf-8"), None
-    except UnicodeDecodeError:
-        return base64.b64encode(content).decode("ascii"), "base64"
 
 
 class AioSandboxBackend(BaseSandbox):
@@ -83,8 +55,13 @@ class AioSandboxBackend(BaseSandbox):
         if client is not None:
             self._client = client
         else:
-            from agent_sandbox import Sandbox
-
+            try:
+                from agent_sandbox import Sandbox
+            except ImportError as exc:
+                raise ImportError(
+                    "sandbox.backend=aio 需要可选依赖 agent-sandbox："
+                    "在 backend 目录执行 uv sync --extra aio"
+                ) from exc
             self._client = Sandbox(
                 base_url=base_url, timeout=float(SandboxConfig.execute_timeout_seconds)
             )
@@ -93,55 +70,12 @@ class AioSandboxBackend(BaseSandbox):
         self._session_id = session_id
         self._session_workspace = f"/workspace/sessions/{session_id}/workspace"
         self._inject_browser_env = inject_browser_env
-        self._mutex = _session_mutex(user_id, session_id)
+        self._mutex = session_mutex(user_id, session_id)
         self._default_timeout = SandboxConfig.execute_timeout_seconds
 
     @property
     def id(self) -> str:
         return f"aio-{self._user_id}-{self._session_id}"
-
-    @staticmethod
-    def _normalize_path(key: str) -> str:
-        if not key.startswith("/"):
-            msg = "Path must be absolute"
-            raise ValueError(msg)
-        if ".." in key or key.startswith("~"):
-            msg = "Path traversal not allowed"
-            raise ValueError(msg)
-        return str(PurePosixPath(key))
-
-    def _assert_readable(self, container_path: str) -> None:
-        normalized = str(PurePosixPath(container_path))
-        for prefix in _ALLOWED_READ_PREFIXES:
-            if normalized == prefix or normalized.startswith(f"{prefix}/"):
-                return
-        msg = f"Path outside sandbox mounts: {container_path}"
-        raise ValueError(msg)
-
-    def _resolve_read_path(self, key: str) -> str:
-        container = self._normalize_path(key)
-        self._assert_readable(container)
-        return container
-
-    def _resolve_write_path(self, key: str) -> str:
-        container = self._normalize_path(key)
-        if container.startswith(f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/") or container == (
-            EXTENSIONS_SKILLS_CONTAINER_PREFIX
-        ):
-            msg = "Platform skills are read-only"
-            raise ValueError(msg)
-        if not (
-            container == _CONTAINER_WORKSPACE
-            or container.startswith(f"{_CONTAINER_WORKSPACE}/")
-        ):
-            msg = f"Path outside /workspace mount: {container}"
-            raise ValueError(msg)
-        if container.startswith(f"{CUSTOM_SKILLS_CONTAINER_PREFIX}/") or container == (
-            CUSTOM_SKILLS_CONTAINER_PREFIX
-        ):
-            msg = "Skills directory is read-only for agents"
-            raise ValueError(msg)
-        return container
 
     def _with_env(self, command: str) -> str:
         if not self._inject_browser_env:
@@ -177,12 +111,12 @@ class AioSandboxBackend(BaseSandbox):
         with self._mutex:
             for path, content in files:
                 try:
-                    abs_path = self._resolve_write_path(path)
+                    abs_path = resolve_write_container_path(path)
                 except ValueError:
                     responses.append(FileUploadResponse(path=path, error="invalid_path"))
                     continue
                 try:
-                    text, encoding = _prepare_write_file_payload(content)
+                    text, encoding = prepare_write_file_payload(content)
                     write_kwargs: dict[str, object] = {
                         "file": abs_path,
                         "content": text,
@@ -200,7 +134,7 @@ class AioSandboxBackend(BaseSandbox):
         with self._mutex:
             for path in paths:
                 try:
-                    abs_path = self._resolve_read_path(path)
+                    abs_path = resolve_read_container_path(path)
                 except ValueError:
                     responses.append(
                         FileDownloadResponse(path=path, content=None, error="invalid_path")
@@ -230,15 +164,15 @@ class AioSandboxBackend(BaseSandbox):
         return responses
 
     def ls(self, path: str) -> LsResult:
-        return super().ls(self._resolve_read_path(path))
+        return super().ls(resolve_read_container_path(path))
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> object:
         return super().read(
-            self._resolve_read_path(file_path), offset=offset, limit=limit
+            resolve_read_container_path(file_path), offset=offset, limit=limit
         )
 
     def write(self, file_path: str, content: str) -> object:
-        return super().write(self._resolve_write_path(file_path), content)
+        return super().write(resolve_write_container_path(file_path), content)
 
     def edit(
         self,
@@ -248,7 +182,7 @@ class AioSandboxBackend(BaseSandbox):
         replace_all: bool = False,
     ) -> object:
         return super().edit(
-            self._resolve_write_path(file_path),
+            resolve_write_container_path(file_path),
             old_string,
             new_string,
             replace_all=replace_all,
@@ -258,7 +192,7 @@ class AioSandboxBackend(BaseSandbox):
         resolved = (
             self._session_workspace
             if path is None
-            else self._resolve_read_path(path)
+            else resolve_read_container_path(path)
         )
         return super().grep(pattern, path=resolved, glob=glob)
 
@@ -266,7 +200,7 @@ class AioSandboxBackend(BaseSandbox):
         resolved = (
             self._session_workspace
             if path == "/"
-            else self._resolve_read_path(path)
+            else resolve_read_container_path(path)
         )
         return super().glob(pattern, path=resolved)
 
@@ -275,9 +209,13 @@ async def create_aio_sandbox_backend(user_id: str, session_id: str) -> AioSandbo
     """创建裸 AIO 沙箱 backend（容器路径由 agent_filesystem 映射）。"""
     from services.sandbox_service import ensure_user_sandbox
 
-    base_url = await ensure_user_sandbox(user_id)
+    handle = await ensure_user_sandbox(user_id)
+    if handle.runtime != "aio" or not handle.base_url:
+        raise RuntimeError(
+            f"用户沙箱 runtime={handle.runtime!r}，aio backend 需要 base_url"
+        )
     return AioSandboxBackend(
-        base_url=base_url,
+        base_url=handle.base_url,
         user_id=user_id,
         session_id=session_id,
         inject_browser_env=True,

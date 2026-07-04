@@ -31,4 +31,4 @@ results/
 .promptfoo/
 AGENTS.local.md
 
-# 部署制品统一在 deploy/（backend/Dockerfile、frontend/Dockerfile、mcp/Dockerfile）
+# 部署制品统一在 deploy/（backend/Dockerfile、frontend/Dockerfile、sandbox-slim/Dockerfile）
