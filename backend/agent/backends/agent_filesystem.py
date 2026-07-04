@@ -1,34 +1,15 @@
-"""Agent 虚拟路径：`/research/` 工作区 + `/skills/extensions|custom/` 只读 Skills。
-
-CompositeBackend 约定：route 子 backend 的 ls/glob/grep 返回的路径须相对 route 根（如 `/foo/`），
-由 Composite 再拼上 `/skills/extensions/` 等前缀。AIO 内层返回容器绝对路径，须经 PrefixBackend
-做双向映射（map_in / map_out）。
-"""
+"""Agent 虚拟路径：`/research/` 工作区 + `/skills/extensions|custom/` 只读 Skills。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from deepagents.backends.composite import CompositeBackend
-from deepagents.backends.protocol import (
-    BackendProtocol,
-    EditResult,
-    ExecuteResponse,
-    FileDownloadResponse,
-    FileInfo,
-    FileUploadResponse,
-    GlobResult,
-    GrepMatch,
-    GrepResult,
-    LsResult,
-    ReadResult,
-    SandboxBackendProtocol,
-    WriteResult,
-)
+from deepagents.backends.filesystem import FilesystemBackend
+from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 
-from agent.backends.aio_sandbox import AioSandboxBackend
+from agent.backends.backend_guards import StaticListingBackend, UserMemoryBackend
 from agent.backends.local_shell import create_local_shell_backend
-from agent.backends.path_rewrite import PathRewriteContext, build_path_rewrite_context, rewrite_virtual_paths_in_command
 from agent.backends.mount_paths import (
     AGENT_CUSTOM_SKILLS_ROUTE,
     AGENT_EXTENSIONS_SKILLS_ROUTE,
@@ -37,6 +18,8 @@ from agent.backends.mount_paths import (
     CUSTOM_SKILLS_CONTAINER_PREFIX,
     EXTENSIONS_SKILLS_CONTAINER_PREFIX,
 )
+from agent.backends.path_rewrite import build_path_rewrite_context
+from agent.backends.prefix_backend import PrefixBackend
 from config.extensions_paths import skills_root
 from config.user_data_paths import (
     get_user_agents_md_path,
@@ -45,328 +28,28 @@ from config.user_data_paths import (
     get_workspace_dir,
 )
 
-_READ_ONLY_SKILLS_ERROR = "Skills directory is read-only"
-_READ_ONLY_USER_PROFILE_ERROR = "USER.md is read-only; update via user settings"
-
-
-def _agent_path(path: str) -> str:
-    return path if path.startswith("/") else f"/{path}"
-
-
-class SkillsIndexBackend(BackendProtocol):
-    """`/skills/` 索引：仅列出 `extensions/` 与 `custom/` 两个子路由（只读）。"""
-
-    _ENTRIES: tuple[FileInfo, ...] = (
-        {"path": "/extensions/", "is_dir": True},
-        {"path": "/custom/", "is_dir": True},
-    )
-
-    def ls(self, path: str) -> LsResult:
-        if _agent_path(path) in ("/", ""):
-            return LsResult(entries=list(self._ENTRIES))
-        return LsResult(entries=None, error=f"Path '{AGENT_SKILLS_INDEX_ROUTE}{path.lstrip('/')}': path_not_found")
-
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        return ReadResult(error=_READ_ONLY_SKILLS_ERROR)
-
-    def write(self, file_path: str, content: str) -> WriteResult:
-        return WriteResult(error=_READ_ONLY_SKILLS_ERROR)
-
-    def edit(
-        self,
-        file_path: str,
-        old_string: str,
-        new_string: str,
-        replace_all: bool = False,
-    ) -> EditResult:
-        return EditResult(error=_READ_ONLY_SKILLS_ERROR)
-
-    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
-        return GrepResult(matches=[])
-
-    def glob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-        return [FileUploadResponse(path=path, error="permission_denied") for path, _ in files]
-
-    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        return [
-            FileDownloadResponse(path=path, content=None, error="file_not_found") for path in paths
-        ]
-
-
-class UserMemoryBackend(BackendProtocol):
-    """`/memory/` 路由：AGENTS.md 可写，USER.md 只读。"""
-
-    _AGENTS_NAME = "AGENTS.md"
-    _USER_NAME = "USER.md"
-
-    def __init__(self, *, agents_path: Path, user_path: Path) -> None:
-        self._agents_path = agents_path
-        self._user_path = user_path
-
-    def _normalize(self, file_path: str) -> str:
-        path = _agent_path(file_path)
-        name = path.lstrip("/")
-        if name in (self._AGENTS_NAME, self._USER_NAME):
-            return name
-        return ""
-
-    def ls(self, path: str) -> LsResult:
-        if _agent_path(path) not in ("/", ""):
-            return LsResult(entries=None, error="path_not_found")
-        entries: list[FileInfo] = []
-        if self._agents_path.is_file():
-            entries.append({"path": f"/{self._AGENTS_NAME}", "is_dir": False})
-        if self._user_path.is_file():
-            entries.append({"path": f"/{self._USER_NAME}", "is_dir": False})
-        return LsResult(entries=entries)
-
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        name = self._normalize(file_path)
-        if not name:
-            return ReadResult(error="file_not_found")
-        disk = self._agents_path if name == self._AGENTS_NAME else self._user_path
-        if not disk.is_file():
-            return ReadResult(error="file_not_found")
-        text = disk.read_text(encoding="utf-8")
-        lines = text.splitlines(keepends=True)
-        chunk = "".join(lines[offset : offset + limit])
-        return ReadResult(file_data={"content": chunk, "encoding": "utf-8"})
-
-    def write(self, file_path: str, content: str) -> WriteResult:
-        name = self._normalize(file_path)
-        if name == self._USER_NAME:
-            return WriteResult(error=_READ_ONLY_USER_PROFILE_ERROR)
-        if name != self._AGENTS_NAME:
-            return WriteResult(error="file_not_found")
-        self._agents_path.parent.mkdir(parents=True, exist_ok=True)
-        self._agents_path.write_text(content, encoding="utf-8")
-        return WriteResult(path=f"/{self._AGENTS_NAME}")
-
-    def edit(
-        self,
-        file_path: str,
-        old_string: str,
-        new_string: str,
-        replace_all: bool = False,
-    ) -> EditResult:
-        name = self._normalize(file_path)
-        if name == self._USER_NAME:
-            return EditResult(error=_READ_ONLY_USER_PROFILE_ERROR)
-        if name != self._AGENTS_NAME:
-            return EditResult(error="file_not_found")
-        if not self._agents_path.is_file():
-            return EditResult(error="file_not_found")
-        text = self._agents_path.read_text(encoding="utf-8")
-        if old_string not in text:
-            return EditResult(error="old_string not found in file")
-        if replace_all:
-            updated = text.replace(old_string, new_string)
-        else:
-            updated = text.replace(old_string, new_string, 1)
-        self._agents_path.write_text(updated, encoding="utf-8")
-        return EditResult(path=f"/{self._AGENTS_NAME}")
-
-    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
-        return GrepResult(matches=[])
-
-    def glob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-        responses: list[FileUploadResponse] = []
-        for agent_path, _ in files:
-            name = self._normalize(agent_path)
-            if name == self._USER_NAME:
-                responses.append(FileUploadResponse(path=agent_path, error="permission_denied"))
-            else:
-                responses.append(FileUploadResponse(path=agent_path, error="file_not_found"))
-        return responses
-
-    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        responses: list[FileDownloadResponse] = []
-        for agent_path in paths:
-            name = self._normalize(agent_path)
-            if not name:
-                responses.append(
-                    FileDownloadResponse(path=agent_path, content=None, error="file_not_found")
-                )
-                continue
-            disk = self._agents_path if name == self._AGENTS_NAME else self._user_path
-            if not disk.is_file():
-                responses.append(
-                    FileDownloadResponse(path=agent_path, content=None, error="file_not_found")
-                )
-                continue
-            responses.append(
-                FileDownloadResponse(
-                    path=agent_path,
-                    content=disk.read_bytes(),
-                    error=None,
-                )
-            )
-        return responses
-
-
-class PrefixBackend(SandboxBackendProtocol):
-    """Composite route 适配：route 内相对路径 ↔ inner（local 虚拟路径或容器绝对路径）。"""
-
-    def __init__(
-        self,
-        inner: BackendProtocol,
-        *,
-        container_prefix: str | None = None,
-        read_only: bool = False,
-        rewrite_ctx: PathRewriteContext | None = None,
-    ) -> None:
-        self._inner = inner
-        self._container_prefix = container_prefix.rstrip("/") if container_prefix else None
-        self._read_only = read_only
-        self._rewrite_ctx = rewrite_ctx
-
-    def _map_in(self, path: str) -> str:
-        if self._container_prefix is None:
-            return _agent_path(path)
-        agent = _agent_path(path)
-        if agent == "/":
-            return self._container_prefix
-        return f"{self._container_prefix}{agent}"
-
-    def _map_out(self, inner_path: str) -> str:
-        """内层路径 → route 内相对路径，供 CompositeBackend 再拼 route 前缀。"""
-        normalized = inner_path.replace("\\", "/")
-        if self._container_prefix is None:
-            return _agent_path(normalized)
-        prefix = self._container_prefix
-        if normalized == prefix:
-            return "/"
-        if normalized.startswith(f"{prefix}/"):
-            return _agent_path(normalized[len(prefix) :])
-        return _agent_path(normalized)
-
-    def _normalize_file_info(self, entry: FileInfo) -> FileInfo:
-        raw_path = entry["path"]
-        is_dir = bool(entry.get("is_dir"))
-        rel = self._map_out(raw_path.rstrip("/") if is_dir else raw_path)
-        if is_dir:
-            rel = f"{rel.rstrip('/')}/"
-        return {**entry, "path": rel}
-
-    def _normalize_grep_match(self, match: GrepMatch) -> GrepMatch:
-        return {**match, "path": self._map_out(match["path"])}
-
-    def ls(self, path: str) -> LsResult:
-        result = self._inner.ls(self._map_in(path))
-        if result.error or not result.entries:
-            return result
-        return LsResult(entries=[self._normalize_file_info(entry) for entry in result.entries])
-
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        return self._inner.read(self._map_in(file_path), offset=offset, limit=limit)
-
-    def write(self, file_path: str, content: str) -> WriteResult:
-        if self._read_only:
-            return WriteResult(error=_READ_ONLY_SKILLS_ERROR)
-        return self._inner.write(self._map_in(file_path), content)
-
-    def edit(
-        self,
-        file_path: str,
-        old_string: str,
-        new_string: str,
-        replace_all: bool = False,
-    ) -> EditResult:
-        if self._read_only:
-            return EditResult(error=_READ_ONLY_SKILLS_ERROR)
-        return self._inner.edit(
-            self._map_in(file_path),
-            old_string,
-            new_string,
-            replace_all=replace_all,
-        )
-
-    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
-        if path is None:
-            mapped = self._container_prefix if self._container_prefix is not None else path
-        else:
-            mapped = self._map_in(path)
-        result = self._inner.grep(pattern, path=mapped, glob=glob)
-        if result.error or not result.matches:
-            return result
-        return GrepResult(
-            matches=[self._normalize_grep_match(match) for match in result.matches],
-        )
-
-    def glob(self, pattern: str, path: str = "/") -> GlobResult:
-        result = self._inner.glob(pattern, path=self._map_in(path))
-        if result.error or not result.matches:
-            return result
-        return GlobResult(
-            matches=[self._normalize_file_info(match) for match in result.matches],
-        )
-
-    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-        if self._read_only:
-            return [
-                FileUploadResponse(path=path, error="permission_denied") for path, _ in files
-            ]
-        mapped = [(self._map_in(path), content) for path, content in files]
-        responses = self._inner.upload_files(mapped)
-        return [
-            FileUploadResponse(path=agent_path, error=responses[i].error if i < len(responses) else None)
-            for i, (agent_path, _) in enumerate(files)
-        ]
-
-    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        mapped = [self._map_in(path) for path in paths]
-        responses = self._inner.download_files(mapped)
-        return [
-            FileDownloadResponse(
-                path=agent_path,
-                content=responses[i].content if i < len(responses) else None,
-                error=responses[i].error if i < len(responses) else None,
-            )
-            for i, agent_path in enumerate(paths)
-        ]
-
-    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
-        if not isinstance(self._inner, SandboxBackendProtocol):
-            msg = "Inner backend does not support command execution"
-            raise NotImplementedError(msg)
-        effective = command
-        if self._rewrite_ctx is not None:
-            effective = rewrite_virtual_paths_in_command(command, ctx=self._rewrite_ctx)
-        return self._inner.execute(effective, timeout=timeout)
-
-    @property
-    def id(self) -> str:
-        if isinstance(self._inner, SandboxBackendProtocol):
-            return self._inner.id
-        return f"prefix:{id(self)}"
+# 测试与兼容 import
+__all__ = (
+    "PrefixBackend",
+    "UserMemoryBackend",
+    "build_agent_filesystem_backend",
+)
 
 
 def _skills_route_backend(
     *,
-    sandbox: AioSandboxBackend | None,
+    sandbox: SandboxBackendProtocol | None,
     host_root: Path,
     container_prefix: str,
-    shell_timeout: int,
 ) -> PrefixBackend:
-    if sandbox is not None:
-        inner: BackendProtocol = sandbox
-        return PrefixBackend(
-            inner,
-            container_prefix=container_prefix,
-            read_only=True,
-        )
+    inner: BackendProtocol = (
+        sandbox
+        if sandbox is not None
+        else FilesystemBackend(root_dir=host_root, virtual_mode=True)
+    )
     return PrefixBackend(
-        create_local_shell_backend(
-            host_root,
-            virtual_mode=True,
-            timeout=shell_timeout,
-        ),
+        inner,
+        container_prefix=container_prefix if sandbox is not None else None,
         read_only=True,
     )
 
@@ -375,12 +58,10 @@ def build_agent_filesystem_backend(
     *,
     user_id: str,
     session_id: str,
-    sandbox: AioSandboxBackend | None,
+    sandbox: SandboxBackendProtocol | None,
     shell_timeout: int,
 ) -> CompositeBackend:
     """构建 Agent 文件系统：default=工作区，routes=extensions/custom skills（只读）。"""
-    extensions_root = skills_root()
-    custom_root = get_user_skills_dir(user_id)
     rewrite_ctx = build_path_rewrite_context(
         user_id=user_id,
         session_id=session_id,
@@ -388,47 +69,44 @@ def build_agent_filesystem_backend(
     )
 
     if sandbox is not None:
-        workspace_inner: SandboxBackendProtocol = sandbox
         workspace = PrefixBackend(
-            workspace_inner,
+            sandbox,
             container_prefix=f"/workspace/sessions/{session_id}/workspace",
             rewrite_ctx=rewrite_ctx,
         )
     else:
-        session_ws = get_workspace_dir(user_id, session_id)
         workspace = PrefixBackend(
             create_local_shell_backend(
-                session_ws,
+                get_workspace_dir(user_id, session_id),
                 virtual_mode=True,
                 timeout=shell_timeout,
             ),
             rewrite_ctx=rewrite_ctx,
         )
 
-    extensions = _skills_route_backend(
-        sandbox=sandbox,
-        host_root=extensions_root,
-        container_prefix=EXTENSIONS_SKILLS_CONTAINER_PREFIX,
-        shell_timeout=shell_timeout,
-    )
-    custom = _skills_route_backend(
-        sandbox=sandbox,
-        host_root=custom_root,
-        container_prefix=CUSTOM_SKILLS_CONTAINER_PREFIX,
-        shell_timeout=shell_timeout,
-    )
-
-    memory = UserMemoryBackend(
-        agents_path=get_user_agents_md_path(user_id),
-        user_path=get_user_profile_md_path(user_id),
-    )
-
     return CompositeBackend(
         default=workspace,
         routes={
-            AGENT_SKILLS_INDEX_ROUTE: SkillsIndexBackend(),
-            AGENT_EXTENSIONS_SKILLS_ROUTE: extensions,
-            AGENT_CUSTOM_SKILLS_ROUTE: custom,
-            AGENT_MEMORY_ROUTE: memory,
+            AGENT_SKILLS_INDEX_ROUTE: StaticListingBackend(
+                (
+                    {"path": "/extensions/", "is_dir": True},
+                    {"path": "/custom/", "is_dir": True},
+                ),
+                route=AGENT_SKILLS_INDEX_ROUTE,
+            ),
+            AGENT_EXTENSIONS_SKILLS_ROUTE: _skills_route_backend(
+                sandbox=sandbox,
+                host_root=skills_root(),
+                container_prefix=EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+            ),
+            AGENT_CUSTOM_SKILLS_ROUTE: _skills_route_backend(
+                sandbox=sandbox,
+                host_root=get_user_skills_dir(user_id),
+                container_prefix=CUSTOM_SKILLS_CONTAINER_PREFIX,
+            ),
+            AGENT_MEMORY_ROUTE: UserMemoryBackend(
+                agents_path=get_user_agents_md_path(user_id),
+                user_path=get_user_profile_md_path(user_id),
+            ),
         },
     )

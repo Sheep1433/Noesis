@@ -24,14 +24,14 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 COPY backend/pyproject.toml backend/uv.lock ./
 
-RUN uv sync --frozen --no-install-project
+RUN uv sync --frozen --no-install-project --no-dev
 
 COPY backend/ ./
 
 # Skills 包（深度研究 / Skills 管理 API）
 COPY extensions/skills ./extensions/skills
 
-RUN uv sync --frozen
+RUN uv sync --frozen --no-dev
 
 EXPOSE 8089
 

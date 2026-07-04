@@ -6,8 +6,14 @@ import shlex
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from config import get_config, resolved_container_ssh_dir
-from executor import build_ssh_batch_command, exec_in_container
+from config import get_config, resolved_ssh_dir
+from executor import (
+    build_sshpass_command,
+    build_ssh_command,
+    classify_exec_failure,
+    classify_ssh_stderr,
+    exec_local,
+)
 from utils.errors import CommandExecutionError, InternalError, SSHAuthFailedError
 from utils.output_handler import success_result
 
@@ -21,7 +27,7 @@ def _require_ip(ip: str) -> None:
 
 def _resolve_public_key(explicit: Optional[str]) -> Path:
     cfg = get_config()
-    ssh_dir = Path(resolved_container_ssh_dir(cfg))
+    ssh_dir = Path(resolved_ssh_dir(cfg))
     if explicit:
         key = Path(explicit).expanduser()
         if not key.is_file():
@@ -37,6 +43,13 @@ def _resolve_public_key(explicit: Optional[str]) -> Path:
     )
 
 
+def _fail_install(cmd: list[str], exit_code: int, stdout: str, stderr: str) -> None:
+    err = classify_exec_failure(cmd, stderr)
+    if err is not None:
+        raise err
+    raise CommandExecutionError(f"Failed to install public key: {stderr or stdout or exit_code}")
+
+
 def setup_passwordless_login(
     ip: str,
     password: str,
@@ -48,7 +61,7 @@ def setup_passwordless_login(
     Install the local SSH public key on a remote host for passwordless login.
 
     Uses password authentication once, then verifies key-only login works.
-    Requires sshpass in the sandbox container image.
+    Requires sshpass on the MCP host (for one-time password bootstrap).
     """
     _require_ip(ip)
     if not password:
@@ -67,30 +80,21 @@ def setup_passwordless_login(
         "chmod 600 ~/.ssh/authorized_keys"
     )
 
-    install_cmd = [
-        "sshpass",
-        "-p",
-        password,
-        "ssh",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        f"ConnectTimeout={cfg.execution.connect_timeout}",
-        "-o",
-        "LogLevel=ERROR",
-        "-p",
-        str(effective_port),
-        f"{user}@{ip}",
-        remote_install,
-    ]
-
-    exit_code, stdout, stderr = exec_in_container(install_cmd, timeout=60)
+    install_cmd = build_sshpass_command(
+        ip, user, effective_port, password, remote_install
+    )
+    exit_code, stdout, stderr = exec_local(install_cmd, timeout=60)
     if exit_code != 0:
-        raise CommandExecutionError(f"Failed to install public key: {stderr or stdout}")
+        _fail_install(install_cmd, exit_code, stdout, stderr)
 
-    verify_cmd = build_ssh_batch_command(ip, user, effective_port, "echo __SSH_OK__")
-    exit_code, stdout, stderr = exec_in_container(verify_cmd, timeout=30)
+    verify_cmd = build_ssh_command(
+        ip, user, effective_port, "echo __SSH_OK__", batch_mode=True
+    )
+    exit_code, stdout, stderr = exec_local(verify_cmd, timeout=30)
     if exit_code != 0 or "__SSH_OK__" not in stdout:
+        err = classify_ssh_stderr(stderr)
+        if err is not None:
+            raise err
         raise SSHAuthFailedError(f"Passwordless login verification failed: {stderr or stdout}")
 
     return success_result({

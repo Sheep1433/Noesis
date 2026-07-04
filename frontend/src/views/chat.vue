@@ -2,8 +2,7 @@
 import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
-import { UAParser } from 'ua-parser-js'
-import { ensureSession, getSession, stopChat } from '@/api/chat'
+import { ensureSession, getSession, stopChat, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
@@ -827,73 +826,27 @@ const scrollToBottom = () => {
   }
 }
 
-const keys = useMagicKeys()
-const enterCommand = keys.Enter
-const enterCtrl = keys.Enter
-
-const activeElement = useActiveElement()
-const notUsingInput = computed(
-  () => activeElement.value?.tagName !== 'TEXTAREA',
-)
-
-const parser = new UAParser()
-const isMacos = parser.getOS().name.includes('Mac')
-
 const placeholder = computed(() => {
   if (uploadingOnSend.value) {
     return '附件上传中...'
   }
-  if (stylizingLoading.value) {
-    return `输入任意问题...`
-  }
-  return `输入任意问题, 按 ${
-    isMacos ? 'Command' : 'Ctrl'
-  } + Enter 键快捷开始...`
+  return '输入任意问题...'
 })
+
+function onComposerKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) {
+    return
+  }
+  e.preventDefault()
+  if (!stylizingLoading.value && sendDisabled.value) {
+    return
+  }
+  void handleCreateStylized()
+}
 
 const generateRandomSuffix = function () {
   return Math.floor(Math.random() * 10000) // 生成0到9999之间的随机整数
 }
-
-watch(
-  () => enterCommand.value,
-  () => {
-    if (!isMacos || notUsingInput.value) {
-      return
-    }
-
-    if (stylizingLoading.value || sendDisabled.value) {
-      return
-    }
-
-    if (!enterCommand.value) {
-      handleCreateStylized()
-    }
-  },
-  {
-    deep: true,
-  },
-)
-
-watch(
-  () => enterCtrl.value,
-  () => {
-    if (isMacos || notUsingInput.value) {
-      return
-    }
-
-    if (stylizingLoading.value || sendDisabled.value) {
-      return
-    }
-
-    if (!enterCtrl.value) {
-      handleCreateStylized()
-    }
-  },
-  {
-    deep: true,
-  },
-)
 
 // 重置状态
 const handleResetState = () => {
@@ -914,14 +867,89 @@ handleResetState()
 const markdownPreviews = ref<Map<string, HTMLElement | null>>(new Map())
 
 
+// 会话列表右键菜单
+const sessionContextMenuShow = ref(false)
+const sessionContextMenuX = ref(0)
+const sessionContextMenuY = ref(0)
+const sessionContextMenuTarget = ref<TableItem | null>(null)
+const sessionContextMenuOptions = [
+  { label: '修改标题', key: 'rename' },
+]
+
+function closeSessionContextMenu() {
+  sessionContextMenuShow.value = false
+  sessionContextMenuTarget.value = null
+}
+
+function handleSessionContextMenuSelect(key: string) {
+  const target = sessionContextMenuTarget.value
+  closeSessionContextMenu()
+  if (key !== 'rename' || !target) {
+    return
+  }
+  openRenameSessionModal(target)
+}
+
+const renameSessionModal = reactive({
+  show: false,
+  loading: false,
+  sessionId: '',
+  title: '',
+  originalTitle: '',
+})
+
+function openRenameSessionModal(row: TableItem) {
+  renameSessionModal.sessionId = row.chat_id
+  renameSessionModal.title = row.key || ''
+  renameSessionModal.originalTitle = row.key || ''
+  renameSessionModal.show = true
+}
+
+async function submitRenameSession() {
+  const title = renameSessionModal.title.trim()
+  if (!title) {
+    window.$ModalMessage.warning('标题不能为空')
+    return false
+  }
+  if (title === renameSessionModal.originalTitle) {
+    renameSessionModal.show = false
+    return true
+  }
+  renameSessionModal.loading = true
+  try {
+    await updateSessionTitle(renameSessionModal.sessionId, { title })
+    const sessionIndex = tableData.value.findIndex((s) => s.chat_id === renameSessionModal.sessionId)
+    if (sessionIndex !== -1) {
+      tableData.value[sessionIndex].key = title
+    }
+    window.$ModalMessage.success('标题已更新')
+    renameSessionModal.show = false
+    return true
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '更新标题失败'
+    window.$ModalMessage.error(msg)
+    return false
+  } finally {
+    renameSessionModal.loading = false
+  }
+}
+
 // 表格行点击事件
 const currentIndex = ref<string | null>(null)
-const rowProps = (row: any) => {
+const rowProps = (row: TableItem) => {
   return {
     class: [
       'cursor-pointer select-none',
       currentIndex.value === row.uuid && 'selected-row',
     ].join(' '),
+    onContextmenu: (e: MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      sessionContextMenuTarget.value = row
+      sessionContextMenuX.value = e.clientX
+      sessionContextMenuY.value = e.clientY
+      sessionContextMenuShow.value = true
+    },
     onClick: async () => {
       backgroundColorVariable.value = cssVar(themeCssVar.bg)
 
@@ -1350,6 +1378,34 @@ function onComposerPaste(e: ClipboardEvent) {
             </n-input>
           </div>
           <div flex="1 ~ col" class="scrollable-table-container">
+            <n-dropdown
+              trigger="manual"
+              placement="bottom-start"
+              :show="sessionContextMenuShow"
+              :x="sessionContextMenuX"
+              :y="sessionContextMenuY"
+              :options="sessionContextMenuOptions"
+              @select="handleSessionContextMenuSelect"
+              @clickoutside="closeSessionContextMenu"
+            />
+            <n-modal
+              v-model:show="renameSessionModal.show"
+              preset="dialog"
+              title="修改标题"
+              positive-text="确定"
+              negative-text="取消"
+              :loading="renameSessionModal.loading"
+              :mask-closable="false"
+              @positive-click="submitRenameSession"
+            >
+              <n-input
+                v-model:value="renameSessionModal.title"
+                placeholder="请输入会话标题"
+                :maxlength="255"
+                clearable
+                @keyup.enter="submitRenameSession"
+              />
+            </n-modal>
             <n-data-table
               ref="tableRef"
               class="custom-table"
@@ -1930,6 +1986,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       maxRows: 10,
                     }"
                     @paste="onComposerPaste"
+                    @keydown="onComposerKeydown"
                   />
 
                   <ChatComposerToolbar

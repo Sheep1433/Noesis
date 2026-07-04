@@ -1,4 +1,4 @@
-"""Per-user AIO 沙箱容器管理（Docker socket）。"""
+"""Per-user 沙箱容器管理（Docker socket，docker exec / 可选 AIO HTTP）。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import docker
 import httpx
-from docker.errors import DockerException, NotFound
+from docker.errors import APIError, DockerException, ImageNotFound, NotFound
 
 from paths import (
     ensure_sandbox_mount_readable,
@@ -32,7 +32,15 @@ def _validate_user_id(user_id: str) -> str:
 
 def _container_name(user_id: str) -> str:
     digest = hashlib.sha256(user_id.encode()).hexdigest()[:12]
-    return f"noesis-aio-{digest}"
+    return f"noesis-sandbox-{digest}"
+
+
+def _sandbox_image_build_hint(image: str) -> str:
+    return (
+        f"沙箱镜像 {image!r} 不存在且拉取失败。"
+        "请在仓库根目录执行: "
+        f"docker build -t {image} -f deploy/sandbox-slim/Dockerfile ."
+    )
 
 
 def _public_host() -> str:
@@ -81,7 +89,9 @@ def _published_base_url(host_port: int) -> str:
 class SandboxRecord:
     user_id: str
     container_id: str
-    base_url: str
+    container_name: str
+    runtime: str
+    base_url: str | None = None
     last_used: float = field(default_factory=time.time)
     in_flight: int = 0
 
@@ -92,6 +102,13 @@ class SandboxManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._records: dict[str, SandboxRecord] = {}
+        self._runtime = os.environ.get("SANDBOX_RUNTIME", "docker").strip().lower() or "docker"
+        if self._runtime not in ("docker", "aio"):
+            raise RuntimeError(f"非法 SANDBOX_RUNTIME={self._runtime!r}，仅支持 docker | aio")
+        self._docker_image = os.environ.get(
+            "SANDBOX_DOCKER_IMAGE",
+            os.environ.get("SANDBOX_AIO_IMAGE", "noesis/sandbox-slim:latest"),
+        )
         self._aio_image = os.environ.get(
             "SANDBOX_AIO_IMAGE", "ghcr.io/agent-infra/sandbox:latest"
         )
@@ -109,6 +126,23 @@ class SandboxManager:
             self._docker = docker.from_env()
         except DockerException as exc:
             raise RuntimeError(f"无法连接 Docker: {exc}") from exc
+
+    def _ensure_image_available(self, image: str) -> None:
+        """本地无镜像时不隐式 pull（避免 Docker Hub 超时变成 HTTP 500）。"""
+        try:
+            self._docker.images.get(image)
+        except ImageNotFound as exc:
+            raise RuntimeError(_sandbox_image_build_hint(image)) from exc
+
+    def _run_container(self, *, image: str, run_kwargs: dict):
+        self._ensure_image_available(image)
+        try:
+            return self._docker.containers.run(**run_kwargs)
+        except APIError as exc:
+            hint = _sandbox_image_build_hint(image)
+            if "pull" in str(exc).lower() or "not found" in str(exc).lower():
+                raise RuntimeError(hint) from exc
+            raise RuntimeError(f"启动沙箱容器失败 ({image}): {exc}") from exc
 
     def _user_workspace_host(self, user_id: str) -> Path:
         return self._host_data_dir / "users" / user_id
@@ -128,7 +162,9 @@ class SandboxManager:
                 time.sleep(1.0)
         raise RuntimeError(f"AIO 沙箱未就绪 ({base_url}): {last_error}")
 
-    def _start_container(self, user_id: str) -> SandboxRecord:
+    def _start_container(self, user_id: str, *, runtime: str) -> SandboxRecord:
+        if runtime not in ("docker", "aio"):
+            raise ValueError(f"非法 runtime: {runtime!r}")
         name = _container_name(user_id)
         user_ws = self._user_workspace_host(user_id)
         user_ws.mkdir(parents=True, exist_ok=True)
@@ -145,34 +181,63 @@ class SandboxManager:
             str(skills_host): {"bind": "/skills", "mode": "ro"},
         }
 
-        host_port = _find_free_host_port(start=self._host_port_base)
         run_kwargs: dict = {
-            "image": self._aio_image,
             "name": name,
             "detach": True,
-            "ports": {f"{self._aio_port}/tcp": host_port},
             "volumes": volumes,
-            "environment": {
-                "SANDBOX_HEADLESS": self._headless,
-                "URL_CHROME_PATH": self._chrome_path,
-            },
             "labels": {
                 "noesis.user_id": user_id,
                 "noesis.managed": "true",
-                "noesis.host_port": str(host_port),
+                "noesis.runtime": runtime,
             },
             "restart_policy": {"Name": "unless-stopped"},
         }
         if self._docker_network:
             run_kwargs["network"] = self._docker_network
 
-        container = self._docker.containers.run(**run_kwargs)
-        base_url = _published_base_url(host_port)
-        self._wait_aio_ready(base_url)
+        if runtime == "aio":
+            host_port = _find_free_host_port(start=self._host_port_base)
+            run_kwargs.update(
+                {
+                    "image": self._aio_image,
+                    "ports": {f"{self._aio_port}/tcp": host_port},
+                    "environment": {
+                        "SANDBOX_HEADLESS": self._headless,
+                        "URL_CHROME_PATH": self._chrome_path,
+                    },
+                    "labels": {
+                        **run_kwargs["labels"],
+                        "noesis.host_port": str(host_port),
+                    },
+                }
+            )
+            container = self._run_container(image=self._aio_image, run_kwargs=run_kwargs)
+            base_url = _published_base_url(host_port)
+            self._wait_aio_ready(base_url)
+            return SandboxRecord(
+                user_id=user_id,
+                container_id=container.id,
+                container_name=name,
+                runtime="aio",
+                base_url=base_url,
+            )
+
+        run_kwargs.update(
+            {
+                "image": self._docker_image,
+                "command": ["sleep", "infinity"],
+            }
+        )
+        container = self._run_container(image=self._docker_image, run_kwargs=run_kwargs)
+        container.reload()
+        if container.status != "running":
+            raise RuntimeError(f"沙箱容器启动失败: {name} ({container.status})")
         return SandboxRecord(
             user_id=user_id,
             container_id=container.id,
-            base_url=base_url,
+            container_name=name,
+            runtime="docker",
+            base_url=None,
         )
 
     def _sync_running(self, user_id: str) -> SandboxRecord | None:
@@ -187,28 +252,46 @@ class SandboxManager:
             container.reload()
             if container.status != "running":
                 return None
-        host_port = _extract_host_port(container, self._aio_port)
-        if host_port is None:
-            return None
+        labels = container.labels or {}
+        runtime = labels.get("noesis.runtime", self._runtime)
+        base_url: str | None = None
+        if runtime == "aio":
+            host_port = _extract_host_port(container, self._aio_port)
+            if host_port is None:
+                return None
+            base_url = _published_base_url(host_port)
         return SandboxRecord(
             user_id=user_id,
             container_id=container.id,
-            base_url=_published_base_url(host_port),
+            container_name=name,
+            runtime=runtime,
+            base_url=base_url,
         )
 
-    def ensure(self, user_id: str) -> str:
+    def ensure(self, user_id: str, *, runtime: str | None = None) -> SandboxRecord:
         user_id = _validate_user_id(user_id)
+        requested = (runtime or self._runtime).strip().lower()
+        if requested not in ("docker", "aio"):
+            raise ValueError(f"非法 runtime: {requested!r}")
+
         with self._lock:
             record = self._records.get(user_id)
             if record is not None:
-                record.last_used = time.time()
-                return record.base_url
+                if record.runtime != requested:
+                    self._records.pop(user_id, None)
+                    self._stop_and_remove(_container_name(user_id))
+                else:
+                    record.last_used = time.time()
+                    return record
 
             synced = self._sync_running(user_id)
             if synced is not None:
-                self._records[user_id] = synced
-                synced.last_used = time.time()
-                return synced.base_url
+                if synced.runtime != requested:
+                    self._stop_and_remove(synced.container_name)
+                else:
+                    self._records[user_id] = synced
+                    synced.last_used = time.time()
+                    return synced
 
             active = len(self._records) or len(
                 [
@@ -224,22 +307,51 @@ class SandboxManager:
                     f"用户沙箱已达上限 sandbox_max_replicas={self._max_replicas}"
                 )
 
-            created = self._start_container(user_id)
+            created = self._start_container(user_id, runtime=requested)
             self._records[user_id] = created
-            return created.base_url
+            return created
+
+    def get_record(self, user_id: str) -> SandboxRecord:
+        user_id = _validate_user_id(user_id)
+        with self._lock:
+            record = self._records.get(user_id)
+            if record is not None:
+                record.last_used = time.time()
+                return record
+            synced = self._sync_running(user_id)
+            if synced is None:
+                raise RuntimeError(f"用户沙箱不存在: {user_id}")
+            self._records[user_id] = synced
+            synced.last_used = time.time()
+            return synced
+
+    def get_container(self, user_id: str):
+        record = self.get_record(user_id)
+        try:
+            container = self._docker.containers.get(record.container_name)
+        except NotFound as exc:
+            raise RuntimeError(f"容器不存在: {record.container_name}") from exc
+        container.reload()
+        if container.status != "running":
+            raise RuntimeError(
+                f"容器未运行: {record.container_name} ({container.status})"
+            )
+        return container
+
+    def _stop_and_remove(self, name: str) -> bool:
+        try:
+            container = self._docker.containers.get(name)
+        except NotFound:
+            return False
+        container.stop(timeout=15)
+        container.remove(force=True)
+        return True
 
     def destroy(self, user_id: str) -> bool:
         user_id = _validate_user_id(user_id)
         with self._lock:
             self._records.pop(user_id, None)
-            name = _container_name(user_id)
-            try:
-                container = self._docker.containers.get(name)
-            except NotFound:
-                return False
-            container.stop(timeout=15)
-            container.remove(force=True)
-            return True
+            return self._stop_and_remove(_container_name(user_id))
 
     def set_in_flight(self, user_id: str, delta: int) -> None:
         user_id = _validate_user_id(user_id)

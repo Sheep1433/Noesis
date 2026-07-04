@@ -24,7 +24,7 @@ from config.user_data_paths import (
 )
 
 if TYPE_CHECKING:
-    from agent.backends.aio_sandbox import AioSandboxBackend
+    from deepagents.backends.protocol import SandboxBackendProtocol
 
 _SYSTEM_DENYLIST: tuple[str, ...] = (
     "/usr",
@@ -49,7 +49,7 @@ _TIER1_ROUTES: tuple[tuple[str, str], ...] = (
 
 @dataclass(frozen=True, slots=True)
 class PathRewriteContext:
-    backend_kind: Literal["aio", "local_shell"]
+    backend_kind: Literal["container", "local_shell"]
     user_id: str
     session_id: str
     workspace_prefix: str
@@ -63,11 +63,11 @@ def build_path_rewrite_context(
     *,
     user_id: str,
     session_id: str,
-    sandbox: AioSandboxBackend | None,
+    sandbox: SandboxBackendProtocol | None,
 ) -> PathRewriteContext:
     if sandbox is not None:
         return PathRewriteContext(
-            backend_kind="aio",
+            backend_kind="container",
             user_id=user_id,
             session_id=session_id,
             workspace_prefix=f"/workspace/sessions/{session_id}/workspace",

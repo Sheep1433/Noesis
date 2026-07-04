@@ -58,8 +58,7 @@ Noesis 启动脚本（统一入口）
   ./scripts/run.sh docker:logs         # backend 日志
 
 环境变量（dev / prod 共用）:
-  START_MCP=0|1           是否启动 extensions/mcp/docker-ssh（默认 0，故障运维需显式开启）
-  MCP_BASE_IMAGE=...      MCP 沙箱基础镜像（国内网络可设 docker.m.daocloud.io/library/ubuntu:24.04）
+  START_MCP=0|1           是否启动 extensions/mcp/ssh（默认 0，故障运维需显式开启）
   START_LANGFUSE=0|1      是否启动 Langfuse 栈（默认 0）
   NOESIS_CONFIG_PATH        覆盖 yaml 路径
 

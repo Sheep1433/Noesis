@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from agent.backends import uses_aio_sandbox
+from agent.backends import uses_container_sandbox
 from common.logging import logger
 from common.paths import REPO_ROOT
 from config.env import SandboxConfig
@@ -56,7 +56,7 @@ def ensure_sandbox_runner_process() -> None:
 
     if os.environ.get("SANDBOX_RUNNER_AUTOSTART", "1").lower() in ("0", "false", "no"):
         return
-    if not uses_aio_sandbox():
+    if not uses_container_sandbox():
         return
     if _runner_healthy():
         return

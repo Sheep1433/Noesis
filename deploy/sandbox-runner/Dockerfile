@@ -1,4 +1,4 @@
-# sandbox-runner：内网 AIO 容器 lifecycle（Docker socket / DooD）
+# sandbox-runner：内网用户沙箱 lifecycle + docker exec 代理（Docker socket / DooD）
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update \

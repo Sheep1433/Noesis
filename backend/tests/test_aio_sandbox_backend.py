@@ -1,20 +1,15 @@
-"""AioSandboxBackend：mock agent_sandbox、mutex 与容器路径校验。"""
+"""AioSandboxBackend：mock agent_sandbox SDK 行为。"""
 
 from __future__ import annotations
 
 import base64
 import threading
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from agent.backends.aio_sandbox import (
-    AioSandboxBackend,
-    _session_mutex,
-    create_aio_sandbox_backend,
-)
-from agent.backends.mount_paths import EXTENSIONS_SKILLS_CONTAINER_PREFIX
+from agent.backends.aio_sandbox import AioSandboxBackend
 
 
 class _FakeShell:
@@ -64,38 +59,6 @@ def backend(fake_client: MagicMock) -> AioSandboxBackend:
     )
 
 
-def test_resolve_read_session_workspace(backend: AioSandboxBackend) -> None:
-    path = "/workspace/sessions/s1/workspace/research/report.md"
-    assert backend._resolve_read_path(path) == path
-
-
-def test_resolve_read_extensions_skills_mount(backend: AioSandboxBackend) -> None:
-    path = f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
-    assert backend._resolve_read_path(path) == path
-
-
-def test_resolve_read_rejects_non_absolute(backend: AioSandboxBackend) -> None:
-    with pytest.raises(ValueError, match="absolute"):
-        backend._resolve_read_path("research/report.md")
-
-
-def test_resolve_write_blocks_extensions_skills(backend: AioSandboxBackend) -> None:
-    with pytest.raises(ValueError, match="read-only"):
-        backend._resolve_write_path(
-            f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
-        )
-
-
-def test_resolve_write_blocks_custom_skills_mount(backend: AioSandboxBackend) -> None:
-    with pytest.raises(ValueError, match="read-only"):
-        backend._resolve_write_path("/workspace/skills/my-upload/SKILL.md")
-
-
-def test_resolve_read_blocks_traversal(backend: AioSandboxBackend) -> None:
-    with pytest.raises(ValueError, match="traversal"):
-        backend._resolve_read_path("/workspace/../etc/passwd")
-
-
 def test_execute_uses_session_workspace_exec_dir(backend: AioSandboxBackend) -> None:
     backend.execute("echo hi")
     assert backend._client.shell.calls[0][1] == "/workspace/sessions/s1/workspace"
@@ -116,18 +79,3 @@ def test_upload_writes_utf8_text_not_base64_literal(backend: AioSandboxBackend) 
     stored = backend._client.file.files[path]
     assert stored == markdown.encode("utf-8")
     assert not stored.decode("ascii", errors="ignore").startswith("IyD")
-
-
-def test_different_sessions_may_use_parallel_mutex_keys() -> None:
-    assert _session_mutex("u1", "s1") is not _session_mutex("u1", "s2")
-
-
-@pytest.mark.asyncio
-async def test_create_aio_sandbox_backend_returns_backend() -> None:
-    with patch(
-        "services.sandbox_service.ensure_user_sandbox",
-        new_callable=AsyncMock,
-        return_value="http://aio:8080",
-    ):
-        backend = await create_aio_sandbox_backend("u1", "s1")
-    assert isinstance(backend, AioSandboxBackend)

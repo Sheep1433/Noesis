@@ -28,11 +28,13 @@ backend/
 ├── agent/
 │   ├── factory.py               # create_noesis_agent
 │   ├── common_react_agent.py    # 通用问答（RAG）
-│   ├── fault_operation_agent.py # 故障运维（MCP + AIO 沙箱）
+│   ├── fault_operation_agent.py # 故障运维（MCP + 沙箱工作区）
 │   ├── super_agent.py           # 通用超级智能体（AIO 沙箱 + Skills + 用户记忆）
 │   ├── backends/
 │   │   ├── factory.py           # create_agent_backend（唯一入口）
-│   │   ├── agent_filesystem.py  # CompositeBackend + PrefixBackend
+│   │   ├── agent_filesystem.py  # build_agent_filesystem_backend 工厂
+│   │   ├── prefix_backend.py    # route 路径映射适配
+│   │   ├── backend_guards.py    # 白名单 / 静态 listing 守卫
 │   │   ├── mount_paths.py       # Agent / 容器路径常量
 │   │   ├── path_rewrite.py      # execute 虚拟路径 → 物理路径 rewrite
 │   │   ├── aio_sandbox.py       # 裸容器 I/O（不面向 Agent 路径）
@@ -82,7 +84,7 @@ backend/
 ### Agent AIO 沙箱（单用户单容器）
 
 - **产品模型**：每个 `user_id` **一个** AIO 容器（同用户多 session 复用）；磁盘工作区仍 **per-session**（`users/{uid}/sessions/{sid}/workspace`）。
-- **接入**：`AioSandboxBackend(BaseSandbox)` + PyPI `agent-sandbox`（当前 **0.0.30**，与 `SANDBOX_AIO_IMAGE` 配套）。
+- **接入**：`DockerExecSandboxBackend(BaseSandbox)`（默认，`sandbox.backend=docker`）经 runner docker exec；`AioSandboxBackend` 保留（`sandbox.backend=aio` + `agent-sandbox`）。
 - **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（`/research/` = session workspace，`/memory/` = 用户记忆，`/skills/extensions|` + `/skills/custom/` 只读）。
 - **生命周期**：`services/sandbox_service.py` 经内网 `sandbox-runner` 起停容器；`user_sandbox_run` 维护 per-user in-flight；**删 session 不 destroy 用户沙箱**。
 - **并发**：对 `(user_id, session_id)` mutex 串行 AIO HTTP（单 shell 会话）。
@@ -161,7 +163,7 @@ async def login(
 | prod | `backend/.env.prod` | `backend/config.prod.yaml` |
 | docker | `deploy/.env.docker` | `deploy/config.docker.yaml` |
 
-Docker 制品目录：`deploy/`（`docker-compose.yml`、`backend/Dockerfile`、`frontend/Dockerfile`、`mcp/Dockerfile`）
+Docker 制品目录：`deploy/`（`docker-compose.yml`、`backend/Dockerfile`、`frontend/Dockerfile`、`sandbox-slim/Dockerfile`）
 
 - `config/env.py` 合并 env + yaml → `ModelConfig` 等
 - `NOESIS_CONFIG_PATH` / `APP_ENV=prod` 可自动选中 `config.prod.yaml`

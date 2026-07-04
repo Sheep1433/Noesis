@@ -145,9 +145,11 @@ web_tools:
   fetch_timeout_seconds: 30
   ddg_backends: mojeek,yandex
 
-# AIO 沙箱（深度研究 / 故障运维）；runner 镜像/回收等见 deploy/docker-compose.yml
+# Agent 沙箱（深度研究 / 故障运维）
+# backend: docker（推荐 slim 镜像 + docker exec）| aio（全量 AIO 镜像，需 uv sync --extra aio）| local_shell（宿主机）
+# runner 镜像/回收等见 deploy/docker-compose.yml
 sandbox:
-  backend: aio
+  backend: docker
   runner_url: http://sandbox-runner:8090
   execute_timeout_seconds: 120
 

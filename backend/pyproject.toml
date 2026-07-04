@@ -5,67 +5,71 @@ description = "Noesis Agent"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # API / 持久化
     "aiosqlite>=0.22.1",
+    "alembic>=1.18.5",
     "asyncmy>=0.2.10",
     "bcrypt>=5.0.0",
-    "beartype>=0.18.0",
-    "dashscope>=1.24.7",
-    "deepagents>=0.5.0",
-    "faiss-cpu>=1.12.0",
     "fastapi[all]>=0.120.0",
-    "jieba>=0.42.1",
+    "httpx>=0.27.0",
+    "loguru>=0.7.3",
+    "mcp>=1.19.0",
+    "pydantic-validation-decorator>=0.1.5",
+    "pyjwt>=2.10.1",
+    "pymysql>=1.1.2",
+    "pyyaml>=6.0",
+    "sqlalchemy[asyncio]>=2.0.44",
+    # Agent
+    "deepagents>=0.6.7",
     "langchain>=1.0.2",
     "langchain-community>=0.4",
+    "langchain-deepseek>=1.0.1",
     "langchain-mcp-adapters>=0.1.11",
     "langchain-openai>=1.0.2",
     "langchain-qwq>=0.3.5",
     "langgraph>=1.0.1",
     "langgraph-checkpoint-sqlite>=3.0.3",
-    "loguru>=0.7.3",
+    "tavily-python>=0.5.0",
+    "ddgs>=9.0.0",
+    # 知识库 / DeepDoc / RAG
+    "beartype>=0.18.0",
+    "chardet>=5.2.0",
+    "huggingface-hub>=0.26.0",
+    "jieba>=0.42.1",
+    "markdown>=3.6",
     "markitdown[docx]>=0.0.1",
-    "mcp>=1.19.0",
     "numpy>=2.2.6",
-    "qdrant-client>=1.12.0",
+    "onnxruntime>=1.19.0",
+    "opencv-python-headless>=4.10.0.84",
     "openai>=2.7.1",
+    "openpyxl>=3.1.5",
     "pandas>=2.3.3",
-    "py2neo>=2021.2.4",
-    "pydantic-validation-decorator>=0.1.5",
-    "pyyaml>=6.0",
-    "pyjwt>=2.10.1",
-    "pymysql>=1.1.2",
+    "pdfplumber>=0.10.4",
+    "pypdf>=5.0.0",
+    "python-docx>=1.2.0",
+    "python-pptx>=1.0.2",
+    "qdrant-client>=1.18.0",
     "rank-bm25>=0.2.2",
-    "sqlalchemy[asyncio]>=2.0.44",
-    "sqlglot>=27.29.0",
-    # Test dependencies
+    "scikit-learn>=1.5.0",
+    "xgboost>=2.0.0",
+    # 可观测
+    "langfuse>=3.10.0,<4",
+]
+
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
-    "httpx>=0.27.0",
-    "aiosqlite>=0.20.0",
-    "qdrant-client>=1.17.1",
-    "asyncssh>=2.22.0",
-    "langfuse>=3.10.0,<4",
-    "python-docx>=1.2.0",
-    "python-pptx>=1.0.2",
-    "chardet>=5.2.0",
-    "huggingface-hub>=0.26.0",
-    "markdown>=3.6",
-    "onnxruntime>=1.19.0",
-    "opencv-python-headless>=4.10.0.84",
-    "pdfplumber>=0.10.4",
-    "pypdf>=5.0.0",
-    "scikit-learn>=1.5.0",
-    "xgboost>=2.0.0",
-    "langchain-deepseek>=1.0.1",
-    "openpyxl>=3.1.5",
-    "deepagents>=0.6.7",
-    "tavily-python>=0.5.0",
-    "ddgs>=9.0.0",
-    "agent-sandbox==0.0.30",
-    "alembic>=1.18.5",
 ]
 
+[tool.uv]
+default-groups = ["dev"]
+
 [project.optional-dependencies]
+aio = [
+    "agent-sandbox==0.0.30",
+]
 loadtest = [
     "locust>=2.31.0",
 ]

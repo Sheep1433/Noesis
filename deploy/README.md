@@ -47,12 +47,18 @@ DEPLOY_BRANCH=main bash ./scripts/deploy-remote.sh
 | `nginx` | 前端静态资源 + 反向代理 |
 | `backend` | FastAPI API |
 | `qdrant` | 向量库 |
-| `sandbox-runner` | 内网 AIO 沙箱 lifecycle（持 Docker socket） |
+| `sandbox-runner` | 内网沙箱 lifecycle + docker exec 代理（持 Docker socket） |
 
 ## 首次部署
 
 1. 复制 `deploy/.env.docker.example` → `deploy/.env.docker` 并填写密钥。
-2. **预拉 AIO 镜像**（与 backend `agent-sandbox==0.0.30` 配套）：
+2. **构建 slim 沙箱镜像**（默认 `sandbox.backend: docker`）：
+
+```bash
+docker build -t noesis/sandbox-slim:latest -f deploy/sandbox-slim/Dockerfile .
+```
+
+若仍用全量 AIO（`sandbox.backend: aio` + `SANDBOX_RUNTIME=aio`）：
 
 ```bash
 docker pull ghcr.io/agent-infra/sandbox:latest
@@ -94,7 +100,7 @@ CPU 即可运行；macOS 开发机解析 PDF 需 `brew install libomp`（xgboost
 
 | 配置位置 | 内容 |
 |----------|------|
-| `backend/config.yaml` → `sandbox.backend` | `aio` / `local_shell` |
+| `backend/config.yaml` → `sandbox.backend` | `docker`（推荐）/ `aio` / `local_shell` |
 | `backend/config.yaml` → `sandbox.runner_url` | backend 访问 runner 地址 |
 | `deploy/docker-compose.yml` → `sandbox-runner` 环境变量 | 镜像、回收、挂载卷等 runner 运维参数 |
 | `.env` → `SANDBOX_RUNNER_TOKEN` | runner 与 backend 共享 Bearer token（可选） |
