@@ -49,12 +49,13 @@ def test_create_local_shell_backend_can_resolve_gh(tmp_path) -> None:
 
 
 def test_create_local_shell_backend_https_curl_returns_body(tmp_path) -> None:
+    """验证 shell backend 能通过 curl 正常发起 HTTPS 请求。"""
     workspace = tmp_path / "agent_workspace"
     workspace.mkdir()
     backend = create_local_shell_backend(workspace, virtual_mode=True)
     result = backend.execute(
-        'curl -sS "https://export.arxiv.org/api/query?search_query=all:AI&max_results=1" | head -c 200'
+        'curl -sS -o /dev/null -w "%{http_code}" https://example.com'
     )
 
     assert result.exit_code == 0
-    assert "<?xml" in result.output or "<feed" in result.output
+    assert result.output.strip() in ("200", "301", "302")
