@@ -1,13 +1,9 @@
 # syntax=docker/dockerfile:1
 # Noesis 后端生产镜像（由 deploy/docker-compose.yml 引用，构建上下文为仓库根目录）
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim-bookworm AS builder
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    wget \
-    curl \
-    gh \
-    ca-certificates \
     build-essential \
     pkg-config \
     default-libmysqlclient-dev \
@@ -33,9 +29,25 @@ COPY extensions/skills ./extensions/skills
 
 RUN uv sync --frozen --no-dev
 
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    libmariadb3 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV PYTHONPATH=/app \
+    PATH="/app/.venv/bin:$PATH"
+
+COPY --from=builder /app /app
+
 EXPOSE 8089
 
 HEALTHCHECK --interval=20s --timeout=5s --start-period=90s --retries=5 \
-  CMD wget -qO- http://127.0.0.1:8089/health >/dev/null || exit 1
+  CMD curl -fsS http://127.0.0.1:8089/health >/dev/null || exit 1
 
-CMD ["uv", "run", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8089"]
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8089"]

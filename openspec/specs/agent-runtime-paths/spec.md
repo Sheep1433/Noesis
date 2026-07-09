@@ -133,7 +133,7 @@
 | 维度 | 会话工作区 | `skills-filesystem` | `chat-session-attachments` |
 |------|-----------|---------------------|----------------------------|
 | 消费方 | `FilesystemMiddleware` Agent | Skills API + Agent `/skills/extensions/`、`/skills/custom/` | `GeneralQAAgent` 附件 |
-| 路径 | `.data/users/{uid}/sessions/{sid}/workspace/`（任务产物常用 `research/` 子目录；根路径如 `notes.md` 亦合法） | 平台：`extensions/skills`；用户：`.data/users/{uid}/skills/` | `.data/users/{uid}/sessions/{sid}/uploads|attachments/` |
+| 路径 | `.data/users/{uid}/sessions/{sid}/workspace/`（通用任务默认写根或自建子目录；`research/` 仅深度调研等场景） | 平台：`extensions/skills`；用户：`.data/users/{uid}/skills/` | `.data/users/{uid}/sessions/{sid}/uploads|attachments/` |
 | 写入 | Agent 笔记/卸载 | 用户 ZIP → `skills/`；平台只读 | 用户上传 |
 | 隔离 | user + session | 平台全局 + user | user + session |
 
@@ -149,10 +149,15 @@ Agent **SHALL NOT** 将附件目录作为默认可写根。Agent 经 backend 访
 - **WHEN** Agent `write_file` 至 `/skills/custom/foo/SKILL.md`
 - **THEN** **SHALL NOT** 修改 `.data/users/{uid}/skills/` 下文件
 
-#### Scenario: 任务产物写入 research 子目录
+#### Scenario: research 子目录仅用于调研类产物
 
-- **WHEN** Agent `write_file` 至 `/research/notes.md`
+- **WHEN** Agent 在深度调研等 research 场景 `write_file` 至 `/research/notes.md`
 - **THEN** 变更 **SHALL** 落在 `sessions/{sid}/workspace/research/notes.md`，**SHALL NOT** 写入其它 session 或 `skills/`
+
+#### Scenario: 通用任务默认写入 workspace 根
+
+- **WHEN** 通用智能体 `write_file` 至 `/diagram.mmd`（非 research 场景）
+- **THEN** 变更 **SHALL** 落在 `sessions/{sid}/workspace/diagram.mmd`，**SHALL NOT** 默认写入 `research/` 子目录
 
 #### Scenario: filesystem 默认盘写入 workspace 根
 

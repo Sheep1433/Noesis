@@ -1491,11 +1491,6 @@ function onComposerPaste(e: ClipboardEvent) {
               </template>
               管理对话
             </n-button>
-
-            <TableModal
-              :show="isModalOpen"
-              @update:show="handleModalClose"
-            />
           </div>
         </div>
         <ResizeDivider
@@ -2103,6 +2098,10 @@ function onComposerPaste(e: ClipboardEvent) {
         </div>
       </n-layout-content>
     </n-layout>
+    <TableModal
+      :show="isModalOpen"
+      @update:show="handleModalClose"
+    />
   </div>
 </template>
 

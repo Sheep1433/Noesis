@@ -94,6 +94,16 @@ export function getCodeLanguage(path: string): string {
   return EXT_TO_CODE_LANGUAGE[getPathExtension(path)] ?? 'plaintext'
 }
 
+/** 拆分 Markdown 文件头部的 YAML frontmatter（`---` 包裹）与正文 */
+export function splitYamlFrontmatter(content: string): { frontmatter: string | null; body: string } {
+  const normalized = content.replace(/^\uFEFF/, '')
+  const match = normalized.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  if (!match) {
+    return { frontmatter: null, body: content }
+  }
+  return { frontmatter: match[1], body: normalized.slice(match[0].length) }
+}
+
 const FILE_TYPE_ICON_MAP: Record<string, string> = {
   xlsx: 'i-vscode-icons:file-type-excel2',
   xls: 'i-vscode-icons:file-type-excel2',

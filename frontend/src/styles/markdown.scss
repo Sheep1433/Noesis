@@ -1,82 +1,7 @@
-.markdown-code-wrapper {
-  --at-apply: 'relative whitespace-initial';
-  --at-apply: 'line-height-24';
-  --at-apply: 'flex flex-col';
-  --at-apply: 'my-12px';
-  --at-apply: rounded-8 overflow-hidden;
-
-
-  .markdown-code-header {
-    --at-apply: flex justify-between items-center;
-    --at-apply: 'b-b b-b-solid b-b-#3c3c43:10';
-    --at-apply: 'bg-#282c34';
-    --at-apply: 'font-size-14';
-    --at-apply: 'relative'; // 添加相对定位作为容器
-  }
-
-  .markdown-code-copy {
-    --at-apply: pl-14 text-14 font-500;
-    --at-apply: px-14 py-8 rounded-4;
-    --at-apply: 'flex items-center justify-center';
-    --at-apply: 'b-none bg-transparent';
-    --at-apply: 'c-#808080' cursor-pointer;
-    --at-apply: transition-all-300 opacity-100;
-    --at-apply: 'c-#ffffff';
-    --at-apply: 'z-10'; // 提高z-index确保显示在上层
-
-    .markdown-copy-icon {
-      --at-apply: text-16 pointer-events-none mr-4;
-      --at-apply: 'i-ci:copy';
-    }
-
-    .markdown-copy-text {
-      --at-apply: pointer-events-none;
-
-      &.default {
-        display: initial;
-      }
-
-      &.done {
-        display: none;
-      }
-    }
-
-    &.copied {
-
-      .markdown-copy-icon {
-        --at-apply: 'i-ic:baseline-check';
-      }
-
-      .markdown-copy-text {
-
-        &.default {
-          display: none;
-        }
-
-        &.done {
-          display: initial;
-        }
-      }
-    }
-  }
-
-  .markdown-code-lang {
-    --at-apply: 'c-#ffffff';
-    --at-apply: pl-15 text-15 font-500;
-    --at-apply: transition-all-300 opacity-100;
-  }
-
-  pre {
-
-    code {
-      --at-apply: whitespace-pre py-15;
-    }
-  }
-}
 /* 工具调用折叠块样式 */
 .tool-call {
   --at-apply: 'my-12px border border-#3c3c43:20 rounded-8 overflow-hidden';
-  
+
   summary {
     --at-apply: 'px-16 py-12 cursor-pointer bg-#282c34:5 hover:bg-#282c34:10 transition-colors-200';
     --at-apply: 'flex items-center gap-8';
@@ -93,23 +18,23 @@
       --at-apply: 'c-#868e96';
     }
   }
-  
+
   &[open] summary {
     --at-apply: 'border-b border-#3c3c43:10';
   }
-  
+
   .tool-output {
     --at-apply: 'p-12 bg-#1e1e1e';
-    
+
     pre {
       --at-apply: 'ma-0 overflow-x-auto';
-      
+
       code {
         --at-apply: 'text-13 c-#d4d4d4 bg-transparent';
       }
     }
   }
-  
+
   pre {
     --at-apply: 'ma-0 pa-0 border-none';
   }

@@ -32,7 +32,7 @@
 
 `create_agent_backend(user_id, session_id)` SHALL 使 deepagents virtual **`/`** 映射到容器内 **`/workspace/sessions/{session_id}/workspace`**；Agent **SHALL** 继续使用 `/research/...`、`/memory/...` 等路径而 **SHALL NOT** 在 Prompt 中嵌入 `sessions/{session_id}/`。
 
-任务可写产物 **SHALL** 默认落在 virtual `/research/` 子目录下；workspace 根虚拟路径（`/notes.md` 等）**SHALL** 仍受支持。
+任务可写产物 **SHALL** 默认落在 workspace 根或任务自定义子目录；`/research/` **SHALL** 仅在深度调研等 research 场景（如 `deep-research-v2` Skill）使用；workspace 根虚拟路径（`/notes.md` 等）**SHALL** 为通用智能体默认落盘位置。
 
 #### Scenario: Prompt 路径不变
 

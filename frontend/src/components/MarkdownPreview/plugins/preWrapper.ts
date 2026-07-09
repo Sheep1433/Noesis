@@ -61,8 +61,11 @@ export function preWrapperPlugin(md: MarkdownIt, options: Options) {
       `
       <div class="markdown-code-wrapper flex language-${lang}${getAdaptiveThemeMarker(options)}${active}">
         <div class="markdown-code-header">
-          <span class="markdown-code-lang">${getBaseLanguageName(lang)}</span>
-          <button class="markdown-code-copy">
+          <div class="markdown-code-header__leading">
+            <span class="markdown-code-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="markdown-code-lang">${getBaseLanguageName(lang)}</span>
+          </div>
+          <button type="button" class="markdown-code-copy" title="复制代码">
             <div class="markdown-copy-icon"></div>
             <span class="markdown-copy-text default">复制代码</span>
             <span class="markdown-copy-text done">已复制</span>

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import io
 import tarfile
+import time
 from unittest.mock import MagicMock
 
 import pytest
 
-from docker_exec import exec_command, read_file_text, write_file_text
+from docker_exec import exec_command, read_file_text, write_file_text, write_file_bytes
 
 
 def _make_container(*, exec_result: tuple[bytes, bytes] | None = None) -> MagicMock:
@@ -68,3 +69,24 @@ def test_write_and_read_file_roundtrip() -> None:
     text, encoding = read_file_text(container, path="/workspace/s1/notes.md")
     assert encoding is None
     assert text == "你好"
+
+
+def test_write_file_sets_mtime_in_tar() -> None:
+    container = _make_container()
+    captured: list[bytes] = []
+
+    def put_archive(_parent: str, data: bytes) -> None:
+        captured.append(data)
+
+    container.put_archive.side_effect = put_archive
+
+    before = int(time.time())
+    write_file_bytes(container, path="/workspace/s1/notes.md", content=b"hello")
+    after = int(time.time())
+
+    assert len(captured) == 1
+    with tarfile.open(fileobj=io.BytesIO(captured[0]), mode="r:") as tar:
+        member = tar.getmembers()[0]
+        assert member.mtime >= before
+        assert member.mtime <= after
+        assert member.mtime >= 315532800  # 1980-01-01

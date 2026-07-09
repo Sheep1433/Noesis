@@ -1,6 +1,7 @@
 import MarkdownIt from 'markdown-it'
 import markdownItHighlight from 'markdown-it-highlightjs'
 import hljs from './highlight'
+import { mermaidPlugin } from './mermaid'
 import { preWrapperPlugin } from './preWrapper'
 
 
@@ -23,7 +24,7 @@ md.use(markdownItHighlight, {
   hljs,
   auto: true,
   code: true,
-}).use(preWrapperPlugin, {
+}).use(mermaidPlugin).use(preWrapperPlugin, {
   hasSingleTheme: true,
 })
 

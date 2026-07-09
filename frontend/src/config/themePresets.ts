@@ -74,3 +74,10 @@ export const PRESET_NAIVE_COLORS: Record<ThemePresetId, PresetNaiveColors> = {
 export function isDarkThemePreset(id: ThemePresetId): boolean {
   return id === 'deep'
 }
+
+/** 主题切换遮罩 / 过渡用底色 — 与 _presets.scss / _semantic.scss 的 --noesis-color-bg 对齐 */
+export const THEME_PRESET_SURFACE_BG: Record<ThemePresetId, string> = {
+  newsprint: '#f4f1ea',
+  light: '#ffffff',
+  deep: '#0a0a0f',
+}

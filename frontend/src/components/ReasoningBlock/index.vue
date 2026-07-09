@@ -2,7 +2,6 @@
 import { BulbOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { collapseCompactStyle } from '@/utils/collapseCompact'
-import { themeColors } from '@/config/theme'
 
 interface Props {
   reasoning?: string
@@ -31,7 +30,7 @@ withDefaults(defineProps<Props>(), {
       <template #header>
         <div class="reasoning-header">
           <div class="reasoning-header__icon">
-            <n-icon :size="14" :color="appearance === 'light' ? themeColors.blockLightIcon : themeColors.blockDarkIcon">
+            <n-icon :size="14">
               <BulbOutline />
             </n-icon>
           </div>
@@ -62,7 +61,7 @@ withDefaults(defineProps<Props>(), {
   border-radius: var(--noesis-radius-sm);
   margin: 3px 0;
   box-shadow: var(--noesis-shadow-block-dark);
-  border-left: 2px solid var(--reasoning-accent);
+  border-left: 3px solid var(--reasoning-accent);
 }
 
 .reasoning-call--light {
@@ -74,7 +73,7 @@ withDefaults(defineProps<Props>(), {
   background: var(--noesis-block-light-bg);
   border: 1px solid var(--noesis-block-light-border);
   border-radius: var(--noesis-radius-md);
-  border-left: 2px solid var(--reasoning-accent);
+  border-left: 3px solid var(--reasoning-accent);
   box-shadow: var(--noesis-shadow-sm);
 }
 
@@ -115,7 +114,7 @@ withDefaults(defineProps<Props>(), {
 }
 
 .reasoning-call--light :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-color-border-divider);
+  border-top: 1px solid var(--noesis-block-light-divider);
 }
 
 .reasoning-header {
@@ -156,6 +155,7 @@ withDefaults(defineProps<Props>(), {
   height: 26px;
   border-radius: 7px;
   background: var(--noesis-block-dark-bg-icon);
+  color: var(--noesis-block-dark-icon);
   flex-shrink: 0;
 }
 
@@ -169,6 +169,7 @@ withDefaults(defineProps<Props>(), {
 
 .reasoning-call--light .reasoning-header__icon {
   background: var(--noesis-color-primary-bg-icon);
+  color: var(--noesis-block-light-icon);
 }
 
 .reasoning-call--light .reasoning-header:hover {

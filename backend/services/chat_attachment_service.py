@@ -159,17 +159,13 @@ class ChatAttachmentService:
             raise HTTPException(status_code=404, detail="会话不存在")
 
     @classmethod
-    async def _count_active(cls, session_id: str, db: AsyncSession) -> int:
-        now = _now_ms()
-        result = await db.execute(
-            select(TChatAttachment).where(
-                and_(
-                    TChatAttachment.session_id == session_id,
-                    TChatAttachment.expires_at > now,
-                )
-            )
-        )
-        return len(result.scalars().all())
+    def validate_message_file_count(cls, file_dict: Optional[dict]) -> None:
+        if not file_dict:
+            return
+        count = len(file_dict)
+        max_n = ChatAttachmentConfig.max_files_per_message
+        if count > max_n:
+            raise ServiceWarning(message=f"单条消息最多 {max_n} 个附件")
 
     @classmethod
     async def lazy_delete_expired(cls, session_id: str, db: AsyncSession) -> int:
@@ -306,12 +302,6 @@ class ChatAttachmentService:
             raise ServiceWarning(message=f"文档大小超过 {ChatAttachmentConfig.max_file_mb}MB 限制")
         if kind == "image" and size_mb > ChatAttachmentConfig.max_image_mb:
             raise ServiceWarning(message=f"图片大小超过 {ChatAttachmentConfig.max_image_mb}MB 限制")
-
-        active_count = await cls._count_active(session_id, db)
-        if active_count >= ChatAttachmentConfig.max_count_per_session:
-            raise ServiceWarning(
-                message=f"每会话最多 {ChatAttachmentConfig.max_count_per_session} 个附件"
-            )
 
         attachment_id = str(uuid.uuid4())
         upload_path = _uploads_dir(user_id, session_id) / safe_name

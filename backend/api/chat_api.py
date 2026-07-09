@@ -30,7 +30,11 @@ from schemas.chat_vo import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from schemas.session_context_vo import SessionContextResponse, WorkspaceFileContent
+from schemas.session_context_vo import (
+    SessionContextResponse,
+    WorkspaceFileContent,
+    WorkspaceFileWriteRequest,
+)
 from services.session_context_service import SessionContextService
 from services.chat_service import ChatService
 from services.user_service import UserService
@@ -418,6 +422,67 @@ async def get_session_workspace_file(
             session_id=session_id,
             user_id=str(current_user.user_id),
             rel_path=path,
+            db=db,
+        )
+        return WorkspaceFileContent(path=rel, content=content)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return ResponseUtil.not_found(msg=str(exc.detail))
+        if exc.status_code == 400:
+            return ResponseUtil.failure(msg=str(exc.detail))
+        raise
+
+
+@chat_router.get(
+    "/sessions/{session_id}/workspace/archive",
+    summary="下载工作区目录或文件",
+)
+async def get_session_workspace_archive(
+    session_id: str,
+    path: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        filename, data, media_type = await SessionContextService.download_workspace_path(
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            rel_path=path,
+            db=db,
+        )
+        encoded_name = quote(filename)
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={
+                'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_name}",
+            },
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return ResponseUtil.not_found(msg=str(exc.detail))
+        if exc.status_code == 400:
+            return ResponseUtil.failure(msg=str(exc.detail))
+        raise
+
+
+@chat_router.put(
+    "/sessions/{session_id}/workspace/file",
+    response_model=WorkspaceFileContent,
+    summary="保存会话工作区文本文件",
+)
+async def put_session_workspace_file(
+    session_id: str,
+    request: WorkspaceFileWriteRequest,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        rel, content = await SessionContextService.write_workspace_file(
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            rel_path=request.path,
+            content=request.content,
             db=db,
         )
         return WorkspaceFileContent(path=rel, content=content)

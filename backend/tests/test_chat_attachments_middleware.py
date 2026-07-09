@@ -186,7 +186,7 @@ async def test_middleware_vlm_fallback_injects_caption():
     ref = f"{CHAT_ATTACHMENT_REF}:{row.id}"
     mock_cfg = MagicMock()
     mock_cfg.vlm_fallback_enabled = True
-    mock_cfg.max_images_per_message = 3
+    mock_cfg.max_files_per_message = 10
     mock_cfg.reinject_session_images = True
     mock_cfg.image_inject_max_edge = 1536
     mock_cfg.tiny_inline_chars = 4096

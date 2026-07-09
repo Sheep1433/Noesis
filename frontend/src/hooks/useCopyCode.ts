@@ -3,8 +3,8 @@ import { copyToClipboard } from '@/utils/copy'
 export function useCopyCode() {
   const timeoutIdMap: WeakMap<HTMLElement, NodeJS.Timeout> = new WeakMap()
   window.addEventListener('click', (e) => {
-    const el = e.target as HTMLElement
-    if (!el.matches('div[class*="language-"] button.markdown-code-copy')) {
+    const el = (e.target as HTMLElement).closest('button.markdown-code-copy')
+    if (!el) {
       return
     }
 
@@ -14,8 +14,9 @@ export function useCopyCode() {
       return
     }
 
-    const isShell = /language-(shellscript|shell|bash|sh|zsh)/.test(
-      parent.className,
+    const wrapper = el.closest('.markdown-code-wrapper')
+    const isShell = wrapper != null && /language-(shellscript|shell|bash|sh|zsh)/.test(
+      wrapper.className,
     )
 
     const ignoredNodes = []

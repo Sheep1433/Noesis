@@ -66,6 +66,21 @@ def test_resolve_storage_filename_keeps_meaningful_name(tmp_path):
     assert name == "架构图-v2.png"
 
 
+def test_validate_message_file_count_allows_within_limit():
+    from services.chat_attachment_service import ChatAttachmentService
+
+    ChatAttachmentService.validate_message_file_count({f"f{i}.pdf": "ref" for i in range(10)})
+
+
+def test_validate_message_file_count_rejects_over_limit():
+    from exceptions.exception import ServiceWarning
+    from services.chat_attachment_service import ChatAttachmentService
+
+    with pytest.raises(ServiceWarning) as exc:
+        ChatAttachmentService.validate_message_file_count({f"f{i}.pdf": "ref" for i in range(11)})
+    assert "单条消息最多" in (exc.value.message or "")
+
+
 @pytest.mark.asyncio
 async def test_upload_requires_existing_session():
     db = AsyncMock()

@@ -6,6 +6,7 @@ import base64
 import io
 import os
 import tarfile
+import time
 from dataclasses import dataclass
 
 from docker.errors import APIError, NotFound
@@ -114,6 +115,7 @@ def write_file_bytes(container: Container, *, path: str, content: bytes) -> None
         info = tarfile.TarInfo(name=name)
         info.size = len(content)
         info.mode = 0o644
+        info.mtime = int(time.time())
         tar.addfile(info, io.BytesIO(content))
     tarstream.seek(0)
     try:

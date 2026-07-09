@@ -1,0 +1,265 @@
+/* Markdown / 预览区代码块 — 随 data-theme 切换，替代固定 atom-one-dark */
+
+.markdown-code-wrapper {
+  --code-block-bg: var(--noesis-color-bg-muted);
+  --code-block-header-bg: var(--noesis-color-bg-subtle);
+  --code-block-border: var(--noesis-color-border-subtle);
+  --code-block-fg: var(--noesis-color-text-code);
+  --code-block-muted: var(--noesis-color-text-code-muted);
+  --code-block-shadow: var(--noesis-shadow-sm);
+  --code-block-radius: 10px;
+  --code-block-dot-1: #ff5f57;
+  --code-block-dot-2: #febc2e;
+  --code-block-dot-3: #28c840;
+  --hljs-comment: #6a737d;
+  --hljs-keyword: #d73a49;
+  --hljs-string: #032f62;
+  --hljs-number: #005cc5;
+  --hljs-title: #6f42c1;
+  --hljs-attr: #005cc5;
+  --hljs-built_in: #e36209;
+  --hljs-literal: #005cc5;
+  --hljs-meta: #6a737d;
+  --hljs-regexp: #032f62;
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin: 12px 0;
+  border: 1px solid var(--code-block-border);
+  border-radius: var(--code-block-radius);
+  overflow: hidden;
+  background: var(--code-block-bg);
+  box-shadow: var(--code-block-shadow);
+  line-height: 1.6;
+  white-space: initial;
+}
+
+html[data-theme="deep"] .markdown-code-wrapper {
+  --code-block-bg: #14141c;
+  --code-block-header-bg: #1c1c28;
+  --code-block-border: rgb(255 255 255 / 10%);
+  --code-block-fg: #e4e4e7;
+  --code-block-muted: #a1a1aa;
+  --code-block-shadow: 0 1px 0 rgb(255 255 255 / 4%) inset, 0 8px 24px rgb(0 0 0 / 28%);
+  --code-block-dot-1: rgb(255 95 87 / 85%);
+  --code-block-dot-2: rgb(254 188 46 / 85%);
+  --code-block-dot-3: rgb(40 200 64 / 85%);
+  --hljs-comment: #7a8496;
+  --hljs-keyword: #f59e0b;
+  --hljs-string: #a5d6ff;
+  --hljs-number: #fbbf24;
+  --hljs-title: #c4b5fd;
+  --hljs-attr: #7dd3fc;
+  --hljs-built_in: #fbbf24;
+  --hljs-literal: #67e8f9;
+  --hljs-meta: #a1a1aa;
+  --hljs-regexp: #fca5a5;
+}
+
+.markdown-code-wrapper .markdown-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--code-block-border);
+  background: var(--code-block-header-bg);
+}
+
+.markdown-code-wrapper .markdown-code-header__leading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.markdown-code-wrapper .markdown-code-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.markdown-code-wrapper .markdown-code-dots i {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--code-block-dot-1);
+}
+
+.markdown-code-wrapper .markdown-code-dots i:nth-child(2) {
+  background: var(--code-block-dot-2);
+}
+
+.markdown-code-wrapper .markdown-code-dots i:nth-child(3) {
+  background: var(--code-block-dot-3);
+}
+
+.markdown-code-wrapper .markdown-code-lang {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--code-block-border);
+  background: var(--code-block-bg);
+  color: var(--code-block-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.markdown-code-wrapper .markdown-code-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--code-block-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.markdown-code-wrapper .markdown-code-copy:hover {
+  color: var(--code-block-fg);
+  background: var(--noesis-color-bg-hover);
+  border-color: var(--code-block-border);
+}
+
+.markdown-code-wrapper .markdown-code-copy .markdown-copy-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  pointer-events: none;
+  --at-apply: 'i-ci:copy';
+}
+
+.markdown-code-wrapper .markdown-code-copy.copied .markdown-copy-icon {
+  --at-apply: 'i-ic:baseline-check';
+}
+
+.markdown-code-wrapper .markdown-code-copy .markdown-copy-text {
+  pointer-events: none;
+}
+
+.markdown-code-wrapper .markdown-code-copy .markdown-copy-text.done {
+  display: none;
+}
+
+.markdown-code-wrapper .markdown-code-copy.copied {
+  color: var(--noesis-color-success);
+}
+
+.markdown-code-wrapper .markdown-code-copy.copied .markdown-copy-text.default {
+  display: none;
+}
+
+.markdown-code-wrapper .markdown-code-copy.copied .markdown-copy-text.done {
+  display: initial;
+}
+
+.markdown-code-wrapper pre {
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  background: transparent;
+}
+
+.markdown-code-wrapper pre code.hljs {
+  display: block;
+  padding: 14px 16px;
+  overflow-x: auto;
+  background: transparent;
+  color: var(--code-block-fg);
+  font-family: var(--noesis-font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.65;
+  tab-size: 2;
+}
+
+.markdown-code-wrapper .hljs-comment,
+.markdown-code-wrapper .hljs-quote {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+
+.markdown-code-wrapper .hljs-keyword,
+.markdown-code-wrapper .hljs-selector-tag,
+.markdown-code-wrapper .hljs-literal,
+.markdown-code-wrapper .hljs-section,
+.markdown-code-wrapper .hljs-link {
+  color: var(--hljs-keyword);
+}
+
+.markdown-code-wrapper .hljs-string,
+.markdown-code-wrapper .hljs-title,
+.markdown-code-wrapper .hljs-name,
+.markdown-code-wrapper .hljs-type,
+.markdown-code-wrapper .hljs-attribute,
+.markdown-code-wrapper .hljs-symbol,
+.markdown-code-wrapper .hljs-bullet,
+.markdown-code-wrapper .hljs-addition,
+.markdown-code-wrapper .hljs-template-tag,
+.markdown-code-wrapper .hljs-template-variable {
+  color: var(--hljs-string);
+}
+
+.markdown-code-wrapper .hljs-number,
+.markdown-code-wrapper .hljs-regexp,
+.markdown-code-wrapper .hljs-selector-attr,
+.markdown-code-wrapper .hljs-selector-pseudo {
+  color: var(--hljs-number);
+}
+
+.markdown-code-wrapper .hljs-title,
+.markdown-code-wrapper .hljs-title.class_,
+.markdown-code-wrapper .hljs-title.function_ {
+  color: var(--hljs-title);
+}
+
+.markdown-code-wrapper .hljs-attr,
+.markdown-code-wrapper .hljs-variable,
+.markdown-code-wrapper .hljs-template-variable,
+.markdown-code-wrapper .hljs-selector-id,
+.markdown-code-wrapper .hljs-selector-class {
+  color: var(--hljs-attr);
+}
+
+.markdown-code-wrapper .hljs-built_in,
+.markdown-code-wrapper .hljs-class .hljs-title {
+  color: var(--hljs-built_in);
+}
+
+.markdown-code-wrapper .hljs-meta,
+.markdown-code-wrapper .hljs-meta .hljs-keyword {
+  color: var(--hljs-meta);
+}
+
+/* 行内 code */
+.markdown-wrapper :not(pre) > code,
+.markdown-wrapper p > code,
+.markdown-wrapper li > code {
+  padding: 0.15em 0.45em;
+  border: 1px solid var(--noesis-color-border-code, var(--noesis-color-border-subtle));
+  border-radius: 6px;
+  background: var(--noesis-color-bg-muted);
+  color: var(--noesis-color-text-code);
+  font-family: var(--noesis-font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.9em;
+  white-space: break-spaces;
+}

@@ -3,6 +3,9 @@ import { KB_FILE_DICT_REF } from '@/config/knowledge'
 
 export const CHAT_ATTACHMENT_REF = '__CHAT_ATTACHMENT__'
 
+/** 与后端 chat_attachment.max_files_per_message 默认值一致 */
+export const CHAT_MAX_FILES_PER_MESSAGE = 10
+
 export { KB_FILE_DICT_REF }
 
 export function chatAttachmentRef(attachmentId: string): string {

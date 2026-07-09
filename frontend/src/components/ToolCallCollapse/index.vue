@@ -3,7 +3,6 @@ import { BuildOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { computed } from 'vue'
 import { collapseCompactStyle } from '@/utils/collapseCompact'
-import { themeColors } from '@/config/theme'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 interface Props {
@@ -169,7 +168,7 @@ const durationDisplay = computed(() => {
       <template #header>
         <div class="tool-header">
           <div class="tool-header__icon">
-            <n-icon :size="14" :color="appearance === 'light' ? themeColors.blockLightIcon : themeColors.blockDarkIcon">
+            <n-icon :size="14">
               <BuildOutline />
             </n-icon>
           </div>
@@ -222,7 +221,7 @@ const durationDisplay = computed(() => {
   border-radius: var(--noesis-radius-sm);
   margin: 3px 0;
   box-shadow: var(--noesis-shadow-block-dark);
-  border-left: 2px solid var(--tool-accent);
+  border-left: 3px solid var(--tool-accent);
 }
 
 .tool-call--light {
@@ -234,7 +233,7 @@ const durationDisplay = computed(() => {
   background: var(--noesis-block-light-bg);
   border: 1px solid var(--noesis-block-light-border);
   border-radius: var(--noesis-radius-md);
-  border-left: 2px solid var(--tool-accent);
+  border-left: 3px solid var(--tool-accent);
   box-shadow: var(--noesis-shadow-sm);
 }
 
@@ -281,7 +280,7 @@ const durationDisplay = computed(() => {
 }
 
 .tool-call--light :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-color-border-divider);
+  border-top: 1px solid var(--noesis-block-light-divider);
 }
 
 .tool-header {
@@ -334,6 +333,7 @@ const durationDisplay = computed(() => {
   height: 26px;
   border-radius: 7px;
   background: var(--noesis-block-dark-bg-icon);
+  color: var(--noesis-block-dark-icon);
   flex-shrink: 0;
 }
 
@@ -347,6 +347,7 @@ const durationDisplay = computed(() => {
 
 .tool-call--light .tool-header__icon {
   background: var(--noesis-color-primary-bg-icon);
+  color: var(--noesis-block-light-icon);
 }
 
 .tool-call--light .tool-header:hover {

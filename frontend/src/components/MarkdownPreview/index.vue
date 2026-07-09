@@ -1,13 +1,12 @@
 <script lang="ts" setup>
+import { computed, onMounted, ref, watch } from 'vue'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
+import { useMermaidRender } from '@/hooks/useMermaidRender'
 import { TASK_TOOL_NAME } from '@/utils/parseTaskTool'
 import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
 import MarkdownInstance from './plugins/markdown'
-
-// code高亮语法样式
-import 'highlight.js/styles/atom-one-dark-reasonable.css'
 
 interface Props {
   isInit?: boolean
@@ -45,6 +44,7 @@ const emit = defineEmits<Emits>()
 
 const isCompleted = ref(false)
 const refWrapperContent = ref<HTMLElement>()
+const markdownContentRef = ref<HTMLElement | null>(null)
 
 const displayText = ref('')
 
@@ -66,6 +66,10 @@ const renderedMarkdown = computed(() => {
 const renderedContent = computed(() => {
   return `${renderedMarkdown.value}`
 })
+
+const mermaidEnabled = computed(() => isCompleted.value && !!displayText.value)
+
+useMermaidRender(markdownContentRef, renderedContent, mermaidEnabled)
 
 const onCompleted = () => {
   isCompleted.value = true
@@ -115,7 +119,12 @@ onMounted(() => {
           class="w-full h-full overflow-y-auto"
           :class="variant === 'segment' ? 'px-15px py-2' : 'p-15px'"
         >
-          <div class="markdown-wrapper" :class="{ 'markdown-wrapper--segment': variant === 'segment' }" v-html="renderedContent"></div>
+          <div
+            ref="markdownContentRef"
+            class="markdown-wrapper"
+            :class="{ 'markdown-wrapper--segment': variant === 'segment' }"
+            v-html="renderedContent"
+          ></div>
 
           <div
             v-if="showActionBar && isCompleted"
@@ -217,13 +226,7 @@ onMounted(() => {
   p {
     line-height: 2;
     margin: 10px 16px;
-    & > code {
-      background-color: transparent;
-      white-space: pre;
-      padding: 2px 4px;
-      border-radius: 4px;
-      font-size: 0.9em;
-    }
+
     img { display: inline-block; }
   }
 
@@ -263,6 +266,11 @@ onMounted(() => {
     background: var(--noesis-chat-tab-active-bg);
     border-color: var(--noesis-color-primary);
     color: var(--noesis-color-primary);
+  }
+
+  .mermaid {
+    margin: 16px 0;
+    overflow-x: auto;
   }
 }
 

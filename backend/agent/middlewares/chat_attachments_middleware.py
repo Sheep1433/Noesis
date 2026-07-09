@@ -146,8 +146,8 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
         file_dict: Dict[str, Any],
         round_ids: Set[str],
     ) -> List[Tuple[bytes, str, str]]:
-        """返回 (bytes, mime, file_name) 列表，本轮优先，总数受 MAX_IMAGES_PER_MESSAGE 限制。"""
-        max_n = ChatAttachmentConfig.max_images_per_message
+        """返回 (bytes, mime, file_name) 列表；本轮优先，历史重注入总数受 max_files_per_message 限制。"""
+        max_n = ChatAttachmentConfig.max_files_per_message
         selected: List[Tuple[bytes, str, str]] = []
 
         async def append_row(row: TChatAttachment) -> bool:

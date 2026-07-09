@@ -25,6 +25,7 @@
     "markmap-lib": "^0.18.8",
     "markmap-toolbar": "^0.18.8",
     "markmap-view": "^0.18.8",
+    "mermaid": "^11.16.0",
     "naive-ui": "^2.38.2",
     "nprogress": "^0.2.0",
     "pinia": "^3.0.2",

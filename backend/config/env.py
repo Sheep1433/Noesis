@@ -199,12 +199,11 @@ class ChatAttachmentSettings:
     enabled: bool
     ttl_days: int
     max_file_mb: int
-    max_count_per_session: int
     auto_convert: bool
     max_image_mb: int
     vision_enabled: bool
     reinject_session_images: bool
-    max_images_per_message: int
+    max_files_per_message: int
     image_inject_max_edge: int
     vlm_fallback_enabled: bool
     tiny_inline_chars: int
@@ -507,17 +506,14 @@ def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
         enabled=_legacy_env_bool("CHAT_ATTACHMENT_ENABLED", ca.enabled),
         ttl_days=_legacy_env_int("CHAT_ATTACHMENT_TTL_DAYS", ca.ttl_days),
         max_file_mb=_legacy_env_int("CHAT_ATTACHMENT_MAX_FILE_MB", ca.max_file_mb),
-        max_count_per_session=_legacy_env_int(
-            "CHAT_ATTACHMENT_MAX_COUNT_PER_SESSION", ca.max_count_per_session
-        ),
         auto_convert=_legacy_env_bool("CHAT_ATTACHMENT_AUTO_CONVERT", ca.auto_convert),
         max_image_mb=_legacy_env_int("CHAT_ATTACHMENT_MAX_IMAGE_MB", ca.max_image_mb),
         vision_enabled=_legacy_env_bool("CHAT_ATTACHMENT_VISION_ENABLED", ca.vision_enabled),
         reinject_session_images=_legacy_env_bool(
             "CHAT_ATTACHMENT_REINJECT_SESSION_IMAGES", ca.reinject_session_images
         ),
-        max_images_per_message=_legacy_env_int(
-            "CHAT_ATTACHMENT_MAX_IMAGES_PER_MESSAGE", ca.max_images_per_message
+        max_files_per_message=_legacy_env_int(
+            "CHAT_ATTACHMENT_MAX_FILES_PER_MESSAGE", ca.max_files_per_message
         ),
         image_inject_max_edge=_legacy_env_int(
             "CHAT_ATTACHMENT_IMAGE_INJECT_MAX_EDGE", ca.image_inject_max_edge

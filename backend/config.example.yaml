@@ -190,12 +190,11 @@ chat_attachment:
   # 磁盘路径固定为 .data/users/{user_id}/sessions/{session_id}/uploads|attachments/（见 user_data_paths）
   ttl_days: 7
   max_file_mb: 20
-  max_count_per_session: 10
   auto_convert: true
   max_image_mb: 5
   vision_enabled: true
   reinject_session_images: true
-  max_images_per_message: 3
+  max_files_per_message: 10
   image_inject_max_edge: 1536
   vlm_fallback_enabled: true
   tiny_inline_chars: 4096

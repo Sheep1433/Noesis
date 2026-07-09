@@ -17,6 +17,8 @@
 
 **document** 支持扩展名：`.doc`、`.docx`、`.pdf`、`.txt`、`.xlsx`、`.csv`、`.ppt`、`.pptx`、`.md`；单文件 ≤ `CHAT_ATTACHMENT_MAX_FILE_MB`（默认 20MB）。
 
+单条消息的 `file_dict` 附件数（文档与图片合计）SHALL ≤ `CHAT_ATTACHMENT_MAX_FILES_PER_MESSAGE`（默认 10）。系统 SHALL NOT 对 session 累计附件数设上限。
+
 **image** 支持：`image/jpeg`、`image/png`、`image/webp`、`image/gif`；单文件 ≤ `CHAT_ATTACHMENT_MAX_IMAGE_MB`（默认 5MB）。
 
 **Session 存在性**：

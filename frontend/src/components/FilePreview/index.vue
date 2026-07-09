@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { NButton, NButtonGroup, NCode, NSpin } from 'naive-ui'
+import { CreateOutline, DownloadOutline } from '@vicons/ionicons-v5'
+import { NButton, NButtonGroup, NCode, NIcon, NInput, NSpin } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import MarkdownInstance from '@/components/MarkdownPreview/plugins/markdown'
-import { getCodeLanguage, isImagePreviewPath, isMarkdownPreviewPath } from '@/utils/filePreview'
-import 'highlight.js/styles/atom-one-dark-reasonable.css'
+import { useMermaidRender } from '@/hooks/useMermaidRender'
+import { downloadFile } from '@/utils/download'
+import { getCodeLanguage, getFileBaseName, isImagePreviewPath, isMarkdownPreviewPath, splitYamlFrontmatter } from '@/utils/filePreview'
 
 type MarkdownViewMode = 'preview' | 'source'
 
@@ -15,6 +17,8 @@ const props = withDefaults(defineProps<{
   density?: 'compact' | 'comfortable'
   showPath?: boolean
   fillHeight?: boolean
+  editable?: boolean
+  saving?: boolean
 }>(), {
   content: '',
   imageSrc: '',
@@ -22,23 +26,93 @@ const props = withDefaults(defineProps<{
   density: 'comfortable',
   showPath: true,
   fillHeight: false,
+  editable: false,
+  saving: false,
 })
 
+const emit = defineEmits<{
+  save: [content: string]
+}>()
+
 const viewMode = ref<MarkdownViewMode>('preview')
+const isEditing = ref(false)
+const draftContent = ref('')
+const markdownPreviewRef = ref<HTMLElement | null>(null)
 
 watch(
   () => props.path,
   () => {
     viewMode.value = 'preview'
+    isEditing.value = false
+    draftContent.value = ''
   },
+)
+
+watch(
+  () => props.content,
+  (value) => {
+    if (!isEditing.value) {
+      draftContent.value = value
+    }
+  },
+  { immediate: true },
 )
 
 const isImage = computed(() => isImagePreviewPath(props.path) && !!props.imageSrc)
 const isMarkdown = computed(() => isMarkdownPreviewPath(props.path))
 const codeLanguage = computed(() => getCodeLanguage(props.path))
-const renderedMarkdown = computed(() => MarkdownInstance.render(props.content))
-const showMarkdownSource = computed(() => isMarkdown.value && viewMode.value === 'source')
-const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value === 'preview')
+const displayContent = computed(() => (isEditing.value ? draftContent.value : props.content))
+const markdownParts = computed(() => splitYamlFrontmatter(displayContent.value))
+const renderedMarkdown = computed(() => MarkdownInstance.render(markdownParts.value.body))
+const showMarkdownSource = computed(() => isMarkdown.value && viewMode.value === 'source' && !isEditing.value)
+const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value === 'preview' && !isEditing.value)
+const canEdit = computed(() => props.editable && !isImage.value && !props.loading)
+const canDownload = computed(() => !props.loading && (!!props.content || !!props.imageSrc))
+const mermaidSource = computed(() => (showMarkdownPreview.value ? renderedMarkdown.value : ''))
+const mermaidEnabled = computed(() => showMarkdownPreview.value && !!mermaidSource.value)
+
+useMermaidRender(markdownPreviewRef, mermaidSource, mermaidEnabled)
+
+function startEdit() {
+  draftContent.value = props.content
+  isEditing.value = true
+  viewMode.value = 'source'
+}
+
+function cancelEdit() {
+  draftContent.value = props.content
+  isEditing.value = false
+  if (isMarkdown.value) {
+    viewMode.value = 'preview'
+  }
+}
+
+function saveEdit() {
+  emit('save', draftContent.value)
+}
+
+watch(
+  () => props.saving,
+  (saving, wasSaving) => {
+    if (wasSaving && !saving && isEditing.value) {
+      isEditing.value = false
+      if (isMarkdown.value) {
+        viewMode.value = 'preview'
+      }
+    }
+  },
+)
+
+async function downloadCurrentFile() {
+  const filename = getFileBaseName(props.path) || 'download'
+  if (isImage.value && props.imageSrc) {
+    const res = await fetch(props.imageSrc)
+    const blob = await res.blob()
+    downloadFile(blob, filename)
+    return
+  }
+  downloadFile(props.content, filename, 'text/plain;charset=utf-8')
+}
 </script>
 
 <template>
@@ -49,26 +123,58 @@ const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value ==
       { 'file-preview--fill': fillHeight },
     ]"
   >
-    <div v-if="(showPath && path) || isMarkdown" class="file-preview__header">
+    <div v-if="(showPath && path) || isMarkdown || canDownload || canEdit" class="file-preview__header">
       <div v-if="showPath && path" class="file-preview__path" :title="path">
         {{ path }}
       </div>
-      <n-button-group v-if="isMarkdown" size="tiny" class="file-preview__mode-toggle">
+      <div class="file-preview__actions">
+        <n-button-group v-if="isMarkdown && !isEditing" size="tiny" class="file-preview__mode-toggle">
+          <n-button
+            :type="viewMode === 'preview' ? 'primary' : 'default'"
+            :ghost="viewMode !== 'preview'"
+            @click="viewMode = 'preview'"
+          >
+            预览
+          </n-button>
+          <n-button
+            :type="viewMode === 'source' ? 'primary' : 'default'"
+            :ghost="viewMode !== 'source'"
+            @click="viewMode = 'source'"
+          >
+            源码
+          </n-button>
+        </n-button-group>
         <n-button
-          :type="viewMode === 'preview' ? 'primary' : 'default'"
-          :ghost="viewMode !== 'preview'"
-          @click="viewMode = 'preview'"
+          v-if="canDownload"
+          quaternary
+          size="tiny"
+          title="下载"
+          @click="downloadCurrentFile"
         >
-          预览
+          <template #icon>
+            <n-icon size="16"><DownloadOutline /></n-icon>
+          </template>
         </n-button>
         <n-button
-          :type="viewMode === 'source' ? 'primary' : 'default'"
-          :ghost="viewMode !== 'source'"
-          @click="viewMode = 'source'"
+          v-if="canEdit && !isEditing"
+          quaternary
+          size="tiny"
+          title="编辑"
+          @click="startEdit"
         >
-          源码
+          <template #icon>
+            <n-icon size="16"><CreateOutline /></n-icon>
+          </template>
         </n-button>
-      </n-button-group>
+        <template v-if="isEditing">
+          <n-button size="tiny" :loading="saving" type="primary" @click="saveEdit">
+            保存
+          </n-button>
+          <n-button size="tiny" :disabled="saving" @click="cancelEdit">
+            取消
+          </n-button>
+        </template>
+      </div>
     </div>
     <n-spin v-if="loading" size="small" class="file-preview__spin" />
     <div v-else-if="isImage" class="file-preview__image-wrap">
@@ -76,9 +182,23 @@ const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value ==
     </div>
     <div
       v-else-if="showMarkdownPreview"
+      ref="markdownPreviewRef"
       class="file-preview__markdown markdown-wrapper markdown-wrapper--file-preview"
-      v-html="renderedMarkdown"
-    ></div>
+    >
+      <pre
+        v-if="markdownParts.frontmatter"
+        class="file-preview__frontmatter"
+      >{{ markdownParts.frontmatter }}</pre>
+      <div v-html="renderedMarkdown"></div>
+    </div>
+    <n-input
+      v-else-if="isEditing"
+      v-model:value="draftContent"
+      type="textarea"
+      :autosize="{ minRows: 12, maxRows: 40 }"
+      class="file-preview__editor"
+      placeholder="编辑文件内容…"
+    />
     <n-code
       v-else-if="showMarkdownSource || !isMarkdown"
       :code="content"
@@ -128,7 +248,7 @@ const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value ==
   min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
-  color: #64748b;
+  color: var(--noesis-color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -143,6 +263,13 @@ const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value ==
   color: var(--n-text-color-3);
 }
 
+.file-preview__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .file-preview__mode-toggle {
   flex-shrink: 0;
 }
@@ -153,26 +280,31 @@ const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value ==
   padding: 12px;
 }
 
-.file-preview__code {
+.file-preview__code,
+.file-preview__editor {
   overflow: auto;
 }
 
 .file-preview--fill .file-preview__code,
 .file-preview--fill .file-preview__markdown,
-.file-preview--fill .file-preview__image-wrap {
+.file-preview--fill .file-preview__image-wrap,
+.file-preview--fill .file-preview__editor {
   flex: 1;
   min-height: 0;
 }
 
-.file-preview--compact .file-preview__code {
+.file-preview--compact .file-preview__code,
+.file-preview--compact .file-preview__editor {
   max-height: min(40vh, 320px);
 }
 
-.file-preview--compact.file-preview--fill .file-preview__code {
+.file-preview--compact.file-preview--fill .file-preview__code,
+.file-preview--compact.file-preview--fill .file-preview__editor {
   max-height: none;
 }
 
-.file-preview--comfortable .file-preview__code {
+.file-preview--comfortable .file-preview__code,
+.file-preview--comfortable .file-preview__editor {
   max-height: calc(100vh - 280px);
 }
 
@@ -212,6 +344,12 @@ const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value ==
   height: auto;
   border-radius: 6px;
   border: 1px solid rgb(0 0 0 / 5%);
+}
+
+.file-preview__editor :deep(textarea) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>
 
@@ -293,5 +431,24 @@ const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value ==
     overflow: auto;
     border-radius: 6px;
   }
+
+  .mermaid {
+    margin: 12px 0;
+    overflow-x: auto;
+  }
+}
+
+.file-preview__frontmatter {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--noesis-color-border);
+  background: var(--noesis-color-bg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--noesis-color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

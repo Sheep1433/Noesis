@@ -27,9 +27,16 @@ def test_super_agent_no_mandatory_research_orchestration():
     assert "deep-research-v2" not in prompt
     assert "<orchestration>" not in prompt
     assert "调研类" not in prompt
-    assert "深度调研" not in prompt
     assert "BrowseComp" not in prompt
     assert "明确一致" in prompt
+    assert "不要**把普通任务产物默认写入 `/research/`" in prompt
+    assert "工作区根" in prompt
+
+
+def test_super_agent_default_workspace_not_research():
+    prompt = build_prompt(PromptProfile.SUPER_AGENT)
+    assert "默认写在**工作区根**" in prompt
+    assert "才使用 `/research/`" in prompt
 
 
 def test_noesis_skills_system_prompt_has_required_slots():

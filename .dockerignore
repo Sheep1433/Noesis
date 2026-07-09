@@ -18,6 +18,12 @@ frontend/dist
 **/.venv
 **/.mypy_cache
 
+# 后端非生产内容（评测 / 单测不进镜像）
+backend/evals/
+backend/tests/
+backend/AGENTS.md
+backend/README.md
+
 # 本地密钥（示例文件在 deploy/ 下单独跟踪）
 **/.env
 **/.env.*

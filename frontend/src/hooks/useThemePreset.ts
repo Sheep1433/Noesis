@@ -1,16 +1,18 @@
-import { computed } from 'vue'
+import type { ThemePresetId } from '@/config/themePresets'
 import { useLocalStorage } from '@vueuse/core'
+import { computed } from 'vue'
 import {
   DEFAULT_THEME_PRESET,
   LEGACY_THEME_PRESET_MAP,
   PRESET_NAIVE_COLORS,
   THEME_PRESET_OPTIONS,
   THEME_PRESET_STORAGE_KEY,
-  type ThemePresetId,
+
 } from '@/config/themePresets'
+import { runThemeTransition } from '@/utils/themeTransition'
 
 const VALID_PRESET_IDS = new Set<ThemePresetId>(
-  THEME_PRESET_OPTIONS.map(item => item.id),
+  THEME_PRESET_OPTIONS.map((item) => item.id),
 )
 
 export function normalizeThemePresetId(id: unknown): ThemePresetId {
@@ -33,19 +35,25 @@ function syncThemeAttribute(id: ThemePresetId) {
   const root = document.documentElement
   if (id === DEFAULT_THEME_PRESET) {
     root.removeAttribute('data-theme')
-  }
-  else {
+  } else {
     root.dataset.theme = id
   }
 }
 
 const presetId = useLocalStorage<ThemePresetId>(THEME_PRESET_STORAGE_KEY, DEFAULT_THEME_PRESET)
 
+function commitThemePreset(id: ThemePresetId) {
+  const normalized = normalizeThemePresetId(id)
+  if (presetId.value !== normalized) {
+    presetId.value = normalized
+  }
+  syncThemeAttribute(normalized)
+}
+
 const currentPresetId = computed({
   get: () => normalizeThemePresetId(presetId.value),
   set: (id: ThemePresetId) => {
-    presetId.value = id
-    syncThemeAttribute(id)
+    commitThemePreset(id)
   },
 })
 
@@ -59,7 +67,11 @@ export function initThemePreset() {
 }
 
 export function applyThemePreset(id: ThemePresetId) {
-  currentPresetId.value = id
+  const normalized = normalizeThemePresetId(id)
+  if (normalized === normalizeThemePresetId(presetId.value)) {
+    return
+  }
+  void runThemeTransition(normalized, () => commitThemePreset(normalized))
 }
 
 export function useThemePreset() {

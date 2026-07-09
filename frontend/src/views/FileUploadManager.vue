@@ -5,6 +5,7 @@ import type { ChatAttachmentItem } from '@/store/business'
 import { deleteSessionAttachment, uploadSessionAttachment } from '@/api/chat'
 import { uploadDocument } from '@/api/knowledgeBase'
 import { KB_FILE_DICT_REF, TEST_CASE_UPLOAD_COLLECTION } from '@/config/knowledge'
+import { CHAT_MAX_FILES_PER_MESSAGE } from '@/config/chat'
 import { getFileTypeIconClass, isImagePreviewPath, isImageUploadFile } from '@/utils/filePreview'
 
 const props = defineProps({
@@ -69,7 +70,22 @@ function enqueueFiles(raw: File[] | FileList) {
     return
   }
 
-  for (const file of files) {
+  if (props.uploadMode === 'chat') {
+    const remaining = CHAT_MAX_FILES_PER_MESSAGE - pendingUploadFileInfoList.value.length
+    if (remaining <= 0) {
+      window.$ModalMessage.warning(`单条消息最多 ${CHAT_MAX_FILES_PER_MESSAGE} 个附件`)
+      return
+    }
+    if (files.length > remaining) {
+      window.$ModalMessage.warning(
+        `单条消息最多 ${CHAT_MAX_FILES_PER_MESSAGE} 个附件，已忽略超出部分`,
+      )
+    }
+  }
+
+  const filesToAdd = props.uploadMode === 'chat' ? files.slice(0, Math.max(0, CHAT_MAX_FILES_PER_MESSAGE - pendingUploadFileInfoList.value.length)) : files
+
+  for (const file of filesToAdd) {
     const doc = isDocumentFile(file)
     const img = isImageFile(file)
     if (!doc && !img) {
@@ -248,7 +264,7 @@ const options = computed(() => {
             accept=".doc,.docx,.ppt,.pptx,.pdf,.txt,.xlsx,.csv,.md"
             default-upload={false}
             show-file-list={false}
-            multiple={false}
+            multiple
             onChange={(res) => {
               if (res.file.file) {
                 enqueueFiles([res.file.file])
@@ -280,7 +296,7 @@ const options = computed(() => {
             accept={imageAccept}
             default-upload={false}
             show-file-list={false}
-            multiple={false}
+            multiple
             onChange={(res) => {
               if (res.file.file) {
                 enqueueFiles([res.file.file])

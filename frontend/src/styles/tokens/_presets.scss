@@ -112,7 +112,8 @@ html:not([data-theme]) .chat-composer {
 
   --noesis-block-light-accent: #3b82f6;
   --noesis-block-light-bg: #f3f4f6;
-  --noesis-block-light-border: transparent;
+  --noesis-block-light-border: #e5e7eb;
+  --noesis-block-light-divider: #e5e7eb;
   --noesis-block-light-text: #4b5563;
   --noesis-block-light-text-name: #111827;
   --noesis-block-light-text-code: #374151;
@@ -346,6 +347,7 @@ html[data-theme="light"] .link-btn:hover {
   --noesis-block-light-accent: #f59e0b;
   --noesis-block-light-bg: rgb(26 26 36 / 60%);
   --noesis-block-light-border: rgb(255 255 255 / 8%);
+  --noesis-block-light-divider: rgb(255 255 255 / 8%);
   --noesis-block-light-text: #e4e4e7;
   --noesis-block-light-text-name: #fafafa;
   --noesis-block-light-text-code: #d4d4d8;

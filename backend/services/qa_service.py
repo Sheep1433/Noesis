@@ -18,11 +18,12 @@ from agent.super_agent import SuperAgent
 from agent.case_generate.case_coordinator import CaseCoordinator
 
 from config.database import AsyncSessionLocal
-from config.env import LangfuseConfig, StreamConfig
+from config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
 from constants.code_enum import IntentEnum
 from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QaQueryRequest
 from services.chat_service import ChatService
+from services.chat_attachment_service import ChatAttachmentService
 from domain.observability.langfuse import langfuse_workflow_context, merge_langfuse_runnable_config
 from domain.chat.streaming.langgraph_sse import LangGraphSseBridge, bridge_raw_to_sse_lines
 from common.logging import logger
@@ -537,6 +538,9 @@ class QaService:
         """
         logging.info(f"query param: {req_obj.json()}")
         clean_query = re.sub(r"\s+", "", req_obj.query or "")
+
+        if ChatAttachmentConfig.enabled and req_obj.file_dict:
+            ChatAttachmentService.validate_message_file_count(req_obj.file_dict)
 
         session_id = req_obj.chat_id or str(uuid.uuid4())
         task_cancelled = False

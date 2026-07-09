@@ -85,7 +85,7 @@ backend/
 
 - **产品模型**：每个 `user_id` **一个** AIO 容器（同用户多 session 复用）；磁盘工作区仍 **per-session**（`users/{uid}/sessions/{sid}/workspace`）。
 - **接入**：`DockerExecSandboxBackend(BaseSandbox)`（默认，`sandbox.backend=docker`）经 runner docker exec；`AioSandboxBackend` 保留（`sandbox.backend=aio` + `agent-sandbox`）。
-- **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（`/research/` = session workspace，`/memory/` = 用户记忆，`/skills/extensions|` + `/skills/custom/` 只读）。
+- **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（workspace 根默认可写；`/research/` 为可选子目录；`/memory/` = 用户记忆；`/skills/extensions|` + `/skills/custom/` 只读）。
 - **生命周期**：`services/sandbox_service.py` 经内网 `sandbox-runner` 起停容器；`user_sandbox_run` 维护 per-user in-flight；**删 session 不 destroy 用户沙箱**。
 - **并发**：对 `(user_id, session_id)` mutex 串行 AIO HTTP（单 shell 会话）。
 - **配置**：`config.yaml` → `sandbox.*`；密钥 `SANDBOX_RUNNER_TOKEN`；Docker bind 根 `NOESIS_HOST_DATA_DIR`。
@@ -227,5 +227,5 @@ Domain → Common
 
 - 每次改动后执行 `uv run app.py`（在 `backend/` 目录），确认进程能正常拉起
 - 新增测试放 `backend/tests/`；接口 Bug 先在 `test_tdd_design.md` 写测试点
-- **Agent 路径**：工具层用 `/research/`、`/skills/extensions/`、`/skills/custom/`；路由集中在 `agent_filesystem.py`，勿再搞 symlink 合并、勿向 Agent 暴露 `/workspace/...`、勿改 `extensions/skills` 做 Noesis 适配（Noesis 差异写 prompt）
+- **Agent 路径**：工具层 workspace 根为默认落盘；`/research/` 仅调研场景；另有 `/skills/extensions/`、`/skills/custom/`；路由集中在 `agent_filesystem.py`，勿再搞 symlink 合并、勿向 Agent 暴露 `/workspace/...`、勿改 `extensions/skills` 做 Noesis 适配（Noesis 差异写 prompt）
 - **改沙箱挂载/路径后**：跑 `tests/test_agent_filesystem.py` 与 `test_aio_sandbox_backend.py`；AIO 挂载变更需重建用户容器（`noesis-aio-*`）

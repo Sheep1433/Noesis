@@ -9,6 +9,7 @@ const props = defineProps<{
   isExpanded: (key: string) => boolean
   toggleExpand: (key: string) => void
   onRowClick: (node: SessionFsTreeNode) => void
+  onContextMenu: (node: SessionFsTreeNode, event: MouseEvent) => void
 }>()
 
 const isFolder = computed(() => !props.node.isLeaf)
@@ -30,6 +31,10 @@ function onChevronClick(e: Event) {
   e.stopPropagation()
   props.toggleExpand(props.node.key)
 }
+
+function handleContextMenu(event: MouseEvent) {
+  props.onContextMenu(props.node, event)
+}
 </script>
 
 <template>
@@ -42,6 +47,7 @@ function onChevronClick(e: Event) {
       }"
       :style="{ paddingLeft: `${8 + depth * 14}px` }"
       @click="onRowClick(node)"
+      @contextmenu="handleContextMenu"
     >
       <span
         class="tree-chevron"
@@ -67,6 +73,7 @@ function onChevronClick(e: Event) {
         :is-expanded="isExpanded"
         :toggle-expand="toggleExpand"
         :on-row-click="onRowClick"
+        :on-context-menu="onContextMenu"
       />
     </template>
   </div>

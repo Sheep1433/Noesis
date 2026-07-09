@@ -358,6 +358,66 @@ export async function getWorkspaceFile(
   return res.json() as Promise<WorkspaceFileContent>
 }
 
+/** 保存工作区文件 PUT /api/chat/sessions/{sessionId}/workspace/file */
+export async function saveWorkspaceFile(
+  sessionId: string,
+  path: string,
+  content: string,
+): Promise<WorkspaceFileContent> {
+  const req = makeRequest(
+    'PUT',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/workspace/file`,
+    { path, content },
+  )
+  const res = await authFetch(req)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { msg?: string }).msg || `保存失败: ${res.status}`)
+  }
+  return res.json() as Promise<WorkspaceFileContent>
+}
+
+function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) {
+    return null
+  }
+  const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim())
+    } catch {
+      return utf8Match[1].trim()
+    }
+  }
+  const plainMatch = header.match(/filename="?([^";]+)"?/i)
+  return plainMatch?.[1]?.trim() ?? null
+}
+
+/** 下载目录（ZIP）或单文件 GET /api/chat/sessions/{sessionId}/workspace/archive */
+export async function downloadWorkspaceArchive(
+  sessionId: string,
+  path: string,
+): Promise<void> {
+  const url = new URL(
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/workspace/archive`,
+  )
+  url.searchParams.set('path', path)
+  const req = makeRequest('GET', url.toString())
+  const res = await authFetch(req)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { msg?: string }).msg || `下载失败: ${res.status}`)
+  }
+  const blob = await res.blob()
+  const contentType = res.headers.get('Content-Type') || 'application/octet-stream'
+  const isZip = contentType.includes('zip')
+  const fallback = isZip
+    ? `${path.split('/').filter(Boolean).pop() || 'archive'}.zip`
+    : (path.split('/').filter(Boolean).pop() || 'download')
+  const filename = parseContentDispositionFilename(res.headers.get('Content-Disposition')) || fallback
+  downloadFile(blob, filename, contentType)
+}
+
 // ============================================================================
 // Message API
 // ============================================================================
@@ -444,22 +504,6 @@ export interface TestCaseExportCaseItem {
 export interface TestCaseExportParams {
   test_cases?: TestCaseExportCaseItem[]
   query?: string
-}
-
-function parseContentDispositionFilename(disposition: string | null): string | null {
-  if (!disposition) {
-    return null
-  }
-  const star = disposition.match(/filename\*=UTF-8''([^;]+)/i)
-  if (star?.[1]) {
-    try {
-      return decodeURIComponent(star[1].trim())
-    } catch {
-      return star[1].trim()
-    }
-  }
-  const plain = disposition.match(/filename="?([^";]+)"?/i)
-  return plain?.[1]?.trim() || null
 }
 
 /**

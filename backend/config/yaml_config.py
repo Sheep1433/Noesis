@@ -223,12 +223,11 @@ class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
     ttl_days: int = Field(default=7, ge=1)
     max_file_mb: int = Field(default=20, ge=1)
-    max_count_per_session: int = Field(default=10, ge=1)
     auto_convert: bool = True
     max_image_mb: int = Field(default=5, ge=1)
     vision_enabled: bool = True
     reinject_session_images: bool = True
-    max_images_per_message: int = Field(default=3, ge=1)
+    max_files_per_message: int = Field(default=10, ge=1)
     image_inject_max_edge: int = Field(default=1536, ge=256, le=4096)
     vlm_fallback_enabled: bool = True
     tiny_inline_chars: int = Field(default=4096, ge=0)

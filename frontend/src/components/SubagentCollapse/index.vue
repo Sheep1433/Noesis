@@ -12,7 +12,6 @@ import {
   parseTaskToolOutput,
 } from '@/utils/parseTaskTool'
 import { formatDurationMs } from '@/views/chat/messageParts'
-import { themeColors } from '@/config/theme'
 
 interface Props {
   input?: Record<string, unknown>
@@ -114,7 +113,7 @@ const durationDisplay = computed(() => {
       <template #header>
         <div class="subagent-header">
           <div class="subagent-header__icon">
-            <n-icon :size="17" :color="appearance === 'light' ? themeColors.blockLightIcon : themeColors.blockDarkIcon">
+            <n-icon :size="17">
               <GitNetworkOutline />
             </n-icon>
           </div>
@@ -248,7 +247,7 @@ const durationDisplay = computed(() => {
 }
 
 .subagent-call--light :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-color-border-divider);
+  border-top: 1px solid var(--noesis-block-light-divider);
 }
 
 .subagent-header {
@@ -300,6 +299,7 @@ const durationDisplay = computed(() => {
   height: 32px;
   border-radius: var(--noesis-radius-md);
   background: var(--noesis-block-dark-bg-icon);
+  color: var(--noesis-block-dark-icon);
   flex-shrink: 0;
 }
 
@@ -313,6 +313,7 @@ const durationDisplay = computed(() => {
 
 .subagent-call--light .subagent-header__icon {
   background: var(--noesis-color-primary-bg-icon);
+  color: var(--noesis-block-light-icon);
 }
 
 .subagent-call--light .subagent-header:hover {

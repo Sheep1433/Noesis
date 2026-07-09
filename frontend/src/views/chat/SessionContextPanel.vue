@@ -7,8 +7,8 @@ import {
   NSpin,
   useMessage,
 } from 'naive-ui'
-import { onBeforeUnmount, ref, watch } from 'vue'
-import { getSessionContext, getWorkspaceFile } from '@/api/chat'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { getSessionContext, getWorkspaceFile, saveWorkspaceFile } from '@/api/chat'
 import FilePreview from '@/components/FilePreview/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
 import { usePaneResize } from '@/hooks/usePaneResize'
@@ -29,6 +29,14 @@ const previewPath = ref('')
 const previewContent = ref('')
 const previewImageSrc = ref('')
 const previewLoading = ref(false)
+const previewSaving = ref(false)
+
+const previewEditable = computed(() => {
+  if (!previewPath.value) {
+    return false
+  }
+  return getFilePreviewKind(previewPath.value) === 'text'
+})
 
 const { size: treeWidth, startResize: startTreeResize } = usePaneResize({
   storageKey: 'noesis.chat.sessionTreeWidth',
@@ -50,13 +58,34 @@ function clearPreview() {
   revokePreviewImage()
 }
 
+function sessionArtifactRelPath(key: string, sessionId: string): string | null {
+  const prefix = `sessions/${sessionId}/`
+  if (!key.startsWith(prefix)) {
+    if (key.startsWith('uploads/') || key.startsWith('attachments/')) {
+      return key
+    }
+    return null
+  }
+  const rel = key.slice(prefix.length)
+  if (rel.startsWith('uploads/') || rel.startsWith('attachments/')) {
+    return rel
+  }
+  return null
+}
+
+function isSessionArtifactKey(key: string, sessionId: string): boolean {
+  return sessionArtifactRelPath(key, sessionId) != null
+}
+
 function openArtifact(path: string) {
-  const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${path}`
+  const rel = sessionArtifactRelPath(path, props.sessionId) ?? path
+  const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${rel}`
   window.open(url, '_blank', 'noopener')
 }
 
 async function loadArtifactImage(path: string) {
-  const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${path}`
+  const rel = sessionArtifactRelPath(path, props.sessionId) ?? path
+  const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${rel}`
   const res = await authFetch(url)
   if (!res.ok) {
     throw new Error(`Failed to load image: ${res.status}`)
@@ -95,7 +124,7 @@ async function onSelectFile(key: string) {
   previewContent.value = ''
 
   const kind = getFilePreviewKind(key)
-  const isUploadOrAttach = key.startsWith('uploads/') || key.startsWith('attachments/')
+  const isUploadOrAttach = isSessionArtifactKey(key, props.sessionId)
 
   if (kind === 'unsupported') {
     clearPreview()
@@ -131,6 +160,23 @@ async function onSelectFile(key: string) {
     selectedKey.value = ''
   } finally {
     previewLoading.value = false
+  }
+}
+
+async function onSaveFile(content: string) {
+  if (!props.sessionId || !previewPath.value) {
+    return
+  }
+  previewSaving.value = true
+  try {
+    const res = await saveWorkspaceFile(props.sessionId, previewPath.value, content)
+    previewContent.value = res.content
+    message.success('已保存')
+  } catch (e: unknown) {
+    const err = e as Error
+    message.error(err.message || '保存失败')
+  } finally {
+    previewSaving.value = false
   }
 }
 
@@ -171,6 +217,7 @@ defineExpose({ reload })
             v-if="context?.tree?.length"
             :nodes="context.tree"
             :selected-key="selectedKey"
+            :session-id="sessionId"
             @select="onSelectFile"
           />
           <div v-else class="panel-empty-hint">
@@ -186,9 +233,12 @@ defineExpose({ reload })
             :content="previewContent"
             :image-src="previewImageSrc"
             :loading="previewLoading"
+            :editable="previewEditable"
+            :saving="previewSaving"
             density="compact"
             fill-height
             class="session-file-preview"
+            @save="onSaveFile"
           />
           <div v-else class="panel-empty-hint panel-empty-hint--preview">
             选择文件以查看内容

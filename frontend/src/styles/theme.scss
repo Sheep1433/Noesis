@@ -13,3 +13,51 @@
   border-top-color: var(--noesis-color-primary);
   border-left-color: var(--noesis-color-primary);
 }
+
+/* 主题切换：View Transitions API 交叉淡入淡出 */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 420ms;
+    animation-timing-function: ease-in-out;
+    mix-blend-mode: normal;
+  }
+
+  ::view-transition-old(root) {
+    z-index: 1;
+    animation-name: noesis-theme-fade-out;
+  }
+
+  ::view-transition-new(root) {
+    z-index: 2;
+    animation-name: noesis-theme-fade-in;
+  }
+}
+
+@keyframes noesis-theme-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes noesis-theme-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+html.noesis-theme-transitioning {
+  pointer-events: none;
+}
+
+/* 不支持 View Transitions 时的遮罩过渡 */
+.noesis-theme-transition-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 420ms ease-in-out;
+}
+
+.noesis-theme-transition-overlay--active {
+  opacity: 1;
+}

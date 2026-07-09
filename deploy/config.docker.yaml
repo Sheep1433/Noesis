@@ -128,12 +128,11 @@ chat_attachment:
   enabled: true
   ttl_days: 7
   max_file_mb: 20
-  max_count_per_session: 10
   auto_convert: true
   max_image_mb: 5
   vision_enabled: true
   reinject_session_images: true
-  max_images_per_message: 3
+  max_files_per_message: 10
   tiny_inline_chars: 4096
   read_page_lines: 2000
   preview_chars: 500
