@@ -14,7 +14,7 @@
 2. 经 `LangGraphSseBridge` 发出 `tool-output-available`；
 3. 工具调用链装配了 `ToolErrorHandlingMiddleware`（经 `create_noesis_agent` 的 Agent 路径）。
 
-**In scope（示例）**：`COMMON_QA`、`FAULT_OPERATION_QA`、`DEEP_RESEARCH_QA` 的 ReAct Agent 工具调用。
+**In scope（示例）**：`COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 ReAct Agent 工具调用。
 
 **Out of scope（显式排除）**：
 
@@ -29,7 +29,7 @@
 
 #### Scenario: 深度研究 execute 在范围内
 
-- **WHEN** `DEEP_RESEARCH_QA` 经 `create_noesis_agent` 调用 `execute` 且 bridge 处理 `on_tool_end`
+- **WHEN** `SUPER_AGENT_QA` 经 `create_noesis_agent` 调用 `execute` 且 bridge 处理 `on_tool_end`
 - **THEN** 本规格 **SHALL** 适用
 
 ### Requirement: 系统 SHALL 区分调用层 status 与执行层 outcome

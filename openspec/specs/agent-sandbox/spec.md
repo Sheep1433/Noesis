@@ -30,7 +30,9 @@
 
 ### Requirement: Agent virtual 根 SHALL 对应当前 session workspace
 
-`create_agent_backend(user_id, session_id)` SHALL 使 deepagents virtual **`/`** 映射到容器内 **`/workspace/sessions/{session_id}/workspace`**；Agent **SHALL** 继续使用 `/research/...`、`/memory/...` 等路径而 **SHALL NOT** 在 Prompt 中嵌入 `sessions/{session_id}/`。
+`create_agent_backend(user_id, session_id)` SHALL 使 deepagents virtual **`/research/`**（或等效 session 工作区路由）映射到容器内 **`/workspace/sessions/{session_id}/workspace`**；用户记忆 virtual **`/memory/`** **SHALL** 映射到 **`/workspace/`** 根下的 `AGENTS.md` 与 `USER.md`，**SHALL NOT** 映射到 session workspace 子目录。
+
+Agent **SHALL** 继续使用 `/research/...`、`/memory/...`、`/skills/...` 虚拟路径，**SHALL NOT** 在 Prompt 中嵌入 `sessions/{session_id}/` 物理路径。
 
 任务可写产物 **SHALL** 默认落在 workspace 根或任务自定义子目录；`/research/` **SHALL** 仅在深度调研等 research 场景（如 `deep-research-v2` Skill）使用；workspace 根虚拟路径（`/notes.md` 等）**SHALL** 为通用智能体默认落盘位置。
 

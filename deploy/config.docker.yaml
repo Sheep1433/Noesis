@@ -137,7 +137,7 @@ chat_attachment:
   read_page_lines: 2000
   preview_chars: 500
 
-# Web 检索工具（COMMON_QA / DEEP_RESEARCH；TAVILY_API_KEY 见 deploy/.env.docker）
+# Web 检索工具（COMMON_QA / SUPER_AGENT_QA；TAVILY_API_KEY 见 deploy/.env.docker）
 web_tools:
   max_search_results: 8
   fetch_max_chars: 4096

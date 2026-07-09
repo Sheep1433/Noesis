@@ -4,7 +4,7 @@
 
 **读 spec 时以 `openspec/specs/` 为主**；`changes/archive/` 为历史决策链。
 
-## 能力目录（25 个有效 spec + 2 个合并占位）
+## 能力目录（26 个有效 spec + 2 个合并占位）
 
 | 域 | 能力 id | 一句话 |
 |----|---------|--------|
@@ -16,7 +16,8 @@
 | **Agent 场景** | `agent-common-qa` | `COMMON_QA` / GeneralQAAgent |
 | | `agent-fault-operation` | `FAULT_OPERATION_QA` / MCP |
 | | `agent-test-case` | `TEST_CASE_QA` / CaseCoordinator |
-| | `agent-deep-research` | `DEEP_RESEARCH_QA` / Skills + 子 Agent |
+| | `agent-super-agent` | `SUPER_AGENT_QA` / SuperAgent + Skills + 子 Agent |
+| | `agent-user-memory` | 用户级 `AGENTS.md` / `USER.md` + `/memory/` |
 | | `agent-web-tools` | web_search / web_fetch |
 | | `agent-tool-failure-handling` | 工具错误 SSE 与 outcome |
 | **运行时** | `agent-runtime-paths` | **权威** `.data/users/` 布局、删会话清理、迁移 |
@@ -40,11 +41,12 @@
 | Change | 状态 | 说明 |
 |--------|------|------|
 | `kb-multimodal-retrieval` | **调研 / 设计** | 图片向量、跨模态召回（文搜图）；见 [research-report](./changes/kb-multimodal-retrieval/research-report.md) |
-| `add-super-agent-user-memory` | **实现进行中** | `SuperAgent` + `SUPER_AGENT_QA` + 用户级 `/memory/` |
 | `add-kb-citation-sources` | **规格完整，未开始** | KB 引用角标 + `citations-available` SSE |
 | `extract-agent-runtime-harness` | **提案阶段** | `noesis_runtime` 与 Harness 拆分 |
 | `refine-tool-outcome-handling` | **规格已入主 spec，实现未完成** | `tool_outcome.py` 与前端 ToolCallCollapse 待实现 |
 | `fault-operation-agent-experience-learning` | **未开始** | 故障运维经验沉淀 |
+
+已归档（2026-07-10）：`add-super-agent-user-memory`（`SuperAgent` + `SUPER_AGENT_QA` + 用户记忆 → 主 spec `agent-super-agent`、`agent-user-memory`）。
 
 已归档（2026-07-09）：`enterprise-kb-retrieval-foundation`（知识库 RAG 底座 → 主 spec `knowledge-base` 等 5 项）。
 
@@ -57,6 +59,7 @@
 | 聊天发消息、SSE | `platform-chat` Purpose + qa_type 表 | `agent-tool-failure-handling`（工具错误帧） |
 | 上传文件 | `chat-composer-send-upload` | `chat-session-attachments` |
 | 工作区 / 删会话磁盘 | `agent-runtime-paths` | `agent-sandbox` |
+| 超级智能体 / 用户记忆 | `agent-super-agent` | `agent-user-memory` |
 | 跑测试用例评测 | `test-case-agent-eval` | `backend/evals/case/README.md` |
 | 跑 Agent benchmark | `agent-offline-eval` | `backend/evals/README.md` |
 | 知识库入库/检索/调参 | [PRD 详细设计](../docs/prd/knowledge-base/知识库RAG底座详细设计.md) | `knowledge-base` → `kb-document-parse` → `kb-chunking` → `kb-retrieval` |
@@ -70,7 +73,7 @@
 | `COMMON_QA` | `agent-common-qa` |
 | `FAULT_OPERATION_QA` | `agent-fault-operation` |
 | `TEST_CASE_QA` | `agent-test-case` |
-| `DEEP_RESEARCH_QA` | `agent-deep-research` |
+| `SUPER_AGENT_QA` | `agent-super-agent`（用户记忆见 `agent-user-memory`） |
 
 ## 与代码模块对齐
 

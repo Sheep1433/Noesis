@@ -264,7 +264,7 @@ NOESIS_COMPRESSION_EVAL_INTEGRATION=1 uv run pytest tests/test_eval_compression_
 
 ## 4. 深度研究负载测试（`evals.loadtest` + Locust）
 
-对运行中的后端发 HTTP 请求，压测 `DEEP_RESEARCH_QA` SSE 链路（与离线 eval 不同，走真实 API）。
+对运行中的后端发 HTTP 请求，压测 `SUPER_AGENT_QA` SSE 链路（与离线 eval 不同，走真实 API）。
 
 ```
 evals/loadtest/

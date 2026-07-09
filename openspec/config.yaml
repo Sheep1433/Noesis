@@ -6,7 +6,7 @@ context: |
 
   后端分层：api/* → services/* → agent/utils；API 禁止裸 JSON，统一 utils.response_util.ResponseUtil；数据库访问仅在 Service；配置在 config/env.py + pydantic-settings，禁止硬编码密钥。
 
-  前端：Pinia（userStore token 于 sessionStorage）、路由 requiresAuth、聊天 SSE 与 MarkdownPreview；问答类型 qa_type 对齐后端 IntentEnum：COMMON_QA、FAULT_OPERATION_QA、TEST_CASE_QA、DEEP_RESEARCH_QA。
+  前端：Pinia（userStore token 于 sessionStorage）、路由 requiresAuth、聊天 SSE 与 MarkdownPreview；问答类型 qa_type 对齐后端 IntentEnum：COMMON_QA、FAULT_OPERATION_QA、TEST_CASE_QA、SUPER_AGENT_QA。
 
   验证：后端改动后 `uv run app.py`；前端 `pnpm lint` / `pnpm build` 按影响范围执行。HTTP 业务 code 与状态码需一致（404/409 等见仓库 AGENTS.md）。
 

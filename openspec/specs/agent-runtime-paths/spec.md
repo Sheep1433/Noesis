@@ -41,6 +41,8 @@
 
 | 用途 | 相对路径（于 `users/{user_id}/`） |
 |------|----------------------------------|
+| 用户记忆（Agent 惯例） | `AGENTS.md` |
+| 用户画像 | `USER.md` |
 | 用户 Skills（跨会话） | `skills/` |
 | 会话根 | `sessions/{session_id}/` |
 | Agent 工作区 | `sessions/{session_id}/workspace/` |
@@ -59,6 +61,33 @@
 - **WHEN** 调用 `get_user_skills_dir("42")`
 - **THEN** 返回路径 SHALL 等于 `{REPO_ROOT}/.data/users/42/skills`
 
+#### Scenario: 解析用户 AGENTS.md
+
+- **WHEN** 调用 `get_user_agents_md_path("42")`
+- **THEN** 返回路径 SHALL 等于 `{REPO_ROOT}/.data/users/42/AGENTS.md`
+
+### Requirement: 用户记忆文件路径 API
+
+路径模块 **SHALL** 除现有 `skills/` 与会话子树外，支持用户级记忆文件：
+
+| API | 返回路径 |
+|-----|----------|
+| `get_user_agents_md_path(user_id)` | `{DATA_DIR}/users/{user_id}/AGENTS.md` |
+| `get_user_profile_md_path(user_id)` | `{DATA_DIR}/users/{user_id}/USER.md` |
+| `ensure_user_memory_files(user_id)` | 创建用户根（若不存在）并 seed 上述文件（若不存在） |
+
+用户记忆文件 **SHALL** 位于 `users/{user_id}/` 根下，**SHALL NOT** 位于 `sessions/{session_id}/workspace/` 内。
+
+#### Scenario: ensure 创建 seed 文件
+
+- **WHEN** 对新用户调用 `ensure_user_memory_files("99")`
+- **THEN** SHALL 创建 `.data/users/99/AGENTS.md` 且文件非空（含 seed 注释或占位节）
+
+#### Scenario: 记忆路径不在 workspace 下
+
+- **WHEN** 调用 `get_user_agents_md_path("42")` 与 `get_workspace_dir("42", "s1")`
+- **THEN** `AGENTS.md` 路径 **SHALL NOT** 以 `sessions/s1/workspace` 为父目录
+
 ### Requirement: 系统 SHALL 提供集中式路径与会话数据删除 API
 
 路径权威模块为 `config/user_data_paths.py`，SHALL 提供：
@@ -68,7 +97,7 @@
 - `delete_session_data(user_id, session_id)`：删除 `{REPO_ROOT}/.data/users/{user_id}/sessions/{session_id}/` 整棵子树（含 workspace、uploads、attachments；幂等）
 - `delete_session_workspace(user_id, session_id)` **MAY** 保留为 `delete_session_data` 的别名或薄封装，供历史调用方兼容
 
-`delete_session_data` **SHALL NOT** 删除 `skills/` 或其它会话目录。
+`delete_session_data` **SHALL NOT** 删除 `skills/`、`AGENTS.md`、`USER.md` 或其它会话目录。
 
 `user_id` 与 `session_id` 拼入路径前 SHALL 校验仅含 `[A-Za-z0-9_-]`，非法值 SHALL 抛出 `ValueError`。
 
@@ -128,16 +157,22 @@
 
 ### Requirement: 工作区、Skills 与聊天附件边界 SHALL 职责分离
 
-系统 SHALL 维持下表所列三者的职责分离：
+系统 SHALL 维持下表所列四者的职责分离：
 
-| 维度 | 会话工作区 | `skills-filesystem` | `chat-session-attachments` |
-|------|-----------|---------------------|----------------------------|
-| 消费方 | `FilesystemMiddleware` Agent | Skills API + Agent `/skills/extensions/`、`/skills/custom/` | `GeneralQAAgent` 附件 |
-| 路径 | `.data/users/{uid}/sessions/{sid}/workspace/`（通用任务默认写根或自建子目录；`research/` 仅深度调研等场景） | 平台：`extensions/skills`；用户：`.data/users/{uid}/skills/` | `.data/users/{uid}/sessions/{sid}/uploads|attachments/` |
-| 写入 | Agent 笔记/卸载 | 用户 ZIP → `skills/`；平台只读 | 用户上传 |
-| 隔离 | user + session | 平台全局 + user | user + session |
+| 维度 | 会话工作区 | 用户记忆 | `skills-filesystem` | `chat-session-attachments` |
+|------|-----------|----------|---------------------|----------------------------|
+| 消费方 | `FilesystemMiddleware` Agent | `MemoryMiddleware` + `/memory/`；面板 PUT API | Skills API + Agent `/skills/` | `GeneralQAAgent` 附件 |
+| 路径 | `sessions/{sid}/workspace/` | `users/{uid}/AGENTS.md`、`USER.md` | 平台 + `users/{uid}/skills/` | `sessions/{sid}/uploads\|attachments/` |
+| 写入 | Agent 任务产物 | Agent / 用户面板写 `AGENTS.md`、`USER.md` | 用户 ZIP → `skills/` | 用户上传 |
+| 隔离 | user + session | user | 平台 + user | user + session |
+| 删 session | 删除 workspace 子树 | **保留** | **保留** | 删除附件子树 |
 
-Agent **SHALL NOT** 将附件目录作为默认可写根。Agent 经 backend 访问平台 Skills **SHALL** 使用 `/skills/extensions/`；用户 Skills **SHALL** 使用 `/skills/custom/`。
+Agent **SHALL NOT** 将附件目录作为默认可写根；**SHALL NOT** 将用户记忆存入 workspace 以规避删会话清理。
+
+#### Scenario: 删 session 不删 AGENTS.md
+
+- **WHEN** `delete_session_data(uid, sid)` 成功
+- **THEN** `users/{uid}/AGENTS.md` SHALL 仍存在
 
 #### Scenario: Skills 仍为全局只读
 
@@ -184,11 +219,9 @@ runner **SHALL** 将宿主机 `{NOESIS_HOST_DATA_DIR}/users/{user_id}/` rw mount
 | `/skills/extensions/...` | `/skills/...` | `extensions/skills/...` | 只读 |
 | `/skills/custom/...` | `/workspace/skills/...` | `.data/users/{uid}/skills/...` | 只读 |
 | `/memory/AGENTS.md` | `/workspace/AGENTS.md` | `.data/users/{uid}/AGENTS.md` | 可写 |
-| `/memory/USER.md` | `/workspace/USER.md` | `.data/users/{uid}/USER.md` | Agent 只读 |
+| `/memory/USER.md` | `/workspace/USER.md` | `.data/users/{uid}/USER.md` | 可写 |
 
 常量 **SHALL** 集中在 `mount_paths.py` + `PathRewriteContext` 构造；**SHALL NOT** 使用单层 `/skills/{name}` 作为权威路径。
-
-**协调**：`/memory/` 物理布局 **SHALL** 与 `add-super-agent-user-memory` 一致；本 change **SHALL** 先于该 change 归档。
 
 #### Scenario: write 与 execute 同一 research 文件
 

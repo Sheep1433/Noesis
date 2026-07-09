@@ -140,7 +140,7 @@ other:
 checkpoint:
   db_path: ../.data/checkpoints/langgraph_checkpoints.sqlite
 
-# Web 检索工具（COMMON_QA / DEEP_RESEARCH；TAVILY_API_KEY 见 .env.prod）
+# Web 检索工具（COMMON_QA / SUPER_AGENT_QA；TAVILY_API_KEY 见 .env.prod）
 web_tools:
   max_search_results: 8
   fetch_max_chars: 4096

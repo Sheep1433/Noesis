@@ -130,6 +130,31 @@ async def test_get_context_not_owned() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_user_memory_files_via_panel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
+    uid, sid = "u1", "s1"
+    paths.ensure_user_memory_files(uid)
+    db = AsyncMock()
+    with patch(
+        "services.session_context_service.ChatService.get_session_by_id",
+        new_callable=AsyncMock,
+        return_value=object(),
+    ):
+        rel, content = await SessionContextService.write_workspace_file(
+            sid, uid, 'USER.md', '# 用户画像\n\n研发', db,
+        )
+        assert rel == 'USER.md'
+        assert content == '# 用户画像\n\n研发'
+        assert paths.get_user_profile_md_path(uid).read_text(encoding="utf-8") == '# 用户画像\n\n研发'
+
+        rel_agents, content_agents = await SessionContextService.write_workspace_file(
+            sid, uid, 'AGENTS.md', '## 偏好\n中文', db,
+        )
+        assert rel_agents == 'AGENTS.md'
+        assert paths.get_user_agents_md_path(uid).read_text(encoding="utf-8") == '## 偏好\n中文'
+
+
+@pytest.mark.asyncio
 async def test_write_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
     uid, sid = "u1", "s1"

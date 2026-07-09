@@ -71,6 +71,11 @@
 - **WHEN** 用户在面板编辑 `sessions/{id}/workspace/report.md` 并点击保存
 - **THEN** SHALL 调用 PUT API 写回磁盘，且预览区展示最新内容
 
+#### Scenario: 保存用户记忆文件
+
+- **WHEN** 用户在面板编辑 `AGENTS.md` 或 `USER.md` 并点击保存
+- **THEN** SHALL 调用 PUT API 写回 `users/{user_id}/` 下对应文件，且预览区展示最新内容
+
 #### Scenario: 复杂文件无编辑入口
 
 - **WHEN** 用户选中 `.docx` 或 `.pdf`

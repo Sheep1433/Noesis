@@ -22,7 +22,6 @@ from deepagents.backends.protocol import (
 from agent.backends.prefix_backend import _agent_path
 
 _READ_ONLY_SKILLS_ERROR = "Skills directory is read-only"
-_READ_ONLY_USER_PROFILE_ERROR = "USER.md is read-only; update via user settings"
 _MEMORY_FILES = frozenset({"AGENTS.md", "USER.md"})
 
 
@@ -165,7 +164,7 @@ class GuardedFilesystemBackend(BackendProtocol):
 
 
 def UserMemoryBackend(*, agents_path: Path, user_path: Path) -> GuardedFilesystemBackend:
-    """`/memory/`：AGENTS.md 可写，USER.md 只读。"""
+    """`/memory/`：AGENTS.md 与 USER.md 均可写。"""
     memory_root = agents_path.parent
     if user_path.parent != memory_root:
         msg = "AGENTS.md and USER.md must share the same parent directory"
@@ -173,6 +172,4 @@ def UserMemoryBackend(*, agents_path: Path, user_path: Path) -> GuardedFilesyste
     return GuardedFilesystemBackend(
         FilesystemBackend(root_dir=memory_root, virtual_mode=True),
         allowed=_MEMORY_FILES,
-        read_only=frozenset({"USER.md"}),
-        read_only_error=_READ_ONLY_USER_PROFILE_ERROR,
     )

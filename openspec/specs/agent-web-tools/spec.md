@@ -2,13 +2,13 @@
 
 ## Purpose
 
-本能力规定 Noesis **联网工具**（`web_search`、`web_fetch`）的装配、Provider 回退链路与配置：`build_web_search_tools()` 供 `COMMON_QA` 与 `DEEP_RESEARCH_QA` 挂载；Tavily 为主、DDG/local 为回退；配置经 `env.py` 管理，不扩展 REST/SSE 契约。
+本能力规定 Noesis **联网工具**（`web_search`、`web_fetch`）的装配、Provider 回退链路与配置：`build_web_search_tools()` 供 `COMMON_QA` 与 `SUPER_AGENT_QA` 挂载；Tavily 为主、DDG/local 为回退；配置经 `env.py` 管理，不扩展 REST/SSE 契约。
 ## Requirements
 ### Requirement: build_web_search_tools SHALL 提供固定双工具并由指定 Agent 挂载
 
 系统 SHALL 在 `backend/agent/tools/web_search_tool.py`（或等价路径）提供 `build_web_search_tools()`，固定返回 `web_search` 与 `web_fetch` 两个 `StructuredTool`。
 
-- **SHALL** 由 `GeneralQAAgent`（`COMMON_QA`）与 `DeepResearchAgent`（`DEEP_RESEARCH_QA`）挂载；**SHALL NOT** 由故障运维、测试用例生成等其它 `qa_type` 默认挂载。
+- **SHALL** 由 `GeneralQAAgent`（`COMMON_QA`）与 `SuperAgent`（`SUPER_AGENT_QA`）挂载；**SHALL NOT** 由故障运维、测试用例生成等其它 `qa_type` 默认挂载。
 - `web_search` 与 `web_fetch` 的执行 Provider SHALL 由运行时解析器决定：**Tavily 优先**；无 `TAVILY_API_KEY` 或 Tavily 调用失败时，`web_search` 回退 `ddg`，`web_fetch` 回退 `local`。
 
 #### Scenario: 工厂返回双工具
@@ -89,6 +89,6 @@
 
 #### Scenario: 深度研究会话中展示 web_search
 
-- **WHEN** `DEEP_RESEARCH_QA` 流式响应出现 `toolName=web_search`
+- **WHEN** `SUPER_AGENT_QA` 流式响应出现 `toolName=web_search`
 - **THEN** 前端 SHALL 按 `platform-chat` 既有工具块规则平铺或嵌套展示，**SHALL NOT** 要求本能力定义新 UI 组件
 

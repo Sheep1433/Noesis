@@ -11,7 +11,7 @@ from agent.backends.mount_paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_US
 from config import user_data_paths as user_paths
 
 
-def test_user_memory_backend_agents_writable_user_readonly(tmp_path: Path) -> None:
+def test_user_memory_backend_agents_and_user_writable(tmp_path: Path) -> None:
     agents = tmp_path / "AGENTS.md"
     user = tmp_path / "USER.md"
     agents.write_text("agents-v1", encoding="utf-8")
@@ -22,8 +22,9 @@ def test_user_memory_backend_agents_writable_user_readonly(tmp_path: Path) -> No
     assert read_agents.error is None
     assert "agents-v1" in read_agents.file_data["content"]  # type: ignore[index]
 
-    write_user = backend.write("/USER.md", "hack")
-    assert write_user.error is not None
+    write_user = backend.write("/USER.md", "profile-v2")
+    assert write_user.error is None
+    assert user.read_text(encoding="utf-8") == "profile-v2"
 
     write_agents = backend.write("/AGENTS.md", "agents-v2")
     assert write_agents.error is None
