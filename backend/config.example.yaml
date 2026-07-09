@@ -43,6 +43,9 @@ model:
     - id: default
       label: Qwen Plus（默认）
       name: qwen-plus
+    - id: qwen-vl-max
+      label: Qwen VL Max（识图）
+      name: qwen-vl-max
     - id: qwen-max
       label: Qwen Max（更强）
       name: qwen-max
@@ -92,7 +95,7 @@ rerank:
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
 vlm:
-  name: Qwen3-VL-32B-Instruct
+  name: qwen-vl-max
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
 context:
@@ -163,8 +166,8 @@ web_tools:
   max_search_results: 8
   fetch_max_chars: 4096
   fetch_timeout_seconds: 30
-  # DDG 回退引擎（逗号分隔）；勿用 auto，否则会轮询不可达源导致 N×timeout 延迟
-  ddg_backends: mojeek,yandex
+  # DDG 回退引擎（逗号分隔）。本机实测可用：mojeek（中文/技术 query）；brave 仅英文较稳。勿用 yandex（常 0 条）或 auto（易超时）
+  ddg_backends: mojeek
 
 # Agent 沙箱（深度研究 / 故障运维）
 # backend: docker（推荐 slim 镜像 + docker exec）| aio（全量 AIO 镜像，需 uv sync --extra aio）| local_shell（宿主机）
@@ -193,6 +196,8 @@ chat_attachment:
   vision_enabled: true
   reinject_session_images: true
   max_images_per_message: 3
+  image_inject_max_edge: 1536
+  vlm_fallback_enabled: true
   tiny_inline_chars: 4096
   read_page_lines: 2000
   preview_chars: 500

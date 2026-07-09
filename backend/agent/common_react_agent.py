@@ -19,7 +19,6 @@ from agent.tools.chat_attachment_tools import build_attachment_tools
 from config.env import ChatAttachmentConfig
 from services.chat_attachment_service import ChatAttachmentService
 from common.logging import logger
-from domain.chat.attachments.vision import is_vision_available
 
 
 def _normalize_kb_collections(raw: Optional[List[str]]) -> List[str]:
@@ -98,7 +97,7 @@ class GeneralQAAgent(BaseAgent):
                         session_id=session_id,
                         user_id=user_id,
                         db=db,
-                        vision_available=is_vision_available(),
+                        model_id=model_id,
                     )
                 ]
 

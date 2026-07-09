@@ -28,7 +28,6 @@ from agent.tools.chat_attachment_tools import build_attachment_tools
 from common.logging import logger
 from config.env import ChatAttachmentConfig
 from config.user_data_paths import ensure_user_memory_files
-from domain.chat.attachments.vision import is_vision_available
 from llm import get_llm
 from services.chat_attachment_service import ChatAttachmentService
 
@@ -159,7 +158,7 @@ class SuperAgent(BaseAgent):
                             session_id=session_id,
                             user_id=user_id,
                             db=db,
-                            vision_available=is_vision_available(),
+                            model_id=model_id,
                         ),
                     )
 

@@ -36,10 +36,13 @@ def resolve_web_search(query: str, limit: int | None = None) -> dict[str, Any]:
             )
 
     try:
-        return ddg.search_with_ddg(q, effective_limit, timeout=timeout)
+        result = ddg.search_with_ddg(q, effective_limit, timeout=timeout)
+        if result.get("total_results", 0) == 0:
+            logger.info("web_search DDG 无命中 query={!r}", q)
+        return result
     except Exception as e:
         logger.warning("web_search 全部 provider 失败（DuckDuckGo）query={!r}: {}", q, e)
-        return {"error": "搜索失败", "query": q}
+        return {"error": "搜索失败", "query": q, "detail": str(e)}
 
 
 def resolve_web_fetch(url: str) -> str:

@@ -4,9 +4,7 @@
 
 **读 spec 时以 `openspec/specs/` 为主**；`changes/archive/` 为历史决策链。
 
-**例外 — 知识库 RAG 底座**：`openspec/specs/knowledge-base/` **已删除**；实现与验收 **一律以** [`changes/enterprise-kb-retrieval-foundation/`](changes/enterprise-kb-retrieval-foundation/README.md) **及** [`docs/prd/knowledge-base/知识库RAG底座详细设计.md`](../docs/prd/knowledge-base/知识库RAG底座详细设计.md) **为准**。
-
-## 能力目录（20 个有效 spec + 2 个合并占位）
+## 能力目录（25 个有效 spec + 2 个合并占位）
 
 | 域 | 能力 id | 一句话 |
 |----|---------|--------|
@@ -26,7 +24,11 @@
 | | `skills-filesystem` | Skills 只读挂载与用户 ZIP |
 | | ~~`user-data-layout`~~ | → 已合并至 `agent-runtime-paths` |
 | | ~~`agent-workspace`~~ | → 已合并至 `agent-runtime-paths` |
-| **知识库** | — | **→ change `enterprise-kb-retrieval-foundation` + [PRD](../docs/prd/knowledge-base/知识库RAG底座详细设计.md)**（归档前无主 spec 目录） |
+| **知识库** | `knowledge-base` | HTTP API、MySQL 集合配置 |
+| | `kb-document-parse` | DeepDoc 解析、ParserFactory |
+| | `kb-chunking` | DeepDocChunkAdapter、分块模板 |
+| | `kb-retrieval` | hybrid + rerank 检索门面 |
+| | `kb-evaluation` | 单集合评测 CLI（`evals/kb`） |
 | **离线评测** | `test-case-agent-eval` | `evals.case` 两阶段 promptfoo |
 | | `agent-offline-eval` | `evals.agent.*` benchmark |
 | | `message-compression-eval` | `evals.compression` |
@@ -37,9 +39,14 @@
 
 | Change | 状态 | 说明 |
 |--------|------|------|
-| **`enterprise-kb-retrieval-foundation`** | **规格完整，实现进行中** | **知识库 RAG 底座唯一跟踪入口**；多 preset 分块、MySQL 集合配置、hybrid+rerank、evals/kb |
-| `refine-tool-outcome-handling` | **规格已入主 spec，实现未完成** | `platform-chat` / `agent-tool-failure-handling` 已写 outcome 契约；`tool_outcome.py` 与前端 ToolCallCollapse 待实现 |
-| `fault-operation-agent-experience-learning` | **未开始** | 故障运维经验沉淀，见 change proposal |
+| `kb-multimodal-retrieval` | **调研 / 设计** | 图片向量、跨模态召回（文搜图）；见 [research-report](./changes/kb-multimodal-retrieval/research-report.md) |
+| `add-super-agent-user-memory` | **实现进行中** | `SuperAgent` + `SUPER_AGENT_QA` + 用户级 `/memory/` |
+| `add-kb-citation-sources` | **规格完整，未开始** | KB 引用角标 + `citations-available` SSE |
+| `extract-agent-runtime-harness` | **提案阶段** | `noesis_runtime` 与 Harness 拆分 |
+| `refine-tool-outcome-handling` | **规格已入主 spec，实现未完成** | `tool_outcome.py` 与前端 ToolCallCollapse 待实现 |
+| `fault-operation-agent-experience-learning` | **未开始** | 故障运维经验沉淀 |
+
+已归档（2026-07-09）：`enterprise-kb-retrieval-foundation`（知识库 RAG 底座 → 主 spec `knowledge-base` 等 5 项）。
 
 已归档（2026-06-26）：`general-qa-file-upload`、`test-case-two-phase-eval`、`refactor-agent-eval-benchmarks`。
 
@@ -52,8 +59,9 @@
 | 工作区 / 删会话磁盘 | `agent-runtime-paths` | `agent-sandbox` |
 | 跑测试用例评测 | `test-case-agent-eval` | `backend/evals/case/README.md` |
 | 跑 Agent benchmark | `agent-offline-eval` | `backend/evals/README.md` |
-| 知识库入库/检索/调参 | [PRD 详细设计](../docs/prd/knowledge-base/知识库RAG底座详细设计.md) | [`enterprise-kb-retrieval-foundation`](changes/enterprise-kb-retrieval-foundation/README.md) spec |
-| 单集合 KB 检索评测 | change 内 `kb-evaluation` | `evals/kb/`（与 `evals.case --phase rag` 互补） |
+| 知识库入库/检索/调参 | [PRD 详细设计](../docs/prd/knowledge-base/知识库RAG底座详细设计.md) | `knowledge-base` → `kb-document-parse` → `kb-chunking` → `kb-retrieval` |
+| 知识库多模态 / 文搜图 | [`kb-multimodal-retrieval` research-report](changes/kb-multimodal-retrieval/research-report.md) | 同 change 内 [design.md](changes/kb-multimodal-retrieval/design.md) |
+| 单集合 KB 检索评测 | `kb-evaluation` | `evals/kb/`（与 `evals.case --phase rag` 互补） |
 
 ## qa_type 路由
 

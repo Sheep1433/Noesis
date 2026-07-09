@@ -49,11 +49,14 @@ def _img_row(**overrides) -> TChatAttachment:
 @pytest.mark.asyncio
 async def test_middleware_injects_uploaded_files_for_document():
     db = AsyncMock()
-    mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=False)
     row = _doc_row()
     ref = f"{CHAT_ATTACHMENT_REF}:{row.id}"
 
     with (
+        patch(
+            "agent.middlewares.chat_attachments_middleware.is_vlm_configured",
+            return_value=False,
+        ),
         patch(
             "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
             new_callable=AsyncMock,
@@ -69,6 +72,7 @@ async def test_middleware_injects_uploaded_files_for_document():
             return_value=("# Title\n\nhello world", None),
         ),
     ):
+        mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=False)
         msg = HumanMessage(
             content="总结文档",
             additional_kwargs={
@@ -139,10 +143,13 @@ async def test_middleware_multimodal_when_vision_available():
 @pytest.mark.asyncio
 async def test_middleware_vision_downgrade_lists_image_metadata():
     db = AsyncMock()
-    mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=False)
     row = _img_row()
 
     with (
+        patch(
+            "agent.middlewares.chat_attachments_middleware.is_vlm_configured",
+            return_value=False,
+        ),
         patch(
             "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
             new_callable=AsyncMock,
@@ -154,6 +161,7 @@ async def test_middleware_vision_downgrade_lists_image_metadata():
             return_value=[row],
         ),
     ):
+        mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=False)
         msg = HumanMessage(
             content="这是什么图",
             additional_kwargs={
@@ -168,7 +176,74 @@ async def test_middleware_vision_downgrade_lists_image_metadata():
 
     text = result["messages"][-1].content
     assert isinstance(text, str)
-    assert "不支持 Vision" in text
+    assert "无法查看图片" in text
+
+
+@pytest.mark.asyncio
+async def test_middleware_vlm_fallback_injects_caption():
+    db = AsyncMock()
+    row = _img_row()
+    ref = f"{CHAT_ATTACHMENT_REF}:{row.id}"
+    mock_cfg = MagicMock()
+    mock_cfg.vlm_fallback_enabled = True
+    mock_cfg.max_images_per_message = 3
+    mock_cfg.reinject_session_images = True
+    mock_cfg.image_inject_max_edge = 1536
+    mock_cfg.tiny_inline_chars = 4096
+
+    with (
+        patch(
+            "agent.middlewares.chat_attachments_middleware.ChatAttachmentConfig",
+            mock_cfg,
+        ),
+        patch(
+            "agent.middlewares.chat_attachments_middleware.is_vlm_configured",
+            return_value=True,
+        ),
+        patch(
+            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_images",
+            new_callable=AsyncMock,
+            return_value=[row],
+        ),
+        patch(
+            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.get_by_id",
+            new_callable=AsyncMock,
+            return_value=row,
+        ),
+        patch(
+            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.read_image_bytes",
+            return_value=(b"\x89PNG", "image/png"),
+        ),
+        patch(
+            "agent.middlewares.chat_attachments_middleware.describe_image_bytes_for_chat",
+            return_value="图中是一只猫",
+        ),
+    ):
+        mw = ChatAttachmentsMiddleware(
+            session_id="sess-1", user_id="user-1", db=db, vision_available=False
+        )
+        msg = HumanMessage(
+            content="描述图片",
+            additional_kwargs={
+                "noesis_attachments": {
+                    "session_id": "sess-1",
+                    "user_id": "user-1",
+                    "file_dict": {"photo.png": ref},
+                }
+            },
+        )
+        result = await mw.abefore_agent({"messages": [msg]}, MagicMock())
+
+    text = result["messages"][-1].content
+    assert isinstance(text, str)
+    assert "[图片描述 · photo.png]" in text
+    assert "图中是一只猫" in text
+    assert "VLM 生成图片描述" in text
 
 
 @pytest.mark.asyncio

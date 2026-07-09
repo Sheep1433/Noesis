@@ -1,7 +1,7 @@
 """会话附件中间件：仅 before_agent（文档清单 + multimodal 图片）。"""
-
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -18,7 +18,10 @@ from services.chat_attachment_service import ChatAttachmentService
 from domain.chat.attachments.resolver import attachment_id_from_ref, is_chat_attachment_ref
 from common.logging import logger
 from domain.chat.attachments.markdown import extract_outline
+from domain.chat.attachments.image_prepare import prepare_image_bytes_for_injection
 from domain.chat.attachments.vision import is_vision_available
+from domain.chat.attachments.vlm_caption import describe_image_bytes_for_chat
+from kb.embedding import is_vlm_configured
 
 
 def _human_text(content: Any) -> str:
@@ -47,14 +50,23 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
         session_id: str,
         user_id: str,
         db: AsyncSession,
+        model_id: Optional[str] = None,
         vision_available: Optional[bool] = None,
     ):
         super().__init__()
         self.session_id = session_id
         self.user_id = user_id
         self.db = db
+        self.model_id = model_id
         self.vision_available = (
-            vision_available if vision_available is not None else is_vision_available()
+            vision_available
+            if vision_available is not None
+            else is_vision_available(model_id)
+        )
+        self.vlm_fallback_enabled = (
+            ChatAttachmentConfig.vlm_fallback_enabled
+            and is_vlm_configured()
+            and not self.vision_available
         )
 
     def _parse_meta(self, messages: list) -> Optional[Dict[str, Any]]:
@@ -81,6 +93,8 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
         self,
         file_dict: Dict[str, Any],
         round_ids: Set[str],
+        *,
+        image_delivery: str,
     ) -> Tuple[str, bool]:
         docs = await ChatAttachmentService.list_session_documents(
             self.session_id, self.user_id, self.db
@@ -116,10 +130,12 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
                 f'- image: "{row.file_name}" mime="{row.mime_type or ""}" '
                 f'round="{round_tag}"'
             )
-            if not self.vision_available:
+            if image_delivery == "none":
                 lines.append(
-                    "  note: 当前模型不支持 Vision，无法直接查看图片内容"
+                    "  note: 当前模型不支持 Vision，且未配置 VLM 描述兜底，无法查看图片内容"
                 )
+            elif image_delivery == "vlm_caption":
+                lines.append("  note: 已通过 VLM 生成图片描述并注入正文（非原生看图）")
             has_content = True
 
         lines.append("</uploaded_files>")
@@ -142,7 +158,12 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
             except FileNotFoundError:
                 logger.warning(f"图片文件缺失 attachment_id={row.id}")
                 return True
-            selected.append((data, mime, row.file_name))
+            prepared, out_mime = prepare_image_bytes_for_injection(
+                data,
+                mime,
+                max_edge=ChatAttachmentConfig.image_inject_max_edge,
+            )
+            selected.append((prepared, out_mime, row.file_name))
             return True
 
         if round_ids:
@@ -168,6 +189,27 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
 
         return selected
 
+    async def _build_vlm_caption_block(
+        self,
+        images: List[Tuple[bytes, str, str]],
+    ) -> str:
+        lines: List[str] = []
+        for data, mime, name in images:
+            try:
+                desc = await asyncio.to_thread(
+                    describe_image_bytes_for_chat,
+                    data,
+                    mime,
+                    file_name=name,
+                )
+                lines.append(f"[图片描述 · {name}]\n{desc}")
+            except Exception as exc:
+                logger.warning(
+                    f"[ChatAttachmentsMiddleware] VLM 描述失败 file={name!r}: {exc}"
+                )
+                lines.append(f"[图片描述 · {name}]\n（描述生成失败，请仅依据文件名推断）")
+        return "\n\n".join(lines).strip()
+
     async def _patch_last_human(self, messages: list) -> dict | None:
         meta = self._parse_meta(messages)
         if meta is None:
@@ -178,7 +220,21 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
             file_dict = {}
 
         round_ids = await self._current_round_ids(file_dict)
-        uploaded_block, has_files = await self._build_uploaded_files(file_dict, round_ids)
+
+        image_delivery = "none"
+        images: List[Tuple[bytes, str, str]] = []
+        if self.vision_available:
+            images = await self._collect_images(file_dict, round_ids)
+            if images:
+                image_delivery = "multimodal"
+        elif self.vlm_fallback_enabled:
+            images = await self._collect_images(file_dict, round_ids)
+            if images:
+                image_delivery = "vlm_caption"
+
+        uploaded_block, has_files = await self._build_uploaded_files(
+            file_dict, round_ids, image_delivery=image_delivery
+        )
 
         last_human_idx = None
         last_human = None
@@ -195,9 +251,11 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
         prefix = f"{uploaded_block}\n\n" if has_files and uploaded_block else ""
         combined_text = f"{prefix}{user_text}".strip() if prefix else user_text
 
-        images: List[Tuple[bytes, str, str]] = []
-        if self.vision_available:
-            images = await self._collect_images(file_dict, round_ids)
+        vlm_caption_block = ""
+        if image_delivery == "vlm_caption" and images:
+            vlm_caption_block = await self._build_vlm_caption_block(images)
+            if vlm_caption_block:
+                combined_text = f"{combined_text}\n\n{vlm_caption_block}".strip()
 
         if not has_files and not images:
             return None
@@ -224,6 +282,13 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
             content=new_content,
             additional_kwargs=new_kwargs,
             id=getattr(last_human, "id", None),
+        )
+
+        logger.info(
+            f"[ChatAttachmentsMiddleware] session={self.session_id} "
+            f"model_id={self.model_id or ''} vision_available={self.vision_available} "
+            f"vlm_fallback={self.vlm_fallback_enabled} images_injected={len(images)} "
+            f"delivery={image_delivery}"
         )
 
         updates: list = []

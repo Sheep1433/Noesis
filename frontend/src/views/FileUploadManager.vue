@@ -20,6 +20,10 @@ const props = defineProps({
   },
 })
 
+const emit = defineEmits<{
+  chatImageUploaded: []
+}>()
+
 // 全局存储
 const businessStore = useBusinessStore()
 
@@ -101,13 +105,17 @@ const uploadChatAttachment = async (fileInfo: ExtendedUploadFileInfo) => {
     attachment_id: data.attachment_id,
     kind: data.kind as 'document' | 'image',
     virtual_path: data.virtual_path,
-    preview_base64: null,
-    artifact_url: data.artifact_url,
+    preview_base64: data.preview_base64 ?? null,
+    artifact_url: data.artifact_url ?? null,
     source_file_key: data.file_name,
     parse_file_key: data.attachment_id,
+    file_size: '',
   })
   if (data.parse_error) {
     window.$ModalMessage.warning(data.parse_error)
+  }
+  if (data.kind === 'image') {
+    emit('chatImageUploaded')
   }
 }
 

@@ -34,6 +34,23 @@ def test_ddg_search_uses_configured_backends(mock_ddgs_cls):
     assert result["total_results"] == 1
 
 
+@patch("ddgs.DDGS")
+def test_ddg_search_treats_no_results_as_empty(mock_ddgs_cls):
+    from ddgs.exceptions import DDGSException
+
+    mock_ddgs_cls.return_value.text.side_effect = DDGSException("No results found.")
+
+    from agent.tools.web_providers.ddg import search_with_ddg
+
+    with patch("agent.tools.web_providers.ddg.WebToolsConfig") as mock_cfg:
+        mock_cfg.ddg_backends = "mojeek,yandex"
+        result = search_with_ddg("今天天气", 5, timeout=15)
+
+    assert result["total_results"] == 0
+    assert result["results"] == []
+    assert result["provider"] == "ddg"
+
+
 @patch("agent.tools.web_providers.resolver.WebToolsConfig")
 @patch("agent.tools.web_providers.tavily.WebToolsConfig")
 @patch("tavily.TavilyClient")
@@ -55,6 +72,27 @@ def test_web_search_uses_tavily_when_key_present(
     assert data["total_results"] == 1
     assert data["results"][0]["url"] == "https://a.com"
     mock_client.search.assert_called_once()
+
+
+@patch("agent.tools.web_providers.resolver.WebToolsConfig")
+@patch("agent.tools.web_providers.tavily.WebToolsConfig")
+@patch("agent.tools.web_providers.ddg.search_with_ddg")
+def test_web_search_returns_empty_ddg_results_without_error(
+    mock_ddg, mock_tavily_cfg, mock_resolver_cfg
+):
+    _configure_web_tools(mock_tavily_cfg, mock_resolver_cfg)
+    mock_ddg.return_value = {
+        "query": "今天天气",
+        "provider": "ddg",
+        "ddg_backends": "mojeek,yandex",
+        "total_results": 0,
+        "results": [],
+    }
+
+    raw = web_search("今天天气")
+    data = json.loads(raw)
+    assert data["total_results"] == 0
+    assert "error" not in data
 
 
 @patch("agent.tools.web_providers.resolver.WebToolsConfig")

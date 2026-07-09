@@ -68,6 +68,7 @@ declare module 'vue' {
     NTooltip: typeof import('naive-ui')['NTooltip']
     NUpload: typeof import('naive-ui')['NUpload']
     ReasoningBlock: typeof import('./src/components/ReasoningBlock/index.vue')['default']
+    ResizeDivider: typeof import('./src/components/ResizeDivider.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SubagentCollapse: typeof import('./src/components/SubagentCollapse/index.vue')['default']

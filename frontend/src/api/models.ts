@@ -11,11 +11,14 @@ export interface ChatModelOption {
   model_name: string
   model_type: string
   is_default: boolean
+  supports_vision?: boolean
 }
 
 export interface ChatModelCatalog {
   models: ChatModelOption[]
   default_id: string
+  first_vision_model_id?: string | null
+  vlm_fallback_available?: boolean
 }
 
 export async function getChatModels(): Promise<ChatModelCatalog> {

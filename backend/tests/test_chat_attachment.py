@@ -50,6 +50,22 @@ def test_detect_kind_document():
     assert _detect_kind("photo.png", "image/png") == "image"
 
 
+def test_resolve_storage_filename_renames_generic_image(tmp_path):
+    from services.chat_attachment_service import _resolve_storage_filename
+
+    name = _resolve_storage_filename("image.png", kind="image", upload_dir=tmp_path)
+    assert name.startswith("img-")
+    assert name.endswith(".png")
+    assert name != "image.png"
+
+
+def test_resolve_storage_filename_keeps_meaningful_name(tmp_path):
+    from services.chat_attachment_service import _resolve_storage_filename
+
+    name = _resolve_storage_filename("架构图-v2.png", kind="image", upload_dir=tmp_path)
+    assert name == "架构图-v2.png"
+
+
 @pytest.mark.asyncio
 async def test_upload_requires_existing_session():
     db = AsyncMock()

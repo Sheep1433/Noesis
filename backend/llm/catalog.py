@@ -126,6 +126,8 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
 
 
 def list_public_models() -> List[dict[str, Any]]:
+    from domain.chat.attachments.vision import model_name_supports_vision
+
     default_id = get_default_model_id()
     return [
         {
@@ -134,6 +136,17 @@ def list_public_models() -> List[dict[str, Any]]:
             "model_name": entry.model_name,
             "model_type": entry.model_type,
             "is_default": entry.id == default_id,
+            "supports_vision": model_name_supports_vision(entry.model_name),
         }
         for entry in get_model_catalog()
     ]
+
+
+def get_catalog_vision_meta() -> dict[str, Any]:
+    from domain.chat.attachments.vision import get_first_vision_catalog_id
+    from kb.embedding import is_vlm_configured
+
+    return {
+        "first_vision_model_id": get_first_vision_catalog_id(),
+        "vlm_fallback_available": is_vlm_configured(),
+    }

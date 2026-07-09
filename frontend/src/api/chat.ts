@@ -128,6 +128,7 @@ export interface ChatAttachmentResponse {
   preview?: string | null
   virtual_path: string
   artifact_url?: string | null
+  preview_base64?: string | null
   parse_error?: string | null
 }
 

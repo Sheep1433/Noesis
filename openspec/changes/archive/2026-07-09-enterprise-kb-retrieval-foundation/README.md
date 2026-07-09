@@ -27,6 +27,12 @@
 2. `kb-document-parse` → `kb-chunking` → `kb-retrieval`
 3. `knowledge-base` → Agent delta
 
+## 相关变更（扩展）
+
+| Change | 说明 |
+|--------|------|
+| [`kb-multimodal-retrieval`](../kb-multimodal-retrieval/README.md) | 图片向量与跨模态召回调研（**未实现**）；在文本 RAG 底座之上扩展 `alt_embedding` |
+
 ## 参数字段（入库 processing_params）
 
 | 字段 | 默认 | 说明 |

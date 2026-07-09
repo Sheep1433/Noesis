@@ -133,3 +133,8 @@ export function isImageAttachment(
 export function isImageUploadFile(file: File): boolean {
   return file.type.startsWith('image/') || isImagePreviewPath(file.name)
 }
+
+/** 附件缩略图 data URL（preview_base64 为 JPEG） */
+export function attachmentPreviewDataUrl(previewBase64: string): string {
+  return `data:image/jpeg;base64,${previewBase64}`
+}

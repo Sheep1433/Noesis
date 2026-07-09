@@ -10,6 +10,8 @@ import {
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { getSessionContext, getWorkspaceFile } from '@/api/chat'
 import FilePreview from '@/components/FilePreview/index.vue'
+import ResizeDivider from '@/components/ResizeDivider.vue'
+import { usePaneResize } from '@/hooks/usePaneResize'
 import { authFetch } from '@/utils/authHttp'
 import { getFilePreviewKind } from '@/utils/filePreview'
 import WorkspaceFileTree from '@/views/chat/WorkspaceFileTree.vue'
@@ -27,6 +29,13 @@ const previewPath = ref('')
 const previewContent = ref('')
 const previewImageSrc = ref('')
 const previewLoading = ref(false)
+
+const { size: treeWidth, startResize: startTreeResize } = usePaneResize({
+  storageKey: 'noesis.chat.sessionTreeWidth',
+  defaultSize: 132,
+  min: 100,
+  max: 360,
+})
 
 function revokePreviewImage() {
   if (previewImageSrc.value) {
@@ -154,7 +163,10 @@ defineExpose({ reload })
 
     <n-spin :show="loading" class="panel-body">
       <div class="panel-split">
-        <aside class="panel-tree">
+        <aside
+          class="panel-tree"
+          :style="{ width: `${treeWidth}px` }"
+        >
           <WorkspaceFileTree
             v-if="context?.tree?.length"
             :nodes="context.tree"
@@ -164,6 +176,7 @@ defineExpose({ reload })
           <div v-else class="panel-empty-hint">
             暂无文件
           </div>
+          <ResizeDivider @resize-start="startTreeResize" />
         </aside>
 
         <section class="panel-preview">
@@ -230,11 +243,11 @@ defineExpose({ reload })
 }
 
 .panel-tree {
-  flex: 0 0 132px;
-  min-width: 120px;
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
   overflow: auto;
   padding: 4px 0 8px;
-  border-right: 1px solid var(--noesis-color-border-aside);
 }
 
 .panel-preview {

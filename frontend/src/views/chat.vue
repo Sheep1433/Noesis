@@ -4,18 +4,22 @@ import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { ensureSession, getSession, stopChat, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
+import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
+import ResizeDivider from '@/components/ResizeDivider.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
+import { usePaneResize } from '@/hooks/usePaneResize'
 import { isUnauthorizedError } from '@/utils/authHttp'
-import { qaTypeLabel } from '@/utils/qaType'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
+import { qaTypeLabel } from '@/utils/qaType'
+import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import {
   appendReasoningDelta,
   appendStreamFailureNotice,
@@ -37,7 +41,6 @@ import {
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
-import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
@@ -395,6 +398,20 @@ const uuids = ref<Record<string, string>>({})
 const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
 const selectedKbCollections = ref<string[]>([])
 const selectedModelId = ref('')
+
+async function onChatImageUploaded() {
+  if (!usesSessionAttachmentUpload(qa_type.value)) {
+    return
+  }
+  const sessionId = uuids.value[qa_type.value] ?? ''
+  if (!sessionId) {
+    return
+  }
+  await ensureVisionModelForImageUpload({
+    sessionId,
+    selectedModelId,
+  })
+}
 
 function normalizeKbCollections(raw: unknown): string[] {
   if (!Array.isArray(raw)) {
@@ -1180,6 +1197,21 @@ const collapsed = useLocalStorage(
   ref(false),
 )
 
+const { size: historySiderWidth, startResize: startHistorySiderResize } = usePaneResize({
+  storageKey: 'noesis.chat.historySiderWidth',
+  defaultSize: 260,
+  min: 200,
+  max: 420,
+})
+
+const { size: sessionPanelWidth, startResize: startSessionPanelResize } = usePaneResize({
+  storageKey: 'noesis.chat.sessionPanelWidth',
+  defaultSize: 420,
+  min: 280,
+  max: 720,
+  invertDelta: true,
+})
+
 // 背景颜色 默认页面和内容页面动态调整
 const backgroundColorVariable = ref(cssVar(themeCssVar.bgElevated))
 
@@ -1318,7 +1350,7 @@ function onComposerPaste(e: ClipboardEvent) {
         class="chat-history-sider"
         collapse-mode="width"
         :collapsed-width="0"
-        :width="260"
+        :width="historySiderWidth"
         :show-collapsed-content="false"
         show-trigger="arrow-circle"
         bordered
@@ -1358,7 +1390,7 @@ function onComposerPaste(e: ClipboardEvent) {
               aria-label="搜索对话"
               @click="onFocusSearchChat"
             >
-              <span class="search-chat-trigger__icon i-hugeicons:search-01" aria-hidden="true" />
+              <span class="search-chat-trigger__icon i-hugeicons:search-01" aria-hidden="true"></span>
             </button>
             <n-input
               v-else
@@ -1373,7 +1405,7 @@ function onComposerPaste(e: ClipboardEvent) {
               @clear="handleClear()"
             >
               <template #prefix>
-                <span class="search-chat-input__icon i-hugeicons:search-01" aria-hidden="true" />
+                <span class="search-chat-input__icon i-hugeicons:search-01" aria-hidden="true"></span>
               </template>
             </n-input>
           </div>
@@ -1466,590 +1498,602 @@ function onComposerPaste(e: ClipboardEvent) {
             />
           </div>
         </div>
+        <ResizeDivider
+          v-if="!collapsed"
+          @resize-start="startHistorySiderResize"
+        />
       </n-layout-sider>
       <n-layout-content class="content" :style="{ backgroundColor: backgroundColorVariable }">
         <div class="chat-main-layout h-full flex min-w-0">
           <div class="chat-main-inner flex-1 min-w-0 min-h-0 flex flex-col">
-        <!-- 内容区域 -->
-        <div
-          flex="~ 1 col"
-          min-w-0
-          h-full
-        >
-          <div flex="~ justify-between items-center" class="chat-top-bar">
-            <NavigationNavBar
-              class="flex-1 min-w-0"
-              :background-color="backgroundColorVariable"
-            />
-            <button
-              v-if="!showDefaultPage && uuids[qa_type]"
-              type="button"
-              class="session-files-toggle"
-              :class="{ 'session-files-toggle--open': sessionFilesPanelOpen }"
-              :title="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
-              :aria-label="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
-              @click="toggleSessionFilesPanel"
+            <!-- 内容区域 -->
+            <div
+              flex="~ 1 col"
+              min-w-0
+              h-full
             >
-              <span
-                class="session-files-toggle__icon"
-                :class="sessionFilesPanelOpen ? 'i-carbon:side-panel-close' : 'i-carbon:side-panel-open'"
-              />
-            </button>
-          </div>
-
-          <!-- 这里循环渲染即可实现多轮对话 -->
-          <div
-            ref="messagesContainer"
-            flex="1 ~ col"
-            min-h-0
-            pb-20
-            class="scrollable-container"
-            :style="{ backgroundColor: backgroundColorVariable }"
-            @scroll="handleScroll"
-          >
-            <!-- 默认对话页面 -->
-            <transition name="fade">
-              <div v-if="showDefaultPage">
-                <DefaultPage :qa-type="qa_type" />
+              <div flex="~ justify-between items-center" class="chat-top-bar">
+                <NavigationNavBar
+                  class="flex-1 min-w-0"
+                  :background-color="backgroundColorVariable"
+                />
+                <button
+                  v-if="!showDefaultPage && uuids[qa_type]"
+                  type="button"
+                  class="session-files-toggle"
+                  :class="{ 'session-files-toggle--open': sessionFilesPanelOpen }"
+                  :title="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
+                  :aria-label="sessionFilesPanelOpen ? '收起文件区' : '展开文件区'"
+                  @click="toggleSessionFilesPanel"
+                >
+                  <span
+                    class="session-files-toggle__icon"
+                    :class="sessionFilesPanelOpen ? 'i-carbon:side-panel-close' : 'i-carbon:side-panel-open'"
+                  ></span>
+                </button>
               </div>
-            </transition>
 
-            <template
-              v-if="!showDefaultPage"
-            >
+              <!-- 这里循环渲染即可实现多轮对话 -->
               <div
-                v-for="(item, index) in conversationItemsSnapshot"
-                :key="`${item.uuid}-${index}`"
-                class="mb-4"
+                ref="messagesContainer"
+                flex="1 ~ col"
+                min-h-0
+                pb-20
+                class="scrollable-container"
+                :style="{ backgroundColor: backgroundColorVariable }"
+                @scroll="handleScroll"
               >
-                <div v-if="item.role === 'user'" class="flex flex-col items-end space-y-2 w-full">
-                  <!-- 用户消息 -->
+                <!-- 默认对话页面 -->
+                <transition name="fade">
+                  <div v-if="showDefaultPage">
+                    <DefaultPage :qa-type="qa_type" />
+                  </div>
+                </transition>
+
+                <template
+                  v-if="!showDefaultPage"
+                >
                   <div
-                    :style="{
-                      'margin-left': `10%`,
-                      'margin-right': `10%`,
-                      'padding': `15px`,
-                      'border-radius': `5px`,
-                      'text-align': `center`,
-                      'max-width': '80%', // 控制宽度避免撑满
-                    }"
+                    v-for="(item, index) in conversationItemsSnapshot"
+                    :key="`${item.uuid}-${index}`"
+                    class="mb-4"
                   >
-                    <n-space>
-                      <n-tag
-                        size="large"
-                        :bordered="false"
-                        :round="true"
+                    <div v-if="item.role === 'user'" class="flex flex-col items-end space-y-2 w-full">
+                      <!-- 用户消息 -->
+                      <div
                         :style="{
-                          'fontSize': '16px',
-                          'fontFamily': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
-                          'fontWeight': '400',
-                          'color': cssVar(themeCssVar.textNav),
-                          'max-width': '600px',
-                          'text-align': 'left',
-                          'padding': '5px 18px',
-                          'height': 'auto',
-                          'line-height': 1.5,
-                          'word-wrap': 'break-word',
-                          'word-break': 'break-all',
-                          'white-space': 'pre-wrap',
-                          'overflow': 'visible',
-                        }"
-                        :color="{
-                          color: naivePresetColors.primaryBorderSoft,
-                          borderColor: naivePresetColors.primaryBorderSoft,
+                          'margin-left': `10%`,
+                          'margin-right': `10%`,
+                          'padding': `15px`,
+                          'border-radius': `5px`,
+                          'text-align': `center`,
+                          'max-width': '80%', // 控制宽度避免撑满
                         }"
                       >
-                        <template #avatar>
-                          <div class="size-25 text-primary i-my-svg:user-avatar" />
-                        </template>
-                        {{ item.question }}
-                      </n-tag>
-                    </n-space>
-                  </div>
+                        <n-space>
+                          <n-tag
+                            size="large"
+                            :bordered="false"
+                            :round="true"
+                            :style="{
+                              'fontSize': '16px',
+                              'fontFamily': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
+                              'fontWeight': '400',
+                              'color': cssVar(themeCssVar.textNav),
+                              'max-width': '600px',
+                              'text-align': 'left',
+                              'padding': '5px 18px',
+                              'height': 'auto',
+                              'line-height': 1.5,
+                              'word-wrap': 'break-word',
+                              'word-break': 'break-all',
+                              'white-space': 'pre-wrap',
+                              'overflow': 'visible',
+                            }"
+                            :color="{
+                              color: naivePresetColors.primaryBorderSoft,
+                              borderColor: naivePresetColors.primaryBorderSoft,
+                            }"
+                          >
+                            <template #avatar>
+                              <div class="size-25 text-primary i-my-svg:user-avatar"></div>
+                            </template>
+                            {{ item.question }}
+                          </n-tag>
+                        </n-space>
+                      </div>
 
-                  <!-- 用户上传的文件列表 -->
-                  <div
-                    v-if="item.file_key && item.file_key.length > 0"
-                    class="upload-wrapper-list flex flex-wrap gap-10 items-center pb-5"
-                    style="margin-left: 10%; margin-right: 10.5%; width: 80%; justify-content: flex-end;"
-                  >
-                    <FileListItem
-                      v-for="(file, fileIndex) in item.file_key"
-                      :key="fileIndex"
-                      :file="file"
-                    />
-                  </div>
-
-                  <!-- 加载动画：紧跟在消息下方，但对齐到左边 -->
-                  <div
-                    v-if="contentLoadingStates[index]"
-                    class="i-svg-spinners:bars-scale"
-                    :style="{
-                      'width': `24px`,
-                      'height': `24px`,
-                      'color': cssVar(themeCssVar.primaryTextSoft),
-                      'border-left-color': cssVar(themeCssVar.primaryTextSoft),
-                      'animation': `spin 1s linear infinite`,
-                      'margin-top': '10px',
-                      'align-self': 'flex-start', // 让此元素在交叉轴（水平轴）上靠左对齐
-                      'margin-left': '12%', // 与上面的消息保持一致的缩进
-                    }"
-                  ></div>
-                </div>
-
-                <div v-if="item.role === 'assistant'">
-                  <template v-if="item.messageContent?.version === 1">
-                    <div class="assistant-unified-card">
-                      <template
-                        v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
-                        :key="entry.kind === 'subagent'
-                          ? (entry.part.tool_call_id ?? entry.part.id ?? pi)
-                          : (entry.part.id ?? pi)"
+                      <!-- 用户上传的文件列表 -->
+                      <div
+                        v-if="item.file_key && item.file_key.length > 0"
+                        class="upload-wrapper-list flex flex-wrap gap-10 items-center pb-5"
+                        style="margin-left: 10%; margin-right: 10.5%; width: 80%; justify-content: flex-end;"
                       >
+                        <FileListItem
+                          v-for="(file, fileIndex) in item.file_key"
+                          :key="fileIndex"
+                          :file="file"
+                        />
+                      </div>
+
+                      <!-- 加载动画：紧跟在消息下方，但对齐到左边 -->
+                      <div
+                        v-if="contentLoadingStates[index]"
+                        class="i-svg-spinners:bars-scale"
+                        :style="{
+                          'width': `24px`,
+                          'height': `24px`,
+                          'color': cssVar(themeCssVar.primaryTextSoft),
+                          'border-left-color': cssVar(themeCssVar.primaryTextSoft),
+                          'animation': `spin 1s linear infinite`,
+                          'margin-top': '10px',
+                          'align-self': 'flex-start', // 让此元素在交叉轴（水平轴）上靠左对齐
+                          'margin-left': '12%', // 与上面的消息保持一致的缩进
+                        }"
+                      ></div>
+                    </div>
+
+                    <div v-if="item.role === 'assistant'">
+                      <template v-if="item.messageContent?.version === 1">
+                        <div class="assistant-unified-card">
+                          <template
+                            v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
+                            :key="entry.kind === 'subagent'
+                              ? (entry.part.tool_call_id ?? entry.part.id ?? pi)
+                              : (entry.part.id ?? pi)"
+                          >
+                            <ReasoningBlock
+                              v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
+                              :reasoning="entry.part.content"
+                              :defaultOpen="false"
+                              :streaming="entry.part.status === 'streaming'"
+                              appearance="light"
+                            />
+                            <SubagentCollapse
+                              v-else-if="entry.kind === 'subagent'"
+                              appearance="light"
+                              :input="entry.part.input"
+                              :output="entry.part.output"
+                              :status="entry.part.status"
+                              :error="entry.part.error"
+                              :duration_ms="entry.part.duration_ms"
+                              :child-parts="entry.childParts"
+                            />
+                            <ToolCallCollapse
+                              v-else-if="entry.kind === 'part' && entry.part.type === 'tool'"
+                              appearance="light"
+                              :name="entry.part.name"
+                              :arguments="entry.part.input"
+                              :result="entry.part.output"
+                              :error="entry.part.error"
+                              :status="entry.part.status"
+                              :duration_ms="entry.part.duration_ms"
+                            />
+                            <MarkdownPreview
+                              v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
+                              :content="entry.part.content || ''"
+                              :toolCalls="null"
+                              :msgMetadata="item.msg_metadata"
+                              :isInit="isInit"
+                              :isView="isView"
+                              :show-action-bar="false"
+                              variant="segment"
+                              :qa-type="item.qa_type || 'COMMON_QA'"
+                              :parentScollBottomMethod="scrollToBottom"
+                              @failed="() => onFailedReader(index)"
+                              @recycleQa="() => onRecycleQa(index)"
+                              @praiseFeadBack="() => onPraiseFeadBack(index)"
+                              @belittleFeedback="() => onBelittleFeedback(index)"
+                            />
+                          </template>
+                          <AssistantStreamingIndicator
+                            v-if="showAssistantReplyLoading(index, item.role)"
+                            section
+                            :divided="buildDisplayParts(item.messageContent.parts).length > 0"
+                            :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
+                          />
+                          <div
+                            v-if="hasValidUsage(item.msg_metadata?.usage)"
+                            class="assistant-usage-summary"
+                          >
+                            {{ formatUsageSummary(item.msg_metadata!.usage!) }}
+                          </div>
+                          <AssistantReplyToolbar
+                            v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
+                            :qa-type="item.qa_type || 'COMMON_QA'"
+                            :copy-text="[item.reasoning, item.content].filter((s) => s && String(s).trim()).join('\n\n')"
+                            :langfuse_session_id="item.langfuse_session_id"
+                            :langfuse-ui-origin="langfuseUiOrigin"
+                            @praise-fead-back="() => onPraiseFeadBack(index)"
+                            @belittle-feedback="() => onBelittleFeedback(index)"
+                            @recycle-qa="() => onRecycleQa(index)"
+                          />
+                        </div>
+                      </template>
+                      <template v-else>
                         <ReasoningBlock
-                          v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
-                          :reasoning="entry.part.content"
+                          v-if="item.reasoning"
+                          :reasoning="item.reasoning"
                           :defaultOpen="false"
-                          :streaming="entry.part.status === 'streaming'"
                           appearance="light"
-                        />
-                        <SubagentCollapse
-                          v-else-if="entry.kind === 'subagent'"
-                          appearance="light"
-                          :input="entry.part.input"
-                          :output="entry.part.output"
-                          :status="entry.part.status"
-                          :error="entry.part.error"
-                          :duration_ms="entry.part.duration_ms"
-                          :child-parts="entry.childParts"
-                        />
-                        <ToolCallCollapse
-                          v-else-if="entry.kind === 'part' && entry.part.type === 'tool'"
-                          appearance="light"
-                          :name="entry.part.name"
-                          :arguments="entry.part.input"
-                          :result="entry.part.output"
-                          :error="entry.part.error"
-                          :status="entry.part.status"
-                          :duration_ms="entry.part.duration_ms"
                         />
                         <MarkdownPreview
-                          v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
-                          :content="entry.part.content || ''"
-                          :toolCalls="null"
+                          :content="item.content || ''"
+                          :toolCalls="item.tool_calls"
                           :msgMetadata="item.msg_metadata"
                           :isInit="isInit"
                           :isView="isView"
-                          :show-action-bar="false"
-                          variant="segment"
                           :qa-type="item.qa_type || 'COMMON_QA'"
                           :parentScollBottomMethod="scrollToBottom"
                           @failed="() => onFailedReader(index)"
+                          @completed="() => onCompletedReader(index)"
                           @recycleQa="() => onRecycleQa(index)"
                           @praiseFeadBack="() => onPraiseFeadBack(index)"
                           @belittleFeedback="() => onBelittleFeedback(index)"
+                          @beginRead="() => onBeginRead(index)"
+                        />
+                        <AssistantStreamingIndicator
+                          v-if="showAssistantReplyLoading(index, item.role)"
                         />
                       </template>
-                      <AssistantStreamingIndicator
-                        v-if="showAssistantReplyLoading(index, item.role)"
-                        section
-                        :divided="buildDisplayParts(item.messageContent.parts).length > 0"
-                        :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
-                      />
-                      <div
-                        v-if="hasValidUsage(item.msg_metadata?.usage)"
-                        class="assistant-usage-summary"
-                      >
-                        {{ formatUsageSummary(item.msg_metadata!.usage!) }}
-                      </div>
-                      <AssistantReplyToolbar
-                        v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
-                        :qa-type="item.qa_type || 'COMMON_QA'"
-                        :copy-text="[item.reasoning, item.content].filter((s) => s && String(s).trim()).join('\n\n')"
-                        :langfuse_session_id="item.langfuse_session_id"
-                        :langfuse-ui-origin="langfuseUiOrigin"
-                        @praise-fead-back="() => onPraiseFeadBack(index)"
-                        @belittle-feedback="() => onBelittleFeedback(index)"
-                        @recycle-qa="() => onRecycleQa(index)"
-                      />
                     </div>
-                  </template>
-                  <template v-else>
-                    <ReasoningBlock
-                      v-if="item.reasoning"
-                      :reasoning="item.reasoning"
-                      :defaultOpen="false"
-                      appearance="light"
-                    />
-                    <MarkdownPreview
-                      :content="item.content || ''"
-                      :toolCalls="item.tool_calls"
-                      :msgMetadata="item.msg_metadata"
-                      :isInit="isInit"
-                      :isView="isView"
-                      :qa-type="item.qa_type || 'COMMON_QA'"
-                      :parentScollBottomMethod="scrollToBottom"
-                      @failed="() => onFailedReader(index)"
-                      @completed="() => onCompletedReader(index)"
-                      @recycleQa="() => onRecycleQa(index)"
-                      @praiseFeadBack="() => onPraiseFeadBack(index)"
-                      @belittleFeedback="() => onBelittleFeedback(index)"
-                      @beginRead="() => onBeginRead(index)"
-                    />
-                    <AssistantStreamingIndicator
-                      v-if="showAssistantReplyLoading(index, item.role)"
-                    />
-                  </template>
+                  </div>
+                </template>
+
+                <div
+                  v-if="!isInit && !stylizingLoading"
+                  class="w-70% ml-11% mt-[-20] bg-bgcolor"
+                >
+                  <SuggestedView
+                    :labels="suggested_array"
+                    @suggested="onSuggested"
+                  />
                 </div>
               </div>
-            </template>
 
-            <div
-              v-if="!isInit && !stylizingLoading"
-              class="w-70% ml-11% mt-[-20] bg-bgcolor"
-            >
-              <SuggestedView
-                :labels="suggested_array"
-                @suggested="onSuggested"
-              />
-            </div>
-          </div>
-
-          <div
-            v-show="showScrollToBottom"
-            class="scroll-to-bottom-btn"
-            @click="clickScrollToBottom"
-          >
-            <div class="i-mingcute:arrow-down-fill"></div>
-          </div>
-
-          <div
-            :style="{ backgroundColor: backgroundColorVariable }"
-            class="items-center shrink-0 chat-input-footer-bar"
-          >
-            <div class="flex-1 w-full p-1em chat-input-footer">
-              <n-space
-                vertical
-                class="mx-10%"
+              <div
+                v-show="showScrollToBottom"
+                class="scroll-to-bottom-btn"
+                @click="clickScrollToBottom"
               >
-                <!-- 文档流内、与输入区同宽，避免 absolute 遮挡消息区 -->
-                <TodoList
-                  :todos="businessStore.todos"
-                />
-                <div
-                  flex="~ gap-10"
-                  class="h-40"
-                >
-                  <n-button
-                    type="default"
-                    :class="[
-                      qa_type === 'COMMON_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                    ]"
-                    @click="onAqtiveChange('COMMON_QA', '')"
-                  >
-                    <template #icon>
-                      <n-icon size="16">
-                        <svg
-                          t="1742194713465"
-                          class="icon"
-                          viewBox="0 0 1024 1024"
-                          version="1.1"
-                          xmlns="http://www.w3.org/2000/svg"
-                          p-id="8188"
-                          width="60"
-                          height="60"
-                        >
-                          <path
-                            d="M80.867881 469.76534l0.916659 0.916659 79.711097-79.711097L160.655367 389.901467a162.210364 162.210364 0 0 1 229.164631-229.164631l236.345122 236.345122L706.028994 317.332667l-236.345123-236.803452a275.112139 275.112139 0 0 0-388.81599 389.27432z m472.690245-388.81599l-0.916658 0.916659 79.711097 79.711097 0.916659-0.916658A162.210364 162.210364 0 0 1 862.663019 389.901467l-236.345122 236.345122 79.711097 79.711098 236.803452-236.345123a275.112139 275.112139 0 0 0-389.27432-388.81599z m-84.027031 861.506236l0.916659-0.916659-79.711098-79.711097-0.916658 0.916658a162.210364 162.210364 0 0 1-229.164631-229.431989l236.345122-236.345123L317.251198 317.332667l-236.803452 236.345122a275.112139 275.112139 0 0 0 389.27432 388.815991z m99.801197-372.736272a81.811773 81.811773 0 0 0 21.197728-78.794439 80.895115 80.895115 0 0 0-57.59671-57.596711 81.620803 81.620803 0 1 0 36.398982 136.352956z m373.156407-15.659583l-0.916659-0.916659-79.711097 79.711097 0.916658 0.916659a162.248559 162.248559 0 0 1-229.431989 229.431989L396.885907 626.704918 317.251198 706.568792l236.345122 236.803452A275.073945 275.073945 0 0 0 942.374117 554.136119z"
-                            fill="#297CE9"
-                            p-id="8189"
-                          />
-                        </svg>
-                      </n-icon>
-                    </template>
-                    智能问答
-                  </n-button>
-                  <n-button
-                    type="default"
-                    :class="[
-                      qa_type === 'SUPER_AGENT_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                    ]"
-                    @click="onAqtiveChange('SUPER_AGENT_QA', '')"
-                  >
-                    <template #icon>
-                      <n-icon size="18">
-                        <svg
-                          t="1732528323504"
-                          class="icon"
-                          viewBox="0 0 1024 1024"
-                          version="1.1"
-                          xmlns="http://www.w3.org/2000/svg"
-                          p-id="41739"
-                          width="64"
-                          height="64"
-                        >
-                          <path
-                            d="M96 896c-8 0-15.5-3.1-21.2-8.8C69.1 881.6 66 874 66 866V445c0-5.5 4.5-10 10-10s10 4.5 10 10v421c0 2.7 1 5.2 2.9 7.1 1.9 1.9 4.4 2.9 7.1 2.9h612c5.5 0 10 4.5 10 10s-4.5 10-10 10H96z m748 0v-20c2.7 0 5.2-1 7.1-2.9 1.9-1.9 2.9-4.4 2.9-7.1v-80c0-5.5 4.5-10 10-10s10 4.5 10 10v80c0 8-3.1 15.5-8.8 21.2-5.6 5.7-13.2 8.8-21.2 8.8z m20-450c-5.5 0-10-4.5-10-10V126c0-5.5-4.5-10-10-10H96c-5.5 0-10 4.5-10 10v193c0 5.5-4.5 10-10 10s-10-4.5-10-10V126c0-16.5 13.4-30 30-30h748c16.5 0 30 13.4 30 30v310c0 5.5-4.5 10-10 10z"
-                            fill="#222222"
-                            p-id="41740"
-                          />
-                          <path
-                            d="M781 886m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
-                            fill="#222222"
-                            p-id="41741"
-                          />
-                          <path
-                            d="M76 383m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
-                            fill="#222222"
-                            p-id="41742"
-                          />
-                          <path
-                            d="M84 226h775v20H84zM750 826c-57.2 0-110.9-22.3-151.3-62.7C558.3 722.9 536 669.2 536 612s22.3-110.9 62.7-151.3C639.1 420.3 692.8 398 750 398s110.9 22.3 151.3 62.7C941.7 501.1 964 554.8 964 612s-22.3 110.9-62.7 151.3C860.9 803.7 807.2 826 750 826z m0-408c-107 0-194 87-194 194s87 194 194 194 194-87 194-194-87-194-194-194z"
-                            fill="#222222"
-                            p-id="41743"
-                          />
-                          <path
-                            d="M901.7 753.2c-1 0-2.1-0.2-3.1-0.5-4.1-1.3-6.9-5.2-6.9-9.5V478.8c0-4.3 2.8-8.2 6.9-9.5 4.1-1.3 8.6 0.1 11.2 3.6 24.9 34 51.4 75.6 51.4 139.1 0 62-22.3 97.3-51.4 137.1-1.9 2.7-4.9 4.1-8.1 4.1z m10.1-241.9v200c17.9-28 29.5-56.4 29.5-99.3-0.1-40.2-11-70.5-29.5-100.7z"
-                            fill="#222222"
-                            p-id="41744"
-                          />
-                          <path
-                            d="M859 788l93 130"
-                            fill="#358AFE"
-                            p-id="41745"
-                          />
-                          <path
-                            d="M952 928c-3.1 0-6.2-1.5-8.1-4.2l-93-130c-3.2-4.5-2.2-10.7 2.3-14 4.5-3.2 10.7-2.2 14 2.3l93 130c3.2 4.5 2.2 10.7-2.3 14-1.8 1.3-3.9 1.9-5.9 1.9zM482.4 468.4H171.6c-8.8 0-16-7.2-16-16v-89.8c0-8.8 7.2-16 16-16h310.8c8.8 0 16 7.2 16 16v89.8c0 8.8-7.2 16-16 16z m-306.8-20h302.8v-81.8H175.6v81.8z m306.8-81.8zM384 580H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h219c5.5 0 10 4.5 10 10s-4.5 10-10 10zM455 690H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h290c5.5 0 10 4.5 10 10s-4.5 10-10 10zM525 800H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h360c5.5 0 10 4.5 10 10s-4.5 10-10 10zM183 146c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z"
-                            fill="#222222"
-                            p-id="41746"
-                          />
-                        </svg>
-                      </n-icon>
-                    </template>
-                    智能体
-                  </n-button>
-                  <n-button
-                    type="default"
-                    :class="[
-                      qa_type === 'FAULT_OPERATION_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                    ]"
-                    @click="onAqtiveChange('FAULT_OPERATION_QA', '')"
-                  >
-                    <template #icon>
-                      <n-icon size="18">
-                        <svg
-                          t="1743292000000"
-                          class="icon"
-                          viewBox="0 0 1024 1024"
-                          version="1.1"
-                          xmlns="http://www.w3.org/2000/svg"
-                          p-id="8849"
-                          width="64"
-                          height="64"
-                        >
-                          <path
-                            d="M512 160c-35.3 0-64 28.7-64 64v32c0 35.3 28.7 64 64 64s64-28.7 64-64v-32c0-35.3-28.7-64-64-64z"
-                            fill="#222222"
-                            p-id="8850"
-                          />
-                          <path
-                            d="M480 384h64v320h-64z"
-                            fill="#222222"
-                            p-id="8851"
-                          />
-                          <path
-                            d="M448 704h128v32c0 17.7-14.3 32-32 32H480c-17.7 0-32-14.3-32-32v-32z"
-                            fill="#222222"
-                            p-id="8852"
-                          />
-                          <path
-                            d="M416 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
-                            fill="#222222"
-                            p-id="8853"
-                          />
-                          <path
-                            d="M608 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
-                            fill="#222222"
-                            p-id="8854"
-                          />
-                          <path
-                            d="M448 144c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40h128c22.1 0 40-17.9 40-40v-24c0-22.1-17.9-40-40-40H448z"
-                            fill="#222222"
-                            p-id="8855"
-                          />
-                          <path
-                            d="M848 512c0-141.4-114.6-256-256-256S336 370.6 336 512c0 44.2 11.2 85.8 31.1 122.9L224 768h576l-143.1-133.1C880.8 597.8 896 556.2 896 512zM592 768H432l144-160h144l-128 160z"
-                            fill="#222222"
-                            p-id="8856"
-                          />
-                          <path
-                            d="M512 320c-105.6 0-192 86.4-192 192s86.4 192 192 192 192-86.4 192-192-86.4-192-192-192z"
-                            fill="#222222"
-                            p-id="8857"
-                          />
-                        </svg>
-                      </n-icon>
-                    </template>
-                    故障运维
-                  </n-button>
-                  <n-button
-                    type="default"
-                    :class="[
-                      qa_type === 'TEST_CASE_QA' && 'active-tab',
-                      'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                    ]"
-                    @click="onAqtiveChange('TEST_CASE_QA', '')"
-                  >
-                    <template #icon>
-                      <n-icon size="18">
-                        <svg
-                          t="1743292000001"
-                          class="icon"
-                          viewBox="0 0 1024 1024"
-                          version="1.1"
-                          xmlns="http://www.w3.org/2000/svg"
-                          p-id="88501"
-                          width="64"
-                          height="64"
-                        >
-                          <path
-                            d="M896 128H128c-35.2 0-64 28.8-64 64v640c0 35.2 28.8 64 64 64h768c35.2 0 64-28.8 64-64V192c0-35.2-28.8-64-64-64z"
-                            fill="none"
-                            stroke="#222222"
-                            stroke-width="32"
-                            p-id="88502"
-                          />
-                          <path
-                            d="M320 320h384M320 448h384M320 576h256"
-                            fill="none"
-                            stroke="#222222"
-                            stroke-width="24"
-                            stroke-linecap="round"
-                            p-id="88503"
-                          />
-                          <path
-                            d="M704 640l-96 96-32-32-64 64"
-                            fill="none"
-                            stroke="#4CAF50"
-                            stroke-width="24"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            p-id="88504"
-                          />
-                        </svg>
-                      </n-icon>
-                    </template>
-                    测试用例
-                  </n-button>
-                </div>
-                <div
-                  :class="[
-                    'chat-composer relative b b-solid p-12',
-                    composerDragOver && 'chat-composer--dragover',
-                  ]"
-                  @dragenter="onComposerDragEnter"
-                  @dragover="onComposerDragOver"
-                  @dragleave="onComposerDragLeave"
-                  @drop="onComposerDrop"
-                >
-                  <div
-                    v-if="composerDragOver"
-                    class="chat-composer-drop-hint"
-                  >
-                    松开鼠标上传文件
-                  </div>
+                <div class="i-mingcute:arrow-down-fill"></div>
+              </div>
 
-                  <FileUploadManager
-                    ref="fileUploadRef"
-                    v-model="pendingUploadFileInfoList"
-                    :upload-mode="usesSessionAttachmentUpload(qa_type) ? 'chat' : 'kb'"
-                    :get-session-id="getChatSessionId"
-                  />
-
-                  <n-input
-                    ref="refInputTextString"
-                    v-model:value="inputTextString"
-                    type="textarea"
-                    class="textarea-resize-none w-full text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
-                    :style="{
-                      '--n-border-radius': '15px',
-                      'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
-                      'font-size': '16px',
-                      'line-height': '1.5',
-                    }"
-                    :placeholder="placeholder"
-                    :autosize="{
-                      minRows: 1,
-                      maxRows: 10,
-                    }"
-                    @paste="onComposerPaste"
-                    @keydown="onComposerKeydown"
-                  />
-
-                  <ChatComposerToolbar
-                    v-model:model-id="selectedModelId"
-                    v-model:kb-collections="selectedKbCollections"
-                    :qa-type="qa_type"
-                    :session-id="uuids[qa_type] ?? ''"
-                    :disabled="sseIsLoading"
-                    :file-upload-ref="fileUploadRef"
+              <div
+                :style="{ backgroundColor: backgroundColorVariable }"
+                class="items-center shrink-0 chat-input-footer-bar"
+              >
+                <div class="flex-1 w-full p-1em chat-input-footer">
+                  <n-space
+                    vertical
+                    class="mx-10%"
                   >
-                    <template #right>
-                      <ContextWindowIndicator
-                        v-if="showContextIndicator"
-                        class="shrink-0"
-                        :context="sessionContext!"
+                    <!-- 文档流内、与输入区同宽，避免 absolute 遮挡消息区 -->
+                    <TodoList
+                      :todos="businessStore.todos"
+                    />
+                    <div
+                      flex="~ gap-10"
+                      class="h-40"
+                    >
+                      <n-button
+                        type="default"
+                        :class="[
+                          qa_type === 'COMMON_QA' && 'active-tab',
+                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
+                        ]"
+                        @click="onAqtiveChange('COMMON_QA', '')"
+                      >
+                        <template #icon>
+                          <n-icon size="16">
+                            <svg
+                              t="1742194713465"
+                              class="icon"
+                              viewBox="0 0 1024 1024"
+                              version="1.1"
+                              xmlns="http://www.w3.org/2000/svg"
+                              p-id="8188"
+                              width="60"
+                              height="60"
+                            >
+                              <path
+                                d="M80.867881 469.76534l0.916659 0.916659 79.711097-79.711097L160.655367 389.901467a162.210364 162.210364 0 0 1 229.164631-229.164631l236.345122 236.345122L706.028994 317.332667l-236.345123-236.803452a275.112139 275.112139 0 0 0-388.81599 389.27432z m472.690245-388.81599l-0.916658 0.916659 79.711097 79.711097 0.916659-0.916658A162.210364 162.210364 0 0 1 862.663019 389.901467l-236.345122 236.345122 79.711097 79.711098 236.803452-236.345123a275.112139 275.112139 0 0 0-389.27432-388.81599z m-84.027031 861.506236l0.916659-0.916659-79.711098-79.711097-0.916658 0.916658a162.210364 162.210364 0 0 1-229.164631-229.431989l236.345122-236.345123L317.251198 317.332667l-236.803452 236.345122a275.112139 275.112139 0 0 0 389.27432 388.815991z m99.801197-372.736272a81.811773 81.811773 0 0 0 21.197728-78.794439 80.895115 80.895115 0 0 0-57.59671-57.596711 81.620803 81.620803 0 1 0 36.398982 136.352956z m373.156407-15.659583l-0.916659-0.916659-79.711097 79.711097 0.916658 0.916659a162.248559 162.248559 0 0 1-229.431989 229.431989L396.885907 626.704918 317.251198 706.568792l236.345122 236.803452A275.073945 275.073945 0 0 0 942.374117 554.136119z"
+                                fill="#297CE9"
+                                p-id="8189"
+                              />
+                            </svg>
+                          </n-icon>
+                        </template>
+                        智能问答
+                      </n-button>
+                      <n-button
+                        type="default"
+                        :class="[
+                          qa_type === 'SUPER_AGENT_QA' && 'active-tab',
+                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
+                        ]"
+                        @click="onAqtiveChange('SUPER_AGENT_QA', '')"
+                      >
+                        <template #icon>
+                          <n-icon size="18">
+                            <svg
+                              t="1732528323504"
+                              class="icon"
+                              viewBox="0 0 1024 1024"
+                              version="1.1"
+                              xmlns="http://www.w3.org/2000/svg"
+                              p-id="41739"
+                              width="64"
+                              height="64"
+                            >
+                              <path
+                                d="M96 896c-8 0-15.5-3.1-21.2-8.8C69.1 881.6 66 874 66 866V445c0-5.5 4.5-10 10-10s10 4.5 10 10v421c0 2.7 1 5.2 2.9 7.1 1.9 1.9 4.4 2.9 7.1 2.9h612c5.5 0 10 4.5 10 10s-4.5 10-10 10H96z m748 0v-20c2.7 0 5.2-1 7.1-2.9 1.9-1.9 2.9-4.4 2.9-7.1v-80c0-5.5 4.5-10 10-10s10 4.5 10 10v80c0 8-3.1 15.5-8.8 21.2-5.6 5.7-13.2 8.8-21.2 8.8z m20-450c-5.5 0-10-4.5-10-10V126c0-5.5-4.5-10-10-10H96c-5.5 0-10 4.5-10 10v193c0 5.5-4.5 10-10 10s-10-4.5-10-10V126c0-16.5 13.4-30 30-30h748c16.5 0 30 13.4 30 30v310c0 5.5-4.5 10-10 10z"
+                                fill="#222222"
+                                p-id="41740"
+                              />
+                              <path
+                                d="M781 886m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
+                                fill="#222222"
+                                p-id="41741"
+                              />
+                              <path
+                                d="M76 383m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
+                                fill="#222222"
+                                p-id="41742"
+                              />
+                              <path
+                                d="M84 226h775v20H84zM750 826c-57.2 0-110.9-22.3-151.3-62.7C558.3 722.9 536 669.2 536 612s22.3-110.9 62.7-151.3C639.1 420.3 692.8 398 750 398s110.9 22.3 151.3 62.7C941.7 501.1 964 554.8 964 612s-22.3 110.9-62.7 151.3C860.9 803.7 807.2 826 750 826z m0-408c-107 0-194 87-194 194s87 194 194 194 194-87 194-194-87-194-194-194z"
+                                fill="#222222"
+                                p-id="41743"
+                              />
+                              <path
+                                d="M901.7 753.2c-1 0-2.1-0.2-3.1-0.5-4.1-1.3-6.9-5.2-6.9-9.5V478.8c0-4.3 2.8-8.2 6.9-9.5 4.1-1.3 8.6 0.1 11.2 3.6 24.9 34 51.4 75.6 51.4 139.1 0 62-22.3 97.3-51.4 137.1-1.9 2.7-4.9 4.1-8.1 4.1z m10.1-241.9v200c17.9-28 29.5-56.4 29.5-99.3-0.1-40.2-11-70.5-29.5-100.7z"
+                                fill="#222222"
+                                p-id="41744"
+                              />
+                              <path
+                                d="M859 788l93 130"
+                                fill="#358AFE"
+                                p-id="41745"
+                              />
+                              <path
+                                d="M952 928c-3.1 0-6.2-1.5-8.1-4.2l-93-130c-3.2-4.5-2.2-10.7 2.3-14 4.5-3.2 10.7-2.2 14 2.3l93 130c3.2 4.5 2.2 10.7-2.3 14-1.8 1.3-3.9 1.9-5.9 1.9zM482.4 468.4H171.6c-8.8 0-16-7.2-16-16v-89.8c0-8.8 7.2-16 16-16h310.8c8.8 0 16 7.2 16 16v89.8c0 8.8-7.2 16-16 16z m-306.8-20h302.8v-81.8H175.6v81.8z m306.8-81.8zM384 580H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h219c5.5 0 10 4.5 10 10s-4.5 10-10 10zM455 690H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h290c5.5 0 10 4.5 10 10s-4.5 10-10 10zM525 800H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h360c5.5 0 10 4.5 10 10s-4.5 10-10 10zM183 146c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z"
+                                fill="#222222"
+                                p-id="41746"
+                              />
+                            </svg>
+                          </n-icon>
+                        </template>
+                        智能体
+                      </n-button>
+                      <n-button
+                        type="default"
+                        :class="[
+                          qa_type === 'FAULT_OPERATION_QA' && 'active-tab',
+                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
+                        ]"
+                        @click="onAqtiveChange('FAULT_OPERATION_QA', '')"
+                      >
+                        <template #icon>
+                          <n-icon size="18">
+                            <svg
+                              t="1743292000000"
+                              class="icon"
+                              viewBox="0 0 1024 1024"
+                              version="1.1"
+                              xmlns="http://www.w3.org/2000/svg"
+                              p-id="8849"
+                              width="64"
+                              height="64"
+                            >
+                              <path
+                                d="M512 160c-35.3 0-64 28.7-64 64v32c0 35.3 28.7 64 64 64s64-28.7 64-64v-32c0-35.3-28.7-64-64-64z"
+                                fill="#222222"
+                                p-id="8850"
+                              />
+                              <path
+                                d="M480 384h64v320h-64z"
+                                fill="#222222"
+                                p-id="8851"
+                              />
+                              <path
+                                d="M448 704h128v32c0 17.7-14.3 32-32 32H480c-17.7 0-32-14.3-32-32v-32z"
+                                fill="#222222"
+                                p-id="8852"
+                              />
+                              <path
+                                d="M416 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
+                                fill="#222222"
+                                p-id="8853"
+                              />
+                              <path
+                                d="M608 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
+                                fill="#222222"
+                                p-id="8854"
+                              />
+                              <path
+                                d="M448 144c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40h128c22.1 0 40-17.9 40-40v-24c0-22.1-17.9-40-40-40H448z"
+                                fill="#222222"
+                                p-id="8855"
+                              />
+                              <path
+                                d="M848 512c0-141.4-114.6-256-256-256S336 370.6 336 512c0 44.2 11.2 85.8 31.1 122.9L224 768h576l-143.1-133.1C880.8 597.8 896 556.2 896 512zM592 768H432l144-160h144l-128 160z"
+                                fill="#222222"
+                                p-id="8856"
+                              />
+                              <path
+                                d="M512 320c-105.6 0-192 86.4-192 192s86.4 192 192 192 192-86.4 192-192-86.4-192-192-192z"
+                                fill="#222222"
+                                p-id="8857"
+                              />
+                            </svg>
+                          </n-icon>
+                        </template>
+                        故障运维
+                      </n-button>
+                      <n-button
+                        type="default"
+                        :class="[
+                          qa_type === 'TEST_CASE_QA' && 'active-tab',
+                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
+                        ]"
+                        @click="onAqtiveChange('TEST_CASE_QA', '')"
+                      >
+                        <template #icon>
+                          <n-icon size="18">
+                            <svg
+                              t="1743292000001"
+                              class="icon"
+                              viewBox="0 0 1024 1024"
+                              version="1.1"
+                              xmlns="http://www.w3.org/2000/svg"
+                              p-id="88501"
+                              width="64"
+                              height="64"
+                            >
+                              <path
+                                d="M896 128H128c-35.2 0-64 28.8-64 64v640c0 35.2 28.8 64 64 64h768c35.2 0 64-28.8 64-64V192c0-35.2-28.8-64-64-64z"
+                                fill="none"
+                                stroke="#222222"
+                                stroke-width="32"
+                                p-id="88502"
+                              />
+                              <path
+                                d="M320 320h384M320 448h384M320 576h256"
+                                fill="none"
+                                stroke="#222222"
+                                stroke-width="24"
+                                stroke-linecap="round"
+                                p-id="88503"
+                              />
+                              <path
+                                d="M704 640l-96 96-32-32-64 64"
+                                fill="none"
+                                stroke="#4CAF50"
+                                stroke-width="24"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                p-id="88504"
+                              />
+                            </svg>
+                          </n-icon>
+                        </template>
+                        测试用例
+                      </n-button>
+                    </div>
+                    <div
+                      :class="[
+                        'chat-composer relative b b-solid p-12',
+                        composerDragOver && 'chat-composer--dragover',
+                      ]"
+                      @dragenter="onComposerDragEnter"
+                      @dragover="onComposerDragOver"
+                      @dragleave="onComposerDragLeave"
+                      @drop="onComposerDrop"
+                    >
+                      <div
+                        v-if="composerDragOver"
+                        class="chat-composer-drop-hint"
+                      >
+                        松开鼠标上传文件
+                      </div>
+
+                      <FileUploadManager
+                        ref="fileUploadRef"
+                        v-model="pendingUploadFileInfoList"
+                        :upload-mode="usesSessionAttachmentUpload(qa_type) ? 'chat' : 'kb'"
+                        :get-session-id="getChatSessionId"
+                        @chatImageUploaded="onChatImageUploaded"
                       />
 
-                      <div class="chat-send-btn-wrap shrink-0">
-                        <n-tooltip
-                          :disabled="!stylizingLoading"
-                          placement="top"
-                        >
-                          <template #trigger>
-                            <n-float-button
-                              position="relative"
-                              :width="36"
-                              :height="36"
-                              :disabled="!stylizingLoading && sendDisabled"
-                              :type="stylizingLoading ? 'primary' : 'default'"
-                              color
-                              :class="[
-                                'chat-send-btn',
-                                stylizingLoading && 'chat-send-btn--stop',
-                              ]"
-                              @click.stop="handleCreateStylized()"
+                      <n-input
+                        ref="refInputTextString"
+                        v-model:value="inputTextString"
+                        type="textarea"
+                        class="textarea-resize-none w-full text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
+                        :style="{
+                          '--n-border-radius': '15px',
+                          'font-family': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
+                          'font-size': '16px',
+                          'line-height': '1.5',
+                        }"
+                        :placeholder="placeholder"
+                        :autosize="{
+                          minRows: 1,
+                          maxRows: 10,
+                        }"
+                        @paste="onComposerPaste"
+                        @keydown="onComposerKeydown"
+                      />
+
+                      <ChatComposerToolbar
+                        v-model:model-id="selectedModelId"
+                        v-model:kb-collections="selectedKbCollections"
+                        :qa-type="qa_type"
+                        :session-id="uuids[qa_type] ?? ''"
+                        :disabled="sseIsLoading"
+                        :file-upload-ref="fileUploadRef"
+                      >
+                        <template #right>
+                          <ContextWindowIndicator
+                            v-if="showContextIndicator"
+                            class="shrink-0"
+                            :context="sessionContext!"
+                          />
+
+                          <div class="chat-send-btn-wrap shrink-0">
+                            <n-tooltip
+                              :disabled="!stylizingLoading"
+                              placement="top"
                             >
-                              <span
-                                v-if="stylizingLoading"
-                                class="chat-stop-icon"
-                                aria-label="停止生成"
-                              ></span>
-                              <div
-                                v-else
-                                class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
-                              ></div>
-                            </n-float-button>
-                          </template>
-                          停止生成
-                        </n-tooltip>
-                      </div>
-                    </template>
-                  </ChatComposerToolbar>
+                              <template #trigger>
+                                <n-float-button
+                                  position="relative"
+                                  :width="36"
+                                  :height="36"
+                                  :disabled="!stylizingLoading && sendDisabled"
+                                  :type="stylizingLoading ? 'primary' : 'default'"
+                                  color
+                                  :class="[
+                                    'chat-send-btn',
+                                    stylizingLoading && 'chat-send-btn--stop',
+                                  ]"
+                                  @click.stop="handleCreateStylized()"
+                                >
+                                  <span
+                                    v-if="stylizingLoading"
+                                    class="chat-stop-icon"
+                                    aria-label="停止生成"
+                                  ></span>
+                                  <div
+                                    v-else
+                                    class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
+                                  ></div>
+                                </n-float-button>
+                              </template>
+                              停止生成
+                            </n-tooltip>
+                          </div>
+                        </template>
+                      </ChatComposerToolbar>
+                    </div>
+                  </n-space>
                 </div>
-              </n-space>
+              </div>
             </div>
-          </div>
-        </div>
           </div>
           <aside
             v-if="sessionFilesPanelOpen && !showDefaultPage && uuids[qa_type]"
             class="session-context-aside"
-            :style="{ backgroundColor: backgroundColorVariable }"
+            :style="{
+              backgroundColor: backgroundColorVariable,
+              width: `${sessionPanelWidth}px`,
+            }"
           >
+            <ResizeDivider
+              side="left"
+              @resize-start="startSessionPanelResize"
+            />
             <SessionContextPanel
               ref="sessionFilesPanelRef"
               :session-id="uuids[qa_type] || ''"
@@ -2148,6 +2192,10 @@ function onComposerPaste(e: ClipboardEvent) {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+.chat-history-sider {
+  position: relative;
 }
 
 /* 聊天记录侧栏折叠钮 — 使用 Naive 右缘定位，仅对齐主题色 */
@@ -2358,9 +2406,8 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .session-context-aside {
+  position: relative;
   flex-shrink: 0;
-  width: min(480px, 42vw);
-  min-width: 360px;
   min-height: 0;
   border-left: 1px solid var(--noesis-color-border-aside);
   overflow: hidden;

@@ -205,6 +205,8 @@ class ChatAttachmentSettings:
     vision_enabled: bool
     reinject_session_images: bool
     max_images_per_message: int
+    image_inject_max_edge: int
+    vlm_fallback_enabled: bool
     tiny_inline_chars: int
     read_page_lines: int
     preview_chars: int
@@ -299,7 +301,12 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
     vlm = yaml_cfg.vlm
     loop = yaml_cfg.loop_detection
     runtime = yaml_cfg.agent_runtime
-    vlm_api_key = secrets.vlm_model_api_key or _legacy_env("VL_MODEL_API_KEY", "")
+    vlm_api_key = (
+        secrets.vlm_model_api_key
+        or _legacy_env("VL_MODEL_API_KEY", "")
+        or secrets.embedding_model_api_key
+        or ""
+    ).strip()
     rerank_api_key = (secrets.rerank_model_api_key or secrets.embedding_model_api_key or "").strip()
     return ModelSettings(
         model_type=_legacy_env("MODEL_TYPE", m.type),
@@ -511,6 +518,12 @@ def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
         ),
         max_images_per_message=_legacy_env_int(
             "CHAT_ATTACHMENT_MAX_IMAGES_PER_MESSAGE", ca.max_images_per_message
+        ),
+        image_inject_max_edge=_legacy_env_int(
+            "CHAT_ATTACHMENT_IMAGE_INJECT_MAX_EDGE", ca.image_inject_max_edge
+        ),
+        vlm_fallback_enabled=_legacy_env_bool(
+            "CHAT_ATTACHMENT_VLM_FALLBACK_ENABLED", ca.vlm_fallback_enabled
         ),
         tiny_inline_chars=_legacy_env_int(
             "CHAT_ATTACHMENT_TINY_INLINE_CHARS", ca.tiny_inline_chars

@@ -14,7 +14,7 @@ def is_embedding_configured() -> bool:
 
 
 def is_vlm_configured() -> bool:
-    """VLM 须独立配置 name / base_url / api_key，不回退主模型。"""
+    """VLM 须配置 name / base_url / api_key；api_key 未单独设置时可回退 EMBEDDING_MODEL_API_KEY。"""
     return bool(
         (ModelConfig.vlm_model_name or "").strip()
         and (ModelConfig.vlm_model_base_url or "").strip()

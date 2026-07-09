@@ -1,5 +1,5 @@
 import { query_user_qa_record } from '@/api'
-import { getSessionMessages } from '@/api/chat'
+import { getSessionMessages, listSessionAttachments } from '@/api/chat'
 import { isImagePreviewPath } from '@/utils/filePreview'
 import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, partsContainStreamFailureNotice, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
@@ -174,7 +174,16 @@ async function loadSessionMessages(
   currentRenderIndex: Ref<number>,
 ) {
   try {
-    const { messages } = await getSessionMessages(sessionId, { limit: 500 })
+    const [{ messages }, attachmentList] = await Promise.all([
+      getSessionMessages(sessionId, { limit: 500 }),
+      listSessionAttachments(sessionId).catch(() => ({ attachments: [], total: 0 })),
+    ])
+    const attachmentById = new Map(
+      attachmentList.attachments.map((item) => [item.attachment_id, item]),
+    )
+    const attachmentByName = new Map(
+      attachmentList.attachments.map((item) => [item.file_name, item]),
+    )
     if (messages?.length) {
       // 将消息历史转换为 conversationItems 格式
       let lastUserQaType = 'COMMON_QA'
@@ -189,12 +198,16 @@ async function loadSessionMessages(
             const refPrefix = '__CHAT_ATTACHMENT__:'
             const isChatRef = strVal.startsWith(refPrefix)
             const attachmentId = isChatRef ? strVal.slice(refPrefix.length) : ''
-            const isImage = isImagePreviewPath(fileName)
+            const meta = (attachmentId && attachmentById.get(attachmentId))
+              || attachmentByName.get(fileName)
+            const isImage = meta?.kind === 'image' || isImagePreviewPath(fileName)
             return {
-              file_name: fileName,
-              attachment_id: attachmentId,
-              kind: isImage ? 'image' : 'document',
-              source_file_key: fileName,
+              file_name: meta?.file_name || fileName,
+              attachment_id: attachmentId || meta?.attachment_id || '',
+              kind: isImage ? 'image' as const : 'document' as const,
+              preview_base64: meta?.preview_base64 ?? null,
+              artifact_url: meta?.artifact_url ?? null,
+              source_file_key: meta?.file_name || fileName,
               parse_file_key: strVal,
               file_size: '',
             }

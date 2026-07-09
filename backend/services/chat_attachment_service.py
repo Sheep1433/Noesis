@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import mimetypes
 import os
 import re
@@ -28,6 +27,7 @@ from models.chat_models import TChatAttachment
 from schemas.chat_attachment_vo import AttachmentResponse
 from services.chat_service import ChatService
 from common.logging import logger
+from domain.chat.attachments.image_prepare import build_image_preview_base64
 from domain.chat.attachments.markdown import extract_preview
 
 _DOCUMENT_EXTENSIONS = frozenset({
@@ -37,7 +37,6 @@ _IMAGE_MIME_TYPES = frozenset({
     "image/jpeg", "image/png", "image/webp", "image/gif",
 })
 _UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|]')
-_PREVIEW_IMAGE_MAX_BYTES = 200 * 1024
 
 
 def _now_ms() -> int:
@@ -52,6 +51,36 @@ def _sanitize_filename(name: str) -> str:
     base = os.path.basename(name or "file").strip()
     base = _UNSAFE_NAME_RE.sub("_", base)
     return base or "file"
+
+
+_GENERIC_IMAGE_STEMS = frozenset({
+    "image", "img", "photo", "picture", "screenshot", "screen", "paste",
+})
+
+
+def _resolve_storage_filename(filename: str, *, kind: str, upload_dir: Path) -> str:
+    """落盘文件名：通用图片名改为 img-{id}.ext，并避免同目录冲突。"""
+    safe = _sanitize_filename(filename)
+    path = Path(safe)
+    stem = path.stem.lower()
+    suffix = path.suffix.lower()
+    if not suffix:
+        suffix = ".png" if kind == "image" else ".bin"
+        safe = f"{path.stem or 'file'}{suffix}"
+
+    if kind == "image" and (
+        safe.lower() in {f"image{suffix}", f"screenshot{suffix}"}
+        or stem in _GENERIC_IMAGE_STEMS
+        or stem.startswith("paste-")
+    ):
+        safe = f"img-{uuid.uuid4().hex[:12]}{suffix}"
+
+    candidate = safe
+    counter = 1
+    while (upload_dir / candidate).exists():
+        candidate = f"{Path(safe).stem}-{counter}{Path(safe).suffix}"
+        counter += 1
+    return candidate
 
 
 def _session_dir(user_id: str, session_id: str) -> Path:
@@ -114,6 +143,7 @@ class ChatAttachmentService:
             preview=preview,
             virtual_path=row.virtual_path,
             artifact_url=_artifact_url(row.session_id, rel),
+            preview_base64=row.preview_base64,
         )
 
     @classmethod
@@ -260,10 +290,16 @@ class ChatAttachmentService:
         await cls._ensure_session_owned(session_id, user_id, db)
         await cls.lazy_delete_expired(session_id, db)
 
-        safe_name = _sanitize_filename(filename)
-        kind = _detect_kind(safe_name, mime_type)
+        sanitized = _sanitize_filename(filename)
+        kind = _detect_kind(sanitized, mime_type)
         if not kind:
-            raise ServiceWarning(message=f"不支持的文件格式: {safe_name}")
+            raise ServiceWarning(message=f"不支持的文件格式: {sanitized}")
+
+        safe_name = _resolve_storage_filename(
+            sanitized,
+            kind=kind,
+            upload_dir=_uploads_dir(user_id, session_id),
+        )
 
         size_mb = len(content) / (1024 * 1024)
         if kind == "document" and size_mb > ChatAttachmentConfig.max_file_mb:
@@ -320,8 +356,7 @@ class ChatAttachmentService:
         else:
             virtual_path = f"/sessions/{session_id}/uploads/{safe_name}"
             preview = f"图片 {safe_name}"
-            if len(content) <= _PREVIEW_IMAGE_MAX_BYTES:
-                preview_base64 = base64.b64encode(content).decode("ascii")
+            preview_base64 = build_image_preview_base64(content, resolved_mime or "")
 
         now = _now_ms()
         row = TChatAttachment(

@@ -229,6 +229,8 @@ class ChatAttachmentYamlSection(BaseModel):
     vision_enabled: bool = True
     reinject_session_images: bool = True
     max_images_per_message: int = Field(default=3, ge=1)
+    image_inject_max_edge: int = Field(default=1536, ge=256, le=4096)
+    vlm_fallback_enabled: bool = True
     tiny_inline_chars: int = Field(default=4096, ge=0)
     read_page_lines: int = Field(default=2000, ge=1)
     preview_chars: int = Field(default=500, ge=1)
