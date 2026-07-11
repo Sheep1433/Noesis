@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { welcomeGradientStyle } from '@/config/theme'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 
 const props = withDefaults(
   defineProps<{
@@ -11,7 +11,7 @@ const props = withDefaults(
   { qaType: 'COMMON_QA' },
 )
 
-const router = useRouter()
+const { isMobile } = useBreakpoint()
 
 const cardOneItems = [
   '① RAG 检索增强，结合知识库精准作答',
@@ -37,14 +37,6 @@ const cardFaultItems = [
   '⑤ 适合线上告警、异常与复盘场景',
 ]
 
-const cardTestItems = [
-  '① 需求与文档解析生成测试用例',
-  '② 策略 / 场景 / 用例分层组织',
-  '③ 覆盖度分析与补充建议',
-  '④ 用例优先级与风险点提示',
-  '⑤ 进入独立页面完成生成与导出',
-]
-
 const currentPanel = computed(() => {
   switch (props.qaType) {
     case 'SUPER_AGENT_QA':
@@ -62,13 +54,6 @@ const currentPanel = computed(() => {
         items: cardFaultItems,
         gradientStyle: welcomeGradientStyle('FAULT_OPERATION_QA'),
       }
-    case 'TEST_CASE_QA':
-      return {
-        title: '测试用例生成',
-        subtitle: '基于 Multi-Agent 的用例生成（在独立页面中完成）',
-        items: cardTestItems,
-        gradientStyle: welcomeGradientStyle('TEST_CASE_QA'),
-      }
     case 'COMMON_QA':
     default:
       return {
@@ -80,20 +65,34 @@ const currentPanel = computed(() => {
   }
 })
 
-function openTestCasePage() {
-  router.push({ name: 'TestCaseGenerate' })
-}
+const visibleItems = computed(() => {
+  if (!isMobile.value) {
+    return currentPanel.value.items
+  }
+  return currentPanel.value.items.slice(0, 3)
+})
+
 </script>
 
 <template>
-  <div class="welcome-root">
-    <div class="welcome-atmosphere" aria-hidden="true">
+  <div
+    class="welcome-root"
+    :class="{ 'welcome-root--mobile': isMobile }"
+  >
+    <div
+      v-if="!isMobile"
+      class="welcome-atmosphere"
+      aria-hidden="true"
+    >
       <div class="welcome-blob welcome-blob--primary" />
       <div class="welcome-blob welcome-blob--secondary" />
       <div class="welcome-blob welcome-blob--tertiary" />
     </div>
 
-    <header class="welcome-header">
+    <header
+      class="welcome-header"
+      :class="{ 'welcome-header--mobile': isMobile }"
+    >
       <div class="logo-wrap">
         <div class="brand-mark i-my-svg:system-logo"></div>
       </div>
@@ -106,6 +105,7 @@ function openTestCasePage() {
 
     <div
       class="detail-card detail-card--below-header"
+      :class="{ 'detail-card--mobile': isMobile }"
       :style="currentPanel.gradientStyle"
     >
       <div class="detail-card__lead">
@@ -115,18 +115,13 @@ function openTestCasePage() {
         <p class="detail-card__subtitle">
           {{ currentPanel.subtitle }}
         </p>
-        <p
-          v-if="qaType === 'TEST_CASE_QA'"
-          class="detail-card__cta"
-        >
-          <button type="button" class="link-btn" @click="openTestCasePage">
-            打开测试用例生成页面 →
-          </button>
-        </p>
       </div>
-      <ul class="detail-card__points">
+      <ul
+        class="detail-card__points"
+        :class="{ 'detail-card__points--mobile': isMobile }"
+      >
         <li
-          v-for="(item, index) in currentPanel.items"
+          v-for="(item, index) in visibleItems"
           :key="index"
           class="detail-point"
         >
@@ -142,6 +137,8 @@ function openTestCasePage() {
   position: relative;
   width: 100%;
   max-width: 960px;
+  height: auto;
+  min-height: 0;
   margin: 0 auto;
   padding: 16px 20px 24px;
   box-sizing: border-box;
@@ -250,6 +247,9 @@ function openTestCasePage() {
   border: none;
   box-shadow: var(--noesis-shadow-sm);
   flex-wrap: wrap;
+  height: auto;
+  min-height: 0;
+  align-content: flex-start;
   transition:
     box-shadow var(--noesis-motion-duration) var(--noesis-motion-ease),
     transform var(--noesis-motion-duration) var(--noesis-motion-ease);
@@ -279,37 +279,8 @@ function openTestCasePage() {
   color: var(--noesis-color-text-secondary);
 }
 
-.detail-card__cta {
-  margin: 12px 0 0;
-}
-
-.link-btn {
-  padding: 6px 14px;
-  border: none;
-  background: var(--noesis-color-primary-bg-hover);
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--noesis-color-primary);
-  cursor: pointer;
-  border-radius: var(--noesis-radius-pill);
-  transition: all var(--noesis-motion-duration) var(--noesis-motion-ease);
-}
-
-.link-btn:hover {
-  color: var(--noesis-color-primary-hover);
-  background: var(--noesis-color-primary-bg-hover);
-}
-
-.link-btn:active {
-  transform: scale(0.97);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .detail-card:hover {
-    transform: none;
-  }
-
-  .link-btn:active {
     transform: none;
   }
 }
@@ -323,6 +294,7 @@ function openTestCasePage() {
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 8px 16px;
   align-content: start;
+  align-self: flex-start;
 }
 
 .detail-point {
@@ -332,13 +304,90 @@ function openTestCasePage() {
   padding-left: 0;
 }
 
-@media (max-width: 640px) {
-  .detail-card {
-    flex-direction: column;
+@media (max-width: 768px) {
+  .welcome-root--mobile {
+    padding: 4px 10px 8px;
+    align-self: flex-start;
+    width: 100%;
   }
 
-  .detail-card__points {
-    grid-template-columns: 1fr;
+  .welcome-root--mobile .welcome-header--mobile {
+    margin-top: 0;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--noesis-radius-lg);
+    box-shadow: var(--noesis-shadow-xs, var(--noesis-shadow-sm));
+    border: 1px solid var(--noesis-color-border-subtle, rgb(0 0 0 / 5%));
+  }
+
+  .welcome-root--mobile .welcome-header--mobile .logo-wrap,
+  .welcome-root--mobile .welcome-header--mobile .brand-mark {
+    width: 36px;
+    height: 36px;
+  }
+
+  .welcome-root--mobile .welcome-header--mobile .welcome-title {
+    font-size: 1rem;
+  }
+
+  .welcome-root--mobile .detail-card--below-header {
+    margin-top: 10px;
+  }
+
+  .welcome-root--mobile .detail-card--mobile {
+    flex: none;
+    flex-direction: column;
+    align-items: stretch;
+    align-content: flex-start;
+    gap: 8px;
+    height: auto;
+    min-height: 0;
+    padding: 10px 12px;
+    border-radius: var(--noesis-radius-lg);
+    box-shadow: var(--noesis-shadow-xs, var(--noesis-shadow-sm));
+    border: 1px solid var(--noesis-color-border-subtle, rgb(0 0 0 / 5%));
+  }
+
+  .welcome-root--mobile .detail-card--mobile:hover {
+    transform: none;
+    box-shadow: var(--noesis-shadow-xs, var(--noesis-shadow-sm));
+  }
+
+  .welcome-root--mobile .detail-card--mobile .detail-card__lead {
+    flex: none;
+    min-width: 0;
+  }
+
+  .welcome-root--mobile .detail-card__title {
+    margin-bottom: 4px;
+    font-size: 0.92rem;
+    line-height: 1.3;
+  }
+
+  .welcome-root--mobile .detail-card__subtitle {
+    font-size: 0.74rem;
+    line-height: 1.4;
+  }
+
+  .welcome-root--mobile .detail-card__points--mobile {
+    flex: none;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: none;
+  }
+
+  .welcome-root--mobile .detail-card__points--mobile .detail-point {
+    font-size: 0.68rem;
+    line-height: 1.35;
+    color: var(--noesis-color-text-secondary);
+  }
+
+  .welcome-root--mobile .detail-card__points--mobile .detail-point:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 }
 </style>

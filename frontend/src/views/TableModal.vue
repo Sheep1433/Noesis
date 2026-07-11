@@ -7,6 +7,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:show', 'delete'])
+const { isMobile } = useBreakpoint()
 
 const localShow = computed({
   get: () => props.show,
@@ -238,7 +239,7 @@ watch(
           :page-size="pagination.pageSize"
           :page-count="pagination.pageCount"
           :item-count="pagination.total"
-          show-size-picker
+          :show-size-picker="!isMobile"
           :page-sizes="[8, 16, 24, 32]"
           @update:page="handlePageChange"
           @update:page-size="handlePageSizeChange"
@@ -286,8 +287,12 @@ watch(
     align-items: stretch;
   }
 
+  .session-manage-modal__footer :deep(.n-pagination) {
+    justify-content: center;
+  }
+
   .session-manage-modal__actions {
-    justify-content: flex-end;
+    justify-content: center;
   }
 }
 </style>

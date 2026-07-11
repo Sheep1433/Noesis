@@ -14,12 +14,15 @@ import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { usePaneResize } from '@/hooks/usePaneResize'
+import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { qaTypeLabel } from '@/utils/qaType'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
+import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import {
   appendReasoningDelta,
   appendStreamFailureNotice,
@@ -52,7 +55,7 @@ const sessionFilesPanelRef = ref<InstanceType<typeof SessionContextPanel> | null
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
-/** 是否显示欢迎/默认页（未进入具体会话对话流） */
+/** 是否显示欢迎/默认页；作为对话首页的轻量引导 */
 const showDefaultPage = ref(true)
 
 function reloadSessionFilesPanel() {
@@ -322,7 +325,6 @@ const historySidebarColumns = computed(() => [
 ])
 
 const tableData = ref<TableItem[]>([])
-const tableRef = ref(null)
 
 // 保存对话历史记录
 const conversationItems = ref<
@@ -832,15 +834,28 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   scrollToBottom()
 }
 
-// 滚动到底部
+// 滚动到底部（流式对话中自动跟随；查看历史时默认不滚动，避免干扰阅读）
 const scrollToBottom = () => {
   if (isView.value === false) {
-    nextTick(() => {
-      if (messagesContainer.value) {
-        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-      }
-    })
+    void scrollToLatestMessage()
   }
+}
+
+/** 强制滚到最新消息（切换历史会话等场景） */
+async function scrollToLatestMessage(smooth = false) {
+  await nextTick()
+  await nextTick()
+  requestAnimationFrame(() => {
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTo({
+        top: messagesContainer.value.scrollHeight,
+        behavior: smooth ? 'smooth' : 'auto',
+      })
+      window.setTimeout(() => {
+        showScrollToBottom.value = false
+      }, 350)
+    }
+  })
 }
 
 const placeholder = computed(() => {
@@ -995,6 +1010,10 @@ const rowProps = (row: TableItem) => {
 
       // 与顶栏切换不同：从历史会话点入时已拉取 messages，不能再因 qa_type 不一致而清空列表并打开默认页
       onAqtiveChange(row.qa_type, row.chat_id, true)
+      await scrollToLatestMessage(true)
+      if (isMobile.value) {
+        historyDrawerOpen.value = false
+      }
     },
   }
 }
@@ -1090,16 +1109,12 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   }
 }
 
-const WELCOME_QA_TYPES = ['COMMON_QA', 'SUPER_AGENT_QA', 'FAULT_OPERATION_QA', 'TEST_CASE_QA'] as const
+const WELCOME_QA_TYPES = ['COMMON_QA', 'SUPER_AGENT_QA', 'FAULT_OPERATION_QA'] as const
 
 /** 从 URL 同步问答类型（不触发清空逻辑，避免首屏与历史加载打架） */
 function applyWelcomeRouteQaType() {
   const q = route.query.qa_type
   if (typeof q !== 'string' || !(WELCOME_QA_TYPES as readonly string[]).includes(q)) {
-    return
-  }
-  // 测试用例在独立路由完成；从 URL 同步 TEST_CASE_QA 会误触发跳转，导致无法停留在对话页
-  if (q === 'TEST_CASE_QA') {
     return
   }
   if (qa_type.value !== q) {
@@ -1155,7 +1170,6 @@ const hideScrollbar = () => {
 }
 
 const searchText = ref('')
-const searchChatRef = useTemplateRef('searchChatRef')
 const isFocusSearchChat = ref(false)
 const onFocusSearchChat = () => {
   if (!showDefaultPage.value) {
@@ -1163,7 +1177,7 @@ const onFocusSearchChat = () => {
   }
   isFocusSearchChat.value = true
   nextTick(() => {
-    searchChatRef.value?.focus()
+    chatHistoryPanelRef.value?.focusSearch()
   })
 }
 const onBlurSearchChat = () => {
@@ -1212,6 +1226,39 @@ const { size: sessionPanelWidth, startResize: startSessionPanelResize } = usePan
   invertDelta: true,
 })
 
+const { isMobile } = useBreakpoint()
+const { drawerWidth: historyDrawerWidth } = useResponsiveDrawerWidth({ max: 560, mobileRatio: 0.8 })
+const { drawerWidth: sessionDrawerWidth } = useResponsiveDrawerWidth({ max: 480, mobileRatio: 0.9 })
+const historyDrawerOpen = ref(false)
+const chatHistoryPanelRef = ref<InstanceType<typeof ChatHistoryPanel> | null>(null)
+
+watch(isMobile, (mobile) => {
+  if (mobile) {
+    collapsed.value = true
+    historyDrawerOpen.value = false
+  }
+})
+
+watch(historyDrawerOpen, (open) => {
+  if (open && isMobile.value) {
+    sessionFilesPanelOpen.value = false
+  }
+})
+
+watch(sessionFilesPanelOpen, (open) => {
+  if (open && isMobile.value) {
+    historyDrawerOpen.value = false
+  }
+})
+
+function openHistoryDrawer() {
+  historyDrawerOpen.value = true
+}
+
+function closeHistoryDrawer() {
+  historyDrawerOpen.value = false
+}
+
 // 背景颜色 默认页面和内容页面动态调整
 const backgroundColorVariable = ref(cssVar(themeCssVar.bgElevated))
 
@@ -1222,12 +1269,7 @@ const scrollThreshold = 1000 // 滚动超过100px时显示按钮
 
 // 用户点击图标滚动到底部
 const clickScrollToBottom = () => {
-  nextTick(() => {
-    if (messagesContainer.value) {
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-      showScrollToBottom.value = false // 滚动到底部后隐藏按钮
-    }
-  })
+  void scrollToLatestMessage()
 }
 
 // ======新增：检查是否需要显示滚动到底部按钮==========//
@@ -1259,6 +1301,28 @@ onBeforeUnmount(() => {
 
 // ============================== 文件上传 ============================//
 const composerDragOver = ref(false)
+
+function isFileDragEvent(e: DragEvent): boolean {
+  return !!e.dataTransfer?.types.includes('Files')
+}
+
+/** 阻止浏览器对文件拖放的默认行为（打开新标签 / 直接下载） */
+function onPageDragOver(e: DragEvent) {
+  if (!isFileDragEvent(e)) {
+    return
+  }
+  e.preventDefault()
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+function onPageDrop(e: DragEvent) {
+  if (!isFileDragEvent(e)) {
+    return
+  }
+  e.preventDefault()
+}
 
 function canUploadComposerFiles(): boolean {
   if (qa_type.value === 'FAULT_OPERATION_QA') {
@@ -1295,6 +1359,8 @@ function onComposerDragLeave(e: DragEvent) {
 }
 
 function onComposerDrop(e: DragEvent) {
+  e.preventDefault()
+  e.stopPropagation()
   composerDragOver.value = false
   if (!canUploadComposerFiles()) {
     return
@@ -1335,7 +1401,9 @@ function onComposerPaste(e: ClipboardEvent) {
 
 <template>
   <div
-    class="flex justify-between items-center h-full"
+    class="chat-page flex justify-between items-center h-full"
+    @dragover="onPageDragOver"
+    @drop="onPageDrop"
   >
     <n-layout
       ref="scrollableContainer"
@@ -1346,6 +1414,7 @@ function onComposerPaste(e: ClipboardEvent) {
       @mouseleave="hideScrollbar"
     >
       <n-layout-sider
+        v-if="!isMobile"
         v-model:collapsed="collapsed"
         class="chat-history-sider"
         collapse-mode="width"
@@ -1355,144 +1424,28 @@ function onComposerPaste(e: ClipboardEvent) {
         show-trigger="arrow-circle"
         bordered
       >
-        <div
-          h-full
-          class="content"
-          flex="~ col"
-        >
-          <div class="sidebar-header-toolbar header p-20">
-            <div
-              class="create-chat-box"
-              :class="{
-                hide: isFocusSearchChat,
-              }"
-            >
-              <n-button
-                type="primary"
-                icon-placement="left"
-                strong
-                class="create-chat"
-                :disabled="stylizingLoading"
-                @click="newChat"
-              >
-                <template #icon>
-                  <n-icon>
-                    <div class="i-hugeicons:add-01"></div>
-                  </n-icon>
-                </template>
-                新建对话
-              </n-button>
-            </div>
-            <button
-              v-if="!isFocusSearchChat"
-              type="button"
-              class="search-chat-trigger"
-              aria-label="搜索对话"
-              @click="onFocusSearchChat"
-            >
-              <span class="search-chat-trigger__icon i-hugeicons:search-01" aria-hidden="true"></span>
-            </button>
-            <n-input
-              v-else
-              ref="searchChatRef"
-              v-model:value="searchText"
-              placeholder="搜索"
-              class="search-chat-input"
-              clearable
-              @blur="onBlurSearchChat()"
-              @input="handleSearch()"
-              @keyup.enter="handleSearch()"
-              @clear="handleClear()"
-            >
-              <template #prefix>
-                <span class="search-chat-input__icon i-hugeicons:search-01" aria-hidden="true"></span>
-              </template>
-            </n-input>
-          </div>
-          <div flex="1 ~ col" class="scrollable-table-container">
-            <n-dropdown
-              trigger="manual"
-              placement="bottom-start"
-              :show="sessionContextMenuShow"
-              :x="sessionContextMenuX"
-              :y="sessionContextMenuY"
-              :options="sessionContextMenuOptions"
-              @select="handleSessionContextMenuSelect"
-              @clickoutside="closeSessionContextMenu"
-            />
-            <n-modal
-              v-model:show="renameSessionModal.show"
-              preset="dialog"
-              title="修改标题"
-              positive-text="确定"
-              negative-text="取消"
-              :loading="renameSessionModal.loading"
-              :mask-closable="false"
-              @positive-click="submitRenameSession"
-            >
-              <n-input
-                v-model:value="renameSessionModal.title"
-                placeholder="请输入会话标题"
-                :maxlength="255"
-                clearable
-                @keyup.enter="submitRenameSession"
-              />
-            </n-modal>
-            <n-data-table
-              ref="tableRef"
-              class="custom-table"
-              :style="{
-                'font-size': `14px`,
-                '--n-td-color': cssVar(themeCssVar.bgElevated),
-                'font-family': `-apple-system, BlinkMacSystemFont,'Segoe UI', Roboto, 'Helvetica Neue', Arial,sans-serif`,
-              }"
-              size="small"
-              :bordered="false"
-              :bottom-bordered="false"
-              :single-line="false"
-              :columns="historySidebarColumns"
-              :data="tableData"
-              :loading="isLoadingHistory"
-              :row-props="rowProps"
-            />
-          </div>
-          <div
-            class="footer"
-            style="flex-shrink: 0"
-          >
-            <n-divider
-              style="width: calc(100% - 60px); margin-left: 25px; margin-right: 35px;
-
---n-color: var(--noesis-color-bg-muted);"
-            />
-            <n-button
-              quaternary
-              icon-placement="left"
-              type="primary"
-              strong
-              :style="{
-                'width': `200px`,
-                'height': `38px`,
-                'margin-left': `20px`,
-                'margin-bottom': `10px`,
-                'align-self': `center`,
-                'text-align': `center`,
-                'font-family': `-apple-system, BlinkMacSystemFont,
-            'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-            sans-serif`,
-                'font-size': `14px`,
-              }"
-              @click="openModal"
-            >
-              <template #icon>
-                <n-icon>
-                  <div class="i-hugeicons:voice-id"></div>
-                </n-icon>
-              </template>
-              管理对话
-            </n-button>
-          </div>
-        </div>
+        <ChatHistoryPanel
+          ref="chatHistoryPanelRef"
+          v-model:search-text="searchText"
+          :stylizing-loading="stylizingLoading"
+          :is-focus-search-chat="isFocusSearchChat"
+          :is-loading-history="isLoadingHistory"
+          :table-data="tableData"
+          :history-sidebar-columns="historySidebarColumns"
+          :session-context-menu-show="sessionContextMenuShow"
+          :session-context-menu-x="sessionContextMenuX"
+          :session-context-menu-y="sessionContextMenuY"
+          :session-context-menu-options="sessionContextMenuOptions"
+          :row-props="rowProps"
+          @newChat="newChat"
+          @focusSearch="onFocusSearchChat"
+          @blurSearch="onBlurSearchChat"
+          @search="handleSearch"
+          @clear="handleClear"
+          @openModal="openModal"
+          @contextMenuSelect="handleSessionContextMenuSelect"
+          @contextMenuClose="closeSessionContextMenu"
+        />
         <ResizeDivider
           v-if="!collapsed"
           @resize-start="startHistorySiderResize"
@@ -1508,6 +1461,15 @@ function onComposerPaste(e: ClipboardEvent) {
               h-full
             >
               <div flex="~ justify-between items-center" class="chat-top-bar">
+                <button
+                  v-if="isMobile"
+                  type="button"
+                  class="history-drawer-toggle"
+                  aria-label="打开对话历史"
+                  @click="openHistoryDrawer"
+                >
+                  <span class="i-hugeicons:menu-02" aria-hidden="true"></span>
+                </button>
                 <NavigationNavBar
                   class="flex-1 min-w-0"
                   :background-color="backgroundColorVariable"
@@ -1540,7 +1502,7 @@ function onComposerPaste(e: ClipboardEvent) {
               >
                 <!-- 默认对话页面 -->
                 <transition name="fade">
-                  <div v-if="showDefaultPage">
+                  <div v-if="showDefaultPage" class="default-page-slot">
                     <DefaultPage :qa-type="qa_type" />
                   </div>
                 </transition>
@@ -1761,7 +1723,7 @@ function onComposerPaste(e: ClipboardEvent) {
                 <div class="flex-1 w-full p-1em chat-input-footer">
                   <n-space
                     vertical
-                    class="mx-10%"
+                    class="chat-content-gutter"
                   >
                     <!-- 文档流内、与输入区同宽，避免 absolute 遮挡消息区 -->
                     <TodoList
@@ -1769,7 +1731,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     />
                     <div
                       flex="~ gap-10"
-                      class="h-40"
+                      class="qa-type-tabs h-40"
                     >
                       <n-button
                         type="default"
@@ -1926,55 +1888,6 @@ function onComposerPaste(e: ClipboardEvent) {
                         </template>
                         故障运维
                       </n-button>
-                      <n-button
-                        type="default"
-                        :class="[
-                          qa_type === 'TEST_CASE_QA' && 'active-tab',
-                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                        ]"
-                        @click="onAqtiveChange('TEST_CASE_QA', '')"
-                      >
-                        <template #icon>
-                          <n-icon size="18">
-                            <svg
-                              t="1743292000001"
-                              class="icon"
-                              viewBox="0 0 1024 1024"
-                              version="1.1"
-                              xmlns="http://www.w3.org/2000/svg"
-                              p-id="88501"
-                              width="64"
-                              height="64"
-                            >
-                              <path
-                                d="M896 128H128c-35.2 0-64 28.8-64 64v640c0 35.2 28.8 64 64 64h768c35.2 0 64-28.8 64-64V192c0-35.2-28.8-64-64-64z"
-                                fill="none"
-                                stroke="#222222"
-                                stroke-width="32"
-                                p-id="88502"
-                              />
-                              <path
-                                d="M320 320h384M320 448h384M320 576h256"
-                                fill="none"
-                                stroke="#222222"
-                                stroke-width="24"
-                                stroke-linecap="round"
-                                p-id="88503"
-                              />
-                              <path
-                                d="M704 640l-96 96-32-32-64 64"
-                                fill="none"
-                                stroke="#4CAF50"
-                                stroke-width="24"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                p-id="88504"
-                              />
-                            </svg>
-                          </n-icon>
-                        </template>
-                        测试用例
-                      </n-button>
                     </div>
                     <div
                       :class="[
@@ -2078,7 +1991,7 @@ function onComposerPaste(e: ClipboardEvent) {
             </div>
           </div>
           <aside
-            v-if="sessionFilesPanelOpen && !showDefaultPage && uuids[qa_type]"
+            v-if="sessionFilesPanelOpen && !showDefaultPage && uuids[qa_type] && !isMobile"
             class="session-context-aside"
             :style="{
               backgroundColor: backgroundColorVariable,
@@ -2098,6 +2011,87 @@ function onComposerPaste(e: ClipboardEvent) {
         </div>
       </n-layout-content>
     </n-layout>
+
+    <!-- 移动端：对话历史抽屉 -->
+    <n-drawer
+      v-if="isMobile"
+      v-model:show="historyDrawerOpen"
+      placement="left"
+      :width="historyDrawerWidth"
+      :block-scroll="true"
+    >
+      <n-drawer-content
+        title="对话历史"
+        closable
+        body-content-style="padding: 0; height: 100%;"
+        @close="closeHistoryDrawer"
+      >
+        <ChatHistoryPanel
+          ref="chatHistoryPanelRef"
+          v-model:search-text="searchText"
+          show-account-actions
+          :stylizing-loading="stylizingLoading"
+          :is-focus-search-chat="isFocusSearchChat"
+          :is-loading-history="isLoadingHistory"
+          :table-data="tableData"
+          :history-sidebar-columns="historySidebarColumns"
+          :session-context-menu-show="sessionContextMenuShow"
+          :session-context-menu-x="sessionContextMenuX"
+          :session-context-menu-y="sessionContextMenuY"
+          :session-context-menu-options="sessionContextMenuOptions"
+          :row-props="rowProps"
+          @newChat="newChat"
+          @focusSearch="onFocusSearchChat"
+          @blurSearch="onBlurSearchChat"
+          @search="handleSearch"
+          @clear="handleClear"
+          @openModal="openModal"
+          @contextMenuSelect="handleSessionContextMenuSelect"
+          @contextMenuClose="closeSessionContextMenu"
+        />
+      </n-drawer-content>
+    </n-drawer>
+
+    <!-- 移动端：会话文件抽屉 -->
+    <n-drawer
+      v-if="isMobile"
+      :show="sessionFilesPanelOpen && !showDefaultPage && !!uuids[qa_type]"
+      placement="right"
+      :width="sessionDrawerWidth"
+      :block-scroll="true"
+      @update:show="sessionFilesPanelOpen = $event"
+    >
+      <n-drawer-content
+        title="会话文件"
+        closable
+        body-content-style="padding: 0; height: 100%;"
+      >
+        <SessionContextPanel
+          ref="sessionFilesPanelRef"
+          :session-id="uuids[qa_type] || ''"
+          :background-color="backgroundColorVariable"
+        />
+      </n-drawer-content>
+    </n-drawer>
+
+    <n-modal
+      v-model:show="renameSessionModal.show"
+      preset="dialog"
+      title="修改标题"
+      positive-text="确定"
+      negative-text="取消"
+      :loading="renameSessionModal.loading"
+      :mask-closable="false"
+      @positive-click="submitRenameSession"
+    >
+      <n-input
+        v-model:value="renameSessionModal.title"
+        placeholder="请输入会话标题"
+        :maxlength="255"
+        clearable
+        @keyup.enter="submitRenameSession"
+      />
+    </n-modal>
     <TableModal
       :show="isModalOpen"
       @update:show="handleModalClose"
@@ -2152,47 +2146,6 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 2px;
 }
 
-.create-chat-box {
-  flex: 1;
-  min-width: 0;
-  overflow: visible;
-  transition: flex 0.25s ease, opacity 0.25s ease, margin 0.25s ease;
-
-  &.hide {
-    flex: 0 0 0;
-    width: 0;
-    margin: 0;
-    opacity: 0;
-    overflow: hidden;
-    pointer-events: none;
-  }
-}
-
-.create-chat {
-  width: 100%;
-  height: 40px;
-  text-align: center;
-  font-family: inherit;
-  font-weight: 500;
-  font-size: 14px;
-  border-radius: var(--noesis-radius-pill);
-
-  &:deep(.n-button__border),
-  &:deep(.n-button__state-border) {
-    border-radius: inherit !important;
-  }
-}
-
-.sidebar-header-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
 .chat-history-sider {
   position: relative;
 }
@@ -2209,58 +2162,6 @@ function onComposerPaste(e: ClipboardEvent) {
   color: var(--noesis-color-primary);
   border-color: var(--noesis-color-primary-muted);
   background: var(--noesis-color-primary-bg-subtle);
-}
-
-.search-chat-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--noesis-color-border, #e8eaf3);
-  border-radius: var(--noesis-radius-round);
-  background: var(--noesis-color-bg-elevated, #fff);
-  color: var(--noesis-color-text-muted, #64748b);
-  cursor: pointer;
-  transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
-}
-
-.search-chat-trigger:hover {
-  color: var(--noesis-color-primary, #5c7cfa);
-  border-color: var(--noesis-color-primary-muted, #a48ef4);
-  background: var(--noesis-color-primary-bg-subtle, rgb(92 124 250 / 4%));
-}
-
-.search-chat-trigger__icon {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  font-size: 18px;
-  line-height: 1;
-  color: var(--noesis-color-text-secondary);
-  flex-shrink: 0;
-}
-
-.search-chat-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.search-chat-input :deep(.n-input-wrapper) {
-  height: 36px;
-  border-radius: var(--noesis-radius-pill);
-}
-
-.search-chat-input__icon {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  font-size: 16px;
-  color: var(--noesis-color-text-secondary);
-  flex-shrink: 0;
 }
 
 .scrollable-container {
@@ -2292,56 +2193,11 @@ function onComposerPaste(e: ClipboardEvent) {
   background: var(--noesis-scrollbar-thumb);
 }
 
-:deep(.custom-table .n-data-table-thead) {
-  display: none;
-}
-
-:deep(.custom-table .n-data-table-table) {
-  border-collapse: collapse;
-}
-
-:deep(.custom-table .n-data-table-th),
-:deep(.custom-table .n-data-table-td) {
-  border: none;
-}
-
-:deep(.custom-table td) {
-  color: var(--noesis-color-text, #1a1d33);
-  padding: 12px 16px;
-  background-color: var(--noesis-color-bg-elevated, #fff);
-  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-
-  /* 优化后的系统字体栈：优先使用系统原生字体 */
-
-  font-family:
-    /* macOS */ -apple-system,
-    /* Windows */ BlinkMacSystemFont,
-    /* 通用系统UI */ 'Segoe UI',
-    /* 开源跨平台 */ Roboto,
-    /* Linux */ Oxygen, Ubuntu, Cantarell,
-    /* fallback */ 'Open Sans', 'Helvetica Neue', Arial,
-    /* 终极兜底 */ sans-serif,
-    /* 现代浏览器推荐 */ system-ui,
-    /* 苹果新字体支持 */ "SF Pro Text";
-
-  /* 可选：基础字体大小与行高，提升可读性 */
-
-  font-size: 14px;
-
-  /* 优化字体渲染 */
-
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizelegibility;
-}
-
-:deep(.custom-table .selected-row td) {
-  color: var(--noesis-color-primary) !important;
-  font-weight: bold;
-  padding: 12px 30px !important;
-  background: var(--noesis-chat-selected-row-bg);
-  transform: scale(1.001);
-  transition: all 0.3s ease;
+.default-page-slot {
+  height: auto;
+  flex-shrink: 0;
+  align-self: flex-start;
+  width: 100%;
 }
 
 .default-page {
@@ -2474,37 +2330,6 @@ function onComposerPaste(e: ClipboardEvent) {
   border: 1px solid var(--noesis-color-primary-muted);
 }
 
-
-/** 自定义对话历史表格滚动条样式 */
-
-.scrollable-table-container {
-  overflow-y: hidden;
-  height: 100%;
-  background-color: var(--noesis-color-bg-elevated);
-  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.scrollable-table-container:hover {
-  overflow-y: auto; /* 鼠标悬停时显示滚动条 */
-}
-
-/* 隐藏滚动条轨道 */
-
-.scrollable-table-container::-webkit-scrollbar {
-  width: 5px; /* 滚动条宽度 */
-}
-
-.scrollable-table-container::-webkit-scrollbar-track {
-  background: transparent; /* 滚动条轨道背景透明 */
-}
-
-.scrollable-table-container::-webkit-scrollbar-thumb {
-  background-color: var(--noesis-scrollbar-thumb-muted);
-  border-radius: 4px;
-}
-
-/* 一键到底部按钮样式，底部居中显示 */
-
 .scroll-to-bottom-btn {
   position: absolute;
   bottom: 145px;
@@ -2593,5 +2418,116 @@ function onComposerPaste(e: ClipboardEvent) {
   flex-shrink: 0;
   gap: 8px;
   padding-right: 12px;
+  padding-left: 8px;
+}
+
+.history-drawer-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--noesis-color-border);
+  border-radius: 50%;
+  background: var(--noesis-color-bg-elevated);
+  color: var(--noesis-color-text-secondary);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.history-drawer-toggle:hover {
+  color: var(--noesis-color-primary);
+  border-color: var(--noesis-color-primary-muted);
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
+.history-drawer-toggle span {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+}
+
+.chat-page {
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-content-gutter {
+  margin-left: var(--noesis-content-gutter-desktop);
+  margin-right: var(--noesis-content-gutter-desktop);
+}
+
+.qa-type-tabs {
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.qa-type-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 1024px) {
+  .chat-content-gutter {
+    margin-left: var(--noesis-content-gutter-mobile);
+    margin-right: var(--noesis-content-gutter-mobile);
+  }
+
+  .assistant-unified-card {
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .custom-layout {
+    border-top-left-radius: var(--noesis-shell-radius-mobile);
+  }
+
+  .scroll-to-bottom-btn {
+    bottom: 120px;
+  }
+
+  .default-page-slot {
+    min-height: 0;
+  }
+
+  .default-page {
+    height: auto;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .qa-type-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    overflow: visible;
+  }
+
+  .qa-type-tabs :deep(.n-button) {
+    width: auto !important;
+    min-width: 0;
+    height: 36px;
+    padding: 0 5px !important;
+    font-size: 12px;
+  }
+
+  .qa-type-tabs :deep(.n-button__content) {
+    gap: 3px;
+    white-space: nowrap;
+  }
+
+  .qa-type-tabs :deep(.n-button .n-icon) {
+    flex-shrink: 0;
+    font-size: 14px !important;
+  }
 }
 </style>

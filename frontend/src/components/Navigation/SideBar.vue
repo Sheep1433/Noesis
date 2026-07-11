@@ -131,20 +131,6 @@ const sidebarItems = ref([
     },
   },
   {
-    label: '测试用例',
-    key: 'TestCaseGenerate',
-    onClick() {
-      router.push({
-        name: this.key,
-      })
-    },
-    renderIcon() {
-      return (
-        <div class="sidebar-nav-icon i-mdi:clipboard-text-outline"></div>
-      )
-    },
-  },
-  {
     label: '知识库',
     key: 'KnowledgeBase',
     onClick() {
@@ -169,6 +155,20 @@ const sidebarItems = ref([
     renderIcon() {
       return (
         <div class="sidebar-nav-icon i-my-svg:chat-skill"></div>
+      )
+    },
+  },
+  {
+    label: '测试用例',
+    key: 'TestCaseGenerate',
+    onClick() {
+      router.push({
+        name: this.key,
+      })
+    },
+    renderIcon() {
+      return (
+        <div class="sidebar-nav-icon i-mdi:clipboard-text-outline"></div>
       )
     },
   },
@@ -215,24 +215,24 @@ const handleLogout = async () => {
     <div flex="~ col items-center" pb-16>
       <ThemeSwitcher />
       <n-popover
-      trigger="hover"
-      placement="right-start"
-    >
-      <template #trigger>
-        <SideBarItem
-          fill
-        >
-          <div class="sidebar-nav-icon size-35 i-my-svg:avatar" />
-        </SideBarItem>
-      </template>
-      <n-button
-        quaternary
-        strong
-        @click="handleLogout"
+        trigger="hover"
+        placement="right-start"
       >
-        退出登录
-      </n-button>
-    </n-popover>
+        <template #trigger>
+          <SideBarItem
+            fill
+          >
+            <div class="sidebar-nav-icon size-35 i-my-svg:avatar" />
+          </SideBarItem>
+        </template>
+        <n-button
+          quaternary
+          strong
+          @click="handleLogout"
+        >
+          退出登录
+        </n-button>
+      </n-popover>
     </div>
   </section>
 </template>

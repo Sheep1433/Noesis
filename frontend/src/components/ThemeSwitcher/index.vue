@@ -1,10 +1,18 @@
 <script setup lang="ts">
-import { ColorPaletteOutline } from '@vicons/ionicons-v5'
 import type { DropdownOption } from 'naive-ui'
+import { ColorPaletteOutline } from '@vicons/ionicons-v5'
 import { NDropdown, NIcon } from 'naive-ui'
 import { computed } from 'vue'
 import { DEFAULT_THEME_PRESET, type ThemePresetId } from '@/config/themePresets'
 import { useThemePreset } from '@/hooks/useThemePreset'
+
+withDefaults(defineProps<{
+  placement?: 'right-start' | 'bottom-end' | 'top-end' | 'top-start'
+  compact?: boolean
+}>(), {
+  placement: 'right-start',
+  compact: false,
+})
 
 const { presetId, presets, applyThemePreset } = useThemePreset()
 
@@ -26,14 +34,17 @@ function handleSelect(key: string | number) {
 <template>
   <n-dropdown
     trigger="click"
-    placement="right-start"
+    :placement="placement"
     :options="dropdownOptions"
     @select="handleSelect"
   >
     <button
       type="button"
       class="theme-switcher-trigger"
-      :class="{ 'theme-switcher-trigger--active': presetId !== DEFAULT_THEME_PRESET }"
+      :class="{
+        'theme-switcher-trigger--active': presetId !== DEFAULT_THEME_PRESET,
+        'theme-switcher-trigger--compact': compact,
+      }"
       aria-label="切换界面风格"
       :title="`界面风格：${presets.find(p => p.id === presetId)?.label ?? '纸墨'}`"
     >
@@ -59,6 +70,12 @@ function handleSelect(key: string | number) {
   color: var(--noesis-color-text-muted, #64748b);
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.theme-switcher-trigger--compact {
+  width: 32px;
+  height: 32px;
+  margin: 0;
 }
 
 .theme-switcher-trigger:hover,

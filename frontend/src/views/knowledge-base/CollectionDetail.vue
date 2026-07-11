@@ -48,12 +48,15 @@ import DocumentDrawer from '@/components/KnowledgeBase/DocumentDrawer.vue'
 import KbSearchPanel from '@/components/KnowledgeBase/KbSearchPanel.vue'
 import KbSearchResults from '@/components/KnowledgeBase/KbSearchResults.vue'
 import ShardDetail from '@/components/KnowledgeBase/ShardDetail.vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { fileTypeLabel, formatKbDate, shortHash, SUPPORTED_DOC_FORMATS } from '@/utils/kbFormat'
 
 const router = useRouter()
 const route = useRoute()
 const message = useMessage()
 const dialog = useDialog()
+const { isMobile } = useBreakpoint()
+const uploadModalWidth = computed(() => (isMobile.value ? 'min(560px, calc(100vw - 32px))' : '560px'))
 
 const collectionName = computed(() => String(route.params.collectionName || ''))
 
@@ -196,6 +199,43 @@ const docColumns: DataTableColumns<DocumentInfo> = [
     }),
   },
 ]
+
+const docColumnsMobile: DataTableColumns<DocumentInfo> = [
+  {
+    title: '文件名',
+    key: 'file_name',
+    ellipsis: { tooltip: true },
+    render: (row) => h(
+      'button',
+      {
+        type: 'button',
+        class: 'doc-link',
+        onClick: () => openDrawer(row.file_name),
+      },
+      row.file_name,
+    ),
+  },
+  {
+    title: '分片',
+    key: 'shard_count',
+    width: 56,
+    align: 'right',
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 148,
+    render: (row) => h(NSpace, { size: 2, wrap: false }, {
+      default: () => [
+        h(NButton, { size: 'tiny', quaternary: true, onClick: () => useDocumentAsQuery(row.file_name) }, { default: () => '检索' }),
+        h(NButton, { size: 'tiny', quaternary: true, onClick: () => openDrawer(row.file_name) }, { default: () => '分片' }),
+        h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => handleDelete(row.file_name) }, { default: () => '删' }),
+      ],
+    }),
+  },
+]
+
+const activeDocColumns = computed(() => (isMobile.value ? docColumnsMobile : docColumns))
 
 onMounted(async () => {
   await loadData()
@@ -461,7 +501,7 @@ async function saveCollectionConfig() {
           入库流程：版式解析 → {{ chunkPreset }} 分块 → 向量化 → 入库
         </p>
       </div>
-      <n-space>
+      <n-space class="detail-header-actions" :size="8" :wrap="isMobile">
         <n-button quaternary :loading="loading" @click="loadData">
           <template #icon>
             <n-icon><Refresh /></n-icon>
@@ -488,7 +528,13 @@ async function saveCollectionConfig() {
       <n-alert type="error" :title="error" style="max-width: 480px" />
     </div>
 
-    <n-tabs v-else v-model:value="activeTab" type="line" class="detail-tabs">
+    <n-tabs
+      v-else
+      v-model:value="activeTab"
+      :type="isMobile ? 'segment' : 'line'"
+      class="detail-tabs"
+      :class="{ 'detail-tabs--mobile': isMobile }"
+    >
       <n-tab-pane name="documents">
         <template #tab>
           <n-icon size="16" style="margin-right: 4px">
@@ -497,14 +543,16 @@ async function saveCollectionConfig() {
           文档库
         </template>
         <div class="tab-panel">
-          <n-data-table
-            v-if="documents.length"
-            :columns="docColumns"
-            :data="documents"
-            :bordered="false"
-            size="small"
-            :row-key="(row: DocumentInfo) => row.file_name"
-          />
+          <div v-if="documents.length" class="doc-table-scroll">
+            <n-data-table
+              :columns="activeDocColumns"
+              :data="documents"
+              :bordered="false"
+              :scroll-x="isMobile ? 360 : undefined"
+              size="small"
+              :row-key="(row: DocumentInfo) => row.file_name"
+            />
+          </div>
           <n-empty v-else description="暂无文档，点击右上角上传" />
         </div>
       </n-tab-pane>
@@ -636,7 +684,7 @@ async function saveCollectionConfig() {
       :shard-id="selectedShardId"
     />
 
-    <n-modal v-model:show="showUploadModal" preset="card" title="上传文档" style="width: 560px" @after-leave="closeUploadModal">
+    <n-modal v-model:show="showUploadModal" preset="card" title="上传文档" :style="{ width: uploadModalWidth }" @after-leave="closeUploadModal">
       <div class="upload-intro">
         <p>上传后将自动解析版式、表格与标题结构，再分块写入知识库。</p>
         <div class="format-grid">
@@ -889,6 +937,61 @@ async function saveCollectionConfig() {
 @media (max-width: 720px) {
   .config-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1024px) {
+  .kb-detail {
+    padding: 12px var(--noesis-content-gutter-mobile) 16px;
+  }
+
+  .detail-header {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .detail-header-main h1 {
+    font-size: 18px;
+    word-break: break-all;
+  }
+
+  .detail-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .pipeline-hint {
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  .tab-panel {
+    padding: 10px 0 16px;
+  }
+
+  .doc-table-scroll {
+    margin: 0 calc(-1 * var(--noesis-content-gutter-mobile));
+    padding: 0 var(--noesis-content-gutter-mobile);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .detail-tabs--mobile :deep(.n-tabs-nav) {
+    padding: 0 2px;
+  }
+
+  .format-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .detail-header-actions :deep(.n-button .n-button__content) {
+    font-size: 13px;
+  }
+
+  .detail-meta {
+    gap: 4px;
   }
 }
 </style>

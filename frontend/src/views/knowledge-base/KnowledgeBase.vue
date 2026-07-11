@@ -25,11 +25,14 @@ import {
   getCollections,
   getKnowledgeBaseStatus,
 } from '@/api/knowledgeBase'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { formatKbDate } from '@/utils/kbFormat'
 
 const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
+const { isMobile } = useBreakpoint()
+const modalWidth = computed(() => (isMobile.value ? 'min(520px, calc(100vw - 32px))' : '520px'))
 
 const loading = ref(true)
 const error = ref<string | null>(null)
@@ -140,7 +143,7 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
           智能文档解析 · 结构分块 · 混合检索 · 向量精排
         </p>
       </div>
-      <n-space>
+      <n-space class="kb-hero-actions" :size="8">
         <n-button quaternary :loading="loading" @click="loadData">
           <template #icon>
             <n-icon><Refresh /></n-icon>
@@ -257,7 +260,7 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
       </article>
     </div>
 
-    <n-modal v-model:show="showCreateModal" preset="card" title="新建知识库" style="width: 520px">
+    <n-modal v-model:show="showCreateModal" preset="card" title="新建知识库" :style="{ width: modalWidth }">
       <n-form label-placement="top">
         <n-form-item label="知识库名称" required>
           <n-input
@@ -487,5 +490,42 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
 
 .disconnect-alert code {
   font-size: 12px;
+}
+
+@media (max-width: 1024px) {
+  .kb-page {
+    padding: 12px var(--noesis-content-gutter-mobile);
+    gap: 12px;
+  }
+
+  .kb-hero {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .kb-status-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .kb-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-card-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .kb-hero-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .summary-stats {
+    font-size: 12px;
+    line-height: 1.5;
+  }
 }
 </style>

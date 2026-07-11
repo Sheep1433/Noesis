@@ -3,7 +3,8 @@ import type { SkillFsTreeNode, SkillFsTreeResponse, SkillSource } from '@/api/sk
 import { CloudUpload, DocumentText, FolderOpen, LockClosed, Person, Refresh, Server } from '@vicons/ionicons-v5'
 import {
   NButton,
-  NDropdown,
+  NDrawer,
+  NDrawerContent,
   NEmpty,
   NForm,
   NFormItem,
@@ -16,7 +17,6 @@ import {
   NSpin,
   NTag,
   NText,
-  NTree,
   NUpload,
   useDialog,
   useMessage,
@@ -31,10 +31,17 @@ import {
   uploadSkillsFsZip,
 } from '@/api/skills'
 import FilePreview from '@/components/FilePreview/index.vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { isTextPreviewPath } from '@/utils/filePreview'
+import SkillsTreePanel from '@/views/skills/SkillsTreePanel.vue'
 
 const message = useMessage()
 const dialog = useDialog()
+const { isMobile } = useBreakpoint()
+const { drawerWidth: treeDrawerWidth } = useResponsiveDrawerWidth({ max: 320 })
+const treeDrawerOpen = ref(false)
+const modalWidth = computed(() => (isMobile.value ? 'min(480px, calc(100vw - 32px))' : '480px'))
 
 const SOURCE_LABEL: Record<SkillSource, string> = {
   platform: '平台预置',
@@ -228,6 +235,9 @@ async function onUpdateSelectedKeys(keys: Array<string | number>) {
     message.error(e.message || '读取失败')
   } finally {
     previewLoading.value = false
+    if (isMobile.value && previewMeta.value) {
+      treeDrawerOpen.value = false
+    }
   }
 }
 
@@ -278,7 +288,7 @@ async function confirmZipUpload() {
           </div>
         </div>
       </div>
-      <n-space>
+      <n-space class="page-header-actions">
         <n-button @click="loadTree">
           <template #icon>
             <n-icon><Refresh /></n-icon>
@@ -307,52 +317,43 @@ async function confirmZipUpload() {
       </n-empty>
     </div>
 
-    <n-layout v-else has-sider class="fs-layout" bordered>
+    <n-layout v-else has-sider class="fs-layout" :class="{ 'fs-layout--mobile': isMobile }" bordered>
       <n-layout-sider
+        v-if="!isMobile"
         content-style="padding: 0;"
         :width="320"
         show-trigger
         collapse-mode="width"
         bordered
       >
-        <div class="sider-header">
-          <n-text strong>技能目录</n-text>
-          <n-text depth="3" class="sider-hint">点击文件预览；个人技能顶层目录可右键删除</n-text>
-        </div>
-        <div v-if="treeData.length > 0" class="tree-wrap">
-          <n-dropdown
-            trigger="manual"
-            placement="bottom-start"
-            :show="contextMenuShow"
-            :x="contextMenuX"
-            :y="contextMenuY"
-            :options="contextMenuOptions"
-            @select="handleContextMenuSelect"
-            @clickoutside="closeContextMenu"
-          />
-          <n-tree
-            :data="treeData"
-            :selected-keys="selectedKeys"
-            :render-label="renderTreeLabel"
-            :node-props="nodeProps"
-            block-line
-            show-line
-            selectable
-            @update:selected-keys="onUpdateSelectedKeys"
-          />
-        </div>
-        <div v-else class="tree-empty">
-          <n-empty description="暂无技能" size="small">
-            <template #extra>
-              <n-button size="small" type="primary" @click="openZipModal">
-                上传第一个技能
-              </n-button>
-            </template>
-          </n-empty>
-        </div>
+        <SkillsTreePanel
+          :tree-data="treeData"
+          :selected-keys="selectedKeys"
+          :context-menu-show="contextMenuShow"
+          :context-menu-x="contextMenuX"
+          :context-menu-y="contextMenuY"
+          :context-menu-options="contextMenuOptions"
+          :render-tree-label="renderTreeLabel"
+          :node-props="nodeProps"
+          @update-selected-keys="onUpdateSelectedKeys"
+          @context-menu-select="handleContextMenuSelect"
+          @context-menu-close="closeContextMenu"
+          @open-zip-modal="openZipModal"
+        />
       </n-layout-sider>
 
       <n-layout-content content-style="padding: 0;" :native-scrollbar="false">
+        <div v-if="isMobile" class="mobile-tree-bar">
+          <n-button size="small" quaternary @click="treeDrawerOpen = true">
+            <template #icon>
+              <n-icon><FolderOpen /></n-icon>
+            </template>
+            技能目录
+          </n-button>
+          <n-text v-if="previewMeta" depth="3" class="mobile-preview-hint">
+            {{ previewMeta.filename }}
+          </n-text>
+        </div>
         <div v-if="previewLoading" class="preview-state">
           <n-spin size="medium" />
           <span>读取文件...</span>
@@ -384,7 +385,7 @@ async function confirmZipUpload() {
         </template>
 
         <div v-else class="preview-state">
-          <n-empty description="在左侧选择文件以预览">
+          <n-empty :description="isMobile ? '点击「技能目录」选择文件预览' : '在左侧选择文件以预览'">
             <template v-if="showEmptyHint" #extra>
               <n-text depth="3">您还没有个人技能，可点击右上角「上传技能」添加</n-text>
             </template>
@@ -393,11 +394,41 @@ async function confirmZipUpload() {
       </n-layout-content>
     </n-layout>
 
+    <n-drawer
+      v-if="isMobile"
+      v-model:show="treeDrawerOpen"
+      placement="left"
+      :width="treeDrawerWidth"
+      :trap-focus="false"
+      :block-scroll="true"
+    >
+      <n-drawer-content
+        title="技能目录"
+        closable
+        body-content-style="padding: 0; height: 100%;"
+      >
+        <SkillsTreePanel
+          :tree-data="treeData"
+          :selected-keys="selectedKeys"
+          :context-menu-show="contextMenuShow"
+          :context-menu-x="contextMenuX"
+          :context-menu-y="contextMenuY"
+          :context-menu-options="contextMenuOptions"
+          :render-tree-label="renderTreeLabel"
+          :node-props="nodeProps"
+          @update-selected-keys="onUpdateSelectedKeys"
+          @context-menu-select="handleContextMenuSelect"
+          @context-menu-close="closeContextMenu"
+          @open-zip-modal="openZipModal"
+        />
+      </n-drawer-content>
+    </n-drawer>
+
     <n-modal
       v-model:show="showZipModal"
       preset="card"
       title="上传个人技能"
-      style="width: 480px"
+      :style="{ width: modalWidth }"
     >
       <p class="upload-desc">
         选择包含技能包的 ZIP 文件，系统将解压到您的个人技能库。请保持包内目录结构完整（通常包含 <code>SKILL.md</code>）。
@@ -433,9 +464,71 @@ async function confirmZipUpload() {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 20px 24px;
+  padding: var(--noesis-shell-padding-desktop) 24px;
   box-sizing: border-box;
   gap: 16px;
+}
+
+.fs-layout--mobile {
+  border: 1px solid var(--n-border-color);
+}
+
+.mobile-tree-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--n-border-color);
+  flex-shrink: 0;
+}
+
+.mobile-preview-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 1024px) {
+  .skills-management {
+    padding: 12px var(--noesis-content-gutter-mobile);
+    gap: 12px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-subtitle {
+    max-width: none;
+  }
+
+  .tree-wrap {
+    max-height: none;
+  }
+
+  .preview-body {
+    max-height: calc(100dvh - 280px);
+  }
+}
+
+@media (max-width: 768px) {
+  .page-header-actions :deep(.n-button span:not(.n-button__icon)) {
+    display: none;
+  }
+
+  .page-header-actions :deep(.n-button) {
+    padding: 0 10px;
+  }
 }
 
 .page-header {
@@ -594,12 +687,5 @@ async function confirmZipUpload() {
   margin-top: 4px;
   font-size: 12px;
   color: var(--n-text-color-3);
-}
-
-@media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
-    align-items: stretch;
-  }
 }
 </style>

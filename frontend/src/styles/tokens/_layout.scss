@@ -1,0 +1,20 @@
+/* 布局 token — 壳层内边距、移动端底栏、安全区 */
+
+:root {
+  --noesis-shell-padding-desktop: 40px;
+  --noesis-shell-padding-mobile: 8px;
+  --noesis-shell-radius-desktop: 40px;
+  --noesis-shell-radius-mobile: 12px;
+
+  --noesis-mobile-nav-height: 56px;
+  --noesis-mobile-sidebar-width: 56px;
+  --noesis-safe-area-top: env(safe-area-inset-top, 0px);
+  --noesis-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --noesis-safe-area-left: env(safe-area-inset-left, 0px);
+  --noesis-safe-area-right: env(safe-area-inset-right, 0px);
+
+  --noesis-content-gutter-desktop: 10%;
+  --noesis-content-gutter-mobile: 12px;
+
+  --noesis-app-height: 100dvh;
+}
