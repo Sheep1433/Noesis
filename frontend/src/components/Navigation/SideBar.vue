@@ -188,8 +188,8 @@ const handleLogout = async () => {
     flex="~ col justify-between"
     w-70
     h-full
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow-x-hidden
+    overflow-y-auto
     relative
     :style="{
       background: 'var(--noesis-sidebar-bg)',
@@ -222,7 +222,7 @@ const handleLogout = async () => {
           <SideBarItem
             fill
           >
-            <div class="sidebar-nav-icon size-35 i-my-svg:avatar" />
+            <div class="sidebar-nav-icon size-35 i-my-svg:avatar"></div>
           </SideBarItem>
         </template>
         <n-button

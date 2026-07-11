@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { DropdownOption } from 'naive-ui'
+import type { ThemePresetId } from '@/config/themePresets'
 import { ColorPaletteOutline } from '@vicons/ionicons-v5'
 import { NDropdown, NIcon } from 'naive-ui'
 import { computed } from 'vue'
-import { DEFAULT_THEME_PRESET, type ThemePresetId } from '@/config/themePresets'
+import { DEFAULT_THEME_PRESET } from '@/config/themePresets'
 import { useThemePreset } from '@/hooks/useThemePreset'
 
 withDefaults(defineProps<{
@@ -17,7 +18,7 @@ withDefaults(defineProps<{
 const { presetId, presets, applyThemePreset } = useThemePreset()
 
 const dropdownOptions = computed<DropdownOption[]>(() =>
-  presets.map(item => ({
+  presets.map((item) => ({
     key: item.id,
     label: item.label,
     props: {

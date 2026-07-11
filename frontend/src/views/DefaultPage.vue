@@ -71,7 +71,6 @@ const visibleItems = computed(() => {
   }
   return currentPanel.value.items.slice(0, 3)
 })
-
 </script>
 
 <template>
@@ -84,9 +83,9 @@ const visibleItems = computed(() => {
       class="welcome-atmosphere"
       aria-hidden="true"
     >
-      <div class="welcome-blob welcome-blob--primary" />
-      <div class="welcome-blob welcome-blob--secondary" />
-      <div class="welcome-blob welcome-blob--tertiary" />
+      <div class="welcome-blob welcome-blob--primary"></div>
+      <div class="welcome-blob welcome-blob--secondary"></div>
+      <div class="welcome-blob welcome-blob--tertiary"></div>
     </div>
 
     <header
