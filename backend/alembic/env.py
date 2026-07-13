@@ -1,4 +1,4 @@
-"""Alembic 运行环境（同步 pymysql，与 asyncmy 应用层分离）。"""
+"""Alembic 运行环境（同步 psycopg，与 asyncpg 应用层分离）。"""
 
 from logging.config import fileConfig
 

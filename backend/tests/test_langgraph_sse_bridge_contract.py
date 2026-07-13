@@ -61,14 +61,14 @@ def test_message_start_and_text_delta_shapes() -> None:
     assert "part_id" in td
 
 
-def test_message_start_includes_stop_token() -> None:
-    bridge = LangGraphSseBridge("sess-stop", stop_token="tok-stop-1")
+def test_message_start_does_not_include_client_stop_token() -> None:
+    bridge = LangGraphSseBridge("sess-stop")
     builder = AssistantMessageBuilder(session_id="sess-stop", message_id=bridge.assistant_message_id)
     ctx = _ctx()
     text = "".join(bridge.process_item({"type": "text-delta", "text_delta": "x"}, builder, ctx))
     objs = _data_json_objects(text)
     assert objs[0]["type"] == "message-start"
-    assert objs[0]["stop_token"] == "tok-stop-1"
+    assert "stop_token" not in objs[0]
 
 
 def test_message_start_with_langfuse_hint() -> None:

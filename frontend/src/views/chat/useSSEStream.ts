@@ -4,7 +4,8 @@
  */
 
 import { ref } from 'vue'
-import { applyRefreshToken, getAuthHeaders } from '@/utils/authHttp'
+import { useUserStore } from '@/store/business/userStore'
+import { getAuthHeaders } from '@/utils/authHttp'
 
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
@@ -78,7 +79,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
 
   const isLoading = ref(false)
   const error = ref<string | null>(null)
-  const currentStopToken = ref<string | null>(null)
   let removeBeforeUnload: (() => void) | null = null
   let lastFinishReason: string | undefined
   let abortController: AbortController | null = null
@@ -93,7 +93,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         const payload = JSON.stringify({
           session_id: sessionId,
           qa_type: qaType,
-          ...(currentStopToken.value ? { stop_token: currentStopToken.value } : {}),
+          ...(useUserStore().csrfToken ? { csrf_token: useUserStore().csrfToken } : {}),
         })
         const blob = new Blob([payload], { type: 'application/json' })
         navigator.sendBeacon(`/api/chat/sessions/${sessionId}/stop`, blob)
@@ -127,10 +127,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     const t = (data.type as string) || eventName
 
     if (t === 'message-start') {
-      const stopRaw = data.stop_token
-      currentStopToken.value = typeof stopRaw === 'string' && stopRaw.trim()
-        ? stopRaw.trim()
-        : null
       onMessageStart?.(data)
       return
     }
@@ -296,7 +292,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
 
     tool_name_by_call_id.clear()
     error.value = null
-    currentStopToken.value = null
     streamSettled = false
     lastFinishReason = undefined
     userAborted = false
@@ -321,7 +316,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           extra: extra || {},
         }),
       })
-      applyRefreshToken(res)
 
       if (!res.ok) {
         const status = res.status
@@ -392,7 +386,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
 
     tool_name_by_call_id.clear()
     error.value = null
-    currentStopToken.value = null
     streamSettled = false
     lastFinishReason = undefined
     userAborted = false
@@ -413,7 +406,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         },
         body: JSON.stringify({ selected_point_names: selectedPointNames }),
       })
-      applyRefreshToken(res)
 
       if (!res.ok) {
         const status = res.status
@@ -485,16 +477,11 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     abortController?.abort()
   }
 
-  function getStopToken(): string | null {
-    return currentStopToken.value
-  }
-
   return {
     isLoading,
     error,
     sendMessage,
     resumeTestCase,
     abortStream,
-    getStopToken,
   }
 }

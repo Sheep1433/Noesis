@@ -49,6 +49,7 @@ def build_noesis_runtime_middleware(
     *,
     include_tool_call_limits: bool = True,
     backend: BackendProtocol | None = None,
+    model_id: str | None = None,
 ) -> list[AgentMiddleware]:
     """Noesis 运行时防护中间件（clock → repair → offload → loop → limit → metrics）。"""
     middleware: list[AgentMiddleware] = [SessionClockMiddleware()]
@@ -56,7 +57,10 @@ def build_noesis_runtime_middleware(
     if ModelConfig.dangling_tool_call_repair_enabled:
         middleware.append(DanglingToolCallMiddleware())
 
-    summary_middleware = create_summary_offload_middleware(filesystem_backend=backend)
+    summary_middleware = create_summary_offload_middleware(
+        filesystem_backend=backend,
+        model_id=model_id,
+    )
     if summary_middleware is not None:
         middleware.append(summary_middleware)
 
@@ -74,7 +78,7 @@ def build_noesis_runtime_middleware(
         middleware.extend(build_tool_call_limit_middleware())
 
     if ModelConfig.context_display_enabled:
-        middleware.append(ContextMetricsMiddleware())
+        middleware.append(ContextMetricsMiddleware(model_id=model_id))
 
     return middleware
 
@@ -188,7 +192,7 @@ def create_noesis_agent(
     )
     if extra_middleware:
         middleware.extend(extra_middleware)
-    middleware.extend(build_noesis_runtime_middleware(backend=backend))
+    middleware.extend(build_noesis_runtime_middleware(backend=backend, model_id=model_id))
 
     return create_agent(
         model=model if model is not None else get_llm(model_id=model_id),

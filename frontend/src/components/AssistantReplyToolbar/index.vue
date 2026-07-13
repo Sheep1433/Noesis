@@ -1,7 +1,7 @@
 <script lang="ts" setup>
-import { useClipboard } from '@vueuse/core'
 import { computed } from 'vue'
 import QatypeIcon from '@/components/IconFont/QatypeIcon.vue'
+import { copyToClipboard } from '@/utils/copy'
 
 const props = withDefaults(defineProps<{
   qaType?: string
@@ -35,12 +35,21 @@ function openLangfuseUi() {
   window.open(origin, '_blank', 'noopener,noreferrer')
 }
 
-const { copy, copied } = useClipboard()
-
 const handlePassClip = async () => {
-  await copy(props.copyText || '')
-  window.$ModalMessage.destroyAll()
-  window.$ModalMessage.success(copied.value ? '已复制' : '复制失败')
+  const text = props.copyText || ''
+  if (!text.trim()) {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.warning('暂无可复制内容')
+    return
+  }
+  try {
+    await copyToClipboard(text)
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.success('已复制')
+  } catch {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.error('复制失败')
+  }
 }
 </script>
 

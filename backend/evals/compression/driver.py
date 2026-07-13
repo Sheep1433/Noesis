@@ -10,7 +10,8 @@ from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemM
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
-from agent.middlewares.context_metrics import get_agent_token_counter, resolve_context_max_tokens
+from agent.middlewares.context_metrics import get_agent_token_counter
+from llm.model_limits import resolve_context_max_tokens
 from agent.middlewares.summary_offload_middleware import SummarizationOffloadMiddleware
 from config.env import ModelConfig
 from llm import get_llm

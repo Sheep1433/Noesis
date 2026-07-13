@@ -21,7 +21,7 @@ _PATH_PREFIXES: tuple[str, ...] = (
 _ENV_DENYLIST_EXACT: frozenset[str] = frozenset(
     {
         "JWT_SECRET_KEY",
-        "MYSQL_PASSWORD",
+        "POSTGRES_PASSWORD",
         "MODEL_API_KEY",
         "EMBEDDING_MODEL_API_KEY",
         "RERANK_MODEL_API_KEY",

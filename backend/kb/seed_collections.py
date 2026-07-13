@@ -52,6 +52,6 @@ async def ensure_default_kb_collections() -> None:
             await KbCollectionConfigService.ensure_defaults_for_qdrant_collections(db)
             await db.commit()
     except Exception as exc:
-        logger.warning(f"[KB Init] MySQL 集合配置回填失败: {exc}")
+        logger.warning(f"[KB Init] PostgreSQL 集合配置回填失败: {exc}")
 
     logger.info("[KB Init] 默认知识库 Collection 检查完成")

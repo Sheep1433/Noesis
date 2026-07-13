@@ -1,12 +1,8 @@
-import {
-  applyRefreshToken,
-  authFetch,
-  getAuthHeaders,
-} from '@/utils/authHttp'
+import { authFetch, getAuthHeaders } from '@/utils/authHttp'
 
 /** 用户登录（表单登录，不经 Bearer 鉴权） */
 export async function login(username: string, password: string) {
-  const url = new URL(`${location.origin}/api/user/login`)
+  const url = new URL(`${location.origin}/api/auth/login`)
   const formData = new URLSearchParams()
   formData.append('username', username)
   formData.append('password', password)
@@ -20,13 +16,12 @@ export async function login(username: string, password: string) {
     },
     body: formData,
   })
-  applyRefreshToken(res)
   return res
 }
 
-/** 用户注册 */
-export async function register(username: string, password: string) {
-  const url = new URL(`${location.origin}/api/user/register`)
+/** 使用邀请码注册；成功后服务端同时建立 Cookie Session。 */
+export async function register(username: string, password: string, inviteCode: string) {
+  const url = new URL(`${location.origin}/api/auth/register`)
   const res = await fetch(url, {
     mode: 'cors',
     credentials: 'include',
@@ -37,6 +32,7 @@ export async function register(username: string, password: string) {
     body: JSON.stringify({
       username,
       password,
+      invite_code: inviteCode,
     }),
   })
   return res

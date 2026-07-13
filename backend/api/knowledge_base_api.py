@@ -1,5 +1,5 @@
 """
-知识库管理 API：Qdrant 向量数据 + MySQL 集合配置
+知识库管理 API：Qdrant 向量数据 + PostgreSQL 集合配置
 """
 import json
 import logging
@@ -125,7 +125,7 @@ async def create_collection(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """创建 Collection（Qdrant + MySQL 默认配置）"""
+    """创建 Collection（Qdrant + PostgreSQL 默认配置）"""
     _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
@@ -157,7 +157,7 @@ async def delete_collection(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """删除 Collection（Qdrant + MySQL 配置）"""
+    """删除 Collection（Qdrant + PostgreSQL 配置）"""
     _ = current_user
     if not is_qdrant_connected():
         raise HTTPException(status_code=503, detail="向量库未连接")
@@ -209,7 +209,7 @@ async def get_collection_config(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """读取集合 MySQL 配置"""
+    """读取集合 PostgreSQL 配置"""
     _ = current_user
     service = QdrantService()
     cfg = await _require_collection_config(db, service, collection_name)

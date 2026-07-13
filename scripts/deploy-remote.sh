@@ -6,8 +6,8 @@
 #   DEPLOY_BRANCH   部署分支，默认 main（生产）；偶尔线上调试 dev 时传 dev
 #
 # 线上仅一套 compose（:28468）。生产 / 调试通过 deploy/.env.docker 区 MySQL 库：
-#   生产  MYSQL_DATABASE=noesis
-#   调试  MYSQL_DATABASE=noesis_dev  （部署前手动改，调试完改回）
+#   生产  POSTGRES_DATABASE=noesis
+#   调试  POSTGRES_DATABASE=noesis_dev  （部署前手动改，调试完改回）
 set -euo pipefail
 
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"

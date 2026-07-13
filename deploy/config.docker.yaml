@@ -10,15 +10,16 @@ app:
   version: 1.0.0
   reload: false
 
-jwt:
-  algorithm: HS256
-  expire_minutes: 1440
-  redis_expire_minutes: 30
+session:
+  idle_expire_days: 30
+  absolute_expire_days: 90
+  renewal_window_minutes: 5
+  cookie_name: noesis_session
 
 database:
-  host: host.docker.internal
-  port: 3306
-  user: root
+  host: postgres
+  port: 5432
+  user: noesis
   database: noesis
   echo: false
   max_overflow: 10
@@ -122,7 +123,7 @@ other:
 
 # 容器内路径基于 /app（backend/）；持久化见 docker-compose backend_runtime 卷
 checkpoint:
-  db_path: ./data/checkpoints/langgraph_checkpoints.sqlite
+  database: noesis_langgraph
 
 chat_attachment:
   enabled: true

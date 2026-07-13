@@ -4,8 +4,8 @@ from kb.chunk import (
     chunk,
     deep_merge_mapping,
     merge_query_execution_params,
-    normalize_mysql_processing_params,
-    normalize_mysql_query_params,
+    normalize_collection_processing_params,
+    normalize_collection_query_params,
     normalize_query_execution_params,
     resolve_effective_processing_params,
 )
@@ -29,8 +29,8 @@ def test_resolve_processing_priority_document_over_collection():
     assert merged["chunk_preset_id"] == KB_CHUNK_PRESET_GENERAL
 
 
-def test_normalize_mysql_processing_forces_general_preset():
-    out = normalize_mysql_processing_params({"strategy": "markdown_headers", "chunk_size": 600})
+def test_normalize_collection_processing_forces_general_preset():
+    out = normalize_collection_processing_params({"strategy": "markdown_headers", "chunk_size": 600})
     assert out["chunk_preset_id"] == KB_CHUNK_PRESET_GENERAL
     assert out["chunk_parser_config"]["chunk_size"] == 600
 
@@ -72,7 +72,7 @@ def test_chunk_long_plain_text_produces_chunks():
     assert len(docs) >= 1
 
 
-def test_normalize_mysql_query_maps_limit_alias():
-    out = normalize_mysql_query_params({"limit": 8})
+def test_normalize_collection_query_maps_limit_alias():
+    out = normalize_collection_query_params({"limit": 8})
     assert out["final_top_k"] == 8
     assert "limit" not in out

@@ -35,7 +35,8 @@ def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
 
     with (
         patch("agent.middlewares.summary_offload_middleware.ModelConfig", cfg),
-        patch("agent.middlewares.context_metrics.ModelConfig", cfg),
+        patch("llm.model_limits.ModelConfig", cfg),
+        patch("agent.middlewares.summary_offload_middleware.resolve_context_max_tokens", return_value=8000),
         patch(
             "agent.middlewares.summary_offload_middleware.get_llm",
             return_value=mock_model,
@@ -47,6 +48,32 @@ def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
     assert isinstance(mw, SummarizationOffloadMiddleware)
     assert mock_model.profile == {"max_input_tokens": 8000}
     assert mw._get_token_trigger_value() == 50000
+
+
+def test_create_summary_offload_uses_catalog_model_id_for_context() -> None:
+    cfg = SimpleNamespace(
+        summarization_enabled=True,
+        summarization_trigger_tokens=0,
+        summarization_trigger_fraction=0.75,
+        summarization_messages_to_keep=6,
+        summarization_tool_offload_threshold=1000,
+        summarization_max_retention_ratio=0.6,
+    )
+    mock_model = MagicMock()
+    mock_model.profile = None
+
+    with (
+        patch("agent.middlewares.summary_offload_middleware.ModelConfig", cfg),
+        patch("agent.middlewares.summary_offload_middleware.resolve_context_max_tokens", return_value=1_000_000) as resolve_ctx,
+        patch(
+            "agent.middlewares.summary_offload_middleware.get_llm",
+            return_value=mock_model,
+        ),
+    ):
+        mw = create_summary_offload_middleware(model_id="nemotron")
+
+    resolve_ctx.assert_any_call("nemotron")
+    assert mw._get_token_trigger_value() == 750_000
 
 
 def test_get_llm_summarization_falls_back_to_main_model() -> None:

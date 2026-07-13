@@ -4,6 +4,7 @@ import { Copy, EyeOutline } from '@vicons/ionicons-v5'
 import { NAlert, NButton, NDrawer, NDrawerContent, NEmpty, NIcon, NPagination, NSpin, NTooltip, useMessage } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import { getDocumentShards } from '@/api/knowledgeBase'
+import { copyToClipboard } from '@/utils/copy'
 import { formatKbDate } from '@/utils/kbFormat'
 
 const props = defineProps<{
@@ -97,7 +98,7 @@ function shardIndex(shard: ShardInfo, index: number) {
 
 async function copyContent(shard: ShardInfo) {
   try {
-    await navigator.clipboard.writeText(shard.content)
+    await copyToClipboard(shard.content)
     message.success('复制成功')
   } catch {
     message.error('复制失败')

@@ -59,6 +59,9 @@ def resolve_session_id_for_request(request: ModelRequest) -> str:
 class ContextMetricsMiddleware(AgentMiddleware):
     """Record context fill level immediately before model invoke (final ModelRequest)."""
 
+    def __init__(self, *, model_id: str | None = None) -> None:
+        self._model_id = model_id
+
     def _record(self, request: ModelRequest) -> None:
         if not ModelConfig.context_display_enabled:
             return
@@ -68,7 +71,10 @@ class ContextMetricsMiddleware(AgentMiddleware):
                 "[context_metrics] runtime.execution_info.thread_id 缺失，跳过上下文快照写入"
             )
             return
-        ContextMetricsRegistry.put(session_id, build_context_snapshot_from_request(request))
+        ContextMetricsRegistry.put(
+            session_id,
+            build_context_snapshot_from_request(request, model_id=self._model_id),
+        )
 
     @override
     def wrap_model_call(

@@ -1,12 +1,16 @@
 import type { Ref } from 'vue'
-import mermaid from 'mermaid'
 import { nextTick, onMounted, onUnmounted, watch } from 'vue'
 
 let initialized = false
+let mermaidLoader: Promise<typeof import('mermaid').default> | null = null
 
-function ensureMermaid() {
+async function ensureMermaid() {
+  if (!mermaidLoader) {
+    mermaidLoader = import('mermaid').then((module) => module.default)
+  }
+  const mermaid = await mermaidLoader
   if (initialized) {
-    return
+    return mermaid
   }
   mermaid.initialize({
     startOnLoad: false,
@@ -15,6 +19,7 @@ function ensureMermaid() {
     fontFamily: 'inherit',
   })
   initialized = true
+  return mermaid
 }
 
 export function useMermaidRender(
@@ -39,7 +44,7 @@ export function useMermaidRender(
     if (!nodes.length) {
       return
     }
-    ensureMermaid()
+    const mermaid = await ensureMermaid()
     const currentId = ++renderId
     try {
       await mermaid.run({ nodes })

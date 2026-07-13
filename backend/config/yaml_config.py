@@ -56,17 +56,17 @@ class AppYamlSection(BaseModel):
     reload: bool = True
 
 
-class JwtYamlSection(BaseModel):
-    algorithm: str = "HS256"
-    expire_minutes: int = 1440
-    redis_expire_minutes: int = 30
-    stop_token_expire_minutes: int = 15
+class SessionYamlSection(BaseModel):
+    idle_expire_days: int = Field(default=30, ge=1)
+    absolute_expire_days: int = Field(default=90, ge=1)
+    renewal_window_minutes: int = Field(default=5, ge=1)
+    cookie_name: str = "noesis_session"
 
 
 class DatabaseYamlSection(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 3306
-    user: str = "root"
+    port: int = 5432
+    user: str = "noesis"
     database: str = "noesis"
     echo: bool = True
     max_overflow: int = 10
@@ -83,6 +83,14 @@ class ModelGenerationYamlSection(BaseModel):
     streaming: bool = True
 
 
+class ModelLimitYamlSection(BaseModel):
+    """模型上下文上限（与 models.dev / OpenCode ``limit`` 字段一致）。"""
+
+    context: int = Field(default=0, ge=0)
+    output: int | None = Field(default=None, ge=0)
+    input: int | None = Field(default=None, ge=0)
+
+
 class ModelCatalogEntryYamlSection(BaseModel):
     """可选对话模型；未填字段继承 model 层默认。"""
 
@@ -92,6 +100,7 @@ class ModelCatalogEntryYamlSection(BaseModel):
     name: str = ""
     temperature: float | None = None
     base_url: str = ""
+    limit: ModelLimitYamlSection | None = None
 
 
 class ModelYamlSection(BaseModel):
@@ -106,6 +115,7 @@ class ModelYamlSection(BaseModel):
     max_retries: int = Field(default=2, ge=0)
     generation: ModelGenerationYamlSection = Field(default_factory=ModelGenerationYamlSection)
     default_catalog_id: str = ""
+    limit: ModelLimitYamlSection | None = None
     catalog: list[ModelCatalogEntryYamlSection] = Field(default_factory=list)
 
 
@@ -141,8 +151,8 @@ class SummarizationYamlSection(BaseModel):
     # 仅模型名单独配置；type / base_url / api_key 与 model 层一致
     model_name: str = ""
     temperature: float = 0.0
-    # trigger_tokens > 0 时优先；为 0 时用 trigger_fraction × context.max_input_tokens
-    trigger_tokens: int = Field(default=96000, ge=0)
+    # trigger_tokens > 0 时优先；为 0 时用 trigger_fraction × 当前 model catalog limit.context
+    trigger_tokens: int = Field(default=0, ge=0)
     trigger_fraction: float = Field(default=0.75, gt=0, le=1)
     max_input_tokens: int = Field(default=0, ge=0)
     tool_offload_threshold: int = Field(default=6000, ge=1)
@@ -209,7 +219,7 @@ class WebToolsYamlSection(BaseModel):
 
 
 class CheckpointYamlSection(BaseModel):
-    db_path: str = "../.data/checkpoints/langgraph_checkpoints.sqlite"
+    database: str = "noesis_langgraph"
 
 
 class SandboxYamlSection(BaseModel):
@@ -252,7 +262,7 @@ class KbYamlSection(BaseModel):
 class AppYamlConfig(BaseModel):
     config_version: int = 1
     app: AppYamlSection = Field(default_factory=AppYamlSection)
-    jwt: JwtYamlSection = Field(default_factory=JwtYamlSection)
+    session: SessionYamlSection = Field(default_factory=SessionYamlSection)
     database: DatabaseYamlSection = Field(default_factory=DatabaseYamlSection)
     model: ModelYamlSection = Field(default_factory=ModelYamlSection)
     embedding: EmbeddingYamlSection = Field(default_factory=EmbeddingYamlSection)

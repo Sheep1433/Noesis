@@ -26,7 +26,8 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 from typing_extensions import override
 
-from agent.middlewares.context_metrics import get_agent_token_counter, resolve_context_max_tokens
+from agent.middlewares.context_metrics import get_agent_token_counter
+from llm.model_limits import resolve_context_max_tokens
 from config.env import ModelConfig
 from deepagents.backends.protocol import BackendProtocol
 from llm import get_llm
@@ -207,9 +208,10 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
         filesystem_backend: BackendProtocol | None = None,
         tool_offload_threshold: int | None = None,
         max_retention_ratio: float | None = None,
+        context_model_id: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(model, **kwargs)
+        self._context_model_id = context_model_id
         self._filesystem_backend = filesystem_backend
         self.tool_offload_threshold = (
             tool_offload_threshold
@@ -221,10 +223,11 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
             if max_retention_ratio is not None
             else ModelConfig.summarization_max_retention_ratio
         )
+        super().__init__(model, **kwargs)
 
     @override
     def _get_profile_limits(self) -> int | None:
-        return resolve_context_max_tokens()
+        return resolve_context_max_tokens(self._context_model_id)
 
     def _get_token_trigger_value(self) -> int | None:
         if not self._trigger_conditions:
@@ -356,12 +359,13 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
 def create_summary_offload_middleware(
     *,
     filesystem_backend: BackendProtocol | None = None,
+    model_id: str | None = None,
 ) -> SummarizationOffloadMiddleware | None:
     if not ModelConfig.summarization_enabled:
         return None
 
     model = get_llm(purpose="summarization")
-    max_input = resolve_context_max_tokens()
+    max_input = resolve_context_max_tokens(model_id)
 
     if not getattr(model, "profile", None):
         model.profile = {"max_input_tokens": max_input}
@@ -374,6 +378,7 @@ def create_summary_offload_middleware(
     return SummarizationOffloadMiddleware(
         model,
         filesystem_backend=filesystem_backend,
+        context_model_id=model_id,
         trigger=trigger,
         keep=("messages", ModelConfig.summarization_messages_to_keep),
         token_counter=get_agent_token_counter(),

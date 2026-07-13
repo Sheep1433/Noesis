@@ -32,7 +32,8 @@ def test_compress_fixture_messages_with_mock_summary():
 
     with (
         patch("evals.compression.driver.ModelConfig", cfg),
-        patch("agent.middlewares.context_metrics.ModelConfig", cfg),
+        patch("llm.model_limits.ModelConfig", cfg),
+        patch("evals.compression.driver.resolve_context_max_tokens", return_value=8000),
         patch("evals.compression.driver.get_llm", return_value=mock_model),
         patch(
             "agent.middlewares.summary_offload_middleware.SummarizationOffloadMiddleware._create_summary",

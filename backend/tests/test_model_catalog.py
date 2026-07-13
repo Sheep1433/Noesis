@@ -8,7 +8,7 @@ from llm.factory import get_llm
 
 @patch("llm.catalog.load_app_yaml")
 def test_model_catalog_uses_yaml_entries(mock_load_yaml):
-    from config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelYamlSection
+    from config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelLimitYamlSection, ModelYamlSection
 
     mock_load_yaml.return_value = AppYamlConfig(
         model=ModelYamlSection(
@@ -18,7 +18,12 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
             default_catalog_id="flash",
             catalog=[
                 ModelCatalogEntryYamlSection(id="flash", label="Flash", name="deepseek-v4-flash-free"),
-                ModelCatalogEntryYamlSection(id="reasoner", label="Reasoner", name="deepseek-reasoner"),
+                ModelCatalogEntryYamlSection(
+                    id="reasoner",
+                    label="Reasoner",
+                    name="deepseek-reasoner",
+                    limit=ModelLimitYamlSection(context=200000, output=128000),
+                ),
             ],
         )
     )
@@ -28,6 +33,8 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
     assert len(catalog) == 2
     assert get_default_model_id() == "flash"
     assert resolve_catalog_entry("reasoner").model_name == "deepseek-reasoner"
+    assert resolve_catalog_entry("reasoner").limit is not None
+    assert resolve_catalog_entry("reasoner").limit.context == 200_000
     assert resolve_catalog_entry(None).id == "flash"
 
     get_model_catalog.cache_clear()

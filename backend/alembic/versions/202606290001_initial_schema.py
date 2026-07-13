@@ -33,8 +33,6 @@ def upgrade() -> None:
         sa.Column("update_time", sa.DateTime(), nullable=True, comment="修改时间"),
         sa.PrimaryKeyConstraint("id"),
         comment="用户表",
-        mysql_charset="utf8mb4",
-        mysql_collate="utf8mb4_unicode_ci",
     )
 
     op.create_table(
@@ -50,8 +48,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["parent_id"], ["t_chat_session.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         comment="会话表 v2.1",
-        mysql_charset="utf8mb4",
-        mysql_collate="utf8mb4_unicode_ci",
     )
     op.create_index("idx_session_parent", "t_chat_session", ["parent_id"], unique=False)
     op.create_index("idx_session_updated", "t_chat_session", ["updated_at"], unique=False)
@@ -79,8 +75,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["session_id"], ["t_chat_session.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         comment="消息表 v2.1",
-        mysql_charset="utf8mb4",
-        mysql_collate="utf8mb4_unicode_ci",
     )
     op.create_index("idx_message_session", "t_chat_message", ["session_id", "created_at"], unique=False)
     op.create_index("idx_message_parent", "t_chat_message", ["parent_id"], unique=False)
@@ -110,8 +104,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["session_id"], ["t_chat_session.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         comment="聊天会话附件表",
-        mysql_charset="utf8mb4",
-        mysql_collate="utf8mb4_unicode_ci",
     )
     op.create_index("idx_attachment_session", "t_chat_attachment", ["session_id", "created_at"], unique=False)
     op.create_index("idx_attachment_expires", "t_chat_attachment", ["expires_at"], unique=False)
@@ -119,8 +111,8 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
-            INSERT INTO t_user (id, username, password, mobile, create_time, update_time)
-            VALUES (1, 'admin', :password, NULL, NOW(), NOW())
+            INSERT INTO t_user (username, password, mobile, create_time, update_time)
+            VALUES ('admin', :password, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
         ).bindparams(password=_DEMO_ADMIN_PASSWORD_HASH)
     )

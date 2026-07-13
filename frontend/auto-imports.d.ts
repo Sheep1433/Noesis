@@ -334,6 +334,9 @@ declare global {
   // @ts-ignore
   export type { ChatAttachmentItem, BusinessState } from './src/store/business/index'
   import('./src/store/business/index')
+  // @ts-ignore
+  export type { AuthUser } from './src/store/business/userStore'
+  import('./src/store/business/userStore')
 }
 
 // for vue template auto import

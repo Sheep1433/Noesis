@@ -25,7 +25,7 @@ from common.logging import logger
 from domain.chat.message_builder import AssistantMessageBuilder
 
 # ============================================================================
-# 加载锁：服务启动从 MySQL 恢复检查点完成前，业务写入须等待
+# 加载锁：服务启动完成 PostgreSQL 检查点恢复前，业务写入须等待
 # ============================================================================
 _load_lock = threading.Lock()
 _load_complete = False
@@ -810,6 +810,11 @@ class ChatService:
         :param db: 数据库会话
         :return: 会话对象
         """
+        # 聊天表以字符串保存用户标识；认证层当前使用整数主键。
+        # 在服务边界统一转换，避免 PostgreSQL 对 VARCHAR = INTEGER 的严格类型检查失败。
+        if user_id is not None:
+            user_id = str(user_id)
+
         conditions = [
             TChatSession.id == session_id,
             TChatSession.deleted_at.is_(None)

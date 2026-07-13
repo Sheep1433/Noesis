@@ -1,4 +1,4 @@
-"""知识库 MySQL 配置模型。"""
+"""知识库集合配置模型。"""
 from __future__ import annotations
 
 import datetime

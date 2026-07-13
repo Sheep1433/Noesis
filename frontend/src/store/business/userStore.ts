@@ -1,48 +1,60 @@
-// src/store/userStore.ts
 import { defineStore } from 'pinia'
+
+export interface AuthUser {
+  id: number
+  username: string
+  mobile?: string | null
+}
 
 export const useUserStore = defineStore('user', {
   state: () => ({
-    user: null as null | { token: string },
+    user: null as AuthUser | null,
+    csrfToken: '',
+    initialized: false,
+    unavailable: false,
   }),
   actions: {
-    login(user: { token: string }) {
+    login(user: AuthUser, csrfToken: string) {
       this.user = user
-      sessionStorage.setItem('user', JSON.stringify(user))
-    },
-    setToken(token: string) {
-      this.login({ token })
+      this.csrfToken = csrfToken
+      this.unavailable = false
     },
     logoutLocal() {
       this.user = null
-      sessionStorage.removeItem('user')
+      this.csrfToken = ''
     },
     async logout() {
       try {
-        await fetch(`${location.origin}/api/user/logout`, {
+        await fetch(`${location.origin}/api/auth/logout`, {
           method: 'POST',
           credentials: 'include',
+          headers: { 'X-CSRF-Token': this.csrfToken },
         })
+      } finally {
+        this.logoutLocal()
+      }
+    },
+    async restoreSession() {
+      try {
+        const res = await fetch(`${location.origin}/api/auth/session`, { credentials: 'include' })
+        if (res.status === 401) {
+          this.logoutLocal()
+          return
+        }
+        if (!res.ok) {
+          this.unavailable = true
+          return
+        }
+        const json = await res.json() as { code: number, data?: { user: AuthUser, csrf_token: string } }
+        if (json.code === 200 && json.data) {
+          this.login(json.data.user, json.data.csrf_token)
+        }
       } catch {
-        // 网络失败时仍清除本地态
+        this.unavailable = true
+      } finally {
+        this.initialized = true
       }
-      this.logoutLocal()
-    },
-    init() {
-      const storedUser = sessionStorage.getItem('user')
-      if (storedUser) {
-        this.user = JSON.parse(storedUser)
-      }
-    },
-    getUserToken() {
-      const storedUser = sessionStorage.getItem('user')
-      if (storedUser) {
-        this.user = JSON.parse(storedUser)
-      }
-      return this.user?.token
     },
   },
-  getters: {
-    isLoggedIn: (state) => !!state.user,
-  },
+  getters: { isLoggedIn: (state) => !!state.user },
 })

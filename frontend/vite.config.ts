@@ -9,11 +9,13 @@ import IconsResolver from 'unplugin-icons/resolver'
 import Icons from 'unplugin-icons/vite'
 import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
 import Components from 'unplugin-vue-components/vite'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 
 import raw from 'vite-raw-plugin'
 
 export default defineConfig(({ mode }) => {
+  // 仅允许 Vite 约定的公开变量进入客户端构建产物；绝不注入完整 process.env。
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
   const devProxy = {
     // REST/SSE 经 /api 转发；勿开 ws，否则部分环境下大文件 multipart 会与 WS 升级逻辑冲突
     '/api': {
@@ -25,7 +27,7 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
-    base: process.env.VITE_ROUTER_MODE === 'hash' ? '' : '/',
+    base: env.VITE_ROUTER_MODE === 'hash' ? '' : '/',
     assetsInclude: ['**/*.png'],
     server: {
       port: 2048,
@@ -45,7 +47,7 @@ export default defineConfig(({ mode }) => {
       proxy: devProxy,
     },
     preview: {
-      port: Number(process.env.FRONTEND_PREVIEW_PORT) || 4173,
+      port: Number(env.VITE_FRONTEND_PREVIEW_PORT) || 4173,
       strictPort: true,
       host: '0.0.0.0',
       // prod 裸机 preview 仅需 /api 反代后端
@@ -153,7 +155,8 @@ export default defineConfig(({ mode }) => {
       ],
     },
     define: {
-      'process.env': process.env,
+      // 兼容仍读取 process.env 的浏览器依赖，但只提供显式公开的 VITE_* 变量。
+      'process.env': env,
     },
     css: {
       preprocessorOptions: {
