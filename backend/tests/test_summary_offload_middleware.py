@@ -71,9 +71,8 @@ def test_create_summary_offload_uses_catalog_model_id_for_context() -> None:
         ),
     ):
         mw = create_summary_offload_middleware(model_id="nemotron")
-
-    resolve_ctx.assert_any_call("nemotron")
-    assert mw._get_token_trigger_value() == 750_000
+        resolve_ctx.assert_any_call("nemotron")
+        assert mw._get_token_trigger_value() == 750_000
 
 
 def test_get_llm_summarization_falls_back_to_main_model() -> None:
