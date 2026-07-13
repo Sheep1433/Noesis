@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from exceptions.handle import handle_exception
-from middleware.sliding_auth import SlidingAuthMiddleware
+from middleware.csrf import CsrfMiddleware
 from config.env import AppConfig
 from config.checkpointer import close_checkpointer, init_checkpointer
 from config.get_db import init_database
@@ -10,13 +10,13 @@ from config.database import async_engine
 from common.logging import logger
 from domain.observability.langfuse import sync_langfuse_env_from_app_config
 from api import (
-    login_router,
     user_router,
     chat_router,
     knowledge_base_router,
     skill_router,
     chat_attachment_router,
     model_router,
+    auth_router,
 )
 from services.qdrant_service import init_qdrant_client, close_qdrant_client
 from services.sandbox_service import shutdown_sandboxes
@@ -52,11 +52,11 @@ app = FastAPI(
 )
 
 handle_exception(app)
-app.add_middleware(SlidingAuthMiddleware)
+app.add_middleware(CsrfMiddleware)
 
 # 加载路由列表
 controller_list = [
-    {'router': login_router, 'tags': ['登录模块']},
+    {'router': auth_router, 'tags': ['认证模块']},
     {'router':  user_router, 'tags': ['用户模块']},
     {'router':  chat_router, 'tags': ['聊天历史模块']},
     {'router':  knowledge_base_router, 'tags': ['知识库模块']},
@@ -73,4 +73,3 @@ for controller in controller_list:
 async def health_check():
     """健康检查端点"""
     return {'status': 'healthy', 'app': AppConfig.app_name}
-

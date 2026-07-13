@@ -1,4 +1,4 @@
-"""聊天会话附件：磁盘存储 + MySQL 元数据。"""
+"""聊天会话附件：磁盘存储 + PostgreSQL 元数据。"""
 
 from __future__ import annotations
 

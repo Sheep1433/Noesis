@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 from langchain.agents.middleware.summarization import TokenCounter, count_tokens_approximately
 from langchain.agents.middleware.types import ModelRequest
@@ -11,24 +11,11 @@ from langchain_core.messages import SystemMessage
 from langchain_core.messages.utils import convert_to_openai_messages
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from config.env import ModelConfig
-from common.logging import logger
-
-DEFAULT_CONTEXT_MAX_INPUT_TOKENS = 128_000
+from llm.model_limits import resolve_context_max_tokens
 
 
 def get_agent_token_counter() -> TokenCounter:
     return count_tokens_approximately
-
-
-def resolve_context_max_tokens() -> int:
-    if ModelConfig.context_max_input_tokens > 0:
-        return int(ModelConfig.context_max_input_tokens)
-    logger.warning(
-        "context.max_input_tokens 未配置，使用默认值 {}",
-        DEFAULT_CONTEXT_MAX_INPUT_TOKENS,
-    )
-    return DEFAULT_CONTEXT_MAX_INPUT_TOKENS
 
 
 def _messages_with_system(
@@ -89,10 +76,14 @@ def compute_used_percentage(current_tokens: int, max_tokens: int) -> int:
     return min(100, pct)
 
 
-def build_context_snapshot(messages: list[Any]) -> dict[str, int]:
+def build_context_snapshot(
+    messages: list[Any],
+    *,
+    model_id: Optional[str] = None,
+) -> dict[str, int]:
     """仅基于消息列表的粗估（摘要触发等内部逻辑使用）。"""
     current_tokens = int(get_agent_token_counter()(messages))
-    max_tokens = resolve_context_max_tokens()
+    max_tokens = resolve_context_max_tokens(model_id)
     used_percentage = compute_used_percentage(current_tokens, max_tokens)
     return {
         "current_tokens": current_tokens,
@@ -101,10 +92,14 @@ def build_context_snapshot(messages: list[Any]) -> dict[str, int]:
     }
 
 
-def build_context_snapshot_from_request(request: ModelRequest) -> dict[str, int]:
+def build_context_snapshot_from_request(
+    request: ModelRequest,
+    *,
+    model_id: Optional[str] = None,
+) -> dict[str, int]:
     """Composer 上下文指示器：对齐即将发往模型的有效输入规模。"""
     current_tokens = estimate_model_request_input_tokens(request)
-    max_tokens = resolve_context_max_tokens()
+    max_tokens = resolve_context_max_tokens(model_id)
     used_percentage = compute_used_percentage(current_tokens, max_tokens)
     return {
         "current_tokens": current_tokens,

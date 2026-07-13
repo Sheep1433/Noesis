@@ -44,8 +44,6 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("collection_name"),
         comment="知识库集合配置",
-        mysql_charset="utf8mb4",
-        mysql_collate="utf8mb4_unicode_ci",
     )
 
 

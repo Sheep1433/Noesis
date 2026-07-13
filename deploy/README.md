@@ -1,6 +1,6 @@
 # Noesis Docker 部署
 
-生产与开发环境均使用 **Docker Compose**（`deploy/docker-compose.yml`）：nginx + backend + qdrant + sandbox-runner。MySQL 在宿主机或独立实例，通过 `host.docker.internal` 连接（见 `config.docker.yaml`）。
+生产与开发环境均使用 **Docker Compose**（`deploy/docker-compose.yml`）：nginx + backend + PostgreSQL + qdrant + sandbox-runner。PostgreSQL 由 Compose 管理并使用持久化卷。
 
 ## CI 自动部署
 
@@ -12,29 +12,26 @@
 
 ## 偶尔线上调试 dev
 
-与生产共用同一 compose，**只换 Git 分支 + MySQL 库名**（数据隔离）：
+与生产共用同一 compose，仅切换 Git 分支；开发环境应使用独立 Compose 项目名和 PostgreSQL 数据卷：
 
 ```bash
 cd /root/zzq/code/noesis
 
 # 1. 编辑 deploy/.env.docker
-#    MYSQL_DATABASE=noesis_dev
 #    APP_ENV=dev          # 可选
 
 # 2. 部署 dev 分支
 DEPLOY_BRANCH=dev bash ./scripts/deploy-remote.sh
 
 # 3. 调试结束后恢复生产
-#    改回 MYSQL_DATABASE=noesis、APP_ENV=prod
+#    改回 APP_ENV=prod
 DEPLOY_BRANCH=main bash ./scripts/deploy-remote.sh
 ```
-
-首次调试前在 MySQL 创建开发库：`CREATE DATABASE noesis_dev ...`（可与生产共用同一 MySQL 实例）。
 
 服务器首次准备：
 
 1. 安装 Docker，克隆仓库到 `DEPLOY_PATH`（如 `/root/zzq/code/noesis`）。
-2. 复制 `deploy/.env.docker.example` → `deploy/.env.docker`，生产默认 `MYSQL_DATABASE=noesis`。
+2. 复制 `deploy/.env.docker.example` → `deploy/.env.docker`，设置 `POSTGRES_PASSWORD`。
 3. 预拉 AIO 镜像：`docker pull ghcr.io/agent-infra/sandbox:latest`。
 4. `main` 推送且 CI 通过后自动部署。
 
@@ -46,6 +43,7 @@ DEPLOY_BRANCH=main bash ./scripts/deploy-remote.sh
 |------|------|
 | `nginx` | 前端静态资源 + 反向代理 |
 | `backend` | FastAPI API |
+| `postgres` | 业务数据与 LangGraph checkpoint |
 | `qdrant` | 向量库 |
 | `sandbox-runner` | 内网沙箱 lifecycle + docker exec 代理（持 Docker socket） |
 
@@ -70,7 +68,7 @@ docker pull ghcr.io/agent-infra/sandbox:latest
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-首次部署或发版时，后端容器启动会自动执行 Alembic 迁移（`server.py` → `init_database()`）。全新环境需先建库：在宿主机执行 `cd backend && uv run python sql/initialize_mysql.py`，详见 `backend/sql/README.md`。
+首次部署或发版时，后端容器启动会自动执行 Alembic 迁移（`server.py` → `init_database()`）。Compose 会在空数据卷上创建业务库和 LangGraph checkpoint 库；本地非 Compose 环境使用 `cd backend && uv run python sql/initialize_postgresql.py`。
 
 ### DeepDoc 模型（知识库 PDF 解析）
 

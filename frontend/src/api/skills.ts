@@ -1,7 +1,7 @@
 /**
  * Skills 文件目录 API（平台预置 + 个人上传）
  */
-import { useUserStore } from '@/store/business/userStore'
+import { authFetch } from '@/utils/authHttp'
 
 const API_BASE = `${location.origin}/api/skills`
 
@@ -53,15 +53,10 @@ function parseSourceFromKey(key: string): { source: SkillSource, path: string } 
  * 获取当前用户可用 Skills 目录树
  */
 export async function getSkillsFsTree(): Promise<SkillFsTreeResponse> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const url = `${API_BASE}/fs/tree`
 
-  const response = await fetch(url, {
+  const response = await authFetch(url, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
   })
 
   if (!response.ok) {
@@ -78,18 +73,13 @@ export async function getSkillsFsFile(
   key: string,
   source?: SkillSource,
 ): Promise<SkillFsFileContent> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const parsed = parseSourceFromKey(key)
   const effectiveSource = source ?? parsed.source
   const relPath = parsed.path
   const url = `${API_BASE}/fs/file?path=${encodeURIComponent(relPath)}&source=${effectiveSource}`
 
-  const response = await fetch(url, {
+  const response = await authFetch(url, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
   })
 
   if (!response.ok) {
@@ -106,18 +96,13 @@ export async function getSkillsFsFile(
 export async function uploadSkillsFsZip(
   file: File,
 ): Promise<{ success: boolean, message: string }> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const url = `${API_BASE}/fs/upload-zip`
 
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(url, {
+  const response = await authFetch(url, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
     body: formData,
   })
 
@@ -138,15 +123,10 @@ export async function uploadSkillsFsZip(
 export async function deleteUserSkillPackage(
   packageName: string,
 ): Promise<{ success: boolean, message: string }> {
-  const userStore = useUserStore()
-  const token = userStore.getUserToken()
   const url = `${API_BASE}/fs/package?path=${encodeURIComponent(packageName)}`
 
-  const response = await fetch(url, {
+  const response = await authFetch(url, {
     method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
   })
 
   const json = await response.json().catch(() => ({}))

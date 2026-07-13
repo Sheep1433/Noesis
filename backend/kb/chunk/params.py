@@ -135,8 +135,8 @@ def normalize_query_execution_params(
     collection_query: Optional[Mapping[str, Any]] = None,
     request_overrides: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """平台默认 → MySQL 集合 query_params → 单次请求覆盖。"""
-    base = normalize_mysql_query_params(collection_query)
+    """平台默认 → 集合 query_params → 单次请求覆盖。"""
+    base = normalize_collection_query_params(collection_query)
     merged = merge_query_execution_params(persisted=base, request_overrides=request_overrides)
     for key, default in DEFAULT_COLLECTION_QUERY.items():
         if key == "limit":
@@ -194,13 +194,13 @@ def _fixed_window_chunks(text: str, *, chunk_size: int, overlap: int) -> list[st
     return chunks
 
 
-def normalize_mysql_processing_params(raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def normalize_collection_processing_params(raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     """与 DEFAULT_COLLECTION_PROCESSING 合并，并规范化为 general preset。"""
     merged = deep_merge_mapping(DEFAULT_COLLECTION_PROCESSING, raw or {})
     return _flatten_chunk_parser_config(merged)
 
 
-def normalize_mysql_query_params(raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def normalize_collection_query_params(raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     """与 DEFAULT_COLLECTION_QUERY 合并；limit 别名映射为 final_top_k。"""
     raw_dict = dict(raw or {})
     limit_only = "limit" in raw_dict and "final_top_k" not in raw_dict
@@ -213,12 +213,12 @@ def normalize_mysql_query_params(raw: Optional[Mapping[str, Any]]) -> Dict[str, 
 
 def fixed_processing_params() -> Dict[str, Any]:
     """平台固定入库分块参数。"""
-    return normalize_mysql_processing_params({})
+    return normalize_collection_processing_params({})
 
 
 def build_effective_processing_snapshot(effective_params: Mapping[str, Any]) -> Dict[str, Any]:
     """写入 Qdrant payload 的 effective_processing_params 快照。"""
-    normalized = normalize_mysql_processing_params(effective_params)
+    normalized = normalize_collection_processing_params(effective_params)
     snapshot: Dict[str, Any] = {
         "chunk_preset_id": normalized.get("chunk_preset_id", KB_CHUNK_PRESET_GENERAL),
         "chunk_template_id": normalized.get(

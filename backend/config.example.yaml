@@ -14,16 +14,17 @@ app:
   version: 1.0.0
   reload: true
 
-jwt:
-  algorithm: HS256
-  expire_minutes: 1440
-  redis_expire_minutes: 30
-  stop_token_expire_minutes: 15
+session:
+  # 生产环境必须通过同源 HTTPS 部署，Cookie 由服务端管理。
+  idle_expire_days: 30
+  absolute_expire_days: 90
+  renewal_window_minutes: 5
+  cookie_name: noesis_session
 
 database:
   host: 127.0.0.1
-  port: 3306
-  user: root
+  port: 5432
+  user: noesis
   database: noesis
   echo: true
   max_overflow: 10
@@ -43,6 +44,9 @@ model:
     - id: default
       label: Qwen Plus（默认）
       name: qwen-plus
+      limit:
+        context: 129024
+        output: 8192
     - id: qwen-vl-max
       label: Qwen VL Max（识图）
       name: qwen-vl-max
@@ -50,6 +54,9 @@ model:
       label: Qwen Max（更强）
       name: qwen-max
       temperature: 0.7
+      limit:
+        context: 30720
+        output: 8192
   # --- OpenCode Zen 免费模型示例（取消注释并改 default_catalog_id；.env MODEL_API_KEY=public）---
   # type: opencode
   # name: deepseek-v4-flash-free
@@ -59,22 +66,15 @@ model:
   #   - id: flash
   #     label: DeepSeek V4 Flash（快速）
   #     name: deepseek-v4-flash-free
-  #   - id: big-pickle
-  #     label: Big Pickle（推理）
-  #     name: big-pickle
-  #     temperature: 0.7
-  #   - id: mimo
-  #     label: MiMo V2.5（小米）
-  #     name: mimo-v2.5-free
-  #     temperature: 0.7
+  #     limit:
+  #       context: 200000
+  #       output: 128000
   #   - id: nemotron
   #     label: Nemotron 3 Ultra（1M 上下文）
   #     name: nemotron-3-ultra-free
-  #     temperature: 0.6
-  #   - id: north
-  #     label: North Mini Code（代码）
-  #     name: north-mini-code-free
-  #     temperature: 0.5
+  #     limit:
+  #       context: 1000000
+  #       output: 128000
   # 单次 LLM HTTP 读超时（秒）：流式为相邻 chunk 间隔上限；深度研究建议 ≥120
   request_timeout: 120
   max_retries: 2
@@ -99,7 +99,7 @@ vlm:
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
 context:
-  max_input_tokens: 128000
+  max_input_tokens: 0
   display_enabled: true
 
 summarization:
@@ -107,8 +107,8 @@ summarization:
   # 仅 model_name 单独配置；type / base_url / api_key 与 model 层一致
   model_name: ""
   temperature: 0.0
-  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × context.max_input_tokens
-  trigger_tokens: 96000
+  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × catalog limit.context
+  trigger_tokens: 0
   trigger_fraction: 0.75
   max_input_tokens: 0
   # 仅卸載单条 ToolMessage 超过此阈值的正文（典型 web_search ~2.7k，保留在上下文中）
@@ -157,9 +157,9 @@ other:
   skills_filesystem_root: ""  # 空则默认 extensions/skills；可填绝对路径或相对仓库根的路径
   mcp_config_path: ""  # 空则默认 extensions/mcp/mcp.json；可用环境变量 MCP_CONFIG_PATH 覆盖
 
-# LangGraph Agent checkpoint（SQLite 持久化）
+# LangGraph Agent checkpoint（独立 PostgreSQL 数据库）
 checkpoint:
-  db_path: ../.data/checkpoints/langgraph_checkpoints.sqlite
+  database: noesis_langgraph
 
 # Web 检索工具（COMMON_QA / SUPER_AGENT_QA；TAVILY_API_KEY 见 .env）
 web_tools:

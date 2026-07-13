@@ -152,11 +152,9 @@ class LangGraphSseBridge:
         session_id: str,
         *,
         emit_langfuse_session_hint: bool = False,
-        stop_token: Optional[str] = None,
     ) -> None:
         self.session_id = session_id or ""
         self._emit_langfuse_session_hint = bool(emit_langfuse_session_hint)
-        self._stop_token = stop_token
         self.assistant_message_id = str(uuid.uuid4())
         self._message_started = False
         self._text_open = False
@@ -308,8 +306,6 @@ class LangGraphSseBridge:
         }
         if self._emit_langfuse_session_hint and self.session_id:
             payload["langfuse_session_id"] = self.session_id
-        if self._stop_token:
-            payload["stop_token"] = self._stop_token
         out.append(_format_sse("message-start", payload))
 
     def _close_text(self, out: List[str], *, record_checkpoint: bool = True) -> None:

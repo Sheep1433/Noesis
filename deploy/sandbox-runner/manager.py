@@ -240,6 +240,17 @@ class SandboxManager:
             base_url=None,
         )
 
+    def _cleanup_stale_container(self, user_id: str) -> None:
+        """删除已停止/异常容器，避免 compose 重部署后同名创建 409。"""
+        name = _container_name(user_id)
+        try:
+            container = self._docker.containers.get(name)
+        except NotFound:
+            return
+        if container.status in ("running", "created", "restarting"):
+            return
+        self._stop_and_remove(name)
+
     def _sync_running(self, user_id: str) -> SandboxRecord | None:
         name = _container_name(user_id)
         try:
@@ -307,6 +318,7 @@ class SandboxManager:
                     f"用户沙箱已达上限 sandbox_max_replicas={self._max_replicas}"
                 )
 
+            self._cleanup_stale_container(user_id)
             created = self._start_container(user_id, runtime=requested)
             self._records[user_id] = created
             return created

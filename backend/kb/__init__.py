@@ -7,8 +7,8 @@ from kb.chunk import (
     deep_merge_mapping,
     fixed_processing_params,
     merge_query_execution_params,
-    normalize_mysql_processing_params,
-    normalize_mysql_query_params,
+    normalize_collection_processing_params,
+    normalize_collection_query_params,
     resolve_effective_processing_params,
 )
 from kb.document_parse import DocumentParser, ParsedFile
@@ -32,8 +32,8 @@ __all__ = [
     "deep_merge_mapping",
     "fixed_processing_params",
     "merge_query_execution_params",
-    "normalize_mysql_processing_params",
-    "normalize_mysql_query_params",
+    "normalize_collection_processing_params",
+    "normalize_collection_query_params",
     "resolve_effective_processing_params",
     # embedding
     "get_embedding",

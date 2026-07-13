@@ -1,5 +1,5 @@
 """FastAPI / Starlette HTTP 中间件（与 ``agent/middlewares`` LangGraph 中间件区分）。"""
 
-from middleware.sliding_auth import SlidingAuthMiddleware
+from middleware.csrf import CsrfMiddleware
 
-__all__ = ["SlidingAuthMiddleware"]
+__all__ = ["CsrfMiddleware"]

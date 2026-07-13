@@ -591,10 +591,9 @@ const sseIsLoading = sseStream.isLoading
 
 async function stopChatStream() {
   const sessionId = getChatSessionId()
-  const stopToken = sseStream.getStopToken()
   sseStream.abortStream()
   try {
-    await stopChat(sessionId, qa_type.value, stopToken)
+    await stopChat(sessionId, qa_type.value)
   } catch (err) {
     // 401 已由 authHttp 统一跳转登录；其余错误仍等待 SSE finish/stopped
     if (!isUnauthorizedError(err)) {

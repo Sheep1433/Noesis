@@ -59,7 +59,4 @@ class QaStopRequest(BaseModel):
     # model_config = ConfigDict(alias_generator=to_camel)
     session_id: str
     qa_type: str = Field(..., description="问答类型，例如 common_qa")
-    stop_token: Optional[str] = Field(
-        None,
-        description="流式 message-start 下发的短期停止凭据，JWT 失效时可用",
-    )
+    csrf_token: Optional[str] = Field(None, description="页面卸载 Beacon 使用的 CSRF 凭据")

@@ -49,6 +49,7 @@ import KbSearchPanel from '@/components/KnowledgeBase/KbSearchPanel.vue'
 import KbSearchResults from '@/components/KnowledgeBase/KbSearchResults.vue'
 import ShardDetail from '@/components/KnowledgeBase/ShardDetail.vue'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { copyToClipboard } from '@/utils/copy'
 import { fileTypeLabel, formatKbDate, shortHash, SUPPORTED_DOC_FORMATS } from '@/utils/kbFormat'
 
 const router = useRouter()
@@ -131,7 +132,7 @@ async function copyHash(hash: string | null | undefined) {
     return
   }
   try {
-    await navigator.clipboard.writeText(hash)
+    await copyToClipboard(hash)
     message.success('Hash 已复制')
   } catch {
     message.error('复制失败')

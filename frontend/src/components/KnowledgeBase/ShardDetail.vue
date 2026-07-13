@@ -14,6 +14,7 @@ import {
 } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import { getShardDetail } from '@/api/knowledgeBase'
+import { copyToClipboard } from '@/utils/copy'
 import { formatKbDate } from '@/utils/kbFormat'
 
 const props = defineProps<{
@@ -87,7 +88,7 @@ async function copyContent() {
   }
 
   try {
-    await navigator.clipboard.writeText(detail.value.content)
+    await copyToClipboard(detail.value.content)
     message.success('复制成功')
   } catch {
     message.error('复制失败')

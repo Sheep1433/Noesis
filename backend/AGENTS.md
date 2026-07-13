@@ -6,7 +6,7 @@ FastAPI + LangGraph 后端：多场景 Agent 问答、知识库 RAG、SSE 流式
 
 - **框架**：FastAPI
 - **Agent**：LangGraph（`create_noesis_agent` 统一工厂）
-- **数据库**：MySQL（SQLAlchemy 异步）
+- **数据库**：PostgreSQL（SQLAlchemy 异步）
 - **向量库**：Qdrant
 - **LLM**：DashScope（Qwen）/ OpenAI 兼容接口 / OpenCode Zen
 - **认证**：JWT
@@ -72,7 +72,7 @@ backend/
 | 子目录 | 用途 |
 |--------|------|
 | `.data/qdrant/` | 本地 Qdrant 容器卷（`scripts/run.sh` 默认） |
-| `.data/checkpoints/` | LangGraph SQLite checkpoint |
+| PostgreSQL `noesis_langgraph` | LangGraph checkpoint |
 | `.data/users/{user_id}/` | 用户记忆、`skills/`、`sessions/{sid}/workspace\|uploads\|attachments` |
 | `.data/kb_uploads/` | 知识库上传暂存（解析后删除） |
 | `.data/kb_parse/` | DeepDoc 解析结果缓存 |
@@ -140,7 +140,7 @@ async def login(
 
 ### 知识库 RAG 底座（`enterprise-kb-retrieval-foundation`）
 
-- **配置**：MySQL `kb_collection_config`（`processing_params` / `query_params`）；Qdrant 仅存向量与分片
+- **配置**：PostgreSQL `kb_collection_config`（`processing_params` / `query_params`）；Qdrant 仅存向量与分片
 - **入库**：`DocumentParser` → `chunk()`（`chunk_preset_id=general`）→ embed → upsert；payload 含 `effective_processing_params`
 - **检索**：统一 `KbRetrievalService.search()`：`recall_top_k` → rerank（可降级）→ `score_threshold` → `final_top_k`；默认 `search_mode=hybrid`
 - **API**：`GET/PATCH /api/knowledge_base/collections/{name}/config`；检索/上传参数与 Agent 共用 `kb/chunk/params.py` 合并函数
@@ -168,7 +168,7 @@ Docker 制品目录：`deploy/`（`docker-compose.yml`、`backend/Dockerfile`、
 - `config/env.py` 合并 env + yaml → `ModelConfig` 等
 - `NOESIS_CONFIG_PATH` / `APP_ENV=prod` 可自动选中 `config.prod.yaml`
 - **禁止在代码中硬编码配置值**
-- yaml 中相对路径（如 `checkpoint.db_path`）基于 `backend/` 解析，见 `common.paths.resolve_backend_relative`
+- checkpoint 使用 PostgreSQL 独立数据库，由 `checkpoint.database` 配置。
 
 ### 6. 异常与响应
 

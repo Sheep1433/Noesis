@@ -28,12 +28,7 @@ class EnvSecrets(BaseSettings):
 
     app_env: str = Field(default="dev", alias="APP_ENV")
 
-    jwt_secret_key: str = Field(
-        default="b01c66dc2c58dc6a0aabfe2144256be36226de378bf87f72c0c795dda67f4d55",
-        alias="JWT_SECRET_KEY",
-    )
-
-    mysql_password: str = Field(default="mysqlroot", alias="MYSQL_PASSWORD")
+    postgres_password: str = Field(default="postgres", alias="POSTGRES_PASSWORD")
 
     model_api_key: str = Field(default="", alias="MODEL_API_KEY")
     embedding_model_api_key: str = Field(default="", alias="EMBEDDING_MODEL_API_KEY")
@@ -67,21 +62,20 @@ class AppSettings:
 
 
 @dataclass(frozen=True)
-class JwtSettings:
-    jwt_secret_key: str
-    jwt_algorithm: str
-    jwt_expire_minutes: int
-    jwt_redis_expire_minutes: int
-    jwt_stop_token_expire_minutes: int
+class SessionSettings:
+    idle_expire_days: int
+    absolute_expire_days: int
+    renewal_window_minutes: int
+    cookie_name: str
 
 
 @dataclass(frozen=True)
 class DataBaseSettings:
-    mysql_host: str
-    mysql_port: int
-    mysql_user: str
-    mysql_password: str
-    mysql_database: str
+    postgres_host: str
+    postgres_port: int
+    postgres_user: str
+    postgres_password: str
+    postgres_database: str
     db_echo: bool
     db_max_overflow: int
     db_pool_size: int
@@ -191,7 +185,7 @@ class SandboxSettings:
 
 @dataclass(frozen=True)
 class CheckpointSettings:
-    db_path: str
+    postgres_database: str
 
 
 @dataclass(frozen=True)
@@ -259,29 +253,24 @@ def _build_app(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> AppSettings:
     )
 
 
-def _build_jwt(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> JwtSettings:
-    jwt = yaml_cfg.jwt
-    return JwtSettings(
-        jwt_secret_key=secrets.jwt_secret_key,
-        jwt_algorithm=_legacy_env("JWT_ALGORITHM", jwt.algorithm),
-        jwt_expire_minutes=_legacy_env_int("JWT_EXPIRE_MINUTES", jwt.expire_minutes),
-        jwt_redis_expire_minutes=_legacy_env_int(
-            "JWT_REDIS_EXPIRE_MINUTES", jwt.redis_expire_minutes
-        ),
-        jwt_stop_token_expire_minutes=_legacy_env_int(
-            "JWT_STOP_TOKEN_EXPIRE_MINUTES", jwt.stop_token_expire_minutes
-        ),
+def _build_session(yaml_cfg: AppYamlConfig) -> SessionSettings:
+    session = yaml_cfg.session
+    return SessionSettings(
+        idle_expire_days=_legacy_env_int("SESSION_IDLE_EXPIRE_DAYS", session.idle_expire_days),
+        absolute_expire_days=_legacy_env_int("SESSION_ABSOLUTE_EXPIRE_DAYS", session.absolute_expire_days),
+        renewal_window_minutes=_legacy_env_int("SESSION_RENEWAL_WINDOW_MINUTES", session.renewal_window_minutes),
+        cookie_name=_legacy_env("SESSION_COOKIE_NAME", session.cookie_name),
     )
 
 
 def _build_database(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> DataBaseSettings:
     db = yaml_cfg.database
     return DataBaseSettings(
-        mysql_host=_legacy_env("MYSQL_HOST", db.host),
-        mysql_port=_legacy_env_int("MYSQL_PORT", db.port),
-        mysql_user=_legacy_env("MYSQL_USER", db.user),
-        mysql_password=secrets.mysql_password,
-        mysql_database=_legacy_env("MYSQL_DATABASE", db.database),
+        postgres_host=_legacy_env("POSTGRES_HOST", db.host),
+        postgres_port=_legacy_env_int("POSTGRES_PORT", db.port),
+        postgres_user=_legacy_env("POSTGRES_USER", db.user),
+        postgres_password=secrets.postgres_password,
+        postgres_database=_legacy_env("POSTGRES_DATABASE", db.database),
         db_echo=_legacy_env_bool("DB_ECHO", db.echo),
         db_max_overflow=_legacy_env_int("DB_MAX_OVERFLOW", db.max_overflow),
         db_pool_size=_legacy_env_int("DB_POOL_SIZE", db.pool_size),
@@ -496,7 +485,7 @@ def sandbox_runner_headers() -> dict[str, str]:
 def _build_checkpoint(yaml_cfg: AppYamlConfig) -> CheckpointSettings:
     cp = yaml_cfg.checkpoint
     return CheckpointSettings(
-        db_path=_legacy_env("LANGGRAPH_CHECKPOINT_DB_PATH", cp.db_path),
+        postgres_database=_legacy_env("LANGGRAPH_POSTGRES_DATABASE", cp.database),
     )
 
 
@@ -556,8 +545,8 @@ class GetConfig:
         return _build_app(self._secrets, self._yaml)
 
     @lru_cache
-    def get_jwt_config(self) -> JwtSettings:
-        return _build_jwt(self._secrets, self._yaml)
+    def get_session_config(self) -> SessionSettings:
+        return _build_session(self._yaml)
 
     @lru_cache
     def get_database_config(self) -> DataBaseSettings:
@@ -634,7 +623,7 @@ class GetConfig:
 
 get_config = GetConfig()
 AppConfig = get_config.get_app_config()
-JwtConfig = get_config.get_jwt_config()
+SessionConfig = get_config.get_session_config()
 DataBaseConfig = get_config.get_database_config()
 ModelConfig = get_config.get_model_config()
 OtherConfig = get_config.get_other_config()

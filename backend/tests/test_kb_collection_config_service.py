@@ -59,7 +59,7 @@ async def test_ensure_defaults_for_qdrant_collections():
     mock_create.assert_awaited_once()
 
 
-def test_load_query_params_sync_reads_mysql_row():
+def test_load_query_params_sync_reads_postgresql_row():
     row = MagicMock()
     row.query_params = {"search_mode": "hybrid", "recall_top_k": 30}
     session = MagicMock()

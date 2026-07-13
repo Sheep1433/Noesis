@@ -8,6 +8,7 @@ from exceptions.exception import (
     ConflictException,
     LoginException,
     ModelValidatorException,
+    PermissionException,
     ServiceException,
     ServiceWarning,
 )
@@ -24,6 +25,10 @@ def handle_exception(app: FastAPI):
     @app.exception_handler(AuthException)
     async def auth_exception_handler(request: Request, exc: AuthException):
         return ResponseUtil.unauthorized(data=exc.data, msg=exc.message)
+
+    @app.exception_handler(PermissionException)
+    async def permission_exception_handler(request: Request, exc: PermissionException):
+        return ResponseUtil.forbidden(data=exc.data, msg=exc.message)
 
     # 自定义登录检验异常
     @app.exception_handler(LoginException)

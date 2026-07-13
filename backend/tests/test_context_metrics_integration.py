@@ -1,6 +1,7 @@
 """Context metrics 与 Agent 流式路径集成测试。"""
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,13 +20,13 @@ class _FakeLLM(GenericFakeChatModel):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.getenv("RUN_POSTGRES_INTEGRATION") != "1",
+    reason="requires the Compose PostgreSQL service",
+)
 async def test_agent_stream_writes_context_registry_by_thread_id(
-    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db_path = tmp_path / "checkpoints.sqlite"
-    monkeypatch.setenv("LANGGRAPH_CHECKPOINT_DB_PATH", str(db_path))
-
     from config.env import get_config
 
     get_config.get_checkpoint_config.cache_clear()
@@ -49,7 +50,7 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
             patch("agent.factory.ModelConfig", cfg),
             patch("agent.factory.get_llm", return_value=fake_llm),
             patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg),
-            patch("agent.middlewares.context_metrics.ModelConfig", cfg),
+            patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=128000),
         ):
             agent = create_noesis_agent(
                 tools=[],

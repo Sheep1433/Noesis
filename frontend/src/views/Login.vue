@@ -8,6 +8,7 @@ const form = ref({
   username: 'admin',
   password: '123456',
   confirmPassword: '',
+  inviteCode: '',
 })
 const mode = ref<AuthMode>('login')
 const formRef = ref(null)
@@ -24,7 +25,7 @@ onMounted(() => {
 
 async function parseResponse(res: Response) {
   const responseData = await res.json()
-  return responseData as { code: number, msg?: string, data?: { token?: string } }
+  return responseData as { code: number, msg?: string, data?: { user?: { id: number, username: string, mobile?: string | null }, csrf_token?: string } }
 }
 
 async function handleLogin() {
@@ -36,8 +37,8 @@ async function handleLogin() {
   try {
     const res = await GlobalAPI.login(form.value.username, form.value.password)
     const responseData = await parseResponse(res)
-    if (responseData.code === 200 && responseData.data?.token) {
-      userStore.login({ token: responseData.data.token })
+    if (responseData.code === 200 && responseData.data?.user && responseData.data.csrf_token) {
+      userStore.login(responseData.data.user, responseData.data.csrf_token)
       message.success('登录成功')
       setTimeout(() => router.push('/'), 300)
     } else {
@@ -51,7 +52,30 @@ async function handleLogin() {
 }
 
 async function handleRegister() {
-  message.warning('当前系统不支持自己注册，请联系管理员')
+  if (!form.value.username || !form.value.password || !form.value.confirmPassword || !form.value.inviteCode) {
+    message.error('请填写完整信息')
+    return
+  }
+  if (form.value.password !== form.value.confirmPassword) {
+    message.error('两次输入的密码不一致')
+    return
+  }
+  loading.value = true
+  try {
+    const res = await GlobalAPI.register(form.value.username, form.value.password, form.value.inviteCode)
+    const responseData = await parseResponse(res)
+    if (responseData.code === 200 && responseData.data?.user && responseData.data.csrf_token) {
+      userStore.login(responseData.data.user, responseData.data.csrf_token)
+      message.success('注册成功')
+      setTimeout(() => router.push('/'), 300)
+    } else {
+      message.error(responseData.msg ?? '注册失败')
+    }
+  } catch {
+    message.error('注册失败，请稍后重试')
+  } finally {
+    loading.value = false
+  }
 }
 
 function handleSubmit() {
@@ -83,6 +107,7 @@ function switchMode(next: AuthMode) {
     form.value.password = ''
   }
   form.value.confirmPassword = ''
+  form.value.inviteCode = ''
 }
 </script>
 
@@ -134,6 +159,20 @@ function switchMode(next: AuthMode) {
               type="password"
               show-password-on="click"
               placeholder="请再次输入密码"
+              @keydown.enter="onEnterSubmit"
+            />
+          </n-form-item>
+          <n-form-item
+            v-if="mode === 'register'"
+            label="邀请码"
+            path="inviteCode"
+          >
+            <n-input
+              v-model:value="form.inviteCode"
+              type="password"
+              show-password-on="click"
+              maxlength="6"
+              placeholder="请输入 6 位数字邀请码"
               @keydown.enter="onEnterSubmit"
             />
           </n-form-item>

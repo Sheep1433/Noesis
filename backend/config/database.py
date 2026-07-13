@@ -7,14 +7,14 @@ from urllib.parse import quote_plus
 from config.env import DataBaseConfig
 
 ASYNC_SQLALCHEMY_DATABASE_URL = (
-    f'mysql+asyncmy://{DataBaseConfig.mysql_user}:{quote_plus(DataBaseConfig.mysql_password)}@'
-    f'{DataBaseConfig.mysql_host}:{DataBaseConfig.mysql_port}/{DataBaseConfig.mysql_database}'
+    f'postgresql+asyncpg://{DataBaseConfig.postgres_user}:{quote_plus(DataBaseConfig.postgres_password)}@'
+    f'{DataBaseConfig.postgres_host}:{DataBaseConfig.postgres_port}/{DataBaseConfig.postgres_database}'
 )
 
-# Alembic 与同步脚本使用（应用运行时仍走 asyncmy）
+# Alembic 与同步脚本使用（应用运行时仍走 asyncpg）
 SYNC_SQLALCHEMY_DATABASE_URL = (
-    f'mysql+pymysql://{DataBaseConfig.mysql_user}:{quote_plus(DataBaseConfig.mysql_password)}@'
-    f'{DataBaseConfig.mysql_host}:{DataBaseConfig.mysql_port}/{DataBaseConfig.mysql_database}'
+    f'postgresql+psycopg://{DataBaseConfig.postgres_user}:{quote_plus(DataBaseConfig.postgres_password)}@'
+    f'{DataBaseConfig.postgres_host}:{DataBaseConfig.postgres_port}/{DataBaseConfig.postgres_database}'
 )
 
 

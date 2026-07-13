@@ -14,8 +14,8 @@ from kb.chunk.params import (
     deep_merge_mapping,
     fixed_processing_params,
     merge_query_execution_params,
-    normalize_mysql_processing_params,
-    normalize_mysql_query_params,
+    normalize_collection_processing_params,
+    normalize_collection_query_params,
     normalize_query_execution_params,
     resolve_effective_processing_params,
 )
@@ -33,8 +33,8 @@ __all__ = [
     "deep_merge_mapping",
     "fixed_processing_params",
     "merge_query_execution_params",
-    "normalize_mysql_processing_params",
-    "normalize_mysql_query_params",
+    "normalize_collection_processing_params",
+    "normalize_collection_query_params",
     "normalize_query_execution_params",
     "resolve_effective_processing_params",
 ]

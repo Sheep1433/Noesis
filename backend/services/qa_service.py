@@ -29,7 +29,6 @@ from domain.chat.streaming.langgraph_sse import LangGraphSseBridge, bridge_raw_t
 from common.logging import logger
 from domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
 from domain.chat.streaming.bridge import MemoryStreamBridge, iter_bridge_events
-from domain.auth.stop_token import StopTokenService
 from domain.chat.streaming.failure_notice import (
     append_disconnect_partial_content,
     append_stream_failure_notice_to_content,
@@ -653,7 +652,6 @@ class QaService:
             bridge = LangGraphSseBridge(
                 session_id,
                 emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
-                stop_token=StopTokenService.create(session_id, int(current_user.user_id)),
             )
             builder = AssistantMessageBuilder(
                 session_id=session_id,
@@ -873,7 +871,6 @@ class QaService:
             bridge = LangGraphSseBridge(
                 session_id,
                 emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
-                stop_token=StopTokenService.create(session_id, int(current_user.user_id)),
             )
             builder = AssistantMessageBuilder(
                 session_id=session_id,
@@ -1202,4 +1199,3 @@ async def _persist_assistant(
                 status=status,
                 db=persist_db,
             )
-

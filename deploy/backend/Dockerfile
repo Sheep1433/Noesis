@@ -6,7 +6,6 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
-    default-libmysqlclient-dev \
     python3-dev \
   && rm -rf /var/lib/apt/lists/*
 
@@ -35,7 +34,6 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
-    libmariadb3 \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

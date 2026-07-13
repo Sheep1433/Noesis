@@ -26,7 +26,7 @@ class CollectionDetail(BaseModel):
 
 
 class CollectionConfigResponse(BaseModel):
-    """集合 MySQL 配置"""
+    """集合 PostgreSQL 配置"""
     collection_name: str
     processing_params: Dict[str, Any] = Field(default_factory=dict)
     query_params: Dict[str, Any] = Field(default_factory=dict)
@@ -173,7 +173,7 @@ class SearchCollectionBody(BaseModel):
     )
     search_mode: Optional[Literal["vector", "bm25", "hybrid"]] = Field(
         default=None,
-        description="检索模式；缺省使用集合 MySQL 默认（hybrid）",
+        description="检索模式；缺省使用集合 PostgreSQL 默认（hybrid）",
     )
     filters: Optional[Dict[str, Any]] = Field(
         None,

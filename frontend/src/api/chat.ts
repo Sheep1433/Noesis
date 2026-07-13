@@ -8,7 +8,6 @@ import {
   authFetch,
   getAuthHeaders,
   parseAuthJson,
-  STOP_TOKEN_HEADER,
 } from '@/utils/authHttp'
 import { downloadFile } from '@/utils/download'
 
@@ -469,22 +468,15 @@ export async function getMessage(messageId: string): Promise<ChatMessageResponse
 export async function stopChat(
   sessionId: string,
   qaType: string,
-  stopToken?: string | null,
 ): Promise<void> {
   const body: Record<string, string> = {
     session_id: sessionId,
     qa_type: qaType,
   }
-  const extraHeaders: Record<string, string> = {}
-  if (stopToken) {
-    body.stop_token = stopToken
-    extraHeaders[STOP_TOKEN_HEADER] = stopToken
-  }
   const req = makeRequest(
     'POST',
     `${location.origin}${BASE}/sessions/${sessionId}/stop`,
     body,
-    extraHeaders,
   )
   await parseResponse<void>(await authFetch(req))
 }

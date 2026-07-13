@@ -1,4 +1,4 @@
-"""知识库集合 MySQL 配置服务。"""
+"""知识库集合配置服务。"""
 from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from kb.chunk.params import (
     deep_merge_mapping,
-    normalize_mysql_processing_params,
-    normalize_mysql_query_params,
+    normalize_collection_processing_params,
+    normalize_collection_query_params,
 )
 from models.kb_models import TKbCollectionConfig
 from services.qdrant_service import QdrantService, is_qdrant_connected
@@ -22,7 +22,7 @@ _SyncSessionLocal: sessionmaker[Session] | None = None
 
 
 def _get_sync_session() -> Session:
-    """Agent 工具线程内读取 MySQL 配置；避免 asyncio.run 与全局 async 引擎跨 loop 冲突。"""
+    """Agent 工具线程内读取集合配置；避免 asyncio.run 与全局 async 引擎跨 loop 冲突。"""
     global _sync_engine, _SyncSessionLocal
     if _SyncSessionLocal is None:
         from config.database import SYNC_SQLALCHEMY_DATABASE_URL
@@ -44,11 +44,11 @@ def _get_sync_session() -> Session:
 class KbCollectionConfigService:
     @classmethod
     def platform_processing_defaults(cls) -> Dict[str, Any]:
-        return normalize_mysql_processing_params({})
+        return normalize_collection_processing_params({})
 
     @classmethod
     def platform_query_defaults(cls) -> Dict[str, Any]:
-        return normalize_mysql_query_params({})
+        return normalize_collection_query_params({})
 
     @classmethod
     async def get_row(
@@ -75,8 +75,8 @@ class KbCollectionConfigService:
             return None
         return {
             "collection_name": row.collection_name,
-            "processing_params": normalize_mysql_processing_params(row.processing_params),
-            "query_params": normalize_mysql_query_params(row.query_params),
+            "processing_params": normalize_collection_processing_params(row.processing_params),
+            "query_params": normalize_collection_query_params(row.query_params),
         }
 
     @classmethod
@@ -127,13 +127,13 @@ class KbCollectionConfigService:
             return None
 
         if processing_params is not None:
-            current = normalize_mysql_processing_params(row.processing_params)
-            row.processing_params = normalize_mysql_processing_params(
+            current = normalize_collection_processing_params(row.processing_params)
+            row.processing_params = normalize_collection_processing_params(
                 deep_merge_mapping(current, processing_params)
             )
         if query_params is not None:
-            current_q = normalize_mysql_query_params(row.query_params)
-            row.query_params = normalize_mysql_query_params(
+            current_q = normalize_collection_query_params(row.query_params)
+            row.query_params = normalize_collection_query_params(
                 deep_merge_mapping(current_q, query_params)
             )
 
@@ -142,7 +142,7 @@ class KbCollectionConfigService:
 
     @classmethod
     async def ensure_defaults_for_qdrant_collections(cls, db: AsyncSession) -> int:
-        """为 Qdrant 已有但 MySQL 缺失的 collection 回填默认配置行。"""
+        """为 Qdrant 已有但关系库缺失的 collection 回填默认配置行。"""
         if not is_qdrant_connected():
             return 0
 
@@ -169,7 +169,7 @@ class KbCollectionConfigService:
             ).scalar_one_or_none()
             if row is None:
                 return cls.platform_query_defaults()
-            return normalize_mysql_query_params(row.query_params)
+            return normalize_collection_query_params(row.query_params)
 
     @classmethod
     def load_query_params_sync(cls, collection_name: str) -> Dict[str, Any]:
@@ -191,7 +191,7 @@ class KbCollectionConfigService:
             ).scalar_one_or_none()
             if row is None:
                 return cls.platform_processing_defaults()
-            return normalize_mysql_processing_params(row.processing_params)
+            return normalize_collection_processing_params(row.processing_params)
 
     @classmethod
     def load_processing_params_sync(cls, collection_name: str) -> Dict[str, Any]:

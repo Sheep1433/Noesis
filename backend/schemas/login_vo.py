@@ -13,14 +13,8 @@ class UserRegister(BaseModel):
     mobile: Optional[str] = Field(default=None, max_length=20, description='手机号')
 
 
-class Token(BaseModel):
-    access_token: str = Field(description='token信息')
-    token_type: str = Field(description='token类型')
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+class UserRegistrationRequest(UserRegister):
+    invite_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$", description="6 位数字邀请码")
 
 
 class CurrentUser(BaseModel):

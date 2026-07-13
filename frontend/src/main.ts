@@ -18,15 +18,13 @@ function setupPlugins() {
 
 async function setupApp() {
   setupStore(app)
+  const userStore = useUserStore()
+  await userStore.restoreSession()
   await setupRouter(app)
   app.mount('#app')
 }
 
 setupPlugins()
 setupApp()
-
-// 初始化用户状态
-const userStore = useUserStore()
-userStore.init()
 
 export default app

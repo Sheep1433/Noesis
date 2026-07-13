@@ -8,7 +8,7 @@ from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QueryUserRecordRequest
 from services.chat_service import ChatService
 from services.user_service import UserService
-from domain.auth.token_service import AuthTokenService
+from domain.auth.session_cookie import clear_session_cookie
 from common.http.response import ResponseUtil
 
 user_router = APIRouter(prefix="/api/user")
@@ -18,7 +18,7 @@ user_router = APIRouter(prefix="/api/user")
 async def logout(request: Request):
     """清除 HttpOnly 鉴权 Cookie。"""
     response = ResponseUtil.success(msg="已退出登录")
-    AuthTokenService.clear_auth_cookie(response)
+    clear_session_cookie(response)
     return response
 
 

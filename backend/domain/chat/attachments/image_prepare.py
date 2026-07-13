@@ -9,7 +9,7 @@ _GIF_MIME = "image/gif"
 
 
 _PREVIEW_MAX_EDGE = 320
-# MySQL TEXT 上限 65535；base64 留余量给 UTF-8 与元数据
+# 预览内容设限，避免单条消息元数据异常膨胀。
 _PREVIEW_MAX_BASE64_LEN = 48_000
 
 
