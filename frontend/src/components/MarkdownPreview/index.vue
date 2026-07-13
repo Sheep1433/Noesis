@@ -116,7 +116,7 @@ onMounted(() => {
           v-if="displayText"
           ref="refWrapperContent"
           text-16
-          class="w-full h-full overflow-y-auto"
+          class="markdown-preview__body w-full h-full overflow-y-auto"
           :class="variant === 'segment' ? 'px-15px py-2' : 'p-15px'"
         >
           <div
@@ -280,6 +280,30 @@ onMounted(() => {
   width: 100%;
   border-radius: 0;
   box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  .markdown-preview__body {
+    padding-right: 8px !important;
+    padding-left: 8px !important;
+  }
+
+  .markdown-wrapper {
+    padding-right: 12px;
+    padding-left: 12px;
+    font-size: 15px;
+    line-height: 1.6;
+
+    p {
+      margin: 8px 0;
+      line-height: 1.75;
+    }
+
+    li,
+    li > p {
+      line-height: 1.75;
+    }
+  }
 }
 
 .tool-calls-wrapper {

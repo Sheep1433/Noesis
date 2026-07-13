@@ -1518,6 +1518,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     <div v-if="item.role === 'user'" class="flex flex-col items-end space-y-2 w-full">
                       <!-- 用户消息 -->
                       <div
+                        class="chat-user-message"
                         :style="{
                           'margin-left': `10%`,
                           'margin-right': `10%`,
@@ -1529,6 +1530,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       >
                         <n-space>
                           <n-tag
+                            class="chat-user-message__tag"
                             size="large"
                             :bordered="false"
                             :round="true"
@@ -2505,6 +2507,19 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 @media (max-width: 768px) {
+  .chat-user-message {
+    max-width: calc(100% - 8px) !important;
+    margin: 0 !important;
+    padding: 6px !important;
+  }
+
+  .chat-user-message__tag {
+    max-width: 100% !important;
+    padding: 4px 12px !important;
+    font-size: 15px !important;
+    line-height: 1.55 !important;
+  }
+
   .qa-type-tabs {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
