@@ -9,7 +9,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.common_react_agent import GeneralQAAgent
@@ -51,23 +51,39 @@ def _normalize_kb_collections(raw: Any) -> List[str]:
     return out
 
 
-async def _resolve_kb_collections_for_query(
+async def _resolve_kb_settings_for_query(
     *,
     session_id: str,
     user_id: str,
     request_kb_collections: Optional[List[str]],
+    request_kb_search_enabled: Optional[bool],
     db: AsyncSession,
-) -> List[str]:
-    """请求显式携带 kb_collections 时写入会话；否则读会话 extra。"""
-    if request_kb_collections is not None:
-        normalized = _normalize_kb_collections(request_kb_collections)
+) -> Tuple[List[str], bool]:
+    """解析并持久化会话知识库范围与启用状态。"""
+    if request_kb_collections is not None or request_kb_search_enabled is not None:
+        session = await ChatService.get_session_by_id(
+            session_id,
+            user_id=user_id,
+            db=db,
+        )
+        stored_extra = session.extra if session and session.extra else {}
+        normalized = (
+            _normalize_kb_collections(request_kb_collections)
+            if request_kb_collections is not None
+            else _normalize_kb_collections(stored_extra.get("kb_collections"))
+        )
+        enabled = (
+            request_kb_search_enabled
+            if request_kb_search_enabled is not None
+            else stored_extra.get("kb_search_enabled") is not False
+        )
         await ChatService.merge_session_extra(
             session_id,
             user_id,
-            {"kb_collections": normalized},
+            {"kb_collections": normalized, "kb_search_enabled": enabled},
             db=db,
         )
-        return normalized
+        return normalized, enabled
 
     session = await ChatService.get_session_by_id(
         session_id,
@@ -75,8 +91,11 @@ async def _resolve_kb_collections_for_query(
         db=db,
     )
     if not session or not session.extra:
-        return []
-    return _normalize_kb_collections(session.extra.get("kb_collections"))
+        return [], True
+    return (
+        _normalize_kb_collections(session.extra.get("kb_collections")),
+        session.extra.get("kb_search_enabled") is not False,
+    )
 
 
 def _normalize_model_id(raw: Any) -> Optional[str]:
@@ -590,10 +609,11 @@ class QaService:
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
-                kb_collections = await _resolve_kb_collections_for_query(
+                kb_collections, kb_search_enabled = await _resolve_kb_settings_for_query(
                     session_id=session_id,
                     user_id=str(current_user.user_id),
                     request_kb_collections=req_obj.kb_collections,
+                    request_kb_search_enabled=req_obj.kb_search_enabled,
                     db=db,
                 )
 
@@ -605,6 +625,7 @@ class QaService:
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     kb_collections=kb_collections or None,
+                    kb_search_enabled=kb_search_enabled,
                     model_id=resolved_model_id,
                     db=db,
                 )
