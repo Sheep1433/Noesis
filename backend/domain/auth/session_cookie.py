@@ -4,7 +4,9 @@ from config.env import AppConfig, SessionConfig
 
 
 def is_secure_cookie() -> bool:
-    return AppConfig.app_env.lower() in ("prod", "production")
+    # prod 环境通过 HTTP nginx 反代对外暴露，不支持 HTTPS，
+    # 设置 Secure 标记会导致浏览器不发送 cookie → 表现为"登录已过期"
+    return False
 
 
 def attach_session_cookie(response: Response, raw_session_id: str, max_age_seconds: int) -> None:
