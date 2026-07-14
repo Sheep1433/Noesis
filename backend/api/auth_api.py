@@ -38,7 +38,7 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
     )
     current = CurrentUser(user_id=user_id, username=username, mobile=mobile)
     response = ResponseUtil.success(msg="登录成功", data=_payload(current, issued.session, issued.csrf_token))
-    attach_session_cookie(response, issued.raw_session_id, SessionConfig.idle_expire_days * 86_400)
+    attach_session_cookie(request, response, issued.raw_session_id, SessionConfig.idle_expire_days * 86_400)
     return response
 
 
@@ -53,7 +53,7 @@ async def register(request: Request, body: UserRegistrationRequest, db: AsyncSes
     )
     current = CurrentUser(user_id=user.id, username=user.username or "", mobile=user.mobile)
     response = ResponseUtil.success(msg="注册成功", data=_payload(current, issued.session, issued.csrf_token))
-    attach_session_cookie(response, issued.raw_session_id, SessionConfig.idle_expire_days * 86_400)
+    attach_session_cookie(request, response, issued.raw_session_id, SessionConfig.idle_expire_days * 86_400)
     return response
 
 
@@ -62,7 +62,7 @@ async def current_session(request: Request, current: CurrentUser = Depends(UserS
     session = request.state.auth_session
     csrf_token = await SessionService.rotate_csrf(db, session)
     response = ResponseUtil.success(data=_payload(current, session, csrf_token))
-    attach_session_cookie(response, request.cookies[SessionConfig.cookie_name], SessionService.remaining_seconds(session))
+    attach_session_cookie(request, response, request.cookies[SessionConfig.cookie_name], SessionService.remaining_seconds(session))
     return response
 
 
@@ -71,7 +71,7 @@ async def logout(request: Request, current: CurrentUser = Depends(UserService.ge
     await UserService.require_csrf(request)
     await SessionService.revoke(db, request.state.auth_session)
     response = ResponseUtil.success(msg="已退出登录")
-    clear_session_cookie(response)
+    clear_session_cookie(request, response)
     return response
 
 
@@ -80,7 +80,7 @@ async def logout_all(request: Request, current: CurrentUser = Depends(UserServic
     await UserService.require_csrf(request)
     await SessionService.revoke_all(db, current.user_id)
     response = ResponseUtil.success(msg="已退出全部设备")
-    clear_session_cookie(response)
+    clear_session_cookie(request, response)
     return response
 
 
@@ -103,5 +103,5 @@ async def revoke_session(target_session_id: str, request: Request, current: Curr
         return ResponseUtil.not_found(msg="会话不存在")
     response = ResponseUtil.success(msg="会话已撤销")
     if target_session_id == request.state.auth_session.id:
-        clear_session_cookie(response)
+        clear_session_cookie(request, response)
     return response

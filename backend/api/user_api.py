@@ -18,7 +18,7 @@ user_router = APIRouter(prefix="/api/user")
 async def logout(request: Request):
     """清除 HttpOnly 鉴权 Cookie。"""
     response = ResponseUtil.success(msg="已退出登录")
-    clear_session_cookie(response)
+    clear_session_cookie(request, response)
     return response
 
 
