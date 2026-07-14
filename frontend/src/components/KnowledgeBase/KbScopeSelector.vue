@@ -9,6 +9,7 @@ const props = defineProps<{
 }>()
 
 const modelValue = defineModel<string[]>({ default: () => [] })
+const kbSearchEnabled = defineModel<boolean>('kbSearchEnabled', { default: true })
 
 const loading = ref(false)
 const loadError = ref<string | null>(null)
@@ -53,13 +54,13 @@ async function loadCollections() {
   }
 }
 
-async function persistScope(names: string[]) {
+async function persistScope(names: string[], enabled = kbSearchEnabled.value) {
   if (!props.sessionId) {
     return
   }
   try {
     await ensureSession(props.sessionId, {
-      extra: { kb_collections: names },
+      extra: { kb_collections: names, kb_search_enabled: enabled },
     })
   } catch (e) {
     console.warn('保存知识库失败', e)
@@ -69,6 +70,11 @@ async function persistScope(names: string[]) {
 async function onUpdate(value: string[]) {
   modelValue.value = value
   await persistScope(value)
+}
+
+async function onSearchEnabledUpdate(value: boolean) {
+  kbSearchEnabled.value = value
+  await persistScope(modelValue.value, value)
 }
 
 onMounted(() => {
@@ -115,11 +121,19 @@ watch(
       <div class="kb-scope-embedded__title text-12 font-medium mb-8">
         知识库
       </div>
+      <n-checkbox
+        :checked="kbSearchEnabled"
+        :disabled="disabled || !sessionId"
+        class="mb-8"
+        @update:checked="onSearchEnabledUpdate"
+      >
+        使用知识库检索
+      </n-checkbox>
       <n-select
         :value="modelValue"
         :options="options"
         :loading="loading"
-        :disabled="disabled || !sessionId"
+        :disabled="disabled || !sessionId || !kbSearchEnabled"
         multiple
         clearable
         filterable

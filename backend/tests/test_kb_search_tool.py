@@ -84,6 +84,45 @@ def test_resolve_scope_session_default(_names, _connected):
     assert cols == ["kb_other"]
 
 
+@patch("agent.tools.kb_search_tool.is_qdrant_connected", return_value=True)
+@patch("agent.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1", "kb2"])
+def test_resolve_scope_rejects_collection_outside_user_selected_scope(_names, _connected):
+    cols, err = resolve_search_collections(
+        collection_names=["kb2"],
+        default_collection_names=["kb1"],
+        allowed_collection_names=["kb1"],
+    )
+
+    assert cols == []
+    assert err is not None
+    assert "kb2" in err
+
+
+@patch("agent.tools.kb_search_tool.is_qdrant_connected", return_value=True)
+@patch("agent.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1", "kb2"])
+def test_resolve_scope_rejects_mixed_request_when_scope_is_enforced(_names, _connected):
+    cols, err = resolve_search_collections(
+        collection_names=["kb1", "kb2"],
+        allowed_collection_names=["kb1"],
+    )
+
+    assert cols == []
+    assert err is not None
+    assert "当前用户选定的检索范围" in err
+
+
+@patch("agent.tools.kb_search_tool.is_qdrant_connected", return_value=True)
+@patch("agent.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1", "kb2"])
+def test_resolve_scope_only_returns_user_selected_collections(_names, _connected):
+    cols, err = resolve_search_collections(
+        default_collection_names=["kb1"],
+        allowed_collection_names=["kb1"],
+    )
+
+    assert err is None
+    assert cols == ["kb1"]
+
+
 @patch("agent.tools.kb_search_tool.KbCollectionConfigService.load_query_params_sync", return_value={"search_mode": "hybrid"})
 @patch("agent.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("agent.tools.kb_search_tool.list_qdrant_collection_names", return_value=["req_docs", "kb_other"])

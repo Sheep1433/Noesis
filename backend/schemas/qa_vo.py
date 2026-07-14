@@ -12,6 +12,10 @@ class QaQueryRequest(BaseModel):
         None,
         description="限定检索的知识库 Collection 列表；空列表表示不限制（检索全部可用库）",
     )
+    kb_search_enabled: Optional[bool] = Field(
+        None,
+        description="是否启用知识库检索；未传时沿用会话设置，默认启用",
+    )
     model_id: Optional[str] = Field(
         None,
         description="对话模型目录 id；省略时使用会话 extra 或默认模型",

@@ -399,6 +399,7 @@ const uuids = ref<Record<string, string>>({})
 
 const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
 const selectedKbCollections = ref<string[]>([])
+const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
 
 async function onChatImageUploaded() {
@@ -446,11 +447,13 @@ async function loadSessionContext(sessionId: string) {
     const raw = session.extra?.context
     sessionContext.value = hasValidContextWindow(raw) ? raw : null
     selectedKbCollections.value = normalizeKbCollections(session.extra?.kb_collections)
+    kbSearchEnabled.value = session.extra?.kb_search_enabled !== false
     const storedModelId = String(session.extra?.model_id ?? '').trim()
     selectedModelId.value = storedModelId
   } catch {
     sessionContext.value = null
     selectedKbCollections.value = []
+    kbSearchEnabled.value = true
     selectedModelId.value = ''
   }
 }
@@ -819,6 +822,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   }
   if (qa_type.value === 'COMMON_QA') {
     streamExtra.kb_collections = selectedKbCollections.value
+    streamExtra.kb_search_enabled = kbSearchEnabled.value
   }
   if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
     streamExtra.model_id = selectedModelId.value
@@ -1099,6 +1103,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
     uuids.value[val] = uuidv4()
     sessionContext.value = null
     selectedKbCollections.value = []
+    kbSearchEnabled.value = true
     selectedModelId.value = ''
   }
 
@@ -1938,6 +1943,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       <ChatComposerToolbar
                         v-model:model-id="selectedModelId"
                         v-model:kb-collections="selectedKbCollections"
+                        v-model:kb-search-enabled="kbSearchEnabled"
                         :qa-type="qa_type"
                         :session-id="uuids[qa_type] ?? ''"
                         :disabled="sseIsLoading"

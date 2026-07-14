@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const selectedModelId = defineModel<string>('modelId', { default: '' })
 const selectedKbCollections = defineModel<string[]>('kbCollections', { default: () => [] })
+const kbSearchEnabled = defineModel<boolean>('kbSearchEnabled', { default: true })
 
 const showKbScope = computed(() => props.qaType === 'COMMON_QA')
 const showModelSelector = computed(() => props.qaType !== 'TEST_CASE_QA')
@@ -57,6 +58,7 @@ const uploadOptions = computed(() => props.fileUploadRef?.options ?? [])
             <div class="composer-plus-panel__divider"></div>
             <KbScopeSelector
               v-model="selectedKbCollections"
+              v-model:kb-search-enabled="kbSearchEnabled"
               :session-id="sessionId"
               :disabled="disabled"
               embedded

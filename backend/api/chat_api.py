@@ -598,6 +598,7 @@ async def send_message_stream(
     qa_type = (request.extra or {}).get("qa_type", IntentEnum.COMMON_QA.value[0])
     file_dict = (request.extra or {}).get("file_dict")
     kb_collections = (request.extra or {}).get("kb_collections")
+    kb_search_enabled = (request.extra or {}).get("kb_search_enabled")
     extra = request.extra or {}
     model_id = extra.get("model_id") if "model_id" in extra else None
 
@@ -612,6 +613,7 @@ async def send_message_stream(
         chat_id=session_id,
         file_dict=file_dict,
         kb_collections=kb_collections if isinstance(kb_collections, list) else None,
+        kb_search_enabled=kb_search_enabled if isinstance(kb_search_enabled, bool) else None,
         model_id=str(model_id).strip() if model_id is not None and str(model_id).strip() else None,
     )
 
@@ -789,5 +791,4 @@ async def stop_stream(
     if msg == "未知的 qa_type":
         return ResponseUtil.failure(msg=msg)
     return ResponseUtil.success(msg=msg)
-
 

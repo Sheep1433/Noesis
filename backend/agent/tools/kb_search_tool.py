@@ -67,9 +67,10 @@ def resolve_search_collections(
     *,
     collection_names: Optional[List[str]] = None,
     default_collection_names: Optional[List[str]] = None,
+    allowed_collection_names: Optional[List[str]] = None,
 ) -> Tuple[List[str], Optional[str]]:
     """
-    解析检索范围：工具入参 > 会话默认 > 全部可用库。
+    解析检索范围：受限会话仅允许访问 allowed_collection_names；其它情况工具入参优先。
     返回 (collections, error_json)；error_json 非空时 collections 为空。
     """
     available = list_qdrant_collection_names()
@@ -80,6 +81,15 @@ def resolve_search_collections(
         )
 
     available_set = set(available)
+    allowed = _normalize_name_list(allowed_collection_names)
+    if allowed:
+        available = [name for name in available if name in set(allowed)]
+        available_set = set(available)
+        if not available:
+            return [], json.dumps(
+                {"hits": [], "message": "会话选定的知识库均不可用，请在界面重新选择"},
+                ensure_ascii=False,
+            )
     requested = _normalize_name_list(collection_names)
     if requested:
         valid = [n for n in requested if n in available_set]
@@ -89,6 +99,16 @@ def resolve_search_collections(
                 {
                     "hits": [],
                     "message": "指定的知识库均不可用或不存在",
+                    "invalid_collections": invalid,
+                    "available_collections": available,
+                },
+                ensure_ascii=False,
+            )
+        if invalid and allowed:
+            return [], json.dumps(
+                {
+                    "hits": [],
+                    "message": "请求的知识库不在当前用户选定的检索范围内",
                     "invalid_collections": invalid,
                     "available_collections": available,
                 },
@@ -171,6 +191,7 @@ def search_knowledge_bases_all(
     collection_names: Optional[List[str]] = None,
     *,
     default_collection_names: Optional[List[str]] = None,
+    allowed_collection_names: Optional[List[str]] = None,
 ) -> str:
     """在指定或默认范围内的知识库 Collection 并行 hybrid 检索，全局 Top-K。"""
     t_total = time.perf_counter()
@@ -184,6 +205,7 @@ def search_knowledge_bases_all(
     collections, err = resolve_search_collections(
         collection_names=collection_names,
         default_collection_names=default_collection_names,
+        allowed_collection_names=allowed_collection_names,
     )
     resolve_ms = (time.perf_counter() - t_resolve) * 1000
     if err:
@@ -343,12 +365,14 @@ def get_knowledge_document(
 def build_kb_search_tools(
     *,
     default_collection_names: Optional[List[str]] = None,
+    enforce_scope: bool = False,
 ) -> list:
     """构建知识库 Tool；无 Collection 或向量库未连接时不挂载。"""
     if not is_qdrant_connected() or not list_qdrant_collection_names():
         return []
 
     scope = _normalize_name_list(default_collection_names)
+    allowed_scope = scope if enforce_scope and scope else None
 
     def _list() -> str:
         return list_knowledge_bases(default_collection_names=scope or None)
@@ -363,6 +387,7 @@ def build_kb_search_tools(
             limit=limit,
             collection_names=collection_names,
             default_collection_names=scope or None,
+            allowed_collection_names=allowed_scope,
         )
 
     def _get_document(collection_name: str, file_name: str) -> str:
@@ -378,7 +403,7 @@ def build_kb_search_tools(
             name="list_knowledge_bases",
             description=(
                 "列出企业内可检索的知识库 Collection（名称、文档数、分片数）。"
-                "用户问题涉及特定业务域且未明确库名时，可先调用以选定 search_knowledge_base 的 collection_names。"
+                "当前会话仅显示并允许检索用户选定的知识库范围。"
             ),
         ),
         StructuredTool.from_function(
@@ -386,7 +411,7 @@ def build_kb_search_tools(
             name="search_knowledge_base",
             description=(
                 "在知识库中执行 hybrid 检索（向量 + BM25 融合，多库并行后全局排序）。"
-                "回答需要事实或文档依据时必须先调用；可传 collection_names 限定范围（省略则用会话默认或全部库）。"
+                "回答需要事实或文档依据时必须先调用；若用户已选定知识库范围，不能检索范围外的库。"
                 "引用时注明 collection_name 与 file_name；片段不足时可调用 get_knowledge_document 拉整篇。"
             ),
             args_schema=KbSearchInput,
