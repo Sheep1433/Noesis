@@ -15,10 +15,14 @@ const childrenRoutes: Array<RouteRecordRaw> = [
     ],
   },
   {
-    path: 'mcpChat',
-    name: 'McpChat',
+    path: 'mcp',
+    name: 'McpManagement',
     component: () => import('@/views/mcp/MCPClient.vue'),
-    meta: { requiresAuth: true }, // 标记需要认证
+    meta: { requiresAuth: true },
+  },
+  {
+    path: 'mcpChat',
+    redirect: { name: 'McpManagement' },
   },
   {
     path: 'testcase/generate',

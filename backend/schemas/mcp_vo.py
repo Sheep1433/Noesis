@@ -31,3 +31,33 @@ class McpProbeResponse(BaseModel):
     ok: bool
     tool_count: int = 0
     message: str = ""
+
+
+class McpConfigFileResponse(BaseModel):
+    """用户 mcp.json 原文（编辑用）。"""
+
+    content: str = Field(..., description="JSON 文本")
+    path_hint: str = Field(
+        ...,
+        description="逻辑路径提示，如 users/{uid}/mcp.json",
+    )
+    exists: bool = Field(..., description="磁盘上是否已有文件")
+
+
+class McpConfigUpdateRequest(BaseModel):
+    content: str = Field(..., description="完整 mcp.json 文本")
+
+
+class McpServerStatusItemVo(BaseModel):
+    id: str
+    source: Literal["platform", "user"]
+    transport: str
+    url: str | None = None
+    display_name: str | None = None
+    status: Literal["unknown", "ok", "error"] = "unknown"
+    tool_count: int = 0
+    message: str = ""
+
+
+class McpServerStatusResponse(BaseModel):
+    servers: list[McpServerStatusItemVo] = Field(default_factory=list)

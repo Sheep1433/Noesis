@@ -159,6 +159,20 @@ const sidebarItems = ref([
     },
   },
   {
+    label: 'MCP',
+    key: 'McpManagement',
+    onClick() {
+      router.push({
+        name: this.key,
+      })
+    },
+    renderIcon() {
+      return (
+        <div class="sidebar-nav-icon i-mdi:toy-brick-outline"></div>
+      )
+    },
+  },
+  {
     label: '测试用例',
     key: 'TestCaseGenerate',
     onClick() {

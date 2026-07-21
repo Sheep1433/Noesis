@@ -34,6 +34,12 @@ export const mainNavItems: MainNavItem[] = [
     iconClass: 'i-my-svg:chat-skill',
   },
   {
+    label: 'MCP',
+    key: 'McpManagement',
+    routeName: 'McpManagement',
+    iconClass: 'i-mdi:toy-brick-outline',
+  },
+  {
     label: '测试',
     key: 'TestCaseGenerate',
     routeName: 'TestCaseGenerate',

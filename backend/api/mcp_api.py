@@ -1,13 +1,16 @@
-"""MCP 目录与用户配置 API。"""
+"""MCP 目录、状态与用户配置文件 API。"""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from common.http.response import ResponseUtil
 from schemas.login_vo import CurrentUser
 from schemas.mcp_vo import (
+    McpConfigFileResponse,
+    McpConfigUpdateRequest,
     McpProbeResponse,
     McpServerCatalogItemVo,
     McpServerCatalogResponse,
+    McpServerStatusResponse,
     McpServerUpsertRequest,
 )
 from services.mcp_service import McpService
@@ -24,6 +27,35 @@ async def list_mcp_servers(
     return McpServerCatalogResponse(
         servers=[McpServerCatalogItemVo.model_validate(i.model_dump()) for i in items]
     )
+
+
+@mcp_router.get("/servers/status", response_model=McpServerStatusResponse)
+async def list_mcp_server_status(
+    probe: bool = Query(False, description="是否探测连通与工具数"),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    items = await McpService.list_server_status(current_user.user_id, probe=probe)
+    return McpServerStatusResponse(servers=items)
+
+
+@mcp_router.get("/config", response_model=McpConfigFileResponse)
+async def get_mcp_config(
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """读取当前用户 mcp.json（不存在则返回空模板）。"""
+    return McpService.get_user_config_file(current_user.user_id)
+
+
+@mcp_router.put("/config", response_model=McpConfigFileResponse)
+async def put_mcp_config(
+    body: McpConfigUpdateRequest,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """整文件保存用户 mcp.json（仅允许 HTTP/SSE transport）。"""
+    try:
+        return McpService.save_user_config_file(current_user.user_id, body.content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @mcp_router.put("/servers/{server_id}")

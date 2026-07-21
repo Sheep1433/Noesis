@@ -3,8 +3,9 @@ import type { DropdownOption } from 'naive-ui'
 import type { McpServerCatalogItem } from '@/api/mcp'
 import type { ChatModelOption } from '@/api/models'
 import type FileUploadManager from '@/views/FileUploadManager.vue'
+import { useRouter } from 'vue-router'
 import { ensureSession } from '@/api/chat'
-import { listMcpServers, upsertMcpServer } from '@/api/mcp'
+import { listMcpServers } from '@/api/mcp'
 import { getChatModels } from '@/api/models'
 import { getSkillsFsTree } from '@/api/skills'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
@@ -15,6 +16,8 @@ const props = defineProps<{
   disabled?: boolean
   fileUploadRef?: InstanceType<typeof FileUploadManager> | null
 }>()
+
+const router = useRouter()
 
 const selectedModelId = defineModel<string>('modelId', { default: '' })
 const selectedKbCollections = defineModel<string[]>('kbCollections', { default: () => [] })
@@ -33,11 +36,6 @@ const mcpServers = ref<McpServerCatalogItem[]>([])
 const skillPackages = ref<{ id: string, source: string }[]>([])
 const catalogLoaded = ref(false)
 const catalogLoading = ref(false)
-
-const addMcpShow = ref(false)
-const addMcpId = ref('')
-const addMcpUrl = ref('')
-const addMcpSaving = ref(false)
 
 const currentModelLabel = computed(() => {
   const hit = models.value.find((m) => m.id === selectedModelId.value)
@@ -145,33 +143,6 @@ function isSkillChecked(id: string) {
   return selectedSkills.value.includes(id)
 }
 
-async function submitAddMcp() {
-  const id = addMcpId.value.trim()
-  const url = addMcpUrl.value.trim()
-  if (!id || !url) {
-    return false
-  }
-  addMcpSaving.value = true
-  try {
-    await upsertMcpServer(id, { transport: 'streamable_http', url })
-    addMcpShow.value = false
-    addMcpId.value = ''
-    addMcpUrl.value = ''
-    catalogLoaded.value = false
-    await loadCatalogs()
-    if (!selectedMcpServers.value.includes(id)) {
-      toggleMcp(id)
-    }
-    return true
-  } catch (e) {
-    console.warn('添加 MCP 失败', e)
-    window.$ModalMessage?.error?.('添加 MCP 失败')
-    return false
-  } finally {
-    addMcpSaving.value = false
-  }
-}
-
 const modelOptions = computed<DropdownOption[]>(() =>
   models.value.map((m) => ({
     label: m.label,
@@ -204,7 +175,7 @@ const mcpOptions = computed<DropdownOption[]>(() => {
     key: `mcp:${s.id}`,
   }))
   items.push({ type: 'divider', key: 'mcp-div' })
-  items.push({ label: '添加 MCP Server…', key: 'mcp:add' })
+  items.push({ label: '打开 MCP 配置…', key: 'mcp:config' })
   return items
 })
 
@@ -263,8 +234,9 @@ function onPlusSelect(key: string | number) {
     toggleSkill(k.slice('skill:'.length))
     return
   }
-  if (k === 'mcp:add') {
-    addMcpShow.value = true
+  if (k === 'mcp:config') {
+    plusOpen.value = false
+    void router.push({ name: 'McpManagement' })
     return
   }
   if (k.startsWith('mcp:')) {
@@ -334,25 +306,6 @@ function onPlusSelect(key: string | number) {
     <div class="composer-toolbar__right">
       <slot name="right"></slot>
     </div>
-
-    <n-modal
-      v-model:show="addMcpShow"
-      preset="dialog"
-      title="添加 MCP Server"
-      positive-text="保存"
-      negative-text="取消"
-      :loading="addMcpSaving"
-      @positive-click="submitAddMcp"
-    >
-      <div class="add-mcp-form">
-        <n-input v-model:value="addMcpId" placeholder="server id（字母数字下划线）" />
-        <n-input
-          v-model:value="addMcpUrl"
-          class="mt-8"
-          placeholder="https://host/mcp"
-        />
-      </div>
-    </n-modal>
   </div>
 </template>
 
@@ -436,13 +389,6 @@ function onPlusSelect(key: string | number) {
 
 .composer-kb-inline {
   margin-left: 4px;
-}
-
-.add-mcp-form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 280px;
 }
 
 :global(.composer-check-row) {

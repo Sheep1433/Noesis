@@ -95,3 +95,48 @@ def test_profile_server_names_default() -> None:
     names = get_profile_server_names(MCP_PROFILE_FAULT_OPERATION)
     assert isinstance(names, list)
     assert len(names) >= 1
+
+
+def test_save_user_config_file_rejects_stdio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import config.user_data_paths as user_paths
+    from services.mcp_service import McpService
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    with pytest.raises(ValueError, match="stdio|transport"):
+        McpService.save_user_config_file(
+            "u1",
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "bad": {"transport": "stdio", "command": "npx", "args": []}
+                    }
+                }
+            ),
+        )
+
+
+def test_save_user_config_file_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import config.user_data_paths as user_paths
+    from services.mcp_service import McpService
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    out = McpService.save_user_config_file(
+        "u2",
+        json.dumps(
+            {
+                "mcpServers": {
+                    "ctx": {
+                        "transport": "streamable_http",
+                        "url": "https://example.com/mcp",
+                    }
+                }
+            }
+        ),
+    )
+    assert out.exists
+    assert "ctx" in out.content
+    assert get_user_mcp_path("u2").is_file()
