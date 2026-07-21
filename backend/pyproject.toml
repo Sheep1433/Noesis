@@ -68,9 +68,6 @@ dev = [
 default-groups = ["dev"]
 
 [project.optional-dependencies]
-aio = [
-    "agent-sandbox==0.0.30",
-]
 loadtest = [
     "locust>=2.31.0",
 ]

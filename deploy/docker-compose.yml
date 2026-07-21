@@ -1,8 +1,13 @@
 # Noesis 生产栈：nginx + backend + qdrant + sandbox-runner
-# 在仓库根目录执行: docker compose -f deploy/docker-compose.yml up -d
+# 在仓库根目录执行: docker compose -f deploy/docker-compose.yml --env-file deploy/.env.docker up -d
 #
-# 默认 docker exec + slim 镜像。构建 slim: docker build -t noesis/sandbox-slim:latest -f deploy/sandbox-slim/Dockerfile .
-# 若仍用全量 AIO：SANDBOX_RUNTIME=aio + docker pull ghcr.io/agent-infra/sandbox:latest
+# 关键：NOESIS_HOST_DATA_DIR / NOESIS_HOST_SKILLS_DIR 必须是 Docker **宿主机**绝对路径。
+# runner 把这两个路径原样交给 daemon 做 bind；同时以相同路径挂进 runner，便于 mkdir。
+# 示例（仓库根开发）:
+#   NOESIS_HOST_DATA_DIR=/absolute/path/to/Noesis/.data
+#   NOESIS_HOST_SKILLS_DIR=/absolute/path/to/Noesis/extensions/skills
+#
+# 构建 slim: docker build -t noesis/sandbox-slim:latest -f deploy/sandbox-slim/Dockerfile .
 
 name: ${COMPOSE_PROJECT_NAME:-noesis}
 
@@ -38,20 +43,22 @@ services:
     restart: unless-stopped
     environment:
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
-      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-docker}
+      SANDBOX_RUNTIME: docker
       SANDBOX_DOCKER_IMAGE: ${SANDBOX_DOCKER_IMAGE:-noesis/sandbox-slim:latest}
-      SANDBOX_AIO_IMAGE: ${SANDBOX_AIO_IMAGE:-ghcr.io/agent-infra/sandbox:latest}
-      SANDBOX_AIO_PORT: "8080"
-      SANDBOX_PUBLIC_HOST: host.docker.internal
-      NOESIS_HOST_DATA_DIR: /data/noesis
-      SANDBOX_SKILLS_HOST_DIR: /data/skills
+      # 必须是宿主机绝对路径（daemon bind source）
+      NOESIS_HOST_DATA_DIR: ${NOESIS_HOST_DATA_DIR:?Set NOESIS_HOST_DATA_DIR to absolute host path}
+      SANDBOX_SKILLS_HOST_DIR: ${NOESIS_HOST_SKILLS_DIR:?Set NOESIS_HOST_SKILLS_DIR to absolute host skills path}
       SANDBOX_MAX_REPLICAS: "20"
       SANDBOX_IDLE_TTL_SECONDS: "259200"
       SANDBOX_REAP_INTERVAL_SECONDS: "3600"
-      SANDBOX_HEADLESS: "1"
+      SANDBOX_UID: "10001"
+      SANDBOX_GID: "10001"
+      SANDBOX_MEM_LIMIT: "512m"
+      SANDBOX_PIDS_LIMIT: "256"
     volumes:
-      - noesis_data:/data/noesis
-      - ../extensions/skills:/data/skills:ro
+      # 路径字符串与宿主机一致，避免「容器内路径冒充 host bind」
+      - ${NOESIS_HOST_DATA_DIR}:${NOESIS_HOST_DATA_DIR}
+      - ${NOESIS_HOST_SKILLS_DIR}:${NOESIS_HOST_SKILLS_DIR}:ro
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
@@ -71,13 +78,14 @@ services:
       - .env.docker
     environment:
       NOESIS_CONFIG_PATH: /app/config.yaml
-      NOESIS_HOST_DATA_DIR: /data/noesis
+      # 容器内用户数据根；与 runner 的 NOESIS_HOST_DATA_DIR 指向同一宿主机目录
+      NOESIS_DATA_DIR: /data/noesis
       SANDBOX_RUNNER_URL: http://sandbox-runner:8090
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
       SANDBOX_SKIP_DOCKER_CHECK: "1"
     volumes:
       - ./config.docker.yaml:/app/config.yaml:ro
-      - noesis_data:/data/noesis
+      - ${NOESIS_HOST_DATA_DIR}:/data/noesis
       - backend_runtime:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -114,4 +122,3 @@ volumes:
   postgres_data:
   qdrant_storage:
   backend_runtime:
-  noesis_data:

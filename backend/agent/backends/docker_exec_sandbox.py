@@ -14,6 +14,7 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.sandbox import BaseSandbox
 
+from agent.backends.mount_paths import WORKSPACE_CONTAINER_PREFIX
 from agent.backends.sandbox_common import prepare_write_file_payload, session_mutex
 from agent.backends.sandbox_mount_policy import (
     resolve_read_container_path,
@@ -23,7 +24,7 @@ from config.env import SandboxConfig, sandbox_runner_headers
 
 
 class DockerExecSandboxBackend(BaseSandbox):
-    """用户 docker 沙箱：runner 经 docker exec 执行，容器内绝对路径由 agent_filesystem 映射。"""
+    """session 级 docker 沙箱：runner 经 docker exec 执行，挂载根为 /workspace。"""
 
     def __init__(
         self,
@@ -34,7 +35,7 @@ class DockerExecSandboxBackend(BaseSandbox):
     ) -> None:
         self._user_id = user_id
         self._session_id = session_id
-        self._session_workspace = f"/workspace/sessions/{session_id}/workspace"
+        self._workspace = WORKSPACE_CONTAINER_PREFIX
         self._mutex = session_mutex(user_id, session_id)
         self._default_timeout = float(SandboxConfig.execute_timeout_seconds)
         self._runner_url = SandboxConfig.runner_url.rstrip("/")
@@ -43,6 +44,9 @@ class DockerExecSandboxBackend(BaseSandbox):
     @property
     def id(self) -> str:
         return f"docker-{self._user_id}-{self._session_id}"
+
+    def _api_prefix(self) -> str:
+        return f"/internal/sandboxes/{self._user_id}/sessions/{self._session_id}"
 
     def _post(self, path: str, payload: dict) -> httpx.Response:
         headers = sandbox_runner_headers()
@@ -60,18 +64,50 @@ class DockerExecSandboxBackend(BaseSandbox):
                 json=payload,
             )
 
+    def _execute_once(self, command: str, effective_timeout: float) -> httpx.Response:
+        return self._post(
+            f"{self._api_prefix()}/exec",
+            {
+                "command": command,
+                "exec_dir": self._workspace,
+                "timeout": effective_timeout,
+            },
+        )
+
+    def _ensure_sync(self) -> None:
+        """同步 ensure（供 execute 在 404 后重建；清缓存后强制 PUT）。"""
+        from services.sandbox_service import invalidate_session_sandbox_cache
+
+        invalidate_session_sandbox_cache(self._user_id, self._session_id)
+        headers = sandbox_runner_headers()
+        path = f"/internal/sandboxes/{self._user_id}/sessions/{self._session_id}"
+        with httpx.Client(timeout=120.0) as client:
+            resp = client.put(
+                f"{self._runner_url}{path}",
+                headers=headers,
+                json={"runtime": "docker"},
+            )
+        if resp.status_code >= 400:
+            detail = resp.text.strip() or resp.reason_phrase
+            raise RuntimeError(
+                f"重建会话沙箱失败 HTTP {resp.status_code}: {detail}"
+            )
+
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         effective_timeout = float(timeout if timeout is not None else self._default_timeout)
         with self._mutex:
             try:
-                resp = self._post(
-                    f"/internal/sandboxes/{self._user_id}/exec",
-                    {
-                        "command": command,
-                        "exec_dir": self._session_workspace,
-                        "timeout": effective_timeout,
-                    },
-                )
+                resp = self._execute_once(command, effective_timeout)
+                if resp.status_code == 404:
+                    try:
+                        self._ensure_sync()
+                    except (httpx.HTTPError, RuntimeError) as exc:
+                        return ExecuteResponse(
+                            output=f"Docker sandbox recreate failed: {exc}",
+                            exit_code=1,
+                            truncated=False,
+                        )
+                    resp = self._execute_once(command, effective_timeout)
             except httpx.HTTPError as exc:
                 return ExecuteResponse(
                     output=f"Docker sandbox execute failed: {exc}",
@@ -107,7 +143,7 @@ class DockerExecSandboxBackend(BaseSandbox):
                     payload["encoding"] = encoding
                 try:
                     resp = self._post(
-                        f"/internal/sandboxes/{self._user_id}/files/write",
+                        f"{self._api_prefix()}/files/write",
                         payload,
                     )
                     if resp.status_code >= 400:
@@ -133,7 +169,7 @@ class DockerExecSandboxBackend(BaseSandbox):
                     continue
                 try:
                     resp = self._post(
-                        f"/internal/sandboxes/{self._user_id}/files/read",
+                        f"{self._api_prefix()}/files/read",
                         {"file": abs_path},
                     )
                 except httpx.HTTPError:
@@ -190,7 +226,7 @@ class DockerExecSandboxBackend(BaseSandbox):
 
     def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> object:
         resolved = (
-            self._session_workspace
+            self._workspace
             if path is None
             else resolve_read_container_path(path)
         )
@@ -198,7 +234,7 @@ class DockerExecSandboxBackend(BaseSandbox):
 
     def glob(self, pattern: str, path: str = "/") -> object:
         resolved = (
-            self._session_workspace
+            self._workspace
             if path == "/"
             else resolve_read_container_path(path)
         )
@@ -209,7 +245,7 @@ async def create_docker_exec_sandbox_backend(
     user_id: str,
     session_id: str,
 ) -> DockerExecSandboxBackend:
-    from services.sandbox_service import ensure_user_sandbox
+    from services.sandbox_service import ensure_session_sandbox
 
-    await ensure_user_sandbox(user_id)
+    await ensure_session_sandbox(user_id, session_id)
     return DockerExecSandboxBackend(user_id=user_id, session_id=session_id)

@@ -223,7 +223,7 @@ class CheckpointYamlSection(BaseModel):
 
 
 class SandboxYamlSection(BaseModel):
-    # docker：slim 镜像 + docker exec（推荐）；aio：全量 AIO；local_shell：宿主机
+    # docker：slim 镜像 + docker exec（生产）；local_shell：宿主机（开发/测试）
     backend: str = "docker"
     runner_url: str = "http://127.0.0.1:8090"
     execute_timeout_seconds: int = Field(default=120, ge=1)

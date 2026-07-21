@@ -8,7 +8,6 @@ from typing import AsyncGenerator, Optional
 
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.memory import MemoryMiddleware
-from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import SubAgent
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage
@@ -21,6 +20,7 @@ from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.middlewares.chat_attachments_middleware import ChatAttachmentsMiddleware
 from agent.middlewares.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
 from agent.middlewares.memory_sync_middleware import MemorySyncMiddleware
+from agent.middlewares.revisable_skills_middleware import RevisableSkillsMiddleware
 from agent.prompts import PromptProfile, build_prompt
 from agent.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from agent.tools import build_web_search_tools
@@ -56,21 +56,23 @@ def _build_task_worker_subagents(
     backend: BackendProtocol,
     web_tools: list,
     *,
+    user_id: str,
     model_id: str | None = None,
 ) -> list[SubAgent]:
     subagent_middleware = [
         *build_subagent_default_middleware(backend),
-        SkillsMiddleware(
+        RevisableSkillsMiddleware(
             backend=backend,
             sources=list(SKILL_SOURCES),
             system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+            user_id=user_id,
         ),
     ]
     return [
         {
             "name": "task-worker",
             "description": (
-                "在独立上下文中完成主 Agent 委派的单个子任务：阅读 `/skills/extensions/` 与 `/skills/custom/` 相关 Skill、"
+                "在独立上下文中完成主 Agent 委派的单个子任务：阅读 `/skills/public/` 与 `/skills/personal/` 相关 Skill、"
                 "使用 web_search/web_fetch 检索、在工作区读写与归纳文件，多步后返回结构化小结。"
                 "适合可并行、上下文较重的子任务（调研子课题、多源检索、批量读文件等）。"
             ),
@@ -127,10 +129,11 @@ class SuperAgent(BaseAgent):
                 tools = list(web_tools)
                 extra_middleware: list = [
                     TodoListMiddleware(),
-                    SkillsMiddleware(
+                    RevisableSkillsMiddleware(
                         backend=backend,
                         sources=list(SKILL_SOURCES),
                         system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+                        user_id=user_id,
                     ),
                     *_build_memory_middleware(backend),
                 ]
@@ -167,7 +170,9 @@ class SuperAgent(BaseAgent):
                     system_prompt=build_prompt(PromptProfile.SUPER_AGENT),
                     checkpointer=self.checkpointer,
                     backend=backend,
-                    subagents=_build_task_worker_subagents(backend, web_tools, model_id=model_id),
+                    subagents=_build_task_worker_subagents(
+                        backend, web_tools, user_id=user_id, model_id=model_id
+                    ),
                     extra_middleware=extra_middleware,
                     model_id=model_id,
                 )

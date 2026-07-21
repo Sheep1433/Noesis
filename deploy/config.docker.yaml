@@ -146,8 +146,8 @@ web_tools:
   ddg_backends: mojeek,yandex
 
 # Agent 沙箱（深度研究 / 故障运维）
-# backend: docker（推荐 slim 镜像 + docker exec）| aio（全量 AIO 镜像，需 uv sync --extra aio）| local_shell（宿主机）
-# runner 镜像/回收等见 deploy/docker-compose.yml
+# backend: docker（slim + docker exec）| local_shell（宿主机；aio 已移除）
+# runner / 宿主机路径见 deploy/docker-compose.yml（NOESIS_HOST_DATA_DIR）
 sandbox:
   backend: docker
   runner_url: http://sandbox-runner:8090

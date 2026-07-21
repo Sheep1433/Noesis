@@ -1,18 +1,24 @@
-"""容器内路径校验（AIO / docker exec 共用）。"""
+"""容器内路径校验（docker exec / local 映射共用）。"""
 
 from __future__ import annotations
 
 from pathlib import PurePosixPath
 
 from agent.backends.mount_paths import (
-    CUSTOM_SKILLS_CONTAINER_PREFIX,
-    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+    PERSONAL_SKILLS_CONTAINER_PREFIX,
+    PUBLIC_SKILLS_CONTAINER_PREFIX,
+    WORKSPACE_CONTAINER_PREFIX,
 )
 
-_CONTAINER_WORKSPACE = "/workspace"
 _ALLOWED_READ_PREFIXES = (
-    _CONTAINER_WORKSPACE,
-    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+    WORKSPACE_CONTAINER_PREFIX,
+    PUBLIC_SKILLS_CONTAINER_PREFIX,
+    PERSONAL_SKILLS_CONTAINER_PREFIX,
+)
+
+_READ_ONLY_PREFIXES = (
+    PUBLIC_SKILLS_CONTAINER_PREFIX,
+    PERSONAL_SKILLS_CONTAINER_PREFIX,
 )
 
 
@@ -41,22 +47,17 @@ def resolve_read_container_path(key: str) -> str:
     return container
 
 
+def _is_under_prefix(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
 def resolve_write_container_path(key: str) -> str:
     container = normalize_container_path(key)
-    if container.startswith(f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/") or container == (
-        EXTENSIONS_SKILLS_CONTAINER_PREFIX
-    ):
-        msg = "Platform skills are read-only"
-        raise ValueError(msg)
-    if not (
-        container == _CONTAINER_WORKSPACE
-        or container.startswith(f"{_CONTAINER_WORKSPACE}/")
-    ):
+    for prefix in _READ_ONLY_PREFIXES:
+        if _is_under_prefix(container, prefix):
+            msg = "Skills directory is read-only"
+            raise ValueError(msg)
+    if not _is_under_prefix(container, WORKSPACE_CONTAINER_PREFIX):
         msg = f"Path outside /workspace mount: {container}"
-        raise ValueError(msg)
-    if container.startswith(f"{CUSTOM_SKILLS_CONTAINER_PREFIX}/") or container == (
-        CUSTOM_SKILLS_CONTAINER_PREFIX
-    ):
-        msg = "Skills directory is read-only for agents"
         raise ValueError(msg)
     return container

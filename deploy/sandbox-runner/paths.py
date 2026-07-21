@@ -1,8 +1,14 @@
-"""本地 / 容器内默认路径解析（免手动 export）。"""
+"""本地 / 容器内默认路径解析（免手动 export）。
+
+Compose 部署时：
+- NOESIS_HOST_DATA_DIR / SANDBOX_SKILLS_HOST_DIR 必须是 Docker daemon 可见的**宿主机绝对路径**。
+- runner 容器内需把同一路径 bind 进来（路径字符串与宿主机一致），才能 mkdir/chown。
+"""
 
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 _RUNNER_DIR = Path(__file__).resolve().parent
@@ -35,22 +41,22 @@ def resolve_skills_host_dir() -> Path:
     return (repo_root() / "extensions" / "skills").resolve()
 
 
-_SANDBOX_MOUNT_DIR_MODE = 0o755
-_SANDBOX_MOUNT_FILE_MODE = 0o644
+def ensure_sandbox_mount_dirs(
+    *paths: Path,
+    uid: int = 10001,
+    gid: int = 10001,
+) -> None:
+    """创建挂载源目录；尽量 chown 到沙箱 UID，保留既有可执行位。
 
-
-def ensure_sandbox_mount_readable(path: Path, *, recursive: bool = False) -> None:
-    """确保 bind mount 源对 AIO 进程用户 gem (uid=1000) 可读。"""
-    if not path.exists():
-        return
-    try:
-        path.chmod(_SANDBOX_MOUNT_DIR_MODE if path.is_dir() else _SANDBOX_MOUNT_FILE_MODE)
-    except OSError:
-        return
-    if not recursive or not path.is_dir():
-        return
-    for child in path.rglob("*"):
+    不再递归 chmod 644（会破坏 Skill 脚本可执行位）。
+    """
+    for path in paths:
+        path.mkdir(parents=True, exist_ok=True)
         try:
-            child.chmod(_SANDBOX_MOUNT_DIR_MODE if child.is_dir() else _SANDBOX_MOUNT_FILE_MODE)
+            os.chown(path, uid, gid)
         except OSError:
-            continue
+            # 非 root runner 无法 chown 时放宽目录权限以便沙箱用户写入 workspace
+            try:
+                path.chmod(path.stat().st_mode | stat.S_IWOTH | stat.S_IXOTH | stat.S_IROTH)
+            except OSError:
+                pass

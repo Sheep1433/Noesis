@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 BACKEND_DIR = _BACKEND_DIR
 REPO_ROOT = _BACKEND_DIR.parent
-DATA_DIR = REPO_ROOT / ".data"
+
+# Compose：NOESIS_DATA_DIR=/data/noesis（与宿主机 NOESIS_HOST_DATA_DIR 同一目录）
+_DATA_DIR_ENV = os.environ.get("NOESIS_DATA_DIR", "").strip()
+DATA_DIR = Path(_DATA_DIR_ENV).resolve() if _DATA_DIR_ENV else (REPO_ROOT / ".data")
 
 
 def data_path(*parts: str) -> Path:

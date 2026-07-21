@@ -1,4 +1,4 @@
-"""Agent 虚拟路径：`/research/` 工作区 + `/skills/extensions|custom/`。"""
+"""Agent 虚拟路径：workspace 根 + `/skills/public|personal/` + `/memory/`。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from agent.backends.agent_filesystem import PrefixBackend, build_agent_filesyste
 from agent.backends.mount_paths import (
     AGENT_CUSTOM_SKILLS_ROUTE,
     AGENT_EXTENSIONS_SKILLS_ROUTE,
-    AGENT_SKILLS_INDEX_ROUTE,
-    CUSTOM_SKILLS_CONTAINER_PREFIX,
-    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+    AGENT_PERSONAL_SKILLS_ROUTE,
+    AGENT_PUBLIC_SKILLS_ROUTE,
+    PERSONAL_SKILLS_CONTAINER_PREFIX,
+    PUBLIC_SKILLS_CONTAINER_PREFIX,
+    WORKSPACE_CONTAINER_PREFIX,
 )
-from agent.backends.path_rewrite import PathRewriteContext, rewrite_virtual_paths_in_command
 from deepagents.backends.protocol import (
-    EditResult,
     ExecuteResponse,
     FileData,
     LsResult,
@@ -32,6 +32,7 @@ class _StubBackend:
         self.label = label
         self.read_calls: list[str] = []
         self.ls_calls: list[str] = []
+        self.write_calls: list[tuple[str, str]] = []
 
     def ls(self, path: str) -> LsResult:
         self.ls_calls.append(path)
@@ -44,6 +45,7 @@ class _StubBackend:
         return ReadResult(file_data=FileData(content=self.label, encoding="utf-8"))
 
     def write(self, file_path: str, content: str) -> WriteResult:
+        self.write_calls.append((file_path, content))
         return WriteResult(path=file_path)
 
     def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False):
@@ -72,524 +74,166 @@ class _StubSandbox(_StubBackend, SandboxBackendProtocol):
 
 def test_prefix_backend_maps_container_prefix() -> None:
     inner = _StubBackend("inner")
-    backend = PrefixBackend(inner, container_prefix="/skills")
+    backend = PrefixBackend(inner, container_prefix="/skills/public")
     backend.read("/deep-research-v2/SKILL.md")
-    assert inner.read_calls == ["/skills/deep-research-v2/SKILL.md"]
+    assert inner.read_calls == ["/skills/public/deep-research-v2/SKILL.md"]
 
 
 def test_prefix_backend_map_out_strips_container_prefix() -> None:
-    backend = PrefixBackend(_StubBackend("inner"), container_prefix="/workspace/skills")
-    assert backend._map_out("/workspace/skills/my-tool") == "/my-tool"
-    assert backend._map_out("/workspace/skills") == "/"
+    backend = PrefixBackend(_StubBackend("inner"), container_prefix="/skills/personal")
+    assert backend._map_out("/skills/personal/my-tool") == "/my-tool"
+    assert backend._map_out("/skills/personal") == "/"
 
 
-def test_prefix_backend_ls_normalizes_aio_absolute_entries() -> None:
-    inner = _StubBackend("inner")
-
-    def ls(path: str) -> LsResult:
-        assert path == "/workspace/skills"
-        return LsResult(
-            entries=[
-                {"path": "/workspace/skills/my-tool", "is_dir": True},
-            ]
-        )
-
-    inner.ls = ls  # type: ignore[method-assign]
-    backend = PrefixBackend(inner, container_prefix="/workspace/skills", read_only=True)
-    result = backend.ls("/")
-    assert result.error is None
-    assert result.entries == [{"path": "/my-tool/", "is_dir": True}]
+def test_prefix_backend_execute_does_not_rewrite_shell_operators() -> None:
+    sandbox = _StubSandbox("s")
+    backend = PrefixBackend(sandbox, container_prefix="/workspace")
+    cmd = "mkdir -p out && printf x > out/a.txt | cat"
+    backend.execute(cmd)
+    assert sandbox.execute_calls == [cmd]
 
 
 @pytest.mark.asyncio
-async def test_aio_composite_ls_extensions_paths_are_not_doubled() -> None:
-    sandbox = _StubSandbox("sandbox")
-
-    def ls(path: str) -> LsResult:
-        if path == "/skills":
-            return LsResult(
-                entries=[
-                    {"path": "/skills/deep-research-v2", "is_dir": True},
-                ]
-            )
-        return LsResult(entries=[])
-
-    sandbox.ls = ls  # type: ignore[method-assign]
-    composite = build_agent_filesystem_backend(
-        user_id="u1",
-        session_id="s1",
-        sandbox=sandbox,  # type: ignore[arg-type]
-        shell_timeout=30,
-    )
-    result = await composite.als("/skills/extensions")
-    paths = {entry["path"].rstrip("/") for entry in result.entries or []}
-    assert "/skills/extensions/deep-research-v2" in paths
-    assert "/skills/extensions/skills" not in "".join(paths)
-
-
-@pytest.mark.asyncio
-async def test_aio_composite_ls_custom_workspace_is_not_session_workspace() -> None:
-    """Agent 误用 /skills/custom/workspace 时，映射到容器内不存在的 skill 目录。"""
-    sandbox = _StubSandbox("sandbox")
-
-    def ls(path: str) -> LsResult:
-        if path == "/workspace/skills/workspace":
-            return LsResult(entries=None, error="Path '/workspace/skills/workspace': path_not_found")
-        return LsResult(entries=[])
-
-    sandbox.ls = ls  # type: ignore[method-assign]
-    composite = build_agent_filesystem_backend(
-        user_id="u1",
-        session_id="s1",
-        sandbox=sandbox,  # type: ignore[arg-type]
-        shell_timeout=30,
-    )
-    result = await composite.als("/skills/custom/workspace")
-    assert result.error is not None
-
-
-def test_prefix_backend_read_only_rejects_write() -> None:
-    inner = _StubBackend("inner")
-    backend = PrefixBackend(inner, read_only=True)
-    result = backend.write("/foo.md", "x")
-    assert result.error is not None
-    assert inner.read_calls == []
-
-
-@pytest.mark.asyncio
-async def test_prefix_backend_als_delegates_to_ls() -> None:
-    inner = _StubBackend("inner")
-    backend = PrefixBackend(inner, read_only=True)
-    result = await backend.als("/")
-    assert result.error is None
-    assert inner.ls_calls == ["/"]
-
-
-@pytest.mark.asyncio
-async def test_ls_skills_index_lists_extensions_and_custom(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_local_shell_composite_writes_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from config import user_data_paths as user_paths
 
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     platform = tmp_path / "platform-skills"
     platform.mkdir()
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
+    (platform / "deep-research-v2").mkdir()
+    (platform / "deep-research-v2" / "SKILL.md").write_text("# skill\n", encoding="utf-8")
     monkeypatch.setattr(
         "agent.backends.agent_filesystem.skills_root",
         lambda: platform,
     )
 
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    for path in ("/skills", "/skills/"):
-        result = await backend.als(path)
-        assert result.error is None, path
-        names = {entry["path"].rstrip("/") for entry in result.entries or []}
-        assert names == {"/skills/extensions", "/skills/custom"}
-
-
-@pytest.mark.asyncio
-async def test_aio_ls_skills_index_does_not_hit_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sandbox = _StubSandbox("sandbox")
-    workspace_ls_calls: list[str] = []
-
-    def ls(path: str) -> LsResult:
-        if path.startswith("/workspace/sessions/"):
-            workspace_ls_calls.append(path)
-            return LsResult(entries=None, error=f"unexpected workspace ls: {path}")
-        if path == "/skills":
-            return LsResult(entries=[{"path": "/skills/deep-research-v2", "is_dir": True}])
-        return LsResult(entries=[])
-
-    sandbox.ls = ls  # type: ignore[method-assign]
-    composite = build_agent_filesystem_backend(
-        user_id="u1",
-        session_id="s1",
-        sandbox=sandbox,  # type: ignore[arg-type]
-        shell_timeout=30,
-    )
-    result = await composite.als("/skills")
-    assert result.error is None
-    assert workspace_ls_calls == []
-    names = {entry["path"].rstrip("/") for entry in result.entries or []}
-    assert names == {"/skills/extensions", "/skills/custom"}
-
-
-@pytest.mark.asyncio
-async def test_create_agent_backend_local_shell_lists_extensions_skills(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    skill_dir = platform / "deep-research-v2"
-    skill_dir.mkdir()
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    result = await backend.als(AGENT_EXTENSIONS_SKILLS_ROUTE)
-    assert result.error is None
-    paths = {entry["path"].rstrip("/") for entry in result.entries or []}
-    assert "/skills/extensions/deep-research-v2" in paths
-
-
-@pytest.mark.asyncio
-async def test_create_agent_backend_local_shell_writes_research_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    target = "/research/notes.md"
-    result = backend.write(target, "hello")
-    assert result.error is None
-    ws = user_paths.get_workspace_dir("u1", "s1")
-    assert (ws / "research" / "notes.md").read_text(encoding="utf-8") == "hello"
-
-
-@pytest.mark.asyncio
-async def test_create_agent_backend_reads_extensions_skill(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    skill_dir = platform / "deep-research-v2"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text("skill-body", encoding="utf-8")
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    result = backend.read("/skills/extensions/deep-research-v2/SKILL.md")
-    assert result.error is None
-    assert result.file_data is not None
-    content = (
-        result.file_data.content
-        if hasattr(result.file_data, "content")
-        else result.file_data["content"]
-    )
-    assert "skill-body" in content
-
-
-@pytest.mark.asyncio
-async def test_create_agent_backend_custom_skills_route_is_read_only(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    result = backend.write("/skills/custom/my-skill/SKILL.md", "x")
-    assert result.error is not None
-
-
-@pytest.mark.asyncio
-async def test_skills_middleware_can_load_extensions_skills(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-    from deepagents.middleware.skills import _alist_skills_with_errors
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    skill_dir = platform / "deep-research-v2"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: deep-research-v2\ndescription: test skill\n---\n\n# Body\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    skills, err = await _alist_skills_with_errors(backend, AGENT_EXTENSIONS_SKILLS_ROUTE)
-    assert err is None
-    assert len(skills) == 1
-    assert skills[0]["name"] == "deep-research-v2"
-
-
-@pytest.mark.asyncio
-async def test_create_agent_backend_aio_uses_composite(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from unittest.mock import AsyncMock, patch
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "aio")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    with patch(
-        "agent.backends.factory.create_aio_sandbox_backend",
-        new_callable=AsyncMock,
-    ) as mock_create:
-        mock_sandbox = MagicMock()
-        mock_create.return_value = mock_sandbox
-        from agent.backends.factory import create_agent_backend
-        from deepagents.backends.composite import CompositeBackend
-
-        backend = await create_agent_backend("u1", "s1")
-
-    assert isinstance(backend, CompositeBackend)
-    assert AGENT_SKILLS_INDEX_ROUTE in backend.routes
-    assert AGENT_EXTENSIONS_SKILLS_ROUTE in backend.routes
-    assert AGENT_CUSTOM_SKILLS_ROUTE in backend.routes
-    mock_create.assert_awaited_once_with("u1", "s1")
-
-
-def test_build_agent_filesystem_aio_maps_extensions_container_prefix() -> None:
-    sandbox = _StubSandbox("sandbox")
     backend = build_agent_filesystem_backend(
         user_id="u1",
         session_id="s1",
-        sandbox=sandbox,  # type: ignore[arg-type]
+        sandbox=None,
         shell_timeout=30,
     )
-    route_backend = backend.routes[AGENT_EXTENSIONS_SKILLS_ROUTE]
-    assert isinstance(route_backend, PrefixBackend)
-    route_backend.read("/deep-research-v2/SKILL.md")
-    assert sandbox.read_calls == [
-        f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
-    ]
-
-
-def _aio_rewrite_ctx() -> PathRewriteContext:
-    return PathRewriteContext(
-        backend_kind="aio",
-        user_id="u1",
-        session_id="s1",
-        workspace_prefix="/workspace/sessions/s1/workspace",
-        extensions_prefix="/skills",
-        custom_skills_prefix="/workspace/skills",
-        memory_agents_path="/workspace/AGENTS.md",
-        memory_user_path="/workspace/USER.md",
-    )
-
-
-def test_rewrite_virtual_paths_research_extensions_custom_memory() -> None:
-    ctx = _aio_rewrite_ctx()
-    assert rewrite_virtual_paths_in_command("cat /research/demo/report.md", ctx=ctx) == (
-        "cat /workspace/sessions/s1/workspace/research/demo/report.md"
-    )
-    assert rewrite_virtual_paths_in_command(
-        "python3 /skills/extensions/deep-research-v2/run.py", ctx=ctx
-    ) == "python3 /skills/deep-research-v2/run.py"
-    assert rewrite_virtual_paths_in_command(
-        "python3 /skills/custom/my-tool/run.py", ctx=ctx
-    ) == "python3 /workspace/skills/my-tool/run.py"
-    assert rewrite_virtual_paths_in_command("cat /memory/AGENTS.md", ctx=ctx) == (
-        "cat /workspace/AGENTS.md"
-    )
-
-
-def test_rewrite_virtual_paths_workspace_root_tier2() -> None:
-    ctx = _aio_rewrite_ctx()
-    assert rewrite_virtual_paths_in_command("cat /notes.md", ctx=ctx) == (
-        "cat /workspace/sessions/s1/workspace/notes.md"
-    )
-
-
-def test_rewrite_virtual_paths_echo_quoted_path_not_rewritten() -> None:
-    ctx = _aio_rewrite_ctx()
-    cmd = rewrite_virtual_paths_in_command('echo "see /research/foo"', ctx=ctx)
-    assert "/workspace/sessions/s1/workspace" not in cmd
-    assert "see /research/foo" in cmd
-
-
-def test_workspace_prefix_backend_execute_rewrites_aio_paths() -> None:
-    sandbox = _StubSandbox("sandbox")
-    composite = build_agent_filesystem_backend(
-        user_id="u1",
-        session_id="s1",
-        sandbox=sandbox,  # type: ignore[arg-type]
-        shell_timeout=30,
-    )
-    composite.execute("cat /research/demo/report.md")
-    assert sandbox.execute_calls == [
-        "cat /workspace/sessions/s1/workspace/research/demo/report.md"
-    ]
-    composite.execute("python3 /skills/custom/my-tool/run.py")
-    assert "/workspace/skills/my-tool/run.py" in sandbox.execute_calls[-1]
-
-
-@pytest.mark.asyncio
-async def test_workspace_execute_notes_md_matches_write_file(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    write_result = backend.write("/notes.md", "note-body")
-    assert write_result.error is None
-    exec_result = backend.execute("cat /notes.md")
-    assert exec_result.exit_code == 0
-    assert "note-body" in exec_result.output
-
-
-@pytest.mark.asyncio
-async def test_workspace_execute_memory_agents_md_local_shell(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
-    agents_path = user_paths.get_user_agents_md_path("u1")
-    agents_path.parent.mkdir(parents=True, exist_ok=True)
-    agents_path.write_text("agent-memory", encoding="utf-8")
-    user_paths.get_workspace_dir("u1", "s1").mkdir(parents=True, exist_ok=True)
-
-    from agent.backends.factory import create_agent_backend
-
-    backend = await create_agent_backend("u1", "s1")
-    read_result = backend.read("/memory/AGENTS.md")
-    assert read_result.error is None
-    exec_result = backend.execute("cat /memory/AGENTS.md")
-    assert exec_result.exit_code == 0
-    assert "agent-memory" in exec_result.output
-
-
-@pytest.mark.asyncio
-async def test_workspace_execute_echo_does_not_leak_physical_prefix(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from config import user_data_paths as user_paths
-
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
-
-    users_root = tmp_path / "users"
-    platform = tmp_path / "platform-skills"
-    platform.mkdir()
-    monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
-    monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
-        lambda: platform,
-    )
-
+    result = backend.write("/notes.md", "hello")
+    assert result.error is None
     ws = user_paths.get_workspace_dir("u1", "s1")
-    ws.mkdir(parents=True, exist_ok=True)
+    assert (ws / "notes.md").read_text(encoding="utf-8") == "hello"
 
-    from agent.backends.factory import create_agent_backend
 
-    backend = await create_agent_backend("u1", "s1")
-    exec_result = backend.execute('echo "see /research/foo"')
-    assert exec_result.exit_code == 0
-    assert str(ws) not in exec_result.output
-    assert "/research/foo" in exec_result.output
+@pytest.mark.asyncio
+async def test_local_shell_execute_shell_operators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from config import user_data_paths as user_paths
+    from config.agent_workspace_paths import ensure_workspace_dir
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    platform = tmp_path / "platform-skills"
+    platform.mkdir()
+    monkeypatch.setattr(
+        "agent.backends.agent_filesystem.skills_root",
+        lambda: platform,
+    )
+    ensure_workspace_dir("u1", "s1")
+
+    backend = build_agent_filesystem_backend(
+        user_id="u1",
+        session_id="s1",
+        sandbox=None,
+        shell_timeout=30,
+    )
+    result = backend.execute("mkdir -p out && printf done > out/result.txt")
+    assert result.exit_code == 0, result.output
+    ws = user_paths.get_workspace_dir("u1", "s1")
+    assert (ws / "out" / "result.txt").read_text(encoding="utf-8") == "done"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_composite_routes_and_workspace_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from config import user_data_paths as user_paths
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    platform = tmp_path / "platform-skills"
+    platform.mkdir()
+    monkeypatch.setattr(
+        "agent.backends.agent_filesystem.skills_root",
+        lambda: platform,
+    )
+
+    sandbox = _StubSandbox("aio")
+    backend = build_agent_filesystem_backend(
+        user_id="u1",
+        session_id="s1",
+        sandbox=sandbox,
+        shell_timeout=30,
+    )
+    assert AGENT_PUBLIC_SKILLS_ROUTE in backend.routes
+    assert AGENT_PERSONAL_SKILLS_ROUTE in backend.routes
+    assert AGENT_EXTENSIONS_SKILLS_ROUTE in backend.routes
+    assert AGENT_CUSTOM_SKILLS_ROUTE in backend.routes
+
+    workspace = backend.default
+    assert isinstance(workspace, PrefixBackend)
+    assert workspace._container_prefix == WORKSPACE_CONTAINER_PREFIX
+
+    public = backend.routes[AGENT_PUBLIC_SKILLS_ROUTE]
+    assert isinstance(public, PrefixBackend)
+    assert public._container_prefix == PUBLIC_SKILLS_CONTAINER_PREFIX
+    assert public._read_only is True
+
+    personal = backend.routes[AGENT_PERSONAL_SKILLS_ROUTE]
+    assert isinstance(personal, PrefixBackend)
+    assert personal._container_prefix == PERSONAL_SKILLS_CONTAINER_PREFIX
+    assert personal._read_only is True
+
+
+@pytest.mark.asyncio
+async def test_skills_routes_are_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from config import user_data_paths as user_paths
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    platform = tmp_path / "platform-skills"
+    platform.mkdir()
+    monkeypatch.setattr(
+        "agent.backends.agent_filesystem.skills_root",
+        lambda: platform,
+    )
+
+    backend = build_agent_filesystem_backend(
+        user_id="u1",
+        session_id="s1",
+        sandbox=None,
+        shell_timeout=30,
+    )
+    result = backend.write("/skills/personal/my-skill/SKILL.md", "x")
+    assert result.error is not None
+    assert "read-only" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_legacy_skills_aliases_map_to_same_backends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from config import user_data_paths as user_paths
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    platform = tmp_path / "platform-skills"
+    platform.mkdir()
+    monkeypatch.setattr(
+        "agent.backends.agent_filesystem.skills_root",
+        lambda: platform,
+    )
+
+    backend = build_agent_filesystem_backend(
+        user_id="u1",
+        session_id="s1",
+        sandbox=_StubSandbox("s"),
+        shell_timeout=30,
+    )
+    assert backend.routes[AGENT_EXTENSIONS_SKILLS_ROUTE] is backend.routes[AGENT_PUBLIC_SKILLS_ROUTE]
+    assert backend.routes[AGENT_CUSTOM_SKILLS_ROUTE] is backend.routes[AGENT_PERSONAL_SKILLS_ROUTE]

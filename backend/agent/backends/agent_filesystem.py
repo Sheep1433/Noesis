@@ -1,4 +1,4 @@
-"""Agent 虚拟路径：`/research/` 工作区 + `/skills/extensions|custom/` 只读 Skills。"""
+"""Agent 虚拟路径：workspace 根 + `/skills/public|personal/` 只读 Skills + `/memory/`。"""
 
 from __future__ import annotations
 
@@ -8,17 +8,18 @@ from deepagents.backends.composite import CompositeBackend
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 
-from agent.backends.backend_guards import StaticListingBackend, UserMemoryBackend
+from agent.backends.backend_guards import UserMemoryBackend
 from agent.backends.local_shell import create_local_shell_backend
 from agent.backends.mount_paths import (
     AGENT_CUSTOM_SKILLS_ROUTE,
     AGENT_EXTENSIONS_SKILLS_ROUTE,
     AGENT_MEMORY_ROUTE,
-    AGENT_SKILLS_INDEX_ROUTE,
-    CUSTOM_SKILLS_CONTAINER_PREFIX,
-    EXTENSIONS_SKILLS_CONTAINER_PREFIX,
+    AGENT_PERSONAL_SKILLS_ROUTE,
+    AGENT_PUBLIC_SKILLS_ROUTE,
+    PERSONAL_SKILLS_CONTAINER_PREFIX,
+    PUBLIC_SKILLS_CONTAINER_PREFIX,
+    WORKSPACE_CONTAINER_PREFIX,
 )
-from agent.backends.path_rewrite import build_path_rewrite_context
 from agent.backends.prefix_backend import PrefixBackend
 from config.extensions_paths import skills_root
 from config.user_data_paths import (
@@ -28,7 +29,6 @@ from config.user_data_paths import (
     get_workspace_dir,
 )
 
-# 测试与兼容 import
 __all__ = (
     "PrefixBackend",
     "UserMemoryBackend",
@@ -61,18 +61,11 @@ def build_agent_filesystem_backend(
     sandbox: SandboxBackendProtocol | None,
     shell_timeout: int,
 ) -> CompositeBackend:
-    """构建 Agent 文件系统：default=工作区，routes=extensions/custom skills（只读）。"""
-    rewrite_ctx = build_path_rewrite_context(
-        user_id=user_id,
-        session_id=session_id,
-        sandbox=sandbox,
-    )
-
+    """构建 Agent 文件系统：default=工作区，routes=public/personal skills（只读）+ memory。"""
     if sandbox is not None:
         workspace = PrefixBackend(
             sandbox,
-            container_prefix=f"/workspace/sessions/{session_id}/workspace",
-            rewrite_ctx=rewrite_ctx,
+            container_prefix=WORKSPACE_CONTAINER_PREFIX,
         )
     else:
         workspace = PrefixBackend(
@@ -81,29 +74,27 @@ def build_agent_filesystem_backend(
                 virtual_mode=True,
                 timeout=shell_timeout,
             ),
-            rewrite_ctx=rewrite_ctx,
         )
+
+    public_skills = _skills_route_backend(
+        sandbox=sandbox,
+        host_root=skills_root(),
+        container_prefix=PUBLIC_SKILLS_CONTAINER_PREFIX,
+    )
+    personal_skills = _skills_route_backend(
+        sandbox=sandbox,
+        host_root=get_user_skills_dir(user_id),
+        container_prefix=PERSONAL_SKILLS_CONTAINER_PREFIX,
+    )
 
     return CompositeBackend(
         default=workspace,
         routes={
-            AGENT_SKILLS_INDEX_ROUTE: StaticListingBackend(
-                (
-                    {"path": "/extensions/", "is_dir": True},
-                    {"path": "/custom/", "is_dir": True},
-                ),
-                route=AGENT_SKILLS_INDEX_ROUTE,
-            ),
-            AGENT_EXTENSIONS_SKILLS_ROUTE: _skills_route_backend(
-                sandbox=sandbox,
-                host_root=skills_root(),
-                container_prefix=EXTENSIONS_SKILLS_CONTAINER_PREFIX,
-            ),
-            AGENT_CUSTOM_SKILLS_ROUTE: _skills_route_backend(
-                sandbox=sandbox,
-                host_root=get_user_skills_dir(user_id),
-                container_prefix=CUSTOM_SKILLS_CONTAINER_PREFIX,
-            ),
+            AGENT_PUBLIC_SKILLS_ROUTE: public_skills,
+            AGENT_PERSONAL_SKILLS_ROUTE: personal_skills,
+            # 过渡期 filesystem 别名
+            AGENT_EXTENSIONS_SKILLS_ROUTE: public_skills,
+            AGENT_CUSTOM_SKILLS_ROUTE: personal_skills,
             AGENT_MEMORY_ROUTE: UserMemoryBackend(
                 agents_path=get_user_agents_md_path(user_id),
                 user_path=get_user_profile_md_path(user_id),

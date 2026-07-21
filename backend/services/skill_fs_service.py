@@ -202,8 +202,13 @@ class SkillFsService:
     @classmethod
     def extract_zip_to_user_dir(cls, zip_path: str, user_id: str | int) -> Tuple[bool, str]:
         """将 ZIP 内容解压到 `.data/users/{user_id}/skills/`。"""
+        from services.skills_revision import bump_user_skills_revision
+
         root = str(ensure_user_skills_dir(user_id))
-        return cls._extract_zip(zip_path, root)
+        ok, msg = cls._extract_zip(zip_path, root)
+        if ok:
+            bump_user_skills_revision(str(user_id))
+        return ok, msg
 
     @classmethod
     def _extract_zip(cls, zip_path: str, root: str) -> Tuple[bool, str]:
@@ -260,6 +265,9 @@ class SkillFsService:
         except OSError as e:
             logger.error(f'删除技能目录失败 {target}: {e}')
             return False, f'删除失败: {e}'
+        from services.skills_revision import bump_user_skills_revision
+
+        bump_user_skills_revision(str(user_id))
         return True, f'已删除技能「{name}」'
 
 

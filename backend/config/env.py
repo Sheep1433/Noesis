@@ -455,7 +455,11 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
 def _build_sandbox(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> SandboxSettings:
     sb = yaml_cfg.sandbox
     backend = _legacy_env("SANDBOX_BACKEND", sb.backend).strip().lower() or "docker"
-    if backend not in ("docker", "aio", "local_shell"):
+    if backend == "aio":
+        raise ValueError(
+            "sandbox.backend=aio 已移除；请使用 docker 或 local_shell"
+        )
+    if backend not in ("docker", "local_shell"):
         backend = "docker"
     return SandboxSettings(
         backend=backend,

@@ -1,4 +1,4 @@
-"""delete_session 应先 cancel Agent run，且不销毁用户沙箱。"""
+"""delete_session 应先 cancel Agent run，并销毁该 session 沙箱。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _session(user_id: str, session_id: str) -> TChatSession:
 
 
 @pytest.mark.asyncio
-async def test_delete_session_cancels_agents_before_workspace_cleanup(tmp_path: Path) -> None:
+async def test_delete_session_cancels_agents_and_destroys_sandbox(tmp_path: Path) -> None:
     from config import agent_workspace_paths as paths
     from config import user_data_paths as udp
     from services.chat_service import ChatService
@@ -39,7 +39,10 @@ async def test_delete_session_cancels_agents_before_workspace_cleanup(tmp_path: 
     with (
         patch.object(udp, "_USERS_ROOT", users_root),
         patch("services.chat_service.cancel_session_agent_runs", cancel_mock),
-        patch("services.sandbox_service.destroy_user_sandbox", new_callable=AsyncMock) as destroy_mock,
+        patch(
+            "services.sandbox_service.destroy_session_sandbox",
+            new_callable=AsyncMock,
+        ) as destroy_mock,
     ):
         paths.ensure_workspace_dir(user_id, session_id)
         session_dir = users_root / user_id / "sessions" / session_id
@@ -49,5 +52,5 @@ async def test_delete_session_cancels_agents_before_workspace_cleanup(tmp_path: 
 
     assert ok is True
     cancel_mock.assert_awaited_once_with(session_id)
-    destroy_mock.assert_not_awaited()
+    destroy_mock.assert_awaited_once_with(user_id, session_id)
     assert not session_dir.exists()

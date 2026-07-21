@@ -506,6 +506,16 @@ class ChatService:
         )
         await db.commit()
         delete_session_workspace(user_id, session_id)
+        try:
+            from services.sandbox_service import destroy_session_sandbox
+
+            await destroy_session_sandbox(user_id, session_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "destroy_session_sandbox 失败 session_id={} err={}",
+                session_id,
+                exc,
+            )
         logger.info(f'软删会话成功: session_id={session_id}, user_id={user_id}（已级联软删消息）')
         return True
 
@@ -572,6 +582,16 @@ class ChatService:
 
         for sid in found_ids:
             delete_session_workspace(uid, sid)
+            try:
+                from services.sandbox_service import destroy_session_sandbox
+
+                await destroy_session_sandbox(uid, sid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "destroy_session_sandbox 失败 session_id={} err={}",
+                    sid,
+                    exc,
+                )
 
         logger.info(
             f'批量软删会话成功: user_id={uid}, count={len(found_ids)}, session_ids={found_ids}'

@@ -1,4 +1,4 @@
-"""sandbox-runner：内网 user 级沙箱 lifecycle + docker exec 代理 API。"""
+"""sandbox-runner：内网 session 级沙箱 lifecycle + docker exec 代理 API。"""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def _reap_loop() -> None:
         try:
             removed = get_manager().reap_idle()
             if removed:
-                print(f"[sandbox-runner] idle 回收 {removed} 个用户沙箱")
+                print(f"[sandbox-runner] idle 回收 {removed} 个会话沙箱")
         except Exception as exc:  # noqa: BLE001
             print(f"[sandbox-runner] idle 回收失败: {exc}")
 
@@ -75,9 +75,7 @@ def verify_token(authorization: str | None = Header(default=None)) -> None:
 
 
 class EnsureRequest(BaseModel):
-    runtime: str = Field(
-        description="期望的沙箱 runtime：docker | aio（须与 backend sandbox.backend 一致）"
-    )
+    runtime: str = Field(default="docker", description="期望的沙箱 runtime：仅 docker")
 
 
 class EnsureResponse(BaseModel):
@@ -122,10 +120,13 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.put("/internal/sandboxes/{user_id}", dependencies=[Depends(verify_token)])
-def ensure_sandbox(user_id: str, body: EnsureRequest) -> EnsureResponse:
+@app.put(
+    "/internal/sandboxes/{user_id}/sessions/{session_id}",
+    dependencies=[Depends(verify_token)],
+)
+def ensure_sandbox(user_id: str, session_id: str, body: EnsureRequest) -> EnsureResponse:
     try:
-        record = get_manager().ensure(user_id, runtime=body.runtime)
+        record = get_manager().ensure(user_id, session_id, runtime=body.runtime)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -135,38 +136,43 @@ def ensure_sandbox(user_id: str, body: EnsureRequest) -> EnsureResponse:
     return EnsureResponse(
         runtime=record.runtime,
         container_name=record.container_name,
-        base_url=record.base_url,
+        base_url=None,
     )
 
 
-@app.delete("/internal/sandboxes/{user_id}", dependencies=[Depends(verify_token)])
-def destroy_sandbox(user_id: str) -> dict[str, bool]:
+@app.delete(
+    "/internal/sandboxes/{user_id}/sessions/{session_id}",
+    dependencies=[Depends(verify_token)],
+)
+def destroy_sandbox(user_id: str, session_id: str) -> dict[str, bool]:
     try:
-        removed = get_manager().destroy(user_id)
+        removed = get_manager().destroy(user_id, session_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"removed": removed}
 
 
 @app.post(
-    "/internal/sandboxes/{user_id}/in-flight",
+    "/internal/sandboxes/{user_id}/sessions/{session_id}/in-flight",
     dependencies=[Depends(verify_token)],
 )
-def adjust_in_flight(user_id: str, body: InFlightRequest) -> dict[str, str]:
+def adjust_in_flight(
+    user_id: str, session_id: str, body: InFlightRequest
+) -> dict[str, str]:
     try:
-        get_manager().set_in_flight(user_id, body.delta)
+        get_manager().set_in_flight(user_id, session_id, body.delta)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok"}
 
 
 @app.post(
-    "/internal/sandboxes/{user_id}/exec",
+    "/internal/sandboxes/{user_id}/sessions/{session_id}/exec",
     dependencies=[Depends(verify_token)],
 )
-def sandbox_exec(user_id: str, body: ExecRequest) -> ExecResponse:
+def sandbox_exec(user_id: str, session_id: str, body: ExecRequest) -> ExecResponse:
     try:
-        container = get_manager().get_container(user_id)
+        container = get_manager().get_container(user_id, session_id)
         result = exec_command(
             container,
             command=body.command,
@@ -185,12 +191,14 @@ def sandbox_exec(user_id: str, body: ExecRequest) -> ExecResponse:
 
 
 @app.post(
-    "/internal/sandboxes/{user_id}/files/read",
+    "/internal/sandboxes/{user_id}/sessions/{session_id}/files/read",
     dependencies=[Depends(verify_token)],
 )
-def sandbox_read_file(user_id: str, body: FileReadRequest) -> FileReadResponse:
+def sandbox_read_file(
+    user_id: str, session_id: str, body: FileReadRequest
+) -> FileReadResponse:
     try:
-        container = get_manager().get_container(user_id)
+        container = get_manager().get_container(user_id, session_id)
         content, encoding = read_file_text(container, path=body.file)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -204,12 +212,14 @@ def sandbox_read_file(user_id: str, body: FileReadRequest) -> FileReadResponse:
 
 
 @app.post(
-    "/internal/sandboxes/{user_id}/files/write",
+    "/internal/sandboxes/{user_id}/sessions/{session_id}/files/write",
     dependencies=[Depends(verify_token)],
 )
-def sandbox_write_file(user_id: str, body: FileWriteRequest) -> dict[str, str]:
+def sandbox_write_file(
+    user_id: str, session_id: str, body: FileWriteRequest
+) -> dict[str, str]:
     try:
-        container = get_manager().get_container(user_id)
+        container = get_manager().get_container(user_id, session_id)
         write_file_text(
             container,
             path=body.file,
