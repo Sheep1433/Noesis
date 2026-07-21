@@ -20,6 +20,14 @@ class QaQueryRequest(BaseModel):
         None,
         description="对话模型目录 id；省略时使用会话 extra 或默认模型",
     )
+    mcp_servers: Optional[List[str]] = Field(
+        None,
+        description="本轮启用的 MCP server id；省略时读会话 extra（FAULT 缺省回退 profile）",
+    )
+    enabled_skills: Optional[List[str]] = Field(
+        None,
+        description="本轮启用的 skill 包名；省略时读会话 extra；键缺失表示全部",
+    )
 
 
 class TestCaseResumeRequest(BaseModel):

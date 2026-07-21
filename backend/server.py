@@ -17,6 +17,7 @@ from api import (
     chat_attachment_router,
     model_router,
     auth_router,
+    mcp_router,
 )
 from services.qdrant_service import init_qdrant_client, close_qdrant_client
 from services.sandbox_service import shutdown_sandboxes
@@ -63,6 +64,7 @@ controller_list = [
     {'router':  skill_router, 'tags': ['Skill 模块']},
     {'router':  chat_attachment_router, 'tags': ['聊天附件模块']},
     {'router':  model_router, 'tags': ['模型模块']},
+    {'router':  mcp_router, 'tags': ['MCP 模块']},
 ]
 
 for controller in controller_list:

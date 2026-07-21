@@ -5,7 +5,7 @@
 """
 import asyncio
 import uuid
-from typing import AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, List, Optional
 
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +52,7 @@ class GeneralQAAgent(BaseAgent):
         kb_collections: Optional[list] = None,
         kb_search_enabled: bool = True,
         model_id: Optional[str] = None,
+        mcp_tools: Optional[List[Any]] = None,
         db: Optional[AsyncSession] = None,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
@@ -64,13 +65,15 @@ class GeneralQAAgent(BaseAgent):
             enforce_scope=bool(scoped_collections),
         ) if kb_search_enabled else []
         web_tools = build_web_search_tools()
-        tools = kb_tools + web_tools
+        tools = kb_tools + web_tools + list(mcp_tools or [])
         kb_enabled = len(kb_tools) > 0
         if kb_enabled:
             scope_label = scoped_collections or list_qdrant_collection_names()
             logger.info(
                 f"GeneralQAAgent kb_tools={len(kb_tools)} scope={scope_label}"
             )
+        if mcp_tools:
+            logger.info(f"GeneralQAAgent mcp_tools={len(mcp_tools)}")
 
         user_id = str(getattr(current_user, "user_id", "") or "")
         attachments_enabled = False

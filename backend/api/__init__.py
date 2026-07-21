@@ -5,6 +5,7 @@ from .skill_api import skill_router as skill_router
 from .chat_attachment_api import chat_attachment_router as chat_attachment_router
 from .model_api import model_router as model_router
 from .auth_api import auth_router as auth_router
+from .mcp_api import mcp_router as mcp_router
 
 __all__ = [
     "user_router",
@@ -14,4 +15,5 @@ __all__ = [
     "chat_attachment_router",
     "model_router",
     "auth_router",
+    "mcp_router",
 ]

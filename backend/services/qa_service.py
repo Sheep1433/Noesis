@@ -16,9 +16,14 @@ from agent.common_react_agent import GeneralQAAgent
 from agent.fault_operation_agent import FaultOperationAgent
 from agent.super_agent import SuperAgent
 from agent.case_generate.case_coordinator import CaseCoordinator
+from agent.mcp.loader import load_mcp_tools_by_names
 
 from config.database import AsyncSessionLocal
 from config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
+from config.mcp_config import (
+    MCP_PROFILE_FAULT_OPERATION,
+    get_profile_server_names,
+)
 from constants.code_enum import IntentEnum
 from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QaQueryRequest
@@ -49,6 +54,84 @@ def _normalize_kb_collections(raw: Any) -> List[str]:
         seen.add(name)
         out.append(name)
     return out
+
+
+def _normalize_id_list(raw: Any) -> List[str]:
+    if not isinstance(raw, list):
+        return []
+    seen: set[str] = set()
+    out: List[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+async def _resolve_mcp_servers_for_query(
+    *,
+    session_id: str,
+    user_id: str,
+    qa_type: str,
+    request_mcp_servers: Optional[List[str]],
+    db: AsyncSession,
+) -> List[str]:
+    if request_mcp_servers is not None:
+        normalized = _normalize_id_list(request_mcp_servers)
+        await ChatService.merge_session_extra(
+            session_id,
+            user_id,
+            {"mcp_servers": normalized},
+            db=db,
+        )
+        return normalized
+
+    session = await ChatService.get_session_by_id(
+        session_id,
+        user_id=user_id,
+        db=db,
+    )
+    extra = session.extra if session and session.extra else {}
+    if "mcp_servers" in extra:
+        return _normalize_id_list(extra.get("mcp_servers"))
+
+    if qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
+        try:
+            return get_profile_server_names(MCP_PROFILE_FAULT_OPERATION)
+        except KeyError:
+            logger.warning("FAULT_OPERATION 缺省 profile 不存在，mcp_servers=[]")
+            return []
+    return []
+
+
+async def _resolve_enabled_skills_for_query(
+    *,
+    session_id: str,
+    user_id: str,
+    request_enabled_skills: Optional[List[str]],
+    db: AsyncSession,
+) -> Optional[List[str]]:
+    if request_enabled_skills is not None:
+        normalized = _normalize_id_list(request_enabled_skills)
+        await ChatService.merge_session_extra(
+            session_id,
+            user_id,
+            {"enabled_skills": normalized},
+            db=db,
+        )
+        return normalized
+
+    session = await ChatService.get_session_by_id(
+        session_id,
+        user_id=user_id,
+        db=db,
+    )
+    extra = session.extra if session and session.extra else {}
+    if "enabled_skills" not in extra:
+        return None
+    return _normalize_id_list(extra.get("enabled_skills"))
 
 
 async def _resolve_kb_settings_for_query(
@@ -608,6 +691,7 @@ class QaService:
 
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
+            kb_search_enabled = True
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
                 kb_collections, kb_search_enabled = await _resolve_kb_settings_for_query(
                     session_id=session_id,
@@ -615,6 +699,30 @@ class QaService:
                     request_kb_collections=req_obj.kb_collections,
                     request_kb_search_enabled=req_obj.kb_search_enabled,
                     db=db,
+                )
+
+            mcp_server_ids: List[str] = []
+            enabled_skills: Optional[List[str]] = None
+            if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]:
+                mcp_server_ids = await _resolve_mcp_servers_for_query(
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    qa_type=req_obj.qa_type,
+                    request_mcp_servers=req_obj.mcp_servers,
+                    db=db,
+                )
+                enabled_skills = await _resolve_enabled_skills_for_query(
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    request_enabled_skills=req_obj.enabled_skills,
+                    db=db,
+                )
+
+            mcp_tools: List[Any] = []
+            if mcp_server_ids:
+                mcp_tools = await load_mcp_tools_by_names(
+                    mcp_server_ids,
+                    user_id=str(current_user.user_id),
                 )
 
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
@@ -627,6 +735,7 @@ class QaService:
                     kb_collections=kb_collections or None,
                     kb_search_enabled=kb_search_enabled,
                     model_id=resolved_model_id,
+                    mcp_tools=mcp_tools or None,
                     db=db,
                 )
             elif req_obj.qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
@@ -637,6 +746,7 @@ class QaService:
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     model_id=resolved_model_id,
+                    mcp_tools=mcp_tools,
                 )
             elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
                 agent_generator = case_coordinator.run_agent(
@@ -653,6 +763,8 @@ class QaService:
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     model_id=resolved_model_id,
+                    mcp_tools=mcp_tools or None,
+                    enabled_skills=enabled_skills,
                     db=db,
                 )
             else:

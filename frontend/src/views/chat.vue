@@ -401,6 +401,26 @@ const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnap
 const selectedKbCollections = ref<string[]>([])
 const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
+const selectedMcpServers = ref<string[]>([])
+const selectedSkills = ref<string[]>([])
+const skillsAllEnabled = ref(true)
+
+function normalizeIdList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of raw) {
+    const name = String(item ?? '').trim()
+    if (!name || seen.has(name)) {
+      continue
+    }
+    seen.add(name)
+    out.push(name)
+  }
+  return out
+}
 
 async function onChatImageUploaded() {
   if (!usesSessionAttachmentUpload(qa_type.value)) {
@@ -417,20 +437,7 @@ async function onChatImageUploaded() {
 }
 
 function normalizeKbCollections(raw: unknown): string[] {
-  if (!Array.isArray(raw)) {
-    return []
-  }
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const item of raw) {
-    const name = String(item ?? '').trim()
-    if (!name || seen.has(name)) {
-      continue
-    }
-    seen.add(name)
-    out.push(name)
-  }
-  return out
+  return normalizeIdList(raw)
 }
 
 const showContextIndicator = computed(
@@ -450,11 +457,28 @@ async function loadSessionContext(sessionId: string) {
     kbSearchEnabled.value = session.extra?.kb_search_enabled !== false
     const storedModelId = String(session.extra?.model_id ?? '').trim()
     selectedModelId.value = storedModelId
+    if (Object.prototype.hasOwnProperty.call(session.extra ?? {}, 'mcp_servers')) {
+      selectedMcpServers.value = normalizeIdList(session.extra?.mcp_servers)
+    }
+    else {
+      selectedMcpServers.value = []
+    }
+    if (Object.prototype.hasOwnProperty.call(session.extra ?? {}, 'enabled_skills')) {
+      selectedSkills.value = normalizeIdList(session.extra?.enabled_skills)
+      skillsAllEnabled.value = false
+    }
+    else {
+      selectedSkills.value = []
+      skillsAllEnabled.value = true
+    }
   } catch {
     sessionContext.value = null
     selectedKbCollections.value = []
     kbSearchEnabled.value = true
     selectedModelId.value = ''
+    selectedMcpServers.value = []
+    selectedSkills.value = []
+    skillsAllEnabled.value = true
   }
 }
 
@@ -826,6 +850,12 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   }
   if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
     streamExtra.model_id = selectedModelId.value
+  }
+  if (qa_type.value !== 'TEST_CASE_QA' && selectedMcpServers.value.length > 0) {
+    streamExtra.mcp_servers = selectedMcpServers.value
+  }
+  if (qa_type.value === 'SUPER_AGENT_QA' && !skillsAllEnabled.value) {
+    streamExtra.enabled_skills = selectedSkills.value
   }
   await sseStream.sendMessage(
     uuids.value[qa_type.value],
@@ -1944,6 +1974,9 @@ function onComposerPaste(e: ClipboardEvent) {
                         v-model:model-id="selectedModelId"
                         v-model:kb-collections="selectedKbCollections"
                         v-model:kb-search-enabled="kbSearchEnabled"
+                        v-model:mcp-servers="selectedMcpServers"
+                        v-model:enabled-skills="selectedSkills"
+                        v-model:skills-all-enabled="skillsAllEnabled"
                         :qa-type="qa_type"
                         :session-id="uuids[qa_type] ?? ''"
                         :disabled="sseIsLoading"

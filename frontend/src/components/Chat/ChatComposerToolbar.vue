@@ -1,6 +1,12 @@
 <script lang="ts" setup>
+import type { DropdownOption } from 'naive-ui'
+import type { McpServerCatalogItem } from '@/api/mcp'
+import type { ChatModelOption } from '@/api/models'
 import type FileUploadManager from '@/views/FileUploadManager.vue'
-import ModelSelector from '@/components/Chat/ModelSelector.vue'
+import { ensureSession } from '@/api/chat'
+import { listMcpServers, upsertMcpServer } from '@/api/mcp'
+import { getChatModels } from '@/api/models'
+import { getSkillsFsTree } from '@/api/skills'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
 
 const props = defineProps<{
@@ -13,71 +19,340 @@ const props = defineProps<{
 const selectedModelId = defineModel<string>('modelId', { default: '' })
 const selectedKbCollections = defineModel<string[]>('kbCollections', { default: () => [] })
 const kbSearchEnabled = defineModel<boolean>('kbSearchEnabled', { default: true })
+const selectedMcpServers = defineModel<string[]>('mcpServers', { default: () => [] })
+const selectedSkills = defineModel<string[]>('enabledSkills', { default: () => [] })
+const skillsAllEnabled = defineModel<boolean>('skillsAllEnabled', { default: true })
 
 const showKbScope = computed(() => props.qaType === 'COMMON_QA')
-const showModelSelector = computed(() => props.qaType !== 'TEST_CASE_QA')
+const showSkillsMenu = computed(() => props.qaType === 'SUPER_AGENT_QA')
 const plusOpen = ref(false)
-
 const uploadOptions = computed(() => props.fileUploadRef?.options ?? [])
+
+const models = ref<ChatModelOption[]>([])
+const mcpServers = ref<McpServerCatalogItem[]>([])
+const skillPackages = ref<{ id: string, source: string }[]>([])
+const catalogLoaded = ref(false)
+const catalogLoading = ref(false)
+
+const addMcpShow = ref(false)
+const addMcpId = ref('')
+const addMcpUrl = ref('')
+const addMcpSaving = ref(false)
+
+const currentModelLabel = computed(() => {
+  const hit = models.value.find((m) => m.id === selectedModelId.value)
+  return hit?.label || (catalogLoading.value ? '加载中…' : '选择模型')
+})
+
+async function loadCatalogs() {
+  if (catalogLoading.value) {
+    return
+  }
+  catalogLoading.value = true
+  try {
+    const [modelCatalog, mcpCatalog, skillsTree] = await Promise.all([
+      getChatModels(),
+      listMcpServers(),
+      getSkillsFsTree().catch(() => null),
+    ])
+    models.value = modelCatalog.models ?? []
+    if (!selectedModelId.value) {
+      selectedModelId.value = modelCatalog.default_id
+    }
+    mcpServers.value = mcpCatalog.servers ?? []
+    const pkgs: { id: string, source: string }[] = []
+    for (const section of [skillsTree?.platform, skillsTree?.user]) {
+      if (!section?.tree) {
+        continue
+      }
+      for (const node of section.tree) {
+        if (!node.isLeaf) {
+          pkgs.push({ id: node.label, source: node.source })
+        }
+      }
+    }
+    skillPackages.value = pkgs
+    catalogLoaded.value = true
+  } catch (e) {
+    console.warn('加载 Composer 目录失败', e)
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+watch(plusOpen, (open) => {
+  if (open && !catalogLoaded.value) {
+    void loadCatalogs()
+  }
+})
+
+watch(
+  () => props.sessionId,
+  () => {
+    catalogLoaded.value = false
+  },
+)
+
+async function persistExtra(patch: Record<string, unknown>) {
+  if (!props.sessionId) {
+    return
+  }
+  try {
+    await ensureSession(props.sessionId, { extra: patch })
+  } catch (e) {
+    console.warn('保存会话工具选择失败', e)
+  }
+}
+
+async function onSelectModel(key: string) {
+  selectedModelId.value = key
+  await persistExtra({ model_id: key })
+}
+
+function toggleMcp(id: string) {
+  const set = new Set(selectedMcpServers.value)
+  if (set.has(id)) {
+    set.delete(id)
+  } else {
+    set.add(id)
+  }
+  const next = [...set]
+  selectedMcpServers.value = next
+  void persistExtra({ mcp_servers: next })
+}
+
+function toggleSkill(id: string) {
+  let current = selectedSkills.value
+  if (skillsAllEnabled.value) {
+    current = skillPackages.value.map((p) => p.id)
+    skillsAllEnabled.value = false
+  }
+  const set = new Set(current)
+  if (set.has(id)) {
+    set.delete(id)
+  } else {
+    set.add(id)
+  }
+  const next = [...set]
+  selectedSkills.value = next
+  void persistExtra({ enabled_skills: next })
+}
+
+function isSkillChecked(id: string) {
+  if (skillsAllEnabled.value) {
+    return true
+  }
+  return selectedSkills.value.includes(id)
+}
+
+async function submitAddMcp() {
+  const id = addMcpId.value.trim()
+  const url = addMcpUrl.value.trim()
+  if (!id || !url) {
+    return false
+  }
+  addMcpSaving.value = true
+  try {
+    await upsertMcpServer(id, { transport: 'streamable_http', url })
+    addMcpShow.value = false
+    addMcpId.value = ''
+    addMcpUrl.value = ''
+    catalogLoaded.value = false
+    await loadCatalogs()
+    if (!selectedMcpServers.value.includes(id)) {
+      toggleMcp(id)
+    }
+    return true
+  } catch (e) {
+    console.warn('添加 MCP 失败', e)
+    window.$ModalMessage?.error?.('添加 MCP 失败')
+    return false
+  } finally {
+    addMcpSaving.value = false
+  }
+}
+
+const modelOptions = computed<DropdownOption[]>(() =>
+  models.value.map((m) => ({
+    label: m.label,
+    key: `model:${m.id}`,
+  })),
+)
+
+const skillOptions = computed<DropdownOption[]>(() =>
+  skillPackages.value.map((p) => ({
+    label: () =>
+      h('div', { class: 'composer-check-row' }, [
+        h('span', { class: isSkillChecked(p.id) ? 'i-carbon:checkmark' : 'composer-check-spacer' }),
+        h('span', {}, `${p.id} (${p.source})`),
+      ]),
+    key: `skill:${p.id}`,
+  })),
+)
+
+const mcpOptions = computed<DropdownOption[]>(() => {
+  const items: DropdownOption[] = mcpServers.value.map((s) => ({
+    label: () =>
+      h('div', { class: 'composer-check-row' }, [
+        h('span', {
+          class: selectedMcpServers.value.includes(s.id)
+            ? 'i-carbon:checkmark'
+            : 'composer-check-spacer',
+        }),
+        h('span', {}, `${s.display_name || s.id} · ${s.source}`),
+      ]),
+    key: `mcp:${s.id}`,
+  }))
+  items.push({ type: 'divider', key: 'mcp-div' })
+  items.push({ label: '添加 MCP Server…', key: 'mcp:add' })
+  return items
+})
+
+const plusMenuOptions = computed<DropdownOption[]>(() => {
+  const opts: DropdownOption[] = []
+
+  if (uploadOptions.value.length) {
+    opts.push({
+      type: 'group',
+      label: '附件',
+      key: 'upload-group',
+      children: uploadOptions.value.map((item, idx) => ({
+        key: `upload:${idx}`,
+        type: 'render' as const,
+        render: item.type === 'render' && item.render
+          ? () => h({ render: item.render })
+          : () => h('span'),
+      })),
+    })
+  }
+
+  opts.push({
+    label: 'Models',
+    key: 'models',
+    children: modelOptions.value.length
+      ? modelOptions.value
+      : [{ label: catalogLoading.value ? '加载中…' : '无可用模型', key: 'models:empty', disabled: true }],
+  })
+
+  if (showSkillsMenu.value) {
+    opts.push({
+      label: 'Skills',
+      key: 'skills',
+      children: skillOptions.value.length
+        ? skillOptions.value
+        : [{ label: catalogLoading.value ? '加载中…' : '暂无 Skills', key: 'skills:empty', disabled: true }],
+    })
+  }
+
+  opts.push({
+    label: 'MCP Servers',
+    key: 'mcp',
+    children: mcpOptions.value,
+  })
+
+  return opts
+})
+
+function onPlusSelect(key: string | number) {
+  const k = String(key)
+  if (k.startsWith('model:')) {
+    void onSelectModel(k.slice('model:'.length))
+    return
+  }
+  if (k.startsWith('skill:')) {
+    toggleSkill(k.slice('skill:'.length))
+    return
+  }
+  if (k === 'mcp:add') {
+    addMcpShow.value = true
+    return
+  }
+  if (k.startsWith('mcp:')) {
+    toggleMcp(k.slice('mcp:'.length))
+  }
+}
 </script>
 
 <template>
   <div class="composer-toolbar">
     <div class="composer-toolbar__left">
-      <n-popover
+      <n-dropdown
         v-model:show="plusOpen"
         trigger="click"
         placement="top-start"
+        :options="plusMenuOptions"
         :disabled="disabled"
-        class="composer-plus-popover"
+        @select="onPlusSelect"
       >
-        <template #trigger>
-          <button
-            type="button"
-            class="composer-plus-btn"
-            :disabled="disabled"
-            aria-label="添加附件或设置知识库"
-          >
-            <span class="i-carbon:add text-18"></span>
-          </button>
-        </template>
+        <button
+          type="button"
+          class="composer-plus-btn"
+          :disabled="disabled"
+          aria-label="添加上下文与工具"
+        >
+          <span class="i-carbon:add text-18"></span>
+        </button>
+      </n-dropdown>
 
-        <div class="composer-plus-panel">
-          <div
-            v-for="item in uploadOptions"
-            :key="String(item.key)"
-            class="composer-plus-panel__item"
-          >
-            <component
-              :is="{ render: item.render }"
-              v-if="item.type === 'render' && item.render"
-            />
-          </div>
-
-          <template v-if="showKbScope">
-            <div class="composer-plus-panel__divider"></div>
-            <KbScopeSelector
-              v-model="selectedKbCollections"
-              v-model:kb-search-enabled="kbSearchEnabled"
-              :session-id="sessionId"
-              :disabled="disabled"
-              embedded
-            />
-          </template>
-        </div>
-      </n-popover>
-
-      <ModelSelector
-        v-if="showModelSelector"
-        v-model="selectedModelId"
-        :session-id="sessionId"
+      <button
+        type="button"
+        class="composer-model-trigger"
         :disabled="disabled"
-      />
+        @click="plusOpen = true"
+      >
+        <span class="composer-model-trigger__label">{{ currentModelLabel }}</span>
+        <span class="i-carbon:chevron-down text-12 opacity-60"></span>
+      </button>
+
+      <n-tag
+        v-if="selectedMcpServers.length"
+        size="small"
+        :bordered="false"
+        class="composer-chip"
+      >
+        MCP {{ selectedMcpServers.length }}
+      </n-tag>
+      <n-tag
+        v-if="showSkillsMenu && !skillsAllEnabled"
+        size="small"
+        :bordered="false"
+        class="composer-chip"
+      >
+        Skills {{ selectedSkills.length }}
+      </n-tag>
+
+      <div v-if="showKbScope" class="composer-kb-inline">
+        <KbScopeSelector
+          v-model="selectedKbCollections"
+          v-model:kb-search-enabled="kbSearchEnabled"
+          :session-id="sessionId"
+          :disabled="disabled"
+        />
+      </div>
     </div>
 
     <div class="composer-toolbar__right">
       <slot name="right"></slot>
     </div>
+
+    <n-modal
+      v-model:show="addMcpShow"
+      preset="dialog"
+      title="添加 MCP Server"
+      positive-text="保存"
+      negative-text="取消"
+      :loading="addMcpSaving"
+      @positive-click="submitAddMcp"
+    >
+      <div class="add-mcp-form">
+        <n-input v-model:value="addMcpId" placeholder="server id（字母数字下划线）" />
+        <n-input
+          v-model:value="addMcpUrl"
+          class="mt-8"
+          placeholder="https://host/mcp"
+        />
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -129,19 +404,55 @@ const uploadOptions = computed(() => props.fileUploadRef?.options ?? [])
   opacity: 0.55;
 }
 
-.composer-plus-panel {
-  min-width: 200px;
-  padding: 4px 0;
+.composer-model-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--noesis-radius-sm, 6px);
+  background: transparent;
+  color: var(--noesis-text-secondary, #6b7280);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
 }
 
-.composer-plus-panel__divider {
-  height: 1px;
-  margin: 6px 12px;
-  background: var(--noesis-border-subtle, rgb(0 0 0 / 8%));
+.composer-model-trigger:hover:not(:disabled) {
+  background: var(--noesis-color-primary-bg-subtle, rgb(0 0 0 / 4%));
+  color: var(--noesis-text-primary, #111);
 }
 
-.composer-plus-panel__item :deep(.px-4) {
-  padding-left: 0;
-  padding-right: 0;
+.composer-model-trigger__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-chip {
+  font-size: 11px;
+}
+
+.composer-kb-inline {
+  margin-left: 4px;
+}
+
+.add-mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 280px;
+}
+
+:global(.composer-check-row) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+:global(.composer-check-spacer) {
+  display: inline-block;
+  width: 14px;
 }
 </style>
