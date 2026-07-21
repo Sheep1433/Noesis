@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import type { McpServerStatusItem } from '@/api/mcp'
-import { DocumentText, Refresh, Server } from '@vicons/ionicons-v5'
+import { CodeSlash, Refresh, Server } from '@vicons/ionicons-v5'
 import {
   NButton,
   NEmpty,
   NIcon,
   NLayout,
   NLayoutContent,
+  NLayoutSider,
   NSpace,
   NSpin,
-  NTag,
   NText,
   useMessage,
 } from 'naive-ui'
@@ -17,7 +17,6 @@ import { computed, onMounted, ref } from 'vue'
 import {
   getMcpConfig,
   listMcpServerStatus,
-  probeMcpServer,
   saveMcpConfig,
 } from '@/api/mcp'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
@@ -26,7 +25,7 @@ const message = useMessage()
 const { isMobile } = useBreakpoint()
 
 const loading = ref(true)
-const probing = ref(false)
+const refreshing = ref(false)
 const saving = ref(false)
 const error = ref<string | null>(null)
 const servers = ref<McpServerStatusItem[]>([])
@@ -35,33 +34,34 @@ const configPath = ref('users/{uid}/mcp.json')
 const configExists = ref(false)
 const editorText = ref('{\n  "mcpServers": {}\n}\n')
 const editorDirty = ref(false)
-const showEditor = ref(true)
 
 const platformServers = computed(() => servers.value.filter((s) => s.source === 'platform'))
 const userServers = computed(() => servers.value.filter((s) => s.source === 'user'))
+const connectedCount = computed(() => servers.value.filter((s) => s.status === 'ok').length)
 
 onMounted(async () => {
-  await Promise.all([loadStatus(false), loadConfig()])
+  await Promise.all([loadConfig(), refreshStatus({ initial: true })])
 })
 
-async function loadStatus(probe: boolean) {
-  if (probe) {
-    probing.value = true
-  } else {
+/** 进入页面 / 保存后自动握手（对齐 Cursor：打开即显示绿点与 tool 数） */
+async function refreshStatus(opts?: { initial?: boolean }) {
+  if (opts?.initial) {
     loading.value = true
+  } else {
+    refreshing.value = true
   }
   error.value = null
   try {
-    const res = await listMcpServerStatus(probe)
+    const res = await listMcpServerStatus(true)
     servers.value = res.servers ?? []
   } catch (e: any) {
-    error.value = e.message || '加载失败'
-    if (!probe) {
+    error.value = e.message || '状态加载失败'
+    if (opts?.initial) {
       servers.value = []
     }
   } finally {
     loading.value = false
-    probing.value = false
+    refreshing.value = false
   }
 }
 
@@ -90,8 +90,8 @@ async function saveConfig() {
     configPath.value = cfg.path_hint
     configExists.value = cfg.exists
     editorDirty.value = false
-    message.success('已保存 mcp.json')
-    await loadStatus(false)
+    message.success('配置已保存')
+    await refreshStatus()
   } catch (e: any) {
     message.error(e.message || '保存失败')
   } finally {
@@ -99,362 +99,477 @@ async function saveConfig() {
   }
 }
 
-async function refreshProbe() {
-  await loadStatus(true)
-}
-
-async function probeOne(id: string) {
-  try {
-    const result = await probeMcpServer(id)
-    servers.value = servers.value.map((s) => {
-      if (s.id !== id) {
-        return s
-      }
-      return {
-        ...s,
-        status: result.ok ? 'ok' : 'error',
-        tool_count: result.tool_count,
-        message: result.message,
-      }
-    })
-  } catch (e: any) {
-    message.error(e.message || '探测失败')
-  }
-}
-
-function statusLabel(s: McpServerStatusItem) {
+function statusText(s: McpServerStatusItem) {
   if (s.status === 'ok') {
-    return s.tool_count > 0 ? `${s.tool_count} tools` : '已连接'
+    return s.tool_count > 0 ? `${s.tool_count} tools enabled` : 'Connected'
   }
   if (s.status === 'error') {
-    return '不可用'
+    return 'Failed'
   }
-  return '未检测'
-}
-
-function statusType(s: McpServerStatusItem): 'success' | 'error' | 'default' {
-  if (s.status === 'ok') {
-    return 'success'
-  }
-  if (s.status === 'error') {
-    return 'error'
-  }
-  return 'default'
+  return 'Connecting…'
 }
 </script>
 
 <template>
-  <NLayout class="mcp-page" style="height: 100%">
-    <NLayoutContent class="mcp-page__content">
-      <div class="mcp-page__header">
-        <div>
-          <h1 class="mcp-page__title">
-            MCP Servers
-          </h1>
-          <NText depth="3" class="mcp-page__subtitle">
-            配置写在用户 mcp.json；本页展示连通状态。会话内启用请在对话 Composer 勾选。
-          </NText>
+  <div class="mcp-management">
+    <header class="page-header">
+      <div class="page-header-main">
+        <div class="page-title-row">
+          <n-icon :component="Server" size="24" class="page-title-icon" />
+          <div>
+            <h1 class="page-title">
+              MCP
+            </h1>
+            <p class="page-subtitle">
+              编辑个人 <code>mcp.json</code>；进入本页会自动检测连通与工具数。
+              对话里启用请在 Composer 勾选。
+            </p>
+          </div>
         </div>
-        <NSpace>
-          <NButton :loading="probing" @click="refreshProbe">
-            <template #icon>
-              <NIcon :component="Refresh" />
-            </template>
-            检测连通
-          </NButton>
-          <NButton
-            type="primary"
-            :disabled="!editorDirty"
-            :loading="saving"
-            @click="saveConfig"
-          >
-            保存配置
-          </NButton>
-        </NSpace>
       </div>
+      <n-space class="page-header-actions">
+        <n-button :loading="refreshing" :disabled="loading" @click="refreshStatus()">
+          <template #icon>
+            <n-icon :component="Refresh" />
+          </template>
+          刷新状态
+        </n-button>
+        <n-button
+          type="primary"
+          :disabled="!editorDirty"
+          :loading="saving"
+          @click="saveConfig"
+        >
+          保存
+        </n-button>
+      </n-space>
+    </header>
 
-      <NSpin :show="loading">
-        <div v-if="error" class="mcp-page__error">
-          {{ error }}
-        </div>
+    <div v-if="loading" class="loading">
+      <n-spin size="large" />
+      <span>正在连接 MCP…</span>
+    </div>
 
-        <div class="mcp-page__grid" :class="{ 'mcp-page__grid--stack': isMobile }">
-          <section class="mcp-panel">
-            <div class="mcp-panel__head">
-              <NIcon :component="Server" />
-              <span>状态</span>
-            </div>
+    <div v-else-if="error && !servers.length" class="error-wrap">
+      <n-empty :description="error">
+        <template #extra>
+          <n-button @click="refreshStatus({ initial: true })">
+            重试
+          </n-button>
+        </template>
+      </n-empty>
+    </div>
 
-            <div v-if="!servers.length && !loading" class="mcp-panel__empty">
-              <NEmpty description="暂无 MCP server。在右侧编辑 mcp.json 后保存。" />
-            </div>
+    <n-layout
+      v-else
+      has-sider
+      class="mcp-layout"
+      :class="{ 'mcp-layout--mobile': isMobile }"
+      bordered
+    >
+      <n-layout-sider
+        v-if="!isMobile"
+        content-style="padding: 0;"
+        :width="340"
+        bordered
+      >
+        <div class="status-pane">
+          <div class="status-pane__summary">
+            <span>{{ servers.length }} servers</span>
+            <span class="status-pane__dot">·</span>
+            <span>{{ connectedCount }} connected</span>
+          </div>
 
-            <div v-else class="mcp-server-list">
-              <div v-if="platformServers.length" class="mcp-server-group">
-                <div class="mcp-server-group__label">
-                  平台
-                </div>
-                <div
-                  v-for="s in platformServers"
-                  :key="`p-${s.id}`"
-                  class="mcp-server-row"
-                >
-                  <span
-                    class="mcp-dot"
-                    :class="{
-                      'mcp-dot--ok': s.status === 'ok',
-                      'mcp-dot--err': s.status === 'error',
-                    }"
-                  ></span>
-                  <div class="mcp-server-row__main">
-                    <div class="mcp-server-row__name">
-                      {{ s.display_name || s.id }}
-                    </div>
-                    <div class="mcp-server-row__meta">
-                      {{ s.transport }} · {{ s.url || '—' }}
-                    </div>
-                    <div v-if="s.message && s.status === 'error'" class="mcp-server-row__msg">
-                      {{ s.message }}
-                    </div>
-                  </div>
-                  <NTag size="small" :type="statusType(s)" :bordered="false">
-                    {{ statusLabel(s) }}
-                  </NTag>
-                  <NButton text size="tiny" @click="probeOne(s.id)">
-                    探测
-                  </NButton>
-                </div>
+          <p v-if="error" class="status-pane__warn">
+            {{ error }}
+          </p>
+
+          <n-empty
+            v-if="!servers.length"
+            class="status-pane__empty"
+            description="暂无 server。在右侧写入 mcpServers 后保存。"
+            size="small"
+          />
+
+          <template v-else>
+            <div v-if="platformServers.length" class="server-group">
+              <div class="server-group__label">
+                Platform
               </div>
-
-              <div v-if="userServers.length" class="mcp-server-group">
-                <div class="mcp-server-group__label">
-                  我的
-                </div>
-                <div
-                  v-for="s in userServers"
-                  :key="`u-${s.id}`"
-                  class="mcp-server-row"
-                >
-                  <span
-                    class="mcp-dot"
-                    :class="{
-                      'mcp-dot--ok': s.status === 'ok',
-                      'mcp-dot--err': s.status === 'error',
-                    }"
-                  ></span>
-                  <div class="mcp-server-row__main">
-                    <div class="mcp-server-row__name">
-                      {{ s.display_name || s.id }}
-                    </div>
-                    <div class="mcp-server-row__meta">
-                      {{ s.transport }} · {{ s.url || '—' }}
-                    </div>
-                    <div v-if="s.message && s.status === 'error'" class="mcp-server-row__msg">
-                      {{ s.message }}
-                    </div>
-                  </div>
-                  <NTag size="small" :type="statusType(s)" :bordered="false">
-                    {{ statusLabel(s) }}
-                  </NTag>
-                  <NButton text size="tiny" @click="probeOne(s.id)">
-                    探测
-                  </NButton>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="mcp-panel mcp-panel--editor">
-            <div class="mcp-panel__head">
-              <NIcon :component="DocumentText" />
-              <span>mcp.json</span>
-              <NText depth="3" class="mcp-panel__path">
-                {{ configPath }}
-                <template v-if="!configExists">
-                  （尚未落盘）
-                </template>
-              </NText>
-              <NButton
-                v-if="isMobile"
-                text
-                size="tiny"
-                class="mcp-panel__toggle"
-                @click="showEditor = !showEditor"
+              <button
+                v-for="s in platformServers"
+                :key="`p-${s.id}`"
+                type="button"
+                class="server-card"
               >
-                {{ showEditor ? '收起' : '展开' }}
-              </NButton>
+                <span
+                  class="server-card__dot"
+                  :class="{
+                    'server-card__dot--ok': s.status === 'ok',
+                    'server-card__dot--err': s.status === 'error',
+                    'server-card__dot--pending': s.status === 'unknown',
+                  }"
+                ></span>
+                <div class="server-card__body">
+                  <div class="server-card__name">
+                    {{ s.display_name || s.id }}
+                  </div>
+                  <div class="server-card__status">
+                    {{ statusText(s) }}
+                  </div>
+                  <div v-if="s.status === 'error' && s.message" class="server-card__err">
+                    {{ s.message }}
+                  </div>
+                </div>
+              </button>
             </div>
-            <NText depth="3" class="mcp-panel__hint">
-              仅支持 transport: streamable_http / sse。平台 server 在 extensions/mcp/mcp.json，不可在此覆盖删除。
-            </NText>
-            <textarea
-              v-show="showEditor"
-              class="mcp-editor"
-              :value="editorText"
-              spellcheck="false"
-              @input="onEditorInput(($event.target as HTMLTextAreaElement).value)"
-            ></textarea>
-          </section>
+
+            <div v-if="userServers.length" class="server-group">
+              <div class="server-group__label">
+                Personal
+              </div>
+              <button
+                v-for="s in userServers"
+                :key="`u-${s.id}`"
+                type="button"
+                class="server-card"
+              >
+                <span
+                  class="server-card__dot"
+                  :class="{
+                    'server-card__dot--ok': s.status === 'ok',
+                    'server-card__dot--err': s.status === 'error',
+                    'server-card__dot--pending': s.status === 'unknown',
+                  }"
+                ></span>
+                <div class="server-card__body">
+                  <div class="server-card__name">
+                    {{ s.display_name || s.id }}
+                  </div>
+                  <div class="server-card__status">
+                    {{ statusText(s) }}
+                  </div>
+                  <div v-if="s.status === 'error' && s.message" class="server-card__err">
+                    {{ s.message }}
+                  </div>
+                </div>
+              </button>
+            </div>
+          </template>
         </div>
-      </NSpin>
-    </NLayoutContent>
-  </NLayout>
+      </n-layout-sider>
+
+      <n-layout-content content-style="padding: 0;" :native-scrollbar="false">
+        <div v-if="isMobile" class="mobile-status">
+          <div
+            v-for="s in servers"
+            :key="s.id"
+            class="server-card server-card--compact"
+          >
+            <span
+              class="server-card__dot"
+              :class="{
+                'server-card__dot--ok': s.status === 'ok',
+                'server-card__dot--err': s.status === 'error',
+              }"
+            ></span>
+            <div class="server-card__body">
+              <div class="server-card__name">
+                {{ s.display_name || s.id }}
+              </div>
+              <div class="server-card__status">
+                {{ statusText(s) }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="editor-pane">
+          <div class="editor-pane__head">
+            <n-icon :component="CodeSlash" size="18" />
+            <span class="editor-pane__title">mcp.json</span>
+            <n-text depth="3" class="editor-pane__path">
+              {{ configPath }}
+              <template v-if="!configExists">
+                · new
+              </template>
+              <template v-else-if="editorDirty">
+                · modified
+              </template>
+            </n-text>
+          </div>
+          <p class="editor-pane__hint">
+            仅 <code>streamable_http</code> / <code>sse</code>。平台项在
+            <code>extensions/mcp/mcp.json</code>，此处只改个人配置。
+          </p>
+          <textarea
+            class="mcp-editor"
+            :value="editorText"
+            spellcheck="false"
+            @input="onEditorInput(($event.target as HTMLTextAreaElement).value)"
+          ></textarea>
+        </div>
+      </n-layout-content>
+    </n-layout>
+  </div>
 </template>
 
 <style scoped>
-.mcp-page__content {
-  padding: 20px 24px 32px;
-  max-width: 1200px;
-  margin: 0 auto;
+.mcp-management {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px 0;
+  box-sizing: border-box;
+  background: var(--noesis-color-bg, #f4f1ea);
 }
 
-.mcp-page__header {
+.page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   flex-wrap: wrap;
 }
 
-.mcp-page__title {
-  margin: 0 0 6px;
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--noesis-text-primary, #111);
-}
-
-.mcp-page__subtitle {
-  font-size: 13px;
-}
-
-.mcp-page__error {
-  margin-bottom: 12px;
-  color: var(--noesis-color-danger, #d03050);
-}
-
-.mcp-page__grid {
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.2fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.mcp-page__grid--stack {
-  grid-template-columns: 1fr;
-}
-
-.mcp-panel {
-  border: 1px solid var(--noesis-border-subtle, rgb(0 0 0 / 8%));
-  border-radius: var(--noesis-radius-md, 10px);
-  background: var(--noesis-bg-elevated, #fff);
-  padding: 14px 16px;
-  min-height: 200px;
-}
-
-.mcp-panel__head {
+.page-title-row {
   display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.page-title-icon {
+  margin-top: 2px;
+  color: var(--noesis-color-text-secondary, #404040);
+}
+
+.page-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--noesis-color-text-heading, #000);
+  letter-spacing: -0.02em;
+}
+
+.page-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--noesis-color-text-muted, #737373);
+  max-width: 520px;
+}
+
+.page-subtitle code {
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--noesis-color-bg-muted, #ebe6dc);
+}
+
+.loading,
+.error-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 12px;
+  color: var(--noesis-color-text-muted, #737373);
+}
+
+.mcp-layout {
+  flex: 1;
+  min-height: 0;
+  border-radius: var(--noesis-radius-md, 10px) var(--noesis-radius-md, 10px) 0 0;
+  overflow: hidden;
+  background: var(--noesis-color-bg-elevated, #faf8f3);
+}
+
+.mcp-layout--mobile :deep(.n-layout-sider) {
+  display: none;
+}
+
+.status-pane {
+  padding: 14px 12px 20px;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.status-pane__summary {
+  font-size: 12px;
+  color: var(--noesis-color-text-muted, #737373);
+  padding: 0 6px 12px;
+}
+
+.status-pane__dot {
+  margin: 0 4px;
+}
+
+.status-pane__warn {
+  margin: 0 6px 10px;
+  font-size: 12px;
+  color: var(--noesis-color-danger, #ff6b6b);
+}
+
+.status-pane__empty {
+  padding: 32px 8px;
+}
+
+.server-group {
+  margin-bottom: 14px;
+}
+
+.server-group__label {
+  font-size: 11px;
   font-weight: 600;
-  margin-bottom: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--noesis-color-text-muted, #737373);
+  padding: 4px 8px 8px;
 }
 
-.mcp-panel__path {
-  margin-left: auto;
-  font-size: 12px;
-  font-weight: 400;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+.server-card {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  align-items: flex-start;
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 10px 8px;
+  cursor: default;
+  color: inherit;
 }
 
-.mcp-panel__hint {
-  display: block;
-  font-size: 12px;
-  margin-bottom: 10px;
+.server-card:hover {
+  background: var(--noesis-color-primary-bg-subtle, rgb(17 17 17 / 4%));
 }
 
-.mcp-panel__empty {
-  padding: 24px 0;
-}
-
-.mcp-server-group {
-  margin-bottom: 16px;
-}
-
-.mcp-server-group__label {
-  font-size: 12px;
-  color: var(--noesis-text-secondary, #6b7280);
+.server-card--compact {
+  background: var(--noesis-color-bg-elevated, #faf8f3);
+  border: 1px solid var(--noesis-color-border-light, #d4d0c8);
   margin-bottom: 8px;
 }
 
-.mcp-server-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 8px;
-  border-radius: 8px;
+.server-card__dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--noesis-color-text-muted, #737373);
 }
 
-.mcp-server-row:hover {
-  background: var(--noesis-color-primary-bg-subtle, rgb(0 0 0 / 3%));
+.server-card__dot--ok {
+  background: var(--noesis-color-success, #51cf66);
+  box-shadow: 0 0 0 3px rgb(81 207 102 / 18%);
 }
 
-.mcp-server-row__main {
-  flex: 1;
+.server-card__dot--err {
+  background: var(--noesis-color-danger, #ff6b6b);
+}
+
+.server-card__dot--pending {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.server-card__body {
   min-width: 0;
+  flex: 1;
 }
 
-.mcp-server-row__name {
-  font-weight: 500;
+.server-card__name {
+  font-size: 14px;
+  font-weight: 560;
+  color: var(--noesis-color-text-body, #262626);
+}
+
+.server-card__status {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--noesis-color-text-muted, #737373);
+}
+
+.server-card__err {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--noesis-color-danger, #ff6b6b);
+  word-break: break-word;
+}
+
+.mobile-status {
+  padding: 12px 14px 0;
+}
+
+.editor-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+  box-sizing: border-box;
+}
+
+.editor-pane__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.editor-pane__title {
+  font-weight: 600;
   font-size: 14px;
 }
 
-.mcp-server-row__meta {
+.editor-pane__path {
+  margin-left: auto;
   font-size: 12px;
-  color: var(--noesis-text-secondary, #6b7280);
-  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-.mcp-server-row__msg {
-  margin-top: 4px;
+.editor-pane__hint {
+  margin: 0 0 10px;
   font-size: 12px;
-  color: var(--noesis-color-danger, #d03050);
+  color: var(--noesis-color-text-muted, #737373);
+  line-height: 1.45;
 }
 
-.mcp-dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 6px;
-  border-radius: 999px;
-  background: var(--noesis-text-tertiary, #9ca3af);
-  flex-shrink: 0;
-}
-
-.mcp-dot--ok {
-  background: #18a058;
-}
-
-.mcp-dot--err {
-  background: #d03050;
+.editor-pane__hint code {
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--noesis-color-bg-muted, #ebe6dc);
 }
 
 .mcp-editor {
+  flex: 1;
   width: 100%;
-  min-height: 420px;
+  min-height: 360px;
   box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid var(--noesis-border-subtle, rgb(0 0 0 / 10%));
+  padding: 14px 16px;
+  border: 1px solid var(--noesis-color-border-light, #d4d0c8);
   border-radius: 8px;
-  background: var(--noesis-bg-muted, #fafafa);
-  color: var(--noesis-text-primary, #111);
+  background: var(--noesis-color-bg, #f4f1ea);
+  color: var(--noesis-color-text-body, #262626);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12.5px;
-  line-height: 1.5;
-  resize: vertical;
+  line-height: 1.55;
+  resize: none;
 }
 
 .mcp-editor:focus {
-  outline: 2px solid var(--noesis-color-primary, #2080f0);
-  outline-offset: 1px;
+  outline: none;
+  border-color: var(--noesis-color-border-focus, #111);
+  box-shadow: 0 0 0 3px var(--noesis-color-primary-ring, rgb(17 17 17 / 18%));
 }
 </style>
