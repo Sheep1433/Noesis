@@ -1,6 +1,16 @@
 
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Literal
+
+
+class MentionItem(BaseModel):
+    """Composer @ / 结构化引用（本轮问答）。"""
+
+    type: Literal["skill", "file", "folder", "subagent"] = Field(..., description="引用类型")
+    id: Optional[str] = Field(None, description="skill 包名或 subagent 类型名")
+    path: Optional[str] = Field(None, description="相对用户数据根或会话的文件/目录路径")
+    source: Optional[Literal["platform", "user"]] = Field(None, description="skill 来源")
+    virtual_path: Optional[str] = Field(None, description="可选 Agent 虚拟路径提示")
 
 
 class QaQueryRequest(BaseModel):
@@ -27,6 +37,10 @@ class QaQueryRequest(BaseModel):
     enabled_skills: Optional[List[str]] = Field(
         None,
         description="本轮启用的 skill 包名；省略时读会话 extra；键缺失表示全部",
+    )
+    mentions: Optional[List[MentionItem]] = Field(
+        None,
+        description="本轮 @ / 结构化引用；省略则不注入",
     )
 
 

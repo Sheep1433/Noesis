@@ -3,7 +3,7 @@
 """
 import json
 import logging
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,8 +14,6 @@ from schemas.knowledge_base_schema import (
     CollectionDetail,
     CollectionConfigResponse,
     PatchCollectionConfigRequest,
-    DocumentInfo,
-    ShardInfo,
     ShardDetail,
     KnowledgeBaseStatus,
     SearchResult,
@@ -70,7 +68,7 @@ async def _require_collection_config(
     return cfg
 
 
-@knowledge_base_router.get('/status', response_model=KnowledgeBaseStatus)
+@knowledge_base_router.get('/status')
 async def get_status(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
@@ -86,15 +84,17 @@ async def get_status(
         except Exception as e:
             logger.error(f"获取 collections 数量失败: {e}")
 
-    return KnowledgeBaseStatus(
-        connected=connected,
-        host=QdrantConfig.qdrant_host,
-        port=QdrantConfig.qdrant_port,
-        collections_count=collections_count,
+    return ResponseUtil.success(
+        data=KnowledgeBaseStatus(
+            connected=connected,
+            host=QdrantConfig.qdrant_host,
+            port=QdrantConfig.qdrant_port,
+            collections_count=collections_count,
+        ).model_dump(),
     )
 
 
-@knowledge_base_router.get('/collections', response_model=List[CollectionInfo])
+@knowledge_base_router.get('/collections')
 async def get_collections(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
@@ -106,7 +106,7 @@ async def get_collections(
     service = QdrantService()
     collections = service.get_collections()
 
-    return [
+    items = [
         CollectionInfo(
             name=c.get("name", ""),
             vector_dimension=c.get("vector_dimension", 1024),
@@ -117,9 +117,10 @@ async def get_collections(
         for c in collections
         if c.get("name")
     ]
+    return ResponseUtil.success(data=[item.model_dump() for item in items])
 
 
-@knowledge_base_router.post('/collections', response_model=CreateCollectionResponse)
+@knowledge_base_router.post('/collections')
 async def create_collection(
     request: CreateCollectionRequest,
     current_user: CurrentUser = Depends(UserService.get_current_user),
@@ -144,10 +145,12 @@ async def create_collection(
     await KbCollectionConfigService.create_default(db, request.name)
     await db.commit()
 
-    return CreateCollectionResponse(
-        success=True,
-        message=result['message'],
-        name=result['name'],
+    return ResponseUtil.success(
+        data=CreateCollectionResponse(
+            success=True,
+            message=result['message'],
+            name=result['name'],
+        ).model_dump(),
     )
 
 
@@ -171,10 +174,10 @@ async def delete_collection(
     await KbCollectionConfigService.delete_config(db, collection_name)
     await db.commit()
 
-    return result
+    return ResponseUtil.success(data=result)
 
 
-@knowledge_base_router.get('/collections/{collection_name}', response_model=CollectionDetail)
+@knowledge_base_router.get('/collections/{collection_name}')
 async def get_collection(
     collection_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
@@ -190,20 +193,19 @@ async def get_collection(
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' 不存在")
 
-    return CollectionDetail(
-        name=collection.get("name", collection_name),
-        vector_dimension=int(collection.get("vector_dimension", 1024)),
-        documents_count=collection.get("documents_count", 0),
-        points_count=collection.get("points_count", 0),
-        created_at=collection.get("created_at"),
-        status=collection.get("status"),
+    return ResponseUtil.success(
+        data=CollectionDetail(
+            name=collection.get("name", collection_name),
+            vector_dimension=int(collection.get("vector_dimension", 1024)),
+            documents_count=collection.get("documents_count", 0),
+            points_count=collection.get("points_count", 0),
+            created_at=collection.get("created_at"),
+            status=collection.get("status"),
+        ).model_dump(),
     )
 
 
-@knowledge_base_router.get(
-    '/collections/{collection_name}/config',
-    response_model=CollectionConfigResponse,
-)
+@knowledge_base_router.get('/collections/{collection_name}/config')
 async def get_collection_config(
     collection_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
@@ -213,13 +215,10 @@ async def get_collection_config(
     _ = current_user
     service = QdrantService()
     cfg = await _require_collection_config(db, service, collection_name)
-    return CollectionConfigResponse(**cfg)
+    return ResponseUtil.success(data=CollectionConfigResponse(**cfg).model_dump())
 
 
-@knowledge_base_router.patch(
-    '/collections/{collection_name}/config',
-    response_model=CollectionConfigResponse,
-)
+@knowledge_base_router.patch('/collections/{collection_name}/config')
 async def patch_collection_config(
     collection_name: str,
     body: PatchCollectionConfigRequest,
@@ -248,10 +247,10 @@ async def patch_collection_config(
     await db.commit()
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' 配置不存在")
-    return CollectionConfigResponse(**updated)
+    return ResponseUtil.success(data=CollectionConfigResponse(**updated).model_dump())
 
 
-@knowledge_base_router.get('/collections/{collection_name}/documents', response_model=List[DocumentInfo])
+@knowledge_base_router.get('/collections/{collection_name}/documents')
 async def get_documents(
     collection_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
@@ -262,13 +261,11 @@ async def get_documents(
         raise HTTPException(status_code=503, detail="向量库未连接")
 
     service = QdrantService()
-    return service.get_collection_documents(collection_name)
+    docs = service.get_collection_documents(collection_name)
+    return ResponseUtil.success(data=docs)
 
 
-@knowledge_base_router.get(
-    '/collections/{collection_name}/documents/{file_name}/shards',
-    response_model=List[ShardInfo],
-)
+@knowledge_base_router.get('/collections/{collection_name}/documents/{file_name}/shards')
 async def get_shards(
     collection_name: str,
     file_name: str,
@@ -280,13 +277,11 @@ async def get_shards(
         raise HTTPException(status_code=503, detail="向量库未连接")
 
     service = QdrantService()
-    return service.get_document_shards(collection_name, file_name)
+    shards = service.get_document_shards(collection_name, file_name)
+    return ResponseUtil.success(data=shards)
 
 
-@knowledge_base_router.get(
-    '/collections/{collection_name}/shards/{shard_id}',
-    response_model=ShardDetail,
-)
+@knowledge_base_router.get('/collections/{collection_name}/shards/{shard_id}')
 async def get_shard_detail(
     collection_name: str,
     shard_id: str,
@@ -303,25 +298,24 @@ async def get_shard_detail(
     if not shard:
         raise HTTPException(status_code=404, detail=f"分片 '{shard_id}' 不存在")
 
-    return ShardDetail(
-        id=str(shard["id"]),
-        content=shard["content"],
-        char_length=int(shard.get("char_length", 0)),
-        vector_dimension=int(shard.get("vector_dimension", 0)),
-        created_at=shard.get("created_at"),
-        header_path=shard.get("header_path"),
-        Header_1=shard.get("Header_1"),
-        Header_2=shard.get("Header_2"),
-        Header_3=shard.get("Header_3"),
-        chunk_index=shard.get("chunk_index"),
-        effective_processing_params=shard.get("effective_processing_params"),
+    return ResponseUtil.success(
+        data=ShardDetail(
+            id=str(shard["id"]),
+            content=shard["content"],
+            char_length=int(shard.get("char_length", 0)),
+            vector_dimension=int(shard.get("vector_dimension", 0)),
+            created_at=shard.get("created_at"),
+            header_path=shard.get("header_path"),
+            Header_1=shard.get("Header_1"),
+            Header_2=shard.get("Header_2"),
+            Header_3=shard.get("Header_3"),
+            chunk_index=shard.get("chunk_index"),
+            effective_processing_params=shard.get("effective_processing_params"),
+        ).model_dump(),
     )
 
 
-@knowledge_base_router.delete(
-    '/collections/{collection_name}/documents/{file_name}',
-    response_model=DeleteResponse,
-)
+@knowledge_base_router.delete('/collections/{collection_name}/documents/{file_name}')
 async def delete_document(
     collection_name: str,
     file_name: str,
@@ -338,17 +332,16 @@ async def delete_document(
     if not result['success']:
         raise HTTPException(status_code=500, detail=result['message'])
 
-    return DeleteResponse(
-        success=result['success'],
-        message=result['message'],
-        deleted_count=result['deleted_count'],
+    return ResponseUtil.success(
+        data=DeleteResponse(
+            success=result['success'],
+            message=result['message'],
+            deleted_count=result['deleted_count'],
+        ).model_dump(),
     )
 
 
-@knowledge_base_router.post(
-    '/collections/{collection_name}/upload',
-    response_model=UploadResponse,
-)
+@knowledge_base_router.post('/collections/{collection_name}/upload')
 async def upload_document(
     collection_name: str,
     file: UploadFile = File(...),
@@ -400,12 +393,14 @@ async def upload_document(
                 raise HTTPException(status_code=409, detail=result['message'])
             raise HTTPException(status_code=500, detail=result['message'])
 
-        return UploadResponse(
-            success=True,
-            message=result['message'],
-            file_name=original_name,
-            shards_created=result['shards_created'],
-            extracted_markdown=result.get('extracted_markdown'),
+        return ResponseUtil.success(
+            data=UploadResponse(
+                success=True,
+                message=result['message'],
+                file_name=original_name,
+                shards_created=result['shards_created'],
+                extracted_markdown=result.get('extracted_markdown'),
+            ).model_dump(),
         )
     except HTTPException:
         raise
@@ -449,6 +444,7 @@ async def search_collection(
                 "limit",
                 "final_top_k",
                 "recall_top_k",
+                "rerank_top_k",
                 "use_reranker",
                 "score_threshold",
                 "search_mode",

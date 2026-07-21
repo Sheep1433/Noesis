@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { McpServerStatusItem } from '@/api/mcp'
-import { CodeSlash, Refresh, Server } from '@vicons/ionicons-v5'
+import { CodeSlash, Refresh } from '@vicons/ionicons-v5'
 import {
   NButton,
   NEmpty,
@@ -35,8 +35,6 @@ const configExists = ref(false)
 const editorText = ref('{\n  "mcpServers": {}\n}\n')
 const editorDirty = ref(false)
 
-const platformServers = computed(() => servers.value.filter((s) => s.source === 'platform'))
-const userServers = computed(() => servers.value.filter((s) => s.source === 'user'))
 const connectedCount = computed(() => servers.value.filter((s) => s.status === 'ok').length)
 
 onMounted(async () => {
@@ -52,7 +50,8 @@ async function refreshStatus(opts?: { initial?: boolean }) {
   }
   error.value = null
   try {
-    const res = await listMcpServerStatus(true)
+    // 管理页仅展示用户 mcp.json（与右侧编辑器一致）；Composer 仍用合并目录
+    const res = await listMcpServerStatus(true, 'user')
     servers.value = res.servers ?? []
   } catch (e: any) {
     error.value = e.message || '状态加载失败'
@@ -112,22 +111,11 @@ function statusText(s: McpServerStatusItem) {
 
 <template>
   <div class="mcp-management">
-    <header class="page-header">
-      <div class="page-header-main">
-        <div class="page-title-row">
-          <n-icon :component="Server" size="24" class="page-title-icon" />
-          <div>
-            <h1 class="page-title">
-              MCP
-            </h1>
-            <p class="page-subtitle">
-              编辑个人 <code>mcp.json</code>；进入本页会自动检测连通与工具数。
-              对话里启用请在 Composer 勾选。
-            </p>
-          </div>
-        </div>
-      </div>
-      <n-space class="page-header-actions">
+    <header class="panel-header">
+      <p class="panel-subtitle">
+        编辑个人 <code>mcp.json</code>；打开本页会自动检测连通与工具数。
+      </p>
+      <n-space class="panel-header-actions">
         <n-button :loading="refreshing" :disabled="loading" @click="refreshStatus()">
           <template #icon>
             <n-icon :component="Refresh" />
@@ -192,45 +180,13 @@ function statusText(s: McpServerStatusItem) {
           />
 
           <template v-else>
-            <div v-if="platformServers.length" class="server-group">
+            <div class="server-group">
               <div class="server-group__label">
-                Platform
+                Your mcp.json
               </div>
               <button
-                v-for="s in platformServers"
-                :key="`p-${s.id}`"
-                type="button"
-                class="server-card"
-              >
-                <span
-                  class="server-card__dot"
-                  :class="{
-                    'server-card__dot--ok': s.status === 'ok',
-                    'server-card__dot--err': s.status === 'error',
-                    'server-card__dot--pending': s.status === 'unknown',
-                  }"
-                ></span>
-                <div class="server-card__body">
-                  <div class="server-card__name">
-                    {{ s.display_name || s.id }}
-                  </div>
-                  <div class="server-card__status">
-                    {{ statusText(s) }}
-                  </div>
-                  <div v-if="s.status === 'error' && s.message" class="server-card__err">
-                    {{ s.message }}
-                  </div>
-                </div>
-              </button>
-            </div>
-
-            <div v-if="userServers.length" class="server-group">
-              <div class="server-group__label">
-                Personal
-              </div>
-              <button
-                v-for="s in userServers"
-                :key="`u-${s.id}`"
+                v-for="s in servers"
+                :key="s.id"
                 type="button"
                 class="server-card"
               >
@@ -299,8 +255,9 @@ function statusText(s: McpServerStatusItem) {
             </n-text>
           </div>
           <p class="editor-pane__hint">
-            仅 <code>streamable_http</code> / <code>sse</code>。平台项在
-            <code>extensions/mcp/mcp.json</code>，此处只改个人配置。
+            仅 <code>streamable_http</code> / <code>sse</code>。请直接填写完整 URL
+            与 headers（需要 API Key 时写入 <code>headers</code>）。
+            个人配置使用字面量，不要写环境变量占位符。左侧状态与本文件内容一致。
           </p>
           <textarea
             class="mcp-editor"
@@ -319,48 +276,32 @@ function statusText(s: McpServerStatusItem) {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px 24px 0;
+  padding: 12px 0 0;
   box-sizing: border-box;
-  background: var(--noesis-color-bg, #f4f1ea);
 }
 
-.page-header {
+.panel-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   flex-wrap: wrap;
 }
 
-.page-title-row {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
+.panel-header-actions {
+  flex-shrink: 0;
 }
 
-.page-title-icon {
-  margin-top: 2px;
-  color: var(--noesis-color-text-secondary, #404040);
-}
-
-.page-title {
+.panel-subtitle {
   margin: 0;
-  font-size: 22px;
-  font-weight: 650;
-  color: var(--noesis-color-text-heading, #000);
-  letter-spacing: -0.02em;
-}
-
-.page-subtitle {
-  margin: 4px 0 0;
   font-size: 13px;
   line-height: 1.5;
   color: var(--noesis-color-text-muted, #737373);
   max-width: 520px;
 }
 
-.page-subtitle code {
+.panel-subtitle code {
   font-size: 12px;
   padding: 1px 5px;
   border-radius: 4px;

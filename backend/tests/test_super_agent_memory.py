@@ -42,7 +42,7 @@ def test_build_memory_middleware_stack() -> None:
 
 def test_task_worker_subagents_exclude_memory_middleware() -> None:
     backend = MagicMock()
-    subs = _build_task_worker_subagents(backend, [], user_id="u1")
+    subs = _build_task_worker_subagents(backend, [], [], user_id="u1")
     assert len(subs) == 1
     middleware = subs[0]["middleware"]
     assert not any(isinstance(m, MemoryMiddleware) for m in middleware)

@@ -15,6 +15,8 @@ import {
   NModal,
   NSpace,
   NSpin,
+  NTabPane,
+  NTabs,
   NTag,
   NText,
   NUpload,
@@ -34,6 +36,7 @@ import FilePreview from '@/components/FilePreview/index.vue'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { isTextPreviewPath } from '@/utils/filePreview'
+import SkillsMarketPanel from '@/views/skills/SkillsMarketPanel.vue'
 import SkillsTreePanel from '@/views/skills/SkillsTreePanel.vue'
 
 const message = useMessage()
@@ -42,6 +45,7 @@ const { isMobile } = useBreakpoint()
 const { drawerWidth: treeDrawerWidth } = useResponsiveDrawerWidth({ max: 320 })
 const treeDrawerOpen = ref(false)
 const modalWidth = computed(() => (isMobile.value ? 'min(480px, calc(100vw - 32px))' : '480px'))
+const activeTab = ref<'installed' | 'market'>('installed')
 
 const SOURCE_LABEL: Record<SkillSource, string> = {
   platform: '平台预置',
@@ -272,23 +276,20 @@ async function confirmZipUpload() {
     zipLoading.value = false
   }
 }
+
+async function onMarketInstalled() {
+  await loadTree()
+  activeTab.value = 'installed'
+}
 </script>
 
 <template>
   <div class="skills-management">
-    <header class="page-header">
-      <div class="page-header-main">
-        <div class="page-title-row">
-          <n-icon :component="FolderOpen" size="24" class="page-title-icon" />
-          <div>
-            <h1 class="page-title">技能中心</h1>
-            <p class="page-subtitle">
-              管理 Agent 可调用的能力包。平台预置技能只读可用；个人技能支持上传 ZIP，右键顶层技能目录可删除。
-            </p>
-          </div>
-        </div>
-      </div>
-      <n-space class="page-header-actions">
+    <header class="panel-header">
+      <p class="panel-subtitle">
+        平台预置只读；个人技能可上传 ZIP 或从 skills.sh 安装，右键顶层目录可删除。
+      </p>
+      <n-space v-if="activeTab === 'installed'" class="panel-header-actions">
         <n-button @click="loadTree">
           <template #icon>
             <n-icon><Refresh /></n-icon>
@@ -304,95 +305,117 @@ async function confirmZipUpload() {
       </n-space>
     </header>
 
-    <div v-if="loading" class="loading">
-      <n-spin size="large" />
-      <span>加载技能目录...</span>
-    </div>
-
-    <div v-else-if="error" class="error-wrap">
-      <n-empty :description="error">
-        <template #extra>
-          <n-button @click="loadTree">重试</n-button>
-        </template>
-      </n-empty>
-    </div>
-
-    <n-layout v-else has-sider class="fs-layout" :class="{ 'fs-layout--mobile': isMobile }" bordered>
-      <n-layout-sider
-        v-if="!isMobile"
-        content-style="padding: 0;"
-        :width="320"
-        show-trigger
-        collapse-mode="width"
-        bordered
-      >
-        <SkillsTreePanel
-          :tree-data="treeData"
-          :selected-keys="selectedKeys"
-          :context-menu-show="contextMenuShow"
-          :context-menu-x="contextMenuX"
-          :context-menu-y="contextMenuY"
-          :context-menu-options="contextMenuOptions"
-          :render-tree-label="renderTreeLabel"
-          :node-props="nodeProps"
-          @update-selected-keys="onUpdateSelectedKeys"
-          @context-menu-select="handleContextMenuSelect"
-          @context-menu-close="closeContextMenu"
-          @open-zip-modal="openZipModal"
-        />
-      </n-layout-sider>
-
-      <n-layout-content content-style="padding: 0;" :native-scrollbar="false">
-        <div v-if="isMobile" class="mobile-tree-bar">
-          <n-button size="small" quaternary @click="treeDrawerOpen = true">
-            <template #icon>
-              <n-icon><FolderOpen /></n-icon>
-            </template>
-            技能目录
-          </n-button>
-          <n-text v-if="previewMeta" depth="3" class="mobile-preview-hint">
-            {{ previewMeta.filename }}
-          </n-text>
-        </div>
-        <div v-if="previewLoading" class="preview-state">
-          <n-spin size="medium" />
-          <span>读取文件...</span>
+    <n-tabs v-model:value="activeTab" type="line" class="skills-tabs">
+      <n-tab-pane name="installed" tab="已安装" display-directive="show">
+        <div v-if="loading" class="loading">
+          <n-spin size="large" />
+          <span>加载技能目录...</span>
         </div>
 
-        <template v-else-if="previewMeta">
-          <div class="preview-header">
-            <div class="preview-title-row">
-              <n-icon :component="DocumentText" size="18" class="preview-file-icon" />
-              <span class="preview-filename">{{ previewMeta.filename }}</span>
-              <n-tag
-                size="small"
-                :type="previewMeta.source === 'platform' ? 'info' : 'success'"
-                :bordered="false"
-              >
-                {{ SOURCE_LABEL[previewMeta.source] }}
-              </n-tag>
-            </div>
-            <n-text depth="3" class="preview-path">{{ previewMeta.relPath }}</n-text>
-          </div>
-          <div class="preview-body">
-            <FilePreview
-              :path="previewMeta.relPath"
-              :content="previewContent"
-              :show-path="false"
-              density="comfortable"
-            />
-          </div>
-        </template>
-
-        <div v-else class="preview-state">
-          <n-empty :description="isMobile ? '点击「技能目录」选择文件预览' : '在左侧选择文件以预览'">
-            <template v-if="showEmptyHint" #extra>
-              <n-text depth="3">您还没有个人技能，可点击右上角「上传技能」添加</n-text>
+        <div v-else-if="error" class="error-wrap">
+          <n-empty :description="error">
+            <template #extra>
+              <n-button @click="loadTree">
+                重试
+              </n-button>
             </template>
           </n-empty>
         </div>
-      </n-layout-content>
-    </n-layout>
+
+        <n-layout v-else has-sider class="fs-layout" :class="{ 'fs-layout--mobile': isMobile }" bordered>
+          <n-layout-sider
+            v-if="!isMobile"
+            content-style="padding: 0;"
+            :width="320"
+            show-trigger
+            collapse-mode="width"
+            bordered
+          >
+            <SkillsTreePanel
+              :tree-data="treeData"
+              :selected-keys="selectedKeys"
+              :context-menu-show="contextMenuShow"
+              :context-menu-x="contextMenuX"
+              :context-menu-y="contextMenuY"
+              :context-menu-options="contextMenuOptions"
+              :render-tree-label="renderTreeLabel"
+              :node-props="nodeProps"
+              @update-selected-keys="onUpdateSelectedKeys"
+              @context-menu-select="handleContextMenuSelect"
+              @context-menu-close="closeContextMenu"
+              @open-zip-modal="openZipModal"
+            />
+          </n-layout-sider>
+
+          <n-layout-content content-style="padding: 0;" :native-scrollbar="false">
+            <div v-if="isMobile" class="mobile-tree-bar">
+              <n-button size="small" quaternary @click="treeDrawerOpen = true">
+                <template #icon>
+                  <n-icon><FolderOpen /></n-icon>
+                </template>
+                技能目录
+              </n-button>
+              <n-text v-if="previewMeta" depth="3" class="mobile-preview-hint">
+                {{ previewMeta.filename }}
+              </n-text>
+            </div>
+            <div v-if="previewLoading" class="preview-state">
+              <n-spin size="medium" />
+              <span>读取文件...</span>
+            </div>
+
+            <template v-else-if="previewMeta">
+              <div class="preview-pane">
+                <div class="preview-header">
+                  <div class="preview-title-row">
+                    <n-icon :component="DocumentText" size="18" class="preview-file-icon" />
+                    <span class="preview-filename">{{ previewMeta.filename }}</span>
+                    <n-tag
+                      size="small"
+                      :type="previewMeta.source === 'platform' ? 'info' : 'success'"
+                      :bordered="false"
+                    >
+                      {{ SOURCE_LABEL[previewMeta.source] }}
+                    </n-tag>
+                  </div>
+                  <n-text depth="3" class="preview-path">
+                    {{ previewMeta.relPath }}
+                  </n-text>
+                </div>
+                <div class="preview-body">
+                  <FilePreview
+                    class="skills-file-preview"
+                    :path="previewMeta.relPath"
+                    :content="previewContent"
+                    :show-path="false"
+                    density="comfortable"
+                    fill-height
+                  />
+                </div>
+              </div>
+            </template>
+
+            <div v-else class="preview-state">
+              <n-empty :description="isMobile ? '点击「技能目录」选择文件预览' : '在左侧选择文件以预览'">
+                <template v-if="showEmptyHint" #extra>
+                  <n-text depth="3">
+                    您还没有个人技能，可上传 ZIP 或切换到「市场」安装
+                  </n-text>
+                </template>
+              </n-empty>
+            </div>
+          </n-layout-content>
+        </n-layout>
+      </n-tab-pane>
+
+      <n-tab-pane name="market" tab="市场" display-directive="show">
+        <SkillsMarketPanel
+          class="market-pane"
+          :active="activeTab === 'market'"
+          @installed="onMarketInstalled"
+        />
+      </n-tab-pane>
+    </n-tabs>
 
     <n-drawer
       v-if="isMobile"
@@ -464,9 +487,30 @@ async function confirmZipUpload() {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: var(--noesis-shell-padding-desktop) 24px;
+  padding: 12px 0 16px;
   box-sizing: border-box;
-  gap: 16px;
+  gap: 12px;
+}
+
+.skills-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.skills-tabs :deep(.n-tabs-pane-wrapper) {
+  flex: 1;
+  min-height: 0;
+}
+
+.skills-tabs :deep(.n-tab-pane) {
+  height: 100%;
+}
+
+.market-pane {
+  height: 100%;
+  min-height: 420px;
 }
 
 .fs-layout--mobile {
@@ -491,47 +535,44 @@ async function confirmZipUpload() {
   white-space: nowrap;
 }
 
-.page-header-actions {
+.panel-header-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 @media (max-width: 1024px) {
   .skills-management {
-    padding: 12px var(--noesis-content-gutter-mobile);
-    gap: 12px;
+    padding: 10px 0 12px;
+    gap: 10px;
   }
 
-  .page-header {
+  .panel-header {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .page-subtitle {
+  .panel-subtitle {
     max-width: none;
   }
 
   .tree-wrap {
     max-height: none;
   }
-
-  .preview-body {
-    max-height: calc(100dvh - 280px);
-  }
 }
 
 @media (max-width: 768px) {
-  .page-header-actions :deep(.n-button span:not(.n-button__icon)) {
+  .panel-header-actions :deep(.n-button span:not(.n-button__icon)) {
     display: none;
   }
 
-  .page-header-actions :deep(.n-button) {
+  .panel-header-actions :deep(.n-button) {
     padding: 0 10px;
   }
 }
 
-.page-header {
+.panel-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -539,27 +580,8 @@ async function confirmZipUpload() {
   gap: 16px;
 }
 
-.page-title-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.page-title-icon {
-  color: var(--n-primary-color);
-  margin-top: 2px;
-  flex-shrink: 0;
-}
-
-.page-title {
+.panel-subtitle {
   margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.page-subtitle {
-  margin: 6px 0 0;
   font-size: 13px;
   color: var(--n-text-color-3);
   line-height: 1.5;
@@ -585,6 +607,21 @@ async function confirmZipUpload() {
   min-height: 0;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.fs-layout :deep(.n-layout-scroll-container) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.preview-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 
 .sider-header {
@@ -662,8 +699,17 @@ async function confirmZipUpload() {
 }
 
 .preview-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
   padding: 12px 16px 16px;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.skills-file-preview {
+  flex: 1;
+  min-height: 0;
 }
 
 .upload-desc {

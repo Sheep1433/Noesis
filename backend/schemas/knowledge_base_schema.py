@@ -167,6 +167,12 @@ class SearchCollectionBody(BaseModel):
     )
     final_top_k: Optional[int] = Field(None, description='最终返回条数上限')
     recall_top_k: Optional[int] = Field(None, description='召回阶段候选上限')
+    rerank_top_k: Optional[int] = Field(
+        None,
+        ge=1,
+        le=100,
+        description='送入 rerank 的文档数上限（成本控制；默认 15，且不超过 recall_top_k）',
+    )
     use_reranker: Optional[bool] = Field(None, description='是否 cross-encoder 精排')
     score_threshold: Optional[float] = Field(
         None, description='rerank 之后的分数过滤阈值'

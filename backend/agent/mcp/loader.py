@@ -20,6 +20,23 @@ def clear_mcp_tools_cache() -> None:
     _TOOLS_CACHE.clear()
 
 
+def format_mcp_error(exc: BaseException) -> str:
+    """展开 ExceptionGroup / TaskGroup，避免只看到 unhandled errors in a TaskGroup。"""
+    parts: list[str] = [f"{type(exc).__name__}: {exc}"]
+    sub = getattr(exc, "exceptions", None)
+    if isinstance(sub, (list, tuple)):
+        for i, child in enumerate(sub[:5]):
+            parts.append(f"  [{i}] {type(child).__name__}: {child}")
+            nested = getattr(child, "exceptions", None)
+            if isinstance(nested, (list, tuple)) and nested:
+                parts.append(f"      → {type(nested[0]).__name__}: {nested[0]}")
+    return " | ".join(parts) if len(parts) == 1 else "\n".join(parts)
+
+
+def _format_mcp_error(exc: BaseException) -> str:
+    return format_mcp_error(exc)
+
+
 async def load_mcp_tools(
     profile: str,
     *,
@@ -66,7 +83,12 @@ async def load_mcp_tools_by_names(
             tools.extend(part)
             logger.info("MCP server={!r} 加载工具 {} 个", sid, len(part))
         except Exception as e:
-            logger.warning("MCP server={!r} 加载失败，已跳过: {}", sid, e)
+            logger.warning(
+                "MCP server={!r} url={!r} 加载失败，已跳过:\n{}",
+                sid,
+                cfg.get("url"),
+                _format_mcp_error(e),
+            )
 
     if use_cache:
         _TOOLS_CACHE[cache_key] = (now + _TOOLS_CACHE_TTL_SEC, list(tools))

@@ -16,6 +16,14 @@ class ConflictException(Exception):
         self.message = message
 
 
+class NotFoundException(Exception):
+    """资源不存在"""
+
+    def __init__(self, data: str = None, message: str = None):
+        self.data = data
+        self.message = message
+
+
 class AuthException(Exception):
     """
     自定义令牌异常AuthException

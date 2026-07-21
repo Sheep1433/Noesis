@@ -94,7 +94,69 @@ def test_user_overrides_platform(
 def test_profile_server_names_default() -> None:
     names = get_profile_server_names(MCP_PROFILE_FAULT_OPERATION)
     assert isinstance(names, list)
-    assert len(names) >= 1
+    assert names == ["remote_ops"]
+
+
+def test_validate_user_rejects_env_placeholder() -> None:
+    with pytest.raises(ValueError, match="字面量|占位"):
+        validate_user_server_config(
+            {
+                "transport": "streamable_http",
+                "url": "http://${HOST}/mcp",
+            }
+        )
+
+
+def test_materialize_user_mcp_literals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import config.user_data_paths as user_paths
+    from config.mcp_config import materialize_user_mcp_literals
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    monkeypatch.setenv("NOESIS_MCP_REMOTE_URL", "http://127.0.0.1:8000/mcp")
+    uid = "u_mat"
+    path = get_user_mcp_path(uid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote_ops": {
+                        "transport": "streamable_http",
+                        "url": "${NOESIS_MCP_REMOTE_URL}",
+                        "headers": {"CONTEXT7_API_KEY": ""},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert materialize_user_mcp_literals(uid) is True
+    cfg = load_user_mcp_json(uid)
+    assert cfg.mcpServers["remote_ops"]["url"] == "http://127.0.0.1:8000/mcp"
+    assert "headers" not in cfg.mcpServers["remote_ops"]
+
+
+def test_ensure_user_config_seeded_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import config.user_data_paths as user_paths
+    from services.mcp_service import McpService
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    uid = "u_seed"
+    path = get_user_mcp_path(uid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"mcpServers": {}}\n', encoding="utf-8")
+
+    out = McpService.get_user_config_file(uid)
+    assert "context7" in out.content
+    assert "remote_ops" in out.content
+    assert "${" not in out.content
+    assert "http://localhost:8000/mcp" in out.content
+    cfg = load_user_mcp_json(uid)
+    assert set(cfg.mcpServers) == {"context7", "remote_ops"}
 
 
 def test_save_user_config_file_rejects_stdio(

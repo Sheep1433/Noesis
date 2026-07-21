@@ -157,6 +157,16 @@ other:
   skills_filesystem_root: ""  # 空则默认 extensions/skills；可填绝对路径或相对仓库根的路径
   mcp_config_path: ""  # 空则默认 extensions/mcp/mcp.json；可用环境变量 MCP_CONFIG_PATH 覆盖
 
+# Skills 市场（skills.sh 搜索 + GitHub 安装到个人 skills）
+skills_market:
+  provider: skills_sh
+  base_url: https://skills.sh
+  search_timeout_seconds: 15
+  github_timeout_seconds: 60
+  cache_ttl_seconds: 300
+  max_archive_bytes: 52428800  # 50MB
+  # featured_skills 可省略，使用内置推荐种子
+
 # LangGraph Agent checkpoint（独立 PostgreSQL 数据库）
 checkpoint:
   database: noesis_langgraph

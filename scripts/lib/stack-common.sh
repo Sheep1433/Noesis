@@ -87,9 +87,10 @@ start_mcp() {
 
   log_info "启动 MCP server..."
   cd "$MCP_DIR"
-  uv run python server.py &
+  # 显式 http + 8000，与 mcp.json / NOESIS_MCP_REMOTE_URL 默认一致
+  uv run python server.py --transport http --host 127.0.0.1 --port 8000 &
   MCP_PID=$!
-  log_info "MCP server started (PID: $MCP_PID)"
+  log_info "MCP server started (PID: $MCP_PID) → http://127.0.0.1:8000/mcp"
 }
 
 _should_start_sandbox_runner() {

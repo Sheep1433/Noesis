@@ -321,6 +321,13 @@ async function downloadCurrentFile() {
   max-height: none;
 }
 
+.file-preview--comfortable.file-preview--fill .file-preview__code,
+.file-preview--comfortable.file-preview--fill .file-preview__editor,
+.file-preview--comfortable.file-preview--fill .file-preview__markdown,
+.file-preview--comfortable.file-preview--fill .file-preview__image-wrap {
+  max-height: none;
+}
+
 .file-preview__image-wrap {
   padding: 8px;
   overflow: auto;

@@ -145,8 +145,8 @@ const sidebarItems = ref([
     },
   },
   {
-    label: 'Skills',
-    key: 'SkillsManagement',
+    label: '扩展',
+    key: 'Extensions',
     onClick() {
       router.push({
         name: this.key,
@@ -154,21 +154,7 @@ const sidebarItems = ref([
     },
     renderIcon() {
       return (
-        <div class="sidebar-nav-icon i-my-svg:chat-skill"></div>
-      )
-    },
-  },
-  {
-    label: 'MCP',
-    key: 'McpManagement',
-    onClick() {
-      router.push({
-        name: this.key,
-      })
-    },
-    renderIcon() {
-      return (
-        <div class="sidebar-nav-icon i-mdi:toy-brick-outline"></div>
+        <div class="sidebar-nav-icon i-mdi:puzzle-outline"></div>
       )
     },
   },

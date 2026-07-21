@@ -28,16 +28,10 @@ export const mainNavItems: MainNavItem[] = [
     iconClass: 'i-my-svg:chat-knowledge',
   },
   {
-    label: 'Skills',
-    key: 'SkillsManagement',
-    routeName: 'SkillsManagement',
-    iconClass: 'i-my-svg:chat-skill',
-  },
-  {
-    label: 'MCP',
-    key: 'McpManagement',
-    routeName: 'McpManagement',
-    iconClass: 'i-mdi:toy-brick-outline',
+    label: '扩展',
+    key: 'Extensions',
+    routeName: 'Extensions',
+    iconClass: 'i-mdi:puzzle-outline',
   },
   {
     label: '测试',

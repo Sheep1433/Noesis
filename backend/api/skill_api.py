@@ -1,33 +1,37 @@
 """
-Skill API — Skills 文件目录（平台 + 用户）
+Skill API — Skills 文件目录（平台 + 用户）+ skills.sh 市场
 """
 import os
 import tempfile
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
 
 from schemas.login_vo import CurrentUser
 from schemas.skill_vo import (
-    SkillFsTreeResponse,
     SkillFsFileContent,
     SkillSource,
+    SkillMarketInstallRequest,
 )
 from services.skill_fs_service import SkillFsService, max_zip_bytes
+from services.skill_market_service import SkillMarketService
 from services.user_service import UserService
 from common.http.response import ResponseUtil
 
 skill_router = APIRouter(prefix='/api/skills', tags=['Skill 模块'])
 
 
-@skill_router.get('/fs/tree', response_model=SkillFsTreeResponse)
+@skill_router.get('/fs/tree')
 async def get_skills_fs_tree(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """列出当前用户可用的 Skills（平台预置 + 个人上传）。"""
-    return SkillFsService.get_tree(current_user.user_id)
+    return ResponseUtil.success(
+        data=SkillFsService.get_tree(current_user.user_id).model_dump(),
+    )
 
 
-@skill_router.get('/fs/file', response_model=SkillFsFileContent)
+@skill_router.get('/fs/file')
 async def get_skills_fs_file(
     path: str,
     source: SkillSource = 'platform',
@@ -42,11 +46,13 @@ async def get_skills_fs_file(
     )
     if not ok:
         raise HTTPException(status_code=400, detail=err)
-    return SkillFsFileContent(
-        rel_path=rel,
-        filename=os.path.basename(rel) or rel,
-        source=source,
-        content=content,
+    return ResponseUtil.success(
+        data=SkillFsFileContent(
+            rel_path=rel,
+            filename=os.path.basename(rel) or rel,
+            source=source,
+            content=content,
+        ).model_dump(),
     )
 
 
@@ -84,4 +90,60 @@ async def delete_user_skill_package(
     ok, msg = SkillFsService.delete_user_skill_package(path, current_user.user_id)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
+    return ResponseUtil.success(msg=msg)
+
+
+@skill_router.get('/market/browse')
+async def market_browse(
+    sort: Literal['all_time', 'trending'] = Query(
+        'trending',
+        description='all_time=累计安装；trending=24h 趋势',
+    ),
+    limit: int = Query(40, ge=1, le=100, description='榜单条数'),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """skills.sh Leaderboard（/ 或 /trending）。"""
+    return ResponseUtil.success(
+        data=SkillMarketService.browse(
+            current_user.user_id, sort=sort, limit=limit,
+        ).model_dump(),
+    )
+
+
+@skill_router.get('/market/search')
+async def market_search(
+    q: str = Query(..., min_length=2, description='搜索词'),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """搜索 skills.sh 目录。"""
+    return ResponseUtil.success(
+        data=SkillMarketService.search(current_user.user_id, q, limit=limit).model_dump(),
+    )
+
+
+@skill_router.get('/market/detail')
+async def market_detail(
+    source: str = Query(..., description='GitHub owner/repo'),
+    skill_id: str = Query(..., description='技能包名'),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """拉取技能详情（含 SKILL.md）。"""
+    return ResponseUtil.success(
+        data=SkillMarketService.detail(current_user.user_id, source, skill_id).model_dump(),
+    )
+
+
+@skill_router.post('/market/install')
+async def market_install(
+    body: SkillMarketInstallRequest,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """从 skills.sh / GitHub 安装到个人 skills。"""
+    msg = SkillMarketService.install(
+        current_user.user_id,
+        body.source,
+        body.skill_id,
+        overwrite=body.overwrite,
+    )
     return ResponseUtil.success(msg=msg)

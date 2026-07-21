@@ -11,6 +11,7 @@ declare global {
   const applyThemePreset: typeof import('./src/hooks/useThemePreset')['applyThemePreset']
   const asyncComputed: typeof import('@vueuse/core')['asyncComputed']
   const autoResetRef: typeof import('@vueuse/core')['autoResetRef']
+  const candidateToMention: typeof import('./src/hooks/useMentionCatalog')['candidateToMention']
   const computed: typeof import('vue')['computed']
   const computedAsync: typeof import('@vueuse/core')['computedAsync']
   const computedEager: typeof import('@vueuse/core')['computedEager']
@@ -37,8 +38,11 @@ declare global {
   const defineComponent: typeof import('vue')['defineComponent']
   const eagerComputed: typeof import('@vueuse/core')['eagerComputed']
   const effectScope: typeof import('vue')['effectScope']
+  const ensureMentionCatalog: typeof import('./src/hooks/useMentionCatalog')['ensureMentionCatalog']
   const extendRef: typeof import('@vueuse/core')['extendRef']
   const fetchConversationHistory: typeof import('./src/store/business/initChatHistory')['fetchConversationHistory']
+  const formatMentionToken: typeof import('./src/hooks/useMentionCatalog')['formatMentionToken']
+  const formatMentionTokenFromCandidate: typeof import('./src/hooks/useMentionCatalog')['formatMentionTokenFromCandidate']
   const getCurrentInstance: typeof import('vue')['getCurrentInstance']
   const getCurrentScope: typeof import('vue')['getCurrentScope']
   const h: typeof import('vue')['h']
@@ -46,6 +50,8 @@ declare global {
   const initThemePreset: typeof import('./src/hooks/useThemePreset')['initThemePreset']
   const inject: typeof import('vue')['inject']
   const injectLocal: typeof import('@vueuse/core')['injectLocal']
+  const invalidateMentionContextCache: typeof import('./src/hooks/useMentionCatalog')['invalidateMentionContextCache']
+  const invalidateMentionSkillsCache: typeof import('./src/hooks/useMentionCatalog')['invalidateMentionSkillsCache']
   const isDefined: typeof import('@vueuse/core')['isDefined']
   const isProxy: typeof import('vue')['isProxy']
   const isReactive: typeof import('vue')['isReactive']
@@ -53,6 +59,7 @@ declare global {
   const isRef: typeof import('vue')['isRef']
   const makeDestructurable: typeof import('@vueuse/core')['makeDestructurable']
   const markRaw: typeof import('vue')['markRaw']
+  const mentionToPayload: typeof import('./src/hooks/useMentionCatalog')['mentionToPayload']
   const nextTick: typeof import('vue')['nextTick']
   const normalizeThemePresetId: typeof import('./src/hooks/useThemePreset')['normalizeThemePresetId']
   const onActivated: typeof import('vue')['onActivated']
@@ -329,6 +336,9 @@ declare global {
   export type { RouteRecordRaw, RouteLocationRaw } from 'vue-router'
   import('vue-router')
   // @ts-ignore
+  export type { MentionKind, MentionCandidate, ComposerMention } from './src/hooks/useMentionCatalog'
+  import('./src/hooks/useMentionCatalog')
+  // @ts-ignore
   export type { UsePaneResizeOptions } from './src/hooks/usePaneResize'
   import('./src/hooks/usePaneResize')
   // @ts-ignore
@@ -349,6 +359,7 @@ declare module 'vue' {
     readonly applyThemePreset: UnwrapRef<typeof import('./src/hooks/useThemePreset')['applyThemePreset']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
     readonly autoResetRef: UnwrapRef<typeof import('@vueuse/core')['autoResetRef']>
+    readonly candidateToMention: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['candidateToMention']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly computedAsync: UnwrapRef<typeof import('@vueuse/core')['computedAsync']>
     readonly computedEager: UnwrapRef<typeof import('@vueuse/core')['computedEager']>
@@ -375,8 +386,11 @@ declare module 'vue' {
     readonly defineComponent: UnwrapRef<typeof import('vue')['defineComponent']>
     readonly eagerComputed: UnwrapRef<typeof import('@vueuse/core')['eagerComputed']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
+    readonly ensureMentionCatalog: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['ensureMentionCatalog']>
     readonly extendRef: UnwrapRef<typeof import('@vueuse/core')['extendRef']>
     readonly fetchConversationHistory: UnwrapRef<typeof import('./src/store/business/initChatHistory')['fetchConversationHistory']>
+    readonly formatMentionToken: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['formatMentionToken']>
+    readonly formatMentionTokenFromCandidate: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['formatMentionTokenFromCandidate']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
     readonly h: UnwrapRef<typeof import('vue')['h']>
@@ -384,6 +398,8 @@ declare module 'vue' {
     readonly initThemePreset: UnwrapRef<typeof import('./src/hooks/useThemePreset')['initThemePreset']>
     readonly inject: UnwrapRef<typeof import('vue')['inject']>
     readonly injectLocal: UnwrapRef<typeof import('@vueuse/core')['injectLocal']>
+    readonly invalidateMentionContextCache: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['invalidateMentionContextCache']>
+    readonly invalidateMentionSkillsCache: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['invalidateMentionSkillsCache']>
     readonly isDefined: UnwrapRef<typeof import('@vueuse/core')['isDefined']>
     readonly isProxy: UnwrapRef<typeof import('vue')['isProxy']>
     readonly isReactive: UnwrapRef<typeof import('vue')['isReactive']>
@@ -391,6 +407,7 @@ declare module 'vue' {
     readonly isRef: UnwrapRef<typeof import('vue')['isRef']>
     readonly makeDestructurable: UnwrapRef<typeof import('@vueuse/core')['makeDestructurable']>
     readonly markRaw: UnwrapRef<typeof import('vue')['markRaw']>
+    readonly mentionToPayload: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['mentionToPayload']>
     readonly nextTick: UnwrapRef<typeof import('vue')['nextTick']>
     readonly normalizeThemePresetId: UnwrapRef<typeof import('./src/hooks/useThemePreset')['normalizeThemePresetId']>
     readonly onActivated: UnwrapRef<typeof import('vue')['onActivated']>

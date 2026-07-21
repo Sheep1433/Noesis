@@ -1,7 +1,7 @@
 /**
  * MCP 目录、状态与用户配置文件 API
  */
-import { authFetch } from '@/utils/authHttp'
+import { authFetch, parseAuthJson } from '@/utils/authHttp'
 
 const API_BASE = `${location.origin}/api/mcp`
 
@@ -41,16 +41,21 @@ export async function listMcpServers(): Promise<McpServerCatalogResponse> {
   if (!response.ok) {
     throw new Error(`获取 MCP 目录失败: ${response.status}`)
   }
-  return response.json()
+  return parseAuthJson<McpServerCatalogResponse>(response)
 }
 
-export async function listMcpServerStatus(probe = false): Promise<McpServerStatusResponse> {
-  const url = `${API_BASE}/servers/status?probe=${probe ? 'true' : 'false'}`
+export async function listMcpServerStatus(
+  probe = false,
+  scope: 'user' | 'all' = 'user',
+): Promise<McpServerStatusResponse> {
+  const url =
+    `${API_BASE}/servers/status` +
+    `?probe=${probe ? 'true' : 'false'}&scope=${encodeURIComponent(scope)}`
   const response = await authFetch(url, { method: 'GET' })
   if (!response.ok) {
     throw new Error(`获取 MCP 状态失败: ${response.status}`)
   }
-  return response.json()
+  return parseAuthJson<McpServerStatusResponse>(response)
 }
 
 export async function getMcpConfig(): Promise<McpConfigFile> {
@@ -58,7 +63,7 @@ export async function getMcpConfig(): Promise<McpConfigFile> {
   if (!response.ok) {
     throw new Error(`读取 MCP 配置失败: ${response.status}`)
   }
-  return response.json()
+  return parseAuthJson<McpConfigFile>(response)
 }
 
 export async function saveMcpConfig(content: string): Promise<McpConfigFile> {
@@ -77,7 +82,7 @@ export async function saveMcpConfig(content: string): Promise<McpConfigFile> {
     }
     throw new Error(detail)
   }
-  return response.json()
+  return parseAuthJson<McpConfigFile>(response)
 }
 
 export async function probeMcpServer(serverId: string): Promise<{
@@ -92,5 +97,5 @@ export async function probeMcpServer(serverId: string): Promise<{
   if (!response.ok) {
     throw new Error(`探测失败: ${response.status}`)
   }
-  return response.json()
+  return parseAuthJson(response)
 }

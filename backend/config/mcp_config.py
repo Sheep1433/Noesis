@@ -17,6 +17,11 @@ from config.user_data_paths import ensure_user_mcp_path, get_user_mcp_path
 
 _BRACED_VAR_RE = re.compile(r"\$\{([^}]+)\}")
 
+# 未设置环境变量时的默认值（避免 URL 留成字面量 ${VAR}）
+_ENV_DEFAULTS: dict[str, str] = {
+    "NOESIS_MCP_REMOTE_URL": "http://localhost:8000/mcp",
+}
+
 MCP_PROFILE_FAULT_OPERATION = "fault_operation"
 MCP_PROFILE_SIMPLE_MCP = "simple_mcp"
 
@@ -51,7 +56,18 @@ def resolve_mcp_config_path() -> Path:
 
 
 def _expand_env_vars(value: str) -> str:
-    return _BRACED_VAR_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
+    def _repl(m: re.Match[str]) -> str:
+        key = m.group(1)
+        if key in os.environ:
+            return os.environ[key]
+        if key in _ENV_DEFAULTS:
+            return _ENV_DEFAULTS[key]
+        # 可选密钥未配置时置空，避免把 ${VAR} 原样塞进 header
+        if key.endswith(("_API_KEY", "_TOKEN", "_SECRET")):
+            return ""
+        return m.group(0)
+
+    return _BRACED_VAR_RE.sub(_repl, value)
 
 
 def _expand_deep(value: Any) -> Any:
@@ -63,6 +79,52 @@ def _expand_deep(value: Any) -> Any:
         return [_expand_deep(item) for item in value]
     return value
 
+
+# 传给 langchain-mcp-adapters 的连接字段（不含 UI 元数据如 display_name）
+_HTTP_CONNECTION_KEYS = frozenset(
+    {
+        "transport",
+        "url",
+        "headers",
+        "timeout",
+        "sse_read_timeout",
+        "terminate_on_close",
+        "session_kwargs",
+        "httpx_client_factory",
+        "auth",
+    }
+)
+_STDIO_CONNECTION_KEYS = frozenset(
+    {
+        "transport",
+        "command",
+        "args",
+        "env",
+        "cwd",
+        "encoding",
+        "encoding_error_handler",
+        "session_kwargs",
+    }
+)
+_WS_CONNECTION_KEYS = frozenset({"transport", "url", "session_kwargs"})
+
+
+def to_adapter_connection(server_cfg: dict[str, Any]) -> dict[str, Any]:
+    """去掉 display_name 等元数据，只保留 MultiServerMCPClient 认识的字段。"""
+    expanded = _expand_deep(server_cfg)
+    if not isinstance(expanded, dict):
+        raise TypeError("server 配置必须是对象")
+    transport = str(expanded.get("transport") or "").strip()
+    if transport in {"streamable_http", "streamable-http", "http", "sse"}:
+        allowed = _HTTP_CONNECTION_KEYS
+    elif transport == "stdio":
+        allowed = _STDIO_CONNECTION_KEYS
+    elif transport == "websocket":
+        allowed = _WS_CONNECTION_KEYS
+    else:
+        # 未知 transport：至少丢掉明确的 UI 字段，避免 **kwargs 炸
+        allowed = _HTTP_CONNECTION_KEYS | _STDIO_CONNECTION_KEYS | _WS_CONNECTION_KEYS
+    return {k: v for k, v in expanded.items() if k in allowed}
 
 def _read_mcp_json_file(cfg_path: Path) -> McpJsonConfig:
     if not cfg_path.is_file():
@@ -122,7 +184,72 @@ def validate_user_server_config(server_cfg: dict[str, Any]) -> dict[str, Any]:
     url = str(server_cfg.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
         raise ValueError("用户 MCP url 须为 http:// 或 https://")
+    _reject_user_placeholders(server_cfg)
     return dict(server_cfg)
+
+
+def _reject_user_placeholders(value: Any, *, path: str = "") -> None:
+    """个人 mcp.json 要求字面量；${ENV} 仅允许出现在平台 extensions/mcp/mcp.json。"""
+    if isinstance(value, str):
+        if "${" in value:
+            where = path or "配置"
+            raise ValueError(
+                f"用户 MCP {where} 请直接填写字面量，不支持 ${'{ENV}'} 占位（收到 {value!r}）"
+            )
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            child = f"{path}.{k}" if path else str(k)
+            _reject_user_placeholders(v, path=child)
+        return
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            _reject_user_placeholders(item, path=f"{path}[{i}]")
+
+
+def expand_mcp_values(value: Any) -> Any:
+    """展开 ${ENV}（平台配置 / 迁移旧用户文件用）。"""
+    return _expand_deep(value)
+
+
+def materialize_user_mcp_literals(user_id: str | int) -> bool:
+    """
+    若用户 mcp.json 仍含历史 ${ENV}，展开为字面量并写回。
+    空字符串的 header 值会删掉（例如未配置的 API Key）。
+    """
+    cfg = load_user_mcp_json(user_id)
+    if not cfg.mcpServers:
+        return False
+
+    def _has_placeholder(v: Any) -> bool:
+        if isinstance(v, str):
+            return "${" in v
+        if isinstance(v, dict):
+            return any(_has_placeholder(x) for x in v.values())
+        if isinstance(v, list):
+            return any(_has_placeholder(x) for x in v)
+        return False
+
+    if not any(_has_placeholder(raw) for raw in cfg.mcpServers.values()):
+        return False
+
+    new_servers: dict[str, Any] = {}
+    for sid, raw in cfg.mcpServers.items():
+        expanded = expand_mcp_values(raw)
+        if not isinstance(expanded, dict):
+            continue
+        headers = expanded.get("headers")
+        if isinstance(headers, dict):
+            cleaned = {k: v for k, v in headers.items() if str(v).strip()}
+            if cleaned:
+                expanded["headers"] = cleaned
+            else:
+                expanded.pop("headers", None)
+        new_servers[str(sid)] = expanded
+
+    save_user_mcp_json(user_id, McpJsonConfig(mcpServers=new_servers))
+    logger.info("已将用户 MCP 配置中的 ${{ENV}} 展开为字面量 user_id={}", user_id)
+    return True
 
 
 def _redact_url(url: str | None) -> str | None:
@@ -134,6 +261,7 @@ def _redact_url(url: str | None) -> str | None:
 
 
 def list_merged_servers(user_id: str | int | None = None) -> list[McpServerCatalogItem]:
+    """平台 + 用户合并目录；同名用户覆盖平台。"""
     platform = load_mcp_json()
     user_cfg = load_user_mcp_json(user_id) if user_id is not None else McpJsonConfig()
     items: dict[str, McpServerCatalogItem] = {}
@@ -142,7 +270,7 @@ def list_merged_servers(user_id: str | int | None = None) -> list[McpServerCatal
             id=sid,
             source="platform",
             transport=str(raw.get("transport") or ""),
-            url=_redact_url(str(raw.get("url") or "") or None),
+            url=_redact_url(_expand_env_vars(str(raw.get("url") or "")) or None),
             display_name=str(raw.get("display_name") or sid),
         )
     for sid, raw in user_cfg.mcpServers.items():
@@ -150,10 +278,27 @@ def list_merged_servers(user_id: str | int | None = None) -> list[McpServerCatal
             id=sid,
             source="user",
             transport=str(raw.get("transport") or ""),
-            url=_redact_url(str(raw.get("url") or "") or None),
+            url=_redact_url(_expand_env_vars(str(raw.get("url") or "")) or None),
             display_name=str(raw.get("display_name") or sid),
         )
     return sorted(items.values(), key=lambda x: (x.source != "user", x.id.lower()))
+
+
+def list_user_servers(user_id: str | int) -> list[McpServerCatalogItem]:
+    """仅用户 mcp.json 中的 server（与配置编辑器内容一致）。"""
+    user_cfg = load_user_mcp_json(user_id)
+    items: list[McpServerCatalogItem] = []
+    for sid, raw in user_cfg.mcpServers.items():
+        items.append(
+            McpServerCatalogItem(
+                id=sid,
+                source="user",
+                transport=str(raw.get("transport") or ""),
+                url=_redact_url(_expand_env_vars(str(raw.get("url") or "")) or None),
+                display_name=str(raw.get("display_name") or sid),
+            )
+        )
+    return sorted(items, key=lambda x: x.id.lower())
 
 
 def get_merged_server_map(user_id: str | int | None = None) -> dict[str, dict[str, Any]]:
@@ -207,7 +352,7 @@ def resolve_server_connections(
         if not server_cfg.get("transport"):
             logger.warning("MCP server {!r} 缺少 transport，已跳过", sid)
             continue
-        connections[sid] = _expand_deep(server_cfg)
+        connections[sid] = to_adapter_connection(server_cfg)
     return connections
 
 

@@ -159,7 +159,9 @@ DEFAULT_COLLECTION_PROCESSING: Dict[str, Any] = {
 DEFAULT_COLLECTION_QUERY: Dict[str, Any] = {
     "search_mode": "hybrid",
     "use_reranker": True,
-    "recall_top_k": 50,
+    # 成本优先：缩小召回与 rerank 文档数（DashScope 按 documents 计费）
+    "recall_top_k": 20,
+    "rerank_top_k": 15,
     "final_top_k": 10,
     "score_threshold": None,
     "rrf_k": 60,

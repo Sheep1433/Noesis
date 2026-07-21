@@ -53,8 +53,9 @@ pnpm stylelint      # 样式检查
 | `views/chat.vue` | 核心对话页 |
 | `views/Login.vue` | 登录 |
 | `views/knowledge-base/` | 知识库 |
-| `views/skills/` | Skills 管理 |
-| `views/mcp/MCPClient.vue` | MCP 客户端 |
+| `views/extensions/` | 扩展配置（Skills + MCP） |
+| `views/skills/` | Skills 面板（嵌于扩展页） |
+| `views/mcp/MCPClient.vue` | MCP 面板（嵌于扩展页） |
 | `views/TestAssistant.vue` | 测试助手 |
 
 ### 关键组件

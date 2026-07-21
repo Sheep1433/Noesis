@@ -72,7 +72,7 @@
 
 ### Requirement: 检索执行默认参数
 
-公开检索接口在调用方未显式指定检索字段时 SHALL 使用 **MySQL `kb_collection_config.query_params`** 与平台默认值合并后的结果。平台默认 SHALL 为：`search_mode=hybrid`、`use_reranker=true`、`recall_top_k=50`、`final_top_k=10`、`score_threshold=null`、`rrf_k=60`。显式请求字段 SHALL 优先于集合默认与平台默认。
+公开检索接口在调用方未显式指定检索字段时 SHALL 使用 **MySQL `kb_collection_config.query_params`** 与平台默认值合并后的结果。平台默认 SHALL 为：`search_mode=hybrid`、`use_reranker=true`、`recall_top_k=20`、`rerank_top_k=15`、`final_top_k=10`、`score_threshold=null`、`rrf_k=60`。显式请求字段 SHALL 优先于集合默认与平台默认。
 
 #### Scenario: 未传 final_top_k 时使用集合默认
 
@@ -89,7 +89,7 @@
 `POST /api/knowledge_base/collections/{collection_name}/search` 请求体 SHALL 支持：
 
 - 必填：`query`
-- 可选：`search_mode`、`use_reranker`、`recall_top_k`、`final_top_k`、`score_threshold`、`rrf_k`、`filters`
+- 可选：`search_mode`、`use_reranker`、`recall_top_k`、`rerank_top_k`、`final_top_k`、`score_threshold`、`rrf_k`、`filters`
 - deprecated 别名：`limit`（等价 `final_top_k`；与 `final_top_k` 同时传时 **`final_top_k` 优先**）
 
 响应命中项 SHALL 含 `search_mode`；启用 rerank 时 MAY 含 `rerank_score`、`recall_score`。过滤语义 SHALL 与 `kb-retrieval` 一致。

@@ -210,6 +210,66 @@ class OtherYamlSection(BaseModel):
     mcp_config_path: str = ""  # 空则默认 extensions/mcp/mcp.json
 
 
+class SkillsMarketFeaturedItem(BaseModel):
+    id: str = ""
+    source: str = ""
+    skill_id: str = ""
+
+
+class SkillsMarketYamlSection(BaseModel):
+    """skills.sh 市场：搜索发现 + GitHub 安装。"""
+    provider: str = "skills_sh"
+    base_url: str = "https://skills.sh"
+    search_timeout_seconds: int = Field(default=15, ge=1)
+    github_timeout_seconds: int = Field(default=60, ge=1)
+    cache_ttl_seconds: int = Field(default=300, ge=0)
+    max_archive_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
+    featured_skills: list[SkillsMarketFeaturedItem] = Field(
+        default_factory=lambda: [
+            SkillsMarketFeaturedItem(
+                id="vercel-labs/skills/find-skills",
+                source="vercel-labs/skills",
+                skill_id="find-skills",
+            ),
+            SkillsMarketFeaturedItem(
+                id="anthropics/skills/pdf",
+                source="anthropics/skills",
+                skill_id="pdf",
+            ),
+            SkillsMarketFeaturedItem(
+                id="anthropics/skills/frontend-design",
+                source="anthropics/skills",
+                skill_id="frontend-design",
+            ),
+            SkillsMarketFeaturedItem(
+                id="anthropics/skills/docx",
+                source="anthropics/skills",
+                skill_id="docx",
+            ),
+            SkillsMarketFeaturedItem(
+                id="anthropics/skills/xlsx",
+                source="anthropics/skills",
+                skill_id="xlsx",
+            ),
+            SkillsMarketFeaturedItem(
+                id="anthropics/skills/pptx",
+                source="anthropics/skills",
+                skill_id="pptx",
+            ),
+            SkillsMarketFeaturedItem(
+                id="obra/superpowers/brainstorming",
+                source="obra/superpowers",
+                skill_id="brainstorming",
+            ),
+            SkillsMarketFeaturedItem(
+                id="vercel-labs/agent-skills/vercel-react-best-practices",
+                source="vercel-labs/agent-skills",
+                skill_id="vercel-react-best-practices",
+            ),
+        ],
+    )
+
+
 class WebToolsYamlSection(BaseModel):
     max_search_results: int = Field(default=8, ge=1, le=20)
     fetch_max_chars: int = Field(default=4096, ge=1)
@@ -276,6 +336,7 @@ class AppYamlConfig(BaseModel):
     qdrant: QdrantYamlSection = Field(default_factory=QdrantYamlSection)
     langfuse: LangfuseYamlSection = Field(default_factory=LangfuseYamlSection)
     other: OtherYamlSection = Field(default_factory=OtherYamlSection)
+    skills_market: SkillsMarketYamlSection = Field(default_factory=SkillsMarketYamlSection)
     web_tools: WebToolsYamlSection = Field(default_factory=WebToolsYamlSection)
     checkpoint: CheckpointYamlSection = Field(default_factory=CheckpointYamlSection)
     chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)

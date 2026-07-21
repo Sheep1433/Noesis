@@ -142,7 +142,7 @@ async def login(
 
 - **配置**：PostgreSQL `kb_collection_config`（`processing_params` / `query_params`）；Qdrant 仅存向量与分片
 - **入库**：`DocumentParser` → `chunk()`（`chunk_preset_id=general`）→ embed → upsert；payload 含 `effective_processing_params`
-- **检索**：统一 `KbRetrievalService.search()`：`recall_top_k` → rerank（可降级）→ `score_threshold` → `final_top_k`；默认 `search_mode=hybrid`
+- **检索**：统一 `KbRetrievalService.search()`：`recall_top_k` → 截断 `rerank_top_k` → rerank（可降级）→ `score_threshold` → `final_top_k`；默认 `search_mode=hybrid`
 - **API**：`GET/PATCH /api/knowledge_base/collections/{name}/config`；检索/上传参数与 Agent 共用 `kb/chunk/params.py` 合并函数
 - **评测**：`uv run python -m evals.kb.run --collection <name>`
 

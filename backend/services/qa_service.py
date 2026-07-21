@@ -29,6 +29,7 @@ from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QaQueryRequest
 from services.chat_service import ChatService
 from services.chat_attachment_service import ChatAttachmentService
+from services.mention_resolve_service import MentionResolveService
 from domain.observability.langfuse import langfuse_workflow_context, merge_langfuse_runnable_config
 from domain.chat.streaming.langgraph_sse import LangGraphSseBridge, bridge_raw_to_sse_lines
 from common.logging import logger
@@ -650,6 +651,20 @@ class QaService:
         bridge: Optional[LangGraphSseBridge] = None
         ctx: Dict[str, Any] = {}
 
+        resolved_mentions = MentionResolveService.resolve(
+            mentions=req_obj.mentions,
+            qa_type=req_obj.qa_type,
+            user_id=str(current_user.user_id),
+            session_id=session_id,
+        )
+        agent_query = clean_query
+        if resolved_mentions.prompt_block:
+            agent_query = (
+                f"{clean_query}\n\n{resolved_mentions.prompt_block}".strip()
+                if clean_query
+                else resolved_mentions.prompt_block
+            )
+
         try:
             # 创建或获取会话
             await ChatService.get_or_create_session(
@@ -662,15 +677,18 @@ class QaService:
 
             # 流式开始前写入用户消息
             if user_text:
+                user_extra: Dict[str, Any] = {
+                    "qa_type": req_obj.qa_type,
+                    "file_dict": req_obj.file_dict,
+                }
+                if resolved_mentions.persistence:
+                    user_extra["mentions"] = resolved_mentions.persistence
                 await ChatService.save_message(
                     session_id=session_id,
                     user_id=current_user.user_id,
                     role="user",
                     content=UserMessageBuilder(content=user_text).serialize(),
-                    extra={
-                        "qa_type": req_obj.qa_type,
-                        "file_dict": req_obj.file_dict,
-                    },
+                    extra=user_extra,
                     db=db,
                 )
 
@@ -717,6 +735,10 @@ class QaService:
                     request_enabled_skills=req_obj.enabled_skills,
                     db=db,
                 )
+                if resolved_mentions.skill_ids and enabled_skills is not None:
+                    enabled_skills = list(
+                        dict.fromkeys([*enabled_skills, *resolved_mentions.skill_ids]),
+                    )
 
             mcp_tools: List[Any] = []
             if mcp_server_ids:
@@ -727,7 +749,7 @@ class QaService:
 
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
                 agent_generator = common_agent.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id=session_id,
                     current_user=current_user,
                     file_list=req_obj.file_dict,
@@ -740,7 +762,7 @@ class QaService:
                 )
             elif req_obj.qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
                 agent_generator = fault_agent.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id=session_id,
                     current_user=current_user,
                     file_list=req_obj.file_dict,
@@ -750,14 +772,14 @@ class QaService:
                 )
             elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
                 agent_generator = case_coordinator.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id,
                     req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                 )
             elif req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
                 agent_generator = super_agent.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id=session_id,
                     current_user=current_user,
                     file_list=req_obj.file_dict,

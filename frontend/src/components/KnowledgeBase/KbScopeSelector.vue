@@ -91,12 +91,12 @@ watch(
 
 <template>
   <div
-    class="kb-scope-selector flex flex-col gap-4 min-w-0"
-    :class="embedded ? 'kb-scope-selector--embedded' : ''"
+    class="kb-scope-selector flex flex-col gap-4"
+    :class="embedded ? 'kb-scope-selector--embedded min-w-0' : 'kb-scope-selector--inline'"
   >
     <div
       v-if="!embedded"
-      class="flex items-center gap-6 min-w-0"
+      class="kb-scope-inline flex items-center gap-6"
     >
       <span class="kb-scope-label shrink-0 text-12 opacity-70">知识库</span>
       <n-select
@@ -108,7 +108,8 @@ watch(
         clearable
         filterable
         size="small"
-        class="kb-scope-select flex-1 min-w-0"
+        :consistent-menu-width="false"
+        class="kb-scope-select"
         placeholder="不选则检索全部可用库"
         max-tag-count="responsive"
         @update:value="onUpdate"
@@ -160,11 +161,23 @@ watch(
 </template>
 
 <style scoped>
+.kb-scope-selector--inline {
+  flex-shrink: 0;
+}
+
+.kb-scope-inline {
+  flex-shrink: 0;
+}
+
 .kb-scope-select {
+  width: 200px;
+  min-width: 200px;
   max-width: 320px;
 }
 
 .kb-scope-selector--embedded .kb-scope-select {
+  width: 100%;
+  min-width: 0;
   max-width: none;
 }
 

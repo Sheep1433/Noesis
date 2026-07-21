@@ -15,14 +15,10 @@ const childrenRoutes: Array<RouteRecordRaw> = [
     ],
   },
   {
-    path: 'mcp',
-    name: 'McpManagement',
-    component: () => import('@/views/mcp/MCPClient.vue'),
+    path: 'extensions',
+    name: 'Extensions',
+    component: () => import('@/views/extensions/Extensions.vue'),
     meta: { requiresAuth: true },
-  },
-  {
-    path: 'mcpChat',
-    redirect: { name: 'McpManagement' },
   },
   {
     path: 'testcase/generate',
@@ -41,13 +37,6 @@ const childrenRoutes: Array<RouteRecordRaw> = [
     path: 'knowledgeBase/collection/:collectionName',
     name: 'KnowledgeBaseDetail',
     component: () => import('@/views/knowledge-base/CollectionDetail.vue'),
-    meta: { requiresAuth: true },
-  },
-  // Skills 管理路由
-  {
-    path: 'skills',
-    name: 'SkillsManagement',
-    component: () => import('@/views/skills/SkillsManagement.vue'),
     meta: { requiresAuth: true },
   },
 ]
