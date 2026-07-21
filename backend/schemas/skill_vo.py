@@ -43,3 +43,41 @@ class SkillFsFileContent(BaseModel):
     filename: str = Field(description='文件名')
     source: SkillSource = Field(description='platform 或 user')
     content: str = Field(description='文件文本内容')
+
+
+class SkillMarketItem(BaseModel):
+    """skills.sh 市场条目"""
+    id: str = Field(description='完整 id，如 anthropics/skills/pdf')
+    skill_id: str = Field(description='技能包名（安装目录名）')
+    name: str = Field(description='展示名')
+    source: str = Field(description='GitHub owner/repo，如 anthropics/skills')
+    installs: int = Field(default=0, description='skills.sh 安装次数')
+    market_url: str = Field(default='', description='skills.sh 详情页')
+    installed: bool = Field(
+        default=False,
+        description='是否已从同源安装到个人 skills（exact）',
+    )
+    install_match: Literal['none', 'exact', 'name_conflict'] = Field(
+        default='none',
+        description='none 未占用；exact 同源已装；name_conflict 同名目录已占用',
+    )
+
+
+class SkillMarketListResponse(BaseModel):
+    """市场列表（browse / search）"""
+    items: List[SkillMarketItem] = Field(default_factory=list)
+    query: str = Field(default='', description='搜索词；browse 为空')
+
+
+class SkillMarketDetailResponse(BaseModel):
+    """市场技能详情（正文来自 skills.sh 详情页）"""
+    item: SkillMarketItem
+    skill_md: str = Field(default='', description='SKILL 正文（skills.sh 渲染）')
+    skill_md_path: str = Field(default='', description='展示用路径，固定为 SKILL.md')
+
+
+class SkillMarketInstallRequest(BaseModel):
+    """从市场安装到个人 skills"""
+    source: str = Field(description='GitHub owner/repo')
+    skill_id: str = Field(description='技能包名')
+    overwrite: bool = Field(default=False, description='同名已存在时是否覆盖')

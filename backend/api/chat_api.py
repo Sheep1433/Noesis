@@ -31,7 +31,6 @@ from schemas.chat_vo import (
     SendMessageResponse,
 )
 from schemas.session_context_vo import (
-    SessionContextResponse,
     WorkspaceFileContent,
     WorkspaceFileWriteRequest,
 )
@@ -385,7 +384,6 @@ async def get_session_messages(
 
 @chat_router.get(
     "/sessions/{session_id}/context",
-    response_model=SessionContextResponse,
     summary="获取会话上下文（工作区产物 + 附件）",
 )
 async def get_session_context(
@@ -399,7 +397,7 @@ async def get_session_context(
             user_id=str(current_user.user_id),
             db=db,
         )
-        return payload
+        return ResponseUtil.success(data=payload.model_dump())
     except HTTPException as exc:
         if exc.status_code == 404:
             return ResponseUtil.not_found(msg=str(exc.detail))
@@ -408,7 +406,6 @@ async def get_session_context(
 
 @chat_router.get(
     "/sessions/{session_id}/workspace/file",
-    response_model=WorkspaceFileContent,
     summary="读取会话工作区文本文件",
 )
 async def get_session_workspace_file(
@@ -424,7 +421,9 @@ async def get_session_workspace_file(
             rel_path=path,
             db=db,
         )
-        return WorkspaceFileContent(path=rel, content=content)
+        return ResponseUtil.success(
+            data=WorkspaceFileContent(path=rel, content=content).model_dump(),
+        )
     except HTTPException as exc:
         if exc.status_code == 404:
             return ResponseUtil.not_found(msg=str(exc.detail))
@@ -468,7 +467,6 @@ async def get_session_workspace_archive(
 
 @chat_router.put(
     "/sessions/{session_id}/workspace/file",
-    response_model=WorkspaceFileContent,
     summary="保存会话工作区文本文件",
 )
 async def put_session_workspace_file(
@@ -485,7 +483,9 @@ async def put_session_workspace_file(
             content=request.content,
             db=db,
         )
-        return WorkspaceFileContent(path=rel, content=content)
+        return ResponseUtil.success(
+            data=WorkspaceFileContent(path=rel, content=content).model_dump(),
+        )
     except HTTPException as exc:
         if exc.status_code == 404:
             return ResponseUtil.not_found(msg=str(exc.detail))
@@ -593,13 +593,28 @@ async def send_message_stream(
     返回 SSE 格式事件流
     """
     from schemas.qa_vo import QaQueryRequest, QaStopRequest
+    from services.mention_resolve_service import MentionResolveService, parse_mention_items
 
     session_id = request.session_id or ""
     qa_type = (request.extra or {}).get("qa_type", IntentEnum.COMMON_QA.value[0])
     file_dict = (request.extra or {}).get("file_dict")
     kb_collections = (request.extra or {}).get("kb_collections")
+    kb_search_enabled = (request.extra or {}).get("kb_search_enabled")
     extra = request.extra or {}
     model_id = extra.get("model_id") if "model_id" in extra else None
+    mcp_servers = extra.get("mcp_servers") if isinstance(extra.get("mcp_servers"), list) else None
+    enabled_skills = extra.get("enabled_skills") if isinstance(extra.get("enabled_skills"), list) else None
+
+    mentions_items = None
+    if "mentions" in extra:
+        mentions_items = parse_mention_items(extra.get("mentions"))
+        # 流式响应前同步校验，失败返回 4xx JSON（非 SSE）
+        MentionResolveService.resolve(
+            mentions=mentions_items,
+            qa_type=qa_type,
+            user_id=str(current_user.user_id),
+            session_id=session_id,
+        )
 
     if session_id:
         denied = await _deny_foreign_session(session_id, current_user, db)
@@ -612,7 +627,11 @@ async def send_message_stream(
         chat_id=session_id,
         file_dict=file_dict,
         kb_collections=kb_collections if isinstance(kb_collections, list) else None,
+        kb_search_enabled=kb_search_enabled if isinstance(kb_search_enabled, bool) else None,
         model_id=str(model_id).strip() if model_id is not None and str(model_id).strip() else None,
+        mcp_servers=[str(x) for x in mcp_servers] if mcp_servers is not None else None,
+        enabled_skills=[str(x) for x in enabled_skills] if enabled_skills is not None else None,
+        mentions=mentions_items,
     )
 
     try:
@@ -789,5 +808,4 @@ async def stop_stream(
     if msg == "未知的 qa_type":
         return ResponseUtil.failure(msg=msg)
     return ResponseUtil.success(msg=msg)
-
 

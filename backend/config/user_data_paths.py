@@ -99,6 +99,17 @@ def ensure_user_skills_dir(user_id: str | int) -> Path:
     return path
 
 
+def get_user_mcp_path(user_id: str | int) -> Path:
+    """返回用户 MCP 配置文件 `.data/users/{user_id}/mcp.json`（不创建）。"""
+    return get_user_root(user_id) / "mcp.json"
+
+
+def ensure_user_mcp_path(user_id: str | int) -> Path:
+    """确保用户根存在并返回 mcp.json 路径（文件可不存在）。"""
+    ensure_user_root(user_id)
+    return get_user_mcp_path(user_id)
+
+
 def get_session_root(user_id: str | int, session_id: str) -> Path:
     """返回会话子树根 `.data/users/{user_id}/sessions/{session_id}/`（不创建）。"""
     uid = validate_segment(str(user_id), kind="user_id")

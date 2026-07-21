@@ -145,6 +145,24 @@ class OtherSettings:
 
 
 @dataclass(frozen=True)
+class SkillsMarketFeaturedSkill:
+    id: str
+    source: str
+    skill_id: str
+
+
+@dataclass(frozen=True)
+class SkillsMarketSettings:
+    provider: str
+    base_url: str
+    search_timeout_seconds: int
+    github_timeout_seconds: int
+    cache_ttl_seconds: int
+    max_archive_bytes: int
+    featured_skills: tuple[SkillsMarketFeaturedSkill, ...]
+
+
+@dataclass(frozen=True)
 class QdrantSettings:
     qdrant_host: str
     qdrant_port: int
@@ -441,6 +459,37 @@ def _build_langfuse(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> LangfuseSet
     )
 
 
+def _build_skills_market(yaml_cfg: AppYamlConfig) -> SkillsMarketSettings:
+    sm = yaml_cfg.skills_market
+    featured = tuple(
+        SkillsMarketFeaturedSkill(
+            id=(item.id or "").strip(),
+            source=(item.source or "").strip(),
+            skill_id=(item.skill_id or "").strip(),
+        )
+        for item in sm.featured_skills
+        if (item.source or "").strip() and (item.skill_id or "").strip()
+    )
+    return SkillsMarketSettings(
+        provider=_legacy_env("SKILLS_MARKET_PROVIDER", sm.provider).strip() or "skills_sh",
+        base_url=_legacy_env("SKILLS_MARKET_BASE_URL", sm.base_url).strip().rstrip("/")
+        or "https://skills.sh",
+        search_timeout_seconds=_legacy_env_int(
+            "SKILLS_MARKET_SEARCH_TIMEOUT_SECONDS", sm.search_timeout_seconds
+        ),
+        github_timeout_seconds=_legacy_env_int(
+            "SKILLS_MARKET_GITHUB_TIMEOUT_SECONDS", sm.github_timeout_seconds
+        ),
+        cache_ttl_seconds=_legacy_env_int(
+            "SKILLS_MARKET_CACHE_TTL_SECONDS", sm.cache_ttl_seconds
+        ),
+        max_archive_bytes=_legacy_env_int(
+            "SKILLS_MARKET_MAX_ARCHIVE_BYTES", sm.max_archive_bytes
+        ),
+        featured_skills=featured,
+    )
+
+
 def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSettings:
     wt = yaml_cfg.web_tools
     return WebToolsSettings(
@@ -455,7 +504,11 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
 def _build_sandbox(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> SandboxSettings:
     sb = yaml_cfg.sandbox
     backend = _legacy_env("SANDBOX_BACKEND", sb.backend).strip().lower() or "docker"
-    if backend not in ("docker", "aio", "local_shell"):
+    if backend == "aio":
+        raise ValueError(
+            "sandbox.backend=aio 已移除；请使用 docker 或 local_shell"
+        )
+    if backend not in ("docker", "local_shell"):
         backend = "docker"
     return SandboxSettings(
         backend=backend,
@@ -573,6 +626,10 @@ class GetConfig:
         return _build_langfuse(self._secrets, self._yaml)
 
     @lru_cache
+    def get_skills_market_config(self) -> SkillsMarketSettings:
+        return _build_skills_market(self._yaml)
+
+    @lru_cache
     def get_web_tools_config(self) -> WebToolsSettings:
         return _build_web_tools(self._secrets, self._yaml)
 
@@ -630,6 +687,7 @@ OtherConfig = get_config.get_other_config()
 QdrantConfig = get_config.get_qdrant_config()
 StreamConfig = get_config.get_stream_config()
 LangfuseConfig = get_config.get_langfuse_config()
+SkillsMarketConfig = get_config.get_skills_market_config()
 WebToolsConfig = get_config.get_web_tools_config()
 CheckpointConfig = get_config.get_checkpoint_config()
 SandboxConfig = get_config.get_sandbox_config()

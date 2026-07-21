@@ -11,6 +11,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSessionContext, getWorkspaceFile, saveWorkspaceFile } from '@/api/chat'
 import FilePreview from '@/components/FilePreview/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
+import { invalidateMentionContextCache } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { authFetch } from '@/utils/authHttp'
 import { getFilePreviewKind } from '@/utils/filePreview'
@@ -99,6 +100,7 @@ async function reload() {
     context.value = null
     return
   }
+  invalidateMentionContextCache(props.sessionId)
   loading.value = true
   clearPreview()
   selectedKey.value = ''

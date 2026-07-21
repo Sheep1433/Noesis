@@ -6,7 +6,10 @@ import base64
 
 import pytest
 
-from agent.backends.mount_paths import EXTENSIONS_SKILLS_CONTAINER_PREFIX
+from agent.backends.mount_paths import (
+    PERSONAL_SKILLS_CONTAINER_PREFIX,
+    PUBLIC_SKILLS_CONTAINER_PREFIX,
+)
 from agent.backends.sandbox_common import prepare_write_file_payload, session_mutex
 from agent.backends.sandbox_mount_policy import (
     resolve_read_container_path,
@@ -14,13 +17,18 @@ from agent.backends.sandbox_mount_policy import (
 )
 
 
-def test_resolve_read_session_workspace() -> None:
-    path = "/workspace/sessions/s1/workspace/research/report.md"
+def test_resolve_read_workspace() -> None:
+    path = "/workspace/research/report.md"
     assert resolve_read_container_path(path) == path
 
 
-def test_resolve_read_extensions_skills_mount() -> None:
-    path = f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
+def test_resolve_read_public_skills_mount() -> None:
+    path = f"{PUBLIC_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
+    assert resolve_read_container_path(path) == path
+
+
+def test_resolve_read_personal_skills_mount() -> None:
+    path = f"{PERSONAL_SKILLS_CONTAINER_PREFIX}/my-tool/SKILL.md"
     assert resolve_read_container_path(path) == path
 
 
@@ -29,16 +37,18 @@ def test_resolve_read_rejects_non_absolute() -> None:
         resolve_read_container_path("research/report.md")
 
 
-def test_resolve_write_blocks_extensions_skills() -> None:
+def test_resolve_write_blocks_public_skills() -> None:
     with pytest.raises(ValueError, match="read-only"):
         resolve_write_container_path(
-            f"{EXTENSIONS_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
+            f"{PUBLIC_SKILLS_CONTAINER_PREFIX}/deep-research-v2/SKILL.md"
         )
 
 
-def test_resolve_write_blocks_custom_skills_mount() -> None:
+def test_resolve_write_blocks_personal_skills() -> None:
     with pytest.raises(ValueError, match="read-only"):
-        resolve_write_container_path("/workspace/skills/my-upload/SKILL.md")
+        resolve_write_container_path(
+            f"{PERSONAL_SKILLS_CONTAINER_PREFIX}/my-upload/SKILL.md"
+        )
 
 
 def test_resolve_read_blocks_traversal() -> None:

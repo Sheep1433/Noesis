@@ -18,6 +18,7 @@ const props = defineProps<{
   loading?: boolean
   defaultLimit?: number
   defaultRecallTopK?: number
+  defaultRerankTopK?: number
   defaultUseReranker?: boolean
   defaultRrfK?: number
 }>()
@@ -30,6 +31,7 @@ const query = defineModel<string>('query', { default: '' })
 const searchMode = defineModel<KbSearchMode>('searchMode', { default: 'hybrid' })
 const finalTopKOverride = defineModel<number | null>('finalTopKOverride', { default: null })
 const recallTopKOverride = defineModel<number | null>('recallTopKOverride', { default: null })
+const rerankTopKOverride = defineModel<number | null>('rerankTopKOverride', { default: null })
 const useRerankerOverride = defineModel<boolean | null>('useRerankerOverride', { default: null })
 const scoreThresholdOverride = defineModel<number | null>('scoreThresholdOverride', { default: null })
 const rrfKOverride = defineModel<number | null>('rrfKOverride', { default: null })
@@ -92,7 +94,17 @@ function onSearch() {
               :min="1"
               :max="200"
               clearable
-              :placeholder="`默认 ${props.defaultRecallTopK ?? 50}`"
+              :placeholder="`默认 ${props.defaultRecallTopK ?? 20}`"
+              style="width: 100%"
+            />
+          </n-form-item>
+          <n-form-item label="rerank_top_k" :show-feedback="false">
+            <n-input-number
+              v-model:value="rerankTopKOverride"
+              :min="1"
+              :max="100"
+              clearable
+              :placeholder="`默认 ${props.defaultRerankTopK ?? 15}`"
               style="width: 100%"
             />
           </n-form-item>

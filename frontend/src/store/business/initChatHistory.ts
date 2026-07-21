@@ -218,6 +218,7 @@ async function loadSessionMessages(
             qa_type: userQaType,
             question: extractContent(msg.content, msg.role),
             file_key: fileKey,
+            mentions: Array.isArray(msg.extra?.mentions) ? msg.extra.mentions : undefined,
             role: 'user' as const,
             reader: null,
             parent_id: msg.parent_id,

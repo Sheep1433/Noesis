@@ -87,6 +87,7 @@ const searchQuery = ref('')
 const searchMode = ref<KbSearchMode>('hybrid')
 const searchFinalTopKOverride = ref<number | null>(null)
 const searchRecallTopKOverride = ref<number | null>(null)
+const searchRerankTopKOverride = ref<number | null>(null)
 const searchUseRerankerOverride = ref<boolean | null>(null)
 const searchScoreThresholdOverride = ref<number | null>(null)
 const searchRrfKOverride = ref<number | null>(null)
@@ -100,6 +101,7 @@ const configChunkSize = ref<number | null>(null)
 const configChunkOverlap = ref<number | null>(null)
 const configFinalTopK = ref<number | null>(null)
 const configRecallTopK = ref<number | null>(null)
+const configRerankTopK = ref<number | null>(null)
 const configUseReranker = ref<boolean | null>(null)
 const configScoreThreshold = ref<number | null>(null)
 const configRrfK = ref<number | null>(null)
@@ -117,7 +119,10 @@ const defaultQueryLimit = computed(() =>
   ?? 10,
 )
 const defaultRecallTopK = computed(() =>
-  collectionConfig.value?.query_params?.recall_top_k ?? KB_DEFAULT_QUERY.recall_top_k ?? 50,
+  collectionConfig.value?.query_params?.recall_top_k ?? KB_DEFAULT_QUERY.recall_top_k ?? 20,
+)
+const defaultRerankTopK = computed(() =>
+  collectionConfig.value?.query_params?.rerank_top_k ?? KB_DEFAULT_QUERY.rerank_top_k ?? 15,
 )
 const defaultUseReranker = computed(() =>
   collectionConfig.value?.query_params?.use_reranker ?? KB_DEFAULT_QUERY.use_reranker ?? true,
@@ -275,6 +280,7 @@ async function loadData() {
     if (configData?.query_params) {
       configFinalTopK.value = configData.query_params.final_top_k ?? configData.query_params.limit ?? null
       configRecallTopK.value = configData.query_params.recall_top_k ?? null
+      configRerankTopK.value = configData.query_params.rerank_top_k ?? null
       configUseReranker.value = configData.query_params.use_reranker ?? null
       configRrfK.value = configData.query_params.rrf_k ?? null
       const st = configData.query_params.score_threshold
@@ -353,6 +359,9 @@ async function handleSearch() {
     }
     if (searchRecallTopKOverride.value !== null && searchRecallTopKOverride.value !== undefined) {
       body.recall_top_k = searchRecallTopKOverride.value
+    }
+    if (searchRerankTopKOverride.value !== null && searchRerankTopKOverride.value !== undefined) {
+      body.rerank_top_k = searchRerankTopKOverride.value
     }
     if (searchUseRerankerOverride.value !== null) {
       body.use_reranker = searchUseRerankerOverride.value
@@ -451,6 +460,7 @@ async function saveCollectionConfig() {
         search_mode: searchMode.value,
         final_top_k: configFinalTopK.value ?? defaultQueryLimit.value as number,
         recall_top_k: configRecallTopK.value ?? defaultRecallTopK.value,
+        rerank_top_k: configRerankTopK.value ?? defaultRerankTopK.value,
         use_reranker: configUseReranker.value ?? defaultUseReranker.value,
         score_threshold: configScoreThreshold.value,
         rrf_k: configRrfK.value ?? defaultRrfK.value,
@@ -571,6 +581,7 @@ async function saveCollectionConfig() {
             v-model:search-mode="searchMode"
             v-model:final-top-k-override="searchFinalTopKOverride"
             v-model:recall-top-k-override="searchRecallTopKOverride"
+            v-model:rerank-top-k-override="searchRerankTopKOverride"
             v-model:use-reranker-override="searchUseRerankerOverride"
             v-model:score-threshold-override="searchScoreThresholdOverride"
             v-model:rrf-k-override="searchRrfKOverride"
@@ -578,6 +589,7 @@ async function saveCollectionConfig() {
             :loading="searching"
             :default-limit="defaultQueryLimit as number"
             :default-recall-top-k="defaultRecallTopK as number"
+            :default-rerank-top-k="defaultRerankTopK as number"
             :default-use-reranker="defaultUseReranker as boolean"
             :default-rrf-k="defaultRrfK as number"
             @search="handleSearch"
@@ -652,6 +664,9 @@ async function saveCollectionConfig() {
               </n-form-item>
               <n-form-item label="recall_top_k">
                 <n-input-number v-model:value="configRecallTopK" :min="1" :max="200" clearable style="width: 100%" />
+              </n-form-item>
+              <n-form-item label="rerank_top_k">
+                <n-input-number v-model:value="configRerankTopK" :min="1" :max="100" clearable style="width: 100%" />
               </n-form-item>
               <n-form-item label="rrf_k（混合检索）">
                 <n-input-number v-model:value="configRrfK" :min="1" :max="500" clearable style="width: 100%" />

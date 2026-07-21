@@ -14,7 +14,7 @@ from agent.base.base_agent import BaseAgent, DEFAULT_RECURSION_LIMIT
 from agent.factory import build_subagent_default_middleware, create_noesis_agent
 from agent.mcp.loader import load_mcp_tools
 from agent.prompts import PromptProfile, build_prompt
-from agent.backends import SKILL_SOURCES, agent_sandbox_session, create_agent_backend
+from agent.backends import agent_sandbox_session, create_agent_backend
 from config.mcp_config import MCP_PROFILE_FAULT_OPERATION
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.subagents import SubAgent
@@ -70,6 +70,7 @@ class FaultOperationAgent(BaseAgent):
         file_list: dict = None,
         qa_type: Optional[str] = None,
         model_id: Optional[str] = None,
+        mcp_tools: Optional[list] = None,
     ) -> AsyncGenerator[dict, None]:
         """运行 Agent 并返回流式响应"""
         task_id = session_id or str(uuid.uuid4())
@@ -99,15 +100,21 @@ class FaultOperationAgent(BaseAgent):
             }
 
             async with agent_sandbox_session(user_id, session_id):
-                mcp_tools = await self._load_mcp_tools()
+                resolved_mcp = (
+                    list(mcp_tools)
+                    if mcp_tools is not None
+                    else await self._load_mcp_tools()
+                )
                 backend = await create_agent_backend(user_id, session_id)
 
                 agent = create_noesis_agent(
-                    tools=mcp_tools,
+                    tools=resolved_mcp,
                     system_prompt=build_prompt(PromptProfile.FAULT_OPERATION),
                     checkpointer=self.checkpointer,
                     backend=backend,
-                    subagents=_build_fault_operation_subagents(backend, mcp_tools, model_id=model_id),
+                    subagents=_build_fault_operation_subagents(
+                        backend, resolved_mcp, model_id=model_id
+                    ),
                     model_id=model_id,
                 )
 

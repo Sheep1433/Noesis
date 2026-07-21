@@ -1,7 +1,7 @@
 /**
  * Skills 文件目录 API（平台预置 + 个人上传）
  */
-import { authFetch } from '@/utils/authHttp'
+import { authFetch, parseAuthJson } from '@/utils/authHttp'
 
 const API_BASE = `${location.origin}/api/skills`
 
@@ -63,7 +63,7 @@ export async function getSkillsFsTree(): Promise<SkillFsTreeResponse> {
     throw new Error(`获取 Skills 目录失败: ${response.status}`)
   }
 
-  return response.json()
+  return parseAuthJson<SkillFsTreeResponse>(response)
 }
 
 /**
@@ -84,10 +84,10 @@ export async function getSkillsFsFile(
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: response.statusText }))
-    throw new Error(err.detail || `读取文件失败: ${response.status}`)
+    throw new Error(err.detail || err.msg || `读取文件失败: ${response.status}`)
   }
 
-  return response.json()
+  return parseAuthJson<SkillFsFileContent>(response)
 }
 
 /**
@@ -146,6 +146,94 @@ export function isDeletableUserSkillPackage(node: SkillFsTreeNode): boolean {
   }
   const { path } = parseSourceFromKey(node.key)
   return path.length > 0 && !path.includes('/')
+}
+
+/** skills.sh 市场条目 */
+export interface SkillMarketItem {
+  id: string
+  skill_id: string
+  name: string
+  source: string
+  installs: number
+  market_url: string
+  installed: boolean
+  install_match: 'none' | 'exact' | 'name_conflict'
+}
+
+export interface SkillMarketListResponse {
+  items: SkillMarketItem[]
+  query: string
+}
+
+export interface SkillMarketDetailResponse {
+  item: SkillMarketItem
+  skill_md: string
+  skill_md_path: string
+}
+
+export type SkillMarketSort = 'all_time' | 'trending'
+
+export async function browseSkillsMarket(
+  sort: SkillMarketSort = 'trending',
+  limit = 40,
+): Promise<SkillMarketListResponse> {
+  const url = `${API_BASE}/market/browse?sort=${encodeURIComponent(sort)}&limit=${limit}`
+  const response = await authFetch(url, { method: 'GET' })
+  if (!response.ok) {
+    throw new Error(`获取榜单失败: ${response.status}`)
+  }
+  return parseAuthJson<SkillMarketListResponse>(response)
+}
+
+export async function searchSkillsMarket(
+  q: string,
+  limit = 20,
+): Promise<SkillMarketListResponse> {
+  const url = `${API_BASE}/market/search?q=${encodeURIComponent(q)}&limit=${limit}`
+  const response = await authFetch(url, { method: 'GET' })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: response.statusText }))
+    throw new Error(err.detail || err.msg || `搜索失败: ${response.status}`)
+  }
+  return parseAuthJson<SkillMarketListResponse>(response)
+}
+
+export async function getSkillsMarketDetail(
+  source: string,
+  skillId: string,
+): Promise<SkillMarketDetailResponse> {
+  const url = `${API_BASE}/market/detail?source=${encodeURIComponent(source)}&skill_id=${encodeURIComponent(skillId)}`
+  const response = await authFetch(url, { method: 'GET' })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: response.statusText }))
+    throw new Error(err.detail || err.msg || `获取详情失败: ${response.status}`)
+  }
+  return parseAuthJson<SkillMarketDetailResponse>(response)
+}
+
+export async function installSkillsMarketPackage(params: {
+  source: string
+  skill_id: string
+  overwrite?: boolean
+}): Promise<{ success: boolean, message: string }> {
+  const url = `${API_BASE}/market/install`
+  const response = await authFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source: params.source,
+      skill_id: params.skill_id,
+      overwrite: Boolean(params.overwrite),
+    }),
+  })
+  const json = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(json.detail || json.msg || `安装失败: ${response.status}`)
+  }
+  return {
+    success: Boolean(json.success ?? true),
+    message: json.msg || '安装成功',
+  }
 }
 
 export { parseSourceFromKey }

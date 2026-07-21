@@ -60,7 +60,8 @@ def test_normalize_query_defaults_hybrid():
     assert params["search_mode"] == "hybrid"
     assert params["use_reranker"] is True
     assert params["final_top_k"] == 10
-    assert params["recall_top_k"] == 50
+    assert params["recall_top_k"] == 20
+    assert params["rerank_top_k"] == 15
 
 
 def test_chunk_long_plain_text_produces_chunks():

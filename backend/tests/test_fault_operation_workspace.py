@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from agent.backends.aio_sandbox import AioSandboxBackend
+from agent.backends.docker_exec_sandbox import DockerExecSandboxBackend
 from agent.fault_operation_agent import FaultOperationAgent
 
 
@@ -15,18 +15,15 @@ def test_workspace_backend_root_dir_matches_session(tmp_path: Path) -> None:
     from config import user_data_paths as udp
 
     users_root = tmp_path / "users"
-    fake_client = type("C", (), {})()
 
     with patch.object(udp, "_USERS_ROOT", users_root):
         paths.ensure_workspace_dir("u1", "fault-sess-1")
-        backend = AioSandboxBackend(
-            base_url="http://aio:8080",
+        backend = DockerExecSandboxBackend(
             user_id="u1",
             session_id="fault-sess-1",
-            client=fake_client,
         )
 
-    assert backend._session_workspace == "/workspace/sessions/fault-sess-1/workspace"
+    assert backend._workspace == "/workspace"
     assert (users_root / "u1" / "sessions" / "fault-sess-1" / "workspace").is_dir()
 
 

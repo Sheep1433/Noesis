@@ -509,11 +509,36 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   }
 
   .kb-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .kb-card {
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .kb-card-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .kb-card-name {
+    font-size: 14px;
+  }
+
+  .kb-card-tags {
+    margin-top: 6px;
   }
 
   .kb-card-stats {
     grid-template-columns: repeat(2, 1fr);
+    margin-top: 8px;
+  }
+
+  .kb-card-stats dd {
+    font-size: 13px;
   }
 }
 
@@ -526,6 +551,14 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   .summary-stats {
     font-size: 12px;
     line-height: 1.5;
+  }
+
+  .kb-grid {
+    gap: 8px;
+  }
+
+  .kb-card {
+    padding: 10px;
   }
 }
 </style>

@@ -1,7 +1,7 @@
 /**
  * 知识库管理 API
  */
-import { authFetch } from '@/utils/authHttp'
+import { authFetch, parseAuthJson } from '@/utils/authHttp'
 
 const API_BASE = `${location.origin}/api/knowledge_base`
 
@@ -22,6 +22,7 @@ export interface KbQueryParams {
   limit?: number
   final_top_k?: number
   recall_top_k?: number
+  rerank_top_k?: number
   use_reranker?: boolean
   score_threshold?: number | null
   search_mode?: KbSearchMode
@@ -31,7 +32,8 @@ export interface KbQueryParams {
 
 export const KB_DEFAULT_QUERY: KbQueryParams = {
   final_top_k: 10,
-  recall_top_k: 50,
+  recall_top_k: 20,
+  rerank_top_k: 15,
   search_mode: 'hybrid',
   use_reranker: true,
   score_threshold: null,
@@ -120,6 +122,7 @@ export interface SearchCollectionRequest {
   limit?: number
   final_top_k?: number
   recall_top_k?: number
+  rerank_top_k?: number
   use_reranker?: boolean
   score_threshold?: number | null
   search_mode?: KbSearchMode
@@ -187,98 +190,94 @@ async function kbRequest(url: string, init?: RequestInit): Promise<Response> {
   return response
 }
 
+async function kbJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await kbRequest(url, init)
+  return parseAuthJson<T>(response)
+}
+
 /**
  * 获取知识库连接状态
  */
 export async function getKnowledgeBaseStatus(): Promise<KnowledgeBaseStatus> {
-  const response = await kbRequest(`${API_BASE}/status`, { method: 'GET' })
-  return response.json()
+  return kbJson<KnowledgeBaseStatus>(`${API_BASE}/status`, { method: 'GET' })
 }
 
 /**
  * 获取 Collection 列表
  */
 export async function getCollections(): Promise<CollectionInfo[]> {
-  const response = await kbRequest(`${API_BASE}/collections`, { method: 'GET' })
-  return response.json()
+  return kbJson<CollectionInfo[]>(`${API_BASE}/collections`, { method: 'GET' })
 }
 
 /**
  * 获取 Collection 详情
  */
 export async function getCollection(name: string): Promise<CollectionDetail> {
-  const response = await kbRequest(
+  return kbJson<CollectionDetail>(
     `${API_BASE}/collections/${encodeURIComponent(name)}`,
     { method: 'GET' },
   )
-  return response.json()
 }
 
 /**
  * 获取 Collection 下的文档列表
  */
 export async function getDocuments(collectionName: string): Promise<DocumentInfo[]> {
-  const response = await kbRequest(
+  return kbJson<DocumentInfo[]>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents`,
     { method: 'GET' },
   )
-  return response.json()
 }
 
 /**
  * 获取文档的分片列表
  */
 export async function getDocumentShards(collectionName: string, fileName: string): Promise<ShardInfo[]> {
-  const response = await kbRequest(
+  return kbJson<ShardInfo[]>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}/shards`,
     { method: 'GET' },
   )
-  return response.json()
 }
 
 /**
  * 获取分片详情
  */
 export async function getShardDetail(collectionName: string, shardId: string): Promise<ShardDetail> {
-  const response = await kbRequest(
+  return kbJson<ShardDetail>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/shards/${encodeURIComponent(shardId)}`,
     { method: 'GET' },
   )
-  return response.json()
 }
 
 /**
  * 删除文档
  */
 export async function deleteDocument(collectionName: string, fileName: string): Promise<DeleteResponse> {
-  const response = await kbRequest(
+  return kbJson<DeleteResponse>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}`,
     { method: 'DELETE' },
   )
-  return response.json()
 }
 
 /**
  * 创建 Collection
  */
 export async function createCollection(request: CreateCollectionRequest): Promise<CreateCollectionResponse> {
-  const response = await kbRequest(`${API_BASE}/collections`, {
+  return kbJson<CreateCollectionResponse>(`${API_BASE}/collections`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   })
-  return response.json()
 }
 
 /**
  * 删除 Collection
  */
 export async function deleteCollection(collectionName: string): Promise<{ success: boolean, message: string }> {
-  const response = await kbRequest(
+  return kbJson<{ success: boolean, message: string }>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}`,
     { method: 'DELETE' },
   )
-  return response.json()
 }
 
 /** 上传文档（解析分块后写入知识库） */
@@ -293,18 +292,16 @@ export async function uploadDocument(
     formData.append('processing_params', JSON.stringify(processingParams))
   }
 
-  const response = await kbRequest(
-    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/upload`,
-    { method: 'POST', body: formData },
-  )
-
-  return response.json() as Promise<{
+  return kbJson<{
     success: boolean
     message: string
     file_name?: string
     shards_created?: number
     extracted_markdown?: string | null
-  }>
+  }>(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/upload`,
+    { method: 'POST', body: formData },
+  )
 }
 
 /**
@@ -328,6 +325,9 @@ export async function searchCollection(
   if (body.recall_top_k !== undefined && body.recall_top_k !== null) {
     payload.recall_top_k = body.recall_top_k
   }
+  if (body.rerank_top_k !== undefined && body.rerank_top_k !== null) {
+    payload.rerank_top_k = body.rerank_top_k
+  }
   if (body.use_reranker !== undefined) {
     payload.use_reranker = body.use_reranker
   }
@@ -341,7 +341,7 @@ export async function searchCollection(
     payload.rrf_k = body.rrf_k
   }
 
-  const response = await kbRequest(
+  return kbJson<SearchCollectionResponse>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/search`,
     {
       method: 'POST',
@@ -349,64 +349,20 @@ export async function searchCollection(
       body: JSON.stringify(payload),
     },
   )
-
-  const json = await response.json() as {
-    data?: SearchCollectionResponse | SearchResult[]
-    results?: SearchResult[]
-    timing?: SearchTiming
-  } | SearchResult[]
-
-  if (Array.isArray(json)) {
-    return { results: json, timing: emptySearchTiming() }
-  }
-
-  const data = json.data
-  if (data && !Array.isArray(data) && Array.isArray(data.results)) {
-    return {
-      results: data.results,
-      timing: data.timing ?? emptySearchTiming(),
-    }
-  }
-  if (data && Array.isArray(data)) {
-    return { results: data, timing: emptySearchTiming() }
-  }
-  if (json && Array.isArray(json.results)) {
-    return {
-      results: json.results,
-      timing: json.timing ?? emptySearchTiming(),
-    }
-  }
-  return { results: [], timing: emptySearchTiming() }
-}
-
-function emptySearchTiming(): SearchTiming {
-  return {
-    prepare_ms: 0,
-    recall_ms: 0,
-    parse_ms: 0,
-    rerank_ms: 0,
-    post_ms: 0,
-    total_ms: 0,
-    rerank_applied: false,
-    recall_hits: 0,
-    final_hits: 0,
-    search_mode: 'hybrid',
-  }
 }
 
 export async function getCollectionConfig(collectionName: string): Promise<CollectionConfig> {
-  const response = await kbRequest(
+  return kbJson<CollectionConfig>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/config`,
     { method: 'GET' },
   )
-  return response.json()
 }
 
 export async function patchCollectionConfig(
   collectionName: string,
   patch: { processing_params?: KbProcessingParams, query_params?: KbQueryParams },
 ): Promise<CollectionConfig> {
-  const response = await kbRequest(
+  return kbJson<CollectionConfig>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/config`,
     {
       method: 'PATCH',
@@ -414,7 +370,6 @@ export async function patchCollectionConfig(
       body: JSON.stringify(patch),
     },
   )
-  return response.json()
 }
 
 export type {

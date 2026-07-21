@@ -72,3 +72,45 @@ def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _conn, _svc_av
     hits = result.hits
     assert len(hits) == 2
     assert hits[0].score >= hits[1].score or hits[0].file_name == "b.md"
+
+
+@patch("kb.retrieval.service.rerank_documents")
+@patch("kb.retrieval.service.is_rerank_available", return_value=True)
+@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch.object(
+    __import__("kb.retrieval.service", fromlist=["KbRetrievalService"]).KbRetrievalService,
+    "_get_retrieval",
+)
+def test_retrieval_caps_rerank_input(mock_get_retrieval, _conn, _avail, mock_rerank):
+    """rerank 只吃 rerank_top_k 条，控制 API documents 计费。"""
+    from langchain_core.documents import Document
+
+    from kb.retrieval import KbRetrievalService
+
+    docs = [
+        (Document(page_content=f"d{i}", metadata={"file_name": f"{i}.md", "point_id": str(i)}), float(i))
+        for i in range(10, 0, -1)
+    ]
+    retrieval = MagicMock()
+    retrieval.hybrid_search_with_scores.return_value = docs
+    mock_get_retrieval.return_value = retrieval
+    mock_rerank.return_value = [(0, 0.9), (1, 0.8), (2, 0.1)]
+
+    result = KbRetrievalService.search(
+        collection_name="kb1",
+        query="test",
+        query_execution_params={
+            "use_reranker": True,
+            "search_mode": "hybrid",
+            "final_top_k": 3,
+            "recall_top_k": 10,
+            "rerank_top_k": 3,
+        },
+        vector_dimension=1024,
+    )
+
+    mock_rerank.assert_called_once()
+    _args, _kwargs = mock_rerank.call_args
+    assert _args[0] == "test"
+    assert len(_args[1]) == 3
+    assert len(result.hits) == 3

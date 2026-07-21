@@ -1,40 +1,10 @@
-"""sandbox-runner manager 单元测试。"""
+"""sandbox-runner manager / paths 单元测试。"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
-
-from manager import _extract_host_port, _find_free_host_port, _published_base_url
-
-
-def test_published_base_url_respects_public_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SANDBOX_PUBLIC_HOST", "host.docker.internal")
-    assert _published_base_url(18081) == "http://host.docker.internal:18081"
-
-
-def test_find_free_host_port_returns_bindable_port() -> None:
-    port = _find_free_host_port(start=39000)
-    assert 39000 <= port < 41000
-
-
-def test_extract_host_port_from_label() -> None:
-    container = MagicMock()
-    container.labels = {"noesis.host_port": "19001"}
-    container.attrs = {"NetworkSettings": {"Ports": {}}}
-    assert _extract_host_port(container, 8080) == 19001
-
-
-def test_extract_host_port_from_docker_bindings() -> None:
-    container = MagicMock()
-    container.labels = {}
-    container.attrs = {
-        "NetworkSettings": {"Ports": {"8080/tcp": [{"HostPort": "19002"}]}}
-    }
-    assert _extract_host_port(container, 8080) == 19002
 
 
 def test_resolve_host_data_dir_defaults_to_repo_data(
@@ -59,3 +29,22 @@ def test_resolve_skills_host_dir_defaults_to_extensions_skills(
     (tmp_path / "backend").mkdir()
     (tmp_path / "extensions" / "skills").mkdir(parents=True)
     assert resolve_skills_host_dir() == (tmp_path / "extensions" / "skills").resolve()
+
+
+def test_ensure_sandbox_mount_dirs_creates(tmp_path: Path) -> None:
+    from paths import ensure_sandbox_mount_dirs
+
+    ws = tmp_path / "workspace"
+    skills = tmp_path / "skills"
+    ensure_sandbox_mount_dirs(ws, skills, uid=10001, gid=10001)
+    assert ws.is_dir()
+    assert skills.is_dir()
+
+
+def test_container_name_is_session_scoped() -> None:
+    from manager import _container_name
+
+    a = _container_name("u1", "s1")
+    b = _container_name("u1", "s2")
+    assert a != b
+    assert a.startswith("noesis-sandbox-")

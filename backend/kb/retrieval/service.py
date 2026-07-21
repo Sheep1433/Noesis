@@ -57,7 +57,7 @@ class KbSearchResult:
 
 
 class KbRetrievalService:
-    """集合内检索：recall → rerank → score_threshold → final_top_k。"""
+    """集合内检索：recall → 截断 rerank_top_k → rerank → score_threshold → final_top_k。"""
 
     @classmethod
     def qdrant_url(cls) -> str:
@@ -106,6 +106,7 @@ class KbRetrievalService:
         rrf_k: Optional[int] = None,
         use_reranker: Optional[bool] = None,
         recall_top_k: Optional[int] = None,
+        rerank_top_k: Optional[int] = None,
         final_top_k: Optional[int] = None,
     ) -> KbSearchResult:
         if not is_qdrant_connected():
@@ -129,6 +130,8 @@ class KbRetrievalService:
             legacy_overrides["use_reranker"] = use_reranker
         if recall_top_k is not None:
             legacy_overrides["recall_top_k"] = recall_top_k
+        if rerank_top_k is not None:
+            legacy_overrides["rerank_top_k"] = rerank_top_k
         if query_execution_params:
             legacy_overrides.update(
                 {k: v for k, v in dict(query_execution_params).items() if v is not None}
@@ -144,13 +147,19 @@ class KbRetrievalService:
             raise ValueError(f"不支持的 search_mode: {mode}")
 
         try:
-            recall_k = max(1, int(params.get("recall_top_k") or 50))
+            recall_k = max(1, int(params.get("recall_top_k") or 20))
         except (TypeError, ValueError):
-            recall_k = 50
+            recall_k = 20
         try:
             final_k = max(1, int(params.get("final_top_k") or 10))
         except (TypeError, ValueError):
             final_k = 10
+        try:
+            # 默认略大于 final，避免精排候选过窄；且不超过 recall
+            rerank_k = max(1, int(params.get("rerank_top_k") or 15))
+        except (TypeError, ValueError):
+            rerank_k = 15
+        rerank_k = min(rerank_k, recall_k)
         try:
             rrf_k_i = max(1, int(params.get("rrf_k") or 60))
         except (TypeError, ValueError):
@@ -199,9 +208,13 @@ class KbRetrievalService:
 
         rerank_ms = 0.0
         rerank_applied = False
+        rerank_input_count = 0
         if use_rerank and hits and is_rerank_available():
+            hits.sort(key=lambda h: h.score, reverse=True)
+            candidates = hits[:rerank_k]
+            rerank_input_count = len(candidates)
             t_rerank = time.perf_counter()
-            hits = cls._apply_rerank(query, hits)
+            hits = cls._apply_rerank(query, candidates)
             rerank_ms = (time.perf_counter() - t_rerank) * 1000
             rerank_applied = True
         elif use_rerank and hits and not is_rerank_available():
@@ -234,8 +247,10 @@ class KbRetrievalService:
             f"collection={collection_name} mode={mode} "
             f"prepare_ms={prepare_ms:.1f} recall_ms={recall_ms:.1f} parse_ms={parse_ms:.1f} "
             f"rerank_ms={rerank_ms:.1f} rerank_applied={rerank_applied} "
+            f"rerank_docs={rerank_input_count} "
             f"post_ms={post_ms:.1f} recall_hits={recall_hit_count} "
-            f"final_hits={len(final_hits)} recall_top_k={recall_k} final_top_k={final_k} "
+            f"final_hits={len(final_hits)} recall_top_k={recall_k} "
+            f"rerank_top_k={rerank_k} final_top_k={final_k} "
             f"total_ms={total_ms:.1f}"
         )
         return KbSearchResult(hits=final_hits, timing=timing)

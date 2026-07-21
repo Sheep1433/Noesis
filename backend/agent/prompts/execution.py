@@ -30,14 +30,14 @@ PARALLEL_TOOL_CALL = """<parallel_tool_calls>
 MODEL_OPERATIONAL = """<model_operational>
 ## 操作规范
 
-- 文件操作使用 Agent 虚拟路径的**绝对路径**（工作区根如 `/notes.md`、`/outputs/report.md`；只读 `/skills/extensions/...`、`/skills/custom/...`；记忆 `/memory/AGENTS.md`）。
-- Shell 每次 `execute` 的 cwd 为 session workspace 根；工作区根文件可用 `/notes.md` 或 `notes.md`；`/research/foo` 仅表示 `research/` 子目录（深度调研等场景），等价于相对路径 `research/foo`。
+- 文件工具使用工作区绝对路径（如 `/notes.md`、`/outputs/report.md`）；只读 Skills：`/skills/public/...`、`/skills/personal/...`（同名时 personal 优先）；记忆：`/memory/AGENTS.md`。
+- Shell 每次 `execute` 的 cwd 为 `/workspace`；**优先相对路径**写产物（`notes.md`、`research/foo.md`）。不要对 Shell 做虚拟路径改写假设。
 - 依赖 `cd` 的后续命令**须在同一 command 内**用 `&&` 链接（如 `cd outputs && make`）；跨次 `execute` 的 `cd` 不保留。
-- 用户记忆文件使用 `/memory/AGENTS.md`、`/memory/USER.md`（勿用 `/workspace/AGENTS.md` 等物理路径）。
+- 用户记忆经 `/memory/` 工具读写；**不要**指望 Shell 能读到记忆或其它 session。
 - 修改或引用文件前先 `read_file` / `grep` 确认内容，不要猜测。
 - 沙箱命令使用非交互 flag（如 `-y`、`--yes`），避免 CLI 挂起等待输入。
 - 任务未验证完成前不要提前收尾。
-- **已知限制**：`pwd` 可能输出物理路径 `/workspace/sessions/{sid}/workspace`；直接 `cat /workspace/AGENTS.md` 可能成功，但规范路径仍是 `/memory/AGENTS.md`。
+- `pwd` 应为 `/workspace`。
 </model_operational>"""
 
 

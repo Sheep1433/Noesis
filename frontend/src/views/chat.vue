@@ -1,10 +1,12 @@
 <script lang="tsx" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
+import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { ensureSession, getSession, stopChat, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
+import MentionPicker from '@/components/Chat/MentionPicker.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
@@ -13,8 +15,16 @@ import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
+import { supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
+import {
+  candidateToMention,
+  ensureMentionCatalog,
+  formatMentionToken,
+  invalidateMentionContextCache,
+  mentionToPayload,
+} from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { isUnauthorizedError } from '@/utils/authHttp'
@@ -59,6 +69,7 @@ const sessionFilesPanelOpen = ref(false)
 const showDefaultPage = ref(true)
 
 function reloadSessionFilesPanel() {
+  invalidateMentionContextCache(uuids.value[qa_type.value] || undefined)
   if (!sessionFilesPanelOpen.value) {
     return
   }
@@ -175,6 +186,14 @@ const stylizingLoading = ref(false)
 // 输入字符串
 const inputTextString = ref('')
 const refInputTextString = ref<InputInst | null>()
+const composerMentions = ref<ComposerMention[]>([])
+const mentionPickerRef = ref<InstanceType<typeof MentionPicker> | null>(null)
+const mentionPickerOpen = ref(false)
+const mentionPickerQuery = ref('')
+const mentionPickerCandidates = ref<MentionCandidate[]>([])
+const mentionPickerLoading = ref(false)
+const mentionTriggerIndex = ref(-1)
+const mentionTriggerChar = ref<'/' | '@' | ''>('')
 
 interface FileUploadRef {
   pendingUploadFileInfoList: UploadFileInfo[] | null | undefined
@@ -337,6 +356,7 @@ const conversationItems = ref<
     content: string
     reasoning?: string
     file_key: ChatAttachmentItem[]
+    mentions?: ComposerMention[]
     tool_calls?: any[]
     messageContent?: MessageContentV1
     msg_metadata?: any
@@ -399,23 +419,13 @@ const uuids = ref<Record<string, string>>({})
 
 const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
 const selectedKbCollections = ref<string[]>([])
+const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
+const selectedMcpServers = ref<string[]>([])
+const selectedSkills = ref<string[]>([])
+const skillsAllEnabled = ref(true)
 
-async function onChatImageUploaded() {
-  if (!usesSessionAttachmentUpload(qa_type.value)) {
-    return
-  }
-  const sessionId = uuids.value[qa_type.value] ?? ''
-  if (!sessionId) {
-    return
-  }
-  await ensureVisionModelForImageUpload({
-    sessionId,
-    selectedModelId,
-  })
-}
-
-function normalizeKbCollections(raw: unknown): string[] {
+function normalizeIdList(raw: unknown): string[] {
   if (!Array.isArray(raw)) {
     return []
   }
@@ -432,6 +442,24 @@ function normalizeKbCollections(raw: unknown): string[] {
   return out
 }
 
+async function onChatImageUploaded() {
+  if (!usesSessionAttachmentUpload(qa_type.value)) {
+    return
+  }
+  const sessionId = uuids.value[qa_type.value] ?? ''
+  if (!sessionId) {
+    return
+  }
+  await ensureVisionModelForImageUpload({
+    sessionId,
+    selectedModelId,
+  })
+}
+
+function normalizeKbCollections(raw: unknown): string[] {
+  return normalizeIdList(raw)
+}
+
 const showContextIndicator = computed(
   () => qa_type.value !== 'TEST_CASE_QA' && hasValidContextWindow(sessionContext.value),
 )
@@ -446,12 +474,31 @@ async function loadSessionContext(sessionId: string) {
     const raw = session.extra?.context
     sessionContext.value = hasValidContextWindow(raw) ? raw : null
     selectedKbCollections.value = normalizeKbCollections(session.extra?.kb_collections)
+    kbSearchEnabled.value = session.extra?.kb_search_enabled !== false
     const storedModelId = String(session.extra?.model_id ?? '').trim()
-    selectedModelId.value = storedModelId
+    if (storedModelId) {
+      selectedModelId.value = storedModelId
+    }
+    if (Object.prototype.hasOwnProperty.call(session.extra ?? {}, 'mcp_servers')) {
+      selectedMcpServers.value = normalizeIdList(session.extra?.mcp_servers)
+    } else {
+      selectedMcpServers.value = []
+    }
+    if (Object.prototype.hasOwnProperty.call(session.extra ?? {}, 'enabled_skills')) {
+      selectedSkills.value = normalizeIdList(session.extra?.enabled_skills)
+      skillsAllEnabled.value = false
+    } else {
+      selectedSkills.value = []
+      skillsAllEnabled.value = true
+    }
   } catch {
     sessionContext.value = null
     selectedKbCollections.value = []
+    kbSearchEnabled.value = true
     selectedModelId.value = ''
+    selectedMcpServers.value = []
+    selectedSkills.value = []
+    skillsAllEnabled.value = true
   }
 }
 
@@ -785,6 +832,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
       question: textContent,
       content: '',
       file_key: upload_file_key,
+      mentions: [...composerMentions.value],
       role: 'user',
     })
     // 更新 currentRenderIndex 以包含新添加的项
@@ -819,15 +867,28 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   }
   if (qa_type.value === 'COMMON_QA') {
     streamExtra.kb_collections = selectedKbCollections.value
+    streamExtra.kb_search_enabled = kbSearchEnabled.value
   }
   if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
     streamExtra.model_id = selectedModelId.value
+  }
+  if (qa_type.value !== 'TEST_CASE_QA' && selectedMcpServers.value.length > 0) {
+    streamExtra.mcp_servers = selectedMcpServers.value
+  }
+  if (qa_type.value === 'SUPER_AGENT_QA' && !skillsAllEnabled.value) {
+    streamExtra.enabled_skills = selectedSkills.value
+  }
+  if (composerMentions.value.length > 0) {
+    streamExtra.mentions = composerMentions.value.map(mentionToPayload)
   }
   await sseStream.sendMessage(
     uuids.value[qa_type.value],
     textContent,
     streamExtra,
   )
+
+  composerMentions.value = []
+  closeMentionPicker()
 
   // 滚动到底部
   scrollToBottom()
@@ -861,10 +922,119 @@ const placeholder = computed(() => {
   if (uploadingOnSend.value) {
     return '附件上传中...'
   }
+  if (supportsSlashSkills(qa_type.value)) {
+    return '行首 / 选 Skills；空格后 @ 可引用多个文件或 subagent…'
+  }
+  if (supportsAtMentions(qa_type.value)) {
+    return '空格后 @ 引用文件或 subagent…'
+  }
   return '输入任意问题...'
 })
 
+function getComposerTextarea(): HTMLTextAreaElement | null {
+  const inst = refInputTextString.value as InputInst & { textareaElRef?: HTMLTextAreaElement } | null
+  if (inst?.textareaElRef) {
+    return inst.textareaElRef
+  }
+  const root = (inst as unknown as { $el?: HTMLElement })?.$el
+  return root?.querySelector?.('textarea') ?? null
+}
+
+function closeMentionPicker() {
+  mentionPickerOpen.value = false
+  mentionPickerQuery.value = ''
+  mentionTriggerIndex.value = -1
+  mentionTriggerChar.value = ''
+}
+
+async function syncMentionPickerFromInput() {
+  const ta = getComposerTextarea()
+  const text = inputTextString.value
+  const pos = ta?.selectionStart ?? text.length
+  const before = text.slice(0, pos)
+  // / 仅行首；@ 允许空白边界（行首或空格/制表后）
+  const slashMatch = before.match(/(^|\n)\/(\S*)$/)
+  const atMatch = before.match(/(^|\s)@(\S*)$/)
+  const match = slashMatch
+    ? { trigger: '/' as const, query: slashMatch[2] || '', prefix: slashMatch[1] }
+    : atMatch
+      ? { trigger: '@' as const, query: atMatch[2] || '', prefix: atMatch[1] }
+      : null
+  if (!match) {
+    closeMentionPicker()
+    return
+  }
+  const { trigger, query } = match
+  if (trigger === '/' && !supportsSlashSkills(qa_type.value)) {
+    closeMentionPicker()
+    return
+  }
+  if (trigger === '@' && !supportsAtMentions(qa_type.value)) {
+    closeMentionPicker()
+    return
+  }
+  const triggerAt = before.length - 1 - query.length
+  const needLoad = !mentionPickerOpen.value
+    || mentionTriggerChar.value !== trigger
+    || mentionTriggerIndex.value !== triggerAt
+  mentionTriggerChar.value = trigger
+  mentionTriggerIndex.value = triggerAt
+  mentionPickerQuery.value = query
+  mentionPickerOpen.value = true
+  if (needLoad) {
+    mentionPickerLoading.value = true
+    try {
+      mentionPickerCandidates.value = await ensureMentionCatalog({
+        qaType: qa_type.value,
+        sessionId: uuids.value[qa_type.value] || '',
+        mode: trigger === '/' ? 'slash' : 'at',
+      })
+    } finally {
+      mentionPickerLoading.value = false
+    }
+  }
+}
+
+function onMentionSelect(item: MentionCandidate) {
+  const mention = candidateToMention(item)
+  const token = formatMentionToken(mention)
+  const existingKey = `${mention.type}:${mention.id || mention.path}`
+  if (!composerMentions.value.some((m) => `${m.type}:${m.id || m.path}` === existingKey)) {
+    composerMentions.value = [...composerMentions.value, mention]
+  }
+  const ta = getComposerTextarea()
+  const text = inputTextString.value
+  const pos = ta?.selectionStart ?? text.length
+  const start = mentionTriggerIndex.value
+  if (start >= 0) {
+    const insert = `${token} `
+    inputTextString.value = `${text.slice(0, start)}${insert}${text.slice(pos)}`
+    const caret = start + insert.length
+    nextTick(() => {
+      ta?.focus()
+      ta?.setSelectionRange(caret, caret)
+    })
+  } else {
+    nextTick(() => ta?.focus())
+  }
+  closeMentionPicker()
+}
+
+function formatMentionChip(m: ComposerMention) {
+  return formatMentionToken(m)
+}
+
 function onComposerKeydown(e: KeyboardEvent) {
+  if (mentionPickerOpen.value && mentionPickerRef.value) {
+    const key = e.key
+    if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Escape' || key === 'Tab'
+      || (key === 'Enter' && !e.shiftKey)) {
+      mentionPickerRef.value.onKeydown(e)
+      if (e.defaultPrevented) {
+        return
+      }
+    }
+  }
   if (e.key !== 'Enter' || e.shiftKey || e.isComposing) {
     return
   }
@@ -875,6 +1045,15 @@ function onComposerKeydown(e: KeyboardEvent) {
   void handleCreateStylized()
 }
 
+watch(inputTextString, () => {
+  // 删掉输入框中的 token 时，同步丢掉结构化 mentions
+  if (composerMentions.value.length) {
+    const text = inputTextString.value
+    composerMentions.value = composerMentions.value.filter((m) => text.includes(formatMentionToken(m)))
+  }
+  void syncMentionPickerFromInput()
+})
+
 const generateRandomSuffix = function () {
   return Math.floor(Math.random() * 10000) // 生成0到9999之间的随机整数
 }
@@ -882,6 +1061,8 @@ const generateRandomSuffix = function () {
 // 重置状态
 const handleResetState = () => {
   inputTextString.value = ''
+  composerMentions.value = []
+  closeMentionPicker()
   clearComposerQueue()
 
   stylizingLoading.value = false
@@ -1099,6 +1280,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
     uuids.value[val] = uuidv4()
     sessionContext.value = null
     selectedKbCollections.value = []
+    kbSearchEnabled.value = true
     selectedModelId.value = ''
   }
 
@@ -1559,6 +1741,18 @@ function onComposerPaste(e: ClipboardEvent) {
                             {{ item.question }}
                           </n-tag>
                         </n-space>
+                        <div
+                          v-if="item.mentions && item.mentions.length"
+                          class="composer-mention-chips composer-mention-chips--history"
+                        >
+                          <span
+                            v-for="(m, mi) in item.mentions"
+                            :key="`${m.type}:${m.id || m.path}:${mi}`"
+                            class="composer-mention-chip composer-mention-chip--readonly"
+                          >
+                            {{ formatMentionChip(m) }}
+                          </span>
+                        </div>
                       </div>
 
                       <!-- 用户上传的文件列表 -->
@@ -1915,6 +2109,16 @@ function onComposerPaste(e: ClipboardEvent) {
                         @chatImageUploaded="onChatImageUploaded"
                       />
 
+                      <MentionPicker
+                        ref="mentionPickerRef"
+                        :open="mentionPickerOpen"
+                        :query="mentionPickerQuery"
+                        :candidates="mentionPickerCandidates"
+                        :loading="mentionPickerLoading"
+                        @select="onMentionSelect"
+                        @close="closeMentionPicker"
+                      />
+
                       <n-input
                         ref="refInputTextString"
                         v-model:value="inputTextString"
@@ -1938,10 +2142,13 @@ function onComposerPaste(e: ClipboardEvent) {
                       <ChatComposerToolbar
                         v-model:model-id="selectedModelId"
                         v-model:kb-collections="selectedKbCollections"
+                        v-model:kb-search-enabled="kbSearchEnabled"
+                        v-model:mcp-servers="selectedMcpServers"
+                        v-model:enabled-skills="selectedSkills"
+                        v-model:skills-all-enabled="skillsAllEnabled"
                         :qa-type="qa_type"
                         :session-id="uuids[qa_type] ?? ''"
                         :disabled="sseIsLoading"
-                        :file-upload-ref="fileUploadRef"
                       >
                         <template #right>
                           <ContextWindowIndicator
@@ -2104,6 +2311,32 @@ function onComposerPaste(e: ClipboardEvent) {
 .chat-composer--dragover {
   border-color: var(--noesis-color-primary);
   background: var(--noesis-color-primary-bg-subtle);
+}
+
+.composer-mention-chips--history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+
+.composer-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--noesis-color-border);
+  border-radius: 999px;
+  background: var(--noesis-color-bg-elevated);
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.composer-mention-chip--readonly {
+  cursor: default;
 }
 
 .chat-composer-drop-hint {

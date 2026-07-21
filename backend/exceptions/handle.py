@@ -8,6 +8,7 @@ from exceptions.exception import (
     ConflictException,
     LoginException,
     ModelValidatorException,
+    NotFoundException,
     PermissionException,
     ServiceException,
     ServiceWarning,
@@ -39,6 +40,11 @@ def handle_exception(app: FastAPI):
     @app.exception_handler(ConflictException)
     async def conflict_exception_handler(request: Request, exc: ConflictException):
         return ResponseUtil.conflict(data=exc.data, msg=exc.message)
+
+    @app.exception_handler(NotFoundException)
+    async def not_found_exception_handler(request: Request, exc: NotFoundException):
+        logger.warning(exc.message)
+        return ResponseUtil.not_found(data=exc.data, msg=exc.message)
 
     # 自定义模型检验异常
     @app.exception_handler(ModelValidatorException)

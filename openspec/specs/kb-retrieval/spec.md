@@ -20,11 +20,12 @@
 
 ### Requirement: 检索参数字段与合并
 
-`query_execution_params` canonical 字段 SHALL 为：`search_mode`、`use_reranker`、`recall_top_k`、`final_top_k`、`score_threshold`、`rrf_k`。
+`query_execution_params` canonical 字段 SHALL 为：`search_mode`、`use_reranker`、`recall_top_k`、`rerank_top_k`、`final_top_k`、`score_threshold`、`rrf_k`。
 
 - `limit` SHALL 作为 **deprecated 别名**：读入时映射为 `final_top_k`；与 `final_top_k` 同时存在时 **`final_top_k` 优先**。
 - 合并顺序：**MySQL 集合 `query_params`** → **平台默认** → **单次请求覆盖**（非 null 字段）。
-- 平台默认：`search_mode=hybrid`、`use_reranker=true`、`recall_top_k=50`、`final_top_k=10`、`score_threshold=null`、`rrf_k=60`。
+- 平台默认：`search_mode=hybrid`、`use_reranker=true`、`recall_top_k=20`、`rerank_top_k=15`、`final_top_k=10`、`score_threshold=null`、`rrf_k=60`。
+- `rerank_top_k` SHALL 不超过 `recall_top_k`（实现可 `min(rerank_top_k, recall_top_k)`）。
 
 #### Scenario: limit 别名归一化
 
@@ -55,7 +56,7 @@
 检索 SHALL 按以下顺序执行：
 
 1. 在当前 `search_mode` 下召回至多 `recall_top_k` 条候选（含 filters）
-2. 若 `use_reranker=true` 且 rerank 可用，对候选 cross-encoder 重排
+2. 若 `use_reranker=true` 且 rerank 可用，先按召回分截断至多 `rerank_top_k` 条，再对候选 cross-encoder 重排
 3. 若 `score_threshold` 非 null，**在 rerank 之后**（无 rerank 则在 recall 分上）过滤低于阈值的命中
 4. 按最终分降序截断为至多 `final_top_k` 条
 
@@ -66,10 +67,11 @@
 - **WHEN** `use_reranker=true`、`score_threshold=0.5`，且某候选 recall 分高但 rerank 分低于 0.5
 - **THEN** 该候选 SHALL NOT 出现在最终结果中
 
-#### Scenario: 启用 rerank 时先扩召回
+#### Scenario: 启用 rerank 时限制精排条数
 
-- **WHEN** `use_reranker=true`、`recall_top_k=50`、`final_top_k=10`
-- **THEN** 召回阶段 SHALL 保留至多 50 条候选供 rerank
+- **WHEN** `use_reranker=true`、`recall_top_k=20`、`rerank_top_k=15`、`final_top_k=10`
+- **THEN** 召回阶段 SHALL 保留至多 20 条候选
+- **AND** 送入 rerank 的文档数 SHALL 不超过 15
 - **AND** 最终返回 SHALL 不超过 10 条
 
 ### Requirement: cross-encoder rerank

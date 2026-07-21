@@ -202,8 +202,13 @@ class SkillFsService:
     @classmethod
     def extract_zip_to_user_dir(cls, zip_path: str, user_id: str | int) -> Tuple[bool, str]:
         """将 ZIP 内容解压到 `.data/users/{user_id}/skills/`。"""
+        from services.skills_revision import bump_user_skills_revision
+
         root = str(ensure_user_skills_dir(user_id))
-        return cls._extract_zip(zip_path, root)
+        ok, msg = cls._extract_zip(zip_path, root)
+        if ok:
+            bump_user_skills_revision(str(user_id))
+        return ok, msg
 
     @classmethod
     def _extract_zip(cls, zip_path: str, root: str) -> Tuple[bool, str]:
@@ -235,6 +240,67 @@ class SkillFsService:
         return True
 
     @classmethod
+    def user_package_exists(cls, package_name: str, user_id: str | int) -> bool:
+        if not cls._is_top_level_package_name(package_name):
+            return False
+        name = package_name.strip().replace('\\', '/')
+        try:
+            root = str(ensure_user_skills_dir(user_id))
+            target = cls._safe_join(root, name)
+        except ValueError:
+            return False
+        return os.path.isdir(target) and not os.path.islink(target)
+
+    @classmethod
+    def install_package_dir(
+        cls,
+        src_dir: str,
+        package_name: str,
+        user_id: str | int,
+        *,
+        overwrite: bool = False,
+    ) -> Tuple[bool, str]:
+        """将本地技能目录复制到用户 personal skills（顶层包名）。"""
+        from services.skills_revision import bump_user_skills_revision
+
+        if not cls._is_top_level_package_name(package_name):
+            return False, '非法技能包名'
+        name = package_name.strip().replace('\\', '/')
+        src = os.path.abspath(src_dir)
+        if not os.path.isdir(src):
+            return False, '源技能目录不存在'
+        if not os.path.isfile(os.path.join(src, 'SKILL.md')):
+            return False, '源目录缺少 SKILL.md'
+        try:
+            root = str(ensure_user_skills_dir(user_id))
+            dest = cls._safe_join(root, name)
+        except ValueError:
+            return False, '非法路径'
+        if os.path.abspath(dest) == os.path.abspath(root):
+            return False, '不能安装到根目录'
+        if os.path.lexists(dest):
+            if not overwrite:
+                return False, f'技能「{name}」已存在'
+            if os.path.islink(dest) or not os.path.isdir(dest):
+                return False, '目标路径非法，无法覆盖'
+            try:
+                shutil.rmtree(dest)
+            except OSError as e:
+                return False, f'覆盖前删除失败: {e}'
+        try:
+            shutil.copytree(
+                src,
+                dest,
+                ignore=shutil.ignore_patterns('.git', '.github', '__pycache__', 'node_modules'),
+                symlinks=False,
+            )
+        except OSError as e:
+            logger.error(f'安装技能目录失败 {src} -> {dest}: {e}')
+            return False, f'安装失败: {e}'
+        bump_user_skills_revision(str(user_id))
+        return True, f'已安装技能「{name}」'
+
+    @classmethod
     def delete_user_skill_package(
         cls,
         package_name: str,
@@ -260,6 +326,9 @@ class SkillFsService:
         except OSError as e:
             logger.error(f'删除技能目录失败 {target}: {e}')
             return False, f'删除失败: {e}'
+        from services.skills_revision import bump_user_skills_revision
+
+        bump_user_skills_revision(str(user_id))
         return True, f'已删除技能「{name}」'
 
 

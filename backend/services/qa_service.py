@@ -9,21 +9,27 @@ import re
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.common_react_agent import GeneralQAAgent
 from agent.fault_operation_agent import FaultOperationAgent
 from agent.super_agent import SuperAgent
 from agent.case_generate.case_coordinator import CaseCoordinator
+from agent.mcp.loader import load_mcp_tools_by_names
 
 from config.database import AsyncSessionLocal
 from config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
+from config.mcp_config import (
+    MCP_PROFILE_FAULT_OPERATION,
+    get_profile_server_names,
+)
 from constants.code_enum import IntentEnum
 from schemas.login_vo import CurrentUser
 from schemas.qa_vo import QaQueryRequest
 from services.chat_service import ChatService
 from services.chat_attachment_service import ChatAttachmentService
+from services.mention_resolve_service import MentionResolveService
 from domain.observability.langfuse import langfuse_workflow_context, merge_langfuse_runnable_config
 from domain.chat.streaming.langgraph_sse import LangGraphSseBridge, bridge_raw_to_sse_lines
 from common.logging import logger
@@ -51,20 +57,34 @@ def _normalize_kb_collections(raw: Any) -> List[str]:
     return out
 
 
-async def _resolve_kb_collections_for_query(
+def _normalize_id_list(raw: Any) -> List[str]:
+    if not isinstance(raw, list):
+        return []
+    seen: set[str] = set()
+    out: List[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+async def _resolve_mcp_servers_for_query(
     *,
     session_id: str,
     user_id: str,
-    request_kb_collections: Optional[List[str]],
+    qa_type: str,
+    request_mcp_servers: Optional[List[str]],
     db: AsyncSession,
 ) -> List[str]:
-    """请求显式携带 kb_collections 时写入会话；否则读会话 extra。"""
-    if request_kb_collections is not None:
-        normalized = _normalize_kb_collections(request_kb_collections)
+    if request_mcp_servers is not None:
+        normalized = _normalize_id_list(request_mcp_servers)
         await ChatService.merge_session_extra(
             session_id,
             user_id,
-            {"kb_collections": normalized},
+            {"mcp_servers": normalized},
             db=db,
         )
         return normalized
@@ -74,9 +94,92 @@ async def _resolve_kb_collections_for_query(
         user_id=user_id,
         db=db,
     )
+    extra = session.extra if session and session.extra else {}
+    if "mcp_servers" in extra:
+        return _normalize_id_list(extra.get("mcp_servers"))
+
+    if qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
+        try:
+            return get_profile_server_names(MCP_PROFILE_FAULT_OPERATION)
+        except KeyError:
+            logger.warning("FAULT_OPERATION 缺省 profile 不存在，mcp_servers=[]")
+            return []
+    return []
+
+
+async def _resolve_enabled_skills_for_query(
+    *,
+    session_id: str,
+    user_id: str,
+    request_enabled_skills: Optional[List[str]],
+    db: AsyncSession,
+) -> Optional[List[str]]:
+    if request_enabled_skills is not None:
+        normalized = _normalize_id_list(request_enabled_skills)
+        await ChatService.merge_session_extra(
+            session_id,
+            user_id,
+            {"enabled_skills": normalized},
+            db=db,
+        )
+        return normalized
+
+    session = await ChatService.get_session_by_id(
+        session_id,
+        user_id=user_id,
+        db=db,
+    )
+    extra = session.extra if session and session.extra else {}
+    if "enabled_skills" not in extra:
+        return None
+    return _normalize_id_list(extra.get("enabled_skills"))
+
+
+async def _resolve_kb_settings_for_query(
+    *,
+    session_id: str,
+    user_id: str,
+    request_kb_collections: Optional[List[str]],
+    request_kb_search_enabled: Optional[bool],
+    db: AsyncSession,
+) -> Tuple[List[str], bool]:
+    """解析并持久化会话知识库范围与启用状态。"""
+    if request_kb_collections is not None or request_kb_search_enabled is not None:
+        session = await ChatService.get_session_by_id(
+            session_id,
+            user_id=user_id,
+            db=db,
+        )
+        stored_extra = session.extra if session and session.extra else {}
+        normalized = (
+            _normalize_kb_collections(request_kb_collections)
+            if request_kb_collections is not None
+            else _normalize_kb_collections(stored_extra.get("kb_collections"))
+        )
+        enabled = (
+            request_kb_search_enabled
+            if request_kb_search_enabled is not None
+            else stored_extra.get("kb_search_enabled") is not False
+        )
+        await ChatService.merge_session_extra(
+            session_id,
+            user_id,
+            {"kb_collections": normalized, "kb_search_enabled": enabled},
+            db=db,
+        )
+        return normalized, enabled
+
+    session = await ChatService.get_session_by_id(
+        session_id,
+        user_id=user_id,
+        db=db,
+    )
     if not session or not session.extra:
-        return []
-    return _normalize_kb_collections(session.extra.get("kb_collections"))
+        return [], True
+    return (
+        _normalize_kb_collections(session.extra.get("kb_collections")),
+        session.extra.get("kb_search_enabled") is not False,
+    )
 
 
 def _normalize_model_id(raw: Any) -> Optional[str]:
@@ -548,6 +651,20 @@ class QaService:
         bridge: Optional[LangGraphSseBridge] = None
         ctx: Dict[str, Any] = {}
 
+        resolved_mentions = MentionResolveService.resolve(
+            mentions=req_obj.mentions,
+            qa_type=req_obj.qa_type,
+            user_id=str(current_user.user_id),
+            session_id=session_id,
+        )
+        agent_query = clean_query
+        if resolved_mentions.prompt_block:
+            agent_query = (
+                f"{clean_query}\n\n{resolved_mentions.prompt_block}".strip()
+                if clean_query
+                else resolved_mentions.prompt_block
+            )
+
         try:
             # 创建或获取会话
             await ChatService.get_or_create_session(
@@ -560,15 +677,18 @@ class QaService:
 
             # 流式开始前写入用户消息
             if user_text:
+                user_extra: Dict[str, Any] = {
+                    "qa_type": req_obj.qa_type,
+                    "file_dict": req_obj.file_dict,
+                }
+                if resolved_mentions.persistence:
+                    user_extra["mentions"] = resolved_mentions.persistence
                 await ChatService.save_message(
                     session_id=session_id,
                     user_id=current_user.user_id,
                     role="user",
                     content=UserMessageBuilder(content=user_text).serialize(),
-                    extra={
-                        "qa_type": req_obj.qa_type,
-                        "file_dict": req_obj.file_dict,
-                    },
+                    extra=user_extra,
                     db=db,
                 )
 
@@ -589,49 +709,84 @@ class QaService:
 
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
+            kb_search_enabled = True
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
-                kb_collections = await _resolve_kb_collections_for_query(
+                kb_collections, kb_search_enabled = await _resolve_kb_settings_for_query(
                     session_id=session_id,
                     user_id=str(current_user.user_id),
                     request_kb_collections=req_obj.kb_collections,
+                    request_kb_search_enabled=req_obj.kb_search_enabled,
                     db=db,
+                )
+
+            mcp_server_ids: List[str] = []
+            enabled_skills: Optional[List[str]] = None
+            if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]:
+                mcp_server_ids = await _resolve_mcp_servers_for_query(
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    qa_type=req_obj.qa_type,
+                    request_mcp_servers=req_obj.mcp_servers,
+                    db=db,
+                )
+                enabled_skills = await _resolve_enabled_skills_for_query(
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    request_enabled_skills=req_obj.enabled_skills,
+                    db=db,
+                )
+                if resolved_mentions.skill_ids and enabled_skills is not None:
+                    enabled_skills = list(
+                        dict.fromkeys([*enabled_skills, *resolved_mentions.skill_ids]),
+                    )
+
+            mcp_tools: List[Any] = []
+            if mcp_server_ids:
+                mcp_tools = await load_mcp_tools_by_names(
+                    mcp_server_ids,
+                    user_id=str(current_user.user_id),
                 )
 
             if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
                 agent_generator = common_agent.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id=session_id,
                     current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     kb_collections=kb_collections or None,
+                    kb_search_enabled=kb_search_enabled,
                     model_id=resolved_model_id,
+                    mcp_tools=mcp_tools or None,
                     db=db,
                 )
             elif req_obj.qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
                 agent_generator = fault_agent.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id=session_id,
                     current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     model_id=resolved_model_id,
+                    mcp_tools=mcp_tools,
                 )
             elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
                 agent_generator = case_coordinator.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id,
                     req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                 )
             elif req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
                 agent_generator = super_agent.run_agent(
-                    clean_query,
+                    agent_query,
                     session_id=session_id,
                     current_user=current_user,
                     file_list=req_obj.file_dict,
                     qa_type=req_obj.qa_type,
                     model_id=resolved_model_id,
+                    mcp_tools=mcp_tools or None,
+                    enabled_skills=enabled_skills,
                     db=db,
                 )
             else:

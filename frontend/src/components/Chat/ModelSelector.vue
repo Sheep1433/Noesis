@@ -38,8 +38,10 @@ async function loadModels() {
     options.value = catalog.models ?? []
     if (!modelValue.value) {
       modelValue.value = catalog.default_id
+      await persistModel(catalog.default_id)
     } else if (!options.value.some((item) => item.id === modelValue.value)) {
       modelValue.value = catalog.default_id
+      await persistModel(catalog.default_id)
     }
   } catch (e) {
     options.value = []

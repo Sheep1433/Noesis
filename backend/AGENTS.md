@@ -29,15 +29,15 @@ backend/
 │   ├── factory.py               # create_noesis_agent
 │   ├── common_react_agent.py    # 通用问答（RAG）
 │   ├── fault_operation_agent.py # 故障运维（MCP + 沙箱工作区）
-│   ├── super_agent.py           # 通用超级智能体（AIO 沙箱 + Skills + 用户记忆）
+│   ├── super_agent.py           # 通用超级智能体（沙箱 + Skills + 用户记忆）
 │   ├── backends/
 │   │   ├── factory.py           # create_agent_backend（唯一入口）
 │   │   ├── agent_filesystem.py  # build_agent_filesystem_backend 工厂
 │   │   ├── prefix_backend.py    # route 路径映射适配
 │   │   ├── backend_guards.py    # 白名单 / 静态 listing 守卫
 │   │   ├── mount_paths.py       # Agent / 容器路径常量
-│   │   ├── path_rewrite.py      # execute 虚拟路径 → 物理路径 rewrite
-│   │   ├── aio_sandbox.py       # 裸容器 I/O（不面向 Agent 路径）
+│   │   ├── sandbox_mount_policy.py # 容器路径读写校验
+│   │   ├── docker_exec_sandbox.py # Docker Exec 沙箱（生产）
 │   │   └── local_shell.py       # local_shell 子 backend
 │   ├── case_generate/           # 测试用例 StateGraph
 │   ├── middlewares/             # LangGraph 运行时中间件（守卫、附件、摘要卸载等）
@@ -81,14 +81,14 @@ backend/
 
 路径权威模块：`config/user_data_paths.py`（`agent_workspace_paths.py` 为兼容 import 的薄封装）。
 
-### Agent AIO 沙箱（单用户单容器）
+### Agent 沙箱（per-session Docker Exec）
 
-- **产品模型**：每个 `user_id` **一个** AIO 容器（同用户多 session 复用）；磁盘工作区仍 **per-session**（`users/{uid}/sessions/{sid}/workspace`）。
-- **接入**：`DockerExecSandboxBackend(BaseSandbox)`（默认，`sandbox.backend=docker`）经 runner docker exec；`AioSandboxBackend` 保留（`sandbox.backend=aio` + `agent-sandbox`）。
-- **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（workspace 根默认可写；`/research/` 为可选子目录；`/memory/` = 用户记忆；`/skills/extensions|` + `/skills/custom/` 只读）。
-- **生命周期**：`services/sandbox_service.py` 经内网 `sandbox-runner` 起停容器；`user_sandbox_run` 维护 per-user in-flight；**删 session 不 destroy 用户沙箱**。
-- **并发**：对 `(user_id, session_id)` mutex 串行 AIO HTTP（单 shell 会话）。
-- **配置**：`config.yaml` → `sandbox.*`；密钥 `SANDBOX_RUNNER_TOKEN`；Docker bind 根 `NOESIS_HOST_DATA_DIR`。
+- **产品模型**：每个 `(user_id, session_id)` 一个 slim 容器；挂载仅当前 session workspace（rw）+ `/skills/public`（ro）+ `/skills/personal`（ro）。
+- **接入**：`DockerExecSandboxBackend`（`sandbox.backend=docker`）；开发/测试用 `local_shell`。**AIO 已移除**。
+- **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（workspace 根默认可写；`/skills/public|personal` 只读；`/memory/` = 用户记忆，不经 Shell 挂载）。
+- **生命周期**：`services/sandbox_service.py` 经 runner 起停；删 session **SHALL** destroy 该 session 沙箱；handle 缓存遇 404 失效并重建。
+- **并发**：对 `(user_id, session_id)` mutex 串行 execute。
+- **配置**：`config.yaml` → `sandbox.*`；密钥 `SANDBOX_RUNNER_TOKEN`；Compose 须设宿主机绝对路径 `NOESIS_HOST_DATA_DIR` / `NOESIS_HOST_SKILLS_DIR`。
 - **生产**：`deploy/sandbox-runner` + compose 服务 `sandbox-runner`（Docker socket / DooD）。
 
 ### 目录约定
@@ -142,7 +142,7 @@ async def login(
 
 - **配置**：PostgreSQL `kb_collection_config`（`processing_params` / `query_params`）；Qdrant 仅存向量与分片
 - **入库**：`DocumentParser` → `chunk()`（`chunk_preset_id=general`）→ embed → upsert；payload 含 `effective_processing_params`
-- **检索**：统一 `KbRetrievalService.search()`：`recall_top_k` → rerank（可降级）→ `score_threshold` → `final_top_k`；默认 `search_mode=hybrid`
+- **检索**：统一 `KbRetrievalService.search()`：`recall_top_k` → 截断 `rerank_top_k` → rerank（可降级）→ `score_threshold` → `final_top_k`；默认 `search_mode=hybrid`
 - **API**：`GET/PATCH /api/knowledge_base/collections/{name}/config`；检索/上传参数与 Agent 共用 `kb/chunk/params.py` 合并函数
 - **评测**：`uv run python -m evals.kb.run --collection <name>`
 
@@ -227,5 +227,5 @@ Domain → Common
 
 - 每次改动后执行 `uv run app.py`（在 `backend/` 目录），确认进程能正常拉起
 - 新增测试放 `backend/tests/`；接口 Bug 先在 `test_tdd_design.md` 写测试点
-- **Agent 路径**：工具层 workspace 根为默认落盘；`/research/` 仅调研场景；另有 `/skills/extensions/`、`/skills/custom/`；路由集中在 `agent_filesystem.py`，勿再搞 symlink 合并、勿向 Agent 暴露 `/workspace/...`、勿改 `extensions/skills` 做 Noesis 适配（Noesis 差异写 prompt）
-- **改沙箱挂载/路径后**：跑 `tests/test_agent_filesystem.py` 与 `test_aio_sandbox_backend.py`；AIO 挂载变更需重建用户容器（`noesis-aio-*`）
+- **Agent 路径**：工具层 workspace 根为默认落盘；`/research/` 仅调研场景；Skills 为 `/skills/public/`、`/skills/personal/`（filesystem 过渡期别名 `/skills/extensions|custom`）；路由集中在 `agent_filesystem.py`。Shell cwd=`/workspace`，产物优先相对路径；**禁止**对 execute 做 shlex round-trip 路径 rewrite。
+- **改沙箱挂载/路径后**：跑 `tests/test_agent_filesystem.py`、`test_docker_exec_sandbox_backend.py`、`test_sandbox_service_cache.py`；挂载变更需重建 session 容器（`noesis-sandbox-*`）

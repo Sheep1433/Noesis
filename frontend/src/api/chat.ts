@@ -333,10 +333,7 @@ export async function getSessionContext(sessionId: string): Promise<SessionConte
   if (res.status === 404) {
     return null
   }
-  if (!res.ok) {
-    throw new Error(`获取会话上下文失败: ${res.status}`)
-  }
-  return res.json() as Promise<SessionContextResponse>
+  return parseAuthJson<SessionContextResponse>(res)
 }
 
 /** 读取工作区文件 GET /api/chat/sessions/{sessionId}/workspace/file */
@@ -349,12 +346,7 @@ export async function getWorkspaceFile(
   )
   url.searchParams.set('path', path)
   const req = makeRequest('GET', url.toString())
-  const res = await authFetch(req)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as { msg?: string }).msg || `读取失败: ${res.status}`)
-  }
-  return res.json() as Promise<WorkspaceFileContent>
+  return parseAuthJson<WorkspaceFileContent>(await authFetch(req))
 }
 
 /** 保存工作区文件 PUT /api/chat/sessions/{sessionId}/workspace/file */
@@ -368,12 +360,7 @@ export async function saveWorkspaceFile(
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/workspace/file`,
     { path, content },
   )
-  const res = await authFetch(req)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as { msg?: string }).msg || `保存失败: ${res.status}`)
-  }
-  return res.json() as Promise<WorkspaceFileContent>
+  return parseAuthJson<WorkspaceFileContent>(await authFetch(req))
 }
 
 function parseContentDispositionFilename(header: string | null): string | null {

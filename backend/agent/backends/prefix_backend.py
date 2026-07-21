@@ -18,8 +18,6 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 
-from agent.backends.path_rewrite import PathRewriteContext, rewrite_virtual_paths_in_command
-
 _READ_ONLY_SKILLS_ERROR = "Skills directory is read-only"
 
 
@@ -36,12 +34,10 @@ class PrefixBackend(SandboxBackendProtocol):
         *,
         container_prefix: str | None = None,
         read_only: bool = False,
-        rewrite_ctx: PathRewriteContext | None = None,
     ) -> None:
         self._inner = inner
         self._container_prefix = container_prefix.rstrip("/") if container_prefix else None
         self._read_only = read_only
-        self._rewrite_ctx = rewrite_ctx
 
     def _map_in(self, path: str) -> str:
         if self._container_prefix is None:
@@ -145,10 +141,9 @@ class PrefixBackend(SandboxBackendProtocol):
         if not isinstance(self._inner, SandboxBackendProtocol):
             msg = "Inner backend does not support command execution"
             raise NotImplementedError(msg)
-        effective = command
-        if self._rewrite_ctx is not None:
-            effective = rewrite_virtual_paths_in_command(command, ctx=self._rewrite_ctx)
-        return self._inner.execute(effective, timeout=timeout)
+        # 禁止对 command 做 shlex round-trip rewrite（会破坏 > | && 等 Shell 操作符）。
+        # Agent 应使用相对路径或容器真实挂载路径（/workspace、/skills/public|personal）。
+        return self._inner.execute(command, timeout=timeout)
 
     @property
     def id(self) -> str:
