@@ -12,10 +12,12 @@ wheels/
 .cursor/
 .claude/
 .codex/
+.agents/
 docs/
 # 缓存与依赖
 *cache*/
 *logs*/
+.tmp/
 node_modules/
 
 # 本地运行时数据（见 common/paths.py）

@@ -28,6 +28,7 @@ import {
 } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
@@ -107,37 +108,176 @@ const isView = ref(false)
 // 新增：加载历史对话的状态
 const isLoadingHistory = ref(false)
 
+/** 程序化改 URL 时跳过路由 watch 的二次恢复，避免重复拉消息 */
+const suppressRouteSessionSync = ref(false)
+
+function routeSessionId(): string {
+  const raw = route.params.sessionId
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function isComposingRouteName(name: unknown): boolean {
+  return name === 'ChatIndex' || name === 'ChatNew' || name === 'ChatRoot'
+}
+
+async function replaceChatSessionUrl(sessionId: string) {
+  if (!sessionId) {
+    return
+  }
+  if (route.name === 'ChatSession' && routeSessionId() === sessionId) {
+    return
+  }
+  suppressRouteSessionSync.value = true
+  try {
+    await router.replace({ name: 'ChatSession', params: { sessionId } })
+  } finally {
+    suppressRouteSessionSync.value = false
+  }
+}
+
+async function navigateToComposingUrl(replace = false) {
+  if (isComposingRouteName(route.name) && !routeSessionId()) {
+    return
+  }
+  suppressRouteSessionSync.value = true
+  try {
+    const nav = replace ? router.replace : router.push
+    await nav({ name: 'ChatNew' })
+  } finally {
+    suppressRouteSessionSync.value = false
+  }
+}
+
+async function restoreActiveSessionFromRoute(sessionId: string) {
+  try {
+    const session = await getSession(sessionId)
+    const qt = String(session.extra?.qa_type ?? '').trim() || 'COMMON_QA'
+    if (qt === 'TEST_CASE_QA') {
+      await router.replace({ name: 'TestCaseGenerate' })
+      return
+    }
+
+    showDefaultPage.value = false
+    isInit.value = false
+    isView.value = true
+    currentIndex.value = sessionId
+    clearComposerQueue()
+    businessStore.todos = []
+
+    qa_type.value = qt
+    businessStore.update_qa_type(qt)
+    uuids.value[qt] = sessionId
+    sessionMaterialized.value = true
+
+    await loadSessionMessages(sessionId, conversationItems, currentRenderIndex)
+    const hasUserMessage = conversationItems.value.some((item) => item.role === 'user')
+    if (!hasUserMessage) {
+      window.$ModalMessage.info('该会话尚无消息，已回到新对话')
+      resetComposingSurface()
+      await navigateToComposingUrl(true)
+      return
+    }
+    await loadSessionContext(sessionId)
+    reloadSessionFilesPanel()
+    await scrollToLatestMessage(false)
+  } catch (error) {
+    console.error('恢复会话失败:', error)
+    window.$ModalMessage.warning('会话不存在或无权访问，已回到新对话')
+    resetComposingSurface()
+    await navigateToComposingUrl(true)
+  }
+}
+
+function resetComposingSurface() {
+  sessionContext.value = null
+  showDefaultPage.value = true
+  isInit.value = true
+  isView.value = false
+  conversationItems.value = []
+  stylizingLoading.value = false
+  suggested_array.value = []
+  currentIndex.value = null
+  businessStore.todos = []
+  clearComposerQueue()
+  inputTextString.value = ''
+  pendingHitl.value = null
+  uuids.value[qa_type.value] = uuidv4()
+  sessionMaterialized.value = false
+  selectedKbCollections.value = []
+  kbSearchEnabled.value = true
+  selectedModelId.value = ''
+  selectedMcpServers.value = []
+  selectedSkills.value = []
+  skillsAllEnabled.value = true
+}
+
 // 使用 onMounted 生命周期钩子加载历史对话
-onBeforeMount(() => {
+onBeforeMount(async () => {
   try {
     if (businessStore.qa_type === 'TEST_CASE_QA') {
       businessStore.update_qa_type('COMMON_QA')
     }
     applyWelcomeRouteQaType()
-    // 开始加载历史对话
     isLoadingHistory.value = true
     isInit.value = true
-    fetchConversationHistory(isInit, conversationItems, tableData, currentRenderIndex, null, '')
+    await fetchConversationHistory(isInit, conversationItems, tableData, currentRenderIndex, null, '')
+
+    const sid = routeSessionId()
+    if (sid) {
+      await restoreActiveSessionFromRoute(sid)
+    }
   } catch (error) {
     console.error('加载历史对话失败:', error)
     window.$ModalMessage.error('加载历史对话失败，请重试')
   } finally {
-    // 加载完成
     isLoadingHistory.value = false
   }
 })
+
+watch(
+  () => [route.name, routeSessionId()] as const,
+  async ([name, sid], [prevName, prevSid]) => {
+    if (suppressRouteSessionSync.value) {
+      return
+    }
+    if (name === 'ChatSession' && sid && sid !== prevSid) {
+      if (uuids.value[qa_type.value] === sid && !showDefaultPage.value && conversationItems.value.length > 0) {
+        return
+      }
+      await restoreActiveSessionFromRoute(sid)
+      return
+    }
+    if (
+      isComposingRouteName(name)
+      && (prevName === 'ChatSession' || Boolean(prevSid))
+      && !showDefaultPage.value
+    ) {
+      resetComposingSurface()
+    }
+  },
+)
 
 // 管理对话
 const isModalOpen = ref(false)
 function openModal() {
   isModalOpen.value = true
 }
-// 模态框关闭
-function handleModalClose(value) {
+/** 关闭管理弹窗：只刷新左侧列表；保留当前对话面。若当前会话已被删除则回 composing。 */
+function handleModalClose(value: boolean) {
   isModalOpen.value = value
-  isInit.value = true
-  // 重新加载对话记录
-  fetchConversationHistory(
+  if (value) {
+    return
+  }
+  void refreshSidebarAfterManageClose()
+}
+
+async function refreshSidebarAfterManageClose() {
+  const activeSessionId = sessionMaterialized.value
+    ? String(uuids.value[qa_type.value] || '')
+    : ''
+  const wasShowingChat = !showDefaultPage.value
+
+  await fetchConversationHistory(
     isInit,
     conversationItems,
     tableData,
@@ -145,35 +285,29 @@ function handleModalClose(value) {
     null,
     '',
   )
-  showDefaultPage.value = true
+
+  if (!wasShowingChat || !activeSessionId) {
+    return
+  }
+  const stillExists = tableData.value.some(
+    (item) => item.chat_id === activeSessionId || item.uuid === activeSessionId,
+  )
+  if (!stillExists) {
+    resetComposingSurface()
+    void navigateToComposingUrl(true)
+  }
 }
 
 // 新建对话
 function newChat() {
-  sessionContext.value = null
   backgroundColorVariable.value = cssVar(themeCssVar.bgElevated)
 
-  if (showDefaultPage.value) {
+  if (showDefaultPage.value && isComposingRouteName(route.name) && !routeSessionId()) {
     window.$ModalMessage.success(`已经是最新对话`)
     return
   }
-  showDefaultPage.value = true
-  isInit.value = true
-  conversationItems.value = []
-  stylizingLoading.value = false
-  suggested_array.value = []
-
-  // 清除表格选中状态
-  currentIndex.value = null
-
-  // 清理 Todo 列表（PRD：仅在当前会话生效，会话结束后不持久化）
-  businessStore.todos = []
-
-  clearComposerQueue()
-  inputTextString.value = ''
-
-  // 新增：生成当前问答类型的新uuid
-  uuids.value[qa_type.value] = uuidv4()
+  resetComposingSurface()
+  void navigateToComposingUrl(false)
 }
 
 /**
@@ -436,6 +570,8 @@ const selectedModelId = ref('')
 const selectedMcpServers = ref<string[]>([])
 const selectedSkills = ref<string[]>([])
 const skillsAllEnabled = ref(true)
+/** 当前内存 session_id 是否已物化（历史点入或发送 ensure 成功） */
+const sessionMaterialized = ref(false)
 
 function normalizeIdList(raw: unknown): string[] {
   if (!Array.isArray(raw)) {
@@ -465,7 +601,28 @@ async function onChatImageUploaded() {
   await ensureVisionModelForImageUpload({
     sessionId,
     selectedModelId,
+    persistSessionExtra: sessionMaterialized.value,
   })
+}
+
+function buildComposingSessionExtra(): Record<string, unknown> {
+  const extra: Record<string, unknown> = {
+    qa_type: qa_type.value,
+  }
+  if (qa_type.value === 'COMMON_QA') {
+    extra.kb_collections = selectedKbCollections.value
+    extra.kb_search_enabled = kbSearchEnabled.value
+  }
+  if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
+    extra.model_id = selectedModelId.value
+  }
+  if (qa_type.value !== 'TEST_CASE_QA') {
+    extra.mcp_servers = selectedMcpServers.value
+  }
+  if (qa_type.value === 'SUPER_AGENT_QA' && !skillsAllEnabled.value) {
+    extra.enabled_skills = selectedSkills.value
+  }
+  return extra
 }
 
 function normalizeKbCollections(raw: unknown): string[] {
@@ -503,6 +660,7 @@ async function loadSessionContext(sessionId: string) {
       selectedSkills.value = []
       skillsAllEnabled.value = true
     }
+    sessionMaterialized.value = true
   } catch {
     sessionContext.value = null
     selectedKbCollections.value = []
@@ -511,6 +669,7 @@ async function loadSessionContext(sessionId: string) {
     selectedMcpServers.value = []
     selectedSkills.value = []
     skillsAllEnabled.value = true
+    sessionMaterialized.value = false
   }
 }
 
@@ -769,8 +928,7 @@ async function resolveAttachmentsForSend(): Promise<{
   if (usesSessionAttachmentUpload(qa_type.value)) {
     uploadingOnSend.value = true
     try {
-      const sessionId = getChatSessionId()
-      await ensureSession(sessionId, { extra: { qa_type: qa_type.value } })
+      // session 须已由发送编排 ensure；此处只串行 upload
       const uploaded = await fileUploadRef.value!.uploadAllPendingFiles!()
       return {
         upload_file_key: uploaded,
@@ -794,6 +952,13 @@ async function resolveAttachmentsForSend(): Promise<{
 function usesSessionAttachmentUpload(mode: string): boolean {
   return mode === 'COMMON_QA' || mode === 'SUPER_AGENT_QA' || mode === 'DEEP_RESEARCH_QA'
 }
+
+/** FAULT 禁止附件：不得用 kb 即时上传；与 chat 延时队列共用组件但入口已关 */
+const composerUploadMode = computed(() =>
+  usesSessionAttachmentUpload(qa_type.value) || qa_type.value === 'FAULT_OPERATION_QA'
+    ? 'chat'
+    : 'kb',
+)
 
 
 // 提交对话
@@ -828,6 +993,18 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
       inputTextString.value = ''
       refInputTextString.value?.select()
     }
+    return
+  }
+
+  // 发送才物化：merge COMPOSING overlay → session.extra
+  const sessionIdForSend = getChatSessionId()
+  try {
+    await ensureSession(sessionIdForSend, { extra: buildComposingSessionExtra() })
+    sessionMaterialized.value = true
+    void replaceChatSessionUrl(sessionIdForSend)
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
+    window.$ModalMessage.error(`创建会话失败: ${msg}`)
     return
   }
 
@@ -1250,6 +1427,7 @@ const rowProps = (row: TableItem) => {
 
       // 与顶栏切换不同：从历史会话点入时已拉取 messages，不能再因 qa_type 不一致而清空列表并打开默认页
       onAqtiveChange(row.qa_type, row.chat_id, true)
+      await replaceChatSessionUrl(row.chat_id)
       await scrollToLatestMessage(true)
       if (isMobile.value) {
         historyDrawerOpen.value = false
@@ -1334,14 +1512,22 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   // 切换类型时生成新uuid
   if (chat_id) {
     uuids.value[val] = chat_id
+    sessionMaterialized.value = true
     void loadSessionContext(chat_id)
     reloadSessionFilesPanel()
   } else {
     uuids.value[val] = uuidv4()
+    sessionMaterialized.value = false
     sessionContext.value = null
     selectedKbCollections.value = []
     kbSearchEnabled.value = true
     selectedModelId.value = ''
+    selectedMcpServers.value = []
+    selectedSkills.value = []
+    skillsAllEnabled.value = true
+    if (!fromHistorySelection) {
+      void navigateToComposingUrl(true)
+    }
   }
 
   // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
@@ -2173,7 +2359,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       <FileUploadManager
                         ref="fileUploadRef"
                         v-model="pendingUploadFileInfoList"
-                        :upload-mode="usesSessionAttachmentUpload(qa_type) ? 'chat' : 'kb'"
+                        :upload-mode="composerUploadMode"
                         :get-session-id="getChatSessionId"
                         @chatImageUploaded="onChatImageUploaded"
                       />
@@ -2217,6 +2403,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         v-model:skills-all-enabled="skillsAllEnabled"
                         :qa-type="qa_type"
                         :session-id="uuids[qa_type] ?? ''"
+                        :persist-session-extra="sessionMaterialized"
                         :disabled="sseIsLoading"
                         :file-upload-ref="fileUploadRef"
                       >

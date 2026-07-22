@@ -94,32 +94,44 @@ mode_prod() {
   exec "$ROOT/scripts/prod.sh" "$@"
 }
 
+compose_env_file="$DEPLOY/.env.docker"
+
+export_compose_host_env() {
+  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.data}"
+  export NOESIS_HOST_SKILLS_DIR="${NOESIS_HOST_SKILLS_DIR:-$ROOT/extensions/skills}"
+}
+
+docker_compose() {
+  export_compose_host_env
+  docker compose -f "$COMPOSE_FILE" --env-file "$compose_env_file" "$@"
+}
+
 mode_docker() {
   export APP_ENV=prod
-  ensure_file "$DEPLOY/.env.docker" "$DEPLOY/.env.docker.example"
+  ensure_file "$compose_env_file" "$DEPLOY/.env.docker.example"
   if [[ ! -f "$DEPLOY/config.docker.yaml" ]]; then
     die "缺少 $DEPLOY/config.docker.yaml"
   fi
-  log "模式=docker | compose=$COMPOSE_FILE | env=$DEPLOY/.env.docker"
+  log "模式=docker | compose=$COMPOSE_FILE | env=$compose_env_file"
   cd "$ROOT"
-  docker compose -f "$COMPOSE_FILE" up -d "$@"
+  docker_compose up -d "$@"
   log "访问 http://localhost | 健康: curl -sS http://localhost/health"
 }
 
 mode_docker_build() {
-  ensure_file "$DEPLOY/.env.docker" "$DEPLOY/.env.docker.example"
+  ensure_file "$compose_env_file" "$DEPLOY/.env.docker.example"
   cd "$ROOT"
-  docker compose -f "$COMPOSE_FILE" build "$@"
+  docker_compose build "$@"
 }
 
 mode_docker_down() {
   cd "$ROOT"
-  docker compose -f "$COMPOSE_FILE" down "$@"
+  docker_compose down "$@"
 }
 
 mode_docker_logs() {
   cd "$ROOT"
-  docker compose -f "$COMPOSE_FILE" logs -f backend "$@"
+  docker_compose logs -f backend "$@"
 }
 
 main() {

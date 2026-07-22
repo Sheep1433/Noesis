@@ -38,6 +38,8 @@ function modelSupportsVision(catalog: ChatModelCatalog, modelId: string): boolea
 export async function ensureVisionModelForImageUpload(options: {
   sessionId: string
   selectedModelId: Ref<string>
+  /** 仅 ACTIVE（或发送编排已物化）时写回 session.extra */
+  persistSessionExtra?: boolean
 }): Promise<'already' | 'switched' | 'vlm_fallback' | 'unsupported'> {
   const catalog = await loadCatalog()
   const currentId = options.selectedModelId.value || catalog.default_id
@@ -52,7 +54,7 @@ export async function ensureVisionModelForImageUpload(options: {
   if (visionId) {
     options.selectedModelId.value = visionId
     const label = catalog.models?.find((m) => m.id === visionId)?.label || visionId
-    if (options.sessionId) {
+    if (options.persistSessionExtra && options.sessionId) {
       try {
         await ensureSession(options.sessionId, { extra: { model_id: visionId } })
       } catch (e) {

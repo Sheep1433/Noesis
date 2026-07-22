@@ -134,7 +134,7 @@ langfuse:
 
 other:
   skills_filesystem_root: ""  # 空则默认 extensions/skills；可填绝对路径或相对仓库根的路径
-  mcp_config_path: ""  # 空则默认 extensions/mcp/mcp.json；可用环境变量 MCP_CONFIG_PATH 覆盖
+  mcp_config_path: ""  # 空则默认 extensions/mcp/mcp.json
 
 # Skills 市场（skills.sh 搜索 + GitHub 安装到个人 skills）
 skills_market:
@@ -158,7 +158,7 @@ web_tools:
   ddg_backends: mojeek,yandex
 
 # Agent 沙箱（深度研究 / 故障运维）
-# backend: docker（推荐 slim 镜像 + docker exec）| aio（全量 AIO 镜像，需 uv sync --extra aio）| local_shell（宿主机）
+# backend: docker（推荐 slim 镜像 + docker exec）| local_shell（宿主机）
 sandbox:
   backend: docker
   runner_url: http://127.0.0.1:8090
@@ -187,6 +187,8 @@ chat_attachment:
   vision_enabled: true
   reinject_session_images: true
   max_files_per_message: 10
+  image_inject_max_edge: 1536
+  vlm_fallback_enabled: true
   tiny_inline_chars: 4096
   read_page_lines: 2000
   preview_chars: 500
