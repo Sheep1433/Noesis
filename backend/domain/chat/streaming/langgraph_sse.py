@@ -152,10 +152,11 @@ class LangGraphSseBridge:
         session_id: str,
         *,
         emit_langfuse_session_hint: bool = False,
+        assistant_message_id: Optional[str] = None,
     ) -> None:
         self.session_id = session_id or ""
         self._emit_langfuse_session_hint = bool(emit_langfuse_session_hint)
-        self.assistant_message_id = str(uuid.uuid4())
+        self.assistant_message_id = str(assistant_message_id) if assistant_message_id else str(uuid.uuid4())
         self._message_started = False
         self._text_open = False
         self._current_text_part_id: Optional[str] = None
@@ -173,6 +174,7 @@ class LangGraphSseBridge:
         self._usage_cumulative: Dict[str, int] = {}
         self.last_context_snapshot: Dict[str, int] = {}
         self._session_context_tick = False
+        self.last_hitl_payload: Optional[Dict[str, Any]] = None
 
     # ---------- metrics ctx ----------
 
@@ -639,6 +641,81 @@ class LangGraphSseBridge:
             self._emit_finish(out, payload, builder=builder, ctx=ctx)
             return
 
+        if t == "hitl-required":
+            self._ensure_started(out)
+            self._close_reasoning(out)
+            self._close_text(out)
+            if builder is not None:
+                self._flush_text_buffer(builder, ctx)
+            payload = dict(item)
+            payload["type"] = "hitl-required"
+            payload["message_id"] = self.assistant_message_id
+            payload.setdefault("session_id", self.session_id)
+            self.last_hitl_payload = payload
+            for action in payload.get("action_requests") or []:
+                name = str(action.get("name") or "")
+                tool_call_id = action.get("tool_call_id") or ""
+                args = action.get("args") if isinstance(action.get("args"), dict) else {}
+                already = bool(
+                    tool_call_id
+                    and builder is not None
+                    and tool_call_id in getattr(builder, "_tools_by_call_id", {})
+                )
+                if already and builder is not None:
+                    builder.update_tool_hitl(
+                        tool_call_id,
+                        {
+                            "kind": payload.get("kind"),
+                            "status": "pending",
+                            "interrupt_id": payload.get("interrupt_id"),
+                        },
+                        status="running",
+                    )
+                else:
+                    part_id = _new_id("part-tool")
+                    if tool_call_id:
+                        self._tool_part_ids[tool_call_id] = part_id
+                    out.append(
+                        _format_sse(
+                            "tool-input-start",
+                            {
+                                "type": "tool-input-start",
+                                "message_id": self.assistant_message_id,
+                                "part_id": part_id,
+                                "tool_call_id": tool_call_id,
+                                "name": name,
+                            },
+                        )
+                    )
+                    out.append(
+                        _format_sse(
+                            "tool-input-available",
+                            {
+                                "type": "tool-input-available",
+                                "message_id": self.assistant_message_id,
+                                "part_id": part_id,
+                                "tool_call_id": tool_call_id,
+                                "name": name,
+                                "input": args,
+                            },
+                        )
+                    )
+                    if builder is not None:
+                        builder.append_tool(
+                            name,
+                            args,
+                            tool_call_id=tool_call_id or None,
+                            status="running",
+                            hitl={
+                                "kind": payload.get("kind"),
+                                "status": "pending",
+                                "interrupt_id": payload.get("interrupt_id"),
+                            },
+                        )
+            self._persist_tick = True
+            out.append(_format_sse("hitl-required", payload))
+            return
+
         if t in ("phase-start", "phase-delta", "phase-end"):
             self._ensure_started(out)
             payload = dict(item)
@@ -652,7 +729,9 @@ class LangGraphSseBridge:
 
         if t and t not in ("ai", "tool"):
             self._ensure_started(out)
-            out.append(_format_sse(str(t), dict(item)))
+            payload = dict(item)
+            payload.setdefault("message_id", self.assistant_message_id)
+            out.append(_format_sse(str(t), payload))
 
     # ---------- LangChain astream_events ----------
 

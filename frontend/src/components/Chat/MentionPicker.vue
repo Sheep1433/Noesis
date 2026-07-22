@@ -7,7 +7,6 @@ const props = defineProps<{
   query: string
   candidates: MentionCandidate[]
   loading?: boolean
-  /** 锚点：相对 composer 的 top 偏移，由父级定位 */
 }>()
 
 const emit = defineEmits<{
@@ -25,7 +24,6 @@ const filtered = computed(() =>
 watch(
   () => [props.open, props.query] as const,
   () => {
-    // 不把 candidates 放进依赖：父组件每次预取会换新数组引用，重置会和键盘/鼠标抢高亮
     if (props.open) {
       activeIndex.value = 0
     }
@@ -38,17 +36,17 @@ watch(filtered, (list) => {
   }
 })
 
-function kindPrefix(kind: string) {
-  if (kind === 'skill') {
-    return '/'
+function kindIcon(kind: string) {
+  switch (kind) {
+    case 'skill':
+      return 'i-carbon:notebook'
+    case 'subagent':
+      return 'i-carbon:bot'
+    case 'folder':
+      return 'i-carbon:folder'
+    default:
+      return 'i-carbon:document'
   }
-  if (kind === 'subagent') {
-    return '@agent '
-  }
-  if (kind === 'folder') {
-    return '@folder '
-  }
-  return '@'
 }
 
 function onSelect(item: MentionCandidate) {
@@ -140,7 +138,11 @@ defineExpose({ onKeydown })
         @mouseenter="activeIndex = idx"
         @click="onSelect(item)"
       >
-        <span class="mention-picker__kind">{{ kindPrefix(item.kind) }}</span>
+        <span
+          class="mention-picker__icon"
+          :class="kindIcon(item.kind)"
+          aria-hidden="true"
+        ></span>
         <span class="mention-picker__label">{{ item.label }}</span>
         <span v-if="item.description" class="mention-picker__desc">{{ item.description }}</span>
       </li>
@@ -172,7 +174,7 @@ defineExpose({ onKeydown })
 .mention-picker__item {
   display: flex;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
   padding: 8px 10px;
   border-radius: 8px;
   cursor: pointer;
@@ -184,11 +186,12 @@ defineExpose({ onKeydown })
   background: var(--noesis-bg-muted, rgb(0 0 0 / 6%));
 }
 
-.mention-picker__kind {
+.mention-picker__icon {
   flex-shrink: 0;
+  width: 16px;
+  height: 16px;
   color: var(--noesis-text-secondary, #888);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: 16px;
 }
 
 .mention-picker__label {

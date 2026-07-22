@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { McpServerCatalogItem } from '@/api/mcp'
+import type FileUploadManager from '@/views/FileUploadManager.vue'
 import { NButton, NCheckbox, NPopover } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { ensureSession } from '@/api/chat'
@@ -8,10 +9,13 @@ import { getSkillsFsTree } from '@/api/skills'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
 
+type MenuView = 'root' | 'mcp' | 'skills'
+
 const props = defineProps<{
   qaType: string
   sessionId: string
   disabled?: boolean
+  fileUploadRef?: InstanceType<typeof FileUploadManager> | null
 }>()
 
 const router = useRouter()
@@ -25,7 +29,16 @@ const skillsAllEnabled = defineModel<boolean>('skillsAllEnabled', { default: tru
 
 const showKbScope = computed(() => props.qaType === 'COMMON_QA')
 const showSkillsMenu = computed(() => props.qaType === 'SUPER_AGENT_QA')
+const showUploadImage = computed(() =>
+  props.qaType === 'COMMON_QA'
+  || props.qaType === 'SUPER_AGENT_QA'
+  || props.qaType === 'DEEP_RESEARCH_QA',
+)
 const plusOpen = ref(false)
+const menuView = ref<MenuView>('root')
+
+const docInputRef = ref<HTMLInputElement | null>(null)
+const imageInputRef = ref<HTMLInputElement | null>(null)
 
 const mcpServers = ref<McpServerCatalogItem[]>([])
 const skillPackages = ref<{ id: string, source: string }[]>([])
@@ -63,15 +76,19 @@ async function loadCatalogs() {
   }
 }
 
-onMounted(() => {
-  void loadCatalogs()
+watch(plusOpen, (open) => {
+  if (open) {
+    menuView.value = 'root'
+    if (!catalogLoaded.value) {
+      void loadCatalogs()
+    }
+  }
 })
 
 watch(
   () => props.sessionId,
   () => {
     catalogLoaded.value = false
-    void loadCatalogs()
   },
 )
 
@@ -126,11 +143,71 @@ function openMcpConfig() {
   plusOpen.value = false
   void router.push({ name: 'Extensions', query: { tab: 'mcp' } })
 }
+
+function pickDocuments() {
+  docInputRef.value?.click()
+}
+
+function pickImages() {
+  imageInputRef.value?.click()
+}
+
+function onDocFilesSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files ? [...input.files] : []
+  input.value = ''
+  if (!files.length) {
+    return
+  }
+  props.fileUploadRef?.enqueueFiles?.(files)
+  plusOpen.value = false
+}
+
+function onImageFilesSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files ? [...input.files] : []
+  input.value = ''
+  if (!files.length) {
+    return
+  }
+  props.fileUploadRef?.enqueueFiles?.(files)
+  plusOpen.value = false
+}
+
+const mcpSummary = computed(() => {
+  const n = selectedMcpServers.value.length
+  return n > 0 ? `${n}` : ''
+})
+
+const skillSummary = computed(() => {
+  if (skillsAllEnabled.value) {
+    return '全部'
+  }
+  const n = selectedSkills.value.length
+  return n > 0 ? `${n}` : ''
+})
 </script>
 
 <template>
   <div class="composer-toolbar">
     <div class="composer-toolbar__left">
+      <input
+        ref="docInputRef"
+        type="file"
+        class="composer-hidden-input"
+        accept=".doc,.docx,.ppt,.pptx,.pdf,.txt,.xlsx,.csv,.md"
+        multiple
+        @change="onDocFilesSelected"
+      >
+      <input
+        ref="imageInputRef"
+        type="file"
+        class="composer-hidden-input"
+        accept="image/jpeg,image/png,image/webp,image/gif"
+        multiple
+        @change="onImageFilesSelected"
+      >
+
       <n-popover
         v-model:show="plusOpen"
         trigger="click"
@@ -145,40 +222,67 @@ function openMcpConfig() {
             type="button"
             class="composer-plus-btn"
             :disabled="disabled"
-            aria-label="配置 Skills 与 MCP"
+            aria-label="附件与工具"
           >
             <span class="i-carbon:add text-18"></span>
           </button>
         </template>
 
         <div class="composer-tools-panel" @click.stop>
-          <section v-if="showSkillsMenu" class="composer-tools-section">
-            <div class="composer-tools-section__title">
-              Skills
-            </div>
-            <div v-if="catalogLoading" class="composer-tools-empty">
-              加载中…
-            </div>
-            <div v-else-if="!skillPackages.length" class="composer-tools-empty">
-              暂无 Skills
-            </div>
-            <label
-              v-for="skill in skillPackages"
-              :key="skill.id"
-              class="composer-tool-row"
+          <!-- 一级：上传 / MCP / Skills -->
+          <template v-if="menuView === 'root'">
+            <button
+              type="button"
+              class="composer-menu-item"
+              @click="pickDocuments"
             >
-              <n-checkbox
-                :checked="isSkillChecked(skill.id)"
-                @update:checked="(checked) => toggleSkill(skill.id, checked)"
-              />
-              <span class="composer-tool-row__label">{{ skill.id }} ({{ skill.source }})</span>
-            </label>
-          </section>
+              <span class="i-material-symbols:file-open-outline composer-menu-item__icon"></span>
+              <span class="composer-menu-item__label">上传文件</span>
+            </button>
+            <button
+              v-if="showUploadImage"
+              type="button"
+              class="composer-menu-item"
+              @click="pickImages"
+            >
+              <span class="i-mdi:file-image-outline composer-menu-item__icon"></span>
+              <span class="composer-menu-item__label">上传图片</span>
+            </button>
 
-          <section class="composer-tools-section">
-            <div class="composer-tools-section__title">
-              MCP Servers
-            </div>
+            <button
+              type="button"
+              class="composer-menu-item"
+              @click="menuView = 'mcp'"
+            >
+              <span class="i-carbon:api composer-menu-item__icon"></span>
+              <span class="composer-menu-item__label">MCP</span>
+              <span v-if="mcpSummary" class="composer-menu-item__badge">{{ mcpSummary }}</span>
+              <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
+            </button>
+
+            <button
+              v-if="showSkillsMenu"
+              type="button"
+              class="composer-menu-item"
+              @click="menuView = 'skills'"
+            >
+              <span class="i-carbon:notebook composer-menu-item__icon"></span>
+              <span class="composer-menu-item__label">Skills</span>
+              <span v-if="skillSummary" class="composer-menu-item__badge">{{ skillSummary }}</span>
+              <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
+            </button>
+          </template>
+
+          <!-- 二级：MCP -->
+          <template v-else-if="menuView === 'mcp'">
+            <button
+              type="button"
+              class="composer-menu-back"
+              @click="menuView = 'root'"
+            >
+              <span class="i-carbon:chevron-left"></span>
+              <span>MCP</span>
+            </button>
             <div v-if="catalogLoading" class="composer-tools-empty">
               加载中…
             </div>
@@ -204,7 +308,36 @@ function openMcpConfig() {
             >
               打开 MCP 配置…
             </n-button>
-          </section>
+          </template>
+
+          <!-- 二级：Skills -->
+          <template v-else-if="menuView === 'skills'">
+            <button
+              type="button"
+              class="composer-menu-back"
+              @click="menuView = 'root'"
+            >
+              <span class="i-carbon:chevron-left"></span>
+              <span>Skills</span>
+            </button>
+            <div v-if="catalogLoading" class="composer-tools-empty">
+              加载中…
+            </div>
+            <div v-else-if="!skillPackages.length" class="composer-tools-empty">
+              暂无 Skills
+            </div>
+            <label
+              v-for="skill in skillPackages"
+              :key="skill.id"
+              class="composer-tool-row"
+            >
+              <n-checkbox
+                :checked="isSkillChecked(skill.id)"
+                @update:checked="(checked) => toggleSkill(skill.id, checked)"
+              />
+              <span class="composer-tool-row__label">{{ skill.id }} ({{ skill.source }})</span>
+            </label>
+          </template>
         </div>
       </n-popover>
 
@@ -253,6 +386,10 @@ function openMcpConfig() {
   flex-shrink: 0;
 }
 
+.composer-hidden-input {
+  display: none;
+}
+
 .composer-plus-btn {
   display: inline-flex;
   align-items: center;
@@ -279,10 +416,10 @@ function openMcpConfig() {
 }
 
 .composer-tools-panel {
-  min-width: 280px;
-  max-width: min(360px, calc(100vw - 32px));
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 32px));
   max-height: min(420px, calc(100vh - 200px));
-  padding: 8px 0;
+  padding: 6px 0;
   overflow-y: auto;
   background: var(--n-color, #fff);
   border: 1px solid var(--n-border-color, rgb(0 0 0 / 9%));
@@ -290,21 +427,68 @@ function openMcpConfig() {
   box-shadow: var(--n-box-shadow, 0 4px 16px rgb(0 0 0 / 12%));
 }
 
-.composer-tools-section + .composer-tools-section {
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--n-border-color, rgb(0 0 0 / 9%));
+.composer-menu-item,
+.composer-menu-back {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--noesis-text-primary, #111);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
 }
 
-.composer-tools-section__title {
-  padding: 4px 14px 8px;
-  font-size: 12px;
+.composer-menu-item:hover,
+.composer-menu-back:hover {
+  background: var(--noesis-color-primary-bg-subtle, rgb(0 0 0 / 4%));
+}
+
+.composer-menu-item__icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  color: var(--noesis-text-secondary, #6b7280);
+}
+
+.composer-menu-item__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.composer-menu-item__badge {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--noesis-color-primary-bg-subtle, rgb(0 0 0 / 6%));
+  color: var(--noesis-text-secondary, #6b7280);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.composer-menu-item__chevron {
+  flex-shrink: 0;
+  color: var(--noesis-text-secondary, #6b7280);
+  font-size: 14px;
+}
+
+.composer-menu-back {
+  margin-bottom: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--n-border-color, rgb(0 0 0 / 9%));
   font-weight: 600;
   color: var(--noesis-text-secondary, #6b7280);
 }
 
 .composer-tools-empty {
-  padding: 4px 14px 10px;
+  padding: 8px 14px 12px;
   font-size: 12px;
   color: var(--noesis-text-secondary, #6b7280);
 }

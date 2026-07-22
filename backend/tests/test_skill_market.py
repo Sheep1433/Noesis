@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import zipfile
 from pathlib import Path
 
@@ -114,22 +115,13 @@ def test_search_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
         def json(self):
             return payload
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
+    def fake_request(cls, method, url, **kwargs):
+        assert method == "GET"
+        assert "/api/search" in url
+        assert kwargs["params"]["q"] == "pdf"
+        return FakeResp()
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url, params=None):
-            assert "/api/search" in url
-            assert params["q"] == "pdf"
-            return FakeResp()
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(SkillsShClient, "_request_skills_sh", classmethod(fake_request))
     hits = SkillsShClient.search("pdf", limit=5)
     assert len(hits) == 1
     assert hits[0].skill_id == "pdf"
@@ -293,6 +285,57 @@ def test_browse_no_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ei.value.message == "leaderboard down"
 
 
+def test_leaderboard_stale_cache_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    hit = client_mod.SkillsShSearchHit(
+        id="acme/skills/demo",
+        skill_id="demo",
+        name="demo",
+        source="acme/skills",
+        installs=1,
+    )
+    client_mod._leaderboard_cache["trending"] = (time.monotonic() - 600, [hit])
+
+    def boom(cls, method, url, **kwargs):
+        raise httpx.ConnectError("[SSL: UNEXPECTED_EOF_WHILE_READING]")
+
+    monkeypatch.setattr(SkillsShClient, "_request_skills_sh", classmethod(boom))
+    results = SkillsShClient.fetch_leaderboard("trending", limit=10)
+    assert len(results) == 1
+    assert results[0].skill_id == "demo"
+
+
+def test_request_skills_sh_retries_transient_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    class FakeResp:
+        status_code = 200
+        text = "ok"
+        is_error = False
+        headers: dict = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def request(self, method, url, **kwargs):
+            calls.append(1)
+            if len(calls) < 3:
+                raise httpx.ConnectError("transient")
+            return FakeResp()
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    resp = SkillsShClient._request_skills_sh("GET", "https://skills.sh/trending")
+    assert resp.status_code == 200
+    assert len(calls) == 3
+
+
 def test_annotate_exact_and_name_conflict(users_root: Path) -> None:
     exact = paths.ensure_user_skills_dir("u1") / "pdf"
     exact.mkdir(parents=True)
@@ -346,74 +389,54 @@ def test_annotate_exact_and_name_conflict(users_root: Path) -> None:
     assert items[2].installed is False
 
 
-def test_parse_skills_sh_detail_html_prose() -> None:
-    html = """
-    <html><body>
-    <div class="prose dark:prose-invert">
-      <h1>Web Access</h1>
-      <p>Route all web operations through this skill.</p>
-      <ul><li>Search</li><li>Fetch pages</li></ul>
-    </div>
-    <div class="flex gap-2"></div>
-  </body></html>
-    """
-    skill_md, display_name = SkillsShClient._parse_skills_sh_detail_html(html)
-    assert "Web Access" in skill_md
-    assert "Route all web operations" in skill_md
-    assert display_name is None
+def test_pick_skill_md_from_download() -> None:
+    skill_md, relpath = SkillsShClient._pick_skill_md_from_download([
+        {"path": "references/note.md", "contents": "x"},
+        {"path": ".claude/skills/design-guide/SKILL.md", "contents": "deep"},
+        {"path": "SKILL.md", "contents": "---\nname: demo\n---\n\n# Demo\n"},
+    ])
+    assert relpath == "SKILL.md"
+    assert "# Demo" in skill_md
 
 
-def test_parse_skills_sh_detail_html_schema_fallback() -> None:
-    html = """
-    <script type="application/ld+json">{
-      "@type": "SoftwareApplication",
-      "name": "Design Guide",
-      "description": "Paperclip design system skill."
-    }</script>
-    """
-    skill_md, display_name = SkillsShClient._parse_skills_sh_detail_html(html)
-    assert display_name == "Design Guide"
-    assert "Paperclip design system" in skill_md
+def test_parse_skill_md_display_name() -> None:
+    md = "---\nname: design-guide\ndescription: x\n---\n\n# Guide\n"
+    assert SkillsShClient._parse_skill_md_display_name(md) == "design-guide"
+    assert SkillsShClient._parse_skill_md_display_name("# no frontmatter") is None
 
 
-def test_fetch_skill_preview_from_skills_sh(monkeypatch: pytest.MonkeyPatch) -> None:
-    html = """
-    <html><body>
-    <div class="prose dark:prose-invert">
-      <h1>Design Guide</h1>
-      <p>Guidelines for Paperclip UI.</p>
-    </div>
-    <div class="flex gap-2"></div>
-    <script type="application/ld+json">{
-      "@type": "SoftwareApplication",
-      "name": "Design Guide"
-    }</script>
-    </body></html>
-    """
+def test_fetch_skill_preview_from_download_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "files": [
+            {
+                "path": "SKILL.md",
+                "contents": (
+                    "---\nname: design-guide\n---\n\n"
+                    "# Paperclip Design Guide\n\n## 13. Common Mistakes to Avoid\n"
+                ),
+            },
+            {"path": "scripts/run.py", "contents": "print('hi')\n"},
+        ],
+        "hash": "abc",
+    }
 
     class FakeResp:
         status_code = 200
-        text = html
         is_error = False
         headers: dict = {}
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
+        def json(self):
+            return payload
 
-        def __enter__(self):
-            return self
+    def fake_request(cls, method, url, **kwargs):
+        assert method == "GET"
+        assert url.endswith("/api/download/getpaperclipai/paperclip/design-guide")
+        return FakeResp()
 
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url, **kwargs):
-            assert "skills.sh/getpaperclipai/paperclip/design-guide" in url
-            return FakeResp()
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(SkillsShClient, "_request_skills_sh", classmethod(fake_request))
     preview = SkillsShClient.fetch_skill_preview("getpaperclipai/paperclip", "design-guide")
-    assert "Design Guide" in preview.skill_md
+    assert "Paperclip Design Guide" in preview.skill_md
+    assert "13. Common Mistakes" in preview.skill_md
     assert preview.skill_md_relpath == "SKILL.md"
     assert preview.tree == []
-    assert preview.display_name == "Design Guide"
+    assert preview.display_name == "design-guide"

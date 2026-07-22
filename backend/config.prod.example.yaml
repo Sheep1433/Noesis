@@ -142,7 +142,8 @@ skills_market:
   base_url: https://skills.sh
   search_timeout_seconds: 15
   github_timeout_seconds: 60
-  cache_ttl_seconds: 300
+  cache_ttl_seconds: 3600
+  preview_cache_ttl_seconds: 86400
   max_archive_bytes: 52428800
 
 # LangGraph Agent checkpoint（独立 PostgreSQL 数据库）
@@ -162,6 +163,11 @@ sandbox:
   backend: docker
   runner_url: http://127.0.0.1:8090
   execute_timeout_seconds: 120
+
+# SuperAgent HITL（默认关闭）；ask_timeout_seconds=86400（24h）
+hitl:
+  enabled: false
+  ask_timeout_seconds: 86400
 
 # 知识库 DeepDoc（ONNX 权重需单独下载，见 backend/kb/README.md）
 kb:

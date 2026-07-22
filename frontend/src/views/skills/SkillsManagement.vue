@@ -347,7 +347,10 @@ async function onMarketInstalled() {
             />
           </n-layout-sider>
 
-          <n-layout-content content-style="padding: 0;" :native-scrollbar="false">
+          <n-layout-content
+            content-style="padding: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden;"
+            :native-scrollbar="false"
+          >
             <div v-if="isMobile" class="mobile-tree-bar">
               <n-button size="small" quaternary @click="treeDrawerOpen = true">
                 <template #icon>
@@ -384,12 +387,10 @@ async function onMarketInstalled() {
                 </div>
                 <div class="preview-body">
                   <FilePreview
-                    class="skills-file-preview"
                     :path="previewMeta.relPath"
                     :content="previewContent"
                     :show-path="false"
                     density="comfortable"
-                    fill-height
                   />
                 </div>
               </div>
@@ -505,12 +506,15 @@ async function onMarketInstalled() {
 }
 
 .skills-tabs :deep(.n-tab-pane) {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 .market-pane {
   height: 100%;
-  min-height: 420px;
+  min-height: 0;
 }
 
 .fs-layout--mobile {
@@ -605,8 +609,13 @@ async function onMarketInstalled() {
 .fs-layout {
   flex: 1;
   min-height: 0;
+  height: 100%;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.fs-layout :deep(.n-layout) {
+  height: 100%;
 }
 
 .fs-layout :deep(.n-layout-scroll-container) {
@@ -618,10 +627,10 @@ async function onMarketInstalled() {
 
 .preview-pane {
   display: flex;
-  flex-direction: column;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
-  height: 100%;
+  overflow: hidden;
 }
 
 .sider-header {
@@ -659,12 +668,12 @@ async function onMarketInstalled() {
 
 .preview-state {
   display: flex;
+  flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  height: 100%;
-  min-height: 280px;
+  min-height: 0;
   padding: 24px;
   color: var(--n-text-color-3);
 }
@@ -699,17 +708,19 @@ async function onMarketInstalled() {
 }
 
 .preview-body {
-  display: flex;
   flex: 1;
-  flex-direction: column;
   min-height: 0;
   padding: 12px 16px 16px;
-  overflow: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
-.skills-file-preview {
-  flex: 1;
-  min-height: 0;
+.preview-body :deep(.file-preview__markdown),
+.preview-body :deep(.file-preview__code),
+.preview-body :deep(.file-preview__editor),
+.preview-body :deep(.file-preview__image-wrap) {
+  max-height: none;
+  overflow: visible;
 }
 
 .upload-desc {

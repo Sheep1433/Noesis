@@ -66,6 +66,7 @@ class ToolPart(MessagePart):
     status: str = "running"
     error: Optional[str] = None
     error_category: Optional[str] = None
+    hitl: Optional[Dict[str, Any]] = None
     type: str = "tool"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -85,6 +86,8 @@ class ToolPart(MessagePart):
             out["errorCategory"] = self.error_category
         if self.parent_task_call_id:
             out["parent_task_call_id"] = self.parent_task_call_id
+        if self.hitl:
+            out["hitl"] = self.hitl
         return out
 
 
@@ -109,6 +112,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             status=data.get("status") or "running",
             error=data.get("error"),
             error_category=data.get("errorCategory"),
+            hitl=data.get("hitl"),
         )
     raise ValueError(f"Unknown part type: {part_type}")
 
@@ -211,18 +215,49 @@ class AssistantMessageBuilder:
         tool_input: Optional[Dict[str, Any]] = None,
         tool_call_id: Optional[str] = None,
         parent_task_call_id: Optional[str] = None,
+        *,
+        status: str = "running",
+        hitl: Optional[Dict[str, Any]] = None,
     ) -> None:
         part = ToolPart(
             name=tool,
             arguments=tool_input,
             tool_call_id=tool_call_id,
             parent_task_call_id=parent_task_call_id,
-            status="running",
+            status=status,
+            hitl=hitl,
         )
         self._content.parts.append(part)
         self._last_tool = part
         if tool_call_id:
             self._tools_by_call_id[tool_call_id] = part
+
+    def load_from_content_dict(self, data: Dict[str, Any]) -> None:
+        """从已落库 content 恢复 parts（HITL resume 续写同一 assistant 行）。"""
+        self._content = MessageContent.from_dict(data or {"parts": []})
+        self._tools_by_call_id = {}
+        self._last_tool = None
+        for part in self._content.parts:
+            if isinstance(part, ToolPart) and part.tool_call_id:
+                self._tools_by_call_id[part.tool_call_id] = part
+                if part.status == "running":
+                    self._last_tool = part
+
+    def update_tool_hitl(
+        self,
+        tool_call_id: Optional[str],
+        hitl: Dict[str, Any],
+        *,
+        status: Optional[str] = None,
+    ) -> None:
+        if not tool_call_id:
+            return
+        target = self._tools_by_call_id.get(tool_call_id)
+        if target is None:
+            return
+        target.hitl = {**(target.hitl or {}), **hitl}
+        if status is not None:
+            target.status = status
 
     def append_tool_output(
         self,

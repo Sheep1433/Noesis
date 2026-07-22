@@ -163,7 +163,8 @@ skills_market:
   base_url: https://skills.sh
   search_timeout_seconds: 15
   github_timeout_seconds: 60
-  cache_ttl_seconds: 300
+  cache_ttl_seconds: 3600
+  preview_cache_ttl_seconds: 86400  # SKILL.md 详情缓存（秒），默认 24h
   max_archive_bytes: 52428800  # 50MB
   # featured_skills 可省略，使用内置推荐种子
 
@@ -185,6 +186,12 @@ sandbox:
   backend: docker
   runner_url: http://127.0.0.1:8090
   execute_timeout_seconds: 120
+
+# SuperAgent HITL（工具审批 / ask_user）；默认关闭，与现网行为一致
+# ask_timeout_seconds: 超时未审批按 reject；86400 = 24h
+hitl:
+  enabled: false
+  ask_timeout_seconds: 86400
 
 # 知识库 DeepDoc（ONNX 权重需单独下载，见 backend/kb/README.md）
 kb:

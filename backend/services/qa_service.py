@@ -286,7 +286,63 @@ def _assistant_content_snapshot(builder: Optional[AssistantMessageBuilder]) -> D
 
 
 def _assistant_status_for_finish(finish_reason: str) -> str:
-    return "error" if finish_reason == "error" else "completed"
+    if finish_reason == "error":
+        return "error"
+    if finish_reason == "hitl_pending":
+        return "streaming"
+    return "completed"
+
+
+async def _persist_hitl_pending_assistant(
+    *,
+    builder: Optional[AssistantMessageBuilder],
+    bridge: LangGraphSseBridge,
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+    qa_type: str,
+    model: Optional[str] = None,
+) -> None:
+    """HITL 等待：UPDATE content + status=streaming，不标记终态 finalized。"""
+    if ctx.get("user_stopped"):
+        return
+    if ctx.get("text_buffer") and builder:
+        builder.append_text_delta(
+            ctx["text_buffer"],
+            parent_task_call_id=ctx.get("text_buffer_parent_task_call_id"),
+        )
+        ctx["text_buffer"] = ""
+        ctx["text_buffer_parent_task_call_id"] = None
+    content = _assistant_content_snapshot(builder)
+    extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge, model=model)
+    aid = _resolve_assistant_message_id(ctx, builder)
+    if not aid:
+        return
+    await _persist_assistant(
+        content,
+        session_id,
+        user_id,
+        status="streaming",
+        extra=extra,
+        assistant_message_id=aid,
+    )
+    hitl = bridge.last_hitl_payload or {}
+    if hitl.get("interrupt_id"):
+        from agent.hitl.pending import PendingHitl, pending_hitl
+        from agent.hitl.timeout import schedule_hitl_timeout
+
+        pending = PendingHitl(
+            interrupt_id=str(hitl["interrupt_id"]),
+            session_id=session_id,
+            user_id=str(user_id),
+            assistant_message_id=str(aid),
+            expires_at=float(hitl.get("expires_at") or 0),
+            kind=str(hitl.get("kind") or "approval"),
+            action_requests=list(hitl.get("action_requests") or []),
+            review_configs=list(hitl.get("review_configs") or []),
+        )
+        pending_hitl.put(pending)
+        schedule_hitl_timeout(pending)
 
 
 def _build_assistant_persist_extra(
@@ -849,15 +905,26 @@ class QaService:
                 yield sse_line
 
             if not task_cancelled and not ctx.get("user_stopped"):
-                await _finalize_streaming_assistant(
-                    builder=builder,
-                    bridge=bridge,
-                    ctx=ctx,
-                    session_id=session_id,
-                    user_id=current_user.user_id,
-                    qa_type=req_obj.qa_type,
-                    model=resolved_model_name,
-                )
+                if bridge.last_finish_reason == "hitl_pending":
+                    await _persist_hitl_pending_assistant(
+                        builder=builder,
+                        bridge=bridge,
+                        ctx=ctx,
+                        session_id=session_id,
+                        user_id=current_user.user_id,
+                        qa_type=req_obj.qa_type,
+                        model=resolved_model_name,
+                    )
+                else:
+                    await _finalize_streaming_assistant(
+                        builder=builder,
+                        bridge=bridge,
+                        ctx=ctx,
+                        session_id=session_id,
+                        user_id=current_user.user_id,
+                        qa_type=req_obj.qa_type,
+                        model=resolved_model_name,
+                    )
 
             logger.info(
                 f"exec_query 流式正常结束 session_id={session_id} qa_type={req_obj.qa_type} "
@@ -1184,6 +1251,281 @@ class QaService:
                         yield line
                 except Exception:
                     logging.exception("failed to emit SSE after test case resume exception")
+            cls._active_streams.pop(session_id, None)
+
+    @classmethod
+    async def exec_hitl_resume(
+        cls,
+        session_id: str,
+        *,
+        interrupt_id: str,
+        decisions: List[Dict[str, Any]],
+        grant_scope: Optional[str],
+        current_user: CurrentUser,
+        db: AsyncSession,
+    ) -> AsyncGenerator[str, None]:
+        """HITL resume：新开 SSE，续写同一 assistant_message_id。"""
+        from agent.hitl.pending import pending_hitl
+        from agent.hitl.session_grants import session_grants
+        from models.chat_models import TChatMessage
+        from sqlalchemy import and_, select
+
+        task_cancelled = False
+        builder: Optional[AssistantMessageBuilder] = None
+        bridge: Optional[LangGraphSseBridge] = None
+        ctx: Dict[str, Any] = {}
+        qa_type = IntentEnum.SUPER_AGENT_QA.value[0]
+
+        pending = pending_hitl.get(session_id)
+        if (
+            pending is None
+            or pending.interrupt_id != interrupt_id
+            or pending.user_id != str(current_user.user_id)
+        ):
+            br = LangGraphSseBridge(session_id)
+            c: Dict[str, Any] = {}
+            for line in br.process_item(
+                {"type": "__tw_error__", "content": "无匹配的 pending HITL"},
+                None,
+                c,
+            ):
+                yield line
+            for line in br.process_item(
+                {"type": "__tw_finish__", "finish_reason": "error", "usage": {}},
+                None,
+                c,
+            ):
+                yield line
+            for line in br.finalize():
+                yield line
+            return
+
+        if pending_hitl.is_expired(pending):
+            pending_hitl.clear(session_id)
+            br = LangGraphSseBridge(
+                session_id,
+                assistant_message_id=pending.assistant_message_id,
+            )
+            c = {}
+            for line in br.process_item(
+                {"type": "__tw_error__", "content": "HITL 已超时"},
+                None,
+                c,
+            ):
+                yield line
+            for line in br.process_item(
+                {"type": "__tw_finish__", "finish_reason": "error", "usage": {}},
+                None,
+                c,
+            ):
+                yield line
+            for line in br.finalize():
+                yield line
+            return
+
+        if grant_scope == "session":
+            # 仅网络类 execute 可 grant；memory 写入不在此路径授予
+            session_grants.grant(session_id, "network_execute")
+
+        decision_payloads = []
+        for d in decisions:
+            item: Dict[str, Any] = {"type": d.get("type")}
+            if d.get("message") is not None:
+                item["message"] = d["message"]
+            decision_payloads.append(item)
+
+        aid = pending.assistant_message_id
+        actions = list(pending.action_requests or [])
+        pending_hitl.pop_if_match(session_id, interrupt_id)
+        from agent.hitl.timeout import cancel_hitl_timeout
+
+        cancel_hitl_timeout(session_id)
+
+        try:
+            existing_content: Dict[str, Any] = {"version": 1, "parts": []}
+            async with AsyncSessionLocal() as persist_db:
+                result = await persist_db.execute(
+                    select(TChatMessage).where(
+                        and_(
+                            TChatMessage.id == aid,
+                            TChatMessage.session_id == session_id,
+                            TChatMessage.user_id == str(current_user.user_id),
+                            TChatMessage.deleted_at.is_(None),
+                        )
+                    )
+                )
+                msg = result.scalar_one_or_none()
+                if msg and isinstance(msg.content, dict):
+                    existing_content = msg.content
+
+            bridge = LangGraphSseBridge(
+                session_id,
+                emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
+                assistant_message_id=aid,
+            )
+            builder = AssistantMessageBuilder(session_id=session_id, message_id=aid)
+            builder.load_from_content_dict(existing_content)
+            ctx = _new_stream_ctx()
+            ctx["_assistant_db_id"] = aid
+            cls._active_streams[session_id] = _ActiveStreamState(
+                builder=builder,
+                ctx=ctx,
+                qa_type=qa_type,
+                model_name=None,
+            )
+
+            # reject/respond 不经 on_tool_end：先合成 tool-output 与 hitl 状态
+            from domain.chat.streaming.langgraph_sse import _format_sse
+
+            for idx, decision in enumerate(decision_payloads):
+                action = actions[idx] if idx < len(actions) else {}
+                tool_call_id = action.get("tool_call_id")
+                name = str(action.get("name") or "")
+                dtype = decision.get("type")
+                if dtype == "approve":
+                    builder.update_tool_hitl(
+                        tool_call_id,
+                        {"status": "approved", "decision": "approve"},
+                    )
+                elif dtype == "reject":
+                    msg_text = decision.get("message") or "用户拒绝了该操作"
+                    builder.update_tool_hitl(
+                        tool_call_id,
+                        {"status": "rejected", "decision": "reject"},
+                        status="error",
+                    )
+                    try:
+                        builder.append_tool_output(
+                            name,
+                            msg_text,
+                            tool_call_id,
+                            status="error",
+                            error=msg_text,
+                            error_category="deterministic",
+                        )
+                    except ValueError:
+                        pass
+                    yield _format_sse(
+                        "tool-output-available",
+                        {
+                            "type": "tool-output-available",
+                            "message_id": aid,
+                            "tool_call_id": tool_call_id,
+                            "name": name,
+                            "output": msg_text,
+                            "status": "error",
+                            "error": msg_text,
+                        },
+                    )
+                elif dtype == "respond":
+                    answer = str(decision.get("message") or "")
+                    builder.update_tool_hitl(
+                        tool_call_id,
+                        {"status": "answered", "decision": "respond"},
+                        status="success",
+                    )
+                    try:
+                        builder.append_tool_output(
+                            name,
+                            answer,
+                            tool_call_id,
+                            status="success",
+                        )
+                    except ValueError:
+                        pass
+                    yield _format_sse(
+                        "tool-output-available",
+                        {
+                            "type": "tool-output-available",
+                            "message_id": aid,
+                            "tool_call_id": tool_call_id,
+                            "name": name,
+                            "output": answer,
+                            "status": "success",
+                        },
+                    )
+
+            agent_generator = super_agent.resume_agent(
+                session_id=session_id,
+                decisions=decision_payloads,
+                current_user=current_user,
+                qa_type=qa_type,
+                db=db,
+                message_id=aid,
+            )
+
+            ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
+            async for sse_line in _yield_sse_from_agent_bridge(
+                agent_generator,
+                bridge=bridge,
+                builder=builder,
+                ctx=ctx,
+                session_id=session_id,
+                user_id=current_user.user_id,
+                qa_type=qa_type,
+                keepalive_seconds=ka_sec,
+            ):
+                yield sse_line
+
+            async for sse_line in _finalize_sse_bridge_stream(
+                bridge, builder, ctx, session_id, current_user.user_id
+            ):
+                yield sse_line
+
+            if not task_cancelled and not ctx.get("user_stopped"):
+                if bridge.last_finish_reason == "hitl_pending":
+                    await _persist_hitl_pending_assistant(
+                        builder=builder,
+                        bridge=bridge,
+                        ctx=ctx,
+                        session_id=session_id,
+                        user_id=current_user.user_id,
+                        qa_type=qa_type,
+                    )
+                else:
+                    await _finalize_streaming_assistant(
+                        builder=builder,
+                        bridge=bridge,
+                        ctx=ctx,
+                        session_id=session_id,
+                        user_id=current_user.user_id,
+                        qa_type=qa_type,
+                    )
+
+            cls._active_streams.pop(session_id, None)
+
+        except asyncio.CancelledError:
+            task_cancelled = True
+            await _handle_stream_client_disconnect(
+                session_id=session_id,
+                qa_type=qa_type,
+                user_id=current_user.user_id,
+                ctx=ctx or {},
+                builder=builder,
+                log_label="exec_hitl_resume",
+            )
+            cls._active_streams.pop(session_id, None)
+            raise
+        except Exception as e:
+            logging.exception(f"HITL resume 异常: {e}")
+            if bridge is not None:
+                b = builder or AssistantMessageBuilder(session_id=session_id)
+                c = ctx or {}
+                try:
+                    for line in bridge.process_item(
+                        {"type": "__tw_error__", "content": str(e)}, b, c
+                    ):
+                        yield line
+                    for line in bridge.process_item(
+                        {"type": "__tw_finish__", "finish_reason": "error", "usage": {}},
+                        b,
+                        c,
+                    ):
+                        yield line
+                    for line in bridge.finalize():
+                        yield line
+                except Exception:
+                    logging.exception("failed to emit SSE after HITL resume exception")
             cls._active_streams.pop(session_id, None)
 
     @classmethod

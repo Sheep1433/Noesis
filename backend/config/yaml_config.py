@@ -223,6 +223,7 @@ class SkillsMarketYamlSection(BaseModel):
     search_timeout_seconds: int = Field(default=15, ge=1)
     github_timeout_seconds: int = Field(default=60, ge=1)
     cache_ttl_seconds: int = Field(default=300, ge=0)
+    preview_cache_ttl_seconds: int = Field(default=86400, ge=0)
     max_archive_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
     featured_skills: list[SkillsMarketFeaturedItem] = Field(
         default_factory=lambda: [
@@ -289,6 +290,14 @@ class SandboxYamlSection(BaseModel):
     execute_timeout_seconds: int = Field(default=120, ge=1)
 
 
+class HitlYamlSection(BaseModel):
+    """SuperAgent 人机协同（工具审批 / ask_user）。"""
+
+    enabled: bool = False
+    # 默认 24h：异步审批场景避免短超时误 reject
+    ask_timeout_seconds: int = Field(default=86400, ge=1)
+
+
 class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
     ttl_days: int = Field(default=7, ge=1)
@@ -341,6 +350,7 @@ class AppYamlConfig(BaseModel):
     checkpoint: CheckpointYamlSection = Field(default_factory=CheckpointYamlSection)
     chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)
     sandbox: SandboxYamlSection = Field(default_factory=SandboxYamlSection)
+    hitl: HitlYamlSection = Field(default_factory=HitlYamlSection)
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
 
 

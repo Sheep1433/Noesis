@@ -7,7 +7,8 @@ from typing import Any, Literal, cast
 from deepagents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
 from langchain.agents import create_agent
-from langchain.agents.middleware import ToolCallLimitMiddleware
+from langchain.agents.middleware import HumanInTheLoopMiddleware, ToolCallLimitMiddleware
+from langchain.agents.middleware.human_in_the_loop import InterruptOnConfig
 from langchain.agents.middleware.types import AgentMiddleware
 
 from deepagents.backends import BackendProtocol
@@ -20,7 +21,7 @@ from agent.middlewares import (
     ToolErrorHandlingMiddleware,
     create_summary_offload_middleware,
 )
-from config.env import ModelConfig
+from config.env import HitlConfig, ModelConfig
 from llm import get_llm
 
 ExitBehavior = Literal["continue", "error", "end"]
@@ -154,6 +155,7 @@ def create_noesis_agent(
     subagents: list[SubAgent | CompiledSubAgent] | None = None,
     async_subagents: list[AsyncSubAgent] | None = None,
     extra_middleware: list[AgentMiddleware] | None = None,
+    interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     model=None,
     model_id: str | None = None,
     **create_agent_kwargs: Any,
@@ -166,6 +168,7 @@ def create_noesis_agent(
         → SubAgentMiddleware (optional)
         → AsyncSubAgentMiddleware (optional)
         → extra_middleware（如 SkillsMiddleware，由调用方按需传入）
+        → HumanInTheLoopMiddleware（可选，``hitl.enabled`` + ``interrupt_on``）
         → SessionClockMiddleware
         → DanglingToolCall / SummarizationOffload / LoopDetection
         → ToolErrorHandlingMiddleware
@@ -180,6 +183,7 @@ def create_noesis_agent(
         subagents: 同步子 Agent 规格，挂载 ``SubAgentMiddleware``（需 ``backend``）。
         async_subagents: 远程 Agent Protocol 异步子 Agent，挂载 ``AsyncSubAgentMiddleware``。
         extra_middleware: 能力扩展中间件（Skills 等），插在文件系统/子 Agent 栈与运行时防护之间。
+        interrupt_on: HITL 工具审批配置；仅当 ``HitlConfig.enabled`` 且非空时挂载中间件。
         **create_agent_kwargs: 透传给 ``create_agent``（如 ``state_schema``）。
     """
     middleware: list[AgentMiddleware] = []
@@ -192,6 +196,8 @@ def create_noesis_agent(
     )
     if extra_middleware:
         middleware.extend(extra_middleware)
+    if HitlConfig.enabled and interrupt_on:
+        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
     middleware.extend(build_noesis_runtime_middleware(backend=backend, model_id=model_id))
 
     return create_agent(
