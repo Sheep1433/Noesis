@@ -138,8 +138,9 @@ export const fetchConversationHistory = async function fetchConversationHistory(
       if (data && Array.isArray(data.data?.records)) {
         const records = data.data.records
 
-        // 初始化左侧会话列表数据
-        if (isInit.value) {
+        // 列表查询（无指定 row）：刷新左侧会话列表
+        // 点选具体会话时 API 按 chat_id 过滤，不得用单条结果覆盖整表
+        if (!row?.chat_id) {
           tableData.value = records.map((chat: any) => ({
             uuid: chat.session_id,
             key: chat.title?.trim() || '新对话',
@@ -149,12 +150,9 @@ export const fetchConversationHistory = async function fetchConversationHistory(
         }
 
         // 用户点击了某个会话，加载该会话的完整消息历史
+        // 列表刷新不得清空 conversationItems，否则关「管理对话」会洗白主区
         if (row?.chat_id && !isInit.value) {
           await loadSessionMessages(row.chat_id, conversationItems, currentRenderIndex)
-        } else {
-          // 初始化时或搜索时不加载 conversationItems
-          conversationItems.value = []
-          currentRenderIndex.value = 0
         }
       }
     } else {
@@ -168,7 +166,7 @@ export const fetchConversationHistory = async function fetchConversationHistory(
 /**
  * 加载指定会话的完整消息历史
  */
-async function loadSessionMessages(
+export async function loadSessionMessages(
   sessionId: string,
   conversationItems: Ref<any[]>,
   currentRenderIndex: Ref<number>,

@@ -6,6 +6,8 @@ import { getChatModels } from '@/api/models'
 const props = defineProps<{
   sessionId: string
   disabled?: boolean
+  /** ACTIVE 会话才写回 session.extra；COMPOSING 仅改本地 modelValue */
+  persistSessionExtra?: boolean
 }>()
 
 const modelValue = defineModel<string>({ default: '' })
@@ -38,10 +40,8 @@ async function loadModels() {
     options.value = catalog.models ?? []
     if (!modelValue.value) {
       modelValue.value = catalog.default_id
-      await persistModel(catalog.default_id)
     } else if (!options.value.some((item) => item.id === modelValue.value)) {
       modelValue.value = catalog.default_id
-      await persistModel(catalog.default_id)
     }
   } catch (e) {
     options.value = []
@@ -52,7 +52,7 @@ async function loadModels() {
 }
 
 async function persistModel(modelId: string) {
-  if (!props.sessionId || !modelId) {
+  if (!props.persistSessionExtra || !props.sessionId || !modelId) {
     return
   }
   try {

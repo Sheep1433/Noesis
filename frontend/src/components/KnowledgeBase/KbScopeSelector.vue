@@ -6,6 +6,8 @@ const props = defineProps<{
   sessionId: string
   disabled?: boolean
   embedded?: boolean
+  /** ACTIVE 会话才写回 session.extra；COMPOSING 仅改本地 v-model */
+  persistSessionExtra?: boolean
 }>()
 
 const modelValue = defineModel<string[]>({ default: () => [] })
@@ -55,7 +57,7 @@ async function loadCollections() {
 }
 
 async function persistScope(names: string[], enabled = kbSearchEnabled.value) {
-  if (!props.sessionId) {
+  if (!props.persistSessionExtra || !props.sessionId) {
     return
   }
   try {

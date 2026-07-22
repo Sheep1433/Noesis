@@ -12,6 +12,16 @@ const childrenRoutes: Array<RouteRecordRaw> = [
         name: 'ChatIndex',
         component: () => import('@/views/chat.vue'),
       },
+      {
+        path: 'new',
+        name: 'ChatNew',
+        component: () => import('@/views/chat.vue'),
+      },
+      {
+        path: ':sessionId',
+        name: 'ChatSession',
+        component: () => import('@/views/chat.vue'),
+      },
     ],
   },
   {

@@ -76,6 +76,10 @@ vlm:
   name: Qwen3-VL-32B-Instruct
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
+context:
+  max_input_tokens: 0
+  display_enabled: true
+
 summarization:
   enabled: true
   model_name: ""
@@ -98,6 +102,12 @@ loop_detection:
 
 agent_runtime:
   dangling_tool_call_repair_enabled: true
+  tool_call_limit:
+    enabled: true
+    thread_limit: 200
+    run_limit: null
+    exit_behavior: continue
+    task_run_limit: 10
 
 stream:
   sse_keepalive_interval_seconds: 25
@@ -120,6 +130,17 @@ langfuse:
 
 other:
   skills_filesystem_root: ""  # 空则默认 extensions/skills（Docker 镜像内为 /app/extensions/skills）
+  mcp_config_path: ""  # 空则默认 extensions/mcp/mcp.json
+
+# Skills 市场（skills.sh 搜索 + GitHub 安装到个人 skills）
+skills_market:
+  provider: skills_sh
+  base_url: https://skills.sh
+  search_timeout_seconds: 15
+  github_timeout_seconds: 60
+  cache_ttl_seconds: 3600
+  preview_cache_ttl_seconds: 86400
+  max_archive_bytes: 52428800
 
 # 容器内路径基于 /app（backend/）；持久化见 docker-compose backend_runtime 卷
 checkpoint:
@@ -134,6 +155,8 @@ chat_attachment:
   vision_enabled: true
   reinject_session_images: true
   max_files_per_message: 10
+  image_inject_max_edge: 1536
+  vlm_fallback_enabled: true
   tiny_inline_chars: 4096
   read_page_lines: 2000
   preview_chars: 500

@@ -22,6 +22,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/10-create-langgraph-db.sql:ro
+    # 宿主机 5433，避免 POSTGRES_PORT 经 env_file 泄漏进 backend 覆盖容器内 5432
     ports:
       - "5433:5432"
     healthcheck:

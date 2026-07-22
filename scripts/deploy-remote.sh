@@ -21,6 +21,12 @@ CONFIG_FILE="$ROOT/deploy/config.docker.yaml"
 
 die() { echo "deploy-remote: $*" >&2; exit 1; }
 
+# 沙箱 bind 宿主机路径：由仓库根推导，勿写入 deploy/.env.docker
+export_compose_host_env() {
+  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.data}"
+  export NOESIS_HOST_SKILLS_DIR="${NOESIS_HOST_SKILLS_DIR:-$ROOT/extensions/skills}"
+}
+
 [[ -f "$COMPOSE_FILE" ]] || die "缺少 ${COMPOSE_FILE}（请使用 deploy/docker-compose.yml，勿用仓库根目录旧 compose）"
 [[ -f "$ENV_FILE" ]] || die "缺少 ${ENV_FILE}，请从 deploy/.env.docker.example 复制并填写"
 [[ -f "$CONFIG_FILE" ]] || die "缺少 ${CONFIG_FILE}"
@@ -28,6 +34,7 @@ die() { echo "deploy-remote: $*" >&2; exit 1; }
 cd "$ROOT"
 
 compose() {
+  export_compose_host_env
   local cmd=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
   if docker info >/dev/null 2>&1; then
     "${cmd[@]}" "$@"

@@ -14,7 +14,7 @@ import uuid
 import time
 import threading
 from typing import Optional, List, Dict, Any
-from sqlalchemy import select, and_, update, func
+from sqlalchemy import select, and_, update, func, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.chat_models import TChatSession, TChatMessage
@@ -699,6 +699,18 @@ class ChatService:
             TChatSession.user_id == user_id,
             TChatSession.deleted_at.is_(None)
         ]
+        # 侧栏/列表：仅展示至少有一条未删 user 消息的会话（过滤 ensure 空壳）
+        conditions.append(
+            exists(
+                select(TChatMessage.id).where(
+                    and_(
+                        TChatMessage.session_id == TChatSession.id,
+                        TChatMessage.role == "user",
+                        TChatMessage.deleted_at.is_(None),
+                    )
+                )
+            )
+        )
 
         base_filter = and_(*conditions) if conditions else None
         result = await db.execute(
@@ -727,6 +739,15 @@ class ChatService:
         conditions = [
             TChatSession.user_id == user_id,
             TChatSession.deleted_at.is_(None),
+            exists(
+                select(TChatMessage.id).where(
+                    and_(
+                        TChatMessage.session_id == TChatSession.id,
+                        TChatMessage.role == "user",
+                        TChatMessage.deleted_at.is_(None),
+                    )
+                )
+            ),
         ]
         if session_id:
             conditions.append(TChatSession.id == session_id)
