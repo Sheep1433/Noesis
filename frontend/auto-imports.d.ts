@@ -57,6 +57,7 @@ declare global {
   const isReactive: typeof import('vue')['isReactive']
   const isReadonly: typeof import('vue')['isReadonly']
   const isRef: typeof import('vue')['isRef']
+  const loadSessionMessages: typeof import('./src/store/business/initChatHistory')['loadSessionMessages']
   const makeDestructurable: typeof import('@vueuse/core')['makeDestructurable']
   const markRaw: typeof import('vue')['markRaw']
   const mentionToPayload: typeof import('./src/hooks/useMentionCatalog')['mentionToPayload']
@@ -405,6 +406,7 @@ declare module 'vue' {
     readonly isReactive: UnwrapRef<typeof import('vue')['isReactive']>
     readonly isReadonly: UnwrapRef<typeof import('vue')['isReadonly']>
     readonly isRef: UnwrapRef<typeof import('vue')['isRef']>
+    readonly loadSessionMessages: UnwrapRef<typeof import('./src/store/business/initChatHistory')['loadSessionMessages']>
     readonly makeDestructurable: UnwrapRef<typeof import('@vueuse/core')['makeDestructurable']>
     readonly markRaw: UnwrapRef<typeof import('vue')['markRaw']>
     readonly mentionToPayload: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['mentionToPayload']>

@@ -15,6 +15,8 @@ const props = defineProps<{
   qaType: string
   sessionId: string
   disabled?: boolean
+  /** ACTIVE 才 ensure 写 extra；COMPOSING 只改本地 v-model */
+  persistSessionExtra?: boolean
   fileUploadRef?: InstanceType<typeof FileUploadManager> | null
 }>()
 
@@ -29,11 +31,12 @@ const skillsAllEnabled = defineModel<boolean>('skillsAllEnabled', { default: tru
 
 const showKbScope = computed(() => props.qaType === 'COMMON_QA')
 const showSkillsMenu = computed(() => props.qaType === 'SUPER_AGENT_QA')
-const showUploadImage = computed(() =>
+const showFileUpload = computed(() =>
   props.qaType === 'COMMON_QA'
   || props.qaType === 'SUPER_AGENT_QA'
   || props.qaType === 'DEEP_RESEARCH_QA',
 )
+const showUploadImage = computed(() => showFileUpload.value)
 const plusOpen = ref(false)
 const menuView = ref<MenuView>('root')
 
@@ -93,7 +96,7 @@ watch(
 )
 
 async function persistExtra(patch: Record<string, unknown>) {
-  if (!props.sessionId) {
+  if (!props.persistSessionExtra || !props.sessionId) {
     return
   }
   try {
@@ -232,6 +235,7 @@ const skillSummary = computed(() => {
           <!-- 一级：上传 / MCP / Skills -->
           <template v-if="menuView === 'root'">
             <button
+              v-if="showFileUpload"
               type="button"
               class="composer-menu-item"
               @click="pickDocuments"
@@ -344,6 +348,7 @@ const skillSummary = computed(() => {
       <ModelSelector
         v-model="selectedModelId"
         :session-id="sessionId"
+        :persist-session-extra="persistSessionExtra"
         :disabled="disabled"
       />
 
@@ -352,6 +357,7 @@ const skillSummary = computed(() => {
           v-model="selectedKbCollections"
           v-model:kb-search-enabled="kbSearchEnabled"
           :session-id="sessionId"
+          :persist-session-extra="persistSessionExtra"
           :disabled="disabled"
         />
       </div>

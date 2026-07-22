@@ -425,10 +425,8 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
 def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
     hitl = yaml_cfg.hitl
     return HitlSettings(
-        enabled=_legacy_env_bool("HITL_ENABLED", hitl.enabled),
-        ask_timeout_seconds=_legacy_env_int(
-            "HITL_ASK_TIMEOUT_SECONDS", hitl.ask_timeout_seconds
-        ),
+        enabled=hitl.enabled,
+        ask_timeout_seconds=hitl.ask_timeout_seconds,
     )
 
 
@@ -488,24 +486,13 @@ def _build_skills_market(yaml_cfg: AppYamlConfig) -> SkillsMarketSettings:
         if (item.source or "").strip() and (item.skill_id or "").strip()
     )
     return SkillsMarketSettings(
-        provider=_legacy_env("SKILLS_MARKET_PROVIDER", sm.provider).strip() or "skills_sh",
-        base_url=_legacy_env("SKILLS_MARKET_BASE_URL", sm.base_url).strip().rstrip("/")
-        or "https://skills.sh",
-        search_timeout_seconds=_legacy_env_int(
-            "SKILLS_MARKET_SEARCH_TIMEOUT_SECONDS", sm.search_timeout_seconds
-        ),
-        github_timeout_seconds=_legacy_env_int(
-            "SKILLS_MARKET_GITHUB_TIMEOUT_SECONDS", sm.github_timeout_seconds
-        ),
-        cache_ttl_seconds=_legacy_env_int(
-            "SKILLS_MARKET_CACHE_TTL_SECONDS", sm.cache_ttl_seconds
-        ),
-        preview_cache_ttl_seconds=_legacy_env_int(
-            "SKILLS_MARKET_PREVIEW_CACHE_TTL_SECONDS", sm.preview_cache_ttl_seconds
-        ),
-        max_archive_bytes=_legacy_env_int(
-            "SKILLS_MARKET_MAX_ARCHIVE_BYTES", sm.max_archive_bytes
-        ),
+        provider=sm.provider.strip() or "skills_sh",
+        base_url=sm.base_url.strip().rstrip("/") or "https://skills.sh",
+        search_timeout_seconds=sm.search_timeout_seconds,
+        github_timeout_seconds=sm.github_timeout_seconds,
+        cache_ttl_seconds=sm.cache_ttl_seconds,
+        preview_cache_ttl_seconds=sm.preview_cache_ttl_seconds,
+        max_archive_bytes=sm.max_archive_bytes,
         featured_skills=featured,
     )
 
