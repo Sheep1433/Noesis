@@ -72,7 +72,7 @@ class SkillMarketListResponse(BaseModel):
 class SkillMarketDetailResponse(BaseModel):
     """市场技能详情（正文来自 skills.sh 详情页）"""
     item: SkillMarketItem
-    skill_md: str = Field(default='', description='SKILL 正文（skills.sh 渲染）')
+    skill_md: str = Field(default='', description='SKILL.md 原文（skills.sh /api/download）')
     skill_md_path: str = Field(default='', description='展示用路径，固定为 SKILL.md')
 
 

@@ -474,16 +474,14 @@ function primaryActionLabel(item: SkillMarketItem): string {
             正文来自 skills.sh；安装后可在「已安装」Tab 查看完整目录结构。
           </n-text>
           <div class="detail-content">
-            <div class="detail-preview">
-              <FilePreview
-                v-if="detailMd"
-                path="SKILL.md"
-                :content="detailMd"
-                :show-path="false"
-                density="comfortable"
-              />
-              <n-empty v-else description="暂无 SKILL.md 内容" />
-            </div>
+            <FilePreview
+              v-if="detailMd"
+              path="SKILL.md"
+              :content="detailMd"
+              :show-path="false"
+              density="comfortable"
+            />
+            <n-empty v-else description="暂无 SKILL.md 内容" />
           </div>
         </template>
         <n-empty v-else description="选择左侧技能查看详情" />
@@ -539,8 +537,9 @@ function primaryActionLabel(item: SkillMarketItem): string {
   display: grid;
   grid-template-columns: minmax(260px, 340px) 1fr;
   gap: 12px;
-  min-height: 0;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .market-list {
@@ -604,32 +603,14 @@ function primaryActionLabel(item: SkillMarketItem): string {
 }
 
 .market-detail {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
   border: 1px solid var(--noesis-border);
   border-radius: 8px;
   padding: 12px;
-  display: flex;
-  flex-direction: column;
-}
-
-.detail-hint {
-  display: block;
-  font-size: 12px;
-  margin-bottom: 8px;
-}
-
-.detail-content {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.detail-preview {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
 }
 
 .detail-header {
@@ -637,7 +618,30 @@ function primaryActionLabel(item: SkillMarketItem): string {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-shrink: 0;
   margin-bottom: 12px;
+}
+
+.detail-hint {
+  display: block;
+  flex-shrink: 0;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.detail-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.detail-content :deep(.file-preview__markdown),
+.detail-content :deep(.file-preview__code),
+.detail-content :deep(.file-preview__editor),
+.detail-content :deep(.file-preview__image-wrap) {
+  max-height: none;
+  overflow: visible;
 }
 
 .detail-name {

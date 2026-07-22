@@ -1,9 +1,16 @@
 from collections.abc import AsyncGenerator
 
 from langchain_core.messages import convert_to_messages
+from langgraph.types import Command
+
+from agent.hitl.stream import (
+    _tool_calls_from_model_end,
+    build_hitl_required_event,
+    extract_interrupt_payload,
+)
+from common.logging import logger
 from config.checkpointer import get_checkpointer
 from domain.observability.langfuse import langfuse_tracing_enabled, merge_langfuse_runnable_config
-from common.logging import logger
 
 DEFAULT_RECURSION_LIMIT = 200
 
@@ -60,11 +67,16 @@ class BaseAgent:
         """
         消费 agent.astream_events，原样 yield LangGraph/LangChain 事件 dict；
         结束时 yield __tw_finish__；取消 / 异常时 yield 控制哨兵（由 langgraph_sse_bridge 转 SSE）。
+        HITL interrupt：转为 ``hitl-required`` + ``finish_reason=hitl_pending``。
         """
-        raw_input = dict(stream_args.get("input", {}))
-        input_messages = raw_input.get("messages", [])
-        if isinstance(input_messages, list):
-            raw_input["messages"] = convert_to_messages(input_messages)
+        raw_input = stream_args.get("input", {})
+        if isinstance(raw_input, Command):
+            stream_input: object = raw_input
+        else:
+            stream_input = dict(raw_input or {})
+            input_messages = stream_input.get("messages", [])
+            if isinstance(input_messages, list):
+                stream_input["messages"] = convert_to_messages(input_messages)
 
         original_config = stream_args.get("config", {})
         recursion_limit = original_config.get("recursion_limit", DEFAULT_RECURSION_LIMIT)
@@ -84,9 +96,13 @@ class BaseAgent:
             enabled=langfuse_tracing_enabled(),
         )
 
+        session_id = str(stream_args.get("langfuse_session_id") or task_id or "")
+        last_tool_calls: list[dict] = []
+        hitl_pending = False
+
         try:
             async for event in agent.astream_events(
-                raw_input,
+                stream_input,
                 config=agent_config,
             ):
                 if self.running_tasks.get(task_id, {}).get("cancelled"):
@@ -95,9 +111,32 @@ class BaseAgent:
                     )
                     yield {"type": "__tw_abort__"}
                     break
+
+                model_tcs = _tool_calls_from_model_end(event)
+                if model_tcs:
+                    last_tool_calls = model_tcs
+
+                interrupt = extract_interrupt_payload(event)
+                if interrupt is not None:
+                    interrupt_id, hitl_value = interrupt
+                    logger.info(
+                        f"HITL interrupt task_id={task_id} interrupt_id={interrupt_id}"
+                    )
+                    yield build_hitl_required_event(
+                        interrupt_id=interrupt_id,
+                        hitl_value=hitl_value,
+                        session_id=session_id,
+                        message_id=_message_id,
+                        tool_calls=last_tool_calls,
+                    )
+                    yield {"type": "__tw_finish__", "finish_reason": "hitl_pending"}
+                    hitl_pending = True
+                    break
+
                 yield event
 
-            yield {"type": "__tw_finish__", "finish_reason": "stop"}
+            if not hitl_pending:
+                yield {"type": "__tw_finish__", "finish_reason": "stop"}
 
         except Exception as e:
             logger.exception(

@@ -49,6 +49,22 @@ class TestCaseResumeRequest(BaseModel):
     selected_point_names: List[str] = Field(..., description="用户采纳的测试点 point_name 列表，至少一项")
 
 
+class HitlDecisionItem(BaseModel):
+    type: Literal["approve", "reject", "respond"] = Field(..., description="HITL 决策类型")
+    message: Optional[str] = Field(None, description="reject 说明或 respond 回答文本")
+
+
+class HitlResumeRequest(BaseModel):
+    """SuperAgent HITL：审批 / 澄清后继续同一 thread（返回新 SSE）"""
+
+    interrupt_id: str = Field(..., description="hitl-required 中的 interrupt_id")
+    decisions: List[HitlDecisionItem] = Field(..., min_length=1, description="与 action_requests 等长的决策列表")
+    grant_scope: Optional[Literal["once", "session"]] = Field(
+        None,
+        description="网络类 execute：once 仅本次；session 本会话同类放行",
+    )
+
+
 class TestCaseExportCaseItem(BaseModel):
     """导出用例条目（与阶段 B 产出字段对齐）"""
 

@@ -139,6 +139,12 @@ class StreamSettings:
 
 
 @dataclass(frozen=True)
+class HitlSettings:
+    enabled: bool
+    ask_timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class OtherSettings:
     skills_filesystem_root: str
     mcp_config_path: str
@@ -158,6 +164,7 @@ class SkillsMarketSettings:
     search_timeout_seconds: int
     github_timeout_seconds: int
     cache_ttl_seconds: int
+    preview_cache_ttl_seconds: int
     max_archive_bytes: int
     featured_skills: tuple[SkillsMarketFeaturedSkill, ...]
 
@@ -415,6 +422,16 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
     )
 
 
+def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
+    hitl = yaml_cfg.hitl
+    return HitlSettings(
+        enabled=_legacy_env_bool("HITL_ENABLED", hitl.enabled),
+        ask_timeout_seconds=_legacy_env_int(
+            "HITL_ASK_TIMEOUT_SECONDS", hitl.ask_timeout_seconds
+        ),
+    )
+
+
 def _build_other(yaml_cfg: AppYamlConfig) -> OtherSettings:
     other = yaml_cfg.other
     return OtherSettings(
@@ -482,6 +499,9 @@ def _build_skills_market(yaml_cfg: AppYamlConfig) -> SkillsMarketSettings:
         ),
         cache_ttl_seconds=_legacy_env_int(
             "SKILLS_MARKET_CACHE_TTL_SECONDS", sm.cache_ttl_seconds
+        ),
+        preview_cache_ttl_seconds=_legacy_env_int(
+            "SKILLS_MARKET_PREVIEW_CACHE_TTL_SECONDS", sm.preview_cache_ttl_seconds
         ),
         max_archive_bytes=_legacy_env_int(
             "SKILLS_MARKET_MAX_ARCHIVE_BYTES", sm.max_archive_bytes
@@ -638,6 +658,10 @@ class GetConfig:
         return _build_sandbox(self._secrets, self._yaml)
 
     @lru_cache
+    def get_hitl_config(self) -> HitlSettings:
+        return _build_hitl(self._yaml)
+
+    @lru_cache
     def get_checkpoint_config(self) -> CheckpointSettings:
         return _build_checkpoint(self._yaml)
 
@@ -691,5 +715,6 @@ SkillsMarketConfig = get_config.get_skills_market_config()
 WebToolsConfig = get_config.get_web_tools_config()
 CheckpointConfig = get_config.get_checkpoint_config()
 SandboxConfig = get_config.get_sandbox_config()
+HitlConfig = get_config.get_hitl_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
 KbConfig = get_config.get_kb_config()

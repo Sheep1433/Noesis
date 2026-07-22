@@ -225,6 +225,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       || t === 'phase-start'
       || t === 'phase-delta'
       || t === 'phase-end'
+      || t === 'hitl-required'
     ) {
       onCustomEvent?.(t, data)
       return
@@ -469,6 +470,102 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     }
   }
 
+  async function resumeHitl(
+    sessionId: string,
+    body: {
+      interrupt_id: string
+      decisions: Array<{ type: string, message?: string }>
+      grant_scope?: 'once' | 'session' | null
+    },
+  ) {
+    if (isLoading.value) {
+      return
+    }
+
+    tool_name_by_call_id.clear()
+    error.value = null
+    streamSettled = false
+    lastFinishReason = undefined
+    userAborted = false
+    abortController = new AbortController()
+    isLoading.value = true
+
+    const qaType = 'SUPER_AGENT_QA'
+    setupBeforeUnload(sessionId, qaType)
+
+    try {
+      const res = await fetch(`/api/chat/sessions/${sessionId}/hitl/resume`, {
+        method: 'POST',
+        credentials: 'include',
+        signal: abortController.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!res.ok) {
+        const status = res.status
+        let detail = `请求失败（HTTP ${status}）`
+        if (status === 429) {
+          detail = '请求过于频繁（429），请稍后再试'
+        } else if (status === 401) {
+          detail = '未授权（401），请重新登录'
+        } else if (status === 503) {
+          detail = '服务暂时不可用（503），请稍后再试'
+        }
+        throw new Error(detail)
+      }
+
+      const reader = res.body?.getReader()
+      if (!reader) {
+        throw new Error('无法读取响应流')
+      }
+
+      const decoder = new TextDecoder()
+      let rawBuffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (value) {
+          rawBuffer += decoder.decode(value, { stream: true })
+        }
+        const { frames, rest } = parseSseFrames(rawBuffer)
+        rawBuffer = rest
+        for (const frame of frames) {
+          parseAndDispatchFrame(frame, dispatchFrame)
+        }
+        if (done) {
+          break
+        }
+      }
+
+      if (rawBuffer.trim()) {
+        const flush = `${rawBuffer}\n\n`
+        const { frames: tailFrames } = parseSseFrames(flush)
+        for (const frame of tailFrames) {
+          parseAndDispatchFrame(frame, dispatchFrame)
+        }
+        rawBuffer = ''
+      }
+      if (!userAborted) {
+        settleSuccess()
+      }
+    } catch (err: unknown) {
+      if (userAborted) {
+        settleSuccess('stopped')
+      } else {
+        const msg = err instanceof Error ? err.message : String(err)
+        settleFailure(msg)
+      }
+    } finally {
+      cleanupBeforeUnload()
+      abortController = null
+      isLoading.value = false
+    }
+  }
+
   function abortStream() {
     if (!isLoading.value || userAborted) {
       return
@@ -482,6 +579,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     error,
     sendMessage,
     resumeTestCase,
+    resumeHitl,
     abortStream,
   }
 }

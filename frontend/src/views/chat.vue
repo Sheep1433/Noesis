@@ -8,6 +8,7 @@ import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
+import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
@@ -39,6 +40,7 @@ import {
   appendTextDelta,
   appendTextDeltaWithRedactedThinking,
   appendUserStopNotice,
+  applyHitlPendingParts,
   applyToolOutput,
   assistantPartsStillStreaming,
   completeLastReasoningPart,
@@ -182,6 +184,16 @@ function newChat() {
 
 // 对话等待提示词图标
 const stylizingLoading = ref(false)
+
+type PendingHitlState = {
+  interrupt_id: string
+  kind: string
+  action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown>, description?: string }>
+  review_configs: unknown[]
+  expires_at: number
+  submitting: boolean
+}
+const pendingHitl = ref<PendingHitlState | null>(null)
 
 // 输入字符串
 const inputTextString = ref('')
@@ -551,6 +563,27 @@ const sseStream = useSSEStream({
   onToolResult: (tool_call_id, payload) => {
     patchLastAssistantParts((parts) => applyToolOutput(parts, tool_call_id, payload))
   },
+  onCustomEvent: (eventType, data) => {
+    if (eventType !== 'hitl-required') {
+      return
+    }
+    const interrupt_id = String(data.interrupt_id ?? '')
+    const kind = String(data.kind ?? 'approval')
+    const action_requests = Array.isArray(data.action_requests)
+      ? (data.action_requests as Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>)
+      : []
+    pendingHitl.value = {
+      interrupt_id,
+      kind,
+      action_requests,
+      review_configs: Array.isArray(data.review_configs) ? data.review_configs : [],
+      expires_at: Number(data.expires_at ?? 0),
+      submitting: false,
+    }
+    patchLastAssistantParts((parts) =>
+      applyHitlPendingParts(parts, { interrupt_id, kind, action_requests }),
+    )
+  },
   onFinish: (detail) => {
     stylizingLoading.value = false
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
@@ -558,9 +591,13 @@ const sseStream = useSSEStream({
     if (lastIdx !== -1) {
       const prev = conversationItems.value[lastIdx]
       if (prev.messageContent?.version === 1) {
-        const parts = detail?.finish_reason === 'stopped'
-          ? appendUserStopNotice(prev.messageContent.parts)
-          : markStreamingPartsComplete(prev.messageContent.parts)
+        let parts = prev.messageContent.parts
+        if (detail?.finish_reason === 'stopped') {
+          parts = appendUserStopNotice(parts)
+        } else if (detail?.finish_reason !== 'hitl_pending') {
+          parts = markStreamingPartsComplete(parts)
+          pendingHitl.value = null
+        }
         const { content, reasoning } = syncLegacyFieldsFromParts(parts)
         conversationItems.value = [
           ...conversationItems.value.slice(0, lastIdx),
@@ -635,6 +672,29 @@ const sseStream = useSSEStream({
 
 /** 顶层 ref 供模板自动解包；嵌在 sseStream 对象里的 isLoading 不会解包，会导致选择器一直 disabled */
 const sseIsLoading = sseStream.isLoading
+
+async function submitHitlFromPanel(payload: {
+  decisions: Array<{ type: string, message?: string }>
+  grant_scope?: 'once' | 'session' | null
+}) {
+  const pending = pendingHitl.value
+  if (!pending || pending.submitting) {
+    return
+  }
+  pending.submitting = true
+  const sessionId = getChatSessionId()
+  try {
+    await sseStream.resumeHitl(sessionId, {
+      interrupt_id: pending.interrupt_id,
+      decisions: payload.decisions,
+      grant_scope: payload.grant_scope,
+    })
+  } finally {
+    if (pendingHitl.value) {
+      pendingHitl.value.submitting = false
+    }
+  }
+}
 
 async function stopChatStream() {
   const sessionId = getChatSessionId()
@@ -1811,16 +1871,17 @@ function onComposerPaste(e: ClipboardEvent) {
                               :duration_ms="entry.part.duration_ms"
                               :child-parts="entry.childParts"
                             />
-                            <ToolCallCollapse
-                              v-else-if="entry.kind === 'part' && entry.part.type === 'tool'"
-                              appearance="light"
-                              :name="entry.part.name"
-                              :arguments="entry.part.input"
-                              :result="entry.part.output"
-                              :error="entry.part.error"
-                              :status="entry.part.status"
-                              :duration_ms="entry.part.duration_ms"
-                            />
+                            <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
+                              <ToolCallCollapse
+                                appearance="light"
+                                :name="entry.part.name"
+                                :arguments="entry.part.input"
+                                :result="entry.part.output"
+                                :error="entry.part.error"
+                                :status="entry.part.status"
+                                :duration_ms="entry.part.duration_ms"
+                              />
+                            </template>
                             <MarkdownPreview
                               v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                               :content="entry.part.content || ''"
@@ -1920,8 +1981,16 @@ function onComposerPaste(e: ClipboardEvent) {
                     vertical
                     class="chat-content-gutter"
                   >
-                    <!-- 文档流内、与输入区同宽，避免 absolute 遮挡消息区 -->
+                    <!-- HITL 优先占 Todo 槽位；无 pending 时显示 Todo -->
+                    <HitlComposerPanel
+                      v-if="pendingHitl"
+                      :kind="pendingHitl.kind"
+                      :action-requests="pendingHitl.action_requests"
+                      :disabled="!!pendingHitl.submitting || sseIsLoading"
+                      @submit="submitHitlFromPanel"
+                    />
                     <TodoList
+                      v-else
                       :todos="businessStore.todos"
                     />
                     <div
@@ -2149,6 +2218,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         :qa-type="qa_type"
                         :session-id="uuids[qa_type] ?? ''"
                         :disabled="sseIsLoading"
+                        :file-upload-ref="fileUploadRef"
                       >
                         <template #right>
                           <ContextWindowIndicator

@@ -13,7 +13,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from urllib.parse import quote
 
-from fastapi import Body, Depends, APIRouter, HTTPException
+from fastapi import Body, Depends, APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,7 +42,12 @@ from common.http.response import ResponseUtil
 from domain.chat.message_builder import UserMessageBuilder
 from common.logging import logger
 from constants.code_enum import IntentEnum
-from schemas.qa_vo import QaStopRequest, TestCaseExportRequest, TestCaseResumeRequest
+from schemas.qa_vo import (
+    HitlResumeRequest,
+    QaStopRequest,
+    TestCaseExportRequest,
+    TestCaseResumeRequest,
+)
 
 
 chat_router = APIRouter(prefix="/api/chat")
@@ -685,6 +690,58 @@ async def resume_test_case_stream(
         generator = QaService.exec_test_case_resume(
             session_id=session_id,
             selected_point_names=request.selected_point_names,
+            current_user=current_user,
+            db=db,
+        )
+        return StreamingResponse(
+            _event_generator(generator, session_id),
+            media_type="text/event-stream",
+        )
+    except Exception as e:
+        logger.exception(e)
+        return StreamingResponse(
+            iter([
+                'event: error\ndata: {"type":"error","message_id":"","error":"服务异常"}\n\n',
+                'event: finish\ndata: {"type":"finish","message_id":"","finish_reason":"error","usage":{}}\n\n',
+                'data: [DONE]\n\n',
+            ]),
+            media_type="text/event-stream",
+        )
+
+
+@chat_router.post("/sessions/{session_id}/hitl/resume", summary="SuperAgent HITL：审批/澄清后继续")
+async def resume_hitl_stream(
+    session_id: str,
+    request: HitlResumeRequest,
+    http_request: Request,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    从 hitl-required interrupt 恢复 SuperAgent；成功返回新的 text/event-stream。
+    CSRF：校验 ``X-CSRF-Token``（与 stop 同级，但不复用 QaStopRequest body）。
+    """
+    await UserService.require_csrf(http_request)
+
+    session = await ChatService.get_session_by_id(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if not session:
+        return ResponseUtil.not_found(msg="会话不存在")
+
+    try:
+        logger.info(
+            f"HITL resume 流式开始 session_id={session_id} user_id={current_user.user_id} "
+            f"interrupt_id={request.interrupt_id}"
+        )
+        decisions = [d.model_dump(exclude_none=True) for d in request.decisions]
+        generator = QaService.exec_hitl_resume(
+            session_id=session_id,
+            interrupt_id=request.interrupt_id,
+            decisions=decisions,
+            grant_scope=request.grant_scope,
             current_user=current_user,
             db=db,
         )

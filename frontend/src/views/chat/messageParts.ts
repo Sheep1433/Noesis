@@ -33,6 +33,13 @@ export interface ToolUiPart {
   duration_ms?: number
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
   parent_task_call_id?: string
+  /** HITL 审批/澄清状态（可选扩展） */
+  hitl?: {
+    kind?: string
+    status?: 'pending' | 'approved' | 'rejected' | 'answered'
+    interrupt_id?: string
+    decision?: string
+  } | null
 }
 
 export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart
@@ -231,6 +238,19 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
       })
     } else if (rec.type === 'tool') {
       const input = normalizeToolPartInput(rec.input)
+      const hitlRaw = rec.hitl
+      const hitl = hitlRaw && typeof hitlRaw === 'object'
+        ? {
+            kind: typeof (hitlRaw as any).kind === 'string' ? (hitlRaw as any).kind : undefined,
+            status: (hitlRaw as any).status,
+            interrupt_id: typeof (hitlRaw as any).interrupt_id === 'string'
+              ? (hitlRaw as any).interrupt_id
+              : undefined,
+            decision: typeof (hitlRaw as any).decision === 'string'
+              ? (hitlRaw as any).decision
+              : undefined,
+          }
+        : undefined
       parts.push({
         id,
         type: 'tool',
@@ -243,6 +263,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         errorCategory: rec.errorCategory != null ? String(rec.errorCategory) : null,
         duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
+        ...(hitl ? { hitl } : {}),
       })
     }
   }
@@ -828,6 +849,40 @@ export function applyToolOutput(
     errorCategory: payload.errorCategory ?? tp.errorCategory,
     status,
     duration_ms: payload.duration_ms ?? tp.duration_ms,
+  }
+  return next
+}
+
+export function applyHitlPendingParts(
+  parts: UiPart[],
+  payload: {
+    interrupt_id: string
+    kind: string
+    action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>
+  },
+): UiPart[] {
+  let next = parts.map((p) => ({ ...p })) as UiPart[]
+  for (const action of payload.action_requests || []) {
+    const tool_call_id = action.tool_call_id || ''
+    const name = action.name || ''
+    const args = action.args && typeof action.args === 'object' ? action.args : {}
+    if (tool_call_id) {
+      next = upsertToolInputPart(next, tool_call_id, name, args)
+    }
+    const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
+    if (idx === -1) {
+      continue
+    }
+    const tp = next[idx] as ToolUiPart
+    next[idx] = {
+      ...tp,
+      status: 'running',
+      hitl: {
+        kind: payload.kind,
+        status: 'pending',
+        interrupt_id: payload.interrupt_id,
+      },
+    }
   }
   return next
 }

@@ -15,7 +15,7 @@ Shell 产物优先相对路径（cwd=`/workspace`）。**不要**把普通任务
 _INTENT_GATE = """<interaction>
 ## 交互分流（每次回复前优先判断）
 
-**直接文字回复，禁止调用任何工具**（含 ls、read_file、write_todos、web_search、task、execute 等）：
+**直接文字回复，禁止调用任何工具**（含 ls、read_file、write_todos、web_search、task、execute、ask_user 等）：
 - 问候、寒暄、致谢、告别
 - 询问你能做什么、如何使用本助手
 - 消息过短、无具体任务，或尚无法形成可执行目标
@@ -28,7 +28,13 @@ _INTENT_GATE = """<interaction>
 - 用户补充约束或对进行中任务给出反馈
 - 用户要求查看或汇总已有工作区产物
 
-不确定时：先用一句话确认意图，**仍不调用工具**。
+不确定时：先用一句话确认意图，**仍不调用工具**（含 `ask_user`）。
+
+**`ask_user` 边界**（仅 HITL 启用时可用）：
+- **仅**在任务已启动、已进入工具循环后，缺少执行所需关键参数时调用（如输出格式、范围）。
+- **优先**传 `options`（2–5 个互斥选项）；无法穷举时再用自由文本。
+- 同一轮可并行多次 `ask_user` 提出多个独立问题。
+- 任务入口寒暄或意图不明：**SHALL** 纯文本追问，**SHALL NOT** 调用 `ask_user`。
 </interaction>"""
 
 _APPROACH = """<approach>

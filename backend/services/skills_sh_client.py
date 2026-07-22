@@ -10,7 +10,6 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from html import unescape
 from pathlib import Path
 from typing import Iterable, Literal
 from urllib.parse import quote, urlparse
@@ -34,14 +33,17 @@ _ALLOWED_HOSTS = frozenset(
     },
 )
 
-_SKILLS_SH_HTML_HEADERS = {
+_SKILL_MD_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.S)
+
+_SKILLS_SH_REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-US,en;q=0.9",
 }
+_HTTP_RETRIES = 3
+_HTTP_RETRY_BASE_SLEEP = 0.5
 
 _search_cache: dict[str, tuple[float, list["SkillsShSearchHit"]]] = {}
 # sort → (monotonic_ts, hits)
@@ -132,7 +134,64 @@ def market_url_for(skill_full_id: str, base_url: str | None = None) -> str:
 
 
 class SkillsShClient:
-    """skills.sh Search API + Leaderboard（All Time / Trending）+ GitHub archive 安装。"""
+    """skills.sh Search API + Leaderboard + Download API 详情 + GitHub archive 安装。"""
+
+    @classmethod
+    def _stale_cache_max_seconds(cls) -> int:
+        return max(
+            SkillsMarketConfig.cache_ttl_seconds,
+            SkillsMarketConfig.preview_cache_ttl_seconds,
+        )
+
+    @classmethod
+    def _cache_fresh(cls, entry: tuple[float, object] | None, ttl: int) -> object | None:
+        if not entry or ttl <= 0:
+            return None
+        ts, value = entry
+        if time.monotonic() - ts < ttl:
+            return value
+        return None
+
+    @classmethod
+    def _cache_stale(cls, entry: tuple[float, object] | None) -> object | None:
+        if not entry:
+            return None
+        ts, value = entry
+        if time.monotonic() - ts < cls._stale_cache_max_seconds():
+            return value
+        return None
+
+    @classmethod
+    def _request_skills_sh(
+        cls,
+        method: str,
+        url: str,
+        *,
+        params: dict | None = None,
+        accept: str = "application/json",
+    ) -> httpx.Response:
+        cls._assert_allowed_url(url)
+        timeout = float(SkillsMarketConfig.search_timeout_seconds)
+        headers = {**_SKILLS_SH_REQUEST_HEADERS, "Accept": accept}
+        last_error: Exception | None = None
+        for attempt in range(_HTTP_RETRIES):
+            try:
+                with httpx.Client(
+                    timeout=timeout,
+                    follow_redirects=True,
+                    http2=False,
+                ) as client:
+                    return client.request(method, url, params=params, headers=headers)
+            except httpx.HTTPError as exc:
+                last_error = exc
+                logger.warning(
+                    f"skills.sh HTTP error {method} {url}"
+                    f" attempt={attempt + 1}/{_HTTP_RETRIES}: {exc}",
+                )
+                if attempt + 1 < _HTTP_RETRIES:
+                    time.sleep(_HTTP_RETRY_BASE_SLEEP * (2 ** attempt))
+        assert last_error is not None
+        raise last_error
 
     @classmethod
     def fetch_leaderboard(
@@ -148,29 +207,36 @@ class SkillsShClient:
         ttl = SkillsMarketConfig.cache_ttl_seconds
         now = time.monotonic()
         cached = _leaderboard_cache.get(sort)
-        if cached and ttl > 0 and now - cached[0] < ttl:
-            return list(cached[1][:limit])
+        fresh = cls._cache_fresh(cached, ttl)
+        if fresh is not None:
+            return list(fresh)[:limit]  # type: ignore[arg-type]
 
         base = SkillsMarketConfig.base_url.rstrip("/")
         path = _LEADERBOARD_PATHS[sort]
         url = f"{base}{path}" if path != "/" else f"{base}/"
-        timeout = float(SkillsMarketConfig.search_timeout_seconds)
         label = "All Time" if sort == "all_time" else "Trending"
         try:
-            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                resp = client.get(url, headers={"Accept": "text/html"})
-                cls._raise_for_status(resp, f"skills.sh {label} 榜加载失败")
-                html = resp.text
-        except httpx.HTTPError as exc:
-            logger.warning(f"skills.sh leaderboard HTTP error sort={sort}: {exc}")
-            raise ServiceException(message=f"skills.sh {label} 榜加载失败: {exc}") from exc
-
-        hits = cls._parse_leaderboard_html(html)
-        if not hits:
-            raise ServiceException(message=f"未能解析 skills.sh {label} 榜")
-        if ttl > 0:
-            _leaderboard_cache[sort] = (now, hits)
-        return list(hits[:limit])
+            resp = cls._request_skills_sh(
+                "GET", url, accept="text/html,application/xhtml+xml",
+            )
+            cls._raise_for_status(resp, f"skills.sh {label} 榜加载失败")
+            html = resp.text
+            hits = cls._parse_leaderboard_html(html)
+            if not hits:
+                raise ServiceException(message=f"未能解析 skills.sh {label} 榜")
+            if ttl > 0:
+                _leaderboard_cache[sort] = (now, hits)
+            return list(hits[:limit])
+        except (httpx.HTTPError, ServiceException) as exc:
+            stale = cls._cache_stale(cached)
+            if stale is not None:
+                logger.warning(
+                    f"skills.sh leaderboard fetch failed sort={sort}, using stale cache: {exc}",
+                )
+                return list(stale)[:limit]  # type: ignore[arg-type]
+            if isinstance(exc, httpx.HTTPError):
+                raise ServiceException(message=f"skills.sh {label} 榜加载失败: {exc}") from exc
+            raise
 
     @classmethod
     def fetch_trending(cls, *, limit: int = 40) -> list[SkillsShSearchHit]:
@@ -219,25 +285,32 @@ class SkillsShClient:
         ttl = SkillsMarketConfig.cache_ttl_seconds
         now = time.monotonic()
         cached = _search_cache.get(cache_key)
-        if cached and ttl > 0 and now - cached[0] < ttl:
-            return list(cached[1])
+        fresh = cls._cache_fresh(cached, ttl)
+        if fresh is not None:
+            return list(fresh)  # type: ignore[arg-type]
 
         base = SkillsMarketConfig.base_url.rstrip("/")
         url = f"{base}/api/search"
-        timeout = float(SkillsMarketConfig.search_timeout_seconds)
         try:
-            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                resp = client.get(url, params={"q": q, "limit": str(limit)})
-                cls._raise_for_status(resp, "skills.sh 搜索失败")
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            logger.warning(f"skills.sh search HTTP error: {exc}")
-            raise ServiceException(message=f"skills.sh 搜索失败: {exc}") from exc
-
-        hits = cls._parse_search_payload(data)
-        if ttl > 0:
-            _search_cache[cache_key] = (now, hits)
-        return hits
+            resp = cls._request_skills_sh(
+                "GET", url, params={"q": q, "limit": str(limit)},
+            )
+            cls._raise_for_status(resp, "skills.sh 搜索失败")
+            data = resp.json()
+            hits = cls._parse_search_payload(data)
+            if ttl > 0:
+                _search_cache[cache_key] = (now, hits)
+            return hits
+        except (httpx.HTTPError, ServiceException) as exc:
+            stale = cls._cache_stale(cached)
+            if stale is not None:
+                logger.warning(
+                    f"skills.sh search failed q={q!r}, using stale cache: {exc}",
+                )
+                return list(stale)  # type: ignore[arg-type]
+            if isinstance(exc, httpx.HTTPError):
+                raise ServiceException(message=f"skills.sh 搜索失败: {exc}") from exc
+            raise
 
     @classmethod
     def _parse_search_payload(cls, data: object) -> list[SkillsShSearchHit]:
@@ -360,33 +433,34 @@ class SkillsShClient:
 
     @classmethod
     def fetch_skill_preview(cls, source: str, skill_id: str) -> SkillsShPreview:
-        """详情预览：skills.sh 详情页（SKILL 正文 + 元数据），安装仍走 GitHub。"""
+        """详情预览：skills.sh /api/download 取 SKILL.md 原文，安装仍走 GitHub。"""
         source = validate_source(source)
         skill_id = validate_skill_id(skill_id)
         cache_key = f"{source}/{skill_id}"
-        ttl = SkillsMarketConfig.cache_ttl_seconds
+        ttl = SkillsMarketConfig.preview_cache_ttl_seconds
         now = time.monotonic()
         cached = _preview_cache.get(cache_key)
-        if cached and ttl > 0 and now - cached[0] < ttl:
-            return cached[1]
+        fresh = cls._cache_fresh(cached, ttl)
+        if fresh is not None:
+            return fresh  # type: ignore[return-value]
 
-        timeout = cls._preview_timeout()
-        url = market_url_for(f"{source}/{skill_id}")
-        cls._assert_allowed_url(url)
         try:
-            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                resp = client.get(url, headers=_SKILLS_SH_HTML_HEADERS)
-        except httpx.HTTPError as exc:
-            raise ServiceWarning(message=f"skills.sh 详情加载失败: {exc}") from exc
-        if resp.status_code == 404:
-            raise NotFoundException(message=f"skills.sh 未找到技能「{source}/{skill_id}」")
-        cls._raise_for_status(resp, "skills.sh 详情加载失败")
-        skill_md, display_name = cls._parse_skills_sh_detail_html(resp.text)
+            skill_md, skill_md_relpath, display_name = cls._fetch_skill_md_from_download(
+                source, skill_id,
+            )
+        except (httpx.HTTPError, ServiceWarning, NotFoundException) as exc:
+            stale = cls._cache_stale(cached)
+            if stale is not None and not isinstance(exc, NotFoundException):
+                logger.warning(
+                    f"skills.sh preview failed {cache_key}, using stale cache: {exc}",
+                )
+                return stale  # type: ignore[return-value]
+            raise
         if not skill_md.strip():
-            raise ServiceWarning(message="未能从 skills.sh 解析技能正文")
+            raise ServiceWarning(message="skills.sh 未返回 SKILL.md 正文")
         preview = SkillsShPreview(
             skill_md=skill_md,
-            skill_md_relpath="SKILL.md",
+            skill_md_relpath=skill_md_relpath,
             skill_dir_relpath="",
             tree=[],
             display_name=display_name,
@@ -396,78 +470,55 @@ class SkillsShClient:
         return preview
 
     @classmethod
-    def _parse_skills_sh_detail_html(cls, html: str) -> tuple[str, str | None]:
-        skill_md = cls._extract_prose_markdown(html)
-        if not skill_md:
-            skill_md = cls._extract_rsc_markdown(html)
-        display_name: str | None = None
-        for raw in re.findall(
-            r'<script type="application/ld\+json">(.*?)</script>', html or "", re.S,
-        ):
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
+    def _download_api_url(cls, source: str, skill_id: str) -> str:
+        base = SkillsMarketConfig.base_url.rstrip("/")
+        return f"{base}/api/download/{source}/{skill_id}"
+
+    @classmethod
+    def _fetch_skill_md_from_download(
+        cls, source: str, skill_id: str,
+    ) -> tuple[str, str, str | None]:
+        url = cls._download_api_url(source, skill_id)
+        resp = cls._request_skills_sh("GET", url)
+        if resp.status_code == 404:
+            raise NotFoundException(message=f"skills.sh 未找到技能「{source}/{skill_id}」")
+        cls._raise_for_status(resp, "skills.sh 下载接口失败")
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ServiceWarning(message="skills.sh 下载接口返回非 JSON") from exc
+        skill_md, skill_md_relpath = cls._pick_skill_md_from_download(data.get("files") or [])
+        display_name = cls._parse_skill_md_display_name(skill_md) if skill_md else None
+        return skill_md, skill_md_relpath, display_name
+
+    @classmethod
+    def _pick_skill_md_from_download(cls, files: Iterable) -> tuple[str, str]:
+        candidates: list[tuple[str, str]] = []
+        for item in files:
+            if not isinstance(item, dict):
                 continue
-            if not isinstance(data, dict) or data.get("@type") != "SoftwareApplication":
+            path = str(item.get("path") or "").replace("\\", "/").strip()
+            if path != "SKILL.md" and not path.endswith("/SKILL.md"):
                 continue
-            name = data.get("name")
-            if isinstance(name, str) and name.strip():
-                display_name = name.strip()
-            desc = data.get("description")
-            if not skill_md and isinstance(desc, str) and desc.strip():
-                skill_md = desc.strip()
-        return skill_md, display_name
+            contents = str(item.get("contents") or "")
+            if contents.strip():
+                candidates.append((path, contents))
+        if not candidates:
+            return "", "SKILL.md"
+        path, contents = sorted(candidates, key=lambda pair: (pair[0].count("/"), len(pair[0])))[0]
+        return contents, path if path else "SKILL.md"
 
     @classmethod
-    def _extract_prose_markdown(cls, html: str) -> str:
-        no_script = re.sub(r"<script[^>]*>.*?</script>", "", html or "", flags=re.S)
-        no_style = re.sub(r"<style[^>]*>.*?</style>", "", no_script, flags=re.S)
-        m = re.search(
-            r'<div class="prose[^"]*">(.*)</div>\s*<div class="flex',
-            no_style,
-            re.S,
-        )
-        if not m:
-            m = re.search(r'<div class="prose[^"]*">(.*)', no_style, re.S)
-        if not m:
-            return ""
-        inner = m.group(1)
-        inner = re.sub(r"<h1[^>]*>(.*?)</h1>", r"# \1\n\n", inner, flags=re.S)
-        inner = re.sub(r"<h2[^>]*>(.*?)</h2>", r"## \1\n\n", inner, flags=re.S)
-        inner = re.sub(r"<h3[^>]*>(.*?)</h3>", r"### \1\n\n", inner, flags=re.S)
-        inner = re.sub(r"<li[^>]*>(.*?)</li>", r"- \1\n", inner, flags=re.S)
-        inner = re.sub(r"<p[^>]*>(.*?)</p>", r"\1\n\n", inner, flags=re.S)
-        inner = re.sub(r"<br\s*/?>", "\n", inner, flags=re.S)
-        inner = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", inner, flags=re.S)
-        inner = re.sub(r"<code[^>]*>(.*?)</code>", r"`\1`", inner, flags=re.S)
-        inner = re.sub(r"<[^>]+>", "", inner)
-        text = unescape(inner)
-        return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-    @classmethod
-    def _extract_rsc_markdown(cls, html: str) -> str:
-        best = ""
-        for chunk in re.findall(
-            r'self\.__next_f\.push\(\[1,"((?:\\.|[^"\\])*)"\]\)', html or "",
-        ):
-            decoded = chunk.encode("utf-8").decode("unicode_escape", errors="replace")
-            for block in re.finditer(
-                r'language-markdown code-highlight">(.*?)</code>', decoded, re.S,
-            ):
-                lines: list[str] = []
-                for line in re.finditer(
-                    r'<span class="code-line">(.*?)</span>', block.group(1), re.S,
-                ):
-                    text = unescape(re.sub(r"<[^>]+>", "", line.group(1))).rstrip()
-                    lines.append(text)
-                md = "\n".join(lines).strip()
-                if len(md) > len(best):
-                    best = md
-        return best
-
-    @classmethod
-    def _preview_timeout(cls) -> float:
-        return float(SkillsMarketConfig.search_timeout_seconds)
+    def _parse_skill_md_display_name(cls, skill_md: str) -> str | None:
+        match = _SKILL_MD_FRONTMATTER_RE.match(skill_md or "")
+        if not match:
+            return None
+        for line in match.group(1).splitlines():
+            stripped = line.strip()
+            if stripped.startswith("name:"):
+                name = stripped.split(":", 1)[1].strip().strip("'\"")
+                return name or None
+        return None
 
     @classmethod
     def fetch_skill_md(cls, source: str, skill_id: str) -> tuple[str, str]:
