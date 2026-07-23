@@ -13,7 +13,9 @@ wheels/
 .claude/
 .codex/
 .agents/
-docs/
+# docs：仅提交知识卡片，其余本地文档（prd/bug 等）不纳入版本库
+docs/*
+!docs/NOTES.md
 # 缓存与依赖
 *cache*/
 *logs*/
