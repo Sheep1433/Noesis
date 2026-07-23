@@ -6,7 +6,7 @@ from typing import Any
 
 from config.env import WebToolsConfig
 from common.logging import logger
-from domain.chat.streaming.tool_errors import ToolValidationError
+from domain.chat.streaming.tool_failure import ToolValidationError
 
 
 def _get_client():

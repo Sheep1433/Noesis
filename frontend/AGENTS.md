@@ -43,7 +43,7 @@ pnpm stylelint      # 样式检查
 
 ### API 层
 
-- `src/api/user.ts`（登录、历史记录）、`chat.ts`、`knowledgeBase.ts`、`skills.ts`
+- `src/api/user.ts`（登录、历史记录）、`chat.ts`、`knowledgeBase.ts`、`skills.ts`、`settings.ts`（记忆/定时任务/通道）
 - 统一经 `src/utils/authHttp.ts`（`authFetch` / `getAuthHeaders` / `parseAuthJson`）鉴权
 
 ### 主要页面
@@ -51,6 +51,7 @@ pnpm stylelint      # 样式检查
 | 路径 | 说明 |
 |------|------|
 | `views/chat.vue` | 核心对话页 |
+| `views/settings/` | 个人设置壳（`?s=`：overview/profile/memory/capabilities/automation/channels/account）；侧栏头像入口 |
 | `views/Login.vue` | 登录 |
 | `views/knowledge-base/` | 知识库 |
 | `views/extensions/` | 扩展配置（Skills + MCP） |

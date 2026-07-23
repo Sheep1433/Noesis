@@ -29,7 +29,7 @@ def test_super_agent_no_mandatory_research_orchestration():
     assert "调研类" not in prompt
     assert "BrowseComp" not in prompt
     assert "明确一致" in prompt
-    assert "不要**把普通任务产物默认写入 `/research/`" in prompt
+    assert "不要**把普通任务产物默认写入 `/workspace/research/`" in prompt
     assert "工作区根" in prompt
 
 

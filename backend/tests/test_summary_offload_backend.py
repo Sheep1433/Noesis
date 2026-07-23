@@ -57,7 +57,7 @@ def test_offload_writes_to_injected_disk_backend_and_is_readable() -> None:
 
 def test_offload_under_session_workspace_backend() -> None:
     """会话 backend 根为 workspace/ 时，卸载落在 workspace/summary_offload/。"""
-    from config import agent_workspace_paths as paths
+    from config import user_data_paths as paths
     from config import user_data_paths as udp
 
     with tempfile.TemporaryDirectory() as tmp:

@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import pytest
 
-from agent.common_react_agent import GeneralQAAgent
-from agent.super_agent import SuperAgent
-from agent.fault_operation_agent import FaultOperationAgent
+from agent.profiles.common_react_agent import GeneralQAAgent
+from agent.profiles.super_agent import SuperAgent
+from agent.profiles.fault_operation_agent import FaultOperationAgent
 
 
 @pytest.mark.parametrize(

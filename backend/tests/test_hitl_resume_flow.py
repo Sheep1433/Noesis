@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent.base.base_agent import BaseAgent
+from agent.profiles.base_agent import BaseAgent
 
 
 class _FakeAgent:

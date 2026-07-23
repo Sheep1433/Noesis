@@ -9,7 +9,7 @@ import pytest
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import BaseModel, ValidationError
 
-from domain.chat.streaming.tool_errors import (
+from domain.chat.streaming.tool_failure import (
     ToolFailureCategory,
     ToolInfrastructureError,
     ToolNetworkError,

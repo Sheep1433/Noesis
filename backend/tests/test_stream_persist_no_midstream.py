@@ -21,10 +21,8 @@ async def test_persist_stream_checkpoint_does_not_flush_text_buffer() -> None:
     }
     bridge._persist_tick = True
 
-    with patch("services.qa_service._persist_assistant", new_callable=AsyncMock) as mock_persist:
-        await _persist_stream_checkpoint(
-            bridge, ctx, builder, "sess-mid", "u1",
-        )
+    with patch("services.qa.helpers._persist_assistant", new_callable=AsyncMock) as mock_persist:
+        await _persist_stream_checkpoint(bridge, "sess-mid", "u1")
 
     mock_persist.assert_not_awaited()
     assert ctx["text_buffer"] == "累积正文"

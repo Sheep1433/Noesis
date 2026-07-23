@@ -145,6 +145,12 @@ class HitlSettings:
 
 
 @dataclass(frozen=True)
+class MessagingSettings:
+    telegram_runtime_enabled: bool
+    telegram_poll_timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class OtherSettings:
     skills_filesystem_root: str
     mcp_config_path: str
@@ -430,6 +436,14 @@ def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
     )
 
 
+def _build_messaging(yaml_cfg: AppYamlConfig) -> MessagingSettings:
+    m = yaml_cfg.messaging
+    return MessagingSettings(
+        telegram_runtime_enabled=m.telegram_runtime_enabled,
+        telegram_poll_timeout_seconds=m.telegram_poll_timeout_seconds,
+    )
+
+
 def _build_other(yaml_cfg: AppYamlConfig) -> OtherSettings:
     other = yaml_cfg.other
     return OtherSettings(
@@ -649,6 +663,10 @@ class GetConfig:
         return _build_hitl(self._yaml)
 
     @lru_cache
+    def get_messaging_config(self) -> MessagingSettings:
+        return _build_messaging(self._yaml)
+
+    @lru_cache
     def get_checkpoint_config(self) -> CheckpointSettings:
         return _build_checkpoint(self._yaml)
 
@@ -703,5 +721,6 @@ WebToolsConfig = get_config.get_web_tools_config()
 CheckpointConfig = get_config.get_checkpoint_config()
 SandboxConfig = get_config.get_sandbox_config()
 HitlConfig = get_config.get_hitl_config()
+MessagingConfig = get_config.get_messaging_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
 KbConfig = get_config.get_kb_config()

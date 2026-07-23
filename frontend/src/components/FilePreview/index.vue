@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   editable?: boolean
   saving?: boolean
   downloadTitle?: string
+  showToolbar?: boolean
 }>(), {
   content: '',
   imageSrc: '',
@@ -30,6 +31,7 @@ const props = withDefaults(defineProps<{
   editable: false,
   saving: false,
   downloadTitle: '下载当前文件',
+  showToolbar: true,
 })
 
 const emit = defineEmits<{
@@ -125,7 +127,7 @@ async function downloadCurrentFile() {
       { 'file-preview--fill': fillHeight },
     ]"
   >
-    <div v-if="(showPath && path) || isMarkdown || canDownload || canEdit" class="file-preview__header">
+    <div v-if="showToolbar && ((showPath && path) || isMarkdown || canDownload || canEdit)" class="file-preview__header">
       <div v-if="showPath && path" class="file-preview__path" :title="path">
         {{ path }}
       </div>

@@ -11,10 +11,10 @@ from typing import AsyncIterator, Literal
 import httpx
 
 from common.logging import logger
-from config.agent_workspace_paths import ensure_workspace_dir, ensure_user_root
+from config.user_data_paths import ensure_workspace_dir, ensure_user_root
 from config.user_data_paths import ensure_user_skills_dir
 from config.env import SandboxConfig, sandbox_runner_headers
-from domain.chat.streaming.tool_errors import ToolInfrastructureError
+from domain.chat.streaming.tool_failure import ToolInfrastructureError
 
 SandboxRuntime = Literal["docker"]
 
@@ -26,9 +26,6 @@ class SessionSandboxHandle:
     user_id: str
     session_id: str
 
-
-# 兼容旧名
-UserSandboxHandle = SessionSandboxHandle
 
 _HANDLE_CACHE: dict[str, SessionSandboxHandle] = {}
 _ENSURE_LOCKS: dict[str, asyncio.Lock] = {}
@@ -142,15 +139,6 @@ async def ensure_session_sandbox(user_id: str, session_id: str) -> SessionSandbo
             handle.container_name,
         )
         return handle
-
-
-# 兼容旧调用名
-async def ensure_user_sandbox(user_id: str, session_id: str | None = None) -> SessionSandboxHandle:
-    if not session_id:
-        raise ToolInfrastructureError(
-            "[INTERNAL_ERROR] ensure_user_sandbox 需要 session_id（已改为 per-session 沙箱）"
-        )
-    return await ensure_session_sandbox(user_id, session_id)
 
 
 async def destroy_session_sandbox(user_id: str, session_id: str) -> None:

@@ -24,3 +24,12 @@
 
 - **WHEN** 用户在流式进行中调用停止接口
 - **THEN** assistant 消息 SHALL 进入 partial（或等价）终态，并与现网停止文案/finish_reason 约定兼容
+
+### Requirement: HITL 分段流 SHALL 经同一 Fan-out
+
+`hitl-required` / `finish_reason=hitl_pending` 与 `POST .../hitl/resume` 返回的新 SSE **SHALL** 经同一 RunEvent → SseDelivery / PersistSink 路径，语义与主规格 `platform-chat` HITL 要求一致：pending 不 completed；resume 续写同一 `assistant_message_id`；**SHALL NOT** 在 Fan-out 外另起一套仅 generator 内可见的 HITL 落库分支（过渡期除外）。
+
+#### Scenario: resume 仍走 Fan-out
+
+- **WHEN** 用户对 pending HITL 调用 `hitl/resume`
+- **THEN** 响应 SHALL 为经 SseDelivery 编码的 `text/event-stream`，且 PersistSink SHALL 继续更新同一 assistant 行直至真正终态

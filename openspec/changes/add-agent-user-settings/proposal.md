@@ -27,7 +27,7 @@
 ## Impact
 
 - **前端**：新路由/视图（如 `views/settings/`）、侧栏入口；复用现有 workspace/memory 读写 API 或新增用户级 memory/cron/channels API。
-- **后端**：`/api/user/settings`（或等价前缀）下的 memory、cron、channels；调度组件（进程内或独立 worker）；通道 webhook/轮询适配器（Telegram 首期可只落地配置契约 + stub）。
-- **数据**：`.data/users/{uid}/` 下记忆文件；cron 作业存储（DB 表或用户目录 JSON，design 定夺）；通道凭据存用户配置（禁止进 Agent 可写记忆文件）。
-- **兼容**：不破坏现有 chat/SSE；会话面板 API 保持可用；无 **BREAKING** 要求，除非显式废弃面板写记忆（本 change 倾向保留兼容写入）。
-- **不含**：composer slash、Skills/MCP 整页搬迁（仅深链）。
+- **后端**：`/api/user/...`（或等价前缀）下的 memory、cron、channels **配置** API；调度组件（进程内或独立 worker）；通道**配置与配对**持久化（**不含** webhook/long-poll 真收发，见 `unify-run-delivery`）。
+- **数据**：`.data/users/{uid}/` 下记忆文件；cron 作业存储（DB 表或用户目录 JSON，design 定夺）；通道凭据与配对存用户配置（禁止进 Agent 可写记忆文件）。
+- **兼容**：不破坏现有 chat/SSE；会话面板 API 保持可用；鉴权与 `user-auth` 一致（Cookie Session + CSRF，**非** JWT）。
+- **不含**：composer slash、Skills/MCP 整页搬迁（仅深链）；通道消息运行时 Adapter。

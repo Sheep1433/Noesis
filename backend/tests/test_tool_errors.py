@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from domain.chat.streaming.tool_errors import (
+from domain.chat.streaming.tool_failure import (
     ToolCancelledError,
     ToolFailureCategory,
     ToolFailureError,

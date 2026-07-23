@@ -8,7 +8,7 @@
 
 #### Scenario: 浏览器请求 REST 接口
 
-- **WHEN** 客户端对同源站点的 `/api/user/login`（或任意已存在的 `/api/...` 业务路径）发起请求
+- **WHEN** 客户端对同源站点的 `/api/auth/login`（或任意已存在的 `/api/...` 业务路径）发起请求
 - **THEN** 请求 SHALL 被 Nginx 转发至后端服务并由 FastAPI 处理，且响应与不经 Nginx 直连后端时的语义一致
 
 #### Scenario: 浏览器加载单页应用资源

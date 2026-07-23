@@ -1,4 +1,4 @@
-"""SSE 注释保活：StreamBridge 订阅超时与 Langfuse ContextVar 回归。"""
+"""SSE 注释保活：SseDelivery 注入；raw 生产者侧不进总线心跳。"""
 from __future__ import annotations
 
 import asyncio
@@ -8,181 +8,239 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from config.env import LangfuseConfig
-from services.qa_service import SSE_COMMENT_KEEPALIVE, _iter_agent_stream_via_bridge
-from domain.chat.streaming.bridge import HEARTBEAT_SENTINEL, StreamBridgeError
+from domain.chat.delivery.sse import SSE_COMMENT_KEEPALIVE
+from domain.chat.message_builder import AssistantMessageBuilder
+from domain.chat.streaming.bridge import (
+    END_SENTINEL,
+    HEARTBEAT_SENTINEL,
+    MemoryStreamBridge,
+    iter_bridge_events,
+)
+from domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from services.qa_service import _yield_sse_from_agent_bridge
 
 
 @pytest.mark.asyncio
-async def test_keepalive_from_bridge_subscribe_timeout() -> None:
+async def test_keepalive_from_sse_delivery_timeout() -> None:
     async def slow_gen():
         await asyncio.sleep(0.12)
-        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
+        yield {"type": "__tw_finish__", "finish_reason": "stop", "usage": {}}
 
-    seen: list = []
-    async for item in _iter_agent_stream_via_bridge(
+    bridge = LangGraphSseBridge("sess-hb", assistant_message_id="msg-hb")
+    builder = AssistantMessageBuilder(session_id="sess-hb", message_id="msg-hb")
+    lines: list[str] = []
+    async for line in _yield_sse_from_agent_bridge(
         slow_gen(),
+        bridge=bridge,
+        builder=builder,
+        ctx={},
         session_id="sess-hb",
-        assistant_message_id="msg-hb",
+        user_id="u1",
         qa_type="COMMON_QA",
         keepalive_seconds=0.04,
     ):
-        seen.append(item)
+        lines.append(line)
 
-    assert any(x is HEARTBEAT_SENTINEL for x in seen), "订阅空闲超时应产出心跳哨兵"
-    assert any(isinstance(x, dict) and x.get("type") == "finish" for x in seen)
+    assert any(line.startswith(": keepalive") or line == SSE_COMMENT_KEEPALIVE for line in lines)
+    assert any("finish" in line for line in lines)
 
 
 @pytest.mark.asyncio
 async def test_keepalive_disabled_zero_interval() -> None:
     async def gen():
-        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
+        yield {"type": "__tw_finish__", "finish_reason": "stop", "usage": {}}
 
-    seen: list = []
-    async for item in _iter_agent_stream_via_bridge(
+    bridge = LangGraphSseBridge("sess-off", assistant_message_id="msg-off")
+    builder = AssistantMessageBuilder(session_id="sess-off", message_id="msg-off")
+    lines: list[str] = []
+    async for line in _yield_sse_from_agent_bridge(
         gen(),
+        bridge=bridge,
+        builder=builder,
+        ctx={},
         session_id="sess-off",
-        assistant_message_id="msg-off",
+        user_id="u1",
         qa_type="COMMON_QA",
+        keepalive_seconds=0,
+    ):
+        lines.append(line)
+
+    assert not any(line.startswith(": keepalive") for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_raw_bridge_zero_keepalive_no_heartbeat_sentinel() -> None:
+    """生产者侧 keepalive=0 时不应产出 HEARTBEAT_SENTINEL（心跳仅在 SseDelivery）。"""
+
+    async def slow_gen():
+        await asyncio.sleep(0.08)
+        yield {"type": "ok"}
+
+    mem = MemoryStreamBridge()
+    seen: list = []
+    async for item in iter_bridge_events(
+        mem,
+        "run-raw",
+        slow_gen(),
         keepalive_seconds=0,
     ):
         seen.append(item)
 
     assert not any(x is HEARTBEAT_SENTINEL for x in seen)
-    assert len([x for x in seen if isinstance(x, dict)]) == 1
+    assert any(isinstance(x, dict) and x.get("type") == "ok" for x in seen)
+    assert any(x is END_SENTINEL for x in seen)
 
 
 @pytest.mark.asyncio
-async def test_bridge_does_not_cancel_slow_producer_on_heartbeat() -> None:
-    """心跳期间上游 generator 应继续运行，不被 wait_for 取消。"""
+async def test_sse_delivery_does_not_cancel_slow_producer_on_keepalive() -> None:
     cancelled = False
 
     async def slow_gen():
         nonlocal cancelled
         try:
             await asyncio.sleep(0.1)
-            yield {"type": "ok"}
+            yield {"type": "text-delta", "text_delta": "ok"}
+            yield {"type": "__tw_finish__", "finish_reason": "stop", "usage": {}}
         except asyncio.CancelledError:
             cancelled = True
             raise
 
-    seen: list = []
-    async for item in _iter_agent_stream_via_bridge(
+    bridge = LangGraphSseBridge("sess-prod", assistant_message_id="msg-prod")
+    builder = AssistantMessageBuilder(session_id="sess-prod", message_id="msg-prod")
+    lines: list[str] = []
+    async for line in _yield_sse_from_agent_bridge(
         slow_gen(),
+        bridge=bridge,
+        builder=builder,
+        ctx={},
         session_id="sess-prod",
-        assistant_message_id="msg-prod",
+        user_id="u1",
         qa_type="COMMON_QA",
         keepalive_seconds=0.03,
     ):
-        seen.append(item)
+        lines.append(line)
 
     assert not cancelled
-    assert any(isinstance(x, dict) and x.get("type") == "ok" for x in seen)
+    assert any("ok" in line or "text" in line for line in lines)
 
 
 @pytest.mark.asyncio
-async def test_test_case_stream_langfuse_context_with_bridge_keepalive() -> None:
-    """Langfuse workflow context 在生产者 Task 内，保活多帧不应触发 ContextVar reset 异常。"""
+async def test_test_case_stream_langfuse_context_with_sse_keepalive() -> None:
     async def gen():
         yield {"type": "phase-start"}
         await asyncio.sleep(0.06)
-        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
+        yield {"type": "__tw_finish__", "finish_reason": "stop", "usage": {}}
 
-    seen: list = []
+    session_uuid = "d5f2c3f4-729c-4779-8dbe-307467f276e3"
+    bridge = LangGraphSseBridge(session_uuid, assistant_message_id="asst-1")
+    builder = AssistantMessageBuilder(session_id=session_uuid, message_id="asst-1")
     mock_cm = MagicMock()
     mock_cm.__enter__ = MagicMock(return_value=None)
     mock_cm.__exit__ = MagicMock(return_value=False)
-    session_uuid = "d5f2c3f4-729c-4779-8dbe-307467f276e3"
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=True)
+    lines: list[str] = []
     with (
         patch("config.env.LangfuseConfig", langfuse_cfg),
-        patch("services.qa_service.LangfuseConfig", langfuse_cfg),
+        patch("services.qa.helpers.LangfuseConfig", langfuse_cfg),
     ):
         with patch("langfuse.propagate_attributes", return_value=mock_cm):
-            async for item in _iter_agent_stream_via_bridge(
+            async for line in _yield_sse_from_agent_bridge(
                 gen(),
+                bridge=bridge,
+                builder=builder,
+                ctx={},
                 session_id=session_uuid,
-                assistant_message_id="asst-1",
+                user_id="u1",
                 qa_type="TEST_CASE_QA",
                 keepalive_seconds=0.02,
                 langfuse_thread_id=f"case_graph_{session_uuid}",
             ):
-                seen.append(item)
+                lines.append(line)
 
-    assert any(isinstance(x, dict) and x.get("type") == "finish" for x in seen)
+    assert any("finish" in line for line in lines)
 
 
 @pytest.mark.asyncio
-async def test_bridge_error_surfaces_as_stream_bridge_error() -> None:
+async def test_bridge_error_surfaces_through_orchestrator() -> None:
     async def bad_gen():
         yield {"type": "phase-start"}
         raise RuntimeError("upstream failed")
 
-    seen: list = []
+    bridge = LangGraphSseBridge("sess-err", assistant_message_id="msg-err")
+    builder = AssistantMessageBuilder(session_id="sess-err", message_id="msg-err")
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=False)
-    with patch("services.qa_service.LangfuseConfig", langfuse_cfg):
-        async for item in _iter_agent_stream_via_bridge(
-            bad_gen(),
-            session_id="sess-err",
-            assistant_message_id="msg-err",
-            qa_type="COMMON_QA",
-            keepalive_seconds=0,
-        ):
-            seen.append(item)
-
-    assert any(isinstance(x, dict) and x.get("type") == "phase-start" for x in seen)
-    errors = [x for x in seen if isinstance(x, StreamBridgeError)]
-    assert errors and "upstream failed" in str(errors[0].exc)
+    with patch("services.qa.helpers.LangfuseConfig", langfuse_cfg):
+        with pytest.raises(RuntimeError, match="upstream failed"):
+            async for _ in _yield_sse_from_agent_bridge(
+                bad_gen(),
+                bridge=bridge,
+                builder=builder,
+                ctx={},
+                session_id="sess-err",
+                user_id="u1",
+                qa_type="COMMON_QA",
+                keepalive_seconds=0,
+            ):
+                pass
 
 
 @pytest.mark.asyncio
-async def test_test_case_phase_frames_through_bridge() -> None:
-    """TEST_CASE_QA 阶段业务帧经 bridge 转发，不被保活逻辑改写。"""
+async def test_test_case_phase_frames_through_orchestrator() -> None:
     async def case_gen():
         yield {"type": "phase-start", "phase": "scenes_testpoints"}
         yield {"type": "testpoints-confirm-required", "scenes": []}
-        yield {"type": "finish", "finish_reason": "stop", "usage": {}}
+        yield {"type": "__tw_finish__", "finish_reason": "stop", "usage": {}}
 
-    seen: list = []
-    async for item in _iter_agent_stream_via_bridge(
+    bridge = LangGraphSseBridge("tc-phase", assistant_message_id="asst-phase")
+    builder = AssistantMessageBuilder(session_id="tc-phase", message_id="asst-phase")
+    lines: list[str] = []
+    async for line in _yield_sse_from_agent_bridge(
         case_gen(),
+        bridge=bridge,
+        builder=builder,
+        ctx={},
         session_id="tc-phase",
-        assistant_message_id="asst-phase",
+        user_id="u1",
         qa_type="TEST_CASE_QA",
         keepalive_seconds=0,
         langfuse_thread_id="case_graph_tc-phase",
     ):
-        if isinstance(item, StreamBridgeError):
-            raise item.exc
-        seen.append(item)
+        lines.append(line)
 
-    types = [x.get("type") for x in seen if isinstance(x, dict)]
-    assert types == ["phase-start", "testpoints-confirm-required", "finish"]
+    joined = "".join(lines)
+    assert "phase-start" in joined
+    assert "testpoints-confirm-required" in joined
+    assert "finish" in joined
 
 
 @pytest.mark.asyncio
-async def test_test_case_resume_scene_cases_through_bridge() -> None:
+async def test_test_case_resume_scene_cases_through_orchestrator() -> None:
     async def resume_gen():
         yield {
             "type": "scene-cases",
             "sceneName": "上传",
             "cases": [{"case_id": "TC-001", "test_steps": ["s1"]}],
         }
-        yield {"type": "finish", "finish_reason": "stop", "total": 1, "usage": {}}
+        yield {"type": "__tw_finish__", "finish_reason": "stop", "total": 1, "usage": {}}
 
-    seen: list = []
+    bridge = LangGraphSseBridge("tc-resume", assistant_message_id="asst-resume")
+    builder = AssistantMessageBuilder(session_id="tc-resume", message_id="asst-resume")
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=False)
-    with patch("services.qa_service.LangfuseConfig", langfuse_cfg):
-        async for item in _iter_agent_stream_via_bridge(
+    lines: list[str] = []
+    with patch("services.qa.helpers.LangfuseConfig", langfuse_cfg):
+        async for line in _yield_sse_from_agent_bridge(
             resume_gen(),
+            bridge=bridge,
+            builder=builder,
+            ctx={},
             session_id="tc-resume",
-            assistant_message_id="asst-resume",
+            user_id="u1",
             qa_type="TEST_CASE_QA",
             keepalive_seconds=0,
             langfuse_thread_id="case_graph_tc-resume",
         ):
-            seen.append(item)
+            lines.append(line)
 
-    scene = next(x for x in seen if isinstance(x, dict) and x.get("type") == "scene-cases")
-    assert scene.get("sceneName") == "上传"
-    finish = next(x for x in seen if isinstance(x, dict) and x.get("type") == "finish")
-    assert finish.get("total") == 1
+    joined = "".join(lines)
+    assert "scene-cases" in joined
+    assert "上传" in joined

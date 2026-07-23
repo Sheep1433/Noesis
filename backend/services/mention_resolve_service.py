@@ -6,12 +6,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Optional
 
-from agent.backends.mount_paths import (
+from agent.backends.paths import (
     AGENT_MEMORY_AGENTS_FILE,
     AGENT_MEMORY_USER_FILE,
     AGENT_PERSONAL_SKILLS_ROUTE,
+    canonicalize_agent_path,
 )
-from agent.skills_filter import _package_has_skill_md
+from agent.skills import package_has_skill_md
 from config.extensions_paths import skills_root
 from config.user_data_paths import (
     get_session_attachments_dir,
@@ -156,8 +157,8 @@ class MentionResolveService:
         if "/" in sid or ".." in sid or sid.startswith("."):
             raise ServiceException(message=f"非法 skill id: {sid}")
 
-        platform_ok = _package_has_skill_md(skills_root(), sid)
-        user_ok = _package_has_skill_md(get_user_skills_dir(user_id), sid)
+        platform_ok = package_has_skill_md(skills_root(), sid)
+        user_ok = package_has_skill_md(get_user_skills_dir(user_id), sid)
         source = (item.source or "").strip()
         if source == "platform":
             if not platform_ok:
@@ -247,8 +248,12 @@ class MentionResolveService:
         session_prefix = f"sessions/{session_id}/"
         if rel_norm.startswith(session_prefix):
             tail = rel_norm[len(session_prefix):]
-            if tail.startswith("workspace/"):
-                return "/" + tail[len("workspace/"):]
+            if tail.startswith("workspace/") or tail == "workspace":
+                try:
+                    # UI sessions/.../workspace/x → Agent /workspace/x
+                    return canonicalize_agent_path(rel_norm)
+                except ValueError as exc:
+                    raise ServiceException(message=f"非法路径: {rel_norm}") from exc
             if tail.startswith("uploads/"):
                 return f"/uploads/{tail[len('uploads/'):]}"
             if tail.startswith("attachments/"):

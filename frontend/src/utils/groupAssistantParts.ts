@@ -1,7 +1,7 @@
-import type { ToolUiPart, UiPart } from '@/views/chat/messageParts'
-import { part_parent_task_call_id } from '@/views/chat/messageParts'
+import type { ReasoningUiPart, ToolUiPart, UiPart } from '@/views/chat/messageParts'
 import { shouldRenderSubagentPart } from '@/utils/parseTaskTool'
 import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
+import { part_parent_task_call_id } from '@/views/chat/messageParts'
 
 export type DisplayPartEntry =
   | { kind: 'part', part: UiPart }
@@ -17,6 +17,30 @@ export function isNestedSubagentChild(part: UiPart): boolean {
     return false
   }
   return true
+}
+
+/** 合并相邻且同 parent 的 reasoning，修复历史/交错流造成的碎块 */
+export function coalesceAdjacentReasoning(parts: UiPart[]): UiPart[] {
+  const out: UiPart[] = []
+  for (const p of parts) {
+    const last = out[out.length - 1]
+    if (
+      p.type === 'reasoning'
+      && last?.type === 'reasoning'
+      && part_parent_task_call_id(last) === part_parent_task_call_id(p)
+    ) {
+      const prev = last as ReasoningUiPart
+      const cur = p as ReasoningUiPart
+      out[out.length - 1] = {
+        ...prev,
+        content: `${prev.content}${cur.content}`,
+        status: cur.status === 'streaming' || prev.status === 'streaming' ? 'streaming' : 'completed',
+      }
+      continue
+    }
+    out.push(p)
+  }
+  return out
 }
 
 /**
@@ -36,6 +60,10 @@ export function buildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
     const list = childByParent.get(parentId) ?? []
     list.push(p)
     childByParent.set(parentId, list)
+  }
+
+  for (const [id, list] of childByParent) {
+    childByParent.set(id, coalesceAdjacentReasoning(list))
   }
 
   const out: DisplayPartEntry[] = []

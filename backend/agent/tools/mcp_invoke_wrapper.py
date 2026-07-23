@@ -8,7 +8,7 @@ from typing import Any, TypeVar
 
 import httpx
 
-from domain.chat.streaming.tool_errors import (
+from domain.chat.streaming.tool_failure import (
     ToolFailureCategory,
     ToolFailureError,
     ToolInfrastructureError,

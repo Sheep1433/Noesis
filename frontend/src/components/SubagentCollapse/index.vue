@@ -208,12 +208,12 @@ const durationDisplay = computed(() => {
 .subagent-call--light {
   --tool-accent: var(--noesis-block-light-accent);
   box-sizing: border-box;
-  width: 90%;
+  width: 100%;
   max-width: 100%;
-  margin: 8px auto;
+  margin: 5px 0;
   background: var(--noesis-block-light-bg);
   border: 1px solid var(--noesis-block-light-border);
-  border-radius: var(--noesis-radius-lg);
+  border-radius: var(--noesis-radius-md);
   border-left: 3px solid var(--tool-accent);
   box-shadow: var(--noesis-shadow-sm);
 }
@@ -428,12 +428,60 @@ const durationDisplay = computed(() => {
 .subagent-timeline {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
-.subagent-timeline :deep(.tool-call) {
+.subagent-timeline :deep(.tool-call),
+.subagent-timeline :deep(.reasoning-call) {
   margin: 0;
   width: 100%;
+  border-radius: var(--noesis-radius-sm);
+  box-shadow: none;
+}
+
+/* 子过程略缩小：与主时间线区分层级 */
+.subagent-timeline :deep(.reasoning-header),
+.subagent-timeline :deep(.tool-header) {
+  padding: 5px 8px 5px 6px;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.subagent-timeline :deep(.reasoning-header__icon),
+.subagent-timeline :deep(.tool-header__icon) {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.subagent-timeline :deep(.reasoning-name),
+.subagent-timeline :deep(.tool-name) {
+  font-size: 11px;
+}
+
+.subagent-timeline :deep(.reasoning-content),
+.subagent-timeline :deep(.tool-content) {
+  padding: 0 8px 8px;
+}
+
+.subagent-timeline :deep(.reasoning-section__body),
+.subagent-timeline :deep(.tool-section__body) {
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.subagent-timeline :deep(.reasoning-content pre),
+.subagent-timeline :deep(.tool-content pre),
+.subagent-timeline :deep(.tool-section__label) {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.subagent-timeline :deep(.n-tag) {
+  font-size: 10px;
+  height: 18px;
+  line-height: 18px;
+  padding: 0 6px;
 }
 
 .subagent-narrative {

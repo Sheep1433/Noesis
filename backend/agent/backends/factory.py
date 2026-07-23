@@ -1,29 +1,37 @@
-"""Agent 沙箱后端：CompositeBackend + workspace + `/memory/` + `/skills/public|personal/`。"""
+"""Agent 沙箱后端：选 runtime + 组装 CompositeBackend。"""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator, Literal
 
 from deepagents.backends.composite import CompositeBackend
-from deepagents.backends.protocol import SandboxBackendProtocol
-from deepagents.middleware.skills import SkillSource
+from deepagents.backends.filesystem import FilesystemBackend
+from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 
-from agent.backends.agent_filesystem import build_agent_filesystem_backend
-from agent.backends.docker_exec_sandbox import create_docker_exec_sandbox_backend
-from agent.backends.mount_paths import (
+from agent.backends.agent_path import AgentPathBackend
+from agent.backends.docker_exec import create_docker_exec_sandbox_backend
+from agent.backends.local_shell import create_local_shell_backend
+from agent.backends.memory import UserMemoryBackend
+from agent.backends.paths import (
+    AGENT_MEMORY_ROUTE,
     AGENT_PERSONAL_SKILLS_ROUTE,
     AGENT_PUBLIC_SKILLS_ROUTE,
+    WORKSPACE_CONTAINER_PREFIX,
 )
-from config.agent_workspace_paths import ensure_workspace_dir
 from config.env import get_config
-from config.user_data_paths import ensure_user_memory_files, ensure_user_skills_dir
-from services.sandbox_service import user_sandbox_run
-
-SKILL_SOURCES: tuple[SkillSource, ...] = (
-    (AGENT_PUBLIC_SKILLS_ROUTE, "Public"),
-    (AGENT_PERSONAL_SKILLS_ROUTE, "Personal"),
+from config.extensions_paths import skills_root
+from config.user_data_paths import (
+    ensure_user_memory_files,
+    ensure_user_skills_dir,
+    ensure_workspace_dir,
+    get_user_agents_md_path,
+    get_user_profile_md_path,
+    get_user_skills_dir,
+    get_workspace_dir,
 )
+from services.sandbox_service import user_sandbox_run
 
 SandboxBackendKind = Literal["docker", "local_shell"]
 
@@ -67,8 +75,55 @@ async def agent_sandbox_session(user_id: str, session_id: str) -> AsyncIterator[
         yield
 
 
+def _read_only_fs(host_root: Path) -> AgentPathBackend:
+    """Composite 已剥 route 前缀；不再二次 canonicalize。"""
+    return AgentPathBackend(
+        FilesystemBackend(root_dir=host_root, virtual_mode=True),
+        read_only=True,
+        canonicalize=False,
+    )
+
+
+def build_agent_filesystem_backend(
+    *,
+    user_id: str,
+    session_id: str,
+    sandbox: SandboxBackendProtocol | None,
+    shell_timeout: int,
+) -> CompositeBackend:
+    """docker：default=沙箱（含 skills 挂载）；local：workspace strip + skills routes。"""
+    memory = UserMemoryBackend(
+        agents_path=get_user_agents_md_path(user_id),
+        user_path=get_user_profile_md_path(user_id),
+    )
+
+    if sandbox is not None:
+        default: BackendProtocol = AgentPathBackend(sandbox)
+        return CompositeBackend(
+            default=default,
+            routes={AGENT_MEMORY_ROUTE: memory},
+        )
+
+    default = AgentPathBackend(
+        create_local_shell_backend(
+            get_workspace_dir(user_id, session_id),
+            virtual_mode=True,
+            timeout=shell_timeout,
+        ),
+        strip_root=WORKSPACE_CONTAINER_PREFIX,
+    )
+    return CompositeBackend(
+        default=default,
+        routes={
+            AGENT_PUBLIC_SKILLS_ROUTE: _read_only_fs(skills_root()),
+            AGENT_PERSONAL_SKILLS_ROUTE: _read_only_fs(get_user_skills_dir(user_id)),
+            AGENT_MEMORY_ROUTE: memory,
+        },
+    )
+
+
 async def create_agent_backend(user_id: str, session_id: str) -> CompositeBackend:
-    """Agent 文件系统：session workspace + 用户 `/memory/` + 只读 Skills。"""
+    """选 sandbox runtime，再组装 workspace + skills + memory。"""
     sandbox: SandboxBackendProtocol | None = None
     kind = sandbox_backend_kind()
     if kind == "docker":

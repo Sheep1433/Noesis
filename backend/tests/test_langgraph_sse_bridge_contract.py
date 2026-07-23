@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
-from domain.chat.streaming.tool_errors import ToolInfrastructureError
+from domain.chat.streaming.tool_failure import ToolInfrastructureError
 from domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
 from domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 

@@ -10,6 +10,7 @@ from config.database import SYNC_SQLALCHEMY_DATABASE_URL, Base
 # 注册 ORM，供 autogenerate 与 metadata 对齐
 import models.chat_models  # noqa: F401
 import models.db_models  # noqa: F401
+import models.scheduled_task_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", SYNC_SQLALCHEMY_DATABASE_URL)

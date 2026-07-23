@@ -6,7 +6,7 @@ from typing import Any
 
 from common.logging import logger
 from config.env import WebToolsConfig
-from domain.chat.streaming.tool_errors import ToolInfrastructureError
+from domain.chat.streaming.tool_failure import ToolInfrastructureError
 
 
 def _backend_attempts(configured: str | None) -> list[str]:

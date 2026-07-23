@@ -11,7 +11,7 @@ import httpx
 
 from agent.tools.web_providers.url_safety import validate_fetch_url
 from common.logging import logger
-from domain.chat.streaming.tool_errors import ToolValidationError
+from domain.chat.streaming.tool_failure import ToolValidationError
 
 _STRIP_TAGS = frozenset({"script", "style", "noscript", "svg", "iframe"})
 

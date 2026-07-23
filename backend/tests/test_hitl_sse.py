@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from agent.hitl.stream import build_hitl_required_event, extract_interrupt_payload, resolve_hitl_kind
+from domain.chat.streaming.hitl import build_hitl_required_event, extract_interrupt_payload, resolve_hitl_kind
 from domain.chat.message_builder import AssistantMessageBuilder
 from domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 

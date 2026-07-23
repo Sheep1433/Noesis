@@ -168,9 +168,6 @@ class SessionContextService:
             tail = norm[len(session_prefix):]
             if tail.startswith(('workspace/', 'uploads/', 'attachments/')):
                 return norm
-        # 兼容旧版相对会话根的路径（workspace/…、uploads/…）
-        if norm.startswith(('workspace/', 'uploads/', 'attachments/')):
-            return f'{session_prefix}{norm}'
         raise HTTPException(status_code=400, detail='非法路径')
 
     @classmethod
@@ -196,10 +193,6 @@ class SessionContextService:
                 return norm
             if tail in ('workspace', 'uploads', 'attachments'):
                 return norm
-        if norm.startswith(('workspace/', 'uploads/', 'attachments/')):
-            return f'{session_prefix_slash}{norm}'
-        if norm in ('workspace', 'uploads', 'attachments'):
-            return f'{session_prefix_slash}{norm}'
         raise HTTPException(status_code=400, detail='非法路径')
 
     @classmethod

@@ -3,7 +3,7 @@ from server import app, AppConfig  # noqa: F401
 
 
 if __name__ == '__main__':
-    from services.sandbox_runner_launcher import ensure_sandbox_runner_process
+    from common.sandbox_runner_launcher import ensure_sandbox_runner_process
 
     ensure_sandbox_runner_process()
     uvicorn.run(

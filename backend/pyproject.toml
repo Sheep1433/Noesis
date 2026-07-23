@@ -55,6 +55,7 @@ dependencies = [
     "xgboost>=2.0.0",
     # 可观测
     "langfuse>=3.10.0,<4",
+    "croniter>=6.2.4",
 ]
 
 [dependency-groups]

@@ -20,7 +20,7 @@ def _session(user_id: str, session_id: str) -> TChatSession:
 
 @pytest.mark.asyncio
 async def test_delete_session_cancels_agents_and_destroys_sandbox(tmp_path: Path) -> None:
-    from config import agent_workspace_paths as paths
+    from config import user_data_paths as paths
     from config import user_data_paths as udp
     from services.chat_service import ChatService
 

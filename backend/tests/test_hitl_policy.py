@@ -9,13 +9,13 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 
 from agent.factory import create_noesis_agent
-from agent.hitl.policy import (
+from agent.guardrails.policy import (
     is_dangerous_execute,
     is_memory_write_path,
     is_network_execute,
 )
-from agent.hitl.session_grants import SessionGrantStore
-from agent.hitl.tools import build_interrupt_on
+from agent.guardrails.session_grants import SessionGrantStore
+from agent.tools.ask_user import build_interrupt_on
 from agent.middlewares import ToolErrorHandlingMiddleware
 
 

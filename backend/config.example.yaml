@@ -137,6 +137,11 @@ agent_runtime:
 stream:
   sse_keepalive_interval_seconds: 25
 
+messaging:
+  # Telegram long-poll 真收发；默认关，开前先在设置页填 bot token + 配对 chat_id
+  telegram_runtime_enabled: false
+  telegram_poll_timeout_seconds: 25
+
 qdrant:
   host: 127.0.0.1
   port: 6333

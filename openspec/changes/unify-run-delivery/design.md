@@ -60,11 +60,20 @@ TextDelta / TextEnd / ReasoningDelta / ...
 ToolInputStart / ToolInputAvailable / ToolOutputAvailable
 UsageUpdate / ContextUpdate
 BusinessEvent(type=..., payload=...)  # test-case phase 等
+HitlRequired(...)  # 对齐现网 hitl-required 载荷
+RunPaused(reason=hitl_pending)  # 本段传输可结束；run 未终态
 RunCompleted / RunAborted / RunError
 ```
 
-`LcEventMapper`（自现 `LangGraphSseBridge` 拆出）负责 LC `astream_events` + `__tw_*` → RunEvent。  
-`SseCodec` 负责 RunEvent → 既有 `event:` / `data:` 帧（**比特级兼容**现网前端）。
+`LcEventMapper`（自现 `LangGraphSseBridge` 拆出）负责 LC `astream_events` + `__tw_*` + interrupt → RunEvent（含 `HitlRequired`）。  
+`SseCodec` 负责 RunEvent → 既有 `event:` / `data:` 帧（**比特级兼容**现网前端，含 `hitl-required` / `finish_reason=hitl_pending`）。
+
+**HITL 语义（与主规格 `platform-chat` 一致，Fan-out 必须保留）：**
+
+- interrupt → 发布 `HitlRequired` + `RunPaused(hitl_pending)`；SseDelivery 可对本段 HTTP 流发 `finish` + `[DONE]`。
+- PersistSink **SHALL NOT** 将此时视为 `completed` / `partial` / `error` 终态；assistant **保持** `status=streaming`，parts 记 pending HITL。
+- `hitl/resume`（及 test-case resume）**SHALL** 复用同一 Fan-out：新开 SseDelivery 段、续写同一 `assistant_message_id`，直至真正 `RunCompleted` / abort / error。
+- HITL 超时 reject 后再走终态落库（可无活跃 SSE）。
 
 ### D3：RunEventBus
 
@@ -77,6 +86,7 @@ RunCompleted / RunAborted / RunError
 - `origin`：`web` | `telegram` | `wechat` | `cron` | `eval` 写入 message/session extra，便于审计。
 - Checkpoint：仅保留有意义的 session context 合并；删除无效的 persist_tick 空路径。
 - **SHALL NOT** 因「无 SSE 订阅者」而跳过终态落库。
+- **HITL：** 收到 `HitlRequired` / `RunPaused(hitl_pending)` 时 **SHALL** 更新 parts（pending），**SHALL NOT** 终态；仅在真正 `RunCompleted` / `RunAborted` / `RunError`（含超时 reject 后）终态。resume 段 **SHALL** 续写同一 `assistant_message_id`。
 
 ### D5：SseDelivery
 
@@ -109,13 +119,20 @@ class ChannelAdapter(Protocol):
 
 工具/推理细节默认 **不** 镜像到 IM，除非 adapter 显式开启。
 
-### D7：ChannelBinding 与入站
+### D7：ChannelBinding 与入站（运行时；配置面另见 settings）
 
 ```text
 (user_id, channel_type, external_chat_id[, thread_id]) → session_id
 ```
 
-- 配对/绑定数据来自 `add-agent-user-settings` 存储。
+**职责边界（相对 `add-agent-user-settings`）：**
+
+| `add-agent-user-settings` | 本 change（Delivery） |
+|---------------------------|----------------------|
+| 通道 CRUD、密钥、配对/绑定**存储**、设置 UI | 读取绑定；ChannelAdapter 入站/出站；RunEvent Fan-out |
+| **不**实现 webhook/long-poll 投递管线 | SPI + stub；生产 TG/微信 adapter 可另 change |
+
+- 配对/绑定数据来自 settings 存储；Delivery **SHALL NOT** 另起一套用户可写「通道密钥」源。
 - 未配对入站 **拒绝** 特权执行（可提示配对）。
 - 入站用户消息 **SHALL** 写入同一 messages SSOT（`extra.channel` / `external_message_id`）。
 

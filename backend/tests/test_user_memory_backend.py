@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agent.backends.agent_filesystem import UserMemoryBackend, build_agent_filesystem_backend
-from agent.backends.mount_paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from agent.backends.memory import UserMemoryBackend
+from agent.backends.factory import build_agent_filesystem_backend
+from agent.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
 from config import user_data_paths as user_paths
 
 
@@ -58,7 +59,7 @@ async def test_composite_memory_route_isolated_from_workspace(
     platform.mkdir()
     monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
     monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
+        "agent.backends.factory.skills_root",
         lambda: platform,
     )
 
@@ -73,7 +74,7 @@ async def test_composite_memory_route_isolated_from_workspace(
     assert mem.error is None
     assert "memory-body" in mem.file_data["content"]  # type: ignore[index]
 
-    ws = backend.write("/research/notes.md", "task")
+    ws = backend.write("/workspace/research/notes.md", "task")
     assert ws.error is None
     workspace = user_paths.get_workspace_dir("u1", "s1")
     assert (workspace / "research" / "notes.md").read_text(encoding="utf-8") == "task"

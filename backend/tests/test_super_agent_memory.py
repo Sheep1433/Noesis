@@ -9,10 +9,10 @@ import pytest
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.middleware.memory import MemoryMiddleware
 
-from agent.backends.mount_paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from agent.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
 from agent.middlewares.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
 from agent.middlewares.memory_sync_middleware import MemorySyncMiddleware
-from agent.super_agent import (
+from agent.profiles.super_agent import (
     _MEMORY_SOURCES,
     _build_memory_middleware,
     _build_task_worker_subagents,

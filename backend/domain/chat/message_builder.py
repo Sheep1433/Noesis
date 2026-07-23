@@ -169,20 +169,19 @@ class AssistantMessageBuilder:
         text: str,
         parent_task_call_id: Optional[str] = None,
     ) -> None:
-        """流式正文增量：合并进最后一个 text part，否则新建。"""
+        """流式正文增量：合并进同 parent 最近 text part（跳过其它 parent 交错）。"""
         if not text:
             return
-        if (
-            self._content.parts
-            and isinstance(self._content.parts[-1], TextPart)
-            and self._content.parts[-1].parent_task_call_id == parent_task_call_id
-        ):
-            last = self._content.parts[-1]
-            last.content = (last.content or "") + text
-        else:
-            self._content.parts.append(
-                TextPart(content=text, parent_task_call_id=parent_task_call_id),
-            )
+        for part in reversed(self._content.parts):
+            if part.parent_task_call_id != parent_task_call_id:
+                continue
+            if isinstance(part, TextPart):
+                part.content = (part.content or "") + text
+                return
+            break
+        self._content.parts.append(
+            TextPart(content=text, parent_task_call_id=parent_task_call_id),
+        )
 
     def append_reasoning(self, reasoning: str, parent_task_call_id: Optional[str] = None) -> None:
         self._content.parts.append(
@@ -194,20 +193,19 @@ class AssistantMessageBuilder:
         reasoning: str,
         parent_task_call_id: Optional[str] = None,
     ) -> None:
-        """流式思考增量：合并进最后一个 reasoning part，否则新建。"""
+        """流式思考增量：合并进同 parent 最近 reasoning（跳过其它 parent 交错）。"""
         if not reasoning:
             return
-        if (
-            self._content.parts
-            and isinstance(self._content.parts[-1], ReasoningPart)
-            and self._content.parts[-1].parent_task_call_id == parent_task_call_id
-        ):
-            last = self._content.parts[-1]
-            last.content = (last.content or "") + reasoning
-        else:
-            self._content.parts.append(
-                ReasoningPart(content=reasoning, parent_task_call_id=parent_task_call_id),
-            )
+        for part in reversed(self._content.parts):
+            if part.parent_task_call_id != parent_task_call_id:
+                continue
+            if isinstance(part, ReasoningPart):
+                part.content = (part.content or "") + reasoning
+                return
+            break
+        self._content.parts.append(
+            ReasoningPart(content=reasoning, parent_task_call_id=parent_task_call_id),
+        )
 
     def append_tool(
         self,

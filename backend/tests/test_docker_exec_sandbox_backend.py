@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from agent.backends.docker_exec_sandbox import DockerExecSandboxBackend
+from agent.backends.docker_exec import DockerExecSandboxBackend
 
 
 class _FakeResponse:

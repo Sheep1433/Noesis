@@ -25,6 +25,12 @@ const childrenRoutes: Array<RouteRecordRaw> = [
     ],
   },
   {
+    path: 'settings',
+    name: 'Settings',
+    component: () => import('@/views/settings/SettingsShell.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: 'extensions',
     name: 'Extensions',
     component: () => import('@/views/extensions/Extensions.vue'),

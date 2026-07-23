@@ -41,15 +41,11 @@ const searchText = defineModel<string>('searchText', { required: true })
 const searchChatRef = useTemplateRef('searchChatRef')
 
 const router = useRouter()
-const userStore = useUserStore()
 const showUserMenu = ref(false)
 
-async function handleLogout() {
+function openSettings() {
   showUserMenu.value = false
-  await userStore.logout()
-  setTimeout(() => {
-    router.replace('/login')
-  }, 500)
+  void router.push({ name: 'Settings' })
 }
 
 defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
@@ -182,9 +178,9 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
             <n-button
               quaternary
               strong
-              @click="handleLogout"
+              @click="openSettings"
             >
-              退出登录
+              设置
             </n-button>
           </n-popover>
         </div>
