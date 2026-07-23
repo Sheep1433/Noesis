@@ -2,6 +2,7 @@
 import { NTabPane, NTabs } from 'naive-ui'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import MCPClient from '@/views/mcp/MCPClient.vue'
 import SkillsManagement from '@/views/skills/SkillsManagement.vue'
 
@@ -9,6 +10,7 @@ type ExtensionsTab = 'skills' | 'mcp'
 
 const route = useRoute()
 const router = useRouter()
+const { isMobile } = useBreakpoint()
 
 const activeTab = computed<ExtensionsTab>({
   get() {
@@ -33,7 +35,7 @@ function onTabUpdate(value: string | number) {
       <h1 class="extensions-title">
         扩展
       </h1>
-      <p class="extensions-subtitle">
+      <p v-if="!isMobile" class="extensions-subtitle">
         配置 Agent 可用的 Skills 与 MCP Servers；对话中在 Composer 勾选启用。
       </p>
     </header>
@@ -103,12 +105,23 @@ function onTabUpdate(value: string | number) {
 }
 
 .extensions-tabs :deep(.n-tab-pane) {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 768px) {
   .extensions {
-    padding: 12px var(--noesis-content-gutter-mobile) 0;
+    padding: 8px var(--noesis-content-gutter-mobile) 0;
+  }
+
+  .extensions-title {
+    font-size: 18px;
+  }
+
+  .extensions-header {
+    margin-bottom: 0;
   }
 }
 </style>

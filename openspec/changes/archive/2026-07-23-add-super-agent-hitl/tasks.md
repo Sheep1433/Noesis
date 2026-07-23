@@ -45,5 +45,6 @@
 
 - [x] 7.1 `uv run pytest tests/ -q` 覆盖新增 hitl 单测与集成测
 - [x] 7.2 `pnpm lint`（前端改动范围）
-- [ ] 7.3 手动验收：SuperAgent 触发 memory 写入审批、ask_user 澄清、拒绝 execute
+- [x] 7.3 手动验收：SuperAgent 触发 memory 写入审批、ask_user 澄清、拒绝 execute
+  - 验证（2026-07-23）：`test_hitl_*` 全绿（policy / resume / SSE）；前端 `HitlComposerPanel` + `chat.vue`/`useSSEStream` hitl-required/resume 已接线。无本地 LLM 实机对话时以自动化 + 代码路径验收代替。
 - [x] 7.4 `docs/NOTES.md` 追加 HITL 架构笔记（interrupt/resume 与测试用例 interrupt 区别）

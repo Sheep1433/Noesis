@@ -25,10 +25,10 @@ const emptyHint = computed(() => {
     return loadError.value
   }
   if (options.value.length === 0) {
-    return '暂无知识库，请先在「知识库管理」中创建并上传文档'
+    return '暂无知识库'
   }
   if (options.value.every((o) => o.disabled)) {
-    return '已有知识库但尚无已入库文档，上传文档后可在此限定检索范围'
+    return '暂无已入库文档'
   }
   return ''
 })
@@ -98,7 +98,7 @@ watch(
   >
     <div
       v-if="!embedded"
-      class="kb-scope-inline flex items-center gap-6"
+      class="kb-scope-inline flex items-center gap-6 min-w-0"
     >
       <span class="kb-scope-label shrink-0 text-12 opacity-70">知识库</span>
       <n-select
@@ -112,7 +112,7 @@ watch(
         size="small"
         :consistent-menu-width="false"
         class="kb-scope-select"
-        placeholder="不选则检索全部可用库"
+        placeholder="全部可用库"
         max-tag-count="responsive"
         @update:value="onUpdate"
       />
@@ -142,7 +142,7 @@ watch(
         filterable
         size="small"
         class="kb-scope-select w-full"
-        placeholder="不选则检索全部可用库"
+        placeholder="全部可用库"
         max-tag-count="responsive"
         @update:value="onUpdate"
       />
@@ -153,12 +153,6 @@ watch(
         {{ emptyHint }}
       </p>
     </div>
-    <p
-      v-if="emptyHint && !embedded"
-      class="kb-scope-hint m-0 text-12 opacity-70"
-    >
-      {{ emptyHint }}
-    </p>
   </div>
 </template>
 
@@ -168,13 +162,16 @@ watch(
 }
 
 .kb-scope-inline {
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .kb-scope-select {
-  width: 200px;
-  min-width: 200px;
-  max-width: 320px;
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 0;
+  max-width: 200px;
 }
 
 .kb-scope-selector--embedded .kb-scope-select {
@@ -194,5 +191,16 @@ watch(
 .kb-scope-label,
 .kb-scope-hint {
   color: var(--noesis-text-secondary, #6b7280);
+}
+
+@media (max-width: 768px) {
+  .kb-scope-label {
+    display: none;
+  }
+
+  .kb-scope-select {
+    flex: 1 1 auto;
+    max-width: none;
+  }
 }
 </style>

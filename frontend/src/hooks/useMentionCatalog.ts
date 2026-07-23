@@ -7,6 +7,7 @@ import type { SubagentOption } from '@/config/subagents'
 import { getSessionContext } from '@/api/chat'
 import { getSkillsFsTree } from '@/api/skills'
 import { getSubagentsForQaType } from '@/config/subagents'
+import { collectSkillPackages } from '@/utils/skillsTree'
 
 export type MentionKind = 'skill' | 'file' | 'folder' | 'subagent'
 
@@ -82,24 +83,13 @@ async function loadContext(sessionId: string, force = false): Promise<SessionCon
 }
 
 function flattenSkillPackages(tree: SkillFsTreeResponse): MentionCandidate[] {
-  const out: MentionCandidate[] = []
-  for (const section of [tree.platform, tree.user]) {
-    if (!section?.tree) {
-      continue
-    }
-    for (const node of section.tree) {
-      if (!node.isLeaf) {
-        out.push({
-          kind: 'skill',
-          id: node.label,
-          source: node.source,
-          label: node.label,
-          description: `${node.source} skill`,
-        })
-      }
-    }
-  }
-  return out
+  return collectSkillPackages(tree).map((pkg) => ({
+    kind: 'skill' as const,
+    id: pkg.id,
+    source: pkg.source,
+    label: pkg.id,
+    description: `${pkg.source} skill`,
+  }))
 }
 
 function flattenFsNodes(

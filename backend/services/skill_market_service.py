@@ -39,24 +39,35 @@ class SkillMarketService:
         user_id: str | int,
         *,
         sort: LeaderboardSort = "trending",
-        limit: int = 40,
+        limit: int = 20,
+        offset: int = 0,
     ) -> SkillMarketListResponse:
         """榜单浏览。"""
-        hits = SkillsShClient.fetch_leaderboard(sort, limit=limit)
-        items = [cls._to_item(h) for h in hits]
+        hits = SkillsShClient.fetch_leaderboard(sort, limit=100)
+        total = len(hits)
+        page_hits = hits[offset : offset + limit]
+        items = [cls._to_item(h) for h in page_hits]
         cls._annotate_install_status(items, user_id)
-        return SkillMarketListResponse(items=items, query="")
+        return SkillMarketListResponse(items=items, query="", total=total)
 
     @classmethod
     def search(
-        cls, user_id: str | int, query: str, *, limit: int = 20,
+        cls,
+        user_id: str | int,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
     ) -> SkillMarketListResponse:
-        hits = SkillsShClient.search(query, limit=limit)
-        items = [cls._to_item(h) for h in hits]
+        hits = SkillsShClient.search(query, limit=50)
+        total = len(hits)
+        page_hits = hits[offset : offset + limit]
+        items = [cls._to_item(h) for h in page_hits]
         cls._annotate_install_status(items, user_id)
         return SkillMarketListResponse(
             items=items,
             query=(query or "").strip(),
+            total=total,
         )
 
     @classmethod

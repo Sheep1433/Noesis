@@ -6,6 +6,7 @@ import tempfile
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
+from fastapi.responses import Response
 
 from schemas.login_vo import CurrentUser
 from schemas.skill_vo import (
@@ -93,19 +94,41 @@ async def delete_user_skill_package(
     return ResponseUtil.success(msg=msg)
 
 
+@skill_router.get('/fs/package/archive')
+async def download_skill_package_archive(
+    path: str,
+    source: SkillSource = 'user',
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    """下载顶层技能目录 ZIP（平台预置只读，个人技能可备份）。"""
+    ok, err, data, filename = SkillFsService.build_package_zip(
+        path,
+        source=source,
+        user_id=current_user.user_id,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=err)
+    return Response(
+        content=data,
+        media_type='application/zip',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
+
+
 @skill_router.get('/market/browse')
 async def market_browse(
     sort: Literal['all_time', 'trending'] = Query(
         'trending',
         description='all_time=累计安装；trending=24h 趋势',
     ),
-    limit: int = Query(40, ge=1, le=100, description='榜单条数'),
+    limit: int = Query(20, ge=1, le=50, description='每页条数'),
+    offset: int = Query(0, ge=0, description='偏移量'),
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """skills.sh Leaderboard（/ 或 /trending）。"""
     return ResponseUtil.success(
         data=SkillMarketService.browse(
-            current_user.user_id, sort=sort, limit=limit,
+            current_user.user_id, sort=sort, limit=limit, offset=offset,
         ).model_dump(),
     )
 
@@ -113,12 +136,15 @@ async def market_browse(
 @skill_router.get('/market/search')
 async def market_search(
     q: str = Query(..., min_length=2, description='搜索词'),
-    limit: int = Query(20, ge=1, le=50),
+    limit: int = Query(20, ge=1, le=50, description='每页条数'),
+    offset: int = Query(0, ge=0, description='偏移量'),
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
     """搜索 skills.sh 目录。"""
     return ResponseUtil.success(
-        data=SkillMarketService.search(current_user.user_id, q, limit=limit).model_dump(),
+        data=SkillMarketService.search(
+            current_user.user_id, q, limit=limit, offset=offset,
+        ).model_dump(),
     )
 
 

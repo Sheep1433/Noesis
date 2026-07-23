@@ -19,6 +19,7 @@ const props = withDefaults(defineProps<{
   fillHeight?: boolean
   editable?: boolean
   saving?: boolean
+  downloadTitle?: string
 }>(), {
   content: '',
   imageSrc: '',
@@ -28,6 +29,7 @@ const props = withDefaults(defineProps<{
   fillHeight: false,
   editable: false,
   saving: false,
+  downloadTitle: '下载当前文件',
 })
 
 const emit = defineEmits<{
@@ -127,53 +129,58 @@ async function downloadCurrentFile() {
       <div v-if="showPath && path" class="file-preview__path" :title="path">
         {{ path }}
       </div>
-      <div class="file-preview__actions">
-        <n-button-group v-if="isMarkdown && !isEditing" size="tiny" class="file-preview__mode-toggle">
-          <n-button
-            :type="viewMode === 'preview' ? 'primary' : 'default'"
-            :ghost="viewMode !== 'preview'"
-            @click="viewMode = 'preview'"
-          >
-            预览
-          </n-button>
-          <n-button
-            :type="viewMode === 'source' ? 'primary' : 'default'"
-            :ghost="viewMode !== 'source'"
-            @click="viewMode = 'source'"
-          >
-            源码
-          </n-button>
-        </n-button-group>
+      <div class="file-preview__toolbar">
+        <div class="file-preview__actions">
+          <n-button-group v-if="isMarkdown && !isEditing" size="tiny" class="file-preview__mode-toggle">
+            <n-button
+              :type="viewMode === 'preview' ? 'primary' : 'default'"
+              :ghost="viewMode !== 'preview'"
+              @click="viewMode = 'preview'"
+            >
+              预览
+            </n-button>
+            <n-button
+              :type="viewMode === 'source' ? 'primary' : 'default'"
+              :ghost="viewMode !== 'source'"
+              @click="viewMode = 'source'"
+            >
+              源码
+            </n-button>
+          </n-button-group>
         <n-button
           v-if="canDownload"
           quaternary
           size="tiny"
-          title="下载"
+          :title="downloadTitle"
           @click="downloadCurrentFile"
         >
-          <template #icon>
-            <n-icon size="16"><DownloadOutline /></n-icon>
-          </template>
-        </n-button>
-        <n-button
-          v-if="canEdit && !isEditing"
-          quaternary
-          size="tiny"
-          title="编辑"
-          @click="startEdit"
-        >
-          <template #icon>
-            <n-icon size="16"><CreateOutline /></n-icon>
-          </template>
-        </n-button>
-        <template v-if="isEditing">
-          <n-button size="tiny" :loading="saving" type="primary" @click="saveEdit">
-            保存
+            <template #icon>
+              <n-icon size="16"><DownloadOutline /></n-icon>
+            </template>
           </n-button>
-          <n-button size="tiny" :disabled="saving" @click="cancelEdit">
-            取消
+          <n-button
+            v-if="canEdit && !isEditing"
+            quaternary
+            size="tiny"
+            title="编辑"
+            @click="startEdit"
+          >
+            <template #icon>
+              <n-icon size="16"><CreateOutline /></n-icon>
+            </template>
           </n-button>
-        </template>
+          <template v-if="isEditing">
+            <n-button size="tiny" :loading="saving" type="primary" @click="saveEdit">
+              保存
+            </n-button>
+            <n-button size="tiny" :disabled="saving" @click="cancelEdit">
+              取消
+            </n-button>
+          </template>
+        </div>
+        <div v-if="$slots['header-extra']" class="file-preview__header-extra">
+          <slot name="header-extra" />
+        </div>
       </div>
     </div>
     <n-spin v-if="loading" size="small" class="file-preview__spin" />
@@ -255,7 +262,8 @@ async function downloadCurrentFile() {
 }
 
 .file-preview--comfortable .file-preview__header {
-  padding: 0 0 8px;
+  padding: 2px 0 10px;
+  margin-bottom: 6px;
 }
 
 .file-preview--comfortable .file-preview__path {
@@ -263,11 +271,29 @@ async function downloadCurrentFile() {
   color: var(--n-text-color-3);
 }
 
+.file-preview__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
 .file-preview__actions {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+
+.file-preview__header-extra {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .file-preview__mode-toggle {
@@ -446,7 +472,7 @@ async function downloadCurrentFile() {
 }
 
 .file-preview__frontmatter {
-  margin: 0 0 12px;
+  margin: 4px 0 12px;
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--noesis-color-border);

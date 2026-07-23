@@ -1257,10 +1257,6 @@ function onMentionSelect(item: MentionCandidate) {
   closeMentionPicker()
 }
 
-function formatMentionChip(m: ComposerMention) {
-  return formatMentionToken(m)
-}
-
 function onComposerKeydown(e: KeyboardEvent) {
   if (mentionPickerOpen.value && mentionPickerRef.value) {
     const key = e.key
@@ -1987,18 +1983,6 @@ function onComposerPaste(e: ClipboardEvent) {
                             {{ item.question }}
                           </n-tag>
                         </n-space>
-                        <div
-                          v-if="item.mentions && item.mentions.length"
-                          class="composer-mention-chips composer-mention-chips--history"
-                        >
-                          <span
-                            v-for="(m, mi) in item.mentions"
-                            :key="`${m.type}:${m.id || m.path}:${mi}`"
-                            class="composer-mention-chip composer-mention-chip--readonly"
-                          >
-                            {{ formatMentionChip(m) }}
-                          </span>
-                        </div>
                       </div>
 
                       <!-- 用户上传的文件列表 -->
@@ -2570,32 +2554,6 @@ function onComposerPaste(e: ClipboardEvent) {
   background: var(--noesis-color-primary-bg-subtle);
 }
 
-.composer-mention-chips--history {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-  justify-content: flex-end;
-}
-
-.composer-mention-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 100%;
-  padding: 2px 8px;
-  border: 1px solid var(--noesis-color-border);
-  border-radius: 999px;
-  background: var(--noesis-color-bg-elevated);
-  color: var(--noesis-color-text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.composer-mention-chip--readonly {
-  cursor: default;
-}
-
 .chat-composer-drop-hint {
   position: absolute;
   inset: 0;
@@ -3010,17 +2968,19 @@ function onComposerPaste(e: ClipboardEvent) {
   }
 
   .qa-type-tabs {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
-    overflow: visible;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .qa-type-tabs :deep(.n-button) {
+    flex: 0 0 auto;
     width: auto !important;
-    min-width: 0;
+    min-width: fit-content;
     height: 36px;
-    padding: 0 5px !important;
+    padding: 0 12px !important;
     font-size: 12px;
   }
 

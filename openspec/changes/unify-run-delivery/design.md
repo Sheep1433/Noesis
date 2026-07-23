@@ -1,8 +1,10 @@
 ## Context
 
-Noesis 流式路径将 Agent 执行、SSE 成帧、消息落库绑在同一 generator（`QaService.exec_query` + `LangGraphSseBridge` + 单消费者 `MemoryStreamBridge`）。`extract-agent-runtime-harness` 将引入 `AgentRunService` 与 Runtime/Harness 边界，但明确不做多通道。`add-agent-user-settings` 提供通道凭据与绑定配置面。本 change 在二者之上完成 **Delivery 层**：typed 事件、Fan-out、ChannelAdapter SPI，使 Telegram/微信等可插拔，且浏览器 SSE **对外契约冻结**。
+Noesis 流式路径将 Agent 执行、SSE 成帧、消息落库绑在同一 generator（`QaService.exec_query` + `LangGraphSseBridge` + 单消费者 `MemoryStreamBridge`）。`add-agent-user-settings` 提供通道凭据与绑定配置面。
 
-参考：Hermes Gateway（SessionStore + delivery adapters）、Clowder（消息 SSOT + 网页 live / IM projection 分离）、deer-flow runtime/harness。
+原计划依赖的 `extract-agent-runtime-harness`（整包迁入 `noesis_runtime/`、Profile 注册表、Harbor 全切）**影响面过大、ROI 靠后**，已搁置并由本 change **supersede** 其「事件与投递解耦」目标。本 change 在 **现有** `backend/agent/` + `qa_service` 上完成 Delivery 层：typed 事件、Fan-out、ChannelAdapter SPI；浏览器 SSE **对外契约冻结**。
+
+参考：Hermes Gateway（SessionStore + delivery adapters）、Clowder（消息 SSOT + 网页 live / IM projection 分离）。
 
 ## Goals / Non-Goals
 
@@ -11,6 +13,7 @@ Noesis 流式路径将 Agent 执行、SSE 成帧、消息落库绑在同一 gene
 - RunEvent 为内部唯一语言；多 sink 订阅同一次 run。
 - PersistSink 独占落库状态机；与传输生命周期解耦。
 - SseDelivery 仅为浏览器投递；成帧与 LC 映射分离。
+- 轻量 run 编排接缝（组 sinks / start / cancel），不依赖先搬家。
 - ChannelAdapter SPI + ChannelBinding；微信/飞书/Telegram 同模型扩展。
 - 清理落库 tick 空操作与 stop/断连互斥碎片（收敛到 RunLifecycle）。
 
@@ -18,26 +21,35 @@ Noesis 流式路径将 Agent 执行、SSE 成帧、消息落库绑在同一 gene
 
 - **BREAKING** 变更对外 SSE 事件名或 JSON 字段（契约冻结）。
 - 用 WebSocket 替换 SSE（SessionHub WS 可选后续）。
+- 整包 `noesis_runtime/` 物理拆分、Agent Profile 注册表、Harbor 强制同入口（远期可选 slim change）。
 - 完整实现微信/Telegram 生产收发（adapter 契约 + 至少一条 stub/参考实现即可）。
 - 设置页、cron 配置 UI（其他 change）。
 - 改变 assistant 骨架—终态语义（仍 authoritative 服务端落库）。
 
 ## Decisions
 
-### D1：依赖与包边界
+### D1：自立边界（不依赖 harness 搬家）
 
 ```
-noesis_runtime (extract-agent-runtime-harness)
-    发布 RunEvent
+backend/agent/*（保留）
+  astream_events / Agent.run
          │
-services / domain/chat/delivery/   ← 本 change 新增或重组
-    RunEventBus + PersistSink + SseDelivery + ChannelRegistry
+LcEventMapper → RunEvent
          │
-api/chat stream 仅挂 SseDelivery（若请求来自 HTTP SSE）
-channel workers 挂对应 ChannelAdapter
+RunEventBus（多订阅）
+         │
+┌────────┼────────┬─────────────────┐
+│        │        │                 │
+PersistSink  SseDelivery  ChannelDelivery…
+（落库）    （浏览器）   （TG/微信 stub…）
+         │
+QaService / 轻量 RunOrchestrator
+  注册 sinks → 启动现有 Agent 流 → RunLifecycle.cancel
 ```
 
-若 harness change 尚未合入：本 change 实现期 **SHALL** 先具备「等价于 AgentRunService 发布事件」的接缝（可暂从现有 bridge 适配），但目标架构以 harness 为准，避免长期双入口。
+- **SHALL NOT** 以 `extract-agent-runtime-harness` 合入为前提。
+- 允许日后把 `RunOrchestrator` 再抽成独立 `AgentRunService` 或迁包，但本 change **不**做目录大搬家。
+- 同一时刻 **SHALL** 只有一条「发布 RunEvent」的生产路径（禁止旧 generator 落库与新 Fan-out 长期双轨）。
 
 ### D2：RunEvent 模型（示意）
 
@@ -86,7 +98,7 @@ class ChannelAdapter(Protocol):
     # outbound: 订阅 RunEvent，按 capabilities 投影（FinalTextOnly vs ThrottledEdit）
 ```
 
-微信等差异关在 adapter（API 形态、加密、客服消息窗口），Harness **不** if-else 平台细节。
+微信等差异关在 adapter（API 形态、加密、客服消息窗口），编排层 **不** if-else 平台细节。
 
 出站默认策略：
 
@@ -127,11 +139,20 @@ class ChannelAdapter(Protocol):
 - `disconnect`：对齐现断连 partial
 - 通道侧 stop 命令映射到同一入口，避免第三套 `_active_streams` 语义
 
+### D11：与已搁置 harness 的关系
+
+| 原 harness 目标 | 本 change | 远期 |
+|-----------------|-----------|------|
+| Run 事件与投递解耦 | **在此完成** | — |
+| 评测与线上同入口 | 非必须 | slim change 可选 |
+| `noesis_runtime/` 搬家 | **不做** | 仅当 Delivery 稳定且目录仍痛 |
+
 ## Risks / Trade-offs
 
 | Risk | Mitigation |
 |------|------------|
-| harness 未完成导致双执行入口 | tasks 标明依赖；过渡期单一适配层，禁止第三条路径 |
+| 不搬家导致 qa_service 仍偏厚 | RunOrchestrator + PersistSink 先削薄流式路径；接受 Agent 类暂留 |
+| Fan-out 与旧路径双轨 | feature flag 短过渡；tasks 要求删除 generator 内落库 |
 | Fan-out 背压 | Persist 同步关键路径；IM 出站可丢中间 delta、保终态 |
 | 微信 API 碎片 | SPI + capabilities；具体微信形态另 change |
 | 回归 SSE 细微差异 | 契约测试：录制 RunEvent → SseCodec 快照对比现网 |

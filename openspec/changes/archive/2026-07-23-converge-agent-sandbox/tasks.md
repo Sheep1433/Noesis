@@ -45,7 +45,7 @@
 - [x] 7.1 Skills 上传/删除 API 成功后 invalidate 该用户 session 的 Skills 元数据（或提供重扫钩子）；补测「同 session 上传后可见」
 - [x] 7.2 删除仍存在的 `/skills/` 静态索引 backend（若有）及死代码路径重写
 - [x] 7.3 全局替换 Prompt、常量、测试中的旧路径命名，与 delta specs 一致
-- [ ] 7.4 将本 change 的 delta 在归档前与 `openspec/specs/{agent-sandbox,skills-filesystem,agent-runtime-paths,container-deployment}` 对齐准备（实现完成后 `/opsx:archive`）
+- [x] 7.4 将本 change 的 delta 在归档前与 `openspec/specs/{agent-sandbox,skills-filesystem,agent-runtime-paths,container-deployment}` 对齐准备（实现完成后 `/opsx:archive`）
 
 ## 8. 测试与验收
 

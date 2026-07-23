@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import type { SkillMarketItem, SkillMarketSort } from '@/api/skills'
-import { CheckmarkCircleOutline, DownloadOutline, OpenOutline, SearchOutline } from '@vicons/ionicons-v5'
+import { DownloadOutline, OpenOutline, SearchOutline } from '@vicons/ionicons-v5'
 import {
   NButton,
+  NDrawer,
+  NDrawerContent,
   NEmpty,
   NIcon,
   NInput,
+  NPagination,
   NSpace,
   NSpin,
   NTag,
@@ -13,7 +16,8 @@ import {
   useDialog,
   useMessage,
 } from 'naive-ui'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import {
   browseSkillsMarket,
   getSkillsMarketDetail,
@@ -34,11 +38,40 @@ const emit = defineEmits<{
 
 const message = useMessage()
 const dialog = useDialog()
+const { isMobile } = useBreakpoint()
+
+/** 主从分栏所需最小内容宽度；低于此值改列表 + Drawer（按容器宽度，非整页视口） */
+const MARKET_SPLIT_MIN_WIDTH = 720
+
+const marketRootRef = ref<HTMLElement | null>(null)
+const marketWidth = ref(0)
+
+let marketResizeObserver: ResizeObserver | null = null
+
+const useStackedLayout = computed(() => {
+  if (isMobile.value) {
+    return true
+  }
+  return marketWidth.value < MARKET_SPLIT_MIN_WIDTH
+})
+
+const detailDrawerOpen = computed({
+  get: () => useStackedLayout.value && (!!detailItem.value || detailLoading.value),
+  set: (open) => {
+    if (!open) {
+      closeMobileDetail()
+    }
+  },
+})
+
+const PAGE_SIZE = 12
 
 const loading = ref(false)
 const installingId = ref<string | null>(null)
 const query = ref('')
 const items = ref<SkillMarketItem[]>([])
+const total = ref(0)
+const currentPage = ref(1)
 const mode = ref<'browse' | 'search'>('browse')
 const browseSort = ref<SkillMarketSort>('trending')
 const error = ref<string | null>(null)
@@ -48,9 +81,24 @@ const detailItem = ref<SkillMarketItem | null>(null)
 const detailMd = ref('')
 
 onMounted(() => {
+  if (marketRootRef.value) {
+    marketWidth.value = marketRootRef.value.getBoundingClientRect().width
+    marketResizeObserver = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width
+      if (width != null) {
+        marketWidth.value = width
+      }
+    })
+    marketResizeObserver.observe(marketRootRef.value)
+  }
   if (props.active) {
     void loadBrowse()
   }
+})
+
+onUnmounted(() => {
+  marketResizeObserver?.disconnect()
+  marketResizeObserver = null
 })
 
 watch(
@@ -97,10 +145,10 @@ function patchItemStatus(updated: SkillMarketItem) {
 
 async function refreshCurrentList() {
   if (mode.value === 'search' && query.value.trim().length >= 2) {
-    await runSearch({ keepDetail: true })
+    await runSearch({ keepDetail: true, page: currentPage.value })
     return
   }
-  await loadBrowse({ keepDetail: true })
+  await loadBrowse({ keepDetail: true, page: currentPage.value })
 }
 
 async function setBrowseSort(sort: SkillMarketSort) {
@@ -108,10 +156,12 @@ async function setBrowseSort(sort: SkillMarketSort) {
     return
   }
   browseSort.value = sort
+  currentPage.value = 1
   await loadBrowse()
 }
 
-async function loadBrowse(opts?: { keepDetail?: boolean }) {
+async function loadBrowse(opts?: { keepDetail?: boolean; page?: number }) {
+  const page = opts?.page ?? currentPage.value
   loading.value = true
   error.value = null
   mode.value = 'browse'
@@ -120,8 +170,14 @@ async function loadBrowse(opts?: { keepDetail?: boolean }) {
     detailMd.value = ''
   }
   try {
-    const res = await browseSkillsMarket(browseSort.value)
+    const res = await browseSkillsMarket(
+      browseSort.value,
+      PAGE_SIZE,
+      (page - 1) * PAGE_SIZE,
+    )
     items.value = res.items.map(normalizeItem)
+    total.value = res.total ?? res.items.length
+    currentPage.value = page
     if (opts?.keepDetail && detailItem.value) {
       const latest = items.value.find((i) => i.id === detailItem.value?.id)
       if (latest) {
@@ -131,17 +187,19 @@ async function loadBrowse(opts?: { keepDetail?: boolean }) {
   } catch (e: any) {
     error.value = e.message || '加载榜单失败'
     items.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
 }
 
-async function runSearch(opts?: { keepDetail?: boolean }) {
+async function runSearch(opts?: { keepDetail?: boolean; page?: number }) {
   const q = query.value.trim()
   if (q.length < 2) {
     message.warning('请输入至少 2 个字符')
     return
   }
+  const page = opts?.page ?? 1
   loading.value = true
   error.value = null
   mode.value = 'search'
@@ -150,9 +208,11 @@ async function runSearch(opts?: { keepDetail?: boolean }) {
     detailMd.value = ''
   }
   try {
-    const res = await searchSkillsMarket(q)
+    const res = await searchSkillsMarket(q, PAGE_SIZE, (page - 1) * PAGE_SIZE)
     items.value = res.items.map(normalizeItem)
-    if (!res.items.length) {
+    total.value = res.total ?? res.items.length
+    currentPage.value = page
+    if (!res.items.length && page === 1) {
       message.info('未找到匹配技能')
     }
     if (opts?.keepDetail && detailItem.value) {
@@ -164,6 +224,7 @@ async function runSearch(opts?: { keepDetail?: boolean }) {
   } catch (e: any) {
     error.value = e.message || '搜索失败'
     items.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
@@ -264,33 +325,83 @@ function installsLabel(): string {
   return browseSort.value === 'trending' ? '24h' : 'all'
 }
 
-function primaryActionLabel(item: SkillMarketItem): string {
+function closeMobileDetail() {
+  detailItem.value = null
+  detailMd.value = ''
+  detailLoading.value = false
+}
+
+function formatRank(index: number): string {
+  return String((currentPage.value - 1) * PAGE_SIZE + index + 1).padStart(2, '0')
+}
+
+async function onPageChange(page: number) {
+  if (mode.value === 'search') {
+    await runSearch({ keepDetail: true, page })
+    return
+  }
+  await loadBrowse({ keepDetail: true, page })
+}
+
+function listActionLabel(item: SkillMarketItem): string {
   const match = item.install_match || 'none'
   if (match === 'exact') {
-    return '已安装'
+    return '重新安装'
   }
   if (match === 'name_conflict') {
-    return '同名已占用'
+    return '覆盖安装'
   }
   return '安装'
+}
+
+function onListActionClick(item: SkillMarketItem) {
+  const match = item.install_match || 'none'
+  if (match === 'exact' || match === 'name_conflict') {
+    confirmInstall(item, true)
+    return
+  }
+  confirmInstall(item, false)
+}
+
+function detailPrimaryLabel(item: SkillMarketItem): string {
+  const match = item.install_match || 'none'
+  if (match === 'name_conflict') {
+    return '覆盖安装'
+  }
+  if (match === 'none') {
+    return isMobile.value ? '安装' : '安装到个人技能'
+  }
+  return ''
 }
 </script>
 
 <template>
-  <div class="skills-market">
+  <div
+    ref="marketRootRef"
+    class="skills-market"
+    :class="{ 'skills-market--stacked': useStackedLayout }"
+  >
     <div class="market-toolbar">
       <n-input
         v-model:value="query"
         clearable
-        placeholder="搜索 skills.sh（至少 2 字符）"
+        :placeholder="isMobile ? '搜索 skills.sh' : '搜索 skills.sh（至少 2 字符）'"
         @keyup.enter="runSearch()"
       >
         <template #prefix>
           <n-icon :component="SearchOutline" />
         </template>
       </n-input>
-      <n-button type="primary" :loading="loading && mode === 'search'" @click="runSearch()">
-        搜索
+      <n-button
+        type="primary"
+        :loading="loading && mode === 'search'"
+        :circle="isMobile"
+        @click="runSearch()"
+      >
+        <template v-if="isMobile" #icon>
+          <n-icon :component="SearchOutline" />
+        </template>
+        <span v-if="!isMobile">搜索</span>
       </n-button>
     </div>
 
@@ -331,73 +442,72 @@ function primaryActionLabel(item: SkillMarketItem): string {
     </div>
 
     <div v-else class="market-body">
+      <div class="market-list-col">
       <div class="market-list">
         <div
           v-for="(item, index) in items"
           :key="item.id"
           class="market-card"
           :class="{ active: detailItem?.id === item.id }"
-          @click="openDetail(item)"
         >
-          <div class="market-card-title">
-            <span class="name">
-              <span v-if="mode === 'browse'" class="rank">#{{ index + 1 }}</span>
-              {{ item.name }}
-            </span>
-            <div class="market-card-tags">
-              <n-tag v-if="item.install_match === 'exact'" size="small" type="success" :bordered="false">
-                已安装
-              </n-tag>
-              <n-tag
-                v-else-if="item.install_match === 'name_conflict'"
-                size="small"
-                type="warning"
-                :bordered="false"
-              >
-                同名占用
-              </n-tag>
-              <n-tag v-if="item.installs" size="small" :bordered="false">
-                {{ formatInstalls(item.installs) }}
-                <template v-if="mode === 'browse'"> · {{ installsLabel() }}</template>
-                <template v-else> installs</template>
-              </n-tag>
+          <button
+            type="button"
+            class="market-card-main"
+            @click="openDetail(item)"
+          >
+            <div class="market-card-title">
+              <span class="name">
+                <span
+                  v-if="mode === 'browse'"
+                  class="rank-badge"
+                  :class="{ 'rank-badge--top': (currentPage - 1) * PAGE_SIZE + index < 3 }"
+                >{{ formatRank(index) }}</span>
+                {{ item.name }}
+              </span>
+              <div class="market-card-tags">
+                <n-tag
+                  v-if="item.install_match === 'name_conflict'"
+                  size="small"
+                  type="warning"
+                  :bordered="false"
+                >
+                  同名占用
+                </n-tag>
+                <n-tag v-if="item.installs" size="small" :bordered="false">
+                  {{ formatInstalls(item.installs) }}
+                  <template v-if="mode === 'browse'"> · {{ installsLabel() }}</template>
+                </n-tag>
+              </div>
             </div>
-          </div>
-          <n-text depth="3" class="source">
-            {{ item.source }}
-          </n-text>
-          <div class="market-card-actions" @click.stop>
+            <n-text v-if="useStackedLayout" depth="3" class="source source--stacked">
+              {{ item.source }}
+            </n-text>
+            <n-text v-else depth="3" class="source">
+              {{ item.source }}
+            </n-text>
+          </button>
+          <div v-if="!useStackedLayout" class="market-card-actions">
             <n-button
               size="tiny"
               :type="item.install_match === 'none' ? 'primary' : 'default'"
               :secondary="item.install_match !== 'none'"
               :loading="installingId === item.id"
-              @click="onInstallClick(item)"
+              @click.stop="onListActionClick(item)"
             >
-              <template #icon>
-                <n-icon
-                  :component="item.install_match === 'exact' ? CheckmarkCircleOutline : DownloadOutline"
-                />
+              <template v-if="item.install_match === 'none'" #icon>
+                <n-icon :component="DownloadOutline" />
               </template>
-              {{ primaryActionLabel(item) }}
+              {{ listActionLabel(item) }}
             </n-button>
             <n-button
-              v-if="item.install_match === 'exact'"
-              size="tiny"
-              quaternary
-              :loading="installingId === item.id"
-              @click="confirmInstall(item, true)"
-            >
-              重新安装
-            </n-button>
-            <n-button
-              v-if="item.market_url"
+              v-if="!isMobile && item.market_url"
               size="tiny"
               tag="a"
               :href="item.market_url"
               target="_blank"
               rel="noopener noreferrer"
               quaternary
+              @click.stop
             >
               <template #icon>
                 <n-icon :component="OpenOutline" />
@@ -408,8 +518,20 @@ function primaryActionLabel(item: SkillMarketItem): string {
         </div>
         <n-empty v-if="!items.length" description="暂无结果" />
       </div>
+      <div v-if="total > PAGE_SIZE" class="market-pagination">
+        <n-pagination
+          :page="currentPage"
+          :page-size="PAGE_SIZE"
+          :item-count="total"
+          :disabled="loading"
+          size="small"
+          :page-slot="isMobile ? 5 : 7"
+          @update:page="onPageChange"
+        />
+      </div>
+      </div>
 
-      <div class="market-detail">
+      <div v-if="!useStackedLayout" class="market-detail">
         <div v-if="detailLoading" class="market-state">
           <n-spin size="medium" />
           <span>加载 SKILL.md…</span>
@@ -425,15 +547,7 @@ function primaryActionLabel(item: SkillMarketItem): string {
               </n-text>
               <div class="detail-tags">
                 <n-tag
-                  v-if="detailItem.install_match === 'exact'"
-                  size="small"
-                  type="success"
-                  :bordered="false"
-                >
-                  已安装
-                </n-tag>
-                <n-tag
-                  v-else-if="detailItem.install_match === 'name_conflict'"
+                  v-if="detailItem.install_match === 'name_conflict'"
                   size="small"
                   type="warning"
                   :bordered="false"
@@ -455,24 +569,16 @@ function primaryActionLabel(item: SkillMarketItem): string {
                 重新安装
               </n-button>
               <n-button
+                v-else-if="detailItem.install_match !== 'exact'"
                 :type="detailItem.install_match === 'none' ? 'primary' : 'default'"
                 size="small"
                 :loading="installingId === detailItem.id"
                 @click="onInstallClick(detailItem)"
               >
-                {{
-                  detailItem.install_match === 'exact'
-                    ? '已安装'
-                    : detailItem.install_match === 'name_conflict'
-                      ? '覆盖安装'
-                      : '安装到个人技能'
-                }}
+                {{ detailPrimaryLabel(detailItem) }}
               </n-button>
             </n-space>
           </div>
-          <n-text depth="3" class="detail-hint">
-            正文来自 skills.sh；安装后可在「已安装」Tab 查看完整目录结构。
-          </n-text>
           <div class="detail-content">
             <FilePreview
               v-if="detailMd"
@@ -480,6 +586,7 @@ function primaryActionLabel(item: SkillMarketItem): string {
               :content="detailMd"
               :show-path="false"
               density="comfortable"
+              download-title="下载"
             />
             <n-empty v-else description="暂无 SKILL.md 内容" />
           </div>
@@ -487,6 +594,60 @@ function primaryActionLabel(item: SkillMarketItem): string {
         <n-empty v-else description="选择左侧技能查看详情" />
       </div>
     </div>
+
+    <n-drawer
+      v-if="useStackedLayout"
+      v-model:show="detailDrawerOpen"
+      placement="right"
+      :width="'100%'"
+      :trap-focus="false"
+      :block-scroll="true"
+    >
+      <n-drawer-content
+        :title="detailItem?.name ?? '加载中…'"
+        closable
+        body-content-style="padding: 0 12px 16px; height: 100%; display: flex; flex-direction: column; min-height: 0;"
+        @close="closeMobileDetail"
+      >
+        <div v-if="detailLoading" class="market-state market-state--drawer">
+          <n-spin size="medium" />
+          <span>加载 SKILL.md…</span>
+        </div>
+        <template v-else-if="detailItem">
+          <div class="detail-content detail-content--drawer">
+            <FilePreview
+              v-if="detailMd"
+              path="SKILL.md"
+              :content="detailMd"
+              :show-path="false"
+              density="comfortable"
+              download-title="下载"
+            >
+              <template v-if="detailItem.install_match === 'exact'" #header-extra>
+                <n-button
+                  size="tiny"
+                  :loading="installingId === detailItem.id"
+                  @click="confirmInstall(detailItem, true)"
+                >
+                  重新安装
+                </n-button>
+              </template>
+              <template v-else-if="detailPrimaryLabel(detailItem)" #header-extra>
+                <n-button
+                  :type="detailItem.install_match === 'none' ? 'primary' : 'default'"
+                  size="tiny"
+                  :loading="installingId === detailItem.id"
+                  @click="onInstallClick(detailItem)"
+                >
+                  {{ detailPrimaryLabel(detailItem) }}
+                </n-button>
+              </template>
+            </FilePreview>
+            <n-empty v-else description="暂无 SKILL.md 内容" />
+          </div>
+        </template>
+      </n-drawer-content>
+    </n-drawer>
   </div>
 </template>
 
@@ -494,10 +655,10 @@ function primaryActionLabel(item: SkillMarketItem): string {
 .skills-market {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  height: 100%;
+  gap: 8px;
+  flex: 1;
   min-height: 0;
-  padding: 12px 16px 16px;
+  padding: 8px 0 12px;
 }
 
 .market-toolbar {
@@ -517,10 +678,30 @@ function primaryActionLabel(item: SkillMarketItem): string {
   align-items: center;
 }
 
-.rank {
-  margin-right: 6px;
-  color: var(--noesis-text-3);
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.25rem;
+  margin-right: 8px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--noesis-text-3);
+  background: rgb(0 0 0 / 5%);
+}
+
+.rank-badge--top {
+  color: var(--noesis-primary, #297ce9);
+  background: rgb(41 124 233 / 12%);
+}
+
+.market-state--drawer {
+  min-height: 160px;
 }
 
 .market-state {
@@ -535,27 +716,53 @@ function primaryActionLabel(item: SkillMarketItem): string {
 
 .market-body {
   display: grid;
-  grid-template-columns: minmax(260px, 340px) 1fr;
+  grid-template-columns: minmax(220px, min(32%, 320px)) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
+.market-list-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  gap: 8px;
+}
+
 .market-list {
-  overflow: auto;
+  flex: 1;
+  overflow-x: clip;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+  min-width: 0;
   padding-right: 4px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.market-pagination {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
 }
 
 .market-card {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 0;
   border: 1px solid var(--noesis-border);
   border-radius: 8px;
-  padding: 10px 12px;
-  cursor: pointer;
+  overflow: hidden;
   background: var(--noesis-bg-elevated, transparent);
   transition: border-color 0.15s ease;
 
@@ -565,16 +772,42 @@ function primaryActionLabel(item: SkillMarketItem): string {
   }
 }
 
+.market-card-main {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px 8px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+
+  &:hover {
+    background: rgb(0 0 0 / 2%);
+  }
+}
+
+.market-card.active .market-card-main {
+  background: rgb(41 124 233 / 4%);
+}
+
 .market-card-title {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 4px;
 
   .name {
+    min-width: 0;
+    flex: 1 1 10rem;
     font-weight: 600;
     font-size: 14px;
+    line-height: 1.35;
+    word-break: break-word;
   }
 }
 
@@ -584,10 +817,13 @@ function primaryActionLabel(item: SkillMarketItem): string {
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .detail-tags {
   margin-top: 6px;
+  margin-left: 0;
 }
 
 .source {
@@ -595,17 +831,28 @@ function primaryActionLabel(item: SkillMarketItem): string {
   word-break: break-all;
 }
 
+.source--stacked {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .market-card-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
+  padding: 0 12px 10px;
 }
 
 .market-detail {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
   border: 1px solid var(--noesis-border);
@@ -615,6 +862,7 @@ function primaryActionLabel(item: SkillMarketItem): string {
 
 .detail-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
@@ -649,9 +897,55 @@ function primaryActionLabel(item: SkillMarketItem): string {
   font-weight: 600;
 }
 
-@media (max-width: 900px) {
+.detail-content--drawer {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+
+.skills-market--stacked {
   .market-body {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .market-list-col {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+  }
+
+  .market-list {
+    gap: 10px;
+    padding-right: 0;
+    overflow-x: clip;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .market-card-main {
+    padding: 12px 14px;
+  }
+
+  .market-card-title {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-bottom: 0;
+
+    .name {
+      font-size: 15px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+  }
+
+  .market-card-tags {
+    width: 100%;
   }
 }
 </style>

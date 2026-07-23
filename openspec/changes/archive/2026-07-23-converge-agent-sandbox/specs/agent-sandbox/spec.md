@@ -72,8 +72,6 @@ runner 创建沙箱时 **SHALL** 仅挂载：
 - **WHEN** 配置或环境指定 `sandbox.backend=aio`
 - **THEN** 系统 SHALL 在启动或创建 backend 时失败并给出明确错误，**SHALL NOT** 静默回退
 
-## MODIFIED Requirements
-
 ### Requirement: 系统 SHALL 为每个会话提供隔离沙箱执行环境
 
 需要 filesystem backend 且 `current_user` 有效时，系统 SHALL 经 `sandbox-runner` 为当前 **`(user_id, session_id)`** 创建或复用沙箱执行环境（默认 **per-session 容器**；若实现为 per-user 容器则 **SHALL** 仅挂载该 session 的挂载表）。不同用户 **SHALL** 使用不同容器。同用户不同 session **SHALL NOT** 共享可写 workspace 挂载。
@@ -143,31 +141,6 @@ runner 创建沙箱时 **SHALL** 仅挂载：
 - **WHEN** session `s1` 内两个 `execute` 几乎同时到达
 - **THEN** backend SHALL 串行转发至该 session 沙箱
 
-### Requirement: 沙箱环境与密钥
-
-沙箱容器 env **SHALL NOT** 含 API 业务密钥；**MAY** 含 scoped `GH_TOKEN`。
-
-#### Scenario: 沙箱内无 Tavily Key
-
-- **WHEN** Agent `execute(command="env")`
-- **THEN** **SHALL NOT** 含 `TAVILY_API_KEY`
-
-### Requirement: 沙箱 idle 回收 SHALL 尊重 in-flight Agent
-
-`SandboxService` **SHALL** 维护 in-flight 计数（按 sandbox lifecycle 键：session 或 user）。
-
-runner **SHALL NOT** 因 idle TTL 停止仍有 in-flight > 0 的沙箱。
-
-#### Scenario: 流式进行中不回收
-
-- **WHEN** session 仍在 SSE 流式运行，且 idle TTL 已到
-- **THEN** runner **SHALL NOT** 停止该 session 沙箱
-
-#### Scenario: idle 后回收
-
-- **WHEN** 对应 sandbox 的 in-flight 为 0 且超过 TTL
-- **THEN** runner **MAY** 停止容器；磁盘 `users/{uid}/sessions/{sid}/workspace` **SHALL** 保留
-
 ### Requirement: 软删 session SHALL 可销毁该 session 沙箱
 
 软删 session **SHALL** cancel run 并 `delete_session_data`；**SHALL** 销毁该 session 对应沙箱容器（若存在）。**SHALL NOT** 删除用户记忆或个人 Skills。
@@ -218,17 +191,79 @@ Agent Prompt **SHALL** 说明：shell cwd 为 workspace 根；相对路径即产
 - **WHEN** Agent `execute(command="printf ok > notes.md")`
 - **THEN** 宿主机当前 session workspace 下 **SHALL** 存在 `notes.md`，内容为 `ok`
 
+## MODIFIED Requirements
+
+### Requirement: 沙箱环境与密钥
+
+沙箱容器 env **SHALL NOT** 含 API 业务密钥；**MAY** 含 scoped `GH_TOKEN`。
+
+#### Scenario: 沙箱内无 Tavily Key
+
+- **WHEN** Agent `execute(command="env")`
+- **THEN** **SHALL NOT** 含 `TAVILY_API_KEY`
+
+### Requirement: 沙箱 idle 回收 SHALL 尊重 in-flight Agent
+
+`SandboxService` **SHALL** 维护 in-flight 计数（按 sandbox lifecycle 键：session 或 user）。
+
+runner **SHALL NOT** 因 idle TTL 停止仍有 in-flight > 0 的沙箱。
+
+#### Scenario: 流式进行中不回收
+
+- **WHEN** session 仍在 SSE 流式运行，且 idle TTL 已到
+- **THEN** runner **SHALL NOT** 停止该 session 沙箱
+
+#### Scenario: idle 后回收
+
+- **WHEN** 对应 sandbox 的 in-flight 为 0 且超过 TTL
+- **THEN** runner **MAY** 停止容器；磁盘 `users/{uid}/sessions/{sid}/workspace` **SHALL** 保留
+
 ## REMOVED Requirements
+
+### Requirement: 系统 SHALL 为每个用户提供独立 AIO 沙箱
+
+**Reason**: 收敛为 per-session Docker Exec 沙箱，取消 per-user AIO 容器模型。
+**Migration**: 见 ADDED「系统 SHALL 为每个会话提供隔离沙箱执行环境」。
+
+### Requirement: Agent virtual 根 SHALL 对应当前 session workspace
+
+**Reason**: virtual `/research/`、`/memory/` 路由模型随 AIO 一并废弃，改为容器内 `/workspace` 直挂。
+**Migration**: 见 ADDED「Agent workspace 根 SHALL 映射容器 /workspace」。
 
 ### Requirement: AioSandboxBackend SHALL 实现 BaseSandbox
 
 **Reason**: 删除 AIO 兼容链，生产仅 Docker Exec。
 **Migration**: 使用 `DockerExecSandboxBackend`；开发用 `local_shell`。
 
+### Requirement: AIO 调用 SHALL 按 session 串行化
+
+**Reason**: AIO backend 已删除，串行化改由 Docker Exec backend 描述。
+**Migration**: 见 ADDED「沙箱调用 SHALL 按 session 串行化」。
+
+### Requirement: 沙箱挂载 SHALL 为 users/{user_id} 树
+
+**Reason**: 整用户目录 rw 挂载模型废弃，改为 session workspace + 双 Skills 只读挂载。
+**Migration**: 见 ADDED「沙箱挂载 SHALL 仅为当前 session workspace 与双 Skills」。
+
 ### Requirement: 浏览器与 CDP Skills
 
 **Reason**: 依赖 AIO 浏览器环境，本变更删除 AIO。
 **Migration**: 需要时另开 browser sandbox 变更；本阶段 Skills 不得假设容器内 Chromium/CDP。
+
+### Requirement: 软删 session SHALL NOT 销毁用户沙箱
+
+**Reason**: per-user 沙箱模型废弃；per-session 沙箱在删 session 时应随之销毁。
+**Migration**: 见 ADDED「软删 session SHALL 可销毁该 session 沙箱」。
+
+### Requirement: sandbox-runner SHALL 提供 user 级 lifecycle API
+
+**Reason**: lifecycle 主键改为 session。
+**Migration**: 见 ADDED「sandbox-runner SHALL 提供 lifecycle API」。
+
+### Requirement: Docker 部署 SHALL 使用 NOESIS_HOST_DATA_DIR
+
+**Reason**: bind 目标从整用户目录改为 session workspace 与双 Skills；表述并入新的 Docker bind 要求。
+**Migration**: 见 ADDED「Docker 部署 SHALL 使用宿主机真实路径做 bind」。
 
 ### Requirement: backend SHALL 依赖 agent-sandbox SDK
 
@@ -239,3 +274,8 @@ Agent Prompt **SHALL** 说明：shell cwd 为 workspace 根；相对路径即产
 
 **Reason**: Shell token rewrite（`shlex.split`/`join`）破坏操作符，且与简化挂载冲突；目标态取消 execute 虚拟路径 rewrite。
 **Migration**: filesystem 工具继续解析虚拟路径；`execute` 使用 `/workspace` 与 `/skills/public|personal` 真实路径或相对路径。过渡期可保留工具层旧路径别名，但 **SHALL NOT** 恢复整命令 shlex round-trip rewrite。
+
+### Requirement: execute 工作目录 SHALL 为 session workspace 根
+
+**Reason**: exec_dir 从 AIO 的 `/workspace/sessions/{sid}/workspace` 收敛为 Docker Exec 的 `/workspace`。
+**Migration**: 见 ADDED「execute 工作目录 SHALL 为 /workspace」。

@@ -64,6 +64,25 @@ def test_user_tree_skips_symlinks(users_root: Path, tmp_path: Path) -> None:
     assert user_labels == ["my-skill"]
 
 
+def test_build_package_zip_user_skill(users_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    platform_root = tmp_path / "platform-skills"
+    skill_dir = platform_root / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# demo", encoding="utf-8")
+    monkeypatch.setattr(SkillFsService, "get_platform_root_path", classmethod(lambda cls: str(platform_root)))
+
+    user_dir = paths.ensure_user_skills_dir("u1") / "my-skill"
+    user_dir.mkdir(parents=True)
+    (user_dir / "SKILL.md").write_text("# user", encoding="utf-8")
+
+    ok, err, data, filename = SkillFsService.build_package_zip("my-skill", source="user", user_id="u1")
+
+    assert ok is True
+    assert err == ""
+    assert filename == "my-skill.zip"
+    assert data.startswith(b"PK")
+
+
 def test_delete_user_skill_package_rejects_symlink(users_root: Path, tmp_path: Path) -> None:
     outside = tmp_path / "outside" / "linked-skill"
     outside.mkdir(parents=True)

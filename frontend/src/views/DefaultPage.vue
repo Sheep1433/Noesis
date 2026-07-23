@@ -69,7 +69,7 @@ const visibleItems = computed(() => {
   if (!isMobile.value) {
     return currentPanel.value.items
   }
-  return currentPanel.value.items.slice(0, 3)
+  return currentPanel.value.items.slice(0, 2)
 })
 </script>
 
@@ -364,15 +364,14 @@ const visibleItems = computed(() => {
   }
 
   .welcome-root--mobile .detail-card__subtitle {
-    font-size: 0.74rem;
-    line-height: 1.4;
+    display: none;
   }
 
   .welcome-root--mobile .detail-card__points--mobile {
     flex: none;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -386,7 +385,7 @@ const visibleItems = computed(() => {
   }
 
   .welcome-root--mobile .detail-card__points--mobile .detail-point:last-child:nth-child(odd) {
-    grid-column: 1 / -1;
+    grid-column: auto;
   }
 }
 </style>

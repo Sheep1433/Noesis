@@ -1,6 +1,5 @@
 <script lang="ts" setup>
 import { computed } from 'vue'
-import QatypeIcon from '@/components/IconFont/QatypeIcon.vue'
 import { copyToClipboard } from '@/utils/copy'
 
 const props = withDefaults(defineProps<{
@@ -56,7 +55,6 @@ const handlePassClip = async () => {
 <template>
   <div class="assistant-reply-toolbar">
     <div class="assistant-reply-toolbar__left">
-      <QatypeIcon :qa_type="qaType" />
       <n-tooltip v-if="showLangfuse" placement="top">
         <template #trigger>
           <n-button

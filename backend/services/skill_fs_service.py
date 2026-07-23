@@ -1,6 +1,7 @@
 """
 Skills 文件目录（平台 extensions/skills + 用户 .data/users/{uid}/skills/）
 """
+import io
 import os
 import shutil
 import zipfile
@@ -330,6 +331,44 @@ class SkillFsService:
 
         bump_user_skills_revision(str(user_id))
         return True, f'已删除技能「{name}」'
+
+    @classmethod
+    def build_package_zip(
+        cls,
+        package_name: str,
+        *,
+        source: SkillSource,
+        user_id: str | int,
+    ) -> Tuple[bool, str, bytes, str]:
+        """将顶层技能目录打包为 ZIP（平台/个人均可下载）。"""
+        if not cls._is_top_level_package_name(package_name):
+            return False, '仅支持下载顶层技能目录', b'', ''
+        name = package_name.strip().replace('\\', '/')
+        try:
+            root = cls._resolve_root(source, user_id)
+            package_dir = cls._safe_join(root, name)
+        except ValueError:
+            return False, '非法路径', b'', ''
+        if not os.path.isdir(package_dir):
+            return False, '技能目录不存在', b'', ''
+        if os.path.islink(package_dir):
+            return False, '不能打包符号链接目录', b'', ''
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for dirpath, dirnames, filenames in os.walk(package_dir):
+                dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+                for fn in filenames:
+                    if fn.startswith('.'):
+                        continue
+                    full = os.path.join(dirpath, fn)
+                    if os.path.islink(full):
+                        continue
+                    arcname = os.path.relpath(full, package_dir).replace('\\', '/')
+                    zf.write(full, arcname)
+        data = buf.getvalue()
+        if len(data) > _MAX_ZIP_BYTES:
+            return False, f'技能包过大（>{_MAX_ZIP_BYTES // 1024 // 1024}MB）', b'', ''
+        return True, '', data, f'{name}.zip'
 
 
 def max_zip_bytes() -> int:

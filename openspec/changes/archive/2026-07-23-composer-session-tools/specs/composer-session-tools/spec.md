@@ -25,9 +25,9 @@
 - **THEN** Composer MCP 子菜单 SHALL 显示 `fault_ops` 为已启用
 - **AND** 后续发问 SHALL 按该勾选加载工具
 
-### Requirement: mcp_servers 缺省回退规则
+### Requirement: mcp_servers 缺省回退规则 SHALL 按 qa_type 区分
 
-当会话 `extra` **不包含**键 `mcp_servers` 时：
+当会话 `extra` **不包含**键 `mcp_servers` 时，系统 SHALL 按 `qa_type` 区分回退：
 
 - `FAULT_OPERATION_QA` SHALL 回退为平台 profile `fault_operation` 的 server 列表
 - 其它 `qa_type` SHALL 视为未启用任何 MCP（空列表）

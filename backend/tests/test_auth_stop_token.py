@@ -58,3 +58,56 @@ async def test_revoke_all_targets_only_the_current_user():
     await SessionService.revoke_all(db, 7)
     assert db.execute.await_count == 1
     assert db.commit.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_rejects_missing_cookie(monkeypatch):
+    from exceptions.exception import AuthException
+    from services.user_service import UserService
+
+    request = MagicMock()
+    request.cookies.get.return_value = None
+    db = AsyncMock()
+    monkeypatch.setattr(SessionService, "get_valid", AsyncMock(return_value=None))
+    with pytest.raises(AuthException):
+        await UserService.get_current_user(request, db)
+
+
+@pytest.mark.asyncio
+async def test_require_csrf_rejects_bad_header():
+    from exceptions.exception import PermissionException
+    from services.user_service import UserService
+
+    request = MagicMock()
+    request.state.auth_session = _session("csrf")
+    request.headers.get.return_value = "wrong"
+    with pytest.raises(PermissionException):
+        await UserService.require_csrf(request)
+
+
+@pytest.mark.asyncio
+async def test_stop_csrf_accepts_body_token(monkeypatch):
+    from schemas.login_vo import CurrentUser
+    from schemas.qa_vo import QaStopRequest
+    from services.user_service import UserService
+
+    sess = _session("csrf-body")
+    request = MagicMock()
+    request.cookies.get.return_value = "session"
+    request.headers.get.return_value = ""
+    request.state.auth_session = sess
+    db = AsyncMock()
+    monkeypatch.setattr(SessionService, "get_valid", AsyncMock(return_value=sess))
+    monkeypatch.setattr(SessionService, "touch", AsyncMock(side_effect=lambda _db, s: s))
+    monkeypatch.setattr(
+        UserService,
+        "_user_from_id",
+        AsyncMock(return_value=CurrentUser(user_id=1, username="u", mobile=None)),
+    )
+    user = await UserService.get_user_for_stop(
+        "sid",
+        request,
+        QaStopRequest(session_id="sid", qa_type="SUPER_AGENT_QA", csrf_token="csrf-body"),
+        db,
+    )
+    assert user.user_id == 1

@@ -8,8 +8,9 @@ import { listMcpServers } from '@/api/mcp'
 import { getSkillsFsTree } from '@/api/skills'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
+import { collectSkillPackages } from '@/utils/skillsTree'
 
-type MenuView = 'root' | 'mcp' | 'skills'
+type MenuView = 'root' | 'mcp' | 'skills' | 'kb'
 
 const props = defineProps<{
   qaType: string
@@ -54,23 +55,20 @@ async function loadCatalogs() {
   }
   catalogLoading.value = true
   try {
-    const [mcpCatalog, skillsTree] = await Promise.all([
+    const [mcpResult, skillsResult] = await Promise.allSettled([
       listMcpServers(),
-      getSkillsFsTree().catch(() => null),
+      getSkillsFsTree(),
     ])
-    mcpServers.value = mcpCatalog.servers ?? []
-    const pkgs: { id: string, source: string }[] = []
-    for (const section of [skillsTree?.platform, skillsTree?.user]) {
-      if (!section?.tree) {
-        continue
-      }
-      for (const node of section.tree) {
-        if (!node.isLeaf) {
-          pkgs.push({ id: node.label, source: node.source })
-        }
-      }
+    if (mcpResult.status === 'fulfilled') {
+      mcpServers.value = mcpResult.value.servers ?? []
+    } else {
+      console.warn('加载 MCP 目录失败', mcpResult.reason)
     }
-    skillPackages.value = pkgs
+    if (skillsResult.status === 'fulfilled') {
+      skillPackages.value = collectSkillPackages(skillsResult.value)
+    } else {
+      console.warn('加载 Skills 目录失败', skillsResult.reason)
+    }
     catalogLoaded.value = true
   } catch (e) {
     console.warn('加载 Composer 目录失败', e)
@@ -189,6 +187,14 @@ const skillSummary = computed(() => {
   const n = selectedSkills.value.length
   return n > 0 ? `${n}` : ''
 })
+
+const kbSummary = computed(() => {
+  if (!kbSearchEnabled.value) {
+    return '关'
+  }
+  const n = selectedKbCollections.value.length
+  return n > 0 ? `${n}` : ''
+})
 </script>
 
 <template>
@@ -251,6 +257,18 @@ const skillSummary = computed(() => {
             >
               <span class="i-mdi:file-image-outline composer-menu-item__icon"></span>
               <span class="composer-menu-item__label">上传图片</span>
+            </button>
+
+            <button
+              v-if="showKbScope"
+              type="button"
+              class="composer-menu-item"
+              @click="menuView = 'kb'"
+            >
+              <span class="i-carbon:book composer-menu-item__icon"></span>
+              <span class="composer-menu-item__label">知识库</span>
+              <span v-if="kbSummary" class="composer-menu-item__badge">{{ kbSummary }}</span>
+              <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
             </button>
 
             <button
@@ -342,6 +360,28 @@ const skillSummary = computed(() => {
               <span class="composer-tool-row__label">{{ skill.id }} ({{ skill.source }})</span>
             </label>
           </template>
+
+          <!-- 二级：知识库 -->
+          <template v-else-if="menuView === 'kb'">
+            <button
+              type="button"
+              class="composer-menu-back"
+              @click="menuView = 'root'"
+            >
+              <span class="i-carbon:chevron-left"></span>
+              <span>知识库</span>
+            </button>
+            <div class="composer-kb-panel">
+              <KbScopeSelector
+                v-model="selectedKbCollections"
+                v-model:kb-search-enabled="kbSearchEnabled"
+                embedded
+                :session-id="sessionId"
+                :persist-session-extra="persistSessionExtra"
+                :disabled="disabled"
+              />
+            </div>
+          </template>
         </div>
       </n-popover>
 
@@ -351,16 +391,6 @@ const skillSummary = computed(() => {
         :persist-session-extra="persistSessionExtra"
         :disabled="disabled"
       />
-
-      <div v-if="showKbScope" class="composer-kb-inline">
-        <KbScopeSelector
-          v-model="selectedKbCollections"
-          v-model:kb-search-enabled="kbSearchEnabled"
-          :session-id="sessionId"
-          :persist-session-extra="persistSessionExtra"
-          :disabled="disabled"
-        />
-      </div>
     </div>
 
     <div class="composer-toolbar__right">
@@ -525,9 +555,17 @@ const skillSummary = computed(() => {
   margin: 4px 8px 2px;
 }
 
-.composer-kb-inline {
-  flex-shrink: 0;
-  margin-left: 4px;
-  min-width: 0;
+.composer-kb-panel {
+  padding: 4px 0 8px;
+}
+
+.composer-kb-panel :deep(.kb-scope-embedded) {
+  width: 100%;
+  max-width: none;
+  padding: 0 14px 4px;
+}
+
+.composer-kb-panel :deep(.kb-scope-embedded__title) {
+  display: none;
 }
 </style>
