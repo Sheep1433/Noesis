@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent.backends import create_agent_backend, sandbox_backend_kind, uses_container_sandbox
-from config.agent_workspace_paths import ensure_workspace_dir
+from config.user_data_paths import ensure_workspace_dir
 from deepagents.backends.composite import CompositeBackend
 
 
@@ -51,13 +51,13 @@ async def test_create_agent_backend_local_shell(
     platform = tmp_path / "platform-skills"
     platform.mkdir()
     monkeypatch.setattr(
-        "agent.backends.agent_filesystem.skills_root",
+        "agent.backends.factory.skills_root",
         lambda: platform,
     )
 
     backend = await create_agent_backend("u1", "s1")
     ws = ensure_workspace_dir("u1", "s1")
-    target = "/research/notes.md"
+    target = "/workspace/research/notes.md"
     result = backend.write(target, "hello")
     assert result.error is None
     assert (ws / "research" / "notes.md").read_text(encoding="utf-8") == "hello"
@@ -77,8 +77,8 @@ async def test_create_agent_backend_docker(docker_backend: None) -> None:
 
 
 def test_skill_sources_use_public_and_personal_routes() -> None:
-    from agent.backends import SKILL_SOURCES
-    from agent.backends.mount_paths import (
+    from agent.skills import SKILL_SOURCES
+    from agent.backends.paths import (
         AGENT_PERSONAL_SKILLS_ROUTE,
         AGENT_PUBLIC_SKILLS_ROUTE,
     )

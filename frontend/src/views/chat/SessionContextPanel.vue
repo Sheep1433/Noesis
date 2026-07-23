@@ -8,6 +8,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { getSessionContext, getWorkspaceFile, saveWorkspaceFile } from '@/api/chat'
 import FilePreview from '@/components/FilePreview/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
@@ -23,6 +24,7 @@ const props = defineProps<{
 }>()
 
 const message = useMessage()
+const router = useRouter()
 const loading = ref(false)
 const context = ref<SessionContextResponse | null>(null)
 const selectedKey = ref('')
@@ -37,6 +39,17 @@ const previewEditable = computed(() => {
     return false
   }
   return getFilePreviewKind(previewPath.value) === 'text'
+})
+
+const settingsDeepLink = computed(() => {
+  const base = previewPath.value.replace(/^\/+/, '')
+  if (base === 'USER.md') {
+    return { name: 'Settings' as const, query: { s: 'profile' } }
+  }
+  if (base === 'AGENTS.md') {
+    return { name: 'Settings' as const, query: { s: 'memory' } }
+  }
+  return null
 })
 
 const { size: treeWidth, startResize: startTreeResize } = usePaneResize({
@@ -202,6 +215,15 @@ defineExpose({ reload })
     :style="backgroundColor ? { backgroundColor, '--panel-bg': backgroundColor } : undefined"
   >
     <div class="panel-toolbar">
+      <n-button
+        v-if="settingsDeepLink"
+        quaternary
+        size="tiny"
+        title="在设置中打开"
+        @click="router.push(settingsDeepLink)"
+      >
+        在设置中打开
+      </n-button>
       <n-button quaternary size="tiny" :loading="loading" title="Refresh" @click="reload">
         <template #icon>
           <n-icon size="16"><Refresh /></n-icon>
@@ -265,6 +287,7 @@ defineExpose({ reload })
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 4px;
   flex-shrink: 0;
   padding: 4px 6px 0;
 }

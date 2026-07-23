@@ -27,28 +27,31 @@
 - **WHEN** 用户打开 `channels` 且已配置一条 Telegram 通道
 - **THEN** 列表 SHALL 显示该通道且不展示完整明文 token
 
-### Requirement: Telegram 通道 SHALL 定义入站与出站边界
+### Requirement: Telegram 通道配置 SHALL 声明产品边界（运行时另见 Delivery）
 
-对 `type=telegram` 且 `enabled=true` 的通道，系统 SHALL 定义：
+对 `type=telegram` 的通道配置，系统 SHALL 能持久化：`enabled`、连接参数、可选默认 `qa_type`、以及与 Noesis `user_id` 的配对/绑定标识（存储格式由实现选定）。
 
-- **入站**：平台 MAY 将 Telegram 消息路由为该用户的 Agent 请求（默认 `qa_type` 可配置）；实现分期时规格仍要求配置面与数据模型就绪。
-- **出站**：定时任务或 Agent 完成结果 MAY 投递到该通道（由任务 `delivery` 或通道路由配置选择）；未配置出站时 **SHALL NOT** 外泄到 Telegram。
+下列**运行时**行为（入站路由、出站 Fan-out、Adapter 收发）**SHALL** 由 `unify-run-delivery` / ChannelAdapter 实现；本能力 **SHALL** 仅保证配置与配对数据可被运行时读取，**SHALL NOT** 在本 change 内要求落地 webhook/long-poll 或消息投递管线。
 
-入站身份映射 SHALL 绑定到 Noesis `user_id`（例如通过用户在设置中完成的链接/配对流程）；未配对的 Telegram 发送方 **SHALL NOT** 触发任意用户的 Agent。
+产品边界（供运行时遵守）：
 
-#### Scenario: 未配对拒绝入站
+- 未配对的 Telegram 发送方 **SHALL NOT** 触发任意用户的 Agent；
+- 通道 `enabled=false` 时 **SHALL NOT** 向外投递；
+- 未配置出站目标时 **SHALL NOT** 将 Agent/cron 结果外泄到 Telegram。
 
-- **WHEN** 未与任何 Noesis 用户配对的 Telegram 账号向 bot 发消息且入站处理已启用
-- **THEN** 系统 SHALL 不执行特权用户的 Agent 任务（可回复引导配对）
+#### Scenario: 保存启用中的 Telegram 配置
 
-#### Scenario: 停用通道停止外发
+- **WHEN** 用户保存 `type=telegram` 且 `enabled=true` 的通道配置（含脱敏后的连接信息）
+- **THEN** 系统 SHALL 持久化该配置，供后续 ChannelAdapter 读取
 
-- **WHEN** 用户将 Telegram 通道 `enabled` 设为 false
-- **THEN** 系统 SHALL 停止向该通道投递出站消息
+#### Scenario: 停用配置可供运行时读取
+
+- **WHEN** 用户将 Telegram 通道 `enabled` 设为 false 并保存
+- **THEN** 持久化状态 SHALL 为 disabled；运行时（Delivery）据此 **SHALL** 停止外发（本 change 不实现外发本身）
 
 ### Requirement: 通道 API SHALL 鉴权且作用域为当前用户
 
-`/api/user/channels`（或等价前缀）SHALL 要求 JWT；列表/变更仅限当前用户。未知 `channel_id` SHALL 返回 404。
+`/api/user/channels`（或等价前缀）SHALL 要求有效的 Cookie Session（与 `user-auth` 一致）；非安全方法 SHALL 校验 CSRF。列表/变更仅限当前用户。未知 `channel_id` SHALL 返回 404。系统 **SHALL NOT** 以 Authorization Bearer JWT 作为本 API 的身份凭据。
 
 #### Scenario: 越权通道
 

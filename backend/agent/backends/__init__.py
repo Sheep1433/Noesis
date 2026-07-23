@@ -1,5 +1,4 @@
 from agent.backends.factory import (
-    SKILL_SOURCES,
     agent_sandbox_session,
     create_agent_backend,
     sandbox_backend_kind,
@@ -7,7 +6,6 @@ from agent.backends.factory import (
 )
 
 __all__ = [
-    "SKILL_SOURCES",
     "agent_sandbox_session",
     "create_agent_backend",
     "sandbox_backend_kind",

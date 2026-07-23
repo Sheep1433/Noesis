@@ -30,8 +30,8 @@ PARALLEL_TOOL_CALL = """<parallel_tool_calls>
 MODEL_OPERATIONAL = """<model_operational>
 ## 操作规范
 
-- 文件工具使用工作区绝对路径（如 `/notes.md`、`/outputs/report.md`）；只读 Skills：`/skills/public/...`、`/skills/personal/...`（同名时 personal 优先）；记忆：`/memory/AGENTS.md`。
-- Shell 每次 `execute` 的 cwd 为 `/workspace`；**优先相对路径**写产物（`notes.md`、`research/foo.md`）。不要对 Shell 做虚拟路径改写假设。
+- 文件工具与 Shell 共用绝对路径：工作区 ``/workspace/notes.md``、``/workspace/research/foo.md``；只读 Skills：``/skills/public/...``、``/skills/personal/...``（同名时 personal 优先）；记忆：``/memory/AGENTS.md``。**不要**写裸 ``/notes.md``（旧虚拟根）或 ``sessions/.../workspace/``（UI 路径）。
+- Shell 每次 `execute` 的 cwd 为 `/workspace`；**优先相对路径**写产物（`notes.md`、`research/foo.md`）。不要对 Shell 做路径改写假设。
 - 依赖 `cd` 的后续命令**须在同一 command 内**用 `&&` 链接（如 `cd outputs && make`）；跨次 `execute` 的 `cd` 不保留。
 - 用户记忆经 `/memory/` 工具读写；**不要**指望 Shell 能读到记忆或其它 session。
 - 修改或引用文件前先 `read_file` / `grep` 确认内容，不要猜测。

@@ -194,7 +194,7 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 #### Scenario: 沙箱超时不得空 success
 
-- **WHEN** AIO `shell.exec_command` 超时
+- **WHEN** docker / local_shell `execute` 超时
 - **THEN** SHALL 抛 `ToolTimeoutError`，SHALL NOT `status=success` + `outcome=empty`
 
 ### Requirement: 用户 output SHALL 与 Agent 原始输出分离格式化

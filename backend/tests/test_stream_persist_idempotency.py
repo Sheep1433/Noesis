@@ -37,7 +37,7 @@ async def test_finalize_then_disconnect_persists_once() -> None:
     mock_persist = AsyncMock()
     user = SimpleNamespace(user_id="u1")
 
-    with patch("services.qa_service._persist_assistant", mock_persist):
+    with patch("services.qa.helpers._persist_assistant", mock_persist):
         await _finalize_streaming_assistant(
             builder=builder,
             bridge=bridge,
@@ -78,7 +78,7 @@ async def test_disconnect_then_finalize_persists_once() -> None:
     bridge.last_finish_reason = "stop"
 
     try:
-        with patch("services.qa_service._persist_assistant", mock_persist):
+        with patch("services.qa.helpers._persist_assistant", mock_persist):
             await _handle_stream_client_disconnect(
                 session_id=session_id,
                 qa_type="COMMON_QA",
@@ -112,7 +112,7 @@ async def test_finalize_uses_builder_message_id_when_ctx_missing() -> None:
     ctx = {"text_buffer": ""}
     mock_persist = AsyncMock()
 
-    with patch("services.qa_service._persist_assistant", mock_persist):
+    with patch("services.qa.helpers._persist_assistant", mock_persist):
         await _finalize_streaming_assistant(
             builder=builder,
             bridge=bridge,
@@ -134,7 +134,7 @@ async def test_double_disconnect_handler_is_idempotent() -> None:
     ctx = {"_assistant_db_id": "msg-4", "text_buffer": ""}
     mock_persist = AsyncMock()
 
-    with patch("services.qa_service._persist_assistant", mock_persist):
+    with patch("services.qa.helpers._persist_assistant", mock_persist):
         await _handle_stream_client_disconnect(
             session_id=session_id,
             qa_type="COMMON_QA",

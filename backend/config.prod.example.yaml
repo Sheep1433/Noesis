@@ -116,6 +116,11 @@ agent_runtime:
 stream:
   sse_keepalive_interval_seconds: 25
 
+messaging:
+  # Telegram long-poll 真收发；默认关。多 worker 勿同时开以免重复 getUpdates
+  telegram_runtime_enabled: false
+  telegram_poll_timeout_seconds: 25
+
 qdrant:
   host: 127.0.0.1
   port: 6333

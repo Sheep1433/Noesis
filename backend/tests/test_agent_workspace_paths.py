@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent.backends.local_shell import create_local_shell_backend
-from config import agent_workspace_paths as paths
+from config import user_data_paths as paths
 from config import user_data_paths as user_paths
 
 

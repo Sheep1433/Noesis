@@ -26,7 +26,7 @@ async def test_handle_stream_client_disconnect_flushes_text_buffer() -> None:
     user = SimpleNamespace(user_id="u1")
 
     try:
-        with patch("services.qa_service._persist_assistant", mock_persist):
+        with patch("services.qa.helpers._persist_assistant", mock_persist):
             await _handle_stream_client_disconnect(
                 session_id=session_id,
                 qa_type="COMMON_QA",

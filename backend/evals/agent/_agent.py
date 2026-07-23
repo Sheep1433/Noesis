@@ -9,8 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from agent.super_agent import SuperAgent
-from config.agent_workspace_paths import ensure_workspace_dir
+from agent.profiles.super_agent import SuperAgent
+from config.user_data_paths import ensure_workspace_dir
 from evals.bootstrap import eval_runtime
 
 DEFAULT_TIME_BUDGET_SECONDS = 600

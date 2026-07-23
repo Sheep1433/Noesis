@@ -19,8 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.chat_models import TChatSession, TChatMessage
 from exceptions.exception import ServiceException
-from config.agent_workspace_paths import delete_session_workspace
-from services.agent_lifecycle import cancel_session_agent_runs
+from config.user_data_paths import delete_session_workspace
 from common.logging import logger
 from domain.chat.message_builder import AssistantMessageBuilder
 
@@ -41,6 +40,22 @@ def set_load_complete() -> None:
     global _load_complete
     with _load_lock:
         _load_complete = True
+
+
+async def cancel_session_agent_runs(session_id: str) -> None:
+    """取消各 Agent 在 session_id 上的进行中 run（幂等；lazy import 避免与 qa_service 循环）。"""
+    from services.qa_service import (
+        case_coordinator,
+        common_agent,
+        super_agent,
+        fault_agent,
+    )
+
+    await common_agent.cancel_task(session_id)
+    await fault_agent.cancel_task(session_id)
+    await super_agent.cancel_task(session_id)
+    await case_coordinator.cancel_task(session_id)
+    logger.info("已请求取消 session Agent runs session_id={}", session_id)
 
 
 def wait_for_load() -> None:
@@ -507,6 +522,21 @@ class ChatService:
         await db.commit()
         delete_session_workspace(user_id, session_id)
         try:
+            from services.scheduled_task_service import ScheduledTaskService
+
+            await ScheduledTaskService.disable_session_bound_tasks(
+                db,
+                user_id,
+                session_id,
+                reason="session_deleted",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "disable_session_bound_tasks 失败 session_id={} err={}",
+                session_id,
+                exc,
+            )
+        try:
             from services.sandbox_service import destroy_session_sandbox
 
             await destroy_session_sandbox(user_id, session_id)
@@ -582,6 +612,21 @@ class ChatService:
 
         for sid in found_ids:
             delete_session_workspace(uid, sid)
+            try:
+                from services.scheduled_task_service import ScheduledTaskService
+
+                await ScheduledTaskService.disable_session_bound_tasks(
+                    db,
+                    uid,
+                    sid,
+                    reason="session_deleted",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "disable_session_bound_tasks 失败 session_id={} err={}",
+                    sid,
+                    exc,
+                )
             try:
                 from services.sandbox_service import destroy_session_sandbox
 

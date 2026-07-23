@@ -50,6 +50,19 @@ def test_append_text_delta_new_part_when_parent_changes() -> None:
     assert parts[1]["parent_task_call_id"] == "task-1"
 
 
+def test_append_reasoning_delta_merges_across_interleaved_parent() -> None:
+    """主 Agent part 插入时，子 Agent reasoning 仍应合并为同一块。"""
+    builder = AssistantMessageBuilder()
+    builder.append_reasoning_delta("The", parent_task_call_id="task-1")
+    builder.append_text_delta("主线", parent_task_call_id=None)
+    builder.append_reasoning_delta(" user wants", parent_task_call_id="task-1")
+    parts = builder.to_dict()["parts"]
+    reasoning = [p for p in parts if p["type"] == "reasoning"]
+    assert len(reasoning) == 1
+    assert reasoning[0]["content"] == "The user wants"
+    assert reasoning[0]["parent_task_call_id"] == "task-1"
+
+
 def test_append_tool_output_persists_error_status() -> None:
     builder = AssistantMessageBuilder()
     builder.append_tool("bash", {"command": "uptime"}, tool_call_id="tc-1")

@@ -6,12 +6,12 @@ from unittest.mock import patch
 
 import pytest
 
-from agent.backends.docker_exec_sandbox import DockerExecSandboxBackend
-from agent.fault_operation_agent import FaultOperationAgent
+from agent.backends.docker_exec import DockerExecSandboxBackend
+from agent.profiles.fault_operation_agent import FaultOperationAgent
 
 
 def test_workspace_backend_root_dir_matches_session(tmp_path: Path) -> None:
-    from config import agent_workspace_paths as paths
+    from config import user_data_paths as paths
     from config import user_data_paths as udp
 
     users_root = tmp_path / "users"

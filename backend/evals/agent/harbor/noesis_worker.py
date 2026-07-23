@@ -13,7 +13,7 @@ from pathlib import Path
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage
 
-from agent.base.base_agent import DEFAULT_RECURSION_LIMIT
+from agent.profiles.base_agent import DEFAULT_RECURSION_LIMIT
 from agent.factory import create_noesis_agent
 from config.checkpointer import get_checkpointer
 from evals.agent.harbor.harbor_proxy_client import resolve_container_working_dir_via_proxy

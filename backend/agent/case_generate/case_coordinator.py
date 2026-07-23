@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from config.checkpointer import get_checkpointer
 from langgraph.types import Command
 
-from agent.base.base_agent import DEFAULT_RECURSION_LIMIT
+from agent.profiles.base_agent import DEFAULT_RECURSION_LIMIT
 from agent.case_generate.case_graph import TestCaseState, build_test_case_graph
 from agent.case_generate.rag import extract_source_file_names
 from config.env import LangfuseConfig

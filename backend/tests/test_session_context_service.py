@@ -29,12 +29,11 @@ async def test_read_workspace_file_rejects_traversal(tmp_path: Path, monkeypatch
         assert rel == 'sessions/s1/workspace/ok.md'
         assert content == "hello"
 
-        # 兼容旧版 workspace/ 前缀
-        rel_legacy, content_legacy = await SessionContextService.read_workspace_file(
-            sid, uid, 'workspace/ok.md', db,
-        )
-        assert rel_legacy == 'sessions/s1/workspace/ok.md'
-        assert content_legacy == "hello"
+        with pytest.raises(HTTPException) as exc_legacy:
+            await SessionContextService.read_workspace_file(
+                sid, uid, 'workspace/ok.md', db,
+            )
+        assert exc_legacy.value.status_code == 400
 
         with pytest.raises(HTTPException) as exc:
             await SessionContextService.read_workspace_file(sid, uid, "../etc/passwd", db)

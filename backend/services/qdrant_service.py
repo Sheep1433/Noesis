@@ -9,10 +9,9 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from config.env import QdrantConfig
 from common.logging import logger
-from services.qdrant_shard_fields import payload_created_at, vector_length
 from kb.document_parse import DocumentParser
 from kb.chunk import chunk, build_effective_processing_snapshot, fixed_processing_params
-from kb.retrieval.payload import documents_to_points
+from kb.retrieval.payload import documents_to_points, payload_created_at, vector_length
 
 # 全局 Qdrant 客户端实例
 _qdrant_client: Optional[QdrantClient] = None

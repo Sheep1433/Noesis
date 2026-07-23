@@ -91,7 +91,7 @@ def test_skill_and_file_and_subagent(user_session):
     )
     assert "deep-research-v2" in resolved.skill_ids
     assert "/skills/public/deep-research-v2/SKILL.md" in resolved.prompt_block
-    assert "`/notes.md`" in resolved.prompt_block
+    assert "`/workspace/notes.md`" in resolved.prompt_block
     assert "task-worker" in resolved.prompt_block
     assert len(resolved.persistence) == 3
 
@@ -143,7 +143,7 @@ def test_fault_accepts_file_and_subagent(user_session):
         user_id=uid,
         session_id=sid,
     )
-    assert "`/notes.md`" in resolved.prompt_block
+    assert "`/workspace/notes.md`" in resolved.prompt_block
     assert "general-purpose" in resolved.prompt_block
 
 

@@ -239,11 +239,6 @@ class SkillsShClient:
             raise
 
     @classmethod
-    def fetch_trending(cls, *, limit: int = 40) -> list[SkillsShSearchHit]:
-        """兼容旧调用：等价于 fetch_leaderboard(trending)。"""
-        return cls.fetch_leaderboard("trending", limit=limit)
-
-    @classmethod
     def _parse_leaderboard_html(cls, html: str) -> list[SkillsShSearchHit]:
         hits: list[SkillsShSearchHit] = []
         seen: set[str] = set()

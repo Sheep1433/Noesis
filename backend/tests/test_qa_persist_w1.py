@@ -14,8 +14,8 @@ async def test_persist_assistant_passes_status_and_extra() -> None:
     cm.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("services.qa_service.AsyncSessionLocal", return_value=cm),
-        patch("services.qa_service.ChatService.save_message", new_callable=AsyncMock) as save_msg,
+        patch("services.qa.helpers.AsyncSessionLocal", return_value=cm),
+        patch("services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as save_msg,
     ):
         from services.qa_service import _persist_assistant
 
@@ -42,9 +42,9 @@ async def test_persist_assistant_update_path_calls_update() -> None:
     cm.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("services.qa_service.AsyncSessionLocal", return_value=cm),
-        patch("services.qa_service.ChatService.update_assistant_message", new_callable=AsyncMock) as upd,
-        patch("services.qa_service.ChatService.save_message", new_callable=AsyncMock) as ins,
+        patch("services.qa.helpers.AsyncSessionLocal", return_value=cm),
+        patch("services.qa.helpers.ChatService.update_assistant_message", new_callable=AsyncMock) as upd,
+        patch("services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as ins,
     ):
         from services.qa_service import _persist_assistant
 
@@ -64,8 +64,8 @@ async def test_persist_assistant_update_path_calls_update() -> None:
 @pytest.mark.asyncio
 async def test_persist_assistant_skips_empty_parts_without_row_id() -> None:
     with (
-        patch("services.qa_service.AsyncSessionLocal") as mock_local,
-        patch("services.qa_service.ChatService.save_message", new_callable=AsyncMock) as save_msg,
+        patch("services.qa.helpers.AsyncSessionLocal") as mock_local,
+        patch("services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as save_msg,
     ):
         from services.qa_service import _persist_assistant
 

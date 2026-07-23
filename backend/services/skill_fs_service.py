@@ -4,7 +4,9 @@ Skills 文件目录（平台 extensions/skills + 用户 .data/users/{uid}/skills
 import io
 import os
 import shutil
+import time
 import zipfile
+from pathlib import Path
 from typing import List, Literal, Tuple
 
 from config.extensions_paths import skills_root
@@ -14,8 +16,32 @@ from common.logging import logger
 
 _MAX_READ_BYTES = 512 * 1024
 _MAX_ZIP_BYTES = 10 * 1024 * 1024
+_REVISION_FILE = ".skills_revision"
 
 SkillSource = Literal["platform", "user"]
+
+
+def skills_revision_path(user_id: str) -> Path:
+    return get_user_skills_dir(user_id) / _REVISION_FILE
+
+
+def get_user_skills_revision(user_id: str) -> str:
+    path = skills_revision_path(user_id)
+    if not path.is_file():
+        return "0"
+    try:
+        return path.read_text(encoding="utf-8").strip() or "0"
+    except OSError:
+        return "0"
+
+
+def bump_user_skills_revision(user_id: str) -> str:
+    """个人 Skills 树变更后调用；返回新 revision。"""
+    path = skills_revision_path(user_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    value = str(time.time_ns())
+    path.write_text(value, encoding="utf-8")
+    return value
 
 
 class SkillFsService:
@@ -203,8 +229,6 @@ class SkillFsService:
     @classmethod
     def extract_zip_to_user_dir(cls, zip_path: str, user_id: str | int) -> Tuple[bool, str]:
         """将 ZIP 内容解压到 `.data/users/{user_id}/skills/`。"""
-        from services.skills_revision import bump_user_skills_revision
-
         root = str(ensure_user_skills_dir(user_id))
         ok, msg = cls._extract_zip(zip_path, root)
         if ok:
@@ -262,8 +286,6 @@ class SkillFsService:
         overwrite: bool = False,
     ) -> Tuple[bool, str]:
         """将本地技能目录复制到用户 personal skills（顶层包名）。"""
-        from services.skills_revision import bump_user_skills_revision
-
         if not cls._is_top_level_package_name(package_name):
             return False, '非法技能包名'
         name = package_name.strip().replace('\\', '/')
@@ -327,8 +349,6 @@ class SkillFsService:
         except OSError as e:
             logger.error(f'删除技能目录失败 {target}: {e}')
             return False, f'删除失败: {e}'
-        from services.skills_revision import bump_user_skills_revision
-
         bump_user_skills_revision(str(user_id))
         return True, f'已删除技能「{name}」'
 

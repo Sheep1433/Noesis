@@ -2,23 +2,22 @@ schema: spec-driven
 
 # 写入 AI 指令与变更提案时的项目约束（勿在此存放密钥；敏感项仅描述来源如 .env）
 context: |
-  项目：Noesis — Vue 3 + Vite + TypeScript + Naive UI 前端，FastAPI + LangGraph + SQLAlchemy(异步) + MySQL 后端，向量检索 Qdrant，LLM 默认 DashScope 兼容 OpenAI 接口。
+  项目：Noesis — Vue 3 + Vite + TypeScript + Naive UI 前端，FastAPI + LangGraph + SQLAlchemy(异步) + PostgreSQL 后端，向量检索 Qdrant，LLM 默认 DashScope 兼容 OpenAI 接口。
 
-  后端分层：api/* → services/* → agent/utils；API 禁止裸 JSON，统一 utils.response_util.ResponseUtil；数据库访问仅在 Service；配置在 config/env.py + pydantic-settings，禁止硬编码密钥。
+  后端分层：api/* → services/* → domain/agent；API 禁止裸 JSON，统一 utils.response_util.ResponseUtil；数据库访问仅在 Service；配置在 config/env.py + pydantic-settings，禁止硬编码密钥。
 
-  前端：Pinia（userStore token 于 sessionStorage）、路由 requiresAuth、聊天 SSE 与 MarkdownPreview；问答类型 qa_type 对齐后端 IntentEnum：COMMON_QA、FAULT_OPERATION_QA、TEST_CASE_QA、SUPER_AGENT_QA。
+  前端：Pinia（认证为 Session Cookie + CSRF）、路由 requiresAuth、聊天 SSE 与 MarkdownPreview；问答类型 qa_type：COMMON_QA、FAULT_OPERATION_QA、TEST_CASE_QA、SUPER_AGENT_QA。
 
-  验证：后端改动后 `uv run app.py`；前端 `pnpm lint` / `pnpm build` 按影响范围执行。HTTP 业务 code 与状态码需一致（404/409 等见仓库 AGENTS.md）。
+  验证：后端改动后 `uv run app.py`；前端 `pnpm lint` / `pnpm build` 按影响范围执行。HTTP 业务 code 与状态码需一致（见仓库 AGENTS.md）。
 
-  OpenSpec：主规格位于 openspec/specs/<capability>/spec.md；变更内 delta 在 openspec/changes/<name>/specs/，归档时与主规格对齐。模块导航见 openspec/README.md。
+  OpenSpec：主规格位于 openspec/specs/<capability>/spec.md（11 个功能模块，见 openspec/README.md）；变更 delta 在 openspec/changes/<name>/specs/，归档时与主规格对齐。
 
-  能力 id 按域分组（目录名 = 能力 id）：
-  - 平台聊天：platform-chat、chat-session-attachments、chat-composer-send-upload、chat-session-context-panel、agent-reasoning-observability
-  - Agent 场景：agent-common-qa、agent-fault-operation、agent-test-case、agent-deep-research、agent-web-tools、agent-tool-failure-handling
-  - 运行时：agent-runtime-paths（权威路径；user-data-layout / agent-workspace 已合并占位）、agent-sandbox、skills-filesystem
-  - 知识库（无主 spec 目录，见 change enterprise-kb-retrieval-foundation + docs/prd/knowledge-base/）：knowledge-base、kb-chunking、kb-retrieval、kb-document-parse、kb-evaluation
-  - 离线评测：test-case-agent-eval、agent-offline-eval、message-compression-eval
-  - 部署认证：container-deployment、user-auth
+  能力 id：
+  - 聊天：platform-chat、chat-composer
+  - Agent：agent-runtime、agent-profiles、agent-hitl、agent-tool-failure-handling、agent-delivery
+  - 知识库：knowledge-base
+  - 用户与部署：user-platform、container-deployment
+  - 评测：offline-evals
 
 rules:
   proposal:
@@ -27,7 +26,8 @@ rules:
   specs:
     - 每个 Requirement 使用「系统 SHALL / 用户 SHALL」等可验收表述；Scenario 使用 **WHEN** / **THEN** / **AND**。
     - Purpose 不少于 50 字符；不复制本 config 中的密钥或示例默认值。
+    - 优先改对应功能模块主规格；避免再拆过细的能力 id，除非跨域边界清晰。
   design:
     - 指向具体文件路径与模块；说明数据流、错误与回滚；SSE/Agent 变更需写明事件或状态机约定。
   tasks:
-    - 任务可独立验证；含前后端时标注接口与 UI 触点；高风险区（JWT、MCP、Qdrant、消息持久化）单列检查项。
+    - 任务可独立验证；含前后端时标注接口与 UI 触点；高风险区（认证、MCP、Qdrant、消息持久化）单列检查项。

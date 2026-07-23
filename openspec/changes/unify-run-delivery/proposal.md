@@ -6,13 +6,13 @@
 
 ## What Changes
 
-- 引入内部 **RunEvent** 模型与 **RunEventBus**（多订阅）；执行产物经 `LcEventMapper` 发布结构化事件，**不**直接 yield SSE 字符串作为权威事件源。
-- 将落库抽为 **PersistSink**（骨架—检查点—终态状态机唯一权威），与「是否存在 SSE 客户端」解耦。
-- 将现有 SSE 路径降级为 **SseDelivery**（`SseCodec` 成帧）；`LangGraphSseBridge` 职责收缩为 LC→RunEvent 映射 + SSE 投影。
+- 引入内部 **RunEvent** 模型与 **RunEventBus**（多订阅）；执行产物经 `LcEventMapper` 发布结构化事件，**不**直接 yield SSE 字符串作为权威事件源；**显式覆盖 HITL**（`HitlRequired` / `RunPaused(hitl_pending)`），与主规格 pending 不终态、resume 续写同 `message_id` 一致。
+- 将落库抽为 **PersistSink**（骨架—检查点—终态状态机唯一权威；HITL pending **非**终态），与「是否存在 SSE 客户端」解耦。
+- 将现有 SSE 路径降级为 **SseDelivery**（`SseCodec` 成帧）；`LangGraphSseBridge` 职责收缩为 LC→RunEvent 映射 + SSE 投影（含 `hitl-required` / resume 段）。
 - 在现有代码树上提供轻量 **run 编排接缝**（如 `RunOrchestrator` / `start_run`，可仍由 `QaService` 调用）：组 sinks、启动 Agent 流、统一 cancel——**不**要求先迁 `noesis_runtime/` 包。
 - 定义 **ChannelAdapter SPI**（inbound normalize + outbound project + capabilities），首期至少落地契约与 stub 注册表；Telegram/微信等具体 adapter 可分期实现。
-- 定义 **ChannelBinding**（外部 chat ↔ Noesis `session_id`）与入站路由到同一 run 编排 + 落库 SSOT。
-- **非目标**：整包 Runtime/Harness 物理拆分（已搁置）；全面改 WebSocket 替换 SSE；改变对外 SSE 事件名/载荷（**无 BREAKING**）；实现完整微信/Telegram 生产投递（可跟进）；设置页 UI（属 `add-agent-user-settings`）。
+- 定义 **ChannelBinding**（外部 chat ↔ Noesis `session_id`）与入站路由到同一 run 编排 + 落库 SSOT；**配置/密钥/配对存储**属 `add-agent-user-settings`，本 change 只读并跑运行时。
+- **非目标**：整包 Runtime/Harness 物理拆分（已搁置）；全面改 WebSocket 替换 SSE；改变对外 SSE 事件名/载荷（**无 BREAKING**）；实现完整微信/Telegram 生产投递（可跟进）；设置页 UI / 通道 CRUD（属 `add-agent-user-settings`）。
 
 ## Capabilities
 
@@ -22,8 +22,8 @@
 
 ### Modified Capabilities
 
-- `platform-chat`：流式入口 SHALL 经 Run Fan-out 消费事件；落库由 PersistSink 驱动；对外 SSE 契约保持兼容。
-- `agent-messaging-channels`（若尚未归档进主规格，则以本 change delta + `add-agent-user-settings` 为准）：通道运行时投递 SHALL 实现 ChannelAdapter，且 **SHALL NOT** 依赖浏览器 SSE 存活。
+- `platform-chat`：流式入口 SHALL 经 Run Fan-out 消费事件；落库由 PersistSink 驱动；HITL 分段流与 resume 同路径；对外 SSE 契约保持兼容。
+- `agent-messaging-channels`：本 change 仅 **运行时**（Adapter / Fan-out）；配置面以 `add-agent-user-settings` 为准；出站 **SHALL NOT** 依赖浏览器 SSE 存活。
 
 ## Impact
 

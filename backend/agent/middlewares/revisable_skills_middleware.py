@@ -8,7 +8,7 @@ from deepagents.middleware.skills import SkillsMiddleware, SkillsState
 from langchain.agents.middleware.types import PrivateStateAttr
 from typing_extensions import Annotated
 
-from services.skills_revision import get_user_skills_revision
+from services.skill_fs_service import get_user_skills_revision
 
 
 class SkillsRevisionState(SkillsState):

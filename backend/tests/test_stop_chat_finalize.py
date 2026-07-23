@@ -80,8 +80,8 @@ async def test_stop_chat_sets_user_stopped_and_persists() -> None:
     user = SimpleNamespace(user_id="u1")
 
     try:
-        with patch("services.qa_service._persist_assistant", mock_persist):
-            with patch("services.qa_service.common_agent.cancel_task", mock_cancel):
+        with patch("services.qa.service._persist_assistant", mock_persist):
+            with patch("services.qa.service.common_agent.cancel_task", mock_cancel):
                 ok, msg = await QaService.stop_chat(session_id, "COMMON_QA", user)
 
         assert ok is True

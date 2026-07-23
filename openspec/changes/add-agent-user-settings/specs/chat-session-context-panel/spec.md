@@ -15,7 +15,7 @@
 
 面板 SHALL 为可内联预览的文本文件（含 Markdown、代码、纯文本）提供**下载**与**编辑保存**操作；Office / PDF 等复杂格式 SHALL 继续仅通过 artifact URL 打开，不提供内联编辑。
 
-系统 SHALL 提供 `PUT /api/chat/sessions/{session_id}/workspace/file`（JWT 认证），请求体含 `path` 与 `content`，写入范围与只读 API 一致；单文件大小上限与读限制一致（512KB）。
+系统 SHALL 提供 `PUT /api/chat/sessions/{session_id}/workspace/file`（Cookie Session 认证 + CSRF，与 `user-auth` 一致），请求体含 `path` 与 `content`，写入范围与只读 API 一致；单文件大小上限与读限制一致（512KB）。
 
 对 `USER.md` / `AGENTS.md`：面板编辑 **SHALL** 继续可用，作为相对设置页主入口的兼容路径；产品文案 MAY 提示用户前往「个人与 Agent 设置」管理画像与偏好。
 

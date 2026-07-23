@@ -1,5 +1,6 @@
-"""Agent 工具（RAG、检索等）。"""
+"""Agent 工具（RAG、检索、HITL ask_user 等）。"""
 
+from agent.tools.ask_user import ask_user_tool, build_interrupt_on
 from agent.tools.kb_search_tool import (
     build_kb_search_tools,
     get_knowledge_document,
@@ -11,6 +12,8 @@ from agent.tools.kb_search_tool import (
 from agent.tools.web_search_tool import build_web_search_tools
 
 __all__ = [
+    "ask_user_tool",
+    "build_interrupt_on",
     "build_kb_search_tools",
     "build_web_search_tools",
     "get_knowledge_document",

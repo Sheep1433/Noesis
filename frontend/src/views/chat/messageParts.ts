@@ -636,15 +636,21 @@ export function appendTextDelta(
 ): UiPart[] {
   const parentId = parent_task_call_id?.trim() || undefined
   const next = parts.map((p) => ({ ...p })) as UiPart[]
-  const last = next[next.length - 1]
-  if (last?.type === 'text' && part_parent_task_call_id(last) === parentId) {
-    const t = last
-    next[next.length - 1] = {
-      ...t,
-      content: t.content + delta,
-      status: t.status === 'completed' ? 'streaming' : (t.status || 'streaming'),
+  // 跳过其它 parent 的交错 part，避免子 Agent 正文被拆碎
+  for (let i = next.length - 1; i >= 0; i--) {
+    const p = next[i]
+    if (part_parent_task_call_id(p) !== parentId) {
+      continue
     }
-    return next
+    if (p.type === 'text') {
+      next[i] = {
+        ...p,
+        content: p.content + delta,
+        status: p.status === 'completed' ? 'streaming' : (p.status || 'streaming'),
+      }
+      return next
+    }
+    break
   }
   next.push({
     id: genPartId('text'),
@@ -759,15 +765,22 @@ export function appendReasoningDelta(
 ): UiPart[] {
   const parentId = parent_task_call_id?.trim() || undefined
   const next = parts.map((p) => ({ ...p })) as UiPart[]
-  const last = next[next.length - 1]
-  if (last?.type === 'reasoning' && part_parent_task_call_id(last) === parentId) {
-    const r = last
-    next[next.length - 1] = {
-      ...r,
-      content: r.content + delta,
-      status: 'streaming',
+  // 跳过其它 parent 的交错 part（主 Agent 与子 Agent 事件交错时），
+  // 合并进「同 parent 最近一条 reasoning」；同 parent 的 text/tool 之后才新开块。
+  for (let i = next.length - 1; i >= 0; i--) {
+    const p = next[i]
+    if (part_parent_task_call_id(p) !== parentId) {
+      continue
     }
-    return next
+    if (p.type === 'reasoning') {
+      next[i] = {
+        ...p,
+        content: p.content + delta,
+        status: 'streaming',
+      }
+      return next
+    }
+    break
   }
   next.push({
     id: genPartId('reasoning'),

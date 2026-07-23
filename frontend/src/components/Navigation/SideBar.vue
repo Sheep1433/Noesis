@@ -3,8 +3,6 @@ import ThemeSwitcher from '@/components/ThemeSwitcher/index.vue'
 
 const router = useRouter()
 const route = useRoute()
-const userStore = useUserStore()
-
 
 // 侧边栏图标组件
 const SideBarItem = defineComponent({
@@ -175,12 +173,6 @@ const sidebarItems = ref([
 ])
 
 
-const handleLogout = async () => {
-  await userStore.logout()
-  setTimeout(() => {
-    router.replace('/login')
-  }, 500)
-}
 </script>
 
 <template>
@@ -225,13 +217,16 @@ const handleLogout = async () => {
             <div class="sidebar-nav-icon size-35 i-my-svg:avatar"></div>
           </SideBarItem>
         </template>
-        <n-button
-          quaternary
-          strong
-          @click="handleLogout"
-        >
-          退出登录
-        </n-button>
+        <div class="sidebar-user-menu">
+          <n-button
+            quaternary
+            strong
+            block
+            @click="router.push({ name: 'Settings' })"
+          >
+            设置
+          </n-button>
+        </div>
       </n-popover>
     </div>
   </section>
@@ -251,5 +246,12 @@ const handleLogout = async () => {
 .sidebar-nav-icon {
   display: inline-block;
   flex-shrink: 0;
+}
+
+.sidebar-user-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 120px;
 }
 </style>

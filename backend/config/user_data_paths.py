@@ -75,8 +75,35 @@ def get_user_profile_md_path(user_id: str | int) -> Path:
     return get_user_root(user_id) / "USER.md"
 
 
+def get_user_memory_dir(user_id: str | int) -> Path:
+    """返回 L2 日记目录 `.data/users/{user_id}/memory/`（不创建）。"""
+    return get_user_root(user_id) / "memory"
+
+
+def ensure_user_memory_dir(user_id: str | int) -> Path:
+    """创建并返回 L2 日记目录。"""
+    return _ensure_sandbox_dir(get_user_memory_dir(user_id))
+
+
+def get_user_daily_memory_path(user_id: str | int, date: str) -> Path:
+    """返回 L2 日记路径 ``memory/YYYY-MM-DD.md``（不创建）。``date`` 须为 ``YYYY-MM-DD``。"""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
+        raise ValueError(f"非法日记日期: {date!r}，须为 YYYY-MM-DD")
+    return get_user_memory_dir(user_id) / f"{date}.md"
+
+
+def get_user_channels_path(user_id: str | int) -> Path:
+    """返回通道配置文件 `.data/users/{user_id}/channels.json`（不创建）。"""
+    return get_user_root(user_id) / "channels.json"
+
+
+def ensure_user_channels_path(user_id: str | int) -> Path:
+    ensure_user_root(user_id)
+    return get_user_channels_path(user_id)
+
+
 def ensure_user_memory_files(user_id: str | int) -> Path:
-    """创建用户根目录并 seed AGENTS.md / USER.md（若不存在）。"""
+    """创建用户根目录并 seed AGENTS.md / USER.md（若不存在）；并确保 L2 ``memory/`` 目录存在。"""
     root = ensure_user_root(user_id)
     agents = get_user_agents_md_path(user_id)
     if not agents.is_file():
@@ -84,6 +111,7 @@ def ensure_user_memory_files(user_id: str | int) -> Path:
     profile = get_user_profile_md_path(user_id)
     if not profile.is_file():
         profile.write_text(_USER_MD_SEED, encoding="utf-8")
+    ensure_user_memory_dir(user_id)
     return root
 
 
@@ -166,3 +194,7 @@ def delete_session_data(user_id: str | int, session_id: str) -> None:
         session_id,
         session_dir,
     )
+
+
+# 兼容旧名（原 agent_workspace_paths.delete_session_workspace）
+delete_session_workspace = delete_session_data

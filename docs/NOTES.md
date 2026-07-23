@@ -564,3 +564,179 @@
 - **现象**：Web 端压低窗口高度时，列表卡片挤在一起。
 - **根因**：`.market-list` 为 flex 列，子项默认 `flex-shrink:1` 被压扁；stacked 模式曾设 `overflow:visible` 无法滚动。
 - **修复**：`.market-card { flex-shrink:0 }`；列表/详情区 `overflow-y:auto`；stacked 与 split 均保持 `min-height:0` 滚动链。
+
+## 2026-07-23 — unify-run-delivery：RunEvent Fan-out 落地
+
+**Why：** 浏览器 SSE 与未来 TG/微信共用同一 run；落库不能绑在「有没有 SSE 客户端」上；HITL pending 不能被当成 completed。
+
+**How to apply：**
+- 内部事件：`domain/chat/delivery/`（`RunEvent` / `RunEventBus` / `LcEventMapper` / `SseDelivery` / `PersistSink` / `RunOrchestrator` / ChannelAdapter SPI）。
+- `qa_service` 流式路径经 Orchestrator：raw → Mapper → Bus → SseDelivery；**keepalive 只在 SseDelivery**。
+- PersistSink：`HitlRequired` / `RunPaused(hitl_pending)` **不**终态；resume 仍同 `message_id`。
+- channels：**配置面**在 settings；Delivery 只跑 Adapter/Binding/入站拒绝未配对。
+- `LangGraphSseBridge` 暂作 Mapper 实现细节，对外 SSE 契约冻结；WS / harness 搬家非本 change。
+
+## 2026-07-23 — add-agent-user-settings：设置壳 + 记忆/cron/通道配置
+
+**Why：** 侧栏只有退出；记忆编辑散在会话面板；需要用户级 cron 与通道凭据入口，且与 Delivery 运行时拆清。
+
+**How to apply：**
+- 路由 `/settings?s=`；侧栏头像 → 设置；section 无 slash。
+- API：`/api/user/memory/{USER.md|AGENTS.md}`、`/scheduled-tasks`、`/channels`（Cookie Session + CSRF）。
+- L2：`users/{uid}/memory/YYYY-MM-DD.md` 目录 ensure；不默认注入。
+- Cron：表 `user_scheduled_tasks` + 进程内 30s 轮询 + SKIP LOCKED；会话删除停用 `session:{id}` 绑定。
+- Channels：`channels.json` 脱敏；同步 `ChannelBindingStore`；Agent `/memory/` 白名单无 channels。
+- 部署后：`uv run alembic upgrade head`。
+
+## 2026-07-23 — add-telegram-channel-adapter：Telegram 真收发（long-poll）
+
+**Why：** 设置页已能存 bot token/配对，Delivery 有 SPI，但无真收发；需要同一套 SuperAgent + SSOT，不依赖浏览器 SSE。
+
+**How to apply：**
+- 开关：`messaging.telegram_runtime_enabled`（写在 `config.yaml` / `config.prod.yaml`），**默认 false**。出网走标准 `HTTP(S)_PROXY` / 系统代理，无专用 proxy 配置项。
+- Client/Adapter：`domain/chat/delivery/telegram/`；Registry 的 `telegram` 为真 Adapter；出站经 `stream_out` 伪流式。
+- Headless：`RunOrchestrator.run_headless` + `services/channel_run_service.run_channel_agent`（`origin=telegram`，PersistSink 落库）。
+- Poll：`services/telegram_runtime.py` lifespan 启停；密钥仅 `MessagingChannelService.iter_enabled_runtime`（不经 HTTP）。
+- 未配对：拒绝 Agent，回配对 Chat ID 提示。HITL：TG 内仅提示去网页确认。
+
+## 2026-07-23 — Telegram 出站对齐 Hermes 伪流式
+
+**Why：** TG 终态一次发送体验差；要对齐 Hermes「主回复 edit + 工具独立进度气泡」。
+
+**How to apply：**
+- `domain/chat/delivery/telegram/stream_out.py`：文本 0.8s/24chars + cursor；工具 1.5s accumulate；遇工具先 finalize 文本段。
+- `channel_run_service` `on_events` → `TelegramOutbound.feed_events`；`telegram_runtime` 不再二次 send 终态全文。
+- 不抄 draft API / cleanup_progress；不镜像 tool output。
+
+## 2026-07-23 — Telegram 终态 MarkdownV2（最小可用）
+
+**Why：** plain 看得到流式，但 `**粗体**` / 代码块不排版。
+
+**How to apply：** 流式仍 plain；`force_close` / 兜底发送走 `to_telegram_markdown_v2` + `parse_mode=MarkdownV2`，失败回落 plain。见 `telegram/markdown_v2.py`。
+
+## 2026-07-23 — Telegram HITL 对齐网页审批 + recursion_limit 9999
+
+**Why：** TG 撞 HITL 只能提示去网页；且「跑几轮」就到 200——LangGraph `recursion_limit` 计的是图节点步（模型轮+工具节点+中间节点），不是用户对话轮。
+
+**How to apply：**
+- HITL：`hitl_prompt.py` 发卡 + Inline Keyboard（批准/拒绝/本会话放行）；`callback_query` → `resume_channel_hitl`（与网页 decisions/grant_scope 同语义）；clarification 用下一条文字 respond。
+- `DEFAULT_RECURSION_LIMIT = 9999`（`agent/base/base_agent.py`）。
+- Poll `allowed_updates` 含 `callback_query`。
+
+## 2026-07-23 — Agent 路径唯一规则（防 workspace/workspace）
+
+**Why：** Agent 混用虚拟根 `/research/...`、容器 `/workspace/...`、UI `sessions/{sid}/workspace/...`，`PrefixBackend` 再叠 `/workspace` → 出现双目录；`write_file` 失败用户侧只见「执行失败」。不应靠改 Skill 文案或再叠 middleware 补丁。
+
+**How to apply：**
+- **唯一入口**：`sandbox_mount_policy.canonicalize_agent_path`；`PrefixBackend._map_in`、mention→虚拟路径、HITL memory 判定共用。
+- **坐标系**：filesystem 虚拟根=`/`；容器物理=`/workspace`（execute cwd，**不** rewrite shell）；UI=`sessions/{sid}/workspace/`。
+- **别名剥除**：`/workspace/...`、`sessions/*/workspace/...`（可重复剥）；`/skills|/memory|/uploads|/attachments` 不剥。
+- **禁止**：改 `extensions/skills/**`；新增路径 middleware；对 execute 做 shlex 路径改写。
+- 平台 prompt 一句纪律见 `agent/prompts/execution.py`（非 Skill）。
+
+## 2026-07-23 — services 微文件收拢（P0）
+
+**Why：** `services/` 混入非编排薄文件，扁平目录噪音大。
+
+**How to apply：**
+- `qdrant_shard_fields` → `kb/retrieval/payload.py`（纯函数属 KB；避免 services↔kb 循环依赖）
+- `skills_revision` → `skill_fs_service`；middleware 改 import
+- `agent_lifecycle.cancel_session_agent_runs` → `chat_service`（lazy import qa）
+- `sandbox_runner_launcher` → `common/`（app 启动钩子，非 Service）
+
+## 2026-07-23 — 删除 Skills/沙箱旧名别名（首版本无过渡）
+
+**Why：** 首版本不需要 `EXTENSIONS_*=PUBLIC_*` 一类兼容别名，也不保留 `/skills/extensions|custom` filesystem 映射。
+
+**How to apply：**
+- `mount_paths.py` 仅保留 public/personal/workspace/memory 常量。
+- `agent_filesystem` routes 不再挂 extensions/custom。
+- `sandbox_service` 去掉 `UserSandboxHandle` / `ensure_user_sandbox`。
+- 会话上下文路径须带 `sessions/{id}/…` 前缀，不再接受裸 `workspace/`。
+
+## 2026-07-23 — delivery / streaming / 路径壳再收拢
+
+**Why：** delivery 薄文件过多；`telegram_runtime` 占 services；`agent_workspace_paths` 纯委托壳；`tool_errors` 与 `tool_failure` 同域。
+
+**How to apply：**
+- delivery：`inbound`→`channels`；`lifecycle`→`orchestrator`；`mapper`+`sse_codec`+`sse_delivery`→`sse.py`
+- `services/telegram_runtime` → `domain/chat/delivery/telegram/runtime.py`
+- 删除 `config/agent_workspace_paths`；调用方改 `user_data_paths`（`delete_session_workspace` 别名保留）
+- `tool_errors` 并入 `tool_failure`（异常层次 + 分类同文件）
+
+## 2026-07-23 — agent/ 目录对齐 DeerFlow 精神
+
+**Why：** `hitl/` 把策略工具与平台 pending 混在一起；`base/` 空壳；入口散在根上。
+
+**How to apply：**
+- `profiles/`：Super / QA / 故障 / MCP 入口
+- `guardrails/`：policy + session_grants
+- `tools/ask_user.py`：ask_user + interrupt_on
+- `domain/chat/hitl/`：pending / timeout（平台态）
+- `domain/chat/streaming/hitl.py`：SSE 载荷组装
+- `base_agent.py` → `profiles/base_agent.py`；`skills_filter.py` → `backends/skills_filter.py`（不放 `agent/` 根）
+- **无**旧路径 re-export
+
+## 2026-07-23 — backends 职责收拢（保留名 backends）
+
+**Why：** Skills 过滤 / 死代码 StaticListing / 薄 sandbox_common / 错误 re-export 把「执行后端」目录弄脏。
+
+**How to apply：**
+- `agent/skills/`：`SKILL_SOURCES` + 会话过滤（离开 backends）
+- `path_policy`（原 sandbox_mount_policy）；`memory_backend`（原 backend_guards，删 StaticListing）
+- `sandbox_common` 并入 `docker_exec_sandbox`；去掉兼容 shim
+- `agent_filesystem` 只导出 `build_agent_filesystem_backend`
+
+## 2026-07-23 — Agent 路径统一为 /workspace（对齐 DeerFlow）
+
+**Why：** 旧「虚拟根 `/notes.md`」+ 容器 `/workspace` + UI `sessions/...` 三套坐标迫使 PrefixBackend/canonicalize 互相剥前缀。
+
+**How to apply：**
+- Agent 与 Shell 共用 ``/workspace/...``、``/skills/...``、``/memory/...``
+- `canonicalize`：裸路径/UI → `/workspace/...`；折叠双 workspace
+- docker：default=沙箱（skills 挂载在容器内，不再单独 route）；local：strip `/workspace` + skills routes
+- Prompt / mention 注入已切新路径
+
+## 2026-07-23 — qa_service → services/qa 包拆分
+
+**Why：** 单文件 ~1700 行难维护；按职责拆成 facade 包，行为不变。
+
+**How to apply：**
+- 新包：`services/qa/{agents,resolve,persist,stream,service}.py` + `__init__.py` facade
+- `services/qa_service.py` 仅兼容 re-export（含 `AsyncSessionLocal` / `ChatService` / `LangfuseConfig` 供 patch）
+- `QaService._active_streams` ≡ `stream.ACTIVE_STREAMS`（同一 dict）
+- 跨模块调用经 `from services import qa_service as qs` lazy 解析，保留 `patch("services.qa_service._persist_assistant")` 等路径
+
+## 2026-07-23 — services/qa 收成 service + helpers
+
+**Why：** 先前拆成 agents/resolve/persist/stream 过碎，且包内绕 `qa_service` shim 保 patch，设计差。
+
+**How to apply：**
+- 仅保留 `services/qa/{__init__,service,helpers}.py`；shim `qa_service.py` 仍兼容旧 import
+- `__init__` 只导出 `QaService` + 4 agent 单例
+- 去掉包内 `from services import qa_service as qs`；测试 patch 打到 `services.qa.helpers` / `services.qa.service`
+
+## 2026-07-23 — backends 六文件定型
+
+**Why：** `mount_paths` / `path_policy` / `prefix_backend` / `agent_filesystem` 过碎且命名滞后。
+
+**How to apply（仅这些）：**
+```
+backends/
+  paths.py       # 常量 + canonicalize + 容器读写校验
+  agent_path.py  # AgentPathBackend
+  memory.py      # /memory/ 白名单
+  factory.py     # create + build_agent_filesystem_backend
+  local_shell.py
+  docker_exec.py
+```
+
+## 2026-07-23 — OpenSpec 主规格收成 11 模块
+
+**Why：** `openspec/specs` 曾膨胀到 ~33 份，大量仍写 AIO / 虚拟根 `/notes.md` / MySQL / JWT。
+
+**How to apply（读 spec 只认这些 id）：**
+- `platform-chat` / `chat-composer`
+- `agent-runtime` / `agent-profiles` / `agent-hitl` / `agent-tool-failure-handling` / `agent-delivery`
+- `knowledge-base` / `user-platform` / `container-deployment` / `offline-evals`
+- 导航见 `openspec/README.md`；旧 id 细节在 `changes/archive/`

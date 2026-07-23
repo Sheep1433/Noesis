@@ -27,22 +27,14 @@ backend/
 │   └── embedding/
 ├── agent/
 │   ├── factory.py               # create_noesis_agent
-│   ├── common_react_agent.py    # 通用问答（RAG）
-│   ├── fault_operation_agent.py # 故障运维（MCP + 沙箱工作区）
-│   ├── super_agent.py           # 通用超级智能体（沙箱 + Skills + 用户记忆）
-│   ├── backends/
-│   │   ├── factory.py           # create_agent_backend（唯一入口）
-│   │   ├── agent_filesystem.py  # build_agent_filesystem_backend 工厂
-│   │   ├── prefix_backend.py    # route 路径映射适配
-│   │   ├── backend_guards.py    # 白名单 / 静态 listing 守卫
-│   │   ├── mount_paths.py       # Agent / 容器路径常量
-│   │   ├── sandbox_mount_policy.py # 容器路径读写校验
-│   │   ├── docker_exec_sandbox.py # Docker Exec 沙箱（生产）
-│   │   └── local_shell.py       # local_shell 子 backend
-│   ├── case_generate/           # 测试用例 StateGraph
-│   ├── middlewares/             # LangGraph 运行时中间件（守卫、附件、摘要卸载等）
-│   ├── prompts/ / tools/
-│   └── simple_mcp_agent.py
+│   ├── profiles/                # 场景入口 + BaseAgent
+│   ├── guardrails/              # HITL 策略 + session grant（对齐 DeerFlow）
+│   ├── backends/                # 执行后端：factory / docker|local / path / memory
+│   ├── skills/                  # SkillSource 目录与会话过滤
+│   ├── middlewares/             # LangGraph 运行时中间件
+│   ├── tools/                   # RAG / web / ask_user
+│   ├── prompts/ / mcp/
+│   └── case_generate/           # 测试用例 StateGraph
 ├── common/                      # 跨模块共用（日志、路径、HTTP 响应等，无领域语义）
 │   ├── logging.py
 │   ├── paths.py                 # REPO_ROOT、.data/ 路径解析
@@ -53,7 +45,10 @@ backend/
 │   ├── chat/
 │   │   ├── message_builder.py
 │   │   ├── attachments/         # 附件解析、Markdown outline、Vision 判定
-│   │   └── streaming/           # SSE 桥接、流错误展示
+│   │   ├── streaming/           # LangGraphSseBridge、HITL SSE 载荷
+│   │   ├── hitl/                # pending interrupt / 超时 resume（平台态）
+│   │   └── delivery/            # RunEvent Fan-out、PersistSink、SSE、ChannelAdapter
+│   │       └── telegram/        # TG adapter + long-poll runtime
 │   └── observability/langfuse.py
 ├── middleware/                    # FastAPI / Starlette HTTP 中间件
 ├── llm/                         # LLM 工厂（get_llm）
@@ -96,7 +91,9 @@ backend/
 | 放哪里 | 判断标准 |
 |--------|----------|
 | `common/` | 3+ 无关模块共用、无业务语义（日志、HTTP 响应、路径、序列化） |
-| `domain/` | 有明确业务域（鉴权、聊天流式、可观测性） |
+| `domain/` | 有明确业务域（鉴权、聊天流式、HITL 会话态、可观测性） |
+| `agent/profiles/` | 场景 Agent 入口类 |
+| `agent/guardrails/` | 工具审批策略（非 middleware 类） |
 | `agent/middlewares/` | LangGraph Agent 运行时钩子 |
 | `middleware/` | HTTP 请求/响应链（鉴权 Cookie 续期等） |
 | `services/` | 跨领域编排 |
@@ -200,20 +197,28 @@ Domain → Common
 
 ## SSE 流式响应
 
-- 编排入口：`services/qa_service.py`
-- 事件桥接：`domain/chat/streaming/langgraph_sse.py`（`agent.astream_events()`）
-- 核心事件：`reasoning-*`、`text-*`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`
+- 编排入口：`services/qa_service.py`（经 `RunOrchestrator` 组 sinks）
+- **Delivery（Fan-out）**：`domain/chat/delivery/`
+  - `events` / `bus`：内部 RunEvent 与多订阅总线
+  - `mapper`：`LcEventMapper`（包装 `LangGraphSseBridge`：LC/`__tw_*`/HITL → RunEvent）
+  - `sse_delivery` / `sse_codec`：浏览器投递；**keepalive 仅在此层**，不进总线
+  - `persist_sink`：落库决策（含 `hitl_pending` **非**终态）
+  - `lifecycle`：`CancelReason`（user_stop / disconnect / channel_stop）
+  - `channels`：ChannelAdapter SPI + Binding；**配置/密钥属 settings**，本包仅运行时
+- 现网 SSE 成帧仍兼容：`domain/chat/streaming/langgraph_sse.py`
+- 核心事件：`reasoning-*`、`text-*`、`tool-input-*`、`tool-output-available`、`hitl-required`、`usage-update`、`error`、`finish`、`[DONE]`（WS 非 P0；harness 搬家已搁置）
 
 **assistant 落库（同一 `message_id` 单行）**：
 
 | 阶段 | 时机 | `status` |
 |------|------|----------|
 | 骨架 | 流开始前 | `streaming`（空 parts，流式中不 UPDATE 正文） |
+| HITL 等待 | `hitl_pending` | 保持 `streaming`（parts 记 pending；resume 续写同 id） |
 | 终态 completed | `_finalize_streaming_assistant` | `completed` / `error` |
 | 终态 partial | `/stop` → `stop_chat` | `partial` + `finish_reason=stopped` |
 | 终态 partial | 意外断连 → `_handle_stream_client_disconnect` | `partial`（无用户中断文案） |
 
-流式过程中 **不** 按 token/part 增量写 assistant；`_persist_stream_checkpoint` 仅 merge 会话 `extra.context`。
+流式过程中 **不** 按 token/part 增量写 assistant；`_persist_stream_checkpoint` 仅 merge 会话 `extra.context`。无浏览器 SSE 时 PersistSink 仍应终态落库。
 
 - 跨端约定见 [../AGENTS.md](../AGENTS.md)
 
@@ -227,5 +232,6 @@ Domain → Common
 
 - 每次改动后执行 `uv run app.py`（在 `backend/` 目录），确认进程能正常拉起
 - 新增测试放 `backend/tests/`；接口 Bug 先在 `test_tdd_design.md` 写测试点
-- **Agent 路径**：工具层 workspace 根为默认落盘；`/research/` 仅调研场景；Skills 为 `/skills/public/`、`/skills/personal/`（filesystem 过渡期别名 `/skills/extensions|custom`）；路由集中在 `agent_filesystem.py`。Shell cwd=`/workspace`，产物优先相对路径；**禁止**对 execute 做 shlex round-trip 路径 rewrite。
-- **改沙箱挂载/路径后**：跑 `tests/test_agent_filesystem.py`、`test_docker_exec_sandbox_backend.py`、`test_sandbox_service_cache.py`；挂载变更需重建 session 容器（`noesis-sandbox-*`）
+- **Agent 路径**：唯一坐标系为容器绝对路径（与 Shell 一致）：``/workspace/...``、``/skills/public|personal/...``、``/memory/...``。UI ``sessions/{sid}/workspace/`` 仅在注入前映射。``paths.canonicalize_agent_path`` 负责归一；local 用 ``AgentPathBackend(strip_root=/workspace)``。**禁止**改第三方 Skill 文案纠路径；**禁止**对 execute 做 shlex 路径 rewrite。
+- **backends 布局**：`paths`（常量+归一）、`agent_path`、`memory`、`factory`（组装）、`local_shell`、`docker_exec`
+- **改沙箱挂载/路径后**：跑 `tests/test_agent_filesystem.py`、`test_docker_exec_sandbox_backend.py`、`test_path_policy.py`、`test_sandbox_service_cache.py`；挂载变更需重建 session 容器（`noesis-sandbox-*`）

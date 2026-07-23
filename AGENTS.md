@@ -36,6 +36,7 @@ Noesis/
 | 后端启动 | `backend/app.py`、`backend/server.py` |
 | 问答编排 | `backend/services/qa_service.py` |
 | Agent 工厂 | `backend/agent/factory.py` |
+| 场景入口 | `backend/agent/profiles/`（Super / QA / 故障 / MCP） |
 | SSE 桥接 | `backend/domain/chat/streaming/langgraph_sse.py` |
 | 配置 | `backend/config/env.py` + `backend/config.yaml` |
 

@@ -298,6 +298,13 @@ class HitlYamlSection(BaseModel):
     ask_timeout_seconds: int = Field(default=86400, ge=1)
 
 
+class MessagingYamlSection(BaseModel):
+    """多通道运行时（与 settings 配置面分离）。"""
+
+    telegram_runtime_enabled: bool = False
+    telegram_poll_timeout_seconds: int = Field(default=25, ge=1, le=60)
+
+
 class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
     ttl_days: int = Field(default=7, ge=1)
@@ -351,6 +358,7 @@ class AppYamlConfig(BaseModel):
     chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)
     sandbox: SandboxYamlSection = Field(default_factory=SandboxYamlSection)
     hitl: HitlYamlSection = Field(default_factory=HitlYamlSection)
+    messaging: MessagingYamlSection = Field(default_factory=MessagingYamlSection)
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
 
 

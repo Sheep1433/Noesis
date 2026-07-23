@@ -1,8 +1,19 @@
 ## ADDED Requirements
 
+### Requirement: 通道运行时归属本 Delivery；配置面归属 settings
+
+通道 **配置、密钥、配对持久化与设置 UI** SHALL 由 `add-agent-user-settings`（`agent-messaging-channels` 配置面）提供。本 delta **仅**覆盖运行时：ChannelAdapter 注册、入站路由、出站投影、与 RunEvent Fan-out 的衔接。
+
+本能力 **SHALL NOT** 再定义一套用户可写的通道 CRUD / token 存储；**SHALL** 读取 settings 已持久化的配置与绑定。
+
+#### Scenario: 运行时消费已保存配置
+
+- **WHEN** 用户已在设置中启用某 `channel_type` 且 pairing 有效
+- **THEN** ChannelRegistry / Binding 解析 SHALL 能基于该持久化配置启动入站或出站，而无需在 Delivery 内重复保存 token
+
 ### Requirement: 通道运行时 SHALL 通过 ChannelAdapter 接入 Fan-out
 
-已启用的通讯通道（见设置/配置面）在运行时 SHALL 以 `agent-run-delivery` 所定义的 ChannelAdapter 注册到 ChannelRegistry，入站经 Session/Binding 路由到同一 Agent run 入口，出站订阅 RunEvent 总线。
+已启用的通讯通道在运行时 SHALL 以 `agent-run-delivery` 所定义的 ChannelAdapter 注册到 ChannelRegistry，入站经 Session/Binding 路由到同一 Agent run 入口，出站订阅 RunEvent 总线。
 
 通道实现 **SHALL NOT** 复制一套独立于消息 SSOT 的 transcript，也 **SHALL NOT** 将浏览器 SSE 连接作为出站前提。
 

@@ -1,87 +1,71 @@
 # OpenSpec 导航
 
-主规格目录：`openspec/specs/<capability>/spec.md`。变更 delta 在 `openspec/changes/<name>/specs/`，归档后与主规格对齐。
+主规格：`openspec/specs/<capability>/spec.md`。变更 delta：`openspec/changes/<name>/specs/`，归档后并入主规格。
 
-**读 spec 时以 `openspec/specs/` 为主**；`changes/archive/` 为历史决策链。
+**读 spec 以本目录为准**；`changes/archive/` 只作历史决策链。
 
-## 能力目录（26 个有效 spec + 2 个合并占位）
+## 能力目录（11）
 
 | 域 | 能力 id | 一句话 |
 |----|---------|--------|
-| **平台聊天** | `platform-chat` | 会话、SSE、停止、LLM 工厂、chat 通用 UI |
-| | `chat-session-attachments` | 会话附件 API、TTL、`file_dict` |
-| | `chat-composer-send-upload` | 发送时上传（方案 B）前端行为 |
-| | `chat-session-context-panel` | 上下文浏览 API + 右侧面板 |
-| | `agent-reasoning-observability` | Langfuse 追踪（reasoning SSE 见 platform-chat） |
-| **Agent 场景** | `agent-common-qa` | `COMMON_QA` / GeneralQAAgent |
-| | `agent-fault-operation` | `FAULT_OPERATION_QA` / MCP |
-| | `agent-test-case` | `TEST_CASE_QA` / CaseCoordinator |
-| | `agent-super-agent` | `SUPER_AGENT_QA` / SuperAgent + Skills + 子 Agent |
-| | `agent-user-memory` | 用户级 `AGENTS.md` / `USER.md` + `/memory/` |
-| | `agent-web-tools` | web_search / web_fetch |
-| | `agent-tool-failure-handling` | 工具错误 SSE 与 outcome |
-| **运行时** | `agent-runtime-paths` | **权威** `.data/users/` 布局、删会话清理、迁移 |
-| | `agent-sandbox` | AIO 沙箱、runner API |
-| | `skills-filesystem` | Skills 只读挂载与用户 ZIP |
-| | ~~`user-data-layout`~~ | → 已合并至 `agent-runtime-paths` |
-| | ~~`agent-workspace`~~ | → 已合并至 `agent-runtime-paths` |
-| **知识库** | `knowledge-base` | HTTP API、MySQL 集合配置 |
-| | `kb-document-parse` | DeepDoc 解析、ParserFactory |
-| | `kb-chunking` | DeepDocChunkAdapter、分块模板 |
-| | `kb-retrieval` | hybrid + rerank 检索门面 |
-| | `kb-evaluation` | 单集合评测 CLI（`evals/kb`） |
-| **离线评测** | `test-case-agent-eval` | `evals.case` 两阶段 promptfoo |
-| | `agent-offline-eval` | `evals.agent.*` benchmark |
-| | `message-compression-eval` | `evals.compression` |
-| **部署认证** | `container-deployment` | Docker Compose、Nginx、sandbox-runner |
-| | `user-auth` | JWT 登录 |
+| **聊天平台** | `platform-chat` | 会话/消息、SSE 契约、落库状态机、qa 路由、流式 UI |
+| | `chat-composer` | 对话面生命周期、发送上传、附件、mentions、上下文面板 |
+| **Agent** | `agent-runtime` | `.data/users` 布局、`/workspace` 坐标系、沙箱、Skills、记忆、web 工具 |
+| | `agent-profiles` | COMMON / SUPER / FAULT / TEST_CASE 四场景 |
+| | `agent-hitl` | 审批策略、ask_user、多端 resume |
+| | `agent-tool-failure-handling` | 工具调用/执行双层语义与 SSE 字段 |
+| | `agent-delivery` | RunEvent 总线、PersistSink、SseDelivery、ChannelAdapter |
+| **知识库** | `knowledge-base` | API、解析、分块、检索、kb 评测指针 |
+| **用户与部署** | `user-platform` | Session Cookie、MCP 配置、PostgreSQL |
+| | `container-deployment` | Compose、Nginx、sandbox-runner |
+| **评测** | `offline-evals` | `evals.agent` / `case` / `compression` / `kb` |
+
+> 2026-07-23 起由约 33 份能力合并精简；旧 id（如 `agent-sandbox`、`agent-runtime-paths`、`user-auth`）已并入上表，细节以 archive change 为准。
 
 ## 活跃变更（`openspec/changes/`，非 archive）
 
-| Change | 状态 | 说明 |
-|--------|------|------|
-| `kb-multimodal-retrieval` | **调研 / 设计** | 图片向量、跨模态召回（文搜图）；见 [research-report](./changes/kb-multimodal-retrieval/research-report.md) |
-| `add-kb-citation-sources` | **规格完整，未开始** | KB 引用角标 + `citations-available` SSE |
-| `extract-agent-runtime-harness` | **提案阶段** | `noesis_runtime` 与 Harness 拆分 |
-| `refine-tool-outcome-handling` | **规格已入主 spec，实现未完成** | `tool_outcome.py` 与前端 ToolCallCollapse 待实现 |
-| `fault-operation-agent-experience-learning` | **未开始** | 故障运维经验沉淀 |
-
-已归档（2026-07-10）：`add-super-agent-user-memory`（`SuperAgent` + `SUPER_AGENT_QA` + 用户记忆 → 主 spec `agent-super-agent`、`agent-user-memory`）。
-
-已归档（2026-07-09）：`enterprise-kb-retrieval-foundation`（知识库 RAG 底座 → 主 spec `knowledge-base` 等 5 项）。
-
-已归档（2026-06-26）：`general-qa-file-upload`、`test-case-two-phase-eval`、`refactor-agent-eval-benchmarks`。
+| Change | 说明 |
+|--------|------|
+| `unify-run-delivery` | Delivery Fan-out（主规格已吸收为 `agent-delivery`，change 可继续收尾任务） |
+| `add-telegram-channel-adapter` | Telegram 真收发（并入 `agent-delivery`） |
+| `add-agent-user-settings` | 设置面：记忆/通道/定时任务配置 |
+| `kb-multimodal-retrieval` | 多模态检索调研 |
+| `add-kb-citation-sources` | KB 引用角标 |
+| `refine-tool-outcome-handling` | outcome 与前端展示收尾 |
+| `fault-operation-agent-experience-learning` | 故障经验沉淀 |
 
 ## 推荐阅读顺序
 
 | 目标 | 先读 | 再读 |
 |------|------|------|
-| 聊天发消息、SSE | `platform-chat` Purpose + qa_type 表 | `agent-tool-failure-handling`（工具错误帧） |
-| 上传文件 | `chat-composer-send-upload` | `chat-session-attachments` |
-| 工作区 / 删会话磁盘 | `agent-runtime-paths` | `agent-sandbox` |
-| 超级智能体 / 用户记忆 | `agent-super-agent` | `agent-user-memory` |
-| 跑测试用例评测 | `test-case-agent-eval` | `backend/evals/case/README.md` |
-| 跑 Agent benchmark | `agent-offline-eval` | `backend/evals/README.md` |
-| 知识库入库/检索/调参 | [PRD 详细设计](../docs/prd/knowledge-base/知识库RAG底座详细设计.md) | `knowledge-base` → `kb-document-parse` → `kb-chunking` → `kb-retrieval` |
-| 知识库多模态 / 文搜图 | [`kb-multimodal-retrieval` research-report](changes/kb-multimodal-retrieval/research-report.md) | 同 change 内 [design.md](changes/kb-multimodal-retrieval/design.md) |
-| 单集合 KB 检索评测 | `kb-evaluation` | `evals/kb/`（与 `evals.case --phase rag` 互补） |
+| 发消息 / SSE / 落库 | `platform-chat` | `agent-delivery` |
+| Composer / 上传 / @ | `chat-composer` | `agent-runtime`（路径） |
+| 工作区 / 沙箱 / 记忆 | `agent-runtime` | `agent-profiles` |
+| HITL | `agent-hitl` | `agent-delivery`（通道 resume） |
+| 某一种 qa_type | `agent-profiles` | 对应实现 `agent/profiles/` |
+| 知识库 | `knowledge-base` | `docs/prd/knowledge-base/` |
+| 登录 / DB | `user-platform` | `container-deployment` |
 
 ## qa_type 路由
 
-| `qa_type` | Agent spec |
-|-----------|------------|
-| `COMMON_QA` | `agent-common-qa` |
-| `FAULT_OPERATION_QA` | `agent-fault-operation` |
-| `TEST_CASE_QA` | `agent-test-case` |
-| `SUPER_AGENT_QA` | `agent-super-agent`（用户记忆见 `agent-user-memory`） |
+| `qa_type` | 见 |
+|-----------|-----|
+| `COMMON_QA` | `agent-profiles` § COMMON |
+| `FAULT_OPERATION_QA` | `agent-profiles` § FAULT |
+| `TEST_CASE_QA` | `agent-profiles` § TEST_CASE |
+| `SUPER_AGENT_QA` | `agent-profiles` § SUPER + `agent-hitl` |
 
-## 与代码模块对齐
+## 与代码对齐
 
-| OpenSpec 域 | 代码入口 |
-|-------------|----------|
-| 平台聊天 | `backend/domain/chat/`、`frontend/src/views/chat/` |
-| Agent | `backend/agent/` |
-| 运行时路径 | `backend/config/user_data_paths.py` |
-| 评测 | `backend/evals/` |
-| 知识库 | `backend/kb/`、`api/knowledge_base_api.py` |
-| 部署 | `deploy/` |
+| OpenSpec | 代码入口 |
+|----------|----------|
+| `platform-chat` | `domain/chat/`、`services/qa/`、`frontend/src/views/chat/` |
+| `chat-composer` | `services/mention_resolve_service.py`、`SessionContextPanel` |
+| `agent-runtime` | `agent/backends/`、`config/user_data_paths.py` |
+| `agent-profiles` | `agent/profiles/`、`agent/case_generate/` |
+| `agent-hitl` | `agent/guardrails/`、`domain/chat/hitl/` |
+| `agent-delivery` | `domain/chat/delivery/` |
+| `knowledge-base` | `backend/kb/`、`api/knowledge_base_api.py` |
+| `user-platform` | `api` auth、MCP、Alembic/PostgreSQL |
+| `offline-evals` | `backend/evals/` |
+| `container-deployment` | `deploy/` |

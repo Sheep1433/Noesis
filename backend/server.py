@@ -18,9 +18,15 @@ from api import (
     model_router,
     auth_router,
     mcp_router,
+    user_settings_router,
 )
 from services.qdrant_service import init_qdrant_client, close_qdrant_client
 from services.sandbox_service import shutdown_sandboxes
+from services.scheduled_task_scheduler import (
+    start_scheduled_task_scheduler,
+    stop_scheduled_task_scheduler,
+)
+from domain.chat.delivery.telegram.runtime import start_telegram_runtime, stop_telegram_runtime
 from kb.seed_collections import ensure_default_kb_collections
 
 
@@ -33,8 +39,12 @@ async def lifespan(app: FastAPI):
     # 初始化 Qdrant 连接
     await init_qdrant_client()
     await ensure_default_kb_collections()
+    start_scheduled_task_scheduler()
+    start_telegram_runtime()
     logger.info(f'🚀 {AppConfig.app_name}启动成功')
     yield
+    await stop_telegram_runtime()
+    await stop_scheduled_task_scheduler()
     # 关闭 Qdrant 连接
     await close_qdrant_client()
     await close_checkpointer()
@@ -59,6 +69,7 @@ app.add_middleware(CsrfMiddleware)
 controller_list = [
     {'router': auth_router, 'tags': ['认证模块']},
     {'router':  user_router, 'tags': ['用户模块']},
+    {'router':  user_settings_router, 'tags': ['用户设置']},
     {'router':  chat_router, 'tags': ['聊天历史模块']},
     {'router':  knowledge_base_router, 'tags': ['知识库模块']},
     {'router':  skill_router, 'tags': ['Skill 模块']},

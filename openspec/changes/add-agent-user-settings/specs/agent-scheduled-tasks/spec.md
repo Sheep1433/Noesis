@@ -18,7 +18,7 @@
 
 ### Requirement: 系统 SHALL 提供定时任务 CRUD 与启停 API
 
-系统 SHALL 提供前缀 `/api/user/scheduled-tasks` 的 JWT 认证 API，支持：列表、获取、创建、更新、删除、启用/停用、手动触发一次（可选）。
+系统 SHALL 提供前缀 `/api/user/scheduled-tasks` 的认证 API（Cookie Session + 非安全方法 CSRF，与 `user-auth` 一致），支持：列表、获取、创建、更新、删除、启用/停用、手动触发一次（可选）。系统 **SHALL NOT** 以 Authorization Bearer JWT 作为本 API 的身份凭据。
 
 列表与变更 **SHALL** 仅作用于当前 `user_id`；越权 id **SHALL** 返回 404。
 
