@@ -32,6 +32,12 @@ async def test_batch_delete_sessions_skips_missing_ids() -> None:
 
     with patch("services.chat_service.cancel_session_agent_runs", new_callable=AsyncMock), patch(
         "services.chat_service.delete_session_workspace"
+    ), patch(
+        "services.scheduled_task_service.ScheduledTaskService.disable_session_bound_tasks",
+        new_callable=AsyncMock,
+    ), patch(
+        "services.sandbox_service.destroy_session_sandbox",
+        new_callable=AsyncMock,
     ):
         deleted = await ChatService.batch_delete_sessions(
             [keep_id, missing_id, keep_id],
