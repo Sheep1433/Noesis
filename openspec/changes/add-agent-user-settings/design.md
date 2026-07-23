@@ -136,8 +136,8 @@ SuperAgent MemoryMiddleware ──▶ 不变挂载点；L2 不进 bootstrap sour
 
 ## Related Changes
 
-- **`unify-run-delivery`**：RunEvent Fan-out、PersistSink、ChannelAdapter SPI；通道**真收发**依赖该 change，本 change 只做配置/绑定面。
-- **`extract-agent-runtime-harness`**：`AgentRunService` / Runtime 边界；Delivery 层消费其事件。
+- **`unify-run-delivery`**：RunEvent Fan-out、PersistSink、ChannelAdapter SPI；通道**真收发**依赖该 change，本 change 只做配置/绑定面。Delivery **自立**于现有 `agent/` + `qa_service`，不依赖 `extract-agent-runtime-harness`。
+- **`extract-agent-runtime-harness`**：已搁置（整包搬家影响面过大）；其「事件与投递解耦」目标由 `unify-run-delivery` supersede。
 
 ## Open Questions
 

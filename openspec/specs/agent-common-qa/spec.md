@@ -3,9 +3,7 @@
 ## Purpose
 
 本能力规定 Noesis **通用智能问答**（`qa_type=COMMON_QA`）场景的端到端行为：前端经聊天入口提交问题后，`qa_service` 按 `qa_type` 路由至 `GeneralQAAgent`；Agent 通过统一工厂 `create_noesis_agent` 装配 LLM 与可选知识库 Tool（`list_knowledge_bases`、`search_knowledge_base`、`get_knowledge_document`），在向量库可用时对**会话选定或工具指定**的知识库 Collection 并行 hybrid 检索并据检索结果生成 Markdown 结构化回答。会话创建、消息持久化、SSE 帧契约、停止生成接口等**平台级聊天基础设施**由 `openspec/specs/platform-chat/spec.md` 统一定义，本 spec 仅描述 COMMON_QA 专属路由、Agent 装配、知识库工具与提示词策略，不重复平台层细节。
-
 ## Requirements
-
 ### Requirement: qa_type=COMMON_QA SHALL 路由至 GeneralQAAgent
 
 系统 SHALL 在流式与非流式问答入口（`qa_service.exec_query` 及等价路径）中，当请求体 `qa_type` 为 `COMMON_QA`（`IntentEnum.COMMON_QA`）时，调用 `GeneralQAAgent.run_agent` 作为唯一 Agent 流水线；SHALL NOT 在该路径上调用 `FaultOperationAgent`、`CaseCoordinator` 或 `DeepResearchAgent`。
@@ -25,24 +23,21 @@
 
 ### Requirement: GeneralQAAgent SHALL 经 create_noesis_agent 装配 LangChain Agent
 
-`GeneralQAAgent`（`backend/agent/common_react_agent.py`）SHALL 继承 `BaseAgent`，在 `run_agent` 内通过 `create_noesis_agent` 创建 Agent 实例；工厂 SHALL 使用 `get_llm()` 作为主模型，并挂载项目统一的运行时防护中间件（摘要卸载、上下文编辑、循环检测、悬空 tool-call 修复、ToolCallLimit 等，以 `backend/agent/factory.py` 为准）。
+`GeneralQAAgent`（`backend/agent/common_react_agent.py`）SHALL 继承 `BaseAgent`，在 `run_agent` 内通过 `create_noesis_agent` 创建 Agent 实例；工厂 SHALL 使用 `get_llm()` 作为主模型，并挂载项目统一的运行时防护中间件。
 
-Agent SHALL 使用 `InMemorySaver` checkpointer；`config.configurable.thread_id` SHALL 取会话 `session_id`（缺失时使用约定默认值）；`recursion_limit` SHALL 使用 `DEFAULT_RECURSION_LIMIT`。
+当会话解析出的 `mcp_servers` 非空时，`GeneralQAAgent` SHALL 将对应 MCP 工具并入 `tools` 传给 `create_noesis_agent`。当 `mcp_servers` 为空（含缺省空列表）时，SHALL NOT 挂载 MCP 工具。
 
-`run_agent` SHALL 通过 `BaseAgent._stream_agent_response` 消费 `agent.astream_events`，原样向上游 yield LangGraph/LangChain 事件 dict，供 `LangGraphSseBridge` 转换为 SSE（桥接细节见平台聊天 spec）。
+COMMON_QA 路径仍 SHALL NOT 默认挂载文件系统 `FilesystemMiddleware`、`SubAgentMiddleware` 或 `task` 委派工具（与是否挂 MCP 无关）。
 
-COMMON_QA 路径 SHALL NOT 挂载 MCP 工具、文件系统 `FilesystemMiddleware`、`SubAgentMiddleware` 或 `task` 委派工具。
+#### Scenario: 会话勾选 MCP 后 COMMON_QA 可调用工具
 
-#### Scenario: 标准装配与流式消费
+- **WHEN** 会话 `extra.mcp_servers` 含有效 server id 且该 server 可连接
+- **THEN** `GeneralQAAgent` 的 tools SHALL 包含自该 server 加载的 MCP 工具
 
-- **WHEN** `GeneralQAAgent.run_agent` 收到非空 `query` 与有效 `session_id`
-- **THEN** 系统 SHALL 调用 `create_noesis_agent(tools=kb_tools, system_prompt=..., checkpointer=...)`
-- **AND** 异步生成器 SHALL 产出 `astream_events` 事件直至 `__tw_finish__` 或取消/异常哨兵
+#### Scenario: 未勾选 MCP 时行为与历史一致
 
-#### Scenario: Langfuse 配置透传
-
-- **WHEN** `LANGFUSE_TRACING_ENABLED` 为真
-- **THEN** `stream_args` SHALL 透传 `langfuse_session_id`（取 `session_id`）与 `qa_type` 至 `merge_langfuse_runnable_config`（行为见 `openspec/specs/agent-reasoning-observability/spec.md`）
+- **WHEN** 会话无 `mcp_servers` 键或值为空列表
+- **THEN** `GeneralQAAgent` SHALL NOT 挂载 MCP 工具
 
 ### Requirement: 系统提示词 SHALL 区分知识库可用与不可用
 
@@ -111,9 +106,13 @@ COMMON_QA 路径 SHALL NOT 挂载 MCP 工具、文件系统 `FilesystemMiddlewar
 
 ### Requirement: 会话 SHALL 持久化 kb_collections
 
-- 客户端 MAY 在 `POST /api/chat/sessions/stream` 的 `extra.kb_collections` 传入 string 数组。
-- `qa_service` SHALL 在请求显式携带该字段时 merge 至会话 `extra.kb_collections`；否则读取会话已有值。
-- COMMON_QA 前端 SHALL 提供多选 UI（`KbScopeSelector`）写回会话 extra。
+客户端 MAY 在 `POST /api/chat/sessions/stream` 的 `extra.kb_collections` 传入 string 数组；`qa_service` SHALL 在请求显式携带该字段时 merge 至会话 `extra.kb_collections`，否则读取会话已有值；COMMON_QA 前端 SHALL 提供多选 UI（`KbScopeSelector`）写回会话 extra。
+
+#### Scenario: 显式携带 kb_collections 写回会话
+
+- **WHEN** 客户端请求携带 `extra.kb_collections`
+- **THEN** `qa_service` SHALL 将其 merge 至会话 `extra.kb_collections` 并持久化
+- **AND** 后续同会话请求未显式携带时 SHALL 沿用该已持久化值
 
 ### Requirement: 工具输出 SHALL 为结构化 JSON 字符串
 
@@ -183,3 +182,4 @@ COMMON_QA 的 `astream_events` 输出 SHALL 经 `qa_service` 中的 `LangGraphSs
 - **WHEN** 流式请求未携带 `qa_type` 或 `extra.qa_type` 为空
 - **THEN** 路由层 SHALL 按 `COMMON_QA` 调用 `GeneralQAAgent`
 - **AND** 持久化元数据 SHALL 记录 `qa_type=COMMON_QA`
+

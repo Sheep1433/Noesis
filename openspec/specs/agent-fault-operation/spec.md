@@ -35,7 +35,7 @@
 
 ### Requirement: MCP 工具连接与工具集边界
 
-`FaultOperationAgent` SHALL 通过 `MultiServerMCPClient` 以 `streamable_http` 传输连接配置的 MCP 端点（默认 `fault_ops` 服务），在每次 `run_agent` 调用时动态加载工具列表并注入 `create_noesis_agent(tools=...)`。
+`FaultOperationAgent` SHALL 使用 `qa_service` 解析后的 MCP 工具列表（来自会话 `extra.mcp_servers`，缺省回退平台 profile `fault_operation`），通过 `MultiServerMCPClient` 以 `streamable_http` 传输连接对应端点，在每次 `run_agent` 调用时动态加载工具列表并注入主 Agent 与 `general-purpose` 子 Agent。SHALL NOT 在忽略会话勾选的情况下始终硬绑单一 profile（回退仅适用于键缺失）。
 
 MCP 工具集 SHALL 至少覆盖以下语义分层（具体工具名以实现注册为准）：
 
@@ -51,9 +51,14 @@ MCP 工具集 SHALL 至少覆盖以下语义分层（具体工具名以实现注
 
 所有 MCP 工具调用 SHALL 要求显式 `ip`（目标主机）；Agent 系统提示 SHALL 规定：只使用提供的 MCP 工具操作远程环境，不编造命令或执行结果，日志分析须给出明确结论，修复建议须具体可操作。
 
+#### Scenario: 会话显式选择用户 MCP
+
+- **WHEN** 故障运维会话 `extra.mcp_servers` 为用户自定义 server id 列表
+- **THEN** Agent SHALL 仅加载这些 server 的工具
+
 #### Scenario: MCP 端点可达时加载工具
 
-- **WHEN** `FaultOperationAgent.run_agent` 开始且 MCP 服务可用
+- **WHEN** `FaultOperationAgent.run_agent` 开始且解析出的 MCP server 可用
 - **THEN** 系统 SHALL 成功 `get_tools()` 并将非空工具列表传入 Agent，且工具调用经 SSE `tool-*` 帧对外可见（平台桥接规则见 `platform-chat`）
 
 #### Scenario: read 行范围与截断

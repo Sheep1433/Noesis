@@ -18,4 +18,5 @@
 ## 3. Docs / verify
 
 - [x] 3.1 `docs/NOTES.md` 追加知识卡片
-- [ ] 3.2 全量 pytest / 前端 lint（按影响范围）
+- [x] 3.2 全量 pytest / 前端 lint（按影响范围）
+  - 验证（2026-07-23）：`uv run pytest tests/ -q` → 539 passed；MCP/sandbox 相关子集通过。全仓 `pnpm lint` 有未关联 WIP 报错；scoped eslint 对 ChatComposerToolbar/Hitl/userStore 等仅剩 mcp.ts 既有 linebreak 风格问题。

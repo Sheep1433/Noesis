@@ -5,16 +5,19 @@ import type { SkillFsTreeNode } from '@/api/skills'
 defineProps<{
   treeData: SkillFsTreeNode[]
   selectedKeys: string[]
+  expandedKeys: string[]
   contextMenuShow: boolean
   contextMenuX: number
   contextMenuY: number
   contextMenuOptions: Array<{ label: string, key: string }>
   renderTreeLabel: (props: TreeRenderProps) => unknown
   nodeProps: (props: { option: SkillFsTreeNode }) => Record<string, unknown>
+  compact?: boolean
 }>()
 
 const emit = defineEmits<{
   updateSelectedKeys: [keys: Array<string | number>]
+  updateExpandedKeys: [keys: Array<string | number>]
   contextMenuSelect: [key: string]
   contextMenuClose: []
   openZipModal: []
@@ -23,10 +26,10 @@ const emit = defineEmits<{
 
 <template>
   <div class="skills-tree-panel">
-    <div class="sider-header">
+    <div class="sider-header" :class="{ 'sider-header--compact': compact }">
       <n-text strong>技能目录</n-text>
-      <n-text depth="3" class="sider-hint">
-        点击文件预览；个人技能顶层目录可右键删除
+      <n-text v-if="!compact" depth="3" class="sider-hint">
+        点击文件预览；技能包右键可下载 / 删除
       </n-text>
     </div>
     <div v-if="treeData.length > 0" class="tree-wrap">
@@ -43,12 +46,14 @@ const emit = defineEmits<{
       <n-tree
         :data="treeData"
         :selected-keys="selectedKeys"
+        :expanded-keys="expandedKeys"
         :render-label="renderTreeLabel"
         :node-props="nodeProps"
         block-line
         show-line
         selectable
         @update:selected-keys="emit('updateSelectedKeys', $event)"
+        @update:expanded-keys="emit('updateExpandedKeys', $event)"
       />
     </div>
     <div v-else class="tree-empty">
@@ -89,6 +94,10 @@ const emit = defineEmits<{
   min-height: 0;
   padding: 8px 10px 12px;
   overflow: auto;
+}
+
+.sider-header--compact {
+  padding: 8px 12px;
 }
 
 .tree-empty {

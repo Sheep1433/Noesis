@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SkillFsTreeNode, SkillFsTreeResponse, SkillSource } from '@/api/skills'
-import { CloudUpload, DocumentText, FolderOpen, LockClosed, Person, Refresh, Server } from '@vicons/ionicons-v5'
+import { CloudUpload, DocumentText, LockClosed, Person, Refresh, Server } from '@vicons/ionicons-v5'
 import {
   NButton,
   NDrawer,
@@ -26,24 +26,32 @@ import {
 import { computed, h, onMounted, ref } from 'vue'
 import {
   deleteUserSkillPackage,
+  downloadSkillPackageArchive,
   getSkillsFsFile,
   getSkillsFsTree,
   isDeletableUserSkillPackage,
+  isSkillPackageNode,
   parseSourceFromKey,
   uploadSkillsFsZip,
 } from '@/api/skills'
 import FilePreview from '@/components/FilePreview/index.vue'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
-import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { isTextPreviewPath } from '@/utils/filePreview'
+import { hasSkillPackages, resolveSkillsDisplayTree } from '@/utils/skillsTree'
 import SkillsMarketPanel from '@/views/skills/SkillsMarketPanel.vue'
 import SkillsTreePanel from '@/views/skills/SkillsTreePanel.vue'
 
 const message = useMessage()
 const dialog = useDialog()
 const { isMobile } = useBreakpoint()
-const { drawerWidth: treeDrawerWidth } = useResponsiveDrawerWidth({ max: 320 })
-const treeDrawerOpen = ref(false)
+const previewDrawerOpen = computed({
+  get: () => isMobile.value && (previewLoading.value || !!previewMeta.value),
+  set: (open) => {
+    if (!open) {
+      closeMobilePreview()
+    }
+  },
+})
 const modalWidth = computed(() => (isMobile.value ? 'min(480px, calc(100vw - 32px))' : '480px'))
 const activeTab = ref<'installed' | 'market'>('installed')
 
@@ -55,9 +63,10 @@ const SOURCE_LABEL: Record<SkillSource, string> = {
 const loading = ref(true)
 const error = ref<string | null>(null)
 const treePayload = ref<SkillFsTreeResponse | null>(null)
-const treeData = computed(() => treePayload.value?.tree ?? [])
+const treeData = computed(() => resolveSkillsDisplayTree(treePayload.value))
 
 const selectedKeys = ref<string[]>([])
+const expandedKeys = ref<string[]>(['platform:', 'user:'])
 const previewLoading = ref(false)
 const previewMeta = ref<{
   relPath: string
@@ -75,13 +84,31 @@ const contextMenuX = ref(0)
 const contextMenuY = ref(0)
 const contextMenuTarget = ref<SkillFsTreeNode | null>(null)
 
-const contextMenuOptions = [
-  { label: '删除技能', key: 'delete' },
-]
+const contextMenuOptions = computed(() => {
+  const target = contextMenuTarget.value
+  if (!target) {
+    return []
+  }
+  const options: Array<{ label: string, key: string }> = [
+    { label: '下载', key: 'download' },
+  ]
+  if (isDeletableUserSkillPackage(target)) {
+    options.push({ label: '删除', key: 'delete' })
+  }
+  return options
+})
 
 const showEmptyHint = computed(() => {
   const userNode = treeData.value.find((n) => n.key === 'user:')
-  return !userNode?.children?.length
+  return !userNode?.children?.length && !hasSkillPackages(treePayload.value)
+})
+
+const previewPackageName = computed(() => {
+  if (!previewMeta.value?.relPath) {
+    return ''
+  }
+  const [pkg] = previewMeta.value.relPath.split('/')
+  return pkg || ''
 })
 
 onMounted(async () => {
@@ -96,6 +123,7 @@ async function loadTree() {
   selectedKeys.value = []
   try {
     treePayload.value = await getSkillsFsTree()
+    rememberExpandedKeys('platform:', 'user:')
   } catch (e: any) {
     error.value = e.message || '加载失败'
     treePayload.value = null
@@ -139,7 +167,7 @@ function renderTreeLabel({ option }: { option: SkillFsTreeNode }) {
 function nodeProps({ option }: { option: SkillFsTreeNode }) {
   return {
     onContextmenu(e: MouseEvent) {
-      if (!isDeletableUserSkillPackage(option)) {
+      if (!isSkillPackageNode(option)) {
         return
       }
       e.preventDefault()
@@ -160,10 +188,38 @@ function closeContextMenu() {
 function handleContextMenuSelect(key: string) {
   const target = contextMenuTarget.value
   closeContextMenu()
-  if (key !== 'delete' || !target) {
+  if (!target) {
     return
   }
-  confirmDeleteSkillPackage(target)
+  if (key === 'delete') {
+    confirmDeleteSkillPackage(target)
+    return
+  }
+  if (key === 'download') {
+    void downloadSkillPackage(target)
+  }
+}
+
+async function downloadSkillPackage(node: SkillFsTreeNode) {
+  const { path, source } = parseSourceFromKey(node.key)
+  try {
+    await downloadSkillPackageArchive(path, source)
+    message.success(`已开始下载「${node.label}」`)
+  } catch (e: any) {
+    message.error(e.message || '下载失败')
+  }
+}
+
+async function downloadPreviewPackage() {
+  if (!previewMeta.value || !previewPackageName.value) {
+    return
+  }
+  try {
+    await downloadSkillPackageArchive(previewPackageName.value, previewMeta.value.source)
+    message.success(`已开始下载「${previewPackageName.value}」`)
+  } catch (e: any) {
+    message.error(e.message || '下载失败')
+  }
 }
 
 function confirmDeleteSkillPackage(node: SkillFsTreeNode) {
@@ -198,10 +254,57 @@ async function executeDeleteSkillPackage(packageName: string, nodeKey: string): 
   }
 }
 
+function collectAncestorKeys(key: string): string[] {
+  if (!key) {
+    return []
+  }
+  const colon = key.indexOf(':')
+  if (colon < 0) {
+    return [key]
+  }
+  const rootKey = key.slice(0, colon + 1)
+  const rest = key.slice(colon + 1)
+  if (!rest) {
+    return [rootKey]
+  }
+  const parts = rest.split('/')
+  const keys = [rootKey]
+  let acc = `${rootKey}${parts[0]}`
+  keys.push(acc)
+  for (let i = 1; i < parts.length - 1; i++) {
+    acc += `/${parts[i]}`
+    keys.push(acc)
+  }
+  return keys
+}
+
+function rememberExpandedKeys(...keys: string[]) {
+  const next = new Set(expandedKeys.value)
+  for (const key of keys) {
+    for (const ancestor of collectAncestorKeys(key)) {
+      next.add(ancestor)
+    }
+  }
+  expandedKeys.value = [...next]
+}
+
+function onUpdateExpandedKeys(keys: Array<string | number>) {
+  expandedKeys.value = keys.map((k) => String(k))
+}
+
+function closeMobilePreview() {
+  previewMeta.value = null
+  previewContent.value = ''
+  previewLoading.value = false
+}
+
 async function onUpdateSelectedKeys(keys: Array<string | number>) {
   const raw = keys[0]
   const key = raw == null ? '' : String(raw)
   selectedKeys.value = key ? [key] : []
+  if (key) {
+    rememberExpandedKeys(key)
+  }
 
   if (!key) {
     previewMeta.value = null
@@ -239,9 +342,6 @@ async function onUpdateSelectedKeys(keys: Array<string | number>) {
     message.error(e.message || '读取失败')
   } finally {
     previewLoading.value = false
-    if (isMobile.value && previewMeta.value) {
-      treeDrawerOpen.value = false
-    }
   }
 }
 
@@ -285,8 +385,8 @@ async function onMarketInstalled() {
 
 <template>
   <div class="skills-management">
-    <header class="panel-header">
-      <p class="panel-subtitle">
+    <header v-if="!isMobile || activeTab === 'installed'" class="panel-header">
+      <p v-if="!isMobile" class="panel-subtitle">
         平台预置只读；个人技能可上传 ZIP 或从 skills.sh 安装，右键顶层目录可删除。
       </p>
       <n-space v-if="activeTab === 'installed'" class="panel-header-actions">
@@ -322,9 +422,8 @@ async function onMarketInstalled() {
           </n-empty>
         </div>
 
-        <n-layout v-else has-sider class="fs-layout" :class="{ 'fs-layout--mobile': isMobile }" bordered>
+        <n-layout v-else-if="!isMobile" has-sider class="fs-layout" bordered>
           <n-layout-sider
-            v-if="!isMobile"
             content-style="padding: 0;"
             :width="320"
             show-trigger
@@ -334,6 +433,7 @@ async function onMarketInstalled() {
             <SkillsTreePanel
               :tree-data="treeData"
               :selected-keys="selectedKeys"
+              :expanded-keys="expandedKeys"
               :context-menu-show="contextMenuShow"
               :context-menu-x="contextMenuX"
               :context-menu-y="contextMenuY"
@@ -341,6 +441,7 @@ async function onMarketInstalled() {
               :render-tree-label="renderTreeLabel"
               :node-props="nodeProps"
               @update-selected-keys="onUpdateSelectedKeys"
+              @update-expanded-keys="onUpdateExpandedKeys"
               @context-menu-select="handleContextMenuSelect"
               @context-menu-close="closeContextMenu"
               @open-zip-modal="openZipModal"
@@ -351,17 +452,6 @@ async function onMarketInstalled() {
             content-style="padding: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden;"
             :native-scrollbar="false"
           >
-            <div v-if="isMobile" class="mobile-tree-bar">
-              <n-button size="small" quaternary @click="treeDrawerOpen = true">
-                <template #icon>
-                  <n-icon><FolderOpen /></n-icon>
-                </template>
-                技能目录
-              </n-button>
-              <n-text v-if="previewMeta" depth="3" class="mobile-preview-hint">
-                {{ previewMeta.filename }}
-              </n-text>
-            </div>
             <div v-if="previewLoading" class="preview-state">
               <n-spin size="medium" />
               <span>读取文件...</span>
@@ -397,16 +487,37 @@ async function onMarketInstalled() {
             </template>
 
             <div v-else class="preview-state">
-              <n-empty :description="isMobile ? '点击「技能目录」选择文件预览' : '在左侧选择文件以预览'">
+              <n-empty description="在左侧选择文件以预览">
                 <template v-if="showEmptyHint" #extra>
-                  <n-text depth="3">
-                    您还没有个人技能，可上传 ZIP 或切换到「市场」安装
-                  </n-text>
+                  <n-button size="small" type="primary" @click="activeTab = 'market'">
+                    去市场安装
+                  </n-button>
                 </template>
               </n-empty>
             </div>
           </n-layout-content>
         </n-layout>
+
+        <div v-else class="mobile-installed">
+          <SkillsTreePanel
+            compact
+            class="mobile-tree-panel"
+            :tree-data="treeData"
+            :selected-keys="selectedKeys"
+            :expanded-keys="expandedKeys"
+            :context-menu-show="contextMenuShow"
+            :context-menu-x="contextMenuX"
+            :context-menu-y="contextMenuY"
+            :context-menu-options="contextMenuOptions"
+            :render-tree-label="renderTreeLabel"
+            :node-props="nodeProps"
+            @update-selected-keys="onUpdateSelectedKeys"
+            @update-expanded-keys="onUpdateExpandedKeys"
+            @context-menu-select="handleContextMenuSelect"
+            @context-menu-close="closeContextMenu"
+            @open-zip-modal="openZipModal"
+          />
+        </div>
       </n-tab-pane>
 
       <n-tab-pane name="market" tab="市场" display-directive="show">
@@ -420,31 +531,50 @@ async function onMarketInstalled() {
 
     <n-drawer
       v-if="isMobile"
-      v-model:show="treeDrawerOpen"
-      placement="left"
-      :width="treeDrawerWidth"
+      v-model:show="previewDrawerOpen"
+      placement="right"
+      :width="'100%'"
       :trap-focus="false"
       :block-scroll="true"
     >
       <n-drawer-content
-        title="技能目录"
+        :title="previewMeta?.filename ?? '加载中…'"
         closable
-        body-content-style="padding: 0; height: 100%;"
+        body-content-style="padding: 0; height: 100%; display: flex; flex-direction: column; min-height: 0;"
+        @close="closeMobilePreview"
       >
-        <SkillsTreePanel
-          :tree-data="treeData"
-          :selected-keys="selectedKeys"
-          :context-menu-show="contextMenuShow"
-          :context-menu-x="contextMenuX"
-          :context-menu-y="contextMenuY"
-          :context-menu-options="contextMenuOptions"
-          :render-tree-label="renderTreeLabel"
-          :node-props="nodeProps"
-          @update-selected-keys="onUpdateSelectedKeys"
-          @context-menu-select="handleContextMenuSelect"
-          @context-menu-close="closeContextMenu"
-          @open-zip-modal="openZipModal"
-        />
+        <div v-if="previewLoading" class="preview-state preview-state--drawer">
+          <n-spin size="medium" />
+          <span>读取文件...</span>
+        </div>
+        <template v-else-if="previewMeta">
+          <div class="preview-drawer-meta">
+            <n-tag
+              size="small"
+              :type="previewMeta.source === 'platform' ? 'info' : 'success'"
+              :bordered="false"
+            >
+              {{ SOURCE_LABEL[previewMeta.source] }}
+            </n-tag>
+            <n-button
+              v-if="previewPackageName"
+              size="tiny"
+              quaternary
+              @click="downloadPreviewPackage"
+            >
+              下载
+            </n-button>
+          </div>
+          <div class="preview-drawer-body">
+            <FilePreview
+              :path="previewMeta.relPath"
+              :content="previewContent"
+              :show-path="false"
+              density="comfortable"
+              download-title="下载"
+            />
+          </div>
+        </template>
       </n-drawer-content>
     </n-drawer>
 
@@ -490,7 +620,7 @@ async function onMarketInstalled() {
   min-height: 0;
   padding: 12px 0 16px;
   box-sizing: border-box;
-  gap: 12px;
+  gap: 8px;
 }
 
 .skills-tabs {
@@ -513,30 +643,50 @@ async function onMarketInstalled() {
 }
 
 .market-pane {
-  height: 100%;
+  flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .fs-layout--mobile {
   border: 1px solid var(--n-border-color);
 }
 
-.mobile-tree-bar {
+.mobile-installed {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--n-border-color);
-  flex-shrink: 0;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--n-border-color);
+  border-radius: 10px;
+  overflow: hidden;
 }
 
-.mobile-preview-hint {
+.mobile-tree-panel {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 0;
+}
+
+.preview-state--drawer {
+  flex: 1;
+  min-height: 160px;
+}
+
+.preview-drawer-meta {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 8px;
+}
+
+.preview-drawer-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 12px 16px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .panel-header-actions {
@@ -548,21 +698,16 @@ async function onMarketInstalled() {
 
 @media (max-width: 1024px) {
   .skills-management {
-    padding: 10px 0 12px;
-    gap: 10px;
+    padding: 6px 0 10px;
+    gap: 6px;
   }
 
   .panel-header {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .panel-subtitle {
-    max-width: none;
-  }
-
-  .tree-wrap {
-    max-height: none;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    min-height: 0;
   }
 }
 

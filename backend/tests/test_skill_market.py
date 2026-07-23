@@ -255,6 +255,27 @@ def test_browse_trending(users_root: Path, monkeypatch: pytest.MonkeyPatch) -> N
     resp = SkillMarketService.browse("u1", sort="trending", limit=10)
     assert len(resp.items) == 1
     assert resp.items[0].skill_id == "ai-video-generation"
+    assert resp.total == 1
+
+
+def test_browse_pagination(users_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_lb(sort: str = "trending", *, limit: int = 40):
+        return [
+            client_mod.SkillsShSearchHit(
+                id=f"owner/repo/skill-{i}",
+                skill_id=f"skill-{i}",
+                name=f"skill-{i}",
+                source="owner/repo",
+                installs=i,
+            )
+            for i in range(5)
+        ][:limit]
+
+    monkeypatch.setattr(SkillsShClient, "fetch_leaderboard", staticmethod(fake_lb))
+    resp = SkillMarketService.browse("u1", sort="trending", limit=2, offset=2)
+    assert resp.total == 5
+    assert len(resp.items) == 2
+    assert resp.items[0].skill_id == "skill-2"
 
 
 def test_browse_all_time(users_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:

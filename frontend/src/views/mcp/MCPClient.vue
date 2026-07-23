@@ -17,6 +17,7 @@ import { computed, onMounted, ref } from 'vue'
 import {
   getMcpConfig,
   listMcpServerStatus,
+  listMcpServers,
   saveMcpConfig,
 } from '@/api/mcp'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
@@ -54,9 +55,23 @@ async function refreshStatus(opts?: { initial?: boolean }) {
     const res = await listMcpServerStatus(true, 'user')
     servers.value = res.servers ?? []
   } catch (e: any) {
-    error.value = e.message || '状态加载失败'
-    if (opts?.initial) {
-      servers.value = []
+    // 探测失败时降级为目录列表，避免整页不可用（如镜像未打包平台 mcp.json）
+    try {
+      const fallback = await listMcpServers('user')
+      servers.value = (fallback.servers ?? []).map((s) => ({
+        ...s,
+        status: 'unknown' as const,
+        tool_count: 0,
+        message: '',
+      }))
+      error.value = e.message
+        ? `${e.message}（已显示 server 列表，可点刷新重试）`
+        : '状态探测失败（已显示 server 列表）'
+    } catch {
+      error.value = e.message || '状态加载失败'
+      if (opts?.initial) {
+        servers.value = []
+      }
     }
   } finally {
     loading.value = false
@@ -112,7 +127,7 @@ function statusText(s: McpServerStatusItem) {
 <template>
   <div class="mcp-management">
     <header class="panel-header">
-      <p class="panel-subtitle">
+      <p v-if="!isMobile" class="panel-subtitle">
         编辑个人 <code>mcp.json</code>；打开本页会自动检测连通与工具数。
       </p>
       <n-space class="panel-header-actions">

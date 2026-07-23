@@ -13,8 +13,6 @@
 - **WHEN** 用户在 session `s1` 中上传个人 Skill `foo`，随后在同一 session 继续对话且 Agent 依赖 Skills 列表
 - **THEN** 系统 SHALL 使 `foo` 对后续加载可见（重扫或显式 invalidate）
 
-## MODIFIED Requirements
-
 ### Requirement: Agent SHALL 只读挂载平台与个人 Skills
 
 使用 `SkillsMiddleware` 的 Agent **SHALL** 将平台 Skills 映射为 **`/skills/public/`**，将用户 Skills 映射为 **`/skills/personal/`**（只读）。`SkillsMiddleware.sources` **SHALL** 包含上述两者，且 **personal 顺序在 public 之后**，使同名个人 Skill 覆盖公共 Skill。
@@ -38,4 +36,7 @@
 
 ## REMOVED Requirements
 
-（无整条删除；原「`/skills/` + `/user-skills/`」要求由上方 MODIFIED 替换。）
+### Requirement: Agent SHALL 只读挂载用户 Skills
+
+**Reason**: 平台/个人 Skills 分目录挂载（`/skills/public/`、`/skills/personal/`）替代原单一 `/skills/` 只读挂载。
+**Migration**: 见 ADDED「Agent SHALL 只读挂载平台与个人 Skills」。

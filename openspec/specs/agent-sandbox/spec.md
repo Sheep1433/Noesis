@@ -4,134 +4,9 @@
 
 本能力规定 Noesis **AIO 沙箱**的隔离与生命周期：每用户一个 AIO 容器、session 级 virtual workspace 根、`sandbox-runner` 内网 API、rw/ro 挂载策略，以及与 `agent-runtime-paths` 路径布局的对齐。删 session **SHALL NOT** 销毁用户沙箱。
 ## Requirements
-### Requirement: 系统 SHALL 为每个用户提供独立 AIO 沙箱
-
-需要 filesystem backend 且 `current_user` 有效时，系统 SHALL 经 `sandbox-runner` 为 **`user_id`** 创建或复用 **一个** AIO 容器。**SHALL NOT** 为每个 `session_id` 单独创建容器。不同用户 **SHALL** 使用不同容器。
-
-#### Scenario: 首次使用创建用户沙箱
-
-- **WHEN** 用户 `u1` 在 session `s1` 首次触发 filesystem 或 `execute`
-- **THEN** runner SHALL 创建或绑定 `aio-{hash(user_id)}`；容器 lifecycle 主键 **SHALL** 为 `user_id`
-
-#### Scenario: 同用户换 session 复用沙箱
-
-- **WHEN** 用户 `u1` 在 session `s2` 发起 Agent，且 `u1` 沙箱已存在
-- **THEN** SHALL 复用同一 AIO 容器与 `base_url`；backend SHALL 切换为 session `s2` 的 virtual 根
-
-#### Scenario: 不同用户隔离
-
-- **WHEN** 用户 `u1` 与 `u2` 同时运行 Agent
-- **THEN** **SHALL** 使用两个 AIO 容器，**SHALL NOT** 共用 `base_url`
-
-#### Scenario: sandbox-runner 不可用
-
-- **WHEN** runner 不可达或 AIO 容器未 ready
-- **THEN** Agent SHALL 明确失败，**SHALL NOT** 回退 `LocalShellBackend`
-
-### Requirement: Agent virtual 根 SHALL 对应当前 session workspace
-
-`create_agent_backend(user_id, session_id)` SHALL 使 deepagents virtual **`/research/`**（或等效 session 工作区路由）映射到容器内 **`/workspace/sessions/{session_id}/workspace`**；用户记忆 virtual **`/memory/`** **SHALL** 映射到 **`/workspace/`** 根下的 `AGENTS.md` 与 `USER.md`，**SHALL NOT** 映射到 session workspace 子目录。
-
-Agent **SHALL** 继续使用 `/research/...`、`/memory/...`、`/skills/...` 虚拟路径，**SHALL NOT** 在 Prompt 中嵌入 `sessions/{session_id}/` 物理路径。
-
-任务可写产物 **SHALL** 默认落在 workspace 根或任务自定义子目录；`/research/` **SHALL** 仅在深度调研等 research 场景（如 `deep-research-v2` Skill）使用；workspace 根虚拟路径（`/notes.md` 等）**SHALL** 为通用智能体默认落盘位置。
-
-#### Scenario: Prompt 路径不变
-
-- **WHEN** Agent `write_file` 写入 `/research/demo/report.md`（当前 session `s1`）
-- **THEN** 文件 SHALL 落在 `.data/users/{uid}/sessions/s1/workspace/research/demo/report.md`
-
-#### Scenario: extensions Skills 路径
-
-- **WHEN** Agent `read_file` 读取 `/skills/extensions/deep-research-v2/SKILL.md`
-- **THEN** SHALL 解析至容器内 ro `/skills/deep-research-v2/SKILL.md`
-
-#### Scenario: custom Skills 路径
-
-- **WHEN** Agent `read_file` 读取 `/skills/custom/my-tool/SKILL.md`
-- **THEN** SHALL 解析至容器内 `/workspace/skills/my-tool/SKILL.md`
-
-#### Scenario: 单层 /skills/{name} 非权威路径
-
-- **WHEN** Agent `read_file` 读取 `/skills/deep-research-v2/SKILL.md`（未带 `extensions/` 或 `custom/`）
-- **THEN** 系统 **SHALL NOT** 保证解析至平台或用户 Skills 目录；**SHALL** 按 default workspace 路由（通常 `file_not_found`）
-
-### Requirement: AioSandboxBackend SHALL 实现 BaseSandbox
-
-**SHALL** 经 `agent_sandbox.Sandbox(base_url=...)` 实现 `execute`、`upload_files`、`download_files`。**SHALL NOT** 在 API 进程本地 shell 执行 Agent 命令。
-
-#### Scenario: execute 不经 API 进程 shell
-
-- **WHEN** Agent 调用 `execute`
-- **THEN** SHALL 在用户 AIO 容器内经 HTTP 执行
-
-### Requirement: AIO 调用 SHALL 按 session 串行化
-
-对同一 `(user_id, session_id)`，`AioSandboxBackend` **SHALL** mutex 串行 `execute` 与 upload/download（AIO 单 shell 会话）。
-
-对同一 `user_id` 不同 `session_id`，**MAY** 并行到达 backend，但 **SHALL** 各自 mutex，**SHALL NOT** 交叉污染 AIO shell 状态。
-
-#### Scenario: 同 session 并行 tool 调用
-
-- **WHEN** session `s1` 内两个 `execute` 几乎同时到达
-- **THEN** backend SHALL 串行转发至 AIO
-
-### Requirement: 沙箱挂载 SHALL 为 users/{user_id} 树
-
-AIO 容器 **SHALL** rw mount：
-
-- `{NOESIS_HOST_DATA_DIR}/users/{user_id}/` → `/workspace`
-
-**SHALL** ro mount：
-
-- `extensions/skills` → `/skills`
-
-**SHALL NOT** mount API `/app`、`.env`、其它用户目录、附件、checkpoint。
-
-#### Scenario: execute 不可读 API 密钥
-
-- **WHEN** Agent `execute(command="cat /app/.env")`
-- **THEN** **SHALL NOT** 返回 Noesis 业务密钥
-
-#### Scenario: 同用户 execute 可读其它 session 工作区
-
-- **WHEN** 当前 run 为 session `s1`，Agent `execute` 读取 `/workspace/sessions/s2/workspace/notes.md`（同用户 `s2` 存在）
-- **THEN** **MAY** 成功返回内容（供跨 session 汇总等场景）
-
-#### Scenario: 不同用户不可互读
-
-- **WHEN** 用户 `u1` Agent 尝试访问 `u2` 的 workspace
-- **THEN** **SHALL NOT** 成功（`u2` 目录未 mount 进 `u1` 容器）
-
-#### Scenario: filesystem 默认盘不误写其它 session
-
-- **WHEN** 当前 run 为 session `s1`，Agent 经 filesystem 工具 `write_file("/notes.md")`
-- **THEN** SHALL 写入 `sessions/s1/workspace/notes.md`，**SHALL NOT** 默认写入 `sessions/s2/`
-
-#### Scenario: Skills 只读
-
-- **WHEN** Agent `write_file` 至 `/skills/foo.md`
-- **THEN** **SHALL NOT** 修改宿主机 `extensions/skills`
-
-### Requirement: 浏览器与 CDP Skills
-
-**SHALL** 在用户 AIO 容器内 `execute` 运行 baoyu 等 Skills。
-
-**SHALL** 按 session 注入：
-
-- `SANDBOX_HEADLESS=1`
-- `URL_CHROME_PATH`
-- `BAOYU_CHROME_PROFILE_DIR=/workspace/sessions/{session_id}/workspace/.chrome-profile`
-- CDP 端口 env（如 `SANDBOX_CDP_PORT`）按 session 区分
-
-#### Scenario: 同用户两 session CDP
-
-- **WHEN** 用户 `u1` 在 `s1` 与 `s2` 先后触发 CDP 抓页
-- **THEN** **SHALL** 共用 **一个** AIO 容器；profile/端口 **SHALL** 按 session 区分，**SHALL NOT** 因固定端口必然互斥失败
-
 ### Requirement: 沙箱环境与密钥
 
-AIO 容器 env **SHALL NOT** 含 API 业务密钥；**MAY** 含 scoped `GH_TOKEN`。
+沙箱容器 env **SHALL NOT** 含 API 业务密钥；**MAY** 含 scoped `GH_TOKEN`。
 
 #### Scenario: 沙箱内无 Tavily Key
 
@@ -140,134 +15,204 @@ AIO 容器 env **SHALL NOT** 含 API 业务密钥；**MAY** 含 scoped `GH_TOKEN
 
 ### Requirement: 沙箱 idle 回收 SHALL 尊重 in-flight Agent
 
-`SandboxService` **SHALL** 维护 **per-user** in-flight 计数（该 user 任一 session run 期间 >0）。
+`SandboxService` **SHALL** 维护 in-flight 计数（按 sandbox lifecycle 键：session 或 user）。
 
-runner **SHALL NOT** 因 idle TTL 停止用户沙箱，当该 user in-flight **> 0**。
+runner **SHALL NOT** 因 idle TTL 停止仍有 in-flight > 0 的沙箱。
 
 #### Scenario: 流式进行中不回收
 
-- **WHEN** 用户 `u1` 某 session 仍在 SSE 流式运行，且 idle TTL 已到
-- **THEN** runner **SHALL NOT** 停止 `u1` 沙箱
+- **WHEN** session 仍在 SSE 流式运行，且 idle TTL 已到
+- **THEN** runner **SHALL NOT** 停止该 session 沙箱
 
-#### Scenario: 全 idle 后回收
+#### Scenario: idle 后回收
 
-- **WHEN** 用户 `u1` 全部 session in-flight 为 0 且超过 TTL
-- **THEN** runner **MAY** 停止 `u1` AIO 容器；磁盘 `users/u1/` **SHALL** 保留
+- **WHEN** 对应 sandbox 的 in-flight 为 0 且超过 TTL
+- **THEN** runner **MAY** 停止容器；磁盘 `users/{uid}/sessions/{sid}/workspace` **SHALL** 保留
 
-### Requirement: 软删 session SHALL NOT 销毁用户沙箱
+### Requirement: execute SHALL 保留 Shell 操作符语义
 
-软删 session **SHALL** cancel run 并 `delete_session_data`（见 `agent-runtime-paths`）；**SHALL NOT** 调用 `destroy_user_sandbox`（除非该 user 无其它 session 且产品另行规定——默认 **不** destroy）。
+系统对 `execute` 命令做任何路径处理时 **SHALL NOT** 使用会把 `>`、`>>`、`<`、`|`、`||`、`&&`、`;`、`(`、`)` 等变成普通 argv 的 `shlex.split` → `shlex.join` 整命令回写。
 
-#### Scenario: 删 session 保留用户沙箱
+目标态：**SHALL NOT** 对 `execute` 做 Skills/虚拟绝对路径的 token rewrite；Agent **SHALL** 使用相对路径或容器真实挂载路径（`/workspace/...`、`/skills/public/...`、`/skills/personal/...`）。
+
+#### Scenario: 重定向写入 workspace
+
+- **WHEN** Agent `execute(command="printf done > /workspace/out.txt")`（或 cwd 为 `/workspace` 时 `printf done > out.txt`）
+- **THEN** 文件 SHALL 出现在当前 session 的宿主机 workspace，且内容为 `done`
+
+#### Scenario: 管道与链式命令
+
+- **WHEN** Agent `execute(command="mkdir -p out && printf x > out/a.txt && cat out/a.txt | wc -c")`
+- **THEN** 命令 SHALL 按 Shell 语义执行成功，**SHALL NOT** 将 `&&`、`>`、`|` 当作字面参数
+
+### Requirement: 沙箱挂载 SHALL 仅为当前 session workspace 与双 Skills
+
+runner 创建沙箱时 **SHALL** 仅挂载：
+
+- 当前 session workspace（宿主机）→ `/workspace`（rw）
+- 公共 skills（宿主机）→ `/skills/public`（ro）
+- 个人 skills（宿主机）→ `/skills/personal`（ro）
+
+**SHALL NOT** 将整个 `users/{user_id}/` 树 rw 挂载进容器。
+
+#### Scenario: 不可经 Shell 写个人 Skills
+
+- **WHEN** Agent `execute(command="echo hack > /skills/personal/foo/SKILL.md")`
+- **THEN** **SHALL** 失败（只读挂载），宿主机个人 Skills 文件 **SHALL NOT** 被修改
+
+#### Scenario: 不可经 Shell 访问其它 session
+
+- **WHEN** 当前 run 为 session `s1`，Agent `execute` 尝试读取另一 session `s2` 的 workspace 文件
+- **THEN** **SHALL NOT** 成功（`s2` 未挂载）
+
+#### Scenario: 记忆与附件不在默认挂载面
+
+- **WHEN** Agent `execute(command="ls /workspace")` 或探测用户根
+- **THEN** **SHALL NOT** 默认列出 `AGENTS.md`、`USER.md`、其它 session、`uploads/`、`attachments/` 作为可写树
+
+### Requirement: backend handle 缓存 SHALL 在容器缺失时失效并重建
+
+`SandboxService` 的 handle 缓存 **SHALL** 仅作优化。当 runner 返回容器不存在（如 HTTP 404）或等价错误时，backend **SHALL** 清除该用户/session 的缓存条目，**SHALL** 重新 `ensure` 并重试执行 **至少一次**。
+
+#### Scenario: idle 回收后自动恢复
+
+- **WHEN** runner 已回收容器且 backend 仍持有旧 handle，随后 Agent 发起 `execute`
+- **THEN** backend SHALL 失效缓存、重建沙箱并成功执行（或返回明确不可恢复错误，**SHALL NOT** 对该用户后续请求永久 404）
+
+### Requirement: 沙箱进程 SHALL 非 root 运行
+
+`sandbox-slim`（或等价生产镜像）**SHALL** 声明非 root `USER`。容器内有效 UID **SHALL NOT** 为 0。
+
+#### Scenario: 探针非 root
+
+- **WHEN** 在运行中的沙箱执行 `id -u`
+- **THEN** 输出 **SHALL NOT** 为 `0`
+
+### Requirement: 生产 backend SHALL 仅为 docker 或 local_shell
+
+配置 `sandbox.backend` **SHALL** 仅允许 `docker` 与 `local_shell`。**SHALL NOT** 提供 `aio` 选项。
+
+#### Scenario: 配置 aio 被拒绝
+
+- **WHEN** 配置或环境指定 `sandbox.backend=aio`
+- **THEN** 系统 SHALL 在启动或创建 backend 时失败并给出明确错误，**SHALL NOT** 静默回退
+
+### Requirement: 系统 SHALL 为每个会话提供隔离沙箱执行环境
+
+需要 filesystem backend 且 `current_user` 有效时，系统 SHALL 经 `sandbox-runner` 为当前 **`(user_id, session_id)`** 创建或复用沙箱执行环境（默认 **per-session 容器**；若实现为 per-user 容器则 **SHALL** 仅挂载该 session 的挂载表）。不同用户 **SHALL** 使用不同容器。同用户不同 session **SHALL NOT** 共享可写 workspace 挂载。
+
+#### Scenario: 首次使用创建会话沙箱
+
+- **WHEN** 用户 `u1` 在 session `s1` 首次触发 filesystem 或 `execute`
+- **THEN** runner SHALL 创建或绑定对应该 session 的沙箱；lifecycle 主键 **SHALL** 包含 `session_id`（或等价确保挂载仅服务 `s1`）
+
+#### Scenario: 同用户换 session 不共享可写盘
+
+- **WHEN** 用户 `u1` 在 session `s2` 发起 Agent
+- **THEN** `/workspace` **SHALL** 映射 `s2` 的 workspace，**SHALL NOT** 映射 `s1` 的 workspace
+
+#### Scenario: 不同用户隔离
+
+- **WHEN** 用户 `u1` 与 `u2` 同时运行 Agent
+- **THEN** **SHALL** 使用两个沙箱容器，**SHALL NOT** 共用执行端点
+
+#### Scenario: sandbox-runner 不可用
+
+- **WHEN** runner 不可达或沙箱未 ready
+- **THEN** Agent SHALL 明确失败，**SHALL NOT** 在生产 `docker` 模式下回退 `LocalShellBackend`
+
+### Requirement: Agent workspace 根 SHALL 映射容器 /workspace
+
+`create_agent_backend(user_id, session_id)` SHALL 使 Agent 默认可写根对应容器内 **`/workspace`**（宿主机当前 session workspace）。深度调研等场景的 `research/` **SHALL** 为 `/workspace/research/` 子目录。
+
+公共 Skills **SHALL** 经 `/skills/public/` 只读访问；个人 Skills **SHALL** 经 `/skills/personal/` 只读访问。
+
+用户记忆 **SHALL** 继续经 MemoryMiddleware / 面板 API，**SHALL NOT** 要求映射进沙箱 Shell 可见路径。
+
+任务可写产物 **SHALL** 默认落在 `/workspace` 根或任务子目录。
+
+#### Scenario: workspace 根写入
+
+- **WHEN** Agent `write_file` 写入 `/notes.md` 或相对路径 `notes.md`
+- **THEN** 文件 SHALL 落在 `.data/users/{uid}/sessions/{sid}/workspace/notes.md`
+
+#### Scenario: 公共 Skills 路径
+
+- **WHEN** Agent `read_file` 读取 `/skills/public/deep-research-v2/SKILL.md`
+- **THEN** SHALL 解析至容器内 ro `/skills/public/deep-research-v2/SKILL.md`
+
+#### Scenario: 个人 Skills 路径
+
+- **WHEN** Agent `read_file` 读取 `/skills/personal/my-tool/SKILL.md`
+- **THEN** SHALL 解析至容器内 ro `/skills/personal/my-tool/SKILL.md`
+
+### Requirement: DockerExecSandboxBackend SHALL 实现 BaseSandbox
+
+生产路径 **SHALL** 经 runner 的 Docker Exec（或等价）实现 `execute`、文件上下传。**SHALL NOT** 在 API 进程本地 shell 执行生产 Agent 命令（`local_shell` 仅开发/测试）。
+
+#### Scenario: execute 不经 API 进程 shell
+
+- **WHEN** `sandbox.backend=docker` 且 Agent 调用 `execute`
+- **THEN** SHALL 在用户沙箱容器内经 runner 执行
+
+### Requirement: 沙箱调用 SHALL 按 session 串行化
+
+对同一 `(user_id, session_id)`，沙箱 backend **SHALL** mutex 串行 `execute` 与 upload/download。
+
+对同一 `user_id` 不同 `session_id`，**MAY** 并行。
+
+#### Scenario: 同 session 并行 tool 调用
+
+- **WHEN** session `s1` 内两个 `execute` 几乎同时到达
+- **THEN** backend SHALL 串行转发至该 session 沙箱
+
+### Requirement: 软删 session SHALL 可销毁该 session 沙箱
+
+软删 session **SHALL** cancel run 并 `delete_session_data`；**SHALL** 销毁该 session 对应沙箱容器（若存在）。**SHALL NOT** 删除用户记忆或个人 Skills。
+
+#### Scenario: 删 session 销毁其沙箱
 
 - **WHEN** 用户删除 session `s1` 且仍有 session `s2`
-- **THEN** `sessions/s1/` **SHALL** 删除；`u1` AIO 容器 **MAY** 继续服务 `s2`
+- **THEN** `sessions/s1/` **SHALL** 删除；`s1` 沙箱容器 **SHALL** 被销毁；`s2` 沙箱 **MAY** 继续
 
-### Requirement: sandbox-runner SHALL 提供 user 级 lifecycle API
+### Requirement: sandbox-runner SHALL 提供 lifecycle API
 
-runner **SHALL** 提供内网 API：
-
-- `PUT /internal/sandboxes/{user_id}` → `{ "base_url": "..." }`
-- `DELETE /internal/sandboxes/{user_id}`
-- `GET /health`
+runner **SHALL** 提供内网 API 以确保/销毁沙箱（路径可按 session 键演进，如 `PUT/DELETE /internal/sandboxes/{user_id}/{session_id}` 或文档等价），以及 `GET /health`。
 
 **SHALL** 使用 `SANDBOX_RUNNER_TOKEN`；**SHALL NOT** 公网暴露。
-
-可选 `sandbox_max_replicas`：全局 concurrent **用户**沙箱上限。
 
 #### Scenario: 未授权拒绝
 
 - **WHEN** 请求无有效 token
 - **THEN** HTTP 401
 
-#### Scenario: 确保用户沙箱
+#### Scenario: 确保沙箱
 
-- **WHEN** backend `PUT /internal/sandboxes/u1` 且 token 有效
-- **THEN** runner **SHALL** 返回可达的 `base_url`
+- **WHEN** backend 确保 `(u1, s1)` 沙箱且 token 有效
+- **THEN** runner **SHALL** 返回可达的执行句柄（如 `container_id` / `base_url` 等价字段）
 
-### Requirement: Docker 部署 SHALL 使用 NOESIS_HOST_DATA_DIR
+### Requirement: Docker 部署 SHALL 使用宿主机真实路径做 bind
 
-runner bind **SHALL** 使用 `NOESIS_HOST_DATA_DIR` 解析 `users/{uid}/` host 路径。
+runner 向 Docker daemon 声明的 bind **SHALL** 使用宿主机绝对路径（`NOESIS_HOST_DATA_DIR` 等），**SHALL NOT** 使用仅在 runner 容器命名空间有效、宿主机不存在的路径。
 
-#### Scenario: Compose workspace 持久化
+#### Scenario: Compose workspace 持久化同源
 
-- **WHEN** Agent 写入 workspace
-- **THEN** AIO bind 与 backend 写入 **SHALL** 指向同一 host 存储
+- **WHEN** Agent 写入 `/workspace/notes.md`
+- **THEN** backend 与前端读取的 session workspace **SHALL** 与沙箱写入为同一宿主机文件
 
-### Requirement: backend SHALL 依赖 agent-sandbox SDK
+### Requirement: execute 工作目录 SHALL 为 /workspace
 
-backend **SHALL** 声明 PyPI 依赖 `agent-sandbox`；版本 **SHALL** 与 `SANDBOX_AIO_IMAGE` 在文档或 lockfile 中配套说明。
+Docker Exec backend 的 `execute` **SHALL** 将工作目录设为 `/workspace`。
 
-#### Scenario: SDK 与容器 API 不兼容
+Agent Prompt **SHALL** 说明：shell cwd 为 workspace 根；相对路径即产物路径。
 
-- **WHEN** SDK 与 AIO 容器 API 版本不匹配导致 HTTP 错误
-- **THEN** Agent **SHALL** 返回明确 sandbox 失败，**SHALL NOT** 回退 LocalShell
+#### Scenario: pwd 为 /workspace
 
-### Requirement: execute SHALL 与 filesystem 工具解析同一虚拟路径
+- **WHEN** Agent `execute(command="pwd")`
+- **THEN** 输出 **SHALL** 为 `/workspace`
 
-因 deepagents `CompositeBackend.execute()` **仅委托 default backend**，系统 **SHALL** 在 **workspace** `PrefixBackend.execute()`（`default` 链）内、调用 inner `execute` 之前，将命令 token 中的 Agent 虚拟绝对路径 rewrite 为与 `read_file` / `write_file` 相同的物理目标。extensions / custom / memory 的 `PrefixBackend` **SHALL NOT** 作为 execute rewrite 落点（其 `execute()` 不会被调用）。
+#### Scenario: 相对路径写入
 
-映射 **SHALL** 使用 `PathRewriteContext`（与 `build_agent_filesystem_backend` 同源构造），**SHALL** 经 token 级处理（**SHALL NOT** 对整条 command 裸 `str.replace`）。
-
-**Tier 1**（显式前缀，最长优先）：
-
-| 虚拟前缀 | AIO 容器物理目标 |
-|----------|------------------|
-| `/research/` | `/workspace/sessions/{session_id}/workspace/research/` |
-| `/skills/extensions/` | `/skills/` |
-| `/skills/custom/` | `/workspace/skills/` |
-| `/memory/AGENTS.md` | `/workspace/AGENTS.md` |
-| `/memory/USER.md` | `/workspace/USER.md` |
-
-**Tier 2**（workspace 根）：未命中 Tier 1 且非系统 denylist 的虚拟绝对路径 token（如 `/notes.md`、`/summary_offload/...`）**SHALL** rewrite 为 `/workspace/sessions/{session_id}/workspace{token}`。
-
-`local_shell` 与 `aio` **SHALL** 共用同一 rewrite 逻辑；目标为等价 host 绝对路径。
-
-#### Scenario: execute 读取 research 文件与 read_file 一致
-
-- **WHEN** 当前 session 为 `s1`，Agent 已 `write_file` 写入 `/research/demo/report.md`，随后 `execute(command="cat /research/demo/report.md")`
-- **THEN** 命令 **SHALL** 在容器内读取 `/workspace/sessions/s1/workspace/research/demo/report.md` 并返回文件内容
-
-#### Scenario: execute 读取 workspace 根文件
-
-- **WHEN** Agent `write_file("/notes.md", "x")` 后 `execute(command="cat /notes.md")`
-- **THEN** **SHALL** 读取 `/workspace/sessions/{sid}/workspace/notes.md` 并返回 `x`
-
-#### Scenario: execute 运行 extensions skill 脚本
-
-- **WHEN** Agent `execute(command="python3 /skills/extensions/deep-research-v2/run.py")`
-- **THEN** 命令 **SHALL** rewrite 为容器内 `/skills/deep-research-v2/run.py` 并执行
-
-#### Scenario: execute 读取记忆文件与 super-agent 物理路径一致
-
-- **WHEN** 宿主机存在 `users/{uid}/AGENTS.md` 且 AIO mount 就绪，Agent `execute(command="cat /memory/AGENTS.md")`
-- **THEN** 命令 **SHALL** rewrite 为 `cat /workspace/AGENTS.md` 并返回该文件内容（与 `read_file("/memory/AGENTS.md")` 读同一文件）
-
-#### Scenario: local_shell 模式行为一致
-
-- **WHEN** `sandbox.backend=local_shell`，Agent `execute(command="cat /research/notes.md")` 且该文件已由 `write_file` 写入
-- **THEN** **SHALL** 读取 `{REPO_ROOT}/.data/users/{uid}/sessions/{sid}/workspace/research/notes.md`
-
-#### Scenario: 引号内路径不被误 rewrite
-
-- **WHEN** Agent `execute(command='echo "see /research/foo"')`
-- **THEN** 输出 **SHALL NOT** 将引号内字符串改写为物理 workspace 路径
-
-### Requirement: execute 工作目录 SHALL 为 session workspace 根
-
-`AioSandboxBackend.execute` **SHALL** 将 `exec_dir` 设为 `/workspace/sessions/{session_id}/workspace`。
-
-Agent Prompt **SHALL** 说明：shell cwd 为 workspace 根；`/research/foo` 等价于 `research/foo`；依赖 `cd` 的后续命令 **SHALL** 在同一 command 用 `&&` 链接。
-
-**已知限制（首版）**：`pwd` 输出 **MAY** 仍为物理路径 `/workspace/sessions/{sid}/workspace`；`execute` 直接访问 `/workspace/AGENTS.md` **MAY** 成功（mount bypass），本能力 **SHALL NOT** 将其作为规范路径。
-
-#### Scenario: pwd 输出物理路径
-
-- **WHEN** Agent `execute(command="pwd")` 且 session 为 `s1`
-- **THEN** 输出 **SHALL** 为 `/workspace/sessions/s1/workspace`
-
-#### Scenario: 链式 cd 与 make
-
-- **WHEN** Agent `execute(command="cd /research/demo && make")`
-- **THEN** `cd` 与 `make` **SHALL** 在同一 shell 调用内执行，且 `cd` 目标 **SHALL** 经 rewrite 指向 `.../workspace/research/demo`
+- **WHEN** Agent `execute(command="printf ok > notes.md")`
+- **THEN** 宿主机当前 session workspace 下 **SHALL** 存在 `notes.md`，内容为 `ok`
 

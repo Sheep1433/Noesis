@@ -25,6 +25,8 @@ COPY backend/ ./
 
 # Skills 包（深度研究 / Skills 管理 API）
 COPY extensions/skills ./extensions/skills
+# 平台 MCP 配置（故障运维 profile、probe 合并目录）
+COPY extensions/mcp ./extensions/mcp
 
 RUN uv sync --frozen --no-dev
 

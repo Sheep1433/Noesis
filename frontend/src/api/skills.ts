@@ -2,6 +2,7 @@
  * Skills 文件目录 API（平台预置 + 个人上传）
  */
 import { authFetch, parseAuthJson } from '@/utils/authHttp'
+import { downloadFile } from '@/utils/download'
 
 const API_BASE = `${location.origin}/api/skills`
 
@@ -141,11 +142,35 @@ export async function deleteUserSkillPackage(
 }
 
 export function isDeletableUserSkillPackage(node: SkillFsTreeNode): boolean {
-  if (node.isLeaf || node.source !== 'user') {
+  return isSkillPackageNode(node) && node.source === 'user'
+}
+
+/** 顶层技能包目录（可下载 ZIP） */
+export function isSkillPackageNode(node: SkillFsTreeNode): boolean {
+  if (node.isLeaf || node.key === 'platform:' || node.key === 'user:') {
     return false
   }
   const { path } = parseSourceFromKey(node.key)
   return path.length > 0 && !path.includes('/')
+}
+
+/**
+ * 下载顶层技能目录 ZIP
+ */
+export async function downloadSkillPackageArchive(
+  packageName: string,
+  source: SkillSource,
+): Promise<void> {
+  const url =
+    `${API_BASE}/fs/package/archive` +
+    `?path=${encodeURIComponent(packageName)}&source=${encodeURIComponent(source)}`
+  const response = await authFetch(url, { method: 'GET' })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: response.statusText }))
+    throw new Error(err.detail || err.msg || `下载失败: ${response.status}`)
+  }
+  const blob = await response.blob()
+  downloadFile(blob, `${packageName}.zip`)
 }
 
 /** skills.sh 市场条目 */
@@ -163,6 +188,7 @@ export interface SkillMarketItem {
 export interface SkillMarketListResponse {
   items: SkillMarketItem[]
   query: string
+  total: number
 }
 
 export interface SkillMarketDetailResponse {
@@ -175,9 +201,10 @@ export type SkillMarketSort = 'all_time' | 'trending'
 
 export async function browseSkillsMarket(
   sort: SkillMarketSort = 'trending',
-  limit = 40,
+  limit = 20,
+  offset = 0,
 ): Promise<SkillMarketListResponse> {
-  const url = `${API_BASE}/market/browse?sort=${encodeURIComponent(sort)}&limit=${limit}`
+  const url = `${API_BASE}/market/browse?sort=${encodeURIComponent(sort)}&limit=${limit}&offset=${offset}`
   const response = await authFetch(url, { method: 'GET' })
   if (!response.ok) {
     throw new Error(`获取榜单失败: ${response.status}`)
@@ -188,8 +215,9 @@ export async function browseSkillsMarket(
 export async function searchSkillsMarket(
   q: string,
   limit = 20,
+  offset = 0,
 ): Promise<SkillMarketListResponse> {
-  const url = `${API_BASE}/market/search?q=${encodeURIComponent(q)}&limit=${limit}`
+  const url = `${API_BASE}/market/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`
   const response = await authFetch(url, { method: 'GET' })
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: response.statusText }))

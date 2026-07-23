@@ -136,6 +136,9 @@ def _read_mcp_json_file(cfg_path: Path) -> McpJsonConfig:
 @lru_cache(maxsize=1)
 def load_mcp_json(path: Path | None = None) -> McpJsonConfig:
     cfg_path = path or resolve_mcp_config_path()
+    if not cfg_path.is_file():
+        logger.warning("平台 MCP 配置不存在 path={}，使用空配置", cfg_path)
+        return McpJsonConfig()
     cfg = _read_mcp_json_file(cfg_path)
     logger.debug(
         "已加载平台 MCP 配置 path={} servers={} profiles={}",

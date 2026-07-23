@@ -1,6 +1,6 @@
-## 1. 依赖与接缝
+## 1. 接缝与模块边界
 
-- [ ] 1.1 确认/推进 `extract-agent-runtime-harness` 核心：`AgentRunService` 可发布执行生命周期；若未就绪，实现过渡 `RunEvent` 适配层并文档标明唯一入口
+- [ ] 1.1 在现有 `agent/` + `qa_service` 上约定轻量 run 编排接缝（如 `RunOrchestrator.start_run` / `cancel`）：组 sinks、启动现有 Agent 流；**不**依赖 `extract-agent-runtime-harness` / `noesis_runtime` 搬家
 - [ ] 1.2 约定模块目录（如 `domain/chat/delivery/` 或 `services/run_delivery/`）：Bus、PersistSink、SseCodec、ChannelRegistry 边界与 import 方向
 
 ## 2. RunEvent 与总线
@@ -31,6 +31,6 @@
 ## 6. 收敛旧路径与文档
 
 - [ ] 6.1 删除或隔离旧「generator 内落库+成帧」双路径；合并 `exec_test_case_resume` 到同一 Fan-out 模板（若成本可控）
-- [ ] 6.2 更新 `backend/AGENTS.md` / 流式说明：RunEvent Fan-out 图；注明 WS 非 P0
+- [ ] 6.2 更新 `backend/AGENTS.md` / 流式说明：RunEvent Fan-out 图；注明 WS 非 P0；注明 harness 搬家已搁置
 - [ ] 6.3 在 `docs/NOTES.md` 追加知识卡片（架构变更）
 - [ ] 6.4 全量相关 pytest：streaming / stop / disconnect / tool events

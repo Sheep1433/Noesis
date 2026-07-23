@@ -67,6 +67,7 @@ class SkillMarketListResponse(BaseModel):
     """市场列表（browse / search）"""
     items: List[SkillMarketItem] = Field(default_factory=list)
     query: str = Field(default='', description='搜索词；browse 为空')
+    total: int = Field(default=0, description='命中总数（分页前）')
 
 
 class SkillMarketDetailResponse(BaseModel):

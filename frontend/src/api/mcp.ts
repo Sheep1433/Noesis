@@ -36,8 +36,11 @@ export interface McpConfigFile {
   exists: boolean
 }
 
-export async function listMcpServers(): Promise<McpServerCatalogResponse> {
-  const response = await authFetch(`${API_BASE}/servers`, { method: 'GET' })
+export async function listMcpServers(scope: 'user' | 'all' = 'all'): Promise<McpServerCatalogResponse> {
+  const response = await authFetch(
+    `${API_BASE}/servers?scope=${encodeURIComponent(scope)}`,
+    { method: 'GET' },
+  )
   if (!response.ok) {
     throw new Error(`获取 MCP 目录失败: ${response.status}`)
   }
@@ -53,7 +56,14 @@ export async function listMcpServerStatus(
     `?probe=${probe ? 'true' : 'false'}&scope=${encodeURIComponent(scope)}`
   const response = await authFetch(url, { method: 'GET' })
   if (!response.ok) {
-    throw new Error(`获取 MCP 状态失败: ${response.status}`)
+    let detail = `获取 MCP 状态失败: ${response.status}`
+    try {
+      const json = await response.json() as { msg?: string, detail?: string }
+      detail = json.msg || json.detail || detail
+    } catch {
+      // ignore
+    }
+    throw new Error(detail)
   }
   return parseAuthJson<McpServerStatusResponse>(response)
 }
