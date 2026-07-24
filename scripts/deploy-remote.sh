@@ -46,6 +46,15 @@ compose() {
 echo "==> 同步 ${DEPLOY_BRANCH} 分支 (stack=${COMPOSE_PROJECT_NAME}, port=${NOESIS_HTTP_PORT})"
 git fetch origin "${DEPLOY_BRANCH}"
 git reset --hard "origin/${DEPLOY_BRANCH}"
+# reset 不删 untracked；Docker build context 会吃进工作区脏文件。
+# 例：服务器残留 frontend/pnpm-workspace.yaml（无 packages）→ pnpm build 报
+# "packages field missing or empty"。保留密钥与运行时数据。
+git clean -fd \
+  -e 'deploy/.env.docker' \
+  -e 'deploy/.env.docker.bak*' \
+  -e 'deploy/compose.host.env' \
+  -e '.data' \
+  -e '.data/**'
 
 echo "==> 部署前释放磁盘（避免 docker build 因 no space left on device 失败）"
 avail_kb="$(df --output=avail / | tail -1 | tr -d ' ')"
