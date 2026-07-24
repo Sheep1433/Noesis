@@ -50,14 +50,27 @@ def exec_command(
     """在容器内执行单条 bash 命令（无跨调用 shell 状态）。"""
     workdir = exec_dir or "/workspace"
     api = container.client.api
+    # GNU timeout 的 COMMAND 必须是可执行文件。若写成
+    #   timeout N cd /workspace && node …
+    # bash 会解析为 (timeout N cd /workspace) && …，timeout 去 exec builtin `cd`
+    # → "timeout: failed to run command 'cd': No such file or directory"。
+    # 正确：timeout 只包一层 bash，由 bash 解释完整 command（含 &&、管道、builtin）。
     if timeout is not None and timeout > 0:
-        shell_cmd = f"timeout --signal=TERM {int(timeout)} {command}"
+        cmd = [
+            "timeout",
+            "--signal=TERM",
+            str(int(timeout)),
+            "/bin/bash",
+            "-lc",
+            command,
+        ]
     else:
-        shell_cmd = command
+        cmd = ["/bin/bash", "-lc", command]
     exec_id = api.exec_create(
         container.id,
-        cmd=["/bin/bash", "-lc", shell_cmd],
+        cmd=cmd,
         workdir=workdir,
+        environment={"HOME": "/home/sandbox", "USER": "sandbox"},
         stdout=True,
         stderr=True,
     )
