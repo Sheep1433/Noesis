@@ -6,6 +6,9 @@ export interface AuthUser {
   mobile?: string | null
 }
 
+/** 移动弱网下避免无限卡住首屏；超时后按未登录继续，后台不再阻塞 mount */
+const RESTORE_SESSION_TIMEOUT_MS = 4000
+
 export const useUserStore = defineStore('user', {
   state: () => ({
     user: null as AuthUser | null,
@@ -35,8 +38,16 @@ export const useUserStore = defineStore('user', {
       }
     },
     async restoreSession() {
+      if (this.initialized) {
+        return
+      }
+      const controller = new AbortController()
+      const timer = window.setTimeout(() => controller.abort(), RESTORE_SESSION_TIMEOUT_MS)
       try {
-        const res = await fetch(`${location.origin}/api/auth/session`, { credentials: 'include' })
+        const res = await fetch(`${location.origin}/api/auth/session`, {
+          credentials: 'include',
+          signal: controller.signal,
+        })
         if (res.status === 401) {
           this.logoutLocal()
           return
@@ -52,6 +63,7 @@ export const useUserStore = defineStore('user', {
       } catch {
         this.unavailable = true
       } finally {
+        window.clearTimeout(timer)
         this.initialized = true
       }
     },
