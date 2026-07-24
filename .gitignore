@@ -8,15 +8,11 @@ wheels/
 # IDE
 .idea
 
-# AI IDE 本地配置（不提交）；项目 Agent skills 例外（真源 .agents/skills，Cursor 软链）
-.cursor/*
-!.cursor/skills/
-!.cursor/skills/**
+# AI IDE 本地配置（不提交）
+.cursor/
 .claude/
 .codex/
-.agents/*
-!.agents/skills/
-!.agents/skills/**
+.agents/
 # docs：仅提交知识卡片，其余本地文档（prd/bug/TODO 等）不纳入版本库
 # docs/TODO.md 为本地工程清单，禁止提交
 docs/*
