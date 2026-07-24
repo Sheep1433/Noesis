@@ -142,6 +142,12 @@ class SandboxManager:
             "command": ["sleep", "infinity"],
             "volumes": volumes,
             "user": f"{self._sandbox_uid}:{self._sandbox_gid}",
+            # 数值 --user 时 Docker 常不设 HOME；缺省会导致 pip --user 写到 /.local
+            "environment": {
+                "HOME": "/home/sandbox",
+                "USER": "sandbox",
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            },
             "labels": {
                 "noesis.user_id": user_id,
                 "noesis.session_id": session_id,

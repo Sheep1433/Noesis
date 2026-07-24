@@ -76,19 +76,26 @@ function canArchiveDownload(key: string): boolean {
   return !!key && !/^users\/[^/]+$/.test(key)
 }
 
+function openContextMenu(node: SessionFsTreeNode, clientX: number, clientY: number) {
+  if (!canArchiveDownload(node.key)) {
+    return
+  }
+  contextMenuShow.value = false
+  contextMenuTarget.value = node
+  contextMenuX.value = clientX
+  contextMenuY.value = clientY
+  void nextTick(() => {
+    contextMenuShow.value = true
+  })
+}
+
 function onNodeContextMenu(node: SessionFsTreeNode, event: MouseEvent) {
   if (!canArchiveDownload(node.key)) {
     return
   }
   event.preventDefault()
   event.stopPropagation()
-  contextMenuShow.value = false
-  contextMenuTarget.value = node
-  contextMenuX.value = event.clientX
-  contextMenuY.value = event.clientY
-  void nextTick(() => {
-    contextMenuShow.value = true
-  })
+  openContextMenu(node, event.clientX, event.clientY)
 }
 
 function closeContextMenu() {
@@ -96,15 +103,13 @@ function closeContextMenu() {
   contextMenuTarget.value = null
 }
 
-async function handleContextMenuSelect(key: string) {
-  const target = contextMenuTarget.value
-  closeContextMenu()
-  if (key !== 'download' || !target || !props.sessionId || archiveDownloading.value) {
+async function downloadNode(node: SessionFsTreeNode) {
+  if (!canArchiveDownload(node.key) || !props.sessionId || archiveDownloading.value) {
     return
   }
   archiveDownloading.value = true
   try {
-    await downloadWorkspaceArchive(props.sessionId, target.key)
+    await downloadWorkspaceArchive(props.sessionId, node.key)
     message.success('已开始下载')
   } catch (e: unknown) {
     const err = e as Error
@@ -113,11 +118,25 @@ async function handleContextMenuSelect(key: string) {
     archiveDownloading.value = false
   }
 }
+
+async function handleContextMenuSelect(key: string) {
+  const target = contextMenuTarget.value
+  closeContextMenu()
+  if (key !== 'download' || !target) {
+    return
+  }
+  await downloadNode(target)
+}
+
+function onNodeDownload(node: SessionFsTreeNode) {
+  closeContextMenu()
+  void downloadNode(node)
+}
 </script>
 
 <template>
   <div v-if="nodes.length" class="workspace-file-tree">
-    <p class="workspace-file-tree__hint">右键或 Control+点按可下载</p>
+    <p class="workspace-file-tree__hint">右键、长按或点下载图标可下载</p>
     <n-dropdown
       trigger="manual"
       placement="bottom-start"
@@ -129,17 +148,21 @@ async function handleContextMenuSelect(key: string) {
       @select="handleContextMenuSelect"
       @clickoutside="closeContextMenu"
     />
-    <WorkspaceFileTreeNode
-      v-for="node in nodes"
-      :key="node.key"
-      :node="node"
-      :depth="0"
-      :selected-key="selectedKey"
-      :is-expanded="isExpanded"
-      :toggle-expand="toggleExpand"
-      :on-row-click="onRowClick"
-      :on-context-menu="onNodeContextMenu"
-    />
+    <div class="workspace-file-tree__body">
+      <WorkspaceFileTreeNode
+        v-for="node in nodes"
+        :key="node.key"
+        :node="node"
+        :depth="0"
+        :selected-key="selectedKey"
+        :can-download="canArchiveDownload"
+        :is-expanded="isExpanded"
+        :toggle-expand="toggleExpand"
+        :on-row-click="onRowClick"
+        :on-context-menu="onNodeContextMenu"
+        :on-download="onNodeDownload"
+      />
+    </div>
   </div>
 </template>
 
@@ -151,9 +174,18 @@ async function handleContextMenuSelect(key: string) {
 }
 
 .workspace-file-tree__hint {
+  position: sticky;
+  left: 0;
+  z-index: 1;
   margin: 0;
   padding: 0 8px 6px;
   font-size: 11px;
   color: var(--noesis-color-text-tertiary, #94a3b8);
+  background: var(--panel-bg, transparent);
+}
+
+.workspace-file-tree__body {
+  min-width: 100%;
+  width: max-content;
 }
 </style>

@@ -35,13 +35,37 @@ def test_exec_command_runs_bash_with_workdir() -> None:
     kwargs = api.exec_create.call_args.kwargs
     assert kwargs["workdir"] == "/workspace/s1"
     assert kwargs["cmd"] == ["/bin/bash", "-lc", "echo hi"]
+    assert kwargs["environment"]["HOME"] == "/home/sandbox"
 
 
 def test_exec_command_wraps_timeout() -> None:
     container = _make_container()
     exec_command(container, command="sleep 99", timeout=30)
     kwargs = container.client.api.exec_create.call_args.kwargs
-    assert kwargs["cmd"] == ["/bin/bash", "-lc", "timeout --signal=TERM 30 sleep 99"]
+    assert kwargs["cmd"] == [
+        "timeout",
+        "--signal=TERM",
+        "30",
+        "/bin/bash",
+        "-lc",
+        "sleep 99",
+    ]
+
+
+def test_exec_command_timeout_keeps_shell_builtins_and_chains() -> None:
+    """回归：timeout 不得直接 exec `cd`（builtin），须整段交给 bash。"""
+    container = _make_container()
+    cmd = "cd /workspace && node -e \"console.log(1)\""
+    exec_command(container, command=cmd, timeout=60)
+    kwargs = container.client.api.exec_create.call_args.kwargs
+    assert kwargs["cmd"] == [
+        "timeout",
+        "--signal=TERM",
+        "60",
+        "/bin/bash",
+        "-lc",
+        cmd,
+    ]
 
 
 def test_write_and_read_file_roundtrip() -> None:
