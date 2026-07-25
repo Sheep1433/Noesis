@@ -23,13 +23,13 @@ from typing import Any, Dict, List, Optional
 from langchain_core.documents import Document
 from qdrant_client.models import PointStruct
 
-from common.logging import logger
-from kb.chunk import chunk
-from kb.chunk.params import fixed_processing_params
-from kb.document_parse.parser import DocumentParser
-from kb.embedding import embedding_not_configured_message, get_embedding, is_embedding_configured
-from kb.retrieval import KbRetrievalService
-from kb.retrieval.payload import compute_content_hash, documents_to_points, hash_to_uuid
+from noesis.runtime.logging import logger
+from noesis_server.kb.chunk import chunk
+from noesis_server.kb.chunk.params import fixed_processing_params
+from noesis_server.kb.document_parse.parser import DocumentParser
+from noesis_server.kb.embedding import embedding_not_configured_message, get_embedding, is_embedding_configured
+from noesis_server.kb.retrieval import KbRetrievalService
+from noesis_server.kb.retrieval.payload import compute_content_hash, documents_to_points, hash_to_uuid
 
 RAG_DIR = Path(__file__).resolve().parent
 CASE_ROOT = RAG_DIR.parent
@@ -137,7 +137,7 @@ def build_points_for_upload(documents: List[Document], *, file_hash: str) -> Lis
 
 
 def upsert_points(collection_name: str, points: List[PointStruct]) -> int:
-    from services.qdrant_service import QdrantService
+    from noesis_server.kb.qdrant import QdrantService
 
     service = QdrantService()
     if not service.client:
@@ -182,7 +182,7 @@ def pick_relevant_by_keywords(
 
 
 def _ensure_eval_collections(*, reset: bool) -> None:
-    from services.qdrant_service import QdrantService, init_qdrant_client
+    from noesis_server.kb.qdrant import QdrantService, init_qdrant_client
 
     if not asyncio.run(init_qdrant_client()):
         raise RuntimeError("Qdrant 连接失败，无法入库 eval 文档")

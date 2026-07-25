@@ -3,10 +3,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kb.rerank.client import is_rerank_available, rerank_documents
+from noesis_server.kb.rerank.client import is_rerank_available, rerank_documents
 
 
-@patch("kb.rerank.client.ModelConfig")
+@patch("noesis_server.kb.rerank.client.ModelConfig")
 def test_is_rerank_available_requires_key_and_name(mock_cfg):
     mock_cfg.rerank_model_name = "gte-rerank-v2"
     mock_cfg.rerank_model_api_key = ""
@@ -15,9 +15,9 @@ def test_is_rerank_available_requires_key_and_name(mock_cfg):
     assert is_rerank_available() is True
 
 
-@patch("kb.rerank.client.httpx.Client")
-@patch("kb.rerank.client.is_rerank_available", return_value=True)
-@patch("kb.rerank.client.ModelConfig")
+@patch("noesis_server.kb.rerank.client.httpx.Client")
+@patch("noesis_server.kb.rerank.client.is_rerank_available", return_value=True)
+@patch("noesis_server.kb.rerank.client.ModelConfig")
 def test_rerank_documents_changes_order(mock_cfg, _avail, mock_client_cls):
     mock_cfg.rerank_model_name = "gte-rerank-v2"
     mock_cfg.rerank_model_api_key = "sk-test"
@@ -43,18 +43,18 @@ def test_rerank_documents_changes_order(mock_cfg, _avail, mock_client_cls):
     assert ranked[1] == (0, 0.2)
 
 
-@patch("kb.rerank.client.rerank_documents", side_effect=RuntimeError("api down"))
-@patch("kb.rerank.client.is_rerank_available", return_value=True)
-@patch("kb.retrieval.service.is_rerank_available", return_value=True)
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.rerank.client.rerank_documents", side_effect=RuntimeError("api down"))
+@patch("noesis_server.kb.rerank.client.is_rerank_available", return_value=True)
+@patch("noesis_server.kb.retrieval.service.is_rerank_available", return_value=True)
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 @patch.object(
-    __import__("kb.retrieval.service", fromlist=["KbRetrievalService"]).KbRetrievalService,
+    __import__("noesis_server.kb.retrieval.service", fromlist=["KbRetrievalService"]).KbRetrievalService,
     "_get_retrieval",
 )
 def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _conn, _svc_avail, _client_avail, _rerank):
     from langchain_core.documents import Document
 
-    from kb.retrieval import KbRetrievalService
+    from noesis_server.kb.retrieval import KbRetrievalService
 
     retrieval = MagicMock()
     retrieval.hybrid_search_with_scores.return_value = [
@@ -74,18 +74,18 @@ def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _conn, _svc_av
     assert hits[0].score >= hits[1].score or hits[0].file_name == "b.md"
 
 
-@patch("kb.retrieval.service.rerank_documents")
-@patch("kb.retrieval.service.is_rerank_available", return_value=True)
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.retrieval.service.rerank_documents")
+@patch("noesis_server.kb.retrieval.service.is_rerank_available", return_value=True)
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 @patch.object(
-    __import__("kb.retrieval.service", fromlist=["KbRetrievalService"]).KbRetrievalService,
+    __import__("noesis_server.kb.retrieval.service", fromlist=["KbRetrievalService"]).KbRetrievalService,
     "_get_retrieval",
 )
 def test_retrieval_caps_rerank_input(mock_get_retrieval, _conn, _avail, mock_rerank):
     """rerank 只吃 rerank_top_k 条，控制 API documents 计费。"""
     from langchain_core.documents import Document
 
-    from kb.retrieval import KbRetrievalService
+    from noesis_server.kb.retrieval import KbRetrievalService
 
     docs = [
         (Document(page_content=f"d{i}", metadata={"file_name": f"{i}.md", "point_id": str(i)}), float(i))

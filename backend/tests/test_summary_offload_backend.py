@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import ToolMessage
 
-from agent.backends.local_shell import create_local_shell_backend
-from agent.middlewares.summary_offload_middleware import (
+from noesis.backends.local_shell import create_local_shell_backend
+from noesis.middlewares.summary_offload_middleware import (
     _build_offload_file_path,
     _process_tool_message,
     _resolve_filesystem_backend,
@@ -57,8 +57,8 @@ def test_offload_writes_to_injected_disk_backend_and_is_readable() -> None:
 
 def test_offload_under_session_workspace_backend() -> None:
     """会话 backend 根为 workspace/ 时，卸载落在 workspace/summary_offload/。"""
-    from config import user_data_paths as paths
-    from config import user_data_paths as udp
+    from noesis.config import user_data_paths as paths
+    from noesis.config import user_data_paths as udp
 
     with tempfile.TemporaryDirectory() as tmp:
         users_root = Path(tmp) / "users"

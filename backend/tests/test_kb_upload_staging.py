@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from kb.document_parse.cached_parse import parse_file_cached
-from kb.document_parse.deepdoc_result import DeepDocBlock, DeepDocParseResult
-from kb.document_parse.source_name import apply_source_file_name
-from kb.document_parse.staging import sanitize_kb_filename, staging_path, write_staging
-from kb.rerank.client import is_rerank_available
+from noesis_server.kb.document_parse.cached_parse import parse_file_cached
+from noesis_server.kb.document_parse.deepdoc_result import DeepDocBlock, DeepDocParseResult
+from noesis_server.kb.document_parse.source_name import apply_source_file_name
+from noesis_server.kb.document_parse.staging import sanitize_kb_filename, staging_path, write_staging
+from noesis_server.kb.rerank.client import is_rerank_available
 
 
 def test_sanitize_kb_filename_strips_path():
@@ -23,7 +23,7 @@ def test_staging_path_under_data_dir():
 
 def test_write_staging_creates_file(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "kb.document_parse.staging.data_path",
+        "noesis_server.kb.document_parse.staging.data_path",
         lambda *parts: tmp_path.joinpath(*parts),
     )
     content = b"hello"
@@ -34,7 +34,7 @@ def test_write_staging_creates_file(tmp_path, monkeypatch):
 
 
 def test_apply_source_file_name_updates_parsed():
-    from kb.document_parse.models import ParsedFile
+    from noesis_server.kb.document_parse.models import ParsedFile
 
     parsed = ParsedFile(
         file_path="/tmp/tmpXXXX.md",
@@ -53,7 +53,7 @@ def test_apply_source_file_name_updates_parsed():
     assert updated.deepdoc_result.source_file_name == "真实需求.md"
 
 
-@patch("kb.document_parse.cached_parse.parse_file_with_deepdoc")
+@patch("noesis_server.kb.document_parse.cached_parse.parse_file_with_deepdoc")
 def test_parse_file_cached_uses_source_file_name(mock_parse, tmp_path):
     staging = tmp_path / "hash_真实.docx"
     staging.write_text("x", encoding="utf-8")
@@ -79,8 +79,8 @@ def test_parse_file_cached_uses_source_file_name(mock_parse, tmp_path):
 def test_rerank_api_key_falls_back_to_embedding():
     from unittest.mock import Mock
 
-    from config.env import _build_model
-    from config.yaml_config import load_app_yaml
+    from noesis.config.env import _build_model
+    from noesis.config.yaml_config import load_app_yaml
 
     secrets = Mock()
     secrets.rerank_model_api_key = ""
@@ -90,7 +90,7 @@ def test_rerank_api_key_falls_back_to_embedding():
     assert model.rerank_model_api_key == "sk-emb"
 
 
-@patch("kb.rerank.client.ModelConfig")
+@patch("noesis_server.kb.rerank.client.ModelConfig")
 def test_is_rerank_available_uses_config_key(mock_cfg):
     mock_cfg.rerank_model_name = "gte-rerank-v2"
     mock_cfg.rerank_model_api_key = "sk-emb"

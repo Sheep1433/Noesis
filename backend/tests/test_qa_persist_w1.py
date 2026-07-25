@@ -14,10 +14,10 @@ async def test_persist_assistant_passes_status_and_extra() -> None:
     cm.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("services.qa.helpers.AsyncSessionLocal", return_value=cm),
-        patch("services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as save_msg,
+        patch("noesis_server.services.qa.helpers.AsyncSessionLocal", return_value=cm),
+        patch("noesis_server.services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as save_msg,
     ):
-        from services.qa_service import _persist_assistant
+        from noesis_server.services.qa.helpers import _persist_assistant
 
         await _persist_assistant(
             {"version": 1, "parts": [{"type": "text", "id": "p1", "content": "x"}]},
@@ -42,11 +42,11 @@ async def test_persist_assistant_update_path_calls_update() -> None:
     cm.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("services.qa.helpers.AsyncSessionLocal", return_value=cm),
-        patch("services.qa.helpers.ChatService.update_assistant_message", new_callable=AsyncMock) as upd,
-        patch("services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as ins,
+        patch("noesis_server.services.qa.helpers.AsyncSessionLocal", return_value=cm),
+        patch("noesis_server.services.qa.helpers.ChatService.update_assistant_message", new_callable=AsyncMock) as upd,
+        patch("noesis_server.services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as ins,
     ):
-        from services.qa_service import _persist_assistant
+        from noesis_server.services.qa.helpers import _persist_assistant
 
         upd.return_value = True
         await _persist_assistant(
@@ -64,10 +64,10 @@ async def test_persist_assistant_update_path_calls_update() -> None:
 @pytest.mark.asyncio
 async def test_persist_assistant_skips_empty_parts_without_row_id() -> None:
     with (
-        patch("services.qa.helpers.AsyncSessionLocal") as mock_local,
-        patch("services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as save_msg,
+        patch("noesis_server.services.qa.helpers.AsyncSessionLocal") as mock_local,
+        patch("noesis_server.services.qa.helpers.ChatService.save_message", new_callable=AsyncMock) as save_msg,
     ):
-        from services.qa_service import _persist_assistant
+        from noesis_server.services.qa.helpers import _persist_assistant
 
         await _persist_assistant({"parts": []}, "s", "u", status="partial")
 

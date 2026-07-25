@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定四大 `qa_type` 对应的 Agent **产品行为与装配边界**：`COMMON_QA`、`SUPER_AGENT_QA`、`FAULT_OPERATION_QA`、`TEST_CASE_QA`。运行时路径/沙箱见 `agent-runtime`；HITL 策略见 `agent-hitl`；平台路由见 `platform-chat`。实现目录：`agent/profiles/`、`agent/case_generate/`。
+本能力规定四大 `qa_type` 对应的 Agent **产品行为与装配边界**：`COMMON_QA`、`SUPER_AGENT_QA`、`FAULT_OPERATION_QA`、`TEST_CASE_QA`。运行时路径/沙箱见 `agent-runtime`；HITL 策略见 `agent-hitl`；平台路由见 `platform-chat`。实现目录：`packages/harness/noesis/agents/`、`packages/harness/noesis/agents/case_generate/`。
 
 ## Requirements
 

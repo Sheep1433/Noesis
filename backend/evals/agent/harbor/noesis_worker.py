@@ -1,10 +1,9 @@
-"""Harbor 子进程 Worker：在 backend venv 内运行 Noesis Agent。"""
+"""Harbor 子进程 Worker：经 harness factory + stream_agent_events（与线上同核）。"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 import uuid
@@ -13,18 +12,18 @@ from pathlib import Path
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage
 
-from agent.profiles.base_agent import DEFAULT_RECURSION_LIMIT
-from agent.factory import create_noesis_agent
-from config.checkpointer import get_checkpointer
+from noesis.config.checkpointer import get_checkpointer
 from evals.agent.harbor.harbor_proxy_client import resolve_container_working_dir_via_proxy
-from evals.agent.harbor.proxy_backend import ProxyHarborBackend
 from evals.agent.harbor.noesis_runner import (
     HarborRunCollector,
     build_harbor_system_prompt,
     resolve_harbor_llm,
     write_run_artifacts,
 )
+from evals.agent.harbor.proxy_backend import ProxyHarborBackend
 from evals.bootstrap import eval_runtime
+from noesis.factory import create_noesis_agent
+from noesis.runtime.stream import DEFAULT_RECURSION_LIMIT, stream_agent_events
 
 
 async def _run_worker(
@@ -51,6 +50,7 @@ async def _run_worker(
         model_name=resolved_model_name,
     )
     collector.add_user_step()
+    message_id = f"msg_{uuid.uuid4().hex[:16]}"
 
     async with eval_runtime():
         agent = create_noesis_agent(
@@ -61,16 +61,28 @@ async def _run_worker(
             extra_middleware=[TodoListMiddleware()],
             model=llm,
         )
-        config = {
-            "configurable": {"thread_id": session_id},
-            "recursion_limit": DEFAULT_RECURSION_LIMIT,
+        stream_args = {
+            "input": {"messages": [HumanMessage(content=instruction)]},
+            "config": {
+                "configurable": {"thread_id": session_id},
+                "recursion_limit": DEFAULT_RECURSION_LIMIT,
+            },
+            "langfuse_session_id": session_id,
+            "qa_type": "HARBOR_EVAL",
         }
         try:
-            async for event in agent.astream_events(
-                {"messages": [HumanMessage(content=instruction)]},
-                config=config,
-                version="v2",
+            async for event in stream_agent_events(
+                agent,
+                stream_args,
+                task_id=session_id,
+                message_id=message_id,
             ):
+                if isinstance(event, dict) and str(event.get("type", "")).startswith(
+                    "__tw_"
+                ):
+                    if event.get("type") == "__tw_error__":
+                        collector.error = str(event.get("content") or "stream error")
+                    continue
                 collector.consume(event)
         except Exception as exc:
             collector.error = str(exc)

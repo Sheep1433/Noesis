@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from services.qa_service import QaService, _ActiveStreamState
-from domain.chat.message_builder import AssistantMessageBuilder
-from domain.chat.streaming.failure_notice import (
+from noesis_server.services.qa import QaService
+from noesis_server.services.qa.helpers import _ActiveStreamState
+from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
+from noesis_server.domain.chat.streaming.failure_notice import (
     USER_STOP_NOTICE_PLAIN,
     USER_STOP_TOOL_ERROR,
     append_disconnect_partial_content,
@@ -80,8 +81,8 @@ async def test_stop_chat_sets_user_stopped_and_persists() -> None:
     user = SimpleNamespace(user_id="u1")
 
     try:
-        with patch("services.qa.service._persist_assistant", mock_persist):
-            with patch("services.qa.service.common_agent.cancel_task", mock_cancel):
+        with patch("noesis_server.services.qa.service._persist_assistant", mock_persist):
+            with patch("noesis_server.services.qa.service.common_agent.cancel_task", mock_cancel):
                 ok, msg = await QaService.stop_chat(session_id, "COMMON_QA", user)
 
         assert ok is True

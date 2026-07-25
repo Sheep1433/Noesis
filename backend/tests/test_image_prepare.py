@@ -5,7 +5,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from domain.chat.attachments.image_prepare import (
+from noesis.runtime.attachments.image_prepare import (
     _PREVIEW_MAX_BASE64_LEN,
     build_image_preview_base64,
 )

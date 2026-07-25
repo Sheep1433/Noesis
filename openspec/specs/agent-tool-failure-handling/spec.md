@@ -3,9 +3,7 @@
 ## Purpose
 
 本能力规定 Agent 工具调用的**双层语义**：调用层（invoke）失败分类与用户可见脱敏文案；执行层（outcome）表达命令退出、超时、空输出等「工具已返回」场景。后端分类与解析供 middleware、SSE 桥接、落库共用；**前端 `tool-output-available` 展示契约见 `platform-chat` 规格**。
-
 ## Requirements
-
 ### Requirement: 本规格 SHALL 限定适用范围
 
 本规格 **SHALL** 仅约束同时满足下列条件的工具结束路径：
@@ -340,3 +338,12 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 - **WHEN** 单测断言 E-03 与 S-07
 - **THEN** E-03 SHALL 仅 `status=error` + `execution_timeout`；S-07 SHALL 仅 `status=success` + `outcome=timed_out`
+
+### Requirement: 工具失败类型归属 harness
+
+工具失败分类与异常类型的权威实现 SHALL 位于 `noesis.errors.tool_failure`。平台 SSE/Delivery 映射层 SHALL 直接使用该路径，**SHALL NOT** re-export 或维护第二份互斥分类表。
+
+#### Scenario: 导入路径
+
+- **WHEN** middleware 或 web tools 抛出基础设施失败
+- **THEN** SHALL 使用 `noesis.errors.tool_failure.ToolInfrastructureError`

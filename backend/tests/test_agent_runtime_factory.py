@@ -4,8 +4,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from agent.factory import build_noesis_runtime_middleware
-from agent.middlewares import (
+from noesis.factory import build_noesis_runtime_middleware
+from noesis.middlewares import (
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
     SessionClockMiddleware,
@@ -14,7 +14,7 @@ from agent.middlewares import (
 )
 from langchain_core.messages import AIMessage
 
-from agent.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware as DTM
+from noesis.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware as DTM
 
 
 def test_runtime_stack_includes_guards_when_enabled() -> None:
@@ -28,8 +28,8 @@ def test_runtime_stack_includes_guards_when_enabled() -> None:
     summary_mw = SummarizationOffloadMiddleware(MagicMock())
 
     with (
-        patch("agent.factory.ModelConfig", cfg),
-        patch("agent.factory.create_summary_offload_middleware", return_value=summary_mw),
+        patch("noesis.factory.ModelConfig", cfg),
+        patch("noesis.factory.create_summary_offload_middleware", return_value=summary_mw),
     ):
         stack = build_noesis_runtime_middleware(include_tool_call_limits=False)
 
@@ -50,8 +50,8 @@ def test_runtime_stack_respects_disable_flags() -> None:
         loop_detection_enabled=False,
     )
     with (
-        patch("agent.factory.ModelConfig", cfg),
-        patch("agent.factory.create_summary_offload_middleware", return_value=None),
+        patch("noesis.factory.ModelConfig", cfg),
+        patch("noesis.factory.create_summary_offload_middleware", return_value=None),
     ):
         stack = build_noesis_runtime_middleware(include_tool_call_limits=False)
 

@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agent.backends.local_shell import create_local_shell_backend
-from config import user_data_paths as paths
-from config import user_data_paths as user_paths
+from noesis.backends.local_shell import create_local_shell_backend
+from noesis.config import user_data_paths as paths
+from noesis.config import user_data_paths as user_paths
 
 
 @pytest.fixture

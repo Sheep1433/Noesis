@@ -8,17 +8,17 @@ from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
-from agent.middlewares.context_metrics import (
+from noesis.middlewares.context_metrics import (
     build_context_snapshot,
     build_context_snapshot_from_request,
     compute_used_percentage,
 )
-from agent.middlewares.context_metrics_middleware import (
+from noesis.middlewares.context_metrics_middleware import (
     ContextMetricsMiddleware,
     ContextMetricsRegistry,
     resolve_session_id_for_request,
 )
-from llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
+from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
 
 
 def _runtime_with_thread(thread_id: str) -> MagicMock:
@@ -27,9 +27,9 @@ def _runtime_with_thread(thread_id: str) -> MagicMock:
     return runtime
 
 
-@patch("llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_resolve_context_max_tokens_from_global_config(mock_resolve) -> None:
-    from llm.catalog import ModelCatalogEntry
+    from noesis.llm.catalog import ModelCatalogEntry
 
     mock_resolve.return_value = ModelCatalogEntry(
         id="default",
@@ -41,7 +41,7 @@ def test_resolve_context_max_tokens_from_global_config(mock_resolve) -> None:
         limit=None,
     )
     cfg = SimpleNamespace(context_max_input_tokens=64000)
-    with patch("llm.model_limits.ModelConfig", cfg):
+    with patch("noesis.llm.model_limits.ModelConfig", cfg):
         assert resolve_context_max_tokens() == 64000
 
 
@@ -51,9 +51,9 @@ def test_compute_used_percentage_minimum_one_when_nonzero() -> None:
     assert compute_used_percentage(68_000, 128_000) == 53
 
 
-@patch("llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
-    from llm.catalog import ModelCatalogEntry
+    from noesis.llm.catalog import ModelCatalogEntry
 
     mock_resolve.return_value = ModelCatalogEntry(
         id="default",
@@ -65,18 +65,19 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
         limit=None,
     )
     cfg = SimpleNamespace(context_max_input_tokens=0)
-    with patch("llm.model_limits.ModelConfig", cfg):
+    with patch("noesis.llm.model_limits.ModelConfig", cfg):
         assert resolve_context_max_tokens() == DEFAULT_CONTEXT_TOKENS
 
 
-@patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=1000)
-def test_build_context_snapshot_percentage(mock_resolve) -> None:
+@patch("noesis.middlewares.context_metrics.resolve_context_max_tokens")
+def test_build_context_snapshot_percentage(mock_require) -> None:
+    mock_require.return_value = 1000
     messages = [SystemMessage(content="x" * 4000), HumanMessage(content="y" * 4000)]
     snap = build_context_snapshot(messages, model_id="flash")
     assert snap["max_tokens"] == 1000
     assert snap["current_tokens"] > 0
     assert 0 <= snap["used_percentage"] <= 100
-    mock_resolve.assert_called_once_with("flash")
+    mock_require.assert_called_once_with("flash")
 
 
 def test_build_context_snapshot_from_request_includes_system_and_tools() -> None:
@@ -94,10 +95,13 @@ def test_build_context_snapshot_from_request_includes_system_and_tools() -> None
         tools=[demo_search],
         runtime=_runtime_with_thread("sess-tools"),
     )
-    with patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=128000) as mock_resolve:
+    with patch(
+        "noesis.middlewares.context_metrics.resolve_context_max_tokens"
+    ) as mock_require:
+        mock_require.return_value = 128000
         snap = build_context_snapshot_from_request(request, model_id="nemotron")
     assert snap["current_tokens"] == 900
-    mock_resolve.assert_called_once_with("nemotron")
+    mock_require.assert_called_once_with("nemotron")
     model.get_num_tokens.assert_called_once()
     payload = model.get_num_tokens.call_args[0][0]
     assert "system prompt" in payload
@@ -137,8 +141,8 @@ def test_context_metrics_middleware_records_registry() -> None:
         runtime=_runtime_with_thread("sess-ctx-1"),
     )
     with (
-        patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg),
-        patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=200_000),
+        patch("noesis.middlewares.context_metrics_middleware.ModelConfig", cfg),
+        patch("noesis.llm.model_limits.resolve_context_max_tokens", return_value=200_000),
     ):
         mw.wrap_model_call(request, lambda req: MagicMock())
     snap = ContextMetricsRegistry.peek("sess-ctx-1")
@@ -156,6 +160,6 @@ def test_context_metrics_middleware_skips_when_display_disabled() -> None:
         messages=[HumanMessage(content="hello")],
         runtime=_runtime_with_thread("sess-ctx-2"),
     )
-    with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
+    with patch("noesis.middlewares.context_metrics_middleware.ModelConfig", cfg):
         mw.wrap_model_call(request, lambda req: MagicMock())
     assert ContextMetricsRegistry.peek("sess-ctx-2") is None

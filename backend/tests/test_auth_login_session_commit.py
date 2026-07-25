@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from starlette.requests import Request
 
-from api.auth_api import login, register
-from schemas.login_vo import UserLogin, UserRegistrationRequest
+from noesis_server.api.auth_api import login, register
+from noesis_server.schemas.login_vo import UserLogin, UserRegistrationRequest
 
 
 class _ExpiredAfterSessionCreateUser:
@@ -48,8 +48,8 @@ async def test_login_reads_user_fields_before_session_commit():
             csrf_token="csrf-token",
         )
 
-    with patch("api.auth_api.LoginService.authenticate_user", new=AsyncMock(return_value=user)), patch(
-        "api.auth_api.SessionService.create", side_effect=create_session,
+    with patch("noesis_server.api.auth_api.LoginService.authenticate_user", new=AsyncMock(return_value=user)), patch(
+        "noesis_server.api.auth_api.SessionService.create", side_effect=create_session,
     ):
         response = await login(request, SimpleNamespace(username="alice", password="secret"), AsyncMock())
 
@@ -68,8 +68,8 @@ async def test_register_issues_session_cookie():
     )
     body = UserRegistrationRequest(username="newuser", password="secret1", invite_code="123456")
 
-    with patch("api.auth_api.LoginService.register_with_invite", new=AsyncMock(return_value=user)), patch(
-        "api.auth_api.SessionService.create", new=AsyncMock(return_value=issued)
+    with patch("noesis_server.api.auth_api.LoginService.register_with_invite", new=AsyncMock(return_value=user)), patch(
+        "noesis_server.api.auth_api.SessionService.create", new=AsyncMock(return_value=issued)
     ):
         response = await register(request, body, AsyncMock())
 

@@ -9,15 +9,15 @@ import pytest
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.middleware.memory import MemoryMiddleware
 
-from agent.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
-from agent.middlewares.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from agent.middlewares.memory_sync_middleware import MemorySyncMiddleware
-from agent.profiles.super_agent import (
+from noesis.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from noesis.middlewares.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
+from noesis.middlewares.memory_sync_middleware import MemorySyncMiddleware
+from noesis.agents.super_agent import (
     _MEMORY_SOURCES,
     _build_memory_middleware,
     _build_task_worker_subagents,
 )
-from constants.code_enum import IntentEnum
+from noesis_server.constants.code_enum import IntentEnum
 
 
 def test_memory_prompt_contains_agent_memory_placeholder() -> None:

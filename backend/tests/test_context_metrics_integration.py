@@ -9,9 +9,9 @@ import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent.factory import create_noesis_agent
-from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
-from config.checkpointer import close_checkpointer, get_checkpointer, init_checkpointer
+from noesis.factory import create_noesis_agent
+from noesis.middlewares.context_metrics_middleware import ContextMetricsRegistry
+from noesis.config.checkpointer import close_checkpointer, get_checkpointer, init_checkpointer
 
 
 class _FakeLLM(GenericFakeChatModel):
@@ -27,7 +27,7 @@ class _FakeLLM(GenericFakeChatModel):
 async def test_agent_stream_writes_context_registry_by_thread_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from config.env import get_config
+    from noesis.config.env import get_config
 
     get_config.get_checkpoint_config.cache_clear()
     await close_checkpointer()
@@ -47,10 +47,10 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
 
     try:
         with (
-            patch("agent.factory.ModelConfig", cfg),
-            patch("agent.factory.get_llm", return_value=fake_llm),
-            patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg),
-            patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=128000),
+            patch("noesis.factory.ModelConfig", cfg),
+            patch("noesis.llm.factory.get_llm", return_value=fake_llm),
+            patch("noesis.middlewares.context_metrics_middleware.ModelConfig", cfg),
+            patch("noesis.llm.model_limits.resolve_context_max_tokens", return_value=128000),
         ):
             agent = create_noesis_agent(
                 tools=[],

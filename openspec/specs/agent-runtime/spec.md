@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定 Agent **运行时文件系统与沙箱**：宿主机 `.data/users/` 布局、Agent/Shell 共用的绝对路径坐标系（`/workspace`、`/skills/public|personal`、`/memory`）、backend 工厂（docker / local_shell）、Skills 只读挂载与用户 ZIP、用户记忆、以及 web_search / web_fetch。代码锚点：`config/user_data_paths.py`、`agent/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`。
+本能力规定 Agent **运行时文件系统与沙箱**：宿主机 `.data/users/` 布局、Agent/Shell 共用的绝对路径坐标系（`/workspace`、`/skills/public|personal`、`/memory`）、backend 工厂（docker / local_shell）、Skills 只读挂载与用户 ZIP、用户记忆、以及 web_search / web_fetch。代码锚点：`packages/harness/noesis/config/user_data_paths.py`、`packages/harness/noesis/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`。
 
 ## 路径命名
 

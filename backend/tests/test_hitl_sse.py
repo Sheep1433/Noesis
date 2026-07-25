@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from domain.chat.streaming.hitl import build_hitl_required_event, extract_interrupt_payload, resolve_hitl_kind
-from domain.chat.message_builder import AssistantMessageBuilder
-from domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.runtime.hitl import build_hitl_required_event, extract_interrupt_payload, resolve_hitl_kind
+from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
+from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 
 
 def test_extract_interrupt_from_on_chain_stream() -> None:

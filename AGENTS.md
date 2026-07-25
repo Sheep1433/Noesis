@@ -33,12 +33,12 @@ Noesis/
 | 容器部署 | `deploy/docker-compose.yml`、`deploy/backend/Dockerfile`、`deploy/frontend/Dockerfile` |
 | 前端应用 | `frontend/src/main.ts`、`frontend/src/views/chat.vue` |
 | 前端 SSE | `frontend/src/views/chat/useSSEStream.ts` |
-| 后端启动 | `backend/app.py`、`backend/server.py` |
-| 问答编排 | `backend/services/qa_service.py` |
-| Agent 工厂 | `backend/agent/factory.py` |
-| 场景入口 | `backend/agent/profiles/`（Super / QA / 故障 / MCP） |
-| SSE 桥接 | `backend/domain/chat/streaming/langgraph_sse.py` |
-| 配置 | `backend/config/env.py` + `backend/config.yaml` |
+| 后端启动 | `backend/app.py`、`backend/noesis_server/server.py` |
+| 问答编排 | `backend/noesis_server/services/qa/` |
+| Agent 工厂 | `backend/packages/harness/noesis/factory.py` |
+| 场景入口 | `backend/packages/harness/noesis/agents/`（Super / QA / 故障 / MCP / Case Generate） |
+| SSE 桥接 | `backend/noesis_server/domain/chat/streaming/langgraph_sse.py` |
+| 配置 | `backend/packages/harness/noesis/config/env.py` + `backend/config.yaml` |
 
 ## 跨端技术要点
 
@@ -162,4 +162,3 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 - 方案变更同步更新 `docs/prd/`，单文件演进，不做版本对比
 - 多次未解决的问题记录到 `docs/debugging/`（现象、根因、排查、方案）
 - 高关注区：SSE 持久化、Qdrant 异常、配置硬编码、JWT/DB 默认密钥、MCP 远程执行
-

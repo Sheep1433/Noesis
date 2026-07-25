@@ -12,7 +12,7 @@ from evals.compression.driver import compress_fixture_messages, parse_fixture_me
 from evals.compression.fixture_loader import filter_fixtures, list_fixture_ids, load_fixture, load_probes
 from evals.compression.grader import grade_single_probe
 from evals.langfuse_env import eval_langfuse_run
-from domain.observability.langfuse import eval_langfuse_observation
+from noesis_server.infrastructure.observability.langfuse import eval_langfuse_observation
 from evals.compression.report import (
     build_summary,
     results_dir_for_tag,

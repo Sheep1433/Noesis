@@ -6,13 +6,13 @@ from unittest.mock import patch
 
 import pytest
 
-from agent.backends.docker_exec import DockerExecSandboxBackend
-from agent.profiles.fault_operation_agent import FaultOperationAgent
+from noesis.backends.docker_exec import DockerExecSandboxBackend
+from noesis.agents.fault_operation import FaultOperationAgent
 
 
 def test_workspace_backend_root_dir_matches_session(tmp_path: Path) -> None:
-    from config import user_data_paths as paths
-    from config import user_data_paths as udp
+    from noesis.config import user_data_paths as paths
+    from noesis.config import user_data_paths as udp
 
     users_root = tmp_path / "users"
 
@@ -29,7 +29,7 @@ def test_workspace_backend_root_dir_matches_session(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_run_agent_without_session_id_does_not_write_global_fault_ops(tmp_path: Path) -> None:
-    from config import user_data_paths as udp
+    from noesis.config import user_data_paths as udp
 
     users_root = tmp_path / "users"
     agent = FaultOperationAgent()

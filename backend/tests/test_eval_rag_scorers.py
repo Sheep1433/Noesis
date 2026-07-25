@@ -1,6 +1,6 @@
 """RAG Recall@K scorer（mock retrieval_trace，无 Qdrant）。"""
 
-from agent.case_generate.rag import (
+from noesis.agents.case_generate.rag import (
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
 )

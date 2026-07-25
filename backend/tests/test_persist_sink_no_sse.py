@@ -1,8 +1,8 @@
 """无 SseDelivery 时 PersistSink 仍可得出终态决策。"""
 from __future__ import annotations
 
-from domain.chat.delivery.events import RunCompleted, WireFrame
-from domain.chat.delivery.persist_sink import PersistSink
+from noesis_server.domain.chat.delivery.events import RunCompleted, WireFrame
+from noesis_server.domain.chat.delivery.persist_sink import PersistSink
 
 
 def test_persist_sink_without_sse_subscriber() -> None:

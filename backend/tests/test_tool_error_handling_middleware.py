@@ -9,8 +9,8 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 from unittest.mock import MagicMock
 
-from agent.middlewares.tool_error_handling_middleware import ToolErrorHandlingMiddleware
-from domain.chat.streaming.tool_failure import (
+from noesis.middlewares.tool_error_handling_middleware import ToolErrorHandlingMiddleware
+from noesis.errors.tool_failure import (
     ToolFailureCategory,
     ToolInfrastructureError,
 )

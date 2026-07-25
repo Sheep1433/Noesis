@@ -1,9 +1,9 @@
 import uvicorn
-from server import app, AppConfig  # noqa: F401
+from noesis_server.server import app, AppConfig  # noqa: F401
 
 
 if __name__ == '__main__':
-    from common.sandbox_runner_launcher import ensure_sandbox_runner_process
+    from noesis_server.bootstrap.sandbox_runner import ensure_sandbox_runner_process
 
     ensure_sandbox_runner_process()
     uvicorn.run(

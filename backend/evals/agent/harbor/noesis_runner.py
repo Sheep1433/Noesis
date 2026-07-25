@@ -10,10 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.prompts.execution import build_execution_sections
-from config.env import ModelConfig
-from llm import get_llm
-from llm.factory import _build_chat_model
+from noesis.prompts.execution import build_execution_sections
+from noesis.config.env import ModelConfig
+from noesis.llm import get_llm
+from noesis.llm.factory import _build_chat_model
 
 _AGENT_VERSION = "0.1.0"
 _DEFAULT_MODEL = "opencode/deepseek-v4-flash-free"
@@ -54,7 +54,7 @@ def resolve_harbor_llm(model_name: str | None):
                 model_api_key=api_key,
             )
     if normalized:
-        from llm.catalog import get_model_catalog
+        from noesis.llm.catalog import get_model_catalog
 
         catalog_ids = {entry.id for entry in get_model_catalog()}
         if normalized in catalog_ids:
@@ -223,5 +223,4 @@ def write_run_artifacts(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-
 

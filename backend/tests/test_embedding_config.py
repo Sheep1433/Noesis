@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from kb.chunk import chunk
-from kb.document_parse.parser import DocumentParser
-from kb.embedding.embedding import (
+from noesis_server.kb.chunk import chunk
+from noesis_server.kb.document_parse.parser import DocumentParser
+from noesis_server.kb.embedding.embedding import (
     embedding_not_configured_message,
     get_embedding,
     is_embedding_configured,
@@ -30,29 +30,29 @@ def _model_cfg(**overrides):
 
 
 def test_is_embedding_configured_requires_all_fields() -> None:
-    with patch("kb.embedding.embedding.ModelConfig", _model_cfg()):
+    with patch("noesis_server.kb.embedding.embedding.ModelConfig", _model_cfg()):
         assert is_embedding_configured() is True
 
-    with patch("kb.embedding.embedding.ModelConfig", _model_cfg(embedding_model_api_key="")):
+    with patch("noesis_server.kb.embedding.embedding.ModelConfig", _model_cfg(embedding_model_api_key="")):
         assert is_embedding_configured() is False
 
 
 def test_is_vlm_configured_requires_all_fields() -> None:
-    with patch("kb.embedding.embedding.ModelConfig", _model_cfg()):
+    with patch("noesis_server.kb.embedding.embedding.ModelConfig", _model_cfg()):
         assert is_vlm_configured() is True
 
-    with patch("kb.embedding.embedding.ModelConfig", _model_cfg(vlm_model_api_key="")):
+    with patch("noesis_server.kb.embedding.embedding.ModelConfig", _model_cfg(vlm_model_api_key="")):
         assert is_vlm_configured() is False
 
 
 def test_get_embedding_raises_when_not_configured() -> None:
-    with patch("kb.embedding.embedding.ModelConfig", _model_cfg(embedding_model_api_key="")):
+    with patch("noesis_server.kb.embedding.embedding.ModelConfig", _model_cfg(embedding_model_api_key="")):
         with pytest.raises(ValueError, match="未配置 Embedding"):
             get_embedding()
 
 
 def test_get_embedding_dashscope_compat_kwargs() -> None:
-    with patch("kb.embedding.embedding.ModelConfig", _model_cfg()):
+    with patch("noesis_server.kb.embedding.embedding.ModelConfig", _model_cfg()):
         with patch("langchain_openai.OpenAIEmbeddings") as mock_cls:
             mock_cls.return_value = object()
             get_embedding()
@@ -66,7 +66,7 @@ def test_get_embedding_dashscope_compat_kwargs() -> None:
 
 def test_get_embedding_dashscope_batch_size() -> None:
     with patch(
-        "kb.embedding.embedding.ModelConfig",
+        "noesis_server.kb.embedding.embedding.ModelConfig",
         _model_cfg(embedding_model_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"),
     ):
         with patch("langchain_openai.OpenAIEmbeddings") as mock_cls:
@@ -83,8 +83,8 @@ def test_get_embedding_dashscope_batch_size() -> None:
 
 def test_chunk_warns_when_embedding_not_configured() -> None:
     with (
-        patch("kb.chunk.chunker.is_embedding_configured", return_value=False),
-        patch("kb.chunk.chunker.logger.warning") as warn,
+        patch("noesis_server.kb.chunk.chunker.is_embedding_configured", return_value=False),
+        patch("noesis_server.kb.chunk.chunker.logger.warning") as warn,
     ):
         docs = chunk("# Title\n\nhello", effective_params={"chunk_size": 200, "chunk_overlap": 0})
 
@@ -94,5 +94,5 @@ def test_chunk_warns_when_embedding_not_configured() -> None:
 
 def test_replace_images_skips_silently_when_vlm_not_configured() -> None:
     md = "![alt](data:image/png;base64,QUJD)"
-    with patch("kb.embedding.is_vlm_configured", return_value=False):
+    with patch("noesis_server.kb.embedding.is_vlm_configured", return_value=False):
         assert DocumentParser._replace_images_with_descriptions(md) == md

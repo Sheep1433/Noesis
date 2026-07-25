@@ -9,8 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from agent.profiles.super_agent import SuperAgent
-from config.user_data_paths import ensure_workspace_dir
+from noesis.agents.super_agent import SuperAgent
+from noesis.config.user_data_paths import ensure_workspace_dir
 from evals.bootstrap import eval_runtime
 
 DEFAULT_TIME_BUDGET_SECONDS = 600
@@ -65,7 +65,7 @@ async def _run_async(
     time_budget_seconds: int,
 ) -> StreamCollector:
     ensure_workspace_dir(user_id, session_id)
-    async with eval_runtime():
+    async with eval_runtime(no_attachments=True):
         agent = SuperAgent()
         user = SimpleNamespace(user_id=user_id)
         collector = StreamCollector()

@@ -5,19 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from agent.backends.memory import UserMemoryBackend
-from config.user_data_paths import (
+from noesis.backends.memory import UserMemoryBackend
+from noesis.config.user_data_paths import (
     ensure_user_memory_files,
     get_user_channels_path,
     get_user_daily_memory_path,
     get_user_memory_dir,
 )
-from services.messaging_channel_service import MessagingChannelService
-from services.user_memory_service import UserMemoryService
+from noesis_server.services.messaging_channel_service import MessagingChannelService
+from noesis_server.services.user_memory_service import UserMemoryService
 
 
 def test_user_memory_read_write_same_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("config.user_data_paths._USERS_ROOT", tmp_path / "users")
+    monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     uid = "u-mem-1"
     ensure_user_memory_files(uid)
     written = UserMemoryService.write_file(uid, "USER.md", "# hello\n")
@@ -28,13 +28,13 @@ def test_user_memory_read_write_same_disk(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_user_memory_rejects_illegal_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("config.user_data_paths._USERS_ROOT", tmp_path / "users")
+    monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     with pytest.raises(ValueError, match="非法记忆文件名"):
         UserMemoryService.read_file("u1", "channels.json")
 
 
 def test_daily_memory_path_and_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("config.user_data_paths._USERS_ROOT", tmp_path / "users")
+    monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     uid = "u-l2"
     ensure_user_memory_files(uid)
     assert get_user_memory_dir(uid).is_dir()
@@ -47,7 +47,7 @@ def test_daily_memory_path_and_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 def test_agent_memory_backend_cannot_write_channels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("config.user_data_paths._USERS_ROOT", tmp_path / "users")
+    monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     uid = "u-ch"
     ensure_user_memory_files(uid)
     agents = tmp_path / "users" / uid / "AGENTS.md"
@@ -61,7 +61,7 @@ def test_agent_memory_backend_cannot_write_channels(
 
 
 def test_channels_token_masked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("config.user_data_paths._USERS_ROOT", tmp_path / "users")
+    monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     uid = "u-tg"
     item = MessagingChannelService.create_channel(
         uid,

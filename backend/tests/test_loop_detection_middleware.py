@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from agent.middlewares.loop_detection_middleware import (
+from noesis.middlewares.loop_detection_middleware import (
     _HARD_STOP_MSG,
     _WARNING_MSG,
     LoopDetectionMiddleware,

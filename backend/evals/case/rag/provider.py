@@ -16,9 +16,9 @@ _BACKEND = Path(__file__).resolve().parents[3]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from agent.case_generate.case_graph import _build_scene_cases_prompt
-from agent.case_generate.rag import build_scene_rag_context
-from config.env import QdrantConfig
+from noesis.agents.case_generate.case_graph import _build_scene_cases_prompt
+from noesis.agents.case_generate.rag import build_scene_rag_context
+from noesis.config.env import QdrantConfig
 from evals.case.rag.ingest import eval_requirement_collection, eval_test_case_collection
 from evals.case.shared.provider_common import eval_run_id, resolve_document_context, tracing_note
 from evals.langfuse_env import eval_langfuse_run
@@ -46,7 +46,7 @@ def _resolve_item(context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _ensure_qdrant() -> None:
-    from services.qdrant_service import init_qdrant_client
+    from noesis_server.kb.qdrant import init_qdrant_client
 
     if not asyncio.run(init_qdrant_client()):
         raise RuntimeError(

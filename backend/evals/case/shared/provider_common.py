@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from config.env import LangfuseConfig
+from noesis.config.env import LangfuseConfig
 from evals.langfuse_env import load_eval_langfuse_settings
 
 
