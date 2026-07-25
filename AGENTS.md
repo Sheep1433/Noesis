@@ -48,7 +48,7 @@ Noesis/
 |-------|------|---------|------|
 | GeneralQAAgent | `create_noesis_agent` | RAG hybrid 检索 | 智能问答 |
 | FaultOperationAgent | `create_noesis_agent` | MCP | 故障运维 |
-| DeepResearchAgent | `create_noesis_agent` | 文件系统 + Skills | 深度研究 |
+| SuperAgent | `create_noesis_agent` | 文件系统 + Skills + 子 Agent | 深度研究 / 通用复杂任务 |
 | CaseCoordinator | LangGraph `StateGraph` | 自定义 workflow | 测试用例生成 |
 | SimpleMCPAgent | `create_noesis_agent` | MCP | 本地调试 |
 
@@ -64,7 +64,7 @@ Noesis/
 
 ### 认证
 
-Token 存 `sessionStorage`；路由 `meta.requiresAuth`；401 跳转登录。
+认证使用 Cookie Session + CSRF；路由 `meta.requiresAuth`；401 跳转登录。
 
 ## 开发验证
 
