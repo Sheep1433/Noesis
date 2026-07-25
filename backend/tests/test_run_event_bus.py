@@ -5,9 +5,9 @@ import asyncio
 
 import pytest
 
-from domain.chat.delivery.bus import RunEventBus
-from domain.chat.delivery.events import RunCompleted, WireFrame
-from domain.chat.delivery.sse import iter_sse_from_bus
+from noesis_server.domain.chat.delivery.bus import RunEventBus
+from noesis_server.domain.chat.delivery.events import RunCompleted, WireFrame
+from noesis_server.domain.chat.delivery.sse import iter_sse_from_bus
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,7 @@
 | Composer / 上传 / @ | `chat-composer` | `agent-runtime`（路径） |
 | 工作区 / 沙箱 / 记忆 | `agent-runtime` | `agent-profiles` |
 | HITL | `agent-hitl` | `agent-delivery`（通道 resume） |
-| 某一种 qa_type | `agent-profiles` | 对应实现 `agent/profiles/` |
+| 某一种 qa_type | `agent-profiles` | 对应实现 `packages/harness/noesis/agents/` |
 | 知识库 | `knowledge-base` | `docs/prd/knowledge-base/` |
 | 登录 / DB | `user-platform` | `container-deployment` |
 
@@ -59,13 +59,14 @@
 
 | OpenSpec | 代码入口 |
 |----------|----------|
-| `platform-chat` | `domain/chat/`、`services/qa/`、`frontend/src/views/chat/` |
-| `chat-composer` | `services/mention_resolve_service.py`、`SessionContextPanel` |
-| `agent-runtime` | `agent/backends/`、`config/user_data_paths.py` |
-| `agent-profiles` | `agent/profiles/`、`agent/case_generate/` |
-| `agent-hitl` | `agent/guardrails/`、`domain/chat/hitl/` |
-| `agent-delivery` | `domain/chat/delivery/` |
-| `knowledge-base` | `backend/kb/`、`api/knowledge_base_api.py` |
-| `user-platform` | `api` auth、MCP、Alembic/PostgreSQL |
+| `platform-chat` | `noesis_server/domain/chat/`、`noesis_server/services/qa/`、`frontend/src/views/chat/` |
+| `chat-composer` | `noesis_server/services/mention_resolve_service.py`、`SessionContextPanel` |
+| `agent-runtime` | `packages/harness/noesis/backends/`、`packages/harness/noesis/config/user_data_paths.py` |
+| `agent-profiles` | `packages/harness/noesis/agents/`、`agents/case_generate/` |
+| `agent-hitl` | `packages/harness/noesis/guardrails/`、`noesis_server/domain/chat/hitl/` |
+| `agent-harness`（change） | `packages/harness/noesis/`；公共入口 `noesis.config` / `noesis.runtime`，内部按 `runtime.stream` / `runtime.deps` 分层 |
+| `agent-delivery` | `noesis_server/domain/chat/delivery/` |
+| `knowledge-base` | `backend/noesis_server/kb/`、`noesis_server/api/knowledge_base_api.py` |
+| `user-platform` | `noesis_server/api` auth、MCP、Alembic/PostgreSQL |
 | `offline-evals` | `backend/evals/` |
 | `container-deployment` | `deploy/` |

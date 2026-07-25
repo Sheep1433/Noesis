@@ -3,11 +3,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_deepseek import ChatDeepSeek
 
-from llm.factory import _OPENCODE_DEFAULT_BASE_URL, _OPENCODE_DEFAULT_HEADERS, _build_chat_model
+from noesis.llm.factory import _OPENCODE_DEFAULT_BASE_URL, _OPENCODE_DEFAULT_HEADERS, _build_chat_model
 
 
 def test_build_chat_model_opencode_uses_required_headers() -> None:
-    with patch("llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
+    with patch("noesis.llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
         _build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
@@ -27,7 +27,7 @@ def test_build_chat_model_opencode_uses_required_headers() -> None:
 
 
 def test_llm_http_clients_bypass_system_proxy() -> None:
-    from llm.factory import _llm_http_clients
+    from noesis.llm.factory import _llm_http_clients
 
     sync_client, async_client = _llm_http_clients()
     assert sync_client._trust_env is False
@@ -35,7 +35,7 @@ def test_llm_http_clients_bypass_system_proxy() -> None:
 
 
 def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:
-    with patch("llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
+    with patch("noesis.llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
         _build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
@@ -48,7 +48,7 @@ def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:
 
 
 def test_build_chat_model_opencode_returns_chat_deepseek_instance() -> None:
-    with patch("llm.factory.ModelConfig") as model_config:
+    with patch("noesis.llm.factory.ModelConfig") as model_config:
         model_config.max_retries = 2
         model_config.request_timeout = 30.0
         model_config.streaming = True

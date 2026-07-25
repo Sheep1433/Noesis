@@ -10,7 +10,7 @@ _BACKEND = Path(__file__).resolve().parents[3]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from llm import get_llm
+from noesis.llm import get_llm
 
 
 def call_api(

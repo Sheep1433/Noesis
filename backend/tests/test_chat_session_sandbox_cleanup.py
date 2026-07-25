@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from models.chat_models import TChatSession
+from noesis_server.models.chat_models import TChatSession
 
 
 def _session(user_id: str, session_id: str) -> TChatSession:
@@ -20,9 +20,9 @@ def _session(user_id: str, session_id: str) -> TChatSession:
 
 @pytest.mark.asyncio
 async def test_delete_session_cancels_agents_and_destroys_sandbox(tmp_path: Path) -> None:
-    from config import user_data_paths as paths
-    from config import user_data_paths as udp
-    from services.chat_service import ChatService
+    from noesis.config import user_data_paths as paths
+    from noesis.config import user_data_paths as udp
+    from noesis_server.services.chat_service import ChatService
 
     users_root = tmp_path / "users"
     user_id = "u1"
@@ -38,9 +38,9 @@ async def test_delete_session_cancels_agents_and_destroys_sandbox(tmp_path: Path
 
     with (
         patch.object(udp, "_USERS_ROOT", users_root),
-        patch("services.chat_service.cancel_session_agent_runs", cancel_mock),
+        patch("noesis_server.services.chat_service.cancel_session_agent_runs", cancel_mock),
         patch(
-            "services.sandbox_service.destroy_session_sandbox",
+            "noesis.backends.sandbox_lifecycle.destroy_session_sandbox",
             new_callable=AsyncMock,
         ) as destroy_mock,
     ):

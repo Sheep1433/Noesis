@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from domain.chat.delivery.telegram.markdown_v2 import escape_mdv2, to_telegram_markdown_v2
-from domain.chat.delivery.telegram.stream_out import (
+from noesis_server.domain.chat.delivery.telegram.markdown_v2 import escape_mdv2, to_telegram_markdown_v2
+from noesis_server.domain.chat.delivery.telegram.stream_out import (
     CURSOR,
     TelegramTextStreamer,
     deliver_final_markdown,

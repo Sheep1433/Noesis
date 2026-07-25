@@ -2,13 +2,13 @@
 
 from unittest.mock import patch
 
-from llm.catalog import get_default_model_id, get_model_catalog, resolve_catalog_entry
-from llm.factory import get_llm
+from noesis.llm.catalog import get_default_model_id, get_model_catalog, resolve_catalog_entry
+from noesis.llm.factory import get_llm
 
 
-@patch("llm.catalog.load_app_yaml")
+@patch("noesis.llm.catalog.load_app_yaml")
 def test_model_catalog_uses_yaml_entries(mock_load_yaml):
-    from config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelLimitYamlSection, ModelYamlSection
+    from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelLimitYamlSection, ModelYamlSection
 
     mock_load_yaml.return_value = AppYamlConfig(
         model=ModelYamlSection(
@@ -40,10 +40,10 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
     get_model_catalog.cache_clear()
 
 
-@patch("llm.factory._build_chat_model")
-@patch("llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.factory._build_chat_model")
+@patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_get_llm_accepts_model_id(mock_resolve, mock_build):
-    from llm.catalog import ModelCatalogEntry
+    from noesis.llm.catalog import ModelCatalogEntry
 
     mock_resolve.return_value = ModelCatalogEntry(
         id="reasoner",

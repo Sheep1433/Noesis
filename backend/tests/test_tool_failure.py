@@ -9,12 +9,12 @@ import pytest
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import BaseModel, ValidationError
 
-from domain.chat.streaming.tool_failure import (
+from noesis.errors.tool_failure import (
     ToolFailureCategory,
     ToolInfrastructureError,
     ToolNetworkError,
 )
-from domain.chat.streaming.tool_failure import (
+from noesis.errors.tool_failure import (
     DEFAULT_USER_TOOL_ERROR,
     USER_TOOL_ERROR_MESSAGES,
     build_error_tool_message,

@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from agent.case_generate.case_graph import _generate_scene_cases, _normalize_scene_cases
-from schemas.case_generate_vo import SceneTestCasesOutput, TestCaseOutput
+from noesis.agents.case_generate.case_graph import _generate_scene_cases, _normalize_scene_cases
+from noesis.agents.case_generate.vo import SceneTestCasesOutput, TestCaseOutput
 
 
 def test_normalize_scene_cases_assigns_ids_and_meta():
@@ -62,7 +62,7 @@ async def test_generate_scene_cases_single_llm_invoke():
     mock_chain.bind.return_value = mock_bound
     mock_llm.with_structured_output.return_value = mock_chain
 
-    with patch("agent.case_generate.case_graph.get_llm", return_value=mock_llm):
+    with patch("noesis.agents.case_generate.case_graph.get_llm", return_value=mock_llm):
         cases, err = await _generate_scene_cases("登录", points, "ctx", 0)
 
     assert err is None
@@ -110,7 +110,7 @@ async def test_generate_scene_cases_repairs_stringified_malformed_cases():
     mock_chain.bind.return_value = mock_bound
     mock_llm.with_structured_output.return_value = mock_chain
 
-    with patch("agent.case_generate.case_graph.get_llm", return_value=mock_llm):
+    with patch("noesis.agents.case_generate.case_graph.get_llm", return_value=mock_llm):
         cases, err = await _generate_scene_cases("无障碍", points, "ctx", 0)
 
     assert err is None

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent.profiles.base_agent import BaseAgent
+from noesis.agents.base import BaseAgent
 
 
 class _FakeAgent:

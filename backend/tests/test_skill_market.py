@@ -10,12 +10,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from config import user_data_paths as paths
-from exceptions.exception import ConflictException, NotFoundException, ServiceException
-from services.skill_fs_service import SkillFsService
-from services.skill_market_service import SkillMarketService
-from services import skills_sh_client as client_mod
-from services.skills_sh_client import SkillsShClient, validate_skill_id, validate_source
+from noesis.config import user_data_paths as paths
+from noesis_server.exceptions.exception import ConflictException, NotFoundException, ServiceException
+from noesis_server.services.skill_fs_service import SkillFsService
+from noesis_server.services.skill_market_service import SkillMarketService
+from noesis_server.services import skills_sh_client as client_mod
+from noesis_server.services.skills_sh_client import SkillsShClient, validate_skill_id, validate_source
 
 
 @pytest.fixture(autouse=True)

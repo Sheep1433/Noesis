@@ -9,7 +9,7 @@ import yaml
 
 from evals.case.rag.ingest import FIXTURE_VERSION, build_id_map, pick_relevant_by_keywords
 from evals.case.shared.assertions import score_rag_channel
-from agent.case_generate.rag import CHANNEL_HISTORICAL_REQUIREMENT, CHANNEL_HISTORICAL_TEST_CASES
+from noesis.agents.case_generate.rag import CHANNEL_HISTORICAL_REQUIREMENT, CHANNEL_HISTORICAL_TEST_CASES
 
 CASE_ROOT = Path(__file__).resolve().parents[1] / "evals" / "case"
 RAG_DIR = CASE_ROOT / "rag"

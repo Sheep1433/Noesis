@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage
 from evals.agent._agent import run_super_agent
 from evals.agent.browsecomp.official import BrowseCompEval, MessageList, SamplerBase, SamplerResponse
 from evals.langfuse_env import eval_langfuse_run
-from llm import get_llm
+from noesis.llm import get_llm
 
 SUITE_ROOT = Path(__file__).resolve().parent
 RESULTS_ROOT = SUITE_ROOT / "results"

@@ -5,9 +5,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelLimitYamlSection, ModelYamlSection
-from llm.catalog import ModelCatalogEntry, get_model_catalog, resolve_catalog_entry
-from llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens, resolve_model_limit
+from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelLimitYamlSection, ModelYamlSection
+from noesis.llm.catalog import ModelCatalogEntry, get_model_catalog, resolve_catalog_entry
+from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens, resolve_model_limit
 
 
 def _yaml_with_catalog() -> AppYamlConfig:
@@ -35,7 +35,7 @@ def _yaml_with_catalog() -> AppYamlConfig:
     )
 
 
-@patch("llm.catalog.load_app_yaml")
+@patch("noesis.llm.catalog.load_app_yaml")
 def test_resolve_context_max_tokens_from_catalog_limit(mock_load_yaml) -> None:
     mock_load_yaml.return_value = _yaml_with_catalog()
     get_model_catalog.cache_clear()
@@ -46,7 +46,7 @@ def test_resolve_context_max_tokens_from_catalog_limit(mock_load_yaml) -> None:
     get_model_catalog.cache_clear()
 
 
-@patch("llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_resolve_context_max_tokens_falls_back_to_global(mock_resolve) -> None:
     mock_resolve.return_value = ModelCatalogEntry(
         id="plain",
@@ -58,11 +58,11 @@ def test_resolve_context_max_tokens_falls_back_to_global(mock_resolve) -> None:
         limit=None,
     )
     cfg = SimpleNamespace(context_max_input_tokens=64000)
-    with patch("llm.model_limits.ModelConfig", cfg):
+    with patch("noesis.llm.model_limits.ModelConfig", cfg):
         assert resolve_context_max_tokens("plain") == 64000
 
 
-@patch("llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
     mock_resolve.return_value = ModelCatalogEntry(
         id="plain",
@@ -74,11 +74,11 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
         limit=None,
     )
     cfg = SimpleNamespace(context_max_input_tokens=0)
-    with patch("llm.model_limits.ModelConfig", cfg):
+    with patch("noesis.llm.model_limits.ModelConfig", cfg):
         assert resolve_context_max_tokens("plain") == DEFAULT_CONTEXT_TOKENS
 
 
-@patch("llm.catalog.load_app_yaml")
+@patch("noesis.llm.catalog.load_app_yaml")
 def test_catalog_entry_inherits_model_level_limit(mock_load_yaml) -> None:
     mock_load_yaml.return_value = AppYamlConfig(
         model=ModelYamlSection(
@@ -100,13 +100,13 @@ def test_catalog_entry_inherits_model_level_limit(mock_load_yaml) -> None:
     get_model_catalog.cache_clear()
 
 
-@patch("llm.catalog.load_app_yaml")
+@patch("noesis.llm.catalog.load_app_yaml")
 def test_resolve_model_limit_prefers_catalog_over_global(mock_load_yaml) -> None:
     mock_load_yaml.return_value = _yaml_with_catalog()
     get_model_catalog.cache_clear()
 
     cfg = SimpleNamespace(context_max_input_tokens=128000)
-    with patch("llm.model_limits.ModelConfig", cfg):
+    with patch("noesis.llm.model_limits.ModelConfig", cfg):
         limit = resolve_model_limit("flash")
 
     assert limit.context == 200_000

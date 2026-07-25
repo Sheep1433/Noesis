@@ -10,11 +10,11 @@ from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemM
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
-from agent.middlewares.context_metrics import get_agent_token_counter
-from llm.model_limits import resolve_context_max_tokens
-from agent.middlewares.summary_offload_middleware import SummarizationOffloadMiddleware
-from config.env import ModelConfig
-from llm import get_llm
+from noesis.middlewares.context_metrics import get_agent_token_counter
+from noesis.llm.model_limits import resolve_context_max_tokens
+from noesis.middlewares.summary_offload_middleware import SummarizationOffloadMiddleware
+from noesis.config.env import ModelConfig
+from noesis.llm import get_llm
 
 
 def _require_summarization_enabled() -> None:

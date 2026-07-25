@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.kb_collection_config_service import KbCollectionConfigService
+from noesis_server.services.kb_collection_config_service import KbCollectionConfigService
 
 
 @pytest.mark.asyncio
@@ -44,7 +44,7 @@ async def test_patch_config_merges_processing():
 @pytest.mark.asyncio
 async def test_ensure_defaults_for_qdrant_collections():
     db = AsyncMock()
-    with patch("services.kb_collection_config_service.is_qdrant_connected", return_value=True):
+    with patch("noesis_server.services.kb_collection_config_service.is_qdrant_connected", return_value=True):
         with patch.object(
             KbCollectionConfigService, "get_row", new=AsyncMock(return_value=None)
         ):
@@ -53,7 +53,7 @@ async def test_ensure_defaults_for_qdrant_collections():
             ) as mock_create:
                 svc = MagicMock()
                 svc.get_collections.return_value = [{"name": "new_col"}]
-                with patch("services.kb_collection_config_service.QdrantService", return_value=svc):
+                with patch("noesis_server.services.kb_collection_config_service.QdrantService", return_value=svc):
                     n = await KbCollectionConfigService.ensure_defaults_for_qdrant_collections(db)
     assert n == 1
     mock_create.assert_awaited_once()
@@ -68,7 +68,7 @@ def test_load_query_params_sync_reads_postgresql_row():
     session.__exit__ = MagicMock(return_value=False)
 
     with patch(
-        "services.kb_collection_config_service._get_sync_session",
+        "noesis_server.services.kb_collection_config_service._get_sync_session",
         return_value=session,
     ):
         params = KbCollectionConfigService.load_query_params_sync("medical")

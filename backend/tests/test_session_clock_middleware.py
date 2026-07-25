@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent.middlewares.session_clock_middleware import (
+from noesis.middlewares.session_clock_middleware import (
     SessionClockMiddleware,
     is_session_clock_message,
 )
@@ -91,7 +91,7 @@ def test_render_clock_uses_configured_timezone(monkeypatch: pytest.MonkeyPatch) 
         def now(cls, tz=None):
             return fixed if tz is not None else fixed.replace(tzinfo=None)
 
-    monkeypatch.setattr("agent.middlewares.session_clock_middleware.datetime", _FixedDatetime)
+    monkeypatch.setattr("noesis.middlewares.session_clock_middleware.datetime", _FixedDatetime)
     block = mw._render_clock_block()
     assert "2026-06-10 08:30:00" in block
     assert "周三" in block

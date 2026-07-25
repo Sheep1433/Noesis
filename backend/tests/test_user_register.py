@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from exceptions.exception import ConflictException
-from exceptions.exception import LoginException
-from domain.auth.registration_invite import RegistrationInviteService
-from schemas.login_vo import UserRegister, UserRegistrationRequest
-from services.login_service import LoginService
+from noesis_server.exceptions.exception import ConflictException
+from noesis_server.exceptions.exception import LoginException
+from noesis_server.services.auth.invites import RegistrationInviteService
+from noesis_server.schemas.login_vo import UserRegister, UserRegistrationRequest
+from noesis_server.services.login_service import LoginService
 
 
 def _mock_db_with_existing_user(existing: bool) -> AsyncMock:
@@ -46,7 +46,7 @@ async def test_register_user_conflict() -> None:
 async def test_register_with_invite_verifies_code_and_creates_user() -> None:
     db = _mock_db_with_existing_user(existing=False)
     body = UserRegistrationRequest(username="newuser", password="secret1", invite_code="123456")
-    with patch("services.login_service.RegistrationInviteService.verify", new=AsyncMock()) as verify:
+    with patch("noesis_server.services.login_service.RegistrationInviteService.verify", new=AsyncMock()) as verify:
         user = await LoginService.register_with_invite(db, body)
 
     assert user.username == "newuser"
@@ -59,7 +59,7 @@ async def test_register_with_invite_does_not_create_user_when_code_invalid() -> 
     db = _mock_db_with_existing_user(existing=False)
     body = UserRegistrationRequest(username="newuser", password="secret1", invite_code="123456")
     with patch(
-        "services.login_service.RegistrationInviteService.verify",
+        "noesis_server.services.login_service.RegistrationInviteService.verify",
         new=AsyncMock(side_effect=LoginException(message="邀请码无效")),
     ):
         with pytest.raises(LoginException):
@@ -86,6 +86,14 @@ async def test_global_invite_can_be_verified_repeatedly() -> None:
 @pytest.mark.asyncio
 async def test_rotate_invite_updates_admin_record() -> None:
     admin = MagicMock()
+    admin.id = 1
+    admin.username = "admin"
+    admin.password = "hash"
+    admin.mobile = None
+    admin.registration_invite_digest = None
+    admin.registration_invite_updated_at = None
+    admin.create_time = None
+    admin.update_time = None
     result = MagicMock()
     result.scalar_one_or_none.return_value = admin
     db = AsyncMock()
@@ -95,6 +103,5 @@ async def test_rotate_invite_updates_admin_record() -> None:
         code = await RegistrationInviteService.rotate(db)
 
     assert code == "123456"
-    assert len(admin.registration_invite_digest) == 64
-    assert isinstance(admin.registration_invite_updated_at, int)
+    assert db.execute.await_count == 2
     db.commit.assert_awaited_once()

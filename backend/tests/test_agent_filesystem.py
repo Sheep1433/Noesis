@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from agent.backends.factory import build_agent_filesystem_backend
-from agent.backends.paths import (
+from noesis.backends.factory import build_agent_filesystem_backend
+from noesis.backends.paths import (
     AGENT_MEMORY_ROUTE,
     AGENT_PERSONAL_SKILLS_ROUTE,
     AGENT_PUBLIC_SKILLS_ROUTE,
     WORKSPACE_CONTAINER_PREFIX,
 )
-from agent.backends.agent_path import AgentPathBackend
+from noesis.backends.agent_path import AgentPathBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
     FileData,
@@ -101,7 +101,7 @@ def test_agent_path_backend_execute_does_not_rewrite_shell() -> None:
 async def test_local_shell_composite_writes_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from config import user_data_paths as user_paths
+    from noesis.config import user_data_paths as user_paths
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     platform = tmp_path / "platform-skills"
@@ -109,7 +109,7 @@ async def test_local_shell_composite_writes_workspace(
     (platform / "deep-research-v2").mkdir()
     (platform / "deep-research-v2" / "SKILL.md").write_text("# skill\n", encoding="utf-8")
     monkeypatch.setattr(
-        "agent.backends.factory.skills_root",
+        "noesis.backends.factory.skills_root",
         lambda: platform,
     )
 
@@ -129,14 +129,14 @@ async def test_local_shell_composite_writes_workspace(
 async def test_local_shell_execute_shell_operators(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from config import user_data_paths as user_paths
-    from config.user_data_paths import ensure_workspace_dir
+    from noesis.config import user_data_paths as user_paths
+    from noesis.config.user_data_paths import ensure_workspace_dir
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     platform = tmp_path / "platform-skills"
     platform.mkdir()
     monkeypatch.setattr(
-        "agent.backends.factory.skills_root",
+        "noesis.backends.factory.skills_root",
         lambda: platform,
     )
     ensure_workspace_dir("u1", "s1")
@@ -157,13 +157,13 @@ async def test_local_shell_execute_shell_operators(
 async def test_docker_composite_skills_on_default_sandbox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from config import user_data_paths as user_paths
+    from noesis.config import user_data_paths as user_paths
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     platform = tmp_path / "platform-skills"
     platform.mkdir()
     monkeypatch.setattr(
-        "agent.backends.factory.skills_root",
+        "noesis.backends.factory.skills_root",
         lambda: platform,
     )
 
@@ -190,13 +190,13 @@ async def test_docker_composite_skills_on_default_sandbox(
 async def test_local_skills_routes_are_read_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from config import user_data_paths as user_paths
+    from noesis.config import user_data_paths as user_paths
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     platform = tmp_path / "platform-skills"
     platform.mkdir()
     monkeypatch.setattr(
-        "agent.backends.factory.skills_root",
+        "noesis.backends.factory.skills_root",
         lambda: platform,
     )
 

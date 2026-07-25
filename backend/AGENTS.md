@@ -5,7 +5,7 @@ FastAPI + LangGraph 后端：多场景 Agent 问答、知识库 RAG、SSE 流式
 ## 技术栈
 
 - **框架**：FastAPI
-- **Agent**：LangGraph（`create_noesis_agent` 统一工厂）
+- **Agent**：LangGraph（`noesis.factory.create_noesis_agent` 统一工厂）
 - **数据库**：PostgreSQL（SQLAlchemy 异步）
 - **向量库**：Qdrant
 - **LLM**：DashScope（Qwen）/ OpenAI 兼容接口 / OpenCode Zen
@@ -15,54 +15,46 @@ FastAPI + LangGraph 后端：多场景 Agent 问答、知识库 RAG、SSE 流式
 
 ```
 backend/
-├── api/                         # 路由层
-├── services/                    # 业务编排（qa_service、chat_service 等）
-├── schemas/                     # Pydantic 模型
-├── models/                      # ORM（db_models.py、chat_models.py）
-├── kb/                          # 解析 / 分块 / 嵌入 / 检索 / rerank
-│   ├── document_parse/          # DeepDoc + ParserFactory
-│   ├── chunk/                   # general 标题切分；params 合并
-│   ├── retrieval/               # KbRetrievalService 门面（hybrid→rerank）
-│   ├── rerank/                  # DashScope cross-encoder
-│   └── embedding/
-├── agent/
-│   ├── factory.py               # create_noesis_agent
-│   ├── profiles/                # 场景入口 + BaseAgent
-│   ├── guardrails/              # HITL 策略 + session grant（对齐 DeerFlow）
-│   ├── backends/                # 执行后端：factory / docker|local / path / memory
-│   ├── skills/                  # SkillSource 目录与会话过滤
-│   ├── middlewares/             # LangGraph 运行时中间件
-│   ├── tools/                   # RAG / web / ask_user
-│   ├── prompts/ / mcp/
-│   └── case_generate/           # 测试用例 StateGraph
-├── common/                      # 跨模块共用（日志、路径、HTTP 响应等，无领域语义）
-│   ├── logging.py
-│   ├── paths.py                 # REPO_ROOT、.data/ 路径解析
-│   ├── serialization.py
-│   ├── http/response.py
-├── domain/                      # 有业务语义的领域模块
-│   ├── auth/                    # 密码、访问令牌、stop token
-│   ├── chat/
-│   │   ├── message_builder.py
-│   │   ├── attachments/         # 附件解析、Markdown outline、Vision 判定
-│   │   ├── streaming/           # LangGraphSseBridge、HITL SSE 载荷
-│   │   ├── hitl/                # pending interrupt / 超时 resume（平台态）
-│   │   └── delivery/            # RunEvent Fan-out、PersistSink、SSE、ChannelAdapter
-│   │       └── telegram/        # TG adapter + long-poll runtime
-│   └── observability/langfuse.py
-├── middleware/                    # FastAPI / Starlette HTTP 中间件
-├── llm/                         # LLM 工厂（get_llm）
+├── noesis_server/               # Web/数据库/通道平台宿主（import noesis_server）
+│   ├── api/                     # FastAPI 路由
+│   ├── services/                # 应用编排；qa/、channels/
+│   │   └── auth/                # Session/邀请码/登录注册 application service
+│   ├── domain/                  # auth entity/policy/port、chat/delivery 等平台核心模型
+│   ├── infrastructure/          # database repositories、observability 等技术适配
+│   ├── kb/                      # 解析、分块、检索、Qdrant
+│   ├── models/ / schemas/       # ORM / API Pydantic 模型
+│   ├── middleware/              # FastAPI / Starlette 中间件
+│   ├── common/ / constants/ / exceptions/
+│   ├── bootstrap/               # sandbox runner、默认 KB 初始化
+│   └── server.py                # FastAPI app 与 lifespan
+├── packages/
+│   └── harness/noesis/          # noesis-harness：Agent 内核（import noesis）
+│       ├── factory.py           # create_noesis_agent
+│       ├── agents/              # 所有具体 Agent + BaseAgent
+│       │   └── case_generate/
+│       ├── runtime/             # stream / HITL / deps / attachments / logging
+│       ├── config/              # env / yaml / paths / MCP / checkpointer
+│       ├── llm/                 # model factory / catalog / limits
+│       ├── guardrails/          # HITL 策略 + session grant
+│       ├── backends/            # docker|local / path / memory / sandbox_lifecycle
+│       ├── skills/ / middlewares/
+│       ├── tools/ / prompts/ / mcp/
+│       └── errors/              # tool_failure 权威源
 ├── evals/                       # 评测包根（evals.case / evals.agent / evals.compression）
-├── config/                      # env.py、database.py、yaml 合并
-├── constants/                   # 枚举
-├── exceptions/
 ├── sql/                         # Alembic 迁移说明与 SQL 工具脚本
 ├── tests/
-├── server.py
 └── app.py
 ```
 
-本地运行时数据统一落在仓库根 **`.data/`**（gitignore），与 `common/paths.py` 对齐：
+> **分层（强制）**：
+> - `noesis_server` / `evals` → `noesis`；`noesis` 禁止反向 import `noesis_server`
+> - 平台内部：API → services → domain / KB / harness；bootstrap 负责进程组装
+> - `domain/auth` 禁止依赖 FastAPI、SQLAlchemy、ORM、infrastructure/services；持久化经 repository Protocol → `infrastructure/database/repositories/auth.py`
+> - 平台能力经 `noesis_server.services.harness_wiring` 绑定到 `noesis.runtime.deps`
+> - 宿主/评测调用常用能力优先使用稳定门面：`from noesis.config import ModelConfig, data_path`、`from noesis.runtime import logger, stream_agent_events`；细分模块路径用于内部实现或精确 mock
+> - 旧顶层 `api/services/domain/config/...` import 不保留兼容 shim
+
+本地运行时数据统一落在仓库根 **`.data/`**（gitignore），与 `packages/harness/noesis/config/paths.py` 对齐：
 
 | 子目录 | 用途 |
 |--------|------|
@@ -74,14 +66,14 @@ backend/
 | `.data/rag/res/deepdoc/` | DeepDoc 模型权重 |
 | `.data/logs/` | 后端错误日志 |
 
-路径权威模块：`config/user_data_paths.py`（`agent_workspace_paths.py` 为兼容 import 的薄封装）。
+路径权威模块：`packages/harness/noesis/config/user_data_paths.py`。
 
 ### Agent 沙箱（per-session Docker Exec）
 
 - **产品模型**：每个 `(user_id, session_id)` 一个 slim 容器；挂载仅当前 session workspace（rw）+ `/skills/public`（ro）+ `/skills/personal`（ro）。
 - **接入**：`DockerExecSandboxBackend`（`sandbox.backend=docker`）；开发/测试用 `local_shell`。**AIO 已移除**。
 - **工厂**：`create_agent_backend(user_id, session_id)` → `CompositeBackend`（workspace 根默认可写；`/skills/public|personal` 只读；`/memory/` = 用户记忆，不经 Shell 挂载）。
-- **生命周期**：`services/sandbox_service.py` 经 runner 起停；删 session **SHALL** destroy 该 session 沙箱；handle 缓存遇 404 失效并重建。
+- **生命周期**：`noesis.backends.sandbox_lifecycle` 经 runner 起停；删 session **SHALL** destroy 该 session 沙箱；handle 缓存遇 404 失效并重建。
 - **并发**：对 `(user_id, session_id)` mutex 串行 execute。
 - **配置**：`config.yaml` → `sandbox.*`；密钥 `SANDBOX_RUNNER_TOKEN`；Compose 须设宿主机绝对路径 `NOESIS_HOST_DATA_DIR` / `NOESIS_HOST_SKILLS_DIR`。
 - **生产**：`deploy/sandbox-runner` + compose 服务 `sandbox-runner`（Docker socket / DooD）。
@@ -90,17 +82,17 @@ backend/
 
 | 放哪里 | 判断标准 |
 |--------|----------|
-| `common/` | 3+ 无关模块共用、无业务语义（日志、HTTP 响应、路径、序列化） |
-| `domain/` | 有明确业务域（鉴权、聊天流式、HITL 会话态、可观测性） |
-| `agent/profiles/` | 场景 Agent 入口类 |
-| `agent/guardrails/` | 工具审批策略（非 middleware 类） |
-| `agent/middlewares/` | LangGraph Agent 运行时钩子 |
-| `middleware/` | HTTP 请求/响应链（鉴权 Cookie 续期等） |
-| `services/` | 跨领域编排 |
+| `noesis_server/common/` | 无业务语义、不得依赖 service/domain/KB/harness |
+| `noesis_server/domain/` | 平台核心业务语义，不得反向依赖 application service |
+| `packages/harness/noesis/agents/` | 场景 Agent 入口类；测试用例 Agent 位于 `agents/case_generate/` |
+| `packages/harness/noesis/guardrails/` | 工具审批策略 |
+| `packages/harness/noesis/middlewares/` | LangGraph Agent 运行时钩子 |
+| `noesis_server/middleware/` | HTTP 请求/响应链 |
+| `noesis_server/services/` | 跨领域应用编排 |
 
 ## 核心规范
 
-### 1. API 层 (`api/*.py`)
+### 1. API 层 (`noesis_server/api/*.py`)
 
 - 单文件一个 `APIRouter`，通过 `prefix` 归类 URI
 - 通过 `Depends(get_db)` 注入数据库会话
@@ -108,7 +100,7 @@ backend/
 - 异常由全局处理器统一捕获，不在 API 层捕获
 
 ```python
-from common.http.response import ResponseUtil
+from noesis_server.common.http.response import ResponseUtil
 
 login_router = APIRouter(prefix="/user")
 
@@ -123,14 +115,14 @@ async def login(
     return ResponseUtil.success(msg='登录成功', data={'token': access_token})
 ```
 
-### 2. Service 层 (`services/*.py`)
+### 2. Service 层 (`noesis_server/services/*.py`)
 
 - 服务类使用 `@classmethod`，保持无状态
 - 统一使用 `AsyncSession` + `select` + `await session.execute()`
 - 查询后使用 `scalar_one_or_none()` 获取结果
 - 根据场景抛出 `LoginException`、`ServiceException` 等自定义异常
 
-### 3. Schema 层 (`schemas/*.py`)
+### 3. Schema 层 (`noesis_server/schemas/*.py`)
 
 - 使用 Pydantic `BaseModel`，必须声明 `Field(description=...)`
 - 按业务拆分独立文件（登录、问答、知识库、附件等）
@@ -140,12 +132,12 @@ async def login(
 - **配置**：PostgreSQL `kb_collection_config`（`processing_params` / `query_params`）；Qdrant 仅存向量与分片
 - **入库**：`DocumentParser` → `chunk()`（`chunk_preset_id=general`）→ embed → upsert；payload 含 `effective_processing_params`
 - **检索**：统一 `KbRetrievalService.search()`：`recall_top_k` → 截断 `rerank_top_k` → rerank（可降级）→ `score_threshold` → `final_top_k`；默认 `search_mode=hybrid`
-- **API**：`GET/PATCH /api/knowledge_base/collections/{name}/config`；检索/上传参数与 Agent 共用 `kb/chunk/params.py` 合并函数
+- **API**：`GET/PATCH /api/knowledge_base/collections/{name}/config`；HTTP 薄层委托 `noesis_server.services.knowledge_base_service`，检索/上传参数与 Agent 共用 `noesis_server.kb.chunk.params`
 - **评测**：`uv run python -m evals.kb.run --collection <name>`
 
-### 4. 数据库模型 (`models/`)
+### 4. 数据库模型 (`noesis_server/models/`)
 
-- 继承 `config.database.Base`
+- 继承 `noesis_server.infrastructure.database.engine.Base`
 - 使用 `Mapped[...] = mapped_column(...)` 语法
 - 时间戳使用 `server_default=text("CURRENT_TIMESTAMP")`
 - **表结构变更**：修改模型后 `uv run alembic revision --autogenerate -m "..."`，详见 `sql/README.md`
@@ -162,7 +154,7 @@ async def login(
 
 Docker 制品目录：`deploy/`（`docker-compose.yml`、`backend/Dockerfile`、`frontend/Dockerfile`、`sandbox-slim/Dockerfile`）
 
-- `config/env.py` 合并 env + yaml → `ModelConfig` 等
+- `packages/harness/noesis/config/env.py` 合并 env + yaml → `ModelConfig` 等
 - `NOESIS_CONFIG_PATH` / `APP_ENV=prod` 可自动选中 `config.prod.yaml`
 - **禁止在代码中硬编码配置值**
 - checkpoint 使用 PostgreSQL 独立数据库，由 `checkpoint.database` 配置。
@@ -170,20 +162,20 @@ Docker 制品目录：`deploy/`（`docker-compose.yml`、`backend/Dockerfile`、
 ### 6. 异常与响应
 
 - 自定义异常：`LoginException`、`AuthException`、`PermissionException`、`ServiceException`
-- 全局处理见 `exceptions/handle.py`，统一返回 `ResponseUtil` 格式
+- 全局处理见 `noesis_server/exceptions/handle.py`，统一返回 `ResponseUtil` 格式
 - HTTP 状态码与业务 code 须一致（404/409 等），详见 [../AGENTS.md](../AGENTS.md)
 
-### 7. 日志 (`common/logging.py`)
+### 7. 日志 (`packages/harness/noesis/runtime/logging.py`)
 
-- 使用 `from common.logging import logger`，禁止 `print`
+- 使用 `from noesis.runtime.logging import logger`，禁止 `print`
 - `info` 正常流程；`warning` 用户输入问题；`error`/`exception` 系统异常
 
 ## 开发流程
 
-1. 在 `schemas/` 定义请求/响应模型
-2. 在 `services/` 实现业务逻辑
-3. 在 `api/` 创建路由并在 `api/__init__.py` 导出
-4. 在 `server.py` 的 `controller_list` 登记
+1. 在 `noesis_server/schemas/` 定义请求/响应模型
+2. 在 `noesis_server/services/` 实现业务逻辑
+3. 在 `noesis_server/api/` 创建路由并在 `noesis_server/api/__init__.py` 导出
+4. 在 `noesis_server/server.py` 的 `controller_list` 登记
 5. 敏感项更新 `.env.example`；运行参数更新 `config.example.yaml` 对应段
 
 ## 依赖注入链
@@ -193,19 +185,19 @@ API → Service → Domain / Agent / KB
 Domain → Common
 ```
 
-**严禁跨层引用**：API 层不能直接访问数据库，必须通过 Service；`common/` 不得 import `domain/`、`agent/`、`services/`。
+**严禁跨层引用**：API 层不能直接访问数据库，必须通过 Service；domain/KB 不得 import services；common 不得 import domain/KB/services/noesis。
 
 ## SSE 流式响应
 
-- 编排入口：`services/qa_service.py`（经 `RunOrchestrator` 组 sinks）
-- **Delivery（Fan-out）**：`domain/chat/delivery/`
+- 编排入口：`noesis_server/services/qa/`（经 `RunOrchestrator` 组 sinks）
+- **Delivery（Fan-out）**：`noesis_server/domain/chat/delivery/`
   - `events` / `bus`：内部 RunEvent 与多订阅总线
   - `mapper`：`LcEventMapper`（包装 `LangGraphSseBridge`：LC/`__tw_*`/HITL → RunEvent）
   - `sse_delivery` / `sse_codec`：浏览器投递；**keepalive 仅在此层**，不进总线
   - `persist_sink`：落库决策（含 `hitl_pending` **非**终态）
   - `lifecycle`：`CancelReason`（user_stop / disconnect / channel_stop）
   - `channels`：ChannelAdapter SPI + Binding；**配置/密钥属 settings**，本包仅运行时
-- 现网 SSE 成帧仍兼容：`domain/chat/streaming/langgraph_sse.py`
+- 现网 SSE 成帧：`noesis_server/domain/chat/streaming/langgraph_sse.py`
 - 核心事件：`reasoning-*`、`text-*`、`tool-input-*`、`tool-output-available`、`hitl-required`、`usage-update`、`error`、`finish`、`[DONE]`（WS 非 P0；harness 搬家已搁置）
 
 **assistant 落库（同一 `message_id` 单行）**：
@@ -225,7 +217,7 @@ Domain → Common
 ## 安全规范
 
 - 密码：统一 `domain.auth.password.PwdUtil`
-- JWT：集中在 `LoginService` / `PwdUtil` / `domain.auth.token_service`
+- Session/邀请码用例：`noesis_server.services.auth`；领域规则：`noesis_server.domain.auth`
 - **禁止手写 `jwt.encode/decode`**（`StopTokenService` 除外，专用于流式 stop 凭据）
 
 ## 验证与排错

@@ -8,15 +8,15 @@ from unittest.mock import MagicMock, patch
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 
-from agent.factory import create_noesis_agent
-from agent.guardrails.policy import (
+from noesis.factory import create_noesis_agent
+from noesis.guardrails.policy import (
     is_dangerous_execute,
     is_memory_write_path,
     is_network_execute,
 )
-from agent.guardrails.session_grants import SessionGrantStore
-from agent.tools.ask_user import build_interrupt_on
-from agent.middlewares import ToolErrorHandlingMiddleware
+from noesis.guardrails.session_grants import SessionGrantStore
+from noesis.tools.ask_user import build_interrupt_on
+from noesis.middlewares import ToolErrorHandlingMiddleware
 
 
 def test_memory_path_detection() -> None:
@@ -78,11 +78,11 @@ def test_create_noesis_agent_skips_hitl_when_disabled() -> None:
         tool_call_limit_enabled=False,
     )
     with (
-        patch("agent.factory.create_agent", side_effect=_fake_create_agent),
-        patch("agent.factory.get_llm", return_value=MagicMock()),
-        patch("agent.factory.HitlConfig", hitl_cfg),
-        patch("agent.factory.ModelConfig", model_cfg),
-        patch("agent.factory.create_summary_offload_middleware", return_value=None),
+        patch("noesis.factory.create_agent", side_effect=_fake_create_agent),
+        patch("noesis.llm.factory.get_llm", return_value=MagicMock()),
+        patch("noesis.factory.HitlConfig", hitl_cfg),
+        patch("noesis.factory.ModelConfig", model_cfg),
+        patch("noesis.factory.create_summary_offload_middleware", return_value=None),
     ):
         create_noesis_agent(
             system_prompt="x",
@@ -108,11 +108,11 @@ def test_create_noesis_agent_mounts_hitl_before_tool_error() -> None:
         tool_call_limit_enabled=False,
     )
     with (
-        patch("agent.factory.create_agent", side_effect=_fake_create_agent),
-        patch("agent.factory.get_llm", return_value=MagicMock()),
-        patch("agent.factory.HitlConfig", hitl_cfg),
-        patch("agent.factory.ModelConfig", model_cfg),
-        patch("agent.factory.create_summary_offload_middleware", return_value=None),
+        patch("noesis.factory.create_agent", side_effect=_fake_create_agent),
+        patch("noesis.llm.factory.get_llm", return_value=MagicMock()),
+        patch("noesis.factory.HitlConfig", hitl_cfg),
+        patch("noesis.factory.ModelConfig", model_cfg),
+        patch("noesis.factory.create_summary_offload_middleware", return_value=None),
     ):
         create_noesis_agent(
             system_prompt="x",

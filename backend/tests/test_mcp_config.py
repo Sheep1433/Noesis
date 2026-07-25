@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from config.mcp_config import (
+from noesis.config.mcp_config import (
     MCP_PROFILE_FAULT_OPERATION,
     clear_mcp_config_cache,
     get_profile_connections,
@@ -110,7 +110,7 @@ def test_expand_remote_url_default(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_to_adapter_connection_strips_display_name() -> None:
-    from config.mcp_config import to_adapter_connection
+    from noesis.config.mcp_config import to_adapter_connection
 
     conn = to_adapter_connection(
         {

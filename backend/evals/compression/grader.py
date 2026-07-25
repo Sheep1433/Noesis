@@ -13,7 +13,7 @@ from langchain_core.messages import (
 )
 
 from evals.compression.rubric import build_judge_prompt, parse_judge_response
-from llm import get_llm
+from noesis.llm import get_llm
 
 CONTINUATION_SYSTEM = (
     "你是长会话中的接续助手。较早轮次已被压缩进 handoff 摘要。"

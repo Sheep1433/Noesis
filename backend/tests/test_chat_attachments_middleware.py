@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agent.middlewares.chat_attachments_middleware import ChatAttachmentsMiddleware
-from models.chat_models import TChatAttachment
-from domain.chat.attachments.resolver import CHAT_ATTACHMENT_REF
+from noesis.runtime.attachments.resolver import CHAT_ATTACHMENT_REF
+from noesis.middlewares.chat_attachments_middleware import ChatAttachmentsMiddleware
+from noesis_server.models.chat_models import TChatAttachment
+
+_ATTACH = "noesis.middlewares.chat_attachments_middleware.require_attachment_service"
+
+
+@contextmanager
+def _mock_attachment_svc(**attrs):
+    svc = MagicMock()
+    for name, value in attrs.items():
+        setattr(svc, name, value)
+    with patch(_ATTACH, return_value=svc):
+        yield svc
 
 
 def _doc_row(**overrides) -> TChatAttachment:
@@ -54,25 +66,18 @@ async def test_middleware_injects_uploaded_files_for_document():
 
     with (
         patch(
-            "agent.middlewares.chat_attachments_middleware.is_vlm_configured",
+            "noesis.middlewares.chat_attachments_middleware.require_is_vlm_configured",
             return_value=False,
         ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
-            new_callable=AsyncMock,
-            return_value=[row],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_images",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService._read_document_text",
-            return_value=("# Title\n\nhello world", None),
+        _mock_attachment_svc(
+            list_session_documents=AsyncMock(return_value=[row]),
+            list_session_images=AsyncMock(return_value=[]),
+            _read_document_text=MagicMock(return_value=("# Title\n\nhello world", None)),
         ),
     ):
-        mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=False)
+        mw = ChatAttachmentsMiddleware(
+            session_id="sess-1", user_id="user-1", db=db, vision_available=False
+        )
         msg = HumanMessage(
             content="总结文档",
             additional_kwargs={
@@ -96,30 +101,17 @@ async def test_middleware_injects_uploaded_files_for_document():
 @pytest.mark.asyncio
 async def test_middleware_multimodal_when_vision_available():
     db = AsyncMock()
-    mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=True)
+    mw = ChatAttachmentsMiddleware(
+        session_id="sess-1", user_id="user-1", db=db, vision_available=True
+    )
     row = _img_row()
     ref = f"{CHAT_ATTACHMENT_REF}:{row.id}"
 
-    with (
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_images",
-            new_callable=AsyncMock,
-            return_value=[row],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.get_by_id",
-            new_callable=AsyncMock,
-            return_value=row,
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.read_image_bytes",
-            return_value=(b"\x89PNG", "image/png"),
-        ),
+    with _mock_attachment_svc(
+        list_session_documents=AsyncMock(return_value=[]),
+        list_session_images=AsyncMock(return_value=[row]),
+        get_by_id=AsyncMock(return_value=row),
+        read_image_bytes=MagicMock(return_value=(b"\x89PNG", "image/png")),
     ):
         msg = HumanMessage(
             content="描述图片",
@@ -147,21 +139,17 @@ async def test_middleware_vision_downgrade_lists_image_metadata():
 
     with (
         patch(
-            "agent.middlewares.chat_attachments_middleware.is_vlm_configured",
+            "noesis.middlewares.chat_attachments_middleware.require_is_vlm_configured",
             return_value=False,
         ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_images",
-            new_callable=AsyncMock,
-            return_value=[row],
+        _mock_attachment_svc(
+            list_session_documents=AsyncMock(return_value=[]),
+            list_session_images=AsyncMock(return_value=[row]),
         ),
     ):
-        mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=False)
+        mw = ChatAttachmentsMiddleware(
+            session_id="sess-1", user_id="user-1", db=db, vision_available=False
+        )
         msg = HumanMessage(
             content="这是什么图",
             additional_kwargs={
@@ -193,35 +181,22 @@ async def test_middleware_vlm_fallback_injects_caption():
 
     with (
         patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentConfig",
+            "noesis.middlewares.chat_attachments_middleware.ChatAttachmentConfig",
             mock_cfg,
         ),
         patch(
-            "agent.middlewares.chat_attachments_middleware.is_vlm_configured",
+            "noesis.middlewares.chat_attachments_middleware.require_is_vlm_configured",
             return_value=True,
         ),
         patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_images",
-            new_callable=AsyncMock,
-            return_value=[row],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.get_by_id",
-            new_callable=AsyncMock,
-            return_value=row,
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.read_image_bytes",
-            return_value=(b"\x89PNG", "image/png"),
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.describe_image_bytes_for_chat",
+            "noesis.middlewares.chat_attachments_middleware.describe_image_bytes_for_chat",
             return_value="图中是一只猫",
+        ),
+        _mock_attachment_svc(
+            list_session_documents=AsyncMock(return_value=[]),
+            list_session_images=AsyncMock(return_value=[row]),
+            get_by_id=AsyncMock(return_value=row),
+            read_image_bytes=MagicMock(return_value=(b"\x89PNG", "image/png")),
         ),
     ):
         mw = ChatAttachmentsMiddleware(
@@ -249,24 +224,15 @@ async def test_middleware_vlm_fallback_injects_caption():
 @pytest.mark.asyncio
 async def test_middleware_reinjects_historical_images():
     db = AsyncMock()
-    mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db, vision_available=True)
+    mw = ChatAttachmentsMiddleware(
+        session_id="sess-1", user_id="user-1", db=db, vision_available=True
+    )
     historical = _img_row(id="img-old", file_name="old.png")
 
-    with (
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_images",
-            new_callable=AsyncMock,
-            return_value=[historical],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.read_image_bytes",
-            return_value=(b"img", "image/png"),
-        ),
+    with _mock_attachment_svc(
+        list_session_documents=AsyncMock(return_value=[]),
+        list_session_images=AsyncMock(return_value=[historical]),
+        read_image_bytes=MagicMock(return_value=(b"img", "image/png")),
     ):
         msg = HumanMessage(
             content="继续问",
@@ -289,17 +255,9 @@ async def test_middleware_noop_without_attachments():
     db = AsyncMock()
     mw = ChatAttachmentsMiddleware(session_id="sess-1", user_id="user-1", db=db)
 
-    with (
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_documents",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        patch(
-            "agent.middlewares.chat_attachments_middleware.ChatAttachmentService.list_session_images",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
+    with _mock_attachment_svc(
+        list_session_documents=AsyncMock(return_value=[]),
+        list_session_images=AsyncMock(return_value=[]),
     ):
         msg = HumanMessage(content="纯文本")
         result = await mw.abefore_agent({"messages": [msg]}, MagicMock())

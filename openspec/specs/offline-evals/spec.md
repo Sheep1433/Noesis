@@ -6,14 +6,19 @@
 
 ## Requirements
 
-### Requirement: Agent 离线评测
+### Requirement: Agent 离线评测经 harness
 
-`evals.agent` SHALL 提供可重复的 Agent benchmark 入口（含 Harbor 等工作负载，以仓库 README 为准）。评测装配 SHALL 使用与线上一致的 SuperAgent（或文档声明的 profile），**SHALL NOT** 依赖已删除的 `DeepResearchAgent` 作为默认被测对象。
+`evals.agent`（含 Harbor）SHALL 通过 `noesis` 包的工厂与流式核执行被测 Agent。**SHALL NOT** 在 worker 内长期维护与线上分叉的完整 middleware/factory 装配副本（允许注入评测专用 backend / prompt / collector）。
 
-#### Scenario: 文档可跑
+#### Scenario: Harbor 使用 harness factory
 
-- **WHEN** 按 `backend/evals/README.md` 执行示例命令
-- **THEN** SHALL 能启动评测进程并产出结果目录或报告
+- **WHEN** 运行 Harbor `noesis_worker`
+- **THEN** SHALL `from noesis.factory import create_noesis_agent` 并经 `noesis.runtime.stream.stream_agent_events` 消费事件
+
+#### Scenario: Harbor 不加载平台 wiring
+
+- **WHEN** Harbor worker 初始化内存 checkpointer 并执行无 KB/附件工具的 Agent
+- **THEN** SHALL NOT import `noesis_server.services.harness_wiring`，也 SHALL NOT 初始化平台 KB、附件或 ORM 服务
 
 ### Requirement: 测试用例两阶段评测
 
@@ -35,7 +40,7 @@
 
 ### Requirement: KB 检索评测指针
 
-单集合 KB 评测入口与 `knowledge-base` 中评测 Requirement 一致；本能力仅要求在 evals 索引中可发现，避免与在线检索 API 混淆。
+单集合 KB 评测入口 SHALL 与 `knowledge-base` 中评测 Requirement 一致；本能力 SHALL 保证其在 evals 索引中可发现，避免与在线检索 API 混淆。
 
 #### Scenario: 索引存在
 

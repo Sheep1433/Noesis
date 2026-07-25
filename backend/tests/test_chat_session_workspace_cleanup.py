@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from models.chat_models import TChatSession
+from noesis_server.models.chat_models import TChatSession
 
 
 def _session(user_id: str, session_id: str) -> TChatSession:
@@ -19,9 +19,9 @@ def _session(user_id: str, session_id: str) -> TChatSession:
 
 @pytest.mark.asyncio
 async def test_delete_session_removes_workspace(tmp_path: Path) -> None:
-    from config import user_data_paths as paths
-    from config import user_data_paths as udp
-    from services.chat_service import ChatService
+    from noesis.config import user_data_paths as paths
+    from noesis.config import user_data_paths as udp
+    from noesis_server.services.chat_service import ChatService
 
     users_root = tmp_path / "users"
     user_id = "u1"
@@ -35,7 +35,7 @@ async def test_delete_session_removes_workspace(tmp_path: Path) -> None:
 
     with (
         patch.object(udp, "_USERS_ROOT", users_root),
-        patch("services.chat_service.cancel_session_agent_runs", new_callable=AsyncMock),
+        patch("noesis_server.services.chat_service.cancel_session_agent_runs", new_callable=AsyncMock),
     ):
         paths.ensure_workspace_dir(user_id, session_id)
         session_dir = users_root / user_id / "sessions" / session_id

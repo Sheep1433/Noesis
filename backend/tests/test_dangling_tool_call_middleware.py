@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from agent.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
+from noesis.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
 
 
 def _ai_with_tool_calls(tool_calls):

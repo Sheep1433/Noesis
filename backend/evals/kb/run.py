@@ -82,12 +82,12 @@ def compute_recall_hit(
 async def _run_eval(args: argparse.Namespace) -> int:
     _ensure_path()
 
-    from config.database import AsyncSessionLocal
-    from config.get_db import init_database
-    from kb.chunk import normalize_query_execution_params
-    from kb.retrieval import KbRetrievalService
-    from services.kb_collection_config_service import KbCollectionConfigService
-    from services.qdrant_service import QdrantService, init_qdrant_client, is_qdrant_connected
+    from noesis_server.infrastructure.database.engine import AsyncSessionLocal
+    from noesis_server.infrastructure.database.dependency import init_database
+    from noesis_server.kb.chunk import normalize_query_execution_params
+    from noesis_server.kb.retrieval import KbRetrievalService
+    from noesis_server.services.kb_collection_config_service import KbCollectionConfigService
+    from noesis_server.kb.qdrant import QdrantService, init_qdrant_client, is_qdrant_connected
 
     await init_database()
     if not await init_qdrant_client():

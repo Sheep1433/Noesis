@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import pytest
 
-from agent.profiles.common_react_agent import GeneralQAAgent
-from agent.profiles.super_agent import SuperAgent
-from agent.profiles.fault_operation_agent import FaultOperationAgent
+from noesis.agents.common_qa import GeneralQAAgent
+from noesis.agents.super_agent import SuperAgent
+from noesis.agents.fault_operation import FaultOperationAgent
 
 
 @pytest.mark.parametrize(

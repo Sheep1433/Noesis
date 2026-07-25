@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent.middlewares.summary_offload_middleware import (
+from noesis.middlewares.summary_offload_middleware import (
     SummarizationOffloadMiddleware,
     create_summary_offload_middleware,
 )
@@ -14,7 +14,7 @@ from agent.middlewares.summary_offload_middleware import (
 
 def test_create_summary_offload_disabled() -> None:
     cfg = SimpleNamespace(summarization_enabled=False)
-    with patch("agent.middlewares.summary_offload_middleware.ModelConfig", cfg):
+    with patch("noesis.middlewares.summary_offload_middleware.ModelConfig", cfg):
         assert create_summary_offload_middleware() is None
 
 
@@ -34,17 +34,20 @@ def test_create_summary_offload_enabled_calls_summarization_llm() -> None:
     mock_model.profile = None
 
     with (
-        patch("agent.middlewares.summary_offload_middleware.ModelConfig", cfg),
-        patch("llm.model_limits.ModelConfig", cfg),
-        patch("agent.middlewares.summary_offload_middleware.resolve_context_max_tokens", return_value=8000),
+        patch("noesis.middlewares.summary_offload_middleware.ModelConfig", cfg),
+        patch("noesis.llm.model_limits.ModelConfig", cfg),
         patch(
-            "agent.middlewares.summary_offload_middleware.get_llm",
+            "noesis.middlewares.summary_offload_middleware.resolve_context_max_tokens",
+            return_value=8000,
+        ),
+        patch(
+            "noesis.middlewares.summary_offload_middleware.get_llm",
             return_value=mock_model,
-        ) as get_llm,
+        ) as get_llm_mock,
     ):
         mw = create_summary_offload_middleware()
 
-    get_llm.assert_called_once_with(purpose="summarization")
+    get_llm_mock.assert_called_once_with(purpose="summarization")
     assert isinstance(mw, SummarizationOffloadMiddleware)
     assert mock_model.profile == {"max_input_tokens": 8000}
     assert mw._get_token_trigger_value() == 50000
@@ -63,15 +66,18 @@ def test_create_summary_offload_uses_catalog_model_id_for_context() -> None:
     mock_model.profile = None
 
     with (
-        patch("agent.middlewares.summary_offload_middleware.ModelConfig", cfg),
-        patch("agent.middlewares.summary_offload_middleware.resolve_context_max_tokens", return_value=1_000_000) as resolve_ctx,
+        patch("noesis.middlewares.summary_offload_middleware.ModelConfig", cfg),
         patch(
-            "agent.middlewares.summary_offload_middleware.get_llm",
+            "noesis.middlewares.summary_offload_middleware.resolve_context_max_tokens",
+            return_value=1_000_000,
+        ) as resolve_context,
+        patch(
+            "noesis.middlewares.summary_offload_middleware.get_llm",
             return_value=mock_model,
         ),
     ):
         mw = create_summary_offload_middleware(model_id="nemotron")
-        resolve_ctx.assert_any_call("nemotron")
+        resolve_context.assert_any_call("nemotron")
         assert mw._get_token_trigger_value() == 750_000
 
 
@@ -86,10 +92,10 @@ def test_get_llm_summarization_falls_back_to_main_model() -> None:
         model_base_url="https://main.example/v1",
     )
     with (
-        patch("llm.factory.ModelConfig", cfg),
-        patch("llm.factory._build_chat_model", return_value=MagicMock()) as build,
+        patch("noesis.llm.factory.ModelConfig", cfg),
+        patch("noesis.llm.factory._build_chat_model", return_value=MagicMock()) as build,
     ):
-        from llm.factory import get_llm
+        from noesis.llm.factory import get_llm
 
         get_llm(purpose="summarization")
 
@@ -110,10 +116,10 @@ def test_get_llm_summarization_uses_dedicated_model_name() -> None:
         model_base_url="https://main.example/v1",
     )
     with (
-        patch("llm.factory.ModelConfig", cfg),
-        patch("llm.factory._build_chat_model", return_value=MagicMock()) as build,
+        patch("noesis.llm.factory.ModelConfig", cfg),
+        patch("noesis.llm.factory._build_chat_model", return_value=MagicMock()) as build,
     ):
-        from llm.factory import get_llm
+        from noesis.llm.factory import get_llm
 
         get_llm(purpose="summarization")
 

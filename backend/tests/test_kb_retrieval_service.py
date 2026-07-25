@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
-from kb.retrieval import KbRetrievalService
+from noesis_server.kb.retrieval import KbRetrievalService
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def mock_retrieval():
     return retrieval
 
 
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 @patch.object(KbRetrievalService, "_get_retrieval")
 def test_search_vector_mode(mock_get_retrieval, _mock_connected, mock_retrieval):
     mock_get_retrieval.return_value = mock_retrieval
@@ -54,7 +54,7 @@ def test_search_vector_mode(mock_get_retrieval, _mock_connected, mock_retrieval)
     mock_retrieval.vector_search.assert_called_once()
 
 
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 @patch.object(KbRetrievalService, "_get_retrieval")
 def test_search_with_filters_splits_prefix(mock_get_retrieval, _mock_connected, mock_retrieval):
     mock_get_retrieval.return_value = mock_retrieval
@@ -72,8 +72,8 @@ def test_search_with_filters_splits_prefix(mock_get_retrieval, _mock_connected, 
     assert kwargs.get("metadata_filter") == {"file_name": "a.md"}
 
 
-@patch("kb.retrieval.service.is_rerank_available", return_value=False)
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.retrieval.service.is_rerank_available", return_value=False)
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 @patch.object(KbRetrievalService, "_get_retrieval")
 def test_search_bm25_returns_nonzero_scores(
     mock_get_retrieval, _mock_connected, _mock_rerank, mock_retrieval
@@ -104,7 +104,7 @@ def test_search_bm25_returns_nonzero_scores(
     mock_retrieval.bm25_search_with_scores.assert_called_once()
 
 
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 @patch.object(KbRetrievalService, "_get_retrieval")
 def test_search_hybrid_uses_rrf(mock_get_retrieval, _mock_connected, mock_retrieval):
     mock_retrieval.hybrid_search_with_scores.return_value = [
@@ -140,8 +140,8 @@ def test_search_hybrid_uses_rrf(mock_get_retrieval, _mock_connected, mock_retrie
     )
 
 
-@patch("kb.retrieval.service.get_qdrant_client")
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.retrieval.service.get_qdrant_client")
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 def test_fetch_chunks_by_chunk_index_field(mock_connected, mock_client_fn):
     point0 = MagicMock()
     point0.payload = {
@@ -159,8 +159,8 @@ def test_fetch_chunks_by_chunk_index_field(mock_connected, mock_client_fn):
     assert chunks == ["chunk-zero", "chunk-two"]
 
 
-@patch("kb.retrieval.service.get_qdrant_client")
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis_server.kb.retrieval.service.get_qdrant_client")
+@patch("noesis_server.kb.retrieval.service.is_qdrant_connected", return_value=True)
 def test_fetch_full_document_by_file_name_sorted(mock_connected, mock_client_fn):
     p0 = MagicMock()
     p0.payload = {

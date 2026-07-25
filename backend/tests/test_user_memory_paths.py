@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from config import user_data_paths as paths
+from noesis.config import user_data_paths as paths
 
 
 def test_get_user_agents_md_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

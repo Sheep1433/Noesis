@@ -16,7 +16,7 @@
 ## 知识库上传与 Rerank 配置（2026-07-01）
 
 - **上传暂存**：`POST .../upload` 写入 `.data/kb_uploads/{collection}/{file_hash}_{原名}`，解析后删除；Qdrant 分片 `file_name` 经 `source_file_name` 显式传入，不再用 `basename(tmp)`。
-- **Rerank 密钥**：`ModelSettings.rerank_model_api_key` 在 `config/env.py` 中回退 `embedding_model_api_key`；`RERANK_MODEL_API_KEY` 仅作可选覆盖，prod 不必单独配置。
+- **Rerank 密钥**：`ModelSettings.rerank_model_api_key` 在 `noesis/config/env.py` 中回退 `embedding_model_api_key`；`RERANK_MODEL_API_KEY` 仅作可选覆盖，prod 不必单独配置。
 
 ## 动态切换对话模型（2026-07-02）
 
@@ -774,3 +774,42 @@ backends/
 - Noesis 专用 → `Noesis/.agents/skills/<name>/`；Cursor 用 `.cursor/skills/<name>` **软链**
 - `langfuse-trace-analysis`：对照 Langfuse UI + 业务 DB，扫 execute 失败文本（timeout/cd、权限、缺 node 等）
 - **禁止**把仓库专用流程写进 knowledge-base；误推 `.agents` 到公开 GitHub 须立刻回退
+
+## 2026-07-25 — extract-noesis-harness：Agent 内核整包独立
+
+**Why：** 评测/通道要调 Agent 内核，但不能反向依赖平台 `services`/Delivery；旧「整包搬家 + AgentRunService」与 Delivery 重叠故搁置。对齐 DeerFlow：`packages/harness` = 内核，Gateway/QaService = 壳，同 factory、异投递。
+
+**How to apply：**
+- 代码：`backend/packages/harness/noesis/`（import `noesis`）；不保留旧命名空间 shim
+- 依赖：`noesis -X→ services`、`-X→ domain.chat.delivery`；附件/KB 经 `services/harness_wiring.wire_harness_platform_deps` → `noesis.runtime.deps`
+- 流式核：`noesis.runtime.stream.stream_agent_events`；Harbor/BrowseComp 同核
+- Delivery 仍在 `domain/chat/delivery`；**不要**再造 RunManager
+- OpenSpec：`openspec/changes/extract-noesis-harness/`
+- 回归：`cd backend && uv run pytest tests/ -q`
+
+## 2026-07-25 — harness 彻底与平台解耦（deps 绑定）
+
+**Why：** 仅搬目录不够；`domain.attachments` / Langfuse / ORM / `kb` 仍让 noesis 粘平台。目标是评测可只依赖 noesis+config，平台单向注入。
+
+**How to apply：**
+- 附件输入适配：`noesis.runtime.attachments.*`；旧 domain 路径已移除
+- case VO：`noesis.agents.case_generate.vo`；`schemas.case_generate_vo` shim
+- **禁止** noesis → `domain` / `services` / `models` / `api` / `kb`（静态）；LLM 内聚为 `noesis.llm`
+- 一律经 `noesis.runtime.deps` + `services.harness_wiring.wire_harness_platform_deps`
+- 运行时配置与日志内聚：`noesis.config`、`noesis.runtime.logging`；禁止反向依赖 backend 顶层 `config/common`
+- 宿主/评测的稳定公共入口为 `noesis.config` / `noesis.runtime`；二者通过惰性导出避免配置与 logging 的循环初始化，细分模块路径仅用于内部实现和精确 patch。
+- 静态检查：`rg 'from (domain|services|models|api|kb)\\.' packages/harness/noesis` 应为空
+
+## 2026-07-25 — backend 平台宿主收敛
+
+- 平台 Web/数据库/KB/通道代码统一位于 `backend/noesis_server/`，import 使用 `noesis_server.*`；backend 根只保留 `app.py`、`evals`、`packages`、迁移/脚本与测试。
+- 三个顶层运行边界：`noesis`（Agent harness）、`noesis_server`（平台宿主）、`evals`（评测）；旧 `api/services/domain/config/kb/...` 顶层包不保留 shim。
+- 依赖修正：Qdrant 归 `noesis_server.kb.qdrant`；Telegram/HITL timeout 与 KB seed 归 services/bootstrap；数据库归 `infrastructure.database`；Langfuse 归 `infrastructure.observability`；删除 `services.qa_service` 兼容入口。
+- Knowledge Base API 只保留 FastAPI transport；集合、上传、检索编排统一进入 `noesis_server.services.knowledge_base_service`。
+
+## 2026-07-25 — auth domain 与 ORM 解耦
+
+- `noesis_server.domain.auth` 只保留 `AuthUser` / `AuthSession`、policy 和 repository Protocol，不 import FastAPI、SQLAlchemy、ORM 或平台异常。
+- `noesis_server.infrastructure.database.repositories.auth` 负责 ORM/entity 显式映射；repository 只 flush，不 commit/rollback。
+- Session、邀请码、登录注册事务边界位于 `noesis_server.services.auth` / `LoginService`；Cookie transport 位于 `noesis_server.api.auth_cookie`。
+- 数据库表、Session Cookie、CSRF 与 `/api/auth` 外部行为不变。
