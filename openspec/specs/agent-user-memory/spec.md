@@ -1,5 +1,8 @@
-## ADDED Requirements
+# agent-user-memory Specification
 
+## Purpose
+TBD - created by archiving change add-agent-user-settings. Update Purpose after archive.
+## Requirements
 ### Requirement: 设置页为用户记忆主编辑入口
 
 除会话上下文面板外，系统 SHALL 将「个人与 Agent 设置」中的 `profile` / `memory` section（见 `agent-user-settings`）视为用户编辑 `USER.md` 与 `AGENTS.md` 的**主入口**。用户级 memory API 与面板 PUT、Agent `/memory/` **SHALL** 指向同一磁盘文件。
@@ -32,8 +35,6 @@ Agent 虚拟路径 SHALL 能访问 L2（建议 `/memory/daily/YYYY-MM-DD.md` 映
 
 - **WHEN** 调用获取用户某日日记路径的辅助函数（如 `get_user_daily_memory_path(uid, date)`）
 - **THEN** 返回路径 SHALL 等于 `{DATA_DIR}/users/{uid}/memory/{date}.md` 且 `date` 为 `YYYY-MM-DD`
-
-## MODIFIED Requirements
 
 ### Requirement: 上下文面板 SHALL 允许用户编辑记忆文件
 

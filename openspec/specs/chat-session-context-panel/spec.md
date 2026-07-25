@@ -1,5 +1,8 @@
-## ADDED Requirements
+# chat-session-context-panel Specification
 
+## Purpose
+TBD - created by archiving change add-agent-user-settings. Update Purpose after archive.
+## Requirements
 ### Requirement: 记忆文件节点 SHALL 支持跳转设置入口
 
 当上下文面板展示用户根下的 `USER.md` 或 `AGENTS.md` 时，UI SHALL 提供「在设置中打开」或等价操作，导航至设置壳对应 `profile` / `memory` section。面板内编辑保存行为 SHALL 保持可用（兼容路径）。
@@ -8,8 +11,6 @@
 
 - **WHEN** 用户在上下文树选中 `USER.md` 并触发「在设置中打开」
 - **THEN** 系统 SHALL 导航至设置壳且 section 为 `profile`
-
-## MODIFIED Requirements
 
 ### Requirement: 上下文面板 SHALL 支持文本文件下载与编辑
 

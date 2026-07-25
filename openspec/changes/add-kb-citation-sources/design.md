@@ -1,244 +1,118 @@
 ## Context
 
-当前 COMMON_QA 链路：
+COMMON_QA 当前由 harness 的 `search_knowledge_base` 返回 JSON hits，平台 Bridge 将工具结果写入 assistant `tool` part，最终由 PersistSink 落库。检索 hit 已有 `file_name`、`header_path` 和内容，但 `KbSearchHit.id` 混用了 Qdrant point id、`content_hash` 与其它 id；前端来源详情 API 又直接接受 collection/shard，无法证明该 shard 确实属于当前 assistant 回答。
 
-```
-GeneralQAAgent
-  → search_knowledge_base（返回 hits JSON，含 file_name / header_path）
-  → tool-output-available（落入 content.parts type=tool）
-  → LLM 生成 text-delta（正文可能手写来源名）
-  → finish → 落库 text + tool parts
-```
-
-痛点与约束见 `proposal.md`。补充现网约束：
-
-- **SSE 键名**：`LangGraphSseBridge` 与 `useSSEStream` 现网统一 **snake_case**（`message_id`、`part_id`、`text_delta`、`parent_task_call_id`），golden 测试同风格。
-- **shard_id**：入库时 Qdrant point id 为 `hash_to_uuid(content_hash)`；向量检索会在 `metadata.point_id` 写入真实 point id，但 `_doc_to_hit` 若回退到裸 `content_hash` 则 `retrieve` 会 404。
-- **partial 落库**：`stop_chat` / `_persist_disconnect_partial` 当前直接 `builder.to_dict()`，不经过 bridge finalize。
-
-首版范围：**仅 `qa_type=COMMON_QA`** + `search_knowledge_base`。
-
-## 难度评估（为何引用溯源比「加个 SSE 字段」难）
-
-引用溯源在 Noesis 里被拆成 **四层能力**，难度不均：
-
-| 层级 | 内容 | 难度 | 说明 |
-|------|------|------|------|
-| **L1 数据** | Qdrant payload 已有 `file_name` / `header_path` / `chunk_index` | 低 | 入库链路成熟 |
-| **L2 工程** | `CitationsPart`、snake_case SSE、抽屉调 shard API | 中 | 与 platform-chat 模式一致，可控 |
-| **L3 检索定位** | `shard_id` 在 hybrid/BM25 路径可 retrieve | **中高** | 现网 `_doc_to_hit` 与 RRF 合并路径有缝，须修 + 集成测 |
-| **L4 语义绑定** | 正文陈述 ↔ 具体分片（cited-only） | **高** | 当前方案 **强依赖 LLM 写 `[n]`**，无后端语义对齐 |
-
-**结论**：本 change **有信心交付 L1–L2 + 刷新后可回放的 L3 兜底**；**L4 的产品体验上限取决于模型是否遵守角标约定**，fallback Top-5 是妥协而非 Perplexity 级「真实引用」。实现前应对业务方对齐：**首版是「结构化来源展示 + 可点击原文」**，不是「可审计的逐句归因」。
-
-**置信度摘要**（实现前心理预期）：
-
-- 落库 / 历史回放 / 正常 finish 的 SSE：**高**
-- 点击打开分片（修好 `_doc_to_hit` + hybrid 实测后）：**中高**
-- 文内 `[n]` + cited-only 与模型回答一致：**中低**
-- 用户 `/stop` 后**流式过程中**立刻看到来源列表：**低**（见 §5.1，首版不保证）
+旧设计在 harness 工具中通过 contextvar 注册 Citation，并在 finish 时解析 `[n]`。这有五个结构问题：harness 反向感知平台消息模型；数字序号跨多次工具调用不稳定；stop/disconnect 需要复制 finalize；Top-K fallback 混淆“引用”和“检索”；公开 shard id 泄漏存储实现且授权上下文不足。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- 端到端 Citation：登记 → 正文 `[n]` → cited 子集 → SSE（snake_case）→ `CitationsPart` 落库 → UI。
-- **completed / partial / stop** 三种终态均尽力写入 `citations` part（保证刷新后可回放）。
-- 单测 + **验收级** eval / 手工用例监控 `[n]` 引用率与 `citation_fallback` 占比（见 §9）。
+- 在不破坏 harness 独立性的前提下，让知识库工具输出可机器读取的 provenance。
+- 来源在 tool end 即进入 assistant builder，使 completed、partial、disconnect、HITL resume 自然复用同一快照。
+- 稳定表达“模型明确引用”和“工具仅检索”，不夸大归因置信度。
+- 来源详情访问以 assistant message 为授权根，刷新后可回放。
+- 支持同一轮多次/并行检索，不依赖可变数字编号。
 
 **Non-Goals:**
 
-- `get_knowledge_document` 自动 citation、PDF bbox、其它 qa_type UI、独立 REST、用户编辑来源。
+- 不承诺逐句审计级事实归因、PDF bbox 或跨文档段落对齐。
+- 不为旧消息反向生成来源。
+- 首版仅覆盖 COMMON_QA 的 `search_knowledge_base`。
+- 不把 Qdrant point id、collection 内部名称设计为永久公开标识。
 
 ## Decisions
 
-### 1. Citation 数据模型与 citation_id
+### 1. Harness 输出 provenance envelope，不持有 CitationCollector
 
-```python
-@dataclass
-class Citation:
-    citation_id: str       # UUID5，见下
-    index: int             # 1-based，回合内全局递增
-    collection_name: str
-    file_name: str
-    shard_id: Optional[str]  # Qdrant point id；无法解析时为 None
-    chunk_index: Optional[int]
-    header_path: Optional[str]
-    snippet: str           # ≤ 280 字符
-    score: Optional[float]
-```
-
-**citation_id 算法（规格化）**：
-
-```text
-uuid5(NAMESPACE_URL, f"noesis:citation:{collection_name}\0{file_name}\0{shard_id_or_empty}")
-```
-
-- `shard_id` 为空时第三段用空字符串；同一三元组跨端稳定。
-- 单测 golden 须锁定样例输入输出。
-
-**回合内序号上限**：`index` 最大 **50**；超出不再分配新 citation（工具仍返回 hit 但无 `citation_index`），避免角标爆炸。
-
-### 2. shard_id 来源与空值
-
-**决策**：`shard_id` SHALL 仅为可 `retrieve` 的 Qdrant point id。
-
-| 优先级 | 来源 |
-|--------|------|
-| 1 | `Document.metadata["point_id"]`（向量/混合检索命中时由 store 写入） |
-| 2 | `VectorStorage.hash_to_uuid(metadata["content_hash"])`（**必须**调用 `store.py` 同一函数：`uuid5(NAMESPACE_DNS, content_hash)`，禁止自写） |
-| 3 | 无法解析 → `shard_id=None`，Citation 仍登记；抽屉走文档级 fallback |
-
-**实现要求**：修改 `_doc_to_hit`，`KbSearchHit.id` 按上表解析；**禁止**将裸 `content_hash` 字符串作为 `shard_id` 透出。
-
-**hybrid 注意**：默认 `search_mode=hybrid` 走 RRF，命中可能来自 BM25 分支；BM25 索引文档 **无** `metadata.point_id`，须依赖优先级 2。须加 **`hybrid` 集成测试**（真实 Collection），不能仅测 vector 单路径。历史 payload 缺 `content_hash` 时 `shard_id` 大量为 null，抽屉体验降级为文档级定位——属已知数据债。
-
-`chunk_index`：**硬依赖** — `_doc_to_hit` 从 payload metadata 写入 `KbSearchHit` 新字段；`kb_search_tool` 透传至 hit JSON。
-
-### 3. merged_text 与角标解析
-
-**merged_text 范围**：
-
-- **仅**合并 assistant 回合内 **`type=text` 且 `parent_task_call_id` 为空** 的 part（顶层主回答正文），按 parts 顺序直接拼接（无分隔符）；
-- **排除** `reasoning`、`tool`、以及子 Agent 嵌套 text（COMMON_QA 虽无 `task`，规格预先收紧以免误计入）；
-- 流式路径：`AssistantMessageBuilder.merged_text_content()` 与落库 parts 语义一致。
-
-**角标解析**（`resolve.py`）：
-
-1. 对 merged_text 先剔除 fenced code block（` ``` ` 与 `~~~` 包裹段），再解析；
-2. 正则：`\[(\d{1,3})\](?!\()` — 支持 1–999，排除 Markdown 链接 `[n](url)`；
-3. 解析结果 `cited_indices` 仅保留 `1 ≤ n ≤ 50` 且已在 registry 登记的 index；
-4. reasoning 内容 **不参与**解析（因 merged_text 不含 reasoning）。
-
-**cited 子集与 fallback**：有角标 → cited-only；无角标但有登记 → score Top-5 + `citation_fallback=true`。
-
-**fallback 语义（产品妥协）**：文末列表 **不代表** 模型逐条引用了这 5 条，仅表示「检索认为相关」；UI 须展示 fallback 说明。若业务要求审计级归因，须二期做正文–snippet 相似度推断（见 §10）。
-
-### 4. SSE：`citations-available`（snake_case）
-
-**时序**：在 **`finish` 之前**发出；若本轮曾发出 `text-end`，则在其后；**若无 `text-end`（无正文流）**，则在最后一个业务帧（如 `tool-output-available`）之后、`finish` 之前发出。
+`search_knowledge_base` 每个 hit 增加：
 
 ```json
 {
-  "type": "citations-available",
-  "message_id": "msg-xxx",
-  "part_id": "part-citations-xxx",
-  "citations": [
-    {
-      "citation_id": "uuid",
-      "index": 1,
-      "collection_name": "requirement_docs",
-      "file_name": "登录PRD.md",
-      "shard_id": "abc-123",
-      "chunk_index": 4,
-      "header_path": "登录PRD.md > 验证码",
-      "snippet": "验证码有效期为 5 分钟……",
-      "score": 0.87
-    }
-  ],
-  "citation_fallback": false
+  "source_ref": "kb_7f3a9c2d1e",
+  "locator": {
+    "collection_name": "requirement_docs",
+    "document_key": "<file_hash-or-stable-document-key>",
+    "chunk_index": 4,
+    "point_id": "<optional-internal-qdrant-id>"
+  },
+  "title": "登录需求.md",
+  "header_path": "登录 > 验证码",
+  "snippet": "..."
 }
 ```
 
-- SSE 与落库 **均 snake_case**；前端 `useSSEStream` 直接读 snake_case，与 `text-delta` 一致。
-- `citations` 数组项字段与 `CitationsPart.items[]` 同形。
+`source_ref` 由规范化 locator 的 SHA-256 截断生成，只是模型可引用的回合内稳定 token，不是授权凭据。harness 不 import `noesis_server`，也不创建平台 message part。
 
-### 5. 持久化与终态路径
+选择该方案而不是 contextvar collector，是因为工具返回本身就是 Agent 与宿主之间的稳定边界；平台可以在 `on_tool_end` 解析已知 schema，而评测也能原样消费。
 
-#### 5.1 共享函数与调用顺序（硬约束）
+### 2. 平台在 tool end 登记 EvidenceSource
 
-```text
-_flush_ctx_text_buffer(ctx, builder)
-_finalize_citations(builder, collector)   # 须在 to_dict / 用户停止文案之前
-# 正常 finish：bridge 另发 citations-available SSE
-snapshot = builder.to_dict()
-content = append_user_stop_notice_to_content(snapshot)   # 仅 stop；citations part 已在 snapshot 内
-persist(content)
-```
+`LangGraphSseBridge` 仅对已知工具名和 schema version 解析 provenance，并调用 `AssistantMessageBuilder.upsert_sources()`。Source part 按 `source_ref` 去重，保留：
 
-`_finalize_citations(builder, collector)`：
+- `source_id`：平台生成的 message-scoped opaque id；
+- `source_ref`：供模型正文引用；
+- `status`: `retrieved | cited`；
+- `title`、`header_path`、截断 snippet snapshot；
+- 私有 locator：collection、document key、chunk index、可选 point id；
+- `tool_call_ids`：审计检索来源，不暴露给普通 UI。
 
-1. `merged_text = builder.merged_text_content()`（仅顶层 text parts）；
-2. `items, fallback = collector.finalize(merged_text)`；
-3. 若 `items` 非空 → `builder.append_citations(...)`（**排在既有 text/tool parts 之后、用户停止提示 text 之前**）。
+登记发生在 tool end，因此 stop、disconnect 与 HITL pending 时 builder 已含来源，无需三套 collector finalize。HITL resume 从落库 content 恢复 source part 后继续去重。
 
-**CitationCollector 登记位置（硬约束）**：**仅**在 `kb_search_tool._format_hits`（主线程、并行检索 `as_completed` 之后）调用 `register_hits`。**禁止**在 `ThreadPoolExecutor` worker（`_search_one_collection`）内登记——`contextvar` 不会传播到子线程。
+### 3. 模型引用稳定 token，前端映射数字角标
 
-**调用点**：
+提示词要求模型使用 `[[source:kb_xxx]]`。后端只解析顶层 assistant text part，忽略 reasoning、tool、子 Agent text、fenced code 和 inline code。命中已登记 `source_ref` 才把对应 source 标为 `cited`；未知 token 保持普通文本并记录观测，不生成来源。
 
-| 路径 | SSE `citations-available` | 落库 `citations` part |
-|------|---------------------------|------------------------|
-| 正常 `finish`（bridge） | **发出** | 是 |
-| `stop_chat` | **首版不保证**（流协程与 stop API 解耦，不向已开 SSE 注入帧） | 是（`status=partial`） |
-| 意外断连 `_persist_disconnect_partial` | **不发**（连接已断） | 是（`status=partial`） |
+前端按正文首次出现顺序把有效 token 渲染成 `[1]`、`[2]`，来源列表使用同一映射。数字只属于展示，不进入模型协议和持久化身份。
 
-**用户预期**：`/stop` 或断连后，**刷新会话**应能看到来源列表；流式过程中 stop 后立刻出列表 **不是** 首版承诺。
+没有有效 token 时，来源保持 `retrieved`。UI MAY 在折叠区域显示“本轮检索来源”，但 SHALL NOT 使用“引用”文案。取消旧方案 `citation_fallback=true`。
 
-用户停止后刷新：**须**能从 DB 读到 `citations` part。
+### 4. 来源事件分为 available 与 finalized
 
-### 6. CitationsPart
+平台通过统一 RunEvent/Delivery 发出：
 
-```json
-{
-  "type": "citations",
-  "items": [ { "citation_id", "index", "collection_name", "file_name", "shard_id", ... } ],
-  "citation_fallback": false
-}
-```
+- `sources-available`：紧随对应 `tool-output-available`，包含新增/更新的 retrieved sources；
+- `sources-finalized`：正文结束后、`finish` 前发送 cited source ids 与最终展示顺序。
 
-`shard_id` 可为 `null`。插入于 text parts 之后、终态 persist 前。
+断连不发送后续 SSE，但 PersistSink 仍使用 builder 快照；stop API 不需要向另一条 SSE 注入事件。客户端刷新后从消息 content 恢复相同结果。
 
-### 7. 提示词、前端、Langfuse
+### 5. 来源详情以 assistant message 为授权根
 
-与初版一致；Markdown 角标仅处理 **text part** 渲染路径中的 `[n]`（代码块内由渲染层跳过，与后端解析一致）。
+新增 `GET /api/chat/messages/{message_id}/sources/{source_id}`。Service SHALL：
 
-Langfuse：`finalize` 写入 cited 摘要 metadata。
+1. 加载 assistant message 与所属 session；
+2. 校验当前用户拥有 session/message；
+3. 从该消息持久化 source part 查 locator，拒绝客户端自带 collection/shard；
+4. 重新校验 collection 仍在用户可访问范围；
+5. 优先按内部 point id 读取，失败时按 document key + chunk index 回退；
+6. 返回当前片段和 snapshot 状态，找不到时返回 404/410 语义而非跨库搜索。
 
-### 8. 部署顺序
+公开 `source_id` 不可反解 Qdrant id。即使用户猜到另一个 source id，也无法脱离 message ownership 读取。
 
-**前后端须同版本发布**：后端先落库 `citations` part 而前端未解析会导致刷新丢失列表。tasks 规定：前端 `5.x` 与后端 `3.x` **同一 PR / 同一发布**，或前端先合 tolerant 解析。
+### 6. 文档身份与重建策略
 
-### 9. 验收与 eval（验收门槛，非「可有可无」）
-
-| 类型 | 内容 | 阻塞发布 |
-|------|------|----------|
-| 单元 | collector、resolve、`citation_id`、SSE golden | 是 |
-| 集成 | **hybrid** 检索 → `shard_id` 可 retrieve 或明确 fallback | 是 |
-| 手工 | `requirement_docs` 种子入库 → COMMON_QA → `[n]` / 列表 / 抽屉 / **stop 后刷新** | 是 |
-| LLM 行为 | 记录 `[n]` 率与 `citation_fallback` 占比 | 记录指标；占比过高须产品评审 |
-
-自动化：`test_citation_e2e_prompt.py` 用固定 assistant 文本（含 `[1]`）断言 finalize，不依赖 live LLM。
-
-### 10. 已知局限与二期方向
-
-| 局限 | 首版处理 | 二期可选 |
-|------|----------|----------|
-| LLM 不写 `[n]` | fallback Top-5 + 文案 | 正文–snippet 重叠推断 cited |
-| 非半角角标 `【1】` | 不支持 | 扩展 resolve |
-| inline code 内 `[1]` | 不处理 | Markdown AST 统一 |
-| stop 时无流式来源列表 | 刷新 DB 回放 | stream_state 注入 SSE |
-| 审计级逐句归因 | 不承诺 | 独立归因或结构化输出 |
+point id 只用于当前存储快速定位。长期 locator 以 `document_key`（优先 file hash/文档稳定 id）+ `chunk_index` 为主，并保留 snippet snapshot。重新分块后无法精确定位时，UI 仍可展示 snapshot，但 SHALL 标记“原文已更新或不可定位”，不能静默打开相似但不同的片段。
 
 ## Risks / Trade-offs
 
-- **[Risk] LLM 不写 `[n]`（最高业务风险）** → fallback + 指标；体验可能是「有相关文档」而非「引用了哪句」。
-- **[Risk] hybrid/BM25 缺 point_id** → 仅 `VectorStorage.hash_to_uuid`；hybrid 集成测；旧库无 `content_hash` 抽屉降级。
-- **[Risk] stop 无 SSE 引用帧** → partial 落库 + stop 后刷新验收。
-- **[Risk] contextvar 误用** → 登记只在 `_format_hits` 主线程。
-- **[Trade-off] fallback 列表易误解为已引用** → `citation_fallback` UI 强制说明。
+- **[Risk] 模型仍可能不输出 source token** → 明确显示为“检索来源”，记录 cited/retrieved 比率，不伪造引用。
+- **[Risk] 工具 JSON 增大上下文** → snippet 和 provenance 字段设硬上限，平台 source part 去重。
+- **[Risk] 文档重建后 locator 失效** → point id 快路径 + document key/chunk fallback + snapshot 降级状态。
+- **[Risk] Bridge 解析工具 schema 形成特例** → 使用 versioned provenance envelope，解析器独立于 KB service，可供未来工具复用。
+- **[Trade-off] 两个 SSE 事件比 finish-only 复杂** → 换取 stop/disconnect 无专用 finalize、来源更早可见和状态语义准确。
 
 ## Migration Plan
 
-1. `domain/chat/citations/` + 单测（含 citation_id、resolve、shard_id）。
-2. 修复 `_doc_to_hit` + `kb_search_tool` + collector contextvar。
-3. `_finalize_citations` 接入 bridge、`stop_chat`、disconnect。
-4. 前端 5.x + 6.x 与后端同 PR。
-5. 同步 `docs/prd/platform/SSE流式数据设计.md` §2.2 事件表。
-6. `uv run pytest`；`pnpm lint`。
+1. 先扩展 harness KB hit schema 与边界测试，确保不 import 平台模块。
+2. 增加平台 SourcePart、provenance parser、builder 恢复/去重和 RunEvent 映射。
+3. 增加 assistant-scoped source detail API 与授权测试。
+4. 前端先支持未知/新 source part 的 tolerant 解析，再启用 SSE 和 UI。
+5. 更新 COMMON_QA prompt，最后开启 source token 解析与 cited 状态。
+6. 全量后端测试、前端 lint/build、hybrid 集成测试和 stop/断连/HITL 回放测试通过后发布。
 
-**回滚**：停用 collector 与发帧；旧前端忽略未知 type。
+回滚时可停止 prompt token 与来源事件发射；已落库 source part 由 tolerant 客户端忽略，不影响正文和 tool parts。
 
 ## Open Questions
 
-- `citation_fallback` Top-K 首版硬编码 5。
-- 二期是否做「无角标时用 snippet–正文重叠推断 cited」——待首版指标（fallback 占比）再定。
+- `document_key` 采用现有 `file_hash`，还是补正式 document id；实现前用迁移检查确认覆盖率。
+- `sources-available` 是否向普通用户默认折叠 retrieved sources，交由 UI 验收决定，不影响协议。
