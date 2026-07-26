@@ -1,5 +1,6 @@
-# 测试用例生成设计
+# 测试用例生成工程设计
 
+> 状态：Current
 > OpenSpec：`agent-profiles`、`offline-evals`
 
 ## 1. 场景

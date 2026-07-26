@@ -137,7 +137,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 - 自动化运行明细默认保留 30 天、每用户最多 1000 条；清理不删除任务的最新状态摘要。
 - 用户级 Provider、通道密钥与 MCP Header 要求配置 `SETTINGS_ENCRYPTION_KEY`，缺失时敏感配置写入会被拒绝。
 
-运维与产品契约见 [设置控制面说明](docs/prd/platform/设置控制面.md)。
+运维与产品契约见 [设置控制面说明](docs/architecture/platform/settings-control-plane.md)。
 
 ### 访问地址（dev 模式）
 
@@ -175,7 +175,7 @@ Noesis/
 ├── scripts/           # run.sh（dev | prod | docker）
 ├── assets/            # README 演示截图
 ├── openspec/          # 变更提案与规格
-└── docs/              # PRD、Bug 记录、调试笔记
+└── docs/              # 技术调研、架构、工程专题与调试记录
 ```
 
 ## 文档索引
@@ -190,7 +190,7 @@ Noesis/
 | [deploy/README.md](deploy/README.md) | 容器部署与远程发布 |
 | [backend/sql/README.md](backend/sql/README.md) | 数据库迁移（Alembic） |
 | `./scripts/run.sh help` | 部署模式、端口与环境变量 |
-| `docs/` | PRD、Bug 记录、调试笔记 |
+| [docs/README.md](docs/README.md) | 技术调研、架构、工程专题、测试与调试文档 |
 
 ## 开发
 

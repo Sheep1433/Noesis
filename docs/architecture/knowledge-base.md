@@ -1,5 +1,6 @@
-# 知识库 RAG 底座设计
+# 知识库 RAG 架构
 
+> 状态：Current
 > OpenSpec：`knowledge-base`；多模态规划见 active change `kb-multimodal-retrieval`
 
 ## 1. 目标

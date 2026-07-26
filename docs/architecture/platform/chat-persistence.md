@@ -1,5 +1,6 @@
-# 聊天记录设计
+# 聊天记录与持久化架构
 
+> 状态：Current
 > OpenSpec：`platform-chat`、`user-platform`、`agent-run-delivery`
 
 ## 1. 数据职责
@@ -23,7 +24,7 @@ Service 层负责事务和权限；API 不直接访问 ORM。认证使用 Cookie
 
 ## 3. 消息模型
 
-assistant 使用 multipart `content.parts`。一轮流式回答只写一条 assistant 行，经 skeleton、可选 checkpoint、终态 UPDATE 完成。详细状态机见 [SSE 流式数据设计](SSE流式数据设计.md)。
+assistant 使用 multipart `content.parts`。一轮流式回答只写一条 assistant 行，经 skeleton、可选 checkpoint、终态 UPDATE 完成。详细状态机见 [SSE 流式数据设计](chat-streaming.md)。
 
 历史读取必须兼容旧纯文本 content；新 part 必须 versioned 或提供 tolerant parser，不能导致整条历史消息丢失。
 

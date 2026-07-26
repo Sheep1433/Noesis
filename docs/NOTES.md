@@ -460,14 +460,14 @@
 
 - **问题**：刷新/挂载 ModelSelector → `ensureSession` 造空「新对话」；方案 B 附件与 Composer 偏好物化时机冲突；FAULT `+` 仍可能走 KB 上传。
 - **定稿**：L2 Staging+Commit；状态机 DRAFT→COMMITTING→ACTIVE；偏好 User defaults ⊥ draft overlay ⊥ `session.extra`；列表不展示 draft/空壳；ACTIVE 用 `/chat/:id` 续聊。
-- **文档**：`docs/prd/platform/Chat对话面生命周期设计.md`；规格 `openspec/specs/chat-surface-lifecycle/spec.md`（演进 `chat-composer-send-upload`）。
+- **历史文档路径（已删除）**：`docs/prd/platform/Chat对话面生命周期设计.md`；规格 `openspec/specs/chat-surface-lifecycle/spec.md`（演进 `chat-composer-send-upload`）。
 - **落地顺序**：P0 禁挂载 ensure + 滤列表 + 关 FAULT 上传 → P1 路由续聊 → P2 staging/TTL → P3 用户默认设置与 TestAssistant 收编。
 
 ## 2026-07-22 — Chat 对话面：去掉 draft，改回发送才物化
 
 - **修订**：产品确认未发送附件无需服务端保存，刷新丢失合理；删除 draft / staging / soft lifecycle。
 - **现行定稿**：COMPOSING→SENDING→ACTIVE；点击发送才 ensure；附件保持方案 B（本地队列）；偏好三层仍在，overlay 仅内存。
-- **文档已改**：`docs/prd/platform/Chat对话面生命周期设计.md`、`openspec/specs/chat-surface-lifecycle/spec.md`；落地 P0→P1→P2（无 staging 阶段）。
+- **历史文档路径（已删除）**：`docs/prd/platform/Chat对话面生命周期设计.md`；当时同步修改 `openspec/specs/chat-surface-lifecycle/spec.md`，落地 P0→P1→P2（无 staging 阶段）。
 
 ## 2026-07-22 — Chat Surface P0 实现（feat/chat-surface-lifecycle）
 

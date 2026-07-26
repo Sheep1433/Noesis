@@ -43,7 +43,7 @@
 | 工作区 / 沙箱 / 记忆 | `agent-runtime` | `agent-profiles` |
 | HITL | `agent-hitl` | `agent-delivery`（通道 resume） |
 | 某一种 qa_type | `agent-profiles` | 对应实现 `packages/harness/noesis/agents/` |
-| 知识库 | `knowledge-base` | `docs/prd/knowledge-base/` |
+| 知识库 | `knowledge-base` | `docs/architecture/knowledge-base.md` |
 | 登录 / DB | `user-platform` | `container-deployment` |
 
 ## qa_type 路由

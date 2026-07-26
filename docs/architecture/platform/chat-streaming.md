@@ -1,5 +1,6 @@
-# SSE 流式数据设计
+# SSE 流式数据架构
 
+> 状态：Current
 > OpenSpec：`platform-chat`、`agent-run-delivery`、`agent-tool-failure-handling`
 
 ## 1. 边界

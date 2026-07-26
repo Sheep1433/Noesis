@@ -1,5 +1,8 @@
 # 设置控制面
 
+> 状态：Current
+> OpenSpec：`expand-settings-control-plane`
+
 ## 范围
 
 设置页统一管理模型连接与默认用途、MCP、自动化运行、Telegram 通道、用户画像与记忆、通知偏好、系统诊断和设置迁移。聊天 `/api/chat` 的请求字段、SSE 事件和 assistant 单行终态落库契约保持不变。

@@ -1,5 +1,6 @@
-# 故障运维 Agent 设计
+# 故障运维 Agent 工程设计
 
+> 状态：Current
 > OpenSpec：`agent-profiles`、`agent-hitl`、`agent-tool-failure-handling`
 
 ## 1. 定位
