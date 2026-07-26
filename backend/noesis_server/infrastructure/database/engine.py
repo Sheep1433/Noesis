@@ -57,5 +57,10 @@ async_engine = create_async_engine(
     pool_timeout=DataBaseConfig.db_pool_timeout,
     pool_pre_ping=True,  # 连接前验证，避免使用已断开的连接
 )
-AsyncSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=async_engine)
+AsyncSessionLocal = async_sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+    bind=async_engine,
+)
 inspector = AsyncDatabaseInspector(async_engine)

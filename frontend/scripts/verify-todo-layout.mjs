@@ -18,9 +18,13 @@ async function main() {
 
   const injected = await page.evaluate(() => {
     const app = document.querySelector('#app')
-    if (!app) return { ok: false, reason: 'no #app' }
+    if (!app) {
+      return { ok: false, reason: 'no #app' }
+    }
     const pinia = app.__vue_app__?.config?.globalProperties?.$pinia
-    if (!pinia) return { ok: false, reason: 'no pinia' }
+    if (!pinia) {
+      return { ok: false, reason: 'no pinia' }
+    }
     const stores = pinia._s
     let business = stores.get('business-store') ?? null
     if (!business) {
@@ -31,7 +35,9 @@ async function main() {
         }
       }
     }
-    if (!business) return { ok: false, reason: 'no business store' }
+    if (!business) {
+      return { ok: false, reason: 'no business store' }
+    }
     business.update_todos([
       { content: '测试 Todo 1', status: 'in_progress' },
       { content: '测试 Todo 2', status: 'pending' },

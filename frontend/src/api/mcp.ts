@@ -14,6 +14,7 @@ export interface McpServerCatalogItem {
   transport: string
   url?: string | null
   display_name?: string | null
+  enabled: boolean
 }
 
 export interface McpServerCatalogResponse {
@@ -24,6 +25,9 @@ export interface McpServerStatusItem extends McpServerCatalogItem {
   status: McpServerStatus
   tool_count: number
   message: string
+  checked_at?: number
+  error_category?: string
+  correlation_id?: string | null
 }
 
 export interface McpServerStatusResponse {
@@ -51,9 +55,9 @@ export async function listMcpServerStatus(
   probe = false,
   scope: 'user' | 'all' = 'user',
 ): Promise<McpServerStatusResponse> {
-  const url =
-    `${API_BASE}/servers/status` +
-    `?probe=${probe ? 'true' : 'false'}&scope=${encodeURIComponent(scope)}`
+  const url
+    = `${API_BASE}/servers/status`
+      + `?probe=${probe ? 'true' : 'false'}&scope=${encodeURIComponent(scope)}`
   const response = await authFetch(url, { method: 'GET' })
   if (!response.ok) {
     let detail = `获取 MCP 状态失败: ${response.status}`
@@ -108,4 +112,36 @@ export async function probeMcpServer(serverId: string): Promise<{
     throw new Error(`探测失败: ${response.status}`)
   }
   return parseAuthJson(response)
+}
+
+export type McpServerWrite = {
+  transport: 'streamable_http' | 'sse'
+  url: string
+  display_name?: string
+  enabled: boolean
+  headers_action: 'keep' | 'replace' | 'clear'
+  headers?: Record<string, string>
+}
+
+export async function upsertMcpServer(serverId: string, payload: McpServerWrite) {
+  const response = await authFetch(`${API_BASE}/servers/${encodeURIComponent(serverId)}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  })
+  return parseAuthJson<McpServerCatalogItem>(response)
+}
+
+export async function deleteMcpServer(serverId: string) {
+  const response = await authFetch(`${API_BASE}/servers/${encodeURIComponent(serverId)}`, { method: 'DELETE' })
+  return parseAuthJson(response)
+}
+
+export async function setMcpServerEnabled(serverId: string, enabled: boolean) {
+  const action = enabled ? 'enable' : 'disable'
+  const response = await authFetch(`${API_BASE}/servers/${encodeURIComponent(serverId)}/${action}`, { method: 'POST' })
+  return parseAuthJson<McpServerCatalogItem>(response)
+}
+
+export async function listMcpServerTools(serverId: string, refresh = false) {
+  const response = await authFetch(`${API_BASE}/servers/${encodeURIComponent(serverId)}/tools?refresh=${refresh}`, { method: 'GET' })
+  return parseAuthJson<{ tools: Array<{ name: string, description: string }> }>(response)
 }

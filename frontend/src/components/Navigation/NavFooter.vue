@@ -7,11 +7,10 @@ withDefaults(
     showBorder: false,
   },
 )
-
-const link = ref('https://github.com/pdsuwwz')
 </script>
 
 <template>
+  <span v-if="false"></span>
   <!-- <footer
     class="footer"
     :class="{

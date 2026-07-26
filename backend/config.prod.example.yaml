@@ -121,6 +121,15 @@ messaging:
   telegram_runtime_enabled: false
   telegram_poll_timeout_seconds: 25
 
+settings_features:
+  provider_models: false
+  mcp_management: false
+  automation_operations: false
+  channel_operations: false
+  agent_context: false
+  observability: false
+  import_export: false
+
 qdrant:
   host: 127.0.0.1
   port: 6333

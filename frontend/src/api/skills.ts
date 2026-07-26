@@ -161,9 +161,9 @@ export async function downloadSkillPackageArchive(
   packageName: string,
   source: SkillSource,
 ): Promise<void> {
-  const url =
-    `${API_BASE}/fs/package/archive` +
-    `?path=${encodeURIComponent(packageName)}&source=${encodeURIComponent(source)}`
+  const url
+    = `${API_BASE}/fs/package/archive`
+      + `?path=${encodeURIComponent(packageName)}&source=${encodeURIComponent(source)}`
   const response = await authFetch(url, { method: 'GET' })
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: response.statusText }))

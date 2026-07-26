@@ -10,9 +10,14 @@ from typing import Any, Dict, List, Optional
 from noesis.config.paths import DATA_DIR
 from noesis.config.user_data_paths import ensure_user_channels_path, get_user_channels_path
 from noesis_server.domain.chat.delivery.channels import ChannelBinding, channel_bindings
+from noesis_server.domain.chat.delivery.channel_health import channel_health
+from noesis_server.common.security.secrets import SecretCipher, SecretEncryptionUnavailable, secret_suffix
+from noesis_server.exceptions.exception import ServiceException
+from noesis_server.constants.code_enum import IntentEnum
 
 _ALLOWED_TYPES = frozenset({"telegram", "wechat", "feishu"})
 _USERS_ROOT = DATA_DIR / "users"
+_ALLOWED_QA_TYPES = {item.value[0] for item in IntentEnum}
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,22 @@ class RuntimeChannelConfig:
     default_qa_type: str
     display_name: str
     enabled: bool = True
+    session_strategy: str = "persistent"
+    delivery_preference: str = "reply"
+
+
+def _encrypt_token(token: str) -> tuple[str, str | None]:
+    try:
+        return f"enc:{SecretCipher().encrypt(token)}", secret_suffix(token)
+    except SecretEncryptionUnavailable as exc:
+        raise ServiceException(data={"code": "secret_encryption_unavailable"}, message="敏感配置暂时无法保存") from exc
+
+
+def _runtime_token(value: str | None) -> str:
+    raw = str(value or "")
+    if raw.startswith("enc:"):
+        return SecretCipher().decrypt(raw.removeprefix("enc:"))
+    return raw
 
 
 def _mask_token(token: Optional[str]) -> Optional[str]:
@@ -89,17 +110,19 @@ def _sync_bindings(user_id: str | int, channels: List[Dict[str, Any]]) -> None:
         )
 
 
-def _public_view(ch: Dict[str, Any]) -> Dict[str, Any]:
+def _public_view(ch: Dict[str, Any], user_id: str | int) -> Dict[str, Any]:
     secrets = ch.get("secrets") if isinstance(ch.get("secrets"), dict) else {}
     pairing = ch.get("pairing") if isinstance(ch.get("pairing"), dict) else {}
     routing = ch.get("routing") if isinstance(ch.get("routing"), dict) else {}
     token = secrets.get("bot_token") or ch.get("bot_token")
+    meta = ch.get("secret_meta") if isinstance(ch.get("secret_meta"), dict) else {}
+    suffix = meta.get("bot_token_suffix")
     return {
         "channel_id": ch.get("channel_id"),
         "type": ch.get("type"),
         "enabled": bool(ch.get("enabled")),
         "display_name": ch.get("display_name") or "",
-        "bot_token_masked": _mask_token(token),
+        "bot_token_masked": f"****{suffix}" if suffix else _mask_token(token if not str(token or "").startswith("enc:") else None),
         "has_token": bool(token),
         "pairing_chat_id": pairing.get("chat_id") or ch.get("pairing_chat_id"),
         "default_qa_type": routing.get("default_qa_type")
@@ -107,19 +130,33 @@ def _public_view(ch: Dict[str, Any]) -> Dict[str, Any]:
         or "SUPER_AGENT_QA",
         "default_session_id": routing.get("default_session_id")
         or ch.get("default_session_id"),
+        "session_strategy": routing.get("session_strategy") or "persistent",
+        "delivery_preference": routing.get("delivery_preference") or "reply",
+        "health": channel_health.get(user_id, str(ch.get("channel_id") or "")),
     }
 
 
 class MessagingChannelService:
     @staticmethod
+    def _validate_routing(payload: Dict[str, Any]) -> None:
+        qa_type = str(payload.get("default_qa_type") or "SUPER_AGENT_QA")
+        if qa_type not in _ALLOWED_QA_TYPES:
+            raise ValueError("不支持的默认 Agent 类型")
+        if str(payload.get("session_strategy") or "persistent") not in {"persistent", "new_per_message"}:
+            raise ValueError("不支持的会话策略")
+        if str(payload.get("delivery_preference") or "reply") not in {"reply", "silent"}:
+            raise ValueError("不支持的回复策略")
+
+    @staticmethod
     def list_channels(user_id: str | int) -> List[Dict[str, Any]]:
         data = _load_raw(user_id)
         channels = data.get("channels") or []
         _sync_bindings(user_id, channels)
-        return [_public_view(c) for c in channels if isinstance(c, dict)]
+        return [_public_view(c, user_id) for c in channels if isinstance(c, dict)]
 
     @classmethod
     def create_channel(cls, user_id: str | int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        cls._validate_routing(payload)
         ctype = str(payload.get("type") or "telegram").strip().lower()
         if ctype not in _ALLOWED_TYPES:
             raise ValueError(f"不支持的通道类型: {ctype}")
@@ -127,29 +164,34 @@ class MessagingChannelService:
         channels: List[Dict[str, Any]] = list(data.get("channels") or [])
         channel_id = str(uuid.uuid4())
         token = payload.get("bot_token")
+        stored_token, suffix = _encrypt_token(str(token)) if token else (None, None)
         ch = {
             "channel_id": channel_id,
             "type": ctype,
             "enabled": bool(payload.get("enabled", True)),
             "display_name": str(payload.get("display_name") or ctype).strip(),
-            "secrets": {"bot_token": token} if token else {},
+            "secrets": {"bot_token": stored_token} if stored_token else {},
+            "secret_meta": {"bot_token_suffix": suffix} if suffix else {},
             "pairing": {"chat_id": payload.get("pairing_chat_id")}
             if payload.get("pairing_chat_id")
             else {},
             "routing": {
                 "default_qa_type": payload.get("default_qa_type") or "SUPER_AGENT_QA",
                 "default_session_id": payload.get("default_session_id") or channel_id,
+                "session_strategy": payload.get("session_strategy") or "persistent",
+                "delivery_preference": payload.get("delivery_preference") or "reply",
             },
         }
         channels.append(ch)
         data["channels"] = channels
         _save_raw(user_id, data)
-        return _public_view(ch)
+        return _public_view(ch, user_id)
 
     @classmethod
     def update_channel(
         cls, user_id: str | int, channel_id: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
+        cls._validate_routing(payload)
         data = _load_raw(user_id)
         channels: List[Dict[str, Any]] = list(data.get("channels") or [])
         idx = next((i for i, c in enumerate(channels) if c.get("channel_id") == channel_id), -1)
@@ -166,9 +208,20 @@ class MessagingChannelService:
                 raise ValueError(f"不支持的通道类型: {ctype}")
             ch["type"] = ctype
         secrets = dict(ch.get("secrets") or {})
-        if payload.get("bot_token"):
-            secrets["bot_token"] = payload["bot_token"]
+        token_action = str(payload.get("bot_token_action") or ("replace" if payload.get("bot_token") else "keep"))
+        secret_meta = dict(ch.get("secret_meta") or {})
+        if token_action == "replace":
+            token = str(payload.get("bot_token") or "").strip()
+            if not token:
+                raise ValueError("替换 Token 时必须填写新值")
+            secrets["bot_token"], secret_meta["bot_token_suffix"] = _encrypt_token(token)
+        elif token_action == "clear":
+            secrets.pop("bot_token", None)
+            secret_meta.pop("bot_token_suffix", None)
+        elif token_action != "keep":
+            raise ValueError("不支持的 Token 写入动作")
         ch["secrets"] = secrets
+        ch["secret_meta"] = secret_meta
         pairing = dict(ch.get("pairing") or {})
         if "pairing_chat_id" in payload:
             if payload["pairing_chat_id"]:
@@ -181,11 +234,15 @@ class MessagingChannelService:
             routing["default_qa_type"] = payload["default_qa_type"]
         if "default_session_id" in payload:
             routing["default_session_id"] = payload.get("default_session_id")
+        if payload.get("session_strategy"):
+            routing["session_strategy"] = payload["session_strategy"]
+        if payload.get("delivery_preference"):
+            routing["delivery_preference"] = payload["delivery_preference"]
         ch["routing"] = routing
         channels[idx] = ch
         data["channels"] = channels
         _save_raw(user_id, data)
-        return _public_view(ch)
+        return _public_view(ch, user_id)
 
     @staticmethod
     def delete_channel(user_id: str | int, channel_id: str) -> None:
@@ -199,6 +256,26 @@ class MessagingChannelService:
     @staticmethod
     def channels_config_path(user_id: str | int) -> Path:
         return get_user_channels_path(user_id)
+
+    @staticmethod
+    def get_runtime_channel(user_id: str | int, channel_id: str) -> RuntimeChannelConfig:
+        data = _load_raw(user_id)
+        ch = next((item for item in data.get("channels", []) if isinstance(item, dict) and item.get("channel_id") == channel_id), None)
+        if ch is None:
+            raise KeyError(channel_id)
+        secrets = ch.get("secrets") if isinstance(ch.get("secrets"), dict) else {}
+        token = secrets.get("bot_token") or ch.get("bot_token")
+        pairing = ch.get("pairing") if isinstance(ch.get("pairing"), dict) else {}
+        routing = ch.get("routing") if isinstance(ch.get("routing"), dict) else {}
+        return RuntimeChannelConfig(
+            user_id=str(user_id), channel_id=channel_id, channel_type=str(ch.get("type") or "telegram"),
+            bot_token=_runtime_token(str(token or "")), pairing_chat_id=str(pairing.get("chat_id")) if pairing.get("chat_id") else None,
+            default_session_id=str(routing.get("default_session_id") or channel_id),
+            default_qa_type=str(routing.get("default_qa_type") or "SUPER_AGENT_QA"),
+            display_name=str(ch.get("display_name") or "telegram"), enabled=bool(ch.get("enabled")),
+            session_strategy=str(routing.get("session_strategy") or "persistent"),
+            delivery_preference=str(routing.get("delivery_preference") or "reply"),
+        )
 
     @staticmethod
     def iter_enabled_runtime(
@@ -242,7 +319,7 @@ class MessagingChannelService:
                         user_id=str(uid),
                         channel_id=channel_id,
                         channel_type=ctype,
-                        bot_token=str(token),
+                        bot_token=_runtime_token(str(token)),
                         pairing_chat_id=str(pair_id) if pair_id else None,
                         default_session_id=str(session_id),
                         default_qa_type=str(
@@ -252,6 +329,8 @@ class MessagingChannelService:
                         ),
                         display_name=str(ch.get("display_name") or ctype),
                         enabled=True,
+                        session_strategy=str(routing.get("session_strategy") or "persistent"),
+                        delivery_preference=str(routing.get("delivery_preference") or "reply"),
                     )
                 )
 

@@ -19,6 +19,8 @@ from noesis_server.api import (
     auth_router,
     mcp_router,
     user_settings_router,
+    settings_router,
+    provider_router,
 )
 from noesis_server.kb.qdrant import init_qdrant_client, close_qdrant_client
 from noesis.backends.sandbox_lifecycle import shutdown_sandboxes
@@ -72,6 +74,8 @@ controller_list = [
     {'router': auth_router, 'tags': ['认证模块']},
     {'router':  user_router, 'tags': ['用户模块']},
     {'router':  user_settings_router, 'tags': ['用户设置']},
+    {'router':  settings_router, 'tags': ['设置控制面']},
+    {'router':  provider_router, 'tags': ['模型与 Provider']},
     {'router':  chat_router, 'tags': ['聊天历史模块']},
     {'router':  knowledge_base_router, 'tags': ['知识库模块']},
     {'router':  skill_router, 'tags': ['Skill 模块']},

@@ -1,16 +1,15 @@
 <script lang="tsx" setup>
 import type { ScrollbarInst, UploadCustomRequestOptions } from 'naive-ui'
-import type { TcScene, TcTestCase, CaseGenStatus } from '@/views/TestAssistant/scenesToMarkmap'
+import type { TestCaseExportCaseItem } from '@/api/chat'
+import type { CaseGenStatus, TcScene, TcTestCase } from '@/views/TestAssistant/scenesToMarkmap'
 import { Transformer } from 'markmap-lib'
 import { Toolbar } from 'markmap-toolbar'
 import { Markmap } from 'markmap-view'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { createSession, exportTestCaseMarkdown, getSessionMessages } from '@/api/chat'
-import type { TestCaseExportCaseItem } from '@/api/chat'
 import { query_user_qa_record } from '@/api'
+import { createSession, exportTestCaseMarkdown, getSessionMessages } from '@/api/chat'
 import { getCollections, uploadDocument } from '@/api/knowledgeBase'
 import { KB_FILE_DICT_REF, TEST_CASE_UPLOAD_COLLECTION } from '@/config/knowledge'
-import { cssVar, themeCssVar } from '@/config/theme'
 import { normalizeApiContent } from '@/views/chat/messageParts'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import {
@@ -532,9 +531,9 @@ const sse = useSSEStream({
         const failHint = failed ? `，${failed} 条失败` : ''
         const failDetails = failed
           ? Object.entries(caseGenErrors.value)
-            .filter(([pn]) => caseGenStatus.value[pn] === 'error')
-            .map(([pn, msg]) => `「${pn}」：${msg}`)
-            .join('；')
+              .filter(([pn]) => caseGenStatus.value[pn] === 'error')
+              .map(([pn, msg]) => `「${pn}」：${msg}`)
+              .join('；')
           : ''
         appendChat(
           'assistant',
@@ -554,7 +553,7 @@ const sse = useSSEStream({
     loading.value = false
     tcCasesByPoint.value = {}
     caseGenStatus.value = {}
-  caseGenErrors.value = {}
+    caseGenErrors.value = {}
     tcPhase.value = 'idle'
     tcPhaseRailIndex.value = -1
     if (tcScenes.value.length) {
@@ -781,7 +780,7 @@ async function runTestCaseAfterUpload(fileLabel: string) {
     selectedPointNames.value = []
     tcCasesByPoint.value = {}
     caseGenStatus.value = {}
-  caseGenErrors.value = {}
+    caseGenErrors.value = {}
     setMindmapMarkdown('# 测试场景与测试点\n\n正在生成测试场景与测试点…')
     const session = await createSession({
       title: `测试用例-${kbName}`.slice(0, 80),
@@ -842,7 +841,7 @@ async function submitConfirmedCases() {
     window.$ModalMessage?.error?.(msg)
     loading.value = false
     caseGenStatus.value = {}
-  caseGenErrors.value = {}
+    caseGenErrors.value = {}
   }
 }
 
@@ -1074,7 +1073,7 @@ onBeforeUnmount(() => {
           @click="handleExportCases"
         >
           <template #icon>
-            <span class="i-mingcute:download-2-line text-16" />
+            <span class="i-mingcute:download-2-line text-16"></span>
           </template>
           导出 Markdown
         </n-button>
@@ -1139,7 +1138,7 @@ onBeforeUnmount(() => {
                 }"
               >
                 <template #avatar>
-                  <div class="size-25 text-primary i-my-svg:user-avatar" />
+                  <div class="size-25 text-primary i-my-svg:user-avatar"></div>
                 </template>
                 {{ m.text }}
               </n-tag>
@@ -1170,7 +1169,7 @@ onBeforeUnmount(() => {
                     class="tc-case-progress-item"
                     :class="`tc-case-progress-item--${item.status}`"
                   >
-                    <span class="tc-case-progress-dot" />
+                    <span class="tc-case-progress-dot"></span>
                     <span class="tc-case-progress-name">{{ item.sceneName }}</span>
                     <span class="tc-case-progress-state">{{ item.label }}</span>
                   </li>

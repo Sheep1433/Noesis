@@ -127,6 +127,18 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 
 4. **（可选）联网检索**：配置 `TAVILY_API_KEY`；未配置时自动回退 DuckDuckGo 搜索。
 
+### 设置控制面
+
+`/settings` 提供模型与 Provider、MCP、自动化、通讯通道、画像与记忆、通知、系统诊断及设置迁移入口。新增设置 API 使用 Cookie Session 与 CSRF；导出文件不包含 API Key、Token、敏感 Header、消息、附件、checkpoint 或运行日志。
+
+- 数据库升级由启动流程执行 migration `202607260001`，新增 Provider、模型用途、自动化运行、通知偏好与设置审计表。
+- `backend/config.yaml` 的 `settings_features` 可分别控制 `provider_models`、`mcp_management`、`automation_operations`、`channel_operations`、`agent_context`、`observability` 与 `import_export`。
+- 回滚前端时可关闭对应 capability；数据库新增表应保留，旧配置与兼容 API 仍可使用。
+- 自动化运行明细默认保留 30 天、每用户最多 1000 条；清理不删除任务的最新状态摘要。
+- 用户级 Provider、通道密钥与 MCP Header 要求配置 `SETTINGS_ENCRYPTION_KEY`，缺失时敏感配置写入会被拒绝。
+
+运维与产品契约见 [设置控制面说明](docs/prd/platform/设置控制面.md)。
+
 ### 访问地址（dev 模式）
 
 | 服务 | 地址 |

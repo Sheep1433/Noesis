@@ -20,18 +20,18 @@ async def _tick_once() -> None:
             logger.exception("scheduled task claim failed")
             return
         for row in rows:
-            try:
-                await ScheduledTaskService._execute_task(row)
-                row.last_status = "success"
-                row.last_error = None
-            except Exception as exc:
-                logger.exception("scheduled task execute failed id={}", row.id)
-                row.last_status = "error"
-                row.last_error = str(exc)[:2000]
             from noesis_server.services.scheduled_task_service import _now_ms
-
+            run = await ScheduledTaskService.execute_with_record(
+                db,
+                row,
+                trigger_source="schedule",
+                idempotency_key=f"schedule:{row.id}:{row.next_run_at}",
+            )
+            row.last_status = run.status
+            row.last_error = run.error_message
             row.last_run_at = _now_ms()
             row.updated_at = row.last_run_at
+            await ScheduledTaskService.cleanup_runs(db, row.user_id)
         if rows:
             await db.commit()
 

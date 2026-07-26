@@ -87,6 +87,9 @@ class TelegramBotClient:
         result = await self._call("getUpdates", payload)
         return list(result or [])
 
+    async def get_me(self) -> Dict[str, Any]:
+        return dict(await self._call("getMe") or {})
+
     async def send_message(
         self,
         chat_id: str | int,

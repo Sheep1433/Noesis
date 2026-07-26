@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -28,7 +29,10 @@ from noesis_server.schemas.mcp_vo import (
     McpProbeResponse,
     McpServerStatusItemVo,
     McpServerUpsertRequest,
+    McpToolCatalogItemVo,
 )
+
+_REDACTED_HEADER = "[REDACTED]"
 
 # 用户侧默认写字面量（个人 mcp.json 不进 git）；平台 extensions/mcp/mcp.json 才用 ${ENV} 藏密钥
 _DEFAULT_USER_MCP = """{
@@ -69,23 +73,55 @@ def _probe_error_message(exc: BaseException, *, url: str | None) -> str:
     """把常见连接失败翻成可操作的中文提示。"""
     text = format_mcp_error(exc)
     lower = text.lower()
-    target = url or "MCP endpoint"
+    target = (url or "MCP endpoint").split("?", 1)[0]
     if "502" in text or "bad gateway" in lower:
-        return (
-            f"{target} 返回 502：本机远程运维 MCP 未正常响应。"
-            f"请用 START_MCP=1 ./scripts/run.sh dev 启动 extensions/mcp/ssh，"
-            f"或检查 NOESIS_MCP_REMOTE_URL。"
-        )
+        return "MCP 服务暂时不可用，请确认服务已启动后重试"
     if "connect" in lower and (
         "refused" in lower or "error" in lower or "failed" in lower
     ):
-        return (
-            f"无法连接 {target}。若为 remote_ops，请启动本地 MCP："
-            f"START_MCP=1 ./scripts/run.sh dev"
-        )
+        return f"无法连接 {target}，请检查地址并确认服务可用"
     if "timed out" in lower or "timeout" in lower:
         return f"连接 {target} 超时"
-    return text
+    return "MCP 服务暂时不可用，请检查连接配置后重试"
+
+
+def _probe_error_category(exc: BaseException) -> str:
+    text = format_mcp_error(exc).lower()
+    if any(code in text for code in ("401", "403", "unauthorized", "forbidden", "authentication")):
+        return "authentication"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if any(word in text for word in ("connect", "refused", "dns", "network")):
+        return "connection"
+    return "provider"
+
+
+def _redacted_config_content(cfg: McpJsonConfig) -> str:
+    payload = {"mcpServers": json.loads(json.dumps(cfg.mcpServers))}
+    for server in payload["mcpServers"].values():
+        headers = server.get("headers")
+        if isinstance(headers, dict):
+            server["headers"] = {key: _REDACTED_HEADER for key in headers}
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def _merge_redacted_headers(user_id: str | int, servers: dict[str, Any]) -> dict[str, Any]:
+    current = load_user_mcp_json(user_id).mcpServers
+    for sid, server in servers.items():
+        headers = server.get("headers") if isinstance(server, dict) else None
+        if not isinstance(headers, dict):
+            continue
+        old_headers = current.get(sid, {}).get("headers", {})
+        merged = {}
+        for key, value in headers.items():
+            if value == _REDACTED_HEADER:
+                if key not in old_headers:
+                    raise ValueError(f"header {key!r} 没有可保留的现有值，请填写新值或删除该项")
+                merged[key] = old_headers[key]
+            else:
+                merged[key] = value
+        server["headers"] = merged
+    return servers
 
 
 class McpService:
@@ -124,10 +160,10 @@ class McpService:
         if materialize_user_mcp_literals(user_id):
             _clear_mcp_caches()
         path = get_user_mcp_path(user_id)
-        content = path.read_text(encoding="utf-8")
+        content = _redacted_config_content(load_user_mcp_json(user_id))
         return McpConfigFileResponse(
             content=content,
-            path_hint=f"users/{user_id}/mcp.json",
+            path_hint="个人 MCP 配置",
             exists=True,
         )
 
@@ -148,6 +184,7 @@ class McpService:
         if not isinstance(servers, dict):
             raise ValueError("mcpServers 必须是对象")
 
+        servers = _merge_redacted_headers(user_id, servers)
         validated: dict[str, Any] = {}
         for sid, cfg in servers.items():
             validate_server_id(str(sid))
@@ -175,10 +212,19 @@ class McpService:
         raw: dict[str, Any] = {
             "transport": body.transport,
             "url": body.url.strip(),
+            "enabled": body.enabled,
         }
         if body.display_name:
             raw["display_name"] = body.display_name.strip()
-        if body.headers:
+        existing = load_user_mcp_json(user_id).mcpServers.get(sid, {})
+        if body.headers_action == "keep" and existing.get("headers"):
+            raw["headers"] = existing["headers"]
+        elif body.headers_action == "replace" and body.headers:
+            raw["headers"] = body.headers
+        elif body.headers_action == "clear":
+            raw.pop("headers", None)
+        elif body.headers:
+            # 兼容旧客户端：传 headers 即视为 replace。
             raw["headers"] = body.headers
         if body.extra:
             raw.update(body.extra)
@@ -203,6 +249,17 @@ class McpService:
         logger.info("已删除用户 MCP server user_id={} id={}", user_id, sid)
 
     @classmethod
+    def set_user_server_enabled(cls, user_id: str | int, server_id: str, enabled: bool) -> McpServerCatalogItem:
+        sid = validate_server_id(server_id)
+        cfg = load_user_mcp_json(user_id)
+        if sid not in cfg.mcpServers:
+            raise KeyError("MCP Server 不存在")
+        cfg.mcpServers[sid]["enabled"] = enabled
+        save_user_mcp_json(user_id, cfg)
+        _clear_mcp_caches()
+        return next(item for item in list_user_servers(user_id) if item.id == sid)
+
+    @classmethod
     async def probe_server(
         cls,
         user_id: str | int,
@@ -223,7 +280,11 @@ class McpService:
 
         connections = resolve_server_connections([sid], user_id=user_id)
         if sid not in connections:
-            result = McpProbeResponse(ok=False, tool_count=0, message="server 未配置")
+            raw_server = load_user_mcp_json(user_id).mcpServers.get(sid)
+            if raw_server and raw_server.get("enabled") is False:
+                result = McpProbeResponse(ok=False, tool_count=0, message="MCP Server 已停用", checked_at=int(time.time() * 1000), error_category="disabled")
+            else:
+                result = McpProbeResponse(ok=False, tool_count=0, message="MCP Server 未配置", checked_at=int(time.time() * 1000), error_category="configuration")
             _PROBE_CACHE[cache_key] = (now + _PROBE_ERR_CACHE_TTL_SEC, result)
             return result
 
@@ -241,21 +302,28 @@ class McpService:
                 ok=True,
                 tool_count=len(tools),
                 message=f"连通正常，发现 {len(tools)} 个工具",
+                checked_at=int(time.time() * 1000),
+                correlation_id=str(uuid.uuid4()),
             )
         except TimeoutError:
             result = McpProbeResponse(
                 ok=False,
                 tool_count=0,
                 message=(
-                    f"探测超时（>{_PROBE_HTTP_TIMEOUT.total_seconds():.0f}s），"
-                    f"目标={url or sid}。网络较慢时可再点刷新。"
+                    f"探测超时（>{_PROBE_HTTP_TIMEOUT.total_seconds():.0f}s），请检查网络后重试"
                 ),
+                checked_at=int(time.time() * 1000),
+                error_category="timeout",
+                correlation_id=str(uuid.uuid4()),
             )
         except Exception as e:
             result = McpProbeResponse(
                 ok=False,
                 tool_count=0,
                 message=_probe_error_message(e, url=url),
+                checked_at=int(time.time() * 1000),
+                error_category=_probe_error_category(e),
+                correlation_id=str(uuid.uuid4()),
             )
 
         ttl = _PROBE_OK_CACHE_TTL_SEC if result.ok else _PROBE_ERR_CACHE_TTL_SEC
@@ -281,6 +349,7 @@ class McpService:
                     transport=s.transport,
                     url=s.url,
                     display_name=s.display_name,
+                    enabled=s.enabled,
                     status="unknown",
                 )
                 for s in catalog
@@ -297,7 +366,23 @@ class McpService:
                 status="ok" if result.ok else "error",
                 tool_count=result.tool_count,
                 message=result.message,
+                enabled=s.enabled,
+                checked_at=result.checked_at,
+                error_category=result.error_category,
+                correlation_id=result.correlation_id,
             )
 
         # 并行探测：总耗时 ≈ max(各 server)，而非 sum
         return list(await asyncio.gather(*[_one(s) for s in catalog]))
+
+    @classmethod
+    async def list_server_tools(cls, user_id: str | int, server_id: str) -> list[McpToolCatalogItemVo]:
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        sid = validate_server_id(server_id)
+        connections = resolve_server_connections([sid], user_id=user_id)
+        if sid not in connections:
+            raise KeyError("MCP Server 不存在或已停用")
+        client = MultiServerMCPClient({sid: connections[sid]})
+        tools = await asyncio.wait_for(client.get_tools(), timeout=_PROBE_HTTP_TIMEOUT.total_seconds() + 1)
+        return [McpToolCatalogItemVo(name=str(tool.name), description=str(getattr(tool, "description", "") or "")) for tool in tools]

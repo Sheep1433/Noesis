@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, Field
 
 from noesis.runtime.logging import logger
@@ -28,6 +29,7 @@ MCP_PROFILE_SIMPLE_MCP = "simple_mcp"
 USER_ALLOWED_TRANSPORTS = frozenset({"streamable_http", "sse"})
 McpServerSource = Literal["platform", "user"]
 _SERVER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_ENCRYPTED_HEADER_PREFIX = "noesis:enc:v1:"
 
 
 class McpJsonConfig(BaseModel):
@@ -41,6 +43,7 @@ class McpServerCatalogItem(BaseModel):
     transport: str
     url: str | None = None
     display_name: str | None = None
+    enabled: bool = True
 
 
 def resolve_mcp_config_path() -> Path:
@@ -154,7 +157,9 @@ def load_user_mcp_json(user_id: str | int) -> McpJsonConfig:
     if not path.is_file():
         return McpJsonConfig()
     try:
-        return _read_mcp_json_file(path)
+        cfg = _read_mcp_json_file(path)
+        cfg.mcpServers = _decrypt_user_headers(cfg.mcpServers)
+        return cfg
     except Exception as e:
         logger.warning("读取用户 MCP 配置失败 user_id={} err={}", user_id, e)
         return McpJsonConfig()
@@ -162,9 +167,61 @@ def load_user_mcp_json(user_id: str | int) -> McpJsonConfig:
 
 def save_user_mcp_json(user_id: str | int, cfg: McpJsonConfig) -> Path:
     path = ensure_user_mcp_path(user_id)
-    payload = {"mcpServers": cfg.mcpServers}
+    payload = {"mcpServers": _encrypt_user_headers(cfg.mcpServers)}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def _settings_fernet() -> Fernet:
+    raw = (os.environ.get("SETTINGS_ENCRYPTION_KEY") or "").strip()
+    if not raw:
+        raise ValueError("保存 MCP Header 前请先配置设置加密密钥")
+    try:
+        return Fernet(raw.encode())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("设置加密密钥无效") from exc
+
+
+def _encrypt_user_headers(servers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    payload = json.loads(json.dumps(servers))
+    cipher: Fernet | None = None
+    for server in payload.values():
+        headers = server.get("headers")
+        if not isinstance(headers, dict):
+            continue
+        cipher = cipher or _settings_fernet()
+        server["headers"] = {
+            key: value if str(value).startswith(_ENCRYPTED_HEADER_PREFIX) else (
+                _ENCRYPTED_HEADER_PREFIX + cipher.encrypt(str(value).encode()).decode()
+            )
+            for key, value in headers.items()
+        }
+    return payload
+
+
+def _decrypt_user_headers(servers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    payload = json.loads(json.dumps(servers))
+    cipher: Fernet | None = None
+    for server in payload.values():
+        headers = server.get("headers")
+        if not isinstance(headers, dict):
+            continue
+        decrypted: dict[str, Any] = {}
+        for key, value in headers.items():
+            text = str(value)
+            if not text.startswith(_ENCRYPTED_HEADER_PREFIX):
+                # 兼容历史明文；下次保存时自动迁移为密文。
+                decrypted[key] = value
+                continue
+            cipher = cipher or _settings_fernet()
+            try:
+                decrypted[key] = cipher.decrypt(
+                    text.removeprefix(_ENCRYPTED_HEADER_PREFIX).encode()
+                ).decode()
+            except InvalidToken as exc:
+                raise ValueError("MCP Header 无法解密，请检查设置加密密钥") from exc
+        server["headers"] = decrypted
+    return payload
 
 
 def validate_server_id(server_id: str) -> str:
@@ -275,6 +332,7 @@ def list_merged_servers(user_id: str | int | None = None) -> list[McpServerCatal
             transport=str(raw.get("transport") or ""),
             url=_redact_url(_expand_env_vars(str(raw.get("url") or "")) or None),
             display_name=str(raw.get("display_name") or sid),
+            enabled=raw.get("enabled") is not False,
         )
     for sid, raw in user_cfg.mcpServers.items():
         items[sid] = McpServerCatalogItem(
@@ -283,6 +341,7 @@ def list_merged_servers(user_id: str | int | None = None) -> list[McpServerCatal
             transport=str(raw.get("transport") or ""),
             url=_redact_url(_expand_env_vars(str(raw.get("url") or "")) or None),
             display_name=str(raw.get("display_name") or sid),
+            enabled=raw.get("enabled") is not False,
         )
     return sorted(items.values(), key=lambda x: (x.source != "user", x.id.lower()))
 
@@ -299,6 +358,7 @@ def list_user_servers(user_id: str | int) -> list[McpServerCatalogItem]:
                 transport=str(raw.get("transport") or ""),
                 url=_redact_url(_expand_env_vars(str(raw.get("url") or "")) or None),
                 display_name=str(raw.get("display_name") or sid),
+                enabled=raw.get("enabled") is not False,
             )
         )
     return sorted(items, key=lambda x: x.id.lower())
@@ -351,6 +411,9 @@ def resolve_server_connections(
         server_cfg = server_map.get(sid)
         if not server_cfg:
             logger.warning("MCP server {!r} 未找到，已跳过", sid)
+            continue
+        if server_cfg.get("enabled") is False:
+            logger.info("MCP server {!r} 已停用，跳过加载", sid)
             continue
         if not server_cfg.get("transport"):
             logger.warning("MCP server {!r} 缺少 transport，已跳过", sid)

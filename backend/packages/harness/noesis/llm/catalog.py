@@ -137,6 +137,19 @@ def get_default_model_id() -> str:
 
 
 def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
+
+    snapshot = get_runtime_model_snapshot(model_id)
+    if snapshot is not None:
+        return ModelCatalogEntry(
+            id=snapshot.id,
+            label=snapshot.model_name,
+            model_type=snapshot.model_type,
+            model_name=snapshot.model_name,
+            temperature=float(ModelConfig.model_temperature),
+            base_url=snapshot.base_url,
+            is_default=False,
+        )
     catalog = get_model_catalog()
     normalized = str(model_id or "").strip()
     if normalized:

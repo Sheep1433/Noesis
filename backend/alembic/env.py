@@ -11,6 +11,7 @@ from noesis_server.infrastructure.database.engine import SYNC_SQLALCHEMY_DATABAS
 import noesis_server.models.chat_models  # noqa: F401
 import noesis_server.models.db_models  # noqa: F401
 import noesis_server.models.scheduled_task_models  # noqa: F401
+import noesis_server.models.settings_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", SYNC_SQLALCHEMY_DATABASE_URL)

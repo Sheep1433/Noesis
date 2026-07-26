@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+/* eslint-disable vue/valid-v-slot */
 import { qaTypeLabel } from '@/utils/qaType'
 
 // 定义 props

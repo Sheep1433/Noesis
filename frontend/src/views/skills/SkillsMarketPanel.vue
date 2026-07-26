@@ -17,7 +17,6 @@ import {
   useMessage,
 } from 'naive-ui'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useBreakpoint } from '@/hooks/useBreakpoint'
 import {
   browseSkillsMarket,
   getSkillsMarketDetail,
@@ -25,6 +24,7 @@ import {
   searchSkillsMarket,
 } from '@/api/skills'
 import FilePreview from '@/components/FilePreview/index.vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 
 const props = withDefaults(defineProps<{
   active?: boolean
@@ -160,7 +160,7 @@ async function setBrowseSort(sort: SkillMarketSort) {
   await loadBrowse()
 }
 
-async function loadBrowse(opts?: { keepDetail?: boolean; page?: number }) {
+async function loadBrowse(opts?: { keepDetail?: boolean, page?: number }) {
   const page = opts?.page ?? currentPage.value
   loading.value = true
   error.value = null
@@ -193,7 +193,7 @@ async function loadBrowse(opts?: { keepDetail?: boolean; page?: number }) {
   }
 }
 
-async function runSearch(opts?: { keepDetail?: boolean; page?: number }) {
+async function runSearch(opts?: { keepDetail?: boolean, page?: number }) {
   const q = query.value.trim()
   if (q.length < 2) {
     message.warning('请输入至少 2 个字符')
@@ -443,92 +443,92 @@ function detailPrimaryLabel(item: SkillMarketItem): string {
 
     <div v-else class="market-body">
       <div class="market-list-col">
-      <div class="market-list">
-        <div
-          v-for="(item, index) in items"
-          :key="item.id"
-          class="market-card"
-          :class="{ active: detailItem?.id === item.id }"
-        >
-          <button
-            type="button"
-            class="market-card-main"
-            @click="openDetail(item)"
+        <div class="market-list">
+          <div
+            v-for="(item, index) in items"
+            :key="item.id"
+            class="market-card"
+            :class="{ active: detailItem?.id === item.id }"
           >
-            <div class="market-card-title">
-              <span class="name">
-                <span
-                  v-if="mode === 'browse'"
-                  class="rank-badge"
-                  :class="{ 'rank-badge--top': (currentPage - 1) * PAGE_SIZE + index < 3 }"
-                >{{ formatRank(index) }}</span>
-                {{ item.name }}
-              </span>
-              <div class="market-card-tags">
-                <n-tag
-                  v-if="item.install_match === 'name_conflict'"
-                  size="small"
-                  type="warning"
-                  :bordered="false"
-                >
-                  同名占用
-                </n-tag>
-                <n-tag v-if="item.installs" size="small" :bordered="false">
-                  {{ formatInstalls(item.installs) }}
-                  <template v-if="mode === 'browse'"> · {{ installsLabel() }}</template>
-                </n-tag>
+            <button
+              type="button"
+              class="market-card-main"
+              @click="openDetail(item)"
+            >
+              <div class="market-card-title">
+                <span class="name">
+                  <span
+                    v-if="mode === 'browse'"
+                    class="rank-badge"
+                    :class="{ 'rank-badge--top': (currentPage - 1) * PAGE_SIZE + index < 3 }"
+                  >{{ formatRank(index) }}</span>
+                  {{ item.name }}
+                </span>
+                <div class="market-card-tags">
+                  <n-tag
+                    v-if="item.install_match === 'name_conflict'"
+                    size="small"
+                    type="warning"
+                    :bordered="false"
+                  >
+                    同名占用
+                  </n-tag>
+                  <n-tag v-if="item.installs" size="small" :bordered="false">
+                    {{ formatInstalls(item.installs) }}
+                    <template v-if="mode === 'browse'"> · {{ installsLabel() }}</template>
+                  </n-tag>
+                </div>
               </div>
+              <n-text v-if="useStackedLayout" depth="3" class="source source--stacked">
+                {{ item.source }}
+              </n-text>
+              <n-text v-else depth="3" class="source">
+                {{ item.source }}
+              </n-text>
+            </button>
+            <div v-if="!useStackedLayout" class="market-card-actions">
+              <n-button
+                size="tiny"
+                :type="item.install_match === 'none' ? 'primary' : 'default'"
+                :secondary="item.install_match !== 'none'"
+                :loading="installingId === item.id"
+                @click.stop="onListActionClick(item)"
+              >
+                <template v-if="item.install_match === 'none'" #icon>
+                  <n-icon :component="DownloadOutline" />
+                </template>
+                {{ listActionLabel(item) }}
+              </n-button>
+              <n-button
+                v-if="!isMobile && item.market_url"
+                size="tiny"
+                tag="a"
+                :href="item.market_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                quaternary
+                @click.stop
+              >
+                <template #icon>
+                  <n-icon :component="OpenOutline" />
+                </template>
+                skills.sh
+              </n-button>
             </div>
-            <n-text v-if="useStackedLayout" depth="3" class="source source--stacked">
-              {{ item.source }}
-            </n-text>
-            <n-text v-else depth="3" class="source">
-              {{ item.source }}
-            </n-text>
-          </button>
-          <div v-if="!useStackedLayout" class="market-card-actions">
-            <n-button
-              size="tiny"
-              :type="item.install_match === 'none' ? 'primary' : 'default'"
-              :secondary="item.install_match !== 'none'"
-              :loading="installingId === item.id"
-              @click.stop="onListActionClick(item)"
-            >
-              <template v-if="item.install_match === 'none'" #icon>
-                <n-icon :component="DownloadOutline" />
-              </template>
-              {{ listActionLabel(item) }}
-            </n-button>
-            <n-button
-              v-if="!isMobile && item.market_url"
-              size="tiny"
-              tag="a"
-              :href="item.market_url"
-              target="_blank"
-              rel="noopener noreferrer"
-              quaternary
-              @click.stop
-            >
-              <template #icon>
-                <n-icon :component="OpenOutline" />
-              </template>
-              skills.sh
-            </n-button>
           </div>
+          <n-empty v-if="!items.length" description="暂无结果" />
         </div>
-        <n-empty v-if="!items.length" description="暂无结果" />
-      </div>
-      <div v-if="total > PAGE_SIZE" class="market-pagination">
-        <n-pagination
-          :page="currentPage"
-          :page-size="PAGE_SIZE"
-          :item-count="total"
-          :disabled="loading"
-          size="small"
-          :page-slot="isMobile ? 5 : 7"
-          @update:page="onPageChange"
-        />
-      </div>
+        <div v-if="total > PAGE_SIZE" class="market-pagination">
+          <n-pagination
+            :page="currentPage"
+            :page-size="PAGE_SIZE"
+            :item-count="total"
+            :disabled="loading"
+            size="small"
+            :page-slot="isMobile ? 5 : 7"
+            @update:page="onPageChange"
+          />
+        </div>
       </div>
 
       <div v-if="!useStackedLayout" class="market-detail">
@@ -599,7 +599,7 @@ function detailPrimaryLabel(item: SkillMarketItem): string {
       v-if="useStackedLayout"
       v-model:show="detailDrawerOpen"
       placement="right"
-      :width="'100%'"
+      width="100%"
       :trap-focus="false"
       :block-scroll="true"
     >

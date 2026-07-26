@@ -1,56 +1,105 @@
 <script setup lang="ts">
-export type SettingsSection =
-  | 'overview'
-  | 'profile'
-  | 'memory'
-  | 'capabilities'
-  | 'automation'
-  | 'channels'
-  | 'account'
+import type { SettingsSectionId } from './registry'
+import { computed, nextTick, ref } from 'vue'
+import { filterSettingsSections } from './registry'
 
 const props = defineProps<{
-  section: SettingsSection
+  section: SettingsSectionId
 }>()
 
 const emit = defineEmits<{
-  (e: 'update:section', value: SettingsSection): void
+  (e: 'select', value: SettingsSectionId): void
 }>()
 
-const items: { key: SettingsSection, label: string }[] = [
-  { key: 'overview', label: '概览' },
-  { key: 'profile', label: '画像' },
-  { key: 'memory', label: '记忆' },
-  { key: 'capabilities', label: '扩展' },
-  { key: 'automation', label: '自动化' },
-  { key: 'channels', label: '通讯' },
-  { key: 'account', label: '账户' },
-]
+const query = ref('')
+const buttonRefs = ref<HTMLButtonElement[]>([])
+const items = computed(() => filterSettingsSections(query.value))
+
+function setButtonRef(el: unknown, index: number) {
+  if (el instanceof HTMLButtonElement) {
+    buttonRefs.value[index] = el
+  }
+}
+
+async function onKeydown(event: KeyboardEvent, index: number) {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    return
+  }
+  event.preventDefault()
+  const last = items.value.length - 1
+  const next = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? last
+      : event.key === 'ArrowDown'
+        ? (index + 1) % items.value.length
+        : (index - 1 + items.value.length) % items.value.length
+  await nextTick()
+  buttonRefs.value[next]?.focus()
+}
 </script>
 
 <template>
-  <nav class="settings-nav" aria-label="设置导航">
-    <button
-      v-for="item in items"
-      :key="item.key"
-      type="button"
-      class="settings-nav__item"
-      :class="{ 'is-active': props.section === item.key }"
-      @click="emit('update:section', item.key)"
-    >
-      {{ item.label }}
-    </button>
-  </nav>
+  <aside class="settings-nav-wrap">
+    <label class="settings-nav-search">
+      <span class="sr-only">搜索设置</span>
+      <input v-model="query" type="search" placeholder="搜索设置" aria-label="搜索设置" autocomplete="off">
+    </label>
+    <nav class="settings-nav" aria-label="设置导航">
+      <button
+        v-for="(item, index) in items"
+        :key="item.id"
+        :ref="el => setButtonRef(el, index)"
+        type="button"
+        class="settings-nav__item"
+        :class="{ 'is-active': props.section === item.id }"
+        :aria-current="props.section === item.id ? 'page' : undefined"
+        @click="emit('select', item.id)"
+        @keydown="onKeydown($event, index)"
+      >
+        <span>{{ item.label }}</span>
+        <small>{{ item.description }}</small>
+      </button>
+      <p v-if="items.length === 0" class="settings-nav__empty">
+        没有匹配的设置
+      </p>
+    </nav>
+  </aside>
 </template>
 
 <style scoped>
+.settings-nav-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 180px;
+}
+
+.settings-nav-search input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--noesis-color-border-subtle, rgba(0, 0, 0, 0.1));
+  border-radius: 8px;
+  background: var(--noesis-color-bg-surface, transparent);
+  color: var(--noesis-color-text-heading);
+  padding: 8px 10px;
+  outline: none;
+}
+
+.settings-nav-search input:focus {
+  border-color: var(--noesis-color-border-strong, rgba(0, 0, 0, 0.28));
+}
+
 .settings-nav {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 140px;
 }
 
 .settings-nav__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   text-align: left;
   border: none;
   background: transparent;
@@ -59,6 +108,30 @@ const items: { key: SettingsSection, label: string }[] = [
   border-radius: 8px;
   cursor: pointer;
   font-size: 14px;
+}
+
+.settings-nav__item small {
+  color: var(--noesis-color-text-tertiary, var(--noesis-color-text-secondary));
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.settings-nav__empty {
+  margin: 8px 4px;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .settings-nav__item:hover {
@@ -75,8 +148,21 @@ const items: { key: SettingsSection, label: string }[] = [
 @media (max-width: 768px) {
   .settings-nav {
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
     min-width: 0;
+  }
+
+  .settings-nav-wrap {
+    min-width: 0;
+  }
+
+  .settings-nav__item {
+    flex: 0 0 auto;
+  }
+
+  .settings-nav__item small {
+    display: none;
   }
 }
 </style>

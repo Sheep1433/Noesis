@@ -95,7 +95,7 @@ function extractLang(info: string) {
   return info
     .trim()
     .replace(/=\d*/, '')
-    .replace(/:(?:no-)?line-numbers(?:\{| |$|=?\d*).*/, '')
+    .replace(/:(?:no-)?line-numbers.*/, '')
     .replace(/(?:-vue|\{| ).*$/, '')
     .replace(/^vue-html$/, 'template')
     .replace(/^ansi$/, '')

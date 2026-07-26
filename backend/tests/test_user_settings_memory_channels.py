@@ -61,6 +61,8 @@ def test_agent_memory_backend_cannot_write_channels(
 
 
 def test_channels_token_masked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cryptography.fernet import Fernet
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     uid = "u-tg"
     item = MessagingChannelService.create_channel(

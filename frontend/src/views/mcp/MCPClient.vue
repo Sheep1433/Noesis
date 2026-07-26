@@ -5,24 +5,34 @@ import {
   NButton,
   NEmpty,
   NIcon,
+  NInput,
   NLayout,
   NLayoutContent,
   NLayoutSider,
+  NSelect,
   NSpace,
   NSpin,
+  NSwitch,
+  NTag,
   NText,
+  useDialog,
   useMessage,
 } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 import {
+  deleteMcpServer,
   getMcpConfig,
-  listMcpServerStatus,
   listMcpServers,
+  listMcpServerStatus,
+  listMcpServerTools,
   saveMcpConfig,
+  setMcpServerEnabled,
+  upsertMcpServer,
 } from '@/api/mcp'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 
 const message = useMessage()
+const dialog = useDialog()
 const { isMobile } = useBreakpoint()
 
 const loading = ref(true)
@@ -31,12 +41,17 @@ const saving = ref(false)
 const error = ref<string | null>(null)
 const servers = ref<McpServerStatusItem[]>([])
 
-const configPath = ref('users/{uid}/mcp.json')
+const configPath = ref('个人 MCP 配置')
 const configExists = ref(false)
 const editorText = ref('{\n  "mcpServers": {}\n}\n')
 const editorDirty = ref(false)
+const mode = ref<'form' | 'json'>('form')
+const form = ref({ id: '', display_name: '', transport: 'streamable_http' as 'streamable_http' | 'sse', url: '', headers: '', enabled: true })
+const editingServerId = ref<string | null>(null)
+const visibleTools = ref<Record<string, Array<{ name: string, description: string }>>>({})
 
 const connectedCount = computed(() => servers.value.filter((s) => s.status === 'ok').length)
+const serverFormDirty = computed(() => Boolean(form.value.id || form.value.display_name || form.value.url || form.value.headers || editingServerId.value))
 
 onMounted(async () => {
   await Promise.all([loadConfig(), refreshStatus({ initial: true })])
@@ -122,15 +137,94 @@ function statusText(s: McpServerStatusItem) {
   }
   return 'Connecting…'
 }
+
+function switchMode(next: 'form' | 'json') {
+  const hasUnsaved = mode.value === 'json' ? editorDirty.value : serverFormDirty.value
+  if (hasUnsaved) {
+    dialog.warning({
+      title: '放弃未保存修改？',
+      content: mode.value === 'json' ? '高级 JSON 的修改尚未保存。' : 'Server 表单的修改尚未保存。',
+      positiveText: '放弃并切换',
+      negativeText: '继续编辑',
+      onPositiveClick: () => {
+        resetServerForm()
+        mode.value = next
+      },
+    })
+    return
+  }
+  mode.value = next
+}
+
+function editServer(server: McpServerStatusItem) {
+  editingServerId.value = server.id
+  form.value = { id: server.id, display_name: server.display_name || '', transport: server.transport as 'streamable_http' | 'sse', url: server.url || '', headers: '', enabled: server.enabled }
+}
+
+function resetServerForm() {
+  editingServerId.value = null
+  form.value = { id: '', display_name: '', transport: 'streamable_http', url: '', headers: '', enabled: true }
+}
+
+async function saveServer() {
+  try {
+    const parsedHeaders = form.value.headers.trim() ? JSON.parse(form.value.headers) as Record<string, string> : undefined
+    await upsertMcpServer(editingServerId.value || form.value.id, {
+      transport: form.value.transport,
+      url: form.value.url,
+      display_name: form.value.display_name,
+      enabled: form.value.enabled,
+      headers_action: parsedHeaders ? 'replace' : 'keep',
+      ...(parsedHeaders ? { headers: parsedHeaders } : {}),
+    })
+    message.success('MCP Server 已保存')
+    resetServerForm()
+    await Promise.all([loadConfig(), refreshStatus()])
+  } catch (e: any) {
+    message.error(e.message || '保存 Server 失败')
+  }
+}
+
+async function toggleServer(server: McpServerStatusItem, enabled: boolean) {
+  await setMcpServerEnabled(server.id, enabled)
+  await Promise.all([loadConfig(), refreshStatus()])
+}
+
+function removeServer(server: McpServerStatusItem) {
+  dialog.warning({
+    title: `删除 ${server.display_name || server.id}？`,
+    content: '该 Server 将无法再被 Agent 使用，此操作无法撤销。',
+    positiveText: '删除',
+    negativeText: '取消',
+    async onPositiveClick() {
+      await deleteMcpServer(server.id)
+      await Promise.all([loadConfig(), refreshStatus()])
+    },
+  })
+}
+
+async function showTools(server: McpServerStatusItem) {
+  try {
+    visibleTools.value[server.id] = (await listMcpServerTools(server.id, true)).tools
+  } catch (e: any) {
+    message.error(e.message || '加载工具目录失败')
+  }
+}
 </script>
 
 <template>
   <div class="mcp-management">
     <header class="panel-header">
       <p v-if="!isMobile" class="panel-subtitle">
-        编辑个人 <code>mcp.json</code>；打开本页会自动检测连通与工具数。
+        管理个人 MCP 服务；打开本页会自动检测连通与工具数。
       </p>
       <n-space class="panel-header-actions">
+        <n-button :type="mode === 'form' ? 'primary' : 'default'" @click="switchMode('form')">
+          表单
+        </n-button>
+        <n-button :type="mode === 'json' ? 'primary' : 'default'" @click="switchMode('json')">
+          高级 JSON
+        </n-button>
         <n-button :loading="refreshing" :disabled="loading" @click="refreshStatus()">
           <template #icon>
             <n-icon :component="Refresh" />
@@ -138,6 +232,7 @@ function statusText(s: McpServerStatusItem) {
           刷新状态
         </n-button>
         <n-button
+          v-if="mode === 'json'"
           type="primary"
           :disabled="!editorDirty"
           :loading="saving"
@@ -161,6 +256,37 @@ function statusText(s: McpServerStatusItem) {
           </n-button>
         </template>
       </n-empty>
+    </div>
+
+    <div v-else-if="mode === 'form'" class="form-mode">
+      <div class="server-form">
+        <n-input v-model:value="form.id" :disabled="Boolean(editingServerId)" placeholder="Server ID，如 context7" />
+        <n-input v-model:value="form.display_name" placeholder="显示名称" />
+        <n-select v-model:value="form.transport" :options="[{ label: 'Streamable HTTP', value: 'streamable_http' }, { label: 'SSE', value: 'sse' }]" />
+        <n-input v-model:value="form.url" placeholder="https://example.com/mcp" />
+        <n-input v-model:value="form.headers" type="textarea" :rows="2" placeholder="Headers JSON；编辑时留空保留现有敏感值，例如 {&quot;Authorization&quot;:&quot;Bearer …&quot;}" />
+        <label class="form-enabled"><n-switch v-model:value="form.enabled" /> 启用</label>
+        <n-space><n-button type="primary" :disabled="!form.id || !form.url" @click="saveServer">{{ editingServerId ? '保存修改' : '添加 Server' }}</n-button><n-button v-if="editingServerId" @click="resetServerForm">取消</n-button></n-space>
+      </div>
+      <n-empty v-if="!servers.length" description="暂无 MCP Server" />
+      <div v-for="server in servers" :key="server.id" class="form-server-card">
+        <div class="form-server-meta">
+          <strong>{{ server.display_name || server.id }}</strong>
+          <span>{{ server.url }}</span>
+          <n-tag size="small" :type="server.status === 'ok' ? 'success' : server.status === 'error' ? 'error' : 'default'">{{ statusText(server) }}</n-tag>
+          <span v-if="server.checked_at" class="checked-at">检查于 {{ new Date(server.checked_at).toLocaleString() }}</span>
+          <span v-if="server.message && server.status === 'error'" class="server-card__err">{{ server.message }}</span>
+        </div>
+        <n-space align="center">
+          <n-switch :value="server.enabled" @update:value="value => toggleServer(server, value)" />
+          <n-button size="small" @click="editServer(server)">编辑</n-button>
+          <n-button size="small" @click="showTools(server)">工具目录</n-button>
+          <n-button size="small" type="error" quaternary @click="removeServer(server)">删除</n-button>
+        </n-space>
+        <ul v-if="visibleTools[server.id]" class="tool-list">
+          <li v-for="tool in visibleTools[server.id]" :key="tool.name"><strong>{{ tool.name }}</strong><span>{{ tool.description }}</span></li>
+        </ul>
+      </div>
     </div>
 
     <n-layout
@@ -197,7 +323,7 @@ function statusText(s: McpServerStatusItem) {
           <template v-else>
             <div class="server-group">
               <div class="server-group__label">
-                Your mcp.json
+                个人 MCP 服务
               </div>
               <button
                 v-for="s in servers"
@@ -258,14 +384,14 @@ function statusText(s: McpServerStatusItem) {
         <div class="editor-pane">
           <div class="editor-pane__head">
             <n-icon :component="CodeSlash" size="18" />
-            <span class="editor-pane__title">mcp.json</span>
+            <span class="editor-pane__title">高级 JSON 配置</span>
             <n-text depth="3" class="editor-pane__path">
               {{ configPath }}
               <template v-if="!configExists">
-                · new
+                · 新建
               </template>
               <template v-else-if="editorDirty">
-                · modified
+                · 已修改
               </template>
             </n-text>
           </div>
@@ -294,6 +420,16 @@ function statusText(s: McpServerStatusItem) {
   padding: 12px 0 0;
   box-sizing: border-box;
 }
+
+.form-mode { flex: 1; min-height: 0; overflow: auto; padding: 4px 2px 20px; }
+.server-form { display: grid; gap: 10px; max-width: 680px; padding: 16px; margin-bottom: 16px; border: 1px solid var(--noesis-color-border-light, #d4d0c8); border-radius: 10px; }
+.form-enabled { display: flex; gap: 8px; align-items: center; }
+.form-server-card { display: flex; gap: 14px; justify-content: space-between; align-items: center; flex-wrap: wrap; padding: 14px 4px; border-bottom: 1px solid var(--noesis-color-border-light, #d4d0c8); }
+.form-server-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; color: var(--noesis-color-text-muted, #737373); }
+.form-server-meta strong { color: var(--noesis-color-text-body, #262626); font-size: 14px; }
+.checked-at { font-size: 11px; }
+.tool-list { flex-basis: 100%; margin: 4px 0; display: grid; gap: 6px; }
+.tool-list li { display: flex; flex-direction: column; font-size: 12px; color: var(--noesis-color-text-muted, #737373); }
 
 .panel-header {
   display: flex;
