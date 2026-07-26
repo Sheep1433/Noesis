@@ -1,7 +1,8 @@
 import type { GlobalThemeOverrides } from 'naive-ui'
+import type { ThemePresetId } from '@/config/themePresets'
 import { darkTheme, lightTheme } from 'naive-ui'
 import { themeColors } from '@/config/theme'
-import { PRESET_NAIVE_COLORS, type ThemePresetId } from '@/config/themePresets'
+import { PRESET_NAIVE_COLORS } from '@/config/themePresets'
 import { useIsDarkThemePreset, useThemePreset } from '@/hooks/useThemePreset'
 
 const baseThemeOverrides: GlobalThemeOverrides = {

@@ -13,13 +13,21 @@ function fail(msg) {
   process.exitCode = 1
 }
 
+function assert(condition, msg) {
+  if (!condition) {
+    fail(msg)
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ headless: true })
   const page = await browser.newPage()
   const errors = []
   page.on('pageerror', (e) => errors.push(String(e)))
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(`console: ${msg.text()}`)
+    if (msg.type() === 'error') {
+      errors.push(`console: ${msg.text()}`)
+    }
   })
 
   console.log('goto', BASE)
@@ -35,16 +43,39 @@ async function main() {
     await page.waitForTimeout(1500)
   }
 
+  // illegal deep link falls back to overview without breaking the shell
+  await page.goto(`${BASE}/settings?s=unknown`, { waitUntil: 'networkidle', timeout: 60000 })
+  await page.waitForTimeout(300)
+  assert((await page.getByRole('heading', { name: '概览' }).count()) === 1, 'invalid section did not fall back')
+
+  // navigation search matches keywords and keeps stable section links
+  const search = page.getByRole('searchbox', { name: '搜索设置' })
+  const settingsNav = page.getByRole('navigation', { name: '设置导航' })
+  await search.fill('Telegram')
+  assert((await settingsNav.getByRole('button', { name: /通讯/ }).count()) === 1, 'settings keyword search failed')
+  await search.fill('')
+
+  // keyboard navigation follows the visible section order
+  const overviewNav = settingsNav.getByRole('button', { name: /概览/ })
+  await overviewNav.focus()
+  await overviewNav.press('ArrowDown')
+  assert(await settingsNav.getByRole('button', { name: /模型/ }).evaluate((el) => el === document.activeElement), 'arrow navigation failed')
+
   // navigate settings
   await page.goto(`${BASE}/settings?s=profile`, { waitUntil: 'networkidle', timeout: 60000 })
   await page.waitForTimeout(800)
 
+  console.log('profile url', page.url())
+  await page.getByText('Markdown 原文', { exact: true }).click()
+  if ((await page.getByRole('button', { name: '编辑' }).count()) > 0) {
+    await page.getByRole('button', { name: '编辑' }).click()
+  }
   const textarea = page.locator('textarea').first()
   await textarea.waitFor({ timeout: 15000 })
   const before = await textarea.inputValue()
   console.log('profile content length', before.length)
 
-  if (errors.some((e) => e.includes("reading 'content'"))) {
+  if (errors.some((e) => e.includes('reading \'content\''))) {
     fail(errors.join('\n'))
     await browser.close()
     return
@@ -55,16 +86,25 @@ async function main() {
   await page.getByRole('button', { name: '保存' }).click()
   await page.waitForTimeout(1000)
 
-  const toastOrError = errors.filter((e) => e.includes("reading 'updated_at'") || e.includes("reading 'content'"))
+  const toastOrError = errors.filter((e) => e.includes('reading \'updated_at\'') || e.includes('reading \'content\''))
   if (toastOrError.length) {
     fail(toastOrError.join('\n'))
     await browser.close()
     return
   }
 
+  // restore source content so smoke is repeatable
+  await page.getByRole('button', { name: '编辑' }).click()
+  await textarea.fill(before)
+  await page.getByRole('button', { name: '保存' }).click()
+  await page.waitForTimeout(500)
+
   // memory section
   await page.goto(`${BASE}/settings?s=memory`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(800)
+  if ((await page.getByRole('button', { name: '编辑' }).count()) > 0) {
+    await page.getByRole('button', { name: '编辑' }).click()
+  }
   const mem = page.locator('textarea').first()
   await mem.waitFor({ timeout: 15000 })
   console.log('memory content length', (await mem.inputValue()).length)
@@ -79,9 +119,14 @@ async function main() {
   await page.waitForTimeout(1000)
   console.log('channels heading', await page.getByRole('heading', { name: '通讯通道' }).count())
 
+  // mobile shell remains searchable and horizontally navigable
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.reload({ waitUntil: 'networkidle' })
+  assert((await page.getByRole('searchbox', { name: '搜索设置' }).count()) === 1, 'mobile settings search missing')
+
   const critical = errors.filter(
     (e) =>
-      e.includes("Cannot read properties of undefined")
+      e.includes('Cannot read properties of undefined')
       || e.includes('API error')
       || e.includes('Failed to fetch'),
   )
@@ -89,7 +134,9 @@ async function main() {
     fail(critical.join('\n'))
   } else {
     console.log('OK settings smoke passed')
-    if (errors.length) console.log('non-critical errors:', errors.slice(0, 5))
+    if (errors.length) {
+      console.log('non-critical errors:', errors.slice(0, 5))
+    }
   }
 
   await page.screenshot({ path: '/tmp/noesis-settings-smoke.png', fullPage: true })

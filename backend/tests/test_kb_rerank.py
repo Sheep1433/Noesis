@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from noesis_server.kb.rerank.client import is_rerank_available, rerank_documents
+from noesis.llm.runtime_snapshot import RuntimeModelSnapshot, set_runtime_model_snapshot
 
 
 @patch("noesis_server.kb.rerank.client.ModelConfig")
@@ -41,6 +42,29 @@ def test_rerank_documents_changes_order(mock_cfg, _avail, mock_client_cls):
     ranked = rerank_documents("query", ["doc-a", "doc-b"], top_n=2)
     assert ranked[0] == (1, 0.95)
     assert ranked[1] == (0, 0.2)
+
+
+@patch("noesis_server.kb.rerank.client.httpx.Client")
+def test_rerank_uses_frozen_user_binding(mock_client_cls):
+    snapshot = RuntimeModelSnapshot(
+        id="user:p1:rank", provider_id="p1", purpose="rerank", model_type="openai",
+        model_name="custom-rerank", base_url="https://provider.example/v1", api_key="user-key",
+    )
+    response = MagicMock()
+    response.json.return_value = {"output": {"results": [{"index": 0, "relevance_score": 1}]}}
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.return_value = response
+    mock_client_cls.return_value = client
+    set_runtime_model_snapshot(snapshot)
+    try:
+        assert rerank_documents("q", ["d"]) == [(0, 1.0)]
+        args, kwargs = client.post.call_args
+        assert args[0] == "https://provider.example/v1/rerank"
+        assert kwargs["json"]["model"] == "custom-rerank"
+        assert kwargs["headers"]["Authorization"] == "Bearer user-key"
+    finally:
+        set_runtime_model_snapshot(None)
 
 
 @patch("noesis_server.kb.rerank.client.rerank_documents", side_effect=RuntimeError("api down"))

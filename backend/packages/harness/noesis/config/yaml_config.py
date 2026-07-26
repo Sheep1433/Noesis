@@ -306,6 +306,18 @@ class MessagingYamlSection(BaseModel):
     telegram_poll_timeout_seconds: int = Field(default=25, ge=1, le=60)
 
 
+class SettingsFeaturesYamlSection(BaseModel):
+    """设置控制面分域开关；用于分阶段交付与安全回滚。"""
+
+    provider_models: bool = False
+    mcp_management: bool = False
+    automation_operations: bool = False
+    channel_operations: bool = False
+    agent_context: bool = False
+    observability: bool = False
+    import_export: bool = False
+
+
 class ChatAttachmentYamlSection(BaseModel):
     enabled: bool = True
     ttl_days: int = Field(default=7, ge=1)
@@ -360,6 +372,9 @@ class AppYamlConfig(BaseModel):
     sandbox: SandboxYamlSection = Field(default_factory=SandboxYamlSection)
     hitl: HitlYamlSection = Field(default_factory=HitlYamlSection)
     messaging: MessagingYamlSection = Field(default_factory=MessagingYamlSection)
+    settings_features: SettingsFeaturesYamlSection = Field(
+        default_factory=SettingsFeaturesYamlSection
+    )
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
 
 

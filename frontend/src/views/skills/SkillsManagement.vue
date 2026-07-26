@@ -533,7 +533,7 @@ async function onMarketInstalled() {
       v-if="isMobile"
       v-model:show="previewDrawerOpen"
       placement="right"
-      :width="'100%'"
+      width="100%"
       :trap-focus="false"
       :block-scroll="true"
     >

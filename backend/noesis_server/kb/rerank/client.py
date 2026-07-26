@@ -12,6 +12,10 @@ _RERANK_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-re
 
 
 def is_rerank_available() -> bool:
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
+
+    if get_runtime_model_snapshot(purpose="rerank") is not None:
+        return True
     return bool(
         (ModelConfig.rerank_model_name or "").strip()
         and (ModelConfig.rerank_model_api_key or "").strip()
@@ -40,8 +44,16 @@ def rerank_documents(
     if not q:
         return [(i, 0.0) for i in range(len(documents))]
 
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
+
+    snapshot = get_runtime_model_snapshot(purpose="rerank")
+    model_name = (snapshot.model_name if snapshot else ModelConfig.rerank_model_name).strip()
+    api_key = (snapshot.api_key if snapshot else ModelConfig.rerank_model_api_key).strip()
+    api_url = (
+        f"{snapshot.base_url.rstrip('/')}/rerank" if snapshot else _RERANK_API_URL
+    )
     payload = {
-        "model": ModelConfig.rerank_model_name.strip(),
+        "model": model_name,
         "input": {
             "query": q,
             "documents": list(documents),
@@ -52,12 +64,12 @@ def rerank_documents(
         },
     }
     headers = {
-        "Authorization": f"Bearer {ModelConfig.rerank_model_api_key.strip()}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
     with httpx.Client(timeout=httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)) as client:
-        resp = client.post(_RERANK_API_URL, json=payload, headers=headers)
+        resp = client.post(api_url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
 

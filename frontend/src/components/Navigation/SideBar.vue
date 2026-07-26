@@ -171,8 +171,6 @@ const sidebarItems = ref([
     },
   },
 ])
-
-
 </script>
 
 <template>

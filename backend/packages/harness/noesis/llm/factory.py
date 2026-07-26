@@ -113,12 +113,22 @@ def _build_chat_model(
 
 def get_llm(purpose: str | None = None, *, model_id: str | None = None):
     from noesis.llm.catalog import resolve_catalog_entry
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
+    runtime_snapshot = get_runtime_model_snapshot(
+        model_id,
+        purpose="chat" if purpose in {None, "chat"} else purpose,
+    )
     use_summary_model = purpose == "summarization" and bool(
         ModelConfig.summarization_model_name.strip()
     )
 
-    if use_summary_model:
+    if runtime_snapshot is not None:
+        model_type = runtime_snapshot.model_type
+        model_name = runtime_snapshot.model_name
+        temperature_str = ModelConfig.model_temperature
+        model_base_url = runtime_snapshot.base_url
+    elif use_summary_model:
         model_type = ModelConfig.model_type.strip().lower()
         model_name = ModelConfig.summarization_model_name.strip()
         temperature_str = str(ModelConfig.summarization_model_temperature)
@@ -135,7 +145,7 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
         temperature_str = ModelConfig.model_temperature
         model_base_url = ModelConfig.model_base_url
 
-    model_api_key = ModelConfig.model_api_key
+    model_api_key = runtime_snapshot.api_key if runtime_snapshot is not None else ModelConfig.model_api_key
 
     if not model_type:
         raise ValueError("MODEL_TYPE environment variable is not set.")

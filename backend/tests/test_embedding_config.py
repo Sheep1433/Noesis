@@ -14,6 +14,7 @@ from noesis_server.kb.embedding.embedding import (
     is_embedding_configured,
     is_vlm_configured,
 )
+from noesis.llm.runtime_snapshot import RuntimeModelSnapshot, set_runtime_model_snapshot
 
 
 def _model_cfg(**overrides):
@@ -79,6 +80,24 @@ def test_get_embedding_dashscope_batch_size() -> None:
         check_embedding_ctx_length=False,
         chunk_size=10,
     )
+
+
+def test_get_embedding_uses_frozen_user_binding() -> None:
+    snapshot = RuntimeModelSnapshot(
+        id="user:p1:embed", provider_id="p1", purpose="embedding", model_type="openai",
+        model_name="custom-embed", base_url="https://provider.example/v1", api_key="user-key",
+    )
+    set_runtime_model_snapshot(snapshot)
+    try:
+        with patch("langchain_openai.OpenAIEmbeddings") as mock_cls:
+            mock_cls.return_value = object()
+            get_embedding()
+        mock_cls.assert_called_once_with(
+            model="custom-embed", openai_api_key="user-key",
+            openai_api_base="https://provider.example/v1", check_embedding_ctx_length=False,
+        )
+    finally:
+        set_runtime_model_snapshot(None)
 
 
 def test_chunk_warns_when_embedding_not_configured() -> None:

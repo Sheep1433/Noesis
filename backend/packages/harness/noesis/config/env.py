@@ -44,6 +44,7 @@ class EnvSecrets(BaseSettings):
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
 
     sandbox_runner_token: str = Field(default="", alias="SANDBOX_RUNNER_TOKEN")
+    settings_encryption_key: str = Field(default="", alias="SETTINGS_ENCRYPTION_KEY")
 
 
 # ---------------------------------------------------------------------------

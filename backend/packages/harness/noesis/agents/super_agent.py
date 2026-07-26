@@ -31,6 +31,7 @@ from noesis.tools.chat_attachment_tools import build_attachment_tools
 from noesis.runtime.logging import logger
 from noesis.config.env import ChatAttachmentConfig, HitlConfig
 from noesis.config.user_data_paths import ensure_user_memory_files
+from noesis.context import ContextResolver
 from noesis.llm.factory import get_llm
 from noesis.runtime.deps import require_attachment_service
 
@@ -44,14 +45,14 @@ def _resolve_user_id(current_user) -> Optional[str]:
     return str(uid) if uid is not None else None
 
 
-def _build_memory_middleware(backend: BackendProtocol) -> list:
+def _build_memory_middleware(backend: BackendProtocol, sources: list[str] | tuple[str, ...] = _MEMORY_SOURCES) -> list:
     return [
         MemoryMiddleware(
             backend=backend,
-            sources=_MEMORY_SOURCES,
+            sources=list(sources),
             system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
         ),
-        MemorySyncMiddleware(backend=backend, sources=_MEMORY_SOURCES),
+        MemorySyncMiddleware(backend=backend, sources=list(sources)),
     ]
 
 
@@ -114,6 +115,7 @@ class SuperAgent(BaseAgent):
             tools = tools + [ask_user_tool]
             interrupt_on = build_interrupt_on(session_id=session_id)
         skill_sources = resolve_skill_sources_for_session(user_id, enabled_skills)
+        resolved_context = ContextResolver.resolve(user_id, PromptProfile.SUPER_AGENT)
         extra_middleware: list = [
             TodoListMiddleware(),
             RevisableSkillsMiddleware(
@@ -122,7 +124,7 @@ class SuperAgent(BaseAgent):
                 system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
                 user_id=user_id,
             ),
-            *_build_memory_middleware(backend),
+            *_build_memory_middleware(backend, resolved_context.memory_sources),
         ]
 
         if (
@@ -154,7 +156,7 @@ class SuperAgent(BaseAgent):
 
         return create_noesis_agent(
             tools=tools,
-            system_prompt=build_prompt(PromptProfile.SUPER_AGENT),
+            system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
             backend=backend,
             subagents=_build_task_worker_subagents(

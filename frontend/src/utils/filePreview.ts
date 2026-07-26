@@ -95,7 +95,7 @@ export function getCodeLanguage(path: string): string {
 }
 
 /** 拆分 Markdown 文件头部的 YAML frontmatter（`---` 包裹）与正文 */
-export function splitYamlFrontmatter(content: string): { frontmatter: string | null; body: string } {
+export function splitYamlFrontmatter(content: string): { frontmatter: string | null, body: string } {
   const normalized = content.replace(/^\uFEFF/, '')
   const match = normalized.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
   if (!match) {

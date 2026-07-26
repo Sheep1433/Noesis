@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 
 from noesis.config.mcp_config import (
     MCP_PROFILE_FAULT_OPERATION,
@@ -202,3 +203,38 @@ def test_save_user_config_file_ok(
     assert out.exists
     assert "ctx" in out.content
     assert get_user_mcp_path("u2").is_file()
+
+
+def test_config_read_redacts_headers_and_round_trip_keeps_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import noesis.config.user_data_paths as user_paths
+    from noesis_server.services.mcp_service import McpService
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    uid = "u_secret"
+    secret = "Bearer must-never-reach-client"
+    save_user_mcp_json(uid, McpJsonConfig(mcpServers={"secure": {
+        "transport": "streamable_http", "url": "https://example.com/mcp",
+        "headers": {"Authorization": secret},
+    }}))
+    assert secret not in get_user_mcp_path(uid).read_text(encoding="utf-8")
+
+    read = McpService.get_user_config_file(uid)
+    assert secret not in read.content
+    assert "[REDACTED]" in read.content
+    McpService.save_user_config_file(uid, read.content)
+    assert load_user_mcp_json(uid).mcpServers["secure"]["headers"]["Authorization"] == secret
+
+
+def test_disabled_user_mcp_is_not_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import noesis.config.user_data_paths as user_paths
+
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
+    save_user_mcp_json("u_disabled", McpJsonConfig(mcpServers={"off": {
+        "transport": "streamable_http", "url": "https://example.com/mcp", "enabled": False,
+    }}))
+    assert resolve_server_connections(["off"], user_id="u_disabled") == {}

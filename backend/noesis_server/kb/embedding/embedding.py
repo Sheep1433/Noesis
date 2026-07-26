@@ -6,6 +6,10 @@ from noesis.config.env import ModelConfig
 
 def is_embedding_configured() -> bool:
     """Embedding 须独立配置 name / base_url / api_key，不回退主模型。"""
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
+
+    if get_runtime_model_snapshot(purpose="embedding") is not None:
+        return True
     return bool(
         (ModelConfig.embedding_model_name or "").strip()
         and (ModelConfig.embedding_model_base_url or "").strip()
@@ -15,6 +19,10 @@ def is_embedding_configured() -> bool:
 
 def is_vlm_configured() -> bool:
     """VLM 须配置 name / base_url / api_key；api_key 未单独设置时可回退 EMBEDDING_MODEL_API_KEY。"""
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
+
+    if get_runtime_model_snapshot(purpose="vision") is not None:
+        return True
     return bool(
         (ModelConfig.vlm_model_name or "").strip()
         and (ModelConfig.vlm_model_base_url or "").strip()
@@ -44,9 +52,12 @@ def get_embedding(model: str | None = None):
 
     from langchain_openai import OpenAIEmbeddings
 
-    model_name = (model or ModelConfig.embedding_model_name).strip()
-    api_key = ModelConfig.embedding_model_api_key.strip()
-    base_url = ModelConfig.embedding_model_base_url.strip()
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
+
+    snapshot = get_runtime_model_snapshot(purpose="embedding")
+    model_name = (model or (snapshot.model_name if snapshot else ModelConfig.embedding_model_name)).strip()
+    api_key = (snapshot.api_key if snapshot else ModelConfig.embedding_model_api_key).strip()
+    base_url = (snapshot.base_url if snapshot else ModelConfig.embedding_model_base_url).strip()
     kwargs: dict = {
         "model": model_name,
         "openai_api_key": api_key,

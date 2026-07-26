@@ -53,6 +53,7 @@ def describe_image_bytes_for_chat(
     同步调用配置的 VLM 生成图片描述。未配置 VLM 或调用失败时抛出异常，由调用方降级。
     """
     from noesis.config.env import ModelConfig
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
     if not require_is_vlm_configured():
         raise ValueError("VLM 未配置")
@@ -60,15 +61,18 @@ def describe_image_bytes_for_chat(
     import httpx
     from openai import OpenAI
 
-    model_name = (ModelConfig.vlm_model_name or "").strip()
+    snapshot = get_runtime_model_snapshot(purpose="vision")
+    model_name = (
+        snapshot.model_name if snapshot else ModelConfig.vlm_model_name or ""
+    ).strip()
     if not model_name:
         raise ValueError("VLM 未配置")
 
-    api_key = ModelConfig.vlm_model_api_key.strip()
+    api_key = (snapshot.api_key if snapshot else ModelConfig.vlm_model_api_key).strip()
     data_uri = _image_data_uri(data, mime or "image/jpeg")
     client = OpenAI(
         api_key=api_key,
-        base_url=ModelConfig.vlm_model_base_url,
+        base_url=snapshot.base_url if snapshot else ModelConfig.vlm_model_base_url,
         http_client=httpx.Client(
             timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10),
         ),

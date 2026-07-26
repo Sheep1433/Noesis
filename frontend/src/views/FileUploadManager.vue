@@ -4,8 +4,8 @@ import type { PropType } from 'vue'
 import type { ChatAttachmentItem } from '@/store/business'
 import { deleteSessionAttachment, uploadSessionAttachment } from '@/api/chat'
 import { uploadDocument } from '@/api/knowledgeBase'
-import { KB_FILE_DICT_REF, TEST_CASE_UPLOAD_COLLECTION } from '@/config/knowledge'
 import { CHAT_MAX_FILES_PER_MESSAGE } from '@/config/chat'
+import { KB_FILE_DICT_REF, TEST_CASE_UPLOAD_COLLECTION } from '@/config/knowledge'
 import { getFileTypeIconClass, isImagePreviewPath, isImageUploadFile } from '@/utils/filePreview'
 
 const props = defineProps({

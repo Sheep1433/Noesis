@@ -196,6 +196,11 @@ async def _resolve_model_for_query(
     db: AsyncSession,
 ) -> str:
     """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。"""
+    from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
+    from noesis_server.services.provider_service import ProviderService
+
+    snapshots = await ProviderService.resolve_runtime_snapshots(db, int(user_id))
+    set_runtime_model_snapshots(snapshots)
     if request_model_id is not None:
         normalized = _normalize_model_id(request_model_id)
         resolved = resolve_catalog_entry(normalized).id
@@ -216,7 +221,8 @@ async def _resolve_model_for_query(
         stored = _normalize_model_id(session.extra.get("model_id"))
         if stored:
             return resolve_catalog_entry(stored).id
-    return get_default_model_id()
+    snapshot = next((item for item in snapshots if item.purpose == "chat"), None)
+    return snapshot.id if snapshot is not None else get_default_model_id()
 
 
 def _resolved_model_name(model_id: str) -> str:

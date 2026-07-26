@@ -31,9 +31,9 @@ withDefaults(
     :aria-label="label"
   >
     <span class="assistant-streaming-indicator__dots" aria-hidden="true">
-      <span class="assistant-streaming-indicator__dot" />
-      <span class="assistant-streaming-indicator__dot" />
-      <span class="assistant-streaming-indicator__dot" />
+      <span class="assistant-streaming-indicator__dot"></span>
+      <span class="assistant-streaming-indicator__dot"></span>
+      <span class="assistant-streaming-indicator__dot"></span>
     </span>
     <span class="assistant-streaming-indicator__label">{{ label }}</span>
   </div>

@@ -1,9 +1,9 @@
 """用户记忆 / 定时任务 / 通讯通道 API（挂在 /api/user）。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,14 +12,21 @@ from noesis_server.infrastructure.database.dependency import get_db
 from noesis_server.schemas.login_vo import CurrentUser
 from noesis_server.services.messaging_channel_service import MessagingChannelService
 from noesis_server.services.scheduled_task_service import ScheduledTaskService
+from noesis_server.services.scheduled_task_service import compute_next_run_ms, cron_summary
 from noesis_server.services.user_memory_service import UserMemoryService
 from noesis_server.services.user_service import UserService
+from noesis_server.services.settings_service import SettingsService
 
 user_settings_router = APIRouter(prefix="/api/user", tags=["用户设置"])
 
 
 class MemoryWriteBody(BaseModel):
     content: str = Field(..., description="Markdown 正文")
+
+
+class ProfileFieldsBody(BaseModel):
+    fields: Dict[str, str]
+    expected_updated_at: Optional[str] = None
 
 
 class ScheduledTaskCreateBody(BaseModel):
@@ -49,9 +56,12 @@ class ChannelUpsertBody(BaseModel):
     enabled: bool = True
     display_name: str = ""
     bot_token: Optional[str] = None
+    bot_token_action: Literal["keep", "replace", "clear"] = "keep"
     pairing_chat_id: Optional[str] = None
     default_qa_type: str = "SUPER_AGENT_QA"
     default_session_id: Optional[str] = None
+    session_strategy: Literal["persistent", "new_per_message"] = "persistent"
+    delivery_preference: Literal["reply", "silent"] = "reply"
 
 
 # ----- memory -----
@@ -84,7 +94,68 @@ async def put_user_memory_file(
     return ResponseUtil.success(msg="已保存", data=data)
 
 
+@user_settings_router.put("/profile/fields")
+async def put_profile_fields(
+    body: ProfileFieldsBody,
+    request: Request,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    await UserService.require_csrf(request)
+    try:
+        data = UserMemoryService.write_profile_fields(current_user.user_id, body.fields, body.expected_updated_at)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ResponseUtil.success(msg="已保存", data=data)
+
+
+@user_settings_router.get("/memory/daily/list")
+async def list_daily_memory(current_user: CurrentUser = Depends(UserService.get_current_user)):
+    return ResponseUtil.success(data={"items": UserMemoryService.list_daily(current_user.user_id)})
+
+
+@user_settings_router.get("/memory/daily/search")
+async def search_daily_memory(
+    q: str = Query(..., min_length=1, max_length=100),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    try:
+        items = UserMemoryService.search_daily(current_user.user_id, q, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseUtil.success(data={"items": items})
+
+
+@user_settings_router.get("/context/preview")
+async def preview_agent_context(
+    profile: str = Query("super_agent"),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    from noesis.context import ContextResolver
+    try:
+        data = ContextResolver.resolve(current_user.user_id, profile).public_view()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="不支持的 Agent 类型") from exc
+    return ResponseUtil.success(data=data)
+
+
 # ----- scheduled tasks -----
+
+
+@user_settings_router.get("/scheduled-tasks/preview")
+async def preview_scheduled_task(
+    cron_expr: str = Query(...),
+    timezone: str = Query("Asia/Shanghai"),
+    _current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    try:
+        return ResponseUtil.success(data={
+            "summary": cron_summary(cron_expr, timezone),
+            "next_run_at": compute_next_run_ms(cron_expr, timezone),
+            "timezone": timezone,
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @user_settings_router.get("/scheduled-tasks")
@@ -110,6 +181,8 @@ async def create_scheduled_task(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="automation.create", setting_domain="automation", target_id=item["id"], summary={"fields": ["name", "cron_expr", "timezone", "enabled", "qa_type", "session_binding", "delivery"]})
+    await db.commit()
     return ResponseUtil.success(msg="已创建", data=item)
 
 
@@ -145,6 +218,8 @@ async def update_scheduled_task(
         raise HTTPException(status_code=400, detail=str(e)) from e
     if item is None:
         return ResponseUtil.not_found(msg="任务不存在")
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="automation.update", setting_domain="automation", target_id=task_id, summary={"fields": list({k for k, v in body.model_dump().items() if v is not None})})
+    await db.commit()
     return ResponseUtil.success(msg="已更新", data=item)
 
 
@@ -159,6 +234,8 @@ async def delete_scheduled_task(
     ok = await ScheduledTaskService.delete_task(db, current_user.user_id, task_id)
     if not ok:
         return ResponseUtil.not_found(msg="任务不存在")
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="automation.delete", setting_domain="automation", target_id=task_id)
+    await db.commit()
     return ResponseUtil.success(msg="已删除")
 
 
@@ -196,15 +273,61 @@ async def run_scheduled_task_once(
     request: Request,
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     await UserService.require_csrf(request)
     try:
-        item = await ScheduledTaskService.run_once(db, current_user.user_id, task_id)
+        item = await ScheduledTaskService.run_once(db, current_user.user_id, task_id, idempotency_key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if item is None:
         return ResponseUtil.not_found(msg="任务不存在")
     return ResponseUtil.success(msg="已触发", data=item)
+
+
+@user_settings_router.get("/scheduled-tasks/{task_id}/runs")
+async def list_scheduled_task_runs(
+    task_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await ScheduledTaskService.list_runs(db, current_user.user_id, task_id, page, page_size)
+    if result.pop("not_found", False):
+        return ResponseUtil.not_found(msg="任务不存在")
+    return ResponseUtil.success(data=result)
+
+
+@user_settings_router.get("/scheduled-task-runs/{run_id}")
+async def get_scheduled_task_run(
+    run_id: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    run = await ScheduledTaskService.get_run(db, current_user.user_id, run_id)
+    if run is None:
+        return ResponseUtil.not_found(msg="运行记录不存在")
+    from noesis_server.services.scheduled_task_service import _run_to_dict
+    return ResponseUtil.success(data=_run_to_dict(run))
+
+
+@user_settings_router.post("/scheduled-task-runs/{run_id}/retry")
+async def retry_scheduled_task_run(
+    run_id: str,
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await UserService.require_csrf(request)
+    try:
+        run = await ScheduledTaskService.retry_run(db, current_user.user_id, run_id, idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if run is None:
+        return ResponseUtil.not_found(msg="运行记录不存在")
+    return ResponseUtil.success(msg="已创建重试运行", data=run)
 
 
 # ----- channels -----
@@ -223,14 +346,21 @@ async def create_channel(
     body: ChannelUpsertBody,
     request: Request,
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     await UserService.require_csrf(request)
     try:
+        payload = body.model_dump()
+        if body.bot_token:
+            payload["bot_token_action"] = "replace"
+        await _validate_channel_session(db, current_user.user_id, body.session_strategy, body.default_session_id)
         item = MessagingChannelService.create_channel(
-            current_user.user_id, body.model_dump()
+            current_user.user_id, payload
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.create", setting_domain="channel", target_id=item["channel_id"], summary={"fields": ["type", "enabled", "display_name", "pairing", "routing"], "secret_action": payload["bot_token_action"]})
+    await db.commit()
     return ResponseUtil.success(msg="已创建", data=item)
 
 
@@ -240,9 +370,11 @@ async def update_channel(
     body: ChannelUpsertBody,
     request: Request,
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     await UserService.require_csrf(request)
     try:
+        await _validate_channel_session(db, current_user.user_id, body.session_strategy, body.default_session_id)
         item = MessagingChannelService.update_channel(
             current_user.user_id, channel_id, body.model_dump()
         )
@@ -250,6 +382,8 @@ async def update_channel(
         return ResponseUtil.not_found(msg="通道不存在")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.update", setting_domain="channel", target_id=channel_id, summary={"fields": ["type", "enabled", "display_name", "pairing", "routing"], "secret_action": body.bot_token_action})
+    await db.commit()
     return ResponseUtil.success(msg="已更新", data=item)
 
 
@@ -258,10 +392,47 @@ async def delete_channel(
     channel_id: str,
     request: Request,
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     await UserService.require_csrf(request)
     try:
         MessagingChannelService.delete_channel(current_user.user_id, channel_id)
     except KeyError:
         return ResponseUtil.not_found(msg="通道不存在")
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.delete", setting_domain="channel", target_id=channel_id)
+    await db.commit()
     return ResponseUtil.success(msg="已删除")
+
+
+async def _validate_channel_session(db: AsyncSession, user_id: int, strategy: str, session_id: str | None) -> None:
+    if strategy != "persistent" or not session_id:
+        return
+    from noesis_server.services.chat_service import ChatService
+    if await ChatService.get_session_by_id(session_id, user_id=user_id, db=db) is None:
+        raise HTTPException(status_code=400, detail="所选会话不存在")
+
+
+@user_settings_router.post("/channels/{channel_id}/test-connection")
+async def test_channel_connection(channel_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+    from noesis_server.services.channel_operations_service import ChannelOperationsService
+    await UserService.require_csrf(request)
+    try:
+        result = await ChannelOperationsService.test_connection(current_user.user_id, channel_id)
+    except KeyError:
+        return ResponseUtil.not_found(msg="通道不存在")
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.test_connection", setting_domain="channel", target_id=channel_id, summary={"result": result.get("status"), "correlation_id": result.get("correlation_id")})
+    await db.commit()
+    return ResponseUtil.success(data=result)
+
+
+@user_settings_router.post("/channels/{channel_id}/test-delivery")
+async def test_channel_delivery(channel_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+    from noesis_server.services.channel_operations_service import ChannelOperationsService
+    await UserService.require_csrf(request)
+    try:
+        result = await ChannelOperationsService.test_delivery(current_user.user_id, channel_id)
+    except KeyError:
+        return ResponseUtil.not_found(msg="通道不存在")
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.test_delivery", setting_domain="channel", target_id=channel_id, summary={"result": result.get("status"), "correlation_id": result.get("correlation_id")})
+    await db.commit()
+    return ResponseUtil.success(data=result)

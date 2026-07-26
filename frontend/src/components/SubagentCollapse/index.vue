@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import type { SubagentRunStatus } from '@/utils/parseTaskTool'
-import type { ToolRunStatus, ToolUiPart, UiPart } from '@/views/chat/messageParts'
-import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
-import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
+import type { ToolRunStatus, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
-import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
+import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
+import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import {
   parseTaskToolInput,
   parseTaskToolOutput,
 } from '@/utils/parseTaskTool'
+import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 interface Props {

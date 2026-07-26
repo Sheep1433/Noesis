@@ -35,5 +35,6 @@ class TUserScheduledTask(Base):
     last_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     disabled_reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    deleted_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="软删除时间（毫秒）")
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

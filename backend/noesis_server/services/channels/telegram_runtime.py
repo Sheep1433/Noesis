@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import Any, Dict, Optional, Set
 
 from noesis_server.domain.chat.hitl.pending import pending_hitl
@@ -25,6 +26,7 @@ from noesis_server.services.messaging_channel_service import (
     MessagingChannelService,
     RuntimeChannelConfig,
 )
+from noesis_server.domain.chat.delivery.channel_health import channel_health
 
 _PAIRING_HINT = (
     "此聊天尚未与 Noesis 配对。\n"
@@ -85,9 +87,11 @@ async def _after_channel_result(
     chat_id: str,
     binding_user_id: str | int,
     binding_session_id: str,
-    outbound: TelegramOutbound,
+    outbound: Optional[TelegramOutbound],
     result: Any,
 ) -> None:
+    if outbound is None:
+        return
     if result.hitl_pending and result.hitl_payload:
         await _deliver_hitl_card(
             client,
@@ -274,12 +278,14 @@ async def _handle_message(
     inbound = await adapter.normalize_inbound(update)
     if inbound is None:
         return
+    channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "received")
 
     MessagingChannelService.iter_enabled_runtime("telegram", user_id=cfg.user_id)
     routed = route_inbound(inbound)
     chat_id = inbound.external_chat_id
 
     if not routed.ok or routed.binding is None:
+        channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "rejected_unpaired")
         hint = _PAIRING_HINT.format(chat_id=chat_id)
         try:
             await client.send_message(chat_id, hint)
@@ -322,10 +328,11 @@ async def _handle_message(
             return
 
     try:
-        outbound = TelegramOutbound(client, chat_id)
+        outbound = TelegramOutbound(client, chat_id) if cfg.delivery_preference == "reply" else None
+        session_id = str(uuid.uuid4()) if cfg.session_strategy == "new_per_message" else binding.session_id
         result = await run_channel_agent(
             user_id=binding.user_id,
-            session_id=binding.session_id,
+            session_id=session_id,
             query=inbound.text,
             qa_type=cfg.default_qa_type,
             origin="telegram",
@@ -333,15 +340,17 @@ async def _handle_message(
             channel_type="telegram",
             outbound=outbound,
         )
+        channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "succeeded")
         await _after_channel_result(
             client,
             chat_id,
             binding.user_id,
-            binding.session_id,
+            session_id,
             outbound,
             result,
         )
     except Exception:
+        channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "failed")
         logger.exception(
             "telegram handle inbound failed user={} chat_id={}",
             cfg.user_id,
@@ -379,6 +388,7 @@ async def _poll_loop(cfg: RuntimeChannelConfig) -> None:
     )
     try:
         await adapter.start()
+        channel_health.report_status(cfg.user_id, cfg.channel_id, "healthy", "通道运行正常")
         while not _stop.is_set():
             try:
                 updates = await client.get_updates(
@@ -389,6 +399,7 @@ async def _poll_loop(cfg: RuntimeChannelConfig) -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                channel_health.report_status(cfg.user_id, cfg.channel_id, "unavailable", "通道连接失败，正在重试", error_category="connection")
                 logger.warning(
                     "telegram getUpdates error bot={} err={}；5s 后重试",
                     masked,
@@ -399,6 +410,8 @@ async def _poll_loop(cfg: RuntimeChannelConfig) -> None:
                     break
                 except asyncio.TimeoutError:
                     continue
+
+            channel_health.report_status(cfg.user_id, cfg.channel_id, "healthy", "通道运行正常")
 
             for upd in updates:
                 if _stop.is_set():
@@ -411,6 +424,7 @@ async def _poll_loop(cfg: RuntimeChannelConfig) -> None:
                 except Exception:
                     logger.exception("telegram update handle error bot={}", masked)
     finally:
+        channel_health.report_status(cfg.user_id, cfg.channel_id, "unknown", "通道当前未运行")
         await adapter.stop()
         await client.aclose()
         logger.info(
