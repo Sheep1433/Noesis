@@ -74,7 +74,7 @@
 
 - [x] 9.1 在 `feat/expand-settings-control-plane` 建立 foundation，并按 A-F 工作流集中实现；共享 primitives、API/schema 边界和 section 注册表由该分支统一维护
 - [x] 9.2 完成跨工作流文件边界与依赖方向审查，确保能力保持独立 section、Service 和测试边界，共享注册由集成分支统一完成
-- [ ] 9.3 功能分支同步最新 `dev` 并完成自测；验证通过后按 `feat/expand-settings-control-plane → dev` 合并，禁止直接进入 `main`
+- [x] 9.3 功能分支同步最新 `dev` 并完成自测；验证通过后按 `feat/expand-settings-control-plane → dev` 合并，禁止直接进入 `main`
 - [x] 9.4 运行后端 `uv run pytest tests/ -q`，重点验证认证、MCP、Qdrant、Scheduler、Delivery 与消息持久化无回归
 - [x] 9.5 运行前端 `pnpm lint`、相关组件测试、settings smoke 与 `pnpm build`
 - [x] 9.6 执行设置关键路径人工验收：深链、搜索、Provider、MCP、任务历史、通道测试、上下文预览、诊断、导入导出
