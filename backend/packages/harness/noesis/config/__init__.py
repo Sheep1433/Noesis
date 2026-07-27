@@ -31,6 +31,7 @@ _EXPORTS = {
     "get_config": ("noesis.config.env", "get_config"),
     "get_sandbox_runner_token": ("noesis.config.env", "get_sandbox_runner_token"),
     "sandbox_runner_headers": ("noesis.config.env", "sandbox_runner_headers"),
+    "temporary_checkpointer": ("noesis.config.checkpointer", "temporary_checkpointer"),
     # Host-independent filesystem locations.
     "BACKEND_DIR": ("noesis.config.paths", "BACKEND_DIR"),
     "DATA_DIR": ("noesis.config.paths", "DATA_DIR"),

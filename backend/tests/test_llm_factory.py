@@ -3,12 +3,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_deepseek import ChatDeepSeek
 
-from noesis.llm.factory import _OPENCODE_DEFAULT_BASE_URL, _OPENCODE_DEFAULT_HEADERS, _build_chat_model
+from noesis.llm.factory import _OPENCODE_DEFAULT_BASE_URL, _OPENCODE_DEFAULT_HEADERS, build_chat_model
 
 
 def test_build_chat_model_opencode_uses_required_headers() -> None:
     with patch("noesis.llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
-        _build_chat_model(
+        build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
             temperature=0.75,
@@ -36,7 +36,7 @@ def test_llm_http_clients_bypass_system_proxy() -> None:
 
 def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:
     with patch("noesis.llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
-        _build_chat_model(
+        build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
             temperature=0.75,
@@ -52,7 +52,7 @@ def test_build_chat_model_opencode_returns_chat_deepseek_instance() -> None:
         model_config.max_retries = 2
         model_config.request_timeout = 30.0
         model_config.streaming = True
-        model = _build_chat_model(
+        model = build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
             temperature=0.75,
@@ -65,7 +65,7 @@ def test_build_chat_model_opencode_returns_chat_deepseek_instance() -> None:
 
 def test_build_chat_model_unsupported_type_raises() -> None:
     with pytest.raises(ValueError, match="Unsupported MODEL_TYPE"):
-        _build_chat_model(
+        build_chat_model(
             model_type="unknown-vendor",
             model_name="test",
             temperature=0.0,

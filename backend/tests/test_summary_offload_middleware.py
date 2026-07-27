@@ -93,7 +93,7 @@ def test_get_llm_summarization_falls_back_to_main_model() -> None:
     )
     with (
         patch("noesis.llm.factory.ModelConfig", cfg),
-        patch("noesis.llm.factory._build_chat_model", return_value=MagicMock()) as build,
+        patch("noesis.llm.factory.build_chat_model", return_value=MagicMock()) as build,
     ):
         from noesis.llm.factory import get_llm
 
@@ -117,7 +117,7 @@ def test_get_llm_summarization_uses_dedicated_model_name() -> None:
     )
     with (
         patch("noesis.llm.factory.ModelConfig", cfg),
-        patch("noesis.llm.factory._build_chat_model", return_value=MagicMock()) as build,
+        patch("noesis.llm.factory.build_chat_model", return_value=MagicMock()) as build,
     ):
         from noesis.llm.factory import get_llm
 
