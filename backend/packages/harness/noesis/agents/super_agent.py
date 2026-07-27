@@ -28,6 +28,7 @@ from noesis.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.skills import resolve_skill_sources_for_session
 from noesis.tools import build_web_search_tools
 from noesis.tools.chat_attachment_tools import build_attachment_tools
+from noesis.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
 from noesis.config.env import ChatAttachmentConfig, HitlConfig
 from noesis.config.user_data_paths import ensure_user_memory_files
@@ -110,6 +111,8 @@ class SuperAgent(BaseAgent):
         backend = await create_agent_backend(user_id, session_id)
         web_tools = build_web_search_tools()
         tools = list(web_tools) + list(mcp_tools or [])
+        if db is not None:
+            tools.extend(build_memory_tools(user_id=user_id, db=db))
         interrupt_on = None
         if HitlConfig.enabled:
             tools = tools + [ask_user_tool]

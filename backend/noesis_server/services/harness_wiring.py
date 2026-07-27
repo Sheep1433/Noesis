@@ -11,6 +11,7 @@ from noesis.runtime.deps import (
     bind_kb_retrieval,
     bind_kb_services,
     bind_langfuse,
+    bind_memory_service,
     bind_vlm,
 )
 from noesis_server.kb.chunk import normalize_query_execution_params
@@ -18,12 +19,19 @@ from noesis_server.kb.embedding import is_vlm_configured
 from noesis_server.kb.retrieval.service import KbRetrievalService
 from noesis_server.services.chat_attachment_service import ChatAttachmentService
 from noesis_server.services.kb_collection_config_service import KbCollectionConfigService
+from noesis_server.services.memory_dream_service import MemoryDreamService
+from noesis_server.services.user_memory_service import UserMemoryService
 from noesis_server.kb.qdrant import QdrantService, is_qdrant_connected
 
 
 def wire_harness_platform_deps() -> None:
     """Bind ChatAttachment / KB / Langfuse / VLM for noesis."""
     bind_attachment_service(ChatAttachmentService)
+    class MemoryPlatformService:
+        search_entries = staticmethod(UserMemoryService.search_entries)
+        get_source = staticmethod(MemoryDreamService.get_source)
+
+    bind_memory_service(MemoryPlatformService)
     bind_kb_services(
         collection_config_service=KbCollectionConfigService,
         qdrant_service_factory=QdrantService,

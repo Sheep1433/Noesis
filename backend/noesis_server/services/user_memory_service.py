@@ -18,34 +18,10 @@ from noesis.config.user_data_paths import (
 MemoryFileName = Literal["USER.md", "AGENTS.md"]
 _ALLOWED_FILES: frozenset[str] = frozenset({"USER.md", "AGENTS.md"})
 _MAX_BYTES = 512 * 1024
-_PROFILE_START = "<!-- noesis-profile:start -->"
-_PROFILE_END = "<!-- noesis-profile:end -->"
-_PROFILE_FIELDS = ("称呼", "时区", "语言", "角色")
 _DATE_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
 
 
 class UserMemoryService:
-    @staticmethod
-    def _parse_profile(content: str) -> Dict[str, Any]:
-        start = content.find(_PROFILE_START)
-        end = content.find(_PROFILE_END)
-        if start < 0 and "<!-- Noesis 用户画像：可在上下文面板编辑，Agent 只读 -->" in content and "## 基本信息" in content:
-            return {"structured_editable": True, "fields": {"称呼": "", "时区": "Asia/Shanghai", "语言": "中文", "角色": ""}, "reason": None}
-        if start < 0 or end < start or content.find(_PROFILE_START, start + 1) >= 0:
-            return {"structured_editable": False, "fields": {}, "reason": "原文不包含可安全维护的画像区块"}
-        block = content[start + len(_PROFILE_START):end]
-        fields: Dict[str, str] = {}
-        for line in block.splitlines():
-            if not line.strip():
-                continue
-            key, separator, value = line.partition(":")
-            if not separator or key.strip() not in _PROFILE_FIELDS or key.strip() in fields:
-                return {"structured_editable": False, "fields": {}, "reason": "画像区块格式无法无损解析"}
-            fields[key.strip()] = value.strip()
-        if set(fields) != set(_PROFILE_FIELDS):
-            return {"structured_editable": False, "fields": {}, "reason": "画像区块字段不完整"}
-        return {"structured_editable": True, "fields": fields, "reason": None}
-
     @staticmethod
     def _resolve_path(user_id: str | int, file: str) -> Path:
         if file not in _ALLOWED_FILES:
@@ -68,8 +44,6 @@ class UserMemoryService:
             "updated_at": mtime,
             "size": len(content.encode("utf-8")),
         }
-        if file == "USER.md":
-            result["profile"] = cls._parse_profile(content)
         return result
 
     @classmethod
@@ -82,26 +56,6 @@ class UserMemoryService:
         path = cls._resolve_path(user_id, file)
         path.write_text(raw, encoding="utf-8")
         return cls.read_file(user_id, file)
-
-    @classmethod
-    def write_profile_fields(cls, user_id: str | int, fields: Dict[str, Any], expected_updated_at: str | None = None) -> Dict[str, Any]:
-        current = cls.read_file(user_id, "USER.md")
-        if expected_updated_at and current.get("updated_at") != expected_updated_at:
-            raise RuntimeError("画像原文已更新，请重新加载后再保存")
-        profile = current["profile"]
-        if not profile["structured_editable"]:
-            raise RuntimeError(profile["reason"])
-        merged = {key: str(fields.get(key, profile["fields"][key]) or "").replace("\n", " ").strip() for key in _PROFILE_FIELDS}
-        content = current["content"]
-        block = "\n".join([_PROFILE_START, *(f"{key}: {merged[key]}" for key in _PROFILE_FIELDS), _PROFILE_END])
-        if _PROFILE_START in content:
-            start = content.index(_PROFILE_START)
-            end = content.index(_PROFILE_END, start) + len(_PROFILE_END)
-            updated = content[:start] + block + content[end:]
-        else:
-            first_break = content.find("\n")
-            updated = content[:first_break + 1] + "\n" + block + content[first_break + 1:]
-        return cls.write_file(user_id, "USER.md", updated)
 
     @staticmethod
     def list_daily(user_id: str | int) -> list[Dict[str, Any]]:
@@ -140,6 +94,33 @@ class UserMemoryService:
                 if len(matches) >= max(1, min(limit, 50)):
                     return matches
         return matches
+
+    @staticmethod
+    def search_entries(user_id: str | int, query: str, *, date_from: str | None = None, date_to: str | None = None, category: str | None = None, limit: int = 10) -> list[Dict[str, Any]]:
+        from noesis_server.services.memory_dream_service import parse_daily_entries
+
+        term = str(query or "").strip().casefold()
+        if not term:
+            raise ValueError("请输入搜索关键词")
+        if date_from and date_to and date_from > date_to:
+            raise ValueError("开始日期不能晚于结束日期")
+        scored: list[tuple[int, Dict[str, Any]]] = []
+        for daily in UserMemoryService.list_daily(user_id):
+            day = daily["date"]
+            if (date_from and day < date_from) or (date_to and day > date_to):
+                continue
+            content = get_user_daily_memory_path(user_id, day).read_text(encoding="utf-8")
+            for entry in parse_daily_entries(content, day):
+                if category and entry.get("category") != category:
+                    continue
+                summary = str(entry.get("summary", ""))
+                keywords = [str(item) for item in entry.get("keywords", [])]
+                score = summary.casefold().count(term) * 3 + sum(term in item.casefold() for item in keywords) * 5
+                if score:
+                    entry["score"] = score
+                    scored.append((score, entry))
+        scored.sort(key=lambda pair: (pair[0], pair[1]["date"]), reverse=True)
+        return [item for _, item in scored[:max(1, min(limit, 50))]]
 
     @staticmethod
     def ensure_daily_dir(user_id: str | int) -> str:

@@ -29,6 +29,7 @@ from noesis_server.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,
     stop_scheduled_task_scheduler,
 )
+from noesis_server.services.memory_dream_scheduler import start_memory_dream_scheduler, stop_memory_dream_scheduler
 from noesis_server.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
 from noesis_server.bootstrap.kb import ensure_default_kb_collections
 
@@ -44,10 +45,12 @@ async def lifespan(app: FastAPI):
     await init_qdrant_client()
     await ensure_default_kb_collections()
     start_scheduled_task_scheduler()
+    start_memory_dream_scheduler()
     start_telegram_runtime()
     logger.info(f'🚀 {AppConfig.app_name}启动成功')
     yield
     await stop_telegram_runtime()
+    await stop_memory_dream_scheduler()
     await stop_scheduled_task_scheduler()
     # 关闭 Qdrant 连接
     await close_qdrant_client()

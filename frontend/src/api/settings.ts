@@ -127,11 +127,6 @@ export type MemoryFilePayload = {
   content: string
   updated_at?: string
   size?: number
-  profile?: {
-    structured_editable: boolean
-    fields: Record<string, string>
-    reason?: string | null
-  }
 }
 
 export async function getUserMemoryFile(file: 'USER.md' | 'AGENTS.md') {
@@ -155,19 +150,21 @@ export async function putUserMemoryFile(file: 'USER.md' | 'AGENTS.md', content: 
   return parseAuthJson<MemoryFilePayload>(res)
 }
 
-export function putProfileFields(fields: Record<string, string>, expectedUpdatedAt?: string) {
-  return settingsJson<MemoryFilePayload>('/api/user/profile/fields', 'PUT', { fields, expected_updated_at: expectedUpdatedAt })
-}
-
 export type DailyMemoryItem = { date: string, size: number, updated_at: string }
-export type DailyMemoryMatch = { date: string, line: number, snippet: string }
+export type MemorySourceRef = { session_id: string, message_id: string }
+export type DailyMemoryMatch = { id: string, date: string, category: string, summary: string, keywords: string[], score: number, sources: MemorySourceRef[] }
+export type MemoryDreamResult = { date: string, timezone: string, entries: number, status: string }
 
 export async function listDailyMemory() {
   return (await settingsJson<{ items: DailyMemoryItem[] }>('/api/user/memory/daily/list')).items
 }
 
 export async function searchDailyMemory(query: string) {
-  return (await settingsJson<{ items: DailyMemoryMatch[] }>(`/api/user/memory/daily/search?q=${encodeURIComponent(query)}`)).items
+  return (await settingsJson<{ items: DailyMemoryMatch[] }>(`/api/user/memory/daily/entries/search?q=${encodeURIComponent(query)}`)).items
+}
+
+export function runMemoryDream(date: string, timezone = 'Asia/Shanghai') {
+  return settingsJson<MemoryDreamResult>('/api/user/memory/dream', 'POST', { date, timezone })
 }
 
 export type ContextPreview = {

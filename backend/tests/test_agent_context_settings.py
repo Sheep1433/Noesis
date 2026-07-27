@@ -1,4 +1,4 @@
-"""Structured profile, L2 search, and side-effect-free context preview."""
+"""Raw profile, L2 search, and side-effect-free context preview."""
 
 from pathlib import Path
 
@@ -14,24 +14,24 @@ def user_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
 
 
-def test_structured_profile_preserves_unmanaged_markdown() -> None:
+def test_profile_is_raw_markdown() -> None:
     ensure_user_memory_files("u1")
     path = get_user_profile_md_path("u1")
     original = path.read_text(encoding="utf-8") + "\n## 自定义\n保留这段内容\n"
     path.write_text(original, encoding="utf-8")
 
-    result = UserMemoryService.write_profile_fields("u1", {"称呼": "Sheep", "时区": "Asia/Shanghai"})
+    result = UserMemoryService.write_file("u1", "USER.md", original)
 
-    assert result["profile"]["fields"]["称呼"] == "Sheep"
     assert "## 自定义\n保留这段内容" in result["content"]
+    assert "profile" not in result
 
 
-def test_structured_profile_rejects_unparseable_raw_document() -> None:
+def test_profile_accepts_custom_raw_document() -> None:
     ensure_user_memory_files("u1")
     get_user_profile_md_path("u1").write_text("# 完全自定义画像\n", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="原文"):
-        UserMemoryService.write_profile_fields("u1", {"称呼": "Sheep"})
+    result = UserMemoryService.write_file("u1", "USER.md", "# 完全自定义画像\n")
+    assert result["content"] == "# 完全自定义画像\n"
 
 
 def test_daily_memory_list_and_search_are_user_scoped() -> None:

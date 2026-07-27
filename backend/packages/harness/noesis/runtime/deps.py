@@ -22,11 +22,34 @@ _langfuse_tracing_enabled: Callable[[], bool] | None = None
 _merge_langfuse_runnable_config: Callable[..., dict] | None = None
 _hits_to_langfuse_payload: Callable[..., Any] | None = None
 _langfuse_retrieval_observation: Callable[..., Any] | None = None
+_memory_service: Any | None = None
 
 
 def bind_attachment_service(service: Any) -> None:
     global _attachment_service
     _attachment_service = service
+
+
+def bind_memory_service(service: Any) -> None:
+    global _memory_service
+    _memory_service = service
+
+
+@contextmanager
+def temporary_memory_service(service: Any) -> Iterator[None]:
+    global _memory_service
+    previous = _memory_service
+    _memory_service = service
+    try:
+        yield
+    finally:
+        _memory_service = previous
+
+
+def require_memory_service() -> Any:
+    if _memory_service is None:
+        raise RuntimeError("Memory service not bound; call noesis.runtime.deps.bind_memory_service")
+    return _memory_service
 
 
 @contextmanager
