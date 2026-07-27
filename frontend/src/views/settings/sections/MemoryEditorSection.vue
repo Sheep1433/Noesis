@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { ContextPreview, DailyMemoryItem, DailyMemoryMatch } from '@/api/settings'
-import { NButton, NInput, NSelect, NTabPane, NTabs, NTag, useMessage } from 'naive-ui'
+import { NButton, NDatePicker, NInput, NSelect, NTag, useMessage } from 'naive-ui'
 import { computed, onMounted, ref, watch } from 'vue'
-import { getContextPreview, getUserMemoryFile, listDailyMemory, putProfileFields, putUserMemoryFile, searchDailyMemory } from '@/api/settings'
+import { getContextPreview, getUserMemoryFile, listDailyMemory, putUserMemoryFile, runMemoryDream, searchDailyMemory } from '@/api/settings'
 import FilePreview from '@/components/FilePreview/index.vue'
 
 const props = defineProps<{
@@ -23,11 +23,11 @@ const saving = ref(false)
 const loading = ref(false)
 const editing = ref(false)
 const dirty = computed(() => editing.value && draft.value !== content.value)
-const profile = ref<{ structured_editable: boolean, fields: Record<string, string>, reason?: string | null }>()
-const profileDraft = reactiveProfile()
 const dailyItems = ref<DailyMemoryItem[]>([])
 const dailyMatches = ref<DailyMemoryMatch[]>([])
 const dailyQuery = ref('')
+const dreamDate = ref(Date.now())
+const dreaming = ref(false)
 const preview = ref<ContextPreview>()
 const previewProfile = ref('super_agent')
 const profileOptions = [
@@ -36,10 +36,6 @@ const profileOptions = [
   { label: '故障运维', value: 'fault_operation' },
 ]
 
-function reactiveProfile() {
-  return ref<Record<string, string>>({})
-}
-
 async function load() {
   loading.value = true
   try {
@@ -47,29 +43,11 @@ async function load() {
     content.value = data?.content ?? ''
     draft.value = content.value
     updatedAt.value = data?.updated_at
-    profile.value = data?.profile
-    profileDraft.value = { ...(data?.profile?.fields || {}) }
     editing.value = !content.value.trim()
   } catch (e) {
     message.error(e instanceof Error ? e.message : '加载失败')
   } finally {
     loading.value = false
-  }
-}
-
-async function saveProfile() {
-  saving.value = true
-  try {
-    const data = await putProfileFields(profileDraft.value, updatedAt.value)
-    content.value = data.content
-    draft.value = data.content
-    updatedAt.value = data.updated_at
-    profile.value = data.profile
-    message.success('画像已保存')
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : '保存失败')
-  } finally {
-    saving.value = false
   }
 }
 
@@ -92,6 +70,20 @@ async function runDailySearch() {
   dailyMatches.value = await searchDailyMemory(dailyQuery.value)
 }
 
+async function dream() {
+  dreaming.value = true
+  try {
+    const date = new Date(dreamDate.value).toLocaleDateString('sv-SE')
+    const result = await runMemoryDream(date)
+    message.success(`已整理 ${result.entries} 条记忆`)
+    await loadContextData()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '记忆整理失败')
+  } finally {
+    dreaming.value = false
+  }
+}
+
 async function refreshPreview() {
   preview.value = await getContextPreview(previewProfile.value)
 }
@@ -112,7 +104,6 @@ async function save() {
     const data = await putUserMemoryFile(props.file, draft.value)
     content.value = draft.value
     updatedAt.value = data?.updated_at
-    profile.value = data?.profile
     editing.value = false
     message.success('已保存')
     await loadContextData()
@@ -145,27 +136,7 @@ onMounted(() => {
       最近修改：{{ updatedAt }}
     </p>
 
-    <div v-if="file === 'USER.md'" class="editor-area">
-      <n-tabs type="line">
-        <n-tab-pane name="structured" tab="常用字段">
-          <template v-if="profile?.structured_editable">
-            <div class="profile-grid">
-              <n-input v-model:value="profileDraft['称呼']" placeholder="称呼" />
-              <n-input v-model:value="profileDraft['时区']" placeholder="时区，例如 Asia/Shanghai" />
-              <n-input v-model:value="profileDraft['语言']" placeholder="常用语言" />
-              <n-input v-model:value="profileDraft['角色']" placeholder="角色或职业" />
-              <n-button type="primary" :loading="saving" @click="saveProfile">保存常用字段</n-button>
-            </div>
-          </template>
-          <p v-else class="hint">{{ profile?.reason || '请使用原文模式维护当前画像。' }}</p>
-        </n-tab-pane>
-        <n-tab-pane name="raw" tab="Markdown 原文">
-          <n-input v-if="editing" v-model:value="draft" type="textarea" :autosize="{ minRows: 16, maxRows: 40 }" :disabled="loading || saving" placeholder="使用 Markdown 编写…" />
-          <FilePreview v-else :path="file" :content="content" :loading="loading" :show-path="false" :show-toolbar="false" density="comfortable" />
-        </n-tab-pane>
-      </n-tabs>
-    </div>
-    <div v-else class="editor-area">
+    <div class="editor-area">
       <n-input
         v-if="editing"
         v-model:value="draft"
@@ -187,10 +158,11 @@ onMounted(() => {
 
     <template v-if="file === 'AGENTS.md'">
       <section class="context-panel">
-        <h3>L2 日记</h3>
+        <h3>跨任务记忆</h3>
+        <div class="inline-actions"><n-date-picker v-model:value="dreamDate" type="date" clearable :actions="null" /><n-button type="primary" :loading="dreaming" @click="dream">整理记忆</n-button></div>
         <div class="inline-actions"><n-input v-model:value="dailyQuery" placeholder="搜索日记内容" @keyup.enter="runDailySearch" /><n-button @click="runDailySearch">搜索</n-button></div>
-        <p class="hint">共 {{ dailyItems.length }} 篇日记。日记按需搜索，不会默认加入每次对话。</p>
-        <div v-for="match in dailyMatches" :key="`${match.date}-${match.line}`" class="result"><strong>{{ match.date }} · 第 {{ match.line }} 行</strong><span>{{ match.snippet }}</span></div>
+        <p class="hint">已整理 {{ dailyItems.length }} 天。记忆仅在需要时检索，不会默认加入每次对话。</p>
+        <div v-for="match in dailyMatches" :key="match.id" class="result"><strong>{{ match.date }} · {{ match.category }} · 匹配度 {{ match.score }}</strong><span>{{ match.summary }}</span><small v-if="match.sources?.[0]">来源：{{ match.sources[0].session_id }} / {{ match.sources[0].message_id }}</small></div>
       </section>
       <section class="context-panel">
         <h3>最终上下文预览</h3>
@@ -240,10 +212,9 @@ onMounted(() => {
   max-width: 720px;
 }
 
-.profile-grid { display: grid; gap: 10px; max-width: 560px; }
 .context-panel { max-width: 720px; margin-top: 28px; }
 .context-panel h3 { margin-bottom: 10px; }
-.inline-actions { display: flex; align-items: center; gap: 8px; }
+.inline-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .inline-actions > :first-child { flex: 1; }
 .result, .source-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); font-size: 13px; }
 

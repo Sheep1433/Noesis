@@ -1,7 +1,8 @@
 """用户记忆 / 定时任务 / 通讯通道 API（挂在 /api/user）。"""
 from __future__ import annotations
 
-from typing import Dict, Literal, Optional
+from datetime import date
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -11,6 +12,7 @@ from noesis_server.common.http.response import ResponseUtil
 from noesis_server.infrastructure.database.dependency import get_db
 from noesis_server.schemas.login_vo import CurrentUser
 from noesis_server.services.messaging_channel_service import MessagingChannelService
+from noesis_server.services.memory_dream_service import MemoryDreamService
 from noesis_server.services.scheduled_task_service import ScheduledTaskService
 from noesis_server.services.scheduled_task_service import compute_next_run_ms, cron_summary
 from noesis_server.services.user_memory_service import UserMemoryService
@@ -24,9 +26,9 @@ class MemoryWriteBody(BaseModel):
     content: str = Field(..., description="Markdown 正文")
 
 
-class ProfileFieldsBody(BaseModel):
-    fields: Dict[str, str]
-    expected_updated_at: Optional[str] = None
+class MemoryDreamBody(BaseModel):
+    date: str = Field(default_factory=lambda: date.today().isoformat())
+    timezone: str = "Asia/Shanghai"
 
 
 class ScheduledTaskCreateBody(BaseModel):
@@ -94,18 +96,19 @@ async def put_user_memory_file(
     return ResponseUtil.success(msg="已保存", data=data)
 
 
-@user_settings_router.put("/profile/fields")
-async def put_profile_fields(
-    body: ProfileFieldsBody,
+@user_settings_router.post("/memory/dream")
+async def run_memory_dream(
+    body: MemoryDreamBody,
     request: Request,
     current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     await UserService.require_csrf(request)
     try:
-        data = UserMemoryService.write_profile_fields(current_user.user_id, body.fields, body.expected_updated_at)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ResponseUtil.success(msg="已保存", data=data)
+        data = await MemoryDreamService.run(db, user_id=current_user.user_id, target_date=body.date, timezone_name=body.timezone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseUtil.success(msg="记忆整理完成", data=data)
 
 
 @user_settings_router.get("/memory/daily/list")
@@ -124,6 +127,37 @@ async def search_daily_memory(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseUtil.success(data={"items": items})
+
+
+@user_settings_router.get("/memory/daily/entries/search")
+async def search_memory_entries(
+    q: str = Query(..., min_length=1, max_length=100),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+):
+    try:
+        items = UserMemoryService.search_entries(current_user.user_id, q, date_from=date_from, date_to=date_to, category=category, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseUtil.success(data={"items": items})
+
+
+@user_settings_router.get("/memory/daily/source")
+async def get_memory_source(
+    session_id: str = Query(...),
+    message_id: str = Query(...),
+    context_messages: int = Query(1, ge=0, le=3),
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        data = await MemoryDreamService.get_source(db, user_id=current_user.user_id, session_id=session_id, message_id=message_id, context_messages=context_messages)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ResponseUtil.success(data=data)
 
 
 @user_settings_router.get("/context/preview")

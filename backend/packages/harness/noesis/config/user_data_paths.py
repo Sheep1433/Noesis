@@ -58,14 +58,7 @@ _AGENTS_MD_SEED = """<!-- Noesis 用户记忆：Agent 会在你明确要求「�
 （待补充）
 """
 
-_USER_MD_SEED = """<!-- Noesis 用户画像：可在上下文面板编辑，Agent 只读 -->
-
-<!-- noesis-profile:start -->
-称呼:
-时区: Asia/Shanghai
-语言: 中文
-角色:
-<!-- noesis-profile:end -->
+_USER_MD_SEED = """<!-- Noesis 用户画像：可在设置页或上下文面板编辑 -->
 
 ## 基本信息
 （待补充）
