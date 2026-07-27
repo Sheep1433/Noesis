@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,8 +13,8 @@ from typing import Any
 
 from noesis.prompts.execution import build_execution_sections
 from noesis.config.env import ModelConfig
-from noesis.llm import get_llm
-from noesis.llm.factory import _build_chat_model
+from noesis.llm import build_chat_model, get_llm
+from evals.agent.runtime import AgentEventCollector
 
 _AGENT_VERSION = "0.1.0"
 _DEFAULT_MODEL = "opencode/deepseek-v4-flash-free"
@@ -46,7 +47,7 @@ def resolve_harbor_llm(model_name: str | None):
             api_key = os.getenv("OPENCODE_API_KEY", "public")
             base_url = os.getenv("OPENCODE_API_BASE", "").strip() or ModelConfig.model_base_url
             temperature = float(os.getenv("HARBOR_NOESIS_TEMPERATURE", "0") or 0)
-            return _build_chat_model(
+            return build_chat_model(
                 model_type="opencode",
                 model_name=raw_name,
                 temperature=temperature,
@@ -74,6 +75,8 @@ class HarborRunCollector:
     error: str | None = None
     _step_id: int = 1
     _pending_tools: dict[str, dict[str, Any]] = field(default_factory=dict)
+    common: AgentEventCollector = field(default_factory=AgentEventCollector)
+    _started_at: float = field(default_factory=time.perf_counter, repr=False)
 
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -90,6 +93,7 @@ class HarborRunCollector:
         self._step_id += 1
 
     def consume(self, event: dict[str, Any]) -> None:
+        self.common.consume(event)
         event_name = event.get("event")
         if event_name == "on_tool_start":
             tool_name = str(event.get("name") or "unknown")
@@ -208,19 +212,17 @@ def write_run_artifacts(
         json.dumps(trajectory, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    summary = {
-        "session_id": session_id,
-        "model": collector.model_name,
-        "final_text": collector.final_text,
-        "tool_stats": collector.tool_stats,
-        "tokens": {
-            "input": collector.input_tokens,
-            "output": collector.output_tokens,
-        },
-        "error": collector.error,
-    }
+    common = collector.common.result(
+        run_id=session_id,
+        suite="harbor",
+        subject="super-agent",
+        latency_ms=int((time.perf_counter() - collector._started_at) * 1000),
+        model=collector.model_name,
+    )
+    if collector.error and not common.error:
+        common.error = collector.error
+    summary = common.to_manifest()
     (logs_dir / "noesis.txt").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-

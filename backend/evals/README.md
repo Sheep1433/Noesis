@@ -7,6 +7,7 @@
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
 | Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
 | Agent / Terminal-Bench | `./evals/agent/harbor/run.sh` | 已实现 |
+| Agent / Agentic RAG | `uv run python -m evals.agent.rag` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
 | 知识库检索（单集合） | `uv run python -m evals.kb.run --collection <name>` | 已实现 |
@@ -16,7 +17,7 @@ cd backend
 uv run python -m evals    # 仅打印上表说明
 ```
 
-OpenSpec：`openspec/specs/agent-offline-eval/spec.md`、`openspec/specs/test-case-agent-eval/spec.md`
+OpenSpec：`openspec/specs/offline-evals/spec.md`
 
 ## Langfuse（评测专用项目）
 
@@ -178,15 +179,17 @@ coverage 走 Python 确定性 scorer（`shared/coverage_scorer.py`）；borderli
 
 ---
 
-## 2. Agent 评测（BrowseComp + Harbor）
+## 2. Agent 评测（BrowseComp + Harbor + Agentic RAG）
 
 个人学习与日常回归推荐 **两条主线**：
 
 1. **BrowseComp** — 多步检索 + 短答案（`SuperAgent` / 深度研究能力）
 2. **Harbor + Terminal-Bench** — 终端任务执行（`harbor view` 看轨迹）
+3. **Agentic RAG** — 验证 GeneralQAAgent 经 Harness KB Tool/Port 检索并引用期望来源
 
 ```
 evals/agent/
+  runtime.py                # 公共事件 Collector 与 run manifest
   _agent.py                 # SuperAgent 共用执行
   browsecomp/
     official.py
@@ -196,6 +199,9 @@ evals/agent/
     run.sh                    # Harbor + Claude Code → terminal-bench@2.0
     README.md
     results/<job-name>/
+  rag/
+    __main__.py             # GeneralQAAgent + Harness KB Tool
+    fixtures/sample.jsonl
 ```
 
 ### BrowseComp
@@ -217,6 +223,26 @@ harbor view evals/agent/harbor/results/smoke
 ```
 
 前置：Docker、`uv tool install harbor`、本机 `claude` CLI、`~/.claude/settings.json`。产物：`evals/agent/harbor/results/<job-name>/`。
+
+### Agentic RAG
+
+```bash
+uv run python -m evals.agent.rag \
+  --dataset fixtures/sample.jsonl \
+  --model-id <catalog-model-id>
+```
+
+数据集每行至少包含 `query`，可选 `collection_names` 和 `expected_sources`。该入口实际运行：
+
+```text
+GeneralQAAgent → create_noesis_agent → search_knowledge_base
+  → noesis.runtime.deps → KbRetrievalService
+```
+
+结果记录 KB Tool 调用率、期望来源 recall 和最终回答。它用于验证 Agentic RAG 集成，不替代 `evals.kb` 的 Recall@K / Hit@K：
+
+- `evals.kb`：直接评价检索与排序，适合确定性回归。
+- `evals.agent.rag`：评价 Agent 是否调用知识库、是否命中来源并基于证据回答。
 
 ---
 
@@ -296,6 +322,6 @@ cd backend
 uv run python -m evals.kb.run --collection requirement_docs --dataset evals/kb/fixtures/sample.jsonl
 ```
 
-可选 `--k`、`--query-params '{"use_reranker":false}'`。默认读取目标集合 MySQL `query_params` 并走 `KbRetrievalService` 全链路。
+可选 `--k`、`--query-params '{"use_reranker":false}'`。默认读取目标集合 PostgreSQL `query_params` 并走 `KbRetrievalService` 全链路。
 
-`sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/prd/platform/SSE流式数据设计.md` §3.3、§6.4）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。
+`sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/architecture/platform/chat-streaming.md`）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。

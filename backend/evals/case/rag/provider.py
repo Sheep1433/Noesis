@@ -74,7 +74,7 @@ async def _run_rag_async(item: Dict[str, Any], *, eval_run_id: str) -> Dict[str,
         test_case_docs_collection=eval_test_case_collection(),
         test_case_upload_collection="",
     )
-    with patch("agent.case_generate.rag.QdrantConfig", eval_qdrant):
+    with patch("noesis.agents.case_generate.rag.QdrantConfig", eval_qdrant):
         scene_rag_context, trace_entry = await build_scene_rag_context(
             scene,
             adopted_point_names=adopted,

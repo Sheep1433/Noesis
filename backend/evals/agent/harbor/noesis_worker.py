@@ -77,13 +77,13 @@ async def _run_worker(
                 task_id=session_id,
                 message_id=message_id,
             ):
+                collector.consume(event)
                 if isinstance(event, dict) and str(event.get("type", "")).startswith(
                     "__tw_"
                 ):
                     if event.get("type") == "__tw_error__":
                         collector.error = str(event.get("content") or "stream error")
                     continue
-                collector.consume(event)
         except Exception as exc:
             collector.error = str(exc)
             write_run_artifacts(

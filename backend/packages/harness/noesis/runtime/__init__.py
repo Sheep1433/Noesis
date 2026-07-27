@@ -16,6 +16,7 @@ _EXPORTS = {
     "bind_langfuse": ("noesis.runtime.deps", "bind_langfuse"),
     "bind_vlm": ("noesis.runtime.deps", "bind_vlm"),
     "temporary_attachment_service": ("noesis.runtime.deps", "temporary_attachment_service"),
+    "temporary_kb_runtime": ("noesis.runtime.deps", "temporary_kb_runtime"),
 }
 
 __all__ = list(_EXPORTS)

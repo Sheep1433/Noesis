@@ -1,6 +1,7 @@
 """Agent 评测入口：各 benchmark 独立子模块。
 
   uv run python -m evals.agent.browsecomp --tag <name>
+  uv run python -m evals.agent.rag --dataset <jsonl>
   ./evals/agent/harbor/run.sh --n-tasks 1 --job-name smoke
 """
 
@@ -10,6 +11,7 @@ import sys
 
 MODULES = (
     ("evals.agent.browsecomp", "BrowseComp（openai/simple-evals 官方流程）"),
+    ("evals.agent.rag", "Agentic RAG（GeneralQAAgent + Harness KB Tool）"),
 )
 
 SHELL_MODULES = (

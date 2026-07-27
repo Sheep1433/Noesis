@@ -29,7 +29,7 @@ def _llm_http_clients() -> tuple[httpx.Client, httpx.AsyncClient]:
     )
 
 
-def _build_chat_model(
+def build_chat_model(
     *,
     model_type: str,
     model_name: str,
@@ -158,7 +158,7 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
     except ValueError:
         raise ValueError(f"Invalid MODEL_TEMPERATURE value: {temperature_str}. Must be a float.")
 
-    return _build_chat_model(
+    return build_chat_model(
         model_type=model_type,
         model_name=model_name,
         temperature=temperature,

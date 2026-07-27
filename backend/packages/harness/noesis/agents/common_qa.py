@@ -51,6 +51,7 @@ class GeneralQAAgent(BaseAgent):
         qa_type: Optional[str] = None,
         kb_collections: Optional[list] = None,
         kb_search_enabled: bool = True,
+        web_search_enabled: bool = True,
         model_id: Optional[str] = None,
         mcp_tools: Optional[List[Any]] = None,
         db: Optional[AsyncSession] = None,
@@ -64,7 +65,7 @@ class GeneralQAAgent(BaseAgent):
             default_collection_names=scoped_collections or None,
             enforce_scope=bool(scoped_collections),
         ) if kb_search_enabled else []
-        web_tools = build_web_search_tools()
+        web_tools = build_web_search_tools() if web_search_enabled else []
         tools = kb_tools + web_tools + list(mcp_tools or [])
         kb_enabled = len(kb_tools) > 0
         if kb_enabled:

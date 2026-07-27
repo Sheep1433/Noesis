@@ -69,6 +69,46 @@ def bind_kb_retrieval(
     _kb_retrieval_service = retrieval_service
 
 
+@contextmanager
+def temporary_kb_runtime(
+    *,
+    collection_config_service: Any,
+    qdrant_service_factory: Callable[[], Any],
+    is_qdrant_connected: Callable[[], bool],
+    normalize_query_execution_params: Callable[..., Any],
+    retrieval_service: Any,
+) -> Iterator[None]:
+    """Temporarily bind all KB ports for an embedded or evaluation runtime."""
+    global _kb_collection_config_service, _qdrant_service_factory, _is_qdrant_connected
+    global _normalize_query_execution_params, _kb_retrieval_service
+    previous = (
+        _kb_collection_config_service,
+        _qdrant_service_factory,
+        _is_qdrant_connected,
+        _normalize_query_execution_params,
+        _kb_retrieval_service,
+    )
+    bind_kb_services(
+        collection_config_service=collection_config_service,
+        qdrant_service_factory=qdrant_service_factory,
+        is_qdrant_connected=is_qdrant_connected,
+    )
+    bind_kb_retrieval(
+        normalize_query_execution_params=normalize_query_execution_params,
+        retrieval_service=retrieval_service,
+    )
+    try:
+        yield
+    finally:
+        (
+            _kb_collection_config_service,
+            _qdrant_service_factory,
+            _is_qdrant_connected,
+            _normalize_query_execution_params,
+            _kb_retrieval_service,
+        ) = previous
+
+
 def bind_langfuse(
     *,
     tracing_enabled: Callable[[], bool],
