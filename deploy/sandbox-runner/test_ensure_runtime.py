@@ -82,6 +82,24 @@ def test_ensure_reuses_when_running(manager: SandboxManager) -> None:
     assert result is synced
 
 
+def test_sync_running_rebuilds_container_when_image_changed(
+    manager: SandboxManager,
+) -> None:
+    running = MagicMock()
+    running.status = "running"
+    running.image.id = "sha256:old"
+    current_image = MagicMock()
+    current_image.id = "sha256:new"
+    manager._docker.containers.get.return_value = running
+    manager._docker.images.get.return_value = current_image
+    manager._stop_and_remove = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    result = manager._sync_running("u1", "s1")
+
+    assert result is None
+    manager._stop_and_remove.assert_called_once_with(_container_name("u1", "s1"))
+
+
 def test_ensure_rejects_aio_runtime(manager: SandboxManager) -> None:
     with pytest.raises(ValueError, match="runtime"):
         manager.ensure("u1", "s1", runtime="aio")

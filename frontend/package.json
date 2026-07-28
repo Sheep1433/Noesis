@@ -13,6 +13,7 @@
     "build": "vite build",
     "build:gh-pages": "cross-env VITE_ROUTER_MODE=hash pnpm build",
     "preview": "vite preview --host",
+    "test": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
     "stylelint": "stylelint .scss, .vue ./src",
@@ -91,6 +92,7 @@
     "unplugin-vue-components": "^28.5.0",
     "vite": "^6.3.5",
     "vite-raw-plugin": "^1.0.2",
+    "vitest": "^3.2.7",
     "vue-eslint-parser": "^10.1.3"
   }
 }

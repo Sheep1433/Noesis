@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +16,7 @@ from noesis_server.domain.chat.delivery.events import (
     RunError,
     RunEvent,
     RunPaused,
+    WireFrame,
 )
 
 
@@ -38,11 +40,13 @@ class PersistSink:
     - 无 SSE 订阅者时仍应在 run 结束后调用 apply 路径
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, checkpoint_interval_seconds: float = 2.0) -> None:
         self.last_hitl: Optional[Dict[str, Any]] = None
         self.paused_hitl = False
         self.terminal: Optional[PersistDecision] = None
         self._seen_events: List[str] = []
+        self.checkpoint_interval_seconds = max(0.1, checkpoint_interval_seconds)
+        self._last_checkpoint_at = time.monotonic()
 
     def on_event(self, event: RunEvent) -> Optional[PersistDecision]:
         name = type(event).__name__
@@ -102,6 +106,23 @@ class PersistSink:
             return decision
 
         return None
+
+    def should_checkpoint(self, event: RunEvent, *, now: float | None = None) -> bool:
+        """语义边界立即写，其余正文按时间节流。"""
+        current = time.monotonic() if now is None else now
+        semantic_boundary = isinstance(event, (HitlRequired, RunPaused, RunCompleted, RunError, RunAborted))
+        if isinstance(event, WireFrame):
+            semantic_boundary = event.event in {
+                "tool-output-available",
+                "phase-end",
+                "hitl-required",
+                "finish",
+                "error",
+            }
+        if semantic_boundary or current - self._last_checkpoint_at >= self.checkpoint_interval_seconds:
+            self._last_checkpoint_at = current
+            return True
+        return False
 
     def final_decision(self) -> PersistDecision:
         if self.paused_hitl and (

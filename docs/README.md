@@ -32,6 +32,7 @@
 
 - [知识库 RAG 架构](architecture/knowledge-base.md)
 - [SSE 流式数据](architecture/platform/chat-streaming.md)
+- [Durable Agent Run 与断线恢复架构](architecture/platform/durable-agent-runs.md)
 - [聊天记录与持久化](architecture/platform/chat-persistence.md)
 - [设置控制面](architecture/platform/settings-control-plane.md)
 - [故障运维 Agent](engineering/agents/fault-operation-agent.md)

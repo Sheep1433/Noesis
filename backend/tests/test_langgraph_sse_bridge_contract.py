@@ -654,6 +654,42 @@ def test_bridge_raw_to_sse_lines_skips_end_sentinel() -> None:
     ) == [": keepalive\n\n"]
 
 
+def test_execute_nonzero_exit_is_projected_as_tool_error() -> None:
+    bridge = LangGraphSseBridge("sess-exit")
+    builder = AssistantMessageBuilder(session_id="sess-exit", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "execute",
+            "run_id": "run-exec",
+            "data": {"input": {"command": "false"}},
+        },
+        builder,
+        ctx,
+    )
+
+    class _FailedOutput:
+        status = "success"
+        content = "\n[Command failed with exit code 1]"
+
+    lines = bridge.process_item(
+        {
+            "event": "on_tool_end",
+            "name": "execute",
+            "run_id": "run-exec",
+            "data": {"output": _FailedOutput()},
+        },
+        builder,
+        ctx,
+    )
+    events = _data_json_objects("".join(lines))
+    tool_output = next(item for item in events if item["type"] == "tool-output-available")
+    assert tool_output["status"] == "error"
+    saved = next(part for part in builder.to_dict()["parts"] if part.get("name") == "execute")
+    assert saved["status"] == "error"
+
+
 def test_tool_error_uses_inflight_tool_call_id() -> None:
     """on_tool_error 的 tool_call_id 应与 tool-input 一致，避免前端出现孤儿工具块。"""
     bridge = LangGraphSseBridge("sess-tool-err")

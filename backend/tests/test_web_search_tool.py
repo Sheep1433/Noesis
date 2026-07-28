@@ -3,8 +3,11 @@ import json
 import socket
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from noesis.tools.web_providers.url_safety import validate_fetch_url
 from noesis.tools.web_search_tool import build_web_search_tools, web_fetch, web_search
+from noesis.errors.tool_failure import ToolNetworkError
 
 
 def _configure_web_tools(*mocks, **overrides) -> None:
@@ -139,6 +142,17 @@ def test_web_search_falls_back_when_tavily_fails(
     mock_ddg.assert_called_once()
 
 
+@patch("noesis.tools.web_search_tool.resolve_web_search")
+def test_web_search_all_providers_failed_raises_typed_tool_error(mock_resolve):
+    mock_resolve.return_value = {
+        "error": "搜索失败",
+        "query": "q",
+        "detail": "all providers unavailable",
+    }
+    with pytest.raises(ToolNetworkError, match="all providers unavailable"):
+        web_search("q")
+
+
 @patch("noesis.tools.web_providers.resolver.WebToolsConfig")
 @patch("noesis.tools.web_providers.tavily.WebToolsConfig")
 @patch("noesis.tools.web_providers.local_fetch.fetch_with_local")
@@ -155,6 +169,13 @@ def test_web_fetch_falls_back_to_local_without_key(
     result = web_fetch("https://example.com")
     assert "provider: local" in result
     mock_local.assert_called_once()
+
+
+@patch("noesis.tools.web_search_tool.resolve_web_fetch")
+def test_web_fetch_failure_raises_typed_tool_error(mock_resolve):
+    mock_resolve.return_value = '{"error":"页面抓取失败","url":"https://example.com"}'
+    with pytest.raises(ToolNetworkError, match="页面抓取失败"):
+        web_fetch("https://example.com")
 
 
 def test_build_returns_both_tools():

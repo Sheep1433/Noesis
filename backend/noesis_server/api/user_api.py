@@ -38,6 +38,7 @@ async def query_user_qa_record(
         session_id=request.chat_id,
         page=request.page,
         limit=request.limit,
+        archived=request.archived,
     )
 
     resolved_qa = await ChatService.resolve_session_qa_types_for_list(sessions, db)
@@ -51,6 +52,8 @@ async def query_user_qa_record(
             "qa_type": resolved_qa.get(s.id),
             "create_time": s.created_at,
             "update_time": s.updated_at,
+            "pinned": bool(getattr(s, "pinned", False)),
+            "archived": bool(getattr(s, "archived", False)),
         }
         for s in sessions
     ]

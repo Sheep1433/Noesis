@@ -95,6 +95,10 @@ class QueryUserRecordRequest(BaseModel):
     limit: int = Field(10, ge=1, le=1_000_000, description="每页条数")
     search_text: Optional[str] = Field(None, description="按会话标题模糊搜索")
     chat_id: Optional[str] = Field(None, description="仅返回指定会话")
+    archived: Optional[str] = Field(
+        None,
+        description="'only' 仅返回归档会话；None/'exclude' 排除归档会话（默认）",
+    )
 
 
 class QaStopRequest(BaseModel):

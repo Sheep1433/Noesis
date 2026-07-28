@@ -88,6 +88,42 @@ class ChatService:
         return normalized or None
 
     @classmethod
+    def apply_default_session_title(cls, session: TChatSession, title: Optional[str]) -> str:
+        """仅在默认标题上应用规范化标题，不提交事务。"""
+        normalized = cls._normalize_session_title(title)
+        current = (session.title or "").strip()
+        if normalized and (not current or current == _DEFAULT_SESSION_TITLE):
+            session.title = normalized
+        return session.title or _DEFAULT_SESSION_TITLE
+
+    @classmethod
+    async def reserve_message_sequences(
+            cls,
+            session_id: str,
+            user_id: str,
+            count: int,
+            db: AsyncSession,
+    ) -> tuple[TChatSession, list[int]]:
+        """锁定会话行并连续分配消息序号；调用方负责提交事务。"""
+        if count < 1:
+            raise ValueError("count must be positive")
+        result = await db.execute(
+            select(TChatSession)
+            .where(
+                TChatSession.id == session_id,
+                TChatSession.user_id == user_id,
+                TChatSession.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        session = result.scalar_one_or_none()
+        if session is None:
+            raise ServiceException(message="会话不存在")
+        start = int(session.next_message_sequence or 1)
+        session.next_message_sequence = start + count
+        return session, list(range(start, start + count))
+
+    @classmethod
     async def set_session_title_if_default(
             cls,
             session_id: str,
@@ -115,8 +151,9 @@ class ChatService:
         if not session_obj:
             return None
 
-        current = (session_obj.title or "").strip()
-        if current and current != _DEFAULT_SESSION_TITLE:
+        previous = session_obj.title
+        cls.apply_default_session_title(session_obj, title)
+        if session_obj.title == previous:
             return session_obj
 
         return await cls.update_session_title(
@@ -272,6 +309,7 @@ class ChatService:
 
         message_id = message_id or str(uuid.uuid4())
         now = _now_ms()
+        _, sequences = await cls.reserve_message_sequences(session_id, str(user_id), 1, db)
 
         # 处理 content 格式：统一为 multipart JSON 格式
         if isinstance(content, str):
@@ -298,6 +336,7 @@ class ChatService:
             content=content_json,
             extra=extra,
             status=status,
+            message_sequence=sequences[0],
             created_at=now
         )
 
@@ -467,13 +506,13 @@ class ChatService:
             )
             cursor_msg = result.scalar_one_or_none()
             if cursor_msg:
-                conditions.append(TChatMessage.created_at < cursor_msg.created_at)
+                conditions.append(TChatMessage.message_sequence < cursor_msg.message_sequence)
 
         base_filter = and_(*conditions)
         result = await db.execute(
             select(TChatMessage)
             .where(base_filter)
-            .order_by(TChatMessage.created_at.desc())  # 降序获取最老的 N 条
+            .order_by(TChatMessage.message_sequence.desc())
             .limit(limit)
         )
         # 保持升序返回
@@ -685,6 +724,57 @@ class ChatService:
         return session_obj
 
     @classmethod
+    async def update_session_meta(
+            cls,
+            session_id: str,
+            user_id: str,
+            pinned: Optional[bool] = None,
+            archived: Optional[bool] = None,
+            db: AsyncSession = None,
+    ) -> TChatSession:
+        """
+        更新会话置顶 / 归档状态。pinned / archived 为 None 表示不修改。
+
+        :param session_id: 会话 ID
+        :param user_id: 用户 ID（用于校验归属）
+        :param pinned: 是否置顶
+        :param archived: 是否归档
+        :param db: 数据库会话
+        :return: 更新后的会话对象
+        """
+        result = await db.execute(
+            select(TChatSession).where(
+                and_(
+                    TChatSession.id == session_id,
+                    TChatSession.user_id == user_id,
+                    TChatSession.deleted_at.is_(None)
+                )
+            )
+        )
+        session_obj = result.scalar_one_or_none()
+        if not session_obj:
+            raise ServiceException(message='会话不存在')
+
+        values: Dict[str, Any] = {}
+        if pinned is not None:
+            values['pinned'] = bool(pinned)
+        if archived is not None:
+            values['archived'] = bool(archived)
+        if values:
+            values['updated_at'] = _now_ms()
+            await db.execute(
+                update(TChatSession)
+                .where(TChatSession.id == session_id)
+                .values(**values)
+            )
+            await db.commit()
+            await db.refresh(session_obj)
+            logger.info(
+                f'更新会话元信息: session_id={session_id}, pinned={pinned}, archived={archived}'
+            )
+        return session_obj
+
+    @classmethod
     async def merge_session_extra(
             cls,
             session_id: str,
@@ -742,7 +832,8 @@ class ChatService:
         """
         conditions = [
             TChatSession.user_id == user_id,
-            TChatSession.deleted_at.is_(None)
+            TChatSession.deleted_at.is_(None),
+            TChatSession.archived.is_(False),
         ]
         # 侧栏/列表：仅展示至少有一条未删 user 消息的会话（过滤 ensure 空壳）
         conditions.append(
@@ -777,9 +868,11 @@ class ChatService:
         session_id: Optional[str] = None,
         page: int = 1,
         limit: int = 10,
+        archived: Optional[str] = None,
     ) -> tuple[List[TChatSession], int]:
         """
         用户「聊天记录」列表：支持按标题模糊搜索、按会话 id 精确过滤、分页。
+        archived='only' 仅返回归档会话；其余情况排除归档会话。置顶会话排到最前。
         """
         conditions = [
             TChatSession.user_id == user_id,
@@ -794,6 +887,10 @@ class ChatService:
                 )
             ),
         ]
+        if archived == "only":
+            conditions.append(TChatSession.archived.is_(True))
+        else:
+            conditions.append(TChatSession.archived.is_(False))
         if session_id:
             conditions.append(TChatSession.id == session_id)
         q = (search_text or "").strip()
@@ -815,16 +912,17 @@ class ChatService:
         result = await db.execute(
             select(TChatSession)
             .where(base_filter)
-            .order_by(TChatSession.updated_at.desc())
+            .order_by(TChatSession.pinned.desc(), TChatSession.updated_at.desc())
             .offset(offset)
             .limit(safe_limit)
         )
         sessions = list(result.scalars().all())
         logger.info(
             f"query_user_sessions_for_record: user_id={user_id}, total={total}, "
-            f"page={safe_page}, limit={safe_limit}, has_search={bool(q)}"
+            f"page={safe_page}, limit={safe_limit}, has_search={bool(q)}, archived={archived}"
         )
         return sessions, total
+
 
     @classmethod
     async def batch_first_user_message_qa_types(

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 
 from noesis_server.domain.chat.delivery.bus import (
     RunEventBus,
@@ -25,6 +25,9 @@ from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
 from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 
 SSE_COMMENT_KEEPALIVE = ": keepalive\n\n"
+
+if TYPE_CHECKING:
+    from noesis_server.domain.chat.runs import SequencedRunEvent
 
 
 def format_sse(event: str, data: Dict[str, Any]) -> str:
@@ -144,6 +147,32 @@ def encode_filtered(event: RunEvent) -> list[str]:
     if not should_encode_for_sse(event):
         return []
     return encode_run_event(event)
+
+
+def encode_sequenced_event(envelope: "SequencedRunEvent") -> list[str]:
+    """编码业务事件，并把 run sequence/attempt 注入 JSON payload。"""
+    if isinstance(envelope.event, StreamDone):
+        return [format_done()]
+    lines = encode_filtered(envelope.event)
+    encoded: list[str] = []
+    for line in lines:
+        event_name = "message"
+        payload: Dict[str, Any] = {}
+        for part in line.strip().split("\n"):
+            if part.startswith("event:"):
+                event_name = part[len("event:") :].strip()
+            elif part.startswith("data:"):
+                try:
+                    parsed = json.loads(part[len("data:") :].strip())
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                except json.JSONDecodeError:
+                    payload = {}
+        payload["run_id"] = envelope.run_id
+        payload["sequence"] = envelope.sequence
+        payload["attempt_id"] = envelope.attempt_id
+        encoded.append(format_sse(event_name, payload))
+    return encoded
 
 
 async def iter_sse_from_bus(

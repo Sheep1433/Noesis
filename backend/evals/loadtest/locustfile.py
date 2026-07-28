@@ -76,13 +76,33 @@ class DeepResearchUser(HttpUser):
         body = {
             "session_id": session_id,
             "content": query,
+            "client_request_id": str(uuid.uuid4()),
             "extra": {"qa_type": QA_TYPE},
         }
 
-        with self.client.post(
-            "/api/chat/sessions/stream",
+        ensured = self.client.put(
+            f"/api/chat/sessions/{session_id}/ensure",
+            headers=self.auth_headers,
+            json={"title": query[:100], "extra": {"qa_type": QA_TYPE}},
+            name="ensure_session",
+        )
+        if ensured.status_code != 200:
+            return
+        created = self.client.post(
+            "/api/chat/runs",
             headers=self.auth_headers,
             json=body,
+            name="create_run",
+        )
+        if created.status_code != 200:
+            return
+        run_id = str((created.json().get("data") or {}).get("run_id") or "")
+        if not run_id:
+            return
+
+        with self.client.get(
+            f"/api/chat/runs/{run_id}/stream",
+            headers=self.auth_headers,
             stream=True,
             timeout=None,
             name="deep_research_stream",
