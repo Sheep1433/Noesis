@@ -3,7 +3,7 @@ from fastapi import FastAPI
 
 from noesis_server.exceptions.handle import handle_exception
 from noesis_server.middleware.csrf import CsrfMiddleware
-from noesis.config.env import AppConfig
+from noesis.config.env import AppConfig, StreamConfig
 from noesis.config.checkpointer import close_checkpointer, init_checkpointer
 from noesis_server.infrastructure.database.dependency import init_database
 from noesis_server.infrastructure.database.engine import async_engine
@@ -31,6 +31,9 @@ from noesis_server.services.scheduled_task_scheduler import (
 from noesis_server.services.memory_dream_scheduler import start_memory_dream_scheduler, stop_memory_dream_scheduler
 from noesis_server.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
 from noesis_server.bootstrap.kb import ensure_default_kb_collections
+from noesis_server.infrastructure.database.engine import AsyncSessionLocal
+from noesis_server.services.run_recovery_service import RunRecoveryService
+from noesis_server.services.run_service import run_manager
 
 
 @asynccontextmanager
@@ -39,6 +42,8 @@ async def lifespan(app: FastAPI):
     sync_langfuse_env_from_app_config()
     wire_harness_platform_deps()
     await init_database()
+    async with AsyncSessionLocal() as recovery_db:
+        await RunRecoveryService.recover_orphaned_runs(recovery_db)
     await init_checkpointer()
     # 初始化 Qdrant 连接
     await init_qdrant_client()
@@ -51,6 +56,7 @@ async def lifespan(app: FastAPI):
     await stop_telegram_runtime()
     await stop_memory_dream_scheduler()
     await stop_scheduled_task_scheduler()
+    await run_manager.shutdown(drain_seconds=StreamConfig.run_shutdown_drain_seconds)
     # 关闭 Qdrant 连接
     await close_qdrant_client()
     await close_checkpointer()

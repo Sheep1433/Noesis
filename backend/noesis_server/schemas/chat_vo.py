@@ -24,6 +24,12 @@ class UpdateSessionTitleRequest(BaseModel):
     title: str = Field(..., description='会话标题')
 
 
+class UpdateSessionMetaRequest(BaseModel):
+    """更新会话元信息（置顶 / 归档）请求"""
+    pinned: Optional[bool] = Field(None, description='是否置顶；None 表示不变')
+    archived: Optional[bool] = Field(None, description='是否归档；None 表示不变')
+
+
 class ChatSessionResponse(BaseModel):
     """会话响应"""
     id: str = Field(..., description='会话 UUID')
@@ -34,6 +40,8 @@ class ChatSessionResponse(BaseModel):
     created_at: int = Field(..., description='创建时间戳（Unix 毫秒）')
     updated_at: int = Field(..., description='更新时间戳（Unix 毫秒）')
     deleted_at: Optional[int] = Field(None, description='软删时间戳')
+    pinned: bool = Field(False, description='是否置顶')
+    archived: bool = Field(False, description='是否归档')
 
 
 class SessionListResponse(BaseModel):
@@ -91,6 +99,7 @@ class ChatMessageResponse(BaseModel):
     content: Dict[str, Any] = Field(..., description='消息内容，JSON multipart 格式')
     extra: Optional[Dict[str, Any]] = Field(None, description='消息元数据')
     status: str = Field(..., description='状态: completed | partial')
+    message_sequence: int = Field(..., description='会话内严格递增的消息序号')
     created_at: int = Field(..., description='创建时间戳（Unix 毫秒）')
 
 
@@ -105,12 +114,46 @@ class MessageListResponse(BaseModel):
 # ============================================================================
 
 class SendMessageRequest(BaseModel):
-    """发送消息请求（POST /api/chat/sessions/stream）"""
+    """直接写入会话消息请求。"""
     session_id: Optional[str] = Field(None, description='会话 ID')
     content: str = Field(..., description='消息内容')
     parent_id: Optional[str] = Field(None, description='父消息 ID')
     role: Literal['user', 'assistant'] = Field('user', description='角色: user | assistant')
     extra: Optional[Dict[str, Any]] = Field(None, description='额外元数据')
+
+
+class CreateRunRequest(BaseModel):
+    """创建独立 Agent run。"""
+
+    session_id: str = Field(..., min_length=1, description='会话 ID')
+    content: str = Field(..., description='用户消息')
+    client_request_id: str = Field(..., min_length=8, max_length=64, description='客户端幂等键')
+    extra: Optional[Dict[str, Any]] = Field(None, description='模型、qa_type、文件等本轮参数')
+
+
+class RunCreatedResponse(BaseModel):
+    run_id: str = Field(..., description='Agent run ID')
+    assistant_message_id: str = Field(..., description='本轮 assistant 消息 ID')
+    session_id: str = Field(..., description='会话 ID')
+    status: str = Field(..., description='queued | running')
+    session_title: str = Field(..., description='服务端最终会话标题')
+
+
+class RunSnapshotResponse(BaseModel):
+    run_id: str = Field(..., description='Agent run ID')
+    assistant_message_id: str = Field(..., description='assistant 消息 ID')
+    session_id: str = Field(..., description='会话 ID')
+    qa_type: str = Field(..., description='问答类型')
+    origin: str = Field(..., description='run 来源')
+    status: str = Field(..., description='run 状态')
+    snapshot_sequence: int = Field(..., description='快照覆盖的最后业务事件序号')
+    attempt_id: int = Field(..., description='当前模型 attempt')
+    content: Dict[str, Any] = Field(..., description='当前 assistant multipart 快照')
+    finish_reason: Optional[str] = Field(None, description='终态原因')
+    error_code: Optional[str] = Field(None, description='稳定错误码')
+    message: Optional[str] = Field(None, description='用户安全提示')
+    retry_attempt: int = Field(0, description='当前重试次数')
+    retry_max: int = Field(0, description='最大重试次数')
 
 
 class SendMessageResponse(BaseModel):

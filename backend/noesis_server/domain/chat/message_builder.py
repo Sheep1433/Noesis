@@ -67,6 +67,7 @@ class ToolPart(MessagePart):
     error: Optional[str] = None
     error_category: Optional[str] = None
     hitl: Optional[Dict[str, Any]] = None
+    outcome: Optional[str] = None
     type: str = "tool"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -88,6 +89,8 @@ class ToolPart(MessagePart):
             out["parent_task_call_id"] = self.parent_task_call_id
         if self.hitl:
             out["hitl"] = self.hitl
+        if self.outcome:
+            out["outcome"] = self.outcome
         return out
 
 
@@ -113,6 +116,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             error=data.get("error"),
             error_category=data.get("errorCategory"),
             hitl=data.get("hitl"),
+            outcome=data.get("outcome"),
         )
     raise ValueError(f"Unknown part type: {part_type}")
 
@@ -217,6 +221,20 @@ class AssistantMessageBuilder:
         status: str = "running",
         hitl: Optional[Dict[str, Any]] = None,
     ) -> None:
+        if tool_call_id:
+            existing = self._tools_by_call_id.get(tool_call_id)
+            if existing is not None:
+                existing.name = tool or existing.name
+                existing.arguments = tool_input if tool_input is not None else existing.arguments
+                if parent_task_call_id:
+                    existing.parent_task_call_id = parent_task_call_id
+                if hitl:
+                    existing.hitl = {**(existing.hitl or {}), **hitl}
+                # 重放 tool start 只补充同一块的输入信息，不能把已有结果退回 running。
+                if existing.status == "running":
+                    existing.status = status
+                    self._last_tool = existing
+                return
         part = ToolPart(
             name=tool,
             arguments=tool_input,
@@ -230,16 +248,53 @@ class AssistantMessageBuilder:
         if tool_call_id:
             self._tools_by_call_id[tool_call_id] = part
 
+    def resolve_hitl_tool_call_id(
+        self,
+        tool: str,
+        tool_input: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """将 HITL resume 的 callback run UUID 映射回模型原始 tool_call_id。"""
+        candidates = [
+            part.tool_call_id
+            for part in self._content.parts
+            if isinstance(part, ToolPart)
+            and part.tool_call_id
+            and part.name == tool
+            and (part.arguments or {}) == (tool_input or {})
+            and part.status == "running"
+            and isinstance(part.hitl, dict)
+            and part.hitl.get("status") in {"pending", "approved", "answered"}
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
     def load_from_content_dict(self, data: Dict[str, Any]) -> None:
         """从已落库 content 恢复 parts（HITL resume 续写同一 assistant 行）。"""
         self._content = MessageContent.from_dict(data or {"parts": []})
         self._tools_by_call_id = {}
         self._last_tool = None
+        canonical_parts: List[MessagePart] = []
         for part in self._content.parts:
             if isinstance(part, ToolPart) and part.tool_call_id:
+                existing = self._tools_by_call_id.get(part.tool_call_id)
+                if existing is not None:
+                    existing.name = part.name or existing.name
+                    existing.arguments = part.arguments or existing.arguments
+                    existing.output = part.output if part.output is not None else existing.output
+                    existing.status = part.status or existing.status
+                    existing.error = part.error or existing.error
+                    existing.error_category = part.error_category or existing.error_category
+                    existing.duration_ms = part.duration_ms or existing.duration_ms
+                    existing.parent_task_call_id = (
+                        part.parent_task_call_id or existing.parent_task_call_id
+                    )
+                    existing.hitl = {**(existing.hitl or {}), **(part.hitl or {})} or None
+                    existing.outcome = part.outcome or existing.outcome
+                    continue
                 self._tools_by_call_id[part.tool_call_id] = part
                 if part.status == "running":
                     self._last_tool = part
+            canonical_parts.append(part)
+        self._content.parts = canonical_parts
 
     def update_tool_hitl(
         self,
@@ -290,6 +345,22 @@ class AssistantMessageBuilder:
             target.tool_call_id = tool_call_id
         if target is self._last_tool:
             self._last_tool = None
+
+    def mark_running_tools_unknown(self, message: str) -> int:
+        """停止/重启时不推断远程副作用，收口所有未完成工具。"""
+        count = 0
+        for part in self._content.parts:
+            if not isinstance(part, ToolPart) or part.status != "running":
+                continue
+            part.status = "error"
+            part.outcome = "unknown"
+            part.error = message
+            part.error_category = "unknown"
+            if part.output is None:
+                part.output = message
+            count += 1
+        self._last_tool = None
+        return count
 
     def to_dict(self) -> Dict[str, Any]:
         return self._content.to_dict()

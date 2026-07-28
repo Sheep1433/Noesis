@@ -44,6 +44,7 @@ export async function query_user_qa_record(
   limit: number,
   search_text: string | null,
   chat_id: string | null,
+  archived?: 'only' | 'exclude',
 ) {
   const url = new URL(`${location.origin}/api/user/query_user_record`)
   const req = new Request(url, {
@@ -59,6 +60,7 @@ export async function query_user_qa_record(
       limit,
       search_text,
       chat_id,
+      archived: archived ?? null,
     }),
   })
   return authFetch(req)

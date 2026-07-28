@@ -75,7 +75,17 @@ class SettingsDiagnosticsService:
                 return "unknown", "执行环境状态未知", "retry"
             return "healthy", "执行环境可用", None
 
-        checks = {"models": models, "mcp": mcp, "scheduler": scheduler, "channels": channels, "database": database, "checkpoint": checkpoint, "qdrant": qdrant, "sandbox": sandbox}
+        async def agent_runs():
+            from noesis.config.env import StreamConfig
+            from noesis_server.services.run_service import run_manager
+
+            metrics = run_manager.metrics_snapshot()
+            active = int(metrics["active_runs"])
+            if active >= StreamConfig.run_max_active:
+                return "degraded", "当前任务较多，请稍后重试", "retry"
+            return "healthy", "任务运行正常", None
+
+        checks = {"models": models, "mcp": mcp, "scheduler": scheduler, "channels": channels, "database": database, "checkpoint": checkpoint, "qdrant": qdrant, "sandbox": sandbox, "agent_runs": agent_runs}
         items = await asyncio.gather(*(cls._run(name, check) for name, check in checks.items()))
         overall = "healthy" if all(item["status"] in {"healthy", "unknown"} for item in items) else "degraded"
         return {"status": overall, "checked_at": int(time.time() * 1000), "items": items}

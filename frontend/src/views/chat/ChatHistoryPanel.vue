@@ -37,6 +37,7 @@ const emit = defineEmits<{
 }>()
 
 const searchText = defineModel<string>('searchText', { required: true })
+const archiveView = defineModel<boolean>('archiveView', { default: false })
 
 const searchChatRef = useTemplateRef('searchChatRef')
 
@@ -67,7 +68,7 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
           icon-placement="left"
           strong
           class="create-chat"
-          :disabled="stylizingLoading"
+          :disabled="stylizingLoading || archiveView"
           @click="emit('newChat')"
         >
           <template #icon>
@@ -78,6 +79,24 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
           新建对话
         </n-button>
       </div>
+      <n-tooltip placement="bottom">
+        <template #trigger>
+          <button
+            type="button"
+            class="archive-toggle"
+            :class="{ 'archive-toggle--active': archiveView }"
+            :aria-label="archiveView ? '退出归档视图' : '查看归档会话'"
+            @click="archiveView = !archiveView"
+          >
+            <span
+              class="archive-toggle__icon"
+              :class="archiveView ? 'i-hugeicons:archive-restore' : 'i-hugeicons:archive-02'"
+              aria-hidden="true"
+            ></span>
+          </button>
+        </template>
+        {{ archiveView ? '退出归档' : '归档' }}
+      </n-tooltip>
       <button
         v-if="!isFocusSearchChat"
         type="button"
@@ -229,6 +248,45 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+.archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--noesis-color-border, #e8eaf3);
+  border-radius: var(--noesis-radius-round);
+  background: var(--noesis-color-bg-elevated, #fff);
+  color: var(--noesis-color-text-muted, #64748b);
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
+}
+
+.archive-toggle:hover {
+  color: var(--noesis-color-primary, #5c7cfa);
+  border-color: var(--noesis-color-primary-muted, #a48ef4);
+  background: var(--noesis-color-primary-bg-subtle, rgb(92 124 250 / 4%));
+}
+
+.archive-toggle--active {
+  color: var(--noesis-color-primary, #5c7cfa);
+  border-color: var(--noesis-color-primary-muted, #a48ef4);
+  background: var(--noesis-color-primary-bg-subtle, rgb(92 124 250 / 8%));
+}
+
+.archive-toggle__icon {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  font-size: 18px;
+  line-height: 1;
+  color: inherit;
+  flex-shrink: 0;
 }
 
 .search-chat-trigger {

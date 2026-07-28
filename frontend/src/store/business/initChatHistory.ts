@@ -1,5 +1,6 @@
 import { query_user_qa_record } from '@/api'
 import { getSessionMessages, listSessionAttachments } from '@/api/chat'
+import { assertStrictMessageSequence } from '@/store/business/chatHistorySequence'
 import { isImagePreviewPath } from '@/utils/filePreview'
 import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, partsContainStreamFailureNotice, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
@@ -11,6 +12,8 @@ interface TableItem {
   key: string
   chat_id: string
   qa_type: string
+  pinned?: boolean
+  archived?: boolean
 }
 
 /**
@@ -130,9 +133,10 @@ export const fetchConversationHistory = async function fetchConversationHistory(
   currentRenderIndex: Ref<number>,
   row,
   searchText: string,
+  archived?: 'only' | 'exclude',
 ) {
   try {
-    const res = await query_user_qa_record(1, 999999, searchText, row?.chat_id)
+    const res = await query_user_qa_record(1, 999999, searchText, row?.chat_id, archived)
     if (res.ok) {
       const data = await res.json()
       if (data && Array.isArray(data.data?.records)) {
@@ -146,6 +150,8 @@ export const fetchConversationHistory = async function fetchConversationHistory(
             key: chat.title?.trim() || '新对话',
             chat_id: chat.session_id,
             qa_type: chat.qa_type || 'COMMON_QA',
+            pinned: Boolean(chat.pinned),
+            archived: Boolean(chat.archived),
           }))
         }
 
@@ -183,6 +189,18 @@ export async function loadSessionMessages(
       attachmentList.attachments.map((item) => [item.file_name, item]),
     )
     if (messages?.length) {
+      assertStrictMessageSequence(messages)
+      const activeAssistant = [...messages].reverse().find(
+        (message: any) => message.role === 'assistant'
+          && message.status === 'streaming'
+          && typeof message.extra?.run_id === 'string',
+      )
+      if (activeAssistant?.extra?.run_id) {
+        sessionStorage.setItem(
+          `noesis:active-run:${sessionId}`,
+          String(activeAssistant.extra.run_id),
+        )
+      }
       // 将消息历史转换为 conversationItems 格式
       let lastUserQaType = 'COMMON_QA'
       const items = messages.map((msg: any, index: number) => {
@@ -263,6 +281,7 @@ export async function loadSessionMessages(
       currentRenderIndex.value = items.length > 0 ? items.length - 1 : 0
     }
   } catch (error) {
-    // debug: error loading session messages
+    window.$ModalMessage?.error('消息加载失败，请重新加载')
+    throw error
   }
 }

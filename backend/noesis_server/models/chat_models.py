@@ -1,7 +1,7 @@
 from typing import Optional
 import time
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import VARCHAR, Integer, Text, JSON, Index, ForeignKey, BigInteger, TypeDecorator
+from sqlalchemy import VARCHAR, Integer, Text, JSON, Index, ForeignKey, BigInteger, Boolean, TypeDecorator, UniqueConstraint, text as sa_text
 
 from noesis_server.infrastructure.database.engine import Base
 
@@ -36,6 +36,7 @@ class TChatSession(Base):
         Index('idx_session_parent', 'parent_id'),
         Index('idx_session_updated', 'updated_at'),
         Index('idx_session_user', 'user_id'),
+        Index('idx_session_user_archived', 'user_id', 'archived'),
         {'comment': '会话表 v2.1'}
     )
 
@@ -47,6 +48,9 @@ class TChatSession(Base):
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000), comment='创建时间戳（Unix 毫秒）')
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000), onupdate=lambda: int(time.time() * 1000), comment='更新时间戳（Unix 毫秒）')
     deleted_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='软删时间戳（毫秒），NULL=未删除')
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa_text("false"), comment='是否置顶（置顶会话排到列表顶部）')
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa_text("false"), comment='是否归档（归档会话从默认列表隐藏）')
+    next_message_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default=sa_text("1"), comment='下一条会话消息序号')
 
 
 class TChatMessage(Base):
@@ -64,8 +68,9 @@ class TChatMessage(Base):
     """
     __tablename__ = "t_chat_message"
     __table_args__ = (
-        Index('idx_message_session', 'session_id', 'created_at'),
+        Index('idx_message_session', 'session_id', 'message_sequence'),
         Index('idx_message_parent', 'parent_id'),
+        UniqueConstraint('session_id', 'message_sequence', name='uq_chat_message_session_sequence'),
         {'comment': '消息表 v2.1'}
     )
 
@@ -77,8 +82,79 @@ class TChatMessage(Base):
     content: Mapped[Optional[str]] = mapped_column(JSON, nullable=True, comment='消息内容，JSON multipart 格式')
     extra: Mapped[Optional[str]] = mapped_column(JSON, nullable=True, comment='JSON: model, tokens, finish_reason, error')
     status: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, default='completed', comment='状态: completed | partial | error | streaming')
+    message_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='会话内严格递增的消息序号')
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000), comment='创建时间戳（Unix 毫秒）')
     deleted_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='软删时间戳（NULL=未删除）')
+
+
+class TAgentRun(Base):
+    """可查询、可重订阅的 Agent run 元数据。"""
+
+    __tablename__ = "t_agent_run"
+    __table_args__ = (
+        UniqueConstraint("user_id", "client_request_id", name="uq_agent_run_user_request"),
+        Index("idx_agent_run_session_status", "session_id", "status"),
+        Index(
+            "uq_agent_run_active_session",
+            "session_id",
+            unique=True,
+            postgresql_where=sa_text("status IN ('queued','running','retrying','hitl_pending')"),
+        ),
+        Index("idx_agent_run_owner_status", "owner_instance_id", "status"),
+        Index("idx_agent_run_updated", "updated_at"),
+        {"comment": "Agent run 生命周期与恢复快照"},
+    )
+
+    id: Mapped[str] = mapped_column(VARCHAR(36), primary_key=True, comment="run UUID")
+    user_id: Mapped[str] = mapped_column(ChatUserId(), nullable=False, comment="用户 ID")
+    session_id: Mapped[str] = mapped_column(
+        VARCHAR(36), ForeignKey("t_chat_session.id", ondelete="CASCADE"), nullable=False
+    )
+    assistant_message_id: Mapped[str] = mapped_column(
+        VARCHAR(36), ForeignKey("t_chat_message.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    client_request_id: Mapped[str] = mapped_column(VARCHAR(64), nullable=False)
+    request_digest: Mapped[str] = mapped_column(VARCHAR(64), nullable=False)
+    qa_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False)
+    origin: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, default="web")
+    status: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, default="queued")
+    last_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    attempt_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    finish_reason: Mapped[Optional[str]] = mapped_column(VARCHAR(40), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(VARCHAR(80), nullable=True)
+    user_error_message: Mapped[Optional[str]] = mapped_column(VARCHAR(500), nullable=True)
+    retry_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_max: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    owner_instance_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100), nullable=True)
+    snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    started_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    finished_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+
+
+class TAgentDelivery(Base):
+    """run 到外部平台的一次出站结果；不参与 Agent 终态。"""
+
+    __tablename__ = "t_agent_delivery"
+    __table_args__ = (
+        Index("idx_agent_delivery_run", "run_id", "created_at"),
+        Index("idx_agent_delivery_status", "status", "updated_at"),
+        {"comment": "Agent run 外部平台投递结果"},
+    )
+
+    id: Mapped[str] = mapped_column(VARCHAR(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        VARCHAR(36), ForeignKey("t_agent_run.id", ondelete="CASCADE"), nullable=False
+    )
+    delivery_type: Mapped[str] = mapped_column(VARCHAR(30), nullable=False)
+    status: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, default="running")
+    error_code: Mapped[Optional[str]] = mapped_column(VARCHAR(80), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(VARCHAR(500), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    finished_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
 
 class TChatAttachment(Base):

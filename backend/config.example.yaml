@@ -136,6 +136,25 @@ agent_runtime:
 
 stream:
   sse_keepalive_interval_seconds: 25
+  checkpoint_interval_seconds: 2
+  persistence_timeout_seconds: 5
+  persistence_retry_interval_seconds: 0.25
+  run_event_buffer_max_events: 2000
+  run_event_buffer_max_bytes: 4194304
+  run_subscriber_queue_max_events: 512
+  run_subscriber_queue_max_bytes: 1048576
+  run_max_active: 100
+  run_max_active_per_user: 4
+  run_terminal_retention_seconds: 300
+  run_max_duration_seconds: 900
+  run_max_output_bytes: 16777216
+  run_hitl_pending_timeout_seconds: 86400
+  run_shutdown_drain_seconds: 10
+  run_cancel_grace_seconds: 2
+  run_tool_timeout_seconds: 120
+  run_channel_queue_max_batches: 128
+  run_channel_queue_max_bytes: 1048576
+  run_channel_drain_seconds: 5
 
 messaging:
   # Telegram long-poll 真收发；默认关，开前先在设置页填 bot token + 配对 chat_id

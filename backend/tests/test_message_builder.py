@@ -78,3 +78,78 @@ def test_append_tool_output_persists_error_status() -> None:
     assert part["status"] == "error"
     assert part["error"]
     assert part["duration_ms"] == 42
+
+
+def test_replayed_tool_start_updates_same_part_instead_of_appending() -> None:
+    builder = AssistantMessageBuilder()
+    builder.append_tool("execute", {"command": "curl example.com"}, "call-1")
+    builder.update_tool_hitl("call-1", {"status": "approved"})
+
+    builder.append_tool("execute", {"command": "curl example.com"}, "call-1")
+    builder.append_tool_output("execute", "ok", "call-1", status="success")
+
+    parts = builder.to_dict()["parts"]
+    assert len(parts) == 1
+    assert parts[0]["tool_call_id"] == "call-1"
+    assert parts[0]["status"] == "success"
+    assert parts[0]["output"] == "ok"
+    assert parts[0]["hitl"]["status"] == "approved"
+
+
+def test_load_collapses_previously_persisted_duplicate_tool_parts() -> None:
+    builder = AssistantMessageBuilder()
+    builder.load_from_content_dict(
+        {
+            "parts": [
+                {
+                    "type": "tool",
+                    "name": "execute",
+                    "input": {"command": "curl example.com"},
+                    "output": None,
+                    "tool_call_id": "call-1",
+                    "status": "running",
+                    "hitl": {"status": "pending"},
+                },
+                {
+                    "type": "tool",
+                    "name": "execute",
+                    "input": {"command": "curl example.com"},
+                    "output": "ok",
+                    "tool_call_id": "call-1",
+                    "status": "success",
+                    "hitl": {"status": "approved"},
+                },
+            ]
+        }
+    )
+
+    parts = builder.to_dict()["parts"]
+    assert len(parts) == 1
+    assert parts[0]["status"] == "success"
+    assert parts[0]["output"] == "ok"
+    assert parts[0]["hitl"]["status"] == "approved"
+
+
+def test_resolve_unique_hitl_tool_call_id_for_resume_callback() -> None:
+    builder = AssistantMessageBuilder()
+    builder.append_tool(
+        "execute",
+        {"command": "curl example.com"},
+        "call-model-1",
+        hitl={"status": "approved", "interrupt_id": "interrupt-1"},
+    )
+
+    assert builder.resolve_hitl_tool_call_id(
+        "execute", {"command": "curl example.com"}
+    ) == "call-model-1"
+
+
+def test_running_tool_is_marked_unknown_when_cancel_cannot_be_confirmed() -> None:
+    builder = AssistantMessageBuilder(session_id="s", message_id="m")
+    builder.append_tool("remote_write", {"value": 1}, "call-1")
+
+    assert builder.mark_running_tools_unknown("执行结果无法确认") == 1
+    part = builder.to_dict()["parts"][0]
+    assert part["status"] == "error"
+    assert part["outcome"] == "unknown"
+    assert part["errorCategory"] == "unknown"

@@ -18,6 +18,12 @@ from noesis.runtime.hitl import (
     build_hitl_required_event,
     extract_interrupt_payload,
 )
+from noesis.runtime.model_attempt import (
+    ModelAttemptCallback,
+    ModelAttemptTracker,
+    bind_model_attempt_tracker,
+    reset_model_attempt_tracker,
+)
 
 DEFAULT_RECURSION_LIMIT = 9999
 
@@ -86,6 +92,17 @@ async def stream_agent_events(
     last_tool_calls: list[dict] = []
     hitl_pending = False
 
+    attempt_tracker = ModelAttemptTracker()
+    tracker_token = bind_model_attempt_tracker(attempt_tracker)
+    callbacks = agent_config.get("callbacks")
+    tracker_callback = ModelAttemptCallback(attempt_tracker)
+    if callbacks is None:
+        agent_config["callbacks"] = [tracker_callback]
+    elif isinstance(callbacks, list):
+        agent_config["callbacks"] = [*callbacks, tracker_callback]
+    else:
+        agent_config["callbacks"] = [callbacks, tracker_callback]
+
     try:
         async for event in agent.astream_events(
             stream_input,
@@ -104,6 +121,7 @@ async def stream_agent_events(
 
             interrupt = extract_interrupt_payload(event)
             if interrupt is not None:
+                attempt_tracker.side_effect_boundary_crossed = True
                 interrupt_id, hitl_value = interrupt
                 logger.info(
                     f"HITL interrupt task_id={task_id} interrupt_id={interrupt_id}"
@@ -130,3 +148,5 @@ async def stream_agent_events(
         )
         yield {"type": "__tw_error__", "content": format_agent_stream_error(e)}
         yield {"type": "__tw_finish__", "finish_reason": "error"}
+    finally:
+        reset_model_attempt_tracker(tracker_token)

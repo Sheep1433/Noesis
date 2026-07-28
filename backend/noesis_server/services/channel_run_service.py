@@ -1,25 +1,40 @@
 """通道 headless Agent 跑次：无浏览器 SSE，经 RunOrchestrator + PersistSink。"""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+import hashlib
+import json
+import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from noesis.mcp.loader import load_mcp_tools_by_names
 from noesis.agents.super_agent import SuperAgent
 from noesis.runtime.logging import logger
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
-from noesis.config.env import LangfuseConfig
+from noesis.config.env import LangfuseConfig, StreamConfig
 from noesis_server.constants.code_enum import IntentEnum
 from noesis_server.domain.chat.delivery.orchestrator import RunOrchestrator
 from noesis_server.domain.chat.delivery.persist_sink import PersistSink
-from noesis_server.domain.chat.delivery.telegram.adapter import extract_plain_text_from_parts
+from noesis_server.domain.chat.delivery.channel_worker import ChannelDeliveryWorker
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
 from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 from noesis_server.services.chat_service import ChatService
 from noesis_server.services.user_service import UserService
+from noesis_server.models.chat_models import TAgentDelivery, TAgentRun, TChatMessage
+from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
+from noesis_server.services.run_service import RunProjection, RunService, run_manager
+from noesis_server.domain.chat.runs import RunLimitExceeded, RunStatus
 
 _orchestrator = RunOrchestrator()
 _super_agent = SuperAgent()
+
+
+def _plain_text(parts: Dict[str, Any]) -> str:
+    from noesis_server.domain.chat.delivery.telegram.adapter import extract_plain_text_from_parts
+
+    return extract_plain_text_from_parts(parts)
 
 
 @dataclass
@@ -30,6 +45,28 @@ class ChannelRunResult:
     finish_reason: str
     hitl_pending: bool = False
     hitl_payload: Optional[Dict[str, Any]] = None
+
+
+async def _set_delivery_result(
+    delivery_id: Optional[str], status: str, *, error_code: Optional[str] = None
+) -> None:
+    if delivery_id is None:
+        return
+    now = int(time.time() * 1000)
+    async with AsyncSessionLocal() as delivery_db:
+        await delivery_db.execute(
+            TAgentDelivery.__table__.update()
+            .where(TAgentDelivery.id == delivery_id)
+            .values(
+                status=status,
+                error_code=error_code,
+                error_message="平台发送失败" if error_code else None,
+                attempts=TAgentDelivery.attempts + 1,
+                updated_at=now,
+                finished_at=now if status in {"completed", "error", "lost"} else None,
+            )
+        )
+        await delivery_db.commit()
 
 
 async def _headless_stream(
@@ -44,23 +81,53 @@ async def _headless_stream(
     origin: str,
     model_name: Optional[str],
     outbound: Optional[Any],
+    publish: Optional[Any] = None,
+    projection: Optional[RunProjection] = None,
+    run_id: Optional[str] = None,
+    delivery_id: Optional[str] = None,
 ) -> ChannelRunResult:
-    from noesis_server.services import qa_service as qs
+    from noesis_server.services.qa import helpers as qs
 
     sink = PersistSink()
     ctx["_persist_sink"] = sink
 
+    async def record_delivery(status: str, *, error_code: Optional[str] = None) -> None:
+        await _set_delivery_result(delivery_id, status, error_code=error_code)
+
+    async def delivery_failed(error_code: str) -> None:
+        logger.warning(
+            "channel delivery failed run_id={} delivery_id={} session_id={} error_code={}",
+            run_id,
+            delivery_id,
+            session_id,
+            error_code,
+        )
+        await record_delivery("error", error_code=error_code)
+
+    delivery_worker = (
+        ChannelDeliveryWorker(
+            outbound,
+            max_batches=StreamConfig.run_channel_queue_max_batches,
+            max_bytes=StreamConfig.run_channel_queue_max_bytes,
+            drain_seconds=StreamConfig.run_channel_drain_seconds,
+            on_failure=delivery_failed,
+        )
+        if outbound is not None
+        else None
+    )
+
     async def on_events(events: List[Any]) -> None:
         for ev in events:
             sink.on_event(ev)
-        if outbound is not None:
-            try:
-                await outbound.feed_events(events)
-            except Exception:
-                logger.warning(
-                    "channel outbound projection failed session_id={}",
-                    session_id,
-                )
+            if projection is not None and publish is not None and run_id is not None:
+                await RunService.publish_projected_event(run_id, projection, ev, publish)
+            else:
+                if projection is not None:
+                    projection.apply(ev)
+                if publish is not None:
+                    await publish(ev, projection.attempt_id if projection is not None else None)
+        if delivery_worker is not None:
+            await delivery_worker.submit(events)
         await qs._persist_stream_checkpoint(
             bridge, session_id, str(user_id)
         )
@@ -76,13 +143,9 @@ async def _headless_stream(
             on_events=on_events,
         )
 
-        if outbound is not None:
-            try:
-                await outbound.finalize()
-            except Exception:
-                logger.warning(
-                    "channel outbound finalize failed session_id={}", session_id
-                )
+        if delivery_worker is not None:
+            if await delivery_worker.finalize():
+                await record_delivery("completed")
 
         decision = sink.final_decision()
         if decision.kind == "hitl_pending" or bridge.last_finish_reason == "hitl_pending":
@@ -97,7 +160,7 @@ async def _headless_stream(
             )
             payload = dict(bridge.last_hitl_payload or {})
             plain = (
-                extract_plain_text_from_parts(builder.to_dict())
+                _plain_text(builder.to_dict())
                 or "需要审批后继续。"
             )
             return ChannelRunResult(
@@ -118,7 +181,7 @@ async def _headless_stream(
             qa_type=qa_type,
             model=model_name,
         )
-        plain = extract_plain_text_from_parts(builder.to_dict())
+        plain = _plain_text(builder.to_dict())
         if not plain:
             plain = "（已完成，无文本回复）"
         return ChannelRunResult(
@@ -127,6 +190,15 @@ async def _headless_stream(
             plain_text=plain,
             finish_reason=bridge.last_finish_reason or decision.finish_reason or "stop",
         )
+    except BaseException as exc:
+        if delivery_worker is not None:
+            await delivery_failed(
+                "CHANNEL_RUN_CANCELLED"
+                if isinstance(exc, asyncio.CancelledError)
+                else "CHANNEL_RUN_FAILED"
+            )
+            await delivery_worker.finalize()
+        raise
     finally:
         qs._unregister_active_stream(session_id)
 
@@ -179,7 +251,7 @@ async def run_channel_agent(
             db=db,
         )
 
-        from noesis_server.services import qa_service as qs
+        from noesis_server.services.qa import helpers as qs
 
         resolved_model_id = await qs._resolve_model_for_query(
             session_id=session_id,
@@ -235,6 +307,120 @@ async def run_channel_agent(
         ):
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 
+        run_id = str(uuid.uuid4())
+        now = int(time.time() * 1000)
+        request_identity = f"{origin}:{session_id}:{external_message_id or uuid.uuid4()}"
+        client_request_id = f"channel:{hashlib.sha256(request_identity.encode()).hexdigest()[:48]}"
+        digest = hashlib.sha256(
+            json.dumps(
+                {"session_id": session_id, "query": text, "qa_type": qa_type, "origin": origin},
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        db.add(
+            TAgentRun(
+                id=run_id,
+                user_id=str(current_user.user_id),
+                session_id=session_id,
+                assistant_message_id=bridge.assistant_message_id,
+                client_request_id=client_request_id,
+                request_digest=digest,
+                qa_type=qa_type,
+                origin=origin,
+                status=RunStatus.QUEUED.value,
+                last_sequence=0,
+                attempt_id=1,
+                retry_attempt=0,
+                retry_max=0,
+                owner_instance_id=f"channel:{origin}",
+                snapshot={"parts": []},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        delivery_id = str(uuid.uuid4()) if outbound is not None else None
+        if delivery_id is not None:
+            db.add(
+                TAgentDelivery(
+                    id=delivery_id,
+                    run_id=run_id,
+                    delivery_type=channel_type,
+                    status="running",
+                    attempts=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        await db.execute(
+            TChatMessage.__table__.update()
+            .where(TChatMessage.id == bridge.assistant_message_id)
+            .values(extra={"qa_type": qa_type, "run_id": run_id, "origin": origin})
+        )
+        await db.commit()
+
+        projection = RunProjection(
+            run_id=run_id,
+            user_id=str(current_user.user_id),
+            session_id=session_id,
+            assistant_message_id=bridge.assistant_message_id,
+            qa_type=qa_type,
+            origin=origin,
+        )
+        result_future: asyncio.Future[ChannelRunResult] = asyncio.get_running_loop().create_future()
+
+        async def producer(publish) -> None:
+            try:
+                result = await _headless_stream(
+                    agent_generator=agent_generator,
+                    bridge=bridge,
+                    builder=builder,
+                    ctx=ctx,
+                    session_id=session_id,
+                    user_id=current_user.user_id,
+                    qa_type=qa_type,
+                    origin=origin,
+                    model_name=resolved_model_name,
+                    outbound=outbound,
+                    publish=publish,
+                    projection=projection,
+                    run_id=run_id,
+                    delivery_id=delivery_id,
+                )
+                await RunService._persist_projection(run_id, projection)
+                if not result_future.done():
+                    result_future.set_result(result)
+            except BaseException as exc:
+                await _set_delivery_result(
+                    delivery_id, "error", error_code="CHANNEL_RUN_FAILED"
+                )
+                await RunService._persist_cancel_or_error(run_id, projection, exc)
+                if not result_future.done():
+                    if isinstance(exc, asyncio.CancelledError):
+                        result_future.cancel()
+                    else:
+                        result_future.set_exception(exc)
+
+        async def persist_limit(error: RunLimitExceeded) -> None:
+            await RunService._persist_cancel_or_error(run_id, projection, error)
+
+        handle = await run_manager.start(
+            run_id=run_id,
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            assistant_message_id=bridge.assistant_message_id,
+            snapshot_provider=projection.snapshot,
+            producer=producer,
+            state=projection,
+            limit_handler=persist_limit,
+        )
+        await db.execute(
+            TAgentRun.__table__.update()
+            .where(TAgentRun.id == run_id)
+            .values(status=RunStatus.RUNNING.value, started_at=now, updated_at=now)
+        )
+        await db.commit()
+
         qs._register_active_stream(
             session_id,
             qs._ActiveStreamState(
@@ -252,18 +438,8 @@ async def run_channel_agent(
             current_user.user_id,
             qa_type,
         )
-        return await _headless_stream(
-            agent_generator=agent_generator,
-            bridge=bridge,
-            builder=builder,
-            ctx=ctx,
-            session_id=session_id,
-            user_id=current_user.user_id,
-            qa_type=qa_type,
-            origin=origin,
-            model_name=resolved_model_name,
-            outbound=outbound,
-        )
+        await handle.producer_task
+        return await result_future
 
 
 async def resume_channel_hitl(
@@ -282,7 +458,7 @@ async def resume_channel_hitl(
     from noesis_server.services.hitl_timeout import cancel_hitl_timeout
     from noesis_server.models.chat_models import TChatMessage
     from sqlalchemy import and_, select
-    from noesis_server.services import qa_service as qs
+    from noesis_server.services.qa import helpers as qs
 
     qa_type = IntentEnum.SUPER_AGENT_QA.value[0]
 
@@ -419,15 +595,84 @@ async def resume_channel_hitl(
             session_id,
             interrupt_id,
         )
-        return await _headless_stream(
-            agent_generator=agent_generator,
-            bridge=bridge,
-            builder=builder,
-            ctx=ctx,
-            session_id=session_id,
-            user_id=current_user.user_id,
-            qa_type=qa_type,
-            origin=origin,
-            model_name=None,
-            outbound=outbound,
+        active = await AgentRunRepository(db).get_active_for_session(
+            str(current_user.user_id), session_id
         )
+        if active is None or active.assistant_message_id != aid:
+            return ChannelRunResult(
+                session_id=session_id,
+                assistant_message_id=aid,
+                plain_text="本轮任务已经中断，无法继续审批。",
+                finish_reason="error",
+            )
+        try:
+            handle = run_manager.get(active.id)
+        except KeyError:
+            return ChannelRunResult(
+                session_id=session_id,
+                assistant_message_id=aid,
+                plain_text="本轮任务已经中断，无法继续审批。",
+                finish_reason="error",
+            )
+        if not isinstance(handle.state, RunProjection):
+            raise RuntimeError("channel run projection unavailable")
+        projection = handle.state
+        projection.builder = builder
+        projection.status = RunStatus.RUNNING
+        delivery_id = str(uuid.uuid4()) if outbound is not None else None
+        if delivery_id is not None:
+            now = int(time.time() * 1000)
+            db.add(
+                TAgentDelivery(
+                    id=delivery_id,
+                    run_id=active.id,
+                    delivery_type=origin,
+                    status="running",
+                    attempts=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await db.commit()
+        result_future: asyncio.Future[ChannelRunResult] = asyncio.get_running_loop().create_future()
+
+        async def producer(publish) -> None:
+            try:
+                resumed_result = await _headless_stream(
+                    agent_generator=agent_generator,
+                    bridge=bridge,
+                    builder=builder,
+                    ctx=ctx,
+                    session_id=session_id,
+                    user_id=current_user.user_id,
+                    qa_type=qa_type,
+                    origin=origin,
+                    model_name=None,
+                    outbound=outbound,
+                    publish=publish,
+                    projection=projection,
+                    run_id=active.id,
+                    delivery_id=delivery_id,
+                )
+                await RunService._persist_projection(active.id, projection)
+                result_future.set_result(resumed_result)
+            except BaseException as exc:
+                await _set_delivery_result(
+                    delivery_id, "error", error_code="CHANNEL_RUN_FAILED"
+                )
+                await RunService._persist_cancel_or_error(active.id, projection, exc)
+                if isinstance(exc, asyncio.CancelledError):
+                    result_future.cancel()
+                else:
+                    result_future.set_exception(exc)
+
+        resumed_handle = await run_manager.resume(active.id, producer)
+        await AgentRunRepository(db).compare_and_set_status(
+            active.id,
+            [RunStatus.HITL_PENDING],
+            RunStatus.RUNNING,
+            updated_at=int(time.time() * 1000),
+        )
+        await db.commit()
+        await resumed_handle.producer_task
+        return await result_future

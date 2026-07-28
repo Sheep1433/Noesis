@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from noesis.tools.web_providers.resolver import resolve_web_fetch, resolve_web_search
 from noesis.runtime.logging import logger
+from noesis.errors.tool_failure import ToolNetworkError, ToolValidationError
 
 
 class WebSearchInput(BaseModel):
@@ -29,26 +30,38 @@ def web_search(query: str, limit: int = 8) -> str:
     """关键词 Web 搜索，返回 JSON 结果列表。"""
     try:
         result = resolve_web_search(query, limit)
+        if result.get("error"):
+            detail = str(result.get("detail") or result.get("error"))
+            if "不能为空" in str(result.get("error")):
+                raise ToolValidationError(detail)
+            raise ToolNetworkError(detail)
         return json.dumps(result, ensure_ascii=False)
+    except (ToolNetworkError, ToolValidationError):
+        raise
     except Exception as e:
         logger.warning("web_search 未预期异常: {}", e)
-        return json.dumps(
-            {"error": "搜索失败", "query": query or ""},
-            ensure_ascii=False,
-        )
+        raise ToolNetworkError(str(e) or "搜索失败") from e
 
 
 def web_fetch(url: str) -> str:
     """抓取已知 URL 的正文摘要（Markdown）。"""
     try:
-        return resolve_web_fetch(url)
+        result = resolve_web_fetch(url)
+        try:
+            payload = json.loads(result)
+        except (TypeError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("error"):
+            detail = str(payload.get("error"))
+            if "不能为空" in detail or "不支持" in detail:
+                raise ToolValidationError(detail)
+            raise ToolNetworkError(detail)
+        return result
+    except (ToolNetworkError, ToolValidationError):
+        raise
     except Exception as e:
         logger.warning("web_fetch 未预期异常: {}", e)
-        raw_url = (url or "").strip()
-        return json.dumps(
-            {"error": "页面抓取失败", "url": raw_url},
-            ensure_ascii=False,
-        )
+        raise ToolNetworkError(str(e) or "页面抓取失败") from e
 
 
 def build_web_search_tools() -> list:

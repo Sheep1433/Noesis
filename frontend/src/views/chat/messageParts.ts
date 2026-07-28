@@ -251,7 +251,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
               : undefined,
           }
         : undefined
-      parts.push({
+      const toolPart: ToolUiPart = {
         id,
         type: 'tool',
         tool_call_id: typeof rec.tool_call_id === 'string' ? rec.tool_call_id : undefined,
@@ -264,7 +264,38 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
         ...(hitl ? { hitl } : {}),
-      })
+      }
+      const toolCallId = toolPart.tool_call_id
+      let existingIndex = toolCallId
+        ? parts.findIndex((part) => part.type === 'tool' && part.tool_call_id === toolCallId)
+        : -1
+      if (existingIndex === -1 && !toolPart.hitl) {
+        const hitlCandidates = parts
+          .map((part, index) => ({ part, index }))
+          .filter(({ part }) => part.type === 'tool'
+            && part.status === 'running'
+            && Boolean(part.hitl)
+            && part.name === toolPart.name
+            && JSON.stringify(part.input) === JSON.stringify(toolPart.input))
+        if (hitlCandidates.length === 1) {
+          existingIndex = hitlCandidates[0].index
+        }
+      }
+      if (existingIndex === -1) {
+        parts.push(toolPart)
+      } else {
+        const existing = parts[existingIndex] as ToolUiPart
+        parts[existingIndex] = {
+          ...existing,
+          ...toolPart,
+          id: existing.id,
+          tool_call_id: existing.tool_call_id || toolPart.tool_call_id,
+          name: toolPart.name || existing.name,
+          input: Object.keys(toolPart.input).length > 0 ? toolPart.input : existing.input,
+          output: toolPart.output || existing.output,
+          hitl: { ...(existing.hitl || {}), ...(toolPart.hitl || {}) },
+        }
+      }
     }
   }
   return { version: 1, parts: expandRedactedThinkingInParts(parts) }
@@ -282,6 +313,20 @@ export function syncLegacyFieldsFromParts(parts: UiPart[]): { content: string, r
     }
   }
   return { content, reasoning: reasoning || undefined }
+}
+
+/**
+ * 取最后一段顶层正文文本（最终回答），用于「复制」。
+ * 排除 reasoning / tool 与嵌套 subagent 子 part，避免工具调用信息混入。
+ */
+export function extractLastTopLevelText(parts: UiPart[]): string {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
+    if (p.type === 'text' && !part_parent_task_call_id(p)) {
+      return p.content || ''
+    }
+  }
+  return ''
 }
 
 /** 是否仍有流式中的正文 / 思考 / 运行中的工具（用于统一气泡底部工具栏仅在结束时展示） */

@@ -36,6 +36,7 @@ def _show_thinking_process_enabled() -> bool:
     return str(ModelConfig.show_thinking_process).strip().lower() in ("true", "1", "yes")
 
 _TOOL_EXIT_SUFFIX = re.compile(r"\s*\[Command succeeded with exit code \d+\]\s*$")
+_TOOL_FAILED_EXIT_RE = re.compile(r"\[Command failed with exit code [1-9]\d*\]\s*$")
 _TOOL_INPUT_MAX = 65536
 TASK_TOOL_NAME = "task"
 
@@ -199,19 +200,16 @@ class LangGraphSseBridge:
         """子 Agent 内部 tool 归属到当前活跃的 task tool_call_id（支持 parent_ids 与并行 task）。"""
         LangGraphSseBridge._ensure_subagent_ctx(ctx)
         stack: List[str] = ctx["task_tool_call_stack"]
-        if not stack:
-            return None
         run_map: Dict[str, str] = ctx["run_id_to_tool_call_id"]
-        stack_set = set(stack)
         parent_ids = item.get("parent_ids")
         if isinstance(parent_ids, (list, tuple)):
             for pid in reversed(parent_ids):
                 if pid is None:
                     continue
                 tid = run_map.get(str(pid))
-                if tid and tid in stack_set:
+                if tid:
                     return tid
-        return stack[-1]
+        return stack[-1] if stack else None
 
     def _register_tool_run(self, item: Dict[str, Any], tool_call_id: str, ctx: Dict[str, Any]) -> None:
         self._ensure_subagent_ctx(ctx)
@@ -543,6 +541,8 @@ class LangGraphSseBridge:
                     return task_failure
         if output_status == "error" or exc is not None:
             return classify_tool_failure(exc, raw=clean_output, tool_name=tool_name)
+        if tool_name == "execute" and _TOOL_FAILED_EXIT_RE.search(clean_output):
+            return classify_tool_failure(None, raw=clean_output, tool_name=tool_name)
         return None
 
     # ---------- entry ----------
@@ -652,6 +652,7 @@ class LangGraphSseBridge:
             payload["message_id"] = self.assistant_message_id
             payload.setdefault("session_id", self.session_id)
             self.last_hitl_payload = payload
+            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
             for action in payload.get("action_requests") or []:
                 name = str(action.get("name") or "")
                 tool_call_id = action.get("tool_call_id") or ""
@@ -684,6 +685,7 @@ class LangGraphSseBridge:
                                 "part_id": part_id,
                                 "tool_call_id": tool_call_id,
                                 "name": name,
+                                **self._sse_parent_field(parent_task_call_id),
                             },
                         )
                     )
@@ -697,6 +699,7 @@ class LangGraphSseBridge:
                                 "tool_call_id": tool_call_id,
                                 "name": name,
                                 "input": args,
+                                **self._sse_parent_field(parent_task_call_id),
                             },
                         )
                     )
@@ -705,6 +708,7 @@ class LangGraphSseBridge:
                             name,
                             args,
                             tool_call_id=tool_call_id or None,
+                            parent_task_call_id=parent_task_call_id,
                             status="running",
                             hitl={
                                 "kind": payload.get("kind"),
@@ -738,6 +742,13 @@ class LangGraphSseBridge:
     def _handle_langchain(self, lc_kind: str, item: Dict[str, Any],
                           builder: Optional[AssistantMessageBuilder],
                           ctx: Dict[str, Any], out: List[str]) -> None:
+        if lc_kind == "on_custom_event" and item.get("name") == "noesis_model_retry":
+            data = item.get("data") or {}
+            if isinstance(data, dict):
+                payload = {"type": "run-status", **data}
+                out.append(_format_sse("run-status", payload))
+            return
+
         if lc_kind == "on_chat_model_start":
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
@@ -825,6 +836,10 @@ class LangGraphSseBridge:
         tool_name = item.get("name") or ""
         input_obj, input_text = _normalize_tool_input(data.get("input", {}))
         tool_call_id = _resolve_tool_call_id(item, data)
+        if builder is not None and tool_call_id not in self._tool_part_ids:
+            resumed_tool_call_id = builder.resolve_hitl_tool_call_id(tool_name, input_obj)
+            if resumed_tool_call_id:
+                tool_call_id = resumed_tool_call_id
         self._register_tool_run(item, tool_call_id, ctx)
 
         parent_task_call_id: Optional[str] = None

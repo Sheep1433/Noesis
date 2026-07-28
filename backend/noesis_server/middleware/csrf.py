@@ -1,8 +1,6 @@
 """Cookie Session 的全局 CSRF 校验。"""
 from __future__ import annotations
 
-import json
-
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -24,12 +22,6 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             if session is None:
                 return await call_next(request)
             token = request.headers.get("X-CSRF-Token")
-            if not token and request.url.path.startswith("/api/chat/sessions/") and request.url.path.endswith("/stop"):
-                try:
-                    payload = json.loads((await request.body()) or b"{}")
-                    token = payload.get("csrf_token")
-                except (ValueError, TypeError):
-                    token = None
             if not SessionService.verify_csrf(session, token):
                 return ResponseUtil.forbidden(msg="CSRF 校验失败")
         return await call_next(request)

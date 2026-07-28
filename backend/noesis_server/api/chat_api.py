@@ -23,12 +23,14 @@ from noesis_server.schemas.chat_vo import (
     CreateSessionRequest,
     EnsureSessionRequest,
     UpdateSessionTitleRequest,
+    UpdateSessionMetaRequest,
     ChatSessionResponse,
     ChatMessageResponse,
     SessionListResponse,
     MessageListResponse,
     SendMessageRequest,
     SendMessageResponse,
+    CreateRunRequest,
 )
 from noesis_server.schemas.session_context_vo import (
     WorkspaceFileContent,
@@ -38,16 +40,24 @@ from noesis_server.services.session_context_service import SessionContextService
 from noesis_server.services.chat_service import ChatService
 from noesis_server.services.user_service import UserService
 from noesis_server.services.qa import QaService
+from noesis_server.services.run_service import RunService, run_manager
 from noesis_server.common.http.response import ResponseUtil
 from noesis_server.domain.chat.message_builder import UserMessageBuilder
 from noesis.runtime.logging import logger
 from noesis_server.constants.code_enum import IntentEnum
 from noesis_server.schemas.qa_vo import (
     HitlResumeRequest,
-    QaStopRequest,
     TestCaseExportRequest,
     TestCaseResumeRequest,
 )
+from noesis_server.domain.chat.delivery.sse import (
+    SSE_COMMENT_KEEPALIVE,
+    encode_sequenced_event,
+    format_done,
+    format_sse,
+)
+from noesis_server.domain.chat.delivery.events import StreamDone
+from noesis_server.domain.chat.runs import SlowSubscriber, TERMINAL_RUN_STATUSES
 
 
 chat_router = APIRouter(prefix="/api/chat")
@@ -90,7 +100,9 @@ def _session_to_response(session) -> ChatSessionResponse:
         extra=session.extra,
         created_at=session.created_at,
         updated_at=session.updated_at,
-        deleted_at=session.deleted_at
+        deleted_at=session.deleted_at,
+        pinned=bool(getattr(session, 'pinned', False)),
+        archived=bool(getattr(session, 'archived', False)),
     )
 
 
@@ -129,6 +141,7 @@ def _message_to_response(message) -> ChatMessageResponse:
         content={"parts": parts},
         extra=extra if extra else None,
         status=message.status,
+        message_sequence=message.message_sequence,
         created_at=message.created_at
     )
 
@@ -315,6 +328,30 @@ async def update_session_title(
 
     return ResponseUtil.success(
         msg='更新会话标题成功',
+        data=_session_to_response(session).model_dump()
+    )
+
+
+@chat_router.patch("/sessions/{session_id}/meta", summary="更新会话置顶/归档状态")
+async def update_session_meta(
+    session_id: str,
+    request: UpdateSessionMetaRequest,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    更新会话置顶 / 归档状态；pinned / archived 为 null 表示不修改。
+    """
+    session = await ChatService.update_session_meta(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        pinned=request.pinned,
+        archived=request.archived,
+        db=db
+    )
+
+    return ResponseUtil.success(
+        msg='更新会话状态成功',
         data=_session_to_response(session).model_dump()
     )
 
@@ -583,182 +620,145 @@ async def _event_generator(generator, session_id: str):
 
 
 
-@chat_router.post("/sessions/stream", summary="流式发送消息并获取AI响应")
-async def send_message_stream(
-    request: SendMessageRequest,
+@chat_router.post("/runs", summary="创建 Agent 任务")
+async def create_run(
+    request: CreateRunRequest,
     current_user: CurrentUser = Depends(UserService.get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    会话级流式问答接口：
-    1. 由 QaService.exec_query 写入 user 消息并驱动 Agent SSE
-    2. assistant 在 qa_service 内按骨架—检查点—终态 UPDATE 同一 message_id（不依赖客户端收到 [DONE]）
-    3. 客户端断连时 _event_generator 触发 generator.aclose() 做 partial 落库
-
-    返回 SSE 格式事件流
-    """
-    from noesis_server.schemas.qa_vo import QaQueryRequest, QaStopRequest
-    from noesis_server.services.mention_resolve_service import MentionResolveService, parse_mention_items
-
-    session_id = request.session_id or ""
-    qa_type = (request.extra or {}).get("qa_type", IntentEnum.COMMON_QA.value[0])
-    file_dict = (request.extra or {}).get("file_dict")
-    kb_collections = (request.extra or {}).get("kb_collections")
-    kb_search_enabled = (request.extra or {}).get("kb_search_enabled")
-    extra = request.extra or {}
-    model_id = extra.get("model_id") if "model_id" in extra else None
-    mcp_servers = extra.get("mcp_servers") if isinstance(extra.get("mcp_servers"), list) else None
-    enabled_skills = extra.get("enabled_skills") if isinstance(extra.get("enabled_skills"), list) else None
-
-    mentions_items = None
-    if "mentions" in extra:
-        mentions_items = parse_mention_items(extra.get("mentions"))
-        # 流式响应前同步校验，失败返回 4xx JSON（非 SSE）
-        MentionResolveService.resolve(
-            mentions=mentions_items,
-            qa_type=qa_type,
-            user_id=str(current_user.user_id),
-            session_id=session_id,
-        )
-
-    if session_id:
-        denied = await _deny_foreign_session(session_id, current_user, db)
-        if denied:
-            return denied
-
-    qa_req = QaQueryRequest(
-        query=request.content,
-        qa_type=qa_type,
-        chat_id=session_id,
-        file_dict=file_dict,
-        kb_collections=kb_collections if isinstance(kb_collections, list) else None,
-        kb_search_enabled=kb_search_enabled if isinstance(kb_search_enabled, bool) else None,
-        model_id=str(model_id).strip() if model_id is not None and str(model_id).strip() else None,
-        mcp_servers=[str(x) for x in mcp_servers] if mcp_servers is not None else None,
-        enabled_skills=[str(x) for x in enabled_skills] if enabled_skills is not None else None,
-        mentions=mentions_items,
+    run = await RunService.create(request, current_user, db)
+    session = await ChatService.get_session_by_id(
+        run.session_id, str(current_user.user_id), db
+    )
+    return ResponseUtil.success(
+        msg="任务已创建",
+        data={
+            "run_id": run.id,
+            "assistant_message_id": run.assistant_message_id,
+            "session_id": run.session_id,
+            "status": run.status,
+            "session_title": session.title,
+        },
     )
 
-    try:
-        logger.info(
-            f"流式问答开始 session_id={session_id or '(new)'} qa_type={qa_type} user_id={current_user.user_id}"
-        )
-        generator = QaService.exec_query(qa_req, current_user, db)
-        return StreamingResponse(
-            _event_generator(generator, session_id),
-            media_type="text/event-stream"
-        )
-    except Exception as e:
-        logger.exception(e)
-        return StreamingResponse(
-            iter([
-                'event: error\ndata: {"type":"error","message_id":"","error":"服务异常"}\n\n',
-                'event: finish\ndata: {"type":"finish","message_id":"","finish_reason":"error","usage":{}}\n\n',
-                'data: [DONE]\n\n',
-            ]),
-            media_type="text/event-stream",
-        )
+
+@chat_router.get("/runs/{run_id}", summary="获取 Agent 任务状态")
+async def get_run(
+    run_id: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+    return ResponseUtil.success(msg="获取任务成功", data=snapshot.to_dict())
 
 
-@chat_router.post("/sessions/{session_id}/test-case/resume", summary="测试用例：采纳测试点后继续生成")
-async def resume_test_case_stream(
-    session_id: str,
+@chat_router.get("/runs/{run_id}/stream", summary="订阅 Agent 任务事件")
+async def stream_run(
+    run_id: str,
+    after_sequence: int = 0,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+    subscription = await RunService.subscribe(
+        run_id, str(current_user.user_id), max(0, after_sequence), db
+    )
+
+    async def event_stream():
+        if subscription is None:
+            yield format_sse("run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()})
+            if snapshot.is_terminal:
+                yield format_done()
+            else:
+                yield format_sse(
+                    "run-status",
+                    {
+                        "type": "run-status",
+                        "run_id": run_id,
+                        "status": snapshot.status.value,
+                        "sequence": snapshot.sequence,
+                        "error_code": "OWNER_UNAVAILABLE",
+                        "message": "连接暂时不可用，请稍后重试",
+                    },
+                )
+            return
+
+        try:
+            if after_sequence > 0 and subscription.replay:
+                for envelope in subscription.replay:
+                    for line in encode_sequenced_event(envelope):
+                        yield line
+            else:
+                yield format_sse(
+                    "run-snapshot",
+                    {"type": "run-snapshot", **subscription.snapshot.to_dict()},
+                )
+            if subscription.snapshot.is_terminal:
+                yield format_done()
+                return
+
+            while True:
+                try:
+                    item = await asyncio.wait_for(subscription.queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield SSE_COMMENT_KEEPALIVE
+                    continue
+                if isinstance(item, SlowSubscriber):
+                    return
+                for line in encode_sequenced_event(item):
+                    yield line
+                if isinstance(item.event, StreamDone):
+                    return
+        finally:
+            try:
+                await run_manager.unsubscribe(run_id, subscription.queue)
+            except KeyError:
+                pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@chat_router.post("/runs/{run_id}/stop", summary="停止 Agent 任务")
+async def stop_run(
+    run_id: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
+    return ResponseUtil.success(
+        msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
+        data=snapshot.to_dict(),
+    )
+
+
+@chat_router.post("/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务")
+async def resume_test_case_run(
+    run_id: str,
     request: TestCaseResumeRequest,
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    在会话内继续执行 CaseCoordinator.resume_agent，流式返回用例内容（SSE）。
-    须与同一会话上一次的 TEST_CASE_QA 首轮流式请求衔接。
-    """
     if not request.selected_point_names:
         return ResponseUtil.failure(msg="请至少选择一个测试点")
-
-    session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db,
-    )
-    if not session:
-        return ResponseUtil.not_found(msg='会话不存在')
-
-    try:
-        logger.info(
-            f"测试用例 resume 流式开始 session_id={session_id} user_id={current_user.user_id} "
-            f"points={len(request.selected_point_names or [])}"
-        )
-        generator = QaService.exec_test_case_resume(
-            session_id=session_id,
-            selected_point_names=request.selected_point_names,
-            current_user=current_user,
-            db=db,
-        )
-        return StreamingResponse(
-            _event_generator(generator, session_id),
-            media_type="text/event-stream",
-        )
-    except Exception as e:
-        logger.exception(e)
-        return StreamingResponse(
-            iter([
-                'event: error\ndata: {"type":"error","message_id":"","error":"服务异常"}\n\n',
-                'event: finish\ndata: {"type":"finish","message_id":"","finish_reason":"error","usage":{}}\n\n',
-                'data: [DONE]\n\n',
-            ]),
-            media_type="text/event-stream",
-        )
+    snapshot = await RunService.resume_test_case(run_id, request, current_user, db)
+    return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
 
 
-@chat_router.post("/sessions/{session_id}/hitl/resume", summary="SuperAgent HITL：审批/澄清后继续")
-async def resume_hitl_stream(
-    session_id: str,
+@chat_router.post("/runs/{run_id}/hitl/resume", summary="审批后继续 Agent 任务")
+async def resume_hitl_run(
+    run_id: str,
     request: HitlResumeRequest,
     http_request: Request,
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    从 hitl-required interrupt 恢复 SuperAgent；成功返回新的 text/event-stream。
-    CSRF：校验 ``X-CSRF-Token``（与 stop 同级，但不复用 QaStopRequest body）。
-    """
     await UserService.require_csrf(http_request)
-
-    session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db,
-    )
-    if not session:
-        return ResponseUtil.not_found(msg="会话不存在")
-
-    try:
-        logger.info(
-            f"HITL resume 流式开始 session_id={session_id} user_id={current_user.user_id} "
-            f"interrupt_id={request.interrupt_id}"
-        )
-        decisions = [d.model_dump(exclude_none=True) for d in request.decisions]
-        generator = QaService.exec_hitl_resume(
-            session_id=session_id,
-            interrupt_id=request.interrupt_id,
-            decisions=decisions,
-            grant_scope=request.grant_scope,
-            current_user=current_user,
-            db=db,
-        )
-        return StreamingResponse(
-            _event_generator(generator, session_id),
-            media_type="text/event-stream",
-        )
-    except Exception as e:
-        logger.exception(e)
-        return StreamingResponse(
-            iter([
-                'event: error\ndata: {"type":"error","message_id":"","error":"服务异常"}\n\n',
-                'event: finish\ndata: {"type":"finish","message_id":"","finish_reason":"error","usage":{}}\n\n',
-                'data: [DONE]\n\n',
-            ]),
-            media_type="text/event-stream",
-        )
+    snapshot = await RunService.resume_hitl(run_id, request, current_user, db)
+    return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
 
 
 @chat_router.post("/sessions/{session_id}/test-case/export", summary="测试用例：导出 Markdown")
@@ -834,34 +834,3 @@ async def get_message(
         msg='获取消息详情成功',
         data=_message_to_response(message).model_dump()
     )
-
-
-@chat_router.post("/sessions/{session_id}/stop", summary="停止流式生成")
-async def stop_stream(
-    session_id: str,
-    stop_payload: QaStopRequest,
-    current_user: CurrentUser = Depends(UserService.get_user_for_stop),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    停止指定会话的流式生成任务
-    """
-    session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db,
-    )
-    if not session:
-        return ResponseUtil.not_found(msg='会话不存在')
-
-    logger.info(
-        f"停止流式生成请求 session_id={session_id} qa_type={stop_payload.qa_type} "
-        f"user_id={current_user.user_id}"
-    )
-    _status, msg = await QaService.stop_chat(session_id, stop_payload.qa_type, current_user)
-    logger.info(
-        f"停止流式生成结果 session_id={session_id} msg={msg}"
-    )
-    if msg == "未知的 qa_type":
-        return ResponseUtil.failure(msg=msg)
-    return ResponseUtil.success(msg=msg)

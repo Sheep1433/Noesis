@@ -200,6 +200,15 @@ class SandboxManager:
             container.reload()
             if container.status != "running":
                 return None
+        try:
+            current_image = self._docker.images.get(self._docker_image)
+        except ImageNotFound:
+            current_image = None
+        if current_image is not None and container.image.id != current_image.id:
+            # Workspace / Skills 均为 bind mount。空闲旧容器可以安全重建，
+            # 否则镜像新增的运行时（例如 node/npm）永远不会进入既有会话。
+            self._stop_and_remove(name)
+            return None
         return SandboxRecord(
             user_id=user_id,
             session_id=session_id,
@@ -219,8 +228,17 @@ class SandboxManager:
         with self._lock:
             record = self._records.get(key)
             if record is not None:
-                record.last_used = time.time()
-                return record
+                if record.in_flight == 0:
+                    synced = self._sync_running(user_id, session_id)
+                    if synced is None:
+                        self._records.pop(key, None)
+                        record = None
+                    else:
+                        self._records[key] = synced
+                        record = synced
+                if record is not None:
+                    record.last_used = time.time()
+                    return record
 
             synced = self._sync_running(user_id, session_id)
             if synced is not None:

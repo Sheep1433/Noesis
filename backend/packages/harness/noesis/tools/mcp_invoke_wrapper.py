@@ -14,6 +14,7 @@ from noesis.errors.tool_failure import (
     ToolInfrastructureError,
     ToolNetworkError,
     ToolPermissionError,
+    ToolTimeoutError,
 )
 
 T = TypeVar("T")
@@ -32,6 +33,8 @@ def _translate_mcp_exception(exc: BaseException) -> BaseException:
             str(exc) or "MCP 连接超时",
             category=ToolFailureCategory.NETWORK_TIMEOUT,
         )
+    if isinstance(exc, TimeoutError):
+        return ToolTimeoutError("工具执行超时")
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in (401, 403):
@@ -52,12 +55,14 @@ def _wrap_callable(
     fn: Callable[..., T],
     *,
     is_async: bool,
+    timeout_seconds: float,
 ) -> Callable[..., T]:
     if is_async:
 
         async def _async_wrapper(*args: Any, **kwargs: Any) -> T:
             try:
-                return await fn(*args, **kwargs)
+                async with asyncio.timeout(timeout_seconds):
+                    return await fn(*args, **kwargs)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -80,15 +85,19 @@ def _wrap_callable(
     return _sync_wrapper
 
 
-def wrap_mcp_tool(tool: Any) -> Any:
+def wrap_mcp_tool(tool: Any, *, timeout_seconds: float | None = None) -> Any:
     """包装单个 MCP 工具的 invoke / ainvoke / coroutine。"""
+    if timeout_seconds is None:
+        from noesis.config.env import StreamConfig
+
+        timeout_seconds = StreamConfig.run_tool_timeout_seconds
     if hasattr(tool, "invoke") and callable(tool.invoke):
-        tool.invoke = _wrap_callable(tool.invoke, is_async=False)
+        tool.invoke = _wrap_callable(tool.invoke, is_async=False, timeout_seconds=timeout_seconds)
     if hasattr(tool, "ainvoke") and callable(tool.ainvoke):
-        tool.ainvoke = _wrap_callable(tool.ainvoke, is_async=True)
+        tool.ainvoke = _wrap_callable(tool.ainvoke, is_async=True, timeout_seconds=timeout_seconds)
     coroutine = getattr(tool, "coroutine", None)
     if coroutine is not None and callable(coroutine):
-        tool.coroutine = _wrap_callable(coroutine, is_async=True)
+        tool.coroutine = _wrap_callable(coroutine, is_async=True, timeout_seconds=timeout_seconds)
     return tool
 
 

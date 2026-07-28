@@ -3,7 +3,7 @@ import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
-import { ensureSession, getSession, stopChat, updateSessionTitle } from '@/api/chat'
+import { ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
@@ -30,11 +30,18 @@ import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
+import { copyToClipboard } from '@/utils/copy'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { qaTypeLabel } from '@/utils/qaType'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
+import {
+  pendingHitlForSession,
+  setPendingHitlForSession,
+  shouldDisableHitlComposer,
+  shouldShowRunContinuation,
+} from '@/views/chat/hitlUiState'
 import {
   appendReasoningDelta,
   appendStreamFailureNotice,
@@ -47,11 +54,13 @@ import {
   completeLastReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
+  extractLastTopLevelText,
   flushRedactedThinkingStreamCtx,
   formatUsageSummary,
   hasValidContextWindow,
   hasValidUsage,
   markStreamingPartsComplete,
+  normalizeApiContent,
   shortenChatErrorToast,
   syncLegacyFieldsFromParts,
   upsertToolInputPart,
@@ -149,6 +158,9 @@ async function navigateToComposingUrl(replace = false) {
 }
 
 async function restoreActiveSessionFromRoute(sessionId: string) {
+  // 切换会话只释放浏览器 subscription，不停止服务端 Run。必须先隔离旧流，
+  // 否则旧会话的 snapshot/delta 会写入新会话页面。
+  sseStream.detachSubscription()
   try {
     const session = await getSession(sessionId)
     const qt = String(session.extra?.qa_type ?? '').trim() || 'COMMON_QA'
@@ -180,6 +192,8 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     await loadSessionContext(sessionId)
     reloadSessionFilesPanel()
     await scrollToLatestMessage(false)
+    // Run 订阅可能持续数分钟；页面与历史列表恢复不应等待整轮生成结束。
+    void sseStream.resumeActiveRun(sessionId)
   } catch (error) {
     console.error('恢复会话失败:', error)
     window.$ModalMessage.warning('会话不存在或无权访问，已回到新对话')
@@ -189,6 +203,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 }
 
 function resetComposingSurface() {
+  sseStream.detachSubscription()
   sessionContext.value = null
   showDefaultPage.value = true
   isInit.value = true
@@ -200,7 +215,6 @@ function resetComposingSurface() {
   businessStore.todos = []
   clearComposerQueue()
   inputTextString.value = ''
-  pendingHitl.value = null
   uuids.value[qa_type.value] = uuidv4()
   sessionMaterialized.value = false
   selectedKbCollections.value = []
@@ -284,6 +298,7 @@ async function refreshSidebarAfterManageClose() {
     currentRenderIndex,
     null,
     '',
+    archiveView.value ? 'only' : 'exclude',
   )
 
   if (!wasShowingChat || !activeSessionId) {
@@ -320,6 +335,8 @@ function newChat() {
 const stylizingLoading = ref(false)
 
 type PendingHitlState = {
+  session_id: string
+  run_id: string
   interrupt_id: string
   kind: string
   action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown>, description?: string }>
@@ -327,7 +344,24 @@ type PendingHitlState = {
   expires_at: number
   submitting: boolean
 }
-const pendingHitl = ref<PendingHitlState | null>(null)
+const pendingHitlBySession = ref<Record<string, PendingHitlState>>({})
+const pendingHitl = computed<PendingHitlState | null>({
+  get: () => {
+    const sessionId = uuids.value[qa_type.value]
+    return pendingHitlForSession(pendingHitlBySession.value, sessionId)
+  },
+  set: (value) => {
+    const sessionId = value?.session_id || uuids.value[qa_type.value]
+    if (!sessionId) {
+      return
+    }
+    pendingHitlBySession.value = setPendingHitlForSession(
+      pendingHitlBySession.value,
+      sessionId,
+      value,
+    )
+  },
+})
 
 // 输入字符串
 const inputTextString = ref('')
@@ -412,22 +446,27 @@ const onRecycleQa = async (index: number) => {
   scrollToBottom()
 }
 
-// 赞（后端反馈接口未接入，仅本地提示）
-const onPraiseFeadBack = (_index: number) => {
-  window.$ModalMessage.destroyAll()
-  window.$ModalMessage.success('感谢反馈', { duration: 1500 })
-}
-
 // 开始输出时隐藏加载提示
 const onBeginRead = async (index: number) => {
   // 设置最上面的滚动提示图标隐藏
   contentLoadingStates.value[currentRenderIndex.value - 1] = false
 }
 
-// 踩（后端反馈接口未接入，仅本地提示）
-const onBelittleFeedback = (_index: number) => {
-  window.$ModalMessage.destroyAll()
-  window.$ModalMessage.success('感谢反馈', { duration: 1500 })
+// 复制用户消息原文
+const handleCopyUserText = async (text: string) => {
+  if (!text.trim()) {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.warning('暂无可复制内容')
+    return
+  }
+  try {
+    await copyToClipboard(text)
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.success('已复制')
+  } catch {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.error('复制失败')
+  }
 }
 
 // 侧边栏对话历史
@@ -436,6 +475,8 @@ interface TableItem {
   key: string
   chat_id: string
   qa_type: string
+  pinned?: boolean
+  archived?: boolean
 }
 
 function sessionQaIconClass(qt: string) {
@@ -473,17 +514,25 @@ const historySidebarColumns = computed(() => [
     align: 'left' as const,
     ellipsis: { tooltip: false },
     render(row: TableItem) {
+      const children: any[] = [
+        h('div', {
+          class: ['size-18px shrink-0 inline-flex items-center justify-center', sessionQaIconClass(row.qa_type)],
+          style: { color: sessionQaIconColor(row.qa_type) },
+          title: sessionQaTooltip(row.qa_type),
+        }),
+        h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
+      ]
+      if (row.pinned) {
+        children.push(h('div', {
+          class: 'size-14px shrink-0 inline-flex items-center justify-center i-hugeicons:pin-02',
+          style: { color: cssVar(themeCssVar.primaryTextSoft) },
+          title: '已置顶',
+        }))
+      }
       return h(
         'div',
         { class: 'flex items-center gap-8px min-w-0 pr-4px' },
-        [
-          h('div', {
-            class: ['size-18px shrink-0 inline-flex items-center justify-center', sessionQaIconClass(row.qa_type)],
-            style: { color: sessionQaIconColor(row.qa_type) },
-            title: sessionQaTooltip(row.qa_type),
-          }),
-          h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
-        ],
+        children,
       )
     },
   },
@@ -673,8 +722,48 @@ async function loadSessionContext(sessionId: string) {
   }
 }
 
+let lastRunStatusNotice = ''
+const reconnectAvailable = ref(false)
+
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
 const sseStream = useSSEStream({
+  onRunStatus: (status, message) => {
+    if (status === lastRunStatusNotice) {
+      return
+    }
+    lastRunStatusNotice = status
+    if (status === 'retrying') {
+      window.$ModalMessage.info(message || '连接中断，正在重试')
+    } else if (status === 'interrupted') {
+      window.$ModalMessage.warning(message || '服务中断，本轮生成未完成')
+    } else if (status === 'disconnected') {
+      reconnectAvailable.value = true
+    } else if (status === 'running') {
+      reconnectAvailable.value = false
+      lastRunStatusNotice = ''
+      pendingHitl.value = null
+    }
+  },
+  onSnapshot: (snapshot) => {
+    reconnectAvailable.value = false
+    stylizingLoading.value = shouldShowRunContinuation(snapshot.status)
+    if (snapshot.status !== 'hitl_pending') {
+      pendingHitlBySession.value = setPendingHitlForSession(
+        pendingHitlBySession.value,
+        snapshot.session_id,
+        null,
+      )
+    }
+    const normalized = normalizeApiContent(snapshot.content)
+    patchLastAssistantParts(() => normalized.parts)
+    const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+    if (lastIdx >= 0) {
+      conversationItems.value[lastIdx] = {
+        ...conversationItems.value[lastIdx],
+        message_id: snapshot.assistant_message_id,
+      }
+    }
+  },
   onMessageStart: (data) => {
     nativeReasoningSeen.value = false
     Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
@@ -731,7 +820,14 @@ const sseStream = useSSEStream({
     const action_requests = Array.isArray(data.action_requests)
       ? (data.action_requests as Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>)
       : []
+    const session_id = String(data.session_id ?? '')
+    const run_id = String(data.run_id ?? '')
+    if (!session_id || !run_id) {
+      return
+    }
     pendingHitl.value = {
+      session_id,
+      run_id,
       interrupt_id,
       kind,
       action_requests,
@@ -739,6 +835,7 @@ const sseStream = useSSEStream({
       expires_at: Number(data.expires_at ?? 0),
       submitting: false,
     }
+    stylizingLoading.value = false
     patchLastAssistantParts((parts) =>
       applyHitlPendingParts(parts, { interrupt_id, kind, action_requests }),
     )
@@ -786,6 +883,13 @@ const sseStream = useSSEStream({
           return
         }
         tableData.value[sessionIndex].key = title
+      } else {
+        tableData.value.unshift({
+          uuid: currentUuid,
+          key: title,
+          chat_id: currentUuid,
+          qa_type: qa_type.value,
+        })
       }
     }
   },
@@ -831,6 +935,9 @@ const sseStream = useSSEStream({
 
 /** 顶层 ref 供模板自动解包；嵌在 sseStream 对象里的 isLoading 不会解包，会导致选择器一直 disabled */
 const sseIsLoading = sseStream.isLoading
+const hitlComposerDisabled = computed(() =>
+  shouldDisableHitlComposer(pendingHitl.value, sseIsLoading.value),
+)
 
 async function submitHitlFromPanel(payload: {
   decisions: Array<{ type: string, message?: string }>
@@ -841,7 +948,7 @@ async function submitHitlFromPanel(payload: {
     return
   }
   pending.submitting = true
-  const sessionId = getChatSessionId()
+  const sessionId = pending.session_id
   try {
     await sseStream.resumeHitl(sessionId, {
       interrupt_id: pending.interrupt_id,
@@ -849,17 +956,19 @@ async function submitHitlFromPanel(payload: {
       grant_scope: payload.grant_scope,
     })
   } finally {
-    if (pendingHitl.value) {
-      pendingHitl.value.submitting = false
+    const current = pendingHitlBySession.value[sessionId]
+    if (current?.interrupt_id === pending.interrupt_id) {
+      pendingHitlBySession.value = {
+        ...pendingHitlBySession.value,
+        [sessionId]: { ...current, submitting: false },
+      }
     }
   }
 }
 
 async function stopChatStream() {
-  const sessionId = getChatSessionId()
-  sseStream.abortStream()
   try {
-    await stopChat(sessionId, qa_type.value)
+    await sseStream.stopCurrentRun()
   } catch (err) {
     // 401 已由 authHttp 统一跳转登录；其余错误仍等待 SSE finish/stopped
     if (!isUnauthorizedError(err)) {
@@ -874,6 +983,15 @@ const getChatSessionId = () => {
     uuids.value[qa_type.value] = uuidv4()
   }
   return uuids.value[qa_type.value]
+}
+
+async function reconnectCurrentRun() {
+  const sessionId = uuids.value[qa_type.value]
+  if (!sessionId) {
+    return
+  }
+  reconnectAvailable.value = false
+  await sseStream.resumeActiveRun(sessionId)
 }
 
 const checkAllFilesUploaded = () => {
@@ -1317,22 +1435,99 @@ const sessionContextMenuShow = ref(false)
 const sessionContextMenuX = ref(0)
 const sessionContextMenuY = ref(0)
 const sessionContextMenuTarget = ref<TableItem | null>(null)
-const sessionContextMenuOptions = [
-  { label: '修改标题', key: 'rename' },
-]
+/** 归档视图：仅展示已归档会话；此时不展示「新建对话」，右键不展示「置顶」 */
+const archiveView = ref(false)
+
+const sessionContextMenuOptions = computed(() => {
+  const target = sessionContextMenuTarget.value
+  const opts: Array<{ label: string, key: string }> = [
+    { label: '修改标题', key: 'rename' },
+  ]
+  if (target && !archiveView.value) {
+    opts.push({ label: target.pinned ? '取消置顶' : '置顶', key: target.pinned ? 'unpin' : 'pin' })
+  }
+  if (target) {
+    opts.push({ label: target.archived ? '取消归档' : '归档', key: target.archived ? 'unarchive' : 'archive' })
+  }
+  return opts
+})
 
 function closeSessionContextMenu() {
   sessionContextMenuShow.value = false
   sessionContextMenuTarget.value = null
 }
 
+async function refreshSessionList() {
+  await fetchConversationHistory(
+    isInit,
+    conversationItems,
+    tableData,
+    currentRenderIndex,
+    null,
+    searchText.value,
+    archiveView.value ? 'only' : 'exclude',
+  )
+}
+
+function sortTableDataPinnedFirst(items: TableItem[]): TableItem[] {
+  return [...items].sort((a, b) => {
+    const pa = a.pinned ? 1 : 0
+    const pb = b.pinned ? 1 : 0
+    if (pa !== pb) {
+      return pb - pa
+    }
+    return 0
+  })
+}
+
+async function toggleSessionMeta(row: TableItem, patch: { pinned?: boolean, archived?: boolean }) {
+  try {
+    await updateSessionMeta(row.chat_id, patch)
+    // 本地即时更新 + 重排
+    const idx = tableData.value.findIndex((s) => s.chat_id === row.chat_id)
+    if (idx !== -1) {
+      const updated = { ...tableData.value[idx], ...patch }
+      const next = [...tableData.value]
+      next[idx] = updated
+      tableData.value = sortTableDataPinnedFirst(next)
+    }
+    // 归档 / 取消归档会改变列表成员，直接重拉
+    if (patch.archived !== undefined) {
+      await refreshSessionList()
+    }
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.success('已更新', { duration: 1200 })
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '操作失败'
+    window.$ModalMessage.error(msg)
+  }
+}
+
 function handleSessionContextMenuSelect(key: string) {
   const target = sessionContextMenuTarget.value
   closeSessionContextMenu()
-  if (key !== 'rename' || !target) {
+  if (!target) {
     return
   }
-  openRenameSessionModal(target)
+  if (key === 'rename') {
+    openRenameSessionModal(target)
+    return
+  }
+  if (key === 'pin') {
+    void toggleSessionMeta(target, { pinned: true })
+    return
+  }
+  if (key === 'unpin') {
+    void toggleSessionMeta(target, { pinned: false })
+    return
+  }
+  if (key === 'archive') {
+    void toggleSessionMeta(target, { archived: true })
+    return
+  }
+  if (key === 'unarchive') {
+    void toggleSessionMeta(target, { archived: false })
+  }
 }
 
 const renameSessionModal = reactive({
@@ -1396,6 +1591,7 @@ const rowProps = (row: TableItem) => {
       sessionContextMenuShow.value = true
     },
     onClick: async () => {
+      sseStream.detachSubscription()
       backgroundColorVariable.value = cssVar(themeCssVar.bg)
 
       currentIndex.value = row.uuid
@@ -1411,6 +1607,10 @@ const rowProps = (row: TableItem) => {
         showDefaultPage.value = false
       }
 
+      // 先切换当前 session 身份，再异步加载历史；审批面板必须立即随 session 隔离，
+      // 不能在网络请求期间继续显示上一会话的 pending HITL。
+      onAqtiveChange(row.qa_type, row.chat_id, true)
+
       // 这里根据chat_id 过滤同一轮对话数据
       await fetchConversationHistory(
         isInit,
@@ -1421,8 +1621,6 @@ const rowProps = (row: TableItem) => {
         '',
       )
 
-      // 与顶栏切换不同：从历史会话点入时已拉取 messages，不能再因 qa_type 不一致而清空列表并打开默认页
-      onAqtiveChange(row.qa_type, row.chat_id, true)
       await replaceChatSessionUrl(row.chat_id)
       await scrollToLatestMessage(true)
       if (isMobile.value) {
@@ -1620,6 +1818,7 @@ const handleSearch = () => {
     currentRenderIndex,
     null,
     searchText.value,
+    archiveView.value ? 'only' : 'exclude',
   )
 }
 
@@ -1654,6 +1853,11 @@ const { drawerWidth: historyDrawerWidth } = useResponsiveDrawerWidth({ max: 560,
 const { drawerWidth: sessionDrawerWidth } = useResponsiveDrawerWidth({ max: 480, mobileRatio: 0.9 })
 const historyDrawerOpen = ref(false)
 const chatHistoryPanelRef = ref<InstanceType<typeof ChatHistoryPanel> | null>(null)
+
+// 切换归档视图时重拉列表
+watch(archiveView, () => {
+  void refreshSessionList()
+})
 
 watch(isMobile, (mobile) => {
   if (mobile) {
@@ -1850,6 +2054,7 @@ function onComposerPaste(e: ClipboardEvent) {
         <ChatHistoryPanel
           ref="chatHistoryPanelRef"
           v-model:search-text="searchText"
+          v-model:archive-view="archiveView"
           :stylizing-loading="stylizingLoading"
           :is-focus-search-chat="isFocusSearchChat"
           :is-loading-history="isLoadingHistory"
@@ -1938,7 +2143,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     :key="`${item.uuid}-${index}`"
                     class="mb-4"
                   >
-                    <div v-if="item.role === 'user'" class="flex flex-col items-end space-y-2 w-full">
+                    <div v-if="item.role === 'user'" class="chat-user-message-row flex flex-col items-end space-y-2 w-full">
                       <!-- 用户消息 -->
                       <div
                         class="chat-user-message"
@@ -1983,6 +2188,22 @@ function onComposerPaste(e: ClipboardEvent) {
                             {{ item.question }}
                           </n-tag>
                         </n-space>
+                      </div>
+
+                      <!-- 用户消息复制按钮（hover 显隐） -->
+                      <div
+                        class="chat-user-message-actions"
+                        style="margin-left: 10%; margin-right: 10%; width: 80%;"
+                      >
+                        <button
+                          type="button"
+                          class="chat-user-copy-btn"
+                          title="复制"
+                          aria-label="复制该消息"
+                          @click="handleCopyUserText(item.question || '')"
+                        >
+                          <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
+                        </button>
                       </div>
 
                       <!-- 用户上传的文件列表 -->
@@ -2065,8 +2286,6 @@ function onComposerPaste(e: ClipboardEvent) {
                               :parentScollBottomMethod="scrollToBottom"
                               @failed="() => onFailedReader(index)"
                               @recycleQa="() => onRecycleQa(index)"
-                              @praiseFeadBack="() => onPraiseFeadBack(index)"
-                              @belittleFeedback="() => onBelittleFeedback(index)"
                             />
                           </template>
                           <AssistantStreamingIndicator
@@ -2075,20 +2294,13 @@ function onComposerPaste(e: ClipboardEvent) {
                             :divided="buildDisplayParts(item.messageContent.parts).length > 0"
                             :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
                           />
-                          <div
-                            v-if="hasValidUsage(item.msg_metadata?.usage)"
-                            class="assistant-usage-summary"
-                          >
-                            {{ formatUsageSummary(item.msg_metadata!.usage!) }}
-                          </div>
                           <AssistantReplyToolbar
                             v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
                             :qa-type="item.qa_type || 'COMMON_QA'"
-                            :copy-text="[item.reasoning, item.content].filter((s) => s && String(s).trim()).join('\n\n')"
+                            :copy-text="extractLastTopLevelText(item.messageContent.parts)"
+                            :usage-text="hasValidUsage(item.msg_metadata?.usage) ? formatUsageSummary(item.msg_metadata!.usage!) : ''"
                             :langfuse_session_id="item.langfuse_session_id"
                             :langfuse-ui-origin="langfuseUiOrigin"
-                            @praise-fead-back="() => onPraiseFeadBack(index)"
-                            @belittle-feedback="() => onBelittleFeedback(index)"
                             @recycle-qa="() => onRecycleQa(index)"
                           />
                         </div>
@@ -2111,8 +2323,6 @@ function onComposerPaste(e: ClipboardEvent) {
                           @failed="() => onFailedReader(index)"
                           @completed="() => onCompletedReader(index)"
                           @recycleQa="() => onRecycleQa(index)"
-                          @praiseFeadBack="() => onPraiseFeadBack(index)"
-                          @belittleFeedback="() => onBelittleFeedback(index)"
                           @beginRead="() => onBeginRead(index)"
                         />
                         <AssistantStreamingIndicator
@@ -2151,12 +2361,27 @@ function onComposerPaste(e: ClipboardEvent) {
                     vertical
                     class="chat-content-gutter"
                   >
+                    <n-alert
+                      v-if="reconnectAvailable"
+                      type="warning"
+                      title="连接已中断"
+                    >
+                      已生成的内容不会丢失，可以重新连接继续查看。
+                      <template #action>
+                        <n-button
+                          size="small"
+                          @click="reconnectCurrentRun"
+                        >
+                          重新连接
+                        </n-button>
+                      </template>
+                    </n-alert>
                     <!-- HITL 优先占 Todo 槽位；无 pending 时显示 Todo -->
                     <HitlComposerPanel
                       v-if="pendingHitl"
                       :kind="pendingHitl.kind"
                       :action-requests="pendingHitl.action_requests"
-                      :disabled="!!pendingHitl.submitting || sseIsLoading"
+                      :disabled="hitlComposerDisabled"
                       @submit="submitHitlFromPanel"
                     />
                     <TodoList
@@ -2843,6 +3068,47 @@ function onComposerPaste(e: ClipboardEvent) {
   flex-shrink: 0;
 }
 
+.chat-user-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+  margin-bottom: 4px;
+}
+
+.chat-user-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
+  color: var(--noesis-color-text-hint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.chat-user-copy-btn span {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.chat-user-message-row:hover .chat-user-copy-btn,
+.chat-user-copy-btn:focus-visible {
+  opacity: 1;
+}
+
+.chat-user-copy-btn:hover {
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
 .assistant-unified-card {
   width: 80%;
   margin-left: 10%;
@@ -2852,15 +3118,6 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 16px;
   overflow: visible;
   box-shadow: var(--noesis-shadow-sm);
-}
-
-.assistant-usage-summary {
-  padding: 4px 16px 8px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
-  font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
-  letter-spacing: 0.02em;
 }
 
 .chat-top-bar {

@@ -1,11 +1,18 @@
 /**
- * chat 页专用：解析 Noesis 标准 SSE（见 docs/prd/platform/SSE流式数据设计.md）
+ * chat 页专用：创建可恢复 run，并解析带 sequence 的 Noesis SSE。
  * 通过回调与 chat.vue 现有 UI 逻辑对接。
  */
 
+import type { AgentRunSnapshot } from '@/api/chat'
 import { ref } from 'vue'
-import { useUserStore } from '@/store/business/userStore'
-import { getAuthHeaders } from '@/utils/authHttp'
+import {
+  createAgentRun,
+  getAgentRun,
+  resumeAgentRunHitl,
+  resumeAgentRunTestCase,
+  stopAgentRun,
+  subscribeAgentRun,
+} from '@/api/chat'
 
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
@@ -35,6 +42,8 @@ export interface SSEStreamOptions {
   onCustomEvent?: (eventType: string, data: Record<string, unknown>) => void
   /** message-start 帧（含 assistant_message_id、可选 langfuse_session_id） */
   onMessageStart?: (data: Record<string, unknown>) => void
+  onSnapshot?: (snapshot: AgentRunSnapshot) => void
+  onRunStatus?: (status: string, message?: string) => void
   onFinish?: (detail?: { finish_reason?: string }) => void
   onError?: (msg: string) => void
 }
@@ -73,47 +82,38 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onToolResult,
     onCustomEvent,
     onMessageStart,
+    onSnapshot,
+    onRunStatus,
     onFinish,
     onError,
   } = options
 
   const isLoading = ref(false)
   const error = ref<string | null>(null)
-  let removeBeforeUnload: (() => void) | null = null
   let lastFinishReason: string | undefined
   let abortController: AbortController | null = null
+  let activeSessionId: string | null = null
+  let streamGeneration = 0
   let userAborted = false
+  let currentRunId: string | null = null
+  let lastSequence = 0
+  let sequenceGap = false
+  let terminalObserved = false
 
   const tool_name_by_call_id = new Map<string, string>()
 
-  function setupBeforeUnload(sessionId: string, qaType: string) {
-    cleanupBeforeUnload()
-    const handleBeforeUnload = () => {
-      if (isLoading.value && sessionId) {
-        const payload = JSON.stringify({
-          session_id: sessionId,
-          qa_type: qaType,
-          ...(useUserStore().csrfToken ? { csrf_token: useUserStore().csrfToken } : {}),
-        })
-        const blob = new Blob([payload], { type: 'application/json' })
-        navigator.sendBeacon(`/api/chat/sessions/${sessionId}/stop`, blob)
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    removeBeforeUnload = () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  function isCurrentStream(generation: number) {
+    return generation === streamGeneration
   }
 
-  function cleanupBeforeUnload() {
-    removeBeforeUnload?.()
-    removeBeforeUnload = null
-  }
-
-  function dispatchFrame(eventName: string, dataStr: string) {
-    if (userAborted) {
+  function dispatchFrame(eventName: string, dataStr: string, generation = streamGeneration) {
+    if (!isCurrentStream(generation) || userAborted) {
       return
     }
     if (dataStr === '[DONE]') {
-      settleSuccess()
+      if (terminalObserved) {
+        settleSuccess()
+      }
       return
     }
 
@@ -125,6 +125,49 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     }
 
     const t = (data.type as string) || eventName
+
+    if (t === 'run-snapshot') {
+      const snapshot = data as unknown as AgentRunSnapshot
+      lastSequence = Number(snapshot.snapshot_sequence ?? 0)
+      sequenceGap = false
+      onSnapshot?.(snapshot)
+      onRunStatus?.(snapshot.status, snapshot.message ?? undefined)
+      if (snapshot.status === 'hitl_pending' && snapshot.pending_hitl) {
+        onCustomEvent?.('hitl-required', {
+          type: 'hitl-required',
+          ...snapshot.pending_hitl,
+          run_id: snapshot.run_id,
+          session_id: snapshot.session_id,
+        })
+      }
+      if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
+        terminalObserved = true
+        if (snapshot.status === 'error') {
+          settleFailure(snapshot.message || '生成失败')
+        } else {
+          settleSuccess(snapshot.finish_reason ?? snapshot.status)
+        }
+      }
+      return
+    }
+
+    const sequence = Number(data.sequence ?? 0)
+    if (sequence > 0) {
+      if (sequence <= lastSequence) {
+        return
+      }
+      if (lastSequence > 0 && sequence !== lastSequence + 1) {
+        sequenceGap = true
+        return
+      }
+      lastSequence = sequence
+    }
+
+    if (t === 'run-status') {
+      const status = String(data.status ?? 'running')
+      onRunStatus?.(status, typeof data.message === 'string' ? data.message : undefined)
+      return
+    }
 
     if (t === 'message-start') {
       onMessageStart?.(data)
@@ -227,14 +270,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       || t === 'phase-end'
       || t === 'hitl-required'
     ) {
-      onCustomEvent?.(t, data)
+      onCustomEvent?.(t, {
+        ...data,
+        run_id: data.run_id ?? currentRunId,
+        session_id: data.session_id ?? activeSessionId,
+      })
       return
     }
     if (t === 'finish') {
-      const title = typeof data.title === 'string' ? data.title.trim() : ''
-      if (title) {
-        onTitleUpdate?.(title)
-      }
       const usage = data.usage as { input_tokens?: number, output_tokens?: number, total_tokens?: number } | undefined
       if (usage && (usage.input_tokens != null || usage.output_tokens != null)) {
         onUsageUpdate?.({
@@ -245,6 +288,11 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       }
       const finish_reason = String(data.finish_reason ?? 'stop')
       lastFinishReason = finish_reason
+      terminalObserved = finish_reason !== 'hitl_pending'
+      if (finish_reason === 'hitl_pending') {
+        onRunStatus?.('hitl_pending')
+        return
+      }
       if (finish_reason === 'error') {
         const errMsg = typeof data.error === 'string' && data.error.trim()
           ? data.error.trim()
@@ -256,6 +304,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     if (t === 'error') {
+      terminalObserved = true
       const msg = String(data.error ?? '请求失败')
       settleFailure(msg)
       return
@@ -282,191 +331,225 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onError?.(msg)
   }
 
+  async function followRun(runId: string, generation: number): Promise<void> {
+    for (let retry = 0; retry <= 5; retry += 1) {
+      if (!isCurrentStream(generation) || streamSettled || userAborted) {
+        break
+      }
+      sequenceGap = false
+      try {
+        const res = await subscribeAgentRun(runId, lastSequence, abortController?.signal)
+        if (!res.ok) {
+          throw new Error(`连接失败（HTTP ${res.status}）`)
+        }
+        const reader = res.body?.getReader()
+        if (!reader) {
+          throw new Error('无法读取响应流')
+        }
+        const decoder = new TextDecoder()
+        let rawBuffer = ''
+        while (true) {
+          if (streamSettled || userAborted) {
+            break
+          }
+          const { done, value } = await reader.read()
+          if (value) {
+            rawBuffer += decoder.decode(value, { stream: true })
+          }
+          const { frames, rest } = parseSseFrames(rawBuffer)
+          rawBuffer = rest
+          for (const frame of frames) {
+            parseAndDispatchFrame(
+              frame,
+              (eventName, dataStr) => dispatchFrame(eventName, dataStr, generation),
+            )
+            if (sequenceGap) {
+              break
+            }
+          }
+          if (done || sequenceGap) {
+            if (sequenceGap) {
+              await reader.cancel()
+            }
+            break
+          }
+        }
+      } catch (streamError) {
+        if (!isCurrentStream(generation) || userAborted) {
+          break
+        }
+        if (retry >= 5) {
+          throw streamError
+        }
+      }
+      if (!isCurrentStream(generation) || streamSettled || userAborted) {
+        break
+      }
+      const snapshot = await getAgentRun(runId)
+      dispatchFrame(
+        'run-snapshot',
+        JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+        generation,
+      )
+      if (streamSettled) {
+        break
+      }
+      if (retry < 5) {
+        const delay = Math.min(8000, 500 * (2 ** retry)) + Math.floor(Math.random() * 250)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
+    if (isCurrentStream(generation) && !streamSettled && !userAborted) {
+      throw new Error('连接已中断，请重新连接')
+    }
+  }
+
+  function detachSubscription() {
+    streamGeneration += 1
+    const controller = abortController
+    abortController = null
+    activeSessionId = null
+    currentRunId = null
+    isLoading.value = false
+    userAborted = false
+    controller?.abort()
+  }
+
+  function beginStream(sessionId: string) {
+    detachSubscription()
+    activeSessionId = sessionId
+    streamSettled = false
+    lastFinishReason = undefined
+    userAborted = false
+    abortController = new AbortController()
+    isLoading.value = true
+    lastSequence = 0
+    sequenceGap = false
+    terminalObserved = false
+    return streamGeneration
+  }
+
   async function sendMessage(
     sessionId: string,
     content: string,
     extra?: Record<string, unknown>,
   ): Promise<void> {
-    if (isLoading.value) {
+    if (isLoading.value && activeSessionId === sessionId) {
       return
     }
 
     tool_name_by_call_id.clear()
     error.value = null
-    streamSettled = false
-    lastFinishReason = undefined
-    userAborted = false
-    abortController = new AbortController()
-    isLoading.value = true
-
-    const qaType = (extra?.qa_type as string) || 'COMMON_QA'
-    setupBeforeUnload(sessionId, qaType)
+    const generation = beginStream(sessionId)
+    const clientRequestId = crypto.randomUUID()
 
     try {
-      const res = await fetch('/api/chat/sessions/stream', {
-        method: 'POST',
-        credentials: 'include',
-        signal: abortController.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        body: JSON.stringify({
+      let created
+      try {
+        created = await createAgentRun({
           session_id: sessionId,
           content,
+          client_request_id: clientRequestId,
           extra: extra || {},
-        }),
+        })
+      } catch {
+        // 响应未知时只使用原幂等键重试一次，服务端会返回同一 run。
+        created = await createAgentRun({
+          session_id: sessionId,
+          content,
+          client_request_id: clientRequestId,
+          extra: extra || {},
+        })
+      }
+      if (!isCurrentStream(generation)) {
+        return
+      }
+      currentRunId = created.run_id
+      if (typeof created.session_title === 'string' && created.session_title.trim()) {
+        onTitleUpdate?.(created.session_title.trim())
+      }
+      sessionStorage.setItem(`noesis:active-run:${sessionId}`, created.run_id)
+      onMessageStart?.({
+        type: 'message-start',
+        run_id: created.run_id,
+        assistant_message_id: created.assistant_message_id,
       })
 
-      if (!res.ok) {
-        const status = res.status
-        let detail = `请求失败（HTTP ${status}）`
-        if (status === 429) {
-          detail = '请求过于频繁（429），请稍后再试'
-        } else if (status === 401) {
-          detail = '未授权（401），请重新登录'
-        } else if (status === 503) {
-          detail = '服务暂时不可用（503），请稍后再试'
-        }
-        throw new Error(detail)
-      }
-
-      const reader = res.body?.getReader()
-      if (!reader) {
-        throw new Error('无法读取响应流')
-      }
-
-      const decoder = new TextDecoder()
-      let rawBuffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (value) {
-          rawBuffer += decoder.decode(value, { stream: true })
-        }
-        const { frames, rest } = parseSseFrames(rawBuffer)
-        rawBuffer = rest
-        for (const frame of frames) {
-          parseAndDispatchFrame(frame, dispatchFrame)
-        }
-        if (done) {
-          break
-        }
-      }
-
-      if (rawBuffer.trim()) {
-        const flush = `${rawBuffer}\n\n`
-        const { frames: tailFrames } = parseSseFrames(flush)
-        for (const frame of tailFrames) {
-          parseAndDispatchFrame(frame, dispatchFrame)
-        }
-        rawBuffer = ''
-      }
-      if (!userAborted) {
-        settleSuccess()
-      }
+      await followRun(created.run_id, generation)
     } catch (err: unknown) {
-      if (userAborted) {
-        settleSuccess('stopped')
+      if (!isCurrentStream(generation) || userAborted) {
         return
       }
       const e = err as { message?: string, name?: string }
       error.value = e.message ?? '未知错误'
-      settleFailure(e.message ?? '未知错误')
+      if (currentRunId && !terminalObserved) {
+        // 订阅失败不等于 Agent 失败。保留 active run 与当前 parts，交给手动重连恢复。
+        onRunStatus?.('disconnected', '连接已中断，可重新连接')
+      } else {
+        settleFailure(e.message ?? '未知错误')
+      }
     } finally {
-      isLoading.value = false
-      abortController = null
-      cleanupBeforeUnload()
+      if (isCurrentStream(generation)) {
+        isLoading.value = false
+        abortController = null
+        if (streamSettled) {
+          sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
+          currentRunId = null
+        }
+      }
+    }
+  }
+
+  async function resumeActiveRun(sessionId: string): Promise<void> {
+    if (isLoading.value && activeSessionId === sessionId) {
+      return
+    }
+    const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
+    if (!runId) {
+      return
+    }
+    const generation = beginStream(sessionId)
+    currentRunId = runId
+    try {
+      const snapshot = await getAgentRun(runId)
+      dispatchFrame(
+        'run-snapshot',
+        JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+        generation,
+      )
+      if (!streamSettled) {
+        await followRun(runId, generation)
+      }
+    } catch (err) {
+      if (!isCurrentStream(generation)) {
+        return
+      }
+      const message = err instanceof Error ? err.message : '连接恢复失败'
+      error.value = message
+      onRunStatus?.('disconnected', '连接已中断，可稍后重试')
+    } finally {
+      if (isCurrentStream(generation)) {
+        isLoading.value = false
+        abortController = null
+        if (streamSettled) {
+          sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
+          currentRunId = null
+        }
+      }
     }
   }
 
   async function resumeTestCase(sessionId: string, selectedPointNames: string[]) {
-    if (isLoading.value) {
-      return
+    const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
+      || (activeSessionId === sessionId ? currentRunId : null)
+    if (!runId) {
+      throw new Error('当前任务已中断，无法继续生成')
     }
-
-    tool_name_by_call_id.clear()
-    error.value = null
-    streamSettled = false
-    lastFinishReason = undefined
-    userAborted = false
-    abortController = new AbortController()
-    isLoading.value = true
-
-    const qaType = 'TEST_CASE_QA'
-    setupBeforeUnload(sessionId, qaType)
-
-    try {
-      const res = await fetch(`/api/chat/sessions/${sessionId}/test-case/resume`, {
-        method: 'POST',
-        credentials: 'include',
-        signal: abortController.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        body: JSON.stringify({ selected_point_names: selectedPointNames }),
-      })
-
-      if (!res.ok) {
-        const status = res.status
-        let detail = `请求失败（HTTP ${status}）`
-        if (status === 429) {
-          detail = '请求过于频繁（429），请稍后再试'
-        } else if (status === 401) {
-          detail = '未授权（401），请重新登录'
-        } else if (status === 503) {
-          detail = '服务暂时不可用（503），请稍后再试'
-        }
-        throw new Error(detail)
-      }
-
-      const reader = res.body?.getReader()
-      if (!reader) {
-        throw new Error('无法读取响应流')
-      }
-
-      const decoder = new TextDecoder()
-      let rawBuffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (value) {
-          rawBuffer += decoder.decode(value, { stream: true })
-        }
-        const { frames, rest } = parseSseFrames(rawBuffer)
-        rawBuffer = rest
-        for (const frame of frames) {
-          parseAndDispatchFrame(frame, dispatchFrame)
-        }
-        if (done) {
-          break
-        }
-      }
-
-      if (rawBuffer.trim()) {
-        const flush = `${rawBuffer}\n\n`
-        const { frames: tailFrames } = parseSseFrames(flush)
-        for (const frame of tailFrames) {
-          parseAndDispatchFrame(frame, dispatchFrame)
-        }
-        rawBuffer = ''
-      }
-      if (!userAborted) {
-        settleSuccess()
-      }
-    } catch (err: unknown) {
-      if (userAborted) {
-        settleSuccess('stopped')
-        return
-      }
-      const e = err as { message?: string }
-      error.value = e.message ?? '未知错误'
-      settleFailure(e.message ?? '未知错误')
-    } finally {
-      isLoading.value = false
-      abortController = null
-      cleanupBeforeUnload()
+    currentRunId = runId
+    const snapshot = await resumeAgentRunTestCase(runId, selectedPointNames)
+    dispatchFrame('run-snapshot', JSON.stringify({ type: 'run-snapshot', ...snapshot }))
+    if ((!isLoading.value || activeSessionId !== sessionId) && !streamSettled) {
+      void resumeActiveRun(sessionId)
     }
   }
 
@@ -478,91 +561,18 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       grant_scope?: 'once' | 'session' | null
     },
   ) {
-    if (isLoading.value) {
-      return
+    const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
+      || (activeSessionId === sessionId ? currentRunId : null)
+    if (!runId) {
+      throw new Error('当前任务已中断，无法继续确认')
     }
-
-    tool_name_by_call_id.clear()
-    error.value = null
-    streamSettled = false
-    lastFinishReason = undefined
-    userAborted = false
-    abortController = new AbortController()
-    isLoading.value = true
-
-    const qaType = 'SUPER_AGENT_QA'
-    setupBeforeUnload(sessionId, qaType)
-
-    try {
-      const res = await fetch(`/api/chat/sessions/${sessionId}/hitl/resume`, {
-        method: 'POST',
-        credentials: 'include',
-        signal: abortController.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        body: JSON.stringify(body),
-      })
-
-      if (!res.ok) {
-        const status = res.status
-        let detail = `请求失败（HTTP ${status}）`
-        if (status === 429) {
-          detail = '请求过于频繁（429），请稍后再试'
-        } else if (status === 401) {
-          detail = '未授权（401），请重新登录'
-        } else if (status === 503) {
-          detail = '服务暂时不可用（503），请稍后再试'
-        }
-        throw new Error(detail)
-      }
-
-      const reader = res.body?.getReader()
-      if (!reader) {
-        throw new Error('无法读取响应流')
-      }
-
-      const decoder = new TextDecoder()
-      let rawBuffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (value) {
-          rawBuffer += decoder.decode(value, { stream: true })
-        }
-        const { frames, rest } = parseSseFrames(rawBuffer)
-        rawBuffer = rest
-        for (const frame of frames) {
-          parseAndDispatchFrame(frame, dispatchFrame)
-        }
-        if (done) {
-          break
-        }
-      }
-
-      if (rawBuffer.trim()) {
-        const flush = `${rawBuffer}\n\n`
-        const { frames: tailFrames } = parseSseFrames(flush)
-        for (const frame of tailFrames) {
-          parseAndDispatchFrame(frame, dispatchFrame)
-        }
-        rawBuffer = ''
-      }
-      if (!userAborted) {
-        settleSuccess()
-      }
-    } catch (err: unknown) {
-      if (userAborted) {
-        settleSuccess('stopped')
-      } else {
-        const msg = err instanceof Error ? err.message : String(err)
-        settleFailure(msg)
-      }
-    } finally {
-      cleanupBeforeUnload()
-      abortController = null
-      isLoading.value = false
+    currentRunId = runId
+    const snapshot = await resumeAgentRunHitl(runId, body)
+    dispatchFrame('run-snapshot', JSON.stringify({ type: 'run-snapshot', ...snapshot }))
+    // 审批时原订阅可能已因网络中断而退出。POST 只恢复 producer，不会自动
+    // 恢复浏览器订阅，因此此处在没有活跃 followRun 时重新订阅。
+    if ((!isLoading.value || activeSessionId !== sessionId) && !streamSettled) {
+      void resumeActiveRun(sessionId)
     }
   }
 
@@ -574,6 +584,21 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     abortController?.abort()
   }
 
+  async function stopCurrentRun() {
+    if (!currentRunId) {
+      abortStream()
+      return
+    }
+    const runId = currentRunId
+    userAborted = true
+    abortController?.abort()
+    const snapshot = await stopAgentRun(runId)
+    terminalObserved = true
+    onSnapshot?.(snapshot)
+    settleSuccess(snapshot.finish_reason ?? 'stopped')
+    isLoading.value = false
+  }
+
   return {
     isLoading,
     error,
@@ -581,5 +606,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     resumeTestCase,
     resumeHitl,
     abortStream,
+    stopCurrentRun,
+    detachSubscription,
+    resumeActiveRun,
   }
 }

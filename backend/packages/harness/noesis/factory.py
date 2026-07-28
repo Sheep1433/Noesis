@@ -17,6 +17,7 @@ from noesis.middlewares import (
     ContextMetricsMiddleware,
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
+    ModelRetryMiddleware,
     SessionClockMiddleware,
     ToolErrorHandlingMiddleware,
     create_summary_offload_middleware,
@@ -53,7 +54,10 @@ def build_noesis_runtime_middleware(
     model_id: str | None = None,
 ) -> list[AgentMiddleware]:
     """Noesis 运行时防护中间件（clock → repair → offload → loop → limit → metrics）。"""
-    middleware: list[AgentMiddleware] = [SessionClockMiddleware()]
+    middleware: list[AgentMiddleware] = [
+        SessionClockMiddleware(),
+        ModelRetryMiddleware(max_retries=getattr(ModelConfig, "max_retries", 0)),
+    ]
 
     if ModelConfig.dangling_tool_call_repair_enabled:
         middleware.append(DanglingToolCallMiddleware())

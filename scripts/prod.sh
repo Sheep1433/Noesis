@@ -71,12 +71,12 @@ main() {
   start_sandbox_runner
 
   read -r HOST PORT < <(
-    cd "$BACKEND_DIR" && uv run python -c "from config.env import AppConfig; print(AppConfig.app_host, AppConfig.app_port)"
+    cd "$BACKEND_DIR" && uv run python -c "from noesis.config.env import AppConfig; print(AppConfig.app_host, AppConfig.app_port)"
   )
 
   log_info "启动后端 (uvicorn, reload=off) ${HOST}:${PORT} ..."
   cd "$BACKEND_DIR"
-  uv run uvicorn server:app --host "$HOST" --port "$PORT" &
+  uv run uvicorn app:app --host "$HOST" --port "$PORT" &
   BACKEND_PID=$!
   log_info "Backend started (PID: $BACKEND_PID)"
   wait_for_backend "启动后"

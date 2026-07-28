@@ -31,6 +31,7 @@ declare module 'vue' {
     LayoutSlotCenterPanel: typeof import('./src/components/Layout/SlotCenterPanel.vue')['default']
     LayoutSlotFrame: typeof import('./src/components/Layout/SlotFrame.vue')['default']
     MarkdownPreview: typeof import('./src/components/MarkdownPreview/index.vue')['default']
+    NAlert: typeof import('naive-ui')['NAlert']
     NavigationMobileBottomNav: typeof import('./src/components/Navigation/MobileBottomNav.vue')['default']
     NavigationNavBar: typeof import('./src/components/Navigation/NavBar.vue')['default']
     NavigationNavFooter: typeof import('./src/components/Navigation/NavFooter.vue')['default']

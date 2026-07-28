@@ -186,6 +186,25 @@ class AgentRuntimeYamlSection(BaseModel):
 
 class StreamYamlSection(BaseModel):
     sse_keepalive_interval_seconds: float = Field(default=25.0, ge=0)
+    checkpoint_interval_seconds: float = Field(default=2.0, gt=0)
+    persistence_timeout_seconds: float = Field(default=5.0, gt=0)
+    persistence_retry_interval_seconds: float = Field(default=0.25, gt=0)
+    run_event_buffer_max_events: int = Field(default=2000, gt=0)
+    run_event_buffer_max_bytes: int = Field(default=4 * 1024 * 1024, gt=0)
+    run_subscriber_queue_max_events: int = Field(default=512, gt=0)
+    run_subscriber_queue_max_bytes: int = Field(default=1024 * 1024, gt=0)
+    run_max_active: int = Field(default=100, gt=0)
+    run_max_active_per_user: int = Field(default=4, gt=0)
+    run_terminal_retention_seconds: float = Field(default=300.0, ge=0)
+    run_max_duration_seconds: float = Field(default=900.0, gt=0)
+    run_max_output_bytes: int = Field(default=16 * 1024 * 1024, gt=0)
+    run_hitl_pending_timeout_seconds: float = Field(default=86400.0, gt=0)
+    run_shutdown_drain_seconds: float = Field(default=10.0, ge=0)
+    run_cancel_grace_seconds: float = Field(default=2.0, ge=0)
+    run_tool_timeout_seconds: float = Field(default=120.0, gt=0)
+    run_channel_queue_max_batches: int = Field(default=128, gt=0)
+    run_channel_queue_max_bytes: int = Field(default=1024 * 1024, gt=0)
+    run_channel_drain_seconds: float = Field(default=5.0, gt=0)
 
 
 class QdrantYamlSection(BaseModel):

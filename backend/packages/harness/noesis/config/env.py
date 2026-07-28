@@ -138,6 +138,25 @@ class ModelSettings:
 @dataclass(frozen=True)
 class StreamSettings:
     sse_keepalive_interval_seconds: float
+    checkpoint_interval_seconds: float
+    persistence_timeout_seconds: float
+    persistence_retry_interval_seconds: float
+    run_event_buffer_max_events: int
+    run_event_buffer_max_bytes: int
+    run_subscriber_queue_max_events: int
+    run_subscriber_queue_max_bytes: int
+    run_max_active: int
+    run_max_active_per_user: int
+    run_terminal_retention_seconds: float
+    run_max_duration_seconds: float
+    run_max_output_bytes: int
+    run_hitl_pending_timeout_seconds: float
+    run_shutdown_drain_seconds: float
+    run_cancel_grace_seconds: float
+    run_tool_timeout_seconds: float
+    run_channel_queue_max_batches: int
+    run_channel_queue_max_bytes: int
+    run_channel_drain_seconds: float
 
 
 @dataclass(frozen=True)
@@ -427,6 +446,25 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
         sse_keepalive_interval_seconds=_legacy_env_float(
             "SSE_KEEPALIVE_INTERVAL_SECONDS", stream.sse_keepalive_interval_seconds
         ),
+        checkpoint_interval_seconds=stream.checkpoint_interval_seconds,
+        persistence_timeout_seconds=stream.persistence_timeout_seconds,
+        persistence_retry_interval_seconds=stream.persistence_retry_interval_seconds,
+        run_event_buffer_max_events=stream.run_event_buffer_max_events,
+        run_event_buffer_max_bytes=stream.run_event_buffer_max_bytes,
+        run_subscriber_queue_max_events=stream.run_subscriber_queue_max_events,
+        run_subscriber_queue_max_bytes=stream.run_subscriber_queue_max_bytes,
+        run_max_active=stream.run_max_active,
+        run_max_active_per_user=stream.run_max_active_per_user,
+        run_terminal_retention_seconds=stream.run_terminal_retention_seconds,
+        run_max_duration_seconds=stream.run_max_duration_seconds,
+        run_max_output_bytes=stream.run_max_output_bytes,
+        run_hitl_pending_timeout_seconds=stream.run_hitl_pending_timeout_seconds,
+        run_shutdown_drain_seconds=stream.run_shutdown_drain_seconds,
+        run_cancel_grace_seconds=stream.run_cancel_grace_seconds,
+        run_tool_timeout_seconds=stream.run_tool_timeout_seconds,
+        run_channel_queue_max_batches=stream.run_channel_queue_max_batches,
+        run_channel_queue_max_bytes=stream.run_channel_queue_max_bytes,
+        run_channel_drain_seconds=stream.run_channel_drain_seconds,
     )
 
 

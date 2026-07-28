@@ -9,6 +9,7 @@ declare global {
   const EffectScope: typeof import('vue')['EffectScope']
   const _: typeof import('lodash-es')
   const applyThemePreset: typeof import('./src/hooks/useThemePreset')['applyThemePreset']
+  const assertStrictMessageSequence: typeof import('./src/store/business/chatHistorySequence')['assertStrictMessageSequence']
   const asyncComputed: typeof import('@vueuse/core')['asyncComputed']
   const autoResetRef: typeof import('@vueuse/core')['autoResetRef']
   const candidateToMention: typeof import('./src/hooks/useMentionCatalog')['candidateToMention']
@@ -358,6 +359,7 @@ declare module 'vue' {
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly _: UnwrapRef<typeof import('lodash-es')>
     readonly applyThemePreset: UnwrapRef<typeof import('./src/hooks/useThemePreset')['applyThemePreset']>
+    readonly assertStrictMessageSequence: UnwrapRef<typeof import('./src/store/business/chatHistorySequence')['assertStrictMessageSequence']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
     readonly autoResetRef: UnwrapRef<typeof import('@vueuse/core')['autoResetRef']>
     readonly candidateToMention: UnwrapRef<typeof import('./src/hooks/useMentionCatalog')['candidateToMention']>
