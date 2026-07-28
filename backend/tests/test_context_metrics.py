@@ -142,7 +142,10 @@ def test_context_metrics_middleware_records_registry() -> None:
     )
     with (
         patch("noesis.middlewares.context_metrics_middleware.ModelConfig", cfg),
-        patch("noesis.llm.model_limits.resolve_context_max_tokens", return_value=200_000),
+        patch(
+            "noesis.middlewares.context_metrics.resolve_context_max_tokens",
+            return_value=200_000,
+        ),
     ):
         mw.wrap_model_call(request, lambda req: MagicMock())
     snap = ContextMetricsRegistry.peek("sess-ctx-1")
