@@ -1,25 +1,5 @@
 import { authFetch, parseAuthJson } from '@/utils/authHttp'
 
-export type SecretWriteAction = 'keep' | 'replace' | 'clear'
-
-export type SecretWriteCommand = {
-  action: SecretWriteAction
-  value?: string
-}
-
-export type SecretSummary = {
-  configured: boolean
-  suffix?: string | null
-  updated_at?: string | null
-}
-
-export type ActionableError = {
-  code: string
-  message: string
-  retryable: boolean
-  correlation_id?: string | null
-}
-
 export type SettingsCapabilities = {
   provider_models: boolean
   mcp_management: boolean
@@ -39,35 +19,6 @@ export async function getSettingsCapabilities() {
   return parseAuthJson<SettingsCapabilities>(res)
 }
 
-export type ProviderConnection = {
-  id: string
-  provider_type: 'openai' | 'deepseek' | 'qwen' | 'minimax' | 'opencode'
-  display_name: string
-  base_url: string
-  enabled: boolean
-  secret: SecretSummary
-  version: number
-  created_at: number
-  updated_at: number
-}
-
-export type ProviderModel = {
-  id: string
-  name: string
-  capabilities: Array<'chat' | 'vision' | 'embedding' | 'rerank'>
-}
-
-export type ModelPurpose = 'chat' | 'vision' | 'embedding' | 'rerank'
-export type ModelPurposeBinding = {
-  purpose: ModelPurpose
-  provider_id: string
-  model_id: string
-  model_name: string
-  capabilities: ModelPurpose[]
-  version: number
-  updated_at: number
-}
-
 async function settingsJson<T>(path: string, method = 'GET', body?: unknown) {
   const res = await authFetch(new Request(`${location.origin}${path}`, {
     method,
@@ -76,50 +27,6 @@ async function settingsJson<T>(path: string, method = 'GET', body?: unknown) {
     body: body === undefined ? undefined : JSON.stringify(body),
   }))
   return parseAuthJson<T>(res)
-}
-
-export async function listProviders() {
-  return (await settingsJson<{ providers: ProviderConnection[] }>('/api/user/providers')).providers
-}
-
-export function createProvider(payload: Omit<ProviderConnection, 'id' | 'secret' | 'version' | 'created_at' | 'updated_at'> & { secret: SecretWriteCommand }) {
-  return settingsJson<ProviderConnection>('/api/user/providers', 'POST', payload)
-}
-
-export function updateProvider(provider: ProviderConnection, payload: Partial<ProviderConnection> & { secret: SecretWriteCommand }) {
-  return settingsJson<ProviderConnection>(`/api/user/providers/${encodeURIComponent(provider.id)}`, 'PUT', {
-    provider_type: payload.provider_type ?? provider.provider_type,
-    display_name: payload.display_name ?? provider.display_name,
-    base_url: payload.base_url ?? provider.base_url,
-    enabled: payload.enabled ?? provider.enabled,
-    version: provider.version,
-    secret: payload.secret,
-  })
-}
-
-export function deleteProvider(id: string) {
-  return settingsJson(`/api/user/providers/${encodeURIComponent(id)}`, 'DELETE')
-}
-
-export function testProvider(id: string) {
-  return settingsJson<{ ok: boolean, message: string, model_count: number, error_category: string }>(`/api/user/providers/${encodeURIComponent(id)}/test`, 'POST')
-}
-
-export async function discoverProviderModels(id: string) {
-  return (await settingsJson<{ models: ProviderModel[] }>(`/api/user/providers/${encodeURIComponent(id)}/models`)).models
-}
-
-export async function listModelBindings() {
-  return (await settingsJson<{ bindings: ModelPurposeBinding[] }>('/api/user/model-bindings')).bindings
-}
-
-export function bindModel(purpose: ModelPurpose, providerId: string, model: ProviderModel) {
-  return settingsJson<ModelPurposeBinding>(`/api/user/model-bindings/${purpose}`, 'PUT', {
-    provider_id: providerId,
-    model_id: model.id,
-    model_name: model.name,
-    capabilities: model.capabilities,
-  })
 }
 
 export type MemoryFilePayload = {

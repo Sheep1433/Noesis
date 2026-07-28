@@ -57,7 +57,6 @@ def test_transfer_recursively_excludes_secrets_and_sensitive_headers() -> None:
 
 @pytest.mark.asyncio
 async def test_export_covers_domains_without_reversible_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
-    provider = SimpleNamespace(provider_type="openai", display_name="P", base_url="https://user:pass@example.com/v1?api_key=leak", enabled=True, secret_ciphertext="encrypted-leak")
     task = SimpleNamespace(name="T", cron_expr="0 9 * * *", timezone="Asia/Shanghai", enabled=True, qa_type="SUPER_AGENT_QA", prompt="hello", session_binding="none", delivery="none")
     preference = SimpleNamespace(event_type="automation.failed", delivery_surface="web", enabled=True)
 
@@ -67,8 +66,6 @@ async def test_export_covers_domains_without_reversible_secrets(monkeypatch: pyt
 
     async def execute(statement):
         sql = str(statement)
-        if "user_provider_connections" in sql:
-            return Result([provider])
         if "user_scheduled_tasks" in sql:
             return Result([task])
         return Result([preference])
@@ -81,8 +78,8 @@ async def test_export_covers_domains_without_reversible_secrets(monkeypatch: pyt
     exported = await SettingsTransferService.export(db, 1)
     rendered = json.dumps(exported, ensure_ascii=False)
 
-    assert set(exported["domains"]) == {"providers", "automation", "channels", "memory", "notifications", "mcp"}
-    for forbidden in ("encrypted-leak", "Bearer leak", "user:pass", "api_key=leak", "bot_token"):
+    assert set(exported["domains"]) == {"automation", "channels", "memory", "notifications", "mcp"}
+    for forbidden in ("Bearer leak", "bot_token"):
         assert forbidden not in rendered
 
 
@@ -91,6 +88,8 @@ def test_import_rejects_secret_fields_and_unsupported_version() -> None:
         SettingsTransferService._validate({"schema_version": 1, "domains": {"providers": [{"api_key": "leak"}]}})
     with pytest.raises(ValueError, match="版本"):
         SettingsTransferService._validate({"schema_version": 99, "domains": {}})
+    with pytest.raises(ValueError, match="不支持的设置域"):
+        SettingsTransferService._validate({"schema_version": 1, "domains": {"providers": []}})
 
 
 @pytest.mark.asyncio

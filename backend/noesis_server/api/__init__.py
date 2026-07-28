@@ -8,7 +8,6 @@ from .auth_api import auth_router as auth_router
 from .mcp_api import mcp_router as mcp_router
 from .user_settings_api import user_settings_router as user_settings_router
 from .settings_api import settings_router as settings_router
-from .provider_api import provider_router as provider_router
 
 __all__ = [
     "user_router",
@@ -21,5 +20,4 @@ __all__ = [
     "mcp_router",
     "user_settings_router",
     "settings_router",
-    "provider_router",
 ]

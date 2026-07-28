@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.yaml_config import load_app_yaml
 from noesis_server.common.security.secrets import redact_sensitive
-from noesis_server.exceptions.exception import ConflictException, NotFoundException
 from noesis_server.infrastructure.database.repositories.settings import SettingsRepository
 from noesis_server.models.settings_models import TUserSettingsAudit
 from noesis_server.schemas.settings_vo import SettingsAuditItem, SettingsAuditPage, SettingsCapabilities
@@ -55,34 +54,3 @@ class SettingsService:
             page_size=page_size,
             total=total,
         )
-
-    @classmethod
-    async def update_provider_with_audit(
-        cls,
-        db: AsyncSession,
-        *,
-        user_id: int,
-        provider_id: str,
-        expected_version: int,
-        values: dict,
-        summary: dict,
-    ) -> None:
-        repo = SettingsRepository(db)
-        if await repo.get_provider(user_id, provider_id) is None:
-            raise NotFoundException(data="", message="Provider 不存在")
-        try:
-            changed = await repo.update_provider(user_id, provider_id, expected_version, values)
-            if not changed:
-                raise ConflictException(data="", message="设置已被其他请求更新，请刷新后重试")
-            await cls.append_audit(
-                db,
-                user_id=user_id,
-                action="provider.update",
-                setting_domain="provider",
-                target_id=provider_id,
-                summary=summary,
-            )
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise

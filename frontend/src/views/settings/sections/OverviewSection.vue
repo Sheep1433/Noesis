@@ -8,7 +8,7 @@ const emit = defineEmits<{
 }>()
 
 const cards: { key: SettingsSectionId, title: string, desc: string }[] = [
-  { key: 'models', title: '模型', desc: 'Provider 连接与默认用途' },
+  { key: 'models', title: '模型', desc: '查看平台可用模型' },
   { key: 'profile', title: '画像', desc: '编辑 USER.md 用户画像' },
   { key: 'memory', title: '记忆', desc: '编辑 AGENTS.md 跨会话偏好' },
   { key: 'automation', title: '自动化', desc: '定时任务与启停' },

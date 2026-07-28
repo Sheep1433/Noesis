@@ -10,46 +10,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from noesis_server.infrastructure.database.engine import Base
 
 
-class TUserProviderConnection(Base):
-    __tablename__ = "user_provider_connections"
-    __table_args__ = (
-        Index("idx_user_provider_connections_user", "user_id"),
-        UniqueConstraint("user_id", "display_name", name="uq_user_provider_connections_name"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    provider_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    secret_ciphertext: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    secret_suffix: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
-    secret_updated_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
-
-
-class TUserModelPurposeBinding(Base):
-    __tablename__ = "user_model_purpose_bindings"
-    __table_args__ = (
-        UniqueConstraint("user_id", "purpose", name="uq_user_model_purpose_binding"),
-        Index("idx_user_model_purpose_bindings_provider", "user_id", "provider_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
-    provider_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    model_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    model_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
-
-
 class TUserScheduledTaskRun(Base):
     __tablename__ = "user_scheduled_task_runs"
     __table_args__ = (

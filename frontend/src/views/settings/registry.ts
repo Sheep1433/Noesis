@@ -29,8 +29,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
   {
     id: 'models',
     label: '模型',
-    description: 'Provider 连接与默认模型',
-    keywords: ['Provider', 'API Key', '聊天', '视觉', 'Embedding', 'Rerank'],
+    description: '平台可用模型目录',
+    keywords: ['模型', '聊天', '视觉', '默认'],
   },
   {
     id: 'profile',
