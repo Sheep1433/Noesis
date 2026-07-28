@@ -7,11 +7,10 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.domain.chat.delivery.channel_health import channel_health
-from noesis_server.models.settings_models import TUserProviderConnection
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
 from noesis_server.services.messaging_channel_service import MessagingChannelService
 
@@ -37,14 +36,9 @@ class SettingsDiagnosticsService:
                 await check_db.execute(text("SELECT 1"))
             return "healthy", "数据服务正常", None
 
-        async def providers():
-            from noesis_server.services.provider_service import ProviderService
-            async with AsyncSessionLocal() as check_db:
-                rows = list((await check_db.execute(select(TUserProviderConnection).where(TUserProviderConnection.user_id == user_id, TUserProviderConnection.enabled.is_(True)))).scalars())
-                if not rows:
-                    return "unknown", "尚未启用模型连接", "configure_provider"
-                results = await asyncio.gather(*(ProviderService.probe(check_db, user_id, row.id) for row in rows))
-            return ("healthy", "模型连接正常", None) if all(item.ok for item in results) else ("degraded", "部分模型连接需要检查", "check_provider")
+        async def models():
+            from noesis.llm.catalog import list_public_models
+            return ("healthy", "模型目录可用", None) if list_public_models() else ("unavailable", "暂无可用模型", "retry")
 
         async def mcp():
             from noesis_server.services.mcp_service import McpService
@@ -81,7 +75,7 @@ class SettingsDiagnosticsService:
                 return "unknown", "执行环境状态未知", "retry"
             return "healthy", "执行环境可用", None
 
-        checks = {"models": providers, "mcp": mcp, "scheduler": scheduler, "channels": channels, "database": database, "checkpoint": checkpoint, "qdrant": qdrant, "sandbox": sandbox}
+        checks = {"models": models, "mcp": mcp, "scheduler": scheduler, "channels": channels, "database": database, "checkpoint": checkpoint, "qdrant": qdrant, "sandbox": sandbox}
         items = await asyncio.gather(*(cls._run(name, check) for name, check in checks.items()))
         overall = "healthy" if all(item["status"] in {"healthy", "unknown"} for item in items) else "degraded"
         return {"status": overall, "checked_at": int(time.time() * 1000), "items": items}

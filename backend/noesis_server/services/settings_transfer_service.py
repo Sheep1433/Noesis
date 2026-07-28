@@ -7,14 +7,13 @@ import json
 import time
 import uuid
 from copy import deepcopy
-from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.mcp_config import load_user_mcp_json
 from noesis_server.models.scheduled_task_models import TUserScheduledTask
-from noesis_server.models.settings_models import TUserNotificationPreference, TUserProviderConnection
+from noesis_server.models.settings_models import TUserNotificationPreference
 from noesis_server.services.messaging_channel_service import MessagingChannelService
 from noesis_server.services.mcp_service import McpService
 from noesis_server.services.scheduled_task_service import ScheduledTaskService
@@ -39,23 +38,13 @@ def _strip_sensitive(value):
     return value
 
 
-def _safe_url(value: str) -> str:
-    parts = urlsplit(value)
-    host = parts.hostname or ""
-    if parts.port:
-        host = f"{host}:{parts.port}"
-    return urlunsplit((parts.scheme, host, parts.path, "", ""))
-
-
 class SettingsTransferService:
     @classmethod
     async def export(cls, db: AsyncSession, user_id: int) -> dict:
-        providers = list((await db.execute(select(TUserProviderConnection).where(TUserProviderConnection.user_id == user_id))).scalars())
         tasks = list((await db.execute(select(TUserScheduledTask).where(TUserScheduledTask.user_id == user_id, TUserScheduledTask.deleted_at.is_(None)))).scalars())
         preferences = list((await db.execute(select(TUserNotificationPreference).where(TUserNotificationPreference.user_id == user_id))).scalars())
         mcp = load_user_mcp_json(user_id).mcpServers
         domains = {
-            "providers": [{"provider_type": row.provider_type, "display_name": row.display_name, "base_url": _safe_url(row.base_url), "enabled": row.enabled} for row in providers],
             "automation": [{key: getattr(row, key) for key in ("name", "cron_expr", "timezone", "enabled", "qa_type", "prompt", "session_binding", "delivery")} for row in tasks],
             "channels": [{key: item.get(key) for key in ("type", "enabled", "display_name", "pairing_chat_id", "default_qa_type", "default_session_id", "session_strategy", "delivery_preference")} for item in MessagingChannelService.list_channels(user_id)],
             "memory": {name: UserMemoryService.read_file(user_id, name)["content"] for name in ("USER.md", "AGENTS.md")},
@@ -83,21 +72,6 @@ class SettingsTransferService:
             raise RuntimeError("设置已变化，请重新预览后再导入")
         applied: list[str] = []
         domains = manifest["domains"]
-        if "providers" in domains:
-            try:
-                existing = {row.display_name: row for row in (await db.execute(select(TUserProviderConnection).where(TUserProviderConnection.user_id == user_id))).scalars()}
-                now = int(time.time() * 1000)
-                for item in domains["providers"]:
-                    row = existing.get(item["display_name"])
-                    if row is None:
-                        db.add(TUserProviderConnection(id=str(uuid.uuid4()), user_id=user_id, provider_type=item["provider_type"], display_name=item["display_name"], base_url=item["base_url"], enabled=False, version=1, created_at=now, updated_at=now))
-                    else:
-                        row.provider_type, row.base_url, row.enabled, row.version, row.updated_at = item["provider_type"], item["base_url"], bool(item["enabled"] and row.secret_ciphertext), row.version + 1, now
-                await db.commit()
-            except Exception:
-                await db.rollback()
-                raise
-            applied.append("providers")
         if "automation" in domains:
             existing_tasks = {item["name"]: item for item in await ScheduledTaskService.list_tasks(db, user_id)}
             try:
@@ -199,7 +173,7 @@ class SettingsTransferService:
             raise ValueError("不支持的设置文件版本")
         if deepcopy(manifest) != _strip_sensitive(manifest):
             raise ValueError("设置文件包含不允许导入的敏感字段")
-        allowed = {"providers", "automation", "channels", "memory", "notifications", "mcp"}
+        allowed = {"automation", "channels", "memory", "notifications", "mcp"}
         if not set(manifest["domains"]).issubset(allowed):
             raise ValueError("设置文件包含不支持的设置域")
 

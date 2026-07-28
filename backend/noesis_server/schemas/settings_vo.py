@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
-
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class SecretWriteAction(StrEnum):
@@ -41,7 +39,7 @@ class ActionableError(BaseModel):
 
 
 class SettingsCapabilities(BaseModel):
-    provider_models: bool = Field(description="模型与 Provider 设置是否开放")
+    provider_models: bool = Field(description="平台模型目录是否开放")
     mcp_management: bool = Field(description="MCP 表单管理是否开放")
     automation_operations: bool = Field(description="自动化运行历史是否开放")
     channel_operations: bool = Field(description="通道诊断是否开放")
@@ -65,70 +63,3 @@ class SettingsAuditPage(BaseModel):
     page: int
     page_size: int
     total: int
-
-
-class ProviderCreate(BaseModel):
-    provider_type: Literal["openai", "deepseek", "qwen", "minimax", "opencode"]
-    display_name: str = Field(min_length=1, max_length=200)
-    base_url: str = Field(min_length=8, max_length=500)
-    enabled: bool = True
-    secret: SecretWriteCommand
-
-    @field_validator("base_url")
-    @classmethod
-    def validate_base_url(cls, value: str) -> str:
-        normalized = value.strip().rstrip("/")
-        if not normalized.startswith(("https://", "http://")):
-            raise ValueError("Base URL 必须使用 http 或 https")
-        return normalized
-
-
-class ProviderUpdate(BaseModel):
-    provider_type: Literal["openai", "deepseek", "qwen", "minimax", "opencode"]
-    display_name: str = Field(min_length=1, max_length=200)
-    base_url: str = Field(min_length=8, max_length=500)
-    enabled: bool
-    version: int = Field(ge=1)
-    secret: SecretWriteCommand
-
-    _validate_base_url = field_validator("base_url")(ProviderCreate.validate_base_url.__func__)
-
-
-class ProviderView(BaseModel):
-    id: str
-    provider_type: str
-    display_name: str
-    base_url: str
-    enabled: bool
-    secret: SecretSummary
-    version: int
-    created_at: int
-    updated_at: int
-
-
-class ProviderProbeResult(BaseModel):
-    ok: bool
-    checked_at: int
-    error_category: Literal["authentication", "timeout", "connection", "invalid_response", "provider", "none"]
-    message: str
-    model_count: int = 0
-    correlation_id: str | None = None
-
-
-class ProviderModel(BaseModel):
-    id: str
-    name: str
-    capabilities: list[Literal["chat", "vision", "embedding", "rerank"]]
-
-
-class ModelPurposeBindingWrite(BaseModel):
-    provider_id: str
-    model_id: str = Field(min_length=1, max_length=200)
-    model_name: str = Field(min_length=1, max_length=200)
-    capabilities: list[Literal["chat", "vision", "embedding", "rerank"]]
-
-
-class ModelPurposeBindingView(ModelPurposeBindingWrite):
-    purpose: Literal["chat", "vision", "embedding", "rerank"]
-    version: int
-    updated_at: int

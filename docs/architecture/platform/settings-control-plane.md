@@ -7,12 +7,12 @@
 
 设置页统一管理模型连接与默认用途、MCP、自动化运行、Telegram 通道、用户画像与记忆、通知偏好、系统诊断和设置迁移。聊天 `/api/chat` 的请求字段、SSE 事件和 assistant 单行终态落库契约保持不变。
 
-Provider 凭据、通道 Token 与用户 MCP Header 使用 `SETTINGS_ENCRYPTION_KEY` 静态加密；读取接口只返回脱敏状态，未配置加密密钥时拒绝新增敏感值。
+通道 Token 与用户 MCP Header 使用 `SETTINGS_ENCRYPTION_KEY` 静态加密；读取接口只返回脱敏状态，未配置加密密钥时拒绝新增敏感值。模型 Provider 与凭据由部署者统一配置，用户侧不接收或保存 Provider API Key。
 
 ## 数据与安全
 
-- migration `202607260001` 创建用户 Provider、模型用途绑定、自动化运行记录、通知偏好和设置审计表，并为定时任务增加软删除时间。
-- Provider API Key 与通道 Token 静态加密保存；读取、日志、审计、诊断和导出只使用脱敏模型。
+- migration `202607260001` 创建设置控制面基础表，`202607280001` 删除用户 Provider 与模型用途绑定表；自动化运行记录、通知偏好和设置审计继续保留。
+- 通道 Token 静态加密保存；读取、日志、审计、诊断和导出只使用脱敏模型。
 - 新增设置 API 统一使用 Cookie Session；写请求校验 CSRF，资源查询始终携带当前用户 id。
 - `USER.md`、`AGENTS.md` 与 L2 日记继续使用同一用户记忆目录；上下文预览复用 Agent 运行时解析器且不调用模型或写入记忆。
 
@@ -20,7 +20,7 @@ Provider 凭据、通道 Token 与用户 MCP Header 使用 `SETTINGS_ENCRYPTION_
 
 `settings_features` 下的开关分别控制：
 
-- `provider_models`
+- `provider_models`：控制平台模型目录是否在设置页开放，不代表用户可管理 Provider。
 - `mcp_management`
 - `automation_operations`
 - `channel_operations`

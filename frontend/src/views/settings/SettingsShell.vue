@@ -10,8 +10,8 @@ import CapabilitiesSection from './sections/CapabilitiesSection.vue'
 import ChannelsSection from './sections/ChannelsSection.vue'
 import DiagnosticsSection from './sections/DiagnosticsSection.vue'
 import MemoryEditorSection from './sections/MemoryEditorSection.vue'
-import ModelProviderSection from './sections/ModelProviderSection.vue'
 import OverviewSection from './sections/OverviewSection.vue'
+import PlatformModelsSection from './sections/PlatformModelsSection.vue'
 import SettingsNav from './SettingsNav.vue'
 
 const route = useRoute()
@@ -83,7 +83,7 @@ onBeforeRouteLeave(async () => confirmDiscard())
       <SettingsNav :section="section" @select="onGoto" />
       <div class="settings-main">
         <OverviewSection v-if="section === 'overview'" @goto="onGoto" />
-        <ModelProviderSection v-else-if="section === 'models'" @dirty-change="hasUnsavedChanges = $event" />
+        <PlatformModelsSection v-else-if="section === 'models'" />
         <MemoryEditorSection
           v-else-if="section === 'profile'"
           file="USER.md"
