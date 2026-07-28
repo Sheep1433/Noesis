@@ -101,8 +101,6 @@ loop_detection:
   hard_limit: 5
   window_size: 20
   max_tracked_threads: 100
-  tool_freq_warn: 30
-  tool_freq_hard_limit: 50
 
 agent_runtime:
   dangling_tool_call_repair_enabled: true
