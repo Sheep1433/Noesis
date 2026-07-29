@@ -128,7 +128,7 @@ function coerceToolStatus(p: Record<string, unknown>): ToolRunStatus {
   return 'success'
 }
 
-function coerceToolState(p: Record<string, unknown>): ToolLifecycleState {
+function parseToolState(p: Record<string, unknown>): ToolLifecycleState {
   const state = p.state
   if (
     state === 'running'
@@ -141,16 +141,7 @@ function coerceToolState(p: Record<string, unknown>): ToolLifecycleState {
   ) {
     return state
   }
-  if (p.timed_out === true || p.outcome === 'timed_out') {
-    return 'timed_out'
-  }
-  if (p.status === 'error' || p.error != null || p.outcome === 'command_failed') {
-    return 'failed'
-  }
-  if (p.status === 'running' || p.status === 'streaming') {
-    return 'running'
-  }
-  return 'succeeded'
+  throw new Error('工具状态协议错误')
 }
 
 export function isTerminalToolState(state: ToolLifecycleState): boolean {
@@ -423,7 +414,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         input,
         output: typeof rec.output === 'string' ? rec.output : '',
         status: coerceToolStatus(rec),
-        state: coerceToolState(rec),
+        state: parseToolState(rec),
         error: rec.error != null ? String(rec.error) : null,
         errorCategory: rec.errorCategory != null ? String(rec.errorCategory) : null,
         duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
@@ -558,7 +549,10 @@ export function assistantPartsStillStreaming(parts: UiPart[]): boolean {
   })
 }
 
-function finalizeStreamingParts(parts: UiPart[], toolRunningAs: 'success' | 'error'): UiPart[] {
+function finalizeStreamingParts(
+  parts: UiPart[],
+  unresolvedToolState: 'failed' | 'cancelled',
+): UiPart[] {
   return parts.map((p) => {
     if (p.type === 'text' && p.status === 'streaming') {
       return { ...p, status: 'completed' }
@@ -566,22 +560,21 @@ function finalizeStreamingParts(parts: UiPart[], toolRunningAs: 'success' | 'err
     if (p.type === 'reasoning' && p.status === 'streaming') {
       return { ...p, status: 'completed' }
     }
-    if (p.type === 'tool' && p.status === 'running') {
-      if (toolRunningAs === 'error') {
-        return {
-          ...p,
-          status: 'error',
-          error: p.error || '工具未返回结果',
-        }
+    if (p.type === 'tool' && !isTerminalToolState(p.state)) {
+      return {
+        ...p,
+        status: 'error',
+        state: unresolvedToolState,
+        outcome: unresolvedToolState,
+        error: p.error || (unresolvedToolState === 'cancelled' ? '本次操作已停止' : '工具未返回结果'),
       }
-      return { ...p, status: 'success' }
     }
     return p
   }) as UiPart[]
 }
 
 export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
-  return finalizeStreamingParts(parts, 'success')
+  return finalizeStreamingParts(parts, 'failed')
 }
 
 const USER_STOP_TOOL_ERROR = '用户已停止生成'
@@ -603,12 +596,11 @@ export function appendUserStopNotice(parts: UiPart[]): UiPart[] {
   if (partsContainUserStopNotice(parts)) {
     return parts
   }
-  const completed = finalizePartsOnStreamError(parts).map((p) => {
-    if (p.type === 'tool' && p.status === 'error' && p.error === '工具未返回结果') {
-      return { ...p, error: USER_STOP_TOOL_ERROR }
-    }
-    return p
-  }) as UiPart[]
+  const completed = finalizeStreamingParts(parts, 'cancelled').map((p) =>
+    p.type === 'tool' && p.state === 'cancelled'
+      ? { ...p, error: USER_STOP_TOOL_ERROR }
+      : p,
+  ) as UiPart[]
 
   const hasProse = completed.some((p) => {
     if (p.type === 'text' || p.type === 'reasoning') {
@@ -654,7 +646,7 @@ export function appendUserStopNotice(parts: UiPart[]): UiPart[] {
 
 /** 流式失败收尾：未完成工具标为 error，避免误显示「完成」。 */
 export function finalizePartsOnStreamError(parts: UiPart[]): UiPart[] {
-  return finalizeStreamingParts(parts, 'error')
+  return finalizeStreamingParts(parts, 'failed')
 }
 
 function hasToolErrorPart(parts: UiPart[]): boolean {

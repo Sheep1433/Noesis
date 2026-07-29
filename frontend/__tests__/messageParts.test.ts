@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyToolOutput, assistantToolFailureSummary, normalizeApiContent, TOOL_STATE_LABELS } from '@/views/chat/messageParts'
+import { parseTaskToolOutput } from '@/utils/parseTaskTool'
+import { applyToolOutput, assistantToolFailureSummary, markStreamingPartsComplete, normalizeApiContent, TOOL_STATE_LABELS } from '@/views/chat/messageParts'
 
 describe('message parts snapshot normalization', () => {
   it('兼容旧消息并严格解析 citation 与 retrieval parts', () => {
@@ -130,6 +131,35 @@ describe('message parts snapshot normalization', () => {
     expect(assistantToolFailureSummary(afterLateEvent)).toEqual({
       hasFailure: true,
       hasVisibleText: true,
+    })
+  })
+
+  it('缺少权威 state 时拒绝猜测工具状态', () => {
+    expect(() => normalizeApiContent({
+      parts: [{ type: 'tool', tool_call_id: 'call-1', name: 'execute', status: 'success' }],
+    })).toThrow('工具状态协议错误')
+  })
+
+  it('finish 收口未完成工具时同时更新 status 与 state', () => {
+    const parts = normalizeApiContent({
+      parts: [{ type: 'tool', tool_call_id: 'call-1', name: 'execute', status: 'running', state: 'running' }],
+    }).parts
+    expect(markStreamingPartsComplete(parts)[0]).toMatchObject({
+      type: 'tool',
+      status: 'error',
+      state: 'failed',
+      outcome: 'failed',
+    })
+  })
+
+  it('子 Agent 完成状态不依赖英文输出前缀', () => {
+    expect(parseTaskToolOutput({ state: 'succeeded', status: 'success', output: '研究已完成' })).toEqual({
+      status: 'completed',
+      result: '研究已完成',
+    })
+    expect(parseTaskToolOutput({ state: 'succeeded', status: 'success', output: '' })).toEqual({
+      status: 'completed',
+      result: undefined,
     })
   })
 })
