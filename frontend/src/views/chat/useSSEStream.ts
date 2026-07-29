@@ -19,6 +19,8 @@ export interface SSEStreamOptions {
   onUsageUpdate?: (usage: { input_tokens: number, output_tokens: number, total_tokens?: number }) => void
   onContextUpdate?: (context: { current_tokens: number, max_tokens: number, used_percentage: number }) => void
   onTextDelta?: (text: string, parent_task_call_id?: string) => void
+  onTextAnnotation?: (textPartId: string, annotation: Record<string, unknown>) => void
+  onRetrievalResults?: (part: Record<string, unknown>) => void
   onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
   onReasoningStart?: (data: Record<string, unknown>) => void
   onReasoningEnd?: (data: Record<string, unknown>) => void
@@ -75,6 +77,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onUsageUpdate,
     onContextUpdate,
     onTextDelta,
+    onTextAnnotation,
+    onRetrievalResults,
     onReasoningDelta,
     onReasoningStart,
     onReasoningEnd,
@@ -178,6 +182,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         ? data.parent_task_call_id.trim()
         : undefined
       onTextDelta?.(data.text_delta, parent_task_call_id)
+      return
+    }
+    if (t === 'text-annotation-added' && data.annotation && typeof data.annotation === 'object') {
+      onTextAnnotation?.(String(data.text_part_id ?? ''), data.annotation as Record<string, unknown>)
+      return
+    }
+    if (t === 'retrieval-results-available') {
+      onRetrievalResults?.({ ...data, type: 'retrieval' })
       return
     }
     if (t === 'reasoning-start') {

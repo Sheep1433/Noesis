@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -9,6 +10,58 @@ from langchain_core.documents import Document
 from qdrant_client.models import PointStruct
 
 _IMAGE_RAW_TEXT_MAX_LEN = 4096
+
+
+def _stable_public_id(prefix: str, *parts: object) -> str:
+    canonical = json.dumps(
+        [str(part or "").strip() for part in parts],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{prefix}_{digest[:32]}"
+
+
+def build_evidence_identity(
+    *,
+    collection_name: str,
+    file_name: str,
+    file_hash: str,
+    chunk_index: int,
+    content_hash: str,
+) -> Dict[str, str]:
+    """生成公开且可重放的 document/version/segment 三层身份。"""
+    document_id = _stable_public_id("doc", collection_name, file_name)
+    document_version_id = _stable_public_id("docv", document_id, file_hash)
+    segment_id = _stable_public_id(
+        "seg", document_version_id, chunk_index, content_hash
+    )
+    return {
+        "document_id": document_id,
+        "document_version_id": document_version_id,
+        "segment_id": segment_id,
+    }
+
+
+def build_typed_locator(metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    locator = metadata.get("locator")
+    if isinstance(locator, dict) and locator.get("type") in {
+        "page",
+        "char",
+        "bbox",
+        "header",
+    }:
+        return dict(locator)
+    page_no = metadata.get("page_no") or metadata.get("page_number")
+    if isinstance(page_no, int) and page_no > 0:
+        return {"type": "page", "page_start": page_no, "page_end": page_no}
+    header_path = str(metadata.get("header_path") or "").strip()
+    if header_path:
+        return {
+            "type": "header",
+            "path": [part.strip() for part in header_path.split(">") if part.strip()],
+        }
+    return None
 
 
 def compute_content_hash(text: str) -> str:
@@ -26,6 +79,7 @@ def build_payload(
     page_content: str,
     metadata: Dict[str, Any],
     chunk_index: int = 0,
+    collection_name: str = "",
     file_hash: Optional[str] = None,
     effective_processing_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -37,16 +91,34 @@ def build_payload(
         raw_text = raw_text[:_IMAGE_RAW_TEXT_MAX_LEN] + "...[truncated]"
 
     content_hash = metadata.get("content_hash") or compute_content_hash(page_content)
+    resolved_chunk_index = int(metadata.get("chunk_index", chunk_index))
+    resolved_file_name = str(
+        metadata.get("file_name") or metadata.get("source_name", "")
+    )
     meta = dict(metadata)
     meta["content_hash"] = content_hash
+
+    identity: Dict[str, str] = {}
+    if collection_name and resolved_file_name and file_hash:
+        identity = build_evidence_identity(
+            collection_name=collection_name,
+            file_name=resolved_file_name,
+            file_hash=file_hash,
+            chunk_index=resolved_chunk_index,
+            content_hash=content_hash,
+        )
+        meta.update(identity)
+    locator = build_typed_locator(meta)
+    if locator is not None:
+        meta["locator"] = locator
 
     payload: Dict[str, Any] = {
         "page_content": page_content,
         "content": page_content,
         "content_hash": content_hash,
-        "file_name": metadata.get("file_name") or metadata.get("source_name", ""),
+        "file_name": resolved_file_name,
         "source": metadata.get("source", ""),
-        "chunk_index": metadata.get("chunk_index", chunk_index),
+        "chunk_index": resolved_chunk_index,
         "file_type": metadata.get("file_type", ""),
         "raw_text": raw_text,
         "clean_text": metadata.get("clean_text", page_content),
@@ -65,6 +137,9 @@ def build_payload(
     }
     if file_hash:
         payload["file_hash"] = file_hash
+    payload.update(identity)
+    if locator is not None:
+        payload["locator"] = locator
     if effective_processing_params is not None:
         payload["effective_processing_params"] = effective_processing_params
     return payload
@@ -74,6 +149,7 @@ def documents_to_points(
     documents: List[Document],
     embeddings: List[List[float]],
     *,
+    collection_name: str = "",
     file_hash: Optional[str] = None,
     effective_processing_params: Optional[Dict[str, Any]] = None,
 ) -> List[PointStruct]:
@@ -87,6 +163,7 @@ def documents_to_points(
             page_content=text,
             metadata=meta,
             chunk_index=int(meta.get("chunk_index", i)),
+            collection_name=collection_name,
             file_hash=file_hash,
             effective_processing_params=effective_processing_params,
         )

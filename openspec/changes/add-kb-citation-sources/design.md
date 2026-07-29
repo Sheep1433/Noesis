@@ -107,6 +107,10 @@ KB 在摄取时提供：
 
 hash 可用于去重和完整性检查，chunk index 可用于诊断，但两者都不作为长期 citation identity。旧版本仍存在时必须打开旧版本；旧版本被清理时返回 stale/missing，不以相似片段静默替代。
 
+当前 Qdrant payload 的迁移映射确定为：`document_id = hash(collection_name, normalized file_name)`，因此同一 collection 内同名文档重新摄取仍保持业务身份；`document_version_id = hash(document_id, file_hash)`，其中 `file_hash` 是上传原文件 SHA-256；`segment_id = hash(document_version_id, chunk_index, content_hash)`，在一次不可变摄取版本内稳定。新入库同时把三层 ID 与 typed locator 写入 payload 顶层和 metadata 子对象，保证 vector、BM25、hybrid 与 rerank 使用同一 identity。
+
+历史 payload 若缺少 `file_hash` 或任一三层 ID，检索层 SHALL 标记 `identity_status=legacy_unversioned`，可以作为 retrieved-only 结果返回，但 SHALL NOT 进入 citation binding。迁移方式是重新摄取原文件；平台不得用文件名、当前 chunk index 或 content hash 临时伪造历史版本身份。
+
 ### 4. 流式事件对齐 OpenAI annotation patch
 
 文本继续使用现有 `text-start` / `text-delta` / `text-end`。新增：

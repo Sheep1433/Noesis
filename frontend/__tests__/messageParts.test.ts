@@ -2,6 +2,32 @@ import { describe, expect, it } from 'vitest'
 import { normalizeApiContent } from '@/views/chat/messageParts'
 
 describe('message parts snapshot normalization', () => {
+  it('兼容旧消息并严格解析 citation 与 retrieval parts', () => {
+    const normalized = normalizeApiContent({ parts: [
+      { type: 'text', content: '旧消息' },
+      {
+        type: 'text', content: '五分钟', annotations: [
+          {
+            type: 'kb_citation', citation_id: 'cit_1', start_index: 0, end_index: 3,
+            document_id: 'doc', document_version_id: 'docv', segment_id: 'seg',
+            title: '需求.md', excerpt: '证据', verification: 'structural',
+          },
+          { type: 'kb_citation', citation_id: 'bad', start_index: 3, end_index: 1 },
+        ],
+      },
+      {
+        id: 'retrieval_1', type: 'retrieval', tool_call_id: 'call_1', query: '有效期',
+        results: [{
+          evidence_id: 'ev_1', document_id: 'doc', document_version_id: 'docv',
+          segment_id: 'seg', title: '需求.md', excerpt: '证据',
+        }],
+      },
+    ] })
+    expect(normalized.parts[0]).toMatchObject({ type: 'text', content: '旧消息' })
+    expect(normalized.parts[1]).toMatchObject({ type: 'text', annotations: [{ citation_id: 'cit_1' }] })
+    expect(normalized.parts[2]).toMatchObject({ type: 'retrieval', results: [{ evidence_id: 'ev_1' }] })
+  })
+
   it('刷新或 HITL 续跑时按 tool_call_id 合并重复工具块', () => {
     const normalized = normalizeApiContent({
       parts: [

@@ -3,7 +3,7 @@ import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
-import { ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { ensureSession, getSession, resolveMessageCitation, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
@@ -44,7 +44,9 @@ import {
 } from '@/views/chat/hitlUiState'
 import {
   appendReasoningDelta,
+  appendRetrievalPart,
   appendStreamFailureNotice,
+  appendTextAnnotation,
   appendTextDelta,
   appendTextDeltaWithRedactedThinking,
   appendUserStopNotice,
@@ -74,6 +76,37 @@ import SuggestedView from './SuggestedPage.vue'
 import TableModal from './TableModal.vue'
 
 const sessionFilesPanelRef = ref<InstanceType<typeof SessionContextPanel> | null>(null)
+const citationDialog = useDialog()
+
+async function openCitation(messageId: string | undefined, citationId: string) {
+  if (!messageId) {
+    return
+  }
+  try {
+    const source = await resolveMessageCitation(messageId, citationId)
+    citationDialog.info({
+      title: source.title || '引用来源',
+      content: source.url
+        ? () => h('div', [h('p', source.excerpt || '该来源暂无可展示内容'), h('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, '打开原网页')])
+        : source.excerpt || '该来源暂无可展示内容',
+      positiveText: '关闭',
+    })
+  } catch (error) {
+    window.$ModalMessage?.error(error instanceof Error ? error.message : '引用来源暂时无法查看')
+  }
+}
+
+function retrievedOnly(parts: UiPart[]) {
+  const cited = new Set(
+    parts.flatMap((part) => part.type === 'text'
+      ? (part.annotations ?? []).map((item) => item.evidence_id).filter(Boolean)
+      : []),
+  )
+  return parts
+    .filter((part) => part.type === 'retrieval')
+    .flatMap((part) => part.type === 'retrieval' ? part.results : [])
+    .filter((result) => !cited.has(result.evidence_id))
+}
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
@@ -787,6 +820,12 @@ const sseStream = useSSEStream({
         ? appendTextDelta(parts, text, parent_task_call_id)
         : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parent_task_call_id),
     ),
+  onTextAnnotation: (_textPartId, annotation) => {
+    patchLastAssistantParts((parts) => appendTextAnnotation(parts, annotation))
+  },
+  onRetrievalResults: (part) => {
+    patchLastAssistantParts((parts) => appendRetrievalPart(parts, part))
+  },
   onReasoningStart: () => {
     nativeReasoningSeen.value = true
   },
@@ -2276,6 +2315,7 @@ function onComposerPaste(e: ClipboardEvent) {
                             <MarkdownPreview
                               v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                               :content="entry.part.content || ''"
+                              :annotations="entry.part.annotations || []"
                               :toolCalls="null"
                               :msgMetadata="item.msg_metadata"
                               :isInit="isInit"
@@ -2286,8 +2326,23 @@ function onComposerPaste(e: ClipboardEvent) {
                               :parentScollBottomMethod="scrollToBottom"
                               @failed="() => onFailedReader(index)"
                               @recycleQa="() => onRecycleQa(index)"
+                              @citation-click="citationId => openCitation(item.message_id, citationId)"
                             />
                           </template>
+                          <details
+                            v-if="retrievedOnly(item.messageContent.parts).length"
+                            class="retrieval-results-panel"
+                          >
+                            <summary>本轮检索结果（{{ retrievedOnly(item.messageContent.parts).length }}）</summary>
+                            <div
+                              v-for="result in retrievedOnly(item.messageContent.parts)"
+                              :key="result.evidence_id"
+                              class="retrieval-result-item"
+                            >
+                              <div class="retrieval-result-title">{{ result.title || (result.source_type === 'web' ? '网页来源' : '知识库文档') }}</div>
+                              <div class="retrieval-result-excerpt">{{ result.excerpt }}</div>
+                            </div>
+                          </details>
                           <AssistantStreamingIndicator
                             v-if="showAssistantReplyLoading(index, item.role)"
                             section

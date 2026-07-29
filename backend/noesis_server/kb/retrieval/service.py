@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 from langchain_core.documents import Document
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 if TYPE_CHECKING:
     from noesis_server.kb.retrieval.store import Retrieval
@@ -32,6 +33,21 @@ class KbSearchHit:
     header_path: Optional[str] = None
     recall_score: Optional[float] = None
     rerank_score: Optional[float] = None
+    document_id: Optional[str] = None
+    document_version_id: Optional[str] = None
+    segment_id: Optional[str] = None
+    locator: Optional[Dict[str, Any]] = None
+    point_id: Optional[str] = None
+    identity_status: str = "versioned"
+
+    @property
+    def citable(self) -> bool:
+        return bool(
+            self.identity_status == "versioned"
+            and self.document_id
+            and self.document_version_id
+            and self.segment_id
+        )
 
 
 @dataclass
@@ -88,6 +104,64 @@ class KbRetrievalService:
         keys = [k for k in _retrieval_cache if k.startswith(f"{collection_name}:")]
         for k in keys:
             del _retrieval_cache[k]
+
+    @classmethod
+    def resolve_evidence(
+        cls,
+        *,
+        collection_name: str,
+        document_id: str,
+        document_version_id: str,
+        segment_id: str,
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
+        """精确实读 versioned segment；返回 resolved / stale / missing。"""
+        if not is_qdrant_connected():
+            return "missing", None
+        client = get_qdrant_client()
+        if client is None:
+            return "missing", None
+
+        def _scroll(conditions: list[FieldCondition]):
+            points, _ = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=Filter(must=conditions),
+                limit=2,
+                with_payload=True,
+                with_vectors=False,
+            )
+            return points
+
+        try:
+            identity_conditions = [
+                FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+                FieldCondition(
+                    key="document_version_id",
+                    match=MatchValue(value=document_version_id),
+                ),
+                FieldCondition(key="segment_id", match=MatchValue(value=segment_id)),
+            ]
+            points = _scroll(identity_conditions)
+            if points:
+                payload = dict(points[0].payload or {})
+                content = payload.get("page_content") or payload.get("content") or ""
+                return "resolved", {
+                    "content": str(content),
+                    "title": str(payload.get("file_name") or payload.get("source_name") or ""),
+                    "locator": payload.get("locator") if isinstance(payload.get("locator"), dict) else None,
+                }
+
+            document_points = _scroll([
+                FieldCondition(key="document_id", match=MatchValue(value=document_id))
+            ])
+            return ("stale", None) if document_points else ("missing", None)
+        except Exception as exc:
+            logger.warning(
+                "[KbRetrievalService] evidence resolve failed collection={} segment={} error={}",
+                collection_name,
+                segment_id,
+                exc,
+            )
+            return "missing", None
 
     @classmethod
     def search(
@@ -201,7 +275,12 @@ class KbRetrievalService:
 
         t_parse = time.perf_counter()
         hits = cls._hits_from_scored(
-            scored, mode, post_filter, recall_limit, qdrant_filter=qdrant_filter
+            scored,
+            mode,
+            post_filter,
+            recall_limit,
+            collection_name=collection_name,
+            qdrant_filter=qdrant_filter,
         )
         parse_ms = (time.perf_counter() - t_parse) * 1000
         recall_hit_count = len(hits)
@@ -281,6 +360,12 @@ class KbRetrievalService:
                     header_path=hit.header_path,
                     recall_score=recall_score,
                     rerank_score=float(rerank_score),
+                    document_id=hit.document_id,
+                    document_version_id=hit.document_version_id,
+                    segment_id=hit.segment_id,
+                    locator=dict(hit.locator) if hit.locator else None,
+                    point_id=hit.point_id,
+                    identity_status=hit.identity_status,
                 )
             )
         return reranked or hits
@@ -306,6 +391,7 @@ class KbRetrievalService:
         post_filter: Dict[str, Any],
         limit: int,
         *,
+        collection_name: str = "",
         qdrant_filter: Optional[Dict[str, Any]] = None,
     ) -> List[KbSearchHit]:
         hits: List[KbSearchHit] = []
@@ -315,7 +401,9 @@ class KbRetrievalService:
                 continue
             if not document_matches_post_filter(meta, post_filter):
                 continue
-            hit = KbRetrievalService._doc_to_hit(doc, score, mode)
+            hit = KbRetrievalService._doc_to_hit(
+                doc, score, mode, collection_name=collection_name
+            )
             hit.recall_score = float(score)
             hits.append(hit)
             if len(hits) >= limit:
@@ -323,7 +411,13 @@ class KbRetrievalService:
         return hits
 
     @staticmethod
-    def _doc_to_hit(doc: Document, score: float, mode: str) -> KbSearchHit:
+    def _doc_to_hit(
+        doc: Document,
+        score: float,
+        mode: str,
+        *,
+        collection_name: str = "",
+    ) -> KbSearchHit:
         meta = doc.metadata or {}
         content = (
             doc.page_content
@@ -333,6 +427,14 @@ class KbRetrievalService:
         )
         file_name = meta.get("file_name") or meta.get("source_name") or ""
         point_id = meta.get("point_id") or meta.get("content_hash") or meta.get("id") or ""
+        document_id = str(meta.get("document_id") or "").strip() or None
+        document_version_id = str(meta.get("document_version_id") or "").strip() or None
+        segment_id = str(meta.get("segment_id") or "").strip() or None
+        identity_status = (
+            "versioned"
+            if document_id and document_version_id and segment_id
+            else "legacy_unversioned"
+        )
         return KbSearchHit(
             id=str(point_id),
             score=float(score),
@@ -340,6 +442,12 @@ class KbRetrievalService:
             file_name=str(file_name),
             search_mode=mode,
             header_path=meta.get("header_path") or None,
+            document_id=document_id,
+            document_version_id=document_version_id,
+            segment_id=segment_id,
+            locator=dict(meta["locator"]) if isinstance(meta.get("locator"), dict) else None,
+            point_id=str(point_id) or None,
+            identity_status=identity_status,
         )
 
     @classmethod

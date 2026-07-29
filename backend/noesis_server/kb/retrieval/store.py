@@ -8,7 +8,6 @@ Retrieval: 专注于检索策略和文档处理（embedding、多种检索策略
 import hashlib
 import os
 import uuid
-from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 from qdrant_client import QdrantClient
@@ -25,6 +24,7 @@ from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
 
 from noesis_server.kb.embedding import get_embedding
+from noesis_server.kb.retrieval.payload import build_payload
 from noesis.runtime.logging import logger
 
 
@@ -249,10 +249,8 @@ class VectorStore:
         "raw_text", "clean_text", "update_time", "element_type",
         "page_content", "Header_1", "Header_2", "Header_3", "Header_4",
         "domain", "business", "header_path", "source_name",
+        "file_hash", "document_id", "document_version_id", "segment_id", "locator",
     }
-
-    # image 类型 raw_text 最大存储长度（超出部分截断，避免 Qdrant payload 超限）
-    _IMAGE_RAW_TEXT_MAX_LEN = 4096
 
     def add_vectors(
         self,
@@ -288,8 +286,6 @@ class VectorStore:
         elif len(metadatas) != len(texts):
             raise ValueError("metadatas 和 texts 长度必须一致")
 
-        now = datetime.now().isoformat()
-
         # 去重检查
         points_to_add = []
         for i, (text, vector, metadata) in enumerate(zip(texts, vectors, metadatas)):
@@ -300,37 +296,16 @@ class VectorStore:
 
             metadata["content_hash"] = content_hash
             point_id = self.hash_to_uuid(content_hash)
-
-            element_type = metadata.get("element_type", "text")
-            raw_text = metadata.get("raw_text", text)
-            # image chunk 的 raw_text 可能包含完整 base64 data URI，截断后仅用于溯源标记
-            if element_type == "image" and len(raw_text) > self._IMAGE_RAW_TEXT_MAX_LEN:
-                raw_text = raw_text[:self._IMAGE_RAW_TEXT_MAX_LEN] + "...[truncated]"
-
-            # 构建顶层 payload 字段
-            payload: Dict[str, Any] = {
-                "page_content": text,
-                "content_hash": content_hash,
-                "file_name": metadata.get("file_name") or metadata.get("source_name", ""),
-                "source": metadata.get("source", ""),
-                "chunk_index": metadata.get("chunk_index", i),
-                "file_type": metadata.get("file_type", ""),
-                "raw_text": raw_text,
-                "clean_text": metadata.get("clean_text", text),
-                "created_at": metadata.get("created_at", now),
-                "update_time": metadata.get("update_time", now),
-                "element_type": element_type,
-                "domain": metadata.get("domain", ""),
-                "business": metadata.get("business", ""),
-                "header_path": metadata.get("header_path", ""),
-                "source_name": metadata.get("source_name") or metadata.get("file_name", ""),
-                "Header_1": metadata.get("Header_1", ""),
-                "Header_2": metadata.get("Header_2", ""),
-                "Header_3": metadata.get("Header_3", ""),
-                "Header_4": metadata.get("Header_4", ""),
-                # 保留 metadata 子对象，兼容现有 Qdrant 过滤查询
-                "metadata": metadata,
-            }
+            payload = build_payload(
+                page_content=text,
+                metadata=metadata,
+                chunk_index=int(metadata.get("chunk_index", i)),
+                collection_name=self.collection_name,
+                file_hash=str(metadata.get("file_hash") or "") or None,
+                effective_processing_params=metadata.get(
+                    "effective_processing_params"
+                ),
+            )
 
             point = PointStruct(
                 id=point_id,
@@ -467,6 +442,7 @@ class VectorStore:
             "domain", "business", "header_path", "source_name",
             "Header_1", "Header_2", "Header_3", "Header_4",
             "content_hash",
+            "file_hash", "document_id", "document_version_id", "segment_id", "locator",
         ):
             if field in payload:
                 meta[field] = payload[field]
