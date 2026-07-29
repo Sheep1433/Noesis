@@ -4,6 +4,7 @@
  */
 
 import type { AgentRunSnapshot } from '@/api/chat'
+import type { ToolLifecycleState } from '@/views/chat/messageParts'
 import { ref } from 'vue'
 import {
   createAgentRun,
@@ -38,6 +39,11 @@ export interface SSEStreamOptions {
       status: 'success' | 'error'
       duration_ms?: number
       errorCategory?: string
+      state?: ToolLifecycleState
+      outcome?: string
+      exit_code?: number
+      timed_out?: boolean
+      truncated?: boolean
     },
   ) => void
   /** 测试用例等扩展 SSE（event 名与 data.type 一致） */
@@ -244,6 +250,11 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         status: status === 'error' ? 'error' : 'success',
         duration_ms: duration_ms != null && !Number.isNaN(duration_ms) ? duration_ms : undefined,
         errorCategory,
+        state: typeof data.state === 'string' ? data.state as ToolLifecycleState : undefined,
+        outcome: typeof data.outcome === 'string' ? data.outcome : undefined,
+        exit_code: data.exit_code != null ? Number(data.exit_code) : undefined,
+        timed_out: data.timed_out != null ? Boolean(data.timed_out) : undefined,
+        truncated: data.truncated != null ? Boolean(data.truncated) : undefined,
       })
       return
     }

@@ -32,6 +32,7 @@ from noesis_server.domain.chat.delivery.events import (
 from noesis_server.domain.chat.delivery.sse import parse_sse_line_to_event
 from noesis_server.domain.chat.delivery.persist_sink import PersistSink
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from noesis_server.domain.chat.tool_state import ToolState
 from noesis_server.domain.chat.runs import RunLimitExceeded, RunManager, RunSnapshot, RunStatus
 from noesis_server.exceptions.exception import ConflictException, NotFoundException, ServiceException
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
@@ -105,6 +106,19 @@ class RunProjection:
                 self.attempt_id,
             )
             return False
+        if self.status in {
+            RunStatus.COMPLETED,
+            RunStatus.PARTIAL,
+            RunStatus.ERROR,
+            RunStatus.INTERRUPTED,
+        } and isinstance(event, (RunCompleted, RunAborted, RunError)):
+            logger.warning(
+                "忽略终态 run 的迟到终态事件 run_id={} status={} event={}",
+                self.run_id,
+                self.status.value,
+                type(event).__name__,
+            )
+            return False
         if isinstance(event, WireFrame):
             data = event.data
             if event.event == "text-delta":
@@ -134,6 +148,7 @@ class RunProjection:
                     data.get("input") if isinstance(data.get("input"), dict) else {},
                     str(data.get("tool_call_id") or ""),
                     data.get("parent_task_call_id"),
+                    state=data.get("state") or ToolState.RUNNING,
                 )
             elif event.event == "tool-input-available":
                 self.side_effect_boundary_crossed = True
@@ -142,6 +157,7 @@ class RunProjection:
                     data.get("input") if isinstance(data.get("input"), dict) else {},
                     str(data.get("tool_call_id") or ""),
                     data.get("parent_task_call_id"),
+                    state=data.get("state") or ToolState.RUNNING,
                 )
             elif event.event == "tool-output-available":
                 if self.cancel_requested or self.status in {
@@ -162,10 +178,16 @@ class RunProjection:
                         str(data.get("output") or ""),
                         str(data.get("tool_call_id") or ""),
                         status=str(data.get("status") or "success"),
+                        state=data.get("state"),
                         error=str(data.get("error")) if data.get("error") else None,
                         error_category=(
                             str(data.get("errorCategory")) if data.get("errorCategory") else None
                         ),
+                        outcome=str(data.get("outcome")) if data.get("outcome") else None,
+                        exit_code=(int(data["exit_code"]) if data.get("exit_code") is not None else None),
+                        timed_out=(bool(data["timed_out"]) if data.get("timed_out") is not None else None),
+                        truncated=(bool(data["truncated"]) if data.get("truncated") is not None else None),
+                        duration_ms=(int(data["duration_ms"]) if data.get("duration_ms") is not None else None),
                     )
                 except ValueError:
                     logger.warning(
@@ -198,18 +220,37 @@ class RunProjection:
                         "interrupt_id": event.payload.get("interrupt_id"),
                     },
                     status="running",
+                    state=ToolState.APPROVAL_PENDING,
                 )
+            keep = {
+                str(action.get("tool_call_id") or "")
+                for action in event.payload.get("action_requests") or []
+                if isinstance(action, dict) and action.get("tool_call_id")
+            }
+            self.builder.reconcile_nonterminal_tools(
+                ToolState.CANCELLED,
+                "本次工具执行已停止",
+                keep_approval_call_ids=keep,
+            )
         elif isinstance(event, RunPaused):
             self.status = RunStatus.HITL_PENDING
             self.finish_reason = event.finish_reason or event.reason
         elif isinstance(event, RunCompleted):
+            self.builder.reconcile_nonterminal_tools(ToolState.CANCELLED, "本次工具执行已停止")
             self.status = RunStatus.COMPLETED
             self.finish_reason = event.finish_reason
             self.pending_hitl = None
         elif isinstance(event, RunAborted):
+            self.builder.reconcile_nonterminal_tools(ToolState.CANCELLED, "本次工具执行已停止")
             self.status = RunStatus.PARTIAL
             self.finish_reason = event.reason
         elif isinstance(event, RunError):
+            terminal_state = (
+                ToolState.TIMED_OUT
+                if event.finish_reason in {"timeout", "hitl_timeout", "run_timeout"}
+                else ToolState.FAILED
+            )
+            self.builder.reconcile_nonterminal_tools(terminal_state, event.message)
             self.status = RunStatus.ERROR
             self.finish_reason = event.finish_reason
             self.user_error_message = event.message
@@ -243,18 +284,22 @@ class RunProjection:
                 self.builder.update_tool_hitl(
                     tool_call_id,
                     {"status": "approved", "decision": "approve"},
+                    status="running",
+                    state=ToolState.RUNNING,
                 )
             elif decision_type == "reject":
                 self.builder.update_tool_hitl(
                     tool_call_id,
                     {"status": "rejected", "decision": "reject"},
                     status="error",
+                    state=ToolState.REJECTED,
                 )
             elif decision_type == "respond":
                 self.builder.update_tool_hitl(
                     tool_call_id,
                     {"status": "answered", "decision": "respond"},
                     status="success",
+                    state=ToolState.SUCCEEDED,
                 )
 
     def snapshot(self, sequence: int, status: RunStatus, attempt_id: int) -> RunSnapshot:
@@ -742,6 +787,14 @@ class RunService:
             else None
             if stopped
             else "生成失败，请稍后重试"
+        )
+        projection.builder.reconcile_nonterminal_tools(
+            ToolState.TIMED_OUT
+            if error_code in {"RUN_TIMEOUT", "HITL_TIMEOUT"}
+            else ToolState.CANCELLED
+            if stopped
+            else ToolState.FAILED,
+            user_message or "本次工具执行已停止",
         )
         async with AsyncSessionLocal() as db:
             repository = AgentRunRepository(db)

@@ -51,6 +51,7 @@ export interface TaskToolOutputContext {
   output?: string
   status?: string
   error?: string | null
+  state?: string
 }
 
 /**
@@ -61,7 +62,7 @@ export function parseTaskToolOutput(ctx: TaskToolOutputContext): ParsedTaskToolO
   const trimmed = output.trim()
   const partError = ctx.error != null ? String(ctx.error).trim() : ''
 
-  if (ctx.status === 'error') {
+  if (['failed', 'timed_out', 'rejected', 'cancelled'].includes(ctx.state || '') || ctx.status === 'error') {
     return {
       status: 'failed',
       error: partError || trimmed || '子任务失败',
@@ -69,7 +70,7 @@ export function parseTaskToolOutput(ctx: TaskToolOutputContext): ParsedTaskToolO
   }
 
   if (!trimmed) {
-    if (ctx.status === 'running' || ctx.status === 'streaming') {
+    if (ctx.state === 'approval_pending' || ctx.status === 'running' || ctx.status === 'streaming') {
       return { status: 'in_progress' }
     }
     return { status: 'in_progress' }

@@ -25,6 +25,12 @@ from noesis.runtime.evidence import (
 )
 from noesis.config.env import CitationLimitConfig
 from noesis.runtime.logging import logger
+from noesis_server.domain.chat.tool_state import (
+    ToolState,
+    can_transition_tool_state,
+    derive_tool_state,
+    is_terminal_tool_state,
+)
 
 
 @dataclass
@@ -102,11 +108,24 @@ class ToolPart(MessagePart):
     duration_ms: Optional[int] = None
     parent_task_call_id: Optional[str] = None
     status: str = "running"
+    state: Optional[str] = None
     error: Optional[str] = None
     error_category: Optional[str] = None
     hitl: Optional[Dict[str, Any]] = None
     outcome: Optional[str] = None
+    exit_code: Optional[int] = None
+    timed_out: Optional[bool] = None
+    truncated: Optional[bool] = None
     type: str = "tool"
+
+    def __post_init__(self) -> None:
+        if self.state is None:
+            self.state = derive_tool_state(
+                status=self.status,
+                outcome=self.outcome,
+                error_category=self.error_category,
+                timed_out=self.timed_out,
+            ).value
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
@@ -116,6 +135,7 @@ class ToolPart(MessagePart):
             "output": self.output,
             "tool_call_id": self.tool_call_id,
             "status": self.status,
+            "state": self.state or ToolState.RUNNING.value,
         }
         if self.duration_ms is not None:
             out["duration_ms"] = self.duration_ms
@@ -129,6 +149,12 @@ class ToolPart(MessagePart):
             out["hitl"] = self.hitl
         if self.outcome:
             out["outcome"] = self.outcome
+        if self.exit_code is not None:
+            out["exit_code"] = self.exit_code
+        if self.timed_out is not None:
+            out["timed_out"] = self.timed_out
+        if self.truncated is not None:
+            out["truncated"] = self.truncated
         return out
 
 
@@ -159,10 +185,19 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             duration_ms=data.get("duration_ms"),
             parent_task_call_id=parent,
             status=data.get("status") or "running",
+            state=data.get("state") or derive_tool_state(
+                status=data.get("status"),
+                outcome=data.get("outcome"),
+                error_category=data.get("errorCategory"),
+                timed_out=data.get("timed_out"),
+            ).value,
             error=data.get("error"),
             error_category=data.get("errorCategory"),
             hitl=data.get("hitl"),
             outcome=data.get("outcome"),
+            exit_code=data.get("exit_code"),
+            timed_out=data.get("timed_out"),
+            truncated=data.get("truncated"),
         )
     if part_type == "retrieval":
         results = data.get("results")
@@ -507,6 +542,7 @@ class AssistantMessageBuilder:
         parent_task_call_id: Optional[str] = None,
         *,
         status: str = "running",
+        state: ToolState | str = ToolState.RUNNING,
         hitl: Optional[Dict[str, Any]] = None,
     ) -> None:
         if tool_call_id:
@@ -519,8 +555,10 @@ class AssistantMessageBuilder:
                 if hitl:
                     existing.hitl = {**(existing.hitl or {}), **hitl}
                 # 重放 tool start 只补充同一块的输入信息，不能把已有结果退回 running。
-                if existing.status == "running":
+                if not is_terminal_tool_state(existing.state):
                     existing.status = status
+                    if can_transition_tool_state(existing.state, state):
+                        existing.state = ToolState(str(state)).value
                     self._last_tool = existing
                 return
         part = ToolPart(
@@ -529,6 +567,7 @@ class AssistantMessageBuilder:
             tool_call_id=tool_call_id,
             parent_task_call_id=parent_task_call_id,
             status=status,
+            state=ToolState(str(state)).value,
             hitl=hitl,
         )
         self._content.parts.append(part)
@@ -549,7 +588,7 @@ class AssistantMessageBuilder:
             and part.tool_call_id
             and part.name == tool
             and (part.arguments or {}) == (tool_input or {})
-            and part.status == "running"
+            and part.state in {ToolState.RUNNING, ToolState.APPROVAL_PENDING}
             and isinstance(part.hitl, dict)
             and part.hitl.get("status") in {"pending", "approved", "answered"}
         ]
@@ -580,7 +619,9 @@ class AssistantMessageBuilder:
                     existing.name = part.name or existing.name
                     existing.arguments = part.arguments or existing.arguments
                     existing.output = part.output if part.output is not None else existing.output
-                    existing.status = part.status or existing.status
+                    if can_transition_tool_state(existing.state, part.state):
+                        existing.status = part.status or existing.status
+                        existing.state = part.state
                     existing.error = part.error or existing.error
                     existing.error_category = part.error_category or existing.error_category
                     existing.duration_ms = part.duration_ms or existing.duration_ms
@@ -589,9 +630,12 @@ class AssistantMessageBuilder:
                     )
                     existing.hitl = {**(existing.hitl or {}), **(part.hitl or {})} or None
                     existing.outcome = part.outcome or existing.outcome
+                    existing.exit_code = part.exit_code if part.exit_code is not None else existing.exit_code
+                    existing.timed_out = part.timed_out if part.timed_out is not None else existing.timed_out
+                    existing.truncated = part.truncated if part.truncated is not None else existing.truncated
                     continue
                 self._tools_by_call_id[part.tool_call_id] = part
-                if part.status == "running":
+                if not is_terminal_tool_state(part.state):
                     self._last_tool = part
             canonical_parts.append(part)
         self._content.parts = canonical_parts
@@ -602,6 +646,7 @@ class AssistantMessageBuilder:
         hitl: Dict[str, Any],
         *,
         status: Optional[str] = None,
+        state: ToolState | str | None = None,
     ) -> None:
         if not tool_call_id:
             return
@@ -609,8 +654,14 @@ class AssistantMessageBuilder:
         if target is None:
             return
         target.hitl = {**(target.hitl or {}), **hitl}
-        if status is not None:
-            target.status = status
+        if state is None:
+            if status is not None and not is_terminal_tool_state(target.state):
+                target.status = status
+            return
+        if can_transition_tool_state(target.state, state):
+            if status is not None:
+                target.status = status
+            target.state = ToolState(str(state)).value
 
     def append_tool_output(
         self,
@@ -622,6 +673,11 @@ class AssistantMessageBuilder:
         status: str = "success",
         error: Optional[str] = None,
         error_category: Optional[str] = None,
+        state: ToolState | str | None = None,
+        outcome: Optional[str] = None,
+        exit_code: Optional[int] = None,
+        timed_out: Optional[bool] = None,
+        truncated: Optional[bool] = None,
     ) -> None:
         """优先按 tool_call_id 定位（支持并行 / 乱序），否则回退到最近一次 append_tool。"""
         target = (
@@ -635,10 +691,25 @@ class AssistantMessageBuilder:
                 f"append_tool_output without matching tool: tool={tool}, tool_call_id={tool_call_id}"
             )
 
+        desired_state = ToolState(str(state)) if state is not None else derive_tool_state(
+            status=status,
+            outcome=outcome,
+            error_category=error_category,
+            timed_out=timed_out,
+        )
+        if is_terminal_tool_state(target.state) and target.state != desired_state:
+            return
+        if not can_transition_tool_state(target.state, desired_state):
+            return
         target.output = output
         target.status = status
+        target.state = desired_state.value
         target.error = error
         target.error_category = error_category
+        target.outcome = outcome
+        target.exit_code = exit_code
+        target.timed_out = timed_out
+        target.truncated = truncated
         if duration_ms is not None:
             target.duration_ms = duration_ms
         if tool_call_id:
@@ -646,13 +717,51 @@ class AssistantMessageBuilder:
         if target is self._last_tool:
             self._last_tool = None
 
+    def reconcile_nonterminal_tools(
+        self,
+        state: ToolState,
+        message: str = "",
+        *,
+        keep_approval_call_ids: set[str] | None = None,
+    ) -> int:
+        keep = keep_approval_call_ids or set()
+        approval_parents = {
+            part.parent_task_call_id
+            for part in self._content.parts
+            if isinstance(part, ToolPart)
+            and part.tool_call_id in keep
+            and part.parent_task_call_id
+        }
+        count = 0
+        for part in self._content.parts:
+            if not isinstance(part, ToolPart) or is_terminal_tool_state(part.state):
+                continue
+            if part.tool_call_id in keep or part.tool_call_id in approval_parents:
+                part.state = ToolState.APPROVAL_PENDING.value
+                continue
+            part.state = state.value
+            part.status = "error" if state != ToolState.SUCCEEDED else "success"
+            part.outcome = {
+                ToolState.CANCELLED: "cancelled",
+                ToolState.REJECTED: "rejected",
+                ToolState.TIMED_OUT: "timed_out",
+            }.get(state, part.outcome or "unknown")
+            if message:
+                part.error = message
+                if part.output is None:
+                    part.output = message
+            count += 1
+        self._last_tool = None
+        return count
+
     def mark_running_tools_unknown(self, message: str) -> int:
         """停止/重启时不推断远程副作用，收口所有未完成工具。"""
         count = 0
         for part in self._content.parts:
-            if not isinstance(part, ToolPart) or part.status != "running":
+            if not isinstance(part, ToolPart) or is_terminal_tool_state(part.state):
                 continue
             part.status = "error"
+            part.state = ToolState.FAILED.value
             part.outcome = "unknown"
             part.error = message
             part.error_category = "unknown"

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.runtime.logging import logger
 from noesis_server.domain.chat.runs import RunStatus
+from noesis_server.domain.chat.tool_state import ToolState
 from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
 from noesis_server.models.chat_models import TAgentDelivery, TAgentRun, TChatMessage
 
@@ -27,6 +28,7 @@ def mark_running_tools_unknown(content: dict[str, Any] | None) -> dict[str, Any]
         part = dict(raw)
         if part.get("type") == "tool" and part.get("status") in {None, "running", "pending"}:
             part["status"] = "error"
+            part["state"] = ToolState.FAILED.value
             part["outcome"] = "unknown"
             part["errorCategory"] = "server_restart"
             part["error"] = "服务中断，操作结果未确认"

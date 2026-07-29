@@ -37,6 +37,7 @@ def test_super_agent_curl_fetch(auth_client, create_session, create_run, collect
     exec_out = events.output_for_tool("execute")
     assert exec_out is not None, "execute 工具缺少 tool-output-available"
     assert exec_out.get("status") == "success", f"execute 状态非 success: {exec_out}"
+    assert exec_out.get("state") == "succeeded", f"execute 生命周期非 succeeded: {exec_out}"
     output = str(exec_out.get("output") or "")
     assert "Example Domain" in output, f"curl 输出未包含预期内容: {output[:200]}"
     # 3. 整轮成功结束并产出文本

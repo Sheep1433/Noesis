@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SubagentRunStatus } from '@/utils/parseTaskTool'
-import type { ToolRunStatus, UiPart } from '@/views/chat/messageParts'
+import type { ToolLifecycleState, ToolRunStatus, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
@@ -17,6 +17,7 @@ interface Props {
   input?: Record<string, unknown>
   output?: string
   status?: ToolRunStatus
+  state?: ToolLifecycleState
   error?: string | null
   duration_ms?: number
   /** 子 Agent 内部 parts（text / reasoning / tool，带 parent_task_call_id） */
@@ -30,6 +31,7 @@ const props = withDefaults(defineProps<Props>(), {
   input: () => ({}),
   output: '',
   status: undefined,
+  state: undefined,
   error: null,
   duration_ms: undefined,
   childParts: () => [],
@@ -54,6 +56,7 @@ const parsedOutput = computed(() =>
   parseTaskToolOutput({
     output: props.output,
     status: props.status,
+    state: props.state,
     error: props.error,
   }),
 )
@@ -184,6 +187,10 @@ const durationDisplay = computed(() => {
                 :result="child.output"
                 :error="child.error"
                 :status="child.status"
+                :state="child.state"
+                :error-category="child.errorCategory"
+                :exit_code="child.exit_code"
+                :truncated="child.truncated"
                 :duration_ms="child.duration_ms"
               />
             </template>

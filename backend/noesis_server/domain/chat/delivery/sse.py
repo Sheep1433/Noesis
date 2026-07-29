@@ -129,7 +129,10 @@ def parse_sse_line_to_event(line: str) -> List[RunEvent]:
         ]
 
     if event_name == "abort":
-        return [WireFrame(event="abort", data=data), RunAborted()]
+        return [
+            WireFrame(event="abort", data=data),
+            RunAborted(reason=str(data.get("reason") or "abort")),
+        ]
 
     if event_name == "error":
         msg = str(data.get("error") or data.get("content") or "error")

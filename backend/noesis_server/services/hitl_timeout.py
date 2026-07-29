@@ -60,6 +60,7 @@ async def _timeout_reject(pending: PendingHitl) -> None:
     from noesis.agents.super_agent import SuperAgent
     from noesis_server.infrastructure.database.engine import AsyncSessionLocal
     from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
+    from noesis_server.domain.chat.tool_state import ToolState
     from noesis_server.models.chat_models import TChatMessage
     from noesis_server.services.chat_service import ChatService
     from sqlalchemy import and_, select
@@ -111,7 +112,9 @@ async def _timeout_reject(pending: PendingHitl) -> None:
                 tcid,
                 {"status": "rejected", "decision": "reject", "reason": "timeout"},
                 status="error",
+                state=ToolState.TIMED_OUT,
             )
+        builder.reconcile_nonterminal_tools(ToolState.TIMED_OUT, "等待确认已超时")
         extra = dict(msg.extra) if msg and isinstance(msg.extra, dict) else {}
         extra["finish_reason"] = "error"
         extra["error_message"] = "HITL 等待超时，已自动拒绝"

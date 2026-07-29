@@ -67,12 +67,21 @@ tool-output-available
 
 ## 4. 工具结果
 
-`status` 表示工具调用是否抛异常；`outcome` 表示成功返回后的执行结果。详细分类见 `agent-tool-failure-handling`。
+工具 part 使用三层语义：`status` 表示工具调用是否抛异常，`outcome` 表示成功返回后的执行结果，`state` 是 UI、snapshot 和历史恢复的权威生命周期。详细状态机见 [工具生命周期与失败处理](../../engineering/agents/tool-lifecycle-and-failures.md)。
 
-- 调用错误：`status=error`，带脱敏错误和 `errorCategory`，不带 `outcome`。
-- 正常返回：`status=success`，按工具类型解析 `ok`、`empty`、`command_failed`、`timed_out`。
+- 非终态：`running`、`approval_pending`。
+- 终态：`succeeded`、`failed`、`timed_out`、`rejected`、`cancelled`。
+- 调用错误：`status=error`，带脱敏错误和 `errorCategory`；超时映射为 `state=timed_out`。
+- 进程正常返回：`status=success`，保留 `exit_code/timed_out/truncated/outcome`；非零退出为 `outcome=command_failed + state=failed`。
+- 终态 Run 落库前统一 reconcile，禁止保存 `running/approval_pending` 工具。
 
-## 5. 停止、断连与 HITL
+## 5. 消息顺序与会话标题
+
+`t_chat_session.next_message_sequence` 是会话内序号分配器，所有消息入口在短事务内锁定会话行并分配 `t_chat_message.message_sequence`。历史 API 只按该字段排序和分页；`created_at` 不参与因果顺序判定。同一 Run 的 user 和 assistant 连续分配，user 始终在前。
+
+首轮 Run 创建时，如果会话仍为“新对话”，服务端在 user、assistant 骨架与 run 的同一事务内用首条非空用户文本设置标题。创建响应立即返回最终 `session_title`；手动标题不会被覆盖。
+
+## 6. 停止、断连与 HITL
 
 - 用户停止通过 `POST /api/chat/runs/{run_id}/stop` 取消，PersistSink 写 `partial`。
 - 客户端断连只移除该 subscriber，不取消 producer 或其它 subscriber。
@@ -83,11 +92,11 @@ tool-output-available
 - `[DONE]` 是整个 Run 的客户端传输结束标记，不是服务端落库条件；HITL 暂停只结束
   当前 LangGraph 执行分段，不得向 Run subscriber 投递 `[DONE]`。
 
-## 6. 保活与部署
+## 7. 保活与部署
 
 SSE 注释保活不推进 sequence，也不落库。反向代理 read timeout 必须大于保活间隔。连接写失败只结束当前订阅，不改写 run 终态。
 
-## 7. 当前限制
+## 8. 当前限制
 
 - live run owner 在单个后端进程内；生产必须单实例运行，或为 run API 配置 owner sticky routing。
 - 进程重启只把悬空 run 收口为 `interrupted/server_restart`，不会重放模型或工具。
@@ -95,7 +104,7 @@ SSE 注释保活不推进 sequence，也不落库。反向代理 read timeout �
 - 模型临时错误只在尚未输出正文、尚未开始工具/HITL 时自动 retry；每次重试递增 `attempt_id`，旧 attempt 迟到事件会被丢弃。Channel outbound 使用进程内有界队列，但不是 durable spool；进程退出时未完成投递记录为 lost，不会自动续发。
 - 前后端必须同步发布；旧 `/api/chat/sessions/stream`、session stop/resume 接口已删除。
 
-## 8. 代码入口
+## 9. 代码入口
 
 - Bridge：`backend/noesis_server/domain/chat/streaming/langgraph_sse.py`
 - Run lifecycle：`backend/noesis_server/domain/chat/runs/`
@@ -104,3 +113,4 @@ SSE 注释保活不推进 sequence，也不落库。反向代理 read timeout �
 - QA 编排：`backend/noesis_server/services/qa/`
 - 前端解析：`frontend/src/views/chat/useSSEStream.ts`
 - parts：`frontend/src/views/chat/messageParts.ts`
+- Tool state：`backend/noesis_server/domain/chat/tool_state.py`

@@ -19,6 +19,7 @@ from noesis_server.domain.chat.delivery.orchestrator import RunOrchestrator
 from noesis_server.domain.chat.delivery.persist_sink import PersistSink
 from noesis_server.domain.chat.delivery.channel_worker import ChannelDeliveryWorker
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from noesis_server.domain.chat.tool_state import ToolState
 from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 from noesis_server.services.chat_service import ChatService
 from noesis_server.services.user_service import UserService
@@ -544,6 +545,8 @@ async def resume_channel_hitl(
                 builder.update_tool_hitl(
                     tool_call_id,
                     {"status": "approved", "decision": "approve"},
+                    status="running",
+                    state=ToolState.RUNNING,
                 )
             elif dtype == "reject":
                 msg_text = decision.get("message") or "用户拒绝了该操作"
@@ -551,6 +554,7 @@ async def resume_channel_hitl(
                     tool_call_id,
                     {"status": "rejected", "decision": "reject"},
                     status="error",
+                    state=ToolState.REJECTED,
                 )
                 try:
                     builder.append_tool_output(
@@ -560,6 +564,8 @@ async def resume_channel_hitl(
                         status="error",
                         error=msg_text,
                         error_category="deterministic",
+                        state=ToolState.REJECTED,
+                        outcome="rejected",
                     )
                 except ValueError:
                     pass
@@ -569,6 +575,7 @@ async def resume_channel_hitl(
                     tool_call_id,
                     {"status": "answered", "decision": "respond"},
                     status="success",
+                    state=ToolState.SUCCEEDED,
                 )
                 try:
                     builder.append_tool_output(
@@ -576,6 +583,8 @@ async def resume_channel_hitl(
                         answer,
                         tool_call_id,
                         status="success",
+                        state=ToolState.SUCCEEDED,
+                        outcome="ok",
                     )
                 except ValueError:
                     pass
