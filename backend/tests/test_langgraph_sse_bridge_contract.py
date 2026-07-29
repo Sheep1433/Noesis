@@ -114,6 +114,71 @@ def test_kb_retrieval_and_terminal_annotation_event_order() -> None:
     assert annotation["annotation"]["evidence_id"] == "ev_1"
 
 
+def test_reasoning_can_continue_after_retrieval_result() -> None:
+    bridge = LangGraphSseBridge("sess-retrieval-reasoning")
+    builder = AssistantMessageBuilder(
+        session_id="sess-retrieval-reasoning",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "web_search",
+            "run_id": "call-search",
+            "data": {"input": {"query": "LLM wiki"}},
+        },
+        builder,
+        ctx,
+    )
+    bridge.process_item(
+        {
+            "event": "on_tool_end",
+            "name": "web_search",
+            "run_id": "call-search",
+            "data": {
+                "output": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "url": "https://example.com/llm-wiki",
+                                "title": "LLM Wiki",
+                                "excerpt": "A research project",
+                                "citable": True,
+                            }
+                        ]
+                    }
+                )
+            },
+        },
+        builder,
+        ctx,
+    )
+
+    class _ReasonChunk:
+        content = ""
+        additional_kwargs = {"reasoning_content": "继续分析检索结果"}
+
+    lines = bridge.process_item(
+        {
+            "event": "on_chat_model_stream",
+            "run_id": "run-after-search",
+            "data": {"chunk": _ReasonChunk()},
+        },
+        builder,
+        ctx,
+    )
+
+    assert any(
+        event.get("type") == "reasoning-delta"
+        for event in _data_json_objects("".join(lines))
+    )
+    assert [part["type"] for part in builder.to_dict()["parts"]][-2:] == [
+        "retrieval",
+        "reasoning",
+    ]
+
+
 def test_structured_answer_transport_tool_is_not_user_visible() -> None:
     bridge = LangGraphSseBridge("sess-structured")
     builder = AssistantMessageBuilder()

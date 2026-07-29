@@ -306,7 +306,7 @@ class AssistantMessageBuilder:
         if not text:
             return
         for part in reversed(self._content.parts):
-            if part.parent_task_call_id != parent_task_call_id:
+            if getattr(part, "parent_task_call_id", None) != parent_task_call_id:
                 continue
             if isinstance(part, TextPart):
                 part.content = (part.content or "") + text
@@ -524,7 +524,7 @@ class AssistantMessageBuilder:
         if not reasoning:
             return
         for part in reversed(self._content.parts):
-            if part.parent_task_call_id != parent_task_call_id:
+            if getattr(part, "parent_task_call_id", None) != parent_task_call_id:
                 continue
             if isinstance(part, ReasoningPart):
                 part.content = (part.content or "") + reasoning

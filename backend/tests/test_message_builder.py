@@ -233,6 +233,23 @@ def test_append_reasoning_delta_merges_across_interleaved_parent() -> None:
     assert reasoning[0]["parent_task_call_id"] == "task-1"
 
 
+def test_text_and_reasoning_delta_after_retrieval_part_do_not_assume_parent_field() -> None:
+    builder = AssistantMessageBuilder()
+    builder.register_retrieval_results(
+        tool_call_id="call-search",
+        query="LLM wiki",
+        results=[],
+    )
+
+    builder.append_reasoning_delta("继续分析")
+    builder.append_text_delta("最终回答")
+
+    parts = builder.to_dict()["parts"]
+    assert [part["type"] for part in parts] == ["retrieval", "reasoning", "text"]
+    assert parts[1]["content"] == "继续分析"
+    assert parts[2]["content"] == "最终回答"
+
+
 def test_append_tool_output_persists_error_status() -> None:
     builder = AssistantMessageBuilder()
     builder.append_tool("bash", {"command": "uptime"}, tool_call_id="tc-1")
