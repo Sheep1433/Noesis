@@ -522,6 +522,17 @@ class RunService:
             checkpoint_interval_seconds=StreamConfig.checkpoint_interval_seconds
         )
 
+        async def persist_delivery(envelope) -> None:
+            event = envelope.event
+            persist_sink.on_event(event)
+            if persist_sink.should_checkpoint(event):
+                await cls._persist_checkpoint(
+                    run.id,
+                    run.assistant_message_id,
+                    projection,
+                    envelope.sequence,
+                )
+
         async def producer(publish) -> None:
             async with AsyncSessionLocal() as run_db:
                 try:
@@ -538,14 +549,7 @@ class RunService:
                             )
                             if envelope is None:
                                 continue
-                            persist_sink.on_event(event)
-                            if persist_sink.should_checkpoint(event):
-                                await cls._persist_checkpoint(
-                                    run.id,
-                                    run.assistant_message_id,
-                                    projection,
-                                    envelope.sequence,
-                                )
+                    await run_manager.drain_delivery(run.id, "persist")
                     await cls._persist_projection(run.id, projection)
                 except BaseException as exc:
                     if isinstance(exc, GeneratorExit):
@@ -568,6 +572,7 @@ class RunService:
             attempt_id=run.attempt_id,
             state=projection,
             limit_handler=persist_limit,
+            deliveries={"persist": persist_delivery},
         )
         async with AsyncSessionLocal() as state_db:
             await AgentRunRepository(state_db).compare_and_set_status(
@@ -864,10 +869,6 @@ class RunService:
         )
         if pending.expires_at > 0 and pending.expires_at <= time.time():
             raise ConflictException(message="确认请求已超时，请重新发起")
-        persist_sink = PersistSink(
-            checkpoint_interval_seconds=StreamConfig.checkpoint_interval_seconds
-        )
-
         async def producer(publish) -> None:
             async with AsyncSessionLocal() as run_db:
                 try:
@@ -885,14 +886,7 @@ class RunService:
                             )
                             if envelope is None:
                                 continue
-                            persist_sink.on_event(event)
-                            if persist_sink.should_checkpoint(event):
-                                await cls._persist_checkpoint(
-                                    run_id,
-                                    row.assistant_message_id,
-                                    projection,
-                                    envelope.sequence,
-                                )
+                    await run_manager.drain_delivery(run_id, "persist")
                     await cls._persist_projection(run_id, projection)
                 except BaseException as exc:
                     await cls._persist_cancel_or_error(run_id, projection, exc)
@@ -958,10 +952,6 @@ class RunService:
         if not isinstance(handle.state, RunProjection):
             raise ConflictException(message="任务状态无法恢复")
         projection = handle.state
-        persist_sink = PersistSink(
-            checkpoint_interval_seconds=StreamConfig.checkpoint_interval_seconds
-        )
-
         async def producer(publish) -> None:
             async with AsyncSessionLocal() as run_db:
                 try:
@@ -979,14 +969,7 @@ class RunService:
                             )
                             if envelope is None:
                                 continue
-                            persist_sink.on_event(event)
-                            if persist_sink.should_checkpoint(event):
-                                await cls._persist_checkpoint(
-                                    run_id,
-                                    row.assistant_message_id,
-                                    projection,
-                                    envelope.sequence,
-                                )
+                    await run_manager.drain_delivery(run_id, "persist")
                     await cls._persist_projection(run_id, projection)
                 except BaseException as exc:
                     await cls._persist_cancel_or_error(run_id, projection, exc)

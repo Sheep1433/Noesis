@@ -115,22 +115,37 @@ async def _headless_stream(
         if outbound is not None
         else None
     )
+    managed_deliveries = publish is not None and run_id is not None
+
+    async def persist_delivery(envelope) -> None:
+        sink.on_event(envelope.event)
+        await qs._persist_stream_checkpoint(bridge, session_id, str(user_id))
+
+    async def channel_delivery(envelope) -> None:
+        if delivery_worker is not None:
+            await delivery_worker.submit([envelope.event])
+
+    if managed_deliveries:
+        await run_manager.register_delivery(run_id, "persist", persist_delivery)
+        if delivery_worker is not None:
+            await run_manager.register_delivery(
+                run_id, f"channel:{delivery_id or origin}", channel_delivery
+            )
 
     async def on_events(events: List[Any]) -> None:
         for ev in events:
-            sink.on_event(ev)
             if projection is not None and publish is not None and run_id is not None:
                 await RunService.publish_projected_event(run_id, projection, ev, publish)
             else:
+                sink.on_event(ev)
                 if projection is not None:
                     projection.apply(ev)
                 if publish is not None:
                     await publish(ev, projection.attempt_id if projection is not None else None)
-        if delivery_worker is not None:
+        if delivery_worker is not None and not managed_deliveries:
             await delivery_worker.submit(events)
-        await qs._persist_stream_checkpoint(
-            bridge, session_id, str(user_id)
-        )
+        if not managed_deliveries:
+            await qs._persist_stream_checkpoint(bridge, session_id, str(user_id))
 
     try:
         await _orchestrator.run_headless(
@@ -142,6 +157,11 @@ async def _headless_stream(
             origin=origin,  # type: ignore[arg-type]
             on_events=on_events,
         )
+
+        if managed_deliveries:
+            await run_manager.drain_delivery(run_id, "persist")
+            if delivery_worker is not None:
+                await run_manager.drain_delivery(run_id, f"channel:{delivery_id or origin}")
 
         if delivery_worker is not None:
             if await delivery_worker.finalize():
@@ -200,6 +220,12 @@ async def _headless_stream(
             await delivery_worker.finalize()
         raise
     finally:
+        if managed_deliveries:
+            await run_manager.unregister_delivery(run_id, "persist")
+            if delivery_worker is not None:
+                await run_manager.unregister_delivery(
+                    run_id, f"channel:{delivery_id or origin}"
+                )
         qs._unregister_active_stream(session_id)
 
 

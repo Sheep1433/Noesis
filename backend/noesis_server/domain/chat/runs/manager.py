@@ -109,6 +109,7 @@ Producer = Callable[[Callable[[Any], Awaitable[SequencedRunEvent]]], Awaitable[N
 SnapshotProvider = Callable[[int, RunStatus, int], RunSnapshot]
 LimitHandler = Callable[[RunLimitExceeded], Awaitable[None]]
 ResumePrepare = Callable[[], None]
+DeliveryHandler = Callable[[SequencedRunEvent], Awaitable[None]]
 
 
 @dataclass
@@ -126,6 +127,11 @@ class RunHandle:
     buffer: deque[SequencedRunEvent] = field(default_factory=deque)
     buffer_bytes: int = 0
     subscribers: set[asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = field(default_factory=set)
+    delivery_queues: dict[str, asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = field(
+        default_factory=dict
+    )
+    delivery_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    delivery_failures: dict[str, BaseException] = field(default_factory=dict)
     terminal_future: asyncio.Future[RunStatus] | None = None
     cleanup_task: asyncio.Task[None] | None = None
     watchdog_task: asyncio.Task[None] | None = None
@@ -191,6 +197,7 @@ class RunManager:
             "cancel_latency_last_ms": 0.0,
             "terminal_reclaimed": 0,
             "stale_attempt_events": 0,
+            "delivery_failures": 0,
         }
 
     async def start(
@@ -205,6 +212,7 @@ class RunManager:
         attempt_id: int = 1,
         state: Any = None,
         limit_handler: LimitHandler | None = None,
+        deliveries: dict[str, DeliveryHandler] | None = None,
     ) -> RunHandle:
         loop = asyncio.get_running_loop()
         handle = RunHandle(
@@ -228,6 +236,8 @@ class RunManager:
             if sum(1 for run in active if run.user_id == user_id) >= self.max_user_active_runs:
                 raise RunCapacityExceeded("user active run limit exceeded")
             self._runs[run_id] = handle
+        for name, handler in (deliveries or {}).items():
+            await self.register_delivery(run_id, name, handler)
         logger.info(
             "agent_run_registered run_id={} session_id={} assistant_message_id={} attempt_id={} status=running",
             run_id,
@@ -311,6 +321,76 @@ class RunManager:
             return self._runs[run_id]
         except KeyError as exc:
             raise RunNotFound(run_id) from exc
+
+    async def register_delivery(
+        self, run_id: str, name: str, handler: DeliveryHandler
+    ) -> asyncio.Task[None]:
+        """注册独立 Delivery worker；handler 失败只移除自身订阅。"""
+        handle = self.get(run_id)
+        async with handle.lock:
+            if name in handle.delivery_tasks:
+                raise ValueError(f"delivery already registered: {name}")
+            queue: asyncio.Queue[SequencedRunEvent | SlowSubscriber] = BoundedEventQueue(
+                maxsize=self.subscriber_queue_events,
+                max_bytes=self.subscriber_queue_bytes,
+            )
+            handle.subscribers.add(queue)
+            handle.delivery_queues[name] = queue
+            task = asyncio.create_task(
+                self._run_delivery(handle, name, queue, handler),
+                name=f"agent-run-delivery:{name}:{run_id}",
+            )
+            handle.delivery_tasks[name] = task
+            return task
+
+    async def _run_delivery(
+        self,
+        handle: RunHandle,
+        name: str,
+        queue: asyncio.Queue[SequencedRunEvent | SlowSubscriber],
+        handler: DeliveryHandler,
+    ) -> None:
+        try:
+            while True:
+                item = await queue.get()
+                try:
+                    if isinstance(item, SlowSubscriber):
+                        raise item
+                    await handler(item)
+                finally:
+                    queue.task_done()
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            handle.delivery_failures[name] = exc
+            self._metrics["delivery_failures"] += 1
+            logger.exception(
+                "agent_run_delivery_failed run_id={} delivery={}", handle.run_id, name
+            )
+        finally:
+            async with handle.lock:
+                handle.subscribers.discard(queue)
+                handle.delivery_queues.pop(name, None)
+                if handle.delivery_tasks.get(name) is asyncio.current_task():
+                    handle.delivery_tasks.pop(name, None)
+
+    async def drain_delivery(self, run_id: str, name: str) -> None:
+        """等待指定 Delivery 消费完已入队事件，不传播其 handler 异常。"""
+        handle = self.get(run_id)
+        queue = getattr(handle, "delivery_queues", {}).get(name)
+        if queue is not None:
+            await queue.join()
+
+    async def unregister_delivery(self, run_id: str, name: str) -> None:
+        handle = self.get(run_id)
+        async with handle.lock:
+            queue = handle.delivery_queues.pop(name, None)
+            task = handle.delivery_tasks.pop(name, None)
+            if queue is not None:
+                handle.subscribers.discard(queue)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def transition(self, run_id: str, target: RunStatus) -> bool:
         handle = self.get(run_id)
@@ -399,6 +479,7 @@ class RunManager:
                 handle.subscribers.discard(queue)
                 try:
                     queue.get_nowait()
+                    queue.task_done()
                 except asyncio.QueueEmpty:
                     pass
                 try:
@@ -469,6 +550,9 @@ class RunManager:
             if handle.status not in TERMINAL_RUN_STATUSES:
                 return False
             handle.subscribers.clear()
+            delivery_tasks = tuple(handle.delivery_tasks.values())
+            handle.delivery_tasks.clear()
+            handle.delivery_queues.clear()
             handle.buffer.clear()
             handle.buffer_bytes = 0
             handle.output_bytes = 0
@@ -488,6 +572,11 @@ class RunManager:
         logger.info("agent_run_reclaimed run_id={} status={}", run_id, handle.status.value)
         if cleanup_task is not None and cleanup_task is not asyncio.current_task():
             cleanup_task.cancel()
+        for task in delivery_tasks:
+            if task is not asyncio.current_task():
+                task.cancel()
+        if delivery_tasks:
+            await asyncio.gather(*delivery_tasks, return_exceptions=True)
         return True
 
     async def shutdown(self, *, drain_seconds: float = 10.0) -> None:
@@ -504,6 +593,16 @@ class RunManager:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        delivery_tasks = [
+            task
+            for handle in self._runs.values()
+            for task in handle.delivery_tasks.values()
+            if not task.done()
+        ]
+        for task in delivery_tasks:
+            task.cancel()
+        if delivery_tasks:
+            await asyncio.gather(*delivery_tasks, return_exceptions=True)
 
     def record_checkpoint_failure(self, run_id: str) -> None:
         self._metrics["checkpoint_failures"] += 1
