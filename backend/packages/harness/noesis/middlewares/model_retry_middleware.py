@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Any
+
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.callbacks.manager import adispatch_custom_event
 
@@ -18,7 +20,16 @@ def is_transient_model_error(exc: BaseException) -> bool:
     if isinstance(exc, (TimeoutError, ConnectionError, asyncio.TimeoutError)):
         return True
     name = exc.__class__.__name__.lower()
-    if any(token in name for token in ("timeout", "connection", "ratelimit", "servererror")):
+    if any(
+        token in name
+        for token in (
+            "timeout",
+            "connection",
+            "protocolerror",
+            "ratelimit",
+            "servererror",
+        )
+    ):
         return True
     status = getattr(exc, "status_code", None)
     return isinstance(status, int) and (status in {408, 429} or status >= 500)

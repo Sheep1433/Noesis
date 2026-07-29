@@ -89,6 +89,7 @@ _MODEL_API_TIMEOUT_MARKERS = re.compile(
 _NETWORK_TIMEOUT_MARKERS = re.compile(
     r"request timed out|timed out|\btimeout\b|apitimeout|connecterror|"
     r"connection refused|econnrefused|network is unreachable|socket hang up|"
+    r"remoteprotocolerror|peer closed connection|incomplete chunked read|"
     r"无法连接|网络异常|网络错误|网络或服务异常",
     re.I,
 )

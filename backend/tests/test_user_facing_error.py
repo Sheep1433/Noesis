@@ -16,6 +16,14 @@ def test_sanitize_stream_connection_refused_not_tool_classifier() -> None:
     assert sanitize_stream_error("connection refused") == "连接失败，请稍后重试。"
 
 
+def test_sanitize_stream_incomplete_chunked_read_as_connection_failure() -> None:
+    raw = (
+        "peer closed connection without sending complete message body "
+        "(incomplete chunked read)"
+    )
+    assert sanitize_stream_error(raw) == "连接失败，请稍后重试。"
+
+
 def test_sanitize_stream_hides_provider_auth_details() -> None:
     raw = "AuthenticationError: Error code: 401 invalid_api_key request_id=secret"
     assert sanitize_stream_error(raw) == "模型服务暂时不可用，请稍后重试。"

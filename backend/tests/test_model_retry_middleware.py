@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 from langchain_core.callbacks.manager import AsyncCallbackManagerForLLMRun
 
@@ -36,6 +37,32 @@ async def test_transient_model_failure_emits_retrying_then_running(monkeypatch) 
     assert handler.await_count == 2
     assert [item[1]["status"] for item in emitted] == ["retrying", "running"]
     assert emitted[0][1]["attempt_id"] == 2
+
+
+@pytest.mark.asyncio
+async def test_incomplete_chunked_model_stream_retries_before_visible_output(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(model_retry_middleware, "adispatch_custom_event", AsyncMock())
+    middleware = ModelRetryMiddleware(max_retries=1, base_delay_seconds=0)
+    tracker = ModelAttemptTracker()
+    token = bind_model_attempt_tracker(tracker)
+    handler = AsyncMock(
+        side_effect=[
+            httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body "
+                "(incomplete chunked read)"
+            ),
+            "ok",
+        ]
+    )
+    try:
+        result = await middleware.awrap_model_call(object(), handler)
+    finally:
+        reset_model_attempt_tracker(token)
+
+    assert result == "ok"
+    assert handler.await_count == 2
 
 
 @pytest.mark.asyncio
