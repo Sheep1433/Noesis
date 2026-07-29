@@ -9,12 +9,15 @@
 
 ```text
 POST /api/chat/runs → RunService → RunManager → QaService producer
-                                      ├─ PersistSink / PostgreSQL snapshot
                                       └─ sequenced event buffer
-                                             └─ GET /runs/{id}/stream → Browser
+                                             ├─ PersistSink → PostgreSQL snapshot
+                                             ├─ SseDelivery → Browser
+                                             └─ ChannelDelivery → Telegram / other channel
 ```
 
 浏览器连接不是消息落库的权威。客户端断开后，producer 与检查点继续运行；刷新后由 run snapshot 和 sequence 恢复。消息通道使用同一个 `RunManager` 注册 run，并在内部通过 headless `RunOrchestrator` 映射事件，不依赖浏览器 SSE。
+
+PersistSink、每个 SseDelivery 和 ChannelDelivery 都使用独立的有界 subscriber queue。RunManager 发布事件时不等待各 Delivery 完成；某个 handler 写入失败只注销该 subscriber 并记录 `delivery_failures`，不会取消 producer、其它 subscriber 或改写 run 终态。PersistSink 在 producer 最终持久化前完成已入队事件的消费，SSE 断连只释放当前浏览器队列。
 
 ## 2. 事件
 

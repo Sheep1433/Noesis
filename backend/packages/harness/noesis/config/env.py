@@ -124,8 +124,6 @@ class ModelSettings:
     loop_detection_hard_limit: int
     loop_detection_window_size: int
     loop_detection_max_tracked_threads: int
-    loop_detection_tool_freq_warn: int
-    loop_detection_tool_freq_hard_limit: int
     dangling_tool_call_repair_enabled: bool
     tool_call_limit_enabled: bool
     tool_call_limit_thread_limit: int | None
@@ -417,12 +415,6 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         loop_detection_window_size=_legacy_env_int("LOOP_DETECTION_WINDOW_SIZE", loop.window_size),
         loop_detection_max_tracked_threads=_legacy_env_int(
             "LOOP_DETECTION_MAX_TRACKED_THREADS", loop.max_tracked_threads
-        ),
-        loop_detection_tool_freq_warn=_legacy_env_int(
-            "LOOP_DETECTION_TOOL_FREQ_WARN", loop.tool_freq_warn
-        ),
-        loop_detection_tool_freq_hard_limit=_legacy_env_int(
-            "LOOP_DETECTION_TOOL_FREQ_HARD_LIMIT", loop.tool_freq_hard_limit
         ),
         dangling_tool_call_repair_enabled=_legacy_env_bool(
             "DANGLING_TOOL_CALL_REPAIR_ENABLED", runtime.dangling_tool_call_repair_enabled

@@ -131,7 +131,6 @@ async def stream_agent_events(
 
             interrupt = extract_interrupt_payload(event)
             if interrupt is not None:
-                attempt_tracker.side_effect_boundary_crossed = True
                 interrupt_id, hitl_value = interrupt
                 logger.info(
                     f"HITL interrupt task_id={task_id} interrupt_id={interrupt_id}"

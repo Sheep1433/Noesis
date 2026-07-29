@@ -169,8 +169,6 @@ class LoopDetectionYamlSection(BaseModel):
     hard_limit: int = Field(default=5, ge=2)
     window_size: int = Field(default=20, ge=1)
     max_tracked_threads: int = Field(default=100, ge=1)
-    tool_freq_warn: int = Field(default=30, ge=1)
-    tool_freq_hard_limit: int = Field(default=50, ge=1)
 
 
 class ToolCallLimitYamlSection(BaseModel):
