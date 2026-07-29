@@ -586,7 +586,6 @@ class RunService:
                         current_user,
                         run_db,
                         assistant_message_id=run.assistant_message_id,
-                        messages_precreated=True,
                     ):
                         for event in parse_sse_line_to_event(line):
                             envelope = await cls.publish_projected_event(
@@ -931,7 +930,6 @@ class RunService:
                         grant_scope=request.grant_scope,
                         current_user=current_user,
                         db=run_db,
-                        run_managed=True,
                     ):
                         for event in parse_sse_line_to_event(line):
                             envelope = await cls.publish_projected_event(
@@ -1014,7 +1012,6 @@ class RunService:
                         current_user=current_user,
                         db=run_db,
                         assistant_message_id=row.assistant_message_id,
-                        messages_precreated=True,
                     ):
                         for event in parse_sse_line_to_event(line):
                             envelope = await cls.publish_projected_event(

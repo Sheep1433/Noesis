@@ -311,7 +311,7 @@ async def test_resume_hitl_uses_projection_pending_without_legacy_store(monkeypa
 
     assert captured["pending"].interrupt_id == "interrupt-1"
     assert captured["pending"].assistant_message_id == "assistant-1"
-    assert captured["run_managed"] is True
+    assert "run_managed" not in captured
     assert snapshot.status == RunStatus.RUNNING
     repository.compare_and_set_status.assert_awaited_once()
 

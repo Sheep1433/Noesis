@@ -7,8 +7,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.services.qa import QaService
-from noesis_server.services.qa.helpers import _ActiveStreamState, _handle_stream_client_disconnect
+from noesis_server.services.qa.helpers import (
+    ACTIVE_STREAMS,
+    _ActiveStreamState,
+    _handle_stream_client_disconnect,
+)
 
 
 @pytest.mark.asyncio
@@ -17,7 +20,7 @@ async def test_handle_stream_client_disconnect_flushes_text_buffer() -> None:
     builder = AssistantMessageBuilder(session_id=session_id, message_id="msg-1")
     ctx = {"text_buffer": "未刷新的正文", "_assistant_db_id": "msg-1"}
 
-    QaService._active_streams[session_id] = _ActiveStreamState(
+    ACTIVE_STREAMS[session_id] = _ActiveStreamState(
         builder=builder,
         ctx=ctx,
         qa_type="COMMON_QA",
@@ -43,4 +46,4 @@ async def test_handle_stream_client_disconnect_flushes_text_buffer() -> None:
         assert any("未刷新的正文" in str(p.get("content", "")) for p in text_parts)
         assert mock_persist.await_args.kwargs["status"] == "partial"
     finally:
-        QaService._active_streams.pop(session_id, None)
+        ACTIVE_STREAMS.pop(session_id, None)

@@ -201,7 +201,6 @@ async def test_exec_hitl_resume_checks_expiry_without_initialization_error() -> 
             grant_scope="once",
             current_user=SimpleNamespace(user_id=1),
             db=SimpleNamespace(),
-            run_managed=True,
         )
     ]
 

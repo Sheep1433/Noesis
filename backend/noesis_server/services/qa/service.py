@@ -1,4 +1,4 @@
-"""QaService — QA orchestration (exec_query / resume / export / stop_chat)."""
+"""QaService — Run-managed QA orchestration (exec_query / resume / export)."""
 
 import asyncio
 import logging
@@ -20,32 +20,17 @@ from noesis_server.services.chat_attachment_service import ChatAttachmentService
 from noesis_server.services.mention_resolve_service import MentionResolveService
 from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
 from noesis_server.domain.chat.tool_state import ToolState
-from noesis_server.domain.chat.streaming.failure_notice import append_user_stop_notice_to_content
 from noesis.llm.catalog import get_default_model_id
 
 from noesis_server.services.qa.helpers import (
-    ACTIVE_STREAMS,
-    _ActiveStreamState,
-    _assistant_content_for_persist,
-    _build_assistant_persist_extra,
     _finalize_sse_bridge_stream,
-    _finalize_streaming_assistant,
-    _flush_ctx_text_buffer,
-    _handle_stream_client_disconnect,
-    _insert_streaming_assistant_skeleton,
-    _mark_stream_persist_finalized,
     _new_stream_ctx,
-    _persist_assistant,
-    _persist_hitl_pending_assistant,
-    _register_active_stream,
     _resolve_enabled_skills_for_query,
     _resolve_kb_settings_for_query,
     _resolve_mcp_servers_for_query,
     _resolve_model_for_query,
-    _resolved_model_name,
-    _unregister_active_stream,
     _yield_sse_from_agent_bridge,
     case_coordinator,
     common_agent,
@@ -55,9 +40,6 @@ from noesis_server.services.qa.helpers import (
 
 
 class QaService:
-    # session_id -> 流式状态（stop 时权威落库）；与 helpers.ACTIVE_STREAMS 同一 dict
-    _active_streams = ACTIVE_STREAMS
-
     @classmethod
     async def exec_query(
         cls,
@@ -66,7 +48,6 @@ class QaService:
         db: AsyncSession,
         *,
         assistant_message_id: Optional[str] = None,
-        messages_precreated: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
         执行问答，返回 Noesis 标准 SSE 文本帧（str）。
@@ -81,12 +62,9 @@ class QaService:
             ChatAttachmentService.validate_message_file_count(req_obj.file_dict)
 
         session_id = req_obj.chat_id or str(uuid.uuid4())
-        task_cancelled = False
-        user_text = (req_obj.query or "").strip()
         builder: Optional[AssistantMessageBuilder] = None
         bridge: Optional[LangGraphSseBridge] = None
         ctx: Dict[str, Any] = {}
-        active_stream_registered = False
 
         resolved_mentions = MentionResolveService.resolve(
             mentions=req_obj.mentions,
@@ -103,39 +81,11 @@ class QaService:
             )
 
         try:
-            if not messages_precreated:
-                # 旧的直接调用路径仍自行创建消息；RunService 会预先在单事务中完成。
-                await ChatService.get_or_create_session(
-                    user_id=current_user.user_id,
-                    session_id=session_id,
-                    title=(user_text[:100] if user_text else (clean_query[:100] if clean_query else None)),
-                    extra={"qa_type": req_obj.qa_type},
-                    db=db
-                )
-
-            # 流式开始前写入用户消息
-            if user_text and not messages_precreated:
-                user_extra: Dict[str, Any] = {
-                    "qa_type": req_obj.qa_type,
-                    "file_dict": req_obj.file_dict,
-                }
-                if resolved_mentions.persistence:
-                    user_extra["mentions"] = resolved_mentions.persistence
-                await ChatService.save_message(
-                    session_id=session_id,
-                    user_id=current_user.user_id,
-                    role="user",
-                    content=UserMessageBuilder(content=user_text).serialize(),
-                    extra=user_extra,
-                    db=db,
-                )
-
             logger.info(
                 f"exec_query 流式上游开始 session_id={session_id} qa_type={req_obj.qa_type} user_id={current_user.user_id}"
             )
 
             resolved_model_id = get_default_model_id()
-            resolved_model_name = _resolved_model_name(resolved_model_id)
             if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]:
                 resolved_model_id = await _resolve_model_for_query(
                     session_id=session_id,
@@ -143,7 +93,6 @@ class QaService:
                     request_model_id=req_obj.model_id,
                     db=db,
                 )
-                resolved_model_name = _resolved_model_name(resolved_model_id)
 
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
@@ -252,23 +201,7 @@ class QaService:
                 message_id=bridge.assistant_message_id,
             )
             ctx = _new_stream_ctx()
-            if not messages_precreated:
-                _register_active_stream(
-                    session_id,
-                    _ActiveStreamState(
-                        builder=builder,
-                        ctx=ctx,
-                        qa_type=req_obj.qa_type,
-                        model_name=resolved_model_name,
-                    ),
-                )
-                active_stream_registered = True
-            if messages_precreated:
-                ctx["_assistant_db_id"] = bridge.assistant_message_id
-            elif await _insert_streaming_assistant_skeleton(
-                bridge.assistant_message_id, session_id, current_user.user_id
-            ):
-                ctx["_assistant_db_id"] = bridge.assistant_message_id
+            ctx["_assistant_db_id"] = bridge.assistant_message_id
 
             ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
             lf_thread = (
@@ -294,124 +227,31 @@ class QaService:
             ):
                 yield sse_line
 
-            if not messages_precreated and not task_cancelled and not ctx.get("user_stopped"):
-                if bridge.last_finish_reason == "hitl_pending":
-                    await _persist_hitl_pending_assistant(
-                        builder=builder,
-                        bridge=bridge,
-                        ctx=ctx,
-                        session_id=session_id,
-                        user_id=current_user.user_id,
-                        qa_type=req_obj.qa_type,
-                        model=resolved_model_name,
-                    )
-                else:
-                    await _finalize_streaming_assistant(
-                        builder=builder,
-                        bridge=bridge,
-                        ctx=ctx,
-                        session_id=session_id,
-                        user_id=current_user.user_id,
-                        qa_type=req_obj.qa_type,
-                        model=resolved_model_name,
-                    )
-
             logger.info(
                 f"exec_query 流式正常结束 session_id={session_id} qa_type={req_obj.qa_type} "
                 f"assistant_message_id={bridge.assistant_message_id if bridge else ''} "
                 f"finish_reason={bridge.last_finish_reason if bridge else ''}"
             )
 
-            if active_stream_registered:
-                _unregister_active_stream(session_id)
-
         except asyncio.CancelledError:
-            task_cancelled = True
             logger.info(
                 f"exec_query 流式任务被取消(CancelledError) session_id={session_id} qa_type={req_obj.qa_type} "
                 f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
                 f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
             )
-            if not messages_precreated:
-                await _handle_stream_client_disconnect(
-                    session_id=session_id,
-                    qa_type=req_obj.qa_type,
-                    user_id=current_user.user_id,
-                    ctx=ctx or {},
-                    builder=builder,
-                    log_label="exec_query",
-                )
-            if active_stream_registered:
-                _unregister_active_stream(session_id)
             raise
 
         except GeneratorExit:
-            task_cancelled = True
             logger.info(
                 f"exec_query 流式消费者断开(GeneratorExit) session_id={session_id} qa_type={req_obj.qa_type} "
                 f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
             )
-            if not messages_precreated:
-                await _handle_stream_client_disconnect(
-                    session_id=session_id,
-                    qa_type=req_obj.qa_type,
-                    user_id=current_user.user_id,
-                    ctx=ctx or {},
-                    builder=builder,
-                    log_label="exec_query",
-                )
-            if active_stream_registered:
-                _unregister_active_stream(session_id)
             raise
 
         except Exception as e:
             logging.exception(f"QA服务异常: {e}")
-            aid = (ctx or {}).get("_assistant_db_id")
-            stream_state = cls._active_streams.get(session_id)
-            persist_b = stream_state.builder if stream_state else builder
-            persist_model = stream_state.model_name if stream_state else None
-            _flush_ctx_text_buffer(ctx, persist_b)
-            err_text = str(e)[:8000]
-            if not messages_precreated and persist_b is not None and not persist_b.is_empty():
-                try:
-                    await _persist_assistant(
-                        _assistant_content_for_persist(persist_b, error_detail=err_text),
-                        session_id,
-                        current_user.user_id,
-                        status="error",
-                        extra=_build_assistant_persist_extra(
-                            qa_type=req_obj.qa_type,
-                            error_message=err_text,
-                            model=persist_model,
-                        ),
-                        assistant_message_id=aid,
-                    )
-                    _mark_stream_persist_finalized(ctx)
-                except Exception:
-                    logger.exception(
-                        f"QA 异常路径 assistant 落库失败: session_id={session_id} user_id={current_user.user_id}"
-                    )
-            elif not messages_precreated and aid:
-                try:
-                    await _persist_assistant(
-                        _assistant_content_for_persist(None, error_detail=err_text),
-                        session_id,
-                        current_user.user_id,
-                        status="error",
-                        extra=_build_assistant_persist_extra(
-                            qa_type=req_obj.qa_type,
-                            error_message=err_text,
-                            model=persist_model,
-                        ),
-                        assistant_message_id=aid,
-                    )
-                    _mark_stream_persist_finalized(ctx)
-                except Exception:
-                    logger.exception(
-                        f"QA 异常路径 assistant 空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
-                    )
             if bridge is not None:
-                b = persist_b if persist_b is not None else AssistantMessageBuilder(session_id=session_id)
+                b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
                     "text_buffer": "",
                     "current_tool_name": None,
@@ -433,8 +273,6 @@ class QaService:
                         yield line
                 except Exception:
                     logging.exception("failed to emit SSE after QA exception")
-            if active_stream_registered:
-                _unregister_active_stream(session_id)
 
     @classmethod
     async def exec_test_case_resume(
@@ -445,45 +283,16 @@ class QaService:
         db: AsyncSession,
         *,
         assistant_message_id: Optional[str] = None,
-        messages_precreated: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
         测试用例生成第二阶段：用户采纳测试点并二次确认后，流式生成具体用例。
         """
-        task_cancelled = False
         names = [n for n in (selected_point_names or []) if isinstance(n, str) and n.strip()]
-        preview = "、".join(names[:15])
-        if len(names) > 15:
-            preview += "…"
-        user_text = f"确认生成测试用例，已采纳 {len(names)} 个测试点：{preview}"
-
         builder: Optional[AssistantMessageBuilder] = None
         bridge: Optional[LangGraphSseBridge] = None
         ctx: Dict[str, Any] = {}
 
         try:
-            if not messages_precreated:
-                await ChatService.get_or_create_session(
-                    user_id=current_user.user_id,
-                    session_id=session_id,
-                    title=user_text[:100],
-                    extra={"qa_type": IntentEnum.TEST_CASE_QA.value[0]},
-                    db=db,
-                )
-
-                await ChatService.save_message(
-                    session_id=session_id,
-                    user_id=current_user.user_id,
-                    role="user",
-                    content=UserMessageBuilder(content=user_text).serialize(),
-                    extra={
-                        "qa_type": IntentEnum.TEST_CASE_QA.value[0],
-                        "test_case_resume": True,
-                        "selected_point_names": names,
-                    },
-                    db=db,
-                )
-
             logger.info(
                 f"exec_test_case_resume 流式上游开始 session_id={session_id} user_id={current_user.user_id} point_count={len(names)}"
             )
@@ -499,34 +308,19 @@ class QaService:
                 session_id=session_id,
                 message_id=bridge.assistant_message_id,
             )
-            if messages_precreated:
-                from sqlalchemy import select
-                from noesis_server.models.chat_models import TChatMessage
+            from sqlalchemy import select
+            from noesis_server.models.chat_models import TChatMessage
 
-                async with AsyncSessionLocal() as persist_db:
-                    result = await persist_db.execute(
-                        select(TChatMessage).where(TChatMessage.id == bridge.assistant_message_id)
-                    )
-                    existing = result.scalar_one_or_none()
-                    if existing is not None and isinstance(existing.content, dict):
-                        builder.load_from_content_dict(existing.content)
+            async with AsyncSessionLocal() as persist_db:
+                result = await persist_db.execute(
+                    select(TChatMessage).where(TChatMessage.id == bridge.assistant_message_id)
+                )
+                existing = result.scalar_one_or_none()
+                if existing is not None and isinstance(existing.content, dict):
+                    builder.load_from_content_dict(existing.content)
             ctx = _new_stream_ctx()
             tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            if not messages_precreated:
-                _register_active_stream(
-                    session_id,
-                    _ActiveStreamState(
-                        builder=builder,
-                        ctx=ctx,
-                        qa_type=tc_qa,
-                    ),
-                )
-            if messages_precreated:
-                ctx["_assistant_db_id"] = bridge.assistant_message_id
-            elif await _insert_streaming_assistant_skeleton(
-                bridge.assistant_message_id, session_id, current_user.user_id
-            ):
-                ctx["_assistant_db_id"] = bridge.assistant_message_id
+            ctx["_assistant_db_id"] = bridge.assistant_message_id
 
             ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
             async for sse_line in _yield_sse_from_agent_bridge(
@@ -547,110 +341,31 @@ class QaService:
             ):
                 yield sse_line
 
-            if not messages_precreated and not task_cancelled and not ctx.get("user_stopped"):
-                await _finalize_streaming_assistant(
-                    builder=builder,
-                    bridge=bridge,
-                    ctx=ctx,
-                    session_id=session_id,
-                    user_id=current_user.user_id,
-                    qa_type=tc_qa,
-                )
-
             logger.info(
                 f"exec_test_case_resume 流式正常结束 session_id={session_id} "
                 f"assistant_message_id={bridge.assistant_message_id if bridge else ''} "
                 f"finish_reason={bridge.last_finish_reason if bridge else ''}"
             )
 
-            if not messages_precreated:
-                _unregister_active_stream(session_id)
-
         except asyncio.CancelledError:
-            task_cancelled = True
             logger.info(
                 f"exec_test_case_resume 流式被取消(CancelledError) session_id={session_id} "
                 f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
                 f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
             )
-            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            if not messages_precreated:
-                await _handle_stream_client_disconnect(
-                    session_id=session_id,
-                    qa_type=tc_qa,
-                    user_id=current_user.user_id,
-                    ctx=ctx or {},
-                    builder=builder,
-                    log_label="exec_test_case_resume",
-                )
-                _unregister_active_stream(session_id)
             raise
 
         except GeneratorExit:
-            task_cancelled = True
             logger.info(
                 f"exec_test_case_resume 流式消费者断开(GeneratorExit) session_id={session_id} "
                 f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
             )
-            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            if not messages_precreated:
-                await _handle_stream_client_disconnect(
-                    session_id=session_id,
-                    qa_type=tc_qa,
-                    user_id=current_user.user_id,
-                    ctx=ctx or {},
-                    builder=builder,
-                    log_label="exec_test_case_resume",
-                )
-                _unregister_active_stream(session_id)
             raise
 
         except Exception as e:
             logging.exception(f"测试用例 resume 异常: {e}")
-            aid = (ctx or {}).get("_assistant_db_id")
-            tc_qa = IntentEnum.TEST_CASE_QA.value[0]
-            stream_state = cls._active_streams.get(session_id)
-            persist_b = stream_state.builder if stream_state else builder
-            _flush_ctx_text_buffer(ctx, persist_b)
-            err_text = str(e)[:8000]
-            if not messages_precreated and persist_b is not None and not persist_b.is_empty():
-                try:
-                    await _persist_assistant(
-                        _assistant_content_for_persist(persist_b, error_detail=err_text),
-                        session_id,
-                        current_user.user_id,
-                        status="error",
-                        extra=_build_assistant_persist_extra(
-                            qa_type=tc_qa,
-                            error_message=err_text,
-                        ),
-                        assistant_message_id=aid,
-                    )
-                    _mark_stream_persist_finalized(ctx)
-                except Exception:
-                    logger.exception(
-                        f"测试用例 resume 异常路径 assistant 落库失败: session_id={session_id} user_id={current_user.user_id}"
-                    )
-            elif not messages_precreated and aid:
-                try:
-                    await _persist_assistant(
-                        _assistant_content_for_persist(None, error_detail=err_text),
-                        session_id,
-                        current_user.user_id,
-                        status="error",
-                        extra=_build_assistant_persist_extra(
-                            qa_type=tc_qa,
-                            error_message=err_text,
-                        ),
-                        assistant_message_id=aid,
-                    )
-                    _mark_stream_persist_finalized(ctx)
-                except Exception:
-                    logger.exception(
-                        f"测试用例 resume 异常路径空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
-                    )
             if bridge is not None:
-                b = persist_b if persist_b is not None else AssistantMessageBuilder(session_id=session_id)
+                b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
                     "text_buffer": "",
                     "current_tool_name": None,
@@ -672,8 +387,6 @@ class QaService:
                         yield line
                 except Exception:
                     logging.exception("failed to emit SSE after test case resume exception")
-            if not messages_precreated:
-                _unregister_active_stream(session_id)
 
     @classmethod
     async def exec_hitl_resume(
@@ -684,14 +397,12 @@ class QaService:
         grant_scope: Optional[str],
         current_user: CurrentUser,
         db: AsyncSession,
-        run_managed: bool = False,
     ) -> AsyncGenerator[str, None]:
         """HITL resume：新开 SSE，续写同一 assistant_message_id。"""
         from noesis.guardrails.session_grants import session_grants
         from noesis_server.models.chat_models import TChatMessage
         from sqlalchemy import and_, select
 
-        task_cancelled = False
         builder: Optional[AssistantMessageBuilder] = None
         bridge: Optional[LangGraphSseBridge] = None
         ctx: Dict[str, Any] = {}
@@ -762,16 +473,6 @@ class QaService:
             builder.load_from_content_dict(existing_content)
             ctx = _new_stream_ctx()
             ctx["_assistant_db_id"] = aid
-            if not run_managed:
-                _register_active_stream(
-                    session_id,
-                    _ActiveStreamState(
-                        builder=builder,
-                        ctx=ctx,
-                        qa_type=qa_type,
-                        model_name=None,
-                    ),
-                )
 
             # reject/respond 不经 on_tool_end：先合成 tool-output 与 hitl 状态
             from noesis_server.domain.chat.streaming.langgraph_sse import _format_sse
@@ -883,42 +584,7 @@ class QaService:
             ):
                 yield sse_line
 
-            if not run_managed and not task_cancelled and not ctx.get("user_stopped"):
-                if bridge.last_finish_reason == "hitl_pending":
-                    await _persist_hitl_pending_assistant(
-                        builder=builder,
-                        bridge=bridge,
-                        ctx=ctx,
-                        session_id=session_id,
-                        user_id=current_user.user_id,
-                        qa_type=qa_type,
-                    )
-                else:
-                    await _finalize_streaming_assistant(
-                        builder=builder,
-                        bridge=bridge,
-                        ctx=ctx,
-                        session_id=session_id,
-                        user_id=current_user.user_id,
-                        qa_type=qa_type,
-                    )
-
-            if not run_managed:
-                _unregister_active_stream(session_id)
-
         except asyncio.CancelledError:
-            task_cancelled = True
-            if not run_managed:
-                await _handle_stream_client_disconnect(
-                    session_id=session_id,
-                    qa_type=qa_type,
-                    user_id=current_user.user_id,
-                    ctx=ctx or {},
-                    builder=builder,
-                    log_label="exec_hitl_resume",
-                )
-            if not run_managed:
-                _unregister_active_stream(session_id)
             raise
         except Exception as e:
             logging.exception(f"HITL resume 异常: {e}")
@@ -940,8 +606,6 @@ class QaService:
                         yield line
                 except Exception:
                     logging.exception("failed to emit SSE after HITL resume exception")
-            if not run_managed:
-                _unregister_active_stream(session_id)
 
     @classmethod
     async def export_test_case_markdown(
@@ -983,81 +647,3 @@ class QaService:
             (session.title or "测试用例").strip(),
         )[:60] or "测试用例"
         return md, f"{safe_title}.md"
-
-    @classmethod
-    async def stop_chat(cls, session_id, qa_type, current_user: CurrentUser):
-        """用户主动停止：权威落库后 cancel_task；流式协程见 ctx.user_stopped 跳过二次落库。"""
-        from noesis_server.domain.chat.delivery.orchestrator import CancelReason, run_lifecycle
-
-        stream_state = cls._active_streams.get(session_id)
-        builder = stream_state.builder if stream_state else None
-        ctx = stream_state.ctx if stream_state else {}
-        if stream_state is not None:
-            stream_state.user_stopped = True
-            ctx["user_stopped"] = True
-        run_lifecycle.notify_cancel(session_id, CancelReason.USER_STOP)
-
-        logger.info(
-            f"stop_chat 处理 session_id={session_id} qa_type={qa_type} user_id={current_user.user_id} "
-            f"has_active_stream={stream_state is not None}"
-        )
-
-        aid = (
-            (getattr(builder, "message_id", None) or None)
-            if builder
-            else ctx.get("_assistant_db_id")
-        )
-        _flush_ctx_text_buffer(ctx, builder)
-
-        persist_extra = {"qa_type": qa_type, "finish_reason": "stopped"}
-        if builder and (aid or not builder.is_empty()):
-            try:
-                snapshot = builder.to_dict() if not builder.is_empty() else {"version": 1, "parts": []}
-                content = append_user_stop_notice_to_content(snapshot)
-                await _persist_assistant(
-                    content,
-                    session_id,
-                    current_user.user_id,
-                    status="partial",
-                    extra=persist_extra,
-                    assistant_message_id=aid,
-                )
-            except Exception:
-                logger.exception(
-                    f"stop_chat 时 assistant 消息落库失败: session_id={session_id} user_id={current_user.user_id}"
-                )
-        elif aid:
-            try:
-                content = append_user_stop_notice_to_content({"version": 1, "parts": []})
-                await _persist_assistant(
-                    content,
-                    session_id,
-                    current_user.user_id,
-                    status="partial",
-                    extra=persist_extra,
-                    assistant_message_id=aid,
-                )
-            except Exception:
-                logger.exception(
-                    f"stop_chat 时 assistant 空内容落库失败: session_id={session_id} user_id={current_user.user_id}"
-                )
-
-        if qa_type == IntentEnum.COMMON_QA.value[0]:
-            status = await common_agent.cancel_task(session_id)
-            logger.info(f"stop_chat cancel_task COMMON_QA session_id={session_id} marked={status}")
-            return status, "停止成功"
-        if qa_type == IntentEnum.FAULT_OPERATION_QA.value[0]:
-            status = await fault_agent.cancel_task(session_id)
-            logger.info(f"stop_chat cancel_task FAULT_OPERATION session_id={session_id} marked={status}")
-            return status, "停止成功"
-        if qa_type == IntentEnum.TEST_CASE_QA.value[0]:
-            status, msg = await case_coordinator.cancel_task(session_id)
-            logger.info(f"stop_chat cancel_task TEST_CASE session_id={session_id} ok={status} msg={msg}")
-            return status, msg
-        if qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
-            status = await super_agent.cancel_task(session_id)
-            logger.info(f"stop_chat cancel_task SUPER_AGENT session_id={session_id} marked={status}")
-            return status, "停止成功"
-
-        logger.warning(f"stop_chat 未知 qa_type session_id={session_id} qa_type={qa_type}")
-        return False, "未知的 qa_type"
