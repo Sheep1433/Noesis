@@ -177,6 +177,16 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
         inp = data.get("input")
         if inp is None and "arguments" in data:
             inp = data.get("arguments")
+        raw_state = data.get("state")
+        try:
+            state = ToolState(str(raw_state)).value
+        except ValueError:
+            state = derive_tool_state(
+                status=data.get("status"),
+                outcome=data.get("outcome"),
+                error_category=data.get("errorCategory"),
+                timed_out=data.get("timed_out"),
+            ).value
         return ToolPart(
             name=data.get("name") or "",
             arguments=inp if inp is not None else {},
@@ -185,12 +195,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             duration_ms=data.get("duration_ms"),
             parent_task_call_id=parent,
             status=data.get("status") or "running",
-            state=data.get("state") or derive_tool_state(
-                status=data.get("status"),
-                outcome=data.get("outcome"),
-                error_category=data.get("errorCategory"),
-                timed_out=data.get("timed_out"),
-            ).value,
+            state=state,
             error=data.get("error"),
             error_category=data.get("errorCategory"),
             hitl=data.get("hitl"),
@@ -243,6 +248,25 @@ class MessageContent:
         if not json_str:
             return cls()
         return cls.from_dict(json.loads(json_str))
+
+
+def normalize_message_content_for_delivery(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize protocol-owned fields without rejecting unknown future part types."""
+    normalized: List[Any] = []
+    for raw in data.get("parts", []):
+        if isinstance(raw, dict) and raw.get("type") == "tool":
+            tool_data = dict(raw)
+            hitl = tool_data.get("hitl")
+            if not is_terminal_tool_state(tool_data.get("state")) and (
+                isinstance(hitl, dict) and hitl.get("status") == "pending"
+            ):
+                tool_data["state"] = ToolState.APPROVAL_PENDING.value
+            normalized.append(_part_from_dict(tool_data).to_dict())
+        elif isinstance(raw, dict):
+            normalized.append(dict(raw))
+        else:
+            normalized.append(raw)
+    return {"parts": normalized}
 
 
 class AssistantMessageBuilder:

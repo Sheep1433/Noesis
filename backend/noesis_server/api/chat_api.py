@@ -43,7 +43,10 @@ from noesis_server.services.user_service import UserService
 from noesis_server.services.qa import QaService
 from noesis_server.services.run_service import RunService, run_manager
 from noesis_server.common.http.response import ResponseUtil
-from noesis_server.domain.chat.message_builder import UserMessageBuilder
+from noesis_server.domain.chat.message_builder import (
+    UserMessageBuilder,
+    normalize_message_content_for_delivery,
+)
 from noesis.runtime.logging import logger
 from noesis_server.constants.code_enum import IntentEnum
 from noesis_server.schemas.qa_vo import (
@@ -133,13 +136,17 @@ def _message_to_response(message) -> ChatMessageResponse:
         except Exception:
             pass
 
+    content = {"parts": parts}
+    if message.role == "assistant":
+        content = normalize_message_content_for_delivery(content)
+
     return ChatMessageResponse(
         id=message.id,
         session_id=message.session_id,
         parent_id=message.parent_id,
         user_id=message.user_id,
         role=message.role,
-        content={"parts": parts},
+        content=content,
         extra=extra if extra else None,
         status=message.status,
         message_sequence=message.message_sequence,
