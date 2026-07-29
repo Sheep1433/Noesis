@@ -1,5 +1,15 @@
 ## ADDED Requirements
 
+### Requirement: Web 工具 SHALL 产出可绑定 evidence
+
+`web_search` 的每个有效 HTTP(S) 结果与 `web_fetch` 的成功页面 SHALL 进入同一 run-level retrieval manifest，以 canonical URL 去重并获得 opaque `evidence_id`。Web 引用 SHALL 使用 `type=url_citation`，保存 URL、title、生成时 excerpt 快照与结构校验状态。resolve SHALL 只返回落库快照和安全外链，不得因点击引用而由服务端重新抓取任意 URL。
+
+#### Scenario: 搜索或抓取后引用网页
+
+- **WHEN** Web 工具返回网页 evidence 且 typed answer segment 绑定其 evidence id
+- **THEN** text part SHALL 生成覆盖该 segment 的 `url_citation`
+- **AND** retrieval part SHALL 保留该网页结果
+
 ### Requirement: Cited annotations SHALL 与 retrieved results 分层
 
 系统 SHALL 采用 OpenAI-style 两层来源模型：顶层 text part 的 `annotations[]` 表示回答实际引用的 evidence，独立 retrieval part 的 `results[]` 表示检索工具返回的 evidence。cited SHALL 是模型 typed binding 经结构校验后的 retrieved 子集；系统 SHALL NOT 从 Top-K、score 或文件名推断 cited。

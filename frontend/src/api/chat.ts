@@ -17,7 +17,7 @@ import { downloadFile } from '@/utils/download'
 
 /** 消息内容片段 */
 export interface MessagePart {
-  type: 'text' | 'reasoning' | 'tool'
+  type: 'text' | 'reasoning' | 'tool' | 'retrieval'
   content?: string
   tool?: string
   input?: Record<string, unknown>
@@ -36,6 +36,24 @@ export interface MessageMetadata {
   output_tokens?: number
   finish_reason?: string
   error?: string
+}
+
+export interface CitationResolveResponse {
+  citation_id: string
+  message_id: string
+  title: string
+  excerpt: string
+  url?: string
+  locator?: Record<string, unknown> | null
+  verification: string
+  snapshot_excerpt?: string
+}
+
+export async function resolveMessageCitation(messageId: string, citationId: string): Promise<CitationResolveResponse> {
+  const res = await authFetch(
+    `/api/chat/messages/${encodeURIComponent(messageId)}/citations/${encodeURIComponent(citationId)}`,
+  )
+  return parseAuthJson<CitationResolveResponse>(res)
 }
 
 /** 会话响应 */

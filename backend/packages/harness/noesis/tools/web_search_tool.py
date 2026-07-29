@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit, urlunsplit
 
 from langchain_core.tools import StructuredTool
+from langchain.tools import ToolRuntime
 from pydantic import BaseModel, Field
 
 from noesis.tools.web_providers.resolver import resolve_web_fetch, resolve_web_search
 from noesis.runtime.logging import logger
 from noesis.errors.tool_failure import ToolNetworkError, ToolValidationError
+from noesis.runtime.evidence import EvidenceEnvelope, current_retrieval_manifest
 
 
 class WebSearchInput(BaseModel):
@@ -26,7 +29,31 @@ class WebFetchInput(BaseModel):
     url: str = Field(description="要抓取的网页 URL（仅 http/https）")
 
 
-def web_search(query: str, limit: int = 8) -> str:
+def _canonical_url(value: str) -> str:
+    parsed = urlsplit((value or "").strip())
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("invalid web evidence URL")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path, parsed.query, ""))
+
+
+def _register_web_result(item: dict, *, tool_call_id: str) -> dict:
+    url = _canonical_url(str(item.get("url") or ""))
+    title = str(item.get("title") or url)
+    excerpt = str(item.get("snippet") or item.get("excerpt") or "").strip() or title
+    row = {**item, "source_type": "web", "url": url, "title": title, "excerpt": excerpt, "citable": True}
+    manifest = current_retrieval_manifest()
+    if manifest is not None:
+        entry = manifest.register(EvidenceEnvelope(source_type="web", url=url, title=title, excerpt=excerpt), tool_call_id=tool_call_id)
+        row.update(entry.model_dump(mode="json"))
+    return row
+
+
+def web_search(query: str, limit: int = 8, runtime: ToolRuntime = None) -> str:
     """关键词 Web 搜索，返回 JSON 结果列表。"""
     try:
         result = resolve_web_search(query, limit)
@@ -35,6 +62,15 @@ def web_search(query: str, limit: int = 8) -> str:
             if "不能为空" in str(result.get("error")):
                 raise ToolValidationError(detail)
             raise ToolNetworkError(detail)
+        tool_call_id = str(runtime.tool_call_id or "") if runtime is not None else ""
+        registered = []
+        for item in result.get("results") or []:
+            try:
+                registered.append(_register_web_result(item, tool_call_id=tool_call_id))
+            except (TypeError, ValueError) as exc:
+                logger.info("忽略不可引用的 Web 搜索结果: {}", exc)
+        result["results"] = registered
+        result["total_results"] = len(registered)
         return json.dumps(result, ensure_ascii=False)
     except (ToolNetworkError, ToolValidationError):
         raise
@@ -43,7 +79,7 @@ def web_search(query: str, limit: int = 8) -> str:
         raise ToolNetworkError(str(e) or "搜索失败") from e
 
 
-def web_fetch(url: str) -> str:
+def web_fetch(url: str, runtime: ToolRuntime = None) -> str:
     """抓取已知 URL 的正文摘要（Markdown）。"""
     try:
         result = resolve_web_fetch(url)
@@ -56,7 +92,10 @@ def web_fetch(url: str) -> str:
             if "不能为空" in detail or "不支持" in detail:
                 raise ToolValidationError(detail)
             raise ToolNetworkError(detail)
-        return result
+        canonical_url = _canonical_url(url)
+        title = next((line[2:].strip() for line in result.splitlines() if line.startswith("# ")), canonical_url)
+        row = _register_web_result({"url": canonical_url, "title": title, "snippet": result}, tool_call_id=str(runtime.tool_call_id or "") if runtime is not None else "")
+        return json.dumps({"url": canonical_url, "content": result, "results": [row]}, ensure_ascii=False)
     except (ToolNetworkError, ToolValidationError):
         raise
     except Exception as e:

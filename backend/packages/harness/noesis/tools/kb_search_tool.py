@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from langchain_core.tools import StructuredTool
+from langchain.tools import ToolRuntime
 from pydantic import BaseModel, Field
 
 from noesis.runtime.deps import (
@@ -18,6 +19,7 @@ from noesis.runtime.deps import (
     require_qdrant_service,
 )
 from noesis.runtime.logging import logger
+from noesis.runtime.evidence import EvidenceEnvelope, current_retrieval_manifest
 
 _MAX_DOCUMENT_CHARS = 80_000
 _MAX_PARALLEL_COLLECTIONS = 8
@@ -79,7 +81,7 @@ def resolve_search_collections(
     available = list_qdrant_collection_names()
     if not available:
         return [], json.dumps(
-            {"hits": [], "message": "当前无可用知识库 Collection"},
+            {"results": [], "message": "当前无可用知识库 Collection"},
             ensure_ascii=False,
         )
 
@@ -90,7 +92,7 @@ def resolve_search_collections(
         available_set = set(available)
         if not available:
             return [], json.dumps(
-                {"hits": [], "message": "会话选定的知识库均不可用，请在界面重新选择"},
+                {"results": [], "message": "会话选定的知识库均不可用，请在界面重新选择"},
                 ensure_ascii=False,
             )
     requested = _normalize_name_list(collection_names)
@@ -100,7 +102,7 @@ def resolve_search_collections(
         if not valid:
             return [], json.dumps(
                 {
-                    "hits": [],
+                    "results": [],
                     "message": "指定的知识库均不可用或不存在",
                     "invalid_collections": invalid,
                     "available_collections": available,
@@ -110,7 +112,7 @@ def resolve_search_collections(
         if invalid and allowed:
             return [], json.dumps(
                 {
-                    "hits": [],
+                    "results": [],
                     "message": "请求的知识库不在当前用户选定的检索范围内",
                     "invalid_collections": invalid,
                     "available_collections": available,
@@ -127,7 +129,7 @@ def resolve_search_collections(
         if not valid:
             return [], json.dumps(
                 {
-                    "hits": [],
+                    "results": [],
                     "message": "会话选定的知识库均不可用，请在界面重新选择或调用 list_knowledge_bases",
                     "requested_collections": scoped_default,
                     "available_collections": available,
@@ -139,16 +141,19 @@ def resolve_search_collections(
     return available, None
 
 
-def _format_hits(scored: List[Tuple[str, KbSearchHit]]) -> str:
+def _format_hits(
+    scored: List[Tuple[str, Any]],
+    *,
+    tool_call_id: str = "",
+) -> str:
     if not scored:
         return json.dumps(
-            {"hits": [], "message": "未检索到相关片段"},
+            {"results": [], "message": "未检索到相关片段"},
             ensure_ascii=False,
         )
     rows = []
     for i, (collection_name, hit) in enumerate(scored, 1):
-        rows.append(
-            {
+        row = {
                 "rank": i,
                 "collection_name": collection_name,
                 "file_name": hit.file_name,
@@ -157,10 +162,39 @@ def _format_hits(scored: List[Tuple[str, KbSearchHit]]) -> str:
                 "rerank_score": round(hit.rerank_score, 4) if hit.rerank_score is not None else None,
                 "search_mode": hit.search_mode,
                 "header_path": hit.header_path,
-                "content": hit.content,
+                "excerpt": hit.content,
+                "document_id": hit.document_id,
+                "document_version_id": hit.document_version_id,
+                "segment_id": hit.segment_id,
+                "locator": hit.locator,
+                "identity_status": hit.identity_status,
+                "citable": hit.citable,
             }
-        )
-    return json.dumps({"hits": rows}, ensure_ascii=False)
+        manifest = current_retrieval_manifest()
+        if manifest is not None and hit.citable:
+            try:
+                entry = manifest.register(
+                    EvidenceEnvelope.model_validate({
+                        "collection_name": collection_name,
+                        "document_id": hit.document_id,
+                        "document_version_id": hit.document_version_id,
+                        "segment_id": hit.segment_id,
+                        "title": hit.file_name,
+                        "excerpt": hit.content,
+                        "locator": hit.locator,
+                        "score": hit.score,
+                        "recall_score": hit.recall_score,
+                        "rerank_score": hit.rerank_score,
+                        "search_mode": hit.search_mode,
+                    }),
+                    tool_call_id=tool_call_id,
+                )
+                row.update(entry.model_dump(mode="json"))
+            except (TypeError, ValueError):
+                row["citable"] = False
+                row["identity_status"] = "invalid_evidence_envelope"
+        rows.append(row)
+    return json.dumps({"results": rows}, ensure_ascii=False)
 
 
 def _search_one_collection(
@@ -168,7 +202,7 @@ def _search_one_collection(
     query: str,
     *,
     global_limit: int,
-) -> List[Tuple[str, KbSearchHit]]:
+) -> List[Tuple[str, Any]]:
     svc = require_qdrant_service()
     col = svc.get_collection(name)
     if not col:
@@ -195,6 +229,7 @@ def search_knowledge_bases_all(
     *,
     default_collection_names: Optional[List[str]] = None,
     allowed_collection_names: Optional[List[str]] = None,
+    tool_call_id: str = "",
 ) -> str:
     """在指定或默认范围内的知识库 Collection 并行 hybrid 检索，全局 Top-K。"""
     t_total = time.perf_counter()
@@ -220,7 +255,7 @@ def search_knowledge_bases_all(
         return err
 
     global_limit = max(1, min(20, int(limit or 10)))
-    merged: List[Tuple[str, KbSearchHit]] = []
+    merged: List[Tuple[str, Any]] = []
     workers = min(len(collections), _MAX_PARALLEL_COLLECTIONS)
 
     t_parallel = time.perf_counter()
@@ -255,7 +290,7 @@ def search_knowledge_bases_all(
         f"merged_hits={len(merged)} final_hits={len(top)} "
         f"query_len={len(query)} total_ms={total_ms:.1f}"
     )
-    return _format_hits(top)
+    return _format_hits(top, tool_call_id=tool_call_id)
 
 
 def list_knowledge_bases(
@@ -384,6 +419,7 @@ def build_kb_search_tools(
         query: str,
         collection_names: Optional[List[str]] = None,
         limit: int = 10,
+        runtime: ToolRuntime = None,
     ) -> str:
         return search_knowledge_bases_all(
             query,
@@ -391,6 +427,7 @@ def build_kb_search_tools(
             collection_names=collection_names,
             default_collection_names=scope or None,
             allowed_collection_names=allowed_scope,
+            tool_call_id=str(runtime.tool_call_id or "") if runtime is not None else "",
         )
 
     def _get_document(collection_name: str, file_name: str) -> str:

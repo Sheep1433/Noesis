@@ -181,7 +181,20 @@ class ToolCallLimitYamlSection(BaseModel):
 
 class AgentRuntimeYamlSection(BaseModel):
     dangling_tool_call_repair_enabled: bool = True
+    structured_citations_enabled: bool = False
+    structured_citation_models: list[str] = Field(
+        default_factory=lambda: ["mimo-v2.5-free"]
+    )
     tool_call_limit: ToolCallLimitYamlSection = Field(default_factory=ToolCallLimitYamlSection)
+
+
+class CitationLimitsYamlSection(BaseModel):
+    max_results_per_call: int = Field(default=20, ge=1, le=100)
+    max_results_per_run: int = Field(default=100, ge=1)
+    max_excerpt_chars: int = Field(default=2000, ge=1)
+    max_excerpt_bytes: int = Field(default=8192, ge=1)
+    max_locator_bytes: int = Field(default=2048, ge=1)
+    max_assistant_content_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
 
 
 class StreamYamlSection(BaseModel):
@@ -380,6 +393,7 @@ class AppYamlConfig(BaseModel):
     summarization: SummarizationYamlSection = Field(default_factory=SummarizationYamlSection)
     loop_detection: LoopDetectionYamlSection = Field(default_factory=LoopDetectionYamlSection)
     agent_runtime: AgentRuntimeYamlSection = Field(default_factory=AgentRuntimeYamlSection)
+    citation_limits: CitationLimitsYamlSection = Field(default_factory=CitationLimitsYamlSection)
     stream: StreamYamlSection = Field(default_factory=StreamYamlSection)
     qdrant: QdrantYamlSection = Field(default_factory=QdrantYamlSection)
     langfuse: LangfuseYamlSection = Field(default_factory=LangfuseYamlSection)

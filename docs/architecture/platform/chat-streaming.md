@@ -23,6 +23,8 @@ POST /api/chat/runs → RunService → RunManager → QaService producer
 - `reasoning-start` / `reasoning-delta` / `reasoning-end`
 - `text-start` / `text-delta` / `text-end`
 - `tool-call-start` / `tool-input-available` / `tool-output-available`
+- `retrieval-results-available`
+- `text-annotation-added`
 - `usage-update` / `context-update` / `token-details`
 - `hitl-required`
 - `error` / `finish-step` / `finish` / `[DONE]`
@@ -46,7 +48,22 @@ streaming skeleton
 - `text`
 - `reasoning`
 - `tool`
-- 由已批准 OpenSpec change 新增的其它 versioned part
+- `retrieval`：本轮知识库工具返回的候选 evidence；不等价于正文已引用来源
+
+顶层 `text` part 可带 `annotations[]`。知识库 citation 使用所属 text part 的 Unicode code point 左闭右开 offset。正文仍由 `text-delta` 交付，引用由独立的 `text-annotation-added` patch 交付，marker 不进入正文。
+
+知识库检索完成后的顺序为：
+
+```text
+tool-output-available
+  → retrieval-results-available
+  → text-delta
+  → text-end
+  → optional terminal text-annotation-added
+  → finish
+```
+
+支持 completed segment streaming 的 provider 可以在 `text-end` 前交付 annotation。只能终态返回 typed answer 的 provider 可以在 `text-end` 后交付，但必须早于 `finish` 和终态持久化。当前 provider 未通过 structured binding 发布门禁，因此默认只交付普通正文与 retrieval results，不推断 citation。
 
 ## 4. 工具结果
 
@@ -60,6 +77,7 @@ streaming skeleton
 - 用户停止通过 `POST /api/chat/runs/{run_id}/stop` 取消，PersistSink 写 `partial`。
 - 客户端断连只移除该 subscriber，不取消 producer 或其它 subscriber。
 - HITL resume 必须继续同一 run/message 身份，禁止新建第二条 assistant。
+- HITL resume 同时恢复 retrieval manifest 的 run salt、evidence namespace 和已登记结果；citation 按 `citation_id` 去重。
 - HITL resume 或 snapshot 重放遇到相同 `tool_call_id` 时更新原工具块，禁止重复追加。
 - 审批面板按 session/run 绑定；切换会话只显示当前 session 的 pending 审批，多会话互不覆盖。
 - `[DONE]` 是整个 Run 的客户端传输结束标记，不是服务端落库条件；HITL 暂停只结束

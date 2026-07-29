@@ -46,4 +46,4 @@
 - 不接入或依赖 OpenAI 托管 File Search；“OpenAI 形态”指输出对象与事件语义，不是复制其托管存储。
 - 不保留旧 `source_ref`、`[[source:...]]`、SourcesPart 或数字 marker 兼容路线。
 - 首版不承诺独立 LLM 语义 verifier、逐字审计级事实判定，也不为历史消息反向生成引用。
-- 首版只覆盖 COMMON_QA 的知识库检索，不扩展 Web Search、附件和 SuperAgent 来源。
+- 首版覆盖 COMMON_QA 的知识库检索、`web_search` 与 `web_fetch`；不扩展附件和 SuperAgent 子任务来源。

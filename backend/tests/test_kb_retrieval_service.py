@@ -18,6 +18,10 @@ def mock_retrieval():
                     "file_name": "a.md",
                     "header_path": "a.md > Sec",
                     "point_id": "pt-1",
+                    "document_id": "doc-1",
+                    "document_version_id": "docv-1",
+                    "segment_id": "seg-1",
+                    "locator": {"type": "header", "path": ["Sec"]},
                 },
             ),
             0.9,
@@ -48,6 +52,9 @@ def test_search_vector_mode(mock_get_retrieval, _mock_connected, mock_retrieval)
     assert hits[0].search_mode == "vector"
     assert hits[0].file_name == "a.md"
     assert hits[0].header_path == "a.md > Sec"
+    assert hits[0].document_id == "doc-1"
+    assert hits[0].segment_id == "seg-1"
+    assert hits[0].citable is True
     assert result.timing.total_ms >= 0
     assert result.timing.recall_hits == 1
     assert result.timing.final_hits == 1
@@ -184,3 +191,47 @@ def test_fetch_full_document_by_file_name_sorted(mock_connected, mock_client_fn)
 
     text = KbRetrievalService.fetch_full_document_by_file_name("col", "req.md")
     assert text == "第一部分\n\n第二部分"
+
+
+def test_legacy_hit_is_explicitly_not_citable() -> None:
+    hit = KbRetrievalService._doc_to_hit(
+        Document(
+            page_content="旧片段",
+            metadata={"file_name": "legacy.md", "content_hash": "old"},
+        ),
+        0.5,
+        "bm25",
+        collection_name="kb1",
+    )
+
+    assert hit.identity_status == "legacy_unversioned"
+    assert hit.citable is False
+    assert hit.document_version_id is None
+
+
+@patch("noesis_server.kb.retrieval.service.rerank_documents")
+def test_rerank_preserves_evidence_identity(mock_rerank) -> None:
+    mock_rerank.return_value = [(0, 0.97)]
+    original = KbRetrievalService._doc_to_hit(
+        Document(
+            page_content="片段",
+            metadata={
+                "file_name": "doc.md",
+                "document_id": "doc-1",
+                "document_version_id": "docv-1",
+                "segment_id": "seg-1",
+                "locator": {"type": "page", "page_start": 1, "page_end": 1},
+            },
+        ),
+        0.6,
+        "hybrid",
+        collection_name="kb1",
+    )
+
+    reranked = KbRetrievalService._apply_rerank("q", [original])
+
+    assert reranked[0].document_id == "doc-1"
+    assert reranked[0].document_version_id == "docv-1"
+    assert reranked[0].segment_id == "seg-1"
+    assert reranked[0].locator == original.locator
+    assert reranked[0].citable is True

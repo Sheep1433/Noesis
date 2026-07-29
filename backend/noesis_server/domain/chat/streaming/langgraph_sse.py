@@ -39,6 +39,7 @@ _TOOL_EXIT_SUFFIX = re.compile(r"\s*\[Command succeeded with exit code \d+\]\s*$
 _TOOL_FAILED_EXIT_RE = re.compile(r"\[Command failed with exit code [1-9]\d*\]\s*$")
 _TOOL_INPUT_MAX = 65536
 TASK_TOOL_NAME = "task"
+STRUCTURED_OUTPUT_TOOL_NAMES = frozenset({"CitedAnswer"})
 
 
 def _new_id(prefix: str) -> str:
@@ -72,6 +73,16 @@ def _tool_output_value(raw_out: Any) -> str:
     if raw_out is None:
         return ""
     return raw_out.content if hasattr(raw_out, "content") else str(raw_out)
+
+
+def _retrieval_payload(raw: str) -> Optional[Dict[str, Any]]:
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list):
+        return None
+    return parsed
 
 
 def _normalize_usage(raw: Any) -> Dict[str, int]:
@@ -632,6 +643,50 @@ class LangGraphSseBridge:
                 self._emit_text_delta(delta, out)
             return
 
+        if t == "typed-answer-segments":
+            segments = item.get("segments")
+            if builder is None or not isinstance(segments, list):
+                return
+            part_id = _new_id("part-text")
+            text_part = builder.apply_typed_segments(
+                [segment for segment in segments if isinstance(segment, dict)],
+                part_id=part_id,
+            )
+            if text_part.content:
+                self._emit_text_delta(text_part.content, out)
+                self._close_text(out, record_checkpoint=False)
+            for annotation in text_part.annotations:
+                out.append(_format_sse("text-annotation-added", {
+                    "type": "text-annotation-added",
+                    "message_id": self.assistant_message_id,
+                    "text_part_id": part_id,
+                    "annotation": annotation,
+                }))
+            self._persist_tick = True
+            return
+        if t == "typed-answer-segment":
+            segment = item.get("segment")
+            if builder is None or not isinstance(segment, dict):
+                return
+            text = str(segment.get("text") or "")
+            if not text:
+                return
+            self._emit_text_delta(text, out)
+            part_id = self._current_text_part_id or _new_id("part-text")
+            text_part = builder.append_typed_segment(segment, part_id=part_id)
+            start = len(text_part.content) - len(text)
+            for annotation in text_part.annotations:
+                if annotation["start_index"] != start:
+                    continue
+                out.append(_format_sse("text-annotation-added", {
+                    "type": "text-annotation-added",
+                    "message_id": self.assistant_message_id,
+                    "text_part_id": part_id,
+                    "annotation": annotation,
+                }))
+            self._persist_tick = True
+            return
+
         if t == "finish":
             payload = dict(item)
             payload.setdefault("type", "finish")
@@ -826,6 +881,8 @@ class LangGraphSseBridge:
 
     def _on_tool_start(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                        ctx: Dict[str, Any], out: List[str]) -> None:
+        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
+            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
@@ -892,6 +949,8 @@ class LangGraphSseBridge:
 
     def _on_tool_end(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                      ctx: Dict[str, Any], out: List[str]) -> None:
+        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
+            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
@@ -935,6 +994,25 @@ class LangGraphSseBridge:
                 error_category=err_cat if is_error else None,
             )
 
+        retrieval_part = None
+        if (
+            builder is not None
+            and not is_error
+            and tool_name in {"search_knowledge_base", "web_search", "web_fetch"}
+        ):
+            retrieval_payload = _retrieval_payload(clean_output)
+            if retrieval_payload is not None:
+                tool_part = getattr(builder, "_tools_by_call_id", {}).get(tool_call_id)
+                tool_input = tool_part.arguments if tool_part is not None else {}
+                retrieval_part = builder.register_retrieval_results(
+                    tool_call_id=tool_call_id,
+                    query=str((tool_input or {}).get("query") or (tool_input or {}).get("url") or ""),
+                    results=retrieval_payload["results"],
+                    truncated=bool(retrieval_payload.get("truncated")),
+                )
+                if tool_part is not None:
+                    tool_part.output = f"检索到 {len(retrieval_part.results)} 条来源"
+
         if tool_name == TASK_TOOL_NAME:
             self._on_task_tool_end(tool_call_id, ctx)
 
@@ -943,9 +1021,17 @@ class LangGraphSseBridge:
             out, part_id, tool_call_id, display_output, sse_status, err_s, duration_ms,
             error_category=err_cat,
         )
+        if retrieval_part is not None:
+            payload = retrieval_part.to_dict()
+            payload["type"] = "retrieval-results-available"
+            payload["message_id"] = self.assistant_message_id
+            out.append(_format_sse("retrieval-results-available", payload))
+            self._persist_tick = True
 
     def _on_tool_error(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                        ctx: Dict[str, Any], out: List[str]) -> None:
+        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
+            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)

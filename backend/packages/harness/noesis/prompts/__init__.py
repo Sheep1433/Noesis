@@ -27,6 +27,7 @@ def build_prompt(
     profile: PromptProfile | str,
     *,
     kb_enabled: bool = False,
+    web_enabled: bool = True,
     attachments_enabled: bool = False,
     kb_scope_collections: list[str] | None = None,
     user_id: str | None = None,
@@ -37,6 +38,7 @@ def build_prompt(
     builders = {
         PromptProfile.COMMON_QA.value: lambda: build_common_qa_prompt(
             kb_enabled=kb_enabled,
+            web_enabled=web_enabled,
             attachments_enabled=attachments_enabled,
             kb_scope_collections=kb_scope_collections,
         ),
