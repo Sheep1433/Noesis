@@ -146,6 +146,54 @@ async def test_card_callback_rejects_other_open_id(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_card_callback_evicts_expired_hitl_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    feishu_runtime._hitl_prompts.clear()
+    feishu_runtime._hitl_prompts["expired"] = _HitlPrompt(
+        "expired", "u1", "s1", "oc_1", "int_1", 1, time.monotonic() - 1
+    )
+    resume = AsyncMock()
+    monkeypatch.setattr(feishu_runtime, "resume_channel_hitl", resume)
+    cfg = SimpleNamespace(user_id="u1", pairing_user_id="ou_owner")
+    raw = {
+        "event": {
+            "operator": {"open_id": "ou_owner"},
+            "action": {"value": {"token": "expired", "decision": "approve"}},
+        }
+    }
+
+    await feishu_runtime._handle_card(cfg, AsyncMock(), raw)
+
+    resume.assert_not_awaited()
+    assert "expired" not in feishu_runtime._hitl_prompts
+
+
+def test_hitl_prompt_store_evicts_expired_and_bounds_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = time.monotonic()
+    feishu_runtime._hitl_prompts.clear()
+    monkeypatch.setattr(feishu_runtime, "_HITL_PROMPT_MAX_ITEMS", 2)
+    feishu_runtime._hitl_prompts["expired"] = _HitlPrompt(
+        "expired", "u1", "s1", "oc_1", "int_1", 1, now - 1
+    )
+
+    for index in range(3):
+        feishu_runtime._store_hitl_prompt(
+            _HitlPrompt(
+                f"token-{index}",
+                "u1",
+                "s1",
+                "oc_1",
+                f"int-{index}",
+                1,
+                now + 60 + index,
+            )
+        )
+
+    assert set(feishu_runtime._hitl_prompts) == {"token-1", "token-2"}
+
+
+@pytest.mark.asyncio
 async def test_clarification_text_resumes_existing_run(monkeypatch: pytest.MonkeyPatch) -> None:
     pending_hitl.put(PendingHitl(
         interrupt_id="int_1", session_id="s1", user_id="u1", assistant_message_id="a1",

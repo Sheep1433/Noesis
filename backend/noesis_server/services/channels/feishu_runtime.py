@@ -43,6 +43,25 @@ class _HitlPrompt:
 
 
 _hitl_prompts: dict[str, _HitlPrompt] = {}
+_HITL_PROMPT_MAX_ITEMS = 4096
+
+
+def _evict_expired_hitl_prompts(*, now: float | None = None) -> None:
+    current = time.monotonic() if now is None else now
+    for token, prompt in tuple(_hitl_prompts.items()):
+        if prompt.expires_at <= current:
+            _hitl_prompts.pop(token, None)
+
+
+def _store_hitl_prompt(prompt: _HitlPrompt) -> None:
+    _evict_expired_hitl_prompts()
+    while len(_hitl_prompts) >= _HITL_PROMPT_MAX_ITEMS:
+        oldest_token = min(
+            _hitl_prompts,
+            key=lambda token: _hitl_prompts[token].expires_at,
+        )
+        _hitl_prompts.pop(oldest_token, None)
+    _hitl_prompts[prompt.token] = prompt
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -86,11 +105,11 @@ async def _deliver_after_result(cfg: RuntimeChannelConfig, client: FeishuBotClie
             return
         token = secrets.token_urlsafe(18)
         actions = list(payload.get("action_requests") or [])
-        _hitl_prompts[token] = _HitlPrompt(
+        _store_hitl_prompt(_HitlPrompt(
             token=token, user_id=str(cfg.user_id), session_id=session_id, chat_id=chat_id,
             interrupt_id=str(payload.get("interrupt_id") or ""), action_count=max(1, len(actions)),
             expires_at=time.monotonic() + 86400,
-        )
+        ))
         await client.send_card(chat_id, _hitl_card(token, payload))
     elif outbound is not None and not outbound.sent_any and result.plain_text:
         await outbound.deliver_final(result.plain_text)
@@ -162,7 +181,12 @@ async def _handle_card(cfg: RuntimeChannelConfig, client: FeishuBotClient, raw: 
     operator = event.get("operator") if isinstance(event.get("operator"), dict) else {}
     open_id = str(operator.get("open_id") or "")
     prompt = _hitl_prompts.get(token)
-    if prompt is None or prompt.expires_at < time.monotonic() or open_id != str(cfg.pairing_user_id or ""):
+    if prompt is None:
+        return
+    if prompt.expires_at <= time.monotonic():
+        _hitl_prompts.pop(token, None)
+        return
+    if open_id != str(cfg.pairing_user_id or ""):
         return
     _hitl_prompts.pop(token, None)
     decisions = [{"type": "approve" if decision == "approve" else "reject"} for _ in range(prompt.action_count)]
@@ -253,6 +277,7 @@ def _start_sdk_thread() -> threading.Thread:
 async def _supervisor_loop() -> None:
     global _active_thread, _active
     while not _stop.is_set():
+        _evict_expired_hitl_prompts()
         configured = bool(MessagingConfig.feishu_app_id and MessagingConfig.feishu_app_secret)
         if configured and (not _active_thread or not _active_thread.is_alive()):
             _active = True
@@ -289,3 +314,4 @@ async def stop_feishu_runtime() -> None:
         except (asyncio.CancelledError, Exception):
             pass
     _supervisor = None
+    _hitl_prompts.clear()
