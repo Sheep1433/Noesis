@@ -22,6 +22,8 @@ def test_recovery_marks_only_unfinished_tools_unknown() -> None:
     assert recovered["parts"][0] == content["parts"][0]
     assert recovered["parts"][1]["outcome"] == "unknown"
     assert recovered["parts"][1]["status"] == "error"
+    assert recovered["parts"][1]["state"] == "failed"
+    assert recovered["parts"][1]["errorCategory"] == "server_restart"
     assert recovered["parts"][2]["status"] == "success"
     assert "outcome" not in recovered["parts"][2]
 

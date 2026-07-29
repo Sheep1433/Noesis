@@ -754,7 +754,12 @@ class AssistantMessageBuilder:
         self._last_tool = None
         return count
 
-    def mark_running_tools_unknown(self, message: str) -> int:
+    def mark_running_tools_unknown(
+        self,
+        message: str,
+        *,
+        error_category: str = "unknown",
+    ) -> int:
         """停止/重启时不推断远程副作用，收口所有未完成工具。"""
         count = 0
         for part in self._content.parts:
@@ -764,7 +769,7 @@ class AssistantMessageBuilder:
             part.state = ToolState.FAILED.value
             part.outcome = "unknown"
             part.error = message
-            part.error_category = "unknown"
+            part.error_category = error_category
             if part.output is None:
                 part.output = message
             count += 1

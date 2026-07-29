@@ -10,31 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.runtime.logging import logger
 from noesis_server.domain.chat.runs import RunStatus
-from noesis_server.domain.chat.tool_state import ToolState
+from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
 from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
 from noesis_server.models.chat_models import TAgentDelivery, TAgentRun, TChatMessage
 
 
 def mark_running_tools_unknown(content: dict[str, Any] | None) -> dict[str, Any]:
-    snapshot = dict(content or {})
-    parts = []
-    raw_parts = snapshot.get("parts")
-    if not isinstance(raw_parts, list):
-        raw_parts = []
-    for raw in raw_parts:
-        if not isinstance(raw, dict):
-            parts.append(raw)
-            continue
-        part = dict(raw)
-        if part.get("type") == "tool" and part.get("status") in {None, "running", "pending"}:
-            part["status"] = "error"
-            part["state"] = ToolState.FAILED.value
-            part["outcome"] = "unknown"
-            part["errorCategory"] = "server_restart"
-            part["error"] = "服务中断，操作结果未确认"
-        parts.append(part)
-    snapshot["parts"] = parts
-    return snapshot
+    builder = AssistantMessageBuilder()
+    builder.load_from_content_dict(content or {"parts": []})
+    builder.mark_running_tools_unknown(
+        "服务中断，操作结果未确认",
+        error_category="server_restart",
+    )
+    return builder.to_dict()
 
 
 class RunRecoveryService:
