@@ -26,6 +26,7 @@
 
 | Change | 说明 |
 |--------|------|
+| `add-feishu-channel-adapter` | 飞书企业自建应用 WebSocket 真收发、群聊 @ 与 HITL 卡片 |
 | `unify-run-delivery` | Delivery Fan-out（主规格已吸收为 `agent-delivery`，change 可继续收尾任务） |
 | `add-telegram-channel-adapter` | Telegram 真收发（并入 `agent-delivery`） |
 | `add-agent-user-settings` | 设置面：记忆/通道/定时任务配置 |

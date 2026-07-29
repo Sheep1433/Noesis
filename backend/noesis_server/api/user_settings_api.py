@@ -5,7 +5,7 @@ from datetime import date
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.common.http.response import ResponseUtil
@@ -54,12 +54,15 @@ class ScheduledTaskUpdateBody(BaseModel):
 
 
 class ChannelUpsertBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: str = "telegram"
     enabled: bool = True
     display_name: str = ""
     bot_token: Optional[str] = None
     bot_token_action: Literal["keep", "replace", "clear"] = "keep"
     pairing_chat_id: Optional[str] = None
+    pairing_user_id: Optional[str] = None
     default_qa_type: str = "SUPER_AGENT_QA"
     default_session_id: Optional[str] = None
     session_strategy: Literal["persistent", "new_per_message"] = "persistent"
@@ -393,7 +396,7 @@ async def create_channel(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.create", setting_domain="channel", target_id=item["channel_id"], summary={"fields": ["type", "enabled", "display_name", "pairing", "routing"], "secret_action": payload["bot_token_action"]})
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.create", setting_domain="channel", target_id=item["channel_id"], summary={"fields": ["type", "enabled", "display_name", "pairing", "routing"], "secret_action": payload["bot_token_action"] if body.type == "telegram" else "none"})
     await db.commit()
     return ResponseUtil.success(msg="已创建", data=item)
 
@@ -416,7 +419,7 @@ async def update_channel(
         return ResponseUtil.not_found(msg="通道不存在")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.update", setting_domain="channel", target_id=channel_id, summary={"fields": ["type", "enabled", "display_name", "pairing", "routing"], "secret_action": body.bot_token_action})
+    await SettingsService.append_audit(db, user_id=current_user.user_id, action="channel.update", setting_domain="channel", target_id=channel_id, summary={"fields": ["type", "enabled", "display_name", "pairing", "routing"], "secret_action": body.bot_token_action if body.type == "telegram" else "none"})
     await db.commit()
     return ResponseUtil.success(msg="已更新", data=item)
 

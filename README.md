@@ -136,6 +136,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 - 回滚前端时可关闭对应 capability；数据库新增表和已有设置数据应保留。
 - 自动化运行明细默认保留 30 天、每用户最多 1000 条；清理不删除任务的最新状态摘要。
 - 用户级 Provider、通道密钥与 MCP Header 要求配置 `SETTINGS_ENCRYPTION_KEY`，缺失时敏感配置写入会被拒绝。
+- 通讯通道支持 Telegram 与飞书企业自建应用。部署方配置一个飞书应用后，不同 Noesis 用户可分别绑定自己的飞书 Open ID；群聊仅响应 @机器人。
 
 运维与产品契约见 [设置控制面说明](docs/architecture/platform/settings-control-plane.md)。
 

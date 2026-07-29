@@ -5,9 +5,9 @@
 
 ## 范围
 
-设置页统一管理模型连接与默认用途、MCP、自动化运行、Telegram 通道、用户画像与记忆、通知偏好、系统诊断和设置迁移。聊天 `/api/chat` 的请求字段、SSE 事件和 assistant 单行终态落库契约保持不变。
+设置页统一管理模型连接与默认用途、MCP、自动化运行、Telegram / 飞书通道、用户画像与记忆、通知偏好、系统诊断和设置迁移。聊天 `/api/chat` 的请求字段、SSE 事件和 assistant 单行终态落库契约保持不变。
 
-通道 Token 与用户 MCP Header 使用 `SETTINGS_ENCRYPTION_KEY` 静态加密；读取接口只返回脱敏状态，未配置加密密钥时拒绝新增敏感值。模型 Provider 与凭据由部署者统一配置，用户侧不接收或保存 Provider API Key。
+Telegram Token 与用户 MCP Header 使用 `SETTINGS_ENCRYPTION_KEY` 静态加密；飞书 App Secret 和模型 Provider 凭据由部署者统一配置，用户侧不接收或保存这些凭据。读取接口只返回必要的脱敏状态，未配置加密密钥时拒绝新增用户级敏感值。
 
 ## 数据与安全
 

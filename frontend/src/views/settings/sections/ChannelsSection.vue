@@ -7,17 +7,20 @@ import {
   testChannelDelivery, updateChannel,
 } from '@/api/settings'
 import { SettingsEmptyState, SettingsSection } from '../primitives'
+import { buildChannelPayload } from './channelPayload'
 
 const message = useMessage()
 const dialog = useDialog()
 const channels = ref<MessagingChannel[]>([])
 const editingId = ref<string | null>(null)
 const form = reactive({
-  display_name: '我的 Telegram Bot', bot_token: '', pairing_chat_id: '', enabled: true,
+  type: 'telegram' as 'telegram' | 'feishu', display_name: '我的 Telegram Bot', bot_token: '',
+  pairing_chat_id: '', pairing_user_id: '', enabled: true,
   default_qa_type: 'SUPER_AGENT_QA', default_session_id: '',
   session_strategy: 'persistent' as 'persistent' | 'new_per_message',
   delivery_preference: 'reply' as 'reply' | 'silent',
 })
+const channelOptions = [{ label: 'Telegram', value: 'telegram' }, { label: '飞书', value: 'feishu' }]
 const qaOptions = ['SUPER_AGENT_QA', 'COMMON_QA', 'FAULT_OPERATION_QA', 'TEST_CASE_QA'].map((value) => ({ label: value, value }))
 const sessionOptions = [{ label: '持续使用同一会话', value: 'persistent' }, { label: '每条消息创建新会话', value: 'new_per_message' }]
 const deliveryOptions = [{ label: '回复消息', value: 'reply' }, { label: '仅运行，不自动回复', value: 'silent' }]
@@ -32,29 +35,27 @@ async function refresh() {
 
 function resetForm() {
   editingId.value = null
-  Object.assign(form, { display_name: '我的 Telegram Bot', bot_token: '', pairing_chat_id: '', enabled: true, default_qa_type: 'SUPER_AGENT_QA', default_session_id: '', session_strategy: 'persistent', delivery_preference: 'reply' })
+  Object.assign(form, { type: 'telegram', display_name: '我的 Telegram Bot', bot_token: '', pairing_chat_id: '', pairing_user_id: '', enabled: true, default_qa_type: 'SUPER_AGENT_QA', default_session_id: '', session_strategy: 'persistent', delivery_preference: 'reply' })
 }
 
 function edit(channel: MessagingChannel) {
   editingId.value = channel.channel_id
   Object.assign(form, {
-    display_name: channel.display_name, bot_token: '', pairing_chat_id: channel.pairing_chat_id || '', enabled: channel.enabled,
+    type: channel.type as 'telegram' | 'feishu', display_name: channel.display_name, bot_token: '',
+    pairing_chat_id: channel.pairing_chat_id || '', pairing_user_id: channel.pairing_user_id || '', enabled: channel.enabled,
     default_qa_type: channel.default_qa_type || 'SUPER_AGENT_QA', default_session_id: channel.default_session_id || '',
     session_strategy: channel.session_strategy || 'persistent', delivery_preference: channel.delivery_preference || 'reply',
   })
 }
 
 async function save() {
-  if (!editingId.value && !form.bot_token.trim()) {
+  if (form.type === 'telegram' && !editingId.value && !form.bot_token.trim()) {
     return message.warning('请填写 Bot Token')
   }
-  const payload = {
-    type: 'telegram', ...form,
-    pairing_chat_id: form.pairing_chat_id.trim() || undefined,
-    default_session_id: form.default_session_id.trim() || undefined,
-    bot_token: form.bot_token.trim() || undefined,
-    bot_token_action: form.bot_token.trim() ? 'replace' : 'keep',
+  if (form.type === 'feishu' && !form.pairing_user_id.trim()) {
+    return message.warning('请填写发送者 Open ID')
   }
+  const payload = buildChannelPayload(form)
   try {
     if (editingId.value) {
       await updateChannel(editingId.value, payload)
@@ -74,6 +75,7 @@ async function toggle(channel: MessagingChannel, enabled: boolean) {
     await updateChannel(channel.channel_id, {
       type: channel.type, display_name: channel.display_name, enabled,
       pairing_chat_id: channel.pairing_chat_id, default_qa_type: channel.default_qa_type,
+      pairing_user_id: channel.pairing_user_id,
       default_session_id: channel.default_session_id, session_strategy: channel.session_strategy || 'persistent',
       delivery_preference: channel.delivery_preference || 'reply', bot_token_action: 'keep',
     })
@@ -119,26 +121,37 @@ onMounted(() => void refresh())
 </script>
 
 <template>
-  <SettingsSection title="通讯通道" description="连接 Telegram，配置配对、默认 Agent、会话方式与回复偏好。">
-    <ol class="steps">
+  <SettingsSection title="通讯通道" description="连接 Telegram 或飞书，在常用通讯工具中使用 Agent。">
+    <ol v-if="form.type === 'telegram'" class="steps">
       <li>在 Telegram 向 <strong>@BotFather</strong> 发送 <code>/newbot</code>，创建机器人并复制 Token。</li>
       <li>添加通道后向机器人发送 <code>/start</code>，再将返回的 Chat ID 填入配对栏。</li>
     </ol>
+    <ol v-else class="steps">
+      <li>向 Noesis 飞书机器人发送任意消息，机器人会返回你的 Open ID。</li>
+      <li>填写 Open ID 完成关联；如需发送测试消息，再填写 Chat ID。</li>
+    </ol>
     <div class="form">
+      <n-select v-model:value="form.type" :options="channelOptions" :disabled="Boolean(editingId)" />
       <n-input v-model:value="form.display_name" placeholder="显示名称" />
-      <n-input v-model:value="form.bot_token" type="password" show-password-on="click" :placeholder="editingId ? '留空则保留现有 Token' : 'Bot Token'" />
-      <n-input v-model:value="form.pairing_chat_id" placeholder="配对 Chat ID（可稍后填写）" />
+      <template v-if="form.type === 'telegram'">
+        <n-input v-model:value="form.bot_token" type="password" show-password-on="click" :placeholder="editingId ? '留空则保留现有 Token' : 'Bot Token'" />
+        <n-input v-model:value="form.pairing_chat_id" placeholder="配对 Chat ID（可稍后填写）" />
+      </template>
+      <template v-else>
+        <n-input v-model:value="form.pairing_user_id" placeholder="发送者 Open ID（用于配对）" />
+        <n-input v-model:value="form.pairing_chat_id" placeholder="接收测试消息的 Chat ID（可稍后填写）" />
+      </template>
       <n-select v-model:value="form.default_qa_type" :options="qaOptions" />
       <n-select v-model:value="form.session_strategy" :options="sessionOptions" />
       <n-input v-if="form.session_strategy === 'persistent'" v-model:value="form.default_session_id" placeholder="固定会话 ID（留空使用通道默认会话）" />
       <n-select v-model:value="form.delivery_preference" :options="deliveryOptions" />
       <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用通道</label>
-      <div class="actions"><n-button type="primary" @click="save">{{ editingId ? '保存修改' : '添加 Telegram 通道' }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
+      <div class="actions"><n-button type="primary" @click="save">{{ editingId ? '保存修改' : `添加${form.type === 'feishu' ? '飞书' : ' Telegram'}通道` }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
     </div>
 
-    <SettingsEmptyState v-if="channels.length === 0" title="尚未配置通道" description="添加 Telegram 通道后可测试连接与消息投递。" />
+    <SettingsEmptyState v-if="channels.length === 0" title="尚未配置通道" description="添加通讯通道后可测试连接与消息投递。" />
     <div v-for="channel in channels" :key="channel.channel_id" class="channel-card">
-      <div class="channel-head"><div><strong>{{ channel.display_name || channel.type }}</strong><div class="muted">{{ channel.type }} · {{ channel.bot_token_masked || '未配置 Token' }} · {{ channel.pairing_chat_id ? '已配对' : '未配对' }}</div></div><n-tag size="small" :type="healthTone(channel.health?.status)">{{ channel.health?.status || 'unknown' }}</n-tag></div>
+      <div class="channel-head"><div><strong>{{ channel.display_name || channel.type }}</strong><div class="muted">{{ channel.type }} · {{ channel.type === 'feishu' ? '系统机器人' : (channel.bot_token_masked || '未配置 Token') }} · {{ channel.type === 'feishu' ? (channel.pairing_user_id ? '已关联' : '未关联') : (channel.pairing_chat_id ? '已配对' : '未配对') }}</div></div><n-tag size="small" :type="healthTone(channel.health?.status)">{{ channel.health?.status || 'unknown' }}</n-tag></div>
       <div class="health"><span>{{ channel.health?.message || '尚未检查' }}</span><span v-if="channel.health?.checked_at">检查于 {{ new Date(channel.health.checked_at).toLocaleString() }}</span><span v-if="channel.health?.last_inbound_at">最近接收：{{ channel.health.last_inbound_status }} · {{ new Date(channel.health.last_inbound_at).toLocaleString() }}</span><span v-if="channel.health?.last_outbound_at">最近发送：{{ channel.health.last_outbound_status }} · {{ new Date(channel.health.last_outbound_at).toLocaleString() }}</span><span v-if="channel.health?.correlation_id">关联 ID：{{ channel.health.correlation_id }}</span></div>
       <div class="actions"><n-switch :value="channel.enabled" @update:value="value => toggle(channel, value)" /><n-button size="small" @click="probe(channel)">测试连接</n-button><n-button size="small" :disabled="!channel.pairing_chat_id" @click="deliver(channel)">发送测试消息</n-button><n-button size="small" @click="edit(channel)">编辑</n-button><n-button size="small" type="error" quaternary @click="remove(channel)">删除</n-button></div>
     </div>

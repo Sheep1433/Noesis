@@ -200,6 +200,12 @@ hitl:
   enabled: false
   ask_timeout_seconds: 86400
 
+# 外部通讯通道；多副本部署只在一个 backend 实例开启轮询/长连接
+messaging:
+  telegram_runtime_enabled: false
+  telegram_poll_timeout_seconds: 25
+  feishu_runtime_enabled: false
+
 # 知识库 DeepDoc（权重挂载至 noesis_data:/data/noesis/rag/res/deepdoc）
 kb:
   deepdoc:

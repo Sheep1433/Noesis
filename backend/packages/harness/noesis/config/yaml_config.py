@@ -336,6 +336,7 @@ class MessagingYamlSection(BaseModel):
 
     telegram_runtime_enabled: bool = False
     telegram_poll_timeout_seconds: int = Field(default=25, ge=1, le=60)
+    feishu_runtime_enabled: bool = False
 
 
 class SettingsFeaturesYamlSection(BaseModel):

@@ -30,6 +30,7 @@ from noesis_server.services.scheduled_task_scheduler import (
 )
 from noesis_server.services.memory_dream_scheduler import start_memory_dream_scheduler, stop_memory_dream_scheduler
 from noesis_server.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
+from noesis_server.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
 from noesis_server.bootstrap.kb import ensure_default_kb_collections
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
 from noesis_server.services.run_recovery_service import RunRecoveryService
@@ -51,8 +52,10 @@ async def lifespan(app: FastAPI):
     start_scheduled_task_scheduler()
     start_memory_dream_scheduler()
     start_telegram_runtime()
+    start_feishu_runtime()
     logger.info(f'🚀 {AppConfig.app_name}启动成功')
     yield
+    await stop_feishu_runtime()
     await stop_telegram_runtime()
     await stop_memory_dream_scheduler()
     await stop_scheduled_task_scheduler()

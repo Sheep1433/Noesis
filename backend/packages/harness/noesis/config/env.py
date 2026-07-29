@@ -44,6 +44,8 @@ class EnvSecrets(BaseSettings):
 
     sandbox_runner_token: str = Field(default="", alias="SANDBOX_RUNNER_TOKEN")
     settings_encryption_key: str = Field(default="", alias="SETTINGS_ENCRYPTION_KEY")
+    feishu_app_id: str = Field(default="", alias="FEISHU_APP_ID")
+    feishu_app_secret: str = Field(default="", alias="FEISHU_APP_SECRET")
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +180,9 @@ class HitlSettings:
 class MessagingSettings:
     telegram_runtime_enabled: bool
     telegram_poll_timeout_seconds: int
+    feishu_runtime_enabled: bool
+    feishu_app_id: str
+    feishu_app_secret: str
 
 
 @dataclass(frozen=True)
@@ -502,11 +507,14 @@ def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
     )
 
 
-def _build_messaging(yaml_cfg: AppYamlConfig) -> MessagingSettings:
+def _build_messaging(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> MessagingSettings:
     m = yaml_cfg.messaging
     return MessagingSettings(
         telegram_runtime_enabled=m.telegram_runtime_enabled,
         telegram_poll_timeout_seconds=m.telegram_poll_timeout_seconds,
+        feishu_runtime_enabled=m.feishu_runtime_enabled,
+        feishu_app_id=secrets.feishu_app_id,
+        feishu_app_secret=secrets.feishu_app_secret,
     )
 
 
@@ -734,7 +742,7 @@ class GetConfig:
 
     @lru_cache
     def get_messaging_config(self) -> MessagingSettings:
-        return _build_messaging(self._yaml)
+        return _build_messaging(self._secrets, self._yaml)
 
     @lru_cache
     def get_checkpoint_config(self) -> CheckpointSettings:

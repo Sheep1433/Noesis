@@ -139,6 +139,7 @@ messaging:
   # Telegram long-poll 真收发；默认关。多 worker 勿同时开以免重复 getUpdates
   telegram_runtime_enabled: false
   telegram_poll_timeout_seconds: 25
+  feishu_runtime_enabled: false
 
 settings_features:
   provider_models: false

@@ -22,13 +22,14 @@ _ALLOWED_QA_TYPES = {item.value[0] for item in IntentEnum}
 
 @dataclass(frozen=True)
 class RuntimeChannelConfig:
-    """内部运行时配置（含 bot_token）；禁止经 HTTP 回传。"""
+    """用户级运行时配置（Telegram 含 token；飞书只含用户配对与路由）。"""
 
     user_id: str
     channel_id: str
     channel_type: str
     bot_token: str
     pairing_chat_id: Optional[str]
+    pairing_user_id: Optional[str]
     default_session_id: str
     default_qa_type: str
     display_name: str
@@ -89,8 +90,13 @@ def _sync_bindings(user_id: str | int, channels: List[Dict[str, Any]]) -> None:
     for ch in channels:
         if not ch.get("enabled"):
             continue
-        chat_id = (ch.get("pairing") or {}).get("chat_id") or ch.get("pairing_chat_id")
-        if not chat_id:
+        pairing = ch.get("pairing") or {}
+        external_id = (
+            pairing.get("user_id")
+            if str(ch.get("type") or "telegram") == "feishu"
+            else pairing.get("chat_id") or ch.get("pairing_chat_id")
+        )
+        if not external_id:
             continue
         session_id = (
             (ch.get("routing") or {}).get("default_session_id")
@@ -104,7 +110,7 @@ def _sync_bindings(user_id: str | int, channels: List[Dict[str, Any]]) -> None:
             ChannelBinding(
                 user_id=uid,
                 channel_type=str(ch.get("type") or "telegram"),
-                external_chat_id=str(chat_id),
+                external_chat_id=str(external_id),
                 session_id=str(session_id),
             )
         )
@@ -125,6 +131,7 @@ def _public_view(ch: Dict[str, Any], user_id: str | int) -> Dict[str, Any]:
         "bot_token_masked": f"****{suffix}" if suffix else _mask_token(token if not str(token or "").startswith("enc:") else None),
         "has_token": bool(token),
         "pairing_chat_id": pairing.get("chat_id") or ch.get("pairing_chat_id"),
+        "pairing_user_id": pairing.get("user_id") or ch.get("pairing_user_id"),
         "default_qa_type": routing.get("default_qa_type")
         or ch.get("default_qa_type")
         or "SUPER_AGENT_QA",
@@ -165,16 +172,23 @@ class MessagingChannelService:
         channel_id = str(uuid.uuid4())
         token = payload.get("bot_token")
         stored_token, suffix = _encrypt_token(str(token)) if token else (None, None)
+        if ctype == "telegram" and not stored_token:
+            raise ValueError("请填写 Bot Token")
         ch = {
             "channel_id": channel_id,
             "type": ctype,
             "enabled": bool(payload.get("enabled", True)),
             "display_name": str(payload.get("display_name") or ctype).strip(),
-            "secrets": {"bot_token": stored_token} if stored_token else {},
-            "secret_meta": {"bot_token_suffix": suffix} if suffix else {},
-            "pairing": {"chat_id": payload.get("pairing_chat_id")}
-            if payload.get("pairing_chat_id")
-            else {},
+            "secrets": {
+                **({"bot_token": stored_token} if stored_token else {}),
+            },
+            "secret_meta": {
+                **({"bot_token_suffix": suffix} if suffix else {}),
+            },
+            "pairing": {
+                **({"chat_id": payload.get("pairing_chat_id")} if payload.get("pairing_chat_id") else {}),
+                **({"user_id": payload.get("pairing_user_id")} if payload.get("pairing_user_id") else {}),
+            },
             "routing": {
                 "default_qa_type": payload.get("default_qa_type") or "SUPER_AGENT_QA",
                 "default_session_id": payload.get("default_session_id") or channel_id,
@@ -229,6 +243,12 @@ class MessagingChannelService:
             else:
                 pairing.pop("chat_id", None)
         ch["pairing"] = pairing
+        if "pairing_user_id" in payload:
+            if payload["pairing_user_id"]:
+                pairing["user_id"] = payload["pairing_user_id"]
+            else:
+                pairing.pop("user_id", None)
+        ch["pairing"] = pairing
         routing = dict(ch.get("routing") or {})
         if payload.get("default_qa_type"):
             routing["default_qa_type"] = payload["default_qa_type"]
@@ -269,7 +289,9 @@ class MessagingChannelService:
         routing = ch.get("routing") if isinstance(ch.get("routing"), dict) else {}
         return RuntimeChannelConfig(
             user_id=str(user_id), channel_id=channel_id, channel_type=str(ch.get("type") or "telegram"),
-            bot_token=_runtime_token(str(token or "")), pairing_chat_id=str(pairing.get("chat_id")) if pairing.get("chat_id") else None,
+            bot_token=_runtime_token(str(token or "")),
+            pairing_chat_id=str(pairing.get("chat_id")) if pairing.get("chat_id") else None,
+            pairing_user_id=str(pairing.get("user_id")) if pairing.get("user_id") else None,
             default_session_id=str(routing.get("default_session_id") or channel_id),
             default_qa_type=str(routing.get("default_qa_type") or "SUPER_AGENT_QA"),
             display_name=str(ch.get("display_name") or "telegram"), enabled=bool(ch.get("enabled")),
@@ -295,11 +317,11 @@ class MessagingChannelService:
                 if not isinstance(ch, dict) or not ch.get("enabled"):
                     continue
                 secrets = ch.get("secrets") if isinstance(ch.get("secrets"), dict) else {}
-                token = secrets.get("bot_token") or ch.get("bot_token")
-                if not token:
-                    continue
                 ctype = str(ch.get("type") or "telegram").lower()
                 if ctype != want:
+                    continue
+                token = secrets.get("bot_token") or ch.get("bot_token")
+                if ctype == "telegram" and not token:
                     continue
                 channel_id = str(ch.get("channel_id") or "")
                 if not channel_id:
@@ -319,8 +341,9 @@ class MessagingChannelService:
                         user_id=str(uid),
                         channel_id=channel_id,
                         channel_type=ctype,
-                        bot_token=_runtime_token(str(token)),
+                        bot_token=_runtime_token(str(token or "")),
                         pairing_chat_id=str(pair_id) if pair_id else None,
+                        pairing_user_id=str(pairing.get("user_id")) if pairing.get("user_id") else None,
                         default_session_id=str(session_id),
                         default_qa_type=str(
                             routing.get("default_qa_type")
@@ -355,5 +378,7 @@ class MessagingChannelService:
         for _ in MessagingChannelService.iter_enabled_runtime("telegram"):
             n += 1
         for _ in MessagingChannelService.iter_enabled_runtime("wechat"):
+            n += 1
+        for _ in MessagingChannelService.iter_enabled_runtime("feishu"):
             n += 1
         return n
