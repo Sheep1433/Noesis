@@ -3,6 +3,14 @@
  */
 
 export type ToolRunStatus = 'running' | 'success' | 'error'
+export type ToolLifecycleState =
+  | 'running'
+  | 'approval_pending'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'rejected'
+  | 'cancelled'
 
 export interface TextUiPart {
   id: string
@@ -28,9 +36,14 @@ export interface ToolUiPart {
   input: Record<string, unknown>
   output: string
   status: ToolRunStatus
+  state: ToolLifecycleState
   error?: string | null
   errorCategory?: string | null
   duration_ms?: number
+  outcome?: string | null
+  exit_code?: number
+  timed_out?: boolean
+  truncated?: boolean
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
   parent_task_call_id?: string
   /** HITL 审批/澄清状态（可选扩展） */
@@ -73,6 +86,56 @@ function coerceToolStatus(p: Record<string, unknown>): ToolRunStatus {
     return 'running'
   }
   return 'success'
+}
+
+function coerceToolState(p: Record<string, unknown>): ToolLifecycleState {
+  const state = p.state
+  if (
+    state === 'running'
+    || state === 'approval_pending'
+    || state === 'succeeded'
+    || state === 'failed'
+    || state === 'timed_out'
+    || state === 'rejected'
+    || state === 'cancelled'
+  ) {
+    return state
+  }
+  if (p.timed_out === true || p.outcome === 'timed_out') {
+    return 'timed_out'
+  }
+  if (p.status === 'error' || p.error != null || p.outcome === 'command_failed') {
+    return 'failed'
+  }
+  if (p.status === 'running' || p.status === 'streaming') {
+    return 'running'
+  }
+  return 'succeeded'
+}
+
+export function isTerminalToolState(state: ToolLifecycleState): boolean {
+  return !['running', 'approval_pending'].includes(state)
+}
+
+export const TOOL_STATE_LABELS: Record<ToolLifecycleState, string> = {
+  running: '正在执行',
+  approval_pending: '等待确认',
+  succeeded: '已完成',
+  failed: '执行失败',
+  timed_out: '执行超时',
+  rejected: '已拒绝',
+  cancelled: '已停止',
+}
+
+export function assistantToolFailureSummary(parts: UiPart[]): {
+  hasFailure: boolean
+  hasVisibleText: boolean
+} {
+  return {
+    hasFailure: parts.some((part) => part.type === 'tool'
+      && ['failed', 'timed_out', 'rejected', 'cancelled'].includes(part.state)),
+    hasVisibleText: parts.some((part) => part.type === 'text' && Boolean(part.content.trim())),
+  }
 }
 
 /** 将已落库的整段 text（含成对标签）拆成 text / reasoning 部件，供历史列表与折叠 UI 使用 */
@@ -259,9 +322,14 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         input,
         output: typeof rec.output === 'string' ? rec.output : '',
         status: coerceToolStatus(rec),
+        state: coerceToolState(rec),
         error: rec.error != null ? String(rec.error) : null,
         errorCategory: rec.errorCategory != null ? String(rec.errorCategory) : null,
         duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
+        outcome: rec.outcome != null ? String(rec.outcome) : null,
+        exit_code: rec.exit_code != null ? Number(rec.exit_code) : undefined,
+        timed_out: rec.timed_out != null ? Boolean(rec.timed_out) : undefined,
+        truncated: rec.truncated != null ? Boolean(rec.truncated) : undefined,
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
         ...(hitl ? { hitl } : {}),
       }
@@ -273,7 +341,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         const hitlCandidates = parts
           .map((part, index) => ({ part, index }))
           .filter(({ part }) => part.type === 'tool'
-            && part.status === 'running'
+            && !isTerminalToolState(part.state)
             && Boolean(part.hitl)
             && part.name === toolPart.name
             && JSON.stringify(part.input) === JSON.stringify(toolPart.input))
@@ -865,6 +933,7 @@ export function upsertToolInputPart(
     input,
     output: '',
     status: 'running',
+    state: 'running',
     ...(parentId ? { parent_task_call_id: parentId } : {}),
   })
   return next
@@ -879,10 +948,16 @@ export function applyToolOutput(
     status: 'success' | 'error'
     duration_ms?: number
     errorCategory?: string
+    state?: ToolLifecycleState
+    outcome?: string
+    exit_code?: number
+    timed_out?: boolean
+    truncated?: boolean
   },
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
+  const state = payload.state ?? (payload.status === 'error' ? 'failed' : 'succeeded')
   const status: ToolRunStatus = payload.status === 'error' ? 'error' : 'success'
   if (idx === -1) {
     next.push({
@@ -893,20 +968,33 @@ export function applyToolOutput(
       input: {},
       output: payload.output,
       status,
+      state,
       error: payload.error,
       errorCategory: payload.errorCategory,
       duration_ms: payload.duration_ms,
+      outcome: payload.outcome,
+      exit_code: payload.exit_code,
+      timed_out: payload.timed_out,
+      truncated: payload.truncated,
     })
     return next
   }
   const tp = next[idx] as ToolUiPart
+  if (isTerminalToolState(tp.state) && tp.state !== state) {
+    return next
+  }
   next[idx] = {
     ...tp,
     output: payload.output,
     error: payload.error,
     errorCategory: payload.errorCategory ?? tp.errorCategory,
     status,
+    state,
     duration_ms: payload.duration_ms ?? tp.duration_ms,
+    outcome: payload.outcome ?? tp.outcome,
+    exit_code: payload.exit_code ?? tp.exit_code,
+    timed_out: payload.timed_out ?? tp.timed_out,
+    truncated: payload.truncated ?? tp.truncated,
   }
   return next
 }
@@ -935,6 +1023,7 @@ export function applyHitlPendingParts(
     next[idx] = {
       ...tp,
       status: 'running',
+      state: 'approval_pending',
       hitl: {
         kind: payload.kind,
         status: 'pending',

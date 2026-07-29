@@ -20,6 +20,7 @@ def test_tool_part_to_dict_snake_case_only() -> None:
         "output": "ok",
         "tool_call_id": "call-1",
         "status": "success",
+        "state": "succeeded",
         "duration_ms": 100,
     }
     assert "toolCallId" not in d

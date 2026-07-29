@@ -51,6 +51,7 @@ import {
   applyHitlPendingParts,
   applyToolOutput,
   assistantPartsStillStreaming,
+  assistantToolFailureSummary,
   completeLastReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
@@ -565,6 +566,11 @@ const conversationItems = ref<
 
 function patchLastAssistantParts(mut: (parts: UiPart[]) => UiPart[]) {
   const lastAssistantIndex = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+  patchAssistantPartsAt(lastAssistantIndex, mut)
+}
+
+function patchAssistantPartsAt(index: number, mut: (parts: UiPart[]) => UiPart[]) {
+  const lastAssistantIndex = index
   if (lastAssistantIndex === -1) {
     return
   }
@@ -755,8 +761,17 @@ const sseStream = useSSEStream({
       )
     }
     const normalized = normalizeApiContent(snapshot.content)
-    patchLastAssistantParts(() => normalized.parts)
-    const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+    let lastIdx = conversationItems.value.findIndex(
+      (item) => item.role === 'assistant' && item.message_id === snapshot.assistant_message_id,
+    )
+    if (lastIdx < 0) {
+      lastIdx = conversationItems.value.findLastIndex(
+        (item) => item.role === 'assistant'
+          && item.chat_id === snapshot.session_id
+          && !item.message_id,
+      )
+    }
+    patchAssistantPartsAt(lastIdx, () => normalized.parts)
     if (lastIdx >= 0) {
       conversationItems.value[lastIdx] = {
         ...conversationItems.value[lastIdx],
@@ -2258,6 +2273,7 @@ function onComposerPaste(e: ClipboardEvent) {
                               :input="entry.part.input"
                               :output="entry.part.output"
                               :status="entry.part.status"
+                              :state="entry.part.state"
                               :error="entry.part.error"
                               :duration_ms="entry.part.duration_ms"
                               :child-parts="entry.childParts"
@@ -2270,6 +2286,10 @@ function onComposerPaste(e: ClipboardEvent) {
                                 :result="entry.part.output"
                                 :error="entry.part.error"
                                 :status="entry.part.status"
+                                :state="entry.part.state"
+                                :error-category="entry.part.errorCategory"
+                                :exit_code="entry.part.exit_code"
+                                :truncated="entry.part.truncated"
                                 :duration_ms="entry.part.duration_ms"
                               />
                             </template>
@@ -2288,6 +2308,18 @@ function onComposerPaste(e: ClipboardEvent) {
                               @recycleQa="() => onRecycleQa(index)"
                             />
                           </template>
+                          <n-alert
+                            v-if="assistantToolFailureSummary(item.messageContent.parts).hasFailure"
+                            type="warning"
+                            :title="assistantToolFailureSummary(item.messageContent.parts).hasVisibleText
+                              ? '部分工具未成功，本次结果可能不完整'
+                              : '本轮未完成'"
+                            class="assistant-tool-failure-summary"
+                          >
+                            <template v-if="!assistantToolFailureSummary(item.messageContent.parts).hasVisibleText" #action>
+                              <n-button size="small" @click="onRecycleQa(index)">重新执行</n-button>
+                            </template>
+                          </n-alert>
                           <AssistantStreamingIndicator
                             v-if="showAssistantReplyLoading(index, item.role)"
                             section

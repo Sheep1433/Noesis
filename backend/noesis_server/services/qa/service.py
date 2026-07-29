@@ -21,6 +21,7 @@ from noesis_server.services.mention_resolve_service import MentionResolveService
 from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 from noesis.runtime.logging import logger
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from noesis_server.domain.chat.tool_state import ToolState
 from noesis_server.domain.chat.streaming.failure_notice import append_user_stop_notice_to_content
 from noesis.llm.catalog import get_default_model_id
 
@@ -784,6 +785,8 @@ class QaService:
                     builder.update_tool_hitl(
                         tool_call_id,
                         {"status": "approved", "decision": "approve"},
+                        status="running",
+                        state=ToolState.RUNNING,
                     )
                 elif dtype == "reject":
                     msg_text = decision.get("message") or "用户拒绝了该操作"
@@ -791,6 +794,7 @@ class QaService:
                         tool_call_id,
                         {"status": "rejected", "decision": "reject"},
                         status="error",
+                        state=ToolState.REJECTED,
                     )
                     try:
                         builder.append_tool_output(
@@ -800,6 +804,8 @@ class QaService:
                             status="error",
                             error=msg_text,
                             error_category="deterministic",
+                            state=ToolState.REJECTED,
+                            outcome="rejected",
                         )
                     except ValueError:
                         pass
@@ -812,6 +818,8 @@ class QaService:
                             "name": name,
                             "output": msg_text,
                             "status": "error",
+                            "state": ToolState.REJECTED.value,
+                            "outcome": "rejected",
                             "error": msg_text,
                         },
                     )
@@ -821,6 +829,7 @@ class QaService:
                         tool_call_id,
                         {"status": "answered", "decision": "respond"},
                         status="success",
+                        state=ToolState.SUCCEEDED,
                     )
                     try:
                         builder.append_tool_output(
@@ -828,6 +837,8 @@ class QaService:
                             answer,
                             tool_call_id,
                             status="success",
+                            state=ToolState.SUCCEEDED,
+                            outcome="ok",
                         )
                     except ValueError:
                         pass
@@ -840,6 +851,8 @@ class QaService:
                             "name": name,
                             "output": answer,
                             "status": "success",
+                            "state": ToolState.SUCCEEDED.value,
+                            "outcome": "ok",
                         },
                     )
 

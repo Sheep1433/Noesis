@@ -46,6 +46,37 @@ def test_common_qa_happy_path(auth_client, create_session, create_run, consume_r
 
 
 @pytest.mark.integration
+def test_default_title_and_message_sequence_survive_refresh(
+    auth_client, create_session, create_run, consume_run_stream
+):
+    """真实 PostgreSQL/API：首轮标题与 user→assistant 顺序由服务端持久化。"""
+    session_id = create_session(title="新对话")
+    run = create_run(
+        session_id=session_id,
+        content="验证刷新后的消息顺序",
+        qa_type="COMMON_QA",
+    )
+    assert run["session_title"] == "验证刷新后的消息顺序"
+    consume_run_stream(auth_client, run["run_id"])
+
+    response = auth_client.get(f"/api/chat/sessions/{session_id}/messages")
+    response.raise_for_status()
+    messages = response.json()["data"]["messages"]
+    sequences = [message["message_sequence"] for message in messages]
+    assert sequences == sorted(sequences)
+    assert len(sequences) == len(set(sequences))
+    assert [message["role"] for message in messages[-2:]] == ["user", "assistant"]
+
+    cursor_response = auth_client.get(
+        f"/api/chat/sessions/{session_id}/messages",
+        params={"before_id": messages[-1]["id"]},
+    )
+    cursor_response.raise_for_status()
+    earlier = cursor_response.json()["data"]["messages"]
+    assert any(message["id"] == messages[-2]["id"] for message in earlier)
+
+
+@pytest.mark.integration
 def test_run_snapshot_terminal(auth_client, create_session, create_run, consume_run_stream):
     """run 完成后 GET /runs/{run_id} 应为终态。"""
     session_id = create_session(title="api-test-snapshot")

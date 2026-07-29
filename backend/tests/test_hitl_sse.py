@@ -73,6 +73,7 @@ def test_bridge_emits_hitl_required_and_tool_parts() -> None:
     assert bridge.last_hitl_payload is not None
     assert builder.to_dict()["parts"]
     assert builder.to_dict()["parts"][0]["hitl"]["status"] == "pending"
+    assert builder.to_dict()["parts"][0]["state"] == "approval_pending"
 
     finish_lines = bridge.process_item(
         {"type": "__tw_finish__", "finish_reason": "hitl_pending"},
@@ -205,5 +206,5 @@ async def test_exec_hitl_resume_checks_expiry_without_initialization_error() -> 
     ]
 
     joined = "".join(lines)
-    assert "HITL 已超时" in joined
+    assert "等待确认已超时" in joined
     assert "[DONE]" in joined

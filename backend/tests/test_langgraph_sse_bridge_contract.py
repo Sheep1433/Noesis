@@ -174,7 +174,7 @@ def test_error_event_type() -> None:
     blob = "".join(bridge.process_item({"type": "__tw_error__", "content": "oops"}, builder, ctx))
     assert "event: error\n" in blob
     err = [o for o in _data_json_objects(blob) if o.get("type") == "error"][0]
-    assert err["error"] == "oops"
+    assert err["error"] == "操作失败，请稍后重试。"
     assert err["message_id"] == bridge.assistant_message_id
 
 
@@ -685,9 +685,73 @@ def test_execute_nonzero_exit_is_projected_as_tool_error() -> None:
     )
     events = _data_json_objects("".join(lines))
     tool_output = next(item for item in events if item["type"] == "tool-output-available")
-    assert tool_output["status"] == "error"
+    assert tool_output["status"] == "success"
+    assert tool_output["state"] == "failed"
+    assert tool_output["outcome"] == "command_failed"
+    assert tool_output["exit_code"] == 1
+    assert tool_output["errorCategory"] == "command_failed"
     saved = next(part for part in builder.to_dict()["parts"] if part.get("name") == "execute")
-    assert saved["status"] == "error"
+    assert saved["status"] == "success"
+    assert saved["state"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_state", "expected_outcome"),
+    [
+        ("Error: Command timed out\n[Command failed with exit code 124]", "timed_out", "timed_out"),
+        ("the word failed is ordinary output\n[Command succeeded with exit code 0]", "succeeded", "ok"),
+        ("optional command failed but shell recovered\n[Command succeeded with exit code 0]", "succeeded", "ok"),
+    ],
+)
+def test_execute_uses_exit_protocol_not_output_words(
+    content: str,
+    expected_state: str,
+    expected_outcome: str,
+) -> None:
+    bridge = LangGraphSseBridge("sess-exit-protocol")
+    builder = AssistantMessageBuilder()
+    ctx = _ctx()
+    bridge.process_item({
+        "event": "on_tool_start",
+        "name": "execute",
+        "run_id": "run-exec-protocol",
+        "data": {"input": {"command": "command"}},
+    }, builder, ctx)
+
+    class _Output:
+        status = "success"
+
+        def __init__(self, value: str) -> None:
+            self.content = value
+
+    lines = bridge.process_item({
+        "event": "on_tool_end",
+        "name": "execute",
+        "run_id": "run-exec-protocol",
+        "data": {"output": _Output(content)},
+    }, builder, ctx)
+    event = next(
+        item for item in _data_json_objects("".join(lines))
+        if item["type"] == "tool-output-available"
+    )
+    assert event["state"] == expected_state
+    assert event["outcome"] == expected_outcome
+
+
+def test_abort_with_error_reason_emits_error_without_success_finish() -> None:
+    bridge = LangGraphSseBridge("sess-abort-error")
+    builder = AssistantMessageBuilder()
+    ctx = _ctx()
+    first = bridge.process_item(
+        {"type": "abort", "finish_reason": "error", "content": "internal stack"},
+        builder,
+        ctx,
+    )
+    final = bridge.finalize()
+    blob = "".join(first + final)
+    assert "event: error" in blob
+    assert "event: finish" not in blob
+    assert "data: [DONE]" in blob
 
 
 def test_tool_error_uses_inflight_tool_call_id() -> None:

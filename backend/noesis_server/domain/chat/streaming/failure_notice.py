@@ -48,7 +48,22 @@ def sanitize_stream_error(raw: str, *, default: str = "操作失败，请稍后�
         )
     if is_model_api_timeout_error(s):
         return "模型响应超时，请稍后重试。"
-    return s
+    if s == "HITL 已超时":
+        return "等待确认已超时"
+    lowered = s.lower()
+    if any(marker in lowered for marker in (
+        "authenticationerror",
+        "invalid_api_key",
+        "incorrect api key",
+        "unauthorized",
+        "status code: 401",
+        "error code: 401",
+    )):
+        return "模型服务暂时不可用，请稍后重试。"
+    if is_connection_or_timeout_error(s):
+        return "连接失败，请稍后重试。"
+    # 整轮错误来自服务端异常；未知原文只写日志，不回显路径、堆栈或 provider 细节。
+    return default
 
 
 # ---------- 失败说明文案 ----------
@@ -182,10 +197,13 @@ def _mark_running_tools_error(
     parts: List[Dict[str, Any]],
     *,
     error_message: str,
+    state: str = "failed",
 ) -> None:
     for p in parts:
         if p.get("type") == "tool" and p.get("status") == "running":
             p["status"] = "error"
+            p["state"] = state
+            p["outcome"] = "cancelled" if state == "cancelled" else "unknown"
             if not p.get("error"):
                 p["error"] = error_message
 
@@ -199,7 +217,11 @@ def append_user_stop_notice_to_content(
 ) -> Dict[str, Any]:
     """用户主动停止：running 工具标 error，追加可读中断说明。"""
     parts: List[Dict[str, Any]] = list(content_dict.get("parts") or [])
-    _mark_running_tools_error(parts, error_message=USER_STOP_TOOL_ERROR)
+    _mark_running_tools_error(
+        parts,
+        error_message=USER_STOP_TOOL_ERROR,
+        state="cancelled",
+    )
     has_prose = _has_prose(parts)
     notice = get_user_stop_notice_text(has_prose)
 
