@@ -123,12 +123,15 @@ def _public_view(ch: Dict[str, Any], user_id: str | int) -> Dict[str, Any]:
     token = secrets.get("bot_token") or ch.get("bot_token")
     meta = ch.get("secret_meta") if isinstance(ch.get("secret_meta"), dict) else {}
     suffix = meta.get("bot_token_suffix")
+    masked_token = f"****{suffix}" if suffix else None
+    if masked_token is None and not str(token or "").startswith("enc:"):
+        masked_token = _mask_token(token)
     return {
         "channel_id": ch.get("channel_id"),
         "type": ch.get("type"),
         "enabled": bool(ch.get("enabled")),
         "display_name": ch.get("display_name") or "",
-        "bot_token_masked": f"****{suffix}" if suffix else _mask_token(token if not str(token or "").startswith("enc:") else None),
+        "bot_token_masked": masked_token,
         "has_token": bool(token),
         "pairing_chat_id": pairing.get("chat_id") or ch.get("pairing_chat_id"),
         "pairing_user_id": pairing.get("user_id") or ch.get("pairing_user_id"),
@@ -141,6 +144,57 @@ def _public_view(ch: Dict[str, Any], user_id: str | int) -> Dict[str, Any]:
         "delivery_preference": routing.get("delivery_preference") or "reply",
         "health": channel_health.get(user_id, str(ch.get("channel_id") or "")),
     }
+
+
+def _runtime_config_from_channel(
+    user_id: str | int,
+    ch: Dict[str, Any],
+) -> RuntimeChannelConfig | None:
+    channel_id = str(ch.get("channel_id") or "")
+    if not channel_id:
+        return None
+    channel_type = str(ch.get("type") or "telegram").lower()
+    secrets = ch.get("secrets") if isinstance(ch.get("secrets"), dict) else {}
+    pairing = ch.get("pairing") if isinstance(ch.get("pairing"), dict) else {}
+    routing = ch.get("routing") if isinstance(ch.get("routing"), dict) else {}
+    token = secrets.get("bot_token") or ch.get("bot_token")
+    session_id = (
+        routing.get("default_session_id")
+        or ch.get("default_session_id")
+        or channel_id
+    )
+    if len(str(session_id)) > 36:
+        session_id = channel_id
+    pairing_chat_id = pairing.get("chat_id") or ch.get("pairing_chat_id")
+    pairing_user_id = pairing.get("user_id") or ch.get("pairing_user_id")
+    return RuntimeChannelConfig(
+        user_id=str(user_id),
+        channel_id=channel_id,
+        channel_type=channel_type,
+        bot_token=_runtime_token(str(token or "")),
+        pairing_chat_id=str(pairing_chat_id) if pairing_chat_id else None,
+        pairing_user_id=str(pairing_user_id) if pairing_user_id else None,
+        default_session_id=str(session_id),
+        default_qa_type=str(
+            routing.get("default_qa_type")
+            or ch.get("default_qa_type")
+            or "SUPER_AGENT_QA"
+        ),
+        display_name=str(ch.get("display_name") or channel_type),
+        enabled=bool(ch.get("enabled")),
+        session_strategy=str(routing.get("session_strategy") or "persistent"),
+        delivery_preference=str(routing.get("delivery_preference") or "reply"),
+    )
+
+
+def _configured_user_ids() -> list[str]:
+    if not _USERS_ROOT.is_dir():
+        return []
+    return [
+        user_dir.name
+        for user_dir in sorted(_USERS_ROOT.iterdir())
+        if user_dir.is_dir() and (user_dir / "channels.json").is_file()
+    ]
 
 
 class MessagingChannelService:
@@ -242,7 +296,6 @@ class MessagingChannelService:
                 pairing["chat_id"] = payload["pairing_chat_id"]
             else:
                 pairing.pop("chat_id", None)
-        ch["pairing"] = pairing
         if "pairing_user_id" in payload:
             if payload["pairing_user_id"]:
                 pairing["user_id"] = payload["pairing_user_id"]
@@ -283,21 +336,10 @@ class MessagingChannelService:
         ch = next((item for item in data.get("channels", []) if isinstance(item, dict) and item.get("channel_id") == channel_id), None)
         if ch is None:
             raise KeyError(channel_id)
-        secrets = ch.get("secrets") if isinstance(ch.get("secrets"), dict) else {}
-        token = secrets.get("bot_token") or ch.get("bot_token")
-        pairing = ch.get("pairing") if isinstance(ch.get("pairing"), dict) else {}
-        routing = ch.get("routing") if isinstance(ch.get("routing"), dict) else {}
-        return RuntimeChannelConfig(
-            user_id=str(user_id), channel_id=channel_id, channel_type=str(ch.get("type") or "telegram"),
-            bot_token=_runtime_token(str(token or "")),
-            pairing_chat_id=str(pairing.get("chat_id")) if pairing.get("chat_id") else None,
-            pairing_user_id=str(pairing.get("user_id")) if pairing.get("user_id") else None,
-            default_session_id=str(routing.get("default_session_id") or channel_id),
-            default_qa_type=str(routing.get("default_qa_type") or "SUPER_AGENT_QA"),
-            display_name=str(ch.get("display_name") or "telegram"), enabled=bool(ch.get("enabled")),
-            session_strategy=str(routing.get("session_strategy") or "persistent"),
-            delivery_preference=str(routing.get("delivery_preference") or "reply"),
-        )
+        config = _runtime_config_from_channel(user_id, ch)
+        if config is None:
+            raise KeyError(channel_id)
+        return config
 
     @staticmethod
     def iter_enabled_runtime(
@@ -316,69 +358,36 @@ class MessagingChannelService:
             for ch in channels:
                 if not isinstance(ch, dict) or not ch.get("enabled"):
                     continue
-                secrets = ch.get("secrets") if isinstance(ch.get("secrets"), dict) else {}
-                ctype = str(ch.get("type") or "telegram").lower()
-                if ctype != want:
+                config = _runtime_config_from_channel(uid, ch)
+                if config is None or config.channel_type != want:
                     continue
-                token = secrets.get("bot_token") or ch.get("bot_token")
-                if ctype == "telegram" and not token:
+                if config.channel_type == "telegram" and not config.bot_token:
                     continue
-                channel_id = str(ch.get("channel_id") or "")
-                if not channel_id:
-                    continue
-                pairing = ch.get("pairing") if isinstance(ch.get("pairing"), dict) else {}
-                routing = ch.get("routing") if isinstance(ch.get("routing"), dict) else {}
-                session_id = (
-                    routing.get("default_session_id")
-                    or ch.get("default_session_id")
-                    or channel_id
-                )
-                if len(str(session_id)) > 36:
-                    session_id = channel_id
-                pair_id = pairing.get("chat_id") or ch.get("pairing_chat_id")
-                out.append(
-                    RuntimeChannelConfig(
-                        user_id=str(uid),
-                        channel_id=channel_id,
-                        channel_type=ctype,
-                        bot_token=_runtime_token(str(token or "")),
-                        pairing_chat_id=str(pair_id) if pair_id else None,
-                        pairing_user_id=str(pairing.get("user_id")) if pairing.get("user_id") else None,
-                        default_session_id=str(session_id),
-                        default_qa_type=str(
-                            routing.get("default_qa_type")
-                            or ch.get("default_qa_type")
-                            or "SUPER_AGENT_QA"
-                        ),
-                        display_name=str(ch.get("display_name") or ctype),
-                        enabled=True,
-                        session_strategy=str(routing.get("session_strategy") or "persistent"),
-                        delivery_preference=str(routing.get("delivery_preference") or "reply"),
-                    )
-                )
+                out.append(config)
 
         if user_id is not None:
             _collect(user_id)
             return out
 
-        if not _USERS_ROOT.is_dir():
-            return out
-        for user_dir in sorted(_USERS_ROOT.iterdir()):
-            if not user_dir.is_dir():
-                continue
-            if not (user_dir / "channels.json").is_file():
-                continue
-            _collect(user_dir.name)
+        for configured_user_id in _configured_user_ids():
+            _collect(configured_user_id)
         return out
 
     @staticmethod
     def sync_all_bindings() -> int:
         """启动时把磁盘配对刷进 ChannelBindingStore。"""
-        n = 0
-        for _ in MessagingChannelService.iter_enabled_runtime("telegram"):
-            n += 1
-        for _ in MessagingChannelService.iter_enabled_runtime("wechat"):
-            n += 1
-        for _ in MessagingChannelService.iter_enabled_runtime("feishu"):
-            n += 1
-        return n
+        count = 0
+        for user_id in _configured_user_ids():
+            data = _load_raw(user_id)
+            channels = data.get("channels") or []
+            _sync_bindings(user_id, channels)
+            for ch in channels:
+                if not isinstance(ch, dict) or not ch.get("enabled"):
+                    continue
+                config = _runtime_config_from_channel(user_id, ch)
+                if config is None or config.channel_type not in _ALLOWED_TYPES:
+                    continue
+                if config.channel_type == "telegram" and not config.bot_token:
+                    continue
+                count += 1
+        return count

@@ -41,6 +41,11 @@ def _content_text(content: Any) -> str:
     return str(content.get("text") or "").strip() if isinstance(content, dict) else ""
 
 
+def _dict_field(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    value = parent.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 class FeishuChannelAdapter:
     channel_type = "feishu"
     capabilities = ChannelCapabilities(streaming_edit=True, max_text_len=4000, markdown=False, mirror_tools=False)
@@ -57,11 +62,11 @@ class FeishuChannelAdapter:
         self.started = False
 
     async def normalize_inbound(self, raw: dict[str, Any]) -> InboundMessage | None:
-        header = raw.get("header") if isinstance(raw.get("header"), dict) else {}
-        event = raw.get("event") if isinstance(raw.get("event"), dict) else raw
-        message = event.get("message") if isinstance(event.get("message"), dict) else {}
-        sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
-        sender_id = sender.get("sender_id") if isinstance(sender.get("sender_id"), dict) else {}
+        header = _dict_field(raw, "header")
+        event = _dict_field(raw, "event") or raw
+        message = _dict_field(event, "message")
+        sender = _dict_field(event, "sender")
+        sender_id = _dict_field(sender, "sender_id")
         open_id = str(sender_id.get("open_id") or "")
         message_id = str(message.get("message_id") or "")
         event_id = str(header.get("event_id") or raw.get("event_id") or "")

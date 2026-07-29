@@ -12,6 +12,7 @@ from noesis_server.domain.chat.delivery.channels import channel_bindings
 from noesis_server.exceptions.exception import ConflictException
 from noesis_server.services.channel_operations_service import ChannelOperationsService, _last_command
 from noesis_server.services.messaging_channel_service import MessagingChannelService
+from noesis_server.services import messaging_channel_service
 
 
 @pytest.fixture(autouse=True)
@@ -125,6 +126,32 @@ async def test_disabled_or_unpaired_channel_rejects_test_delivery(monkeypatch: p
 
 
 @pytest.mark.asyncio
+async def test_delivery_rejects_cleared_telegram_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = _create()
+    MessagingChannelService.update_channel(
+        "u1",
+        item["channel_id"],
+        {"bot_token_action": "clear"},
+    )
+
+    class UnexpectedClient:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("缺少 Token 时不应构造 Telegram 客户端")
+
+    monkeypatch.setattr(
+        "noesis_server.services.channel_operations_service.TelegramBotClient",
+        UnexpectedClient,
+    )
+
+    with pytest.raises(ConflictException) as error:
+        await ChannelOperationsService.test_delivery("u1", item["channel_id"])
+
+    assert error.value.data["code"] == "credential_missing"
+
+
+@pytest.mark.asyncio
 async def test_test_command_is_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
     item = _create()
 
@@ -142,7 +169,7 @@ async def test_test_command_is_rate_limited(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_health_read_model_is_user_scoped_and_redacted() -> None:
     item_a = _create("u-a")
-    item_b = _create("u-b")
+    _create("u-b")
     channel_health.report_status("u-a", item_a["channel_id"], "unavailable", "连接失败", error_category="connection")
     health_a = MessagingChannelService.list_channels("u-a")[0]["health"]
     health_b = MessagingChannelService.list_channels("u-b")[0]["health"]
@@ -163,3 +190,24 @@ def test_disabling_channel_removes_inbound_binding_and_runtime_worker() -> None:
 
     assert channel_bindings.resolve("telegram", "42") is None
     assert MessagingChannelService.iter_enabled_runtime("telegram", user_id="u1") == []
+
+
+def test_sync_all_bindings_reads_each_user_config_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _create("u1")
+    users_root = tmp_path / "users"
+    monkeypatch.setattr(messaging_channel_service, "_USERS_ROOT", users_root)
+    original_load = messaging_channel_service._load_raw
+    load_count = 0
+
+    def counting_load(user_id):
+        nonlocal load_count
+        load_count += 1
+        return original_load(user_id)
+
+    monkeypatch.setattr(messaging_channel_service, "_load_raw", counting_load)
+
+    MessagingChannelService.sync_all_bindings()
+
+    assert load_count == 1

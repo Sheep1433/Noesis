@@ -16,7 +16,7 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTr
 from noesis.config.env import MessagingConfig
 from noesis.runtime.logging import logger
 from noesis_server.domain.chat.delivery.channel_health import channel_health
-from noesis_server.domain.chat.delivery.channels import route_inbound
+from noesis_server.domain.chat.delivery.channels import InboundRouteResult, route_inbound
 from noesis_server.domain.chat.delivery.feishu.adapter import FeishuChannelAdapter
 from noesis_server.domain.chat.delivery.feishu.client import FeishuBotClient, mask_app_id
 from noesis_server.domain.chat.delivery.feishu.stream_out import FeishuOutbound
@@ -71,6 +71,18 @@ def _as_dict(value: Any) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _parse_card_action(raw: dict[str, Any]) -> tuple[str, str, str]:
+    event = raw.get("event") if isinstance(raw.get("event"), dict) else raw
+    action = event.get("action") if isinstance(event.get("action"), dict) else {}
+    value = action.get("value") if isinstance(action.get("value"), dict) else {}
+    operator = event.get("operator") if isinstance(event.get("operator"), dict) else {}
+    return (
+        str(value.get("token") or ""),
+        str(value.get("decision") or ""),
+        str(operator.get("open_id") or ""),
+    )
 
 
 def _schedule(coro: Any) -> None:
@@ -136,12 +148,13 @@ async def _handle_message(
     raw: dict[str, Any],
     *,
     normalized: Any = None,
+    routed: InboundRouteResult | None = None,
 ) -> None:
     inbound = normalized or await adapter.normalize_inbound(raw)
     if inbound is None:
         return
     channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "received")
-    routed = route_inbound(inbound)
+    routed = routed or route_inbound(inbound)
     chat_id = str(inbound.raw.get("reply_chat_id") or cfg.pairing_chat_id or "")
     if not routed.ok or routed.binding is None:
         channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "rejected_unpaired")
@@ -173,13 +186,7 @@ async def _handle_message(
 
 
 async def _handle_card(cfg: RuntimeChannelConfig, client: FeishuBotClient, raw: dict[str, Any]) -> None:
-    event = raw.get("event") if isinstance(raw.get("event"), dict) else raw
-    action = event.get("action") if isinstance(event.get("action"), dict) else {}
-    value = action.get("value") if isinstance(action.get("value"), dict) else {}
-    token = str(value.get("token") or "")
-    decision = str(value.get("decision") or "")
-    operator = event.get("operator") if isinstance(event.get("operator"), dict) else {}
-    open_id = str(operator.get("open_id") or "")
+    token, decision, open_id = _parse_card_action(raw)
     prompt = _hitl_prompts.get(token)
     if prompt is None:
         return
@@ -220,16 +227,19 @@ async def _dispatch_message(client: FeishuBotClient, adapter: FeishuChannelAdapt
         if chat_id:
             await client.send_text(chat_id, f"此账号尚未与 Noesis 配对。请在设置中填写发送者 Open ID：{inbound.external_chat_id}")
         return
-    await _handle_message(cfg, client, adapter, raw, normalized=inbound)
+    await _handle_message(
+        cfg,
+        client,
+        adapter,
+        raw,
+        normalized=inbound,
+        routed=routed,
+    )
 
 
 async def _dispatch_card(client: FeishuBotClient, raw: dict[str, Any]) -> None:
-    event = raw.get("event") if isinstance(raw.get("event"), dict) else raw
-    action = event.get("action") if isinstance(event.get("action"), dict) else {}
-    value = action.get("value") if isinstance(action.get("value"), dict) else {}
-    prompt = _hitl_prompts.get(str(value.get("token") or ""))
-    operator = event.get("operator") if isinstance(event.get("operator"), dict) else {}
-    open_id = str(operator.get("open_id") or "")
+    token, _, open_id = _parse_card_action(raw)
+    prompt = _hitl_prompts.get(token)
     cfg = _config_for_binding(prompt.user_id, open_id) if prompt else None
     if cfg is not None:
         await _handle_card(cfg, client, raw)

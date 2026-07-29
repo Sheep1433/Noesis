@@ -210,3 +210,45 @@ async def test_clarification_text_resumes_existing_run(monkeypatch: pytest.Monke
     decisions = resume.await_args.kwargs["decisions"]
     assert decisions == [{"type": "respond", "message": "补充内容"}]
     pending_hitl.clear("s1")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_message_routes_normalized_inbound_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FeishuChannelAdapter()
+    inbound = await adapter.normalize_inbound(_event(event_id="route-once"))
+    assert inbound is not None
+    binding = SimpleNamespace(user_id="u1", session_id="s1")
+    route_count = 0
+
+    def route_once(_inbound):
+        nonlocal route_count
+        route_count += 1
+        return SimpleNamespace(ok=True, binding=binding)
+
+    cfg = SimpleNamespace(
+        user_id="u1",
+        channel_id="channel-1",
+        pairing_chat_id="oc_chat",
+        session_strategy="persistent",
+        delivery_preference="silent",
+        default_qa_type="SUPER_AGENT_QA",
+    )
+    monkeypatch.setattr(feishu_runtime, "route_inbound", route_once)
+    monkeypatch.setattr(feishu_runtime, "_config_for_binding", lambda *_args: cfg)
+    monkeypatch.setattr(
+        feishu_runtime,
+        "run_channel_agent",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                hitl_pending=False,
+                hitl_payload=None,
+                plain_text="",
+            )
+        ),
+    )
+
+    await feishu_runtime._dispatch_message(AsyncMock(), adapter, _event(event_id="route-once-2"))
+
+    assert route_count == 1

@@ -11,7 +11,10 @@ from noesis_server.domain.chat.delivery.channel_health import channel_health
 from noesis_server.domain.chat.delivery.telegram.client import TelegramBotClient
 from noesis_server.domain.chat.delivery.feishu.client import FeishuBotClient
 from noesis_server.exceptions.exception import ConflictException
-from noesis_server.services.messaging_channel_service import MessagingChannelService
+from noesis_server.services.messaging_channel_service import (
+    MessagingChannelService,
+    RuntimeChannelConfig,
+)
 
 _TEST_MESSAGE = "Noesis 通道测试成功。你可以返回设置页继续配置。"
 _RATE_LIMIT_SECONDS = 10.0
@@ -27,6 +30,28 @@ class ChannelOperationsService:
             raise ConflictException(data={"code": "rate_limited"}, message="操作过于频繁，请稍后再试")
         _last_command[key] = now
 
+    @staticmethod
+    def _channel_client(
+        cfg: RuntimeChannelConfig,
+    ) -> FeishuBotClient | TelegramBotClient:
+        if cfg.channel_type == "feishu":
+            if not MessagingConfig.feishu_app_id or not MessagingConfig.feishu_app_secret:
+                raise ConflictException(
+                    data={"code": "service_unavailable"},
+                    message="飞书服务暂不可用",
+                )
+            return FeishuBotClient(
+                MessagingConfig.feishu_app_id,
+                MessagingConfig.feishu_app_secret,
+                timeout=10,
+            )
+        if not cfg.bot_token:
+            raise ConflictException(
+                data={"code": "credential_missing"},
+                message="请先配置 Bot Token",
+            )
+        return TelegramBotClient(cfg.bot_token, timeout=10)
+
     @classmethod
     async def test_connection(cls, user_id: int | str, channel_id: str) -> dict:
         cls._check_rate(user_id, channel_id, "connection")
@@ -34,16 +59,8 @@ class ChannelOperationsService:
         correlation_id = str(uuid.uuid4())
         if not cfg.enabled:
             raise ConflictException(data={"code": "channel_disabled"}, message="请先启用通道")
-        if cfg.channel_type == "feishu":
-            if not MessagingConfig.feishu_app_id or not MessagingConfig.feishu_app_secret:
-                raise ConflictException(data={"code": "service_unavailable"}, message="飞书服务暂不可用")
-            client = FeishuBotClient(MessagingConfig.feishu_app_id, MessagingConfig.feishu_app_secret, timeout=10)
-            probe = client.get_bot_info
-        else:
-            if not cfg.bot_token:
-                raise ConflictException(data={"code": "credential_missing"}, message="请先配置 Bot Token")
-            client = TelegramBotClient(cfg.bot_token, timeout=10)
-            probe = client.get_me
+        client = cls._channel_client(cfg)
+        probe = client.get_bot_info if cfg.channel_type == "feishu" else client.get_me
         try:
             await asyncio.wait_for(probe(), timeout=12)
             channel_health.report_status(user_id, channel_id, "healthy", "连接正常", correlation_id=correlation_id)
@@ -66,9 +83,7 @@ class ChannelOperationsService:
             raise ConflictException(data={"code": "channel_disabled"}, message="请先启用通道")
         if not cfg.pairing_chat_id:
             raise ConflictException(data={"code": "channel_unpaired"}, message="请先完成通道配对")
-        if cfg.channel_type == "feishu" and (not MessagingConfig.feishu_app_id or not MessagingConfig.feishu_app_secret):
-            raise ConflictException(data={"code": "service_unavailable"}, message="飞书服务暂不可用")
-        client = FeishuBotClient(MessagingConfig.feishu_app_id, MessagingConfig.feishu_app_secret, timeout=10) if cfg.channel_type == "feishu" else TelegramBotClient(cfg.bot_token, timeout=10)
+        client = cls._channel_client(cfg)
         try:
             if cfg.channel_type == "feishu":
                 result = await asyncio.wait_for(client.send_text(cfg.pairing_chat_id, _TEST_MESSAGE), timeout=12)
@@ -76,7 +91,10 @@ class ChannelOperationsService:
                 result = await asyncio.wait_for(client.send_message(cfg.pairing_chat_id, _TEST_MESSAGE), timeout=12)
             channel_health.report_activity(user_id, channel_id, "outbound", "succeeded")
             channel_health.report_status(user_id, channel_id, "healthy", "测试消息已发送", correlation_id=correlation_id)
-            external_id = result.get("message_id") or ((result.get("message") or {}).get("message_id") if isinstance(result.get("message"), dict) else None)
+            message = result.get("message")
+            external_id = result.get("message_id") or (
+                message.get("message_id") if isinstance(message, dict) else None
+            )
             return {"ok": True, "status": "delivered", "message": "测试消息已发送", "delivered_at": int(time.time() * 1000), "external_message_id": str(external_id or "") or None, "correlation_id": correlation_id}
         except TimeoutError:
             channel_health.report_activity(user_id, channel_id, "outbound", "failed")
