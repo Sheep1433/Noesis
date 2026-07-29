@@ -47,6 +47,7 @@ _TOOL_EXIT_PROTOCOL_RE = re.compile(
 _TOOL_INPUT_MAX = 65536
 TASK_TOOL_NAME = "task"
 STRUCTURED_OUTPUT_TOOL_NAMES = frozenset({"CitedAnswer"})
+_OMIT_NON_JSON_TOOL_INPUT = object()
 
 
 def _new_id(prefix: str) -> str:
@@ -61,19 +62,42 @@ def _format_done() -> str:
     return "data: [DONE]\n\n"
 
 
+def _json_safe_tool_input(value: Any) -> Any:
+    """只保留模型可见的 JSON 输入，丢弃 ToolRuntime 等框架注入对象。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        normalized: Dict[str, Any] = {}
+        for key, item in value.items():
+            safe_item = _json_safe_tool_input(item)
+            if safe_item is not _OMIT_NON_JSON_TOOL_INPUT:
+                normalized[str(key)] = safe_item
+        return normalized
+    if isinstance(value, (list, tuple, set)):
+        normalized_items = []
+        for item in value:
+            safe_item = _json_safe_tool_input(item)
+            if safe_item is not _OMIT_NON_JSON_TOOL_INPUT:
+                normalized_items.append(safe_item)
+        return normalized_items
+    return _OMIT_NON_JSON_TOOL_INPUT
+
+
 def _normalize_tool_input(raw: Any) -> tuple[Dict[str, Any], Optional[str]]:
-    """SSE / builder 统一使用 dict 形态的 input；返回 (dict, 原始 JSON 字符串供前端 input_text)。"""
+    """SSE / builder 统一使用 JSON-safe dict；返回前端 input_text。"""
     if raw is None or raw == {}:
         return {}, None
     if isinstance(raw, dict):
-        return raw, json.dumps(raw, ensure_ascii=False)
-    try:
-        dumped = json.dumps(raw, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        dumped = str(raw)
+        normalized = _json_safe_tool_input(raw)
+        dumped = json.dumps(normalized, ensure_ascii=False)
+        return normalized, dumped
+    safe_raw = _json_safe_tool_input(raw)
+    if safe_raw is _OMIT_NON_JSON_TOOL_INPUT:
+        return {}, None
+    dumped = json.dumps(safe_raw, ensure_ascii=False)
     if len(dumped) > _TOOL_INPUT_MAX:
         dumped = f"{dumped[:_TOOL_INPUT_MAX]}..."
-    return {"_tw_tool_input": raw if not isinstance(raw, (set,)) else list(raw)}, dumped
+    return {"_tw_tool_input": safe_raw}, dumped
 
 
 def _tool_output_value(raw_out: Any) -> str:

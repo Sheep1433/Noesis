@@ -358,6 +358,45 @@ def test_tool_output_duration_ms() -> None:
     assert tool_parts[0].get("duration_ms") is not None
 
 
+def test_tool_start_omits_injected_runtime_from_sse_and_builder() -> None:
+    class ToolRuntime:
+        pass
+
+    bridge = LangGraphSseBridge("sess-runtime")
+    builder = AssistantMessageBuilder(
+        session_id="sess-runtime",
+        message_id=bridge.assistant_message_id,
+    )
+    lines = bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "web_search",
+            "run_id": "run-search",
+            "data": {
+                "input": {
+                    "query": "LLM wiki",
+                    "limit": 8,
+                    "runtime": ToolRuntime(),
+                }
+            },
+        },
+        builder,
+        _ctx(),
+    )
+
+    available = next(
+        event
+        for event in _data_json_objects("".join(lines))
+        if event.get("type") == "tool-input-available"
+    )
+    assert available["input"] == {"query": "LLM wiki", "limit": 8}
+    assert json.loads(available["input_text"]) == available["input"]
+    saved_tool = next(
+        part for part in builder.to_dict()["parts"] if part.get("type") == "tool"
+    )
+    assert saved_tool["input"] == available["input"]
+
+
 def test_usage_update_and_finish_cumulative() -> None:
     bridge = LangGraphSseBridge("sess-usage")
     builder = AssistantMessageBuilder(session_id="sess-usage", message_id=bridge.assistant_message_id)
