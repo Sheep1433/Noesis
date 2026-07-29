@@ -26,6 +26,7 @@ from typing_extensions import override
 
 from noesis.config.env import ModelConfig
 from noesis.runtime.logging import logger
+from noesis.runtime.thread_context import resolve_runtime_thread_id
 
 _SALIENT_ARG_FIELDS = ("path", "url", "query", "command", "pattern", "glob", "cmd")
 
@@ -106,8 +107,13 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
         self._pending_warnings: dict[str, list[str]] = defaultdict(list)
 
     def _get_thread_id(self, runtime: Runtime) -> str:
-        thread_id = runtime.context.get("thread_id") if runtime.context else None
-        return str(thread_id) if thread_id else "default"
+        thread_id = resolve_runtime_thread_id(runtime)
+        if not thread_id:
+            logger.warning(
+                "[loop_detection] runtime thread_id 缺失，本次调用使用隔离的 runtime 身份"
+            )
+            return f"runtime:{id(runtime)}"
+        return thread_id
 
     def _evict_if_needed(self) -> None:
         while len(self._history) > self._max_tracked_threads:

@@ -1,10 +1,13 @@
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
+from langchain_core.callbacks.manager import AsyncCallbackManagerForLLMRun
 
 from noesis.middlewares import model_retry_middleware
 from noesis.middlewares.model_retry_middleware import ModelRetryMiddleware
 from noesis.runtime.model_attempt import (
+    ModelAttemptCallback,
     ModelAttemptTracker,
     bind_model_attempt_tracker,
     reset_model_attempt_tracker,
@@ -51,6 +54,22 @@ async def test_model_failure_does_not_retry_after_visible_output(monkeypatch) ->
 
     assert handler.await_count == 1
     dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_callback_manager_invokes_sync_attempt_hooks() -> None:
+    tracker = ModelAttemptTracker()
+    callback = ModelAttemptCallback(tracker)
+    manager = AsyncCallbackManagerForLLMRun(
+        run_id=uuid4(),
+        handlers=[callback],
+        inheritable_handlers=[],
+        parent_run_id=None,
+    )
+
+    await manager.on_llm_new_token("token")
+
+    assert tracker.visible_output_started is True
 
 
 def test_retry_custom_event_becomes_run_status_frame() -> None:
