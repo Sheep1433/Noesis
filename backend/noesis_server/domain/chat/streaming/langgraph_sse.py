@@ -20,7 +20,7 @@ from noesis_server.domain.chat.streaming.reasoning import (
     unsent_text_suffix,
 )
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
+from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
 from noesis_server.domain.chat.tool_state import (
     ToolState,
     derive_tool_state,
@@ -601,14 +601,7 @@ class LangGraphSseBridge:
     ) -> bool:
         if builder is None or not task_tool_call_id:
             return False
-        for part in builder._content.parts:  # noqa: SLF001 — bridge 需读累积 parts
-            if (
-                isinstance(part, ToolPart)
-                and part.parent_task_call_id == task_tool_call_id
-                and part.state in {ToolState.FAILED, ToolState.TIMED_OUT}
-            ):
-                return True
-        return False
+        return builder.has_failed_child_tool(task_tool_call_id)
 
     def _resolve_tool_failure(
         self,
@@ -804,7 +797,7 @@ class LangGraphSseBridge:
                 already = bool(
                     tool_call_id
                     and builder is not None
-                    and tool_call_id in getattr(builder, "_tools_by_call_id", {})
+                    and builder.get_tool(tool_call_id) is not None
                 )
                 if already and builder is not None:
                     builder.update_tool_hitl(
@@ -1118,7 +1111,7 @@ class LangGraphSseBridge:
         ):
             retrieval_payload = _retrieval_payload(clean_output)
             if retrieval_payload is not None:
-                tool_part = getattr(builder, "_tools_by_call_id", {}).get(tool_call_id)
+                tool_part = builder.get_tool(tool_call_id)
                 tool_input = tool_part.arguments if tool_part is not None else {}
                 retrieval_part = builder.register_retrieval_results(
                     tool_call_id=tool_call_id,

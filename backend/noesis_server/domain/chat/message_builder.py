@@ -594,6 +594,17 @@ class AssistantMessageBuilder:
         ]
         return candidates[0] if len(candidates) == 1 else None
 
+    def get_tool(self, tool_call_id: str) -> Optional[ToolPart]:
+        return self._tools_by_call_id.get(tool_call_id)
+
+    def has_failed_child_tool(self, parent_tool_call_id: str) -> bool:
+        return any(
+            isinstance(part, ToolPart)
+            and part.parent_task_call_id == parent_tool_call_id
+            and part.state in {ToolState.FAILED, ToolState.TIMED_OUT}
+            for part in self._content.parts
+        )
+
     def load_from_content_dict(self, data: Dict[str, Any]) -> None:
         """从已落库 content 恢复 parts（HITL resume 续写同一 assistant 行）。"""
         self._content = MessageContent.from_dict(data or {"parts": []})
