@@ -17,6 +17,8 @@ POST /api/chat/runs → RunService → RunManager → QaService producer
 
 浏览器连接不是消息落库的权威。客户端断开后，producer 与检查点继续运行；刷新后由 run snapshot 和 sequence 恢复。消息通道使用同一个 `RunManager` 注册 run，并在内部通过 headless `RunOrchestrator` 映射事件，不依赖浏览器 SSE。
 
+Web 路径只有一个持久化责任方：`RunService` 在同一事务中预建 user、assistant 骨架与 run，随后由 PersistSink 更新 checkpoint 和终态。`QaService` 只负责执行 Agent 并产生事件，不创建 Web 消息、不维护 Web active stream，也不处理 Web stop。Telegram、飞书等无浏览器通道可以使用共享的 channel persistence helper，但不得回流为第二套 Web 写入路径。
+
 PersistSink、每个 SseDelivery 和 ChannelDelivery 都使用独立的有界 subscriber queue。RunManager 发布事件时不等待各 Delivery 完成；某个 handler 写入失败只注销该 subscriber 并记录 `delivery_failures`，不会取消 producer、其它 subscriber 或改写 run 终态。PersistSink 在 producer 最终持久化前完成已入队事件的消费，SSE 断连只释放当前浏览器队列。
 
 ## 2. 事件
@@ -106,6 +108,7 @@ SSE 注释保活不推进 sequence，也不落库。反向代理 read timeout �
 - 网页 subscriber queue 与事件缓存有事件数、字节数双上限；慢连接通过 snapshot 恢复。
 - 模型临时错误只在尚未输出正文、尚未开始工具/HITL 时自动 retry；每次重试递增 `attempt_id`，旧 attempt 迟到事件会被丢弃。Channel outbound 使用进程内有界队列，但不是 durable spool；进程退出时未完成投递记录为 lost，不会自动续发。
 - 前后端必须同步发布；旧 `/api/chat/sessions/stream`、session stop/resume 接口已删除。
+- 当前 `LcEventMapper` 仍通过 `LangGraphSseBridge` 生成 SSE 文本后再解析为 typed `RunEvent`。这段内部序列化往返增加了字段漂移和重复解析风险；后续应以独立变更改为 raw event 直接映射 typed event，SSE 仅保留在 Delivery 边界。在完成该变更前，不允许再增加另一套 Bridge 或 Mapper。
 
 ## 9. 代码入口
 

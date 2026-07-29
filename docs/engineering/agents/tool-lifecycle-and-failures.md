@@ -38,6 +38,10 @@ LangGraph callback
 
 `AssistantMessageBuilder` 与前端 reducer 都以 `tool_call_id` 定位，HITL resume 或 snapshot 重放不得追加第二张工具卡片。
 
+Web Run 的生命周期与持久化只由 `RunService` / PersistSink 管理。`QaService` 不得根据调用方参数切换为另一套消息创建、终态落库或 stop 实现。工具状态归一与终态收敛集中在 `AssistantMessageBuilder`，恢复服务和 Bridge 不得各自复制字段修改逻辑。
+
+当前 Bridge 到 RunEvent 之间仍有一次内部 SSE 文本序列化与反解析。这不是目标架构；目标是 raw LangGraph event 直接产生 typed `RunEvent`，并只在浏览器 Delivery 最外层编码 SSE。该调整涉及完整事件协议，需单独变更和 golden test，不在工具状态局部修补中穿插实施。
+
 ## 3. 边界收敛
 
 - `completed`：残留非终态工具转为 `cancelled`，不能误报成功。
