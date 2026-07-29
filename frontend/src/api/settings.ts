@@ -213,6 +213,7 @@ export type MessagingChannel = {
   bot_token_masked?: string | null
   has_token?: boolean
   pairing_chat_id?: string | null
+  pairing_user_id?: string | null
   default_qa_type?: string
   runtime_note?: string
   default_session_id?: string | null

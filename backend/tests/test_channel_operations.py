@@ -73,6 +73,45 @@ async def test_connection_and_delivery_use_adapter_without_chat_side_effect(monk
 
 
 @pytest.mark.asyncio
+async def test_feishu_connection_and_delivery_use_feishu_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    item = _create(
+        type="feishu", display_name="飞书", bot_token=None,
+        pairing_user_id="ou_1", pairing_chat_id="oc_1",
+    )
+    sent = []
+
+    class FakeFeishuClient:
+        def __init__(self, app_id, app_secret, **_kwargs):
+            assert (app_id, app_secret) == ("cli_123", "app-secret")
+        async def get_bot_info(self): return {"bot": {"open_id": "ou_bot"}}
+        async def send_text(self, chat_id, text):
+            sent.append((chat_id, text))
+            return {"message_id": "om_1"}
+        async def aclose(self): return None
+
+    monkeypatch.setattr("noesis_server.services.channel_operations_service.FeishuBotClient", FakeFeishuClient)
+    monkeypatch.setattr(
+        "noesis_server.services.channel_operations_service.MessagingConfig",
+        type("Config", (), {"feishu_app_id": "cli_123", "feishu_app_secret": "app-secret"})(),
+    )
+    assert (await ChannelOperationsService.test_connection("u1", item["channel_id"]))["status"] == "healthy"
+    assert (await ChannelOperationsService.test_delivery("u1", item["channel_id"]))["status"] == "delivered"
+    assert sent == [("oc_1", "Noesis 通道测试成功。你可以返回设置页继续配置。")]
+
+
+@pytest.mark.asyncio
+async def test_feishu_operation_reports_shared_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    item = _create(type="feishu", bot_token=None, pairing_user_id="ou_1")
+    monkeypatch.setattr(
+        "noesis_server.services.channel_operations_service.MessagingConfig",
+        type("Config", (), {"feishu_app_id": "", "feishu_app_secret": ""})(),
+    )
+    with pytest.raises(ConflictException) as error:
+        await ChannelOperationsService.test_connection("u1", item["channel_id"])
+    assert error.value.data["code"] == "service_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_disabled_or_unpaired_channel_rejects_test_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     disabled = _create(enabled=False)
     with pytest.raises(ConflictException) as disabled_error:

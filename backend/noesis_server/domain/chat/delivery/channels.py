@@ -143,9 +143,11 @@ class StubChannelAdapter:
 
 def build_default_registry() -> ChannelRegistry:
     from noesis_server.domain.chat.delivery.telegram.adapter import TelegramChannelAdapter
+    from noesis_server.domain.chat.delivery.feishu.adapter import FeishuChannelAdapter
 
     reg = ChannelRegistry()
     reg.register(TelegramChannelAdapter())
+    reg.register(FeishuChannelAdapter())
     reg.register(
         StubChannelAdapter(
             channel_type="wechat",
