@@ -143,6 +143,7 @@ class VlmYamlSection(RemoteModelYamlSection):
 
 
 class ContextYamlSection(BaseModel):
+    # 摘要触发窗口覆盖值；0 表示使用当前 model catalog 的 limit.context
     max_input_tokens: int = Field(default=0, ge=0)
     display_enabled: bool = True
 
@@ -158,6 +159,7 @@ class SummarizationYamlSection(BaseModel):
     max_input_tokens: int = Field(default=0, ge=0)
     tool_offload_threshold: int = Field(default=6000, ge=1)
     max_retention_ratio: float = Field(default=0.65, gt=0, le=1)
+    # model profile 不可用时的消息数量 fallback
     messages_to_keep: int = Field(default=28, ge=1)
 
 

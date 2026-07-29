@@ -235,12 +235,10 @@ class ChatAttachmentsMiddleware(AgentMiddleware[AgentState]):
             file_dict, round_ids, image_delivery=image_delivery
         )
 
-        last_human_idx = None
         last_human = None
-        for i in range(len(messages) - 1, -1, -1):
-            if getattr(messages[i], "type", None) == "human":
-                last_human_idx = i
-                last_human = messages[i]
+        for message in reversed(messages):
+            if getattr(message, "type", None) == "human":
+                last_human = message
                 break
 
         if last_human is None:
