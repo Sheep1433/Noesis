@@ -1,15 +1,15 @@
 """remove user-managed providers and model bindings
 
-Revision ID: 202607280001
-Revises: 202607260001
+Revision ID: 202607290001
+Revises: 202607280001
 Create Date: 2026-07-28
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "202607280001"
-down_revision = "202607260001"
+revision = "202607290001"
+down_revision = "202607280001"
 branch_labels = None
 depends_on = None
 

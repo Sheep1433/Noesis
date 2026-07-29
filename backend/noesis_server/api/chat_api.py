@@ -38,6 +38,7 @@ from noesis_server.schemas.session_context_vo import (
 )
 from noesis_server.services.session_context_service import SessionContextService
 from noesis_server.services.chat_service import ChatService
+from noesis_server.services.citation_service import CitationService
 from noesis_server.services.user_service import UserService
 from noesis_server.services.qa import QaService
 from noesis_server.services.run_service import RunService, run_manager
@@ -834,3 +835,28 @@ async def get_message(
         msg='获取消息详情成功',
         data=_message_to_response(message).model_dump()
     )
+
+
+@chat_router.get(
+    "/messages/{message_id}/citations/{citation_id}",
+    summary="解析消息引用来源",
+)
+async def resolve_message_citation(
+    message_id: str,
+    citation_id: str,
+    current_user: CurrentUser = Depends(UserService.get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await CitationService.resolve(
+        message_id=message_id,
+        citation_id=citation_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if result.status == "resolved":
+        return ResponseUtil.success(msg="获取引用来源成功", data=result.data)
+    if result.status == "forbidden":
+        return ResponseUtil.forbidden(msg="当前无权查看该引用来源")
+    if result.status == "stale":
+        raise HTTPException(status_code=410, detail="引用对应的文档版本已不可用")
+    return ResponseUtil.not_found(msg="引用来源不存在")

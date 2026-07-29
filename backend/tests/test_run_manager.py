@@ -12,6 +12,7 @@ from noesis_server.domain.chat.runs import (
     RunOutputExceeded,
     RunSnapshot,
     RunStatus,
+    SequencedRunEvent,
     SlowSubscriber,
     StaleAttemptEvent,
 )
@@ -399,3 +400,51 @@ async def test_metrics_track_subscriber_overflow_and_reconnect() -> None:
     metrics = manager.metrics_snapshot()
     assert metrics["reconnect_subscriptions"] == 1
     assert metrics["subscriber_overflow"] == 1
+
+
+@pytest.mark.asyncio
+async def test_delivery_failure_does_not_cancel_producer_or_other_deliveries() -> None:
+    manager = RunManager(terminal_retention_seconds=60)
+    persisted: list[str] = []
+    channel: list[str] = []
+    producer_completed = asyncio.Event()
+
+    async def persist_handler(envelope: SequencedRunEvent) -> None:
+        persisted.append(envelope.event)
+
+    async def broken_sse_handler(envelope: SequencedRunEvent) -> None:
+        raise ConnectionError("browser disconnected")
+
+    async def channel_handler(envelope: SequencedRunEvent) -> None:
+        channel.append(envelope.event)
+
+    async def producer(publish) -> None:
+        await publish("first")
+        await asyncio.sleep(0)
+        await publish("second")
+        producer_completed.set()
+
+    handle = await manager.start(
+        run_id="delivery-isolation",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="assistant-1",
+        snapshot_provider=_snapshot("delivery-isolation"),
+        producer=producer,
+        deliveries={
+            "persist": persist_handler,
+            "sse:test": broken_sse_handler,
+            "channel:telegram": channel_handler,
+        },
+    )
+
+    await handle.producer_task
+    await manager.drain_delivery(handle.run_id, "persist")
+    await manager.drain_delivery(handle.run_id, "channel:telegram")
+
+    assert producer_completed.is_set()
+    assert persisted == ["first", "second"]
+    assert channel == ["first", "second"]
+    assert isinstance(handle.delivery_failures["sse:test"], ConnectionError)
+    assert manager.metrics_snapshot()["delivery_failures"] == 1
+    await manager.shutdown(drain_seconds=0)

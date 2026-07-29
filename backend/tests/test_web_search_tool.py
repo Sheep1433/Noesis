@@ -8,6 +8,7 @@ import pytest
 from noesis.tools.web_providers.url_safety import validate_fetch_url
 from noesis.tools.web_search_tool import build_web_search_tools, web_fetch, web_search
 from noesis.errors.tool_failure import ToolNetworkError
+from noesis.runtime.evidence import RetrievalManifest, bind_retrieval_manifest, reset_retrieval_manifest
 
 
 def _configure_web_tools(*mocks, **overrides) -> None:
@@ -183,6 +184,55 @@ def test_build_returns_both_tools():
     assert len(tools) == 2
     names = {t.name for t in tools}
     assert names == {"web_search", "web_fetch"}
+
+
+@patch("noesis.tools.web_search_tool.resolve_web_search")
+def test_web_search_registers_citable_url_evidence(mock_resolve):
+    mock_resolve.return_value = {"query": "q", "results": [{"title": "Docs", "url": "https://example.com/a#section", "snippet": "answer"}]}
+    manifest = RetrievalManifest(run_salt="web-run")
+    token = bind_retrieval_manifest(manifest)
+    try:
+        data = json.loads(web_search("q"))
+    finally:
+        reset_retrieval_manifest(token)
+    result = data["results"][0]
+    assert result["source_type"] == "web"
+    assert result["url"] == "https://example.com/a"
+    assert result["evidence_id"].startswith("ev_")
+
+
+@patch("noesis.tools.web_search_tool.resolve_web_search")
+def test_web_search_skips_one_invalid_url_without_failing_valid_results(mock_resolve):
+    mock_resolve.return_value = {"query": "q", "results": [
+        {"title": "bad", "url": "javascript:alert(1)", "snippet": "bad"},
+        {"title": "good", "url": "https://example.com", "snippet": "good"},
+    ]}
+    data = json.loads(web_search("q"))
+    assert data["total_results"] == 1
+    assert data["results"][0]["title"] == "good"
+
+
+@patch("noesis.tools.web_search_tool.resolve_web_search")
+def test_web_search_rejects_url_credentials(mock_resolve):
+    mock_resolve.return_value = {"query": "q", "results": [
+        {"title": "bad", "url": "https://user:secret@example.com/page", "snippet": "bad"},
+    ]}
+    data = json.loads(web_search("q"))
+    assert data["results"] == []
+
+
+@patch("noesis.tools.web_search_tool.resolve_web_fetch")
+def test_web_fetch_returns_content_and_registered_evidence(mock_resolve):
+    mock_resolve.return_value = "# Example\n\nbody"
+    manifest = RetrievalManifest(run_salt="fetch-run")
+    token = bind_retrieval_manifest(manifest)
+    try:
+        data = json.loads(web_fetch("https://example.com/page"))
+    finally:
+        reset_retrieval_manifest(token)
+    assert data["content"] == "# Example\n\nbody"
+    assert data["results"][0]["title"] == "Example"
+    assert data["results"][0]["evidence_id"].startswith("ev_")
 
 
 def test_validate_fetch_url_rejects_private_ip():

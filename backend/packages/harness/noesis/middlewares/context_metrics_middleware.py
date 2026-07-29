@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from threading import Lock
-from typing import Any
-
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
 from typing_extensions import override
@@ -13,6 +11,7 @@ from typing_extensions import override
 from noesis.middlewares.context_metrics import build_context_snapshot_from_request
 from noesis.config.env import ModelConfig
 from noesis.runtime.logging import logger
+from noesis.runtime.thread_context import resolve_runtime_thread_id
 
 
 class ContextMetricsRegistry:
@@ -46,14 +45,7 @@ class ContextMetricsRegistry:
 
 def resolve_session_id_for_request(request: ModelRequest) -> str:
     """会话键 = LangGraph execution_info.thread_id（Agent 配置为 Noesis session_id）。"""
-    runtime = request.runtime
-    if runtime is None:
-        return ""
-    exec_info = getattr(runtime, "execution_info", None)
-    if exec_info is None:
-        return ""
-    thread_id = getattr(exec_info, "thread_id", None)
-    return str(thread_id) if thread_id else ""
+    return resolve_runtime_thread_id(request.runtime)
 
 
 class ContextMetricsMiddleware(AgentMiddleware):

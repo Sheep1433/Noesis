@@ -1,5 +1,6 @@
 """search_knowledge_base Tool 单元测试。"""
 import json
+import inspect
 from unittest.mock import patch
 
 from noesis.tools.kb_search_tool import (
@@ -9,6 +10,8 @@ from noesis.tools.kb_search_tool import (
     resolve_search_collections,
     search_knowledge_bases_all,
 )
+import noesis.tools.kb_search_tool as kb_search_tool_module
+from noesis.runtime.evidence import RetrievalManifest, bind_retrieval_manifest, reset_retrieval_manifest
 from noesis_server.kb.retrieval import KbSearchHit, KbSearchResult, KbSearchTiming
 
 
@@ -44,6 +47,10 @@ def test_search_all_collections_hybrid_and_merge(
                     content=f"片段-{collection_name}",
                     file_name="doc.md",
                     search_mode="hybrid",
+                    document_id=f"doc-{collection_name}",
+                    document_version_id=f"docv-{collection_name}",
+                    segment_id=f"seg-{collection_name}",
+                    locator={"type": "header", "path": ["登录"]},
                 )
             ],
             timing=KbSearchTiming(
@@ -62,10 +69,19 @@ def test_search_all_collections_hybrid_and_merge(
 
     mock_search.side_effect = _side_effect
 
-    raw = search_knowledge_bases_all("如何登录", limit=5)
+    token = bind_retrieval_manifest(RetrievalManifest(run_salt="test-run"))
+    try:
+        raw = search_knowledge_bases_all("如何登录", limit=5, tool_call_id="call-search")
+    finally:
+        reset_retrieval_manifest(token)
     data = json.loads(raw)
-    assert len(data["hits"]) == 2
-    assert data["hits"][0]["collection_name"] == "req_docs"
+    assert len(data["results"]) == 2
+    assert data["results"][0]["collection_name"] == "req_docs"
+    assert data["results"][0]["citable"] is True
+    assert data["results"][0]["excerpt"] == "片段-req_docs"
+    assert data["results"][0]["evidence_id"].startswith("ev_")
+    assert data["results"][0]["tool_call_ids"] == ["call-search"]
+    assert "content" not in data["results"][0]
     assert mock_search.call_count == 2
     for call in mock_search.call_args_list:
         params = call.kwargs.get("query_execution_params") or {}
@@ -181,7 +197,7 @@ def test_search_scoped_collection_only(
         collection_names=["req_docs"],
     )
     data = json.loads(raw)
-    assert len(data["hits"]) == 1
+    assert len(data["results"]) == 1
     assert mock_search.call_count == 1
     assert mock_search.call_args.kwargs["collection_name"] == "req_docs"
 
@@ -199,6 +215,12 @@ def test_build_tools_when_collections_exist(_names, _connected):
     }
 
 
+def test_harness_kb_tool_does_not_import_platform_domain() -> None:
+    source = inspect.getsource(kb_search_tool_module)
+    assert "from noesis_server" not in source
+    assert "import noesis_server" not in source
+
+
 @patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=False)
 def test_build_empty_when_disconnected(_connected):
     assert build_kb_search_tools() == []
@@ -209,7 +231,7 @@ def test_build_empty_when_disconnected(_connected):
 def test_search_returns_empty_when_no_collections(_names, _connected):
     raw = search_knowledge_bases_all("q")
     data = json.loads(raw)
-    assert data["hits"] == []
+    assert data["results"] == []
 
 
 @patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)

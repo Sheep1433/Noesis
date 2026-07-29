@@ -4,6 +4,7 @@
  */
 
 import type { AgentRunSnapshot } from '@/api/chat'
+import type { ToolLifecycleState } from '@/views/chat/messageParts'
 import { ref } from 'vue'
 import {
   createAgentRun,
@@ -19,6 +20,8 @@ export interface SSEStreamOptions {
   onUsageUpdate?: (usage: { input_tokens: number, output_tokens: number, total_tokens?: number }) => void
   onContextUpdate?: (context: { current_tokens: number, max_tokens: number, used_percentage: number }) => void
   onTextDelta?: (text: string, parent_task_call_id?: string) => void
+  onTextAnnotation?: (textPartId: string, annotation: Record<string, unknown>) => void
+  onRetrievalResults?: (part: Record<string, unknown>) => void
   onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
   onReasoningStart?: (data: Record<string, unknown>) => void
   onReasoningEnd?: (data: Record<string, unknown>) => void
@@ -36,6 +39,11 @@ export interface SSEStreamOptions {
       status: 'success' | 'error'
       duration_ms?: number
       errorCategory?: string
+      state?: ToolLifecycleState
+      outcome?: string
+      exit_code?: number
+      timed_out?: boolean
+      truncated?: boolean
     },
   ) => void
   /** 测试用例等扩展 SSE（event 名与 data.type 一致） */
@@ -75,6 +83,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onUsageUpdate,
     onContextUpdate,
     onTextDelta,
+    onTextAnnotation,
+    onRetrievalResults,
     onReasoningDelta,
     onReasoningStart,
     onReasoningEnd,
@@ -180,6 +190,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       onTextDelta?.(data.text_delta, parent_task_call_id)
       return
     }
+    if (t === 'text-annotation-added' && data.annotation && typeof data.annotation === 'object') {
+      onTextAnnotation?.(String(data.text_part_id ?? ''), data.annotation as Record<string, unknown>)
+      return
+    }
+    if (t === 'retrieval-results-available') {
+      onRetrievalResults?.({ ...data, type: 'retrieval' })
+      return
+    }
     if (t === 'reasoning-start') {
       onReasoningStart?.(data)
       return
@@ -232,6 +250,11 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         status: status === 'error' ? 'error' : 'success',
         duration_ms: duration_ms != null && !Number.isNaN(duration_ms) ? duration_ms : undefined,
         errorCategory,
+        state: typeof data.state === 'string' ? data.state as ToolLifecycleState : undefined,
+        outcome: typeof data.outcome === 'string' ? data.outcome : undefined,
+        exit_code: data.exit_code != null ? Number(data.exit_code) : undefined,
+        timed_out: data.timed_out != null ? Boolean(data.timed_out) : undefined,
+        truncated: data.truncated != null ? Boolean(data.truncated) : undefined,
       })
       return
     }

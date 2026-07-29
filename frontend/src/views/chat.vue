@@ -3,7 +3,7 @@ import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
-import { ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { ensureSession, getSession, resolveMessageCitation, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
@@ -44,13 +44,16 @@ import {
 } from '@/views/chat/hitlUiState'
 import {
   appendReasoningDelta,
+  appendRetrievalPart,
   appendStreamFailureNotice,
+  appendTextAnnotation,
   appendTextDelta,
   appendTextDeltaWithRedactedThinking,
   appendUserStopNotice,
   applyHitlPendingParts,
   applyToolOutput,
   assistantPartsStillStreaming,
+  assistantToolFailureSummary,
   completeLastReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
@@ -74,6 +77,37 @@ import SuggestedView from './SuggestedPage.vue'
 import TableModal from './TableModal.vue'
 
 const sessionFilesPanelRef = ref<InstanceType<typeof SessionContextPanel> | null>(null)
+const citationDialog = useDialog()
+
+async function openCitation(messageId: string | undefined, citationId: string) {
+  if (!messageId) {
+    return
+  }
+  try {
+    const source = await resolveMessageCitation(messageId, citationId)
+    citationDialog.info({
+      title: source.title || '引用来源',
+      content: source.url
+        ? () => h('div', [h('p', source.excerpt || '该来源暂无可展示内容'), h('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, '打开原网页')])
+        : source.excerpt || '该来源暂无可展示内容',
+      positiveText: '关闭',
+    })
+  } catch (error) {
+    window.$ModalMessage?.error(error instanceof Error ? error.message : '引用来源暂时无法查看')
+  }
+}
+
+function retrievedOnly(parts: UiPart[]) {
+  const cited = new Set(
+    parts.flatMap((part) => part.type === 'text'
+      ? (part.annotations ?? []).map((item) => item.evidence_id).filter(Boolean)
+      : []),
+  )
+  return parts
+    .filter((part) => part.type === 'retrieval')
+    .flatMap((part) => part.type === 'retrieval' ? part.results : [])
+    .filter((result) => !cited.has(result.evidence_id))
+}
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
@@ -565,6 +599,11 @@ const conversationItems = ref<
 
 function patchLastAssistantParts(mut: (parts: UiPart[]) => UiPart[]) {
   const lastAssistantIndex = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+  patchAssistantPartsAt(lastAssistantIndex, mut)
+}
+
+function patchAssistantPartsAt(index: number, mut: (parts: UiPart[]) => UiPart[]) {
+  const lastAssistantIndex = index
   if (lastAssistantIndex === -1) {
     return
   }
@@ -755,8 +794,17 @@ const sseStream = useSSEStream({
       )
     }
     const normalized = normalizeApiContent(snapshot.content)
-    patchLastAssistantParts(() => normalized.parts)
-    const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+    let lastIdx = conversationItems.value.findIndex(
+      (item) => item.role === 'assistant' && item.message_id === snapshot.assistant_message_id,
+    )
+    if (lastIdx < 0) {
+      lastIdx = conversationItems.value.findLastIndex(
+        (item) => item.role === 'assistant'
+          && item.chat_id === snapshot.session_id
+          && !item.message_id,
+      )
+    }
+    patchAssistantPartsAt(lastIdx, () => normalized.parts)
     if (lastIdx >= 0) {
       conversationItems.value[lastIdx] = {
         ...conversationItems.value[lastIdx],
@@ -787,6 +835,12 @@ const sseStream = useSSEStream({
         ? appendTextDelta(parts, text, parent_task_call_id)
         : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parent_task_call_id),
     ),
+  onTextAnnotation: (_textPartId, annotation) => {
+    patchLastAssistantParts((parts) => appendTextAnnotation(parts, annotation))
+  },
+  onRetrievalResults: (part) => {
+    patchLastAssistantParts((parts) => appendRetrievalPart(parts, part))
+  },
   onReasoningStart: () => {
     nativeReasoningSeen.value = true
   },
@@ -2258,6 +2312,7 @@ function onComposerPaste(e: ClipboardEvent) {
                               :input="entry.part.input"
                               :output="entry.part.output"
                               :status="entry.part.status"
+                              :state="entry.part.state"
                               :error="entry.part.error"
                               :duration_ms="entry.part.duration_ms"
                               :child-parts="entry.childParts"
@@ -2270,12 +2325,17 @@ function onComposerPaste(e: ClipboardEvent) {
                                 :result="entry.part.output"
                                 :error="entry.part.error"
                                 :status="entry.part.status"
+                                :state="entry.part.state"
+                                :error-category="entry.part.errorCategory"
+                                :exit_code="entry.part.exit_code"
+                                :truncated="entry.part.truncated"
                                 :duration_ms="entry.part.duration_ms"
                               />
                             </template>
                             <MarkdownPreview
                               v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                               :content="entry.part.content || ''"
+                              :annotations="entry.part.annotations || []"
                               :toolCalls="null"
                               :msgMetadata="item.msg_metadata"
                               :isInit="isInit"
@@ -2286,8 +2346,35 @@ function onComposerPaste(e: ClipboardEvent) {
                               :parentScollBottomMethod="scrollToBottom"
                               @failed="() => onFailedReader(index)"
                               @recycleQa="() => onRecycleQa(index)"
+                              @citation-click="citationId => openCitation(item.message_id, citationId)"
                             />
                           </template>
+                          <details
+                            v-if="retrievedOnly(item.messageContent.parts).length"
+                            class="retrieval-results-panel"
+                          >
+                            <summary>本轮检索结果（{{ retrievedOnly(item.messageContent.parts).length }}）</summary>
+                            <div
+                              v-for="result in retrievedOnly(item.messageContent.parts)"
+                              :key="result.evidence_id"
+                              class="retrieval-result-item"
+                            >
+                              <div class="retrieval-result-title">{{ result.title || (result.source_type === 'web' ? '网页来源' : '知识库文档') }}</div>
+                              <div class="retrieval-result-excerpt">{{ result.excerpt }}</div>
+                            </div>
+                          </details>
+                          <n-alert
+                            v-if="assistantToolFailureSummary(item.messageContent.parts).hasFailure"
+                            type="warning"
+                            :title="assistantToolFailureSummary(item.messageContent.parts).hasVisibleText
+                              ? '部分工具未成功，本次结果可能不完整'
+                              : '本轮未完成'"
+                            class="assistant-tool-failure-summary"
+                          >
+                            <template v-if="!assistantToolFailureSummary(item.messageContent.parts).hasVisibleText" #action>
+                              <n-button size="small" @click="onRecycleQa(index)">重新执行</n-button>
+                            </template>
+                          </n-alert>
                           <AssistantStreamingIndicator
                             v-if="showAssistantReplyLoading(index, item.role)"
                             section

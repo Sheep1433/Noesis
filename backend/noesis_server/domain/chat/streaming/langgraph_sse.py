@@ -21,6 +21,11 @@ from noesis_server.domain.chat.streaming.reasoning import (
 )
 from noesis.runtime.logging import logger
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
+from noesis_server.domain.chat.tool_state import (
+    ToolState,
+    derive_tool_state,
+    extract_process_result,
+)
 from noesis_server.domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
 from noesis_server.domain.chat.streaming.failure_notice import sanitize_stream_error, sanitize_tool_error
 from noesis.errors.tool_failure import (
@@ -35,10 +40,14 @@ from noesis.errors.tool_failure import (
 def _show_thinking_process_enabled() -> bool:
     return str(ModelConfig.show_thinking_process).strip().lower() in ("true", "1", "yes")
 
-_TOOL_EXIT_SUFFIX = re.compile(r"\s*\[Command succeeded with exit code \d+\]\s*$")
-_TOOL_FAILED_EXIT_RE = re.compile(r"\[Command failed with exit code [1-9]\d*\]\s*$")
+_TOOL_EXIT_PROTOCOL_RE = re.compile(
+    r"\s*\[Command (?P<result>succeeded|failed) with exit code (?P<exit_code>\d+)\]"
+    r"(?P<truncated>\s*\[Output was truncated due to size limits\])?\s*$"
+)
 _TOOL_INPUT_MAX = 65536
 TASK_TOOL_NAME = "task"
+STRUCTURED_OUTPUT_TOOL_NAMES = frozenset({"CitedAnswer"})
+_OMIT_NON_JSON_TOOL_INPUT = object()
 
 
 def _new_id(prefix: str) -> str:
@@ -53,25 +62,80 @@ def _format_done() -> str:
     return "data: [DONE]\n\n"
 
 
+def _json_safe_tool_input(value: Any) -> Any:
+    """只保留模型可见的 JSON 输入，丢弃 ToolRuntime 等框架注入对象。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        normalized: Dict[str, Any] = {}
+        for key, item in value.items():
+            safe_item = _json_safe_tool_input(item)
+            if safe_item is not _OMIT_NON_JSON_TOOL_INPUT:
+                normalized[str(key)] = safe_item
+        return normalized
+    if isinstance(value, (list, tuple, set)):
+        normalized_items = []
+        for item in value:
+            safe_item = _json_safe_tool_input(item)
+            if safe_item is not _OMIT_NON_JSON_TOOL_INPUT:
+                normalized_items.append(safe_item)
+        return normalized_items
+    return _OMIT_NON_JSON_TOOL_INPUT
+
+
 def _normalize_tool_input(raw: Any) -> tuple[Dict[str, Any], Optional[str]]:
-    """SSE / builder 统一使用 dict 形态的 input；返回 (dict, 原始 JSON 字符串供前端 input_text)。"""
+    """SSE / builder 统一使用 JSON-safe dict；返回前端 input_text。"""
     if raw is None or raw == {}:
         return {}, None
     if isinstance(raw, dict):
-        return raw, json.dumps(raw, ensure_ascii=False)
-    try:
-        dumped = json.dumps(raw, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        dumped = str(raw)
+        normalized = _json_safe_tool_input(raw)
+        dumped = json.dumps(normalized, ensure_ascii=False)
+        return normalized, dumped
+    safe_raw = _json_safe_tool_input(raw)
+    if safe_raw is _OMIT_NON_JSON_TOOL_INPUT:
+        return {}, None
+    dumped = json.dumps(safe_raw, ensure_ascii=False)
     if len(dumped) > _TOOL_INPUT_MAX:
         dumped = f"{dumped[:_TOOL_INPUT_MAX]}..."
-    return {"_tw_tool_input": raw if not isinstance(raw, (set,)) else list(raw)}, dumped
+    return {"_tw_tool_input": safe_raw}, dumped
 
 
 def _tool_output_value(raw_out: Any) -> str:
     if raw_out is None:
         return ""
     return raw_out.content if hasattr(raw_out, "content") else str(raw_out)
+
+
+def _retrieval_payload(raw: str) -> Optional[Dict[str, Any]]:
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list):
+        return None
+    return parsed
+
+
+def _extract_tool_result(raw_out: Any, content: str) -> tuple[str, Dict[str, Any]]:
+    """Extract explicit result metadata; DeepAgents' anchored suffix is its wire protocol."""
+    metadata = extract_process_result(raw_out)
+    artifact = getattr(raw_out, "artifact", None)
+    if artifact is not None:
+        metadata.update(extract_process_result(artifact))
+    match = _TOOL_EXIT_PROTOCOL_RE.search(content)
+    if match:
+        metadata["exit_code"] = int(match.group("exit_code"))
+        metadata["truncated"] = bool(match.group("truncated"))
+        metadata["timed_out"] = metadata["exit_code"] == 124
+        metadata["outcome"] = (
+            "timed_out"
+            if metadata["timed_out"]
+            else "ok"
+            if metadata["exit_code"] == 0
+            else "command_failed"
+        )
+        content = content[: match.start()].rstrip()
+    return content, metadata
 
 
 def _normalize_usage(raw: Any) -> Dict[str, int]:
@@ -432,7 +496,12 @@ class LangGraphSseBridge:
     def _emit_tool_output(self, out: List[str], part_id: str, tool_call_id: str,
                           output: str, status: str, error: Optional[str],
                           duration_ms: Optional[int] = None,
-                          error_category: Optional[str] = None) -> None:
+                          error_category: Optional[str] = None,
+                          *, state: ToolState | str,
+                          outcome: Optional[str] = None,
+                          exit_code: Optional[int] = None,
+                          timed_out: Optional[bool] = None,
+                          truncated: Optional[bool] = None) -> None:
         payload: Dict[str, Any] = {
             "type": "tool-output-available",
             "message_id": self.assistant_message_id,
@@ -440,12 +509,21 @@ class LangGraphSseBridge:
             "tool_call_id": tool_call_id,
             "output": output,
             "status": status,
+            "state": ToolState(str(state)).value,
             "error": error,
         }
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
         if error_category:
             payload["errorCategory"] = error_category
+        if outcome is not None:
+            payload["outcome"] = outcome
+        if exit_code is not None:
+            payload["exit_code"] = exit_code
+        if timed_out is not None:
+            payload["timed_out"] = timed_out
+        if truncated is not None:
+            payload["truncated"] = truncated
         out.append(_format_sse("tool-output-available", payload))
         self._persist_tick = True
 
@@ -485,6 +563,11 @@ class LangGraphSseBridge:
         status: str = "success",
         error: Optional[str] = None,
         error_category: Optional[str] = None,
+        state: ToolState | str | None = None,
+        outcome: Optional[str] = None,
+        exit_code: Optional[int] = None,
+        timed_out: Optional[bool] = None,
+        truncated: Optional[bool] = None,
     ) -> bool:
         try:
             builder.append_tool_output(
@@ -495,6 +578,11 @@ class LangGraphSseBridge:
                 status=status,
                 error=error,
                 error_category=error_category,
+                state=state,
+                outcome=outcome,
+                exit_code=exit_code,
+                timed_out=timed_out,
+                truncated=truncated,
             )
             return True
         except ValueError as e:
@@ -517,7 +605,7 @@ class LangGraphSseBridge:
             if (
                 isinstance(part, ToolPart)
                 and part.parent_task_call_id == task_tool_call_id
-                and part.status == "error"
+                and part.state in {ToolState.FAILED, ToolState.TIMED_OUT}
             ):
                 return True
         return False
@@ -541,8 +629,6 @@ class LangGraphSseBridge:
                     return task_failure
         if output_status == "error" or exc is not None:
             return classify_tool_failure(exc, raw=clean_output, tool_name=tool_name)
-        if tool_name == "execute" and _TOOL_FAILED_EXIT_RE.search(clean_output):
-            return classify_tool_failure(None, raw=clean_output, tool_name=tool_name)
         return None
 
     # ---------- entry ----------
@@ -598,7 +684,20 @@ class LangGraphSseBridge:
             self._ensure_started(out)
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
-            out.append(_format_sse("abort", {"type": "abort", "message_id": self.assistant_message_id}))
+            finish_reason = str(item.get("finish_reason") or "abort")
+            if finish_reason == "error":
+                out.append(_format_sse("error", {
+                    "type": "error",
+                    "message_id": self.assistant_message_id,
+                    "error": sanitize_stream_error(str(item.get("content") or "生成失败，请稍后重试")),
+                }))
+            else:
+                out.append(_format_sse("abort", {
+                    "type": "abort",
+                    "message_id": self.assistant_message_id,
+                    "reason": finish_reason,
+                }))
+            self._finish_emitted = True
             logger.info(
                 f"SSE bridge 发出 abort session_id={self.session_id} assistant_message_id={self.assistant_message_id} "
                 f"upstream_type={t}"
@@ -622,6 +721,7 @@ class LangGraphSseBridge:
                 "message_id": self.assistant_message_id,
                 "error": str(msg),
             }))
+            self._finish_emitted = True
             return
 
         if t == "text-delta":
@@ -630,6 +730,50 @@ class LangGraphSseBridge:
                 if builder is not None:
                     ctx["text_buffer"] = (ctx.get("text_buffer") or "") + delta
                 self._emit_text_delta(delta, out)
+            return
+
+        if t == "typed-answer-segments":
+            segments = item.get("segments")
+            if builder is None or not isinstance(segments, list):
+                return
+            part_id = _new_id("part-text")
+            text_part = builder.apply_typed_segments(
+                [segment for segment in segments if isinstance(segment, dict)],
+                part_id=part_id,
+            )
+            if text_part.content:
+                self._emit_text_delta(text_part.content, out)
+                self._close_text(out, record_checkpoint=False)
+            for annotation in text_part.annotations:
+                out.append(_format_sse("text-annotation-added", {
+                    "type": "text-annotation-added",
+                    "message_id": self.assistant_message_id,
+                    "text_part_id": part_id,
+                    "annotation": annotation,
+                }))
+            self._persist_tick = True
+            return
+        if t == "typed-answer-segment":
+            segment = item.get("segment")
+            if builder is None or not isinstance(segment, dict):
+                return
+            text = str(segment.get("text") or "")
+            if not text:
+                return
+            self._emit_text_delta(text, out)
+            part_id = self._current_text_part_id or _new_id("part-text")
+            text_part = builder.append_typed_segment(segment, part_id=part_id)
+            start = len(text_part.content) - len(text)
+            for annotation in text_part.annotations:
+                if annotation["start_index"] != start:
+                    continue
+                out.append(_format_sse("text-annotation-added", {
+                    "type": "text-annotation-added",
+                    "message_id": self.assistant_message_id,
+                    "text_part_id": part_id,
+                    "annotation": annotation,
+                }))
+            self._persist_tick = True
             return
 
         if t == "finish":
@@ -671,6 +815,7 @@ class LangGraphSseBridge:
                             "interrupt_id": payload.get("interrupt_id"),
                         },
                         status="running",
+                        state=ToolState.APPROVAL_PENDING,
                     )
                 else:
                     part_id = _new_id("part-tool")
@@ -685,6 +830,7 @@ class LangGraphSseBridge:
                                 "part_id": part_id,
                                 "tool_call_id": tool_call_id,
                                 "name": name,
+                                "state": ToolState.APPROVAL_PENDING.value,
                                 **self._sse_parent_field(parent_task_call_id),
                             },
                         )
@@ -699,6 +845,7 @@ class LangGraphSseBridge:
                                 "tool_call_id": tool_call_id,
                                 "name": name,
                                 "input": args,
+                                "state": ToolState.APPROVAL_PENDING.value,
                                 **self._sse_parent_field(parent_task_call_id),
                             },
                         )
@@ -710,6 +857,7 @@ class LangGraphSseBridge:
                             tool_call_id=tool_call_id or None,
                             parent_task_call_id=parent_task_call_id,
                             status="running",
+                            state=ToolState.APPROVAL_PENDING,
                             hitl={
                                 "kind": payload.get("kind"),
                                 "status": "pending",
@@ -826,6 +974,8 @@ class LangGraphSseBridge:
 
     def _on_tool_start(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                        ctx: Dict[str, Any], out: List[str]) -> None:
+        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
+            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
@@ -860,6 +1010,7 @@ class LangGraphSseBridge:
                 input_obj,
                 tool_call_id,
                 parent_task_call_id=parent_task_call_id,
+                state=ToolState.RUNNING,
             )
 
         part_id = _new_id("part-tool")
@@ -872,6 +1023,7 @@ class LangGraphSseBridge:
             "part_id": part_id,
             "tool_call_id": tool_call_id,
             "name": tool_name,
+            "state": ToolState.RUNNING.value,
         }
         if parent_task_call_id:
             start_payload["parent_task_call_id"] = parent_task_call_id
@@ -883,6 +1035,7 @@ class LangGraphSseBridge:
             "tool_call_id": tool_call_id,
             "name": tool_name,
             "input": input_obj,
+            "state": ToolState.RUNNING.value,
         }
         if parent_task_call_id:
             avail["parent_task_call_id"] = parent_task_call_id
@@ -892,13 +1045,16 @@ class LangGraphSseBridge:
 
     def _on_tool_end(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                      ctx: Dict[str, Any], out: List[str]) -> None:
+        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
+            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
 
         data = item.get("data") or {}
         raw_output = data.get("output")
-        clean_output = _TOOL_EXIT_SUFFIX.sub("", _tool_output_value(raw_output)) if raw_output else ""
+        raw_content = _tool_output_value(raw_output) if raw_output else ""
+        clean_output, process_result = _extract_tool_result(raw_output, raw_content)
         tool_call_id = _resolve_tool_output_call_id(item, data, ctx, self._tool_part_ids)
         tool_name = item.get("name") or ctx.get("current_tool_name") or ""
         ctx["current_tool_name"] = tool_name
@@ -913,13 +1069,27 @@ class LangGraphSseBridge:
             builder=builder,
             task_tool_call_id=tool_call_id if tool_name == TASK_TOOL_NAME else None,
         )
+        outcome = process_result.get("outcome")
+        exit_code = process_result.get("exit_code")
+        timed_out = process_result.get("timed_out")
+        truncated = process_result.get("truncated")
         is_error = failure is not None or output_status == "error"
         err_fields = failure_to_sse_error_fields(failure) if failure else {}
         err_s = err_fields.get("error") if is_error else None
         err_cat = err_fields.get("errorCategory") if is_error else None
+        if outcome == "command_failed":
+            err_cat = "command_failed"
+        elif outcome == "timed_out":
+            err_cat = "execution_timeout"
         if is_error and not err_s:
             err_s = sanitize_tool_error(clean_output)
         sse_status = "error" if is_error else "success"
+        state = derive_tool_state(
+            status=sse_status,
+            outcome=outcome,
+            error_category=err_cat,
+            timed_out=timed_out,
+        )
         display_output = "" if is_error else clean_output
         builder_output = clean_output if not is_error else (failure.message_for_llm if failure else clean_output)
 
@@ -933,7 +1103,31 @@ class LangGraphSseBridge:
                 status="error" if is_error else "success",
                 error=err_s if is_error else None,
                 error_category=err_cat if is_error else None,
+                state=state,
+                outcome=outcome,
+                exit_code=exit_code,
+                timed_out=timed_out,
+                truncated=truncated,
             )
+
+        retrieval_part = None
+        if (
+            builder is not None
+            and not is_error
+            and tool_name in {"search_knowledge_base", "web_search", "web_fetch"}
+        ):
+            retrieval_payload = _retrieval_payload(clean_output)
+            if retrieval_payload is not None:
+                tool_part = getattr(builder, "_tools_by_call_id", {}).get(tool_call_id)
+                tool_input = tool_part.arguments if tool_part is not None else {}
+                retrieval_part = builder.register_retrieval_results(
+                    tool_call_id=tool_call_id,
+                    query=str((tool_input or {}).get("query") or (tool_input or {}).get("url") or ""),
+                    results=retrieval_payload["results"],
+                    truncated=bool(retrieval_payload.get("truncated")),
+                )
+                if tool_part is not None:
+                    tool_part.output = f"检索到 {len(retrieval_part.results)} 条来源"
 
         if tool_name == TASK_TOOL_NAME:
             self._on_task_tool_end(tool_call_id, ctx)
@@ -942,10 +1136,23 @@ class LangGraphSseBridge:
         self._emit_tool_output(
             out, part_id, tool_call_id, display_output, sse_status, err_s, duration_ms,
             error_category=err_cat,
+            state=state,
+            outcome=outcome,
+            exit_code=exit_code,
+            timed_out=timed_out,
+            truncated=truncated,
         )
+        if retrieval_part is not None:
+            payload = retrieval_part.to_dict()
+            payload["type"] = "retrieval-results-available"
+            payload["message_id"] = self.assistant_message_id
+            out.append(_format_sse("retrieval-results-available", payload))
+            self._persist_tick = True
 
     def _on_tool_error(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                        ctx: Dict[str, Any], out: List[str]) -> None:
+        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
+            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
@@ -982,6 +1189,7 @@ class LangGraphSseBridge:
                 status="error",
                 error=err_s,
                 error_category=err_cat,
+                state=derive_tool_state(status="error", error_category=err_cat),
             )
             if not ok:
                 builder.append_text(err_s)
@@ -993,6 +1201,7 @@ class LangGraphSseBridge:
         self._emit_tool_output(
             out, part_id, tool_call_id, "", "error", err_s, duration_ms,
             error_category=err_cat,
+            state=derive_tool_state(status="error", error_category=err_cat),
         )
 
 

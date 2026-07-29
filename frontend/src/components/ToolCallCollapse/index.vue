@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import type { ToolLifecycleState } from '@/views/chat/messageParts'
 import { BuildOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { computed } from 'vue'
 import { collapseCompactStyle } from '@/utils/collapseCompact'
-import { formatDurationMs } from '@/views/chat/messageParts'
+import { formatDurationMs, TOOL_STATE_LABELS } from '@/views/chat/messageParts'
 
 interface Props {
   name: string
@@ -11,6 +12,10 @@ interface Props {
   result?: string
   error?: string | null
   status?: 'running' | 'success' | 'error'
+  state?: ToolLifecycleState
+  errorCategory?: string | null
+  exit_code?: number
+  truncated?: boolean
   duration_ms?: number
   defaultOpen?: boolean
   /** dark：独立深色块；light：嵌入助手气泡、与正文对齐的浅色样式 */
@@ -22,6 +27,10 @@ const props = withDefaults(defineProps<Props>(), {
   result: '',
   error: null,
   status: undefined,
+  state: undefined,
+  errorCategory: null,
+  exit_code: undefined,
+  truncated: undefined,
   duration_ms: undefined,
   defaultOpen: false,
   appearance: 'dark',
@@ -73,12 +82,32 @@ const argumentsDisplay = computed(() => {
 })
 
 const errorDisplay = computed(() => {
-  const raw = props.error?.trim() || (props.status === 'error' ? props.result?.trim() : '')
-  if (!raw) {
-    return props.status === 'error' ? '执行失败' : ''
+  const categoryCopy: Record<string, string> = {
+    network_unreachable: '连接失败，请稍后重试',
+    execution_timeout: '执行超时，可调整任务后重试',
+    tool_timeout: '执行超时，可调整任务后重试',
+    permission_denied: '当前操作没有所需权限',
+    environment_unavailable: '执行环境暂时不可用',
+    command_failed: '命令执行失败',
   }
-  return raw
+  const category = props.errorCategory || ''
+  const stateCopy: Partial<Record<ToolLifecycleState, string>> = {
+    failed: categoryCopy[category] || '执行失败，请检查后重试',
+    timed_out: '执行超时，可调整任务后重试',
+    rejected: '你已拒绝本次操作',
+    cancelled: '本次操作已停止',
+  }
+  const base = props.state ? stateCopy[props.state] : undefined
+  if (!base) {
+    return ''
+  }
+  return props.exit_code != null ? `${base}（退出码 ${props.exit_code}）` : base
 })
+
+const state = computed<ToolLifecycleState>(() => props.state
+  ?? (props.status === 'running' ? 'running' : props.status === 'error' ? 'failed' : 'succeeded'))
+
+const failed = computed(() => ['failed', 'timed_out', 'rejected', 'cancelled'].includes(state.value))
 
 const resultDisplay = computed(() => {
   const raw = props.result?.trim() ? props.result : ''
@@ -181,9 +210,14 @@ const durationDisplay = computed(() => {
             >{{ headerSummary }}</span>
             <div class="tool-header__tags">
               <span v-if="durationDisplay" class="tool-duration">{{ durationDisplay }}</span>
-              <n-tag v-if="status === 'running'" type="warning" size="small" round bordered>运行中</n-tag>
-              <n-tag v-else-if="status === 'success'" type="success" size="small" round bordered>完成</n-tag>
-              <n-tag v-else-if="status === 'error'" type="error" size="small" round bordered>错误</n-tag>
+              <n-tag
+                :type="state === 'succeeded' ? 'success' : ['failed', 'timed_out'].includes(state) ? 'error' : ['running', 'approval_pending'].includes(state) ? 'warning' : 'default'"
+                size="small"
+                round
+                bordered
+              >
+                {{ TOOL_STATE_LABELS[state] }}
+              </n-tag>
             </div>
           </div>
         </div>
@@ -196,17 +230,21 @@ const durationDisplay = computed(() => {
             <pre>{{ argumentsDisplay }}</pre>
           </div>
         </div>
-        <div v-if="errorDisplay && status === 'error'" class="tool-section tool-section--error">
-          <div class="tool-section__label">错误</div>
+        <div v-if="errorDisplay && failed" class="tool-section tool-section--error">
+          <div class="tool-section__label">状态</div>
           <div class="tool-section__body">
             <pre>{{ errorDisplay }}</pre>
           </div>
         </div>
-        <div v-if="resultDisplay && status !== 'error'" class="tool-section tool-section--result">
+        <div v-if="resultDisplay && !failed" class="tool-section tool-section--result">
           <div class="tool-section__label">输出</div>
           <div class="tool-section__body">
             <pre>{{ resultDisplay }}</pre>
           </div>
+        </div>
+        <div v-if="truncated" class="tool-section tool-section--result">
+          <div class="tool-section__label">提示</div>
+          <div class="tool-section__body">输出较长，已截断展示</div>
         </div>
       </div>
     </n-collapse-item>

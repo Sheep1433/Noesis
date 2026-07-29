@@ -6,7 +6,6 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from functools import lru_cache
 
 from dotenv import load_dotenv
@@ -127,14 +126,14 @@ class ModelSettings:
     loop_detection_hard_limit: int
     loop_detection_window_size: int
     loop_detection_max_tracked_threads: int
-    loop_detection_tool_freq_warn: int
-    loop_detection_tool_freq_hard_limit: int
     dangling_tool_call_repair_enabled: bool
     tool_call_limit_enabled: bool
     tool_call_limit_thread_limit: int | None
     tool_call_limit_run_limit: int | None
     tool_call_limit_exit_behavior: str
     tool_call_limit_task_run_limit: int | None
+    structured_citations_enabled: bool
+    structured_citation_models: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -159,6 +158,16 @@ class StreamSettings:
     run_channel_queue_max_batches: int
     run_channel_queue_max_bytes: int
     run_channel_drain_seconds: float
+
+
+@dataclass(frozen=True)
+class CitationLimitSettings:
+    max_results_per_call: int
+    max_results_per_run: int
+    max_excerpt_chars: int
+    max_excerpt_bytes: int
+    max_locator_bytes: int
+    max_assistant_content_bytes: int
 
 
 @dataclass(frozen=True)
@@ -412,12 +421,6 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         loop_detection_max_tracked_threads=_legacy_env_int(
             "LOOP_DETECTION_MAX_TRACKED_THREADS", loop.max_tracked_threads
         ),
-        loop_detection_tool_freq_warn=_legacy_env_int(
-            "LOOP_DETECTION_TOOL_FREQ_WARN", loop.tool_freq_warn
-        ),
-        loop_detection_tool_freq_hard_limit=_legacy_env_int(
-            "LOOP_DETECTION_TOOL_FREQ_HARD_LIMIT", loop.tool_freq_hard_limit
-        ),
         dangling_tool_call_repair_enabled=_legacy_env_bool(
             "DANGLING_TOOL_CALL_REPAIR_ENABLED", runtime.dangling_tool_call_repair_enabled
         ),
@@ -441,6 +444,17 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
                 runtime.tool_call_limit.task_run_limit or 0,
             )
             or None
+        ),
+        structured_citations_enabled=_legacy_env_bool(
+            "STRUCTURED_CITATIONS_ENABLED", runtime.structured_citations_enabled
+        ),
+        structured_citation_models=tuple(
+            item.strip()
+            for item in _legacy_env(
+                "STRUCTURED_CITATION_MODELS",
+                ",".join(runtime.structured_citation_models),
+            ).split(",")
+            if item.strip()
         ),
     )
 
@@ -470,6 +484,18 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
         run_channel_queue_max_batches=stream.run_channel_queue_max_batches,
         run_channel_queue_max_bytes=stream.run_channel_queue_max_bytes,
         run_channel_drain_seconds=stream.run_channel_drain_seconds,
+    )
+
+
+def _build_citation_limits(yaml_cfg: AppYamlConfig) -> CitationLimitSettings:
+    limits = yaml_cfg.citation_limits
+    return CitationLimitSettings(
+        max_results_per_call=limits.max_results_per_call,
+        max_results_per_run=limits.max_results_per_run,
+        max_excerpt_chars=limits.max_excerpt_chars,
+        max_excerpt_bytes=limits.max_excerpt_bytes,
+        max_locator_bytes=limits.max_locator_bytes,
+        max_assistant_content_bytes=limits.max_assistant_content_bytes,
     )
 
 
@@ -691,6 +717,10 @@ class GetConfig:
         return _build_stream(self._yaml)
 
     @lru_cache
+    def get_citation_limit_config(self) -> CitationLimitSettings:
+        return _build_citation_limits(self._yaml)
+
+    @lru_cache
     def get_langfuse_config(self) -> LangfuseSettings:
         return _build_langfuse(self._secrets, self._yaml)
 
@@ -763,6 +793,7 @@ ModelConfig = get_config.get_model_config()
 OtherConfig = get_config.get_other_config()
 QdrantConfig = get_config.get_qdrant_config()
 StreamConfig = get_config.get_stream_config()
+CitationLimitConfig = get_config.get_citation_limit_config()
 LangfuseConfig = get_config.get_langfuse_config()
 SkillsMarketConfig = get_config.get_skills_market_config()
 WebToolsConfig = get_config.get_web_tools_config()

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from noesis.factory import build_noesis_runtime_middleware
 from noesis.middlewares import (
+    ContextBudgetGuardMiddleware,
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
     SessionClockMiddleware,
@@ -39,8 +40,10 @@ def test_runtime_stack_includes_guards_when_enabled() -> None:
     assert SummarizationOffloadMiddleware in types
     assert LoopDetectionMiddleware in types
     assert ToolErrorHandlingMiddleware in types
+    assert ContextBudgetGuardMiddleware in types
     assert types.index(DanglingToolCallMiddleware) < types.index(LoopDetectionMiddleware)
     assert types.index(LoopDetectionMiddleware) < types.index(ToolErrorHandlingMiddleware)
+    assert types.index(ToolErrorHandlingMiddleware) < types.index(ContextBudgetGuardMiddleware)
 
 
 def test_runtime_stack_respects_disable_flags() -> None:

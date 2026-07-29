@@ -205,7 +205,9 @@ run 还需保存 `client_request_id`、请求摘要和当前 `attempt_id`。`(us
 
 恢复后重新发送 running。只有重试耗尽才进入 error。tool error 继续使用现有 `tool-output-available` 双层语义。
 
-ModelRetryMiddleware 只处理 timeout、连接中断、限流和服务端临时错误。callback 会记录本轮是否已产生 token、是否进入工具/HITL；仅在两个边界都未越过时重试。每次重试先发 `retrying`，再发 `running`，同时递增 `attempt_id`。RunManager 在分配 sequence 前拒绝旧 attempt 事件；重试耗尽或边界已越过时才进入 error。
+ModelRetryMiddleware 只处理 timeout、连接中断、限流和服务端临时错误。chat model 的 provider 内部 retry 固定为 0，避免与 middleware 重复重试；摘要等非交互调用仍使用 provider retry。callback 会记录本轮是否已产生 token、是否进入工具/HITL；仅在两个边界都未越过时重试。每次重试先发 `retrying`，再发 `running`，同时递增 `attempt_id`。RunManager 在分配 sequence 前拒绝旧 attempt 事件；重试耗尽或边界已越过时才进入 error。
+
+SummarizationOffloadMiddleware 在模型调用前先卸载大型工具结果，再按 token 窗口压缩历史。ContextBudgetGuardMiddleware 位于最终 model request 路径，在 system prompt、tools schema 与压缩结果合并后重新估算输入；仍超过模型窗口时使用受控错误结束，不把明显超限请求发送给 provider。
 
 ### EventBus 背压
 

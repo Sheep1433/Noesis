@@ -1,7 +1,7 @@
 import copy
 from unittest.mock import MagicMock
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 
 from noesis.middlewares.loop_detection_middleware import (
     _HARD_STOP_MSG,
@@ -13,7 +13,8 @@ from noesis.middlewares.loop_detection_middleware import (
 
 def _make_runtime(thread_id="test-thread"):
     runtime = MagicMock()
-    runtime.context = {"thread_id": thread_id}
+    runtime.execution_info.thread_id = thread_id
+    runtime.context = {}
     return runtime
 
 
@@ -31,6 +32,40 @@ def test_hash_tool_calls_order_independent():
     a = _hash_tool_calls([_bash_call("ls"), {"name": "read_file", "args": {"path": "/tmp"}}])
     b = _hash_tool_calls([{"name": "read_file", "args": {"path": "/tmp"}}, _bash_call("ls")])
     assert a == b
+
+
+def test_thread_id_prefers_execution_info_and_keeps_sessions_isolated():
+    mw = LoopDetectionMiddleware(warn_threshold=2, hard_limit=4)
+    first = _make_runtime("session-1")
+    second = _make_runtime("session-2")
+    call = [_bash_call("ls")]
+
+    assert mw._apply(_make_state(tool_calls=call), first) is None
+    assert mw._apply(_make_state(tool_calls=call), second) is None
+
+    assert mw._drain_pending_warnings(first) == []
+    assert mw._drain_pending_warnings(second) == []
+
+
+def test_thread_id_falls_back_to_context_for_legacy_runtime():
+    mw = LoopDetectionMiddleware()
+    runtime = MagicMock()
+    runtime.execution_info = None
+    runtime.context = {"thread_id": "legacy-session"}
+
+    assert mw._get_thread_id(runtime) == "legacy-session"
+
+
+def test_new_agent_run_clears_previous_loop_history():
+    mw = LoopDetectionMiddleware(warn_threshold=2, hard_limit=4)
+    runtime = _make_runtime("session-1")
+    call = [_bash_call("ls")]
+    mw._apply(_make_state(tool_calls=call), runtime)
+
+    mw.before_agent(_make_state(), runtime)
+
+    assert mw._apply(_make_state(tool_calls=call), runtime) is None
+    assert mw._drain_pending_warnings(runtime) == []
 
 
 def test_warn_queues_injection():

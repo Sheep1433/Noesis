@@ -143,6 +143,7 @@ class VlmYamlSection(RemoteModelYamlSection):
 
 
 class ContextYamlSection(BaseModel):
+    # 摘要触发窗口覆盖值；0 表示使用当前 model catalog 的 limit.context
     max_input_tokens: int = Field(default=0, ge=0)
     display_enabled: bool = True
 
@@ -158,6 +159,7 @@ class SummarizationYamlSection(BaseModel):
     max_input_tokens: int = Field(default=0, ge=0)
     tool_offload_threshold: int = Field(default=6000, ge=1)
     max_retention_ratio: float = Field(default=0.65, gt=0, le=1)
+    # model profile 不可用时的消息数量 fallback
     messages_to_keep: int = Field(default=28, ge=1)
 
 
@@ -167,8 +169,6 @@ class LoopDetectionYamlSection(BaseModel):
     hard_limit: int = Field(default=5, ge=2)
     window_size: int = Field(default=20, ge=1)
     max_tracked_threads: int = Field(default=100, ge=1)
-    tool_freq_warn: int = Field(default=30, ge=1)
-    tool_freq_hard_limit: int = Field(default=50, ge=1)
 
 
 class ToolCallLimitYamlSection(BaseModel):
@@ -181,7 +181,20 @@ class ToolCallLimitYamlSection(BaseModel):
 
 class AgentRuntimeYamlSection(BaseModel):
     dangling_tool_call_repair_enabled: bool = True
+    structured_citations_enabled: bool = False
+    structured_citation_models: list[str] = Field(
+        default_factory=lambda: ["mimo-v2.5-free"]
+    )
     tool_call_limit: ToolCallLimitYamlSection = Field(default_factory=ToolCallLimitYamlSection)
+
+
+class CitationLimitsYamlSection(BaseModel):
+    max_results_per_call: int = Field(default=20, ge=1, le=100)
+    max_results_per_run: int = Field(default=100, ge=1)
+    max_excerpt_chars: int = Field(default=2000, ge=1)
+    max_excerpt_bytes: int = Field(default=8192, ge=1)
+    max_locator_bytes: int = Field(default=2048, ge=1)
+    max_assistant_content_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
 
 
 class StreamYamlSection(BaseModel):
@@ -381,6 +394,7 @@ class AppYamlConfig(BaseModel):
     summarization: SummarizationYamlSection = Field(default_factory=SummarizationYamlSection)
     loop_detection: LoopDetectionYamlSection = Field(default_factory=LoopDetectionYamlSection)
     agent_runtime: AgentRuntimeYamlSection = Field(default_factory=AgentRuntimeYamlSection)
+    citation_limits: CitationLimitsYamlSection = Field(default_factory=CitationLimitsYamlSection)
     stream: StreamYamlSection = Field(default_factory=StreamYamlSection)
     qdrant: QdrantYamlSection = Field(default_factory=QdrantYamlSection)
     langfuse: LangfuseYamlSection = Field(default_factory=LangfuseYamlSection)

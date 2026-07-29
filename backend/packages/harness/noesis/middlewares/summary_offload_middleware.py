@@ -18,7 +18,6 @@ from langchain.agents.middleware.summarization import (
 from langchain.agents.middleware.types import AgentState
 from langchain_core.messages import (
     AnyMessage,
-    MessageLikeRepresentation,
     RemoveMessage,
     ToolMessage,
 )
@@ -227,6 +226,11 @@ class SummarizationOffloadMiddleware(LCSummarizationMiddleware):
 
     @override
     def _get_profile_limits(self) -> int | None:
+        configured_limit = int(
+            getattr(ModelConfig, "summarization_max_input_tokens", 0)
+        )
+        if configured_limit > 0:
+            return configured_limit
         return resolve_context_max_tokens(self._context_model_id)
 
     def _get_token_trigger_value(self) -> int | None:

@@ -22,7 +22,7 @@
 ## 3. Agent 编排与 Delivery 迁移
 
 - [x] 3.1 将 `QaService` 的 Agent producer 交给 RunManager，移除 SSE generator finally 取消 producer 的所有路径
-- [ ] 3.2 将 PersistSink、SseDelivery、ChannelDelivery 注册为独立 subscriber，验证任一 Delivery 失败不取消其它订阅
+- [x] 3.2 将 PersistSink、SseDelivery、ChannelDelivery 注册为独立 subscriber，验证任一 Delivery 失败不取消其它订阅
 - [x] 3.3 收敛 ACTIVE_STREAMS/RunLifecycle 过渡状态，停止操作改为按 run_id 定位且鉴权幂等
 - [x] 3.4 保持四种 qa_type 的 run 身份与终态一致，补 COMMON、SUPER、FAULT、TEST_CASE 代表性测试
 - [x] 3.5 保持 HITL pending/resume 使用同一 run_id 与 assistant_message_id，验证 pending 不终态和超时 reject

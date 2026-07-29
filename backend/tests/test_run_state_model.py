@@ -91,5 +91,6 @@ def test_hitl_resume_replay_updates_original_tool_part() -> None:
     assert len(parts) == 1
     assert parts[0]["tool_call_id"] == "call-1"
     assert parts[0]["status"] == "success"
+    assert parts[0]["state"] == "succeeded"
     assert parts[0]["output"] == "ok"
     assert parts[0]["hitl"]["status"] == "approved"

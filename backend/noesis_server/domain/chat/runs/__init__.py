@@ -11,6 +11,7 @@ from noesis_server.domain.chat.runs.models import (
     require_transition,
 )
 from noesis_server.domain.chat.runs.manager import (
+    DeliveryHandler,
     RunHandle,
     RunManager,
     RunCapacityExceeded,
@@ -35,6 +36,7 @@ __all__ = [
     "can_transition",
     "require_transition",
     "RunHandle",
+    "DeliveryHandler",
     "RunManager",
     "RunCapacityExceeded",
     "RunDurationExceeded",

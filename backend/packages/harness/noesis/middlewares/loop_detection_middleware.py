@@ -26,6 +26,7 @@ from typing_extensions import override
 
 from noesis.config.env import ModelConfig
 from noesis.runtime.logging import logger
+from noesis.runtime.thread_context import resolve_runtime_thread_id
 
 _SALIENT_ARG_FIELDS = ("path", "url", "query", "command", "pattern", "glob", "cmd")
 
@@ -106,8 +107,13 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
         self._pending_warnings: dict[str, list[str]] = defaultdict(list)
 
     def _get_thread_id(self, runtime: Runtime) -> str:
-        thread_id = runtime.context.get("thread_id") if runtime.context else None
-        return str(thread_id) if thread_id else "default"
+        thread_id = resolve_runtime_thread_id(runtime)
+        if not thread_id:
+            logger.warning(
+                "[loop_detection] runtime thread_id 缺失，本次调用使用隔离的 runtime 身份"
+            )
+            return f"runtime:{id(runtime)}"
+        return thread_id
 
     def _evict_if_needed(self) -> None:
         while len(self._history) > self._max_tracked_threads:
@@ -247,21 +253,16 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
             self._queue_pending_warning(runtime, warning)
         return None
 
-    def _clear_pending_warnings(self, runtime: Runtime, *, reason: str) -> None:
+    def _reset_runtime_state(self, runtime: Runtime) -> None:
         thread_id = self._get_thread_id(runtime)
         with self._lock:
-            dropped = self._pending_warnings.pop(thread_id, None)
-        if dropped:
-            logger.info(
-                "[loop_detection] 清空排队警告 | thread_id={} reason={} dropped_count={}",
-                thread_id,
-                reason,
-                len(dropped),
-            )
+            self._history.pop(thread_id, None)
+            self._warned.pop(thread_id, None)
+            self._pending_warnings.pop(thread_id, None)
 
     @override
     def before_agent(self, state: AgentState, runtime: Runtime) -> dict | None:
-        self._clear_pending_warnings(runtime, reason="before_agent")
+        self._reset_runtime_state(runtime)
         return None
 
     @override
@@ -279,7 +280,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
 
     @override
     def after_agent(self, state: AgentState, runtime: Runtime) -> dict | None:
-        self._clear_pending_warnings(runtime, reason="after_agent")
+        self._reset_runtime_state(runtime)
         return None
 
     @override

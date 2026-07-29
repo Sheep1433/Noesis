@@ -1,6 +1,7 @@
 """Noesis agent middlewares."""
 
 from noesis.middlewares.context_metrics_middleware import ContextMetricsMiddleware
+from noesis.middlewares.context_budget_guard_middleware import ContextBudgetGuardMiddleware
 from noesis.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
 from noesis.middlewares.session_clock_middleware import SessionClockMiddleware
 from noesis.middlewares.tool_error_handling_middleware import ToolErrorHandlingMiddleware
@@ -13,6 +14,7 @@ from noesis.middlewares.summary_offload_middleware import (
 
 __all__ = [
     "ContextMetricsMiddleware",
+    "ContextBudgetGuardMiddleware",
     "DanglingToolCallMiddleware",
     "LoopDetectionMiddleware",
     "ModelRetryMiddleware",

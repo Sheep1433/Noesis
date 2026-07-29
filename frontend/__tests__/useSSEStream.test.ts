@@ -81,6 +81,31 @@ describe('useSSEStream durable run recovery', () => {
     })
   })
 
+  it('独立投递 retrieval results 与 annotation patch', async () => {
+    api.subscribeAgentRun.mockResolvedValue(sseResponse([
+      {
+        event: 'retrieval-results-available',
+        data: { type: 'retrieval-results-available', id: 'r1', results: [{ evidence_id: 'ev_1' }] },
+      },
+      {
+        event: 'text-annotation-added',
+        data: {
+          type: 'text-annotation-added', text_part_id: 'text_1',
+          annotation: { type: 'kb_citation', citation_id: 'cit_1' },
+        },
+      },
+      { event: 'finish', data: { type: 'finish', finish_reason: 'stop' } },
+    ]))
+    const onRetrievalResults = vi.fn()
+    const onTextAnnotation = vi.fn()
+    const stream = useSSEStream({ onRetrievalResults, onTextAnnotation })
+    await stream.sendMessage('session-1', 'test')
+    expect(onRetrievalResults).toHaveBeenCalledWith(expect.objectContaining({ type: 'retrieval' }))
+    expect(onTextAnnotation).toHaveBeenCalledWith(
+      'text_1', expect.objectContaining({ citation_id: 'cit_1' }),
+    )
+  })
+
   it('刷新后恢复同一 run，并以服务端终态 snapshot 收尾', async () => {
     sessionStorage.setItem('noesis:active-run:session-1', 'run-1')
     api.getAgentRun.mockResolvedValue(snapshot({ snapshot_sequence: 4 }))

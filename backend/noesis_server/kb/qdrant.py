@@ -672,6 +672,7 @@ class QdrantService:
             points = documents_to_points(
                 documents,
                 embeddings,
+                collection_name=collection_name,
                 file_hash=file_hash,
                 effective_processing_params=build_effective_processing_snapshot(ef_params),
             )

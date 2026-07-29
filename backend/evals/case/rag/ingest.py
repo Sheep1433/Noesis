@@ -111,7 +111,9 @@ def documents_to_id_entries(documents: List[Document]) -> List[Dict[str, Any]]:
     return entries
 
 
-def build_points_for_upload(documents: List[Document], *, file_hash: str) -> List[PointStruct]:
+def build_points_for_upload(
+    documents: List[Document], *, file_hash: str, collection_name: str
+) -> List[PointStruct]:
     if not is_embedding_configured():
         raise RuntimeError(embedding_not_configured_message())
 
@@ -127,6 +129,7 @@ def build_points_for_upload(documents: List[Document], *, file_hash: str) -> Lis
     points = documents_to_points(
         kept_docs,
         embeddings,
+        collection_name=collection_name,
         file_hash=file_hash,
         effective_processing_params=fixed_processing_params(),
     )
@@ -157,7 +160,11 @@ def ingest_markdown_file(
     documents = chunk_markdown_file(file_path, file_name=file_name)
     entries = documents_to_id_entries(documents)
     if upload and entries:
-        points = build_points_for_upload(documents, file_hash=file_content_hash(file_path))
+        points = build_points_for_upload(
+            documents,
+            file_hash=file_content_hash(file_path),
+            collection_name=collection_name,
+        )
         upsert_points(collection_name, points)
     return entries
 

@@ -3,12 +3,37 @@
  */
 
 export type ToolRunStatus = 'running' | 'success' | 'error'
+export type ToolLifecycleState =
+  | 'running'
+  | 'approval_pending'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'rejected'
+  | 'cancelled'
+
+export interface KbCitationAnnotation {
+  type: 'kb_citation' | 'url_citation'
+  citation_id: string
+  evidence_id?: string
+  start_index: number
+  end_index: number
+  document_id?: string
+  document_version_id?: string
+  segment_id?: string
+  url?: string
+  title: string
+  excerpt: string
+  locator?: Record<string, unknown> | null
+  verification: 'structural' | string
+}
 
 export interface TextUiPart {
   id: string
   type: 'text'
   content: string
   status?: string
+  annotations?: KbCitationAnnotation[]
   parent_task_call_id?: string
 }
 
@@ -28,9 +53,14 @@ export interface ToolUiPart {
   input: Record<string, unknown>
   output: string
   status: ToolRunStatus
+  state: ToolLifecycleState
   error?: string | null
   errorCategory?: string | null
   duration_ms?: number
+  outcome?: string | null
+  exit_code?: number
+  timed_out?: boolean
+  truncated?: boolean
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
   parent_task_call_id?: string
   /** HITL 审批/澄清状态（可选扩展） */
@@ -42,7 +72,30 @@ export interface ToolUiPart {
   } | null
 }
 
-export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart
+export interface RetrievalResultUi {
+  evidence_id: string
+  source_type?: 'knowledge_base' | 'web'
+  document_id?: string
+  document_version_id?: string
+  segment_id?: string
+  url?: string
+  title: string
+  excerpt: string
+  locator?: Record<string, unknown> | null
+  score?: number | null
+}
+
+export interface RetrievalUiPart {
+  id: string
+  type: 'retrieval'
+  tool_call_id: string
+  query: string
+  results: RetrievalResultUi[]
+  truncated?: boolean
+  parent_task_call_id?: string
+}
+
+export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart | RetrievalUiPart
 
 export function part_parent_task_call_id(part: UiPart): string | undefined {
   const raw = part.parent_task_call_id
@@ -73,6 +126,56 @@ function coerceToolStatus(p: Record<string, unknown>): ToolRunStatus {
     return 'running'
   }
   return 'success'
+}
+
+function coerceToolState(p: Record<string, unknown>): ToolLifecycleState {
+  const state = p.state
+  if (
+    state === 'running'
+    || state === 'approval_pending'
+    || state === 'succeeded'
+    || state === 'failed'
+    || state === 'timed_out'
+    || state === 'rejected'
+    || state === 'cancelled'
+  ) {
+    return state
+  }
+  if (p.timed_out === true || p.outcome === 'timed_out') {
+    return 'timed_out'
+  }
+  if (p.status === 'error' || p.error != null || p.outcome === 'command_failed') {
+    return 'failed'
+  }
+  if (p.status === 'running' || p.status === 'streaming') {
+    return 'running'
+  }
+  return 'succeeded'
+}
+
+export function isTerminalToolState(state: ToolLifecycleState): boolean {
+  return !['running', 'approval_pending'].includes(state)
+}
+
+export const TOOL_STATE_LABELS: Record<ToolLifecycleState, string> = {
+  running: '正在执行',
+  approval_pending: '等待确认',
+  succeeded: '已完成',
+  failed: '执行失败',
+  timed_out: '执行超时',
+  rejected: '已拒绝',
+  cancelled: '已停止',
+}
+
+export function assistantToolFailureSummary(parts: UiPart[]): {
+  hasFailure: boolean
+  hasVisibleText: boolean
+} {
+  return {
+    hasFailure: parts.some((part) => part.type === 'tool'
+      && ['failed', 'timed_out', 'rejected', 'cancelled'].includes(part.state)),
+    hasVisibleText: parts.some((part) => part.type === 'text' && Boolean(part.content.trim())),
+  }
 }
 
 /** 将已落库的整段 text（含成对标签）拆成 text / reasoning 部件，供历史列表与折叠 UI 使用 */
@@ -221,11 +324,40 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
       return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
     })()
     if (rec.type === 'text') {
+      const annotations = Array.isArray(rec.annotations)
+        ? rec.annotations.flatMap((raw): KbCitationAnnotation[] => {
+            if (!raw || typeof raw !== 'object') {
+              return []
+            }
+            const item = raw as Record<string, unknown>
+            const start = Number(item.start_index)
+            const end = Number(item.end_index)
+            if (!['kb_citation', 'url_citation'].includes(String(item.type)) || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) {
+              return []
+            }
+            return [{
+              type: item.type as 'kb_citation' | 'url_citation',
+              citation_id: String(item.citation_id ?? ''),
+              evidence_id: typeof item.evidence_id === 'string' ? item.evidence_id : undefined,
+              start_index: start,
+              end_index: end,
+              document_id: String(item.document_id ?? ''),
+              document_version_id: String(item.document_version_id ?? ''),
+              segment_id: String(item.segment_id ?? ''),
+              url: typeof item.url === 'string' ? item.url : undefined,
+              title: String(item.title ?? ''),
+              excerpt: String(item.excerpt ?? ''),
+              locator: item.locator && typeof item.locator === 'object' ? item.locator as Record<string, unknown> : null,
+              verification: String(item.verification ?? 'structural'),
+            }]
+          })
+        : undefined
       parts.push({
         id,
         type: 'text',
         content: String(rec.content ?? ''),
         status: String(rec.status || 'completed'),
+        ...(annotations?.length ? { annotations } : {}),
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
       })
     } else if (rec.type === 'reasoning') {
@@ -235,6 +367,38 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         content: String(rec.content ?? ''),
         status: String(rec.status || 'completed'),
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
+      })
+    } else if (rec.type === 'retrieval') {
+      const results = Array.isArray(rec.results)
+        ? rec.results.flatMap((raw): RetrievalResultUi[] => {
+            if (!raw || typeof raw !== 'object') {
+              return []
+            }
+            const item = raw as Record<string, unknown>
+            if (typeof item.evidence_id !== 'string' || typeof item.excerpt !== 'string') {
+              return []
+            }
+            return [{
+              evidence_id: item.evidence_id,
+              source_type: item.source_type === 'web' ? 'web' : 'knowledge_base',
+              document_id: String(item.document_id ?? ''),
+              document_version_id: String(item.document_version_id ?? ''),
+              segment_id: String(item.segment_id ?? ''),
+              url: typeof item.url === 'string' ? item.url : undefined,
+              title: String(item.title ?? ''),
+              excerpt: item.excerpt,
+              locator: item.locator && typeof item.locator === 'object' ? item.locator as Record<string, unknown> : null,
+              score: item.score == null ? null : Number(item.score),
+            }]
+          })
+        : []
+      parts.push({
+        id,
+        type: 'retrieval',
+        tool_call_id: String(rec.tool_call_id ?? ''),
+        query: String(rec.query ?? ''),
+        results,
+        truncated: Boolean(rec.truncated),
       })
     } else if (rec.type === 'tool') {
       const input = normalizeToolPartInput(rec.input)
@@ -259,9 +423,14 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         input,
         output: typeof rec.output === 'string' ? rec.output : '',
         status: coerceToolStatus(rec),
+        state: coerceToolState(rec),
         error: rec.error != null ? String(rec.error) : null,
         errorCategory: rec.errorCategory != null ? String(rec.errorCategory) : null,
         duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
+        outcome: rec.outcome != null ? String(rec.outcome) : null,
+        exit_code: rec.exit_code != null ? Number(rec.exit_code) : undefined,
+        timed_out: rec.timed_out != null ? Boolean(rec.timed_out) : undefined,
+        truncated: rec.truncated != null ? Boolean(rec.truncated) : undefined,
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
         ...(hitl ? { hitl } : {}),
       }
@@ -273,7 +442,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         const hitlCandidates = parts
           .map((part, index) => ({ part, index }))
           .filter(({ part }) => part.type === 'tool'
-            && part.status === 'running'
+            && !isTerminalToolState(part.state)
             && Boolean(part.hitl)
             && part.name === toolPart.name
             && JSON.stringify(part.input) === JSON.stringify(toolPart.input))
@@ -313,6 +482,50 @@ export function syncLegacyFieldsFromParts(parts: UiPart[]): { content: string, r
     }
   }
   return { content, reasoning: reasoning || undefined }
+}
+
+export function appendTextAnnotation(
+  parts: UiPart[],
+  annotation: Record<string, unknown>,
+): UiPart[] {
+  const normalized = normalizeApiContent({
+    parts: [{ type: 'text', content: 'x'.repeat(Math.max(1, Number(annotation.end_index) || 1)), annotations: [annotation] }],
+  }).parts[0]
+  if (!normalized || normalized.type !== 'text' || !normalized.annotations?.length) {
+    return parts
+  }
+  const next = parts.map((part) => ({ ...part })) as UiPart[]
+  for (let i = next.length - 1; i >= 0; i--) {
+    const part = next[i]
+    if (part.type !== 'text' || part.parent_task_call_id) {
+      continue
+    }
+    const item = normalized.annotations[0]
+    if (item.end_index > part.content.length) {
+      return parts
+    }
+    const existing = part.annotations ?? []
+    if (existing.some((value) => value.citation_id === item.citation_id)) {
+      return parts
+    }
+    next[i] = { ...part, annotations: [...existing, item] }
+    return next
+  }
+  return parts
+}
+
+export function appendRetrievalPart(parts: UiPart[], raw: Record<string, unknown>): UiPart[] {
+  const normalized = normalizeApiContent({ parts: [{ ...raw, type: 'retrieval' }] }).parts[0]
+  if (!normalized || normalized.type !== 'retrieval') {
+    return parts
+  }
+  const index = parts.findIndex((part) => part.type === 'retrieval' && part.id === normalized.id)
+  if (index === -1) {
+    return [...parts, normalized]
+  }
+  const next = [...parts]
+  next[index] = normalized
+  return next
 }
 
 /**
@@ -865,6 +1078,7 @@ export function upsertToolInputPart(
     input,
     output: '',
     status: 'running',
+    state: 'running',
     ...(parentId ? { parent_task_call_id: parentId } : {}),
   })
   return next
@@ -879,10 +1093,16 @@ export function applyToolOutput(
     status: 'success' | 'error'
     duration_ms?: number
     errorCategory?: string
+    state?: ToolLifecycleState
+    outcome?: string
+    exit_code?: number
+    timed_out?: boolean
+    truncated?: boolean
   },
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
+  const state = payload.state ?? (payload.status === 'error' ? 'failed' : 'succeeded')
   const status: ToolRunStatus = payload.status === 'error' ? 'error' : 'success'
   if (idx === -1) {
     next.push({
@@ -893,20 +1113,33 @@ export function applyToolOutput(
       input: {},
       output: payload.output,
       status,
+      state,
       error: payload.error,
       errorCategory: payload.errorCategory,
       duration_ms: payload.duration_ms,
+      outcome: payload.outcome,
+      exit_code: payload.exit_code,
+      timed_out: payload.timed_out,
+      truncated: payload.truncated,
     })
     return next
   }
   const tp = next[idx] as ToolUiPart
+  if (isTerminalToolState(tp.state) && tp.state !== state) {
+    return next
+  }
   next[idx] = {
     ...tp,
     output: payload.output,
     error: payload.error,
     errorCategory: payload.errorCategory ?? tp.errorCategory,
     status,
+    state,
     duration_ms: payload.duration_ms ?? tp.duration_ms,
+    outcome: payload.outcome ?? tp.outcome,
+    exit_code: payload.exit_code ?? tp.exit_code,
+    timed_out: payload.timed_out ?? tp.timed_out,
+    truncated: payload.truncated ?? tp.truncated,
   }
   return next
 }
@@ -935,6 +1168,7 @@ export function applyHitlPendingParts(
     next[idx] = {
       ...tp,
       status: 'running',
+      state: 'approval_pending',
       hitl: {
         kind: payload.kind,
         status: 'pending',

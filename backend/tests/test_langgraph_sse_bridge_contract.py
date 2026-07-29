@@ -61,6 +61,168 @@ def test_message_start_and_text_delta_shapes() -> None:
     assert "part_id" in td
 
 
+def test_kb_retrieval_and_terminal_annotation_event_order() -> None:
+    bridge = LangGraphSseBridge("sess-citation")
+    builder = AssistantMessageBuilder(
+        session_id="sess-citation",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    start = {
+        "event": "on_tool_start",
+        "name": "search_knowledge_base",
+        "run_id": "call-1",
+        "data": {"input": {"query": "验证码"}},
+    }
+    bridge.process_item(start, builder, ctx)
+    result = {
+        "results": [{
+            "collection_name": "requirements",
+            "document_id": "doc_1",
+            "document_version_id": "docv_1",
+            "segment_id": "seg_1",
+            "file_name": "登录.md",
+            "excerpt": "验证码五分钟有效",
+            "citable": True,
+            "evidence_id": "ev_1",
+            "tool_call_ids": ["call-1"],
+        }],
+    }
+    end = {
+        "event": "on_tool_end",
+        "name": "search_knowledge_base",
+        "run_id": "call-1",
+        "data": {"output": json.dumps(result, ensure_ascii=False)},
+    }
+    retrieval_lines = bridge.process_item(end, builder, ctx)
+    retrieval_events = _data_json_objects("".join(retrieval_lines))
+    retrieval = next(item for item in retrieval_events if item["type"] == "retrieval-results-available")
+    assert retrieval["tool_call_id"] == "call-1"
+    assert retrieval["results"][0]["evidence_id"] == "ev_1"
+
+    answer_lines = bridge.process_item({
+        "type": "typed-answer-segments",
+        "segments": [{"text": "五分钟", "cited_evidence_ids": ["ev_1"]}],
+    }, builder, ctx)
+    answer_blob = "".join(answer_lines)
+    assert answer_blob.index("event: text-end") < answer_blob.index("event: text-annotation-added")
+    annotation = next(
+        item for item in _data_json_objects(answer_blob)
+        if item["type"] == "text-annotation-added"
+    )
+    assert annotation["text_part_id"]
+    assert annotation["annotation"]["evidence_id"] == "ev_1"
+
+
+def test_reasoning_can_continue_after_retrieval_result() -> None:
+    bridge = LangGraphSseBridge("sess-retrieval-reasoning")
+    builder = AssistantMessageBuilder(
+        session_id="sess-retrieval-reasoning",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "web_search",
+            "run_id": "call-search",
+            "data": {"input": {"query": "LLM wiki"}},
+        },
+        builder,
+        ctx,
+    )
+    bridge.process_item(
+        {
+            "event": "on_tool_end",
+            "name": "web_search",
+            "run_id": "call-search",
+            "data": {
+                "output": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "url": "https://example.com/llm-wiki",
+                                "title": "LLM Wiki",
+                                "excerpt": "A research project",
+                                "citable": True,
+                            }
+                        ]
+                    }
+                )
+            },
+        },
+        builder,
+        ctx,
+    )
+
+    class _ReasonChunk:
+        content = ""
+        additional_kwargs = {"reasoning_content": "继续分析检索结果"}
+
+    lines = bridge.process_item(
+        {
+            "event": "on_chat_model_stream",
+            "run_id": "run-after-search",
+            "data": {"chunk": _ReasonChunk()},
+        },
+        builder,
+        ctx,
+    )
+
+    assert any(
+        event.get("type") == "reasoning-delta"
+        for event in _data_json_objects("".join(lines))
+    )
+    assert [part["type"] for part in builder.to_dict()["parts"]][-2:] == [
+        "retrieval",
+        "reasoning",
+    ]
+
+
+def test_structured_answer_transport_tool_is_not_user_visible() -> None:
+    bridge = LangGraphSseBridge("sess-structured")
+    builder = AssistantMessageBuilder()
+    ctx = _ctx()
+    start = bridge.process_item({
+        "event": "on_tool_start",
+        "name": "CitedAnswer",
+        "run_id": "structured-1",
+        "data": {"input": {"segments": []}},
+    }, builder, ctx)
+    end = bridge.process_item({
+        "event": "on_tool_end",
+        "name": "CitedAnswer",
+        "run_id": "structured-1",
+        "data": {"output": "ok"},
+    }, builder, ctx)
+    assert start == []
+    assert end == []
+    assert builder.to_dict() == {"parts": []}
+
+
+def test_completed_segment_annotation_precedes_text_end() -> None:
+    bridge = LangGraphSseBridge("sess-segments")
+    builder = AssistantMessageBuilder(message_id=bridge.assistant_message_id)
+    builder.register_retrieval_results(
+        tool_call_id="call-1",
+        query="有效期",
+        results=[{
+            "collection_name": "requirements", "document_id": "doc_1",
+            "document_version_id": "docv_1", "segment_id": "seg_1",
+            "file_name": "需求.md", "excerpt": "五分钟", "citable": True,
+            "evidence_id": "ev_1", "tool_call_ids": ["call-1"],
+        }],
+    )
+    ctx = _ctx()
+    segment = bridge.process_item({
+        "type": "typed-answer-segment",
+        "segment": {"text": "五分钟", "cited_evidence_ids": ["ev_1"]},
+    }, builder, ctx)
+    finish = bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
+    blob = "".join([*segment, *finish])
+    assert blob.index("event: text-annotation-added") < blob.index("event: text-end")
+
+
 def test_message_start_does_not_include_client_stop_token() -> None:
     bridge = LangGraphSseBridge("sess-stop")
     builder = AssistantMessageBuilder(session_id="sess-stop", message_id=bridge.assistant_message_id)
@@ -174,7 +336,7 @@ def test_error_event_type() -> None:
     blob = "".join(bridge.process_item({"type": "__tw_error__", "content": "oops"}, builder, ctx))
     assert "event: error\n" in blob
     err = [o for o in _data_json_objects(blob) if o.get("type") == "error"][0]
-    assert err["error"] == "oops"
+    assert err["error"] == "操作失败，请稍后重试。"
     assert err["message_id"] == bridge.assistant_message_id
 
 
@@ -259,6 +421,45 @@ def test_tool_output_duration_ms() -> None:
     assert tool_out[0]["duration_ms"] >= 0
     tool_parts = [p for p in builder.to_dict()["parts"] if p.get("type") == "tool"]
     assert tool_parts[0].get("duration_ms") is not None
+
+
+def test_tool_start_omits_injected_runtime_from_sse_and_builder() -> None:
+    class ToolRuntime:
+        pass
+
+    bridge = LangGraphSseBridge("sess-runtime")
+    builder = AssistantMessageBuilder(
+        session_id="sess-runtime",
+        message_id=bridge.assistant_message_id,
+    )
+    lines = bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "web_search",
+            "run_id": "run-search",
+            "data": {
+                "input": {
+                    "query": "LLM wiki",
+                    "limit": 8,
+                    "runtime": ToolRuntime(),
+                }
+            },
+        },
+        builder,
+        _ctx(),
+    )
+
+    available = next(
+        event
+        for event in _data_json_objects("".join(lines))
+        if event.get("type") == "tool-input-available"
+    )
+    assert available["input"] == {"query": "LLM wiki", "limit": 8}
+    assert json.loads(available["input_text"]) == available["input"]
+    saved_tool = next(
+        part for part in builder.to_dict()["parts"] if part.get("type") == "tool"
+    )
+    assert saved_tool["input"] == available["input"]
 
 
 def test_usage_update_and_finish_cumulative() -> None:
@@ -685,9 +886,73 @@ def test_execute_nonzero_exit_is_projected_as_tool_error() -> None:
     )
     events = _data_json_objects("".join(lines))
     tool_output = next(item for item in events if item["type"] == "tool-output-available")
-    assert tool_output["status"] == "error"
+    assert tool_output["status"] == "success"
+    assert tool_output["state"] == "failed"
+    assert tool_output["outcome"] == "command_failed"
+    assert tool_output["exit_code"] == 1
+    assert tool_output["errorCategory"] == "command_failed"
     saved = next(part for part in builder.to_dict()["parts"] if part.get("name") == "execute")
-    assert saved["status"] == "error"
+    assert saved["status"] == "success"
+    assert saved["state"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_state", "expected_outcome"),
+    [
+        ("Error: Command timed out\n[Command failed with exit code 124]", "timed_out", "timed_out"),
+        ("the word failed is ordinary output\n[Command succeeded with exit code 0]", "succeeded", "ok"),
+        ("optional command failed but shell recovered\n[Command succeeded with exit code 0]", "succeeded", "ok"),
+    ],
+)
+def test_execute_uses_exit_protocol_not_output_words(
+    content: str,
+    expected_state: str,
+    expected_outcome: str,
+) -> None:
+    bridge = LangGraphSseBridge("sess-exit-protocol")
+    builder = AssistantMessageBuilder()
+    ctx = _ctx()
+    bridge.process_item({
+        "event": "on_tool_start",
+        "name": "execute",
+        "run_id": "run-exec-protocol",
+        "data": {"input": {"command": "command"}},
+    }, builder, ctx)
+
+    class _Output:
+        status = "success"
+
+        def __init__(self, value: str) -> None:
+            self.content = value
+
+    lines = bridge.process_item({
+        "event": "on_tool_end",
+        "name": "execute",
+        "run_id": "run-exec-protocol",
+        "data": {"output": _Output(content)},
+    }, builder, ctx)
+    event = next(
+        item for item in _data_json_objects("".join(lines))
+        if item["type"] == "tool-output-available"
+    )
+    assert event["state"] == expected_state
+    assert event["outcome"] == expected_outcome
+
+
+def test_abort_with_error_reason_emits_error_without_success_finish() -> None:
+    bridge = LangGraphSseBridge("sess-abort-error")
+    builder = AssistantMessageBuilder()
+    ctx = _ctx()
+    first = bridge.process_item(
+        {"type": "abort", "finish_reason": "error", "content": "internal stack"},
+        builder,
+        ctx,
+    )
+    final = bridge.finalize()
+    blob = "".join(first + final)
+    assert "event: error" in blob
+    assert "event: finish" not in blob
+    assert "data: [DONE]" in blob
 
 
 def test_tool_error_uses_inflight_tool_call_id() -> None:
