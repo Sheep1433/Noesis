@@ -4,8 +4,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from noesis.middlewares.summary_offload_middleware import (
     SummarizationOffloadMiddleware,
     create_summary_offload_middleware,
@@ -81,6 +79,21 @@ def test_create_summary_offload_uses_catalog_model_id_for_context() -> None:
         assert mw._get_token_trigger_value() == 750_000
 
 
+def test_summarization_max_input_tokens_overrides_catalog_limit() -> None:
+    cfg = SimpleNamespace(
+        summarization_max_input_tokens=64000,
+        summarization_tool_offload_threshold=1000,
+        summarization_max_retention_ratio=0.6,
+    )
+    with patch("noesis.middlewares.summary_offload_middleware.ModelConfig", cfg):
+        mw = SummarizationOffloadMiddleware(
+            MagicMock(),
+            trigger=("fraction", 0.75),
+        )
+        assert mw._get_profile_limits() == 64000
+        assert mw._get_token_trigger_value() == 48000
+
+
 def test_get_llm_summarization_falls_back_to_main_model() -> None:
     """未配置独立摘要模型名时，purpose=summarization 使用主模型参数。"""
     cfg = SimpleNamespace(
@@ -90,6 +103,7 @@ def test_get_llm_summarization_falls_back_to_main_model() -> None:
         model_temperature="0.2",
         model_api_key="main-key",
         model_base_url="https://main.example/v1",
+        max_retries=2,
     )
     with (
         patch("noesis.llm.factory.ModelConfig", cfg),
@@ -114,6 +128,7 @@ def test_get_llm_summarization_uses_dedicated_model_name() -> None:
         model_temperature="0.2",
         model_api_key="main-key",
         model_base_url="https://main.example/v1",
+        max_retries=2,
     )
     with (
         patch("noesis.llm.factory.ModelConfig", cfg),
@@ -128,3 +143,25 @@ def test_get_llm_summarization_uses_dedicated_model_name() -> None:
     assert kwargs["model_api_key"] == "main-key"
     assert kwargs["model_base_url"] == "https://main.example/v1"
     assert kwargs["model_type"] == "openai"
+    assert kwargs["provider_max_retries"] == 2
+
+
+def test_get_llm_chat_disables_provider_retry() -> None:
+    cfg = SimpleNamespace(
+        summarization_model_name="",
+        model_type="openai",
+        model_name="qwen-main",
+        model_temperature="0.2",
+        model_api_key="main-key",
+        model_base_url="https://main.example/v1",
+        max_retries=2,
+    )
+    with (
+        patch("noesis.llm.factory.ModelConfig", cfg),
+        patch("noesis.llm.factory.build_chat_model", return_value=MagicMock()) as build,
+    ):
+        from noesis.llm.factory import get_llm
+
+        get_llm(purpose="chat")
+
+    assert build.call_args.kwargs["provider_max_retries"] == 0

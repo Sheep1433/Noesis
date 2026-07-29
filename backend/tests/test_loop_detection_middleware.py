@@ -56,6 +56,18 @@ def test_thread_id_falls_back_to_context_for_legacy_runtime():
     assert mw._get_thread_id(runtime) == "legacy-session"
 
 
+def test_new_agent_run_clears_previous_loop_history():
+    mw = LoopDetectionMiddleware(warn_threshold=2, hard_limit=4)
+    runtime = _make_runtime("session-1")
+    call = [_bash_call("ls")]
+    mw._apply(_make_state(tool_calls=call), runtime)
+
+    mw.before_agent(_make_state(), runtime)
+
+    assert mw._apply(_make_state(tool_calls=call), runtime) is None
+    assert mw._drain_pending_warnings(runtime) == []
+
+
 def test_warn_queues_injection():
     mw = LoopDetectionMiddleware(warn_threshold=3, hard_limit=5)
     runtime = _make_runtime()

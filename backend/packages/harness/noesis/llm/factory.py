@@ -36,9 +36,14 @@ def build_chat_model(
     temperature: float,
     model_base_url: str,
     model_api_key: str,
+    provider_max_retries: int | None = None,
 ):
     timeout = _llm_http_timeout()
-    max_retries = int(ModelConfig.max_retries)
+    max_retries = (
+        int(ModelConfig.max_retries)
+        if provider_max_retries is None
+        else max(0, int(provider_max_retries))
+    )
     http_client, http_async_client = _llm_http_clients()
     http_kwargs = {
         "http_client": http_client,
@@ -164,4 +169,7 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
         temperature=temperature,
         model_base_url=model_base_url,
         model_api_key=model_api_key,
+        provider_max_retries=(
+            int(ModelConfig.max_retries) if purpose == "summarization" else 0
+        ),
     )

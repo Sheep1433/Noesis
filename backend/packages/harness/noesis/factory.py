@@ -15,6 +15,7 @@ from deepagents.backends import BackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from noesis.middlewares import (
     ContextMetricsMiddleware,
+    ContextBudgetGuardMiddleware,
     DanglingToolCallMiddleware,
     LoopDetectionMiddleware,
     ModelRetryMiddleware,
@@ -81,6 +82,8 @@ def build_noesis_runtime_middleware(
 
     if include_tool_call_limits:
         middleware.extend(build_tool_call_limit_middleware())
+
+    middleware.append(ContextBudgetGuardMiddleware(model_id=model_id))
 
     if ModelConfig.context_display_enabled:
         middleware.append(ContextMetricsMiddleware(model_id=model_id))

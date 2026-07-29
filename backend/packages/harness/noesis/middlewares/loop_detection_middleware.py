@@ -253,21 +253,16 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
             self._queue_pending_warning(runtime, warning)
         return None
 
-    def _clear_pending_warnings(self, runtime: Runtime, *, reason: str) -> None:
+    def _reset_runtime_state(self, runtime: Runtime) -> None:
         thread_id = self._get_thread_id(runtime)
         with self._lock:
-            dropped = self._pending_warnings.pop(thread_id, None)
-        if dropped:
-            logger.info(
-                "[loop_detection] 清空排队警告 | thread_id={} reason={} dropped_count={}",
-                thread_id,
-                reason,
-                len(dropped),
-            )
+            self._history.pop(thread_id, None)
+            self._warned.pop(thread_id, None)
+            self._pending_warnings.pop(thread_id, None)
 
     @override
     def before_agent(self, state: AgentState, runtime: Runtime) -> dict | None:
-        self._clear_pending_warnings(runtime, reason="before_agent")
+        self._reset_runtime_state(runtime)
         return None
 
     @override
@@ -285,7 +280,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
 
     @override
     def after_agent(self, state: AgentState, runtime: Runtime) -> dict | None:
-        self._clear_pending_warnings(runtime, reason="after_agent")
+        self._reset_runtime_state(runtime)
         return None
 
     @override
