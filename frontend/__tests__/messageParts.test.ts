@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseTaskToolOutput } from '@/utils/parseTaskTool'
-import { applyToolOutput, assistantToolFailureSummary, markStreamingPartsComplete, normalizeApiContent, TOOL_STATE_LABELS } from '@/views/chat/messageParts'
+import { applyToolOutput, assistantToolFailureSummary, markStreamingPartsComplete, normalizeApiContent, shouldShowAssistantToolFailureSummary, TOOL_STATE_LABELS } from '@/views/chat/messageParts'
 
 describe('message parts snapshot normalization', () => {
   it('兼容旧消息并严格解析 citation 与 retrieval parts', () => {
@@ -132,6 +132,20 @@ describe('message parts snapshot normalization', () => {
       hasFailure: true,
       hasVisibleText: true,
     })
+  })
+
+  it('run 仍在继续时不应提前显示本轮未完成', () => {
+    const parts = normalizeApiContent({
+      parts: [
+        { type: 'reasoning', content: '继续调研其它来源' },
+        { type: 'tool', tool_call_id: 'call-1', name: 'web_fetch', status: 'error', state: 'failed' },
+        { type: 'tool', tool_call_id: 'call-2', name: 'web_search', status: 'running', state: 'running' },
+      ],
+    }).parts
+
+    expect(assistantToolFailureSummary(parts).hasFailure).toBe(true)
+    expect(shouldShowAssistantToolFailureSummary(parts, true)).toBe(false)
+    expect(shouldShowAssistantToolFailureSummary(parts, false)).toBe(true)
   })
 
   it('缺少权威 state 时拒绝猜测工具状态', () => {

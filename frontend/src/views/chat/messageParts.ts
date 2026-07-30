@@ -169,6 +169,10 @@ export function assistantToolFailureSummary(parts: UiPart[]): {
   }
 }
 
+export function shouldShowAssistantToolFailureSummary(parts: UiPart[], runIsActive: boolean): boolean {
+  return !runIsActive && assistantToolFailureSummary(parts).hasFailure
+}
+
 /** 将已落库的整段 text（含成对标签）拆成 text / reasoning 部件，供历史列表与折叠 UI 使用 */
 function expandRedactedThinkingInPlainText(text: string): Array<{ kind: 'text' | 'reasoning', value: string }> {
   const segments: Array<{ kind: 'text' | 'reasoning', value: string }> = []

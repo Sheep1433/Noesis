@@ -11,6 +11,7 @@ import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vu
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
+import RetrievalResultsCollapse from '@/components/RetrievalResultsCollapse/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
@@ -65,6 +66,7 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   shortenChatErrorToast,
+  shouldShowAssistantToolFailureSummary,
   syncLegacyFieldsFromParts,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
@@ -2349,32 +2351,28 @@ function onComposerPaste(e: ClipboardEvent) {
                               @citation-click="citationId => openCitation(item.message_id, citationId)"
                             />
                           </template>
-                          <details
+                          <RetrievalResultsCollapse
                             v-if="retrievedOnly(item.messageContent.parts).length"
-                            class="retrieval-results-panel"
-                          >
-                            <summary>本轮检索结果（{{ retrievedOnly(item.messageContent.parts).length }}）</summary>
-                            <div
-                              v-for="result in retrievedOnly(item.messageContent.parts)"
-                              :key="result.evidence_id"
-                              class="retrieval-result-item"
-                            >
-                              <div class="retrieval-result-title">{{ result.title || (result.source_type === 'web' ? '网页来源' : '知识库文档') }}</div>
-                              <div class="retrieval-result-excerpt">{{ result.excerpt }}</div>
-                            </div>
-                          </details>
-                          <n-alert
-                            v-if="assistantToolFailureSummary(item.messageContent.parts).hasFailure"
-                            type="warning"
-                            :title="assistantToolFailureSummary(item.messageContent.parts).hasVisibleText
-                              ? '部分工具未成功，本次结果可能不完整'
-                              : '本轮未完成'"
+                            :results="retrievedOnly(item.messageContent.parts)"
+                          />
+                          <div
+                            v-if="shouldShowAssistantToolFailureSummary(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
                             class="assistant-tool-failure-summary"
+                            role="status"
                           >
-                            <template v-if="!assistantToolFailureSummary(item.messageContent.parts).hasVisibleText" #action>
-                              <n-button size="small" @click="onRecycleQa(index)">重新执行</n-button>
-                            </template>
-                          </n-alert>
+                            <span class="assistant-tool-failure-summary__icon" aria-hidden="true">!</span>
+                            <span>{{ assistantToolFailureSummary(item.messageContent.parts).hasVisibleText
+                              ? '部分工具未成功，本次结果可能不完整'
+                              : '本轮未完成' }}</span>
+                            <n-button
+                              v-if="!assistantToolFailureSummary(item.messageContent.parts).hasVisibleText"
+                              text
+                              size="tiny"
+                              @click="onRecycleQa(index)"
+                            >
+                              重新执行
+                            </n-button>
+                          </div>
                           <AssistantStreamingIndicator
                             v-if="showAssistantReplyLoading(index, item.role)"
                             section
@@ -2861,6 +2859,30 @@ function onComposerPaste(e: ClipboardEvent) {
 </template>
 
 <style lang="scss" scoped>
+.assistant-tool-failure-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 2px 3px;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-tool-failure-summary__icon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--noesis-color-warning);
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
 .chat-composer--dragover {
   border-color: var(--noesis-color-primary);
   background: var(--noesis-color-primary-bg-subtle);
