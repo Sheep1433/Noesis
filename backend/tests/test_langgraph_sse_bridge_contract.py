@@ -110,7 +110,12 @@ def test_kb_retrieval_and_terminal_annotation_event_order() -> None:
         item for item in _data_json_objects(answer_blob)
         if item["type"] == "text-annotation-added"
     )
+    text_delta = next(
+        item for item in _data_json_objects(answer_blob)
+        if item["type"] == "text-delta"
+    )
     assert annotation["text_part_id"]
+    assert annotation["text_part_id"] == text_delta["part_id"]
     assert annotation["annotation"]["evidence_id"] == "ev_1"
 
 

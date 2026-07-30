@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from noesis.prompts.base import build_base_prompt, build_sub_prompt
+from noesis.prompts.citations import CITATION_EXTENSION
 from noesis.prompts.execution import build_execution_sections
 
 _ROLE = """<role>
@@ -125,6 +126,7 @@ def build_super_agent_prompt() -> str:
         _TASK_DELEGATION,
         _SKILLS,
         _SUBAGENT_TYPES,
+        CITATION_EXTENSION,
     ]
     return build_base_prompt(*sections)
 

@@ -53,11 +53,11 @@ streaming skeleton
 - `text`
 - `reasoning`
 - `tool`
-- `retrieval`：本轮知识库工具返回的候选 evidence；不等价于正文已引用来源
+- `retrieval`：本轮知识库或 Web 检索工具返回的候选 evidence；不等价于正文已引用来源
 
 顶层 `text` part 可带 `annotations[]`。知识库 citation 使用所属 text part 的 Unicode code point 左闭右开 offset。正文仍由 `text-delta` 交付，引用由独立的 `text-annotation-added` patch 交付，marker 不进入正文。
 
-知识库检索完成后的顺序为：
+检索完成后的顺序为：
 
 ```text
 tool-output-available
@@ -68,7 +68,9 @@ tool-output-available
   → finish
 ```
 
-支持 completed segment streaming 的 provider 可以在 `text-end` 前交付 annotation。只能终态返回 typed answer 的 provider 可以在 `text-end` 后交付，但必须早于 `finish` 和终态持久化。当前 provider 未通过 structured binding 发布门禁，因此默认只交付普通正文与 retrieval results，不推断 citation。
+支持 completed segment streaming 的 provider 可以在 `text-end` 前交付 annotation。只能终态返回 typed answer 的 provider 可以在 `text-end` 后交付，但必须早于 `finish` 和终态持久化。只有通过配置门禁的模型才为 COMMON_QA 和 SUPER_AGENT_QA 主 Agent 启用 typed binding；其它模型只交付普通正文与 retrieval results，不推断 citation。
+
+`RunProjection` 必须消费 retrieval 与 annotation WireFrame，并写入自己的 authoritative builder。Bridge builder 只负责把 LangGraph 事件转换为实时协议，不能作为 durable snapshot 的唯一来源。`text-delta.part_id` 与 `text-annotation-added.text_part_id` 必须一致，否则投影应拒绝 annotation 并记录结构校验失败。
 
 ## 4. 工具结果
 

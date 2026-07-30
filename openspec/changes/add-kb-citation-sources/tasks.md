@@ -60,3 +60,10 @@
 - [x] 8.3 将 typed binding 投影为 `url_citation`，resolve 返回消息快照与安全外链且不触发服务端重抓
 - [x] 8.4 前端解析、展示 Web 引用和 retrieved-only 网页结果
 - [x] 8.5 增加回归测试并运行 OpenSpec 校验
+
+## 9. 智能体引用与 durable 投影补漏
+
+- [x] 9.1 增加 RunProjection 对 retrieval/annotation 事件的回归测试，并修复终态 snapshot 丢失来源状态
+- [x] 9.2 将 structured citation provider 门禁与 prompt 协议共享给 GeneralQAAgent 和 SuperAgent 主 Agent
+- [x] 9.3 增加 SuperAgent 装配测试，验证通过门禁时使用 `CitedAnswer`、未通过时保持纯文本降级
+- [x] 9.4 运行 citation 定向测试、真实模型集成测试、前端测试与 OpenSpec 校验

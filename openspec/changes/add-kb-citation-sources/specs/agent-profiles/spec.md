@@ -24,3 +24,13 @@ GeneralQAAgent system prompt SHALL 注入当前 run manifest 可用 evidence id 
 - **WHEN** 当前 provider 不支持或未通过 structured answer schema 校验
 - **THEN** 系统 MAY 交付纯文本回答与 retrieval results
 - **AND** SHALL NOT 通过 prompt marker 或 Top-K 自动生成 cited annotation
+
+### Requirement: SUPER_AGENT_QA 主 Agent SHALL 支持 typed citation binding
+
+当 SuperAgent 主 Agent 直接调用 `web_search` 或 `web_fetch`，且当前 provider 已通过 structured binding 门禁时，系统 SHALL 使用与 COMMON_QA 相同的 `segments[{text,cited_evidence_ids}]` 契约生成正文引用。子 Agent 内部检索结果不在本要求范围内，除非其 evidence 已进入主 run retrieval manifest。系统 SHALL NOT 从工具调用顺序、Top-K 或正文 URL 猜测引用。
+
+#### Scenario: 智能体直接检索后生成引用
+
+- **WHEN** `qa_type=SUPER_AGENT_QA` 的主 Agent 直接检索网页并绑定本轮 evidence id
+- **THEN** 最终正文 SHALL 产生 `url_citation` annotation
+- **AND** provider 未通过门禁时 SHALL 保留纯文本与 retrieved-only results

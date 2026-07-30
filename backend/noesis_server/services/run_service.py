@@ -129,6 +129,7 @@ class RunProjection:
                 self.builder.append_text_delta(
                     str(delta or ""),
                     parent_task_call_id=data.get("parent_task_call_id"),
+                    part_id=str(data.get("part_id") or "") or None,
                 )
             elif event.event == "reasoning-delta":
                 delta = data.get("text_delta") or data.get("delta") or data.get("content")
@@ -194,6 +195,22 @@ class RunProjection:
                         "忽略无匹配 tool start 的 run 投影结果 run_id={} tool_call_id={}",
                         self.run_id,
                         data.get("tool_call_id"),
+                    )
+            elif event.event == "retrieval-results-available":
+                results = data.get("results")
+                if isinstance(results, list):
+                    self.builder.register_retrieval_results(
+                        tool_call_id=str(data.get("tool_call_id") or ""),
+                        query=str(data.get("query") or ""),
+                        results=[item for item in results if isinstance(item, dict)],
+                        truncated=bool(data.get("truncated")),
+                    )
+            elif event.event == "text-annotation-added":
+                annotation = data.get("annotation")
+                if isinstance(annotation, dict):
+                    self.builder.append_text_annotation(
+                        str(data.get("text_part_id") or ""),
+                        annotation,
                     )
             elif event.event == "run-status":
                 status = str(data.get("status") or "")

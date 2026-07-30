@@ -94,3 +94,51 @@ def test_hitl_resume_replay_updates_original_tool_part() -> None:
     assert parts[0]["state"] == "succeeded"
     assert parts[0]["output"] == "ok"
     assert parts[0]["hitl"]["status"] == "approved"
+
+
+def test_run_projection_preserves_retrieval_and_text_annotation() -> None:
+    projection = RunProjection(
+        run_id="run-citation",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="message-1",
+        qa_type="SUPER_AGENT_QA",
+    )
+    result = {
+        "source_type": "web",
+        "url": "https://example.com/source",
+        "title": "Example source",
+        "excerpt": "Source excerpt",
+        "evidence_id": "ev_web_1",
+        "tool_call_ids": ["call-search"],
+        "citable": True,
+    }
+    projection.apply(WireFrame("retrieval-results-available", {
+        "tool_call_id": "call-search",
+        "query": "example",
+        "results": [result],
+    }))
+    projection.apply(WireFrame("text-delta", {
+        "part_id": "part-text-1",
+        "text_delta": "A supported statement.",
+    }))
+    projection.apply(WireFrame("text-annotation-added", {
+        "text_part_id": "part-text-1",
+        "annotation": {
+            "type": "url_citation",
+            "citation_id": "cit-1",
+            "evidence_id": "ev_web_1",
+            "start_index": 0,
+            "end_index": 22,
+            "title": "Example source",
+            "excerpt": "Source excerpt",
+            "url": "https://example.com/source",
+            "verification": "structural",
+        },
+    }))
+
+    parts = projection.persisted_snapshot()["parts"]
+    retrieval = next(part for part in parts if part["type"] == "retrieval")
+    text = next(part for part in parts if part["type"] == "text")
+    assert retrieval["results"][0]["evidence_id"] == "ev_web_1"
+    assert text["annotations"][0]["citation_id"] == "cit-1"

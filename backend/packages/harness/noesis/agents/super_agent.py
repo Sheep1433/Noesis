@@ -10,6 +10,7 @@ from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.subagents import SubAgent
 from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.structured_output import ToolStrategy
 from langgraph.types import Command
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,8 @@ from noesis.tools import build_web_search_tools
 from noesis.tools.chat_attachment_tools import build_attachment_tools
 from noesis.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
+from noesis.runtime.citation_policy import structured_citations_enabled
+from noesis.runtime.evidence import CitedAnswer
 from noesis.config.env import ChatAttachmentConfig, HitlConfig
 from noesis.config.user_data_paths import ensure_user_memory_files
 from noesis.context import ContextResolver
@@ -173,6 +176,11 @@ class SuperAgent(BaseAgent):
             extra_middleware=extra_middleware,
             interrupt_on=interrupt_on,
             model_id=model_id,
+            **(
+                {"response_format": ToolStrategy(CitedAnswer)}
+                if structured_citations_enabled(model_id)
+                else {}
+            ),
         )
 
     async def run_agent(

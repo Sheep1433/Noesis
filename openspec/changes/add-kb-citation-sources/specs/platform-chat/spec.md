@@ -47,3 +47,9 @@ assistant `content.parts` 的顶层 `text` part SHALL 支持可选 `annotations[
 - **WHEN** 客户端在收到 annotation patch 前断开
 - **THEN** PersistSink SHALL 继续根据 builder 权威快照持久化已校验 annotation 与 retrieval part
 - **AND** SHALL NOT 依赖客户端收到该事件
+
+#### Scenario: Durable run 投影终态消息
+
+- **WHEN** RunProjection 收到 `retrieval-results-available` 与 `text-annotation-added`
+- **THEN** 其权威 snapshot SHALL 保留对应 retrieval part 与 text annotation
+- **AND** 刷新读取的终态 assistant 消息 SHALL 与实时 SSE 展示一致

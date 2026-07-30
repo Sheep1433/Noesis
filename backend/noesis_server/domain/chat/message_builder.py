@@ -505,6 +505,65 @@ class AssistantMessageBuilder:
             )
         return target
 
+    def append_text_annotation(
+        self,
+        text_part_id: str,
+        annotation: Dict[str, Any],
+    ) -> bool:
+        """将已由 SSE bridge 校验的 annotation 重放进 durable builder。"""
+        target = next(
+            (
+                part
+                for part in self._content.parts
+                if isinstance(part, TextPart) and part.id == text_part_id
+            ),
+            None,
+        )
+        if target is None:
+            self._record_citation_rejection("unknown_text_part")
+            return False
+        evidence_id = str(annotation.get("evidence_id") or "")
+        entry = self._retrieval_manifest.get(evidence_id)
+        if entry is None:
+            self._record_citation_rejection("unknown_evidence_id")
+            return False
+        start = annotation.get("start_index")
+        end = annotation.get("end_index")
+        if (
+            not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or start < 0
+            or end <= start
+            or end > len(target.content)
+        ):
+            self._record_citation_rejection("invalid_offset")
+            return False
+        citation_id = str(annotation.get("citation_id") or "")
+        if not citation_id:
+            self._record_citation_rejection("missing_citation_id")
+            return False
+        duplicate = next(
+            (
+                item
+                for item in target.annotations
+                if item.get("citation_id") == citation_id
+                or (
+                    item.get("evidence_id") == evidence_id
+                    and item.get("start_index") == start
+                    and item.get("end_index") == end
+                )
+            ),
+            None,
+        )
+        if duplicate is not None:
+            return True
+        restored = self._citation_annotation(entry, start_index=start, end_index=end)
+        restored["citation_id"] = citation_id
+        target.annotations.append(restored)
+        return True
+
     def _citation_annotation(
         self,
         entry: RetrievalManifestEntry,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from noesis.prompts.base import build_base_prompt
+from noesis.prompts.citations import CITATION_EXTENSION
 
 _ROLE = """<role>
 你是 Noesis 智能问答助手，面向企业内部员工。
@@ -12,11 +13,6 @@ _WORKFLOW = """<workflow>
 事实性问题优先检索知识库；知识库未覆盖或需要最新公开信息时使用 web_search / web_fetch。
 其余基于可靠知识与推理作答。
 </workflow>"""
-
-_CITATION_EXTENSION = """<citations>
-知识库搜索、web_search 与 web_fetch 结果中的 evidence_id 只用于 typed citation binding。正文不得输出 evidence_id、[[source:...]]、[ID:n]、文件名角标或其它引用 marker。
-若运行时要求 structured answer，严格返回 segments[{text,cited_evidence_ids}]：每段只绑定直接支持它的 evidence_id；无依据时使用空数组。不得引用工具结果之外的 evidence_id。
-</citations>"""
 
 _KB_EXTENSION = """<knowledge_base>
 工具：list_knowledge_bases（了解可用库）、search_knowledge_base（片段 hybrid 检索）、get_knowledge_document（片段不足时拉整篇）。
@@ -43,7 +39,7 @@ def build_common_qa_prompt(
 ) -> str:
     sections: list[str] = [_ROLE, _WORKFLOW]
     if kb_enabled or web_enabled:
-        sections.append(_CITATION_EXTENSION)
+        sections.append(CITATION_EXTENSION)
     if attachments_enabled:
         sections.append(_ATTACHMENTS)
     if kb_enabled:

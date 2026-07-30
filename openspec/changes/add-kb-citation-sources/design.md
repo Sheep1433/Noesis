@@ -81,7 +81,7 @@ assistant 终态消息示例：
 
 Harness/runtime 的 run 级 retrieval manifest 是 `evidence_id` 的唯一分配者。登记 hit 时以 `document_id + document_version_id + segment_id` 的 canonical serialization 为去重键，并使用 run-scoped salt 对该 key 做确定性派生，得到不暴露长期身份的短 opaque ID（例如 `ev_a7f2`）；发生短 ID 碰撞时确定性延长摘要。manifest 同时记录所有命中它的 `tool_call_id`。多次或并行工具调用命中同一 evidence SHALL 复用同一个 ID；不同 evidence SHALL 不得因各工具调用的局部序号发生冲突。分配与登记 SHALL 在并发下原子化；同一 run 的检查点恢复与重放必须复用原 salt，因此不依赖工具完成顺序。`evidence_id` 仅在一次 Agent run 的 manifest 内唯一，不持久承担文档身份或授权。
 
-GeneralQAAgent 的生成契约为结构化 answer segments：
+GeneralQAAgent 与 SuperAgent 主 Agent 的生成契约为结构化 answer segments：
 
 ```json
 {
@@ -124,7 +124,7 @@ hash 可用于去重和完整性检查，chunk index 可用于诊断，但两者
 - provider 只能终态返回完整 structured object 时，平台 MAY 先交付完整正文并发送 `text-end`，随后登记 annotation，但 SHALL 在 `finish` 与终态持久化之前完成；
 - 异常或断连时，已验证且范围完整的 annotation 可保留，未闭合 segment 不生成 annotation。
 
-PersistSink 读取 builder 终态快照，不依赖客户端是否收到事件。HITL pending/resume 继续同一 `run_id`、`assistant_message_id`、retrieval manifest 与 evidence namespace；resume 不重新分配已有 `evidence_id`。恢复和 resume 时 citation 按 `citation_id` 去重，retrieval evidence 按稳定 identity 去重，`tool_call_id` 作为命中关联集合合并。
+PersistSink 读取 builder 终态快照，不依赖客户端是否收到事件。Durable `RunProjection` 必须消费 retrieval 与 annotation WireFrame，并把它们写入自身 builder；不得只让面向当前 SSE 连接的 bridge builder 持有来源状态。HITL pending/resume 继续同一 `run_id`、`assistant_message_id`、retrieval manifest 与 evidence namespace；resume 不重新分配已有 `evidence_id`。恢复和 resume 时 citation 按 `citation_id` 去重，retrieval evidence 按稳定 identity 去重，`tool_call_id` 作为命中关联集合合并。
 
 ### 5. 只做确定性的结构校验
 

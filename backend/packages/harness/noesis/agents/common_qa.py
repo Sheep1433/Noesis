@@ -18,10 +18,10 @@ from noesis.prompts import PromptProfile, build_prompt
 from noesis.tools import build_kb_search_tools, build_web_search_tools, list_qdrant_collection_names
 from noesis.tools.chat_attachment_tools import build_attachment_tools
 from noesis.config.env import ChatAttachmentConfig, ModelConfig
+from noesis.runtime.citation_policy import structured_citations_enabled
 from noesis.runtime.evidence import CitedAnswer
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.logging import logger
-from noesis.llm.catalog import resolve_catalog_entry
 
 
 def _normalize_kb_collections(raw: Optional[List[str]]) -> List[str]:
@@ -36,19 +36,6 @@ def _normalize_kb_collections(raw: Optional[List[str]]) -> List[str]:
         seen.add(name)
         out.append(name)
     return out
-
-
-def _structured_citations_enabled(model_id: Optional[str]) -> bool:
-    if not ModelConfig.structured_citations_enabled:
-        return False
-    if model_id:
-        try:
-            model_name = resolve_catalog_entry(model_id).model_name
-        except (KeyError, ValueError):
-            return False
-    else:
-        model_name = ModelConfig.model_name
-    return model_name in ModelConfig.structured_citation_models
 
 
 class GeneralQAAgent(BaseAgent):
@@ -140,7 +127,7 @@ class GeneralQAAgent(BaseAgent):
                 model_id=model_id,
                 **(
                     {"response_format": ToolStrategy(CitedAnswer)}
-                    if (kb_enabled or web_tools) and _structured_citations_enabled(model_id)
+                    if (kb_enabled or web_tools) and structured_citations_enabled(model_id)
                     else {}
                 ),
             )

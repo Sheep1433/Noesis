@@ -69,3 +69,56 @@ def test_super_agent_deep_research(auth_client, create_session, create_run, coll
     # 3. 产出有实质长度的结论文本
     assert events.succeeded, f"SSE 未成功结束: {events.error}"
     assert len(events.text) >= 50, f"结论文本过短: {events.text[:200]}"
+
+
+@pytest.mark.integration
+def test_super_agent_web_answer_persists_clickable_citation(
+    auth_client,
+    create_session,
+    create_run,
+    collect_run_stream,
+):
+    """智能体直接 Web 检索后，实时流和终态消息都保留可点击引用。"""
+    session_id = create_session(
+        title="api-test-super-agent-citation",
+        qa_type="SUPER_AGENT_QA",
+    )
+    run = create_run(
+        session_id=session_id,
+        content=(
+            "请调用 web_fetch 抓取 https://api.github.com，"
+            "用一句话告诉我响应中 current_user_url 的值，并把结论绑定到该网页来源。"
+        ),
+        qa_type="SUPER_AGENT_QA",
+    )
+
+    events = collect_run_stream(
+        auth_client,
+        run["run_id"],
+        deadline_seconds=DEEP_RESEARCH_DEADLINE,
+    )
+    retrieval_events = [
+        payload for name, payload in events.events
+        if name == "retrieval-results-available" and isinstance(payload, dict)
+    ]
+    annotation_events = [
+        payload for name, payload in events.events
+        if name == "text-annotation-added" and isinstance(payload, dict)
+    ]
+
+    assert events.succeeded, f"SSE 未成功结束: {events.error}"
+    assert "web_fetch" in events.tool_names, f"未调用 web_fetch: {events.tool_names}"
+    assert retrieval_events and retrieval_events[0].get("results"), "实时流缺少 retrieval results"
+    assert annotation_events, "实时流缺少 text annotation"
+
+    message_id = annotation_events[0].get("message_id")
+    response = auth_client.get(f"/api/chat/messages/{message_id}")
+    response.raise_for_status()
+    content = response.json()["data"]["content"]
+    parts = content["parts"]
+    assert any(part.get("type") == "retrieval" for part in parts), "终态消息丢失 retrieval part"
+    assert any(
+        annotation.get("type") == "url_citation"
+        for part in parts if part.get("type") == "text"
+        for annotation in part.get("annotations") or []
+    ), "终态消息缺少 url_citation"

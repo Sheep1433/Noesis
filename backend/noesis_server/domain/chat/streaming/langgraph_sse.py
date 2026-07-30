@@ -468,6 +468,7 @@ class LangGraphSseBridge:
         content: str,
         out: List[str],
         parent_task_call_id: Optional[str] = None,
+        part_id: Optional[str] = None,
     ) -> None:
         if not content:
             return
@@ -476,7 +477,7 @@ class LangGraphSseBridge:
         if self._text_open and parent_task_call_id != self._current_text_parent_task_call_id:
             self._close_text(out)
         if not self._text_open:
-            self._current_text_part_id = _new_id("part-text")
+            self._current_text_part_id = part_id or _new_id("part-text")
             self._current_text_parent_task_call_id = parent_task_call_id
             out.append(_format_sse("text-start", {
                 "type": "text-start",
@@ -735,7 +736,7 @@ class LangGraphSseBridge:
                 part_id=part_id,
             )
             if text_part.content:
-                self._emit_text_delta(text_part.content, out)
+                self._emit_text_delta(text_part.content, out, part_id=part_id)
                 self._close_text(out, record_checkpoint=False)
             for annotation in text_part.annotations:
                 out.append(_format_sse("text-annotation-added", {
@@ -753,8 +754,8 @@ class LangGraphSseBridge:
             text = str(segment.get("text") or "")
             if not text:
                 return
-            self._emit_text_delta(text, out)
             part_id = self._current_text_part_id or _new_id("part-text")
+            self._emit_text_delta(text, out, part_id=part_id)
             text_part = builder.append_typed_segment(segment, part_id=part_id)
             start = len(text_part.content) - len(text)
             for annotation in text_part.annotations:

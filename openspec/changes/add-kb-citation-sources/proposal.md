@@ -8,7 +8,7 @@
 
 - assistant 正文继续使用 `text` part，但新增 typed `annotations[]`；知识库引用使用 `type=kb_citation`，不在正文中插入 `[[source:...]]`、`[ID:n]` 等 marker。
 - 新增独立 `retrieval` part，保存工具本轮返回的 retrieval manifest。`text.annotations` 是 cited 子集，`retrieval.results` 是 retrieved 集合，两者不得混用。
-- GeneralQAAgent 以结构化回答片段绑定本轮局部 evidence id；平台校验后投影为正文 offset annotation。若当前模型无法稳定输出结构化绑定，则该轮不生成 cited annotation，禁止回退到 marker 或 Top-K 冒充引用。
+- GeneralQAAgent 与 SuperAgent 主 Agent 以结构化回答片段绑定本轮局部 evidence id；平台校验后投影为正文 offset annotation。若当前模型无法稳定输出结构化绑定，则该轮不生成 cited annotation，禁止回退到 marker 或 Top-K 冒充引用。
 - `evidence_id` 由 run 级 retrieval manifest 统一分配；KB 工具只提供稳定的 document/version/segment identity，避免多次或并行工具调用各自从 `S1` 开始造成冲突。
 - SSE 对齐 OpenAI Responses 的事件分层：沿用 `text-delta`，新增 `text-annotation-added`；检索结果经独立 `retrieval-results-available` 事件交付。终态消息快照为权威来源。
 - 引用定位采用 `document_id + document_version_id + segment_id`，并可附 page/char/bbox/header 等 locator；数组序号、chunk index 和 Qdrant point id 不承担长期公开身份。
@@ -25,7 +25,7 @@
 ### Modified Capabilities
 
 - `knowledge-base`: 检索结果 SHALL 提供稳定的文档、版本、分段身份与可解析 locator。
-- `agent-profiles`: COMMON_QA SHALL 产出结构化 answer-to-evidence binding，不输出引用 marker。
+- `agent-profiles`: COMMON_QA 与 SUPER_AGENT_QA 主 Agent SHALL 产出结构化 answer-to-evidence binding，不输出引用 marker。
 - `platform-chat`: text part、消息持久化与 `/api/chat` SSE SHALL 支持 annotation patch 和独立 retrieval results。
 
 ## Impact
@@ -39,11 +39,11 @@
 | 安全 | 回源时重新验证 message、session、collection/document 权限，不信任客户端 locator |
 | 兼容 | 新字段与 SSE 事件均为增量扩展；旧客户端忽略 annotations/retrieval 后仍可显示纯文本 |
 
-启用门禁：COMMON_QA citation 只有在目标 provider 通过固定样本 structured binding spike 后才能启用。未通过时保留纯文本回答与 retrieved-only results；这属于受控降级，不重新引入正文 marker。
+启用门禁：COMMON_QA 与 SUPER_AGENT_QA citation 只有在目标 provider 通过固定样本 structured binding spike 后才能启用。未通过时保留纯文本回答与 retrieved-only results；这属于受控降级，不重新引入正文 marker。
 
 ## Non-Goals
 
 - 不接入或依赖 OpenAI 托管 File Search；“OpenAI 形态”指输出对象与事件语义，不是复制其托管存储。
 - 不保留旧 `source_ref`、`[[source:...]]`、SourcesPart 或数字 marker 兼容路线。
 - 首版不承诺独立 LLM 语义 verifier、逐字审计级事实判定，也不为历史消息反向生成引用。
-- 首版覆盖 COMMON_QA 的知识库检索、`web_search` 与 `web_fetch`；不扩展附件和 SuperAgent 子任务来源。
+- 首版覆盖 COMMON_QA 的知识库检索，以及 COMMON_QA / SUPER_AGENT_QA 主 Agent 直接调用的 `web_search` 与 `web_fetch`；不扩展附件和 SuperAgent 子任务内部来源。
