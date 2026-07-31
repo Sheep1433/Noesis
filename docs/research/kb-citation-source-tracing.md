@@ -285,3 +285,4 @@ Retrieval part 首版仍放在消息快照内，不预先拆表，但必须为�
 ## 10. 状态说明
 
 本文描述的是研究结论和 Proposed 方案，不代表当前代码已经具备引用溯源。实现完成并验收后，应更新 `docs/architecture/knowledge-base.md` 与 `docs/architecture/platform/chat-streaming.md`，而不是把本报告改写成 Current 架构。
+> 状态（2026-08-01）：本文早期推荐的 typed annotation 方案已被后续源码验证否决。当前实现采用 Prompt Markdown citation；现行决策以 `openspec/changes/add-kb-citation-sources/` 和 `docs/architecture/platform/chat-streaming.md` 为准。本文保留为历史调研证据，不再作为实现建议。

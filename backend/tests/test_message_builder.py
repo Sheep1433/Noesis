@@ -3,7 +3,6 @@
 import json
 
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
-from noesis.runtime.evidence import citation_telemetry
 
 
 def _evidence_result(**overrides):
@@ -16,8 +15,6 @@ def _evidence_result(**overrides):
         "excerpt": "验证码发送后 5 分钟内有效。",
         "locator": {"type": "page", "page_start": 3, "page_end": 3},
         "citable": True,
-        "evidence_id": "ev_test_1",
-        "tool_call_ids": ["call-1"],
         **overrides,
     }
 
@@ -59,81 +56,6 @@ def test_append_text_delta_merges_same_parent() -> None:
     assert parts[0]["content"] == "你好！"
 
 
-def test_retrieval_and_typed_segments_project_unicode_offsets() -> None:
-    builder = AssistantMessageBuilder(session_id="s", message_id="m")
-    retrieval = builder.register_retrieval_results(
-        tool_call_id="call-1",
-        query="验证码有效期",
-        results=[_evidence_result()],
-    )
-    evidence_id = retrieval.results[0]["evidence_id"]
-
-    text = builder.apply_typed_segments([
-        {"text": "你好👋\n", "cited_evidence_ids": []},
-        {"text": "有效期为 5 分钟。", "cited_evidence_ids": [evidence_id, evidence_id]},
-    ])
-
-    assert text.content == "你好👋\n有效期为 5 分钟。"
-    assert len(text.annotations) == 1
-    assert text.annotations[0]["start_index"] == len("你好👋\n")
-    assert text.annotations[0]["end_index"] == len(text.content)
-    assert text.annotations[0]["verification"] == "structural"
-
-
-def test_web_retrieval_projects_url_citation() -> None:
-    builder = AssistantMessageBuilder(session_id="s", message_id="m")
-    retrieval = builder.register_retrieval_results(
-        tool_call_id="web-1",
-        query="latest docs",
-        results=[{
-            "source_type": "web",
-            "url": "https://example.com/docs",
-            "title": "Example Docs",
-            "excerpt": "Current documentation.",
-            "citable": True,
-            "evidence_id": "ev_web_1",
-            "tool_call_ids": ["web-1"],
-        }],
-    )
-    text = builder.apply_typed_segments([{
-        "text": "The docs are current.",
-        "cited_evidence_ids": [retrieval.results[0]["evidence_id"]],
-    }])
-    assert text.annotations == [{
-        "type": "url_citation",
-        "citation_id": text.annotations[0]["citation_id"],
-        "evidence_id": "ev_web_1",
-        "start_index": 0,
-        "end_index": len("The docs are current."),
-        "title": "Example Docs",
-        "excerpt": "Current documentation.",
-        "verification": "structural",
-        "url": "https://example.com/docs",
-    }]
-
-
-def test_typed_segments_preserve_markdown_and_explicit_newlines() -> None:
-    builder = AssistantMessageBuilder()
-    text = builder.apply_typed_segments([
-        {"text": "**规则**：", "cited_evidence_ids": []},
-        {"text": "`5 分钟`\n\n", "cited_evidence_ids": []},
-        {"text": "下一段", "cited_evidence_ids": []},
-    ])
-    assert text.content == "**规则**：`5 分钟`\n\n下一段"
-
-
-def test_unknown_typed_binding_does_not_create_annotation() -> None:
-    citation_telemetry.reset()
-    builder = AssistantMessageBuilder()
-    text = builder.apply_typed_segments([
-        {"text": "正常回答", "cited_evidence_ids": ["ev_forged"]},
-    ])
-    assert text.content == "正常回答"
-    assert text.annotations == []
-    assert builder.citation_validation_counts == {"unknown_evidence_id": 1}
-    assert citation_telemetry.snapshot()["binding_rejected_unknown_evidence_id"] == 1
-
-
 def test_retrieval_manifest_survives_snapshot_restore() -> None:
     original = AssistantMessageBuilder()
     retrieval = original.register_retrieval_results(
@@ -141,14 +63,12 @@ def test_retrieval_manifest_survives_snapshot_restore() -> None:
         query="验证码",
         results=[_evidence_result()],
     )
-    evidence_id = retrieval.results[0]["evidence_id"]
-
     restored = AssistantMessageBuilder()
     restored.load_from_content_dict(original.to_dict())
-    text = restored.apply_typed_segments([
-        {"text": "5 分钟", "cited_evidence_ids": [evidence_id]},
-    ])
-    assert [a["evidence_id"] for a in text.annotations] == [evidence_id]
+    restored_retrieval = next(
+        part for part in restored.to_dict()["parts"] if part["type"] == "retrieval"
+    )
+    assert restored_retrieval["results"] == retrieval.results
 
 
 def test_replayed_retrieval_tool_output_updates_same_part() -> None:
@@ -169,7 +89,6 @@ def test_retrieval_capacity_is_deterministic_and_utf8_safe() -> None:
     builder = AssistantMessageBuilder()
     results = [
         _evidence_result(
-            evidence_id=f"ev_{index}",
             segment_id=f"seg_{index}",
             excerpt="中" * 5000,
         )
@@ -182,7 +101,8 @@ def test_retrieval_capacity_is_deterministic_and_utf8_safe() -> None:
     )
     assert len(retrieval.results) == 20
     assert retrieval.truncated is True
-    assert [item["evidence_id"] for item in retrieval.results] == [f"ev_{i}" for i in range(20)]
+    assert len({item["evidence_id"] for item in retrieval.results}) == 20
+    assert all(item["evidence_id"].startswith("ev_") for item in retrieval.results)
     assert all(len(item["excerpt"].encode("utf-8")) <= 8192 for item in retrieval.results)
 
 
@@ -194,7 +114,6 @@ def test_worst_case_retrieval_snapshot_stays_under_assistant_budget() -> None:
             query="容量测试",
             results=[
                 _evidence_result(
-                    evidence_id=f"ev_{call_index}_{index}",
                     segment_id=f"seg_{call_index}_{index}",
                     excerpt="中" * 5000,
                     locator={"type": "header", "path": ["章" * 1500]},

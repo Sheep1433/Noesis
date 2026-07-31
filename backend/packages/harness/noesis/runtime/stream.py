@@ -24,13 +24,6 @@ from noesis.runtime.model_attempt import (
     bind_model_attempt_tracker,
     reset_model_attempt_tracker,
 )
-from noesis.runtime.evidence import (
-    RetrievalManifest,
-    bind_retrieval_manifest,
-    citation_telemetry,
-    normalize_cited_answer,
-    reset_retrieval_manifest,
-)
 
 DEFAULT_RECURSION_LIMIT = 9999
 
@@ -101,9 +94,6 @@ async def stream_agent_events(
 
     attempt_tracker = ModelAttemptTracker()
     tracker_token = bind_model_attempt_tracker(attempt_tracker)
-    retrieval_manifest = RetrievalManifest(run_salt=message_id)
-    retrieval_token = bind_retrieval_manifest(retrieval_manifest)
-    typed_answer_emitted = False
     callbacks = agent_config.get("callbacks")
     tracker_callback = ModelAttemptCallback(attempt_tracker)
     if callbacks is None:
@@ -146,30 +136,9 @@ async def stream_agent_events(
                 hitl_pending = True
                 break
 
-            if not typed_answer_emitted and event.get("event") == "on_chain_end":
-                output = (event.get("data") or {}).get("output")
-                structured = output.get("structured_response") if isinstance(output, dict) else None
-                if structured is not None:
-                    try:
-                        yield normalize_cited_answer(
-                            structured,
-                            manifest=retrieval_manifest,
-                        )
-                        typed_answer_emitted = True
-                        citation_telemetry.increment("structured_binding_success")
-                    except (TypeError, ValueError) as exc:
-                        citation_telemetry.increment("structured_binding_schema_error")
-                        logger.warning(
-                            "structured citation output rejected task_id={} error={}",
-                            task_id,
-                            exc,
-                        )
-
             yield event
 
         if not hitl_pending:
-            if retrieval_manifest.entries() and not typed_answer_emitted:
-                citation_telemetry.increment("plain_text_retrieval_fallback")
             yield {"type": "__tw_finish__", "finish_reason": "stop"}
 
     except Exception as e:
@@ -179,5 +148,4 @@ async def stream_agent_events(
         yield {"type": "__tw_error__", "content": format_agent_stream_error(e)}
         yield {"type": "__tw_finish__", "finish_reason": "error"}
     finally:
-        reset_retrieval_manifest(retrieval_token)
         reset_model_attempt_tracker(tracker_token)

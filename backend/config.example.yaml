@@ -127,10 +127,6 @@ loop_detection:
 
 agent_runtime:
   dangling_tool_call_repair_enabled: true
-  # 仅在 structured-binding spike 全部通过后开启
-  structured_citations_enabled: false
-  structured_citation_models:
-    - mimo-v2.5-free
   tool_call_limit:
     enabled: true
     thread_limit: 200
@@ -138,13 +134,12 @@ agent_runtime:
     exit_behavior: continue
     task_run_limit: 10
 
-citation_limits:
+retrieval_limits:
   max_results_per_call: 20
   max_results_per_run: 100
   max_excerpt_chars: 2000
   max_excerpt_bytes: 8192
   max_locator_bytes: 2048
-  max_assistant_content_bytes: 2097152
 
 stream:
   sse_keepalive_interval_seconds: 25

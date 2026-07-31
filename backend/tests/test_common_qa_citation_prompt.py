@@ -1,44 +1,33 @@
-from types import SimpleNamespace
-
-import noesis.runtime.citation_policy as citation_policy
 from noesis.prompts.common_qa import build_common_qa_prompt
 from noesis.prompts.super_agent import build_super_agent_prompt
 
 
-def test_kb_prompt_requests_typed_binding_without_body_markers() -> None:
+def test_kb_prompt_requests_markdown_references_in_normal_answer() -> None:
     prompt = build_common_qa_prompt(kb_enabled=True)
-    assert "segments[{text,cited_evidence_ids}]" in prompt
-    assert "无依据时使用空数组" in prompt
-    assert "正文不得输出 evidence_id" in prompt
-    assert "[[source:...]]" in prompt
+
+    assert "知识库来源使用简短编号 `[1]`" in prompt
+    assert "### 参考资料" in prompt
+    assert "直接输出正常 Markdown 回答" in prompt
+    assert "不要把最终回答包装成 JSON" in prompt
+    assert "cited_evidence_ids" not in prompt
 
 
 def test_prompt_without_retrieval_does_not_add_citation_protocol() -> None:
     prompt = build_common_qa_prompt(kb_enabled=False, web_enabled=False)
-    assert "cited_evidence_ids" not in prompt
+
+    assert "### 参考资料" not in prompt
 
 
-def test_web_only_prompt_requests_typed_binding() -> None:
+def test_web_prompt_requests_inline_markdown_links() -> None:
     prompt = build_common_qa_prompt(kb_enabled=False, web_enabled=True)
-    assert "segments[{text,cited_evidence_ids}]" in prompt
-    assert "web_search" in prompt
+
+    assert "[来源标题](原始 URL)" in prompt
+    assert "不得编造来源" in prompt
 
 
-def test_super_agent_prompt_requests_typed_binding_without_body_markers() -> None:
+def test_super_agent_uses_same_prompt_citation_contract() -> None:
     prompt = build_super_agent_prompt()
-    assert "segments[{text,cited_evidence_ids}]" in prompt
-    assert "正文不得输出 evidence_id" in prompt
 
-
-def test_structured_citations_are_gated_by_verified_model(monkeypatch) -> None:
-    monkeypatch.setattr(citation_policy, "ModelConfig", SimpleNamespace(
-        structured_citations_enabled=True,
-        structured_citation_models=("mimo-v2.5-free",),
-        model_name="mimo-v2.5-free",
-    ))
-    monkeypatch.setattr(citation_policy, "resolve_catalog_entry", lambda model_id: SimpleNamespace(
-        model_name={"mimo": "mimo-v2.5-free", "flash": "deepseek-v4-flash-free"}[model_id]
-    ))
-    assert citation_policy.structured_citations_enabled(None) is True
-    assert citation_policy.structured_citations_enabled("mimo") is True
-    assert citation_policy.structured_citations_enabled("flash") is False
+    assert "[来源标题](原始 URL)" in prompt
+    assert "### 参考资料" in prompt
+    assert "不要调用用于提交答案的虚拟工具" in prompt

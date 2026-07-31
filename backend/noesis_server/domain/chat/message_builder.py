@@ -21,9 +21,8 @@ from noesis.runtime.evidence import (
     EvidenceEnvelope,
     RetrievalManifest,
     RetrievalManifestEntry,
-    citation_telemetry,
 )
-from noesis.config.env import CitationLimitConfig
+from noesis.config.env import RetrievalLimitConfig
 from noesis.runtime.logging import logger
 from noesis_server.domain.chat.tool_state import (
     ToolState,
@@ -51,7 +50,6 @@ def _part_parent_fields(parent_task_call_id: Optional[str]) -> Dict[str, Any]:
 class TextPart(MessagePart):
     id: str = ""
     content: str = ""
-    annotations: List[Dict[str, Any]] = field(default_factory=list)
     parent_task_call_id: Optional[str] = None
     type: str = "text"
 
@@ -59,8 +57,6 @@ class TextPart(MessagePart):
         out: Dict[str, Any] = {"type": self.type, "content": self.content}
         if self.id:
             out["id"] = self.id
-        if self.annotations:
-            out["annotations"] = [dict(item) for item in self.annotations]
         out.update(_part_parent_fields(self.parent_task_call_id))
         return out
 
@@ -162,13 +158,9 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
     part_type = data.get("type")
     parent = data.get("parent_task_call_id")
     if part_type == "text":
-        annotations = data.get("annotations")
         return TextPart(
             id=str(data.get("id") or ""),
             content=data.get("content", ""),
-            annotations=[dict(item) for item in annotations if isinstance(item, dict)]
-            if isinstance(annotations, list)
-            else [],
             parent_task_call_id=parent,
         )
     if part_type == "reasoning":
@@ -279,28 +271,27 @@ class AssistantMessageBuilder:
         self._tools_by_call_id: Dict[str, ToolPart] = {}
         self._last_tool: Optional[ToolPart] = None
         self._retrieval_manifest = RetrievalManifest(run_salt=message_id or None)
-        self._citation_validation_counts: Dict[str, int] = {}
+        self._retrieval_validation_counts: Dict[str, int] = {}
 
     @staticmethod
     def _new_part_id(prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
-    def _record_citation_rejection(self, reason: str) -> None:
-        self._citation_validation_counts[reason] = (
-            self._citation_validation_counts.get(reason, 0) + 1
+    def _record_retrieval_rejection(self, reason: str) -> None:
+        self._retrieval_validation_counts[reason] = (
+            self._retrieval_validation_counts.get(reason, 0) + 1
         )
-        citation_telemetry.increment(f"binding_rejected_{reason}")
         logger.warning(
-            "citation_binding_rejected reason={} session_id={} message_id={} count={}",
+            "retrieval_result_rejected reason={} session_id={} message_id={} count={}",
             reason,
             self.session_id,
             self.message_id,
-            self._citation_validation_counts[reason],
+            self._retrieval_validation_counts[reason],
         )
 
     @property
-    def citation_validation_counts(self) -> Dict[str, int]:
-        return dict(self._citation_validation_counts)
+    def retrieval_validation_counts(self) -> Dict[str, int]:
+        return dict(self._retrieval_validation_counts)
 
     def append_text(
         self,
@@ -354,18 +345,18 @@ class AssistantMessageBuilder:
     ) -> RetrievalPart:
         """登记 retrieval tool evidence，并持久化独立 retrieval part。"""
         registered: List[Dict[str, Any]] = []
-        capacity_truncated = len(results) > CitationLimitConfig.max_results_per_call
-        for raw in results[:CitationLimitConfig.max_results_per_call]:
+        capacity_truncated = len(results) > RetrievalLimitConfig.max_results_per_call
+        for raw in results[:RetrievalLimitConfig.max_results_per_call]:
             if not isinstance(raw, dict) or not raw.get("citable", True):
                 continue
             try:
                 excerpt, excerpt_truncated = self._truncate_utf8(
                     str(raw.get("excerpt") or ""),
-                    max_chars=CitationLimitConfig.max_excerpt_chars,
-                    max_bytes=CitationLimitConfig.max_excerpt_bytes,
+                    max_chars=RetrievalLimitConfig.max_excerpt_chars,
+                    max_bytes=RetrievalLimitConfig.max_excerpt_bytes,
                 )
                 locator = raw.get("locator")
-                if locator is not None and len(json.dumps(locator, ensure_ascii=False).encode("utf-8")) > CitationLimitConfig.max_locator_bytes:
+                if locator is not None and len(json.dumps(locator, ensure_ascii=False).encode("utf-8")) > RetrievalLimitConfig.max_locator_bytes:
                     locator = None
                     capacity_truncated = True
                 capacity_truncated = capacity_truncated or excerpt_truncated
@@ -385,25 +376,15 @@ class AssistantMessageBuilder:
                     "search_mode": raw.get("search_mode"),
                 })
             except (TypeError, ValueError):
-                self._record_citation_rejection("invalid_evidence_envelope")
-                continue
-            raw_evidence_id = str(raw.get("evidence_id") or "")
-            if not raw_evidence_id:
-                self._record_citation_rejection("missing_evidence_id")
+                self._record_retrieval_rejection("invalid_evidence_envelope")
                 continue
             if (
-                self._retrieval_manifest.get(raw_evidence_id) is None
-                and len(self._retrieval_manifest.entries()) >= CitationLimitConfig.max_results_per_run
+                self._retrieval_manifest.get_by_envelope(envelope) is None
+                and len(self._retrieval_manifest.entries()) >= RetrievalLimitConfig.max_results_per_run
             ):
                 capacity_truncated = True
                 continue
-            entry = self._retrieval_manifest.ingest(
-                RetrievalManifestEntry(
-                    **envelope.model_dump(),
-                    evidence_id=raw_evidence_id,
-                    tool_call_ids=[str(item) for item in raw.get("tool_call_ids") or [tool_call_id] if item],
-                )
-            )
+            entry = self._retrieval_manifest.register(envelope, tool_call_id=tool_call_id)
             registered.append(entry.model_dump(mode="json"))
         existing_part = next(
             (
@@ -449,149 +430,6 @@ class AssistantMessageBuilder:
             except UnicodeDecodeError:
                 clipped = clipped[:-1]
         return "", True
-
-    def apply_typed_segments(
-        self,
-        segments: List[Dict[str, Any]],
-        *,
-        part_id: Optional[str] = None,
-    ) -> TextPart:
-        """零分隔符拼接 typed segments，并投影通过 membership 校验的 annotations。"""
-        text_part = self.append_text("", part_id=part_id)
-        for raw in segments:
-            self.append_typed_segment(raw, text_part=text_part)
-        return text_part
-
-    def append_typed_segment(
-        self,
-        raw: Dict[str, Any],
-        *,
-        text_part: Optional[TextPart] = None,
-        part_id: Optional[str] = None,
-    ) -> TextPart:
-        target = text_part
-        if target is None and part_id:
-            target = next(
-                (
-                    part for part in self._content.parts
-                    if isinstance(part, TextPart) and part.id == part_id
-                ),
-                None,
-            )
-        target = target or self.append_text("", part_id=part_id)
-        text = str(raw.get("text") or "")
-        if not text:
-            self._record_citation_rejection("empty_segment")
-            return target
-        start = len(target.content)
-        target.content += text
-        end = len(target.content)
-        seen = {
-            (item.get("evidence_id"), item.get("start_index"), item.get("end_index"))
-            for item in target.annotations
-        }
-        for evidence_id in raw.get("cited_evidence_ids") or []:
-            entry = self._retrieval_manifest.get(str(evidence_id))
-            if entry is None:
-                self._record_citation_rejection("unknown_evidence_id")
-                continue
-            key = (entry.evidence_id, start, end)
-            if key in seen:
-                self._record_citation_rejection("duplicate_binding")
-                continue
-            seen.add(key)
-            target.annotations.append(
-                self._citation_annotation(entry, start_index=start, end_index=end)
-            )
-        return target
-
-    def append_text_annotation(
-        self,
-        text_part_id: str,
-        annotation: Dict[str, Any],
-    ) -> bool:
-        """将已由 SSE bridge 校验的 annotation 重放进 durable builder。"""
-        target = next(
-            (
-                part
-                for part in self._content.parts
-                if isinstance(part, TextPart) and part.id == text_part_id
-            ),
-            None,
-        )
-        if target is None:
-            self._record_citation_rejection("unknown_text_part")
-            return False
-        evidence_id = str(annotation.get("evidence_id") or "")
-        entry = self._retrieval_manifest.get(evidence_id)
-        if entry is None:
-            self._record_citation_rejection("unknown_evidence_id")
-            return False
-        start = annotation.get("start_index")
-        end = annotation.get("end_index")
-        if (
-            not isinstance(start, int)
-            or isinstance(start, bool)
-            or not isinstance(end, int)
-            or isinstance(end, bool)
-            or start < 0
-            or end <= start
-            or end > len(target.content)
-        ):
-            self._record_citation_rejection("invalid_offset")
-            return False
-        citation_id = str(annotation.get("citation_id") or "")
-        if not citation_id:
-            self._record_citation_rejection("missing_citation_id")
-            return False
-        duplicate = next(
-            (
-                item
-                for item in target.annotations
-                if item.get("citation_id") == citation_id
-                or (
-                    item.get("evidence_id") == evidence_id
-                    and item.get("start_index") == start
-                    and item.get("end_index") == end
-                )
-            ),
-            None,
-        )
-        if duplicate is not None:
-            return True
-        restored = self._citation_annotation(entry, start_index=start, end_index=end)
-        restored["citation_id"] = citation_id
-        target.annotations.append(restored)
-        return True
-
-    def _citation_annotation(
-        self,
-        entry: RetrievalManifestEntry,
-        *,
-        start_index: int,
-        end_index: int,
-    ) -> Dict[str, Any]:
-        base = {
-            "type": "url_citation" if entry.source_type == "web" else "kb_citation",
-            "citation_id": self._new_part_id("cit"),
-            "evidence_id": entry.evidence_id,
-            "start_index": start_index,
-            "end_index": end_index,
-            "title": entry.title,
-            "excerpt": entry.excerpt,
-            "verification": "structural",
-        }
-        if entry.source_type == "web":
-            base["url"] = entry.url
-        else:
-            base.update({
-                "collection_name": entry.collection_name,
-                "document_id": entry.document_id,
-                "document_version_id": entry.document_version_id,
-                "segment_id": entry.segment_id,
-                "locator": entry.locator.model_dump(mode="json") if entry.locator else None,
-            })
-        return base
 
     def append_reasoning(self, reasoning: str, parent_task_call_id: Optional[str] = None) -> None:
         self._content.parts.append(
@@ -693,7 +531,7 @@ class AssistantMessageBuilder:
         self._content = MessageContent.from_dict(data or {"parts": []})
         self._tools_by_call_id = {}
         self._last_tool = None
-        self._citation_validation_counts = {}
+        self._retrieval_validation_counts = {}
         self._retrieval_manifest = RetrievalManifest(run_salt=self.message_id or None)
         for part in self._content.parts:
             if not isinstance(part, RetrievalPart):

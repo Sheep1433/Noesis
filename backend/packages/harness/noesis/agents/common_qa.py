@@ -7,7 +7,6 @@ import asyncio
 import uuid
 from typing import Any, AsyncGenerator, List, Optional
 
-from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,8 +17,6 @@ from noesis.prompts import PromptProfile, build_prompt
 from noesis.tools import build_kb_search_tools, build_web_search_tools, list_qdrant_collection_names
 from noesis.tools.chat_attachment_tools import build_attachment_tools
 from noesis.config.env import ChatAttachmentConfig, ModelConfig
-from noesis.runtime.citation_policy import structured_citations_enabled
-from noesis.runtime.evidence import CitedAnswer
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.logging import logger
 
@@ -125,11 +122,6 @@ class GeneralQAAgent(BaseAgent):
                 checkpointer=self.checkpointer,
                 extra_middleware=extra_middleware,
                 model_id=model_id,
-                **(
-                    {"response_format": ToolStrategy(CitedAnswer)}
-                    if (kb_enabled or web_tools) and structured_citations_enabled(model_id)
-                    else {}
-                ),
             )
 
             human_kwargs = {}
