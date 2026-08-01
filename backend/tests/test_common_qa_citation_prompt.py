@@ -7,6 +7,8 @@ def test_kb_prompt_requests_markdown_references_in_normal_answer() -> None:
 
     assert "知识库来源使用简短编号 `[1]`" in prompt
     assert "### 参考资料" in prompt
+    assert "必须逐字复制工具结果提供的值" in prompt
+    assert "不得改写、翻译、省略扩展名" in prompt
     assert "直接输出正常 Markdown 回答" in prompt
     assert "不要把最终回答包装成 JSON" in prompt
     assert "cited_evidence_ids" not in prompt

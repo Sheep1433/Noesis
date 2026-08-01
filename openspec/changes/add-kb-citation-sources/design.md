@@ -61,6 +61,7 @@ COMMON_QA 与 SuperAgent 共用一份 citation extension：
 | 模型遗漏引用 | 正文照常完成；retrieval results 仍可查看，评测记录引用覆盖率 |
 | 模型编造 URL | Prompt 明确禁止；集成评测判失败，不由平台猜测修复 |
 | 工具无来源字段 | 不添加引用并说明依据不足 |
+| 旧 Collection 缺少 document/version/segment identity | 命中标记为不可引用；重新入库生成身份，不增加历史兼容分支 |
 | SSE 断连 | 后台继续生成并落库普通 Markdown；刷新读取权威快照 |
 | provider 不支持 JSON schema | 不受影响，因为引用不使用 structured output |
 

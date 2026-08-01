@@ -117,3 +117,4 @@ def test_super_agent_web_answer_uses_markdown_citation(
     assert any(part.get("type") == "retrieval" for part in parts), "终态消息丢失 retrieval part"
     text = "".join(part.get("content", "") for part in parts if part.get("type") == "text")
     assert re.search(citation_pattern, text), f"终态消息缺少目标 Markdown 引用: {text}"
+    assert text == events.text, "Web 引用的流式正文与终态消息不一致"

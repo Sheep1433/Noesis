@@ -56,6 +56,8 @@ upload
 
 知识库不把整篇文档直接灌入 prompt。Agent 根据问题选择 collection、改写 query、评估检索结果并决定是否再次检索。检索工具向 Agent 提供文件名、Collection、excerpt 和可用 locator；Agent 按共享 system prompt 在普通 Markdown 正文中生成编号引用和参考资料列表。平台另外保存 retrieval part 供结果折叠、刷新恢复和调试，但不把所有检索结果自动认定为正文引用。
 
+引用要求命中 payload 含 `document_id`、`document_version_id` 和 `segment_id`。旧版本入库的 Collection 没有这些字段时，命中仍可供 Agent 阅读，但不会进入可引用 retrieval results；需通过当前入库管线重新上传文档，不执行运行时猜测或历史数据兼容。
+
 ## 7. API
 
 正式前缀为 `/api/knowledge_base`，包括：
