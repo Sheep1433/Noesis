@@ -1,5 +1,4 @@
 <script lang="ts" setup>
-import type { KbCitationAnnotation } from '@/views/chat/messageParts'
 import { computed, onMounted, ref, watch } from 'vue'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
@@ -7,7 +6,6 @@ import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { useMermaidRender } from '@/hooks/useMermaidRender'
 import { TASK_TOOL_NAME } from '@/utils/parseTaskTool'
 import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
-import { injectCitationMarkers } from '@/views/chat/citationRendering'
 import MarkdownInstance from './plugins/markdown'
 
 interface Props {
@@ -22,7 +20,6 @@ interface Props {
   variant?: 'full' | 'segment'
   /** 底部工具栏左侧问答类型角标 */
   qaType?: string
-  annotations?: KbCitationAnnotation[]
 }
 
 interface Emits {
@@ -31,7 +28,6 @@ interface Emits {
   (e: 'recycleQa'): void
   (e: 'praiseFeadBack'): void
   (e: 'belittleFeedback'): void
-  (e: 'citationClick', citationId: string): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -42,7 +38,6 @@ const props = withDefaults(defineProps<Props>(), {
   showActionBar: true,
   variant: 'full',
   qaType: 'COMMON_QA',
-  annotations: () => [],
 })
 
 const emit = defineEmits<Emits>()
@@ -65,7 +60,7 @@ watch(
 )
 
 const renderedMarkdown = computed(() => {
-  return MarkdownInstance.render(injectCitationMarkers(displayText.value, props.annotations))
+  return MarkdownInstance.render(displayText.value)
 })
 
 const renderedContent = computed(() => {
@@ -84,14 +79,6 @@ const onCompleted = () => {
 const praiseFeedback = () => emit('praiseFeadBack')
 const belittleFeedback = () => emit('belittleFeedback')
 const handleRecycleAquestion = () => emit('recycleQa')
-
-const handleMarkdownClick = (event: MouseEvent) => {
-  const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('.kb-citation-marker')
-  const raw = target?.dataset.citationId
-  if (raw) {
-    emit('citationClick', decodeURIComponent(raw))
-  }
-}
 
 onMounted(() => {
   // segment 由父级 SSE 控制整轮加载态；挂载即有 content 不代表流结束
@@ -136,7 +123,6 @@ onMounted(() => {
             ref="markdownContentRef"
             class="markdown-wrapper"
             :class="{ 'markdown-wrapper--segment': variant === 'segment' }"
-            @click="handleMarkdownClick"
             v-html="renderedContent"
           ></div>
 
@@ -286,19 +272,6 @@ onMounted(() => {
     margin: 16px 0;
     overflow-x: auto;
   }
-}
-
-:deep(.kb-citation-marker) {
-  margin: 0 2px;
-  padding: 0 5px;
-  border: 0;
-  border-radius: 999px;
-  color: var(--primary-color);
-  background: color-mix(in srgb, var(--primary-color) 12%, transparent);
-  font-size: 11px;
-  line-height: 18px;
-  vertical-align: super;
-  cursor: pointer;
 }
 
 .markdown-wrapper.markdown-wrapper--segment {

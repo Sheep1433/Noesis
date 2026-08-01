@@ -132,8 +132,6 @@ class ModelSettings:
     tool_call_limit_run_limit: int | None
     tool_call_limit_exit_behavior: str
     tool_call_limit_task_run_limit: int | None
-    structured_citations_enabled: bool
-    structured_citation_models: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -161,13 +159,12 @@ class StreamSettings:
 
 
 @dataclass(frozen=True)
-class CitationLimitSettings:
+class RetrievalLimitSettings:
     max_results_per_call: int
     max_results_per_run: int
     max_excerpt_chars: int
     max_excerpt_bytes: int
     max_locator_bytes: int
-    max_assistant_content_bytes: int
 
 
 @dataclass(frozen=True)
@@ -445,17 +442,6 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
             )
             or None
         ),
-        structured_citations_enabled=_legacy_env_bool(
-            "STRUCTURED_CITATIONS_ENABLED", runtime.structured_citations_enabled
-        ),
-        structured_citation_models=tuple(
-            item.strip()
-            for item in _legacy_env(
-                "STRUCTURED_CITATION_MODELS",
-                ",".join(runtime.structured_citation_models),
-            ).split(",")
-            if item.strip()
-        ),
     )
 
 
@@ -487,15 +473,14 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
     )
 
 
-def _build_citation_limits(yaml_cfg: AppYamlConfig) -> CitationLimitSettings:
-    limits = yaml_cfg.citation_limits
-    return CitationLimitSettings(
+def _build_retrieval_limits(yaml_cfg: AppYamlConfig) -> RetrievalLimitSettings:
+    limits = yaml_cfg.retrieval_limits
+    return RetrievalLimitSettings(
         max_results_per_call=limits.max_results_per_call,
         max_results_per_run=limits.max_results_per_run,
         max_excerpt_chars=limits.max_excerpt_chars,
         max_excerpt_bytes=limits.max_excerpt_bytes,
         max_locator_bytes=limits.max_locator_bytes,
-        max_assistant_content_bytes=limits.max_assistant_content_bytes,
     )
 
 
@@ -717,8 +702,8 @@ class GetConfig:
         return _build_stream(self._yaml)
 
     @lru_cache
-    def get_citation_limit_config(self) -> CitationLimitSettings:
-        return _build_citation_limits(self._yaml)
+    def get_retrieval_limit_config(self) -> RetrievalLimitSettings:
+        return _build_retrieval_limits(self._yaml)
 
     @lru_cache
     def get_langfuse_config(self) -> LangfuseSettings:
@@ -793,7 +778,7 @@ ModelConfig = get_config.get_model_config()
 OtherConfig = get_config.get_other_config()
 QdrantConfig = get_config.get_qdrant_config()
 StreamConfig = get_config.get_stream_config()
-CitationLimitConfig = get_config.get_citation_limit_config()
+RetrievalLimitConfig = get_config.get_retrieval_limit_config()
 LangfuseConfig = get_config.get_langfuse_config()
 SkillsMarketConfig = get_config.get_skills_market_config()
 WebToolsConfig = get_config.get_web_tools_config()

@@ -46,7 +46,6 @@ _TOOL_EXIT_PROTOCOL_RE = re.compile(
 )
 _TOOL_INPUT_MAX = 65536
 TASK_TOOL_NAME = "task"
-STRUCTURED_OUTPUT_TOOL_NAMES = frozenset({"CitedAnswer"})
 _OMIT_NON_JSON_TOOL_INPUT = object()
 
 
@@ -726,50 +725,6 @@ class LangGraphSseBridge:
                 self._emit_text_delta(delta, out)
             return
 
-        if t == "typed-answer-segments":
-            segments = item.get("segments")
-            if builder is None or not isinstance(segments, list):
-                return
-            part_id = _new_id("part-text")
-            text_part = builder.apply_typed_segments(
-                [segment for segment in segments if isinstance(segment, dict)],
-                part_id=part_id,
-            )
-            if text_part.content:
-                self._emit_text_delta(text_part.content, out, part_id=part_id)
-                self._close_text(out, record_checkpoint=False)
-            for annotation in text_part.annotations:
-                out.append(_format_sse("text-annotation-added", {
-                    "type": "text-annotation-added",
-                    "message_id": self.assistant_message_id,
-                    "text_part_id": part_id,
-                    "annotation": annotation,
-                }))
-            self._persist_tick = True
-            return
-        if t == "typed-answer-segment":
-            segment = item.get("segment")
-            if builder is None or not isinstance(segment, dict):
-                return
-            text = str(segment.get("text") or "")
-            if not text:
-                return
-            part_id = self._current_text_part_id or _new_id("part-text")
-            self._emit_text_delta(text, out, part_id=part_id)
-            text_part = builder.append_typed_segment(segment, part_id=part_id)
-            start = len(text_part.content) - len(text)
-            for annotation in text_part.annotations:
-                if annotation["start_index"] != start:
-                    continue
-                out.append(_format_sse("text-annotation-added", {
-                    "type": "text-annotation-added",
-                    "message_id": self.assistant_message_id,
-                    "text_part_id": part_id,
-                    "annotation": annotation,
-                }))
-            self._persist_tick = True
-            return
-
         if t == "finish":
             payload = dict(item)
             payload.setdefault("type", "finish")
@@ -968,8 +923,6 @@ class LangGraphSseBridge:
 
     def _on_tool_start(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                        ctx: Dict[str, Any], out: List[str]) -> None:
-        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
-            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
@@ -1039,8 +992,6 @@ class LangGraphSseBridge:
 
     def _on_tool_end(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                      ctx: Dict[str, Any], out: List[str]) -> None:
-        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
-            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
@@ -1145,8 +1096,6 @@ class LangGraphSseBridge:
 
     def _on_tool_error(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                        ctx: Dict[str, Any], out: List[str]) -> None:
-        if str(item.get("name") or "") in STRUCTURED_OUTPUT_TOOL_NAMES:
-            return
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)

@@ -205,13 +205,6 @@ class RunProjection:
                         results=[item for item in results if isinstance(item, dict)],
                         truncated=bool(data.get("truncated")),
                     )
-            elif event.event == "text-annotation-added":
-                annotation = data.get("annotation")
-                if isinstance(annotation, dict):
-                    self.builder.append_text_annotation(
-                        str(data.get("text_part_id") or ""),
-                        annotation,
-                    )
             elif event.event == "run-status":
                 status = str(data.get("status") or "")
                 event_attempt_id = int(data.get("attempt_id") or self.attempt_id)

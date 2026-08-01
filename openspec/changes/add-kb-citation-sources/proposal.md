@@ -1,49 +1,32 @@
 ## Why
 
-知识库问答当前只能展示工具输出，不能回答“这段答案具体依据哪份文档”。现有 change 预设了 `[[source:...]]`、SourcesPart 和前端 marker 解析，但这会把引用身份塞进自然语言，并重复实现 OpenAI Responses 已验证的 typed annotation 机制。
+Noesis 需要在知识库问答和深度研究回答中展示来源，但不同模型对 structured output、虚拟 Tool 和长答案 JSON schema 的兼容性不稳定，并会破坏正常 token streaming。Qwen-Agent、AgentScope Deep Research 和 MS-Agent 的源码调研表明，成熟的通用路线是保留检索来源元数据，同时通过 system prompt 要求模型在普通 Markdown 正文中生成引用。
 
-本变更忽略 Noesis 旧的引用预埋设计，以 `docs/research/kb-citation-source-tracing.md` 中的 OpenAI 形态为产品与协议基线：**答案引用与检索结果分层、引用作为 text annotation、流式文本与 annotation 分事件交付**。Noesis 只实现自建知识库无法由 OpenAI 托管能力代替的部分：证据身份、持久化、权限回查和校验。
+本变更采用 Prompt citation：不修改 `create_agent` 的回答协议，不为引用设置 `response_format`，不把最终答案提交为虚拟 Tool，也不再维护正文 offset annotation。
 
 ## What Changes
 
-- assistant 正文继续使用 `text` part，但新增 typed `annotations[]`；知识库引用使用 `type=kb_citation`，不在正文中插入 `[[source:...]]`、`[ID:n]` 等 marker。
-- 新增独立 `retrieval` part，保存工具本轮返回的 retrieval manifest。`text.annotations` 是 cited 子集，`retrieval.results` 是 retrieved 集合，两者不得混用。
-- GeneralQAAgent 与 SuperAgent 主 Agent 以结构化回答片段绑定本轮局部 evidence id；平台校验后投影为正文 offset annotation。若当前模型无法稳定输出结构化绑定，则该轮不生成 cited annotation，禁止回退到 marker 或 Top-K 冒充引用。
-- `evidence_id` 由 run 级 retrieval manifest 统一分配；KB 工具只提供稳定的 document/version/segment identity，避免多次或并行工具调用各自从 `S1` 开始造成冲突。
-- SSE 对齐 OpenAI Responses 的事件分层：沿用 `text-delta`，新增 `text-annotation-added`；检索结果经独立 `retrieval-results-available` 事件交付。终态消息快照为权威来源。
-- 引用定位采用 `document_id + document_version_id + segment_id`，并可附 page/char/bbox/header 等 locator；数组序号、chunk index 和 Qdrant point id 不承担长期公开身份。
-- 新增 message-scoped citation resolve API，点击引用时重新校验 message ownership 与知识库权限，仅返回最小必要 excerpt/viewer 信息。
-- UI 默认只显示 cited annotations；retrieved-only 结果仅在折叠的“本轮检索结果”中展示。
-- 为 retrieval manifest、excerpt、locator 与消息快照建立可配置硬上限；超限时确定性截断并记录观测，不允许消息体无界增长。
+- COMMON_QA 和 SUPER_AGENT_QA 共用引用 Prompt：Web 来源输出 `[标题](原始 URL)`；KB 来源使用 `[n]`，并在文末 `### 参考资料` 中列出文件名、Collection 和可用定位信息。
+- Agent 始终输出普通 Markdown，沿用现有 token streaming、消息落库与历史加载链路。
+- 检索工具继续保留稳定 source metadata 和独立 retrieval part，供折叠查看与调试；retrieved 不自动等于 cited。
+- 删除 `CitedAnswer`、provider allowlist、structured response adapter、typed answer events、text annotations、citation resolve API 和前端 offset marker 注入。
+- 前端通过现有 Markdown renderer 展示模型输出的引用；Web 链接遵守外链安全策略。
 
 ## Capabilities
 
 ### New Capabilities
 
-- `chat-kb-sources`: 规定 OpenAI-style text annotations、retrieval manifest、引用校验、回源和展示行为。
+- `chat-kb-sources`: 规定 Prompt Markdown citation、来源元数据和检索结果展示行为。
 
 ### Modified Capabilities
 
-- `knowledge-base`: 检索结果 SHALL 提供稳定的文档、版本、分段身份与可解析 locator。
-- `agent-profiles`: COMMON_QA 与 SUPER_AGENT_QA 主 Agent SHALL 产出结构化 answer-to-evidence binding，不输出引用 marker。
-- `platform-chat`: text part、消息持久化与 `/api/chat` SSE SHALL 支持 annotation patch 和独立 retrieval results。
-
-## Impact
-
-| 区域 | 影响 |
-|------|------|
-| Harness | KB tool 返回结构化 evidence；模型侧增加 typed answer binding 适配，不依赖平台消息模型 |
-| 平台 | builder 校验 binding 并写入 text annotations；独立持久化 retrieval part；Delivery 投递 annotation/retrieval 事件 |
-| KB | 补正式 document/version/segment identity 与受控 resolve 能力 |
-| 前端 | 按 annotation offset 渲染可点击角标；retrieval results 作为独立折叠区 |
-| 安全 | 回源时重新验证 message、session、collection/document 权限，不信任客户端 locator |
-| 兼容 | 新字段与 SSE 事件均为增量扩展；旧客户端忽略 annotations/retrieval 后仍可显示纯文本 |
-
-启用门禁：COMMON_QA 与 SUPER_AGENT_QA citation 只有在目标 provider 通过固定样本 structured binding spike 后才能启用。未通过时保留纯文本回答与 retrieved-only results；这属于受控降级，不重新引入正文 marker。
+- `knowledge-base`: 检索结果提供文件名、Collection、URL 和可用 locator，供模型生成引用。
+- `agent-profiles`: COMMON_QA 与 SUPER_AGENT_QA 使用同一 Prompt citation 约束，保持正常文本回答。
+- `platform-chat`: 持久化普通 Markdown text 和独立 retrieval results，不增加 citation 专用流式协议。
 
 ## Non-Goals
 
-- 不接入或依赖 OpenAI 托管 File Search；“OpenAI 形态”指输出对象与事件语义，不是复制其托管存储。
-- 不保留旧 `source_ref`、`[[source:...]]`、SourcesPart 或数字 marker 兼容路线。
-- 首版不承诺独立 LLM 语义 verifier、逐字审计级事实判定，也不为历史消息反向生成引用。
-- 首版覆盖 COMMON_QA 的知识库检索，以及 COMMON_QA / SUPER_AGENT_QA 主 Agent 直接调用的 `web_search` 与 `web_fetch`；不扩展附件和 SuperAgent 子任务内部来源。
+- 不承诺程序化 claim-to-source 绑定、语义 verifier 或引用正确率 100%。
+- 不从 Top-K 自动生成“答案依据”。
+- 不为 KB 编造可点击 URL；没有安全文档链接时使用编号和参考资料列表。
+- 不保留 typed citation、annotation 或 citation resolve API 的历史兼容实现。

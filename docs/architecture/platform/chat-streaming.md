@@ -29,7 +29,6 @@ PersistSink、每个 SseDelivery 和 ChannelDelivery 都使用独立的有界 su
 - `text-start` / `text-delta` / `text-end`
 - `tool-call-start` / `tool-input-available` / `tool-output-available`
 - `retrieval-results-available`
-- `text-annotation-added`
 - `usage-update` / `context-update` / `token-details`
 - `hitl-required`
 - `error` / `finish-step` / `finish` / `[DONE]`
@@ -55,7 +54,7 @@ streaming skeleton
 - `tool`
 - `retrieval`：本轮知识库或 Web 检索工具返回的候选 evidence；不等价于正文已引用来源
 
-顶层 `text` part 可带 `annotations[]`。知识库 citation 使用所属 text part 的 Unicode code point 左闭右开 offset。正文仍由 `text-delta` 交付，引用由独立的 `text-annotation-added` patch 交付，marker 不进入正文。
+引用由 Agent 按 system prompt 直接生成在普通 Markdown `text` part 中，经既有 `text-delta` 交付。平台不维护 citation annotation、offset 或专用引用事件。
 
 检索完成后的顺序为：
 
@@ -64,13 +63,10 @@ tool-output-available
   → retrieval-results-available
   → text-delta
   → text-end
-  → optional terminal text-annotation-added
   → finish
 ```
 
-支持 completed segment streaming 的 provider 可以在 `text-end` 前交付 annotation。只能终态返回 typed answer 的 provider 可以在 `text-end` 后交付，但必须早于 `finish` 和终态持久化。只有通过配置门禁的模型才为 COMMON_QA 和 SUPER_AGENT_QA 主 Agent 启用 typed binding；其它模型只交付普通正文与 retrieval results，不推断 citation。
-
-`RunProjection` 必须消费 retrieval 与 annotation WireFrame，并写入自己的 authoritative builder。Bridge builder 只负责把 LangGraph 事件转换为实时协议，不能作为 durable snapshot 的唯一来源。`text-delta.part_id` 与 `text-annotation-added.text_part_id` 必须一致，否则投影应拒绝 annotation 并记录结构校验失败。
+`RunProjection` 必须消费 retrieval WireFrame，并与普通 `text-delta` 一起写入 authoritative builder。Bridge builder 只负责把 LangGraph 事件转换为实时协议，不能作为 durable snapshot 的唯一来源。
 
 ## 4. 工具结果
 
@@ -93,7 +89,7 @@ tool-output-available
 - 用户停止通过 `POST /api/chat/runs/{run_id}/stop` 取消，PersistSink 写 `partial`。
 - 客户端断连只移除该 subscriber，不取消 producer 或其它 subscriber。
 - HITL resume 必须继续同一 run/message 身份，禁止新建第二条 assistant。
-- HITL resume 同时恢复 retrieval manifest 的 run salt、evidence namespace 和已登记结果；citation 按 `citation_id` 去重。
+- HITL resume 同时恢复 retrieval manifest 的 run salt、evidence namespace 和已登记结果；retrieval evidence 按稳定 identity 去重。
 - HITL resume 或 snapshot 重放遇到相同 `tool_call_id` 时更新原工具块，禁止重复追加。
 - 审批面板按 session/run 绑定；切换会话只显示当前 session 的 pending 审批，多会话互不覆盖。
 - `[DONE]` 是整个 Run 的客户端传输结束标记，不是服务端落库条件；HITL 暂停只结束

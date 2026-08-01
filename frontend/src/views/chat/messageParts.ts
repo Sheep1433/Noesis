@@ -12,28 +12,11 @@ export type ToolLifecycleState =
   | 'rejected'
   | 'cancelled'
 
-export interface KbCitationAnnotation {
-  type: 'kb_citation' | 'url_citation'
-  citation_id: string
-  evidence_id?: string
-  start_index: number
-  end_index: number
-  document_id?: string
-  document_version_id?: string
-  segment_id?: string
-  url?: string
-  title: string
-  excerpt: string
-  locator?: Record<string, unknown> | null
-  verification: 'structural' | string
-}
-
 export interface TextUiPart {
   id: string
   type: 'text'
   content: string
   status?: string
-  annotations?: KbCitationAnnotation[]
   parent_task_call_id?: string
 }
 
@@ -319,40 +302,11 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
       return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
     })()
     if (rec.type === 'text') {
-      const annotations = Array.isArray(rec.annotations)
-        ? rec.annotations.flatMap((raw): KbCitationAnnotation[] => {
-            if (!raw || typeof raw !== 'object') {
-              return []
-            }
-            const item = raw as Record<string, unknown>
-            const start = Number(item.start_index)
-            const end = Number(item.end_index)
-            if (!['kb_citation', 'url_citation'].includes(String(item.type)) || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) {
-              return []
-            }
-            return [{
-              type: item.type as 'kb_citation' | 'url_citation',
-              citation_id: String(item.citation_id ?? ''),
-              evidence_id: typeof item.evidence_id === 'string' ? item.evidence_id : undefined,
-              start_index: start,
-              end_index: end,
-              document_id: String(item.document_id ?? ''),
-              document_version_id: String(item.document_version_id ?? ''),
-              segment_id: String(item.segment_id ?? ''),
-              url: typeof item.url === 'string' ? item.url : undefined,
-              title: String(item.title ?? ''),
-              excerpt: String(item.excerpt ?? ''),
-              locator: item.locator && typeof item.locator === 'object' ? item.locator as Record<string, unknown> : null,
-              verification: String(item.verification ?? 'structural'),
-            }]
-          })
-        : undefined
       parts.push({
         id,
         type: 'text',
         content: String(rec.content ?? ''),
         status: String(rec.status || 'completed'),
-        ...(annotations?.length ? { annotations } : {}),
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
       })
     } else if (rec.type === 'reasoning') {
@@ -477,36 +431,6 @@ export function syncLegacyFieldsFromParts(parts: UiPart[]): { content: string, r
     }
   }
   return { content, reasoning: reasoning || undefined }
-}
-
-export function appendTextAnnotation(
-  parts: UiPart[],
-  annotation: Record<string, unknown>,
-): UiPart[] {
-  const normalized = normalizeApiContent({
-    parts: [{ type: 'text', content: 'x'.repeat(Math.max(1, Number(annotation.end_index) || 1)), annotations: [annotation] }],
-  }).parts[0]
-  if (!normalized || normalized.type !== 'text' || !normalized.annotations?.length) {
-    return parts
-  }
-  const next = parts.map((part) => ({ ...part })) as UiPart[]
-  for (let i = next.length - 1; i >= 0; i--) {
-    const part = next[i]
-    if (part.type !== 'text' || part.parent_task_call_id) {
-      continue
-    }
-    const item = normalized.annotations[0]
-    if (item.end_index > part.content.length) {
-      return parts
-    }
-    const existing = part.annotations ?? []
-    if (existing.some((value) => value.citation_id === item.citation_id)) {
-      return parts
-    }
-    next[i] = { ...part, annotations: [...existing, item] }
-    return next
-  }
-  return parts
 }
 
 export function appendRetrievalPart(parts: UiPart[], raw: Record<string, unknown>): UiPart[] {

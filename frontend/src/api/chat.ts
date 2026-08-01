@@ -38,24 +38,6 @@ export interface MessageMetadata {
   error?: string
 }
 
-export interface CitationResolveResponse {
-  citation_id: string
-  message_id: string
-  title: string
-  excerpt: string
-  url?: string
-  locator?: Record<string, unknown> | null
-  verification: string
-  snapshot_excerpt?: string
-}
-
-export async function resolveMessageCitation(messageId: string, citationId: string): Promise<CitationResolveResponse> {
-  const res = await authFetch(
-    `/api/chat/messages/${encodeURIComponent(messageId)}/citations/${encodeURIComponent(citationId)}`,
-  )
-  return parseAuthJson<CitationResolveResponse>(res)
-}
-
 /** 会话响应 */
 export interface ChatSessionResponse {
   id: string

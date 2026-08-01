@@ -11,7 +11,6 @@ from noesis.tools.kb_search_tool import (
     search_knowledge_bases_all,
 )
 import noesis.tools.kb_search_tool as kb_search_tool_module
-from noesis.runtime.evidence import RetrievalManifest, bind_retrieval_manifest, reset_retrieval_manifest
 from noesis_server.kb.retrieval import KbSearchHit, KbSearchResult, KbSearchTiming
 
 
@@ -69,18 +68,13 @@ def test_search_all_collections_hybrid_and_merge(
 
     mock_search.side_effect = _side_effect
 
-    token = bind_retrieval_manifest(RetrievalManifest(run_salt="test-run"))
-    try:
-        raw = search_knowledge_bases_all("如何登录", limit=5, tool_call_id="call-search")
-    finally:
-        reset_retrieval_manifest(token)
+    raw = search_knowledge_bases_all("如何登录", limit=5)
     data = json.loads(raw)
     assert len(data["results"]) == 2
     assert data["results"][0]["collection_name"] == "req_docs"
     assert data["results"][0]["citable"] is True
     assert data["results"][0]["excerpt"] == "片段-req_docs"
-    assert data["results"][0]["evidence_id"].startswith("ev_")
-    assert data["results"][0]["tool_call_ids"] == ["call-search"]
+    assert "evidence_id" not in data["results"][0]
     assert "content" not in data["results"][0]
     assert mock_search.call_count == 2
     for call in mock_search.call_args_list:

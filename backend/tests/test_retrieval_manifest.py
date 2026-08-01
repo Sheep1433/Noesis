@@ -3,11 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from noesis.runtime.evidence import (
-    CitedAnswer,
     EvidenceEnvelope,
     EvidenceIdCollisionError,
     RetrievalManifest,
-    normalize_cited_answer,
 )
 
 
@@ -43,33 +41,6 @@ def test_manifest_reuses_id_across_parallel_tool_calls() -> None:
     assert stored[0].tool_call_ids == sorted(
         [f"call-{index}" for index in range(20)]
     )
-
-
-def test_provider_adapter_filters_unknown_and_duplicate_bindings() -> None:
-    manifest = RetrievalManifest(run_salt="fixed")
-    known = manifest.register(envelope(), tool_call_id="call-1")
-    event = normalize_cited_answer(
-        CitedAnswer.model_validate({
-            "segments": [{
-                "text": "验证码有效期为五分钟。",
-                "cited_evidence_ids": [known.evidence_id, "ev_forged", known.evidence_id],
-            }],
-        }),
-        manifest=manifest,
-    )
-    assert event == {
-        "type": "typed-answer-segments",
-        "segments": [{
-            "text": "验证码有效期为五分钟。",
-            "cited_evidence_ids": [known.evidence_id],
-        }],
-    }
-
-
-@pytest.mark.parametrize("segments", [[], [{"text": "", "cited_evidence_ids": []}]])
-def test_provider_adapter_rejects_empty_answer_segments(segments) -> None:
-    with pytest.raises(ValueError):
-        CitedAnswer.model_validate({"segments": segments})
 
 
 def test_manifest_checkpoint_replay_keeps_evidence_id() -> None:

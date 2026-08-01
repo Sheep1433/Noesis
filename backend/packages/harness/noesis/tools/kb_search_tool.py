@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, List, Optional, Tuple
 
 from langchain_core.tools import StructuredTool
-from langchain.tools import ToolRuntime
 from pydantic import BaseModel, Field
 
 from noesis.runtime.deps import (
@@ -19,7 +18,6 @@ from noesis.runtime.deps import (
     require_qdrant_service,
 )
 from noesis.runtime.logging import logger
-from noesis.runtime.evidence import EvidenceEnvelope, current_retrieval_manifest
 
 _MAX_DOCUMENT_CHARS = 80_000
 _MAX_PARALLEL_COLLECTIONS = 8
@@ -143,8 +141,6 @@ def resolve_search_collections(
 
 def _format_hits(
     scored: List[Tuple[str, Any]],
-    *,
-    tool_call_id: str = "",
 ) -> str:
     if not scored:
         return json.dumps(
@@ -170,29 +166,6 @@ def _format_hits(
                 "identity_status": hit.identity_status,
                 "citable": hit.citable,
             }
-        manifest = current_retrieval_manifest()
-        if manifest is not None and hit.citable:
-            try:
-                entry = manifest.register(
-                    EvidenceEnvelope.model_validate({
-                        "collection_name": collection_name,
-                        "document_id": hit.document_id,
-                        "document_version_id": hit.document_version_id,
-                        "segment_id": hit.segment_id,
-                        "title": hit.file_name,
-                        "excerpt": hit.content,
-                        "locator": hit.locator,
-                        "score": hit.score,
-                        "recall_score": hit.recall_score,
-                        "rerank_score": hit.rerank_score,
-                        "search_mode": hit.search_mode,
-                    }),
-                    tool_call_id=tool_call_id,
-                )
-                row.update(entry.model_dump(mode="json"))
-            except (TypeError, ValueError):
-                row["citable"] = False
-                row["identity_status"] = "invalid_evidence_envelope"
         rows.append(row)
     return json.dumps({"results": rows}, ensure_ascii=False)
 
@@ -229,7 +202,6 @@ def search_knowledge_bases_all(
     *,
     default_collection_names: Optional[List[str]] = None,
     allowed_collection_names: Optional[List[str]] = None,
-    tool_call_id: str = "",
 ) -> str:
     """在指定或默认范围内的知识库 Collection 并行 hybrid 检索，全局 Top-K。"""
     t_total = time.perf_counter()
@@ -290,7 +262,7 @@ def search_knowledge_bases_all(
         f"merged_hits={len(merged)} final_hits={len(top)} "
         f"query_len={len(query)} total_ms={total_ms:.1f}"
     )
-    return _format_hits(top, tool_call_id=tool_call_id)
+    return _format_hits(top)
 
 
 def list_knowledge_bases(
@@ -419,7 +391,6 @@ def build_kb_search_tools(
         query: str,
         collection_names: Optional[List[str]] = None,
         limit: int = 10,
-        runtime: ToolRuntime = None,
     ) -> str:
         return search_knowledge_bases_all(
             query,
@@ -427,7 +398,6 @@ def build_kb_search_tools(
             collection_names=collection_names,
             default_collection_names=scope or None,
             allowed_collection_names=allowed_scope,
-            tool_call_id=str(runtime.tool_call_id or "") if runtime is not None else "",
         )
 
     def _get_document(collection_name: str, file_name: str) -> str:

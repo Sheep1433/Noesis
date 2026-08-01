@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 # 深度研究可能跑较久，给足上限
@@ -72,13 +74,13 @@ def test_super_agent_deep_research(auth_client, create_session, create_run, coll
 
 
 @pytest.mark.integration
-def test_super_agent_web_answer_persists_clickable_citation(
+def test_super_agent_web_answer_uses_markdown_citation(
     auth_client,
     create_session,
     create_run,
     collect_run_stream,
 ):
-    """智能体直接 Web 检索后，实时流和终态消息都保留可点击引用。"""
+    """智能体直接 Web 检索后，在普通流式正文中保留 Markdown 来源链接。"""
     session_id = create_session(
         title="api-test-super-agent-citation",
         qa_type="SUPER_AGENT_QA",
@@ -87,7 +89,7 @@ def test_super_agent_web_answer_persists_clickable_citation(
         session_id=session_id,
         content=(
             "请调用 web_fetch 抓取 https://api.github.com，"
-            "用一句话告诉我响应中 current_user_url 的值，并把结论绑定到该网页来源。"
+            "用一句话告诉我响应中 current_user_url 的值，并按要求引用该网页来源。"
         ),
         qa_type="SUPER_AGENT_QA",
     )
@@ -101,24 +103,18 @@ def test_super_agent_web_answer_persists_clickable_citation(
         payload for name, payload in events.events
         if name == "retrieval-results-available" and isinstance(payload, dict)
     ]
-    annotation_events = [
-        payload for name, payload in events.events
-        if name == "text-annotation-added" and isinstance(payload, dict)
-    ]
-
     assert events.succeeded, f"SSE 未成功结束: {events.error}"
     assert "web_fetch" in events.tool_names, f"未调用 web_fetch: {events.tool_names}"
     assert retrieval_events and retrieval_events[0].get("results"), "实时流缺少 retrieval results"
-    assert annotation_events, "实时流缺少 text annotation"
+    citation_pattern = r"\[[^\]]+\]\(https://api\.github\.com/?\)"
+    assert re.search(citation_pattern, events.text), f"正文缺少目标 Markdown 引用: {events.text}"
 
-    message_id = annotation_events[0].get("message_id")
+    message_id = run["assistant_message_id"]
     response = auth_client.get(f"/api/chat/messages/{message_id}")
     response.raise_for_status()
     content = response.json()["data"]["content"]
     parts = content["parts"]
     assert any(part.get("type") == "retrieval" for part in parts), "终态消息丢失 retrieval part"
-    assert any(
-        annotation.get("type") == "url_citation"
-        for part in parts if part.get("type") == "text"
-        for annotation in part.get("annotations") or []
-    ), "终态消息缺少 url_citation"
+    text = "".join(part.get("content", "") for part in parts if part.get("type") == "text")
+    assert re.search(citation_pattern, text), f"终态消息缺少目标 Markdown 引用: {text}"
+    assert text == events.text, "Web 引用的流式正文与终态消息不一致"

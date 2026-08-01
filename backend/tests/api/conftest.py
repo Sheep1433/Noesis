@@ -96,10 +96,19 @@ def consume_run_stream():
     return _consume_run_stream
 
 
-def _create_session(client: httpx.Client, *, title: str, qa_type: str | None = None) -> str:
+def _create_session(
+    client: httpx.Client,
+    *,
+    title: str,
+    qa_type: str | None = None,
+    extra: dict | None = None,
+) -> str:
     body: dict = {"title": title}
+    session_extra = dict(extra or {})
     if qa_type:
-        body["extra"] = {"qa_type": qa_type}
+        session_extra["qa_type"] = qa_type
+    if session_extra:
+        body["extra"] = session_extra
     resp = client.post("/api/chat/sessions", json=body)
     resp.raise_for_status()
     return resp.json()["data"]["id"]
@@ -129,6 +138,36 @@ def create_session(auth_client):
 def create_run(auth_client):
     """返回绑定到 auth_client 的建 run 辅助函数。"""
     return lambda **kwargs: _create_run(auth_client, **kwargs)
+
+
+@pytest.fixture
+def citation_kb_collection(auth_client):
+    """创建一份带 versioned identity 的临时 KB，结束后精确删除。"""
+    collection_name = f"citation-live-{uuid.uuid4().hex[:8]}"
+    response = auth_client.post(
+        "/api/knowledge_base/collections",
+        json={"name": collection_name, "vector_dimension": 1024},
+    )
+    response.raise_for_status()
+    try:
+        response = auth_client.post(
+            f"/api/knowledge_base/collections/{collection_name}/upload",
+            files={
+                "file": (
+                    "登录验证码规则.md",
+                    "# 登录验证码规则\n\n登录验证码发送后五分钟内有效，超过五分钟必须重新获取。",
+                    "text/markdown",
+                )
+            },
+        )
+        response.raise_for_status()
+        assert response.json()["data"]["shards_created"] > 0
+        yield collection_name
+    finally:
+        response = auth_client.delete(
+            f"/api/knowledge_base/collections/{collection_name}"
+        )
+        response.raise_for_status()
 
 
 @dataclass

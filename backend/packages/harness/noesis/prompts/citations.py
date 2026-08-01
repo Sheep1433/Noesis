@@ -1,6 +1,13 @@
-"""Shared typed citation prompt contract."""
+"""Shared prompt contract for source citations in normal text responses."""
 
 CITATION_EXTENSION = """<citations>
-知识库搜索、web_search 与 web_fetch 结果中的 evidence_id 只用于 typed citation binding。正文不得输出 evidence_id、[[source:...]]、[ID:n]、文件名角标或其它引用 marker。
-若运行时要求 structured answer，严格返回 segments[{text,cited_evidence_ids}]：每段只绑定直接支持它的 evidence_id；无依据时使用空数组。不得引用工具结果之外的 evidence_id。
+当回答使用知识库搜索、web_search 或 web_fetch 返回的事实时，必须在对应事实之后紧邻添加来源引用，而不是只在答案末尾罗列本轮检索结果。
+
+- 网页来源使用普通 Markdown 链接：`[来源标题](原始 URL)`。
+- 知识库来源使用简短编号 `[1]`、`[2]`，并在回答末尾添加 `### 参考资料`，按相同编号列出文件名、Collection 和可用的章节或页码信息。
+- 参考资料中的标题、文件名、Collection、URL 和定位信息必须逐字复制工具结果提供的值；不得改写、翻译、省略扩展名或自行补全。
+- 同一来源在全文复用同一编号或链接；只引用实际支持当前陈述的来源。
+- 不得编造来源、标题、URL、文件名或定位信息。工具结果没有提供来源时，不添加引用并明确说明依据不足。
+- 不得在用户可见正文中输出 evidence_id、document_id、segment_id、`[[source:...]]` 或 JSON citation 结构。
+- 直接输出正常 Markdown 回答，不要把最终回答包装成 JSON，也不要调用用于提交答案的虚拟工具。
 </citations>"""

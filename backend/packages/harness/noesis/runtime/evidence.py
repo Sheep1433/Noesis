@@ -7,8 +7,6 @@ import hmac
 import json
 import secrets
 import threading
-from collections import Counter
-from contextvars import ContextVar, Token
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -73,7 +71,7 @@ EvidenceLocator = Annotated[
 
 
 class EvidenceEnvelope(BaseModel):
-    """Retrieval tool output before run-local evidence_id allocation."""
+    """Validated retrieval source before platform-local identity allocation."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -116,24 +114,6 @@ class EvidenceEnvelope(BaseModel):
 class RetrievalManifestEntry(EvidenceEnvelope):
     evidence_id: str
     tool_call_ids: list[str] = Field(default_factory=list)
-
-
-class CitedAnswerSegment(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(min_length=1)
-    cited_evidence_ids: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def normalize_evidence_ids(self) -> "CitedAnswerSegment":
-        self.cited_evidence_ids = list(dict.fromkeys(self.cited_evidence_ids))
-        return self
-
-
-class CitedAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    segments: list[CitedAnswerSegment] = Field(min_length=1)
 
 
 class EvidenceIdCollisionError(RuntimeError):
@@ -194,8 +174,13 @@ class RetrievalManifest:
             entry = self._by_identity.get(canonical) if canonical else None
             return entry.model_copy(deep=True) if entry else None
 
+    def get_by_envelope(self, envelope: EvidenceEnvelope) -> RetrievalManifestEntry | None:
+        with self._lock:
+            entry = self._by_identity.get(envelope.canonical_identity())
+            return entry.model_copy(deep=True) if entry else None
+
     def ingest(self, entry: RetrievalManifestEntry) -> RetrievalManifestEntry:
-        """宿主侧登记 Harness 已分配的 entry，不重新分配 evidence_id。"""
+        """从已持久化的 assistant snapshot 恢复原有 entry。"""
         canonical = entry.canonical_identity()
         with self._lock:
             self._externally_assigned = True
@@ -253,67 +238,3 @@ class RetrievalManifest:
             manifest._by_identity[canonical] = entry
             manifest._identity_by_id[entry.evidence_id] = canonical
         return manifest
-
-
-class CitationTelemetry:
-    """低基数进程内计数；观测后端可定期采集 snapshot。"""
-
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._counts: Counter[str] = Counter()
-
-    def increment(self, name: str) -> None:
-        with self._lock:
-            self._counts[name] += 1
-
-    def snapshot(self) -> dict[str, int]:
-        with self._lock:
-            return dict(self._counts)
-
-    def reset(self) -> None:
-        with self._lock:
-            self._counts.clear()
-
-
-citation_telemetry = CitationTelemetry()
-
-
-_CURRENT_RETRIEVAL_MANIFEST: ContextVar[RetrievalManifest | None] = ContextVar(
-    "noesis_retrieval_manifest",
-    default=None,
-)
-
-
-def bind_retrieval_manifest(manifest: RetrievalManifest) -> Token:
-    return _CURRENT_RETRIEVAL_MANIFEST.set(manifest)
-
-
-def current_retrieval_manifest() -> RetrievalManifest | None:
-    return _CURRENT_RETRIEVAL_MANIFEST.get()
-
-
-def reset_retrieval_manifest(token: Token) -> None:
-    _CURRENT_RETRIEVAL_MANIFEST.reset(token)
-
-
-def normalize_cited_answer(
-    raw: Any,
-    *,
-    manifest: RetrievalManifest,
-) -> dict[str, Any]:
-    """Provider adapter：严格解析 typed answer，并丢弃未知 evidence binding。"""
-    answer = raw if isinstance(raw, CitedAnswer) else CitedAnswer.model_validate(raw)
-    segments: list[dict[str, Any]] = []
-    for segment in answer.segments:
-        valid_ids = [
-            evidence_id
-            for evidence_id in segment.cited_evidence_ids
-            if manifest.get(evidence_id) is not None
-        ]
-        segments.append(
-            {
-                "text": segment.text,
-                "cited_evidence_ids": valid_ids,
-            }
-        )
-    return {"type": "typed-answer-segments", "segments": segments}

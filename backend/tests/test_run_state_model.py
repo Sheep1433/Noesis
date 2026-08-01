@@ -96,7 +96,7 @@ def test_hitl_resume_replay_updates_original_tool_part() -> None:
     assert parts[0]["hitl"]["status"] == "approved"
 
 
-def test_run_projection_preserves_retrieval_and_text_annotation() -> None:
+def test_run_projection_preserves_retrieval_results() -> None:
     projection = RunProjection(
         run_id="run-citation",
         user_id="user-1",
@@ -109,8 +109,6 @@ def test_run_projection_preserves_retrieval_and_text_annotation() -> None:
         "url": "https://example.com/source",
         "title": "Example source",
         "excerpt": "Source excerpt",
-        "evidence_id": "ev_web_1",
-        "tool_call_ids": ["call-search"],
         "citable": True,
     }
     projection.apply(WireFrame("retrieval-results-available", {
@@ -122,23 +120,9 @@ def test_run_projection_preserves_retrieval_and_text_annotation() -> None:
         "part_id": "part-text-1",
         "text_delta": "A supported statement.",
     }))
-    projection.apply(WireFrame("text-annotation-added", {
-        "text_part_id": "part-text-1",
-        "annotation": {
-            "type": "url_citation",
-            "citation_id": "cit-1",
-            "evidence_id": "ev_web_1",
-            "start_index": 0,
-            "end_index": 22,
-            "title": "Example source",
-            "excerpt": "Source excerpt",
-            "url": "https://example.com/source",
-            "verification": "structural",
-        },
-    }))
-
     parts = projection.persisted_snapshot()["parts"]
     retrieval = next(part for part in parts if part["type"] == "retrieval")
     text = next(part for part in parts if part["type"] == "text")
-    assert retrieval["results"][0]["evidence_id"] == "ev_web_1"
-    assert text["annotations"][0]["citation_id"] == "cit-1"
+    assert retrieval["results"][0]["evidence_id"].startswith("ev_")
+    assert retrieval["results"][0]["tool_call_ids"] == ["call-search"]
+    assert text["content"] == "A supported statement."

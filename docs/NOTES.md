@@ -9,7 +9,7 @@
 
 ## 2026-07-28 — 引用溯源与 HITL 的实现前置约束
 
-- **引用溯源**：以 OpenAI 形态为优先参考，先修规格再编码。必须定义流式与终态 provider 的 annotation 时序、run-local `evidence_id` 分配者，以及多次/并行 KB 工具调用的命名空间；否则 marker、evidence 与最终文本无法同时一致。
+- **引用溯源**：采用 Prompt Markdown citation，不改变 `create_agent` 回答协议。工具提供可读来源元数据，模型负责生成 Web 链接或 KB 编号；平台内部 `evidence_id` 只服务 retrieval part 去重与恢复，不进入模型上下文。
 - **HITL 恢复**：刷新、审批、切换会话和 resume 必须更新同一消息块；审批面板与 session 绑定，多会话 pending 不能串台。恢复后需显式呈现“继续生成”状态。
 - **验证**：除单元测试外，保留手动启动本地服务后直连真实 HTTP API、真实 LLM 的集成层，重点覆盖 HITL、SSE、curl 工具与深度研究；不为该层额外引入环境闸门或强制 sandbox-runner。
 - **产品范围**：移除用户自定义 Provider/API Key 持久化。当前项目不以大规模多租户为目标，密钥隐私和误用风险高于其展示价值。
@@ -67,14 +67,13 @@
 - **当前可用（实测）**：`deepseek-v4-flash-free`、`big-pickle`、`mimo-v2.5-free`、`nemotron-3-ultra-free`、`north-mini-code-free`；`deepseek-reasoner` **不支持**于 Zen 免费网关。
 - **配置**：`config.yaml` → `model.catalog[]` 逐项列出；界面仅展示 catalog 内条目，未写入 catalog 的模型不会出现。
 
-## KB 引用溯源 OpenSpec（2026-07-02）
+## KB/Web 引用溯源（2026-08-01）
 
-- **变更**：`openspec/changes/add-kb-citation-sources/`（规格先行，代码未合）。
-- **不难（L1–L2）**：`CitationsPart`、snake_case `citations-available`、文末列表 + 抽屉 shard API——与 platform-chat 同构。
-- **难（L4）**：**句子 ↔ 分片** 绑定。首版 = LLM 写 `[n]` + 解析；不稳则 **fallback Top-5**（`citation_fallback`，UI 须写清「非逐条引用」）。非审计级归因。
-- **L3**：hybrid 默认；`shard_id` = `point_id` 或 **`VectorStorage.hash_to_uuid(content_hash)`**（禁裸 hash）。要 hybrid 集成测。
-- **硬约束**：`register_hits` 仅 `_format_hits` 主线程；finalize 在 `to_dict`/stop 文案前；**仅正常 finish** 发 SSE，stop/断连靠**刷新**看来源。
-- **二期**：snippet–正文重叠推断 cited；stop 时 SSE 注入来源。
+- **变更**：`openspec/changes/add-kb-citation-sources/`。
+- **回答协议**：COMMON_QA 与 SuperAgent 共用 Prompt citation；Web 使用 Markdown 原始链接，KB 使用编号和文末参考资料。
+- **平台边界**：正文继续走普通 `text-delta`；独立 retrieval part 保存本轮来源，用于折叠展示和刷新恢复，不推断 cited 子集。
+- **明确删除**：structured answer、虚拟 Tool、typed annotation、citation resolve API、前端 offset marker 和旧兼容分支。
+- **验证**：保留真实模型 Web citation 集成测试，同时检查实时流和终态消息中的 Markdown 来源。
 
 ## 沙箱 execute 虚拟路径统一（2026-07-02）
 
