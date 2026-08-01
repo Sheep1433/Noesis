@@ -186,7 +186,7 @@ def test_build_returns_both_tools():
 
 
 @patch("noesis.tools.web_search_tool.resolve_web_search")
-def test_web_search_registers_citable_url_evidence(mock_resolve):
+def test_web_search_normalizes_citable_source_metadata(mock_resolve):
     mock_resolve.return_value = {"query": "q", "results": [{"title": "Docs", "url": "https://example.com/a#section", "snippet": "answer"}]}
     data = json.loads(web_search("q"))
     result = data["results"][0]
@@ -216,7 +216,7 @@ def test_web_search_rejects_url_credentials(mock_resolve):
 
 
 @patch("noesis.tools.web_search_tool.resolve_web_fetch")
-def test_web_fetch_returns_content_and_registered_evidence(mock_resolve):
+def test_web_fetch_returns_content_and_source_metadata(mock_resolve):
     mock_resolve.return_value = "# Example\n\nbody"
     data = json.loads(web_fetch("https://example.com/page"))
     assert data["content"] == "# Example\n\nbody"

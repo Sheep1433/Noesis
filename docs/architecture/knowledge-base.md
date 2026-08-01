@@ -54,7 +54,7 @@ upload
 
 ## 6. Agentic RAG 方向
 
-知识库不把整篇文档直接灌入 prompt。Agent 根据问题选择 collection、改写 query、评估检索结果并决定是否再次检索。结构化来源能力由 `add-kb-citation-sources` change 设计，未实现前不写入主协议。
+知识库不把整篇文档直接灌入 prompt。Agent 根据问题选择 collection、改写 query、评估检索结果并决定是否再次检索。检索工具向 Agent 提供文件名、Collection、excerpt 和可用 locator；Agent 按共享 system prompt 在普通 Markdown 正文中生成编号引用和参考资料列表。平台另外保存 retrieval part 供结果折叠、刷新恢复和调试，但不把所有检索结果自动认定为正文引用。
 
 ## 7. API
 

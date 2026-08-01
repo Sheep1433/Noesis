@@ -31,7 +31,7 @@
 | `add-telegram-channel-adapter` | Telegram 真收发（并入 `agent-delivery`） |
 | `add-agent-user-settings` | 设置面：记忆/通道/定时任务配置 |
 | `kb-multimodal-retrieval` | 多模态检索调研 |
-| `add-kb-citation-sources` | KB 引用角标 |
+| `add-kb-citation-sources` | KB/Web Prompt Markdown 引用与独立检索结果 |
 | `refine-tool-outcome-handling` | outcome 与前端展示收尾 |
 | `fault-operation-agent-experience-learning` | 故障经验沉淀 |
 
