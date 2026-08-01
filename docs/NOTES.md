@@ -75,6 +75,15 @@
 - **明确删除**：structured answer、虚拟 Tool、typed annotation、citation resolve API、前端 offset marker 和旧兼容分支。
 - **验证**：保留真实模型 Web citation 集成测试，同时检查实时流和终态消息中的 Markdown 来源。
 
+## 2026-07-30 — 评测 harness 收敛 + 中间件复核结论
+
+- **评测统一走 harness**：RAG 与 SuperAgent 评测复用 `packages/harness`，基于 harbor 官方 `harbor.agents.base.BaseAgent` 运行（`docs/engineering/agents/agent-evaluation.md`），不启动 Worker/TCP proxy；测试点旧路线仅供展示、不再演进。`unify-harness-evaluation` 已实现并入 archive。
+- **中间件复核（其他 AI 审查后逐条验证）**：
+  1. `ModelAttemptCallback` 只实现同步 `on_llm_new_token`/`on_tool_start`，但运行时走 `astream_events` 全异步路径——若 LangChain 异步回调不调同步 token 钩子，`visible_output_started` 恒 False，「已流式输出后不再重试」保护静默失效（可能对已吐 token 的调用重试造成重复输出）。需测试验证 async 下同步钩子是否触发；不触发则补 async 实现。
+  2. `LoopDetectionMiddleware` 的 `thread_id` 从 `runtime.context` / `execution` 不同位置取值来源不一致，`context` 无 thread_id 时可能退化为所有会话共用同一循环检测。需确认并统一取值来源。
+  3. `ModelRetryMiddleware` 只在抛异常时重试，不触发「无 token 输出」场景；`astream_events` 的 `is_cancelled` 是 run 级。**有意保留**，非 bug。
+- **引用溯源实况**：KB 检索 23 条但最终回答完全没引用（用户期望 GPT 式 `[1][2]` 溯源）。结论：用 langchain 已有能力（Prompt Markdown citation），不引入虚拟 Tool/结构化 answer/自造规则；模型优先只适配 deepseek 验证完整引用溯源。最终协议见「KB/Web 引用溯源（2026-08-01）」。
+
 ## 沙箱 execute 虚拟路径统一（2026-07-02）
 
 - **问题**：`read_file` 走 Composite 路由成功，`execute("cat /research/...")` 在容器内找不到；`AioSandboxBackend` 仅 rewrite custom skills。
