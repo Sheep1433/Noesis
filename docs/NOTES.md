@@ -74,6 +74,7 @@
 - **平台边界**：正文继续走普通 `text-delta`；独立 retrieval part 保存本轮来源，用于折叠展示和刷新恢复，不推断 cited 子集。
 - **明确删除**：structured answer、虚拟 Tool、typed annotation、citation resolve API、前端 offset marker 和旧兼容分支。
 - **验证**：保留真实模型 Web citation 集成测试，同时检查实时流和终态消息中的 Markdown 来源。
+- **Provider 能力门禁（2026-08-03）**：MiMo 的 `function_calling`、`json_schema`、`json_mode` 在固定对照用例中均稳定返回 500；这不是偶发网络错误，也不是工具数量导致。移除 MiMo 的结构化引用白名单后，同一模型和工具集合可正常产生普通工具调用。以后不能用模型目录或单次成功请求声明结构化能力，必须在目标 provider + 实际工具集合上做能力门禁；门禁失败时关闭结构化引用，不阻断普通对话。
 
 ## 2026-07-30 — 评测 harness 收敛 + 中间件复核结论
 
