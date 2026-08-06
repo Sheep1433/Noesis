@@ -1,5 +1,13 @@
 # 知识卡片（开发笔记）
 
+## 2026-08-04 — MCP 配置页改为目录优先、逐项加载
+
+- **交互**：移除表单模式，页面只保留用户 `mcp.json` 编辑器；进入页面先读取配置与 MCP 目录，列表渲染不等待远程握手。
+- **状态**：每个 Server 独立后台调用单项 probe，按返回顺序更新状态；单个 MCP 失败只显示在对应行，不阻塞其他 Server 或编辑器。
+- **工具**：列表项显示工具数量；点击单个 MCP 后才请求完整工具目录。成功 probe 已缓存工具元数据，展开同一 MCP 不再重复握手；工具目录请求不清空其他 Server 的 probe 缓存。
+- **刷新/保存**：刷新只重新读取目录并触发逐项 probe；保存 JSON 后同样走非阻塞逐项探测。用 generation 丢弃旧一轮 probe 的迟到结果，避免覆盖新配置状态。
+- **范围**：管理页展示用户 `.data/users/{uid}/mcp.json`，与右侧编辑内容一致；平台配置仍由 Composer 的 `scope=all` 使用。
+
 ## 2026-07-29 — 通道、引用与联调的收敛规则
 
 - **飞书通道**：一个 Noesis 实例激活一个飞书应用；不同 Noesis 用户各自完成关联后可独立在飞书对话。无需为每位用户创建一套飞书应用，沿用 Telegram 的用户绑定语义。
@@ -273,7 +281,7 @@
 
 - **字段**：`model.catalog[].limit` 与 models.dev / OpenCode 一致：`context`（窗口上限）、可选 `output` / `input`；`model.limit` 可作无 catalog 或 catalog 项未写 limit 时的默认。
 - **解析**：`llm/model_limits.resolve_model_limit(model_id)` → catalog `limit.context` → `context.max_input_tokens`（全局兜底）→ 128K。
-- **运行时**：`create_noesis_agent(model_id=...)` 将 `model_id` 传入 `SummarizationOffloadMiddleware` 与 `ContextMetricsMiddleware`；压缩触发默认 `trigger_tokens: 0` + `trigger_fraction × limit.context`。
+- **运行时**：`create_noesis_agent(model_id=...)` 将 `model_id` 传入 `ContextLifecycleMiddleware`；它独占压缩判断并生成 `ContextSnapshot`，`RuntimeTelemetryMiddleware` 只读取 snapshot。压缩触发默认 `trigger_tokens: 0` + `trigger_fraction × limit.context`。
 - **API**：`GET /api/models` 每项返回解析后的 `limit` 对象；embedding/rerank 配置未改。
 
 ## 2026-07-11 — sandbox-runner 残留容器 409 修复
@@ -324,13 +332,13 @@
 - **改动**：`prompts/super_agent.py` 翻转策略——轻量（≤2 次工具）主 Agent 自做；多源检索/调研/多步实现优先 `task-worker`；委派须自包含、禁懒委派；子 Agent 小结默认 ≤400 字、长文落盘。`task-worker` tool description 同步强调优先委派。
 - **局限**：仅靠 prompt，主 Agent 仍持有 web/fs 工具，模型可能继续自己搜；若仍爆窗，再做 eager offload / 工具白名单。
 
-## 2026-07-21 — MCP 配置页：文件编辑 + 状态展示
+## 2026-07-21 — MCP 配置页：文件编辑 + 状态展示（历史基线）
 
-- **交互**：参考 Cursor——配置在 `users/{uid}/mcp.json` 文本编辑；管理页左侧状态（连通/tools），右侧编辑器；「检测连通」批量 probe。
+- **交互**：参考 Cursor——配置在 `users/{uid}/mcp.json` 文本编辑；管理页左侧状态（连通/tools），右侧编辑器；旧版曾采用进入页批量 probe。
 - **API**：`GET/PUT /api/mcp/config`；`GET /api/mcp/servers/status?probe=`。
 - **Composer**：会话勾选保留；「打开 MCP 配置…」跳转管理页（侧栏新增 MCP）。
 - **约束**：用户配置仍禁止 stdio，仅 streamable_http/sse。
-- **体验修正**：进入页/保存后**自动 probe**（对齐 Cursor 打开即绿点）；去掉逐行「探测」；布局对齐 Skills 管理页 sider+editor。
+- **体验基线**：旧版进入页/保存后自动批量 probe；现已改为目录优先、逐项后台加载，避免页面卡在全量刷新。
 
 ## 2026-07-21 — MCP 目录与配置对齐（Context7 + remote_ops）
 
@@ -857,3 +865,33 @@ backends/
 - `noesis_server.infrastructure.database.repositories.auth` 负责 ORM/entity 显式映射；repository 只 flush，不 commit/rollback。
 - Session、邀请码、登录注册事务边界位于 `noesis_server.services.auth` / `LoginService`；Cookie transport 位于 `noesis_server.api.auth_cookie`。
 - 数据库表、Session Cookie、CSRF 与 `/api/auth` 外部行为不变。
+
+## 2026-08-04 — converge-agent-runtime：单一 runtime owner 收敛
+
+**Why：** runtime 曾有多套 owner（旧 middleware 栈 + 新装配并行），状态归属不清；目标是单一 owner、删旧装配、可评测。
+
+**How to apply：**
+- 五类 owner：`RunGovernor` / `ContextLifecycle` / `ModelExecution` / `ToolExecution` / `Telemetry`；统一 `RuntimeOutcome`、`ToolResultEnvelope`，内部 detail 不泄漏到 SSE。
+- `middlewares/` 按职责分层：`kernel/`（公共 runtime）`capabilities/`（Skills/Memory）`observability/`（context metrics）`legacy/`（已退出装配，明确标注不参与 runtime）；顶层不再平铺 20 个文件。
+- Memory 语义：**每用户 turn 加载一次、同一 run 内固定**（`TurnMemoryMiddleware`，只挂 `before_agent`）；删除 `memory/revision.py`、`VersionedMemoryMiddleware`、`before_model` 动态刷新和所有写入口 revision bump。理由：run 内保持 system prompt 稳定，用户/Agent 改记忆下一条消息生效即可，无需同轮刷新。
+- 附件改独立 input adapter（`AttachmentInputResolver`），不再依赖 `ChatAttachmentsMiddleware`；压缩走 LangChain `SummarizationMiddleware`，不生成旧 `summary_offload` artifact。
+- 清理纪律：旧 middleware 先保留为未挂载 legacy、迁走有效断言到统一 runtime 契约测试，再物理删除源码与旧测试；不恢复旧接口让测试变绿。
+- LangChain 当前版本 hook 顺序：`before` 正序、`wrap` 嵌套、`after` 逆序。
+- `code-review` 双轴收尾发现 6 项待修：Profile 矩阵未生效、子 Agent 未显式继承父 Governor、Telemetry 去重/完整消费、model call 超限误报为 tool limit、ContextVar 可能重复上报上一轮工具结果、sync/async 重复实现。
+- 验证基线：backend 801 passed、memory 23-25 passed、frontend 21 passed + lint/build；OpenSpec strict validation。
+
+## 2026-08-04 — Deep Research：HITL 占用 Run 预算 + 上下文膨胀
+
+**Why：** `/deep-research-v2` 跑到 Phase 5 正准备生成最终报告时被 900s watchdog 切断，用户只拿到 `partial` 无交付物。
+
+**根因（详见 `docs/bug/deep-research-hitl-timeout-and-context-bloat.md`）：**
+1. Run 从启动即计时，HITL 等待约 237s 也占用 900s 预算 → `RUN_TIMEOUT / limit_exceeded`。
+2. HITL 恢复使首批 3 个并行 task 以新 `tool_call_id` 重建；子 Agent 全量事件回灌父消息 → assistant 单条 2.59MB / 89,815 tokens。
+3. Skill 是领域无关刚性清单（默认 deep、≥20 来源、强制论文/竞品/政策），LLM Wiki 主题不适配仍全量跑。
+4. 搜索不稳定放大重试：Tavily SSL 失败落 DDG、知乎 403、GitHub rate limit、44 次 fetch 4 次 error。
+
+**可迁移原则：**
+- HITL 等待不应计入执行预算（或预算只计模型/工具活跃时间）；watchdog 要区分「等待用户」和「执行中」。
+- 子 Agent 轨迹按需回灌（只留决策摘要/关键证据），不要全量进父消息；`status=success` 不可信，要强扫工具输出文本。
+- 可观测系统会自我膨胀：远程服务器磁盘 100% 的长期根因是 ClickHouse `system.trace_log`(4.73GB)+`system.text_log`(2.89GB) 等诊断表（约 9.4GB），业务 `observations` 仅 177MB；Docker build cache 只是触发点。清磁盘先清可重建资源，不碰业务 volume。
+- Skill 设计：研究范围/深度应由主题适配，不能用固定刚性清单。
