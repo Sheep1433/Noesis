@@ -895,3 +895,28 @@ backends/
 - 子 Agent 轨迹按需回灌（只留决策摘要/关键证据），不要全量进父消息；`status=success` 不可信，要强扫工具输出文本。
 - 可观测系统会自我膨胀：远程服务器磁盘 100% 的长期根因是 ClickHouse `system.trace_log`(4.73GB)+`system.text_log`(2.89GB) 等诊断表（约 9.4GB），业务 `observations` 仅 177MB；Docker build cache 只是触发点。清磁盘先清可重建资源，不碰业务 volume。
 - Skill 设计：研究范围/深度应由主题适配，不能用固定刚性清单。
+
+## 2026-08-05 — 数据结构重设计：从 17 张表收敛到 3 项 + 抄 Claude Code 蓝本
+
+**Why：** Noesis 架构被判定落后，需要 Agent 形态数据结构；过程本身比结果更值得记——过度设计 → 收敛 → 弃杂糅 → 单一蓝本。
+
+**How to apply：**
+- 第一版 17 张表（Event Store/outbox/message_parts/tool_calls/workspace 等全上）被用户质疑后重新评估：真实痛点只有两个——Run↔Message 一对一 + 禁止并行（卡后台/cron/多任务）、tool_call 混在 content JSON（查询/审计不便）。Event Store/Approval/Workspace 实体当时不痛（Claude Code 也没有 Event Store，只有 JSONL）。
+- 地基层 3 项：改 `t_agent_run`（去 `assistant_message_id` UNIQUE + `uq_agent_run_active_session`，加 `trigger_type`/`run_group_id`）；新建 `t_tool_call`/`t_tool_result`（独立 id/状态机/幂等键/risk_level/arguments_hash，大结果落盘引用）。LangGraph、RunEventBus、PersistSink、HITL、沙箱、记忆全不动。
+- Session 层地基层不动：`reserve_message_sequences` 已用 `with_for_update()` 行级锁，多 run 并发序号安全；Event Store 建了才需要 `current_seq`。
+- 演进层每张表带触发信号（Event Store：拆独立 Worker 或多端实时同步；Approval：要跨设备审批/批准后同类自动允许；Workspace：容器泄漏或并行 lease 互斥；message_parts：要按 part 类型查询）；不因「研究报告推荐」或「Codex 有」引入。
+- 最终用户决策：弃「取 Codex 的 X + Claude Code 的 Y + 研究报告的 Z」的杂糅，整体抄 Claude Code（Typed Entry + parentUuid DAG + 工具一等公民 + 决策原因审计），做 PG + 多用户改造；LangGraph checkpointer 承担 transcript 职责，业务表承担 State DB 查询职责。
+- 诚实性修正轮（7 处）：PermissionDecisionReason 实际 11 种非 12；`t_file_snapshot`/session `tag/summary/mode` 列移演进层；`t_tool_call` 明确标注是「Noesis 多用户查询/审计/幂等需求驱动，非 Claude Code 直接对应」（Claude Code 工具调用在 content block 里无独立表）；`decision_reason` 用 Noesis 简化类型 `{type:"hitl", decided_by, reason}`；不说「Claude Code run 不绑 message」（它没有 run 概念）；LangGraph checkpointer 与 transcript JSONL 是职责对应不是同构。
+- 参考文档：`Inbox/gpt/Agent数据结构设计研究报告.md`、`Agent数据结构设计补充-Codex与ClaudeCode源码分析.md`、`Noesis-Agent平台数据结构重设计.md`（含设计决策溯源与修正表）。
+
+## 2026-08-05 — Claude Code 会话 JSONL 与 SSE 四层实现（源码研究）
+
+**Why：** Noesis 数据结构以 Claude Code 为蓝本，且要做多端 SSE 一致；源码在 `cloud-code/claude-code-source/src/`（v2.1.88 还原）。
+
+**How to apply：**
+- 持久化：transcript JSONL per project（`types/logs.ts` 的 `Entry` 约 20 类）+ parentUuid DAG（并行 tool_use 兄弟分支恢复）+ 多类 snapshot（file history/attribution/content replacement/context-collapse「marble-origami」）+ metadata + 远端 CCR v2；fork 用 `parentSessionId` 引用非复制全量。`sessionStorage.ts` 是核心，`getTranscriptPath`/`getAgentTranscriptPath` 决定落盘位置。
+- subagent：`isSidechain:true` 事件写在主 session 目录下 `subagents/agent-<agentId>.jsonl`，同名 `.meta.json` sidecar 存 agentType/worktreePath 供 resume 路由（`sessionStorage.ts:247-258`）；主 jsonl 只留 tool_use/result 引用。
+- compact：压缩标记字段是 `isCompactSummary:true`（`sessionStoragePortable.ts:150`）；grep 命中该词 ≠ 真实事件（本地所有 jsonl 命中均为「会话内容讨论到它」）。`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 把本地计算的有效窗口取 `Math.min(原窗口, 值)`（`autoCompact.ts:38-46`），auto-compact 阈值 ≈ 窗口 − 20k 预留 − 13k buffer；只影响本地阈值，不改真实 API 请求。
+- SSE 四层：`src/cli/transports/SSETransport.ts`（传输层长连接）、`src/services/api/claude.ts`（`stream:true` 流式调用）、`src/utils/stream.ts`（`Stream<T>` 异步队列原语）、`src/services/tools/StreamingToolExecutor.ts`（工具边流式到达边执行）。
+- Tool 模型：`types/logs.ts` 之外看 `Tool.ts` 的 `Tool` 接口（isReadOnly/isDestructive/isConcurrencySafe/interruptBehavior/maxResultSizeChars/checkPermissions/toAutoClassifierInput）与 `ToolUseContext`（contentReplacementState、renderedSystemPrompt 共享父 prompt 字节保 cache、queryTracking{chainId,depth}）。
+- 方法论：研究会话事件结构先做「字段名确认 → 全盘扫描 → 区分真实事件 vs 内容提及」，别被关键词 grep 误导；制造特殊场景用「批次触发 + 清理动作本身也产生事件」（TaskStop 返回已完成也是有效 tool_result 事件）。
