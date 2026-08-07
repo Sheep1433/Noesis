@@ -34,9 +34,57 @@ export interface MessageMetadata {
   model?: string
   input_tokens?: number
   output_tokens?: number
+  total_tokens?: number
   finish_reason?: string
   error?: string
+  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
+  input_token_details?: { cache_read?: number, cache_write?: number }
+  output_token_details?: { reasoning?: number }
+  /** 按 caller/model 归因摘要（调试视图按需展示） */
+  attribution?: {
+    cumulative?: Record<string, number>
+    by_caller?: Record<string, Record<string, number>>
+    by_model?: Record<string, Record<string, number>>
+  }
+  /** 最近一次模型请求的上下文快照（与累计 usage 分开） */
+  context?: ContextSnapshot
 }
+
+/** 当前模型请求的上下文快照（context-update 事件 / 历史消息）。
+ *  结构与 messageParts.ContextWindowSnapshot 对齐，避免循环 import。 */
+export interface ContextSnapshot {
+  current_tokens: number
+  max_tokens: number
+  used_percentage: number
+  updated_at?: string
+  estimated?: boolean
+  counting_method?: string
+  breakdown?: {
+    system: number
+    conversation: number
+    tool_results: number
+    tool_definitions: number
+    other: number
+  }
+  sources?: Record<string, number>
+  caller?: string
+}
+
+export type AgentStopReason =
+  | 'completed'
+  | 'context_exhausted'
+  | 'length_stop'
+  | 'safety_stop'
+  | 'partial_output'
+  | 'empty_after_tools'
+  | 'tool_loop_limit'
+  | 'tool_call_limit'
+  | 'subagent_concurrency_limit'
+  | 'subagent_total_limit'
+  | 'subagent_depth_limit'
+  | 'retryable_error'
+  | 'error'
+  | (string & {})
 
 /** 会话响应 */
 export interface ChatSessionResponse {
@@ -111,7 +159,7 @@ export interface AgentRunSnapshot {
   snapshot_sequence: number
   attempt_id: number
   content: MessageContent
-  finish_reason?: string | null
+  finish_reason?: AgentStopReason | null
   error_code?: string | null
   message?: string | null
   retry_attempt: number

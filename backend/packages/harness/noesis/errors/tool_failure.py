@@ -434,6 +434,10 @@ def build_error_tool_message(request: ToolCallRequest, failure: ToolFailure) -> 
         tool_call_id=tool_call_id,
         name=tool_name,
         status="error",
+        additional_kwargs={
+            "errorCategory": failure.category.value,
+            "retryable": failure.retryable,
+        },
     )
 
 

@@ -430,16 +430,29 @@ const UploadWrapperItem = defineComponent({
 
     const fileIcon = computed(() => getFileTypeIconClass(fileName.value))
 
-    const removeButton = () => (
-      <div class="absolute z-2 top--6 right--6 group-hover:opacity-100 opacity-0 transition-all-300">
-        <div
-          class="text-18 c-info cursor-pointer i-famicons:remove-circle-outline transition-all-300 hover:c-primary bg-white rounded-50%"
+    const removeButton = (alwaysVisible = false) => (
+      <div
+        class={[
+          'absolute z-2 transition-all-300',
+          alwaysVisible ? 'top-2 right-2 opacity-100' : 'top--6 right--6 group-hover:opacity-100 opacity-0',
+        ]}
+      >
+        <button
+          type="button"
+          title="移除附件"
+          aria-label={`移除附件 ${fileName.value}`}
+          class="flex items-center justify-center size-18 border-0 p-0 cursor-pointer rounded-50% transition-all-300 hover:scale-110"
+          style={{
+            backgroundColor: 'var(--noesis-color-danger)',
+            color: 'var(--noesis-color-on-danger)',
+          }}
           onClick={(e: Event) => {
             e.stopPropagation()
             emit('remove')
           }}
         >
-        </div>
+          <span class="block size-12 i-mdi:close" aria-hidden="true"></span>
+        </button>
       </div>
     )
 
@@ -465,7 +478,7 @@ const UploadWrapperItem = defineComponent({
             this.currentStatus?.status === 'parsing' ? 'opacity-70' : '',
           ]}
         >
-          {this.removeButton()}
+          {this.removeButton(true)}
           <n-image
             width={52}
             height={52}

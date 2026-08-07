@@ -232,10 +232,26 @@ def _assistant_content_snapshot(builder: Optional[AssistantMessageBuilder]) -> D
 
 
 def _assistant_status_for_finish(finish_reason: str) -> str:
-    if finish_reason == "error":
+    if finish_reason in {
+        "error",
+        "context_exhausted",
+        "retryable_error",
+    }:
         return "error"
     if finish_reason == "hitl_pending":
         return "streaming"
+    if finish_reason in {
+        "length_stop",
+        "safety_stop",
+        "partial_output",
+        "empty_after_tools",
+        "tool_loop_limit",
+        "tool_call_limit",
+        "subagent_concurrency_limit",
+        "subagent_total_limit",
+        "subagent_depth_limit",
+    }:
+        return "partial"
     return "completed"
 
 

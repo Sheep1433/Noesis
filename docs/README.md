@@ -37,6 +37,8 @@
 - [设置控制面](architecture/platform/settings-control-plane.md)
 - [故障运维 Agent](engineering/agents/fault-operation-agent.md)
 - [测试用例生成](engineering/agents/test-case-generation.md)
+- [Agent 评测运行指南](engineering/agents/agent-evaluation.md)
+- [Agent Runtime 设计（Proposed）](engineering/agents/agent-runtime-design.md)
 
 ## 何时新增文档
 

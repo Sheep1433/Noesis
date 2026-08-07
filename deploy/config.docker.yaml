@@ -91,23 +91,16 @@ summarization:
   max_retention_ratio: 0.65
   messages_to_keep: 28
 
-loop_detection:
-  enabled: true
-  warn_threshold: 3
-  hard_limit: 5
-  window_size: 20
-  max_tracked_threads: 100
-  tool_freq_warn: 30
-  tool_freq_hard_limit: 50
-
 agent_runtime:
-  dangling_tool_call_repair_enabled: true
-  tool_call_limit:
-    enabled: true
-    thread_limit: 200
-    run_limit: null
-    exit_behavior: continue
-    task_run_limit: 10
+  tool_output_max_chars: 24000
+  # Run Governor：统一模型/工具/子 Agent 预算与循环检测
+  governor:
+    tool_calls_enabled: true
+    tool_calls_total: null
+    tool_calls_per_name: 10
+    loop_enabled: true
+    loop_hard_limit: 5
+    loop_window_size: 20
 
 stream:
   sse_keepalive_interval_seconds: 25

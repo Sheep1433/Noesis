@@ -12,12 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
 from noesis.factory import create_noesis_agent
-from noesis.middlewares.chat_attachments_middleware import ChatAttachmentsMiddleware
 from noesis.prompts import PromptProfile, build_prompt
 from noesis.tools import build_kb_search_tools, build_web_search_tools, list_qdrant_collection_names
 from noesis.tools.chat_attachment_tools import build_attachment_tools
-from noesis.config.env import ChatAttachmentConfig, ModelConfig
+from noesis.config.env import ChatAttachmentConfig
 from noesis.runtime.deps import require_attachment_service
+from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
 from noesis.runtime.logging import logger
 
 
@@ -98,19 +98,13 @@ class GeneralQAAgent(BaseAgent):
                     user_id=user_id,
                     db=db,
                 )
-                extra_middleware = [
-                    ChatAttachmentsMiddleware(
-                        session_id=session_id,
-                        user_id=user_id,
-                        db=db,
-                        model_id=model_id,
-                    )
-                ]
+                extra_middleware = []
 
         try:
             config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
 
             agent = create_noesis_agent(
+                profile="COMMON_QA",
                 tools=tools,
                 system_prompt=build_prompt(
                     PromptProfile.COMMON_QA,
@@ -132,11 +126,18 @@ class GeneralQAAgent(BaseAgent):
                     "file_dict": file_list or {},
                 }
 
+            human_message = HumanMessage(content=query, additional_kwargs=human_kwargs)
+            if attachments_enabled and db is not None:
+                human_message = await AttachmentInputResolver(
+                    session_id=session_id,
+                    user_id=user_id,
+                    db=db,
+                    model_id=model_id,
+                ).resolve_human_message(query, additional_kwargs=human_kwargs)
+
             stream_args = {
                 "input": {
-                    "messages": [
-                        HumanMessage(content=query, additional_kwargs=human_kwargs)
-                    ]
+                    "messages": [human_message]
                 },
                 "config": config,
                 "stream_mode": "messages",

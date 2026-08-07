@@ -58,10 +58,12 @@ _PROBE_HTTP_TIMEOUT = timedelta(seconds=12)
 _PROBE_OK_CACHE_TTL_SEC = 60.0
 _PROBE_ERR_CACHE_TTL_SEC = 8.0
 _PROBE_CACHE: dict[tuple[str, str], tuple[float, McpProbeResponse]] = {}
+_PROBE_TOOLS_CACHE: dict[tuple[str, str], tuple[float, list[McpToolCatalogItemVo]]] = {}
 
 
 def clear_mcp_probe_cache() -> None:
     _PROBE_CACHE.clear()
+    _PROBE_TOOLS_CACHE.clear()
 
 
 def _clear_mcp_caches() -> None:
@@ -298,10 +300,21 @@ class McpService:
                 client.get_tools(),
                 timeout=_PROBE_HTTP_TIMEOUT.total_seconds() + 1.0,
             )
+            tool_catalog = [
+                McpToolCatalogItemVo(
+                    name=str(tool.name),
+                    description=str(getattr(tool, "description", "") or ""),
+                )
+                for tool in tools
+            ]
+            _PROBE_TOOLS_CACHE[cache_key] = (
+                now + _PROBE_OK_CACHE_TTL_SEC,
+                tool_catalog,
+            )
             result = McpProbeResponse(
                 ok=True,
-                tool_count=len(tools),
-                message=f"连通正常，发现 {len(tools)} 个工具",
+                tool_count=len(tool_catalog),
+                message=f"连通正常，发现 {len(tool_catalog)} 个工具",
                 checked_at=int(time.time() * 1000),
                 correlation_id=str(uuid.uuid4()),
             )
@@ -380,9 +393,23 @@ class McpService:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         sid = validate_server_id(server_id)
+        cache_key = (str(user_id), sid)
+        now = time.monotonic()
+        hit = _PROBE_TOOLS_CACHE.get(cache_key)
+        if hit and hit[0] > now:
+            return list(hit[1])
+
         connections = resolve_server_connections([sid], user_id=user_id)
         if sid not in connections:
             raise KeyError("MCP Server 不存在或已停用")
         client = MultiServerMCPClient({sid: connections[sid]})
         tools = await asyncio.wait_for(client.get_tools(), timeout=_PROBE_HTTP_TIMEOUT.total_seconds() + 1)
-        return [McpToolCatalogItemVo(name=str(tool.name), description=str(getattr(tool, "description", "") or "")) for tool in tools]
+        result = [
+            McpToolCatalogItemVo(
+                name=str(tool.name),
+                description=str(getattr(tool, "description", "") or ""),
+            )
+            for tool in tools
+        ]
+        _PROBE_TOOLS_CACHE[cache_key] = (now + _PROBE_OK_CACHE_TTL_SEC, result)
+        return result

@@ -17,18 +17,19 @@ class _NoAttachments:
 
 
 @asynccontextmanager
-async def eval_runtime(*, no_attachments: bool = False) -> AsyncIterator[None]:
+async def eval_runtime(*, no_attachments: bool = False) -> AsyncIterator[MemorySaver]:
     """Use an in-memory checkpointer without importing platform services.
 
     SuperAgent benchmarks can opt into a scoped no-attachment provider. Harbor uses
     the bare factory and needs no platform capability bindings at all.
     """
-    with temporary_checkpointer(MemorySaver()):
+    checkpointer = MemorySaver()
+    with temporary_checkpointer(checkpointer):
         if no_attachments:
             with temporary_attachment_service(_NoAttachments()):
-                yield
+                yield checkpointer
         else:
-            yield
+            yield checkpointer
 
 
 @asynccontextmanager

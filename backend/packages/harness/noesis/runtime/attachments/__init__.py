@@ -12,6 +12,7 @@ from noesis.runtime.attachments.resolver import (
 )
 from noesis.runtime.attachments.vision import is_vision_available
 from noesis.runtime.attachments.vlm_caption import describe_image_bytes_for_chat
+from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
 
 __all__ = [
     "CHAT_ATTACHMENT_REF",
@@ -24,4 +25,5 @@ __all__ = [
     "is_vision_available",
     "prepare_image_bytes_for_injection",
     "read_line_range",
+    "AttachmentInputResolver",
 ]

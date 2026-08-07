@@ -44,7 +44,7 @@ Agent 运行时配置与日志 SHALL 由 `noesis.config` / `noesis.runtime.loggi
 
 #### Scenario: Harbor 不旁路 stream
 
-- **WHEN** Harbor worker 执行一轮
+- **WHEN** Harbor `BaseAgent` 执行一轮
 - **THEN** SHALL 调用 `stream_agent_events`（或等价委托），**SHALL NOT** 仅复制一份无 HITL 处理的裸 `astream_events` 循环作为长期权威路径
 
 ### Requirement: Agent 与 runtime 目录归属

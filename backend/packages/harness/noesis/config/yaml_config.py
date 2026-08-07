@@ -157,31 +157,24 @@ class SummarizationYamlSection(BaseModel):
     trigger_tokens: int = Field(default=0, ge=0)
     trigger_fraction: float = Field(default=0.75, gt=0, le=1)
     max_input_tokens: int = Field(default=0, ge=0)
-    tool_offload_threshold: int = Field(default=6000, ge=1)
-    max_retention_ratio: float = Field(default=0.65, gt=0, le=1)
     # model profile 不可用时的消息数量 fallback
     messages_to_keep: int = Field(default=28, ge=1)
 
 
-class LoopDetectionYamlSection(BaseModel):
-    enabled: bool = True
-    warn_threshold: int = Field(default=3, ge=1)
-    hard_limit: int = Field(default=5, ge=2)
-    window_size: int = Field(default=20, ge=1)
-    max_tracked_threads: int = Field(default=100, ge=1)
-
-
-class ToolCallLimitYamlSection(BaseModel):
-    enabled: bool = True
-    thread_limit: int | None = Field(default=200, ge=1)
-    run_limit: int | None = Field(default=None, ge=1)
-    exit_behavior: str = "continue"
-    task_run_limit: int | None = Field(default=10, ge=1)
+class GovernorYamlSection(BaseModel):
+    # 工具调用总量与单工具上限；tool_calls_enabled=false 时两项均不生效
+    tool_calls_enabled: bool = Field(default=True)
+    tool_calls_total: int | None = Field(default=None, ge=1)
+    tool_calls_per_name: int | None = Field(default=10, ge=1)
+    # 同一 run 内的重复工具循环检测
+    loop_enabled: bool = Field(default=True)
+    loop_hard_limit: int = Field(default=5, ge=2)
+    loop_window_size: int = Field(default=20, ge=1)
 
 
 class AgentRuntimeYamlSection(BaseModel):
-    dangling_tool_call_repair_enabled: bool = True
-    tool_call_limit: ToolCallLimitYamlSection = Field(default_factory=ToolCallLimitYamlSection)
+    tool_output_max_chars: int = Field(default=24_000, ge=1)
+    governor: GovernorYamlSection = Field(default_factory=GovernorYamlSection)
 
 
 class RetrievalLimitsYamlSection(BaseModel):
@@ -387,7 +380,6 @@ class AppYamlConfig(BaseModel):
     vlm: VlmYamlSection = Field(default_factory=VlmYamlSection)
     context: ContextYamlSection = Field(default_factory=ContextYamlSection)
     summarization: SummarizationYamlSection = Field(default_factory=SummarizationYamlSection)
-    loop_detection: LoopDetectionYamlSection = Field(default_factory=LoopDetectionYamlSection)
     agent_runtime: AgentRuntimeYamlSection = Field(default_factory=AgentRuntimeYamlSection)
     retrieval_limits: RetrievalLimitsYamlSection = Field(default_factory=RetrievalLimitsYamlSection)
     stream: StreamYamlSection = Field(default_factory=StreamYamlSection)

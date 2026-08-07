@@ -1,4 +1,4 @@
-"""MCP 表单/JSON 双模式、诊断与安全 read model。"""
+"""MCP 目录、probe 与安全工具元数据 read model。"""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from noesis.config.mcp_config import McpJsonConfig, save_user_mcp_json
-from noesis_server.services.mcp_service import McpService, _probe_error_category
+from noesis_server.services.mcp_service import McpService, _probe_error_category, clear_mcp_probe_cache
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +68,50 @@ async def test_probe_timeout_does_not_expose_url_secret(users_root: Path, monkey
     result = await McpService.probe_server("u1", "slow", use_cache=False)
     assert result.error_category == "timeout"
     assert "must-not-leak" not in repr(result.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_status_catalog_does_not_probe_when_probe_disabled(users_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    save_user_mcp_json("u1", McpJsonConfig(mcpServers={"catalog": {
+        "transport": "streamable_http", "url": "https://mcp.example/mcp",
+    }}))
+
+    async def unexpected_probe(*_args, **_kwargs):
+        raise AssertionError("catalog status must not perform a remote probe")
+
+    monkeypatch.setattr(McpService, "probe_server", unexpected_probe)
+    result = await McpService.list_server_status("u1", probe=False, scope="user")
+
+    assert [(item.id, item.status, item.tool_count) for item in result] == [
+        ("catalog", "unknown", 0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_catalog_reuses_successful_probe_metadata(users_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    save_user_mcp_json("u1", McpJsonConfig(mcpServers={"tools": {
+        "transport": "streamable_http", "url": "https://mcp.example/mcp",
+    }}))
+    calls = 0
+
+    class FakeClient:
+        def __init__(self, _connections):
+            pass
+
+        async def get_tools(self):
+            nonlocal calls
+            calls += 1
+            return [type("Tool", (), {"name": "search", "description": "Search docs"})()]
+
+    clear_mcp_probe_cache()
+    monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", FakeClient)
+    await McpService.probe_server("u1", "tools", use_cache=False)
+    tools = await McpService.list_server_tools("u1", "tools")
+
+    assert calls == 1
+    assert [tool.model_dump() for tool in tools] == [
+        {"name": "search", "description": "Search docs"},
+    ]
 
 
 @pytest.mark.asyncio

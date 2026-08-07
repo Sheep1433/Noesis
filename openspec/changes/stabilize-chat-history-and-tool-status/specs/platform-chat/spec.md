@@ -85,14 +85,14 @@ chat 页 SHALL 按服务端 tool `state` 显示“正在执行、等待确认、
 - **THEN** UI SHALL 显示“等待确认”
 - **AND** 允许一次/本会话允许/拒绝控件 SHALL 可点击，除非授权结果正在提交
 
-### Requirement: 工具失败汇总 SHALL 明示回答完整性
+### Requirement: 工具失败且无回答时 SHALL 显示阻断态
 
-前端 SHALL 从 assistant 结构化 tool states 派生一次回答级提示，不依赖模型文本。存在任意未成功工具且仍有回答正文时 SHALL 提示结果可能不完整；没有回答正文时 SHALL 显示阻断态与重试入口。单个工具详情 SHALL 保持可展开。
+前端 SHALL 从 assistant 结构化 tool states 派生无回答阻断态，不依赖模型自行判断。存在任意未成功工具，但在最后一个工具块之后仍有回答正文时 SHALL NOT 额外提示结果可能不完整；只有工具调用前的过程文本时仍 SHALL 视为没有最终回答，并显示阻断态与重试入口。单个工具详情 SHALL 保持可展开。
 
 #### Scenario: 回答包含多个失败工具
 
 - **WHEN** assistant 中有多个 failed/timed_out 工具且仍有正文
-- **THEN** 回答级提示 SHALL 只显示一次
+- **THEN** 回答级完整性提示 SHALL NOT 显示
 - **AND** 每个失败工具卡片 SHALL 保留自己的状态和详情
 
 #### Scenario: 工具失败且无回答

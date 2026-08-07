@@ -136,7 +136,7 @@ onMounted(() => {
       最近修改：{{ updatedAt }}
     </p>
 
-    <div class="editor-area">
+    <div class="editor-area" :class="{ 'editor-area--preview': !editing }">
       <n-input
         v-if="editing"
         v-model:value="draft"
@@ -210,6 +210,15 @@ onMounted(() => {
 
 .editor-area {
   max-width: 720px;
+}
+
+.editor-area--preview {
+  max-height: calc(100vh - 280px);
+  padding: 12px;
+  overflow: auto;
+  background: var(--noesis-color-bg-surface);
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-md);
 }
 
 .context-panel { max-width: 720px; margin-top: 28px; }

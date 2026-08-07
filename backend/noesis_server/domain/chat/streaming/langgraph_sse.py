@@ -12,12 +12,25 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Set
 
-from noesis.middlewares.context_metrics_middleware import ContextMetricsRegistry
+from noesis.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
 from noesis.config.env import ModelConfig
 from noesis_server.domain.chat.streaming.reasoning import (
     extract_reasoning_delta,
     extract_text_content,
     unsent_text_suffix,
+)
+from noesis_server.domain.chat.streaming.usage_normalize import (
+    accumulate_detail as _accumulate_detail,
+    extract_input_token_details as _extract_input_token_details,
+    extract_output_token_details as _extract_output_token_details,
+    normalize_usage as _normalize_usage,
+    to_int as _to_int,
+)
+from noesis_server.domain.chat.streaming.usage_attribution import (
+    CALLER_LEAD_AGENT,
+    ModelCallAttribution,
+    RunUsageCollector,
+    resolve_caller,
 )
 from noesis.runtime.logging import logger
 from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
@@ -137,30 +150,6 @@ def _extract_tool_result(raw_out: Any, content: str) -> tuple[str, Dict[str, Any
     return content, metadata
 
 
-def _normalize_usage(raw: Any) -> Dict[str, int]:
-    """将 provider usage_metadata 统一为 input_tokens / output_tokens / total_tokens。"""
-    if not raw or not isinstance(raw, dict):
-        return {}
-    key_map = {
-        "input_tokens": ("input_tokens", "inputTokens", "prompt_tokens", "promptTokens"),
-        "output_tokens": ("output_tokens", "outputTokens", "completion_tokens", "completionTokens"),
-        "total_tokens": ("total_tokens", "totalTokens"),
-    }
-    out: Dict[str, int] = {}
-    for canonical, aliases in key_map.items():
-        for k in aliases:
-            v = raw.get(k)
-            if v is not None:
-                try:
-                    out[canonical] = int(v)
-                except (TypeError, ValueError):
-                    pass
-                break
-    if "total_tokens" not in out and "input_tokens" in out and "output_tokens" in out:
-        out["total_tokens"] = out["input_tokens"] + out["output_tokens"]
-    return out
-
-
 def _resolve_tool_call_id(item: Dict[str, Any], data: Dict[str, Any]) -> str:
     """
     依次尝试：data.tool_call_id → input 内 ToolCall id → run_id（callback 系统强制注入）。
@@ -235,10 +224,11 @@ class LangGraphSseBridge:
         self.last_finish_usage: Dict[str, Any] = {}
         self.last_finish_reason: str = ""
         self.last_error_message: str = ""
-        self._usage_cumulative: Dict[str, int] = {}
+        self._usage_cumulative: Dict[str, Any] = {}
         self.last_context_snapshot: Dict[str, int] = {}
         self._session_context_tick = False
         self.last_hitl_payload: Optional[Dict[str, Any]] = None
+        self._usage_collector = RunUsageCollector()
 
     # ---------- metrics ctx ----------
 
@@ -328,6 +318,7 @@ class LangGraphSseBridge:
         run_id: Optional[str],
         raw_usage: Any,
         out: List[str],
+        parent_task_call_id: Optional[str] = None,
     ) -> None:
         usage = _normalize_usage(raw_usage)
         if not usage:
@@ -339,13 +330,25 @@ class LangGraphSseBridge:
             if rid in seen:
                 return
             seen.add(rid)
-        cum: Dict[str, int] = ctx["usage_cumulative"]
+        cum: Dict[str, Any] = ctx["usage_cumulative"]
         cum["input_tokens"] = cum.get("input_tokens", 0) + usage.get("input_tokens", 0)
         cum["output_tokens"] = cum.get("output_tokens", 0) + usage.get("output_tokens", 0)
         if "total_tokens" in usage:
             cum["total_tokens"] = cum.get("total_tokens", 0) + usage["total_tokens"]
         elif cum.get("input_tokens") or cum.get("output_tokens"):
             cum["total_tokens"] = cum.get("input_tokens", 0) + cum.get("output_tokens", 0)
+        # 累计 detail 子项（cache_read/cache_write/reasoning），缺失不补零
+        _accumulate_detail(cum, "input_token_details", usage.get("input_token_details"))
+        _accumulate_detail(cum, "output_token_details", usage.get("output_token_details"))
+        # 归因：按 caller/model 聚合（task 3.2）
+        self._usage_collector.record(
+            raw_usage,
+            attribution=ModelCallAttribution(
+                model_run_id=rid,
+                caller=resolve_caller(parent_task_call_id),
+                parent_tool_call_id=parent_task_call_id or "",
+            ),
+        )
         self._usage_cumulative = dict(cum)
         self._emit_usage_update(ctx, out)
 
@@ -541,6 +544,10 @@ class LangGraphSseBridge:
             self._flush_text_buffer(builder, ctx)
         self.last_finish_usage = payload.get("usage") or {}
         self.last_finish_reason = str(payload.get("finish_reason") or "stop")
+        # 附带 by_caller/by_model 归因摘要（向后兼容：旧前端忽略 attribution 字段）
+        attribution = self._usage_collector.summary()
+        if attribution.get("by_caller") or attribution.get("by_model"):
+            payload.setdefault("attribution", attribution)
         out.append(_format_sse("finish", payload))
         self._finish_emitted = True
 
@@ -870,10 +877,8 @@ class LangGraphSseBridge:
                     ctx["text_buffer"] = (ctx.get("text_buffer") or "") + content
                     ctx["text_buffer_parent_task_call_id"] = parent_task_call_id
                 self._emit_text_delta(content, out, parent_task_call_id)
-            if chunk is not None:
-                usage_meta = getattr(chunk, "usage_metadata", None)
-                if usage_meta:
-                    self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out)
+            # usage 不在 stream chunk 累计：部分 chunk 的 usage 不完整，且会因 run_id 去重
+            # 让 on_chat_model_end 的权威 usage 被丢弃。usage 统一在 on_chat_model_end 累计。
             return
 
         if lc_kind == "on_chat_model_end":
@@ -906,7 +911,7 @@ class LangGraphSseBridge:
             if not usage_meta and isinstance(output, dict):
                 usage_meta = output.get("usage_metadata")
             if usage_meta:
-                self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out)
+                self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out, parent_task_call_id)
             return
 
         if lc_kind == "on_tool_start":

@@ -59,6 +59,7 @@ class SimpleMCPAgent(BaseAgent):
             }
 
             agent = create_noesis_agent(
+                profile="SIMPLE_MCP",
                 tools=all_tools,
                 system_prompt=build_prompt(PromptProfile.SIMPLE_MCP),
                 checkpointer=self.checkpointer,

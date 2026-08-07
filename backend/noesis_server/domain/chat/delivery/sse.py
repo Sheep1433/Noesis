@@ -80,7 +80,11 @@ def encode_run_event(event: RunEvent) -> List[str]:
         return [
             format_sse(
                 "error",
-                {"type": "error", "error": event.message},
+                {
+                    "type": "error",
+                    "error": event.message,
+                    "finish_reason": event.finish_reason or "error",
+                },
             )
         ]
 
@@ -118,14 +122,15 @@ def parse_sse_line_to_event(line: str) -> List[RunEvent]:
     if event_name == "finish":
         reason = str(data.get("finish_reason") or "stop")
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        attribution = data.get("attribution") if isinstance(data.get("attribution"), dict) else {}
         if reason == "hitl_pending":
             return [
-                RunPaused(reason="hitl_pending", finish_reason=reason, usage=usage),
+                RunPaused(reason="hitl_pending", finish_reason=reason, usage=usage, attribution=attribution),
                 WireFrame(event="finish", data=data),
             ]
         return [
             WireFrame(event="finish", data=data),
-            RunCompleted(finish_reason=reason, usage=usage),
+            RunCompleted(finish_reason=reason, usage=usage, attribution=attribution),
         ]
 
     if event_name == "abort":
@@ -136,7 +141,10 @@ def parse_sse_line_to_event(line: str) -> List[RunEvent]:
 
     if event_name == "error":
         msg = str(data.get("error") or data.get("content") or "error")
-        return [WireFrame(event="error", data=data), RunError(message=msg)]
+        return [
+            WireFrame(event="error", data=data),
+            RunError(message=msg, finish_reason=str(data.get("finish_reason") or "error")),
+        ]
 
     return [WireFrame(event=event_name, data=data)]
 

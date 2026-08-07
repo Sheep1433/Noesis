@@ -66,11 +66,11 @@
 
 PersistSink 继续保存 `RunProjection.builder` 的权威快照；刷新时前端以 snapshot/history replace 当前 assistant，而不是合并客户端旧 `running` 状态。
 
-### 3. 工具失败采用“卡片必展示 + 回答级汇总”两层产品表达
+### 3. 工具失败由卡片展示，无最终回答时显示阻断态
 
 `frontend/src/components/ToolCallCollapse/index.vue` 和 `SubagentCollapse` 按 `state` 展示固定标签。失败卡片默认折叠，但不能隐藏；展开后展示安全短句、必要的 stderr/exit code 与重试建议。堆栈、宿主路径、provider、网络解析细节仅进入日志。
 
-同一 assistant 含任意 `failed/timed_out/rejected/cancelled` 工具时，回答底部显示汇总：`部分工具未成功，本次结果可能不完整`。若最终没有可见回答且存在失败工具，则升级为阻断提示并提供“重试”操作。该提示由结构化 parts 派生，不依赖模型自行承认失败。
+同一 assistant 含 `failed/timed_out/rejected/cancelled` 工具但 Agent 在最后一个工具块之后仍生成可见回答时，不额外显示回答级完整性提示；失败尝试已由对应工具卡片明确展示，Agent 可以继续改用其它工具完成任务。工具调用前的过程文本不视为最终回答。只有最终没有可见回答且存在失败工具时，才显示阻断提示并提供“重试”操作。该阻断态由结构化 parts 派生，不依赖模型自行承认失败。
 
 这比完全隐藏失败更诚实，也比把全部技术错误直接铺开更适合普通用户。具体失败卡片仍保留，支持排障与判断引用是否完整。
 
@@ -120,7 +120,7 @@ Alembic 迁移按会话回填 sequence：先以 `created_at`、父子关系、ro
 - [会话行锁增加同一会话写入等待] → 单会话本来只允许一个 active run；事务内只做序号分配与行插入，禁止在锁内执行 Agent/网络调用。
 - [Run 暂停时误把仍在执行的并行工具取消] → 先保证桥接事件 drain 顺序，再在暂停边界 reconcile；加入并行工具 + HITL 的事件顺序测试。
 - [父 task 与子工具状态不一致] → reconcile 按树自底向上计算；父 task 等待同一 interrupt 时显示 `approval_pending`，终态时不得残留非终态子 part。
-- [所有失败都汇总会造成提示偏多] → 卡片默认折叠，回答级只显示一条短提示；不隐藏真实失败。
+- [失败工具可能被忽略] → 每个失败工具卡片仍保留明确状态和安全详情；仅删除容易误判最终答案完整性的回答级汇总。
 - [标题取首条文本可能含命令或附件占位] → 仅使用用户可见文本，规范化空白并截断；纯附件会话使用附件名或保持默认标题，具体规则由测试固定。
 
 ## Migration Plan

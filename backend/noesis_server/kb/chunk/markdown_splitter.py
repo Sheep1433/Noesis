@@ -310,4 +310,3 @@ class MarkdownChunker:
                 i += 1
 
         return tables
-

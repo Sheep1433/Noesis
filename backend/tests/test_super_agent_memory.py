@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, NonCallableMagicMock
 
 import pytest
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.middleware.memory import MemoryMiddleware
 
 from noesis.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
-from noesis.middlewares.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from noesis.middlewares.memory_sync_middleware import MemorySyncMiddleware
+from noesis.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
+from noesis.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
 from noesis.agents.super_agent import (
     _MEMORY_SOURCES,
-    _build_memory_middleware,
     _build_task_worker_subagents,
 )
 from noesis_server.constants.code_enum import IntentEnum
@@ -31,15 +29,6 @@ def test_memory_sources_order_user_before_agents() -> None:
     assert _MEMORY_SOURCES == [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
 
 
-def test_build_memory_middleware_stack() -> None:
-    backend = MagicMock()
-    stack = _build_memory_middleware(backend)
-    assert len(stack) == 2
-    assert isinstance(stack[0], MemoryMiddleware)
-    assert isinstance(stack[1], MemorySyncMiddleware)
-    assert stack[0].sources == _MEMORY_SOURCES
-
-
 def test_task_worker_subagents_exclude_memory_middleware() -> None:
     backend = MagicMock()
     subs = _build_task_worker_subagents(backend, [], [], user_id="u1")
@@ -48,32 +37,56 @@ def test_task_worker_subagents_exclude_memory_middleware() -> None:
     assert not any(isinstance(m, MemoryMiddleware) for m in middleware)
 
 
-def test_memory_sync_middleware_reloads_from_disk() -> None:
-    backend = MagicMock()
-    backend.download_files.return_value = [
-        FileDownloadResponse(
-            path=AGENT_MEMORY_USER_FILE,
-            content=b"profile",
-            error=None,
-        ),
-        FileDownloadResponse(
-            path=AGENT_MEMORY_AGENTS_FILE,
-            content=b"v2",
-            error=None,
-        ),
+def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:
+    backend = NonCallableMagicMock()
+    backend.download_files.side_effect = [
+        [
+            FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile-v1", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"rules-v1", error=None),
+        ],
+        [
+            FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile-v2", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"rules-v2", error=None),
+        ],
     ]
-    mw = MemorySyncMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
+    mw = TurnMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
     state = {"memory_contents": {AGENT_MEMORY_AGENTS_FILE: "stale"}}
-    result = mw.before_model(state, MagicMock())
+    first = mw.before_agent(state, MagicMock(), {})
+    second = mw.before_agent({**state, **(first or {})}, MagicMock(), {})
+
+    assert first is not None
+    assert second is not None
+    assert first["memory_contents"][AGENT_MEMORY_AGENTS_FILE] == "rules-v1"
+    assert second["memory_contents"][AGENT_MEMORY_AGENTS_FILE] == "rules-v2"
+    assert backend.download_files.call_count == 2
+    backend.download_files.assert_called_with(list(_MEMORY_SOURCES))
+
+
+def test_turn_memory_has_no_per_model_reload_hook() -> None:
+    assert "before_model" not in TurnMemoryMiddleware.__dict__
+    assert "abefore_model" not in TurnMemoryMiddleware.__dict__
+
+
+@pytest.mark.asyncio
+async def test_turn_memory_async_path_ignores_checkpoint_cache() -> None:
+    backend = NonCallableMagicMock()
+    backend.adownload_files = AsyncMock(
+        return_value=[
+            FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"fresh", error=None),
+        ]
+    )
+    middleware = TurnMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
+
+    result = await middleware.abefore_agent(
+        {"memory_contents": {AGENT_MEMORY_AGENTS_FILE: "stale"}},
+        MagicMock(),
+        {},
+    )
+
     assert result is not None
-    assert result["memory_contents"][AGENT_MEMORY_AGENTS_FILE] == "v2"
-    backend.download_files.assert_called_once_with(list(_MEMORY_SOURCES))
-
-
-def test_memory_sync_skips_when_no_memory_state() -> None:
-    backend = MagicMock()
-    mw = MemorySyncMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
-    assert mw.before_model({}, MagicMock()) is None
+    assert result["memory_contents"][AGENT_MEMORY_AGENTS_FILE] == "fresh"
+    backend.adownload_files.assert_awaited_once_with(list(_MEMORY_SOURCES))
 
 
 def test_intent_enum_excludes_deep_research_qa() -> None:

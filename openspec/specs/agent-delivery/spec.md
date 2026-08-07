@@ -137,3 +137,39 @@ PersistSink SHALL NOT 静默丢弃状态或终态；终态 SHALL 通过可靠 co
 - **WHEN** PostgreSQL 持续不可写并达到 persistence timeout
 - **THEN** 系统 SHALL 停止继续生成不可保存的无限内容
 - **AND** SHALL 使用受控错误将 run 收口为 error 或已有正文对应的 partial
+
+### Requirement: feishu ChannelAdapter SHALL 可真实收发
+`channel_type=feishu` SHALL 注册可执行 Adapter，而非 Stub 或仅可保存的配置类型。入站 SHALL 规范化为统一 InboundMessage 并进入 ChannelRunService；出站 SHALL 消费同一次 run 的 RunEvent，且 SHALL NOT 经过浏览器 SSE 字符串转发。
+
+#### Scenario: Registry 解析飞书 Adapter
+- **WHEN** 飞书运行时启动且存在有效启用配置
+- **THEN** ChannelRegistry SHALL 解析到支持入站规范化与出站投影的 `feishu` Adapter
+
+### Requirement: 飞书绑定 SHALL 分离授权主体与回复目标
+飞书入站授权 SHALL 绑定发送者 open_id；群聊 chat_id 或 message_id SHALL 只作为会话线程与回复目标，SHALL NOT 单独授予群内所有成员调用 Agent 的权限。
+
+#### Scenario: 同群未配对成员提及机器人
+- **WHEN** 未配对成员在已存在目标 chat_id 的群中 @机器人
+- **THEN** 系统 SHALL 拒绝触发 Agent
+
+### Requirement: 飞书消息 SHALL 共用消息 SSOT 与 delivery 终态
+飞书入站用户消息与 assistant 结果 SHALL 写入网页使用的同一消息 SSOT并记录 `origin=feishu`。飞书发送结果 SHALL 与 run 终态分离，断开浏览器或飞书发送失败 SHALL NOT 阻止 PersistSink 完成终态落库。
+
+#### Scenario: 网页查看飞书会话
+- **WHEN** 已配对用户通过飞书完成一轮对话
+- **THEN** 对应 session 的 messages API SHALL 返回该轮 user 与 assistant 消息
+- **AND** 消息来源 SHALL 可审计为 `feishu`
+
+### Requirement: Delivery SHALL 提供通道运行健康 read model
+Delivery SHALL 为设置控制面提供用户作用域的 adapter 状态、最近检查、最近入站/出站结果和脱敏错误摘要。该 read model SHALL 由真实 adapter/runtime 状态派生；通道配置 Service SHALL NOT 写入伪运行状态。
+
+#### Scenario: 获取当前用户通道健康
+- **WHEN** 设置服务请求当前用户通道健康摘要
+- **THEN** Delivery SHALL 仅返回该用户通道的状态且不包含 token、外部请求 header 或内部堆栈
+
+### Requirement: Delivery SHALL 支持受控测试投递
+Delivery SHALL 接受已鉴权设置服务发起的测试投递命令，向指定当前用户通道发送固定测试内容，并返回稳定投递结果。测试投递 SHALL NOT 创建用户聊天消息或触发 Agent run。
+
+#### Scenario: 测试投递成功
+- **WHEN** 设置服务对健康且启用的通道发起测试投递
+- **THEN** Delivery SHALL 发送固定内容、记录结果并返回关联 id

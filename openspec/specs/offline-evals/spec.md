@@ -8,12 +8,13 @@
 
 ### Requirement: Agent 离线评测经 harness
 
-`evals.agent`（含 BrowseComp、Harbor 和 Agentic RAG）SHALL 通过 `noesis` 包的 Agent Profile 或工厂与流式核执行被测 Agent。系统 SHALL NOT 在 worker 内长期维护与线上分叉的完整 middleware/factory 装配副本；评测专用 backend、prompt、collector 和 benchmark adapter 可以注入。各 Agent benchmark SHALL 共用最小事件结果模型，专用报告可以在该结果之上扩展。
+`evals.agent`（含 BrowseComp、Harbor 和 Agentic RAG）SHALL 通过 `noesis` 包的 Agent Profile 或工厂与流式核执行被测 Agent。Harbor 自定义 Agent SHALL 基于官方 `harbor.agents.base.BaseAgent` 生命周期直接运行，不得为加载 Harness 额外维护 Worker 或进程间代理。评测专用 backend、prompt、collector 和 benchmark adapter 可以注入。各 Agent benchmark SHALL 共用最小事件结果模型，专用报告可以在该结果之上扩展。
 
 #### Scenario: Harbor 使用 harness factory
 
-- **WHEN** 运行 Harbor `noesis_worker`
+- **WHEN** Harbor 调用 `NoesisHarborAgent.run()`
 - **THEN** 系统 SHALL `from noesis.factory import create_noesis_agent` 并经 `noesis.runtime.stream.stream_agent_events` 消费事件
+- **AND** SHALL 直接使用 Harbor 传入的 `BaseEnvironment`，不得启动 Noesis Worker 或 TCP 环境代理
 - **AND** 公共完成状态、文本、工具统计、usage 和错误 SHALL 由共享 Agent event collector 生成
 
 #### Scenario: BrowseComp 使用 SuperAgent Profile
@@ -24,7 +25,7 @@
 
 #### Scenario: Harbor 不加载平台 wiring
 
-- **WHEN** Harbor worker 初始化内存 checkpointer 并执行无 KB/附件工具的 Agent
+- **WHEN** Harbor `BaseAgent` 初始化内存 checkpointer 并执行无 KB/附件工具的 Agent
 - **THEN** 系统 SHALL NOT import `noesis_server.services.harness_wiring`
 - **AND** SHALL NOT 初始化平台 KB、附件或 ORM 服务
 

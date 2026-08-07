@@ -79,13 +79,13 @@ Run 进入 `completed | partial | error | interrupted` 等真正终态前，系�
 
 ### Requirement: 工具失败 SHALL 对用户可见且不泄露内部信息
 
-任一工具进入 `failed | timed_out | rejected | cancelled` 时，用户 SHALL 在对应工具卡片看到明确状态；展开态 SHALL 提供安全短句、适用的退出码/用户输出与下一步建议。系统 SHALL NOT 向用户展示堆栈、宿主路径、provider 名称、私有网络解析结果或密钥。assistant 含任意未成功工具时 SHALL 显示一次回答级完整性提示；无可见回答时 SHALL 提供可重试操作。
+任一工具进入 `failed | timed_out | rejected | cancelled` 时，用户 SHALL 在对应工具卡片看到明确状态；展开态 SHALL 提供安全短句、适用的退出码/用户输出与下一步建议。系统 SHALL NOT 向用户展示堆栈、宿主路径、provider 名称、私有网络解析结果或密钥。有可见最终回答时 SHALL NOT 仅因某次工具失败显示回答级完整性提示；无可见回答时 SHALL 提供可重试操作。
 
 #### Scenario: 部分网页来源失败但回答继续
 
 - **WHEN** 一个 `web_fetch` 失败而其它来源成功，Agent 最终仍生成回答
 - **THEN** 失败卡片 SHALL 显示“连接失败”
-- **AND** 回答底部 SHALL 显示“部分工具未成功，本次结果可能不完整”或等价短句
+- **AND** 回答底部 SHALL NOT 额外显示结果不完整提示
 
 #### Scenario: 环境内部错误脱敏
 

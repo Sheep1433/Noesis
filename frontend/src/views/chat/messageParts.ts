@@ -61,6 +61,7 @@ export interface RetrievalResultUi {
   document_id?: string
   document_version_id?: string
   segment_id?: string
+  collection_name?: string
   url?: string
   title: string
   excerpt: string
@@ -143,17 +144,26 @@ export const TOOL_STATE_LABELS: Record<ToolLifecycleState, string> = {
 
 export function assistantToolFailureSummary(parts: UiPart[]): {
   hasFailure: boolean
-  hasVisibleText: boolean
+  hasFinalText: boolean
 } {
+  let lastToolIndex = -1
+  parts.forEach((part, index) => {
+    if (part.type === 'tool') {
+      lastToolIndex = index
+    }
+  })
   return {
     hasFailure: parts.some((part) => part.type === 'tool'
       && ['failed', 'timed_out', 'rejected', 'cancelled'].includes(part.state)),
-    hasVisibleText: parts.some((part) => part.type === 'text' && Boolean(part.content.trim())),
+    hasFinalText: parts.some((part, index) => index > lastToolIndex
+      && part.type === 'text'
+      && Boolean(part.content.trim())),
   }
 }
 
-export function shouldShowAssistantToolFailureSummary(parts: UiPart[], runIsActive: boolean): boolean {
-  return !runIsActive && assistantToolFailureSummary(parts).hasFailure
+export function shouldShowAssistantToolFailureBlocker(parts: UiPart[], runIsActive: boolean): boolean {
+  const summary = assistantToolFailureSummary(parts)
+  return !runIsActive && summary.hasFailure && !summary.hasFinalText
 }
 
 /** 将已落库的整段 text（含成对标签）拆成 text / reasoning 部件，供历史列表与折叠 UI 使用 */
@@ -333,6 +343,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
               document_id: String(item.document_id ?? ''),
               document_version_id: String(item.document_version_id ?? ''),
               segment_id: String(item.segment_id ?? ''),
+              collection_name: typeof item.collection_name === 'string' ? item.collection_name : undefined,
               url: typeof item.url === 'string' ? item.url : undefined,
               title: String(item.title ?? ''),
               excerpt: item.excerpt,
@@ -585,6 +596,23 @@ export interface TokenUsageSummary {
   input_tokens: number
   output_tokens: number
   total_tokens?: number
+  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
+  input_token_details?: { cache_read?: number, cache_write?: number }
+  output_token_details?: { reasoning?: number }
+  /** 按 caller/model 归因摘要（调试视图按需展示） */
+  attribution?: {
+    cumulative?: Record<string, number>
+    by_caller?: Record<string, Record<string, number>>
+    by_model?: Record<string, Record<string, number>>
+  }
+}
+
+export interface ContextBreakdown {
+  system: number
+  conversation: number
+  tool_results: number
+  tool_definitions: number
+  other: number
 }
 
 export interface ContextWindowSnapshot {
@@ -592,6 +620,13 @@ export interface ContextWindowSnapshot {
   max_tokens: number
   used_percentage: number
   updated_at?: string
+  /** 本地估算标识（始终为 true 时表示 token 非精确计费值） */
+  estimated?: boolean
+  counting_method?: string
+  breakdown?: ContextBreakdown
+  /** 来源细分（Skills/memory/RAG/attachments provenance） */
+  sources?: Record<string, number>
+  caller?: string
 }
 
 export function hasValidContextWindow(context: unknown): context is ContextWindowSnapshot {
@@ -606,7 +641,31 @@ export function hasValidContextWindow(context: unknown): context is ContextWindo
 }
 
 export function formatContextWindowTooltip(context: ContextWindowSnapshot): string {
-  return `${formatTokenCount(context.current_tokens)} / ${formatTokenCount(context.max_tokens)}`
+  const header = `${formatTokenCount(context.current_tokens)} / ${formatTokenCount(context.max_tokens)}`
+  if (!context.breakdown) {
+    return header
+  }
+  const b = context.breakdown
+  const lines: string[] = [
+    `系统 ${formatTokenCount(b.system)}`,
+    `对话 ${formatTokenCount(b.conversation)}`,
+    `工具结果 ${formatTokenCount(b.tool_results)}`,
+    `工具定义 ${formatTokenCount(b.tool_definitions)}`,
+  ]
+  if (b.other > 0) {
+    lines.push(`其他 ${formatTokenCount(b.other)}`)
+  }
+  if (context.sources) {
+    const sourceNames = Object.keys(context.sources)
+    for (let i = 0; i < sourceNames.length; i++) {
+      const name = sourceNames[i]
+      const tokens = context.sources[name]
+      if (tokens && tokens > 0) {
+        lines.push(`${name} ${formatTokenCount(tokens)}`)
+      }
+    }
+  }
+  return `${header}（估算）\n${lines.join(' · ')}`
 }
 
 export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {

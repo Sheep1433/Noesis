@@ -24,6 +24,7 @@ from noesis.runtime.model_attempt import (
     bind_model_attempt_tracker,
     reset_model_attempt_tracker,
 )
+from noesis.runtime.outcome import StopReason, current_runtime_outcome, set_runtime_outcome
 
 DEFAULT_RECURSION_LIMIT = 9999
 
@@ -93,6 +94,7 @@ async def stream_agent_events(
     hitl_pending = False
 
     attempt_tracker = ModelAttemptTracker()
+    set_runtime_outcome(None)
     tracker_token = bind_model_attempt_tracker(attempt_tracker)
     callbacks = agent_config.get("callbacks")
     tracker_callback = ModelAttemptCallback(attempt_tracker)
@@ -139,13 +141,24 @@ async def stream_agent_events(
             yield event
 
         if not hitl_pending:
-            yield {"type": "__tw_finish__", "finish_reason": "stop"}
+            runtime_outcome = current_runtime_outcome()
+            reason = runtime_outcome.wire_reason if runtime_outcome is not None else "completed"
+            yield {"type": "__tw_finish__", "finish_reason": "stop" if reason == StopReason.COMPLETED.value else reason}
 
     except Exception as e:
         logger.exception(
             f"stream_agent_events 异常 task_id={task_id} message_id={message_id}"
         )
-        yield {"type": "__tw_error__", "content": format_agent_stream_error(e)}
-        yield {"type": "__tw_finish__", "finish_reason": "error"}
+        runtime_outcome = current_runtime_outcome()
+        if runtime_outcome is None or runtime_outcome.wire_reason not in {
+            "partial_output",
+            "length_stop",
+            "safety_stop",
+        }:
+            yield {"type": "__tw_error__", "content": format_agent_stream_error(e)}
+        yield {
+            "type": "__tw_finish__",
+            "finish_reason": runtime_outcome.wire_reason if runtime_outcome is not None else "error",
+        }
     finally:
         reset_model_attempt_tracker(tracker_token)

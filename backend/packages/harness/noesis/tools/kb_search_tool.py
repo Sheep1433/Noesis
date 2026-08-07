@@ -17,6 +17,7 @@ from noesis.runtime.deps import (
     require_normalize_query_execution_params,
     require_qdrant_service,
 )
+from noesis.runtime.context_provenance import estimate_source_tokens, get_or_create_context_provenance
 from noesis.runtime.logging import logger
 
 _MAX_DOCUMENT_CHARS = 80_000
@@ -384,6 +385,22 @@ def build_kb_search_tools(
     scope = _normalize_name_list(default_collection_names)
     allowed_scope = scope if enforce_scope and scope else None
 
+    def _tag_rag_provenance(result: str) -> str:
+        """Tag the kb retrieval result as a RAG source for context attribution.
+
+        The kb search/get tools are Noesis-owned, so their tool name is an
+        authoritative source marker (not a content regex guess, per design §2).
+        The result string is the actual ToolMessage content; estimating its
+        tokens here lets the breakdown report ``sources.rag``.
+        """
+        try:
+            tokens = estimate_source_tokens(result)
+            if tokens > 0:
+                get_or_create_context_provenance().add("rag", tokens)
+        except Exception:  # noqa: BLE001 - provenance is best-effort, never block a tool result
+            pass
+        return result
+
     def _list() -> str:
         return list_knowledge_bases(default_collection_names=scope or None)
 
@@ -392,19 +409,23 @@ def build_kb_search_tools(
         collection_names: Optional[List[str]] = None,
         limit: int = 10,
     ) -> str:
-        return search_knowledge_bases_all(
-            query,
-            limit=limit,
-            collection_names=collection_names,
-            default_collection_names=scope or None,
-            allowed_collection_names=allowed_scope,
+        return _tag_rag_provenance(
+            search_knowledge_bases_all(
+                query,
+                limit=limit,
+                collection_names=collection_names,
+                default_collection_names=scope or None,
+                allowed_collection_names=allowed_scope,
+            )
         )
 
     def _get_document(collection_name: str, file_name: str) -> str:
-        return get_knowledge_document(
-            collection_name,
-            file_name,
-            allowed_collection_names=scope or None,
+        return _tag_rag_provenance(
+            get_knowledge_document(
+                collection_name,
+                file_name,
+                allowed_collection_names=scope or None,
+            )
         )
 
     tools = [

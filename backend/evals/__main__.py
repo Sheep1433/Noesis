@@ -18,7 +18,7 @@ MODULES = (
 )
 
 SHELL_MODULES = (
-    ("evals/agent/harbor/run.sh", "Agent / Terminal-Bench（Harbor + Claude Code）"),
+    ("evals/agent/harbor/run-noesis.sh", "Agent / Terminal-Bench（Noesis）"),
 )
 
 
@@ -27,7 +27,7 @@ def main() -> int:
     for mod, desc in MODULES:
         print(f"  uv run python -m {mod} --help    # {desc}")
     for script, desc in SHELL_MODULES:
-        print(f"  ./{script} --n-tasks 1 --job-name smoke  # {desc}")
+        print(f"  ./{script} [smoke|cli-10]  # {desc}")
     print("\n详见 backend/evals/README.md")
     return 0 if len(sys.argv) <= 1 else 1
 

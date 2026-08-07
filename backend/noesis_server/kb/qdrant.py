@@ -637,7 +637,20 @@ class QdrantService:
                 }
 
             embedding = get_embedding()
-            embeddings = embedding.embed_documents(texts)
+            try:
+                embeddings = embedding.embed_documents(texts)
+            except Exception:
+                logger.exception(
+                    "Embedding 生成失败 collection={} file={} chunks={}",
+                    collection_name,
+                    file_name,
+                    len(texts),
+                )
+                return {
+                    'success': False,
+                    'message': '文档处理失败，请稍后重试',
+                    'shards_created': 0,
+                }
 
             if not embeddings:
                 logger.warning(f"[QdrantService] 生成 embedding 失败，使用零向量替代")
@@ -679,10 +692,23 @@ class QdrantService:
             if not points:
                 return {'success': False, 'message': '文档分片失败', 'shards_created': 0}
 
-            self.client.upsert(
-                collection_name=collection_name,
-                points=points,
-            )
+            try:
+                self.client.upsert(
+                    collection_name=collection_name,
+                    points=points,
+                )
+            except Exception:
+                logger.exception(
+                    "Qdrant 写入失败 collection={} file={} points={}",
+                    collection_name,
+                    file_name,
+                    len(points),
+                )
+                return {
+                    'success': False,
+                    'message': '文档处理失败，请稍后重试',
+                    'shards_created': 0,
+                }
             from noesis_server.kb.retrieval import KbRetrievalService
 
             KbRetrievalService.invalidate_cache(collection_name)
@@ -695,6 +721,6 @@ class QdrantService:
                 'extracted_markdown': content,
             }
 
-        except Exception as e:
-            logger.error(f"文档上传失败: {e}")
-            return {'success': False, 'message': f'上传失败: {str(e)}', 'shards_created': 0}
+        except Exception:
+            logger.exception("文档上传未预期失败 collection={} file={}", collection_name, file_name)
+            return {'success': False, 'message': '文档处理失败，请稍后重试', 'shards_created': 0}

@@ -108,6 +108,7 @@ class FaultOperationAgent(BaseAgent):
                 backend = await create_agent_backend(user_id, session_id)
 
                 agent = create_noesis_agent(
+                    profile="FAULT_OPERATION_QA",
                     tools=resolved_mcp,
                     system_prompt=build_prompt(PromptProfile.FAULT_OPERATION),
                     checkpointer=self.checkpointer,

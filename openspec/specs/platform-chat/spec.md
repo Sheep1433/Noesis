@@ -76,6 +76,8 @@
 
 系统 SHALL NOT 按 token 增量 UPDATE assistant 正文；完整工具结束、阶段结束、HITL pending 或可配置节流条件满足时 MAY 更新同一行 parts 检查点。落库 SHALL NOT 依赖浏览器 SSE 仍存活。
 
+该原则 SHALL 覆盖所有流式内容类型：终态内容与生命周期事件（assistant text/reasoning 终态、tool part 终态、message/run 生命周期）入库（durable）；流式增量（token delta、reasoning raw delta、tool output chunk、progress、typing、heartbeat）走 SSE 实时投递，SHALL NOT 落 DB。新增写入点 SHALL 遵循同一原则。
+
 HITL 暂停时 assistant SHALL 保持 `streaming`；resume 续写同一 `run_id` 与 `assistant_message_id`。服务重启导致无法继续时，run SHALL 为 `interrupted`，assistant SHALL 为 `partial`，`finish_reason=server_restart`。
 
 #### Scenario: 无浏览器仍终态
@@ -92,6 +94,11 @@ HITL 暂停时 assistant SHALL 保持 `streaming`；resume 续写同一 `run_id`
 - **THEN** assistant SHALL 为 partial
 - **AND** SHALL 带 `finish_reason=stopped`
 
+#### Scenario: tool output 不增量入库
+- **WHEN** 工具执行过程中产生多个 stdout/stderr chunk
+- **THEN** DB SHALL NOT 存在按 chunk 增量写入的行
+- **AND** 工具终态时 SHALL 一次性写入完整 tool part 到 assistant message content
+
 ### Requirement: tool-output-available 语义
 
 `tool-output-available` SHALL 携带单次工具耗时；错误帧 MAY 含 `errorCategory`；成功帧 MAY 含 outcome 元数据。assistant 落库 tool part SHALL 与 SSE 错误语义一致。细则见 `agent-tool-failure-handling`。
@@ -103,12 +110,30 @@ HITL 暂停时 assistant SHALL 保持 `streaming`；resume 续写同一 `run_id`
 
 ### Requirement: usage-update 与上下文指示
 
-流式路径 SHALL 发出消息级累计 LLM token 的 `usage-update` 与 `finish.usage`；MAY 发出会话上下文占用的 `context-update`。系统 SHALL 提供可配置的上下文窗口上限；会话 MAY 持久化最近上下文快照。
+流式路径 SHALL 发出消息级累计 LLM token 的 `usage-update` 与 `finish.usage`，并 SHALL 在可获得快照时发出当前模型请求占用的 `context-update`。系统 SHALL 提供可配置的上下文窗口上限；会话 MAY 持久化最近上下文快照。
+
+`usage-update` 与 `finish.usage` SHALL 保留 `input_tokens`、`output_tokens`、`total_tokens` 既有字段，并在可用时以向后兼容字段提供 `by_caller` 与 `by_model` 归属；Provider cache/reasoning details SHALL 在后端规范化保留并可经 SSE 字段传递，但 SHALL NOT 作为默认前端摘要展示项。`context-update` SHALL 保留 `current_tokens`、`max_tokens`、`used_percentage`，并以向后兼容字段提供估算标识、顶层 breakdown 和可靠来源细分。
+
+chat 页 SHALL 将“最新模型请求的当前 context window”与“本轮 Agent run 累计实际 usage”分开展示。默认摘要 SHALL 只展示 input/output 与 caller/model 归属；cache/reasoning 等 Provider 明细 SHALL 仅在按需调试视图中展示。旧事件或部分字段缺失时 SHALL 降级到既有总量，SHALL NOT 阻断流式回答。
 
 #### Scenario: finish 含 usage
-
 - **WHEN** 一轮正常完成
 - **THEN** `finish`（或等价）SHALL 含累计 usage，供 chat 页展示
+
+#### Scenario: context 与累计 usage 分开展示
+- **WHEN** 一轮 Agent run 已进行多次模型调用并收到最新 context 快照
+- **THEN** chat 页 SHALL 将最新 context 占用与多次调用累计 usage 分开展示
+- **AND** SHALL NOT 用累计 input token 作为当前 context window 占用
+
+#### Scenario: 新字段向后兼容
+- **WHEN** 客户端只识别既有 usage/context 总量字段
+- **THEN** 扩展后的 SSE 事件 SHALL 仍可被该客户端消费
+- **AND** 服务端 SHALL NOT 删除或重命名既有字段
+
+#### Scenario: Provider 明细缺失
+- **WHEN** Provider 未返回 cache、reasoning 或 caller 调试明细
+- **THEN** chat 页 SHALL 继续展示可用的 input/output/total 与 context 总量
+- **AND** SHALL NOT 将缺失明细显示为确定的零消耗
 
 ### Requirement: 停止生成
 
@@ -134,12 +159,15 @@ HITL 暂停时 assistant SHALL 保持 `streaming`；resume 续写同一 `run_id`
 
 ### Requirement: LLM 工厂
 
-系统 SHALL 按配置的 `MODEL_TYPE`（或等价）选用厂商 LangChain 集成创建聊天模型；**SHALL NOT** 在业务代码硬编码密钥。
+系统 SHALL 按部署端配置的模型目录与 `MODEL_TYPE`（或等价配置）选用厂商 LangChain 集成创建聊天模型；用户选择的 `model_id` SHALL 只能引用平台公开目录。系统 SHALL NOT 从用户设置加载 Provider 地址、API Key 或运行时模型快照，且 SHALL NOT 在业务代码硬编码密钥。
 
 #### Scenario: 缺密钥失败可定位
-
-- **WHEN** 所需 API Key 缺失
+- **WHEN** 平台模型所需 API Key 缺失
 - **THEN** 创建模型 SHALL 失败并给出可定位错误，而非静默空响应
+
+#### Scenario: 用户选择平台模型
+- **WHEN** 用户在聊天页选择 `/api/models` 中的模型
+- **THEN** 后续 run SHALL 使用该平台目录项且不读取用户 Provider 配置
 
 ### Requirement: reasoning SSE 与 UI
 
@@ -299,3 +327,48 @@ chat 页 SHALL 为一次用户发送生成稳定 `client_request_id`，在创建
 - **WHEN** 客户端达到连续自动重连次数上限且服务端终态未知
 - **THEN** 页面 SHALL 显示连接恢复操作并保留已有内容
 - **AND** SHALL NOT 将 run 标记为成功或最终失败
+
+### Requirement: 新 run SHALL 按用途解析用户默认模型
+聊天服务创建新 run 时 SHALL 通过模型用途解析器确定模型，解析顺序为当前用户用途绑定、平台用途默认、现有环境配置；一次 run SHALL 固定启动时解析结果。用户修改默认模型 SHALL NOT 改变正在执行的 run。
+
+#### Scenario: 对话期间修改默认模型
+- **WHEN** run 已启动后用户修改 `chat` 默认模型
+- **THEN** 当前 run SHALL 继续使用启动时模型，下一次新 run SHALL 使用新的有效绑定
+
+### Requirement: 设置控制面扩展 SHALL 保持聊天协议兼容
+新增模型设置、运行记录、通知与诊断 SHALL NOT 改变 `/api/chat` 现有请求必填字段、SSE 事件集合和 assistant 骨架—检查点—终态单行落库状态机。
+
+#### Scenario: 未配置用户模型绑定
+- **WHEN** 用户没有任何用途绑定并发起现有聊天请求
+- **THEN** 系统 SHALL 按平台/环境默认正常运行且前端无需新增 SSE 分支
+
+### Requirement: 平台聊天 SHALL 以普通文本交付 citation
+
+引用编号 SHALL 作为普通 Markdown text part 的内容，经现有 `text-start`、`text-delta`、`text-end` 和 `finish` 交付。平台 SHALL NOT 增加 citation structured response、citation 专用终态文本或第二份 citation annotation。
+
+#### Scenario: 流式输出带 Markdown 引用的回答
+
+- **WHEN** 模型逐 token 生成正文编号和参考资料列表
+- **THEN** 客户端 SHALL 按原有 text delta 顺序展示
+- **AND** 终态消息 SHALL 与流式正文完全一致
+
+### Requirement: 平台 MAY 独立持久化 retrieval results
+
+平台 MAY 使用独立 retrieval part 和 `retrieval-results-available` 交付工具来源，供恢复及来源抽屉展示。retrieval part SHALL NOT 声称其中每条结果都被最终答案引用。
+
+#### Scenario: 刷新恢复研究回答
+
+- **WHEN** 带 Markdown 引用的回答在生成中刷新
+- **THEN** 普通 text snapshot SHALL 恢复已经生成的引用文本
+- **AND** retrieval part SHALL 独立恢复
+
+### Requirement: Citation 上标 SHALL 可确定性恢复
+
+平台 SHALL 在同一 assistant message 中保存原始 Markdown text 和 retrieval parts。客户端 SHALL 使用这两类权威数据确定性重建同一编号、source type 和跳转目标；不持久化第二份答案或依赖流式时内存 annotation。
+
+#### Scenario: 刷新带引用的已完成回答
+
+- **WHEN** 客户端重新加载已完成的 assistant message
+- **THEN** `[n]` SHALL 继续显示为一个可点击上标
+- **AND** 点击目标 SHALL 与首次流式生成完成时一致
+

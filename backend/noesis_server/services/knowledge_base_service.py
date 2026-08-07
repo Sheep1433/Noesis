@@ -389,8 +389,8 @@ async def upload_document(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"上传文档失败: {e}")
-        raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}") from e
+        logger.exception("上传文档服务异常 collection=%s file=%s", collection_name, original_name)
+        raise HTTPException(status_code=500, detail="上传失败，请稍后重试") from e
     finally:
         if staging_path.exists():
             staging_path.unlink()

@@ -19,7 +19,6 @@ from deepagents.backends.protocol import (
 )
 
 from noesis.backends.paths import posix_clean
-
 _MEMORY_FILES = frozenset({"AGENTS.md", "USER.md"})
 
 
@@ -96,7 +95,8 @@ class GuardedFilesystemBackend(BackendProtocol):
             return EditResult(error=self._read_only_error)
         if not name:
             return EditResult(error="file_not_found")
-        return self._inner.edit(file_path, old_string, new_string, replace_all=replace_all)
+        result = self._inner.edit(file_path, old_string, new_string, replace_all=replace_all)
+        return result
 
     def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
         return GrepResult(matches=[])

@@ -7,11 +7,11 @@ import { ensureSession, getSession, updateSessionMeta, updateSessionTitle } from
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
+import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
-import RetrievalResultsCollapse from '@/components/RetrievalResultsCollapse/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
@@ -53,7 +53,6 @@ import {
   applyHitlPendingParts,
   applyToolOutput,
   assistantPartsStillStreaming,
-  assistantToolFailureSummary,
   completeLastReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
@@ -65,7 +64,7 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   shortenChatErrorToast,
-  shouldShowAssistantToolFailureSummary,
+  shouldShowAssistantToolFailureBlocker,
   syncLegacyFieldsFromParts,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
@@ -82,6 +81,25 @@ function retrievedResults(parts: UiPart[]) {
   return parts
     .filter((part) => part.type === 'retrieval')
     .flatMap((part) => part.type === 'retrieval' ? part.results : [])
+}
+
+type CitationSourcesHandle = InstanceType<typeof CitationSources>
+const citationSourcesRefs = new Map<string, CitationSourcesHandle>()
+
+function citationSourcesKey(item: { message_id?: string, chat_id: string }, index: number): string {
+  return item.message_id || `${item.chat_id}:${index}`
+}
+
+function setCitationSourcesRef(key: string, component: unknown) {
+  if (component) {
+    citationSourcesRefs.set(key, component as CitationSourcesHandle)
+  } else {
+    citationSourcesRefs.delete(key)
+  }
+}
+
+function openCitationSource(key: string, number: number) {
+  citationSourcesRefs.get(key)?.open(number)
 }
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
@@ -626,7 +644,7 @@ const nativeReasoningSeen = ref(false)
 // 改为对象存储不同问答类型的uuid
 const uuids = ref<Record<string, string>>({})
 
-const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
+const sessionContext = ref<import('@/api/chat').ContextSnapshot | null>(null)
 const selectedKbCollections = ref<string[]>([])
 const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
@@ -2307,6 +2325,8 @@ function onComposerPaste(e: ClipboardEvent) {
                             <MarkdownPreview
                               v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                               :content="entry.part.content || ''"
+                              :retrieval-results="retrievedResults(item.messageContent.parts)"
+                              :references-complete="entry.part.status !== 'streaming'"
                               :toolCalls="null"
                               :msgMetadata="item.msg_metadata"
                               :isInit="isInit"
@@ -2317,23 +2337,17 @@ function onComposerPaste(e: ClipboardEvent) {
                               :parentScollBottomMethod="scrollToBottom"
                               @failed="() => onFailedReader(index)"
                               @recycleQa="() => onRecycleQa(index)"
+                              @citation-click="(number) => openCitationSource(citationSourcesKey(item, index), number)"
                             />
                           </template>
-                          <RetrievalResultsCollapse
-                            v-if="retrievedResults(item.messageContent.parts).length"
-                            :results="retrievedResults(item.messageContent.parts)"
-                          />
                           <div
-                            v-if="shouldShowAssistantToolFailureSummary(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
-                            class="assistant-tool-failure-summary"
+                            v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
+                            class="assistant-tool-failure-blocker"
                             role="status"
                           >
-                            <span class="assistant-tool-failure-summary__icon" aria-hidden="true">!</span>
-                            <span>{{ assistantToolFailureSummary(item.messageContent.parts).hasVisibleText
-                              ? '部分工具未成功，本次结果可能不完整'
-                              : '本轮未完成' }}</span>
+                            <span class="assistant-tool-failure-blocker__icon" aria-hidden="true">!</span>
+                            <span>本轮未完成</span>
                             <n-button
-                              v-if="!assistantToolFailureSummary(item.messageContent.parts).hasVisibleText"
                               text
                               size="tiny"
                               @click="onRecycleQa(index)"
@@ -2352,10 +2366,20 @@ function onComposerPaste(e: ClipboardEvent) {
                             :qa-type="item.qa_type || 'COMMON_QA'"
                             :copy-text="extractLastTopLevelText(item.messageContent.parts)"
                             :usage-text="hasValidUsage(item.msg_metadata?.usage) ? formatUsageSummary(item.msg_metadata!.usage!) : ''"
+                            :attribution="item.msg_metadata?.usage?.attribution"
                             :langfuse_session_id="item.langfuse_session_id"
                             :langfuse-ui-origin="langfuseUiOrigin"
                             @recycle-qa="() => onRecycleQa(index)"
-                          />
+                          >
+                            <template #meta>
+                              <CitationSources
+                                v-if="retrievedResults(item.messageContent.parts).length"
+                                :ref="(component) => setCitationSourcesRef(citationSourcesKey(item, index), component)"
+                                :content="extractLastTopLevelText(item.messageContent.parts)"
+                                :results="retrievedResults(item.messageContent.parts)"
+                              />
+                            </template>
+                          </AssistantReplyToolbar>
                         </div>
                       </template>
                       <template v-else>
@@ -2827,7 +2851,7 @@ function onComposerPaste(e: ClipboardEvent) {
 </template>
 
 <style lang="scss" scoped>
-.assistant-tool-failure-summary {
+.assistant-tool-failure-blocker {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -2837,7 +2861,7 @@ function onComposerPaste(e: ClipboardEvent) {
   line-height: 1.4;
 }
 
-.assistant-tool-failure-summary__icon {
+.assistant-tool-failure-blocker__icon {
   display: inline-flex;
   flex: 0 0 16px;
   align-items: center;

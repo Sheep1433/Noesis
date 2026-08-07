@@ -1,0 +1,17 @@
+Noesis Knowledge Base — DeepDoc Vendor Notice
+=============================================
+
+This directory contains source code vendored from RAGFlow DeepDoc:
+
+  Project:  RAGFlow (InfiniFlow)
+  Upstream: https://github.com/infiniflow/ragflow
+  Pin:      see UPSTREAM.md
+  License:  Apache License 2.0 (see LICENSE)
+
+OCR / Layout / TSR models are NOT included in this repository.
+Download weights separately:
+
+  cd backend && uv run python -m kb.download_models
+
+Manual modifications relative to upstream MUST be recorded in
+docs/NOTES.md (DeepDoc Vendor 修改清单).

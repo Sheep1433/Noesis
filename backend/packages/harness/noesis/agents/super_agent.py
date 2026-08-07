@@ -7,7 +7,6 @@ import uuid
 from typing import AsyncGenerator, Optional
 
 from deepagents.backends.protocol import BackendProtocol
-from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.subagents import SubAgent
 from langchain.agents.middleware import TodoListMiddleware
 from langgraph.types import Command
@@ -19,10 +18,9 @@ from noesis.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FI
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
 from noesis.factory import build_subagent_default_middleware, create_noesis_agent
 from noesis.tools.ask_user import ask_user_tool, build_interrupt_on
-from noesis.middlewares.chat_attachments_middleware import ChatAttachmentsMiddleware
-from noesis.middlewares.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from noesis.middlewares.memory_sync_middleware import MemorySyncMiddleware
-from noesis.middlewares.revisable_skills_middleware import RevisableSkillsMiddleware
+from noesis.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
+from noesis.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
+from noesis.middlewares.capabilities.versioned_skills_middleware import VersionedSkillsMiddleware
 from noesis.prompts import PromptProfile, build_prompt
 from noesis.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.skills import resolve_skill_sources_for_session
@@ -35,6 +33,7 @@ from noesis.config.user_data_paths import ensure_user_memory_files
 from noesis.context import ContextResolver
 from noesis.llm.factory import get_llm
 from noesis.runtime.deps import require_attachment_service
+from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
 
 _MEMORY_SOURCES = [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
 
@@ -44,17 +43,6 @@ def _resolve_user_id(current_user) -> Optional[str]:
         return None
     uid = getattr(current_user, "user_id", None)
     return str(uid) if uid is not None else None
-
-
-def _build_memory_middleware(backend: BackendProtocol, sources: list[str] | tuple[str, ...] = _MEMORY_SOURCES) -> list:
-    return [
-        MemoryMiddleware(
-            backend=backend,
-            sources=list(sources),
-            system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
-        ),
-        MemorySyncMiddleware(backend=backend, sources=list(sources)),
-    ]
 
 
 def _build_task_worker_subagents(
@@ -68,7 +56,7 @@ def _build_task_worker_subagents(
 ) -> list[SubAgent]:
     subagent_middleware = [
         *build_subagent_default_middleware(backend),
-        RevisableSkillsMiddleware(
+        VersionedSkillsMiddleware(
             backend=backend,
             sources=list(skill_sources),
             system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
@@ -121,13 +109,17 @@ class SuperAgent(BaseAgent):
         resolved_context = ContextResolver.resolve(user_id, PromptProfile.SUPER_AGENT)
         extra_middleware: list = [
             TodoListMiddleware(),
-            RevisableSkillsMiddleware(
+            VersionedSkillsMiddleware(
                 backend=backend,
                 sources=list(skill_sources),
                 system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
                 user_id=user_id,
             ),
-            *_build_memory_middleware(backend, resolved_context.memory_sources),
+            TurnMemoryMiddleware(
+                backend=backend,
+                sources=list(resolved_context.memory_sources),
+                system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
+            ),
         ]
 
         if (
@@ -147,17 +139,9 @@ class SuperAgent(BaseAgent):
                 user_id=user_id,
                 db=db,
             )
-            extra_middleware.insert(
-                0,
-                ChatAttachmentsMiddleware(
-                    session_id=session_id,
-                    user_id=user_id,
-                    db=db,
-                    model_id=model_id,
-                ),
-            )
 
         return create_noesis_agent(
+            profile="SUPER_AGENT_QA",
             tools=tools,
             system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
@@ -230,11 +214,18 @@ class SuperAgent(BaseAgent):
                         "file_dict": file_list or {},
                     }
 
+                human_message = HumanMessage(content=query, additional_kwargs=human_kwargs)
+                if ChatAttachmentConfig.enabled and db is not None:
+                    human_message = await AttachmentInputResolver(
+                        session_id=session_id,
+                        user_id=user_id,
+                        db=db,
+                        model_id=model_id,
+                    ).resolve_human_message(query, additional_kwargs=human_kwargs)
+
                 stream_args = {
                     "input": {
-                        "messages": [
-                            HumanMessage(content=query, additional_kwargs=human_kwargs)
-                        ]
+                        "messages": [human_message]
                     },
                     "config": config,
                     "stream_mode": "messages",

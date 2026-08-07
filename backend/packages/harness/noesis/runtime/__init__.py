@@ -17,6 +17,23 @@ _EXPORTS = {
     "bind_vlm": ("noesis.runtime.deps", "bind_vlm"),
     "temporary_attachment_service": ("noesis.runtime.deps", "temporary_attachment_service"),
     "temporary_kb_runtime": ("noesis.runtime.deps", "temporary_kb_runtime"),
+    "RuntimeOutcome": ("noesis.runtime.outcome", "RuntimeOutcome"),
+    "RuntimePhase": ("noesis.runtime.outcome", "RuntimePhase"),
+    "RuntimeStatus": ("noesis.runtime.outcome", "RuntimeStatus"),
+    "StopReason": ("noesis.runtime.outcome", "StopReason"),
+    "ToolResultEnvelope": ("noesis.runtime.outcome", "ToolResultEnvelope"),
+    "GovernorState": ("noesis.runtime.outcome", "GovernorState"),
+    "ContextSnapshot": ("noesis.runtime.context_snapshot", "ContextSnapshot"),
+    "ContextProvenance": ("noesis.runtime.context_provenance", "ContextProvenance"),
+    "current_context_provenance": ("noesis.runtime.context_provenance", "current_context_provenance"),
+    "get_or_create_context_provenance": ("noesis.runtime.context_provenance", "get_or_create_context_provenance"),
+    "reset_context_provenance": ("noesis.runtime.context_provenance", "reset_context_provenance"),
+    "estimate_source_tokens": ("noesis.runtime.context_provenance", "estimate_source_tokens"),
+    "RunGovernor": ("noesis.runtime.governor", "RunGovernor"),
+    "GovernorLimits": ("noesis.runtime.governor", "GovernorLimits"),
+    "current_runtime_outcome": ("noesis.runtime.outcome", "current_runtime_outcome"),
+    "current_run_governor": ("noesis.runtime.governor", "current_run_governor"),
+    "current_tool_result_envelope": ("noesis.runtime.outcome", "current_tool_result_envelope"),
 }
 
 __all__ = list(_EXPORTS)

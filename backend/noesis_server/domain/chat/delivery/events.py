@@ -43,12 +43,14 @@ class RunPaused:
     reason: str  # hitl_pending
     finish_reason: str = ""
     usage: Dict[str, Any] = field(default_factory=dict)
+    attribution: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class RunCompleted:
     finish_reason: str = "stop"
     usage: Dict[str, Any] = field(default_factory=dict)
+    attribution: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

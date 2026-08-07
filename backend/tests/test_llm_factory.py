@@ -2,12 +2,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_deepseek import ChatDeepSeek
+from langchain_core.messages import AIMessage, HumanMessage
 
-from noesis.llm.factory import _OPENCODE_DEFAULT_BASE_URL, _OPENCODE_DEFAULT_HEADERS, build_chat_model
+from noesis.llm.factory import (
+    _OPENCODE_DEFAULT_BASE_URL,
+    _OPENCODE_DEFAULT_HEADERS,
+    build_chat_model,
+)
 
 
 def test_build_chat_model_opencode_uses_required_headers() -> None:
-    with patch("noesis.llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
+    with patch(
+        "noesis.llm.factory.ReasoningAwareChatDeepSeek",
+        return_value=MagicMock(),
+    ) as chat_deepseek:
         build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
@@ -35,7 +43,10 @@ def test_llm_http_clients_bypass_system_proxy() -> None:
 
 
 def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:
-    with patch("noesis.llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
+    with patch(
+        "noesis.llm.factory.ReasoningAwareChatDeepSeek",
+        return_value=MagicMock(),
+    ) as chat_deepseek:
         build_chat_model(
             model_type="opencode",
             model_name="deepseek-v4-flash-free",
@@ -61,6 +72,35 @@ def test_build_chat_model_opencode_returns_chat_deepseek_instance() -> None:
         )
 
     assert isinstance(model, ChatDeepSeek)
+
+
+def test_opencode_model_round_trips_reasoning_content_on_tool_call() -> None:
+    model = build_chat_model(
+        model_type="opencode",
+        model_name="deepseek-v4-flash-free",
+        temperature=0.75,
+        model_base_url="https://opencode.ai/zen/v1",
+        model_api_key="public",
+    )
+
+    payload = model._get_request_payload(  # noqa: SLF001
+        [
+            HumanMessage(content="查一下 Noesis"),
+            AIMessage(
+                content="",
+                additional_kwargs={"reasoning_content": "先调用检索工具"},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "search",
+                        "args": {"query": "Noesis"},
+                    }
+                ],
+            ),
+        ]
+    )
+
+    assert payload["messages"][1]["reasoning_content"] == "先调用检索工具"
 
 
 def test_build_chat_model_unsupported_type_raises() -> None:

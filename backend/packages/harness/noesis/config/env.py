@@ -118,20 +118,14 @@ class ModelSettings:
     summarization_trigger_tokens: int
     summarization_trigger_fraction: float
     summarization_max_input_tokens: int
-    summarization_tool_offload_threshold: int
-    summarization_max_retention_ratio: float
     summarization_messages_to_keep: int
-    loop_detection_enabled: bool
-    loop_detection_warn_threshold: int
-    loop_detection_hard_limit: int
-    loop_detection_window_size: int
-    loop_detection_max_tracked_threads: int
-    dangling_tool_call_repair_enabled: bool
-    tool_call_limit_enabled: bool
-    tool_call_limit_thread_limit: int | None
-    tool_call_limit_run_limit: int | None
-    tool_call_limit_exit_behavior: str
-    tool_call_limit_task_run_limit: int | None
+    governor_loop_enabled: bool
+    governor_loop_hard_limit: int
+    governor_loop_window_size: int
+    tool_output_max_chars: int
+    governor_tool_calls_enabled: bool
+    governor_tool_calls_total: int | None
+    governor_tool_calls_per_name: int | None
 
 
 @dataclass(frozen=True)
@@ -350,8 +344,8 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
     emb = yaml_cfg.embedding
     rerank = yaml_cfg.rerank
     vlm = yaml_cfg.vlm
-    loop = yaml_cfg.loop_detection
     runtime = yaml_cfg.agent_runtime
+    gov = runtime.governor
     vlm_api_key = (
         secrets.vlm_model_api_key
         or _legacy_env("VL_MODEL_API_KEY", "")
@@ -400,45 +394,26 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         summarization_max_input_tokens=_legacy_env_int(
             "SUMMARIZATION_MAX_INPUT_TOKENS", s.max_input_tokens
         ),
-        summarization_tool_offload_threshold=_legacy_env_int(
-            "SUMMARIZATION_TOOL_OFFLOAD_THRESHOLD", s.tool_offload_threshold
-        ),
-        summarization_max_retention_ratio=_legacy_env_float(
-            "SUMMARIZATION_MAX_RETENTION_RATIO", s.max_retention_ratio
-        ),
         summarization_messages_to_keep=_legacy_env_int(
             "SUMMARIZATION_MESSAGES_TO_KEEP", s.messages_to_keep
         ),
-        loop_detection_enabled=_legacy_env_bool("LOOP_DETECTION_ENABLED", loop.enabled),
-        loop_detection_warn_threshold=_legacy_env_int(
-            "LOOP_DETECTION_WARN_THRESHOLD", loop.warn_threshold
+        governor_loop_enabled=_legacy_env_bool("GOVERNOR_LOOP_ENABLED", gov.loop_enabled),
+        governor_loop_hard_limit=_legacy_env_int("GOVERNOR_LOOP_HARD_LIMIT", gov.loop_hard_limit),
+        governor_loop_window_size=_legacy_env_int("GOVERNOR_LOOP_WINDOW_SIZE", gov.loop_window_size),
+        tool_output_max_chars=_legacy_env_int(
+            "TOOL_OUTPUT_MAX_CHARS", runtime.tool_output_max_chars
         ),
-        loop_detection_hard_limit=_legacy_env_int("LOOP_DETECTION_HARD_LIMIT", loop.hard_limit),
-        loop_detection_window_size=_legacy_env_int("LOOP_DETECTION_WINDOW_SIZE", loop.window_size),
-        loop_detection_max_tracked_threads=_legacy_env_int(
-            "LOOP_DETECTION_MAX_TRACKED_THREADS", loop.max_tracked_threads
+        governor_tool_calls_enabled=_legacy_env_bool(
+            "GOVERNOR_TOOL_CALLS_ENABLED", gov.tool_calls_enabled
         ),
-        dangling_tool_call_repair_enabled=_legacy_env_bool(
-            "DANGLING_TOOL_CALL_REPAIR_ENABLED", runtime.dangling_tool_call_repair_enabled
-        ),
-        tool_call_limit_enabled=_legacy_env_bool(
-            "TOOL_CALL_LIMIT_ENABLED", runtime.tool_call_limit.enabled
-        ),
-        tool_call_limit_thread_limit=_legacy_env_int(
-            "TOOL_CALL_LIMIT_THREAD_LIMIT", runtime.tool_call_limit.thread_limit or 0
-        )
-        or None,
-        tool_call_limit_run_limit=(
-            _legacy_env_int("TOOL_CALL_LIMIT_RUN_LIMIT", runtime.tool_call_limit.run_limit or 0)
+        governor_tool_calls_total=(
+            _legacy_env_int("GOVERNOR_TOOL_CALLS_TOTAL", gov.tool_calls_total or 0)
             or None
         ),
-        tool_call_limit_exit_behavior=_legacy_env(
-            "TOOL_CALL_LIMIT_EXIT_BEHAVIOR", runtime.tool_call_limit.exit_behavior
-        ),
-        tool_call_limit_task_run_limit=(
+        governor_tool_calls_per_name=(
             _legacy_env_int(
-                "TOOL_CALL_LIMIT_TASK_RUN_LIMIT",
-                runtime.tool_call_limit.task_run_limit or 0,
+                "GOVERNOR_TOOL_CALLS_PER_NAME",
+                gov.tool_calls_per_name or 0,
             )
             or None
         ),

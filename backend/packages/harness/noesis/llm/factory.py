@@ -2,6 +2,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
+from langchain_core.messages import AIMessage
 from noesis.config.env import ModelConfig
 
 _OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
@@ -9,6 +10,21 @@ _OPENCODE_DEFAULT_HEADERS = {
     "HTTP-Referer": "https://opencode.ai/",
     "X-Title": "opencode",
 }
+
+
+class ReasoningAwareChatDeepSeek(ChatDeepSeek):
+    """Keep DeepSeek thinking metadata when tool calls are sent back upstream."""
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        messages = self._convert_input(input_).to_messages()
+        for message, payload_message in zip(messages, payload.get("messages", []), strict=False):
+            if not isinstance(message, AIMessage):
+                continue
+            reasoning_content = (message.additional_kwargs or {}).get("reasoning_content")
+            if reasoning_content is not None:
+                payload_message["reasoning_content"] = reasoning_content
+        return payload
 
 
 def _llm_http_timeout() -> httpx.Timeout:
@@ -71,7 +87,7 @@ def build_chat_model(
             streaming=ModelConfig.streaming,
             **http_kwargs,
         ),
-        "opencode": lambda: ChatDeepSeek(
+        "opencode": lambda: ReasoningAwareChatDeepSeek(
             model=model_name,
             temperature=temperature,
             api_base=model_base_url or _OPENCODE_DEFAULT_BASE_URL,
@@ -96,7 +112,7 @@ def build_chat_model(
             streaming=ModelConfig.streaming,
             **http_kwargs,
         ),
-        "deepseek": lambda: ChatDeepSeek(
+        "deepseek": lambda: ReasoningAwareChatDeepSeek(
             model=model_name,
             temperature=temperature,
             base_url=model_base_url,
