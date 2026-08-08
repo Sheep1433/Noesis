@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from noesis_server.api.chat_api import ensure_session
-from noesis_server.schemas.chat_vo import EnsureSessionRequest
+from noesis.schemas.chat_vo import EnsureSessionRequest
 
 
 @pytest.mark.asyncio

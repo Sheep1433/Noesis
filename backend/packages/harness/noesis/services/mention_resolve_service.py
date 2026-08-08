@@ -25,7 +25,7 @@ from noesis.config.user_data_paths import (
 )
 from noesis.config.code_enum import IntentEnum
 from noesis.errors.exceptions import ServiceException
-from noesis_server.schemas.qa_vo import MentionItem
+from noesis.schemas.qa_vo import MentionItem
 
 MentionType = Literal["skill", "file", "folder", "subagent"]
 

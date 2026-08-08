@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.common.http.response import ResponseUtil
-from noesis_server.schemas.login_vo import CurrentUser
+from noesis.schemas.login_vo import CurrentUser
 from noesis_server.infrastructure.database.dependency import get_db
 from noesis.services.settings_service import SettingsService
 from noesis.services.user_service import UserService

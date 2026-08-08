@@ -15,7 +15,7 @@ from noesis.skills.revision import (
     get_user_skills_revision,
     skills_revision_path,
 )
-from noesis_server.schemas.skill_vo import SkillFsSourceSection, SkillFsTreeNode, SkillFsTreeResponse
+from noesis.schemas.skill_vo import SkillFsSourceSection, SkillFsTreeNode, SkillFsTreeResponse
 from noesis.runtime.logging import logger
 
 _MAX_READ_BYTES = 512 * 1024

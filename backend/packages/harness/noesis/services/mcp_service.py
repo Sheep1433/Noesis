@@ -24,7 +24,7 @@ from noesis.config.mcp_config import (
     validate_user_server_config,
 )
 from noesis.config.user_data_paths import ensure_user_mcp_path, get_user_mcp_path
-from noesis_server.schemas.mcp_vo import (
+from noesis.schemas.mcp_vo import (
     McpConfigFileResponse,
     McpProbeResponse,
     McpServerStatusItemVo,

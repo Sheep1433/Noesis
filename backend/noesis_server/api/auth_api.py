@@ -8,7 +8,7 @@ from noesis.config.env import SessionConfig
 from noesis.services.auth.sessions import SessionService
 from noesis_server.api.auth_cookie import attach_session_cookie, clear_session_cookie
 from noesis.errors.exceptions import AuthException
-from noesis_server.schemas.login_vo import CurrentUser, UserLogin, UserRegistrationRequest
+from noesis.schemas.login_vo import CurrentUser, UserLogin, UserRegistrationRequest
 from noesis.services.login_service import LoginService
 from noesis.services.user_service import UserService
 

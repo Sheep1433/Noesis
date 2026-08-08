@@ -9,8 +9,8 @@ get_db = pg_manager.get_async_session_context
 from noesis.errors.exceptions import AuthException, LoginException
 from noesis.domain.auth.entities import AuthUser
 from noesis.repositories.auth_repository import SqlAlchemyUserRepository
-from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.schemas.qa_vo import QaStopRequest
+from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.qa_vo import QaStopRequest
 from noesis.config.env import SessionConfig
 from noesis.runtime.logging import logger
 from noesis.domain.auth.password import PwdUtil

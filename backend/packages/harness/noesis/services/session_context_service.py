@@ -22,7 +22,7 @@ from noesis.config.user_data_paths import (
     get_user_skills_dir,
     get_workspace_dir,
 )
-from noesis_server.schemas.session_context_vo import FsTreeNode, SessionContextResponse
+from noesis.schemas.session_context_vo import FsTreeNode, SessionContextResponse
 from noesis.services.chat_service import ChatService
 from noesis.services.skill_fs_service import SkillFsService
 

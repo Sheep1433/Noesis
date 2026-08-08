@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.common.http.response import ResponseUtil
-from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.schemas.mcp_vo import (
+from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.mcp_vo import (
     McpConfigUpdateRequest,
     McpServerCatalogItemVo,
     McpServerUpsertRequest,

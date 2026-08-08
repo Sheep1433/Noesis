@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from noesis_server.schemas.settings_vo import (
+from noesis.schemas.settings_vo import (
     SecretWriteAction,
     SecretWriteCommand,
     SettingsCapabilities,

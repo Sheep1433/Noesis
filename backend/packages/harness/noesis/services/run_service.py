@@ -38,10 +38,10 @@ from noesis.errors.exceptions import ConflictException, NotFoundException, Servi
 from noesis.storage.postgres.manager import pg_manager
 from noesis.repositories.agent_run_repository import AgentRunRepository
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage, TChatSession
-from noesis_server.schemas.chat_vo import CreateRunRequest
-from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.schemas.qa_vo import QaQueryRequest
-from noesis_server.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
+from noesis.schemas.chat_vo import CreateRunRequest
+from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.qa_vo import QaQueryRequest
+from noesis.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
 from noesis.services.qa import QaService
 from noesis.services.chat_service import ChatService
 

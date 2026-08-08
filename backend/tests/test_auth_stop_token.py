@@ -87,8 +87,8 @@ async def test_require_csrf_rejects_bad_header():
 
 @pytest.mark.asyncio
 async def test_stop_csrf_accepts_body_token(monkeypatch):
-    from noesis_server.schemas.login_vo import CurrentUser
-    from noesis_server.schemas.qa_vo import QaStopRequest
+    from noesis.schemas.login_vo import CurrentUser
+    from noesis.schemas.qa_vo import QaStopRequest
     from noesis.services.user_service import UserService
 
     sess = _session("csrf-body")

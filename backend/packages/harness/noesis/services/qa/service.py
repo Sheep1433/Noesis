@@ -13,8 +13,8 @@ from noesis.mcp.loader import load_mcp_tools_by_names
 from noesis.storage.postgres.manager import pg_manager
 from noesis.config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
 from noesis.config.code_enum import IntentEnum
-from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.schemas.qa_vo import QaQueryRequest
+from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.qa_vo import QaQueryRequest
 from noesis.services.chat_service import ChatService
 from noesis.services.chat_attachment_service import ChatAttachmentService
 from noesis.services.mention_resolve_service import MentionResolveService

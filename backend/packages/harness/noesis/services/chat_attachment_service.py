@@ -24,7 +24,7 @@ from noesis.config.user_data_paths import (
 from noesis.errors.exceptions import ServiceWarning
 from noesis.knowledge.parser import DocumentParser
 from noesis.storage.postgres.models.chat import TChatAttachment
-from noesis_server.schemas.chat_attachment_vo import AttachmentResponse
+from noesis.schemas.chat_attachment_vo import AttachmentResponse
 from noesis.services.chat_service import ChatService
 from noesis.runtime.logging import logger
 from noesis.runtime.attachments.image_prepare import build_image_preview_base64

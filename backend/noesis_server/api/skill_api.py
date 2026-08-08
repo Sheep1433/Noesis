@@ -8,8 +8,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
 from fastapi.responses import Response
 
-from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.schemas.skill_vo import (
+from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.skill_vo import (
     SkillFsFileContent,
     SkillSource,
     SkillMarketInstallRequest,

@@ -1,39 +1,68 @@
 """Knowledge Base HTTP transport.
 
-Business orchestration lives in ``noesis_server.services.knowledge_base_service``.
+Service (``noesis.services.knowledge_base_service``) returns plain dicts and
+raises domain exceptions; this layer wraps responses with ``ResponseUtil`` and
+maps exceptions to HTTP status codes.
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.infrastructure.database.dependency import get_db
-from noesis_server.schemas.knowledge_base_schema import (
+from noesis.schemas.knowledge_base_schema import (
     CreateCollectionRequest,
     PatchCollectionConfigRequest,
     SearchCollectionBody,
 )
-from noesis_server.schemas.login_vo import CurrentUser
+from noesis.schemas.login_vo import CurrentUser
 from noesis.services import knowledge_base_service
 from noesis.services.user_service import UserService
+from noesis_server.common.http.response import ResponseUtil
+from noesis.errors.exceptions import (
+    ConflictException,
+    NotFoundException,
+    ServiceException,
+)
+from noesis.knowledge.base import QdrantNotConnectedError
 
 
 knowledge_base_router = APIRouter(prefix="/api/knowledge_base", tags=["知识库模块"])
+
+
+def _map_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, QdrantNotConnectedError):
+        return HTTPException(status_code=503, detail=str(exc.message or "向量库未连接"))
+    if isinstance(exc, NotFoundException):
+        return HTTPException(status_code=404, detail=exc.message or "资源不存在")
+    if isinstance(exc, ConflictException):
+        return HTTPException(status_code=409, detail=exc.message or "资源冲突")
+    if isinstance(exc, ServiceException):
+        return HTTPException(status_code=500, detail=exc.message or "服务异常")
+    return HTTPException(status_code=500, detail=str(exc))
 
 
 @knowledge_base_router.get("/status")
 async def get_status(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    return await knowledge_base_service.get_status(current_user)
+    try:
+        data = await knowledge_base_service.get_status(current_user)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.get("/collections")
 async def get_collections(
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    return await knowledge_base_service.get_collections(current_user)
+    try:
+        data = await knowledge_base_service.get_collections(current_user)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.post("/collections")
@@ -42,7 +71,11 @@ async def create_collection(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await knowledge_base_service.create_collection(request, current_user, db)
+    try:
+        data = await knowledge_base_service.create_collection(request, current_user, db)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.delete("/collections/{collection_name}")
@@ -51,7 +84,11 @@ async def delete_collection(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await knowledge_base_service.delete_collection(collection_name, current_user, db)
+    try:
+        data = await knowledge_base_service.delete_collection(collection_name, current_user, db)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.get("/collections/{collection_name}")
@@ -59,7 +96,11 @@ async def get_collection(
     collection_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    return await knowledge_base_service.get_collection(collection_name, current_user)
+    try:
+        data = await knowledge_base_service.get_collection(collection_name, current_user)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.get("/collections/{collection_name}/config")
@@ -68,7 +109,11 @@ async def get_collection_config(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await knowledge_base_service.get_collection_config(collection_name, current_user, db)
+    try:
+        data = await knowledge_base_service.get_collection_config(collection_name, current_user, db)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.patch("/collections/{collection_name}/config")
@@ -78,9 +123,13 @@ async def patch_collection_config(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await knowledge_base_service.patch_collection_config(
-        collection_name, body, current_user, db
-    )
+    try:
+        data = await knowledge_base_service.patch_collection_config(
+            collection_name, body, current_user, db
+        )
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.get("/collections/{collection_name}/documents")
@@ -88,7 +137,11 @@ async def get_documents(
     collection_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    return await knowledge_base_service.get_documents(collection_name, current_user)
+    try:
+        data = await knowledge_base_service.get_documents(collection_name, current_user)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.get("/collections/{collection_name}/documents/{file_name}/shards")
@@ -97,7 +150,11 @@ async def get_shards(
     file_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    return await knowledge_base_service.get_shards(collection_name, file_name, current_user)
+    try:
+        data = await knowledge_base_service.get_shards(collection_name, file_name, current_user)
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.get("/collections/{collection_name}/shards/{shard_id}")
@@ -106,9 +163,13 @@ async def get_shard_detail(
     shard_id: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    return await knowledge_base_service.get_shard_detail(
-        collection_name, shard_id, current_user
-    )
+    try:
+        data = await knowledge_base_service.get_shard_detail(
+            collection_name, shard_id, current_user
+        )
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.delete("/collections/{collection_name}/documents/{file_name}")
@@ -117,9 +178,13 @@ async def delete_document(
     file_name: str,
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    return await knowledge_base_service.delete_document(
-        collection_name, file_name, current_user
-    )
+    try:
+        data = await knowledge_base_service.delete_document(
+            collection_name, file_name, current_user
+        )
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.post("/collections/{collection_name}/upload")
@@ -133,14 +198,18 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ):
     content = await file.read()
-    return await knowledge_base_service.upload_document(
-        collection_name,
-        file_name=file.filename or "unknown",
-        content=content,
-        processing_params=processing_params,
-        current_user=current_user,
-        db=db,
-    )
+    try:
+        data = await knowledge_base_service.upload_document(
+            collection_name,
+            file_name=file.filename or "unknown",
+            content=content,
+            processing_params=processing_params,
+            current_user=current_user,
+            db=db,
+        )
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(data=data)
 
 
 @knowledge_base_router.post("/collections/{collection_name}/search")
@@ -150,6 +219,10 @@ async def search_collection(
     current_user: CurrentUser = Depends(UserService.get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await knowledge_base_service.search_collection(
-        collection_name, body, current_user, db
-    )
+    try:
+        data = await knowledge_base_service.search_collection(
+            collection_name, body, current_user, db
+        )
+    except Exception as exc:
+        raise _map_exception(exc) from exc
+    return ResponseUtil.success(msg="检索成功", data=data)

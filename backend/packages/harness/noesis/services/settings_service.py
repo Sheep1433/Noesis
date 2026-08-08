@@ -11,7 +11,7 @@ from noesis.config.yaml_config import load_app_yaml
 from noesis.security.secrets import redact_sensitive
 from noesis.repositories.settings_repository import SettingsRepository
 from noesis.storage.postgres.models.settings import TUserSettingsAudit
-from noesis_server.schemas.settings_vo import SettingsAuditItem, SettingsAuditPage, SettingsCapabilities
+from noesis.schemas.settings_vo import SettingsAuditItem, SettingsAuditPage, SettingsCapabilities
 
 
 class SettingsService:

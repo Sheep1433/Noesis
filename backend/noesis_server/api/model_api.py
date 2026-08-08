@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from noesis_server.common.http.response import ResponseUtil
 from noesis.llm.catalog import get_catalog_vision_meta, get_default_model_id, list_public_models
-from noesis_server.schemas.model_vo import ModelCatalogItem, ModelCatalogResponse
+from noesis.schemas.model_vo import ModelCatalogItem, ModelCatalogResponse
 
 model_router = APIRouter(prefix="/api/models")
 

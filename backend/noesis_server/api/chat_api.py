@@ -18,8 +18,8 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.infrastructure.database.dependency import get_db
-from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.schemas.chat_vo import (
+from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.chat_vo import (
     CreateSessionRequest,
     EnsureSessionRequest,
     UpdateSessionTitleRequest,
@@ -32,7 +32,7 @@ from noesis_server.schemas.chat_vo import (
     SendMessageResponse,
     CreateRunRequest,
 )
-from noesis_server.schemas.session_context_vo import (
+from noesis.schemas.session_context_vo import (
     WorkspaceFileContent,
     WorkspaceFileWriteRequest,
 )
@@ -48,7 +48,7 @@ from noesis.domain.chat.message_builder import (
 )
 from noesis.runtime.logging import logger
 from noesis.config.code_enum import IntentEnum
-from noesis_server.schemas.qa_vo import (
+from noesis.schemas.qa_vo import (
     HitlResumeRequest,
     TestCaseExportRequest,
     TestCaseResumeRequest,

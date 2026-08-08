@@ -11,8 +11,8 @@ from noesis.domain.chat.delivery.events import HitlRequired, StreamDone, WireFra
 from noesis.domain.chat.delivery.sse import encode_sequenced_event
 from noesis.domain.chat.runs import RunSnapshot, RunStatus, SequencedRunEvent
 from noesis.errors.exceptions import ServiceException
-from noesis_server.schemas.chat_vo import CreateRunRequest
-from noesis_server.schemas.qa_vo import HitlResumeRequest
+from noesis.schemas.chat_vo import CreateRunRequest
+from noesis.schemas.qa_vo import HitlResumeRequest
 from noesis.services import run_service
 from noesis.services.run_service import RunProjection, RunService
 

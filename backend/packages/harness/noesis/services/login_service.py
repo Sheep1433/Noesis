@@ -2,7 +2,7 @@ from datetime import datetime
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from noesis_server.schemas.login_vo import UserLogin, UserRegister, UserRegistrationRequest
+from noesis.schemas.login_vo import UserLogin, UserRegister, UserRegistrationRequest
 from noesis.domain.auth.entities import AuthUser
 from noesis.errors.exceptions import ConflictException, LoginException
 from noesis.repositories.auth_repository import SqlAlchemyUserRepository

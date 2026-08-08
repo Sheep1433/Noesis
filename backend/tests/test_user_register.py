@@ -8,7 +8,7 @@ import pytest
 from noesis.errors.exceptions import ConflictException
 from noesis.errors.exceptions import LoginException
 from noesis.services.auth.invites import RegistrationInviteService
-from noesis_server.schemas.login_vo import UserRegister, UserRegistrationRequest
+from noesis.schemas.login_vo import UserRegister, UserRegistrationRequest
 from noesis.services.login_service import LoginService
 
 

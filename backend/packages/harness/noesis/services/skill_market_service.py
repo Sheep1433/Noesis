@@ -14,7 +14,7 @@ from noesis.runtime.logging import logger
 from noesis.config.env import SkillsMarketConfig
 from noesis.config.user_data_paths import get_user_skills_dir
 from noesis.errors.exceptions import ConflictException, ServiceException
-from noesis_server.schemas.skill_vo import (
+from noesis.schemas.skill_vo import (
     SkillMarketDetailResponse,
     SkillMarketItem,
     SkillMarketListResponse,

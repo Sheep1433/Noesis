@@ -7,7 +7,7 @@ import pytest
 from starlette.requests import Request
 
 from noesis_server.api.auth_api import login, register
-from noesis_server.schemas.login_vo import UserLogin, UserRegistrationRequest
+from noesis.schemas.login_vo import UserLogin, UserRegistrationRequest
 
 
 class _ExpiredAfterSessionCreateUser:
