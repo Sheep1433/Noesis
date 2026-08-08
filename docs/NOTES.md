@@ -929,3 +929,46 @@ backends/
 - SSE 四层：`src/cli/transports/SSETransport.ts`（传输层长连接）、`src/services/api/claude.ts`（`stream:true` 流式调用）、`src/utils/stream.ts`（`Stream<T>` 异步队列原语）、`src/services/tools/StreamingToolExecutor.ts`（工具边流式到达边执行）。
 - Tool 模型：`types/logs.ts` 之外看 `Tool.ts` 的 `Tool` 接口（isReadOnly/isDestructive/isConcurrencySafe/interruptBehavior/maxResultSizeChars/checkPermissions/toAutoClassifierInput）与 `ToolUseContext`（contentReplacementState、renderedSystemPrompt 共享父 prompt 字节保 cache、queryTracking{chainId,depth}）。
 - 方法论：研究会话事件结构先做「字段名确认 → 全盘扫描 → 区分真实事件 vs 内容提及」，别被关键词 grep 误导；制造特殊场景用「批次触发 + 清理动作本身也产生事件」（TaskStop 返回已完成也是有效 tool_result 事件）。
+
+
+## 2026-08-07 — usage 累计 dedup 陷阱 + reasoning token 口径（↓2 bug）
+
+**Why：** 线上显示输出 token 只有 2（↑21.4K ↓2），总 token 停在输入值；同时思考/工具状态文案「已完成/完成」不一致。
+
+**根因（已用红测试锁定 `assert 2 == 593`）：**
+1. `_accumulate_usage` 在 `on_chat_model_stream`（partial usage）和 `on_chat_model_end`（权威 usage）用**同一 run_id** 各调一次，dedup（`langgraph_sse.py:336-341`）把 end 的权威 usage 当重复跳过了 → 部分流式 usage 被冻结成最终值。
+2. `_normalize_usage` 忽略 `output_token_details.reasoning_tokens`：DeepSeek 系 reasoning 模型把思考 token 放在该字段，`output_tokens` 不含 → 输出被系统性低估。
+
+**修复：** usage 只在 `on_chat_model_end` 累计（该点 usage_metadata 完整）；stream chunk 的 usage 不可靠。dedup 保留，用于防重复 end 事件。
+
+**可迁移原则：**
+- 统计类数据的「最后一次权威值」不能被「第一次部分值」的 dedup 吃掉；去重键相同不代表数据相同。
+- reasoning 模型 token 口径：`output_tokens` ≠ 全部输出，要看 `output_token_details.reasoning_tokens`；多 provider 平台要按模型分口径。
+- 状态文案统一走常量映射（`TOOL_STATE_LABELS`），不要散落硬编码。
+
+## 2026-08-07 — 多 Provider SSE 格式对比（compare_sse.py 方法论）
+
+**Why：** 平台适配多 provider 前必须看清各家 SSE 原始格式；SDK 会抹平差异。
+
+**How to apply：**
+- 用 httpx 直连读原始 `data:` 行（不走 openai/anthropic SDK），脚本在 `.tmp/scripts/compare_sse.py`（gitignore，不上 GitHub），结果分析在 `.tmp/RUN_RESULT.md`。
+- 四种格式：OpenAI Chat Completions（`data: {"choices":[{"delta":{"content":"..."}}]}` + `[DONE]`）、Anthropic Messages（`event: content_block_delta` + `message_stop`，`x-api-key` + `anthropic-version` 头）、OpenAI Responses（`type:response.output_text.delta` + `response.completed`，delta 直接是字符串）、OpenAI 兼容中转。
+- 同一 DeepSeek 模型三形态（OpenAI `/v1`、Anthropic `/anthropic`、Responses `/v1`）reasoning 字段名/位置完全不同：`reasoning_content` vs `thinking` content_block vs `response.reasoning_text.delta`——统一抽象会丢差异，适配必须按格式分支。
+- usage 位置：OpenAI 在末尾 chunk（`stream_options.include_usage`，中断拿不到）；Anthropic 分两次（`message_start` 给 input、`message_delta` 给 output）；Responses 在 `response.completed`。
+- DeepSeek Anthropic 兼容端点是 `https://api.deepseek.com/anthropic`（非 `/v1/messages`）；中转 Anthropic 常见 `/v1/messages`。
+- 排障顺序：HTTP/2 兼容性（中转可能只支持 HTTP/1.1）、model_not_found（中转模型名可能不同）、500 do_request_failed（中转不支持某端点）。
+
+## 2026-08-07 — 数据结构设计回退复盘 + harness 边界重新定义
+
+**Why：** 8/5 的 17 表→3 表设计在 8/7 凌晨被用户逐点追问后整体回退；随后 knowledge 移入 harness 又引出 harness 边界问题。
+
+**回退复盘（诚实结论）：**
+- t_tool_call 独立表的理由是「多用户查询/审计/幂等」——逐一验证后**当前没有任何真实功能需求**：无审计面板、无高危命令查询页面；幂等 LangGraph 层已有 tool_call_id；多端同步走 message.content 的 tool part。全部是理论推断。
+- 约束型改动不可逆：去 UNIQUE/去 partial unique 一旦做，未来加回来要改数据和代码；「预埋」只有加可空列这类低成本元数据才合理（fork 的 `parent_session_id`/`fork_from_message_id`），空表（t_file_snapshot）是过度预埋。
+- 结论：用户最初的 message.content JSON 方案与 Claude Code 蓝本一致，是对的。保留：流式不入库原则（终态一次性写入；token delta/reasoning raw/tool output chunk/progress 不入库），直接写进 `openspec/specs/platform-chat/spec.md`，不开新 change。
+- 教训：设计文档的「溯源表」如果源是「研究报告理论推荐」而非源码证据，要标注清楚；被质疑时逐条回答「现在不做会卡什么功能」。
+
+**harness 边界（对齐 deer-flow）：**
+- 参考项目核实：YuXi 是单一 `yuxi` 包，无 harness/platform 拆分，manager 即服务、router 直调单例、无 port 无注入；deer-flow 与 Noesis 同形态（`backend/packages/harness` + `backend/app`），且 **harness 包内装全部业务 ORM + engine + migrations**（`persistence/models/` 有 User/Run/Agent/Channel 等）。
+- 结论：Noesis 的 harness 应扩展为「Agent 内核 + 全局数据持久层」，knowledge 引擎（已静态依赖 `noesis.config.env`/`noesis.runtime.logging`，自包含）直接迁入 `noesis.knowledge`，删掉 CollectionConfigPort 注入层（历史包袱：harness 禁止 import kb 的旧规则）。
+- spec：`openspec/changes/move-knowledge-into-harness/`（proposal/design/specs/tasks 6 阶段迁移）；参考项目只内部对齐，spec 不提及避免抄袭观感。
