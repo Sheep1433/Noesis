@@ -10,19 +10,23 @@
 ## 2. 分层
 
 ```text
-KnowledgeBase API
-  → knowledge_base_service
-      → kb.document_parse / chunk / embedding
-      → kb.retrieval
-      → Qdrant adapter
+KnowledgeBase API (noesis_server/api/knowledge_base_api.py)
+  → knowledge_base_service (HTTP 编排)
+      → noesis.knowledge.parser / chunking / embedding
+      → noesis.knowledge.retrieval.KbRetrievalService
+      → noesis.knowledge.implementations.qdrant.QdrantService
+      → noesis.repositories.kb_collection_config_repository
+          → noesis.storage.postgres.manager.pg_manager
+          → noesis.storage.postgres.models.knowledge
 
 noesis.tools.kb_search_tool
-  → noesis.runtime.deps KB port
-  → platform wiring
-  → KbRetrievalService
+  → noesis.knowledge (直接 import：KbRetrievalService / normalize_query_execution_params)
+  → noesis.knowledge.implementations.qdrant (QdrantService / is_qdrant_connected)
+  → noesis.repositories.kb_collection_config_repository.load_query_params_sync
+      → noesis.storage.postgres.manager.pg_manager (sync session)
 ```
 
-`noesis` harness 禁止 import `noesis_server.kb`、ORM 或 FastAPI。平台通过 runtime deps 绑定检索、集合配置和连接状态。
+知识库引擎位于 harness 内的 `noesis.knowledge` 子系统；DB engine、ORM 与 Alembic 位于 `noesis.storage`；集合配置 repository 位于 `noesis.repositories`。`noesis` harness **SHALL NOT** import `noesis_server.*`；平台单向消费 harness。KB 检索、Qdrant 客户端、集合配置与 VLM 判定均由 harness 直接提供，不再经 `noesis.runtime.deps` 注入。`noesis_server/kb/` 仅作 re-export shim 保留，供尚未切换的消费者过渡。`noesis.config.checkpointer`（LangGraph checkpoint，独立库）与 `pg_manager`（业务库）并存。
 
 ## 3. 数据
 
