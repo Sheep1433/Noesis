@@ -9,7 +9,7 @@ from noesis.repositories.kb_collection_config_repository import (
     KbCollectionConfigRepository,
     load_query_params_sync,
 )
-from noesis_server.services.kb_collection_config_service import KbCollectionConfigService
+from noesis.services.kb_collection_config_service import KbCollectionConfigService
 
 
 @pytest.mark.asyncio

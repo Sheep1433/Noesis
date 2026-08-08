@@ -7,9 +7,9 @@ import pytest
 
 from noesis.errors.exceptions import ConflictException
 from noesis.errors.exceptions import LoginException
-from noesis_server.services.auth.invites import RegistrationInviteService
+from noesis.services.auth.invites import RegistrationInviteService
 from noesis_server.schemas.login_vo import UserRegister, UserRegistrationRequest
-from noesis_server.services.login_service import LoginService
+from noesis.services.login_service import LoginService
 
 
 def _mock_db_with_existing_user(existing: bool) -> AsyncMock:
@@ -46,7 +46,7 @@ async def test_register_user_conflict() -> None:
 async def test_register_with_invite_verifies_code_and_creates_user() -> None:
     db = _mock_db_with_existing_user(existing=False)
     body = UserRegistrationRequest(username="newuser", password="secret1", invite_code="123456")
-    with patch("noesis_server.services.login_service.RegistrationInviteService.verify", new=AsyncMock()) as verify:
+    with patch("noesis.services.login_service.RegistrationInviteService.verify", new=AsyncMock()) as verify:
         user = await LoginService.register_with_invite(db, body)
 
     assert user.username == "newuser"
@@ -59,7 +59,7 @@ async def test_register_with_invite_does_not_create_user_when_code_invalid() -> 
     db = _mock_db_with_existing_user(existing=False)
     body = UserRegistrationRequest(username="newuser", password="secret1", invite_code="123456")
     with patch(
-        "noesis_server.services.login_service.RegistrationInviteService.verify",
+        "noesis.services.login_service.RegistrationInviteService.verify",
         new=AsyncMock(side_effect=LoginException(message="邀请码无效")),
     ):
         with pytest.raises(LoginException):

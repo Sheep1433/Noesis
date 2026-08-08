@@ -36,11 +36,11 @@ from noesis_server.schemas.session_context_vo import (
     WorkspaceFileContent,
     WorkspaceFileWriteRequest,
 )
-from noesis_server.services.session_context_service import SessionContextService
-from noesis_server.services.chat_service import ChatService
-from noesis_server.services.user_service import UserService
-from noesis_server.services.qa import QaService
-from noesis_server.services.run_service import RunService, run_manager
+from noesis.services.session_context_service import SessionContextService
+from noesis.services.chat_service import ChatService
+from noesis.services.user_service import UserService
+from noesis.services.qa import QaService
+from noesis.services.run_service import RunService, run_manager
 from noesis_server.common.http.response import ResponseUtil
 from noesis.domain.chat.message_builder import (
     UserMessageBuilder,

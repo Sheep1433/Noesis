@@ -6,7 +6,7 @@ import pytest
 
 from noesis.domain.auth.entities import AuthSession
 from noesis.domain.auth.policy import digest_secret
-from noesis_server.services.auth.sessions import SessionService
+from noesis.services.auth.sessions import SessionService
 
 
 def _session(csrf: str = "csrf") -> AuthSession:
@@ -34,7 +34,7 @@ def test_cookie_lifetime_uses_the_stricter_server_expiry(monkeypatch):
     session = _session()
     session.idle_expires_at = 2_000
     session.absolute_expires_at = 1_500
-    monkeypatch.setattr("noesis_server.services.auth.sessions._now_ms", lambda: 1_000)
+    monkeypatch.setattr("noesis.services.auth.sessions._now_ms", lambda: 1_000)
     assert SessionService.remaining_seconds(session) == 0
 
 
@@ -63,7 +63,7 @@ async def test_revoke_all_targets_only_the_current_user():
 @pytest.mark.asyncio
 async def test_get_current_user_rejects_missing_cookie(monkeypatch):
     from noesis.errors.exceptions import AuthException
-    from noesis_server.services.user_service import UserService
+    from noesis.services.user_service import UserService
 
     request = MagicMock()
     request.cookies.get.return_value = None
@@ -76,7 +76,7 @@ async def test_get_current_user_rejects_missing_cookie(monkeypatch):
 @pytest.mark.asyncio
 async def test_require_csrf_rejects_bad_header():
     from noesis.errors.exceptions import PermissionException
-    from noesis_server.services.user_service import UserService
+    from noesis.services.user_service import UserService
 
     request = MagicMock()
     request.state.auth_session = _session("csrf")
@@ -89,7 +89,7 @@ async def test_require_csrf_rejects_bad_header():
 async def test_stop_csrf_accepts_body_token(monkeypatch):
     from noesis_server.schemas.login_vo import CurrentUser
     from noesis_server.schemas.qa_vo import QaStopRequest
-    from noesis_server.services.user_service import UserService
+    from noesis.services.user_service import UserService
 
     sess = _session("csrf-body")
     request = MagicMock()

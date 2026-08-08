@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from noesis_server.services.chat_attachment_service import ChatAttachmentService
+from noesis.services.chat_attachment_service import ChatAttachmentService
 from noesis.runtime.attachments.resolver import (
     CHAT_ATTACHMENT_REF,
     attachment_id_from_ref,
@@ -44,14 +44,14 @@ def test_read_line_range():
 
 
 def test_detect_kind_document():
-    from noesis_server.services.chat_attachment_service import _detect_kind
+    from noesis.services.chat_attachment_service import _detect_kind
 
     assert _detect_kind("report.pdf", None) == "document"
     assert _detect_kind("photo.png", "image/png") == "image"
 
 
 def test_resolve_storage_filename_renames_generic_image(tmp_path):
-    from noesis_server.services.chat_attachment_service import _resolve_storage_filename
+    from noesis.services.chat_attachment_service import _resolve_storage_filename
 
     name = _resolve_storage_filename("image.png", kind="image", upload_dir=tmp_path)
     assert name.startswith("img-")
@@ -60,21 +60,21 @@ def test_resolve_storage_filename_renames_generic_image(tmp_path):
 
 
 def test_resolve_storage_filename_keeps_meaningful_name(tmp_path):
-    from noesis_server.services.chat_attachment_service import _resolve_storage_filename
+    from noesis.services.chat_attachment_service import _resolve_storage_filename
 
     name = _resolve_storage_filename("架构图-v2.png", kind="image", upload_dir=tmp_path)
     assert name == "架构图-v2.png"
 
 
 def test_validate_message_file_count_allows_within_limit():
-    from noesis_server.services.chat_attachment_service import ChatAttachmentService
+    from noesis.services.chat_attachment_service import ChatAttachmentService
 
     ChatAttachmentService.validate_message_file_count({f"f{i}.pdf": "ref" for i in range(10)})
 
 
 def test_validate_message_file_count_rejects_over_limit():
     from noesis.errors.exceptions import ServiceWarning
-    from noesis_server.services.chat_attachment_service import ChatAttachmentService
+    from noesis.services.chat_attachment_service import ChatAttachmentService
 
     with pytest.raises(ServiceWarning) as exc:
         ChatAttachmentService.validate_message_file_count({f"f{i}.pdf": "ref" for i in range(11)})
@@ -85,13 +85,13 @@ def test_validate_message_file_count_rejects_over_limit():
 async def test_upload_requires_existing_session():
     db = AsyncMock()
     with patch(
-        "noesis_server.services.chat_attachment_service.ChatService.get_session_by_id",
+        "noesis.services.chat_attachment_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=None,
     ):
         from fastapi import HTTPException
 
-        from noesis_server.services.chat_attachment_service import ChatAttachmentService
+        from noesis.services.chat_attachment_service import ChatAttachmentService
 
         with pytest.raises(HTTPException) as exc:
             await ChatAttachmentService._ensure_session_owned("sess-missing", "user-1", db)

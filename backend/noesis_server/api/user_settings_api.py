@@ -11,13 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis_server.common.http.response import ResponseUtil
 from noesis_server.infrastructure.database.dependency import get_db
 from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.services.messaging_channel_service import MessagingChannelService
-from noesis_server.services.memory_dream_service import MemoryDreamService
-from noesis_server.services.scheduled_task_service import ScheduledTaskService
-from noesis_server.services.scheduled_task_service import compute_next_run_ms, cron_summary
-from noesis_server.services.user_memory_service import UserMemoryService
-from noesis_server.services.user_service import UserService
-from noesis_server.services.settings_service import SettingsService
+from noesis.services.messaging_channel_service import MessagingChannelService
+from noesis.services.memory_dream_service import MemoryDreamService
+from noesis.services.scheduled_task_service import ScheduledTaskService
+from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
+from noesis.services.user_memory_service import UserMemoryService
+from noesis.services.user_service import UserService
+from noesis.services.settings_service import SettingsService
 
 user_settings_router = APIRouter(prefix="/api/user", tags=["用户设置"])
 
@@ -345,7 +345,7 @@ async def get_scheduled_task_run(
     run = await ScheduledTaskService.get_run(db, current_user.user_id, run_id)
     if run is None:
         return ResponseUtil.not_found(msg="运行记录不存在")
-    from noesis_server.services.scheduled_task_service import _run_to_dict
+    from noesis.services.scheduled_task_service import _run_to_dict
     return ResponseUtil.success(data=_run_to_dict(run))
 
 
@@ -444,14 +444,14 @@ async def delete_channel(
 async def _validate_channel_session(db: AsyncSession, user_id: int, strategy: str, session_id: str | None) -> None:
     if strategy != "persistent" or not session_id:
         return
-    from noesis_server.services.chat_service import ChatService
+    from noesis.services.chat_service import ChatService
     if await ChatService.get_session_by_id(session_id, user_id=user_id, db=db) is None:
         raise HTTPException(status_code=400, detail="所选会话不存在")
 
 
 @user_settings_router.post("/channels/{channel_id}/test-connection")
 async def test_channel_connection(channel_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
-    from noesis_server.services.channel_operations_service import ChannelOperationsService
+    from noesis.services.channel_operations_service import ChannelOperationsService
     await UserService.require_csrf(request)
     try:
         result = await ChannelOperationsService.test_connection(current_user.user_id, channel_id)
@@ -464,7 +464,7 @@ async def test_channel_connection(channel_id: str, request: Request, current_use
 
 @user_settings_router.post("/channels/{channel_id}/test-delivery")
 async def test_channel_delivery(channel_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
-    from noesis_server.services.channel_operations_service import ChannelOperationsService
+    from noesis.services.channel_operations_service import ChannelOperationsService
     await UserService.require_csrf(request)
     try:
         result = await ChannelOperationsService.test_delivery(current_user.user_id, channel_id)

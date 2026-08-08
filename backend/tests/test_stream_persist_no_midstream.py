@@ -7,7 +7,7 @@ import pytest
 
 from noesis.domain.chat.message_builder import AssistantMessageBuilder
 from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
-from noesis_server.services.qa.helpers import _flush_ctx_text_buffer, _persist_stream_checkpoint
+from noesis.services.qa.helpers import _flush_ctx_text_buffer, _persist_stream_checkpoint
 
 
 @pytest.mark.asyncio
@@ -21,7 +21,7 @@ async def test_persist_stream_checkpoint_does_not_flush_text_buffer() -> None:
     }
     bridge._persist_tick = True
 
-    with patch("noesis_server.services.qa.helpers._persist_assistant", new_callable=AsyncMock) as mock_persist:
+    with patch("noesis.services.qa.helpers._persist_assistant", new_callable=AsyncMock) as mock_persist:
         await _persist_stream_checkpoint(bridge, "sess-mid", "u1")
 
     mock_persist.assert_not_awaited()

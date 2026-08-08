@@ -7,7 +7,7 @@ from starlette.requests import Request
 from noesis_server.common.http.response import ResponseUtil
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
 from noesis.config.env import SessionConfig
-from noesis_server.services.auth.sessions import SessionService
+from noesis.services.auth.sessions import SessionService
 
 
 class CsrfMiddleware(BaseHTTPMiddleware):

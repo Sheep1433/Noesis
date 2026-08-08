@@ -10,7 +10,7 @@ from noesis_server.schemas.settings_vo import (
     SecretWriteCommand,
     SettingsCapabilities,
 )
-from noesis_server.services.settings_service import SettingsService
+from noesis.services.settings_service import SettingsService
 
 
 def test_secret_write_command_enforces_three_state_contract() -> None:
@@ -39,7 +39,7 @@ def test_settings_capabilities_come_from_runtime_config(
     )
     config = SimpleNamespace(settings_features=flags)
     monkeypatch.setattr(
-        "noesis_server.services.settings_service.load_app_yaml",
+        "noesis.services.settings_service.load_app_yaml",
         lambda: config,
     )
 

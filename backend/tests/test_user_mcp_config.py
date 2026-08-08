@@ -143,7 +143,7 @@ def test_ensure_user_config_seeded_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import noesis.config.user_data_paths as user_paths
-    from noesis_server.services.mcp_service import McpService
+    from noesis.services.mcp_service import McpService
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     uid = "u_seed"
@@ -164,7 +164,7 @@ def test_save_user_config_file_rejects_stdio(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import noesis.config.user_data_paths as user_paths
-    from noesis_server.services.mcp_service import McpService
+    from noesis.services.mcp_service import McpService
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     with pytest.raises(ValueError, match="stdio|transport"):
@@ -184,7 +184,7 @@ def test_save_user_config_file_ok(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import noesis.config.user_data_paths as user_paths
-    from noesis_server.services.mcp_service import McpService
+    from noesis.services.mcp_service import McpService
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     out = McpService.save_user_config_file(
@@ -209,7 +209,7 @@ def test_config_read_redacts_headers_and_round_trip_keeps_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import noesis.config.user_data_paths as user_paths
-    from noesis_server.services.mcp_service import McpService
+    from noesis.services.mcp_service import McpService
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", Fernet.generate_key().decode())

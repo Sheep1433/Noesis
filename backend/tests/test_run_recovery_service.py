@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from noesis_server.services import run_recovery_service
-from noesis_server.services.run_recovery_service import RunRecoveryService
-from noesis_server.services.run_recovery_service import mark_running_tools_unknown
+from noesis.services import run_recovery_service
+from noesis.services.run_recovery_service import RunRecoveryService
+from noesis.services.run_recovery_service import mark_running_tools_unknown
 
 
 def test_recovery_marks_only_unfinished_tools_unknown() -> None:

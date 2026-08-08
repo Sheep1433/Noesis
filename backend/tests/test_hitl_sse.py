@@ -10,7 +10,7 @@ from noesis.runtime.hitl import build_hitl_required_event, extract_interrupt_pay
 from noesis.domain.chat.hitl.pending import PendingHitl
 from noesis.domain.chat.message_builder import AssistantMessageBuilder
 from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
-from noesis_server.services.qa.service import QaService
+from noesis.services.qa.service import QaService
 
 
 def test_extract_interrupt_from_on_chain_stream() -> None:

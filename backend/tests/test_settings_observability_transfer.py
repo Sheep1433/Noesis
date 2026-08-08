@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from noesis_server.infrastructure.database.repositories.settings import SettingsRepository
-from noesis_server.services.notification_preference_service import NotificationPreferenceService
-from noesis_server.services.settings_diagnostics_service import SettingsDiagnosticsService
-from noesis_server.services.settings_transfer_service import SettingsTransferService, _strip_sensitive
+from noesis.services.notification_preference_service import NotificationPreferenceService
+from noesis.services.settings_diagnostics_service import SettingsDiagnosticsService
+from noesis.services.settings_transfer_service import SettingsTransferService, _strip_sensitive
 
 
 @pytest.mark.asyncio
@@ -71,9 +71,9 @@ async def test_export_covers_domains_without_reversible_secrets(monkeypatch: pyt
         return Result([preference])
 
     db = SimpleNamespace(execute=execute)
-    monkeypatch.setattr("noesis_server.services.settings_transfer_service.MessagingChannelService.list_channels", lambda _uid: [{"type": "telegram", "display_name": "Bot", "enabled": True, "bot_token": "leak"}])
-    monkeypatch.setattr("noesis_server.services.settings_transfer_service.UserMemoryService.read_file", lambda _uid, name: {"content": f"safe {name}"})
-    monkeypatch.setattr("noesis_server.services.settings_transfer_service.load_user_mcp_json", lambda _uid: SimpleNamespace(mcpServers={"s": {"url": "https://example.com", "headers": {"Authorization": "Bearer leak"}}}))
+    monkeypatch.setattr("noesis.services.settings_transfer_service.MessagingChannelService.list_channels", lambda _uid: [{"type": "telegram", "display_name": "Bot", "enabled": True, "bot_token": "leak"}])
+    monkeypatch.setattr("noesis.services.settings_transfer_service.UserMemoryService.read_file", lambda _uid, name: {"content": f"safe {name}"})
+    monkeypatch.setattr("noesis.services.settings_transfer_service.load_user_mcp_json", lambda _uid: SimpleNamespace(mcpServers={"s": {"url": "https://example.com", "headers": {"Authorization": "Bearer leak"}}}))
 
     exported = await SettingsTransferService.export(db, 1)
     rendered = json.dumps(exported, ensure_ascii=False)
@@ -109,10 +109,10 @@ async def test_import_rolls_back_failed_memory_domain_and_audits_failure(monkeyp
         return {"content": content}
 
     monkeypatch.setattr(SettingsTransferService, "preview", AsyncMock(return_value={"preview_id": "p1", "errors": []}))
-    monkeypatch.setattr("noesis_server.services.settings_transfer_service.UserMemoryService.read_file", read_file)
-    monkeypatch.setattr("noesis_server.services.settings_transfer_service.UserMemoryService.write_file", write_file)
+    monkeypatch.setattr("noesis.services.settings_transfer_service.UserMemoryService.read_file", read_file)
+    monkeypatch.setattr("noesis.services.settings_transfer_service.UserMemoryService.write_file", write_file)
     audit = AsyncMock()
-    monkeypatch.setattr("noesis_server.services.settings_transfer_service.SettingsService.append_audit", audit)
+    monkeypatch.setattr("noesis.services.settings_transfer_service.SettingsService.append_audit", audit)
     db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
     manifest = {"schema_version": 1, "domains": {"memory": {"USER.md": "new user", "AGENTS.md": "new agents"}}}
 

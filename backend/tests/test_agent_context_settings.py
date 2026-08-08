@@ -6,7 +6,7 @@ import pytest
 
 from noesis.context import ContextResolver
 from noesis.config.user_data_paths import ensure_user_memory_files, get_user_daily_memory_path, get_user_profile_md_path
-from noesis_server.services.user_memory_service import UserMemoryService
+from noesis.services.user_memory_service import UserMemoryService
 
 
 @pytest.fixture(autouse=True)

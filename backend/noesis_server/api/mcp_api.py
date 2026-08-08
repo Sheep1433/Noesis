@@ -10,10 +10,10 @@ from noesis_server.schemas.mcp_vo import (
     McpServerCatalogItemVo,
     McpServerUpsertRequest,
 )
-from noesis_server.services.mcp_service import McpService, clear_mcp_probe_cache
-from noesis_server.services.user_service import UserService
+from noesis.services.mcp_service import McpService, clear_mcp_probe_cache
+from noesis.services.user_service import UserService
 from noesis_server.infrastructure.database.dependency import get_db
-from noesis_server.services.settings_service import SettingsService
+from noesis.services.settings_service import SettingsService
 
 mcp_router = APIRouter(prefix="/api/mcp", tags=["MCP 模块"])
 

@@ -15,9 +15,9 @@ from noesis.security.secrets import (
 )
 from noesis.errors.exceptions import AuthException
 from noesis_server.infrastructure.database.repositories.settings import SettingsRepository
-from noesis_server.services.settings_service import SettingsService
-from noesis_server.services.auth.sessions import SessionService
-from noesis_server.services.user_service import UserService
+from noesis.services.settings_service import SettingsService
+from noesis.services.auth.sessions import SessionService
+from noesis.services.user_service import UserService
 
 
 def test_secret_cipher_fails_closed_and_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:

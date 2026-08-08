@@ -46,7 +46,7 @@ async def ensure_default_kb_collections() -> None:
 
     try:
         from noesis_server.infrastructure.database.engine import AsyncSessionLocal
-        from noesis_server.services.kb_collection_config_service import KbCollectionConfigService
+        from noesis.services.kb_collection_config_service import KbCollectionConfigService
 
         async with AsyncSessionLocal() as db:
             await KbCollectionConfigService.ensure_defaults_for_qdrant_collections(db)

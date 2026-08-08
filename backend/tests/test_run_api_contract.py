@@ -13,8 +13,8 @@ from noesis.domain.chat.runs import RunSnapshot, RunStatus, SequencedRunEvent
 from noesis.errors.exceptions import ServiceException
 from noesis_server.schemas.chat_vo import CreateRunRequest
 from noesis_server.schemas.qa_vo import HitlResumeRequest
-from noesis_server.services import run_service
-from noesis_server.services.run_service import RunProjection, RunService
+from noesis.services import run_service
+from noesis.services.run_service import RunProjection, RunService
 
 
 def test_run_routes_replace_legacy_stream_and_stop() -> None:
@@ -104,7 +104,7 @@ async def test_terminal_projection_atomically_finalizes_run_and_assistant(monkey
 
     repository = MagicMock()
     repository.finalize = AsyncMock(return_value=True)
-    monkeypatch.setattr(run_service, "AsyncSessionLocal", DbContext)
+    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", DbContext)
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
     monkeypatch.setattr(run_service.run_manager, "transition", AsyncMock())
 
@@ -296,7 +296,7 @@ async def test_resume_hitl_uses_projection_pending_without_legacy_store(monkeypa
             return run_db
         async def __aexit__(self, *_args):
             return False
-    monkeypatch.setattr(run_service, "AsyncSessionLocal", DbContext)
+    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", DbContext)
 
     db = MagicMock()
     db.commit = AsyncMock()
@@ -486,7 +486,7 @@ async def test_checkpoint_db_outage_fails_within_configured_deadline(monkeypatch
         assistant_message_id="message-1",
         qa_type="COMMON_QA",
     )
-    monkeypatch.setattr(run_service, "AsyncSessionLocal", FailingSession)
+    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", FailingSession)
     monkeypatch.setattr(
         run_service,
         "StreamConfig",
@@ -646,7 +646,7 @@ async def test_start_failure_cleanup_finalizes_queued_run(monkeypatch) -> None:
     repository = MagicMock()
     repository.finalize = AsyncMock(return_value=True)
     monkeypatch.setattr(run_service.run_manager, "get", MagicMock(side_effect=KeyError))
-    monkeypatch.setattr(run_service, "AsyncSessionLocal", DbContext)
+    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", DbContext)
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
 
     await RunService._finalize_start_failure(run)

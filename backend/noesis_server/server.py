@@ -23,18 +23,18 @@ from noesis_server.api import (
 )
 from noesis_server.kb.qdrant import init_qdrant_client, close_qdrant_client
 from noesis.backends.sandbox_lifecycle import shutdown_sandboxes
-from noesis_server.services.harness_wiring import wire_harness_platform_deps
-from noesis_server.services.scheduled_task_scheduler import (
+from noesis_server.wiring import wire_harness_platform_deps
+from noesis.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,
     stop_scheduled_task_scheduler,
 )
-from noesis_server.services.memory_dream_scheduler import start_memory_dream_scheduler, stop_memory_dream_scheduler
-from noesis_server.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
-from noesis_server.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
+from noesis.services.memory_dream_scheduler import start_memory_dream_scheduler, stop_memory_dream_scheduler
+from noesis.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
+from noesis.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
 from noesis_server.bootstrap.kb import ensure_default_kb_collections
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
-from noesis_server.services.run_recovery_service import RunRecoveryService
-from noesis_server.services.run_service import run_manager
+from noesis.services.run_recovery_service import RunRecoveryService
+from noesis.services.run_service import run_manager
 
 
 @asynccontextmanager

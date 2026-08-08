@@ -10,8 +10,8 @@ from noesis_server.infrastructure.database.dependency import get_db
 from noesis.errors.exceptions import ServiceWarning
 from noesis_server.schemas.chat_attachment_vo import AttachmentListResponse
 from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.services.chat_attachment_service import ChatAttachmentService
-from noesis_server.services.user_service import UserService
+from noesis.services.chat_attachment_service import ChatAttachmentService
+from noesis.services.user_service import UserService
 from noesis_server.common.http.response import ResponseUtil
 
 chat_attachment_router = APIRouter(prefix="/api/chat")

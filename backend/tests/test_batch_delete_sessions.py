@@ -18,7 +18,7 @@ def _session(user_id: str, session_id: str) -> TChatSession:
 
 @pytest.mark.asyncio
 async def test_batch_delete_sessions_skips_missing_ids() -> None:
-    from noesis_server.services.chat_service import ChatService
+    from noesis.services.chat_service import ChatService
 
     user_id = "1"
     keep_id = "sess-keep"
@@ -30,10 +30,10 @@ async def test_batch_delete_sessions_skips_missing_ids() -> None:
     db.execute = AsyncMock(return_value=result_mock)
     db.commit = AsyncMock()
 
-    with patch("noesis_server.services.chat_service.cancel_session_agent_runs", new_callable=AsyncMock), patch(
-        "noesis_server.services.chat_service.delete_session_workspace"
+    with patch("noesis.services.chat_service.cancel_session_agent_runs", new_callable=AsyncMock), patch(
+        "noesis.services.chat_service.delete_session_workspace"
     ), patch(
-        "noesis_server.services.scheduled_task_service.ScheduledTaskService.disable_session_bound_tasks",
+        "noesis.services.scheduled_task_service.ScheduledTaskService.disable_session_bound_tasks",
         new_callable=AsyncMock,
     ), patch(
         "noesis.backends.sandbox_lifecycle.destroy_session_sandbox",
@@ -52,7 +52,7 @@ async def test_batch_delete_sessions_skips_missing_ids() -> None:
 @pytest.mark.asyncio
 async def test_batch_delete_sessions_raises_when_none_found() -> None:
     from noesis.errors.exceptions import ServiceException
-    from noesis_server.services.chat_service import ChatService
+    from noesis.services.chat_service import ChatService
 
     db = AsyncMock()
     result_mock = MagicMock()

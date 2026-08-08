@@ -6,7 +6,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from noesis.config.mcp_config import McpJsonConfig, save_user_mcp_json
-from noesis_server.services.mcp_service import McpService, _probe_error_category, clear_mcp_probe_cache
+from noesis.services.mcp_service import McpService, _probe_error_category, clear_mcp_probe_cache
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +64,7 @@ async def test_probe_timeout_does_not_expose_url_secret(users_root: Path, monkey
         raise TimeoutError
 
     monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", FakeClient)
-    monkeypatch.setattr("noesis_server.services.mcp_service.asyncio.wait_for", timeout)
+    monkeypatch.setattr("noesis.services.mcp_service.asyncio.wait_for", timeout)
     result = await McpService.probe_server("u1", "slow", use_cache=False)
     assert result.error_category == "timeout"
     assert "must-not-leak" not in repr(result.model_dump())

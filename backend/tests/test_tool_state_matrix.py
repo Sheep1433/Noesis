@@ -15,7 +15,7 @@ from noesis.domain.chat.tool_state import (
     can_transition_tool_state,
     derive_tool_state,
 )
-from noesis_server.services.run_service import RunProjection
+from noesis.services.run_service import RunProjection
 
 
 @pytest.mark.parametrize(

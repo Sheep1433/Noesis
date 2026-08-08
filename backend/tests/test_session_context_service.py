@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from noesis.config import user_data_paths as paths
-from noesis_server.services.session_context_service import SessionContextService
+from noesis.services.session_context_service import SessionContextService
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_read_workspace_file_rejects_traversal(tmp_path: Path, monkeypatch
     (ws / "ok.md").write_text("hello", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -47,7 +47,7 @@ async def test_read_user_root_file(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     paths.ensure_user_memory_files(uid)
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -71,7 +71,7 @@ async def test_get_context_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     (skill_dir / "SKILL.md").write_text("skill", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -103,7 +103,7 @@ async def test_get_context_hides_empty_workspace_and_attachments_dup(
     (attachments / "resume.md").write_text("parsed", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -119,7 +119,7 @@ async def test_get_context_hides_empty_workspace_and_attachments_dup(
 async def test_get_context_not_owned() -> None:
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -135,7 +135,7 @@ async def test_write_user_memory_files_via_panel(tmp_path: Path, monkeypatch: py
     paths.ensure_user_memory_files(uid)
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -161,7 +161,7 @@ async def test_write_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     (ws / "draft.md").write_text("old", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -196,7 +196,7 @@ async def test_build_path_archive_workspace_dir(tmp_path: Path, monkeypatch: pyt
     (sub / "b.txt").write_text("world", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -223,7 +223,7 @@ async def test_build_path_archive_skills_subdir(tmp_path: Path, monkeypatch: pyt
     (pkg / "SKILL.md").write_text("skill", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -243,7 +243,7 @@ async def test_build_path_archive_rejects_user_root(tmp_path: Path, monkeypatch:
     uid, sid = "u1", "s1"
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -260,7 +260,7 @@ async def test_download_workspace_path_single_file(tmp_path: Path, monkeypatch: 
     (ws / "note.md").write_text("# hi", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -284,7 +284,7 @@ async def test_build_path_archive_old_file_timestamp(tmp_path: Path, monkeypatch
     os.utime(old_file, (0, 0))
     db = AsyncMock()
     with patch(
-        "noesis_server.services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):

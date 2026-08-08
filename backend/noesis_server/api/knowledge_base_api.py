@@ -15,8 +15,8 @@ from noesis_server.schemas.knowledge_base_schema import (
     SearchCollectionBody,
 )
 from noesis_server.schemas.login_vo import CurrentUser
-from noesis_server.services import knowledge_base_service
-from noesis_server.services.user_service import UserService
+from noesis.services import knowledge_base_service
+from noesis.services.user_service import UserService
 
 
 knowledge_base_router = APIRouter(prefix="/api/knowledge_base", tags=["知识库模块"])

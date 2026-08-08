@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
 from noesis_server.models.chat_models import TChatMessage, TChatSession
-from noesis_server.services.chat_service import ChatService
+from noesis.services.chat_service import ChatService
 
 
 @pytest.mark.integration

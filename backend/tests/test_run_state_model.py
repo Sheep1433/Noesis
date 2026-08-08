@@ -8,7 +8,7 @@ from noesis.domain.chat.runs import (
     require_transition,
 )
 from noesis.domain.chat.delivery.events import HitlRequired, WireFrame
-from noesis_server.services.run_service import RunProjection
+from noesis.services.run_service import RunProjection
 
 
 def test_run_state_machine_accepts_retry_and_hitl_resume() -> None:

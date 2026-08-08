@@ -13,11 +13,11 @@ import pytest
 from noesis.domain.chat.delivery.channels import channel_bindings, channel_registry, route_inbound
 from noesis.domain.chat.delivery.feishu.adapter import EventDeduplicator, FeishuChannelAdapter
 from noesis.domain.chat.delivery.feishu.client import FeishuBotClient
-from noesis_server.services.messaging_channel_service import MessagingChannelService
+from noesis.services.messaging_channel_service import MessagingChannelService
 from noesis_server.api.user_settings_api import ChannelUpsertBody
 from noesis.domain.chat.hitl.pending import PendingHitl, pending_hitl
-from noesis_server.services.channels import feishu_runtime
-from noesis_server.services.channels.feishu_runtime import _HitlPrompt, _hitl_card
+from noesis.services.channels import feishu_runtime
+from noesis.services.channels.feishu_runtime import _HitlPrompt, _hitl_card
 
 
 def _event(*, event_id: str = "evt-1", message_id: str = "m-1", chat_type: str = "p2p", text: str = "你好", mentions=None):

@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis_server.infrastructure.database.dependency import get_db
 from noesis_server.schemas.login_vo import CurrentUser
 from noesis_server.schemas.qa_vo import QueryUserRecordRequest
-from noesis_server.services.chat_service import ChatService
-from noesis_server.services.user_service import UserService
+from noesis.services.chat_service import ChatService
+from noesis.services.user_service import UserService
 from noesis_server.api.auth_cookie import clear_session_cookie
 from noesis_server.common.http.response import ResponseUtil
 
