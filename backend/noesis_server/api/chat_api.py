@@ -42,25 +42,25 @@ from noesis_server.services.user_service import UserService
 from noesis_server.services.qa import QaService
 from noesis_server.services.run_service import RunService, run_manager
 from noesis_server.common.http.response import ResponseUtil
-from noesis_server.domain.chat.message_builder import (
+from noesis.domain.chat.message_builder import (
     UserMessageBuilder,
     normalize_message_content_for_delivery,
 )
 from noesis.runtime.logging import logger
-from noesis_server.constants.code_enum import IntentEnum
+from noesis.config.code_enum import IntentEnum
 from noesis_server.schemas.qa_vo import (
     HitlResumeRequest,
     TestCaseExportRequest,
     TestCaseResumeRequest,
 )
-from noesis_server.domain.chat.delivery.sse import (
+from noesis.domain.chat.delivery.sse import (
     SSE_COMMENT_KEEPALIVE,
     encode_sequenced_event,
     format_done,
     format_sse,
 )
-from noesis_server.domain.chat.delivery.events import StreamDone
-from noesis_server.domain.chat.runs import SlowSubscriber, TERMINAL_RUN_STATUSES
+from noesis.domain.chat.delivery.events import StreamDone
+from noesis.domain.chat.runs import SlowSubscriber, TERMINAL_RUN_STATUSES
 
 
 chat_router = APIRouter(prefix="/api/chat")

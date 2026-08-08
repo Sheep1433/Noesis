@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from noesis_server.domain.chat.runs import (
+from noesis.domain.chat.runs import (
     HitlPendingExpired,
     RunCapacityExceeded,
     RunDurationExceeded,

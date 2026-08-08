@@ -1,5 +1,6 @@
-"""服务端安全工具。"""
+"""Re-export ``noesis.security`` (transition shim)."""
+from __future__ import annotations
 
-from noesis_server.common.security.secrets import SecretCipher, redact_sensitive, secret_suffix
+from noesis.security.secrets import SecretCipher, redact_sensitive, secret_suffix
 
 __all__ = ["SecretCipher", "redact_sensitive", "secret_suffix"]

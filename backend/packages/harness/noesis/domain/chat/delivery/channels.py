@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from noesis_server.domain.chat.delivery.events import RunEvent
+from noesis.domain.chat.delivery.events import RunEvent
 
 
 @dataclass
@@ -142,8 +142,8 @@ class StubChannelAdapter:
 
 
 def build_default_registry() -> ChannelRegistry:
-    from noesis_server.domain.chat.delivery.telegram.adapter import TelegramChannelAdapter
-    from noesis_server.domain.chat.delivery.feishu.adapter import FeishuChannelAdapter
+    from noesis.domain.chat.delivery.telegram.adapter import TelegramChannelAdapter
+    from noesis.domain.chat.delivery.feishu.adapter import FeishuChannelAdapter
 
     reg = ChannelRegistry()
     reg.register(TelegramChannelAdapter())
@@ -193,7 +193,7 @@ def project_for_capabilities(
     caps: ChannelCapabilities,
 ) -> List[RunEvent]:
     """按 capabilities 过滤出站事件（单测/stub 用）。"""
-    from noesis_server.domain.chat.delivery.events import RunCompleted, WireFrame
+    from noesis.domain.chat.delivery.events import RunCompleted, WireFrame
 
     if caps.streaming_edit:
         return list(events)

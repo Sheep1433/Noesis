@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 from cryptography.fernet import Fernet
 
-from noesis_server.domain.chat.delivery.channel_health import channel_health
-from noesis_server.domain.chat.delivery.channels import channel_bindings
-from noesis_server.exceptions.exception import ConflictException
+from noesis.domain.chat.delivery.channel_health import channel_health
+from noesis.domain.chat.delivery.channels import channel_bindings
+from noesis.errors.exceptions import ConflictException
 from noesis_server.services.channel_operations_service import ChannelOperationsService, _last_command
 from noesis_server.services.messaging_channel_service import MessagingChannelService
 from noesis_server.services import messaging_channel_service

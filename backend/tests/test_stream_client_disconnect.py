@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
 from noesis_server.services.qa.helpers import (
     ACTIVE_STREAMS,
     _ActiveStreamState,

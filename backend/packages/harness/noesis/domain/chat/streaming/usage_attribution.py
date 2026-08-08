@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from noesis_server.domain.chat.streaming.usage_normalize import normalize_usage
+from noesis.domain.chat.streaming.usage_normalize import normalize_usage
 
 #: caller 枚举（spec §5）
 CALLER_LEAD_AGENT = "lead_agent"

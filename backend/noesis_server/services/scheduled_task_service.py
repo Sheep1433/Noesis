@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from noesis.runtime.logging import logger
-from noesis_server.constants.code_enum import IntentEnum
+from noesis.config.code_enum import IntentEnum
 from noesis_server.models.scheduled_task_models import TUserScheduledTask
 from noesis_server.models.settings_models import TUserScheduledTaskRun
 
@@ -109,8 +109,8 @@ class ScheduledTaskService:
         try:
             import asyncio
 
-            from noesis_server.domain.chat.delivery.channel_health import channel_health
-            from noesis_server.domain.chat.delivery.telegram.client import TelegramBotClient
+            from noesis.domain.chat.delivery.channel_health import channel_health
+            from noesis.domain.chat.delivery.telegram.client import TelegramBotClient
             from noesis_server.services.messaging_channel_service import MessagingChannelService
 
             cfg = MessagingChannelService.get_runtime_channel(row.user_id, channel_id)

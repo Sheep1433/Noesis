@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from noesis_server.domain.auth.entities import AuthSession, AuthUser
+from noesis.domain.auth.entities import AuthSession, AuthUser
 
 
 class UserRepository(Protocol):

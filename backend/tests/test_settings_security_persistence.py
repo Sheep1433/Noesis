@@ -7,13 +7,13 @@ import pytest
 from cryptography.fernet import Fernet
 from starlette.requests import Request
 
-from noesis_server.common.security.secrets import (
+from noesis.security.secrets import (
     REDACTED,
     SecretCipher,
     SecretEncryptionUnavailable,
     redact_sensitive,
 )
-from noesis_server.exceptions.exception import AuthException
+from noesis.errors.exceptions import AuthException
 from noesis_server.infrastructure.database.repositories.settings import SettingsRepository
 from noesis_server.services.settings_service import SettingsService
 from noesis_server.services.auth.sessions import SessionService

@@ -18,8 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.runtime.logging import logger
 from noesis.config.env import StreamConfig
-from noesis_server.constants.code_enum import IntentEnum
-from noesis_server.domain.chat.delivery.events import (
+from noesis.config.code_enum import IntentEnum
+from noesis.domain.chat.delivery.events import (
     HitlRequired,
     RunAborted,
     RunCompleted,
@@ -29,12 +29,12 @@ from noesis_server.domain.chat.delivery.events import (
     StreamDone,
     WireFrame,
 )
-from noesis_server.domain.chat.delivery.sse import parse_sse_line_to_event
-from noesis_server.domain.chat.delivery.persist_sink import PersistSink
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
-from noesis_server.domain.chat.tool_state import ToolState
-from noesis_server.domain.chat.runs import RunLimitExceeded, RunManager, RunSnapshot, RunStatus
-from noesis_server.exceptions.exception import ConflictException, NotFoundException, ServiceException
+from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
+from noesis.domain.chat.delivery.persist_sink import PersistSink
+from noesis.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from noesis.domain.chat.tool_state import ToolState
+from noesis.domain.chat.runs import RunLimitExceeded, RunManager, RunSnapshot, RunStatus
+from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
 from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
 from noesis_server.models.chat_models import TAgentRun, TChatMessage, TChatSession
@@ -917,7 +917,7 @@ class RunService:
             or str(pending_payload.get("interrupt_id") or "") != request.interrupt_id
         ):
             raise ConflictException(message="确认请求已失效，请刷新后重试")
-        from noesis_server.domain.chat.hitl.pending import PendingHitl
+        from noesis.domain.chat.hitl.pending import PendingHitl
 
         pending = PendingHitl(
             interrupt_id=request.interrupt_id,

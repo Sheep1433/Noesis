@@ -24,7 +24,7 @@ from noesis.runtime.evidence import (
 )
 from noesis.config.env import RetrievalLimitConfig
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.tool_state import (
+from noesis.domain.chat.tool_state import (
     ToolState,
     can_transition_tool_state,
     derive_tool_state,

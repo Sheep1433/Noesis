@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from noesis_server.domain.auth.entities import AuthSession
-from noesis_server.domain.auth.policy import digest_secret
+from noesis.domain.auth.entities import AuthSession
+from noesis.domain.auth.policy import digest_secret
 from noesis_server.services.auth.sessions import SessionService
 
 
@@ -62,7 +62,7 @@ async def test_revoke_all_targets_only_the_current_user():
 
 @pytest.mark.asyncio
 async def test_get_current_user_rejects_missing_cookie(monkeypatch):
-    from noesis_server.exceptions.exception import AuthException
+    from noesis.errors.exceptions import AuthException
     from noesis_server.services.user_service import UserService
 
     request = MagicMock()
@@ -75,7 +75,7 @@ async def test_get_current_user_rejects_missing_cookie(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_require_csrf_rejects_bad_header():
-    from noesis_server.exceptions.exception import PermissionException
+    from noesis.errors.exceptions import PermissionException
     from noesis_server.services.user_service import UserService
 
     request = MagicMock()

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from noesis_server.domain.chat.runs import RunStatus
+from noesis.domain.chat.runs import RunStatus
 from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
 
 

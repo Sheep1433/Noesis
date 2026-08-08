@@ -5,7 +5,7 @@ import asyncio
 import time
 from typing import Any
 
-from noesis_server.domain.chat.delivery.events import RunEvent, WireFrame
+from noesis.domain.chat.delivery.events import RunEvent, WireFrame
 from .client import FeishuBotClient
 
 MAX_TEXT = 3900

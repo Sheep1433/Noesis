@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from noesis_server.exceptions.exception import ServiceException
+from noesis.errors.exceptions import ServiceException
 from noesis_server.schemas.qa_vo import MentionItem
 from noesis_server.services.mention_resolve_service import MentionResolveService, parse_mention_items
 

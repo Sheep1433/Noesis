@@ -5,13 +5,13 @@ import asyncio
 import json
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 
-from noesis_server.domain.chat.delivery.bus import (
+from noesis.domain.chat.delivery.bus import (
     RunEventBus,
     bus_error_exc,
     is_bus_end,
     is_bus_error,
 )
-from noesis_server.domain.chat.delivery.events import (
+from noesis.domain.chat.delivery.events import (
     HitlRequired,
     RunAborted,
     RunCompleted,
@@ -21,13 +21,13 @@ from noesis_server.domain.chat.delivery.events import (
     StreamDone,
     WireFrame,
 )
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 
 SSE_COMMENT_KEEPALIVE = ": keepalive\n\n"
 
 if TYPE_CHECKING:
-    from noesis_server.domain.chat.runs import SequencedRunEvent
+    from noesis.domain.chat.runs import SequencedRunEvent
 
 
 def format_sse(event: str, data: Dict[str, Any]) -> str:

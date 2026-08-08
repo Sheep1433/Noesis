@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from noesis.config import user_data_paths as paths
-from noesis_server.exceptions.exception import ConflictException, NotFoundException, ServiceException
+from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis_server.services.skill_fs_service import SkillFsService
 from noesis_server.services.skill_market_service import SkillMarketService
 from noesis_server.services import skills_sh_client as client_mod

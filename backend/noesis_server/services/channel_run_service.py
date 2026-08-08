@@ -14,26 +14,26 @@ from noesis.agents.super_agent import SuperAgent
 from noesis.runtime.logging import logger
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
 from noesis.config.env import LangfuseConfig, StreamConfig
-from noesis_server.constants.code_enum import IntentEnum
-from noesis_server.domain.chat.delivery.orchestrator import RunOrchestrator
-from noesis_server.domain.chat.delivery.persist_sink import PersistSink
-from noesis_server.domain.chat.delivery.channel_worker import ChannelDeliveryWorker
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
-from noesis_server.domain.chat.tool_state import ToolState
-from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.config.code_enum import IntentEnum
+from noesis.domain.chat.delivery.orchestrator import RunOrchestrator
+from noesis.domain.chat.delivery.persist_sink import PersistSink
+from noesis.domain.chat.delivery.channel_worker import ChannelDeliveryWorker
+from noesis.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from noesis.domain.chat.tool_state import ToolState
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 from noesis_server.services.chat_service import ChatService
 from noesis_server.services.user_service import UserService
 from noesis_server.models.chat_models import TAgentDelivery, TAgentRun, TChatMessage
 from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
 from noesis_server.services.run_service import RunProjection, RunService, run_manager
-from noesis_server.domain.chat.runs import RunLimitExceeded, RunStatus
+from noesis.domain.chat.runs import RunLimitExceeded, RunStatus
 
 _orchestrator = RunOrchestrator()
 _super_agent = SuperAgent()
 
 
 def _plain_text(parts: Dict[str, Any]) -> str:
-    from noesis_server.domain.chat.delivery.telegram.adapter import extract_plain_text_from_parts
+    from noesis.domain.chat.delivery.telegram.adapter import extract_plain_text_from_parts
 
     return extract_plain_text_from_parts(parts)
 
@@ -480,7 +480,7 @@ async def resume_channel_hitl(
     outbound: Optional[Any] = None,
 ) -> ChannelRunResult:
     """Telegram / 通道 HITL resume：对齐网页 decisions，无 SSE。"""
-    from noesis_server.domain.chat.hitl.pending import pending_hitl
+    from noesis.domain.chat.hitl.pending import pending_hitl
     from noesis.guardrails.session_grants import session_grants
     from noesis_server.services.hitl_timeout import cancel_hitl_timeout
     from noesis_server.models.chat_models import TChatMessage

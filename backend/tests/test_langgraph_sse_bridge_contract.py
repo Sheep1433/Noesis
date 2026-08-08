@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from noesis_server.domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
+from noesis.domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
 from noesis.errors.tool_failure import ToolInfrastructureError
-from noesis_server.domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
+from noesis.domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
+from noesis.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 
 
 def _ctx() -> Dict[str, Any]:
@@ -1493,8 +1493,8 @@ def test_replay_does_not_re_accumulate_usage() -> None:
 
 def test_finish_attribution_carried_through_delivery_event() -> None:
     """finish 的 attribution 字段经 delivery 解析为 RunCompleted.attribution（4.2 恢复路径）。"""
-    from noesis_server.domain.chat.delivery.sse import parse_sse_line_to_event
-    from noesis_server.domain.chat.delivery.events import RunCompleted
+    from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
+    from noesis.domain.chat.delivery.events import RunCompleted
 
     finish_frame = (
         'event: finish\n'

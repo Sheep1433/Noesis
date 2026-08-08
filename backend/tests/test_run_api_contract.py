@@ -7,10 +7,10 @@ from sqlalchemy.exc import IntegrityError
 
 from noesis_server.api import chat_api
 from noesis_server.api.chat_api import chat_router
-from noesis_server.domain.chat.delivery.events import HitlRequired, StreamDone, WireFrame
-from noesis_server.domain.chat.delivery.sse import encode_sequenced_event
-from noesis_server.domain.chat.runs import RunSnapshot, RunStatus, SequencedRunEvent
-from noesis_server.exceptions.exception import ServiceException
+from noesis.domain.chat.delivery.events import HitlRequired, StreamDone, WireFrame
+from noesis.domain.chat.delivery.sse import encode_sequenced_event
+from noesis.domain.chat.runs import RunSnapshot, RunStatus, SequencedRunEvent
+from noesis.errors.exceptions import ServiceException
 from noesis_server.schemas.chat_vo import CreateRunRequest
 from noesis_server.schemas.qa_vo import HitlResumeRequest
 from noesis_server.services import run_service

@@ -2,7 +2,7 @@
 
 import json
 
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
+from noesis.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 
 
 def _evidence_result(**overrides):

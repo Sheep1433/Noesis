@@ -4,14 +4,14 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.infrastructure.database.dependency import get_db
-from noesis_server.exceptions.exception import AuthException, LoginException
-from noesis_server.domain.auth.entities import AuthUser
+from noesis.errors.exceptions import AuthException, LoginException
+from noesis.domain.auth.entities import AuthUser
 from noesis_server.infrastructure.database.repositories.auth import SqlAlchemyUserRepository
 from noesis_server.schemas.login_vo import CurrentUser
 from noesis_server.schemas.qa_vo import QaStopRequest
 from noesis.config.env import SessionConfig
 from noesis.runtime.logging import logger
-from noesis_server.domain.auth.password import PwdUtil
+from noesis.domain.auth.password import PwdUtil
 from noesis_server.services.auth.sessions import SessionService
 
 
@@ -59,7 +59,7 @@ class UserService:
         session = getattr(request.state, "auth_session", None)
         token = request.headers.get("X-CSRF-Token")
         if session is None or not SessionService.verify_csrf(session, token):
-            from noesis_server.exceptions.exception import PermissionException
+            from noesis.errors.exceptions import PermissionException
             raise PermissionException(data='', message='CSRF 校验失败')
 
     @classmethod
@@ -73,6 +73,6 @@ class UserService:
         current_user = await cls.get_current_user(http_request, db)
         token = (http_request.headers.get("X-CSRF-Token") or stop_payload.csrf_token or "").strip()
         if not SessionService.verify_csrf(http_request.state.auth_session, token):
-            from noesis_server.exceptions.exception import PermissionException
+            from noesis.errors.exceptions import PermissionException
             raise PermissionException(data='', message='CSRF 校验失败')
         return current_user

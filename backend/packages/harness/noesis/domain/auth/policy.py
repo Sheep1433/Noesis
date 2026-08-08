@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 
-from noesis_server.domain.auth.entities import AuthSession
+from noesis.domain.auth.entities import AuthSession
 
 
 def digest_secret(value: str) -> str:

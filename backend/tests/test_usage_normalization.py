@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from noesis_server.domain.chat.streaming.langgraph_sse import (
+from noesis.domain.chat.streaming.langgraph_sse import (
     _accumulate_detail,
     _extract_input_token_details,
     _extract_output_token_details,

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from noesis_server.domain.chat.delivery.events import RunEvent
+from noesis.domain.chat.delivery.events import RunEvent
 
 
 class _EndSentinel:

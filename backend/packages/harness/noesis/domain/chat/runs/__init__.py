@@ -1,6 +1,6 @@
 """Durable Agent run 的领域模型与进程内生命周期管理。"""
 
-from noesis_server.domain.chat.runs.models import (
+from noesis.domain.chat.runs.models import (
     ACTIVE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
     InvalidRunTransition,
@@ -10,7 +10,7 @@ from noesis_server.domain.chat.runs.models import (
     can_transition,
     require_transition,
 )
-from noesis_server.domain.chat.runs.manager import (
+from noesis.domain.chat.runs.manager import (
     DeliveryHandler,
     RunHandle,
     RunManager,

@@ -23,16 +23,16 @@ from noesis.config.mcp_config import (
     MCP_PROFILE_FAULT_OPERATION,
     get_profile_server_names,
 )
-from noesis_server.constants.code_enum import IntentEnum
-from noesis_server.domain.chat.delivery.events import RunEvent
-from noesis_server.domain.chat.delivery.orchestrator import RunOrchestrator
-from noesis_server.domain.chat.delivery.persist_sink import PersistSink
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.domain.chat.streaming.failure_notice import (
+from noesis.config.code_enum import IntentEnum
+from noesis.domain.chat.delivery.events import RunEvent
+from noesis.domain.chat.delivery.orchestrator import RunOrchestrator
+from noesis.domain.chat.delivery.persist_sink import PersistSink
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.streaming.failure_notice import (
     append_disconnect_partial_content,
     append_stream_failure_notice_to_content,
 )
-from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 from noesis_server.infrastructure.observability.langfuse import langfuse_workflow_context, merge_langfuse_runnable_config
 from noesis.llm.catalog import get_default_model_id, resolve_catalog_entry
 from noesis_server.services.chat_service import ChatService
@@ -400,7 +400,7 @@ async def _persist_hitl_pending_assistant(
     )
     hitl = bridge.last_hitl_payload or {}
     if hitl.get("interrupt_id"):
-        from noesis_server.domain.chat.hitl.pending import PendingHitl, pending_hitl
+        from noesis.domain.chat.hitl.pending import PendingHitl, pending_hitl
         from noesis_server.services.hitl_timeout import schedule_hitl_timeout
 
         pending = PendingHitl(
@@ -603,7 +603,7 @@ async def _finalize_sse_bridge_stream(
     lines = _run_orchestrator.finalize_sse(bridge, finish_reason=finish_reason)
     sink = ctx.get("_persist_sink")
     if isinstance(sink, PersistSink):
-        from noesis_server.domain.chat.delivery.sse import parse_sse_line_to_event
+        from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
 
         for line in lines:
             for ev in parse_sse_line_to_event(line):
@@ -623,7 +623,7 @@ class _ActiveStreamState:
 
 
 def _register_active_stream(session_id: str, state: _ActiveStreamState) -> None:
-    from noesis_server.domain.chat.delivery.orchestrator import run_lifecycle
+    from noesis.domain.chat.delivery.orchestrator import run_lifecycle
 
     ACTIVE_STREAMS[session_id] = state
     run_lifecycle.register(
@@ -637,7 +637,7 @@ def _register_active_stream(session_id: str, state: _ActiveStreamState) -> None:
 
 
 def _unregister_active_stream(session_id: str) -> None:
-    from noesis_server.domain.chat.delivery.orchestrator import run_lifecycle
+    from noesis.domain.chat.delivery.orchestrator import run_lifecycle
 
     ACTIVE_STREAMS.pop(session_id, None)
     run_lifecycle.pop(session_id)
@@ -711,7 +711,7 @@ async def _handle_stream_client_disconnect(
     log_label: str,
 ) -> None:
     """客户端断开连接：将已生成内容 partial 落库（shield 避免 CancelledError 打断 commit）。"""
-    from noesis_server.domain.chat.delivery.orchestrator import CancelReason, run_lifecycle
+    from noesis.domain.chat.delivery.orchestrator import CancelReason, run_lifecycle
 
     stream_ctx = ctx or {}
     if _stream_terminal_persist_done(stream_ctx):

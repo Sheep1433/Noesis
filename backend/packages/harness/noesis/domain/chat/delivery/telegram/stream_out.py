@@ -6,8 +6,8 @@ import json
 import time
 from typing import Any, Dict, List, Optional, Protocol
 
-from noesis_server.domain.chat.delivery.events import RunEvent, WireFrame
-from noesis_server.domain.chat.delivery.telegram.markdown_v2 import to_telegram_markdown_v2
+from noesis.domain.chat.delivery.events import RunEvent, WireFrame
+from noesis.domain.chat.delivery.telegram.markdown_v2 import to_telegram_markdown_v2
 
 # Hermes gateway/config.py defaults
 EDIT_INTERVAL = 0.8

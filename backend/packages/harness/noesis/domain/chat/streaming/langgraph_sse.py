@@ -14,33 +14,33 @@ from typing import Any, Dict, List, Optional, Set
 
 from noesis.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
 from noesis.config.env import ModelConfig
-from noesis_server.domain.chat.streaming.reasoning import (
+from noesis.domain.chat.streaming.reasoning import (
     extract_reasoning_delta,
     extract_text_content,
     unsent_text_suffix,
 )
-from noesis_server.domain.chat.streaming.usage_normalize import (
+from noesis.domain.chat.streaming.usage_normalize import (
     accumulate_detail as _accumulate_detail,
     extract_input_token_details as _extract_input_token_details,
     extract_output_token_details as _extract_output_token_details,
     normalize_usage as _normalize_usage,
     to_int as _to_int,
 )
-from noesis_server.domain.chat.streaming.usage_attribution import (
+from noesis.domain.chat.streaming.usage_attribution import (
     CALLER_LEAD_AGENT,
     ModelCallAttribution,
     RunUsageCollector,
     resolve_caller,
 )
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.domain.chat.tool_state import (
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.tool_state import (
     ToolState,
     derive_tool_state,
     extract_process_result,
 )
-from noesis_server.domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
-from noesis_server.domain.chat.streaming.failure_notice import sanitize_stream_error, sanitize_tool_error
+from noesis.domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
+from noesis.domain.chat.streaming.failure_notice import sanitize_stream_error, sanitize_tool_error
 from noesis.errors.tool_failure import (
     ToolFailure,
     classify_task_tool_output,

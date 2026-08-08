@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from noesis_server.exceptions.exception import ConflictException
-from noesis_server.exceptions.exception import LoginException
+from noesis.errors.exceptions import ConflictException
+from noesis.errors.exceptions import LoginException
 from noesis_server.services.auth.invites import RegistrationInviteService
 from noesis_server.schemas.login_vo import UserRegister, UserRegistrationRequest
 from noesis_server.services.login_service import LoginService

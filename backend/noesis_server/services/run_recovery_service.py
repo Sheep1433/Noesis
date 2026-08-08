@@ -9,8 +9,8 @@ from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.runs import RunStatus
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.runs import RunStatus
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
 from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
 from noesis_server.models.chat_models import TAgentDelivery, TAgentRun, TChatMessage
 

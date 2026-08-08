@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from noesis_server.domain.chat.delivery.channel_worker import ChannelDeliveryWorker
+from noesis.domain.chat.delivery.channel_worker import ChannelDeliveryWorker
 
 
 class _BlockingOutbound:

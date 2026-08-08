@@ -3,8 +3,8 @@
 配置面（通道 CRUD/密钥）属 settings；本包仅运行时。
 """
 
-from noesis_server.domain.chat.delivery.bus import RunEventBus
-from noesis_server.domain.chat.delivery.events import (
+from noesis.domain.chat.delivery.bus import RunEventBus
+from noesis.domain.chat.delivery.events import (
     BusinessEvent,
     HitlRequired,
     RunAborted,
@@ -17,7 +17,7 @@ from noesis_server.domain.chat.delivery.events import (
     StreamDone,
     WireFrame,
 )
-from noesis_server.domain.chat.delivery.orchestrator import (
+from noesis.domain.chat.delivery.orchestrator import (
     CancelReason,
     RunLifecycle,
     RunOrchestrator,

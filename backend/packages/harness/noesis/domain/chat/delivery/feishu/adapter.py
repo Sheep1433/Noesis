@@ -6,8 +6,8 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from noesis_server.domain.chat.delivery.channels import ChannelCapabilities, InboundMessage
-from noesis_server.domain.chat.delivery.events import RunEvent
+from noesis.domain.chat.delivery.channels import ChannelCapabilities, InboundMessage
+from noesis.domain.chat.delivery.events import RunEvent
 from .client import FeishuBotClient
 
 

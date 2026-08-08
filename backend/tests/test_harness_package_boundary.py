@@ -120,30 +120,34 @@ def test_platform_host_uses_single_namespace() -> None:
 
 
 def test_platform_core_does_not_depend_on_application_services() -> None:
-    platform_root = BACKEND_ROOT / "noesis_server"
+    # domain now lives in harness (noesis.domain); assert it does not import
+    # application services (noesis.services) — one-way dependency.
+    domain_root = NOESIS_ROOT / "domain"
     violations: list[str] = []
-    for package in ("domain", "kb"):
-        for path in sorted((platform_root / package).rglob("*.py")):
-            if "_ragflow_compat" in path.parts or "deepdoc" in path.parts:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            modules = [
-                alias.name
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Import)
-                for alias in node.names
-            ]
-            modules.extend(
-                node.module
-                for node in ast.walk(tree)
-                if isinstance(node, ast.ImportFrom) and node.module
-            )
-            if any(name == "noesis_server.services" or name.startswith("noesis_server.services.") for name in modules):
-                violations.append(str(path.relative_to(BACKEND_ROOT)))
-    assert not violations, "platform core imports application services:\n" + "\n".join(violations)
+    for path in sorted(domain_root.rglob("*.py")):
+        if "_ragflow_compat" in path.parts or "deepdoc" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        modules = [
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        ]
+        modules.extend(
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        )
+        if any(name == "noesis.services" or name.startswith("noesis.services.") for name in modules):
+            violations.append(str(path.relative_to(BACKEND_ROOT)))
+    assert not violations, "noesis.domain imports application services:\n" + "\n".join(violations)
 
+    # platform common may re-export harness (noesis.*) but must not import
+    # platform services/domain/kb top-level packages.
+    platform_root = BACKEND_ROOT / "noesis_server"
     for path in sorted((platform_root / "common").rglob("*.py")):
-        assert not (_top_level_imports(path) & {"noesis", "services", "domain", "kb"}), path
+        assert not (_top_level_imports(path) & {"services", "domain", "kb"}), path
 
 
 def test_knowledge_base_api_uses_application_service() -> None:

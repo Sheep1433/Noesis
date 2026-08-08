@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi import status
 
-from noesis_server.constants.code_enum import HttpStatusConstant
+from noesis.config.code_enum import HttpStatusConstant
 
 
 class ResponseUtil:

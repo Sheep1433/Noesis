@@ -12,16 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis.mcp.loader import load_mcp_tools_by_names
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
 from noesis.config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
-from noesis_server.constants.code_enum import IntentEnum
+from noesis.config.code_enum import IntentEnum
 from noesis_server.schemas.login_vo import CurrentUser
 from noesis_server.schemas.qa_vo import QaQueryRequest
 from noesis_server.services.chat_service import ChatService
 from noesis_server.services.chat_attachment_service import ChatAttachmentService
 from noesis_server.services.mention_resolve_service import MentionResolveService
-from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.domain.chat.tool_state import ToolState
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.tool_state import ToolState
 from noesis.llm.catalog import get_default_model_id
 
 from noesis_server.services.qa.helpers import (
@@ -477,7 +477,7 @@ class QaService:
             ctx["_assistant_db_id"] = aid
 
             # reject/respond 不经 on_tool_end：先合成 tool-output 与 hitl 状态
-            from noesis_server.domain.chat.streaming.langgraph_sse import _format_sse
+            from noesis.domain.chat.streaming.langgraph_sse import _format_sse
 
             for idx, decision in enumerate(decision_payloads):
                 action = actions[idx] if idx < len(actions) else {}

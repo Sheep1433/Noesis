@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.runs.models import (
+from noesis.domain.chat.runs.models import (
     RunSnapshot,
     RunStatus,
     TERMINAL_RUN_STATUSES,

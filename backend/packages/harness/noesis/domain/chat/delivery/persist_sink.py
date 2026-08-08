@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from noesis_server.domain.chat.delivery.events import (
+from noesis.domain.chat.delivery.events import (
     HitlRequired,
     RunAborted,
     RunCompleted,

@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from noesis_server.domain.chat.delivery.channels import ChannelCapabilities, InboundMessage
-from noesis_server.domain.chat.delivery.events import RunCompleted, RunEvent, WireFrame
-from noesis_server.domain.chat.delivery.telegram.client import TelegramBotClient
+from noesis.domain.chat.delivery.channels import ChannelCapabilities, InboundMessage
+from noesis.domain.chat.delivery.events import RunCompleted, RunEvent, WireFrame
+from noesis.domain.chat.delivery.telegram.client import TelegramBotClient
 
 
 def _extract_final_text(events: List[RunEvent]) -> str:

@@ -15,7 +15,7 @@ from noesis.agents.super_agent import (
     _MEMORY_SOURCES,
     _build_task_worker_subagents,
 )
-from noesis_server.constants.code_enum import IntentEnum
+from noesis.config.code_enum import IntentEnum
 
 
 def test_memory_prompt_contains_agent_memory_placeholder() -> None:

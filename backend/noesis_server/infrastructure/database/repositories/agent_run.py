@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis_server.domain.chat.runs import ACTIVE_RUN_STATUSES, RunStatus
+from noesis.domain.chat.runs import ACTIVE_RUN_STATUSES, RunStatus
 from noesis_server.models.chat_models import TAgentRun, TChatMessage
 
 

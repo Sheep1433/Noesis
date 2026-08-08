@@ -5,18 +5,18 @@ import asyncio
 from enum import Enum
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
-from noesis_server.domain.chat.delivery.bus import RunEventBus
-from noesis_server.domain.chat.delivery.events import RunEvent, RunOrigin, RunStarted
-from noesis_server.domain.chat.delivery.sse import LcEventMapper, encode_filtered, iter_sse_from_bus
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.domain.chat.streaming.bridge import (
+from noesis.domain.chat.delivery.bus import RunEventBus
+from noesis.domain.chat.delivery.events import RunEvent, RunOrigin, RunStarted
+from noesis.domain.chat.delivery.sse import LcEventMapper, encode_filtered, iter_sse_from_bus
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.streaming.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
     MemoryStreamBridge,
     StreamBridgeError,
     iter_bridge_events,
 )
-from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 
 OnEvents = Callable[[List[RunEvent]], Awaitable[None]]
 

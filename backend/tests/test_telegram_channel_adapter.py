@@ -6,14 +6,14 @@ from typing import Any, Dict, List
 
 import pytest
 
-from noesis_server.domain.chat.delivery.channels import ChannelBinding, channel_bindings
-from noesis_server.domain.chat.delivery.events import RunCompleted, WireFrame
-from noesis_server.domain.chat.delivery.channels import route_inbound
-from noesis_server.domain.chat.delivery.telegram.adapter import (
+from noesis.domain.chat.delivery.channels import ChannelBinding, channel_bindings
+from noesis.domain.chat.delivery.events import RunCompleted, WireFrame
+from noesis.domain.chat.delivery.channels import route_inbound
+from noesis.domain.chat.delivery.telegram.adapter import (
     TelegramChannelAdapter,
     extract_plain_text_from_parts,
 )
-from noesis_server.domain.chat.delivery.telegram.client import mask_bot_token
+from noesis.domain.chat.delivery.telegram.client import mask_bot_token
 from noesis_server.services.messaging_channel_service import MessagingChannelService
 
 

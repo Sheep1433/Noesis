@@ -18,7 +18,7 @@ import httpx
 
 from noesis.runtime.logging import logger
 from noesis.config.env import SkillsMarketConfig
-from noesis_server.exceptions.exception import NotFoundException, ServiceException, ServiceWarning
+from noesis.errors.exceptions import NotFoundException, ServiceException, ServiceWarning
 
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SKILL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

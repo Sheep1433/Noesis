@@ -21,7 +21,7 @@ from noesis.config.user_data_paths import (
     ensure_session_uploads_dir,
     get_session_root,
 )
-from noesis_server.exceptions.exception import ServiceWarning
+from noesis.errors.exceptions import ServiceWarning
 from noesis_server.kb.document_parse import DocumentParser
 from noesis_server.models.chat_models import TChatAttachment
 from noesis_server.schemas.chat_attachment_vo import AttachmentResponse

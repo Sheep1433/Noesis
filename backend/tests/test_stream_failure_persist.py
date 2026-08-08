@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from noesis_server.domain.chat.streaming.failure_notice import (
+from noesis.domain.chat.streaming.failure_notice import (
     USER_STOP_NOTICE_PLAIN,
     append_disconnect_partial_content,
     append_stream_failure_notice_to_content,
@@ -97,7 +97,7 @@ def test_user_stop_and_disconnect_notice_are_distinct() -> None:
 
 def test_build_assistant_persist_extra_includes_qa_type() -> None:
     from noesis_server.services.qa.helpers import _build_assistant_persist_extra
-    from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+    from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 
     bridge = LangGraphSseBridge("s1")
     bridge.last_finish_reason = "error"

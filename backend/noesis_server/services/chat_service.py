@@ -18,10 +18,10 @@ from sqlalchemy import select, and_, update, func, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.models.chat_models import TChatSession, TChatMessage
-from noesis_server.exceptions.exception import ServiceException
+from noesis.errors.exceptions import ServiceException
 from noesis.config.user_data_paths import delete_session_workspace
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
 
 # ============================================================================
 # 加载锁：服务启动完成 PostgreSQL 检查点恢复前，业务写入须等待
@@ -964,7 +964,7 @@ class ChatService:
             db: AsyncSession,
     ) -> Dict[str, str]:
         """会话 id -> qa_type：优先会话 extra，否则首条 user 消息，否则 COMMON_QA。"""
-        from noesis_server.constants.code_enum import IntentEnum
+        from noesis.config.code_enum import IntentEnum
 
         default_qt = IntentEnum.COMMON_QA.value[0]
         need_ids = [

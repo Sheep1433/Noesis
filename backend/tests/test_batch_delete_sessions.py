@@ -51,7 +51,7 @@ async def test_batch_delete_sessions_skips_missing_ids() -> None:
 
 @pytest.mark.asyncio
 async def test_batch_delete_sessions_raises_when_none_found() -> None:
-    from noesis_server.exceptions.exception import ServiceException
+    from noesis.errors.exceptions import ServiceException
     from noesis_server.services.chat_service import ChatService
 
     db = AsyncMock()

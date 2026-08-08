@@ -15,12 +15,12 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTr
 
 from noesis.config.env import MessagingConfig
 from noesis.runtime.logging import logger
-from noesis_server.domain.chat.delivery.channel_health import channel_health
-from noesis_server.domain.chat.delivery.channels import InboundRouteResult, route_inbound
-from noesis_server.domain.chat.delivery.feishu.adapter import FeishuChannelAdapter
-from noesis_server.domain.chat.delivery.feishu.client import FeishuBotClient, mask_app_id
-from noesis_server.domain.chat.delivery.feishu.stream_out import FeishuOutbound
-from noesis_server.domain.chat.hitl.pending import pending_hitl
+from noesis.domain.chat.delivery.channel_health import channel_health
+from noesis.domain.chat.delivery.channels import InboundRouteResult, route_inbound
+from noesis.domain.chat.delivery.feishu.adapter import FeishuChannelAdapter
+from noesis.domain.chat.delivery.feishu.client import FeishuBotClient, mask_app_id
+from noesis.domain.chat.delivery.feishu.stream_out import FeishuOutbound
+from noesis.domain.chat.hitl.pending import pending_hitl
 from noesis_server.services.channel_run_service import resume_channel_hitl, run_channel_agent
 from noesis_server.services.messaging_channel_service import MessagingChannelService, RuntimeChannelConfig
 

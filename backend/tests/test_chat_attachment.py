@@ -73,7 +73,7 @@ def test_validate_message_file_count_allows_within_limit():
 
 
 def test_validate_message_file_count_rejects_over_limit():
-    from noesis_server.exceptions.exception import ServiceWarning
+    from noesis.errors.exceptions import ServiceWarning
     from noesis_server.services.chat_attachment_service import ChatAttachmentService
 
     with pytest.raises(ServiceWarning) as exc:

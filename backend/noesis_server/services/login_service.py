@@ -3,11 +3,11 @@ from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from noesis_server.schemas.login_vo import UserLogin, UserRegister, UserRegistrationRequest
-from noesis_server.domain.auth.entities import AuthUser
-from noesis_server.exceptions.exception import ConflictException, LoginException
+from noesis.domain.auth.entities import AuthUser
+from noesis.errors.exceptions import ConflictException, LoginException
 from noesis_server.infrastructure.database.repositories.auth import SqlAlchemyUserRepository
 from noesis.runtime.logging import logger
-from noesis_server.domain.auth.password import PwdUtil
+from noesis.domain.auth.password import PwdUtil
 from noesis_server.services.auth.invites import RegistrationInviteService
 
 

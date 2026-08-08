@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.env import SessionConfig
-from noesis_server.domain.auth.entities import AuthSession
-from noesis_server.domain.auth.ports import SessionRepository
-from noesis_server.domain.auth.policy import (
+from noesis.domain.auth.entities import AuthSession
+from noesis.domain.auth.ports import SessionRepository
+from noesis.domain.auth.policy import (
     digest_secret,
     is_session_valid,
     remaining_seconds,

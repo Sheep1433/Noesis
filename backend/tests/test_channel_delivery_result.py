@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from noesis_server.services.channel_run_service import _set_delivery_result
-from noesis_server.domain.chat.delivery.events import RunCompleted
-from noesis_server.domain.chat.runs import RunStatus
+from noesis.domain.chat.delivery.events import RunCompleted
+from noesis.domain.chat.runs import RunStatus
 from noesis_server.services import channel_run_service as channel_service
 
 

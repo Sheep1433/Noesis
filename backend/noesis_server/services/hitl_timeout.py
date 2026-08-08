@@ -6,7 +6,7 @@ import asyncio
 import time
 from typing import Any
 
-from noesis_server.domain.chat.hitl.pending import PendingHitl, pending_hitl
+from noesis.domain.chat.hitl.pending import PendingHitl, pending_hitl
 from noesis.runtime.logging import logger
 
 
@@ -56,11 +56,11 @@ def cancel_hitl_timeout(session_id: str) -> None:
 
 async def _timeout_reject(pending: PendingHitl) -> None:
     """超时：Command(resume=reject) + assistant 终态 partial。"""
-    from noesis_server.domain.chat.hitl.pending import pending_hitl as store
+    from noesis.domain.chat.hitl.pending import pending_hitl as store
     from noesis.agents.super_agent import SuperAgent
     from noesis_server.infrastructure.database.engine import AsyncSessionLocal
-    from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-    from noesis_server.domain.chat.tool_state import ToolState
+    from noesis.domain.chat.message_builder import AssistantMessageBuilder
+    from noesis.domain.chat.tool_state import ToolState
     from noesis_server.models.chat_models import TChatMessage
     from noesis_server.services.chat_service import ChatService
     from sqlalchemy import and_, select
