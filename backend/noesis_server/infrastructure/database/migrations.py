@@ -1,8 +1,4 @@
-"""Re-export Alembic migration runner (transition shim).
-
-Authoritative implementation in ``noesis.storage.postgres.manager.run_migrations``.
-Removed in F4.
-"""
+"""平台 Alembic 迁移入口（委托 noesis.storage.postgres.manager）。"""
 from __future__ import annotations
 
 from noesis.storage.postgres.manager import run_migrations

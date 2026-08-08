@@ -3,7 +3,7 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic_validation_decorator import FieldValidationError
-from noesis_server.exceptions.exception import (
+from noesis.errors.exceptions import (
     AuthException,
     ConflictException,
     LoginException,

@@ -1,9 +1,8 @@
-"""Re-export ``noesis.storage`` DB engine primitives (transition shim).
+"""平台 DB engine 基础设施。
 
-The authoritative engine, ``Base``, session factory, and inspector now live in
-``noesis.storage.postgres``. This file re-exports them so existing platform
-consumers keep importing ``noesis_server.infrastructure.database.engine`` until
-they migrate. Removed in F4.
+委托 ``noesis.storage.postgres.manager.pg_manager``，为平台 HTTP 层
+（API Depends / lifespan / middleware / bootstrap）提供 session factory
+与 engine 符号。harness 内核直接用 ``pg_manager``，不经此层。
 """
 from __future__ import annotations
 
@@ -15,10 +14,6 @@ from noesis.storage.postgres.manager import (
     pg_manager,
 )
 
-# Mirror old eager-creation: engine/session/inspector created on first access,
-# NOT at import (avoids touching DB during import). Old code created eagerly at
-# module level; pg_manager._ensure_engine() does the same without running
-# migrations.
 pg_manager._ensure_engine()
 
 async_engine = pg_manager.async_engine
