@@ -13,6 +13,7 @@ from noesis.schemas.mcp_vo import (
 from noesis.services.mcp_service import McpService, clear_mcp_probe_cache
 from noesis.services.user_service import UserService
 from noesis_server.infrastructure.database.dependency import get_db
+
 from noesis.services.settings_service import SettingsService
 
 mcp_router = APIRouter(prefix="/api/mcp", tags=["MCP 模块"])

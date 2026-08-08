@@ -84,10 +84,10 @@ async def _run_eval(args: argparse.Namespace) -> int:
 
     from noesis_server.infrastructure.database.engine import AsyncSessionLocal
     from noesis_server.infrastructure.database.dependency import init_database
-    from noesis_server.kb.chunk import normalize_query_execution_params
-    from noesis_server.kb.retrieval import KbRetrievalService
-    from noesis_server.services.kb_collection_config_service import KbCollectionConfigService
-    from noesis_server.kb.qdrant import QdrantService, init_qdrant_client, is_qdrant_connected
+    from noesis.knowledge.chunking import normalize_query_execution_params
+    from noesis.knowledge.retrieval import KbRetrievalService
+    from noesis.services.kb_collection_config_service import KbCollectionConfigService
+    from noesis.knowledge.implementations.qdrant import QdrantService, init_qdrant_client, is_qdrant_connected
 
     await init_database()
     if not await init_qdrant_client():

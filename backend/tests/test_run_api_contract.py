@@ -511,7 +511,7 @@ async def test_create_flushes_messages_before_adding_run(monkeypatch) -> None:
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from noesis_server.models.chat_models import TAgentRun, TChatMessage
+    from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage
 
     sequence: list[str] = []
 

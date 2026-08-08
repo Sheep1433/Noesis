@@ -3,7 +3,7 @@
 Authoritative implementation: ``noesis.knowledge``. Each legacy subpackage name
 (``document_parse``, ``chunk``, ``retrieval``, ``rerank``, ``embedding``) is
 aliased to its harness canonical module via ``sys.modules`` so deep import paths
-(e.g. ``noesis_server.kb.document_parse.staging``) keep resolving. Removed once
+(e.g. ``noesis.knowledge.document_parse.staging``) keep resolving. Removed once
 all consumers import ``noesis.knowledge`` directly.
 """
 from __future__ import annotations
@@ -21,11 +21,11 @@ _LEGACY_ALIAS = {
 
 for _legacy, _canonical in _LEGACY_ALIAS.items():
     _mod = import_module(_canonical)
-    sys.modules[f"noesis_server.kb.{_legacy}"] = _mod
+    sys.modules[f"noesis.knowledge.{_legacy}"] = _mod
 
 _filters = import_module("noesis.knowledge.retrieval.filters")
-sys.modules["noesis_server.kb.filters"] = _filters
-sys.modules["noesis_server.kb.retrieval.filters"] = _filters
+sys.modules["noesis.knowledge.filters"] = _filters
+sys.modules["noesis.knowledge.retrieval.filters"] = _filters
 
 from noesis.knowledge.chunking import (  # noqa: E402,F401
     KB_CHUNK_STRATEGY,

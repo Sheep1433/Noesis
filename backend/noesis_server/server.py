@@ -21,7 +21,7 @@ from noesis_server.api import (
     user_settings_router,
     settings_router,
 )
-from noesis_server.kb.qdrant import init_qdrant_client, close_qdrant_client
+from noesis.knowledge.implementations.qdrant import init_qdrant_client, close_qdrant_client
 from noesis.backends.sandbox_lifecycle import shutdown_sandboxes
 from noesis_server.wiring import wire_harness_platform_deps
 from noesis.services.scheduled_task_scheduler import (

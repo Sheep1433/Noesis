@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-from noesis_server.kb.document_parse.deepdoc_config import ensure_model_dir, list_required_model_files
+from noesis.knowledge.parser.deepdoc_config import ensure_model_dir, list_required_model_files
 
 DEEPDOC_REPO = "InfiniFlow/deepdoc"
 XGB_REPO = "InfiniFlow/text_concat_xgb_v1.0"

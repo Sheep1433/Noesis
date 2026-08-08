@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from noesis_server.models.chat_models import TChatSession
+from noesis.storage.postgres.models.chat import TChatSession
 
 
 def _session(user_id: str, session_id: str) -> TChatSession:

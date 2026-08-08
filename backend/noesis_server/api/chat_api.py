@@ -18,6 +18,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.infrastructure.database.dependency import get_db
+
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.chat_vo import (
     CreateSessionRequest,
@@ -818,7 +819,7 @@ async def get_message(
     # 先获取消息（需要查询 session 来验证权限）
     # 这里简化处理，实际应该通过 ChatService 获取
     from sqlalchemy import select
-    from noesis_server.models.chat_models import TChatMessage, TChatSession
+    from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
 
     result = await db.execute(
         select(TChatMessage).where(TChatMessage.id == message_id)

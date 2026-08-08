@@ -1,7 +1,7 @@
 """Re-export ``noesis.services`` under legacy ``noesis_server.services`` paths.
 
 Authoritative: ``noesis.services``. Submodules aliased via sys.modules so
-deep paths (e.g. ``noesis_server.services.chat_service``) keep resolving.
+deep paths (e.g. ``noesis.services.chat_service``) keep resolving.
 Removed in F4 once api/server switch to direct noesis.services imports.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ _FLAT = [
     "user_memory_service", "user_service",
 ]
 for _name in _FLAT:
-    _full = f"noesis_server.services.{_name}"
+    _full = f"noesis.services.{_name}"
     if _full not in sys.modules:
         try:
             sys.modules[_full] = import_module(f"noesis.services.{_name}")
@@ -32,7 +32,7 @@ for _name in _FLAT:
 
 # Subpackages
 for _sub in ("auth", "channels", "qa"):
-    _full = f"noesis_server.services.{_sub}"
+    _full = f"noesis.services.{_sub}"
     if _full not in sys.modules:
         try:
             sys.modules[_full] = import_module(f"noesis.services.{_sub}")

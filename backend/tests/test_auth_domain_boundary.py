@@ -17,13 +17,13 @@ from noesis.domain.auth.policy import (
     verify_csrf,
     verify_invite_digest,
 )
-from noesis_server.infrastructure.database.repositories.auth import (
+from noesis.repositories.auth_repository import (
     SqlAlchemySessionRepository,
     SqlAlchemyUserRepository,
     session_from_orm,
     user_from_orm,
 )
-from noesis_server.models.db_models import TUser, TUserSession
+from noesis.storage.postgres.models.auth import TUser, TUserSession
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]

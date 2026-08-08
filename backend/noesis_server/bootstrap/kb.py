@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from noesis.config.env import QdrantConfig
-from noesis_server.kb.qdrant import QdrantService, is_qdrant_connected
+from noesis.knowledge.implementations.qdrant import QdrantService, is_qdrant_connected
 from noesis.runtime.logging import logger
 
 _VECTOR_DIM = 1024

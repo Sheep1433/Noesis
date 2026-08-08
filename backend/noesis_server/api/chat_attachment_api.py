@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.infrastructure.database.dependency import get_db
+
 from noesis.errors.exceptions import ServiceWarning
 from noesis.schemas.chat_attachment_vo import AttachmentListResponse
 from noesis.schemas.login_vo import CurrentUser

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis_server.infrastructure.database.dependency import get_db
+
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.qa_vo import QueryUserRecordRequest
 from noesis.services.chat_service import ChatService

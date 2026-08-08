@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from noesis.domain.chat.runs import RunStatus
-from noesis_server.infrastructure.database.repositories.agent_run import AgentRunRepository
+from noesis.repositories.agent_run_repository import AgentRunRepository
 
 
 @pytest.mark.asyncio

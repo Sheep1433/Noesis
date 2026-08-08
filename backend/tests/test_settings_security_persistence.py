@@ -14,7 +14,7 @@ from noesis.security.secrets import (
     redact_sensitive,
 )
 from noesis.errors.exceptions import AuthException
-from noesis_server.infrastructure.database.repositories.settings import SettingsRepository
+from noesis.repositories.settings_repository import SettingsRepository
 from noesis.services.settings_service import SettingsService
 from noesis.services.auth.sessions import SessionService
 from noesis.services.user_service import UserService

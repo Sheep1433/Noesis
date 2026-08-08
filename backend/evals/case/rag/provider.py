@@ -46,7 +46,7 @@ def _resolve_item(context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _ensure_qdrant() -> None:
-    from noesis_server.kb.qdrant import init_qdrant_client
+    from noesis.knowledge.implementations.qdrant import init_qdrant_client
 
     if not asyncio.run(init_qdrant_client()):
         raise RuntimeError(

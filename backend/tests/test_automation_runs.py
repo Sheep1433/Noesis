@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from noesis_server.models.settings_models import TUserScheduledTaskRun
+from noesis.storage.postgres.models.settings import TUserScheduledTaskRun
 from noesis.services.scheduled_task_service import (
     ScheduledTaskService,
     compute_next_run_ms,

@@ -10,7 +10,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
+
 from noesis_server.infrastructure.database.dependency import get_db
+
 from noesis.schemas.knowledge_base_schema import (
     CreateCollectionRequest,
     PatchCollectionConfigRequest,

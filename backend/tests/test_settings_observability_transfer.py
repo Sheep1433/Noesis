@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from noesis_server.infrastructure.database.repositories.settings import SettingsRepository
+from noesis.repositories.settings_repository import SettingsRepository
 from noesis.services.notification_preference_service import NotificationPreferenceService
 from noesis.services.settings_diagnostics_service import SettingsDiagnosticsService
 from noesis.services.settings_transfer_service import SettingsTransferService, _strip_sensitive

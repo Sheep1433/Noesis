@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from noesis_server.infrastructure.database.engine import AsyncSessionLocal
-from noesis_server.services.auth.invites import RegistrationInviteService
+from noesis.services.auth.invites import RegistrationInviteService
 
 
 async def _rotate(admin_username: str) -> None:
