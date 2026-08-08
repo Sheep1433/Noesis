@@ -18,14 +18,24 @@ import logging
 
 from PIL import Image
 
-from noesis_server.common.constants import LLMType
-from noesis_server.api.db.services.llm_service import LLMBundle
-from noesis_server.api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
-from noesis_server.common.connection_utils import timeout
+from noesis.knowledge._ragflow_compat.common.constants import LLMType
+from noesis.knowledge._ragflow_compat.common.connection_utils import timeout
 from rag.app.picture import vision_llm_chunk as picture_vision_llm_chunk
 from rag.prompts.generator import vision_llm_figure_describe_prompt, vision_llm_figure_describe_prompt_with_context
 from rag.nlp import append_context2table_image4pdf
 from rag.utils.lazy_image import ensure_pil_image, open_image_for_processing, is_image_like
+
+
+def _tenant_llm_bundle(tenant_id, model_config):
+    """延迟导入 tenant LLM 服务（RAGFlow 兼容，Noesis 不用 multi-tenant，避免 harness 依赖 noesis_server）。"""
+    from noesis_server.api.db.services.llm_service import LLMBundle
+    return LLMBundle(tenant_id, model_config)
+
+
+def _get_tenant_default_model_by_type(tenant_id, model_type):
+    """延迟导入 tenant 模型解析（RAGFlow 兼容）。"""
+    from noesis_server.api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+    return get_tenant_default_model_by_type(tenant_id, model_type)
 
 # need to delete before pr
 def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
@@ -48,8 +58,8 @@ def vision_figure_parser_docx_wrapper(sections, tbls, callback=None,**kwargs):
     if not sections:
         return tbls
     try:
-        vision_model_config = get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
-        vision_model = LLMBundle(kwargs["tenant_id"], vision_model_config)
+        vision_model_config = _get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = _tenant_llm_bundle(kwargs["tenant_id"], vision_model_config)
         callback(0.7, "Visual model detected. Attempting to enhance figure extraction...")
     except Exception:
         vision_model = None
@@ -68,8 +78,8 @@ def vision_figure_parser_figure_xlsx_wrapper(images,callback=None, **kwargs):
     if not images:
         return []
     try:
-        vision_model_config = get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
-        vision_model = LLMBundle(kwargs["tenant_id"], vision_model_config)
+        vision_model_config = _get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = _tenant_llm_bundle(kwargs["tenant_id"], vision_model_config)
         callback(0.2, "Visual model detected. Attempting to enhance Excel image extraction...")
     except Exception:
         vision_model = None
@@ -97,8 +107,8 @@ def vision_figure_parser_pdf_wrapper(tbls, callback=None, **kwargs):
     parser_config = kwargs.get("parser_config", {})
     context_size = max(0, int(parser_config.get("image_context_size", 0) or 0))
     try:
-        vision_model_config = get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
-        vision_model = LLMBundle(kwargs["tenant_id"], vision_model_config)
+        vision_model_config = _get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = _tenant_llm_bundle(kwargs["tenant_id"], vision_model_config)
         callback(0.7, "Visual model detected. Attempting to enhance figure extraction...")
     except Exception:
         vision_model = None
@@ -136,8 +146,8 @@ def vision_figure_parser_docx_wrapper_naive(chunks, idx_lst, callback=None, **kw
     if not chunks:
         return []
     try:
-        vision_model_config = get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
-        vision_model = LLMBundle(kwargs["tenant_id"], vision_model_config)
+        vision_model_config = _get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = _tenant_llm_bundle(kwargs["tenant_id"], vision_model_config)
         callback(0.7, "Visual model detected. Attempting to enhance figure extraction...")
     except Exception:
         vision_model = None

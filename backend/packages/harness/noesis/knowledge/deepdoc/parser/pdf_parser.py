@@ -37,17 +37,17 @@ from pypdf import PdfReader as pdf2_read
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
-from noesis_server.common.constants import MAXIMUM_PAGE_NUMBER
-from noesis_server.common.file_utils import get_project_base_directory
+from noesis.knowledge._ragflow_compat.common.constants import MAXIMUM_PAGE_NUMBER
+from noesis.knowledge._ragflow_compat.common.file_utils import get_project_base_directory
 from deepdoc.vision import OCR, AscendLayoutRecognizer, LayoutRecognizer, Recognizer, TableStructureRecognizer
 from rag.nlp import rag_tokenizer
 from rag.prompts.generator import vision_llm_describe_prompt
 from deepdoc.parser.utils import extract_pdf_outlines
-from noesis_server.common import settings
+from noesis.knowledge._ragflow_compat.common import settings
 
 
 
-from noesis_server.common.misc_utils import thread_pool_exec
+from noesis.knowledge._ragflow_compat.common.misc_utils import thread_pool_exec
 
 LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"
 if LOCK_KEY_pdfplumber not in sys.modules:

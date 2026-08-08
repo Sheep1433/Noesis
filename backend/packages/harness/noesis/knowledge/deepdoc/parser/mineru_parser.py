@@ -38,7 +38,7 @@ from enum import StrEnum
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from deepdoc.parser.utils import extract_pdf_outlines
 
-from noesis_server.common.constants import MAXIMUM_PAGE_NUMBER
+from noesis.knowledge._ragflow_compat.common.constants import MAXIMUM_PAGE_NUMBER
 
 LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"
 if LOCK_KEY_pdfplumber not in sys.modules:

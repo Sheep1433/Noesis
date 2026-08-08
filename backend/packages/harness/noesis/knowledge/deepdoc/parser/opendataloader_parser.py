@@ -15,7 +15,7 @@ import pdfplumber
 import requests
 from PIL import Image
 
-from noesis_server.common.constants import MAXIMUM_PAGE_NUMBER
+from noesis.knowledge._ragflow_compat.common.constants import MAXIMUM_PAGE_NUMBER
 
 try:
     from deepdoc.parser.pdf_parser import RAGFlowPdfParser

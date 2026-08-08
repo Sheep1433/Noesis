@@ -21,9 +21,9 @@ import os
 
 from huggingface_hub import snapshot_download
 
-from noesis_server.common.file_utils import get_project_base_directory
-from noesis_server.common.misc_utils import pip_install_torch
-from noesis_server.common import settings
+from noesis.knowledge._ragflow_compat.common.file_utils import get_project_base_directory
+from noesis.knowledge._ragflow_compat.common.misc_utils import pip_install_torch
+from noesis.knowledge._ragflow_compat.common import settings
 from .operators import *  # noqa: F403
 from . import operators
 import math

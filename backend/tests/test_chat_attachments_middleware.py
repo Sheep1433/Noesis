@@ -12,7 +12,7 @@ from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
 
 def _resolver(*, vision: bool = False) -> AttachmentInputResolver:
     with patch(
-        "noesis.runtime.attachments.input_resolver.require_is_vlm_configured",
+        "noesis.runtime.attachments.input_resolver.is_vlm_configured",
         return_value=False,
     ):
         return AttachmentInputResolver(
@@ -81,7 +81,7 @@ async def test_vision_image_becomes_multimodal_block() -> None:
 @pytest.mark.asyncio
 async def test_non_vision_model_uses_vlm_caption_without_image_block() -> None:
     with patch(
-        "noesis.runtime.attachments.input_resolver.require_is_vlm_configured",
+        "noesis.runtime.attachments.input_resolver.is_vlm_configured",
         return_value=True,
     ):
         resolver = AttachmentInputResolver(

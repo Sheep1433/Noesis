@@ -36,7 +36,7 @@ def init_in_out(args):
 
     from PIL import Image
 
-    from noesis_server.common.file_utils import traversal_files
+    from noesis.knowledge._ragflow_compat.common.file_utils import traversal_files
 
     images = []
     outputs = []

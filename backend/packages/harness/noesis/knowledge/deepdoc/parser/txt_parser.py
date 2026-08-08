@@ -17,7 +17,7 @@
 import re
 
 from deepdoc.parser.utils import get_text
-from noesis_server.common.token_utils import num_tokens_from_string
+from noesis.knowledge._ragflow_compat.common.token_utils import num_tokens_from_string
 
 
 class RAGFlowTxtParser:

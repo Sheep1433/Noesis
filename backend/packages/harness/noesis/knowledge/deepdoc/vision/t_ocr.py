@@ -20,7 +20,7 @@ import os
 import sys
 
 
-from noesis_server.common.misc_utils import thread_pool_exec
+from noesis.knowledge._ragflow_compat.common.misc_utils import thread_pool_exec
 
 sys.path.insert(
     0,

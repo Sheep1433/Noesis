@@ -21,7 +21,7 @@ from collections import Counter
 from rag.nlp import rag_tokenizer
 from io import BytesIO
 import logging
-from noesis_server.common.constants import MAXIMUM_PAGE_NUMBER
+from noesis.knowledge._ragflow_compat.common.constants import MAXIMUM_PAGE_NUMBER
 from docx.image.exceptions import (
     InvalidImageStreamError,
     UnexpectedEndOfFileError,
