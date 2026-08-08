@@ -1,4 +1,4 @@
-from noesis_server.kb.retrieval.payload import (
+from noesis.knowledge.retrieval.payload import (
     build_evidence_identity,
     build_payload,
     build_typed_locator,

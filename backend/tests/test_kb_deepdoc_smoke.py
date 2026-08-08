@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
-from noesis_server.kb.document_parse.deepdoc_result import DeepDocBlock, DeepDocParseResult
-from noesis_server.kb.document_parse.factory import ParserFactory
+from noesis.knowledge.parser.deepdoc_result import DeepDocBlock, DeepDocParseResult
+from noesis.knowledge.parser.factory import ParserFactory
 
 
 def _fake_result(file_path: str, *, blocks=None, file_type="pdf") -> DeepDocParseResult:
@@ -37,7 +37,7 @@ def test_deepdoc_smoke_mock_formats(tmp_path, suffix, ftype):
     path.write_bytes(b"fake")
 
     with patch(
-        "noesis_server.kb.document_parse.factory.parse_file_with_deepdoc",
+        "noesis.knowledge.parser.factory.parse_file_with_deepdoc",
         return_value=_fake_result(str(path), file_type=ftype),
     ):
         parsed = ParserFactory.parse(str(path))
@@ -58,7 +58,7 @@ def test_excel_smoke_mock_rows(tmp_path):
         file_type="xlsx",
         blocks=[DeepDocBlock(content="a: 1", layout_type="table_row")],
     )
-    with patch("noesis_server.kb.document_parse.factory.parse_file_with_deepdoc", return_value=result):
+    with patch("noesis.knowledge.parser.factory.parse_file_with_deepdoc", return_value=result):
         parsed = ParserFactory.parse(str(xlsx))
     assert parsed.is_tabular
     assert parsed.row_documents

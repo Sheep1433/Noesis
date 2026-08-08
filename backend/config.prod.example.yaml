@@ -55,6 +55,53 @@ model:
   #   - id: north
   #     label: North Mini Code（代码）
   #     name: north-mini-code-free
+
+  # --- DeepSeek 官方直连（需 .env DEEPSEEK_API_KEY）---
+  # type: deepseek
+  # name: deepseek-v4-flash
+  # temperature: 0.75
+  # base_url: https://api.deepseek.com/v1
+
+  # --- 阿里云 DashScope Qwen（需 .env DASHSCOPE_API_KEY）---
+  # type: qwen
+  # name: qwen-plus
+  # temperature: 0.75
+  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+  # --- Anthropic 官方或中转（需 .env ANTHROPIC_API_KEY）---
+  # type: anthropic
+  # name: claude-haiku-4-5-20251001
+  # temperature: 0.75
+  # base_url: https://api.anthropic.com          # 官方；中转改成中转地址
+
+  # --- 多 provider catalog 切换示例 ---
+  # default_catalog_id: deepseek-flash
+  # catalog:
+  #   - id: deepseek-flash
+  #     label: DeepSeek V4 Flash（官方）
+  #     type: deepseek
+  #     name: deepseek-v4-flash
+  #     base_url: https://api.deepseek.com/v1
+  #     limit:
+  #       context: 200000
+  #       output: 128000
+  #   - id: qwen-plus
+  #     label: Qwen Plus（DashScope）
+  #     type: qwen
+  #     name: qwen-plus
+  #     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  #     limit:
+  #       context: 129024
+  #       output: 8192
+  #   - id: claude-haiku
+  #     label: Claude Haiku 4.5
+  #     type: anthropic
+  #     name: claude-haiku-4-5-20251001
+  #     base_url: https://api.anthropic.com
+  #     limit:
+  #       context: 200000
+  #       output: 8192
+
   request_timeout: 120
   max_retries: 2
   generation:

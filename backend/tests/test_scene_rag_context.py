@@ -15,7 +15,7 @@ from noesis.agents.case_generate.rag import (
     build_scene_rag_context,
 )
 from noesis.agents.case_generate.case_graph import _build_scene_cases_prompt
-from noesis_server.kb.retrieval import KbSearchHit
+from noesis.knowledge.retrieval import KbSearchHit
 
 
 def _hit(hit_id: str, content: str, *, file_name: str = "a.md") -> KbSearchHit:

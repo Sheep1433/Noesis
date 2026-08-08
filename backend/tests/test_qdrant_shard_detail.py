@@ -1,5 +1,5 @@
 """Qdrant 分片详情字段：向量维度与入库时间。"""
-from noesis_server.kb.retrieval.payload import payload_created_at, vector_length
+from noesis.knowledge.retrieval.payload import payload_created_at, vector_length
 
 
 def test_payload_created_at_prefers_created_at():

@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from noesis_server.kb.chunk import chunk, fixed_processing_params
-from noesis_server.kb.chunk.deepdoc_adapter import adapt_deepdoc_to_documents
-from noesis_server.kb.document_parse import DocumentParser
-from noesis_server.kb.document_parse.deepdoc_result import DeepDocBlock, DeepDocParseResult
-from noesis_server.kb.document_parse.factory import ParserFactory
-from noesis_server.kb.document_parse.models import ParsedFile
+from noesis.knowledge.chunking import chunk, fixed_processing_params
+from noesis.knowledge.chunking.deepdoc_adapter import adapt_deepdoc_to_documents
+from noesis.knowledge.parser import DocumentParser
+from noesis.knowledge.parser.deepdoc_result import DeepDocBlock, DeepDocParseResult
+from noesis.knowledge.parser.factory import ParserFactory
+from noesis.knowledge.parser.models import ParsedFile
 
 _SEED_MEDICAL_MD = (
     Path(__file__).resolve().parents[1]

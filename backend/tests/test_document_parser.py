@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from noesis_server.kb.document_parse import DocumentParser
+from noesis.knowledge.parser import DocumentParser
 
 
 def test_excel_parse_each_row_is_document(tmp_path):
