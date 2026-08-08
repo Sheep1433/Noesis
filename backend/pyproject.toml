@@ -7,6 +7,8 @@ requires-python = ">=3.11"
 dependencies = [
     # Agent harness（内含 noesis.llm；禁止 noesis→services 反向依赖）
     "noesis-harness",
+    # 本地 harness CLI（评测用，直调 Agent，不走 HTTP）
+    "noesis-cli",
     # API / 持久化
     "alembic>=1.18.5",
     "asyncpg>=0.30.0",
@@ -68,6 +70,7 @@ default-groups = ["dev"]
 
 [tool.uv.sources]
 noesis-harness = { path = "packages/harness", editable = true }
+noesis-cli = { path = "packages/noesis-cli", editable = true }
 
 [project.optional-dependencies]
 loadtest = [

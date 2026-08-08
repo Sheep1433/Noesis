@@ -29,7 +29,7 @@ def test_empty_response_error_message() -> None:
     assert "finish_reason" in str(err)
 
 
-@patch("noesis.runtime.attachments.vlm_caption.require_is_vlm_configured", return_value=True)
+@patch("noesis.runtime.attachments.vlm_caption.is_vlm_configured", return_value=True)
 @patch("noesis.config.env.ModelConfig")
 def test_describe_image_uses_configured_model_only(mock_cfg, _mock_vlm) -> None:
     mock_cfg.vlm_model_api_key = "key"
@@ -51,7 +51,7 @@ def test_describe_image_uses_configured_model_only(mock_cfg, _mock_vlm) -> None:
     assert client.chat.completions.create.call_args.kwargs["model"] == "qwen-vl-max"
 
 
-@patch("noesis.runtime.attachments.vlm_caption.require_is_vlm_configured", return_value=True)
+@patch("noesis.runtime.attachments.vlm_caption.is_vlm_configured", return_value=True)
 @patch("noesis.config.env.ModelConfig")
 def test_describe_image_raises_on_empty_content(mock_cfg, _mock_vlm) -> None:
     mock_cfg.vlm_model_api_key = "key"

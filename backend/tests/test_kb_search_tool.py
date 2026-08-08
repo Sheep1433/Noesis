@@ -11,30 +11,42 @@ from noesis.tools.kb_search_tool import (
     search_knowledge_bases_all,
 )
 import noesis.tools.kb_search_tool as kb_search_tool_module
-from noesis_server.kb.retrieval import KbSearchHit, KbSearchResult, KbSearchTiming
+from noesis.knowledge.retrieval import KbSearchHit, KbSearchResult, KbSearchTiming
 
 
-@patch("noesis.tools.kb_search_tool.require_kb_collection_config_service")
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+def _timing():
+    return KbSearchTiming(
+        prepare_ms=0.0,
+        recall_ms=1.0,
+        parse_ms=0.1,
+        rerank_ms=0.0,
+        post_ms=0.1,
+        total_ms=1.2,
+        rerank_applied=False,
+        recall_hits=1,
+        final_hits=1,
+        search_mode="hybrid",
+    )
+
+
+@patch("noesis.tools.kb_search_tool.load_query_params_sync", return_value={"search_mode": "hybrid"})
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["req_docs", "kb_other"])
-@patch("noesis.tools.kb_search_tool.require_qdrant_service")
-@patch("noesis.tools.kb_search_tool.require_normalize_query_execution_params")
-@patch("noesis.tools.kb_search_tool.require_kb_retrieval_service")
+@patch("noesis.tools.kb_search_tool.QdrantService")
+@patch("noesis.tools.kb_search_tool.normalize_query_execution_params")
+@patch("noesis.tools.kb_search_tool.KbRetrievalService")
 def test_search_all_collections_hybrid_and_merge(
     mock_retrieval, mock_normalize, mock_qdrant_cls, _names, _connected, _load_qp
 ):
-    _load_qp.return_value.load_query_params_sync.return_value = {"search_mode": "hybrid"}
-    mock_normalize.return_value.side_effect = lambda **kwargs: kwargs.get("request_overrides") or {}
-    # normalize is require_normalize...() which returns callable
-    mock_normalize.return_value = lambda **kwargs: {
+    mock_normalize.side_effect = lambda **kwargs: {
         **(kwargs.get("request_overrides") or {}),
         "final_top_k": (kwargs.get("request_overrides") or {}).get("final_top_k", 10),
     }
-    mock_qdrant_cls.get_collection.return_value = {
+    mock_qdrant_cls.return_value.get_collection.return_value = {
         "name": "x",
         "vector_dimension": 1024,
     }
-    mock_search = mock_retrieval.return_value.search
+    mock_search = mock_retrieval.search
 
     def _side_effect(*, collection_name: str, **kwargs):
         score = 0.9 if collection_name == "req_docs" else 0.5
@@ -52,18 +64,7 @@ def test_search_all_collections_hybrid_and_merge(
                     locator={"type": "header", "path": ["登录"]},
                 )
             ],
-            timing=KbSearchTiming(
-                prepare_ms=0.0,
-                recall_ms=1.0,
-                parse_ms=0.1,
-                rerank_ms=0.0,
-                post_ms=0.1,
-                total_ms=1.2,
-                rerank_applied=False,
-                recall_hits=1,
-                final_hits=1,
-                search_mode="hybrid",
-            ),
+            timing=_timing(),
         )
 
     mock_search.side_effect = _side_effect
@@ -82,7 +83,7 @@ def test_search_all_collections_hybrid_and_merge(
         assert params.get("final_top_k") == 5
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["req_docs", "kb_other"])
 def test_resolve_scope_tool_param_over_default(_names, _connected):
     cols, err = resolve_search_collections(
@@ -93,7 +94,7 @@ def test_resolve_scope_tool_param_over_default(_names, _connected):
     assert cols == ["req_docs"]
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["req_docs", "kb_other"])
 def test_resolve_scope_session_default(_names, _connected):
     cols, err = resolve_search_collections(
@@ -103,7 +104,7 @@ def test_resolve_scope_session_default(_names, _connected):
     assert cols == ["kb_other"]
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1", "kb2"])
 def test_resolve_scope_rejects_collection_outside_user_selected_scope(_names, _connected):
     cols, err = resolve_search_collections(
@@ -117,7 +118,7 @@ def test_resolve_scope_rejects_collection_outside_user_selected_scope(_names, _c
     assert "kb2" in err
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1", "kb2"])
 def test_resolve_scope_rejects_mixed_request_when_scope_is_enforced(_names, _connected):
     cols, err = resolve_search_collections(
@@ -130,7 +131,7 @@ def test_resolve_scope_rejects_mixed_request_when_scope_is_enforced(_names, _con
     assert "当前用户选定的检索范围" in err
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1", "kb2"])
 def test_resolve_scope_only_returns_user_selected_collections(_names, _connected):
     cols, err = resolve_search_collections(
@@ -142,25 +143,24 @@ def test_resolve_scope_only_returns_user_selected_collections(_names, _connected
     assert cols == ["kb1"]
 
 
-@patch("noesis.tools.kb_search_tool.require_kb_collection_config_service")
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.load_query_params_sync", return_value={"search_mode": "hybrid"})
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["req_docs", "kb_other"])
-@patch("noesis.tools.kb_search_tool.require_qdrant_service")
-@patch("noesis.tools.kb_search_tool.require_normalize_query_execution_params")
-@patch("noesis.tools.kb_search_tool.require_kb_retrieval_service")
+@patch("noesis.tools.kb_search_tool.QdrantService")
+@patch("noesis.tools.kb_search_tool.normalize_query_execution_params")
+@patch("noesis.tools.kb_search_tool.KbRetrievalService")
 def test_search_scoped_collection_only(
     mock_retrieval, mock_normalize, mock_qdrant_cls, _names, _connected, _load_qp
 ):
-    _load_qp.return_value.load_query_params_sync.return_value = {"search_mode": "hybrid"}
-    mock_normalize.return_value = lambda **kwargs: {
+    mock_normalize.side_effect = lambda **kwargs: {
         **(kwargs.get("request_overrides") or {}),
         "final_top_k": (kwargs.get("request_overrides") or {}).get("final_top_k", 10),
     }
-    mock_qdrant_cls.get_collection.return_value = {
+    mock_qdrant_cls.return_value.get_collection.return_value = {
         "name": "x",
         "vector_dimension": 1024,
     }
-    mock_search = mock_retrieval.return_value.search
+    mock_search = mock_retrieval.search
     mock_search.return_value = KbSearchResult(
         hits=[
             KbSearchHit(
@@ -171,18 +171,7 @@ def test_search_scoped_collection_only(
                 search_mode="hybrid",
             )
         ],
-        timing=KbSearchTiming(
-            prepare_ms=0.0,
-            recall_ms=1.0,
-            parse_ms=0.1,
-            rerank_ms=0.0,
-            post_ms=0.1,
-            total_ms=1.2,
-            rerank_applied=False,
-            recall_hits=1,
-            final_hits=1,
-            search_mode="hybrid",
-        ),
+        timing=_timing(),
     )
 
     raw = search_knowledge_bases_all(
@@ -196,7 +185,7 @@ def test_search_scoped_collection_only(
     assert mock_search.call_args.kwargs["collection_name"] == "req_docs"
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1"])
 def test_build_tools_when_collections_exist(_names, _connected):
     tools = build_kb_search_tools()
@@ -215,12 +204,12 @@ def test_harness_kb_tool_does_not_import_platform_domain() -> None:
     assert "import noesis_server" not in source
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=False)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=False)
 def test_build_empty_when_disconnected(_connected):
     assert build_kb_search_tools() == []
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=[])
 def test_search_returns_empty_when_no_collections(_names, _connected):
     raw = search_knowledge_bases_all("q")
@@ -228,11 +217,11 @@ def test_search_returns_empty_when_no_collections(_names, _connected):
     assert data["results"] == []
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1"])
-@patch("noesis.tools.kb_search_tool.require_qdrant_service")
+@patch("noesis.tools.kb_search_tool.QdrantService")
 def test_list_knowledge_bases(mock_qdrant_cls, _names, _connected):
-    mock_qdrant_cls.get_collection.return_value = {
+    mock_qdrant_cls.return_value.get_collection.return_value = {
         "documents_count": 3,
         "points_count": 10,
     }
@@ -241,17 +230,17 @@ def test_list_knowledge_bases(mock_qdrant_cls, _names, _connected):
     assert data["collections"][0]["collection_name"] == "kb1"
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1"])
-@patch("noesis.tools.kb_search_tool.require_kb_retrieval_service")
+@patch("noesis.tools.kb_search_tool.KbRetrievalService")
 def test_get_knowledge_document(mock_retrieval, _names, _connected):
-    mock_retrieval.return_value.fetch_full_document_by_file_name.return_value = "全文"
+    mock_retrieval.fetch_full_document_by_file_name.return_value = "全文"
     data = json.loads(get_knowledge_document("kb1", "a.md"))
     assert data["content"] == "全文"
     assert data["truncated"] is False
 
 
-@patch("noesis.tools.kb_search_tool.require_is_qdrant_connected", return_value=True)
+@patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=True)
 @patch("noesis.tools.kb_search_tool.list_qdrant_collection_names", return_value=["kb1", "kb2"])
 def test_get_knowledge_document_respects_scope(_names, _connected):
     data = json.loads(

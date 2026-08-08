@@ -2,7 +2,11 @@
 
 Harness MUST NOT import ``services.*``, ``domain.*``, or ``models.*``.
 LLM kit (``llm``) is a shared package and may be imported directly.
-Platform (app lifespan / evals bootstrap) binds KB / attachments / Langfuse / VLM here.
+
+KB retrieval / Qdrant / VLM / collection-config are now imported directly by
+harness from ``noesis.knowledge`` / ``noesis.repositories`` / ``noesis.storage``;
+no KB binding surface remains here. Only attachments / memory / Langfuse are
+bound by the platform host.
 """
 
 from __future__ import annotations
@@ -12,12 +16,6 @@ from collections.abc import Iterator
 from typing import Any, Callable
 
 _attachment_service: Any | None = None
-_kb_collection_config_service: Any | None = None
-_qdrant_service_factory: Callable[[], Any] | None = None
-_is_qdrant_connected: Callable[[], bool] | None = None
-_is_vlm_configured: Callable[[], bool] | None = None
-_normalize_query_execution_params: Callable[..., Any] | None = None
-_kb_retrieval_service: Any | None = None
 _langfuse_tracing_enabled: Callable[[], bool] | None = None
 _merge_langfuse_runnable_config: Callable[..., dict] | None = None
 _hits_to_langfuse_payload: Callable[..., Any] | None = None
@@ -64,74 +62,6 @@ def temporary_attachment_service(service: Any) -> Iterator[None]:
         _attachment_service = previous
 
 
-def bind_kb_services(
-    *,
-    collection_config_service: Any,
-    qdrant_service_factory: Callable[[], Any],
-    is_qdrant_connected: Callable[[], bool],
-) -> None:
-    global _kb_collection_config_service, _qdrant_service_factory, _is_qdrant_connected
-    _kb_collection_config_service = collection_config_service
-    _qdrant_service_factory = qdrant_service_factory
-    _is_qdrant_connected = is_qdrant_connected
-
-
-def bind_vlm(is_vlm_configured: Callable[[], bool]) -> None:
-    global _is_vlm_configured
-    _is_vlm_configured = is_vlm_configured
-
-
-def bind_kb_retrieval(
-    *,
-    normalize_query_execution_params: Callable[..., Any],
-    retrieval_service: Any,
-) -> None:
-    """Bind KB retrieval primitives (no static ``kb`` import inside harness tools)."""
-    global _normalize_query_execution_params, _kb_retrieval_service
-    _normalize_query_execution_params = normalize_query_execution_params
-    _kb_retrieval_service = retrieval_service
-
-
-@contextmanager
-def temporary_kb_runtime(
-    *,
-    collection_config_service: Any,
-    qdrant_service_factory: Callable[[], Any],
-    is_qdrant_connected: Callable[[], bool],
-    normalize_query_execution_params: Callable[..., Any],
-    retrieval_service: Any,
-) -> Iterator[None]:
-    """Temporarily bind all KB ports for an embedded or evaluation runtime."""
-    global _kb_collection_config_service, _qdrant_service_factory, _is_qdrant_connected
-    global _normalize_query_execution_params, _kb_retrieval_service
-    previous = (
-        _kb_collection_config_service,
-        _qdrant_service_factory,
-        _is_qdrant_connected,
-        _normalize_query_execution_params,
-        _kb_retrieval_service,
-    )
-    bind_kb_services(
-        collection_config_service=collection_config_service,
-        qdrant_service_factory=qdrant_service_factory,
-        is_qdrant_connected=is_qdrant_connected,
-    )
-    bind_kb_retrieval(
-        normalize_query_execution_params=normalize_query_execution_params,
-        retrieval_service=retrieval_service,
-    )
-    try:
-        yield
-    finally:
-        (
-            _kb_collection_config_service,
-            _qdrant_service_factory,
-            _is_qdrant_connected,
-            _normalize_query_execution_params,
-            _kb_retrieval_service,
-        ) = previous
-
-
 def bind_langfuse(
     *,
     tracing_enabled: Callable[[], bool],
@@ -154,48 +84,6 @@ def require_attachment_service() -> Any:
             "from platform startup or eval bootstrap"
         )
     return _attachment_service
-
-
-def require_kb_collection_config_service() -> Any:
-    if _kb_collection_config_service is None:
-        raise RuntimeError(
-            "KbCollectionConfigService not bound; call noesis.runtime.deps.bind_kb_services"
-        )
-    return _kb_collection_config_service
-
-
-def require_qdrant_service() -> Any:
-    if _qdrant_service_factory is None:
-        raise RuntimeError("QdrantService factory not bound; call noesis.runtime.deps.bind_kb_services")
-    return _qdrant_service_factory()
-
-
-def require_is_qdrant_connected() -> bool:
-    if _is_qdrant_connected is None:
-        raise RuntimeError("is_qdrant_connected not bound; call noesis.runtime.deps.bind_kb_services")
-    return bool(_is_qdrant_connected())
-
-
-def require_is_vlm_configured() -> bool:
-    if _is_vlm_configured is None:
-        raise RuntimeError("is_vlm_configured not bound; call noesis.runtime.deps.bind_vlm")
-    return bool(_is_vlm_configured())
-
-
-def require_normalize_query_execution_params() -> Callable[..., Any]:
-    if _normalize_query_execution_params is None:
-        raise RuntimeError(
-            "normalize_query_execution_params not bound; call noesis.runtime.deps.bind_kb_retrieval"
-        )
-    return _normalize_query_execution_params
-
-
-def require_kb_retrieval_service() -> Any:
-    if _kb_retrieval_service is None:
-        raise RuntimeError(
-            "KbRetrievalService not bound; call noesis.runtime.deps.bind_kb_retrieval"
-        )
-    return _kb_retrieval_service
 
 
 def langfuse_tracing_enabled() -> bool:

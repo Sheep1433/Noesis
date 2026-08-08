@@ -8,7 +8,7 @@ from typing import AsyncIterator
 from langgraph.checkpoint.memory import MemorySaver
 
 from noesis.config.checkpointer import temporary_checkpointer
-from noesis.runtime.deps import temporary_attachment_service, temporary_kb_runtime
+from noesis.runtime.deps import temporary_attachment_service
 
 
 class _NoAttachments:
@@ -34,25 +34,18 @@ async def eval_runtime(*, no_attachments: bool = False) -> AsyncIterator[MemoryS
 
 @asynccontextmanager
 async def agentic_rag_runtime() -> AsyncIterator[None]:
-    """Bind only the platform KB adapters required by the Harness RAG tools."""
-    from noesis_server.kb.chunk import normalize_query_execution_params
-    from noesis_server.kb.qdrant import (
-        QdrantService,
-        init_qdrant_client,
-        is_qdrant_connected,
-    )
-    from noesis_server.kb.retrieval import KbRetrievalService
-    from noesis_server.services.kb_collection_config_service import (
-        KbCollectionConfigService,
-    )
+    """Initialize the KB engine + Postgres storage for Harness RAG tools.
+
+    KB retrieval, Qdrant, VLM, and collection-config are imported directly by
+    the harness tools from ``noesis.knowledge`` / ``noesis.repositories`` /
+    ``noesis.storage``; no dependency injection is needed. This context only
+    ensures Qdrant is connected and the Postgres engine is ready for the
+    synchronous collection-config reads performed inside Agent tool threads.
+    """
+    from noesis.knowledge.implementations.qdrant import init_qdrant_client
+    from noesis.storage.postgres.manager import pg_manager
 
     if not await init_qdrant_client():
         raise RuntimeError("Agentic RAG 评测需要可用的 Qdrant")
-    with temporary_kb_runtime(
-        collection_config_service=KbCollectionConfigService,
-        qdrant_service_factory=QdrantService,
-        is_qdrant_connected=is_qdrant_connected,
-        normalize_query_execution_params=normalize_query_execution_params,
-        retrieval_service=KbRetrievalService,
-    ):
-        yield
+    pg_manager._ensure_engine()
+    yield

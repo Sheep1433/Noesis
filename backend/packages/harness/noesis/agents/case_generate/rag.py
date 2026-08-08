@@ -10,12 +10,11 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from noesis.config.env import QdrantConfig
+from noesis.knowledge import KbRetrievalService, normalize_query_execution_params
+from noesis.repositories.kb_collection_config_repository import load_query_params_sync
 from noesis.runtime.deps import (
     hits_to_langfuse_payload,
     langfuse_retrieval_observation,
-    require_kb_collection_config_service,
-    require_kb_retrieval_service,
-    require_normalize_query_execution_params,
 )
 from noesis.runtime.logging import logger
 
@@ -81,7 +80,7 @@ class _HybridRetriever:
             return []
 
         def _run() -> List[Any]:
-            collection_query = require_kb_collection_config_service().load_query_params_sync(
+            collection_query = load_query_params_sync(
                 self.collection_name
             )
             overrides = dict(_CHANNEL_QUERY_OVERRIDE)
@@ -89,11 +88,11 @@ class _HybridRetriever:
                 overrides.update(channel_overrides)
             if limit != DEFAULT_TOP_K:
                 overrides["final_top_k"] = limit
-            exec_params = require_normalize_query_execution_params()(
+            exec_params = normalize_query_execution_params(
                 collection_query=collection_query,
                 request_overrides=overrides,
             )
-            return require_kb_retrieval_service().search(
+            return KbRetrievalService.search(
                 collection_name=self.collection_name,
                 query=query.strip(),
                 query_execution_params=exec_params,

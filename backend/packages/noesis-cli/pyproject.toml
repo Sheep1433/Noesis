@@ -1,0 +1,20 @@
+[project]
+name = "noesis-cli"
+version = "0.1.0"
+description = "Noesis local harness CLI — direct agent call, no HTTP"
+requires-python = ">=3.11"
+dependencies = [
+    "noesis-harness",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/noesis_cli"]
+
+[project.scripts]
+noesis = "noesis_cli.main:app"

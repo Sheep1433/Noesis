@@ -2,6 +2,8 @@ import httpx
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessageChunk
 from noesis.config.env import ModelConfig
 
 _OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
@@ -9,6 +11,84 @@ _OPENCODE_DEFAULT_HEADERS = {
     "HTTP-Referer": "https://opencode.ai/",
     "X-Title": "opencode",
 }
+
+
+class ChatOpenCode(ChatOpenAI):
+    """OpenCode Zen 统一适配：归一化不同模型的 reasoning 字段到 additional_kwargs["reasoning_content"]。
+
+    OpenCode 聚合了多家模型，reasoning 字段格式不统一：
+    - DeepSeek 系列：delta.reasoning_content（字符串）
+    - MiMo 系列：delta.reasoning（字符串）+ delta.reasoning_details（数组，含 type/text/format/index）
+    - 其他模型：可能无 reasoning 或用不同字段
+
+    本类在流式和非流式两条路径上统一提取，上层只需读 additional_kwargs["reasoning_content"]。
+    """
+
+    @staticmethod
+    def _extract_reasoning_from_delta(delta: dict) -> str | None:
+        """从流式 delta 字典提取 reasoning 文本，统一输出字符串。"""
+        # 1. DeepSeek 原生：reasoning_content（字符串）
+        reasoning_content = delta.get("reasoning_content")
+        if reasoning_content is not None:
+            return reasoning_content
+        # 2. MiMo / OpenRouter：reasoning（字符串）
+        reasoning = delta.get("reasoning")
+        if reasoning is not None:
+            return reasoning
+        # 3. reasoning_details 数组（MiMo 结构化格式）：拼接 text 字段
+        details = delta.get("reasoning_details")
+        if isinstance(details, list) and details:
+            parts = [d.get("text", "") for d in details if isinstance(d, dict) and d.get("text")]
+            if parts:
+                return "".join(parts)
+        return None
+
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        """流式：从每个 chunk 的 delta 提取 reasoning 并归一化。"""
+        generation_chunk = super()._convert_chunk_to_generation_chunk(
+            chunk, default_chunk_class, base_generation_info,
+        )
+        choices = chunk.get("choices") if isinstance(chunk, dict) else None
+        if choices and generation_chunk and isinstance(generation_chunk.message, AIMessageChunk):
+            delta = choices[0].get("delta", {})
+            reasoning = self._extract_reasoning_from_delta(delta)
+            if reasoning is not None:
+                generation_chunk.message.additional_kwargs["reasoning_content"] = reasoning
+            # 标记 provider 供上层区分
+            generation_chunk.message.response_metadata = {
+                **generation_chunk.message.response_metadata,
+                "model_provider": "opencode",
+            }
+        return generation_chunk
+
+    def _create_chat_result(self, response, generation_info=None):
+        """非流式：从完整 response 提取 reasoning 并归一化。"""
+        rtn = super()._create_chat_result(response, generation_info)
+        for generation in rtn.generations:
+            if generation.message.response_metadata is None:
+                generation.message.response_metadata = {}
+            generation.message.response_metadata["model_provider"] = "opencode"
+
+        # 尝试从 response 的 message 里提取 reasoning
+        choices = getattr(response, "choices", None) if hasattr(response, "choices") else None
+        if choices:
+            msg = choices[0].message
+            # DeepSeek 原生
+            if hasattr(msg, "reasoning_content") and msg.reasoning_content:
+                rtn.generations[0].message.additional_kwargs["reasoning_content"] = msg.reasoning_content
+            else:
+                # OpenRouter / MiMo：reasoning 和 reasoning_details 在 model_extra 里
+                model_extra = getattr(msg, "model_extra", None) or {}
+                if isinstance(model_extra, dict):
+                    delta_like = {
+                        "reasoning_content": model_extra.get("reasoning_content"),
+                        "reasoning": model_extra.get("reasoning"),
+                        "reasoning_details": model_extra.get("reasoning_details"),
+                    }
+                    reasoning = self._extract_reasoning_from_delta(delta_like)
+                    if reasoning is not None:
+                        rtn.generations[0].message.additional_kwargs["reasoning_content"] = reasoning
+        return rtn
 
 
 def _llm_http_timeout() -> httpx.Timeout:
@@ -71,10 +151,10 @@ def build_chat_model(
             streaming=ModelConfig.streaming,
             **http_kwargs,
         ),
-        "opencode": lambda: ReasoningAwareChatDeepSeek(
+        "opencode": lambda: ChatOpenCode(
             model=model_name,
             temperature=temperature,
-            api_base=model_base_url or _OPENCODE_DEFAULT_BASE_URL,
+            base_url=model_base_url or _OPENCODE_DEFAULT_BASE_URL,
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
@@ -96,11 +176,22 @@ def build_chat_model(
             streaming=ModelConfig.streaming,
             **http_kwargs,
         ),
-        "deepseek": lambda: ReasoningAwareChatDeepSeek(
+        "deepseek": lambda: ChatDeepSeek(
             model=model_name,
             temperature=temperature,
             base_url=model_base_url,
             api_key=model_api_key,
+            timeout=timeout,
+            max_retries=max_retries,
+            streaming=ModelConfig.streaming,
+            **http_kwargs,
+        ),
+        "anthropic": lambda: ChatAnthropic(
+            model=model_name,
+            temperature=temperature,
+            base_url=model_base_url,
+            api_key=model_api_key,
+            max_tokens=int(ModelConfig.max_tokens),
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,

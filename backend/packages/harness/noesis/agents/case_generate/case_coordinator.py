@@ -52,7 +52,7 @@ async def resolve_document_context(file_list: Optional[Dict[str, Any]]) -> str:
         TEST_CASE_KB_FILE_DICT_REF,
         requirement_collection_name,
     )
-    from noesis.runtime.deps import require_kb_retrieval_service
+    from noesis.knowledge import KbRetrievalService
 
     if not file_list:
         return ""
@@ -67,7 +67,7 @@ async def resolve_document_context(file_list: Optional[Dict[str, Any]]) -> str:
         s = str(val).strip()
         if s == TEST_CASE_KB_FILE_DICT_REF:
             body = await asyncio.to_thread(
-                require_kb_retrieval_service().fetch_full_document_by_file_name,
+                KbRetrievalService.fetch_full_document_by_file_name,
                 coll,
                 file_name,
             )

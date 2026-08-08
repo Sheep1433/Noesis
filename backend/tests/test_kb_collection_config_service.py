@@ -1,10 +1,14 @@
-"""KbCollectionConfigService 单测（mock DB / Qdrant）。"""
+"""KbCollectionConfig repository / service 单测（mock DB / Qdrant）。"""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from noesis.repositories.kb_collection_config_repository import (
+    KbCollectionConfigRepository,
+    load_query_params_sync,
+)
 from noesis_server.services.kb_collection_config_service import KbCollectionConfigService
 
 
@@ -13,7 +17,7 @@ async def test_create_default_idempotent():
     db = AsyncMock()
     existing = MagicMock()
     with patch.object(
-        KbCollectionConfigService, "get_row", new=AsyncMock(return_value=existing)
+        KbCollectionConfigRepository, "get_row", new=AsyncMock(return_value=existing)
     ):
         row = await KbCollectionConfigService.create_default(db, "my_col")
     assert row is existing
@@ -26,9 +30,9 @@ async def test_patch_config_merges_processing():
     row = MagicMock()
     row.processing_params = {"chunk_parser_config": {"chunk_size": 500}}
     row.query_params = {}
-    with patch.object(KbCollectionConfigService, "get_row", new=AsyncMock(return_value=row)):
+    with patch.object(KbCollectionConfigRepository, "get_row", new=AsyncMock(return_value=row)):
         with patch.object(
-            KbCollectionConfigService,
+            KbCollectionConfigRepository,
             "get_config",
             new=AsyncMock(return_value={"collection_name": "c", "processing_params": {}, "query_params": {}}),
         ):
@@ -44,16 +48,16 @@ async def test_patch_config_merges_processing():
 @pytest.mark.asyncio
 async def test_ensure_defaults_for_qdrant_collections():
     db = AsyncMock()
-    with patch("noesis_server.services.kb_collection_config_service.is_qdrant_connected", return_value=True):
+    with patch("noesis.knowledge.implementations.qdrant.is_qdrant_connected", return_value=True):
         with patch.object(
-            KbCollectionConfigService, "get_row", new=AsyncMock(return_value=None)
+            KbCollectionConfigRepository, "get_row", new=AsyncMock(return_value=None)
         ):
             with patch.object(
-                KbCollectionConfigService, "create_default", new=AsyncMock()
+                KbCollectionConfigRepository, "create_default", new=AsyncMock()
             ) as mock_create:
                 svc = MagicMock()
                 svc.get_collections.return_value = [{"name": "new_col"}]
-                with patch("noesis_server.services.kb_collection_config_service.QdrantService", return_value=svc):
+                with patch("noesis.knowledge.implementations.qdrant.QdrantService", return_value=svc):
                     n = await KbCollectionConfigService.ensure_defaults_for_qdrant_collections(db)
     assert n == 1
     mock_create.assert_awaited_once()
@@ -68,10 +72,10 @@ def test_load_query_params_sync_reads_postgresql_row():
     session.__exit__ = MagicMock(return_value=False)
 
     with patch(
-        "noesis_server.services.kb_collection_config_service._get_sync_session",
+        "noesis.repositories.kb_collection_config_repository.pg_manager.get_sync_session",
         return_value=session,
     ):
-        params = KbCollectionConfigService.load_query_params_sync("medical")
+        params = load_query_params_sync("medical")
 
     assert params["search_mode"] == "hybrid"
     assert params["recall_top_k"] == 30

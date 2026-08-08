@@ -184,12 +184,12 @@ def list_public_models() -> List[dict[str, Any]]:
 
 
 def get_catalog_vision_meta() -> dict[str, Any]:
-    from noesis.runtime.deps import require_is_vlm_configured
+    from noesis.knowledge.embedding import is_vlm_configured
     from noesis.llm.vision_meta import get_first_vision_catalog_id
 
     # VLM fallback 探测属平台能力；经 deps 绑定，避免 noesis→kb 反向依赖。
     try:
-        vlm_fallback = require_is_vlm_configured()
+        vlm_fallback = is_vlm_configured()
     except RuntimeError:
         vlm_fallback = False
 

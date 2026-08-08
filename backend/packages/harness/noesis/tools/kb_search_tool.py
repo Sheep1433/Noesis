@@ -10,13 +10,9 @@ from typing import Any, List, Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from noesis.runtime.deps import (
-    require_is_qdrant_connected,
-    require_kb_collection_config_service,
-    require_kb_retrieval_service,
-    require_normalize_query_execution_params,
-    require_qdrant_service,
-)
+from noesis.knowledge import KbRetrievalService, normalize_query_execution_params
+from noesis.knowledge.implementations.qdrant import QdrantService, is_qdrant_connected
+from noesis.repositories.kb_collection_config_repository import load_query_params_sync
 from noesis.runtime.context_provenance import estimate_source_tokens, get_or_create_context_provenance
 from noesis.runtime.logging import logger
 
@@ -40,10 +36,10 @@ class KbGetDocumentInput(BaseModel):
 
 def list_qdrant_collection_names() -> List[str]:
     """列出当前可检索的 Collection（已连接且有点数）。"""
-    if not require_is_qdrant_connected():
+    if not is_qdrant_connected():
         return []
     names: List[str] = []
-    for col in require_qdrant_service().get_collections():
+    for col in QdrantService().get_collections():
         name = (col.get("name") or "").strip()
         if not name:
             continue
@@ -177,17 +173,17 @@ def _search_one_collection(
     *,
     global_limit: int,
 ) -> List[Tuple[str, Any]]:
-    svc = require_qdrant_service()
+    svc = QdrantService()
     col = svc.get_collection(name)
     if not col:
         return []
     vd = int(col.get("vector_dimension") or 1024)
-    collection_query = require_kb_collection_config_service().load_query_params_sync(name)
-    exec_params = require_normalize_query_execution_params()(
+    collection_query = load_query_params_sync(name)
+    exec_params = normalize_query_execution_params(
         collection_query=collection_query,
         request_overrides={"final_top_k": global_limit},
     )
-    hits = require_kb_retrieval_service().search(
+    hits = KbRetrievalService.search(
         collection_name=name,
         query=query,
         query_execution_params=exec_params,
@@ -206,7 +202,7 @@ def search_knowledge_bases_all(
 ) -> str:
     """在指定或默认范围内的知识库 Collection 并行 hybrid 检索，全局 Top-K。"""
     t_total = time.perf_counter()
-    if not require_is_qdrant_connected():
+    if not is_qdrant_connected():
         return json.dumps(
             {"error": "向量库未连接，无法检索"},
             ensure_ascii=False,
@@ -271,14 +267,14 @@ def list_knowledge_bases(
     default_collection_names: Optional[List[str]] = None,
 ) -> str:
     """列出企业内可检索的知识库 Collection 及文档规模。"""
-    if not require_is_qdrant_connected():
+    if not is_qdrant_connected():
         return json.dumps(
             {"error": "向量库未连接，无法列出知识库"},
             ensure_ascii=False,
         )
 
     scope = _normalize_name_list(default_collection_names)
-    svc = require_qdrant_service()
+    svc = QdrantService()
     rows = []
     for name in list_qdrant_collection_names():
         if scope and name not in scope:
@@ -310,7 +306,7 @@ def get_knowledge_document(
     allowed_collection_names: Optional[List[str]] = None,
 ) -> str:
     """按 collection + file_name 拉取整篇文档正文（chunk 检索不够时补全上下文）。"""
-    if not require_is_qdrant_connected():
+    if not is_qdrant_connected():
         return json.dumps(
             {"error": "向量库未连接，无法读取文档"},
             ensure_ascii=False,
@@ -344,7 +340,7 @@ def get_knowledge_document(
             ensure_ascii=False,
         )
 
-    content = require_kb_retrieval_service().fetch_full_document_by_file_name(col_name, doc_name)
+    content = KbRetrievalService.fetch_full_document_by_file_name(col_name, doc_name)
     if not content.strip():
         return json.dumps(
             {
@@ -379,7 +375,7 @@ def build_kb_search_tools(
     enforce_scope: bool = False,
 ) -> list:
     """构建知识库 Tool；无 Collection 或向量库未连接时不挂载。"""
-    if not require_is_qdrant_connected() or not list_qdrant_collection_names():
+    if not is_qdrant_connected() or not list_qdrant_collection_names():
         return []
 
     scope = _normalize_name_list(default_collection_names)

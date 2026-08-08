@@ -5,7 +5,7 @@ import base64
 from typing import Any
 
 from noesis.runtime.logging import logger
-from noesis.runtime.deps import require_is_vlm_configured
+from noesis.knowledge.embedding import is_vlm_configured
 
 _CHAT_IMAGE_CAPTION_PROMPT = (
     "请用中文简洁描述这张图片的关键信息（主体、文字、图表数据、界面元素等），"
@@ -55,7 +55,7 @@ def describe_image_bytes_for_chat(
     from noesis.config.env import ModelConfig
     from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
-    if not require_is_vlm_configured():
+    if not is_vlm_configured():
         raise ValueError("VLM 未配置")
 
     import httpx
