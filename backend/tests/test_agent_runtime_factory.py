@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import AIMessage, ToolMessage
 
 from noesis.factory import build_noesis_runtime_middleware
-from noesis.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
+from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
 
 
 def test_runtime_stack_contains_only_the_five_kernel_owners() -> None:

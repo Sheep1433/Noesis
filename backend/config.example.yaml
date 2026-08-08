@@ -233,14 +233,14 @@ hitl:
 kb:
   deepdoc:
     enabled: true
-    model_dir: ../.data/rag/res/deepdoc
+    model_dir: ../.noesis/rag/res/deepdoc
   parser:
     default: deepdoc
 
 # 聊天会话附件（COMMON_QA；敏感项无）
 chat_attachment:
   enabled: true
-  # 磁盘路径固定为 .data/users/{user_id}/sessions/{session_id}/uploads|attachments/（见 user_data_paths）
+  # 磁盘路径固定为 .noesis/users/{user_id}/sessions/{session_id}/uploads|attachments/（见 user_data_paths）
   ttl_days: 7
   max_file_mb: 20
   auto_convert: true

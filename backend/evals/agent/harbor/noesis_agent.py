@@ -17,7 +17,7 @@ from evals.bootstrap import eval_runtime
 from noesis.config import ModelConfig
 from noesis.factory import create_noesis_agent
 from noesis.llm import build_chat_model, get_llm
-from noesis.prompts.execution import build_execution_sections
+from noesis.agents.prompts.execution import build_execution_sections
 from noesis.runtime import DEFAULT_RECURSION_LIMIT, stream_agent_events
 
 AGENT_VERSION = "0.1.0"

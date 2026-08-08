@@ -1,5 +1,5 @@
 """
-Skills 文件目录（平台 extensions/skills + 用户 .data/users/{uid}/skills/）
+Skills 文件目录（平台 extensions/skills + 用户 .noesis/users/{uid}/skills/）
 """
 import io
 import os
@@ -10,7 +10,7 @@ from typing import List, Literal, Tuple
 
 from noesis.config.extensions_paths import skills_root
 from noesis.config.user_data_paths import ensure_user_skills_dir, get_user_skills_dir
-from noesis.skills.revision import (
+from noesis.agents.skills.revision import (
     bump_user_skills_revision,
     get_user_skills_revision,
     skills_revision_path,
@@ -217,7 +217,7 @@ class SkillFsService:
 
     @classmethod
     def extract_zip_to_user_dir(cls, zip_path: str, user_id: str | int) -> Tuple[bool, str]:
-        """将 ZIP 内容解压到 `.data/users/{user_id}/skills/`。"""
+        """将 ZIP 内容解压到 `.noesis/users/{user_id}/skills/`。"""
         root = str(ensure_user_skills_dir(user_id))
         ok, msg = cls._extract_zip(zip_path, root)
         if ok:

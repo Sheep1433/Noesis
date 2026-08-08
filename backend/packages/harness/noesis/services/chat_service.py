@@ -576,7 +576,7 @@ class ChatService:
                 exc,
             )
         try:
-            from noesis.backends.sandbox_lifecycle import destroy_session_sandbox
+            from noesis.agents.backends.sandbox_lifecycle import destroy_session_sandbox
 
             await destroy_session_sandbox(user_id, session_id)
         except Exception as exc:  # noqa: BLE001
@@ -667,7 +667,7 @@ class ChatService:
                     exc,
                 )
             try:
-                from noesis.backends.sandbox_lifecycle import destroy_session_sandbox
+                from noesis.agents.backends.sandbox_lifecycle import destroy_session_sandbox
 
                 await destroy_session_sandbox(uid, sid)
             except Exception as exc:  # noqa: BLE001

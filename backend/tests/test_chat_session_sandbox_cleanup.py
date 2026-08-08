@@ -40,7 +40,7 @@ async def test_delete_session_cancels_agents_and_destroys_sandbox(tmp_path: Path
         patch.object(udp, "_USERS_ROOT", users_root),
         patch("noesis.services.chat_service.cancel_session_agent_runs", cancel_mock),
         patch(
-            "noesis.backends.sandbox_lifecycle.destroy_session_sandbox",
+            "noesis.agents.backends.sandbox_lifecycle.destroy_session_sandbox",
             new_callable=AsyncMock,
         ) as destroy_mock,
     ):

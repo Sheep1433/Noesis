@@ -70,7 +70,7 @@ class SettingsDiagnosticsService:
             return ("healthy", "知识检索服务正常", None) if is_qdrant_connected() else ("unavailable", "知识检索服务暂不可用", "retry")
 
         async def sandbox():
-            from noesis.backends import sandbox_lifecycle
+            from noesis.agents.backends import sandbox_lifecycle
             if not hasattr(sandbox_lifecycle, "agent_sandbox_session") and not hasattr(sandbox_lifecycle, "shutdown_sandboxes"):
                 return "unknown", "执行环境状态未知", "retry"
             return "healthy", "执行环境可用", None

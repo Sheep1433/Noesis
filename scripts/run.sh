@@ -96,7 +96,7 @@ mode_prod() {
 compose_env_file="$DEPLOY/.env.docker"
 
 export_compose_host_env() {
-  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.data}"
+  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.noesis}"
   export NOESIS_HOST_SKILLS_DIR="${NOESIS_HOST_SKILLS_DIR:-$ROOT/extensions/skills}"
 }
 

@@ -9,7 +9,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from noesis.mcp.loader import load_mcp_tools_by_names
+from noesis.agents.mcp.loader import load_mcp_tools_by_names
 from noesis.agents.super_agent import SuperAgent
 from noesis.runtime.logging import logger
 from noesis.storage.postgres.manager import pg_manager
@@ -481,7 +481,7 @@ async def resume_channel_hitl(
 ) -> ChannelRunResult:
     """Telegram / 通道 HITL resume：对齐网页 decisions，无 SSE。"""
     from noesis.domain.chat.hitl.pending import pending_hitl
-    from noesis.guardrails.session_grants import session_grants
+    from noesis.agents.guardrails.session_grants import session_grants
     from noesis.services.hitl_timeout import cancel_hitl_timeout
     from noesis.storage.postgres.models.chat import TChatMessage
     from sqlalchemy import and_, select

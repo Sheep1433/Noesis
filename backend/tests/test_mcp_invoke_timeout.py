@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from noesis.errors.tool_failure import ToolFailureCategory, ToolTimeoutError
-from noesis.tools.mcp_invoke_wrapper import wrap_mcp_tool
+from noesis.agents.tools.mcp_invoke_wrapper import wrap_mcp_tool
 
 
 class _SlowTool:

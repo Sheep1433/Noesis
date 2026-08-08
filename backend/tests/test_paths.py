@@ -6,11 +6,11 @@ import base64
 
 import pytest
 
-from noesis.backends.docker_exec import (
+from noesis.agents.backends.docker_exec import (
     _prepare_write_file_payload,
     _session_mutex,
 )
-from noesis.backends.paths import (
+from noesis.agents.backends.paths import (
     PERSONAL_SKILLS_CONTAINER_PREFIX,
     PUBLIC_SKILLS_CONTAINER_PREFIX,
     canonicalize_agent_path,

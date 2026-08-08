@@ -15,12 +15,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from noesis.factory import build_middleware_inventory, middleware_inventory
-from noesis.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
-from noesis.middlewares.kernel.model_execution_middleware import ModelExecutionMiddleware
-from noesis.middlewares.kernel.run_governor_middleware import RunGovernorMiddleware, default_governor_limits
-from noesis.middlewares.kernel.tool_execution_middleware import ToolExecutionMiddleware
+from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
+from noesis.agents.middlewares.kernel.model_execution_middleware import ModelExecutionMiddleware
+from noesis.agents.middlewares.kernel.run_governor_middleware import RunGovernorMiddleware, default_governor_limits
+from noesis.agents.middlewares.kernel.tool_execution_middleware import ToolExecutionMiddleware
 from noesis.runtime import StopReason, current_runtime_outcome
-from noesis.middlewares.kernel.runtime_telemetry_middleware import RuntimeTelemetryMiddleware
+from noesis.agents.middlewares.kernel.runtime_telemetry_middleware import RuntimeTelemetryMiddleware
 from noesis.runtime.outcome import ToolResultEnvelope, set_tool_result_envelope
 from noesis.runtime.governor import (
     GovernorLimits,
@@ -306,7 +306,7 @@ def test_context_lifecycle_injects_clock_without_persisting_it() -> None:
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
-            "noesis.middlewares.kernel.context_lifecycle_middleware.resolve_context_max_tokens",
+            "noesis.agents.middlewares.kernel.context_lifecycle_middleware.resolve_context_max_tokens",
             lambda _model_id: 100_000,
         )
         middleware.wrap_model_call(
@@ -358,7 +358,7 @@ def test_governor_config_consolidated_under_agent_runtime(monkeypatch: pytest.Mo
         governor_loop_window_size=12,
     )
     monkeypatch.setattr(
-        "noesis.middlewares.kernel.run_governor_middleware.ModelConfig", cfg
+        "noesis.agents.middlewares.kernel.run_governor_middleware.ModelConfig", cfg
     )
     disabled = default_governor_limits()
     # tool limits disabled → totals ignored even when set

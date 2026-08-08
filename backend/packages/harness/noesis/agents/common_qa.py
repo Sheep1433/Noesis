@@ -12,9 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
 from noesis.factory import create_noesis_agent
-from noesis.prompts import PromptProfile, build_prompt
-from noesis.tools import build_kb_search_tools, build_web_search_tools, list_qdrant_collection_names
-from noesis.tools.chat_attachment_tools import build_attachment_tools
+from noesis.agents.prompts import PromptProfile, build_prompt
+from noesis.agents.tools import build_kb_search_tools, build_web_search_tools, list_qdrant_collection_names
+from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
 from noesis.config.env import ChatAttachmentConfig
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver

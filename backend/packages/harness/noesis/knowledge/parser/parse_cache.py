@@ -1,4 +1,4 @@
-"""DeepDoc 解析结果 JSON 缓存（`.data/kb_parse/`）。"""
+"""DeepDoc 解析结果 JSON 缓存（`.noesis/kb_parse/`）。"""
 from __future__ import annotations
 
 import json
@@ -6,16 +6,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
+from noesis.config.paths import data_path
 from noesis.knowledge.parser.deepdoc_config import DEEPDOC_UPSTREAM_COMMIT
 from noesis.knowledge.parser.deepdoc_result import DeepDocBlock, DeepDocParseResult, DeepDocTable
 from noesis.runtime.logging import logger
 
 
 def _cache_root() -> Path:
-    backend_dir = Path(__file__).resolve().parents[2]
-    root = backend_dir.parent / ".data" / "kb_parse"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    return data_path("kb_parse")
 
 
 def cache_file_path(collection_name: str, file_hash: str) -> Path:

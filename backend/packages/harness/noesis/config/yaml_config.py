@@ -357,7 +357,7 @@ class ChatAttachmentYamlSection(BaseModel):
 
 class KbDeepDocYamlSection(BaseModel):
     enabled: bool = True
-    model_dir: str = "../.data/rag/res/deepdoc"
+    model_dir: str = "../.noesis/rag/res/deepdoc"
 
 
 class KbParserYamlSection(BaseModel):

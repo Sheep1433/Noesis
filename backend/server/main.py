@@ -22,7 +22,7 @@ from server.api import (
     settings_router,
 )
 from noesis.knowledge.implementations.qdrant import init_qdrant_client, close_qdrant_client
-from noesis.backends.sandbox_lifecycle import shutdown_sandboxes
+from noesis.agents.backends.sandbox_lifecycle import shutdown_sandboxes
 from server.wiring import wire_harness_platform_deps
 from noesis.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,

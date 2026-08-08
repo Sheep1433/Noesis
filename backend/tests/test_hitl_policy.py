@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
 from noesis.factory import create_noesis_agent
-from noesis.guardrails.policy import is_dangerous_execute, is_memory_write_path, is_network_execute
-from noesis.guardrails.session_grants import SessionGrantStore
-from noesis.tools.ask_user import build_interrupt_on
+from noesis.agents.guardrails.policy import is_dangerous_execute, is_memory_write_path, is_network_execute
+from noesis.agents.guardrails.session_grants import SessionGrantStore
+from noesis.agents.tools.ask_user import build_interrupt_on
 
 
 def test_memory_path_detection() -> None:

@@ -36,7 +36,7 @@ async def test_batch_delete_sessions_skips_missing_ids() -> None:
         "noesis.services.scheduled_task_service.ScheduledTaskService.disable_session_bound_tasks",
         new_callable=AsyncMock,
     ), patch(
-        "noesis.backends.sandbox_lifecycle.destroy_session_sandbox",
+        "noesis.agents.backends.sandbox_lifecycle.destroy_session_sandbox",
         new_callable=AsyncMock,
     ):
         deleted = await ChatService.batch_delete_sessions(

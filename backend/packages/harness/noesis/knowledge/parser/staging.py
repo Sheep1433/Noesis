@@ -1,4 +1,4 @@
-"""知识库上传暂存：解析前写入 ``.data/kb_uploads/``。"""
+"""知识库上传暂存：解析前写入 ``.noesis/kb_uploads/``。"""
 from __future__ import annotations
 
 import hashlib

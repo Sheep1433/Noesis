@@ -8,7 +8,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.yaml_config import load_app_yaml
-from noesis.security.secrets import redact_sensitive
+from noesis.config.secrets import redact_sensitive
 from noesis.repositories.settings_repository import SettingsRepository
 from noesis.storage.postgres.models.settings import TUserSettingsAudit
 from noesis.schemas.settings_vo import SettingsAuditItem, SettingsAuditPage, SettingsCapabilities

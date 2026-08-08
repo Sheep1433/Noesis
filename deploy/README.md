@@ -56,7 +56,7 @@ DEPLOY_BRANCH=main bash ./scripts/deploy-remote.sh
 docker build -t noesis/sandbox-slim:latest -f deploy/sandbox-slim/Dockerfile .
 ```
 
-3. **宿主机路径**（默认由 `deploy-remote.sh` / `run.sh docker` 从仓库根推导为 `$REPO/.data` 与 `$REPO/extensions/skills`，无需写入 `.env.docker`）。
+3. **宿主机路径**（默认由 `deploy-remote.sh` / `run.sh docker` 从仓库根推导为 `$REPO/.noesis` 与 `$REPO/extensions/skills`，无需写入 `.env.docker`）。
 
 > AIO 运行时已移除。勿再设置 `SANDBOX_RUNTIME=aio` / `SANDBOX_AIO_IMAGE`。
 
@@ -98,7 +98,7 @@ CPU 即可运行；macOS 开发机解析 PDF 需 `brew install libomp`（xgboost
 |----------|------|
 | `backend/config.yaml` → `sandbox.backend` | `docker`（生产）/ `local_shell`（开发） |
 | `backend/config.yaml` → `sandbox.runner_url` | backend 访问 runner 地址 |
-| `NOESIS_HOST_DATA_DIR` / `NOESIS_HOST_SKILLS_DIR` | **宿主机**绝对路径（默认 `$REPO/.data` 与 `$REPO/extensions/skills`，由启动脚本推导） |
+| `NOESIS_HOST_DATA_DIR` / `NOESIS_HOST_SKILLS_DIR` | **宿主机**绝对路径（默认 `$REPO/.noesis` 与 `$REPO/extensions/skills`，由启动脚本推导） |
 | `deploy/docker-compose.yml` → `sandbox-runner` | slim 镜像、回收、资源限制等 |
 | `.env` → `SANDBOX_RUNNER_TOKEN` | runner 与 backend 共享 Bearer token（可选） |
 
@@ -116,7 +116,7 @@ CPU 即可运行；macOS 开发机解析 PDF 需 `brew install libomp`（xgboost
 ./scripts/run.sh dev
 ```
 
-也可单独启动后端（`sandbox.backend=docker` 时需 runner；裸机路径默认对齐仓库 `.data/` 与 `extensions/skills`）：
+也可单独启动后端（`sandbox.backend=docker` 时需 runner；裸机路径默认对齐仓库 `.noesis/` 与 `extensions/skills`）：
 
 ```bash
 cd backend && uv run app.py

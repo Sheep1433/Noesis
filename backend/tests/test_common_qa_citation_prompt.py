@@ -1,5 +1,5 @@
-from noesis.prompts.common_qa import build_common_qa_prompt
-from noesis.prompts.super_agent import build_super_agent_prompt
+from noesis.agents.prompts.common_qa import build_common_qa_prompt
+from noesis.agents.prompts.super_agent import build_super_agent_prompt
 
 
 def test_kb_prompt_requests_markdown_references_in_normal_answer() -> None:

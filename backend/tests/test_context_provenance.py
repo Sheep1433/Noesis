@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from noesis.middlewares.kernel.context_metrics import build_context_snapshot_from_request
+from noesis.agents.middlewares.kernel.context_metrics import build_context_snapshot_from_request
 from noesis.runtime.context_provenance import (
     ContextProvenance,
     current_context_provenance,
@@ -97,7 +97,7 @@ def test_context_snapshot_consumes_provenance_sources() -> None:
         messages=[HumanMessage(content="用户问题")],
         runtime=_runtime_with_thread("sess-prov"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         # 无 provenance
         snap = build_context_snapshot_from_request(request)
         assert snap["sources"] == {}
@@ -157,7 +157,7 @@ def test_missing_provenance_keeps_content_in_parent_category() -> None:
         messages=[HumanMessage(content="问题")],
         runtime=_runtime_with_thread("sess-no-prov"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request)
 
     # 无 provenance → sources 空，但 system 分类仍有值（内容留在 system 父分类）

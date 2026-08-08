@@ -12,9 +12,9 @@ from langchain_core.messages import HumanMessage
 
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
 from noesis.factory import build_subagent_default_middleware, create_noesis_agent
-from noesis.mcp.loader import load_mcp_tools
-from noesis.prompts import PromptProfile, build_prompt
-from noesis.backends import agent_sandbox_session, create_agent_backend
+from noesis.agents.mcp.loader import load_mcp_tools
+from noesis.agents.prompts import PromptProfile, build_prompt
+from noesis.agents.backends import agent_sandbox_session, create_agent_backend
 from noesis.config.mcp_config import MCP_PROFILE_FAULT_OPERATION
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.subagents import SubAgent

@@ -3,7 +3,7 @@ import json
 import pytest
 
 from noesis.runtime.deps import temporary_memory_service
-from noesis.tools.memory_tools import build_memory_tools
+from noesis.agents.tools.memory_tools import build_memory_tools
 
 
 class FakeMemoryService:

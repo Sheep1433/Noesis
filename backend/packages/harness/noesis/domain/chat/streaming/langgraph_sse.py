@@ -12,7 +12,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Set
 
-from noesis.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
+from noesis.agents.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
 from noesis.config.env import ModelConfig
 from noesis.domain.chat.streaming.reasoning import (
     extract_reasoning_delta,

@@ -6,13 +6,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Optional
 
-from noesis.backends.paths import (
+from noesis.agents.backends.paths import (
     AGENT_MEMORY_AGENTS_FILE,
     AGENT_MEMORY_USER_FILE,
     AGENT_PERSONAL_SKILLS_ROUTE,
     canonicalize_agent_path,
 )
-from noesis.skills import package_has_skill_md
+from noesis.agents.skills import package_has_skill_md
 from noesis.config.extensions_paths import skills_root
 from noesis.config.user_data_paths import (
     get_session_attachments_dir,

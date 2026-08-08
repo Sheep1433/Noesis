@@ -10,10 +10,10 @@ from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemM
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
-from noesis.middlewares.kernel.context_metrics import get_agent_token_counter
+from noesis.agents.middlewares.kernel.context_metrics import get_agent_token_counter
 from noesis.llm.model_limits import resolve_context_max_tokens
 from langchain.agents.middleware.summarization import SummarizationMiddleware
-from noesis.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
+from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
 from noesis.config.env import ModelConfig
 from noesis.llm import get_llm
 

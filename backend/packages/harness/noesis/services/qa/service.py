@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.errors.exceptions import NotFoundException, ServiceException
 
-from noesis.mcp.loader import load_mcp_tools_by_names
+from noesis.agents.mcp.loader import load_mcp_tools_by_names
 from noesis.errors.exceptions import NotFoundException, ServiceException
 
 from noesis.storage.postgres.manager import pg_manager
@@ -431,7 +431,7 @@ class QaService:
         db: AsyncSession,
     ) -> AsyncGenerator[str, None]:
         """HITL resume：新开 SSE，续写同一 assistant_message_id。"""
-        from noesis.guardrails.session_grants import session_grants
+        from noesis.agents.guardrails.session_grants import session_grants
         from noesis.storage.postgres.models.chat import TChatMessage
         from sqlalchemy import and_, select
 

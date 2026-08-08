@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from noesis.backends.memory import UserMemoryBackend
+from noesis.agents.backends.memory import UserMemoryBackend
 from noesis.config.user_data_paths import (
     ensure_user_memory_files,
     get_user_channels_path,

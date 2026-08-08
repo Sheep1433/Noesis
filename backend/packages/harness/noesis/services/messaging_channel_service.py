@@ -11,7 +11,7 @@ from noesis.config.paths import DATA_DIR
 from noesis.config.user_data_paths import ensure_user_channels_path, get_user_channels_path
 from noesis.domain.chat.delivery.channels import ChannelBinding, channel_bindings
 from noesis.domain.chat.delivery.channel_health import channel_health
-from noesis.security.secrets import SecretCipher, SecretEncryptionUnavailable, secret_suffix
+from noesis.config.secrets import SecretCipher, SecretEncryptionUnavailable, secret_suffix
 from noesis.errors.exceptions import ServiceException
 from noesis.config.code_enum import IntentEnum
 
@@ -347,7 +347,7 @@ class MessagingChannelService:
         *,
         user_id: Optional[str | int] = None,
     ) -> List[RuntimeChannelConfig]:
-        """内部 API：返回含 bot_token 的启用通道；扫描 .data/users/*/channels.json。"""
+        """内部 API：返回含 bot_token 的启用通道；扫描 .noesis/users/*/channels.json。"""
         want = str(channel_type).lower()
         out: List[RuntimeChannelConfig] = []
 

@@ -54,17 +54,17 @@ backend/
 > - 宿主/评测调用常用能力优先使用稳定门面：`from noesis.config import ModelConfig, data_path`、`from noesis.runtime import logger, stream_agent_events`；细分模块路径用于内部实现或精确 mock
 > - 旧顶层 `api/services/domain/config/...` import 不保留兼容 shim
 
-本地运行时数据统一落在仓库根 **`.data/`**（gitignore），与 `packages/harness/noesis/config/paths.py` 对齐：
+本地运行时数据统一落在仓库根 **`.noesis/`**（gitignore），与 `packages/harness/noesis/config/paths.py` 对齐：
 
 | 子目录 | 用途 |
 |--------|------|
-| `.data/qdrant/` | 本地 Qdrant 容器卷（`scripts/run.sh` 默认） |
+| `.noesis/qdrant/` | 本地 Qdrant 容器卷（`scripts/run.sh` 默认） |
 | PostgreSQL `noesis_langgraph` | LangGraph checkpoint |
-| `.data/users/{user_id}/` | 用户记忆、`skills/`、`sessions/{sid}/workspace\|uploads\|attachments` |
-| `.data/kb_uploads/` | 知识库上传暂存（解析后删除） |
-| `.data/kb_parse/` | DeepDoc 解析结果缓存 |
-| `.data/rag/res/deepdoc/` | DeepDoc 模型权重 |
-| `.data/logs/` | 后端错误日志 |
+| `.noesis/users/{user_id}/` | 用户记忆、`skills/`、`sessions/{sid}/workspace\|uploads\|attachments` |
+| `.noesis/kb_uploads/` | 知识库上传暂存（解析后删除） |
+| `.noesis/kb_parse/` | DeepDoc 解析结果缓存 |
+| `.noesis/rag/res/deepdoc/` | DeepDoc 模型权重 |
+| `.noesis/logs/` | 后端错误日志 |
 
 路径权威模块：`packages/harness/noesis/config/user_data_paths.py`。
 

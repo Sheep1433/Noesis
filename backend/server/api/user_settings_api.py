@@ -169,7 +169,7 @@ async def preview_agent_context(
     profile: str = Query("super_agent"),
     current_user: CurrentUser = Depends(UserService.get_current_user),
 ):
-    from noesis.context import ContextResolver
+    from noesis.agents.context import ContextResolver
     try:
         data = ContextResolver.resolve(current_user.user_id, profile).public_view()
     except ValueError as exc:

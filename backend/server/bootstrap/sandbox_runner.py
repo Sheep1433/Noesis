@@ -13,7 +13,7 @@ import time
 
 import httpx
 
-from noesis.backends import uses_container_sandbox
+from noesis.agents.backends import uses_container_sandbox
 from noesis.runtime.logging import logger
 from noesis.config.paths import REPO_ROOT
 from noesis.config.env import SandboxConfig

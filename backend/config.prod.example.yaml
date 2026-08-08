@@ -245,7 +245,7 @@ hitl:
 kb:
   deepdoc:
     enabled: true
-    model_dir: ../.data/rag/res/deepdoc
+    model_dir: ../.noesis/rag/res/deepdoc
   parser:
     default: deepdoc
 

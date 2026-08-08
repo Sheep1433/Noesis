@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from noesis.backends import create_agent_backend, sandbox_backend_kind, uses_container_sandbox
+from noesis.agents.backends import create_agent_backend, sandbox_backend_kind, uses_container_sandbox
 from noesis.config.user_data_paths import ensure_workspace_dir
 from deepagents.backends.composite import CompositeBackend
 
@@ -51,7 +51,7 @@ async def test_create_agent_backend_local_shell(
     platform = tmp_path / "platform-skills"
     platform.mkdir()
     monkeypatch.setattr(
-        "noesis.backends.factory.skills_root",
+        "noesis.agents.backends.factory.skills_root",
         lambda: platform,
     )
 
@@ -66,7 +66,7 @@ async def test_create_agent_backend_local_shell(
 @pytest.mark.asyncio
 async def test_create_agent_backend_docker(docker_backend: None) -> None:
     with patch(
-        "noesis.backends.factory.create_docker_exec_sandbox_backend",
+        "noesis.agents.backends.factory.create_docker_exec_sandbox_backend",
         new_callable=AsyncMock,
     ) as mock_create:
         mock_sandbox = MagicMock()
@@ -77,8 +77,8 @@ async def test_create_agent_backend_docker(docker_backend: None) -> None:
 
 
 def test_skill_sources_use_public_and_personal_routes() -> None:
-    from noesis.skills import SKILL_SOURCES
-    from noesis.backends.paths import (
+    from noesis.agents.skills import SKILL_SOURCES
+    from noesis.agents.backends.paths import (
         AGENT_PERSONAL_SKILLS_ROUTE,
         AGENT_PUBLIC_SKILLS_ROUTE,
     )

@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from noesis.tools.web_providers.url_safety import validate_fetch_url
-from noesis.tools.web_search_tool import build_web_search_tools, web_fetch, web_search
+from noesis.agents.tools.web_providers.url_safety import validate_fetch_url
+from noesis.agents.tools.web_search_tool import build_web_search_tools, web_fetch, web_search
 from noesis.errors.tool_failure import ToolNetworkError
 
 
@@ -26,9 +26,9 @@ def test_ddg_search_uses_configured_backends(mock_ddgs_cls):
         {"title": "T", "href": "https://t.com", "body": "snippet"},
     ]
 
-    from noesis.tools.web_providers.ddg import search_with_ddg
+    from noesis.agents.tools.web_providers.ddg import search_with_ddg
 
-    with patch("noesis.tools.web_providers.ddg.WebToolsConfig") as mock_cfg:
+    with patch("noesis.agents.tools.web_providers.ddg.WebToolsConfig") as mock_cfg:
         mock_cfg.ddg_backends = "mojeek,yandex"
         result = search_with_ddg("q", 3, timeout=15)
 
@@ -43,9 +43,9 @@ def test_ddg_search_treats_no_results_as_empty(mock_ddgs_cls):
 
     mock_ddgs_cls.return_value.text.side_effect = DDGSException("No results found.")
 
-    from noesis.tools.web_providers.ddg import search_with_ddg
+    from noesis.agents.tools.web_providers.ddg import search_with_ddg
 
-    with patch("noesis.tools.web_providers.ddg.WebToolsConfig") as mock_cfg:
+    with patch("noesis.agents.tools.web_providers.ddg.WebToolsConfig") as mock_cfg:
         mock_cfg.ddg_backends = "mojeek,yandex"
         result = search_with_ddg("今天天气", 5, timeout=15)
 
@@ -54,8 +54,8 @@ def test_ddg_search_treats_no_results_as_empty(mock_ddgs_cls):
     assert result["provider"] == "ddg"
 
 
-@patch("noesis.tools.web_providers.resolver.WebToolsConfig")
-@patch("noesis.tools.web_providers.tavily.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.resolver.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.tavily.WebToolsConfig")
 @patch("tavily.TavilyClient")
 def test_web_search_uses_tavily_when_key_present(
     mock_client_cls, mock_tavily_cfg, mock_resolver_cfg
@@ -77,9 +77,9 @@ def test_web_search_uses_tavily_when_key_present(
     mock_client.search.assert_called_once()
 
 
-@patch("noesis.tools.web_providers.resolver.WebToolsConfig")
-@patch("noesis.tools.web_providers.tavily.WebToolsConfig")
-@patch("noesis.tools.web_providers.ddg.search_with_ddg")
+@patch("noesis.agents.tools.web_providers.resolver.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.tavily.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.ddg.search_with_ddg")
 def test_web_search_returns_empty_ddg_results_without_error(
     mock_ddg, mock_tavily_cfg, mock_resolver_cfg
 ):
@@ -98,9 +98,9 @@ def test_web_search_returns_empty_ddg_results_without_error(
     assert "error" not in data
 
 
-@patch("noesis.tools.web_providers.resolver.WebToolsConfig")
-@patch("noesis.tools.web_providers.tavily.WebToolsConfig")
-@patch("noesis.tools.web_providers.ddg.search_with_ddg")
+@patch("noesis.agents.tools.web_providers.resolver.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.tavily.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.ddg.search_with_ddg")
 def test_web_search_falls_back_to_ddg_without_key(
     mock_ddg, mock_tavily_cfg, mock_resolver_cfg
 ):
@@ -118,9 +118,9 @@ def test_web_search_falls_back_to_ddg_without_key(
     mock_ddg.assert_called_once()
 
 
-@patch("noesis.tools.web_providers.resolver.WebToolsConfig")
-@patch("noesis.tools.web_providers.tavily.WebToolsConfig")
-@patch("noesis.tools.web_providers.ddg.search_with_ddg")
+@patch("noesis.agents.tools.web_providers.resolver.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.tavily.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.ddg.search_with_ddg")
 @patch("tavily.TavilyClient")
 def test_web_search_falls_back_when_tavily_fails(
     mock_client_cls, mock_ddg, mock_tavily_cfg, mock_resolver_cfg
@@ -142,7 +142,7 @@ def test_web_search_falls_back_when_tavily_fails(
     mock_ddg.assert_called_once()
 
 
-@patch("noesis.tools.web_search_tool.resolve_web_search")
+@patch("noesis.agents.tools.web_search_tool.resolve_web_search")
 def test_web_search_all_providers_failed_raises_typed_tool_error(mock_resolve):
     mock_resolve.return_value = {
         "error": "搜索失败",
@@ -153,9 +153,9 @@ def test_web_search_all_providers_failed_raises_typed_tool_error(mock_resolve):
         web_search("q")
 
 
-@patch("noesis.tools.web_providers.resolver.WebToolsConfig")
-@patch("noesis.tools.web_providers.tavily.WebToolsConfig")
-@patch("noesis.tools.web_providers.local_fetch.fetch_with_local")
+@patch("noesis.agents.tools.web_providers.resolver.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.tavily.WebToolsConfig")
+@patch("noesis.agents.tools.web_providers.local_fetch.fetch_with_local")
 def test_web_fetch_falls_back_to_local_without_key(
     mock_local, mock_tavily_cfg, mock_resolver_cfg
 ):
@@ -171,7 +171,7 @@ def test_web_fetch_falls_back_to_local_without_key(
     mock_local.assert_called_once()
 
 
-@patch("noesis.tools.web_search_tool.resolve_web_fetch")
+@patch("noesis.agents.tools.web_search_tool.resolve_web_fetch")
 def test_web_fetch_failure_raises_typed_tool_error(mock_resolve):
     mock_resolve.return_value = '{"error":"页面抓取失败","url":"https://example.com"}'
     with pytest.raises(ToolNetworkError, match="页面抓取失败"):
@@ -185,7 +185,7 @@ def test_build_returns_both_tools():
     assert names == {"web_search", "web_fetch"}
 
 
-@patch("noesis.tools.web_search_tool.resolve_web_search")
+@patch("noesis.agents.tools.web_search_tool.resolve_web_search")
 def test_web_search_normalizes_citable_source_metadata(mock_resolve):
     mock_resolve.return_value = {"query": "q", "results": [{"title": "Docs", "url": "https://example.com/a#section", "snippet": "answer"}]}
     data = json.loads(web_search("q"))
@@ -195,7 +195,7 @@ def test_web_search_normalizes_citable_source_metadata(mock_resolve):
     assert "evidence_id" not in result
 
 
-@patch("noesis.tools.web_search_tool.resolve_web_search")
+@patch("noesis.agents.tools.web_search_tool.resolve_web_search")
 def test_web_search_skips_one_invalid_url_without_failing_valid_results(mock_resolve):
     mock_resolve.return_value = {"query": "q", "results": [
         {"title": "bad", "url": "javascript:alert(1)", "snippet": "bad"},
@@ -206,7 +206,7 @@ def test_web_search_skips_one_invalid_url_without_failing_valid_results(mock_res
     assert data["results"][0]["title"] == "good"
 
 
-@patch("noesis.tools.web_search_tool.resolve_web_search")
+@patch("noesis.agents.tools.web_search_tool.resolve_web_search")
 def test_web_search_rejects_url_credentials(mock_resolve):
     mock_resolve.return_value = {"query": "q", "results": [
         {"title": "bad", "url": "https://user:secret@example.com/page", "snippet": "bad"},
@@ -215,7 +215,7 @@ def test_web_search_rejects_url_credentials(mock_resolve):
     assert data["results"] == []
 
 
-@patch("noesis.tools.web_search_tool.resolve_web_fetch")
+@patch("noesis.agents.tools.web_search_tool.resolve_web_fetch")
 def test_web_fetch_returns_content_and_source_metadata(mock_resolve):
     mock_resolve.return_value = "# Example\n\nbody"
     data = json.loads(web_fetch("https://example.com/page"))
@@ -236,7 +236,7 @@ def test_validate_fetch_url_rejects_non_http_scheme():
     assert "scheme" in err.lower() or "不支持" in err
 
 
-@patch("noesis.tools.web_providers.url_safety.socket.getaddrinfo")
+@patch("noesis.agents.tools.web_providers.url_safety.socket.getaddrinfo")
 def test_validate_fetch_url_allows_public_domain(mock_getaddrinfo):
     mock_getaddrinfo.return_value = [
         (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
@@ -246,7 +246,7 @@ def test_validate_fetch_url_allows_public_domain(mock_getaddrinfo):
     assert err == ""
 
 
-@patch("noesis.tools.web_providers.url_safety.socket.getaddrinfo")
+@patch("noesis.agents.tools.web_providers.url_safety.socket.getaddrinfo")
 def test_validate_fetch_url_rejects_domain_resolving_to_private(mock_getaddrinfo):
     mock_getaddrinfo.return_value = [
         (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 0)),

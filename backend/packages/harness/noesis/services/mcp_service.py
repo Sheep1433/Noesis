@@ -9,7 +9,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, Literal
 
-from noesis.mcp.loader import clear_mcp_tools_cache, format_mcp_error
+from noesis.agents.mcp.loader import clear_mcp_tools_cache, format_mcp_error
 from noesis.runtime.logging import logger
 from noesis.config.mcp_config import (
     McpJsonConfig,

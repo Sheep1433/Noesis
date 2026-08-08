@@ -8,7 +8,7 @@ from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
-from noesis.middlewares.kernel.context_metrics import (
+from noesis.agents.middlewares.kernel.context_metrics import (
     BREAKDOWN_KEYS,
     DEFAULT_CONTEXT_CALLER,
     METHOD_APPROXIMATE,
@@ -18,12 +18,12 @@ from noesis.middlewares.kernel.context_metrics import (
     build_request_breakdown,
     compute_used_percentage,
 )
-from noesis.middlewares.observability.context_metrics_middleware import (
+from noesis.agents.middlewares.observability.context_metrics_middleware import (
     ContextMetricsMiddleware,
     resolve_run_id_for_request,
     resolve_session_id_for_request,
 )
-from noesis.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
+from noesis.agents.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
 from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
 
 
@@ -75,7 +75,7 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
         assert resolve_context_max_tokens() == DEFAULT_CONTEXT_TOKENS
 
 
-@patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens")
+@patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens")
 def test_build_context_snapshot_percentage(mock_require) -> None:
     mock_require.return_value = 1000
     messages = [SystemMessage(content="x" * 4000), HumanMessage(content="y" * 4000)]
@@ -102,7 +102,7 @@ def test_build_context_snapshot_from_request_includes_system_and_tools() -> None
         runtime=_runtime_with_thread("sess-tools"),
     )
     with patch(
-        "noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens"
+        "noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens"
     ) as mock_require:
         mock_require.return_value = 128000
         snap = build_context_snapshot_from_request(request, model_id="nemotron")
@@ -147,9 +147,9 @@ def test_context_metrics_middleware_records_registry() -> None:
         runtime=_runtime_with_thread("sess-ctx-1"),
     )
     with (
-            patch("noesis.middlewares.observability.context_metrics_middleware.ModelConfig", cfg),
+            patch("noesis.agents.middlewares.observability.context_metrics_middleware.ModelConfig", cfg),
         patch(
-            "noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens",
+            "noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens",
             return_value=200_000,
         ),
     ):
@@ -169,7 +169,7 @@ def test_context_metrics_middleware_skips_when_display_disabled() -> None:
         messages=[HumanMessage(content="hello")],
         runtime=_runtime_with_thread("sess-ctx-2"),
     )
-    with patch("noesis.middlewares.observability.context_metrics_middleware.ModelConfig", cfg):
+    with patch("noesis.agents.middlewares.observability.context_metrics_middleware.ModelConfig", cfg):
         mw.wrap_model_call(request, lambda req: MagicMock())
     assert ContextMetricsRegistry.peek("sess-ctx-2") is None
 
@@ -223,7 +223,7 @@ def test_context_snapshot_from_request_has_backward_compatible_fields() -> None:
         messages=[HumanMessage(content="你好")],
         runtime=_runtime_with_thread("sess-snap"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request, model_id="flash")
 
     assert snap["current_tokens"] == 900
@@ -251,7 +251,7 @@ def test_context_snapshot_breakdown_sums_to_current_tokens() -> None:
         messages=[HumanMessage(content="用户问题 " * 20), ToolMessage(content="结果 " * 60, tool_call_id="c1", name="t")],
         runtime=_runtime_with_thread("sess-sum"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=200000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=200000):
         snap = build_context_snapshot_from_request(request)
 
     assert snap["counting_method"] == METHOD_APPROXIMATE
@@ -273,7 +273,7 @@ def test_context_snapshot_counting_method_falls_back_to_approximate() -> None:
         messages=[HumanMessage(content="hello world")],
         runtime=_runtime_with_thread("sess-fallback"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request)
 
     assert snap["counting_method"] == METHOD_APPROXIMATE
@@ -290,7 +290,7 @@ def test_context_snapshot_caller_override() -> None:
         messages=[HumanMessage(content="hi")],
         runtime=_runtime_with_thread("sess-caller"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request, caller="subagent")
     assert snap["caller"] == "subagent"
 
@@ -309,7 +309,7 @@ def test_context_snapshot_model_tokenizer_other_absorbs_framing() -> None:
         messages=[HumanMessage(content="q" * 2000)],
         runtime=_runtime_with_thread("sess-framing"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request)
 
     assert snap["counting_method"] == METHOD_MODEL_TOKENIZER
@@ -381,7 +381,7 @@ def test_snapshot_complex_tool_schema_does_not_crash() -> None:
         tools=[complex_tool],
         runtime=_runtime_with_thread("sess-complex-tool"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request)
 
     assert snap["counting_method"] == METHOD_APPROXIMATE
@@ -404,7 +404,7 @@ def test_snapshot_multimodal_content_estimates_image_at_fixed_cost() -> None:
         messages=[multimodal_msg],
         runtime=_runtime_with_thread("sess-multimodal"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request)
 
     assert snap["current_tokens"] > 0
@@ -422,7 +422,7 @@ def test_snapshot_model_without_get_num_tokens_method() -> None:
         messages=[HumanMessage(content="hello world")],
         runtime=_runtime_with_thread("sess-no-method"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request)
 
     assert snap["counting_method"] == METHOD_APPROXIMATE
@@ -439,7 +439,7 @@ def test_breakdown_other_never_negative() -> None:
         messages=[HumanMessage(content="用户问题 " * 100)],
         runtime=_runtime_with_thread("sess-tiny-model"),
     )
-    with patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=128000):
         snap = build_context_snapshot_from_request(request)
 
     assert snap["breakdown"]["other"] >= 0
@@ -568,8 +568,8 @@ def test_context_metrics_middleware_writes_with_run_id() -> None:
         runtime=_runtime_with_thread_and_run("sess-mw-run", "run-mw-1"),
     )
     with (
-        patch("noesis.middlewares.observability.context_metrics_middleware.ModelConfig", cfg),
-        patch("noesis.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=200_000),
+        patch("noesis.agents.middlewares.observability.context_metrics_middleware.ModelConfig", cfg),
+        patch("noesis.agents.middlewares.kernel.context_metrics.resolve_context_max_tokens", return_value=200_000),
     ):
         mw.wrap_model_call(request, lambda req: MagicMock())
     snap = ContextMetricsRegistry.peek("sess-mw-run", run_id="run-mw-1")

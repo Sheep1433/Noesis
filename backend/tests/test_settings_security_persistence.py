@@ -7,7 +7,7 @@ import pytest
 from cryptography.fernet import Fernet
 from starlette.requests import Request
 
-from noesis.security.secrets import (
+from noesis.config.secrets import (
     REDACTED,
     SecretCipher,
     SecretEncryptionUnavailable,

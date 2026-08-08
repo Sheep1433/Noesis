@@ -1,4 +1,4 @@
-"""仓库根目录与本地运行时数据路径（``.data/``）。"""
+"""仓库根目录与本地运行时数据路径（``.noesis/``）。"""
 
 from __future__ import annotations
 
@@ -21,11 +21,11 @@ REPO_ROOT = BACKEND_DIR.parent if (BACKEND_DIR.parent / "extensions").is_dir() e
 
 # Compose：NOESIS_DATA_DIR=/data/noesis（与宿主机 NOESIS_HOST_DATA_DIR 同一目录）
 _DATA_DIR_ENV = os.environ.get("NOESIS_DATA_DIR", "").strip()
-DATA_DIR = Path(_DATA_DIR_ENV).resolve() if _DATA_DIR_ENV else (REPO_ROOT / ".data")
+DATA_DIR = Path(_DATA_DIR_ENV).resolve() if _DATA_DIR_ENV else (REPO_ROOT / ".noesis")
 
 
 def data_path(*parts: str) -> Path:
-    """返回 ``.data/`` 下路径并确保父目录存在。"""
+    """返回 ``.noesis/`` 下路径并确保父目录存在。"""
     path = DATA_DIR.joinpath(*parts)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path

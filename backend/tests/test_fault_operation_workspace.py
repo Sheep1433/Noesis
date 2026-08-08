@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from noesis.backends.docker_exec import DockerExecSandboxBackend
+from noesis.agents.backends.docker_exec import DockerExecSandboxBackend
 from noesis.agents.fault_operation import FaultOperationAgent
 
 

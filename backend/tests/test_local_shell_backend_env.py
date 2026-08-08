@@ -7,7 +7,7 @@ import shutil
 
 import pytest
 
-from noesis.backends.local_shell import (
+from noesis.agents.backends.local_shell import (
     _merge_path,
     build_shell_execute_env,
     create_local_shell_backend,

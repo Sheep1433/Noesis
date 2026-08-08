@@ -1,4 +1,4 @@
-"""用户级运行时数据路径（`.data/users/{user_id}/`）。"""
+"""用户级运行时数据路径（`.noesis/users/{user_id}/`）。"""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def validate_segment(name: str, *, kind: str = "segment") -> str:
 
 
 def get_user_root(user_id: str | int) -> Path:
-    """返回用户数据根 `.data/users/{user_id}/`（不创建）。"""
+    """返回用户数据根 `.noesis/users/{user_id}/`（不创建）。"""
     uid = validate_segment(str(user_id), kind="user_id")
     return _USERS_ROOT / uid
 
@@ -76,7 +76,7 @@ def get_user_profile_md_path(user_id: str | int) -> Path:
 
 
 def get_user_memory_dir(user_id: str | int) -> Path:
-    """返回 L2 日记目录 `.data/users/{user_id}/memory/`（不创建）。"""
+    """返回 L2 日记目录 `.noesis/users/{user_id}/memory/`（不创建）。"""
     return get_user_root(user_id) / "memory"
 
 
@@ -93,7 +93,7 @@ def get_user_daily_memory_path(user_id: str | int, date: str) -> Path:
 
 
 def get_user_channels_path(user_id: str | int) -> Path:
-    """返回通道配置文件 `.data/users/{user_id}/channels.json`（不创建）。"""
+    """返回通道配置文件 `.noesis/users/{user_id}/channels.json`（不创建）。"""
     return get_user_root(user_id) / "channels.json"
 
 
@@ -116,7 +116,7 @@ def ensure_user_memory_files(user_id: str | int) -> Path:
 
 
 def get_user_skills_dir(user_id: str | int) -> Path:
-    """返回用户 Skills 目录 `.data/users/{user_id}/skills/`（不创建）。"""
+    """返回用户 Skills 目录 `.noesis/users/{user_id}/skills/`（不创建）。"""
     return get_user_root(user_id) / "skills"
 
 
@@ -128,7 +128,7 @@ def ensure_user_skills_dir(user_id: str | int) -> Path:
 
 
 def get_user_mcp_path(user_id: str | int) -> Path:
-    """返回用户 MCP 配置文件 `.data/users/{user_id}/mcp.json`（不创建）。"""
+    """返回用户 MCP 配置文件 `.noesis/users/{user_id}/mcp.json`（不创建）。"""
     return get_user_root(user_id) / "mcp.json"
 
 
@@ -139,7 +139,7 @@ def ensure_user_mcp_path(user_id: str | int) -> Path:
 
 
 def get_session_root(user_id: str | int, session_id: str) -> Path:
-    """返回会话子树根 `.data/users/{user_id}/sessions/{session_id}/`（不创建）。"""
+    """返回会话子树根 `.noesis/users/{user_id}/sessions/{session_id}/`（不创建）。"""
     uid = validate_segment(str(user_id), kind="user_id")
     sid = validate_segment(session_id, kind="session_id")
     return get_user_root(uid) / "sessions" / sid

@@ -18,12 +18,12 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from noesis.config.env import HitlConfig, ModelConfig
 from noesis.llm.factory import get_llm
 from noesis.llm.model_limits import resolve_context_max_tokens
-from noesis.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
-from noesis.middlewares.kernel.context_metrics import get_agent_token_counter
-from noesis.middlewares.kernel.model_execution_middleware import ModelExecutionMiddleware
-from noesis.middlewares.kernel.run_governor_middleware import RunGovernorMiddleware
-from noesis.middlewares.kernel.runtime_telemetry_middleware import RuntimeTelemetryMiddleware
-from noesis.middlewares.kernel.tool_execution_middleware import ToolExecutionMiddleware
+from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
+from noesis.agents.middlewares.kernel.context_metrics import get_agent_token_counter
+from noesis.agents.middlewares.kernel.model_execution_middleware import ModelExecutionMiddleware
+from noesis.agents.middlewares.kernel.run_governor_middleware import RunGovernorMiddleware
+from noesis.agents.middlewares.kernel.runtime_telemetry_middleware import RuntimeTelemetryMiddleware
+from noesis.agents.middlewares.kernel.tool_execution_middleware import ToolExecutionMiddleware
 
 
 # Actual order is outer-to-inner and is intentionally kept in one builder:

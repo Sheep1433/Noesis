@@ -13,25 +13,25 @@ from langgraph.types import Command
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.backends import agent_sandbox_session, create_agent_backend
-from noesis.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from noesis.agents.backends import agent_sandbox_session, create_agent_backend
+from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
 from noesis.factory import build_subagent_default_middleware, create_noesis_agent
-from noesis.tools.ask_user import ask_user_tool, build_interrupt_on
-from noesis.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from noesis.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
-from noesis.middlewares.capabilities.versioned_skills_middleware import VersionedSkillsMiddleware
-from noesis.prompts import PromptProfile, build_prompt
-from noesis.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
-from noesis.skills import resolve_skill_sources_for_session
-from noesis.tools import build_web_search_tools
-from noesis.tools.chat_attachment_tools import build_attachment_tools
-from noesis.tools.kb_search_tool import build_kb_search_tools
-from noesis.tools.memory_tools import build_memory_tools
+from noesis.agents.tools.ask_user import ask_user_tool, build_interrupt_on
+from noesis.agents.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
+from noesis.agents.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
+from noesis.agents.middlewares.capabilities.versioned_skills_middleware import VersionedSkillsMiddleware
+from noesis.agents.prompts import PromptProfile, build_prompt
+from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
+from noesis.agents.skills import resolve_skill_sources_for_session
+from noesis.agents.tools import build_web_search_tools
+from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
+from noesis.agents.tools.kb_search_tool import build_kb_search_tools
+from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
 from noesis.config.env import ChatAttachmentConfig, HitlConfig
 from noesis.config.user_data_paths import ensure_user_memory_files
-from noesis.context import ContextResolver
+from noesis.agents.context import ContextResolver
 from noesis.llm.factory import get_llm
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
