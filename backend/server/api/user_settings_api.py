@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis_server.common.http.response import ResponseUtil
-from noesis_server.infrastructure.database.dependency import get_db
+from server.response import ResponseUtil
+from server.db import get_db
 
 from noesis.schemas.login_vo import CurrentUser
 from noesis.services.messaging_channel_service import MessagingChannelService

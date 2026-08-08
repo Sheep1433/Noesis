@@ -1,7 +1,7 @@
 """Event rendering for Noesis CLI — real-time terminal output + eval collector.
 
-Independent of noesis_server: extracts reasoning/text from LangChain chunks
-directly, aligned with noesis_server/domain/chat/streaming/reasoning.py but
+Independent of server: extracts reasoning/text from LangChain chunks
+directly, aligned with server/domain/chat/streaming/reasoning.py but
 without importing it (CLI only depends on noesis-harness).
 """
 

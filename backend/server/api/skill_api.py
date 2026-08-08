@@ -17,7 +17,7 @@ from noesis.schemas.skill_vo import (
 from noesis.services.skill_fs_service import SkillFsService, max_zip_bytes
 from noesis.services.skill_market_service import SkillMarketService
 from noesis.services.user_service import UserService
-from noesis_server.common.http.response import ResponseUtil
+from server.response import ResponseUtil
 
 skill_router = APIRouter(prefix='/api/skills', tags=['Skill 模块'])
 

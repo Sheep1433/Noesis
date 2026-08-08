@@ -14,7 +14,7 @@ from noesis.errors.exceptions import (
     ServiceWarning,
 )
 from noesis.runtime.logging import logger
-from noesis_server.common.http.response import ResponseUtil
+from server.response import ResponseUtil
 
 
 def handle_exception(app: FastAPI):

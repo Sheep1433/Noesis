@@ -21,7 +21,7 @@ FORBIDDEN_PLATFORM_PACKAGES = {
     "kb",
     "models",
     "services",
-    "noesis_server",
+    "server",
 }
 LEGACY_TOP_LEVEL_PACKAGES = {"agent", "harness", "llm"}
 LEGACY_PLATFORM_PACKAGES = {
@@ -48,7 +48,7 @@ def test_harness_does_not_import_platform_layers() -> None:
             continue
         # noesis.services may import fastapi (Request/Depends for auth) —
         # YuXi's services also use fastapi directly. fastapi is NOT in the
-        # forbidden set (only noesis_server.* platform packages are).
+        # forbidden set (only server.* platform packages are).
         forbidden = _top_level_imports(path) & FORBIDDEN_PLATFORM_PACKAGES
         if forbidden:
             relative = path.relative_to(BACKEND_ROOT)
@@ -102,8 +102,8 @@ def test_noesis_top_level_uses_stable_subsystems() -> None:
 
 
 def test_platform_host_uses_single_namespace() -> None:
-    platform_root = BACKEND_ROOT / "noesis_server"
-    assert (platform_root / "server.py").is_file()
+    platform_root = BACKEND_ROOT / "server"
+    assert (platform_root / "main.py").is_file()
     for package in LEGACY_PLATFORM_PACKAGES:
         assert not (BACKEND_ROOT / package).exists(), f"legacy platform package remains: {package}"
 
@@ -148,17 +148,17 @@ def test_platform_core_does_not_depend_on_application_services() -> None:
 
     # platform common may re-export harness (noesis.*) but must not import
     # platform services/domain/kb top-level packages.
-    platform_root = BACKEND_ROOT / "noesis_server"
+    platform_root = BACKEND_ROOT / "server"
     for path in sorted((platform_root / "common").rglob("*.py")):
         assert not (_top_level_imports(path) & {"services", "domain", "kb"}), path
 
 
 def test_knowledge_base_api_uses_application_service() -> None:
-    path = BACKEND_ROOT / "noesis_server" / "api" / "knowledge_base_api.py"
+    path = BACKEND_ROOT / "server" / "api" / "knowledge_base_api.py"
     source = path.read_text(encoding="utf-8")
-    # API uses harness service (noesis.services), not platform noesis_server.services
+    # API uses harness service (noesis.services), not platform server.services
     assert "noesis.services import knowledge_base_service" in source or "noesis.services.knowledge_base_service" in source
-    assert "noesis_server.kb" not in source
+    assert "server.kb" not in source
 
 
 def test_factory_import_needs_no_platform_startup_or_wiring() -> None:
@@ -176,7 +176,7 @@ import sys
 from noesis.factory import create_noesis_agent
 
 assert callable(create_noesis_agent)
-for prefix in ("api", "domain", "kb", "models", "services", "noesis_server"):
+for prefix in ("api", "domain", "kb", "models", "services", "server"):
     assert not any(name == prefix or name.startswith(prefix + ".") for name in sys.modules), prefix
 assert "fastapi" not in sys.modules
 """
@@ -239,7 +239,7 @@ from evals.bootstrap import eval_runtime
 async def main():
     async with eval_runtime():
         assert not any(
-            name == "noesis_server.services" or name.startswith("noesis.services.")
+            name == "server.services" or name.startswith("noesis.services.")
             for name in sys.modules
         )
 

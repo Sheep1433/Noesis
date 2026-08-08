@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from noesis_server.infrastructure.database.engine import AsyncSessionLocal
+from server.db import AsyncSessionLocal
 from noesis.services.auth.invites import RegistrationInviteService
 
 

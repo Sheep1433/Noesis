@@ -200,8 +200,8 @@ def test_build_tools_when_collections_exist(_names, _connected):
 
 def test_harness_kb_tool_does_not_import_platform_domain() -> None:
     source = inspect.getsource(kb_search_tool_module)
-    assert "from noesis_server" not in source
-    assert "import noesis_server" not in source
+    assert "from server" not in source
+    assert "import server" not in source
 
 
 @patch("noesis.tools.kb_search_tool.is_qdrant_connected", return_value=False)

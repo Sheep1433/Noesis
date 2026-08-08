@@ -82,8 +82,8 @@ def compute_recall_hit(
 async def _run_eval(args: argparse.Namespace) -> int:
     _ensure_path()
 
-    from noesis_server.infrastructure.database.engine import AsyncSessionLocal
-    from noesis_server.infrastructure.database.dependency import init_database
+    from server.db import AsyncSessionLocal
+    from server.db import init_database
     from noesis.knowledge.chunking import normalize_query_execution_params
     from noesis.knowledge.retrieval import KbRetrievalService
     from noesis.services.kb_collection_config_service import KbCollectionConfigService

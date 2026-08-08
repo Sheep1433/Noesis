@@ -45,7 +45,7 @@ async def ensure_default_kb_collections() -> None:
         _ensure_collection(service, collection_name)
 
     try:
-        from noesis_server.infrastructure.database.engine import AsyncSessionLocal
+        from server.db import AsyncSessionLocal
         from noesis.services.kb_collection_config_service import KbCollectionConfigService
 
         async with AsyncSessionLocal() as db:

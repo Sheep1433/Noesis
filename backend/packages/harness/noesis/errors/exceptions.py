@@ -1,6 +1,6 @@
 """业务领域异常（service 层抛出，api 层 catch 映射 HTTP）。
 
-从 noesis_server/exceptions/exception.py 迁入。service 不碰 HTTPException，
+从 server/exceptions/exception.py 迁入。service 不碰 HTTPException，
 只抛这些 domain exception；api 层统一 catch 映射 HTTP code。
 """
 from __future__ import annotations

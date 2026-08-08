@@ -72,7 +72,7 @@ model:
   # type: anthropic
   # name: claude-haiku-4-5-20251001
   # temperature: 0.75
-  # base_url: https://api.anthropic.com          # 官方；中转改成中转地址
+  # base_url: https://api.anthropic.com          
 
   # --- 多 provider catalog 切换示例 ---
   # default_catalog_id: deepseek-flash

@@ -8,7 +8,7 @@ no KB binding is needed here. Only attachments / memory / Langfuse remain bound.
 
 from __future__ import annotations
 
-from noesis_server.infrastructure.observability import langfuse as lf
+from server import langfuse as lf
 from noesis.runtime.deps import (
     bind_attachment_service,
     bind_langfuse,

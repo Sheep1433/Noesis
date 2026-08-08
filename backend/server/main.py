@@ -1,15 +1,15 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-from noesis_server.exceptions.handle import handle_exception
-from noesis_server.middleware.csrf import CsrfMiddleware
+from server.exception_handlers import handle_exception
+from server.middleware.csrf import CsrfMiddleware
 from noesis.config.env import AppConfig, StreamConfig
 from noesis.config.checkpointer import close_checkpointer, init_checkpointer
-from noesis_server.infrastructure.database.dependency import init_database
-from noesis_server.infrastructure.database.engine import async_engine
+from server.db import init_database
+from server.db import async_engine
 from noesis.runtime.logging import logger
-from noesis_server.infrastructure.observability.langfuse import sync_langfuse_env_from_app_config
-from noesis_server.api import (
+from server.langfuse import sync_langfuse_env_from_app_config
+from server.api import (
     user_router,
     chat_router,
     knowledge_base_router,
@@ -23,7 +23,7 @@ from noesis_server.api import (
 )
 from noesis.knowledge.implementations.qdrant import init_qdrant_client, close_qdrant_client
 from noesis.backends.sandbox_lifecycle import shutdown_sandboxes
-from noesis_server.wiring import wire_harness_platform_deps
+from server.wiring import wire_harness_platform_deps
 from noesis.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,
     stop_scheduled_task_scheduler,
@@ -31,8 +31,8 @@ from noesis.services.scheduled_task_scheduler import (
 from noesis.services.memory_dream_scheduler import start_memory_dream_scheduler, stop_memory_dream_scheduler
 from noesis.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
 from noesis.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
-from noesis_server.bootstrap.kb import ensure_default_kb_collections
-from noesis_server.infrastructure.database.engine import AsyncSessionLocal
+from server.bootstrap.kb import ensure_default_kb_collections
+from server.db import AsyncSessionLocal
 from noesis.services.run_recovery_service import RunRecoveryService
 from noesis.services.run_service import run_manager
 

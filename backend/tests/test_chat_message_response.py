@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from noesis_server.api.chat_api import _message_to_response
+from server.api.chat_api import _message_to_response
 
 
 def test_assistant_history_response_normalizes_missing_tool_state() -> None:

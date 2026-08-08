@@ -1,6 +1,6 @@
 """Postgres storage manager — single owner of engine, session factory, migrations.
 
-Replaces ``noesis_server/infrastructure/database/{engine,dependency,migrations}.py``.
+Replaces ``server/infrastructure/database/{engine,dependency,migrations}.py``.
 ``pg_manager`` is a process singleton built from ``noesis.config.env.DataBaseConfig``.
 ``noesis.config.checkpointer`` (LangGraph checkpoint, independent DB, psycopg pool)
 coexists with this and is NOT merged.

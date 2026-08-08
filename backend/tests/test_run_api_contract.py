@@ -5,8 +5,8 @@ from dataclasses import replace
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from noesis_server.api import chat_api
-from noesis_server.api.chat_api import chat_router
+from server.api import chat_api
+from server.api.chat_api import chat_router
 from noesis.domain.chat.delivery.events import HitlRequired, StreamDone, WireFrame
 from noesis.domain.chat.delivery.sse import encode_sequenced_event
 from noesis.domain.chat.runs import RunSnapshot, RunStatus, SequencedRunEvent

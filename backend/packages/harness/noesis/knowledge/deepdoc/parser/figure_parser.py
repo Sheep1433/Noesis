@@ -27,14 +27,14 @@ from rag.utils.lazy_image import ensure_pil_image, open_image_for_processing, is
 
 
 def _tenant_llm_bundle(tenant_id, model_config):
-    """延迟导入 tenant LLM 服务（RAGFlow 兼容，Noesis 不用 multi-tenant，避免 harness 依赖 noesis_server）。"""
-    from noesis_server.api.db.services.llm_service import LLMBundle
+    """延迟导入 tenant LLM 服务（RAGFlow 兼容，Noesis 不用 multi-tenant，避免 harness 依赖 server）。"""
+    from server.api.db.services.llm_service import LLMBundle
     return LLMBundle(tenant_id, model_config)
 
 
 def _get_tenant_default_model_by_type(tenant_id, model_type):
     """延迟导入 tenant 模型解析（RAGFlow 兼容）。"""
-    from noesis_server.api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+    from server.api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
     return get_tenant_default_model_by_type(tenant_id, model_type)
 
 # need to delete before pr

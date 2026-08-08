@@ -4,7 +4,7 @@ from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 from noesis.config.env import LangfuseConfig
-from noesis_server.infrastructure.observability import langfuse as langfuse_tracing
+from server import langfuse as langfuse_tracing
 
 
 def _langfuse_config(*, tracing_enabled: bool) -> LangfuseConfig:

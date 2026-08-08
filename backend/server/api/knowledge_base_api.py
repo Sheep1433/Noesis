@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 
-from noesis_server.infrastructure.database.dependency import get_db
+from server.db import get_db
 
 from noesis.schemas.knowledge_base_schema import (
     CreateCollectionRequest,
@@ -22,7 +22,7 @@ from noesis.schemas.knowledge_base_schema import (
 from noesis.schemas.login_vo import CurrentUser
 from noesis.services import knowledge_base_service
 from noesis.services.user_service import UserService
-from noesis_server.common.http.response import ResponseUtil
+from server.response import ResponseUtil
 from noesis.errors.exceptions import (
     ConflictException,
     NotFoundException,

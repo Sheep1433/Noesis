@@ -17,7 +17,7 @@ from fastapi import Body, Depends, APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis_server.infrastructure.database.dependency import get_db
+from server.db import get_db
 
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.chat_vo import (
@@ -42,7 +42,7 @@ from noesis.services.chat_service import ChatService
 from noesis.services.user_service import UserService
 from noesis.services.qa import QaService
 from noesis.services.run_service import RunService, run_manager
-from noesis_server.common.http.response import ResponseUtil
+from server.response import ResponseUtil
 from noesis.domain.chat.message_builder import (
     UserMessageBuilder,
     normalize_message_content_for_delivery,

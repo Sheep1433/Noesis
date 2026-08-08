@@ -27,14 +27,14 @@ from noesis.storage.postgres.models.auth import TUser, TUserSession
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-AUTH_DOMAIN = BACKEND_ROOT / "noesis_server" / "domain" / "auth"
+AUTH_DOMAIN = BACKEND_ROOT / "server" / "domain" / "auth"
 FORBIDDEN = {
     "fastapi",
     "sqlalchemy",
-    "noesis_server.exceptions",
-    "noesis_server.infrastructure",
-    "noesis_server.models",
-    "noesis_server.services",
+    "server.exceptions",
+    "server.infrastructure",
+    "server.models",
+    "server.services",
 }
 
 

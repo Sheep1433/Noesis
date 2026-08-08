@@ -3,14 +3,14 @@ import math
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis_server.infrastructure.database.dependency import get_db
+from server.db import get_db
 
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.qa_vo import QueryUserRecordRequest
 from noesis.services.chat_service import ChatService
 from noesis.services.user_service import UserService
-from noesis_server.api.auth_cookie import clear_session_cookie
-from noesis_server.common.http.response import ResponseUtil
+from server.api.auth_cookie import clear_session_cookie
+from server.response import ResponseUtil
 
 user_router = APIRouter(prefix="/api/user")
 
