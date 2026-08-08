@@ -51,6 +51,6 @@
 
 - [x] 8.1 更新 Harbor、BrowseComp 与 Agentic RAG collector 消费统一 outcome/event，确认 adapter 不包含 retry、compaction、tool bounding 或 governor 分支
 - [x] 8.2 为超大工具结果、dangling call、length stop、可见 token 后断流、工具后空响应、重复工具和 subagent 限制建立确定性回归 fixture
-- [ ] 8.3 跑 harness/runtime/stream/tool failure/assistant persistence 相关后端测试及前端 lint/build；执行一条 Harbor Agent E2E 和一条线上 SuperAgent 流式冒烟
+- [x] 8.3 跑 harness/runtime/stream/tool failure/assistant persistence 相关后端测试及前端 lint/build；执行一条 Harbor Agent E2E 和一条线上 SuperAgent 流式冒烟
 - [x] 8.4 使用 `code-review` 按本 spec 与仓库规范审查改动，再对确认存在的浅 wrapper、重复计算、旧兼容分支使用 `code-simplification`
 - [x] 8.5 更新 `docs/architecture/` 当前 runtime 架构，删除研究建议中已落地后的过时描述，并确认 OpenSpec 所有任务和规格场景可追溯

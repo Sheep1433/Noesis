@@ -41,7 +41,7 @@
 
 ## 5. 集成验证与文档
 
-- [ ] 5.1 在真实数据库与浏览器完成标题、刷新顺序、网络失败、命令失败、HITL approve/reject、stop 和子 Agent 嵌套验收
+- [x] 5.1 在真实数据库与浏览器完成标题、刷新顺序、网络失败、命令失败、HITL approve/reject、stop 和子 Agent 嵌套验收
 - [x] 5.2 验证 Run 终态 assistant 的所有 tool parts 均为终态，并对历史数据抽样执行一致性查询
 - [x] 5.3 运行后端相关测试与全套测试，前端运行 `pnpm test`、`pnpm lint`、`pnpm build`
 - [x] 5.4 按实现结果更新 `docs/architecture/platform/chat-streaming.md` 与工具状态工程文档，记录状态机、消息 sequence、标题事务和排障查询
