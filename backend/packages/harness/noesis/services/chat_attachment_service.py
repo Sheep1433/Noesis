@@ -11,7 +11,6 @@ import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from fastapi import HTTPException
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +20,7 @@ from noesis.config.user_data_paths import (
     ensure_session_uploads_dir,
     get_session_root,
 )
-from noesis.errors.exceptions import ServiceWarning
+from noesis.errors.exceptions import NotFoundException, PermissionException, ServiceException, ServiceWarning
 from noesis.knowledge.parser import DocumentParser
 from noesis.storage.postgres.models.chat import TChatAttachment
 from noesis.schemas.chat_attachment_vo import AttachmentResponse
@@ -156,7 +155,7 @@ class ChatAttachmentService:
     ):
         session = await ChatService.get_session_by_id(session_id, user_id=user_id, db=db)
         if not session:
-            raise HTTPException(status_code=404, detail="会话不存在")
+            raise NotFoundException(message="会话不存在")
 
     @classmethod
     def validate_message_file_count(cls, file_dict: Optional[dict]) -> None:
@@ -331,10 +330,7 @@ class ChatAttachmentService:
                     cls._delete_disk_files_from_paths(
                         user_id, session_id, original_rel, None
                     )
-                    raise HTTPException(
-                        status_code=422,
-                        detail="文档解析后正文为空，请检查文件是否为扫描件或格式损坏",
-                    )
+                    raise ServiceException(message="文档解析后正文为空，请检查文件是否为扫描件或格式损坏")
                 md_path = _attachments_dir(user_id, session_id) / f"{stem}.md"
                 md_path.write_text(md_text, encoding="utf-8")
                 markdown_rel = _rel_path(md_path, user_id, session_id)
@@ -442,7 +438,7 @@ class ChatAttachmentService:
             attachment_id, session_id, user_id, db, allow_expired=True
         )
         if not row:
-            raise HTTPException(status_code=404, detail="附件不存在")
+            raise NotFoundException(message="附件不存在")
         cls._delete_disk_files(row)
         await db.execute(delete(TChatAttachment).where(TChatAttachment.id == attachment_id))
         await db.commit()
@@ -457,19 +453,19 @@ class ChatAttachmentService:
     ) -> Tuple[Path, str]:
         await cls._ensure_session_owned(session_id, user_id, db)
         if ".." in relative_path or relative_path.startswith("/"):
-            raise HTTPException(status_code=400, detail="非法路径")
+            raise ServiceException(message="非法路径")
 
         abs_path = _abs_path(relative_path, user_id, session_id)
         if not abs_path.is_file():
-            raise HTTPException(status_code=404, detail="文件不存在")
+            raise NotFoundException(message="文件不存在")
 
         norm = relative_path.replace("\\", "/")
         if not norm.startswith(("uploads/", "attachments/")):
-            raise HTTPException(status_code=403, detail="无权访问该文件")
+            raise PermissionException(message="无权访问该文件")
 
         session_root = _session_dir(user_id, session_id).resolve()
         if not str(abs_path.resolve()).startswith(str(session_root)):
-            raise HTTPException(status_code=403, detail="无权访问该文件")
+            raise PermissionException(message="无权访问该文件")
 
         mime = mimetypes.guess_type(abs_path.name)[0] or "application/octet-stream"
         return abs_path, mime

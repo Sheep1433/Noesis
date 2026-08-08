@@ -10,8 +10,9 @@ import time
 import zipfile
 from typing import List
 
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
 
 from noesis.config.user_data_paths import (
     get_session_root,
@@ -22,8 +23,14 @@ from noesis.config.user_data_paths import (
     get_user_skills_dir,
     get_workspace_dir,
 )
+from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
+
 from noesis.schemas.session_context_vo import FsTreeNode, SessionContextResponse
+from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
+
 from noesis.services.chat_service import ChatService
+from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
+
 from noesis.services.skill_fs_service import SkillFsService
 
 _MAX_READ_BYTES = 512 * 1024
@@ -38,7 +45,7 @@ class SessionContextService:
     async def _ensure_owned(cls, session_id: str, user_id: str, db: AsyncSession) -> None:
         session = await ChatService.get_session_by_id(session_id, user_id=user_id, db=db)
         if not session:
-            raise HTTPException(status_code=404, detail="会话不存在")
+            raise NotFoundException(message="会话不存在")
 
     @classmethod
     def _scan_directory(cls, dir_path: str, key_prefix: str) -> List[FsTreeNode]:
@@ -158,7 +165,7 @@ class SessionContextService:
     def _normalize_rel_path(cls, rel_path: str, session_id: str) -> str:
         norm = rel_path.strip().replace('\\', '/')
         if not norm or '..' in norm.split('/'):
-            raise HTTPException(status_code=400, detail='非法路径')
+            raise ServiceException(message='非法路径')
         if norm in _USER_ROOT_FILES:
             return norm
         if norm.startswith('skills/'):
@@ -168,15 +175,15 @@ class SessionContextService:
             tail = norm[len(session_prefix):]
             if tail.startswith(('workspace/', 'uploads/', 'attachments/')):
                 return norm
-        raise HTTPException(status_code=400, detail='非法路径')
+        raise ServiceException(message='非法路径')
 
     @classmethod
     def _normalize_archive_path(cls, rel_path: str, session_id: str) -> str:
         norm = rel_path.strip().replace('\\', '/').rstrip('/')
         if not norm or '..' in norm.split('/'):
-            raise HTTPException(status_code=400, detail='非法路径')
+            raise ServiceException(message='非法路径')
         if norm.startswith('users/'):
-            raise HTTPException(status_code=400, detail='非法路径')
+            raise ServiceException(message='非法路径')
         if norm in _USER_ROOT_FILES:
             return norm
         if norm == 'skills' or norm.startswith('skills/'):
@@ -193,7 +200,7 @@ class SessionContextService:
                 return norm
             if tail in ('workspace', 'uploads', 'attachments'):
                 return norm
-        raise HTTPException(status_code=400, detail='非法路径')
+        raise ServiceException(message='非法路径')
 
     @classmethod
     def _archive_download_name(cls, rel_norm: str) -> str:
@@ -231,15 +238,13 @@ class SessionContextService:
             size = os.path.getsize(full_path)
             total_bytes += size
             if total_bytes > _MAX_ARCHIVE_BYTES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"打包内容过大（>{_MAX_ARCHIVE_BYTES // (1024 * 1024)}MB）",
+                raise ServiceException(message=f"打包内容过大（>{_MAX_ARCHIVE_BYTES // (1024 * 1024)}MB）",
                 )
             cls._write_file_to_zip(zf, full_path, os.path.basename(full_path))
             return total_bytes
 
         if not os.path.isdir(full_path):
-            raise HTTPException(status_code=404, detail="路径不存在")
+            raise NotFoundException(message="路径不存在")
 
         for dirpath, dirnames, filenames in os.walk(full_path):
             dirnames[:] = sorted(
@@ -256,9 +261,7 @@ class SessionContextService:
                 size = os.path.getsize(fpath)
                 total_bytes += size
                 if total_bytes > _MAX_ARCHIVE_BYTES:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"打包内容过大（>{_MAX_ARCHIVE_BYTES // (1024 * 1024)}MB）",
+                    raise ServiceException(message=f"打包内容过大（>{_MAX_ARCHIVE_BYTES // (1024 * 1024)}MB）",
                     )
                 rel_arc = os.path.relpath(fpath, arc_root)
                 cls._write_file_to_zip(zf, fpath, rel_arc)
@@ -273,7 +276,7 @@ class SessionContextService:
         with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED, **zip_kwargs) as zf:
             cls._add_path_to_zip(zf, full_path, full_path, 0)
             if not zf.namelist():
-                raise HTTPException(status_code=400, detail='目录为空，无法下载')
+                raise ServiceException(message='目录为空，无法下载')
         return cls._archive_download_name(rel_norm), buffer.getvalue()
 
     @classmethod
@@ -290,22 +293,20 @@ class SessionContextService:
         try:
             full = SkillFsService._safe_join(root, rel_norm)
         except ValueError:
-            raise HTTPException(status_code=400, detail='非法路径')
+            raise ServiceException(message='非法路径')
         if not os.path.exists(full):
-            raise HTTPException(status_code=404, detail="路径不存在")
+            raise NotFoundException(message="路径不存在")
 
         if os.path.isfile(full):
             size = os.path.getsize(full)
             if size > _MAX_ARCHIVE_BYTES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"文件过大（>{_MAX_ARCHIVE_BYTES // (1024 * 1024)}MB）",
+                raise ServiceException(message=f"文件过大（>{_MAX_ARCHIVE_BYTES // (1024 * 1024)}MB）",
                 )
             try:
                 with open(full, 'rb') as handle:
                     data = handle.read()
             except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"读取失败: {exc}") from exc
+                raise ServiceException(message=f"读取失败: {exc}") from exc
             name = os.path.basename(full)
             media_type, _ = mimetypes.guess_type(name)
             return name, data, media_type or 'application/octet-stream'
@@ -325,7 +326,7 @@ class SessionContextService:
             session_id, user_id, rel_path, db,
         )
         if media_type != 'application/zip':
-            raise HTTPException(status_code=400, detail='请对目录使用打包下载')
+            raise ServiceException(message='请对目录使用打包下载')
         return name, data
 
     @classmethod
@@ -342,28 +343,22 @@ class SessionContextService:
         try:
             full = SkillFsService._safe_join(root, rel_norm)
         except ValueError:
-            raise HTTPException(status_code=400, detail='非法路径')
+            raise ServiceException(message='非法路径')
         if not os.path.isfile(full):
-            raise HTTPException(status_code=404, detail="不是文件或不存在")
+            raise NotFoundException(message="不是文件或不存在")
         size = os.path.getsize(full)
         if size > _MAX_READ_BYTES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"文件过大（>{_MAX_READ_BYTES // 1024}KB）",
-            )
+            raise ServiceException(message=f"文件过大（>{_MAX_READ_BYTES // 1024}KB）")
         try:
             with open(full, 'r', encoding='utf-8', errors='replace') as handle:
                 return rel_norm, handle.read()
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"读取失败: {exc}") from exc
+            raise ServiceException(message=f"读取失败: {exc}") from exc
 
     @classmethod
     def _validate_write_size(cls, content: str) -> None:
         if len(content.encode('utf-8')) > _MAX_READ_BYTES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"文件过大（>{_MAX_READ_BYTES // 1024}KB）",
-            )
+            raise ServiceException(message=f"文件过大（>{_MAX_READ_BYTES // 1024}KB）")
 
     @classmethod
     async def write_workspace_file(
@@ -380,13 +375,13 @@ class SessionContextService:
         try:
             full = SkillFsService._safe_join(root, rel_norm)
         except ValueError:
-            raise HTTPException(status_code=400, detail='非法路径')
+            raise ServiceException(message='非法路径')
         if not os.path.isfile(full):
-            raise HTTPException(status_code=404, detail="不是文件或不存在")
+            raise NotFoundException(message="不是文件或不存在")
         cls._validate_write_size(content)
         try:
             with open(full, 'w', encoding='utf-8', newline='\n') as handle:
                 handle.write(content)
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"写入失败: {exc}") from exc
+            raise ServiceException(message=f"写入失败: {exc}") from exc
         return rel_norm, content

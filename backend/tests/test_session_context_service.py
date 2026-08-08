@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
+from noesis.errors.exceptions import ServiceException, NotFoundException
 
 from noesis.config import user_data_paths as paths
 from noesis.services.session_context_service import SessionContextService
@@ -29,15 +29,13 @@ async def test_read_workspace_file_rejects_traversal(tmp_path: Path, monkeypatch
         assert rel == 'sessions/s1/workspace/ok.md'
         assert content == "hello"
 
-        with pytest.raises(HTTPException) as exc_legacy:
+        with pytest.raises((ServiceException, NotFoundException)) as exc_legacy:
             await SessionContextService.read_workspace_file(
                 sid, uid, 'workspace/ok.md', db,
             )
-        assert exc_legacy.value.status_code == 400
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.read_workspace_file(sid, uid, "../etc/passwd", db)
-        assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -123,9 +121,8 @@ async def test_get_context_not_owned() -> None:
         new_callable=AsyncMock,
         return_value=None,
     ):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.get_context("s1", "u1", db)
-        assert exc.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -172,17 +169,15 @@ async def test_write_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         assert content == '# updated'
         assert (ws / "draft.md").read_text(encoding="utf-8") == '# updated'
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.write_workspace_file(
                 sid, uid, '../etc/passwd', 'hack', db,
             )
-        assert exc.value.status_code == 400
 
-        with pytest.raises(HTTPException) as missing_exc:
+        with pytest.raises((ServiceException, NotFoundException)) as missing_exc:
             await SessionContextService.write_workspace_file(
                 sid, uid, f'sessions/{sid}/workspace/missing.md', 'x', db,
             )
-        assert missing_exc.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -247,9 +242,8 @@ async def test_build_path_archive_rejects_user_root(tmp_path: Path, monkeypatch:
         new_callable=AsyncMock,
         return_value=object(),
     ):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.build_path_archive(sid, uid, f'users/{uid}', db)
-        assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio

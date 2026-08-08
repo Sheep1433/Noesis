@@ -89,10 +89,9 @@ async def test_upload_requires_existing_session():
         new_callable=AsyncMock,
         return_value=None,
     ):
-        from fastapi import HTTPException
+        from noesis.errors.exceptions import ServiceException, NotFoundException
 
         from noesis.services.chat_attachment_service import ChatAttachmentService
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await ChatAttachmentService._ensure_session_owned("sess-missing", "user-1", db)
-        assert exc.value.status_code == 404

@@ -9,20 +9,50 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.mcp.loader import load_mcp_tools_by_names
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.storage.postgres.manager import pg_manager
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.config.code_enum import IntentEnum
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.schemas.login_vo import CurrentUser
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.schemas.qa_vo import QaQueryRequest
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.services.chat_service import ChatService
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.services.chat_attachment_service import ChatAttachmentService
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.services.mention_resolve_service import MentionResolveService
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.runtime.logging import logger
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.domain.chat.tool_state import ToolState
+from noesis.errors.exceptions import NotFoundException, ServiceException
+
 from noesis.llm.catalog import get_default_model_id
+
+from noesis.errors.exceptions import NotFoundException, ServiceException
 
 from noesis.services.qa.helpers import (
     _finalize_sse_bridge_stream,
@@ -624,13 +654,12 @@ class QaService:
         Returns:
             (markdown 正文, 建议下载文件名)
         """
-        from fastapi import HTTPException
 
         session = await ChatService.get_session_by_id(
             session_id, current_user.user_id, db
         )
         if not session:
-            raise HTTPException(status_code=404, detail="会话不存在")
+            raise NotFoundException(message="会话不存在")
 
         md = case_coordinator.get_export_markdown(
             session_id,
@@ -638,10 +667,7 @@ class QaService:
             query=query,
         )
         if not md:
-            raise HTTPException(
-                status_code=404,
-                detail="暂无可导出的测试用例，请先生成用例",
-            )
+            raise NotFoundException(message="暂无可导出的测试用例，请先生成用例")
 
         safe_title = re.sub(
             r"[^\w\u4e00-\u9fff\-]+",

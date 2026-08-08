@@ -20,6 +20,7 @@ _langfuse_tracing_enabled: Callable[[], bool] | None = None
 _merge_langfuse_runnable_config: Callable[..., dict] | None = None
 _hits_to_langfuse_payload: Callable[..., Any] | None = None
 _langfuse_retrieval_observation: Callable[..., Any] | None = None
+_langfuse_workflow_context: Callable[..., Any] | None = None
 _memory_service: Any | None = None
 
 
@@ -68,13 +69,15 @@ def bind_langfuse(
     merge_runnable_config: Callable[..., dict],
     hits_to_payload: Callable[..., Any] | None = None,
     retrieval_observation: Callable[..., Any] | None = None,
+    workflow_context: Callable[..., Any] | None = None,
 ) -> None:
     global _langfuse_tracing_enabled, _merge_langfuse_runnable_config
-    global _hits_to_langfuse_payload, _langfuse_retrieval_observation
+    global _hits_to_langfuse_payload, _langfuse_retrieval_observation, _langfuse_workflow_context
     _langfuse_tracing_enabled = tracing_enabled
     _merge_langfuse_runnable_config = merge_runnable_config
     _hits_to_langfuse_payload = hits_to_payload
     _langfuse_retrieval_observation = retrieval_observation
+    _langfuse_workflow_context = workflow_context
 
 
 def require_attachment_service() -> Any:
@@ -110,3 +113,11 @@ def langfuse_retrieval_observation(*args: Any, **kwargs: Any) -> Any:
 
         return nullcontext()
     return _langfuse_retrieval_observation(*args, **kwargs)
+
+
+def langfuse_workflow_context(config: dict) -> Any:
+    if _langfuse_workflow_context is None:
+        from contextlib import nullcontext
+
+        return nullcontext()
+    return _langfuse_workflow_context(config)

@@ -33,4 +33,5 @@ def wire_harness_platform_deps() -> None:
         merge_runnable_config=lf.merge_langfuse_runnable_config,
         hits_to_payload=lf.hits_to_langfuse_payload,
         retrieval_observation=lf.langfuse_retrieval_observation,
+        workflow_context=lf.langfuse_workflow_context,
     )

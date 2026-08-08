@@ -33,7 +33,7 @@ from noesis.domain.chat.streaming.failure_notice import (
     append_stream_failure_notice_to_content,
 )
 from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
-from noesis_server.infrastructure.observability.langfuse import langfuse_workflow_context, merge_langfuse_runnable_config
+from noesis.runtime.deps import langfuse_workflow_context, merge_langfuse_runnable_config
 from noesis.llm.catalog import get_default_model_id, resolve_catalog_entry
 from noesis.services.chat_service import ChatService
 

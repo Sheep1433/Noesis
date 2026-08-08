@@ -46,12 +46,9 @@ def test_harness_does_not_import_platform_layers() -> None:
     for path in sorted(NOESIS_ROOT.rglob("*.py")):
         if "_ragflow_compat" in path.parts or "deepdoc" in path.parts:
             continue
-        # F3 in progress: noesis.services still imports noesis_server.schemas
-        # (HTTP VO) and noesis_server.common.http.response (ResponseUtil) —
-        # these are being stripped (HTTP moved to api layer). Skip services/
-        # until F3 HTTP stripping is complete.
-        if "services" in path.parts:
-            continue
+        # noesis.services may import fastapi (Request/Depends for auth) —
+        # YuXi's services also use fastapi directly. fastapi is NOT in the
+        # forbidden set (only noesis_server.* platform packages are).
         forbidden = _top_level_imports(path) & FORBIDDEN_PLATFORM_PACKAGES
         if forbidden:
             relative = path.relative_to(BACKEND_ROOT)
