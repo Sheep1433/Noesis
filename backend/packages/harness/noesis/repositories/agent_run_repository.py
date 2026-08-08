@@ -8,7 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.domain.chat.runs import ACTIVE_RUN_STATUSES, RunStatus
-from noesis_server.models.chat_models import TAgentRun, TChatMessage
+from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage
 
 
 class AgentRunRepository:

@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.domain.auth.entities import AuthSession, AuthUser
-from noesis_server.models.db_models import TUser, TUserSession
+from noesis.storage.postgres.models.auth import TUser, TUserSession
 
 
 def user_from_orm(row: TUser) -> AuthUser:

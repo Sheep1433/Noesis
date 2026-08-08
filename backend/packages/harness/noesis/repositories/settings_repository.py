@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis_server.models.settings_models import (
+from noesis.storage.postgres.models.settings import (
     TUserSettingsAudit,
     TUserNotificationPreference,
 )

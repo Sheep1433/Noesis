@@ -1,8 +1,8 @@
 """Noesis repositories — domain repositories over ``noesis.storage``.
 
-Knowledge-base domain repository is here. Business-domain repositories
-(``agent_run`` / ``auth`` / ``settings``) land in F2 (after domain moved into
-``noesis.domain`` in F1, which is now complete).
+Knowledge-base collection config + business-domain (agent_run / auth /
+settings) repositories. Constructed with an async session; session source is
+``noesis.storage.postgres.manager.pg_manager``.
 """
 from __future__ import annotations
 
