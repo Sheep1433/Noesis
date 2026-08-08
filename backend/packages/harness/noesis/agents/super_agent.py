@@ -26,6 +26,7 @@ from noesis.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.skills import resolve_skill_sources_for_session
 from noesis.tools import build_web_search_tools
 from noesis.tools.chat_attachment_tools import build_attachment_tools
+from noesis.tools.kb_search_tool import build_kb_search_tools
 from noesis.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
 from noesis.config.env import ChatAttachmentConfig, HitlConfig
@@ -94,11 +95,21 @@ class SuperAgent(BaseAgent):
         enabled_skills: Optional[list[str]],
         file_list: dict | None,
         db: Optional[AsyncSession],
+        kb_collections: Optional[list[str]] = None,
+        kb_search_enabled: bool = True,
     ):
         ensure_user_memory_files(user_id)
         backend = await create_agent_backend(user_id, session_id)
         web_tools = build_web_search_tools()
         tools = list(web_tools) + list(mcp_tools or [])
+        # KB 检索工具（用户勾选启用时挂载）
+        if kb_search_enabled and kb_collections is not None:
+            kb_tools = build_kb_search_tools(
+                default_collection_names=kb_collections,
+                enforce_scope=bool(kb_collections),
+            )
+            if kb_tools:
+                tools.extend(kb_tools)
         if db is not None:
             tools.extend(build_memory_tools(user_id=user_id, db=db))
         interrupt_on = None
@@ -171,6 +182,8 @@ class SuperAgent(BaseAgent):
         mcp_tools: Optional[list] = None,
         enabled_skills: Optional[list[str]] = None,
         db: Optional[AsyncSession] = None,
+        kb_collections: Optional[list[str]] = None,
+        kb_search_enabled: bool = True,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
@@ -204,6 +217,8 @@ class SuperAgent(BaseAgent):
                     enabled_skills=enabled_skills,
                     file_list=file_list,
                     db=db,
+                    kb_collections=kb_collections,
+                    kb_search_enabled=kb_search_enabled,
                 )
 
                 human_kwargs = {}
@@ -275,6 +290,8 @@ class SuperAgent(BaseAgent):
         file_list: dict | None = None,
         db: Optional[AsyncSession] = None,
         message_id: Optional[str] = None,
+        kb_collections: Optional[list[str]] = None,
+        kb_search_enabled: bool = True,
     ) -> AsyncGenerator[dict, None]:
         """从 HITL interrupt 以 ``Command(resume=...)`` 继续同一 thread。"""
         task_id = session_id
@@ -303,6 +320,8 @@ class SuperAgent(BaseAgent):
                     enabled_skills=enabled_skills,
                     file_list=file_list,
                     db=db,
+                    kb_collections=kb_collections,
+                    kb_search_enabled=kb_search_enabled,
                 )
                 stream_args = {
                     "input": Command(resume={"decisions": decisions}),

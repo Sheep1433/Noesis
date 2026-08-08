@@ -97,7 +97,7 @@ class QaService:
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
             kb_search_enabled = True
-            if req_obj.qa_type == IntentEnum.COMMON_QA.value[0]:
+            if req_obj.qa_type in (IntentEnum.COMMON_QA.value[0], IntentEnum.SUPER_AGENT_QA.value[0]):
                 kb_collections, kb_search_enabled = await _resolve_kb_settings_for_query(
                     session_id=session_id,
                     user_id=str(current_user.user_id),
@@ -175,6 +175,8 @@ class QaService:
                     mcp_tools=mcp_tools or None,
                     enabled_skills=enabled_skills,
                     db=db,
+                    kb_collections=kb_collections or None,
+                    kb_search_enabled=kb_search_enabled,
                 )
             else:
                 # 即时代码路径，连续产出多帧 SSE，无长时间阻塞，无需注释保活。

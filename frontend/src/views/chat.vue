@@ -690,7 +690,7 @@ function buildComposingSessionExtra(): Record<string, unknown> {
   const extra: Record<string, unknown> = {
     qa_type: qa_type.value,
   }
-  if (qa_type.value === 'COMMON_QA') {
+  if (qa_type.value === 'COMMON_QA' || qa_type.value === 'SUPER_AGENT_QA') {
     extra.kb_collections = selectedKbCollections.value
     extra.kb_search_enabled = kbSearchEnabled.value
   }
@@ -1264,7 +1264,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     qa_type: qa_type.value,
     file_dict,
   }
-  if (qa_type.value === 'COMMON_QA') {
+  if (qa_type.value === 'COMMON_QA' || qa_type.value === 'SUPER_AGENT_QA') {
     streamExtra.kb_collections = selectedKbCollections.value
     streamExtra.kb_search_enabled = kbSearchEnabled.value
   }
