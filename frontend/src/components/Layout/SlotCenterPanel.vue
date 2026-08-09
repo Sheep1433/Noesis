@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import { isChatRouteName } from '@/config/navigation'
+
 interface Props {
   loading?: boolean
 }
@@ -8,6 +10,8 @@ withDefaults(defineProps<Props>(), {
 
 const appStore = useAppStore()
 const { isMobile } = useBreakpoint()
+const route = useRoute()
+const isMobileChat = computed(() => isMobile.value && isChatRouteName(route.name))
 
 appStore.areaLoading = true
 setTimeout(() => {
@@ -55,14 +59,20 @@ setTimeout(() => {
             h-full
             overflow-hidden
             class="app-shell__main"
-            :class="{ 'app-shell__main--mobile': isMobile }"
+            :class="{
+              'app-shell__main--mobile': isMobile,
+              'app-shell__main--mobile-chat': isMobileChat,
+            }"
             :style="{ background: 'var(--noesis-layout-shell-bg)' }"
           >
             <div
               size-full
               overflow-hidden
               class="app-shell__content"
-              :class="{ 'app-shell__content--mobile': isMobile }"
+              :class="{
+                'app-shell__content--mobile': isMobile,
+                'app-shell__content--mobile-chat': isMobileChat,
+              }"
             >
               <LayoutDefault />
             </div>
@@ -72,7 +82,7 @@ setTimeout(() => {
     </template>
     <template #bottom>
       <NavigationNavFooter />
-      <NavigationMobileBottomNav v-if="isMobile" />
+      <NavigationMobileBottomNav v-if="isMobile && !isMobileChat" />
     </template>
   </LayoutSlotFrame>
 </template>
@@ -105,6 +115,17 @@ setTimeout(() => {
 
 .app-shell__content--mobile {
   border-radius: var(--noesis-shell-radius-mobile);
+}
+
+.app-shell__main--mobile-chat {
+  padding:
+    var(--noesis-safe-area-top)
+    0
+    var(--noesis-safe-area-bottom);
+}
+
+.app-shell__content--mobile-chat {
+  border-radius: 0;
 }
 
 @media (max-width: 1024px) {

@@ -19,6 +19,11 @@ const props = defineProps<{
   /** ACTIVE 才 ensure 写 extra；COMPOSING 只改本地 v-model */
   persistSessionExtra?: boolean
   fileUploadRef?: InstanceType<typeof FileUploadManager> | null
+  showSessionFiles?: boolean
+}>()
+
+const emit = defineEmits<{
+  openSessionFiles: []
 }>()
 
 const router = useRouter()
@@ -145,6 +150,11 @@ function openMcpConfig() {
   void router.push({ name: 'Extensions', query: { tab: 'mcp' } })
 }
 
+function openSessionFiles() {
+  plusOpen.value = false
+  emit('openSessionFiles')
+}
+
 function pickDocuments() {
   docInputRef.value?.click()
 }
@@ -241,6 +251,15 @@ const kbSummary = computed(() => {
           <!-- 一级：上传 / MCP / Skills -->
           <template v-if="menuView === 'root'">
             <button
+              v-if="showSessionFiles"
+              type="button"
+              class="composer-menu-item"
+              @click="openSessionFiles"
+            >
+              <span class="i-carbon:folder-details composer-menu-item__icon"></span>
+              <span class="composer-menu-item__label">会话文件</span>
+            </button>
+            <button
               v-if="showFileUpload"
               type="button"
               class="composer-menu-item"
@@ -258,6 +277,14 @@ const kbSummary = computed(() => {
               <span class="i-mdi:file-image-outline composer-menu-item__icon"></span>
               <span class="composer-menu-item__label">上传图片</span>
             </button>
+
+            <ModelSelector
+              v-model="selectedModelId"
+              embedded
+              :session-id="sessionId"
+              :persist-session-extra="persistSessionExtra"
+              :disabled="disabled"
+            />
 
             <button
               v-if="showKbScope"
@@ -384,13 +411,6 @@ const kbSummary = computed(() => {
           </template>
         </div>
       </n-popover>
-
-      <ModelSelector
-        v-model="selectedModelId"
-        :session-id="sessionId"
-        :persist-session-extra="persistSessionExtra"
-        :disabled="disabled"
-      />
     </div>
 
     <div class="composer-toolbar__right">

@@ -8,6 +8,7 @@ const props = defineProps<{
   disabled?: boolean
   /** ACTIVE 会话才写回 session.extra；COMPOSING 仅改本地 modelValue */
   persistSessionExtra?: boolean
+  embedded?: boolean
 }>()
 
 const modelValue = defineModel<string>({ default: '' })
@@ -92,8 +93,11 @@ watch(
     <button
       type="button"
       class="composer-model-trigger"
+      :class="{ 'composer-model-trigger--menu': embedded }"
       :disabled="disabled || loading || dropdownOptions.length === 0"
     >
+      <span v-if="embedded" class="i-carbon:machine-learning-model composer-model-trigger__icon"></span>
+      <span v-if="embedded" class="composer-model-trigger__title">模型</span>
       <span class="composer-model-trigger__label">{{ currentLabel }}</span>
       <span class="i-carbon:chevron-down text-12 opacity-60"></span>
     </button>
@@ -131,5 +135,33 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-model-trigger--menu {
+  width: 100%;
+  max-width: none;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 0;
+  color: var(--noesis-text-primary, #111);
+  font-size: 13px;
+  text-align: left;
+}
+
+.composer-model-trigger__icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--noesis-text-secondary, #6b7280);
+  font-size: 16px;
+}
+
+.composer-model-trigger__title {
+  flex: 1;
+}
+
+.composer-model-trigger--menu .composer-model-trigger__label {
+  max-width: 140px;
+  color: var(--noesis-text-secondary, #6b7280);
 }
 </style>

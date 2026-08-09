@@ -2,10 +2,12 @@
 import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
+import type { ChatModeQaType } from '@/utils/qaType'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
+import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
 import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
@@ -34,7 +36,7 @@ import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
-import { qaTypeLabel } from '@/utils/qaType'
+import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import {
@@ -172,13 +174,18 @@ async function replaceChatSessionUrl(sessionId: string) {
 }
 
 async function navigateToComposingUrl(replace = false) {
-  if (isComposingRouteName(route.name) && !routeSessionId()) {
+  const query = { ...route.query, qa_type: qa_type.value }
+  if (
+    isComposingRouteName(route.name)
+    && !routeSessionId()
+    && route.query.qa_type === qa_type.value
+  ) {
     return
   }
   suppressRouteSessionSync.value = true
   try {
     const nav = replace ? router.replace : router.push
-    await nav({ name: 'ChatNew' })
+    await nav({ name: 'ChatNew', query })
   } finally {
     suppressRouteSessionSync.value = false
   }
@@ -341,8 +348,14 @@ async function refreshSidebarAfterManageClose() {
 }
 
 // 新建对话
-function newChat() {
+function newChat(targetQaType: ChatModeQaType = qa_type.value as ChatModeQaType) {
   backgroundColorVariable.value = cssVar(themeCssVar.bgElevated)
+
+  if (isChatModeChange(qa_type.value, targetQaType)) {
+    activateChatMode(targetQaType, '')
+    historyDrawerOpen.value = false
+    return
+  }
 
   if (showDefaultPage.value && isComposingRouteName(route.name) && !routeSessionId()) {
     window.$ModalMessage.success(`已经是最新对话`)
@@ -350,6 +363,13 @@ function newChat() {
   }
   resetComposingSurface()
   void navigateToComposingUrl(false)
+}
+
+function changeChatMode(targetQaType: ChatModeQaType) {
+  if (!isChatModeChange(qa_type.value, targetQaType)) {
+    return
+  }
+  activateChatMode(targetQaType, '')
 }
 
 /**
@@ -463,7 +483,7 @@ const currentRenderIndex = ref(0)
 const onRecycleQa = async (index: number) => {
   // 设置当前选中的问答类型
   const item = conversationItems.value[index - 1]
-  onAqtiveChange(item.qa_type, item.chat_id)
+  activateChatMode(item.qa_type, item.chat_id)
 
 
   // 清空推荐列表
@@ -1042,7 +1062,7 @@ const checkAllFilesUploaded = () => {
   const pendingFiles = fileUploadRef.value?.pendingUploadFileInfoList || []
 
   if (qa_type.value === 'FAULT_OPERATION_QA' && pendingFiles.length > 0) {
-    window.$ModalMessage.warning('故障运维暂不支持文件上传')
+    window.$ModalMessage.warning('故障排查暂不支持文件上传')
     return false
   }
 
@@ -1653,7 +1673,7 @@ const rowProps = (row: TableItem) => {
 
       // 先切换当前 session 身份，再异步加载历史；审批面板必须立即随 session 隔离，
       // 不能在网络请求期间继续显示上一会话的 pending HITL。
-      onAqtiveChange(row.qa_type, row.chat_id, true)
+      activateChatMode(row.qa_type, row.chat_id, true)
 
       // 这里根据chat_id 过滤同一轮对话数据
       await fetchConversationHistory(
@@ -1727,14 +1747,16 @@ function ensureActiveSessionId() {
 }
 
 watch(qa_type, ensureActiveSessionId, { immediate: true })
-/**
- * @param fromHistorySelection 为 true 时表示从左侧历史会话点入：已加载该会话 messages，仅同步 qa_type / uuid，不得清空 conversationItems 或切回默认页
- */
-const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
+/** 从历史会话进入时只同步模式与会话标识，不清空已加载的消息。 */
+const activateChatMode = (
+  targetQaType: string,
+  sessionId: string,
+  fromHistorySelection = false,
+) => {
   businessStore.todos = []
 
   // 切换到不同问答类型时，清空聊天记录（顶栏切换）；历史会话点入时跳过，否则会覆盖刚加载的 messages
-  if (qa_type.value !== val) {
+  if (qa_type.value !== targetQaType) {
     suggested_array.value = []
     if (!fromHistorySelection) {
       conversationItems.value = []
@@ -1744,17 +1766,17 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
     }
   }
 
-  qa_type.value = val
-  businessStore.update_qa_type(val)
+  qa_type.value = targetQaType
+  businessStore.update_qa_type(targetQaType)
 
   // 切换类型时生成新uuid
-  if (chat_id) {
-    uuids.value[val] = chat_id
+  if (sessionId) {
+    uuids.value[targetQaType] = sessionId
     sessionMaterialized.value = true
-    void loadSessionContext(chat_id)
+    void loadSessionContext(sessionId)
     reloadSessionFilesPanel()
   } else {
-    uuids.value[val] = uuidv4()
+    uuids.value[targetQaType] = uuidv4()
     sessionMaterialized.value = false
     sessionContext.value = null
     selectedKbCollections.value = []
@@ -1769,7 +1791,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   }
 
   // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
-  if (val === 'TEST_CASE_QA' && route.name !== 'TestCaseGenerate') {
+  if (targetQaType === 'TEST_CASE_QA' && route.name !== 'TestCaseGenerate') {
     router.push({ name: 'TestCaseGenerate' })
   }
 }
@@ -1997,7 +2019,7 @@ function onPageDrop(e: DragEvent) {
 
 function canUploadComposerFiles(): boolean {
   if (qa_type.value === 'FAULT_OPERATION_QA') {
-    window.$ModalMessage.warning('故障运维暂不支持文件上传')
+    window.$ModalMessage.warning('故障排查暂不支持文件上传')
     return false
   }
   return true
@@ -2073,6 +2095,7 @@ function onComposerPaste(e: ClipboardEvent) {
 <template>
   <div
     class="chat-page flex justify-between items-center h-full"
+    :class="{ 'chat-page--mobile': isMobile }"
     @dragover="onPageDragOver"
     @drop="onPageDrop"
   >
@@ -2109,6 +2132,7 @@ function onComposerPaste(e: ClipboardEvent) {
           :session-context-menu-y="sessionContextMenuY"
           :session-context-menu-options="sessionContextMenuOptions"
           :row-props="rowProps"
+          :current-qa-type="qa_type"
           @newChat="newChat"
           @focusSearch="onFocusSearchChat"
           @blurSearch="onBlurSearchChat"
@@ -2143,11 +2167,19 @@ function onComposerPaste(e: ClipboardEvent) {
                   <span class="i-hugeicons:menu-02" aria-hidden="true"></span>
                 </button>
                 <NavigationNavBar
+                  v-if="!isMobile"
                   class="flex-1 min-w-0"
                   :background-color="backgroundColorVariable"
                 />
+                <div class="chat-top-bar__mode">
+                  <ChatModeSelector
+                    :qa-type="qa_type"
+                    :disabled="sseIsLoading"
+                    @select="changeChatMode"
+                  />
+                </div>
                 <button
-                  v-if="!showDefaultPage && uuids[qa_type]"
+                  v-if="!isMobile && !showDefaultPage && uuids[qa_type]"
                   type="button"
                   class="session-files-toggle"
                   :class="{ 'session-files-toggle--open': sessionFilesPanelOpen }"
@@ -2466,166 +2498,6 @@ function onComposerPaste(e: ClipboardEvent) {
                       :todos="businessStore.todos"
                     />
                     <div
-                      flex="~ gap-10"
-                      class="qa-type-tabs h-40"
-                    >
-                      <n-button
-                        type="default"
-                        :class="[
-                          qa_type === 'COMMON_QA' && 'active-tab',
-                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                        ]"
-                        @click="onAqtiveChange('COMMON_QA', '')"
-                      >
-                        <template #icon>
-                          <n-icon size="16">
-                            <svg
-                              t="1742194713465"
-                              class="icon"
-                              viewBox="0 0 1024 1024"
-                              version="1.1"
-                              xmlns="http://www.w3.org/2000/svg"
-                              p-id="8188"
-                              width="60"
-                              height="60"
-                            >
-                              <path
-                                d="M80.867881 469.76534l0.916659 0.916659 79.711097-79.711097L160.655367 389.901467a162.210364 162.210364 0 0 1 229.164631-229.164631l236.345122 236.345122L706.028994 317.332667l-236.345123-236.803452a275.112139 275.112139 0 0 0-388.81599 389.27432z m472.690245-388.81599l-0.916658 0.916659 79.711097 79.711097 0.916659-0.916658A162.210364 162.210364 0 0 1 862.663019 389.901467l-236.345122 236.345122 79.711097 79.711098 236.803452-236.345123a275.112139 275.112139 0 0 0-389.27432-388.81599z m-84.027031 861.506236l0.916659-0.916659-79.711098-79.711097-0.916658 0.916658a162.210364 162.210364 0 0 1-229.164631-229.431989l236.345122-236.345123L317.251198 317.332667l-236.803452 236.345122a275.112139 275.112139 0 0 0 389.27432 388.815991z m99.801197-372.736272a81.811773 81.811773 0 0 0 21.197728-78.794439 80.895115 80.895115 0 0 0-57.59671-57.596711 81.620803 81.620803 0 1 0 36.398982 136.352956z m373.156407-15.659583l-0.916659-0.916659-79.711097 79.711097 0.916658 0.916659a162.248559 162.248559 0 0 1-229.431989 229.431989L396.885907 626.704918 317.251198 706.568792l236.345122 236.803452A275.073945 275.073945 0 0 0 942.374117 554.136119z"
-                                fill="#297CE9"
-                                p-id="8189"
-                              />
-                            </svg>
-                          </n-icon>
-                        </template>
-                        智能问答
-                      </n-button>
-                      <n-button
-                        type="default"
-                        :class="[
-                          qa_type === 'SUPER_AGENT_QA' && 'active-tab',
-                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                        ]"
-                        @click="onAqtiveChange('SUPER_AGENT_QA', '')"
-                      >
-                        <template #icon>
-                          <n-icon size="18">
-                            <svg
-                              t="1732528323504"
-                              class="icon"
-                              viewBox="0 0 1024 1024"
-                              version="1.1"
-                              xmlns="http://www.w3.org/2000/svg"
-                              p-id="41739"
-                              width="64"
-                              height="64"
-                            >
-                              <path
-                                d="M96 896c-8 0-15.5-3.1-21.2-8.8C69.1 881.6 66 874 66 866V445c0-5.5 4.5-10 10-10s10 4.5 10 10v421c0 2.7 1 5.2 2.9 7.1 1.9 1.9 4.4 2.9 7.1 2.9h612c5.5 0 10 4.5 10 10s-4.5 10-10 10H96z m748 0v-20c2.7 0 5.2-1 7.1-2.9 1.9-1.9 2.9-4.4 2.9-7.1v-80c0-5.5 4.5-10 10-10s10 4.5 10 10v80c0 8-3.1 15.5-8.8 21.2-5.6 5.7-13.2 8.8-21.2 8.8z m20-450c-5.5 0-10-4.5-10-10V126c0-5.5-4.5-10-10-10H96c-5.5 0-10 4.5-10 10v193c0 5.5-4.5 10-10 10s-10-4.5-10-10V126c0-16.5 13.4-30 30-30h748c16.5 0 30 13.4 30 30v310c0 5.5-4.5 10-10 10z"
-                                fill="#222222"
-                                p-id="41740"
-                              />
-                              <path
-                                d="M781 886m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
-                                fill="#222222"
-                                p-id="41741"
-                              />
-                              <path
-                                d="M76 383m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
-                                fill="#222222"
-                                p-id="41742"
-                              />
-                              <path
-                                d="M84 226h775v20H84zM750 826c-57.2 0-110.9-22.3-151.3-62.7C558.3 722.9 536 669.2 536 612s22.3-110.9 62.7-151.3C639.1 420.3 692.8 398 750 398s110.9 22.3 151.3 62.7C941.7 501.1 964 554.8 964 612s-22.3 110.9-62.7 151.3C860.9 803.7 807.2 826 750 826z m0-408c-107 0-194 87-194 194s87 194 194 194 194-87 194-194-87-194-194-194z"
-                                fill="#222222"
-                                p-id="41743"
-                              />
-                              <path
-                                d="M901.7 753.2c-1 0-2.1-0.2-3.1-0.5-4.1-1.3-6.9-5.2-6.9-9.5V478.8c0-4.3 2.8-8.2 6.9-9.5 4.1-1.3 8.6 0.1 11.2 3.6 24.9 34 51.4 75.6 51.4 139.1 0 62-22.3 97.3-51.4 137.1-1.9 2.7-4.9 4.1-8.1 4.1z m10.1-241.9v200c17.9-28 29.5-56.4 29.5-99.3-0.1-40.2-11-70.5-29.5-100.7z"
-                                fill="#222222"
-                                p-id="41744"
-                              />
-                              <path
-                                d="M859 788l93 130"
-                                fill="#358AFE"
-                                p-id="41745"
-                              />
-                              <path
-                                d="M952 928c-3.1 0-6.2-1.5-8.1-4.2l-93-130c-3.2-4.5-2.2-10.7 2.3-14 4.5-3.2 10.7-2.2 14 2.3l93 130c3.2 4.5 2.2 10.7-2.3 14-1.8 1.3-3.9 1.9-5.9 1.9zM482.4 468.4H171.6c-8.8 0-16-7.2-16-16v-89.8c0-8.8 7.2-16 16-16h310.8c8.8 0 16 7.2 16 16v89.8c0 8.8-7.2 16-16 16z m-306.8-20h302.8v-81.8H175.6v81.8z m306.8-81.8zM384 580H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h219c5.5 0 10 4.5 10 10s-4.5 10-10 10zM455 690H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h290c5.5 0 10 4.5 10 10s-4.5 10-10 10zM525 800H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h360c5.5 0 10 4.5 10 10s-4.5 10-10 10zM183 146c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z"
-                                fill="#222222"
-                                p-id="41746"
-                              />
-                            </svg>
-                          </n-icon>
-                        </template>
-                        智能体
-                      </n-button>
-                      <n-button
-                        type="default"
-                        :class="[
-                          qa_type === 'FAULT_OPERATION_QA' && 'active-tab',
-                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                        ]"
-                        @click="onAqtiveChange('FAULT_OPERATION_QA', '')"
-                      >
-                        <template #icon>
-                          <n-icon size="18">
-                            <svg
-                              t="1743292000000"
-                              class="icon"
-                              viewBox="0 0 1024 1024"
-                              version="1.1"
-                              xmlns="http://www.w3.org/2000/svg"
-                              p-id="8849"
-                              width="64"
-                              height="64"
-                            >
-                              <path
-                                d="M512 160c-35.3 0-64 28.7-64 64v32c0 35.3 28.7 64 64 64s64-28.7 64-64v-32c0-35.3-28.7-64-64-64z"
-                                fill="#222222"
-                                p-id="8850"
-                              />
-                              <path
-                                d="M480 384h64v320h-64z"
-                                fill="#222222"
-                                p-id="8851"
-                              />
-                              <path
-                                d="M448 704h128v32c0 17.7-14.3 32-32 32H480c-17.7 0-32-14.3-32-32v-32z"
-                                fill="#222222"
-                                p-id="8852"
-                              />
-                              <path
-                                d="M416 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
-                                fill="#222222"
-                                p-id="8853"
-                              />
-                              <path
-                                d="M608 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
-                                fill="#222222"
-                                p-id="8854"
-                              />
-                              <path
-                                d="M448 144c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40h128c22.1 0 40-17.9 40-40v-24c0-22.1-17.9-40-40-40H448z"
-                                fill="#222222"
-                                p-id="8855"
-                              />
-                              <path
-                                d="M848 512c0-141.4-114.6-256-256-256S336 370.6 336 512c0 44.2 11.2 85.8 31.1 122.9L224 768h576l-143.1-133.1C880.8 597.8 896 556.2 896 512zM592 768H432l144-160h144l-128 160z"
-                                fill="#222222"
-                                p-id="8856"
-                              />
-                              <path
-                                d="M512 320c-105.6 0-192 86.4-192 192s86.4 192 192 192 192-86.4 192-192-86.4-192-192-192z"
-                                fill="#222222"
-                                p-id="8857"
-                              />
-                            </svg>
-                          </n-icon>
-                        </template>
-                        故障运维
-                      </n-button>
-                    </div>
-                    <div
                       :class="[
                         'chat-composer relative b b-solid p-12',
                         composerDragOver && 'chat-composer--dragover',
@@ -2692,6 +2564,8 @@ function onComposerPaste(e: ClipboardEvent) {
                         :persist-session-extra="sessionMaterialized"
                         :disabled="sseIsLoading"
                         :file-upload-ref="fileUploadRef"
+                        :show-session-files="isMobile && !showDefaultPage && !!uuids[qa_type]"
+                        @open-session-files="toggleSessionFilesPanel"
                       >
                         <template #right>
                           <ContextWindowIndicator
@@ -2791,6 +2665,7 @@ function onComposerPaste(e: ClipboardEvent) {
           :session-context-menu-y="sessionContextMenuY"
           :session-context-menu-options="sessionContextMenuOptions"
           :row-props="rowProps"
+          :current-qa-type="qa_type"
           @newChat="newChat"
           @focusSearch="onFocusSearchChat"
           @blurSearch="onBlurSearchChat"
@@ -2981,15 +2856,6 @@ function onComposerPaste(e: ClipboardEvent) {
   align-items: center;
   height: 100vh;
   background-color: var(--noesis-color-bg);
-}
-
-.active-tab,
-:deep(.n-button.active-tab) {
-  background: var(--noesis-chat-tab-active-bg) !important;
-  border-color: var(--noesis-chat-tab-active-border, var(--noesis-color-primary)) !important;
-  color: var(--noesis-chat-tab-active-color, var(--noesis-color-primary)) !important;
-  box-shadow: var(--noesis-chat-tab-active-shadow, none);
-  font-weight: 600;
 }
 
 /* 新建对话框的淡入淡出动画样式 */
@@ -3228,6 +3094,13 @@ function onComposerPaste(e: ClipboardEvent) {
   padding-left: 8px;
 }
 
+.chat-top-bar__mode {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
 .history-drawer-toggle {
   display: flex;
   align-items: center;
@@ -3265,20 +3138,13 @@ function onComposerPaste(e: ClipboardEvent) {
   min-height: 0;
 }
 
+.chat-page--mobile .custom-layout {
+  border-radius: 0;
+}
+
 .chat-content-gutter {
   margin-left: var(--noesis-content-gutter-desktop);
   margin-right: var(--noesis-content-gutter-desktop);
-}
-
-.qa-type-tabs {
-  overflow-x: auto;
-  flex-wrap: nowrap;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-
-.qa-type-tabs::-webkit-scrollbar {
-  display: none;
 }
 
 @media (max-width: 1024px) {
@@ -3312,6 +3178,26 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 @media (max-width: 768px) {
+  .chat-top-bar {
+    min-height: 48px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--noesis-color-border-subtle);
+  }
+
+  .chat-top-bar__mode {
+    flex: 1;
+    padding-right: 32px;
+  }
+
+  .chat-input-footer {
+    padding: 8px !important;
+  }
+
+  .chat-content-gutter {
+    margin-right: 0;
+    margin-left: 0;
+  }
+
   .chat-user-message {
     max-width: calc(100% - 8px) !important;
     margin: 0 !important;
@@ -3325,31 +3211,5 @@ function onComposerPaste(e: ClipboardEvent) {
     line-height: 1.55 !important;
   }
 
-  .qa-type-tabs {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 8px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .qa-type-tabs :deep(.n-button) {
-    flex: 0 0 auto;
-    width: auto !important;
-    min-width: fit-content;
-    height: 36px;
-    padding: 0 12px !important;
-    font-size: 12px;
-  }
-
-  .qa-type-tabs :deep(.n-button__content) {
-    gap: 3px;
-    white-space: nowrap;
-  }
-
-  .qa-type-tabs :deep(.n-button .n-icon) {
-    flex-shrink: 0;
-    font-size: 14px !important;
-  }
 }
 </style>
