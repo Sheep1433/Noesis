@@ -1,7 +1,7 @@
 """KbCollectionConfig repository / service 单测（mock DB / Qdrant）。"""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -10,6 +10,7 @@ from noesis.repositories.kb_collection_config_repository import (
     load_query_params_sync,
 )
 from noesis.services.kb_collection_config_service import KbCollectionConfigService
+from noesis.knowledge.runtime import knowledge_base
 
 
 @pytest.mark.asyncio
@@ -48,7 +49,11 @@ async def test_patch_config_merges_processing():
 @pytest.mark.asyncio
 async def test_ensure_defaults_for_qdrant_collections():
     db = AsyncMock()
-    with patch("noesis.knowledge.implementations.qdrant.is_qdrant_connected", return_value=True):
+    with patch(
+        "noesis.knowledge.manager.KnowledgeBaseManager.connected",
+        new_callable=PropertyMock,
+        return_value=True,
+    ):
         with patch.object(
             KbCollectionConfigRepository, "get_row", new=AsyncMock(return_value=None)
         ):
@@ -57,7 +62,7 @@ async def test_ensure_defaults_for_qdrant_collections():
             ) as mock_create:
                 svc = MagicMock()
                 svc.get_collections.return_value = [{"name": "new_col"}]
-                with patch("noesis.knowledge.implementations.qdrant.QdrantService", return_value=svc):
+                with patch.object(knowledge_base, "service", return_value=svc):
                     n = await KbCollectionConfigService.ensure_defaults_for_qdrant_collections(db)
     assert n == 1
     mock_create.assert_awaited_once()

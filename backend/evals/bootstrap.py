@@ -34,18 +34,22 @@ async def eval_runtime(*, no_attachments: bool = False) -> AsyncIterator[MemoryS
 
 @asynccontextmanager
 async def agentic_rag_runtime() -> AsyncIterator[None]:
-    """Initialize the KB engine + Postgres storage for Harness RAG tools.
+    """Initialize the KB engine + Postgres storage for core RAG tools.
 
     KB retrieval, Qdrant, VLM, and collection-config are imported directly by
-    the harness tools from ``noesis.knowledge`` / ``noesis.repositories`` /
+    core tools from ``noesis.knowledge`` / ``noesis.repositories`` /
     ``noesis.storage``; no dependency injection is needed. This context only
     ensures Qdrant is connected and the Postgres engine is ready for the
     synchronous collection-config reads performed inside Agent tool threads.
     """
-    from noesis.knowledge.implementations.qdrant import init_qdrant_client
+    from noesis.knowledge.runtime import close_knowledge_base, init_knowledge_base
     from noesis.storage.postgres.manager import pg_manager
 
-    if not await init_qdrant_client():
+    if not await init_knowledge_base():
         raise RuntimeError("Agentic RAG 评测需要可用的 Qdrant")
     pg_manager._ensure_engine()
-    yield
+    try:
+        yield
+    finally:
+        await close_knowledge_base()
+        await pg_manager.close()

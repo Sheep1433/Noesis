@@ -246,12 +246,12 @@ active run 数量、单 run 时长、累计输出、event buffer、subscriber qu
 
 当前入口：
 
-- `backend/noesis_server/domain/chat/runs/`：RunHandle、RunManager、状态机、snapshot。
-- `backend/noesis_server/domain/chat/runs/`：sequence、多 subscriber、缓存与慢消费者隔离。
-- `backend/noesis_server/services/qa/`：producer 装配与 PersistSink。
-- `backend/noesis_server/services/run_service.py`：run 应用服务。
-- `backend/noesis_server/api/chat_api.py`：`/api/chat/runs*`。
-- `backend/noesis_server/models/chat_models.py`：run ORM。
+- `backend/packages/noesis-core/src/noesis/domain/chat/runs/`：RunHandle、RunManager、状态机、snapshot。
+- `backend/packages/noesis-core/src/noesis/domain/chat/runs/`：sequence、多 subscriber、缓存与慢消费者隔离。
+- `backend/packages/noesis-core/src/noesis/services/qa/`：producer 装配与 PersistSink。
+- `backend/packages/noesis-core/src/noesis/services/run_service.py`：run 应用服务。
+- `backend/server/api/chat_api.py`：`/api/chat/runs*`。
+- `backend/packages/noesis-core/src/noesis/storage/postgres/models/chat.py`：run ORM。
 - `frontend/src/api/chat.ts`：run API。
 - `frontend/src/views/chat/useSSEStream.ts`：snapshot、sequence、重订阅。
 - `frontend/src/store/business/initChatHistory.ts`：active run 恢复。

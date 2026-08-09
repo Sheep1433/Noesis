@@ -1,4 +1,4 @@
-"""Map Harbor's async task environment to the Harness sandbox protocol."""
+"""Map Harbor's async task environment to the Noesis sandbox protocol."""
 
 from __future__ import annotations
 

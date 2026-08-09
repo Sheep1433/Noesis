@@ -289,7 +289,7 @@ dependencies = [
     { name = "markitdown", extra = ["docx"] },
     { name = "mcp" },
     { name = "noesis-cli" },
-    { name = "noesis-harness" },
+    { name = "noesis-core" },
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "openai" },
@@ -352,7 +352,7 @@ requires-dist = [
     { name = "markitdown", extras = ["docx"], specifier = ">=0.0.1" },
     { name = "mcp", specifier = ">=1.19.0" },
     { name = "noesis-cli", editable = "packages/noesis-cli" },
-    { name = "noesis-harness", editable = "packages/harness" },
+    { name = "noesis-core", editable = "packages/noesis-core" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "onnxruntime", specifier = ">=1.19.0" },
     { name = "openai", specifier = ">=2.7.1" },
@@ -2565,6 +2565,13 @@ docx = [
     { name = "lxml" },
     { name = "mammoth" },
 ]
+pdf = [
+    { name = "pdfminer-six" },
+    { name = "pdfplumber" },
+]
+pptx = [
+    { name = "python-pptx" },
+]
 
 [[package]]
 name = "markupsafe"
@@ -2898,68 +2905,100 @@ name = "noesis-cli"
 version = "0.1.0"
 source = { editable = "packages/noesis-cli" }
 dependencies = [
-    { name = "noesis-harness" },
+    { name = "noesis-core" },
     { name = "rich" },
     { name = "typer" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "noesis-harness" },
+    { name = "noesis-core" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
 
 [[package]]
-name = "noesis-harness"
+name = "noesis-core"
 version = "0.1.0"
-source = { editable = "packages/harness" }
+source = { editable = "packages/noesis-core" }
 dependencies = [
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "bcrypt" },
+    { name = "croniter" },
+    { name = "cryptography" },
     { name = "ddgs" },
     { name = "deepagents" },
+    { name = "fastapi" },
     { name = "httpx" },
+    { name = "jieba" },
     { name = "langchain" },
+    { name = "langchain-anthropic" },
     { name = "langchain-community" },
     { name = "langchain-deepseek" },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
     { name = "langchain-qwq" },
+    { name = "langchain-text-splitters" },
     { name = "langfuse" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-postgres" },
+    { name = "lark-oapi" },
     { name = "loguru" },
+    { name = "markitdown", extra = ["docx", "pdf", "pptx"] },
     { name = "mcp" },
+    { name = "openai" },
     { name = "pillow" },
+    { name = "psycopg", extra = ["binary", "pool"] },
     { name = "psycopg-pool" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-docx" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "qdrant-client" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "tavily-python" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.18.5" },
+    { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "bcrypt", specifier = ">=5.0.0" },
+    { name = "croniter", specifier = ">=6.2.4" },
+    { name = "cryptography", specifier = ">=48.0.0" },
     { name = "ddgs", specifier = ">=9.0.0" },
     { name = "deepagents", specifier = ">=0.6.7" },
+    { name = "fastapi", specifier = ">=0.120.0" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "jieba", specifier = ">=0.42.1" },
     { name = "langchain", specifier = ">=1.0.2" },
+    { name = "langchain-anthropic", specifier = ">=1.0.0" },
     { name = "langchain-community", specifier = ">=0.4" },
     { name = "langchain-deepseek", specifier = ">=1.0.1" },
     { name = "langchain-mcp-adapters", specifier = ">=0.1.11" },
     { name = "langchain-openai", specifier = ">=1.0.2" },
     { name = "langchain-qwq", specifier = ">=0.3.5" },
+    { name = "langchain-text-splitters", specifier = ">=1.0.0" },
     { name = "langfuse", specifier = ">=3.10.0,<4" },
     { name = "langgraph", specifier = ">=1.0.1" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.0" },
+    { name = "lark-oapi", specifier = ">=1.5.3,<2" },
     { name = "loguru", specifier = ">=0.7.0" },
+    { name = "markitdown", extras = ["pdf", "docx", "pptx"], specifier = ">=0.1.4" },
     { name = "mcp", specifier = ">=1.19.0" },
+    { name = "openai", specifier = ">=2.8.0" },
     { name = "pillow", specifier = ">=10.0.0" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2.0" },
     { name = "psycopg-pool", specifier = ">=3.2.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
+    { name = "python-docx", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "qdrant-client", specifier = ">=1.18.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44" },
     { name = "tavily-python", specifier = ">=0.5.0" },
 ]
 

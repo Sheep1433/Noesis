@@ -1,8 +1,8 @@
-"""平台 DB 基础设施：session dependency + engine 委托 + 迁移入口。
+"""平台 DB 基础设施：请求 session dependency 与迁移入口。
 
 委托 ``noesis.storage.postgres.manager.pg_manager``，为平台 HTTP 层
-（API Depends / lifespan / middleware / bootstrap）提供 session factory
-与 engine 符号。harness 内核直接用 ``pg_manager``，不经此层。
+（API Depends）提供请求级 session。核心包和启动代码直接使用
+``pg_manager``，避免缓存会在关闭后失效的 engine/session factory 别名。
 """
 from __future__ import annotations
 
@@ -14,13 +14,6 @@ from noesis.storage.postgres.manager import (
     pg_manager,
     run_migrations,
 )
-
-pg_manager._ensure_engine()
-
-async_engine = pg_manager.async_engine
-AsyncSessionLocal = pg_manager.AsyncSessionLocal
-inspector = pg_manager.inspector
-
 
 async def get_db():
     """每一个请求处理完毕后会关闭当前连接，不同的请求使用不同的连接。"""
@@ -43,9 +36,6 @@ __all__ = [
     "ASYNC_SQLALCHEMY_DATABASE_URL",
     "SYNC_SQLALCHEMY_DATABASE_URL",
     "AsyncDatabaseInspector",
-    "async_engine",
-    "AsyncSessionLocal",
-    "inspector",
     "pg_manager",
     "run_migrations",
     "get_db",

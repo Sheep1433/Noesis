@@ -1,4 +1,4 @@
-"""Run GeneralQAAgent through the real Harness KB Tool chain."""
+"""Run GeneralQAAgent through the real core KB Tool chain."""
 
 from __future__ import annotations
 

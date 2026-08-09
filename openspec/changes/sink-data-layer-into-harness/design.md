@@ -1,6 +1,30 @@
 # Design — sink-data-layer-into-harness
 
-> 配套 `proposal.md`。本变更重新定义 harness 边界：harness 从「Agent 内核」扩展为「Agent 内核 + 全量数据层」，平台降为薄边缘。受影响能力：`agent-harness`、`knowledge-base`。
+> 配套 `proposal.md`。本变更采用 YuXi 式两层后端：`server` 是进程与 HTTP 边缘，`noesis` 是业务和基础设施主体。受影响能力：`agent-harness`、`knowledge-base`。
+
+## 0. 最终边界（2026-08-09 修订）
+
+实现过程中确认，继续把 `noesis` 约束成纯 Agent harness 会重新引入 service 注入和跨包转发。最终结构以本地 YuXi `backend/server` + `backend/package/yuxi` 为参照：
+
+```text
+backend/server/                         # FastAPI app、router、middleware、lifespan、进程装配
+backend/packages/noesis-core/src/noesis/ # 核心后端包（distribution: noesis-core）
+  agents/ services/ domain/ runtime/    # Agent 与业务运行主体
+  knowledge/ repositories/ storage/    # 知识与数据基础设施
+```
+
+物理打包采用 DeerFlow 的独立 workspace package，包内职责采用 YuXi 的完整核心后端。`harness` 不再作为目录名，避免把 service、domain、knowledge、storage 误读成纯 Agent 内核；Python import 保持 `noesis.*`，因此改名不改变运行时代码坐标。
+
+边界规则：
+
+- `server.*` 可以 import `noesis.*`；`noesis.*` 禁止 import `server.*`。
+- `noesis.factory` 与离线评测不要求启动 FastAPI app。
+- service、scheduler、渠道运行实现可以位于 `noesis`；其启动/关闭由 `server.main` lifespan 装配。
+- FastAPI router、middleware、ResponseUtil 和 HTTP 状态映射只位于 `server`。核心 service 可使用请求类型作为入口参数，但不得注册 router 或创建 app。
+- repository 是共享持久化查询的首选边界；单个 service 内、事务局部且没有第二调用方的 SQLAlchemy 查询不强制包装成浅 repository。
+- Knowledge 使用 `factory → manager → runtime`；manager 拥有客户端生命周期，service 负责用例编排，API 负责 HTTP 翻译。
+
+后文的 `noesis_server` 表示迁移前路径，仅用于记录来源；目标路径统一为 `server` 与 `noesis`。
 
 ## 1. 现状（已核对源码）
 
@@ -26,7 +50,7 @@
 - **Alembic 三件套**：`alembic.ini`（`script_location = alembic`，相对 backend 根）+ backend 根 `alembic/`（`env.py` + `versions/`）+ `migrations.py` 的 `run_migrations()` 函数。`env.py` 显式 import 4 个 `noesis_server.models.*` 与 engine 的 `SYNC_SQLALCHEMY_DATABASE_URL` / `Base`，迁移后全要改指向 `noesis.storage`。`migrations.py` 的 `_bootstrap_legacy_schema_stamp`（检测旧 `init_sql` 建表无 revision 时 stamp head）**必须保留**，否则已部署环境迁移断裂。
 - **`Depends(get_db)` 被用 72 处**（API 层）。`get_db` 内部 `async with AsyncSessionLocal() as current_db: yield`。迁移只改 `get_db` 内部委托 `pg_manager`，72 处 Depends 签名不动。
 - **lifespan**（`server.py`）：`init_database()` → `AsyncSessionLocal()`（recovery）→ `init_checkpointer()`；关闭 `close_checkpointer()` + run_manager。**现状未显式关 async_engine**——迁移时 `pg_manager.close()` 补上。
-- **langgraph checkpointer 已在 harness**：`packages/harness/noesis/config/checkpointer.py` 用 `psycopg.AsyncConnectionPool` + `AsyncPostgresSaver` 连**独立 checkpoint 库**（`get_config.get_checkpoint_config().postgres_database`，可能与业务库异名）。本变更**不合并** checkpointer 与 `pg_manager`：checkpointer 管 LangGraph checkpoint（psycopg 原生连接池），`pg_manager` 管 ORM 业务库（SQLAlchemy async engine），二者职责不同、库可能不同，并存。spec 须明确边界避免误以为重复。
+- **langgraph checkpointer 已在核心包**：`packages/noesis-core/src/noesis/config/checkpointer.py` 用 `psycopg.AsyncConnectionPool` + `AsyncPostgresSaver` 连**独立 checkpoint 库**（`get_config.get_checkpoint_config().postgres_database`，可能与业务库异名）。本变更**不合并** checkpointer 与 `pg_manager`：checkpointer 管 LangGraph checkpoint（psycopg 原生连接池），`pg_manager` 管 ORM 业务库（SQLAlchemy async engine），二者职责不同、库可能不同，并存。
 
 ### 1.3 全量 ORM（11 表，全部迁入）
 
@@ -48,7 +72,7 @@
 ## 2. 目标结构
 
 ```
-packages/harness/noesis/
+packages/noesis-core/src/noesis/
 ├── storage/
 │   ├── postgres/
 │   │   ├── manager.py          # PostgresManager 单例 pg_manager：engine + session factory + inspector + init/close；含 run_migrations + legacy stamp
@@ -113,24 +137,24 @@ pg_manager = PostgresManager()
 ## 3. 调用链（迁移后）
 
 ```
-noesis_server/api/*.py   (FastAPI router; Depends(get_db) 签名不变，get_db 内部委托 pg_manager)
+server/api/*.py   (FastAPI router; Depends(get_db) 签名不变，get_db 内部委托 pg_manager)
   └─ service(db) → XxxRepository(db) → await db.commit()      (事务语义不变)
       └─ session 来源: noesis.storage.postgres.manager.pg_manager
       └─ ORM: noesis.storage.postgres.models.*  (单一 Base)
-noesis_server/api/knowledge_base_api.py  →  noesis.knowledge.runtime.knowledge_base  (直调，catch domain exception → HTTP)
+server/api/knowledge_base_api.py  →  noesis.services.knowledge_base_service → noesis.knowledge.runtime.knowledge_base
 noesis.tools.kb_search_tool  →  from noesis.knowledge import ...   (直 import，无 deps 注入)
 noesis.*  ─imports─▶ noesis.config / noesis.runtime.logging / noesis.storage / noesis.repositories  (闭包内闭合)
-noesis_server.*  ─imports─▶ noesis.*   (平台单向消费 harness)
+server.*  ─imports─▶ noesis.*   (边缘单向消费核心包)
 noesis.config.checkpointer  (既有，独立 checkpoint 库，与 pg_manager 并存，不动)
 ```
 
 ## 4. 依赖与边界
 
-### 4.1 harness 反向依赖断言
+### 4.1 核心包反向依赖断言
 
-- `noesis.storage/**` / `noesis.repositories/**` / `noesis.knowledge/**` **SHALL NOT** import `noesis_server.*` / `services` / `domain` / `api`。
+- `noesis/**` **SHALL NOT** import `server.*`；`storage` / `repositories` / `knowledge` 不得依赖 `noesis.services`。
 - `noesis.storage` SHALL 只依赖 `noesis.config.env.DataBaseConfig` 与 SQLAlchemy/psycopg/alembic。
-- 平台 `noesis_server/**` 单向 import `noesis.*`，SHALL NOT 保留 engine/ORM/repository/Alembic 实现。
+- 边缘 `server/**` 单向 import `noesis.*`，SHALL NOT 保留独立 engine/ORM/repository/Alembic 实现。
 
 ### 4.2 deps 收敛
 
@@ -138,7 +162,7 @@ noesis.config.checkpointer  (既有，独立 checkpoint 库，与 pg_manager 并
 
 ### 4.3 HTTP/领域分界
 
-平台 API 边缘化：调 `knowledge_base.xxx()` 或 `repository.xxx(db)`，catch domain exception → HTTP（404/409/503/500），`ResponseUtil` 包装。`get_db()` 改委托 `pg_manager`，72 处 Depends 不动。平台 service 保留跨多 repo 的薄编排（如 `chat_service` 聚合消息+附件+run），在 `pg_manager` session context 内构造多 repo 共享事务，SHALL NOT 内联 ORM/engine。
+`server/api` 负责 HTTP 状态映射与 `ResponseUtil` 包装；`noesis.services` 负责用例编排。`get_db()` 委托 `pg_manager`。service 优先通过 repository 使用共享查询；局部事务查询可直接使用注入的 `AsyncSession`，不得创建第二套 engine。
 
 ### 4.4 checkpointer 边界
 

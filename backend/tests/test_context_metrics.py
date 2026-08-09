@@ -23,7 +23,7 @@ from noesis.agents.middlewares.observability.context_metrics_middleware import (
     resolve_run_id_for_request,
     resolve_session_id_for_request,
 )
-from noesis.agents.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
+from noesis.runtime.observability import ContextMetricsRegistry
 from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
 
 

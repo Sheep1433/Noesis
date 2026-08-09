@@ -130,11 +130,11 @@ SSE 注释保活不推进 sequence，也不落库。反向代理 read timeout �
 
 ## 9. 代码入口
 
-- Bridge：`backend/noesis_server/domain/chat/streaming/langgraph_sse.py`
-- Run lifecycle：`backend/noesis_server/domain/chat/runs/`
-- Run Service：`backend/noesis_server/services/run_service.py`
-- Run API：`backend/noesis_server/api/chat_api.py`
-- QA 编排：`backend/noesis_server/services/qa/`
+- Bridge：`backend/packages/noesis-core/src/noesis/domain/chat/streaming/langgraph_sse.py`
+- Run lifecycle：`backend/packages/noesis-core/src/noesis/domain/chat/runs/`
+- Run Service：`backend/packages/noesis-core/src/noesis/services/run_service.py`
+- Run API：`backend/server/api/chat_api.py`
+- QA 编排：`backend/packages/noesis-core/src/noesis/services/qa/`
 - 前端解析：`frontend/src/views/chat/useSSEStream.ts`
 - parts：`frontend/src/views/chat/messageParts.ts`
-- Tool state：`backend/noesis_server/domain/chat/tool_state.py`
+- Tool state：`backend/packages/noesis-core/src/noesis/domain/chat/tool_state.py`

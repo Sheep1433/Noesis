@@ -10,8 +10,9 @@
 ## 2. 分层
 
 ```text
-KnowledgeBase API (noesis_server/api/knowledge_base_api.py)
-  → knowledge_base_service (HTTP 编排)
+KnowledgeBase API (server/api/knowledge_base_api.py)
+  → noesis.services.knowledge_base_service
+      → noesis.knowledge.runtime.knowledge_base (KnowledgeBaseManager)
       → noesis.knowledge.parser / chunking / embedding
       → noesis.knowledge.retrieval.KbRetrievalService
       → noesis.knowledge.implementations.qdrant.QdrantService
@@ -19,14 +20,14 @@ KnowledgeBase API (noesis_server/api/knowledge_base_api.py)
           → noesis.storage.postgres.manager.pg_manager
           → noesis.storage.postgres.models.knowledge
 
-noesis.tools.kb_search_tool
+noesis.agents.tools.kb_search_tool
   → noesis.knowledge (直接 import：KbRetrievalService / normalize_query_execution_params)
-  → noesis.knowledge.implementations.qdrant (QdrantService / is_qdrant_connected)
+  → noesis.knowledge.runtime.knowledge_base
   → noesis.repositories.kb_collection_config_repository.load_query_params_sync
       → noesis.storage.postgres.manager.pg_manager (sync session)
 ```
 
-知识库引擎位于 harness 内的 `noesis.knowledge` 子系统；DB engine、ORM 与 Alembic 位于 `noesis.storage`；集合配置 repository 位于 `noesis.repositories`。`noesis` harness **SHALL NOT** import `noesis_server.*`；平台单向消费 harness。KB 检索、Qdrant 客户端、集合配置与 VLM 判定均由 harness 直接提供，不再经 `noesis.runtime.deps` 注入。`noesis_server/kb/` 仅作 re-export shim 保留，供尚未切换的消费者过渡。`noesis.config.checkpointer`（LangGraph checkpoint，独立库）与 `pg_manager`（业务库）并存。
+知识库引擎位于核心包的 `noesis.knowledge` 子系统；DB engine、ORM 与 Alembic 位于 `noesis.storage`；集合配置 repository 位于 `noesis.repositories`。`noesis` 禁止 import `server`，`server` 单向调用核心包。`KnowledgeBaseManager` 持有 Qdrant client，并由 FastAPI lifespan 和 eval bootstrap 管理生命周期。`noesis.config.checkpointer`（LangGraph checkpoint，独立库）与 `pg_manager`（业务库）并存。
 
 ## 3. 数据
 
@@ -71,7 +72,7 @@ upload
 - 单集合检索；
 - 文档分片与分片详情。
 
-API 只负责认证、参数和响应封装，业务编排位于 `noesis_server.services.knowledge_base_service`。
+API 只负责认证、参数和响应封装，业务编排位于 `noesis.services.knowledge_base_service`。
 
 ## 8. 评测
 
@@ -81,8 +82,8 @@ API 只负责认证、参数和响应封装，业务编排位于 `noesis_server.
 
 ## 9. 代码入口
 
-- API：`backend/noesis_server/api/knowledge_base_api.py`
-- Service：`backend/noesis_server/services/knowledge_base_service.py`
-- KB：`backend/noesis_server/kb/`
-- Harness tool：`backend/packages/harness/noesis/tools/kb_search_tool.py`
-- 配置：`backend/packages/harness/noesis/config/yaml_config.py`
+- API：`backend/server/api/knowledge_base_api.py`
+- Service：`backend/packages/noesis-core/src/noesis/services/knowledge_base_service.py`
+- Knowledge：`backend/packages/noesis-core/src/noesis/knowledge/`
+- Agent tool：`backend/packages/noesis-core/src/noesis/agents/tools/kb_search_tool.py`
+- 配置：`backend/packages/noesis-core/src/noesis/config/yaml_config.py`

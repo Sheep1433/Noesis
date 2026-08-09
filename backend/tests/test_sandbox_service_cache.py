@@ -1,4 +1,4 @@
-"""Harness sandbox lifecycle：session 缓存失效与重建。"""
+"""Core sandbox lifecycle：session 缓存失效与重建。"""
 
 from __future__ import annotations
 

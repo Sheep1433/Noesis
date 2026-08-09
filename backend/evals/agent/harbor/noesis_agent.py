@@ -1,4 +1,4 @@
-"""Harbor BaseAgent adapter backed directly by the Noesis Harness."""
+"""Harbor BaseAgent adapter backed directly by Noesis core."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def _resolve_llm(model_name: str | None):
 
 
 class NoesisHarborAgent(BaseAgent):
-    """Run the Noesis Harness through Harbor's official custom-agent API."""
+    """Run Noesis core through Harbor's official custom-agent API."""
 
     @staticmethod
     def name() -> str:

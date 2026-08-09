@@ -70,12 +70,16 @@ def test_rerank_uses_frozen_user_binding(mock_client_cls):
 @patch("noesis.knowledge.rerank.client.rerank_documents", side_effect=RuntimeError("api down"))
 @patch("noesis.knowledge.rerank.client.is_rerank_available", return_value=True)
 @patch("noesis.knowledge.retrieval.service.is_rerank_available", return_value=True)
-@patch("noesis.knowledge.retrieval.service._is_qdrant_connected", return_value=True)
+@patch.object(
+    __import__("noesis.knowledge.runtime", fromlist=["knowledge_base"]).knowledge_base,
+    "_connected",
+    True,
+)
 @patch.object(
     __import__("noesis.knowledge.retrieval.service", fromlist=["KbRetrievalService"]).KbRetrievalService,
     "_get_retrieval",
 )
-def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _conn, _svc_avail, _client_avail, _rerank):
+def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _svc_avail, _client_avail, _rerank):
     from langchain_core.documents import Document
 
     from noesis.knowledge.retrieval import KbRetrievalService
@@ -100,12 +104,16 @@ def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _conn, _svc_av
 
 @patch("noesis.knowledge.retrieval.service.rerank_documents")
 @patch("noesis.knowledge.retrieval.service.is_rerank_available", return_value=True)
-@patch("noesis.knowledge.retrieval.service._is_qdrant_connected", return_value=True)
+@patch.object(
+    __import__("noesis.knowledge.runtime", fromlist=["knowledge_base"]).knowledge_base,
+    "_connected",
+    True,
+)
 @patch.object(
     __import__("noesis.knowledge.retrieval.service", fromlist=["KbRetrievalService"]).KbRetrievalService,
     "_get_retrieval",
 )
-def test_retrieval_caps_rerank_input(mock_get_retrieval, _conn, _avail, mock_rerank):
+def test_retrieval_caps_rerank_input(mock_get_retrieval, _avail, mock_rerank):
     """rerank 只吃 rerank_top_k 条，控制 API documents 计费。"""
     from langchain_core.documents import Document
 

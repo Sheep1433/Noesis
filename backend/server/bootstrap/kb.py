@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 from noesis.config.env import QdrantConfig
-from noesis.knowledge.implementations.qdrant import QdrantService, is_qdrant_connected
+from noesis.knowledge.implementations.qdrant import QdrantService
+from noesis.knowledge.runtime import knowledge_base
 from noesis.runtime.logging import logger
 
 _VECTOR_DIM = 1024
@@ -29,11 +30,11 @@ def _ensure_collection(service: QdrantService, collection_name: str) -> bool:
 
 async def ensure_default_kb_collections() -> None:
     """确保默认知识库 Collection 存在：需求文档、历史测试用例。"""
-    if not is_qdrant_connected():
+    if not knowledge_base.connected:
         logger.warning("[KB Init] Qdrant 未连接，跳过默认知识库初始化")
         return
 
-    service = QdrantService()
+    service = knowledge_base.service()
     if not service.client:
         logger.warning("[KB Init] Qdrant 客户端不可用，跳过默认知识库初始化")
         return
@@ -45,10 +46,10 @@ async def ensure_default_kb_collections() -> None:
         _ensure_collection(service, collection_name)
 
     try:
-        from server.db import AsyncSessionLocal
         from noesis.services.kb_collection_config_service import KbCollectionConfigService
+        from noesis.storage.postgres.manager import pg_manager
 
-        async with AsyncSessionLocal() as db:
+        async with pg_manager.get_async_session_context() as db:
             await KbCollectionConfigService.ensure_defaults_for_qdrant_collections(db)
             await db.commit()
     except Exception as exc:

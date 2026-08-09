@@ -185,7 +185,7 @@ coverage 走 Python 确定性 scorer（`shared/coverage_scorer.py`）；borderli
 
 1. **BrowseComp** — 多步检索 + 短答案（`SuperAgent` / 深度研究能力）
 2. **Harbor + Terminal-Bench** — 终端任务执行（`harbor view` 看轨迹）
-3. **Agentic RAG** — 验证 GeneralQAAgent 经 Harness KB Tool/Port 检索并引用期望来源
+3. **Agentic RAG** — 验证 GeneralQAAgent 经 core KB Tool/Port 检索并引用期望来源
 
 ```
 evals/agent/
@@ -201,7 +201,7 @@ evals/agent/
     README.md
     results/<job-name>/
   rag/
-    __main__.py             # GeneralQAAgent + Harness KB Tool
+    __main__.py             # GeneralQAAgent + core KB Tool
     fixtures/sample.jsonl
 ```
 

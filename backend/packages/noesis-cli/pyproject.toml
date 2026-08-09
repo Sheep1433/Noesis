@@ -1,10 +1,10 @@
 [project]
 name = "noesis-cli"
 version = "0.1.0"
-description = "Noesis local harness CLI — direct agent call, no HTTP"
+description = "Noesis local Agent CLI — direct core call, no HTTP"
 requires-python = ">=3.11"
 dependencies = [
-    "noesis-harness",
+    "noesis-core",
     "typer>=0.12.0",
     "rich>=13.0.0",
 ]

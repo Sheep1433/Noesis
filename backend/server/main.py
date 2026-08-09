@@ -1,4 +1,4 @@
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI
 
 from server.exception_handlers import handle_exception
@@ -6,7 +6,7 @@ from server.middleware.csrf import CsrfMiddleware
 from noesis.config.env import AppConfig, StreamConfig
 from noesis.config.checkpointer import close_checkpointer, init_checkpointer
 from server.db import init_database
-from server.db import async_engine
+from noesis.storage.postgres.manager import pg_manager
 from noesis.runtime.logging import logger
 from server.langfuse import sync_langfuse_env_from_app_config
 from server.api import (
@@ -21,9 +21,9 @@ from server.api import (
     user_settings_router,
     settings_router,
 )
-from noesis.knowledge.implementations.qdrant import init_qdrant_client, close_qdrant_client
+from noesis.knowledge.runtime import init_knowledge_base, close_knowledge_base
 from noesis.agents.backends.sandbox_lifecycle import shutdown_sandboxes
-from server.wiring import wire_harness_platform_deps
+from server.wiring import wire_runtime_observability
 from noesis.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,
     stop_scheduled_task_scheduler,
@@ -32,7 +32,6 @@ from noesis.services.memory_dream_scheduler import start_memory_dream_scheduler,
 from noesis.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
 from noesis.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
 from server.bootstrap.kb import ensure_default_kb_collections
-from server.db import AsyncSessionLocal
 from noesis.services.run_recovery_service import RunRecoveryService
 from noesis.services.run_service import run_manager
 
@@ -41,33 +40,35 @@ from noesis.services.run_service import run_manager
 async def lifespan(app: FastAPI):
     logger.info(f'⏰️ {AppConfig.app_name}开始启动')
     sync_langfuse_env_from_app_config()
-    wire_harness_platform_deps()
-    await init_database()
-    async with AsyncSessionLocal() as recovery_db:
-        await RunRecoveryService.recover_orphaned_runs(recovery_db)
-    await init_checkpointer()
-    # 初始化 Qdrant 连接
-    await init_qdrant_client()
-    await ensure_default_kb_collections()
-    start_scheduled_task_scheduler()
-    start_memory_dream_scheduler()
-    start_telegram_runtime()
-    start_feishu_runtime()
-    logger.info(f'🚀 {AppConfig.app_name}启动成功')
-    yield
-    await stop_feishu_runtime()
-    await stop_telegram_runtime()
-    await stop_memory_dream_scheduler()
-    await stop_scheduled_task_scheduler()
-    await run_manager.shutdown(drain_seconds=StreamConfig.run_shutdown_drain_seconds)
-    # 关闭 Qdrant 连接
-    await close_qdrant_client()
-    await close_checkpointer()
-    await shutdown_sandboxes()
-    # 关闭数据库连接池（等待现有连接完成，避免 CancelledError）
-    logger.info("正在关闭数据库连接池...")
-    await async_engine.dispose()
-    logger.info("数据库连接池已关闭")
+    wire_runtime_observability()
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(pg_manager.close)
+        await init_database()
+        async with pg_manager.get_async_session_context() as recovery_db:
+            await RunRecoveryService.recover_orphaned_runs(recovery_db)
+
+        resources.push_async_callback(shutdown_sandboxes)
+        await init_checkpointer()
+        resources.push_async_callback(close_checkpointer)
+        await init_knowledge_base()
+        resources.push_async_callback(close_knowledge_base)
+        resources.push_async_callback(
+            run_manager.shutdown,
+            drain_seconds=StreamConfig.run_shutdown_drain_seconds,
+        )
+
+        await ensure_default_kb_collections()
+        start_scheduled_task_scheduler()
+        resources.push_async_callback(stop_scheduled_task_scheduler)
+        start_memory_dream_scheduler()
+        resources.push_async_callback(stop_memory_dream_scheduler)
+        start_telegram_runtime()
+        resources.push_async_callback(stop_telegram_runtime)
+        start_feishu_runtime()
+        resources.push_async_callback(stop_feishu_runtime)
+
+        logger.info(f'🚀 {AppConfig.app_name}启动成功')
+        yield
 
 
 app = FastAPI(

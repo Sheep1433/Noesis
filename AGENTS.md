@@ -35,12 +35,13 @@ Noesis/
 | 容器部署 | `deploy/docker-compose.yml`、`deploy/backend/Dockerfile`、`deploy/frontend/Dockerfile` |
 | 前端应用 | `frontend/src/main.ts`、`frontend/src/views/chat.vue` |
 | 前端 SSE | `frontend/src/views/chat/useSSEStream.ts` |
-| 后端启动 | `backend/app.py`、`backend/noesis_server/server.py` |
-| 问答编排 | `backend/noesis_server/services/qa/` |
-| Agent 工厂 | `backend/packages/harness/noesis/factory.py` |
-| 场景入口 | `backend/packages/harness/noesis/agents/`（Super / QA / 故障 / MCP / Case Generate） |
-| SSE 桥接 | `backend/noesis_server/domain/chat/streaming/langgraph_sse.py` |
-| 配置 | `backend/packages/harness/noesis/config/env.py` + `backend/config.yaml` |
+| 后端启动 | `backend/app.py`、`backend/server/main.py` |
+| 后端核心包 | `backend/packages/noesis-core/src/noesis/`（distribution：`noesis-core`） |
+| 问答编排 | `backend/packages/noesis-core/src/noesis/services/qa/` |
+| Agent 工厂 | `backend/packages/noesis-core/src/noesis/factory.py` |
+| 场景入口 | `backend/packages/noesis-core/src/noesis/agents/`（Super / QA / 故障 / MCP / Case Generate） |
+| SSE 桥接 | `backend/packages/noesis-core/src/noesis/domain/chat/streaming/langgraph_sse.py` |
+| 配置 | `backend/packages/noesis-core/src/noesis/config/env.py` + `backend/config.yaml` |
 
 ## 跨端技术要点
 

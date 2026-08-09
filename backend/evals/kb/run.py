@@ -82,15 +82,15 @@ def compute_recall_hit(
 async def _run_eval(args: argparse.Namespace) -> int:
     _ensure_path()
 
-    from server.db import AsyncSessionLocal
     from server.db import init_database
     from noesis.knowledge.chunking import normalize_query_execution_params
     from noesis.knowledge.retrieval import KbRetrievalService
     from noesis.services.kb_collection_config_service import KbCollectionConfigService
-    from noesis.knowledge.implementations.qdrant import QdrantService, init_qdrant_client, is_qdrant_connected
+    from noesis.knowledge.runtime import init_knowledge_base, knowledge_base
+    from noesis.storage.postgres.manager import pg_manager
 
     await init_database()
-    if not await init_qdrant_client():
+    if not await init_knowledge_base():
         print("Qdrant 未连接，评测终止")
         return 1
 
@@ -106,14 +106,14 @@ async def _run_eval(args: argparse.Namespace) -> int:
         print("无有效评测样本")
         return 1
 
-    service = QdrantService()
+    service = knowledge_base.service()
     col = service.get_collection(args.collection)
     if not col:
         print(f"Collection 不存在: {args.collection}")
         return 1
     vd = int(col.get("vector_dimension") or 1024)
 
-    async with AsyncSessionLocal() as db:
+    async with pg_manager.get_async_session_context() as db:
         cfg = await KbCollectionConfigService.get_config(db, args.collection)
     collection_query = (cfg or {}).get("query_params")
 
@@ -172,7 +172,7 @@ async def _run_eval(args: argparse.Namespace) -> int:
         "recall_at_k": round(avg_recall, 4),
         "hit_at_k": round(avg_hit, 4),
         "failures": failures[:20],
-        "qdrant_connected": is_qdrant_connected(),
+        "qdrant_connected": knowledge_base.connected,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if recalls else 1

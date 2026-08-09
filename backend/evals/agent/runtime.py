@@ -1,4 +1,4 @@
-"""Shared event collection and result schema for Harness-based Agent evaluations."""
+"""Shared event collection and result schema for core Agent evaluations."""
 
 from __future__ import annotations
 

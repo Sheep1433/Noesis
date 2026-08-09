@@ -12,6 +12,6 @@ uv pip install \
   'harbor==0.15.0' \
   'litellm==1.90.0' \
   'psycopg[binary,pool]>=3.2.0' \
-  --editable "${BACKEND_ROOT}/packages/harness"
+  --editable "${BACKEND_ROOT}/packages/noesis-core"
 
 echo "Harbor 评测环境已创建：${VENV_DIR}"

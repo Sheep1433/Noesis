@@ -2,7 +2,7 @@
 
 Independent of server: extracts reasoning/text from LangChain chunks
 directly, aligned with server/domain/chat/streaming/reasoning.py but
-without importing it (CLI only depends on noesis-harness).
+without importing it (CLI only depends on noesis-core).
 """
 
 from __future__ import annotations

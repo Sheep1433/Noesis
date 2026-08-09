@@ -9,7 +9,7 @@ import uuid
 import pytest
 from sqlalchemy import delete, select
 
-from server.db import AsyncSessionLocal
+from noesis.storage.postgres.manager import pg_manager
 from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
 from noesis.services.chat_service import ChatService
 
@@ -19,7 +19,7 @@ from noesis.services.chat_service import ChatService
 async def test_concurrent_writers_allocate_unique_contiguous_sequences() -> None:
     session_id = str(uuid.uuid4())
     now = int(time.time() * 1000)
-    async with AsyncSessionLocal() as db:
+    async with pg_manager.get_async_session_context() as db:
         db.add(TChatSession(
             id=session_id,
             user_id="1",
@@ -31,7 +31,7 @@ async def test_concurrent_writers_allocate_unique_contiguous_sequences() -> None
         await db.commit()
 
     async def write(content: str) -> None:
-        async with AsyncSessionLocal() as db:
+        async with pg_manager.get_async_session_context() as db:
             await ChatService.save_message(
                 session_id=session_id,
                 user_id="1",
@@ -42,7 +42,7 @@ async def test_concurrent_writers_allocate_unique_contiguous_sequences() -> None
 
     try:
         await asyncio.gather(write("first"), write("second"))
-        async with AsyncSessionLocal() as db:
+        async with pg_manager.get_async_session_context() as db:
             rows = (
                 await db.execute(
                     select(TChatMessage)
@@ -52,7 +52,7 @@ async def test_concurrent_writers_allocate_unique_contiguous_sequences() -> None
             ).scalars().all()
             assert [row.message_sequence for row in rows] == [1, 2]
     finally:
-        async with AsyncSessionLocal() as db:
+        async with pg_manager.get_async_session_context() as db:
             await db.execute(delete(TChatMessage).where(TChatMessage.session_id == session_id))
             await db.execute(delete(TChatSession).where(TChatSession.id == session_id))
             await db.commit()

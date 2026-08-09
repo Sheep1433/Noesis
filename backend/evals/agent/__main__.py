@@ -11,7 +11,7 @@ import sys
 
 MODULES = (
     ("evals.agent.browsecomp", "BrowseComp（openai/simple-evals 官方流程）"),
-    ("evals.agent.rag", "Agentic RAG（GeneralQAAgent + Harness KB Tool）"),
+    ("evals.agent.rag", "Agentic RAG（GeneralQAAgent + core KB Tool）"),
 )
 
 SHELL_MODULES = (

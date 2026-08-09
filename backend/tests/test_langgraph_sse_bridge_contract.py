@@ -185,7 +185,7 @@ def test_message_start_with_langfuse_hint() -> None:
 
 
 def test_context_update_emitted_with_usage_update() -> None:
-    from noesis.agents.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
+    from noesis.runtime.observability import ContextMetricsRegistry
 
     bridge = LangGraphSseBridge("sess-usage-ctx")
     builder = AssistantMessageBuilder(session_id="sess-usage-ctx", message_id=bridge.assistant_message_id)
@@ -213,7 +213,7 @@ def test_context_update_emitted_with_usage_update() -> None:
 
 
 def test_context_update_event_shape() -> None:
-    from noesis.agents.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
+    from noesis.runtime.observability import ContextMetricsRegistry
 
     bridge = LangGraphSseBridge("sess-ctx")
     builder = AssistantMessageBuilder(session_id="sess-ctx", message_id=bridge.assistant_message_id)
@@ -1411,7 +1411,7 @@ def test_sse_payloads_preserve_legacy_fields_while_adding_new_ones() -> None:
 
 def test_context_update_carries_breakdown_and_sources() -> None:
     """context-update 含 breakdown/sources/estimated/caller，同时保留 current_tokens 等。"""
-    from noesis.agents.middlewares.observability.context_metrics_registry import ContextMetricsRegistry
+    from noesis.runtime.observability import ContextMetricsRegistry
 
     bridge = LangGraphSseBridge("sess-ctx-fields")
     builder = AssistantMessageBuilder(session_id="sess-ctx-fields", message_id=bridge.assistant_message_id)
@@ -1612,4 +1612,3 @@ def test_steps_bounded_does_not_grow_unbounded() -> None:
     # bridge 处理不报错；collector steps 不超 MAX_STEPS
     assert len(bridge._usage_collector.steps) == 5  # noqa: SLF001
     assert bridge._usage_collector.summary()["cumulative"]["input_tokens"] == 5  # noqa: SLF001
-

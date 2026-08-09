@@ -46,9 +46,9 @@ def _resolve_item(context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _ensure_qdrant() -> None:
-    from noesis.knowledge.implementations.qdrant import init_qdrant_client
+    from noesis.knowledge.runtime import init_knowledge_base
 
-    if not asyncio.run(init_qdrant_client()):
+    if not asyncio.run(init_knowledge_base()):
         raise RuntimeError(
             "Qdrant 连接失败：RAG 评测需要向量库。"
             "请确认 Qdrant 已启动；可先运行 uv run python -m evals.case.rag.ingest"
