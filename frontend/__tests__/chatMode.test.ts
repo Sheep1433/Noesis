@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isChatRouteName } from '../src/config/navigation'
+import { isChatRouteName, shouldShowMobileBottomNav } from '../src/config/navigation'
 import {
   CHAT_MODE_OPTIONS,
   chatModeOption,
@@ -37,5 +37,20 @@ describe('immersive mobile chat routes', () => {
 
   it.each(['KnowledgeBase', 'Extensions', 'TestCaseGenerate', 'Settings'])('excludes %s', (routeName) => {
     expect(isChatRouteName(routeName)).toBe(false)
+  })
+})
+
+describe('mobile bottom navigation', () => {
+  it('stays hidden on the settings page', () => {
+    expect(shouldShowMobileBottomNav('Settings', true)).toBe(false)
+  })
+
+  it('preserves navigation on other mobile product pages', () => {
+    expect(shouldShowMobileBottomNav('KnowledgeBase', true)).toBe(true)
+    expect(shouldShowMobileBottomNav('Extensions', true)).toBe(true)
+  })
+
+  it('never shows mobile navigation on desktop', () => {
+    expect(shouldShowMobileBottomNav('Settings', false)).toBe(false)
   })
 })

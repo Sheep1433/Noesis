@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { isChatRouteName } from '@/config/navigation'
+import { isChatRouteName, shouldShowMobileBottomNav } from '@/config/navigation'
 
 interface Props {
   loading?: boolean
@@ -12,6 +12,8 @@ const appStore = useAppStore()
 const { isMobile } = useBreakpoint()
 const route = useRoute()
 const isMobileChat = computed(() => isMobile.value && isChatRouteName(route.name))
+const showMobileBottomNav = computed(() => shouldShowMobileBottomNav(route.name, isMobile.value))
+const isMobileWithoutBottomNav = computed(() => isMobile.value && !showMobileBottomNav.value)
 
 appStore.areaLoading = true
 setTimeout(() => {
@@ -61,6 +63,7 @@ setTimeout(() => {
             class="app-shell__main"
             :class="{
               'app-shell__main--mobile': isMobile,
+              'app-shell__main--mobile-no-nav': isMobileWithoutBottomNav,
               'app-shell__main--mobile-chat': isMobileChat,
             }"
             :style="{ background: 'var(--noesis-layout-shell-bg)' }"
@@ -82,7 +85,7 @@ setTimeout(() => {
     </template>
     <template #bottom>
       <NavigationNavFooter />
-      <NavigationMobileBottomNav v-if="isMobile && !isMobileChat" />
+      <NavigationMobileBottomNav v-if="showMobileBottomNav" />
     </template>
   </LayoutSlotFrame>
 </template>
@@ -115,6 +118,10 @@ setTimeout(() => {
 
 .app-shell__content--mobile {
   border-radius: var(--noesis-shell-radius-mobile);
+}
+
+.app-shell__main--mobile-no-nav {
+  padding-bottom: calc(var(--noesis-safe-area-bottom) + var(--noesis-shell-padding-mobile));
 }
 
 .app-shell__main--mobile-chat {
