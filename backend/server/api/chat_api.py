@@ -39,7 +39,7 @@ from noesis.schemas.session_context_vo import (
 )
 from noesis.services.session_context_service import SessionContextService
 from noesis.services.chat_service import ChatService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.qa import QaService
 from noesis.services.run_service import RunService, run_manager
 from server.response import ResponseUtil
@@ -161,7 +161,7 @@ def _message_to_response(message) -> ChatMessageResponse:
 @chat_router.get("/sessions", summary="获取会话列表")
 async def get_sessions(
     status: Optional[str] = None,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -184,7 +184,7 @@ async def get_sessions(
 @chat_router.post("/sessions", summary="创建会话")
 async def create_session(
     request: CreateSessionRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -220,7 +220,7 @@ class BatchDeleteRequest(BaseModel):
 @chat_router.post("/sessions/batch-delete", summary="批量删除会话")
 async def batch_delete_sessions(
     request: BatchDeleteRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -238,7 +238,7 @@ async def batch_delete_sessions(
 async def ensure_session(
     session_id: str,
     request: EnsureSessionRequest = Body(default=EnsureSessionRequest()),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -278,7 +278,7 @@ async def ensure_session(
 @chat_router.get("/sessions/{session_id}", summary="获取会话详情")
 async def get_session(
     session_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -302,7 +302,7 @@ async def get_session(
 @chat_router.delete("/sessions/{session_id}", summary="删除会话")
 async def delete_session(
     session_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -321,7 +321,7 @@ async def delete_session(
 async def update_session_title(
     session_id: str,
     request: UpdateSessionTitleRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -344,7 +344,7 @@ async def update_session_title(
 async def update_session_meta(
     session_id: str,
     request: UpdateSessionMetaRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -367,7 +367,7 @@ async def update_session_meta(
 @chat_router.get("/sessions/{session_id}/children", summary="获取子会话列表")
 async def get_child_sessions(
     session_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -403,7 +403,7 @@ async def get_session_messages(
     session_id: str,
     limit: int = 100,
     before_id: str = None,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -438,7 +438,7 @@ async def get_session_messages(
 )
 async def get_session_context(
     session_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -461,7 +461,7 @@ async def get_session_context(
 async def get_session_workspace_file(
     session_id: str,
     path: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -489,7 +489,7 @@ async def get_session_workspace_file(
 async def get_session_workspace_archive(
     session_id: str,
     path: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -522,7 +522,7 @@ async def get_session_workspace_archive(
 async def put_session_workspace_file(
     session_id: str,
     request: WorkspaceFileWriteRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -548,7 +548,7 @@ async def put_session_workspace_file(
 async def send_message(
     session_id: str,
     request: SendMessageRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -631,7 +631,7 @@ async def _event_generator(generator, session_id: str):
 @chat_router.post("/runs", summary="创建 Agent 任务")
 async def create_run(
     request: CreateRunRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     run = await RunService.create(request, current_user, db)
@@ -653,7 +653,7 @@ async def create_run(
 @chat_router.get("/runs/{run_id}", summary="获取 Agent 任务状态")
 async def get_run(
     run_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     snapshot = await RunService.get(run_id, str(current_user.user_id), db)
@@ -664,7 +664,7 @@ async def get_run(
 async def stream_run(
     run_id: str,
     after_sequence: int = 0,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     snapshot = await RunService.get(run_id, str(current_user.user_id), db)
@@ -733,7 +733,7 @@ async def stream_run(
 @chat_router.post("/runs/{run_id}/stop", summary="停止 Agent 任务")
 async def stop_run(
     run_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
@@ -747,7 +747,7 @@ async def stop_run(
 async def resume_test_case_run(
     run_id: str,
     request: TestCaseResumeRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not request.selected_point_names:
@@ -761,10 +761,10 @@ async def resume_hitl_run(
     run_id: str,
     request: HitlResumeRequest,
     http_request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(http_request)
+    await require_csrf(http_request)
     snapshot = await RunService.resume_hitl(run_id, request, current_user, db)
     return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
 
@@ -773,7 +773,7 @@ async def resume_hitl_run(
 async def export_test_case_markdown(
     session_id: str,
     request: TestCaseExportRequest = Body(default_factory=TestCaseExportRequest),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -810,7 +810,7 @@ async def export_test_case_markdown(
 @chat_router.get("/messages/{message_id}", summary="获取消息详情")
 async def get_message(
     message_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """

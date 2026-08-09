@@ -16,7 +16,7 @@ from noesis.schemas.skill_vo import (
 )
 from noesis.services.skill_fs_service import SkillFsService, max_zip_bytes
 from noesis.services.skill_market_service import SkillMarketService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user
 from server.response import ResponseUtil
 
 skill_router = APIRouter(prefix='/api/skills', tags=['Skill 模块'])
@@ -24,7 +24,7 @@ skill_router = APIRouter(prefix='/api/skills', tags=['Skill 模块'])
 
 @skill_router.get('/fs/tree')
 async def get_skills_fs_tree(
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """列出当前用户可用的 Skills（平台预置 + 个人上传）。"""
     return ResponseUtil.success(
@@ -36,7 +36,7 @@ async def get_skills_fs_tree(
 async def get_skills_fs_file(
     path: str,
     source: SkillSource = 'platform',
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     读取 Skills 目录下文本文件；source=platform|user
@@ -60,7 +60,7 @@ async def get_skills_fs_file(
 @skill_router.post('/fs/upload-zip')
 async def upload_skills_fs_zip(
     file: UploadFile = File(...),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """上传个人技能：将 ZIP 解压到当前登录用户的私有目录。"""
     zip_path = None
@@ -85,7 +85,7 @@ async def upload_skills_fs_zip(
 @skill_router.delete('/fs/package')
 async def delete_user_skill_package(
     path: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """删除当前用户上传的顶层技能目录。"""
     ok, msg = SkillFsService.delete_user_skill_package(path, current_user.user_id)
@@ -98,7 +98,7 @@ async def delete_user_skill_package(
 async def download_skill_package_archive(
     path: str,
     source: SkillSource = 'user',
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """下载顶层技能目录 ZIP（平台预置只读，个人技能可备份）。"""
     ok, err, data, filename = SkillFsService.build_package_zip(
@@ -123,7 +123,7 @@ async def market_browse(
     ),
     limit: int = Query(20, ge=1, le=50, description='每页条数'),
     offset: int = Query(0, ge=0, description='偏移量'),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """skills.sh Leaderboard（/ 或 /trending）。"""
     return ResponseUtil.success(
@@ -138,7 +138,7 @@ async def market_search(
     q: str = Query(..., min_length=2, description='搜索词'),
     limit: int = Query(20, ge=1, le=50, description='每页条数'),
     offset: int = Query(0, ge=0, description='偏移量'),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """搜索 skills.sh 目录。"""
     return ResponseUtil.success(
@@ -152,7 +152,7 @@ async def market_search(
 async def market_detail(
     source: str = Query(..., description='GitHub owner/repo'),
     skill_id: str = Query(..., description='技能包名'),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """拉取技能详情（含 SKILL.md）。"""
     return ResponseUtil.success(
@@ -163,7 +163,7 @@ async def market_detail(
 @skill_router.post('/market/install')
 async def market_install(
     body: SkillMarketInstallRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """从 skills.sh / GitHub 安装到个人 skills。"""
     msg = SkillMarketService.install(

@@ -11,7 +11,7 @@ from noesis.schemas.mcp_vo import (
     McpServerUpsertRequest,
 )
 from noesis.services.mcp_service import McpService, clear_mcp_probe_cache
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user, require_csrf
 from server.db import get_db
 
 from noesis.services.settings_service import SettingsService
@@ -25,7 +25,7 @@ async def list_mcp_servers(
         "all",
         description="all=平台+用户合并（Composer）；user=仅用户 mcp.json",
     ),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     if scope not in ("all", "user"):
         raise HTTPException(status_code=400, detail="scope 须为 all 或 user")
@@ -50,7 +50,7 @@ async def list_mcp_server_status(
         "user",
         description="user=仅用户配置（管理页）；all=平台+用户合并",
     ),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     if scope not in ("all", "user"):
         raise HTTPException(status_code=400, detail="scope 须为 all 或 user")
@@ -66,7 +66,7 @@ async def list_mcp_server_status(
 
 @mcp_router.get("/config")
 async def get_mcp_config(
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """读取当前用户 mcp.json（不存在则 seed 推荐模板）。"""
     cfg = McpService.get_user_config_file(current_user.user_id)
@@ -77,11 +77,11 @@ async def get_mcp_config(
 async def put_mcp_config(
     body: McpConfigUpdateRequest,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """整文件保存用户 mcp.json（仅允许 HTTP/SSE transport）。"""
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         cfg = McpService.save_user_config_file(current_user.user_id, body.content)
     except ValueError as e:
@@ -96,10 +96,10 @@ async def upsert_mcp_server(
     server_id: str,
     body: McpServerUpsertRequest,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         item = McpService.upsert_user_server(current_user.user_id, server_id, body)
     except ValueError as e:
@@ -116,10 +116,10 @@ async def upsert_mcp_server(
 async def delete_mcp_server(
     server_id: str,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         McpService.delete_user_server(current_user.user_id, server_id)
     except ValueError as e:
@@ -135,9 +135,9 @@ async def delete_mcp_server(
 async def probe_mcp_server(
     server_id: str,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         result = await McpService.probe_server(current_user.user_id, server_id)
     except ValueError as e:
@@ -146,8 +146,8 @@ async def probe_mcp_server(
 
 
 @mcp_router.post("/servers/{server_id}/enable")
-async def enable_mcp_server(server_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
-    await UserService.require_csrf(request)
+async def enable_mcp_server(server_id: str, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await require_csrf(request)
     try:
         item = McpService.set_user_server_enabled(current_user.user_id, server_id, True)
     except KeyError as exc:
@@ -158,8 +158,8 @@ async def enable_mcp_server(server_id: str, request: Request, current_user: Curr
 
 
 @mcp_router.post("/servers/{server_id}/disable")
-async def disable_mcp_server(server_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
-    await UserService.require_csrf(request)
+async def disable_mcp_server(server_id: str, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await require_csrf(request)
     try:
         item = McpService.set_user_server_enabled(current_user.user_id, server_id, False)
     except KeyError as exc:
@@ -170,7 +170,7 @@ async def disable_mcp_server(server_id: str, request: Request, current_user: Cur
 
 
 @mcp_router.get("/servers/{server_id}/tools")
-async def list_mcp_server_tools(server_id: str, refresh: bool = Query(False), current_user: CurrentUser = Depends(UserService.get_current_user)):
+async def list_mcp_server_tools(server_id: str, refresh: bool = Query(False), current_user: CurrentUser = Depends(get_current_user)):
     try:
         if refresh:
             clear_mcp_probe_cache()

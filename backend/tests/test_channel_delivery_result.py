@@ -65,7 +65,7 @@ async def test_headless_automation_run_completes_without_browser_subscription(mo
     monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", lambda: _DbContext(db))
     monkeypatch.setattr(
         channel_service.UserService,
-        "_user_from_id",
+        "get_user_by_id",
         AsyncMock(return_value=SimpleNamespace(user_id="user-1")),
     )
     monkeypatch.setattr(channel_service.ChatService, "get_or_create_session", AsyncMock())

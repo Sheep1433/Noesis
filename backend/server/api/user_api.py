@@ -8,7 +8,7 @@ from server.db import get_db
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.qa_vo import QueryUserRecordRequest
 from noesis.services.chat_service import ChatService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user
 from server.api.auth_cookie import clear_session_cookie
 from server.response import ResponseUtil
 
@@ -26,7 +26,7 @@ async def logout(request: Request):
 @user_router.post("/query_user_record", summary="查询用户记录")
 async def query_user_qa_record(
     request: QueryUserRecordRequest,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """

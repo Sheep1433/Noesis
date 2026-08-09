@@ -12,7 +12,7 @@ from noesis.errors.exceptions import ServiceWarning
 from noesis.schemas.chat_attachment_vo import AttachmentListResponse
 from noesis.schemas.login_vo import CurrentUser
 from noesis.services.chat_attachment_service import ChatAttachmentService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user
 from server.response import ResponseUtil
 
 chat_attachment_router = APIRouter(prefix="/api/chat")
@@ -25,7 +25,7 @@ chat_attachment_router = APIRouter(prefix="/api/chat")
 async def upload_attachment(
     session_id: str,
     file: UploadFile = File(...),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     content = await file.read()
@@ -62,7 +62,7 @@ async def upload_attachment(
 )
 async def list_attachments(
     session_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -89,7 +89,7 @@ async def list_attachments(
 async def delete_attachment(
     session_id: str,
     attachment_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -113,7 +113,7 @@ async def delete_attachment(
 async def get_artifact(
     session_id: str,
     relative_path: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:

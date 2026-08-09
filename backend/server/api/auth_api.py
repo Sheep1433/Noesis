@@ -11,7 +11,7 @@ from server.api.auth_cookie import attach_session_cookie, clear_session_cookie
 from noesis.errors.exceptions import AuthException
 from noesis.schemas.login_vo import CurrentUser, UserLogin, UserRegistrationRequest
 from noesis.services.login_service import LoginService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user, require_csrf
 
 auth_router = APIRouter(prefix="/api/auth")
 
@@ -58,7 +58,7 @@ async def register(request: Request, body: UserRegistrationRequest, db: AsyncSes
 
 
 @auth_router.get("/session")
-async def current_session(request: Request, current: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def current_session(request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     session = request.state.auth_session
     csrf_token = await SessionService.rotate_csrf(db, session)
     response = ResponseUtil.success(data=_payload(current, session, csrf_token))
@@ -67,8 +67,8 @@ async def current_session(request: Request, current: CurrentUser = Depends(UserS
 
 
 @auth_router.post("/logout")
-async def logout(request: Request, current: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
-    await UserService.require_csrf(request)
+async def logout(request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await require_csrf(request)
     await SessionService.revoke(db, request.state.auth_session)
     response = ResponseUtil.success(msg="已退出登录")
     clear_session_cookie(request, response)
@@ -76,8 +76,8 @@ async def logout(request: Request, current: CurrentUser = Depends(UserService.ge
 
 
 @auth_router.post("/logout-all")
-async def logout_all(request: Request, current: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
-    await UserService.require_csrf(request)
+async def logout_all(request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await require_csrf(request)
     await SessionService.revoke_all(db, current.user_id)
     response = ResponseUtil.success(msg="已退出全部设备")
     clear_session_cookie(request, response)
@@ -85,7 +85,7 @@ async def logout_all(request: Request, current: CurrentUser = Depends(UserServic
 
 
 @auth_router.get("/sessions")
-async def list_sessions(request: Request, current: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_sessions(request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     sessions = await SessionService.list_active(db, current.user_id)
     return ResponseUtil.success(data={"sessions": [
         {"id": item.id, "created_at": item.created_at, "last_seen_at": item.last_seen_at,
@@ -97,8 +97,8 @@ async def list_sessions(request: Request, current: CurrentUser = Depends(UserSer
 
 
 @auth_router.delete("/sessions/{target_session_id}")
-async def revoke_session(target_session_id: str, request: Request, current: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
-    await UserService.require_csrf(request)
+async def revoke_session(target_session_id: str, request: Request, current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await require_csrf(request)
     if not await SessionService.revoke_by_id(db, current.user_id, target_session_id):
         return ResponseUtil.not_found(msg="会话不存在")
     response = ResponseUtil.success(msg="会话已撤销")

@@ -17,7 +17,7 @@ from noesis.services.memory_dream_service import MemoryDreamService
 from noesis.services.scheduled_task_service import ScheduledTaskService
 from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
 from noesis.services.user_memory_service import UserMemoryService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.settings_service import SettingsService
 
 user_settings_router = APIRouter(prefix="/api/user", tags=["用户设置"])
@@ -76,7 +76,7 @@ class ChannelUpsertBody(BaseModel):
 @user_settings_router.get("/memory/{file_name}")
 async def get_user_memory_file(
     file_name: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
         data = UserMemoryService.read_file(current_user.user_id, file_name)
@@ -90,9 +90,9 @@ async def put_user_memory_file(
     file_name: str,
     body: MemoryWriteBody,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         data = UserMemoryService.write_file(current_user.user_id, file_name, body.content)
     except ValueError as e:
@@ -104,10 +104,10 @@ async def put_user_memory_file(
 async def run_memory_dream(
     body: MemoryDreamBody,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         data = await MemoryDreamService.run(db, user_id=current_user.user_id, target_date=body.date, timezone_name=body.timezone)
     except ValueError as exc:
@@ -116,7 +116,7 @@ async def run_memory_dream(
 
 
 @user_settings_router.get("/memory/daily/list")
-async def list_daily_memory(current_user: CurrentUser = Depends(UserService.get_current_user)):
+async def list_daily_memory(current_user: CurrentUser = Depends(get_current_user)):
     return ResponseUtil.success(data={"items": UserMemoryService.list_daily(current_user.user_id)})
 
 
@@ -124,7 +124,7 @@ async def list_daily_memory(current_user: CurrentUser = Depends(UserService.get_
 async def search_daily_memory(
     q: str = Query(..., min_length=1, max_length=100),
     limit: int = Query(20, ge=1, le=50),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
         items = UserMemoryService.search_daily(current_user.user_id, q, limit)
@@ -140,7 +140,7 @@ async def search_memory_entries(
     date_to: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     limit: int = Query(10, ge=1, le=50),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
         items = UserMemoryService.search_entries(current_user.user_id, q, date_from=date_from, date_to=date_to, category=category, limit=limit)
@@ -154,7 +154,7 @@ async def get_memory_source(
     session_id: str = Query(...),
     message_id: str = Query(...),
     context_messages: int = Query(1, ge=0, le=3),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -167,7 +167,7 @@ async def get_memory_source(
 @user_settings_router.get("/context/preview")
 async def preview_agent_context(
     profile: str = Query("super_agent"),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     from noesis.agents.context import ContextResolver
     try:
@@ -184,7 +184,7 @@ async def preview_agent_context(
 async def preview_scheduled_task(
     cron_expr: str = Query(...),
     timezone: str = Query("Asia/Shanghai"),
-    _current_user: CurrentUser = Depends(UserService.get_current_user),
+    _current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
         return ResponseUtil.success(data={
@@ -198,7 +198,7 @@ async def preview_scheduled_task(
 
 @user_settings_router.get("/scheduled-tasks")
 async def list_scheduled_tasks(
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     items = await ScheduledTaskService.list_tasks(db, current_user.user_id)
@@ -209,10 +209,10 @@ async def list_scheduled_tasks(
 async def create_scheduled_task(
     body: ScheduledTaskCreateBody,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         item = await ScheduledTaskService.create_task(
             db, current_user.user_id, body.model_dump()
@@ -227,7 +227,7 @@ async def create_scheduled_task(
 @user_settings_router.get("/scheduled-tasks/{task_id}")
 async def get_scheduled_task(
     task_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     item = await ScheduledTaskService.get_task(db, current_user.user_id, task_id)
@@ -241,10 +241,10 @@ async def update_scheduled_task(
     task_id: str,
     body: ScheduledTaskUpdateBody,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         item = await ScheduledTaskService.update_task(
             db,
@@ -265,10 +265,10 @@ async def update_scheduled_task(
 async def delete_scheduled_task(
     task_id: str,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     ok = await ScheduledTaskService.delete_task(db, current_user.user_id, task_id)
     if not ok:
         return ResponseUtil.not_found(msg="任务不存在")
@@ -281,10 +281,10 @@ async def delete_scheduled_task(
 async def enable_scheduled_task(
     task_id: str,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     item = await ScheduledTaskService.set_enabled(db, current_user.user_id, task_id, True)
     if item is None:
         return ResponseUtil.not_found(msg="任务不存在")
@@ -295,10 +295,10 @@ async def enable_scheduled_task(
 async def disable_scheduled_task(
     task_id: str,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     item = await ScheduledTaskService.set_enabled(db, current_user.user_id, task_id, False)
     if item is None:
         return ResponseUtil.not_found(msg="任务不存在")
@@ -309,11 +309,11 @@ async def disable_scheduled_task(
 async def run_scheduled_task_once(
     task_id: str,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         item = await ScheduledTaskService.run_once(db, current_user.user_id, task_id, idempotency_key)
     except ValueError as e:
@@ -328,7 +328,7 @@ async def list_scheduled_task_runs(
     task_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await ScheduledTaskService.list_runs(db, current_user.user_id, task_id, page, page_size)
@@ -340,7 +340,7 @@ async def list_scheduled_task_runs(
 @user_settings_router.get("/scheduled-task-runs/{run_id}")
 async def get_scheduled_task_run(
     run_id: str,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     run = await ScheduledTaskService.get_run(db, current_user.user_id, run_id)
@@ -355,10 +355,10 @@ async def retry_scheduled_task_run(
     run_id: str,
     request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         run = await ScheduledTaskService.retry_run(db, current_user.user_id, run_id, idempotency_key)
     except ValueError as exc:
@@ -373,7 +373,7 @@ async def retry_scheduled_task_run(
 
 @user_settings_router.get("/channels")
 async def list_channels(
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     items = MessagingChannelService.list_channels(current_user.user_id)
     return ResponseUtil.success(data={"channels": items})
@@ -383,10 +383,10 @@ async def list_channels(
 async def create_channel(
     body: ChannelUpsertBody,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         payload = body.model_dump()
         if body.bot_token:
@@ -407,10 +407,10 @@ async def update_channel(
     channel_id: str,
     body: ChannelUpsertBody,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         await _validate_channel_session(db, current_user.user_id, body.session_strategy, body.default_session_id)
         item = MessagingChannelService.update_channel(
@@ -429,10 +429,10 @@ async def update_channel(
 async def delete_channel(
     channel_id: str,
     request: Request,
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         MessagingChannelService.delete_channel(current_user.user_id, channel_id)
     except KeyError:
@@ -451,9 +451,9 @@ async def _validate_channel_session(db: AsyncSession, user_id: int, strategy: st
 
 
 @user_settings_router.post("/channels/{channel_id}/test-connection")
-async def test_channel_connection(channel_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def test_channel_connection(channel_id: str, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.channel_operations_service import ChannelOperationsService
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         result = await ChannelOperationsService.test_connection(current_user.user_id, channel_id)
     except KeyError:
@@ -464,9 +464,9 @@ async def test_channel_connection(channel_id: str, request: Request, current_use
 
 
 @user_settings_router.post("/channels/{channel_id}/test-delivery")
-async def test_channel_delivery(channel_id: str, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def test_channel_delivery(channel_id: str, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.channel_operations_service import ChannelOperationsService
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         result = await ChannelOperationsService.test_delivery(current_user.user_id, channel_id)
     except KeyError:

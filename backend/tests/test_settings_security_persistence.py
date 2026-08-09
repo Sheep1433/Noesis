@@ -17,7 +17,7 @@ from noesis.errors.exceptions import AuthException
 from noesis.repositories.settings_repository import SettingsRepository
 from noesis.services.settings_service import SettingsService
 from noesis.services.auth.sessions import SessionService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user
 
 
 def test_secret_cipher_fails_closed_and_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,4 +77,4 @@ async def test_settings_auth_rejects_bearer_without_cookie_session(monkeypatch: 
     monkeypatch.setattr(SessionService, "get_valid", AsyncMock(return_value=None))
 
     with pytest.raises(AuthException):
-        await UserService.get_current_user(request, SimpleNamespace())
+        await get_current_user(request, SimpleNamespace())

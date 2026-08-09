@@ -9,7 +9,7 @@ from noesis.schemas.login_vo import CurrentUser
 from server.db import get_db
 
 from noesis.services.settings_service import SettingsService
-from noesis.services.user_service import UserService
+from server.auth_dependencies import get_current_user, require_csrf
 
 settings_router = APIRouter(prefix="/api/user/settings", tags=["用户设置"])
 
@@ -31,7 +31,7 @@ class ImportApplyBody(ImportPreviewBody):
 
 @settings_router.get("/capabilities")
 async def get_settings_capabilities(
-    _current_user: CurrentUser = Depends(UserService.get_current_user),
+    _current_user: CurrentUser = Depends(get_current_user),
 ):
     capabilities = SettingsService.get_capabilities()
     return ResponseUtil.success(data=capabilities.model_dump())
@@ -41,7 +41,7 @@ async def get_settings_capabilities(
 async def list_settings_audit(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    current_user: CurrentUser = Depends(UserService.get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await SettingsService.list_audit(db, current_user.user_id, page, page_size)
@@ -49,15 +49,15 @@ async def list_settings_audit(
 
 
 @settings_router.get("/notifications")
-async def list_notifications(current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_notifications(current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.notification_preference_service import NotificationPreferenceService
     return ResponseUtil.success(data={"items": await NotificationPreferenceService.list_preferences(db, current_user.user_id)})
 
 
 @settings_router.put("/notifications")
-async def update_notification(body: NotificationWrite, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def update_notification(body: NotificationWrite, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.notification_preference_service import NotificationPreferenceService
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         item = await NotificationPreferenceService.set_preference(db, current_user.user_id, body.event_type, body.delivery_surface, body.enabled, body.version)
     except ValueError as exc:
@@ -68,21 +68,21 @@ async def update_notification(body: NotificationWrite, request: Request, current
 
 
 @settings_router.get("/diagnostics")
-async def get_diagnostics(current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def get_diagnostics(current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_diagnostics_service import SettingsDiagnosticsService
     return ResponseUtil.success(data=await SettingsDiagnosticsService.diagnose(db, current_user.user_id))
 
 
 @settings_router.get("/export")
-async def export_settings(current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def export_settings(current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_transfer_service import SettingsTransferService
     return ResponseUtil.success(data=await SettingsTransferService.export(db, current_user.user_id))
 
 
 @settings_router.post("/import/preview")
-async def preview_import(body: ImportPreviewBody, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def preview_import(body: ImportPreviewBody, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_transfer_service import SettingsTransferService
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         result = await SettingsTransferService.preview(db, current_user.user_id, body.manifest)
     except ValueError as exc:
@@ -91,9 +91,9 @@ async def preview_import(body: ImportPreviewBody, request: Request, current_user
 
 
 @settings_router.post("/import/apply")
-async def apply_import(body: ImportApplyBody, request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def apply_import(body: ImportApplyBody, request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_transfer_service import SettingsTransferService
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     try:
         result = await SettingsTransferService.apply(db, current_user.user_id, body.manifest, body.preview_id)
     except ValueError as exc:
@@ -104,7 +104,7 @@ async def apply_import(body: ImportApplyBody, request: Request, current_user: Cu
 
 
 @settings_router.post("/reset")
-async def reset_settings(request: Request, current_user: CurrentUser = Depends(UserService.get_current_user), db: AsyncSession = Depends(get_db)):
+async def reset_settings(request: Request, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     from noesis.services.settings_transfer_service import SettingsTransferService
-    await UserService.require_csrf(request)
+    await require_csrf(request)
     return ResponseUtil.success(msg="已恢复默认设置", data=await SettingsTransferService.reset(db, current_user.user_id))
