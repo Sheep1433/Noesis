@@ -972,3 +972,39 @@ backends/
 - 参考项目核实：YuXi 是单一 `yuxi` 包，无 harness/platform 拆分，manager 即服务、router 直调单例、无 port 无注入；deer-flow 与 Noesis 同形态（`backend/packages/harness` + `backend/app`），且 **harness 包内装全部业务 ORM + engine + migrations**（`persistence/models/` 有 User/Run/Agent/Channel 等）。
 - 结论：Noesis 的 harness 应扩展为「Agent 内核 + 全局数据持久层」，knowledge 引擎（已静态依赖 `noesis.config.env`/`noesis.runtime.logging`，自包含）直接迁入 `noesis.knowledge`，删掉 CollectionConfigPort 注入层（历史包袱：harness 禁止 import kb 的旧规则）。
 - spec：`openspec/changes/move-knowledge-into-harness/`（proposal/design/specs/tasks 6 阶段迁移）；参考项目只内部对齐，spec 不提及避免抄袭观感。
+
+## 2026-08-08 — Provider 网关掩盖协议风险：reasoning_content 不能只看是否报错
+
+**问题/症状：** Noesis 通过 OpenCode 调用 DeepSeek，并且带工具调用；DeepSeek 文档曾要求后续 assistant 消息回传 `reasoning_content`，但线上没有出现 400。
+
+**排查结论：**
+- 当前部署走的是 `https://opencode.ai/zen/v1`，不是 DeepSeek 官方 endpoint；中转层可能替请求补齐或剥离字段，因此“没有报错”不能证明客户端协议正确。
+- 8 月 8 日对官方 API、OpenCode 以及不同模型/调用方式做了对照，当前版本的简单多轮用例都返回 200；历史上 DeepSeek V4 thinking + tools + 多轮回放确实出现过 400，触发条件还会随模型版本、网关和序列化路径变化。
+- `ReasoningAwareChatDeepSeek` 的价值是防御协议变化和保留模型上下文，不应把“当前网关能兜底”当成永久契约。
+
+**可迁移原则：** Provider 兼容性要按「目标 endpoint + 真实工具集合 + 流式/非流式 + 多轮回放」做能力测试；中转网关能把错误隐藏一段时间，不能用一次成功请求替代协议验证。适配层保留低成本防御，但要记录事实、推测和验证范围。
+
+**验证与遗留：** 当前简单用例未复现 400；仍需在切换官方 endpoint、不同 thinking 模式和工具回放场景时保留回归测试。相关 provider/SSE 适配入口见 `packages/harness/noesis/llm/` 与 `noesis.domain.chat.streaming`。
+
+## 2026-08-08 — 平台层、Harness 与本地 CLI 的职责边界
+
+**问题/症状：** 参考 YuXi 整理目录时，容易把 `noesis_server`、harness、middleware 和 CLI 按目录名机械合并，导致平台能力和 Agent 内核互相污染。
+
+**最终边界：**
+- `packages/harness/noesis/` 是 Agent 内核与运行时，承载 agents、services、domain、storage、repositories、knowledge、schemas 等业务能力。
+- `noesis_server/` 是 HTTP 交付层，负责 routers、FastAPI middleware、lifespan、平台 wiring、数据库依赖和响应格式；它薄，但不是多余的。
+- `packages/noesis-cli/` 是本地 harness CLI，直接复用 Agent 工厂和 in-memory checkpointer，不引入 TUI，也不为了评测额外引入 Cookie/API Key 认证。
+
+**可迁移原则：** 参考项目只能提供依赖方向和职责问题的对照，不能把对方的 `utils/` 目录当成收纳箱。判断目录是否必要，要看它是否承担清晰的运行时边界；评测 CLI 应尽量走和评测 harness 相同的调用路径，避免为了“像产品”再复制一套 HTTP 层。
+
+**验证与遗留：** harness boundary、后端和 CLI 测试在会话中通过；当前 Noesis 工作树仍有其他未提交改动，后续要单独做最终分支验收，不能把本次目录结论等同于整个分支已收尾。
+
+## 2026-08-08 — 全局 CSRF 中间件与登录入口的边界
+
+**问题/症状：** 登录界面直接显示“CSRF 校验失败”，用户无法判断是密码、会话还是跨站请求问题。
+
+**根因：** CSRF middleware 对请求统一检查；浏览器带着有效但旧的 session cookie，却没有对应的 `X-CSRF-Token`，登录请求也被当成已建立会话后的写操作拦截。
+
+**解法/取舍：** 保留已登录状态变更接口的 CSRF 校验；对 login/register/logout 等认证生命周期入口做明确白名单；对用户返回“会话验证失败，请刷新页面后重试”，详细原因只留在服务端日志。修复后错误从 CSRF 拦截变成业务层密码校验，说明请求已经通过 middleware。
+
+**可迁移原则：** 安全 middleware 不能只按“所有 POST 都拦”设计，要区分会话建立、会话内状态变更和公开入口；错误信息对用户要可行动且不泄露安全机制，排查时再用日志和请求头确认真实边界。
