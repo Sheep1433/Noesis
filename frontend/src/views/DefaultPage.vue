@@ -84,7 +84,11 @@ const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.sl
       <div class="welcome-blob welcome-blob--tertiary"></div>
     </div>
 
-    <section v-if="isMobile" class="mobile-intro">
+    <section
+      v-if="isMobile"
+      class="mobile-intro"
+      :style="currentPanel.gradientStyle"
+    >
       <h2 class="mobile-intro__title">
         {{ currentPanel.title }}
       </h2>
@@ -329,7 +333,10 @@ const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.sl
 .mobile-intro {
   width: min(100%, 440px);
   margin: 0 0 10vh;
-  padding: 0 8px;
+  padding: 18px 16px;
+  border-radius: var(--noesis-radius-xl);
+  box-shadow: var(--noesis-shadow-sm);
+  box-sizing: border-box;
   text-align: center;
 }
 

@@ -41,12 +41,14 @@ describe('immersive mobile chat routes', () => {
 })
 
 describe('mobile bottom navigation', () => {
-  it('stays hidden on the settings page', () => {
-    expect(shouldShowMobileBottomNav('Settings', true)).toBe(false)
-  })
+  it.each(['Settings', 'KnowledgeBase', 'KnowledgeBaseDetail'])(
+    'stays hidden on the %s page',
+    (routeName) => {
+      expect(shouldShowMobileBottomNav(routeName, true)).toBe(false)
+    },
+  )
 
   it('preserves navigation on other mobile product pages', () => {
-    expect(shouldShowMobileBottomNav('KnowledgeBase', true)).toBe(true)
     expect(shouldShowMobileBottomNav('Extensions', true)).toBe(true)
   })
 

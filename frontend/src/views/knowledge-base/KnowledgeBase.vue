@@ -194,7 +194,11 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
       请确认 Qdrant 已启动，并检查后端 <code>config.yaml</code> 中的 qdrant 配置。
     </n-alert>
 
-    <div v-else-if="collections.length === 0" class="state-block">
+    <div
+      v-else-if="collections.length === 0"
+      class="state-block state-block--empty"
+      :style="isMobile ? { flex: '0 0 auto', justifyContent: 'flex-start', minHeight: '0' } : undefined"
+    >
       <n-empty description="还没有知识库，创建第一个开始入库">
         <template #extra>
           <n-button type="primary" :disabled="!status?.connected" @click="openCreateModal">
@@ -539,6 +543,13 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
 
   .kb-card-stats dd {
     font-size: 13px;
+  }
+}
+
+@media (width <= 768px) {
+
+  .state-block--empty {
+    padding: clamp(40px, 10vh, 80px) 0 24px;
   }
 }
 
