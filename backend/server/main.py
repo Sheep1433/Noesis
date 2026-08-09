@@ -31,7 +31,7 @@ from noesis.services.scheduled_task_scheduler import (
 from noesis.services.memory_dream_scheduler import start_memory_dream_scheduler, stop_memory_dream_scheduler
 from noesis.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
 from noesis.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
-from server.bootstrap.kb import ensure_default_kb_collections
+from server.bootstrap.kb import sync_existing_kb_collection_configs
 from noesis.services.run_recovery_service import RunRecoveryService
 from noesis.services.run_service import run_manager
 
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
             drain_seconds=StreamConfig.run_shutdown_drain_seconds,
         )
 
-        await ensure_default_kb_collections()
+        await sync_existing_kb_collection_configs()
         start_scheduled_task_scheduler()
         resources.push_async_callback(stop_scheduled_task_scheduler)
         start_memory_dream_scheduler()

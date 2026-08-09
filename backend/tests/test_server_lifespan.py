@@ -24,7 +24,7 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "init_knowledge_base",
         "close_knowledge_base",
         "shutdown_sandboxes",
-        "ensure_default_kb_collections",
+        "sync_existing_kb_collection_configs",
         "stop_scheduled_task_scheduler",
         "stop_memory_dream_scheduler",
         "stop_telegram_runtime",
