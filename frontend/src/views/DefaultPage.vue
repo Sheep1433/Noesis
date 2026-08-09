@@ -43,31 +43,30 @@ const currentPanel = computed(() => {
   switch (mode.qaType) {
     case 'SUPER_AGENT_QA':
       return {
-        title: mode.label,
-        subtitle: mode.description,
-        mobilePrompt: '描述目标，我来帮你拆解并完成任务',
+        title: '智能体',
+        subtitle: '通用超级智能体：调研、检索、分析与多步任务编排',
         items: cardReportItems,
         gradientStyle: welcomeGradientStyle('SUPER_AGENT_QA'),
       }
     case 'FAULT_OPERATION_QA':
       return {
-        title: mode.label,
-        subtitle: mode.description,
-        mobilePrompt: '描述现象和环境，我来帮你定位问题',
+        title: '故障运维',
+        subtitle: '面向故障诊断、排查与恢复的专项助手',
         items: cardFaultItems,
         gradientStyle: welcomeGradientStyle('FAULT_OPERATION_QA'),
       }
     case 'COMMON_QA':
     default:
       return {
-        title: mode.label,
-        subtitle: mode.description,
-        mobilePrompt: '有问题就问我',
+        title: '智能问答',
+        subtitle: '基于 RAG 与向量检索的通用智能问答',
         items: cardOneItems,
         gradientStyle: welcomeGradientStyle('COMMON_QA'),
       }
   }
 })
+
+const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.slice(0, 2) : currentPanel.value.items)
 </script>
 
 <template>
@@ -85,9 +84,23 @@ const currentPanel = computed(() => {
       <div class="welcome-blob welcome-blob--tertiary"></div>
     </div>
 
-    <p v-if="isMobile" class="mobile-empty-prompt">
-      {{ currentPanel.mobilePrompt }}
-    </p>
+    <section v-if="isMobile" class="mobile-intro">
+      <h2 class="mobile-intro__title">
+        {{ currentPanel.title }}
+      </h2>
+      <p class="mobile-intro__subtitle">
+        {{ currentPanel.subtitle }}
+      </p>
+      <ul class="mobile-intro__points">
+        <li
+          v-for="(item, index) in visibleItems"
+          :key="index"
+          class="mobile-intro__point"
+        >
+          {{ item }}
+        </li>
+      </ul>
+    </section>
 
     <header
       v-if="!isMobile"
@@ -313,10 +326,39 @@ const currentPanel = computed(() => {
   }
 }
 
-.mobile-empty-prompt {
-  margin: 0 0 12vh;
-  color: var(--noesis-color-text-secondary);
-  font-size: 15px;
+.mobile-intro {
+  width: min(100%, 440px);
+  margin: 0 0 10vh;
+  padding: 0 8px;
   text-align: center;
+}
+
+.mobile-intro__title {
+  margin: 0;
+  color: var(--noesis-color-text-heading);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.mobile-intro__subtitle {
+  margin: 8px 0 0;
+  color: var(--noesis-color-text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.mobile-intro__points {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0 0;
+  padding: 0;
+  color: var(--noesis-color-text-body);
+  font-size: 13px;
+  line-height: 1.45;
+  list-style: none;
+}
+
+.mobile-intro__point {
+  margin: 0;
 }
 </style>
