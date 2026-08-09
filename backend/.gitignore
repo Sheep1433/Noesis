@@ -42,7 +42,7 @@ temp/
 *.tmp
 *.temp
 
-# 运行时数据已迁至仓库根 .noesis/（见 common/paths.py）
+# 运行时数据已迁至仓库根 .noesis/（见 noesis.config.paths）
 
 # ========== 向量索引和缓存 ==========
 vector_index/

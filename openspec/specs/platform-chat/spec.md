@@ -11,7 +11,7 @@
 #### Scenario: 软删清理会话磁盘
 
 - **WHEN** 用户软删除会话 `sid`
-- **THEN** `.data/users/{uid}/sessions/{sid}/` SHALL 被删除；`AGENTS.md` / `USER.md` / `skills/` SHALL 保留
+- **THEN** `.noesis/users/{uid}/sessions/{sid}/` SHALL 被删除；`AGENTS.md` / `USER.md` / `skills/` SHALL 保留
 
 ### Requirement: 消息列表与详情
 
@@ -488,4 +488,3 @@ chat 页 SHALL 按服务端 tool `state` 显示“正在执行、等待确认、
 - **WHEN** 关键工具失败并且 assistant 没有可见正文
 - **THEN** UI SHALL 告知本轮未完成
 - **AND** SHALL 提供重新执行本轮的操作
-

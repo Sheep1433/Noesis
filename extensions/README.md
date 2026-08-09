@@ -46,7 +46,7 @@ Noesis 可插拔扩展的统一目录，与 `backend/`、`frontend/` 应用代�
 - `context7`：文档检索（需 `CONTEXT7_API_KEY`，可选）
 - `remote_ops`：本仓库 `extensions/mcp/ssh` 远程运维 MCP；默认 URL `http://localhost:8000/mcp`（可用 `NOESIS_MCP_REMOTE_URL` 覆盖）
 
-- 用户个人配置在 `.data/users/{uid}/mcp.json`（首次空配置会 seed 与上表相同的两项，**字面量 URL**，不含 `${ENV}`）。`profiles` 将 Agent 场景映射到要连接的 `mcpServers` 键。
+- 用户个人配置在 `.noesis/users/{uid}/mcp.json`（首次空配置会 seed 与上表相同的两项，**字面量 URL**，不含 `${ENV}`）。`profiles` 将 Agent 场景映射到要连接的 `mcpServers` 键。
 
 平台 `extensions/mcp/mcp.json` 仍可用 `${ENV_VAR}` 注入部署密钥（如 `CONTEXT7_API_KEY`）；**个人编辑器只接受字面量**。
 

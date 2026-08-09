@@ -35,7 +35,7 @@
 #### Scenario: 上传写入会话子树
 
 - **WHEN** 已登录用户向 session `s1` 上传 `a.pdf`
-- **THEN** 文件 SHALL 出现在 `.data/users/{uid}/sessions/s1/uploads/`（或现行约定目录）
+- **THEN** 文件 SHALL 出现在 `.noesis/users/{uid}/sessions/s1/uploads/`（或现行约定目录）
 
 ### Requirement: `/` 与 `@` mentions
 
@@ -74,4 +74,4 @@ Composer SHALL 提供 slash / mention 选择器；发送载荷 MAY 含 `mentions
 #### Scenario: 编辑 USER.md
 
 - **WHEN** 用户经面板保存 `USER.md`
-- **THEN** 磁盘 `.data/users/{uid}/USER.md` SHALL 更新，且后续 `/memory/USER.md` 读取可见新内容
+- **THEN** 磁盘 `.noesis/users/{uid}/USER.md` SHALL 更新，且后续 `/memory/USER.md` 读取可见新内容

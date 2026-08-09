@@ -112,7 +112,7 @@ evals   ──▶  noesis
 
 - `noesis/config/env.py` 合并 env + yaml；禁止硬编码配置。
 - 统一使用 `from noesis.runtime.logging import logger`，禁止 `print`。
-- 本地运行时数据统一位于仓库根 `.data/`，路径由 `noesis.config` 生成。
+- 本地运行时数据统一位于仓库根 `.noesis/`，路径由 `noesis.config` 生成。
 
 ## SSE 与持久化
 

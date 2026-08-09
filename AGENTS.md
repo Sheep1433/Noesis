@@ -23,7 +23,7 @@ Noesis/
 ├── frontend/          → frontend/AGENTS.md
 ├── backend/           → backend/AGENTS.md
 ├── extensions/        → Skills 包 + MCP 服务（见 extensions/README.md）
-├── .data/             → 本地运行时数据（gitignore：Qdrant、checkpoint、附件、工作区、日志）
+├── .noesis/           → 本地运行时数据（gitignore：Qdrant、checkpoint、附件、工作区、日志）
 ├── deploy/            → Docker Compose、镜像定义、生产配置
 ├── scripts/run.sh     # dev | prod | docker
 ├── openspec/          # 变更提案与规格

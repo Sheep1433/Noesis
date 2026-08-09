@@ -85,7 +85,7 @@ jq . evals/agent/browsecomp/results/bc-smoke-new-12/convos.jsonl
 
 终端结束时会打印 `BrowseComp accuracy: ...` 与 `Results: ...` 路径。
 
-**过程/trace（非成绩表）**：配置 `evals/.env` 后可在 Langfuse 按 `eval_tag=<tag>`、`eval_line=agent` 筛选；整次 session 为 `browsecomp-<tag>`，单题为 `browsecomp-<uuid>`。单题工作区与卸載文件在 `.data/users/eval-browsecomp/sessions/`。
+**过程/trace（非成绩表）**：配置 `evals/.env` 后可在 Langfuse 按 `eval_tag=<tag>`、`eval_line=agent` 筛选；整次 session 为 `browsecomp-<tag>`，单题为 `browsecomp-<uuid>`。单题工作区与卸载文件在 `.noesis/users/eval-browsecomp/sessions/`。
 
 BrowseComp 走仓库内 Python 模块（`uv run python -m evals.agent.browsecomp`），直接调 Noesis `SuperAgent`，因此**未**集成 Harbor / promptfoo 类 viewer。
 

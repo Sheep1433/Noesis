@@ -25,7 +25,7 @@ uv sync
 uv run python -m kb.download_models
 ```
 
-默认目录：`.data/rag/res/deepdoc/`（可通过 `config.yaml` → `kb.deepdoc.model_dir` 或 `KB_DEEPDOC_MODEL_DIR` 覆盖）。
+默认目录：`.noesis/rag/res/deepdoc/`（可通过 `config.yaml` → `kb.deepdoc.model_dir` 或 `KB_DEEPDOC_MODEL_DIR` 覆盖）。
 
 镜像环境变量（可选）：
 

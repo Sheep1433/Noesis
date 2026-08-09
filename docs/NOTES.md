@@ -15,7 +15,7 @@
 - **状态**：每个 Server 独立后台调用单项 probe，按返回顺序更新状态；单个 MCP 失败只显示在对应行，不阻塞其他 Server 或编辑器。
 - **工具**：列表项显示工具数量；点击单个 MCP 后才请求完整工具目录。成功 probe 已缓存工具元数据，展开同一 MCP 不再重复握手；工具目录请求不清空其他 Server 的 probe 缓存。
 - **刷新/保存**：刷新只重新读取目录并触发逐项 probe；保存 JSON 后同样走非阻塞逐项探测。用 generation 丢弃旧一轮 probe 的迟到结果，避免覆盖新配置状态。
-- **范围**：管理页展示用户 `.data/users/{uid}/mcp.json`，与右侧编辑内容一致；平台配置仍由 Composer 的 `scope=all` 使用。
+- **范围**：管理页展示用户 `.noesis/users/{uid}/mcp.json`，与右侧编辑内容一致；平台配置仍由 Composer 的 `scope=all` 使用。
 
 ## 2026-07-29 — 通道、引用与联调的收敛规则
 
@@ -63,11 +63,11 @@
 - **三工具**：`list_knowledge_bases`（发现）、`search_knowledge_base`（片段 hybrid，可传 `collection_names`）、`get_knowledge_document`（整篇补全，80k 字符截断）。
 - **检索范围**：工具入参 > 会话 `extra.kb_collections` > 全部可用库；多库 **ThreadPoolExecutor 并行**，每库 `final_top_k=global_limit` 后全局 merge（不再 `ceil(limit/N)` 预截断）。
 - **前端**：COMMON_QA 输入区 `KbScopeSelector` 多选写回 `extra.kb_collections`；流式 `extra.kb_collections` 同步会话。
-- **检索耗时日志**：`KbRetrievalService.search` → `[KbRetrievalService] search`（recall/parse/rerank/post/total ms）；Agent 跨库 → `[KbSearchTool] search_knowledge_base`（resolve/parallel/merge/total ms）。`grep` 后端 `.data/logs` 或控制台即可。
+- **检索耗时日志**：`KbRetrievalService.search` → `[KbRetrievalService] search`（recall/parse/rerank/post/total ms）；Agent 跨库 → `[KbSearchTool] search_knowledge_base`（resolve/parallel/merge/total ms）。`grep` 后端 `.noesis/logs` 或控制台即可。
 
 ## 知识库上传与 Rerank 配置（2026-07-01）
 
-- **上传暂存**：`POST .../upload` 写入 `.data/kb_uploads/{collection}/{file_hash}_{原名}`，解析后删除；Qdrant 分片 `file_name` 经 `source_file_name` 显式传入，不再用 `basename(tmp)`。
+- **上传暂存**：`POST .../upload` 写入 `.noesis/kb_uploads/{collection}/{file_hash}_{原名}`，解析后删除；Qdrant 分片 `file_name` 经 `source_file_name` 显式传入，不再用 `basename(tmp)`。
 - **Rerank 密钥**：`ModelSettings.rerank_model_api_key` 在 `noesis/config/env.py` 中回退 `embedding_model_api_key`；`RERANK_MODEL_API_KEY` 仅作可选覆盖，prod 不必单独配置。
 
 ## 动态切换对话模型（2026-07-02）
@@ -266,7 +266,7 @@
 ## 2026-07-10 — SuperAgent 用户记忆（add-super-agent-user-memory 归档）
 
 - **BREAKING**：`DEEP_RESEARCH_QA` / `DeepResearchAgent` 移除；统一为 `SUPER_AGENT_QA` + `SuperAgent` + `task-worker`。
-- **磁盘**：`.data/users/{uid}/AGENTS.md`（Agent 可写）、`USER.md`（Agent 只读）；删 session **不**删记忆文件。
+- **磁盘**：`.noesis/users/{uid}/AGENTS.md`（Agent 可写）、`USER.md`（Agent 只读）；删 session **不**删记忆文件。
 - **虚拟路径**：`/memory/AGENTS.md`、`/memory/USER.md` → `UserMemoryBackend`；`MemoryMiddleware` + `MemorySyncMiddleware` 仅主 Agent 挂载。
 - **面板**：右侧上下文树展示两文件；`PUT workspace/file` 允许用户直接编辑 `AGENTS.md` 与 `USER.md`。
 - **Agent 写边界（2026-07-10 更新）**：`USER.md` 与 `AGENTS.md` 均可由 Agent `edit_file` 更新（对齐 OpenClaw「USER.md Update as you go」）。
@@ -316,7 +316,7 @@
 ## 2026-07-21 — Composer 会话级 Models / Skills / MCP
 
 - **动机**：补齐用户自定义 MCP + Cursor 式 Composer 勾选；此前 MCP 仅部署级 `mcp.json` 且绑死 `FAULT_OPERATION_QA`。
-- **配置**：平台 `extensions/mcp/mcp.json` + 用户 `.data/users/{uid}/mcp.json`（同名用户覆盖）；用户仅允许 `streamable_http`/`sse`。
+- **配置**：平台 `extensions/mcp/mcp.json` + 用户 `.noesis/users/{uid}/mcp.json`（同名用户覆盖）；用户仅允许 `streamable_http`/`sse`。
 - **会话 extra**：`mcp_servers`（缺省：FAULT 回退 profile，其它 `[]`）、`enabled_skills`（缺省全部）。
 - **API**：`/api/mcp/servers` list/PUT/DELETE/probe；打开菜单只拉元数据，不 `get_tools()`。
 - **Agent**：COMMON / FAULT / SUPER 均可按勾选挂 MCP；SUPER 按 `enabled_skills` 过滤 SkillsMiddleware sources；TEST_CASE 协调器不挂 MCP。
@@ -374,7 +374,7 @@
 
 - **选型**：接 skills.sh（跨 Agent 公共目录），不接 ClawHub（偏 OpenClaw）。
 - **发现**：`GET /api/skills/market/search` → `skills.sh/api/search`；`/market/browse` 用配置 `skills_market.featured_skills` 推荐种子。
-- **安装**：`POST /api/skills/market/install` 从 GitHub zipball 抽出含 `SKILL.md` 的目录 → 写入 `.data/users/{uid}/skills/`，写 `.skills-sh/origin.json`，bump revision。
+- **安装**：`POST /api/skills/market/install` 从 GitHub zipball 抽出含 `SKILL.md` 的目录 → 写入 `.noesis/users/{uid}/skills/`，写 `.skills-sh/origin.json`，bump revision。
 - **UI**：扩展页 Skills 增加「已安装 / 市场」Tab；装完回到已安装树。
 - **配置**：`backend/config.yaml` → `skills_market.*`（base_url / timeout / featured_skills）。
 

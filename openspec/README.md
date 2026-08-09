@@ -10,7 +10,7 @@
 |----|---------|--------|
 | **聊天平台** | `platform-chat` | 会话/消息、SSE 契约、落库状态机、qa 路由、流式 UI |
 | | `chat-composer` | 对话面生命周期、发送上传、附件、mentions、上下文面板 |
-| **Agent** | `agent-runtime` | `.data/users` 布局、`/workspace` 坐标系、沙箱、Skills、记忆、web 工具 |
+| **Agent** | `agent-runtime` | `.noesis/users` 布局、`/workspace` 坐标系、沙箱、Skills、记忆、web 工具 |
 | | `agent-profiles` | COMMON / SUPER / FAULT / TEST_CASE 四场景 |
 | | `agent-hitl` | 审批策略、ask_user、多端 resume |
 | | `agent-tool-failure-handling` | 工具调用/执行双层语义与 SSE 字段 |

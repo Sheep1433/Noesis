@@ -2,13 +2,13 @@
 
 ## Purpose
 
-本能力规定 Agent **运行时文件系统与沙箱**：宿主机 `.data/users/` 布局、Agent/Shell 共用的绝对路径坐标系（`/workspace`、`/skills/public|personal`、`/memory`）、backend 工厂（docker / local_shell）、Skills 只读挂载与用户 ZIP、用户记忆、以及 web_search / web_fetch。代码锚点：`packages/noesis-core/src/noesis/config/user_data_paths.py`、`packages/noesis-core/src/noesis/agents/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`。
+本能力规定 Agent **运行时文件系统与沙箱**：宿主机 `.noesis/users/` 布局、Agent/Shell 共用的绝对路径坐标系（`/workspace`、`/skills/public|personal`、`/memory`）、backend 工厂（docker / local_shell）、Skills 只读挂载与用户 ZIP、用户记忆、以及 web_search / web_fetch。代码锚点：`packages/noesis-core/src/noesis/config/user_data_paths.py`、`packages/noesis-core/src/noesis/agents/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`。
 
 ## 路径命名
 
 | 路径 | 含义 |
 |------|------|
-| `{REPO_ROOT}/.data/users/{user_id}/` | 用户数据根 |
+| `{REPO_ROOT}/.noesis/users/{user_id}/` | 用户数据根 |
 | `.../sessions/{session_id}/workspace/` | 会话工作区（宿主机） |
 | `.../sessions/{session_id}/uploads/` | 附件原文件 |
 | `.../sessions/{session_id}/attachments/` | 附件 Markdown |
@@ -23,14 +23,14 @@
 ## Requirements
 ### Requirement: 用户数据根与会话子树
 
-路径模块 SHALL 将用户根定为 `DATA_DIR / "users"`；`user_id` / `session_id` 拼入路径前 SHALL 校验段字符。系统 **SHALL NOT** 用配置覆盖 `.data/users` 根。
+路径模块 SHALL 将用户根定为 `DATA_DIR / "users"`；`user_id` / `session_id` 拼入路径前 SHALL 校验段字符。用户根 MAY 随统一的 `DATA_DIR` 配置改变，但系统 **SHALL NOT** 为 `users` 单独提供另一套根目录配置。
 
 会话子树 SHALL 含 `workspace/`、`uploads/`、`attachments/`。`delete_session_data` SHALL 删除整棵会话子树且幂等，**SHALL NOT** 删除用户级 `skills/`、`AGENTS.md`、`USER.md`。
 
 #### Scenario: 工作区路径
 
 - **WHEN** `get_workspace_dir("42", "sess-abc")`
-- **THEN** 返回 `{REPO_ROOT}/.data/users/42/sessions/sess-abc/workspace`
+- **THEN** 返回 `{REPO_ROOT}/.noesis/users/42/sessions/sess-abc/workspace`
 
 #### Scenario: 非法 user_id
 

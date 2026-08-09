@@ -33,7 +33,7 @@ noesis.agents.tools.kb_search_tool
 
 - PostgreSQL：集合配置、用户关系和管理元数据。
 - Qdrant：向量、chunk 文本与检索 payload。
-- `.data/`：解析缓存、上传 staging 和本地模型数据。
+- `.noesis/`：解析缓存、上传 staging 和本地模型数据。
 
 Qdrant payload 至少保留文档身份、`chunk_index`、`content_hash`、标题路径、文件类型和正文。point id 是存储实现细节，不应直接成为公开授权凭据。
 

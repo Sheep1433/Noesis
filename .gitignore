@@ -23,7 +23,7 @@ docs/TODO.local.md
 .tmp/
 node_modules/
 
-# 本地运行时数据（见 common/paths.py）
+# 本地运行时数据（见 noesis.config.paths）
 .noesis/
 
 # Agent 离线评测产物

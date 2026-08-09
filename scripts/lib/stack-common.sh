@@ -7,7 +7,7 @@ FRONTEND_DIR="${FRONTEND_DIR:-$ROOT/frontend}"
 EXTENSIONS_DIR="${EXTENSIONS_DIR:-$ROOT/extensions}"
 MCP_DIR="${MCP_DIR:-$EXTENSIONS_DIR/mcp/ssh}"
 QDRANT_CONTAINER="${QDRANT_CONTAINER:-noesis-qdrant}"
-QDRANT_STORAGE="${QDRANT_STORAGE:-$ROOT/.data/qdrant}"
+QDRANT_STORAGE="${QDRANT_STORAGE:-$ROOT/.noesis/qdrant}"
 
 MCP_PID=""
 BACKEND_PID=""
@@ -164,7 +164,7 @@ start_sandbox_runner() {
     return 0
   fi
 
-  log_info "启动 sandbox-runner（路径自动对齐仓库 .data/ 与 extensions/skills）..."
+  log_info "启动 sandbox-runner（路径自动对齐仓库 .noesis/ 与 extensions/skills）..."
   cd "$ROOT/deploy/sandbox-runner"
   export SANDBOX_RUNTIME="${SANDBOX_RUNTIME:-docker}"
   export SANDBOX_DOCKER_IMAGE="${SANDBOX_DOCKER_IMAGE:-noesis/sandbox-slim:latest}"

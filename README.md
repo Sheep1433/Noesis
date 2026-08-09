@@ -69,7 +69,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
              │                      │
         PostgreSQL（业务数据）    Qdrant（向量库）
              │
-        .data/（checkpoint、用户工作区、附件、KB 缓存）
+        .noesis/（checkpoint、用户工作区、附件、KB 缓存）
 ```
 
 **Agent 运行时路径约定**（沙箱内虚拟路径）：

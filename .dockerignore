@@ -31,7 +31,7 @@ backend/README.md
 deploy/.env.docker
 
 # 本地运行时与评测产物
-.data
+.noesis
 **/logs
 results/
 .promptfoo/
