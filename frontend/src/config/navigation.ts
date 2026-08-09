@@ -7,6 +7,12 @@ export interface MainNavItem {
   fill?: boolean
 }
 
+export const CHAT_ROUTE_NAMES = ['ChatRoot', 'ChatIndex', 'ChatNew', 'ChatSession'] as const
+
+export function isChatRouteName(routeName: unknown): boolean {
+  return CHAT_ROUTE_NAMES.includes(routeName as (typeof CHAT_ROUTE_NAMES)[number])
+}
+
 export const mainNavItems: MainNavItem[] = [
   {
     label: '智枢',

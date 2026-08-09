@@ -14,6 +14,7 @@ declare module 'vue' {
     ChatComposerToolbar: typeof import('./src/components/Chat/ChatComposerToolbar.vue')['default']
     ChatMentionPicker: typeof import('./src/components/Chat/MentionPicker.vue')['default']
     ChatModelSelector: typeof import('./src/components/Chat/ModelSelector.vue')['default']
+    ChatModeSelector: typeof import('./src/components/Chat/ChatModeSelector.vue')['default']
     CitationSources: typeof import('./src/components/CitationSources/index.vue')['default']
     ContextWindowIndicator: typeof import('./src/components/ContextWindowIndicator/index.vue')['default']
     FilePreview: typeof import('./src/components/FilePreview/index.vue')['default']

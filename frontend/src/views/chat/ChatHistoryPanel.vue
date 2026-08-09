@@ -1,6 +1,9 @@
 <script lang="ts" setup>
 import type { DataTableColumns } from 'naive-ui'
+import type { ChatModeQaType } from '@/utils/qaType'
+import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import ThemeSwitcher from '@/components/ThemeSwitcher/index.vue'
+import { mainNavItems } from '@/config/navigation'
 import { cssVar, themeCssVar } from '@/config/theme'
 
 interface TableItem {
@@ -23,10 +26,11 @@ defineProps<{
   rowProps: (row: TableItem) => Record<string, unknown>
   /** 移动端历史抽屉底部：主题切换 + 用户头像 */
   showAccountActions?: boolean
+  currentQaType?: string
 }>()
 
 const emit = defineEmits<{
-  newChat: []
+  newChat: [qaType: ChatModeQaType]
   focusSearch: []
   blurSearch: []
   search: []
@@ -43,10 +47,15 @@ const searchChatRef = useTemplateRef('searchChatRef')
 
 const router = useRouter()
 const showUserMenu = ref(false)
+const drawerNavItems = mainNavItems.filter((item) => item.routeName && item.routeName !== 'ChatIndex')
 
 function openSettings() {
   showUserMenu.value = false
   void router.push({ name: 'Settings' })
+}
+
+function navigateTo(routeName: string) {
+  void router.push({ name: routeName })
 }
 
 defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
@@ -63,21 +72,29 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
         class="create-chat-box"
         :class="{ hide: isFocusSearchChat }"
       >
-        <n-button
-          type="primary"
-          icon-placement="left"
-          strong
-          class="create-chat"
+        <ChatModeSelector
+          :qa-type="currentQaType"
           :disabled="stylizingLoading || archiveView"
-          @click="emit('newChat')"
+          placement="bottom-start"
+          @select="emit('newChat', $event)"
         >
-          <template #icon>
-            <n-icon>
-              <div class="i-hugeicons:add-01"></div>
-            </n-icon>
+          <template #trigger>
+            <n-button
+              type="primary"
+              icon-placement="left"
+              strong
+              class="create-chat"
+              :disabled="stylizingLoading || archiveView"
+            >
+              <template #icon>
+                <n-icon>
+                  <div class="i-hugeicons:add-01"></div>
+                </n-icon>
+              </template>
+              新建对话
+            </n-button>
           </template>
-          新建对话
-        </n-button>
+        </ChatModeSelector>
       </div>
       <n-tooltip placement="bottom">
         <template #trigger>
@@ -154,6 +171,18 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
     </div>
 
     <div class="footer" style="flex-shrink: 0">
+      <nav v-if="showAccountActions" class="history-product-nav" aria-label="产品导航">
+        <button
+          v-for="item in drawerNavItems"
+          :key="item.key"
+          type="button"
+          class="history-product-nav__item"
+          @click="navigateTo(item.routeName)"
+        >
+          <span class="history-product-nav__icon" :class="item.iconClass" aria-hidden="true"></span>
+          <span>{{ item.label }}</span>
+        </button>
+      </nav>
       <n-divider class="footer-divider" />
       <div
         class="footer-toolbar"
@@ -413,6 +442,42 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
   width: calc(100% - 32px);
   margin: 0 auto;
   --n-color: var(--noesis-color-bg-muted);
+}
+
+.history-product-nav {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 10px 16px 12px;
+}
+
+.history-product-nav__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 52px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
+  color: var(--noesis-color-text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.history-product-nav__item:hover {
+  background: var(--noesis-color-primary-bg-subtle);
+  color: var(--noesis-color-primary);
+}
+
+.history-product-nav__icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
 }
 
 .footer-toolbar {
