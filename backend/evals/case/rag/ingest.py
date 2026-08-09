@@ -24,12 +24,12 @@ from langchain_core.documents import Document
 from qdrant_client.models import PointStruct
 
 from noesis.runtime.logging import logger
-from noesis_server.kb.chunk import chunk
-from noesis_server.kb.chunk.params import fixed_processing_params
-from noesis_server.kb.document_parse.parser import DocumentParser
-from noesis_server.kb.embedding import embedding_not_configured_message, get_embedding, is_embedding_configured
-from noesis_server.kb.retrieval import KbRetrievalService
-from noesis_server.kb.retrieval.payload import compute_content_hash, documents_to_points, hash_to_uuid
+from noesis.knowledge.chunking import chunk
+from noesis.knowledge.chunking.params import fixed_processing_params
+from noesis.knowledge.parser.parser import DocumentParser
+from noesis.knowledge.embedding import embedding_not_configured_message, get_embedding, is_embedding_configured
+from noesis.knowledge.retrieval import KbRetrievalService
+from noesis.knowledge.retrieval.payload import compute_content_hash, documents_to_points, hash_to_uuid
 
 RAG_DIR = Path(__file__).resolve().parent
 CASE_ROOT = RAG_DIR.parent
@@ -140,9 +140,9 @@ def build_points_for_upload(
 
 
 def upsert_points(collection_name: str, points: List[PointStruct]) -> int:
-    from noesis_server.kb.qdrant import QdrantService
+    from noesis.knowledge.runtime import knowledge_base
 
-    service = QdrantService()
+    service = knowledge_base.service()
     if not service.client:
         raise RuntimeError("Qdrant 客户端未连接")
     service.client.upsert(collection_name=collection_name, points=points)
@@ -189,12 +189,12 @@ def pick_relevant_by_keywords(
 
 
 def _ensure_eval_collections(*, reset: bool) -> None:
-    from noesis_server.kb.qdrant import QdrantService, init_qdrant_client
+    from noesis.knowledge.runtime import init_knowledge_base, knowledge_base
 
-    if not asyncio.run(init_qdrant_client()):
+    if not asyncio.run(init_knowledge_base()):
         raise RuntimeError("Qdrant 连接失败，无法入库 eval 文档")
 
-    service = QdrantService()
+    service = knowledge_base.service()
     if not service.client:
         raise RuntimeError("Qdrant 客户端不可用")
 

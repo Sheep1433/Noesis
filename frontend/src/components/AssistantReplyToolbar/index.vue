@@ -1,12 +1,21 @@
 <script lang="ts" setup>
 import { computed } from 'vue'
 import { copyToClipboard } from '@/utils/copy'
+import { formatTokenCount } from '@/views/chat/messageParts'
+
+interface AttributionSummary {
+  cumulative?: Record<string, number>
+  by_caller?: Record<string, Record<string, number>>
+  by_model?: Record<string, Record<string, number>>
+}
 
 const props = withDefaults(defineProps<{
   qaType?: string
   copyText?: string
   /** token 用量摘要（如 "↑24.2K ↓593 · 共 24.8K"），非空时显示在左侧 */
   usageText?: string
+  /** 按 caller/model 归因摘要（按需调试视图，非默认摘要） */
+  attribution?: AttributionSummary | null
   /** 与 SSE message-start.langfuse_session_id 一致 */
   langfuse_session_id?: string
   /** VITE_LANGFUSE_UI_ORIGIN，非空时显示「观测」 */
@@ -15,6 +24,7 @@ const props = withDefaults(defineProps<{
   qaType: 'COMMON_QA',
   copyText: '',
   usageText: '',
+  attribution: null,
   langfuse_session_id: '',
   langfuseUiOrigin: '',
 })
@@ -22,6 +32,34 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   recycleQa: []
 }>()
+
+/** 归因 tooltip 文本：展示 caller/model 汇总（按需，不展示无界 steps） */
+const attributionTooltip = computed(() => {
+  const attr = props.attribution
+  if (!attr?.by_caller && !attr?.by_model) {
+    return ''
+  }
+  const lines: string[] = []
+  if (attr.by_caller) {
+    lines.push('按调用方：')
+    for (const [caller, usage] of Object.entries(attr.by_caller)) {
+      const inp = usage.input_tokens ?? 0
+      const out = usage.output_tokens ?? 0
+      lines.push(`  ${caller}: ↑${formatTokenCount(inp)} ↓${formatTokenCount(out)}`)
+    }
+  }
+  if (attr.by_model) {
+    lines.push('按模型：')
+    for (const [model, usage] of Object.entries(attr.by_model)) {
+      const inp = usage.input_tokens ?? 0
+      const out = usage.output_tokens ?? 0
+      lines.push(`  ${model}: ↑${formatTokenCount(inp)} ↓${formatTokenCount(out)}`)
+    }
+  }
+  return lines.join('\n')
+})
+
+const showAttribution = computed(() => Boolean(attributionTooltip.value))
 
 const showLangfuse = computed(
   () => Boolean(props.langfuse_session_id?.trim() && props.langfuseUiOrigin?.trim()),
@@ -56,10 +94,22 @@ const handlePassClip = async () => {
 <template>
   <div class="assistant-reply-toolbar">
     <div class="assistant-reply-toolbar__left">
+      <n-tooltip v-if="usageText && showAttribution" placement="top">
+        <template #trigger>
+          <span
+            v-if="usageText"
+            class="assistant-reply-toolbar__usage"
+          >{{ usageText }}</span>
+        </template>
+        <div style="max-width: 320px; font-size: 12px; line-height: 1.6; white-space: pre-line">
+          {{ attributionTooltip }}
+        </div>
+      </n-tooltip>
       <span
-        v-if="usageText"
+        v-else-if="usageText"
         class="assistant-reply-toolbar__usage"
       >{{ usageText }}</span>
+      <slot name="meta"></slot>
       <n-tooltip v-if="showLangfuse" placement="top">
         <template #trigger>
           <n-button

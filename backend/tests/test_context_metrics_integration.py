@@ -10,7 +10,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from noesis.factory import create_noesis_agent
-from noesis.middlewares.context_metrics_middleware import ContextMetricsRegistry
+from noesis.runtime.observability import ContextMetricsRegistry
 from noesis.config.checkpointer import close_checkpointer, get_checkpointer, init_checkpointer
 
 
@@ -36,10 +36,9 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
     cfg = SimpleNamespace(
         context_display_enabled=True,
         context_max_input_tokens=128000,
-        dangling_tool_call_repair_enabled=False,
-        loop_detection_enabled=False,
+        governor_loop_enabled=False,
         summarization_enabled=False,
-        tool_call_limit_enabled=False,
+        governor_tool_calls_enabled=False,
         show_thinking_process="false",
     )
     session_id = "sess-context-integration"
@@ -49,7 +48,7 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
         with (
             patch("noesis.factory.ModelConfig", cfg),
             patch("noesis.llm.factory.get_llm", return_value=fake_llm),
-            patch("noesis.middlewares.context_metrics_middleware.ModelConfig", cfg),
+            patch("noesis.agents.middlewares.observability.context_metrics_middleware.ModelConfig", cfg),
             patch("noesis.llm.model_limits.resolve_context_max_tokens", return_value=128000),
         ):
             agent = create_noesis_agent(

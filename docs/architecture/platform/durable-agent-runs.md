@@ -205,9 +205,9 @@ run 还需保存 `client_request_id`、请求摘要和当前 `attempt_id`。`(us
 
 恢复后重新发送 running。只有重试耗尽才进入 error。tool error 继续使用现有 `tool-output-available` 双层语义。
 
-ModelRetryMiddleware 只处理 timeout、连接中断、限流和服务端临时错误。chat model 的 provider 内部 retry 固定为 0，避免与 middleware 重复重试；摘要等非交互调用仍使用 provider retry。callback 会记录本轮是否已产生 token、是否进入工具/HITL；仅在两个边界都未越过时重试。每次重试先发 `retrying`，再发 `running`，同时递增 `attempt_id`。RunManager 在分配 sequence 前拒绝旧 attempt 事件；重试耗尽或边界已越过时才进入 error。
+Model Execution 是交互模型调用的唯一 owner：它记录 `model_attempt` 的可见 token、tool/HITL 副作用边界，只在边界未越过且错误可重试时发出 retry。正常响应的 `length_stop`、`safety_stop`、`partial_output` 和工具后的空终态也通过同一 `RuntimeOutcome` 表达；provider sampling retry 不与该路径叠加。
 
-SummarizationOffloadMiddleware 在模型调用前先卸载大型工具结果，再按 token 窗口压缩历史。ContextBudgetGuardMiddleware 位于最终 model request 路径，在 system prompt、tools schema 与压缩结果合并后重新估算输入；仍超过模型窗口时使用受控错误结束，不把明显超限请求发送给 provider。
+Context Lifecycle 在最终 `ModelRequest` 上只构造一次 `ContextSnapshot`，负责 dangling call normalization、compaction、可重建 context source 和最终预算判断。Tool Execution 在 dispatch 边界先分类 typed failure，再接收 DeepAgents `FilesystemMiddleware` 已处理的结果，只有无 backend 且仍未有界时才做一次 head/tail fallback。Run Governor 统一 loop、tool、subagent active/total/depth 限制；Runtime Telemetry 只读这些 outcome 和 snapshot，不参与决策。
 
 ### EventBus 背压
 
@@ -246,12 +246,12 @@ active run 数量、单 run 时长、累计输出、event buffer、subscriber qu
 
 当前入口：
 
-- `backend/noesis_server/domain/chat/runs/`：RunHandle、RunManager、状态机、snapshot。
-- `backend/noesis_server/domain/chat/runs/`：sequence、多 subscriber、缓存与慢消费者隔离。
-- `backend/noesis_server/services/qa/`：producer 装配与 PersistSink。
-- `backend/noesis_server/services/run_service.py`：run 应用服务。
-- `backend/noesis_server/api/chat_api.py`：`/api/chat/runs*`。
-- `backend/noesis_server/models/chat_models.py`：run ORM。
+- `backend/packages/noesis-core/src/noesis/domain/chat/runs/`：RunHandle、RunManager、状态机、snapshot。
+- `backend/packages/noesis-core/src/noesis/domain/chat/runs/`：sequence、多 subscriber、缓存与慢消费者隔离。
+- `backend/packages/noesis-core/src/noesis/services/qa/`：producer 装配与 PersistSink。
+- `backend/packages/noesis-core/src/noesis/services/run_service.py`：run 应用服务。
+- `backend/server/api/chat_api.py`：`/api/chat/runs*`。
+- `backend/packages/noesis-core/src/noesis/storage/postgres/models/chat.py`：run ORM。
 - `frontend/src/api/chat.ts`：run API。
 - `frontend/src/views/chat/useSSEStream.ts`：snapshot、sequence、重订阅。
 - `frontend/src/store/business/initChatHistory.ts`：active run 恢复。

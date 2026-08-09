@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.services.qa.helpers import (
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.services.qa.helpers import (
     ACTIVE_STREAMS,
     _ActiveStreamState,
     _handle_stream_client_disconnect,
@@ -30,7 +30,7 @@ async def test_handle_stream_client_disconnect_flushes_text_buffer() -> None:
     user = SimpleNamespace(user_id="u1")
 
     try:
-        with patch("noesis_server.services.qa.helpers._persist_assistant", mock_persist):
+        with patch("noesis.services.qa.helpers._persist_assistant", mock_persist):
             await _handle_stream_client_disconnect(
                 session_id=session_id,
                 qa_type="COMMON_QA",

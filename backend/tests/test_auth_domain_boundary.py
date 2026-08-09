@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from noesis_server.domain.auth.entities import AuthSession, AuthUser
-from noesis_server.domain.auth.policy import (
+from noesis.domain.auth.entities import AuthSession, AuthUser
+from noesis.domain.auth.policy import (
     digest_secret,
     is_session_valid,
     session_expiry,
@@ -17,24 +17,24 @@ from noesis_server.domain.auth.policy import (
     verify_csrf,
     verify_invite_digest,
 )
-from noesis_server.infrastructure.database.repositories.auth import (
+from noesis.repositories.auth_repository import (
     SqlAlchemySessionRepository,
     SqlAlchemyUserRepository,
     session_from_orm,
     user_from_orm,
 )
-from noesis_server.models.db_models import TUser, TUserSession
+from noesis.storage.postgres.models.auth import TUser, TUserSession
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-AUTH_DOMAIN = BACKEND_ROOT / "noesis_server" / "domain" / "auth"
+AUTH_DOMAIN = BACKEND_ROOT / "server" / "domain" / "auth"
 FORBIDDEN = {
     "fastapi",
     "sqlalchemy",
-    "noesis_server.exceptions",
-    "noesis_server.infrastructure",
-    "noesis_server.models",
-    "noesis_server.services",
+    "server.exceptions",
+    "server.infrastructure",
+    "server.models",
+    "server.services",
 }
 
 

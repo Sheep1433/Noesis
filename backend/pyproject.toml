@@ -5,8 +5,10 @@ description = "Noesis Agent"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Agent harness（内含 noesis.llm；禁止 noesis→services 反向依赖）
-    "noesis-harness",
+    # 核心后端包（import noesis）
+    "noesis-core",
+    # 本地 Agent CLI（评测用，直调 Agent，不走 HTTP）
+    "noesis-cli",
     # API / 持久化
     "alembic>=1.18.5",
     "asyncpg>=0.30.0",
@@ -23,18 +25,12 @@ dependencies = [
     "psycopg[binary,pool]>=3.2.0",
     "pyyaml>=6.0",
     "sqlalchemy[asyncio]>=2.0.44",
-    # Agent
-    "deepagents>=0.6.7",
-    "langchain>=1.0.2",
-    "langchain-community>=0.4",
-    "langchain-deepseek>=1.0.1",
+    # KB 层直接依赖（非经 noesis 间接引入）
+    "langchain-core",
+    "langchain-community",
+    "langchain-openai",
     "langchain-mcp-adapters>=0.1.11",
-    "langchain-openai>=1.0.2",
-    "langchain-qwq>=0.3.5",
-    "langgraph>=1.0.1",
-    "langgraph-checkpoint-postgres>=3.0.0",
-    "tavily-python>=0.5.0",
-    "ddgs>=9.0.0",
+    "langchain-text-splitters",
     # 知识库 / DeepDoc / RAG
     "beartype>=0.18.0",
     "chardet>=5.2.0",
@@ -73,7 +69,8 @@ dev = [
 default-groups = ["dev"]
 
 [tool.uv.sources]
-noesis-harness = { path = "packages/harness", editable = true }
+noesis-core = { path = "packages/noesis-core", editable = true }
+noesis-cli = { path = "packages/noesis-cli", editable = true }
 
 [project.optional-dependencies]
 loadtest = [

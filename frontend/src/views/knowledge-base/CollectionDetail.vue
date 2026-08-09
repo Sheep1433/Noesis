@@ -71,6 +71,15 @@ const documents = ref<DocumentInfo[]>([])
 const drawerShow = ref(false)
 const selectedFileName = ref('')
 
+function openDocumentFromRoute() {
+  const fileName = typeof route.query.file === 'string' ? route.query.file : ''
+  if (!fileName) {
+    return
+  }
+  selectedFileName.value = fileName
+  drawerShow.value = true
+}
+
 const shardDetailShow = ref(false)
 const selectedShardId = ref('')
 
@@ -82,6 +91,8 @@ const showDeleteModal = ref(false)
 const deleteTargetFile = ref('')
 
 const activeTab = ref('documents')
+
+watch(() => route.query.file, openDocumentFromRoute, { immediate: true })
 
 const searchQuery = ref('')
 const searchMode = ref<KbSearchMode>('hybrid')

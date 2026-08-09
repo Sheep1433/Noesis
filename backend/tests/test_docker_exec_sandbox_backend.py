@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from noesis.backends.docker_exec import DockerExecSandboxBackend
+from noesis.agents.backends.docker_exec import DockerExecSandboxBackend
 
 
 class _FakeResponse:

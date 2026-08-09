@@ -112,27 +112,20 @@ summarization:
   trigger_fraction: 0.75
   # 可选摘要窗口覆盖值；0 表示使用 model catalog 的 limit.context
   max_input_tokens: 0
-  # 仅卸載单条 ToolMessage 超过此阈值的正文（典型 web_search ~2.7k，保留在上下文中）
-  tool_offload_threshold: 6000
-  max_retention_ratio: 0.65
   # model profile 不可用时的消息数量 fallback
   messages_to_keep: 28
 
-loop_detection:
-  enabled: true
-  warn_threshold: 3
-  hard_limit: 5
-  window_size: 20
-  max_tracked_threads: 100
-
 agent_runtime:
-  dangling_tool_call_repair_enabled: true
-  tool_call_limit:
-    enabled: true
-    thread_limit: 200
-    run_limit: null
-    exit_behavior: continue
-    task_run_limit: 10
+  # 无 filesystem backend 时，单条 ToolMessage 写入 history 前的字符上限
+  tool_output_max_chars: 24000
+  # Run Governor：统一模型/工具/子 Agent 预算与循环检测
+  governor:
+    tool_calls_enabled: true
+    tool_calls_total: null
+    tool_calls_per_name: 10
+    loop_enabled: true
+    loop_hard_limit: 5
+    loop_window_size: 20
 
 retrieval_limits:
   max_results_per_call: 20
@@ -240,14 +233,14 @@ hitl:
 kb:
   deepdoc:
     enabled: true
-    model_dir: ../.data/rag/res/deepdoc
+    model_dir: ../.noesis/rag/res/deepdoc
   parser:
     default: deepdoc
 
 # 聊天会话附件（COMMON_QA；敏感项无）
 chat_attachment:
   enabled: true
-  # 磁盘路径固定为 .data/users/{user_id}/sessions/{session_id}/uploads|attachments/（见 user_data_paths）
+  # 磁盘路径固定为 .noesis/users/{user_id}/sessions/{session_id}/uploads|attachments/（见 user_data_paths）
   ttl_days: 7
   max_file_mb: 20
   auto_convert: true

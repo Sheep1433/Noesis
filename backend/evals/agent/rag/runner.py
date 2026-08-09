@@ -1,15 +1,14 @@
-"""Run GeneralQAAgent through the real Harness KB Tool chain."""
+"""Run GeneralQAAgent through the real core KB Tool chain."""
 
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 from types import SimpleNamespace
 from typing import Any
 
 from evals.agent.rag.scoring import score_expected_sources
-from evals.agent.runtime import AgentEventCollector
+from evals.agent.runtime import AgentEventCollector, collect_agent_events
 from evals.bootstrap import eval_runtime
 from noesis.agents.common_qa import GeneralQAAgent
 
@@ -30,8 +29,8 @@ async def run_agentic_rag_sample(
     started = time.perf_counter()
 
     async with eval_runtime(no_attachments=True):
-        async def consume() -> None:
-            async for event in agent.run_agent(
+        await collect_agent_events(
+            agent.run_agent(
                 query,
                 session_id=session_id,
                 current_user=SimpleNamespace(user_id="eval-agentic-rag"),
@@ -40,14 +39,11 @@ async def run_agentic_rag_sample(
                 kb_search_enabled=True,
                 web_search_enabled=False,
                 model_id=model_id,
-            ):
-                collector.consume(event)
-
-        try:
-            await asyncio.wait_for(consume(), timeout=time_budget_seconds)
-        except asyncio.TimeoutError:
-            await agent.cancel_task(session_id)
-            collector.error = f"timeout after {time_budget_seconds}s"
+            ),
+            collector,
+            timeout_seconds=time_budget_seconds,
+            cancel=lambda: agent.cancel_task(session_id),
+        )
 
     result = collector.result(
         run_id=session_id,

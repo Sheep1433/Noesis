@@ -37,8 +37,8 @@ assistant 使用 multipart `content.parts`。一轮流式回答只写一条 assi
 
 ## 5. 代码入口
 
-- API：`backend/noesis_server/api/chat_api.py`
-- Service：`backend/noesis_server/services/chat_service.py`、`services/qa/`
-- ORM：`backend/noesis_server/models/chat_models.py`
-- 消息构建：`backend/noesis_server/domain/chat/message_builder.py`
+- API：`backend/server/api/chat_api.py`
+- Service：`backend/packages/noesis-core/src/noesis/services/chat_service.py`、`services/qa/`
+- ORM：`backend/packages/noesis-core/src/noesis/storage/postgres/models/chat.py`
+- 消息构建：`backend/packages/noesis-core/src/noesis/domain/chat/message_builder.py`
 - 前端历史恢复：`frontend/src/store/business/initChatHistory.ts`

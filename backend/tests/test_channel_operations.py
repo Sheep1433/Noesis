@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock
 import pytest
 from cryptography.fernet import Fernet
 
-from noesis_server.domain.chat.delivery.channel_health import channel_health
-from noesis_server.domain.chat.delivery.channels import channel_bindings
-from noesis_server.exceptions.exception import ConflictException
-from noesis_server.services.channel_operations_service import ChannelOperationsService, _last_command
-from noesis_server.services.messaging_channel_service import MessagingChannelService
-from noesis_server.services import messaging_channel_service
+from noesis.domain.chat.delivery.channel_health import channel_health
+from noesis.domain.chat.delivery.channels import channel_bindings
+from noesis.errors.exceptions import ConflictException
+from noesis.services.channel_operations_service import ChannelOperationsService, _last_command
+from noesis.services.messaging_channel_service import MessagingChannelService
+from noesis.services import messaging_channel_service
 
 
 @pytest.fixture(autouse=True)
@@ -62,9 +62,9 @@ async def test_connection_and_delivery_use_adapter_without_chat_side_effect(monk
         async def aclose(self):
             return None
 
-    monkeypatch.setattr("noesis_server.services.channel_operations_service.TelegramBotClient", FakeClient)
+    monkeypatch.setattr("noesis.services.channel_operations_service.TelegramBotClient", FakeClient)
     save_message = AsyncMock()
-    monkeypatch.setattr("noesis_server.services.chat_service.ChatService.save_message", save_message)
+    monkeypatch.setattr("noesis.services.chat_service.ChatService.save_message", save_message)
     connection = await ChannelOperationsService.test_connection("u1", item["channel_id"])
     delivery = await ChannelOperationsService.test_delivery("u1", item["channel_id"])
     assert connection["status"] == "healthy"
@@ -90,9 +90,9 @@ async def test_feishu_connection_and_delivery_use_feishu_client(monkeypatch: pyt
             return {"message_id": "om_1"}
         async def aclose(self): return None
 
-    monkeypatch.setattr("noesis_server.services.channel_operations_service.FeishuBotClient", FakeFeishuClient)
+    monkeypatch.setattr("noesis.services.channel_operations_service.FeishuBotClient", FakeFeishuClient)
     monkeypatch.setattr(
-        "noesis_server.services.channel_operations_service.MessagingConfig",
+        "noesis.services.channel_operations_service.MessagingConfig",
         type("Config", (), {"feishu_app_id": "cli_123", "feishu_app_secret": "app-secret"})(),
     )
     assert (await ChannelOperationsService.test_connection("u1", item["channel_id"]))["status"] == "healthy"
@@ -104,7 +104,7 @@ async def test_feishu_connection_and_delivery_use_feishu_client(monkeypatch: pyt
 async def test_feishu_operation_reports_shared_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     item = _create(type="feishu", bot_token=None, pairing_user_id="ou_1")
     monkeypatch.setattr(
-        "noesis_server.services.channel_operations_service.MessagingConfig",
+        "noesis.services.channel_operations_service.MessagingConfig",
         type("Config", (), {"feishu_app_id": "", "feishu_app_secret": ""})(),
     )
     with pytest.raises(ConflictException) as error:
@@ -141,7 +141,7 @@ async def test_delivery_rejects_cleared_telegram_token(
             raise AssertionError("缺少 Token 时不应构造 Telegram 客户端")
 
     monkeypatch.setattr(
-        "noesis_server.services.channel_operations_service.TelegramBotClient",
+        "noesis.services.channel_operations_service.TelegramBotClient",
         UnexpectedClient,
     )
 
@@ -160,7 +160,7 @@ async def test_test_command_is_rate_limited(monkeypatch: pytest.MonkeyPatch) -> 
         async def get_me(self): return {"id": 1}
         async def aclose(self): return None
 
-    monkeypatch.setattr("noesis_server.services.channel_operations_service.TelegramBotClient", FakeClient)
+    monkeypatch.setattr("noesis.services.channel_operations_service.TelegramBotClient", FakeClient)
     await ChannelOperationsService.test_connection("u1", item["channel_id"])
     with pytest.raises(ConflictException) as error:
         await ChannelOperationsService.test_connection("u1", item["channel_id"])

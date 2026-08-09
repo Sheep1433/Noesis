@@ -9,12 +9,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from noesis_server.infrastructure.database.engine import AsyncSessionLocal
-from noesis_server.services.auth.invites import RegistrationInviteService
+from noesis.storage.postgres.manager import pg_manager
+from noesis.services.auth.invites import RegistrationInviteService
 
 
 async def _rotate(admin_username: str) -> None:
-    async with AsyncSessionLocal() as db:
+    async with pg_manager.get_async_session_context() as db:
         code = await RegistrationInviteService.rotate(db, admin_username)
     print(f"当前邀请码已更新：{code}")
     print("旧邀请码已立即失效；数据库不会保存新邀请码明文。")

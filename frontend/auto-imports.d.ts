@@ -7,6 +7,7 @@
 export {}
 declare global {
   const EffectScope: typeof import('vue')['EffectScope']
+  const NETWORK_TIMEOUT_RE: typeof import('naive-ui')['NETWORK_TIMEOUT_RE']
   const _: typeof import('lodash-es')
   const applyThemePreset: typeof import('./src/hooks/useThemePreset')['applyThemePreset']
   const assertStrictMessageSequence: typeof import('./src/store/business/chatHistorySequence')['assertStrictMessageSequence']

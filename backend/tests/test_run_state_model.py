@@ -1,14 +1,14 @@
 import pytest
 
-from noesis_server.domain.chat.runs import (
+from noesis.domain.chat.runs import (
     InvalidRunTransition,
     RunSnapshot,
     RunStatus,
     can_transition,
     require_transition,
 )
-from noesis_server.domain.chat.delivery.events import HitlRequired, WireFrame
-from noesis_server.services.run_service import RunProjection
+from noesis.domain.chat.delivery.events import HitlRequired, WireFrame
+from noesis.services.run_service import RunProjection
 
 
 def test_run_state_machine_accepts_retry_and_hitl_resume() -> None:

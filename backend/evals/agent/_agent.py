@@ -10,7 +10,7 @@ from typing import Any, Dict
 from noesis.agents.super_agent import SuperAgent
 from noesis.config.user_data_paths import ensure_workspace_dir
 from evals.bootstrap import eval_runtime
-from evals.agent.runtime import AgentEventCollector
+from evals.agent.runtime import AgentEventCollector, collect_agent_events
 
 DEFAULT_TIME_BUDGET_SECONDS = 600
 
@@ -21,6 +21,7 @@ async def _run_async(
     session_id: str,
     user_id: str,
     time_budget_seconds: int,
+    model_id: str | None,
 ) -> AgentEventCollector:
     ensure_workspace_dir(user_id, session_id)
     async with eval_runtime(no_attachments=True):
@@ -28,21 +29,18 @@ async def _run_async(
         user = SimpleNamespace(user_id=user_id)
         collector = AgentEventCollector()
 
-        async def consume() -> None:
-            async for chunk in agent.run_agent(
+        await collect_agent_events(
+            agent.run_agent(
                 query,
                 session_id=session_id,
                 current_user=user,
                 qa_type="SUPER_AGENT_QA",
-            ):
-                collector.consume(chunk)
-
-        try:
-            await asyncio.wait_for(consume(), timeout=time_budget_seconds)
-        except asyncio.TimeoutError:
-            await agent.cancel_task(session_id)
-            collector.error = f"timeout after {time_budget_seconds}s"
-            collector.completed = False
+                model_id=model_id,
+            ),
+            collector,
+            timeout_seconds=time_budget_seconds,
+            cancel=lambda: agent.cancel_task(session_id),
+        )
     return collector
 
 
@@ -52,6 +50,7 @@ def run_super_agent(
     session_id: str,
     user_id: str = "eval",
     time_budget_seconds: int = DEFAULT_TIME_BUDGET_SECONDS,
+    model_id: str | None = None,
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
     collector = asyncio.run(
@@ -60,12 +59,14 @@ def run_super_agent(
             session_id=session_id,
             user_id=user_id,
             time_budget_seconds=time_budget_seconds,
+            model_id=model_id,
         )
     )
     result = collector.result(
         run_id=session_id,
         suite="browsecomp",
         subject="super-agent",
+        model=model_id,
         latency_ms=int((time.perf_counter() - t0) * 1000),
     )
     payload = result.to_dict()

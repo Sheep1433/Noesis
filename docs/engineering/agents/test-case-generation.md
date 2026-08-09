@@ -39,8 +39,8 @@ requirements
 
 ## 5. 代码入口
 
-- Coordinator：`backend/packages/harness/noesis/agents/case_generate/case_coordinator.py`
-- Graph：`backend/packages/harness/noesis/agents/case_generate/case_graph.py`
-- RAG：`backend/packages/harness/noesis/agents/case_generate/rag.py`
-- Schema：`backend/packages/harness/noesis/agents/case_generate/vo.py`
+- Coordinator：`backend/packages/noesis-core/src/noesis/agents/case_generate/case_coordinator.py`
+- Graph：`backend/packages/noesis-core/src/noesis/agents/case_generate/case_graph.py`
+- RAG：`backend/packages/noesis-core/src/noesis/agents/case_generate/rag.py`
+- Schema：`backend/packages/noesis-core/src/noesis/agents/case_generate/vo.py`
 - 评测：`backend/evals/case/`

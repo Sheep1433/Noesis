@@ -5,15 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from noesis.backends.memory import UserMemoryBackend
+from noesis.agents.backends.memory import UserMemoryBackend
 from noesis.config.user_data_paths import (
     ensure_user_memory_files,
     get_user_channels_path,
     get_user_daily_memory_path,
     get_user_memory_dir,
 )
-from noesis_server.services.messaging_channel_service import MessagingChannelService
-from noesis_server.services.user_memory_service import UserMemoryService
+from noesis.services.messaging_channel_service import MessagingChannelService
+from noesis.services.user_memory_service import UserMemoryService
 
 
 def test_user_memory_read_write_same_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

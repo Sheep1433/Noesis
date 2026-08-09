@@ -7,17 +7,17 @@ import pytest
 from cryptography.fernet import Fernet
 from starlette.requests import Request
 
-from noesis_server.common.security.secrets import (
+from noesis.config.secrets import (
     REDACTED,
     SecretCipher,
     SecretEncryptionUnavailable,
     redact_sensitive,
 )
-from noesis_server.exceptions.exception import AuthException
-from noesis_server.infrastructure.database.repositories.settings import SettingsRepository
-from noesis_server.services.settings_service import SettingsService
-from noesis_server.services.auth.sessions import SessionService
-from noesis_server.services.user_service import UserService
+from noesis.errors.exceptions import AuthException
+from noesis.repositories.settings_repository import SettingsRepository
+from noesis.services.settings_service import SettingsService
+from noesis.services.auth.sessions import SessionService
+from noesis.services.user_service import UserService
 
 
 def test_secret_cipher_fails_closed_and_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:

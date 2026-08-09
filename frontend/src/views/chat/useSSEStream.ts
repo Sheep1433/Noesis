@@ -3,7 +3,7 @@
  * 通过回调与 chat.vue 现有 UI 逻辑对接。
  */
 
-import type { AgentRunSnapshot } from '@/api/chat'
+import type { AgentRunSnapshot, AgentStopReason, ContextSnapshot } from '@/api/chat'
 import type { ToolLifecycleState } from '@/views/chat/messageParts'
 import { ref } from 'vue'
 import {
@@ -15,10 +15,24 @@ import {
   subscribeAgentRun,
 } from '@/api/chat'
 
+/** 累计 usage（含可选 detail/attribution，向后兼容缺失字段） */
+export interface UsageUpdate {
+  input_tokens: number
+  output_tokens: number
+  total_tokens?: number
+  input_token_details?: { cache_read?: number, cache_write?: number }
+  output_token_details?: { reasoning?: number }
+  attribution?: {
+    cumulative?: Record<string, number>
+    by_caller?: Record<string, Record<string, number>>
+    by_model?: Record<string, Record<string, number>>
+  }
+}
+
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
-  onUsageUpdate?: (usage: { input_tokens: number, output_tokens: number, total_tokens?: number }) => void
-  onContextUpdate?: (context: { current_tokens: number, max_tokens: number, used_percentage: number }) => void
+  onUsageUpdate?: (usage: UsageUpdate) => void
+  onContextUpdate?: (context: ContextSnapshot) => void
   onTextDelta?: (text: string, parent_task_call_id?: string) => void
   onRetrievalResults?: (part: Record<string, unknown>) => void
   onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
@@ -51,7 +65,7 @@ export interface SSEStreamOptions {
   onMessageStart?: (data: Record<string, unknown>) => void
   onSnapshot?: (snapshot: AgentRunSnapshot) => void
   onRunStatus?: (status: string, message?: string) => void
-  onFinish?: (detail?: { finish_reason?: string }) => void
+  onFinish?: (detail?: { finish_reason?: AgentStopReason }) => void
   onError?: (msg: string) => void
 }
 
@@ -253,27 +267,30 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     if (t === 'usage-update') {
-      const usage = data.usage as { input_tokens?: number, output_tokens?: number, total_tokens?: number } | undefined
+      const usage = data.usage as UsageUpdate | undefined
       if (usage && (usage.input_tokens != null || usage.output_tokens != null)) {
         onUsageUpdate?.({
           input_tokens: Number(usage.input_tokens ?? 0),
           output_tokens: Number(usage.output_tokens ?? 0),
           total_tokens: usage.total_tokens != null ? Number(usage.total_tokens) : undefined,
+          input_token_details: usage.input_token_details,
+          output_token_details: usage.output_token_details,
         })
       }
       return
     }
     if (t === 'context-update') {
-      const context = data.context as {
-        current_tokens?: number
-        max_tokens?: number
-        used_percentage?: number
-      } | undefined
+      const context = data.context as ContextSnapshot | undefined
       if (context && context.max_tokens != null && Number(context.max_tokens) > 0) {
         onContextUpdate?.({
           current_tokens: Number(context.current_tokens ?? 0),
           max_tokens: Number(context.max_tokens),
           used_percentage: Number(context.used_percentage ?? 0),
+          estimated: context.estimated,
+          counting_method: context.counting_method,
+          breakdown: context.breakdown,
+          sources: context.sources,
+          caller: context.caller,
         })
       }
       return
@@ -295,12 +312,15 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     if (t === 'finish') {
-      const usage = data.usage as { input_tokens?: number, output_tokens?: number, total_tokens?: number } | undefined
+      const usage = data.usage as UsageUpdate | undefined
       if (usage && (usage.input_tokens != null || usage.output_tokens != null)) {
         onUsageUpdate?.({
           input_tokens: Number(usage.input_tokens ?? 0),
           output_tokens: Number(usage.output_tokens ?? 0),
           total_tokens: usage.total_tokens != null ? Number(usage.total_tokens) : undefined,
+          input_token_details: usage.input_token_details,
+          output_token_details: usage.output_token_details,
+          attribution: data.attribution as UsageUpdate['attribution'],
         })
       }
       const finish_reason = String(data.finish_reason ?? 'stop')
@@ -315,6 +335,10 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           ? data.error.trim()
           : '生成失败'
         settleFailure(errMsg)
+        return
+      }
+      if (['context_exhausted', 'retryable_error'].includes(finish_reason)) {
+        settleFailure(finish_reason)
         return
       }
       settleSuccess(finish_reason)

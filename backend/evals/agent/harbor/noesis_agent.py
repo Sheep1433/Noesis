@@ -1,37 +1,72 @@
-"""Harbor 自定义 Agent 入口（Harbor Python 进程，子进程拉起 backend Worker）。"""
+"""Harbor BaseAgent adapter backed directly by Noesis core."""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import uuid
-from pathlib import Path
+from langchain.agents.middleware import TodoListMiddleware
+from langchain_core.messages import HumanMessage
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from evals.agent.harbor.harbor_env_proxy import HarborEnvironmentProxy
-from evals.agent.harbor.noesis_artifacts import load_run_summary
+from evals.agent.harbor.harbor_backend import HarborBackend
+from evals.bootstrap import eval_runtime
+from noesis.config import ModelConfig
+from noesis.factory import create_noesis_agent
+from noesis.llm import build_chat_model, get_llm
+from noesis.agents.prompts.execution import build_execution_sections
+from noesis.runtime import DEFAULT_RECURSION_LIMIT, stream_agent_events
 
-_AGENT_VERSION = "0.1.0"
+AGENT_VERSION = "0.1.0"
 
 
-def _backend_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+def _build_system_prompt(*, working_dir: str) -> str:
+    sections = [
+        "<role>",
+        "你是终端任务智能体，在隔离的 Linux 容器内完成用户指令。",
+        "使用 ls、read_file、write_file、edit_file、execute、grep、glob 等工具真实操作容器文件系统。",
+        "</role>",
+        "<environment>",
+        f"- 容器工作目录（execute 默认 cwd）：`{working_dir}`",
+        "- 文件路径须为绝对路径；先用 ls 熟悉目录结构。",
+        "- 交付前用命令或 read_file 验证结果。",
+        "</environment>",
+        *build_execution_sections(include_tool_enforcement=True),
+    ]
+    return "\n\n".join(sections)
+
+
+def _resolve_llm(model_name: str | None):
+    normalized = (model_name or "").strip()
+    if normalized.startswith("opencode/"):
+        return build_chat_model(
+            model_type="opencode",
+            model_name=normalized.split("/", maxsplit=1)[1],
+            temperature=float(os.getenv("HARBOR_NOESIS_TEMPERATURE", "0") or 0),
+            model_base_url=os.getenv("OPENCODE_API_BASE", "").strip()
+            or ModelConfig.model_base_url,
+            model_api_key=os.getenv("OPENCODE_API_KEY", "public"),
+        )
+    if normalized:
+        from noesis.llm.catalog import get_model_catalog
+
+        if normalized in {entry.id for entry in get_model_catalog()}:
+            return get_llm(model_id=normalized)
+    return get_llm()
 
 
 class NoesisHarborAgent(BaseAgent):
-    """Host 侧薄适配：环境代理 + `uv run` 子进程运行 Noesis Agent。"""
-
-    SUPPORTS_ATIF: bool = True
+    """Run Noesis core through Harbor's official custom-agent API."""
 
     @staticmethod
     def name() -> str:
         return "noesis-harbor"
 
     def version(self) -> str | None:
-        return _AGENT_VERSION
+        return AGENT_VERSION
 
     async def setup(self, environment: BaseEnvironment) -> None:
         return
@@ -42,75 +77,37 @@ class NoesisHarborAgent(BaseAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        del context
         session_id = environment.session_id or str(uuid.uuid4())
-        logs_dir = self.logs_dir.resolve()
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        instruction_path = logs_dir / "instruction.txt"
-        instruction_path.write_text(instruction, encoding="utf-8")
-        worker_log_path = logs_dir / "noesis-worker.log"
-
-        proxy = HarborEnvironmentProxy(environment)
-        await proxy.start()
-        host, _, port_str = proxy.url.partition(":")
-        port = int(port_str)
-
-        backend_root = _backend_root()
-        cmd = [
-            "uv",
-            "run",
-            "python",
-            "-m",
-            "evals.agent.harbor.noesis_worker",
-            "--proxy-host",
-            host,
-            "--proxy-port",
-            str(port),
-            "--instruction-file",
-            str(instruction_path),
-            "--logs-dir",
-            str(logs_dir),
-            "--session-id",
-            session_id,
-            "--model-name",
-            self.model_name or "",
-        ]
-
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(backend_root) + (
-            f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else ""
+        pwd = await environment.exec("pwd")
+        working_dir = (pwd.stdout or "/").strip()
+        backend = HarborBackend(
+            environment,
+            loop=asyncio.get_running_loop(),
+            cwd=working_dir,
         )
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(backend_root),
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        assert proc.stdout is not None
-        log_lines: list[str] = []
-        try:
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace").rstrip("\n")
-                log_lines.append(text)
-            return_code = await proc.wait()
-        finally:
-            await proxy.stop()
-            worker_log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
-
-        summary = load_run_summary(logs_dir)
-        context.n_input_tokens = summary.get("tokens", {}).get("input") or None
-        context.n_output_tokens = summary.get("tokens", {}).get("output") or None
-        context.metadata = {
-            "tool_stats": summary.get("tool_stats") or {},
-            "final_text_preview": str(summary.get("final_text") or "")[:500],
-            "worker_return_code": return_code,
-        }
-
-        if return_code != 0:
-            error = summary.get("error") or f"worker exited with code {return_code}"
-            context.metadata["error"] = error
-            raise RuntimeError(error)
+        async with eval_runtime() as checkpointer:
+            agent = create_noesis_agent(
+                tools=[],
+                system_prompt=_build_system_prompt(working_dir=working_dir),
+                checkpointer=checkpointer,
+                backend=backend,
+                extra_middleware=[TodoListMiddleware()],
+                model=_resolve_llm(self.model_name),
+            )
+            async for _ in stream_agent_events(
+                agent,
+                {
+                    "input": {"messages": [HumanMessage(content=instruction)]},
+                    "config": {
+                        "configurable": {"thread_id": session_id},
+                        "recursion_limit": DEFAULT_RECURSION_LIMIT,
+                    },
+                    "langfuse_session_id": session_id,
+                    "qa_type": "HARBOR_EVAL",
+                },
+                task_id=session_id,
+                message_id=f"msg_{uuid.uuid4().hex[:16]}",
+            ):
+                pass

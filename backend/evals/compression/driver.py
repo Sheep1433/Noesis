@@ -1,4 +1,4 @@
-"""加载 fixture → 调用 SummarizationOffloadMiddleware.before_model → 压缩后 messages。"""
+"""加载 fixture → 调用 ContextLifecycle.before_model → 压缩后 messages。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemM
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
-from noesis.middlewares.context_metrics import get_agent_token_counter
+from noesis.agents.middlewares.kernel.context_metrics import get_agent_token_counter
 from noesis.llm.model_limits import resolve_context_max_tokens
-from noesis.middlewares.summary_offload_middleware import SummarizationOffloadMiddleware
+from langchain.agents.middleware.summarization import SummarizationMiddleware
+from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
 from noesis.config.env import ModelConfig
 from noesis.llm import get_llm
 
@@ -50,7 +51,7 @@ def parse_fixture_messages(raw: List[Dict[str, Any]]) -> List[AnyMessage]:
     return convert_to_messages(lc_payload)
 
 
-def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> SummarizationOffloadMiddleware:
+def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> ContextLifecycleMiddleware:
     _require_summarization_enabled()
     options = dict(compress_options or {})
     force = bool(options.get("force", True))
@@ -70,14 +71,13 @@ def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> 
     else:
         trigger = ("fraction", ModelConfig.summarization_trigger_fraction)
 
-    return SummarizationOffloadMiddleware(
+    engine = SummarizationMiddleware(
         model,
         trigger=trigger,
         keep=("messages", keep_n),
         token_counter=get_agent_token_counter(),
-        tool_offload_threshold=ModelConfig.summarization_tool_offload_threshold,
-        max_retention_ratio=ModelConfig.summarization_max_retention_ratio,
     )
+    return ContextLifecycleMiddleware(compaction_engine=engine)
 
 
 def _apply_message_update(original: List[AnyMessage], update: Dict[str, Any]) -> List[AnyMessage]:
@@ -120,7 +120,7 @@ def compress_fixture_messages(
     state: AgentState = {"messages": list(messages)}
     runtime = Runtime(context=SimpleNamespace(backend=None))
 
-    token_counter = middleware.token_counter
+    token_counter = get_agent_token_counter()
     pre_tokens = token_counter(messages)
     pre_count = len(messages)
 

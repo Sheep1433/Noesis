@@ -68,6 +68,26 @@ tool-output-available
 
 `RunProjection` 必须消费 retrieval WireFrame，并与普通 `text-delta` 一起写入 authoritative builder。Bridge builder 只负责把 LangGraph 事件转换为实时协议，不能作为 durable snapshot 的唯一来源。
 
+### 3.1 上下文与用量字段语义
+
+`usage-update`、`context-update`、`finish.usage` 携带两类互不混淆的 token 视角，新增字段均向后兼容（旧客户端忽略新字段）。
+
+**当前上下文（context-update，本地估算）**：描述下一次模型请求的输入构成，每次调用覆盖前一次，不跨调用求和。
+
+- 保留字段：`current_tokens`、`max_tokens`、`used_percentage`。
+- 新增字段：`estimated: true`（始终为本地估算，非计费值）、`counting_method`（`model_tokenizer` | `approximate`）、`breakdown`（system/conversation/tool_results/tool_definitions/other，和等于 `current_tokens`）、`sources`（provenance 驱动的来源细分：skills/memory/rag/attachments）、`caller`。
+- 估算精度：`current_tokens` 优先用模型 tokenizer（对 DeepSeek 系为近似），不可用时回退 `count_tokens_approximately`（4 chars/token）。model tokenizer 路径下 breakdown 用 approximate，`other` 吸收两条路径差值；approximate 路径下和严格等于 `current_tokens`。不按比例改写 breakdown 冒充 Provider 实际 input。
+
+**本轮消耗（usage-update / finish.usage，Provider 实际值）**：描述已发生的模型消耗，按 model run id 去重累计。
+
+- 保留字段：`input_tokens`、`output_tokens`、`total_tokens`。
+- 新增字段：`input_token_details`（`cache_read`/`cache_write`）、`output_token_details`（`reasoning`）。缺失 detail 不补零（区分"Provider 返回 0"与"不支持"）；detail 不参与 `total_tokens` 二次相加。
+- 归因（`finish.attribution`，按需调试）：`cumulative`、`by_caller`（lead_agent/subagent/middleware）、`by_model`、有界 `steps`（上限 200）。默认前端摘要只展示 input/output；cache/reasoning/by_caller/by_model 仅在按需调试视图展示。
+- usage 只在 `on_chat_model_end` 累计（不从 stream chunk 累计），避免部分 stream usage 冻结终态值（曾导致 ↓2 bug）。
+- 持久化只写终态 `last_finish_usage` 一次，不按 token delta 写库；attribution/breakdown 不落库。
+
+排障：`output_tokens` 异常小（如 ↓2）→ 检查是否有 stream chunk usage 抢先累计；`input_tokens` 偏大 → 检查 Provider 是否在 `input_tokens` 含 cache（LangChain 已规范化，但代理可能不符）；context 占用与 Provider input 不等 → 正常，二者口径不同（本地估算 vs Provider 实际）。
+
 ## 4. 工具结果
 
 工具 part 使用三层语义：`status` 表示工具调用是否抛异常，`outcome` 表示成功返回后的执行结果，`state` 是 UI、snapshot 和历史恢复的权威生命周期。详细状态机见 [工具生命周期与失败处理](../../engineering/agents/tool-lifecycle-and-failures.md)。
@@ -110,11 +130,11 @@ SSE 注释保活不推进 sequence，也不落库。反向代理 read timeout �
 
 ## 9. 代码入口
 
-- Bridge：`backend/noesis_server/domain/chat/streaming/langgraph_sse.py`
-- Run lifecycle：`backend/noesis_server/domain/chat/runs/`
-- Run Service：`backend/noesis_server/services/run_service.py`
-- Run API：`backend/noesis_server/api/chat_api.py`
-- QA 编排：`backend/noesis_server/services/qa/`
+- Bridge：`backend/packages/noesis-core/src/noesis/domain/chat/streaming/langgraph_sse.py`
+- Run lifecycle：`backend/packages/noesis-core/src/noesis/domain/chat/runs/`
+- Run Service：`backend/packages/noesis-core/src/noesis/services/run_service.py`
+- Run API：`backend/server/api/chat_api.py`
+- QA 编排：`backend/packages/noesis-core/src/noesis/services/qa/`
 - 前端解析：`frontend/src/views/chat/useSSEStream.ts`
 - parts：`frontend/src/views/chat/messageParts.ts`
-- Tool state：`backend/noesis_server/domain/chat/tool_state.py`
+- Tool state：`backend/packages/noesis-core/src/noesis/domain/chat/tool_state.py`

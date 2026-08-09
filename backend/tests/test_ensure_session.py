@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from noesis_server.api.chat_api import ensure_session
-from noesis_server.schemas.chat_vo import EnsureSessionRequest
+from server.api.chat_api import ensure_session
+from noesis.schemas.chat_vo import EnsureSessionRequest
 
 
 @pytest.mark.asyncio
@@ -27,21 +27,21 @@ async def test_ensure_session_creates_or_gets():
 
     with (
         patch(
-            "noesis_server.api.chat_api.ChatService.is_session_owned_by_other",
+            "server.api.chat_api.ChatService.is_session_owned_by_other",
             new_callable=AsyncMock,
             return_value=False,
         ),
         patch(
-            "noesis_server.api.chat_api.ChatService.get_or_create_session",
+            "server.api.chat_api.ChatService.get_or_create_session",
             new_callable=AsyncMock,
             return_value=mock_session,
         ) as mock_goc,
         patch(
-            "noesis_server.api.chat_api.ChatService.merge_session_extra",
+            "server.api.chat_api.ChatService.merge_session_extra",
             new_callable=AsyncMock,
         ) as mock_merge,
         patch(
-            "noesis_server.api.chat_api.ChatService.get_session_by_id",
+            "server.api.chat_api.ChatService.get_session_by_id",
             new_callable=AsyncMock,
             return_value=mock_session,
         ),

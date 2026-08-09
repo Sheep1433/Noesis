@@ -1,4 +1,4 @@
-"""Harness Agentic RAG evaluation."""
+"""Noesis core Agentic RAG evaluation."""
 
 from evals.agent.rag.scoring import score_expected_sources
 

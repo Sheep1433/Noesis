@@ -76,6 +76,7 @@ watch(
       await loadShards()
     }
   },
+  { immediate: true },
 )
 
 async function loadShards() {

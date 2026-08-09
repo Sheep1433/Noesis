@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from noesis_server.exceptions.exception import ServiceException
-from noesis_server.schemas.qa_vo import MentionItem
-from noesis_server.services.mention_resolve_service import MentionResolveService, parse_mention_items
+from noesis.errors.exceptions import ServiceException
+from noesis.schemas.qa_vo import MentionItem
+from noesis.services.mention_resolve_service import MentionResolveService, parse_mention_items
 
 
 @pytest.fixture()
@@ -30,35 +30,35 @@ def user_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (platform / "SKILL.md").write_text("# dr\n", encoding="utf-8")
 
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.get_user_root",
+        "noesis.services.mention_resolve_service.get_user_root",
         lambda user_id: root if str(user_id) == uid else tmp_path / "users" / str(user_id),
     )
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.get_workspace_dir",
+        "noesis.services.mention_resolve_service.get_workspace_dir",
         lambda user_id, session_id: root / "sessions" / session_id / "workspace",
     )
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.get_session_uploads_dir",
+        "noesis.services.mention_resolve_service.get_session_uploads_dir",
         lambda user_id, session_id: root / "sessions" / session_id / "uploads",
     )
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.get_session_attachments_dir",
+        "noesis.services.mention_resolve_service.get_session_attachments_dir",
         lambda user_id, session_id: root / "sessions" / session_id / "attachments",
     )
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.get_user_skills_dir",
+        "noesis.services.mention_resolve_service.get_user_skills_dir",
         lambda user_id: root / "skills",
     )
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.get_user_agents_md_path",
+        "noesis.services.mention_resolve_service.get_user_agents_md_path",
         lambda user_id: root / "AGENTS.md",
     )
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.get_user_profile_md_path",
+        "noesis.services.mention_resolve_service.get_user_profile_md_path",
         lambda user_id: root / "USER.md",
     )
     monkeypatch.setattr(
-        "noesis_server.services.mention_resolve_service.skills_root",
+        "noesis.services.mention_resolve_service.skills_root",
         lambda: tmp_path / "platform-skills",
     )
     return uid, sid, root

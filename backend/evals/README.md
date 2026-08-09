@@ -6,7 +6,7 @@
 |------|------|------|
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
 | Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
-| Agent / Terminal-Bench | `./evals/agent/harbor/run.sh` | 已实现 |
+| Agent / Terminal-Bench | `./evals/agent/harbor/run-noesis.sh` | 已实现 |
 | Agent / Agentic RAG | `uv run python -m evals.agent.rag` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
@@ -185,7 +185,7 @@ coverage 走 Python 确定性 scorer（`shared/coverage_scorer.py`）；borderli
 
 1. **BrowseComp** — 多步检索 + 短答案（`SuperAgent` / 深度研究能力）
 2. **Harbor + Terminal-Bench** — 终端任务执行（`harbor view` 看轨迹）
-3. **Agentic RAG** — 验证 GeneralQAAgent 经 Harness KB Tool/Port 检索并引用期望来源
+3. **Agentic RAG** — 验证 GeneralQAAgent 经 core KB Tool/Port 检索并引用期望来源
 
 ```
 evals/agent/
@@ -196,33 +196,36 @@ evals/agent/
     __main__.py               # uv run python -m evals.agent.browsecomp
     results/<tag>/
   harbor/
-    run.sh                    # Harbor + Claude Code → terminal-bench@2.0
+    run-noesis.sh             # Noesis SuperAgent
+    run-opencode.sh           # OpenCode 对照组
     README.md
     results/<job-name>/
   rag/
-    __main__.py             # GeneralQAAgent + Harness KB Tool
+    __main__.py             # GeneralQAAgent + core KB Tool
     fixtures/sample.jsonl
 ```
 
 ### BrowseComp
 
 ```bash
-uv run python -m evals.agent.browsecomp --tag bc-smoke --num-examples 5
+uv run python -m evals.agent.browsecomp \
+  --tag bc-smoke --num-examples 5 --model-id flash
 ```
 
 首次运行会从官方 URL 下载 CSV 并缓存到 `evals/agent/browsecomp/data/`；离线重跑复用缓存。也可设置 `BROWSECOMP_CSV_PATH` 指向本地文件。
 
 官方 CSV + `BrowseCompEval` → 指标 **accuracy**。结果：`browsecomp/results/<tag>/summary.json`。
 
-### Terminal-Bench（Harbor + Claude Code）
+### Terminal-Bench（Harbor）
 
 ```bash
 cd backend
-./evals/agent/harbor/run.sh --n-tasks 1 --job-name smoke
-harbor view evals/agent/harbor/results/smoke
+./evals/agent/harbor/run-noesis.sh          # 单题
+./evals/agent/harbor/run-noesis.sh cli-10   # 10 题
+harbor view evals/agent/harbor/results/noesis-cli-10
 ```
 
-前置：Docker、`uv tool install harbor`、本机 `claude` CLI、`~/.claude/settings.json`。产物：`evals/agent/harbor/results/<job-name>/`。
+OpenCode 对照组将脚本替换为 `run-opencode.sh`。产物：`evals/agent/harbor/results/<job-name>/`。
 
 ### Agentic RAG
 
@@ -248,7 +251,7 @@ GeneralQAAgent → create_noesis_agent → search_knowledge_base
 
 ## 3. 消息压缩（`evals.compression`）
 
-评测 `SummarizationOffloadMiddleware`（`before_model` 摘要路径）。流程对齐 [hermes-compression-eval](https://github.com/NousResearch/hermes-compression-eval)：
+评测 `ContextLifecycleMiddleware` 的 `before_model` compaction 路径；内部使用 LangChain `SummarizationMiddleware` 作为摘要 engine，不负责工具结果 offload。流程对齐 [hermes-compression-eval](https://github.com/NousResearch/hermes-compression-eval)：
 
 ```
 fixture → driver.compress() → probe continuation (get_llm) → Judge 五维 0–5 (get_llm)

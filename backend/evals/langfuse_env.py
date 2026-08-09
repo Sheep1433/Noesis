@@ -59,7 +59,7 @@ def eval_langfuse_run(
 
     仅在 with 块内临时设置 Langfuse SDK 所需环境变量，退出后恢复，不影响主项目。
   """
-    from noesis_server.infrastructure.observability.langfuse import activate_eval_langfuse
+    from server.langfuse import activate_eval_langfuse
 
     settings = load_eval_langfuse_settings()
     if settings is None or not settings.tracing_enabled:

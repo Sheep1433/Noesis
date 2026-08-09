@@ -82,12 +82,8 @@ main() {
   wait_for_backend "启动后"
 
   cd "$FRONTEND_DIR"
-  if [[ "${SKIP_FRONTEND_BUILD:-0}" != "1" ]]; then
-    log_info "构建前端 (pnpm build) ..."
-    pnpm build
-  else
-    log_warn "SKIP_FRONTEND_BUILD=1，跳过 pnpm build"
-  fi
+  log_info "构建前端 (pnpm build) ..."
+  pnpm build
   wait_for_backend "构建后"
 
   log_info "启动前端预览 ${FRONTEND_PORT} (pnpm preview, /api → 127.0.0.1:${PORT}) ..."

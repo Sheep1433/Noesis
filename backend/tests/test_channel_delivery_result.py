@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from noesis_server.services.channel_run_service import _set_delivery_result
-from noesis_server.domain.chat.delivery.events import RunCompleted
-from noesis_server.domain.chat.runs import RunStatus
-from noesis_server.services import channel_run_service as channel_service
+from noesis.services.channel_run_service import _set_delivery_result
+from noesis.domain.chat.delivery.events import RunCompleted
+from noesis.domain.chat.runs import RunStatus
+from noesis.services import channel_run_service as channel_service
 
 
 class _DbContext:
@@ -28,7 +28,7 @@ async def test_channel_delivery_failure_is_written_independently(monkeypatch) ->
     db.execute = AsyncMock()
     db.commit = AsyncMock()
     monkeypatch.setattr(
-        "noesis_server.services.channel_run_service.AsyncSessionLocal",
+        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
         lambda: _DbContext(db),
     )
 
@@ -48,7 +48,7 @@ async def test_channel_delivery_failure_is_written_independently(monkeypatch) ->
 async def test_no_outbound_delivery_does_not_write(monkeypatch) -> None:
     local = MagicMock()
     monkeypatch.setattr(
-        "noesis_server.services.channel_run_service.AsyncSessionLocal", local
+        "noesis.storage.postgres.manager.pg_manager.get_async_session_context", local
     )
 
     await _set_delivery_result(None, "completed")
@@ -62,7 +62,7 @@ async def test_headless_automation_run_completes_without_browser_subscription(mo
     db.add = MagicMock()
     db.execute = AsyncMock()
     db.commit = AsyncMock()
-    monkeypatch.setattr(channel_service, "AsyncSessionLocal", lambda: _DbContext(db))
+    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", lambda: _DbContext(db))
     monkeypatch.setattr(
         channel_service.UserService,
         "_user_from_id",
@@ -70,7 +70,7 @@ async def test_headless_automation_run_completes_without_browser_subscription(mo
     )
     monkeypatch.setattr(channel_service.ChatService, "get_or_create_session", AsyncMock())
     monkeypatch.setattr(channel_service.ChatService, "save_message", AsyncMock())
-    from noesis_server.services.qa import helpers as qs
+    from noesis.services.qa import helpers as qs
 
     monkeypatch.setattr(qs, "_resolve_model_for_query", AsyncMock(return_value=None))
     monkeypatch.setattr(qs, "_resolved_model_name", lambda _model_id: None)

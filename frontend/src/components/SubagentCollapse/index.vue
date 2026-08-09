@@ -136,7 +136,7 @@ const durationDisplay = computed(() => {
               <span v-if="durationDisplay" class="subagent-duration">{{ durationDisplay }}</span>
               <n-tag type="info" size="small" round bordered>{{ subagentTypeLabel }}</n-tag>
               <n-tag v-if="runStatus === 'in_progress'" type="warning" size="small" round bordered>进行中</n-tag>
-              <n-tag v-else-if="runStatus === 'completed'" type="success" size="small" round bordered>完成</n-tag>
+              <n-tag v-else-if="runStatus === 'completed'" type="success" size="small" round bordered>已完成</n-tag>
               <n-tag v-else-if="runStatus === 'failed'" type="error" size="small" round bordered>失败</n-tag>
             </div>
           </div>

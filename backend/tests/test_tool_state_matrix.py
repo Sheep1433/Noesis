@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import pytest
 
-from noesis_server.domain.chat.delivery.events import (
+from noesis.domain.chat.delivery.events import (
     HitlRequired,
     RunAborted,
     RunCompleted,
     RunError,
     WireFrame,
 )
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.domain.chat.tool_state import (
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.tool_state import (
     ToolState,
     can_transition_tool_state,
     derive_tool_state,
 )
-from noesis_server.services.run_service import RunProjection
+from noesis.services.run_service import RunProjection
 
 
 @pytest.mark.parametrize(

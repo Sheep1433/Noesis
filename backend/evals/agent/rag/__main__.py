@@ -70,7 +70,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Harness Agentic RAG evaluation")
+    parser = argparse.ArgumentParser(description="Noesis core Agentic RAG evaluation")
     parser.add_argument("--dataset", default="fixtures/sample.jsonl")
     parser.add_argument("--output", default="")
     parser.add_argument("--model-id", default="")

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from noesis.config import user_data_paths as paths
-from noesis_server.services.skill_fs_service import SkillFsService
+from noesis.services.skill_fs_service import SkillFsService
 
 
 @pytest.fixture

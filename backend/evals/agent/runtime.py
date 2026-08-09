@@ -1,10 +1,11 @@
-"""Shared event collection and result schema for Harness-based Agent evaluations."""
+"""Shared event collection and result schema for core Agent evaluations."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, AsyncIterable, Awaitable, Callable
 
 
 def _text(value: Any) -> str:
@@ -30,6 +31,7 @@ class AgentRunResult:
     output_tokens: int = 0
     error: str | None = None
     artifacts: list[str] = field(default_factory=list)
+    outcome: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -51,13 +53,24 @@ class AgentEventCollector:
     input_tokens: int = 0
     output_tokens: int = 0
     error: str | None = None
+    outcome: dict[str, Any] | None = None
     _pending_tools: dict[str, str] = field(default_factory=dict)
 
     def consume(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
         if event_type == "__tw_finish__":
             self.finish_reason = str(event.get("finish_reason") or "") or None
-            self.completed = self.finish_reason == "stop"
+            self.completed = self.error is None and self.finish_reason in {None, "stop", "completed"}
+            if self.finish_reason not in {None, "stop", "completed"}:
+                self.outcome = {
+                    "status": "stop",
+                    "reason": self.finish_reason,
+                }
+            return
+        if event_type in {"runtime-outcome", "runtime_outcome"} or isinstance(event.get("outcome"), dict):
+            value = event.get("outcome") if isinstance(event.get("outcome"), dict) else event
+            self.outcome = dict(value)
+            self.finish_reason = str(self.outcome.get("reason") or self.finish_reason or "") or None
             return
         if event_type in {"__tw_error__", "abort", "__tw_abort__"}:
             self.error = str(event.get("content") or "agent error")
@@ -120,4 +133,40 @@ class AgentEventCollector:
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
             error=self.error,
+            outcome=dict(self.outcome) if self.outcome is not None else None,
         )
+
+
+async def collect_agent_events(
+    events: AsyncIterable[dict[str, Any]],
+    collector: AgentEventCollector,
+    *,
+    timeout_seconds: int,
+    cancel: Callable[[], Awaitable[Any]],
+) -> None:
+    """Collect a stream while keeping timeout ownership in the eval runner."""
+
+    async def consume() -> None:
+        async for event in events:
+            collector.consume(event)
+
+    task = asyncio.create_task(consume())
+    timeout_error: str | None = None
+    try:
+        done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
+        if task in done:
+            await task
+            return
+
+        timeout_error = f"timeout after {timeout_seconds}s"
+        try:
+            await asyncio.wait_for(cancel(), timeout=5)
+        except Exception as exc:  # noqa: BLE001
+            timeout_error += f"; cancellation failed: {exc}"
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if timeout_error is not None:
+            collector.error = timeout_error
+            collector.completed = False

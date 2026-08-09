@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
-from noesis_server.infrastructure.observability import langfuse as lf
+from server import langfuse as lf
 from evals.langfuse_env import EvalLangfuseSettings, eval_langfuse_run
 
 

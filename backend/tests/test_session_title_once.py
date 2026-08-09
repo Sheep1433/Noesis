@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from noesis_server.models.chat_models import TChatSession
-from noesis_server.services.chat_service import ChatService
+from noesis.storage.postgres.models.chat import TChatSession
+from noesis.services.chat_service import ChatService
 
 
 def _session(title: str) -> TChatSession:
@@ -26,10 +26,10 @@ async def test_set_session_title_if_default_updates_new_dialog() -> None:
     db.execute = AsyncMock(return_value=result_mock)
 
     with patch(
-        "noesis_server.services.chat_service.ChatService.update_session_title",
+        "noesis.services.chat_service.ChatService.update_session_title",
         new_callable=AsyncMock,
     ) as upd:
-        from noesis_server.services.chat_service import ChatService
+        from noesis.services.chat_service import ChatService
 
         await ChatService.set_session_title_if_default(
             session_id="session-1",
@@ -55,10 +55,10 @@ async def test_set_session_title_if_default_skips_custom_title() -> None:
     db.execute = AsyncMock(return_value=result_mock)
 
     with patch(
-        "noesis_server.services.chat_service.ChatService.update_session_title",
+        "noesis.services.chat_service.ChatService.update_session_title",
         new_callable=AsyncMock,
     ) as upd:
-        from noesis_server.services.chat_service import ChatService
+        from noesis.services.chat_service import ChatService
 
         out = await ChatService.set_session_title_if_default(
             session_id="session-1",

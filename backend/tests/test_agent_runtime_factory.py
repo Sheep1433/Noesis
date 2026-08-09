@@ -1,82 +1,47 @@
-"""Agent runtime factory：middleware 栈与中断后继续推理的前置条件。"""
+"""Agent runtime factory inventory and ordering contracts."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from langchain_core.messages import AIMessage, ToolMessage
+
 from noesis.factory import build_noesis_runtime_middleware
-from noesis.middlewares import (
-    ContextBudgetGuardMiddleware,
-    DanglingToolCallMiddleware,
-    LoopDetectionMiddleware,
-    SessionClockMiddleware,
-    SummarizationOffloadMiddleware,
-    ToolErrorHandlingMiddleware,
-)
-from langchain_core.messages import AIMessage
-
-from noesis.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware as DTM
+from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
 
 
-def test_runtime_stack_includes_guards_when_enabled() -> None:
-    cfg = SimpleNamespace(
+def test_runtime_stack_contains_only_the_five_kernel_owners() -> None:
+    config = SimpleNamespace(
         context_display_enabled=False,
-        dangling_tool_call_repair_enabled=True,
-        loop_detection_enabled=True,
-        loop_detection_warn_threshold=3,
-        loop_detection_hard_limit=5,
+        summarization_enabled=False,
+        max_retries=0,
     )
-    summary_mw = SummarizationOffloadMiddleware(MagicMock())
+    with patch("noesis.factory.ModelConfig", config):
+        stack = build_noesis_runtime_middleware()
 
-    with (
-        patch("noesis.factory.ModelConfig", cfg),
-        patch("noesis.factory.create_summary_offload_middleware", return_value=summary_mw),
-    ):
-        stack = build_noesis_runtime_middleware(include_tool_call_limits=False)
-
-    types = [type(m) for m in stack]
-    assert types[0] is SessionClockMiddleware
-    assert DanglingToolCallMiddleware in types
-    assert SummarizationOffloadMiddleware in types
-    assert LoopDetectionMiddleware in types
-    assert ToolErrorHandlingMiddleware in types
-    assert ContextBudgetGuardMiddleware in types
-    assert types.index(DanglingToolCallMiddleware) < types.index(LoopDetectionMiddleware)
-    assert types.index(LoopDetectionMiddleware) < types.index(ToolErrorHandlingMiddleware)
-    assert types.index(ToolErrorHandlingMiddleware) < types.index(ContextBudgetGuardMiddleware)
+    assert [type(item).__name__ for item in stack] == [
+        "RuntimeTelemetryMiddleware",
+        "ToolExecutionMiddleware",
+        "RunGovernorMiddleware",
+        "ContextLifecycleMiddleware",
+        "ModelExecutionMiddleware",
+    ]
 
 
-def test_runtime_stack_respects_disable_flags() -> None:
-    cfg = SimpleNamespace(
-        context_display_enabled=False,
-        dangling_tool_call_repair_enabled=False,
-        loop_detection_enabled=False,
-    )
-    with (
-        patch("noesis.factory.ModelConfig", cfg),
-        patch("noesis.factory.create_summary_offload_middleware", return_value=None),
-    ):
-        stack = build_noesis_runtime_middleware(include_tool_call_limits=False)
-
-    assert not any(isinstance(m, DanglingToolCallMiddleware) for m in stack)
-    assert not any(isinstance(m, LoopDetectionMiddleware) for m in stack)
-
-
-def test_dangling_repair_does_not_mutate_persisted_parts_shape() -> None:
-    """synthetic repair 仅补丁模型输入，不改变 content.parts 结构约定。"""
+def test_context_normalization_does_not_mutate_persisted_parts_shape() -> None:
     persisted = {
         "version": 1,
         "parts": [{"type": "tool", "tool_call_id": "call_1", "status": "streaming"}],
     }
-    mw = DTM()
-    msgs = [
-        AIMessage(
-            content="",
-            tool_calls=[{"name": "bash", "id": "call_1", "args": {}}],
-        )
+    messages = [
+        AIMessage(content="", tool_calls=[{"name": "bash", "id": "call_1", "args": {}}])
     ]
-    patched = mw._build_patched_messages(msgs)
-    assert patched is not None
+
+    normalized = ContextLifecycleMiddleware.normalize_messages(messages)
+
+    assert isinstance(normalized[-1], ToolMessage)
+    assert normalized[-1].tool_call_id == "call_1"
     assert persisted == {
         "version": 1,
         "parts": [{"type": "tool", "tool_call_id": "call_1", "status": "streaming"}],

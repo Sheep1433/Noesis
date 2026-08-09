@@ -5,12 +5,12 @@ export interface SkillPackageOption {
   source: SkillSource
 }
 
-/** n-tree 不接受 children: null，统一为 undefined */
+/** 叶子节点不带 children；目录节点保留空数组，避免 n-tree 误判为异步加载 */
 export function normalizeSkillsTreeNodes(nodes: SkillFsTreeNode[]): SkillFsTreeNode[] {
   return nodes.map((node) => {
-    const children = node.children?.length
-      ? normalizeSkillsTreeNodes(node.children)
-      : undefined
+    const children = node.isLeaf
+      ? undefined
+      : normalizeSkillsTreeNodes(node.children ?? [])
     return { ...node, children }
   })
 }

@@ -6,15 +6,15 @@ from typing import Any, Dict, List
 
 import pytest
 
-from noesis_server.domain.chat.delivery.channels import ChannelBinding, channel_bindings
-from noesis_server.domain.chat.delivery.events import RunCompleted, WireFrame
-from noesis_server.domain.chat.delivery.channels import route_inbound
-from noesis_server.domain.chat.delivery.telegram.adapter import (
+from noesis.domain.chat.delivery.channels import ChannelBinding, channel_bindings
+from noesis.domain.chat.delivery.events import RunCompleted, WireFrame
+from noesis.domain.chat.delivery.channels import route_inbound
+from noesis.domain.chat.delivery.telegram.adapter import (
     TelegramChannelAdapter,
     extract_plain_text_from_parts,
 )
-from noesis_server.domain.chat.delivery.telegram.client import mask_bot_token
-from noesis_server.services.messaging_channel_service import MessagingChannelService
+from noesis.domain.chat.delivery.telegram.client import mask_bot_token
+from noesis.services.messaging_channel_service import MessagingChannelService
 
 
 @pytest.mark.asyncio
@@ -141,10 +141,10 @@ def test_iter_enabled_runtime_includes_token(tmp_path: Path, monkeypatch: pytest
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "noesis_server.services.messaging_channel_service._USERS_ROOT", users
+        "noesis.services.messaging_channel_service._USERS_ROOT", users
     )
     monkeypatch.setattr(
-        "noesis_server.services.messaging_channel_service.get_user_channels_path",
+        "noesis.services.messaging_channel_service.get_user_channels_path",
         lambda user_id: users / str(user_id) / "channels.json",
     )
     items = MessagingChannelService.iter_enabled_runtime("telegram")

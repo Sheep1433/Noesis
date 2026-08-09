@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from noesis.config.user_data_paths import ensure_user_memory_files, get_user_daily_memory_path
-from noesis_server.services.memory_dream_service import DreamMessage, build_entries, parse_daily_entries, render_daily_memory
-from noesis_server.services.user_memory_service import UserMemoryService
+from noesis.services.memory_dream_service import DreamMessage, build_entries, parse_daily_entries, render_daily_memory
+from noesis.services.user_memory_service import UserMemoryService
 
 
 @pytest.fixture(autouse=True)

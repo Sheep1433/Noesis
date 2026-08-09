@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from noesis_server.models.settings_models import TUserScheduledTaskRun
-from noesis_server.services.scheduled_task_service import (
+from noesis.storage.postgres.models.settings import TUserScheduledTaskRun
+from noesis.services.scheduled_task_service import (
     ScheduledTaskService,
     compute_next_run_ms,
     cron_summary,
@@ -66,7 +66,7 @@ async def test_successful_run_has_terminal_record(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_notification_preference_does_not_stop_business_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    from noesis_server.services.notification_preference_service import NotificationPreferenceService
+    from noesis.services.notification_preference_service import NotificationPreferenceService
     task = _task()
     task.delivery = "web_notify"
     db = SimpleNamespace(execute=AsyncMock(return_value=_ScalarResult()), add=lambda _row: None, commit=AsyncMock(), refresh=AsyncMock())
@@ -83,7 +83,7 @@ async def test_notification_preference_does_not_stop_business_run(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_enabled_web_notification_is_delivered_via_run_record(monkeypatch: pytest.MonkeyPatch) -> None:
-    from noesis_server.services.notification_preference_service import NotificationPreferenceService
+    from noesis.services.notification_preference_service import NotificationPreferenceService
 
     task = _task()
     task.delivery = "web_notify"
@@ -98,7 +98,7 @@ async def test_enabled_web_notification_is_delivered_via_run_record(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_enabled_channel_notification_uses_delivery_surface(monkeypatch: pytest.MonkeyPatch) -> None:
-    from noesis_server.services.notification_preference_service import NotificationPreferenceService
+    from noesis.services.notification_preference_service import NotificationPreferenceService
 
     task = _task()
     task.delivery = "channel:channel-1"

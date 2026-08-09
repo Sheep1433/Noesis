@@ -1,4 +1,4 @@
-from noesis_server.server import app
+from server.main import app
 
 
 def test_user_provider_routes_are_not_registered() -> None:

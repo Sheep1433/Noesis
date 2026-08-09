@@ -1,12 +1,12 @@
 """LcEventMapper + SseCodec 契约冒烟。"""
 from __future__ import annotations
 
-from noesis_server.domain.chat.delivery.events import HitlRequired, RunPaused, StreamDone, WireFrame
-from noesis_server.domain.chat.delivery.sse import LcEventMapper
-from noesis_server.domain.chat.delivery.sse import encode_run_event, parse_sse_line_to_event
-from noesis_server.domain.chat.delivery.sse import encode_filtered
-from noesis_server.domain.chat.message_builder import AssistantMessageBuilder
-from noesis_server.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.domain.chat.delivery.events import HitlRequired, RunPaused, StreamDone, WireFrame
+from noesis.domain.chat.delivery.sse import LcEventMapper
+from noesis.domain.chat.delivery.sse import encode_run_event, parse_sse_line_to_event
+from noesis.domain.chat.delivery.sse import encode_filtered
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
 
 
 def test_parse_hitl_required_and_paused() -> None:

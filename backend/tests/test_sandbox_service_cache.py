@@ -1,4 +1,4 @@
-"""Harness sandbox lifecycle：session 缓存失效与重建。"""
+"""Core sandbox lifecycle：session 缓存失效与重建。"""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from noesis.backends import sandbox_lifecycle as life
+from noesis.agents.backends import sandbox_lifecycle as life
 
-_LIFE = "noesis.backends.sandbox_lifecycle"
+_LIFE = "noesis.agents.backends.sandbox_lifecycle"
 
 
 @pytest.fixture(autouse=True)

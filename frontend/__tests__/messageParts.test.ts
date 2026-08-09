@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { parseTaskToolOutput } from '@/utils/parseTaskTool'
-import { applyToolOutput, assistantToolFailureSummary, markStreamingPartsComplete, normalizeApiContent, shouldShowAssistantToolFailureSummary, TOOL_STATE_LABELS } from '@/views/chat/messageParts'
+import {
+  applyToolOutput,
+  assistantToolFailureSummary,
+  formatContextWindowTooltip,
+  formatUsageSummary,
+  hasValidContextWindow,
+  hasValidUsage,
+  markStreamingPartsComplete,
+  normalizeApiContent,
+  shouldShowAssistantToolFailureBlocker,
+  TOOL_STATE_LABELS,
+} from '@/views/chat/messageParts'
 
 describe('message parts snapshot normalization', () => {
   it('解析普通文本与 retrieval parts', () => {
@@ -104,7 +115,7 @@ describe('message parts snapshot normalization', () => {
     })
   })
 
-  it('失败终态不会被晚到 running 覆盖，多个失败只派生一次回答级提示', () => {
+  it('失败终态不会被晚到 running 覆盖，有最终回答时不派生误导性汇总', () => {
     const initial = normalizeApiContent({
       parts: [
         { type: 'tool', tool_call_id: 'call-1', name: 'web_fetch', status: 'error', state: 'failed' },
@@ -121,8 +132,9 @@ describe('message parts snapshot normalization', () => {
     expect((afterLateEvent[0] as any).state).toBe('failed')
     expect(assistantToolFailureSummary(afterLateEvent)).toEqual({
       hasFailure: true,
-      hasVisibleText: true,
+      hasFinalText: true,
     })
+    expect(shouldShowAssistantToolFailureBlocker(afterLateEvent, false)).toBe(false)
   })
 
   it('run 仍在继续时不应提前显示本轮未完成', () => {
@@ -135,8 +147,19 @@ describe('message parts snapshot normalization', () => {
     }).parts
 
     expect(assistantToolFailureSummary(parts).hasFailure).toBe(true)
-    expect(shouldShowAssistantToolFailureSummary(parts, true)).toBe(false)
-    expect(shouldShowAssistantToolFailureSummary(parts, false)).toBe(true)
+    expect(shouldShowAssistantToolFailureBlocker(parts, true)).toBe(false)
+    expect(shouldShowAssistantToolFailureBlocker(parts, false)).toBe(true)
+  })
+
+  it('工具前的过程文本不应被当作最终回答', () => {
+    const parts = normalizeApiContent({
+      parts: [
+        { type: 'text', content: '我来查询一下。' },
+        { type: 'tool', tool_call_id: 'call-1', name: 'web_fetch', status: 'error', state: 'failed' },
+      ],
+    }).parts
+
+    expect(shouldShowAssistantToolFailureBlocker(parts, false)).toBe(true)
   })
 
   it('缺少权威 state 时拒绝猜测工具状态', () => {
@@ -166,5 +189,113 @@ describe('message parts snapshot normalization', () => {
       status: 'completed',
       result: undefined,
     })
+  })
+})
+
+// ---------- task 5.4: 旧事件 / 部分 details / 零值 / 刷新恢复 / 会话切换 兼容 ----------
+
+describe('context window tooltip 兼容旧事件与新字段', () => {
+  it('旧事件无 breakdown：只展示 current/max 总量', () => {
+    const tooltip = formatContextWindowTooltip({
+      current_tokens: 5000,
+      max_tokens: 128000,
+      used_percentage: 4,
+    })
+    expect(tooltip).toBe('5K / 128K')
+    expect(tooltip).not.toContain('系统')
+  })
+
+  it('新事件含 breakdown：展示分类明细与估算标识', () => {
+    const tooltip = formatContextWindowTooltip({
+      current_tokens: 12000,
+      max_tokens: 128000,
+      used_percentage: 9,
+      estimated: true,
+      breakdown: {
+        system: 3200, conversation: 5100, tool_results: 1800,
+        tool_definitions: 1200, other: 700,
+      },
+      sources: { skills: 900, memory: 300 },
+    })
+    expect(tooltip).toContain('12K / 128K')
+    expect(tooltip).toContain('估算')
+    expect(tooltip).toContain('系统 3.2K')
+    expect(tooltip).toContain('对话 5.1K')
+    expect(tooltip).toContain('工具结果 1.8K')
+    expect(tooltip).toContain('工具定义 1.2K')
+    expect(tooltip).toContain('其他 700')
+    expect(tooltip).toContain('skills 900')
+    expect(tooltip).toContain('memory 300')
+  })
+
+  it('breakdown other 为 0 时不展示「其他」行', () => {
+    const tooltip = formatContextWindowTooltip({
+      current_tokens: 1000,
+      max_tokens: 128000,
+      used_percentage: 1,
+      breakdown: {
+        system: 300, conversation: 500, tool_results: 100,
+        tool_definitions: 100, other: 0,
+      },
+    })
+    expect(tooltip).not.toContain('其他')
+  })
+})
+
+describe('usage summary 兼容零值与缺失 details', () => {
+  it('基础 usage（无 details）正常展示', () => {
+    const text = formatUsageSummary({
+      input_tokens: 21400,
+      output_tokens: 593,
+      total_tokens: 21993,
+    })
+    expect(text).toContain('↑21.4K')
+    expect(text).toContain('↓593')
+    expect(text).toContain('共 22K')
+  })
+
+  it('含 details 的 usage 默认摘要不展示 cache/reasoning', () => {
+    const text = formatUsageSummary({
+      input_tokens: 21400,
+      output_tokens: 593,
+      total_tokens: 21993,
+      input_token_details: { cache_read: 60, cache_write: 0 },
+      output_token_details: { reasoning: 8 },
+    })
+    // 默认摘要只展示 input/output/total
+    expect(text).toBe('↑21.4K ↓593 · 共 22K')
+    expect(text).not.toContain('cache')
+    expect(text).not.toContain('reasoning')
+  })
+
+  it('零值 usage 仍可格式化', () => {
+    const text = formatUsageSummary({
+      input_tokens: 0,
+      output_tokens: 0,
+    })
+    expect(text).toContain('↑0')
+    expect(text).toContain('↓0')
+  })
+})
+
+describe('hasValidUsage / hasValidContextWindow 降级', () => {
+  it('hasValidUsage 拒绝空对象与缺失字段', () => {
+    expect(hasValidUsage(null)).toBe(false)
+    expect(hasValidUsage({})).toBe(false)
+    expect(hasValidUsage({ input_tokens: 0, output_tokens: 0 })).toBe(false)
+    expect(hasValidUsage({ input_tokens: 100, output_tokens: 0 })).toBe(true)
+  })
+
+  it('hasValidContextWindow 拒绝缺字段与零 max', () => {
+    expect(hasValidContextWindow(null)).toBe(false)
+    expect(hasValidContextWindow({ current_tokens: 100 })).toBe(false)
+    expect(hasValidContextWindow({ current_tokens: 100, max_tokens: 0, used_percentage: 1 })).toBe(false)
+    expect(hasValidContextWindow({ current_tokens: 100, max_tokens: 128000, used_percentage: 1 })).toBe(true)
+  })
+
+  it('历史消息缺新字段（breakdown/sources）仍通过校验', () => {
+    expect(hasValidContextWindow({
+      current_tokens: 5000, max_tokens: 128000, used_percentage: 4,
+    })).toBe(true)
   })
 })

@@ -15,7 +15,7 @@ from noesis.agents.case_generate.rag import (
     build_scene_rag_context,
 )
 from noesis.agents.case_generate.case_graph import _build_scene_cases_prompt
-from noesis_server.kb.retrieval import KbSearchHit
+from noesis.knowledge.retrieval import KbSearchHit
 
 
 def _hit(hit_id: str, content: str, *, file_name: str = "a.md") -> KbSearchHit:
@@ -127,7 +127,7 @@ async def test_build_scene_rag_context_langfuse_spans_when_enabled():
         with patch("langfuse.get_client", return_value=mock_client):
             with patch.object(_HybridRetriever, "search", new=_side_effect):
                 with patch("noesis.agents.case_generate.rag.QdrantConfig", qdrant_cfg):
-                    from noesis_server.infrastructure.observability.langfuse import langfuse_workflow_context
+                    from server.langfuse import langfuse_workflow_context
 
                     run_config = {
                         "metadata": {

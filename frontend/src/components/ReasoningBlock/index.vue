@@ -38,7 +38,7 @@ withDefaults(defineProps<Props>(), {
             <span class="reasoning-name">{{ streaming ? '思考中…' : '思考过程' }}</span>
             <div class="reasoning-header__tags">
               <n-tag v-if="streaming" type="warning" size="small" round bordered>运行中</n-tag>
-              <n-tag v-else type="success" size="small" round bordered>完成</n-tag>
+              <n-tag v-else type="success" size="small" round bordered>已完成</n-tag>
             </div>
           </div>
         </div>

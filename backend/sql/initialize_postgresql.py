@@ -14,7 +14,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
 from noesis.config.env import DataBaseConfig, get_config  # noqa: E402
-from noesis_server.infrastructure.database.migrations import run_migrations  # noqa: E402
+from server.db import run_migrations  # noqa: E402
 
 
 def server_url() -> str:
