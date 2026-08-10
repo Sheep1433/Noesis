@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力是 Noesis **网页聊天平台**的权威规格：会话与消息 API、`qa_type` 路由、SSE 对外契约、流式 assistant 落库状态机、停止与失败分流、以及 chat 页与流式强相关的 UI（reasoning / tool / todo / 子 Agent）。Composer 面（上传、mentions、上下文面板）见 `chat-composer`；Run Fan-out / 通道见 `agent-delivery`；HITL 策略见 `agent-hitl`。
+本能力是 Noesis **网页聊天平台**的权威规格：会话与消息 API、`qa_type` 路由、SSE 对外契约、流式 assistant 落库状态机、停止与失败分流、以及 chat 页与流式强相关的 UI（reasoning / tool / todo / 子 Agent / 引用与来源展示）。Composer 面（上传、mentions、上下文面板）见 `chat-composer`；Run Fan-out / 通道见 `agent-delivery`；HITL 策略见 `agent-hitl`。
 ## Requirements
 ### Requirement: 会话生命周期管理
 
@@ -342,15 +342,28 @@ chat 页 SHALL 为一次用户发送生成稳定 `client_request_id`，在创建
 - **WHEN** 用户没有任何用途绑定并发起现有聊天请求
 - **THEN** 系统 SHALL 按平台/环境默认正常运行且前端无需新增 SSE 分支
 
-### Requirement: 平台聊天 SHALL 以普通文本交付 citation
+### Requirement: Citation SHALL 由 Prompt 生成普通 Markdown 文本交付
 
-引用编号 SHALL 作为普通 Markdown text part 的内容，经现有 `text-start`、`text-delta`、`text-end` 和 `finish` 交付。平台 SHALL NOT 增加 citation structured response、citation 专用终态文本或第二份 citation annotation。
+系统 SHALL 通过共享 system prompt 要求 Agent 在普通 Markdown 回答中为 Web 和 KB 统一生成 `[n]` 引用及 `### 参考资料`，并作为普通 Markdown text part 经现有 `text-start`、`text-delta`、`text-end` 和 `finish` 交付。系统 SHALL NOT 使用 typed answer segment、structured `response_format`、虚拟 Tool、citation structured response、citation 专用终态文本或第二份 citation annotation。平台 MAY 解析已生成的 Markdown 编号并将其与本轮 retrieval 做确定性匹配，但 SHALL NOT 改写模型正文。
 
 #### Scenario: 流式输出带 Markdown 引用的回答
 
 - **WHEN** 模型逐 token 生成正文编号和参考资料列表
 - **THEN** 客户端 SHALL 按原有 text delta 顺序展示
 - **AND** 终态消息 SHALL 与流式正文完全一致
+
+#### Scenario: 模型引用网页
+
+- **WHEN** 回答使用 `web_search` 或 `web_fetch` 返回的事实
+- **THEN** 模型 SHALL 在事实附近输出 `[n]`
+- **AND** 参考资料的对应条目 SHALL 包含工具返回的原始 URL
+- **AND** SHALL NOT 输出内部 evidence ID
+
+#### Scenario: 工具没有提供来源
+
+- **WHEN** 工具结果不包含可识别来源
+- **THEN** 模型 SHALL NOT 编造引用
+- **AND** MAY 明确说明依据不足
 
 ### Requirement: 平台 MAY 独立持久化 retrieval results
 
@@ -361,6 +374,52 @@ chat 页 SHALL 为一次用户发送生成稳定 `client_request_id`，在创建
 - **WHEN** 带 Markdown 引用的回答在生成中刷新
 - **THEN** 普通 text snapshot SHALL 恢复已经生成的引用文本
 - **AND** retrieval part SHALL 独立恢复
+
+### Requirement: Retrieval results SHALL NOT 冒充 cited sources
+
+平台 MAY 持久化工具返回的 retrieval results，并在回答末尾通过紧凑来源入口和来源抽屉展示，但 SHALL NOT 将 Top-K、score 或全部检索结果自动称为“引用”或“答案依据”。平台 SHALL NOT 解析模型 Markdown 反推 claim-to-source binding。
+
+#### Scenario: 检索后模型没有引用
+
+- **WHEN** 工具返回检索结果但最终正文没有引用
+- **THEN** 正文 SHALL 保持模型原始输出
+- **AND** retrieval results MAY 继续通过来源入口和来源抽屉展示
+
+### Requirement: Retrieval results SHALL 使用统一来源抽屉
+
+正文实际出现对应 `[n]`、全部参考资料条目均唯一匹配成功、流式正文已完成且该段之后没有其他正文时，客户端 SHALL 隐藏仅供绑定使用的 `### 参考资料` 段；否则 SHALL 保留原始 Markdown，并将连续参考资料条目分行展示。存在本轮 retrieval results 时，客户端 SHALL 在回答底部工具栏与 token 用量同行展示紧凑来源图标和去重后的来源文档数量，而不是独立的检索结果折叠块。点击入口 SHALL 打开“来源”抽屉，按“引用来源”和“其他检索结果”展示 Web 与 KB 来源；抽屉 SHALL 使用紧凑单行编号条目，只展示单行省略标题及域名或 Collection，不展示 excerpt 正文，并保留完整标题供 hover 查看；原始 Markdown SHALL 保持完整。
+
+#### Scenario: 查看本轮全部来源
+
+- **WHEN** 用户点击回答末尾的来源入口
+- **THEN** 客户端 SHALL 打开来源抽屉
+- **AND** Web 来源 SHALL 可安全打开原始 URL
+- **AND** KB 来源 SHALL 在新标签页进入对应 Collection 文档并打开该文件的分片抽屉
+- **AND** 未被正文引用的结果 SHALL 归入“其他检索结果”
+
+### Requirement: 可点击引用 SHALL 来自本轮 retrieval
+
+客户端 SHALL 解析正文 `[n]` 与参考资料条目，并使用 canonical URL（Web）或文件名与 Collection（KB）与已持久化的本轮 retrieval results 匹配。Web 展示标题 MAY 与 retrieval title 不同，不参与来源身份判断。只有唯一匹配成功的条目 SHALL 渲染为可点击上标。
+
+#### Scenario: Web 编号匹配成功
+
+- **WHEN** 参考资料的 URL canonicalize 后唯一匹配本轮 Web retrieval
+- **THEN** 对应 `[n]` SHALL 渲染为可点击上标
+- **AND** 点击 SHALL 打开当前回答的来源抽屉并滚动、高亮对应编号
+- **AND** 点击抽屉条目 SHALL 使用安全外链策略打开原始 URL
+
+#### Scenario: KB 编号匹配成功
+
+- **WHEN** 参考资料的文件名、Collection 和可用 locator 唯一匹配本轮 KB retrieval
+- **THEN** 对应 `[n]` SHALL 渲染为可点击上标
+- **AND** 点击 SHALL 打开当前回答的来源抽屉并滚动、高亮对应编号
+- **AND** 点击抽屉条目 SHALL 在新标签页进入受认证保护的对应 Collection 并打开该文件的分片抽屉
+
+#### Scenario: 条目无匹配或多义
+
+- **WHEN** 参考资料无法唯一匹配本轮 retrieval
+- **THEN** 平台 SHALL NOT 生成可点击 citation
+- **AND** 正文 SHALL 保持模型原始 Markdown
 
 ### Requirement: Citation 上标 SHALL 可确定性恢复
 

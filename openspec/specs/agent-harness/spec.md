@@ -1,7 +1,8 @@
 # agent-harness Specification
 
 ## Purpose
-TBD - created by archiving change extract-noesis-harness. Update Purpose after archive.
+
+本能力规定 **harness 包边界与依赖隔离**：Agent 内核（工厂、LLM、agents、runtime、backends、middlewares、tools、prompts、mcp、skills、guardrails）作为独立 distribution `noesis-harness`（顶层包 `noesis`），SHALL NOT 静态依赖上层平台包（services/domain/models/api/kb/config/common）；平台 Delivery 与 HTTP 编排 SHALL NOT 位于该包内。需要附件存储、KB 检索等宿主能力时 SHALL 经 `noesis.runtime.deps` 由宿主按运行场景绑定。运行时行为细节见 `agent-runtime`；评测消费见 `offline-evals`。
 ## Requirements
 ### Requirement: Harness 为独立 Agent 内核包
 
@@ -105,7 +106,7 @@ Web API、应用服务、平台领域逻辑、数据库、KB、ORM、Schema、�
 
 ### Requirement: Harness SHALL 分离 Kernel 与 Profile Capability
 
-`noesis.factory` SHALL 将公共 runtime kernel 与 Agent Profile capability 分开装配。公共 kernel SHALL 由 `agent-runtime-lifecycle` 定义；Filesystem、SubAgent、Skills、Memory、Attachments、Todo 与 HITL SHALL 作为 Profile capability 按需选择，SHALL NOT 被统计或实现为所有 Agent 必须加载的公共 guard。
+`noesis.factory` SHALL 将公共 runtime kernel 与 Agent Profile capability 分开装配。公共 kernel SHALL 由 `agent-runtime`（运行时执行 Lifecycle）定义；Filesystem、SubAgent、Skills、Memory、Attachments、Todo 与 HITL SHALL 作为 Profile capability 按需选择，SHALL NOT 被统计或实现为所有 Agent 必须加载的公共 guard。
 
 #### Scenario: COMMON_QA 不加载 SuperAgent 能力
 

@@ -1,7 +1,7 @@
 # Durable Agent Run 与断线恢复设计
 
 > 状态：Current（核心 Web run 与恢复链路已实现；未完成能力在“已知限制”中列明）
-> 关联 OpenSpec：`durable-agent-run-recovery`、`agent-run-recovery`、`agent-delivery`、`platform-chat`
+> 关联 OpenSpec：`durable-agent-run-recovery`（change，已归档并入）、`agent-delivery`、`platform-chat`
 > 外部实现核对：OpenAI Codex `95637f7056835fea66bdd0044414af480fc0fd74`；OpenClaw `8ecb609990ff191bb9258f5685f90cbdde7e6c17`
 > 核对日期：2026-07-27
 

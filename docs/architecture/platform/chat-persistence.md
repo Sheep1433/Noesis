@@ -1,7 +1,7 @@
 # 聊天记录与持久化架构
 
 > 状态：Current
-> OpenSpec：`platform-chat`、`user-platform`、`agent-run-delivery`
+> OpenSpec：`platform-chat`、`user-platform`、`agent-delivery`
 
 ## 1. 数据职责
 

@@ -1,7 +1,7 @@
 # SSE 流式数据架构
 
 > 状态：Current
-> OpenSpec：`platform-chat`、`agent-run-delivery`、`agent-tool-failure-handling`
+> OpenSpec：`platform-chat`、`agent-delivery`、`agent-tool-failure-handling`
 
 ## 1. 边界
 
