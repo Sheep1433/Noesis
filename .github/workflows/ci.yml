@@ -55,7 +55,7 @@ jobs:
         run: cp config.example.yaml config.yaml
 
       - name: Import smoke check
-        run: uv run python -c "from server import app; assert app.title"
+        run: uv run python -c "from server.main import app; assert app.title"
 
       - name: Run backend tests
         run: uv run pytest tests/ -q
@@ -86,6 +86,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
 
       - name: Build
         run: pnpm build
