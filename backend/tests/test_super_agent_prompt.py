@@ -1,7 +1,7 @@
 """超级智能体 system prompt 结构回归。"""
 
-from agent.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
-from agent.prompts import PromptProfile, build_prompt
+from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
+from noesis.agents.prompts import PromptProfile, build_prompt
 
 
 def test_super_agent_execution_discipline():

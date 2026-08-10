@@ -7,6 +7,22 @@ export interface MainNavItem {
   fill?: boolean
 }
 
+export const CHAT_ROUTE_NAMES = ['ChatRoot', 'ChatIndex', 'ChatNew', 'ChatSession'] as const
+const MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES = [
+  ...CHAT_ROUTE_NAMES,
+  'KnowledgeBaseDetail',
+] as const
+
+export function isChatRouteName(routeName: unknown): boolean {
+  return CHAT_ROUTE_NAMES.includes(routeName as (typeof CHAT_ROUTE_NAMES)[number])
+}
+
+export function shouldShowMobileBottomNav(routeName: unknown, isMobile: boolean): boolean {
+  return isMobile && !MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES.includes(
+    routeName as (typeof MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES)[number],
+  )
+}
+
 export const mainNavItems: MainNavItem[] = [
   {
     label: '智枢',
@@ -33,10 +49,26 @@ export const mainNavItems: MainNavItem[] = [
     routeName: 'Extensions',
     iconClass: 'i-mdi:puzzle-outline',
   },
-  {
-    label: '测试',
-    key: 'TestCaseGenerate',
-    routeName: 'TestCaseGenerate',
-    iconClass: 'i-mdi:clipboard-text-outline',
-  },
+]
+
+const settingsNavItem: MainNavItem = {
+  label: '设置',
+  key: 'Settings',
+  routeName: 'Settings',
+  iconClass: 'i-hugeicons:settings-01',
+}
+
+/** 移动端顶层页面统一使用的全局导航。 */
+export const mobileProductNavItems: MainNavItem[] = [
+  mainNavItems[1],
+  mainNavItems[2],
+  mainNavItems[3],
+  settingsNavItem,
+]
+
+/** 历史抽屉保留管理入口，不重复展示当前所在的对话入口。 */
+export const mobileHistoryNavItems: MainNavItem[] = [
+  mainNavItems[2],
+  mainNavItems[3],
+  settingsNavItem,
 ]

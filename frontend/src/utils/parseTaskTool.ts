@@ -2,8 +2,6 @@
 export const TASK_TOOL_NAME = 'task'
 
 export const TASK_SUCCEEDED_PREFIX = 'Task Succeeded. Result:'
-export const TASK_FAILED_PREFIX = 'Task failed.'
-export const TASK_TIMED_OUT_PREFIX = 'Task timed out'
 
 export type SubagentRunStatus = 'in_progress' | 'completed' | 'failed'
 
@@ -51,6 +49,7 @@ export interface TaskToolOutputContext {
   output?: string
   status?: string
   error?: string | null
+  state?: string
 }
 
 /**
@@ -61,35 +60,22 @@ export function parseTaskToolOutput(ctx: TaskToolOutputContext): ParsedTaskToolO
   const trimmed = output.trim()
   const partError = ctx.error != null ? String(ctx.error).trim() : ''
 
-  if (ctx.status === 'error') {
+  if (['failed', 'timed_out', 'rejected', 'cancelled'].includes(ctx.state || '') || ctx.status === 'error') {
     return {
       status: 'failed',
       error: partError || trimmed || '子任务失败',
     }
   }
 
-  if (!trimmed) {
-    if (ctx.status === 'running' || ctx.status === 'streaming') {
-      return { status: 'in_progress' }
-    }
+  if (ctx.state === 'running' || ctx.state === 'approval_pending'
+    || ctx.status === 'running' || ctx.status === 'streaming') {
     return { status: 'in_progress' }
   }
 
-  if (trimmed.startsWith(TASK_SUCCEEDED_PREFIX)) {
-    const result = trimmed.slice(TASK_SUCCEEDED_PREFIX.length).trim()
-    return { status: 'completed', result: result || undefined }
-  }
-
-  if (trimmed.startsWith(TASK_FAILED_PREFIX)) {
-    const error = trimmed.slice(TASK_FAILED_PREFIX.length).trim()
-    return { status: 'failed', error: error || '子任务失败' }
-  }
-
-  if (trimmed.startsWith(TASK_TIMED_OUT_PREFIX)) {
-    return { status: 'failed', error: trimmed }
-  }
-
-  return { status: 'in_progress' }
+  const result = trimmed.startsWith(TASK_SUCCEEDED_PREFIX)
+    ? trimmed.slice(TASK_SUCCEEDED_PREFIX.length).trim()
+    : trimmed
+  return { status: 'completed', result: result || undefined }
 }
 
 /** 是否应对该 part 使用 SubagentCollapse 而非 ToolCallCollapse */

@@ -1,44 +1,71 @@
 <script setup lang="ts">
-import type { SettingsSection } from './SettingsNav.vue'
-import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import type { SettingsSectionId } from './registry'
+import { useDialog } from 'naive-ui'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { resolveSettingsSection } from './registry'
 import AccountSection from './sections/AccountSection.vue'
 import AutomationSection from './sections/AutomationSection.vue'
 import CapabilitiesSection from './sections/CapabilitiesSection.vue'
 import ChannelsSection from './sections/ChannelsSection.vue'
+import DiagnosticsSection from './sections/DiagnosticsSection.vue'
 import MemoryEditorSection from './sections/MemoryEditorSection.vue'
 import OverviewSection from './sections/OverviewSection.vue'
+import PlatformModelsSection from './sections/PlatformModelsSection.vue'
 import SettingsNav from './SettingsNav.vue'
-
-const SECTIONS: SettingsSection[] = [
-  'overview',
-  'profile',
-  'memory',
-  'capabilities',
-  'automation',
-  'channels',
-  'account',
-]
 
 const route = useRoute()
 const router = useRouter()
+const dialog = useDialog()
 
-const section = computed<SettingsSection>({
-  get() {
-    const s = String(route.query.s || 'overview')
-    return (SECTIONS.includes(s as SettingsSection) ? s : 'overview') as SettingsSection
-  },
-  set(value) {
-    void router.replace({
-      name: 'Settings',
-      query: value === 'overview' ? {} : { s: value },
+const section = computed<SettingsSectionId>(() => resolveSettingsSection(route.query.s))
+const hasUnsavedChanges = ref(false)
+
+function confirmDiscard(): Promise<boolean> {
+  if (!hasUnsavedChanges.value) {
+    return Promise.resolve(true)
+  }
+  return new Promise((resolve) => {
+    dialog.warning({
+      title: '放弃未保存修改？',
+      content: '当前设置尚未保存，离开后修改将丢失。',
+      positiveText: '放弃修改',
+      negativeText: '继续编辑',
+      onPositiveClick: () => resolve(true),
+      onNegativeClick: () => resolve(false),
+      onClose: () => resolve(false),
     })
-  },
-})
-
-function onGoto(s: SettingsSection) {
-  section.value = s
+  })
 }
+
+async function onGoto(next: SettingsSectionId) {
+  if (next === section.value || !(await confirmDiscard())) {
+    return
+  }
+  hasUnsavedChanges.value = false
+  void router.replace({
+    name: 'Settings',
+    query: next === 'overview' ? {} : { s: next },
+  })
+}
+
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasUnsavedChanges.value) {
+    return
+  }
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+watch(() => route.query.s, (raw) => {
+  if (raw !== undefined && resolveSettingsSection(raw) === 'overview' && raw !== 'overview') {
+    void router.replace({ name: 'Settings' })
+  }
+}, { immediate: true })
+
+onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
+onBeforeRouteLeave(async () => confirmDiscard())
 </script>
 
 <template>
@@ -53,24 +80,28 @@ function onGoto(s: SettingsSection) {
     </header>
 
     <div class="settings-body">
-      <SettingsNav v-model:section="section" />
+      <SettingsNav :section="section" @select="onGoto" />
       <div class="settings-main">
         <OverviewSection v-if="section === 'overview'" @goto="onGoto" />
+        <PlatformModelsSection v-else-if="section === 'models'" />
         <MemoryEditorSection
           v-else-if="section === 'profile'"
           file="USER.md"
           title="画像"
           description="USER.md：用户画像与稳定信息（每会话注入）。"
+          @dirty-change="hasUnsavedChanges = $event"
         />
         <MemoryEditorSection
           v-else-if="section === 'memory'"
           file="AGENTS.md"
           title="记忆"
           description="AGENTS.md：跨会话偏好与惯例（每会话注入，注意控长）。"
+          @dirty-change="hasUnsavedChanges = $event"
         />
         <CapabilitiesSection v-else-if="section === 'capabilities'" />
         <AutomationSection v-else-if="section === 'automation'" />
         <ChannelsSection v-else-if="section === 'channels'" />
+        <DiagnosticsSection v-else-if="section === 'diagnostics'" />
         <AccountSection v-else-if="section === 'account'" />
       </div>
     </div>
@@ -117,10 +148,12 @@ function onGoto(s: SettingsSection) {
   overflow: auto;
 }
 
-@media (max-width: 768px) {
+@media (width <= 768px) {
+
   .settings {
     padding: var(--noesis-shell-padding-mobile, 16px);
   }
+
   .settings-body {
     flex-direction: column;
   }

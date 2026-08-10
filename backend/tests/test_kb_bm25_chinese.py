@@ -1,7 +1,7 @@
 """BM25 中文关键词检索回归（jieba 分词 + 负分不过滤）。"""
 from langchain_core.documents import Document
 
-from kb.retrieval import Retrieval, VectorStore, kb_bm25_preprocess
+from noesis.knowledge.retrieval import Retrieval, VectorStore, kb_bm25_preprocess
 
 
 class _FakeVectorStore:

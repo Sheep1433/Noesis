@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agent.backends.local_shell import create_local_shell_backend
-from config import user_data_paths as paths
-from config import user_data_paths as user_paths
+from noesis.agents.backends.local_shell import create_local_shell_backend
+from noesis.config import user_data_paths as paths
+from noesis.config import user_data_paths as user_paths
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def test_parallel_sessions_write_independent_files(users_root: Path) -> None:
 
 
 def test_default_root_uses_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    data_dir = tmp_path / ".data"
+    data_dir = tmp_path / ".noesis"
     monkeypatch.setattr(user_paths, "_USERS_ROOT", data_dir / "users")
     got = paths.get_workspace_dir("1", "sess")
     assert got == data_dir / "users" / "1" / "sessions" / "sess" / "workspace"

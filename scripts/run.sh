@@ -64,7 +64,6 @@ Noesis 启动脚本（统一入口）
 
 prod 额外:
   FRONTEND_PORT=4173      preview 端口
-  SKIP_FRONTEND_BUILD=1   跳过 pnpm build（dist 已存在时）
 
 配置矩阵:
   模式     | 密钥文件              | 运行参数
@@ -97,7 +96,7 @@ mode_prod() {
 compose_env_file="$DEPLOY/.env.docker"
 
 export_compose_host_env() {
-  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.data}"
+  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.noesis}"
   export NOESIS_HOST_SKILLS_DIR="${NOESIS_HOST_SKILLS_DIR:-$ROOT/extensions/skills}"
 }
 

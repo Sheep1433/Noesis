@@ -23,7 +23,7 @@ die() { echo "deploy-remote: $*" >&2; exit 1; }
 
 # 沙箱 bind 宿主机路径：由仓库根推导，勿写入 deploy/.env.docker
 export_compose_host_env() {
-  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.data}"
+  export NOESIS_HOST_DATA_DIR="${NOESIS_HOST_DATA_DIR:-$ROOT/.noesis}"
   export NOESIS_HOST_SKILLS_DIR="${NOESIS_HOST_SKILLS_DIR:-$ROOT/extensions/skills}"
 }
 
@@ -53,8 +53,8 @@ git clean -fd \
   -e 'deploy/.env.docker' \
   -e 'deploy/.env.docker.bak*' \
   -e 'deploy/compose.host.env' \
-  -e '.data' \
-  -e '.data/**'
+  -e '.noesis' \
+  -e '.noesis/**'
 
 echo "==> 部署前释放磁盘（避免 docker build 因 no space left on device 失败）"
 avail_kb="$(df --output=avail / | tail -1 | tr -d ' ')"

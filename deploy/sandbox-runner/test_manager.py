@@ -16,7 +16,7 @@ def test_resolve_host_data_dir_defaults_to_repo_data(
     monkeypatch.setenv("NOESIS_REPO_ROOT", str(tmp_path))
     (tmp_path / "backend").mkdir()
     (tmp_path / "extensions").mkdir()
-    assert resolve_host_data_dir() == (tmp_path / ".data").resolve()
+    assert resolve_host_data_dir() == (tmp_path / ".noesis").resolve()
 
 
 def test_resolve_skills_host_dir_defaults_to_extensions_skills(

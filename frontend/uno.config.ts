@@ -16,15 +16,15 @@ const require = createRequire(import.meta.url)
 
 /** 显式 require — collections 须为函数，否则 prod 构建无法生成图标 CSS */
 const iconCollections = {
-  carbon: () => require('@iconify-json/carbon/icons.json'),
-  ci: () => require('@iconify-json/ci/icons.json'),
-  hugeicons: () => require('@iconify-json/hugeicons/icons.json'),
-  ic: () => require('@iconify-json/ic/icons.json'),
+  'carbon': () => require('@iconify-json/carbon/icons.json'),
+  'ci': () => require('@iconify-json/ci/icons.json'),
+  'hugeicons': () => require('@iconify-json/hugeicons/icons.json'),
+  'ic': () => require('@iconify-json/ic/icons.json'),
   'material-symbols': () => require('@iconify-json/material-symbols/icons.json'),
-  mdi: () => require('@iconify-json/mdi/icons.json'),
-  mingcute: () => require('@iconify-json/mingcute/icons.json'),
+  'mdi': () => require('@iconify-json/mdi/icons.json'),
+  'mingcute': () => require('@iconify-json/mingcute/icons.json'),
   'svg-spinners': () => require('@iconify-json/svg-spinners/icons.json'),
-  uil: () => require('@iconify-json/uil/icons.json'),
+  'uil': () => require('@iconify-json/uil/icons.json'),
 }
 
 /** 运行时拼接的 icon class — 无法被静态扫描，须 safelist */
@@ -52,6 +52,7 @@ const DYNAMIC_ICON_SAFELIST = [
   'i-svg-spinners:3-dots-rotate',
   'i-svg-spinners:6-dots-rotate',
   'i-mdi:clipboard-text-outline',
+  'i-mdi:puzzle-outline',
   'i-mdi:file-image-outline',
   'i-material-symbols:file-open-outline',
   'i-ci:copy',

@@ -16,9 +16,9 @@ _BACKEND = Path(__file__).resolve().parents[3]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from agent.case_generate.case_graph import _build_scene_cases_prompt
-from agent.case_generate.rag import build_scene_rag_context
-from config.env import QdrantConfig
+from noesis.agents.case_generate.case_graph import _build_scene_cases_prompt
+from noesis.agents.case_generate.rag import build_scene_rag_context
+from noesis.config.env import QdrantConfig
 from evals.case.rag.ingest import eval_requirement_collection, eval_test_case_collection
 from evals.case.shared.provider_common import eval_run_id, resolve_document_context, tracing_note
 from evals.langfuse_env import eval_langfuse_run
@@ -46,9 +46,9 @@ def _resolve_item(context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _ensure_qdrant() -> None:
-    from services.qdrant_service import init_qdrant_client
+    from noesis.knowledge.runtime import init_knowledge_base
 
-    if not asyncio.run(init_qdrant_client()):
+    if not asyncio.run(init_knowledge_base()):
         raise RuntimeError(
             "Qdrant 连接失败：RAG 评测需要向量库。"
             "请确认 Qdrant 已启动；可先运行 uv run python -m evals.case.rag.ingest"
@@ -74,7 +74,7 @@ async def _run_rag_async(item: Dict[str, Any], *, eval_run_id: str) -> Dict[str,
         test_case_docs_collection=eval_test_case_collection(),
         test_case_upload_collection="",
     )
-    with patch("agent.case_generate.rag.QdrantConfig", eval_qdrant):
+    with patch("noesis.agents.case_generate.rag.QdrantConfig", eval_qdrant):
         scene_rag_context, trace_entry = await build_scene_rag_context(
             scene,
             adopted_point_names=adopted,

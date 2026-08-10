@@ -5,10 +5,15 @@ description = "Noesis Agent"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # 核心后端包（import noesis）
+    "noesis-core",
+    # 本地 Agent CLI（评测用，直调 Agent，不走 HTTP）
+    "noesis-cli",
     # API / 持久化
     "alembic>=1.18.5",
     "asyncpg>=0.30.0",
     "bcrypt>=5.0.0",
+    "cryptography>=48.0.0",
     "fastapi>=0.120.0",
     "uvicorn[standard]>=0.30.0",
     "python-multipart>=0.0.9",
@@ -20,18 +25,12 @@ dependencies = [
     "psycopg[binary,pool]>=3.2.0",
     "pyyaml>=6.0",
     "sqlalchemy[asyncio]>=2.0.44",
-    # Agent
-    "deepagents>=0.6.7",
-    "langchain>=1.0.2",
-    "langchain-community>=0.4",
-    "langchain-deepseek>=1.0.1",
+    # KB 层直接依赖（非经 noesis 间接引入）
+    "langchain-core",
+    "langchain-community",
+    "langchain-openai",
     "langchain-mcp-adapters>=0.1.11",
-    "langchain-openai>=1.0.2",
-    "langchain-qwq>=0.3.5",
-    "langgraph>=1.0.1",
-    "langgraph-checkpoint-postgres>=3.0.0",
-    "tavily-python>=0.5.0",
-    "ddgs>=9.0.0",
+    "langchain-text-splitters",
     # 知识库 / DeepDoc / RAG
     "beartype>=0.18.0",
     "chardet>=5.2.0",
@@ -56,6 +55,7 @@ dependencies = [
     # 可观测
     "langfuse>=3.10.0,<4",
     "croniter>=6.2.4",
+    "lark-oapi>=1.5.3,<2",
 ]
 
 [dependency-groups]
@@ -68,6 +68,10 @@ dev = [
 [tool.uv]
 default-groups = ["dev"]
 
+[tool.uv.sources]
+noesis-core = { path = "packages/noesis-core", editable = true }
+noesis-cli = { path = "packages/noesis-cli", editable = true }
+
 [project.optional-dependencies]
 loadtest = [
     "locust>=2.31.0",
@@ -77,6 +81,8 @@ loadtest = [
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# 默认跳过 integration（真实 LLM / 外部服务），需手动 `-m integration` 或设环境变量开启
+addopts = "-m 'not integration'"
 markers = [
     "integration: marks tests that call real LLM or external services",
 ]

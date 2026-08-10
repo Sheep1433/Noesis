@@ -139,7 +139,7 @@ def _borderline_llm_enabled() -> bool:
 
 def _llm_arbitrate(*, golden_name: str, gen_name: str, mode: str) -> bool:
     """borderline 对：由 LLM 判定是否语义覆盖（recall）或是否有效（precision）。"""
-    from llm import get_llm
+    from noesis.llm import get_llm
 
     if mode == "recall":
         question = (

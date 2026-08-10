@@ -4,7 +4,7 @@
 # 关键：NOESIS_HOST_DATA_DIR / NOESIS_HOST_SKILLS_DIR 必须是 Docker **宿主机**绝对路径。
 # runner 把这两个路径原样交给 daemon 做 bind；同时以相同路径挂进 runner，便于 mkdir。
 # 示例（仓库根开发）:
-#   NOESIS_HOST_DATA_DIR=/absolute/path/to/Noesis/.data
+#   NOESIS_HOST_DATA_DIR=/absolute/path/to/Noesis/.noesis
 #   NOESIS_HOST_SKILLS_DIR=/absolute/path/to/Noesis/extensions/skills
 #
 # 构建 slim: docker build -t noesis/sandbox-slim:latest -f deploy/sandbox-slim/Dockerfile .

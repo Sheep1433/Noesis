@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { getSessionContext, getWorkspaceFile, saveWorkspaceFile } from '@/api/chat'
 import FilePreview from '@/components/FilePreview/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { invalidateMentionContextCache } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { authFetch } from '@/utils/authHttp'
@@ -54,10 +55,12 @@ const settingsDeepLink = computed(() => {
 
 const { size: treeWidth, startResize: startTreeResize } = usePaneResize({
   storageKey: 'noesis.chat.sessionTreeWidth',
-  defaultSize: 132,
-  min: 100,
-  max: 360,
+  defaultSize: 180,
+  min: 120,
+  max: 240,
 })
+const { isMobile } = useBreakpoint()
+const effectiveTreeWidth = computed(() => Math.min(treeWidth.value, isMobile.value ? 132 : 240))
 
 function revokePreviewImage() {
   if (previewImageSrc.value) {
@@ -235,17 +238,19 @@ defineExpose({ reload })
       <div class="panel-split">
         <aside
           class="panel-tree"
-          :style="{ width: `${treeWidth}px` }"
+          :style="{ width: `${effectiveTreeWidth}px` }"
         >
-          <WorkspaceFileTree
-            v-if="context?.tree?.length"
-            :nodes="context.tree"
-            :selected-key="selectedKey"
-            :session-id="sessionId"
-            @select="onSelectFile"
-          />
-          <div v-else class="panel-empty-hint">
-            暂无文件
+          <!-- 滚动放内层，避免 ResizeDivider 跟着横向滚动「切进」文件名 -->
+          <div class="panel-tree__scroll">
+            <WorkspaceFileTree
+              v-if="context?.tree?.length"
+              :nodes="context.tree"
+              :selected-key="selectedKey"
+              @select="onSelectFile"
+            />
+            <div v-else class="panel-empty-hint">
+              暂无文件
+            </div>
           </div>
           <ResizeDivider @resize-start="startTreeResize" />
         </aside>
@@ -259,6 +264,7 @@ defineExpose({ reload })
             :loading="previewLoading"
             :editable="previewEditable"
             :saving="previewSaving"
+            :show-download="false"
             density="compact"
             fill-height
             class="session-file-preview"
@@ -320,6 +326,15 @@ defineExpose({ reload })
 .panel-tree {
   position: relative;
   flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-tree__scroll {
+  flex: 1;
+  min-height: 0;
   min-width: 0;
   overflow: auto;
   padding: 4px 0 8px;

@@ -1,5 +1,5 @@
 """chunk_template_id 规范化单测。"""
-from kb.chunk import (
+from noesis.knowledge.chunking import (
     KB_CHUNK_TEMPLATE_GENERAL,
     normalize_collection_processing_params,
 )

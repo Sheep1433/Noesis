@@ -2,11 +2,14 @@
 import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
+import type { ChatModeQaType } from '@/utils/qaType'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
-import { ensureSession, getSession, stopChat, updateSessionTitle } from '@/api/chat'
+import { ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
+import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
+import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
@@ -16,7 +19,7 @@ import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
-import { supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
+import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import {
@@ -30,13 +33,22 @@ import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
+import { copyToClipboard } from '@/utils/copy'
+import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
-import { qaTypeLabel } from '@/utils/qaType'
+import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import {
+  pendingHitlForSession,
+  setPendingHitlForSession,
+  shouldDisableHitlComposer,
+  shouldShowRunContinuation,
+} from '@/views/chat/hitlUiState'
+import {
   appendReasoningDelta,
+  appendRetrievalPart,
   appendStreamFailureNotice,
   appendTextDelta,
   appendTextDeltaWithRedactedThinking,
@@ -47,12 +59,15 @@ import {
   completeLastReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
+  extractLastTopLevelText,
   flushRedactedThinkingStreamCtx,
   formatUsageSummary,
   hasValidContextWindow,
   hasValidUsage,
   markStreamingPartsComplete,
+  normalizeApiContent,
   shortenChatErrorToast,
+  shouldShowAssistantToolFailureBlocker,
   syncLegacyFieldsFromParts,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
@@ -65,6 +80,30 @@ import SuggestedView from './SuggestedPage.vue'
 import TableModal from './TableModal.vue'
 
 const sessionFilesPanelRef = ref<InstanceType<typeof SessionContextPanel> | null>(null)
+function retrievedResults(parts: UiPart[]) {
+  return parts
+    .filter((part) => part.type === 'retrieval')
+    .flatMap((part) => part.type === 'retrieval' ? part.results : [])
+}
+
+type CitationSourcesHandle = InstanceType<typeof CitationSources>
+const citationSourcesRefs = new Map<string, CitationSourcesHandle>()
+
+function citationSourcesKey(item: { message_id?: string, chat_id: string }, index: number): string {
+  return item.message_id || `${item.chat_id}:${index}`
+}
+
+function setCitationSourcesRef(key: string, component: unknown) {
+  if (component) {
+    citationSourcesRefs.set(key, component as CitationSourcesHandle)
+  } else {
+    citationSourcesRefs.delete(key)
+  }
+}
+
+function openCitationSource(key: string, number: number) {
+  citationSourcesRefs.get(key)?.open(number)
+}
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
@@ -136,19 +175,27 @@ async function replaceChatSessionUrl(sessionId: string) {
 }
 
 async function navigateToComposingUrl(replace = false) {
-  if (isComposingRouteName(route.name) && !routeSessionId()) {
+  const query = { ...route.query, qa_type: qa_type.value }
+  if (
+    isComposingRouteName(route.name)
+    && !routeSessionId()
+    && route.query.qa_type === qa_type.value
+  ) {
     return
   }
   suppressRouteSessionSync.value = true
   try {
     const nav = replace ? router.replace : router.push
-    await nav({ name: 'ChatNew' })
+    await nav({ name: 'ChatNew', query })
   } finally {
     suppressRouteSessionSync.value = false
   }
 }
 
 async function restoreActiveSessionFromRoute(sessionId: string) {
+  // 切换会话只释放浏览器 subscription，不停止服务端 Run。必须先隔离旧流，
+  // 否则旧会话的 snapshot/delta 会写入新会话页面。
+  sseStream.detachSubscription()
   try {
     const session = await getSession(sessionId)
     const qt = String(session.extra?.qa_type ?? '').trim() || 'COMMON_QA'
@@ -180,6 +227,8 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     await loadSessionContext(sessionId)
     reloadSessionFilesPanel()
     await scrollToLatestMessage(false)
+    // Run 订阅可能持续数分钟；页面与历史列表恢复不应等待整轮生成结束。
+    void sseStream.resumeActiveRun(sessionId)
   } catch (error) {
     console.error('恢复会话失败:', error)
     window.$ModalMessage.warning('会话不存在或无权访问，已回到新对话')
@@ -189,6 +238,8 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 }
 
 function resetComposingSurface() {
+  sseStream.detachSubscription()
+  stopProcessingClock()
   sessionContext.value = null
   showDefaultPage.value = true
   isInit.value = true
@@ -200,7 +251,6 @@ function resetComposingSurface() {
   businessStore.todos = []
   clearComposerQueue()
   inputTextString.value = ''
-  pendingHitl.value = null
   uuids.value[qa_type.value] = uuidv4()
   sessionMaterialized.value = false
   selectedKbCollections.value = []
@@ -220,7 +270,7 @@ onBeforeMount(async () => {
     applyWelcomeRouteQaType()
     isLoadingHistory.value = true
     isInit.value = true
-    await fetchConversationHistory(isInit, conversationItems, tableData, currentRenderIndex, null, '')
+    await refreshHistoryLists()
 
     const sid = routeSessionId()
     if (sid) {
@@ -277,14 +327,7 @@ async function refreshSidebarAfterManageClose() {
     : ''
   const wasShowingChat = !showDefaultPage.value
 
-  await fetchConversationHistory(
-    isInit,
-    conversationItems,
-    tableData,
-    currentRenderIndex,
-    null,
-    '',
-  )
+  await refreshHistoryLists()
 
   if (!wasShowingChat || !activeSessionId) {
     return
@@ -299,8 +342,14 @@ async function refreshSidebarAfterManageClose() {
 }
 
 // 新建对话
-function newChat() {
+function newChat(targetQaType: ChatModeQaType = qa_type.value as ChatModeQaType) {
   backgroundColorVariable.value = cssVar(themeCssVar.bgElevated)
+
+  if (isChatModeChange(qa_type.value, targetQaType)) {
+    activateChatMode(targetQaType, '')
+    historyDrawerOpen.value = false
+    return
+  }
 
   if (showDefaultPage.value && isComposingRouteName(route.name) && !routeSessionId()) {
     window.$ModalMessage.success(`已经是最新对话`)
@@ -308,6 +357,13 @@ function newChat() {
   }
   resetComposingSurface()
   void navigateToComposingUrl(false)
+}
+
+function changeChatMode(targetQaType: ChatModeQaType) {
+  if (!isChatModeChange(qa_type.value, targetQaType)) {
+    return
+  }
+  activateChatMode(targetQaType, '')
 }
 
 /**
@@ -318,8 +374,34 @@ function newChat() {
 
 // 对话等待提示词图标
 const stylizingLoading = ref(false)
+const processingNow = ref(Date.now())
+let processingTimer: ReturnType<typeof setInterval> | null = null
+
+function startProcessingClock() {
+  processingNow.value = Date.now()
+  if (processingTimer !== null) {
+    return
+  }
+  processingTimer = setInterval(() => {
+    processingNow.value = Date.now()
+  }, 1000)
+}
+
+function stopProcessingClock() {
+  if (processingTimer === null) {
+    return
+  }
+  clearInterval(processingTimer)
+  processingTimer = null
+}
+
+function processingTimeText(startedAt?: number): string {
+  return formatElapsedSeconds(startedAt, processingNow.value)
+}
 
 type PendingHitlState = {
+  session_id: string
+  run_id: string
   interrupt_id: string
   kind: string
   action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown>, description?: string }>
@@ -327,7 +409,24 @@ type PendingHitlState = {
   expires_at: number
   submitting: boolean
 }
-const pendingHitl = ref<PendingHitlState | null>(null)
+const pendingHitlBySession = ref<Record<string, PendingHitlState>>({})
+const pendingHitl = computed<PendingHitlState | null>({
+  get: () => {
+    const sessionId = uuids.value[qa_type.value]
+    return pendingHitlForSession(pendingHitlBySession.value, sessionId)
+  },
+  set: (value) => {
+    const sessionId = value?.session_id || uuids.value[qa_type.value]
+    if (!sessionId) {
+      return
+    }
+    pendingHitlBySession.value = setPendingHitlForSession(
+      pendingHitlBySession.value,
+      sessionId,
+      value,
+    )
+  },
+})
 
 // 输入字符串
 const inputTextString = ref('')
@@ -402,7 +501,7 @@ const currentRenderIndex = ref(0)
 const onRecycleQa = async (index: number) => {
   // 设置当前选中的问答类型
   const item = conversationItems.value[index - 1]
-  onAqtiveChange(item.qa_type, item.chat_id)
+  activateChatMode(item.qa_type, item.chat_id)
 
 
   // 清空推荐列表
@@ -412,22 +511,27 @@ const onRecycleQa = async (index: number) => {
   scrollToBottom()
 }
 
-// 赞（后端反馈接口未接入，仅本地提示）
-const onPraiseFeadBack = (_index: number) => {
-  window.$ModalMessage.destroyAll()
-  window.$ModalMessage.success('感谢反馈', { duration: 1500 })
-}
-
 // 开始输出时隐藏加载提示
 const onBeginRead = async (index: number) => {
   // 设置最上面的滚动提示图标隐藏
   contentLoadingStates.value[currentRenderIndex.value - 1] = false
 }
 
-// 踩（后端反馈接口未接入，仅本地提示）
-const onBelittleFeedback = (_index: number) => {
-  window.$ModalMessage.destroyAll()
-  window.$ModalMessage.success('感谢反馈', { duration: 1500 })
+// 复制用户消息原文
+const handleCopyUserText = async (text: string) => {
+  if (!text.trim()) {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.warning('暂无可复制内容')
+    return
+  }
+  try {
+    await copyToClipboard(text)
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.success('已复制')
+  } catch {
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.error('复制失败')
+  }
 }
 
 // 侧边栏对话历史
@@ -436,6 +540,8 @@ interface TableItem {
   key: string
   chat_id: string
   qa_type: string
+  pinned?: boolean
+  archived?: boolean
 }
 
 function sessionQaIconClass(qt: string) {
@@ -473,23 +579,55 @@ const historySidebarColumns = computed(() => [
     align: 'left' as const,
     ellipsis: { tooltip: false },
     render(row: TableItem) {
+      const children: any[] = [
+        h('div', {
+          class: ['size-18px shrink-0 inline-flex items-center justify-center', sessionQaIconClass(row.qa_type)],
+          style: { color: sessionQaIconColor(row.qa_type) },
+          title: sessionQaTooltip(row.qa_type),
+        }),
+        h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
+      ]
+      if (row.pinned) {
+        children.push(h('div', {
+          class: 'size-14px shrink-0 inline-flex items-center justify-center i-hugeicons:pin-02',
+          style: { color: cssVar(themeCssVar.primaryTextSoft) },
+          title: '已置顶',
+        }))
+      }
       return h(
         'div',
         { class: 'flex items-center gap-8px min-w-0 pr-4px' },
-        [
-          h('div', {
-            class: ['size-18px shrink-0 inline-flex items-center justify-center', sessionQaIconClass(row.qa_type)],
-            style: { color: sessionQaIconColor(row.qa_type) },
-            title: sessionQaTooltip(row.qa_type),
-          }),
-          h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
-        ],
+        children,
       )
     },
   },
 ])
 
 const tableData = ref<TableItem[]>([])
+const archivedTableData = ref<TableItem[]>([])
+
+async function refreshHistoryLists(searchTextValue = '') {
+  await Promise.all([
+    fetchConversationHistory(
+      isInit,
+      conversationItems,
+      tableData,
+      currentRenderIndex,
+      null,
+      searchTextValue,
+      'exclude',
+    ),
+    fetchConversationHistory(
+      isInit,
+      conversationItems,
+      archivedTableData,
+      currentRenderIndex,
+      null,
+      searchTextValue,
+      'only',
+    ),
+  ])
+}
 
 // 保存对话历史记录
 const conversationItems = ref<
@@ -511,11 +649,18 @@ const conversationItems = ref<
     message_id?: string
     /** 与后端 Langfuse metadata.langfuse_session_id 一致（chat_id） */
     langfuse_session_id?: string
+    created_at?: number
+    completed_at?: number
   }>
 >([])
 
 function patchLastAssistantParts(mut: (parts: UiPart[]) => UiPart[]) {
   const lastAssistantIndex = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
+  patchAssistantPartsAt(lastAssistantIndex, mut)
+}
+
+function patchAssistantPartsAt(index: number, mut: (parts: UiPart[]) => UiPart[]) {
+  const lastAssistantIndex = index
   if (lastAssistantIndex === -1) {
     return
   }
@@ -563,7 +708,7 @@ const nativeReasoningSeen = ref(false)
 // 改为对象存储不同问答类型的uuid
 const uuids = ref<Record<string, string>>({})
 
-const sessionContext = ref<import('@/views/chat/messageParts').ContextWindowSnapshot | null>(null)
+const sessionContext = ref<import('@/api/chat').ContextSnapshot | null>(null)
 const selectedKbCollections = ref<string[]>([])
 const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
@@ -609,7 +754,7 @@ function buildComposingSessionExtra(): Record<string, unknown> {
   const extra: Record<string, unknown> = {
     qa_type: qa_type.value,
   }
-  if (qa_type.value === 'COMMON_QA') {
+  if (qa_type.value === 'COMMON_QA' || qa_type.value === 'SUPER_AGENT_QA') {
     extra.kb_collections = selectedKbCollections.value
     extra.kb_search_enabled = kbSearchEnabled.value
   }
@@ -673,8 +818,63 @@ async function loadSessionContext(sessionId: string) {
   }
 }
 
+let lastRunStatusNotice = ''
+const reconnectAvailable = ref(false)
+
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
 const sseStream = useSSEStream({
+  onRunStatus: (status, message) => {
+    if (status === lastRunStatusNotice) {
+      return
+    }
+    lastRunStatusNotice = status
+    if (status === 'retrying') {
+      window.$ModalMessage.info(message || '连接中断，正在重试')
+    } else if (status === 'interrupted') {
+      window.$ModalMessage.warning(message || '服务中断，本轮生成未完成')
+    } else if (status === 'disconnected') {
+      reconnectAvailable.value = true
+    } else if (status === 'running') {
+      startProcessingClock()
+      reconnectAvailable.value = false
+      lastRunStatusNotice = ''
+      pendingHitl.value = null
+    }
+  },
+  onSnapshot: (snapshot) => {
+    reconnectAvailable.value = false
+    stylizingLoading.value = shouldShowRunContinuation(snapshot.status)
+    if (stylizingLoading.value) {
+      startProcessingClock()
+    } else if (snapshot.status !== 'hitl_pending') {
+      stopProcessingClock()
+    }
+    if (snapshot.status !== 'hitl_pending') {
+      pendingHitlBySession.value = setPendingHitlForSession(
+        pendingHitlBySession.value,
+        snapshot.session_id,
+        null,
+      )
+    }
+    const normalized = normalizeApiContent(snapshot.content)
+    let lastIdx = conversationItems.value.findIndex(
+      (item) => item.role === 'assistant' && item.message_id === snapshot.assistant_message_id,
+    )
+    if (lastIdx < 0) {
+      lastIdx = conversationItems.value.findLastIndex(
+        (item) => item.role === 'assistant'
+          && item.chat_id === snapshot.session_id
+          && !item.message_id,
+      )
+    }
+    patchAssistantPartsAt(lastIdx, () => normalized.parts)
+    if (lastIdx >= 0) {
+      conversationItems.value[lastIdx] = {
+        ...conversationItems.value[lastIdx],
+        message_id: snapshot.assistant_message_id,
+      }
+    }
+  },
   onMessageStart: (data) => {
     nativeReasoningSeen.value = false
     Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
@@ -698,6 +898,9 @@ const sseStream = useSSEStream({
         ? appendTextDelta(parts, text, parent_task_call_id)
         : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parent_task_call_id),
     ),
+  onRetrievalResults: (part) => {
+    patchLastAssistantParts((parts) => appendRetrievalPart(parts, part))
+  },
   onReasoningStart: () => {
     nativeReasoningSeen.value = true
   },
@@ -731,7 +934,14 @@ const sseStream = useSSEStream({
     const action_requests = Array.isArray(data.action_requests)
       ? (data.action_requests as Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>)
       : []
+    const session_id = String(data.session_id ?? '')
+    const run_id = String(data.run_id ?? '')
+    if (!session_id || !run_id) {
+      return
+    }
     pendingHitl.value = {
+      session_id,
+      run_id,
       interrupt_id,
       kind,
       action_requests,
@@ -739,12 +949,14 @@ const sseStream = useSSEStream({
       expires_at: Number(data.expires_at ?? 0),
       submitting: false,
     }
+    stylizingLoading.value = false
     patchLastAssistantParts((parts) =>
       applyHitlPendingParts(parts, { interrupt_id, kind, action_requests }),
     )
   },
   onFinish: (detail) => {
     stylizingLoading.value = false
+    stopProcessingClock()
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
     const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
     if (lastIdx !== -1) {
@@ -760,7 +972,13 @@ const sseStream = useSSEStream({
         const { content, reasoning } = syncLegacyFieldsFromParts(parts)
         conversationItems.value = [
           ...conversationItems.value.slice(0, lastIdx),
-          { ...prev, messageContent: { version: 1, parts }, content, reasoning },
+          {
+            ...prev,
+            messageContent: { version: 1, parts },
+            content,
+            reasoning,
+            ...(detail?.finish_reason !== 'hitl_pending' ? { completed_at: Date.now() } : {}),
+          },
           ...conversationItems.value.slice(lastIdx + 1),
         ]
       }
@@ -786,6 +1004,13 @@ const sseStream = useSSEStream({
           return
         }
         tableData.value[sessionIndex].key = title
+      } else {
+        tableData.value.unshift({
+          uuid: currentUuid,
+          key: title,
+          chat_id: currentUuid,
+          qa_type: qa_type.value,
+        })
       }
     }
   },
@@ -805,6 +1030,7 @@ const sseStream = useSSEStream({
   },
   onError: (msg) => {
     stylizingLoading.value = false
+    stopProcessingClock()
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
     const lastAssistantIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
     if (lastAssistantIdx !== -1) {
@@ -814,7 +1040,7 @@ const sseStream = useSSEStream({
         const { content, reasoning } = syncLegacyFieldsFromParts(parts)
         conversationItems.value = [
           ...conversationItems.value.slice(0, lastAssistantIdx),
-          { ...prev, messageContent: { version: 1, parts }, content, reasoning },
+          { ...prev, messageContent: { version: 1, parts }, content, reasoning, completed_at: Date.now() },
           ...conversationItems.value.slice(lastAssistantIdx + 1),
         ]
       }
@@ -831,6 +1057,9 @@ const sseStream = useSSEStream({
 
 /** 顶层 ref 供模板自动解包；嵌在 sseStream 对象里的 isLoading 不会解包，会导致选择器一直 disabled */
 const sseIsLoading = sseStream.isLoading
+const hitlComposerDisabled = computed(() =>
+  shouldDisableHitlComposer(pendingHitl.value, sseIsLoading.value),
+)
 
 async function submitHitlFromPanel(payload: {
   decisions: Array<{ type: string, message?: string }>
@@ -841,7 +1070,7 @@ async function submitHitlFromPanel(payload: {
     return
   }
   pending.submitting = true
-  const sessionId = getChatSessionId()
+  const sessionId = pending.session_id
   try {
     await sseStream.resumeHitl(sessionId, {
       interrupt_id: pending.interrupt_id,
@@ -849,17 +1078,19 @@ async function submitHitlFromPanel(payload: {
       grant_scope: payload.grant_scope,
     })
   } finally {
-    if (pendingHitl.value) {
-      pendingHitl.value.submitting = false
+    const current = pendingHitlBySession.value[sessionId]
+    if (current?.interrupt_id === pending.interrupt_id) {
+      pendingHitlBySession.value = {
+        ...pendingHitlBySession.value,
+        [sessionId]: { ...current, submitting: false },
+      }
     }
   }
 }
 
 async function stopChatStream() {
-  const sessionId = getChatSessionId()
-  sseStream.abortStream()
   try {
-    await stopChat(sessionId, qa_type.value)
+    await sseStream.stopCurrentRun()
   } catch (err) {
     // 401 已由 authHttp 统一跳转登录；其余错误仍等待 SSE finish/stopped
     if (!isUnauthorizedError(err)) {
@@ -876,11 +1107,20 @@ const getChatSessionId = () => {
   return uuids.value[qa_type.value]
 }
 
+async function reconnectCurrentRun() {
+  const sessionId = uuids.value[qa_type.value]
+  if (!sessionId) {
+    return
+  }
+  reconnectAvailable.value = false
+  await sseStream.resumeActiveRun(sessionId)
+}
+
 const checkAllFilesUploaded = () => {
   const pendingFiles = fileUploadRef.value?.pendingUploadFileInfoList || []
 
   if (qa_type.value === 'FAULT_OPERATION_QA' && pendingFiles.length > 0) {
-    window.$ModalMessage.warning('故障运维暂不支持文件上传')
+    window.$ModalMessage.warning('故障排查暂不支持文件上传')
     return false
   }
 
@@ -1054,6 +1294,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
 
   // 调用大模型后台服务接口
   stylizingLoading.value = true
+  startProcessingClock()
   inputTextString.value = ''
 
   if (!uuids.value[qa_type.value]) {
@@ -1071,6 +1312,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
       file_key: upload_file_key,
       mentions: [...composerMentions.value],
       role: 'user',
+      created_at: Date.now(),
     })
     // 更新 currentRenderIndex 以包含新添加的项
     currentRenderIndex.value = conversationItems.value.length - 1
@@ -1092,6 +1334,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     file_key: [],
     role: 'assistant',
     messageContent: emptyMessageContent(),
+    created_at: Date.now(),
   })
 
   // 更新 currentRenderIndex 以包含新添加的项
@@ -1102,7 +1345,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     qa_type: qa_type.value,
     file_dict,
   }
-  if (qa_type.value === 'COMMON_QA') {
+  if (qa_type.value === 'COMMON_QA' || qa_type.value === 'SUPER_AGENT_QA') {
     streamExtra.kb_collections = selectedKbCollections.value
     streamExtra.kb_search_enabled = kbSearchEnabled.value
   }
@@ -1156,16 +1399,7 @@ async function scrollToLatestMessage(smooth = false) {
 }
 
 const placeholder = computed(() => {
-  if (uploadingOnSend.value) {
-    return '附件上传中...'
-  }
-  if (supportsSlashSkills(qa_type.value)) {
-    return '行首 / 选 Skills；空格后 @ 可引用多个文件或 subagent…'
-  }
-  if (supportsAtMentions(qa_type.value)) {
-    return '空格后 @ 引用文件或 subagent…'
-  }
-  return '输入任意问题...'
+  return composerPlaceholder(qa_type.value, uploadingOnSend.value)
 })
 
 function getComposerTextarea(): HTMLTextAreaElement | null {
@@ -1299,6 +1533,7 @@ const handleResetState = () => {
   clearComposerQueue()
 
   stylizingLoading.value = false
+  stopProcessingClock()
   nextTick(() => {
     refInputTextString.value?.select()
   })
@@ -1317,22 +1552,88 @@ const sessionContextMenuShow = ref(false)
 const sessionContextMenuX = ref(0)
 const sessionContextMenuY = ref(0)
 const sessionContextMenuTarget = ref<TableItem | null>(null)
-const sessionContextMenuOptions = [
-  { label: '修改标题', key: 'rename' },
-]
+const sessionContextMenuOptions = computed(() => {
+  const target = sessionContextMenuTarget.value
+  const opts: Array<{ label: string, key: string }> = [
+    { label: '修改标题', key: 'rename' },
+  ]
+  if (target && !target.archived) {
+    opts.push({ label: target.pinned ? '取消置顶' : '置顶', key: target.pinned ? 'unpin' : 'pin' })
+  }
+  if (target) {
+    opts.push({ label: target.archived ? '取消归档' : '归档', key: target.archived ? 'unarchive' : 'archive' })
+  }
+  return opts
+})
 
 function closeSessionContextMenu() {
   sessionContextMenuShow.value = false
   sessionContextMenuTarget.value = null
 }
 
+async function refreshSessionList() {
+  await refreshHistoryLists(searchText.value)
+}
+
+function sortTableDataPinnedFirst(items: TableItem[]): TableItem[] {
+  return [...items].sort((a, b) => {
+    const pa = a.pinned ? 1 : 0
+    const pb = b.pinned ? 1 : 0
+    if (pa !== pb) {
+      return pb - pa
+    }
+    return 0
+  })
+}
+
+async function toggleSessionMeta(row: TableItem, patch: { pinned?: boolean, archived?: boolean }) {
+  try {
+    await updateSessionMeta(row.chat_id, patch)
+    // 本地即时更新 + 重排
+    const idx = tableData.value.findIndex((s) => s.chat_id === row.chat_id)
+    if (idx !== -1) {
+      const updated = { ...tableData.value[idx], ...patch }
+      const next = [...tableData.value]
+      next[idx] = updated
+      tableData.value = sortTableDataPinnedFirst(next)
+    }
+    // 归档 / 取消归档会改变两个列表的成员，直接重拉
+    if (patch.archived !== undefined) {
+      await refreshSessionList()
+    }
+    window.$ModalMessage.destroyAll()
+    window.$ModalMessage.success('已更新', { duration: 1200 })
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '操作失败'
+    window.$ModalMessage.error(msg)
+  }
+}
+
 function handleSessionContextMenuSelect(key: string) {
   const target = sessionContextMenuTarget.value
   closeSessionContextMenu()
-  if (key !== 'rename' || !target) {
+  if (!target) {
     return
   }
-  openRenameSessionModal(target)
+  if (key === 'rename') {
+    openRenameSessionModal(target)
+    return
+  }
+  if (key === 'pin') {
+    void toggleSessionMeta(target, { pinned: true })
+    return
+  }
+  if (key === 'unpin') {
+    void toggleSessionMeta(target, { pinned: false })
+    return
+  }
+  if (key === 'archive') {
+    void toggleSessionMeta(target, { archived: true })
+    return
+  }
+  if (key === 'unarchive') {
+    void toggleSessionMeta(target, { archived: false })
+  }
 }
 
 const renameSessionModal = reactive({
@@ -1396,6 +1697,7 @@ const rowProps = (row: TableItem) => {
       sessionContextMenuShow.value = true
     },
     onClick: async () => {
+      sseStream.detachSubscription()
       backgroundColorVariable.value = cssVar(themeCssVar.bg)
 
       currentIndex.value = row.uuid
@@ -1411,6 +1713,10 @@ const rowProps = (row: TableItem) => {
         showDefaultPage.value = false
       }
 
+      // 先切换当前 session 身份，再异步加载历史；审批面板必须立即随 session 隔离，
+      // 不能在网络请求期间继续显示上一会话的 pending HITL。
+      activateChatMode(row.qa_type, row.chat_id, true)
+
       // 这里根据chat_id 过滤同一轮对话数据
       await fetchConversationHistory(
         isInit,
@@ -1421,8 +1727,6 @@ const rowProps = (row: TableItem) => {
         '',
       )
 
-      // 与顶栏切换不同：从历史会话点入时已拉取 messages，不能再因 qa_type 不一致而清空列表并打开默认页
-      onAqtiveChange(row.qa_type, row.chat_id, true)
       await replaceChatSessionUrl(row.chat_id)
       await scrollToLatestMessage(true)
       if (isMobile.value) {
@@ -1485,14 +1789,16 @@ function ensureActiveSessionId() {
 }
 
 watch(qa_type, ensureActiveSessionId, { immediate: true })
-/**
- * @param fromHistorySelection 为 true 时表示从左侧历史会话点入：已加载该会话 messages，仅同步 qa_type / uuid，不得清空 conversationItems 或切回默认页
- */
-const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
+/** 从历史会话进入时只同步模式与会话标识，不清空已加载的消息。 */
+const activateChatMode = (
+  targetQaType: string,
+  sessionId: string,
+  fromHistorySelection = false,
+) => {
   businessStore.todos = []
 
   // 切换到不同问答类型时，清空聊天记录（顶栏切换）；历史会话点入时跳过，否则会覆盖刚加载的 messages
-  if (qa_type.value !== val) {
+  if (qa_type.value !== targetQaType) {
     suggested_array.value = []
     if (!fromHistorySelection) {
       conversationItems.value = []
@@ -1502,17 +1808,17 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
     }
   }
 
-  qa_type.value = val
-  businessStore.update_qa_type(val)
+  qa_type.value = targetQaType
+  businessStore.update_qa_type(targetQaType)
 
   // 切换类型时生成新uuid
-  if (chat_id) {
-    uuids.value[val] = chat_id
+  if (sessionId) {
+    uuids.value[targetQaType] = sessionId
     sessionMaterialized.value = true
-    void loadSessionContext(chat_id)
+    void loadSessionContext(sessionId)
     reloadSessionFilesPanel()
   } else {
-    uuids.value[val] = uuidv4()
+    uuids.value[targetQaType] = uuidv4()
     sessionMaterialized.value = false
     sessionContext.value = null
     selectedKbCollections.value = []
@@ -1527,7 +1833,7 @@ const onAqtiveChange = (val, chat_id, fromHistorySelection = false) => {
   }
 
   // 测试用例生成在独立页面（TestAssistant），不在对话页内完成
-  if (val === 'TEST_CASE_QA' && route.name !== 'TestCaseGenerate') {
+  if (targetQaType === 'TEST_CASE_QA' && route.name !== 'TestCaseGenerate') {
     router.push({ name: 'TestCaseGenerate' })
   }
 }
@@ -1613,14 +1919,8 @@ const onBlurSearchChat = () => {
 // 在script部分添加搜索处理函数
 const handleSearch = () => {
   tableData.value = []
-  fetchConversationHistory(
-    isInit,
-    conversationItems,
-    tableData,
-    currentRenderIndex,
-    null,
-    searchText.value,
-  )
+  archivedTableData.value = []
+  void refreshHistoryLists(searchText.value)
 }
 
 const handleClear = () => {
@@ -1717,6 +2017,7 @@ onMounted(() => {
 
 // 在组件卸载前移除事件监听
 onBeforeUnmount(() => {
+  stopProcessingClock()
   if (messagesContainer.value) {
     messagesContainer.value.removeEventListener('scroll', handleScroll)
   }
@@ -1749,7 +2050,7 @@ function onPageDrop(e: DragEvent) {
 
 function canUploadComposerFiles(): boolean {
   if (qa_type.value === 'FAULT_OPERATION_QA') {
-    window.$ModalMessage.warning('故障运维暂不支持文件上传')
+    window.$ModalMessage.warning('故障排查暂不支持文件上传')
     return false
   }
   return true
@@ -1825,6 +2126,7 @@ function onComposerPaste(e: ClipboardEvent) {
 <template>
   <div
     class="chat-page flex justify-between items-center h-full"
+    :class="{ 'chat-page--mobile': isMobile }"
     @dragover="onPageDragOver"
     @drop="onPageDrop"
   >
@@ -1854,12 +2156,14 @@ function onComposerPaste(e: ClipboardEvent) {
           :is-focus-search-chat="isFocusSearchChat"
           :is-loading-history="isLoadingHistory"
           :table-data="tableData"
+          :archived-table-data="archivedTableData"
           :history-sidebar-columns="historySidebarColumns"
           :session-context-menu-show="sessionContextMenuShow"
           :session-context-menu-x="sessionContextMenuX"
           :session-context-menu-y="sessionContextMenuY"
           :session-context-menu-options="sessionContextMenuOptions"
           :row-props="rowProps"
+          :current-qa-type="qa_type"
           @newChat="newChat"
           @focusSearch="onFocusSearchChat"
           @blurSearch="onBlurSearchChat"
@@ -1894,9 +2198,17 @@ function onComposerPaste(e: ClipboardEvent) {
                   <span class="i-hugeicons:menu-02" aria-hidden="true"></span>
                 </button>
                 <NavigationNavBar
+                  v-if="!isMobile"
                   class="flex-1 min-w-0"
                   :background-color="backgroundColorVariable"
                 />
+                <div class="chat-top-bar__mode">
+                  <ChatModeSelector
+                    :qa-type="qa_type"
+                    :disabled="sseIsLoading"
+                    @select="changeChatMode"
+                  />
+                </div>
                 <button
                   v-if="!showDefaultPage && uuids[qa_type]"
                   type="button"
@@ -1938,7 +2250,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     :key="`${item.uuid}-${index}`"
                     class="mb-4"
                   >
-                    <div v-if="item.role === 'user'" class="flex flex-col items-end space-y-2 w-full">
+                    <div v-if="item.role === 'user'" class="chat-user-message-row flex flex-col items-end space-y-2 w-full">
                       <!-- 用户消息 -->
                       <div
                         class="chat-user-message"
@@ -1985,6 +2297,23 @@ function onComposerPaste(e: ClipboardEvent) {
                         </n-space>
                       </div>
 
+                      <!-- 用户消息复制按钮（hover 显隐） -->
+                      <div
+                        class="chat-user-message-actions"
+                        style="margin-left: 10%; margin-right: 10%; width: 80%;"
+                      >
+                        <span class="message-timestamp" :class="{ 'message-timestamp--always': isMobile }">{{ formatHHmm(item.created_at) }}</span>
+                        <button
+                          type="button"
+                          class="chat-user-copy-btn"
+                          title="复制"
+                          aria-label="复制该消息"
+                          @click="handleCopyUserText(item.question || '')"
+                        >
+                          <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
+                        </button>
+                      </div>
+
                       <!-- 用户上传的文件列表 -->
                       <div
                         v-if="item.file_key && item.file_key.length > 0"
@@ -2018,6 +2347,14 @@ function onComposerPaste(e: ClipboardEvent) {
                     <div v-if="item.role === 'assistant'">
                       <template v-if="item.messageContent?.version === 1">
                         <div class="assistant-unified-card">
+                          <div
+                            v-if="showAssistantReplyLoading(index, item.role)"
+                            class="assistant-processing-time"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {{ processingTimeText(item.created_at) }}
+                          </div>
                           <template
                             v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
                             :key="entry.kind === 'subagent'
@@ -2037,6 +2374,7 @@ function onComposerPaste(e: ClipboardEvent) {
                               :input="entry.part.input"
                               :output="entry.part.output"
                               :status="entry.part.status"
+                              :state="entry.part.state"
                               :error="entry.part.error"
                               :duration_ms="entry.part.duration_ms"
                               :child-parts="entry.childParts"
@@ -2049,12 +2387,18 @@ function onComposerPaste(e: ClipboardEvent) {
                                 :result="entry.part.output"
                                 :error="entry.part.error"
                                 :status="entry.part.status"
+                                :state="entry.part.state"
+                                :error-category="entry.part.errorCategory"
+                                :exit_code="entry.part.exit_code"
+                                :truncated="entry.part.truncated"
                                 :duration_ms="entry.part.duration_ms"
                               />
                             </template>
                             <MarkdownPreview
                               v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                               :content="entry.part.content || ''"
+                              :retrieval-results="retrievedResults(item.messageContent.parts)"
+                              :references-complete="entry.part.status !== 'streaming'"
                               :toolCalls="null"
                               :msgMetadata="item.msg_metadata"
                               :isInit="isInit"
@@ -2064,33 +2408,49 @@ function onComposerPaste(e: ClipboardEvent) {
                               :qa-type="item.qa_type || 'COMMON_QA'"
                               :parentScollBottomMethod="scrollToBottom"
                               @failed="() => onFailedReader(index)"
-                              @recycleQa="() => onRecycleQa(index)"
-                              @praiseFeadBack="() => onPraiseFeadBack(index)"
-                              @belittleFeedback="() => onBelittleFeedback(index)"
+                              @citation-click="(number) => openCitationSource(citationSourcesKey(item, index), number)"
                             />
                           </template>
+                          <div
+                            v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
+                            class="assistant-tool-failure-blocker"
+                            role="status"
+                          >
+                            <span class="assistant-tool-failure-blocker__icon" aria-hidden="true">!</span>
+                            <span>本轮未完成</span>
+                            <n-button
+                              text
+                              size="tiny"
+                              @click="onRecycleQa(index)"
+                            >
+                              重新执行
+                            </n-button>
+                          </div>
                           <AssistantStreamingIndicator
                             v-if="showAssistantReplyLoading(index, item.role)"
                             section
                             :divided="buildDisplayParts(item.messageContent.parts).length > 0"
                             :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
                           />
-                          <div
-                            v-if="hasValidUsage(item.msg_metadata?.usage)"
-                            class="assistant-usage-summary"
-                          >
-                            {{ formatUsageSummary(item.msg_metadata!.usage!) }}
-                          </div>
                           <AssistantReplyToolbar
                             v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
                             :qa-type="item.qa_type || 'COMMON_QA'"
-                            :copy-text="[item.reasoning, item.content].filter((s) => s && String(s).trim()).join('\n\n')"
+                            :copy-text="extractLastTopLevelText(item.messageContent.parts)"
+                            :time-text="formatHHmm(item.completed_at || item.created_at)"
+                            :usage-text="hasValidUsage(item.msg_metadata?.usage) ? formatUsageSummary(item.msg_metadata!.usage!) : ''"
+                            :attribution="item.msg_metadata?.usage?.attribution"
                             :langfuse_session_id="item.langfuse_session_id"
                             :langfuse-ui-origin="langfuseUiOrigin"
-                            @praise-fead-back="() => onPraiseFeadBack(index)"
-                            @belittle-feedback="() => onBelittleFeedback(index)"
-                            @recycle-qa="() => onRecycleQa(index)"
-                          />
+                          >
+                            <template #meta>
+                              <CitationSources
+                                v-if="retrievedResults(item.messageContent.parts).length"
+                                :ref="(component) => setCitationSourcesRef(citationSourcesKey(item, index), component)"
+                                :content="extractLastTopLevelText(item.messageContent.parts)"
+                                :results="retrievedResults(item.messageContent.parts)"
+                              />
+                            </template>
+                          </AssistantReplyToolbar>
                         </div>
                       </template>
                       <template v-else>
@@ -2110,9 +2470,6 @@ function onComposerPaste(e: ClipboardEvent) {
                           :parentScollBottomMethod="scrollToBottom"
                           @failed="() => onFailedReader(index)"
                           @completed="() => onCompletedReader(index)"
-                          @recycleQa="() => onRecycleQa(index)"
-                          @praiseFeadBack="() => onPraiseFeadBack(index)"
-                          @belittleFeedback="() => onBelittleFeedback(index)"
                           @beginRead="() => onBeginRead(index)"
                         />
                         <AssistantStreamingIndicator
@@ -2151,178 +2508,33 @@ function onComposerPaste(e: ClipboardEvent) {
                     vertical
                     class="chat-content-gutter"
                   >
+                    <n-alert
+                      v-if="reconnectAvailable"
+                      type="warning"
+                      title="连接已中断"
+                    >
+                      已生成的内容不会丢失，可以重新连接继续查看。
+                      <template #action>
+                        <n-button
+                          size="small"
+                          @click="reconnectCurrentRun"
+                        >
+                          重新连接
+                        </n-button>
+                      </template>
+                    </n-alert>
                     <!-- HITL 优先占 Todo 槽位；无 pending 时显示 Todo -->
                     <HitlComposerPanel
                       v-if="pendingHitl"
                       :kind="pendingHitl.kind"
                       :action-requests="pendingHitl.action_requests"
-                      :disabled="!!pendingHitl.submitting || sseIsLoading"
+                      :disabled="hitlComposerDisabled"
                       @submit="submitHitlFromPanel"
                     />
                     <TodoList
                       v-else
                       :todos="businessStore.todos"
                     />
-                    <div
-                      flex="~ gap-10"
-                      class="qa-type-tabs h-40"
-                    >
-                      <n-button
-                        type="default"
-                        :class="[
-                          qa_type === 'COMMON_QA' && 'active-tab',
-                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                        ]"
-                        @click="onAqtiveChange('COMMON_QA', '')"
-                      >
-                        <template #icon>
-                          <n-icon size="16">
-                            <svg
-                              t="1742194713465"
-                              class="icon"
-                              viewBox="0 0 1024 1024"
-                              version="1.1"
-                              xmlns="http://www.w3.org/2000/svg"
-                              p-id="8188"
-                              width="60"
-                              height="60"
-                            >
-                              <path
-                                d="M80.867881 469.76534l0.916659 0.916659 79.711097-79.711097L160.655367 389.901467a162.210364 162.210364 0 0 1 229.164631-229.164631l236.345122 236.345122L706.028994 317.332667l-236.345123-236.803452a275.112139 275.112139 0 0 0-388.81599 389.27432z m472.690245-388.81599l-0.916658 0.916659 79.711097 79.711097 0.916659-0.916658A162.210364 162.210364 0 0 1 862.663019 389.901467l-236.345122 236.345122 79.711097 79.711098 236.803452-236.345123a275.112139 275.112139 0 0 0-389.27432-388.81599z m-84.027031 861.506236l0.916659-0.916659-79.711098-79.711097-0.916658 0.916658a162.210364 162.210364 0 0 1-229.164631-229.431989l236.345122-236.345123L317.251198 317.332667l-236.803452 236.345122a275.112139 275.112139 0 0 0 389.27432 388.815991z m99.801197-372.736272a81.811773 81.811773 0 0 0 21.197728-78.794439 80.895115 80.895115 0 0 0-57.59671-57.596711 81.620803 81.620803 0 1 0 36.398982 136.352956z m373.156407-15.659583l-0.916659-0.916659-79.711097 79.711097 0.916658 0.916659a162.248559 162.248559 0 0 1-229.431989 229.431989L396.885907 626.704918 317.251198 706.568792l236.345122 236.803452A275.073945 275.073945 0 0 0 942.374117 554.136119z"
-                                fill="#297CE9"
-                                p-id="8189"
-                              />
-                            </svg>
-                          </n-icon>
-                        </template>
-                        智能问答
-                      </n-button>
-                      <n-button
-                        type="default"
-                        :class="[
-                          qa_type === 'SUPER_AGENT_QA' && 'active-tab',
-                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                        ]"
-                        @click="onAqtiveChange('SUPER_AGENT_QA', '')"
-                      >
-                        <template #icon>
-                          <n-icon size="18">
-                            <svg
-                              t="1732528323504"
-                              class="icon"
-                              viewBox="0 0 1024 1024"
-                              version="1.1"
-                              xmlns="http://www.w3.org/2000/svg"
-                              p-id="41739"
-                              width="64"
-                              height="64"
-                            >
-                              <path
-                                d="M96 896c-8 0-15.5-3.1-21.2-8.8C69.1 881.6 66 874 66 866V445c0-5.5 4.5-10 10-10s10 4.5 10 10v421c0 2.7 1 5.2 2.9 7.1 1.9 1.9 4.4 2.9 7.1 2.9h612c5.5 0 10 4.5 10 10s-4.5 10-10 10H96z m748 0v-20c2.7 0 5.2-1 7.1-2.9 1.9-1.9 2.9-4.4 2.9-7.1v-80c0-5.5 4.5-10 10-10s10 4.5 10 10v80c0 8-3.1 15.5-8.8 21.2-5.6 5.7-13.2 8.8-21.2 8.8z m20-450c-5.5 0-10-4.5-10-10V126c0-5.5-4.5-10-10-10H96c-5.5 0-10 4.5-10 10v193c0 5.5-4.5 10-10 10s-10-4.5-10-10V126c0-16.5 13.4-30 30-30h748c16.5 0 30 13.4 30 30v310c0 5.5-4.5 10-10 10z"
-                                fill="#222222"
-                                p-id="41740"
-                              />
-                              <path
-                                d="M781 886m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
-                                fill="#222222"
-                                p-id="41741"
-                              />
-                              <path
-                                d="M76 383m-16 0a16 16 0 1 0 32 0 16 16 0 1 0-32 0Z"
-                                fill="#222222"
-                                p-id="41742"
-                              />
-                              <path
-                                d="M84 226h775v20H84zM750 826c-57.2 0-110.9-22.3-151.3-62.7C558.3 722.9 536 669.2 536 612s22.3-110.9 62.7-151.3C639.1 420.3 692.8 398 750 398s110.9 22.3 151.3 62.7C941.7 501.1 964 554.8 964 612s-22.3 110.9-62.7 151.3C860.9 803.7 807.2 826 750 826z m0-408c-107 0-194 87-194 194s87 194 194 194 194-87 194-194-87-194-194-194z"
-                                fill="#222222"
-                                p-id="41743"
-                              />
-                              <path
-                                d="M901.7 753.2c-1 0-2.1-0.2-3.1-0.5-4.1-1.3-6.9-5.2-6.9-9.5V478.8c0-4.3 2.8-8.2 6.9-9.5 4.1-1.3 8.6 0.1 11.2 3.6 24.9 34 51.4 75.6 51.4 139.1 0 62-22.3 97.3-51.4 137.1-1.9 2.7-4.9 4.1-8.1 4.1z m10.1-241.9v200c17.9-28 29.5-56.4 29.5-99.3-0.1-40.2-11-70.5-29.5-100.7z"
-                                fill="#222222"
-                                p-id="41744"
-                              />
-                              <path
-                                d="M859 788l93 130"
-                                fill="#358AFE"
-                                p-id="41745"
-                              />
-                              <path
-                                d="M952 928c-3.1 0-6.2-1.5-8.1-4.2l-93-130c-3.2-4.5-2.2-10.7 2.3-14 4.5-3.2 10.7-2.2 14 2.3l93 130c3.2 4.5 2.2 10.7-2.3 14-1.8 1.3-3.9 1.9-5.9 1.9zM482.4 468.4H171.6c-8.8 0-16-7.2-16-16v-89.8c0-8.8 7.2-16 16-16h310.8c8.8 0 16 7.2 16 16v89.8c0 8.8-7.2 16-16 16z m-306.8-20h302.8v-81.8H175.6v81.8z m306.8-81.8zM384 580H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h219c5.5 0 10 4.5 10 10s-4.5 10-10 10zM455 690H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h290c5.5 0 10 4.5 10 10s-4.5 10-10 10zM525 800H165c-5.5 0-10-4.5-10-10s4.5-10 10-10h360c5.5 0 10 4.5 10 10s-4.5 10-10 10zM183 146c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z m94 0c15.5 0 28 12.5 28 28s-12.5 28-28 28-28-12.5-28-28 12.5-28 28-28z"
-                                fill="#222222"
-                                p-id="41746"
-                              />
-                            </svg>
-                          </n-icon>
-                        </template>
-                        智能体
-                      </n-button>
-                      <n-button
-                        type="default"
-                        :class="[
-                          qa_type === 'FAULT_OPERATION_QA' && 'active-tab',
-                          'rounded-100 w-120 h-36 p-15 text-13 text-tab',
-                        ]"
-                        @click="onAqtiveChange('FAULT_OPERATION_QA', '')"
-                      >
-                        <template #icon>
-                          <n-icon size="18">
-                            <svg
-                              t="1743292000000"
-                              class="icon"
-                              viewBox="0 0 1024 1024"
-                              version="1.1"
-                              xmlns="http://www.w3.org/2000/svg"
-                              p-id="8849"
-                              width="64"
-                              height="64"
-                            >
-                              <path
-                                d="M512 160c-35.3 0-64 28.7-64 64v32c0 35.3 28.7 64 64 64s64-28.7 64-64v-32c0-35.3-28.7-64-64-64z"
-                                fill="#222222"
-                                p-id="8850"
-                              />
-                              <path
-                                d="M480 384h64v320h-64z"
-                                fill="#222222"
-                                p-id="8851"
-                              />
-                              <path
-                                d="M448 704h128v32c0 17.7-14.3 32-32 32H480c-17.7 0-32-14.3-32-32v-32z"
-                                fill="#222222"
-                                p-id="8852"
-                              />
-                              <path
-                                d="M416 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
-                                fill="#222222"
-                                p-id="8853"
-                              />
-                              <path
-                                d="M608 80c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40s40-17.9 40-40v-24c0-22.1-17.9-40-40-40z"
-                                fill="#222222"
-                                p-id="8854"
-                              />
-                              <path
-                                d="M448 144c-22.1 0-40 17.9-40 40v24c0 22.1 17.9 40 40 40h128c22.1 0 40-17.9 40-40v-24c0-22.1-17.9-40-40-40H448z"
-                                fill="#222222"
-                                p-id="8855"
-                              />
-                              <path
-                                d="M848 512c0-141.4-114.6-256-256-256S336 370.6 336 512c0 44.2 11.2 85.8 31.1 122.9L224 768h576l-143.1-133.1C880.8 597.8 896 556.2 896 512zM592 768H432l144-160h144l-128 160z"
-                                fill="#222222"
-                                p-id="8856"
-                              />
-                              <path
-                                d="M512 320c-105.6 0-192 86.4-192 192s86.4 192 192 192 192-86.4 192-192-86.4-192-192-192z"
-                                fill="#222222"
-                                p-id="8857"
-                              />
-                            </svg>
-                          </n-icon>
-                        </template>
-                        故障运维
-                      </n-button>
-                    </div>
                     <div
                       :class="[
                         'chat-composer relative b b-solid p-12',
@@ -2483,12 +2695,14 @@ function onComposerPaste(e: ClipboardEvent) {
           :is-focus-search-chat="isFocusSearchChat"
           :is-loading-history="isLoadingHistory"
           :table-data="tableData"
+          :archived-table-data="archivedTableData"
           :history-sidebar-columns="historySidebarColumns"
           :session-context-menu-show="sessionContextMenuShow"
           :session-context-menu-x="sessionContextMenuX"
           :session-context-menu-y="sessionContextMenuY"
           :session-context-menu-options="sessionContextMenuOptions"
           :row-props="rowProps"
+          :current-qa-type="qa_type"
           @newChat="newChat"
           @focusSearch="onFocusSearchChat"
           @blurSearch="onBlurSearchChat"
@@ -2549,6 +2763,30 @@ function onComposerPaste(e: ClipboardEvent) {
 </template>
 
 <style lang="scss" scoped>
+.assistant-tool-failure-blocker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 2px 3px;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-tool-failure-blocker__icon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--noesis-color-warning);
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
 .chat-composer--dragover {
   border-color: var(--noesis-color-primary);
   background: var(--noesis-color-primary-bg-subtle);
@@ -2655,15 +2893,6 @@ function onComposerPaste(e: ClipboardEvent) {
   align-items: center;
   height: 100vh;
   background-color: var(--noesis-color-bg);
-}
-
-.active-tab,
-:deep(.n-button.active-tab) {
-  background: var(--noesis-chat-tab-active-bg) !important;
-  border-color: var(--noesis-chat-tab-active-border, var(--noesis-color-primary)) !important;
-  color: var(--noesis-chat-tab-active-color, var(--noesis-color-primary)) !important;
-  box-shadow: var(--noesis-chat-tab-active-shadow, none);
-  font-weight: 600;
 }
 
 /* 新建对话框的淡入淡出动画样式 */
@@ -2843,7 +3072,66 @@ function onComposerPaste(e: ClipboardEvent) {
   flex-shrink: 0;
 }
 
+.chat-user-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -8px;
+  margin-bottom: 0;
+}
+
+.chat-user-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
+  color: var(--noesis-color-text-hint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.chat-user-copy-btn span {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.chat-user-message-row:hover .chat-user-copy-btn,
+.chat-user-copy-btn:focus-visible {
+  opacity: 1;
+}
+
+.chat-user-copy-btn:hover {
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
+.message-timestamp {
+  opacity: 0;
+  font-size: 11px;
+  color: var(--noesis-color-text-hint);
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.chat-user-message-row:hover .message-timestamp,
+.assistant-unified-card:hover .message-timestamp {
+  opacity: 1;
+}
+
+.message-timestamp--always {
+  opacity: 1;
+}
+
 .assistant-unified-card {
+  position: relative;
   width: 80%;
   margin-left: 10%;
   margin-right: 10%;
@@ -2854,13 +3142,12 @@ function onComposerPaste(e: ClipboardEvent) {
   box-shadow: var(--noesis-shadow-sm);
 }
 
-.assistant-usage-summary {
-  padding: 4px 16px 8px;
+.assistant-processing-time {
+  padding: 8px 16px 0;
   font-size: 11px;
   line-height: 1.4;
   color: var(--noesis-color-text-hint);
-  font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
 }
 
 .chat-top-bar {
@@ -2868,6 +3155,13 @@ function onComposerPaste(e: ClipboardEvent) {
   gap: 8px;
   padding-right: 12px;
   padding-left: 8px;
+}
+
+.chat-top-bar__mode {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
 }
 
 .history-drawer-toggle {
@@ -2907,20 +3201,13 @@ function onComposerPaste(e: ClipboardEvent) {
   min-height: 0;
 }
 
+.chat-page--mobile .custom-layout {
+  border-radius: 0;
+}
+
 .chat-content-gutter {
   margin-left: var(--noesis-content-gutter-desktop);
   margin-right: var(--noesis-content-gutter-desktop);
-}
-
-.qa-type-tabs {
-  overflow-x: auto;
-  flex-wrap: nowrap;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-
-.qa-type-tabs::-webkit-scrollbar {
-  display: none;
 }
 
 @media (max-width: 1024px) {
@@ -2954,6 +3241,26 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 @media (max-width: 768px) {
+  .chat-top-bar {
+    min-height: 48px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--noesis-color-border-subtle);
+  }
+
+  .chat-top-bar__mode {
+    flex: 1;
+    padding-right: 32px;
+  }
+
+  .chat-input-footer {
+    padding: 8px !important;
+  }
+
+  .chat-content-gutter {
+    margin-right: 0;
+    margin-left: 0;
+  }
+
   .chat-user-message {
     max-width: calc(100% - 8px) !important;
     margin: 0 !important;
@@ -2967,31 +3274,5 @@ function onComposerPaste(e: ClipboardEvent) {
     line-height: 1.55 !important;
   }
 
-  .qa-type-tabs {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 8px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .qa-type-tabs :deep(.n-button) {
-    flex: 0 0 auto;
-    width: auto !important;
-    min-width: fit-content;
-    height: 36px;
-    padding: 0 12px !important;
-    font-size: 12px;
-  }
-
-  .qa-type-tabs :deep(.n-button__content) {
-    gap: 3px;
-    white-space: nowrap;
-  }
-
-  .qa-type-tabs :deep(.n-button .n-icon) {
-    flex-shrink: 0;
-    font-size: 14px !important;
-  }
 }
 </style>

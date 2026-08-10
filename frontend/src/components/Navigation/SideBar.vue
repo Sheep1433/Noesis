@@ -1,5 +1,6 @@
 <script lang="tsx" setup>
 import ThemeSwitcher from '@/components/ThemeSwitcher/index.vue'
+import { mainNavItems } from '@/config/navigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -98,81 +99,13 @@ const SideBarItem = defineComponent({
   },
 })
 
-const sidebarItems = ref([
-  {
-    label: '智枢',
-    key: 'SystemLogo',
-    renderIcon() {
-      return (
-        <div class="brand-mark i-my-svg:system-logo"></div>
-      )
-    },
-    onClick() {
-      router.push('/')
-    },
-    props: {
-      fill: true,
-    },
-  },
-  {
-    label: '对话',
-    key: 'ChatIndex',
-    onClick() {
-      router.push({
-        name: this.key,
-      })
-    },
-    renderIcon() {
-      return (
-        <div class="sidebar-nav-icon i-my-svg:chat-index"></div>
-      )
-    },
-  },
-  {
-    label: '知识库',
-    key: 'KnowledgeBase',
-    onClick() {
-      router.push({
-        name: this.key,
-      })
-    },
-    renderIcon() {
-      return (
-        <div class="sidebar-nav-icon i-my-svg:chat-knowledge"></div>
-      )
-    },
-  },
-  {
-    label: '扩展',
-    key: 'Extensions',
-    onClick() {
-      router.push({
-        name: this.key,
-      })
-    },
-    renderIcon() {
-      return (
-        <div class="sidebar-nav-icon i-mdi:puzzle-outline"></div>
-      )
-    },
-  },
-  {
-    label: '测试用例',
-    key: 'TestCaseGenerate',
-    onClick() {
-      router.push({
-        name: this.key,
-      })
-    },
-    renderIcon() {
-      return (
-        <div class="sidebar-nav-icon i-mdi:clipboard-text-outline"></div>
-      )
-    },
-  },
-])
-
-
+function navigate(item: (typeof mainNavItems)[number]) {
+  if (!item.routeName) {
+    void router.push('/')
+    return
+  }
+  void router.push({ name: item.routeName })
+}
 </script>
 
 <template>
@@ -193,14 +126,19 @@ const sidebarItems = ref([
       pt-24
     >
       <SideBarItem
-        v-for="(sidebarItem) in sidebarItems"
+        v-for="sidebarItem in mainNavItems"
         :key="sidebarItem.key"
         :label="sidebarItem.label"
-        :active="sidebarItem.key === route.name"
-        v-bind="sidebarItem.props"
-        @click="sidebarItem.onClick.call(sidebarItem)"
+        :active="sidebarItem.routeName === route.name"
+        :fill="sidebarItem.fill"
+        @click="navigate(sidebarItem)"
       >
-        <component :is="sidebarItem.renderIcon" />
+        <div
+          :class="[
+            sidebarItem.fill ? 'brand-mark' : 'sidebar-nav-icon',
+            sidebarItem.iconClass,
+          ]"
+        ></div>
       </SideBarItem>
     </div>
 

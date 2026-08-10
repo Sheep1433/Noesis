@@ -1,74 +1,37 @@
-from unittest.mock import MagicMock, patch
-
-import pytest
-from langchain_deepseek import ChatDeepSeek
-
-from llm.factory import _OPENCODE_DEFAULT_BASE_URL, _OPENCODE_DEFAULT_HEADERS, _build_chat_model
+from noesis.llm.factory import ChatOpenCode
 
 
-def test_build_chat_model_opencode_uses_required_headers() -> None:
-    with patch("llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
-        _build_chat_model(
-            model_type="opencode",
-            model_name="deepseek-v4-flash-free",
-            temperature=0.75,
-            model_base_url="https://opencode.ai/zen/v1",
-            model_api_key="public",
-        )
+def test_opencode_stream_usage_uses_final_cumulative_chunk() -> None:
+    """OpenCode stream usage is cumulative per chunk, not additive across chunks."""
+    model = ChatOpenCode(model="deepseek-v4-flash-free", api_key="test-key")
+    combined = model._combine_llm_outputs(
+        [
+            {
+                "token_usage": {
+                    "prompt_tokens": 1518,
+                    "completion_tokens": 1,
+                    "total_tokens": 1519,
+                }
+            },
+            {
+                "token_usage": {
+                    "prompt_tokens": 1518,
+                    "completion_tokens": 39,
+                    "total_tokens": 1557,
+                }
+            },
+            {
+                "token_usage": {
+                    "prompt_tokens": 1518,
+                    "completion_tokens": 75,
+                    "total_tokens": 1593,
+                }
+            },
+        ]
+    )
 
-    chat_deepseek.assert_called_once()
-    kwargs = chat_deepseek.call_args.kwargs
-    assert kwargs["model"] == "deepseek-v4-flash-free"
-    assert kwargs["api_base"] == "https://opencode.ai/zen/v1"
-    assert kwargs["api_key"] == "public"
-    assert kwargs["default_headers"] == _OPENCODE_DEFAULT_HEADERS
-    assert kwargs["http_client"]._trust_env is False
-    assert kwargs["http_async_client"]._trust_env is False
-
-
-def test_llm_http_clients_bypass_system_proxy() -> None:
-    from llm.factory import _llm_http_clients
-
-    sync_client, async_client = _llm_http_clients()
-    assert sync_client._trust_env is False
-    assert async_client._trust_env is False
-
-
-def test_build_chat_model_opencode_falls_back_to_default_base_url() -> None:
-    with patch("llm.factory.ChatDeepSeek", return_value=MagicMock()) as chat_deepseek:
-        _build_chat_model(
-            model_type="opencode",
-            model_name="deepseek-v4-flash-free",
-            temperature=0.75,
-            model_base_url="",
-            model_api_key="public",
-        )
-
-    assert chat_deepseek.call_args.kwargs["api_base"] == _OPENCODE_DEFAULT_BASE_URL
-
-
-def test_build_chat_model_opencode_returns_chat_deepseek_instance() -> None:
-    with patch("llm.factory.ModelConfig") as model_config:
-        model_config.max_retries = 2
-        model_config.request_timeout = 30.0
-        model_config.streaming = True
-        model = _build_chat_model(
-            model_type="opencode",
-            model_name="deepseek-v4-flash-free",
-            temperature=0.75,
-            model_base_url="https://opencode.ai/zen/v1",
-            model_api_key="public",
-        )
-
-    assert isinstance(model, ChatDeepSeek)
-
-
-def test_build_chat_model_unsupported_type_raises() -> None:
-    with pytest.raises(ValueError, match="Unsupported MODEL_TYPE"):
-        _build_chat_model(
-            model_type="unknown-vendor",
-            model_name="test",
-            temperature=0.0,
-            model_base_url="https://example.com/v1",
-            model_api_key="key",
-        )
+    assert combined["token_usage"] == {
+        "prompt_tokens": 1518,
+        "completion_tokens": 75,
+        "total_tokens": 1593,
+    }

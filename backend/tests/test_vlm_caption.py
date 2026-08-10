@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from domain.chat.attachments.vlm_caption import (
+from noesis.runtime.attachments.vlm_caption import (
     _empty_response_error,
     _extract_message_text,
     describe_image_bytes_for_chat,
@@ -29,8 +29,8 @@ def test_empty_response_error_message() -> None:
     assert "finish_reason" in str(err)
 
 
-@patch("kb.embedding.is_vlm_configured", return_value=True)
-@patch("config.env.ModelConfig")
+@patch("noesis.runtime.attachments.vlm_caption.is_vlm_configured", return_value=True)
+@patch("noesis.config.env.ModelConfig")
 def test_describe_image_uses_configured_model_only(mock_cfg, _mock_vlm) -> None:
     mock_cfg.vlm_model_api_key = "key"
     mock_cfg.vlm_model_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -51,8 +51,8 @@ def test_describe_image_uses_configured_model_only(mock_cfg, _mock_vlm) -> None:
     assert client.chat.completions.create.call_args.kwargs["model"] == "qwen-vl-max"
 
 
-@patch("kb.embedding.is_vlm_configured", return_value=True)
-@patch("config.env.ModelConfig")
+@patch("noesis.runtime.attachments.vlm_caption.is_vlm_configured", return_value=True)
+@patch("noesis.config.env.ModelConfig")
 def test_describe_image_raises_on_empty_content(mock_cfg, _mock_vlm) -> None:
     mock_cfg.vlm_model_api_key = "key"
     mock_cfg.vlm_model_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"

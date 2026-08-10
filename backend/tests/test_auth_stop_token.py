@@ -1,17 +1,18 @@
 """服务端 Session 与 CSRF 的纯领域回归测试。"""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 
-from models.db_models import TUserSession
-from domain.auth.session import SessionService
+from noesis.domain.auth.entities import AuthSession
+from noesis.domain.auth.policy import digest_secret
+from noesis.services.auth.sessions import SessionService
 
 
-def _session(csrf: str = "csrf") -> TUserSession:
-    from domain.auth.session import _digest
-    return TUserSession(
-        id="s1", user_id=1, session_digest=_digest("session"), csrf_digest=_digest(csrf),
+def _session(csrf: str = "csrf") -> AuthSession:
+    return AuthSession(
+        id="s1", user_id=1, session_digest=digest_secret("session"), csrf_digest=digest_secret(csrf),
         created_at=1, last_seen_at=1, idle_expires_at=9_999_999_999_999,
         absolute_expires_at=9_999_999_999_999, revoked_at=None,
     )
@@ -30,11 +31,33 @@ def test_raw_session_id_is_not_model_field():
     assert session.session_digest != "session"
 
 
+def test_session_restore_returns_401_without_double_wrapping_db_context():
+    """回归：未登录恢复会话返回 401，不得二次包装 async context manager。"""
+    from server.db import get_db
+    from server.main import app
+
+    async def fake_db():
+        yield AsyncMock()
+
+    app.dependency_overrides[get_db] = fake_db
+    try:
+        with patch(
+            "server.auth_dependencies.SessionService.get_valid",
+            new=AsyncMock(return_value=None),
+        ):
+            response = TestClient(app).get("/api/auth/session")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json()["code"] == 401
+
+
 def test_cookie_lifetime_uses_the_stricter_server_expiry(monkeypatch):
     session = _session()
     session.idle_expires_at = 2_000
     session.absolute_expires_at = 1_500
-    monkeypatch.setattr("domain.auth.session._now_ms", lambda: 1_000)
+    monkeypatch.setattr("noesis.services.auth.sessions._now_ms", lambda: 1_000)
     assert SessionService.remaining_seconds(session) == 0
 
 
@@ -62,52 +85,24 @@ async def test_revoke_all_targets_only_the_current_user():
 
 @pytest.mark.asyncio
 async def test_get_current_user_rejects_missing_cookie(monkeypatch):
-    from exceptions.exception import AuthException
-    from services.user_service import UserService
+    from noesis.errors.exceptions import AuthException
+    from server.auth_dependencies import get_current_user
 
     request = MagicMock()
     request.cookies.get.return_value = None
     db = AsyncMock()
     monkeypatch.setattr(SessionService, "get_valid", AsyncMock(return_value=None))
     with pytest.raises(AuthException):
-        await UserService.get_current_user(request, db)
+        await get_current_user(request, db)
 
 
 @pytest.mark.asyncio
 async def test_require_csrf_rejects_bad_header():
-    from exceptions.exception import PermissionException
-    from services.user_service import UserService
+    from noesis.errors.exceptions import PermissionException
+    from server.auth_dependencies import require_csrf
 
     request = MagicMock()
     request.state.auth_session = _session("csrf")
     request.headers.get.return_value = "wrong"
     with pytest.raises(PermissionException):
-        await UserService.require_csrf(request)
-
-
-@pytest.mark.asyncio
-async def test_stop_csrf_accepts_body_token(monkeypatch):
-    from schemas.login_vo import CurrentUser
-    from schemas.qa_vo import QaStopRequest
-    from services.user_service import UserService
-
-    sess = _session("csrf-body")
-    request = MagicMock()
-    request.cookies.get.return_value = "session"
-    request.headers.get.return_value = ""
-    request.state.auth_session = sess
-    db = AsyncMock()
-    monkeypatch.setattr(SessionService, "get_valid", AsyncMock(return_value=sess))
-    monkeypatch.setattr(SessionService, "touch", AsyncMock(side_effect=lambda _db, s: s))
-    monkeypatch.setattr(
-        UserService,
-        "_user_from_id",
-        AsyncMock(return_value=CurrentUser(user_id=1, username="u", mobile=None)),
-    )
-    user = await UserService.get_user_for_stop(
-        "sid",
-        request,
-        QaStopRequest(session_id="sid", qa_type="SUPER_AGENT_QA", csrf_token="csrf-body"),
-        db,
-    )
-    assert user.user_id == 1
+        await require_csrf(request)

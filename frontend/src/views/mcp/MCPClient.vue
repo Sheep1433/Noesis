@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { McpServerStatusItem } from '@/api/mcp'
+import type { McpServerCatalogItem, McpServerStatusItem } from '@/api/mcp'
 import { CodeSlash, Refresh } from '@vicons/ionicons-v5'
 import {
   NButton,
@@ -16,11 +16,13 @@ import {
 import { computed, onMounted, ref } from 'vue'
 import {
   getMcpConfig,
-  listMcpServerStatus,
   listMcpServers,
+  listMcpServerTools,
+  probeMcpServer,
   saveMcpConfig,
 } from '@/api/mcp'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
+import McpServerCard from './McpServerCard.vue'
 
 const message = useMessage()
 const { isMobile } = useBreakpoint()
@@ -30,64 +32,104 @@ const refreshing = ref(false)
 const saving = ref(false)
 const error = ref<string | null>(null)
 const servers = ref<McpServerStatusItem[]>([])
+const probing = ref<Record<string, boolean>>({})
+const expandedServers = ref<Record<string, boolean>>({})
+const visibleTools = ref<Record<string, Array<{ name: string, description: string }>>>({})
+const toolLoading = ref<Record<string, boolean>>({})
+const toolErrors = ref<Record<string, string>>({})
+let loadGeneration = 0
 
-const configPath = ref('users/{uid}/mcp.json')
+const configPath = ref('个人 MCP 配置')
 const configExists = ref(false)
 const editorText = ref('{\n  "mcpServers": {}\n}\n')
 const editorDirty = ref(false)
 
 const connectedCount = computed(() => servers.value.filter((s) => s.status === 'ok').length)
 
-onMounted(async () => {
-  await Promise.all([loadConfig(), refreshStatus({ initial: true })])
-})
+onMounted(loadInitial)
 
-/** 进入页面 / 保存后自动握手（对齐 Cursor：打开即显示绿点与 tool 数） */
-async function refreshStatus(opts?: { initial?: boolean }) {
-  if (opts?.initial) {
-    loading.value = true
-  } else {
-    refreshing.value = true
-  }
-  error.value = null
-  try {
-    // 管理页仅展示用户 mcp.json（与右侧编辑器一致）；Composer 仍用合并目录
-    const res = await listMcpServerStatus(true, 'user')
-    servers.value = res.servers ?? []
-  } catch (e: any) {
-    // 探测失败时降级为目录列表，避免整页不可用（如镜像未打包平台 mcp.json）
-    try {
-      const fallback = await listMcpServers('user')
-      servers.value = (fallback.servers ?? []).map((s) => ({
-        ...s,
-        status: 'unknown' as const,
-        tool_count: 0,
-        message: '',
-      }))
-      error.value = e.message
-        ? `${e.message}（已显示 server 列表，可点刷新重试）`
-        : '状态探测失败（已显示 server 列表）'
-    } catch {
-      error.value = e.message || '状态加载失败'
-      if (opts?.initial) {
-        servers.value = []
-      }
-    }
-  } finally {
-    loading.value = false
-    refreshing.value = false
-  }
+function toStatusItems(items: McpServerCatalogItem[]): McpServerStatusItem[] {
+  return items.map((server) => ({
+    ...server,
+    status: 'unknown' as const,
+    tool_count: 0,
+    message: '',
+  }))
 }
 
-async function loadConfig() {
+function updateServer(serverId: string, patch: Partial<McpServerStatusItem>) {
+  servers.value = servers.value.map((server) => server.id === serverId ? { ...server, ...patch } : server)
+}
+
+function setProbeState(serverId: string, value: boolean) {
+  probing.value = { ...probing.value, [serverId]: value }
+}
+
+async function loadInitial() {
+  loading.value = true
+  error.value = null
+  const generation = ++loadGeneration
+  probing.value = {}
+  expandedServers.value = {}
+  visibleTools.value = {}
+  toolErrors.value = {}
+
+  const configPromise = getMcpConfig()
+    .then((cfg) => {
+      if (generation === loadGeneration) {
+        applyConfig(cfg)
+      }
+    })
+    .catch((reason: any) => {
+      message.error(reason?.message || '读取 MCP 配置失败')
+    })
+
+  const serverPromise = listMcpServers('user')
+    .then((res) => {
+      if (generation !== loadGeneration) {
+        return
+      }
+      servers.value = toStatusItems(res.servers ?? [])
+      loading.value = false
+      if (servers.value.length) {
+        void probeServers(servers.value, generation)
+      }
+    })
+    .catch((reason: any) => {
+      if (generation !== loadGeneration) {
+        return
+      }
+      error.value = reason?.message || '读取 MCP Server 列表失败'
+      loading.value = false
+    })
+
+  await Promise.all([configPromise, serverPromise])
+}
+
+function applyConfig(cfg: { content: string, path_hint: string, exists: boolean }) {
+  editorText.value = cfg.content
+  configPath.value = cfg.path_hint
+  configExists.value = cfg.exists
+  editorDirty.value = false
+}
+
+/** 只刷新目录；每个 Server 的 probe 在后台独立更新，不阻塞列表。 */
+async function refreshStatus() {
+  refreshing.value = true
+  error.value = null
+  const generation = ++loadGeneration
+  probing.value = {}
+  expandedServers.value = {}
+  visibleTools.value = {}
+  toolErrors.value = {}
   try {
-    const cfg = await getMcpConfig()
-    editorText.value = cfg.content
-    configPath.value = cfg.path_hint
-    configExists.value = cfg.exists
-    editorDirty.value = false
+    const res = await listMcpServers('user')
+    servers.value = toStatusItems(res.servers ?? [])
+    void probeServers(servers.value, generation)
   } catch (e: any) {
-    message.error(e.message || '读取配置失败')
+    error.value = e.message || '读取 MCP Server 列表失败'
+  } finally {
+    refreshing.value = false
   }
 }
 
@@ -100,10 +142,7 @@ async function saveConfig() {
   saving.value = true
   try {
     const cfg = await saveMcpConfig(editorText.value)
-    editorText.value = cfg.content
-    configPath.value = cfg.path_hint
-    configExists.value = cfg.exists
-    editorDirty.value = false
+    applyConfig(cfg)
     message.success('配置已保存')
     await refreshStatus()
   } catch (e: any) {
@@ -113,14 +152,73 @@ async function saveConfig() {
   }
 }
 
-function statusText(s: McpServerStatusItem) {
-  if (s.status === 'ok') {
-    return s.tool_count > 0 ? `${s.tool_count} tools enabled` : 'Connected'
+async function probeServers(items: McpServerStatusItem[], generation: number) {
+  await Promise.all(items.map(async (server) => {
+    if (generation !== loadGeneration) {
+      return
+    }
+    if (!server.enabled) {
+      updateServer(server.id, { message: 'MCP Server 已停用' })
+      return
+    }
+
+    setProbeState(server.id, true)
+    try {
+      const result = await probeMcpServer(server.id)
+      if (generation !== loadGeneration) {
+        return
+      }
+      updateServer(server.id, {
+        status: result.ok ? 'ok' : 'error',
+        tool_count: result.tool_count,
+        message: result.message,
+        checked_at: result.checked_at,
+        error_category: result.error_category,
+        correlation_id: result.correlation_id,
+      })
+    } catch (e: any) {
+      if (generation !== loadGeneration) {
+        return
+      }
+      updateServer(server.id, {
+        status: 'error',
+        message: e.message || 'MCP Server 检测失败',
+      })
+    } finally {
+      if (generation === loadGeneration) {
+        setProbeState(server.id, false)
+      }
+    }
+  }))
+}
+
+async function toggleTools(server: McpServerStatusItem) {
+  if (!server.enabled) {
+    return
   }
-  if (s.status === 'error') {
-    return 'Failed'
+  const expanded = !expandedServers.value[server.id]
+  expandedServers.value = { ...expandedServers.value, [server.id]: expanded }
+  if (!expanded || visibleTools.value[server.id] || toolLoading.value[server.id]) {
+    return
   }
-  return 'Connecting…'
+
+  const generation = loadGeneration
+  toolLoading.value = { ...toolLoading.value, [server.id]: true }
+  toolErrors.value = { ...toolErrors.value, [server.id]: '' }
+  try {
+    const result = await listMcpServerTools(server.id)
+    if (generation === loadGeneration) {
+      visibleTools.value = { ...visibleTools.value, [server.id]: result.tools }
+    }
+  } catch (e: any) {
+    if (generation === loadGeneration) {
+      toolErrors.value = { ...toolErrors.value, [server.id]: e.message || '工具目录加载失败' }
+    }
+  } finally {
+    if (generation === loadGeneration) {
+      toolLoading.value = { ...toolLoading.value, [server.id]: false }
+    }
+  }
 }
 </script>
 
@@ -128,21 +226,16 @@ function statusText(s: McpServerStatusItem) {
   <div class="mcp-management">
     <header class="panel-header">
       <p v-if="!isMobile" class="panel-subtitle">
-        编辑个人 <code>mcp.json</code>；打开本页会自动检测连通与工具数。
+        直接编辑个人 mcp.json；Server 列表先展示，状态和工具数在后台逐项加载。
       </p>
       <n-space class="panel-header-actions">
         <n-button :loading="refreshing" :disabled="loading" @click="refreshStatus()">
           <template #icon>
             <n-icon :component="Refresh" />
           </template>
-          刷新状态
+          刷新
         </n-button>
-        <n-button
-          type="primary"
-          :disabled="!editorDirty"
-          :loading="saving"
-          @click="saveConfig"
-        >
+        <n-button type="primary" :disabled="!editorDirty" :loading="saving" @click="saveConfig">
           保存
         </n-button>
       </n-space>
@@ -150,13 +243,13 @@ function statusText(s: McpServerStatusItem) {
 
     <div v-if="loading" class="loading">
       <n-spin size="large" />
-      <span>正在连接 MCP…</span>
+      <span>正在读取 MCP 配置…</span>
     </div>
 
     <div v-else-if="error && !servers.length" class="error-wrap">
       <n-empty :description="error">
         <template #extra>
-          <n-button @click="refreshStatus({ initial: true })">
+          <n-button @click="loadInitial">
             重试
           </n-button>
         </template>
@@ -197,34 +290,19 @@ function statusText(s: McpServerStatusItem) {
           <template v-else>
             <div class="server-group">
               <div class="server-group__label">
-                Your mcp.json
+                个人 MCP 服务
               </div>
-              <button
+              <McpServerCard
                 v-for="s in servers"
                 :key="s.id"
-                type="button"
-                class="server-card"
-              >
-                <span
-                  class="server-card__dot"
-                  :class="{
-                    'server-card__dot--ok': s.status === 'ok',
-                    'server-card__dot--err': s.status === 'error',
-                    'server-card__dot--pending': s.status === 'unknown',
-                  }"
-                ></span>
-                <div class="server-card__body">
-                  <div class="server-card__name">
-                    {{ s.display_name || s.id }}
-                  </div>
-                  <div class="server-card__status">
-                    {{ statusText(s) }}
-                  </div>
-                  <div v-if="s.status === 'error' && s.message" class="server-card__err">
-                    {{ s.message }}
-                  </div>
-                </div>
-              </button>
+                :server="s"
+                :probing="Boolean(probing[s.id])"
+                :expanded="Boolean(expandedServers[s.id])"
+                :tools="visibleTools[s.id]"
+                :tool-loading="Boolean(toolLoading[s.id])"
+                :tool-error="toolErrors[s.id]"
+                @toggle="toggleTools"
+              />
             </div>
           </template>
         </div>
@@ -232,40 +310,31 @@ function statusText(s: McpServerStatusItem) {
 
       <n-layout-content content-style="padding: 0;" :native-scrollbar="false">
         <div v-if="isMobile" class="mobile-status">
-          <div
+          <McpServerCard
             v-for="s in servers"
             :key="s.id"
-            class="server-card server-card--compact"
-          >
-            <span
-              class="server-card__dot"
-              :class="{
-                'server-card__dot--ok': s.status === 'ok',
-                'server-card__dot--err': s.status === 'error',
-              }"
-            ></span>
-            <div class="server-card__body">
-              <div class="server-card__name">
-                {{ s.display_name || s.id }}
-              </div>
-              <div class="server-card__status">
-                {{ statusText(s) }}
-              </div>
-            </div>
-          </div>
+            :server="s"
+            :probing="Boolean(probing[s.id])"
+            :expanded="Boolean(expandedServers[s.id])"
+            :tools="visibleTools[s.id]"
+            :tool-loading="Boolean(toolLoading[s.id])"
+            :tool-error="toolErrors[s.id]"
+            compact
+            @toggle="toggleTools"
+          />
         </div>
 
         <div class="editor-pane">
           <div class="editor-pane__head">
             <n-icon :component="CodeSlash" size="18" />
-            <span class="editor-pane__title">mcp.json</span>
+            <span class="editor-pane__title">MCP JSON 配置</span>
             <n-text depth="3" class="editor-pane__path">
               {{ configPath }}
               <template v-if="!configExists">
-                · new
+                · 新建
               </template>
               <template v-else-if="editorDirty">
-                · modified
+                · 已修改
               </template>
             </n-text>
           </div>
@@ -384,83 +453,6 @@ function statusText(s: McpServerStatusItem) {
   text-transform: uppercase;
   color: var(--noesis-color-text-muted, #737373);
   padding: 4px 8px 8px;
-}
-
-.server-card {
-  display: flex;
-  width: 100%;
-  gap: 10px;
-  align-items: flex-start;
-  text-align: left;
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  padding: 10px 8px;
-  cursor: default;
-  color: inherit;
-}
-
-.server-card:hover {
-  background: var(--noesis-color-primary-bg-subtle, rgb(17 17 17 / 4%));
-}
-
-.server-card--compact {
-  background: var(--noesis-color-bg-elevated, #faf8f3);
-  border: 1px solid var(--noesis-color-border-light, #d4d0c8);
-  margin-bottom: 8px;
-}
-
-.server-card__dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 5px;
-  border-radius: 999px;
-  flex-shrink: 0;
-  background: var(--noesis-color-text-muted, #737373);
-}
-
-.server-card__dot--ok {
-  background: var(--noesis-color-success, #51cf66);
-  box-shadow: 0 0 0 3px rgb(81 207 102 / 18%);
-}
-
-.server-card__dot--err {
-  background: var(--noesis-color-danger, #ff6b6b);
-}
-
-.server-card__dot--pending {
-  animation: pulse-dot 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse-dot {
-  50% {
-    opacity: 0.35;
-  }
-}
-
-.server-card__body {
-  min-width: 0;
-  flex: 1;
-}
-
-.server-card__name {
-  font-size: 14px;
-  font-weight: 560;
-  color: var(--noesis-color-text-body, #262626);
-}
-
-.server-card__status {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--noesis-color-text-muted, #737373);
-}
-
-.server-card__err {
-  margin-top: 4px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--noesis-color-danger, #ff6b6b);
-  word-break: break-word;
 }
 
 .mobile-status {

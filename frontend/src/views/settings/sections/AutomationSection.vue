@@ -1,52 +1,81 @@
 <script setup lang="ts">
-import type { ScheduledTask } from '@/api/settings'
-import { NButton, NInput, NSwitch, NTag, useMessage } from 'naive-ui'
-import { onMounted, ref } from 'vue'
+import type { ScheduledTask, ScheduledTaskRun } from '@/api/settings'
+import { NButton, NInput, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
+import { onMounted, reactive, ref } from 'vue'
 import {
-  createScheduledTask,
-  deleteScheduledTask,
-  listScheduledTasks,
-  runScheduledTask,
-
-  setScheduledTaskEnabled,
+  createScheduledTask, deleteScheduledTask, listScheduledTaskRuns, listScheduledTasks,
+  previewSchedule, retryScheduledTaskRun, runScheduledTask, setScheduledTaskEnabled,
+  updateScheduledTask,
 } from '@/api/settings'
+import { SettingsEmptyState, SettingsSection, SettingsStatus } from '../primitives'
 
 const message = useMessage()
+const dialog = useDialog()
 const loading = ref(false)
+const saving = ref(false)
 const tasks = ref<ScheduledTask[]>([])
-const name = ref('')
-const cronExpr = ref('0 9 * * *')
-const prompt = ref('')
+const editingId = ref<string | null>(null)
+const preview = ref<{ summary: string, next_run_at: number } | null>(null)
+const histories = reactive<Record<string, ScheduledTaskRun[]>>({})
+const form = reactive({
+  name: '', cron_expr: '0 9 * * *', timezone: 'Asia/Shanghai', enabled: true,
+  qa_type: 'SUPER_AGENT_QA', prompt: '', session_binding: 'none', delivery: 'none',
+})
+
+const qaOptions = ['SUPER_AGENT_QA', 'COMMON_QA', 'FAULT_OPERATION_QA', 'TEST_CASE_QA'].map((value) => ({ label: value, value }))
+const timezoneOptions = ['Asia/Shanghai', 'UTC', 'America/New_York', 'Europe/London'].map((value) => ({ label: value, value }))
 
 async function refresh() {
   loading.value = true
   try {
     tasks.value = await listScheduledTasks()
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : '加载失败')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '加载失败')
   } finally {
     loading.value = false
   }
 }
 
-async function onCreate() {
+async function refreshPreview() {
   try {
-    await createScheduledTask({
-      name: name.value || '定时任务',
-      cron_expr: cronExpr.value,
-      prompt: prompt.value,
-      enabled: true,
-      qa_type: 'SUPER_AGENT_QA',
-      timezone: 'Asia/Shanghai',
-      session_binding: 'none',
-      delivery: 'none',
-    })
-    name.value = ''
-    prompt.value = ''
-    message.success('已创建')
+    preview.value = await previewSchedule(form.cron_expr, form.timezone)
+  } catch (error) {
+    preview.value = null
+    message.warning(error instanceof Error ? error.message : '日程无效')
+  }
+}
+
+function resetForm() {
+  editingId.value = null
+  Object.assign(form, { name: '', cron_expr: '0 9 * * *', timezone: 'Asia/Shanghai', enabled: true, qa_type: 'SUPER_AGENT_QA', prompt: '', session_binding: 'none', delivery: 'none' })
+  preview.value = null
+}
+
+function edit(task: ScheduledTask) {
+  editingId.value = task.id
+  Object.assign(form, task)
+  void refreshPreview()
+}
+
+async function save() {
+  saving.value = true
+  try {
+    await refreshPreview()
+    if (!preview.value) {
+      return
+    }
+    if (editingId.value) {
+      await updateScheduledTask(editingId.value, form)
+    } else {
+      await createScheduledTask(form)
+    }
+    message.success(editingId.value ? '任务已更新' : '任务已创建')
+    resetForm()
     await refresh()
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : '创建失败')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '保存失败')
+  } finally {
+    saving.value = false
   }
 }
 
@@ -54,141 +83,94 @@ async function onToggle(task: ScheduledTask, enabled: boolean) {
   try {
     await setScheduledTaskEnabled(task.id, enabled)
     await refresh()
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : '更新失败')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '更新失败')
   }
 }
 
 async function onRun(task: ScheduledTask) {
   try {
-    await runScheduledTask(task.id)
-    message.success('已触发')
-    await refresh()
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : '触发失败')
+    const result = await runScheduledTask(task.id)
+    message.success(`已完成：${result.run?.status || result.last_status}`)
+    await Promise.all([refresh(), loadHistory(task)])
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '触发失败')
   }
 }
 
-async function onDelete(task: ScheduledTask) {
+function onDelete(task: ScheduledTask) {
+  dialog.warning({ title: `删除 ${task.name}？`, content: '任务定义会停用并隐藏，已有运行历史仍会保留。', positiveText: '删除', negativeText: '取消',
+    async onPositiveClick() {
+      await deleteScheduledTask(task.id)
+      message.success('已删除')
+      await refresh()
+    } })
+}
+
+async function loadHistory(task: ScheduledTask) {
   try {
-    await deleteScheduledTask(task.id)
-    message.success('已删除')
-    await refresh()
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : '删除失败')
+    histories[task.id] = (await listScheduledTaskRuns(task.id)).items
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '加载历史失败')
   }
 }
 
-onMounted(() => {
-  void refresh()
-})
+async function retry(run: ScheduledTaskRun, task: ScheduledTask) {
+  try {
+    await retryScheduledTaskRun(run.id)
+    message.success('重试已完成')
+    await Promise.all([refresh(), loadHistory(task)])
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '重试失败')
+  }
+}
+
+onMounted(() => void refresh())
 </script>
 
 <template>
-  <section class="pane">
-    <h2>自动化</h2>
-    <p class="hint">
-      用 cron 定时跑 Agent（默认 isolated，不写入主聊天时间线）。
-    </p>
-
-    <div class="form">
-      <n-input v-model:value="name" placeholder="任务名称" />
-      <n-input v-model:value="cronExpr" placeholder="cron，如 0 9 * * *" />
-      <n-input
-        v-model:value="prompt"
-        type="textarea"
-        placeholder="提示词"
-        :rows="3"
-      />
-      <n-button type="primary" @click="onCreate">
-        创建任务
-      </n-button>
+  <SettingsSection title="自动化" description="配置日程、Agent、会话策略与投递目标，并查看每次运行结果。">
+    <SettingsStatus v-if="loading" title="正在加载">正在读取任务与最近状态…</SettingsStatus>
+    <div class="task-form">
+      <n-input v-model:value="form.name" placeholder="任务名称" />
+      <div class="two-columns"><n-input v-model:value="form.cron_expr" placeholder="cron，如 0 9 * * *" @blur="refreshPreview" /><n-select v-model:value="form.timezone" :options="timezoneOptions" @update:value="refreshPreview" /></div>
+      <div v-if="preview" class="preview">{{ preview.summary }} · 下次 {{ new Date(preview.next_run_at).toLocaleString() }}</div>
+      <n-select v-model:value="form.qa_type" :options="qaOptions" />
+      <n-input v-model:value="form.prompt" type="textarea" placeholder="任务提示词" :rows="4" />
+      <div class="two-columns"><n-input v-model:value="form.session_binding" placeholder="none 或 session:{id}" /><n-input v-model:value="form.delivery" placeholder="none / web_notify / channel:{id}" /></div>
+      <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用任务</label>
+      <div class="actions"><n-button type="primary" :loading="saving" :disabled="!form.name || !form.prompt" @click="save">{{ editingId ? '保存修改' : '创建任务' }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button><n-button @click="refreshPreview">预览日程</n-button></div>
     </div>
 
-    <ul class="list">
-      <li v-for="task in tasks" :key="task.id" class="row">
-        <div class="meta">
-          <strong>{{ task.name }}</strong>
-          <span class="mono">{{ task.cron_expr }}</span>
-          <n-tag size="small" :type="task.enabled ? 'success' : 'default'">
-            {{ task.enabled ? '启用' : '停用' }}
-          </n-tag>
-          <span v-if="task.last_status" class="muted">上次：{{ task.last_status }}</span>
+    <SettingsEmptyState v-if="!loading && tasks.length === 0" title="暂无自动化任务" description="创建任务后，每次执行都会保留独立运行记录。" />
+    <div v-for="task in tasks" :key="task.id" class="task-card">
+      <div class="task-head"><div><strong>{{ task.name }}</strong><div class="muted">{{ task.cron_expr }} · {{ task.timezone }} · {{ task.qa_type }}</div></div><n-tag size="small" :type="task.enabled ? 'success' : 'default'">{{ task.enabled ? '启用' : '停用' }}</n-tag></div>
+      <div class="muted prompt">{{ task.prompt }}</div>
+      <div class="actions"><n-switch :value="task.enabled" @update:value="value => onToggle(task, value)" /><n-button size="small" @click="onRun(task)">立即运行</n-button><n-button size="small" @click="loadHistory(task)">运行历史</n-button><n-button size="small" @click="edit(task)">编辑</n-button><n-button size="small" type="error" quaternary @click="onDelete(task)">删除</n-button></div>
+      <div v-if="histories[task.id]" class="history">
+        <div v-for="run in histories[task.id]" :key="run.id" class="run-row">
+          <div><n-tag size="small" :type="run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'error' : 'warning'">{{ run.status }}</n-tag> <span class="muted">{{ new Date(run.created_at).toLocaleString() }} · {{ run.trigger_source }} · {{ run.duration_ms ?? '—' }} ms</span></div>
+          <p v-if="run.result_summary">{{ run.result_summary }}</p><p v-if="run.error_message" class="error">{{ run.error_message }}</p>
+          <div class="muted">投递：{{ run.delivery_result?.status || '—' }} <span v-if="run.session_id">· 会话 {{ run.session_id }}</span></div>
+          <n-button v-if="run.status === 'failed' || run.status === 'cancelled'" size="tiny" @click="retry(run, task)">重试</n-button>
         </div>
-        <div class="actions">
-          <n-switch
-            :value="task.enabled"
-            @update:value="(v) => onToggle(task, v)"
-          />
-          <n-button size="small" @click="onRun(task)">
-            立即运行
-          </n-button>
-          <n-button size="small" quaternary type="error" @click="onDelete(task)">
-            删除
-          </n-button>
-        </div>
-      </li>
-      <li v-if="!loading && tasks.length === 0" class="empty">
-        暂无定时任务
-      </li>
-    </ul>
-  </section>
+      </div>
+    </div>
+  </SettingsSection>
 </template>
 
 <style scoped>
-.pane h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
-  color: var(--noesis-color-text-heading);
-}
-.hint {
-  margin: 0 0 16px;
-  color: var(--noesis-color-text-secondary);
-  font-size: 13px;
-}
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 520px;
-  margin-bottom: 20px;
-}
-.list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0, 0, 0, 0.08));
-}
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-.muted {
-  color: var(--noesis-color-text-secondary);
-  font-size: 12px;
-}
-.actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.empty {
-  color: var(--noesis-color-text-secondary);
-}
+.task-form { display: grid; gap: 10px; max-width: 700px; padding-bottom: 22px; }
+.two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.preview { color: var(--noesis-color-success, #287a45); font-size: 12px; }
+.enabled, .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.task-card { padding: 16px 0; border-top: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); }
+.task-head { display: flex; justify-content: space-between; gap: 12px; }
+.muted { color: var(--noesis-color-text-secondary); font-size: 12px; }
+.prompt { margin: 8px 0; white-space: pre-wrap; }
+.history { margin-top: 12px; padding: 4px 12px; border-radius: 8px; background: var(--noesis-color-bg-muted, rgba(0,0,0,.03)); }
+.run-row { padding: 10px 0; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
+.run-row p { margin: 6px 0; font-size: 12px; }
+.error { color: var(--noesis-color-danger, #c2413b); }
+@media (max-width: 640px) { .two-columns { grid-template-columns: 1fr; } }
 </style>

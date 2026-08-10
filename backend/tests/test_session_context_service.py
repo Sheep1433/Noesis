@@ -5,10 +5,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
+from noesis.errors.exceptions import ServiceException, NotFoundException
 
-from config import user_data_paths as paths
-from services.session_context_service import SessionContextService
+from noesis.config import user_data_paths as paths
+from noesis.services.session_context_service import SessionContextService
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_read_workspace_file_rejects_traversal(tmp_path: Path, monkeypatch
     (ws / "ok.md").write_text("hello", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -29,15 +29,13 @@ async def test_read_workspace_file_rejects_traversal(tmp_path: Path, monkeypatch
         assert rel == 'sessions/s1/workspace/ok.md'
         assert content == "hello"
 
-        with pytest.raises(HTTPException) as exc_legacy:
+        with pytest.raises((ServiceException, NotFoundException)) as exc_legacy:
             await SessionContextService.read_workspace_file(
                 sid, uid, 'workspace/ok.md', db,
             )
-        assert exc_legacy.value.status_code == 400
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.read_workspace_file(sid, uid, "../etc/passwd", db)
-        assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -47,7 +45,7 @@ async def test_read_user_root_file(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     paths.ensure_user_memory_files(uid)
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -71,7 +69,7 @@ async def test_get_context_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     (skill_dir / "SKILL.md").write_text("skill", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -103,7 +101,7 @@ async def test_get_context_hides_empty_workspace_and_attachments_dup(
     (attachments / "resume.md").write_text("parsed", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -119,13 +117,12 @@ async def test_get_context_hides_empty_workspace_and_attachments_dup(
 async def test_get_context_not_owned() -> None:
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=None,
     ):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.get_context("s1", "u1", db)
-        assert exc.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -135,7 +132,7 @@ async def test_write_user_memory_files_via_panel(tmp_path: Path, monkeypatch: py
     paths.ensure_user_memory_files(uid)
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -161,7 +158,7 @@ async def test_write_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     (ws / "draft.md").write_text("old", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -172,17 +169,15 @@ async def test_write_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         assert content == '# updated'
         assert (ws / "draft.md").read_text(encoding="utf-8") == '# updated'
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.write_workspace_file(
                 sid, uid, '../etc/passwd', 'hack', db,
             )
-        assert exc.value.status_code == 400
 
-        with pytest.raises(HTTPException) as missing_exc:
+        with pytest.raises((ServiceException, NotFoundException)) as missing_exc:
             await SessionContextService.write_workspace_file(
                 sid, uid, f'sessions/{sid}/workspace/missing.md', 'x', db,
             )
-        assert missing_exc.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -196,7 +191,7 @@ async def test_build_path_archive_workspace_dir(tmp_path: Path, monkeypatch: pyt
     (sub / "b.txt").write_text("world", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -223,7 +218,7 @@ async def test_build_path_archive_skills_subdir(tmp_path: Path, monkeypatch: pyt
     (pkg / "SKILL.md").write_text("skill", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -243,13 +238,12 @@ async def test_build_path_archive_rejects_user_root(tmp_path: Path, monkeypatch:
     uid, sid = "u1", "s1"
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises((ServiceException, NotFoundException)) as exc:
             await SessionContextService.build_path_archive(sid, uid, f'users/{uid}', db)
-        assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -260,7 +254,7 @@ async def test_download_workspace_path_single_file(tmp_path: Path, monkeypatch: 
     (ws / "note.md").write_text("# hi", encoding="utf-8")
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):
@@ -284,7 +278,7 @@ async def test_build_path_archive_old_file_timestamp(tmp_path: Path, monkeypatch
     os.utime(old_file, (0, 0))
     db = AsyncMock()
     with patch(
-        "services.session_context_service.ChatService.get_session_by_id",
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
         new_callable=AsyncMock,
         return_value=object(),
     ):

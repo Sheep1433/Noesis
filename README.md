@@ -69,7 +69,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
              │                      │
         PostgreSQL（业务数据）    Qdrant（向量库）
              │
-        .data/（checkpoint、用户工作区、附件、KB 缓存）
+        .noesis/（checkpoint、用户工作区、附件、KB 缓存）
 ```
 
 **Agent 运行时路径约定**（沙箱内虚拟路径）：
@@ -127,6 +127,19 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 
 4. **（可选）联网检索**：配置 `TAVILY_API_KEY`；未配置时自动回退 DuckDuckGo 搜索。
 
+### 设置控制面
+
+`/settings` 提供模型与 Provider、MCP、自动化、通讯通道、画像与记忆、通知、系统诊断及设置迁移入口。新增设置 API 使用 Cookie Session 与 CSRF；导出文件不包含 API Key、Token、敏感 Header、消息、附件、checkpoint 或运行日志。
+
+- 数据库升级由启动流程执行 migration `202607260001`，新增 Provider、模型用途、自动化运行、通知偏好与设置审计表。
+- `backend/config.yaml` 的 `settings_features` 可分别控制 `provider_models`、`mcp_management`、`automation_operations`、`channel_operations`、`agent_context`、`observability` 与 `import_export`。
+- 回滚前端时可关闭对应 capability；数据库新增表和已有设置数据应保留。
+- 自动化运行明细默认保留 30 天、每用户最多 1000 条；清理不删除任务的最新状态摘要。
+- 用户级 Provider、通道密钥与 MCP Header 要求配置 `SETTINGS_ENCRYPTION_KEY`，缺失时敏感配置写入会被拒绝。
+- 通讯通道支持 Telegram 与飞书企业自建应用。部署方配置一个飞书应用后，不同 Noesis 用户可分别绑定自己的飞书 Open ID；群聊仅响应 @机器人。
+
+运维与产品契约见 [设置控制面说明](docs/architecture/platform/settings-control-plane.md)。
+
 ### 访问地址（dev 模式）
 
 | 服务 | 地址 |
@@ -163,7 +176,7 @@ Noesis/
 ├── scripts/           # run.sh（dev | prod | docker）
 ├── assets/            # README 演示截图
 ├── openspec/          # 变更提案与规格
-└── docs/              # PRD、Bug 记录、调试笔记
+└── docs/              # 技术调研、架构、工程专题与调试记录
 ```
 
 ## 文档索引
@@ -178,7 +191,7 @@ Noesis/
 | [deploy/README.md](deploy/README.md) | 容器部署与远程发布 |
 | [backend/sql/README.md](backend/sql/README.md) | 数据库迁移（Alembic） |
 | `./scripts/run.sh help` | 部署模式、端口与环境变量 |
-| `docs/` | PRD、Bug 记录、调试笔记 |
+| [docs/README.md](docs/README.md) | 技术调研、架构、工程专题、测试与调试文档 |
 
 ## 开发
 

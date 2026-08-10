@@ -1,7 +1,7 @@
 """langgraph_sse.reasoning 单元测试。"""
 from types import SimpleNamespace
 
-from domain.chat.streaming.reasoning import (
+from noesis.domain.chat.streaming.reasoning import (
     extract_reasoning_delta,
     extract_text_content,
     unsent_text_suffix,

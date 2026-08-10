@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langgraph.types import Command
 
-from agent.case_generate.case_coordinator import CaseCoordinator
-from agent.case_generate.case_graph import (
+from noesis.agents.case_generate.case_coordinator import CaseCoordinator
+from noesis.agents.case_generate.case_graph import (
     TestCaseState,
     build_test_case_graph,
     generate_scenes_testpoints_node,
@@ -56,7 +56,7 @@ async def test_generate_test_cases_reads_selected_point_names_from_command_updat
     }
 
     with patch(
-        "agent.case_generate.case_graph._generate_cases_streaming",
+        "noesis.agents.case_generate.case_graph._generate_cases_streaming",
         new=AsyncMock(return_value=([mock_case], {"上传": {"scene_name": "上传", "channels": {}}})),
     ):
         cmd = await generate_test_cases_node(state)
@@ -112,7 +112,7 @@ async def test_graph_interrupt_before_cases_and_resume_with_selected_names():
         )
 
     with patch(
-        "agent.case_generate.case_graph.generate_scenes_testpoints_node",
+        "noesis.agents.case_generate.case_graph.generate_scenes_testpoints_node",
         side_effect=_mock_scenes_node,
     ):
         graph = build_test_case_graph()
@@ -158,7 +158,7 @@ async def test_graph_interrupt_before_cases_and_resume_with_selected_names():
     }
 
     with patch(
-        "agent.case_generate.case_graph._generate_cases_streaming",
+        "noesis.agents.case_generate.case_graph._generate_cases_streaming",
         new=AsyncMock(return_value=([mock_case], {"登录": {}})),
     ):
         resume_chunks = []

@@ -11,7 +11,7 @@ _BACKEND = Path(__file__).resolve().parents[3]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from agent.case_generate.rag import (
+from noesis.agents.case_generate.rag import (
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
 )

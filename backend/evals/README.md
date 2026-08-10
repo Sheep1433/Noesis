@@ -6,7 +6,8 @@
 |------|------|------|
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
 | Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
-| Agent / Terminal-Bench | `./evals/agent/harbor/run.sh` | 已实现 |
+| Agent / Terminal-Bench | `./evals/agent/harbor/run-noesis.sh` | 已实现 |
+| Agent / Agentic RAG | `uv run python -m evals.agent.rag` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
 | 知识库检索（单集合） | `uv run python -m evals.kb.run --collection <name>` | 已实现 |
@@ -16,7 +17,7 @@ cd backend
 uv run python -m evals    # 仅打印上表说明
 ```
 
-OpenSpec：`openspec/specs/agent-offline-eval/spec.md`、`openspec/specs/test-case-agent-eval/spec.md`
+OpenSpec：`openspec/specs/offline-evals/spec.md`
 
 ## Langfuse（评测专用项目）
 
@@ -84,7 +85,7 @@ jq . evals/agent/browsecomp/results/bc-smoke-new-12/convos.jsonl
 
 终端结束时会打印 `BrowseComp accuracy: ...` 与 `Results: ...` 路径。
 
-**过程/trace（非成绩表）**：配置 `evals/.env` 后可在 Langfuse 按 `eval_tag=<tag>`、`eval_line=agent` 筛选；整次 session 为 `browsecomp-<tag>`，单题为 `browsecomp-<uuid>`。单题工作区与卸載文件在 `.data/users/eval-browsecomp/sessions/`。
+**过程/trace（非成绩表）**：配置 `evals/.env` 后可在 Langfuse 按 `eval_tag=<tag>`、`eval_line=agent` 筛选；整次 session 为 `browsecomp-<tag>`，单题为 `browsecomp-<uuid>`。单题工作区与卸载文件在 `.noesis/users/eval-browsecomp/sessions/`。
 
 BrowseComp 走仓库内 Python 模块（`uv run python -m evals.agent.browsecomp`），直接调 Noesis `SuperAgent`，因此**未**集成 Harbor / promptfoo 类 viewer。
 
@@ -178,51 +179,79 @@ coverage 走 Python 确定性 scorer（`shared/coverage_scorer.py`）；borderli
 
 ---
 
-## 2. Agent 评测（BrowseComp + Harbor）
+## 2. Agent 评测（BrowseComp + Harbor + Agentic RAG）
 
 个人学习与日常回归推荐 **两条主线**：
 
 1. **BrowseComp** — 多步检索 + 短答案（`SuperAgent` / 深度研究能力）
 2. **Harbor + Terminal-Bench** — 终端任务执行（`harbor view` 看轨迹）
+3. **Agentic RAG** — 验证 GeneralQAAgent 经 core KB Tool/Port 检索并引用期望来源
 
 ```
 evals/agent/
+  runtime.py                # 公共事件 Collector 与 run manifest
   _agent.py                 # SuperAgent 共用执行
   browsecomp/
     official.py
     __main__.py               # uv run python -m evals.agent.browsecomp
     results/<tag>/
   harbor/
-    run.sh                    # Harbor + Claude Code → terminal-bench@2.0
+    run-noesis.sh             # Noesis SuperAgent
+    run-opencode.sh           # OpenCode 对照组
     README.md
     results/<job-name>/
+  rag/
+    __main__.py             # GeneralQAAgent + core KB Tool
+    fixtures/sample.jsonl
 ```
 
 ### BrowseComp
 
 ```bash
-uv run python -m evals.agent.browsecomp --tag bc-smoke --num-examples 5
+uv run python -m evals.agent.browsecomp \
+  --tag bc-smoke --num-examples 5 --model-id flash
 ```
 
 首次运行会从官方 URL 下载 CSV 并缓存到 `evals/agent/browsecomp/data/`；离线重跑复用缓存。也可设置 `BROWSECOMP_CSV_PATH` 指向本地文件。
 
 官方 CSV + `BrowseCompEval` → 指标 **accuracy**。结果：`browsecomp/results/<tag>/summary.json`。
 
-### Terminal-Bench（Harbor + Claude Code）
+### Terminal-Bench（Harbor）
 
 ```bash
 cd backend
-./evals/agent/harbor/run.sh --n-tasks 1 --job-name smoke
-harbor view evals/agent/harbor/results/smoke
+./evals/agent/harbor/run-noesis.sh          # 单题
+./evals/agent/harbor/run-noesis.sh cli-10   # 10 题
+harbor view evals/agent/harbor/results/noesis-cli-10
 ```
 
-前置：Docker、`uv tool install harbor`、本机 `claude` CLI、`~/.claude/settings.json`。产物：`evals/agent/harbor/results/<job-name>/`。
+OpenCode 对照组将脚本替换为 `run-opencode.sh`。产物：`evals/agent/harbor/results/<job-name>/`。
+
+### Agentic RAG
+
+```bash
+uv run python -m evals.agent.rag \
+  --dataset fixtures/sample.jsonl \
+  --model-id <catalog-model-id>
+```
+
+数据集每行至少包含 `query`，可选 `collection_names` 和 `expected_sources`。该入口实际运行：
+
+```text
+GeneralQAAgent → create_noesis_agent → search_knowledge_base
+  → noesis.runtime.deps → KbRetrievalService
+```
+
+结果记录 KB Tool 调用率、期望来源 recall 和最终回答。它用于验证 Agentic RAG 集成，不替代 `evals.kb` 的 Recall@K / Hit@K：
+
+- `evals.kb`：直接评价检索与排序，适合确定性回归。
+- `evals.agent.rag`：评价 Agent 是否调用知识库、是否命中来源并基于证据回答。
 
 ---
 
 ## 3. 消息压缩（`evals.compression`）
 
-评测 `SummarizationOffloadMiddleware`（`before_model` 摘要路径）。流程对齐 [hermes-compression-eval](https://github.com/NousResearch/hermes-compression-eval)：
+评测 `ContextLifecycleMiddleware` 的 `before_model` compaction 路径；内部使用 LangChain `SummarizationMiddleware` 作为摘要 engine，不负责工具结果 offload。流程对齐 [hermes-compression-eval](https://github.com/NousResearch/hermes-compression-eval)：
 
 ```
 fixture → driver.compress() → probe continuation (get_llm) → Judge 五维 0–5 (get_llm)
@@ -296,6 +325,6 @@ cd backend
 uv run python -m evals.kb.run --collection requirement_docs --dataset evals/kb/fixtures/sample.jsonl
 ```
 
-可选 `--k`、`--query-params '{"use_reranker":false}'`。默认读取目标集合 MySQL `query_params` 并走 `KbRetrievalService` 全链路。
+可选 `--k`、`--query-params '{"use_reranker":false}'`。默认读取目标集合 PostgreSQL `query_params` 并走 `KbRetrievalService` 全链路。
 
-`sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/prd/platform/SSE流式数据设计.md` §3.3、§6.4）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。
+`sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/architecture/platform/chat-streaming.md`）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。

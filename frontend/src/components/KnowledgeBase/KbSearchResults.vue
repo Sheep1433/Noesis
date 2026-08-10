@@ -11,7 +11,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  viewShard: [shardId: string]
+  viewShard: [result: SearchResult]
 }>()
 
 const expandedFiles = ref<Record<string, boolean>>({})
@@ -184,8 +184,8 @@ const timingStages = computed(() => {
               </n-tag>
               <span class="hit-score">{{ formatScore(item) }}</span>
               <span v-if="scoreBreakdown(item)" class="hit-breakdown">{{ scoreBreakdown(item) }}</span>
-              <n-button size="tiny" quaternary class="hit-detail-btn" @click="emit('viewShard', item.id)">
-                分片详情
+              <n-button size="tiny" quaternary class="hit-detail-btn" @click="emit('viewShard', item)">
+                查看 chunk
               </n-button>
             </div>
             <p v-if="item.header_path" class="hit-path">

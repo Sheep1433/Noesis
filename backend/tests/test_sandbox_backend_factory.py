@@ -5,15 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent.backends import create_agent_backend, sandbox_backend_kind, uses_container_sandbox
-from config.user_data_paths import ensure_workspace_dir
+from noesis.agents.backends import create_agent_backend, sandbox_backend_kind, uses_container_sandbox
+from noesis.config.user_data_paths import ensure_workspace_dir
 from deepagents.backends.composite import CompositeBackend
 
 
 @pytest.fixture
 def local_shell_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
+    from noesis.config.env import get_config
 
     get_config.get_sandbox_config.cache_clear()
 
@@ -21,7 +21,7 @@ def local_shell_backend(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def docker_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SANDBOX_BACKEND", "docker")
-    from config.env import get_config
+    from noesis.config.env import get_config
 
     get_config.get_sandbox_config.cache_clear()
 
@@ -32,7 +32,7 @@ def test_uses_container_sandbox_from_env(local_shell_backend: None) -> None:
 
 def test_aio_backend_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SANDBOX_BACKEND", "aio")
-    from config.env import get_config
+    from noesis.config.env import get_config
 
     get_config.get_sandbox_config.cache_clear()
     with pytest.raises(ValueError, match="aio"):
@@ -45,13 +45,13 @@ async def test_create_agent_backend_local_shell(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from config import user_data_paths as user_paths
+    from noesis.config import user_data_paths as user_paths
 
     monkeypatch.setattr(user_paths, "_USERS_ROOT", tmp_path / "users")
     platform = tmp_path / "platform-skills"
     platform.mkdir()
     monkeypatch.setattr(
-        "agent.backends.factory.skills_root",
+        "noesis.agents.backends.factory.skills_root",
         lambda: platform,
     )
 
@@ -66,7 +66,7 @@ async def test_create_agent_backend_local_shell(
 @pytest.mark.asyncio
 async def test_create_agent_backend_docker(docker_backend: None) -> None:
     with patch(
-        "agent.backends.factory.create_docker_exec_sandbox_backend",
+        "noesis.agents.backends.factory.create_docker_exec_sandbox_backend",
         new_callable=AsyncMock,
     ) as mock_create:
         mock_sandbox = MagicMock()
@@ -77,8 +77,8 @@ async def test_create_agent_backend_docker(docker_backend: None) -> None:
 
 
 def test_skill_sources_use_public_and_personal_routes() -> None:
-    from agent.skills import SKILL_SOURCES
-    from agent.backends.paths import (
+    from noesis.agents.skills import SKILL_SOURCES
+    from noesis.agents.backends.paths import (
         AGENT_PERSONAL_SKILLS_ROUTE,
         AGENT_PUBLIC_SKILLS_ROUTE,
     )

@@ -1,5 +1,57 @@
 # 知识卡片（开发笔记）
 
+## 2026-08-06 — 流式落库原则：durable vs ephemeral（streaming-persistence-principle）
+
+- **问题/症状**：原 spec 只约束"assistant 正文按骨架—检查点—终态单次落库"，未定义 tool output chunk、reasoning raw delta、progress 等流式内容的入库边界；各写入点自行判断粒度 → 行膨胀与恢复困难。
+- **根因**：流式系统把"传输的细粒度事件"和"应持久化的语义单元"混为一谈；过程增量不具备恢复价值，却比终态更快积累。
+- **解法/原则**：明确二分——**durable**（终态 content snapshot + 生命周期事件）入库持久化；**ephemeral**（流式 chunk / raw delta / progress / typing / heartbeat）不持久化。`PersistSink` 已按语义边界节流、写完整 content 快照而非增量，行为符合，故本 spec 为约束性文档化（不改表结构/代码）。
+- **边界**：不区分"谁产生"（LLM/tool/progress），只看"是否终态语义"。
+- **可迁移**：设计流式持久化先问"这一片断下来还能不能恢复上下文？"，能→持久化，不能→丢弃。粒度由语义单元（整条 content / 生命周期状态）决定，不由传输频率决定。
+- **验证与遗留**：待任务闭环（/goal）。参考：`openspec/changes/streaming-persistence-principle/`。
+
+## 2026-08-04 — MCP 配置页改为目录优先、逐项加载
+
+- **交互**：移除表单模式，页面只保留用户 `mcp.json` 编辑器；进入页面先读取配置与 MCP 目录，列表渲染不等待远程握手。
+- **状态**：每个 Server 独立后台调用单项 probe，按返回顺序更新状态；单个 MCP 失败只显示在对应行，不阻塞其他 Server 或编辑器。
+- **工具**：列表项显示工具数量；点击单个 MCP 后才请求完整工具目录。成功 probe 已缓存工具元数据，展开同一 MCP 不再重复握手；工具目录请求不清空其他 Server 的 probe 缓存。
+- **刷新/保存**：刷新只重新读取目录并触发逐项 probe；保存 JSON 后同样走非阻塞逐项探测。用 generation 丢弃旧一轮 probe 的迟到结果，避免覆盖新配置状态。
+- **范围**：管理页展示用户 `.noesis/users/{uid}/mcp.json`，与右侧编辑内容一致；平台配置仍由 Composer 的 `scope=all` 使用。
+
+## 2026-07-29 — 通道、引用与联调的收敛规则
+
+- **飞书通道**：一个 Noesis 实例激活一个飞书应用；不同 Noesis 用户各自完成关联后可独立在飞书对话。无需为每位用户创建一套飞书应用，沿用 Telegram 的用户绑定语义。
+- **引用能力**：知识库引用与 Web citation 都应使用同一可展示、可追溯的能力线；验证时需确认模型实际会产生可用引用，而不是只验证后端数据结构。
+- **联调策略**：完成的特性分支集中合入 `dev` 后统一验证。优先处理流式中途断连、reasoning 事件、消息加载失败与 409 状态冲突，不能仅依赖单元测试；SSE 需有真实 HTTP/LLM 接口测试。
+- **连接重试**：外部模型临时连接失败可重试 6 次；仍需验证重试不造成已可见输出重复或 run 终态竞争。
+
+## 2026-07-28 — 引用溯源与 HITL 的实现前置约束
+
+- **引用溯源**：采用 Prompt Markdown citation，不改变 `create_agent` 回答协议。工具提供可读来源元数据，模型负责生成 Web 链接或 KB 编号；平台内部 `evidence_id` 只服务 retrieval part 去重与恢复，不进入模型上下文。
+- **HITL 恢复**：刷新、审批、切换会话和 resume 必须更新同一消息块；审批面板与 session 绑定，多会话 pending 不能串台。恢复后需显式呈现“继续生成”状态。
+- **验证**：除单元测试外，保留手动启动本地服务后直连真实 HTTP API、真实 LLM 的集成层，重点覆盖 HITL、SSE、curl 工具与深度研究；不为该层额外引入环境闸门或强制 sandbox-runner。
+- **产品范围**：移除用户自定义 Provider/API Key 持久化。当前项目不以大规模多租户为目标，密钥隐私和误用风险高于其展示价值。
+
+## 2026-07-27 — 流式交付与用户记忆的完整能力线
+
+- **流式交付**：SSE 只是传输层；工具失败、LLM 超时、刷新后的继续感知、用户可见状态和 Telegram 等通道适配必须一起设计、写入 OpenSpec 和长期设计文档。不要以“流式接口可返回”替代端到端验收。
+- **评测主线**：RAG 与 SuperAgent 的评测应复用 harness；旧测试入口可为展示暂留，但不再演进成另一条能力实现。
+- **用户记忆**：`USER.md` 保持轻量，不维护额外“常用字段”。每天的会话内容经 dream 归档到 memory 目录；读取侧提供独立、受控的跨 session 记忆检索，避免把历史原文直接注入常驻上下文。
+- **待验证**：会话提示“生成过程中出现问题”但仍显示生成中的滞留路径，需要从前端状态、SSE 交付与服务重启恢复链路一起排查。
+
+## 2026-07-26 — 文档分层：OpenSpec、调研与长期设计说明
+
+- **OpenSpec**：保留需求、行为约束、验收场景与变更过程，是实现和归档的权威；不要用额外 design/proposal 复制规格。
+- **调研**：围绕某个 change 的项目内外资料可放在该 change 附近；对 Codex、Claude Code、DeerFlow、RAGFlow 等可复用的行业研究可单列研究报告。
+- **`docs/`**：只保留帮助理解复杂机制、值得复盘或对外分享的长期设计说明；不是临时方案和逐步实现日志的垃圾桶。
+- **应用**：知识库引用溯源先补齐 RAGFlow 等实现调研，再重审现有设计；最终约束仍回到 OpenSpec。
+
+## 2026-07-25 — Harness 独立层的最终边界
+
+- **目标**：网络/平台层只负责入口、交付与编排；Agent 能力沉到独立 harness。评测和线上必须调用同一 harness 能力线，禁止平台反向依赖 Agent 实现，也不要为评测堆额外适配层。
+- **推进方式**：这不是短期补丁，按最终分层重构；模块目录收敛要服务依赖方向，而不是仅减少文件数。
+- **验收门槛**：后端能正常启动，核心测试通过，并完成浏览器端验证。2026-07-25 曾出现后端进程构建后提前退出，因此在启动与端到端验收完成前，不能宣称重构完成。
+- **关联**：后续设置能力扩展以 `openspec/changes/expand-settings-control-plane/` 为规格入口；具体实现与分支状态以代码库为准。
+
 ## DeepDoc Vendor 修改清单
 
 | 路径 | 原因 | 同步策略 |
@@ -11,12 +63,12 @@
 - **三工具**：`list_knowledge_bases`（发现）、`search_knowledge_base`（片段 hybrid，可传 `collection_names`）、`get_knowledge_document`（整篇补全，80k 字符截断）。
 - **检索范围**：工具入参 > 会话 `extra.kb_collections` > 全部可用库；多库 **ThreadPoolExecutor 并行**，每库 `final_top_k=global_limit` 后全局 merge（不再 `ceil(limit/N)` 预截断）。
 - **前端**：COMMON_QA 输入区 `KbScopeSelector` 多选写回 `extra.kb_collections`；流式 `extra.kb_collections` 同步会话。
-- **检索耗时日志**：`KbRetrievalService.search` → `[KbRetrievalService] search`（recall/parse/rerank/post/total ms）；Agent 跨库 → `[KbSearchTool] search_knowledge_base`（resolve/parallel/merge/total ms）。`grep` 后端 `.data/logs` 或控制台即可。
+- **检索耗时日志**：`KbRetrievalService.search` → `[KbRetrievalService] search`（recall/parse/rerank/post/total ms）；Agent 跨库 → `[KbSearchTool] search_knowledge_base`（resolve/parallel/merge/total ms）。`grep` 后端 `.noesis/logs` 或控制台即可。
 
 ## 知识库上传与 Rerank 配置（2026-07-01）
 
-- **上传暂存**：`POST .../upload` 写入 `.data/kb_uploads/{collection}/{file_hash}_{原名}`，解析后删除；Qdrant 分片 `file_name` 经 `source_file_name` 显式传入，不再用 `basename(tmp)`。
-- **Rerank 密钥**：`ModelSettings.rerank_model_api_key` 在 `config/env.py` 中回退 `embedding_model_api_key`；`RERANK_MODEL_API_KEY` 仅作可选覆盖，prod 不必单独配置。
+- **上传暂存**：`POST .../upload` 写入 `.noesis/kb_uploads/{collection}/{file_hash}_{原名}`，解析后删除；Qdrant 分片 `file_name` 经 `source_file_name` 显式传入，不再用 `basename(tmp)`。
+- **Rerank 密钥**：`ModelSettings.rerank_model_api_key` 在 `noesis/config/env.py` 中回退 `embedding_model_api_key`；`RERANK_MODEL_API_KEY` 仅作可选覆盖，prod 不必单独配置。
 
 ## 动态切换对话模型（2026-07-02）
 
@@ -32,14 +84,23 @@
 - **当前可用（实测）**：`deepseek-v4-flash-free`、`big-pickle`、`mimo-v2.5-free`、`nemotron-3-ultra-free`、`north-mini-code-free`；`deepseek-reasoner` **不支持**于 Zen 免费网关。
 - **配置**：`config.yaml` → `model.catalog[]` 逐项列出；界面仅展示 catalog 内条目，未写入 catalog 的模型不会出现。
 
-## KB 引用溯源 OpenSpec（2026-07-02）
+## KB/Web 引用溯源（2026-08-01）
 
-- **变更**：`openspec/changes/add-kb-citation-sources/`（规格先行，代码未合）。
-- **不难（L1–L2）**：`CitationsPart`、snake_case `citations-available`、文末列表 + 抽屉 shard API——与 platform-chat 同构。
-- **难（L4）**：**句子 ↔ 分片** 绑定。首版 = LLM 写 `[n]` + 解析；不稳则 **fallback Top-5**（`citation_fallback`，UI 须写清「非逐条引用」）。非审计级归因。
-- **L3**：hybrid 默认；`shard_id` = `point_id` 或 **`VectorStorage.hash_to_uuid(content_hash)`**（禁裸 hash）。要 hybrid 集成测。
-- **硬约束**：`register_hits` 仅 `_format_hits` 主线程；finalize 在 `to_dict`/stop 文案前；**仅正常 finish** 发 SSE，stop/断连靠**刷新**看来源。
-- **二期**：snippet–正文重叠推断 cited；stop 时 SSE 注入来源。
+- **变更**：`openspec/changes/add-kb-citation-sources/`。
+- **回答协议**：COMMON_QA 与 SuperAgent 共用 Prompt citation；Web 使用 Markdown 原始链接，KB 使用编号和文末参考资料。
+- **平台边界**：正文继续走普通 `text-delta`；独立 retrieval part 保存本轮来源，用于折叠展示和刷新恢复，不推断 cited 子集。
+- **明确删除**：structured answer、虚拟 Tool、typed annotation、citation resolve API、前端 offset marker 和旧兼容分支。
+- **验证**：保留真实模型 Web citation 集成测试，同时检查实时流和终态消息中的 Markdown 来源。
+- **Provider 能力门禁（2026-08-03）**：MiMo 的 `function_calling`、`json_schema`、`json_mode` 在固定对照用例中均稳定返回 500；这不是偶发网络错误，也不是工具数量导致。移除 MiMo 的结构化引用白名单后，同一模型和工具集合可正常产生普通工具调用。以后不能用模型目录或单次成功请求声明结构化能力，必须在目标 provider + 实际工具集合上做能力门禁；门禁失败时关闭结构化引用，不阻断普通对话。
+
+## 2026-07-30 — 评测 harness 收敛 + 中间件复核结论
+
+- **评测统一走 harness**：RAG 与 SuperAgent 评测复用 `packages/harness`，基于 harbor 官方 `harbor.agents.base.BaseAgent` 运行（`docs/engineering/agents/agent-evaluation.md`），不启动 Worker/TCP proxy；测试点旧路线仅供展示、不再演进。`unify-harness-evaluation` 已实现并入 archive。
+- **中间件复核（其他 AI 审查后逐条验证）**：
+  1. `ModelAttemptCallback` 只实现同步 `on_llm_new_token`/`on_tool_start`，但运行时走 `astream_events` 全异步路径——若 LangChain 异步回调不调同步 token 钩子，`visible_output_started` 恒 False，「已流式输出后不再重试」保护静默失效（可能对已吐 token 的调用重试造成重复输出）。需测试验证 async 下同步钩子是否触发；不触发则补 async 实现。
+  2. `LoopDetectionMiddleware` 的 `thread_id` 从 `runtime.context` / `execution` 不同位置取值来源不一致，`context` 无 thread_id 时可能退化为所有会话共用同一循环检测。需确认并统一取值来源。
+  3. `ModelRetryMiddleware` 只在抛异常时重试，不触发「无 token 输出」场景；`astream_events` 的 `is_cancelled` 是 run 级。**有意保留**，非 bug。
+- **引用溯源实况**：KB 检索 23 条但最终回答完全没引用（用户期望 GPT 式 `[1][2]` 溯源）。结论：用 langchain 已有能力（Prompt Markdown citation），不引入虚拟 Tool/结构化 answer/自造规则；模型优先只适配 deepseek 验证完整引用溯源。最终协议见「KB/Web 引用溯源（2026-08-01）」。
 
 ## 沙箱 execute 虚拟路径统一（2026-07-02）
 
@@ -205,7 +266,7 @@
 ## 2026-07-10 — SuperAgent 用户记忆（add-super-agent-user-memory 归档）
 
 - **BREAKING**：`DEEP_RESEARCH_QA` / `DeepResearchAgent` 移除；统一为 `SUPER_AGENT_QA` + `SuperAgent` + `task-worker`。
-- **磁盘**：`.data/users/{uid}/AGENTS.md`（Agent 可写）、`USER.md`（Agent 只读）；删 session **不**删记忆文件。
+- **磁盘**：`.noesis/users/{uid}/AGENTS.md`（Agent 可写）、`USER.md`（Agent 只读）；删 session **不**删记忆文件。
 - **虚拟路径**：`/memory/AGENTS.md`、`/memory/USER.md` → `UserMemoryBackend`；`MemoryMiddleware` + `MemorySyncMiddleware` 仅主 Agent 挂载。
 - **面板**：右侧上下文树展示两文件；`PUT workspace/file` 允许用户直接编辑 `AGENTS.md` 与 `USER.md`。
 - **Agent 写边界（2026-07-10 更新）**：`USER.md` 与 `AGENTS.md` 均可由 Agent `edit_file` 更新（对齐 OpenClaw「USER.md Update as you go」）。
@@ -229,7 +290,7 @@
 
 - **字段**：`model.catalog[].limit` 与 models.dev / OpenCode 一致：`context`（窗口上限）、可选 `output` / `input`；`model.limit` 可作无 catalog 或 catalog 项未写 limit 时的默认。
 - **解析**：`llm/model_limits.resolve_model_limit(model_id)` → catalog `limit.context` → `context.max_input_tokens`（全局兜底）→ 128K。
-- **运行时**：`create_noesis_agent(model_id=...)` 将 `model_id` 传入 `SummarizationOffloadMiddleware` 与 `ContextMetricsMiddleware`；压缩触发默认 `trigger_tokens: 0` + `trigger_fraction × limit.context`。
+- **运行时**：`create_noesis_agent(model_id=...)` 将 `model_id` 传入 `ContextLifecycleMiddleware`；它独占压缩判断并生成 `ContextSnapshot`，`RuntimeTelemetryMiddleware` 只读取 snapshot。压缩触发默认 `trigger_tokens: 0` + `trigger_fraction × limit.context`。
 - **API**：`GET /api/models` 每项返回解析后的 `limit` 对象；embedding/rerank 配置未改。
 
 ## 2026-07-11 — sandbox-runner 残留容器 409 修复
@@ -255,7 +316,7 @@
 ## 2026-07-21 — Composer 会话级 Models / Skills / MCP
 
 - **动机**：补齐用户自定义 MCP + Cursor 式 Composer 勾选；此前 MCP 仅部署级 `mcp.json` 且绑死 `FAULT_OPERATION_QA`。
-- **配置**：平台 `extensions/mcp/mcp.json` + 用户 `.data/users/{uid}/mcp.json`（同名用户覆盖）；用户仅允许 `streamable_http`/`sse`。
+- **配置**：平台 `extensions/mcp/mcp.json` + 用户 `.noesis/users/{uid}/mcp.json`（同名用户覆盖）；用户仅允许 `streamable_http`/`sse`。
 - **会话 extra**：`mcp_servers`（缺省：FAULT 回退 profile，其它 `[]`）、`enabled_skills`（缺省全部）。
 - **API**：`/api/mcp/servers` list/PUT/DELETE/probe；打开菜单只拉元数据，不 `get_tools()`。
 - **Agent**：COMMON / FAULT / SUPER 均可按勾选挂 MCP；SUPER 按 `enabled_skills` 过滤 SkillsMiddleware sources；TEST_CASE 协调器不挂 MCP。
@@ -280,13 +341,13 @@
 - **改动**：`prompts/super_agent.py` 翻转策略——轻量（≤2 次工具）主 Agent 自做；多源检索/调研/多步实现优先 `task-worker`；委派须自包含、禁懒委派；子 Agent 小结默认 ≤400 字、长文落盘。`task-worker` tool description 同步强调优先委派。
 - **局限**：仅靠 prompt，主 Agent 仍持有 web/fs 工具，模型可能继续自己搜；若仍爆窗，再做 eager offload / 工具白名单。
 
-## 2026-07-21 — MCP 配置页：文件编辑 + 状态展示
+## 2026-07-21 — MCP 配置页：文件编辑 + 状态展示（历史基线）
 
-- **交互**：参考 Cursor——配置在 `users/{uid}/mcp.json` 文本编辑；管理页左侧状态（连通/tools），右侧编辑器；「检测连通」批量 probe。
+- **交互**：参考 Cursor——配置在 `users/{uid}/mcp.json` 文本编辑；管理页左侧状态（连通/tools），右侧编辑器；旧版曾采用进入页批量 probe。
 - **API**：`GET/PUT /api/mcp/config`；`GET /api/mcp/servers/status?probe=`。
 - **Composer**：会话勾选保留；「打开 MCP 配置…」跳转管理页（侧栏新增 MCP）。
 - **约束**：用户配置仍禁止 stdio，仅 streamable_http/sse。
-- **体验修正**：进入页/保存后**自动 probe**（对齐 Cursor 打开即绿点）；去掉逐行「探测」；布局对齐 Skills 管理页 sider+editor。
+- **体验基线**：旧版进入页/保存后自动批量 probe；现已改为目录优先、逐项后台加载，避免页面卡在全量刷新。
 
 ## 2026-07-21 — MCP 目录与配置对齐（Context7 + remote_ops）
 
@@ -313,7 +374,7 @@
 
 - **选型**：接 skills.sh（跨 Agent 公共目录），不接 ClawHub（偏 OpenClaw）。
 - **发现**：`GET /api/skills/market/search` → `skills.sh/api/search`；`/market/browse` 用配置 `skills_market.featured_skills` 推荐种子。
-- **安装**：`POST /api/skills/market/install` 从 GitHub zipball 抽出含 `SKILL.md` 的目录 → 写入 `.data/users/{uid}/skills/`，写 `.skills-sh/origin.json`，bump revision。
+- **安装**：`POST /api/skills/market/install` 从 GitHub zipball 抽出含 `SKILL.md` 的目录 → 写入 `.noesis/users/{uid}/skills/`，写 `.skills-sh/origin.json`，bump revision。
 - **UI**：扩展页 Skills 增加「已安装 / 市场」Tab；装完回到已安装树。
 - **配置**：`backend/config.yaml` → `skills_market.*`（base_url / timeout / featured_skills）。
 
@@ -453,14 +514,14 @@
 
 - **问题**：刷新/挂载 ModelSelector → `ensureSession` 造空「新对话」；方案 B 附件与 Composer 偏好物化时机冲突；FAULT `+` 仍可能走 KB 上传。
 - **定稿**：L2 Staging+Commit；状态机 DRAFT→COMMITTING→ACTIVE；偏好 User defaults ⊥ draft overlay ⊥ `session.extra`；列表不展示 draft/空壳；ACTIVE 用 `/chat/:id` 续聊。
-- **文档**：`docs/prd/platform/Chat对话面生命周期设计.md`；规格 `openspec/specs/chat-surface-lifecycle/spec.md`（演进 `chat-composer-send-upload`）。
+- **历史文档路径（已删除）**：`docs/prd/platform/Chat对话面生命周期设计.md`；规格 `openspec/specs/chat-surface-lifecycle/spec.md`（演进 `chat-composer-send-upload`）。
 - **落地顺序**：P0 禁挂载 ensure + 滤列表 + 关 FAULT 上传 → P1 路由续聊 → P2 staging/TTL → P3 用户默认设置与 TestAssistant 收编。
 
 ## 2026-07-22 — Chat 对话面：去掉 draft，改回发送才物化
 
 - **修订**：产品确认未发送附件无需服务端保存，刷新丢失合理；删除 draft / staging / soft lifecycle。
 - **现行定稿**：COMPOSING→SENDING→ACTIVE；点击发送才 ensure；附件保持方案 B（本地队列）；偏好三层仍在，overlay 仅内存。
-- **文档已改**：`docs/prd/platform/Chat对话面生命周期设计.md`、`openspec/specs/chat-surface-lifecycle/spec.md`；落地 P0→P1→P2（无 staging 阶段）。
+- **历史文档路径（已删除）**：`docs/prd/platform/Chat对话面生命周期设计.md`；当时同步修改 `openspec/specs/chat-surface-lifecycle/spec.md`，落地 P0→P1→P2（无 staging 阶段）。
 
 ## 2026-07-22 — Chat Surface P0 实现（feat/chat-surface-lifecycle）
 
@@ -764,3 +825,186 @@ backends/
 - 容器与 exec：`HOME=/home/sandbox`
 - 镜像：`nodejs` `npm` `python3-venv`；部署后 rebuild slim + 重建 runner/session 容器
 - 回归：`deploy/sandbox-runner/test_docker_exec.py`
+
+## 2026-07-24 — 项目 skill 落点 + langfuse-trace-analysis
+
+**Why：** 轨迹排障流程被写成 skill 时误放进 `knowledge-base/skills/`；该流程绑 Noesis DB/Langfuse/部署，离开仓库不可用。
+
+**How to apply：**
+- 跨工具个人 skill → `knowledge-base/skills/` → `~/.agents` 软链
+- Noesis 专用 → `Noesis/.agents/skills/<name>/`；Cursor 用 `.cursor/skills/<name>` **软链**
+- `langfuse-trace-analysis`：对照 Langfuse UI + 业务 DB，扫 execute 失败文本（timeout/cd、权限、缺 node 等）
+- **禁止**把仓库专用流程写进 knowledge-base；误推 `.agents` 到公开 GitHub 须立刻回退
+
+## 2026-07-25 — extract-noesis-harness：Agent 内核整包独立
+
+**Why：** 评测/通道要调 Agent 内核，但不能反向依赖平台 `services`/Delivery；旧「整包搬家 + AgentRunService」与 Delivery 重叠故搁置。对齐 DeerFlow：`packages/harness` = 内核，Gateway/QaService = 壳，同 factory、异投递。
+
+**How to apply：**
+- 代码：`backend/packages/harness/noesis/`（import `noesis`）；不保留旧命名空间 shim
+- 依赖：`noesis -X→ services`、`-X→ domain.chat.delivery`；附件/KB 经 `services/harness_wiring.wire_harness_platform_deps` → `noesis.runtime.deps`
+- 流式核：`noesis.runtime.stream.stream_agent_events`；Harbor/BrowseComp 同核
+- Delivery 仍在 `domain/chat/delivery`；**不要**再造 RunManager
+- OpenSpec：`openspec/changes/extract-noesis-harness/`
+- 回归：`cd backend && uv run pytest tests/ -q`
+
+## 2026-07-25 — harness 彻底与平台解耦（deps 绑定）
+
+**Why：** 仅搬目录不够；`domain.attachments` / Langfuse / ORM / `kb` 仍让 noesis 粘平台。目标是评测可只依赖 noesis+config，平台单向注入。
+
+**How to apply：**
+- 附件输入适配：`noesis.runtime.attachments.*`；旧 domain 路径已移除
+- case VO：`noesis.agents.case_generate.vo`；`schemas.case_generate_vo` shim
+- **禁止** noesis → `domain` / `services` / `models` / `api` / `kb`（静态）；LLM 内聚为 `noesis.llm`
+- 一律经 `noesis.runtime.deps` + `services.harness_wiring.wire_harness_platform_deps`
+- 运行时配置与日志内聚：`noesis.config`、`noesis.runtime.logging`；禁止反向依赖 backend 顶层 `config/common`
+- 宿主/评测的稳定公共入口为 `noesis.config` / `noesis.runtime`；二者通过惰性导出避免配置与 logging 的循环初始化，细分模块路径仅用于内部实现和精确 patch。
+- 静态检查：`rg 'from (domain|services|models|api|kb)\\.' packages/harness/noesis` 应为空
+
+## 2026-07-25 — backend 平台宿主收敛
+
+- 平台 Web/数据库/KB/通道代码统一位于 `backend/noesis_server/`，import 使用 `noesis_server.*`；backend 根只保留 `app.py`、`evals`、`packages`、迁移/脚本与测试。
+- 三个顶层运行边界：`noesis`（Agent harness）、`noesis_server`（平台宿主）、`evals`（评测）；旧 `api/services/domain/config/kb/...` 顶层包不保留 shim。
+- 依赖修正：Qdrant 归 `noesis_server.kb.qdrant`；Telegram/HITL timeout 与 KB seed 归 services/bootstrap；数据库归 `infrastructure.database`；Langfuse 归 `infrastructure.observability`；删除 `services.qa_service` 兼容入口。
+- Knowledge Base API 只保留 FastAPI transport；集合、上传、检索编排统一进入 `noesis_server.services.knowledge_base_service`。
+
+## 2026-07-25 — auth domain 与 ORM 解耦
+
+- `noesis_server.domain.auth` 只保留 `AuthUser` / `AuthSession`、policy 和 repository Protocol，不 import FastAPI、SQLAlchemy、ORM 或平台异常。
+- `noesis_server.infrastructure.database.repositories.auth` 负责 ORM/entity 显式映射；repository 只 flush，不 commit/rollback。
+- Session、邀请码、登录注册事务边界位于 `noesis_server.services.auth` / `LoginService`；Cookie transport 位于 `noesis_server.api.auth_cookie`。
+- 数据库表、Session Cookie、CSRF 与 `/api/auth` 外部行为不变。
+
+## 2026-08-04 — converge-agent-runtime：单一 runtime owner 收敛
+
+**Why：** runtime 曾有多套 owner（旧 middleware 栈 + 新装配并行），状态归属不清；目标是单一 owner、删旧装配、可评测。
+
+**How to apply：**
+- 五类 owner：`RunGovernor` / `ContextLifecycle` / `ModelExecution` / `ToolExecution` / `Telemetry`；统一 `RuntimeOutcome`、`ToolResultEnvelope`，内部 detail 不泄漏到 SSE。
+- `middlewares/` 按职责分层：`kernel/`（公共 runtime）`capabilities/`（Skills/Memory）`observability/`（context metrics）`legacy/`（已退出装配，明确标注不参与 runtime）；顶层不再平铺 20 个文件。
+- Memory 语义：**每用户 turn 加载一次、同一 run 内固定**（`TurnMemoryMiddleware`，只挂 `before_agent`）；删除 `memory/revision.py`、`VersionedMemoryMiddleware`、`before_model` 动态刷新和所有写入口 revision bump。理由：run 内保持 system prompt 稳定，用户/Agent 改记忆下一条消息生效即可，无需同轮刷新。
+- 附件改独立 input adapter（`AttachmentInputResolver`），不再依赖 `ChatAttachmentsMiddleware`；压缩走 LangChain `SummarizationMiddleware`，不生成旧 `summary_offload` artifact。
+- 清理纪律：旧 middleware 先保留为未挂载 legacy、迁走有效断言到统一 runtime 契约测试，再物理删除源码与旧测试；不恢复旧接口让测试变绿。
+- LangChain 当前版本 hook 顺序：`before` 正序、`wrap` 嵌套、`after` 逆序。
+- `code-review` 双轴收尾发现 6 项待修：Profile 矩阵未生效、子 Agent 未显式继承父 Governor、Telemetry 去重/完整消费、model call 超限误报为 tool limit、ContextVar 可能重复上报上一轮工具结果、sync/async 重复实现。
+- 验证基线：backend 801 passed、memory 23-25 passed、frontend 21 passed + lint/build；OpenSpec strict validation。
+
+## 2026-08-04 — Deep Research：HITL 占用 Run 预算 + 上下文膨胀
+
+**Why：** `/deep-research-v2` 跑到 Phase 5 正准备生成最终报告时被 900s watchdog 切断，用户只拿到 `partial` 无交付物。
+
+**根因（详见 `docs/bug/deep-research-hitl-timeout-and-context-bloat.md`）：**
+1. Run 从启动即计时，HITL 等待约 237s 也占用 900s 预算 → `RUN_TIMEOUT / limit_exceeded`。
+2. HITL 恢复使首批 3 个并行 task 以新 `tool_call_id` 重建；子 Agent 全量事件回灌父消息 → assistant 单条 2.59MB / 89,815 tokens。
+3. Skill 是领域无关刚性清单（默认 deep、≥20 来源、强制论文/竞品/政策），LLM Wiki 主题不适配仍全量跑。
+4. 搜索不稳定放大重试：Tavily SSL 失败落 DDG、知乎 403、GitHub rate limit、44 次 fetch 4 次 error。
+
+**可迁移原则：**
+- HITL 等待不应计入执行预算（或预算只计模型/工具活跃时间）；watchdog 要区分「等待用户」和「执行中」。
+- 子 Agent 轨迹按需回灌（只留决策摘要/关键证据），不要全量进父消息；`status=success` 不可信，要强扫工具输出文本。
+- 可观测系统会自我膨胀：远程服务器磁盘 100% 的长期根因是 ClickHouse `system.trace_log`(4.73GB)+`system.text_log`(2.89GB) 等诊断表（约 9.4GB），业务 `observations` 仅 177MB；Docker build cache 只是触发点。清磁盘先清可重建资源，不碰业务 volume。
+- Skill 设计：研究范围/深度应由主题适配，不能用固定刚性清单。
+
+## 2026-08-05 — 数据结构重设计：从 17 张表收敛到 3 项 + 抄 Claude Code 蓝本
+
+**Why：** Noesis 架构被判定落后，需要 Agent 形态数据结构；过程本身比结果更值得记——过度设计 → 收敛 → 弃杂糅 → 单一蓝本。
+
+**How to apply：**
+- 第一版 17 张表（Event Store/outbox/message_parts/tool_calls/workspace 等全上）被用户质疑后重新评估：真实痛点只有两个——Run↔Message 一对一 + 禁止并行（卡后台/cron/多任务）、tool_call 混在 content JSON（查询/审计不便）。Event Store/Approval/Workspace 实体当时不痛（Claude Code 也没有 Event Store，只有 JSONL）。
+- 地基层 3 项：改 `t_agent_run`（去 `assistant_message_id` UNIQUE + `uq_agent_run_active_session`，加 `trigger_type`/`run_group_id`）；新建 `t_tool_call`/`t_tool_result`（独立 id/状态机/幂等键/risk_level/arguments_hash，大结果落盘引用）。LangGraph、RunEventBus、PersistSink、HITL、沙箱、记忆全不动。
+- Session 层地基层不动：`reserve_message_sequences` 已用 `with_for_update()` 行级锁，多 run 并发序号安全；Event Store 建了才需要 `current_seq`。
+- 演进层每张表带触发信号（Event Store：拆独立 Worker 或多端实时同步；Approval：要跨设备审批/批准后同类自动允许；Workspace：容器泄漏或并行 lease 互斥；message_parts：要按 part 类型查询）；不因「研究报告推荐」或「Codex 有」引入。
+- 最终用户决策：弃「取 Codex 的 X + Claude Code 的 Y + 研究报告的 Z」的杂糅，整体抄 Claude Code（Typed Entry + parentUuid DAG + 工具一等公民 + 决策原因审计），做 PG + 多用户改造；LangGraph checkpointer 承担 transcript 职责，业务表承担 State DB 查询职责。
+- 诚实性修正轮（7 处）：PermissionDecisionReason 实际 11 种非 12；`t_file_snapshot`/session `tag/summary/mode` 列移演进层；`t_tool_call` 明确标注是「Noesis 多用户查询/审计/幂等需求驱动，非 Claude Code 直接对应」（Claude Code 工具调用在 content block 里无独立表）；`decision_reason` 用 Noesis 简化类型 `{type:"hitl", decided_by, reason}`；不说「Claude Code run 不绑 message」（它没有 run 概念）；LangGraph checkpointer 与 transcript JSONL 是职责对应不是同构。
+- 参考文档：`Inbox/gpt/Agent数据结构设计研究报告.md`、`Agent数据结构设计补充-Codex与ClaudeCode源码分析.md`、`Noesis-Agent平台数据结构重设计.md`（含设计决策溯源与修正表）。
+
+## 2026-08-05 — Claude Code 会话 JSONL 与 SSE 四层实现（源码研究）
+
+**Why：** Noesis 数据结构以 Claude Code 为蓝本，且要做多端 SSE 一致；源码在 `cloud-code/claude-code-source/src/`（v2.1.88 还原）。
+
+**How to apply：**
+- 持久化：transcript JSONL per project（`types/logs.ts` 的 `Entry` 约 20 类）+ parentUuid DAG（并行 tool_use 兄弟分支恢复）+ 多类 snapshot（file history/attribution/content replacement/context-collapse「marble-origami」）+ metadata + 远端 CCR v2；fork 用 `parentSessionId` 引用非复制全量。`sessionStorage.ts` 是核心，`getTranscriptPath`/`getAgentTranscriptPath` 决定落盘位置。
+- subagent：`isSidechain:true` 事件写在主 session 目录下 `subagents/agent-<agentId>.jsonl`，同名 `.meta.json` sidecar 存 agentType/worktreePath 供 resume 路由（`sessionStorage.ts:247-258`）；主 jsonl 只留 tool_use/result 引用。
+- compact：压缩标记字段是 `isCompactSummary:true`（`sessionStoragePortable.ts:150`）；grep 命中该词 ≠ 真实事件（本地所有 jsonl 命中均为「会话内容讨论到它」）。`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 把本地计算的有效窗口取 `Math.min(原窗口, 值)`（`autoCompact.ts:38-46`），auto-compact 阈值 ≈ 窗口 − 20k 预留 − 13k buffer；只影响本地阈值，不改真实 API 请求。
+- SSE 四层：`src/cli/transports/SSETransport.ts`（传输层长连接）、`src/services/api/claude.ts`（`stream:true` 流式调用）、`src/utils/stream.ts`（`Stream<T>` 异步队列原语）、`src/services/tools/StreamingToolExecutor.ts`（工具边流式到达边执行）。
+- Tool 模型：`types/logs.ts` 之外看 `Tool.ts` 的 `Tool` 接口（isReadOnly/isDestructive/isConcurrencySafe/interruptBehavior/maxResultSizeChars/checkPermissions/toAutoClassifierInput）与 `ToolUseContext`（contentReplacementState、renderedSystemPrompt 共享父 prompt 字节保 cache、queryTracking{chainId,depth}）。
+- 方法论：研究会话事件结构先做「字段名确认 → 全盘扫描 → 区分真实事件 vs 内容提及」，别被关键词 grep 误导；制造特殊场景用「批次触发 + 清理动作本身也产生事件」（TaskStop 返回已完成也是有效 tool_result 事件）。
+
+
+## 2026-08-07 — usage 累计 dedup 陷阱 + reasoning token 口径（↓2 bug）
+
+**Why：** 线上显示输出 token 只有 2（↑21.4K ↓2），总 token 停在输入值；同时思考/工具状态文案「已完成/完成」不一致。
+
+**根因（已用红测试锁定 `assert 2 == 593`）：**
+1. `_accumulate_usage` 在 `on_chat_model_stream`（partial usage）和 `on_chat_model_end`（权威 usage）用**同一 run_id** 各调一次，dedup（`langgraph_sse.py:336-341`）把 end 的权威 usage 当重复跳过了 → 部分流式 usage 被冻结成最终值。
+2. `_normalize_usage` 忽略 `output_token_details.reasoning_tokens`：DeepSeek 系 reasoning 模型把思考 token 放在该字段，`output_tokens` 不含 → 输出被系统性低估。
+
+**修复：** usage 只在 `on_chat_model_end` 累计（该点 usage_metadata 完整）；stream chunk 的 usage 不可靠。dedup 保留，用于防重复 end 事件。
+
+**可迁移原则：**
+- 统计类数据的「最后一次权威值」不能被「第一次部分值」的 dedup 吃掉；去重键相同不代表数据相同。
+- reasoning 模型 token 口径：`output_tokens` ≠ 全部输出，要看 `output_token_details.reasoning_tokens`；多 provider 平台要按模型分口径。
+- 状态文案统一走常量映射（`TOOL_STATE_LABELS`），不要散落硬编码。
+
+## 2026-08-07 — 多 Provider SSE 格式对比（compare_sse.py 方法论）
+
+**Why：** 平台适配多 provider 前必须看清各家 SSE 原始格式；SDK 会抹平差异。
+
+**How to apply：**
+- 用 httpx 直连读原始 `data:` 行（不走 openai/anthropic SDK），脚本在 `.tmp/scripts/compare_sse.py`（gitignore，不上 GitHub），结果分析在 `.tmp/RUN_RESULT.md`。
+- 四种格式：OpenAI Chat Completions（`data: {"choices":[{"delta":{"content":"..."}}]}` + `[DONE]`）、Anthropic Messages（`event: content_block_delta` + `message_stop`，`x-api-key` + `anthropic-version` 头）、OpenAI Responses（`type:response.output_text.delta` + `response.completed`，delta 直接是字符串）、OpenAI 兼容中转。
+- 同一 DeepSeek 模型三形态（OpenAI `/v1`、Anthropic `/anthropic`、Responses `/v1`）reasoning 字段名/位置完全不同：`reasoning_content` vs `thinking` content_block vs `response.reasoning_text.delta`——统一抽象会丢差异，适配必须按格式分支。
+- usage 位置：OpenAI 在末尾 chunk（`stream_options.include_usage`，中断拿不到）；Anthropic 分两次（`message_start` 给 input、`message_delta` 给 output）；Responses 在 `response.completed`。
+- DeepSeek Anthropic 兼容端点是 `https://api.deepseek.com/anthropic`（非 `/v1/messages`）；中转 Anthropic 常见 `/v1/messages`。
+- 排障顺序：HTTP/2 兼容性（中转可能只支持 HTTP/1.1）、model_not_found（中转模型名可能不同）、500 do_request_failed（中转不支持某端点）。
+
+## 2026-08-07 — 数据结构设计回退复盘 + harness 边界重新定义
+
+**Why：** 8/5 的 17 表→3 表设计在 8/7 凌晨被用户逐点追问后整体回退；随后 knowledge 移入 harness 又引出 harness 边界问题。
+
+**回退复盘（诚实结论）：**
+- t_tool_call 独立表的理由是「多用户查询/审计/幂等」——逐一验证后**当前没有任何真实功能需求**：无审计面板、无高危命令查询页面；幂等 LangGraph 层已有 tool_call_id；多端同步走 message.content 的 tool part。全部是理论推断。
+- 约束型改动不可逆：去 UNIQUE/去 partial unique 一旦做，未来加回来要改数据和代码；「预埋」只有加可空列这类低成本元数据才合理（fork 的 `parent_session_id`/`fork_from_message_id`），空表（t_file_snapshot）是过度预埋。
+- 结论：用户最初的 message.content JSON 方案与 Claude Code 蓝本一致，是对的。保留：流式不入库原则（终态一次性写入；token delta/reasoning raw/tool output chunk/progress 不入库），直接写进 `openspec/specs/platform-chat/spec.md`，不开新 change。
+- 教训：设计文档的「溯源表」如果源是「研究报告理论推荐」而非源码证据，要标注清楚；被质疑时逐条回答「现在不做会卡什么功能」。
+
+**harness 边界（对齐 deer-flow）：**
+- 参考项目核实：YuXi 是单一 `yuxi` 包，无 harness/platform 拆分，manager 即服务、router 直调单例、无 port 无注入；deer-flow 与 Noesis 同形态（`backend/packages/harness` + `backend/app`），且 **harness 包内装全部业务 ORM + engine + migrations**（`persistence/models/` 有 User/Run/Agent/Channel 等）。
+- 结论：Noesis 的 harness 应扩展为「Agent 内核 + 全局数据持久层」，knowledge 引擎（已静态依赖 `noesis.config.env`/`noesis.runtime.logging`，自包含）直接迁入 `noesis.knowledge`，删掉 CollectionConfigPort 注入层（历史包袱：harness 禁止 import kb 的旧规则）。
+- spec：`openspec/changes/move-knowledge-into-harness/`（proposal/design/specs/tasks 6 阶段迁移）；参考项目只内部对齐，spec 不提及避免抄袭观感。
+
+## 2026-08-08 — Provider 网关掩盖协议风险：reasoning_content 不能只看是否报错
+
+**问题/症状：** Noesis 通过 OpenCode 调用 DeepSeek，并且带工具调用；DeepSeek 文档曾要求后续 assistant 消息回传 `reasoning_content`，但线上没有出现 400。
+
+**排查结论：**
+- 当前部署走的是 `https://opencode.ai/zen/v1`，不是 DeepSeek 官方 endpoint；中转层可能替请求补齐或剥离字段，因此“没有报错”不能证明客户端协议正确。
+- 8 月 8 日对官方 API、OpenCode 以及不同模型/调用方式做了对照，当前版本的简单多轮用例都返回 200；历史上 DeepSeek V4 thinking + tools + 多轮回放确实出现过 400，触发条件还会随模型版本、网关和序列化路径变化。
+- `ReasoningAwareChatDeepSeek` 的价值是防御协议变化和保留模型上下文，不应把“当前网关能兜底”当成永久契约。
+
+**可迁移原则：** Provider 兼容性要按「目标 endpoint + 真实工具集合 + 流式/非流式 + 多轮回放」做能力测试；中转网关能把错误隐藏一段时间，不能用一次成功请求替代协议验证。适配层保留低成本防御，但要记录事实、推测和验证范围。
+
+**验证与遗留：** 当前简单用例未复现 400；仍需在切换官方 endpoint、不同 thinking 模式和工具回放场景时保留回归测试。相关 provider/SSE 适配入口见 `packages/harness/noesis/llm/` 与 `noesis.domain.chat.streaming`。
+
+## 2026-08-08 — 平台层、Harness 与本地 CLI 的职责边界
+
+**问题/症状：** 参考 YuXi 整理目录时，容易把 `noesis_server`、harness、middleware 和 CLI 按目录名机械合并，导致平台能力和 Agent 内核互相污染。
+
+**最终边界：**
+- `packages/harness/noesis/` 是 Agent 内核与运行时，承载 agents、services、domain、storage、repositories、knowledge、schemas 等业务能力。
+- `noesis_server/` 是 HTTP 交付层，负责 routers、FastAPI middleware、lifespan、平台 wiring、数据库依赖和响应格式；它薄，但不是多余的。
+- `packages/noesis-cli/` 是本地 harness CLI，直接复用 Agent 工厂和 in-memory checkpointer，不引入 TUI，也不为了评测额外引入 Cookie/API Key 认证。
+
+**可迁移原则：** 参考项目只能提供依赖方向和职责问题的对照，不能把对方的 `utils/` 目录当成收纳箱。判断目录是否必要，要看它是否承担清晰的运行时边界；评测 CLI 应尽量走和评测 harness 相同的调用路径，避免为了“像产品”再复制一套 HTTP 层。
+
+**验证与遗留：** harness boundary、后端和 CLI 测试在会话中通过；当前 Noesis 工作树仍有其他未提交改动，后续要单独做最终分支验收，不能把本次目录结论等同于整个分支已收尾。
+
+## 2026-08-08 — 全局 CSRF 中间件与登录入口的边界
+
+**问题/症状：** 登录界面直接显示“CSRF 校验失败”，用户无法判断是密码、会话还是跨站请求问题。
+
+**根因：** CSRF middleware 对请求统一检查；浏览器带着有效但旧的 session cookie，却没有对应的 `X-CSRF-Token`，登录请求也被当成已建立会话后的写操作拦截。
+
+**解法/取舍：** 保留已登录状态变更接口的 CSRF 校验；对 login/register/logout 等认证生命周期入口做明确白名单；对用户返回“会话验证失败，请刷新页面后重试”，详细原因只留在服务端日志。修复后错误从 CSRF 拦截变成业务层密码校验，说明请求已经通过 middleware。
+
+**可迁移原则：** 安全 middleware 不能只按“所有 POST 都拦”设计，要区分会话建立、会话内状态变更和公开入口；错误信息对用户要可行动且不泄露安全机制，排查时再用日志和请求头确认真实边界。

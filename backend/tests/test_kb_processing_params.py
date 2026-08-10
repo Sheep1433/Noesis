@@ -1,5 +1,5 @@
 """知识库入库/检索参数合并单测（rag-chunking-pipeline）。"""
-from kb.chunk import (
+from noesis.knowledge.chunking import (
     KB_CHUNK_PRESET_GENERAL,
     chunk,
     deep_merge_mapping,

@@ -2,8 +2,8 @@
 
 import pytest
 
-from models.chat_models import TChatSession
-from services.chat_service import ChatService
+from noesis.storage.postgres.models.chat import TChatSession
+from noesis.services.chat_service import ChatService
 
 
 class _Result:

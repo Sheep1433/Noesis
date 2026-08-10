@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from services.chat_service import ChatService
+from noesis.services.chat_service import ChatService
 
 
 @pytest.mark.asyncio

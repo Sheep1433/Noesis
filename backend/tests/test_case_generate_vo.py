@@ -1,6 +1,6 @@
 """TestCaseOutput 列表字段 coercion 单测。"""
 
-from schemas.case_generate_vo import TestCaseOutput
+from noesis.agents.case_generate.vo import TestCaseOutput
 
 
 def test_expected_results_accepts_json_string():

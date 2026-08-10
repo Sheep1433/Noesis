@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定聊天 **Composer 产品面**：对话表面生命周期（COMPOSING / SENDING / ACTIVE）、发送时上传、会话附件、`/` `@` mentions、session 级工具开关（MCP / Skills）、以及右侧会话上下文面板。平台 SSE 与落库见 `platform-chat`；磁盘布局见 `agent-runtime`。
+本能力规定聊天 **Composer 产品面**：对话表面生命周期（COMPOSING / SENDING / ACTIVE）、发送时上传、会话附件、`/` `@` mentions、session 级工具开关（MCP / Skills）、以及右侧会话上下文面板。平台 SSE 与落库见 `platform-chat`；设置控制面见 `user-settings`；磁盘布局见 `agent-runtime`。
 
 ## Requirements
 
@@ -35,7 +35,7 @@
 #### Scenario: 上传写入会话子树
 
 - **WHEN** 已登录用户向 session `s1` 上传 `a.pdf`
-- **THEN** 文件 SHALL 出现在 `.data/users/{uid}/sessions/s1/uploads/`（或现行约定目录）
+- **THEN** 文件 SHALL 出现在 `.noesis/users/{uid}/sessions/s1/uploads/`（或现行约定目录）
 
 ### Requirement: `/` 与 `@` mentions
 
@@ -62,7 +62,11 @@ Composer SHALL 提供 slash / mention 选择器；发送载荷 MAY 含 `mentions
 
 ### Requirement: 会话上下文面板
 
-系统 SHALL 提供会话上下文浏览 API（树：workspace / skills / memory 等）；面板 SHALL 支持只读浏览，并对约定路径（workspace 文件、用户记忆）提供编辑能力（与实现一致）。Purpose 与实现冲突时以可编辑 Requirement 为准。
+系统 SHALL 提供会话上下文浏览 API（树：workspace / skills / memory 等）；面板 SHALL 支持只读浏览，并为可内联预览的文本文件（含 Markdown、代码、纯文本）提供**下载**与**编辑保存**操作；Office / PDF 等复杂格式 SHALL 仅通过 artifact URL 打开，不提供内联编辑。
+
+系统 SHALL 提供 `PUT /api/chat/sessions/{session_id}/workspace/file`（Cookie Session 认证 + CSRF，与 `user-platform` 一致），请求体含 `path` 与 `content`，写入范围与只读 API 一致；单文件大小上限与读限制一致（512KB）。
+
+对 `USER.md` / `AGENTS.md`：面板编辑 SHALL 继续可用，作为相对设置页主入口的兼容路径（设置页为产品主入口，见 `user-settings`）；产品文案 MAY 提示用户前往「个人与 Agent 设置」管理画像与偏好。当面板展示用户根下的 `USER.md` 或 `AGENTS.md` 时，UI SHALL 提供「在设置中打开」或等价操作，导航至设置壳对应 `profile` / `memory` section。
 
 认证 SHALL 使用 Session Cookie（见 `user-platform`），**SHALL NOT** 要求 Bearer JWT。
 
@@ -71,7 +75,22 @@ Composer SHALL 提供 slash / mention 选择器；发送载荷 MAY 含 `mentions
 - **WHEN** session workspace 存在 `report.md`
 - **THEN** 上下文树 SHALL 暴露对应节点（UI key 可为 `sessions/{sid}/workspace/report.md`）
 
-#### Scenario: 编辑 USER.md
+#### Scenario: 保存工作区 Markdown
 
-- **WHEN** 用户经面板保存 `USER.md`
-- **THEN** 磁盘 `.data/users/{uid}/USER.md` SHALL 更新，且后续 `/memory/USER.md` 读取可见新内容
+- **WHEN** 用户在面板编辑 `sessions/{id}/workspace/report.md` 并点击保存
+- **THEN** SHALL 调用 PUT API 写回磁盘，且预览区展示最新内容
+
+#### Scenario: 保存用户记忆文件
+
+- **WHEN** 用户经面板编辑 `USER.md` 或 `AGENTS.md` 并保存
+- **THEN** SHALL 调用 PUT API 写回 `users/{user_id}/` 下对应文件，且后续 `/memory/USER.md` 读取可见新内容
+
+#### Scenario: 从面板跳转画像设置
+
+- **WHEN** 用户在上下文树选中 `USER.md` 并触发「在设置中打开」
+- **THEN** 系统 SHALL 导航至设置壳且 section 为 `profile`
+
+#### Scenario: 复杂文件无编辑入口
+
+- **WHEN** 用户选中 `.docx` 或 `.pdf`
+- **THEN** UI SHALL 打开 artifact 或下载，**SHALL NOT** 展示内联编辑器

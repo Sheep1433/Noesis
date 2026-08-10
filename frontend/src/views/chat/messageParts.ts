@@ -3,6 +3,14 @@
  */
 
 export type ToolRunStatus = 'running' | 'success' | 'error'
+export type ToolLifecycleState =
+  | 'running'
+  | 'approval_pending'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'rejected'
+  | 'cancelled'
 
 export interface TextUiPart {
   id: string
@@ -28,9 +36,14 @@ export interface ToolUiPart {
   input: Record<string, unknown>
   output: string
   status: ToolRunStatus
+  state: ToolLifecycleState
   error?: string | null
   errorCategory?: string | null
   duration_ms?: number
+  outcome?: string | null
+  exit_code?: number
+  timed_out?: boolean
+  truncated?: boolean
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
   parent_task_call_id?: string
   /** HITL 审批/澄清状态（可选扩展） */
@@ -42,7 +55,31 @@ export interface ToolUiPart {
   } | null
 }
 
-export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart
+export interface RetrievalResultUi {
+  evidence_id: string
+  source_type?: 'knowledge_base' | 'web'
+  document_id?: string
+  document_version_id?: string
+  segment_id?: string
+  collection_name?: string
+  url?: string
+  title: string
+  excerpt: string
+  locator?: Record<string, unknown> | null
+  score?: number | null
+}
+
+export interface RetrievalUiPart {
+  id: string
+  type: 'retrieval'
+  tool_call_id: string
+  query: string
+  results: RetrievalResultUi[]
+  truncated?: boolean
+  parent_task_call_id?: string
+}
+
+export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart | RetrievalUiPart
 
 export function part_parent_task_call_id(part: UiPart): string | undefined {
   const raw = part.parent_task_call_id
@@ -73,6 +110,60 @@ function coerceToolStatus(p: Record<string, unknown>): ToolRunStatus {
     return 'running'
   }
   return 'success'
+}
+
+function parseToolState(p: Record<string, unknown>): ToolLifecycleState {
+  const state = p.state
+  if (
+    state === 'running'
+    || state === 'approval_pending'
+    || state === 'succeeded'
+    || state === 'failed'
+    || state === 'timed_out'
+    || state === 'rejected'
+    || state === 'cancelled'
+  ) {
+    return state
+  }
+  throw new Error('工具状态协议错误')
+}
+
+export function isTerminalToolState(state: ToolLifecycleState): boolean {
+  return !['running', 'approval_pending'].includes(state)
+}
+
+export const TOOL_STATE_LABELS: Record<ToolLifecycleState, string> = {
+  running: '正在执行',
+  approval_pending: '等待确认',
+  succeeded: '已完成',
+  failed: '执行失败',
+  timed_out: '执行超时',
+  rejected: '已拒绝',
+  cancelled: '已停止',
+}
+
+export function assistantToolFailureSummary(parts: UiPart[]): {
+  hasFailure: boolean
+  hasFinalText: boolean
+} {
+  let lastToolIndex = -1
+  parts.forEach((part, index) => {
+    if (part.type === 'tool') {
+      lastToolIndex = index
+    }
+  })
+  return {
+    hasFailure: parts.some((part) => part.type === 'tool'
+      && ['failed', 'timed_out', 'rejected', 'cancelled'].includes(part.state)),
+    hasFinalText: parts.some((part, index) => index > lastToolIndex
+      && part.type === 'text'
+      && Boolean(part.content.trim())),
+  }
+}
+
+export function shouldShowAssistantToolFailureBlocker(parts: UiPart[], runIsActive: boolean): boolean {
+  const summary = assistantToolFailureSummary(parts)
+  return !runIsActive && summary.hasFailure && !summary.hasFinalText
 }
 
 /** 将已落库的整段 text（含成对标签）拆成 text / reasoning 部件，供历史列表与折叠 UI 使用 */
@@ -236,6 +327,39 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         status: String(rec.status || 'completed'),
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
       })
+    } else if (rec.type === 'retrieval') {
+      const results = Array.isArray(rec.results)
+        ? rec.results.flatMap((raw): RetrievalResultUi[] => {
+            if (!raw || typeof raw !== 'object') {
+              return []
+            }
+            const item = raw as Record<string, unknown>
+            if (typeof item.evidence_id !== 'string' || typeof item.excerpt !== 'string') {
+              return []
+            }
+            return [{
+              evidence_id: item.evidence_id,
+              source_type: item.source_type === 'web' ? 'web' : 'knowledge_base',
+              document_id: String(item.document_id ?? ''),
+              document_version_id: String(item.document_version_id ?? ''),
+              segment_id: String(item.segment_id ?? ''),
+              collection_name: typeof item.collection_name === 'string' ? item.collection_name : undefined,
+              url: typeof item.url === 'string' ? item.url : undefined,
+              title: String(item.title ?? ''),
+              excerpt: item.excerpt,
+              locator: item.locator && typeof item.locator === 'object' ? item.locator as Record<string, unknown> : null,
+              score: item.score == null ? null : Number(item.score),
+            }]
+          })
+        : []
+      parts.push({
+        id,
+        type: 'retrieval',
+        tool_call_id: String(rec.tool_call_id ?? ''),
+        query: String(rec.query ?? ''),
+        results,
+        truncated: Boolean(rec.truncated),
+      })
     } else if (rec.type === 'tool') {
       const input = normalizeToolPartInput(rec.input)
       const hitlRaw = rec.hitl
@@ -251,7 +375,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
               : undefined,
           }
         : undefined
-      parts.push({
+      const toolPart: ToolUiPart = {
         id,
         type: 'tool',
         tool_call_id: typeof rec.tool_call_id === 'string' ? rec.tool_call_id : undefined,
@@ -259,12 +383,48 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         input,
         output: typeof rec.output === 'string' ? rec.output : '',
         status: coerceToolStatus(rec),
+        state: parseToolState(rec),
         error: rec.error != null ? String(rec.error) : null,
         errorCategory: rec.errorCategory != null ? String(rec.errorCategory) : null,
         duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
+        outcome: rec.outcome != null ? String(rec.outcome) : null,
+        exit_code: rec.exit_code != null ? Number(rec.exit_code) : undefined,
+        timed_out: rec.timed_out != null ? Boolean(rec.timed_out) : undefined,
+        truncated: rec.truncated != null ? Boolean(rec.truncated) : undefined,
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
         ...(hitl ? { hitl } : {}),
-      })
+      }
+      const toolCallId = toolPart.tool_call_id
+      let existingIndex = toolCallId
+        ? parts.findIndex((part) => part.type === 'tool' && part.tool_call_id === toolCallId)
+        : -1
+      if (existingIndex === -1 && !toolPart.hitl) {
+        const hitlCandidates = parts
+          .map((part, index) => ({ part, index }))
+          .filter(({ part }) => part.type === 'tool'
+            && !isTerminalToolState(part.state)
+            && Boolean(part.hitl)
+            && part.name === toolPart.name
+            && JSON.stringify(part.input) === JSON.stringify(toolPart.input))
+        if (hitlCandidates.length === 1) {
+          existingIndex = hitlCandidates[0].index
+        }
+      }
+      if (existingIndex === -1) {
+        parts.push(toolPart)
+      } else {
+        const existing = parts[existingIndex] as ToolUiPart
+        parts[existingIndex] = {
+          ...existing,
+          ...toolPart,
+          id: existing.id,
+          tool_call_id: existing.tool_call_id || toolPart.tool_call_id,
+          name: toolPart.name || existing.name,
+          input: Object.keys(toolPart.input).length > 0 ? toolPart.input : existing.input,
+          output: toolPart.output || existing.output,
+          hitl: { ...(existing.hitl || {}), ...(toolPart.hitl || {}) },
+        }
+      }
     }
   }
   return { version: 1, parts: expandRedactedThinkingInParts(parts) }
@@ -284,6 +444,34 @@ export function syncLegacyFieldsFromParts(parts: UiPart[]): { content: string, r
   return { content, reasoning: reasoning || undefined }
 }
 
+export function appendRetrievalPart(parts: UiPart[], raw: Record<string, unknown>): UiPart[] {
+  const normalized = normalizeApiContent({ parts: [{ ...raw, type: 'retrieval' }] }).parts[0]
+  if (!normalized || normalized.type !== 'retrieval') {
+    return parts
+  }
+  const index = parts.findIndex((part) => part.type === 'retrieval' && part.id === normalized.id)
+  if (index === -1) {
+    return [...parts, normalized]
+  }
+  const next = [...parts]
+  next[index] = normalized
+  return next
+}
+
+/**
+ * 取最后一段顶层正文文本（最终回答），用于「复制」。
+ * 排除 reasoning / tool 与嵌套 subagent 子 part，避免工具调用信息混入。
+ */
+export function extractLastTopLevelText(parts: UiPart[]): string {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
+    if (p.type === 'text' && !part_parent_task_call_id(p)) {
+      return p.content || ''
+    }
+  }
+  return ''
+}
+
 /** 是否仍有流式中的正文 / 思考 / 运行中的工具（用于统一气泡底部工具栏仅在结束时展示） */
 export function assistantPartsStillStreaming(parts: UiPart[]): boolean {
   return parts.some((p) => {
@@ -300,7 +488,10 @@ export function assistantPartsStillStreaming(parts: UiPart[]): boolean {
   })
 }
 
-function finalizeStreamingParts(parts: UiPart[], toolRunningAs: 'success' | 'error'): UiPart[] {
+function finalizeStreamingParts(
+  parts: UiPart[],
+  unresolvedToolState: 'failed' | 'cancelled',
+): UiPart[] {
   return parts.map((p) => {
     if (p.type === 'text' && p.status === 'streaming') {
       return { ...p, status: 'completed' }
@@ -308,22 +499,21 @@ function finalizeStreamingParts(parts: UiPart[], toolRunningAs: 'success' | 'err
     if (p.type === 'reasoning' && p.status === 'streaming') {
       return { ...p, status: 'completed' }
     }
-    if (p.type === 'tool' && p.status === 'running') {
-      if (toolRunningAs === 'error') {
-        return {
-          ...p,
-          status: 'error',
-          error: p.error || '工具未返回结果',
-        }
+    if (p.type === 'tool' && !isTerminalToolState(p.state)) {
+      return {
+        ...p,
+        status: 'error',
+        state: unresolvedToolState,
+        outcome: unresolvedToolState,
+        error: p.error || (unresolvedToolState === 'cancelled' ? '本次操作已停止' : '工具未返回结果'),
       }
-      return { ...p, status: 'success' }
     }
     return p
   }) as UiPart[]
 }
 
 export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
-  return finalizeStreamingParts(parts, 'success')
+  return finalizeStreamingParts(parts, 'failed')
 }
 
 const USER_STOP_TOOL_ERROR = '用户已停止生成'
@@ -345,12 +535,11 @@ export function appendUserStopNotice(parts: UiPart[]): UiPart[] {
   if (partsContainUserStopNotice(parts)) {
     return parts
   }
-  const completed = finalizePartsOnStreamError(parts).map((p) => {
-    if (p.type === 'tool' && p.status === 'error' && p.error === '工具未返回结果') {
-      return { ...p, error: USER_STOP_TOOL_ERROR }
-    }
-    return p
-  }) as UiPart[]
+  const completed = finalizeStreamingParts(parts, 'cancelled').map((p) =>
+    p.type === 'tool' && p.state === 'cancelled'
+      ? { ...p, error: USER_STOP_TOOL_ERROR }
+      : p,
+  ) as UiPart[]
 
   const hasProse = completed.some((p) => {
     if (p.type === 'text' || p.type === 'reasoning') {
@@ -396,7 +585,7 @@ export function appendUserStopNotice(parts: UiPart[]): UiPart[] {
 
 /** 流式失败收尾：未完成工具标为 error，避免误显示「完成」。 */
 export function finalizePartsOnStreamError(parts: UiPart[]): UiPart[] {
-  return finalizeStreamingParts(parts, 'error')
+  return finalizeStreamingParts(parts, 'failed')
 }
 
 function hasToolErrorPart(parts: UiPart[]): boolean {
@@ -407,6 +596,15 @@ export interface TokenUsageSummary {
   input_tokens: number
   output_tokens: number
   total_tokens?: number
+  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
+  input_token_details?: { cache_read?: number, cache_write?: number }
+  output_token_details?: { reasoning?: number }
+  /** 按 caller/model 归因摘要（调试视图按需展示） */
+  attribution?: {
+    cumulative?: Record<string, number>
+    by_caller?: Record<string, Record<string, number>>
+    by_model?: Record<string, Record<string, number>>
+  }
 }
 
 export interface ContextWindowSnapshot {
@@ -427,10 +625,6 @@ export function hasValidContextWindow(context: unknown): context is ContextWindo
   return max > 0 && current >= 0 && !Number.isNaN(pct)
 }
 
-export function formatContextWindowTooltip(context: ContextWindowSnapshot): string {
-  return `${formatTokenCount(context.current_tokens)} / ${formatTokenCount(context.max_tokens)}`
-}
-
 export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
   if (!usage || typeof usage !== 'object') {
     return false
@@ -442,6 +636,12 @@ export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
 }
 
 export function formatTokenCount(n: number): string {
+  if (n >= 1_000_000_000) {
+    return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`
+  }
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  }
   if (n >= 1000) {
     return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`
   }
@@ -458,7 +658,7 @@ export function formatDurationMs(ms: number): string {
 
 export function formatUsageSummary(usage: TokenUsageSummary): string {
   const total = usage.total_tokens ?? usage.input_tokens + usage.output_tokens
-  return `↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
+  return `本轮用量 ↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
 }
 
 const MODEL_API_TIMEOUT_RE = /readtimeout|writetimeout|connecttimeout|pooltimeout|streamchunktimeouterror|stream_chunk_timeout|apitimeout|request timed out|timed out waiting/i
@@ -820,6 +1020,7 @@ export function upsertToolInputPart(
     input,
     output: '',
     status: 'running',
+    state: 'running',
     ...(parentId ? { parent_task_call_id: parentId } : {}),
   })
   return next
@@ -834,10 +1035,16 @@ export function applyToolOutput(
     status: 'success' | 'error'
     duration_ms?: number
     errorCategory?: string
+    state?: ToolLifecycleState
+    outcome?: string
+    exit_code?: number
+    timed_out?: boolean
+    truncated?: boolean
   },
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
+  const state = payload.state ?? (payload.status === 'error' ? 'failed' : 'succeeded')
   const status: ToolRunStatus = payload.status === 'error' ? 'error' : 'success'
   if (idx === -1) {
     next.push({
@@ -848,20 +1055,33 @@ export function applyToolOutput(
       input: {},
       output: payload.output,
       status,
+      state,
       error: payload.error,
       errorCategory: payload.errorCategory,
       duration_ms: payload.duration_ms,
+      outcome: payload.outcome,
+      exit_code: payload.exit_code,
+      timed_out: payload.timed_out,
+      truncated: payload.truncated,
     })
     return next
   }
   const tp = next[idx] as ToolUiPart
+  if (isTerminalToolState(tp.state) && tp.state !== state) {
+    return next
+  }
   next[idx] = {
     ...tp,
     output: payload.output,
     error: payload.error,
     errorCategory: payload.errorCategory ?? tp.errorCategory,
     status,
+    state,
     duration_ms: payload.duration_ms ?? tp.duration_ms,
+    outcome: payload.outcome ?? tp.outcome,
+    exit_code: payload.exit_code ?? tp.exit_code,
+    timed_out: payload.timed_out ?? tp.timed_out,
+    truncated: payload.truncated ?? tp.truncated,
   }
   return next
 }
@@ -890,6 +1110,7 @@ export function applyHitlPendingParts(
     next[idx] = {
       ...tp,
       status: 'running',
+      state: 'approval_pending',
       hitl: {
         kind: payload.kind,
         status: 'pending',

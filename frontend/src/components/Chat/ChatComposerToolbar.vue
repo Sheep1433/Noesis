@@ -30,7 +30,7 @@ const selectedMcpServers = defineModel<string[]>('mcpServers', { default: () => 
 const selectedSkills = defineModel<string[]>('enabledSkills', { default: () => [] })
 const skillsAllEnabled = defineModel<boolean>('skillsAllEnabled', { default: true })
 
-const showKbScope = computed(() => props.qaType === 'COMMON_QA')
+const showKbScope = computed(() => props.qaType === 'COMMON_QA' || props.qaType === 'SUPER_AGENT_QA')
 const showSkillsMenu = computed(() => props.qaType === 'SUPER_AGENT_QA')
 const showFileUpload = computed(() =>
   props.qaType === 'COMMON_QA'

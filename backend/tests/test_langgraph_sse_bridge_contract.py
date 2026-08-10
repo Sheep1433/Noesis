@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
-from domain.chat.streaming.tool_failure import ToolInfrastructureError
-from domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
-from domain.chat.message_builder import AssistantMessageBuilder, ToolPart
+from noesis.domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
+from noesis.errors.tool_failure import ToolInfrastructureError
+from noesis.domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
+from noesis.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
 
 
 def _ctx() -> Dict[str, Any]:
@@ -61,6 +61,109 @@ def test_message_start_and_text_delta_shapes() -> None:
     assert "part_id" in td
 
 
+def test_kb_retrieval_event_preserves_sources() -> None:
+    bridge = LangGraphSseBridge("sess-citation")
+    builder = AssistantMessageBuilder(
+        session_id="sess-citation",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    start = {
+        "event": "on_tool_start",
+        "name": "search_knowledge_base",
+        "run_id": "call-1",
+        "data": {"input": {"query": "验证码"}},
+    }
+    bridge.process_item(start, builder, ctx)
+    result = {
+        "results": [{
+            "collection_name": "requirements",
+            "document_id": "doc_1",
+            "document_version_id": "docv_1",
+            "segment_id": "seg_1",
+            "file_name": "登录.md",
+            "excerpt": "验证码五分钟有效",
+            "citable": True,
+        }],
+    }
+    end = {
+        "event": "on_tool_end",
+        "name": "search_knowledge_base",
+        "run_id": "call-1",
+        "data": {"output": json.dumps(result, ensure_ascii=False)},
+    }
+    retrieval_lines = bridge.process_item(end, builder, ctx)
+    retrieval_events = _data_json_objects("".join(retrieval_lines))
+    retrieval = next(item for item in retrieval_events if item["type"] == "retrieval-results-available")
+    assert retrieval["tool_call_id"] == "call-1"
+    assert retrieval["results"][0]["evidence_id"].startswith("ev_")
+    assert retrieval["results"][0]["tool_call_ids"] == ["call-1"]
+
+def test_reasoning_can_continue_after_retrieval_result() -> None:
+    bridge = LangGraphSseBridge("sess-retrieval-reasoning")
+    builder = AssistantMessageBuilder(
+        session_id="sess-retrieval-reasoning",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "web_search",
+            "run_id": "call-search",
+            "data": {"input": {"query": "LLM wiki"}},
+        },
+        builder,
+        ctx,
+    )
+    bridge.process_item(
+        {
+            "event": "on_tool_end",
+            "name": "web_search",
+            "run_id": "call-search",
+            "data": {
+                "output": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "url": "https://example.com/llm-wiki",
+                                "title": "LLM Wiki",
+                                "excerpt": "A research project",
+                                "citable": True,
+                            }
+                        ]
+                    }
+                )
+            },
+        },
+        builder,
+        ctx,
+    )
+
+    class _ReasonChunk:
+        content = ""
+        additional_kwargs = {"reasoning_content": "继续分析检索结果"}
+
+    lines = bridge.process_item(
+        {
+            "event": "on_chat_model_stream",
+            "run_id": "run-after-search",
+            "data": {"chunk": _ReasonChunk()},
+        },
+        builder,
+        ctx,
+    )
+
+    assert any(
+        event.get("type") == "reasoning-delta"
+        for event in _data_json_objects("".join(lines))
+    )
+    assert [part["type"] for part in builder.to_dict()["parts"]][-2:] == [
+        "retrieval",
+        "reasoning",
+    ]
+
+
 def test_message_start_does_not_include_client_stop_token() -> None:
     bridge = LangGraphSseBridge("sess-stop")
     builder = AssistantMessageBuilder(session_id="sess-stop", message_id=bridge.assistant_message_id)
@@ -82,27 +185,24 @@ def test_message_start_with_langfuse_hint() -> None:
 
 
 def test_context_update_emitted_with_usage_update() -> None:
-    from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
+    from noesis.runtime.observability import ContextMetricsRegistry
 
     bridge = LangGraphSseBridge("sess-usage-ctx")
     builder = AssistantMessageBuilder(session_id="sess-usage-ctx", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    ContextMetricsRegistry.put(
-        "sess-usage-ctx",
-        {"current_tokens": 1200, "max_tokens": 128000, "used_percentage": 1},
-    )
     parts: List[str] = []
     parts.extend(bridge.process_item({"type": "text-delta", "text_delta": "hi"}, builder, ctx))
-    parts.extend(
-        bridge.process_item(
-            {
-                "event": "on_chat_model_end",
-                "data": {"output": MagicMock(usage_metadata={"input_tokens": 10, "output_tokens": 5})},
-            },
-            builder,
-            ctx,
+    with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+        parts.extend(
+            bridge.process_item(
+                {
+                    "event": "on_chat_model_end",
+                    "data": {"output": MagicMock(usage_metadata={"input_tokens": 10, "output_tokens": 5})},
+                },
+                builder,
+                ctx,
+            )
         )
-    )
     blob = "".join(parts)
     assert "event: usage-update\n" in blob
     assert "event: context-update\n" in blob
@@ -110,25 +210,23 @@ def test_context_update_emitted_with_usage_update() -> None:
 
 
 def test_context_update_event_shape() -> None:
-    from agent.middlewares.context_metrics_middleware import ContextMetricsRegistry
+    """on_chat_model_end 后 context-update 携带 provider 真实 input_tokens。"""
+    from noesis.runtime.observability import ContextMetricsRegistry
 
     bridge = LangGraphSseBridge("sess-ctx")
     builder = AssistantMessageBuilder(session_id="sess-ctx", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    ContextMetricsRegistry.put(
-        "sess-ctx",
-        {"current_tokens": 87040, "max_tokens": 128000, "used_percentage": 68},
-    )
-    blob = "".join(
-        bridge.process_item(
-            {
-                "event": "on_chat_model_end",
-                "data": {"output": MagicMock(usage_metadata={"input_tokens": 1, "output_tokens": 1})},
-            },
-            builder,
-            ctx,
+    with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+        blob = "".join(
+            bridge.process_item(
+                {
+                    "event": "on_chat_model_end",
+                    "data": {"output": MagicMock(usage_metadata={"input_tokens": 87040, "output_tokens": 100})},
+                },
+                builder,
+                ctx,
+            )
         )
-    )
     assert "event: context-update\n" in blob
     cu = [o for o in _data_json_objects(blob) if o.get("type") == "context-update"][0]
     assert cu["message_id"] == bridge.assistant_message_id
@@ -174,7 +272,7 @@ def test_error_event_type() -> None:
     blob = "".join(bridge.process_item({"type": "__tw_error__", "content": "oops"}, builder, ctx))
     assert "event: error\n" in blob
     err = [o for o in _data_json_objects(blob) if o.get("type") == "error"][0]
-    assert err["error"] == "oops"
+    assert err["error"] == "操作失败，请稍后重试。"
     assert err["message_id"] == bridge.assistant_message_id
 
 
@@ -259,6 +357,45 @@ def test_tool_output_duration_ms() -> None:
     assert tool_out[0]["duration_ms"] >= 0
     tool_parts = [p for p in builder.to_dict()["parts"] if p.get("type") == "tool"]
     assert tool_parts[0].get("duration_ms") is not None
+
+
+def test_tool_start_omits_injected_runtime_from_sse_and_builder() -> None:
+    class ToolRuntime:
+        pass
+
+    bridge = LangGraphSseBridge("sess-runtime")
+    builder = AssistantMessageBuilder(
+        session_id="sess-runtime",
+        message_id=bridge.assistant_message_id,
+    )
+    lines = bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "web_search",
+            "run_id": "run-search",
+            "data": {
+                "input": {
+                    "query": "LLM wiki",
+                    "limit": 8,
+                    "runtime": ToolRuntime(),
+                }
+            },
+        },
+        builder,
+        _ctx(),
+    )
+
+    available = next(
+        event
+        for event in _data_json_objects("".join(lines))
+        if event.get("type") == "tool-input-available"
+    )
+    assert available["input"] == {"query": "LLM wiki", "limit": 8}
+    assert json.loads(available["input_text"]) == available["input"]
+    saved_tool = next(
+        part for part in builder.to_dict()["parts"] if part.get("type") == "tool"
+    )
+    assert saved_tool["input"] == available["input"]
 
 
 def test_usage_update_and_finish_cumulative() -> None:
@@ -349,7 +486,87 @@ def test_usage_dedup_same_run_id() -> None:
     assert len(usage_updates) == 1
 
 
-def test_chat_model_end_flushes_unstreamed_text() -> None:
+def test_usage_dedup_same_model_run_across_contexts() -> None:
+    """同一模型 run 在子 Agent context 变化时也不能再次累计。"""
+    bridge = LangGraphSseBridge("sess-cross-context-dedup")
+    builder = AssistantMessageBuilder(
+        session_id="sess-cross-context-dedup",
+        message_id=bridge.assistant_message_id,
+    )
+
+    class _Output:
+        usage_metadata = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+
+    first = _ctx()
+    second = _ctx()
+    first_parts = bridge.process_item(
+        {"event": "on_chat_model_end", "run_id": "run-cross-1", "data": {"output": _Output()}},
+        builder,
+        first,
+    )
+    second_parts = bridge.process_item(
+        {"event": "on_chat_model_end", "run_id": "run-cross-1", "data": {"output": _Output()}},
+        builder,
+        second,
+    )
+
+    first_updates = [o for o in _data_json_objects("".join(first_parts)) if o.get("type") == "usage-update"]
+    second_updates = [o for o in _data_json_objects("".join(second_parts)) if o.get("type") == "usage-update"]
+    assert first_updates[-1]["usage"]["total_tokens"] == 120
+    assert not second_updates
+
+
+def test_usage_end_is_authoritative_over_partial_stream_chunk() -> None:
+    """流式 chunk 携带部分 usage（run_id R）时，on_chat_model_end 的完整 usage 须覆盖之，不得被去重丢弃。
+
+    复现线上 ↓2 症状：部分 stream chunk 的 output_tokens 先进入累计并被 run_id 标记，
+    导致终态完整 usage 被同 run_id 去重跳过，output 停留在部分值。
+    """
+    bridge = LangGraphSseBridge("sess-partial-usage")
+    builder = AssistantMessageBuilder(session_id="sess-partial-usage", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+
+    class _PartialChunk:
+        content = ""
+        # 部分 usage：input 已知、output 仅 2、无 total
+        usage_metadata = {"input_tokens": 21400, "output_tokens": 2}
+
+    class _CompleteOutput:
+        # 终态完整 usage：output 为真实生成量
+        usage_metadata = {
+            "input_tokens": 21400,
+            "output_tokens": 593,
+            "total_tokens": 21993,
+            "output_token_details": {"reasoning_tokens": 1200},
+        }
+
+    run_id = "run-partial-1"
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_stream", "run_id": run_id, "data": {"chunk": _PartialChunk()}},
+            builder,
+            ctx,
+        )
+    )
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": run_id, "data": {"output": _CompleteOutput()}},
+            builder,
+            ctx,
+        )
+    )
+
+    objs = _data_json_objects("".join(parts))
+    usage_updates = [o for o in objs if o.get("type") == "usage-update"]
+    assert usage_updates, "expected at least one usage-update"
+    final = usage_updates[-1]["usage"]
+    # 终态 output 须反映真实生成量，而非被部分 stream chunk 冻结在 2
+    assert final["output_tokens"] == 593
+    assert final["total_tokens"] == 21993
+
+
+
     """非流式或空 chunk 场景：终态 AIMessage 正文须在 on_chat_model_end 补发 text-delta。"""
     bridge = LangGraphSseBridge("sess-end-text")
     builder = AssistantMessageBuilder(session_id="sess-end-text", message_id=bridge.assistant_message_id)
@@ -654,6 +871,106 @@ def test_bridge_raw_to_sse_lines_skips_end_sentinel() -> None:
     ) == [": keepalive\n\n"]
 
 
+def test_execute_nonzero_exit_is_projected_as_tool_error() -> None:
+    bridge = LangGraphSseBridge("sess-exit")
+    builder = AssistantMessageBuilder(session_id="sess-exit", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "execute",
+            "run_id": "run-exec",
+            "data": {"input": {"command": "false"}},
+        },
+        builder,
+        ctx,
+    )
+
+    class _FailedOutput:
+        status = "success"
+        content = "\n[Command failed with exit code 1]"
+
+    lines = bridge.process_item(
+        {
+            "event": "on_tool_end",
+            "name": "execute",
+            "run_id": "run-exec",
+            "data": {"output": _FailedOutput()},
+        },
+        builder,
+        ctx,
+    )
+    events = _data_json_objects("".join(lines))
+    tool_output = next(item for item in events if item["type"] == "tool-output-available")
+    assert tool_output["status"] == "success"
+    assert tool_output["state"] == "failed"
+    assert tool_output["outcome"] == "command_failed"
+    assert tool_output["exit_code"] == 1
+    assert tool_output["errorCategory"] == "command_failed"
+    saved = next(part for part in builder.to_dict()["parts"] if part.get("name") == "execute")
+    assert saved["status"] == "success"
+    assert saved["state"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_state", "expected_outcome"),
+    [
+        ("Error: Command timed out\n[Command failed with exit code 124]", "timed_out", "timed_out"),
+        ("the word failed is ordinary output\n[Command succeeded with exit code 0]", "succeeded", "ok"),
+        ("optional command failed but shell recovered\n[Command succeeded with exit code 0]", "succeeded", "ok"),
+    ],
+)
+def test_execute_uses_exit_protocol_not_output_words(
+    content: str,
+    expected_state: str,
+    expected_outcome: str,
+) -> None:
+    bridge = LangGraphSseBridge("sess-exit-protocol")
+    builder = AssistantMessageBuilder()
+    ctx = _ctx()
+    bridge.process_item({
+        "event": "on_tool_start",
+        "name": "execute",
+        "run_id": "run-exec-protocol",
+        "data": {"input": {"command": "command"}},
+    }, builder, ctx)
+
+    class _Output:
+        status = "success"
+
+        def __init__(self, value: str) -> None:
+            self.content = value
+
+    lines = bridge.process_item({
+        "event": "on_tool_end",
+        "name": "execute",
+        "run_id": "run-exec-protocol",
+        "data": {"output": _Output(content)},
+    }, builder, ctx)
+    event = next(
+        item for item in _data_json_objects("".join(lines))
+        if item["type"] == "tool-output-available"
+    )
+    assert event["state"] == expected_state
+    assert event["outcome"] == expected_outcome
+
+
+def test_abort_with_error_reason_emits_error_without_success_finish() -> None:
+    bridge = LangGraphSseBridge("sess-abort-error")
+    builder = AssistantMessageBuilder()
+    ctx = _ctx()
+    first = bridge.process_item(
+        {"type": "abort", "finish_reason": "error", "content": "internal stack"},
+        builder,
+        ctx,
+    )
+    final = bridge.finalize()
+    blob = "".join(first + final)
+    assert "event: error" in blob
+    assert "event: finish" not in blob
+    assert "data: [DONE]" in blob
+
+
 def test_tool_error_uses_inflight_tool_call_id() -> None:
     """on_tool_error 的 tool_call_id 应与 tool-input 一致，避免前端出现孤儿工具块。"""
     bridge = LangGraphSseBridge("sess-tool-err")
@@ -881,3 +1198,402 @@ def test_reasoning_disabled_when_show_thinking_off() -> None:
     )
     objs = _data_json_objects(text)
     assert not any(o.get("type", "").startswith("reasoning") for o in objs)
+
+
+# ---------- task 3.5: 流式 chunk / model end / 重放 / 无 usage / 并行子 Agent 聚合 ----------
+
+
+def test_usage_aggregates_across_stream_chunk_and_model_end() -> None:
+    """流式 chunk 携带部分 usage + model end 携带完整 usage：终态权威值不被丢弃。
+
+    usage 只在 on_chat_model_end 累计（stream chunk 不累计），避免部分值冻结。
+    """
+    bridge = LangGraphSseBridge("sess-stream-end")
+    builder = AssistantMessageBuilder(session_id="sess-stream-end", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _PartialChunk:
+        content = "hi"
+        usage_metadata = {"input_tokens": 100, "output_tokens": 2}  # 部分
+
+    class _CompleteOutput:
+        usage_metadata = {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
+
+    run_id = "run-se-1"
+    parts: List[str] = []
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_stream", "run_id": run_id, "data": {"chunk": _PartialChunk()}},
+            builder, ctx,
+        )
+    )
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": run_id, "data": {"output": _CompleteOutput()}},
+            builder, ctx,
+        )
+    )
+
+    objs = _data_json_objects("".join(parts))
+    usage_updates = [o for o in objs if o.get("type") == "usage-update"]
+    assert usage_updates
+    # 终态完整 usage 被采用（output=50，不是部分值 2）
+    assert usage_updates[-1]["usage"]["output_tokens"] == 50
+    assert usage_updates[-1]["usage"]["total_tokens"] == 150
+
+
+def test_usage_repeated_model_end_same_run_id_deduped() -> None:
+    """同一 run_id 的 model end 重放/重复事件只累计一次。"""
+    bridge = LangGraphSseBridge("sess-replay")
+    builder = AssistantMessageBuilder(session_id="sess-replay", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _Output:
+        usage_metadata = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+
+    run_id = "run-replay-1"
+    parts: List[str] = []
+    for _ in range(3):
+        parts.extend(
+            bridge.process_item(
+                {"event": "on_chat_model_end", "run_id": run_id, "data": {"output": _Output()}},
+                builder, ctx,
+            )
+        )
+
+    objs = _data_json_objects("".join(parts))
+    usage_updates = [o for o in objs if o.get("type") == "usage-update"]
+    # 只累计一次
+    assert len(usage_updates) == 1
+    assert usage_updates[0]["usage"]["input_tokens"] == 100
+
+
+def test_provider_no_usage_emits_no_usage_update() -> None:
+    """Provider 无 usage_metadata：不发 usage-update，不阻断文本流。"""
+    bridge = LangGraphSseBridge("sess-no-usage")
+    builder = AssistantMessageBuilder(session_id="sess-no-usage", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _OutputNoUsage:
+        content = "answer"
+        usage_metadata = None
+
+    parts: List[str] = []
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "run-none", "data": {"output": _OutputNoUsage()}},
+            builder, ctx,
+        )
+    )
+
+    objs = _data_json_objects("".join(parts))
+    assert not any(o.get("type") == "usage-update" for o in objs)
+    # 文本仍正常
+    assert any(o.get("type") == "text-delta" for o in objs)
+
+
+def test_parallel_subagent_usage_aggregated_by_caller() -> None:
+    """并行子 Agent：各自 model call 归 subagent，run 总量求和，finish 附带 attribution。"""
+    bridge = LangGraphSseBridge("sess-parallel-sub")
+    builder = AssistantMessageBuilder(session_id="sess-parallel-sub", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _LeadOutput:
+        usage_metadata = {"input_tokens": 200, "output_tokens": 50, "total_tokens": 250}
+
+    class _SubOutput:
+        usage_metadata = {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130}
+
+    parts: List[str] = []
+    # 主 Agent model call
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "lead-run", "data": {"output": _LeadOutput()}},
+            builder, ctx,
+        )
+    )
+    # task tool start（压栈，让子 Agent model call 归 subagent）
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_tool_start", "run_id": "task-tool-1", "name": "task",
+             "data": {"input": {"tool_call_id": "task-call-1", "description": "sub task 1"}}},
+            builder, ctx,
+        )
+    )
+    # 子 Agent model call（parent_ids 指向 task tool run_id）
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "sub-run-1", "parent_ids": ["task-tool-1"],
+             "data": {"output": _SubOutput()}},
+            builder, ctx,
+        )
+    )
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_tool_end", "run_id": "task-tool-1", "name": "task"},
+            builder, ctx,
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    objs = _data_json_objects("".join(parts))
+    finish_objs = [o for o in objs if o.get("type") == "finish"]
+    assert finish_objs
+    finish = finish_objs[-1]
+    # cumulative = 200 + 100
+    assert finish["usage"]["input_tokens"] == 300
+    # attribution 附带 by_caller
+    assert "attribution" in finish
+    assert finish["attribution"]["by_caller"]["lead_agent"]["input_tokens"] == 200
+    assert finish["attribution"]["by_caller"]["subagent"]["input_tokens"] == 100
+
+
+def test_usage_details_accumulate_across_multiple_calls() -> None:
+    """多次 model call 的 cache/reasoning detail 累计到 cumulative。"""
+    bridge = LangGraphSseBridge("sess-detail-acc")
+    builder = AssistantMessageBuilder(session_id="sess-detail-acc", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _Output1:
+        usage_metadata = {
+            "input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+            "input_token_details": {"cache_read": 60, "cache_creation": 10},
+            "output_token_details": {"reasoning": 5},
+        }
+
+    class _Output2:
+        usage_metadata = {
+            "input_tokens": 80, "output_tokens": 15, "total_tokens": 95,
+            "input_token_details": {"cache_read": 40},
+        }
+
+    parts: List[str] = []
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "d1", "data": {"output": _Output1()}},
+            builder, ctx,
+        )
+    )
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "d2", "data": {"output": _Output2()}},
+            builder, ctx,
+        )
+    )
+
+    objs = _data_json_objects("".join(parts))
+    usage_updates = [o for o in objs if o.get("type") == "usage-update"]
+    final = usage_updates[-1]["usage"]
+    assert final["input_tokens"] == 180
+    assert final["input_token_details"]["cache_read"] == 100
+    assert final["input_token_details"]["cache_write"] == 10
+    assert final["output_token_details"]["reasoning"] == 5
+
+
+# ---------- task 4.1 / 4.2: SSE 字段向后兼容 + 重订阅不重复累计 ----------
+
+
+def test_sse_payloads_preserve_legacy_fields_while_adding_new_ones() -> None:
+    """usage-update/context-update/finish 保留既有字段，新增字段向后兼容。"""
+    bridge = LangGraphSseBridge("sess-compat")
+    builder = AssistantMessageBuilder(session_id="sess-compat", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _Output:
+        usage_metadata = {
+            "input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+            "input_token_details": {"cache_read": 60},
+        }
+
+    parts: List[str] = []
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "run-compat", "data": {"output": _Output()}},
+            builder, ctx,
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    objs = _data_json_objects("".join(parts))
+
+    # usage-update：既有 input/output/total 保留 + 新 details
+    usage_update = next(o for o in objs if o.get("type") == "usage-update")
+    u = usage_update["usage"]
+    assert u["input_tokens"] == 100  # 既有
+    assert u["output_tokens"] == 20  # 既有
+    assert u["total_tokens"] == 120  # 既有
+    assert u["input_token_details"]["cache_read"] == 60  # 新增
+
+    # finish：既有 finish_reason/usage 保留
+    finish = next(o for o in objs if o.get("type") == "finish")
+    assert finish["finish_reason"] == "stop"  # 既有
+    assert finish["usage"]["input_tokens"] == 100  # 既有
+    # message_id 既有
+    assert finish["message_id"] == bridge.assistant_message_id
+
+
+def test_replay_does_not_re_accumulate_usage() -> None:
+    """重订阅 replay 是已编码事件，不重新走 bridge 累计，usage 不重复。
+
+    验证：同一 bridge 实例处理 model end 后，finalize 的 finish.usage 是单次值；
+    重放同一事件序列不会让 usage 翻倍（replay 走 delivery 已编码事件，不重跑 process_item）。
+    """
+    bridge = LangGraphSseBridge("sess-replay-no-dup")
+    builder = AssistantMessageBuilder(session_id="sess-replay-no-dup", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _Output:
+        usage_metadata = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+
+    parts: List[str] = []
+    parts.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "run-no-dup", "data": {"output": _Output()}},
+            builder, ctx,
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    objs = _data_json_objects("".join(parts))
+    finish = next(o for o in objs if o.get("type") == "finish")
+    # 单次累计，未翻倍
+    assert finish["usage"]["input_tokens"] == 100
+    assert finish["usage"]["total_tokens"] == 120
+
+    # 重放同一 run_id 的 model end：bridge 的去重应跳过（seen_run_ids）
+    parts2: List[str] = []
+    parts2.extend(
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": "run-no-dup", "data": {"output": _Output()}},
+            builder, ctx,
+        )
+    )
+    objs2 = _data_json_objects("".join(parts2))
+    # 去重：不产生新的 usage-update
+    assert not any(o.get("type") == "usage-update" for o in objs2)
+
+
+def test_finish_attribution_carried_through_delivery_event() -> None:
+    """finish 的 attribution 字段经 delivery 解析为 RunCompleted.attribution（4.2 恢复路径）。"""
+    from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
+    from noesis.domain.chat.delivery.events import RunCompleted
+
+    finish_frame = (
+        'event: finish\n'
+        'data: {"type":"finish","message_id":"m1","finish_reason":"stop",'
+        '"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120},'
+        '"attribution":{"cumulative":{"input_tokens":100},'
+        '"by_caller":{"lead_agent":{"input_tokens":100}}}}\n\n'
+    )
+    events = parse_sse_line_to_event(finish_frame)
+    completed = next(e for e in events if isinstance(e, RunCompleted))
+    assert completed.usage["input_tokens"] == 100
+    assert completed.attribution["by_caller"]["lead_agent"]["input_tokens"] == 100
+
+
+# ---------- task 4.3 / 4.4: 边界校验 + 持久化不按 token delta 写库 ----------
+
+
+def test_malformed_usage_detail_does_not_block_text_stream() -> None:
+    """异常 detail 字段（非 dict / 非整数）降级，不阻断文本流。"""
+    bridge = LangGraphSseBridge("sess-malformed")
+    builder = AssistantMessageBuilder(session_id="sess-malformed", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _BadOutput:
+        content = "正常正文"
+        usage_metadata = {
+            "input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+            "input_token_details": "not a dict",  # 异常
+            "output_token_details": {"reasoning": "not an int"},  # 异常
+        }
+
+    parts = list(bridge.process_item(
+        {"event": "on_chat_model_end", "run_id": "run-bad", "data": {"output": _BadOutput()}},
+        builder, ctx,
+    ))
+    objs = _data_json_objects("".join(parts))
+    # 文本流不阻断
+    assert any(o.get("type") == "text-delta" for o in objs)
+    # usage 仍可用（平铺字段正常）
+    usage_updates = [o for o in objs if o.get("type") == "usage-update"]
+    assert usage_updates
+    assert usage_updates[-1]["usage"]["input_tokens"] == 100
+    # 异常 detail 不进 payload（非 dict 被跳过）
+    assert "input_token_details" not in usage_updates[-1]["usage"]
+
+
+def test_zero_and_missing_usage_details_distinguished() -> None:
+    """Provider 返回 cache_write=0 与缺失 cache_write 区分：0 保留，缺失不补。"""
+    bridge = LangGraphSseBridge("sess-zero-vs-missing")
+    builder = AssistantMessageBuilder(session_id="sess-zero-vs-missing", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _WithZero:
+        usage_metadata = {
+            "input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+            "input_token_details": {"cache_read": 60, "cache_creation": 0},  # cache_write=0
+        }
+
+    class _Missing:
+        usage_metadata = {
+            "input_tokens": 50, "output_tokens": 10, "total_tokens": 60,
+            "input_token_details": {"cache_read": 30},  # 无 cache_creation
+        }
+
+    parts: List[str] = []
+    parts.extend(bridge.process_item(
+        {"event": "on_chat_model_end", "run_id": "z1", "data": {"output": _WithZero()}},
+        builder, ctx,
+    ))
+    parts.extend(bridge.process_item(
+        {"event": "on_chat_model_end", "run_id": "z2", "data": {"output": _Missing()}},
+        builder, ctx,
+    ))
+
+    objs = _data_json_objects("".join(parts))
+    usage_updates = [o for o in objs if o.get("type") == "usage-update"]
+    final = usage_updates[-1]["usage"]
+    # cache_write: 0 + 缺失 = 0（0 被保留并累计，缺失不补但已有 0）
+    assert final["input_token_details"]["cache_read"] == 90
+    assert final["input_token_details"]["cache_write"] == 0
+
+
+def test_persisted_usage_is_terminal_only_not_per_delta() -> None:
+    """持久化只读终态 last_finish_usage，不按 token delta 写库；attribution/breakdown 不落库。"""
+    bridge = LangGraphSseBridge("sess-persist")
+    bridge.last_finish_usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+    bridge.last_finish_reason = "stop"
+
+    # 终态 usage 是单次快照（last_finish_usage），不是每 delta 累积的中间值
+    assert bridge.last_finish_usage["input_tokens"] == 100
+    assert bridge.last_finish_usage["total_tokens"] == 120
+    # attribution 不在 last_finish_usage（调试字段，只在 finish 事件透传，不落库）
+    assert "attribution" not in bridge.last_finish_usage
+    assert "breakdown" not in bridge.last_finish_usage
+    # last_finish_usage 只在 _emit_finish 时赋值一次（终态），非 per-delta
+    # 验证：未发 finish 时 last_finish_usage 为空
+    fresh_bridge = LangGraphSseBridge("sess-persist-fresh")
+    assert fresh_bridge.last_finish_usage == {}
+
+
+def test_steps_bounded_does_not_grow_unbounded() -> None:
+    """大量 model call：steps 有界，cumulative 仍准确（已在 3.3 测，此处验证 bridge 集成不破坏）。"""
+    bridge = LangGraphSseBridge("sess-bounded-steps")
+    builder = AssistantMessageBuilder(session_id="sess-bounded-steps", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    class _Output:
+        usage_metadata = {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+
+    for i in range(5):
+        bridge.process_item(
+            {"event": "on_chat_model_end", "run_id": f"b-run-{i}", "data": {"output": _Output()}},
+            builder, ctx,
+        )
+    # bridge 处理不报错；collector steps 不超 MAX_STEPS
+    assert len(bridge._usage_collector.steps) == 5  # noqa: SLF001
+    assert bridge._usage_collector.summary()["cumulative"]["input_tokens"] == 5  # noqa: SLF001

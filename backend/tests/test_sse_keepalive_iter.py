@@ -7,17 +7,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config.env import LangfuseConfig
-from domain.chat.delivery.sse import SSE_COMMENT_KEEPALIVE
-from domain.chat.message_builder import AssistantMessageBuilder
-from domain.chat.streaming.bridge import (
+from noesis.config.env import LangfuseConfig
+from noesis.domain.chat.delivery.sse import SSE_COMMENT_KEEPALIVE
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.streaming.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
     MemoryStreamBridge,
     iter_bridge_events,
 )
-from domain.chat.streaming.langgraph_sse import LangGraphSseBridge
-from services.qa_service import _yield_sse_from_agent_bridge
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.services.qa.helpers import _yield_sse_from_agent_bridge
 
 
 @pytest.mark.asyncio
@@ -140,8 +140,8 @@ async def test_test_case_stream_langfuse_context_with_sse_keepalive() -> None:
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=True)
     lines: list[str] = []
     with (
-        patch("config.env.LangfuseConfig", langfuse_cfg),
-        patch("services.qa.helpers.LangfuseConfig", langfuse_cfg),
+        patch("noesis.config.env.LangfuseConfig", langfuse_cfg),
+        patch("noesis.services.qa.helpers.LangfuseConfig", langfuse_cfg),
     ):
         with patch("langfuse.propagate_attributes", return_value=mock_cm):
             async for line in _yield_sse_from_agent_bridge(
@@ -169,7 +169,7 @@ async def test_bridge_error_surfaces_through_orchestrator() -> None:
     bridge = LangGraphSseBridge("sess-err", assistant_message_id="msg-err")
     builder = AssistantMessageBuilder(session_id="sess-err", message_id="msg-err")
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=False)
-    with patch("services.qa.helpers.LangfuseConfig", langfuse_cfg):
+    with patch("noesis.services.qa.helpers.LangfuseConfig", langfuse_cfg):
         with pytest.raises(RuntimeError, match="upstream failed"):
             async for _ in _yield_sse_from_agent_bridge(
                 bad_gen(),
@@ -227,7 +227,7 @@ async def test_test_case_resume_scene_cases_through_orchestrator() -> None:
     builder = AssistantMessageBuilder(session_id="tc-resume", message_id="asst-resume")
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=False)
     lines: list[str] = []
-    with patch("services.qa.helpers.LangfuseConfig", langfuse_cfg):
+    with patch("noesis.services.qa.helpers.LangfuseConfig", langfuse_cfg):
         async for line in _yield_sse_from_agent_bridge(
             resume_gen(),
             bridge=bridge,

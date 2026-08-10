@@ -1,4 +1,5 @@
 /** 知识库 UI 通用格式化 */
+import type { ChunkLocator } from '@/api/knowledgeBase'
 
 const FILE_TYPE_LABEL: Record<string, string> = {
   pdf: 'PDF',
@@ -49,6 +50,45 @@ export function shortHash(hash: string | null | undefined, len = 8): string {
     return '—'
   }
   return hash.length > len * 2 ? `${hash.slice(0, len)}…` : hash
+}
+
+const ELEMENT_TYPE_LABEL: Record<string, string> = {
+  text: '正文',
+  title: '标题',
+  table: '表格',
+  image: '图片',
+}
+
+export function chunkElementLabel(type: string | null | undefined): string {
+  return type ? ELEMENT_TYPE_LABEL[type] || type : '未分类'
+}
+
+export function formatChunkLocator(locator: ChunkLocator | null | undefined): string {
+  if (!locator) {
+    return '未提供来源位置'
+  }
+  if (locator.type === 'page') {
+    const start = locator.page_start
+    const end = locator.page_end
+    if (start != null && end != null && end !== start) {
+      return `第 ${start}–${end} 页`
+    }
+    return start != null ? `第 ${start} 页` : '页面位置'
+  }
+  if (locator.type === 'header') {
+    return Array.isArray(locator.path) && locator.path.length
+      ? locator.path.join(' / ')
+      : '标题位置'
+  }
+  if (locator.type === 'char') {
+    return locator.start != null && locator.end != null
+      ? `字符 ${locator.start}–${locator.end}`
+      : '字符位置'
+  }
+  if (locator.type === 'bbox') {
+    return '版面坐标'
+  }
+  return locator.type
 }
 
 /** 知识库上传支持的文档格式（界面展示用） */

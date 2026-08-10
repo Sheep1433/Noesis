@@ -15,7 +15,7 @@ _BACKEND = Path(__file__).resolve().parents[3]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from agent.case_generate.case_graph import TestCaseState, generate_scenes_testpoints_node
+from noesis.agents.case_generate.case_graph import TestCaseState, generate_scenes_testpoints_node
 from evals.case.shared.provider_common import eval_run_id, resolve_document_context, tracing_note
 from evals.langfuse_env import eval_langfuse_run
 

@@ -23,13 +23,13 @@ from typing import Any, Dict, List, Optional
 from langchain_core.documents import Document
 from qdrant_client.models import PointStruct
 
-from common.logging import logger
-from kb.chunk import chunk
-from kb.chunk.params import fixed_processing_params
-from kb.document_parse.parser import DocumentParser
-from kb.embedding import embedding_not_configured_message, get_embedding, is_embedding_configured
-from kb.retrieval import KbRetrievalService
-from kb.retrieval.payload import compute_content_hash, documents_to_points, hash_to_uuid
+from noesis.runtime.logging import logger
+from noesis.knowledge.chunking import chunk
+from noesis.knowledge.chunking.params import fixed_processing_params
+from noesis.knowledge.parser.parser import DocumentParser
+from noesis.knowledge.embedding import embedding_not_configured_message, get_embedding, is_embedding_configured
+from noesis.knowledge.retrieval import KbRetrievalService
+from noesis.knowledge.retrieval.payload import compute_content_hash, documents_to_points, hash_to_uuid
 
 RAG_DIR = Path(__file__).resolve().parent
 CASE_ROOT = RAG_DIR.parent
@@ -111,7 +111,9 @@ def documents_to_id_entries(documents: List[Document]) -> List[Dict[str, Any]]:
     return entries
 
 
-def build_points_for_upload(documents: List[Document], *, file_hash: str) -> List[PointStruct]:
+def build_points_for_upload(
+    documents: List[Document], *, file_hash: str, collection_name: str
+) -> List[PointStruct]:
     if not is_embedding_configured():
         raise RuntimeError(embedding_not_configured_message())
 
@@ -127,6 +129,7 @@ def build_points_for_upload(documents: List[Document], *, file_hash: str) -> Lis
     points = documents_to_points(
         kept_docs,
         embeddings,
+        collection_name=collection_name,
         file_hash=file_hash,
         effective_processing_params=fixed_processing_params(),
     )
@@ -137,9 +140,9 @@ def build_points_for_upload(documents: List[Document], *, file_hash: str) -> Lis
 
 
 def upsert_points(collection_name: str, points: List[PointStruct]) -> int:
-    from services.qdrant_service import QdrantService
+    from noesis.knowledge.runtime import knowledge_base
 
-    service = QdrantService()
+    service = knowledge_base.service()
     if not service.client:
         raise RuntimeError("Qdrant 客户端未连接")
     service.client.upsert(collection_name=collection_name, points=points)
@@ -157,7 +160,11 @@ def ingest_markdown_file(
     documents = chunk_markdown_file(file_path, file_name=file_name)
     entries = documents_to_id_entries(documents)
     if upload and entries:
-        points = build_points_for_upload(documents, file_hash=file_content_hash(file_path))
+        points = build_points_for_upload(
+            documents,
+            file_hash=file_content_hash(file_path),
+            collection_name=collection_name,
+        )
         upsert_points(collection_name, points)
     return entries
 
@@ -182,12 +189,12 @@ def pick_relevant_by_keywords(
 
 
 def _ensure_eval_collections(*, reset: bool) -> None:
-    from services.qdrant_service import QdrantService, init_qdrant_client
+    from noesis.knowledge.runtime import init_knowledge_base, knowledge_base
 
-    if not asyncio.run(init_qdrant_client()):
+    if not asyncio.run(init_knowledge_base()):
         raise RuntimeError("Qdrant 连接失败，无法入库 eval 文档")
 
-    service = QdrantService()
+    service = knowledge_base.service()
     if not service.client:
         raise RuntimeError("Qdrant 客户端不可用")
 

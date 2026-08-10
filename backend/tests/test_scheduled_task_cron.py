@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.scheduled_task_service import (
+from noesis.services.scheduled_task_service import (
     compute_next_run_ms,
     validate_cron_expr,
 )

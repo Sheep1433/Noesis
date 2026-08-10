@@ -13,8 +13,8 @@ from sqlalchemy import create_engine, text
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
-from config.env import DataBaseConfig, get_config  # noqa: E402
-from config.migrate import run_migrations  # noqa: E402
+from noesis.config.env import DataBaseConfig, get_config  # noqa: E402
+from server.db import run_migrations  # noqa: E402
 
 
 def server_url() -> str:

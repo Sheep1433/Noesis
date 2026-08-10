@@ -5,17 +5,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config.env import LangfuseConfig, QdrantConfig
+from noesis.config.env import LangfuseConfig, QdrantConfig
 
-from agent.case_generate.rag import (
+from noesis.agents.case_generate.rag import (
     CHANNEL_CURRENT_REQUIREMENT,
     CHANNEL_HISTORICAL_REQUIREMENT,
     CHANNEL_HISTORICAL_TEST_CASES,
     _HybridRetriever,
     build_scene_rag_context,
 )
-from agent.case_generate.case_graph import _build_scene_cases_prompt
-from kb.retrieval import KbSearchHit
+from noesis.agents.case_generate.case_graph import _build_scene_cases_prompt
+from noesis.knowledge.retrieval import KbSearchHit
 
 
 def _hit(hit_id: str, content: str, *, file_name: str = "a.md") -> KbSearchHit:
@@ -45,7 +45,7 @@ async def test_build_scene_rag_context_three_channel_order():
 
     qdrant_cfg = replace(QdrantConfig, case_rag_historical_requirements_enabled=True)
     with patch.object(_HybridRetriever, "search", new=_side_effect):
-        with patch("agent.case_generate.rag.QdrantConfig", qdrant_cfg):
+        with patch("noesis.agents.case_generate.rag.QdrantConfig", qdrant_cfg):
             context, trace = await build_scene_rag_context(
                 SCENE,
                 adopted_point_names=["密码错误提示"],
@@ -123,11 +123,11 @@ async def test_build_scene_rag_context_langfuse_spans_when_enabled():
 
     langfuse_cfg = replace(LangfuseConfig, langfuse_tracing_enabled=True)
     qdrant_cfg = replace(QdrantConfig, case_rag_historical_requirements_enabled=True)
-    with patch("config.env.LangfuseConfig", langfuse_cfg):
+    with patch("noesis.config.env.LangfuseConfig", langfuse_cfg):
         with patch("langfuse.get_client", return_value=mock_client):
             with patch.object(_HybridRetriever, "search", new=_side_effect):
-                with patch("agent.case_generate.rag.QdrantConfig", qdrant_cfg):
-                    from domain.observability.langfuse import langfuse_workflow_context
+                with patch("noesis.agents.case_generate.rag.QdrantConfig", qdrant_cfg):
+                    from server.langfuse import langfuse_workflow_context
 
                     run_config = {
                         "metadata": {

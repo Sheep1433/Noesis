@@ -4,7 +4,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
-from kb.retrieval import KbRetrievalService
+from noesis.knowledge.retrieval import KbRetrievalService
+from noesis.knowledge.runtime import knowledge_base
 
 
 @pytest.fixture
@@ -18,6 +19,10 @@ def mock_retrieval():
                     "file_name": "a.md",
                     "header_path": "a.md > Sec",
                     "point_id": "pt-1",
+                    "document_id": "doc-1",
+                    "document_version_id": "docv-1",
+                    "segment_id": "seg-1",
+                    "locator": {"type": "header", "path": ["Sec"]},
                 },
             ),
             0.9,
@@ -30,9 +35,9 @@ def mock_retrieval():
     return retrieval
 
 
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch.object(knowledge_base, "_connected", True)
 @patch.object(KbRetrievalService, "_get_retrieval")
-def test_search_vector_mode(mock_get_retrieval, _mock_connected, mock_retrieval):
+def test_search_vector_mode(mock_get_retrieval, mock_retrieval):
     mock_get_retrieval.return_value = mock_retrieval
 
     result = KbRetrievalService.search(
@@ -48,15 +53,18 @@ def test_search_vector_mode(mock_get_retrieval, _mock_connected, mock_retrieval)
     assert hits[0].search_mode == "vector"
     assert hits[0].file_name == "a.md"
     assert hits[0].header_path == "a.md > Sec"
+    assert hits[0].document_id == "doc-1"
+    assert hits[0].segment_id == "seg-1"
+    assert hits[0].citable is True
     assert result.timing.total_ms >= 0
     assert result.timing.recall_hits == 1
     assert result.timing.final_hits == 1
     mock_retrieval.vector_search.assert_called_once()
 
 
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch.object(knowledge_base, "_connected", True)
 @patch.object(KbRetrievalService, "_get_retrieval")
-def test_search_with_filters_splits_prefix(mock_get_retrieval, _mock_connected, mock_retrieval):
+def test_search_with_filters_splits_prefix(mock_get_retrieval, mock_retrieval):
     mock_get_retrieval.return_value = mock_retrieval
 
     KbRetrievalService.search(
@@ -72,11 +80,11 @@ def test_search_with_filters_splits_prefix(mock_get_retrieval, _mock_connected, 
     assert kwargs.get("metadata_filter") == {"file_name": "a.md"}
 
 
-@patch("kb.retrieval.service.is_rerank_available", return_value=False)
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch("noesis.knowledge.retrieval.service.is_rerank_available", return_value=False)
+@patch.object(knowledge_base, "_connected", True)
 @patch.object(KbRetrievalService, "_get_retrieval")
 def test_search_bm25_returns_nonzero_scores(
-    mock_get_retrieval, _mock_connected, _mock_rerank, mock_retrieval
+    mock_get_retrieval, _mock_rerank, mock_retrieval
 ):
     mock_retrieval.bm25_search_with_scores.return_value = [
         (
@@ -104,9 +112,9 @@ def test_search_bm25_returns_nonzero_scores(
     mock_retrieval.bm25_search_with_scores.assert_called_once()
 
 
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
+@patch.object(knowledge_base, "_connected", True)
 @patch.object(KbRetrievalService, "_get_retrieval")
-def test_search_hybrid_uses_rrf(mock_get_retrieval, _mock_connected, mock_retrieval):
+def test_search_hybrid_uses_rrf(mock_get_retrieval, mock_retrieval):
     mock_retrieval.hybrid_search_with_scores.return_value = [
         (
             Document(
@@ -140,9 +148,9 @@ def test_search_hybrid_uses_rrf(mock_get_retrieval, _mock_connected, mock_retrie
     )
 
 
-@patch("kb.retrieval.service.get_qdrant_client")
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
-def test_fetch_chunks_by_chunk_index_field(mock_connected, mock_client_fn):
+@patch.object(knowledge_base, "_client")
+@patch.object(knowledge_base, "_connected", True)
+def test_fetch_chunks_by_chunk_index_field(mock_client):
     point0 = MagicMock()
     point0.payload = {
         "chunk_index": 0,
@@ -153,15 +161,15 @@ def test_fetch_chunks_by_chunk_index_field(mock_connected, mock_client_fn):
         "chunk_index": 2,
         "page_content": "chunk-two",
     }
-    mock_client_fn.return_value.scroll.return_value = ([point0, point1], None)
+    mock_client.scroll.return_value = ([point0, point1], None)
 
     chunks = KbRetrievalService.fetch_chunks_by_indexes("col", [0, 2, 99])
     assert chunks == ["chunk-zero", "chunk-two"]
 
 
-@patch("kb.retrieval.service.get_qdrant_client")
-@patch("kb.retrieval.service.is_qdrant_connected", return_value=True)
-def test_fetch_full_document_by_file_name_sorted(mock_connected, mock_client_fn):
+@patch.object(knowledge_base, "_client")
+@patch.object(knowledge_base, "_connected", True)
+def test_fetch_full_document_by_file_name_sorted(mock_client):
     p0 = MagicMock()
     p0.payload = {
         "file_name": "req.md",
@@ -180,7 +188,51 @@ def test_fetch_full_document_by_file_name_sorted(mock_connected, mock_client_fn)
         "chunk_index": 0,
         "page_content": "忽略",
     }
-    mock_client_fn.return_value.scroll.return_value = ([p0, p1, p2], None)
+    mock_client.scroll.return_value = ([p0, p1, p2], None)
 
     text = KbRetrievalService.fetch_full_document_by_file_name("col", "req.md")
     assert text == "第一部分\n\n第二部分"
+
+
+def test_legacy_hit_is_explicitly_not_citable() -> None:
+    hit = KbRetrievalService._doc_to_hit(
+        Document(
+            page_content="旧片段",
+            metadata={"file_name": "legacy.md", "content_hash": "old"},
+        ),
+        0.5,
+        "bm25",
+        collection_name="kb1",
+    )
+
+    assert hit.identity_status == "legacy_unversioned"
+    assert hit.citable is False
+    assert hit.document_version_id is None
+
+
+@patch("noesis.knowledge.retrieval.service.rerank_documents")
+def test_rerank_preserves_evidence_identity(mock_rerank) -> None:
+    mock_rerank.return_value = [(0, 0.97)]
+    original = KbRetrievalService._doc_to_hit(
+        Document(
+            page_content="片段",
+            metadata={
+                "file_name": "doc.md",
+                "document_id": "doc-1",
+                "document_version_id": "docv-1",
+                "segment_id": "seg-1",
+                "locator": {"type": "page", "page_start": 1, "page_end": 1},
+            },
+        ),
+        0.6,
+        "hybrid",
+        collection_name="kb1",
+    )
+
+    reranked = KbRetrievalService._apply_rerank("q", [original])
+
+    assert reranked[0].document_id == "doc-1"
+    assert reranked[0].document_version_id == "docv-1"
+    assert reranked[0].segment_id == "seg-1"
+    assert reranked[0].locator == original.locator
+    assert reranked[0].citable is True

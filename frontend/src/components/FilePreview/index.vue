@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   editable?: boolean
   saving?: boolean
   downloadTitle?: string
+  showDownload?: boolean
   showToolbar?: boolean
 }>(), {
   content: '',
@@ -31,6 +32,7 @@ const props = withDefaults(defineProps<{
   editable: false,
   saving: false,
   downloadTitle: '下载当前文件',
+  showDownload: true,
   showToolbar: true,
 })
 
@@ -149,13 +151,13 @@ async function downloadCurrentFile() {
               源码
             </n-button>
           </n-button-group>
-        <n-button
-          v-if="canDownload"
-          quaternary
-          size="tiny"
-          :title="downloadTitle"
-          @click="downloadCurrentFile"
-        >
+          <n-button
+            v-if="showDownload && canDownload"
+            quaternary
+            size="tiny"
+            :title="downloadTitle"
+            @click="downloadCurrentFile"
+          >
             <template #icon>
               <n-icon size="16"><DownloadOutline /></n-icon>
             </template>
@@ -181,7 +183,7 @@ async function downloadCurrentFile() {
           </template>
         </div>
         <div v-if="$slots['header-extra']" class="file-preview__header-extra">
-          <slot name="header-extra" />
+          <slot name="header-extra"></slot>
         </div>
       </div>
     </div>

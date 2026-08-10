@@ -10,7 +10,9 @@
 | **本文件** `AGENTS.md` | 仓库导航、跨端技术要点、协作与 Bug 流转（**唯一权威来源**） |
 | [frontend/AGENTS.md](frontend/AGENTS.md) | 前端目录地图、命令、流式/UI 约定 |
 | [backend/AGENTS.md](backend/AGENTS.md) | 后端分层规范、配置、Service/API 模板 |
-| `docs/prd/` | 产品需求 |
+| `docs/research/` | 项目现状与外部技术调研 |
+| `docs/architecture/` | 当前长期架构与数据流 |
+| `docs/engineering/` | 高难度实现与工程经验 |
 | `docs/bug/` | Bug 记录 |
 | `docs/debugging/` | 疑难排查沉淀 |
 
@@ -21,7 +23,7 @@ Noesis/
 ├── frontend/          → frontend/AGENTS.md
 ├── backend/           → backend/AGENTS.md
 ├── extensions/        → Skills 包 + MCP 服务（见 extensions/README.md）
-├── .data/             → 本地运行时数据（gitignore：Qdrant、checkpoint、附件、工作区、日志）
+├── .noesis/           → 本地运行时数据（gitignore：Qdrant、checkpoint、附件、工作区、日志）
 ├── deploy/            → Docker Compose、镜像定义、生产配置
 ├── scripts/run.sh     # dev | prod | docker
 ├── openspec/          # 变更提案与规格
@@ -33,12 +35,13 @@ Noesis/
 | 容器部署 | `deploy/docker-compose.yml`、`deploy/backend/Dockerfile`、`deploy/frontend/Dockerfile` |
 | 前端应用 | `frontend/src/main.ts`、`frontend/src/views/chat.vue` |
 | 前端 SSE | `frontend/src/views/chat/useSSEStream.ts` |
-| 后端启动 | `backend/app.py`、`backend/server.py` |
-| 问答编排 | `backend/services/qa_service.py` |
-| Agent 工厂 | `backend/agent/factory.py` |
-| 场景入口 | `backend/agent/profiles/`（Super / QA / 故障 / MCP） |
-| SSE 桥接 | `backend/domain/chat/streaming/langgraph_sse.py` |
-| 配置 | `backend/config/env.py` + `backend/config.yaml` |
+| 后端启动 | `backend/app.py`、`backend/server/main.py` |
+| 后端核心包 | `backend/packages/noesis-core/src/noesis/`（distribution：`noesis-core`） |
+| 问答编排 | `backend/packages/noesis-core/src/noesis/services/qa/` |
+| Agent 工厂 | `backend/packages/noesis-core/src/noesis/factory.py` |
+| 场景入口 | `backend/packages/noesis-core/src/noesis/agents/`（Super / QA / 故障 / MCP / Case Generate） |
+| SSE 桥接 | `backend/packages/noesis-core/src/noesis/domain/chat/streaming/langgraph_sse.py` |
+| 配置 | `backend/packages/noesis-core/src/noesis/config/env.py` + `backend/config.yaml` |
 
 ## 跨端技术要点
 
@@ -48,7 +51,7 @@ Noesis/
 |-------|------|---------|------|
 | GeneralQAAgent | `create_noesis_agent` | RAG hybrid 检索 | 智能问答 |
 | FaultOperationAgent | `create_noesis_agent` | MCP | 故障运维 |
-| DeepResearchAgent | `create_noesis_agent` | 文件系统 + Skills | 深度研究 |
+| SuperAgent | `create_noesis_agent` | 文件系统 + Skills + 子 Agent | 深度研究 / 通用复杂任务 |
 | CaseCoordinator | LangGraph `StateGraph` | 自定义 workflow | 测试用例生成 |
 | SimpleMCPAgent | `create_noesis_agent` | MCP | 本地调试 |
 
@@ -60,11 +63,11 @@ Noesis/
 
 `reasoning-start/delta/end`、`text-start/delta/end`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`
 
-**assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/prd/platform/SSE流式数据设计.md` §3.3。
+**assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/architecture/platform/chat-streaming.md` §3.3。
 
 ### 认证
 
-Token 存 `sessionStorage`；路由 `meta.requiresAuth`；401 跳转登录。
+认证使用 Cookie Session + CSRF；路由 `meta.requiresAuth`；401 跳转登录。
 
 ## 开发验证
 
@@ -75,6 +78,7 @@ cd frontend && pnpm lint        # 前端按影响范围 lint / build
 
 - Python 统一 `uv run`，禁止裸 `python`
 - 测试目录：`backend/tests/`、`frontend/tests/`
+- 每次测试完成后必须停止由 Agent 启动的后端、前端 dev/preview server 及临时测试进程，释放占用端口，避免与用户后续执行冲突
 - 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库
 - SSE、Agent、Qdrant、消息持久化相关改动优先补回归测试
 
@@ -136,7 +140,7 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 
 - 测试：问题记入 `docs/bug/`
 - 开发：属实则修复并标「✅ 已修复」，不属实标「❌ 非 Bug」并说明原因；**默认不主动处理 Bug**
-- 产品：方案放 `docs/prd/`
+- 产品：可验收行为写 OpenSpec；关键调研、架构和工程设计按 `docs/README.md` 分类
 
 ### Bug 状态流转
 
@@ -159,7 +163,18 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 
 - 先解决根因，再考虑容错；安全问题禁止吞异常或扩大权限绕过
 - **禁止**多套方案并行（v2 / 备选）；废弃方案立即删除；遇到兼容方案的代码主动向用户提问是否要保留
-- 方案变更同步更新 `docs/prd/`，单文件演进，不做版本对比
+- 方案变更同步更新对应 `docs/architecture/` 或 `docs/engineering/` 文档，单文件演进，不做版本对比
 - 多次未解决的问题记录到 `docs/debugging/`（现象、根因、排查、方案）
 - 高关注区：SSE 持久化、Qdrant 异常、配置硬编码、JWT/DB 默认密钥、MCP 远程执行
 
+### 代码质量 Skills
+
+| 场景 | 必须使用 | 约束 |
+|------|----------|------|
+| 修复 Bug、性能回退或偶发故障 | `diagnosing-bugs` | 先建立能捕获原始问题的稳定反馈，再定位根因；禁止先加 fallback、兼容分支或笼统 `try/except` |
+| 功能或重构完成、准备提交或合并 | `code-review` | 同时检查项目规范与原始 spec；重点检查需求遗漏、范围扩大及 Fowler code smells |
+| review 已确认存在冗余、浅 wrapper、无需求支撑的抽象或复杂控制流 | `code-simplification` | 仅修改本次范围；保持输入、输出、异常和副作用顺序不变；测试通过不是简化成立的唯一依据，还要证明更易理解 |
+
+- 简单逻辑默认直接表达。只有概念需要命名、存在多个真实调用方、需要隔离变化或形成有效测试 seam 时才提取函数、类或接口。
+- Bug 修复必须删除被新方案取代的补丁、临时日志和不可达分支，不保留“以后可能有用”的兼容实现。
+- `code-simplification` 不自动扩大到无关文件，也不以减少行数为目标；无法说明原实现为何存在时先停止修改并查历史或调用方。

@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from domain.chat.message_builder import AssistantMessageBuilder
-from domain.chat.streaming.langgraph_sse import LangGraphSseBridge
-from services.qa_service import (
-    QaService,
+from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.services.qa.helpers import (
+    ACTIVE_STREAMS,
     _ActiveStreamState,
     _finalize_streaming_assistant,
     _handle_stream_client_disconnect,
@@ -37,7 +37,7 @@ async def test_finalize_then_disconnect_persists_once() -> None:
     mock_persist = AsyncMock()
     user = SimpleNamespace(user_id="u1")
 
-    with patch("services.qa.helpers._persist_assistant", mock_persist):
+    with patch("noesis.services.qa.helpers._persist_assistant", mock_persist):
         await _finalize_streaming_assistant(
             builder=builder,
             bridge=bridge,
@@ -69,7 +69,7 @@ async def test_disconnect_then_finalize_persists_once() -> None:
     mock_persist = AsyncMock()
     user = SimpleNamespace(user_id="u1")
 
-    QaService._active_streams[session_id] = _ActiveStreamState(
+    ACTIVE_STREAMS[session_id] = _ActiveStreamState(
         builder=builder,
         ctx=ctx,
         qa_type="COMMON_QA",
@@ -78,7 +78,7 @@ async def test_disconnect_then_finalize_persists_once() -> None:
     bridge.last_finish_reason = "stop"
 
     try:
-        with patch("services.qa.helpers._persist_assistant", mock_persist):
+        with patch("noesis.services.qa.helpers._persist_assistant", mock_persist):
             await _handle_stream_client_disconnect(
                 session_id=session_id,
                 qa_type="COMMON_QA",
@@ -99,7 +99,7 @@ async def test_disconnect_then_finalize_persists_once() -> None:
         mock_persist.assert_awaited_once()
         assert mock_persist.await_args.kwargs["status"] == "partial"
     finally:
-        QaService._active_streams.pop(session_id, None)
+        ACTIVE_STREAMS.pop(session_id, None)
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ async def test_finalize_uses_builder_message_id_when_ctx_missing() -> None:
     ctx = {"text_buffer": ""}
     mock_persist = AsyncMock()
 
-    with patch("services.qa.helpers._persist_assistant", mock_persist):
+    with patch("noesis.services.qa.helpers._persist_assistant", mock_persist):
         await _finalize_streaming_assistant(
             builder=builder,
             bridge=bridge,
@@ -134,7 +134,7 @@ async def test_double_disconnect_handler_is_idempotent() -> None:
     ctx = {"_assistant_db_id": "msg-4", "text_buffer": ""}
     mock_persist = AsyncMock()
 
-    with patch("services.qa.helpers._persist_assistant", mock_persist):
+    with patch("noesis.services.qa.helpers._persist_assistant", mock_persist):
         await _handle_stream_client_disconnect(
             session_id=session_id,
             qa_type="COMMON_QA",

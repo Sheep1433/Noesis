@@ -1,7 +1,7 @@
 """Telegram HITL 审批卡片 / callback 解析。"""
 from __future__ import annotations
 
-from domain.chat.delivery.telegram.hitl_prompt import (
+from noesis.domain.chat.delivery.telegram.hitl_prompt import (
     allow_session_grant_for_actions,
     build_approval_keyboard,
     decisions_for_op,

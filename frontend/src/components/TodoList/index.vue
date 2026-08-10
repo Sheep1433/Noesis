@@ -2,9 +2,9 @@
 import type { Todo } from './types'
 import { ChevronDown, ChevronUp, ListOutline } from '@vicons/ionicons-v5'
 import { NBadge, NIcon } from 'naive-ui'
-import { useNaivePresetColors } from '@/hooks/useThemePreset'
-
 import { computed, ref } from 'vue'
+
+import { useNaivePresetColors } from '@/hooks/useThemePreset'
 
 const props = defineProps<{
   todos: Todo[]

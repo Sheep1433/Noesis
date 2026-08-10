@@ -76,7 +76,7 @@ function onSearch() {
       </n-button>
     </div>
     <n-collapse>
-      <n-collapse-item title="高级参数（单次调试覆盖）" name="advanced">
+      <n-collapse-item title="高级参数（仅用于本次检索）" name="advanced">
         <div class="advanced-grid">
           <n-form-item label="final_top_k" :show-feedback="false">
             <n-input-number

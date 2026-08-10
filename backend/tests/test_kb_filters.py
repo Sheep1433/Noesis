@@ -1,7 +1,7 @@
-"""kb.filters 单元测试"""
+"""noesis.knowledge.retrieval.filters 单元测试"""
 from langchain_core.documents import Document
 
-from kb.retrieval import document_matches_post_filter, split_search_filters
+from noesis.knowledge.retrieval import document_matches_post_filter, split_search_filters
 
 
 def test_split_search_filters_empty():

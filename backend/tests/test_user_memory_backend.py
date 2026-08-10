@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from agent.backends.memory import UserMemoryBackend
-from agent.backends.factory import build_agent_filesystem_backend
-from agent.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
-from config import user_data_paths as user_paths
+from noesis.agents.backends.memory import UserMemoryBackend
+from noesis.agents.backends.factory import build_agent_filesystem_backend
+from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from noesis.config import user_data_paths as user_paths
 
 
 def test_user_memory_backend_agents_and_user_writable(tmp_path: Path) -> None:
@@ -50,7 +50,7 @@ async def test_composite_memory_route_isolated_from_workspace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from config.env import get_config
+    from noesis.config.env import get_config
 
     get_config.get_sandbox_config.cache_clear()
 
@@ -59,7 +59,7 @@ async def test_composite_memory_route_isolated_from_workspace(
     platform.mkdir()
     monkeypatch.setattr(user_paths, "_USERS_ROOT", users_root)
     monkeypatch.setattr(
-        "agent.backends.factory.skills_root",
+        "noesis.agents.backends.factory.skills_root",
         lambda: platform,
     )
 
@@ -67,7 +67,7 @@ async def test_composite_memory_route_isolated_from_workspace(
     agents_disk = user_paths.get_user_agents_md_path("u1")
     agents_disk.write_text("memory-body", encoding="utf-8")
 
-    from agent.backends.factory import create_agent_backend
+    from noesis.agents.backends.factory import create_agent_backend
 
     backend = await create_agent_backend("u1", "s1")
     mem = backend.read(AGENT_MEMORY_AGENTS_FILE)

@@ -2,6 +2,12 @@
 import { systemTitle } from '@/base'
 import { useNaivePresetColors } from '@/hooks/useThemePreset'
 
+withDefaults(defineProps<Props>(), {
+  transparent: true,
+  hasBorder: true,
+  backgroundColor: 'var(--noesis-color-bg-elevated)',
+})
+
 const naivePresetColors = useNaivePresetColors()
 
 interface Props {
@@ -9,12 +15,6 @@ interface Props {
   hasBorder?: boolean
   backgroundColor?: string
 }
-withDefaults(defineProps<Props>(), {
-  transparent: true,
-  hasBorder: true,
-  backgroundColor: 'var(--noesis-color-bg-elevated)',
-})
-
 const handleToRepo = () => {
   // 点击不再跳转，仅展示标题
 }

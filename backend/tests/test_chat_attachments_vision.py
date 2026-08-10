@@ -1,17 +1,17 @@
 """Vision 判定与图片预处理单测。"""
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from domain.chat.attachments.image_prepare import prepare_image_bytes_for_injection
-from domain.chat.attachments.vision import (
+from noesis.runtime.attachments.image_prepare import prepare_image_bytes_for_injection
+from noesis.runtime.attachments.vision import (
     is_vision_available,
     model_name_supports_vision,
     resolve_effective_vision_model_id,
 )
-from llm.catalog import ModelCatalogEntry
+from noesis.llm.catalog import ModelCatalogEntry
 
 
 def test_model_name_supports_vision() -> None:
@@ -20,11 +20,11 @@ def test_model_name_supports_vision() -> None:
     assert model_name_supports_vision("qwen-plus") is False
 
 
-@patch("domain.chat.attachments.vision.ChatAttachmentConfig")
-@patch("llm.catalog.resolve_catalog_entry")
-def test_is_vision_available_uses_model_id(mock_resolve, mock_cfg) -> None:
+@patch("noesis.runtime.attachments.vision.ChatAttachmentConfig")
+@patch("noesis.runtime.attachments.vision.resolve_catalog_entry")
+def test_is_vision_available_uses_model_id(mock_require_resolve, mock_cfg) -> None:
     mock_cfg.vision_enabled = True
-    mock_resolve.return_value = ModelCatalogEntry(
+    mock_require_resolve.return_value = ModelCatalogEntry(
         id="vl",
         label="VL",
         model_type="qwen",
@@ -34,11 +34,11 @@ def test_is_vision_available_uses_model_id(mock_resolve, mock_cfg) -> None:
         is_default=False,
     )
     assert is_vision_available("vl") is True
-    mock_resolve.assert_called_once_with("vl")
+    mock_require_resolve.assert_called_once_with("vl")
 
 
-@patch("domain.chat.attachments.vision.get_first_vision_catalog_id", return_value="qwen-vl-max")
-@patch("domain.chat.attachments.vision.is_vision_available")
+@patch("noesis.runtime.attachments.vision.get_first_vision_catalog_id", return_value="qwen-vl-max")
+@patch("noesis.runtime.attachments.vision.is_vision_available")
 def test_resolve_effective_vision_model_id_switches(mock_avail, _mock_first) -> None:
     mock_avail.side_effect = lambda model_id=None: model_id == "qwen-vl-max"
     assert resolve_effective_vision_model_id("qwen-plus") == "qwen-vl-max"

@@ -1,22 +1,23 @@
 <script setup lang="ts">
 import type { SubagentRunStatus } from '@/utils/parseTaskTool'
-import type { ToolRunStatus, ToolUiPart, UiPart } from '@/views/chat/messageParts'
-import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
-import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
+import type { ToolLifecycleState, ToolRunStatus, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
-import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
+import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
+import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import {
   parseTaskToolInput,
   parseTaskToolOutput,
 } from '@/utils/parseTaskTool'
+import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 interface Props {
   input?: Record<string, unknown>
   output?: string
   status?: ToolRunStatus
+  state?: ToolLifecycleState
   error?: string | null
   duration_ms?: number
   /** 子 Agent 内部 parts（text / reasoning / tool，带 parent_task_call_id） */
@@ -30,6 +31,7 @@ const props = withDefaults(defineProps<Props>(), {
   input: () => ({}),
   output: '',
   status: undefined,
+  state: undefined,
   error: null,
   duration_ms: undefined,
   childParts: () => [],
@@ -54,6 +56,7 @@ const parsedOutput = computed(() =>
   parseTaskToolOutput({
     output: props.output,
     status: props.status,
+    state: props.state,
     error: props.error,
   }),
 )
@@ -133,7 +136,7 @@ const durationDisplay = computed(() => {
               <span v-if="durationDisplay" class="subagent-duration">{{ durationDisplay }}</span>
               <n-tag type="info" size="small" round bordered>{{ subagentTypeLabel }}</n-tag>
               <n-tag v-if="runStatus === 'in_progress'" type="warning" size="small" round bordered>进行中</n-tag>
-              <n-tag v-else-if="runStatus === 'completed'" type="success" size="small" round bordered>完成</n-tag>
+              <n-tag v-else-if="runStatus === 'completed'" type="success" size="small" round bordered>已完成</n-tag>
               <n-tag v-else-if="runStatus === 'failed'" type="error" size="small" round bordered>失败</n-tag>
             </div>
           </div>
@@ -184,6 +187,10 @@ const durationDisplay = computed(() => {
                 :result="child.output"
                 :error="child.error"
                 :status="child.status"
+                :state="child.state"
+                :error-category="child.errorCategory"
+                :exit_code="child.exit_code"
+                :truncated="child.truncated"
                 :duration_ms="child.duration_ms"
               />
             </template>

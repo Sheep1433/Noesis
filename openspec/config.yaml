@@ -10,13 +10,13 @@ context: |
 
   验证：后端改动后 `uv run app.py`；前端 `pnpm lint` / `pnpm build` 按影响范围执行。HTTP 业务 code 与状态码需一致（见仓库 AGENTS.md）。
 
-  OpenSpec：主规格位于 openspec/specs/<capability>/spec.md（11 个功能模块，见 openspec/README.md）；变更 delta 在 openspec/changes/<name>/specs/，归档时与主规格对齐。
+  OpenSpec：主规格位于 openspec/specs/<capability>/spec.md（13 个功能模块，见 openspec/README.md）；变更 delta 在 openspec/changes/<name>/specs/，归档时与主规格对齐。
 
   能力 id：
   - 聊天：platform-chat、chat-composer
-  - Agent：agent-runtime、agent-profiles、agent-hitl、agent-tool-failure-handling、agent-delivery
+  - Agent：agent-runtime、agent-harness、agent-profiles、agent-hitl、agent-tool-failure-handling、agent-delivery
   - 知识库：knowledge-base
-  - 用户与部署：user-platform、container-deployment
+  - 用户与部署：user-platform、user-settings、container-deployment
   - 评测：offline-evals
 
 rules:

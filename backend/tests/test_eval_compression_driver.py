@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from langchain_core.messages import HumanMessage
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from evals.compression.driver import compress_fixture_messages, parse_fixture_messages
 from evals.compression.fixture_loader import load_fixture
@@ -21,24 +21,17 @@ def test_compress_fixture_messages_with_mock_summary():
         summarization_trigger_tokens=0,
         summarization_trigger_fraction=0.85,
         summarization_messages_to_keep=4,
-        summarization_tool_offload_threshold=50,
-        summarization_max_retention_ratio=0.6,
     )
-    mock_model = MagicMock()
+    mock_model = FakeListChatModel(
+        responses=["[Conversation Summary]\n根因: max_size=0\n修复: config/database.yaml"]
+    )
     mock_model.profile = {"max_input_tokens": 8000}
-
-    def fake_summary(_msgs):
-        return HumanMessage(content="[Conversation Summary]\n根因: max_size=0\n修复: config/database.yaml")
 
     with (
         patch("evals.compression.driver.ModelConfig", cfg),
-        patch("llm.model_limits.ModelConfig", cfg),
+        patch("noesis.llm.model_limits.ModelConfig", cfg),
         patch("evals.compression.driver.resolve_context_max_tokens", return_value=8000),
         patch("evals.compression.driver.get_llm", return_value=mock_model),
-        patch(
-            "agent.middlewares.summary_offload_middleware.SummarizationOffloadMiddleware._create_summary",
-            side_effect=fake_summary,
-        ),
     ):
         result = compress_fixture_messages(messages, compress_options={"force": True})
 

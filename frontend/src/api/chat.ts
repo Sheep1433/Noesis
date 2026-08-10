@@ -17,7 +17,7 @@ import { downloadFile } from '@/utils/download'
 
 /** 消息内容片段 */
 export interface MessagePart {
-  type: 'text' | 'reasoning' | 'tool'
+  type: 'text' | 'reasoning' | 'tool' | 'retrieval'
   content?: string
   tool?: string
   input?: Record<string, unknown>
@@ -34,9 +34,46 @@ export interface MessageMetadata {
   model?: string
   input_tokens?: number
   output_tokens?: number
+  total_tokens?: number
   finish_reason?: string
   error?: string
+  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
+  input_token_details?: { cache_read?: number, cache_write?: number }
+  output_token_details?: { reasoning?: number }
+  /** 按 caller/model 归因摘要（调试视图按需展示） */
+  attribution?: {
+    cumulative?: Record<string, number>
+    by_caller?: Record<string, Record<string, number>>
+    by_model?: Record<string, Record<string, number>>
+  }
+  /** 最近一次模型请求的上下文快照（与累计 usage 分开） */
+  context?: ContextSnapshot
 }
+
+/** 当前模型请求的上下文快照（context-update 事件 / 历史消息）。
+ *  结构与 messageParts.ContextWindowSnapshot 对齐，避免循环 import。 */
+export interface ContextSnapshot {
+  current_tokens: number
+  max_tokens: number
+  used_percentage: number
+  updated_at?: string
+}
+
+export type AgentStopReason =
+  | 'completed'
+  | 'context_exhausted'
+  | 'length_stop'
+  | 'safety_stop'
+  | 'partial_output'
+  | 'empty_after_tools'
+  | 'tool_loop_limit'
+  | 'tool_call_limit'
+  | 'subagent_concurrency_limit'
+  | 'subagent_total_limit'
+  | 'subagent_depth_limit'
+  | 'retryable_error'
+  | 'error'
+  | (string & {})
 
 /** 会话响应 */
 export interface ChatSessionResponse {
@@ -66,6 +103,7 @@ export interface ChatMessageResponse {
   content: MessageContent
   extra?: MessageMetadata
   status: string
+  message_sequence: number
   created_at: number
 }
 
@@ -80,6 +118,61 @@ export interface SendMessageResponse {
   message_id: string
   session_id: string
   status: string
+}
+
+export type AgentRunStatus =
+  | 'queued'
+  | 'running'
+  | 'retrying'
+  | 'hitl_pending'
+  | 'completed'
+  | 'partial'
+  | 'error'
+  | 'interrupted'
+
+export interface AgentRunCreated {
+  run_id: string
+  assistant_message_id: string
+  session_id: string
+  status: AgentRunStatus
+  session_title: string
+}
+
+export interface AgentRunSnapshot {
+  run_id: string
+  assistant_message_id: string
+  session_id: string
+  qa_type: string
+  origin: string
+  status: AgentRunStatus
+  snapshot_sequence: number
+  attempt_id: number
+  content: MessageContent
+  finish_reason?: AgentStopReason | null
+  error_code?: string | null
+  message?: string | null
+  retry_attempt: number
+  retry_max: number
+  pending_hitl?: {
+    interrupt_id?: string
+    kind?: string
+    action_requests?: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>
+    review_configs?: unknown[]
+    expires_at?: number
+  } | null
+}
+
+export interface CreateAgentRunParams {
+  session_id: string
+  content: string
+  client_request_id: string
+  extra?: Record<string, unknown>
+}
+
+export interface ResumeAgentRunHitlParams {
+  interrupt_id: string
+  decisions: Array<{ type: string, message?: string }>
+  grant_scope?: 'once' | 'session' | null
 }
 
 /** 创建会话请求参数 */
@@ -230,6 +323,60 @@ export async function ensureSession(
   return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
+export async function createAgentRun(params: CreateAgentRunParams): Promise<AgentRunCreated> {
+  const req = makeRequest('POST', `${location.origin}${BASE}/runs`, params)
+  return parseResponse<AgentRunCreated>(await authFetch(req))
+}
+
+export async function getAgentRun(runId: string): Promise<AgentRunSnapshot> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}`)
+  return parseResponse<AgentRunSnapshot>(await authFetch(req))
+}
+
+export async function subscribeAgentRun(
+  runId: string,
+  afterSequence: number,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const url = new URL(`${location.origin}${BASE}/runs/${encodeURIComponent(runId)}/stream`)
+  url.searchParams.set('after_sequence', String(Math.max(0, afterSequence)))
+  return authFetch(new Request(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers: getAuthHeaders(),
+    signal,
+  }))
+}
+
+export async function stopAgentRun(runId: string): Promise<AgentRunSnapshot> {
+  const req = makeRequest('POST', `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}/stop`)
+  return parseResponse<AgentRunSnapshot>(await authFetch(req))
+}
+
+export async function resumeAgentRunHitl(
+  runId: string,
+  params: ResumeAgentRunHitlParams,
+): Promise<AgentRunSnapshot> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}/hitl/resume`,
+    params,
+  )
+  return parseResponse<AgentRunSnapshot>(await authFetch(req))
+}
+
+export async function resumeAgentRunTestCase(
+  runId: string,
+  selectedPointNames: string[],
+): Promise<AgentRunSnapshot> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}/test-case/resume`,
+    { selected_point_names: selectedPointNames },
+  )
+  return parseResponse<AgentRunSnapshot>(await authFetch(req))
+}
+
 /**
  * 获取会话详情
  * GET /api/chat/sessions/{id}
@@ -257,6 +404,24 @@ export async function updateSessionTitle(
   params: UpdateSessionTitleParams,
 ): Promise<ChatSessionResponse> {
   const req = makeRequest('PATCH', `${location.origin}${BASE}/sessions/${id}/title`, params)
+  return parseResponse<ChatSessionResponse>(await authFetch(req))
+}
+
+/** 更新会话置顶 / 归档状态参数 */
+export interface UpdateSessionMetaParams {
+  pinned?: boolean | null
+  archived?: boolean | null
+}
+
+/**
+ * 更新会话置顶 / 归档状态
+ * PATCH /api/chat/sessions/{id}/meta
+ */
+export async function updateSessionMeta(
+  id: string,
+  params: UpdateSessionMetaParams,
+): Promise<ChatSessionResponse> {
+  const req = makeRequest('PATCH', `${location.origin}${BASE}/sessions/${id}/meta`, params)
   return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
@@ -446,26 +611,6 @@ export async function sendMessage(
 export async function getMessage(messageId: string): Promise<ChatMessageResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/messages/${messageId}`)
   return parseResponse<ChatMessageResponse>(await authFetch(req))
-}
-
-/**
- * 停止对话
- * POST /api/chat/sessions/{sessionId}/stop
- */
-export async function stopChat(
-  sessionId: string,
-  qaType: string,
-): Promise<void> {
-  const body: Record<string, string> = {
-    session_id: sessionId,
-    qa_type: qaType,
-  }
-  const req = makeRequest(
-    'POST',
-    `${location.origin}${BASE}/sessions/${sessionId}/stop`,
-    body,
-  )
-  await parseResponse<void>(await authFetch(req))
 }
 
 /** 导出用例条目（与后端 TestCaseExportCaseItem 对齐） */

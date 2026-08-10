@@ -1,8 +1,8 @@
 """chunk 层单测：parse 输出 / Markdown 文本 → 分片 Document。"""
 import pytest
 
-from kb.chunk import chunk, fixed_processing_params
-from kb.document_parse import DocumentParser
+from noesis.knowledge.chunking import chunk, fixed_processing_params
+from noesis.knowledge.parser import DocumentParser
 
 
 def test_chunk_text_sets_file_metadata():

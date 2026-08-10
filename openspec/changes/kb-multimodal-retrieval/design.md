@@ -84,7 +84,7 @@ vectors:
 |------|------|------|
 | `modality` | string | `text` \| `image` \| `mixed` |
 | `element_type` | string | 保留现有；image chunk 为 `image` |
-| `image_uri` | string? | 相对 `.data/kb_images/` 或 collection 内路径 |
+| `image_uri` | string? | 相对 `.noesis/kb_images/` 或 collection 内路径 |
 | `caption` | string? | OCR + VLM 描述，供 BM25 与展示 |
 | `page_no` | int? | PDF 页码 |
 | `figure_bbox` | float[]? | 可选，溯源 |
@@ -103,7 +103,7 @@ vectors:
 
 ```
 DeepDoc parse_into_bboxes / docx 图片提取
-  → 持久化 image bytes → .data/kb_images/{collection}/{file_hash}/{chunk_id}.png
+  → 持久化 image bytes → .noesis/kb_images/{collection}/{file_hash}/{chunk_id}.png
   → 可选 VLM caption（is_vlm_configured）
   → chunk: page_content = caption || OCR text
   → metadata: image_uri, modality=image
@@ -172,7 +172,7 @@ kb:
     model: tongyi-embedding-vision-plus
     # base_url / api_key 继承 embedding 段或独立 env
   image_storage:
-    root: .data/kb_images        # 与 common.paths 对齐
+    root: .noesis/kb_images     # 与 noesis.config.paths 对齐
   figure_enrichment:
     vlm_caption: true            # Phase 1：入库时生成描述
     vlm_only_when_no_ocr: false  # 仅无 OCR 文字时调 VLM

@@ -1,6 +1,6 @@
 """parse_cache 单测。"""
-from kb.document_parse.deepdoc_result import DeepDocBlock, DeepDocParseResult
-from kb.document_parse.parse_cache import (
+from noesis.knowledge.parser.deepdoc_result import DeepDocBlock, DeepDocParseResult
+from noesis.knowledge.parser.parse_cache import (
     cache_file_path,
     load_parse_cache,
     result_from_dict,
@@ -11,7 +11,7 @@ from kb.document_parse.parse_cache import (
 def test_parse_cache_roundtrip(tmp_path, monkeypatch):
     root = tmp_path / "kb_parse"
     monkeypatch.setattr(
-        "kb.document_parse.parse_cache._cache_root",
+        "noesis.knowledge.parser.parse_cache._cache_root",
         lambda: root,
     )
     result = DeepDocParseResult(

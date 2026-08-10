@@ -1,7 +1,7 @@
 """测试用例 Markdown 导出。"""
 
-from agent.case_generate.case_coordinator import CaseCoordinator, export_cases
-from api.chat_api import _attachment_content_disposition
+from noesis.agents.case_generate.case_coordinator import CaseCoordinator, export_cases
+from server.api.chat_api import _attachment_content_disposition
 
 
 def test_export_cases_markdown_contains_fields():

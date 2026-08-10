@@ -31,7 +31,7 @@ def resolve_host_data_dir() -> Path:
     raw = os.environ.get("NOESIS_HOST_DATA_DIR", "").strip()
     if raw:
         return Path(raw).resolve()
-    return (repo_root() / ".data").resolve()
+    return (repo_root() / ".noesis").resolve()
 
 
 def resolve_skills_host_dir() -> Path:

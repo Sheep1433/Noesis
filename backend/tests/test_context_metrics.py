@@ -2,34 +2,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from langchain.agents.middleware.types import ModelRequest
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import tool
-
-from agent.middlewares.context_metrics import (
-    build_context_snapshot,
-    build_context_snapshot_from_request,
-    compute_used_percentage,
-)
-from agent.middlewares.context_metrics_middleware import (
-    ContextMetricsMiddleware,
-    ContextMetricsRegistry,
-    resolve_session_id_for_request,
-)
-from llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
+from noesis.domain.chat.streaming.usage_normalize import compute_used_percentage
+from noesis.runtime.observability import ContextMetricsRegistry
+from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
 
 
-def _runtime_with_thread(thread_id: str) -> MagicMock:
-    runtime = MagicMock()
-    runtime.execution_info = MagicMock(thread_id=thread_id)
-    return runtime
-
-
-@patch("llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_resolve_context_max_tokens_from_global_config(mock_resolve) -> None:
-    from llm.catalog import ModelCatalogEntry
+    from noesis.llm.catalog import ModelCatalogEntry
 
     mock_resolve.return_value = ModelCatalogEntry(
         id="default",
@@ -41,7 +23,7 @@ def test_resolve_context_max_tokens_from_global_config(mock_resolve) -> None:
         limit=None,
     )
     cfg = SimpleNamespace(context_max_input_tokens=64000)
-    with patch("llm.model_limits.ModelConfig", cfg):
+    with patch("noesis.llm.model_limits.ModelConfig", cfg):
         assert resolve_context_max_tokens() == 64000
 
 
@@ -51,9 +33,9 @@ def test_compute_used_percentage_minimum_one_when_nonzero() -> None:
     assert compute_used_percentage(68_000, 128_000) == 53
 
 
-@patch("llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
-    from llm.catalog import ModelCatalogEntry
+    from noesis.llm.catalog import ModelCatalogEntry
 
     mock_resolve.return_value = ModelCatalogEntry(
         id="default",
@@ -65,97 +47,83 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
         limit=None,
     )
     cfg = SimpleNamespace(context_max_input_tokens=0)
-    with patch("llm.model_limits.ModelConfig", cfg):
+    with patch("noesis.llm.model_limits.ModelConfig", cfg):
         assert resolve_context_max_tokens() == DEFAULT_CONTEXT_TOKENS
 
 
-@patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=1000)
-def test_build_context_snapshot_percentage(mock_resolve) -> None:
-    messages = [SystemMessage(content="x" * 4000), HumanMessage(content="y" * 4000)]
-    snap = build_context_snapshot(messages, model_id="flash")
-    assert snap["max_tokens"] == 1000
-    assert snap["current_tokens"] > 0
-    assert 0 <= snap["used_percentage"] <= 100
-    mock_resolve.assert_called_once_with("flash")
+# ---------- registry 按 run/caller 隔离 ----------
 
 
-def test_build_context_snapshot_from_request_includes_system_and_tools() -> None:
-    @tool
-    def demo_search(query: str) -> str:
-        """Search the knowledge base for relevant documents."""
-        return query
+def test_registry_isolates_concurrent_runs_in_same_session() -> None:
+    """同 session 并发两个 run：各自写入不互相覆盖，按 run_id peek 各取各的。"""
+    ContextMetricsRegistry._reset_for_tests()
+    try:
+        snap_a = {"current_tokens": 1000, "max_tokens": 128000, "used_percentage": 1}
+        snap_b = {"current_tokens": 5000, "max_tokens": 128000, "used_percentage": 4}
+        ContextMetricsRegistry.put("sess-concurrent", snap_a, run_id="run-A")
+        ContextMetricsRegistry.put("sess-concurrent", snap_b, run_id="run-B")
 
-    model = MagicMock()
-    model.get_num_tokens.return_value = 900
-    request = ModelRequest(
-        model=model,
-        system_message=SystemMessage(content="system prompt " * 50),
-        messages=[HumanMessage(content="你好")],
-        tools=[demo_search],
-        runtime=_runtime_with_thread("sess-tools"),
-    )
-    with patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=128000) as mock_resolve:
-        snap = build_context_snapshot_from_request(request, model_id="nemotron")
-    assert snap["current_tokens"] == 900
-    mock_resolve.assert_called_once_with("nemotron")
-    model.get_num_tokens.assert_called_once()
-    payload = model.get_num_tokens.call_args[0][0]
-    assert "system prompt" in payload
-    assert "demo_search" in payload
+        got_a = ContextMetricsRegistry.peek("sess-concurrent", run_id="run-A")
+        got_b = ContextMetricsRegistry.peek("sess-concurrent", run_id="run-B")
+        assert got_a is not None and got_b is not None
+        assert got_a["current_tokens"] == 1000
+        assert got_b["current_tokens"] == 5000
+    finally:
+        ContextMetricsRegistry._reset_for_tests()
 
 
-def test_resolve_session_id_from_execution_info() -> None:
-    request = ModelRequest(
-        model=MagicMock(),
-        messages=[HumanMessage(content="hello")],
-        runtime=_runtime_with_thread("sess-from-thread"),
-    )
-    assert resolve_session_id_for_request(request) == "sess-from-thread"
+def test_registry_peek_falls_back_to_latest_when_run_id_missing() -> None:
+    """无 run_id 或未命中时回退到 session 最新快照（兼容旧调用路径）。"""
+    ContextMetricsRegistry._reset_for_tests()
+    try:
+        snap = {"current_tokens": 2000, "max_tokens": 128000, "used_percentage": 2}
+        ContextMetricsRegistry.put("sess-fallback", snap, run_id="run-X")
+
+        # 不传 run_id → 回退到最新
+        got = ContextMetricsRegistry.peek("sess-fallback")
+        assert got is not None
+        assert got["current_tokens"] == 2000
+        # 传不存在的 run_id → 也回退到最新
+        got2 = ContextMetricsRegistry.peek("sess-fallback", run_id="run-nonexistent")
+        assert got2 is not None
+        assert got2["current_tokens"] == 2000
+    finally:
+        ContextMetricsRegistry._reset_for_tests()
 
 
-def test_resolve_session_id_missing_execution_info() -> None:
-    runtime = MagicMock()
-    runtime.execution_info = None
-    request = ModelRequest(
-        model=MagicMock(),
-        messages=[HumanMessage(content="hello")],
-        runtime=runtime,
-    )
-    assert resolve_session_id_for_request(request) == ""
+def test_registry_clear_run_only_clears_specified_run() -> None:
+    """run 终态清理只清该 run 精确槽；同 session 其他 run 不受影响。"""
+    ContextMetricsRegistry._reset_for_tests()
+    try:
+        ContextMetricsRegistry.put("sess-clear", {"current_tokens": 100}, run_id="run-1")
+        ContextMetricsRegistry.put("sess-clear", {"current_tokens": 200}, run_id="run-2")
+
+        ContextMetricsRegistry.clear_run("sess-clear", "run-1")
+
+        # run-2 精确命中不受影响
+        got_run2 = ContextMetricsRegistry.peek("sess-clear", run_id="run-2")
+        assert got_run2 is not None
+        assert got_run2["current_tokens"] == 200
+        # run-1 精确槽已清，回退到 session 最新（run-2）
+        got_run1_fallback = ContextMetricsRegistry.peek("sess-clear", run_id="run-1")
+        assert got_run1_fallback is not None
+        assert got_run1_fallback["current_tokens"] == 200
+    finally:
+        ContextMetricsRegistry._reset_for_tests()
 
 
-def test_context_metrics_middleware_records_registry() -> None:
-    cfg = SimpleNamespace(context_display_enabled=True)
-    mw = ContextMetricsMiddleware(model_id="flash")
-    model = MagicMock()
-    model.get_num_tokens.return_value = 512
-    request = ModelRequest(
-        model=model,
-        system_message=SystemMessage(content="noesis system"),
-        messages=[HumanMessage(content="hello world")],
-        tools=[],
-        runtime=_runtime_with_thread("sess-ctx-1"),
-    )
-    with (
-        patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg),
-        patch("agent.middlewares.context_metrics.resolve_context_max_tokens", return_value=200_000),
-    ):
-        mw.wrap_model_call(request, lambda req: MagicMock())
-    snap = ContextMetricsRegistry.peek("sess-ctx-1")
-    assert snap is not None
-    assert snap["current_tokens"] == 512
-    assert snap["max_tokens"] == 200_000
-    ContextMetricsRegistry.clear("sess-ctx-1")
+def test_registry_clear_session_removes_all_runs() -> None:
+    """session 级清理移除该 session 所有 run 快照。"""
+    ContextMetricsRegistry._reset_for_tests()
+    try:
+        ContextMetricsRegistry.put("sess-all", {"current_tokens": 100}, run_id="run-1")
+        ContextMetricsRegistry.put("sess-all", {"current_tokens": 200}, run_id="run-2")
+        ContextMetricsRegistry.put("sess-all", {"current_tokens": 300}, run_id="")
 
+        ContextMetricsRegistry.clear("sess-all")
 
-def test_context_metrics_middleware_skips_when_display_disabled() -> None:
-    cfg = SimpleNamespace(context_display_enabled=False)
-    mw = ContextMetricsMiddleware(model_id="flash")
-    request = ModelRequest(
-        model=MagicMock(),
-        messages=[HumanMessage(content="hello")],
-        runtime=_runtime_with_thread("sess-ctx-2"),
-    )
-    with patch("agent.middlewares.context_metrics_middleware.ModelConfig", cfg):
-        mw.wrap_model_call(request, lambda req: MagicMock())
-    assert ContextMetricsRegistry.peek("sess-ctx-2") is None
+        assert ContextMetricsRegistry.peek("sess-all", run_id="run-1") is None
+        assert ContextMetricsRegistry.peek("sess-all", run_id="run-2") is None
+        assert ContextMetricsRegistry.peek("sess-all") is None
+    finally:
+        ContextMetricsRegistry._reset_for_tests()

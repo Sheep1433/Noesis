@@ -15,7 +15,7 @@ export function useCopyCode() {
     }
 
     const wrapper = el.closest('.markdown-code-wrapper')
-    const isShell = wrapper != null && /language-(shellscript|shell|bash|sh|zsh)/.test(
+    const isShell = wrapper != null && /language-(?:shellscript|shell|bash|sh|zsh)/.test(
       wrapper.className,
     )
 
@@ -32,7 +32,7 @@ export function useCopyCode() {
     let text = clone.textContent || ''
 
     if (isShell) {
-      text = text.replace(/^ *(\$|>) /gm, '').trim()
+      text = text.replace(/^ *(?:\$|>) /gm, '').trim()
     }
 
     void copyToClipboard(text).then(() => {
