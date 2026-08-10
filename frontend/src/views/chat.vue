@@ -19,7 +19,7 @@ import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
-import { supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
+import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import {
@@ -1338,16 +1338,7 @@ async function scrollToLatestMessage(smooth = false) {
 }
 
 const placeholder = computed(() => {
-  if (uploadingOnSend.value) {
-    return '附件上传中...'
-  }
-  if (supportsSlashSkills(qa_type.value)) {
-    return '行首 / 选 Skills；空格后 @ 可引用多个文件或 subagent…'
-  }
-  if (supportsAtMentions(qa_type.value)) {
-    return '空格后 @ 引用文件或 subagent…'
-  }
-  return '输入任意问题...'
+  return composerPlaceholder(qa_type.value, uploadingOnSend.value)
 })
 
 function getComposerTextarea(): HTMLTextAreaElement | null {

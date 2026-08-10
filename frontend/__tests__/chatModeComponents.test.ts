@@ -56,7 +56,7 @@ describe('chat mode selector', () => {
 })
 
 describe('compact composer tools', () => {
-  it('keeps task tools inside the compact menu', async () => {
+  it('keeps the model switch beside plus and task tools inside the compact menu', async () => {
     const wrapper = mount(ChatComposerToolbar, {
       props: {
         qaType: 'SUPER_AGENT_QA',
@@ -74,18 +74,19 @@ describe('compact composer tools', () => {
       },
     })
 
+    const toolbarButtons = wrapper.get('.composer-toolbar__left').findAll('button')
+    expect(toolbarButtons[0].classes()).toContain('composer-plus-btn')
+    expect(toolbarButtons[1].attributes('data-testid')).toBe('model-selector')
     await wrapper.get('.composer-plus-btn').trigger('click')
     await flushPromises()
     const toolsPanel = document.querySelector<HTMLElement>('.composer-tools-panel')!
     expect(toolsPanel.textContent).toContain('会话文件')
     expect(toolsPanel.textContent).toContain('上传文件')
     expect(toolsPanel.textContent).toContain('上传图片')
-    expect(toolsPanel.textContent).toContain('模型')
     expect(toolsPanel.textContent).toContain('知识库')
     expect(toolsPanel.textContent).toContain('MCP')
     expect(toolsPanel.textContent).toContain('Skills')
-    expect(toolsPanel.querySelector('[data-testid="model-selector"]')).not.toBeNull()
-    expect(wrapper.find('[data-testid="model-selector"]').exists()).toBe(false)
+    expect(toolsPanel.querySelector('[data-testid="model-selector"]')).toBeNull()
     wrapper.unmount()
   })
 })

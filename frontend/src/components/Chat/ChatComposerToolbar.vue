@@ -278,14 +278,6 @@ const kbSummary = computed(() => {
               <span class="composer-menu-item__label">上传图片</span>
             </button>
 
-            <ModelSelector
-              v-model="selectedModelId"
-              embedded
-              :session-id="sessionId"
-              :persist-session-extra="persistSessionExtra"
-              :disabled="disabled"
-            />
-
             <button
               v-if="showKbScope"
               type="button"
@@ -411,6 +403,13 @@ const kbSummary = computed(() => {
           </template>
         </div>
       </n-popover>
+
+      <ModelSelector
+        v-model="selectedModelId"
+        :session-id="sessionId"
+        :persist-session-extra="persistSessionExtra"
+        :disabled="disabled"
+      />
     </div>
 
     <div class="composer-toolbar__right">

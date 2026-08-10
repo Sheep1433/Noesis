@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { isChatRouteName, shouldShowMobileBottomNav } from '../src/config/navigation'
+import { isChatRouteName, mainNavItems, shouldShowMobileBottomNav } from '../src/config/navigation'
+import { composerPlaceholder } from '../src/config/subagents'
 import {
   CHAT_MODE_OPTIONS,
   chatModeOption,
@@ -54,5 +55,24 @@ describe('mobile bottom navigation', () => {
 
   it('never shows mobile navigation on desktop', () => {
     expect(shouldShowMobileBottomNav('Settings', false)).toBe(false)
+  })
+})
+
+describe('public product navigation', () => {
+  it('does not expose the retired test-case page', () => {
+    expect(mainNavItems.map((item) => item.routeName)).not.toContain('TestCaseGenerate')
+  })
+})
+
+describe('composer placeholder', () => {
+  it('describes shortcuts in product language', () => {
+    expect(composerPlaceholder('SUPER_AGENT_QA', false)).toBe(
+      '输入消息，使用 / 调用 Skill，使用 @ 引用文件或协作助手…',
+    )
+    expect(composerPlaceholder('FAULT_OPERATION_QA', false)).toBe(
+      '输入消息，使用 @ 引用文件或协作助手…',
+    )
+    expect(composerPlaceholder('COMMON_QA', false)).toBe('输入消息…')
+    expect(composerPlaceholder('COMMON_QA', true)).toBe('正在上传附件…')
   })
 })

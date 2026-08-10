@@ -51,10 +51,4 @@ export const mainNavItems: MainNavItem[] = [
     routeName: 'Extensions',
     iconClass: 'i-mdi:puzzle-outline',
   },
-  {
-    label: '测试',
-    key: 'TestCaseGenerate',
-    routeName: 'TestCaseGenerate',
-    iconClass: 'i-mdi:clipboard-text-outline',
-  },
 ]

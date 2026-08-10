@@ -34,3 +34,16 @@ export function supportsSlashSkills(qaType: string): boolean {
 export function supportsAtMentions(qaType: string): boolean {
   return qaType === 'SUPER_AGENT_QA' || qaType === 'FAULT_OPERATION_QA'
 }
+
+export function composerPlaceholder(qaType: string, uploading: boolean): string {
+  if (uploading) {
+    return '正在上传附件…'
+  }
+  if (supportsSlashSkills(qaType)) {
+    return '输入消息，使用 / 调用 Skill，使用 @ 引用文件或协作助手…'
+  }
+  if (supportsAtMentions(qaType)) {
+    return '输入消息，使用 @ 引用文件或协作助手…'
+  }
+  return '输入消息…'
+}
