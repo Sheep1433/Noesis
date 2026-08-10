@@ -18,6 +18,8 @@ ENV UV_COMPILE_BYTECODE=1 \
     PYTHONPATH=/app
 
 COPY backend/pyproject.toml backend/uv.lock ./
+COPY backend/packages/noesis-core/pyproject.toml packages/noesis-core/pyproject.toml
+COPY backend/packages/noesis-cli/pyproject.toml packages/noesis-cli/pyproject.toml
 
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-dev
 
