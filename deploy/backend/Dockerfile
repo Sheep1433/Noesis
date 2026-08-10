@@ -19,7 +19,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 COPY backend/pyproject.toml backend/uv.lock ./
 
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-install-workspace --no-dev
 
 COPY backend/ ./
 
