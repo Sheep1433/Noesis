@@ -70,7 +70,7 @@ describe('mobile chat welcome', () => {
     expect(wrapper.get('.mobile-intro__subtitle').text()).toBe(subtitle)
     expect(wrapper.findAll('.mobile-intro__point').map((item) => item.text())).toEqual(points)
     expect(wrapper.get('.mobile-intro').attributes('style')).toContain('background')
-    expect(wrapper.find('.welcome-header').exists()).toBe(false)
+    expect(wrapper.get('.mobile-intro__brand').text()).toContain('智枢')
     wrapper.unmount()
   })
 })

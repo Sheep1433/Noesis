@@ -56,12 +56,31 @@ describe('chat mode selector', () => {
 })
 
 describe('compact composer tools', () => {
+  it('does not render a session-files button in the composer toolbar', () => {
+    const wrapper = mount(ChatComposerToolbar, {
+      props: {
+        qaType: 'COMMON_QA',
+        sessionId: 'session-1',
+      },
+      global: {
+        stubs: {
+          NButton: { template: '<button><slot /></button>' },
+          NCheckbox: true,
+          ModelSelector: { template: '<button data-testid="model-selector">模型</button>' },
+          KbScopeSelector: true,
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="session-files-trigger"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('keeps the model switch beside plus and task tools inside the compact menu', async () => {
     const wrapper = mount(ChatComposerToolbar, {
       props: {
         qaType: 'SUPER_AGENT_QA',
         sessionId: 'session-1',
-        showSessionFiles: true,
       },
       attachTo: document.body,
       global: {
@@ -80,7 +99,7 @@ describe('compact composer tools', () => {
     await wrapper.get('.composer-plus-btn').trigger('click')
     await flushPromises()
     const toolsPanel = document.querySelector<HTMLElement>('.composer-tools-panel')!
-    expect(toolsPanel.textContent).toContain('会话文件')
+    expect(toolsPanel.textContent).not.toContain('会话文件')
     expect(toolsPanel.textContent).toContain('上传文件')
     expect(toolsPanel.textContent).toContain('上传图片')
     expect(toolsPanel.textContent).toContain('知识库')

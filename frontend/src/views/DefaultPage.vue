@@ -89,6 +89,10 @@ const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.sl
       class="mobile-intro"
       :style="currentPanel.gradientStyle"
     >
+      <div class="mobile-intro__brand">
+        <span class="mobile-intro__brand-mark i-my-svg:system-logo" aria-hidden="true"></span>
+        <span>智枢</span>
+      </div>
       <h2 class="mobile-intro__title">
         {{ currentPanel.title }}
       </h2>
@@ -338,6 +342,22 @@ const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.sl
   box-shadow: var(--noesis-shadow-sm);
   box-sizing: border-box;
   text-align: center;
+}
+
+.mobile-intro__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--noesis-color-text-heading);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mobile-intro__brand-mark {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
 }
 
 .mobile-intro__title {

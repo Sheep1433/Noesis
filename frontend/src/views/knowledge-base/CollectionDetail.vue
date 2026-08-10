@@ -9,11 +9,12 @@ import type {
   SearchResult,
   SearchTiming,
 } from '@/api/knowledgeBase'
-import { ArrowBack, CloudUpload, DocumentTextOutline, Refresh, Search, SettingsOutline } from '@vicons/ionicons-v5'
+import { ArrowBack, CloudUpload, DocumentTextOutline, EllipsisHorizontal, Refresh, Search, SettingsOutline } from '@vicons/ionicons-v5'
 import {
   NAlert,
   NButton,
   NDataTable,
+  NDropdown,
   NEmpty,
   NFormItem,
   NIcon,
@@ -82,6 +83,7 @@ function openDocumentFromRoute() {
 
 const shardDetailShow = ref(false)
 const selectedShardId = ref('')
+const selectedSearchContext = ref<SearchResult | null>(null)
 
 const showUploadModal = ref(false)
 const selectedFile = ref<File | null>(null)
@@ -155,6 +157,40 @@ async function copyHash(hash: string | null | undefined) {
   }
 }
 
+const documentMoreOptions = [
+  { label: '删除文档', key: 'delete' },
+]
+
+function renderDocumentActions(row: DocumentInfo, compact = false) {
+  return h(NSpace, { size: compact ? 2 : 4, wrap: false }, {
+    default: () => [
+      h(NButton, { size: 'tiny', quaternary: true, onClick: () => useDocumentAsQuery(row.file_name) }, { default: () => '检索' }),
+      h(NButton, { size: 'tiny', quaternary: true, onClick: () => openDrawer(row.file_name) }, { default: () => '分片' }),
+      h(
+        NDropdown,
+        {
+          trigger: 'click',
+          options: documentMoreOptions,
+          onSelect: (key: string) => key === 'delete' && handleDelete(row.file_name),
+        },
+        {
+          default: () => h(
+            NButton,
+            {
+              'size': 'tiny',
+              'quaternary': true,
+              'aria-label': `${row.file_name} 更多操作`,
+            },
+            compact
+              ? { icon: () => h(NIcon, null, { default: () => h(EllipsisHorizontal) }) }
+              : { default: () => '更多' },
+          ),
+        },
+      ),
+    ],
+  })
+}
+
 const docColumns: DataTableColumns<DocumentInfo> = [
   {
     title: '文件名',
@@ -206,14 +242,8 @@ const docColumns: DataTableColumns<DocumentInfo> = [
   {
     title: '操作',
     key: 'actions',
-    width: 200,
-    render: (row) => h(NSpace, { size: 4 }, {
-      default: () => [
-        h(NButton, { size: 'tiny', quaternary: true, onClick: () => useDocumentAsQuery(row.file_name) }, { default: () => '检索' }),
-        h(NButton, { size: 'tiny', quaternary: true, onClick: () => openDrawer(row.file_name) }, { default: () => '分片' }),
-        h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => handleDelete(row.file_name) }, { default: () => '删除' }),
-      ],
-    }),
+    width: 188,
+    render: (row) => renderDocumentActions(row),
   },
 ]
 
@@ -242,13 +272,7 @@ const docColumnsMobile: DataTableColumns<DocumentInfo> = [
     title: '操作',
     key: 'actions',
     width: 148,
-    render: (row) => h(NSpace, { size: 2, wrap: false }, {
-      default: () => [
-        h(NButton, { size: 'tiny', quaternary: true, onClick: () => useDocumentAsQuery(row.file_name) }, { default: () => '检索' }),
-        h(NButton, { size: 'tiny', quaternary: true, onClick: () => openDrawer(row.file_name) }, { default: () => '分片' }),
-        h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => handleDelete(row.file_name) }, { default: () => '删' }),
-      ],
-    }),
+    render: (row) => renderDocumentActions(row, true),
   },
 ]
 
@@ -329,6 +353,12 @@ function confirmDeleteCollection() {
   })
 }
 
+function handleCollectionAction(key: string) {
+  if (key === 'delete') {
+    confirmDeleteCollection()
+  }
+}
+
 function openUploadModal() {
   selectedFile.value = null
   uploadPreview.value = null
@@ -340,8 +370,9 @@ function openDrawer(fileName: string) {
   drawerShow.value = true
 }
 
-function openShardDetail(shardId: string) {
-  selectedShardId.value = shardId
+function openShardDetail(result: SearchResult) {
+  selectedShardId.value = result.id
+  selectedSearchContext.value = result
   shardDetailShow.value = true
 }
 
@@ -530,10 +561,16 @@ async function saveCollectionConfig() {
           </template>
           刷新
         </n-button>
-        <n-button type="error" ghost @click="confirmDeleteCollection">
-          删除知识库
-        </n-button>
-        <n-button type="primary" @click="openUploadModal">
+        <n-dropdown
+          trigger="click"
+          :options="[{ label: '删除知识库', key: 'delete' }]"
+          @select="handleCollectionAction"
+        >
+          <n-button quaternary circle aria-label="更多操作">
+            <template #icon><n-icon><EllipsisHorizontal /></n-icon></template>
+          </n-button>
+        </n-dropdown>
+        <n-button :type="activeTab === 'documents' ? 'primary' : 'default'" @click="openUploadModal">
           <template #icon>
             <n-icon><CloudUpload /></n-icon>
           </template>
@@ -584,7 +621,7 @@ async function saveCollectionConfig() {
           <n-icon size="16" style="margin-right: 4px">
             <Search />
           </n-icon>
-          检索调试
+          检索测试
         </template>
         <div class="tab-panel tab-panel--search">
           <KbSearchPanel
@@ -654,7 +691,7 @@ async function saveCollectionConfig() {
           <section class="config-section">
             <h3>检索策略</h3>
             <p class="section-desc">
-              默认检索模式与 Top-K；可在「检索调试」页面临时覆盖后一并保存。
+              默认检索模式与 Top-K；可在「检索测试」页面临时调整后一并保存。
             </p>
             <div class="config-grid">
               <n-form-item label="search_mode">
@@ -702,13 +739,13 @@ async function saveCollectionConfig() {
       v-model:show="drawerShow"
       :collection-name="collectionName"
       :file-name="selectedFileName"
-      @view-shard="openShardDetail"
     />
 
     <ShardDetail
       v-model:show="shardDetailShow"
       :collection-name="collectionName"
       :shard-id="selectedShardId"
+      :search-context="selectedSearchContext"
     />
 
     <n-modal v-model:show="showUploadModal" preset="card" title="上传文档" :style="{ width: uploadModalWidth }" @after-leave="closeUploadModal">
@@ -769,6 +806,7 @@ async function saveCollectionConfig() {
   height: 100%;
   padding: 16px 20px 20px;
   box-sizing: border-box;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -778,6 +816,7 @@ async function saveCollectionConfig() {
   gap: 12px;
   margin-bottom: 12px;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .detail-header-main {

@@ -15,7 +15,6 @@ from noesis.runtime.attachments.markdown import extract_outline
 from noesis.runtime.attachments.resolver import attachment_id_from_ref, is_chat_attachment_ref
 from noesis.runtime.attachments.vision import is_vision_available
 from noesis.runtime.attachments.vlm_caption import describe_image_bytes_for_chat
-from noesis.runtime.context_provenance import estimate_source_tokens, get_or_create_context_provenance
 from noesis.runtime.deps import require_attachment_service
 from noesis.knowledge.embedding import is_vlm_configured
 from noesis.runtime.logging import logger
@@ -61,28 +60,6 @@ class AttachmentInputResolver:
             and is_vlm_configured()
             and not self.vision_available
         )
-
-    @staticmethod
-    def _tag_attachments_provenance(
-        uploaded_block: str,
-        images: list[tuple[bytes, str, str]],
-        image_delivery: str,
-    ) -> None:
-        """Tag attachment content as an ``attachments`` source for attribution.
-
-        Estimates the injected attachment text (file listing + captions) plus a
-        flat per-image cost for multimodal delivery. VLM captions are already in
-        ``uploaded_block``; multimodal image tokens are approximated at the same
-        flat rate the token counter uses (85/image). Best-effort: never blocks.
-        """
-        try:
-            tokens = estimate_source_tokens(uploaded_block)
-            if image_delivery == "multimodal" and images:
-                tokens += 85 * len(images)
-            if tokens > 0:
-                get_or_create_context_provenance().add("attachments", tokens)
-        except Exception:  # noqa: BLE001 - provenance is best-effort
-            pass
 
     @staticmethod
     def _parse_meta(messages: list[Any], *, session_id: str, user_id: str) -> dict[str, Any] | None:
@@ -253,7 +230,6 @@ class AttachmentInputResolver:
         kwargs = dict(getattr(last_human, "additional_kwargs", None) or {})
         kwargs["noesis_attachments"] = meta
         new_human = HumanMessage(content=content, additional_kwargs=kwargs, id=getattr(last_human, "id", None))
-        self._tag_attachments_provenance(uploaded_block, images, image_delivery)
         logger.info(
             "附件已解析 session=%s model_id=%s vision=%s vlm=%s images=%d delivery=%s",
             self.session_id,

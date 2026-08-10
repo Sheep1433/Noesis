@@ -23,6 +23,7 @@ declare module 'vue' {
     HitlComposerPanel: typeof import('./src/components/HitlComposerPanel/index.vue')['default']
     IconFont: typeof import('./src/components/IconFont/index.vue')['default']
     IconFontQatypeIcon: typeof import('./src/components/IconFont/QatypeIcon.vue')['default']
+    KnowledgeBaseChunkDetailPanel: typeof import('./src/components/KnowledgeBase/ChunkDetailPanel.vue')['default']
     KnowledgeBaseDocumentDrawer: typeof import('./src/components/KnowledgeBase/DocumentDrawer.vue')['default']
     KnowledgeBaseKbScopeSelector: typeof import('./src/components/KnowledgeBase/KbScopeSelector.vue')['default']
     KnowledgeBaseKbSearchPanel: typeof import('./src/components/KnowledgeBase/KbSearchPanel.vue')['default']

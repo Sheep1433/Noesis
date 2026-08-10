@@ -68,27 +68,59 @@ export interface CollectionDetail extends CollectionInfo {
   status?: string | null
 }
 
-interface KnowledgeBaseStatus {
+export interface KnowledgeBaseStatus {
   connected: boolean
   host: string
   port: number
   collections_count: number
 }
 
-interface DocumentInfo {
+export interface DocumentInfo {
   file_name: string
   shard_count: number
   uploaded_at: string | null
   file_hash?: string | null
 }
 
-interface ShardInfo {
+export type ChunkElementType = 'text' | 'title' | 'table' | 'image'
+export type ChunkLocatorType = 'page' | 'char' | 'bbox' | 'header'
+
+export interface ChunkLocator {
+  type: ChunkLocatorType
+  page_start?: number
+  page_end?: number
+  start?: number
+  end?: number
+  path?: string[]
+  bbox?: number[]
+  [key: string]: unknown
+}
+
+export interface ChunkSummary {
   id: string
-  content: string
+  content_preview: string
   char_length: number
   created_at: string | null
   header_path?: string | null
   chunk_index?: number | null
+  locator?: ChunkLocator | null
+  element_type?: string | null
+  token_count?: number | null
+}
+
+export interface ChunkSummaryPage {
+  items: ChunkSummary[]
+  total: number
+  next_cursor: string | null
+}
+
+export interface ChunkPageQuery {
+  limit?: number
+  cursor?: string | null
+  element_type?: ChunkElementType | null
+  locator_type?: ChunkLocatorType | null
+  keyword?: string
+  sort?: 'asc' | 'desc'
 }
 
 export interface ShardDetail {
@@ -101,7 +133,21 @@ export interface ShardDetail {
   Header_1?: string | null
   Header_2?: string | null
   Header_3?: string | null
+  Header_4?: string | null
   chunk_index?: number | null
+  locator?: ChunkLocator | null
+  element_type?: string | null
+  token_count?: number | null
+  file_name?: string | null
+  file_hash?: string | null
+  content_hash?: string | null
+  document_id?: string | null
+  document_version_id?: string | null
+  segment_id?: string | null
+  source?: string | null
+  raw_text?: string | null
+  clean_text?: string | null
+  raw_metadata?: Record<string, unknown>
   effective_processing_params?: Record<string, unknown> | null
 }
 
@@ -232,9 +278,33 @@ export async function getDocuments(collectionName: string): Promise<DocumentInfo
 /**
  * 获取文档的分片列表
  */
-export async function getDocumentShards(collectionName: string, fileName: string): Promise<ShardInfo[]> {
-  return kbJson<ShardInfo[]>(
-    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}/shards`,
+export async function getDocumentShards(
+  collectionName: string,
+  fileName: string,
+  query: ChunkPageQuery = {},
+): Promise<ChunkSummaryPage> {
+  const params = new URLSearchParams()
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit))
+  }
+  if (query.cursor) {
+    params.set('cursor', query.cursor)
+  }
+  if (query.element_type) {
+    params.set('element_type', query.element_type)
+  }
+  if (query.locator_type) {
+    params.set('locator_type', query.locator_type)
+  }
+  if (query.keyword?.trim()) {
+    params.set('keyword', query.keyword.trim())
+  }
+  if (query.sort) {
+    params.set('sort', query.sort)
+  }
+  const suffix = params.size ? `?${params.toString()}` : ''
+  return kbJson<ChunkSummaryPage>(
+    `${API_BASE}/collections/${encodeURIComponent(collectionName)}/documents/${encodeURIComponent(fileName)}/shards${suffix}`,
     { method: 'GET' },
   )
 }

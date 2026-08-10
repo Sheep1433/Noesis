@@ -3,7 +3,7 @@ import type { DataTableColumns } from 'naive-ui'
 import type { ChatModeQaType } from '@/utils/qaType'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import ThemeSwitcher from '@/components/ThemeSwitcher/index.vue'
-import { mainNavItems } from '@/config/navigation'
+import { mobileHistoryNavItems } from '@/config/navigation'
 import { cssVar, themeCssVar } from '@/config/theme'
 
 interface TableItem {
@@ -18,6 +18,7 @@ defineProps<{
   isFocusSearchChat: boolean
   isLoadingHistory: boolean
   tableData: TableItem[]
+  archivedTableData: TableItem[]
   historySidebarColumns: DataTableColumns<TableItem>
   sessionContextMenuShow: boolean
   sessionContextMenuX: number
@@ -41,13 +42,13 @@ const emit = defineEmits<{
 }>()
 
 const searchText = defineModel<string>('searchText', { required: true })
-const archiveView = defineModel<boolean>('archiveView', { default: false })
+const archiveExpanded = ref(false)
 
 const searchChatRef = useTemplateRef('searchChatRef')
 
 const router = useRouter()
 const showUserMenu = ref(false)
-const drawerNavItems = mainNavItems.filter((item) => item.routeName && item.routeName !== 'ChatIndex')
+const drawerNavItems = mobileHistoryNavItems
 
 function openSettings() {
   showUserMenu.value = false
@@ -74,7 +75,7 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
       >
         <ChatModeSelector
           :qa-type="currentQaType"
-          :disabled="stylizingLoading || archiveView"
+          :disabled="stylizingLoading"
           placement="bottom-start"
           @select="emit('newChat', $event)"
         >
@@ -84,7 +85,7 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
               icon-placement="left"
               strong
               class="create-chat"
-              :disabled="stylizingLoading || archiveView"
+              :disabled="stylizingLoading"
             >
               <template #icon>
                 <n-icon>
@@ -96,24 +97,6 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
           </template>
         </ChatModeSelector>
       </div>
-      <n-tooltip placement="bottom">
-        <template #trigger>
-          <button
-            type="button"
-            class="archive-toggle"
-            :class="{ 'archive-toggle--active': archiveView }"
-            :aria-label="archiveView ? '退出归档视图' : '查看归档会话'"
-            @click="archiveView = !archiveView"
-          >
-            <span
-              class="archive-toggle__icon"
-              :class="archiveView ? 'i-hugeicons:archive-restore' : 'i-hugeicons:archive-02'"
-              aria-hidden="true"
-            ></span>
-          </button>
-        </template>
-        {{ archiveView ? '退出归档' : '归档' }}
-      </n-tooltip>
       <button
         v-if="!isFocusSearchChat"
         type="button"
@@ -168,6 +151,49 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
         :loading="isLoadingHistory"
         :row-props="rowProps"
       />
+      <section
+        v-if="archivedTableData.length"
+        class="archived-section"
+        data-testid="archived-section"
+      >
+        <button
+          type="button"
+          class="archived-section__toggle"
+          :aria-expanded="archiveExpanded"
+          data-testid="archive-section-toggle"
+          @click="archiveExpanded = !archiveExpanded"
+        >
+          <span class="archived-section__title">
+            <span class="archived-section__icon i-hugeicons:archive-02" aria-hidden="true"></span>
+            已归档
+          </span>
+          <span class="archived-section__meta">
+            {{ archivedTableData.length }} 条
+            <span
+              class="archived-section__chevron i-hugeicons:arrow-down-01"
+              :class="{ 'archived-section__chevron--expanded': archiveExpanded }"
+              aria-hidden="true"
+            ></span>
+          </span>
+        </button>
+        <div v-show="archiveExpanded" class="archived-section__content">
+          <n-data-table
+            class="custom-table archived-table"
+            :style="{
+              'font-size': '14px',
+              '--n-td-color': cssVar(themeCssVar.bgElevated),
+            }"
+            size="small"
+            :bordered="false"
+            :bottom-bordered="false"
+            :single-line="false"
+            :columns="historySidebarColumns"
+            :data="archivedTableData"
+            :loading="isLoadingHistory"
+            :row-props="rowProps"
+          />
+        </div>
+      </section>
     </div>
 
     <div class="footer" style="flex-shrink: 0">
@@ -279,45 +305,6 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
   z-index: 1;
 }
 
-.archive-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--noesis-color-border, #e8eaf3);
-  border-radius: var(--noesis-radius-round);
-  background: var(--noesis-color-bg-elevated, #fff);
-  color: var(--noesis-color-text-muted, #64748b);
-  cursor: pointer;
-  transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
-}
-
-.archive-toggle:hover {
-  color: var(--noesis-color-primary, #5c7cfa);
-  border-color: var(--noesis-color-primary-muted, #a48ef4);
-  background: var(--noesis-color-primary-bg-subtle, rgb(92 124 250 / 4%));
-}
-
-.archive-toggle--active {
-  color: var(--noesis-color-primary, #5c7cfa);
-  border-color: var(--noesis-color-primary-muted, #a48ef4);
-  background: var(--noesis-color-primary-bg-subtle, rgb(92 124 250 / 8%));
-}
-
-.archive-toggle__icon {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  font-size: 18px;
-  line-height: 1;
-  color: inherit;
-  flex-shrink: 0;
-}
-
 .search-chat-trigger {
   display: inline-flex;
   align-items: center;
@@ -375,6 +362,64 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
   height: 100%;
   background-color: var(--noesis-color-bg-elevated);
   transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.archived-section {
+  flex-shrink: 0;
+  border-top: 1px solid var(--noesis-color-border-subtle);
+  background: var(--noesis-color-bg-muted);
+}
+
+.archived-section__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--noesis-color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.archived-section__toggle:hover {
+  background: var(--noesis-color-primary-bg-subtle);
+  color: var(--noesis-color-primary);
+}
+
+.archived-section__title,
+.archived-section__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.archived-section__icon,
+.archived-section__chevron {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+}
+
+.archived-section__chevron {
+  transition: transform 0.18s ease;
+}
+
+.archived-section__chevron--expanded {
+  transform: rotate(180deg);
+}
+
+.archived-section__content {
+  max-height: 240px;
+  overflow-y: auto;
+  border-top: 1px solid var(--noesis-color-border-subtle);
+}
+
+.archived-table {
+  background: var(--noesis-color-bg-elevated);
 }
 
 .scrollable-table-container::-webkit-scrollbar {

@@ -1,11 +1,32 @@
 <script setup lang="ts">
-import type { ShardInfo } from '@/api/knowledgeBase'
-import { Copy, EyeOutline } from '@vicons/ionicons-v5'
-import { NAlert, NButton, NDrawer, NDrawerContent, NEmpty, NIcon, NPagination, NSpin, NTooltip, useMessage } from 'naive-ui'
+import type {
+  ChunkElementType,
+  ChunkSummary,
+  ShardDetail,
+} from '@/api/knowledgeBase'
+import {
+  ArrowBack,
+  ChevronBack,
+  ChevronForward,
+  SearchOutline,
+} from '@vicons/ionicons-v5'
+import {
+  NAlert,
+  NButton,
+  NDrawer,
+  NDrawerContent,
+  NEmpty,
+  NIcon,
+  NInput,
+  NSelect,
+  NSpin,
+  NTag,
+} from 'naive-ui'
 import { computed, ref, watch } from 'vue'
-import { getDocumentShards } from '@/api/knowledgeBase'
-import { copyToClipboard } from '@/utils/copy'
-import { formatKbDate } from '@/utils/kbFormat'
+import { getDocumentShards, getShardDetail } from '@/api/knowledgeBase'
+import ChunkDetailPanel from '@/components/KnowledgeBase/ChunkDetailPanel.vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { chunkElementLabel, formatChunkLocator } from '@/utils/kbFormat'
 
 const props = defineProps<{
   show: boolean
@@ -15,99 +36,184 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:show': [value: boolean]
-  'viewShard': [shardId: string]
 }>()
 
-const message = useMessage()
+const { isMobile } = useBreakpoint()
+const { width: windowWidth } = useWindowSize()
+const drawerWidth = computed(() => {
+  if (isMobile.value) {
+    return windowWidth.value
+  }
+  return Math.min(windowWidth.value - 48, 1180)
+})
+
 const loading = ref(false)
 const error = ref<string | null>(null)
-const allShards = ref<ShardInfo[]>([])
+const items = ref<ChunkSummary[]>([])
+const total = ref(0)
+const nextCursor = ref<string | null>(null)
+const cursorHistory = ref<Array<string | null>>([null])
+const pageIndex = ref(0)
 
-const page = ref(1)
-const pageSize = ref(20)
+const selectedShardId = ref('')
+const selectedDetail = ref<ShardDetail | null>(null)
+const detailLoading = ref(false)
+const detailError = ref<string | null>(null)
+const mobilePane = ref<'list' | 'detail'>('list')
 
-const { width: windowWidth } = useWindowSize()
+const keyword = ref('')
+const elementType = ref<ChunkElementType | null>(null)
+const sort = ref<'asc' | 'desc'>('asc')
 
-const drawerWidth = computed(() => {
-  const w = windowWidth.value
-  if (w <= 480) {
-    return w
-  }
-  if (w <= 768) {
-    return Math.min(w - 24, 640)
-  }
-  return Math.min(w - 48, 1100)
-})
+const elementOptions = [
+  { label: '全部类型', value: '' },
+  { label: '正文', value: 'text' },
+  { label: '标题', value: 'title' },
+  { label: '表格', value: 'table' },
+  { label: '图片', value: 'image' },
+]
+const sortOptions = [
+  { label: '正序', value: 'asc' },
+  { label: '倒序', value: 'desc' },
+]
 
-function sortShardsByChunkIndex(shards: ShardInfo[]): ShardInfo[] {
-  return [...shards].sort((a, b) => {
-    const ai = a.chunk_index ?? Number.MAX_SAFE_INTEGER
-    const bi = b.chunk_index ?? Number.MAX_SAFE_INTEGER
-    return ai - bi
-  })
-}
-
-const paginatedShards = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return allShards.value.slice(start, end)
-})
-
-const totalPages = computed(() => Math.ceil(allShards.value.length / pageSize.value))
-
-const totalChars = computed(() =>
-  allShards.value.reduce((sum, shard) => sum + (shard.char_length ?? 0), 0),
+const selectedIndex = computed(() =>
+  items.value.findIndex((item) => item.id === selectedShardId.value),
 )
-
-const pageRangeLabel = computed(() => {
-  if (allShards.value.length === 0) {
-    return ''
+const pageLabel = computed(() => {
+  if (!total.value) {
+    return '0 个分块'
   }
-  const start = (page.value - 1) * pageSize.value + 1
-  const end = Math.min(page.value * pageSize.value, allShards.value.length)
-  return `第 ${start}–${end} 条，共 ${allShards.value.length} 个分片`
+  return `第 ${pageIndex.value + 1} 页 · 共 ${total.value} 个分块`
 })
 
 watch(
   () => [props.show, props.collectionName, props.fileName],
-  async ([newShow, newCollection, newFile]) => {
-    if (newShow && newCollection && newFile) {
-      page.value = 1
-      await loadShards()
+  async ([show, collectionName, fileName], previous) => {
+    if (!show || !collectionName || !fileName) {
+      return
     }
+    const fileChanged = previous?.[1] !== collectionName || previous?.[2] !== fileName
+    if (fileChanged) {
+      resetInspector()
+    }
+    await loadPage('first')
   },
   { immediate: true },
 )
 
-async function loadShards() {
+function resetInspector() {
+  keyword.value = ''
+  elementType.value = null
+  sort.value = 'asc'
+  resetPagination()
+}
+
+function resetPagination() {
+  cursorHistory.value = [null]
+  pageIndex.value = 0
+  nextCursor.value = null
+  selectedShardId.value = ''
+  selectedDetail.value = null
+  mobilePane.value = 'list'
+}
+
+async function loadPage(select: 'first' | 'last' | 'keep' = 'keep') {
   loading.value = true
   error.value = null
-
   try {
-    const shards = await getDocumentShards(props.collectionName, props.fileName)
-    allShards.value = sortShardsByChunkIndex(shards)
+    const page = await getDocumentShards(props.collectionName, props.fileName, {
+      limit: 20,
+      cursor: cursorHistory.value[pageIndex.value],
+      keyword: keyword.value,
+      element_type: elementType.value,
+      sort: sort.value,
+    })
+    items.value = page.items
+    total.value = page.total
+    nextCursor.value = page.next_cursor
+    const selectedStillVisible = items.value.some((item) => item.id === selectedShardId.value)
+    if (select === 'keep' && selectedStillVisible) {
+      return
+    }
+    const target = select === 'last' ? items.value.at(-1) : items.value[0]
+    if (target) {
+      await selectShard(target, false)
+    } else {
+      selectedShardId.value = ''
+      selectedDetail.value = null
+    }
   } catch (e: any) {
-    error.value = e.message || '加载失败'
+    error.value = e.message || '分块列表加载失败'
+    items.value = []
   } finally {
     loading.value = false
   }
 }
 
-function shardIndex(shard: ShardInfo, index: number) {
-  return shard.chunk_index ?? (page.value - 1) * pageSize.value + index + 1
-}
-
-async function copyContent(shard: ShardInfo) {
+async function selectShard(shard: ChunkSummary, revealDetail = true) {
+  selectedShardId.value = shard.id
+  if (revealDetail && isMobile.value) {
+    mobilePane.value = 'detail'
+  }
+  detailLoading.value = true
+  detailError.value = null
   try {
-    await copyToClipboard(shard.content)
-    message.success('复制成功')
-  } catch {
-    message.error('复制失败')
+    selectedDetail.value = await getShardDetail(props.collectionName, shard.id)
+  } catch (e: any) {
+    detailError.value = e.message || '分块详情加载失败'
+    selectedDetail.value = null
+  } finally {
+    detailLoading.value = false
   }
 }
 
-function handlePageChange(newPage: number) {
-  page.value = newPage
+async function applyFilters() {
+  resetPagination()
+  await loadPage('first')
+}
+
+async function updateElementType(value: string | null) {
+  elementType.value = (value || null) as ChunkElementType | null
+  await applyFilters()
+}
+
+async function updateSort(value: string) {
+  sort.value = value as 'asc' | 'desc'
+  await applyFilters()
+}
+
+async function previousPage(select: 'first' | 'last' = 'first') {
+  if (pageIndex.value === 0) {
+    return
+  }
+  pageIndex.value -= 1
+  await loadPage(select)
+}
+
+async function nextPage(select: 'first' | 'last' = 'first') {
+  if (!nextCursor.value) {
+    return
+  }
+  cursorHistory.value = [
+    ...cursorHistory.value.slice(0, pageIndex.value + 1),
+    nextCursor.value,
+  ]
+  pageIndex.value += 1
+  await loadPage(select)
+}
+
+async function moveSelection(direction: -1 | 1) {
+  const nextIndex = selectedIndex.value + direction
+  if (items.value[nextIndex]) {
+    await selectShard(items.value[nextIndex])
+    return
+  }
+  if (direction === 1 && nextCursor.value) {
+    await nextPage('first')
+  } else if (direction === -1 && pageIndex.value > 0) {
+    await previousPage('last')
+  }
 }
 </script>
 
@@ -118,285 +224,316 @@ function handlePageChange(newPage: number) {
     placement="right"
     :trap-focus="false"
     :block-scroll="true"
-    @update:show="(val) => emit('update:show', val)"
+    @update:show="emit('update:show', $event)"
   >
-    <n-drawer-content :title="`分片预览 · ${fileName}`" closable class="shard-drawer-content">
-      <div v-if="loading" class="loading">
-        <n-spin size="large" />
+    <n-drawer-content :title="`分块浏览 · ${fileName}`" closable class="chunk-drawer">
+      <div class="inspector-toolbar">
+        <n-input
+          v-model:value="keyword"
+          clearable
+          placeholder="搜索正文"
+          @clear="applyFilters"
+          @keyup.enter="applyFilters"
+        >
+          <template #prefix><n-icon><SearchOutline /></n-icon></template>
+        </n-input>
+        <n-select
+          :value="elementType || ''"
+          :options="elementOptions"
+          @update:value="updateElementType"
+        />
+        <n-select :value="sort" :options="sortOptions" @update:value="updateSort" />
       </div>
 
-      <div v-else-if="error" class="error">
-        <n-alert type="error" :title="error" />
-      </div>
+      <div class="inspector-shell" :class="{ 'show-detail': mobilePane === 'detail' }">
+        <section class="chunk-list-pane">
+          <header class="list-heading">
+            <div>
+              <strong>分块列表</strong>
+              <span>{{ pageLabel }}</span>
+            </div>
+          </header>
 
-      <div v-else-if="allShards.length > 0" class="shards-container">
-        <header class="shards-toolbar">
-          <div class="shards-stats">
-            <span class="stat-pill">{{ allShards.length }} 个分片</span>
-            <span class="stat-pill">{{ totalChars.toLocaleString() }} 字</span>
-          </div>
-          <span v-if="totalPages > 1" class="shards-range">{{ pageRangeLabel }}</span>
-        </header>
-
-        <div class="shards-grid">
-          <article
-            v-for="(shard, index) in paginatedShards"
-            :key="shard.id"
-            class="shard-card"
-          >
-            <header class="shard-header">
-              <div class="shard-meta">
-                <span class="shard-badge">#{{ shardIndex(shard, index) }}</span>
-                <span
-                  v-if="shard.header_path"
-                  class="shard-path"
-                  :title="shard.header_path"
-                >
-                  {{ shard.header_path }}
+          <div v-if="loading" class="list-state"><n-spin /></div>
+          <n-alert v-else-if="error" type="error" :title="error" />
+          <n-empty v-else-if="!items.length" description="没有匹配的分块" />
+          <div v-else class="chunk-list">
+            <button
+              v-for="chunk in items"
+              :key="chunk.id"
+              type="button"
+              class="chunk-row"
+              :class="{ active: chunk.id === selectedShardId }"
+              @click="selectShard(chunk)"
+            >
+              <span class="chunk-index">#{{ chunk.chunk_index ?? '—' }}</span>
+              <span class="chunk-row-main">
+                <span class="chunk-path">{{ chunk.header_path || formatChunkLocator(chunk.locator) }}</span>
+                <span class="chunk-preview">{{ chunk.content_preview }}</span>
+                <span class="chunk-meta">
+                  <n-tag size="tiny" :bordered="false">{{ chunkElementLabel(chunk.element_type) }}</n-tag>
+                  <span>{{ formatChunkLocator(chunk.locator) }}</span>
+                  <span>{{ chunk.char_length }} 字</span>
+                  <span v-if="chunk.token_count !== null && chunk.token_count !== undefined">{{ chunk.token_count }} tokens</span>
                 </span>
-                <span class="shard-length">{{ shard.char_length }} 字</span>
-              </div>
-              <div class="shard-actions">
-                <n-tooltip trigger="hover" placement="top">
-                  <template #trigger>
-                    <n-button size="tiny" quaternary circle @click="emit('viewShard', shard.id)">
-                      <template #icon>
-                        <n-icon><EyeOutline /></n-icon>
-                      </template>
-                    </n-button>
-                  </template>
-                  查看详情
-                </n-tooltip>
-                <n-tooltip trigger="hover" placement="top">
-                  <template #trigger>
-                    <n-button size="tiny" quaternary circle @click="copyContent(shard)">
-                      <template #icon>
-                        <n-icon><Copy /></n-icon>
-                      </template>
-                    </n-button>
-                  </template>
-                  复制内容
-                </n-tooltip>
-              </div>
-            </header>
+              </span>
+              <n-icon><ChevronForward /></n-icon>
+            </button>
+          </div>
 
-            <div class="shard-content">{{ shard.content }}</div>
+          <footer class="list-pagination">
+            <n-button size="small" :disabled="pageIndex === 0 || loading" @click="previousPage()">
+              <template #icon><n-icon><ChevronBack /></n-icon></template>
+              上一页
+            </n-button>
+            <n-button size="small" :disabled="!nextCursor || loading" @click="nextPage()">
+              下一页
+              <template #icon><n-icon><ChevronForward /></n-icon></template>
+            </n-button>
+          </footer>
+        </section>
 
-            <footer class="shard-footer">
-              {{ formatKbDate(shard.created_at) }}
-            </footer>
-          </article>
-        </div>
-
-        <footer v-if="totalPages > 1" class="pagination">
-          <n-pagination
-            v-model:page="page"
-            :page-count="totalPages"
-            :page-slot="5"
-            size="small"
-            @update:page="handlePageChange"
+        <section class="chunk-detail-pane">
+          <header class="detail-nav">
+            <n-button v-if="isMobile" quaternary size="small" @click="mobilePane = 'list'">
+              <template #icon><n-icon><ArrowBack /></n-icon></template>
+              返回列表
+            </n-button>
+            <span class="detail-nav-spacer"></span>
+            <n-button
+              quaternary
+              size="small"
+              :disabled="selectedIndex <= 0 && pageIndex === 0"
+              @click="moveSelection(-1)"
+            >
+              上一个
+            </n-button>
+            <n-button
+              quaternary
+              size="small"
+              :disabled="selectedIndex === items.length - 1 && !nextCursor"
+              @click="moveSelection(1)"
+            >
+              下一个
+            </n-button>
+          </header>
+          <ChunkDetailPanel
+            :detail="selectedDetail"
+            :loading="detailLoading"
+            :error="detailError"
           />
-        </footer>
+        </section>
       </div>
-
-      <n-empty v-else description="暂无分片" />
     </n-drawer-content>
   </n-drawer>
 </template>
 
 <style scoped>
-.shard-drawer-content :deep(.n-drawer-body-content-wrapper) {
+.chunk-drawer :deep(.n-drawer-body-content-wrapper) {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  padding: 0;
   overflow: hidden;
 }
 
-.loading {
-  display: flex;
-  justify-content: center;
-  padding: 40px;
+.inspector-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px 96px;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--noesis-color-border-subtle);
+  background: var(--noesis-color-bg-muted);
 }
 
-.error {
-  padding: 16px;
+.inspector-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
-.shards-container {
+.chunk-list-pane,
+.chunk-detail-pane {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  min-width: 0;
   min-height: 0;
-  gap: 12px;
 }
 
-.shards-toolbar {
+.chunk-list-pane {
+  border-right: 1px solid var(--noesis-color-border-subtle);
+  background: var(--noesis-color-bg-muted);
+}
+
+.list-heading {
+  padding: 14px 16px 10px;
+}
+
+.list-heading div {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 8px 16px;
-  flex-shrink: 0;
-  padding-bottom: 12px;
-  border-bottom: 1px dashed var(--noesis-color-border-subtle);
-}
-
-.shards-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.stat-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 10px;
-  font-size: 12px;
-  color: var(--noesis-color-text-secondary);
-  background: var(--noesis-color-bg-subtle);
-  border: 1px solid var(--noesis-color-border-light);
-  border-radius: var(--noesis-radius-pill);
-}
-
-.shards-range {
-  font-size: 12px;
-  color: var(--noesis-color-text-muted);
-}
-
-.shards-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
   gap: 12px;
+}
+
+.list-heading strong {
+  font-size: 13px;
+}
+
+.list-heading span {
+  color: var(--noesis-color-text-muted);
+  font-size: 11px;
+}
+
+.list-state {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
+
+.chunk-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 2px;
-  align-content: start;
+  padding: 4px 10px 12px;
 }
 
-.shard-card {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--noesis-color-bg-elevated);
-  border: 1px solid var(--noesis-color-border-light);
-  border-radius: var(--noesis-radius-md);
+.chunk-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 6px;
   padding: 12px;
-  min-height: 160px;
-  max-height: 300px;
-  overflow: hidden;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  border: 1px solid transparent;
+  border-radius: var(--noesis-radius-sm);
+  background: transparent;
+  color: var(--noesis-color-text);
+  text-align: left;
+  cursor: pointer;
 }
 
-.shard-card:hover {
-  border-color: var(--noesis-color-border);
+.chunk-row:hover {
   background: var(--noesis-color-bg-hover);
 }
 
-.shard-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
-  flex-shrink: 0;
+.chunk-row.active {
+  border-color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
-.shard-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-}
-
-.shard-badge {
-  flex-shrink: 0;
-  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+.chunk-index {
+  color: var(--noesis-color-primary);
+  font-family: ui-monospace, monospace;
   font-size: 11px;
-  font-weight: 600;
-  color: var(--noesis-color-text);
-  background: var(--noesis-color-bg-muted);
-  border: 1px solid var(--noesis-color-border-subtle);
-  border-radius: var(--noesis-radius-sm);
-  padding: 1px 6px;
-  line-height: 1.5;
+  font-weight: 700;
 }
 
-.shard-path {
-  flex: 1;
+.chunk-row-main {
+  display: grid;
   min-width: 0;
-  max-width: 100%;
-  font-size: 12px;
-  color: var(--noesis-color-text-muted);
+  gap: 5px;
+}
+
+.chunk-path {
   overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.shard-length {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--noesis-color-text-placeholder);
-}
-
-.shard-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
-.shard-content {
-  flex: 1;
-  min-height: 0;
-  background: var(--noesis-color-bg-muted);
-  border: 1px solid var(--noesis-color-border-subtle);
-  border-radius: var(--noesis-radius-sm);
-  padding: 10px;
-  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+.chunk-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--noesis-color-text-body);
   font-size: 12px;
   line-height: 1.55;
-  color: var(--noesis-color-text-body);
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.shard-footer {
-  flex-shrink: 0;
-  margin-top: 8px;
-  color: var(--noesis-color-text-placeholder);
-  font-size: 11px;
-  text-align: right;
-}
-
-.pagination {
+.chunk-meta {
   display: flex;
-  justify-content: center;
-  padding-top: 12px;
-  flex-shrink: 0;
-  border-top: 1px dashed var(--noesis-color-border-subtle);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
+  color: var(--noesis-color-text-muted);
+  font-size: 10px;
 }
 
-@media (max-width: 480px) {
-  .shards-toolbar {
-    flex-direction: column;
-    align-items: flex-start;
+.list-pagination,
+.detail-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--noesis-color-border-subtle);
+  background: var(--noesis-color-bg-elevated);
+}
+
+.detail-nav {
+  justify-content: flex-end;
+  border-top: none;
+  border-bottom: 1px solid var(--noesis-color-border-subtle);
+}
+
+.detail-nav-spacer {
+  flex: 1;
+}
+
+@media (width <= 900px) {
+
+  .inspector-toolbar {
+    grid-template-columns: minmax(0, 1fr) 112px 88px;
+  }
+}
+
+@media (width <= 768px) {
+
+  .inspector-toolbar {
+    grid-template-columns: minmax(0, 1fr) 112px 88px;
+    padding: 10px 12px;
   }
 
-  .shard-header {
-    flex-direction: column;
-    align-items: stretch;
+  .inspector-shell {
+    display: block;
+    position: relative;
   }
 
-  .shard-actions {
-    justify-content: flex-end;
+  .chunk-list-pane,
+  .chunk-detail-pane {
+    position: absolute;
+    inset: 0;
   }
 
-  .shard-card {
-    max-height: 360px;
+  .chunk-detail-pane {
+    visibility: hidden;
+    transform: translateX(100%);
+    background: var(--noesis-color-bg-elevated);
+    transition: transform 0.2s ease;
+  }
+
+  .inspector-shell.show-detail .chunk-list-pane {
+    visibility: hidden;
+  }
+
+  .inspector-shell.show-detail .chunk-detail-pane {
+    visibility: visible;
+    transform: translateX(0);
+  }
+}
+
+@media (width <= 560px) {
+
+  .inspector-toolbar {
+    grid-template-columns: minmax(0, 1fr) 104px;
+  }
+
+  .inspector-toolbar > :first-child {
+    grid-column: 1 / -1;
   }
 }
 </style>

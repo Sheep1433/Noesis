@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -190,22 +190,19 @@ def test_context_update_emitted_with_usage_update() -> None:
     bridge = LangGraphSseBridge("sess-usage-ctx")
     builder = AssistantMessageBuilder(session_id="sess-usage-ctx", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    ContextMetricsRegistry.put(
-        "sess-usage-ctx",
-        {"current_tokens": 1200, "max_tokens": 128000, "used_percentage": 1},
-    )
     parts: List[str] = []
     parts.extend(bridge.process_item({"type": "text-delta", "text_delta": "hi"}, builder, ctx))
-    parts.extend(
-        bridge.process_item(
-            {
-                "event": "on_chat_model_end",
-                "data": {"output": MagicMock(usage_metadata={"input_tokens": 10, "output_tokens": 5})},
-            },
-            builder,
-            ctx,
+    with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+        parts.extend(
+            bridge.process_item(
+                {
+                    "event": "on_chat_model_end",
+                    "data": {"output": MagicMock(usage_metadata={"input_tokens": 10, "output_tokens": 5})},
+                },
+                builder,
+                ctx,
+            )
         )
-    )
     blob = "".join(parts)
     assert "event: usage-update\n" in blob
     assert "event: context-update\n" in blob
@@ -213,25 +210,23 @@ def test_context_update_emitted_with_usage_update() -> None:
 
 
 def test_context_update_event_shape() -> None:
+    """on_chat_model_end 后 context-update 携带 provider 真实 input_tokens。"""
     from noesis.runtime.observability import ContextMetricsRegistry
 
     bridge = LangGraphSseBridge("sess-ctx")
     builder = AssistantMessageBuilder(session_id="sess-ctx", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    ContextMetricsRegistry.put(
-        "sess-ctx",
-        {"current_tokens": 87040, "max_tokens": 128000, "used_percentage": 68},
-    )
-    blob = "".join(
-        bridge.process_item(
-            {
-                "event": "on_chat_model_end",
-                "data": {"output": MagicMock(usage_metadata={"input_tokens": 1, "output_tokens": 1})},
-            },
-            builder,
-            ctx,
+    with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+        blob = "".join(
+            bridge.process_item(
+                {
+                    "event": "on_chat_model_end",
+                    "data": {"output": MagicMock(usage_metadata={"input_tokens": 87040, "output_tokens": 100})},
+                },
+                builder,
+                ctx,
+            )
         )
-    )
     assert "event: context-update\n" in blob
     cu = [o for o in _data_json_objects(blob) if o.get("type") == "context-update"][0]
     assert cu["message_id"] == bridge.assistant_message_id
@@ -489,6 +484,36 @@ def test_usage_dedup_same_run_id() -> None:
     objs = _data_json_objects("".join(parts))
     usage_updates = [o for o in objs if o.get("type") == "usage-update"]
     assert len(usage_updates) == 1
+
+
+def test_usage_dedup_same_model_run_across_contexts() -> None:
+    """同一模型 run 在子 Agent context 变化时也不能再次累计。"""
+    bridge = LangGraphSseBridge("sess-cross-context-dedup")
+    builder = AssistantMessageBuilder(
+        session_id="sess-cross-context-dedup",
+        message_id=bridge.assistant_message_id,
+    )
+
+    class _Output:
+        usage_metadata = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+
+    first = _ctx()
+    second = _ctx()
+    first_parts = bridge.process_item(
+        {"event": "on_chat_model_end", "run_id": "run-cross-1", "data": {"output": _Output()}},
+        builder,
+        first,
+    )
+    second_parts = bridge.process_item(
+        {"event": "on_chat_model_end", "run_id": "run-cross-1", "data": {"output": _Output()}},
+        builder,
+        second,
+    )
+
+    first_updates = [o for o in _data_json_objects("".join(first_parts)) if o.get("type") == "usage-update"]
+    second_updates = [o for o in _data_json_objects("".join(second_parts)) if o.get("type") == "usage-update"]
+    assert first_updates[-1]["usage"]["total_tokens"] == 120
+    assert not second_updates
 
 
 def test_usage_end_is_authoritative_over_partial_stream_chunk() -> None:
@@ -1407,46 +1432,6 @@ def test_sse_payloads_preserve_legacy_fields_while_adding_new_ones() -> None:
     assert finish["usage"]["input_tokens"] == 100  # 既有
     # message_id 既有
     assert finish["message_id"] == bridge.assistant_message_id
-
-
-def test_context_update_carries_breakdown_and_sources() -> None:
-    """context-update 含 breakdown/sources/estimated/caller，同时保留 current_tokens 等。"""
-    from noesis.runtime.observability import ContextMetricsRegistry
-
-    bridge = LangGraphSseBridge("sess-ctx-fields")
-    builder = AssistantMessageBuilder(session_id="sess-ctx-fields", message_id=bridge.assistant_message_id)
-    ctx = _ctx()
-    ContextMetricsRegistry.put(
-        "sess-ctx-fields",
-        {
-            "current_tokens": 5000, "max_tokens": 128000, "used_percentage": 4,
-            "estimated": True, "counting_method": "approximate",
-            "breakdown": {"system": 1000, "conversation": 3000, "tool_results": 500, "tool_definitions": 400, "other": 100},
-            "sources": {"skills": 900},
-            "caller": "lead_agent",
-        },
-    )
-
-    class _Output:
-        usage_metadata = {"input_tokens": 100, "output_tokens": 20}
-
-    parts = list(bridge.process_item(
-        {"event": "on_chat_model_end", "run_id": "run-ctx", "data": {"output": _Output()}},
-        builder, ctx,
-    ))
-    objs = _data_json_objects("".join(parts))
-    ctx_update = next(o for o in objs if o.get("type") == "context-update")
-    c = ctx_update["context"]
-    # 既有字段保留
-    assert c["current_tokens"] == 5000
-    assert c["max_tokens"] == 128000
-    assert c["used_percentage"] == 4
-    # 新增字段
-    assert c["estimated"] is True
-    assert c["breakdown"]["system"] == 1000
-    assert c["sources"]["skills"] == 900
-    assert c["caller"] == "lead_agent"
-    ContextMetricsRegistry.clear("sess-ctx-fields")
 
 
 def test_replay_does_not_re_accumulate_usage() -> None:

@@ -239,6 +239,7 @@ export async function loadSessionMessages(
             reader: null,
             parent_id: msg.parent_id,
             message_id: msg.id,
+            created_at: msg.created_at,
           }
         }
 
@@ -274,6 +275,7 @@ export async function loadSessionMessages(
           msg_metadata: msg.extra,
           parent_id: msg.parent_id,
           message_id: msg.id,
+          created_at: msg.created_at,
         }
       })
 

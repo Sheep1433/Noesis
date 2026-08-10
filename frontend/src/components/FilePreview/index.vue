@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   editable?: boolean
   saving?: boolean
   downloadTitle?: string
+  showDownload?: boolean
   showToolbar?: boolean
 }>(), {
   content: '',
@@ -31,6 +32,7 @@ const props = withDefaults(defineProps<{
   editable: false,
   saving: false,
   downloadTitle: '下载当前文件',
+  showDownload: true,
   showToolbar: true,
 })
 
@@ -150,7 +152,7 @@ async function downloadCurrentFile() {
             </n-button>
           </n-button-group>
           <n-button
-            v-if="canDownload"
+            v-if="showDownload && canDownload"
             quaternary
             size="tiny"
             :title="downloadTitle"

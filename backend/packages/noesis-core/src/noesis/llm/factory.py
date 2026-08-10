@@ -5,12 +5,55 @@ from langchain_qwq import ChatQwen
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessageChunk
 from noesis.config.env import ModelConfig
+from noesis.runtime.logging import logger
 
 _OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
 _OPENCODE_DEFAULT_HEADERS = {
     "HTTP-Referer": "https://opencode.ai/",
     "X-Title": "opencode",
 }
+_DEBUG_TOKEN_USAGE_TAG = "[DEBUG-TOKEN-USAGE]"
+_PROVIDER_USAGE_KEYS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens_details",
+    "completion_tokens_details",
+    "input_tokens_details",
+    "output_tokens_details",
+)
+
+
+def _debug_provider_usage(value):
+    """Log only numeric provider usage fields, never response content."""
+    if value is None:
+        return {"raw_type": "missing"}
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+    elif hasattr(value, "dict"):
+        value = value.dict()
+    if not isinstance(value, dict):
+        return {"raw_type": type(value).__name__}
+    fields = {}
+    for key in _PROVIDER_USAGE_KEYS:
+        item = value.get(key)
+        if isinstance(item, dict):
+            numeric = {}
+            for nested_key, nested_value in item.items():
+                try:
+                    numeric[nested_key] = int(nested_value)
+                except (TypeError, ValueError):
+                    continue
+            if numeric:
+                fields[key] = numeric
+        else:
+            try:
+                fields[key] = int(item)
+            except (TypeError, ValueError):
+                continue
+    return {"raw_type": type(value).__name__, "fields": fields}
 
 
 class ChatOpenCode(ChatOpenAI):
@@ -45,6 +88,14 @@ class ChatOpenCode(ChatOpenAI):
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
         """流式：从每个 chunk 的 delta 提取 reasoning 并归一化。"""
+        if isinstance(chunk, dict) and chunk.get("usage"):
+            logger.debug(
+                "{} provider_stream_usage model={} response_id={} usage={}",
+                _DEBUG_TOKEN_USAGE_TAG,
+                self.model_name,
+                chunk.get("id") or "",
+                _debug_provider_usage(chunk.get("usage")),
+            )
         generation_chunk = super()._convert_chunk_to_generation_chunk(
             chunk, default_chunk_class, base_generation_info,
         )
@@ -61,8 +112,40 @@ class ChatOpenCode(ChatOpenAI):
             }
         return generation_chunk
 
+    def _combine_llm_outputs(self, llm_outputs: list[dict | None]) -> dict:
+        """Use the final cumulative usage instead of summing every stream chunk.
+
+        OpenCode returns prompt/completion usage as a running total on each
+        streamed chunk. LangChain's OpenAI implementation sums ``token_usage``
+        across chunks, which turns one request into an inflated total.
+        """
+        final_token_usage = None
+        metadata_outputs = []
+        for output in llm_outputs:
+            if output is None:
+                metadata_outputs.append(None)
+                continue
+            token_usage = output.get("token_usage")
+            if token_usage is not None:
+                final_token_usage = dict(token_usage)
+            metadata_outputs.append(
+                {key: value for key, value in output.items() if key != "token_usage"}
+            )
+
+        combined = super()._combine_llm_outputs(metadata_outputs)
+        if final_token_usage is not None:
+            combined["token_usage"] = final_token_usage
+        return combined
+
     def _create_chat_result(self, response, generation_info=None):
         """非流式：从完整 response 提取 reasoning 并归一化。"""
+        logger.debug(
+            "{} provider_response_usage model={} response_id={} usage={}",
+            _DEBUG_TOKEN_USAGE_TAG,
+            self.model_name,
+            getattr(response, "id", "") or "",
+            _debug_provider_usage(getattr(response, "usage", None)),
+        )
         rtn = super()._create_chat_result(response, generation_info)
         for generation in rtn.generations:
             if generation.message.response_metadata is None:

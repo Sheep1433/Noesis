@@ -57,17 +57,6 @@ export interface ContextSnapshot {
   max_tokens: number
   used_percentage: number
   updated_at?: string
-  estimated?: boolean
-  counting_method?: string
-  breakdown?: {
-    system: number
-    conversation: number
-    tool_results: number
-    tool_definitions: number
-    other: number
-  }
-  sources?: Record<string, number>
-  caller?: string
 }
 
 export type AgentStopReason =

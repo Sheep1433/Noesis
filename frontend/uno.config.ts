@@ -52,6 +52,7 @@ const DYNAMIC_ICON_SAFELIST = [
   'i-svg-spinners:3-dots-rotate',
   'i-svg-spinners:6-dots-rotate',
   'i-mdi:clipboard-text-outline',
+  'i-mdi:puzzle-outline',
   'i-mdi:file-image-outline',
   'i-material-symbols:file-open-outline',
   'i-ci:copy',

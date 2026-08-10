@@ -50,28 +50,71 @@ class DocumentInfo(BaseModel):
     uploaded_at: Optional[str] = None
 
 
-class ShardInfo(BaseModel):
-    """分片信息"""
-    id: str
-    content: str
-    char_length: int
-    created_at: Optional[str] = None
+class ShardPageQuery(BaseModel):
+    """文档分片分页查询。cursor 由服务端签发，客户端不得解析。"""
+
+    limit: int = Field(default=20, ge=1, le=100, description="单页数量上限")
+    cursor: Optional[str] = Field(default=None, max_length=2048, description="不透明分页游标")
+    element_type: Optional[Literal["text", "title", "table", "image"]] = Field(
+        default=None, description="内容类型筛选"
+    )
+    locator_type: Optional[Literal["page", "char", "bbox", "header"]] = Field(
+        default=None, description="来源定位类型筛选"
+    )
+    keyword: Optional[str] = Field(default=None, max_length=200, description="chunk 正文关键词")
+    sort: Literal["asc", "desc"] = Field(default="asc", description="按 chunk_index 排序")
+
+
+class ChunkSummary(BaseModel):
+    """分片列表摘要，不返回完整正文。"""
+
+    id: str = Field(description="Qdrant point 标识")
+    content_preview: str = Field(description="截断后的 chunk 正文摘要")
+    char_length: int = Field(ge=0, description="chunk 正文字符数")
+    created_at: Optional[str] = Field(None, description="chunk 入库时间")
     header_path: Optional[str] = Field(None, description="标题路径")
     chunk_index: Optional[int] = Field(None, description="文档内分片序号")
+    locator: Optional[Dict[str, Any]] = Field(None, description="typed source locator")
+    element_type: Optional[str] = Field(None, description="text/table/image 等内容类型")
+    token_count: Optional[int] = Field(None, ge=0, description="入库时持久化的 token 数")
+
+
+class ChunkSummaryPage(BaseModel):
+    """分片 cursor 分页响应。"""
+
+    items: List[ChunkSummary] = Field(description="当前页 chunk 摘要")
+    total: int = Field(ge=0, description="符合条件的 chunk 总数")
+    next_cursor: Optional[str] = Field(None, description="下一页不透明游标")
 
 
 class ShardDetail(BaseModel):
     """分片详情"""
-    id: str
-    content: str
-    char_length: int
-    vector_dimension: int
-    created_at: Optional[str] = None
+    id: str = Field(description="Qdrant point 标识")
+    content: str = Field(description="chunk 入库正文")
+    char_length: int = Field(ge=0, description="chunk 正文字符数")
+    vector_dimension: int = Field(ge=0, description="Collection 向量维度")
+    created_at: Optional[str] = Field(None, description="chunk 入库时间")
     header_path: Optional[str] = Field(None, description="标题路径")
     Header_1: Optional[str] = Field(None, description="一级标题")
     Header_2: Optional[str] = Field(None, description="二级标题")
     Header_3: Optional[str] = Field(None, description="三级标题")
+    Header_4: Optional[str] = Field(None, description="四级标题")
     chunk_index: Optional[int] = Field(None, description="文档内分片序号")
+    locator: Optional[Dict[str, Any]] = Field(None, description="typed source locator")
+    element_type: Optional[str] = Field(None, description="text/table/image 等内容类型")
+    token_count: Optional[int] = Field(None, ge=0, description="入库时持久化的 token 数")
+    file_name: Optional[str] = Field(None, description="来源文件名")
+    file_hash: Optional[str] = Field(None, description="来源文件内容哈希")
+    content_hash: Optional[str] = Field(None, description="chunk 正文哈希")
+    document_id: Optional[str] = Field(None, description="稳定文档标识")
+    document_version_id: Optional[str] = Field(None, description="稳定文档版本标识")
+    segment_id: Optional[str] = Field(None, description="稳定片段标识")
+    source: Optional[str] = Field(None, description="来源 URI 或路径")
+    raw_text: Optional[str] = Field(None, description="解析器输出的原始文本")
+    clean_text: Optional[str] = Field(None, description="清洗后的文本")
+    raw_metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="经过白名单过滤的补充来源元数据"
+    )
     effective_processing_params: Optional[Dict[str, Any]] = Field(
         None, description="入库时生效的处理参数快照"
     )

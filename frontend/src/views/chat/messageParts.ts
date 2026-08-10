@@ -607,26 +607,11 @@ export interface TokenUsageSummary {
   }
 }
 
-export interface ContextBreakdown {
-  system: number
-  conversation: number
-  tool_results: number
-  tool_definitions: number
-  other: number
-}
-
 export interface ContextWindowSnapshot {
   current_tokens: number
   max_tokens: number
   used_percentage: number
   updated_at?: string
-  /** 本地估算标识（始终为 true 时表示 token 非精确计费值） */
-  estimated?: boolean
-  counting_method?: string
-  breakdown?: ContextBreakdown
-  /** 来源细分（Skills/memory/RAG/attachments provenance） */
-  sources?: Record<string, number>
-  caller?: string
 }
 
 export function hasValidContextWindow(context: unknown): context is ContextWindowSnapshot {
@@ -640,34 +625,6 @@ export function hasValidContextWindow(context: unknown): context is ContextWindo
   return max > 0 && current >= 0 && !Number.isNaN(pct)
 }
 
-export function formatContextWindowTooltip(context: ContextWindowSnapshot): string {
-  const header = `${formatTokenCount(context.current_tokens)} / ${formatTokenCount(context.max_tokens)}`
-  if (!context.breakdown) {
-    return header
-  }
-  const b = context.breakdown
-  const lines: string[] = [
-    `系统 ${formatTokenCount(b.system)}`,
-    `对话 ${formatTokenCount(b.conversation)}`,
-    `工具结果 ${formatTokenCount(b.tool_results)}`,
-    `工具定义 ${formatTokenCount(b.tool_definitions)}`,
-  ]
-  if (b.other > 0) {
-    lines.push(`其他 ${formatTokenCount(b.other)}`)
-  }
-  if (context.sources) {
-    const sourceNames = Object.keys(context.sources)
-    for (let i = 0; i < sourceNames.length; i++) {
-      const name = sourceNames[i]
-      const tokens = context.sources[name]
-      if (tokens && tokens > 0) {
-        lines.push(`${name} ${formatTokenCount(tokens)}`)
-      }
-    }
-  }
-  return `${header}（估算）\n${lines.join(' · ')}`
-}
-
 export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
   if (!usage || typeof usage !== 'object') {
     return false
@@ -679,6 +636,12 @@ export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
 }
 
 export function formatTokenCount(n: number): string {
+  if (n >= 1_000_000_000) {
+    return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`
+  }
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  }
   if (n >= 1000) {
     return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`
   }
@@ -695,7 +658,7 @@ export function formatDurationMs(ms: number): string {
 
 export function formatUsageSummary(usage: TokenUsageSummary): string {
   const total = usage.total_tokens ?? usage.input_tokens + usage.output_tokens
-  return `↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
+  return `本轮用量 ↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
 }
 
 const MODEL_API_TIMEOUT_RE = /readtimeout|writetimeout|connecttimeout|pooltimeout|streamchunktimeouterror|stream_chunk_timeout|apitimeout|request timed out|timed out waiting/i

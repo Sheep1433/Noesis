@@ -1,17 +1,17 @@
 <script lang="ts" setup>
-import { mainNavItems } from '@/config/navigation'
+import { mobileProductNavItems } from '@/config/navigation'
 
 const router = useRouter()
 const route = useRoute()
 
-function isActive(item: (typeof mainNavItems)[number]) {
+function isActive(item: (typeof mobileProductNavItems)[number]) {
   if (!item.routeName) {
     return route.path === '/'
   }
   return route.name === item.routeName
 }
 
-function navigate(item: (typeof mainNavItems)[number]) {
+function navigate(item: (typeof mobileProductNavItems)[number]) {
   if (!item.routeName) {
     router.push('/')
     return
@@ -26,13 +26,12 @@ function navigate(item: (typeof mainNavItems)[number]) {
     aria-label="主导航"
   >
     <button
-      v-for="item in mainNavItems"
+      v-for="item in mobileProductNavItems"
       :key="item.key"
       type="button"
       class="mobile-bottom-nav__item"
       :class="{
         'mobile-bottom-nav__item--active': isActive(item),
-        'mobile-bottom-nav__item--brand': item.fill,
       }"
       :aria-current="isActive(item) ? 'page' : undefined"
       @click="navigate(item)"
@@ -58,7 +57,8 @@ function navigate(item: (typeof mainNavItems)[number]) {
   align-items: stretch;
   justify-content: space-around;
   height: calc(var(--noesis-mobile-nav-height) + var(--noesis-safe-area-bottom));
-  padding-bottom: var(--noesis-safe-area-bottom);
+  gap: 4px;
+  padding: 4px 8px var(--noesis-safe-area-bottom);
   border-top: 1px solid var(--noesis-color-border-subtle);
   background: var(--noesis-sidebar-bg);
   backdrop-filter: blur(8px);
@@ -74,6 +74,7 @@ function navigate(item: (typeof mainNavItems)[number]) {
   min-width: 0;
   margin: 0;
   padding: 4px 2px;
+  border-radius: var(--noesis-radius-md);
   border: none;
   background: transparent;
   color: var(--noesis-color-text-secondary);
@@ -82,13 +83,9 @@ function navigate(item: (typeof mainNavItems)[number]) {
 }
 
 .mobile-bottom-nav__item--active {
+  background: var(--noesis-color-primary-bg-hover);
   color: var(--noesis-color-text);
   font-weight: 600;
-}
-
-.mobile-bottom-nav__item--brand .mobile-bottom-nav__icon {
-  width: 22px;
-  height: 22px;
 }
 
 .mobile-bottom-nav__icon {

@@ -489,9 +489,11 @@ class VectorStore:
             # 转换为 Document
             for point in points:
                 payload = point.payload
+                metadata = self._payload_to_metadata(payload)
+                metadata["point_id"] = str(point.id)
                 doc = Document(
                     page_content=payload.get("page_content", ""),
-                    metadata=self._payload_to_metadata(payload),
+                    metadata=metadata,
                 )
                 all_documents.append(doc)
 

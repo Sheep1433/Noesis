@@ -22,6 +22,7 @@ class KnowledgeBaseManager:
 
     def __init__(self) -> None:
         self._client: Optional[QdrantClient] = None
+        self._service: Optional[KnowledgeBase] = None
         self._connected = False
 
     @property
@@ -34,7 +35,9 @@ class KnowledgeBaseManager:
 
     def service(self) -> KnowledgeBase:
         """通过 factory 返回绑定当前 client 的 Knowledge 实现。"""
-        return KnowledgeBaseFactory.create("qdrant", self._client)
+        if self._service is None:
+            self._service = KnowledgeBaseFactory.create("qdrant", self._client)
+        return self._service
 
     async def initialize(self) -> bool:
         """创建并验证 Qdrant client；重复调用保持幂等。"""
@@ -68,6 +71,7 @@ class KnowledgeBaseManager:
             return False
 
         self._client = client
+        self._service = KnowledgeBaseFactory.create("qdrant", client)
         self._connected = True
         logger.info("Qdrant 连接成功")
         return True
@@ -76,6 +80,7 @@ class KnowledgeBaseManager:
         """关闭 client 并清空连接状态。"""
         client = self._client
         self._client = None
+        self._service = None
         self._connected = False
         if client is None:
             return

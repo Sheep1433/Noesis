@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { getSessionContext, getWorkspaceFile, saveWorkspaceFile } from '@/api/chat'
 import FilePreview from '@/components/FilePreview/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { invalidateMentionContextCache } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { authFetch } from '@/utils/authHttp'
@@ -56,8 +57,10 @@ const { size: treeWidth, startResize: startTreeResize } = usePaneResize({
   storageKey: 'noesis.chat.sessionTreeWidth',
   defaultSize: 180,
   min: 120,
-  max: 360,
+  max: 240,
 })
+const { isMobile } = useBreakpoint()
+const effectiveTreeWidth = computed(() => Math.min(treeWidth.value, isMobile.value ? 132 : 240))
 
 function revokePreviewImage() {
   if (previewImageSrc.value) {
@@ -235,7 +238,7 @@ defineExpose({ reload })
       <div class="panel-split">
         <aside
           class="panel-tree"
-          :style="{ width: `${treeWidth}px` }"
+          :style="{ width: `${effectiveTreeWidth}px` }"
         >
           <!-- 滚动放内层，避免 ResizeDivider 跟着横向滚动「切进」文件名 -->
           <div class="panel-tree__scroll">
@@ -243,7 +246,6 @@ defineExpose({ reload })
               v-if="context?.tree?.length"
               :nodes="context.tree"
               :selected-key="selectedKey"
-              :session-id="sessionId"
               @select="onSelectFile"
             />
             <div v-else class="panel-empty-hint">
@@ -262,6 +264,7 @@ defineExpose({ reload })
             :loading="previewLoading"
             :editable="previewEditable"
             :saving="previewSaving"
+            :show-download="false"
             density="compact"
             fill-height
             class="session-file-preview"

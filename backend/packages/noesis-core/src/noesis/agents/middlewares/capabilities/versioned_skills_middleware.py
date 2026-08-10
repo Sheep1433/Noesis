@@ -8,10 +8,6 @@ from deepagents.middleware.skills import SkillsMiddleware, SkillsState
 from langchain.agents.middleware.types import PrivateStateAttr
 from typing_extensions import Annotated
 
-from noesis.runtime.context_provenance import (
-    estimate_source_tokens,
-    get_or_create_context_provenance,
-)
 from noesis.agents.skills.revision import get_user_skills_revision
 
 
@@ -35,29 +31,11 @@ class VersionedSkillsMiddleware(SkillsMiddleware):
         clean.pop("skills_load_errors", None)
         return revision, clean
 
-    def _record_skills_provenance(self, update: Any) -> None:
-        """Tag the skills source once per Agent invocation based on loaded metadata.
-
-        Skills metadata is loaded in ``before_agent`` and formatted into the
-        system prompt lazily at model-call time. We estimate the metadata
-        (the source of the skills section) here, consistent with the
-        run-boundary load contract.
-        """
-        if not isinstance(update, dict):
-            return
-        metadata = update.get("skills_metadata")
-        if not metadata:
-            return
-        tokens = estimate_source_tokens(metadata)
-        if tokens > 0:
-            get_or_create_context_provenance().add("skills", tokens)
-
     def before_agent(self, state, runtime, config=None):  # type: ignore[override]
         revision, prepared = self._prepare(state)
         if state.get("skills_revision") == revision and "skills_metadata" in state:
             return None
         update = super().before_agent(prepared, runtime, config) or {}
-        self._record_skills_provenance(update)
         return {**update, "skills_revision": revision}
 
     async def abefore_agent(self, state, runtime, config=None):  # type: ignore[override]
@@ -65,5 +43,4 @@ class VersionedSkillsMiddleware(SkillsMiddleware):
         if state.get("skills_revision") == revision and "skills_metadata" in state:
             return None
         update = await super().abefore_agent(prepared, runtime, config) or {}
-        self._record_skills_provenance(update)
         return {**update, "skills_revision": revision}

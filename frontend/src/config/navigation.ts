@@ -10,8 +10,6 @@ export interface MainNavItem {
 export const CHAT_ROUTE_NAMES = ['ChatRoot', 'ChatIndex', 'ChatNew', 'ChatSession'] as const
 const MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES = [
   ...CHAT_ROUTE_NAMES,
-  'Settings',
-  'KnowledgeBase',
   'KnowledgeBaseDetail',
 ] as const
 
@@ -51,4 +49,26 @@ export const mainNavItems: MainNavItem[] = [
     routeName: 'Extensions',
     iconClass: 'i-mdi:puzzle-outline',
   },
+]
+
+const settingsNavItem: MainNavItem = {
+  label: '设置',
+  key: 'Settings',
+  routeName: 'Settings',
+  iconClass: 'i-hugeicons:settings-01',
+}
+
+/** 移动端顶层页面统一使用的全局导航。 */
+export const mobileProductNavItems: MainNavItem[] = [
+  mainNavItems[1],
+  mainNavItems[2],
+  mainNavItems[3],
+  settingsNavItem,
+]
+
+/** 历史抽屉保留管理入口，不重复展示当前所在的对话入口。 */
+export const mobileHistoryNavItems: MainNavItem[] = [
+  mainNavItems[2],
+  mainNavItems[3],
+  settingsNavItem,
 ]

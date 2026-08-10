@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { CollectionInfo, KnowledgeBaseStatus } from '@/api/knowledgeBase'
-import { Add, ArrowForward, Library, Refresh, TrashOutline } from '@vicons/ionicons-v5'
+import { Add, EllipsisHorizontal, InformationCircleOutline, Library, Refresh } from '@vicons/ionicons-v5'
 import {
   NAlert,
   NButton,
+  NDropdown,
   NEmpty,
   NForm,
   NFormItem,
@@ -11,6 +12,7 @@ import {
   NInput,
   NInputNumber,
   NModal,
+  NPopover,
   NSpace,
   NSpin,
   NTag,
@@ -112,8 +114,7 @@ async function handleCreate() {
   }
 }
 
-function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
-  event.stopPropagation()
+function confirmDeleteCollection(collection: CollectionInfo) {
   dialog.warning({
     title: '删除知识库',
     content: `确定删除「${collection.name}」？将同时清除其中 ${collection.documents_count} 个文档与 ${collection.points_count} 个向量分片，且不可恢复。`,
@@ -129,6 +130,12 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
       }
     },
   })
+}
+
+function handleCollectionAction(key: string, collection: CollectionInfo) {
+  if (key === 'delete') {
+    confirmDeleteCollection(collection)
+  }
 }
 </script>
 
@@ -163,9 +170,17 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
       <div class="status-pill" :class="{ online: status?.connected }">
         <span class="status-dot"></span>
         <span>{{ status?.connected ? '向量库已连接' : '向量库未连接' }}</span>
-        <span v-if="status?.connected" class="status-detail">
-          {{ status.host }}:{{ status.port }}
-        </span>
+        <n-popover v-if="status?.connected" trigger="click" placement="bottom-start">
+          <template #trigger>
+            <n-button quaternary circle size="tiny" aria-label="查看连接信息">
+              <template #icon><n-icon><InformationCircleOutline /></n-icon></template>
+            </n-button>
+          </template>
+          <div class="status-diagnostic">
+            <strong>连接信息</strong>
+            <span>{{ status.host }}:{{ status.port }}</span>
+          </div>
+        </n-popover>
       </div>
       <div v-if="status?.connected && collections.length" class="summary-stats">
         <span>{{ collections.length }} 个知识库</span>
@@ -191,7 +206,7 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
       title="向量库未连接"
       class="disconnect-alert"
     >
-      请确认 Qdrant 已启动，并检查后端 <code>config.yaml</code> 中的 qdrant 配置。
+      知识库服务暂不可用，请稍后重试或联系管理员。
     </n-alert>
 
     <div
@@ -225,18 +240,17 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
             <h3 class="kb-card-name">
               {{ collection.name }}
             </h3>
-            <n-space :size="4" @click.stop>
-              <n-button text size="small" @click="goToDetail(collection.name)">
-                <template #icon>
-                  <n-icon><ArrowForward /></n-icon>
-                </template>
-              </n-button>
-              <n-button text size="small" type="error" @click="confirmDeleteCollection(collection, $event)">
-                <template #icon>
-                  <n-icon><TrashOutline /></n-icon>
-                </template>
-              </n-button>
-            </n-space>
+            <div @click.stop>
+              <n-dropdown
+                trigger="click"
+                :options="[{ label: '删除知识库', key: 'delete' }]"
+                @select="handleCollectionAction($event, collection)"
+              >
+                <n-button quaternary circle size="small" aria-label="更多操作">
+                  <template #icon><n-icon><EllipsisHorizontal /></n-icon></template>
+                </n-button>
+              </n-dropdown>
+            </div>
           </div>
           <div class="kb-card-tags">
             <n-tag size="small" :bordered="false" type="success">
@@ -307,7 +321,12 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   height: 100%;
   padding: 20px 24px;
   box-sizing: border-box;
-  overflow-y: auto;
+  min-width: 0;
+  overflow: hidden auto;
+}
+
+.kb-page > * {
+  min-width: 0;
 }
 
 .kb-hero {
@@ -320,7 +339,7 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
 
 .kb-title {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
@@ -338,10 +357,8 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 10px 14px;
-  background: var(--noesis-color-bg-muted);
-  border: 1px solid var(--noesis-color-border);
-  border-radius: var(--noesis-radius-md);
+  min-height: 28px;
+  padding: 2px 0;
 }
 
 .status-pill {
@@ -367,9 +384,16 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   background: var(--noesis-color-success);
 }
 
-.status-detail {
-  color: var(--noesis-color-text-placeholder);
+.status-diagnostic {
+  display: grid;
+  gap: 4px;
+  min-width: 160px;
   font-size: 12px;
+}
+
+.status-diagnostic span {
+  color: var(--noesis-color-text-muted);
+  font-family: ui-monospace, monospace;
 }
 
 .summary-stats {
@@ -395,16 +419,18 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
 
 .kb-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  min-width: 0;
 }
 
 .kb-card {
   display: flex;
   gap: 14px;
-  padding: 16px;
+  min-width: 0;
+  padding: 18px;
   background: var(--noesis-color-bg-elevated);
-  border: 1px solid var(--noesis-color-border);
+  border: 1px solid var(--noesis-color-border-subtle);
   border-radius: var(--noesis-radius-md);
   cursor: pointer;
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -417,8 +443,8 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
 
 .kb-card-icon {
   flex-shrink: 0;
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -441,7 +467,7 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
 
 .kb-card-name {
   margin: 0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -496,7 +522,8 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   font-size: 12px;
 }
 
-@media (max-width: 1024px) {
+@media (width <= 1024px) {
+
   .kb-page {
     padding: 12px var(--noesis-content-gutter-mobile);
     gap: 12px;
@@ -513,7 +540,6 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   }
 
   .kb-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
 
@@ -548,12 +574,17 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
 
 @media (width <= 768px) {
 
+  .kb-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .state-block--empty {
     padding: clamp(40px, 10vh, 80px) 0 24px;
   }
 }
 
-@media (max-width: 480px) {
+@media (width <= 480px) {
+
   .kb-hero-actions {
     width: 100%;
     justify-content: flex-end;
@@ -569,7 +600,37 @@ function confirmDeleteCollection(collection: CollectionInfo, event: Event) {
   }
 
   .kb-card {
+    flex-direction: row;
+    gap: 8px;
     padding: 10px;
+  }
+
+  .kb-card-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .kb-card-name {
+    font-size: 13px;
+  }
+
+  .kb-card-tags {
+    gap: 4px;
+    margin-top: 5px;
+  }
+
+  .kb-card-tags :deep(.n-tag) {
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  .kb-card-stats {
+    gap: 6px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .kb-card-stats div:last-child {
+    grid-column: auto;
   }
 }
 </style>

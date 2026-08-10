@@ -72,11 +72,12 @@ tool-output-available
 
 `usage-update`、`context-update`、`finish.usage` 携带两类互不混淆的 token 视角，新增字段均向后兼容（旧客户端忽略新字段）。
 
-**当前上下文（context-update，本地估算）**：描述下一次模型请求的输入构成，每次调用覆盖前一次，不跨调用求和。
+**当前上下文（context-update，Provider 真实值）**：描述当前上下文窗口占用，取自 Provider 最近一次 model call 返回的 `input_tokens`（非累计），每次调用覆盖前一次。
 
 - 保留字段：`current_tokens`、`max_tokens`、`used_percentage`。
-- 新增字段：`estimated: true`（始终为本地估算，非计费值）、`counting_method`（`model_tokenizer` | `approximate`）、`breakdown`（system/conversation/tool_results/tool_definitions/other，和等于 `current_tokens`）、`sources`（provenance 驱动的来源细分：skills/memory/rag/attachments）、`caller`。
-- 估算精度：`current_tokens` 优先用模型 tokenizer（对 DeepSeek 系为近似），不可用时回退 `count_tokens_approximately`（4 chars/token）。model tokenizer 路径下 breakdown 用 approximate，`other` 吸收两条路径差值；approximate 路径下和严格等于 `current_tokens`。不按比例改写 breakdown 冒充 Provider 实际 input。
+- `current_tokens` = Provider `input_tokens`（单轮，非累计）；`max_tokens` 取自模型 catalog 的 `limit.context` 或 `context_max_input_tokens` 配置。
+- Provider 不返回 usage 时，沿用上一轮真实值；首轮无数据时不展示指示器。
+- model call 前的上下文耗尽拦截仍用本地估算（`estimate_model_request_input_tokens`），因为此刻 Provider 尚未返回 usage；该估算仅用于内部拦截，不发给前端。
 
 **本轮消耗（usage-update / finish.usage，Provider 实际值）**：描述已发生的模型消耗，按 model run id 去重累计。
 
@@ -84,9 +85,9 @@ tool-output-available
 - 新增字段：`input_token_details`（`cache_read`/`cache_write`）、`output_token_details`（`reasoning`）。缺失 detail 不补零（区分"Provider 返回 0"与"不支持"）；detail 不参与 `total_tokens` 二次相加。
 - 归因（`finish.attribution`，按需调试）：`cumulative`、`by_caller`（lead_agent/subagent/middleware）、`by_model`、有界 `steps`（上限 200）。默认前端摘要只展示 input/output；cache/reasoning/by_caller/by_model 仅在按需调试视图展示。
 - usage 只在 `on_chat_model_end` 累计（不从 stream chunk 累计），避免部分 stream usage 冻结终态值（曾导致 ↓2 bug）。
-- 持久化只写终态 `last_finish_usage` 一次，不按 token delta 写库；attribution/breakdown 不落库。
+- 持久化只写终态 `last_finish_usage` 一次，不按 token delta 写库；attribution 不落库。
 
-排障：`output_tokens` 异常小（如 ↓2）→ 检查是否有 stream chunk usage 抢先累计；`input_tokens` 偏大 → 检查 Provider 是否在 `input_tokens` 含 cache（LangChain 已规范化，但代理可能不符）；context 占用与 Provider input 不等 → 正常，二者口径不同（本地估算 vs Provider 实际）。
+排障：`output_tokens` 异常小（如 ↓2）→ 检查是否有 stream chunk usage 抢先累计；`input_tokens` 偏大 → 检查 Provider 是否在 `input_tokens` 含 cache（LangChain 已规范化，但代理可能不符）。
 
 ## 4. 工具结果
 

@@ -42,13 +42,12 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
         show_thinking_process="false",
     )
     session_id = "sess-context-integration"
-    fake_llm = _FakeLLM(messages=iter([AIMessage(content="ok")]))
+    fake_llm = _FakeLLM(messages=iter([AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 10})]))
 
     try:
         with (
             patch("noesis.factory.ModelConfig", cfg),
             patch("noesis.llm.factory.get_llm", return_value=fake_llm),
-            patch("noesis.agents.middlewares.observability.context_metrics_middleware.ModelConfig", cfg),
             patch("noesis.llm.model_limits.resolve_context_max_tokens", return_value=128000),
         ):
             agent = create_noesis_agent(
@@ -67,7 +66,7 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
         snap = ContextMetricsRegistry.peek(session_id)
         assert snap is not None
         assert snap["max_tokens"] == 128000
-        assert snap["current_tokens"] > 0
+        assert snap["current_tokens"] == 100
         assert snap["used_percentage"] >= 1
     finally:
         ContextMetricsRegistry.clear(session_id)

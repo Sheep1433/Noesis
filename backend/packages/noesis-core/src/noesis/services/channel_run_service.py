@@ -322,6 +322,7 @@ async def run_channel_agent(
         bridge = LangGraphSseBridge(
             session_id,
             emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
+            model_id=resolved_model_id,
         )
         builder = AssistantMessageBuilder(
             session_id=session_id,

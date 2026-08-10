@@ -148,10 +148,12 @@ onBeforeRouteLeave(async () => confirmDiscard())
   overflow: auto;
 }
 
-@media (max-width: 768px) {
+@media (width <= 768px) {
+
   .settings {
     padding: var(--noesis-shell-padding-mobile, 16px);
   }
+
   .settings-body {
     flex-direction: column;
   }

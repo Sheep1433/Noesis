@@ -59,17 +59,26 @@ describe('mobile layout navigation', () => {
     vi.useRealTimers()
   })
 
-  it.each(['Settings', 'KnowledgeBase', 'KnowledgeBaseDetail'])(
-    'hides the bottom navigation and releases its space on %s',
+  it.each(['Settings', 'KnowledgeBase'])(
+    'shows the bottom navigation and reserves its space on %s',
     (routeName) => {
       testState.route.name = routeName
       const wrapper = mount(SlotCenterPanel, { global: { stubs: globalStubs } })
 
-      expect(wrapper.find('[data-testid="mobile-bottom-nav"]').exists()).toBe(false)
-      expect(wrapper.get('.app-shell__main').classes()).toContain('app-shell__main--mobile-no-nav')
+      expect(wrapper.find('[data-testid="mobile-bottom-nav"]').exists()).toBe(true)
+      expect(wrapper.get('.app-shell__main').classes()).not.toContain('app-shell__main--mobile-no-nav')
       wrapper.unmount()
     },
   )
+
+  it('hides the bottom navigation on nested knowledge base details', () => {
+    testState.route.name = 'KnowledgeBaseDetail'
+    const wrapper = mount(SlotCenterPanel, { global: { stubs: globalStubs } })
+
+    expect(wrapper.find('[data-testid="mobile-bottom-nav"]').exists()).toBe(false)
+    expect(wrapper.get('.app-shell__main').classes()).toContain('app-shell__main--mobile-no-nav')
+    wrapper.unmount()
+  })
 
   it('keeps the bottom navigation on other mobile product pages', () => {
     testState.route.name = 'Extensions'

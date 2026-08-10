@@ -15,12 +15,10 @@ from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, Tool
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from noesis.llm.model_limits import resolve_context_max_tokens
-from noesis.agents.middlewares.kernel.context_metrics import build_context_snapshot_from_request, estimate_model_request_input_tokens
-from noesis.runtime.observability import ContextMetricsRegistry
+from noesis.agents.middlewares.kernel.context_metrics import estimate_model_request_input_tokens
 from noesis.runtime.context_snapshot import ContextSnapshot, ContextSource, set_context_snapshot
 from noesis.runtime.outcome import RuntimePhase, RuntimeStatus, StopReason, current_runtime_outcome, outcome, set_runtime_outcome
 from noesis.runtime.logging import logger
-from noesis.runtime.thread_context import resolve_runtime_run_id, resolve_runtime_thread_id
 
 
 _CLOCK_KEY = "noesis_session_clock"
@@ -128,29 +126,7 @@ class ContextLifecycleMiddleware(AgentMiddleware[AgentState]):
         system_value = request.system_prompt or getattr(request.system_message, "content", None)
         snapshot = ContextSnapshot(tuple(messages), system_value, tuple(sources), tuple(request.tools or ()), current, limit, {"model_id": self.model_id or ""})
         set_context_snapshot(snapshot)
-        self._publish_breakdown_snapshot(final_request)
         return snapshot
-
-    def _publish_breakdown_snapshot(self, request: ModelRequest) -> None:
-        """Write the breakdown-enriched snapshot to the SSE registry.
-
-        The runtime ``ContextSnapshot`` above is an internal lifecycle object; the
-        SSE bridge reads a separate breakdown snapshot from ``ContextMetricsRegistry``
-        to emit ``context-update``. We build it from the same final request so the
-        UI sees consistent system/conversation/tool breakdown plus provenance sources.
-        """
-        try:
-            session_id = resolve_runtime_thread_id(request.runtime)
-            if not session_id:
-                return
-            run_id = resolve_runtime_run_id(request.runtime)
-            ContextMetricsRegistry.put(
-                session_id,
-                build_context_snapshot_from_request(request, model_id=self.model_id),
-                run_id=run_id,
-            )
-        except Exception:  # noqa: BLE001 - context display is best-effort, never block a model call
-            logger.debug("[context_lifecycle] breakdown snapshot publish failed", exception=True)
 
     def _dispatch(self, request: ModelRequest, handler: Callable):
         active_outcome = current_runtime_outcome()

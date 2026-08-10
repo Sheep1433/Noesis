@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { isChatRouteName, mainNavItems, shouldShowMobileBottomNav } from '../src/config/navigation'
+import {
+  isChatRouteName,
+  mainNavItems,
+  mobileHistoryNavItems,
+  mobileProductNavItems,
+  shouldShowMobileBottomNav,
+} from '../src/config/navigation'
 import { composerPlaceholder } from '../src/config/subagents'
 import {
   CHAT_MODE_OPTIONS,
@@ -42,12 +48,16 @@ describe('immersive mobile chat routes', () => {
 })
 
 describe('mobile bottom navigation', () => {
-  it.each(['Settings', 'KnowledgeBase', 'KnowledgeBaseDetail'])(
-    'stays hidden on the %s page',
+  it.each(['Settings', 'KnowledgeBase'])(
+    'shows the bottom navigation on the %s page',
     (routeName) => {
-      expect(shouldShowMobileBottomNav(routeName, true)).toBe(false)
+      expect(shouldShowMobileBottomNav(routeName, true)).toBe(true)
     },
   )
+
+  it('keeps nested knowledge base details focused on their local content', () => {
+    expect(shouldShowMobileBottomNav('KnowledgeBaseDetail', true)).toBe(false)
+  })
 
   it('preserves navigation on other mobile product pages', () => {
     expect(shouldShowMobileBottomNav('Extensions', true)).toBe(true)
@@ -61,6 +71,23 @@ describe('mobile bottom navigation', () => {
 describe('public product navigation', () => {
   it('does not expose the retired test-case page', () => {
     expect(mainNavItems.map((item) => item.routeName)).not.toContain('TestCaseGenerate')
+  })
+
+  it('uses the four top-level product entries for mobile navigation', () => {
+    expect(mobileProductNavItems.map((item) => item.routeName)).toEqual([
+      'ChatIndex',
+      'KnowledgeBase',
+      'Extensions',
+      'Settings',
+    ])
+  })
+
+  it('keeps the history drawer shortcuts to three management entries', () => {
+    expect(mobileHistoryNavItems.map((item) => item.routeName)).toEqual([
+      'KnowledgeBase',
+      'Extensions',
+      'Settings',
+    ])
   })
 })
 

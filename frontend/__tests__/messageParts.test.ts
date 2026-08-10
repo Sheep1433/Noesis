@@ -3,7 +3,6 @@ import { parseTaskToolOutput } from '@/utils/parseTaskTool'
 import {
   applyToolOutput,
   assistantToolFailureSummary,
-  formatContextWindowTooltip,
   formatUsageSummary,
   hasValidContextWindow,
   hasValidUsage,
@@ -192,56 +191,6 @@ describe('message parts snapshot normalization', () => {
   })
 })
 
-// ---------- task 5.4: 旧事件 / 部分 details / 零值 / 刷新恢复 / 会话切换 兼容 ----------
-
-describe('context window tooltip 兼容旧事件与新字段', () => {
-  it('旧事件无 breakdown：只展示 current/max 总量', () => {
-    const tooltip = formatContextWindowTooltip({
-      current_tokens: 5000,
-      max_tokens: 128000,
-      used_percentage: 4,
-    })
-    expect(tooltip).toBe('5K / 128K')
-    expect(tooltip).not.toContain('系统')
-  })
-
-  it('新事件含 breakdown：展示分类明细与估算标识', () => {
-    const tooltip = formatContextWindowTooltip({
-      current_tokens: 12000,
-      max_tokens: 128000,
-      used_percentage: 9,
-      estimated: true,
-      breakdown: {
-        system: 3200, conversation: 5100, tool_results: 1800,
-        tool_definitions: 1200, other: 700,
-      },
-      sources: { skills: 900, memory: 300 },
-    })
-    expect(tooltip).toContain('12K / 128K')
-    expect(tooltip).toContain('估算')
-    expect(tooltip).toContain('系统 3.2K')
-    expect(tooltip).toContain('对话 5.1K')
-    expect(tooltip).toContain('工具结果 1.8K')
-    expect(tooltip).toContain('工具定义 1.2K')
-    expect(tooltip).toContain('其他 700')
-    expect(tooltip).toContain('skills 900')
-    expect(tooltip).toContain('memory 300')
-  })
-
-  it('breakdown other 为 0 时不展示「其他」行', () => {
-    const tooltip = formatContextWindowTooltip({
-      current_tokens: 1000,
-      max_tokens: 128000,
-      used_percentage: 1,
-      breakdown: {
-        system: 300, conversation: 500, tool_results: 100,
-        tool_definitions: 100, other: 0,
-      },
-    })
-    expect(tooltip).not.toContain('其他')
-  })
-})
-
 describe('usage summary 兼容零值与缺失 details', () => {
   it('基础 usage（无 details）正常展示', () => {
     const text = formatUsageSummary({
@@ -249,9 +198,18 @@ describe('usage summary 兼容零值与缺失 details', () => {
       output_tokens: 593,
       total_tokens: 21993,
     })
-    expect(text).toContain('↑21.4K')
+    expect(text).toContain('本轮用量 ↑21.4K')
     expect(text).toContain('↓593')
     expect(text).toContain('共 22K')
+  })
+
+  it('大于百万的 usage 使用 M 单位，避免显示成难读的五位 K 数', () => {
+    const text = formatUsageSummary({
+      input_tokens: 55506500,
+      output_tokens: 1184300,
+      total_tokens: 56690800,
+    })
+    expect(text).toBe('本轮用量 ↑55.5M ↓1.2M · 共 56.7M')
   })
 
   it('含 details 的 usage 默认摘要不展示 cache/reasoning', () => {
@@ -263,7 +221,7 @@ describe('usage summary 兼容零值与缺失 details', () => {
       output_token_details: { reasoning: 8 },
     })
     // 默认摘要只展示 input/output/total
-    expect(text).toBe('↑21.4K ↓593 · 共 22K')
+    expect(text).toBe('本轮用量 ↑21.4K ↓593 · 共 22K')
     expect(text).not.toContain('cache')
     expect(text).not.toContain('reasoning')
   })
@@ -293,7 +251,7 @@ describe('hasValidUsage / hasValidContextWindow 降级', () => {
     expect(hasValidContextWindow({ current_tokens: 100, max_tokens: 128000, used_percentage: 1 })).toBe(true)
   })
 
-  it('历史消息缺新字段（breakdown/sources）仍通过校验', () => {
+  it('历史消息只有核心字段仍通过校验', () => {
     expect(hasValidContextWindow({
       current_tokens: 5000, max_tokens: 128000, used_percentage: 4,
     })).toBe(true)

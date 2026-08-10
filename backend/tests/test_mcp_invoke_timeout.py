@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 from noesis.errors.tool_failure import ToolFailureCategory, ToolTimeoutError
 from noesis.agents.tools.mcp_invoke_wrapper import wrap_mcp_tool
+
+
+def test_mcp_tool_is_marked_for_context_attribution() -> None:
+    tool = wrap_mcp_tool(SimpleNamespace(), timeout_seconds=1)
+
+    assert tool.metadata["noesis_context_source"] == "mcp"
 
 
 class _SlowTool:

@@ -34,6 +34,7 @@ import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
+import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
@@ -238,6 +239,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 
 function resetComposingSurface() {
   sseStream.detachSubscription()
+  stopProcessingClock()
   sessionContext.value = null
   showDefaultPage.value = true
   isInit.value = true
@@ -268,7 +270,7 @@ onBeforeMount(async () => {
     applyWelcomeRouteQaType()
     isLoadingHistory.value = true
     isInit.value = true
-    await fetchConversationHistory(isInit, conversationItems, tableData, currentRenderIndex, null, '')
+    await refreshHistoryLists()
 
     const sid = routeSessionId()
     if (sid) {
@@ -325,15 +327,7 @@ async function refreshSidebarAfterManageClose() {
     : ''
   const wasShowingChat = !showDefaultPage.value
 
-  await fetchConversationHistory(
-    isInit,
-    conversationItems,
-    tableData,
-    currentRenderIndex,
-    null,
-    '',
-    archiveView.value ? 'only' : 'exclude',
-  )
+  await refreshHistoryLists()
 
   if (!wasShowingChat || !activeSessionId) {
     return
@@ -380,6 +374,30 @@ function changeChatMode(targetQaType: ChatModeQaType) {
 
 // 对话等待提示词图标
 const stylizingLoading = ref(false)
+const processingNow = ref(Date.now())
+let processingTimer: ReturnType<typeof setInterval> | null = null
+
+function startProcessingClock() {
+  processingNow.value = Date.now()
+  if (processingTimer !== null) {
+    return
+  }
+  processingTimer = setInterval(() => {
+    processingNow.value = Date.now()
+  }, 1000)
+}
+
+function stopProcessingClock() {
+  if (processingTimer === null) {
+    return
+  }
+  clearInterval(processingTimer)
+  processingTimer = null
+}
+
+function processingTimeText(startedAt?: number): string {
+  return formatElapsedSeconds(startedAt, processingNow.value)
+}
 
 type PendingHitlState = {
   session_id: string
@@ -586,6 +604,30 @@ const historySidebarColumns = computed(() => [
 ])
 
 const tableData = ref<TableItem[]>([])
+const archivedTableData = ref<TableItem[]>([])
+
+async function refreshHistoryLists(searchTextValue = '') {
+  await Promise.all([
+    fetchConversationHistory(
+      isInit,
+      conversationItems,
+      tableData,
+      currentRenderIndex,
+      null,
+      searchTextValue,
+      'exclude',
+    ),
+    fetchConversationHistory(
+      isInit,
+      conversationItems,
+      archivedTableData,
+      currentRenderIndex,
+      null,
+      searchTextValue,
+      'only',
+    ),
+  ])
+}
 
 // 保存对话历史记录
 const conversationItems = ref<
@@ -607,6 +649,8 @@ const conversationItems = ref<
     message_id?: string
     /** 与后端 Langfuse metadata.langfuse_session_id 一致（chat_id） */
     langfuse_session_id?: string
+    created_at?: number
+    completed_at?: number
   }>
 >([])
 
@@ -791,6 +835,7 @@ const sseStream = useSSEStream({
     } else if (status === 'disconnected') {
       reconnectAvailable.value = true
     } else if (status === 'running') {
+      startProcessingClock()
       reconnectAvailable.value = false
       lastRunStatusNotice = ''
       pendingHitl.value = null
@@ -799,6 +844,11 @@ const sseStream = useSSEStream({
   onSnapshot: (snapshot) => {
     reconnectAvailable.value = false
     stylizingLoading.value = shouldShowRunContinuation(snapshot.status)
+    if (stylizingLoading.value) {
+      startProcessingClock()
+    } else if (snapshot.status !== 'hitl_pending') {
+      stopProcessingClock()
+    }
     if (snapshot.status !== 'hitl_pending') {
       pendingHitlBySession.value = setPendingHitlForSession(
         pendingHitlBySession.value,
@@ -906,6 +956,7 @@ const sseStream = useSSEStream({
   },
   onFinish: (detail) => {
     stylizingLoading.value = false
+    stopProcessingClock()
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
     const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
     if (lastIdx !== -1) {
@@ -921,7 +972,13 @@ const sseStream = useSSEStream({
         const { content, reasoning } = syncLegacyFieldsFromParts(parts)
         conversationItems.value = [
           ...conversationItems.value.slice(0, lastIdx),
-          { ...prev, messageContent: { version: 1, parts }, content, reasoning },
+          {
+            ...prev,
+            messageContent: { version: 1, parts },
+            content,
+            reasoning,
+            ...(detail?.finish_reason !== 'hitl_pending' ? { completed_at: Date.now() } : {}),
+          },
           ...conversationItems.value.slice(lastIdx + 1),
         ]
       }
@@ -973,6 +1030,7 @@ const sseStream = useSSEStream({
   },
   onError: (msg) => {
     stylizingLoading.value = false
+    stopProcessingClock()
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
     const lastAssistantIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
     if (lastAssistantIdx !== -1) {
@@ -982,7 +1040,7 @@ const sseStream = useSSEStream({
         const { content, reasoning } = syncLegacyFieldsFromParts(parts)
         conversationItems.value = [
           ...conversationItems.value.slice(0, lastAssistantIdx),
-          { ...prev, messageContent: { version: 1, parts }, content, reasoning },
+          { ...prev, messageContent: { version: 1, parts }, content, reasoning, completed_at: Date.now() },
           ...conversationItems.value.slice(lastAssistantIdx + 1),
         ]
       }
@@ -1236,6 +1294,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
 
   // 调用大模型后台服务接口
   stylizingLoading.value = true
+  startProcessingClock()
   inputTextString.value = ''
 
   if (!uuids.value[qa_type.value]) {
@@ -1253,6 +1312,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
       file_key: upload_file_key,
       mentions: [...composerMentions.value],
       role: 'user',
+      created_at: Date.now(),
     })
     // 更新 currentRenderIndex 以包含新添加的项
     currentRenderIndex.value = conversationItems.value.length - 1
@@ -1274,6 +1334,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     file_key: [],
     role: 'assistant',
     messageContent: emptyMessageContent(),
+    created_at: Date.now(),
   })
 
   // 更新 currentRenderIndex 以包含新添加的项
@@ -1472,6 +1533,7 @@ const handleResetState = () => {
   clearComposerQueue()
 
   stylizingLoading.value = false
+  stopProcessingClock()
   nextTick(() => {
     refInputTextString.value?.select()
   })
@@ -1490,15 +1552,12 @@ const sessionContextMenuShow = ref(false)
 const sessionContextMenuX = ref(0)
 const sessionContextMenuY = ref(0)
 const sessionContextMenuTarget = ref<TableItem | null>(null)
-/** 归档视图：仅展示已归档会话；此时不展示「新建对话」，右键不展示「置顶」 */
-const archiveView = ref(false)
-
 const sessionContextMenuOptions = computed(() => {
   const target = sessionContextMenuTarget.value
   const opts: Array<{ label: string, key: string }> = [
     { label: '修改标题', key: 'rename' },
   ]
-  if (target && !archiveView.value) {
+  if (target && !target.archived) {
     opts.push({ label: target.pinned ? '取消置顶' : '置顶', key: target.pinned ? 'unpin' : 'pin' })
   }
   if (target) {
@@ -1513,15 +1572,7 @@ function closeSessionContextMenu() {
 }
 
 async function refreshSessionList() {
-  await fetchConversationHistory(
-    isInit,
-    conversationItems,
-    tableData,
-    currentRenderIndex,
-    null,
-    searchText.value,
-    archiveView.value ? 'only' : 'exclude',
-  )
+  await refreshHistoryLists(searchText.value)
 }
 
 function sortTableDataPinnedFirst(items: TableItem[]): TableItem[] {
@@ -1546,7 +1597,7 @@ async function toggleSessionMeta(row: TableItem, patch: { pinned?: boolean, arch
       next[idx] = updated
       tableData.value = sortTableDataPinnedFirst(next)
     }
-    // 归档 / 取消归档会改变列表成员，直接重拉
+    // 归档 / 取消归档会改变两个列表的成员，直接重拉
     if (patch.archived !== undefined) {
       await refreshSessionList()
     }
@@ -1868,15 +1919,8 @@ const onBlurSearchChat = () => {
 // 在script部分添加搜索处理函数
 const handleSearch = () => {
   tableData.value = []
-  fetchConversationHistory(
-    isInit,
-    conversationItems,
-    tableData,
-    currentRenderIndex,
-    null,
-    searchText.value,
-    archiveView.value ? 'only' : 'exclude',
-  )
+  archivedTableData.value = []
+  void refreshHistoryLists(searchText.value)
 }
 
 const handleClear = () => {
@@ -1910,11 +1954,6 @@ const { drawerWidth: historyDrawerWidth } = useResponsiveDrawerWidth({ max: 560,
 const { drawerWidth: sessionDrawerWidth } = useResponsiveDrawerWidth({ max: 480, mobileRatio: 0.9 })
 const historyDrawerOpen = ref(false)
 const chatHistoryPanelRef = ref<InstanceType<typeof ChatHistoryPanel> | null>(null)
-
-// 切换归档视图时重拉列表
-watch(archiveView, () => {
-  void refreshSessionList()
-})
 
 watch(isMobile, (mobile) => {
   if (mobile) {
@@ -1978,6 +2017,7 @@ onMounted(() => {
 
 // 在组件卸载前移除事件监听
 onBeforeUnmount(() => {
+  stopProcessingClock()
   if (messagesContainer.value) {
     messagesContainer.value.removeEventListener('scroll', handleScroll)
   }
@@ -2112,11 +2152,11 @@ function onComposerPaste(e: ClipboardEvent) {
         <ChatHistoryPanel
           ref="chatHistoryPanelRef"
           v-model:search-text="searchText"
-          v-model:archive-view="archiveView"
           :stylizing-loading="stylizingLoading"
           :is-focus-search-chat="isFocusSearchChat"
           :is-loading-history="isLoadingHistory"
           :table-data="tableData"
+          :archived-table-data="archivedTableData"
           :history-sidebar-columns="historySidebarColumns"
           :session-context-menu-show="sessionContextMenuShow"
           :session-context-menu-x="sessionContextMenuX"
@@ -2170,7 +2210,7 @@ function onComposerPaste(e: ClipboardEvent) {
                   />
                 </div>
                 <button
-                  v-if="!isMobile && !showDefaultPage && uuids[qa_type]"
+                  v-if="!showDefaultPage && uuids[qa_type]"
                   type="button"
                   class="session-files-toggle"
                   :class="{ 'session-files-toggle--open': sessionFilesPanelOpen }"
@@ -2262,6 +2302,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         class="chat-user-message-actions"
                         style="margin-left: 10%; margin-right: 10%; width: 80%;"
                       >
+                        <span class="message-timestamp" :class="{ 'message-timestamp--always': isMobile }">{{ formatHHmm(item.created_at) }}</span>
                         <button
                           type="button"
                           class="chat-user-copy-btn"
@@ -2306,6 +2347,14 @@ function onComposerPaste(e: ClipboardEvent) {
                     <div v-if="item.role === 'assistant'">
                       <template v-if="item.messageContent?.version === 1">
                         <div class="assistant-unified-card">
+                          <div
+                            v-if="showAssistantReplyLoading(index, item.role)"
+                            class="assistant-processing-time"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {{ processingTimeText(item.created_at) }}
+                          </div>
                           <template
                             v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
                             :key="entry.kind === 'subagent'
@@ -2359,7 +2408,6 @@ function onComposerPaste(e: ClipboardEvent) {
                               :qa-type="item.qa_type || 'COMMON_QA'"
                               :parentScollBottomMethod="scrollToBottom"
                               @failed="() => onFailedReader(index)"
-                              @recycleQa="() => onRecycleQa(index)"
                               @citation-click="(number) => openCitationSource(citationSourcesKey(item, index), number)"
                             />
                           </template>
@@ -2388,11 +2436,11 @@ function onComposerPaste(e: ClipboardEvent) {
                             v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
                             :qa-type="item.qa_type || 'COMMON_QA'"
                             :copy-text="extractLastTopLevelText(item.messageContent.parts)"
+                            :time-text="formatHHmm(item.completed_at || item.created_at)"
                             :usage-text="hasValidUsage(item.msg_metadata?.usage) ? formatUsageSummary(item.msg_metadata!.usage!) : ''"
                             :attribution="item.msg_metadata?.usage?.attribution"
                             :langfuse_session_id="item.langfuse_session_id"
                             :langfuse-ui-origin="langfuseUiOrigin"
-                            @recycle-qa="() => onRecycleQa(index)"
                           >
                             <template #meta>
                               <CitationSources
@@ -2422,7 +2470,6 @@ function onComposerPaste(e: ClipboardEvent) {
                           :parentScollBottomMethod="scrollToBottom"
                           @failed="() => onFailedReader(index)"
                           @completed="() => onCompletedReader(index)"
-                          @recycleQa="() => onRecycleQa(index)"
                           @beginRead="() => onBeginRead(index)"
                         />
                         <AssistantStreamingIndicator
@@ -2555,8 +2602,6 @@ function onComposerPaste(e: ClipboardEvent) {
                         :persist-session-extra="sessionMaterialized"
                         :disabled="sseIsLoading"
                         :file-upload-ref="fileUploadRef"
-                        :show-session-files="isMobile && !showDefaultPage && !!uuids[qa_type]"
-                        @open-session-files="toggleSessionFilesPanel"
                       >
                         <template #right>
                           <ContextWindowIndicator
@@ -2650,6 +2695,7 @@ function onComposerPaste(e: ClipboardEvent) {
           :is-focus-search-chat="isFocusSearchChat"
           :is-loading-history="isLoadingHistory"
           :table-data="tableData"
+          :archived-table-data="archivedTableData"
           :history-sidebar-columns="historySidebarColumns"
           :session-context-menu-show="sessionContextMenuShow"
           :session-context-menu-x="sessionContextMenuX"
@@ -3029,8 +3075,8 @@ function onComposerPaste(e: ClipboardEvent) {
 .chat-user-message-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: -4px;
-  margin-bottom: 4px;
+  margin-top: -8px;
+  margin-bottom: 0;
 }
 
 .chat-user-copy-btn {
@@ -3067,7 +3113,25 @@ function onComposerPaste(e: ClipboardEvent) {
   background: var(--noesis-color-primary-bg-subtle);
 }
 
+.message-timestamp {
+  opacity: 0;
+  font-size: 11px;
+  color: var(--noesis-color-text-hint);
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.chat-user-message-row:hover .message-timestamp,
+.assistant-unified-card:hover .message-timestamp {
+  opacity: 1;
+}
+
+.message-timestamp--always {
+  opacity: 1;
+}
+
 .assistant-unified-card {
+  position: relative;
   width: 80%;
   margin-left: 10%;
   margin-right: 10%;
@@ -3076,6 +3140,14 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 16px;
   overflow: visible;
   box-shadow: var(--noesis-shadow-sm);
+}
+
+.assistant-processing-time {
+  padding: 8px 16px 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--noesis-color-text-hint);
+  letter-spacing: 0.01em;
 }
 
 .chat-top-bar {

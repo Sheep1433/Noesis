@@ -1,25 +1,24 @@
 <script setup lang="ts">
 import type { ContextWindowSnapshot } from '@/views/chat/messageParts'
-import { computed } from 'vue'
-import { formatContextWindowTooltip } from '@/views/chat/messageParts'
+import { computed, ref } from 'vue'
+import { formatTokenCount } from '@/views/chat/messageParts'
 
 const props = defineProps<{
   context: ContextWindowSnapshot
 }>()
 
+const panelOpen = ref(false)
 const percentage = computed(() => Math.min(100, Math.max(0, Math.round(props.context.used_percentage))))
 
 const ringColor = computed(() => {
   if (percentage.value >= 85) {
-    return '#e88080'
+    return 'var(--noesis-color-danger)'
   }
   if (percentage.value >= 60) {
-    return '#f2c97d'
+    return 'var(--noesis-color-warning)'
   }
-  return '#8a8f99'
+  return 'var(--noesis-color-text-muted)'
 })
-
-const tooltipText = computed(() => `${formatContextWindowTooltip(props.context)}（估算）`)
 
 const dashOffset = computed(() => {
   const circumference = 2 * Math.PI * 9
@@ -28,12 +27,21 @@ const dashOffset = computed(() => {
 </script>
 
 <template>
-  <n-tooltip placement="top">
+  <n-popover
+    v-model:show="panelOpen"
+    placement="top-end"
+    trigger="click"
+    :show-arrow="false"
+    raw
+  >
     <template #trigger>
       <div
         class="context-window-indicator"
         role="status"
-        :aria-label="`上下文占用约 ${percentage}%`"
+        :aria-label="`上下文占用 ${percentage}%，点击查看用量`"
+        tabindex="0"
+        @keydown.enter.prevent="panelOpen = !panelOpen"
+        @keydown.space.prevent="panelOpen = !panelOpen"
       >
         <svg
           class="context-window-indicator__ring"
@@ -70,8 +78,32 @@ const dashOffset = computed(() => {
         <span class="context-window-indicator__label">{{ percentage }}%</span>
       </div>
     </template>
-    {{ tooltipText }}
-  </n-tooltip>
+    <div
+      data-testid="context-usage-panel"
+      class="context-usage-panel"
+      role="dialog"
+      aria-label="Context Usage"
+    >
+      <div class="context-usage-panel__header">
+        <span>Context Usage</span>
+        <button
+          type="button"
+          class="context-usage-panel__close"
+          aria-label="关闭上下文用量"
+          @click="panelOpen = false"
+        >
+          ×
+        </button>
+      </div>
+      <div class="context-usage-panel__summary">
+        <span>{{ percentage }}% Full</span>
+        <span>{{ formatTokenCount(context.current_tokens) }} / {{ formatTokenCount(context.max_tokens) }} Tokens</span>
+      </div>
+      <div class="context-usage-panel__bar" role="progressbar" :aria-valuenow="percentage" aria-valuemin="0" aria-valuemax="100">
+        <span class="context-usage-panel__bar-fill" :style="{ width: `${percentage}%`, backgroundColor: ringColor }"></span>
+      </div>
+    </div>
+  </n-popover>
 </template>
 
 <style scoped lang="scss">
@@ -79,11 +111,70 @@ const dashOffset = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #8a8f99;
+  color: var(--noesis-color-text-muted);
   font-size: 12px;
   line-height: 1;
   cursor: default;
   user-select: none;
+}
+
+.context-usage-panel {
+  width: min(360px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 14px;
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-lg);
+  background: var(--noesis-color-bg-elevated);
+  box-shadow: var(--noesis-shadow-float);
+  color: var(--noesis-color-text-body);
+}
+
+.context-usage-panel__header,
+.context-usage-panel__summary {
+  display: flex;
+  align-items: center;
+}
+
+.context-usage-panel__header {
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.context-usage-panel__close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--noesis-color-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.context-usage-panel__summary {
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage-panel__bar {
+  position: relative;
+  height: 5px;
+  margin: 8px 0 12px;
+  overflow: hidden;
+  border-radius: var(--noesis-radius-pill);
+  background: var(--noesis-color-bg-muted);
+}
+
+.context-usage-panel__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
 }
 
 .context-window-indicator__track {

@@ -1,11 +1,11 @@
 """检索层：向量存储、检索策略与统一检索门面。"""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
 
 from noesis.knowledge.retrieval.filters import document_matches_post_filter, split_search_filters
 from noesis.knowledge.retrieval.payload import build_payload, documents_to_points
-from noesis.knowledge.retrieval.service import KbRetrievalService, KbSearchHit, KbSearchResult, KbSearchTiming
 from noesis.knowledge.retrieval.store import (
     Retrieval,
     VectorStore,
@@ -28,5 +28,22 @@ __all__ = [
     "split_search_filters",
 ]
 
+_SERVICE_EXPORTS = frozenset(
+    {"KbRetrievalService", "KbSearchHit", "KbSearchResult", "KbSearchTiming"}
+)
+
+
+def __getattr__(name: str) -> Any:
+    """延迟加载检索门面，避免 Qdrant adapter 与 runtime 形成导入环。"""
+    if name in _SERVICE_EXPORTS:
+        return getattr(import_module("noesis.knowledge.retrieval.service"), name)
+    raise AttributeError(name)
+
+
 if TYPE_CHECKING:
-    pass
+    from noesis.knowledge.retrieval.service import (
+        KbRetrievalService,
+        KbSearchHit,
+        KbSearchResult,
+        KbSearchTiming,
+    )

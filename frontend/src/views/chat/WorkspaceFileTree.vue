@@ -1,32 +1,18 @@
 <script setup lang="ts">
-import type { DropdownOption } from 'naive-ui'
 import type { SessionFsTreeNode } from '@/api/chat'
-import { NDropdown, useMessage } from 'naive-ui'
-import { nextTick, ref, watch } from 'vue'
-import { downloadWorkspaceArchive } from '@/api/chat'
+import { ref, watch } from 'vue'
 import WorkspaceFileTreeNode from './WorkspaceFileTreeNode.vue'
 
 const props = defineProps<{
   nodes: SessionFsTreeNode[]
   selectedKey?: string
-  sessionId: string
 }>()
 
 const emit = defineEmits<{
   select: [key: string]
 }>()
 
-const message = useMessage()
 const expandedKeys = ref<string[]>([])
-const contextMenuShow = ref(false)
-const contextMenuX = ref(0)
-const contextMenuY = ref(0)
-const contextMenuTarget = ref<SessionFsTreeNode | null>(null)
-const archiveDownloading = ref(false)
-
-const contextMenuOptions: DropdownOption[] = [
-  { label: '下载', key: 'download' },
-]
 
 watch(
   () => props.nodes,
@@ -71,83 +57,11 @@ function onRowClick(node: SessionFsTreeNode) {
   }
   toggleExpand(node.key)
 }
-
-function canArchiveDownload(key: string): boolean {
-  return !!key && !/^users\/[^/]+$/.test(key)
-}
-
-function openContextMenu(node: SessionFsTreeNode, clientX: number, clientY: number) {
-  if (!canArchiveDownload(node.key)) {
-    return
-  }
-  contextMenuShow.value = false
-  contextMenuTarget.value = node
-  contextMenuX.value = clientX
-  contextMenuY.value = clientY
-  void nextTick(() => {
-    contextMenuShow.value = true
-  })
-}
-
-function onNodeContextMenu(node: SessionFsTreeNode, event: MouseEvent) {
-  if (!canArchiveDownload(node.key)) {
-    return
-  }
-  event.preventDefault()
-  event.stopPropagation()
-  openContextMenu(node, event.clientX, event.clientY)
-}
-
-function closeContextMenu() {
-  contextMenuShow.value = false
-  contextMenuTarget.value = null
-}
-
-async function downloadNode(node: SessionFsTreeNode) {
-  if (!canArchiveDownload(node.key) || !props.sessionId || archiveDownloading.value) {
-    return
-  }
-  archiveDownloading.value = true
-  try {
-    await downloadWorkspaceArchive(props.sessionId, node.key)
-    message.success('已开始下载')
-  } catch (e: unknown) {
-    const err = e as Error
-    message.error(err.message || '下载失败')
-  } finally {
-    archiveDownloading.value = false
-  }
-}
-
-async function handleContextMenuSelect(key: string) {
-  const target = contextMenuTarget.value
-  closeContextMenu()
-  if (key !== 'download' || !target) {
-    return
-  }
-  await downloadNode(target)
-}
-
-function onNodeDownload(node: SessionFsTreeNode) {
-  closeContextMenu()
-  void downloadNode(node)
-}
 </script>
 
 <template>
   <div v-if="nodes.length" class="workspace-file-tree">
-    <p class="workspace-file-tree__hint">右键、长按或点下载图标可下载</p>
-    <n-dropdown
-      trigger="manual"
-      placement="bottom-start"
-      to="body"
-      :show="contextMenuShow"
-      :x="contextMenuX"
-      :y="contextMenuY"
-      :options="contextMenuOptions"
-      @select="handleContextMenuSelect"
-      @clickoutside="closeContextMenu"
-    />
+    <p class="workspace-file-tree__hint">点击文件即可预览内容</p>
     <div class="workspace-file-tree__body">
       <WorkspaceFileTreeNode
         v-for="node in nodes"
@@ -155,12 +69,9 @@ function onNodeDownload(node: SessionFsTreeNode) {
         :node="node"
         :depth="0"
         :selected-key="selectedKey"
-        :can-download="canArchiveDownload"
         :is-expanded="isExpanded"
         :toggle-expand="toggleExpand"
         :on-row-click="onRowClick"
-        :on-context-menu="onNodeContextMenu"
-        :on-download="onNodeDownload"
       />
     </div>
   </div>

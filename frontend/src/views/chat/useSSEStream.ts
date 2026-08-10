@@ -286,11 +286,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           current_tokens: Number(context.current_tokens ?? 0),
           max_tokens: Number(context.max_tokens),
           used_percentage: Number(context.used_percentage ?? 0),
-          estimated: context.estimated,
-          counting_method: context.counting_method,
-          breakdown: context.breakdown,
-          sources: context.sources,
-          caller: context.caller,
         })
       }
       return

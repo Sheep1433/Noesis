@@ -8,6 +8,7 @@ maps exceptions to HTTP status codes.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -18,6 +19,7 @@ from noesis.schemas.knowledge_base_schema import (
     CreateCollectionRequest,
     PatchCollectionConfigRequest,
     SearchCollectionBody,
+    ShardPageQuery,
 )
 from noesis.schemas.login_vo import CurrentUser
 from noesis.services import knowledge_base_service
@@ -28,13 +30,15 @@ from noesis.errors.exceptions import (
     NotFoundException,
     ServiceException,
 )
-from noesis.knowledge.base import QdrantNotConnectedError
+from noesis.knowledge.base import KBOperationError, QdrantNotConnectedError
 
 
 knowledge_base_router = APIRouter(prefix="/api/knowledge_base", tags=["知识库模块"])
 
 
 def _map_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc) or "请求参数无效")
     if isinstance(exc, QdrantNotConnectedError):
         return HTTPException(status_code=503, detail=str(exc.message or "向量库未连接"))
     if isinstance(exc, NotFoundException):
@@ -43,6 +47,8 @@ def _map_exception(exc: Exception) -> HTTPException:
         return HTTPException(status_code=409, detail=exc.message or "资源冲突")
     if isinstance(exc, ServiceException):
         return HTTPException(status_code=500, detail=exc.message or "服务异常")
+    if isinstance(exc, KBOperationError):
+        return HTTPException(status_code=500, detail=str(exc) or "知识库操作失败")
     return HTTPException(status_code=500, detail=str(exc))
 
 
@@ -151,10 +157,32 @@ async def get_documents(
 async def get_shards(
     collection_name: str,
     file_name: str,
+    limit: str = "20",
+    cursor: Optional[str] = None,
+    element_type: Optional[str] = None,
+    locator_type: Optional[str] = None,
+    keyword: Optional[str] = None,
+    sort: str = "asc",
     current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
-        data = await knowledge_base_service.get_shards(collection_name, file_name, current_user)
+        query = ShardPageQuery.model_validate(
+            {
+                "limit": limit,
+                "cursor": cursor,
+                "element_type": element_type,
+                "locator_type": locator_type,
+                "keyword": keyword,
+                "sort": sort,
+            }
+        )
+    except ValidationError as exc:
+        message = exc.errors()[0].get("msg", "分页参数无效")
+        raise HTTPException(status_code=400, detail=f"分页参数无效：{message}") from exc
+    try:
+        data = await knowledge_base_service.get_shards(
+            collection_name, file_name, query, current_user
+        )
     except Exception as exc:
         raise _map_exception(exc) from exc
     return ResponseUtil.success(data=data)

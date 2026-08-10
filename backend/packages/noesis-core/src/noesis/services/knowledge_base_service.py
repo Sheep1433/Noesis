@@ -27,10 +27,12 @@ from noesis.schemas.knowledge_base_schema import (
     CreateCollectionRequest,
     CreateCollectionResponse,
     SearchCollectionBody,
+    ChunkSummaryPage,
+    ShardPageQuery,
 )
 from noesis.knowledge.implementations.qdrant import QdrantService
 from noesis.knowledge.runtime import knowledge_base
-from noesis.knowledge.base import QdrantNotConnectedError
+from noesis.knowledge.base import KBNotFoundError, QdrantNotConnectedError
 from noesis.errors.exceptions import NotFoundException, ServiceException
 from noesis.services.kb_collection_config_service import KbCollectionConfigService
 from noesis.knowledge.chunking import (
@@ -243,14 +245,19 @@ async def get_documents(
 async def get_shards(
     collection_name: str,
     file_name: str,
+    query: ShardPageQuery,
     current_user: CurrentUser,
-) -> list:
-    """获取文档的分片列表"""
+) -> Dict[str, Any]:
+    """获取文档的分片分页摘要。"""
     _ = current_user
     _ensure_connected()
 
     service = knowledge_base.service()
-    return service.get_document_shards(collection_name, file_name)
+    try:
+        page = service.get_document_shards_page(collection_name, file_name, query)
+    except KBNotFoundError as exc:
+        raise NotFoundException(message=str(exc)) from exc
+    return ChunkSummaryPage(**page).model_dump()
 
 
 async def get_shard_detail(
@@ -278,7 +285,21 @@ async def get_shard_detail(
         Header_1=shard.get("Header_1"),
         Header_2=shard.get("Header_2"),
         Header_3=shard.get("Header_3"),
+        Header_4=shard.get("Header_4"),
         chunk_index=shard.get("chunk_index"),
+        locator=shard.get("locator"),
+        element_type=shard.get("element_type"),
+        token_count=shard.get("token_count"),
+        file_name=shard.get("file_name"),
+        file_hash=shard.get("file_hash"),
+        content_hash=shard.get("content_hash"),
+        document_id=shard.get("document_id"),
+        document_version_id=shard.get("document_version_id"),
+        segment_id=shard.get("segment_id"),
+        source=shard.get("source"),
+        raw_text=shard.get("raw_text"),
+        clean_text=shard.get("clean_text"),
+        raw_metadata=shard.get("raw_metadata") or {},
         effective_processing_params=shard.get("effective_processing_params"),
     ).model_dump()
 

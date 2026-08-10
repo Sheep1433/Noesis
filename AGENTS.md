@@ -78,6 +78,7 @@ cd frontend && pnpm lint        # 前端按影响范围 lint / build
 
 - Python 统一 `uv run`，禁止裸 `python`
 - 测试目录：`backend/tests/`、`frontend/tests/`
+- 每次测试完成后必须停止由 Agent 启动的后端、前端 dev/preview server 及临时测试进程，释放占用端口，避免与用户后续执行冲突
 - 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库
 - SSE、Agent、Qdrant、消息持久化相关改动优先补回归测试
 

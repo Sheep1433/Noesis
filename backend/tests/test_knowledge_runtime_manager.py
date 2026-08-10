@@ -21,12 +21,16 @@ async def test_manager_owns_qdrant_client_lifecycle() -> None:
     service = manager.service()
     assert isinstance(service, QdrantService)
     assert service.client is client
+    assert manager.service() is service
 
     await manager.close()
 
     client.close.assert_called_once()
     assert manager.connected is False
     assert manager.client is None
+    disconnected_service = manager.service()
+    assert disconnected_service is not service
+    assert disconnected_service.client is None
 
 
 @pytest.mark.asyncio

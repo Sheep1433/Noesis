@@ -30,7 +30,6 @@ interface Props {
 interface Emits {
   (e: 'completed'): void
   (e: 'failed', error: any): void
-  (e: 'recycleQa'): void
   (e: 'praiseFeadBack'): void
   (e: 'belittleFeedback'): void
   (e: 'citationClick', number: number): void
@@ -100,7 +99,6 @@ const onCompleted = () => {
 
 const praiseFeedback = () => emit('praiseFeadBack')
 const belittleFeedback = () => emit('belittleFeedback')
-const handleRecycleAquestion = () => emit('recycleQa')
 
 function handleMarkdownClick(event: MouseEvent) {
   const target = event.target instanceof Element
@@ -170,7 +168,6 @@ onMounted(() => {
               :copy-text="displayText"
               @praise-fead-back="praiseFeedback"
               @belittle-feedback="belittleFeedback"
-              @recycle-qa="handleRecycleAquestion"
             />
           </div>
 

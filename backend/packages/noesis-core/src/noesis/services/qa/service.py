@@ -213,6 +213,7 @@ class QaService:
                 br = LangGraphSseBridge(
                     session_id,
                     emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
+                    model_id=resolved_model_id,
                 )
                 ctx_err: Dict[str, Any] = {}
                 for line in br.process_item({"type": "error", "content": "未知的qa_type"}, None, ctx_err):
@@ -227,6 +228,7 @@ class QaService:
                 session_id,
                 emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
                 assistant_message_id=assistant_message_id,
+                model_id=resolved_model_id,
             )
             builder = AssistantMessageBuilder(
                 session_id=session_id,
@@ -335,6 +337,7 @@ class QaService:
                 session_id,
                 emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
                 assistant_message_id=assistant_message_id,
+                model_id=resolved_model_id,
             )
             builder = AssistantMessageBuilder(
                 session_id=session_id,
