@@ -946,6 +946,10 @@ backends/
 - reasoning 模型 token 口径：`output_tokens` ≠ 全部输出，要看 `output_token_details.reasoning_tokens`；多 provider 平台要按模型分口径。
 - 状态文案统一走常量映射（`TOOL_STATE_LABELS`），不要散落硬编码。
 
+**2026-08-10 回归补充：** 简单首轮问答仍出现几十 K 的 ↑/↓ 用量，调试日志显示流式 chunk 携带的 usage 被重复观察/累计的风险仍存在。排查时必须按一次模型请求建立唯一 usage 记录：chunk usage 只用于诊断，终态 usage 才能写入统计；同时保留原始 `run_id`、chunk 序号和 provider 响应，才能区分“真实大 prompt”与“同一 usage 重复累加”。
+
+**新增验收：** 首轮无工具问答、带工具多轮问答、触发摘要后的下一轮分别回放；对比 provider 原始 usage、服务端累计值和前端展示值，确保三者只在口径转换处有可解释差异。
+
 ## 2026-08-07 — 多 Provider SSE 格式对比（compare_sse.py 方法论）
 
 **Why：** 平台适配多 provider 前必须看清各家 SSE 原始格式；SDK 会抹平差异。
