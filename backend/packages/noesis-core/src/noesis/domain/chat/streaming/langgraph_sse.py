@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Set
 
 from noesis.runtime.observability import ContextMetricsRegistry
 from noesis.llm.model_limits import resolve_context_max_tokens
-from noesis.agents.middlewares.kernel.context_metrics import compute_used_percentage
 from noesis.config.env import ModelConfig
 from noesis.domain.chat.streaming.reasoning import (
     extract_reasoning_delta,
@@ -23,6 +22,7 @@ from noesis.domain.chat.streaming.reasoning import (
 )
 from noesis.domain.chat.streaming.usage_normalize import (
     accumulate_detail as _accumulate_detail,
+    compute_used_percentage,
     extract_input_token_details as _extract_input_token_details,
     extract_output_token_details as _extract_output_token_details,
     normalize_usage as _normalize_usage,

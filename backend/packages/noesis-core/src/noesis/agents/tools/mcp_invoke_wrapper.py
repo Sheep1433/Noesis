@@ -98,6 +98,12 @@ def wrap_mcp_tool(tool: Any, *, timeout_seconds: float | None = None) -> Any:
     coroutine = getattr(tool, "coroutine", None)
     if coroutine is not None and callable(coroutine):
         tool.coroutine = _wrap_callable(coroutine, is_async=True, timeout_seconds=timeout_seconds)
+    # 标记来源供上下文来源细分归属（见 agent-runtime spec：可靠 provenance）。
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        tool.metadata = metadata
+    metadata.setdefault("noesis_context_source", "mcp")
     return tool
 
 

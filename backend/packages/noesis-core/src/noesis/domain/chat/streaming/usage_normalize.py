@@ -24,6 +24,16 @@ def to_int(value: Any) -> int | None:
         return None
 
 
+def compute_used_percentage(current_tokens: int, max_tokens: int) -> int:
+    """占用百分比；有占用但四舍五入为 0 时显示 1%，避免圆环长期为 0%。"""
+    if max_tokens <= 0 or current_tokens <= 0:
+        return 0
+    pct = round(current_tokens / max_tokens * 100)
+    if pct == 0:
+        return 1
+    return min(100, pct)
+
+
 def normalize_usage(raw: Any) -> Dict[str, Any]:
     """Normalize provider usage_metadata into a compatible token structure.
 

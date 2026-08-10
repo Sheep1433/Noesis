@@ -4,7 +4,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from noesis.agents.middlewares.kernel.context_metrics import compute_used_percentage
+from noesis.domain.chat.streaming.usage_normalize import compute_used_percentage
 from noesis.runtime.observability import ContextMetricsRegistry
 from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
 
