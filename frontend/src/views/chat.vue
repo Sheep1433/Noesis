@@ -2300,7 +2300,6 @@ function onComposerPaste(e: ClipboardEvent) {
                       <!-- 用户消息复制按钮（hover 显隐） -->
                       <div
                         class="chat-user-message-actions"
-                        style="margin-left: 10%; margin-right: 10%; width: 80%;"
                       >
                         <span class="message-timestamp" :class="{ 'message-timestamp--always': isMobile }">{{ formatHHmm(item.created_at) }}</span>
                         <button
@@ -3074,9 +3073,15 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .chat-user-message-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  margin-top: -8px;
+  box-sizing: border-box;
+  width: 80%;
+  margin-right: 10%;
+  margin-left: 10%;
+  margin-top: -14px;
   margin-bottom: 0;
+  padding-right: 8px;
 }
 
 .chat-user-copy-btn {
@@ -3091,7 +3096,7 @@ function onComposerPaste(e: ClipboardEvent) {
   background: transparent;
   color: var(--noesis-color-text-hint);
   cursor: pointer;
-  opacity: 0;
+  opacity: 1;
   transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
 }
 
@@ -3103,31 +3108,17 @@ function onComposerPaste(e: ClipboardEvent) {
   line-height: 1;
 }
 
-.chat-user-message-row:hover .chat-user-copy-btn,
-.chat-user-copy-btn:focus-visible {
-  opacity: 1;
-}
-
 .chat-user-copy-btn:hover {
   color: var(--noesis-color-primary);
   background: var(--noesis-color-primary-bg-subtle);
 }
 
 .message-timestamp {
-  opacity: 0;
+  opacity: 1;
   font-size: 11px;
   color: var(--noesis-color-text-hint);
   transition: opacity 0.15s ease;
   pointer-events: none;
-}
-
-.chat-user-message-row:hover .message-timestamp,
-.assistant-unified-card:hover .message-timestamp {
-  opacity: 1;
-}
-
-.message-timestamp--always {
-  opacity: 1;
 }
 
 .assistant-unified-card {
@@ -3217,6 +3208,12 @@ function onComposerPaste(e: ClipboardEvent) {
   }
 
   .assistant-unified-card {
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .chat-user-message-actions {
     width: 100%;
     margin-left: 0;
     margin-right: 0;

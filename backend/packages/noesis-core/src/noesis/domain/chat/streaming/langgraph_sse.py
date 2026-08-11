@@ -23,13 +23,9 @@ from noesis.domain.chat.streaming.reasoning import (
 from noesis.domain.chat.streaming.usage_normalize import (
     accumulate_detail as _accumulate_detail,
     compute_used_percentage,
-    extract_input_token_details as _extract_input_token_details,
-    extract_output_token_details as _extract_output_token_details,
     normalize_usage as _normalize_usage,
-    to_int as _to_int,
 )
 from noesis.domain.chat.streaming.usage_attribution import (
-    CALLER_LEAD_AGENT,
     ModelCallAttribution,
     RunUsageCollector,
     resolve_caller,
@@ -62,70 +58,6 @@ _TOOL_EXIT_PROTOCOL_RE = re.compile(
 _TOOL_INPUT_MAX = 65536
 TASK_TOOL_NAME = "task"
 _OMIT_NON_JSON_TOOL_INPUT = object()
-_DEBUG_TOKEN_USAGE_TAG = "[DEBUG-TOKEN-USAGE]"
-_DEBUG_USAGE_KEYS = (
-    "input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "prompt_tokens",
-    "completion_tokens",
-    "input_token_details",
-    "output_token_details",
-    "prompt_tokens_details",
-)
-
-
-def _debug_payload_char_count(value: Any) -> int:
-    """Count payload characters without writing prompt content to logs."""
-    if isinstance(value, str):
-        return len(value)
-    if isinstance(value, dict):
-        return sum(_debug_payload_char_count(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return sum(_debug_payload_char_count(item) for item in value)
-    content = getattr(value, "content", None)
-    return _debug_payload_char_count(content) if content is not None else 0
-
-
-def _debug_input_summary(value: Any) -> Dict[str, Any]:
-    """Return safe shape/size information for a model input payload."""
-    if isinstance(value, (list, tuple)):
-        roles: Dict[str, int] = {}
-        for item in value:
-            role = item.get("role") if isinstance(item, dict) else getattr(item, "type", None)
-            role_name = str(role or "unknown")
-            roles[role_name] = roles.get(role_name, 0) + 1
-        return {
-            "items": len(value),
-            "roles": roles,
-            "content_chars": _debug_payload_char_count(value),
-        }
-    return {
-        "type": type(value).__name__,
-        "content_chars": _debug_payload_char_count(value),
-    }
-
-
-def _debug_usage_summary(raw_usage: Any) -> Dict[str, Any]:
-    """Keep provider usage diagnostics numeric and content-free."""
-    fields: Dict[str, Any] = {}
-    for key in _DEBUG_USAGE_KEYS:
-        value = raw_usage.get(key) if isinstance(raw_usage, dict) else getattr(raw_usage, key, None)
-        if value is None:
-            continue
-        if isinstance(value, dict):
-            numeric = {name: parsed for name, item in value.items() if (parsed := _to_int(item)) is not None}
-            if numeric:
-                fields[key] = numeric
-        else:
-            parsed = _to_int(value)
-            if parsed is not None:
-                fields[key] = parsed
-    return {
-        "raw_type": type(raw_usage).__name__,
-        "raw_fields": fields,
-        "normalized": _normalize_usage(raw_usage),
-    }
 
 
 def _new_id(prefix: str) -> str:
@@ -297,9 +229,6 @@ class LangGraphSseBridge:
         self._session_context_tick = False
         self.last_hitl_payload: Optional[Dict[str, Any]] = None
         self._usage_collector = RunUsageCollector()
-        self._debug_model_started_at: Dict[str, float] = {}
-        self._debug_first_output_runs: Set[str] = set()
-        self._debug_first_text_runs: Set[str] = set()
 
     # ---------- metrics ctx ----------
 
@@ -335,54 +264,6 @@ class LangGraphSseBridge:
                     return tid
         return stack[-1] if stack else None
 
-    def _debug_model_start(self, item: Dict[str, Any]) -> None:
-        run_id = str(item.get("run_id") or "").strip()
-        key = run_id or "anonymous"
-        started_at = time.perf_counter()
-        self._debug_model_started_at[key] = started_at
-        data = item.get("data") or {}
-        input_value = data.get("input") if isinstance(data, dict) else None
-        snapshot = ContextMetricsRegistry.peek(self.session_id, run_id=run_id)
-        context_summary = None
-        if snapshot:
-            context_summary = {
-                key: snapshot.get(key)
-                for key in ("current_tokens", "max_tokens")
-                if key in snapshot
-            }
-        logger.debug(
-            "{} model_start session_id={} assistant_message_id={} run_id={} name={} "
-            "parent_count={} input={} context={}",
-            _DEBUG_TOKEN_USAGE_TAG,
-            self.session_id,
-            self.assistant_message_id,
-            run_id or "anonymous",
-            item.get("name") or "",
-            len(item.get("parent_ids") or []),
-            _debug_input_summary(input_value),
-            context_summary,
-        )
-
-    def _debug_model_output(self, item: Dict[str, Any], *, kind: str, chars: int) -> None:
-        run_id = str(item.get("run_id") or "").strip()
-        key = run_id or "anonymous"
-        seen = self._debug_first_text_runs if kind == "text" else self._debug_first_output_runs
-        if key in seen:
-            return
-        seen.add(key)
-        started_at = self._debug_model_started_at.get(key)
-        ttft_ms = round((time.perf_counter() - started_at) * 1000, 1) if started_at else None
-        logger.debug(
-            "{} first_output session_id={} run_id={} name={} kind={} chars={} elapsed_ms={}",
-            _DEBUG_TOKEN_USAGE_TAG,
-            self.session_id,
-            run_id or "anonymous",
-            item.get("name") or "",
-            kind,
-            chars,
-            ttft_ms,
-        )
-
     def _register_tool_run(self, item: Dict[str, Any], tool_call_id: str, ctx: Dict[str, Any]) -> None:
         self._ensure_subagent_ctx(ctx)
         run_id = item.get("run_id")
@@ -417,7 +298,13 @@ class LangGraphSseBridge:
             return {}
         return cum
 
-    def _emit_usage_update(self, ctx: Dict[str, Any], out: List[str]) -> None:
+    def _emit_usage_update(
+        self,
+        ctx: Dict[str, Any],
+        out: List[str],
+        *,
+        run_id: Optional[str] = None,
+    ) -> None:
         usage = self._build_usage_payload(ctx)
         if not usage:
             return
@@ -427,7 +314,7 @@ class LangGraphSseBridge:
             "message_id": self.assistant_message_id,
             "usage": usage,
         }))
-        snapshot = ContextMetricsRegistry.peek(self.session_id)
+        snapshot = ContextMetricsRegistry.peek(self.session_id, run_id=str(run_id or "").strip())
         if snapshot:
             self._emit_context_update(snapshot, out)
 
@@ -441,26 +328,12 @@ class LangGraphSseBridge:
     ) -> None:
         usage = _normalize_usage(raw_usage)
         if not usage:
-            logger.debug(
-                "{} usage_missing session_id={} run_id={} raw={}",
-                _DEBUG_TOKEN_USAGE_TAG,
-                self.session_id,
-                run_id or "anonymous",
-                _debug_usage_summary(raw_usage),
-            )
             return
         self._ensure_metrics_ctx(ctx)
         rid = str(run_id or "").strip()
         if rid:
             seen: Set[str] = ctx["usage_seen_run_ids"]
             if rid in seen:
-                logger.debug(
-                    "{} usage_duplicate session_id={} run_id={} usage={}",
-                    _DEBUG_TOKEN_USAGE_TAG,
-                    self.session_id,
-                    rid,
-                    usage,
-                )
                 return
 
         # collector 是 bridge 级别的唯一去重边界；ctx 可能在子 Agent / 恢复路径
@@ -495,7 +368,6 @@ class LangGraphSseBridge:
             )
 
         cum: Dict[str, Any] = ctx["usage_cumulative"]
-        before = dict(cum)
         cum["input_tokens"] = cum.get("input_tokens", 0) + usage.get("input_tokens", 0)
         cum["output_tokens"] = cum.get("output_tokens", 0) + usage.get("output_tokens", 0)
         if "total_tokens" in usage:
@@ -506,17 +378,7 @@ class LangGraphSseBridge:
         _accumulate_detail(cum, "input_token_details", usage.get("input_token_details"))
         _accumulate_detail(cum, "output_token_details", usage.get("output_token_details"))
         self._usage_cumulative = dict(cum)
-        logger.debug(
-            "{} usage_accumulated session_id={} run_id={} caller={} usage={} before={} after={}",
-            _DEBUG_TOKEN_USAGE_TAG,
-            self.session_id,
-            rid or "anonymous",
-            resolve_caller(parent_task_call_id),
-            usage,
-            before,
-            cum,
-        )
-        self._emit_usage_update(ctx, out)
+        self._emit_usage_update(ctx, out, run_id=rid)
 
     def _tool_duration_ms(self, ctx: Dict[str, Any], tool_call_id: str) -> Optional[int]:
         self._ensure_metrics_ctx(ctx)
@@ -1022,15 +884,12 @@ class LangGraphSseBridge:
         if lc_kind == "on_chat_model_start":
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
-            self._debug_model_start(item)
             return
 
         if lc_kind == "on_chat_model_stream":
             parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
             chunk = (item.get("data") or {}).get("chunk")
             reasoning_delta = extract_reasoning_delta(chunk) if chunk is not None else ""
-            if reasoning_delta:
-                self._debug_model_output(item, kind="reasoning", chars=len(reasoning_delta))
             if self._show_thinking and reasoning_delta:
                 if builder is not None:
                     builder.append_reasoning_delta(
@@ -1041,7 +900,6 @@ class LangGraphSseBridge:
                 self._emit_reasoning_delta(reasoning_delta, out, parent_task_call_id)
             content = extract_text_content(chunk) if chunk is not None else ""
             if content:
-                self._debug_model_output(item, kind="text", chars=len(content))
                 if builder is not None:
                     ctx["text_buffer"] = (ctx.get("text_buffer") or "") + content
                     ctx["text_buffer_parent_task_call_id"] = parent_task_call_id
@@ -1062,7 +920,6 @@ class LangGraphSseBridge:
                         str(ctx.get("reasoning_buffer") or ""),
                     )
                     if reasoning_delta:
-                        self._debug_model_output(item, kind="reasoning", chars=len(reasoning_delta))
                         if builder is not None:
                             builder.append_reasoning_delta(
                                 reasoning_delta,
@@ -1073,7 +930,6 @@ class LangGraphSseBridge:
                 final_text = extract_text_content(output)
                 text_delta = unsent_text_suffix(final_text, str(ctx.get("text_buffer") or ""))
                 if text_delta:
-                    self._debug_model_output(item, kind="text", chars=len(text_delta))
                     if builder is not None:
                         ctx["text_buffer"] = (ctx.get("text_buffer") or "") + text_delta
                         ctx["text_buffer_parent_task_call_id"] = parent_task_call_id
@@ -1081,20 +937,6 @@ class LangGraphSseBridge:
             usage_meta = getattr(output, "usage_metadata", None) if output is not None else None
             if not usage_meta and isinstance(output, dict):
                 usage_meta = output.get("usage_metadata")
-            run_key = str(item.get("run_id") or "anonymous")
-            logger.debug(
-                "{} model_end session_id={} run_id={} name={} duration_ms={} usage={}",
-                _DEBUG_TOKEN_USAGE_TAG,
-                self.session_id,
-                run_key,
-                item.get("name") or "",
-                (
-                    round((time.perf_counter() - self._debug_model_started_at[run_key]) * 1000, 1)
-                    if run_key in self._debug_model_started_at
-                    else None
-                ),
-                _debug_usage_summary(usage_meta) if usage_meta else {"raw_type": "missing"},
-            )
             if usage_meta:
                 self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out, parent_task_call_id)
             return

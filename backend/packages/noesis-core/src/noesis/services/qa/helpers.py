@@ -268,15 +268,6 @@ def _build_assistant_persist_extra(
     if bridge is not None:
         if bridge.last_finish_usage:
             extra["usage"] = bridge.last_finish_usage
-            logger.debug(
-                "[DEBUG-TOKEN-USAGE] persist_usage session_id={} assistant_message_id={} "
-                "model={} usage={} finish_reason={}",
-                bridge.session_id,
-                bridge.assistant_message_id,
-                model or "",
-                bridge.last_finish_usage,
-                bridge.last_finish_reason or "",
-            )
         if bridge.last_finish_reason:
             extra["finish_reason"] = bridge.last_finish_reason
         err = error_message or bridge.last_error_message

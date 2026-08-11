@@ -130,15 +130,14 @@ const handlePassClip = async () => {
     </div>
     <div class="assistant-reply-toolbar__actions">
       <span v-if="timeText" class="assistant-reply-toolbar__time">{{ timeText }}</span>
-      <n-button ghost size="tiny" icon-placement="left" type="default" :bordered="false" class="assistant-reply-toolbar__btn" @click="handlePassClip()">
-        <template #icon>
-          <n-icon size="20" class="assistant-reply-toolbar__icon">
-            <svg t="1734515176870" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="26346" width="200" height="200">
-              <path d="M955.85804 265.068028l0 595.439364L195.018625 860.507392 195.018625 728.187761 62.698994 728.187761 62.698994 132.748397l760.839415 0 0 132.319631L955.85804 265.068028zM195.018625 695.108365 195.018625 265.068028l595.439364 0 0-99.240235L95.779414 165.827793l0 529.279548L195.018625 695.107341zM922.778644 298.148447 228.099045 298.148447 228.099045 827.427996l694.679599 0L922.778644 298.148447z" fill="currentColor" p-id="26347" />
-            </svg>
-          </n-icon>
-        </template>
-      </n-button>
+      <button
+        type="button"
+        class="assistant-reply-toolbar__btn"
+        aria-label="复制回复"
+        @click="handlePassClip()"
+      >
+        <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
+      </button>
     </div>
   </div>
 </template>
@@ -150,7 +149,7 @@ const handlePassClip = async () => {
   align-items: center;
   width: 100%;
   margin-top: 0;
-  padding: 18px 15px;
+  padding: 6px 8px 6px 15px;
   border-top: 1px solid var(--noesis-color-border-subtle);
   border-bottom-right-radius: 15px;
   border-bottom-left-radius: 15px;
@@ -178,12 +177,38 @@ const handlePassClip = async () => {
 
 .assistant-reply-toolbar__actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .assistant-reply-toolbar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
   margin-right: 0;
+  padding: 0;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
+  color: var(--noesis-color-text-hint);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.assistant-reply-toolbar__btn span {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.assistant-reply-toolbar__btn:hover {
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
 .assistant-reply-toolbar__time {
@@ -191,9 +216,5 @@ const handlePassClip = async () => {
   line-height: 1.4;
   color: var(--noesis-color-text-hint);
   white-space: nowrap;
-}
-
-.assistant-reply-toolbar__icon {
-  color: var(--noesis-color-text-secondary);
 }
 </style>

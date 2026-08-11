@@ -237,6 +237,46 @@ def test_context_update_event_shape() -> None:
     ContextMetricsRegistry.clear("sess-ctx")
 
 
+def test_context_update_is_bound_to_the_current_model_run() -> None:
+    """A concurrent model run must not overwrite this run's context indicator."""
+    from noesis.runtime.observability import ContextMetricsRegistry
+
+    bridge = LangGraphSseBridge("sess-context-runs")
+    builder = AssistantMessageBuilder(
+        session_id="sess-context-runs",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+    original_put = ContextMetricsRegistry.put
+
+    def interleave_other_run(cls, session_id, snapshot, *, run_id=""):
+        original_put(session_id, snapshot, run_id=run_id)
+        if run_id == "run-current":
+            original_put(
+                session_id,
+                {"current_tokens": 999, "max_tokens": 128000, "used_percentage": 1},
+                run_id="run-other",
+            )
+
+    with patch.object(ContextMetricsRegistry, "put", classmethod(interleave_other_run)):
+        with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+            blob = "".join(
+                bridge.process_item(
+                    {
+                        "event": "on_chat_model_end",
+                        "run_id": "run-current",
+                        "data": {"output": MagicMock(usage_metadata={"input_tokens": 10, "output_tokens": 5})},
+                    },
+                    builder,
+                    ctx,
+                )
+            )
+
+    cu = [o for o in _data_json_objects(blob) if o.get("type") == "context-update"][0]
+    assert cu["context"]["current_tokens"] == 10
+    ContextMetricsRegistry.clear("sess-context-runs")
+
+
 def test_finish_usage_and_done() -> None:
     bridge = LangGraphSseBridge("sess-2")
     builder = AssistantMessageBuilder(session_id="sess-2", message_id=bridge.assistant_message_id)
