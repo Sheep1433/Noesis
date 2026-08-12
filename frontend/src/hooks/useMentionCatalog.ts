@@ -1,13 +1,12 @@
 /**
- * Mention catalog：预取 skills tree + session context，TTL 缓存，本地过滤。
+ * Mention catalog：预取 skills 包列表 + session context，TTL 缓存，本地过滤。
  */
 import type { SessionContextResponse, SessionFsTreeNode, SlashCommand } from '@/api/chat'
-import type { SkillFsTreeResponse } from '@/api/skills'
+import type { SkillPackageItem } from '@/api/skills'
 import type { SubagentOption } from '@/config/subagents'
 import { getSessionContext, getSlashCommands } from '@/api/chat'
-import { getSkillsFsTree } from '@/api/skills'
+import { getSkillsPackages } from '@/api/skills'
 import { getSubagentsForQaType } from '@/config/subagents'
-import { collectSkillPackages } from '@/utils/skillsTree'
 
 export type MentionKind = 'command' | 'skill' | 'file' | 'folder' | 'subagent'
 
@@ -34,7 +33,7 @@ const SKILLS_TTL_MS = 60_000
 const CONTEXT_TTL_MS = 30_000
 const COMMANDS_TTL_MS = 60_000
 
-let skillsCache: { at: number, data: SkillFsTreeResponse } | null = null
+let skillsCache: { at: number, data: SkillPackageItem[] } | null = null
 let commandsCache: { at: number, data: SlashCommand[] } | null = null
 const contextCache = new Map<string, { at: number, data: SessionContextResponse }>()
 
@@ -51,17 +50,17 @@ export function invalidateMentionContextCache(sessionId?: string) {
   contextCache.clear()
 }
 
-async function loadSkills(force = false): Promise<SkillFsTreeResponse | null> {
+async function loadSkills(force = false): Promise<SkillPackageItem[]> {
   if (!force && skillsCache && Date.now() - skillsCache.at < SKILLS_TTL_MS) {
     return skillsCache.data
   }
   try {
-    const data = await getSkillsFsTree()
+    const data = await getSkillsPackages()
     skillsCache = { at: Date.now(), data }
     return data
   } catch (e) {
     console.warn('mention catalog: skills 加载失败', e)
-    return skillsCache?.data ?? null
+    return skillsCache?.data ?? []
   }
 }
 
@@ -99,13 +98,13 @@ async function loadContext(sessionId: string, force = false): Promise<SessionCon
   }
 }
 
-function flattenSkillPackages(tree: SkillFsTreeResponse): MentionCandidate[] {
-  return collectSkillPackages(tree).map((pkg) => ({
+function flattenSkillPackages(packages: SkillPackageItem[]): MentionCandidate[] {
+  return packages.map((pkg) => ({
     kind: 'skill' as const,
-    id: pkg.id,
+    id: pkg.name,
     source: pkg.source,
-    label: pkg.id,
-    description: `${pkg.source} skill`,
+    label: pkg.name,
+    description: pkg.description,
   }))
 }
 
@@ -166,7 +165,7 @@ export async function ensureMentionCatalog(opts: {
 }): Promise<MentionCandidate[]> {
   const { qaType, sessionId, mode, force } = opts
   if (mode === 'slash') {
-    const [commands, tree] = await Promise.all([loadCommands(force), loadSkills(force)])
+    const [commands, packages] = await Promise.all([loadCommands(force), loadSkills(force)])
     const candidates: MentionCandidate[] = []
     for (const cmd of commands) {
       candidates.push({
@@ -176,9 +175,7 @@ export async function ensureMentionCatalog(opts: {
         description: cmd.description,
       })
     }
-    if (tree) {
-      candidates.push(...flattenSkillPackages(tree))
-    }
+    candidates.push(...flattenSkillPackages(packages))
     return candidates
   }
   const candidates: MentionCandidate[] = []

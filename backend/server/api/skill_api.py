@@ -11,6 +11,7 @@ from fastapi.responses import Response
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.skill_vo import (
     SkillFsFileContent,
+    SkillPackageItem,
     SkillSource,
     SkillMarketInstallRequest,
 )
@@ -20,6 +21,16 @@ from server.auth_dependencies import get_current_user
 from server.response import ResponseUtil
 
 skill_router = APIRouter(prefix='/api/skills', tags=['Skill 模块'])
+
+
+@skill_router.get('/fs/packages', summary='轻量 skill 包列表（不递归文件树）')
+async def get_skills_fs_packages(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """供聊天 Composer/Mention 补全用；只返回顶层包名 + 描述，体积远小于 /fs/tree。"""
+    return ResponseUtil.success(
+        data=[p.model_dump() for p in SkillFsService.list_packages(current_user.user_id)],
+    )
 
 
 @skill_router.get('/fs/tree')

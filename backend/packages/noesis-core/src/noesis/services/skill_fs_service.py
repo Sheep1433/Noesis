@@ -14,10 +14,20 @@ from noesis.agents.skills.revision import (
     get_user_skills_revision,
     skills_revision_path,
 )
-from noesis.schemas.skill_vo import SkillFsSourceSection, SkillFsTreeNode, SkillFsTreeResponse
+from noesis.schemas.skill_vo import (
+    SkillFsSourceSection,
+    SkillFsTreeNode,
+    SkillFsTreeResponse,
+    SkillPackageItem,
+)
 from noesis.runtime.logging import logger
 
 _MAX_READ_BYTES = 512 * 1024
+
+# 扫描 skill 目录树时跳过的噪声目录（依赖/缓存/版本控制），无论哪个场景都不应出现在 skill 浏览里。
+_NOISE_DIRS: frozenset[str] = frozenset(
+    {"node_modules", ".git", "vendor", "__pycache__", ".venv", "venv", ".pytest_cache"}
+)
 _MAX_ZIP_BYTES = 10 * 1024 * 1024
 
 SkillSource = Literal["platform", "user"]
@@ -86,6 +96,9 @@ class SkillFsService:
             return []
         for name in names:
             if name.startswith('.'):
+                continue
+            # 跳过依赖/缓存/版本控制等噪声目录，避免 node_modules 等把树撑到数万节点。
+            if name in _NOISE_DIRS:
                 continue
             entry_rel = f'{rel}/{name}' if rel else name
             entry_full = os.path.join(full, name)
@@ -171,6 +184,68 @@ class SkillFsService:
             user=user,
             tree=merged,
         )
+
+    @staticmethod
+    def _parse_skill_md(skill_md: str) -> tuple[str, str]:
+        """从 SKILL.md frontmatter 解析 (name, description)；无则返回 ('', '')。"""
+        import re
+
+        m = re.match(r"^---\s*\n(.*?\n)---\s*\n", skill_md, re.DOTALL)
+        if not m:
+            return "", ""
+        fields: dict[str, str] = {}
+        for line in m.group(1).splitlines():
+            if ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            val = val.strip().strip("\"'")
+            if val:
+                fields[key.strip()] = val
+        desc = fields.get("description", "").strip()
+        if len(desc) > 80:
+            desc = desc[:79].rstrip() + "…"
+        return fields.get("name", ""), desc
+
+    @classmethod
+    def _scan_packages(cls, root: str, source: SkillSource) -> List[SkillPackageItem]:
+        """扫描单个 root 的顶层 skill 包（不递归），只读 SKILL.md frontmatter。"""
+        if not os.path.isdir(root):
+            return []
+        out: List[SkillPackageItem] = []
+        try:
+            names = sorted(os.listdir(root), key=lambda x: x.lower())
+        except OSError as e:
+            logger.warning(f'列出目录失败 {root}: {e}')
+            return []
+        for name in names:
+            if name.startswith('.'):
+                continue
+            pkg = os.path.join(root, name)
+            if not os.path.isdir(pkg):
+                continue
+            skill_md = os.path.join(pkg, "SKILL.md")
+            skill_name = name
+            desc = ""
+            if os.path.isfile(skill_md):
+                try:
+                    text = open(skill_md, encoding="utf-8", errors="replace").read()
+                    parsed_name, desc = cls._parse_skill_md(text)
+                    if parsed_name:
+                        skill_name = parsed_name
+                except OSError:
+                    pass
+            out.append(SkillPackageItem(name=skill_name, source=source, description=desc))
+        return out
+
+    @classmethod
+    def list_packages(cls, user_id: str | int) -> List[SkillPackageItem]:
+        """轻量 skill 包列表（platform + user），不递归文件树。
+
+        供聊天 Composer/Mention 补全用；体积远小于 /fs/tree（只返回顶层包名 + 描述）。
+        """
+        platform = cls._scan_packages(cls.get_platform_root_path(), 'platform')
+        user = cls._scan_packages(cls.get_user_root_path(user_id), 'user')
+        return platform + user
 
     @classmethod
     def _resolve_root(cls, source: SkillSource, user_id: str | int) -> str:
