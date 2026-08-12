@@ -1002,10 +1002,9 @@ class LangGraphSseBridge:
             self._on_tool_error(item, builder, ctx, out)
             return
 
-        logger.warning(
-            "丢弃未知 LangChain event session_id={} assistant_message_id={} event={} name={}",
+        logger.debug(
+            "忽略 LangChain chain event session_id={} event={} name={}",
             self.session_id,
-            self.assistant_message_id,
             lc_kind,
             item.get("name"),
         )
