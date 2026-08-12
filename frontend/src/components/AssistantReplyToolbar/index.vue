@@ -1,23 +1,12 @@
 <script lang="ts" setup>
 import { computed } from 'vue'
 import { copyToClipboard } from '@/utils/copy'
-import { formatTokenCount } from '@/views/chat/messageParts'
-
-interface AttributionSummary {
-  cumulative?: Record<string, number>
-  by_caller?: Record<string, Record<string, number>>
-  by_model?: Record<string, Record<string, number>>
-}
 
 const props = withDefaults(defineProps<{
   qaType?: string
   copyText?: string
-  /** 本轮 token 用量摘要（如 "本轮用量 ↑24.2K ↓593 · 共 24.8K"），非空时显示在左侧 */
-  usageText?: string
   /** 回复完成时间，显示在复制按钮左侧 */
   timeText?: string
-  /** 按 caller/model 归因摘要（按需调试视图，非默认摘要） */
-  attribution?: AttributionSummary | null
   /** 与 SSE message-start.langfuse_session_id 一致 */
   langfuse_session_id?: string
   /** VITE_LANGFUSE_UI_ORIGIN，非空时显示「观测」 */
@@ -25,41 +14,10 @@ const props = withDefaults(defineProps<{
 }>(), {
   qaType: 'COMMON_QA',
   copyText: '',
-  usageText: '',
   timeText: '',
-  attribution: null,
   langfuse_session_id: '',
   langfuseUiOrigin: '',
 })
-
-
-/** 归因 tooltip 文本：展示 caller/model 汇总（按需，不展示无界 steps） */
-const attributionTooltip = computed(() => {
-  const attr = props.attribution
-  if (!attr?.by_caller && !attr?.by_model) {
-    return ''
-  }
-  const lines: string[] = []
-  if (attr.by_caller) {
-    lines.push('按调用方：')
-    for (const [caller, usage] of Object.entries(attr.by_caller)) {
-      const inp = usage.input_tokens ?? 0
-      const out = usage.output_tokens ?? 0
-      lines.push(`  ${caller}: ↑${formatTokenCount(inp)} ↓${formatTokenCount(out)}`)
-    }
-  }
-  if (attr.by_model) {
-    lines.push('按模型：')
-    for (const [model, usage] of Object.entries(attr.by_model)) {
-      const inp = usage.input_tokens ?? 0
-      const out = usage.output_tokens ?? 0
-      lines.push(`  ${model}: ↑${formatTokenCount(inp)} ↓${formatTokenCount(out)}`)
-    }
-  }
-  return lines.join('\n')
-})
-
-const showAttribution = computed(() => Boolean(attributionTooltip.value))
 
 const showLangfuse = computed(
   () => Boolean(props.langfuse_session_id?.trim() && props.langfuseUiOrigin?.trim()),
@@ -94,21 +52,6 @@ const handlePassClip = async () => {
 <template>
   <div class="assistant-reply-toolbar">
     <div class="assistant-reply-toolbar__left">
-      <n-tooltip v-if="usageText && showAttribution" placement="top">
-        <template #trigger>
-          <span
-            v-if="usageText"
-            class="assistant-reply-toolbar__usage"
-          >{{ usageText }}</span>
-        </template>
-        <div style="max-width: 320px; font-size: 12px; line-height: 1.6; white-space: pre-line">
-          {{ attributionTooltip }}
-        </div>
-      </n-tooltip>
-      <span
-        v-else-if="usageText"
-        class="assistant-reply-toolbar__usage"
-      >{{ usageText }}</span>
       <slot name="meta"></slot>
       <n-tooltip v-if="showLangfuse" placement="top">
         <template #trigger>
@@ -130,15 +73,14 @@ const handlePassClip = async () => {
     </div>
     <div class="assistant-reply-toolbar__actions">
       <span v-if="timeText" class="assistant-reply-toolbar__time">{{ timeText }}</span>
-      <n-button ghost size="tiny" icon-placement="left" type="default" :bordered="false" class="assistant-reply-toolbar__btn" @click="handlePassClip()">
-        <template #icon>
-          <n-icon size="20" class="assistant-reply-toolbar__icon">
-            <svg t="1734515176870" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="26346" width="200" height="200">
-              <path d="M955.85804 265.068028l0 595.439364L195.018625 860.507392 195.018625 728.187761 62.698994 728.187761 62.698994 132.748397l760.839415 0 0 132.319631L955.85804 265.068028zM195.018625 695.108365 195.018625 265.068028l595.439364 0 0-99.240235L95.779414 165.827793l0 529.279548L195.018625 695.107341zM922.778644 298.148447 228.099045 298.148447 228.099045 827.427996l694.679599 0L922.778644 298.148447z" fill="currentColor" p-id="26347" />
-            </svg>
-          </n-icon>
-        </template>
-      </n-button>
+      <button
+        type="button"
+        class="assistant-reply-toolbar__btn"
+        aria-label="复制回复"
+        @click="handlePassClip()"
+      >
+        <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
+      </button>
     </div>
   </div>
 </template>
@@ -150,7 +92,7 @@ const handlePassClip = async () => {
   align-items: center;
   width: 100%;
   margin-top: 0;
-  padding: 18px 15px;
+  padding: 6px 8px 6px 15px;
   border-top: 1px solid var(--noesis-color-border-subtle);
   border-bottom-right-radius: 15px;
   border-bottom-left-radius: 15px;
@@ -165,25 +107,40 @@ const handlePassClip = async () => {
   min-width: 0;
 }
 
-.assistant-reply-toolbar__usage {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
-  font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .assistant-reply-toolbar__actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .assistant-reply-toolbar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
   margin-right: 0;
+  padding: 0;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
+  color: var(--noesis-color-text-hint);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.assistant-reply-toolbar__btn span {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.assistant-reply-toolbar__btn:hover {
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
 .assistant-reply-toolbar__time {
@@ -191,9 +148,5 @@ const handlePassClip = async () => {
   line-height: 1.4;
   color: var(--noesis-color-text-hint);
   white-space: nowrap;
-}
-
-.assistant-reply-toolbar__icon {
-  color: var(--noesis-color-text-secondary);
 }
 </style>

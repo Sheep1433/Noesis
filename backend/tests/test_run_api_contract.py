@@ -1,18 +1,33 @@
 import json
 import asyncio
 from dataclasses import replace
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 from server.api import chat_api
 from server.api.chat_api import chat_router
-from noesis.domain.chat.delivery.events import HitlRequired, StreamDone, WireFrame
-from noesis.domain.chat.delivery.sse import encode_sequenced_event
-from noesis.domain.chat.runs import RunSnapshot, RunStatus, SequencedRunEvent
-from noesis.errors.exceptions import ServiceException
+from noesis.chat.delivery.events import HitlRequired, RunCompleted, StreamDone, WireFrame
+from noesis.chat.delivery.sse import encode_sequenced_event
+from noesis.chat.runs import (
+    RunManager,
+    RunSnapshot,
+    RunStatus,
+    SequencedRunEvent,
+    TerminalCandidate,
+)
+from noesis.errors.exceptions import ConflictException, ServiceException
 from noesis.schemas.chat_vo import CreateRunRequest
 from noesis.schemas.qa_vo import HitlResumeRequest
+
+
+async def _noop(*args: Any, **kwargs: Any) -> None:
+    """空 async producer，用于不需要发事件的 Run 启动。"""
+    return None
+
+
 from noesis.services import run_service
 from noesis.services.run_service import RunProjection, RunService
 
@@ -78,6 +93,89 @@ async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_active_run_route_returns_explicit_null(monkeypatch) -> None:
+    """无活跃任务时响应必须显式包含 data=null。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(chat_api.RunService, "get_active_run", AsyncMock(return_value=None))
+    response = await chat_api.get_active_run(
+        "session-1",
+        current_user=SimpleNamespace(user_id="user-1"),
+        db=SimpleNamespace(),
+    )
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 200
+    assert "data" in body
+    assert body["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_stream_returns_429_before_opening_stream(monkeypatch) -> None:
+    """订阅配额超限时不得建立 StreamingResponse。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    snapshot = RunSnapshot(
+        run_id="run-quota",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        qa_type="COMMON_QA",
+        origin="web",
+        status=RunStatus.RUNNING,
+    )
+    monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=snapshot))
+    monkeypatch.setattr(
+        chat_api.RunService,
+        "subscribe",
+        AsyncMock(side_effect=chat_api.SubscriptionLimitExceeded()),
+    )
+
+    response = await chat_api.stream_run(
+        "run-quota",
+        current_user=SimpleNamespace(user_id="user-1"),
+        db=SimpleNamespace(),
+    )
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 429
+    assert body["data"]["error_code"] == "SSE_SUBSCRIPTION_LIMIT"
+
+
+@pytest.mark.asyncio
+async def test_run_stream_returns_503_when_owner_is_unavailable(monkeypatch) -> None:
+    """非终态 DB Run 无本地 owner 时不得创建第二 producer。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    snapshot = RunSnapshot(
+        run_id="run-orphan",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        qa_type="COMMON_QA",
+        origin="web",
+        status=RunStatus.RUNNING,
+        sequence=7,
+    )
+    monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=snapshot))
+    monkeypatch.setattr(chat_api.RunService, "subscribe", AsyncMock(return_value=None))
+
+    response = await chat_api.stream_run(
+        "run-orphan",
+        current_user=SimpleNamespace(user_id="user-1"),
+        db=SimpleNamespace(),
+    )
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 503
+    assert body["data"]["error_code"] == "RUN_OWNER_UNAVAILABLE"
+    assert body["data"]["sequence"] == 7
+
+
+@pytest.mark.asyncio
 async def test_terminal_projection_atomically_finalizes_run_and_assistant(monkeypatch) -> None:
     """自然完成不能只终结 t_agent_run 而把 assistant 永久留在 streaming。"""
     from unittest.mock import AsyncMock, MagicMock
@@ -90,6 +188,19 @@ async def test_terminal_projection_atomically_finalizes_run_and_assistant(monkey
         qa_type="SUPER_AGENT_QA",
     )
     projection.apply(WireFrame(event="text-delta", data={"text_delta": "完成"}))
+    projection.apply(RunCompleted(finish_reason="stop"))
+    envelope = SequencedRunEvent(
+        run_id="run-terminal",
+        sequence=7,
+        attempt_id=1,
+        event=RunCompleted(finish_reason="stop"),
+    )
+    candidate = TerminalCandidate(
+        envelope=envelope,
+        snapshot=projection.snapshot(7, RunStatus.COMPLETED, 1),
+        status=RunStatus.COMPLETED,
+        projected_state=projection,
+    )
 
     db = MagicMock()
     db.commit = AsyncMock()
@@ -106,15 +217,15 @@ async def test_terminal_projection_atomically_finalizes_run_and_assistant(monkey
     repository.finalize = AsyncMock(return_value=True)
     monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", DbContext)
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
-    monkeypatch.setattr(run_service.run_manager, "transition", AsyncMock())
-
-    await RunService._persist_projection("run-terminal", projection)
+    result = await RunService._persist_terminal_candidate(candidate)
 
     kwargs = repository.finalize.await_args.kwargs
     assert kwargs["target"] == RunStatus.COMPLETED
+    assert kwargs["last_sequence"] == 7
     assert kwargs["assistant_status"] == "completed"
     assert kwargs["content"] == {"parts": [{"type": "text", "content": "完成"}]}
     db.commit.assert_awaited_once()
+    assert result.outcome == "committed"
 
 
 def test_hitl_payload_is_present_in_authoritative_snapshot() -> None:
@@ -194,8 +305,12 @@ def test_hitl_decision_updates_authoritative_tool_part_before_resume() -> None:
 
 @pytest.mark.asyncio
 async def test_hitl_segment_done_does_not_close_run_subscription() -> None:
-    """HITL 分段的 [DONE] 不得进入 Run event bus，resume 后沿用原订阅。"""
-    from unittest.mock import AsyncMock
+    """HITL 分段的 [DONE] 不得进入 Run event bus，resume 后沿用原订阅。
+
+    新架构下 StreamDone+HITL_PENDING 检查在 RunProjection.apply 内（返回 False），
+    apply_event 据此返回 None 且不分配 sequence。用真实 RunManager 验证。
+    """
+    from noesis.chat.runs import RunManager, RunStatus
 
     projection = RunProjection(
         run_id="run-hitl-stream",
@@ -204,15 +319,33 @@ async def test_hitl_segment_done_does_not_close_run_subscription() -> None:
         assistant_message_id="assistant-1",
         qa_type="SUPER_AGENT_QA",
     )
-    projection.apply(HitlRequired(payload={"interrupt_id": "interrupt-1"}))
-    publish = AsyncMock()
-
-    envelope = await RunService.publish_projected_event(
-        projection.run_id, projection, StreamDone(), publish
+    manager = RunManager()
+    handle = await manager.start(
+        run_id="run-hitl-stream",
+        session_id="session-1",
+        user_id="1",
+        assistant_message_id="assistant-1",
+        snapshot_provider=projection.snapshot,
+        producer=lambda publish: _noop(),
+        state=projection,
     )
+    await handle.producer_task
 
+    # 先进入 HITL_PENDING（用 apply_event 让 projection.apply 执行）
+    await manager.apply_event(
+        "run-hitl-stream",
+        HitlRequired(payload={"interrupt_id": "interrupt-1"}),
+        producer_generation=handle.producer_generation,
+    )
+    assert projection.status == RunStatus.HITL_PENDING
+
+    # StreamDone 在 HITL_PENDING 时应被 projection.apply 拒绝（返回 None）
+    envelope = await manager.apply_event(
+        "run-hitl-stream", StreamDone(), producer_generation=handle.producer_generation
+    )
     assert envelope is None
-    publish.assert_not_awaited()
+    # sequence 未推进
+    assert handle.last_sequence == 1
 
 
 def test_sequenced_sse_contains_run_identity() -> None:
@@ -479,12 +612,16 @@ async def test_checkpoint_db_outage_fails_within_configured_deadline(monkeypatch
             attempts += 1
             raise ConnectionError("database unavailable")
 
-    projection = RunProjection(
+    snapshot = RunSnapshot(
         run_id="run-db-fail",
         user_id="user-1",
         session_id="session-1",
         assistant_message_id="message-1",
         qa_type="COMMON_QA",
+        origin="web",
+        status=RunStatus.RUNNING,
+        sequence=1,
+        attempt_id=1,
     )
     monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", FailingSession)
     monkeypatch.setattr(
@@ -498,7 +635,7 @@ async def test_checkpoint_db_outage_fails_within_configured_deadline(monkeypatch
     )
 
     with pytest.raises(RuntimeError, match="checkpoint persistence timeout"):
-        await RunService._persist_checkpoint("run-db-fail", "message-1", projection, 1)
+        await RunService._persist_checkpoint("run-db-fail", "message-1", snapshot, 1)
 
     assert 1 < attempts < 50
 
@@ -656,3 +793,158 @@ async def test_start_failure_cleanup_finalizes_queued_run(monkeypatch) -> None:
     assert kwargs["assistant_status"] == "error"
     assert kwargs["error_code"] == "RUN_START_FAILED"
     db.commit.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# §5.1–§5.3  active-run API、409 schema
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_active_run_returns_none_when_no_active_run() -> None:
+    """无 active Run 时 get_active_run 返回 None。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    repository = MagicMock()
+    repository.get_active_for_session = AsyncMock(return_value=None)
+    db = MagicMock()
+
+    with patch.object(run_service, "AgentRunRepository", return_value=repository), \
+         patch.object(run_service.ChatService, "get_session_by_id", AsyncMock(return_value=object())):
+        result = await RunService.get_active_run("session-1", "user-1", db)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_active_run_returns_live_snapshot() -> None:
+    """有 active Run 且 owner 可达时返回 live snapshot。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from types import SimpleNamespace
+
+    projection = RunProjection(
+        run_id="run-active",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="msg-active",
+        qa_type="COMMON_QA",
+    )
+    row = SimpleNamespace(
+        id="run-active",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="msg-active",
+        qa_type="COMMON_QA",
+        origin="web",
+        status="running",
+        last_sequence=0,
+        attempt_id=1,
+        snapshot={"parts": []},
+        finish_reason=None,
+        error_code=None,
+        user_error_message=None,
+        retry_attempt=0,
+        retry_max=0,
+        updated_at=0,
+    )
+    repository = MagicMock()
+    repository.get_active_for_session = AsyncMock(return_value=row)
+
+    manager = RunManager()
+    handle = await manager.start(
+        run_id="run-active",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="msg-active",
+        snapshot_provider=projection.snapshot,
+        producer=_noop,
+        state=projection,
+    )
+    await handle.producer_task
+
+    db = MagicMock()
+    with patch.object(run_service, "AgentRunRepository", return_value=repository), \
+         patch.object(run_service.ChatService, "get_session_by_id", AsyncMock(return_value=object())), \
+         patch.object(run_service, "run_manager", manager):
+        result = await RunService.get_active_run("session-1", "user-1", db)
+
+    assert result is not None
+    assert result.run_id == "run-active"
+    assert result.session_id == "session-1"
+    assert result.assistant_message_id == "msg-active"
+    await manager.transition("run-active", RunStatus.COMPLETED)
+
+
+@pytest.mark.asyncio
+async def test_get_active_run_returns_db_snapshot_when_owner_unavailable() -> None:
+    """有 active Run 但 owner 不可达时返回 DB snapshot。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(
+        id="run-orphan",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="msg-orphan",
+        qa_type="COMMON_QA",
+        origin="web",
+        status="running",
+        last_sequence=5,
+        attempt_id=1,
+        snapshot={"parts": [{"type": "text", "text": "db content"}]},
+        finish_reason=None,
+        error_code=None,
+        user_error_message=None,
+        retry_attempt=0,
+        retry_max=0,
+        updated_at=1700000000000,
+    )
+    repository = MagicMock()
+    repository.get_active_for_session = AsyncMock(return_value=row)
+
+    db = MagicMock()
+    # run_manager.get raises KeyError (owner unavailable)
+    with patch.object(run_service, "AgentRunRepository", return_value=repository), \
+         patch.object(run_service.ChatService, "get_session_by_id", AsyncMock(return_value=object())), \
+         patch.object(run_service, "run_manager", MagicMock(get=MagicMock(side_effect=KeyError))):
+        result = await RunService.get_active_run("session-1", "user-1", db)
+
+    assert result is not None
+    assert result.run_id == "run-orphan"
+    assert result.sequence == 5
+    assert len(result.parts) == 1
+
+
+@pytest.mark.asyncio
+async def test_conflict_409_response_contains_full_join_schema() -> None:
+    """409 创建冲突响应包含 run_id/assistant_message_id/session_id/status。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from types import SimpleNamespace
+
+    active_row = SimpleNamespace(
+        id="run-existing",
+        assistant_message_id="msg-existing",
+        session_id="session-1",
+        status="running",
+    )
+    repository = MagicMock()
+    repository.get_by_client_request = AsyncMock(return_value=None)
+    repository.get_active_for_session = AsyncMock(return_value=active_row)
+
+    db = MagicMock()
+    request = CreateRunRequest(
+        content="hello",
+        session_id="session-1",
+        client_request_id="req-0001",
+    )
+    current_user = SimpleNamespace(user_id="user-1")
+
+    with patch.object(run_service, "AgentRunRepository", return_value=repository):
+        with pytest.raises(ConflictException) as exc_info:
+            await RunService.create(request, current_user, db)
+
+    conflict_data = exc_info.value.data
+    assert conflict_data["run_id"] == "run-existing"
+    assert conflict_data["assistant_message_id"] == "msg-existing"
+    assert conflict_data["session_id"] == "session-1"
+    assert conflict_data["status"] == "running"

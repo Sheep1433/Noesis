@@ -61,9 +61,7 @@ import {
   emptyMessageContent,
   extractLastTopLevelText,
   flushRedactedThinkingStreamCtx,
-  formatUsageSummary,
   hasValidContextWindow,
-  hasValidUsage,
   markStreamingPartsComplete,
   normalizeApiContent,
   shortenChatErrorToast,
@@ -216,19 +214,29 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     uuids.value[qt] = sessionId
     sessionMaterialized.value = true
 
-    await loadSessionMessages(sessionId, conversationItems, currentRenderIndex)
+    const messagesReady = loadSessionMessages(
+      sessionId,
+      conversationItems,
+      currentRenderIndex,
+    )
+    const contextReady = loadSessionContext(sessionId)
+    reloadSessionFilesPanel()
+    // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，
+    // 防止慢历史响应覆盖新 Tab 已收到的实时内容。
+    const activeRunResume = sseStream.resumeActiveRun(sessionId, messagesReady)
+    await messagesReady
     const hasUserMessage = conversationItems.value.some((item) => item.role === 'user')
     if (!hasUserMessage) {
+      sseStream.detachSubscription()
       window.$ModalMessage.info('该会话尚无消息，已回到新对话')
       resetComposingSurface()
       await navigateToComposingUrl(true)
       return
     }
-    await loadSessionContext(sessionId)
-    reloadSessionFilesPanel()
+    await contextReady
     await scrollToLatestMessage(false)
     // Run 订阅可能持续数分钟；页面与历史列表恢复不应等待整轮生成结束。
-    void sseStream.resumeActiveRun(sessionId)
+    void activeRunResume
   } catch (error) {
     console.error('恢复会话失败:', error)
     window.$ModalMessage.warning('会话不存在或无权访问，已回到新对话')
@@ -2300,7 +2308,6 @@ function onComposerPaste(e: ClipboardEvent) {
                       <!-- 用户消息复制按钮（hover 显隐） -->
                       <div
                         class="chat-user-message-actions"
-                        style="margin-left: 10%; margin-right: 10%; width: 80%;"
                       >
                         <span class="message-timestamp" :class="{ 'message-timestamp--always': isMobile }">{{ formatHHmm(item.created_at) }}</span>
                         <button
@@ -2344,17 +2351,25 @@ function onComposerPaste(e: ClipboardEvent) {
                       ></div>
                     </div>
 
-                    <div v-if="item.role === 'assistant'">
+                    <div
+                      v-if="item.role === 'assistant'"
+                      data-testid="assistant-message"
+                      :data-assistant-message-id="item.message_id || ''"
+                    >
                       <template v-if="item.messageContent?.version === 1">
+                        <div
+                          v-if="showAssistantReplyLoading(index, item.role) || item.completed_at"
+                          class="assistant-meta-above"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          <span class="assistant-processing-time-text">
+                            {{ item.completed_at
+                              ? formatElapsedSeconds(item.created_at, item.completed_at)
+                              : processingTimeText(item.created_at) }}
+                          </span>
+                        </div>
                         <div class="assistant-unified-card">
-                          <div
-                            v-if="showAssistantReplyLoading(index, item.role)"
-                            class="assistant-processing-time"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {{ processingTimeText(item.created_at) }}
-                          </div>
                           <template
                             v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
                             :key="entry.kind === 'subagent'
@@ -2428,17 +2443,20 @@ function onComposerPaste(e: ClipboardEvent) {
                           </div>
                           <AssistantStreamingIndicator
                             v-if="showAssistantReplyLoading(index, item.role)"
+                            data-testid="streaming-indicator"
                             section
                             :divided="buildDisplayParts(item.messageContent.parts).length > 0"
                             :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
                           />
+                        </div>
+                        <div
+                          v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
+                          class="assistant-message-actions"
+                        >
                           <AssistantReplyToolbar
-                            v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
                             :qa-type="item.qa_type || 'COMMON_QA'"
                             :copy-text="extractLastTopLevelText(item.messageContent.parts)"
                             :time-text="formatHHmm(item.completed_at || item.created_at)"
-                            :usage-text="hasValidUsage(item.msg_metadata?.usage) ? formatUsageSummary(item.msg_metadata!.usage!) : ''"
-                            :attribution="item.msg_metadata?.usage?.attribution"
                             :langfuse_session_id="item.langfuse_session_id"
                             :langfuse-ui-origin="langfuseUiOrigin"
                           >
@@ -2474,6 +2492,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         />
                         <AssistantStreamingIndicator
                           v-if="showAssistantReplyLoading(index, item.role)"
+                          data-testid="streaming-indicator"
                         />
                       </template>
                     </div>
@@ -2526,6 +2545,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     <!-- HITL 优先占 Todo 槽位；无 pending 时显示 Todo -->
                     <HitlComposerPanel
                       v-if="pendingHitl"
+                      data-testid="hitl-panel"
                       :kind="pendingHitl.kind"
                       :action-requests="pendingHitl.action_requests"
                       :disabled="hitlComposerDisabled"
@@ -2573,6 +2593,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       <n-input
                         ref="refInputTextString"
                         v-model:value="inputTextString"
+                        data-testid="composer-input"
                         type="textarea"
                         class="textarea-resize-none w-full text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
                         :style="{
@@ -2622,6 +2643,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                   :height="36"
                                   :disabled="!stylizingLoading && sendDisabled"
                                   :type="stylizingLoading ? 'primary' : 'default'"
+                                  :data-testid="stylizingLoading ? 'stop-button' : 'send-button'"
                                   color
                                   :class="[
                                     'chat-send-btn',
@@ -3074,9 +3096,15 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .chat-user-message-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  margin-top: -8px;
+  box-sizing: border-box;
+  width: 80%;
+  margin-right: 10%;
+  margin-left: 10%;
+  margin-top: -14px;
   margin-bottom: 0;
+  padding-right: 8px;
 }
 
 .chat-user-copy-btn {
@@ -3091,7 +3119,7 @@ function onComposerPaste(e: ClipboardEvent) {
   background: transparent;
   color: var(--noesis-color-text-hint);
   cursor: pointer;
-  opacity: 0;
+  opacity: 1;
   transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
 }
 
@@ -3103,31 +3131,44 @@ function onComposerPaste(e: ClipboardEvent) {
   line-height: 1;
 }
 
-.chat-user-message-row:hover .chat-user-copy-btn,
-.chat-user-copy-btn:focus-visible {
-  opacity: 1;
-}
-
 .chat-user-copy-btn:hover {
   color: var(--noesis-color-primary);
   background: var(--noesis-color-primary-bg-subtle);
 }
 
 .message-timestamp {
-  opacity: 0;
+  opacity: 1;
   font-size: 11px;
   color: var(--noesis-color-text-hint);
   transition: opacity 0.15s ease;
   pointer-events: none;
 }
 
-.chat-user-message-row:hover .message-timestamp,
-.assistant-unified-card:hover .message-timestamp {
-  opacity: 1;
+.assistant-meta-above {
+  box-sizing: border-box;
+  width: 80%;
+  margin-left: 10%;
+  margin-right: 10%;
+  padding: 4px 16px 0;
 }
 
-.message-timestamp--always {
-  opacity: 1;
+.assistant-processing-time-text {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--noesis-color-text-hint);
+  letter-spacing: 0.01em;
+}
+
+.assistant-message-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  box-sizing: border-box;
+  width: 80%;
+  margin-left: 10%;
+  margin-right: 10%;
+  margin-top: -8px;
+  padding-right: 8px;
 }
 
 .assistant-unified-card {
@@ -3140,14 +3181,6 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 16px;
   overflow: visible;
   box-shadow: var(--noesis-shadow-sm);
-}
-
-.assistant-processing-time {
-  padding: 8px 16px 0;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
-  letter-spacing: 0.01em;
 }
 
 .chat-top-bar {
@@ -3217,6 +3250,12 @@ function onComposerPaste(e: ClipboardEvent) {
   }
 
   .assistant-unified-card {
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .chat-user-message-actions {
     width: 100%;
     margin-left: 0;
     margin-right: 0;

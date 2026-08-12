@@ -7,7 +7,7 @@ run total exactly once and bounded steps.
 
 from __future__ import annotations
 
-from noesis.domain.chat.streaming.usage_attribution import (
+from noesis.chat.event_mapping.usage_attribution import (
     CALLER_LEAD_AGENT,
     CALLER_SUBAGENT,
     MAX_STEPS,

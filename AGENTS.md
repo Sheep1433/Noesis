@@ -40,7 +40,7 @@ Noesis/
 | 问答编排 | `backend/packages/noesis-core/src/noesis/services/qa/` |
 | Agent 工厂 | `backend/packages/noesis-core/src/noesis/factory.py` |
 | 场景入口 | `backend/packages/noesis-core/src/noesis/agents/`（Super / QA / 故障 / MCP / Case Generate） |
-| SSE 桥接 | `backend/packages/noesis-core/src/noesis/domain/chat/streaming/langgraph_sse.py` |
+| SSE 桥接 | `backend/packages/noesis-core/src/noesis/chat/event_mapping/langgraph_bridge.py` |
 | 配置 | `backend/packages/noesis-core/src/noesis/config/env.py` + `backend/config.yaml` |
 
 ## 跨端技术要点

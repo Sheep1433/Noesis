@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from noesis.domain.chat.streaming.bridge import (
+from noesis.chat.event_mapping.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
     StreamBridgeError,

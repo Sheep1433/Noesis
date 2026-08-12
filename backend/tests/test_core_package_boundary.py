@@ -163,32 +163,33 @@ def test_platform_host_uses_single_namespace() -> None:
 
 
 def test_platform_core_does_not_depend_on_application_services() -> None:
-    # domain lives in core (noesis.domain); assert it does not import
+    # chat/auth live in core (noesis.chat, noesis.auth); assert they do not import
     # application services (noesis.services) — one-way dependency.
-    domain_root = NOESIS_ROOT / "domain"
+    domain_roots = [NOESIS_ROOT / "chat", NOESIS_ROOT / "auth"]
     violations: list[str] = []
-    for path in sorted(domain_root.rglob("*.py")):
-        if "_ragflow_compat" in path.parts or "deepdoc" in path.parts:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        modules = [
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        ]
-        modules.extend(
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module
-        )
-        if any(
-            name == prefix or name.startswith(prefix + ".")
-            for name in modules
-            for prefix in ("noesis.services", "noesis.agents")
-        ):
-            violations.append(str(path.relative_to(BACKEND_ROOT)))
-    assert not violations, "noesis.domain imports services/agents:\n" + "\n".join(violations)
+    for domain_root in domain_roots:
+        for path in sorted(domain_root.rglob("*.py")):
+            if "_ragflow_compat" in path.parts or "deepdoc" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            modules = [
+                alias.name
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            ]
+            modules.extend(
+                node.module
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module
+            )
+            if any(
+                name == prefix or name.startswith(prefix + ".")
+                for name in modules
+                for prefix in ("noesis.services", "noesis.agents")
+            ):
+                violations.append(str(path.relative_to(BACKEND_ROOT)))
+    assert not violations, "noesis.chat/auth imports services/agents:\n" + "\n".join(violations)
 
     # platform common may import core (noesis.*) but must not import
     # platform services/domain/kb top-level packages.

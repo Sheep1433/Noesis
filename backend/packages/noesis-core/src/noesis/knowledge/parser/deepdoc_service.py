@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from noesis.runtime.logging import logger
 
 from noesis.knowledge.parser.deepdoc_bootstrap import ensure_deepdoc_bootstrap
 from noesis.knowledge.parser.deepdoc_config import DEEPDOC_UPSTREAM_COMMIT, models_available

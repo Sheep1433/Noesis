@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from noesis.domain.auth.entities import AuthSession
-from noesis.domain.auth.policy import digest_secret
+from noesis.auth.entities import AuthSession
+from noesis.auth.policy import digest_secret
 from noesis.services.auth.sessions import SessionService
 
 

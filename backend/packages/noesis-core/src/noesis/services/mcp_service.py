@@ -161,7 +161,7 @@ class McpService:
         cls.ensure_user_config_seeded(user_id)
         if materialize_user_mcp_literals(user_id):
             _clear_mcp_caches()
-        path = get_user_mcp_path(user_id)
+        get_user_mcp_path(user_id)
         content = _redacted_config_content(load_user_mcp_json(user_id))
         return McpConfigFileResponse(
             content=content,

@@ -5,13 +5,13 @@ import asyncio
 import uuid
 from typing import Any, Dict, Optional, Set
 
-from noesis.domain.chat.hitl.pending import pending_hitl
+from noesis.chat.hitl.pending import pending_hitl
 from noesis.runtime.logging import logger
 from noesis.config.env import MessagingConfig
-from noesis.domain.chat.delivery.channels import route_inbound
-from noesis.domain.chat.delivery.telegram.adapter import TelegramChannelAdapter
-from noesis.domain.chat.delivery.telegram.client import TelegramBotClient, mask_bot_token
-from noesis.domain.chat.delivery.telegram.hitl_prompt import (
+from noesis.chat.delivery.channels import route_inbound
+from noesis.chat.delivery.telegram.adapter import TelegramChannelAdapter
+from noesis.chat.delivery.telegram.client import TelegramBotClient, mask_bot_token
+from noesis.chat.delivery.telegram.hitl_prompt import (
     allow_session_grant_for_actions,
     build_approval_keyboard,
     decisions_for_op,
@@ -20,13 +20,13 @@ from noesis.domain.chat.delivery.telegram.hitl_prompt import (
     register_hitl_prompt,
     telegram_hitl_prompts,
 )
-from noesis.domain.chat.delivery.telegram.stream_out import TelegramOutbound, deliver_final_markdown
+from noesis.chat.delivery.telegram.stream_out import TelegramOutbound, deliver_final_markdown
 from noesis.services.channel_run_service import resume_channel_hitl, run_channel_agent
 from noesis.services.messaging_channel_service import (
     MessagingChannelService,
     RuntimeChannelConfig,
 )
-from noesis.domain.chat.delivery.channel_health import channel_health
+from noesis.chat.delivery.channel_health import channel_health
 
 _PAIRING_HINT = (
     "此聊天尚未与 Noesis 配对。\n"

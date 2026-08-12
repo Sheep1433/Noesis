@@ -4,7 +4,6 @@ Qdrant 向量库服务
 import base64
 import hashlib
 import json
-import os
 from typing import Any, Dict, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import (

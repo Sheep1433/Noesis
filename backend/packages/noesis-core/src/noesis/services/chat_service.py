@@ -21,7 +21,7 @@ from noesis.storage.postgres.models.chat import TChatSession, TChatMessage
 from noesis.errors.exceptions import ServiceException
 from noesis.config.user_data_paths import delete_session_workspace
 from noesis.runtime.logging import logger
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.message_builder import AssistantMessageBuilder
 
 # ============================================================================
 # 加载锁：服务启动完成 PostgreSQL 检查点恢复前，业务写入须等待

@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.domain.chat.delivery.channel_health import channel_health
+from noesis.chat.delivery.channel_health import channel_health
 from noesis.storage.postgres.manager import pg_manager
 from noesis.services.messaging_channel_service import MessagingChannelService
 

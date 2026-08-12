@@ -190,6 +190,7 @@ export async function loadSessionMessages(
     )
     if (messages?.length) {
       assertStrictMessageSequence(messages)
+      // 当前 Tab hint；active Run 的发现始终以服务端 API 为准。
       const activeAssistant = [...messages].reverse().find(
         (message: any) => message.role === 'assistant'
           && message.status === 'streaming'
@@ -276,6 +277,7 @@ export async function loadSessionMessages(
           parent_id: msg.parent_id,
           message_id: msg.id,
           created_at: msg.created_at,
+          completed_at: msg.updated_at,
         }
       })
 

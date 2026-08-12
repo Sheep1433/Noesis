@@ -1012,3 +1012,40 @@ backends/
 **解法/取舍：** 保留已登录状态变更接口的 CSRF 校验；对 login/register/logout 等认证生命周期入口做明确白名单；对用户返回“会话验证失败，请刷新页面后重试”，详细原因只留在服务端日志。修复后错误从 CSRF 拦截变成业务层密码校验，说明请求已经通过 middleware。
 
 **可迁移原则：** 安全 middleware 不能只按“所有 POST 都拦”设计，要区分会话建立、会话内状态变更和公开入口；错误信息对用户要可行动且不泄露安全机制，排查时再用日志和请求头确认真实边界。
+
+## 2026-08-11 — 上下文中间件收敛：Claude Code 的 context 是 pipeline 不是 summarizer
+
+**Why：** 旧五个 kernel middleware 靠 `ContextVar` 在 hook 间传隐式状态（ToolExecution 顺手管 governor、ContextLifecycle 顺手注入时钟、telemetry 再读全局快照），类名宏观但控制流隐蔽，跨 10+ 文件才追得完；目标是「DeepAgents 风格一次装配 + Claude Code 式上下文/重试策略 + Noesis delivery 稳定」。
+
+**研究基线（均 2026-08-11 只读）：** `@anthropic-ai/claude-code@2.1.88`（提取仓 `d907d498`）、DeepAgents `0.6.12`、LangChain、DeerFlow。
+
+**关键结论：**
+- Claude Code 2.1.88 的上下文管理是**一条显式 runtime pipeline**，不是单个 summarization middleware：canonical request → 分层减重 → safe compaction transaction → summary PTL retry → failure breaker → 压缩后权威状态重建 → tool/MCP schema 管理 → subagent 隔离/fork → usage/cache 观测。Noesis 若「行为几乎一致」必须整套具备，只补 auto compact 不够。
+- 现有 `ContextLifecycle` 捕获 compaction 异常后继续运行，并用本地近似 token 估算直接伪造模型答复——偏离 Claude Code 的「预留摘要空间 + 明确失败恢复」，且绕开 Provider 真实语义；重构必须消除这类隐式控制流。
+- DeepAgents 0.6.12 已覆盖 context strategy 大部分基础能力（走 `create_deep_agent()` → LangChain `create_agent()` 装 middleware，`recursion_limit=9999`），但不能原样承担完整 compaction policy：Summarization 加窄策略层、自行控制 middleware 顺序。
+- **保留的 Noesis middleware 收敛为 4 个**：`ToolFailureMiddleware`、`ToolResultLimitMiddleware`、`CompactionMiddleware`、`SafeModelRetryMiddleware`。其中 SafeModelRetry 必须自研：已安装的 LangChain `ModelRetryMiddleware` 不知道 SSE 是否已产生可见 token，也不知道工具副作用边界，异常后可能重放 model step；除非把安全判断迁到更合适的 provider/stream seam，否则不能直接用原生 retry。
+- `factory.py` 同时维护真实 stack 和手写 inventory，两者已分叉；重构时删旧装配，只保留单一装配点。
+
+**How to apply：**
+- 设计落地：`Interview/highlights/Middleware/agent-context-middleware-boundaries.md`（研究/评审，归档于知识库，实现稳定后回归 `docs/research/agents/`）；`openspec/changes/simplify-agent-context-architecture/`（proposal/design/specs/tasks，3 份 delta spec：行为化描述移除具体类名、subagent 默认隔离仅接收明确任务输入、remote trust 移出本 change）。
+- 实现前先对齐 outer-to-inner 目标顺序与 invariants；取消语义必须可终止；SafeModelRetry 沿用已验证 request、attempt 单独计数，只有改变 messages 才走完整 lifecycle。
+
+**验证与遗留：** 实现未开始（待单独 session）；OpenSpec 复审已通过。参考：`Knowledge/Claude-Code/Claude-Code-记忆机制.md`。
+
+## 2026-08-11 — reliable-sse-multitab 实现收官（spec 57/57）
+
+**Why：** 可靠 SSE 推送 + 多 tab 共同查看，服务端发现 active run，前端加入已有 run；TEST_CASE_QA 明确不演进（忽略测试用例生成场景）。
+
+**How to apply（关键正确性点）：**
+- `RunHandle.apply_event()` 原子边界：projection.apply + sequence + buffer + fan-out 在同一 lock 内。
+- `producer_generation` 隔离：旧 producer task 迟到事件被 `StaleProducerGeneration` 拒绝。
+- immutable checkpoint snapshot：lock 内捕获，PersistSink 不读 live projection；repository sequence guard 防回退。
+- terminal persistence barrier：terminal 事件只 buffer 不 fan-out，DB 写成功后才 fan-out；pending 期间 `pre_terminal_snapshot` 保证 GET/subscribe 返回 N-1。
+- stop 幂等：`cancel_requested` + 复用 terminal future。
+- `RuntimeEventMapper` 为 raw→typed RunEvent 唯一映射入口，`LcEventMapper` 收敛为别名。
+- `GET /sessions/{id}/active-run` 服务端发现 active Run，前端 `resumeActiveRun` 优先走服务端 API、sessionStorage 降级；409 join 冲突响应含完整 schema，前端自动加入。
+- SSE subscription 配额（per-run/per-user/global）+ 429；`OWNER_UNAVAILABLE` 503 在开流前拒绝；PG advisory lock 第二个 worker/容器 fail-fast。
+- 前端 `useSSEStream` 显式状态机（Discovering → SnapshotReplace → Subscribing → Applying → GapRecovery/Disconnected/Done）+ Playwright 双 Tab E2E 3 场景。
+- 429/503 统一走 `ResponseUtil`（code-review 硬性违规项）。
+
+**验证：** 后端 887 passed；前端 lint + build + 14 单元测试；tasks 57/57。spec 真源 `openspec/changes/reliable-sse-multitab/`。

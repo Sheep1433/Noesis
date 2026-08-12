@@ -1,5 +1,5 @@
 """stream_failure_notice 错误脱敏。"""
-from noesis.domain.chat.streaming.failure_notice import (
+from noesis.chat.event_mapping.failure_notice import (
     is_internal_infrastructure_error,
     sanitize_stream_error,
     sanitize_tool_error,

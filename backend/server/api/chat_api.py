@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from urllib.parse import quote
 
 from fastapi import Body, Depends, APIRouter, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.db import get_db
@@ -42,8 +42,9 @@ from noesis.services.chat_service import ChatService
 from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.qa import QaService
 from noesis.services.run_service import RunService, run_manager
+from noesis.storage.postgres.manager import pg_manager
 from server.response import ResponseUtil
-from noesis.domain.chat.message_builder import (
+from noesis.chat.message_builder import (
     UserMessageBuilder,
     normalize_message_content_for_delivery,
 )
@@ -54,14 +55,20 @@ from noesis.schemas.qa_vo import (
     TestCaseExportRequest,
     TestCaseResumeRequest,
 )
-from noesis.domain.chat.delivery.sse import (
+from noesis.chat.delivery.sse import (
     SSE_COMMENT_KEEPALIVE,
     encode_sequenced_event,
     format_done,
     format_sse,
 )
-from noesis.domain.chat.delivery.events import StreamDone
-from noesis.domain.chat.runs import SlowSubscriber, TERMINAL_RUN_STATUSES
+from noesis.chat.delivery.events import (
+    RunAborted,
+    RunCompleted,
+    RunError,
+    RunSnapshotReplaced,
+    StreamDone,
+)
+from noesis.chat.runs import SlowSubscriber, SubscriptionLimitExceeded, TERMINAL_RUN_STATUSES
 
 
 chat_router = APIRouter(prefix="/api/chat")
@@ -634,6 +641,11 @@ async def create_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if pg_manager.advisory_lock_ready is False:
+        return ResponseUtil.service_unavailable(
+            msg="任务运行实例暂时不可用，请稍后重试",
+            data={"error_code": "RUN_OWNER_UNAVAILABLE"},
+        )
     run = await RunService.create(request, current_user, db)
     session = await ChatService.get_session_by_id(
         run.session_id, str(current_user.user_id), db
@@ -660,6 +672,25 @@ async def get_run(
     return ResponseUtil.success(msg="获取任务成功", data=snapshot.to_dict())
 
 
+@chat_router.get("/sessions/{session_id}/active-run", summary="查询会话活跃任务")
+async def get_active_run(
+    session_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回当前 session 的 active Run snapshot 或 data=null。
+
+    新 Tab、刷新页和断线恢复使用此端点从服务端发现 active Run，
+    不依赖其它 Tab 的 sessionStorage。返回结构与 GET /runs/{run_id} 一致。
+    """
+    snapshot = await RunService.get_active_run(
+        session_id, str(current_user.user_id), db
+    )
+    if snapshot is None:
+        return ResponseUtil.success(msg="无活跃任务", dict_content={"data": None})
+    return ResponseUtil.success(msg="获取活跃任务成功", data=snapshot.to_dict())
+
+
 @chat_router.get("/runs/{run_id}/stream", summary="订阅 Agent 任务事件")
 async def stream_run(
     run_id: str,
@@ -668,27 +699,34 @@ async def stream_run(
     db: AsyncSession = Depends(get_db),
 ):
     snapshot = await RunService.get(run_id, str(current_user.user_id), db)
-    subscription = await RunService.subscribe(
-        run_id, str(current_user.user_id), max(0, after_sequence), db
-    )
+    try:
+        subscription = await RunService.subscribe(
+            run_id, str(current_user.user_id), max(0, after_sequence), db
+        )
+    except SubscriptionLimitExceeded:
+        return ResponseUtil.too_many_requests(
+            msg="订阅连接数超限，请关闭其它标签页后重试",
+            data={"error_code": "SSE_SUBSCRIPTION_LIMIT"},
+        )
+
+    # Owner 不可达：非终态 Run 在开流前返回 503，不创建第二 producer。
+    # 终态 Run 仍返回 snapshot + [DONE]（客户端可看到权威终态）。
+    if subscription is None and not snapshot.is_terminal:
+        return ResponseUtil.service_unavailable(
+            msg="任务运行实例暂时不可达，请稍后重试",
+            data={
+                "run_id": run_id,
+                "error_code": "RUN_OWNER_UNAVAILABLE",
+                "status": snapshot.status.value,
+                "sequence": snapshot.sequence,
+            },
+        )
 
     async def event_stream():
         if subscription is None:
+            # 终态 + owner 不可达：返回 DB 权威终态 snapshot + [DONE]
             yield format_sse("run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()})
-            if snapshot.is_terminal:
-                yield format_done()
-            else:
-                yield format_sse(
-                    "run-status",
-                    {
-                        "type": "run-status",
-                        "run_id": run_id,
-                        "status": snapshot.status.value,
-                        "sequence": snapshot.sequence,
-                        "error_code": "OWNER_UNAVAILABLE",
-                        "message": "连接暂时不可用，请稍后重试",
-                    },
-                )
+            yield format_done()
             return
 
         try:
@@ -715,6 +753,13 @@ async def stream_run(
                     return
                 for line in encode_sequenced_event(item):
                     yield line
+                run_manager.record_event_delivered(item)
+                if isinstance(
+                    item.event,
+                    (RunCompleted, RunAborted, RunError, RunSnapshotReplaced),
+                ):
+                    yield format_done()
+                    return
                 if isinstance(item.event, StreamDone):
                     return
         finally:

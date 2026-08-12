@@ -4,7 +4,7 @@ Noesis 当前通过 `backend/packages/harness/noesis/factory.py` 统一装配 La
 
 当前问题不是 factory 不统一，而是运行状态的 owner 不统一：工具大结果只在整体 context 接近阈值后由 summarization 扫描；context token 在 summary、guard、metrics 多处计算；loop 与 tool limits 分别维护计数；model retry 不表达正常响应中的 length/safety/empty terminal；子 Agent 只有 `task` 调用次数，没有活跃槽位和嵌套深度。
 
-本设计参考 `docs/research/agents/codex-agent-runtime-lessons.md`。Codex 使用显式 turn loop、ContextManager、ToolOrchestrator 和 agent registry 承担关键状态机，而不是为每个异常增加 middleware。Noesis 不拥有 Codex 那样的自研 turn loop，因此继续以 LangChain middleware 作为主要实现与装配方式；借鉴的是职责边界和唯一状态 owner，不是照搬 Codex 的组件形态。
+本设计参考 `/Users/zzq/Library/Mobile Documents/iCloud~md~obsidian/Documents/knowledge-base/Interview/highlights/Middleware/codex-agent-runtime-lessons.md`（归档于知识库）。Codex 使用显式 turn loop、ContextManager、ToolOrchestrator 和 agent registry 承担关键状态机，而不是为每个异常增加 middleware。Noesis 不拥有 Codex 那样的自研 turn loop，因此继续以 LangChain middleware 作为主要实现与装配方式；借鉴的是职责边界和唯一状态 owner，不是照搬 Codex 的组件形态。
 
 ## Goals / Non-Goals
 

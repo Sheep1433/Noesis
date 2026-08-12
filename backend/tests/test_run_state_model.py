@@ -1,13 +1,13 @@
 import pytest
 
-from noesis.domain.chat.runs import (
+from noesis.chat.runs import (
     InvalidRunTransition,
     RunSnapshot,
     RunStatus,
     can_transition,
     require_transition,
 )
-from noesis.domain.chat.delivery.events import HitlRequired, WireFrame
+from noesis.chat.delivery.events import HitlRequired, WireFrame
 from noesis.services.run_service import RunProjection
 
 

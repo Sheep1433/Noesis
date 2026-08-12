@@ -1,5 +1,7 @@
+import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from server.exception_handlers import handle_exception
 from server.middleware.csrf import CsrfMiddleware
@@ -43,6 +45,27 @@ async def lifespan(app: FastAPI):
     wire_runtime_observability()
     async with AsyncExitStack() as resources:
         resources.push_async_callback(pg_manager.close)
+        # 单 active backend 保护：在 migration/recovery/runtime 启动前获取 advisory lock。
+        # 第二个 worker 或容器无法获取 lock，必须 fail-fast。
+        await pg_manager.acquire_advisory_lock()
+        # 后台监控 advisory lock 连接存活
+        async def _monitor_owner_lock():
+            await pg_manager.monitor_advisory_lock()
+            if pg_manager.advisory_lock_ready is False:
+                logger.error("owner lock 已丢失，停止所有 live Run 并进入 not-ready")
+                await run_manager.shutdown(drain_seconds=0)
+
+        lock_monitor = asyncio.create_task(
+            _monitor_owner_lock(), name="advisory-lock-monitor"
+        )
+        async def _cancel_lock_monitor():
+            if not lock_monitor.done():
+                lock_monitor.cancel()
+                try:
+                    await lock_monitor
+                except asyncio.CancelledError:
+                    pass
+        resources.push_async_callback(_cancel_lock_monitor)
         await init_database()
         async with pg_manager.get_async_session_context() as recovery_db:
             await RunRecoveryService.recover_orphaned_runs(recovery_db)
@@ -102,4 +125,9 @@ for controller in controller_list:
 @app.get('/health', tags=['系统'])
 async def health_check():
     """健康检查端点"""
+    if pg_manager.advisory_lock_ready is False:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not-ready", "app": AppConfig.app_name},
+        )
     return {'status': 'healthy', 'app': AppConfig.app_name}

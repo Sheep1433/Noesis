@@ -52,7 +52,7 @@ evals   ──▶  noesis
 
 - `noesis` 禁止 import `server`；不存在反向 wiring 或兼容 shim。
 - `server` 只负责 FastAPI、middleware、请求依赖、lifespan 和 HTTP 异常翻译，不放业务 service、ORM 或 repository。
-- `noesis.domain` 禁止 import `noesis.services`、`noesis.agents`；`storage`、`repositories`、`knowledge` 禁止 import `server`。
+- `noesis.chat` 和 `noesis.auth` 禁止 import `noesis.services`、`noesis.agents`；`storage`、`repositories`、`knowledge` 禁止 import `server`。
 - API 必须经 Service；API 禁止直接查询 ORM。
 - Service 可以在单事务、单用例内直接写 SQLAlchemy 查询；多个调用方共享的查询、锁和持久化语义必须进入 repository。
 - `noesis.config.checkpointer` 管 LangGraph checkpoint；`noesis.storage.pg_manager` 管业务库。两者连接池和数据库职责独立。
@@ -67,7 +67,8 @@ evals   ──▶  noesis
 | `server/middleware/` | FastAPI / Starlette 请求响应链 |
 | `server/bootstrap/` | 进程启动时的外部资源和默认数据组装 |
 | `noesis/services/` | 应用用例、事务和跨领域编排 |
-| `noesis/domain/` | 与 HTTP、ORM 无关的领域语义；chat delivery/run runtime 也在此 |
+| `noesis/chat/` | 聊天子系统：与 HTTP、ORM 无关的领域语义（事件语言、Run 状态机、事件映射、投递适配、HITL pending） |
+| `noesis/auth/` | 认证领域语义（密码、策略、实体） |
 | `noesis/repositories/` | 被多个用例共享的查询和持久化规则 |
 | `noesis/storage/` | PostgreSQL manager、ORM、Alembic |
 | `noesis/knowledge/` | 知识库生命周期、解析、检索和 Qdrant 实现 |
@@ -117,9 +118,9 @@ evals   ──▶  noesis
 ## SSE 与持久化
 
 - QA 编排：`noesis.services.qa`
-- Delivery：`noesis.domain.chat.delivery`
-- SSE bridge：`noesis.domain.chat.streaming.langgraph_sse`
-- Run lifecycle：`noesis.domain.chat.runs`
+- Delivery：`noesis.chat.delivery`
+- SSE bridge：`noesis.chat.event_mapping.langgraph_bridge`
+- Run lifecycle：`noesis.chat.runs`
 - HTTP API：`server.api.chat_api`
 
 同一轮 assistant SSE 对应 DB 一行：先写 `streaming` 骨架，HITL 时保存 pending part，结束时更新为 `completed`、`error` 或 `partial`。流式 token 不逐个写数据库；无浏览器订阅时 PersistSink 仍负责终态落库。
@@ -136,7 +137,7 @@ keepalive 只存在于 SSE delivery，不进入内部 event bus。API 层不得�
 
 ## 安全
 
-- 密码能力统一使用 `noesis.domain.auth.password.PwdUtil`。
+- 密码能力统一使用 `noesis.auth.password.PwdUtil`。
 - Session、邀请码和登录用例位于 `noesis.services.auth`。
 - 认证使用 Cookie Session + CSRF；禁止新增 JWT 认证旁路。流式 stop token 是单独用途。
 - Qdrant、SSE 持久化、MCP 远程执行和沙箱路径属于高风险改动，应补回归测试。

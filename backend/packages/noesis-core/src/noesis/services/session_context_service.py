@@ -12,7 +12,7 @@ from typing import List
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
+from noesis.errors.exceptions import NotFoundException, ServiceException
 
 from noesis.config.user_data_paths import (
     get_session_root,
@@ -23,13 +23,13 @@ from noesis.config.user_data_paths import (
     get_user_skills_dir,
     get_workspace_dir,
 )
-from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
+from noesis.errors.exceptions import NotFoundException, ServiceException
 
 from noesis.schemas.session_context_vo import FsTreeNode, SessionContextResponse
-from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
+from noesis.errors.exceptions import NotFoundException, ServiceException
 
 from noesis.services.chat_service import ChatService
-from noesis.errors.exceptions import ConflictException, NotFoundException, PermissionException, ServiceException
+from noesis.errors.exceptions import NotFoundException, ServiceException
 
 from noesis.services.skill_fs_service import SkillFsService
 
@@ -131,7 +131,7 @@ class SessionContextService:
         db: AsyncSession,
     ) -> SessionContextResponse:
         await cls._ensure_owned(session_id, user_id, db)
-        user_root = get_user_root(user_id)
+        get_user_root(user_id)
         children: List[FsTreeNode] = []
         children.extend(cls._user_root_file_nodes(user_id))
         skills_dir = get_user_skills_dir(user_id)

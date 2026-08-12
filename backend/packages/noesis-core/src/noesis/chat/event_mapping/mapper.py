@@ -1,0 +1,116 @@
+"""RuntimeEventMapper：LangGraph/LangChain raw event → typed RunEvent 的唯一映射入口。
+
+它是无状态模块（Bridge 实例有状态，mapper 本身不持有状态），不做 plugin registry
+或深类层级。Web、Channel、cron 和 eval 中属于本 change 范围的 Agent Run 共用此 mapper。
+
+状态提取器直接产出 typed RunEvent；SSE 字符串只由 SseDelivery 编码。
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from noesis.chat.delivery.events import (
+    HitlRequired,
+    RunAborted,
+    RunCompleted,
+    RunError,
+    RunEvent,
+    RunPaused,
+    WireFrame,
+)
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+
+
+class RuntimeEventMapper:
+    """raw runtime event → typed RunEvent 的唯一映射入口。
+
+    每个 Run 持有独立 mapper；它只负责 raw event 到 typed event 的映射。
+    """
+
+    def __init__(self, bridge: LangGraphSseBridge) -> None:
+        self.bridge = bridge
+
+    def map_item(
+        self,
+        item: Dict[str, Any],
+        builder: Optional[AssistantMessageBuilder],
+        ctx: Dict[str, Any],
+    ) -> List[RunEvent]:
+        """单条 raw event → 多条 typed RunEvent。"""
+        return self._normalize(self.bridge.map_item(item, builder, ctx))
+
+    def finalize(self, *, finish_reason: Optional[str] = None) -> List[RunEvent]:
+        """流结束：产出 finish + StreamDone。"""
+        return self._normalize(self.bridge.finalize_events(finish_reason=finish_reason))
+
+    @staticmethod
+    def _normalize(events: List[RunEvent]) -> List[RunEvent]:
+        normalized: List[RunEvent] = []
+        for event in events:
+            if not isinstance(event, WireFrame):
+                normalized.append(event)
+                continue
+            data = event.data
+            if event.event == "hitl-required":
+                normalized.append(HitlRequired(payload=dict(data)))
+            elif event.event == "finish":
+                reason = str(data.get("finish_reason") or "stop")
+                usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+                attribution = (
+                    data.get("attribution")
+                    if isinstance(data.get("attribution"), dict)
+                    else {}
+                )
+                if reason == "hitl_pending":
+                    normalized.append(
+                        RunPaused(
+                            reason="hitl_pending",
+                            finish_reason=reason,
+                            usage=usage,
+                            attribution=attribution,
+                        )
+                    )
+                elif reason in {
+                    "length_stop",
+                    "safety_stop",
+                    "partial_output",
+                    "empty_after_tools",
+                    "tool_loop_limit",
+                    "tool_call_limit",
+                    "subagent_concurrency_limit",
+                    "subagent_total_limit",
+                    "subagent_depth_limit",
+                    "stopped",
+                }:
+                    normalized.append(RunAborted(reason=reason))
+                elif reason in {"error", "context_exhausted", "retryable_error"}:
+                    normalized.append(
+                        RunError(
+                            message="生成失败，请稍后重试",
+                            finish_reason=reason,
+                        )
+                    )
+                else:
+                    normalized.append(
+                        RunCompleted(
+                            finish_reason=reason,
+                            usage=usage,
+                            attribution=attribution,
+                        )
+                    )
+            elif event.event == "abort":
+                normalized.append(
+                    RunAborted(reason=str(data.get("reason") or "abort"))
+                )
+            elif event.event == "error":
+                normalized.append(
+                    RunError(
+                        message=str(data.get("error") or data.get("content") or "error"),
+                        finish_reason=str(data.get("finish_reason") or "error"),
+                    )
+                )
+            else:
+                normalized.append(event)
+        return normalized

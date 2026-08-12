@@ -250,16 +250,17 @@ Agent runtime SHALL 支持独立摘要模型的 summarization offload；SHALL �
 
 ### Requirement: HITL 分段流 SHALL 经同一 Fan-out
 
-`hitl-required` / `finish_reason=hitl_pending` 与 `POST .../hitl/resume` 返回的新 SSE **SHALL** 经同一 RunEvent → SseDelivery / PersistSink 路径，语义与主规格 `platform-chat` HITL 要求一致：pending 不 completed；resume 续写同一 `assistant_message_id`；**SHALL NOT** 在 Fan-out 外另起一套仅 generator 内可见的 HITL 落库分支（过渡期除外）。
+`hitl-required` / `finish_reason=hitl_pending` 与 `POST .../hitl/resume` 启动的新 producer segment **SHALL** 经同一 RuntimeEventMapper → RunHandle → SseDelivery / PersistWriter 路径，语义与主规格 `platform-chat` HITL 要求一致：pending 不 completed；resume 续写同一 `assistant_message_id`；**SHALL NOT** 在 RunHandle 外另起一套仅 generator 内可见的 HITL 落库分支。
 
 #### Scenario: resume 仍走 Fan-out
 
 - **WHEN** 用户对 pending HITL 调用 `hitl/resume`
-- **THEN** 响应 SHALL 为经 SseDelivery 编码的 `text/event-stream`，且 PersistSink SHALL 继续更新同一 assistant 行直至真正终态
+- **THEN** resume 响应 SHALL 返回同一 Run 的权威 running snapshot
+- **AND** 客户端 SHALL 重新订阅同一 `run_id`，PersistWriter SHALL 继续更新同一 assistant 行直至真正终态
 
 ### Requirement: chat 页 SHALL 从权威 run snapshot 恢复
 
-chat 页 SHALL 保存当前 run_id、assistant_message_id 与 last_sequence。页面重新加载或连接恢复时，若历史/session 信息表明存在 active run，客户端 SHALL 查询 run 并重新订阅；收到 `run-snapshot` 时 SHALL 按 replace 语义重建该 assistant parts，而不是重复 append。
+chat 页 SHALL 保存当前 run_id、assistant_message_id 与 last_sequence。页面重新加载或连接恢复时，客户端 SHALL 通过服务端 active-run API 查询权威 Run 并重新订阅，不得依赖 sessionStorage 或消息历史推测；收到 `run-snapshot` 时 SHALL 按 replace 语义重建该 assistant parts，而不是重复 append。
 
 #### Scenario: 刷新后继续显示增量
 - **WHEN** 用户在 run 进行中刷新并重新进入同一 session
@@ -547,3 +548,58 @@ chat 页 SHALL 按服务端 tool `state` 显示“正在执行、等待确认、
 - **WHEN** 关键工具失败并且 assistant 没有可见正文
 - **THEN** UI SHALL 告知本轮未完成
 - **AND** SHALL 提供重新执行本轮的操作
+
+### Requirement: 可靠 Web Agent Run SHALL 明确适用范围
+
+可靠 Run、多 Tab、snapshot 恢复和统一 Delivery SHALL 应用于 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA`。`TEST_CASE_QA`、CaseCoordinator、`phase-*`、test-case resume/export SHALL 保持独立，且新主路径 SHALL NOT 为其保留兼容 parser。
+
+#### Scenario: 测试用例生成保持独立
+
+- **WHEN** 执行本能力的实现或验收
+- **THEN** `TEST_CASE_QA` 与 `phase-*` SHALL NOT 进入新 Run 主路径
+
+### Requirement: 服务端 SHALL 提供权威 active Run 发现
+
+系统 SHALL 提供 `GET /api/chat/sessions/{session_id}/active-run`，对已鉴权 owner 返回完整 RunSnapshot 或 `data=null`。未知、已删除或跨用户 session SHALL 返回 404 且不泄露 Run 身份。
+
+#### Scenario: 新 Tab 发现正在执行的 Run
+
+- **WHEN** Tab A 已启动 Run，Tab B 打开同一 session
+- **THEN** Tab B SHALL 从 active-run 获取相同 `run_id`、`assistant_message_id`、status、snapshot_sequence 与 content
+- **AND** SHALL NOT 依赖 Tab A 的 sessionStorage
+
+### Requirement: 多 Tab SHALL 独立订阅同一 Run
+
+同一用户的多个 Tab SHALL 使用独立 SSE subscription。断开、刷新或溢出任意一个 subscription SHALL 只移除自身，不取消 producer、Persistence 或其它 Delivery。
+
+#### Scenario: 关闭创建 Run 的 Tab
+
+- **WHEN** Tab A 与 Tab B 均订阅后关闭 Tab A
+- **THEN** producer SHALL 继续，Tab B SHALL 收到权威终态
+
+### Requirement: 客户端 SHALL 以 snapshot replace 和 sequence 连续性恢复
+
+客户端收到 run-snapshot SHALL replace 相同 assistant 的 parts，并设置 last_sequence。业务 sequence 小于等于 last_sequence SHALL 忽略；等于 last_sequence+1 SHALL apply；大于 last_sequence+1 SHALL 停止 reader并进行 snapshot recovery。无终态 EOF SHALL NOT 触发成功或失败终态回调。
+
+#### Scenario: sequence gap 不继续渲染
+
+- **WHEN** last_sequence=20 而下一事件 sequence=23
+- **THEN** 客户端 SHALL 丢弃该事件并进入 snapshot recovery
+
+### Requirement: 同 session 创建冲突 SHALL 加入已有 Run
+
+同一 session 已有 active Run 时，`POST /api/chat/runs` SHALL 返回 HTTP 409 和当前用户可访问的 `run_id`、`assistant_message_id`、`session_id`、status。客户端 SHALL 加入已有 Run，不启动第二 producer。
+
+#### Scenario: 两个 Tab 同时发送
+
+- **WHEN** 两个 Tab 对同一 session 并发创建 Run
+- **THEN** 最多一个 producer SHALL 启动，另一个请求 SHALL 能加入已有 Run
+
+### Requirement: stop 与 HITL resume SHALL 按 Run 鉴权且幂等
+
+stop 与 HITL resume SHALL 按 `(run_id,current_user_id)` 鉴权并验证 session/assistant 关联。重复 stop SHALL 最多取消一次 producer并产生一个 terminal transaction；重复或过期 HITL 命令 SHALL NOT 启动第二 producer。旧 Run 命令 SHALL NOT 作用于同 session 的后续 Run。
+
+#### Scenario: 旧 Tab 不能停止新 Run
+
+- **WHEN** 旧 Tab 对已终态 R1 发 stop，而同 session 已有新 Run R2
+- **THEN** R2 SHALL 不受影响

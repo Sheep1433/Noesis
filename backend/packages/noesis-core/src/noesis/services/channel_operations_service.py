@@ -7,9 +7,9 @@ import time
 import uuid
 
 from noesis.config.env import MessagingConfig
-from noesis.domain.chat.delivery.channel_health import channel_health
-from noesis.domain.chat.delivery.telegram.client import TelegramBotClient
-from noesis.domain.chat.delivery.feishu.client import FeishuBotClient
+from noesis.chat.delivery.channel_health import channel_health
+from noesis.chat.delivery.telegram.client import TelegramBotClient
+from noesis.chat.delivery.feishu.client import FeishuBotClient
 from noesis.errors.exceptions import ConflictException
 from noesis.services.messaging_channel_service import (
     MessagingChannelService,

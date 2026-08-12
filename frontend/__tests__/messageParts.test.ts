@@ -249,6 +249,7 @@ describe('hasValidUsage / hasValidContextWindow 降级', () => {
     expect(hasValidContextWindow({ current_tokens: 100 })).toBe(false)
     expect(hasValidContextWindow({ current_tokens: 100, max_tokens: 0, used_percentage: 1 })).toBe(false)
     expect(hasValidContextWindow({ current_tokens: 100, max_tokens: 128000, used_percentage: 1 })).toBe(true)
+    expect(hasValidContextWindow({ current_tokens: 128001, max_tokens: 128000, used_percentage: 100 })).toBe(false)
   })
 
   it('历史消息只有核心字段仍通过校验', () => {

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from noesis.domain.chat.delivery.events import (
+from noesis.chat.delivery.events import (
     HitlRequired,
     RunAborted,
     RunCompleted,
     RunError,
     WireFrame,
 )
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.domain.chat.tool_state import (
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.tool_state import (
     ToolState,
     can_transition_tool_state,
     derive_tool_state,

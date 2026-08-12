@@ -1,5 +1,5 @@
 """message_builder 反序列化边角。"""
-from noesis.domain.chat.message_builder import MessageContent
+from noesis.chat.message_builder import MessageContent
 
 
 def test_tool_part_empty_input_dict_preserved() -> None:

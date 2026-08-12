@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { RetrievalResultUi } from '@/views/chat/messageParts'
 import { DocumentsOutline, GlobeOutline } from '@vicons/ionicons-v5'
-import { NButton, NDrawer, NDrawerContent, NIcon } from 'naive-ui'
+import { NDrawer, NDrawerContent, NIcon } from 'naive-ui'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { citationTargets, safeWebUrl } from '@/views/chat/citationRendering'
@@ -100,7 +100,7 @@ defineExpose({ open })
 </script>
 
 <template>
-  <n-button quaternary size="tiny" class="source-entry__button" @click="open()">
+  <button type="button" class="source-entry__button" @click="open()">
     <span class="source-entry__icons" aria-hidden="true">
       <span
         v-for="source in sources.slice(0, 3)"
@@ -115,7 +115,7 @@ defineExpose({ open })
     </span>
     <span>来源</span>
     <span class="source-entry__count">{{ sources.length }}</span>
-  </n-button>
+  </button>
 
   <n-drawer
     v-model:show="drawerOpen"
@@ -178,8 +178,23 @@ defineExpose({ open })
 
 <style scoped>
 .source-entry__button {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-height: 26px;
+  border: 0;
+  padding: 0 4px;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
   color: var(--noesis-color-text-secondary);
+  cursor: pointer;
   font-size: 11px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.source-entry__button:hover {
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
 .source-entry__icons {
@@ -191,13 +206,10 @@ defineExpose({ open })
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin-left: -4px;
-  color: var(--noesis-color-primary);
-  background: var(--noesis-color-bg-elevated);
-  border: 1px solid var(--noesis-color-border);
-  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -1px;
+  color: var(--noesis-color-text-hint);
 }
 
 .source-entry__icon:first-child {

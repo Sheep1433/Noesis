@@ -8,6 +8,7 @@ import type { ToolLifecycleState } from '@/views/chat/messageParts'
 import { ref } from 'vue'
 import {
   createAgentRun,
+  getActiveRun,
   getAgentRun,
   resumeAgentRunHitl,
   resumeAgentRunTestCase,
@@ -488,8 +489,28 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           client_request_id: clientRequestId,
           extra: extra || {},
         })
-      } catch {
-        // 响应未知时只使用原幂等键重试一次，服务端会返回同一 run。
+      } catch (createErr) {
+        // 409 冲突：同 session 已有 active Run，加入它而非当失败
+        const conflictErr = createErr as Error & { conflictRunId?: string }
+        if (conflictErr.conflictRunId) {
+          currentRunId = conflictErr.conflictRunId
+          sessionStorage.setItem(`noesis:active-run:${sessionId}`, conflictErr.conflictRunId)
+          // 从服务端获取已有 Run 的 snapshot 并 replace
+          const snapshot = await getAgentRun(conflictErr.conflictRunId)
+          if (!isCurrentStream(generation)) {
+            return
+          }
+          dispatchFrame(
+            'run-snapshot',
+            JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+            generation,
+          )
+          if (!streamSettled) {
+            await followRun(conflictErr.conflictRunId, generation)
+          }
+          return
+        }
+        // 非 409：响应未知时只使用原幂等键重试一次，服务端会返回同一 run。
         created = await createAgentRun({
           session_id: sessionId,
           content,
@@ -536,23 +557,51 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     }
   }
 
-  async function resumeActiveRun(sessionId: string): Promise<void> {
+  async function resumeActiveRun(
+    sessionId: string,
+    beforeSnapshotApply?: Promise<unknown>,
+  ): Promise<void> {
     if (isLoading.value && activeSessionId === sessionId) {
       return
     }
-    const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
-    if (!runId) {
+    const generation = beginStream(sessionId)
+    // 优先从服务端发现 active Run（新 Tab、刷新页、断线恢复的权威来源）
+    let snapshot: AgentRunSnapshot | null = null
+    try {
+      snapshot = await getActiveRun(sessionId)
+      await beforeSnapshotApply
+    } catch (err) {
+      if (!isCurrentStream(generation)) {
+        return
+      }
+      const message = err instanceof Error ? err.message : '连接恢复失败'
+      error.value = message
+      onRunStatus?.('disconnected', '连接已中断，可稍后重试')
+      isLoading.value = false
       return
     }
-    const generation = beginStream(sessionId)
+    if (!isCurrentStream(generation)) {
+      return
+    }
+    let runId: string | null
+    if (snapshot) {
+      runId = snapshot.run_id
+      // 同步 sessionStorage 作为当前 Tab hint
+      sessionStorage.setItem(`noesis:active-run:${sessionId}`, runId)
+    } else {
+      isLoading.value = false
+      abortController = null
+      return
+    }
     currentRunId = runId
     try {
-      const snapshot = await getAgentRun(runId)
-      dispatchFrame(
-        'run-snapshot',
-        JSON.stringify({ type: 'run-snapshot', ...snapshot }),
-        generation,
-      )
+      if (snapshot) {
+        dispatchFrame(
+          'run-snapshot',
+          JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+          generation,
+        )
+      }
       if (!streamSettled) {
         await followRun(runId, generation)
       }
@@ -597,18 +646,45 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       grant_scope?: 'once' | 'session' | null
     },
   ) {
-    const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
-      || (activeSessionId === sessionId ? currentRunId : null)
+    const active = await getActiveRun(sessionId)
+    const runId = active?.run_id
+      ?? (activeSessionId === sessionId ? currentRunId : null)
     if (!runId) {
       throw new Error('当前任务已中断，无法继续确认')
     }
+    const needsNewSubscription = !isLoading.value || activeSessionId !== sessionId
+    const generation = needsNewSubscription ? beginStream(sessionId) : streamGeneration
     currentRunId = runId
     const snapshot = await resumeAgentRunHitl(runId, body)
-    dispatchFrame('run-snapshot', JSON.stringify({ type: 'run-snapshot', ...snapshot }))
+    dispatchFrame(
+      'run-snapshot',
+      JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+      generation,
+    )
     // 审批时原订阅可能已因网络中断而退出。POST 只恢复 producer，不会自动
     // 恢复浏览器订阅，因此此处在没有活跃 followRun 时重新订阅。
-    if ((!isLoading.value || activeSessionId !== sessionId) && !streamSettled) {
-      void resumeActiveRun(sessionId)
+    if (needsNewSubscription && !streamSettled) {
+      void (async () => {
+        try {
+          await followRun(runId, generation)
+        } catch (err) {
+          if (!isCurrentStream(generation)) {
+            return
+          }
+          const message = err instanceof Error ? err.message : '连接恢复失败'
+          error.value = message
+          onRunStatus?.('disconnected', '连接已中断，可稍后重试')
+        } finally {
+          if (isCurrentStream(generation)) {
+            isLoading.value = false
+            abortController = null
+            if (streamSettled) {
+              sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
+              currentRunId = null
+            }
+          }
+        }
+      })()
     }
   }
 
@@ -629,10 +705,24 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     userAborted = true
     abortController?.abort()
     const snapshot = await stopAgentRun(runId)
-    terminalObserved = true
     onSnapshot?.(snapshot)
-    settleSuccess(snapshot.finish_reason ?? 'stopped')
-    isLoading.value = false
+    if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
+      terminalObserved = true
+      if (snapshot.status === 'error') {
+        settleFailure(snapshot.message ?? '生成失败')
+      } else {
+        settleSuccess(snapshot.finish_reason ?? 'stopped')
+      }
+      isLoading.value = false
+      return
+    }
+
+    // cancel grace 内终态持久化尚未完成时，不能把 running snapshot 当作成功。
+    // 建立新订阅，等待服务端权威 terminal transaction 后再收尾。
+    userAborted = false
+    abortController = new AbortController()
+    onRunStatus?.('running', '正在停止')
+    await followRun(runId, streamGeneration)
   }
 
   return {

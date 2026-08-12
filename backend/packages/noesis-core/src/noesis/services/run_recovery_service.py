@@ -9,8 +9,8 @@ from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.runtime.logging import logger
-from noesis.domain.chat.runs import RunStatus
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.runs import RunStatus
+from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.repositories.agent_run_repository import AgentRunRepository
 from noesis.storage.postgres.models.chat import TAgentDelivery, TAgentRun, TChatMessage
 
@@ -43,6 +43,7 @@ class RunRecoveryService:
                 target=RunStatus.INTERRUPTED,
                 assistant_status="partial",
                 content=content,
+                last_sequence=run.last_sequence,
                 finished_at=int(time.time() * 1000),
                 finish_reason="server_restart",
                 error_code="SERVER_RESTART",
