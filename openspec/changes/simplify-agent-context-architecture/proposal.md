@@ -33,6 +33,6 @@ Noesis 当前把 DeerFlow 式细粒度能力收进五个宏观 runtime middlewar
 ## Impact
 
 - 主要影响 `backend/packages/noesis-core/src/noesis/factory.py`、`noesis/agents/middlewares/`、`noesis/runtime/`、Super/Fault/QA Agent 构造、MCP/tool registry、工具包装、context/usage 流式观测与相关测试。
-- 研究基线为 Claude Code `2.1.88`、DeepAgents `0.6.12`、LangChain `1.3.4`、LangGraph `1.2.4` 和 DeerFlow `bec62779`；实施前必须 pin 并固定 hook/state 契约。
+- 研究基线为 Claude Code `2.1.88`、DeepAgents `0.6.12`、LangChain `1.3.15`、LangGraph `1.2.11` 和 DeerFlow `bec62779`；实施前必须 pin 并固定 hook/state 契约。
 - 平台 API、`/api/chat` SSE 和数据库 schema 保持兼容。
 - 本变更只产出设计与实施任务，不直接修改 runtime 代码。

@@ -15,7 +15,7 @@ RuntimeTelemetry → ToolExecution → RunGovernor → ContextLifecycle → Mode
 
 LangChain/DeepAgents 只有在行为契约满足 Claude Code 目标时才直接采用。行为不同或缺失时，Noesis 实现新的窄 middleware；不为了减少自定义类而降低目标能力。
 
-研究基线：Claude Code npm `2.1.88` 与本地提取源码、DeepAgents `0.6.12`、LangChain `1.3.4`、LangGraph `1.2.4`、DeerFlow commit `bec62779`。
+研究基线：Claude Code npm `2.1.88` 与本地提取源码、DeepAgents `0.6.12`、LangChain `1.3.15`、LangGraph `1.2.11`、DeerFlow commit `bec62779`。该组合由 `deepagents==0.6.12` 的 `requires_dist`（`langchain>=1.3.11,<2.0.0`、`langchain-core>=1.4.8`）推导；不得 pin 与之互斥的更低版本。
 
 ## Goals / Non-Goals
 
@@ -55,26 +55,25 @@ noesis/
 │   ├── micro_compaction_middleware.py   # 不调用模型的局部减重
 │   ├── compaction_middleware.py         # 自动/手动压缩与失败恢复
 │   ├── tool_catalog_middleware.py       # deferred tool schema 与 tool search
-│   ├── subagents_middleware.py          # isolated/fork context policy
+│   ├── subagents_middleware.py       # 子 Agent context policy（isolated/fork/resume）；复用上游 SubAgentMiddleware 的编译/调度/结果回传
 │   ├── tool_failure_middleware.py
 │   ├── tool_result_budget_middleware.py # replacement record、artifact、最终兜底
 │   ├── safe_model_retry_middleware.py
 │   ├── _context_budget.py               # 私有纯函数，不是 middleware
 │   └── _summary_prompt.py              # 私有摘要模板
-├── backends/                      # workspace、archive、artifact adapter
+├── backends/                      # workspace、archive、artifact adapter（注入给 middleware，不被 middleware 运行时调用）
 ├── agents/                        # 场景 prompt、场景 tools、Agent 入口
 └── runtime/
-    ├── compaction.py             # 压缩事务、archive/checkpoint 提交
-    ├── tool_registry.py           # MCP/tool 连接、schema 与权限权威源
+    ├── tool_registry.py           # MCP/tool 连接、schema 与权限权威源（factory 装配时消费）
     ├── providers/                 # request canonicalization 与 capability adapter
-    └── ...                        # streaming、attachments、HITL、task registry、日志
+    └── ...                        # streaming、attachments、HITL host、日志
 ```
 
-DeepAgents/LangChain 的公开 middleware 直接从依赖导入，不复制到 Noesis。`middleware/` 只保存行为不同或上游缺失的 Noesis 实现。
+DeepAgents/LangChain 的公开 middleware 直接从依赖导入，不复制到 Noesis。`middleware/` 只保存行为不同或上游缺失的 Noesis 实现。每个 Noesis middleware 自包含：只依赖 factory 注入的依赖（model、`BackendProtocol`、token_counter、compiled subagents 等）和 LangGraph typed/private state，不在运行时调用 `runtime/`、`service` 或其它 Noesis 模块。archive、summary、boundary、checkpoint 提交等压缩事务全部在 `CompactionMiddleware` 内部完成，无外置 runtime 事务服务。
 
 `factory.py` 可以导入 `middleware`、`backends` 与 `runtime`；这些公共包不得导入具体 `agents` 场景。删除 `agents.__getattr__` lazy import。
 
-### 2. Factory 直接接收 DeepAgents 风格参数
+### 2. Factory 直接接收 DeepAgents 风格参数，底层仍调用 LangChain `create_agent`
 
 ```python
 create_noesis_agent(
@@ -96,9 +95,19 @@ create_noesis_agent(
 )
 ```
 
-现有 `COMMON_QA / SUPER_AGENT_QA / FAULT_OPERATION_QA / SimpleMCP` 名称继续用于配置和观测，不新增另一套 Profile class。场景 Agent 负责准备参数；factory 根据参数一次创建完整 stack 并立即调用 LangChain `create_agent()`。
+底层装配入口保持现状的 LangChain `create_agent()`，不切换到 `create_deep_agent()`。`subagents`、`skills`、`memory`、`backend`、`interrupt_on` 等参数**不是透传给 `create_deep_agent`**，而是由 factory 内部映射为对应中间件实例并加入 `middleware` 列表，再调用 `create_agent(model=..., tools=..., system_prompt=..., middleware=..., checkpointer=..., state_schema=..., name=...)`：
 
-主 Agent、子 Agent与离线评测都使用该入口。调用方不得在 factory 返回后 append middleware。诊断 inventory 从实际列表生成，不维护独立 allowlist。
+| 参数 | 映射为 |
+|---|---|
+| `skills` | `SkillsMiddleware(sources=skills)`（DeepAgents） |
+| `memory` | `MemoryMiddleware(sources=memory)`（DeepAgents） |
+| `subagents` | `SubAgentMiddleware` / `AsyncSubAgentMiddleware`（DeepAgents） |
+| `backend` | `FilesystemMiddleware(backend=backend)`（DeepAgents） |
+| `interrupt_on` | `HumanInTheLoopMiddleware`（LangChain） |
+
+参数签名采用 DeepAgents 风格仅为统一调用方体验；DeepAgents 的公开中间件直接从依赖导入，不复制到 Noesis `middleware/` 目录。`middleware/` 只保存行为不同或上游缺失的 Noesis 实现。Factory 一次性完成映射与 stack 构造；调用方不得在 factory 返回后继续 append capability，诊断 inventory 从实际实例列表生成，不维护独立 allowlist。
+
+现有 `COMMON_QA / SUPER_AGENT_QA / FAULT_OPERATION_QA / SimpleMCP` 名称继续用于配置和观测，不新增另一套 Profile class。场景 Agent 负责准备参数。主 Agent、子 Agent 与离线评测都使用该入口。
 
 ### 3. 目标 Middleware Stack
 
@@ -112,7 +121,7 @@ ToolResultBudgetMiddleware                # Noesis
 → TodoListMiddleware                      # LangChain，可选
 → SkillsMiddleware                        # DeepAgents，可选
 → FilesystemMiddleware                    # DeepAgents，可选
-→ NoesisSubAgentMiddleware                # 组合 DeepAgents，可选
+→ SubAgentContextMiddleware              # Noesis context policy（isolated/fork/resume），可选；复用上游 SubAgentMiddleware 编译/调度/结果回传
 → MemoryMiddleware                        # DeepAgents，可选
 → DynamicContextMiddleware                # Noesis
 → DurableContextMiddleware                # Noesis
@@ -244,11 +253,11 @@ Claude Code 会根据 ToolSearch 动态加载 deferred MCP tools。Noesis 目标
 - MCP server 连接变化形成有界 delta；compaction 后从 catalog 重建；
 - Provider 原生支持 deferred tool 时使用原生字段，否则由 middleware 动态过滤 `request.tools`。
 
-ToolCatalog 负责“模型看到哪些 schema”，tool registry/MCP client 负责连接和实际调用。权限检查在执行时重新验证，不能因为 schema 已发现就绕过授权。
+ToolCatalog 只操作 `request.tools` 与自身 `tool_search` 工具；MCP/tool registry 负责连接和实际调用（factory 装配时绑定，middleware 不在运行时调用 registry）。权限检查在执行时重新验证，不能因为 schema 已发现就绕过授权。
 
 ### 12. CompactionMiddleware
 
-`CompactionMiddleware` 是 `wrap_model_call` 适配层：它截获最终 ModelRequest、决定是否压缩，并在 Provider 真正返回 context overflow 时执行一次 reactive recovery。建档、摘要、boundary 和 checkpoint 的事务由 `runtime/compaction.py` 拥有。
+`CompactionMiddleware` 是自包含的 `wrap_model_call` 适配层：它截获最终 ModelRequest、决定是否压缩，并在 Provider 真正返回 context overflow 时执行一次 reactive recovery。archive、summary、boundary 与 checkpoint 提交等压缩事务**全部在 middleware 内部完成**，不调用 `runtime/compaction.py` 或任何 service。依赖只有 factory 注入的 `model`（summary 调用）、`BackendProtocol`（archive 写入）和 `token_counter`。
 
 压缩引擎使用 DeepAgents 的 backend archive、raw-state summarization event、message partition 和 overflow tail clip；触发、摘要模板和失败状态按 Claude Code 语义实现。不新增 `ContextCompiler` 或第二套 Agent loop。
 
@@ -301,17 +310,19 @@ ToolResultBudget / Snip / MicroCompaction
 
 manual compact 是 host/runtime 命令，可由 UI/API 或可选 tool 触发；它与自动压缩调用同一引擎，不维护第二套 summary 实现。
 
-### 13. NoesisSubAgentMiddleware
+### 13. SubAgentContextMiddleware（context policy 层）
 
-组合 DeepAgents SubAgent，但补充 Claude Code 式 context mode：
+Noesis **不重写** `SubAgentMiddleware` 的编译、调度与结果回传——这部分直接复用 DeepAgents `SubAgentMiddleware` / `AsyncSubAgentMiddleware`（factory 装配时注入 compiled subagents + checkpointer）。上游 `_validate_and_prepare_state` 默认让子 Agent **继承父 Agent 全部 state**（仅硬编码排除 6 个 key：`messages`、`todos`、`structured_response`、`skills_metadata`、`skills_load_errors`、`memory_contents`，见 `subagents.py:240-247,534-539`），对 Noesis 自己引入的 private state（`active_file_refs`、`discovered_tool_refs`、`delegation_ledger`、`_summarization_event` 等）完全无知，会直接泄漏给子 Agent。
 
-- `isolated` 默认：新 message history、新 file state、新 tool discovery、新 compaction state；只接收任务描述、场景允许的 stable context 与自身 tools；
-- `fork` 显式：复制父 conversation snapshot 与白名单 durable context；所有可变 state 深拷贝，后续互不影响；
-- `resume`：从子 Agent 自身 checkpoint 恢复，不重新读取父 Agent 当前 state；
-- 子 Agent result 只以对应 tool call id 的有界 ToolMessage 回到父 Agent；
-- private middleware state 不参与父子 merge。
+因此 Noesis 只自实现子 Agent **context policy**，作为一个自包含中间件，只操作 LangGraph state，不接管 subagent 的编译/调度/结果回传：
 
-并发、取消、超时和 task registry 属于 runtime；middleware 负责 context 输入与结果边界。
+- `isolated` 默认：子 Agent 只接收任务描述 + 场景允许的白名单 stable context；父 Agent 的 conversation、file state、tool discovery、compaction state、durable ledger 全部隔离，不依赖上游的硬编码排除表扩展。
+- `fork` 显式：复制父 conversation snapshot 与白名单 durable context；所有可变 state 深拷贝，后续互不影响。
+- `resume`：从子 Agent 自身 checkpoint 恢复，不重新读取父 Agent 当前 state。
+
+上游 result→ToolMessage 回传机制（`_return_command_with_state_update`）原样复用；private middleware state 不参与父子 merge。
+
+context policy 通过 factory 注入的 `context_mode` 参数（per-subagent）选择，不调用 runtime task registry、service 或 scheduler。并发、取消、超时由 LangGraph 节点执行机制承载，不是 Noesis middleware 的运行时调用对象。
 
 ### 14. Tool 与 Model Middleware
 
@@ -364,7 +375,7 @@ Provider adapter 在真正发送前生成唯一 canonical request，负责：
 | summary PTL retry、reactive overflow | Compaction |
 | consecutive failure breaker | Compaction |
 | post-compact stable source rebuild | 各 stable-source middleware重新执行 |
-| subagent isolated/fork/resume | NoesisSubAgent + runtime checkpoint |
+| subagent isolated/fork/resume | SubAgentContextMiddleware（context policy）+ 上游 SubAgentMiddleware（编译/调度） |
 | provider prompt cache | Provider PromptCaching middleware |
 | provider message/schema canonicalization | Provider request adapter + PatchToolCalls |
 | usage/context visualization | stream + internal context events |
@@ -384,7 +395,7 @@ DeerFlow 的大量 middleware 仍作为迁移检查表，但不决定目录或�
 | SkillActivation/Memory/Todo | DeepAgents/LangChain + DurableContext refs |
 | MCPRouting/DeferredToolFilter | ToolCatalog |
 | ReadBeforeWrite | FileContext |
-| SubagentLimit | runtime task registry + NoesisSubAgent context policy |
+| SubagentLimit | LangGraph 节点执行机制 + SubAgentContextMiddleware context policy |
 | LoopDetection/TokenBudget | call limits + Compaction pressure；独立 run budget 按配置实现 |
 | SystemMessageCoalescing | Provider adapter 契约 |
 | TokenUsage/Title/ToolProgress | stream/service |
@@ -442,7 +453,7 @@ subagent_context_created
 4. 实现 DynamicContext、DurableContext 与 FileContext，验证 stable sources、stale file 和 post-compact rebuild。
 5. 实现 MicroCompaction 与 ToolCatalog，验证 tool pair、artifact synopsis、deferred schema 和 tool search。
 6. 实现 Compaction，覆盖 incremental/full/prefix/reactive/manual、reserve/buffer、structured summary、PTL retry 和 breaker。
-7. 实现 NoesisSubAgent isolated/fork/resume，并接入 runtime task registry。
+7. 实现 SubAgentContextMiddleware 的 isolated/fork/resume context policy，复用上游 SubAgentMiddleware 的编译/调度/结果回传，context_mode 通过 factory 注入。
 8. 迁移 ToolFailure、ToolResultBudget、SafeModelRetry、call limits 与 Provider adapter。
 9. 按字段级迁移表删除旧五 owner、ContextVar 链、手写 inventory、旧目录和失效配置。
 10. 运行 backend 全量测试、各 Profile E2E、长上下文压力测试、Provider overflow、MCP 大 catalog、文件 stale、子 Agent fork 与 `/api/chat` 回归。

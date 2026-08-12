@@ -61,9 +61,7 @@ import {
   emptyMessageContent,
   extractLastTopLevelText,
   flushRedactedThinkingStreamCtx,
-  formatUsageSummary,
   hasValidContextWindow,
-  hasValidUsage,
   markStreamingPartsComplete,
   normalizeApiContent,
   shortenChatErrorToast,
@@ -2359,15 +2357,19 @@ function onComposerPaste(e: ClipboardEvent) {
                       :data-assistant-message-id="item.message_id || ''"
                     >
                       <template v-if="item.messageContent?.version === 1">
+                        <div
+                          v-if="showAssistantReplyLoading(index, item.role) || item.completed_at"
+                          class="assistant-meta-above"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          <span class="assistant-processing-time-text">
+                            {{ item.completed_at
+                              ? formatElapsedSeconds(item.created_at, item.completed_at)
+                              : processingTimeText(item.created_at) }}
+                          </span>
+                        </div>
                         <div class="assistant-unified-card">
-                          <div
-                            v-if="showAssistantReplyLoading(index, item.role)"
-                            class="assistant-processing-time"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {{ processingTimeText(item.created_at) }}
-                          </div>
                           <template
                             v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
                             :key="entry.kind === 'subagent'
@@ -2446,13 +2448,15 @@ function onComposerPaste(e: ClipboardEvent) {
                             :divided="buildDisplayParts(item.messageContent.parts).length > 0"
                             :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
                           />
+                        </div>
+                        <div
+                          v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
+                          class="assistant-message-actions"
+                        >
                           <AssistantReplyToolbar
-                            v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
                             :qa-type="item.qa_type || 'COMMON_QA'"
                             :copy-text="extractLastTopLevelText(item.messageContent.parts)"
                             :time-text="formatHHmm(item.completed_at || item.created_at)"
-                            :usage-text="hasValidUsage(item.msg_metadata?.usage) ? formatUsageSummary(item.msg_metadata!.usage!) : ''"
-                            :attribution="item.msg_metadata?.usage?.attribution"
                             :langfuse_session_id="item.langfuse_session_id"
                             :langfuse-ui-origin="langfuseUiOrigin"
                           >
@@ -3140,6 +3144,33 @@ function onComposerPaste(e: ClipboardEvent) {
   pointer-events: none;
 }
 
+.assistant-meta-above {
+  box-sizing: border-box;
+  width: 80%;
+  margin-left: 10%;
+  margin-right: 10%;
+  padding: 4px 16px 0;
+}
+
+.assistant-processing-time-text {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--noesis-color-text-hint);
+  letter-spacing: 0.01em;
+}
+
+.assistant-message-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  box-sizing: border-box;
+  width: 80%;
+  margin-left: 10%;
+  margin-right: 10%;
+  margin-top: -8px;
+  padding-right: 8px;
+}
+
 .assistant-unified-card {
   position: relative;
   width: 80%;
@@ -3150,14 +3181,6 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 16px;
   overflow: visible;
   box-shadow: var(--noesis-shadow-sm);
-}
-
-.assistant-processing-time {
-  padding: 8px 16px 0;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
-  letter-spacing: 0.01em;
 }
 
 .chat-top-bar {

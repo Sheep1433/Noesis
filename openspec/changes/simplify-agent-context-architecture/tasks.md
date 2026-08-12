@@ -5,7 +5,7 @@
 - [ ] 1.3 增加 summary 错误文本替换 history、tool pair、raw history、archive、overflow recovery 和 retry 副作用基线
 - [ ] 1.4 增加 DeepAgents Filesystem、Skills、Memory、PatchToolCalls、SubAgent private state、prompt cache 与 HITL 契约测试
 - [ ] 1.5 增加 `backend/config.yaml` 到 Pydantic 实际值的加载测试，找出被静默忽略的 runtime 配置键
-- [ ] 1.6 pin DeepAgents `0.6.12`、LangChain `1.3.4` 和 LangGraph `1.2.4`，依赖升级必须通过上述契约测试
+- [ ] 1.6 pin DeepAgents `0.6.12`、LangChain `1.3.15` 和 LangGraph `1.2.11`（由 `deepagents==0.6.12` 的 `requires_dist` 推导的最低可解析组合），依赖升级必须通过上述契约测试
 
 ## 2. 建立 DeepAgents 风格装配
 
@@ -51,10 +51,10 @@
 
 ## 7. 实现 Subagent Context Policy
 
-- [ ] 7.1 组合 DeepAgents SubAgent 并实现 `isolated` 默认模式：独立 messages、file state、tool discovery 和 compaction state
+- [ ] 7.1 复用上游 `SubAgentMiddleware` 编译/调度/结果回传；实现 `SubAgentContextMiddleware` 的 `isolated` 默认模式：子 Agent 只接收任务描述 + 白名单 stable context，不依赖上游硬编码排除表扩展
 - [ ] 7.2 实现显式 `fork`：复制父 conversation snapshot 与白名单 durable context，可变 state 必须 deep copy
 - [ ] 7.3 实现子 Agent 自有 checkpoint `resume`，不重读父 Agent 当前 state
-- [ ] 7.4 子 Agent 只以对应 tool call id 的有界 ToolMessage 回传；并发、取消、超时和 admission 继续由 runtime task registry 管理
+- [ ] 7.4 context_mode 通过 factory 注入；result→ToolMessage 回传承接上游 `_return_command_with_state_update`，并发/取消/超时由 LangGraph 节点执行机制承载，不新增 runtime task registry
 
 ## 8. 迁移 Tool/Model 安全边界
 
