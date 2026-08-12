@@ -138,6 +138,14 @@ export interface AgentRunCreated {
   session_id: string
   status: AgentRunStatus
   session_title: string
+  /** 命中斜杠命令时的 ephemeral 回复（不建 run、不落库）。存在时其余字段可缺省。 */
+  command_reply?: string
+}
+
+/** 命中斜杠命令时的 ephemeral 响应（字段与 AgentRunCreated 不同，故独立判别）。 */
+export interface CommandReplyResult {
+  command_reply: string
+  session_id: string
 }
 
 export interface AgentRunSnapshot {
@@ -280,6 +288,21 @@ async function parseResponse<T>(res: Response): Promise<T> {
 }
 
 // ============================================================================
+// Slash commands
+// ============================================================================
+
+export interface SlashCommand {
+  name: string
+  description: string
+}
+
+/** 列出可用控制命令（skill 命令由 skills fs-tree 提供）。 */
+export async function getSlashCommands(): Promise<SlashCommand[]> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/commands`)
+  return parseResponse<SlashCommand[]>(await authFetch(req))
+}
+
+// ============================================================================
 // Session API
 // ============================================================================
 
@@ -325,10 +348,10 @@ export async function ensureSession(
   return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
-export async function createAgentRun(params: CreateAgentRunParams): Promise<AgentRunCreated> {
+export async function createAgentRun(params: CreateAgentRunParams): Promise<AgentRunCreated | CommandReplyResult> {
   const req = makeRequest('POST', `${location.origin}${BASE}/runs`, params)
   const res = await authFetch(req)
-  const json = await res.json() as { code?: number, msg?: string, data?: AgentRunCreated & { run_id?: string, assistant_message_id?: string, session_id?: string, status?: string } }
+  const json = await res.json() as { code?: number, msg?: string, data?: AgentRunCreated & CommandReplyResult & { run_id?: string, assistant_message_id?: string, session_id?: string, status?: string } }
   // 409 冲突：返回可加入的已有 Run 信息，不当作普通失败
   if (json.code === 409 && json.data?.run_id) {
     const conflict = new Error(json.msg ?? '当前会话仍在生成') as Error & { conflictRunId?: string, conflictData?: unknown }
@@ -338,6 +361,10 @@ export async function createAgentRun(params: CreateAgentRunParams): Promise<Agen
   }
   if (json.code !== 200 || !json.data) {
     throw new Error(json.msg ?? `API error: ${json.code}`)
+  }
+  // 命中斜杠命令：ephemeral 回复，无 run_id
+  if (json.data.command_reply) {
+    return { command_reply: json.data.command_reply, session_id: json.data.session_id ?? params.session_id }
   }
   return json.data
 }

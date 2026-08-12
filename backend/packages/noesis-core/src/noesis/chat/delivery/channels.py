@@ -22,7 +22,23 @@ class InboundMessage:
     text: str
     external_message_id: Optional[str] = None
     thread_id: Optional[str] = None
+    user_id: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+
+    def command_name(self) -> Optional[str]:
+        """斜杠命令统一解析点。
+
+        所有通道的命令解析 SHALL 在此完成；任何 adapter SHALL NOT 自行解析。
+        "/help x" → "help"；非斜杠 / 空文本 → None（放行进 Agent）。
+        """
+        text = (self.text or "").strip()
+        if not text.startswith("/"):
+            return None
+        return text.split(maxsplit=1)[0][1:] or None
+
+    def command_args(self) -> str:
+        text = (self.text or "").strip().split(maxsplit=1)
+        return text[1] if len(text) > 1 else ""
 
 
 @dataclass

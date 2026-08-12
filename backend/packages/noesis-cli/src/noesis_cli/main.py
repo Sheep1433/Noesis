@@ -74,6 +74,35 @@ def agents() -> None:
         console.print(f"  [cyan]{name:12}[/] {cls.__name__}")
 
 
+@app.command()
+def help() -> None:
+    """列出可用斜杠命令（与端内 /help 同源）。"""
+    text = asyncio.run(_invoke_slash_command("/help"))
+    console.print(text)
+
+
+@app.command()
+def skills() -> None:
+    """列出已安装 skill 包（与端内 /skills 同源）。"""
+    text = asyncio.run(_invoke_slash_command("/skills"))
+    console.print(text)
+
+
+async def _invoke_slash_command(slash_text: str) -> str:
+    """复用统一 registry 执行斜杠命令，返回回复文本。"""
+    from noesis.chat.commands.registry import dispatch
+    from noesis.chat.delivery.channels import InboundMessage
+
+    inbound = InboundMessage(
+        channel_type="cli",
+        external_chat_id="cli-local",
+        text=slash_text,
+        user_id="cli-user",
+    )
+    result = await dispatch(inbound)
+    return result.text or "（无输出）"
+
+
 async def _chat(message: str | None, qa_type: str, model_id: str | None, thread_id: str | None) -> None:
     try:
         session = ChatSession(qa_type=qa_type, model_id=model_id, thread_id=thread_id)
@@ -85,6 +114,7 @@ async def _chat(message: str | None, qa_type: str, model_id: str | None, thread_
     console.print(f"[dim]qa_type={qa_type} model={model_id or 'default'} thread={session.thread_id}[/]")
 
     with session.enter_context():
+        _install_command_completer()
         if message:
             await _run_turn(session, renderer, message)
 
@@ -101,7 +131,36 @@ async def _chat(message: str | None, qa_type: str, model_id: str | None, thread_
             await _run_turn(session, renderer, user_input)
 
 
+def _install_command_completer() -> None:
+    """交互模式 readline 补全：输入 / 后 Tab 列出/补全斜杠命令。
+
+    数据源与 noesis help 同源（list_command_descriptions），无需额外依赖。
+    """
+    try:
+        import readline
+    except ImportError:
+        return
+
+    from noesis.chat.commands.registry import list_command_descriptions
+    from noesis.chat.config_skills_scan import scan_installed_skills
+
+    names = [f"/{n}" for n, _ in list_command_descriptions()]
+    names += [f"/{n}" for n, _ in scan_installed_skills()]
+
+    def complete(text: str, state: int) -> str | None:
+        matches = [n for n in names if n.startswith(text)] if text.startswith("/") else []
+        return matches[state] if state < len(matches) else None
+
+    readline.set_completer(complete)
+    readline.parse_and_bind("tab: complete")
+
+
 async def _run_turn(session: ChatSession, renderer: StreamRenderer, query: str) -> None:
+    # 统一命令层：进 Agent 前先 dispatch（ephemeral，不启动 Agent、不落库）。
+    cmd_result = await _dispatch_cli_command(query, session.user_id)
+    if cmd_result is not None:
+        console.print(cmd_result)
+        return
     try:
         async for event in session.run_turn(query):
             renderer.consume(event)
@@ -110,6 +169,23 @@ async def _run_turn(session: ChatSession, renderer: StreamRenderer, query: str) 
         console.print(f"[red]运行异常:[/red] {exc}")
         return
     renderer.end_turn()
+
+
+async def _dispatch_cli_command(query: str, user_id: str) -> str | None:
+    """命中斜杠命令则返回回复文本；未命中返回 None（放行进 Agent）。"""
+    from noesis.chat.commands.registry import dispatch
+    from noesis.chat.delivery.channels import InboundMessage
+
+    inbound = InboundMessage(
+        channel_type="cli",
+        external_chat_id="cli-local",
+        text=query,
+        user_id=user_id,
+    )
+    result = await dispatch(inbound)
+    if not result.handled or result.rewrite_request:
+        return None
+    return result.text
 
 
 async def _eval(query: str, qa_type: str, model_id: str | None, time_budget: int) -> None:

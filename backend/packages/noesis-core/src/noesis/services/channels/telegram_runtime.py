@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from noesis.chat.hitl.pending import pending_hitl
 from noesis.runtime.logging import logger
 from noesis.config.env import MessagingConfig
 from noesis.chat.delivery.channels import route_inbound
+from noesis.chat.commands.registry import dispatch as dispatch_command
+from noesis.chat.commands.registry import list_command_descriptions
+from noesis.chat.config_skills_scan import scan_installed_skills
 from noesis.chat.delivery.telegram.adapter import TelegramChannelAdapter
 from noesis.chat.delivery.telegram.client import TelegramBotClient, mask_bot_token
 from noesis.chat.delivery.telegram.hitl_prompt import (
@@ -269,6 +272,50 @@ async def _try_pending_clarification_reply(
     return True
 
 
+def _build_bot_commands() -> List[Dict[str, str]]:
+    """从统一命令层构建 Telegram BotCommand 列表：控制命令 + skill 命令。
+
+    数据源与 Web mention catalog、CLI /help 同源（list_command_descriptions
+    + scan_installed_skills），三端命令发现一致。
+    """
+    commands: List[Dict[str, str]] = []
+    for name, desc in list_command_descriptions():
+        commands.append({"command": name, "description": (desc or name)[:256]})
+    for name, desc in scan_installed_skills():
+        if name in {"help", "skills", "agents", "model", "status", "reset", "approve", "reject", "stop"}:
+            continue  # 控制命令保留字优先，skill 不得覆盖
+        commands.append({"command": name, "description": (desc or name)[:256]})
+    return commands
+
+
+async def _sync_bot_commands(client: TelegramBotClient, masked: str) -> None:
+    """注册命令菜单；失败不阻断 poll。"""
+    try:
+        await client.set_my_commands(_build_bot_commands())
+    except Exception:
+        logger.warning("telegram setMyCommands failed bot={}", masked)
+
+
+# per-bot 已注册命令时的 skills 目录 mtime；变更才重注册，避免每条消息都调 API。
+_last_commands_mtime: Dict[str, float] = {}
+
+
+async def _maybe_refresh_bot_commands(client: TelegramBotClient, cfg: RuntimeChannelConfig) -> None:
+    """public skills 目录 mtime 变了才重新 setMyCommands。无变更时只一次 stat。"""
+    from noesis.config.extensions_paths import skills_root
+
+    try:
+        root = skills_root()
+        mtime = root.stat().st_mtime if root.exists() else 0.0
+    except OSError:
+        return
+    masked = mask_bot_token(cfg.bot_token)
+    if _last_commands_mtime.get(masked) == mtime:
+        return
+    _last_commands_mtime[masked] = mtime
+    await _sync_bot_commands(client, masked)
+
+
 async def _handle_message(
     cfg: RuntimeChannelConfig,
     client: TelegramBotClient,
@@ -279,6 +326,9 @@ async def _handle_message(
     if inbound is None:
         return
     channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "received")
+
+    # skills 热加载：public skills 目录 mtime 变了就重新注册命令菜单。
+    await _maybe_refresh_bot_commands(client, cfg)
 
     MessagingChannelService.iter_enabled_runtime("telegram", user_id=cfg.user_id)
     routed = route_inbound(inbound)
@@ -326,6 +376,17 @@ async def _handle_message(
             except Exception:
                 pass
             return
+
+    # 统一命令层：消息进 Agent 前先 dispatch（ephemeral 回复，不落库、不启动 Agent）。
+    inbound.user_id = str(binding.user_id)
+    cmd_result = await dispatch_command(inbound)
+    if cmd_result.handled and not cmd_result.rewrite_request:
+        try:
+            await client.send_message(chat_id, cmd_result.text)
+        except Exception:
+            logger.exception("telegram command reply failed chat_id={}", chat_id)
+        channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "command_handled")
+        return
 
     try:
         outbound = TelegramOutbound(client, chat_id) if cfg.delivery_preference == "reply" else None
@@ -388,6 +449,7 @@ async def _poll_loop(cfg: RuntimeChannelConfig) -> None:
     )
     try:
         await adapter.start()
+        await _sync_bot_commands(client, masked)
         channel_health.report_status(cfg.user_id, cfg.channel_id, "healthy", "通道运行正常")
         while not _stop.is_set():
             try:

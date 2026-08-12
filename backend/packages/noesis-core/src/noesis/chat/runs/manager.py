@@ -19,6 +19,7 @@ from noesis.chat.delivery.events import (
     RunSnapshotReplaced,
 )
 from noesis.chat.runs.models import (
+    ACTIVE_RUN_STATUSES,
     RunSnapshot,
     RunStatus,
     TERMINAL_RUN_STATUSES,
@@ -540,6 +541,15 @@ class RunManager:
             return self._runs[run_id]
         except KeyError as exc:
             raise RunNotFound(run_id) from exc
+
+    def list_active_for_user(self, user_id: str) -> list[RunHandle]:
+        """用户的活跃 run（含 hitl_pending），供 /status 等只读命令查询。"""
+        uid = str(user_id)
+        return [
+            h
+            for h in self._runs.values()
+            if h.user_id == uid and h.status in ACTIVE_RUN_STATUSES
+        ]
 
     async def register_delivery(
         self, run_id: str, name: str, handler: DeliveryHandler

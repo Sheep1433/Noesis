@@ -1,15 +1,15 @@
 /**
  * Mention catalog：预取 skills tree + session context，TTL 缓存，本地过滤。
  */
-import type { SessionContextResponse, SessionFsTreeNode } from '@/api/chat'
+import type { SessionContextResponse, SessionFsTreeNode, SlashCommand } from '@/api/chat'
 import type { SkillFsTreeResponse } from '@/api/skills'
 import type { SubagentOption } from '@/config/subagents'
-import { getSessionContext } from '@/api/chat'
+import { getSessionContext, getSlashCommands } from '@/api/chat'
 import { getSkillsFsTree } from '@/api/skills'
 import { getSubagentsForQaType } from '@/config/subagents'
 import { collectSkillPackages } from '@/utils/skillsTree'
 
-export type MentionKind = 'skill' | 'file' | 'folder' | 'subagent'
+export type MentionKind = 'command' | 'skill' | 'file' | 'folder' | 'subagent'
 
 export interface MentionCandidate {
   kind: MentionKind
@@ -32,12 +32,15 @@ export interface ComposerMention {
 
 const SKILLS_TTL_MS = 60_000
 const CONTEXT_TTL_MS = 30_000
+const COMMANDS_TTL_MS = 60_000
 
 let skillsCache: { at: number, data: SkillFsTreeResponse } | null = null
+let commandsCache: { at: number, data: SlashCommand[] } | null = null
 const contextCache = new Map<string, { at: number, data: SessionContextResponse }>()
 
 export function invalidateMentionSkillsCache() {
   skillsCache = null
+  commandsCache = null
 }
 
 export function invalidateMentionContextCache(sessionId?: string) {
@@ -59,6 +62,20 @@ async function loadSkills(force = false): Promise<SkillFsTreeResponse | null> {
   } catch (e) {
     console.warn('mention catalog: skills 加载失败', e)
     return skillsCache?.data ?? null
+  }
+}
+
+async function loadCommands(force = false): Promise<SlashCommand[]> {
+  if (!force && commandsCache && Date.now() - commandsCache.at < COMMANDS_TTL_MS) {
+    return commandsCache.data
+  }
+  try {
+    const data = await getSlashCommands()
+    commandsCache = { at: Date.now(), data }
+    return data
+  } catch (e) {
+    console.warn('mention catalog: commands 加载失败', e)
+    return commandsCache?.data ?? []
   }
 }
 
@@ -149,8 +166,20 @@ export async function ensureMentionCatalog(opts: {
 }): Promise<MentionCandidate[]> {
   const { qaType, sessionId, mode, force } = opts
   if (mode === 'slash') {
-    const tree = await loadSkills(force)
-    return tree ? flattenSkillPackages(tree) : []
+    const [commands, tree] = await Promise.all([loadCommands(force), loadSkills(force)])
+    const candidates: MentionCandidate[] = []
+    for (const cmd of commands) {
+      candidates.push({
+        kind: 'command',
+        id: cmd.name,
+        label: `/${cmd.name}`,
+        description: cmd.description,
+      })
+    }
+    if (tree) {
+      candidates.push(...flattenSkillPackages(tree))
+    }
+    return candidates
   }
   const candidates: MentionCandidate[] = []
   const ctx = await loadContext(sessionId, force)
@@ -182,7 +211,7 @@ export function candidateToMention(c: MentionCandidate): ComposerMention {
 
 /** 写入输入框的纯文本 token（无 chip） */
 export function formatMentionTokenFromCandidate(c: MentionCandidate): string {
-  if (c.kind === 'skill') {
+  if (c.kind === 'command' || c.kind === 'skill') {
     return `/${c.id}`
   }
   if (c.kind === 'subagent') {
@@ -194,7 +223,7 @@ export function formatMentionTokenFromCandidate(c: MentionCandidate): string {
 }
 
 export function formatMentionToken(m: ComposerMention): string {
-  if (m.type === 'skill') {
+  if (m.type === 'command' || m.type === 'skill') {
     return `/${m.id}`
   }
   if (m.type === 'subagent') {
@@ -205,6 +234,10 @@ export function formatMentionToken(m: ComposerMention): string {
 }
 
 export function mentionToPayload(m: ComposerMention) {
+  // 控制命令是 ephemeral，不进 mention payload（dispatch 拦截，不经 Agent）。
+  if (m.type === 'command') {
+    return { type: m.type, ...(m.id ? { id: m.id } : {}) }
+  }
   return {
     type: m.type,
     ...(m.id ? { id: m.id } : {}),

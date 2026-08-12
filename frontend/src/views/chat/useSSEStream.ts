@@ -521,6 +521,12 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       if (!isCurrentStream(generation)) {
         return
       }
+      // 命中斜杠命令：ephemeral 回复（不建 run、不落库），直接渲染文本后结束流。
+      if ('command_reply' in created && created.command_reply) {
+        onTextDelta?.(created.command_reply)
+        settleSuccess('stop')
+        return
+      }
       currentRunId = created.run_id
       if (typeof created.session_title === 'string' && created.session_title.trim()) {
         onTitleUpdate?.(created.session_title.trim())

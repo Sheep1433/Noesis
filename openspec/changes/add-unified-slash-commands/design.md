@@ -165,6 +165,8 @@ await run_agent(...)
 
 `noesis help` / `noesis skills` Typer 子命令（`main.py`）直接调用同一 `registry` 的 handler，经 `StreamRenderer` 投影，与端内 `/help` 输出一致。
 
+`noesis agents` 保留独立的 `QA_TYPE_MAP` 实现（输出 CLI 别名 `super`/`common`/`simple_mcp`，可直接传给 `--qa-type` 参数），不复用 `/agents` 的 `IntentEnum` 全称输出。这是有意为之：CLI 子命令面向 shell 用户需短别名，斜杠命令面向聊天用户需全称 + 中文说明，两者是同一批 qa_type 的两种视角，非重复实现。
+
 ## 6. 命名风格
 
 统一斜杠 `/cmd`，三端一致；CLI 交互模式内也是 `/help`。`noesis help` 子命令复用同一 registry 作为 CLI 原生入口。
