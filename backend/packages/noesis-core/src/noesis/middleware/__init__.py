@@ -42,6 +42,12 @@ from noesis.middleware.source_refresh_middleware import (
     SourceFingerprint,
     SourceRefreshMiddleware,
 )
+from noesis.middleware.subagents_middleware import (
+    SubAgentContextMiddleware,
+    SubAgentContextMode,
+    SubAgentContextPolicy,
+    prepare_subagent_state,
+)
 from noesis.middleware.tool_catalog_middleware import ToolCatalogMiddleware
 from noesis.middleware.tool_failure_middleware import ToolFailureMiddleware
 from noesis.middleware.tool_result_budget_middleware import (
