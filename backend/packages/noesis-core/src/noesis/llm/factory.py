@@ -3,7 +3,7 @@ from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 from noesis.config.env import ModelConfig
 
 _OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
@@ -143,6 +143,51 @@ class ChatOpenCode(ChatOpenAI):
                     if reasoning is not None:
                         rtn.generations[0].message.additional_kwargs["reasoning_content"] = reasoning
         return rtn
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        """序列化方向：把 assistant 的 reasoning_content 回传到 API。
+
+        DeepSeek 思考模式要求，一旦某轮发生了 tool call，该 assistant 的
+        ``reasoning_content`` 必须在后续所有 turn 的上下文中原样回传，否则
+        返回 400 ``The `reasoning_content` in the thinking mode must be passed
+        back to the API.``。``langchain_openai`` 的 ``_convert_message_to_dict``
+        不认识 ``reasoning_content``，序列化时直接丢弃；``langchain_deepseek``
+        也只在捕获方向写入、序列化方向未补。
+
+        OpenCode 聚合多家模型，仅 DeepSeek 系有此硬性回传要求，故只在
+        ``self.model_name`` 以 ``deepseek`` 开头时注入；无 tool call 的轮次
+        API 会忽略该字段，统一注入安全且正确。
+
+        实现要点：``_convert_message_to_dict`` 转出的 dict 已丢失
+        ``additional_kwargs["reasoning_content"]``，因此先从原始 AIMessage
+        列表按序提取，再按 assistant 出现顺序对齐回填到 dict 列表。
+        """
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if not str(getattr(self, "model_name", "")).lower().startswith("deepseek"):
+            return payload
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return payload
+
+        # 原始消息按 assistant 顺序提取 reasoning_content，与 dict 列表中
+        # assistant 顺序一一对应（chat/completions 分支保持输入顺序）。
+        original = self._convert_input(input_).to_messages()
+        reasoning_queue = [
+            msg.additional_kwargs.get("reasoning_content")
+            for msg in original
+            if isinstance(msg, AIMessage)
+        ]
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            if message.get("reasoning_content"):
+                continue
+            if not reasoning_queue:
+                break
+            reasoning = reasoning_queue.pop(0)
+            if reasoning:
+                message["reasoning_content"] = reasoning
+        return payload
 
 
 def _llm_http_timeout() -> httpx.Timeout:
