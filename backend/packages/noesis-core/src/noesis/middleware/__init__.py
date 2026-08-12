@@ -13,6 +13,11 @@ behaviour that differs from upstream or is missing entirely.
 
 from __future__ import annotations
 
+from noesis.middleware.compaction_middleware import (
+    CompactionMiddleware,
+    CompactionResult,
+    CompactionThresholds,
+)
 from noesis.middleware.durable_context_middleware import (
     DurableContext,
     DurableContextMiddleware,
