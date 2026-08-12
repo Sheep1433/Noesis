@@ -50,8 +50,10 @@ export interface MessageMetadata {
   context?: ContextSnapshot
 }
 
-/** 当前模型请求的上下文快照（context-update 事件 / 历史消息）。
- *  结构与 messageParts.ContextWindowSnapshot 对齐，避免循环 import。 */
+/**
+ * 当前模型请求的上下文快照（context-update 事件 / 历史消息）。
+ *  结构与 messageParts.ContextWindowSnapshot 对齐，避免循环 import。
+ */
 export interface ContextSnapshot {
   current_tokens: number
   max_tokens: number
@@ -325,12 +327,33 @@ export async function ensureSession(
 
 export async function createAgentRun(params: CreateAgentRunParams): Promise<AgentRunCreated> {
   const req = makeRequest('POST', `${location.origin}${BASE}/runs`, params)
-  return parseResponse<AgentRunCreated>(await authFetch(req))
+  const res = await authFetch(req)
+  const json = await res.json() as { code?: number, msg?: string, data?: AgentRunCreated & { run_id?: string, assistant_message_id?: string, session_id?: string, status?: string } }
+  // 409 冲突：返回可加入的已有 Run 信息，不当作普通失败
+  if (json.code === 409 && json.data?.run_id) {
+    const conflict = new Error(json.msg ?? '当前会话仍在生成') as Error & { conflictRunId?: string, conflictData?: unknown }
+    conflict.conflictRunId = json.data.run_id
+    conflict.conflictData = json.data
+    throw conflict
+  }
+  if (json.code !== 200 || !json.data) {
+    throw new Error(json.msg ?? `API error: ${json.code}`)
+  }
+  return json.data
 }
 
 export async function getAgentRun(runId: string): Promise<AgentRunSnapshot> {
   const req = makeRequest('GET', `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}`)
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
+}
+
+export async function getActiveRun(sessionId: string): Promise<AgentRunSnapshot | null> {
+  const req = makeRequest(
+    'GET',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/active-run`,
+  )
+  const data = await parseResponse<AgentRunSnapshot | null>(await authFetch(req))
+  return data
 }
 
 export async function subscribeAgentRun(

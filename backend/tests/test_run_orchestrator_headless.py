@@ -5,11 +5,11 @@ from typing import Any, AsyncGenerator, Dict, List
 
 import pytest
 
-from noesis.domain.chat.delivery.events import RunCompleted, WireFrame
-from noesis.domain.chat.delivery.orchestrator import RunOrchestrator
-from noesis.domain.chat.delivery.persist_sink import PersistSink
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.chat.delivery.events import RunCompleted, WireFrame
+from noesis.chat.delivery.orchestrator import RunOrchestrator
+from noesis.services.persist_sink import PersistSink
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 
 
 async def _fake_agent() -> AsyncGenerator[Any, None]:

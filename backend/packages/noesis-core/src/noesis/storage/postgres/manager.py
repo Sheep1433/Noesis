@@ -7,14 +7,15 @@ coexists with this and is NOT merged.
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 from urllib.parse import quote_plus
 
+import asyncpg
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.ext.asyncio import (
-    AsyncAttrs,
     AsyncEngine,
     async_sessionmaker,
     create_async_engine,
@@ -24,6 +25,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from noesis.config.env import DataBaseConfig
 from noesis.runtime.logging import logger
+
+# 固定 application advisory lock key（两个 int 组成 bigint）。
+# 所有 Noesis backend 实例使用同一 key，保证只有一个能获取 lock。
+_NOESIS_ADVISORY_LOCK_KEY1 = 0x4E6F6573  # "Noes" (Noesis)
+_NOESIS_ADVISORY_LOCK_KEY2 = 0x69735F61  # "is_a" (is_active)
 
 ASYNC_SQLALCHEMY_DATABASE_URL = (
     f'postgresql+asyncpg://{DataBaseConfig.postgres_user}:{quote_plus(DataBaseConfig.postgres_password)}@'
@@ -118,6 +124,12 @@ class PostgresManager:
         self.inspector: AsyncDatabaseInspector | None = None
         self._engine_ready = False
         self._migrated = False
+        self._advisory_lock_conn: asyncpg.Connection | None = None
+        self._advisory_lock_ready: bool | None = None
+
+    @property
+    def advisory_lock_ready(self) -> bool | None:
+        return self._advisory_lock_ready
 
     def _ensure_engine(self) -> None:
         """Create async engine + session factory + inspector (idempotent).
@@ -193,8 +205,83 @@ class PostgresManager:
         assert self.inspector is not None
         return self.inspector
 
+    async def acquire_advisory_lock(self) -> None:
+        """获取固定 application advisory lock。专用连接在整个 lifespan 中保持。
+
+        第二个 Uvicorn worker 或 backend 容器无法获取 lock，必须 fail-fast。
+        不只检查 --workers 或 WEB_CONCURRENCY——它们不能覆盖多容器和多进程管理器。
+        """
+        if self._advisory_lock_conn is not None:
+            return  # 已持有
+        dsn = (
+            f"postgresql://{DataBaseConfig.postgres_user}:"
+            f"{quote_plus(DataBaseConfig.postgres_password)}@"
+            f"{DataBaseConfig.postgres_host}:{DataBaseConfig.postgres_port}/"
+            f"{DataBaseConfig.postgres_database}"
+        )
+        conn = await asyncpg.connect(dsn)
+        acquired = await conn.fetchval(
+            "SELECT pg_try_advisory_lock($1, $2)",
+            _NOESIS_ADVISORY_LOCK_KEY1,
+            _NOESIS_ADVISORY_LOCK_KEY2,
+        )
+        if not acquired:
+            await conn.close()
+            raise RuntimeError(
+                "无法获取 PostgreSQL advisory lock：另一个 active backend 实例已持有。"
+                "Noesis P0 只允许一个 active backend 进程；请检查是否误启动了第二个 worker 或容器。"
+            )
+        self._advisory_lock_conn = conn
+        self._advisory_lock_ready = True
+        logger.info(
+            "已获取 PostgreSQL advisory lock（单 active backend 保护）key=({}, {})",
+            hex(_NOESIS_ADVISORY_LOCK_KEY1),
+            hex(_NOESIS_ADVISORY_LOCK_KEY2),
+        )
+
+    async def release_advisory_lock(self) -> None:
+        """释放 advisory lock 并关闭专用连接。lifespan 退出时调用。"""
+        conn = self._advisory_lock_conn
+        self._advisory_lock_conn = None
+        self._advisory_lock_ready = False
+        if conn is None:
+            return
+        try:
+            await conn.fetchval(
+                "SELECT pg_advisory_unlock($1, $2)",
+                _NOESIS_ADVISORY_LOCK_KEY1,
+                _NOESIS_ADVISORY_LOCK_KEY2,
+            )
+        except Exception:
+            logger.warning("释放 advisory lock 时异常（连接可能已断开，lock 自动释放）")
+        finally:
+            await conn.close()
+
+    async def monitor_advisory_lock(self) -> None:
+        """后台监控 advisory lock 连接。连接断开时记录告警并标记 not-ready。
+
+        lifespan 中作为后台 task 运行。连接断开时 lock 自动释放，
+        实例不再拥有 live Run。调用方应据此停止接收新 Run。
+        """
+        while True:
+            await asyncio.sleep(30)
+            conn = self._advisory_lock_conn
+            if conn is None:
+                continue
+            try:
+                await conn.fetchval("SELECT 1")
+            except Exception:
+                logger.error(
+                    "advisory lock 专用连接断开，实例不再持有单 active backend lock。"
+                    "请检查 PostgreSQL 连接并重启实例。"
+                )
+                self._advisory_lock_conn = None
+                self._advisory_lock_ready = False
+                return
+
     async def close(self) -> None:
         """关 async + sync engine（补现状未显式关 engine 的缺口）。"""
+        await self.release_advisory_lock()
         if self.async_engine is not None:
             await self.async_engine.dispose()
             self.async_engine = None

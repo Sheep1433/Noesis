@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import pytest
 
-from noesis.domain.chat.delivery.channels import (
+from noesis.chat.delivery.channels import (
     ChannelBinding,
     ChannelBindingStore,
     build_default_registry,
     project_for_capabilities,
 )
-from noesis.domain.chat.delivery.events import RunCompleted, WireFrame
+from noesis.chat.delivery.events import RunCompleted, WireFrame
 
 
 def test_registry_resolves_telegram_and_wechat() -> None:

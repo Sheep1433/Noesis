@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.domain.chat.runs import ACTIVE_RUN_STATUSES, RunStatus
+from noesis.chat.runs import ACTIVE_RUN_STATUSES, RunStatus
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage
 
 
@@ -69,6 +69,55 @@ class AgentRunRepository:
         result = await self.db.execute(select(TAgentRun).where(TAgentRun.status.in_(statuses)))
         return list(result.scalars().all())
 
+    async def save_checkpoint(
+        self,
+        *,
+        run_id: str,
+        assistant_message_id: str,
+        sequence: int,
+        snapshot: dict,
+        content: dict,
+        attempt_id: int,
+        retry_attempt: int,
+        retry_max: int,
+        status: RunStatus,
+        finish_reason: str | None,
+        updated_at: int,
+    ) -> bool:
+        """原子写入 checkpoint；迟到 sequence 不得更新 run 或 assistant。"""
+        active = [status.value for status in ACTIVE_RUN_STATUSES]
+        run_result = await self.db.execute(
+            update(TAgentRun)
+            .where(
+                TAgentRun.id == run_id,
+                TAgentRun.status.in_(active),
+                TAgentRun.last_sequence <= sequence,
+            )
+            .values(
+                last_sequence=sequence,
+                snapshot=snapshot,
+                attempt_id=attempt_id,
+                retry_attempt=retry_attempt,
+                retry_max=retry_max,
+                status=status.value,
+                finish_reason=finish_reason,
+                updated_at=updated_at,
+            )
+        )
+        if run_result.rowcount != 1:
+            return False
+        message_result = await self.db.execute(
+            update(TChatMessage)
+            .where(
+                TChatMessage.id == assistant_message_id,
+                TChatMessage.status == "streaming",
+            )
+            .values(content=content)
+        )
+        if message_result.rowcount != 1:
+            raise RuntimeError("assistant checkpoint update failed")
+        return True
+
     async def finalize(
         self,
         *,
@@ -76,6 +125,7 @@ class AgentRunRepository:
         target: RunStatus,
         assistant_status: str,
         content: dict,
+        last_sequence: int,
         finished_at: int,
         finish_reason: str,
         error_code: str | None = None,
@@ -95,6 +145,7 @@ class AgentRunRepository:
                 error_code=error_code,
                 user_error_message=user_error_message,
                 snapshot=snapshot if snapshot is not None else content,
+                last_sequence=last_sequence,
                 updated_at=finished_at,
                 finished_at=finished_at,
             )

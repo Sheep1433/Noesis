@@ -1027,7 +1027,7 @@ backends/
 - `factory.py` 同时维护真实 stack 和手写 inventory，两者已分叉；重构时删旧装配，只保留单一装配点。
 
 **How to apply：**
-- 设计落地：`docs/research/agents/agent-context-middleware-boundaries.md`（研究/评审）；`openspec/changes/simplify-agent-context-architecture/`（proposal/design/specs/tasks，3 份 delta spec：行为化描述移除具体类名、subagent 默认隔离仅接收明确任务输入、remote trust 移出本 change）。
+- 设计落地：`Interview/highlights/Middleware/agent-context-middleware-boundaries.md`（研究/评审，归档于知识库，实现稳定后回归 `docs/research/agents/`）；`openspec/changes/simplify-agent-context-architecture/`（proposal/design/specs/tasks，3 份 delta spec：行为化描述移除具体类名、subagent 默认隔离仅接收明确任务输入、remote trust 移出本 change）。
 - 实现前先对齐 outer-to-inner 目标顺序与 invariants；取消语义必须可终止；SafeModelRetry 沿用已验证 request、attempt 单独计数，只有改变 messages 才走完整 lifecycle。
 
 **验证与遗留：** 实现未开始（待单独 session）；OpenSpec 复审已通过。参考：`Knowledge/Claude-Code/Claude-Code-记忆机制.md`。

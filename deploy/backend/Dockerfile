@@ -52,4 +52,7 @@ EXPOSE 8089
 HEALTHCHECK --interval=20s --timeout=5s --start-period=90s --retries=5 \
   CMD curl -fsS http://127.0.0.1:8089/health >/dev/null || exit 1
 
+# 单 worker：Noesis P0 只允许一个 active backend 进程。
+# PostgreSQL advisory lock 是多容器/多进程的最终保护——第二个实例无法获取 lock 会 fail-fast。
+# 禁止添加 --workers > 1 或部署多个 backend 副本。
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8089"]

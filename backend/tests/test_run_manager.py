@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from noesis.domain.chat.runs import (
+from noesis.chat.runs import (
     HitlPendingExpired,
     RunCapacityExceeded,
     RunDurationExceeded,
@@ -260,7 +260,7 @@ async def test_run_output_limit_is_enforced_before_buffer_growth() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hitl_pending_expires_and_cannot_resume() -> None:
+async def test_hitl_pending_expiry_does_not_fake_terminal_without_persistence() -> None:
     expired = asyncio.Event()
     errors = []
 
@@ -285,9 +285,7 @@ async def test_hitl_pending_expires_and_cannot_resume() -> None:
     await manager.transition("run-1", RunStatus.HITL_PENDING)
     await asyncio.wait_for(expired.wait(), timeout=1)
     assert isinstance(errors[0], HitlPendingExpired)
-    assert handle.status == RunStatus.ERROR
-    with pytest.raises(ValueError):
-        await manager.resume("run-1", producer)
+    assert handle.status == RunStatus.HITL_PENDING
 
 
 @pytest.mark.asyncio

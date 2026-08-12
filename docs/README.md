@@ -35,7 +35,6 @@
 - [Durable Agent Run 与断线恢复架构](architecture/platform/durable-agent-runs.md)
 - [聊天记录与持久化](architecture/platform/chat-persistence.md)
 - [设置控制面](architecture/platform/settings-control-plane.md)
-- [故障运维 Agent](engineering/agents/fault-operation-agent.md)
 - [测试用例生成](engineering/agents/test-case-generation.md)
 - [Agent 评测运行指南](engineering/agents/agent-evaluation.md)
 - [Agent Runtime 设计（Proposed）](engineering/agents/agent-runtime-design.md)
@@ -58,3 +57,5 @@
 4. 代码路径变化时同步检查文档链接和实现入口。
 5. 已修复 Bug 不长期堆在 `bug/`；有长期价值的根因写入 `debugging/`。
 6. 个人清单放 `docs/TODO.local.md`，该文件不提交。
+7. Review 结论合并进权威文档后，Review 只作审计记录；无审计价值时删除，不与主文并列为当前设计。
+8. 被新研究取代但仍有源码证据价值的文档标记 `Historical`，并只在分类 README 的 Historical 区引用。

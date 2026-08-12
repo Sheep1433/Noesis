@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from noesis.domain.chat.streaming.langgraph_sse import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
+from noesis.chat.event_mapping.langgraph_bridge import TASK_TOOL_NAME, LangGraphSseBridge, bridge_raw_to_sse_lines
 from noesis.errors.tool_failure import ToolInfrastructureError
-from noesis.domain.chat.streaming.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
-from noesis.domain.chat.message_builder import AssistantMessageBuilder, ToolPart
+from noesis.chat.event_mapping.bridge import END_SENTINEL, HEARTBEAT_SENTINEL
+from noesis.chat.message_builder import AssistantMessageBuilder, ToolPart
 
 
 def _ctx() -> Dict[str, Any]:
@@ -192,7 +192,7 @@ def test_context_update_emitted_with_usage_update() -> None:
     ctx = _ctx()
     parts: List[str] = []
     parts.extend(bridge.process_item({"type": "text-delta", "text_delta": "hi"}, builder, ctx))
-    with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.chat.event_mapping.langgraph_bridge.resolve_context_max_tokens", return_value=128000):
         parts.extend(
             bridge.process_item(
                 {
@@ -216,7 +216,7 @@ def test_context_update_event_shape() -> None:
     bridge = LangGraphSseBridge("sess-ctx")
     builder = AssistantMessageBuilder(session_id="sess-ctx", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+    with patch("noesis.chat.event_mapping.langgraph_bridge.resolve_context_max_tokens", return_value=128000):
         blob = "".join(
             bridge.process_item(
                 {
@@ -259,7 +259,7 @@ def test_context_update_is_bound_to_the_current_model_run() -> None:
             )
 
     with patch.object(ContextMetricsRegistry, "put", classmethod(interleave_other_run)):
-        with patch("noesis.domain.chat.streaming.langgraph_sse.resolve_context_max_tokens", return_value=128000):
+        with patch("noesis.chat.event_mapping.langgraph_bridge.resolve_context_max_tokens", return_value=128000):
             blob = "".join(
                 bridge.process_item(
                     {
@@ -1518,8 +1518,8 @@ def test_replay_does_not_re_accumulate_usage() -> None:
 
 def test_finish_attribution_carried_through_delivery_event() -> None:
     """finish 的 attribution 字段经 delivery 解析为 RunCompleted.attribution（4.2 恢复路径）。"""
-    from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
-    from noesis.domain.chat.delivery.events import RunCompleted
+    from noesis.chat.delivery.sse import parse_sse_line_to_event
+    from noesis.chat.delivery.events import RunCompleted
 
     finish_frame = (
         'event: finish\n'

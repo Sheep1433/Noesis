@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -24,15 +22,22 @@ from noesis.config.mcp_config import (
     get_profile_server_names,
 )
 from noesis.config.code_enum import IntentEnum
-from noesis.domain.chat.delivery.events import RunEvent
-from noesis.domain.chat.delivery.orchestrator import RunOrchestrator
-from noesis.domain.chat.delivery.persist_sink import PersistSink
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.domain.chat.streaming.failure_notice import (
-    append_disconnect_partial_content,
+from noesis.chat.delivery.events import RunEvent
+from noesis.chat.delivery.orchestrator import RunOrchestrator
+from noesis.services.persist_sink import PersistSink
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.failure_notice import (
     append_stream_failure_notice_to_content,
 )
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+from noesis.chat.event_mapping.bridge import (
+    END_SENTINEL,
+    HEARTBEAT_SENTINEL,
+    MemoryStreamBridge,
+    StreamBridgeError,
+    iter_bridge_events,
+)
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper
 from noesis.runtime.deps import langfuse_workflow_context, merge_langfuse_runnable_config
 from noesis.llm.catalog import get_default_model_id, resolve_catalog_entry
 from noesis.services.chat_service import ChatService
@@ -400,7 +405,7 @@ async def _persist_hitl_pending_assistant(
     )
     hitl = bridge.last_hitl_payload or {}
     if hitl.get("interrupt_id"):
-        from noesis.domain.chat.hitl.pending import PendingHitl, pending_hitl
+        from noesis.chat.hitl.pending import PendingHitl, pending_hitl
         from noesis.services.hitl_timeout import schedule_hitl_timeout
 
         pending = PendingHitl(
@@ -517,9 +522,6 @@ async def _persist_stream_checkpoint(
 
 _run_orchestrator = RunOrchestrator()
 
-# Shared with QaService._active_streams (same dict object)
-ACTIVE_STREAMS: Dict[str, "_ActiveStreamState"] = {}
-
 
 def _langfuse_stream_context(
     session_id: str,
@@ -592,6 +594,61 @@ async def _yield_sse_from_agent_bridge(
         yield sse_line
 
 
+async def _yield_run_events_from_agent(
+    agent_generator: AsyncGenerator[Any, None],
+    *,
+    bridge: LangGraphSseBridge,
+    builder: AssistantMessageBuilder,
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+    qa_type: str,
+    langfuse_thread_id: Optional[str] = None,
+    persist_sink: Optional[PersistSink] = None,
+) -> AsyncGenerator[RunEvent, None]:
+    """目标 Agent Run 的唯一 raw → typed path；不经过 EventBus 或 SSE parser。"""
+    sink = persist_sink or PersistSink()
+    ctx["_persist_sink"] = sink
+    mapper = RuntimeEventMapper(bridge)
+    runtime_bridge = MemoryStreamBridge()
+    lf_ctx = _langfuse_stream_context(
+        session_id, qa_type, thread_id=langfuse_thread_id
+    )
+    run_id = f"{session_id}:{bridge.assistant_message_id}"
+    async for raw in iter_bridge_events(
+        runtime_bridge,
+        run_id,
+        agent_generator,
+        keepalive_seconds=0,
+        langfuse_context=lf_ctx,
+    ):
+        if raw is HEARTBEAT_SENTINEL:
+            continue
+        if raw is END_SENTINEL:
+            break
+        if isinstance(raw, StreamBridgeError):
+            raise raw.exc
+        events = mapper.map_item(raw, builder, ctx)
+        for event in events:
+            sink.on_event(event)
+            yield event
+
+
+async def _finalize_run_events(
+    bridge: LangGraphSseBridge,
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+) -> AsyncGenerator[RunEvent, None]:
+    mapper = RuntimeEventMapper(bridge)
+    finish_reason = "stopped" if ctx.get("user_stopped") else None
+    sink = ctx.get("_persist_sink")
+    for event in mapper.finalize(finish_reason=finish_reason):
+        if isinstance(sink, PersistSink):
+            sink.on_event(event)
+        yield event
+
+
 async def _finalize_sse_bridge_stream(
     bridge: LangGraphSseBridge,
     builder: AssistantMessageBuilder,
@@ -603,7 +660,7 @@ async def _finalize_sse_bridge_stream(
     lines = _run_orchestrator.finalize_sse(bridge, finish_reason=finish_reason)
     sink = ctx.get("_persist_sink")
     if isinstance(sink, PersistSink):
-        from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
+        from noesis.chat.delivery.sse import parse_sse_line_to_event
 
         for line in lines:
             for ev in parse_sse_line_to_event(line):
@@ -613,34 +670,6 @@ async def _finalize_sse_bridge_stream(
         await _persist_stream_checkpoint(bridge, session_id, user_id)
 
 
-@dataclass
-class _ActiveStreamState:
-    builder: AssistantMessageBuilder
-    ctx: Dict[str, Any]
-    qa_type: str
-    model_name: str = ""
-    user_stopped: bool = False
-
-
-def _register_active_stream(session_id: str, state: _ActiveStreamState) -> None:
-    from noesis.domain.chat.delivery.orchestrator import run_lifecycle
-
-    ACTIVE_STREAMS[session_id] = state
-    run_lifecycle.register(
-        session_id,
-        {
-            "ctx": state.ctx,
-            "builder": state.builder,
-            "qa_type": state.qa_type,
-        },
-    )
-
-
-def _unregister_active_stream(session_id: str) -> None:
-    from noesis.domain.chat.delivery.orchestrator import run_lifecycle
-
-    ACTIVE_STREAMS.pop(session_id, None)
-    run_lifecycle.pop(session_id)
 
 
 def _flush_ctx_text_buffer(
@@ -654,98 +683,3 @@ def _flush_ctx_text_buffer(
     builder.append_text_delta(buf, parent_task_call_id=parent)
     ctx["text_buffer"] = ""
     ctx["text_buffer_parent_task_call_id"] = None
-
-
-async def _persist_disconnect_partial(
-    *,
-    builder: Optional[AssistantMessageBuilder],
-    ctx: Dict[str, Any],
-    session_id: str,
-    user_id: str,
-    qa_type: str,
-    assistant_message_id: Optional[str],
-) -> None:
-    """连接意外断开：partial 落库，无用户中断文案。"""
-    if _stream_terminal_persist_done(ctx):
-        return
-    _flush_ctx_text_buffer(ctx, builder)
-    if builder and not builder.is_empty():
-        content = append_disconnect_partial_content(builder.to_dict())
-        try:
-            await _persist_assistant(
-                content,
-                session_id,
-                user_id,
-                status="partial",
-                extra={"qa_type": qa_type},
-                assistant_message_id=assistant_message_id,
-            )
-        except Exception:
-            logger.exception(
-                f"连接中断 assistant 消息落库失败: session_id={session_id} user_id={user_id}"
-            )
-    elif assistant_message_id:
-        try:
-            await _persist_assistant(
-                {"version": 1, "parts": []},
-                session_id,
-                user_id,
-                status="partial",
-                extra={"qa_type": qa_type},
-                assistant_message_id=assistant_message_id,
-            )
-        except Exception:
-            logger.exception(
-                f"连接中断 assistant 空内容落库失败: session_id={session_id} user_id={user_id}"
-            )
-    _mark_stream_persist_finalized(ctx)
-
-
-async def _handle_stream_client_disconnect(
-    *,
-    session_id: str,
-    qa_type: str,
-    user_id: str,
-    ctx: Dict[str, Any],
-    builder: Optional[AssistantMessageBuilder],
-    log_label: str,
-) -> None:
-    """客户端断开连接：将已生成内容 partial 落库（shield 避免 CancelledError 打断 commit）。"""
-    from noesis.domain.chat.delivery.orchestrator import CancelReason, run_lifecycle
-
-    stream_ctx = ctx or {}
-    if _stream_terminal_persist_done(stream_ctx):
-        return
-    run_lifecycle.notify_cancel(session_id, CancelReason.DISCONNECT)
-    stream_state = ACTIVE_STREAMS.get(session_id)
-    persist_b = stream_state.builder if stream_state else builder
-    aid = _resolve_assistant_message_id(stream_ctx, persist_b)
-    try:
-        await asyncio.shield(
-            _persist_disconnect_partial(
-                builder=persist_b,
-                ctx=stream_ctx,
-                session_id=session_id,
-                user_id=user_id,
-                qa_type=qa_type,
-                assistant_message_id=aid,
-            )
-        )
-    except asyncio.CancelledError:
-        if _stream_terminal_persist_done(stream_ctx):
-            raise
-        logger.warning(
-            f"{log_label} 断开落库被取消，尝试 detached 落库 session_id={session_id} "
-            f"assistant_db_id={aid}"
-        )
-        asyncio.create_task(
-            _persist_disconnect_partial(
-                builder=persist_b,
-                ctx=stream_ctx,
-                session_id=session_id,
-                user_id=user_id,
-                qa_type=qa_type,
-                assistant_message_id=aid,
-            )
-        )
-        raise

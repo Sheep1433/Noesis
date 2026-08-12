@@ -161,3 +161,33 @@ class ResponseUtil:
             status_code=status.HTTP_404_NOT_FOUND,
             content=jsonable_encoder(result),
         )
+
+    @classmethod
+    def too_many_requests(
+        cls,
+        msg: str = '请求过于频繁',
+        data: Optional[Any] = None,
+    ) -> Response:
+        result = {'code': HttpStatusConstant.TOO_MANY_REQUESTS, 'msg': msg}
+        if data is not None:
+            result['data'] = data
+        result.update({'success': False, 'time': datetime.now()})
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content=jsonable_encoder(result),
+        )
+
+    @classmethod
+    def service_unavailable(
+        cls,
+        msg: str = '服务暂时不可用',
+        data: Optional[Any] = None,
+    ) -> Response:
+        result = {'code': HttpStatusConstant.SERVICE_UNAVAILABLE, 'msg': msg}
+        if data is not None:
+            result['data'] = data
+        result.update({'success': False, 'time': datetime.now()})
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=jsonable_encoder(result),
+        )

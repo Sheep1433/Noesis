@@ -216,19 +216,29 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     uuids.value[qt] = sessionId
     sessionMaterialized.value = true
 
-    await loadSessionMessages(sessionId, conversationItems, currentRenderIndex)
+    const messagesReady = loadSessionMessages(
+      sessionId,
+      conversationItems,
+      currentRenderIndex,
+    )
+    const contextReady = loadSessionContext(sessionId)
+    reloadSessionFilesPanel()
+    // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，
+    // 防止慢历史响应覆盖新 Tab 已收到的实时内容。
+    const activeRunResume = sseStream.resumeActiveRun(sessionId, messagesReady)
+    await messagesReady
     const hasUserMessage = conversationItems.value.some((item) => item.role === 'user')
     if (!hasUserMessage) {
+      sseStream.detachSubscription()
       window.$ModalMessage.info('该会话尚无消息，已回到新对话')
       resetComposingSurface()
       await navigateToComposingUrl(true)
       return
     }
-    await loadSessionContext(sessionId)
-    reloadSessionFilesPanel()
+    await contextReady
     await scrollToLatestMessage(false)
     // Run 订阅可能持续数分钟；页面与历史列表恢复不应等待整轮生成结束。
-    void sseStream.resumeActiveRun(sessionId)
+    void activeRunResume
   } catch (error) {
     console.error('恢复会话失败:', error)
     window.$ModalMessage.warning('会话不存在或无权访问，已回到新对话')
@@ -2343,7 +2353,11 @@ function onComposerPaste(e: ClipboardEvent) {
                       ></div>
                     </div>
 
-                    <div v-if="item.role === 'assistant'">
+                    <div
+                      v-if="item.role === 'assistant'"
+                      data-testid="assistant-message"
+                      :data-assistant-message-id="item.message_id || ''"
+                    >
                       <template v-if="item.messageContent?.version === 1">
                         <div class="assistant-unified-card">
                           <div
@@ -2427,6 +2441,7 @@ function onComposerPaste(e: ClipboardEvent) {
                           </div>
                           <AssistantStreamingIndicator
                             v-if="showAssistantReplyLoading(index, item.role)"
+                            data-testid="streaming-indicator"
                             section
                             :divided="buildDisplayParts(item.messageContent.parts).length > 0"
                             :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
@@ -2473,6 +2488,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         />
                         <AssistantStreamingIndicator
                           v-if="showAssistantReplyLoading(index, item.role)"
+                          data-testid="streaming-indicator"
                         />
                       </template>
                     </div>
@@ -2525,6 +2541,7 @@ function onComposerPaste(e: ClipboardEvent) {
                     <!-- HITL 优先占 Todo 槽位；无 pending 时显示 Todo -->
                     <HitlComposerPanel
                       v-if="pendingHitl"
+                      data-testid="hitl-panel"
                       :kind="pendingHitl.kind"
                       :action-requests="pendingHitl.action_requests"
                       :disabled="hitlComposerDisabled"
@@ -2572,6 +2589,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       <n-input
                         ref="refInputTextString"
                         v-model:value="inputTextString"
+                        data-testid="composer-input"
                         type="textarea"
                         class="textarea-resize-none w-full text-15 [&_.n-input\_\_border]:hidden [&_.n-input\_\_state-border]:hidden [&_.n-input-wrapper]:p-0!"
                         :style="{
@@ -2621,6 +2639,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                   :height="36"
                                   :disabled="!stylizingLoading && sendDisabled"
                                   :type="stylizingLoading ? 'primary' : 'default'"
+                                  :data-testid="stylizingLoading ? 'stop-button' : 'send-button'"
                                   color
                                   :class="[
                                     'chat-send-btn',

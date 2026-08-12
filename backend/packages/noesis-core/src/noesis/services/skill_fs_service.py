@@ -5,7 +5,6 @@ import io
 import os
 import shutil
 import zipfile
-from pathlib import Path
 from typing import List, Literal, Tuple
 
 from noesis.config.extensions_paths import skills_root

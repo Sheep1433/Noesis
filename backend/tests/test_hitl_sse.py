@@ -7,9 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from noesis.runtime.hitl import build_hitl_required_event, extract_interrupt_payload, resolve_hitl_kind
-from noesis.domain.chat.hitl.pending import PendingHitl
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.chat.hitl.pending import PendingHitl
+from noesis.chat.delivery.events import RunError, StreamDone
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.services.qa.service import QaService
 
 
@@ -193,9 +194,9 @@ async def test_exec_hitl_resume_checks_expiry_without_initialization_error() -> 
         kind="approval",
     )
 
-    lines = [
-        line
-        async for line in QaService.exec_hitl_resume(
+    events = [
+        event
+        async for event in QaService.exec_hitl_resume(
             pending=pending,
             decisions=[{"type": "approve"}],
             grant_scope="once",
@@ -204,6 +205,8 @@ async def test_exec_hitl_resume_checks_expiry_without_initialization_error() -> 
         )
     ]
 
-    joined = "".join(lines)
-    assert "等待确认已超时" in joined
-    assert "[DONE]" in joined
+    assert any(
+        isinstance(event, RunError) and "超时" in event.message
+        for event in events
+    )
+    assert any(isinstance(event, StreamDone) for event in events)

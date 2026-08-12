@@ -140,12 +140,17 @@ class StreamSettings:
     run_subscriber_queue_max_bytes: int
     run_max_active: int
     run_max_active_per_user: int
+    run_max_subscriptions_per_run: int
+    run_max_subscriptions_per_user: int
+    run_max_subscriptions_global: int
     run_terminal_retention_seconds: float
     run_max_duration_seconds: float
     run_max_output_bytes: int
     run_hitl_pending_timeout_seconds: float
     run_shutdown_drain_seconds: float
     run_cancel_grace_seconds: float
+    run_terminal_persistence_budget_seconds: float
+    run_terminal_retry_interval_seconds: float
     run_tool_timeout_seconds: float
     run_channel_queue_max_batches: int
     run_channel_queue_max_bytes: int
@@ -435,12 +440,17 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
         run_subscriber_queue_max_bytes=stream.run_subscriber_queue_max_bytes,
         run_max_active=stream.run_max_active,
         run_max_active_per_user=stream.run_max_active_per_user,
+        run_max_subscriptions_per_run=stream.run_max_subscriptions_per_run,
+        run_max_subscriptions_per_user=stream.run_max_subscriptions_per_user,
+        run_max_subscriptions_global=stream.run_max_subscriptions_global,
         run_terminal_retention_seconds=stream.run_terminal_retention_seconds,
         run_max_duration_seconds=stream.run_max_duration_seconds,
         run_max_output_bytes=stream.run_max_output_bytes,
         run_hitl_pending_timeout_seconds=stream.run_hitl_pending_timeout_seconds,
         run_shutdown_drain_seconds=stream.run_shutdown_drain_seconds,
         run_cancel_grace_seconds=stream.run_cancel_grace_seconds,
+        run_terminal_persistence_budget_seconds=stream.run_terminal_persistence_budget_seconds,
+        run_terminal_retry_interval_seconds=stream.run_terminal_retry_interval_seconds,
         run_tool_timeout_seconds=stream.run_tool_timeout_seconds,
         run_channel_queue_max_batches=stream.run_channel_queue_max_batches,
         run_channel_queue_max_bytes=stream.run_channel_queue_max_bytes,

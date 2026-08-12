@@ -10,7 +10,7 @@ __all__ = ["BaseAgent", "DEFAULT_RECURSION_LIMIT"]
 class BaseAgent:
     """
     Agent 基类，定义通用接口和方法
-    使用 LangChain astream_events 流式输出；直接产出 LangGraph 事件 dict（见 langgraph_sse_bridge）。
+    使用 LangChain astream_events 流式输出；直接产出 LangGraph 事件 dict（见 langgraph_bridge_bridge）。
     """
 
     def __init__(self):

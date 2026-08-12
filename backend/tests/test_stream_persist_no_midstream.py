@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.services.qa.helpers import _flush_ctx_text_buffer, _persist_stream_checkpoint
 
 

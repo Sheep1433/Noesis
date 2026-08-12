@@ -109,8 +109,8 @@ class ScheduledTaskService:
         try:
             import asyncio
 
-            from noesis.domain.chat.delivery.channel_health import channel_health
-            from noesis.domain.chat.delivery.telegram.client import TelegramBotClient
+            from noesis.chat.delivery.channel_health import channel_health
+            from noesis.chat.delivery.telegram.client import TelegramBotClient
             from noesis.services.messaging_channel_service import MessagingChannelService
 
             cfg = MessagingChannelService.get_runtime_channel(row.user_id, channel_id)

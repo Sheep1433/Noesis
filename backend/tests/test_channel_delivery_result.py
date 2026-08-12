@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from noesis.services.channel_run_service import _set_delivery_result
-from noesis.domain.chat.delivery.events import RunCompleted
-from noesis.domain.chat.runs import RunStatus
+from noesis.chat.delivery.events import RunCompleted
+from noesis.chat.runs import RunStatus, TerminalCommitResult
 from noesis.services import channel_run_service as channel_service
 
 
@@ -77,12 +77,10 @@ async def test_headless_automation_run_completes_without_browser_subscription(mo
     monkeypatch.setattr(qs, "_resolve_mcp_servers_for_query", AsyncMock(return_value=[]))
     monkeypatch.setattr(qs, "_resolve_enabled_skills_for_query", AsyncMock(return_value=[]))
     monkeypatch.setattr(qs, "_insert_streaming_assistant_skeleton", AsyncMock(return_value=True))
-    monkeypatch.setattr(qs, "_register_active_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(channel_service._super_agent, "run_agent", MagicMock(return_value=object()))
 
     async def fake_headless_stream(**kwargs):
         event = RunCompleted(finish_reason="stop")
-        kwargs["projection"].apply(event)
         await kwargs["publish"](event)
         return channel_service.ChannelRunResult(
             session_id=kwargs["session_id"],
@@ -91,11 +89,12 @@ async def test_headless_automation_run_completes_without_browser_subscription(mo
             finish_reason="stop",
         )
 
-    async def persist_projection(run_id, projection):
-        await channel_service.run_manager.transition(run_id, RunStatus.COMPLETED)
-
     monkeypatch.setattr(channel_service, "_headless_stream", fake_headless_stream)
-    monkeypatch.setattr(channel_service.RunService, "_persist_projection", persist_projection)
+    monkeypatch.setattr(
+        channel_service.RunService,
+        "_persist_terminal_candidate",
+        AsyncMock(return_value=TerminalCommitResult("committed")),
+    )
 
     result = await channel_service.run_channel_agent(
         user_id="1",

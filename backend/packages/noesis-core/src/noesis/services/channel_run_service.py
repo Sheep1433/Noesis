@@ -1,4 +1,4 @@
-"""通道 headless Agent 跑次：无浏览器 SSE，经 RunOrchestrator + PersistSink。"""
+"""通道 headless Agent 跑次：无浏览器 SSE，共用 typed Run 管线。"""
 from __future__ import annotations
 
 import asyncio
@@ -15,25 +15,23 @@ from noesis.runtime.logging import logger
 from noesis.storage.postgres.manager import pg_manager
 from noesis.config.env import LangfuseConfig, StreamConfig
 from noesis.config.code_enum import IntentEnum
-from noesis.domain.chat.delivery.orchestrator import RunOrchestrator
-from noesis.domain.chat.delivery.persist_sink import PersistSink
-from noesis.domain.chat.delivery.channel_worker import ChannelDeliveryWorker
-from noesis.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
-from noesis.domain.chat.tool_state import ToolState
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.services.persist_sink import PersistSink
+from noesis.chat.delivery.channel_worker import ChannelDeliveryWorker
+from noesis.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
+from noesis.chat.tool_state import ToolState
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.services.chat_service import ChatService
 from noesis.services.user_service import UserService
 from noesis.storage.postgres.models.chat import TAgentDelivery, TAgentRun, TChatMessage
 from noesis.repositories.agent_run_repository import AgentRunRepository
 from noesis.services.run_service import RunProjection, RunService, run_manager
-from noesis.domain.chat.runs import RunLimitExceeded, RunStatus
+from noesis.chat.runs import RunLimitExceeded, RunStatus
 
-_orchestrator = RunOrchestrator()
 _super_agent = SuperAgent()
 
 
 def _plain_text(parts: Dict[str, Any]) -> str:
-    from noesis.domain.chat.delivery.telegram.adapter import extract_plain_text_from_parts
+    from noesis.chat.delivery.telegram.adapter import extract_plain_text_from_parts
 
     return extract_plain_text_from_parts(parts)
 
@@ -118,16 +116,11 @@ async def _headless_stream(
     )
     managed_deliveries = publish is not None and run_id is not None
 
-    async def persist_delivery(envelope) -> None:
-        sink.on_event(envelope.event)
-        await qs._persist_stream_checkpoint(bridge, session_id, str(user_id))
-
     async def channel_delivery(envelope) -> None:
         if delivery_worker is not None:
             await delivery_worker.submit([envelope.event])
 
     if managed_deliveries:
-        await run_manager.register_delivery(run_id, "persist", persist_delivery)
         if delivery_worker is not None:
             await run_manager.register_delivery(
                 run_id, f"channel:{delivery_id or origin}", channel_delivery
@@ -149,18 +142,24 @@ async def _headless_stream(
             await qs._persist_stream_checkpoint(bridge, session_id, str(user_id))
 
     try:
-        await _orchestrator.run_headless(
+        async for event in qs._yield_run_events_from_agent(
             agent_generator,
             bridge=bridge,
             builder=builder,
             ctx=ctx,
             session_id=session_id,
-            origin=origin,  # type: ignore[arg-type]
-            on_events=on_events,
-        )
+            user_id=str(user_id),
+            qa_type=qa_type,
+            persist_sink=sink,
+        ):
+            await on_events([event])
+        async for event in qs._finalize_run_events(
+            bridge, ctx, session_id, str(user_id)
+        ):
+            await on_events([event])
 
         if managed_deliveries:
-            await run_manager.drain_delivery(run_id, "persist")
+            await run_manager.drain_persistence(run_id)
             if delivery_worker is not None:
                 await run_manager.drain_delivery(run_id, f"channel:{delivery_id or origin}")
 
@@ -170,15 +169,16 @@ async def _headless_stream(
 
         decision = sink.final_decision()
         if decision.kind == "hitl_pending" or bridge.last_finish_reason == "hitl_pending":
-            await qs._persist_hitl_pending_assistant(
-                builder=builder,
-                bridge=bridge,
-                ctx=ctx,
-                session_id=session_id,
-                user_id=user_id,
-                qa_type=qa_type,
-                model=model_name,
-            )
+            if not managed_deliveries:
+                await qs._persist_hitl_pending_assistant(
+                    builder=builder,
+                    bridge=bridge,
+                    ctx=ctx,
+                    session_id=session_id,
+                    user_id=user_id,
+                    qa_type=qa_type,
+                    model=model_name,
+                )
             payload = dict(bridge.last_hitl_payload or {})
             plain = (
                 _plain_text(builder.to_dict())
@@ -193,15 +193,16 @@ async def _headless_stream(
                 hitl_payload=payload or None,
             )
 
-        await qs._finalize_streaming_assistant(
-            builder=builder,
-            bridge=bridge,
-            ctx=ctx,
-            session_id=session_id,
-            user_id=user_id,
-            qa_type=qa_type,
-            model=model_name,
-        )
+        if not managed_deliveries:
+            await qs._finalize_streaming_assistant(
+                builder=builder,
+                bridge=bridge,
+                ctx=ctx,
+                session_id=session_id,
+                user_id=user_id,
+                qa_type=qa_type,
+                model=model_name,
+            )
         plain = _plain_text(builder.to_dict())
         if not plain:
             plain = "（已完成，无文本回复）"
@@ -222,12 +223,10 @@ async def _headless_stream(
         raise
     finally:
         if managed_deliveries:
-            await run_manager.unregister_delivery(run_id, "persist")
             if delivery_worker is not None:
                 await run_manager.unregister_delivery(
                     run_id, f"channel:{delivery_id or origin}"
                 )
-        qs._unregister_active_stream(session_id)
 
 
 async def run_channel_agent(
@@ -415,7 +414,6 @@ async def run_channel_agent(
                     run_id=run_id,
                     delivery_id=delivery_id,
                 )
-                await RunService._persist_projection(run_id, projection)
                 if not result_future.done():
                     result_future.set_result(result)
             except BaseException as exc:
@@ -432,6 +430,18 @@ async def run_channel_agent(
         async def persist_limit(error: RunLimitExceeded) -> None:
             await RunService._persist_cancel_or_error(run_id, projection, error)
 
+        checkpoint_sink = PersistSink(
+            checkpoint_interval_seconds=StreamConfig.checkpoint_interval_seconds
+        )
+
+        async def persist_checkpoint(request) -> None:
+            await RunService._persist_checkpoint(
+                request.run_id,
+                request.assistant_message_id,
+                request.snapshot,
+                request.snapshot_sequence,
+            )
+
         handle = await run_manager.start(
             run_id=run_id,
             session_id=session_id,
@@ -441,6 +451,9 @@ async def run_channel_agent(
             producer=producer,
             state=projection,
             limit_handler=persist_limit,
+            checkpoint_policy=lambda event, _sequence: checkpoint_sink.checkpoint_kind(event),
+            checkpoint_handler=persist_checkpoint,
+            terminal_handler=RunService._persist_terminal_candidate,
         )
         await db.execute(
             TAgentRun.__table__.update()
@@ -448,16 +461,6 @@ async def run_channel_agent(
             .values(status=RunStatus.RUNNING.value, started_at=now, updated_at=now)
         )
         await db.commit()
-
-        qs._register_active_stream(
-            session_id,
-            qs._ActiveStreamState(
-                builder=builder,
-                ctx=ctx,
-                qa_type=qa_type,
-                model_name=resolved_model_name,
-            ),
-        )
 
         logger.info(
             "channel_run start origin={} session_id={} user_id={} qa_type={}",
@@ -481,7 +484,7 @@ async def resume_channel_hitl(
     outbound: Optional[Any] = None,
 ) -> ChannelRunResult:
     """Telegram / 通道 HITL resume：对齐网页 decisions，无 SSE。"""
-    from noesis.domain.chat.hitl.pending import pending_hitl
+    from noesis.chat.hitl.pending import pending_hitl
     from noesis.agents.guardrails.session_grants import session_grants
     from noesis.services.hitl_timeout import cancel_hitl_timeout
     from noesis.storage.postgres.models.chat import TChatMessage
@@ -553,15 +556,6 @@ async def resume_channel_hitl(
         builder.load_from_content_dict(existing_content)
         ctx = qs._new_stream_ctx()
         ctx["_assistant_db_id"] = aid
-        qs._register_active_stream(
-            session_id,
-            qs._ActiveStreamState(
-                builder=builder,
-                ctx=ctx,
-                qa_type=qa_type,
-                model_name=None,
-            ),
-        )
 
         for idx, decision in enumerate(decision_payloads):
             action = actions[idx] if idx < len(actions) else {}
@@ -653,8 +647,6 @@ async def resume_channel_hitl(
         if not isinstance(handle.state, RunProjection):
             raise RuntimeError("channel run projection unavailable")
         projection = handle.state
-        projection.builder = builder
-        projection.status = RunStatus.RUNNING
         delivery_id = str(uuid.uuid4()) if outbound is not None else None
         if delivery_id is not None:
             now = int(time.time() * 1000)
@@ -690,7 +682,6 @@ async def resume_channel_hitl(
                     run_id=active.id,
                     delivery_id=delivery_id,
                 )
-                await RunService._persist_projection(active.id, projection)
                 result_future.set_result(resumed_result)
             except BaseException as exc:
                 await _set_delivery_result(
@@ -702,7 +693,13 @@ async def resume_channel_hitl(
                 else:
                     result_future.set_exception(exc)
 
-        resumed_handle = await run_manager.resume(active.id, producer)
+        def prepare_resume() -> None:
+            projection.builder = builder
+            projection.begin_hitl_resume()
+
+        resumed_handle = await run_manager.resume(
+            active.id, producer, prepare=prepare_resume
+        )
         await AgentRunRepository(db).compare_and_set_status(
             active.id,
             [RunStatus.HITL_PENDING],

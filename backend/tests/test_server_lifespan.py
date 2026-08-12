@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,6 +16,8 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
     pg_manager = MagicMock()
     pg_manager.get_async_session_context.return_value = _session_context()
     pg_manager.close = AsyncMock()
+    pg_manager.acquire_advisory_lock = AsyncMock()
+    pg_manager.monitor_advisory_lock = AsyncMock()
     monkeypatch.setattr(server_main, "pg_manager", pg_manager)
 
     async_names = (
@@ -95,3 +98,38 @@ async def test_lifespan_cleans_initialized_resources_when_startup_fails(
     patched["pg_manager"].close.assert_awaited_once()
     patched["close_knowledge_base"].assert_not_awaited()
     patched["stop_scheduled_task_scheduler"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_does_not_start_runtime_when_owner_lock_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patched = _patch_lifespan_resources(monkeypatch)
+    patched["pg_manager"].acquire_advisory_lock.side_effect = RuntimeError("lock held")
+
+    with pytest.raises(RuntimeError, match="lock held"):
+        async with server_main.lifespan(server_main.app):
+            pass
+
+    patched["init_database"].assert_not_awaited()
+    patched["recover"].assert_not_awaited()
+    patched["start_scheduled_task_scheduler"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_stops_live_runs_when_owner_lock_is_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patched = _patch_lifespan_resources(monkeypatch)
+    lock_lost = asyncio.Event()
+
+    async def lose_lock() -> None:
+        patched["pg_manager"].advisory_lock_ready = False
+        lock_lost.set()
+
+    patched["pg_manager"].monitor_advisory_lock.side_effect = lose_lock
+
+    async with server_main.lifespan(server_main.app):
+        await asyncio.wait_for(lock_lost.wait(), timeout=1)
+        await asyncio.sleep(0)
+        patched["shutdown_run_manager"].assert_awaited_once_with(drain_seconds=0)

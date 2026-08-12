@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.domain.auth.entities import AuthSession, AuthUser
+from noesis.auth.entities import AuthSession, AuthUser
 from noesis.storage.postgres.models.auth import TUser, TUserSession
 
 

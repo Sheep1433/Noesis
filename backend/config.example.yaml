@@ -151,6 +151,8 @@ stream:
   run_hitl_pending_timeout_seconds: 86400
   run_shutdown_drain_seconds: 10
   run_cancel_grace_seconds: 2
+  run_terminal_persistence_budget_seconds: 5
+  run_terminal_retry_interval_seconds: 5
   run_tool_timeout_seconds: 120
   run_channel_queue_max_batches: 128
   run_channel_queue_max_bytes: 1048576

@@ -1,7 +1,7 @@
 """用户主动停止：stop_chat 收尾与 stream_failure_notice 对齐。"""
 from __future__ import annotations
 
-from noesis.domain.chat.streaming.failure_notice import (
+from noesis.chat.event_mapping.failure_notice import (
     USER_STOP_NOTICE_PLAIN,
     USER_STOP_TOOL_ERROR,
     append_disconnect_partial_content,

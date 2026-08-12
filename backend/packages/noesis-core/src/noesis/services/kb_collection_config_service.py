@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.knowledge.chunking.params import (
     normalize_collection_processing_params,
-    normalize_collection_query_params,
 )
 from noesis.repositories.kb_collection_config_repository import (
     KbCollectionConfigRepository,
@@ -91,7 +90,6 @@ class KbCollectionConfigService:
     @classmethod
     def load_processing_params_sync(cls, collection_name: str) -> Dict[str, Any]:
         """Agent 同步上下文读取集合 processing_params。"""
-        from noesis.repositories.kb_collection_config_repository import load_query_params_sync as _load
         # 复用 sync session 路径读 processing_params
         from noesis.storage.postgres.manager import pg_manager
         from noesis.storage.postgres.models.knowledge import TKbCollectionConfig
