@@ -19,6 +19,7 @@ from noesis.middleware.dynamic_context_middleware import (
     DynamicContextProvider,
     render_dynamic_block,
 )
+from noesis.middleware.micro_compaction_middleware import MicroCompactionMiddleware
 from noesis.middleware.safe_model_retry_middleware import SafeModelRetryMiddleware
 from noesis.middleware.snip_middleware import (
     SnipError,
