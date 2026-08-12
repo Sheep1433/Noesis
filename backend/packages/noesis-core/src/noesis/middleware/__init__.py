@@ -13,6 +13,11 @@ behaviour that differs from upstream or is missing entirely.
 
 from __future__ import annotations
 
+from noesis.middleware.durable_context_middleware import (
+    DurableContext,
+    DurableContextMiddleware,
+    render_durable_block,
+)
 from noesis.middleware.dynamic_context_middleware import (
     DynamicContextBlock,
     DynamicContextMiddleware,
