@@ -38,6 +38,10 @@ from noesis.middleware.snip_middleware import (
     SnipSelector,
     apply_snip_projection,
 )
+from noesis.middleware.source_refresh_middleware import (
+    SourceFingerprint,
+    SourceRefreshMiddleware,
+)
 from noesis.middleware.tool_failure_middleware import ToolFailureMiddleware
 from noesis.middleware.tool_result_budget_middleware import (
     ReplacementRecord,
