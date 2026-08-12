@@ -41,17 +41,23 @@ def test_minimal_stack_has_required_noesis_middleware() -> None:
     )
     stack = build_noesis_stack(deps)
     names = _names(stack)
-    # Required Noesis middleware present (order checked separately).
+    # COMMON_QA required Noesis middleware present (design §16).
     for required in (
         "ToolResultBudgetMiddleware",
         "ToolFailureMiddleware",
+        "SourceRefreshMiddleware",
         "DynamicContextMiddleware",
-        "DurableContextMiddleware",
         "SnipMiddleware",
         "MicroCompactionMiddleware",
+        "CompactionMiddleware",
+        "PatchToolCallsMiddleware",
         "SafeModelRetryMiddleware",
     ):
         assert required in names, f"{required} missing from minimal stack"
+    # COMMON_QA does NOT include DurableContext/ToolCatalog/FileContext.
+    assert "DurableContextMiddleware" not in names
+    assert "ToolCatalogMiddleware" not in names
+    assert "FileContextMiddleware" not in names
 
 
 def test_full_stack_exact_order_per_design() -> None:
@@ -65,6 +71,7 @@ def test_full_stack_exact_order_per_design() -> None:
     }
     deps = NoesisStackDeps(
         backend=_FakeBackend(),
+        profile="SUPER_AGENT_QA",
         dynamic_context_provider=lambda: None,
         source_fingerprint_provider=lambda: None,
         tool_catalog_provider=lambda: [],
@@ -127,12 +134,12 @@ def test_optional_middleware_omission_preserves_relative_order() -> None:
     assert "SubAgentMiddleware" not in names
     assert "MemoryMiddleware" not in names
     assert "HumanInTheLoopMiddleware" not in names
-    # Required Noesis still in relative order.
+    # Required Noesis still in relative order (COMMON_QA baseline).
     required = [
         "ToolResultBudgetMiddleware",
         "ToolFailureMiddleware",
+        "SourceRefreshMiddleware",
         "DynamicContextMiddleware",
-        "DurableContextMiddleware",
         "SnipMiddleware",
         "MicroCompactionMiddleware",
         "PatchToolCallsMiddleware",

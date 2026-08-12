@@ -147,6 +147,7 @@ def _build_stack(
     compaction = _compaction_deps(model_id)
     deps = NoesisStackDeps(
         backend=backend,
+        profile=profile,
         subagents=subagents,
         async_subagents=async_subagents,
         interrupt_on=interrupt_on if (HitlConfig.enabled and interrupt_on) else None,
@@ -218,7 +219,7 @@ _INVENTORY: tuple[MiddlewareInventoryEntry, ...] = (
     MiddlewareInventoryEntry("ToolFailureMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
     MiddlewareInventoryEntry("FileContextMiddleware", "context", "Noesis", ("SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SUBAGENT")),
     MiddlewareInventoryEntry("SourceRefreshMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("DynamicContextMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
+    MiddlewareInventoryEntry("DynamicContextMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP")),
     MiddlewareInventoryEntry("DurableContextMiddleware", "context", "Noesis", ("SUPER_AGENT_QA", "FAULT_OPERATION_QA")),
     MiddlewareInventoryEntry("SnipMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
     MiddlewareInventoryEntry("MicroCompactionMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),

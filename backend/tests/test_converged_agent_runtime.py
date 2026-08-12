@@ -25,8 +25,8 @@ def test_inventory_has_single_kernel_in_spec_order() -> None:
     assert [type(item).__name__ for item in stack] == [
         "ToolResultBudgetMiddleware",
         "ToolFailureMiddleware",
+        "SourceRefreshMiddleware",
         "DynamicContextMiddleware",
-        "DurableContextMiddleware",
         "SnipMiddleware",
         "MicroCompactionMiddleware",
         "PatchToolCallsMiddleware",

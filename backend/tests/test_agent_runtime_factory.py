@@ -27,8 +27,8 @@ def test_runtime_stack_is_the_new_flat_noesis_baseline() -> None:
     expected = [
         "ToolResultBudgetMiddleware",
         "ToolFailureMiddleware",
+        "SourceRefreshMiddleware",
         "DynamicContextMiddleware",
-        "DurableContextMiddleware",
         "SnipMiddleware",
         "MicroCompactionMiddleware",
         "PatchToolCallsMiddleware",

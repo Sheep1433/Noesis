@@ -80,6 +80,41 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+# design §16 Profile matrix — which Noesis middleware are *required* (always
+# bound when the profile is assembled, regardless of provider presence) vs
+# optional (bound only when their dependency is present).
+_REQUIRED_BY_PROFILE: dict[str, frozenset[str]] = {
+    "COMMON_QA": frozenset({
+        "SourceRefresh", "DynamicContext", "ToolResultBudget", "Snip",
+        "MicroCompaction", "Compaction", "PatchToolCalls", "ToolFailure",
+        "SafeModelRetry",
+    }),
+    "SUPER_AGENT_QA": frozenset({
+        "SourceRefresh", "DynamicContext", "ToolResultBudget", "Snip",
+        "MicroCompaction", "Compaction", "PatchToolCalls", "ToolFailure",
+        "SafeModelRetry", "FileContext", "DurableContext", "ToolCatalog",
+    }),
+    "FAULT_OPERATION_QA": frozenset({
+        "SourceRefresh", "DynamicContext", "ToolResultBudget", "Snip",
+        "MicroCompaction", "Compaction", "PatchToolCalls", "ToolFailure",
+        "SafeModelRetry", "DurableContext", "ToolCatalog",
+    }),
+    "SIMPLE_MCP": frozenset({
+        "SourceRefresh", "DynamicContext", "ToolResultBudget", "Snip",
+        "MicroCompaction", "Compaction", "PatchToolCalls", "ToolFailure",
+        "SafeModelRetry", "ToolCatalog",
+    }),
+    "SUBAGENT": frozenset({
+        "SourceRefresh", "ToolResultBudget", "Snip", "MicroCompaction",
+        "Compaction", "PatchToolCalls", "ToolFailure", "SafeModelRetry",
+    }),
+}
+
+
+def _required(profile: str, name: str) -> bool:
+    return name in _REQUIRED_BY_PROFILE.get(profile, frozenset())
+
+
 @dataclass(frozen=True)
 class NoesisStackDeps:
     """Factory-injected dependencies for building the new middleware stack.
@@ -89,6 +124,7 @@ class NoesisStackDeps:
     """
 
     backend: BackendProtocol | None = None
+    profile: str = "COMMON_QA"
     # Context providers injected as closures over already-resolved run context.
     dynamic_context_provider: Any = None
     source_fingerprint_provider: Any = None
@@ -118,23 +154,30 @@ class NoesisStackDeps:
 def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
     """Assemble the full outer-to-inner middleware stack per design §3.
 
-    Optional middleware are only included when their dependency is present,
-    preserving the relative order of the rest.
+    Noesis middleware required by the profile (design §16 matrix) are always
+    bound — provider-less ones bind as no-ops (e.g. SourceRefresh with
+    ``source_provider=None`` skips ``before_agent``) until the factory wires a
+    real provider. Optional upstream capabilities (Skills/Memory/Todo/HITL/call
+    limits/SubAgent) are bound only when their dependency is present;
+    omitting one does not change the relative order of the rest.
     """
     stack: list[AgentMiddleware] = []
 
-    # 1. ToolResultBudget (Noesis) — needs backend for artifact offload.
+    # 1. ToolResultBudget (Noesis) — required for all profiles.
     stack.append(ToolResultBudgetMiddleware(deps.backend))
 
-    # 2. ToolFailure (Noesis).
+    # 2. ToolFailure (Noesis) — required for all profiles.
     stack.append(ToolFailureMiddleware())
 
-    # 3. FileContext (Noesis) — only when a filesystem backend exists.
-    if deps.backend is not None:
+    # 3. FileContext (Noesis) — profile-required (SUPER/FAULT/SUBAGENT) when a
+    #    filesystem backend exists; otherwise omitted.
+    if deps.backend is not None and _required(deps.profile, "FileContext"):
         stack.append(FileContextMiddleware())
 
-    # 4. SourceRefresh (Noesis) — only when a fingerprint provider is wired.
-    if deps.source_fingerprint_provider is not None:
+    # 4. SourceRefresh (Noesis) — profile-required; binds with provider=None
+    #    (no-op: before_agent returns None) until a fingerprint provider is
+    #    wired by the factory.
+    if _required(deps.profile, "SourceRefresh"):
         stack.append(SourceRefreshMiddleware(source_provider=deps.source_fingerprint_provider))
 
     # 5. TodoList (LangChain, optional).
@@ -168,27 +211,38 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
     if deps.memory_sources and deps.backend is not None:
         stack.append(MemoryMiddleware(backend=deps.backend, sources=deps.memory_sources))
 
-    # 10. DynamicContext (Noesis).
-    stack.append(DynamicContextMiddleware(context_provider=deps.dynamic_context_provider))
+    # 10. DynamicContext (Noesis) — required for non-SUBAGENT profiles.
+    if _required(deps.profile, "DynamicContext"):
+        stack.append(DynamicContextMiddleware(context_provider=deps.dynamic_context_provider))
 
-    # 11. DurableContext (Noesis).
-    stack.append(DurableContextMiddleware())
+    # 11. DurableContext (Noesis) — profile-required (SUPER/FAULT) only.
+    if _required(deps.profile, "DurableContext"):
+        stack.append(DurableContextMiddleware())
 
-    # 12. Snip (Noesis).
+    # 12. Snip (Noesis) — required for all profiles.
     stack.append(SnipMiddleware())
 
-    # 13. MicroCompaction (Noesis) — backend optional (text fallback).
+    # 13. MicroCompaction (Noesis) — required; backend optional (text fallback).
     stack.append(MicroCompactionMiddleware(deps.backend))
 
-    # 14. ToolCatalog (Noesis) — only when a catalog provider is wired.
-    if deps.tool_catalog_provider is not None:
+    # 14. ToolCatalog (Noesis) — profile-required; binds with provider=None
+    #    (no-op: no deferred filtering) until a catalog provider is wired.
+    if _required(deps.profile, "ToolCatalog"):
         stack.append(ToolCatalogMiddleware(catalog_provider=deps.tool_catalog_provider))
 
-    # 15. PatchToolCalls (DeepAgents).
+    # 15. PatchToolCalls (DeepAgents) — required for all profiles.
     stack.append(PatchToolCallsMiddleware())
 
-    # 16. Compaction (Noesis) — only when summarize + token_counter + thresholds wired.
-    if deps.summarize is not None and deps.token_counter is not None and deps.compaction_thresholds is not None:
+    # 16. Compaction (Noesis) — profile-required, but needs summarize +
+    #    token_counter + thresholds. When summarization is disabled (no live
+    #    model config), the middleware is omitted rather than bound as a no-op,
+    #    because there is no safe no-op for a summarisation call.
+    if (
+        _required(deps.profile, "Compaction")
+        and deps.summarize is not None
+        and deps.token_counter is not None
+        and deps.compaction_thresholds is not None
+    ):
         stack.append(
             CompactionMiddleware(
                 token_counter=deps.token_counter,
