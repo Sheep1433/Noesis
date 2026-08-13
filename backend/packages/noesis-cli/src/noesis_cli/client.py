@@ -62,7 +62,9 @@ class ChatSession:
         """
         return temporary_checkpointer(self.checkpointer)
 
-    async def run_turn(self, query: str) -> AsyncGenerator[dict[str, Any], None]:
+    async def run_turn(
+        self, query: str, *, enabled_skills: list[str] | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """单轮对话:调 agent.run_agent,yield 事件 dict。"""
         async for event in _run_agent_turn(
             agent=self.agent,
@@ -71,6 +73,7 @@ class ChatSession:
             user_id=self.user_id,
             model_id=self.model_id,
             qa_type=self.qa_type,
+            enabled_skills=enabled_skills,
         ):
             yield event
 
@@ -83,12 +86,13 @@ async def _run_agent_turn(
     user_id: str,
     model_id: str | None,
     qa_type: str,
+    enabled_skills: list[str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """调用 agent.run_agent(),签名因 Agent 类而异。
 
     - SimpleMCPAgent: 只接受 query, session_id
     - GeneralQAAgent: 额外传 kb_search_enabled=False 跳过 Qdrant
-    - SuperAgent: 传 db=None 跳过平台 DB 依赖
+    - SuperAgent: 传 db=None 跳过平台 DB 依赖；enabled_skills 仅 SuperAgent 支持
     """
     qa_enum = _QA_TYPE_ENUM.get(qa_type)
     if isinstance(agent, SimpleMCPAgent):
@@ -112,6 +116,7 @@ async def _run_agent_turn(
             model_id=model_id,
             db=None,
             qa_type=qa_enum,
+            enabled_skills=enabled_skills,
         )
     async for event in agen:
         yield event

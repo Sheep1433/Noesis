@@ -239,6 +239,7 @@ async def run_channel_agent(
     external_message_id: Optional[str] = None,
     channel_type: str = "telegram",
     outbound: Optional[Any] = None,
+    force_enabled_skills: Optional[List[str]] = None,
 ) -> ChannelRunResult:
     """
     已配对入站：写 SSOT user 消息 → SuperAgent headless → 终态落库 → 返回纯文本。
@@ -296,7 +297,7 @@ async def run_channel_agent(
         enabled_skills = await qs._resolve_enabled_skills_for_query(
             session_id=session_id,
             user_id=str(current_user.user_id),
-            request_enabled_skills=None,
+            request_enabled_skills=force_enabled_skills,
             db=db,
         )
         mcp_tools: List[Any] = []

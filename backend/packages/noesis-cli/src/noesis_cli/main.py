@@ -156,13 +156,27 @@ def _install_command_completer() -> None:
 
 
 async def _run_turn(session: ChatSession, renderer: StreamRenderer, query: str) -> None:
-    # 统一命令层：进 Agent 前先 dispatch（ephemeral，不启动 Agent、不落库）。
-    cmd_result = await _dispatch_cli_command(query, session.user_id)
-    if cmd_result is not None:
-        console.print(cmd_result)
+    # 统一命令层：进 Agent 前先 dispatch。
+    # 控制命令 → ephemeral 回复；skill 命令 → rewrite 为 Agent run；其余放行。
+    from noesis.chat.commands.registry import dispatch
+    from noesis.chat.delivery.channels import InboundMessage
+
+    inbound = InboundMessage(
+        channel_type="cli", external_chat_id="cli-local", text=query, user_id=session.user_id,
+    )
+    result = await dispatch(inbound)
+    if result.handled and not result.rewrite_request:
+        console.print(result.text)
         return
+    if result.handled and result.rewrite_request:
+        rw = result.rewrite_request
+        console.print(f"[dim]启用 skill: {', '.join(rw.enabled_skills)}[/]")
+        query = rw.query
+        skills = rw.enabled_skills
+    else:
+        skills = None
     try:
-        async for event in session.run_turn(query):
+        async for event in session.run_turn(query, enabled_skills=skills):
             renderer.consume(event)
     except Exception as exc:  # noqa: BLE001
         renderer.end_turn()
@@ -170,22 +184,6 @@ async def _run_turn(session: ChatSession, renderer: StreamRenderer, query: str) 
         return
     renderer.end_turn()
 
-
-async def _dispatch_cli_command(query: str, user_id: str) -> str | None:
-    """命中斜杠命令则返回回复文本；未命中返回 None（放行进 Agent）。"""
-    from noesis.chat.commands.registry import dispatch
-    from noesis.chat.delivery.channels import InboundMessage
-
-    inbound = InboundMessage(
-        channel_type="cli",
-        external_chat_id="cli-local",
-        text=query,
-        user_id=user_id,
-    )
-    result = await dispatch(inbound)
-    if not result.handled or result.rewrite_request:
-        return None
-    return result.text
 
 
 async def _eval(query: str, qa_type: str, model_id: str | None, time_budget: int) -> None:

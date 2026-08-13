@@ -49,7 +49,7 @@ CLI 额外：`noesis help` / `noesis skills` 等 Typer 子命令复用同一 reg
 
 `CONTROL_COMMANDS = {help, skills, agents, model, status, reset, approve, reject, stop}` 为控制命令保留字，skill 目录不得与之重名。dispatch 匹配时控制命令先于 skill 命令。
 
-D 类（skill 快捷命令，所有 skill 自动暴露为 `/命令名`）尚未实现，但 `CommandResult.rewrite_request` 与保留字优先级已为其预留扩展点：skill 命令将改写为 `enabled_skills=[该skill]` 的 Agent run，与 `/skills` 列表同源（同一份 `scan_installed_skills` 扫描结果）。
+D 类（skill 快捷命令，所有 skill 自动暴露为 `/命令名`）**已实现**：dispatch 在未命中控制命令时，用 `scan_all_skill_names(user_id)` 检查 name 是否为已安装 skill（platform + user），是则返回 `RequestRewrite(query=用户参数, enabled_skills=[name])`，由通道改写为一次 Agent run。无参数时返回用法提示。`CONTROL_COMMANDS` 保留字优先级保证控制命令不被 skill 名覆盖。
 
 ## 包边界
 

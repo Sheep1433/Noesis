@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from noesis.chat.delivery.channels import InboundMessage
-from noesis.chat.commands.result import CommandResult
+from noesis.chat.commands.result import CommandResult, RequestRewrite
 
 #: 控制命令保留字。skill 目录 SHALL NOT 与之重名；dispatch 匹配时控制命令先于 skill 命令。
 CONTROL_COMMANDS: frozenset[str] = frozenset(
@@ -54,13 +54,29 @@ def get_handler(name: str) -> CommandHandler | None:
 async def dispatch(msg: InboundMessage) -> CommandResult:
     """核心分发：任何通道的 /cmd 都走这里。
 
-    返回 ``handled=False`` 即放行（非命令或无斜杠）；命中已注册命令则执行 handler；
-    未知命令返回提示文本而非放行，避免把 ``/typo`` 当成普通 query 喂给 Agent。
+    返回 ``handled=False`` 即放行（非命令或无斜杠）；命中已注册控制命令则执行；
+    匹配已安装 skill 名则转译为一次 Agent run（D 类：rewrite_request）；
+    其余返回提示文本而非放行，避免把 ``/typo`` 当成普通 query 喂给 Agent。
     """
     name = msg.command_name()
     if name is None:
         return CommandResult(handled=False)
     handler = get_handler(name)
-    if handler is None:
-        return CommandResult(handled=True, text=f"未知命令 /{name}（试试 /help）")
-    return await handler(msg)
+    if handler is not None:
+        return await handler(msg)
+    # D 类：skill 快捷命令。控制命令保留字不得被 skill 覆盖。
+    if name not in CONTROL_COMMANDS:
+        from noesis.chat.config_skills_scan import scan_all_skill_names
+
+        if name in scan_all_skill_names(msg.user_id):
+            args = msg.command_args()
+            if not args:
+                return CommandResult(
+                    handled=True,
+                    text=f"用法: /{name} <你的问题或参数>\n（该 skill 已启用，请补充问题）",
+                )
+            return CommandResult(
+                handled=True,
+                rewrite_request=RequestRewrite(query=args, enabled_skills=[name]),
+            )
+    return CommandResult(handled=True, text=f"未知命令 /{name}（试试 /help）")

@@ -28,20 +28,48 @@ def _handlers_registered() -> None:
 
 # --- CLI -----------------------------------------------------------------
 
-async def test_cli_command_dispatched_does_not_start_agent() -> None:
-    """模拟 _run_turn 的命令分支：命中 → 返回文本，不调 session.run_turn。"""
-    from noesis_cli.main import _dispatch_cli_command
+async def test_cli_command_dispatched_returns_reply() -> None:
+    """CLI /help → dispatch 命中控制命令，返回 ephemeral 回复文本。"""
+    from noesis.chat.commands.registry import dispatch
+    from noesis.chat.delivery.channels import InboundMessage
 
-    text = await _dispatch_cli_command("/help", "cli-user")
-    assert text is not None
-    assert "/help" in text
-    assert "/skills" in text
+    inbound = InboundMessage(
+        channel_type="cli", external_chat_id="cli-local", text="/help", user_id="cli-user",
+    )
+    result = await dispatch(inbound)
+    assert result.handled is True
+    assert not result.rewrite_request
+    assert "/help" in result.text
+    assert "/skills" in result.text
+
+
+async def test_cli_skill_command_rewrites_to_agent_run() -> None:
+    """CLI /baoyu-url-to-markdown <问题> → dispatch 返回 rewrite_request。"""
+    from noesis.chat.commands.registry import dispatch
+    from noesis.chat.delivery.channels import InboundMessage
+
+    inbound = InboundMessage(
+        channel_type="cli",
+        external_chat_id="cli-local",
+        text="/baoyu-url-to-markdown 抓取 https://example.com",
+        user_id="cli-user",
+    )
+    result = await dispatch(inbound)
+    assert result.handled is True
+    assert result.rewrite_request is not None
+    assert result.rewrite_request.enabled_skills == ["baoyu-url-to-markdown"]
+    assert result.rewrite_request.query == "抓取 https://example.com"
 
 
 async def test_cli_non_command_passes_through() -> None:
-    from noesis_cli.main import _dispatch_cli_command
+    from noesis.chat.commands.registry import dispatch
+    from noesis.chat.delivery.channels import InboundMessage
 
-    assert await _dispatch_cli_command("帮我查天气", "cli-user") is None
+    inbound = InboundMessage(
+        channel_type="cli", external_chat_id="cli-local", text="帮我查天气", user_id="cli-user",
+    )
+    result = await dispatch(inbound)
+    assert result.handled is False
 
 
 # --- Telegram ------------------------------------------------------------

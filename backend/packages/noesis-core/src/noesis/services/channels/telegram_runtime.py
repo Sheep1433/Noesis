@@ -388,18 +388,22 @@ async def _handle_message(
         channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "command_handled")
         return
 
+    # D 类 skill 命令：改写 query + enabled_skills，走正常 Agent run。
+    rewrite = cmd_result.rewrite_request if cmd_result.handled else None
+
     try:
         outbound = TelegramOutbound(client, chat_id) if cfg.delivery_preference == "reply" else None
         session_id = str(uuid.uuid4()) if cfg.session_strategy == "new_per_message" else binding.session_id
         result = await run_channel_agent(
             user_id=binding.user_id,
             session_id=session_id,
-            query=inbound.text,
+            query=rewrite.query if rewrite else inbound.text,
             qa_type=cfg.default_qa_type,
             origin="telegram",
             external_message_id=inbound.external_message_id,
             channel_type="telegram",
             outbound=outbound,
+            force_enabled_skills=rewrite.enabled_skills if rewrite else None,
         )
         channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "succeeded")
         await _after_channel_result(

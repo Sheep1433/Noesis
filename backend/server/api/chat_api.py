@@ -678,6 +678,17 @@ async def create_run(
                 "session_id": request.session_id,
             },
         )
+    # D 类 skill 快捷命令：改写 query + enabled_skills，走正常 Agent run。
+    if cmd_result.handled and cmd_result.rewrite_request:
+        rw = cmd_result.rewrite_request
+        extra = dict(request.extra or {})
+        extra["enabled_skills"] = rw.enabled_skills
+        request = CreateRunRequest(
+            session_id=request.session_id,
+            content=rw.query,
+            client_request_id=request.client_request_id,
+            extra=extra,
+        )
 
     run = await RunService.create(request, current_user, db)
     session = await ChatService.get_session_by_id(

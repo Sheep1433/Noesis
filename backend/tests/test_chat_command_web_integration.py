@@ -77,3 +77,43 @@ async def test_list_commands_endpoint_returns_descriptions() -> None:
     assert "skills" in names
     help_item = next(it for it in items if it["name"] == "help")
     assert help_item["description"]
+
+
+async def test_web_skill_command_rewrites_then_creates_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Web /skill-name <问题> → dispatch 返回 rewrite → 改写 content+skills 走 RunService.create。"""
+    import server.api.chat_api as api
+
+    monkeypatch.setattr(api.pg_manager, "_advisory_lock_ready", True)
+
+    captured: dict = {}
+    created_run = SimpleNamespace(
+        id="r-2", assistant_message_id="m-2", session_id="s1", status="queued"
+    )
+
+    async def fake_create(request, current_user, db):
+        captured["content"] = request.content
+        captured["extra"] = request.extra
+        return created_run
+
+    monkeypatch.setattr(api.RunService, "create", fake_create)
+    monkeypatch.setattr(
+        api.ChatService, "get_session_by_id",
+        AsyncMock(return_value=SimpleNamespace(title="t")),
+    )
+
+    from noesis.schemas.chat_vo import CreateRunRequest
+
+    req = CreateRunRequest(
+        session_id="s1",
+        content="/baoyu-url-to-markdown 抓取 https://example.com",
+        client_request_id="abcdefgh",
+    )
+    resp = await api.create_run(req, SimpleNamespace(user_id=1), db=None)
+
+    # 走了正常 create（不是 command_reply）
+    data = json.loads(resp.body)["data"]
+    assert data["run_id"] == "r-2"
+    assert "command_reply" not in data
+    # content 被改写为用户问题，enabled_skills 注入 skill
+    assert captured["content"] == "抓取 https://example.com"
+    assert captured["extra"]["enabled_skills"] == ["baoyu-url-to-markdown"]

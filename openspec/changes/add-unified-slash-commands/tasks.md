@@ -43,4 +43,4 @@
 
 ## 非首批（D 类预留，不在本提案实现）
 
-- [ ] 技能快捷命令：所有 skill 自动暴露为 `/命令名`，dispatch fallback 返回 `RequestRewrite` 改写为 Agent run。实现前须校验本提案的 `CommandResult.rewrite_request` 扩展点与 `CONTROL_COMMANDS` 优先级是否成立。
+- [x] 技能快捷命令：所有 skill 自动暴露为 `/命令名`，dispatch fallback 返回 `RequestRewrite` 改写为 Agent run。已实现：dispatch fallback 用 `scan_all_skill_names` 判定，三通道 rewrite 接通（Web 改写 content+enabled_skills，CLI 传 enabled_skills，Telegram force_enabled_skills）。无参数时返回用法提示。

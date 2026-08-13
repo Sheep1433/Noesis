@@ -97,3 +97,35 @@ def test_command_default_description_empty(isolated_registry: None) -> None:
     command("plain")(_echo)
     descs = dict(list_command_descriptions())
     assert descs["plain"] == ""
+
+
+async def test_skill_command_fallback_rewrites(isolated_registry: None) -> None:
+    """D 类：/baoyu-url-to-markdown <问题> 命中已安装 skill → RequestRewrite。"""
+    result = await dispatch(_msg("/baoyu-url-to-markdown 抓取 https://example.com"))
+    assert result.handled is True
+    assert result.rewrite_request is not None
+    assert result.rewrite_request.enabled_skills == ["baoyu-url-to-markdown"]
+    assert result.rewrite_request.query == "抓取 https://example.com"
+
+
+async def test_skill_command_no_args_returns_usage_hint(isolated_registry: None) -> None:
+    """D 类：/skill-name 无参数 → 用法提示，不 rewrite。"""
+    result = await dispatch(_msg("/baoyu-url-to-markdown"))
+    assert result.handled is True
+    assert result.rewrite_request is None
+    assert "用法" in result.text
+
+
+async def test_control_command_not_treated_as_skill(isolated_registry: None) -> None:
+    """控制命令保留字不得被 skill fallback 覆盖：/help 仍是控制命令。"""
+    # help 已注册为控制命令，不应走 skill fallback
+    result = await dispatch(_msg("/help"))
+    assert result.rewrite_request is None
+
+
+async def test_unknown_non_skill_command_returns_hint(isolated_registry: None) -> None:
+    """/typo 既非控制命令也非已安装 skill → 未知命令提示。"""
+    result = await dispatch(_msg("/typo"))
+    assert result.handled is True
+    assert result.rewrite_request is None
+    assert "/typo" in result.text
