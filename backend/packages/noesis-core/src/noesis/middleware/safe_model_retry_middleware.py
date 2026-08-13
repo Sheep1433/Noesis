@@ -2,10 +2,10 @@
 
 Retries transient model-call failures (429 / 408 / 5xx, timeout, connection)
 with exponential backoff, mirroring the Claude Code 2.1.88 behaviour: the
-Anthropic SDK retries at the HTTP layer (``maxRetries=2``, ``shouldRetry`` on
-status code + ``x-should-retry`` header) before the streaming body begins. This
-middleware is a fallback when the SDK's own retry is disabled or insufficient,
-and for non-SDK providers.
+Anthropic SDK retries at the HTTP layer (``CLAUDE_CODE_MAX_RETRIES`` default 10,
+``shouldRetry`` on status code + ``x-should-retry`` header) before the streaming
+body begins. Noesis defaults to 5 (between the SDK default of 2 and CC's 10);
+override via ``max_retries`` or ``ModelConfig.max_retries``.
 
 This is the Noesis owner for model-call retry; LangChain's ``ModelRetryMiddleware``
 is a generic backoff retry without ``ContextOverflowError`` routing.
@@ -99,7 +99,7 @@ class SafeModelRetryMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
     def __init__(
         self,
         *,
-        max_retries: int = 2,
+        max_retries: int = 5,
         backoff_factor: float = 0.5,
         backoff: Callable[[int, float], float] | None = None,
     ) -> None:

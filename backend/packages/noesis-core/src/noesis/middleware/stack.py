@@ -134,7 +134,7 @@ class NoesisStackDeps:
     summarize: Any = None
     compaction_thresholds: CompactionThresholds | None = None
     # Retry policy.
-    max_retries: int = 2
+    max_retries: int = 5
     # Optional upstream capabilities.
     skills_sources: list[str] | None = None
     memory_sources: list[str] | None = None
