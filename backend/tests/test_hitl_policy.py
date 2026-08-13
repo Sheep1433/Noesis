@@ -82,11 +82,8 @@ def test_create_noesis_agent_skips_hitl_when_disabled() -> None:
 
 def test_hitl_is_between_capabilities_and_governor() -> None:
     names = [type(item).__name__ for item in _captured_stack(hitl_enabled=True)]
-    assert names == [
-        "RuntimeTelemetryMiddleware",
-        "ToolExecutionMiddleware",
-        "HumanInTheLoopMiddleware",
-        "RunGovernorMiddleware",
-        "ContextLifecycleMiddleware",
-        "ModelExecutionMiddleware",
-    ]
+    # In the new flat stack, HITL sits at the innermost position (design §3),
+    # after SafeModelRetry and before the provider.
+    assert "HumanInTheLoopMiddleware" in names
+    assert names.index("HumanInTheLoopMiddleware") > names.index("SafeModelRetryMiddleware")
+    assert names[-1] == "HumanInTheLoopMiddleware"

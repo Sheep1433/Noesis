@@ -11,7 +11,7 @@ Noesis 当前把 DeerFlow 式细粒度能力收进五个宏观 runtime middlewar
 - `create_noesis_agent()` 直接接收 model、tools、system prompt、middleware、backend、subagents、skills、memory 等参数，一次生成完整 stack；inventory 从该实例列表生成，调用方不得事后 append。
 - 直接采用契约符合的 DeepAgents/LangChain 能力：Filesystem、Skills、Memory、Todo、PatchToolCalls、HITL 和通用 call limits。
 - 新增 Noesis 上下文 middleware：SourceRefresh、DynamicContext、DurableContext、FileContext、Snip、MicroCompaction、ToolCatalog、Compaction 和 SubAgent context policy。
-- 保留并收窄 ToolFailure、ToolResultBudget 和 SafeModelRetry；SafeModelRetry 保留 SSE 已可见输出和副作用边界，不用 LangChain 通用 retry 机械替换。
+- 保留并收窄 ToolFailure、ToolResultBudget 和 SafeModelRetry；SafeModelRetry 沿用已校验 request、attempt 单独计数、overflow 交回 Compaction，重试由 Provider SDK HTTP 层负责，不重复实现可见输出检测。
 - Compaction middleware 只占用 `wrap_model_call` seam；archive、summary、boundary 与 checkpoint 由 runtime 以事务方式提交。自动与手动 compact 共用同一引擎。
 - Provider adapter 在唯一出口执行 message/tool schema canonicalization、cache marker 和 Provider capability 适配；`PatchToolCalls` 不被误当成完整 canonicalization。
 - MCP/tool registry、subagent scheduler、stream/delivery、attachments、HITL host 和 usage 统计继续属于 runtime/service，不塞进 middleware。

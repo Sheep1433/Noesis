@@ -330,7 +330,7 @@ context policy 通过 factory 注入的 `context_mode` 参数（per-subagent）�
 
 `ToolResultBudgetMiddleware`：对聚合结果执行确定性 content replacement，保存 artifact path、synopsis、hash 和 replacement record；resume 后保持相同决策。Filesystem/artifact 处理后仍超限时执行最终文本兜底，不改变 status/category/outcome。
 
-`SafeModelRetryMiddleware`：只重试尚未产生用户可见 text、tool call、HITL 或其它副作用的瞬时错误。每个 attempt 单独观测；context overflow 交回 Compaction。禁止在 inner handler 中偷偷执行 `empty_after_tools` 第二次调用。
+`SafeModelRetryMiddleware`：重试瞬时错误，沿用同一份已 canonicalization/compaction/预算校验的 request。每个 attempt 单独可观测；context overflow 交回 Compaction。重试由 Provider SDK 的 HTTP 层负责（在流式 body 开始前根据状态码决定），middleware 层不重复实现可见输出检测——这与 Claude Code 2.1.88 的实际行为一致（SDK `maxRetries` 在 HTTP header 层重试，query loop 不检测已流式输出）。禁止在 inner handler 中偷偷执行 `empty_after_tools` 第二次调用。
 
 普通 model/tool call limits 使用 LangChain；语义不满足时才替换为 Noesis 实现。
 

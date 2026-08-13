@@ -58,13 +58,7 @@ Compaction SHALL 按最终 request 预算判断，预算至少覆盖 system inst
 
 ### Requirement: Model Execution SHALL 产生统一 Outcome
 
-模型重试、Provider finish reason 与 delivery stop reason SHALL 保持统一语义。瞬时 Provider attempt 重试 SHALL 只发生在尚未产生用户可见输出、tool call 或 HITL 副作用时，并沿用同一份已经完成 canonicalization、compaction 与预算校验的 request；每个 attempt SHALL 单独计数且可观测。需要改变 messages 的收敛继续 SHALL 重新经过完整 Agent lifecycle，不得直接调用内部 handler。
-
-#### Scenario: 可见输出后连接中断
-
-- **WHEN** Provider 已产生用户可见文本或 tool call 后发生连接错误
-- **THEN** 系统 SHALL 保留已有输出并记录 `partial_output`
-- **AND** SHALL NOT 重放该 model step
+模型重试、Provider finish reason 与 delivery stop reason SHALL 保持统一语义。瞬时 Provider attempt 重试 SHALL 沿用同一份已经完成 canonicalization、compaction 与预算校验的 request；每个 attempt SHALL 单独计数且可观测。重试 SHALL 由 Provider SDK 的 HTTP 层负责（在流式 body 开始前根据状态码决定），middleware 层不重复实现可见输出检测。需要改变 messages 的收敛继续 SHALL 重新经过完整 Agent lifecycle，不得直接调用内部 handler。
 
 #### Scenario: 工具后模型空终态
 
