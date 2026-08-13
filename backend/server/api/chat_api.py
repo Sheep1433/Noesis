@@ -635,6 +635,17 @@ async def _event_generator(generator, session_id: str):
 
 
 
+@chat_router.get("/commands", summary="列出可用斜杠命令")
+async def list_commands(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """返回控制命令（name + description）。skill 命令由 /skills fs-tree 提供。"""
+    from noesis.chat.commands.registry import list_command_descriptions
+
+    items = [{"name": name, "description": desc} for name, desc in list_command_descriptions()]
+    return ResponseUtil.success(msg="获取命令列表成功", data=items)
+
+
 @chat_router.post("/runs", summary="创建 Agent 任务")
 async def create_run(
     request: CreateRunRequest,
@@ -646,6 +657,39 @@ async def create_run(
             msg="任务运行实例暂时不可用，请稍后重试",
             data={"error_code": "RUN_OWNER_UNAVAILABLE"},
         )
+
+    # 统一命令层：进 Agent 前（建 run 前）先 dispatch。
+    # 命中则 ephemeral 回复 —— 不建 run、不落库（user 消息也不持久化）。
+    from noesis.chat.commands.registry import dispatch as dispatch_command
+    from noesis.chat.delivery.channels import InboundMessage
+
+    inbound = InboundMessage(
+        channel_type="web",
+        external_chat_id=request.session_id,
+        text=request.content,
+        user_id=str(current_user.user_id),
+    )
+    cmd_result = await dispatch_command(inbound)
+    if cmd_result.handled and not cmd_result.rewrite_request:
+        return ResponseUtil.success(
+            msg="命令已处理",
+            data={
+                "command_reply": cmd_result.text,
+                "session_id": request.session_id,
+            },
+        )
+    # D 类 skill 快捷命令：改写 query + enabled_skills，走正常 Agent run。
+    if cmd_result.handled and cmd_result.rewrite_request:
+        rw = cmd_result.rewrite_request
+        extra = dict(request.extra or {})
+        extra["enabled_skills"] = rw.enabled_skills
+        request = CreateRunRequest(
+            session_id=request.session_id,
+            content=rw.query,
+            client_request_id=request.client_request_id,
+            extra=extra,
+        )
+
     run = await RunService.create(request, current_user, db)
     session = await ChatService.get_session_by_id(
         run.session_id, str(current_user.user_id), db
@@ -781,11 +825,23 @@ async def stop_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
-    return ResponseUtil.success(
-        msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
-        data=snapshot.to_dict(),
-    )
+    # TEMP-DEBUG: 排查前端“停止请求失败”的真实原因
+    try:
+        snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
+        logger.info(
+            "[TEMP-DEBUG] stop_run 成功 run_id={} user_id={} status={}",
+            run_id, current_user.user_id, snapshot.status.value,
+        )
+        return ResponseUtil.success(
+            msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
+            data=snapshot.to_dict(),
+        )
+    except Exception as e:
+        logger.warning(
+            "[TEMP-DEBUG] stop_run 失败 run_id={} user_id={} type={} msg={}",
+            run_id, current_user.user_id, type(e).__name__, str(e),
+        )
+        raise
 
 
 @chat_router.post("/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务")

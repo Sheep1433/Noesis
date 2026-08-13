@@ -552,6 +552,11 @@ def _new_stream_ctx() -> Dict[str, Any]:
         "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
         "usage_seen_run_ids": set(),
         "_assistant_db_id": None,
+        # 并行工具分组：按 scope（parent_task_call_id 或 "root"）独立计数 step_id。
+        # on_chat_model_start 标 pending scope，首个 on_tool_start mint 新 step_id。
+        "pending_model_step_scopes": set(),
+        "step_counters": {},
+        "current_step_ids": {},
     }
 
 

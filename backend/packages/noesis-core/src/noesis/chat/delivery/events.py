@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Optional, Union
 
-RunOrigin = Literal["web", "telegram", "wechat", "feishu", "cron", "eval"]
+RunOrigin = Literal["web", "telegram", "wechat", "feishu", "cron", "eval", "cli"]
 
 
 @dataclass(frozen=True)

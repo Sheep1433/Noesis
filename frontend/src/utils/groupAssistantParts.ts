@@ -6,6 +6,7 @@ import { part_parent_task_call_id } from '@/views/chat/messageParts'
 export type DisplayPartEntry =
   | { kind: 'part', part: UiPart }
   | { kind: 'subagent', part: ToolUiPart, childParts: UiPart[] }
+  | { kind: 'parallel_tools', parts: ToolUiPart[] }
 
 /** 子 Agent 内部 part（text / reasoning / tool），不含 task 本身 */
 export function isNestedSubagentChild(part: UiPart): boolean {
@@ -85,5 +86,42 @@ export function buildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
     }
     out.push({ kind: 'part', part: p })
   }
-  return out
+  return mergeAdjacentParallelTools(out)
+}
+
+/**
+ * 把相邻且同 ``step_id``（≥2）的 tool part 合并为一个 ``parallel_tools`` entry。
+ * bridge 背靠背发同一 model step 的并行工具，持久化保序，故邻接即可精确分组。
+ * 单工具或无 step_id 的工具保持 ``part``。
+ */
+function mergeAdjacentParallelTools(entries: DisplayPartEntry[]): DisplayPartEntry[] {
+  const result: DisplayPartEntry[] = []
+  let i = 0
+  while (i < entries.length) {
+    const entry = entries[i]
+    if (entry.kind !== 'part' || entry.part.type !== 'tool' || !entry.part.step_id) {
+      result.push(entry)
+      i += 1
+      continue
+    }
+    const stepId = entry.part.step_id
+    const group: ToolUiPart[] = [entry.part]
+    let j = i + 1
+    while (j < entries.length) {
+      const next = entries[j]
+      if (next.kind === 'part' && next.part.type === 'tool' && next.part.step_id === stepId) {
+        group.push(next.part)
+        j += 1
+        continue
+      }
+      break
+    }
+    if (group.length >= 2) {
+      result.push({ kind: 'parallel_tools', parts: group })
+    } else {
+      result.push({ kind: 'part', part: group[0] })
+    }
+    i = j
+  }
+  return result
 }

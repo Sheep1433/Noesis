@@ -90,6 +90,15 @@ class TelegramBotClient:
     async def get_me(self) -> Dict[str, Any]:
         return dict(await self._call("getMe") or {})
 
+    async def set_my_commands(self, commands: List[Dict[str, str]]) -> None:
+        """注册 Bot 命令菜单（输入 / 时 Telegram 原生弹出）。
+
+        ``commands``: [{"command": "help", "description": "..."}]，command 不带 /。
+        """
+        if not commands:
+            return
+        await self._call("setMyCommands", {"commands": commands})
+
     async def send_message(
         self,
         chat_id: str | int,

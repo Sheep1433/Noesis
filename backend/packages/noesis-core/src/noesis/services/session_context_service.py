@@ -18,6 +18,7 @@ from noesis.config.user_data_paths import (
     get_session_root,
     get_session_uploads_dir,
     get_user_agents_md_path,
+    get_user_memory_dir,
     get_user_profile_md_path,
     get_user_root,
     get_user_skills_dir,
@@ -146,6 +147,18 @@ class SessionContextService:
                         children=skills_children,
                     ),
                 )
+        memory_dir = get_user_memory_dir(user_id)
+        if memory_dir.is_dir():
+            memory_children = cls._scan_directory(str(memory_dir), 'memory')
+            if memory_children:
+                children.append(
+                    FsTreeNode(
+                        key='memory',
+                        label='memory',
+                        isLeaf=False,
+                        children=memory_children,
+                    ),
+                )
         children.extend(cls._current_session_nodes(user_id, session_id))
         root_label = f'users/{user_id}'
         tree = [
@@ -170,6 +183,8 @@ class SessionContextService:
             return norm
         if norm.startswith('skills/'):
             return norm
+        if norm.startswith('memory/'):
+            return norm
         session_prefix = f'sessions/{session_id}/'
         if norm.startswith(session_prefix):
             tail = norm[len(session_prefix):]
@@ -187,6 +202,8 @@ class SessionContextService:
         if norm in _USER_ROOT_FILES:
             return norm
         if norm == 'skills' or norm.startswith('skills/'):
+            return norm
+        if norm == 'memory' or norm.startswith('memory/'):
             return norm
         session_prefix = f'sessions/{session_id}'
         if norm == session_prefix:

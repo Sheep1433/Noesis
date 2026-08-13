@@ -44,6 +44,7 @@ export interface SSEStreamOptions {
     args: Record<string, unknown>,
     tool_call_id: string,
     parent_task_call_id?: string,
+    step_id?: string,
   ) => void
   onToolResult?: (
     tool_call_id: string,
@@ -58,6 +59,7 @@ export interface SSEStreamOptions {
       exit_code?: number
       timed_out?: boolean
       truncated?: boolean
+      step_id?: string
     },
   ) => void
   /** 测试用例等扩展 SSE（event 名与 data.type 一致） */
@@ -124,6 +126,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   let terminalObserved = false
 
   const tool_name_by_call_id = new Map<string, string>()
+  const tool_step_id_by_call_id = new Map<string, string | undefined>()
 
   function isCurrentStream(generation: number) {
     return generation === streamGeneration
@@ -225,8 +228,10 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     if (t === 'tool-input-start') {
       const id = String(data.tool_call_id ?? '')
       const name = String(data.name ?? '')
+      const stepId = typeof data.step_id === 'string' ? data.step_id : undefined
       if (id) {
         tool_name_by_call_id.set(id, name)
+        tool_step_id_by_call_id.set(id, stepId)
       }
       return
     }
@@ -237,11 +242,18 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       if (id && nameFromFrame) {
         tool_name_by_call_id.set(id, nameFromFrame)
       }
+      const stepIdRaw = data.step_id
+      const stepId = typeof stepIdRaw === 'string' && stepIdRaw
+        ? stepIdRaw
+        : (id ? tool_step_id_by_call_id.get(id) : undefined)
+      if (id && typeof stepIdRaw === 'string' && stepIdRaw) {
+        tool_step_id_by_call_id.set(id, stepIdRaw)
+      }
       const input = (data.input as Record<string, unknown>) || {}
       const parent_task_call_id = typeof data.parent_task_call_id === 'string' && data.parent_task_call_id.trim()
         ? data.parent_task_call_id.trim()
         : undefined
-      onToolCall?.(name, input, id, parent_task_call_id)
+      onToolCall?.(name, input, id, parent_task_call_id, stepId)
       return
     }
     if (t === 'tool-output-available') {
@@ -253,6 +265,10 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       const errorCategory = typeof data.errorCategory === 'string' && data.errorCategory.trim()
         ? data.errorCategory.trim()
         : undefined
+      const stepIdRaw = data.step_id
+      const stepId = typeof stepIdRaw === 'string' && stepIdRaw
+        ? stepIdRaw
+        : (id ? tool_step_id_by_call_id.get(id) : undefined)
       onToolResult?.(id, {
         output: out,
         error: err || undefined,
@@ -264,6 +280,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         exit_code: data.exit_code != null ? Number(data.exit_code) : undefined,
         timed_out: data.timed_out != null ? Boolean(data.timed_out) : undefined,
         truncated: data.truncated != null ? Boolean(data.truncated) : undefined,
+        step_id: stepId,
       })
       return
     }
@@ -519,6 +536,12 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         })
       }
       if (!isCurrentStream(generation)) {
+        return
+      }
+      // 命中斜杠命令：ephemeral 回复（不建 run、不落库），直接渲染文本后结束流。
+      if ('command_reply' in created && created.command_reply) {
+        onTextDelta?.(created.command_reply)
+        settleSuccess('stop')
         return
       }
       currentRunId = created.run_id

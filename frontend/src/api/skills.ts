@@ -40,6 +40,13 @@ export interface SkillFsFileContent {
   content: string
 }
 
+/** 轻量 skill 包条目（仅顶层包名 + 描述，不递归文件树） */
+export interface SkillPackageItem {
+  name: string
+  source: SkillSource
+  description: string
+}
+
 function parseSourceFromKey(key: string): { source: SkillSource, path: string } {
   if (key.startsWith('user:')) {
     return { source: 'user', path: key.slice('user:'.length) }
@@ -65,6 +72,19 @@ export async function getSkillsFsTree(): Promise<SkillFsTreeResponse> {
   }
 
   return parseAuthJson<SkillFsTreeResponse>(response)
+}
+
+/**
+ * 轻量 skill 包列表（不递归文件树）
+ * 供聊天 Composer/Mention 补全用；体积远小于 /fs/tree。
+ */
+export async function getSkillsPackages(): Promise<SkillPackageItem[]> {
+  const url = `${API_BASE}/fs/packages`
+  const response = await authFetch(url, { method: 'GET' })
+  if (!response.ok) {
+    throw new Error(`获取 Skills 包列表失败: ${response.status}`)
+  }
+  return parseAuthJson<SkillPackageItem[]>(response)
 }
 
 /**

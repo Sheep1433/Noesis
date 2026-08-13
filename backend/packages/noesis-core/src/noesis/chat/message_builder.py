@@ -103,6 +103,7 @@ class ToolPart(MessagePart):
     tool_call_id: Optional[str] = None
     duration_ms: Optional[int] = None
     parent_task_call_id: Optional[str] = None
+    step_id: Optional[str] = None
     status: str = "running"
     state: Optional[str] = None
     error: Optional[str] = None
@@ -141,6 +142,8 @@ class ToolPart(MessagePart):
             out["errorCategory"] = self.error_category
         if self.parent_task_call_id:
             out["parent_task_call_id"] = self.parent_task_call_id
+        if self.step_id:
+            out["step_id"] = self.step_id
         if self.hitl:
             out["hitl"] = self.hitl
         if self.outcome:
@@ -186,6 +189,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             tool_call_id=data.get("tool_call_id"),
             duration_ms=data.get("duration_ms"),
             parent_task_call_id=parent,
+            step_id=data.get("step_id"),
             status=data.get("status") or "running",
             state=state,
             error=data.get("error"),
@@ -465,6 +469,7 @@ class AssistantMessageBuilder:
         status: str = "running",
         state: ToolState | str = ToolState.RUNNING,
         hitl: Optional[Dict[str, Any]] = None,
+        step_id: Optional[str] = None,
     ) -> None:
         if tool_call_id:
             existing = self._tools_by_call_id.get(tool_call_id)
@@ -473,6 +478,8 @@ class AssistantMessageBuilder:
                 existing.arguments = tool_input if tool_input is not None else existing.arguments
                 if parent_task_call_id:
                     existing.parent_task_call_id = parent_task_call_id
+                if step_id:
+                    existing.step_id = step_id
                 if hitl:
                     existing.hitl = {**(existing.hitl or {}), **hitl}
                 # 重放 tool start 只补充同一块的输入信息，不能把已有结果退回 running。
@@ -487,6 +494,7 @@ class AssistantMessageBuilder:
             arguments=tool_input,
             tool_call_id=tool_call_id,
             parent_task_call_id=parent_task_call_id,
+            step_id=step_id,
             status=status,
             state=ToolState(str(state)).value,
             hitl=hitl,

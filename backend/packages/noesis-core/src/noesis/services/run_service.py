@@ -70,6 +70,11 @@ run_manager = RunManager(
     checkpoint_retry_interval_seconds=StreamConfig.persistence_retry_interval_seconds,
 )
 
+# 注入 run_manager 给命令层（/status），避免 noesis.chat 直接 import noesis.services。
+from noesis.chat.commands.runtime import set_run_manager_provider  # noqa: E402
+
+set_run_manager_provider(lambda: run_manager)
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)

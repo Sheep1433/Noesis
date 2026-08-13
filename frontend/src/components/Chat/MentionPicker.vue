@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [MentionCandidate]
+  complete: [MentionCandidate]
   close: []
 }>()
 
@@ -38,6 +39,8 @@ watch(filtered, (list) => {
 
 function kindIcon(kind: string) {
   switch (kind) {
+    case 'command':
+      return 'i-carbon:terminal'
     case 'skill':
       return 'i-carbon:notebook'
     case 'subagent':
@@ -47,6 +50,19 @@ function kindIcon(kind: string) {
     default:
       return 'i-carbon:document'
   }
+}
+
+/** 类型标签：command / 系统skill / 个人skill / 其它 */
+function typeBadge(item: MentionCandidate): { text: string, cls: string } | null {
+  if (item.kind === 'command') {
+    return { text: '命令', cls: 'mention-badge--command' }
+  }
+  if (item.kind === 'skill') {
+    return item.source === 'user'
+      ? { text: '个人', cls: 'mention-badge--user' }
+      : { text: '系统', cls: 'mention-badge--platform' }
+  }
+  return null
 }
 
 function onSelect(item: MentionCandidate) {
@@ -95,7 +111,7 @@ function onKeydown(e: KeyboardEvent) {
     if (hit) {
       e.preventDefault()
       e.stopPropagation()
-      onSelect(hit)
+      emit('complete', hit)
     }
     return
   }
@@ -144,6 +160,11 @@ defineExpose({ onKeydown })
           aria-hidden="true"
         ></span>
         <span class="mention-picker__label">{{ item.label }}</span>
+        <span
+          v-if="typeBadge(item)"
+          class="mention-badge"
+          :class="typeBadge(item)!.cls"
+        >{{ typeBadge(item)!.text }}</span>
         <span v-if="item.description" class="mention-picker__desc">{{ item.description }}</span>
       </li>
     </ul>
@@ -206,6 +227,30 @@ defineExpose({ onKeydown })
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mention-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.mention-badge--command {
+  color: #1f6feb;
+  background: rgb(31 111 235 / 12%);
+}
+
+.mention-badge--platform {
+  color: #1a7f37;
+  background: rgb(26 127 55 / 12%);
+}
+
+.mention-badge--user {
+  color: #8250df;
+  background: rgb(130 80 223 / 12%);
 }
 
 .mention-picker__empty {

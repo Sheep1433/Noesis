@@ -45,6 +45,13 @@ class SkillFsFileContent(BaseModel):
     content: str = Field(description='文件文本内容')
 
 
+class SkillPackageItem(BaseModel):
+    """轻量 skill 包条目（仅顶层包名 + 描述，不递归文件树）。"""
+    name: str = Field(description='skill 包名（= SKILL.md frontmatter name 或目录名）')
+    source: SkillSource = Field(description='platform 或 user')
+    description: str = Field(default='', description='SKILL.md 描述（截断）')
+
+
 class SkillMarketItem(BaseModel):
     """skills.sh 市场条目"""
     id: str = Field(description='完整 id，如 anthropics/skills/pdf')
