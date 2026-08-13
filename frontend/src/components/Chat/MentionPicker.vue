@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [MentionCandidate]
+  complete: [MentionCandidate]
   close: []
 }>()
 
@@ -110,7 +111,7 @@ function onKeydown(e: KeyboardEvent) {
     if (hit) {
       e.preventDefault()
       e.stopPropagation()
-      onSelect(hit)
+      emit('complete', hit)
     }
     return
   }

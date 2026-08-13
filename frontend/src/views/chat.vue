@@ -1513,6 +1513,26 @@ function onMentionSelect(item: MentionCandidate) {
   closeMentionPicker()
 }
 
+function onCompleteMention(item: MentionCandidate) {
+  // Tab 补全：把当前 trigger 到光标的文本替换为选中项的 label，不执行、不关闭 picker。
+  const token = formatMentionTokenFromCandidate(item)
+  const ta = getComposerTextarea()
+  const text = inputTextString.value
+  const pos = ta?.selectionStart ?? text.length
+  const start = mentionTriggerIndex.value
+  if (start < 0) {
+    return
+  }
+  inputTextString.value = `${text.slice(0, start)}${token}${text.slice(pos)}`
+  const caret = start + token.length
+  nextTick(() => {
+    ta?.focus()
+    ta?.setSelectionRange(caret, caret)
+  })
+  // 更新查询，picker 根据补全后的文本重新过滤
+  mentionPickerQuery.value = token
+}
+
 async function runBuiltinCommand(name: string) {
   // 复用 create_run 拦截路径：POST /runs with content=`/name` → command_reply。
   const sessionId = uuids.value[qa_type.value] || ''
@@ -2626,6 +2646,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         :candidates="mentionPickerCandidates"
                         :loading="mentionPickerLoading"
                         @select="onMentionSelect"
+                        @complete="onCompleteMention"
                         @close="closeMentionPicker"
                       />
 
