@@ -134,7 +134,6 @@ class NoesisStackDeps:
     summarize: Any = None
     compaction_thresholds: CompactionThresholds | None = None
     # Retry policy.
-    retry_on: tuple[type[BaseException], ...] = ()
     max_retries: int = 2
     # Optional upstream capabilities.
     skills_sources: list[str] | None = None
@@ -260,8 +259,9 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
     if deps.tool_call_limit is not None:
         stack.append(ToolCallLimitMiddleware(run_limit=deps.tool_call_limit))
 
-    # 19. SafeModelRetry (Noesis).
-    stack.append(SafeModelRetryMiddleware(max_retries=deps.max_retries, retry_on=deps.retry_on))
+    # 19. SafeModelRetry (Noesis) — transient HTTP error retry (408/429/5xx,
+    #     timeout, connection); ContextOverflowError routes to Compaction.
+    stack.append(SafeModelRetryMiddleware(max_retries=deps.max_retries))
 
     # 20. HITL (LangChain, optional).
     if deps.interrupt_on:

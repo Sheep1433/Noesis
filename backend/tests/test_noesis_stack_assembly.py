@@ -87,7 +87,6 @@ def test_full_stack_exact_order_per_design() -> None:
         interrupt_on={"edit_file": True},
         model_call_limit=50,
         tool_call_limit=100,
-        retry_on=(RuntimeError,),
     )
     stack = build_noesis_stack(deps)
     expected = [
