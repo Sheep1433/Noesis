@@ -7,7 +7,7 @@ import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
-import { buildDisplayParts } from '@/utils/groupAssistantParts'
+import { buildChildDisplayParts } from '@/utils/groupAssistantParts'
 import {
   parseTaskToolInput,
   parseTaskToolOutput,
@@ -42,7 +42,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const childTimelineParts = computed(() => props.childParts ?? [])
-const childDisplayParts = computed(() => buildDisplayParts(childTimelineParts.value))
+const childDisplayParts = computed(() => buildChildDisplayParts(childTimelineParts.value))
 
 function entryKey(entry: DisplayPartEntry, fallback: number): string {
   if (entry.kind === 'parallel_tools') {

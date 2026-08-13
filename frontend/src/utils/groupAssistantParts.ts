@@ -90,6 +90,27 @@ export function buildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
 }
 
 /**
+ * 子 Agent 时间线 parts → 展示条目。
+ *
+ * 与 ``buildDisplayParts`` 的区别：子 Agent 的 childParts 本身就是「带
+ * parent_task_call_id 的内部 part」，不应再被 ``isNestedSubagentChild`` 收走
+ * （否则输出为空）。这里只做三件事：过滤不渲染的工具、合并相邻同 parent 的
+ * reasoning 碎块、邻接并行工具按 step_id 合并。
+ */
+export function buildChildDisplayParts(parts: UiPart[]): DisplayPartEntry[] {
+  const filtered: UiPart[] = []
+  for (const p of parts) {
+    if (p.type === 'tool' && !shouldRenderToolCallCollapse(p.name, p.input)) {
+      continue
+    }
+    filtered.push(p)
+  }
+  const coalesced = coalesceAdjacentReasoning(filtered)
+  const out: DisplayPartEntry[] = coalesced.map((p) => ({ kind: 'part', part: p }))
+  return mergeAdjacentParallelTools(out)
+}
+
+/**
  * 把相邻且同 ``step_id``（≥2）的 tool part 合并为一个 ``parallel_tools`` entry。
  * bridge 背靠背发同一 model step 的并行工具，持久化保序，故邻接即可精确分组。
  * 单工具或无 step_id 的工具保持 ``part``。

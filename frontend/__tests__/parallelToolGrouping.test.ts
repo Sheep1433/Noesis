@@ -1,6 +1,6 @@
+import type { ToolUiPart, UiPart } from '@/views/chat/messageParts'
 import { describe, expect, it } from 'vitest'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
-import type { ToolUiPart, UiPart } from '@/views/chat/messageParts'
 
 function makeTool(id: string, stepId?: string): ToolUiPart {
   return {
