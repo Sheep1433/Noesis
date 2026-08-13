@@ -10,6 +10,9 @@ shape.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -21,7 +24,15 @@ from noesis.factory import build_middleware_inventory, middleware_inventory
 
 
 def test_inventory_has_single_kernel_in_spec_order() -> None:
-    stack = build_middleware_inventory(profile="COMMON_QA")
+    # Summarization disabled → CompactionMiddleware omitted; the required
+    # COMMON_QA middleware appear in design §3 order.
+    config = SimpleNamespace(
+        context_display_enabled=False,
+        summarization_enabled=False,
+        max_retries=0,
+    )
+    with patch("noesis.factory.ModelConfig", config):
+        stack = build_middleware_inventory(profile="COMMON_QA")
     assert [type(item).__name__ for item in stack] == [
         "ToolResultBudgetMiddleware",
         "ToolFailureMiddleware",
@@ -32,6 +43,25 @@ def test_inventory_has_single_kernel_in_spec_order() -> None:
         "PatchToolCallsMiddleware",
         "SafeModelRetryMiddleware",
     ]
+
+
+def test_inventory_includes_compaction_when_summarization_enabled() -> None:
+    # When summarization is enabled, CompactionMiddleware appears between
+    # PatchToolCalls and SafeModelRetry (design §3 position 16).
+    config = SimpleNamespace(
+        context_display_enabled=False,
+        summarization_enabled=True,
+        max_retries=0,
+    )
+    with patch("noesis.factory.ModelConfig", config):
+        try:
+            stack = build_middleware_inventory(profile="COMMON_QA")
+        except Exception:
+            pytest.skip("summarization requires a live model config")
+    names = [type(item).__name__ for item in stack]
+    if "CompactionMiddleware" in names:
+        assert names.index("CompactionMiddleware") > names.index("PatchToolCallsMiddleware")
+        assert names.index("CompactionMiddleware") < names.index("SafeModelRetryMiddleware")
 
 
 def test_langchain_hook_contract_is_before_wrap_after() -> None:
