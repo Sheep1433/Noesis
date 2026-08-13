@@ -278,9 +278,10 @@ async function downloadCurrentFile() {
 .file-preview__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
-  flex: 1;
+  flex: 0 1 auto;
+  margin-left: auto;
   min-width: 0;
 }
 
@@ -392,6 +393,9 @@ async function downloadCurrentFile() {
 
 <style lang="scss">
 .markdown-wrapper.markdown-wrapper--file-preview {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding: 8px 12px;
   border-radius: 0;
@@ -399,6 +403,7 @@ async function downloadCurrentFile() {
   font-size: 13px;
   line-height: 1.65;
   color: var(--noesis-color-text-table);
+  overflow-wrap: anywhere;
 
   h1 { font-size: 1.35em; }
   h2 { font-size: 1.15em; padding-bottom: 0.25em; border-bottom: 1px solid var(--noesis-markdown-heading-border); }
@@ -413,6 +418,11 @@ async function downloadCurrentFile() {
   p {
     margin: 8px 0;
     line-height: 1.65;
+  }
+
+  a,
+  :not(pre) > code {
+    overflow-wrap: anywhere;
   }
 
   ul, ol {

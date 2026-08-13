@@ -199,6 +199,9 @@ onMounted(() => {
 
 <style lang="scss">
 .markdown-wrapper {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   margin-left: 10%;
   margin-right: 10%;
   background-color: var(--noesis-color-bg-elevated);
@@ -215,6 +218,7 @@ onMounted(() => {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizelegibility;
+  overflow-wrap: anywhere;
 
   h1 { font-size: 2em; }
   h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--noesis-markdown-heading-border); }
@@ -251,6 +255,11 @@ onMounted(() => {
     text-decoration: underline;
     padding: 0 3px;
     display: inline;
+    overflow-wrap: anywhere;
+  }
+
+  :not(pre) > code {
+    overflow-wrap: anywhere;
   }
 
   .citation-sup {

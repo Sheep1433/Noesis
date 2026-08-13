@@ -8,6 +8,7 @@ import {
   hasValidUsage,
   markStreamingPartsComplete,
   normalizeApiContent,
+  resolveLoadedContextSnapshot,
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
 } from '@/views/chat/messageParts'
@@ -256,5 +257,22 @@ describe('hasValidUsage / hasValidContextWindow 降级', () => {
     expect(hasValidContextWindow({
       current_tokens: 5000, max_tokens: 128000, used_percentage: 4,
     })).toBe(true)
+  })
+
+  it('刚收到的有效上下文不会被尚未落库的旧快照清空', () => {
+    const current = { current_tokens: 2400, max_tokens: 128000, used_percentage: 1.8 }
+    expect(resolveLoadedContextSnapshot(
+      { current_tokens: 39_000_000, max_tokens: 128000, used_percentage: 100 },
+      current,
+      'session-1',
+      'session-1',
+      true,
+    )).toEqual(current)
+    expect(resolveLoadedContextSnapshot(
+      { current_tokens: 39_000_000, max_tokens: 128000, used_percentage: 100 },
+      current,
+      'session-1',
+      'session-2',
+    )).toBeNull()
   })
 })
