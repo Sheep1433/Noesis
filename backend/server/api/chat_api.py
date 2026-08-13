@@ -814,11 +814,23 @@ async def stop_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
-    return ResponseUtil.success(
-        msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
-        data=snapshot.to_dict(),
-    )
+    # TEMP-DEBUG: 排查前端“停止请求失败”的真实原因
+    try:
+        snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
+        logger.info(
+            "[TEMP-DEBUG] stop_run 成功 run_id={} user_id={} status={}",
+            run_id, current_user.user_id, snapshot.status.value,
+        )
+        return ResponseUtil.success(
+            msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
+            data=snapshot.to_dict(),
+        )
+    except Exception as e:
+        logger.warning(
+            "[TEMP-DEBUG] stop_run 失败 run_id={} user_id={} type={} msg={}",
+            run_id, current_user.user_id, type(e).__name__, str(e),
+        )
+        raise
 
 
 @chat_router.post("/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务")

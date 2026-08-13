@@ -4,7 +4,7 @@ import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalo
 import type { ChatAttachmentItem } from '@/store/business'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
-import { ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { createAgentRun, ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
@@ -447,6 +447,14 @@ const mentionPickerCandidates = ref<MentionCandidate[]>([])
 const mentionPickerLoading = ref(false)
 const mentionTriggerIndex = ref(-1)
 const mentionTriggerChar = ref<'/' | '@' | ''>('')
+
+// 内置命令结果弹窗（ephemeral，不进对话框、不落库）
+const commandResultModal = reactive({
+  show: false,
+  title: '',
+  text: '',
+  loading: false,
+})
 
 interface FileUploadRef {
   pendingUploadFileInfoList: UploadFileInfo[] | null | undefined
@@ -1475,6 +1483,12 @@ async function syncMentionPickerFromInput() {
 }
 
 function onMentionSelect(item: MentionCandidate) {
+  // 内置命令：弹窗展示结果，不插输入框、不发消息、不落库。
+  if (item.kind === 'command' && item.id) {
+    void runBuiltinCommand(item.id)
+    closeMentionPicker()
+    return
+  }
   const mention = candidateToMention(item)
   const token = formatMentionToken(mention)
   const existingKey = `${mention.type}:${mention.id || mention.path}`
@@ -1497,6 +1511,31 @@ function onMentionSelect(item: MentionCandidate) {
     nextTick(() => ta?.focus())
   }
   closeMentionPicker()
+}
+
+async function runBuiltinCommand(name: string) {
+  // 复用 create_run 拦截路径：POST /runs with content=`/name` → command_reply。
+  const sessionId = uuids.value[qa_type.value] || ''
+  commandResultModal.loading = true
+  commandResultModal.show = true
+  commandResultModal.title = `/${name}`
+  commandResultModal.text = ''
+  try {
+    const created = await createAgentRun({
+      session_id: sessionId,
+      content: `/${name}`,
+      client_request_id: crypto.randomUUID(),
+    })
+    if ('command_reply' in created && created.command_reply) {
+      commandResultModal.text = created.command_reply
+    } else {
+      commandResultModal.text = '命令未返回结果（可能已创建 run）。'
+    }
+  } catch (e) {
+    commandResultModal.text = `命令执行失败：${(e as Error).message ?? '未知错误'}`
+  } finally {
+    commandResultModal.loading = false
+  }
 }
 
 function onComposerKeydown(e: KeyboardEvent) {
@@ -2781,10 +2820,34 @@ function onComposerPaste(e: ClipboardEvent) {
       :show="isModalOpen"
       @update:show="handleModalClose"
     />
+    <n-modal
+      v-model:show="commandResultModal.show"
+      preset="card"
+      :title="commandResultModal.title"
+      style="max-width: 560px"
+      :bordered="false"
+    >
+      <n-spin :show="commandResultModal.loading">
+        <pre class="command-result-text">{{ commandResultModal.text }}</pre>
+      </n-spin>
+    </n-modal>
   </div>
 </template>
 
 <style lang="scss" scoped>
+.command-result-text {
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--noesis-text, #222);
+}
+
 .assistant-tool-failure-blocker {
   display: flex;
   align-items: center;
