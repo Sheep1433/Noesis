@@ -493,6 +493,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     }
 
     tool_name_by_call_id.clear()
+    tool_step_id_by_call_id.clear()
     error.value = null
     const generation = beginStream(sessionId)
     const clientRequestId = crypto.randomUUID()

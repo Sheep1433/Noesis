@@ -298,19 +298,15 @@ class LangGraphSseBridge:
     ) -> Optional[str]:
         """tool-output-available 回传与 start 一致的 step_id。
 
-        优先读 builder 里 ToolPart 已记录的 step_id（跨乱序 on_tool_end 仍精确匹配）；
-        回退到 ctx ``current_step_ids``（按 scope，同 step 内的工具都能命中）。
+        优先读 builder 里 ToolPart 已记录的 step_id（跨乱序 on_tool_end 仍精确匹配）。
+        ``on_tool_end`` 总在 ``on_tool_start`` 之后触发，ToolPart 已带 step_id，
+        故此 fallback 极少命中；命中则返回 None（不带 step_id）而非猜测 root scope，
+        避免把子 Agent 工具错挂到顶层 step_id。
         """
         if builder is not None:
             tool_part = builder.get_tool(tool_call_id)
             if tool_part is not None and tool_part.step_id:
                 return tool_part.step_id
-        scope_map = ctx.get("current_step_ids") or {}
-        if scope_map:
-            # 顶层 scope
-            root_id = scope_map.get("root")
-            if root_id:
-                return root_id
         return None
 
 
