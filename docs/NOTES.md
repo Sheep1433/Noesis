@@ -1049,3 +1049,65 @@ backends/
 - 429/503 统一走 `ResponseUtil`（code-review 硬性违规项）。
 
 **验证：** 后端 887 passed；前端 lint + build + 14 单元测试；tasks 57/57。spec 真源 `openspec/changes/reliable-sse-multitab/`。
+
+## 2026-08-12 — context 中间件重构落地：12 个自包含中间件
+
+**Why：** 8/11 定稿的 simplify-agent-context spec 需要落地，且用户对「哪些自研、哪些复用上游」有强约束：自研多个中间件可体现能力（支撑项目合理性），但每个 middleware 必须**自包含**（deepagents 风格：各自独立负责拦截/处理，不 import runtime/service/agents）。
+
+**成果（worktree `feat/simplify-agent-context`）：**
+- `noesis/middleware/` 平铺包：12 个中间件 + `__init__.py` + `stack.py`（装配 + Profile 矩阵）；14 测试文件，982 单测通过；net +5357/−1588。
+- 自包含验证：12 中间件零 import `runtime`/`service`/`agents`，中间件互相零 import。
+- Profile 矩阵修正：`build_noesis_stack` 之前无条件加入 DurableContext、缺 SourceRefresh，与 design §16 矛盾 → 已按 profile 决定必需归属，5 个 Profile 实际 stack 与 design 一致。
+- 旧五 owner kernel 已删；`evals/compression/driver` 改用新 `CompactionMiddleware`。
+- middleware 清单：dynamic_context / source_refresh / durable_context / file_context / snip / micro_compaction / tool_catalog / compaction / subagents / tool_failure / tool_result_limit / safe_model_retry。subagent 走 isolated/fork/resume context policy（执行器复用 langchain/deepagents）。
+
+**已知精化缺口（不影响「已实现」，待后续）：**
+1. Compaction 预算覆盖面：factory 注入的 `token_counter` 只数 messages，未覆盖 system prompt + tool definitions（design §17 / agent-runtime spec 要求覆盖最终 request 全部组成；需接真实 tokenizer）。
+2. `_context_budget.py` / `_summary_prompt.py` 未拆成独立文件（design 目录布局建议，当前内联，行为已实现）。
+
+**验证与遗留：** 核查已通过（stack 顺序、Profile 矩阵、自包含性、旧 kernel 删除、982 测试）；worktree 未合并 dev。spec 真源 `openspec/changes/simplify-agent-context-architecture/`。
+
+## 2026-08-12 — 引用溯源是两段式：URL 校验把证据全拒
+
+**问题/症状：** 跑了一轮 web_search 搜索了很多结果，但一次引用溯源都没有（前端无 CitationSources 卡片、正文无 `[1]` 内联）。
+
+**根因：** 引用溯源是两段式，不是纯模型自觉：
+1. **结构化来源**（前端引用卡片）：结果经 `register_retrieval_results` 登记为 `RetrievalPart`，经 `retrieval-results-available` SSE 下发；要求每条 `citable=True`（`identity_status == "versioned"`）且通过 `EvidenceEnvelope` 校验。
+2. **正文内联**（`[1]`/`[2]` + `### 参考资料`）：`CITATION_EXTENSION` prompt 驱动模型把工具实际返回的来源编号嵌进正文（明确禁止输出 evidence_id/document_id/JSON）。
+
+当日 8 条结果**全部**被 `_canonical_url` 判为 `invalid web evidence URL` 过滤 → 模型实际拿到的检索结果是空的，自然无源可引。已在 `_normalize_web_result` 加临时 debug（打被拒结果和原始 item 的 url 字段/keys 命名），待复测。
+
+**可迁移原则：** 排查「为什么没有引用」先分清两段：结构化证据登记 vs prompt 内联生成。结构化段常见坑是 URL/身份校验过严把合法结果全拒（校验的字段命名或 provider 返回格式与预期不符）；「结果多但引用零」往往不是模型没遵循 prompt，而是模型根本没拿到可引用的源。
+
+**验证与遗留：** 根因已定位，临时日志待用户跑一轮带 web_search 的问答后确认；修复后 `_canonical_url` 的字段名/白名单需与 provider 实际返回对齐。
+
+## 2026-08-12 — usage 展示口径：多轮调用的 input 累加 ≠ 单轮用量（613.9K）
+
+**问题/症状：** 前端显示「本轮用量 ↑613.9K ↓4.8K · 共 618.8K」，明显夸张，用户怀疑重复统计。
+
+**根因链路：**
+- `_accumulate_usage`（`langgraph_bridge.py`）每次 `on_chat_model_end` 把 `input_tokens` **累加**到 `ctx["usage_cumulative"]`；工具调用循环里每轮 model 调用 input 都含完整上下文（~100K），6 次调用累加成 600K+。技术上正确（确实是 N 次调用 input 总和），但不是用户期望的口径。
+- 去重依赖 `run_id`，`run_id` 为空时跳过（两层去重都失效）。
+- `finalize_events` 发 finish 时读 `self._usage_cumulative`（Bridge 实例级），与 `_emit_usage_update` 走的 ctx 路径不一致；且日志显示 ctx 在两次调用之间被重置（疑似 HITL resume / 不同执行分段）。
+
+**决策（用户拍板）：** 去掉「本轮用量」文字，只保留圆环。理由：累计数字对用户无任何可操作性（不知道 613.9K 是多还是少），是开发者调试信息；圆环（上下文剩余）才有行动价值（决定是否开新会话）。
+
+- 圆环链路独立且正确：`on_chat_model_end → ContextMetricsRegistry.put(current_tokens=单次 input, max_tokens=模型上限)` → `context-update` SSE → 前端圆环。`current_tokens` 覆盖式不累积。
+- 顺带 UI 收口：已处理时间移到卡片上方空白区；复制按钮+时间移卡片下方（与用户消息一致）；完成后保留（`completed_at − created_at`）；历史加载补 `completed_at`。900 passed。
+
+**可迁移原则：** 统计口径要先问「这个数给谁看、看它做什么决策」：累计 input 只对计费/成本核算有意义，用户决策靠上下文剩余；展示层要把「本轮用量」和「当前上下文占用」分开（延续 8/10–8/11）。去重键缺失（run_id 为空）会静默失效，要保证权威终态只在唯一路径产出。
+
+## 2026-08-12 — 统一命令层（三端发现）+ 聊天场景解耦 /tree
+
+**Why：** Web/Telegram/CLI 三端命令能力不一致，且聊天窗口请求 `/tree` 下载整棵 3 万行 skills 文件树（`baoyu-url-to-markdown` 一个包带 `scripts/node_modules` 就 2210 个文件节点）。
+
+**统一命令层（feat/unified-slash-commands）：**
+- 命令发现三端：Web `useMentionCatalog` slash 模式并入控制命令 + `GET /api/chat/commands`；Telegram `TelegramBotClient.set_my_commands` 注册 Bot 原生命令菜单；CLI `noesis help` 子命令 + 交互模式 readline Tab 补全。三端共用单一数据源：控制命令 `@command(name, description=...)` + skill 命令 SKILL.md frontmatter。
+- 热加载：public skills 用目录 mtime 做 revision（无新文件），变了重注册。
+- 内置命令弹窗展示：选中 command 项 → `createAgentRun(content=/help)` → 后端 `command_reply` 拦截 → 前端 `n-modal` 弹窗，不插输入框、不发消息、不落库；MentionPicker 视觉区分 命令/系统/个人（蓝/绿/紫）。
+
+**接口解耦：**
+- 新增轻量 `GET /api/skills/fs/packages`（只返回顶层包 id+source+description），`useMentionCatalog`/`ChatComposerToolbar` 改调它（4 包 vs 2210 文件节点）。
+- `_scan_dir` 过滤噪声目录（`node_modules`/`.git`/`vendor`/`__pycache__`/`.venv`）→ `/tree` 从数万行降到 39 节点/10KB，只服务技能管理页文件浏览器。933 passed。
+
+**可迁移原则：** 大接口被「顺手复用」要按场景校验数据量：聊天要的是包名列表不是文件树；过滤只针对非 skill 内容的依赖目录，不能按大小/深度裁剪用户真正想浏览的内容。命令发现统一走「单一元数据源 + 每端适配」，不要每端各写一套命令表。
