@@ -2,6 +2,7 @@
 import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
+import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { createAgentRun, ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
@@ -64,6 +65,7 @@ import {
   hasValidContextWindow,
   markStreamingPartsComplete,
   normalizeApiContent,
+  resolveLoadedContextSnapshot,
   shortenChatErrorToast,
   shouldShowAssistantToolFailureBlocker,
   syncLegacyFieldsFromParts,
@@ -82,6 +84,13 @@ function retrievedResults(parts: UiPart[]) {
   return parts
     .filter((part) => part.type === 'retrieval')
     .flatMap((part) => part.type === 'retrieval' ? part.results : [])
+}
+
+function entryKey(entry: DisplayPartEntry, fallback: number): string {
+  if (entry.kind === 'parallel_tools') {
+    return `pg:${entry.parts[0]?.tool_call_id ?? entry.parts[0]?.id ?? fallback}`
+  }
+  return entry.part.tool_call_id ?? entry.part.id ?? String(fallback)
 }
 
 type CitationSourcesHandle = InstanceType<typeof CitationSources>
@@ -249,6 +258,8 @@ function resetComposingSurface() {
   sseStream.detachSubscription()
   stopProcessingClock()
   sessionContext.value = null
+  sessionContextSessionId.value = ''
+  sessionContextIsLive.value = false
   showDefaultPage.value = true
   isInit.value = true
   isView.value = false
@@ -725,6 +736,9 @@ const nativeReasoningSeen = ref(false)
 const uuids = ref<Record<string, string>>({})
 
 const sessionContext = ref<import('@/api/chat').ContextSnapshot | null>(null)
+const sessionContextSessionId = ref('')
+const sessionContextIsLive = ref(false)
+let sessionContextLoadId = 0
 const selectedKbCollections = ref<string[]>([])
 const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
@@ -795,14 +809,30 @@ const showContextIndicator = computed(
 )
 
 async function loadSessionContext(sessionId: string) {
+  const loadId = ++sessionContextLoadId
   if (!sessionId || qa_type.value === 'TEST_CASE_QA') {
     sessionContext.value = null
+    sessionContextSessionId.value = ''
+    sessionContextIsLive.value = false
     return
   }
   try {
     const session = await getSession(sessionId)
+    if (loadId !== sessionContextLoadId || sessionId !== getChatSessionId()) {
+      return
+    }
     const raw = session.extra?.context
-    sessionContext.value = hasValidContextWindow(raw) ? raw : null
+    const preserveLiveSnapshot = sessionContextIsLive.value && sessionContextSessionId.value === sessionId
+    const loaded = resolveLoadedContextSnapshot(
+      raw,
+      sessionContext.value,
+      sessionContextSessionId.value,
+      sessionId,
+      preserveLiveSnapshot,
+    )
+    sessionContext.value = loaded
+    sessionContextSessionId.value = loaded ? sessionId : ''
+    sessionContextIsLive.value = Boolean(loaded && preserveLiveSnapshot)
     selectedKbCollections.value = normalizeKbCollections(session.extra?.kb_collections)
     kbSearchEnabled.value = session.extra?.kb_search_enabled !== false
     const storedModelId = String(session.extra?.model_id ?? '').trim()
@@ -823,7 +853,15 @@ async function loadSessionContext(sessionId: string) {
     }
     sessionMaterialized.value = true
   } catch {
-    sessionContext.value = null
+    if (loadId !== sessionContextLoadId || sessionId !== getChatSessionId()) {
+      return
+    }
+    const preserveLiveSnapshot = sessionContextIsLive.value && sessionContextSessionId.value === sessionId
+    if (!preserveLiveSnapshot) {
+      sessionContext.value = null
+      sessionContextSessionId.value = ''
+      sessionContextIsLive.value = false
+    }
     selectedKbCollections.value = []
     kbSearchEnabled.value = true
     selectedModelId.value = ''
@@ -927,9 +965,9 @@ const sseStream = useSSEStream({
   onReasoningEnd: () => {
     patchLastAssistantParts((parts) => completeLastReasoningPart(parts))
   },
-  onToolCall: (name, args, tool_call_id, parent_task_call_id) => {
+  onToolCall: (name, args, tool_call_id, parent_task_call_id, step_id) => {
     patchLastAssistantParts((parts) =>
-      upsertToolInputPart(parts, tool_call_id, name, args, parent_task_call_id),
+      upsertToolInputPart(parts, tool_call_id, name, args, parent_task_call_id, step_id),
     )
     if (shouldApplyWriteTodos(name, args)) {
       const parsed = parseWriteTodosInput(args)
@@ -1043,6 +1081,8 @@ const sseStream = useSSEStream({
   },
   onContextUpdate: (context) => {
     sessionContext.value = context
+    sessionContextSessionId.value = getChatSessionId()
+    sessionContextIsLive.value = true
   },
   onError: (msg) => {
     stylizingLoading.value = false
@@ -1888,6 +1928,8 @@ const activateChatMode = (
     uuids.value[targetQaType] = uuidv4()
     sessionMaterialized.value = false
     sessionContext.value = null
+    sessionContextSessionId.value = ''
+    sessionContextIsLive.value = false
     selectedKbCollections.value = []
     kbSearchEnabled.value = true
     selectedModelId.value = ''
@@ -2431,9 +2473,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         <div class="assistant-unified-card">
                           <template
                             v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
-                            :key="entry.kind === 'subagent'
-                              ? (entry.part.tool_call_id ?? entry.part.id ?? pi)
-                              : (entry.part.id ?? pi)"
+                            :key="entryKey(entry, pi)"
                           >
                             <ReasoningBlock
                               v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
@@ -2453,6 +2493,31 @@ function onComposerPaste(e: ClipboardEvent) {
                               :duration_ms="entry.part.duration_ms"
                               :child-parts="entry.childParts"
                             />
+                            <div
+                              v-else-if="entry.kind === 'parallel_tools'"
+                              class="parallel-tools-group parallel-tools-group--light"
+                            >
+                              <div class="parallel-tools-group__header">
+                                并行工具 · {{ entry.parts.length }} 个
+                              </div>
+                              <div class="parallel-tools-group__body">
+                                <ToolCallCollapse
+                                  v-for="tp in entry.parts"
+                                  :key="tp.tool_call_id ?? tp.id"
+                                  appearance="light"
+                                  :name="tp.name"
+                                  :arguments="tp.input"
+                                  :result="tp.output"
+                                  :error="tp.error"
+                                  :status="tp.status"
+                                  :state="tp.state"
+                                  :error-category="tp.errorCategory"
+                                  :exit_code="tp.exit_code"
+                                  :truncated="tp.truncated"
+                                  :duration_ms="tp.duration_ms"
+                                />
+                              </div>
+                            </div>
                             <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
                               <ToolCallCollapse
                                 appearance="light"
@@ -3265,6 +3330,32 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 16px;
   overflow: visible;
   box-shadow: var(--noesis-shadow-sm);
+}
+
+.parallel-tools-group--light {
+  margin: 5px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--noesis-block-light-border);
+  border-left: 3px solid var(--noesis-block-light-accent);
+  border-radius: var(--noesis-radius-md);
+  background: var(--noesis-block-light-bg);
+}
+
+.parallel-tools-group__header {
+  font-size: 12px;
+  color: var(--noesis-color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.parallel-tools-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.parallel-tools-group__body :deep(.tool-call--light) {
+  margin: 0;
+  box-shadow: none;
 }
 
 .chat-top-bar {

@@ -1637,3 +1637,112 @@ def test_steps_bounded_does_not_grow_unbounded() -> None:
     # bridge 处理不报错；collector steps 不超 MAX_STEPS
     assert len(bridge._usage_collector.steps) == 5  # noqa: SLF001
     assert bridge._usage_collector.summary()["cumulative"]["input_tokens"] == 5  # noqa: SLF001
+
+
+def _tool_start_event(name: str, run_id: str, tool_call_id: str, parent_ids=None) -> Dict[str, Any]:
+    return {
+        "event": "on_tool_start",
+        "name": name,
+        "run_id": run_id,
+        "parent_ids": parent_ids or [],
+        "data": {"input": {"q": tool_call_id}, "tool_call_id": tool_call_id},
+    }
+
+
+def test_parallel_tools_same_model_step_share_step_id() -> None:
+    """同一 model step 内并行调用的工具共享 step_id；不同 step 的 step_id 不同。"""
+    bridge = LangGraphSseBridge("sess-step")
+    builder = AssistantMessageBuilder(session_id="sess-step", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    # step 1: model start → 两个并行 tool start
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
+    parts: List[str] = []
+    parts.extend(bridge.process_item(_tool_start_event("web_search", "t-1a", "call-1a"), builder, ctx))
+    parts.extend(bridge.process_item(_tool_start_event("web_fetch", "t-1b", "call-1b"), builder, ctx))
+    objs = _data_json_objects("".join(parts))
+    avail = [o for o in objs if o["type"] == "tool-input-available"]
+    assert len(avail) == 2
+    assert avail[0]["step_id"] == avail[1]["step_id"] == "root:1"
+
+    # tool-output-available 也带同一 step_id
+    out_parts: List[str] = []
+    out_parts.extend(bridge.process_item(
+        {"event": "on_tool_end", "name": "web_search", "run_id": "t-1a",
+         "data": {"output": "ok"}}, builder, ctx,
+    ))
+    out_objs = _data_json_objects("".join(out_parts))
+    out_avail = [o for o in out_objs if o["type"] == "tool-output-available"]
+    assert out_avail[0]["step_id"] == "root:1"
+
+    # step 2: 新 model start → 单个 tool，step_id 递增
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-2"}, builder, ctx)
+    parts2: List[str] = []
+    parts2.extend(bridge.process_item(_tool_start_event("read", "t-2a", "call-2a"), builder, ctx))
+    objs2 = _data_json_objects("".join(parts2))
+    avail2 = [o for o in objs2 if o["type"] == "tool-input-available"]
+    assert avail2[0]["step_id"] == "root:2"
+
+
+def test_single_tool_still_gets_step_id() -> None:
+    """单工具调用也有 step_id（前端按 ≥2 分组，单工具不分组但不报错）。"""
+    bridge = LangGraphSseBridge("sess-step-single")
+    builder = AssistantMessageBuilder(session_id="sess-step-single", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
+    parts = bridge.process_item(_tool_start_event("read", "t-1", "call-1"), builder, ctx)
+    avail = next(o for o in _data_json_objects("".join(parts)) if o["type"] == "tool-input-available")
+    assert avail["step_id"] == "root:1"
+
+
+def test_subagent_parallel_tools_step_id_scoped_by_task() -> None:
+    """子 Agent 内部并行工具的 step_id 按 parent_task_call_id 独立计数，与顶层不混淆。"""
+    bridge = LangGraphSseBridge("sess-step-sub")
+    builder = AssistantMessageBuilder(session_id="sess-step-sub", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    task_run = "run-task-s"
+    # 顶层 model step + task tool
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-top"}, builder, ctx)
+    parts: List[str] = []
+    parts.extend(bridge.process_item(
+        {"event": "on_tool_start", "name": TASK_TOOL_NAME, "run_id": task_run, "parent_ids": [],
+         "data": {"input": {"description": "d", "subagent_type": "general-purpose", "prompt": "p"}}},
+        builder, ctx,
+    ))
+    task_avail = next(o for o in _data_json_objects("".join(parts)) if o["type"] == "tool-input-available" and o["name"] == TASK_TOOL_NAME)
+    task_call_id = task_avail["tool_call_id"]
+
+    # 子 Agent 内部 model step + 两个并行 tool
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-sub", "parent_ids": [task_run]}, builder, ctx)
+    sub_parts: List[str] = []
+    sub_parts.extend(bridge.process_item(
+        _tool_start_event("read", "r-sub-1", "call-sub-1", parent_ids=[task_run]), builder, ctx,
+    ))
+    sub_parts.extend(bridge.process_item(
+        _tool_start_event("grep", "r-sub-2", "call-sub-2", parent_ids=[task_run]), builder, ctx,
+    ))
+    sub_objs = _data_json_objects("".join(sub_parts))
+    sub_avail = [o for o in sub_objs if o["type"] == "tool-input-available"]
+    assert len(sub_avail) == 2
+    expected_scope = f"{task_call_id}:1"
+    assert sub_avail[0]["step_id"] == sub_avail[1]["step_id"] == expected_scope
+    # 与顶层 step_id（root:1）不同
+    assert sub_avail[0]["step_id"] != "root:1"
+
+
+def test_step_id_survives_builder_persistence() -> None:
+    """step_id 经 builder.to_dict → from_dict 往返存活。"""
+    from noesis.chat.message_builder import MessageContent
+    bridge = LangGraphSseBridge("sess-step-persist")
+    builder = AssistantMessageBuilder(session_id="sess-step-persist", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "m-1"}, builder, ctx)
+    bridge.process_item(_tool_start_event("read", "t-1", "call-1"), builder, ctx)
+    bridge.process_item(_tool_start_event("read", "t-2", "call-2"), builder, ctx)
+
+    dumped = builder.to_dict()
+    restored = MessageContent.from_dict(dumped)
+    tool_parts = [p for p in restored.parts if isinstance(p, ToolPart)]
+    assert len(tool_parts) == 2
+    assert {p.step_id for p in tool_parts} == {"root:1"}

@@ -46,6 +46,8 @@ export interface ToolUiPart {
   truncated?: boolean
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
   parent_task_call_id?: string
+  /** 同一 model step 内并行调用的工具共享此 id，用于前端并行分组展示 */
+  step_id?: string
   /** HITL 审批/澄清状态（可选扩展） */
   hitl?: {
     kind?: string
@@ -392,6 +394,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
         timed_out: rec.timed_out != null ? Boolean(rec.timed_out) : undefined,
         truncated: rec.truncated != null ? Boolean(rec.truncated) : undefined,
         ...(parent_task_call_id ? { parent_task_call_id } : {}),
+        ...(typeof rec.step_id === 'string' && rec.step_id ? { step_id: rec.step_id } : {}),
         ...(hitl ? { hitl } : {}),
       }
       const toolCallId = toolPart.tool_call_id
@@ -422,6 +425,7 @@ export function normalizeApiContent(raw: unknown): MessageContentV1 {
           name: toolPart.name || existing.name,
           input: Object.keys(toolPart.input).length > 0 ? toolPart.input : existing.input,
           output: toolPart.output || existing.output,
+          step_id: toolPart.step_id ?? existing.step_id,
           hitl: { ...(existing.hitl || {}), ...(toolPart.hitl || {}) },
         }
       }
@@ -623,6 +627,23 @@ export function hasValidContextWindow(context: unknown): context is ContextWindo
   const current = Number(c.current_tokens ?? 0)
   const pct = Number(c.used_percentage ?? Number.NaN)
   return max > 0 && current >= 0 && current <= max && !Number.isNaN(pct)
+}
+
+/** Keep a valid live snapshot when it races an older persisted snapshot. */
+export function resolveLoadedContextSnapshot(
+  raw: unknown,
+  current: ContextWindowSnapshot | null,
+  currentSessionId: string,
+  sessionId: string,
+  currentIsLive = false,
+): ContextWindowSnapshot | null {
+  if (currentIsLive && currentSessionId === sessionId && current) {
+    return current
+  }
+  if (hasValidContextWindow(raw)) {
+    return raw
+  }
+  return currentSessionId === sessionId ? current : null
 }
 
 export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
@@ -998,6 +1019,7 @@ export function upsertToolInputPart(
   name: string,
   input: Record<string, unknown>,
   parent_task_call_id?: string,
+  step_id?: string,
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
@@ -1009,6 +1031,7 @@ export function upsertToolInputPart(
       name: name || tp.name,
       input,
       ...(parentId ? { parent_task_call_id: parentId } : {}),
+      ...(step_id ? { step_id } : {}),
     }
     return next
   }
@@ -1022,6 +1045,7 @@ export function upsertToolInputPart(
     status: 'running',
     state: 'running',
     ...(parentId ? { parent_task_call_id: parentId } : {}),
+    ...(step_id ? { step_id } : {}),
   })
   return next
 }
@@ -1040,6 +1064,7 @@ export function applyToolOutput(
     exit_code?: number
     timed_out?: boolean
     truncated?: boolean
+    step_id?: string
   },
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
@@ -1063,6 +1088,7 @@ export function applyToolOutput(
       exit_code: payload.exit_code,
       timed_out: payload.timed_out,
       truncated: payload.truncated,
+      ...(payload.step_id ? { step_id: payload.step_id } : {}),
     })
     return next
   }
@@ -1082,6 +1108,7 @@ export function applyToolOutput(
     exit_code: payload.exit_code ?? tp.exit_code,
     timed_out: payload.timed_out ?? tp.timed_out,
     truncated: payload.truncated ?? tp.truncated,
+    step_id: payload.step_id ?? tp.step_id,
   }
   return next
 }

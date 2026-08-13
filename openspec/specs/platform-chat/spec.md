@@ -103,6 +103,8 @@ HITL 暂停时 assistant SHALL 保持 `streaming`；resume 续写同一 `run_id`
 
 `tool-output-available` SHALL 携带单次工具耗时；错误帧 MAY 含 `errorCategory`；成功帧 MAY 含 outcome 元数据。assistant 落库 tool part SHALL 与 SSE 错误语义一致。细则见 `agent-tool-failure-handling`。
 
+`tool-input-start` / `tool-input-available` / `tool-output-available` MAY 携带可选 `step_id` 标识所属 model step；同一 model step 内并行调用的工具共享同一 `step_id`。`step_id` 为增量字段，client MAY 忽略；assistant 落库 tool part SHALL 保留 `step_id` 以支持重载后重建并行分组。
+
 #### Scenario: 耗时字段
 
 - **WHEN** 工具调用结束并发出 tool-output-available

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { SubagentRunStatus } from '@/utils/parseTaskTool'
 import type { ToolLifecycleState, ToolRunStatus, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
@@ -6,6 +7,7 @@ import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
+import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import {
   parseTaskToolInput,
   parseTaskToolOutput,
@@ -40,6 +42,14 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const childTimelineParts = computed(() => props.childParts ?? [])
+const childDisplayParts = computed(() => buildDisplayParts(childTimelineParts.value))
+
+function entryKey(entry: DisplayPartEntry, fallback: number): string {
+  if (entry.kind === 'parallel_tools') {
+    return `pg:${entry.parts[0]?.tool_call_id ?? entry.parts[0]?.id ?? fallback}`
+  }
+  return entry.part.tool_call_id ?? entry.part.id ?? String(fallback)
+}
 
 const DISPLAY_MAX = 32_000
 
@@ -165,34 +175,62 @@ const durationDisplay = computed(() => {
         <div v-if="childTimelineParts.length > 0" class="subagent-section subagent-section--timeline">
           <div class="subagent-section__label">执行过程</div>
           <div class="subagent-timeline">
-            <template v-for="(child, ci) in childTimelineParts" :key="child.id ?? ci">
+            <template
+              v-for="(entry, ci) in childDisplayParts"
+              :key="entryKey(entry, ci)"
+            >
               <div
-                v-if="child.type === 'text' && (child.content || child.status === 'streaming')"
+                v-if="entry.kind === 'part' && entry.part.type === 'text' && (entry.part.content || entry.part.status === 'streaming')"
                 class="subagent-narrative"
               >
-                <pre>{{ child.content }}</pre>
+                <pre>{{ entry.part.content }}</pre>
               </div>
               <ReasoningBlock
-                v-else-if="child.type === 'reasoning' && (child.content || child.status === 'streaming')"
-                :reasoning="child.content"
+                v-else-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
+                :reasoning="entry.part.content"
                 :defaultOpen="false"
-                :streaming="child.status === 'streaming'"
+                :streaming="entry.part.status === 'streaming'"
                 appearance="light"
               />
               <ToolCallCollapse
-                v-else-if="child.type === 'tool' && shouldRenderToolCallCollapse(child.name, child.input)"
+                v-else-if="entry.kind === 'part' && entry.part.type === 'tool' && shouldRenderToolCallCollapse(entry.part.name, entry.part.input)"
                 appearance="light"
-                :name="child.name"
-                :arguments="child.input"
-                :result="child.output"
-                :error="child.error"
-                :status="child.status"
-                :state="child.state"
-                :error-category="child.errorCategory"
-                :exit_code="child.exit_code"
-                :truncated="child.truncated"
-                :duration_ms="child.duration_ms"
+                :name="entry.part.name"
+                :arguments="entry.part.input"
+                :result="entry.part.output"
+                :error="entry.part.error"
+                :status="entry.part.status"
+                :state="entry.part.state"
+                :error-category="entry.part.errorCategory"
+                :exit_code="entry.part.exit_code"
+                :truncated="entry.part.truncated"
+                :duration_ms="entry.part.duration_ms"
               />
+              <div
+                v-else-if="entry.kind === 'parallel_tools'"
+                class="subagent-parallel-tools"
+              >
+                <div class="subagent-parallel-tools__header">
+                  并行工具 · {{ entry.parts.length }} 个
+                </div>
+                <div class="subagent-parallel-tools__body">
+                  <ToolCallCollapse
+                    v-for="tp in entry.parts"
+                    :key="tp.tool_call_id ?? tp.id"
+                    appearance="light"
+                    :name="tp.name"
+                    :arguments="tp.input"
+                    :result="tp.output"
+                    :error="tp.error"
+                    :status="tp.status"
+                    :state="tp.state"
+                    :error-category="tp.errorCategory"
+                    :exit_code="tp.exit_code"
+                    :truncated="tp.truncated"
+                    :duration_ms="tp.duration_ms"
+                  />
+                </div>
+              </div>
             </template>
           </div>
         </div>
@@ -436,6 +474,31 @@ const durationDisplay = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.subagent-parallel-tools {
+  margin: 2px 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--noesis-block-light-accent);
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-block-light-bg);
+}
+
+.subagent-parallel-tools__header {
+  font-size: 11px;
+  color: var(--noesis-color-text-secondary);
+  margin-bottom: 2px;
+}
+
+.subagent-parallel-tools__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subagent-parallel-tools__body :deep(.tool-call) {
+  margin: 0;
+  box-shadow: none;
 }
 
 .subagent-timeline :deep(.tool-call),

@@ -275,6 +275,46 @@ class LangGraphSseBridge:
         if run_id and str(run_id).strip():
             ctx["run_id_to_tool_call_id"][str(run_id)] = tool_call_id
 
+    def _mint_step_id(self, ctx: Dict[str, Any], parent_task_call_id: Optional[str]) -> Optional[str]:
+        """为当前 model step 的并行工具调用 mint 分组 step_id。
+
+        ``on_chat_model_start`` 把 scope 加入 ``pending_model_step_scopes``；
+        本方法在首个 ``on_tool_start`` 时 mint 新 step_id（按 scope 递增），后续同
+        step 的工具复用同一 step_id。model step 若不产 tool 则永不 mint（不分组）。
+        scope = parent_task_call_id or "root"，顶层与每个子 Agent 独立计数。
+        """
+        scope = parent_task_call_id or "root"
+        pending = ctx.get("pending_model_step_scopes")
+        if pending and scope in pending:
+            pending.discard(scope)
+            counters = ctx.setdefault("step_counters", {})
+            n = counters.get(scope, 0) + 1
+            counters[scope] = n
+            ctx.setdefault("current_step_ids", {})[scope] = f"{scope}:{n}"
+        return ctx.get("current_step_ids", {}).get(scope)
+
+    def _resolve_tool_step_id(
+        self, builder: Optional[AssistantMessageBuilder], tool_call_id: str, ctx: Dict[str, Any],
+    ) -> Optional[str]:
+        """tool-output-available 回传与 start 一致的 step_id。
+
+        优先读 builder 里 ToolPart 已记录的 step_id（跨乱序 on_tool_end 仍精确匹配）；
+        回退到 ctx ``current_step_ids``（按 scope，同 step 内的工具都能命中）。
+        """
+        if builder is not None:
+            tool_part = builder.get_tool(tool_call_id)
+            if tool_part is not None and tool_part.step_id:
+                return tool_part.step_id
+        scope_map = ctx.get("current_step_ids") or {}
+        if scope_map:
+            # 顶层 scope
+            root_id = scope_map.get("root")
+            if root_id:
+                return root_id
+        return None
+
+
+
     def _on_task_tool_start(self, tool_call_id: str, ctx: Dict[str, Any]) -> None:
         self._ensure_subagent_ctx(ctx)
         ctx["task_tool_call_stack"].append(tool_call_id)
@@ -537,7 +577,8 @@ class LangGraphSseBridge:
                           outcome: Optional[str] = None,
                           exit_code: Optional[int] = None,
                           timed_out: Optional[bool] = None,
-                          truncated: Optional[bool] = None) -> None:
+                          truncated: Optional[bool] = None,
+                          step_id: Optional[str] = None) -> None:
         payload: Dict[str, Any] = {
             "type": "tool-output-available",
             "message_id": self.assistant_message_id,
@@ -548,6 +589,8 @@ class LangGraphSseBridge:
             "state": ToolState(str(state)).value,
             "error": error,
         }
+        if step_id:
+            payload["step_id"] = step_id
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
         if error_category:
@@ -933,6 +976,9 @@ class LangGraphSseBridge:
         if lc_kind == "on_chat_model_start":
             self._close_reasoning(out, record_checkpoint=False)
             self._close_text(out, record_checkpoint=False)
+            # 标记该 scope 下一次 on_tool_start 要 mint 新 step_id（并行工具分组）。
+            scope = self._resolve_parent_task_call_id(item, ctx) or "root"
+            ctx.setdefault("pending_model_step_scopes", set()).add(scope)
             return
 
         if lc_kind == "on_chat_model_stream":
@@ -1033,6 +1079,8 @@ class LangGraphSseBridge:
         else:
             parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
 
+        step_id = self._mint_step_id(ctx, parent_task_call_id)
+
         self._ensure_metrics_ctx(ctx)
         ctx["tool_start_times"][tool_call_id] = time.perf_counter()
 
@@ -1046,6 +1094,7 @@ class LangGraphSseBridge:
                 tool_call_id,
                 parent_task_call_id=parent_task_call_id,
                 state=ToolState.RUNNING,
+                step_id=step_id,
             )
 
         part_id = _new_id("part-tool")
@@ -1062,6 +1111,8 @@ class LangGraphSseBridge:
         }
         if parent_task_call_id:
             start_payload["parent_task_call_id"] = parent_task_call_id
+        if step_id:
+            start_payload["step_id"] = step_id
         out.append(_format_sse("tool-input-start", start_payload))
         avail: Dict[str, Any] = {
             "type": "tool-input-available",
@@ -1074,6 +1125,8 @@ class LangGraphSseBridge:
         }
         if parent_task_call_id:
             avail["parent_task_call_id"] = parent_task_call_id
+        if step_id:
+            avail["step_id"] = step_id
         if input_text is not None:
             avail["input_text"] = input_text
         out.append(_format_sse("tool-input-available", avail))
@@ -1166,6 +1219,7 @@ class LangGraphSseBridge:
             self._on_task_tool_end(tool_call_id, ctx)
 
         part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
+        step_id = self._resolve_tool_step_id(builder, tool_call_id, ctx)
         self._emit_tool_output(
             out, part_id, tool_call_id, display_output, sse_status, err_s, duration_ms,
             error_category=err_cat,
@@ -1174,6 +1228,7 @@ class LangGraphSseBridge:
             exit_code=exit_code,
             timed_out=timed_out,
             truncated=truncated,
+            step_id=step_id,
         )
         if retrieval_part is not None:
             payload = retrieval_part.to_dict()
@@ -1229,10 +1284,12 @@ class LangGraphSseBridge:
             self._on_task_tool_end(tool_call_id, ctx)
 
         part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
+        step_id = self._resolve_tool_step_id(builder, tool_call_id, ctx)
         self._emit_tool_output(
             out, part_id, tool_call_id, "", "error", err_s, duration_ms,
             error_category=err_cat,
             state=derive_tool_state(status="error", error_category=err_cat),
+            step_id=step_id,
         )
 
 
