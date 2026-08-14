@@ -128,8 +128,8 @@ agent_runtime:
     loop_window_size: 20
 
 retrieval_limits:
-  max_results_per_call: 20
-  max_results_per_run: 100
+  max_results_per_call: 30
+  max_results_per_run: 500
   max_excerpt_chars: 2000
   max_excerpt_bytes: 8192
   max_locator_bytes: 2048

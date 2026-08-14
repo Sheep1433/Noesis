@@ -178,8 +178,8 @@ class AgentRuntimeYamlSection(BaseModel):
 
 
 class RetrievalLimitsYamlSection(BaseModel):
-    max_results_per_call: int = Field(default=20, ge=1, le=100)
-    max_results_per_run: int = Field(default=100, ge=1)
+    max_results_per_call: int = Field(default=30, ge=1)
+    max_results_per_run: int = Field(default=500, ge=1)
     max_excerpt_chars: int = Field(default=2000, ge=1)
     max_excerpt_bytes: int = Field(default=8192, ge=1)
     max_locator_bytes: int = Field(default=2048, ge=1)
