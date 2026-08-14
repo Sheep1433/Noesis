@@ -84,14 +84,6 @@ class ModelGenerationYamlSection(BaseModel):
     streaming: bool = True
 
 
-class ModelLimitYamlSection(BaseModel):
-    """模型上下文上限（与 models.dev / OpenCode ``limit`` 字段一致）。"""
-
-    context: int = Field(default=0, ge=0)
-    output: int | None = Field(default=None, ge=0)
-    input: int | None = Field(default=None, ge=0)
-
-
 class ModelCatalogEntryYamlSection(BaseModel):
     """可选对话模型；未填字段继承 model 层默认。"""
 
@@ -101,7 +93,8 @@ class ModelCatalogEntryYamlSection(BaseModel):
     name: str = ""
     temperature: float | None = None
     base_url: str = ""
-    limit: ModelLimitYamlSection | None = None
+    # 上下文窗口（圆环分母 / 压缩阈值）；0=未配置，继承 model 层或 fallback 默认
+    context_window: int = Field(default=0, ge=0)
 
 
 class ModelYamlSection(BaseModel):
@@ -116,7 +109,8 @@ class ModelYamlSection(BaseModel):
     max_retries: int = Field(default=2, ge=0)
     generation: ModelGenerationYamlSection = Field(default_factory=ModelGenerationYamlSection)
     default_catalog_id: str = ""
-    limit: ModelLimitYamlSection | None = None
+    # 上下文窗口（model 层默认，catalog 条目未配时继承）；0=未配置
+    context_window: int = Field(default=0, ge=0)
     catalog: list[ModelCatalogEntryYamlSection] = Field(default_factory=list)
 
 

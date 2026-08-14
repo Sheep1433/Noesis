@@ -1,13 +1,13 @@
-"""Per-model limit.context from catalog config."""
+"""Per-model context_window from catalog config."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelLimitYamlSection, ModelYamlSection
+from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelYamlSection
 from noesis.llm.catalog import ModelCatalogEntry, get_model_catalog, resolve_catalog_entry
-from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens, resolve_model_limit
+from noesis.llm.model_limits import DEFAULT_CONTEXT_TOKENS, resolve_context_max_tokens
 
 
 def _yaml_with_catalog() -> AppYamlConfig:
@@ -22,13 +22,13 @@ def _yaml_with_catalog() -> AppYamlConfig:
                     id="flash",
                     label="Flash",
                     name="deepseek-v4-flash-free",
-                    limit=ModelLimitYamlSection(context=200000, output=128000),
+                    context_window=200000,
                 ),
                 ModelCatalogEntryYamlSection(
                     id="nemotron",
                     label="Nemotron",
                     name="nemotron-3-ultra-free",
-                    limit=ModelLimitYamlSection(context=1_000_000, output=128000),
+                    context_window=1_000_000,
                 ),
             ],
         )
@@ -36,7 +36,7 @@ def _yaml_with_catalog() -> AppYamlConfig:
 
 
 @patch("noesis.llm.catalog.load_app_yaml")
-def test_resolve_context_max_tokens_from_catalog_limit(mock_load_yaml) -> None:
+def test_resolve_context_max_tokens_from_catalog_context_window(mock_load_yaml) -> None:
     mock_load_yaml.return_value = _yaml_with_catalog()
     get_model_catalog.cache_clear()
 
@@ -55,7 +55,7 @@ def test_resolve_context_max_tokens_falls_back_to_global(mock_resolve) -> None:
         model_name="qwen-plus",
         temperature=0.7,
         base_url="https://example.com/v1",
-        limit=None,
+        context_window=0,
     )
     cfg = SimpleNamespace(context_max_input_tokens=64000)
     with patch("noesis.llm.model_limits.ModelConfig", cfg):
@@ -71,7 +71,7 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
         model_name="qwen-plus",
         temperature=0.7,
         base_url="https://example.com/v1",
-        limit=None,
+        context_window=0,
     )
     cfg = SimpleNamespace(context_max_input_tokens=0)
     with patch("noesis.llm.model_limits.ModelConfig", cfg):
@@ -79,12 +79,12 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
 
 
 @patch("noesis.llm.catalog.load_app_yaml")
-def test_catalog_entry_inherits_model_level_limit(mock_load_yaml) -> None:
+def test_catalog_entry_inherits_model_level_context_window(mock_load_yaml) -> None:
     mock_load_yaml.return_value = AppYamlConfig(
         model=ModelYamlSection(
             type="qwen",
             name="qwen-plus",
-            limit=ModelLimitYamlSection(context=129024, output=8192),
+            context_window=129024,
             catalog=[
                 ModelCatalogEntryYamlSection(id="default", label="Plus", name="qwen-plus"),
             ],
@@ -93,23 +93,18 @@ def test_catalog_entry_inherits_model_level_limit(mock_load_yaml) -> None:
     get_model_catalog.cache_clear()
 
     entry = resolve_catalog_entry("default")
-    assert entry.limit is not None
-    assert entry.limit.context == 129024
-    assert entry.limit.output == 8192
+    assert entry.context_window == 129024
 
     get_model_catalog.cache_clear()
 
 
 @patch("noesis.llm.catalog.load_app_yaml")
-def test_resolve_model_limit_prefers_catalog_over_global(mock_load_yaml) -> None:
+def test_resolve_context_prefers_catalog_over_global(mock_load_yaml) -> None:
     mock_load_yaml.return_value = _yaml_with_catalog()
     get_model_catalog.cache_clear()
 
     cfg = SimpleNamespace(context_max_input_tokens=128000)
     with patch("noesis.llm.model_limits.ModelConfig", cfg):
-        limit = resolve_model_limit("flash")
-
-    assert limit.context == 200_000
-    assert limit.output == 128_000
+        assert resolve_context_max_tokens("flash") == 200_000
 
     get_model_catalog.cache_clear()

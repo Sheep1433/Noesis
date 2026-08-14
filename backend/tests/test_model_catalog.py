@@ -9,7 +9,7 @@ from noesis.llm.factory import get_llm
 
 @patch("noesis.llm.catalog.load_app_yaml")
 def test_model_catalog_uses_yaml_entries(mock_load_yaml):
-    from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelLimitYamlSection, ModelYamlSection
+    from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelYamlSection
 
     mock_load_yaml.return_value = AppYamlConfig(
         model=ModelYamlSection(
@@ -23,7 +23,7 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
                     id="reasoner",
                     label="Reasoner",
                     name="deepseek-reasoner",
-                    limit=ModelLimitYamlSection(context=200000, output=128000),
+                    context_window=200000,
                 ),
             ],
         )
@@ -34,8 +34,7 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
     assert len(catalog) == 2
     assert get_default_model_id() == "flash"
     assert resolve_catalog_entry("reasoner").model_name == "deepseek-reasoner"
-    assert resolve_catalog_entry("reasoner").limit is not None
-    assert resolve_catalog_entry("reasoner").limit.context == 200_000
+    assert resolve_catalog_entry("reasoner").context_window == 200_000
     assert resolve_catalog_entry(None).id == "flash"
 
     get_model_catalog.cache_clear()

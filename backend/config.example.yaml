@@ -44,9 +44,7 @@ model:
     - id: default
       label: Qwen Plus（默认）
       name: qwen-plus
-      limit:
-        context: 129024
-        output: 8192
+      context_window: 129024
     - id: qwen-vl-max
       label: Qwen VL Max（识图）
       name: qwen-vl-max
@@ -54,9 +52,7 @@ model:
       label: Qwen Max（更强）
       name: qwen-max
       temperature: 0.7
-      limit:
-        context: 30720
-        output: 8192
+      context_window: 30720
   # --- OpenCode Zen 免费模型示例（取消注释并改 default_catalog_id；.env MODEL_API_KEY=public）---
   # type: opencode
   # name: deepseek-v4-flash-free
@@ -66,15 +62,13 @@ model:
   #   - id: flash
   #     label: DeepSeek V4 Flash（快速）
   #     name: deepseek-v4-flash-free
-  #     limit:
-  #       context: 200000
-  #       output: 128000
+  #     context_window: 200000
+
   #   - id: nemotron
   #     label: Nemotron 3 Ultra（1M 上下文）
   #     name: nemotron-3-ultra-free
-  #     limit:
-  #       context: 1000000
-  #       output: 128000
+  #     context_window: 1000000
+
   # 单次 LLM HTTP 读超时（秒）：流式为相邻 chunk 间隔上限；深度研究建议 ≥120
   request_timeout: 120
   max_retries: 2

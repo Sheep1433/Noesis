@@ -20,7 +20,7 @@ def test_resolve_context_max_tokens_from_global_config(mock_resolve) -> None:
         model_name="qwen-plus",
         temperature=0.7,
         base_url="https://example.com/v1",
-        limit=None,
+        context_window=0,
     )
     cfg = SimpleNamespace(context_max_input_tokens=64000)
     with patch("noesis.llm.model_limits.ModelConfig", cfg):
@@ -44,7 +44,7 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
         model_name="qwen-plus",
         temperature=0.7,
         base_url="https://example.com/v1",
-        limit=None,
+        context_window=0,
     )
     cfg = SimpleNamespace(context_max_input_tokens=0)
     with patch("noesis.llm.model_limits.ModelConfig", cfg):
