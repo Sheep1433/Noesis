@@ -39,7 +39,6 @@ class StopReason(StrEnum):
     TOOL_LOOP_LIMIT = "tool_loop_limit"
     TOOL_CALL_LIMIT = "tool_call_limit"
     MODEL_CALL_LIMIT = "model_call_limit"
-    TOKEN_BUDGET = "token_budget"
     SUBAGENT_CONCURRENCY_LIMIT = "subagent_concurrency_limit"
     SUBAGENT_TOTAL_LIMIT = "subagent_total_limit"
     SUBAGENT_DEPTH_LIMIT = "subagent_depth_limit"
@@ -118,7 +117,6 @@ class GovernorState:
     active_subagents: int = 0
     subagents_total: int = 0
     stop_reason: str | None = None
-    actual_provider_tokens: int | None = None
     _started_at: float = field(default_factory=monotonic, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
@@ -133,7 +131,6 @@ class GovernorState:
             "active_subagents": self.active_subagents,
             "subagents_total": self.subagents_total,
             "stop_reason": self.stop_reason,
-            "actual_provider_tokens": self.actual_provider_tokens,
         }
 
 

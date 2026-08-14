@@ -210,26 +210,32 @@ const durationDisplay = computed(() => {
                 v-else-if="entry.kind === 'parallel_tools'"
                 class="subagent-parallel-tools"
               >
-                <div class="subagent-parallel-tools__header">
-                  并行工具 · {{ entry.parts.length }} 个
-                </div>
-                <div class="subagent-parallel-tools__body">
-                  <ToolCallCollapse
-                    v-for="tp in entry.parts"
-                    :key="tp.tool_call_id ?? tp.id"
-                    appearance="light"
-                    :name="tp.name"
-                    :arguments="tp.input"
-                    :result="tp.output"
-                    :error="tp.error"
-                    :status="tp.status"
-                    :state="tp.state"
-                    :error-category="tp.errorCategory"
-                    :exit_code="tp.exit_code"
-                    :truncated="tp.truncated"
-                    :duration_ms="tp.duration_ms"
-                  />
-                </div>
+                <n-collapse>
+                  <n-collapse-item name="parallel-tools" :default-expanded="true">
+                    <template #header>
+                      <div class="subagent-parallel-tools__header">
+                        并行工具 · {{ entry.parts.length }} 个
+                      </div>
+                    </template>
+                    <div class="subagent-parallel-tools__body">
+                      <ToolCallCollapse
+                        v-for="tp in entry.parts"
+                        :key="tp.tool_call_id ?? tp.id"
+                        appearance="light"
+                        :name="tp.name"
+                        :arguments="tp.input"
+                        :result="tp.output"
+                        :error="tp.error"
+                        :status="tp.status"
+                        :state="tp.state"
+                        :error-category="tp.errorCategory"
+                        :exit_code="tp.exit_code"
+                        :truncated="tp.truncated"
+                        :duration_ms="tp.duration_ms"
+                      />
+                    </div>
+                  </n-collapse-item>
+                </n-collapse>
               </div>
             </template>
           </div>
@@ -321,6 +327,8 @@ const durationDisplay = computed(() => {
 .subagent-header__tags {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
   flex-shrink: 0;
   gap: 6px;
 }
@@ -482,6 +490,18 @@ const durationDisplay = computed(() => {
   border-left: 3px solid var(--noesis-block-light-accent);
   border-radius: var(--noesis-radius-sm);
   background: var(--noesis-block-light-bg);
+}
+
+.subagent-parallel-tools :deep(.n-collapse-item__header) {
+  padding: 0 !important;
+}
+
+.subagent-parallel-tools :deep(.n-collapse-item__content-inner) {
+  padding: 0 !important;
+}
+
+.subagent-parallel-tools :deep(.n-collapse-item__content-wrapper) {
+  border-top: 1px solid var(--noesis-block-light-divider);
 }
 
 .subagent-parallel-tools__header {

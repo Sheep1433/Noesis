@@ -9,33 +9,33 @@
 
 ## 2. 建立 DeepAgents 风格装配
 
-- [ ] 2.1 创建顶层 `noesis.middleware`、`noesis.backends` 与 Provider adapter 目录，保持公共包不反向导入具体 Agent
-- [ ] 2.2 将 `create_noesis_agent()` 改为直接参数入口，一次构造 stack 并立即调用 `create_agent()`；不增加 compiler/spec 中间模型
-- [ ] 2.3 让主 Agent、子 Agent 和离线评测使用同一入口，禁止 factory 返回后 append middleware
-- [ ] 2.4 从实际实例列表生成 inventory，固定各 Profile 的必需项、可选项和 exact order
-- [ ] 2.5 实现 Provider canonical request adapter，覆盖 system 合并、role/tool pair、thinking/media、schema 排序、deferred 字段与 cache marker
+- [x] 2.1 将 middleware 与 backend adapter 归入 `noesis.agents` runtime 包；公共 middleware 不反向导入 factory 或具体场景 Agent
+- [x] 2.2 将 `create_noesis_agent()` 改为直接参数入口，一次构造 stack 并立即调用 `create_agent()`；不增加 compiler/spec 中间模型
+- [x] 2.3 让主 Agent、子 Agent 和离线评测使用同一入口，禁止 factory 返回后 append middleware
+- [x] 2.4 从实际实例列表生成 inventory，固定各 Profile 的必需项、可选项和 exact order
+- [x] 2.5 验证并复用 LangChain Provider adapter 处理 system、role/tool pair、thinking/media、schema 与 cache marker；Noesis 不建立第二个 canonical request adapter
 
 ## 3. 实现稳定上下文来源
 
-- [ ] 3.1 实现 `SourceRefreshMiddleware`：顶层 turn 计算 source revision，只失效变更来源，同一 run 内保持稳定
-- [ ] 3.2 直接采用 DeepAgents Skills/Memory 的 parser 与 private state，由 SourceRefresh 解决“只加载一次”的 freshness 差异
-- [ ] 3.3 实现 `DynamicContextMiddleware`，只注入时间、workspace/session 和 attachment manifest 等已解析来源
-- [ ] 3.4 实现 `DurableContextMiddleware`，保存 plan/task/skill/file/tool 引用和 compact instructions，不复制 conversation 正文
-- [ ] 3.5 实现 `FileContextMiddleware` 与 backend/tool 契约：read state、mtime/hash stale、write-before-read 和 post-compact excerpt 恢复
+- [x] 3.1 实现 `RefreshingSkillsMiddleware`：按用户 Skills revision 定向失效 DeepAgents private cache，同一 run 内保持稳定
+- [x] 3.2 实现 `RefreshingMemoryMiddleware`：每个顶层 turn 刷新 DeepAgents Memory，同一 run 内保持稳定；具备 revision 后改为定向刷新
+- [x] 3.3 实现 `DynamicContextMiddleware`，只注入时间、workspace/session 和 attachment manifest 等已解析来源
+- [x] 3.4 实现 `DurableContextMiddleware`，保存 plan/task/skill/file/tool 引用和 compact instructions，不复制 conversation 正文
+- [x] 3.5 实现 `ReadBeforeWriteMiddleware`：read 记录内容 hash，edit/write 前校验当前版本，任何成功写入使旧 read mark 失效
 - [ ] 3.6 保证 source revision 未变时 prompt prefix 字节稳定，变更时以有界 delta 发布
 
 ## 4. 实现分层 Context Reduction
 
-- [ ] 4.1 实现确定性 `ToolResultBudgetMiddleware`，保存 artifact path、synopsis、hash 与 replacement record，resume 后决策一致
-- [ ] 4.2 实现 `SnipMiddleware`，只改变 effective projection，不物理删除 raw transcript，不切断 boundary/tool pair
-- [ ] 4.3 实现 `MicroCompactionMiddleware`，缩减旧 tool result、write/edit 参数、重复附件和过期 tool delta
-- [ ] 4.4 关闭 DeepAgents 中与 MicroCompaction 同义的旧 tool-arg truncation owner，保留 archive/partition/tail engine
-- [ ] 4.5 对 replacement、snip 和 micro-compaction 增加 raw/effective history、tokens freed、tool pair 和 checkpoint resume 契约测试
+- [x] 4.1 实现确定性 `ToolResultBudgetMiddleware`，保存 artifact path、synopsis、hash 与 replacement record，resume 后决策一致
+- [x] 4.2 实现 `SnipMiddleware`，只改变 effective projection，不物理删除 raw transcript，不切断 boundary/tool pair
+- [x] 4.3 将旧 Tool Result 的 micro-compaction 并入 `ToolResultBudgetMiddleware`，其他 conversation reduction 归 `CompactionMiddleware`
+- [x] 4.4 关闭 DeepAgents 中与 ToolResultBudget/Compaction 同义的旧 truncation owner，保留 archive/partition/tail engine
+- [x] 4.5 对 replacement 与 snip 增加 raw/effective history、tokens freed、tool pair 和 checkpoint resume 契约测试
 
 ## 5. 实现 Tool Catalog 与 Deferred Schema
 
-- [ ] 5.1 建立 runtime tool registry 作为 MCP 连接、schema、revision 和权限的权威源
-- [ ] 5.2 实现 `ToolCatalogMiddleware`：基础/激活工具常驻，大型 MCP 工具 deferred，`tool_search` 激活 discovered set
+- [x] 5.1 建立 runtime tool registry 作为 MCP 连接、schema、revision 和权限的权威源
+- [x] 5.2 实现真实 `tool_search` 工具和薄 `DeferredToolFilterMiddleware`：基础/激活工具常驻，大型 MCP 工具 deferred，搜索结果激活 discovered set
 - [ ] 5.3 Provider 支持时输出原生 deferred schema，不支持时过滤最终 `request.tools`
 - [ ] 5.4 覆盖 MCP 重连/变更、compaction rebuild、schema token 预算、未发现工具不可调用和执行时重新授权
 
@@ -51,22 +51,22 @@
 
 ## 7. 实现 Subagent Context Policy
 
-- [ ] 7.1 复用上游 `SubAgentMiddleware` 编译/调度/结果回传；实现 `SubAgentContextMiddleware` 的 `isolated` 默认模式：子 Agent 只接收任务描述 + 白名单 stable context，不依赖上游硬编码排除表扩展
+- [x] 7.1 复用上游 `SubAgentMiddleware` 编译/调度/结果回传，通过公开 `private_state_keys` 实现默认隔离
 - [ ] 7.2 实现显式 `fork`：复制父 conversation snapshot 与白名单 durable context，可变 state 必须 deep copy
 - [ ] 7.3 实现子 Agent 自有 checkpoint `resume`，不重读父 Agent 当前 state
 - [ ] 7.4 context_mode 通过 factory 注入；result→ToolMessage 回传承接上游 `_return_command_with_state_update`，并发/取消/超时由 LangGraph 节点执行机制承载，不新增 runtime task registry
 
 ## 8. 迁移 Tool/Model 安全边界
 
-- [ ] 8.1 实现只负责异常翻译的 `ToolFailureMiddleware`，放过 LangGraph control exception、整轮取消和 HITL interrupt
-- [ ] 8.2 保留 `SafeModelRetryMiddleware`，只在无可见 text/tool call/HITL/副作用时重试；context overflow 交给 Compaction
-- [ ] 8.3 删除 `empty_after_tools` 对 inner handler 的不可观测二次调用；需要 continuation 时重走完整 Agent lifecycle
-- [ ] 8.4 只对已有真实配置与记账入口的轴启用 LangChain model/tool call limits
+- [x] 8.1 实现只负责异常翻译的 `ToolFailureMiddleware`，放过 LangGraph control exception、整轮取消和 HITL interrupt
+- [x] 8.2 删除 `SafeModelRetryMiddleware`；瞬时 HTTP retry 只由 Provider SDK/adapter 管理，context overflow 交给 Compaction
+- [x] 8.3 删除 `empty_after_tools` 对 inner handler 的不可观测二次调用；需要 continuation 时重走完整 Agent lifecycle
+- [x] 8.4 只对已有真实配置与记账入口的轴启用 LangChain model/tool call limits
 
 ## 9. 删除旧结构并交付
 
 - [ ] 9.1 按字段级迁移表删除 RuntimeTelemetry、RunGovernor、ContextLifecycle、ModelExecution 和 ToolExecution 五个宏观 owner
-- [ ] 9.2 删除 `agents/middlewares/kernel|capabilities`、重复导出、`agents.__getattr__`、隐式 ContextVar 链、手写 inventory 和失效配置；不保留兼容 shim
+- [x] 9.2 删除 `agents/middlewares/kernel`、`capabilities/`、重复导出、隐式 ContextVar 链、手写 inventory 和失效配置；保留 `agents.__getattr__` lazy 场景导出，不保留旧 import 兼容 shim
 - [ ] 9.3 运行 package 无环导入、backend 全量 pytest、启动冒烟和各 Profile/子 Agent E2E，停止所有临时进程
 - [ ] 9.4 运行长上下文、summary PTL、Provider overflow、大 MCP catalog、file stale、fork/resume、HITL、SSE 与 assistant 持久化回归
 - [ ] 9.5 记录 Provider actual usage、local request estimate、cache read/write、replacement/snip/micro/compaction 事件，保持两类 token 语义独立

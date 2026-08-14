@@ -1,4 +1,4 @@
-"""Unit contracts for ``ToolCatalogMiddleware`` (deferred schema + tool search)."""
+"""Unit contracts for deferred schema filtering and execution guards."""
 
 from __future__ import annotations
 
@@ -6,11 +6,13 @@ from typing import Any
 
 import pytest
 from langchain.agents.middleware.types import ModelRequest
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import BaseModel
 
-from noesis.middleware.tool_catalog_middleware import ToolCatalogMiddleware
+from noesis.agents.middlewares.deferred_tool_filter_middleware import DeferredToolFilterMiddleware
+from noesis.agents.runtime.tool_registry import ToolRegistry
 
 
 class _Args(BaseModel):
@@ -29,95 +31,157 @@ def _small_tool(name: str = "read_file") -> StructuredTool:
 def _big_tool(name: str) -> StructuredTool:
     return StructuredTool.from_function(
         name=name,
-        func=lambda q="": "ok",
-        description="B" * 5000,  # large description → high schema cost
+        func=lambda x=0: "ok",
+        description="B" * 5_000,
         args_schema=_Args,
     )
 
 
-def _request(tools, state=None) -> ModelRequest:
+def _request(tools: list[Any], state: dict[str, Any] | None = None) -> ModelRequest:
     return ModelRequest(
         model=object(),  # type: ignore[arg-type]
         messages=[],
         system_message=SystemMessage(content="sys"),
-        tools=list(tools),
+        tools=tools,
         state=state if state is not None else {"messages": []},
     )
 
 
-def test_small_catalog_passes_through_unchanged() -> None:
-    mw = ToolCatalogMiddleware(schema_budget_tokens=10000, large_schema_cost=200)
-    tools = [_small_tool("read_file"), _small_tool("glob")]
-    modified = mw.modify_request(_request(tools))
-    assert [t.name for t in modified.tools] == [t.name for t in tools]
-
-
-def test_large_deferred_tool_is_filtered_out() -> None:
-    mw = ToolCatalogMiddleware(schema_budget_tokens=50, large_schema_cost=200)
-    tools = [_small_tool("read_file"), _big_tool("mcp_huge_tool")]
-    modified = mw.modify_request(_request(tools))
-    names = [t.name for t in modified.tools]
-    assert "read_file" in names  # basic tool kept
-    assert "mcp_huge_tool" not in names  # deferred → filtered
-    assert "tool_search" in names  # tool_search injected
-
-
-def test_base_tools_always_bound_even_if_large() -> None:
-    mw = ToolCatalogMiddleware(schema_budget_tokens=10, large_schema_cost=10)
-    # read_file is "basic" per default predicate → always bound even if large
-    big_basic = _big_tool("read_file")
-    modified = mw.modify_request(_request([big_basic]))
-    assert any(t.name == "read_file" for t in modified.tools)
-
-
-def test_tool_search_activates_discovered_schema() -> None:
-    catalog = [_big_tool("mcp_search_engine"), _big_tool("mcp_calendar")]
-    mw = ToolCatalogMiddleware(catalog_provider=lambda: catalog, large_schema_cost=200)
-    state = {"messages": []}
-
-    # First model call: deferred tools filtered, tool_search present
-    modified = mw.modify_request(_request([_small_tool("read_file")], state=state))
-    assert "mcp_search_engine" not in [t.name for t in modified.tools]
-
-    # Simulate the model calling tool_search("search")
-    from langgraph.prebuilt.tool_node import ToolCallRequest
-    from langchain_core.messages import ToolMessage
-
-    tc_request = ToolCallRequest(
-        tool_call={"name": "tool_search", "args": {"query": "search"}, "id": "ts1"},
-        tool=None,
+def _tool_request(name: str, state: dict[str, Any], tool=None) -> ToolCallRequest:  # noqa: ANN001
+    return ToolCallRequest(
+        tool_call={"name": name, "args": {}, "id": "call-1"},
+        tool=tool,
         state=state,
         runtime=None,
     )
 
-    def handler(_req):  # noqa: ANN001
-        return ToolMessage(content="activated", tool_call_id="ts1", name="tool_search")
 
-    mw.wrap_tool_call(tc_request, handler)
-    discovered = state.get("_tool_catalog_discovered", [])
-    assert "mcp_search_engine" in discovered
-    assert "mcp_calendar" not in discovered
-
-    # Next model call: discovered tool now bound
-    modified2 = mw.modify_request(_request([_small_tool("read_file")], state=state))
-    names2 = [t.name for t in modified2.tools]
-    assert "mcp_search_engine" in names2
-    assert "mcp_calendar" not in names2
-
-
-def test_no_deferred_tools_means_no_tool_search_injected() -> None:
-    mw = ToolCatalogMiddleware(schema_budget_tokens=10000, large_schema_cost=200)
-    modified = mw.modify_request(_request([_small_tool("read_file")]))
-    assert "tool_search" not in [t.name for t in modified.tools]
-
-
-def test_custom_basic_predicate() -> None:
-    mw = ToolCatalogMiddleware(
-        schema_budget_tokens=10,
-        large_schema_cost=10,
-        basic_predicate=lambda name: name == "my_core_tool",
+def _promote(registry: ToolRegistry, query: str, state: dict[str, Any]) -> None:
+    result = registry.tool_search.func(  # type: ignore[union-attr]
+        query=query,
+        state=state,
+        tool_call_id="search-1",
     )
-    modified = mw.modify_request(_request([_big_tool("my_core_tool"), _big_tool("other")]))
-    names = [t.name for t in modified.tools]
-    assert "my_core_tool" in names
-    assert "other" not in names
+    state.update(result.update)
+
+
+def test_middleware_only_exposes_registry_visible_tools() -> None:
+    registry = ToolRegistry(
+        [_small_tool("read_file"), _big_tool("mcp_huge_tool")],
+        large_schema_cost=200,
+    )
+    middleware = DeferredToolFilterMiddleware(registry=registry)
+
+    modified = middleware.modify_request(_request([]))
+
+    assert [tool.name for tool in modified.tools] == ["read_file", "tool_search"]
+    assert registry.get("tool_search") is modified.tools[-1]
+    assert middleware.tools == (registry.tool_search,)
+
+
+def test_promoted_schema_becomes_visible_for_matching_catalog_hash() -> None:
+    registry = ToolRegistry([_big_tool("mcp_search_engine")], large_schema_cost=200)
+    middleware = DeferredToolFilterMiddleware(registry=registry)
+    state: dict[str, Any] = {"messages": []}
+
+    _promote(registry, "search", state)
+    modified = middleware.modify_request(_request([], state))
+
+    assert "mcp_search_engine" in [tool.name for tool in modified.tools]
+
+
+def test_catalog_change_does_not_reuse_old_promotions() -> None:
+    tools = [_big_tool("mcp_search_engine")]
+    registry = ToolRegistry(catalog_provider=lambda: tools, large_schema_cost=200)
+    middleware = DeferredToolFilterMiddleware(registry=registry)
+    state: dict[str, Any] = {"messages": []}
+    _promote(registry, "search", state)
+
+    tools.append(_big_tool("mcp_calendar"))
+    modified = middleware.modify_request(_request([], state))
+
+    assert "mcp_search_engine" not in [tool.name for tool in modified.tools]
+    assert len(state["_tool_catalog_discovered"]) == 1
+
+
+def test_new_top_level_run_clears_previous_promotions() -> None:
+    registry = ToolRegistry([_big_tool("mcp_search_engine")], large_schema_cost=200)
+    middleware = DeferredToolFilterMiddleware(registry=registry)
+    state: dict[str, Any] = {"messages": []}
+    _promote(registry, "search", state)
+
+    update = middleware.before_agent(state, None)  # type: ignore[arg-type]
+
+    assert update == {"_tool_catalog_discovered": {}}
+
+
+def test_sync_tool_hook_blocks_unpromoted_execution() -> None:
+    tool = _big_tool("mcp_huge_tool")
+    middleware = DeferredToolFilterMiddleware(
+        registry=ToolRegistry([tool], large_schema_cost=200)
+    )
+
+    with pytest.raises(PermissionError, match="not been promoted"):
+        middleware.wrap_tool_call(
+            _tool_request(tool.name, {"messages": []}, tool),
+            lambda request: ToolMessage(content="ran", tool_call_id="call-1"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_tool_hook_blocks_unpromoted_execution() -> None:
+    tool = _big_tool("mcp_huge_tool")
+    middleware = DeferredToolFilterMiddleware(
+        registry=ToolRegistry([tool], large_schema_cost=200)
+    )
+
+    async def handler(request):  # noqa: ANN001
+        return ToolMessage(content="ran", tool_call_id="call-1")
+
+    with pytest.raises(PermissionError, match="not been promoted"):
+        await middleware.awrap_tool_call(
+            _tool_request(tool.name, {"messages": []}, tool),
+            handler,
+        )
+
+
+def test_permission_is_rechecked_at_execution() -> None:
+    allowed = False
+    tool = _small_tool("restricted")
+    registry = ToolRegistry(
+        [tool],
+        permissions={"restricted": lambda state: allowed},
+        large_schema_cost=10_000,
+    )
+    middleware = DeferredToolFilterMiddleware(registry=registry)
+
+    with pytest.raises(PermissionError, match="not permitted"):
+        middleware.wrap_tool_call(
+            _tool_request(tool.name, {"messages": []}, tool),
+            lambda request: ToolMessage(content="ran", tool_call_id="call-1"),
+        )
+
+
+def test_sync_model_hook_passes_filtered_request_to_handler() -> None:
+    registry = ToolRegistry([_big_tool("mcp_huge_tool")], large_schema_cost=200)
+    middleware = DeferredToolFilterMiddleware(registry=registry)
+
+    names = middleware.wrap_model_call(
+        _request([]),
+        lambda request: [tool.name for tool in request.tools],  # type: ignore[arg-type,return-value]
+    )
+
+    assert names == ["tool_search"]
+
+
+@pytest.mark.asyncio
+async def test_async_model_hook_passes_filtered_request_to_handler() -> None:
+    registry = ToolRegistry([_big_tool("mcp_huge_tool")], large_schema_cost=200)
+    middleware = DeferredToolFilterMiddleware(registry=registry)
+
+    async def handler(request):  # noqa: ANN001
+        return [tool.name for tool in request.tools]
+
+    names = await middleware.awrap_model_call(_request([]), handler)  # type: ignore[arg-type]
+
+    assert names == ["tool_search"]

@@ -44,7 +44,7 @@
 
 浏览器实时响应 SHALL 使用 `/api/chat` 下的 run 创建与 SSE 订阅端点。系统 SHALL 提供独立的 run 创建、状态查询、SSE 订阅和停止能力，并 SHALL 删除 `POST /api/chat/sessions/stream`。浏览器主实时通道仍为 SSE，不要求 WebSocket。
 
-事件类型至少覆盖：`run-snapshot`、`run-status`、`reasoning-*`、`text-*`、`tool-call-*` / `tool-input-*`、`tool-output-available`、`usage-update`、`context-update`、`hitl-required`、`error`、`finish`、`[DONE]`。业务事件 SHALL 携带 `run_id` 与 sequence；keepalive 注释帧 SHALL 仅由传输层注入。
+事件类型至少覆盖：`run-snapshot`、`run-status`、`reasoning-*`、`text-*`、`tool-call-*` / `tool-input-*`、`tool-output-available`、`context-update`、`hitl-required`、`error`、`finish`、`[DONE]`。业务事件 SHALL 携带 `run_id` 与 sequence；keepalive 注释帧 SHALL 仅由传输层注入。
 
 #### Scenario: 创建后独立订阅
 - **WHEN** 已认证用户成功创建 run
@@ -110,32 +110,23 @@ HITL 暂停时 assistant SHALL 保持 `streaming`；resume 续写同一 `run_id`
 - **WHEN** 工具调用结束并发出 tool-output-available
 - **THEN** 帧 SHALL 含可解析的耗时（毫秒或约定单位）
 
-### Requirement: usage-update 与上下文指示
+### Requirement: 上下文占用指示
 
-流式路径 SHALL 发出消息级累计 LLM token 的 `usage-update` 与 `finish.usage`，并 SHALL 在 Provider 返回 usage 后发出当前上下文占用的 `context-update`。系统 SHALL 提供可配置的上下文窗口上限；会话 MAY 持久化最近上下文快照。
+流式路径 SHALL 在 Provider 返回 usage 后发出当前上下文占用的 `context-update`。系统 SHALL 提供可配置的上下文窗口上限；会话 MAY 持久化最近上下文快照。
 
-`usage-update` 与 `finish.usage` SHALL 保留 `input_tokens`、`output_tokens`、`total_tokens` 既有字段，并在可用时以向后兼容字段提供 `by_caller` 与 `by_model` 归属；Provider cache/reasoning details SHALL 在后端规范化保留并可经 SSE 字段传递，但 SHALL NOT 作为默认前端摘要展示项。`context-update` SHALL 保留 `current_tokens`、`max_tokens`、`used_percentage`，其 `current_tokens` 取自 Provider 最近一次 model call 返回的 `input_tokens`（非累计）。
+`context-update` SHALL 保留 `current_tokens`、`max_tokens`、`used_percentage`，其 `current_tokens` 取自主对话最近一次 model call 返回的 `input_tokens`（非累计）。子 Agent 的 model call SHALL NOT 写入 context 指示器，避免子 Agent 的输入占用覆盖主对话的上下文占用。
 
-chat 页 SHALL 将"当前上下文窗口占用"与"本轮 Agent run 累计实际 usage"分开展示。前者取自 Provider 最近一次 model call 的 `input_tokens`，后者按 model run id 累计。默认摘要 SHALL 只展示 input/output 与 caller/model 归属；cache/reasoning 等 Provider 明细 SHALL 仅在按需调试视图中展示。旧事件或部分字段缺失时 SHALL 降级到既有总量，SHALL NOT 阻断流式回答。
+chat 页 SHALL 展示"当前上下文窗口占用"，取自主对话最近一次 model call 的 `input_tokens`。Provider 不返回 usage 或部分字段缺失时 SHALL 降级到上一轮真实值，SHALL NOT 阻断流式回答。
 
-#### Scenario: finish 含 usage
-- **WHEN** 一轮正常完成
-- **THEN** `finish`（或等价）SHALL 含累计 usage，供 chat 页展示
-
-#### Scenario: context 用最近一次真实 input_tokens
-- **WHEN** 一轮 Agent run 已进行多次模型调用并收到 Provider usage
-- **THEN** `context-update` 的 `current_tokens` SHALL 取自最近一次 model call 的 `input_tokens`（非累计）
+#### Scenario: context 用主对话最近一次真实 input_tokens
+- **WHEN** 一轮 Agent run 中主对话与子 Agent 各进行模型调用
+- **THEN** `context-update` 的 `current_tokens` SHALL 取自主对话最近一次 model call 的 `input_tokens`（非累计）
+- **AND** 子 Agent 的 input_tokens SHALL NOT 覆盖主对话的 context 指示器
 - **AND** SHALL NOT 用累计 input token 作为当前 context window 占用
 
-#### Scenario: 新字段向后兼容
-- **WHEN** 客户端只识别既有 usage/context 总量字段
-- **THEN** 扩展后的 SSE 事件 SHALL 仍可被该客户端消费
-- **AND** 服务端 SHALL NOT 删除或重命名既有字段
-
 #### Scenario: Provider 不返回 usage
-- **WHEN** Provider 未返回 `input_tokens` 或 cache/reasoning 明细
+- **WHEN** Provider 未返回 `input_tokens`
 - **THEN** context 指示器 SHALL 沿用上一轮真实 `input_tokens`；首轮无数据时 SHALL NOT 展示指示器
-- **AND** SHALL NOT 将缺失明细显示为确定的零消耗
 
 ### Requirement: 停止生成
 

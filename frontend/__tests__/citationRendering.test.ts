@@ -132,6 +132,21 @@ describe('numbered citation rendering', () => {
     expect(citationTargets(withPublisher, results, () => '/kb').has(1)).toBe(true)
   })
 
+  it('supports deep-research heading, numbered reference lines, and domain-prefixed markers', () => {
+    const markdown = `结论：Mem0 和 Zep 的效果如文献所示[A3][A4]。\n\n## 参考资料（精选）\n\n3. Mem0 — https://arxiv.org/abs/2504.19413\n4. Zep — https://arxiv.org/abs/2501.13956`
+    const results = [
+      { evidence_id: 'mem0', source_type: 'web' as const, title: 'Mem0', excerpt: '', url: 'https://arxiv.org/abs/2504.19413' },
+      { evidence_id: 'zep', source_type: 'web' as const, title: 'Zep', excerpt: '', url: 'https://arxiv.org/abs/2501.13956' },
+    ]
+    const targets = citationTargets(markdown, results, () => '/kb')
+    const html = MarkdownInstance.render(citationBody(markdown, targets), { citationTargets: targets })
+
+    expect(targets.has(3)).toBe(true)
+    expect(targets.has(4)).toBe(true)
+    expect(html).toContain('data-citation-number="3"')
+    expect(html).toContain('data-citation-number="4"')
+  })
+
   it('renders each visible reference on its own line when matching is incomplete', () => {
     const unknownSource = markdown.replace('https://example.com/report', 'https://unknown.example/report')
     const targets = citationTargets(unknownSource, results, () => '/kb')

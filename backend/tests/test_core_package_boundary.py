@@ -235,6 +235,67 @@ assert "fastapi" not in sys.modules
     )
 
 
+def test_agent_middleware_package_is_lazy_and_has_one_authoritative_path() -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(CORE_PACKAGE_ROOT / "src"), str(BACKEND_ROOT)]
+    )
+    script = """
+import sys
+import noesis.agents
+import noesis.agents.middlewares
+from noesis.factory import create_noesis_agent
+
+assert callable(create_noesis_agent)
+for module in (
+    "noesis.agents.common_qa",
+    "noesis.agents.fault_operation",
+    "noesis.agents.simple_mcp",
+    "noesis.agents.super_agent",
+):
+    assert module not in sys.modules, module
+"""
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=BACKEND_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    middleware_root = NOESIS_ROOT / "agents" / "middlewares"
+    assert middleware_root.is_dir()
+    assert not (middleware_root / "capabilities").exists()
+    assert not (NOESIS_ROOT / "middleware").exists()
+
+    forbidden_prefixes = (
+        "noesis.factory",
+        "noesis.agents.common_qa",
+        "noesis.agents.fault_operation",
+        "noesis.agents.simple_mcp",
+        "noesis.agents.super_agent",
+    )
+    violations: list[str] = []
+    for path in sorted(middleware_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        modules = [
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        ]
+        modules.extend(
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        )
+        if any(module.startswith(forbidden_prefixes) for module in modules):
+            violations.append(str(path.relative_to(BACKEND_ROOT)))
+
+    assert not violations, "middleware imports factory or Agent scenes:\n" + "\n".join(violations)
+
+
 def test_public_subsystem_facades_are_lazy_and_authoritative() -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(

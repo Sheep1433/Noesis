@@ -24,8 +24,8 @@ state. No ``runtime``/``service`` calls.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Annotated, Any, Callable, NotRequired
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -33,6 +33,7 @@ from langchain.agents.middleware.types import (
     ContextT,
     ModelRequest,
     ModelResponse,
+    PrivateStateAttr,
     ResponseT,
 )
 from langchain_core.messages import (
@@ -41,7 +42,10 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-from typing_extensions import TypedDict
+from langchain_core.tools import StructuredTool
+from langchain_core.tools.base import InjectedToolCallId
+from langgraph.prebuilt import InjectedState
+from langgraph.types import Command
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -82,23 +86,42 @@ class SnipRecord:
     reason: str
     original_hash: str
     tokens_freed: int
+    message_keys: tuple[str, ...] = ()
 
 
-class _SnipState(TypedDict, total=False):
-    """Private state holding the projection ledger.
+class SnipState(AgentState[ResponseT]):
+    """Checkpointed projection ledger hidden from agent input/output."""
 
-    Marked private (leading underscore) so it is excluded from agent output
-    and sub-agent inheritance by convention; the field is also namespaced to
-    avoid collision with other middleware.
-    """
-
-    _snip_records: list[SnipRecord]
+    _snip_records: NotRequired[Annotated[list[SnipRecord], PrivateStateAttr]]
 
 
 def _content_hash(message: AnyMessage) -> str:
     """Stable hash of a message's content for replay identity."""
     payload = repr(message.content)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _message_fingerprint(message: AnyMessage) -> str:
+    payload = (
+        message.type,
+        message.id,
+        repr(message.content),
+        getattr(message, "tool_call_id", None),
+        repr(getattr(message, "tool_calls", None)),
+    )
+    return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()[:16]
+
+
+def _indexed_message_keys(messages: list[AnyMessage]) -> list[str]:
+    """Return stable content identities disambiguated by occurrence."""
+    seen: dict[str, int] = {}
+    keys: list[str] = []
+    for message in messages:
+        fingerprint = _message_fingerprint(message)
+        occurrence = seen.get(fingerprint, 0)
+        seen[fingerprint] = occurrence + 1
+        keys.append(f"{fingerprint}:{occurrence}")
+    return keys
 
 
 def _approx_tokens(messages: list[AnyMessage]) -> int:
@@ -120,21 +143,63 @@ def _is_tool_pair_boundary_violation(
     whose matching ``ToolMessage`` falls inside the snipped range (or vice
     versa), or when the snip ends between a tool call and its result.
     """
-    kept = messages[:start] + messages[stop:]
-    kept_call_ids: set[str] = set()
-    kept_result_ids: set[str] = set()
-    for msg in kept:
+    call_positions: dict[str, set[int]] = {}
+    result_positions: dict[str, set[int]] = {}
+    for index, msg in enumerate(messages):
         if isinstance(msg, AIMessage):
             for call in msg.tool_calls:
                 cid = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
                 if cid:
-                    kept_call_ids.add(str(cid))
+                    call_positions.setdefault(str(cid), set()).add(index)
         elif isinstance(msg, ToolMessage):
             if msg.tool_call_id:
-                kept_result_ids.add(msg.tool_call_id)
-    # A call without its result, or a result without its call, inside the kept
-    # tail means the pair was severed.
-    return bool(kept_call_ids - kept_result_ids) or bool(kept_result_ids - kept_call_ids)
+                result_positions.setdefault(msg.tool_call_id, set()).add(index)
+    selected = set(range(start, stop))
+    for call_id in call_positions.keys() & result_positions.keys():
+        call_selected = bool(call_positions[call_id] & selected)
+        result_selected = bool(result_positions[call_id] & selected)
+        if call_selected != result_selected:
+            return True
+    return False
+
+
+def _is_compaction_boundary(message: AnyMessage) -> bool:
+    metadata = dict(getattr(message, "additional_kwargs", {}) or {})
+    return (
+        metadata.get("lc_source") == "summarization"
+        or bool(metadata.get("boundary_hash"))
+        or bool(metadata.get("compaction_boundary"))
+    )
+
+
+def _resolve_selector(messages: list[AnyMessage], record: SnipRecord) -> tuple[int, int] | None:
+    if not record.message_keys:
+        if record.selector.stop <= len(messages):
+            return record.selector.start, record.selector.stop
+        return None
+    keys = _indexed_message_keys(messages)
+    width = len(record.message_keys)
+    needle = list(record.message_keys)
+    for start in range(0, len(keys) - width + 1):
+        if keys[start : start + width] == needle:
+            return start, start + width
+    return None
+
+
+def _last_human_index(messages: list[AnyMessage]) -> int:
+    for index in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[index], HumanMessage):
+            return index
+    return -1
+
+
+def _projection_range_is_safe(messages: list[AnyMessage], start: int, stop: int) -> bool:
+    last_human = _last_human_index(messages)
+    return (
+        (last_human < 0 or stop <= last_human)
+        and not any(_is_compaction_boundary(message) for message in messages[start:stop])
+        and not _is_tool_pair_boundary_violation(messages, start, stop)
+    )
 
 
 def apply_snip_projection(
@@ -151,8 +216,16 @@ def apply_snip_projection(
     if not records:
         return list(messages)
     snipped_ranges: list[tuple[int, int, SnipRecord]] = []
-    for record in records:
-        snipped_ranges.append((record.selector.start, record.selector.stop, record))
+    for raw_record in records:
+        record = raw_record
+        if isinstance(raw_record, dict):
+            selector = raw_record["selector"]
+            if isinstance(selector, dict):
+                selector = SnipSelector(**selector)
+            record = SnipRecord(**{**raw_record, "selector": selector})
+        resolved = _resolve_selector(messages, record)
+        if resolved is not None and _projection_range_is_safe(messages, *resolved):
+            snipped_ranges.append((*resolved, record))
     snipped_ranges.sort(key=lambda r: r[0])
 
     out: list[AnyMessage] = []
@@ -173,7 +246,7 @@ def apply_snip_projection(
     return out
 
 
-class SnipMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
+class SnipMiddleware(AgentMiddleware[SnipState[ResponseT], ContextT, ResponseT]):
     """Apply explicit snip projections to the effective model request.
 
     Projections are accumulated in private state (``_snip_records``) so that
@@ -182,14 +255,64 @@ class SnipMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
     explicit user/system action.
     """
 
+    state_schema = SnipState
+
     def __init__(self, *, token_counter: Callable[[list[AnyMessage]], int] | None = None) -> None:
         self._token_counter = token_counter or _approx_tokens
+        self.tools = (self._create_snip_tool(),)
+
+    def _create_snip_tool(self) -> StructuredTool:
+        middleware = self
+
+        def snip_context(
+            start: int,
+            stop: int,
+            reason: str,
+            state: Annotated[dict[str, Any], InjectedState],
+            tool_call_id: Annotated[str, InjectedToolCallId],
+        ) -> Command[Any]:
+            """Hide an explicit old message range from future model context."""
+            record = middleware.request_snip(
+                list(state.get("messages", [])), SnipSelector(start, stop), reason
+            )
+            records = middleware._records(state)
+            records.append(record)
+            return Command(
+                update={
+                    "_snip_records": records,
+                    "messages": [
+                        ToolMessage(
+                            content=f"Snipped messages [{start}, {stop}) from effective context.",
+                            name="snip_context",
+                            tool_call_id=tool_call_id,
+                        )
+                    ],
+                }
+            )
+
+        return StructuredTool.from_function(
+            func=snip_context,
+            name="snip_context",
+            description=(
+                "Hide an explicit old message range from future model context without "
+                "deleting the raw transcript. Never target the current user turn."
+            ),
+        )
 
     # -- projection ledger (private state) ------------------------------
 
     @staticmethod
     def _records(state: AgentState[Any]) -> list[SnipRecord]:
-        return list(state.get("_snip_records", []))  # type: ignore[arg-type]
+        records: list[SnipRecord] = []
+        for value in state.get("_snip_records", []):  # type: ignore[union-attr]
+            if isinstance(value, SnipRecord):
+                records.append(value)
+                continue
+            selector = value["selector"]
+            if isinstance(selector, dict):
+                selector = SnipSelector(**selector)
+            records.append(SnipRecord(**{**value, "selector": selector}))
+        return records
 
     def request_snip(
         self,
@@ -210,15 +333,13 @@ class SnipMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
             raise SnipError("cannot snip an empty transcript")
         if selector.stop > len(messages):
             raise SnipError("snip selector exceeds transcript length")
-        # Protect the current user request: the last human message (and
-        # everything after it) must remain visible.
-        last_human = -1
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                last_human = i
-                break
-        if last_human >= 0 and selector.start <= last_human < selector.stop:
+        # Protect the current request turn: the last human message and all
+        # messages produced after it must remain visible.
+        last_human = _last_human_index(messages)
+        if last_human >= 0 and selector.stop > last_human:
             raise SnipError("snip must not remove the current user request")
+        if any(_is_compaction_boundary(message) for message in messages[selector.start : selector.stop]):
+            raise SnipError("snip must not remove a compaction boundary")
         if _is_tool_pair_boundary_violation(messages, selector.start, selector.stop):
             raise SnipError("snip would split a tool call/result pair")
 
@@ -230,14 +351,9 @@ class SnipMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
                 "\n".join(_content_hash(m) for m in snipped).encode("utf-8"),
             ).hexdigest()[:16],
             tokens_freed=self._token_counter(snipped),
+            message_keys=tuple(_indexed_message_keys(messages)[selector.start : selector.stop]),
         )
         return record
-
-    def attach_record(self, state: AgentState[Any], record: SnipRecord) -> None:
-        """Persist a projection decision into private state for replay."""
-        records: list[SnipRecord] = self._records(state)
-        records.append(record)
-        state["_snip_records"] = records  # type: ignore[assignment]
 
     # -- model-call seam ------------------------------------------------
 
@@ -269,5 +385,6 @@ __all__ = [
     "SnipMiddleware",
     "SnipRecord",
     "SnipSelector",
+    "SnipState",
     "apply_snip_projection",
 ]

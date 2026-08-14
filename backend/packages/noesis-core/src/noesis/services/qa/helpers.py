@@ -271,8 +271,6 @@ def _build_assistant_persist_extra(
     if model:
         extra["model"] = model
     if bridge is not None:
-        if bridge.last_finish_usage:
-            extra["usage"] = bridge.last_finish_usage
         if bridge.last_finish_reason:
             extra["finish_reason"] = bridge.last_finish_reason
         err = error_message or bridge.last_error_message
@@ -549,8 +547,6 @@ def _new_stream_ctx() -> Dict[str, Any]:
         "current_tool_name": None,
         "current_tool_call_id": None,
         "tool_start_times": {},
-        "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-        "usage_seen_run_ids": set(),
         "_assistant_db_id": None,
         # 并行工具分组：按 scope（parent_task_call_id 或 "root"）独立计数 step_id。
         # on_chat_model_start 标 pending scope，首个 on_tool_start mint 新 step_id。
@@ -636,6 +632,11 @@ async def _yield_run_events_from_agent(
         events = mapper.map_item(raw, builder, ctx)
         for event in events:
             sink.on_event(event)
+        # 任务模式不经过 SseDelivery 的 on_events 回调；在同一处消费
+        # model_end 产生的 context tick，确保实时事件与 session.extra.context
+        # 使用同一条持久化路径。函数内部仅在 tick 存在时写库，不会按 token 写库。
+        await _persist_stream_checkpoint(bridge, session_id, user_id)
+        for event in events:
             yield event
 
 

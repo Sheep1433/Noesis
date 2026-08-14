@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from dataclasses import replace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from noesis.runtime.observability import ContextMetricsRegistry
 from noesis.llm.model_limits import resolve_context_max_tokens
@@ -22,14 +22,8 @@ from noesis.chat.event_mapping.reasoning import (
     unsent_text_suffix,
 )
 from noesis.chat.event_mapping.usage_normalize import (
-    accumulate_detail as _accumulate_detail,
     compute_used_percentage,
     normalize_usage as _normalize_usage,
-)
-from noesis.chat.event_mapping.usage_attribution import (
-    ModelCallAttribution,
-    RunUsageCollector,
-    resolve_caller,
 )
 from noesis.runtime.logging import logger
 from noesis.chat.delivery.events import RunEvent, StreamDone, WireFrame
@@ -58,6 +52,7 @@ _TOOL_EXIT_PROTOCOL_RE = re.compile(
     r"(?P<truncated>\s*\[Output was truncated due to size limits\])?\s*$"
 )
 _TOOL_INPUT_MAX = 65536
+_TOOL_OUTPUT_DISPLAY_MAX = 24000
 TASK_TOOL_NAME = "task"
 _OMIT_NON_JSON_TOOL_INPUT = object()
 
@@ -117,6 +112,17 @@ def _tool_output_value(raw_out: Any) -> str:
     if raw_out is None:
         return ""
     return raw_out.content if hasattr(raw_out, "content") else str(raw_out)
+
+
+def _bound_tool_output_for_display(value: str) -> tuple[str, bool]:
+    """限制发往 UI 的单次工具输出，不影响模型侧原始工具结果。"""
+    if len(value) <= _TOOL_OUTPUT_DISPLAY_MAX:
+        return value, False
+    return (
+        f"{value[:_TOOL_OUTPUT_DISPLAY_MAX]}\n\n"
+        f"…（工具输出过长，已截断展示）",
+        True,
+    )
 
 
 def _retrieval_payload(raw: str) -> Optional[Dict[str, Any]]:
@@ -224,16 +230,13 @@ class LangGraphSseBridge:
         self._current_reasoning_parent_task_call_id: Optional[str] = None
         self._finish_emitted = False
         self._persist_tick = False
-        self.last_finish_usage: Dict[str, Any] = {}
         self.last_finish_reason: str = ""
         self.last_error_message: str = ""
         self._current_attempt_id = 1
         self._model_attempt_ids: Dict[str, int] = {}
-        self._usage_cumulative: Dict[str, Any] = {}
         self.last_context_snapshot: Dict[str, int] = {}
         self._session_context_tick = False
         self.last_hitl_payload: Optional[Dict[str, Any]] = None
-        self._usage_collector = RunUsageCollector()
 
     # ---------- metrics ctx ----------
 
@@ -241,10 +244,6 @@ class LangGraphSseBridge:
     def _ensure_metrics_ctx(ctx: Dict[str, Any]) -> None:
         if "tool_start_times" not in ctx:
             ctx["tool_start_times"] = {}
-        if "usage_cumulative" not in ctx:
-            ctx["usage_cumulative"] = {"input_tokens": 0, "output_tokens": 0}
-        if "usage_seen_run_ids" not in ctx:
-            ctx["usage_seen_run_ids"]: Set[str] = set()
 
     @staticmethod
     def _ensure_subagent_ctx(ctx: Dict[str, Any]) -> None:
@@ -326,39 +325,6 @@ class LangGraphSseBridge:
         if tool_call_id in stack:
             stack.remove(tool_call_id)
 
-    def _cumulative_usage(self, ctx: Dict[str, Any]) -> Dict[str, int]:
-        self._ensure_metrics_ctx(ctx)
-        return dict(ctx["usage_cumulative"])
-
-    def _build_usage_payload(self, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
-        if ctx is not None:
-            cum = self._cumulative_usage(ctx)
-        else:
-            cum = dict(self._usage_cumulative)
-        if not cum or (cum.get("input_tokens", 0) == 0 and cum.get("output_tokens", 0) == 0):
-            return {}
-        return cum
-
-    def _emit_usage_update(
-        self,
-        ctx: Dict[str, Any],
-        out: List[str],
-        *,
-        run_id: Optional[str] = None,
-    ) -> None:
-        usage = self._build_usage_payload(ctx)
-        if not usage:
-            return
-        self._usage_cumulative = dict(usage)
-        out.append(_format_sse("usage-update", {
-            "type": "usage-update",
-            "message_id": self.assistant_message_id,
-            "usage": usage,
-        }))
-        snapshot = ContextMetricsRegistry.peek(self.session_id, run_id=str(run_id or "").strip())
-        if snapshot:
-            self._emit_context_update(snapshot, out)
-
     def _accumulate_usage(
         self,
         ctx: Dict[str, Any],
@@ -372,54 +338,22 @@ class LangGraphSseBridge:
             return
         self._ensure_metrics_ctx(ctx)
         rid = str(run_id or "").strip()
-        if rid:
-            seen: Set[str] = ctx["usage_seen_run_ids"]
-            if rid in seen:
-                return
-
-        # collector 是 bridge 级别的唯一去重边界；ctx 可能在子 Agent / 恢复路径
-        # 中变化，不能只依赖 context 内的 seen 集合，否则同一 model run 会重复累计。
-        recorded_usage = self._usage_collector.record(
-            raw_usage,
-            attribution=ModelCallAttribution(
-                model_run_id=rid,
-                caller=resolve_caller(parent_task_call_id),
-                parent_tool_call_id=parent_task_call_id or "",
-            ),
-        )
-        if recorded_usage is None:
-            return
-        usage = recorded_usage
-        if rid:
-            seen.add(rid)
 
         # 单轮真实 input_tokens → 更新上下文指示器（非累计，每次覆盖）。
+        # 仅主对话（无 parent_task_call_id）写入，子 Agent 的 input_tokens 不覆盖圆环。
         # provider 不返回 usage 时 current_input 为空，registry 保留上一轮真实值。
+        if parent_task_call_id:
+            return
         current_input = usage.get("input_tokens")
         if current_input and current_input > 0:
             limit = resolve_context_max_tokens(self._model_id)
-            ContextMetricsRegistry.put(
-                self.session_id,
-                {
-                    "current_tokens": int(current_input),
-                    "max_tokens": limit,
-                    "used_percentage": compute_used_percentage(int(current_input), limit),
-                },
-                run_id=rid,
-            )
-
-        cum: Dict[str, Any] = ctx["usage_cumulative"]
-        cum["input_tokens"] = cum.get("input_tokens", 0) + usage.get("input_tokens", 0)
-        cum["output_tokens"] = cum.get("output_tokens", 0) + usage.get("output_tokens", 0)
-        if "total_tokens" in usage:
-            cum["total_tokens"] = cum.get("total_tokens", 0) + usage["total_tokens"]
-        elif cum.get("input_tokens") or cum.get("output_tokens"):
-            cum["total_tokens"] = cum.get("input_tokens", 0) + cum.get("output_tokens", 0)
-        # 累计 detail 子项（cache_read/cache_write/reasoning），缺失不补零
-        _accumulate_detail(cum, "input_token_details", usage.get("input_token_details"))
-        _accumulate_detail(cum, "output_token_details", usage.get("output_token_details"))
-        self._usage_cumulative = dict(cum)
-        self._emit_usage_update(ctx, out, run_id=rid)
+            snapshot = {
+                "current_tokens": int(current_input),
+                "max_tokens": limit,
+                "used_percentage": compute_used_percentage(int(current_input), limit),
+            }
+            ContextMetricsRegistry.put(self.session_id, snapshot, run_id=rid)
+            self._emit_context_update(snapshot, out)
 
     def _tool_duration_ms(self, ctx: Dict[str, Any], tool_call_id: str) -> Optional[int]:
         self._ensure_metrics_ctx(ctx)
@@ -464,6 +398,7 @@ class LangGraphSseBridge:
             "type": "reasoning-end",
             "message_id": self.assistant_message_id,
             "part_id": self._current_reasoning_part_id,
+            **self._sse_parent_field(self._current_reasoning_parent_task_call_id),
         }))
         self._reasoning_open = False
         self._current_reasoning_part_id = None
@@ -614,12 +549,7 @@ class LangGraphSseBridge:
         self._close_text(out, record_checkpoint=False)
         if builder is not None and ctx is not None:
             self._flush_text_buffer(builder, ctx)
-        self.last_finish_usage = payload.get("usage") or {}
         self.last_finish_reason = str(payload.get("finish_reason") or "stop")
-        # 附带 by_caller/by_model 归因摘要（向后兼容：旧前端忽略 attribution 字段）
-        attribution = self._usage_collector.summary()
-        if attribution.get("by_caller") or attribution.get("by_model"):
-            payload.setdefault("attribution", attribution)
         out.append(_format_sse("finish", payload))
         self._finish_emitted = True
 
@@ -693,12 +623,20 @@ class LangGraphSseBridge:
         task_tool_call_id: Optional[str] = None,
     ) -> Optional[ToolFailure]:
         if tool_name == TASK_TOOL_NAME:
-            if self._task_has_subagent_tool_error(builder, task_tool_call_id or ""):
-                return subagent_failure_from_context(clean_output)
             if clean_output and output_status != "error":
                 task_failure = classify_task_tool_output(clean_output)
                 if task_failure is not None:
                     return task_failure
+                # The task wrapper is authoritative when it explicitly reports
+                # success. A child tool may fail and still be recovered from by
+                # the subagent; keep that child failure visible in its own part
+                # without upgrading the parent task to a failure.
+                if clean_output.lstrip().startswith("Task Succeeded. Result:"):
+                    return None
+            # Only use child failures as a fallback when the task has not
+            # provided an explicit success/failure result of its own.
+            if self._task_has_subagent_tool_error(builder, task_tool_call_id or ""):
+                return subagent_failure_from_context(clean_output)
         if output_status == "error" or exc is not None:
             return classify_tool_failure(exc, raw=clean_output, tool_name=tool_name)
         return None
@@ -738,12 +676,10 @@ class LangGraphSseBridge:
         out: List[RunEvent] = []
         had_finish_before = self._finish_emitted
         if not self._finish_emitted:
-            usage = self._build_usage_payload()
             self._emit_finish(out, {
                 "type": "finish",
                 "message_id": self.assistant_message_id,
                 "finish_reason": finish_reason or "stop",
-                "usage": usage,
             })
         out.append(_format_done())
         logger.info(
@@ -776,13 +712,10 @@ class LangGraphSseBridge:
         t = item.get("type")
 
         if t == "__tw_finish__":
-            item_usage = item.get("usage") or {}
-            usage = item_usage if item_usage else self._build_usage_payload(ctx)
             self._emit_finish(out, {
                 "type": "finish",
                 "message_id": self.assistant_message_id,
                 "finish_reason": item.get("finish_reason") or "stop",
-                "usage": usage,
             }, builder=builder, ctx=ctx)
             return
 
@@ -842,8 +775,7 @@ class LangGraphSseBridge:
             payload = dict(item)
             payload.setdefault("type", "finish")
             payload.setdefault("message_id", self.assistant_message_id)
-            if not payload.get("usage"):
-                payload["usage"] = self._build_usage_payload(ctx)
+            payload.pop("usage", None)
             self._emit_finish(out, payload, builder=builder, ctx=ctx)
             return
 
@@ -1173,6 +1105,8 @@ class LangGraphSseBridge:
             timed_out=timed_out,
         )
         display_output = "" if is_error else clean_output
+        display_output, display_truncated = _bound_tool_output_for_display(display_output)
+        truncated = bool(truncated) or display_truncated
         builder_output = clean_output if not is_error else (failure.message_for_llm if failure else clean_output)
 
         if builder is not None:

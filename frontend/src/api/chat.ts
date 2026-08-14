@@ -32,20 +32,8 @@ export interface MessageContent {
 /** 消息元数据 */
 export interface MessageMetadata {
   model?: string
-  input_tokens?: number
-  output_tokens?: number
-  total_tokens?: number
   finish_reason?: string
   error?: string
-  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
-  input_token_details?: { cache_read?: number, cache_write?: number }
-  output_token_details?: { reasoning?: number }
-  /** 按 caller/model 归因摘要（调试视图按需展示） */
-  attribution?: {
-    cumulative?: Record<string, number>
-    by_caller?: Record<string, Record<string, number>>
-    by_model?: Record<string, Record<string, number>>
-  }
   /** 最近一次模型请求的上下文快照（与累计 usage 分开） */
   context?: ContextSnapshot
 }

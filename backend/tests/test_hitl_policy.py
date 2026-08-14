@@ -70,6 +70,7 @@ def _captured_stack(*, hitl_enabled: bool):
         create_noesis_agent(
             system_prompt="x",
             checkpointer=MagicMock(),
+            profile="COMMON_QA",
             model=MagicMock(),
             interrupt_on=build_interrupt_on(),
         )
@@ -80,10 +81,7 @@ def test_create_noesis_agent_skips_hitl_when_disabled() -> None:
     assert not any(isinstance(item, HumanInTheLoopMiddleware) for item in _captured_stack(hitl_enabled=False))
 
 
-def test_hitl_is_between_capabilities_and_governor() -> None:
+def test_hitl_is_innermost() -> None:
     names = [type(item).__name__ for item in _captured_stack(hitl_enabled=True)]
-    # In the new flat stack, HITL sits at the innermost position (design §3),
-    # after SafeModelRetry and before the provider.
     assert "HumanInTheLoopMiddleware" in names
-    assert names.index("HumanInTheLoopMiddleware") > names.index("SafeModelRetryMiddleware")
     assert names[-1] == "HumanInTheLoopMiddleware"

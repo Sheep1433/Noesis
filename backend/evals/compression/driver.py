@@ -1,18 +1,17 @@
 """加载 fixture → 调用 CompactionMiddleware → 压缩后 messages。
 
-离线评测使用与线上相同的 ``noesis.middleware.CompactionMiddleware``
+离线评测使用与线上相同的 ``noesis.agents.middlewares.CompactionMiddleware``
 （spec：离线评测使用同一 factory 入口与 middleware 参数）。
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from langchain.agents.middleware.types import AgentState, ModelRequest
+from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, convert_to_messages
 
-from noesis.middleware import CompactionMiddleware, CompactionThresholds
+from noesis.agents.middlewares import CompactionMiddleware, CompactionThresholds
 from noesis.llm.model_limits import resolve_context_max_tokens
 from noesis.config.env import ModelConfig
 from noesis.llm import get_llm
@@ -55,7 +54,7 @@ def _approx_token_counter(messages: List[AnyMessage]) -> int:
     return sum(len(repr(m.content)) for m in messages) // 4
 
 
-def _build_summarize(model) -> str:
+def _build_summarize(model):
     def _summarize(messages: List[AnyMessage]) -> str:
         from langchain_core.messages import get_buffer_string
 
@@ -89,10 +88,12 @@ def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> 
     else:
         auto_at = int(max_input * getattr(ModelConfig, "summarization_trigger_fraction", 0.75))
 
+    reserve = min(reserve, max_input - 2)
+    effective_limit = max_input - reserve
     thresholds = CompactionThresholds(
-        model_input_limit=auto_at + reserve,
+        model_input_limit=max_input,
         summary_output_reserve=reserve,
-        transient_request_buffer=max(0, auto_at + reserve - auto_at),
+        transient_request_buffer=max(0, effective_limit - auto_at),
     )
     return CompactionMiddleware(
         token_counter=_approx_token_counter,
@@ -106,6 +107,8 @@ def _extract_summary_text(messages: List[AnyMessage]) -> str:
     for msg in messages:
         if isinstance(msg, (HumanMessage, AIMessage, SystemMessage)):
             content = msg.content
+            if msg.additional_kwargs.get("lc_source") == "summarization" and isinstance(content, str):
+                return content
             if isinstance(content, str) and "[conversation summary]" in content:
                 return content
             if isinstance(content, str) and len(content) > 200 and "summary" in content.lower():
@@ -130,13 +133,14 @@ def compress_fixture_messages(
         state={"messages": list(messages)},
     )
 
-    def handler(req: ModelRequest) -> str:
-        # The handler receives the (possibly compacted) request; return the
-        # effective message list so we can measure the result.
-        return req.messages
+    effective: list[AnyMessage] = []
 
-    result = middleware.wrap_model_call(request, handler)
-    compressed = list(result) if isinstance(result, list) else list(request.messages)
+    def handler(req: ModelRequest) -> ModelResponse:
+        effective.extend(req.messages)
+        return ModelResponse(result=[AIMessage(content="eval complete")])
+
+    middleware.wrap_model_call(request, handler)
+    compressed = effective or list(request.messages)
 
     post_tokens = _approx_token_counter(compressed)
     post_count = len(compressed)

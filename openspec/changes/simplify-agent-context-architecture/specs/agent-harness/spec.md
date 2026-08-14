@@ -2,12 +2,12 @@
 
 ### Requirement: Agent 与 runtime 目录归属
 
-Agent 场景、公共 middleware、backend adapter 与 runtime host SHALL 保持单向依赖。公共运行能力 SHALL 不依赖具体 Agent 场景；factory 与场景包 SHALL 能直接导入且不需要 lazy import 或兼容 shim 解决循环。具体物理布局与迁移路径由 design 规定。
+Agent 场景、公共 middleware、backend adapter 与 runtime host SHALL 保持明确依赖方向。公共运行能力 SHALL 不依赖具体 Agent 场景；`agents.__init__` SHALL 使用 lazy 场景导出，使 `factory → agents.middlewares` 与场景模块按需导入 factory 可以共存，不得使用兼容 shim。具体物理布局与迁移路径由 design 规定。
 
 #### Scenario: Package 依赖无环
 
 - **WHEN** 独立导入 factory、公共运行能力与 Agent 场景
-- **THEN** 导入 SHALL 成功且不依赖 lazy import 回避循环
+- **THEN** 导入 SHALL 成功，且 package lazy export SHALL NOT eager 导入所有场景实现
 - **AND** 静态依赖检查 SHALL 不存在公共运行能力反向依赖具体场景
 
 ### Requirement: Harness SHALL 分离 Kernel 与 Profile Capability
@@ -58,11 +58,11 @@ Harness SHALL 从实际构造结果生成 middleware inventory，记录每个实
 
 | Profile | 必需能力 | 可选能力 |
 |---|---|---|
-| `COMMON_QA` | SourceRefresh、DynamicContext、ToolResultBudget、Snip、MicroCompaction、Compaction、PatchToolCalls、ToolFailure、SafeModelRetry | ToolCatalog、manual compact、call limits |
-| `SUPER_AGENT_QA` | COMMON 全部 + FileContext、DurableContext、Filesystem、Skills、Memory、Todo、SubAgent、ToolCatalog | manual compact、HITL、call limits |
-| `FAULT_OPERATION_QA` | SourceRefresh、DynamicContext、DurableContext、ToolResultBudget、Snip、MicroCompaction、Compaction、PatchToolCalls、ToolFailure、SafeModelRetry、SubAgent、ToolCatalog | FileContext、HITL、call limits |
-| SimpleMCP | SourceRefresh、DynamicContext、ToolResultBudget、Snip、MicroCompaction、Compaction、ToolCatalog、PatchToolCalls、ToolFailure、SafeModelRetry | manual compact、call limits |
-| Super/Fault 子 Agent | isolated/fork policy、SourceRefresh、ToolResultBudget、Snip、MicroCompaction、Compaction、PatchToolCalls、ToolFailure、SafeModelRetry | FileContext、Skills、Filesystem、ToolCatalog、局部 call limits |
+| `COMMON_QA` | DynamicContext、ToolResultBudget、Compaction、PatchToolCalls、ToolFailure | Snip、DeferredToolFilter、manual compact、call limits |
+| `SUPER_AGENT_QA` | COMMON 全部 + ReadBeforeWrite、DurableContext、Filesystem、RefreshingSkills、RefreshingMemory、Todo、SubAgent、DeferredToolFilter | Snip、manual compact、HITL、call limits |
+| `FAULT_OPERATION_QA` | DynamicContext、DurableContext、ToolResultBudget、Compaction、PatchToolCalls、ToolFailure、SubAgent、DeferredToolFilter | ReadBeforeWrite、Snip、HITL、call limits |
+| SimpleMCP | DynamicContext、ToolResultBudget、Compaction、DeferredToolFilter、PatchToolCalls、ToolFailure | Snip、manual compact、call limits |
+| Super/Fault 子 Agent | DeepAgents isolated task context、ToolResultBudget、Compaction、PatchToolCalls、ToolFailure | ReadBeforeWrite、RefreshingSkills、Filesystem、DeferredToolFilter、Snip、局部 call limits；fork/resume 待上游公开 state-builder hook |
 
 #### Scenario: 未配置能力不出现
 
@@ -76,9 +76,9 @@ Harness SHALL 从实际构造结果生成 middleware inventory，记录每个实
 - **THEN** compaction 与最终预算 SHALL 观察到这些能力处理后的 system instructions 与 tool definitions
 - **AND** exact hook order SHALL 由装配契约测试固定
 
-### Requirement: Skills 与 Memory SHALL 使用上游解析并支持 Source Revision
+### Requirement: Skills 与 Memory SHALL 使用上游解析与独立 Freshness Adapter
 
-Skills 与 Memory SHALL 直接使用选定 DeepAgents 版本的来源解析、private state 与 prompt 注入行为。Noesis SHALL NOT 维护第二套 parser 或 prompt 模板；Noesis `SourceRefreshMiddleware` SHALL 仅负责 revision 判定与定向失效上游 private cache，用于补足 DeepAgents 默认只加载一次的 freshness 差异。
+Skills 与 Memory SHALL 直接使用选定 DeepAgents 版本的来源解析、private state 与 prompt 注入行为。Noesis SHALL NOT 维护第二套 parser 或 prompt 模板；`RefreshingSkillsMiddleware` 和 `RefreshingMemoryMiddleware` SHALL 分别补足 DeepAgents 默认只加载一次的 freshness 差异，系统 SHALL NOT 建立统一 source hash middleware。
 
 #### Scenario: Skills 来源变化
 
@@ -90,7 +90,7 @@ Skills 与 Memory SHALL 直接使用选定 DeepAgents 版本的来源解析、pr
 
 - **WHEN** Agent 使用配置的 memory 路径
 - **THEN** 加载与注入 SHALL 由 DeepAgents MemoryMiddleware 完成
-- **AND** SourceRefresh SHALL 只在顶层 turn 边界根据 revision 失效缓存，不得在 run 中途突变
+- **AND** RefreshingMemory SHALL 只在顶层 invocation 边界失效缓存，不得在 run 中途突变
 
 ## ADDED Requirements
 

@@ -113,21 +113,3 @@ def extract_output_token_details(d: Dict[str, Any]) -> Dict[str, int]:
         if v is not None:
             out["reasoning"] = v
     return out
-
-
-def accumulate_detail(cum: Dict[str, Any], key: str, incoming: Dict[str, int] | None) -> None:
-    """Accumulate detail sub-keys (cache_read/cache_write/reasoning) into a snapshot.
-
-    Missing sub-keys are not zero-filled; existing values sum, absent values
-    initialize. Details never participate in total_tokens re-summing.
-    """
-    if not incoming:
-        return
-    bucket = cum.get(key)
-    if not isinstance(bucket, dict):
-        bucket = {}
-        cum[key] = bucket
-    for sub_key, value in incoming.items():
-        if value is None:
-            continue
-        bucket[sub_key] = bucket.get(sub_key, 0) + int(value)

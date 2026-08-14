@@ -3,17 +3,36 @@ import { parseTaskToolOutput } from '@/utils/parseTaskTool'
 import {
   applyToolOutput,
   assistantToolFailureSummary,
+  completeReasoningPart,
   formatUsageSummary,
   hasValidContextWindow,
   hasValidUsage,
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
+  shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
 } from '@/views/chat/messageParts'
 
 describe('message parts snapshot normalization', () => {
+  it('reasoning-end 按 part_id 闭合对应思考，不误关闭交错的 subagent 思考', () => {
+    const parts = [
+      { id: 'root-reasoning', type: 'reasoning' as const, content: '主线', status: 'streaming' },
+      { id: 'child-reasoning', type: 'reasoning' as const, content: '子任务', status: 'streaming', parent_task_call_id: 'task-1' },
+    ]
+
+    const next = completeReasoningPart(parts, 'root-reasoning')
+
+    expect(next[0]).toMatchObject({ id: 'root-reasoning', status: 'completed' })
+    expect(next[1]).toMatchObject({ id: 'child-reasoning', status: 'streaming' })
+  })
+
+  it('仅对超过阈值的用户消息启用折叠', () => {
+    expect(shouldCollapseUserMessage('a'.repeat(800))).toBe(false)
+    expect(shouldCollapseUserMessage('a'.repeat(801))).toBe(true)
+  })
+
   it('解析普通文本与 retrieval parts', () => {
     const normalized = normalizeApiContent({ parts: [
       { type: 'text', content: '旧消息' },

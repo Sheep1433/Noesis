@@ -8,7 +8,6 @@ from typing import AsyncGenerator, Optional
 
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.subagents import SubAgent
-from langchain.agents.middleware import TodoListMiddleware
 from langgraph.types import Command
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,12 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis.agents.backends import agent_sandbox_session, create_agent_backend
 from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
-from noesis.factory import build_subagent_default_middleware, create_noesis_agent
+from noesis.factory import build_noesis_middleware, create_noesis_agent
 from noesis.agents.tools.ask_user import ask_user_tool, build_interrupt_on
-from noesis.agents.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from noesis.agents.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
-from noesis.agents.middlewares.capabilities.versioned_skills_middleware import VersionedSkillsMiddleware
 from noesis.agents.prompts import PromptProfile, build_prompt
+from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
 from noesis.agents.tools import build_web_search_tools
@@ -55,15 +52,18 @@ def _build_task_worker_subagents(
     model_id: str | None = None,
     interrupt_on: dict | None = None,
 ) -> list[SubAgent]:
-    subagent_middleware = [
-        *build_subagent_default_middleware(backend),
-        VersionedSkillsMiddleware(
-            backend=backend,
-            sources=list(skill_sources),
-            system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
-            user_id=user_id,
-        ),
-    ]
+    model = get_llm(model_id=model_id)
+    subagent_middleware = build_noesis_middleware(
+        profile="SUBAGENT",
+        model=model,
+        model_id=model_id,
+        tools=tools,
+        backend=backend,
+        skills=skill_sources,
+        skills_user_id=user_id,
+        skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+        deferred_tools=bool(tools),
+    )
     spec: SubAgent = {
         "name": "task-worker",
         "description": (
@@ -72,10 +72,9 @@ def _build_task_worker_subagents(
             "复杂任务应优先委派：多源检索、调研、批量读文件、实现与验证等，避免主上下文被工具原文撑满。"
         ),
         "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
-        "model": get_llm(model_id=model_id),
+        "model": model,
         "tools": tools,
         "middleware": subagent_middleware,
-        "skills": list(skill_sources),
     }
     if interrupt_on:
         spec["interrupt_on"] = interrupt_on
@@ -118,21 +117,6 @@ class SuperAgent(BaseAgent):
             interrupt_on = build_interrupt_on(session_id=session_id)
         skill_sources = resolve_skill_sources_for_session(user_id, enabled_skills)
         resolved_context = ContextResolver.resolve(user_id, PromptProfile.SUPER_AGENT)
-        extra_middleware: list = [
-            TodoListMiddleware(),
-            VersionedSkillsMiddleware(
-                backend=backend,
-                sources=list(skill_sources),
-                system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
-                user_id=user_id,
-            ),
-            TurnMemoryMiddleware(
-                backend=backend,
-                sources=list(resolved_context.memory_sources),
-                system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
-            ),
-        ]
-
         if (
             ChatAttachmentConfig.enabled
             and db is not None
@@ -157,6 +141,16 @@ class SuperAgent(BaseAgent):
             system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
             backend=backend,
+            workspace="/workspace",
+            session_id=session_id,
+            attachments=tuple(str(name) for name in (file_list or {})),
+            skills=skill_sources,
+            skills_user_id=user_id,
+            skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+            memory=resolved_context.memory_sources,
+            memory_system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
+            todo=True,
+            deferred_tools=bool(tools),
             subagents=_build_task_worker_subagents(
                 backend,
                 tools,
@@ -165,7 +159,6 @@ class SuperAgent(BaseAgent):
                 model_id=model_id,
                 interrupt_on=interrupt_on,
             ),
-            extra_middleware=extra_middleware,
             interrupt_on=interrupt_on,
             model_id=model_id,
         )

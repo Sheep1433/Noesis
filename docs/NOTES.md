@@ -1055,11 +1055,11 @@ backends/
 **Why：** 8/11 定稿的 simplify-agent-context spec 需要落地，且用户对「哪些自研、哪些复用上游」有强约束：自研多个中间件可体现能力（支撑项目合理性），但每个 middleware 必须**自包含**（deepagents 风格：各自独立负责拦截/处理，不 import runtime/service/agents）。
 
 **成果（worktree `feat/simplify-agent-context`）：**
-- `noesis/middleware/` 平铺包：12 个中间件 + `__init__.py` + `stack.py`（装配 + Profile 矩阵）；14 测试文件，982 单测通过；net +5357/−1588。
+- `noesis/agents/middlewares/` Agent runtime 子包：12 个平铺中间件 + `capabilities/` + `stack.py`（装配 + Profile 矩阵）；原顶层 `noesis/middleware/` 已确认是错误迁移并删除。
 - 自包含验证：12 中间件零 import `runtime`/`service`/`agents`，中间件互相零 import。
 - Profile 矩阵修正：`build_noesis_stack` 之前无条件加入 DurableContext、缺 SourceRefresh，与 design §16 矛盾 → 已按 profile 决定必需归属，5 个 Profile 实际 stack 与 design 一致。
 - 旧五 owner kernel 已删；`evals/compression/driver` 改用新 `CompactionMiddleware`。
-- middleware 清单：dynamic_context / source_refresh / durable_context / file_context / snip / micro_compaction / tool_catalog / compaction / subagents / tool_failure / tool_result_limit / safe_model_retry。subagent 走 isolated/fork/resume context policy（执行器复用 langchain/deepagents）。
+- middleware 清单：dynamic_context / source_refresh / durable_context / file_context / snip / micro_compaction / tool_catalog / compaction / subagents / tool_failure / tool_result_limit / safe_model_retry。subagent 的 isolated 已接入 DeepAgents `task` tool；fork/resume 当前只有纯状态函数，真实 task/checkpoint adapter 仍属于 OpenSpec §7 待办。
 
 **已知精化缺口（不影响「已实现」，待后续）：**
 1. Compaction 预算覆盖面：factory 注入的 `token_counter` 只数 messages，未覆盖 system prompt + tool definitions（design §17 / agent-runtime spec 要求覆盖最终 request 全部组成；需接真实 tokenizer）。

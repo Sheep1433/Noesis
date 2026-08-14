@@ -27,7 +27,6 @@ tool-call seam.
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import TYPE_CHECKING, Any, Callable
 
 from langchain.agents.middleware.types import (
@@ -46,12 +45,10 @@ from noesis.errors.tool_failure import (
     classify_tool_failure,
     format_tool_error_detail,
 )
+from noesis.runtime.logging import logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
-
-logger = logging.getLogger(__name__)
-
 
 # Exceptions that must propagate unchanged to preserve control flow.
 # GraphBubbleUp is the LangGraph base for GraphInterrupt/HITL and other
@@ -75,7 +72,7 @@ class ToolFailureMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
         tool_name = self._tool_name(request)
         failure = classify_tool_failure(exc, tool_name=tool_name)
         logger.error(
-            "tool execution failed name=%s id=%s category=%s detail=%s",
+            "tool execution failed name={} id={} category={} detail={}",
             tool_name,
             self._tool_call_id(request),
             failure.category.value,

@@ -6,7 +6,7 @@ import pytest
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from noesis.middleware.snip_middleware import (
+from noesis.agents.middlewares.snip_middleware import (
     SnipError,
     SnipMiddleware,
     SnipSelector,
@@ -132,3 +132,73 @@ def test_wrap_model_call_passes_projected_request_to_handler() -> None:
     out = mw.wrap_model_call(_request(msgs, state=state), handler)
     assert out == "ok"
     assert len(seen[0]) == 2
+
+
+def test_selector_replays_after_history_is_prefixed() -> None:
+    mw = SnipMiddleware()
+    msgs = _transcript()
+    record = mw.request_snip(msgs, SnipSelector(0, 2), reason="stale")
+    prefixed = [SystemMessage(content="new stable prefix"), *msgs]
+
+    projected = apply_snip_projection(prefixed, [record])
+
+    assert projected[0].content == "new stable prefix"
+    assert "[snipped:" in projected[1].content
+    assert projected[-1].content == "current request"
+
+
+def test_cannot_snip_compaction_boundary() -> None:
+    mw = SnipMiddleware()
+    msgs = [
+        HumanMessage(
+            content="[conversation summary]",
+            additional_kwargs={"lc_source": "summarization", "boundary_hash": "b1"},
+        ),
+        HumanMessage(content="current request"),
+    ]
+
+    with pytest.raises(SnipError, match="compaction boundary"):
+        mw.request_snip(msgs, SnipSelector(0, 1), reason="x")
+
+
+def test_cannot_snip_any_message_in_current_request_turn() -> None:
+    mw = SnipMiddleware()
+    msgs = [
+        HumanMessage(content="old"),
+        AIMessage(content="old answer"),
+        HumanMessage(content="current request"),
+        AIMessage(content="current partial answer"),
+    ]
+
+    with pytest.raises(SnipError, match="current user request"):
+        mw.request_snip(msgs, SnipSelector(3, 4), reason="x")
+
+
+def test_unpaired_tool_call_outside_selector_does_not_block_snip() -> None:
+    mw = SnipMiddleware()
+    msgs = [
+        HumanMessage(content="old"),
+        AIMessage(content="old answer"),
+        AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "pending"}]),
+        HumanMessage(content="current"),
+    ]
+
+    record = mw.request_snip(msgs, SnipSelector(0, 2), reason="old turn")
+    assert record.selector == SnipSelector(0, 2)
+
+
+def test_replay_skips_selector_that_would_now_touch_current_turn() -> None:
+    mw = SnipMiddleware()
+    original = [
+        AIMessage(content="target"),
+        HumanMessage(content="current request"),
+    ]
+    record = mw.request_snip(original, SnipSelector(0, 1), reason="old")
+    reordered = [
+        HumanMessage(content="current request"),
+        AIMessage(content="target"),
+    ]
+
+    projected = apply_snip_projection(reordered, [record])
+
+    assert [message.content for message in projected] == ["current request", "target"]

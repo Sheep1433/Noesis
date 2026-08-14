@@ -1,110 +1,172 @@
-# Noesis Agent Runtime 设计导读
+# Noesis Agent Runtime 与上下文管理
 
-> 状态：Proposed  
-> 权威设计：[`simplify-agent-context-architecture/design.md`](../../../openspec/changes/simplify-agent-context-architecture/design.md)  
-> 可验收行为：[`specs/`](../../../openspec/changes/simplify-agent-context-architecture/specs/)  
-> 实施任务：[`tasks.md`](../../../openspec/changes/simplify-agent-context-architecture/tasks.md)  
-> 研究依据：[`Agent 上下文管理与 Middleware 边界研究`](/Users/zzq/Library/Mobile%20Documents/iCloud~md~obsidian/Documents/knowledge-base/Interview/highlights/Middleware/agent-context-middleware-boundaries.md)（实现稳定后归档回 `docs/research/agents/`）
+> 状态：Current
+>
+> 代码基线：DeepAgents `0.6.12`、LangChain `1.3.15`、LangGraph `1.2.11`
+>
+> 变更设计：[`simplify-agent-context-architecture`](../../../openspec/changes/simplify-agent-context-architecture/design.md)
 
 ## 结论
 
-目标不是“只保留少数 middleware”，而是：
+Noesis 现在采用 DeepAgents 风格的直接装配：场景 Agent 把 `tools / backend / skills / memory / subagents / interrupt_on` 等参数交给唯一 factory，factory 一次生成 middleware stack，再调用 LangChain `create_agent()`。
 
-- 上下文管理行为尽量接近 Claude Code 2.1.88；
-- 代码结构保持 DeepAgents 风格：一个 factory、平铺 `middleware/`、直接参数装配；
-- LangChain/DeepAgents 已有能力只在契约相同时直接使用；缺失时实现 Noesis middleware；
-- 不引入 `ContextCompiler`、多层 kernel、可执行 spec 或第二套 Agent loop。
+上下文能力不是按“类越少越好”裁剪，而是按 owner 是否清楚划分：
 
-## 目标结构
+- 8 个 Noesis middleware 实现 Claude Code 风格但上游缺失的策略；
+- 2 个薄适配器继承 DeepAgents Skills/Memory，只补 freshness；
+- Filesystem、SubAgent、Todo、PatchToolCalls、HITL 和 call limits 直接使用 DeepAgents/LangChain；
+- tool registry、Provider 编码、SSE、持久化和真实文件 I/O 不伪装成 middleware。
+
+`VersionedSkillsMiddleware` 已改名为 `RefreshingSkillsMiddleware`；`TurnMemoryMiddleware` 已改名为 `RefreshingMemoryMiddleware`。旧名称表达的是实现手段或生命周期片段，现名称直接表达能力。`capabilities/` 已删除，因为两个类本身就是 middleware，再增加一层只会让导入路径和阅读成本变高。
+
+## 目录结构
 
 ```text
 noesis/
-├── factory.py                  # 唯一 ReAct Agent 装配入口
-├── middleware/                # 平铺；只放 Noesis 差异能力
-│   ├── source_refresh.py
-│   ├── dynamic_context.py
-│   ├── durable_context.py
-│   ├── file_context.py
-│   ├── snip.py
-│   ├── micro_compaction.py
-│   ├── compaction.py
-│   ├── tool_catalog.py
-│   ├── subagents.py
-│   ├── tool_failure.py
-│   ├── tool_result_budget.py
-│   └── safe_model_retry.py
-├── backends/                   # workspace、artifact、archive adapter
-├── agents/                     # 场景 prompt、tools 与入口
-└── runtime/
-    ├── compaction.py          # archive/summary/boundary/checkpoint 事务
-    ├── tool_registry.py        # MCP/tool 权威源
-    ├── providers/              # canonical request 适配
-    └── ...                     # stream、HITL、task registry、attachments
+├── factory.py
+└── agents/
+    ├── middlewares/
+    │   ├── stack.py
+    │   ├── dynamic_context_middleware.py
+    │   ├── durable_context_middleware.py
+    │   ├── tool_result_budget_middleware.py
+    │   ├── tool_failure_middleware.py
+    │   ├── read_before_write_middleware.py
+    │   ├── deferred_tool_filter_middleware.py
+    │   ├── compaction_middleware.py
+    │   ├── snip_middleware.py
+    │   ├── refreshing_skills_middleware.py
+    │   └── refreshing_memory_middleware.py
+    ├── runtime/
+    │   └── tool_registry.py
+    ├── backends/
+    ├── prompts/
+    └── ... 场景 Agent
 ```
 
-DeepAgents/LangChain 的 Filesystem、Skills、Memory、Todo、PatchToolCalls、HITL 和 call-limit middleware 从依赖直接导入，不在 Noesis 内再包一层同义 wrapper。
+依赖方向固定为 `scene → factory → agents.middlewares/runtime`。通用 middleware 不得反向导入 factory、Service 或具体场景 Agent。`agents.__init__` 保持 lazy 场景导出；循环依赖通过依赖方向解决，不通过把 middleware 移到顶层解决。
 
-## Middleware 分工
+## 8 个 Noesis middleware
 
-| Middleware | 主要职责 | 为什么不能只用上游 |
+| Middleware | 实际功能 | Claude Code 对应逻辑 |
 |---|---|---|
-| SourceRefresh | 顶层 turn 的 source revision 与定向缓存失效 | DeepAgents Skills/Memory 默认只加载一次 |
-| DynamicContext | 注入当前时间、workspace、session、附件索引 | 场景动态来源不属于摘要 |
-| DurableContext | 保存 plan/task/skill/file/tool 引用 | 压缩后必须从摘要外恢复 |
-| FileContext | read state、stale 提示、写前契约、关键 excerpt 恢复 | DeepAgents Filesystem 不等于 Claude Code 文件状态 |
-| Snip | 定点修改 effective history projection | 上游没有等价的持久化 snip record |
-| MicroCompaction | 无模型局部减重 | Summarization 不覆盖完整的 Claude 局部阶段 |
-| ToolCatalog | deferred MCP/tool schema 与 `tool_search` | 大工具目录不应全量进入每次 request |
-| Compaction | 自动/增量/手动压缩、PTL recovery、breaker | DeepAgents 缺 summary reserve、完整 PTL 策略和 durable breaker |
-| NoesisSubAgent | isolated/fork/resume 的 context 边界 | DeepAgents 默认 task 语义不是完整 Claude fork |
-| ToolFailure | typed 异常转换 | Noesis 已有 status/category/outcome 产品契约 |
-| ToolResultBudget | 确定性 replacement 与 artifact record | 需要 resume 后决策一致 |
-| SafeModelRetry | 无可见输出/副作用才 retry | LangChain 通用 retry 不理解 Noesis SSE 边界 |
+| `DynamicContextMiddleware` | 每次 run 解析一次时间、时区、workspace、session、附件清单，保存到 private state；每次 model call 重建同一 system block | 动态环境信息不写进历史，也不要求摘要记住；同一 run 内保持稳定 |
+| `DurableContextMiddleware` | 从 Todo、Skills metadata、read hash、tool promotion 和 task messages 提取有界引用；压缩前后都从 private state 重建 | plan、任务、已加载 Skill、活动文件、已发现工具等属于摘要外的 durable context |
+| `ToolResultBudgetMiddleware` | 对单条超大结果、同一批并行结果和旧 write/edit 大参数执行确定性 replacement；完整正文写 artifact，state 保存 path、synopsis、hash、tokens freed；resume 重放同一决定 | 工具输出与旧工具参数先局部减重，再考虑整段会话压缩；失败结果的 status/category/outcome 不丢失 |
+| `ToolFailureMiddleware` | 把普通工具异常变成与原 call id 配对的 typed error `ToolMessage`；取消、HITL/Graph interrupt 继续抛出 | 工具失败仍保持合法 tool-call/result 序列，控制流异常不能被当成业务错误吞掉 |
+| `ReadBeforeWriteMiddleware` | read 前后读取 backend 并记录稳定内容 hash；write/edit 前重读校验并原子消费 hash；失败写入恢复 claim | 文件修改必须基于当前已读版本，避免使用过期上下文覆盖用户修改 |
+| `DeferredToolFilterMiddleware` | model call 只暴露基础工具与当前 catalog hash 下已发现的 schema；执行时再次检查 promotion 和权限 | 大 MCP/tool catalog 不全量占用 prompt，通过 ToolSearch 按需加载 schema |
+| `CompactionMiddleware` | 最终 request 预算、自动压缩、summary PTL retry、reactive overflow 重试一次、breaker、manual compact、raw history projection 和 archive | Claude Code 式多阶段长上下文压缩；失败摘要不能替换原历史 |
+| `SnipMiddleware` | 通过显式 selector 把旧消息范围替换为 marker；记录 hash/tokens；不删除 raw transcript，不切断 tool pair、当前 turn 或 compact boundary | 定点清理 effective history，而不是整段摘要或物理删消息 |
 
-这些是“窄 middleware”，不是十一个平台 owner。每个类只占一个 LangChain lifecycle seam；数据库、MCP 连接、文件 I/O、task 调度和 stream 仍在 runtime/backend/service。
+所有 Noesis private state 都通过 `state_schema + PrivateStateAttr` 声明，因此 LangChain `create_agent()` 能合并 schema，也不会把内部 ledger 当成普通 Agent 输出。此前 `SubAgentContextMiddleware` 缺少基类 hook 的报错，本质就是它没有正确继承/声明 LangChain middleware 契约；该类现已删除，子 Agent 直接使用 DeepAgents `SubAgentMiddleware(private_state_keys=...)`。
 
-## 请求管道
+## 2 个 DeepAgents 薄适配器
+
+| Adapter | 基类 | 只补什么 |
+|---|---|---|
+| `RefreshingSkillsMiddleware` | `SkillsMiddleware` | 每个顶层 run 比较用户 Skills revision。revision 未变直接使用 checkpoint cache；变化时只清理上游 `skills_metadata/skills_load_errors`，再调用上游 loader |
+| `RefreshingMemoryMiddleware` | `MemoryMiddleware` | 每个顶层 run 清理 `memory_contents` 并调用上游 loader；同一 run 内固定，不在每次 model call 重读文件 |
+
+此前为什么会出现 `VersionedSkillsMiddleware` 和 `TurnMemoryMiddleware`：DeepAgents 的默认 cache 对长寿命 checkpoint 来说不会自动知道外部 Skills/Memory 已变化。Skills 已有 revision，所以用版本判断；Memory 当时没有可靠 revision，只能按 turn 刷新。这个需求仍然存在，只是无需放在 `capabilities/`，也无需建立统一 `SourceRefreshMiddleware`。
+
+## 直接采用的上游 middleware
+
+| 来源 | Middleware | Noesis 用途 |
+|---|---|---|
+| DeepAgents | `FilesystemMiddleware` | workspace 文件工具与 artifact 能力 |
+| DeepAgents | `SubAgentMiddleware` / `AsyncSubAgentMiddleware` | 子 Agent 编译、task 工具、调度与结果回传 |
+| DeepAgents | `PatchToolCallsMiddleware` | 修复中断/恢复后悬空的 tool call |
+| LangChain | `TodoListMiddleware` | Todo 状态与工具 |
+| LangChain | `ModelCallLimitMiddleware` / `ToolCallLimitMiddleware` | 显式配置的调用次数限制 |
+| LangChain | `HumanInTheLoopMiddleware` | 高风险工具审批 |
+
+不复制这些类，也不在 Noesis 中创建只转发构造参数的 wrapper。
+
+## 不再作为 middleware 的能力
+
+| 旧类/概念 | 处理结果 | 当前 owner |
+|---|---|---|
+| `SourceRefreshMiddleware` | 删除 | Skills、Memory、tool catalog、attachments 各自管理 freshness |
+| `MicroCompactionMiddleware` | 删除 | tool-result 局部减重归 ToolResultBudget；conversation reduction 归 Compaction |
+| `SafeModelRetryMiddleware` | 删除 | 瞬时传输 retry 归 Provider SDK；context overflow 归 Compaction |
+| `SubAgentContextMiddleware` | 删除 | DeepAgents SubAgent + `private_state_keys` 负责默认隔离；编译/调度不再包一层 middleware |
+| `ToolCatalogMiddleware` | 拆分并改名 | catalog、revision、权限、`tool_search` 归 `agents/runtime/tool_registry.py`；model/tool hook 只留 DeferredToolFilter |
+| `FileContextMiddleware` | 收窄并改名 | 只保留 ReadBeforeWrite hash gate；不维护第二套文件 LRU/excerpt cache |
+| RuntimeTelemetry/usage/SSE | 移出 | stream bridge、trace 与 Service |
+| Provider canonical encoding/cache | 移出 | LangChain Provider adapter/SDK |
+
+DeerFlow middleware 数量更多，主要因为它还把 uploads、sandbox、title、token usage、terminal、safety、MCP routing 等平台能力放在 middleware 目录。Noesis 没有删除这些产品能力，但按真实 lifecycle 放到 attachment resolver、backend、runtime registry、stream 或 Service。只有需要拦截 `before_agent / model call / tool call` 且需要参与 Agent state 的逻辑才留在 middleware。
+
+## 实际装配顺序
+
+完整 Profile 的 outer-to-inner 顺序：
 
 ```text
-stable sources / source revision
-→ ToolResult replacement
-→ Snip projection
-→ MicroCompaction
-→ ToolCatalog filtering
-→ PatchToolCalls
-→ auto/reactive Compaction
-→ Provider canonicalization + cache marker
-→ model call
+ToolResultBudget                 Noesis
+→ ToolFailure                   Noesis
+→ ReadBeforeWrite               Noesis，可选 backend
+→ TodoList                      LangChain，可选
+→ RefreshingSkills              DeepAgents 薄适配，可选
+→ Filesystem                    DeepAgents，可选
+→ SubAgent / AsyncSubAgent      DeepAgents，可选
+→ RefreshingMemory              DeepAgents 薄适配，可选
+→ DynamicContext                Noesis
+→ DurableContext                Noesis，Super/Fault
+→ Snip                          Noesis，可选
+→ DeferredToolFilter            Noesis，可选
+→ PatchToolCalls                DeepAgents
+→ Compaction                    Noesis，配置开启时
+→ ModelCallLimit / ToolCallLimit LangChain，可选
+→ HumanInTheLoop                LangChain，可选
+→ Provider
 ```
 
-Compaction 只处理 conversation。场景 prompt、Skills、Memory、plan/task、file refs 和 tool catalog 等稳定来源在 compact 后重建，不要求 summary model 记住。
+这里的顺序是行为约束：ToolResultBudget 位于 ToolFailure 外层，才能限制 error result；ReadBeforeWrite 位于 Filesystem 外层，才能在实际工具执行前后校验；稳定上下文与 tool filtering 位于 Compaction 外层，预算才能看到最终 request；HITL 保持最内层工具门禁。
 
-Provider 发送前只有一份 canonical request。本地 token estimate 必须覆盖 system、messages、tool results、tool schemas、attachments 和 framing；Provider actual usage 另行记录，不混为一个数。
+`COMMON_QA` 的最小 stack 是：
 
-## Factory 与顺序
+```text
+ToolResultBudget → ToolFailure → DynamicContext → PatchToolCalls → Compaction
+```
 
-`create_noesis_agent()` 直接接收 `model / tools / system_prompt / middleware / backend / subagents / skills / memory / interrupt_on / checkpointer / state_schema / context_policy / name`。Factory 根据 Profile 参数一次构造 stack，调用方不得在返回后 append。
+Compaction 配置关闭时只省略 Compaction，不改变其他相对顺序。
 
-目标 outer-to-inner 顺序由 OpenSpec design 维护。顺序的关键约束是：
+## 上下文数据流
 
-- ToolResultBudget 要看到成功与失败的最终 ToolMessage；
-- SourceRefresh 要在 Skills/Memory 读取 private cache 前执行；
-- 稳定来源、ToolCatalog 和 PatchToolCalls 要位于 Compaction 外层，让预算看到最终 request；
-- SafeModelRetry 位于 Compaction 内层，context overflow 必须返回 Compaction；
-- HITL 只拦截工具执行，ToolFailure 不得吞掉 interrupt 和取消。
+```mermaid
+flowchart LR
+    A["场景 prompt / Skills / Memory"] --> R["最终 ModelRequest"]
+    B["时间 / workspace / session / attachments"] --> R
+    C["Todo / file hashes / tool promotions / task ledger"] --> R
+    D["raw conversation checkpoint"] --> E["ToolResult replacement + Snip projection"]
+    E --> F["Compaction projection"]
+    F --> R
+    G["ToolRegistry"] --> H["Deferred schema filter"]
+    H --> R
+    R --> P["Provider adapter"]
+```
 
-## 不放在 Middleware 的能力
+raw transcript 不因 ToolResult replacement、Snip 或 Compaction 被物理删除。送给 Provider 的 effective history 由 checkpointed private record 重建。这样 resume 可重放同一决策，摘要或 archive 失败时也不会丢失原始会话。
 
-| 能力 | Owner |
-|---|---|
-| 用户消息与附件解析 | Service/input resolver |
-| MCP 连接、schema 权威源、执行授权 | runtime tool registry |
-| archive/summary/boundary/checkpoint 原子提交 | runtime compaction service |
-| read/write 真实 I/O 与 mtime/hash 拒绝 | backend/tool adapter |
-| subagent 并发、取消、超时、admission | runtime task registry |
-| Provider message/schema 最终编码 | provider request adapter |
-| usage、finish/stop reason、SSE、assistant 落库 | stream/delivery/service |
+## 当前边界
 
-## 当前状态
+- 子 Agent 已通过 DeepAgents `private_state_keys` 隔离 Noesis 的 dynamic/durable/file/tool-result/tool-catalog/snip/compaction state。显式 fork/resume policy 属于后续 subagent state-builder 工作，不应重新做成通用 middleware。
+- Provider 最终的 Anthropic/OpenAI message 编码、prompt cache marker 与网络 retry 继续由 LangChain Provider adapter/SDK 管理；Noesis 不增加 `ContextCompiler`。
+- `SnipMiddleware` 具备真实 `snip_context` tool，但默认不安装；只有产品提供明确入口时通过 `snip=True` 启用。
+- Deferred tool schema 当前使用 Provider 无关的本地过滤；未来 Provider 暴露稳定的原生 deferred schema API 时，可在 Provider adapter 表达，不改变 registry 和 promotion state。
 
-设计尚未实施，当前代码仍使用五个 runtime owner。实施顺序和验收条件以 OpenSpec 为准；实施完成后本文改为 Current 并补真实代码路径。
+## 验证要求
+
+修改 middleware 或 stack 后至少执行：
+
+```bash
+cd backend
+uv run pytest \
+  tests/test_*middleware.py \
+  tests/test_tool_registry.py \
+  tests/test_noesis_stack_assembly.py \
+  tests/test_agent_runtime_factory.py -q
+```
+
+发布前还要验证 wheel 导入、各 Profile 创建、checkpoint resume、并行 tool results、summary PTL、Provider overflow、文件 stale、HITL interrupt 和 SSE/assistant persistence。middleware inventory 必须从实际实例生成，不维护第二份手写 allowlist。

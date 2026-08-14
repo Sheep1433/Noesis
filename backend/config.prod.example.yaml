@@ -167,7 +167,7 @@ stream:
   run_max_subscriptions_global: 500
   run_terminal_retention_seconds: 300
   run_max_duration_seconds: 900
-  run_max_output_bytes: 16777216
+  run_max_output_bytes: 67108864
   run_hitl_pending_timeout_seconds: 86400
   run_shutdown_drain_seconds: 10
   run_cancel_grace_seconds: 2

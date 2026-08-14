@@ -144,6 +144,8 @@ withDefaults(defineProps<Props>(), {
 .reasoning-header__tags {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
   flex-shrink: 0;
 }
 

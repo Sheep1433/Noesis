@@ -1,141 +1,160 @@
-"""Unit contracts for ``DynamicContextMiddleware``.
-
-The dynamic context source is a net-new Noesis component (no upstream
-equivalent). These tests pin its self-contained behaviour: inject a stable
-block at every model call, re-run after compaction (i.e. via
-``modify_request``), never touch history/usage, and honour an injected
-provider instead of a service.
-"""
+"""Contracts for run-stable dynamic context injection."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import asyncio
+from typing import get_args, get_type_hints
 
 import pytest
-from langchain.agents.middleware.types import ModelRequest
-from langchain_core.messages import SystemMessage
+from langchain.agents import create_agent
+from langchain.agents.middleware.types import ModelRequest, PrivateStateAttr
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 
-from noesis.middleware.dynamic_context_middleware import (
+from noesis.agents.middlewares.dynamic_context_middleware import (
     DynamicContextBlock,
     DynamicContextMiddleware,
+    DynamicContextState,
     render_dynamic_block,
 )
 
 
-def _request(system_prompt: str | None = None) -> ModelRequest:
-    model = object()  # modify_request never inspects the model
+def _request(state: dict, system_prompt: str = "static") -> ModelRequest:
     return ModelRequest(
-        model=model,  # type: ignore[arg-type]
+        model=object(),  # type: ignore[arg-type]
         messages=[],
-        system_message=SystemMessage(content=system_prompt) if system_prompt else None,
+        system_message=SystemMessage(content=system_prompt),
+        state=state,
     )
 
 
-def test_modify_request_appends_dynamic_block_after_static_prompt() -> None:
-    mw = DynamicContextMiddleware(
-        context_provider=lambda: DynamicContextBlock(
-            current_time="2026-08-12 12:00:00",
+def _invoke(middleware: DynamicContextMiddleware, state: dict) -> str:
+    seen: list[ModelRequest] = []
+    middleware.wrap_model_call(_request(state), lambda request: seen.append(request))  # type: ignore[arg-type,return-value]
+    return seen[0].system_message.text
+
+
+def test_state_schema_marks_rendered_block_private() -> None:
+    assert DynamicContextMiddleware.state_schema is DynamicContextState
+    hint = get_type_hints(DynamicContextState, include_extras=True)["dynamic_context_block"]
+    assert PrivateStateAttr in get_args(get_args(hint)[0])
+
+
+def test_langchain_graph_runs_hook_and_omits_private_block_from_output() -> None:
+    calls = 0
+
+    def provider() -> DynamicContextBlock:
+        nonlocal calls
+        calls += 1
+        return DynamicContextBlock("graph-turn", "UTC")
+
+    agent = create_agent(
+        model=FakeListChatModel(responses=["ok"]),
+        tools=[],
+        middleware=[DynamicContextMiddleware(context_provider=provider)],
+    )
+
+    result = agent.invoke({"messages": [HumanMessage(content="hello")]})
+
+    assert calls == 1
+    assert "dynamic_context_block" not in result
+
+
+def test_before_agent_resolves_once_and_model_calls_reuse_same_block() -> None:
+    calls = 0
+
+    def provider() -> DynamicContextBlock:
+        nonlocal calls
+        calls += 1
+        return DynamicContextBlock(
+            current_time=f"turn-{calls}",
             timezone="UTC",
             workspace="ws-1",
-            session_id="sess-1",
+            session_id="session-1",
             attachments=("plan.md", "data.csv"),
-        ),
+        )
+
+    middleware = DynamicContextMiddleware(context_provider=provider)
+    update = middleware.before_agent({"messages": []}, runtime=None)  # type: ignore[arg-type]
+    assert update is not None
+    state = {"messages": [], **update}
+
+    first = _invoke(middleware, state)
+    second = _invoke(middleware, state)
+
+    assert calls == 1
+    assert first == second
+    assert first.startswith("static")
+    assert "Current time: turn-1 (UTC)" in first
+    assert "Workspace: ws-1" in first
+    assert "Session: session-1" in first
+    assert "Attachments: plan.md, data.csv" in first
+
+
+def test_next_agent_run_refreshes_the_block() -> None:
+    values = iter(("turn-1", "turn-2"))
+    middleware = DynamicContextMiddleware(
+        context_provider=lambda: DynamicContextBlock(next(values), "UTC"),
     )
-    modified = mw.modify_request(_request("You are a helpful agent."))
+    first = middleware.before_agent({"messages": []}, runtime=None)  # type: ignore[arg-type]
+    second = middleware.before_agent({"messages": [], **(first or {})}, runtime=None)  # type: ignore[arg-type]
 
-    assert modified.system_message is not None
-    text = modified.system_message.text
-    assert text.startswith("You are a helpful agent.")
-    assert "## Runtime Context" in text
-    assert "2026-08-12 12:00:00 (UTC)" in text
-    assert "Workspace: ws-1" in text
-    assert "Session: sess-1" in text
-    assert "Attachments: plan.md, data.csv" in text
-    # history untouched
-    assert modified.messages == []
+    assert first != second
+    assert "turn-1" in _invoke(middleware, {"messages": [], **(first or {})})
+    assert "turn-2" in _invoke(middleware, {"messages": [], **(second or {})})
 
 
-def test_modify_request_is_immutable_and_byte_stable_for_equal_inputs() -> None:
-    provider = lambda: DynamicContextBlock(  # noqa: E731
-        current_time="2026-08-12 12:00:00", timezone="UTC"
+def test_no_provider_clears_checkpointed_block_and_injects_nothing() -> None:
+    middleware = DynamicContextMiddleware()
+    update = middleware.before_agent(
+        {"messages": [], "dynamic_context_block": "stale"},
+        runtime=None,  # type: ignore[arg-type]
     )
-    mw = DynamicContextMiddleware(context_provider=provider)
-
-    first = mw.modify_request(_request("static"))
-    second = mw.modify_request(_request("static"))
-
-    assert first.system_message.text == second.system_message.text
-    # the original request object is not mutated
-    assert second.system_message is not first.system_message
+    assert update == {"dynamic_context_block": ""}
+    assert _invoke(middleware, {"messages": [], **update}) == "static"
 
 
-def test_optional_fields_collapse_without_stray_headers() -> None:
-    block = DynamicContextBlock(current_time="2026-08-12 12:00:00", timezone="UTC")
-    text = render_dynamic_block(block)
+def test_render_collapses_absent_optional_fields() -> None:
+    text = render_dynamic_block(DynamicContextBlock("2026-08-13 10:00:00", "Asia/Shanghai"))
+    assert "Current time: 2026-08-13 10:00:00 (Asia/Shanghai)" in text
     assert "Workspace:" not in text
     assert "Session:" not in text
     assert "Attachments:" not in text
-    assert "Current time:" in text
 
 
-def test_wrap_model_call_invokes_handler_with_modified_request() -> None:
-    seen: list[ModelRequest] = []
-
-    def handler(req: ModelRequest) -> object:
-        seen.append(req)
-        return "response"
-
-    mw = DynamicContextMiddleware(
-        context_provider=lambda: DynamicContextBlock(
-            current_time="2026-08-12 12:00:00", timezone="UTC"
-        ),
-    )
-    out = mw.wrap_model_call(_request("base"), handler)
-    assert out == "response"
-    assert "## Runtime Context" in seen[0].system_message.text
-
-
-def test_no_provider_falls_back_to_time_and_thread_id_without_service() -> None:
-    mw = DynamicContextMiddleware()
-    # No provider, no config: must still produce a block using only datetime.
-    modified = mw.modify_request(_request("static"))
-    assert "## Runtime Context" in modified.system_message.text
-    assert "Current time:" in modified.system_message.text
-
-
-def test_async_provider_resolves_on_async_path() -> None:
-    pytest.importorskip("anyio")
-    import asyncio
-
+def test_sync_hook_rejects_async_provider() -> None:
     async def provider() -> DynamicContextBlock:
-        return DynamicContextBlock(
-            current_time="2026-08-12 12:00:00", timezone="UTC", workspace="ws-async"
-        )
+        return DynamicContextBlock("turn", "UTC")
 
-    mw = DynamicContextMiddleware(context_provider=provider)
-
-    async def handler(req: ModelRequest) -> str:
-        return req.system_message.text
-
-    result = asyncio.run(mw.awrap_model_call(_request("static"), handler))
-    assert "Workspace: ws-async" in result
-
-
-def test_sync_path_rejects_async_provider() -> None:
-    async def provider() -> DynamicContextBlock:
-        return DynamicContextBlock(current_time="t", timezone="UTC")
-
-    mw = DynamicContextMiddleware(context_provider=provider)
+    middleware = DynamicContextMiddleware(context_provider=provider)
     with pytest.raises(TypeError, match="async context_provider"):
-        mw.modify_request(_request("static"))
+        middleware.before_agent({"messages": []}, runtime=None)  # type: ignore[arg-type]
 
 
-def test_default_block_uses_injected_now_for_determinism() -> None:
-    # Guard against the middleware calling a hidden service for the clock.
-    from noesis.middleware.dynamic_context_middleware import _default_block
+def test_async_hook_resolves_provider_once_for_the_run() -> None:
+    calls = 0
 
-    fixed = datetime(2026, 1, 1, 9, 30, tzinfo=timezone.utc)
-    block = _default_block(now=fixed, config=None)
-    assert block.current_time == "2026-01-01 09:30:00"
-    assert block.workspace is None
-    assert block.session_id is None
+    async def provider() -> DynamicContextBlock:
+        nonlocal calls
+        calls += 1
+        return DynamicContextBlock("async-turn", "UTC", workspace="async-ws")
+
+    middleware = DynamicContextMiddleware(context_provider=provider)
+
+    async def scenario() -> tuple[dict[str, str] | None, str]:
+        update = await middleware.abefore_agent({"messages": []}, runtime=None)  # type: ignore[arg-type]
+
+        async def handler(request: ModelRequest) -> str:
+            return request.system_message.text
+
+        text = await middleware.awrap_model_call(
+            _request({"messages": [], **(update or {})}),
+            handler,  # type: ignore[arg-type]
+        )
+        return update, text
+
+    update, text = asyncio.run(scenario())
+    assert update is not None
+    assert calls == 1
+    assert "async-turn" in text
+    assert "Workspace: async-ws" in text
