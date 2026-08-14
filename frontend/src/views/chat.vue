@@ -5,7 +5,7 @@ import type { ChatAttachmentItem } from '@/store/business'
 import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
-import { createAgentRun, ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { createAgentRun, deleteSession, ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
@@ -1669,6 +1669,8 @@ const sessionContextMenuOptions = computed(() => {
   }
   if (target) {
     opts.push({ label: target.archived ? '取消归档' : '归档', key: target.archived ? 'unarchive' : 'archive' })
+    opts.push({ type: 'divider', key: 'divider-delete' })
+    opts.push({ label: '删除', key: 'delete', props: { style: { color: 'var(--noesis-color-error)' } } })
   }
   return opts
 })
@@ -1740,6 +1742,26 @@ function handleSessionContextMenuSelect(key: string) {
   }
   if (key === 'unarchive') {
     void toggleSessionMeta(target, { archived: false })
+    return
+  }
+  if (key === 'delete') {
+    const targetForDelete = target
+    window.$ModalDialog.warning({
+      title: '删除会话',
+      content: `确定删除「${targetForDelete.key}」？会话将从列表移除，消息与工作区文件一并清理。`,
+      positiveText: '删除',
+      negativeText: '取消',
+      onPositiveClick: async () => {
+        try {
+          await deleteSession(targetForDelete.chat_id)
+          window.$ModalMessage.success('已删除', { duration: 1200 })
+          await refreshSidebarAfterManageClose()
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : '删除失败'
+          window.$ModalMessage.error(msg)
+        }
+      },
+    })
   }
 }
 
