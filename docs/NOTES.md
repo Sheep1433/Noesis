@@ -1067,6 +1067,20 @@ backends/
 
 **验证与遗留：** 核查已通过（stack 顺序、Profile 矩阵、自包含性、旧 kernel 删除、982 测试）；worktree 未合并 dev。spec 真源 `openspec/changes/simplify-agent-context-architecture/`。
 
+## 2026-08-13 — Middleware 接入契约比目录位置更关键
+
+**问题/症状：** `create_agent` 装配 `SubAgentContextMiddleware` 时抛出 `AttributeError: type object 'SubAgentContextMiddleware' has no attribute 'wrap_tool_call'`；同时 middleware 曾被迁到顶层 `noesis/middleware`，与 Agent runtime 的 `agents/middlewares` 语义边界脱节。
+
+**根因：** 文件放进“看起来合理”的目录，不会自动满足 LangChain/DeepAgents 的 middleware contract。参与 `create_agent` 的对象必须遵守框架识别的 `AgentMiddleware` 继承/方法覆盖与 hook 签名；如果只实现了自定义状态函数，却被当作完整 middleware 装配，就会在工厂扫描 hook 时直接失败。目录循环的真正风险是 factory 与 agents 场景模块双向 import，不是 middleware 是否位于 `agents/` 下。
+
+**排查路径：** 先对照 `langchain.agents.factory` 的 middleware 分类和 hook 检测，再沿 `factory → stack → create_agent → task/subagent` 生产链追踪；同时对照 DeerFlow 的 `agents/` 包边界，区分包位置、装配顺序和运行时接口三件事。
+
+**解法/取舍：** middleware 回到 `noesis/agents/middlewares/` 作为 Agent runtime 子包；每个自研 middleware 要么完整实现框架要求的 hook，要么只作为纯 helper/状态函数存在，不能伪装成 middleware。最终以真实 `create_agent` 和 DeepAgents `task` tool 验证，不能只测 mock handler 或纯函数。
+
+**可迁移原则：** 框架扩展先验证 integration contract，再讨论目录风格；“能 import”不等于“能被运行时装配”。测试至少覆盖工厂装配、真实 hook 调用和长时 subagent 生命周期。
+
+**验证与遗留：** 已定位当前 AttributeError 的接口契约原因；isolated/fork/resume 的真实 task/checkpoint 接线、并行工具事件分组和刷新恢复仍需 E2E 验收。
+
 ## 2026-08-12 — 引用溯源是两段式：URL 校验把证据全拒
 
 **问题/症状：** 跑了一轮 web_search 搜索了很多结果，但一次引用溯源都没有（前端无 CitationSources 卡片、正文无 `[1]` 内联）。
@@ -1080,6 +1094,8 @@ backends/
 **可迁移原则：** 排查「为什么没有引用」先分清两段：结构化证据登记 vs prompt 内联生成。结构化段常见坑是 URL/身份校验过严把合法结果全拒（校验的字段命名或 provider 返回格式与预期不符）；「结果多但引用零」往往不是模型没遵循 prompt，而是模型根本没拿到可引用的源。
 
 **验证与遗留：** 根因已定位，临时日志待用户跑一轮带 web_search 的问答后确认；修复后 `_canonical_url` 的字段名/白名单需与 provider 实际返回对齐。
+
+**2026-08-13 表述校正：** “原始结果不进上下文”是不准确的。搜索结果全文会进入服务端模型上下文并计入 input token；客户端是否看到原文、引用片段是否明文，是另一条返回管线。分析官方 Anthropic 与非官方模型时，必须分别描述模型侧上下文、客户端可见 payload 和计费口径。
 
 ## 2026-08-12 — usage 展示口径：多轮调用的 input 累加 ≠ 单轮用量（613.9K）
 
