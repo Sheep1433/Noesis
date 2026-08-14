@@ -614,13 +614,22 @@ class RunService:
     async def _persist_cancel_or_error(
         cls, run_id: str, projection: RunProjection, exc: BaseException
     ) -> None:
-        logger.opt(exception=exc).error(
-            "agent run producer failed run_id={} session_id={} status={} exception_type={}",
-            run_id,
-            projection.session_id,
-            projection.status.value,
-            type(exc).__name__,
-        )
+        if isinstance(exc, RunLimitExceeded):
+            logger.warning(
+                "agent run stopped by limit run_id={} session_id={} status={} exception_type={}",
+                run_id,
+                projection.session_id,
+                projection.status.value,
+                type(exc).__name__,
+            )
+        else:
+            logger.opt(exception=exc).error(
+                "agent run producer failed run_id={} session_id={} status={} exception_type={}",
+                run_id,
+                projection.session_id,
+                projection.status.value,
+                type(exc).__name__,
+            )
         handle = run_manager.get(run_id)
         limit_error = (
             exc

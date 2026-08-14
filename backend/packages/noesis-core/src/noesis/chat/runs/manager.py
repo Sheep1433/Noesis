@@ -303,7 +303,7 @@ class RunManager:
         max_subscriptions_global: int = 500,
         terminal_retention_seconds: float = 300.0,
         max_run_duration_seconds: float = 900.0,
-        max_output_bytes: int = 16 * 1024 * 1024,
+        max_output_bytes: int = 64 * 1024 * 1024,
         hitl_pending_timeout_seconds: float = 86400.0,
         cancel_grace_seconds: float = 2.0,
         terminal_persistence_budget_seconds: float = 5.0,
@@ -687,7 +687,10 @@ class RunManager:
             checkpoint_snapshot=checkpoint_snapshot,
             checkpoint_kind=checkpoint_kind,
         )
-        if handle.output_bytes + envelope.estimated_bytes > self.max_output_bytes:
+        # 即使普通输出已经触及上限，也必须允许 RunError / RunAborted
+        # 投递终态，否则 producer 已经被限流后，终态事件还会再次触发同一个异常。
+        terminal_event = isinstance(event, (RunCompleted, RunAborted, RunError))
+        if handle.output_bytes + envelope.estimated_bytes > self.max_output_bytes and not terminal_event:
             handle.limit_error = RunOutputExceeded("run output limit exceeded")
             raise handle.limit_error
         handle.output_bytes += envelope.estimated_bytes
@@ -813,7 +816,11 @@ class RunManager:
                         event=event,
                         checkpoint_snapshot=terminal_snapshot,
                     )
-                    if handle.output_bytes + envelope.estimated_bytes > self.max_output_bytes:
+                    # 终态事件不受普通输出累计上限阻断，确保超限后仍能完成状态机收尾。
+                    if (
+                        handle.output_bytes + envelope.estimated_bytes > self.max_output_bytes
+                        and not isinstance(event, (RunCompleted, RunAborted, RunError))
+                    ):
                         handle.limit_error = RunOutputExceeded("run output limit exceeded")
                         raise handle.limit_error
                     terminal_candidate = TerminalCandidate(

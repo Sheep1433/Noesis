@@ -23,7 +23,6 @@ class GovernorLimits:
     max_active_subagents: int | None = None
     max_subagents_total: int | None = None
     max_depth: int | None = None
-    token_budget: int | None = None
 
 
 class RunGovernor:
@@ -62,7 +61,6 @@ class RunGovernor:
         governor.state.active_subagents = 0
         governor.state.subagents_total = int(snapshot.get("subagents_total") or 0)
         governor.state.stop_reason = snapshot.get("stop_reason")
-        governor.state.actual_provider_tokens = snapshot.get("actual_provider_tokens")
         return governor
 
     def _stop(self, reason: StopReason) -> RuntimeOutcome:
@@ -71,8 +69,6 @@ class RunGovernor:
 
     def reserve_model(self) -> RuntimeOutcome | None:
         with self._lock:
-            if self.state.stop_reason == StopReason.TOKEN_BUDGET.value:
-                return self._stop(StopReason.TOKEN_BUDGET)
             limit = self.limits.model_calls
             if limit is not None and self.state.model_calls >= limit:
                 return self._stop(StopReason.MODEL_CALL_LIMIT)
@@ -130,15 +126,6 @@ class RunGovernor:
 
     def child(self, run_id: str) -> "RunGovernor":
         return RunGovernor(run_id, limits=self.limits, parent=self, depth=self.state.depth + 1)
-
-    def record_actual_tokens(self, total_tokens: int) -> None:
-        """Enable token accounting only when a real provider usage value exists."""
-        if total_tokens < 0:
-            return
-        with self._lock:
-            self.state.actual_provider_tokens = (self.state.actual_provider_tokens or 0) + total_tokens
-            if self.limits.token_budget is not None and self.state.actual_provider_tokens > self.limits.token_budget:
-                self.state.stop_reason = StopReason.TOKEN_BUDGET.value
 
 
 _CURRENT_GOVERNOR: ContextVar[RunGovernor | None] = ContextVar("noesis_run_governor", default=None)

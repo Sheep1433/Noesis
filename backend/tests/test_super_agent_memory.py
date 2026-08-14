@@ -9,8 +9,8 @@ from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.middleware.memory import MemoryMiddleware
 
 from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
-from noesis.agents.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from noesis.agents.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
+from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMemoryMiddleware
+from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.super_agent import (
     _MEMORY_SOURCES,
     _build_task_worker_subagents,
@@ -49,7 +49,7 @@ def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"rules-v2", error=None),
         ],
     ]
-    mw = TurnMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
+    mw = RefreshingMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
     state = {"memory_contents": {AGENT_MEMORY_AGENTS_FILE: "stale"}}
     first = mw.before_agent(state, MagicMock(), {})
     second = mw.before_agent({**state, **(first or {})}, MagicMock(), {})
@@ -63,8 +63,8 @@ def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:
 
 
 def test_turn_memory_has_no_per_model_reload_hook() -> None:
-    assert "before_model" not in TurnMemoryMiddleware.__dict__
-    assert "abefore_model" not in TurnMemoryMiddleware.__dict__
+    assert "before_model" not in RefreshingMemoryMiddleware.__dict__
+    assert "abefore_model" not in RefreshingMemoryMiddleware.__dict__
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_turn_memory_async_path_ignores_checkpoint_cache() -> None:
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"fresh", error=None),
         ]
     )
-    middleware = TurnMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
+    middleware = RefreshingMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
 
     result = await middleware.abefore_agent(
         {"memory_contents": {AGENT_MEMORY_AGENTS_FILE: "stale"}},

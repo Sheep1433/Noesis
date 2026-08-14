@@ -150,17 +150,23 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 **`task` 工具（Bridge 专节，依赖 builder 状态）**：
 
-在调用 `classify_tool_failure` 之前，若 `tool_name == "task"`：
+在调用 `classify_tool_failure` 之前，若 `tool_name == "task"`，父级 task 的明确终态优先：
 
-1. 若 `_task_has_subagent_tool_error(builder, task_call_id)` 为真（扫描 `builder` 内 `parent_task_call_id` 匹配且 `status=error` 的嵌套 parts）→ `subagent_failure`；
-2. 否则若 output 匹配 `classify_task_tool_output` 失败前缀 → `subagent_failure`；
-3. 否则按普通工具处理。
+1. 若 output 匹配 `classify_task_tool_output` 失败前缀 → `subagent_failure`；
+2. 若 output 以 `Task Succeeded. Result:` 开头 → 保持 task 成功；嵌套工具的失败只保留在对应子工具 part，不得升级父 task；
+3. 否则若 `_task_has_subagent_tool_error(builder, task_call_id)` 为真（扫描 `builder` 内 `parent_task_call_id` 匹配且 `status=error` 的嵌套 parts）→ `subagent_failure`；
+4. 否则按普通工具处理。
 
 **事件顺序假设**：嵌套 tool 的 `on_tool_end` **SHALL** 在对应 `task` 的 `on_tool_end` 之前进入 builder（LangGraph 默认嵌套完成顺序）。若漏标，**MAY** 在 `bridge.finalize()` 对仍为 `running`/`success` 的 task parts 做一次 reconcile 扫描；本规格不强制二次 reconcile，但单测 **SHALL** 覆盖「子 tool 先落库」主路径。
 
-#### Scenario: 子图含 error tool 标 subagent_failure
+#### Scenario: 子图含 error tool 但 task 明确成功
 
-- **WHEN** `task` 的 `on_tool_end` 时 builder 已有嵌套 `web_fetch` part 为 `status=error`
+- **WHEN** `task` 的 `on_tool_end` 时 builder 已有嵌套 `web_fetch` part 为 `status=error`，且 task 输出以 `Task Succeeded. Result:` 开头
+- **THEN** task part SHALL `status=success`；`web_fetch` part 仍 SHALL 保留自身的错误状态
+
+#### Scenario: 子图含 error tool 且 task 没有明确终态
+
+- **WHEN** `task` 的 `on_tool_end` 时 builder 已有嵌套 `web_fetch` part 为 `status=error`，但 task 输出没有成功或失败前缀
 - **THEN** task part SHALL `status=error`、`errorCategory=subagent_failure`
 
 #### Scenario: web_fetch 空正文
@@ -326,7 +332,7 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 **网络辨析（N-）**：N-01 ConnectTimeout→network_timeout；N-02 ReadTimeout→execution_timeout；N-03 ConnectError→network_unreachable。
 
-**子 Agent（T-）**：T-01 全成功；T-02 嵌套网络失败→task subagent_failure；T-03 嵌套 command_failed 但 task 仍 success；T-04 parentTaskCallId UI；T-05 Task timed out 文案。
+**子 Agent（T-）**：T-01 全成功；T-02 嵌套网络失败且 task 无明确终态→task subagent_failure；T-03 嵌套 command_failed 但 task 仍 success；T-04 parentTaskCallId UI；T-05 Task timed out 文案。
 
 **并行（P-）**：P-01 并行不错位；P-02 GraphBubbleUp；P-03 unknown 可续推。
 
@@ -476,4 +482,3 @@ Noesis 控制的 `execute/bash` 包装 SHALL 返回真实 `exit_code`、`timed_o
 - **WHEN** 用户明确执行 `optional-command || true` 且 shell 最终返回 0
 - **THEN** 系统 SHALL 按最终 exit code 记录执行成功
 - **AND** SHALL NOT 仅因 stdout/stderr 文本含错误词而改判失败
-

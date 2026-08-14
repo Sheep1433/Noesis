@@ -174,7 +174,7 @@ Compaction SHALL 按最终 request 预算判断，预算至少覆盖 system inst
 
 ### Requirement: Stable Context Sources SHALL 支持 Revision 与压缩后重建
 
-每个顶层用户 turn SHALL 为场景 prompt、Skills、Memory、attachments 和 tool catalog 计算 source revision。同一 run 内 SHALL 固定 revision；revision 未变时 SHALL 保持可缓存 prompt prefix 稳定，revision 变更时 SHALL 只失效对应来源。
+每个来源 SHALL 由自己的 owner 定义 freshness：Skills 使用用户 revision，Memory 在顶层 invocation 刷新，tool catalog 使用 catalog hash，attachments 每轮解析，场景动态信息由 DynamicContext 提供。同一 run 内来源 SHALL 保持稳定；变更时 SHALL 只失效对应来源。
 
 #### Scenario: Skill 在两个 Turn 之间变更
 
@@ -184,7 +184,7 @@ Compaction SHALL 按最终 request 预算判断，预算至少覆盖 system inst
 
 ### Requirement: Effective History Reduction SHALL 保留 Raw Transcript
 
-Tool-result replacement、Snip 与 MicroCompaction SHALL 产生可持久化、可重放的 effective-history projection，不得物理删除 raw transcript。每个 replacement SHALL 记录原内容 hash、原因、artifact/reference 和 token 变化。
+Tool-result replacement 与 Snip SHALL 产生可持久化、可重放的 effective-history projection，不得物理删除 raw transcript。每个 replacement SHALL 记录原内容 hash、原因、artifact/reference 和 token 变化。Tool Result micro-compaction SHALL 由 ToolResultBudget 承担，不得存在第二个同义 middleware。
 
 #### Scenario: Checkpoint Resume 重放局部减重
 
@@ -192,7 +192,7 @@ Tool-result replacement、Snip 与 MicroCompaction SHALL 产生可持久化、�
 - **THEN** 有效 history SHALL 重放与恢复前相同的 replacement/snip 决策
 - **AND** raw transcript SHALL 仍可用于诊断与重新压缩
 
-### Requirement: Tool Catalog SHALL 对大型 Schema 延迟加载
+### Requirement: Tool Registry 与 Deferred Filter SHALL 对大型 Schema 延迟加载
 
 基础工具与已发现工具 SHALL 在最终 request 中可用；超过预算阈值的 MCP/extension 工具 SHALL 默认 deferred，并通过 tool search 加入 discovered set。工具已发现 SHALL NOT 等于获得执行权限。
 
@@ -202,23 +202,23 @@ Tool-result replacement、Snip 与 MicroCompaction SHALL 产生可持久化、�
 - **THEN** 未发现工具的完整 schema SHALL NOT 进入最终 request
 - **AND** tool search 结果 SHALL 只在当前 run 激活对应 schema
 
-### Requirement: File Context SHALL 防止基于过期内容写入
+### Requirement: Read Before Write SHALL 防止基于过期内容写入
 
-Filesystem Profile SHALL 记录已读文件的 path、范围、mtime/hash 与最近使用时间。Edit/Write 的真实拒绝 SHALL 由 backend/tool adapter 执行；middleware SHALL 维护 model-facing stale 状态与压缩恢复引用。
+Filesystem Profile SHALL 在成功 Read 的 ToolMessage metadata 中记录 path 与当前内容 hash。Edit/Write 前 SHALL 重新读取并验证现有文件具有当前版本的 read mark；成功写入 SHALL 使旧 mark 失效。同一路径的检查与执行 SHALL 串行化。
 
 #### Scenario: 已读文件被外部修改
 
 - **WHEN** Edit/Write 发现当前 mtime/hash 与最近 Read 记录不同
 - **THEN** tool adapter SHALL 拒绝基于过期内容的写入
-- **AND** 下一次模型调用 SHALL 看到有界 stale 提示
+- **AND** 工具 SHALL 返回要求重新读取的有界 error ToolMessage
 
 ### Requirement: Provider Adapter SHALL 生成唯一 Canonical Request
 
-Provider adapter SHALL 在发送前完成 system 合并、message role、tool call/result id、thinking/media block、schema 排序、deferred 字段与 cache marker 的 Provider 适配。`PatchToolCallsMiddleware` SHALL 只修复中断导致的不完整 tool pair，不得被当成完整 Provider canonicalization。
+LangChain Provider adapter SHALL 在发送前完成 system 合并、message role、tool call/result id、thinking/media block、schema 与 cache marker 的 Provider 适配。Noesis SHALL NOT 建立第二个 canonical request adapter。`PatchToolCallsMiddleware` SHALL 只修复中断导致的不完整 tool pair，不得被当成 Provider encoder。
 
 #### Scenario: 预算基于最终 Schema
 
-- **WHEN** ToolCatalog 与 Provider adapter 完成 tool schema 过滤和编码
+- **WHEN** DeferredToolFilter 与 Provider adapter 完成 tool schema 过滤和编码
 - **THEN** compaction 预算 SHALL 使用该最终 request
 - **AND** SHALL NOT 使用过滤前的全量 catalog 或早期 history 快照
 

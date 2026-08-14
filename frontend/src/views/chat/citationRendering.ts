@@ -6,39 +6,71 @@ export interface CitationTarget {
   title: string
 }
 
-const REFERENCE_HEADING = /^#{1,6}\s+参考资料\s*$/m
+const HEADING_LINE = /^#{1,6} [^\r\n]+$/gmu
+const REFERENCE_HEADING_NAMES = new Set(['参考资料', '参考文献', 'reference', 'references', 'source', 'sources'])
 const citationParser = new MarkdownIt()
+
+function findReferenceHeading(markdown: string): RegExpExecArray | null {
+  HEADING_LINE.lastIndex = 0
+  while (true) {
+    const match = HEADING_LINE.exec(markdown)
+    if (match === null) {
+      return null
+    }
+    const title = match[0].replace(/^#{1,6} /, '').trim()
+    const base = title.split(/[ \t（(：:]/, 1)[0].toLowerCase()
+    if (REFERENCE_HEADING_NAMES.has(base)) {
+      return match
+    }
+  }
+}
 
 export function citationBody(
   markdown: string,
   targets: Map<number, CitationTarget>,
   referencesComplete = true,
 ): string {
-  const heading = REFERENCE_HEADING.exec(markdown)
+  const heading = findReferenceHeading(markdown)
   if (!heading || !referencesComplete) {
     return markdown
   }
   const referenceSection = markdown.slice(heading.index + heading[0].length)
   const references = parseReferenceLines(referenceSection)
+  const normalizedBody = normalizeCitationAliases(markdown.slice(0, heading.index), references)
   const numbers = new Set(references.map(([number]) => number))
   const allReferencesMatched = references.length > 0
     && numbers.size === references.length
     && references.every(([number]) => targets.has(number))
   if (allReferencesMatched && referenceSectionContainsOnlyReferences(referenceSection)) {
-    return markdown.slice(0, heading.index).trimEnd()
+    return normalizedBody.trimEnd()
   }
-  return `${markdown.slice(0, heading.index + heading[0].length)}${formatReferenceLines(referenceSection)}`
+  return `${normalizedBody}${markdown.slice(heading.index, heading.index + heading[0].length)}${formatReferenceLines(referenceSection)}`
 }
 
 function parseReferenceLine(rawLine: string): [number, string] | null {
   const line = rawLine.trim().replace(/^[-*]\s+/, '')
-  const closingBracket = line.indexOf(']')
-  if (!line.startsWith('[') || closingBracket < 2) {
+  const match = line.match(/^(?:\[(\d+)\]|(\d+)\s*[.、)])/)
+  if (!match) {
     return null
   }
-  const numberText = line.slice(1, closingBracket)
-  const value = line.slice(closingBracket + 1).trim()
-  return /^\d+$/.test(numberText) && value ? [Number(numberText), value] : null
+  const numberText = match[1] || match[2]
+  const value = line.slice(match[0].length).trim()
+  return value ? [Number(numberText), value] : null
+}
+
+/**
+ * Deep-research 报告有时使用 A3/B2 这类域前缀引用，但最终参考资料列表
+ * 会被合并成 3/2 的全局编号。仅当对应的数字确实出现在参考资料列表时，
+ * 才把别名前缀归一化，避免把普通方括号文本误变成引用。
+ */
+function normalizeCitationAliases(markdown: string, references: Array<[number, string]>): string {
+  const referenceNumbers = new Set(references.map(([number]) => String(number)))
+  if (referenceNumbers.size === 0) {
+    return markdown
+  }
+  return markdown.replace(/\[([a-z]+)(\d+)\]/gi, (raw, _prefix: string, number: string) => {
+    return referenceNumbers.has(number) ? `[${number}]` : raw
+  })
 }
 
 function parseReferenceLines(markdown: string): Array<[number, string]> {
@@ -135,15 +167,18 @@ export function citationTargets(
   results: RetrievalResultUi[],
   kbHref: (collectionName: string, fileName: string) => string,
 ): Map<number, CitationTarget> {
-  const heading = REFERENCE_HEADING.exec(markdown)
+  const heading = findReferenceHeading(markdown)
   if (!heading) {
     return new Map()
   }
   const references = markdown.slice(heading.index + heading[0].length)
-  const bodyNumbers = bodyCitationNumbers(markdown.slice(0, heading.index))
+  const parsedReferences = parseReferenceLines(references)
+  const bodyNumbers = bodyCitationNumbers(
+    normalizeCitationAliases(markdown.slice(0, heading.index), parsedReferences),
+  )
   const targets = new Map<number, CitationTarget>()
   const ambiguousNumbers = new Set<number>()
-  for (const [number, line] of parseReferenceLines(references)) {
+  for (const [number, line] of parsedReferences) {
     if (!bodyNumbers.has(number)) {
       continue
     }

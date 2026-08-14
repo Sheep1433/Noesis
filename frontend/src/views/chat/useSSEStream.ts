@@ -16,23 +16,8 @@ import {
   subscribeAgentRun,
 } from '@/api/chat'
 
-/** 累计 usage（含可选 detail/attribution，向后兼容缺失字段） */
-export interface UsageUpdate {
-  input_tokens: number
-  output_tokens: number
-  total_tokens?: number
-  input_token_details?: { cache_read?: number, cache_write?: number }
-  output_token_details?: { reasoning?: number }
-  attribution?: {
-    cumulative?: Record<string, number>
-    by_caller?: Record<string, Record<string, number>>
-    by_model?: Record<string, Record<string, number>>
-  }
-}
-
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
-  onUsageUpdate?: (usage: UsageUpdate) => void
   onContextUpdate?: (context: ContextSnapshot) => void
   onTextDelta?: (text: string, parent_task_call_id?: string) => void
   onRetrievalResults?: (part: Record<string, unknown>) => void
@@ -96,7 +81,6 @@ function parseAndDispatchFrame(frame: string, dispatchFrame: (eventName: string,
 export function useSSEStream(options: SSEStreamOptions = {}) {
   const {
     onTitleUpdate,
-    onUsageUpdate,
     onContextUpdate,
     onTextDelta,
     onRetrievalResults,
@@ -284,19 +268,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       })
       return
     }
-    if (t === 'usage-update') {
-      const usage = data.usage as UsageUpdate | undefined
-      if (usage && (usage.input_tokens != null || usage.output_tokens != null)) {
-        onUsageUpdate?.({
-          input_tokens: Number(usage.input_tokens ?? 0),
-          output_tokens: Number(usage.output_tokens ?? 0),
-          total_tokens: usage.total_tokens != null ? Number(usage.total_tokens) : undefined,
-          input_token_details: usage.input_token_details,
-          output_token_details: usage.output_token_details,
-        })
-      }
-      return
-    }
     if (t === 'context-update') {
       const context = data.context as ContextSnapshot | undefined
       if (context && context.max_tokens != null && Number(context.max_tokens) > 0) {
@@ -325,17 +296,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     if (t === 'finish') {
-      const usage = data.usage as UsageUpdate | undefined
-      if (usage && (usage.input_tokens != null || usage.output_tokens != null)) {
-        onUsageUpdate?.({
-          input_tokens: Number(usage.input_tokens ?? 0),
-          output_tokens: Number(usage.output_tokens ?? 0),
-          total_tokens: usage.total_tokens != null ? Number(usage.total_tokens) : undefined,
-          input_token_details: usage.input_token_details,
-          output_token_details: usage.output_token_details,
-          attribution: data.attribution as UsageUpdate['attribution'],
-        })
-      }
       const finish_reason = String(data.finish_reason ?? 'stop')
       lastFinishReason = finish_reason
       terminalObserved = finish_reason !== 'hitl_pending'

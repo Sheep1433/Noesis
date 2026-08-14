@@ -2,7 +2,7 @@
 
 The old five-owner kernel (RuntimeTelemetry / RunGovernor / ContextLifecycle /
 ModelExecution / ToolExecution) has been retired. Behaviour now lives in the
-self-contained middleware under ``noesis/middleware/`` (each with its own unit
+self-contained middleware under ``noesis/agents/middlewares/`` (each with its own unit
 test file). This file holds only stack-level contracts that span more than one
 middleware: hook ordering, inventory/ordering, and the consolidated config
 shape.
@@ -20,7 +20,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
-from noesis.factory import build_middleware_inventory, middleware_inventory
+from noesis.factory import build_noesis_middleware, middleware_inventory
 
 
 def test_inventory_has_single_kernel_in_spec_order() -> None:
@@ -32,22 +32,18 @@ def test_inventory_has_single_kernel_in_spec_order() -> None:
         max_retries=0,
     )
     with patch("noesis.factory.ModelConfig", config):
-        stack = build_middleware_inventory(profile="COMMON_QA")
+        stack = build_noesis_middleware(profile="COMMON_QA", model=FakeListChatModel(responses=["ok"]))
     assert [type(item).__name__ for item in stack] == [
         "ToolResultBudgetMiddleware",
         "ToolFailureMiddleware",
-        "SourceRefreshMiddleware",
         "DynamicContextMiddleware",
-        "SnipMiddleware",
-        "MicroCompactionMiddleware",
         "PatchToolCallsMiddleware",
-        "SafeModelRetryMiddleware",
     ]
 
 
 def test_inventory_includes_compaction_when_summarization_enabled() -> None:
-    # When summarization is enabled, CompactionMiddleware appears between
-    # PatchToolCalls and SafeModelRetry (design §3 position 16).
+    # When summarization is enabled, CompactionMiddleware runs after
+    # PatchToolCalls so it budgets the repaired effective request.
     config = SimpleNamespace(
         context_display_enabled=False,
         summarization_enabled=True,
@@ -55,13 +51,13 @@ def test_inventory_includes_compaction_when_summarization_enabled() -> None:
     )
     with patch("noesis.factory.ModelConfig", config):
         try:
-            stack = build_middleware_inventory(profile="COMMON_QA")
+            stack = build_noesis_middleware(profile="COMMON_QA", model=FakeListChatModel(responses=["ok"]))
         except Exception:
             pytest.skip("summarization requires a live model config")
     names = [type(item).__name__ for item in stack]
     if "CompactionMiddleware" in names:
         assert names.index("CompactionMiddleware") > names.index("PatchToolCallsMiddleware")
-        assert names.index("CompactionMiddleware") < names.index("SafeModelRetryMiddleware")
+        assert names[-1] == "CompactionMiddleware"
 
 
 def test_langchain_hook_contract_is_before_wrap_after() -> None:
@@ -110,7 +106,11 @@ def test_langchain_hook_contract_is_before_wrap_after() -> None:
 
 def test_inventory_has_no_legacy_loop_or_tool_call_limit_middleware() -> None:
     """旧 LoopDetection registry、五-owner kernel 与重复 ToolCallLimit 装配已删除。"""
-    names = {entry.name for entry in middleware_inventory()}
+    stack = build_noesis_middleware(
+        profile="COMMON_QA",
+        model=FakeListChatModel(responses=["ok"]),
+    )
+    names = {entry.name for entry in middleware_inventory(stack)}
     assert "LoopDetectionMiddleware" not in names
     assert "ToolCallLimitMiddleware" not in names
     assert "RunGovernorMiddleware" not in names
@@ -119,7 +119,6 @@ def test_inventory_has_no_legacy_loop_or_tool_call_limit_middleware() -> None:
     assert "ModelExecutionMiddleware" not in names
     assert "ToolExecutionMiddleware" not in names
 
-    stack = build_middleware_inventory(profile="COMMON_QA")
     types = {type(item).__name__ for item in stack}
     assert "LoopDetectionMiddleware" not in types
     assert "ToolCallLimitMiddleware" not in types

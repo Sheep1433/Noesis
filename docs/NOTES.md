@@ -1055,17 +1055,31 @@ backends/
 **Why：** 8/11 定稿的 simplify-agent-context spec 需要落地，且用户对「哪些自研、哪些复用上游」有强约束：自研多个中间件可体现能力（支撑项目合理性），但每个 middleware 必须**自包含**（deepagents 风格：各自独立负责拦截/处理，不 import runtime/service/agents）。
 
 **成果（worktree `feat/simplify-agent-context`）：**
-- `noesis/middleware/` 平铺包：12 个中间件 + `__init__.py` + `stack.py`（装配 + Profile 矩阵）；14 测试文件，982 单测通过；net +5357/−1588。
+- `noesis/agents/middlewares/` Agent runtime 子包：12 个平铺中间件 + `capabilities/` + `stack.py`（装配 + Profile 矩阵）；原顶层 `noesis/middleware/` 已确认是错误迁移并删除。
 - 自包含验证：12 中间件零 import `runtime`/`service`/`agents`，中间件互相零 import。
 - Profile 矩阵修正：`build_noesis_stack` 之前无条件加入 DurableContext、缺 SourceRefresh，与 design §16 矛盾 → 已按 profile 决定必需归属，5 个 Profile 实际 stack 与 design 一致。
 - 旧五 owner kernel 已删；`evals/compression/driver` 改用新 `CompactionMiddleware`。
-- middleware 清单：dynamic_context / source_refresh / durable_context / file_context / snip / micro_compaction / tool_catalog / compaction / subagents / tool_failure / tool_result_limit / safe_model_retry。subagent 走 isolated/fork/resume context policy（执行器复用 langchain/deepagents）。
+- middleware 清单：dynamic_context / source_refresh / durable_context / file_context / snip / micro_compaction / tool_catalog / compaction / subagents / tool_failure / tool_result_limit / safe_model_retry。subagent 的 isolated 已接入 DeepAgents `task` tool；fork/resume 当前只有纯状态函数，真实 task/checkpoint adapter 仍属于 OpenSpec §7 待办。
 
 **已知精化缺口（不影响「已实现」，待后续）：**
 1. Compaction 预算覆盖面：factory 注入的 `token_counter` 只数 messages，未覆盖 system prompt + tool definitions（design §17 / agent-runtime spec 要求覆盖最终 request 全部组成；需接真实 tokenizer）。
 2. `_context_budget.py` / `_summary_prompt.py` 未拆成独立文件（design 目录布局建议，当前内联，行为已实现）。
 
 **验证与遗留：** 核查已通过（stack 顺序、Profile 矩阵、自包含性、旧 kernel 删除、982 测试）；worktree 未合并 dev。spec 真源 `openspec/changes/simplify-agent-context-architecture/`。
+
+## 2026-08-13 — Middleware 接入契约比目录位置更关键
+
+**问题/症状：** `create_agent` 装配 `SubAgentContextMiddleware` 时抛出 `AttributeError: type object 'SubAgentContextMiddleware' has no attribute 'wrap_tool_call'`；同时 middleware 曾被迁到顶层 `noesis/middleware`，与 Agent runtime 的 `agents/middlewares` 语义边界脱节。
+
+**根因：** 文件放进“看起来合理”的目录，不会自动满足 LangChain/DeepAgents 的 middleware contract。参与 `create_agent` 的对象必须遵守框架识别的 `AgentMiddleware` 继承/方法覆盖与 hook 签名；如果只实现了自定义状态函数，却被当作完整 middleware 装配，就会在工厂扫描 hook 时直接失败。目录循环的真正风险是 factory 与 agents 场景模块双向 import，不是 middleware 是否位于 `agents/` 下。
+
+**排查路径：** 先对照 `langchain.agents.factory` 的 middleware 分类和 hook 检测，再沿 `factory → stack → create_agent → task/subagent` 生产链追踪；同时对照 DeerFlow 的 `agents/` 包边界，区分包位置、装配顺序和运行时接口三件事。
+
+**解法/取舍：** middleware 回到 `noesis/agents/middlewares/` 作为 Agent runtime 子包；每个自研 middleware 要么完整实现框架要求的 hook，要么只作为纯 helper/状态函数存在，不能伪装成 middleware。最终以真实 `create_agent` 和 DeepAgents `task` tool 验证，不能只测 mock handler 或纯函数。
+
+**可迁移原则：** 框架扩展先验证 integration contract，再讨论目录风格；“能 import”不等于“能被运行时装配”。测试至少覆盖工厂装配、真实 hook 调用和长时 subagent 生命周期。
+
+**验证与遗留：** 已定位当前 AttributeError 的接口契约原因；isolated/fork/resume 的真实 task/checkpoint 接线、并行工具事件分组和刷新恢复仍需 E2E 验收。
 
 ## 2026-08-12 — 引用溯源是两段式：URL 校验把证据全拒
 
@@ -1080,6 +1094,8 @@ backends/
 **可迁移原则：** 排查「为什么没有引用」先分清两段：结构化证据登记 vs prompt 内联生成。结构化段常见坑是 URL/身份校验过严把合法结果全拒（校验的字段命名或 provider 返回格式与预期不符）；「结果多但引用零」往往不是模型没遵循 prompt，而是模型根本没拿到可引用的源。
 
 **验证与遗留：** 根因已定位，临时日志待用户跑一轮带 web_search 的问答后确认；修复后 `_canonical_url` 的字段名/白名单需与 provider 实际返回对齐。
+
+**2026-08-13 表述校正：** “原始结果不进上下文”是不准确的。搜索结果全文会进入服务端模型上下文并计入 input token；客户端是否看到原文、引用片段是否明文，是另一条返回管线。分析官方 Anthropic 与非官方模型时，必须分别描述模型侧上下文、客户端可见 payload 和计费口径。
 
 ## 2026-08-12 — usage 展示口径：多轮调用的 input 累加 ≠ 单轮用量（613.9K）
 

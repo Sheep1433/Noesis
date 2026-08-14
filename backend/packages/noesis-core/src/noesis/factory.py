@@ -1,230 +1,228 @@
-"""Shared Agent factory: DeepAgents-style flat middleware stack.
-
-The single ReAct Agent assembly entry point. Builds the complete middleware
-stack via :func:`noesis.middleware.stack.build_noesis_stack` (design §3) and
-calls LangChain ``create_agent()``. ``subagents``/``skills``/``memory``/
-``backend``/``interrupt_on`` are mapped to middleware instances inside the
-stack builder — they are **not** forwarded to ``create_deep_agent``.
-
-The old five-owner kernel (RuntimeTelemetry / RunGovernor / ContextLifecycle /
-ModelExecution / ToolExecution) has been retired; every capability now lives
-in a self-contained middleware under ``noesis/middleware/``.
-"""
+"""Single Agent factory for every Noesis ReAct profile."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, Sequence
 
+from deepagents.backends import BackendProtocol
 from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgent
 from langchain.agents import create_agent
 from langchain.agents.middleware.human_in_the_loop import InterruptOnConfig
+from langchain.agents.middleware.types import AgentMiddleware
+from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.tools import BaseTool
 
-from deepagents.backends import BackendProtocol
+from noesis.agents.middlewares import (
+    CompactionThresholds,
+    DynamicContextBlock,
+    DynamicContextProvider,
+)
+from noesis.agents.middlewares.stack import NoesisStackDeps, build_noesis_stack
+from noesis.agents.runtime.tool_registry import ToolRegistry
 from noesis.config.env import HitlConfig, ModelConfig
 from noesis.llm.factory import get_llm
 from noesis.llm.model_limits import resolve_context_max_tokens
-from noesis.middleware.stack import NoesisStackDeps, build_noesis_stack
 
 
 @dataclass(frozen=True)
 class MiddlewareInventoryEntry:
     name: str
-    category: str
     source: str
-    profiles: tuple[str, ...]
+    order: int
 
 
-def middleware_inventory() -> tuple[MiddlewareInventoryEntry, ...]:
-    """Return the declared inventory for the new flat stack.
+def middleware_inventory(stack: Sequence[AgentMiddleware]) -> tuple[MiddlewareInventoryEntry, ...]:
+    """Describe the actual instances that will be passed to create_agent."""
+    entries = []
+    for order, middleware in enumerate(stack):
+        module = type(middleware).__module__
+        source = "Noesis" if module.startswith("noesis.") else "DeepAgents" if module.startswith("deepagents.") else "LangChain"
+        entries.append(MiddlewareInventoryEntry(type(middleware).__name__, source, order))
+    return tuple(entries)
 
-    Generated from the actual stack assembly for the COMMON_QA profile, so the
-    declaration and the builder cannot drift.
-    """
-    return _INVENTORY
 
+def _compaction_deps(model: Any, model_id: str | None) -> dict[str, Any]:
+    if not ModelConfig.summarization_enabled:
+        return {}
+    summary_model = get_llm(purpose="summarization")
+    model_limit = resolve_context_max_tokens(model_id) or ModelConfig.context_max_input_tokens
+    trigger = ModelConfig.summarization_trigger_tokens
+    reserve = max(1, min(20_000, ModelConfig.max_tokens))
+    transient = max(1, model_limit - reserve - trigger) if trigger > 0 else max(2_000, model_limit // 20)
 
-def build_middleware_inventory(
-    *,
-    profile: str,
-    backend: BackendProtocol | None = None,
-    subagents: list[SubAgent | CompiledSubAgent] | None = None,
-    async_subagents: list[AsyncSubAgent] | None = None,
-    extra_middleware: list | None = None,
-    interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
-    model_id: str | None = None,
-) -> list:
-    """Build the concrete, ordered stack for inventory/profile assertions."""
-    return _build_stack(
-        backend=backend,
-        profile=profile,
-        subagents=subagents,
-        async_subagents=async_subagents,
-        extra_middleware=extra_middleware,
-        interrupt_on=interrupt_on,
-        model_id=model_id,
+    prompt = (
+        "Extract continuation context from this conversation. Preserve user goals, "
+        "requirements, decisions and reasons, files, errors and fixes, rejected "
+        "approaches, completed work, pending tasks and the next step. Return only "
+        "the structured summary.\n\n{messages}"
     )
 
+    def summarize(messages: list) -> str:
+        return summary_model.invoke(prompt.format(messages=messages)).text.strip()
 
-def build_subagent_default_middleware(backend: BackendProtocol) -> list:
-    """Sub-agent stack from the same assembly as the primary Agent.
+    async def async_summarize(messages: list) -> str:
+        response = await summary_model.ainvoke(prompt.format(messages=messages))
+        return response.text.strip()
 
-    Sub-agents use the isolated context policy by default (no parent
-    conversation / durable ledger inheritance).
-    """
-    return _build_stack(backend=backend, profile="SUBAGENT")
+    def request_tokens(request) -> int:
+        messages = list(request.messages)
+        if request.system_message is not None:
+            messages.insert(0, request.system_message)
+        return count_tokens_approximately(messages, tools=list(request.tools))
 
-
-def build_noesis_runtime_middleware(*, model_id: str | None = None) -> list:
-    """Return the public Noesis middleware for the COMMON_QA baseline profile.
-
-    Kept for compatibility with callers that assemble only the runtime layer.
-    """
-    return _build_stack(profile="COMMON_QA", model_id=model_id)
-
-
-def _compaction_deps(model_id: str | None = None) -> dict[str, Any]:
-    """Resolve the compaction dependencies from model config, when enabled.
-
-    Returns an empty dict (→ CompactionMiddleware omitted) when summarization
-    is disabled or the model cannot be resolved without a live config.
-    """
-    if not getattr(ModelConfig, "summarization_enabled", False):
-        return {}
-    try:
-        model = get_llm(purpose="summarization")
-    except Exception:  # noqa: BLE001 — no live config in some environments
-        return {}
-    max_input = resolve_context_max_tokens(model_id)
-
-    def _summarize(messages: list) -> str:
-        # The summary model call is bound here with business tools disabled.
-        # The recursion guard in CompactionMiddleware prevents re-entry.
-        from langchain_core.messages import get_buffer_string
-
-        prompt = (
-            "Summarise the following conversation, preserving: user goals, key "
-            "technical decisions, files/code, errors and fixes, rejected "
-            "approaches, all user requirements, pending tasks, current work, "
-            "and the next step.\n\n"
-            f"{get_buffer_string(messages)}"
-        )
-        from langchain_core.messages import HumanMessage
-
-        return str(model.invoke([HumanMessage(content=prompt)]).content or "")
-
-    def _token_counter(messages: list) -> int:
-        return sum(len(repr(m.content)) for m in messages) // 4
-
-    from noesis.middleware import CompactionThresholds
-
-    trigger_tokens = int(getattr(ModelConfig, "summarization_trigger_tokens", 0))
-    effective_limit = max_input or 128_000
-    reserve = int(getattr(ModelConfig, "summarization_output_reserve", 4_000))
-    buffer = int(getattr(ModelConfig, "summarization_transient_buffer", 2_000))
     return {
-        "summarize": _summarize,
-        "token_counter": _token_counter,
+        "token_counter": count_tokens_approximately,
+        "request_token_counter": request_tokens,
+        "summarize": summarize,
+        "async_summarize": async_summarize,
         "compaction_thresholds": CompactionThresholds(
-            model_input_limit=effective_limit,
+            model_input_limit=model_limit,
             summary_output_reserve=reserve,
-            transient_request_buffer=buffer if trigger_tokens == 0 else max(0, effective_limit - trigger_tokens),
+            transient_request_buffer=transient,
+            final_request_guard=max(512, transient // 4),
         ),
+        "compaction_keep_messages": ModelConfig.summarization_messages_to_keep,
     }
 
 
-def _build_stack(
+def build_noesis_middleware(
     *,
-    backend: BackendProtocol | None = None,
-    profile: str = "COMMON_QA",
-    subagents: list[SubAgent | CompiledSubAgent] | None = None,
-    async_subagents: list[AsyncSubAgent] | None = None,
-    extra_middleware: list | None = None,
-    interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
+    profile: str,
+    model: Any,
     model_id: str | None = None,
-) -> list:
-    compaction = _compaction_deps(model_id)
-    deps = NoesisStackDeps(
-        backend=backend,
-        profile=profile,
-        subagents=subagents,
-        async_subagents=async_subagents,
-        interrupt_on=interrupt_on if (HitlConfig.enabled and interrupt_on) else None,
-        extra_middleware=extra_middleware,
-        max_retries=int(getattr(ModelConfig, "max_retries", 0)),
-        **compaction,
+    tools: Sequence[BaseTool] = (),
+    backend: BackendProtocol | None = None,
+    dynamic_context_provider: DynamicContextProvider | None = None,
+    workspace: str | None = None,
+    session_id: str | None = None,
+    attachments: Sequence[str] = (),
+    skills: Sequence[str | tuple[str, str]] = (),
+    skills_user_id: str | None = None,
+    skills_system_prompt: str | None = None,
+    memory: Sequence[str] = (),
+    memory_system_prompt: str | None = None,
+    todo: bool = False,
+    subagents: Sequence[SubAgent | CompiledSubAgent] = (),
+    async_subagents: Sequence[AsyncSubAgent] = (),
+    tool_registry: ToolRegistry | None = None,
+    deferred_tools: bool = False,
+    snip: bool = False,
+    middleware: Sequence[AgentMiddleware] = (),
+    interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
+    model_call_limit: int | None = None,
+    tool_call_limit: int | None = None,
+) -> list[AgentMiddleware]:
+    if dynamic_context_provider is None:
+        def dynamic_context_provider() -> DynamicContextBlock:
+            now = datetime.now().astimezone()
+            return DynamicContextBlock(
+                current_time=now.isoformat(timespec="seconds"),
+                timezone=str(now.tzinfo),
+                workspace=workspace,
+                session_id=session_id,
+                attachments=tuple(sorted(set(attachments))),
+            )
+    return build_noesis_stack(
+        NoesisStackDeps(
+            profile=profile,
+            tools=tools,
+            backend=backend,
+            dynamic_context_provider=dynamic_context_provider,
+            skills_sources=skills,
+            skills_user_id=skills_user_id,
+            skills_system_prompt=skills_system_prompt,
+            memory_sources=memory,
+            memory_system_prompt=memory_system_prompt,
+            todo=todo,
+            subagents=subagents,
+            async_subagents=async_subagents,
+            tool_registry=tool_registry,
+            enable_deferred_tools=deferred_tools,
+            enable_snip=snip,
+            interrupt_on=interrupt_on if HitlConfig.enabled else None,
+            model_call_limit=model_call_limit,
+            tool_call_limit=tool_call_limit,
+            tool_result_max_chars=int(getattr(ModelConfig, "tool_output_max_chars", 24_000)),
+            middleware=middleware,
+            **_compaction_deps(model, model_id),
+        )
     )
-    return build_noesis_stack(deps)
 
 
 def create_noesis_agent(
     *,
     system_prompt: str,
-    tools: list | None = None,
     checkpointer,
+    profile: str,
+    tools: Sequence[BaseTool] = (),
     backend: BackendProtocol | None = None,
-    subagents: list[SubAgent | CompiledSubAgent] | None = None,
-    async_subagents: list[AsyncSubAgent] | None = None,
-    extra_middleware: list | None = None,
+    dynamic_context_provider: DynamicContextProvider | None = None,
+    workspace: str | None = None,
+    session_id: str | None = None,
+    attachments: Sequence[str] = (),
+    skills: Sequence[str | tuple[str, str]] = (),
+    skills_user_id: str | None = None,
+    skills_system_prompt: str | None = None,
+    memory: Sequence[str] = (),
+    memory_system_prompt: str | None = None,
+    todo: bool = False,
+    subagents: Sequence[SubAgent | CompiledSubAgent] = (),
+    async_subagents: Sequence[AsyncSubAgent] = (),
+    tool_registry: ToolRegistry | None = None,
+    deferred_tools: bool = False,
+    snip: bool = False,
+    middleware: Sequence[AgentMiddleware] = (),
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
+    model_call_limit: int | None = None,
+    tool_call_limit: int | None = None,
     model=None,
     model_id: str | None = None,
     **create_agent_kwargs: Any,
 ):
-    """创建 Noesis Agent：LangChain ``create_agent`` + 自包含 middleware stack。
-
-    中间件顺序由 ``noesis/middleware/stack.py`` 的 ``build_noesis_stack`` 按设计
-    §3 装配。``backend``/``subagents``/``interrupt_on`` 等参数由 factory 映射为
-    对应中间件实例加入 stack，不透传给 ``create_deep_agent``。
-
-    Args:
-        system_prompt: 系统提示词。
-        tools: 额外工具（MCP、RAG 等）；文件系统工具由 ``FilesystemMiddleware`` 注入。
-        checkpointer: LangGraph checkpointer。
-        backend: 可选文件系统后端；提供时挂载 ``FilesystemMiddleware`` 等。
-        subagents: 同步子 Agent 规格，挂载 ``SubAgentMiddleware``（需 ``backend``）。
-        async_subagents: 远程 Agent Protocol 异步子 Agent。
-        extra_middleware: 额外中间件，追加到 stack 末尾（最内层）。
-        interrupt_on: HITL 工具审批配置；仅当 ``HitlConfig.enabled`` 且非空时挂载。
-        model: 已解析的 LLM；省略时由 ``model_id`` 解析。
-        model_id: 模型目录条目 ID。
-        **create_agent_kwargs: 透传给 ``create_agent``（如 ``state_schema``）。
-    """
-    middleware = _build_stack(
+    """Map direct DeepAgents-style arguments to one LangChain middleware stack."""
+    resolved_model = model if model is not None else get_llm(model_id=model_id)
+    stack = build_noesis_middleware(
+        profile=profile,
+        model=resolved_model,
+        model_id=model_id,
+        tools=tools,
         backend=backend,
-        profile=create_agent_kwargs.pop("profile", "UNKNOWN"),
+        dynamic_context_provider=dynamic_context_provider,
+        workspace=workspace,
+        session_id=session_id,
+        attachments=attachments,
+        skills=skills,
+        skills_user_id=skills_user_id,
+        skills_system_prompt=skills_system_prompt,
+        memory=memory,
+        memory_system_prompt=memory_system_prompt,
+        todo=todo,
         subagents=subagents,
         async_subagents=async_subagents,
-        extra_middleware=extra_middleware,
+        tool_registry=tool_registry,
+        deferred_tools=deferred_tools,
+        snip=snip,
+        middleware=middleware,
         interrupt_on=interrupt_on,
-        model_id=model_id,
+        model_call_limit=model_call_limit,
+        tool_call_limit=tool_call_limit,
     )
-
     return create_agent(
-        model=model if model is not None else get_llm(model_id=model_id),
-        tools=tools or [],
+        model=resolved_model,
+        tools=list(tools),
         system_prompt=system_prompt,
         checkpointer=checkpointer,
-        middleware=middleware,
+        middleware=stack,
         **create_agent_kwargs,
     )
 
 
-# Inventory generated from the COMMON_QA baseline stack assembly. Source of
-# truth is ``build_noesis_stack``; this tuple mirrors it for declarative
-# assertions and is validated by the stack-assembly contract tests.
-_INVENTORY: tuple[MiddlewareInventoryEntry, ...] = (
-    MiddlewareInventoryEntry("ToolResultBudgetMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("ToolFailureMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("FileContextMiddleware", "context", "Noesis", ("SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SUBAGENT")),
-    MiddlewareInventoryEntry("SourceRefreshMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("DynamicContextMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP")),
-    MiddlewareInventoryEntry("DurableContextMiddleware", "context", "Noesis", ("SUPER_AGENT_QA", "FAULT_OPERATION_QA")),
-    MiddlewareInventoryEntry("SnipMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("MicroCompactionMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("ToolCatalogMiddleware", "context", "Noesis", ("SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP")),
-    MiddlewareInventoryEntry("PatchToolCallsMiddleware", "runtime", "DeepAgents", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("CompactionMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-    MiddlewareInventoryEntry("SafeModelRetryMiddleware", "context", "Noesis", ("COMMON_QA", "SUPER_AGENT_QA", "FAULT_OPERATION_QA", "SIMPLE_MCP", "SUBAGENT")),
-)
+__all__ = [
+    "MiddlewareInventoryEntry",
+    "build_noesis_middleware",
+    "create_noesis_agent",
+    "middleware_inventory",
+]

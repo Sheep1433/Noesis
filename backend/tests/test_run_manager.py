@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from noesis.chat.delivery.events import RunAborted
 from noesis.chat.runs import (
     HitlPendingExpired,
     RunCapacityExceeded,
@@ -257,6 +258,33 @@ async def test_run_output_limit_is_enforced_before_buffer_growth() -> None:
     results = await asyncio.gather(handle.producer_task, return_exceptions=True)
     assert isinstance(results[0], RunOutputExceeded)
     assert handle.buffer_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_remains_publishable_after_output_limit() -> None:
+    async def producer(publish):
+        return None
+
+    manager = RunManager(max_output_bytes=256)
+    handle = await manager.start(
+        run_id="run-terminal-after-limit",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="message-1",
+        snapshot_provider=_snapshot("run-terminal-after-limit"),
+        producer=producer,
+    )
+    with pytest.raises(RunOutputExceeded):
+        await manager.publish("run-terminal-after-limit", "x" * 2_000)
+
+    terminal = await manager.publish(
+        "run-terminal-after-limit",
+        RunAborted(reason="limit_exceeded", error_code="LIMIT_EXCEEDED"),
+    )
+
+    assert terminal.event.reason == "limit_exceeded"
+    assert terminal.sequence == 1
+    await handle.producer_task
 
 
 @pytest.mark.asyncio

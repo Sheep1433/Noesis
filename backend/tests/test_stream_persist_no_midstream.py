@@ -4,10 +4,17 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
-from noesis.services.qa.helpers import _flush_ctx_text_buffer, _persist_stream_checkpoint
+from noesis.chat.event_mapping.bridge import END_SENTINEL
+from noesis.services.qa.helpers import (
+    _flush_ctx_text_buffer,
+    _new_stream_ctx,
+    _persist_stream_checkpoint,
+    _yield_run_events_from_agent,
+)
 
 
 @pytest.mark.asyncio
@@ -27,6 +34,62 @@ async def test_persist_stream_checkpoint_does_not_flush_text_buffer() -> None:
     mock_persist.assert_not_awaited()
     assert ctx["text_buffer"] == "累积正文"
     assert builder.is_empty()
+
+
+@pytest.mark.asyncio
+async def test_run_event_path_persists_context_after_model_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """任务模式收到 model_end 后，应把 context 快照写入 session extra。"""
+    bridge = LangGraphSseBridge("sess-run")
+    builder = AssistantMessageBuilder(session_id="sess-run", message_id=bridge.assistant_message_id)
+
+    async def fake_iter_bridge_events(*args, **kwargs):
+        yield {
+            "event": "on_chat_model_end",
+            "run_id": "model-run-1",
+            "data": {
+                "output": AIMessage(
+                    content="完成",
+                    usage_metadata={
+                        "input_tokens": 1234,
+                        "output_tokens": 20,
+                        "total_tokens": 1254,
+                    },
+                ),
+            },
+        }
+        yield END_SENTINEL
+
+    persist = AsyncMock()
+    monkeypatch.setattr(
+        "noesis.services.qa.helpers.iter_bridge_events",
+        fake_iter_bridge_events,
+    )
+    monkeypatch.setattr(
+        "noesis.services.qa.helpers._persist_stream_checkpoint",
+        persist,
+    )
+
+    async def empty_agent():
+        if False:
+            yield None
+
+    events = [
+        event
+        async for event in _yield_run_events_from_agent(
+            empty_agent(),
+            bridge=bridge,
+            builder=builder,
+            ctx=_new_stream_ctx(),
+            session_id="sess-run",
+            user_id="u1",
+            qa_type="SUPER_AGENT_QA",
+        )
+    ]
+
+    assert events
+    persist.assert_awaited_once_with(bridge, "sess-run", "u1")
 
 
 def test_flush_ctx_text_buffer_merges_single_text_part() -> None:

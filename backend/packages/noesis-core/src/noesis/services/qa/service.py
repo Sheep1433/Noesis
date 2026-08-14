@@ -281,8 +281,6 @@ class QaService:
                     "current_tool_name": None,
                     "current_tool_call_id": None,
                     "tool_start_times": {},
-                    "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-                    "usage_seen_run_ids": set(),
                 }
                 try:
                     if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
@@ -403,8 +401,6 @@ class QaService:
                     "current_tool_name": None,
                     "current_tool_call_id": None,
                     "tool_start_times": {},
-                    "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-                    "usage_seen_run_ids": set(),
                 }
                 try:
                     for line in bridge.process_item({"type": "__tw_error__", "content": str(e)}, b, c):

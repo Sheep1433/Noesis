@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from langchain.agents.middleware.types import AgentState
 from langgraph.errors import GraphInterrupt
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 
 from noesis.errors.tool_failure import ToolFailureCategory, ToolInfrastructureError
-from noesis.middleware.tool_failure_middleware import ToolFailureMiddleware
+from noesis.agents.middlewares.tool_failure_middleware import ToolFailureMiddleware
 
 
 def _call_request(name: str = "search", call_id: str = "call-1", args: dict | None = None) -> ToolCallRequest:

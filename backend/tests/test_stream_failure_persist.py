@@ -102,7 +102,6 @@ def test_build_assistant_persist_extra_includes_qa_type() -> None:
     bridge = LangGraphSseBridge("s1")
     bridge.last_finish_reason = "error"
     bridge.last_error_message = "已达到最大处理步数"
-    bridge.last_finish_usage = {"input_tokens": 1, "output_tokens": 2}
 
     extra = _build_assistant_persist_extra(qa_type="DEEP_RESEARCH_QA", bridge=bridge)
     assert extra["qa_type"] == "DEEP_RESEARCH_QA"

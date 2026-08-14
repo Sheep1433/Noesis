@@ -78,7 +78,6 @@ class GeneralQAAgent(BaseAgent):
 
         user_id = str(getattr(current_user, "user_id", "") or "")
         attachments_enabled = False
-        extra_middleware = None
 
         if (
             ChatAttachmentConfig.enabled
@@ -98,7 +97,6 @@ class GeneralQAAgent(BaseAgent):
                     user_id=user_id,
                     db=db,
                 )
-                extra_middleware = []
 
         try:
             config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
@@ -114,7 +112,9 @@ class GeneralQAAgent(BaseAgent):
                     kb_scope_collections=scoped_collections or None,
                 ),
                 checkpointer=self.checkpointer,
-                extra_middleware=extra_middleware,
+                deferred_tools=bool(mcp_tools),
+                session_id=session_id,
+                attachments=tuple(str(name) for name in (file_list or {})),
                 model_id=model_id,
             )
 

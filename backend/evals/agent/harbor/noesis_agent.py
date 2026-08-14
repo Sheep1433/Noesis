@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage
 
 from harbor.agents.base import BaseAgent
@@ -93,7 +92,10 @@ class NoesisHarborAgent(BaseAgent):
                 system_prompt=_build_system_prompt(working_dir=working_dir),
                 checkpointer=checkpointer,
                 backend=backend,
-                extra_middleware=[TodoListMiddleware()],
+                workspace=working_dir,
+                session_id=session_id,
+                todo=True,
+                profile="HARBOR_EVAL",
                 model=_resolve_llm(self.model_name),
             )
             async for _ in stream_agent_events(

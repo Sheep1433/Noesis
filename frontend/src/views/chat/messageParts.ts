@@ -93,6 +93,13 @@ export interface MessageContentV1 {
   parts: UiPart[]
 }
 
+/** 用户输入过长时默认收起，避免一条消息撑满整个对话页面。 */
+export const USER_MESSAGE_COLLAPSE_THRESHOLD = 800
+
+export function shouldCollapseUserMessage(content: string): boolean {
+  return content.length > USER_MESSAGE_COLLAPSE_THRESHOLD
+}
+
 export function genPartId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 }
@@ -236,20 +243,48 @@ function expandRedactedThinkingInParts(parts: UiPart[]): UiPart[] {
   return out
 }
 
-/** 将流式思考段标为已完成（redacted 闭合或 SSE reasoning-end） */
-export function completeLastReasoningPart(parts: UiPart[]): UiPart[] {
+/**
+ * 将指定的流式思考段标为已完成。
+ *
+ * reasoning-end 会携带 part_id；只有旧 SSE 没有 part_id 时才按 parent
+ * 回退到最近一段，不能再跨主 Agent / subagent 全局取最后一段。
+ */
+export function completeReasoningPart(
+  parts: UiPart[],
+  part_id?: string,
+  parent_task_call_id?: string,
+): UiPart[] {
   const next = parts.map((q) => ({ ...q })) as UiPart[]
-  for (let i = next.length - 1; i >= 0; i--) {
-    const cur = next[i]
-    if (cur.type === 'reasoning') {
-      const r = cur as ReasoningUiPart
-      if (r.status !== 'completed') {
-        next[i] = { ...r, status: 'completed' }
+  const normalizedPartId = part_id?.trim() || undefined
+  const normalizedParentId = parent_task_call_id?.trim() || undefined
+  let targetIndex = -1
+
+  if (normalizedPartId) {
+    targetIndex = next.findIndex((part) => part.type === 'reasoning' && part.id === normalizedPartId)
+  }
+  if (targetIndex === -1) {
+    for (let i = next.length - 1; i >= 0; i--) {
+      const cur = next[i]
+      if (cur.type === 'reasoning' && part_parent_task_call_id(cur) === normalizedParentId) {
+        targetIndex = i
+        break
       }
-      return next
     }
   }
+  if (targetIndex === -1) {
+    return next
+  }
+
+  const cur = next[targetIndex]
+  if (cur.type === 'reasoning' && cur.status !== 'completed') {
+    next[targetIndex] = { ...cur, status: 'completed' }
+  }
   return next
+}
+
+/** 将流式思考段标为已完成（兼容没有 part_id 的旧调用方）。 */
+export function completeLastReasoningPart(parts: UiPart[], parent_task_call_id?: string): UiPart[] {
+  return completeReasoningPart(parts, undefined, parent_task_call_id)
 }
 
 /** API 落库可能把 list 等放在 input/arguments，统一包成 Record 便于 UI 展示 */
@@ -596,21 +631,6 @@ function hasToolErrorPart(parts: UiPart[]): boolean {
   return parts.some((p) => p.type === 'tool' && p.status === 'error')
 }
 
-export interface TokenUsageSummary {
-  input_tokens: number
-  output_tokens: number
-  total_tokens?: number
-  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
-  input_token_details?: { cache_read?: number, cache_write?: number }
-  output_token_details?: { reasoning?: number }
-  /** 按 caller/model 归因摘要（调试视图按需展示） */
-  attribution?: {
-    cumulative?: Record<string, number>
-    by_caller?: Record<string, Record<string, number>>
-    by_model?: Record<string, Record<string, number>>
-  }
-}
-
 export interface ContextWindowSnapshot {
   current_tokens: number
   max_tokens: number
@@ -646,16 +666,6 @@ export function resolveLoadedContextSnapshot(
   return currentSessionId === sessionId ? current : null
 }
 
-export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
-  if (!usage || typeof usage !== 'object') {
-    return false
-  }
-  const u = usage as Record<string, unknown>
-  const input = Number(u.input_tokens ?? 0)
-  const output = Number(u.output_tokens ?? 0)
-  return input > 0 || output > 0
-}
-
 export function formatTokenCount(n: number): string {
   if (n >= 1_000_000_000) {
     return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`
@@ -675,11 +685,6 @@ export function formatDurationMs(ms: number): string {
   }
   const sec = ms / 1000
   return sec >= 10 ? `${Math.round(sec)}s` : `${sec.toFixed(1)}s`
-}
-
-export function formatUsageSummary(usage: TokenUsageSummary): string {
-  const total = usage.total_tokens ?? usage.input_tokens + usage.output_tokens
-  return `本轮用量 ↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
 }
 
 const MODEL_API_TIMEOUT_RE = /readtimeout|writetimeout|connecttimeout|pooltimeout|streamchunktimeouterror|stream_chunk_timeout|apitimeout|request timed out|timed out waiting/i
@@ -946,7 +951,7 @@ export function appendTextDeltaWithRedactedThinking(
       if (before) {
         out = appendReasoningDelta(out, before, parent_task_call_id)
       }
-      out = completeLastReasoningPart(out)
+      out = completeReasoningPart(out, undefined, parent_task_call_id)
       s = s.slice(idx + REDACTED_CLOSE.length)
       ctx.mode = 'text'
       continue

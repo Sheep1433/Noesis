@@ -61,8 +61,11 @@ class SimpleMCPAgent(BaseAgent):
             agent = create_noesis_agent(
                 profile="SIMPLE_MCP",
                 tools=all_tools,
+                deferred_tools=bool(all_tools),
                 system_prompt=build_prompt(PromptProfile.SIMPLE_MCP),
                 checkpointer=self.checkpointer,
+                session_id=session_id,
+                attachments=tuple(str(name) for name in (file_list or {})),
             )
 
             # 流式执行
