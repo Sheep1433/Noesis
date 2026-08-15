@@ -213,3 +213,82 @@ async def test_async_summary_path_uses_async_callable() -> None:
 
     result = await middleware.awrap_model_call(_request(_messages()), handler)
     assert _command_update(result)["compaction"]["event"]
+
+
+def test_post_compact_preserves_system_message_with_stable_sources() -> None:
+    """compaction 只替换 messages，不动 system_message——稳定来源（Dynamic/Durable 注入）自动保留。"""
+    stable_system = SystemMessage(content="system prompt\n## Dynamic Context\n当前日期: 2026-08-15\n## Durable Context\nactive_plan: do task X")
+    seen = []
+    middleware = CompactionMiddleware(
+        token_counter=lambda messages: 200,
+        summarize=lambda messages: "summary",
+        thresholds=_thresholds(),
+        keep_messages=2,
+    )
+    raw = _messages(10)
+    request = ModelRequest(
+        model=object(),  # type: ignore[arg-type]
+        messages=list(raw),
+        system_message=stable_system,
+        tools=[],
+        state={"messages": list(raw)},
+    )
+    middleware.wrap_model_call(request, lambda req: seen.append(req) or _response())
+    # compaction 替换了 messages（summary + preserved tail），但 system_message 保留
+    assert seen[0].system_message is stable_system
+    assert "Dynamic Context" in seen[0].system_message.content
+    assert "active_plan" in seen[0].system_message.content
+    assert len(seen[0].messages) < len(raw)  # messages 确实被压缩了
+
+
+def test_post_compact_preserves_private_state() -> None:
+    """compaction 只替换 messages 和 compaction policy，不动其他 private state（Skills/Memory）。"""
+    seen = []
+    middleware = CompactionMiddleware(
+        token_counter=lambda messages: 200,
+        summarize=lambda messages: "summary",
+        thresholds=_thresholds(),
+        keep_messages=2,
+    )
+    raw = _messages(10)
+    state = {
+        "messages": list(raw),
+        "skills_metadata": [{"name": "deep-research-v2"}],
+        "memory_contents": "user prefers concise answers",
+    }
+    middleware.wrap_model_call(
+        _request(raw, state),
+        lambda req: seen.append(req) or _response(),
+    )
+    # Skills/Memory state 保留
+    assert seen[0].state.get("skills_metadata") == [{"name": "deep-research-v2"}]
+    assert seen[0].state.get("memory_contents") == "user prefers concise answers"
+
+
+def test_manual_compact_bypasses_threshold_and_breaker() -> None:
+    """manual compact 请求绕过阈值和 breaker 检查。"""
+    seen = []
+    middleware = CompactionMiddleware(
+        token_counter=lambda messages: 1,  # 远低于 auto_compact_at
+        summarize=lambda messages: "manual summary",
+        thresholds=_thresholds(),
+        keep_messages=2,
+        max_consecutive_failures=2,
+    )
+    # 先让 breaker 进入熔断状态
+    state = {"messages": _messages(10), "compaction": {"consecutive_failures": 99}}
+    # 手动 compact 请求：在 state 里设标记不会绕过——需要在 runtime.context 里设
+    # 但测试里没有 runtime，直接测 _should_auto_compact 的逻辑
+    from unittest.mock import MagicMock
+    request = _request(_messages(10), state)
+    # 模拟 runtime.context 有 manual_compact_requested
+    request_runtime = MagicMock()
+    request_runtime.context = {"manual_compact_requested": True}
+    request = request.override(runtime=request_runtime)  # type: ignore[arg-type]
+    # breaker 熔断 + token 远低于阈值，但 manual compact 应该仍然触发
+    assert middleware._should_auto_compact(request) is True
+    # 实际执行压缩
+    result = middleware.wrap_model_call(request, lambda req: seen.append(req) or _response())
+    update = _command_update(result)
+    assert update["compaction"]["last_mode"] == "manual"
+    assert len(seen[0].messages) < 10  # messages 被压缩了

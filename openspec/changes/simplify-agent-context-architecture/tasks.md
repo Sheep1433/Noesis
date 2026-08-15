@@ -41,13 +41,13 @@
 
 ## 6. 实现 Claude Code 式 Compaction
 
-- [ ] 6.1 用最终 canonical request 计算 system/messages/tool results/tool schemas/attachments/framing 预算和 reserve/buffer/guard 阈值
-- [ ] 6.2 实现 incremental、full、prefix、reactive 和 manual 模式；summary request 禁用业务 tools 并有 recursion guard
-- [ ] 6.3 使用结构化 summary，校验空/错误文本，保留 raw history、archive、preserved tail 和完整 API round
-- [ ] 6.4 实现 summary prompt-too-long 的有界 prefix retry、进展检查和 run/checkpoint 持久化连续失败 breaker
-- [ ] 6.5 实现 archive/summary/boundary/stable refs 一次提交；失败不得先清空 history、file state 或 discovered tools
-- [ ] 6.6 实现 host/runtime manual compact 入口与可选 tool，两者共用同一 compaction engine 并支持用户保留指令
-- [ ] 6.7 覆盖 Provider 真实 overflow 一次 reactive recovery、恢复失败终止和 post-compact stable source rebuild
+- [x] 6.1 用最终 canonical request 计算 system/messages/tool results/tool schemas/attachments/framing 预算和 reserve/buffer/guard 阈值
+- [x] 6.2 实现 incremental、full、prefix、reactive 和 manual 模式；summary request 禁用业务 tools 并有 recursion guard
+- [x] 6.3 使用结构化 summary，校验空/错误文本，保留 raw history、archive、preserved tail 和完整 API round
+- [x] 6.4 实现 summary prompt-too-long 的有界 prefix retry、进展检查和 run/checkpoint 持久化连续失败 breaker
+- [x] 6.5 实现 archive/summary/boundary/stable refs 一次提交；失败不得先清空 history、file state 或 discovered tools
+- [x] 6.6 实现 host/runtime manual compact 入口与可选 tool，两者共用同一 compaction engine 并支持用户保留指令
+- [x] 6.7 覆盖 Provider 真实 overflow 一次 reactive recovery、恢复失败终止和 post-compact stable source rebuild
 
 ## 7. 实现 Subagent Context Policy
 
@@ -65,7 +65,7 @@
 
 ## 9. 删除旧结构并交付
 
-- [ ] 9.1 按字段级迁移表删除 RuntimeTelemetry、RunGovernor、ContextLifecycle、ModelExecution 和 ToolExecution 五个宏观 owner
+- [x] 9.1 按字段级迁移表删除 RuntimeTelemetry、RunGovernor、ContextLifecycle、ModelExecution 和 ToolExecution 五个宏观 owner
 - [x] 9.2 删除 `agents/middlewares/kernel`、`capabilities/`、重复导出、隐式 ContextVar 链、手写 inventory 和失效配置；保留 `agents.__getattr__` lazy 场景导出，不保留旧 import 兼容 shim
 - [ ] 9.3 运行 package 无环导入、backend 全量 pytest、启动冒烟和各 Profile/子 Agent E2E，停止所有临时进程
 - [ ] 9.4 运行长上下文、summary PTL、Provider overflow、大 MCP catalog、file stale、fork/resume、HITL、SSE 与 assistant 持久化回归

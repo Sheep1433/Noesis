@@ -5,6 +5,7 @@
 """
 from noesis.chat.commands.handlers import (  # noqa: F401
     agents,
+    compact,
     help,
     model,
     skills,

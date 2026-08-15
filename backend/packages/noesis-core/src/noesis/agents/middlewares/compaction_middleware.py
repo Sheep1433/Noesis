@@ -202,9 +202,26 @@ class CompactionMiddleware(
         policy = self._policy_state(request.state)
         if policy.get("in_progress"):
             return False
+        # manual compact 请求绕过 breaker 和阈值检查
+        if self._manual_compact_requested(request):
+            return True
         if int(policy.get("consecutive_failures", 0)) >= self._max_failures:
             return False
         return self._request_tokens(request) >= self._thresholds.auto_compact_at
+
+    @staticmethod
+    def _manual_compact_requested(request: ModelRequest[Any]) -> bool:
+        """检查 runtime.context 是否有 manual compact 请求标记。
+
+        ``/compact`` 命令在 runtime.context 设 ``manual_compact_requested=True``，
+        CompactionMiddleware 检测到后强制触发压缩（绕过阈值和 breaker）。
+        design §12: 手动 compact 不受自动熔断限制。
+        """
+        runtime = request.runtime
+        context = getattr(runtime, "context", None)
+        if isinstance(context, dict):
+            return bool(context.get("manual_compact_requested"))
+        return False
 
     @staticmethod
     def _thread_id(request: ModelRequest[Any]) -> str:
@@ -436,7 +453,8 @@ class CompactionMiddleware(
         compacted: CompactionResult | None = None
         failed_request: ModelRequest[ContextT] | None = None
         if self._should_auto_compact(effective_request):
-            compacted = self._build(list(effective_request.messages), self._thread_id(request), "auto")
+            mode = "manual" if self._manual_compact_requested(effective_request) else "auto"
+            compacted = self._build(list(effective_request.messages), self._thread_id(request), mode)
             effective_request = (
                 self._request_with_result(effective_request, compacted)
                 if compacted is not None
@@ -469,7 +487,8 @@ class CompactionMiddleware(
         compacted: CompactionResult | None = None
         failed_request: ModelRequest[ContextT] | None = None
         if self._should_auto_compact(effective_request):
-            compacted = await self._abuild(list(effective_request.messages), self._thread_id(request), "auto")
+            mode = "manual" if self._manual_compact_requested(effective_request) else "auto"
+            compacted = await self._abuild(list(effective_request.messages), self._thread_id(request), mode)
             effective_request = (
                 self._request_with_result(effective_request, compacted)
                 if compacted is not None
