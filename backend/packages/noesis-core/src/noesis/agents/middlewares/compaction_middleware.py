@@ -31,6 +31,12 @@ from langgraph.types import Command
 
 from noesis.runtime.logging import logger
 
+try:
+    from langgraph.errors import GraphBubbleUp
+except ImportError:  # pragma: no cover
+    class GraphBubbleUp(Exception):  # type: ignore[no-redef]
+        pass
+
 _SUMMARY_FAILURE_PREFIXES = (
     "<error>",
     "error:",
@@ -246,6 +252,72 @@ class CompactionMiddleware(
             raise RuntimeError("conversation archive write failed")
         return path
 
+    # ---------- compaction events ----------
+
+    def _emit_compaction_event(self, payload: dict[str, Any]) -> None:
+        """同步发 noesis_compaction custom event（照 noesis_model_retry 模式）。"""
+        try:
+            from langgraph.config import get_stream_writer
+
+            writer = get_stream_writer()
+            try:
+                writer(payload)
+            except Exception:
+                pass
+            from langchain_core.callbacks import dispatch_custom_event
+
+            dispatch_custom_event("noesis_compaction", payload)
+        except GraphBubbleUp:
+            raise
+        except Exception:
+            logger.debug("Failed to emit noesis_compaction event", exc_info=True)
+
+    async def _aemit_compaction_event(self, payload: dict[str, Any]) -> None:
+        """异步发 noesis_compaction custom event。"""
+        try:
+            from langgraph.config import get_stream_writer
+
+            writer = get_stream_writer()
+            try:
+                writer(payload)
+            except Exception:
+                pass
+            from langchain_core.callbacks import adispatch_custom_event
+
+            await adispatch_custom_event("noesis_compaction", payload)
+        except GraphBubbleUp:
+            raise
+        except Exception:
+            logger.debug("Failed to emit async noesis_compaction event", exc_info=True)
+
+    def _build_started_payload(self, mode: str, pre_tokens: int) -> dict[str, Any]:
+        return {
+            "compaction_type": "started",
+            "mode": mode,
+            "message": "正在压缩对话上下文…",
+            "pre_tokens": pre_tokens,
+        }
+
+    def _build_completed_payload(
+        self, mode: str, pre_tokens: int, post_tokens: int, messages_summarized: int,
+    ) -> dict[str, Any]:
+        return {
+            "compaction_type": "completed",
+            "mode": mode,
+            "message": f"已压缩 {messages_summarized} 条对话历史",
+            "pre_tokens": pre_tokens,
+            "post_tokens": post_tokens,
+            "messages_summarized": messages_summarized,
+        }
+
+    def _build_failed_payload(self, mode: str, reason: str) -> dict[str, Any]:
+        return {
+            "compaction_type": "failed",
+            "mode": mode,
+            "reason": reason,
+        }
+
+
     def _summarize_with_retry(self, messages: list[AnyMessage]) -> tuple[str, int] | None:
         batch = messages
         for attempt in range(1, self._max_ptl_retries + 2):
@@ -454,23 +526,36 @@ class CompactionMiddleware(
         failed_request: ModelRequest[ContextT] | None = None
         if self._should_auto_compact(effective_request):
             mode = "manual" if self._manual_compact_requested(effective_request) else "auto"
+            pre_tokens = self._request_tokens(effective_request)
+            self._emit_compaction_event(self._build_started_payload(mode, pre_tokens))
             compacted = self._build(list(effective_request.messages), self._thread_id(request), mode)
-            effective_request = (
-                self._request_with_result(effective_request, compacted)
-                if compacted is not None
-                else self._failure_request(effective_request)
-            )
-            if compacted is None:
+            if compacted is not None:
+                effective_request = self._request_with_result(effective_request, compacted)
+                self._emit_compaction_event(self._build_completed_payload(
+                    mode, pre_tokens, self._request_tokens(effective_request),
+                    compacted.original_message_count - len(compacted.preserved_messages),
+                ))
+            else:
+                effective_request = self._failure_request(effective_request)
+                self._emit_compaction_event(self._build_failed_payload(mode, "summary_invalid"))
                 failed_request = effective_request
         if self._request_tokens(effective_request) >= self._thresholds.hard_stop_at:
             raise ContextOverflowError("effective request exceeds the compaction hard guard")
         try:
             response = handler(effective_request)
         except ContextOverflowError:
+            pre_tokens = self._request_tokens(effective_request)
+            self._emit_compaction_event(self._build_started_payload("reactive", pre_tokens))
             reactive = self._build(list(effective_request.messages), self._thread_id(request), "reactive")
             if reactive is None:
+                self._emit_compaction_event(self._build_failed_payload("reactive", "summary_invalid"))
                 raise
-            response = handler(self._request_with_result(effective_request, reactive))
+            effective_request = self._request_with_result(effective_request, reactive)
+            self._emit_compaction_event(self._build_completed_payload(
+                "reactive", pre_tokens, self._request_tokens(effective_request),
+                reactive.original_message_count - len(reactive.preserved_messages),
+            ))
+            response = handler(effective_request)
             compacted = reactive
         if compacted:
             return self._with_command(response, self._state_command(compacted, self._policy_state(request.state)))
@@ -488,23 +573,36 @@ class CompactionMiddleware(
         failed_request: ModelRequest[ContextT] | None = None
         if self._should_auto_compact(effective_request):
             mode = "manual" if self._manual_compact_requested(effective_request) else "auto"
+            pre_tokens = self._request_tokens(effective_request)
+            await self._aemit_compaction_event(self._build_started_payload(mode, pre_tokens))
             compacted = await self._abuild(list(effective_request.messages), self._thread_id(request), mode)
-            effective_request = (
-                self._request_with_result(effective_request, compacted)
-                if compacted is not None
-                else self._failure_request(effective_request)
-            )
-            if compacted is None:
+            if compacted is not None:
+                effective_request = self._request_with_result(effective_request, compacted)
+                await self._aemit_compaction_event(self._build_completed_payload(
+                    mode, pre_tokens, self._request_tokens(effective_request),
+                    compacted.original_message_count - len(compacted.preserved_messages),
+                ))
+            else:
+                effective_request = self._failure_request(effective_request)
+                await self._aemit_compaction_event(self._build_failed_payload(mode, "summary_invalid"))
                 failed_request = effective_request
         if self._request_tokens(effective_request) >= self._thresholds.hard_stop_at:
             raise ContextOverflowError("effective request exceeds the compaction hard guard")
         try:
             response = await handler(effective_request)
         except ContextOverflowError:
+            pre_tokens = self._request_tokens(effective_request)
+            await self._aemit_compaction_event(self._build_started_payload("reactive", pre_tokens))
             reactive = await self._abuild(list(effective_request.messages), self._thread_id(request), "reactive")
             if reactive is None:
+                await self._aemit_compaction_event(self._build_failed_payload("reactive", "summary_invalid"))
                 raise
-            response = await handler(self._request_with_result(effective_request, reactive))
+            effective_request = self._request_with_result(effective_request, reactive)
+            await self._aemit_compaction_event(self._build_completed_payload(
+                "reactive", pre_tokens, self._request_tokens(effective_request),
+                reactive.original_message_count - len(reactive.preserved_messages),
+            ))
+            response = await handler(effective_request)
             compacted = reactive
         if compacted:
             return self._with_command(response, self._state_command(compacted, self._policy_state(request.state)))

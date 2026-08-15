@@ -1328,3 +1328,43 @@ def test_llm_error_fallback_marked_on_model_end_and_flushed_on_finish() -> None:
     assert proj.status == RunStatus.ERROR
     assert proj.finish_reason == "llm_error_fallback"
     assert proj.error_code == "RateLimitError"
+
+
+def test_noesis_compaction_event_emits_run_status_sse() -> None:
+    """noesis_compaction custom event → run-status SSE（compacting / running）。"""
+    bridge = LangGraphSseBridge("sess-compact-evt")
+    builder = AssistantMessageBuilder(session_id="sess-compact-evt", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    # started
+    lines = bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_compaction",
+         "data": {"compaction_type": "started", "mode": "auto", "message": "正在压缩对话上下文…", "pre_tokens": 180000}},
+        builder, ctx,
+    )
+    objs = _data_json_objects("".join(lines))
+    started = next(o for o in objs if o["type"] == "run-status")
+    assert started["status"] == "compacting"
+    assert started["mode"] == "auto"
+
+    # completed
+    lines = bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_compaction",
+         "data": {"compaction_type": "completed", "mode": "auto", "message": "已压缩 16 条对话历史", "pre_tokens": 180000, "post_tokens": 50000, "messages_summarized": 16}},
+        builder, ctx,
+    )
+    objs = _data_json_objects("".join(lines))
+    completed = next(o for o in objs if o["type"] == "run-status")
+    assert completed["status"] == "running"
+    assert completed["messages_summarized"] == 16
+
+    # failed
+    lines = bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_compaction",
+         "data": {"compaction_type": "failed", "mode": "auto", "reason": "summary_invalid"}},
+        builder, ctx,
+    )
+    objs = _data_json_objects("".join(lines))
+    failed = next(o for o in objs if o["type"] == "run-status")
+    assert failed["status"] == "running"
+    assert failed["reason"] == "summary_invalid"

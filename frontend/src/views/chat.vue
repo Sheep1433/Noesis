@@ -893,6 +893,8 @@ const sseStream = useSSEStream({
     lastRunStatusNotice = status
     if (status === 'retrying') {
       retryingLabel.value = message || '连接中断，正在重试'
+    } else if (status === 'compacting') {
+      retryingLabel.value = message || '正在压缩对话上下文…'
     } else if (status === 'interrupted') {
       window.$ModalMessage.warning(message || '服务中断，本轮生成未完成')
     } else if (status === 'disconnected') {
