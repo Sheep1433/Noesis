@@ -82,25 +82,19 @@ model:
   #     type: deepseek
   #     name: deepseek-v4-flash
   #     base_url: https://api.deepseek.com/v1
-  #     limit:
-  #       context: 200000
-  #       output: 128000
+  #     context_window: 200000
   #   - id: qwen-plus
   #     label: Qwen Plus（DashScope）
   #     type: qwen
   #     name: qwen-plus
   #     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  #     limit:
-  #       context: 129024
-  #       output: 8192
+  #     context_window: 129024
   #   - id: claude-haiku
   #     label: Claude Haiku 4.5
   #     type: anthropic
   #     name: claude-haiku-4-5-20251001
   #     base_url: https://api.anthropic.com
-  #     limit:
-  #       context: 200000
-  #       output: 8192
+  #     context_window: 200000
 
   request_timeout: 120
   max_retries: 2
