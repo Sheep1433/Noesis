@@ -293,6 +293,8 @@
 - **运行时**：`create_noesis_agent(model_id=...)` 将 `model_id` 传入 `ContextLifecycleMiddleware`；它独占压缩判断并生成 `ContextSnapshot`，`RuntimeTelemetryMiddleware` 只读取 snapshot。压缩触发默认 `trigger_tokens: 0` + `trigger_fraction × limit.context`。
 - **API**：`GET /api/models` 每项返回解析后的 `limit` 对象；embedding/rerank 配置未改。
 
+**2026-08-14 设计校正：** 配置字段应明确表达模型的 `contextWindow`，只用于上下文圆环、压缩阈值和输入容量判断；不要再用含义模糊的 `limit` 同时承载输出上限。输出长度应由 provider/model 的 `max_tokens` 或等价运行时参数控制，并为上下文保留空间；输入窗口和输出预算是两个不同约束。
+
 ## 2026-07-11 — sandbox-runner 残留容器 409 修复
 
 - **现象**：zzqroot 重部署 compose 后 `SUPER_AGENT_QA` 对话无正文；backend 报 `创建用户沙箱失败 HTTP 503`，Docker 409 同名容器已存在（`Exited` 状态）。
