@@ -8,10 +8,10 @@ const API_BASE = `${location.origin}/api/models`
 export interface ChatModelOption {
   id: string
   label: string
-  model_name: string
   model_type: string
   is_default: boolean
   supports_vision?: boolean
+  context_window?: number
 }
 
 export interface ChatModelCatalog {
