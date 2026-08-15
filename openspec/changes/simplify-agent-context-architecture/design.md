@@ -127,6 +127,7 @@ ToolResultBudgetMiddleware                # Noesis
 → CompactionMiddleware                    # Noesis，组合 DeepAgents engine
 → configured ModelCallLimitMiddleware     # LangChain，可选
 → configured ToolCallLimitMiddleware      # LangChain，可选
+→ LLMErrorHandlingMiddleware              # Noesis 自研，替代 LangChain ModelRetryMiddleware
 → Provider PromptCachingMiddleware        # 上游/provider adapter，可选
 → HumanInTheLoopMiddleware                # LangChain，可选
 → Provider
@@ -138,7 +139,7 @@ ToolResultBudgetMiddleware                # Noesis
 - ReadBeforeWrite 位于 Filesystem 外层，能够观察 read/write/edit 结果以及 backend 异常。
 - Skills、Memory、DynamicContext、DurableContext、DeferredToolFilter 和 PatchToolCalls 都位于 Compaction 外层，使 Compaction 看到最终 system/messages/tools。
 - ToolResultBudget 先执行不调用模型的 Tool Result 减重，Compaction 再判断是否需要摘要。
-- 瞬时 model retry 位于 Provider SDK/adapter；`ContextOverflowError` 返回 Compaction，不由普通 retry 捕获。
+- LLMErrorHandlingMiddleware 位于 call limits 与 Provider 之间，在 Compaction 之后重试 LLM 调用；`ContextOverflowError` 不由此中间件捕获，交回 Compaction 处理。
 - HITL 只影响工具执行。ToolFailure 必须放过 LangGraph 控制异常、用户取消和 HITL interrupt。
 
 ### 4. 上下文管理分为稳定来源与 conversation
@@ -312,7 +313,7 @@ DeepAgents `0.6.12` 没有公开的 state-builder callback；显式 conversation
 
 `ToolResultBudgetMiddleware`：对聚合结果执行确定性 content replacement，保存 artifact path、synopsis、hash 和 replacement record；resume 后保持相同决策。Filesystem/artifact 处理后仍超限时执行最终文本兜底，不改变 status/category/outcome。
 
-不保留 `SafeModelRetryMiddleware`。瞬时 HTTP 错误由 Provider SDK/adapter 在流式 body 开始前重试；context overflow 交回 Compaction。禁止在 inner handler 中偷偷执行 `empty_after_tools` 第二次调用。
+`LLMErrorHandlingMiddleware`（自研，替代 LangChain `ModelRetryMiddleware`）：瞬时 LLM 错误（429 限流、连接超时等）在流式 body 开始前退避重试；重试耗尽后返回带 `noesis_error_fallback=True` 标记的降级 AIMessage，由 projection 终态检查翻译为 run error（而非静默降级为正常回复）。LangChain 原生 `ModelRetryMiddleware` 不知道 SSE 是否已产生可见 token、也不知道工具副作用边界，异常后可能重放 model step 导致重复输出，因此不直接使用。context overflow 不由此中间件捕获，交回 Compaction 处理。禁止在 inner handler 中偷偷执行 `empty_after_tools` 第二次调用。
 
 普通 model/tool call limits 使用 LangChain；语义不满足时才替换为 Noesis 实现。
 
@@ -358,6 +359,7 @@ Noesis 不增加第二个 Provider adapter。`PatchToolCallsMiddleware` 只负�
 | consecutive failure breaker | Compaction |
 | post-compact stable source rebuild | 各 stable-source middleware重新执行 |
 | subagent 默认 isolated | 上游 SubAgentMiddleware + `private_state_keys`；fork/resume 待上游公开 state-builder hook |
+| LLM error retry、circuit breaker、降级标记 | LLMErrorHandlingMiddleware（自研） |
 | provider prompt cache | Provider PromptCaching middleware |
 | provider message/schema canonicalization | Provider request adapter + PatchToolCalls |
 | usage/context visualization | stream + internal context events |
