@@ -5,7 +5,7 @@ import asyncio
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from noesis.chat.delivery.bus import RunEventBus
-from noesis.chat.delivery.events import RunEvent, RunOrigin, RunStarted
+from noesis.chat.delivery.events import RunEvent, RunOrigin
 from noesis.chat.delivery.sse import encode_filtered, iter_sse_from_bus
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.bridge import (
@@ -53,16 +53,6 @@ class RunOrchestrator:
         mapper = RuntimeEventMapper(bridge)
         sse_q = self.bus.subscribe_queue(run_id)
 
-        await self.bus.publish(
-            run_id,
-            RunStarted(
-                run_id=run_id,
-                session_id=session_id,
-                assistant_message_id=bridge.assistant_message_id,
-                origin=origin,
-            ),
-        )
-
         producer = asyncio.create_task(
             self._produce(
                 agent_generator,
@@ -109,15 +99,6 @@ class RunOrchestrator:
         """无 SSE 订阅者的跑次：仍经 Bus + PersistSink on_events，不编码 keepalive。"""
         run_id = bridge_run_id(session_id, bridge.assistant_message_id)
         mapper = RuntimeEventMapper(bridge)
-        await self.bus.publish(
-            run_id,
-            RunStarted(
-                run_id=run_id,
-                session_id=session_id,
-                assistant_message_id=bridge.assistant_message_id,
-                origin=origin,
-            ),
-        )
         try:
             await self._produce(
                 agent_generator,

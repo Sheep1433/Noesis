@@ -229,7 +229,6 @@ class LangGraphSseBridge:
         self._current_text_parent_task_call_id: Optional[str] = None
         self._current_reasoning_parent_task_call_id: Optional[str] = None
         self._finish_emitted = False
-        self._persist_tick = False
         self.last_finish_reason: str = ""
         self.last_error_message: str = ""
         self._current_attempt_id = 1
@@ -377,7 +376,7 @@ class LangGraphSseBridge:
             payload["langfuse_session_id"] = self.session_id
         out.append(_format_sse("message-start", payload))
 
-    def _close_text(self, out: List[str], *, record_checkpoint: bool = True) -> None:
+    def _close_text(self, out: List[str]) -> None:
         if not self._text_open or not self._current_text_part_id:
             return
         out.append(_format_sse("text-end", {
@@ -388,10 +387,8 @@ class LangGraphSseBridge:
         self._text_open = False
         self._current_text_part_id = None
         self._current_text_parent_task_call_id = None
-        if record_checkpoint:
-            self._persist_tick = True
 
-    def _close_reasoning(self, out: List[str], *, record_checkpoint: bool = True) -> None:
+    def _close_reasoning(self, out: List[str]) -> None:
         if not self._reasoning_open or not self._current_reasoning_part_id:
             return
         out.append(_format_sse("reasoning-end", {
@@ -403,21 +400,12 @@ class LangGraphSseBridge:
         self._reasoning_open = False
         self._current_reasoning_part_id = None
         self._current_reasoning_parent_task_call_id = None
-        if record_checkpoint:
-            self._persist_tick = True
 
     @staticmethod
     def _sse_parent_field(parent_task_call_id: Optional[str]) -> Dict[str, str]:
         if parent_task_call_id:
             return {"parent_task_call_id": parent_task_call_id}
         return {}
-
-    def consume_persist_tick(self) -> bool:
-        """供 QaService 在 part 边界将 builder 快照写库；消费后清零。"""
-        if self._persist_tick:
-            self._persist_tick = False
-            return True
-        return False
 
     def consume_session_context_tick(self) -> bool:
         if self._session_context_tick:
@@ -535,7 +523,6 @@ class LangGraphSseBridge:
         if truncated is not None:
             payload["truncated"] = truncated
         out.append(_format_sse("tool-output-available", payload))
-        self._persist_tick = True
 
     def _emit_finish(
         self,
@@ -545,8 +532,8 @@ class LangGraphSseBridge:
         ctx: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._ensure_started(out)
-        self._close_reasoning(out, record_checkpoint=False)
-        self._close_text(out, record_checkpoint=False)
+        self._close_reasoning(out)
+        self._close_text(out)
         if builder is not None and ctx is not None:
             self._flush_text_buffer(builder, ctx)
         self.last_finish_reason = str(payload.get("finish_reason") or "stop")
@@ -721,8 +708,8 @@ class LangGraphSseBridge:
 
         if t in ("__tw_abort__", "abort"):
             self._ensure_started(out)
-            self._close_reasoning(out, record_checkpoint=False)
-            self._close_text(out, record_checkpoint=False)
+            self._close_reasoning(out)
+            self._close_text(out)
             finish_reason = str(item.get("finish_reason") or "abort")
             if finish_reason == "error":
                 out.append(_format_sse("error", {
@@ -745,8 +732,8 @@ class LangGraphSseBridge:
 
         if t in ("__tw_error__", "error"):
             self._ensure_started(out)
-            self._close_reasoning(out, record_checkpoint=False)
-            self._close_text(out, record_checkpoint=False)
+            self._close_reasoning(out)
+            self._close_text(out)
             msg = sanitize_stream_error(
                 str(item.get("error") or item.get("content") or "unknown error")
             )
@@ -858,7 +845,6 @@ class LangGraphSseBridge:
                                 "interrupt_id": payload.get("interrupt_id"),
                             },
                         )
-            self._persist_tick = True
             out.append(_format_sse("hitl-required", payload))
             return
 
@@ -869,7 +855,6 @@ class LangGraphSseBridge:
             payload.setdefault("message_id", self.assistant_message_id)
             if t == "phase-end":
                 payload.setdefault("ok", True)
-                self._persist_tick = True
             out.append(_format_sse(str(t), payload))
             return
 
@@ -902,8 +887,8 @@ class LangGraphSseBridge:
             return
 
         if lc_kind == "on_chat_model_start":
-            self._close_reasoning(out, record_checkpoint=False)
-            self._close_text(out, record_checkpoint=False)
+            self._close_reasoning(out)
+            self._close_text(out)
             # 标记该 scope 下一次 on_tool_start 要 mint 新 step_id（并行工具分组）。
             scope = self._resolve_parent_task_call_id(item, ctx) or "root"
             ctx.setdefault("pending_model_step_scopes", set()).add(scope)
@@ -1165,7 +1150,6 @@ class LangGraphSseBridge:
             payload["type"] = "retrieval-results-available"
             payload["message_id"] = self.assistant_message_id
             out.append(_format_sse("retrieval-results-available", payload))
-            self._persist_tick = True
 
     def _on_tool_error(self, item: Dict[str, Any], builder: Optional[AssistantMessageBuilder],
                        ctx: Dict[str, Any], out: List[str]) -> None:

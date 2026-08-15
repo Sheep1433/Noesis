@@ -152,8 +152,6 @@ class RunSnapshotResponse(BaseModel):
     finish_reason: Optional[str] = Field(None, description='终态原因')
     error_code: Optional[str] = Field(None, description='稳定错误码')
     message: Optional[str] = Field(None, description='用户安全提示')
-    retry_attempt: int = Field(0, description='当前重试次数')
-    retry_max: int = Field(0, description='最大重试次数')
 
 
 class SendMessageResponse(BaseModel):

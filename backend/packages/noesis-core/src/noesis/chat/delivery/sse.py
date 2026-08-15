@@ -126,10 +126,9 @@ def parse_sse_line_to_event(line: str) -> List[RunEvent]:
     if event_name == "finish":
         reason = str(data.get("finish_reason") or "stop")
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-        attribution = data.get("attribution") if isinstance(data.get("attribution"), dict) else {}
         if reason == "hitl_pending":
-            return [RunPaused(reason="hitl_pending", finish_reason=reason, usage=usage, attribution=attribution)]
-        return [RunCompleted(finish_reason=reason, usage=usage, attribution=attribution)]
+            return [RunPaused(reason="hitl_pending", finish_reason=reason, usage=usage)]
+        return [RunCompleted(finish_reason=reason, usage=usage)]
 
     if event_name == "abort":
         return [RunAborted(reason=str(data.get("reason") or "abort"))]

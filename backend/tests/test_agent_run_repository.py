@@ -72,8 +72,6 @@ async def test_stale_checkpoint_does_not_touch_assistant() -> None:
         snapshot={"parts": []},
         content={"parts": []},
         attempt_id=1,
-        retry_attempt=0,
-        retry_max=0,
         status=RunStatus.RUNNING,
         finish_reason=None,
         updated_at=1,

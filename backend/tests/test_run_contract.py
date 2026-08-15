@@ -18,10 +18,8 @@ from noesis.chat.delivery.events import (
     RunCompleted,
     RunError,
     RunPaused,
-    RunStarted,
     StreamDone,
     WireFrame,
-    wire_frame,
 )
 from noesis.chat.delivery.sse import (
     encode_run_event,
@@ -41,12 +39,6 @@ from noesis.chat.runs.manager import SequencedRunEvent
 
 class TestRunEventContract:
     """typed RunEvent union 成员与字段。"""
-
-    def test_wire_frame_carries_event_name_and_data(self) -> None:
-        event = wire_frame("text-delta", {"text_delta": "hello"})
-        assert event.event == "text-delta"
-        assert event.data["text_delta"] == "hello"
-        assert event.data["type"] == "text-delta"
 
     def test_run_completed_carries_finish_reason_and_usage(self) -> None:
         event = RunCompleted(finish_reason="stop", usage={"input": 10, "output": 20})
@@ -99,8 +91,6 @@ class TestRunSnapshotContract:
             finish_reason=None,
             error_code=None,
             user_error_message=None,
-            retry_attempt=0,
-            retry_max=0,
             pending_hitl=None,
             updated_at=1700000000000,
         )
@@ -122,8 +112,6 @@ class TestRunSnapshotContract:
             "finish_reason",
             "error_code",
             "message",
-            "retry_attempt",
-            "retry_max",
             "pending_hitl",
             "updated_at",
         }
@@ -172,7 +160,7 @@ class TestSSEFrameContract:
         assert line == "data: [DONE]\n\n"
 
     def test_encode_sequenced_event_injects_run_metadata(self) -> None:
-        event = wire_frame("text-delta", {"text_delta": "hello"})
+        event = WireFrame(event="text-delta", data={"type": "text-delta", "text_delta": "hello"})
         envelope = SequencedRunEvent(
             run_id="run-1",
             sequence=7,
@@ -214,7 +202,7 @@ class TestSSEFrameContract:
         assert data["finish_reason"] == "stop"
 
     def test_parse_sse_roundtrip_text_delta(self) -> None:
-        original = wire_frame("text-delta", {"text_delta": "roundtrip"})
+        original = WireFrame(event="text-delta", data={"type": "text-delta", "text_delta": "roundtrip"})
         lines = encode_run_event(original)
         events = parse_sse_line_to_event(lines[0])
         assert len(events) == 1

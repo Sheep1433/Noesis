@@ -44,11 +44,7 @@ class RunProjection:
     finish_reason: str | None = None
     error_code: str | None = None
     user_error_message: str | None = None
-    retry_attempt: int = 0
-    retry_max: int = 0
     cancel_requested: bool = False
-    visible_output_started: bool = False
-    side_effect_boundary_crossed: bool = False
     pending_hitl: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
@@ -70,11 +66,7 @@ class RunProjection:
             finish_reason=self.finish_reason,
             error_code=self.error_code,
             user_error_message=self.user_error_message,
-            retry_attempt=self.retry_attempt,
-            retry_max=self.retry_max,
             cancel_requested=self.cancel_requested,
-            visible_output_started=self.visible_output_started,
-            side_effect_boundary_crossed=self.side_effect_boundary_crossed,
             pending_hitl=copy.deepcopy(self.pending_hitl),
         )
         cloned.builder.load_from_content_dict(copy.deepcopy(self.builder.to_dict()))
@@ -110,9 +102,6 @@ class RunProjection:
             data = event.data
             if event.event == "text-delta":
                 delta = data.get("text_delta") or data.get("delta") or data.get("content")
-                self.visible_output_started = self.visible_output_started or bool(
-                    delta
-                )
                 self.builder.append_text_delta(
                     str(delta or ""),
                     parent_task_call_id=data.get("parent_task_call_id"),
@@ -120,15 +109,11 @@ class RunProjection:
                 )
             elif event.event == "reasoning-delta":
                 delta = data.get("text_delta") or data.get("delta") or data.get("content")
-                self.visible_output_started = self.visible_output_started or bool(
-                    delta
-                )
                 self.builder.append_reasoning_delta(
                     str(delta or ""),
                     parent_task_call_id=data.get("parent_task_call_id"),
                 )
             elif event.event in {"tool-call-start", "tool-input-start"}:
-                self.side_effect_boundary_crossed = True
                 if event.event == "tool-input-start":
                     return True
                 self.builder.append_tool(
@@ -139,7 +124,6 @@ class RunProjection:
                     state=data.get("state") or ToolState.RUNNING,
                 )
             elif event.event == "tool-input-available":
-                self.side_effect_boundary_crossed = True
                 self.builder.append_tool(
                     str(data.get("tool_name") or data.get("name") or "tool"),
                     data.get("input") if isinstance(data.get("input"), dict) else {},
@@ -199,10 +183,7 @@ class RunProjection:
                     self.attempt_id = event_attempt_id
                 if status in {item.value for item in RunStatus}:
                     self.status = RunStatus(status)
-                self.retry_attempt = int(data.get("attempt") or self.retry_attempt)
-                self.retry_max = int(data.get("max_attempts") or self.retry_max)
         elif isinstance(event, HitlRequired):
-            self.side_effect_boundary_crossed = True
             self.status = RunStatus.HITL_PENDING
             self.pending_hitl = dict(event.payload)
             for action in event.payload.get("action_requests") or []:
@@ -256,17 +237,6 @@ class RunProjection:
             self.user_error_message = event.message
         return True
 
-    def can_retry_model(self) -> bool:
-        return not self.visible_output_started and not self.side_effect_boundary_crossed
-
-    def begin_retry_attempt(self) -> int:
-        if not self.can_retry_model():
-            raise ValueError("model retry crossed output or side-effect boundary")
-        self.attempt_id += 1
-        self.retry_attempt = self.attempt_id
-        self.status = RunStatus.RETRYING
-        return self.attempt_id
-
     def begin_hitl_resume(self) -> None:
         if self.status != RunStatus.HITL_PENDING:
             raise ValueError("run is not waiting for HITL")
@@ -318,8 +288,6 @@ class RunProjection:
             finish_reason=self.finish_reason,
             error_code=self.error_code,
             user_error_message=self.user_error_message,
-            retry_attempt=self.retry_attempt,
-            retry_max=self.retry_max,
             pending_hitl=self.pending_hitl,
             updated_at=_now_ms(),
         )

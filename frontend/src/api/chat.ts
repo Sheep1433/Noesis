@@ -149,8 +149,6 @@ export interface AgentRunSnapshot {
   finish_reason?: AgentStopReason | null
   error_code?: string | null
   message?: string | null
-  retry_attempt: number
-  retry_max: number
   pending_hitl?: {
     interrupt_id?: string
     kind?: string

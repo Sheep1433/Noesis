@@ -359,8 +359,6 @@ async def run_channel_agent(
                 status=RunStatus.QUEUED.value,
                 last_sequence=0,
                 attempt_id=1,
-                retry_attempt=0,
-                retry_max=0,
                 owner_instance_id=f"channel:{origin}",
                 snapshot={"parts": []},
                 created_at=now,
@@ -455,6 +453,7 @@ async def run_channel_agent(
             checkpoint_policy=lambda event, _sequence: checkpoint_sink.checkpoint_kind(event),
             checkpoint_handler=persist_checkpoint,
             terminal_handler=RunService._persist_terminal_candidate,
+            max_run_duration_seconds=StreamConfig.run_max_duration_seconds_super_agent,
         )
         await db.execute(
             TAgentRun.__table__.update()

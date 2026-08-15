@@ -15,7 +15,6 @@ from noesis.chat.runs import (
     RunStatus,
     SequencedRunEvent,
     SlowSubscriber,
-    StaleAttemptEvent,
 )
 
 
@@ -370,36 +369,6 @@ async def test_terminal_retention_releases_run_handle() -> None:
     await asyncio.sleep(0.03)
     with pytest.raises(KeyError):
         manager.get("run-1")
-
-
-@pytest.mark.asyncio
-async def test_stale_attempt_event_is_dropped_before_sequence_assignment() -> None:
-    release = asyncio.Event()
-
-    async def producer(publish):
-        await release.wait()
-
-    manager = RunManager()
-    handle = await manager.start(
-        run_id="run-1",
-        session_id="session-1",
-        user_id="user-1",
-        assistant_message_id="message-1",
-        snapshot_provider=_snapshot(),
-        producer=producer,
-    )
-    await manager.advance_attempt("run-1", 2)
-    with pytest.raises(StaleAttemptEvent):
-        await manager.publish_attempt("run-1", "late", attempt_id=1)
-    assert handle.last_sequence == 0
-    current = await manager.publish_attempt("run-1", "current", attempt_id=2)
-    assert current.sequence == 1
-    release.set()
-    await handle.producer_task
-    metrics = manager.metrics_snapshot()
-    assert metrics["stale_attempt_events"] == 1
-    assert metrics["published_events"] == 1
-    assert metrics["event_buffer_bytes"] > 0
 
 
 @pytest.mark.asyncio

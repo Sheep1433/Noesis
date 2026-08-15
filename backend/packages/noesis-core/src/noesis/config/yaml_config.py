@@ -195,6 +195,7 @@ class StreamYamlSection(BaseModel):
     run_max_subscriptions_global: int = Field(default=500, gt=0)
     run_terminal_retention_seconds: float = Field(default=300.0, ge=0)
     run_max_duration_seconds: float = Field(default=900.0, gt=0)
+    run_max_duration_seconds_super_agent: float = Field(default=1800.0, gt=0)
     run_max_output_bytes: int = Field(default=16 * 1024 * 1024, gt=0)
     run_hitl_pending_timeout_seconds: float = Field(default=86400.0, gt=0)
     run_shutdown_drain_seconds: float = Field(default=10.0, ge=0)

@@ -72,17 +72,6 @@ _TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = {
 }
 
 
-class RunErrorCode(str, Enum):
-    MODEL_STREAM_DISCONNECTED = "MODEL_STREAM_DISCONNECTED"
-    MODEL_RETRY_EXHAUSTED = "MODEL_RETRY_EXHAUSTED"
-    TOOL_TIMEOUT = "TOOL_TIMEOUT"
-    PERSISTENCE_UNAVAILABLE = "PERSISTENCE_UNAVAILABLE"
-    RUN_TIMEOUT = "RUN_TIMEOUT"
-    LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
-    SERVER_RESTART = "SERVER_RESTART"
-    OWNER_UNAVAILABLE = "OWNER_UNAVAILABLE"
-
-
 class InvalidRunTransition(ValueError):
     """run 状态转换违反领域状态机。"""
 
@@ -112,8 +101,6 @@ class RunSnapshot:
     finish_reason: Optional[str] = None
     error_code: Optional[str] = None
     user_error_message: Optional[str] = None
-    retry_attempt: int = 0
-    retry_max: int = 0
     pending_hitl: Optional[dict[str, Any]] = None
     updated_at: Optional[int] = None
 
@@ -136,8 +123,6 @@ class RunSnapshot:
             "finish_reason": self.finish_reason,
             "error_code": self.error_code,
             "message": self.user_error_message,
-            "retry_attempt": self.retry_attempt,
-            "retry_max": self.retry_max,
             "pending_hitl": self.pending_hitl,
             "updated_at": self.updated_at,
         }

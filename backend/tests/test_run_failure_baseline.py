@@ -22,7 +22,6 @@ from noesis.chat.delivery.events import (
     RunCompleted,
     StreamDone,
     WireFrame,
-    wire_frame,
 )
 from noesis.services.persist_sink import PersistSink
 from noesis.chat.runs import (
@@ -32,7 +31,6 @@ from noesis.chat.runs import (
     RunSnapshot,
     RunStatus,
     SequencedRunEvent,
-    StaleAttemptEvent,
     StaleProducerGeneration,
 )
 from noesis.chat.runs.manager import PersistWriter
@@ -63,7 +61,7 @@ def _snapshot_provider(projection: RunProjection):
 
 
 def _text_delta(text: str) -> WireFrame:
-    return wire_frame("text-delta", {"text_delta": text})
+    return WireFrame(event="text-delta", data={"type": "text-delta", "text_delta": text})
 
 
 # ---------------------------------------------------------------------------
@@ -433,39 +431,6 @@ async def test_persist_writer_keeps_only_latest_pending_checkpoint() -> None:
 # ---------------------------------------------------------------------------
 # §1.4  stale producer generation（Phase 2 已修复）
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_stale_attempt_late_delta_is_rejected() -> None:
-    """验证 attempt_id 拒距机制：advance_attempt 后旧 attempt 事件被拒绝。"""
-    projection = _make_projection()
-    manager = RunManager()
-
-    release = asyncio.Event()
-
-    async def producer(publish) -> None:
-        await release.wait()
-
-    handle = await manager.start(
-        run_id="run-1",
-        session_id="session-1",
-        user_id="user-1",
-        assistant_message_id="msg-1",
-        snapshot_provider=_snapshot_provider(projection),
-        producer=producer,
-        state=projection,
-    )
-
-    await manager.advance_attempt("run-1", 2)
-
-    with pytest.raises(StaleAttemptEvent):
-        await manager.publish_attempt("run-1", _text_delta("late"), attempt_id=1)
-
-    assert handle.last_sequence == 0
-    assert manager.metrics_snapshot()["stale_attempt_events"] == 1
-
-    release.set()
-    await handle.producer_task
 
 
 @pytest.mark.asyncio

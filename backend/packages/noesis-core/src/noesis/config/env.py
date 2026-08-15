@@ -145,6 +145,7 @@ class StreamSettings:
     run_max_subscriptions_global: int
     run_terminal_retention_seconds: float
     run_max_duration_seconds: float
+    run_max_duration_seconds_super_agent: float
     run_max_output_bytes: int
     run_hitl_pending_timeout_seconds: float
     run_shutdown_drain_seconds: float
@@ -445,6 +446,7 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
         run_max_subscriptions_global=stream.run_max_subscriptions_global,
         run_terminal_retention_seconds=stream.run_terminal_retention_seconds,
         run_max_duration_seconds=stream.run_max_duration_seconds,
+        run_max_duration_seconds_super_agent=stream.run_max_duration_seconds_super_agent,
         run_max_output_bytes=stream.run_max_output_bytes,
         run_hitl_pending_timeout_seconds=stream.run_hitl_pending_timeout_seconds,
         run_shutdown_drain_seconds=stream.run_shutdown_drain_seconds,

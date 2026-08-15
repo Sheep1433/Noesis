@@ -415,6 +415,7 @@ function stopProcessingClock() {
   }
   clearInterval(processingTimer)
   processingTimer = null
+  retryingLabel.value = ''
 }
 
 function processingTimeText(startedAt?: number): string {
@@ -885,6 +886,7 @@ async function loadSessionContext(sessionId: string) {
 
 let lastRunStatusNotice = ''
 const reconnectAvailable = ref(false)
+const retryingLabel = ref('')
 
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
 const sseStream = useSSEStream({
@@ -894,12 +896,13 @@ const sseStream = useSSEStream({
     }
     lastRunStatusNotice = status
     if (status === 'retrying') {
-      window.$ModalMessage.info(message || '连接中断，正在重试')
+      retryingLabel.value = message || '连接中断，正在重试'
     } else if (status === 'interrupted') {
       window.$ModalMessage.warning(message || '服务中断，本轮生成未完成')
     } else if (status === 'disconnected') {
       reconnectAvailable.value = true
     } else if (status === 'running') {
+      retryingLabel.value = ''
       startProcessingClock()
       reconnectAvailable.value = false
       lastRunStatusNotice = ''
@@ -2612,7 +2615,7 @@ function onComposerPaste(e: ClipboardEvent) {
                             data-testid="streaming-indicator"
                             section
                             :divided="buildDisplayParts(item.messageContent.parts).length > 0"
-                            :label="buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成'"
+                            :label="retryingLabel || (buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成')"
                           />
                         </div>
                         <div

@@ -127,10 +127,6 @@ class PersistSink:
             return "coalescible"
         return None
 
-    def should_checkpoint(self, event: RunEvent, *, now: float | None = None) -> bool:
-        """保留给 TEST_CASE_QA 旧边界的布尔接口。"""
-        return self.checkpoint_kind(event, now=now) is not None
-
     def final_decision(self) -> PersistDecision:
         if self.paused_hitl and (
             self.terminal is None or self.terminal.kind == "completed"

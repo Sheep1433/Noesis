@@ -124,8 +124,6 @@ class TAgentRun(Base):
     finish_reason: Mapped[Optional[str]] = mapped_column(VARCHAR(40), nullable=True)
     error_code: Mapped[Optional[str]] = mapped_column(VARCHAR(80), nullable=True)
     user_error_message: Mapped[Optional[str]] = mapped_column(VARCHAR(500), nullable=True)
-    retry_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    retry_max: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     owner_instance_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100), nullable=True)
     snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

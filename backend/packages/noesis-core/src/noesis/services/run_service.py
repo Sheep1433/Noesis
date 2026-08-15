@@ -183,8 +183,6 @@ class RunService:
             status=RunStatus.QUEUED.value,
             last_sequence=0,
             attempt_id=1,
-            retry_attempt=0,
-            retry_max=0,
             owner_instance_id=_OWNER_INSTANCE_ID,
             snapshot={"parts": []},
             created_at=now,
@@ -411,6 +409,11 @@ class RunService:
             checkpoint_policy=checkpoint_policy,
             checkpoint_handler=persist_checkpoint,
             terminal_handler=cls._persist_terminal_candidate,
+            max_run_duration_seconds=(
+                StreamConfig.run_max_duration_seconds_super_agent
+                if run.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]
+                else None
+            ),
         )
         async with pg_manager.get_async_session_context() as state_db:
             await AgentRunRepository(state_db).compare_and_set_status(
@@ -448,8 +451,6 @@ class RunService:
                         snapshot=persisted,
                         content=content,
                         attempt_id=snapshot.attempt_id,
-                        retry_attempt=snapshot.retry_attempt,
-                        retry_max=snapshot.retry_max,
                         status=snapshot.status,
                         finish_reason=snapshot.finish_reason,
                         updated_at=_now_ms(),
@@ -690,8 +691,6 @@ class RunService:
             finish_reason=row.finish_reason,
             error_code=row.error_code,
             user_error_message=row.user_error_message,
-            retry_attempt=row.retry_attempt,
-            retry_max=row.retry_max,
             pending_hitl=pending_hitl,
             updated_at=row.updated_at,
         )
@@ -726,8 +725,6 @@ class RunService:
                 finish_reason=row.finish_reason,
                 error_code=row.error_code,
                 user_error_message=row.user_error_message,
-                retry_attempt=row.retry_attempt,
-                retry_max=row.retry_max,
                 pending_hitl=pending_hitl,
                 updated_at=row.updated_at,
             )
@@ -775,8 +772,6 @@ class RunService:
                 finish_reason=row.finish_reason,
                 error_code=row.error_code,
                 user_error_message=row.user_error_message,
-                retry_attempt=row.retry_attempt,
-                retry_max=row.retry_max,
                 pending_hitl=pending_hitl,
                 updated_at=row.updated_at,
             )

@@ -28,6 +28,7 @@ from noesis.agents.middlewares.dynamic_context_middleware import (
     DynamicContextState,
     render_dynamic_block,
 )
+from noesis.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
 from noesis.agents.middlewares.read_before_write_middleware import (
     FileFingerprint,
     ReadBeforeWriteMiddleware,
@@ -68,6 +69,7 @@ __all__ = [
     "DynamicContextProvider",
     "DynamicContextState",
     "FileFingerprint",
+    "LLMErrorHandlingMiddleware",
     "ReadBeforeWriteMiddleware",
     "RefreshingMemoryMiddleware",
     "RefreshingSkillsMiddleware",

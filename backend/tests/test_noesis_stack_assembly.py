@@ -41,6 +41,7 @@ def test_common_stack_exact_order() -> None:
         "DynamicContextMiddleware",
         "PatchToolCallsMiddleware",
         "CompactionMiddleware",
+        "LLMErrorHandlingMiddleware",
     ]
 
 
@@ -90,6 +91,7 @@ def test_full_super_stack_exact_order() -> None:
         "CompactionMiddleware",
         "ModelCallLimitMiddleware",
         "ToolCallLimitMiddleware",
+        "LLMErrorHandlingMiddleware",
         "HumanInTheLoopMiddleware",
     ]
     filesystem = next(item for item in stack if type(item).__name__ == "FilesystemMiddleware")

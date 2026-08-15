@@ -268,6 +268,7 @@ class RunHandle:
     delivery_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     delivery_failures: dict[str, BaseException] = field(default_factory=dict)
     terminal_future: asyncio.Future[RunStatus] | None = None
+    max_run_duration_seconds: float = 0.0
     cleanup_task: asyncio.Task[None] | None = None
     watchdog_task: asyncio.Task[None] | None = None
     hitl_timeout_task: asyncio.Task[None] | None = None
@@ -379,6 +380,7 @@ class RunManager:
         checkpoint_policy: CheckpointPolicy | None = None,
         terminal_handler: TerminalHandler | None = None,
         checkpoint_handler: CheckpointHandler | None = None,
+        max_run_duration_seconds: float | None = None,
     ) -> RunHandle:
         loop = asyncio.get_running_loop()
         handle = RunHandle(
@@ -390,6 +392,11 @@ class RunManager:
             attempt_id=attempt_id,
             snapshot_provider=snapshot_provider,
             terminal_future=loop.create_future(),
+            max_run_duration_seconds=(
+                max_run_duration_seconds
+                if max_run_duration_seconds is not None
+                else self.max_run_duration_seconds
+            ),
             state=state,
             limit_handler=limit_handler,
             checkpoint_policy=checkpoint_policy,
@@ -470,7 +477,7 @@ class RunManager:
         )
 
     async def _expire_running_run(self, handle: RunHandle) -> None:
-        await asyncio.sleep(self.max_run_duration_seconds)
+        await asyncio.sleep(handle.max_run_duration_seconds)
         if handle.status in TERMINAL_RUN_STATUSES:
             return
         handle.limit_error = RunDurationExceeded("run duration limit exceeded")
@@ -516,6 +523,10 @@ class RunManager:
             handle.producer_task = asyncio.create_task(
                 self._run_producer(handle, producer, generation), name=f"agent-run-resume:{run_id}"
             )
+            if handle.watchdog_task is None or handle.watchdog_task.done():
+                handle.watchdog_task = asyncio.create_task(
+                    self._expire_running_run(handle), name=f"agent-run-timeout:{run_id}"
+                )
             return handle
 
     @staticmethod
@@ -635,6 +646,9 @@ class RunManager:
                 handle.hitl_timeout_task = asyncio.create_task(
                     self._expire_hitl_pending(handle), name=f"agent-run-hitl-timeout:{run_id}"
                 )
+                if handle.watchdog_task is not None and handle.watchdog_task is not asyncio.current_task():
+                    handle.watchdog_task.cancel()
+                    handle.watchdog_task = None
             if target in TERMINAL_RUN_STATUSES and handle.terminal_future is not None:
                 self._mark_terminal_locked(handle, target)
             return True
@@ -978,13 +992,6 @@ class RunManager:
                     f"stale attempt event: run={run_id} event={attempt_id} current={handle.attempt_id}"
                 )
             return self._assign_and_fanout(handle, event)
-
-    async def advance_attempt(self, run_id: str, attempt_id: int) -> None:
-        handle = self.get(run_id)
-        async with handle.lock:
-            if attempt_id <= handle.attempt_id:
-                raise ValueError("attempt_id must increase")
-            handle.attempt_id = attempt_id
 
     def _trim_buffer(self, handle: RunHandle) -> None:
         while handle.buffer and (

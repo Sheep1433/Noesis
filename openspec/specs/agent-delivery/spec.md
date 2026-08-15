@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定一次 Agent run 的 **Delivery Fan-out 与 Run 生命周期**：内部 typed `RunEvent`、RunHandle 单写入边界、单调 sequence 与原子 snapshot、Run 身份与显式状态机、幂等创建与冲突防止、PersistWriter 落库与重启恢复、模型重试 attempt 隔离与工具取消语义、RunManager 资源上限、SseDelivery（浏览器 SSE）、ChannelAdapter SPI 与绑定、以及 Telegram / 飞书通道运行时。配置/密钥/设置 UI 属于用户设置面（见 `user-settings`）；本能力只消费已持久化配置。代码锚点：`domain/chat/delivery/`、`services/channel_run_service.py`、`domain/chat/runs/`。
+本能力规定一次 Agent run 的 **Delivery Fan-out 与 Run 生命周期**：内部 typed `RunEvent`、RunHandle 单写入边界、单调 sequence 与原子 snapshot、Run 身份与显式状态机、幂等创建与冲突防止、PersistWriter 落库与重启恢复、模型重试 attempt 隔离与工具取消语义、RunManager 资源上限、SseDelivery（浏览器 SSE）、ChannelAdapter SPI 与绑定、以及 Telegram / 飞书通道运行时。配置/密钥/设置 UI 属于用户设置面（见 `user-settings`）；本能力只消费已持久化配置。代码锚点：`backend/packages/noesis-core/src/noesis/chat/delivery/`、`backend/packages/noesis-core/src/noesis/chat/runs/`、`backend/packages/noesis-core/src/noesis/services/run_service.py`、`backend/packages/noesis-core/src/noesis/services/channel_run_service.py`。
 
 ## Requirements
 
@@ -21,9 +21,9 @@
 
 对每个 `run_id`，RunHandle SHALL 支持一个或多个 SseDelivery、ChannelDelivery 并发订阅。PersistWriter SHALL 使用独立 latest-wins 单槽，不得作为可因 queue overflow 注销的普通 subscriber。producer SHALL 由 run 生命周期拥有，任一 Delivery 取消订阅或写失败 SHALL NOT 取消 producer、PersistWriter 或其它 Delivery。只有明确的用户停止、系统 run timeout、持久化阻塞、HITL 终态决策、服务 shutdown 或授权管理操作 MAY 取消 producer。keepalive SHALL 仅由 SseDelivery 注入，SHALL NOT 广播为业务 RunEvent，也 SHALL NOT 推进 run sequence。
 
-#### Scenario: Persist 与多个 SSE 同时订阅
+#### Scenario: PersistWriter 与多个 SSE 同时工作
 
-- **WHEN** 同一 run 注册 PersistSink 与两个浏览器 SseDelivery
+- **WHEN** 同一 run 启用独立 PersistWriter 且两个浏览器 SseDelivery 已订阅
 - **THEN** 两个 SseDelivery SHALL 在 terminal transaction 提交后观察到相同完成事件
 - **AND** PersistWriter SHALL 已先提交权威 terminal
 

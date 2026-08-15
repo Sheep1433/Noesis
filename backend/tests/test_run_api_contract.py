@@ -482,8 +482,6 @@ def test_run_projection_accepts_current_bridge_field_names() -> None:
     parts = projection.builder.to_dict()["parts"]
     assert parts[0]["content"] == "正文"
     assert parts[1]["name"] == "lookup"
-    assert projection.visible_output_started is True
-    assert projection.side_effect_boundary_crossed is True
 
 
 def test_run_projection_discards_late_tool_result_after_cancel() -> None:
@@ -539,45 +537,6 @@ def test_all_qa_types_keep_run_and_assistant_identity(qa_type: str) -> None:
     assert snapshot.run_id == "run-1"
     assert snapshot.assistant_message_id == "message-1"
     assert snapshot.qa_type == qa_type
-
-
-def test_model_retry_only_before_visible_output_or_side_effects() -> None:
-    clean = RunProjection(
-        run_id="run-clean",
-        user_id="user-1",
-        session_id="session-1",
-        assistant_message_id="message-1",
-        qa_type="COMMON_QA",
-    )
-    assert clean.begin_retry_attempt() == 2
-    assert clean.status == RunStatus.RETRYING
-
-    with_text = RunProjection(
-        run_id="run-text",
-        user_id="user-1",
-        session_id="session-1",
-        assistant_message_id="message-2",
-        qa_type="COMMON_QA",
-    )
-    with_text.apply(WireFrame(event="text-delta", data={"delta": "visible"}))
-    with pytest.raises(ValueError, match="side-effect boundary"):
-        with_text.begin_retry_attempt()
-
-    with_tool = RunProjection(
-        run_id="run-tool",
-        user_id="user-1",
-        session_id="session-1",
-        assistant_message_id="message-3",
-        qa_type="COMMON_QA",
-    )
-    with_tool.apply(
-        WireFrame(
-            event="tool-call-start",
-            data={"tool_name": "write", "tool_call_id": "call-1"},
-        )
-    )
-    with pytest.raises(ValueError, match="side-effect boundary"):
-        with_tool.begin_retry_attempt()
 
 
 def test_projection_ignores_old_attempt_delta() -> None:

@@ -218,7 +218,7 @@ Agent runtime SHALL 支持独立摘要模型的 summarization offload；SHALL �
 
 ### Requirement: 流式问答入口 SHALL 经 Run Fan-out 投递
 
-`POST /api/chat/runs`（或本 change 约定的等价创建端点）SHALL 创建由 RunManager 持有的 producer，并注册 PersistSink；独立 SSE 订阅端点 SHALL 通过 RunEvent 总线的 SseDelivery 输出。问答编排 SHALL NOT 在单一 HTTP generator 内同时拥有 producer、落库和客户端生命周期。
+`POST /api/chat/runs` SHALL 创建由 RunManager 持有的 producer，并为该 Run 配置独立 PersistWriter；独立 SSE 订阅端点 SHALL 从 RunHandle subscription 消费带 sequence 的 RunEvent，并仅在 SSE delivery 边界编码。问答编排 SHALL NOT 在单一 HTTP generator 内同时拥有 producer、落库和客户端生命周期。
 
 旧 `POST /api/chat/sessions/stream` SHALL 被删除，问答编排 SHALL NOT 保留第二条发送路径。
 
@@ -544,12 +544,15 @@ chat 页 SHALL 按服务端 tool `state` 显示“正在执行、等待确认、
 
 ### Requirement: 可靠 Web Agent Run SHALL 明确适用范围
 
-可靠 Run、多 Tab、snapshot 恢复和统一 Delivery SHALL 应用于 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA`。`TEST_CASE_QA`、CaseCoordinator、`phase-*`、test-case resume/export SHALL 保持独立，且新主路径 SHALL NOT 为其保留兼容 parser。
+typed RuntimeEventMapper、可靠 Run、多 Tab、snapshot 恢复和统一 Delivery 的演进与验收范围 SHALL 为 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA`。
 
-#### Scenario: 测试用例生成保持独立
+`TEST_CASE_QA`、CaseCoordinator、`phase-*`、test-case resume/export 不再纳入本能力的演进与验收范围。现有 Web 入口 MAY 继续使用相同 `run_id`、assistant identity 与订阅 API 承载该旧流程，并在 producer 边界把 CaseCoordinator 的旧 SSE 帧适配为 RunEvent；该兼容适配 SHALL 保持隔离，SHALL NOT 进入上述三种目标 Agent 共用的 RuntimeEventMapper，也 SHALL NOT 成为新增可靠性设计的约束。
+
+#### Scenario: 测试用例生成不参与主路径验收
 
 - **WHEN** 执行本能力的实现或验收
-- **THEN** `TEST_CASE_QA` 与 `phase-*` SHALL NOT 进入新 Run 主路径
+- **THEN** SHALL 只验收 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA` 的 typed 主路径
+- **AND** SHALL NOT 因 `TEST_CASE_QA` 的旧 SSE 形状向目标 Agent 的 RuntimeEventMapper 增加兼容 parser
 
 ### Requirement: 服务端 SHALL 提供权威 active Run 发现
 

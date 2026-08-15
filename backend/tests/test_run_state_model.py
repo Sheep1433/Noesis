@@ -39,8 +39,6 @@ def test_snapshot_uses_wire_contract_names() -> None:
         sequence=7,
         attempt_id=2,
         parts=({"type": "text", "text": "部分结果"},),
-        retry_attempt=1,
-        retry_max=3,
     )
 
     payload = snapshot.to_dict()
