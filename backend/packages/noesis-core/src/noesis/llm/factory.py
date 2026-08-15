@@ -320,7 +320,7 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
 
     if runtime_snapshot is not None:
         model_type = runtime_snapshot.model_type
-        model_name = runtime_snapshot.model_name
+        model_name = runtime_snapshot.id
         temperature_str = ModelConfig.model_temperature
         model_base_url = runtime_snapshot.base_url
     elif use_summary_model:
@@ -331,7 +331,7 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
     elif model_id:
         entry = resolve_catalog_entry(model_id)
         model_type = entry.model_type
-        model_name = entry.model_name
+        model_name = entry.id
         temperature_str = str(entry.temperature)
         model_base_url = entry.base_url
     else:

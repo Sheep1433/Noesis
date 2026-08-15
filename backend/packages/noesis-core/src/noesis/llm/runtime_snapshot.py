@@ -12,7 +12,6 @@ class RuntimeModelSnapshot:
     provider_id: str
     purpose: str
     model_type: str
-    model_name: str
     base_url: str
     api_key: str
 

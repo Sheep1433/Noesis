@@ -16,18 +16,16 @@ def _yaml_with_catalog() -> AppYamlConfig:
             type="opencode",
             name="deepseek-v4-flash-free",
             base_url="https://opencode.ai/zen/v1",
-            default_catalog_id="flash",
+            default_catalog_id="deepseek-v4-flash-free",
             catalog=[
                 ModelCatalogEntryYamlSection(
-                    id="flash",
+                    id="deepseek-v4-flash-free",
                     label="Flash",
-                    name="deepseek-v4-flash-free",
                     context_window=200000,
                 ),
                 ModelCatalogEntryYamlSection(
-                    id="nemotron",
+                    id="nemotron-3-ultra-free",
                     label="Nemotron",
-                    name="nemotron-3-ultra-free",
                     context_window=1_000_000,
                 ),
             ],
@@ -40,8 +38,8 @@ def test_resolve_context_max_tokens_from_catalog_context_window(mock_load_yaml) 
     mock_load_yaml.return_value = _yaml_with_catalog()
     get_model_catalog.cache_clear()
 
-    assert resolve_context_max_tokens("flash") == 200_000
-    assert resolve_context_max_tokens("nemotron") == 1_000_000
+    assert resolve_context_max_tokens("deepseek-v4-flash-free") == 200_000
+    assert resolve_context_max_tokens("nemotron-3-ultra-free") == 1_000_000
 
     get_model_catalog.cache_clear()
 
@@ -52,7 +50,6 @@ def test_resolve_context_max_tokens_falls_back_to_global(mock_resolve) -> None:
         id="plain",
         label="Plain",
         model_type="qwen",
-        model_name="qwen-plus",
         temperature=0.7,
         base_url="https://example.com/v1",
         context_window=0,
@@ -68,7 +65,6 @@ def test_resolve_context_max_tokens_default_when_unset(mock_resolve) -> None:
         id="plain",
         label="Plain",
         model_type="qwen",
-        model_name="qwen-plus",
         temperature=0.7,
         base_url="https://example.com/v1",
         context_window=0,
@@ -105,6 +101,6 @@ def test_resolve_context_prefers_catalog_over_global(mock_load_yaml) -> None:
 
     cfg = SimpleNamespace(context_max_input_tokens=128000)
     with patch("noesis.llm.model_limits.ModelConfig", cfg):
-        assert resolve_context_max_tokens("flash") == 200_000
+        assert resolve_context_max_tokens("deepseek-v4-flash-free") == 200_000
 
     get_model_catalog.cache_clear()

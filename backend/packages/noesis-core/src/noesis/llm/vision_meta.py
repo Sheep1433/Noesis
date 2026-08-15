@@ -18,6 +18,6 @@ def get_first_vision_catalog_id() -> Optional[str]:
     from noesis.llm.catalog import get_model_catalog
 
     for entry in get_model_catalog():
-        if model_name_supports_vision(entry.model_name):
+        if model_name_supports_vision(entry.id):
             return entry.id
     return None

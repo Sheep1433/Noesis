@@ -16,13 +16,12 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
             type="opencode",
             name="deepseek-v4-flash-free",
             base_url="https://opencode.ai/zen/v1",
-            default_catalog_id="flash",
+            default_catalog_id="deepseek-v4-flash-free",
             catalog=[
-                ModelCatalogEntryYamlSection(id="flash", label="Flash", name="deepseek-v4-flash-free"),
+                ModelCatalogEntryYamlSection(id="deepseek-v4-flash-free", label="Flash"),
                 ModelCatalogEntryYamlSection(
-                    id="reasoner",
+                    id="deepseek-reasoner",
                     label="Reasoner",
-                    name="deepseek-reasoner",
                     context_window=200000,
                 ),
             ],
@@ -32,10 +31,10 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
 
     catalog = get_model_catalog()
     assert len(catalog) == 2
-    assert get_default_model_id() == "flash"
-    assert resolve_catalog_entry("reasoner").model_name == "deepseek-reasoner"
-    assert resolve_catalog_entry("reasoner").context_window == 200_000
-    assert resolve_catalog_entry(None).id == "flash"
+    assert get_default_model_id() == "deepseek-v4-flash-free"
+    assert resolve_catalog_entry("deepseek-reasoner").id == "deepseek-reasoner"
+    assert resolve_catalog_entry("deepseek-reasoner").context_window == 200_000
+    assert resolve_catalog_entry(None).id == "deepseek-v4-flash-free"
 
     get_model_catalog.cache_clear()
 
@@ -46,10 +45,9 @@ def test_get_llm_accepts_model_id(mock_resolve, mock_build):
     from noesis.llm.catalog import ModelCatalogEntry
 
     mock_resolve.return_value = ModelCatalogEntry(
-        id="reasoner",
+        id="deepseek-reasoner",
         label="Reasoner",
         model_type="deepseek",
-        model_name="deepseek-reasoner",
         temperature=0.6,
         base_url="https://example.com/v1",
     )
@@ -59,7 +57,7 @@ def test_get_llm_accepts_model_id(mock_resolve, mock_build):
         "noesis.llm.factory.ModelConfig",
         SimpleNamespace(model_api_key="test-key", summarization_model_name=""),
     ):
-        get_llm(model_id="reasoner")
+        get_llm(model_id="deepseek-reasoner")
 
     mock_build.assert_called_once()
     kwargs = mock_build.call_args.kwargs

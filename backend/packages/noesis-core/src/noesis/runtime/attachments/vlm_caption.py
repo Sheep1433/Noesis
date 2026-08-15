@@ -63,7 +63,7 @@ def describe_image_bytes_for_chat(
 
     snapshot = get_runtime_model_snapshot(purpose="vision")
     model_name = (
-        snapshot.model_name if snapshot else ModelConfig.vlm_model_name or ""
+        snapshot.id if snapshot else ModelConfig.vlm_model_name or ""
     ).strip()
     if not model_name:
         raise ValueError("VLM 未配置")

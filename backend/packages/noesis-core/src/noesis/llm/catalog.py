@@ -18,7 +18,6 @@ class ModelCatalogEntry:
     id: str
     label: str
     model_type: str
-    model_name: str
     temperature: float
     base_url: str
     is_default: bool = False
@@ -35,10 +34,9 @@ def _entry_from_yaml(
     default_context_window: int,
     is_default: bool,
 ) -> ModelCatalogEntry:
-    model_id = str(raw.id or "").strip()
+    model_id = str(raw.id or default_name).strip()
     label = str(raw.label or "").strip() or model_id
     model_type = str(raw.type or default_type).strip().lower()
-    model_name = str(raw.name or default_name).strip()
     temperature = float(raw.temperature if raw.temperature is not None else default_temperature)
     base_url = str(raw.base_url or default_base_url).strip()
     context_window = int(raw.context_window or default_context_window)
@@ -46,7 +44,6 @@ def _entry_from_yaml(
         id=model_id,
         label=label,
         model_type=model_type,
-        model_name=model_name,
         temperature=temperature,
         base_url=base_url,
         is_default=is_default,
@@ -68,10 +65,9 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     if not raw_entries:
         return (
             ModelCatalogEntry(
-                id="default",
+                id=default_name,
                 label=default_name,
                 model_type=default_type,
-                model_name=default_name,
                 temperature=default_temperature,
                 base_url=default_base_url,
                 is_default=True,
@@ -85,7 +81,7 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     for idx, raw in enumerate(raw_entries):
         model_id = str(raw.id or "").strip()
         if not model_id:
-            model_id = "default" if idx == 0 else f"model-{idx + 1}"
+            model_id = default_name if idx == 0 else f"model-{idx + 1}"
         if model_id in seen:
             continue
         seen.add(model_id)
@@ -108,7 +104,6 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
             id=first.id,
             label=first.label,
             model_type=first.model_type,
-            model_name=first.model_name,
             temperature=first.temperature,
             base_url=first.base_url,
             is_default=True,
@@ -131,9 +126,8 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
     if snapshot is not None:
         return ModelCatalogEntry(
             id=snapshot.id,
-            label=snapshot.model_name,
+            label=snapshot.id,
             model_type=snapshot.model_type,
-            model_name=snapshot.model_name,
             temperature=float(ModelConfig.model_temperature),
             base_url=snapshot.base_url,
             is_default=False,
@@ -159,10 +153,9 @@ def list_public_models() -> List[dict[str, Any]]:
         row: dict[str, Any] = {
             "id": entry.id,
             "label": entry.label,
-            "model_name": entry.model_name,
             "model_type": entry.model_type,
             "is_default": entry.id == default_id,
-            "supports_vision": model_name_supports_vision(entry.model_name),
+            "supports_vision": model_name_supports_vision(entry.id),
             "context_window": entry.context_window,
         }
         rows.append(row)

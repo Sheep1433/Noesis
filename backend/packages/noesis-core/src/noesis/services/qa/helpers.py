@@ -228,7 +228,7 @@ async def _resolve_model_for_query(
 
 
 def _resolved_model_name(model_id: str) -> str:
-    return resolve_catalog_entry(model_id).model_name
+    return resolve_catalog_entry(model_id).id
 
 def _assistant_content_snapshot(builder: Optional[AssistantMessageBuilder]) -> Dict[str, Any]:
     if builder and not builder.is_empty():
