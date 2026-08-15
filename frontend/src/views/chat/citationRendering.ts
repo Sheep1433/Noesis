@@ -132,6 +132,25 @@ export function safeWebUrl(raw: string | undefined): string | null {
   }
 }
 
+/**
+ * URL 匹配键：origin + pathname，忽略 query/hash。
+ * retrieval 记录的 URL 常带 tracking query（如 sohu 的 ?scm=...），
+ * 而模型在参考资料里写的 URL 不含 query，两者应判为同一来源。
+ */
+function webUrlMatchKey(raw: string | undefined): string | null {
+  if (!raw) {
+    return null
+  }
+  try {
+    const url = new URL(raw)
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+      ? `${url.origin}${url.pathname}`
+      : null
+  } catch {
+    return null
+  }
+}
+
 function uniqueSourceMatch(
   results: RetrievalResultUi[],
   predicate: (result: RetrievalResultUi) => boolean,
@@ -191,8 +210,8 @@ export function citationTargets(
     const web = referenceUrl
       ? uniqueSourceMatch(
           results,
-          (result) => result.source_type === 'web' && safeWebUrl(result.url) === referenceUrl,
-          (result) => safeWebUrl(result.url) || '',
+          (result) => result.source_type === 'web' && webUrlMatchKey(result.url) === webUrlMatchKey(referenceUrl),
+          (result) => webUrlMatchKey(result.url) || '',
         )
       : null
     if (web) {

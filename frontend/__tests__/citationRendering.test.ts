@@ -147,6 +147,21 @@ describe('numbered citation rendering', () => {
     expect(html).toContain('data-citation-number="4"')
   })
 
+  it('matches a Web citation when retrieval URL carries tracking query parameters', () => {
+    const withQuery = markdown.replace(
+      'https://example.com/report',
+      'https://m.sohu.com/a/1062516673',
+    ).replace('Example report', '搜狐报道')
+    const resultsWithQuery = [{
+      evidence_id: 'web-q',
+      source_type: 'web' as const,
+      url: 'https://m.sohu.com/a/1062516673?scm=10001.325_13-325_13.0.0-0-0-0-0.5_133',
+      title: '搜狐报道',
+      excerpt: '',
+    }]
+    expect(citationTargets(withQuery, resultsWithQuery, () => '/kb').has(1)).toBe(true)
+  })
+
   it('renders each visible reference on its own line when matching is incomplete', () => {
     const unknownSource = markdown.replace('https://example.com/report', 'https://unknown.example/report')
     const targets = citationTargets(unknownSource, results, () => '/kb')
