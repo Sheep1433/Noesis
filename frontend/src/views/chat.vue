@@ -109,10 +109,6 @@ function setCitationSourcesRef(key: string, component: unknown) {
     citationSourcesRefs.delete(key)
   }
 }
-
-function openCitationSource(key: string, number: number) {
-  citationSourcesRefs.get(key)?.open(number)
-}
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
