@@ -435,9 +435,9 @@ RunEvent 到 `/api/chat` SSE 与 assistant 终态映射 SHALL 支持稳定的 Ag
 - **THEN** assistant SHALL 保存已有正文并进入 partial 或现行等价非 completed 终态
 - **AND** SSE 终态 SHALL 携带 `length_stop`
 
-#### Scenario: governor 停止仍可展示
+#### Scenario: 运行预算中间件停止仍可展示
 
-- **WHEN** Run Governor 因工具循环达到硬限制而停止
+- **WHEN** ToolLoopGuardMiddleware 因工具循环达到硬限制而停止
 - **THEN** assistant SHALL 保留停止前的 reasoning、tool parts 与正文
 - **AND** 终态 SHALL 携带 `tool_loop_limit`
 

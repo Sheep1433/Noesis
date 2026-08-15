@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定 Agent **运行时**：文件系统与沙箱（宿主机 `.noesis/users/` 布局、Agent/Shell 共用的绝对路径坐标系 `/workspace`、`/skills/public|personal`、`/memory`、backend 工厂 docker / local_shell、Skills 只读挂载与用户 ZIP、用户记忆、web_search / web_fetch）、公共 Runtime 执行 Lifecycle（Context Lifecycle、Model Execution、Tool Execution、Run Governor）与 Token / 上下文可观测性。代码锚点：`packages/noesis-core/src/noesis/config/user_data_paths.py`、`packages/noesis-core/src/noesis/agents/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`、`packages/noesis-core/src/noesis/agents/middlewares/`。
+本能力规定 Agent **运行时**：文件系统与沙箱（宿主机 `.noesis/users/` 布局、Agent/Shell 共用的绝对路径坐标系 `/workspace`、`/skills/public|personal`、`/memory`、backend 工厂 docker / local_shell、Skills 只读挂载与用户 ZIP、用户记忆、web_search / web_fetch）、公共 Runtime 执行 Lifecycle（Context Lifecycle、Model Execution、Tool Execution、运行预算中间件）与 Token / 上下文可观测性。代码锚点：`packages/noesis-core/src/noesis/config/user_data_paths.py`、`packages/noesis-core/src/noesis/agents/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`、`packages/noesis-core/src/noesis/agents/middlewares/`。
 
 ## 路径命名
 
@@ -176,7 +176,7 @@ SuperAgent SHALL 获得 `get_memory_source` 工具，并在数据库层校验 se
 
 ### Requirement: 公共 Runtime SHALL 按五类职责组织
 
-系统 SHALL 将 ReAct Agent 的公共运行时职责限定为 Context Lifecycle、Model Execution、Tool Execution、Run Governor 与 Runtime Telemetry，并 SHALL 以 LangChain `AgentMiddleware` lifecycle hook 作为 `create_agent` 的权威接入点。Middleware MAY 将纯计算、存储或 policy 委托给 runtime service，但同一状态与决策 SHALL 只有一个权威 owner；系统 SHALL NOT 绕开 LangChain Agent loop 再建第二套执行循环，也 SHALL NOT 为 length stop、empty terminal、tool output budget 等单点问题继续叠加相互独立且依赖顺序的补丁中间件。
+系统 SHALL 将 ReAct Agent 的公共运行时职责限定为 Context Lifecycle、Model Execution、Tool Execution、运行预算中间件与 Runtime Telemetry，并 SHALL 以 LangChain `AgentMiddleware` lifecycle hook 作为 `create_agent` 的权威接入点。Middleware MAY 将纯计算、存储或 policy 委托给 runtime service，但同一状态与决策 SHALL 只有一个权威 owner；系统 SHALL NOT 绕开 LangChain Agent loop 再建第二套执行循环，也 SHALL NOT 为 length stop、empty terminal、tool output budget 等单点问题继续叠加相互独立且依赖顺序的补丁中间件。
 
 #### Scenario: 工厂装配公共 Runtime
 
@@ -258,27 +258,27 @@ Context Lifecycle SHALL 在模型请求前使用同一份最终 context snapshot
 - **THEN** SHALL 原样保留该有界 content
 - **AND** SHALL NOT 从提示文本解析路径、再次截断 preview 或创建 Noesis artifact
 
-### Requirement: Run Governor SHALL 统一运行预算
+### Requirement: 运行预算 SHALL 由独立 AgentMiddleware 实现
 
-Run Governor SHALL 以 `run_id` 为作用域维护模型调用、工具调用、重复调用窗口、子 Agent 活跃数/总数/深度。所有限制 SHALL 产生稳定 stop reason；主 Agent 与子 Agent SHALL 使用同一预算模型，子 Agent 的本地限制 MAY 更严格但 SHALL NOT 绕过父 run 的总预算。
+系统 SHALL 以独立 `AgentMiddleware`（如 `ToolLoopGuardMiddleware`、`SubagentLimitMiddleware`）实现运行预算，各中间件通过 `wrap_tool_call` / `after_model` 等 lifecycle hook 拦截，而非依赖 `run_id` 作用域的集中式预算控制器。所有限制 SHALL 产生稳定 stop reason；主 Agent 与子 Agent SHALL 使用同一预算模型，子 Agent 的本地限制 MAY 更严格但 SHALL NOT 绕过父 run 的总预算。
 
 #### Scenario: 子 Agent 并发槽位耗尽
 
 - **WHEN** 活跃子 Agent 数已达到配置上限且模型再次委派
-- **THEN** Run Governor SHALL 拒绝新委派并返回稳定的 `subagent_concurrency_limit` reason
+- **THEN** SubagentLimitMiddleware SHALL 拒绝新委派并返回稳定的 `subagent_concurrency_limit` reason
 - **AND** 已运行子 Agent SHALL 不受影响
 
 #### Scenario: 重复工具循环
 
 - **WHEN** 同一 run 的工具调用在配置窗口内达到循环硬限制
-- **THEN** Run Governor SHALL 停止继续调用工具并返回 `tool_loop_limit`
+- **THEN** ToolLoopGuardMiddleware SHALL 停止继续调用工具并返回 `tool_loop_limit`
 - **AND** 最终响应 SHALL 保留停止前已有结果
 
 ## Token 与上下文可观测性
 
 ### Requirement: Runtime Telemetry SHALL 观察而不改变执行决策
 
-Runtime Telemetry SHALL 消费 model、context、tool、subagent、compaction 与 governor outcome，并按 model run id 去重；它 SHALL NOT 单独维护会影响控制流的第二套预算或循环计数。
+Runtime Telemetry SHALL 消费 model、context、tool、subagent 与 compaction 事件，并按 model run id 去重；它 SHALL NOT 单独维护会影响控制流的第二套预算或循环计数。
 
 #### Scenario: telemetry 关闭
 

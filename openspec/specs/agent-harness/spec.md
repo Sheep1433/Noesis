@@ -121,7 +121,7 @@ Web API、应用服务、平台领域逻辑、数据库、KB、ORM、Schema、�
 #### Scenario: Harbor 使用统一 runtime
 
 - **WHEN** Harbor `BaseAgent` 执行 SuperAgent 评测
-- **THEN** SHALL 使用与线上相同的 Model Execution、Context Lifecycle、Tool Execution 和 Run Governor
+- **THEN** SHALL 使用与线上相同的 Model Execution、Context Lifecycle、Tool Execution 和运行预算中间件
 - **AND** SHALL NOT 在 adapter 内复制这些状态机
 
 ### Requirement: Harness SHALL 维护可审计的 Middleware Inventory
@@ -133,7 +133,8 @@ Web API、应用服务、平台领域逻辑、数据库、KB、ORM、Schema、�
 | 公共 kernel | `ContextLifecycleMiddleware` | Noesis | 所有 ReAct Agent |
 | 公共 kernel | `ModelExecutionMiddleware` | Noesis | 所有 ReAct Agent |
 | 公共 kernel | `ToolExecutionMiddleware` | Noesis | 所有 ReAct Agent |
-| 公共 kernel | `RunGovernorMiddleware` | Noesis | 所有 ReAct Agent |
+| 公共 kernel | `ToolLoopGuardMiddleware` | Noesis | 所有 ReAct Agent |
+| 公共 kernel | `SubagentLimitMiddleware` | Noesis | 所有 ReAct Agent |
 | 公共 kernel | `RuntimeTelemetryMiddleware` | Noesis | 所有 ReAct Agent；telemetry 可关闭但行为不变 |
 | capability | `FilesystemMiddleware` | DeepAgents，直接使用 | 具有 workspace/backend 的 Profile 与对应子 Agent |
 | capability | `SubAgentMiddleware` | DeepAgents，直接使用 | 配置同步子 Agent 的 Profile |
@@ -173,7 +174,7 @@ LangChain `SummarizationMiddleware` SHALL 作为 `ContextLifecycleMiddleware` �
 | `SUPER_AGENT_QA` | Filesystem、SubAgent、可选 AsyncSubAgent、TodoList、可选 HITL | VersionedSkills、TurnMemory；附件由 input resolver 处理 | 五个公共 runtime middleware |
 | `FAULT_OPERATION_QA` | Filesystem、SubAgent | 无 | 五个公共 runtime middleware |
 | SimpleMCP 调试 Agent | 无 | 无 | 五个公共 runtime middleware |
-| Super/Fault 子 Agent | Filesystem | 按定义可选 VersionedSkills | 五个公共 runtime middleware，并继承父 Governor scope |
+| Super/Fault 子 Agent | Filesystem | 按定义可选 VersionedSkills | 五个公共 runtime middleware，并继承父运行预算中间件 scope |
 
 #### Scenario: SuperAgent inventory
 
