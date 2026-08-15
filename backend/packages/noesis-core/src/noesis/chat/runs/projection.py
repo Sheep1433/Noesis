@@ -218,6 +218,13 @@ class RunProjection:
             self.status = RunStatus.COMPLETED
             self.finish_reason = event.finish_reason
             self.pending_hitl = None
+            # LLM 重试耗尽后的降级 AIMessage：把「正常结束」翻译成「LLM 错误」
+            fallback = self.builder.last_top_level_error_fallback()
+            if fallback is not None:
+                self.status = RunStatus.ERROR
+                self.finish_reason = "llm_error_fallback"
+                self.error_code = fallback.get("error_type") or "LLMError"
+                self.user_error_message = fallback.get("error_detail") or "LLM 服务经多次重试后仍不可用"
         elif isinstance(event, RunAborted):
             self.builder.reconcile_nonterminal_tools(ToolState.CANCELLED, "本次工具执行已停止")
             self.status = RunStatus.PARTIAL

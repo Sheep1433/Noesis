@@ -51,6 +51,7 @@ class TextPart(MessagePart):
     id: str = ""
     content: str = ""
     parent_task_call_id: Optional[str] = None
+    error_fallback: Optional[Dict[str, Any]] = None
     type: str = "text"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -58,6 +59,8 @@ class TextPart(MessagePart):
         if self.id:
             out["id"] = self.id
         out.update(_part_parent_fields(self.parent_task_call_id))
+        if self.error_fallback:
+            out["error_fallback"] = self.error_fallback
         return out
 
 
@@ -165,6 +168,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             id=str(data.get("id") or ""),
             content=data.get("content", ""),
             parent_task_call_id=parent,
+            error_fallback=data.get("error_fallback") if isinstance(data.get("error_fallback"), dict) else None,
         )
     if part_type == "reasoning":
         return ReasoningPart(content=data.get("content", ""), parent_task_call_id=parent)
@@ -338,6 +342,39 @@ class AssistantMessageBuilder:
             parent_task_call_id=parent_task_call_id,
             part_id=part_id,
         )
+
+    def mark_last_text_error_fallback(
+        self,
+        parent_task_call_id: Optional[str],
+        fallback: Dict[str, Any],
+    ) -> None:
+        """在最近一条同 parent 的 text part 上标记 LLM error_fallback。
+
+        ``LLMErrorHandlingMiddleware`` 重试耗尽后返回降级 AIMessage，
+        bridge 在 ``on_chat_model_end`` 提取 ``noesis_error_fallback``
+        标记后调本方法，终态检查时据此把 run 标为 error。
+        """
+        for part in reversed(self._content.parts):
+            if getattr(part, "parent_task_call_id", None) != parent_task_call_id:
+                continue
+            if isinstance(part, TextPart):
+                part.error_fallback = fallback
+                return
+            break
+
+    def last_top_level_error_fallback(self) -> Optional[Dict[str, Any]]:
+        """最后一条顶层（无 parent_task_call_id）text part 的 error_fallback。
+
+        子 Agent（有 parent_task_call_id）的降级消息不触发 run error——
+        那是子 Agent 的局部失败，由 SubagentCollapse 展示。
+        """
+        for part in reversed(self._content.parts):
+            if not isinstance(part, TextPart):
+                continue
+            if part.parent_task_call_id:
+                continue
+            return part.error_fallback
+        return None
 
     def register_retrieval_results(
         self,

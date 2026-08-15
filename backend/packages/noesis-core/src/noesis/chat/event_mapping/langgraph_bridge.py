@@ -942,6 +942,14 @@ class LangGraphSseBridge:
                         ctx["text_buffer"] = (ctx.get("text_buffer") or "") + text_delta
                         ctx["text_buffer_parent_task_call_id"] = parent_task_call_id
                     self._emit_text_delta(text_delta, out, parent_task_call_id)
+                # LLM 重试耗尽后的降级 AIMessage：记录 fallback 标记供终态检查
+                additional_kwargs = getattr(output, "additional_kwargs", None) or {}
+                if isinstance(additional_kwargs, dict) and additional_kwargs.get("noesis_error_fallback") and builder is not None:
+                    builder.mark_last_text_error_fallback(parent_task_call_id, {
+                        "error_type": additional_kwargs.get("error_type"),
+                        "error_reason": additional_kwargs.get("error_reason"),
+                        "error_detail": additional_kwargs.get("error_detail"),
+                    })
             usage_meta = getattr(output, "usage_metadata", None) if output is not None else None
             if not usage_meta and isinstance(output, dict):
                 usage_meta = output.get("usage_metadata")

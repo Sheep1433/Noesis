@@ -394,7 +394,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                     time.sleep(wait_ms / 1000)
                     attempt += 1
                     continue
-                logger.warning(
+                logger.error(
                     "LLM call failed after %d attempt(s): %s",
                     attempt,
                     _extract_error_detail(exc),
@@ -447,7 +447,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                     await asyncio.sleep(wait_ms / 1000)
                     attempt += 1
                     continue
-                logger.warning(
+                logger.error(
                     "LLM call failed after %d attempt(s): %s",
                     attempt,
                     _extract_error_detail(exc),
