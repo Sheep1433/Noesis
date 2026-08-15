@@ -543,10 +543,22 @@ class LangGraphSseBridge:
     def _flush_text_buffer(self, builder: Optional[AssistantMessageBuilder], ctx: Dict[str, Any]) -> None:
         buf = ctx.get("text_buffer") or ""
         parent = ctx.get("text_buffer_parent_task_call_id")
-        if builder and buf:
-            builder.append_text_delta(buf, parent_task_call_id=parent)
+        pending = ctx.pop("pending_error_fallback", None)
+        if builder:
+            # 降级 AIMessage 的 text 可能为空（理论上不会，但防御），
+            # 但 pending_error_fallback 存在时仍需创建 text part 来挂标记
+            if buf:
+                builder.append_text_delta(buf, parent_task_call_id=parent)
+            elif pending:
+                builder.append_text("", parent_task_call_id=parent)
         ctx["text_buffer"] = ""
         ctx["text_buffer_parent_task_call_id"] = None
+        # text 已写入 builder，现在可以标记 error_fallback（on_chat_model_end 暂存的）
+        if pending and builder:
+            builder.mark_last_text_error_fallback(
+                pending["parent_task_call_id"],
+                pending["fallback"],
+            )
 
     def _safe_append_tool_output(
         self,
@@ -942,14 +954,18 @@ class LangGraphSseBridge:
                         ctx["text_buffer"] = (ctx.get("text_buffer") or "") + text_delta
                         ctx["text_buffer_parent_task_call_id"] = parent_task_call_id
                     self._emit_text_delta(text_delta, out, parent_task_call_id)
-                # LLM 重试耗尽后的降级 AIMessage：记录 fallback 标记供终态检查
+                # LLM 重试耗尽后的降级 AIMessage：暂存 fallback 标记，
+                # 等 _flush_text_buffer 把 text 写入 builder 后再标记 text part
                 additional_kwargs = getattr(output, "additional_kwargs", None) or {}
-                if isinstance(additional_kwargs, dict) and additional_kwargs.get("noesis_error_fallback") and builder is not None:
-                    builder.mark_last_text_error_fallback(parent_task_call_id, {
-                        "error_type": additional_kwargs.get("error_type"),
-                        "error_reason": additional_kwargs.get("error_reason"),
-                        "error_detail": additional_kwargs.get("error_detail"),
-                    })
+                if isinstance(additional_kwargs, dict) and additional_kwargs.get("noesis_error_fallback"):
+                    ctx["pending_error_fallback"] = {
+                        "parent_task_call_id": parent_task_call_id,
+                        "fallback": {
+                            "error_type": additional_kwargs.get("error_type"),
+                            "error_reason": additional_kwargs.get("error_reason"),
+                            "error_detail": additional_kwargs.get("error_detail"),
+                        },
+                    }
             usage_meta = getattr(output, "usage_metadata", None) if output is not None else None
             if not usage_meta and isinstance(output, dict):
                 usage_meta = output.get("usage_metadata")
