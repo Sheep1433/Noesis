@@ -1670,6 +1670,7 @@ const sessionContextMenuOptions = computed(() => {
   const target = sessionContextMenuTarget.value
   const opts: Array<{ label: string, key: string }> = [
     { label: '修改标题', key: 'rename' },
+    { label: '复制标题', key: 'copy-title' },
   ]
   if (target && !target.archived) {
     opts.push({ label: target.pinned ? '取消置顶' : '置顶', key: target.pinned ? 'unpin' : 'pin' })
@@ -1677,7 +1678,7 @@ const sessionContextMenuOptions = computed(() => {
   if (target) {
     opts.push({ label: target.archived ? '取消归档' : '归档', key: target.archived ? 'unarchive' : 'archive' })
     opts.push({ type: 'divider', key: 'divider-delete' })
-    opts.push({ label: '删除', key: 'delete', props: { style: { color: 'var(--noesis-color-error)' } } })
+    opts.push({ label: '删除', key: 'delete', props: { style: { color: 'var(--noesis-color-danger)' } } })
   }
   return opts
 })
@@ -1735,6 +1736,11 @@ function handleSessionContextMenuSelect(key: string) {
     openRenameSessionModal(target)
     return
   }
+  if (key === 'copy-title') {
+    void navigator.clipboard.writeText(target.key)
+    window.$ModalMessage.success('已复制', { duration: 1200 })
+    return
+  }
   if (key === 'pin') {
     void toggleSessionMeta(target, { pinned: true })
     return
@@ -1755,7 +1761,7 @@ function handleSessionContextMenuSelect(key: string) {
     const targetForDelete = target
     window.$ModalDialog.warning({
       title: '删除会话',
-      content: `确定删除「${targetForDelete.key}」？会话将从列表移除，消息与工作区文件一并清理。`,
+      content: `确定删除「${targetForDelete.key}」？删除后不可恢复。`,
       positiveText: '删除',
       negativeText: '取消',
       onPositiveClick: async () => {

@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.storage.postgres.models.chat import TChatSession, TChatMessage
 from noesis.errors.exceptions import ServiceException
-from noesis.config.user_data_paths import delete_session_workspace
 from noesis.runtime.logging import logger
 from noesis.chat.message_builder import AssistantMessageBuilder
 
@@ -559,7 +558,6 @@ class ChatService:
             .values(deleted_at=now)
         )
         await db.commit()
-        delete_session_workspace(user_id, session_id)
         try:
             from noesis.services.scheduled_task_service import ScheduledTaskService
 
@@ -650,7 +648,6 @@ class ChatService:
         await db.commit()
 
         for sid in found_ids:
-            delete_session_workspace(uid, sid)
             try:
                 from noesis.services.scheduled_task_service import ScheduledTaskService
 
