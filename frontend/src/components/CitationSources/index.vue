@@ -4,10 +4,9 @@ import { DocumentsOutline, GlobeOutline } from '@vicons/ionicons-v5'
 import { NDrawer, NDrawerContent, NIcon } from 'naive-ui'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { citationTargets, safeWebUrl } from '@/views/chat/citationRendering'
+import { safeWebUrl } from '@/views/chat/citationRendering'
 
 const props = defineProps<{
-  content: string
   results: RetrievalResultUi[]
 }>()
 
@@ -29,39 +28,11 @@ const sources = computed(() => {
   return [...unique.values()]
 })
 
-const targets = computed(() => citationTargets(
-  props.content,
-  props.results,
-  (collectionName, fileName) => router.resolve({
-    name: 'KnowledgeBaseDetail',
-    params: { collectionName },
-    query: { file: fileName },
-  }).href,
-))
-
-function sourceHref(source: RetrievalResultUi): string | null {
-  if (source.source_type === 'web') {
-    return safeWebUrl(source.url)
-  }
-  return source.collection_name ? router.resolve(kbLocation(source)).href : null
-}
-
-const sourceGroups = computed(() => {
-  const citationNumbers = new Map<string, number>()
-  for (const [number, target] of targets.value) {
-    citationNumbers.set(target.href, number)
-  }
-  const cited = sources.value
-    .filter((source) => citationNumbers.has(sourceHref(source) || ''))
-    .map((source) => ({ source, number: citationNumbers.get(sourceHref(source) || '')!, cited: true }))
-    .sort((a, b) => a.number - b.number)
-  const retrieved = sources.value
-    .filter((source) => !citationNumbers.has(sourceHref(source) || ''))
-    .map((source, index) => ({ source, number: index + 1, cited: false }))
-  return [
-    { title: '引用来源', items: cited },
-    { title: '其他检索结果', items: retrieved },
-  ].filter((group) => group.items.length > 0)
+const sourceList = computed(() => {
+  return sources.value.map((source, index) => ({
+    source,
+    number: index + 1,
+  }))
 })
 
 function kbLocation(result: RetrievalResultUi) {
@@ -125,15 +96,13 @@ defineExpose({ open })
   >
     <n-drawer-content title="来源" closable>
       <div ref="sourceListRef">
-        <section v-for="group in sourceGroups" :key="group.title" class="source-group">
-          <h3 class="source-group__title">{{ group.title }}</h3>
+        <section class="source-group">
           <div class="source-list">
             <article
-              v-for="item in group.items"
+              v-for="item in sourceList"
               :key="item.source.evidence_id"
               class="source-card"
-              :class="{ 'source-card--selected': item.cited && item.number === selectedCitationNumber }"
-              :data-citation-number="item.cited ? item.number : undefined"
+              :data-citation-number="item.number"
             >
               <span class="source-card__number">{{ item.number }}</span>
               <div class="source-card__body">

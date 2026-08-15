@@ -5,10 +5,8 @@ import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { useMermaidRender } from '@/hooks/useMermaidRender'
-import router from '@/router'
 import { TASK_TOOL_NAME } from '@/utils/parseTaskTool'
 import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
-import { citationBody, citationTargets } from '@/views/chat/citationRendering'
 import MarkdownInstance from './plugins/markdown'
 
 interface Props {
@@ -24,7 +22,6 @@ interface Props {
   /** 底部工具栏左侧问答类型角标 */
   qaType?: string
   retrievalResults?: RetrievalResultUi[]
-  referencesComplete?: boolean
 }
 
 interface Emits {
@@ -32,7 +29,6 @@ interface Emits {
   (e: 'failed', error: any): void
   (e: 'praiseFeadBack'): void
   (e: 'belittleFeedback'): void
-  (e: 'citationClick', number: number): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -44,7 +40,6 @@ const props = withDefaults(defineProps<Props>(), {
   variant: 'full',
   qaType: 'COMMON_QA',
   retrievalResults: () => [],
-  referencesComplete: true,
 })
 
 const emit = defineEmits<Emits>()
@@ -67,21 +62,7 @@ watch(
 )
 
 const renderedMarkdown = computed(() => {
-  const targets = props.referencesComplete
-    ? citationTargets(
-        displayText.value,
-        props.retrievalResults,
-        (collectionName, fileName) => router.resolve({
-          name: 'KnowledgeBaseDetail',
-          params: { collectionName },
-          query: { file: fileName },
-        }).href,
-      )
-    : new Map()
-  return MarkdownInstance.render(
-    citationBody(displayText.value, targets, props.referencesComplete),
-    { citationTargets: targets },
-  )
+  return MarkdownInstance.render(displayText.value)
 })
 
 const renderedContent = computed(() => {
@@ -99,16 +80,6 @@ const onCompleted = () => {
 
 const praiseFeedback = () => emit('praiseFeadBack')
 const belittleFeedback = () => emit('belittleFeedback')
-
-function handleMarkdownClick(event: MouseEvent) {
-  const target = event.target instanceof Element
-    ? event.target.closest<HTMLElement>('[data-citation-number]')
-    : null
-  const number = Number(target?.dataset.citationNumber)
-  if (Number.isInteger(number) && number > 0) {
-    emit('citationClick', number)
-  }
-}
 
 onMounted(() => {
   // segment 由父级 SSE 控制整轮加载态；挂载即有 content 不代表流结束
@@ -153,7 +124,6 @@ onMounted(() => {
             ref="markdownContentRef"
             class="markdown-wrapper"
             :class="{ 'markdown-wrapper--segment': variant === 'segment' }"
-            @click="handleMarkdownClick"
             v-html="renderedContent"
           ></div>
 
@@ -262,18 +232,15 @@ onMounted(() => {
     overflow-wrap: anywhere;
   }
 
-  .citation-sup {
+  .citation-badge {
     margin-left: 2px;
     font-size: 0.72em;
     line-height: 0;
     vertical-align: super;
 
-    .citation-link {
+    a {
       display: inline-flex;
-      min-width: 18px;
-      height: 18px;
       align-items: center;
-      justify-content: center;
       padding: 0 5px;
       border-radius: 9px;
       background: var(--noesis-color-primary-bg-icon);
@@ -281,6 +248,16 @@ onMounted(() => {
       border: 0;
       text-decoration: none;
       cursor: pointer;
+    }
+
+    &.citation-badge--kb {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 5px;
+      border-radius: 9px;
+      background: var(--noesis-color-primary-bg-icon);
+      color: var(--noesis-color-primary);
+      cursor: default;
     }
   }
 

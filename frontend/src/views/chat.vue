@@ -1670,7 +1670,6 @@ const sessionContextMenuOptions = computed(() => {
   const target = sessionContextMenuTarget.value
   const opts: Array<{ label: string, key: string }> = [
     { label: '修改标题', key: 'rename' },
-    { label: '复制标题', key: 'copy-title' },
   ]
   if (target && !target.archived) {
     opts.push({ label: target.pinned ? '取消置顶' : '置顶', key: target.pinned ? 'unpin' : 'pin' })
@@ -1734,11 +1733,6 @@ function handleSessionContextMenuSelect(key: string) {
   }
   if (key === 'rename') {
     openRenameSessionModal(target)
-    return
-  }
-  if (key === 'copy-title') {
-    void navigator.clipboard.writeText(target.key)
-    window.$ModalMessage.success('已复制', { duration: 1200 })
     return
   }
   if (key === 'pin') {
@@ -2595,7 +2589,6 @@ function onComposerPaste(e: ClipboardEvent) {
                               v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                               :content="entry.part.content || ''"
                               :retrieval-results="retrievedResults(item.messageContent.parts)"
-                              :references-complete="entry.part.status !== 'streaming'"
                               :toolCalls="null"
                               :msgMetadata="item.msg_metadata"
                               :isInit="isInit"
@@ -2605,7 +2598,6 @@ function onComposerPaste(e: ClipboardEvent) {
                               :qa-type="item.qa_type || 'COMMON_QA'"
                               :parentScollBottomMethod="scrollToBottom"
                               @failed="() => onFailedReader(index)"
-                              @citation-click="(number) => openCitationSource(citationSourcesKey(item, index), number)"
                             />
                           </template>
                           <div
@@ -2639,7 +2631,6 @@ function onComposerPaste(e: ClipboardEvent) {
                               <CitationSources
                                 v-if="retrievedResults(item.messageContent.parts).length"
                                 :ref="(component) => setCitationSourcesRef(citationSourcesKey(item, index), component)"
-                                :content="extractLastTopLevelText(item.messageContent.parts)"
                                 :results="retrievedResults(item.messageContent.parts)"
                               />
                             </template>
