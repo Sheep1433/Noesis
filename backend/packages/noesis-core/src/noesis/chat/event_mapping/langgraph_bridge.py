@@ -913,6 +913,20 @@ class LangGraphSseBridge:
                 self._finish_emitted = True
             return
 
+        if lc_kind == "on_custom_event" and item.get("name") == "noesis_compaction":
+            data = item.get("data") or {}
+            if isinstance(data, dict):
+                compaction_type = str(data.get("compaction_type") or "")
+                if compaction_type == "started":
+                    status = "compacting"
+                elif compaction_type == "failed":
+                    status = "running"
+                else:
+                    status = "running"
+                payload = {"type": "run-status", "status": status, **data}
+                out.append(_format_sse("run-status", payload))
+            return
+
         if lc_kind == "on_chat_model_start":
             self._close_reasoning(out)
             self._close_text(out)

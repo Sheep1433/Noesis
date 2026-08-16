@@ -13,7 +13,7 @@ from noesis.chat.commands.result import CommandResult, RequestRewrite
 
 #: 控制命令保留字。skill 目录 SHALL NOT 与之重名；dispatch 匹配时控制命令先于 skill 命令。
 CONTROL_COMMANDS: frozenset[str] = frozenset(
-    {"help", "skills", "agents", "model", "status", "reset", "approve", "reject", "stop"}
+    {"help", "skills", "agents", "model", "status", "compact", "reset", "approve", "reject", "stop"}
 )
 
 CommandHandler = Callable[[InboundMessage], Awaitable[CommandResult]]
