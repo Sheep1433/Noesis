@@ -896,6 +896,9 @@ class LangGraphSseBridge:
             data = item.get("data") or {}
             if isinstance(data, dict):
                 content = str(data.get("content") or "")
+                # 先 flush 可能在 text_buffer 中的残留流式文本（重试前的部分输出）
+                if builder is not None and ctx.get("text_buffer"):
+                    self._flush_text_buffer(builder, ctx)
                 # fallback 文本写进 builder（用户在消息体看到失败说明）
                 if builder is not None and content:
                     builder.append_text(content, parent_task_call_id=None)

@@ -270,7 +270,7 @@ class CompactionMiddleware(
         except GraphBubbleUp:
             raise
         except Exception:
-            logger.debug("Failed to emit noesis_compaction event", exc_info=True)
+            logger.opt(exception=True).debug("Failed to emit noesis_compaction event")
 
     async def _aemit_compaction_event(self, payload: dict[str, Any]) -> None:
         """异步发 noesis_compaction custom event。"""
@@ -288,7 +288,7 @@ class CompactionMiddleware(
         except GraphBubbleUp:
             raise
         except Exception:
-            logger.debug("Failed to emit async noesis_compaction event", exc_info=True)
+            logger.opt(exception=True).debug("Failed to emit async noesis_compaction event")
 
     def _build_started_payload(self, mode: str, pre_tokens: int) -> dict[str, Any]:
         return {
