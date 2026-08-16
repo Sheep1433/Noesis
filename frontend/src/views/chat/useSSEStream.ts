@@ -370,11 +370,15 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           if (streamSettled || userAborted) {
             break
           }
+          let timer: ReturnType<typeof setTimeout> | undefined
           const result = await Promise.race([
-            reader.read().then((r) => r),
-            new Promise<typeof READ_TIMEOUT>((resolve) =>
-              setTimeout(() => resolve(READ_TIMEOUT), READ_TIMEOUT_MS),
-            ),
+            reader.read().then((r) => {
+              clearTimeout(timer)
+              return r
+            }),
+            new Promise<typeof READ_TIMEOUT>((resolve) => {
+              timer = setTimeout(() => resolve(READ_TIMEOUT), READ_TIMEOUT_MS)
+            }),
           ])
           if (result === READ_TIMEOUT) {
             await reader.cancel()

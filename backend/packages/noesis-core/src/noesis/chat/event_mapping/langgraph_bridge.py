@@ -923,7 +923,7 @@ class LangGraphSseBridge:
                     status = "running"
                 else:
                     status = "running"
-                payload = {"type": "run-status", "status": status, **data}
+                payload = {**data, "type": "run-status", "status": status}
                 out.append(_format_sse("run-status", payload))
             return
 
