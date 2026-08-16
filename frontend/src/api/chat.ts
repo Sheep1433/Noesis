@@ -433,13 +433,13 @@ export async function deleteSession(id: string): Promise<void> {
 
 /**
  * 更新会话标题
- * PATCH /api/chat/sessions/{id}/title
+ * PUT /api/chat/sessions/{id}/title
  */
 export async function updateSessionTitle(
   id: string,
   params: UpdateSessionTitleParams,
 ): Promise<ChatSessionResponse> {
-  const req = makeRequest('PATCH', `${location.origin}${BASE}/sessions/${id}/title`, params)
+  const req = makeRequest('PUT', `${location.origin}${BASE}/sessions/${id}/title`, params)
   return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
@@ -451,13 +451,13 @@ export interface UpdateSessionMetaParams {
 
 /**
  * 更新会话置顶 / 归档状态
- * PATCH /api/chat/sessions/{id}/meta
+ * PUT /api/chat/sessions/{id}/meta
  */
 export async function updateSessionMeta(
   id: string,
   params: UpdateSessionMetaParams,
 ): Promise<ChatSessionResponse> {
-  const req = makeRequest('PATCH', `${location.origin}${BASE}/sessions/${id}/meta`, params)
+  const req = makeRequest('PUT', `${location.origin}${BASE}/sessions/${id}/meta`, params)
   return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 

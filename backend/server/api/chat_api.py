@@ -2,7 +2,7 @@
 Chat API (v2.1)
 
 实现 v2.1 设计的 API 接口：
-1. 会话 API：GET/POST /api/chat/sessions、GET/DELETE /api/chat/sessions/{id}、PATCH /api/chat/sessions/{id}/title
+1. 会话 API：GET/POST /api/chat/sessions、GET/DELETE /api/chat/sessions/{id}、PUT /api/chat/sessions/{id}/title
 2. 消息 API：GET /api/chat/sessions/{id}/messages、POST /api/chat/sessions/{id}/messages、GET /api/chat/messages/{id}
 """
 
@@ -324,7 +324,7 @@ async def delete_session(
     return ResponseUtil.success(msg='删除会话成功')
 
 
-@chat_router.patch("/sessions/{session_id}/title", summary="更新会话标题")
+@chat_router.put("/sessions/{session_id}/title", summary="更新会话标题")
 async def update_session_title(
     session_id: str,
     request: UpdateSessionTitleRequest,
@@ -347,7 +347,7 @@ async def update_session_title(
     )
 
 
-@chat_router.patch("/sessions/{session_id}/meta", summary="更新会话置顶/归档状态")
+@chat_router.put("/sessions/{session_id}/meta", summary="更新会话置顶/归档状态")
 async def update_session_meta(
     session_id: str,
     request: UpdateSessionMetaRequest,

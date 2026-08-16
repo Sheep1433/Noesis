@@ -435,7 +435,7 @@ export async function patchCollectionConfig(
   return kbJson<CollectionConfig>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/config`,
     {
-      method: 'PATCH',
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     },
