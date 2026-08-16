@@ -887,13 +887,18 @@ const retryingLabel = ref('')
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
 const sseStream = useSSEStream({
   onRunStatus: (status, message) => {
+    // retrying 每次带不同 attempt 编号（1/6、2/6…），必须每次刷新 label，
+    // 不走 status 去重——否则只显示首次重试。
+    if (status === 'retrying') {
+      retryingLabel.value = message || '连接中断，正在重试'
+      lastRunStatusNotice = status
+      return
+    }
     if (status === lastRunStatusNotice) {
       return
     }
     lastRunStatusNotice = status
-    if (status === 'retrying') {
-      retryingLabel.value = message || '连接中断，正在重试'
-    } else if (status === 'interrupted') {
+    if (status === 'interrupted') {
       window.$ModalMessage.warning(message || '服务中断，本轮生成未完成')
     } else if (status === 'disconnected') {
       reconnectAvailable.value = true
@@ -2384,84 +2389,74 @@ function onComposerPaste(e: ClipboardEvent) {
                     :key="`${item.uuid}-${index}`"
                     class="mb-4"
                   >
-                    <div v-if="item.role === 'user'" class="chat-user-message-row flex flex-col items-end space-y-2 w-full">
-                      <!-- 用户消息 -->
-                      <div
-                        class="chat-user-message"
-                        :style="{
-                          'margin-left': `10%`,
-                          'margin-right': `10%`,
-                          'padding': `15px`,
-                          'border-radius': `5px`,
-                          'text-align': `center`,
-                          'max-width': '80%', // 控制宽度避免撑满
-                        }"
-                      >
-                        <div class="chat-user-message__stack">
-                          <n-space>
-                            <n-tag
-                              class="chat-user-message__tag"
-                              size="large"
-                              :bordered="false"
-                              :round="true"
-                              :style="{
-                                'fontSize': '16px',
-                                'fontFamily': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
-                                'fontWeight': '400',
-                                'color': cssVar(themeCssVar.textNav),
-                                'max-width': '600px',
-                                'text-align': 'left',
-                                'padding': '5px 18px',
-                                'height': 'auto',
-                                'line-height': 1.5,
-                                'word-wrap': 'break-word',
-                                'word-break': 'break-all',
-                                'white-space': 'pre-wrap',
-                                'overflow': 'visible',
-                              }"
-                              :color="{
-                                color: naivePresetColors.primaryBorderSoft,
-                                borderColor: naivePresetColors.primaryBorderSoft,
-                              }"
-                            >
-                              <template #avatar>
-                                <div class="size-25 text-primary i-my-svg:user-avatar"></div>
-                              </template>
-                              <span
-                                :class="{
-                                  'chat-user-message__content--collapsed': shouldCollapseUserMessage(item.question || '')
-                                    && !isUserMessageExpanded(item),
+                    <div v-if="item.role === 'user'" class="chat-user-message-row flex flex-col space-y-2 w-full">
+                      <div class="chat-message-column chat-user-message-column">
+                        <!-- 用户消息 -->
+                        <div class="chat-user-message">
+                          <div class="chat-user-message__stack">
+                            <n-space>
+                              <n-tag
+                                class="chat-user-message__tag"
+                                size="large"
+                                :bordered="false"
+                                :round="true"
+                                :style="{
+                                  'fontSize': '16px',
+                                  'fontFamily': `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji'`,
+                                  'fontWeight': '400',
+                                  'color': cssVar(themeCssVar.textNav),
+                                  'max-width': '600px',
+                                  'text-align': 'left',
+                                  'padding': '5px 18px',
+                                  'height': 'auto',
+                                  'line-height': 1.5,
+                                  'word-wrap': 'break-word',
+                                  'word-break': 'break-all',
+                                  'white-space': 'pre-wrap',
+                                  'overflow': 'visible',
+                                }"
+                                :color="{
+                                  color: naivePresetColors.primaryBorderSoft,
+                                  borderColor: naivePresetColors.primaryBorderSoft,
                                 }"
                               >
-                                {{ item.question }}
-                              </span>
-                            </n-tag>
-                          </n-space>
+                                <template #avatar>
+                                  <div class="size-25 text-primary i-my-svg:user-avatar"></div>
+                                </template>
+                                <span
+                                  :class="{
+                                    'chat-user-message__content--collapsed': shouldCollapseUserMessage(item.question || '')
+                                      && !isUserMessageExpanded(item),
+                                  }"
+                                >
+                                  {{ item.question }}
+                                </span>
+                              </n-tag>
+                            </n-space>
+                            <button
+                              v-if="shouldCollapseUserMessage(item.question || '')"
+                              type="button"
+                              class="chat-user-message__toggle"
+                              @click.stop="toggleUserMessage(item)"
+                            >
+                              {{ isUserMessageExpanded(item) ? '收起' : '展开' }}
+                            </button>
+                          </div>
+                        </div>
+
+                        <!-- 用户消息复制按钮（hover 显隐） -->
+                        <div class="chat-user-message-actions">
+                          <span class="message-timestamp" :class="{ 'message-timestamp--always': isMobile }">{{ formatHHmm(item.created_at) }}</span>
                           <button
-                            v-if="shouldCollapseUserMessage(item.question || '')"
                             type="button"
-                            class="chat-user-message__toggle"
-                            @click.stop="toggleUserMessage(item)"
+                            class="chat-user-copy-btn"
+                            title="复制"
+                            aria-label="复制该消息"
+                            @click="handleCopyUserText(item.question || '')"
                           >
-                            {{ isUserMessageExpanded(item) ? '收起' : '展开' }}
+                            <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
                           </button>
                         </div>
-                      </div>
-
-                      <!-- 用户消息复制按钮（hover 显隐） -->
-                      <div
-                        class="chat-user-message-actions"
-                      >
-                        <span class="message-timestamp" :class="{ 'message-timestamp--always': isMobile }">{{ formatHHmm(item.created_at) }}</span>
-                        <button
-                          type="button"
-                          class="chat-user-copy-btn"
-                          title="复制"
-                          aria-label="复制该消息"
-                          @click="handleCopyUserText(item.question || '')"
-                        >
-                          <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
-                        </button>
                       </div>
 
                       <!-- 用户上传的文件列表 -->
@@ -2500,137 +2495,139 @@ function onComposerPaste(e: ClipboardEvent) {
                       :data-assistant-message-id="item.message_id || ''"
                     >
                       <template v-if="item.messageContent?.version === 1">
-                        <div
-                          v-if="showAssistantReplyLoading(index, item.role) || item.completed_at"
-                          class="assistant-meta-above"
-                          role="status"
-                          aria-live="polite"
-                        >
-                          <span class="assistant-processing-time-text">
-                            {{ item.completed_at
-                              ? formatElapsedSeconds(item.created_at, item.completed_at)
-                              : processingTimeText(item.created_at) }}
-                          </span>
-                        </div>
-                        <div class="assistant-unified-card">
-                          <template
-                            v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
-                            :key="entryKey(entry, pi)"
+                        <div class="chat-message-column assistant-message-column">
+                          <div
+                            v-if="showAssistantReplyLoading(index, item.role) || item.completed_at"
+                            class="assistant-meta-above"
+                            role="status"
+                            aria-live="polite"
                           >
-                            <ReasoningBlock
-                              v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
-                              :reasoning="entry.part.content"
-                              :defaultOpen="false"
-                              :streaming="entry.part.status === 'streaming'"
-                              appearance="light"
-                            />
-                            <SubagentCollapse
-                              v-else-if="entry.kind === 'subagent'"
-                              appearance="light"
-                              :input="entry.part.input"
-                              :output="entry.part.output"
-                              :status="entry.part.status"
-                              :state="entry.part.state"
-                              :error="entry.part.error"
-                              :duration_ms="entry.part.duration_ms"
-                              :child-parts="entry.childParts"
-                            />
-                            <div
-                              v-else-if="entry.kind === 'parallel_tools'"
-                              class="parallel-tools-group parallel-tools-group--light"
+                            <span class="assistant-processing-time-text">
+                              {{ item.completed_at
+                                ? formatElapsedSeconds(item.created_at, item.completed_at)
+                                : processingTimeText(item.created_at) }}
+                            </span>
+                          </div>
+                          <div class="assistant-unified-card">
+                            <template
+                              v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
+                              :key="entryKey(entry, pi)"
                             >
-                              <n-collapse>
-                                <n-collapse-item name="parallel-tools" :default-expanded="true">
-                                  <template #header>
-                                    <div class="parallel-tools-group__header">
-                                      并行工具 · {{ entry.parts.length }} 个
-                                    </div>
-                                  </template>
-                                  <div class="parallel-tools-group__body">
-                                    <ToolCallCollapse
-                                      v-for="tp in entry.parts"
-                                      :key="tp.tool_call_id ?? tp.id"
-                                      appearance="light"
-                                      :name="tp.name"
-                                      :arguments="tp.input"
-                                      :result="tp.output"
-                                      :error="tp.error"
-                                      :status="tp.status"
-                                      :state="tp.state"
-                                      :error-category="tp.errorCategory"
-                                      :exit_code="tp.exit_code"
-                                      :truncated="tp.truncated"
-                                      :duration_ms="tp.duration_ms"
-                                    />
-                                  </div>
-                                </n-collapse-item>
-                              </n-collapse>
-                            </div>
-                            <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
-                              <ToolCallCollapse
+                              <ReasoningBlock
+                                v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
+                                :reasoning="entry.part.content"
+                                :defaultOpen="false"
+                                :streaming="entry.part.status === 'streaming'"
                                 appearance="light"
-                                :name="entry.part.name"
-                                :arguments="entry.part.input"
-                                :result="entry.part.output"
-                                :error="entry.part.error"
+                              />
+                              <SubagentCollapse
+                                v-else-if="entry.kind === 'subagent'"
+                                appearance="light"
+                                :input="entry.part.input"
+                                :output="entry.part.output"
                                 :status="entry.part.status"
                                 :state="entry.part.state"
-                                :error-category="entry.part.errorCategory"
-                                :exit_code="entry.part.exit_code"
-                                :truncated="entry.part.truncated"
+                                :error="entry.part.error"
                                 :duration_ms="entry.part.duration_ms"
+                                :child-parts="entry.childParts"
+                              />
+                              <div
+                                v-else-if="entry.kind === 'parallel_tools'"
+                                class="parallel-tools-group parallel-tools-group--light"
+                              >
+                                <n-collapse>
+                                  <n-collapse-item name="parallel-tools" :default-expanded="true">
+                                    <template #header>
+                                      <div class="parallel-tools-group__header">
+                                        并行工具 · {{ entry.parts.length }} 个
+                                      </div>
+                                    </template>
+                                    <div class="parallel-tools-group__body">
+                                      <ToolCallCollapse
+                                        v-for="tp in entry.parts"
+                                        :key="tp.tool_call_id ?? tp.id"
+                                        appearance="light"
+                                        :name="tp.name"
+                                        :arguments="tp.input"
+                                        :result="tp.output"
+                                        :error="tp.error"
+                                        :status="tp.status"
+                                        :state="tp.state"
+                                        :error-category="tp.errorCategory"
+                                        :exit_code="tp.exit_code"
+                                        :truncated="tp.truncated"
+                                        :duration_ms="tp.duration_ms"
+                                      />
+                                    </div>
+                                  </n-collapse-item>
+                                </n-collapse>
+                              </div>
+                              <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
+                                <ToolCallCollapse
+                                  appearance="light"
+                                  :name="entry.part.name"
+                                  :arguments="entry.part.input"
+                                  :result="entry.part.output"
+                                  :error="entry.part.error"
+                                  :status="entry.part.status"
+                                  :state="entry.part.state"
+                                  :error-category="entry.part.errorCategory"
+                                  :exit_code="entry.part.exit_code"
+                                  :truncated="entry.part.truncated"
+                                  :duration_ms="entry.part.duration_ms"
+                                />
+                              </template>
+                              <MarkdownPreview
+                                v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
+                                :content="entry.part.content || ''"
+                                :retrieval-results="retrievedResults(item.messageContent.parts)"
+                                :toolCalls="null"
+                                :msgMetadata="item.msg_metadata"
+                                :isInit="isInit"
+                                :isView="isView"
+                                :show-action-bar="false"
+                                variant="segment"
+                                :qa-type="item.qa_type || 'COMMON_QA'"
+                                :parentScollBottomMethod="scrollToBottom"
+                                @failed="() => onFailedReader(index)"
                               />
                             </template>
-                            <MarkdownPreview
-                              v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
-                              :content="entry.part.content || ''"
-                              :retrieval-results="retrievedResults(item.messageContent.parts)"
-                              :toolCalls="null"
-                              :msgMetadata="item.msg_metadata"
-                              :isInit="isInit"
-                              :isView="isView"
-                              :show-action-bar="false"
-                              variant="segment"
-                              :qa-type="item.qa_type || 'COMMON_QA'"
-                              :parentScollBottomMethod="scrollToBottom"
-                              @failed="() => onFailedReader(index)"
+                            <div
+                              v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
+                              class="assistant-tool-failure-blocker"
+                              role="status"
+                            >
+                              <span class="assistant-tool-failure-blocker__icon" aria-hidden="true">!</span>
+                              <span>本轮未完成</span>
+                            </div>
+                            <AssistantStreamingIndicator
+                              v-if="showAssistantReplyLoading(index, item.role)"
+                              data-testid="streaming-indicator"
+                              section
+                              :divided="buildDisplayParts(item.messageContent.parts).length > 0"
+                              :label="retryingLabel || (buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成')"
                             />
-                          </template>
-                          <div
-                            v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
-                            class="assistant-tool-failure-blocker"
-                            role="status"
-                          >
-                            <span class="assistant-tool-failure-blocker__icon" aria-hidden="true">!</span>
-                            <span>本轮未完成</span>
                           </div>
-                          <AssistantStreamingIndicator
-                            v-if="showAssistantReplyLoading(index, item.role)"
-                            data-testid="streaming-indicator"
-                            section
-                            :divided="buildDisplayParts(item.messageContent.parts).length > 0"
-                            :label="retryingLabel || (buildDisplayParts(item.messageContent.parts).length > 0 ? '正在继续生成' : '正在生成')"
-                          />
-                        </div>
-                        <div
-                          v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
-                          class="assistant-message-actions"
-                        >
-                          <AssistantReplyToolbar
-                            :qa-type="item.qa_type || 'COMMON_QA'"
-                            :copy-text="extractLastTopLevelText(item.messageContent.parts)"
-                            :time-text="formatHHmm(item.completed_at || item.created_at)"
-                            :langfuse_session_id="item.langfuse_session_id"
-                            :langfuse-ui-origin="langfuseUiOrigin"
+                          <div
+                            v-if="item.messageContent.parts.length > 0 && !assistantPartsStillStreaming(item.messageContent.parts)"
+                            class="assistant-message-actions"
                           >
-                            <template #meta>
-                              <CitationSources
-                                v-if="retrievedResults(item.messageContent.parts).length"
-                                :ref="(component) => setCitationSourcesRef(citationSourcesKey(item, index), component)"
-                                :results="retrievedResults(item.messageContent.parts)"
-                              />
-                            </template>
-                          </AssistantReplyToolbar>
+                            <AssistantReplyToolbar
+                              :qa-type="item.qa_type || 'COMMON_QA'"
+                              :copy-text="extractLastTopLevelText(item.messageContent.parts)"
+                              :time-text="formatHHmm(item.completed_at || item.created_at)"
+                              :langfuse_session_id="item.langfuse_session_id"
+                              :langfuse-ui-origin="langfuseUiOrigin"
+                            >
+                              <template #meta>
+                                <CitationSources
+                                  v-if="retrievedResults(item.messageContent.parts).length"
+                                  :ref="(component) => setCitationSourcesRef(citationSourcesKey(item, index), component)"
+                                  :results="retrievedResults(item.messageContent.parts)"
+                                />
+                              </template>
+                            </AssistantReplyToolbar>
+                          </div>
                         </div>
                       </template>
                       <template v-else>
@@ -3281,14 +3278,37 @@ function onComposerPaste(e: ClipboardEvent) {
   flex-shrink: 0;
 }
 
+.chat-message-column {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding-right: 10%;
+  padding-left: 10%;
+}
+
+.chat-user-message-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.chat-user-message {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 15px;
+  border-radius: 5px;
+  text-align: center;
+}
+
 .chat-user-message-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   box-sizing: border-box;
-  width: 80%;
-  margin-right: 10%;
-  margin-left: 10%;
+  width: 100%;
+  margin-right: 0;
+  margin-left: 0;
   margin-top: -14px;
   margin-bottom: 0;
   padding-right: 8px;
@@ -3362,9 +3382,9 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .assistant-meta-above {
   box-sizing: border-box;
-  width: 80%;
-  margin-left: 10%;
-  margin-right: 10%;
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
   padding: 4px 16px 0;
 }
 
@@ -3380,18 +3400,18 @@ function onComposerPaste(e: ClipboardEvent) {
   align-items: center;
   justify-content: flex-end;
   box-sizing: border-box;
-  width: 80%;
-  margin-left: 10%;
-  margin-right: 10%;
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
   margin-top: -8px;
   padding-right: 8px;
 }
 
 .assistant-unified-card {
   position: relative;
-  width: 80%;
-  margin-left: 10%;
-  margin-right: 10%;
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
   background: var(--noesis-color-bg-elevated);
   border: 1px solid var(--noesis-color-border-subtle);
   border-radius: 16px;
@@ -3504,6 +3524,12 @@ function onComposerPaste(e: ClipboardEvent) {
   .chat-content-gutter {
     margin-left: var(--noesis-content-gutter-mobile);
     margin-right: var(--noesis-content-gutter-mobile);
+  }
+
+  .chat-message-column {
+    width: 100%;
+    padding-right: 0;
+    padding-left: 0;
   }
 
   .assistant-unified-card {

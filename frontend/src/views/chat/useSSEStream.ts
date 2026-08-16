@@ -362,11 +362,25 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         }
         const decoder = new TextDecoder()
         let rawBuffer = ''
+        // 读超时：防止 TCP half-open 导致 reader.read() 永久挂住。
+        // 超时后 break 出 while，让 followRun 重连查 getAgentRun 拿终态。
+        const READ_TIMEOUT_MS = 45_000
+        const READ_TIMEOUT = Symbol('read-timeout')
         while (true) {
           if (streamSettled || userAborted) {
             break
           }
-          const { done, value } = await reader.read()
+          const result = await Promise.race([
+            reader.read().then((r) => r),
+            new Promise<typeof READ_TIMEOUT>((resolve) =>
+              setTimeout(() => resolve(READ_TIMEOUT), READ_TIMEOUT_MS),
+            ),
+          ])
+          if (result === READ_TIMEOUT) {
+            await reader.cancel()
+            break
+          }
+          const { done, value } = result
           if (value) {
             rawBuffer += decoder.decode(value, { stream: true })
           }

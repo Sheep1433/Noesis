@@ -90,6 +90,7 @@ const handlePassClip = async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  box-sizing: border-box;
   width: 100%;
   margin-top: 0;
   padding: 6px 8px 6px 15px;

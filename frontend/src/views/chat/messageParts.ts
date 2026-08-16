@@ -748,6 +748,14 @@ export function partsContainStreamFailureNotice(parts: UiPart[]): boolean {
   })
 }
 
+function partsContainFailureDetail(parts: UiPart[], detail?: string): boolean {
+  const needle = detail?.trim()
+  if (!needle) {
+    return false
+  }
+  return parts.some((p) => p.type === 'text' && String(p.content ?? '').includes(needle))
+}
+
 /** 将 SSE/流式错误转为气泡内展示文案；null 表示不追加说明 */
 export function getStreamFailureNoticeText(
   detail: string | undefined,
@@ -805,6 +813,11 @@ export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiP
     return finalizePartsOnStreamError(parts)
   }
   const completed = finalizePartsOnStreamError(parts)
+
+  // 模型 fallback 可能已经把用户可见错误写入正文；此时只收口，不再重复追加同一详情。
+  if (partsContainFailureDetail(completed, detail)) {
+    return completed
+  }
 
   const hasProse = completed.some((p) => {
     if (p.type === 'text' || p.type === 'reasoning') {

@@ -76,6 +76,24 @@ def test_append_notice_is_idempotent_when_notice_already_present() -> None:
     assert out["parts"][0]["content"] == content["parts"][0]["content"]
 
 
+def test_append_notice_does_not_repeat_detail_already_in_prose() -> None:
+    detail = "LLM 服务经多次重试后仍不可用，请稍候继续对话。"
+    content = {
+        "version": 1,
+        "parts": [{"type": "text", "content": detail, "status": "completed"}],
+    }
+
+    out = append_stream_failure_notice_to_content(content, detail)
+    rendered = "\n".join(
+        str(part.get("content") or "")
+        for part in out["parts"]
+        if part.get("type") == "text"
+    )
+
+    assert rendered.count("LLM 服务经多次重试后仍不可用") == 1
+    assert len(out["parts"]) == 1
+
+
 def test_assistant_status_for_finish() -> None:
     from noesis.services.qa.helpers import _assistant_status_for_finish
 

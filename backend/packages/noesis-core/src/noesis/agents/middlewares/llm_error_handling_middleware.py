@@ -1,16 +1,16 @@
 """LLM error handling middleware with retry/backoff and user-facing fallbacks.
 
-迁移自 deer-flow 的 LLMErrorHandlingMiddleware。在 wrap_model_call 层捕获
-LLM provider 异常，重试瞬时错误（连接失败/超时/5xx/429），重试时发
-``noesis_model_retry`` custom event（bridge 已实现接收转 run-status SSE）；
-重试用尽后返回一条 content 为失败说明的 AIMessage，让下一轮模型感知上一轮
-被中断，而不是把半截回答当真实内容。
+在 wrap_model_call 层捕获 LLM provider 异常，重试瞬时错误（连接失败/超时/5xx/429），
+重试时发 ``noesis_model_retry`` custom event（bridge 转为 run-status SSE）；重试
+耗尽或不可重试时发 ``noesis_model_fallback`` custom event，bridge 接收后把失败
+说明文本推入 SSE 流（text-delta）并标 error 终态，用户在消息体看到失败原因。
+
+circuit breaker：连续失败达阈值后熔断，后续请求直接降级不再调用 provider。
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import random
 import threading
 import time
@@ -30,8 +30,7 @@ from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 
 from noesis.config.env import ModelConfig
-
-logger = logging.getLogger(__name__)
+from noesis.runtime.logging import logger
 
 # 可重试的 HTTP 状态码（与 OpenAI SDK _should_retry 一致）
 _RETRIABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
@@ -79,13 +78,7 @@ _BURST_PATTERNS = (
     "突发速率",
 )
 
-# Stream-chunk 超时等异常类名，仅 1 次重试后快速失败
-_RETRY_BUDGET_OVERRIDES: dict[str, int] = {
-    "StreamChunkTimeoutError": 2,
-}
-_REASON_RETRY_BUDGETS: dict[str, int] = {
-    "burst_rate": 2,
-}
+# 流式响应中断等异常类名，用于重试耗尽后的针对性失败提示
 _STREAM_DROP_EXCEPTIONS: frozenset[str] = frozenset({"StreamChunkTimeoutError"})
 
 # Circuit breaker 默认阈值
@@ -94,12 +87,12 @@ _DEFAULT_CIRCUIT_RECOVERY_TIMEOUT_SEC = 60
 
 
 class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
-    """Retry transient LLM errors and surface graceful assistant messages.
+    """Retry transient LLM errors and surface graceful fallbacks.
 
     重试与失败轮次感知都在 ``wrap_model_call`` 一处完成：
     - 可重试异常 → 退避后重试，每次发 ``noesis_model_retry`` custom event
-    - 重试用尽 / 不可重试 → 返回 content 为失败说明的 AIMessage（带
-      ``noesis_error_fallback=True`` 标记），让下一轮模型感知上一轮中断
+    - 重试用尽 / 不可重试 → 发 ``noesis_model_fallback`` custom event（bridge
+      把失败文本推入 SSE 流并标 ERROR），返回 content 为失败说明的 AIMessage
     """
 
     retry_base_delay_ms: int = 1000
@@ -150,7 +143,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 self._circuit_state = "open"
                 self._circuit_probe_in_flight = False
                 logger.error(
-                    "Circuit breaker probe failed (Open). Will probe again after %ds.",
+                    "Circuit breaker probe failed (Open). Will probe again after {}s.",
                     self.circuit_recovery_timeout_sec,
                 )
                 return
@@ -161,7 +154,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                     self._circuit_state = "open"
                     self._circuit_probe_in_flight = False
                     logger.error(
-                        "Circuit breaker tripped (Open). Threshold reached (%d). Will probe after %ds.",
+                        "Circuit breaker tripped (Open). Threshold reached ({}). Will probe after {}s.",
                         self.circuit_failure_threshold,
                         self.circuit_recovery_timeout_sec,
                     )
@@ -172,16 +165,6 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 self._circuit_probe_in_flight = False
 
     # ---------- error classification ----------
-
-    def _max_attempts_for(self, exc: BaseException, reason: str = "transient") -> int:
-        candidates = [self.retry_max_attempts]
-        class_override = _RETRY_BUDGET_OVERRIDES.get(type(exc).__name__)
-        if class_override is not None:
-            candidates.append(class_override)
-        reason_override = _REASON_RETRY_BUDGETS.get(reason)
-        if reason_override is not None:
-            candidates.append(reason_override)
-        return min(candidates)
 
     def _classify_error(self, exc: BaseException) -> tuple[bool, str]:
         detail = _extract_error_detail(exc)
@@ -230,10 +213,8 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
 
     # ---------- fallback messages ----------
 
-    def _build_circuit_breaker_message(self) -> str:
-        return "LLM 服务因连续失败已触发熔断保护，请稍候再试。"
-
-    def _build_user_message(self, exc: BaseException, reason: str) -> str:
+    def _fallback_message_for_reason(self, exc: BaseException, reason: str) -> str:
+        """根据错误分类构造面向用户的失败说明文本。"""
         detail = _extract_error_detail(exc)
         if reason == "quota":
             return "LLM 服务额度不足或计费不可用，请检查 provider 账户后重试。"
@@ -250,33 +231,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             return "LLM 服务经多次重试后仍不可用，请稍候继续对话。"
         return f"LLM 请求失败：{detail}"
 
-    def _build_error_fallback_message(
-        self,
-        content: str,
-        *,
-        error_type: str,
-        reason: str,
-        detail: str,
-    ) -> AIMessage:
-        return AIMessage(
-            content=content,
-            additional_kwargs={
-                "noesis_error_fallback": True,
-                "error_type": error_type,
-                "error_reason": reason,
-                "error_detail": detail,
-            },
-        )
-
-    def _build_user_fallback_message(self, exc: BaseException, reason: str) -> AIMessage:
-        return self._build_error_fallback_message(
-            self._build_user_message(exc, reason),
-            error_type=type(exc).__name__,
-            reason=reason,
-            detail=_extract_error_detail(exc),
-        )
-
-    # ---------- retry events ----------
+    # ---------- custom events ----------
 
     def _build_retry_event(
         self,
@@ -301,18 +256,19 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             "message": f"连接失败，{reason_text}，正在重试 ({attempt}/{max_attempts})，{seconds}s 后重试",
         }
 
-    def _emit_retry_event(
-        self,
-        attempt: int,
-        wait_ms: int,
-        reason: str,
-        *,
-        max_attempts: int,
-    ) -> None:
+    @staticmethod
+    def _build_fallback_event(content: str) -> dict[str, Any]:
+        return {"type": "noesis_model_fallback", "content": content}
+
+    def _emit_custom_event(self, name: str, payload: dict[str, Any]) -> None:
+        """双通道发送 custom event：get_stream_writer + dispatch_custom_event。
+
+        LangGraph 中间件返回值绕过 model.ainvoke callback，custom event 是
+        中间件向 SSE 流推送信息的唯一可靠通道。
+        """
         try:
             from langgraph.config import get_stream_writer
 
-            payload = self._build_retry_event(attempt, wait_ms, reason, max_attempts=max_attempts)
             writer = get_stream_writer()
             try:
                 writer(payload)
@@ -320,24 +276,16 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 pass
             from langchain_core.callbacks import dispatch_custom_event
 
-            dispatch_custom_event("noesis_model_retry", payload)
+            dispatch_custom_event(name, payload)
         except GraphBubbleUp:
             raise
         except Exception:
-            logger.debug("Failed to emit noesis_model_retry event", exc_info=True)
+            logger.opt(exception=True).debug("Failed to emit {} event", name)
 
-    async def _aemit_retry_event(
-        self,
-        attempt: int,
-        wait_ms: int,
-        reason: str,
-        *,
-        max_attempts: int,
-    ) -> None:
+    async def _aemit_custom_event(self, name: str, payload: dict[str, Any]) -> None:
         try:
             from langgraph.config import get_stream_writer
 
-            payload = self._build_retry_event(attempt, wait_ms, reason, max_attempts=max_attempts)
             writer = get_stream_writer()
             try:
                 writer(payload)
@@ -345,13 +293,41 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 pass
             from langchain_core.callbacks import adispatch_custom_event
 
-            await adispatch_custom_event("noesis_model_retry", payload)
+            await adispatch_custom_event(name, payload)
         except GraphBubbleUp:
             raise
         except Exception:
-            logger.debug("Failed to emit async noesis_model_retry event", exc_info=True)
+            logger.opt(exception=True).debug("Failed to emit async {} event", name)
 
     # ---------- model call wrapping ----------
+
+    _CIRCUIT_BREAKER_MESSAGE = "LLM 服务因连续失败已触发熔断保护，请稍候再试。"
+
+    def _emit_retry(
+        self, attempt: int, wait_ms: int, reason: str
+    ) -> None:
+        payload = self._build_retry_event(
+            attempt, wait_ms, reason, max_attempts=self.retry_max_attempts
+        )
+        self._emit_custom_event("noesis_model_retry", payload)
+
+    async def _aemit_retry(
+        self, attempt: int, wait_ms: int, reason: str
+    ) -> None:
+        payload = self._build_retry_event(
+            attempt, wait_ms, reason, max_attempts=self.retry_max_attempts
+        )
+        await self._aemit_custom_event("noesis_model_retry", payload)
+
+    def _emit_fallback(self, content: str) -> None:
+        self._emit_custom_event(
+            "noesis_model_fallback", self._build_fallback_event(content)
+        )
+
+    async def _aemit_fallback(self, content: str) -> None:
+        await self._aemit_custom_event(
+            "noesis_model_fallback", self._build_fallback_event(content)
+        )
 
     @override
     def wrap_model_call(
@@ -360,12 +336,8 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelCallResult:
         if self._check_circuit():
-            return self._build_error_fallback_message(
-                self._build_circuit_breaker_message(),
-                error_type="CircuitBreakerOpen",
-                reason="circuit_open",
-                detail="LLM circuit breaker is open",
-            )
+            self._emit_fallback(self._CIRCUIT_BREAKER_MESSAGE)
+            return AIMessage(content=self._CIRCUIT_BREAKER_MESSAGE)
 
         attempt = 1
         prev_delay_ms: int | None = None
@@ -379,32 +351,32 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 raise
             except Exception as exc:
                 retriable, reason = self._classify_error(exc)
-                max_attempts = self._max_attempts_for(exc, reason)
-                if retriable and attempt < max_attempts:
+                if retriable and attempt < self.retry_max_attempts:
                     wait_ms = self._build_retry_delay_ms(prev_delay_ms, exc, reason)
                     prev_delay_ms = wait_ms
                     logger.warning(
-                        "Transient LLM error on attempt %d/%d; retrying in %dms: %s",
+                        "Transient LLM error on attempt {}/{}; retrying in {}ms: {}",
                         attempt,
-                        max_attempts,
+                        self.retry_max_attempts,
                         wait_ms,
                         _extract_error_detail(exc),
                     )
-                    self._emit_retry_event(attempt, wait_ms, reason, max_attempts=max_attempts)
+                    self._emit_retry(attempt, wait_ms, reason)
                     time.sleep(wait_ms / 1000)
                     attempt += 1
                     continue
-                logger.error(
-                    "LLM call failed after %d attempt(s): %s",
+                logger.opt(exception=exc).error(
+                    "LLM call failed after {} attempt(s): {}",
                     attempt,
                     _extract_error_detail(exc),
-                    exc_info=exc,
                 )
                 if retriable and reason != "burst_rate":
                     self._record_failure()
                 else:
                     self._release_half_open_probe()
-                return self._build_user_fallback_message(exc, reason)
+                msg = self._fallback_message_for_reason(exc, reason)
+                self._emit_fallback(msg)
+                return AIMessage(content=msg)
 
     @override
     async def awrap_model_call(
@@ -413,12 +385,8 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelCallResult:
         if self._check_circuit():
-            return self._build_error_fallback_message(
-                self._build_circuit_breaker_message(),
-                error_type="CircuitBreakerOpen",
-                reason="circuit_open",
-                detail="LLM circuit breaker is open",
-            )
+            await self._aemit_fallback(self._CIRCUIT_BREAKER_MESSAGE)
+            return AIMessage(content=self._CIRCUIT_BREAKER_MESSAGE)
 
         attempt = 1
         prev_delay_ms: int | None = None
@@ -432,32 +400,32 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                 raise
             except Exception as exc:
                 retriable, reason = self._classify_error(exc)
-                max_attempts = self._max_attempts_for(exc, reason)
-                if retriable and attempt < max_attempts:
+                if retriable and attempt < self.retry_max_attempts:
                     wait_ms = self._build_retry_delay_ms(prev_delay_ms, exc, reason)
                     prev_delay_ms = wait_ms
                     logger.warning(
-                        "Transient LLM error on attempt %d/%d; retrying in %dms: %s",
+                        "Transient LLM error on attempt {}/{}; retrying in {}ms: {}",
                         attempt,
-                        max_attempts,
+                        self.retry_max_attempts,
                         wait_ms,
                         _extract_error_detail(exc),
                     )
-                    await self._aemit_retry_event(attempt, wait_ms, reason, max_attempts=max_attempts)
+                    await self._aemit_retry(attempt, wait_ms, reason)
                     await asyncio.sleep(wait_ms / 1000)
                     attempt += 1
                     continue
-                logger.error(
-                    "LLM call failed after %d attempt(s): %s",
+                logger.opt(exception=exc).error(
+                    "LLM call failed after {} attempt(s): {}",
                     attempt,
                     _extract_error_detail(exc),
-                    exc_info=exc,
                 )
                 if retriable and reason != "burst_rate":
                     self._record_failure()
                 else:
                     self._release_half_open_probe()
-                return self._build_user_fallback_message(exc, reason)
+                msg = self._fallback_message_for_reason(exc, reason)
+                await self._aemit_fallback(msg)
+                return AIMessage(content=msg)
 
 
 def _matches_any(detail: str, patterns: tuple[str, ...]) -> bool:

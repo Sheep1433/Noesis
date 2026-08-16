@@ -113,6 +113,78 @@ def test_unknown_business_event_is_logged_and_dropped() -> None:
     assert mapper.map_item({"type": "future-unknown-event", "value": 1}, None, {}) == []
 
 
+def test_model_retry_event_is_emitted_as_run_status_type() -> None:
+    """noesis_model_retry custom event 必须以 run-status 类型透传给前端。
+
+    中间件 ``_build_retry_event`` 产出的 payload 含 ``type: noesis_model_retry``。
+    bridge 转成 run-status WireFrame 时不得让该 type 覆盖外层 ``run-status``，
+    否则前端按 ``data.type`` 分发时匹配不到 ``run-status`` 分支，重试提示静默丢失。
+    """
+    mapper = RuntimeEventMapper(LangGraphSseBridge("s1", assistant_message_id="m1"))
+    # 与 LLMErrorHandlingMiddleware._build_retry_event 返回结构一致
+    retry_data = {
+        "type": "noesis_model_retry",
+        "status": "retrying",
+        "attempt_id": 1,
+        "max_attempts": 6,
+        "wait_ms": 1091,
+        "reason": "transient",
+        "message": "连接失败，provider 请求暂时失败，正在重试 (1/6)，2s 后重试",
+    }
+    events = mapper.map_item(
+        {"event": "on_custom_event", "name": "noesis_model_retry", "data": retry_data},
+        None,
+        {},
+    )
+    assert len(events) == 1
+    wf = events[0]
+    assert isinstance(wf, WireFrame)
+    assert wf.event == "run-status"
+    # 前端 useSSEStream 按 data.type 分发，必须是 run-status
+    assert wf.data["type"] == "run-status"
+    # retry 语义字段保留
+    assert wf.data["status"] == "retrying"
+    assert wf.data["max_attempts"] == 6
+
+
+def test_model_fallback_event_emits_text_and_error() -> None:
+    """noesis_model_fallback custom event 必须把 fallback 文本推入 builder
+    并发 error 事件，让 projection 标 ERROR、前端显示失败消息。
+
+    根因：中间件 awrap_model_call 返回 fallback AIMessage 绕过 model.ainvoke，
+    不触发 on_chat_model_end，旧链路（on_chat_model_end 检测 noesis_error_fallback）
+    是死代码。fallback 改由 custom event 通道传输。
+    """
+    bridge = LangGraphSseBridge("s1", assistant_message_id="m1")
+    mapper = RuntimeEventMapper(bridge)
+    builder = AssistantMessageBuilder(session_id="s1", message_id="m1")
+    fallback_data = {
+        "type": "noesis_model_fallback",
+        "content": "LLM 服务经多次重试后仍不可用，请稍候继续对话。",
+        "error_type": "APITimeoutError",
+        "error_reason": "transient",
+        "error_detail": "Request timed out.",
+    }
+    events = mapper.map_item(
+        {"event": "on_custom_event", "name": "noesis_model_fallback", "data": fallback_data},
+        builder,
+        {},
+    )
+    # fallback 文本写进 builder
+    parts = builder.to_dict()["parts"]
+    assert any(
+        isinstance(p, dict) and p.get("type") == "text" and "LLM 服务经多次重试后仍不可用" in p.get("content", "")
+        for p in parts
+    )
+    # 产出包含 text-delta（前端显示文本）和 error（RunError → projection 标 ERROR）
+    from noesis.chat.delivery.events import RunError
+    event_types = [getattr(e, "event", None) for e in events]
+    assert "text-delta" in event_types
+    assert any(isinstance(e, RunError) for e in events)
+    # bridge 已发终态事件，后续 finish 不再重复
+    assert bridge._finish_emitted is True
+
+
 def test_wire_frame_keeps_model_attempt_identity() -> None:
     mapper = RuntimeEventMapper(LangGraphSseBridge("s1", assistant_message_id="m1"))
     mapper.map_item(

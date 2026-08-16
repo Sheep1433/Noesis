@@ -1282,49 +1282,33 @@ def test_step_id_survives_builder_persistence() -> None:
     assert {p.step_id for p in tool_parts} == {"root:1"}
 
 
-def test_llm_error_fallback_marked_on_model_end_and_flushed_on_finish() -> None:
-    """LLM 降级 AIMessage 的 error_fallback 在 on_chat_model_end 暂存，
-    __tw_finish__ flush text 后标记到 builder text part。"""
-    from noesis.chat.runs.projection import RunProjection
-    from noesis.chat.delivery.events import RunCompleted
-    from noesis.chat.runs.models import RunStatus
-
-    bridge = LangGraphSseBridge("sess-fallback")
-    builder = AssistantMessageBuilder(session_id="sess-fallback", message_id=bridge.assistant_message_id)
+def test_model_fallback_event_then_finish_does_not_emit_duplicate_finish() -> None:
+    """noesis_model_fallback custom event 发 error 终态后，后续 __tw_finish__
+    不再重复发 finish 帧（_emit_finish 幂等 guard）。"""
+    bridge = LangGraphSseBridge("sess-fb")
+    builder = AssistantMessageBuilder(session_id="sess-fb", message_id=bridge.assistant_message_id)
     ctx = _ctx()
 
-    class _FallbackOutput:
-        content = "LLM 服务经多次重试后仍不可用，请稍候继续对话。"
-        additional_kwargs = {
-            "noesis_error_fallback": True,
-            "error_type": "RateLimitError",
-            "error_reason": "transient",
-            "error_detail": "Error code: 429 - FreeUsageLimitError",
-        }
-        usage_metadata = None
-
-    bridge.process_item(
-        {"event": "on_chat_model_end", "run_id": "m-1", "data": {"output": _FallbackOutput()}},
+    lines_before = bridge.process_item(
+        {
+            "event": "on_custom_event",
+            "name": "noesis_model_fallback",
+            "data": {
+                "type": "noesis_model_fallback",
+                "content": "LLM 服务经多次重试后仍不可用，请稍候继续对话。",
+                "error_type": "APITimeoutError",
+                "error_reason": "transient",
+                "error_detail": "Request timed out.",
+            },
+        },
         builder, ctx,
     )
-    # text_buffer 还没 flush，pending_error_fallback 暂存
-    assert "pending_error_fallback" in ctx
+    # fallback 发了 error 事件
+    assert any('"error"' in line for line in lines_before)
 
-    bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
-
-    # text part 已写入 builder 且带 error_fallback
-    fallback = builder.last_top_level_error_fallback()
-    assert fallback is not None
-    assert fallback["error_type"] == "RateLimitError"
-    assert "429" in fallback["error_detail"]
-
-    # projection 消费 RunCompleted 后应改 status 为 ERROR
-    proj = RunProjection(
-        run_id="r1", user_id=1, session_id="sess-fallback",
-        assistant_message_id=bridge.assistant_message_id, qa_type="COMMON_QA",
+    lines_after = bridge.process_item(
+        {"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx,
     )
-    proj.builder = builder
-    proj.apply(RunCompleted(finish_reason="stop", usage={}))
-    assert proj.status == RunStatus.ERROR
-    assert proj.finish_reason == "llm_error_fallback"
-    assert proj.error_code == "RateLimitError"
+    # __tw_finish__ 不再发 finish 帧（幂等 guard）
+    assert not any('"finish"' in line for line in lines_after)
+

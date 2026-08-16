@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseTaskToolOutput } from '@/utils/parseTaskTool'
 import {
+  appendStreamFailureNotice,
   applyToolOutput,
   assistantToolFailureSummary,
   completeReasoningPart,
@@ -61,6 +62,21 @@ describe('message parts snapshot normalization', () => {
       cancelled: '已停止',
     })
   })
+
+  it('错误详情已经出现在正文时不重复追加原始错误', () => {
+    const detail = 'LLM 服务经多次重试后仍不可用，请稍候继续对话。'
+    const parts = appendStreamFailureNotice([
+      { id: 'text-1', type: 'text', content: detail, status: 'streaming' },
+    ], detail)
+    const text = parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.content)
+      .join('\n')
+
+    expect(text.match(/LLM 服务经多次重试后仍不可用/g)).toHaveLength(1)
+    expect(parts).toHaveLength(1)
+  })
+
   it('刷新或 HITL 续跑时按 tool_call_id 合并重复工具块', () => {
     const normalized = normalizeApiContent({
       parts: [
