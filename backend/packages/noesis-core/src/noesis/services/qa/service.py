@@ -1,7 +1,6 @@
 """QaService — Run-managed QA orchestration (exec_query / resume / export)."""
 
 import asyncio
-import logging
 import re
 import time
 import uuid
@@ -59,7 +58,7 @@ class QaService:
         Yields:
             RunEvent | str: typed 主路径事件，或 TEST_CASE_QA 的独立 SSE 帧。
         """
-        logging.info(f"query param: {req_obj.json()}")
+        logger.info(f"query param: {req_obj.json()}")
         clean_query = re.sub(r"\s+", "", req_obj.query or "")
 
         if ChatAttachmentConfig.enabled and req_obj.file_dict:
@@ -273,7 +272,7 @@ class QaService:
             raise
 
         except Exception as e:
-            logging.exception(f"QA服务异常: {e}")
+            logger.exception(f"QA服务异常: {e}")
             if bridge is not None:
                 b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
@@ -301,7 +300,7 @@ class QaService:
                     for event in finalize():
                         yield event
                 except Exception:
-                    logging.exception("failed to emit SSE after QA exception")
+                    logger.exception("failed to emit SSE after QA exception")
 
     @classmethod
     async def exec_test_case_resume(
@@ -393,7 +392,7 @@ class QaService:
             raise
 
         except Exception as e:
-            logging.exception(f"测试用例 resume 异常: {e}")
+            logger.exception(f"测试用例 resume 异常: {e}")
             if bridge is not None:
                 b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
@@ -414,7 +413,7 @@ class QaService:
                     for line in bridge.finalize():
                         yield line
                 except Exception:
-                    logging.exception("failed to emit SSE after test case resume exception")
+                    logger.exception("failed to emit SSE after test case resume exception")
 
     @classmethod
     async def exec_hitl_resume(
@@ -616,7 +615,7 @@ class QaService:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logging.exception(f"HITL resume 异常: {e}")
+            logger.exception(f"HITL resume 异常: {e}")
             if bridge is not None:
                 b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {}
@@ -634,7 +633,7 @@ class QaService:
                     for event in mapper.finalize():
                         yield event
                 except Exception:
-                    logging.exception("failed to emit SSE after HITL resume exception")
+                    logger.exception("failed to emit SSE after HITL resume exception")
 
     @classmethod
     async def export_test_case_markdown(

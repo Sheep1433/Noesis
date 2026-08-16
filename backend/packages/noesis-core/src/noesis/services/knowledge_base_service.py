@@ -6,7 +6,6 @@ service 层不碰 HTTP（不抛 HTTPException、不用 ResponseUtil）。
 api 层 catch 后映射 HTTP。返回 dict（VO 构造由 service 完成，api 只包装）。
 """
 import json
-import logging
 from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,9 +40,9 @@ from noesis.knowledge.chunking import (
 )
 from noesis.knowledge.parser.staging import sanitize_kb_filename, write_staging
 from noesis.config.env import QdrantConfig
+from noesis.runtime.logging import logger
 
 
-logger = logging.getLogger(__name__)
 
 
 async def _require_collection_in_qdrant(service: QdrantService, collection_name: str) -> dict:
@@ -382,7 +381,7 @@ async def upload_document(
     except (NotFoundException, ServiceException, QdrantNotConnectedError):
         raise
     except Exception as e:
-        logger.exception("上传文档服务异常 collection=%s file=%s", collection_name, original_name)
+        logger.exception("上传文档服务异常 collection={} file={}", collection_name, original_name)
         raise ServiceException(message="上传失败，请稍后重试") from e
     finally:
         if staging_path.exists():
