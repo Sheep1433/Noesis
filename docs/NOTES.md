@@ -78,6 +78,8 @@
 - **API**：`GET /api/models`；流式 `extra.model_id`。
 - **前端**：输入区 `ModelSelector`（非 TEST_CASE_QA）；切换后 `ensureSession` 持久化。
 
+- **目录契约增补（2026-08-15）**：catalog 已收敛为 `id`（provider 模型全名）+ `label`（展示名）+ `model_type` + `context_window`；同步修改 Pydantic `ModelCatalogItem` 和前端 `ChatModelOption`。只改配置而不改 schema 会让 `/api/models` 继续要求已删除的 `model_name`/`limit`，最终在序列化阶段失败。
+
 ## OpenCode Zen 免费模型目录（2026-07-02）
 
 - **发现**：`https://models.dev/api.json` 中 `opencode` provider、`cost.input==0 && status==active`；网关 `https://opencode.ai/zen/v1`，`.env` `MODEL_API_KEY=public`。
@@ -92,6 +94,8 @@
 - **明确删除**：structured answer、虚拟 Tool、typed annotation、citation resolve API、前端 offset marker 和旧兼容分支。
 - **验证**：保留真实模型 Web citation 集成测试，同时检查实时流和终态消息中的 Markdown 来源。
 - **Provider 能力门禁（2026-08-03）**：MiMo 的 `function_calling`、`json_schema`、`json_mode` 在固定对照用例中均稳定返回 500；这不是偶发网络错误，也不是工具数量导致。移除 MiMo 的结构化引用白名单后，同一模型和工具集合可正常产生普通工具调用。以后不能用模型目录或单次成功请求声明结构化能力，必须在目标 provider + 实际工具集合上做能力门禁；门禁失败时关闭结构化引用，不阻断普通对话。
+
+- **引用匹配增补（2026-08-15）**：检索记录的 Web URL 可能带 tracking query，而模型在参考资料中输出的 URL 不带 query；用完整 URL 严格比较会导致引用编号无法变成上标。匹配键应规范化为 `origin + pathname`（忽略 query/hash），展示链接仍保留经过安全校验的完整 URL，并用真实 tracking URL 回归测试覆盖。
 
 ## 2026-07-30 — 评测 harness 收敛 + 中间件复核结论
 
@@ -1129,3 +1133,25 @@ backends/
 - `_scan_dir` 过滤噪声目录（`node_modules`/`.git`/`vendor`/`__pycache__`/`.venv`）→ `/tree` 从数万行降到 39 节点/10KB，只服务技能管理页文件浏览器。933 passed。
 
 **可迁移原则：** 大接口被「顺手复用」要按场景校验数据量：聊天要的是包名列表不是文件树；过滤只针对非 skill 内容的依赖目录，不能按大小/深度裁剪用户真正想浏览的内容。命令发现统一走「单一元数据源 + 每端适配」，不要每端各写一套命令表。
+
+## 2026-08-15 — LLM 重试耗尽不能静默降级
+
+**问题/症状：** provider 失败时前端曾看不到重试过程，重试耗尽后 run 仍可能被当作正常完成；用户只能看到空的 AIMessage 或没有可行动错误。一次修复还出现了 `error_fallback` 标记丢失，导致错误状态没有传到终态。
+
+**根因：** 重试、SSE 事件、文本 builder 和 RunProjection 分属不同层；中间件返回带 `noesis_error_fallback` 的降级 AIMessage 后，如果消费层不检查该标记，正常的 agent loop 会把失败伪装成 `completed`。另外 `on_chat_model_end` 发生时文本仍在 bridge buffer 中，过早标记找不到 text part，fallback 会被时序吞掉。
+
+**解法/取舍：** 用独立 `LLMErrorHandlingMiddleware` 统一捕获连接失败/超时/5xx，最多重试 6 次并发出 `noesis_model_retry`；耗尽后返回带结构化错误元数据的 AIMessage。bridge 先暂存 fallback，flush 文本后再标记；`RunProjection` 只消费顶层 text part，将 run 改为 `ERROR`，填充 `llm_error_fallback`、错误码和用户可见错误。补齐 message builder、bridge→projection 端到端测试；关闭 SDK 黑盒重试，避免两套计数。
+
+**可迁移原则：** 重试的正确性由“attempt 可见性、已输出保护、最终错误终态、持久化一致性”共同定义，不能只看循环次数。任何降级/兜底都必须在消费层有明确的失败标记和终态映射，禁止用正常 `stop` 掩盖 provider 故障。
+
+**验证与遗留：** 8/15 已补 6 次重试事件、fallback 持久化和 flush 时序测试；仍需用真实 provider 失败注入验收前台事件、最终消息和数据库状态，并完成当前错误处理中间件工作树改动的提交。
+
+## 2026-08-15 — 删除运行时 owner 前先回看 spec
+
+**问题/症状：** 清理 runtime 时发现 governor、thread context、context snapshot、旧 retry/预算状态和若干 delivery 事件从未接入真实路径，代码量大但没有运行时价值；直接删除后又暴露出工具循环检测、subagent 并发/总数/深度限制仍写在 spec 中。
+
+**解法/取舍：** 先用调用方搜索确认死代码，再删除未接线的 owner、数据库列和空转事件；同时把运行预算从 Run Governor 改成独立 Agent middleware 的契约。工具循环与 subagent 限制不能继续依赖被删除的 governor，必须另立职责清晰的 middleware 和验收场景。
+
+**可迁移原则：** “代码存在”不等于“能力存在”，而“删除死代码”也不等于“需求消失”。清理前要把 spec 要求映射到真实调用链；若需求仍有效，先迁移到可观测、可测试的独立组件，再删除旧 owner。
+
+**验证与遗留：** 8/15 已删除旧预算/重试死代码并同步 agent-delivery、platform-chat、agent-runtime spec；工具循环和 subagent 限制尚待独立 middleware 实现。
