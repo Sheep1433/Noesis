@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CollectionInfo, KnowledgeBaseStatus } from '@/api/knowledgeBase'
-import { Add, EllipsisHorizontal, InformationCircleOutline, Library, Refresh } from '@vicons/ionicons-v5'
+import { Add, EllipsisHorizontal, InformationCircleOutline, Library } from '@vicons/ionicons-v5'
 import {
   NAlert,
   NButton,
@@ -151,12 +151,6 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
         </p>
       </div>
       <n-space class="kb-hero-actions" :size="8">
-        <n-button quaternary :loading="loading" @click="loadData">
-          <template #icon>
-            <n-icon><Refresh /></n-icon>
-          </template>
-          刷新
-        </n-button>
         <n-button type="primary" :disabled="!status?.connected" @click="openCreateModal">
           <template #icon>
             <n-icon><Add /></n-icon>

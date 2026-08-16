@@ -4,6 +4,8 @@ import { NButton, NDatePicker, NInput, NSelect, NTag, useMessage } from 'naive-u
 import { computed, onMounted, ref, watch } from 'vue'
 import { getContextPreview, getUserMemoryFile, listDailyMemory, putUserMemoryFile, runMemoryDream, searchDailyMemory } from '@/api/settings'
 import FilePreview from '@/components/FilePreview/index.vue'
+import MarkdownInstance from '@/components/MarkdownPreview/plugins/markdown'
+import { useMermaidRender } from '@/hooks/useMermaidRender'
 
 const props = defineProps<{
   file: 'USER.md' | 'AGENTS.md'
@@ -23,6 +25,13 @@ const saving = ref(false)
 const loading = ref(false)
 const editing = ref(false)
 const dirty = computed(() => editing.value && draft.value !== content.value)
+const formattedUpdatedAt = computed(() => {
+  if (!updatedAt.value) {
+    return undefined
+  }
+  const d = new Date(updatedAt.value)
+  return Number.isNaN(d.getTime()) ? updatedAt.value : d.toLocaleString()
+})
 const dailyItems = ref<DailyMemoryItem[]>([])
 const dailyMatches = ref<DailyMemoryMatch[]>([])
 const dailyQuery = ref('')
@@ -88,6 +97,13 @@ async function refreshPreview() {
   preview.value = await getContextPreview(previewProfile.value)
 }
 
+const compiledMarkdown = computed(() => {
+  const source = preview.value?.compiled_content || ''
+  return source ? MarkdownInstance.render(source) : ''
+})
+const previewRef = ref<HTMLElement | null>(null)
+useMermaidRender(previewRef, compiledMarkdown, computed(() => !!compiledMarkdown.value))
+
 function startEdit() {
   draft.value = content.value
   editing.value = true
@@ -132,8 +148,8 @@ onMounted(() => {
     <p class="hint">
       {{ description }}
     </p>
-    <p v-if="updatedAt" class="meta">
-      最近修改：{{ updatedAt }}
+    <p v-if="formattedUpdatedAt" class="meta">
+      最近修改：{{ formattedUpdatedAt }}
     </p>
 
     <div class="editor-area" :class="{ 'editor-area--preview': !editing }">
@@ -156,22 +172,6 @@ onMounted(() => {
       />
     </div>
 
-    <template v-if="file === 'AGENTS.md'">
-      <section class="context-panel">
-        <h3>跨任务记忆</h3>
-        <div class="inline-actions"><n-date-picker v-model:value="dreamDate" type="date" clearable :actions="null" /><n-button type="primary" :loading="dreaming" @click="dream">整理记忆</n-button></div>
-        <div class="inline-actions"><n-input v-model:value="dailyQuery" placeholder="搜索日记内容" @keyup.enter="runDailySearch" /><n-button @click="runDailySearch">搜索</n-button></div>
-        <p class="hint">已整理 {{ dailyItems.length }} 天。记忆仅在需要时检索，不会默认加入每次对话。</p>
-        <div v-for="match in dailyMatches" :key="match.id" class="result"><strong>{{ match.date }} · {{ match.category }} · 匹配度 {{ match.score }}</strong><span>{{ match.summary }}</span><small v-if="match.sources?.[0]">来源：{{ match.sources[0].session_id }} / {{ match.sources[0].message_id }}</small></div>
-      </section>
-      <section class="context-panel">
-        <h3>最终上下文预览</h3>
-        <div class="inline-actions"><n-select v-model:value="previewProfile" :options="profileOptions" @update:value="refreshPreview" /><n-tag v-if="preview">约 {{ preview.token_estimate }} tokens</n-tag></div>
-        <div v-for="source in preview?.sources" :key="source.id" class="source-row"><strong>{{ source.label }}</strong><span>优先级 {{ source.priority }} · {{ source.injected ? '已加入' : '未加入' }} · {{ source.characters }} 字符</span></div>
-        <n-input :value="preview?.compiled_content || ''" type="textarea" readonly :autosize="{ minRows: 12, maxRows: 28 }" />
-      </section>
-    </template>
-
     <div class="pane-footer">
       <template v-if="editing">
         <n-button :disabled="saving" @click="cancelEdit">
@@ -191,6 +191,22 @@ onMounted(() => {
         编辑
       </n-button>
     </div>
+
+    <template v-if="file === 'AGENTS.md'">
+      <section class="context-panel">
+        <h3>跨任务记忆</h3>
+        <div class="inline-actions"><n-date-picker v-model:value="dreamDate" type="date" clearable :actions="null" /><n-button type="primary" :loading="dreaming" @click="dream">整理记忆</n-button></div>
+        <div class="inline-actions"><n-input v-model:value="dailyQuery" placeholder="搜索日记内容" @keyup.enter="runDailySearch" /><n-button @click="runDailySearch">搜索</n-button></div>
+        <p class="hint">已整理 {{ dailyItems.length }} 天。记忆仅在需要时检索，不会默认加入每次对话。</p>
+        <div v-for="match in dailyMatches" :key="match.id" class="result"><strong>{{ match.date }} · {{ match.category }} · 匹配度 {{ match.score }}</strong><span>{{ match.summary }}</span><small v-if="match.sources?.[0]">来源：{{ match.sources[0].session_id }} / {{ match.sources[0].message_id }}</small></div>
+      </section>
+      <section class="context-panel">
+        <h3>最终上下文预览</h3>
+        <div class="inline-actions"><n-select v-model:value="previewProfile" :options="profileOptions" @update:value="refreshPreview" /><n-tag v-if="preview">约 {{ preview.token_estimate }} tokens</n-tag></div>
+        <div v-for="source in preview?.sources" :key="source.id" class="source-row"><strong>{{ source.label }}</strong><span>{{ source.injected ? '已加入' : '未加入' }} · {{ source.characters }} 字符</span></div>
+        <div ref="previewRef" class="compiled-preview markdown-wrapper" v-html="compiledMarkdown"></div>
+      </section>
+    </template>
   </section>
 </template>
 
@@ -226,6 +242,15 @@ onMounted(() => {
 .inline-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .inline-actions > :first-child { flex: 1; }
 .result, .source-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); font-size: 13px; }
+
+.compiled-preview {
+  max-height: 480px;
+  padding: 12px;
+  overflow: auto;
+  background: var(--noesis-color-bg-surface);
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-md);
+}
 
 .pane-footer {
   display: flex;

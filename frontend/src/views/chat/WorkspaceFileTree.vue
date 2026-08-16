@@ -16,27 +16,12 @@ const expandedKeys = ref<string[]>([])
 
 watch(
   () => props.nodes,
-  (nodes) => {
-    expandedKeys.value = collectExpandableKeys(nodes, 3)
+  () => {
+    // 每次进入文件查看栏或目录刷新后，从收起状态开始，避免一次性展开大量目录。
+    expandedKeys.value = []
   },
   { immediate: true, deep: true },
 )
-
-function collectExpandableKeys(nodes: SessionFsTreeNode[], maxDepth: number, depth = 0): string[] {
-  if (depth >= maxDepth) {
-    return []
-  }
-  const keys: string[] = []
-  for (const node of nodes) {
-    if (!node.isLeaf) {
-      keys.push(node.key)
-      if (node.children?.length) {
-        keys.push(...collectExpandableKeys(node.children, maxDepth, depth + 1))
-      }
-    }
-  }
-  return keys
-}
 
 function isExpanded(key: string) {
   return expandedKeys.value.includes(key)

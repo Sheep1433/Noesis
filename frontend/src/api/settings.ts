@@ -76,7 +76,7 @@ export function runMemoryDream(date: string, timezone = 'Asia/Shanghai') {
 
 export type ContextPreview = {
   profile: string
-  sources: Array<{ id: string, label: string, priority: number, injected: boolean, characters: number, token_estimate: number, content: string }>
+  sources: Array<{ id: string, label: string, injected: boolean, characters: number, token_estimate: number, content: string }>
   compiled_content: string
   characters: number
   token_estimate: number
