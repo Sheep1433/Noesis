@@ -151,7 +151,7 @@ def test_reactive_overflow_retries_once_and_persists_recovery() -> None:
     assert update["compaction"]["last_mode"] == "reactive"
 
 
-def test_breaker_is_checkpointed_and_manual_compaction_still_works() -> None:
+def test_breaker_is_checkpointed_and_blocks_further_compaction() -> None:
     middleware = CompactionMiddleware(
         token_counter=lambda messages: 200,
         summarize=lambda messages: "",
@@ -172,10 +172,6 @@ def test_breaker_is_checkpointed_and_manual_compaction_still_works() -> None:
         _request(state["messages"], state), lambda request: _response()
     )
     assert not isinstance(result, ExtendedModelResponse)
-
-    middleware._summarize = lambda messages: "manual summary"
-    manual = middleware.compact(state, thread_id="thread-1", instructions="keep decisions")
-    assert manual["compaction"]["last_mode"] == "manual"
 
 
 def test_archive_failure_prevents_compaction_publication() -> None:

@@ -31,19 +31,28 @@ from noesis.agents.middlewares import (
     ToolFailureMiddleware,
     ToolResultBudgetMiddleware,
 )
+from noesis.agents.middlewares.compaction_middleware import PRIVATE_STATE_KEYS as _COMPACTION_KEYS
+from noesis.agents.middlewares.deferred_tool_filter_middleware import PRIVATE_STATE_KEYS as _DEFERRED_KEYS
+from noesis.agents.middlewares.durable_context_middleware import PRIVATE_STATE_KEYS as _DURABLE_KEYS
+from noesis.agents.middlewares.dynamic_context_middleware import PRIVATE_STATE_KEYS as _DYNAMIC_KEYS
+from noesis.agents.middlewares.read_before_write_middleware import PRIVATE_STATE_KEYS as _READ_BEFORE_WRITE_KEYS
+from noesis.agents.middlewares.refreshing_skills_middleware import PRIVATE_STATE_KEYS as _SKILLS_KEYS
+from noesis.agents.middlewares.snip_middleware import PRIVATE_STATE_KEYS as _SNIP_KEYS
+from noesis.agents.middlewares.tool_result_budget_middleware import PRIVATE_STATE_KEYS as _TOOL_BUDGET_KEYS
 from noesis.agents.runtime.tool_registry import ToolRegistry
 
+# Subagent isolation must carry each owning middleware's private state across the
+# subagent boundary. Aggregated from each middleware's exported key set so that
+# renaming a PrivateStateAttr updates isolation automatically.
 _PRIVATE_SUBAGENT_KEYS = frozenset(
-    {
-        "dynamic_context_block",
-        "durable_context",
-        "skills_revision",
-        "_read_before_write_versions",
-        "_tool_result_replacements",
-        "_tool_catalog_discovered",
-        "_snip_records",
-        "compaction",
-    }
+    _DYNAMIC_KEYS
+    + _DURABLE_KEYS
+    + _SKILLS_KEYS
+    + _READ_BEFORE_WRITE_KEYS
+    + _TOOL_BUDGET_KEYS
+    + _DEFERRED_KEYS
+    + _SNIP_KEYS
+    + _COMPACTION_KEYS
 )
 
 
@@ -74,6 +83,7 @@ class NoesisStackDeps:
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None
     model_call_limit: int | None = None
     tool_call_limit: int | None = None
+    llm_max_retries: int | None = None
     middleware: Sequence[AgentMiddleware] = ()
 
 
@@ -158,7 +168,7 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
         stack.append(ModelCallLimitMiddleware(run_limit=deps.model_call_limit))
     if deps.tool_call_limit is not None:
         stack.append(ToolCallLimitMiddleware(run_limit=deps.tool_call_limit))
-    stack.append(LLMErrorHandlingMiddleware())
+    stack.append(LLMErrorHandlingMiddleware(max_retries=deps.llm_max_retries))
     stack.extend(deps.middleware)
     if deps.interrupt_on:
         stack.append(HumanInTheLoopMiddleware(interrupt_on=deps.interrupt_on))

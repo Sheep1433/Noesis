@@ -136,7 +136,7 @@ def test_raw_task_worker_has_only_one_hitl_middleware() -> None:
         patch("noesis.agents.super_agent.get_llm", return_value=model),
         patch(
             "noesis.factory.ModelConfig",
-            SimpleNamespace(summarization_enabled=False, tool_output_max_chars=24_000),
+            SimpleNamespace(summarization_enabled=False, tool_output_max_chars=24_000, max_retries=6),
         ),
         patch("noesis.factory.HitlConfig", SimpleNamespace(enabled=True)),
     ):

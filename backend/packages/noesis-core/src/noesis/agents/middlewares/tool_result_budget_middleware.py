@@ -84,6 +84,10 @@ class ToolResultBudgetState(AgentState[ResponseT]):
     ]
 
 
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = ("_tool_result_replacements",)
+
+
 def _content_size(value: Any) -> int:
     if isinstance(value, str):
         return len(value)
@@ -513,46 +517,42 @@ class ToolResultBudgetMiddleware(
         projected, records = self._project_history(request)
         return self._with_records(await handler(projected), records)
 
+    def _merge_replacement_with_update(
+        self,
+        request: ToolCallRequest,
+        result: ToolMessage | Command[Any],
+    ) -> ToolMessage | Command[Any]:
+        replacement, update = self._maybe_replace(request, result, request.state)
+        if update is None:
+            return replacement
+        # Carry the private-state update alongside the bounded result.
+        if isinstance(replacement, Command):
+            return Command(
+                graph=replacement.graph,
+                update={**replacement.update, **update.update},
+                resume=replacement.resume,
+                goto=replacement.goto,
+            )
+        return Command(update={**update.update, "messages": [replacement]})  # type: ignore[arg-type]
+
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
-        result = handler(request)
-        replacement, update = self._maybe_replace(request, result, request.state)
-        if update is not None:
-            # Carry the private-state update alongside the bounded result.
-            if isinstance(replacement, Command):
-                return Command(
-                    graph=replacement.graph,
-                    update={**replacement.update, **update.update},
-                    resume=replacement.resume,
-                    goto=replacement.goto,
-                )
-            return Command(update={**update.update, "messages": [replacement]})  # type: ignore[arg-type]
-        return replacement
+        return self._merge_replacement_with_update(request, handler(request))
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
-        result = await handler(request)
-        replacement, update = self._maybe_replace(request, result, request.state)
-        if update is not None:
-            if isinstance(replacement, Command):
-                return Command(
-                    graph=replacement.graph,
-                    update={**replacement.update, **update.update},
-                    resume=replacement.resume,
-                    goto=replacement.goto,
-                )
-            return Command(update={**update.update, "messages": [replacement]})  # type: ignore[arg-type]
-        return replacement
+        return self._merge_replacement_with_update(request, await handler(request))
 
 
 __all__ = [
     "ARTIFACT_REPLACEMENT_TEMPLATE",
+    "PRIVATE_STATE_KEYS",
     "ReplacementRecord",
     "ToolResultBudgetState",
     "ToolResultBudgetMiddleware",

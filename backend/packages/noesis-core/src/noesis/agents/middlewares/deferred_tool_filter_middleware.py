@@ -36,6 +36,10 @@ class DeferredToolState(AgentState):
     ]
 
 
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = ("_tool_catalog_discovered",)
+
+
 class DeferredToolFilterMiddleware(AgentMiddleware[DeferredToolState, ContextT, ResponseT]):
     """Expose only schemas promoted for the current catalog revision."""
 
@@ -120,5 +124,6 @@ class DeferredToolFilterMiddleware(AgentMiddleware[DeferredToolState, ContextT, 
 __all__ = [
     "DeferredToolFilterMiddleware",
     "DeferredToolState",
+    "PRIVATE_STATE_KEYS",
     "ToolCatalogEntry",
 ]

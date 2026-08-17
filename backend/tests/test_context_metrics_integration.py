@@ -40,6 +40,7 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
         summarization_enabled=False,
         governor_tool_calls_enabled=False,
         show_thinking_process="false",
+        max_retries=6,
     )
     session_id = "sess-context-integration"
     fake_llm = _FakeLLM(messages=iter([AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 10})]))

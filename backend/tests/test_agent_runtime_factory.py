@@ -7,7 +7,7 @@ from noesis.factory import build_noesis_middleware, middleware_inventory
 
 
 def test_inventory_is_generated_from_actual_instances() -> None:
-    config = SimpleNamespace(summarization_enabled=False, tool_output_max_chars=24_000)
+    config = SimpleNamespace(summarization_enabled=False, tool_output_max_chars=24_000, max_retries=6)
     with patch("noesis.factory.ModelConfig", config):
         stack = build_noesis_middleware(
             profile="COMMON_QA",

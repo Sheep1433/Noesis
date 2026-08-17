@@ -53,6 +53,10 @@ class DurableContextState(AgentState):
     durable_context: NotRequired[Annotated[DurableContext, PrivateStateAttr]]
 
 
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = ("durable_context",)
+
+
 def _bounded_text(value: object, limit: int) -> str | None:
     if not isinstance(value, str):
         return None
@@ -295,6 +299,7 @@ __all__ = [
     "DurableContext",
     "DurableContextMiddleware",
     "DurableContextState",
+    "PRIVATE_STATE_KEYS",
     "derive_durable_context",
     "normalize_durable_context",
     "render_durable_block",

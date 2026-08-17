@@ -39,6 +39,9 @@ READ_TOOL_NAMES = frozenset({"read_file", "read", "cat"})
 WRITE_TOOL_NAMES = frozenset({"edit_file", "write_file", "write", "edit"})
 _VERSIONS_KEY = "_read_before_write_versions"
 
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = (_VERSIONS_KEY,)
+
 
 def _merge_versions(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
     """合并 read-before-write 版本记录。
@@ -367,6 +370,7 @@ class ReadBeforeWriteMiddleware(
 
 __all__ = [
     "FileFingerprint",
+    "PRIVATE_STATE_KEYS",
     "READ_TOOL_NAMES",
     "ReadBeforeWriteMiddleware",
     "ReadBeforeWriteState",

@@ -17,6 +17,10 @@ class RefreshingSkillsState(SkillsState):
     skills_revision: NotRequired[Annotated[str, PrivateStateAttr]]
 
 
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = ("skills_revision",)
+
+
 class RefreshingSkillsMiddleware(SkillsMiddleware):
     """Use DeepAgents parsing while pinning one revision for the whole run."""
 

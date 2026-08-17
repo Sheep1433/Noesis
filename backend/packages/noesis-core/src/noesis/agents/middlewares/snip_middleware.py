@@ -95,6 +95,10 @@ class SnipState(AgentState[ResponseT]):
     _snip_records: NotRequired[Annotated[list[SnipRecord], PrivateStateAttr]]
 
 
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = ("_snip_records",)
+
+
 def _content_hash(message: AnyMessage) -> str:
     """Stable hash of a message's content for replay identity."""
     payload = repr(message.content)
@@ -380,6 +384,7 @@ class SnipMiddleware(AgentMiddleware[SnipState[ResponseT], ContextT, ResponseT])
 
 
 __all__ = [
+    "PRIVATE_STATE_KEYS",
     "SNIP_MARKER_TEMPLATE",
     "SnipError",
     "SnipMiddleware",

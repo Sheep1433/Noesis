@@ -29,13 +29,8 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command
 
+from noesis.agents.middlewares._events import aemit_noesis_event, emit_noesis_event
 from noesis.runtime.logging import logger
-
-try:
-    from langgraph.errors import GraphBubbleUp
-except ImportError:  # pragma: no cover
-    class GraphBubbleUp(Exception):  # type: ignore[no-redef]
-        pass
 
 _SUMMARY_FAILURE_PREFIXES = (
     "<error>",
@@ -51,6 +46,10 @@ class CompactionState(AgentState[ResponseT]):
     """Checkpointed policy state which is hidden from agent output."""
 
     compaction: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
+
+
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = ("compaction",)
 
 
 @dataclass(frozen=True)
@@ -255,40 +254,12 @@ class CompactionMiddleware(
     # ---------- compaction events ----------
 
     def _emit_compaction_event(self, payload: dict[str, Any]) -> None:
-        """同步发 noesis_compaction custom event（照 noesis_model_retry 模式）。"""
-        try:
-            from langgraph.config import get_stream_writer
-
-            writer = get_stream_writer()
-            try:
-                writer(payload)
-            except Exception:
-                pass
-            from langchain_core.callbacks import dispatch_custom_event
-
-            dispatch_custom_event("noesis_compaction", payload)
-        except GraphBubbleUp:
-            raise
-        except Exception:
-            logger.opt(exception=True).debug("Failed to emit noesis_compaction event")
+        """同步发 noesis_compaction custom event。"""
+        emit_noesis_event("noesis_compaction", payload)
 
     async def _aemit_compaction_event(self, payload: dict[str, Any]) -> None:
         """异步发 noesis_compaction custom event。"""
-        try:
-            from langgraph.config import get_stream_writer
-
-            writer = get_stream_writer()
-            try:
-                writer(payload)
-            except Exception:
-                pass
-            from langchain_core.callbacks import adispatch_custom_event
-
-            await adispatch_custom_event("noesis_compaction", payload)
-        except GraphBubbleUp:
-            raise
-        except Exception:
-            logger.opt(exception=True).debug("Failed to emit async noesis_compaction event")
+        await aemit_noesis_event("noesis_compaction", payload)
 
     def _build_started_payload(self, mode: str, pre_tokens: int) -> dict[str, Any]:
         return {
@@ -610,19 +581,5 @@ class CompactionMiddleware(
             return self._with_command(response, self._failure_command(failed_request))
         return response
 
-    def compact(self, state: CompactionState[Any], *, thread_id: str, instructions: str | None = None) -> dict[str, Any]:
-        """Host/manual entry point using the same compaction engine."""
-        messages = list(state.get("messages", []))
-        result = self._build(
-            messages,
-            thread_id,
-            "manual",
-            keep_messages=min(self._keep_messages, max(1, len(messages) // 3)),
-            instructions=instructions,
-        )
-        if result is None:
-            raise RuntimeError("manual compaction failed")
-        return self._state_command(result, self._policy_state(state)).update or {}
 
-
-__all__ = ["CompactionMiddleware", "CompactionResult", "CompactionState", "CompactionThresholds"]
+__all__ = ["CompactionMiddleware", "CompactionResult", "CompactionState", "CompactionThresholds", "PRIVATE_STATE_KEYS"]

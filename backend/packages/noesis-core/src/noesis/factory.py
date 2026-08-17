@@ -156,6 +156,7 @@ def build_noesis_middleware(
             interrupt_on=interrupt_on if HitlConfig.enabled else None,
             model_call_limit=model_call_limit,
             tool_call_limit=tool_call_limit,
+            llm_max_retries=int(ModelConfig.max_retries),
             tool_result_max_chars=int(getattr(ModelConfig, "tool_output_max_chars", 24_000)),
             middleware=middleware,
             **_compaction_deps(model, model_id),

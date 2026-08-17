@@ -46,6 +46,10 @@ class DynamicContextState(AgentState):
     dynamic_context_block: NotRequired[Annotated[str, PrivateStateAttr]]
 
 
+# State keys this middleware owns; subagent isolation must carry these over.
+PRIVATE_STATE_KEYS: tuple[str, ...] = ("dynamic_context_block",)
+
+
 DynamicContextProvider = Callable[[], "DynamicContextBlock | Awaitable[DynamicContextBlock]"]
 
 
@@ -146,5 +150,6 @@ __all__ = [
     "DynamicContextMiddleware",
     "DynamicContextProvider",
     "DynamicContextState",
+    "PRIVATE_STATE_KEYS",
     "render_dynamic_block",
 ]

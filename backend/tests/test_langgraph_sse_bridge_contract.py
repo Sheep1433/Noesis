@@ -1351,3 +1351,41 @@ def test_noesis_compaction_event_emits_run_status_sse() -> None:
     failed = next(o for o in objs if o["type"] == "run-status")
     assert failed["status"] == "running"
     assert failed["reason"] == "summary_invalid"
+
+
+def test_noesis_model_fallback_emits_error_and_marks_finished() -> None:
+    """LLM 重试耗尽/熔断后，fallback 事件须翻译为 error SSE、写文案进 builder、
+    并置 _finish_emitted=True，确保后续迟到 RunCompleted 不覆盖 ERROR 终态。"""
+    bridge = LangGraphSseBridge("sess-fb")
+    builder = AssistantMessageBuilder(session_id="sess-fb", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+
+    lines = bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_model_fallback",
+         "data": {"content": "API 额度不足，请检查 provider 账户后重试。"}},
+        builder, ctx,
+    )
+    objs = _data_json_objects("".join(lines))
+    err = next(o for o in objs if o["type"] == "error")
+    assert err["error"] == "API 额度不足，请检查 provider 账户后重试。"
+    assert err["message_id"] == bridge.assistant_message_id
+    assert bridge._finish_emitted is True
+    # fallback 文案进入消息体，用户在消息区看到失败说明
+    payload = builder.to_dict()
+    top_text = next(
+        (p for p in reversed(payload["parts"]) if p.get("type") == "text"), None,
+    )
+    assert top_text is not None
+    assert "API 额度不足" in top_text["content"]
+
+
+def test_llm_error_middleware_max_retries_is_injectable() -> None:
+    """显式 max_retries 覆盖默认；未提供时回退到 ModelConfig 全局值。"""
+    from noesis.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
+    from noesis.config.env import ModelConfig
+
+    explicit = LLMErrorHandlingMiddleware(max_retries=3)
+    assert explicit.retry_max_attempts == 3
+
+    default = LLMErrorHandlingMiddleware()
+    assert default.retry_max_attempts == max(1, int(ModelConfig.max_retries))
