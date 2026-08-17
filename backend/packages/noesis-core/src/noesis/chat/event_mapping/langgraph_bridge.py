@@ -926,6 +926,13 @@ class LangGraphSseBridge:
                     status = "running"
                 else:
                     status = "running"
+                    # compaction 完成时插入分割线标记（不引入新事件类型，
+                    # 复用 text-delta 推送，前端按标记渲染成分割线）
+                    if builder is not None:
+                        boundary_text = "—— 以上对话已压缩摘要 ——"
+                        builder.append_text(boundary_text, parent_task_call_id=None)
+                        self._emit_text_delta(boundary_text, out, parent_task_call_id=None)
+                        self._close_text(out)
                 payload = {**data, "type": "run-status", "status": status}
                 out.append(_format_sse("run-status", payload))
             return

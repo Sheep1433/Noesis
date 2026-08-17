@@ -2669,6 +2669,13 @@ function onComposerPaste(e: ClipboardEvent) {
                                   :duration_ms="entry.part.duration_ms"
                                 />
                               </template>
+                              <div
+                                v-if="entry.kind === 'part' && entry.part.type === 'text' && (entry.part.content || '').startsWith('—— 以上对话已压缩摘要 ——')"
+                                class="compact-boundary"
+                                role="separator"
+                              >
+                                <span class="compact-boundary__text">以上对话已压缩摘要</span>
+                              </div>
                               <MarkdownPreview
                                 v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                                 :content="entry.part.content || ''"
@@ -3161,6 +3168,27 @@ function onComposerPaste(e: ClipboardEvent) {
   height: 8px;
   border-radius: 50%;
   background: var(--noesis-color-primary);
+}
+
+.compact-boundary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  color: var(--noesis-color-text-tertiary);
+  font-size: 12px;
+}
+
+.compact-boundary::before,
+.compact-boundary::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--noesis-color-border-subtle);
+}
+
+.compact-boundary__text {
+  white-space: nowrap;
 }
 
 /* 聊天记录侧栏折叠钮 — 使用 Naive 右缘定位，仅对齐主题色 */
