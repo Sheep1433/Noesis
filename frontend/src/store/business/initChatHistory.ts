@@ -14,6 +14,7 @@ interface TableItem {
   qa_type: string
   pinned?: boolean
   archived?: boolean
+  run_status?: string
 }
 
 /**
@@ -152,6 +153,7 @@ export const fetchConversationHistory = async function fetchConversationHistory(
             qa_type: chat.qa_type || 'COMMON_QA',
             pinned: Boolean(chat.pinned),
             archived: Boolean(chat.archived),
+            run_status: chat.run_status || undefined,
           }))
         }
 

@@ -17,7 +17,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy import select, and_, update, func, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.storage.postgres.models.chat import TChatSession, TChatMessage
+from noesis.storage.postgres.models.chat import TChatSession, TChatMessage, TAgentRun
 from noesis.errors.exceptions import ServiceException
 from noesis.runtime.logging import logger
 from noesis.chat.message_builder import AssistantMessageBuilder
@@ -914,11 +914,33 @@ class ChatService:
             .limit(safe_limit)
         )
         sessions = list(result.scalars().all())
+
+        # 批量取每个 session 最近一条 run 的 status（用于列表展示会话状态）
+        run_status_map: Dict[str, str] = {}
+        if sessions:
+            session_ids = [s.id for s in sessions]
+            run_rows = await db.execute(
+                select(
+                    TAgentRun.session_id,
+                    TAgentRun.status,
+                )
+                .where(
+                    and_(
+                        TAgentRun.session_id.in_(session_ids),
+                        TAgentRun.status.in_([
+                            "running", "retrying", "hitl_pending",
+                        ]),
+                    ),
+                )
+            )
+            for row in run_rows.all():
+                run_status_map[row.session_id] = row.status
+
         logger.info(
             f"query_user_sessions_for_record: user_id={user_id}, total={total}, "
             f"page={safe_page}, limit={safe_limit}, has_search={bool(q)}, archived={archived}"
         )
-        return sessions, total
+        return sessions, total, run_status_map
 
 
     @classmethod

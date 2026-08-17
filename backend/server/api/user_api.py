@@ -32,7 +32,7 @@ async def query_user_qa_record(
     """
     查询用户的会话列表：支持按标题模糊搜索（search_text）、按 chat_id 过滤、分页。
     """
-    sessions, total = await ChatService.query_user_sessions_for_record(
+    sessions, total, run_status_map = await ChatService.query_user_sessions_for_record(
         user_id=str(current_user.user_id),
         db=db,
         search_text=request.search_text,
@@ -55,6 +55,7 @@ async def query_user_qa_record(
             "update_time": s.updated_at,
             "pinned": bool(getattr(s, "pinned", False)),
             "archived": bool(getattr(s, "archived", False)),
+            "run_status": run_status_map.get(s.id),
         }
         for s in sessions
     ]

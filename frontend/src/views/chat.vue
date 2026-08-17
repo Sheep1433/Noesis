@@ -556,6 +556,7 @@ interface TableItem {
   qa_type: string
   pinned?: boolean
   archived?: boolean
+  run_status?: string
 }
 
 function sessionQaIconClass(qt: string) {
@@ -569,6 +570,19 @@ function sessionQaIconClass(qt: string) {
       return 'i-hugeicons:note-edit'
     default:
       return 'i-hugeicons:ai-chat-02'
+  }
+}
+
+function sessionRunStatusConfig(status: string): { label: string, color: string, bg: string } | null {
+  switch (status) {
+    case 'running':
+      return { label: '运行中', color: cssVar(themeCssVar.primary), bg: cssVar(themeCssVar.primaryBg) }
+    case 'retrying':
+      return { label: '重试中', color: '#f0a020', bg: 'rgba(240,160,32,0.1)' }
+    case 'hitl_pending':
+      return { label: '待审批', color: '#f0a020', bg: 'rgba(240,160,32,0.1)' }
+    default:
+      return null
   }
 }
 
@@ -601,6 +615,16 @@ const historySidebarColumns = computed(() => [
         }),
         h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
       ]
+      if (row.run_status) {
+        const statusConfig = sessionRunStatusConfig(row.run_status)
+        if (statusConfig) {
+          children.push(h('span', {
+            class: 'session-run-status-badge shrink-0',
+            style: { color: statusConfig.color, background: statusConfig.bg },
+            title: statusConfig.label,
+          }, statusConfig.label))
+        }
+      }
       if (row.pinned) {
         children.push(h('div', {
           class: 'size-14px shrink-0 inline-flex items-center justify-center i-hugeicons:pin-02',
@@ -901,8 +925,10 @@ const sseStream = useSSEStream({
     if (status === 'compacting') {
       retryingLabel.value = message || '正在压缩对话上下文…'
     } else if (status === 'interrupted') {
+      stylizingLoading.value = false
       window.$ModalMessage.warning(message || '服务中断，本轮生成未完成')
     } else if (status === 'disconnected') {
+      stylizingLoading.value = false
       reconnectAvailable.value = true
     } else if (status === 'running') {
       retryingLabel.value = ''
@@ -3043,6 +3069,16 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .chat-history-sider {
   position: relative;
+}
+
+.session-run-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--noesis-radius-sm);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 /* 聊天记录侧栏折叠钮 — 使用 Naive 右缘定位，仅对齐主题色 */

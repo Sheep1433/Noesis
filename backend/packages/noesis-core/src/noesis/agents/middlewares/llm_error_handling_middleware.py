@@ -217,18 +217,15 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         """根据错误分类构造面向用户的失败说明文本。"""
         detail = _extract_error_detail(exc)
         if reason == "quota":
-            return "LLM 服务额度不足或计费不可用，请检查 provider 账户后重试。"
+            return "API 额度不足，请检查 provider 账户后重试。"
         if reason == "auth":
-            return "LLM 服务鉴权失败，请检查 provider 凭证后重试。"
+            return "API 鉴权失败，请检查凭证后重试。"
         if reason == "burst_rate":
-            return "LLM 服务因请求速率增长过快被临时限流，请稍候再试。"
+            return "请求过于频繁，请稍候再试。"
         if reason in {"busy", "transient"}:
             if type(exc).__name__ in _STREAM_DROP_EXCEPTIONS:
-                return (
-                    "模型流式响应在中途中断，通常因单次响应或工具调用过大导致。"
-                    "请尝试拆分为更小的步骤后重试。"
-                )
-            return "LLM 服务经多次重试后仍不可用，请稍候继续对话。"
+                return "模型响应中断，请尝试拆分为更小的步骤后重试。"
+            return "服务暂时不可用，请稍候重试。"
         return f"LLM 请求失败：{detail}"
 
     # ---------- custom events ----------
@@ -301,7 +298,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
 
     # ---------- model call wrapping ----------
 
-    _CIRCUIT_BREAKER_MESSAGE = "LLM 服务因连续失败已触发熔断保护，请稍候再试。"
+    _CIRCUIT_BREAKER_MESSAGE = "服务暂时不可用，请稍候再试。"
 
     def _emit_retry(
         self, attempt: int, wait_ms: int, reason: str

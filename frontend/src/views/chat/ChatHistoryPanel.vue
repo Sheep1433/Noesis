@@ -11,6 +11,7 @@ interface TableItem {
   chat_id: string
   qa_type: string
   key: string
+  run_status?: string
 }
 
 defineProps<{
