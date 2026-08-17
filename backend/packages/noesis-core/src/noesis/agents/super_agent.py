@@ -96,6 +96,7 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession],
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        disable_hitl: bool = False,
     ):
         ensure_user_memory_files(user_id)
         backend = await create_agent_backend(user_id, session_id)
@@ -112,7 +113,8 @@ class SuperAgent(BaseAgent):
         if db is not None:
             tools.extend(build_memory_tools(user_id=user_id, db=db))
         interrupt_on = None
-        if HitlConfig.enabled:
+        # 无人值守场景（定时任务）禁用 HITL：不挂 ask_user、不设 interrupt_on，避免 agent 卡在等待审批。
+        if HitlConfig.enabled and not disable_hitl:
             tools = tools + [ask_user_tool]
             interrupt_on = build_interrupt_on(session_id=session_id)
         skill_sources = resolve_skill_sources_for_session(user_id, enabled_skills)
@@ -177,6 +179,7 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        disable_hitl: bool = False,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
@@ -212,6 +215,7 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    disable_hitl=disable_hitl,
                 )
 
                 human_kwargs = {}
@@ -285,6 +289,7 @@ class SuperAgent(BaseAgent):
         message_id: Optional[str] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        disable_hitl: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """从 HITL interrupt 以 ``Command(resume=...)`` 继续同一 thread。"""
         task_id = session_id
@@ -315,6 +320,7 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    disable_hitl=disable_hitl,
                 )
                 stream_args = {
                     "input": Command(resume={"decisions": decisions}),

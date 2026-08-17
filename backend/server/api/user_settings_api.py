@@ -180,6 +180,24 @@ async def preview_agent_context(
 # ----- scheduled tasks -----
 
 
+@user_settings_router.post("/scheduled-tasks/parse")
+async def parse_scheduled_task(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """自然语言解析为定时任务草稿，前端拿回预填表单后二次确认提交。"""
+    await require_csrf(request)
+    body = await request.json()
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="请输入任务描述")
+    try:
+        draft = await ScheduledTaskService.parse_natural_language(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseUtil.success(data=draft)
+
+
 @user_settings_router.get("/scheduled-tasks/preview")
 async def preview_scheduled_task(
     cron_expr: str = Query(...),

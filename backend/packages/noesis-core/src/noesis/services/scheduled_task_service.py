@@ -1,6 +1,9 @@
 """用户定时任务 Service + cron 校验。"""
 from __future__ import annotations
 
+import asyncio
+import json
+import re
 import time
 import uuid
 from datetime import datetime
@@ -24,9 +27,48 @@ _ALLOWED_QA = {
     IntentEnum.SUPER_AGENT_QA.value[0],
 }
 
+# 定时任务无人值守模式前缀：注入到用户填写的 prompt 之前，约束 agent 自主完成、不等待用户输入。
+# 仅在定时执行路径注入；用户手动续聊走网页路径，不受此约束、HITL 照常。
+_AUTOMATION_MODE_PROMPT = """<automation_mode>
+本次为定时任务自动执行，无人值守。请遵守：
+- 直接执行下方任务指令，不要寒暄、不要反问、不要等待用户输入或确认。
+- 缺少非关键参数时用合理默认值推进；仅当缺少关键信息致使任务完全无法执行时，输出简短说明并结束。
+- 自我验证关键结论与产物；工具失败如实报告，不编造。
+- 输出应完整可存档（用户之后会查看本次结果），重要事实附可追溯来源。
+</automation_mode>
+
+"""
+
+# 自然语言解析允许的频率映射，用于把中文习惯表达归一成 cron。
+_WEEKDAY_CN = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7}
+_WEEKDAY_EN = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit]
+
+
+def _extract_json_object(content: str) -> Optional[Dict[str, Any]]:
+    """从 LLM 输出里提取首个 JSON 对象，容许包裹在代码块或说明文字中。"""
+    text = content or ""
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1)
+    else:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start : end + 1]
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def validate_cron_expr(expr: str, timezone: str = "Asia/Shanghai") -> None:
@@ -148,6 +190,21 @@ class ScheduledTaskService:
             }
 
     @staticmethod
+    async def _provision_bound_session(
+        db: AsyncSession, user_id: int, title: str, qa_type: str
+    ) -> str:
+        """预建一个空会话供定时任务绑定，所有运行结果追加进同一线程。"""
+        from noesis.services.chat_service import ChatService
+
+        session = await ChatService.create_session(
+            user_id=str(user_id),
+            title=title or None,
+            extra={"qa_type": qa_type, "origin": "automation"},
+            db=db,
+        )
+        return session.id
+
+    @staticmethod
     async def _validate_targets(db: AsyncSession, user_id: int, session_binding: str, delivery: str) -> None:
         if session_binding != "none":
             if not session_binding.startswith("session:") or not session_binding.removeprefix("session:").strip():
@@ -188,6 +245,54 @@ class ScheduledTaskService:
         return _to_dict(row) if row else None
 
     @classmethod
+    async def parse_natural_language(cls, text: str) -> Dict[str, Any]:
+        """把自然语言（如「每周一早上9点收集网上资料整理AI Agent最新进展」）解析成定时任务草稿。
+
+        仅产出 name / cron_expr / prompt，qa_type 固定 SuperAgent、时区固定 Asia/Shanghai、单任务单会话、不投递。
+        后端用 validate_cron_expr 二次校验。LLM 调用失败（限流/配置）时原样暴露错误，不静默兜底。
+        """
+        raw = (text or "").strip()
+        if not raw:
+            raise ValueError("请输入任务描述")
+        prompt = (
+            "你是定时任务解析器。把用户的一句话解析成结构化定时任务，并把模糊意图扩写成具体可执行的指令。"
+            "只输出 JSON，不要任何解释。字段："
+            'name(任务名,<=30字),cron_expr(标准5字段cron,分钟在前),'
+            'prompt(要执行的指令,在用户原意基础上扩写：明确要收集/处理的具体内容维度、'
+            '信息来源方向、关注时间范围、输出结构与要点,让 Agent 拿到就能直接执行,不要泛泛而谈)。'
+            "时间用24小时制；「每周一9点」→'0 9 * * 1'；「每天8:30」→'30 8 * * *'。"
+            f"\n用户输入：{raw}"
+        )
+        from noesis.llm.factory import get_llm
+
+        llm = get_llm()
+        try:
+            resp = await llm.ainvoke(prompt)
+            content = getattr(resp, "text", "") or str(resp)
+        except Exception as e:
+            logger.exception("scheduled task NL parse LLM call failed")
+            raise ValueError(f"解析失败，模型不可用或被限流：{type(e).__name__}") from e
+        data = _extract_json_object(content)
+        if data is None:
+            raise ValueError("解析失败，请直接编辑表单")
+        name = str(data.get("name") or "").strip()[:30] or _truncate(raw, 30)
+        cron_expr = str(data.get("cron_expr") or "").strip()
+        prompt_text = str(data.get("prompt") or "").strip() or raw
+        timezone = "Asia/Shanghai"
+        validate_cron_expr(cron_expr, timezone)
+        return {
+            "name": name,
+            "cron_expr": cron_expr,
+            "timezone": timezone,
+            "qa_type": IntentEnum.SUPER_AGENT_QA.value[0],
+            "prompt": prompt_text,
+            "session_binding": "single",
+            "delivery": "none",
+            "summary": cron_summary(cron_expr, timezone),
+            "next_run_at": compute_next_run_ms(cron_expr, timezone),
+        }
+
+    @classmethod
     async def create_task(
         cls, db: AsyncSession, user_id: int | str, payload: Dict[str, Any], *, commit: bool = True
     ) -> Dict[str, Any]:
@@ -201,6 +306,10 @@ class ScheduledTaskService:
         validate_cron_expr(cron_expr, timezone)
         session_binding = str(payload.get("session_binding") or "none")
         delivery = str(payload.get("delivery") or "none")
+        # 单任务单会话：预建一个空会话并绑定，所有定时运行追加进同一线程。
+        if session_binding == "single":
+            session_id = await cls._provision_bound_session(db, uid, name, qa_type)
+            session_binding = f"session:{session_id}"
         await cls._validate_targets(db, uid, session_binding, delivery)
         now = _now_ms()
         row = TUserScheduledTask(
@@ -297,7 +406,11 @@ class ScheduledTaskService:
     async def run_once(
         cls, db: AsyncSession, user_id: int | str, task_id: str, idempotency_key: str | None = None
     ) -> Optional[Dict[str, Any]]:
-        """手动触发并记录 immutable run。"""
+        """手动触发：只创建 queued 运行记录并后台派发执行，立即返回 run id，不阻塞 HTTP。
+
+        真正的 agent 执行在后台 asyncio 任务里进行（独立 db session），避免 SuperAgent 深度任务
+        导致 HTTP 请求超时。前端通过 run 记录状态（queued→running→succeeded/failed）追踪结果。
+        """
         uid = int(user_id)
         result = await db.execute(
             select(TUserScheduledTask).where(
@@ -307,7 +420,9 @@ class ScheduledTaskService:
         row = result.scalar_one_or_none()
         if row is None:
             return None
-        run = await cls.execute_with_record(db, row, trigger_source="manual", idempotency_key=idempotency_key or str(uuid.uuid4()))
+        idem = idempotency_key or str(uuid.uuid4())
+        # 先建 queued 记录并提交，拿到 run id 立即返回；执行交给后台任务。
+        run = await cls._create_run_record(db, row, trigger_source="manual", idempotency_key=idem)
         now = _now_ms()
         row.last_status = run.status
         row.last_error = run.error_message
@@ -316,17 +431,105 @@ class ScheduledTaskService:
         row.updated_at = now
         await db.commit()
         await db.refresh(row)
+        # 后台派发执行（独立 session，不依赖请求级 db）。
+        asyncio.create_task(cls._run_in_background(row.id, uid, run.id))
         payload = _to_dict(row)
         payload["run"] = _run_to_dict(run)
         return payload
 
     @staticmethod
+    async def _create_run_record(
+        db: AsyncSession, row: TUserScheduledTask, *, trigger_source: str, idempotency_key: str, retry_of: str | None = None
+    ) -> TUserScheduledTaskRun:
+        """创建幂等的 queued 运行记录（不含执行），供手动触发立刻返回。"""
+        existing_result = await db.execute(select(TUserScheduledTaskRun).where(TUserScheduledTaskRun.user_id == row.user_id, TUserScheduledTaskRun.idempotency_key == idempotency_key))
+        existing = existing_result.scalar_one_or_none()
+        if existing is not None:
+            return existing
+        now = _now_ms()
+        run = TUserScheduledTaskRun(id=str(uuid.uuid4()), task_id=row.id, user_id=row.user_id, status="queued", trigger_source=trigger_source, retry_of=retry_of, idempotency_key=idempotency_key, created_at=now)
+        db.add(run)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raced_result = await db.execute(select(TUserScheduledTaskRun).where(TUserScheduledTaskRun.user_id == row.user_id, TUserScheduledTaskRun.idempotency_key == idempotency_key))
+            raced = raced_result.scalar_one_or_none()
+            if raced is not None:
+                return raced
+            raise
+        await db.refresh(run)
+        return run
+
+    @classmethod
+    async def _run_in_background(cls, task_id: str, user_id: int, run_id: str) -> None:
+        """后台执行已创建的 run：标记 running → 执行 → 标记终态。独立 db session。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            result = await db.execute(select(TUserScheduledTask).where(
+                and_(TUserScheduledTask.id == task_id, TUserScheduledTask.user_id == user_id, TUserScheduledTask.deleted_at.is_(None))
+            ))
+            row = result.scalar_one_or_none()
+            if row is None:
+                return
+            run_result = await db.execute(select(TUserScheduledTaskRun).where(TUserScheduledTaskRun.id == run_id, TUserScheduledTaskRun.user_id == user_id))
+            run = run_result.scalar_one_or_none()
+            if run is None:
+                return
+            # 已进入终态的 run 不重复执行（幂等）。
+            if run.status in {"succeeded", "failed", "cancelled"}:
+                return
+            run.status = "running"
+            run.started_at = _now_ms()
+            await db.commit()
+            await db.refresh(run)
+            await db.refresh(row)
+            try:
+                result_obj = await cls._execute_task(row)
+                run.status = "succeeded"
+                run.session_id = getattr(result_obj, "session_id", None)
+                run.result_summary = str(getattr(result_obj, "plain_text", "") or "")[:1000]
+                run.delivery_result = {"status": "not_requested" if row.delivery == "none" else "pending", "target": row.delivery}
+            except Exception:
+                logger.exception("scheduled task execute failed id={} run_id={}", row.id, run.id)
+                run.status = "failed"
+                run.error_category = "execution"
+                run.error_message = "任务执行失败，请根据关联记录重试或检查配置"
+                run.delivery_result = {"status": "not_attempted", "target": row.delivery}
+            if row.delivery != "none":
+                from noesis.services.notification_preference_service import NotificationPreferenceService
+                event_type = "automation.succeeded" if run.status == "succeeded" else "automation.failed"
+                surface = "web" if row.delivery == "web_notify" else "channel"
+                if not await NotificationPreferenceService.should_notify(db, row.user_id, event_type, surface):
+                    run.delivery_result = {"status": "suppressed", "target": row.delivery}
+                else:
+                    run.delivery_result = await cls._deliver_run_notification(row, run)
+            run.finished_at = _now_ms()
+            now = _now_ms()
+            row.last_status = run.status
+            row.last_error = run.error_message
+            row.last_run_at = now
+            row.updated_at = now
+            await db.commit()
+            await db.refresh(run)
+
+    @staticmethod
     async def _execute_task(row: TUserScheduledTask) -> None:
-        """经现有 headless RunOrchestrator 执行，不另建 Agent 调用路径。"""
+        """经现有 headless RunOrchestrator 执行，不另建 Agent 调用路径。
+
+        定时任务无人值守：注入自动化模式 prompt 前缀 + 禁用 HITL，避免 agent 卡在 ask_user/审批等待。
+        用户点进定时会话手动续聊时走网页 RunService 路径，HITL 照常生效，不受此影响。
+        """
         from noesis.services.channel_run_service import run_channel_agent
 
         session_id = row.session_binding.removeprefix("session:") if row.session_binding.startswith("session:") else str(uuid.uuid4())
-        return await run_channel_agent(user_id=row.user_id, session_id=session_id, query=row.prompt, qa_type=row.qa_type, origin="automation", channel_type="automation")
+        query = _AUTOMATION_MODE_PROMPT + row.prompt
+        return await run_channel_agent(
+            user_id=row.user_id, session_id=session_id, query=query,
+            qa_type=row.qa_type, origin="automation", channel_type="automation",
+            disable_hitl=True,
+        )
 
     @classmethod
     async def execute_with_record(cls, db: AsyncSession, row: TUserScheduledTask, *, trigger_source: str, idempotency_key: str, retry_of: str | None = None) -> TUserScheduledTaskRun:

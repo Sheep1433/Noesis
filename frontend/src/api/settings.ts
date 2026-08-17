@@ -192,6 +192,30 @@ export async function previewSchedule(cronExpr: string, timezone: string) {
   return parseAuthJson<{ summary: string, next_run_at: number, timezone: string }>(res)
 }
 
+export type ScheduledTaskDraft = {
+  name: string
+  cron_expr: string
+  timezone: string
+  qa_type: string
+  prompt: string
+  session_binding: string
+  delivery: string
+  summary: string
+  next_run_at: number
+}
+
+export async function parseScheduledTask(text: string) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/scheduled-tasks/parse`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }),
+  )
+  return parseAuthJson<ScheduledTaskDraft>(res)
+}
+
 export async function listScheduledTaskRuns(taskId: string) {
   const res = await authFetch(`${location.origin}/api/user/scheduled-tasks/${encodeURIComponent(taskId)}/runs`)
   return parseAuthJson<{ items: ScheduledTaskRun[], total: number }>(res)

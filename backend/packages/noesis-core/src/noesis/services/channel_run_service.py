@@ -240,6 +240,7 @@ async def run_channel_agent(
     channel_type: str = "telegram",
     outbound: Optional[Any] = None,
     force_enabled_skills: Optional[List[str]] = None,
+    disable_hitl: bool = False,
 ) -> ChannelRunResult:
     """
     已配对入站：写 SSOT user 消息 → SuperAgent headless → 终态落库 → 返回纯文本。
@@ -317,6 +318,7 @@ async def run_channel_agent(
             mcp_tools=mcp_tools or None,
             enabled_skills=enabled_skills,
             db=db,
+            disable_hitl=disable_hitl,
         )
 
         bridge = LangGraphSseBridge(
