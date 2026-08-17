@@ -15,6 +15,8 @@ interface TableItem {
   pinned?: boolean
   archived?: boolean
   run_status?: string
+  last_read_at?: number
+  update_time?: number
 }
 
 /**
@@ -154,6 +156,8 @@ export const fetchConversationHistory = async function fetchConversationHistory(
             pinned: Boolean(chat.pinned),
             archived: Boolean(chat.archived),
             run_status: chat.run_status || undefined,
+            last_read_at: chat.last_read_at || undefined,
+            update_time: chat.update_time || undefined,
           }))
         }
 

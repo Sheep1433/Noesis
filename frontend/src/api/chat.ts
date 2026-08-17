@@ -462,6 +462,15 @@ export async function updateSessionMeta(
 }
 
 /**
+ * 标记会话已读
+ * PUT /api/chat/sessions/{id}/read
+ */
+export async function markSessionRead(id: string): Promise<void> {
+  const req = makeRequest('PUT', `${location.origin}${BASE}/sessions/${id}/read`)
+  await parseResponse<void>(await authFetch(req))
+}
+
+/**
  * 获取子会话列表
  * GET /api/chat/sessions/{id}/children
  */

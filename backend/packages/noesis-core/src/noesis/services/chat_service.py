@@ -813,6 +813,26 @@ class ChatService:
         await db.commit()
 
     @classmethod
+    async def mark_session_read(
+            cls,
+            session_id: str,
+            user_id: str,
+            db: AsyncSession = None,
+    ) -> None:
+        """标记会话已读：设 last_read_at 为当前时间。"""
+        now = _now_ms()
+        await db.execute(
+            update(TChatSession)
+            .where(and_(
+                TChatSession.id == session_id,
+                TChatSession.user_id == user_id,
+                TChatSession.deleted_at.is_(None),
+            ))
+            .values(last_read_at=now)
+        )
+        await db.commit()
+
+    @classmethod
     async def get_user_sessions(
             cls,
             user_id: str,

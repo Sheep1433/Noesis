@@ -6,7 +6,7 @@ import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { NCollapse, NCollapseItem } from 'naive-ui'
-import { createAgentRun, deleteSession, ensureSession, getSession, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { createAgentRun, deleteSession, ensureSession, getSession, markSessionRead, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
@@ -557,6 +557,8 @@ interface TableItem {
   pinned?: boolean
   archived?: boolean
   run_status?: string
+  last_read_at?: number
+  update_time?: number
 }
 
 function sessionQaIconClass(qt: string) {
@@ -584,6 +586,14 @@ function sessionRunStatusConfig(status: string): { label: string, color: string,
     default:
       return null
   }
+}
+
+function isSessionUnread(row: TableItem): boolean {
+  if (!row.update_time) {
+    return false
+  }
+  const lastRead = row.last_read_at || 0
+  return row.update_time > lastRead
 }
 
 function sessionQaIconColor(qt: string) {
@@ -615,6 +625,12 @@ const historySidebarColumns = computed(() => [
         }),
         h('span', { class: 'truncate flex-1 min-w-0' }, row.key),
       ]
+      if (isSessionUnread(row) && !row.run_status) {
+        children.push(h('div', {
+          class: 'session-unread-dot shrink-0',
+          title: '有未读回复',
+        }))
+      }
       if (row.run_status) {
         const statusConfig = sessionRunStatusConfig(row.run_status)
         if (statusConfig) {
@@ -1882,6 +1898,14 @@ const rowProps = (row: TableItem) => {
       // 不能在网络请求期间继续显示上一会话的 pending HITL。
       activateChatMode(row.qa_type, row.chat_id, true)
 
+      // 标记会话已读
+      void markSessionRead(row.chat_id).then(() => {
+        const idx = tableData.value.findIndex((s) => s.chat_id === row.chat_id)
+        if (idx !== -1) {
+          tableData.value[idx].last_read_at = Date.now()
+        }
+      }).catch(() => {})
+
       // 这里根据chat_id 过滤同一轮对话数据
       await fetchConversationHistory(
         isInit,
@@ -3079,6 +3103,13 @@ function onComposerPaste(e: ClipboardEvent) {
   font-size: 11px;
   line-height: 1.4;
   white-space: nowrap;
+}
+
+.session-unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--noesis-color-primary);
 }
 
 /* 聊天记录侧栏折叠钮 — 使用 Naive 右缘定位，仅对齐主题色 */

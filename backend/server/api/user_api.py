@@ -56,6 +56,7 @@ async def query_user_qa_record(
             "pinned": bool(getattr(s, "pinned", False)),
             "archived": bool(getattr(s, "archived", False)),
             "run_status": run_status_map.get(s.id),
+            "last_read_at": getattr(s, "last_read_at", None),
         }
         for s in sessions
     ]

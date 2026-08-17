@@ -12,6 +12,8 @@ interface TableItem {
   qa_type: string
   key: string
   run_status?: string
+  last_read_at?: number
+  update_time?: number
 }
 
 defineProps<{

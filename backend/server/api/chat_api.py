@@ -324,6 +324,21 @@ async def delete_session(
     return ResponseUtil.success(msg='删除会话成功')
 
 
+@chat_router.put("/sessions/{session_id}/read", summary="标记会话已读")
+async def mark_session_read(
+    session_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """标记会话已读：更新 last_read_at 为当前时间。"""
+    await ChatService.mark_session_read(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    return ResponseUtil.success(msg='已标记已读')
+
+
 @chat_router.put("/sessions/{session_id}/title", summary="更新会话标题")
 async def update_session_title(
     session_id: str,
