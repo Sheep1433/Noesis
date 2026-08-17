@@ -1135,6 +1135,19 @@ const sseStream = useSSEStream({
     scrollToBottom()
     void loadSessionContext(getChatSessionId())
     reloadSessionFilesPanel()
+    // 回复完成时，如果用户在看当前会话（页面可见 + 非默认页）→ 标已读
+    // 如果用户切走 tab 或切到别的会话 → 不标已读（列表显示未读圆点）
+    if (document.visibilityState === 'visible' && !showDefaultPage.value) {
+      const currentSessionId = getChatSessionId()
+      if (currentSessionId) {
+        void markSessionRead(currentSessionId).then(() => {
+          const idx = tableData.value.findIndex((s) => s.chat_id === currentSessionId)
+          if (idx !== -1) {
+            tableData.value[idx].last_read_at = Date.now()
+          }
+        }).catch(() => {})
+      }
+    }
   },
   onTitleUpdate: (title: string) => {
     const currentUuid = uuids.value[qa_type.value]
