@@ -149,6 +149,16 @@ flowchart LR
 
 raw transcript 不因 ToolResult replacement、Snip 或 Compaction 被物理删除。送给 Provider 的 effective history 由 checkpointed private record 重建。这样 resume 可重放同一决策，摘要或 archive 失败时也不会丢失原始会话。
 
+## 命令层
+
+命令层（`noesis/chat/commands/`）是跨通道的斜杠命令子系统，与 middleware 解耦：
+
+- **注册与分发**：`@command(name, description, channels=None)` 装饰器写一次逻辑，`dispatch(InboundMessage)` 在进 Agent 前统一分发。命令解析只在 `InboundMessage.command_name()` 做一次，任何 adapter 不自行解析。
+- **包边界**：handler 位于 `noesis.chat` 包，SHALL NOT 直接 import `noesis.services`/`noesis.agents`。需要触达 service 层（如 run_manager、建新会话）时，由 server wiring 在启动时通过 `runtime.py` 的 `set_*_provider` 注入；未注入则降级。这样命令层对 DB/Service 零硬依赖，CLI 等轻量环境也能加载。
+- **通道过滤**：`channels` 参数限定命令在哪些 `channel_type` 可用。声明 channels 后，其余通道 `dispatch` 命中时返回 `handled=False` 放行（当普通文本进 Agent），命令发现（`list_command_descriptions(channel=...)`）也不返回它。默认 `channels=None` 表示全通道可用（保持现有命令行为）。
+
+`/new` 是通道差异化的典型：对齐 Claude Code `/clear` 与 hermes gateway `/new` 的"换新 session 从头开始、旧 session 保留可追溯"模型，但适配多通道——Web 已有「新对话」按钮（命令入口冗余），故 `/new` 声明 `channels=("telegram","feishu")` 仅在无 UI 通道暴露。命中后通过注入的 session_factory 建新 session，并 `channel_bindings.put()` 重绑该 chat 的 binding 到新 session，旧 session 不软删。
+
 ## 当前边界
 
 - 子 Agent 已通过 DeepAgents `private_state_keys` 隔离 Noesis 的 dynamic/durable/file/tool-result/tool-catalog/snip/compaction state。显式 fork/resume policy 属于后续 subagent state-builder 工作，不应重新做成通用 middleware。

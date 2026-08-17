@@ -49,6 +49,21 @@ class ChannelBinding:
     session_id: str
     thread_id: Optional[str] = None
 
+    def rebind_to(self, session_id: str) -> "ChannelBinding":
+        """同一 user/channel、换 session_id 的新 binding。
+
+        用于 ``/new`` 等开新会话场景：保留配对身份，仅切换底层 session，
+        旧 session 不软删、可回溯。语义集中在 binding 自身，避免调用方
+        逐字段重建。
+        """
+        return ChannelBinding(
+            user_id=self.user_id,
+            channel_type=self.channel_type,
+            external_chat_id=self.external_chat_id,
+            session_id=session_id,
+            thread_id=self.thread_id,
+        )
+
 
 @runtime_checkable
 class ChannelAdapter(Protocol):

@@ -76,6 +76,24 @@ from noesis.chat.commands.runtime import set_run_manager_provider  # noqa: E402
 set_run_manager_provider(lambda: run_manager)
 
 
+# 注入「建新会话」工厂给命令层（/new），避免 noesis.chat 直接 import noesis.services。
+# 工厂用 pg_manager 自建 db session（非 FastAPI 请求上下文，如 telegram poll loop）。
+from noesis.chat.commands.runtime import set_session_factory_provider  # noqa: E402
+
+
+async def _create_session_for_command(
+    user_id: str, title: str | None = None, parent_id: str | None = None
+) -> str:
+    async with pg_manager.get_async_session_context() as db:
+        session = await ChatService.create_session(
+            user_id=user_id, title=title, parent_id=parent_id, db=db
+        )
+        return str(session.id)
+
+
+set_session_factory_provider(lambda: _create_session_for_command)
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -139,13 +157,18 @@ class RunService:
         run_id = str(uuid.uuid4())
         assistant_message_id = str(uuid.uuid4())
         extra = dict(request.extra or {})
-        qa_type = str(extra.get("qa_type") or IntentEnum.COMMON_QA.value[0])
+        qa_type = str(extra.get("qa_type") or "")
         try:
             session, message_sequences = await ChatService.reserve_message_sequences(
                 request.session_id, user_id, 2, db
             )
         except ServiceException as exc:
             raise NotFoundException(message="会话不存在") from exc
+        # 请求未显式指定 qa_type 时回退读会话 extra（定时任务会话续聊复用 SuperAgent 等类型）。
+        if not qa_type:
+            session_extra = getattr(session, "extra", None) or {}
+            qa_type = str(session_extra.get("qa_type") or IntentEnum.COMMON_QA.value[0])
+            extra["qa_type"] = qa_type
         ChatService.apply_default_session_title(session, request.content)
         user_message = TChatMessage(
             id=str(uuid.uuid4()),

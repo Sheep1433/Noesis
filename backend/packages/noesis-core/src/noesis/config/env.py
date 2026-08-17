@@ -117,7 +117,6 @@ class ModelSettings:
     summarization_model_temperature: float
     summarization_trigger_tokens: int
     summarization_trigger_fraction: float
-    summarization_max_input_tokens: int
     summarization_messages_to_keep: int
     governor_loop_enabled: bool
     governor_loop_hard_limit: int
@@ -396,9 +395,6 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         ),
         summarization_trigger_fraction=_legacy_env_float(
             "SUMMARIZATION_TRIGGER_FRACTION", s.trigger_fraction
-        ),
-        summarization_max_input_tokens=_legacy_env_int(
-            "SUMMARIZATION_MAX_INPUT_TOKENS", s.max_input_tokens
         ),
         summarization_messages_to_keep=_legacy_env_int(
             "SUMMARIZATION_MESSAGES_TO_KEEP", s.messages_to_keep

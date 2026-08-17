@@ -9,8 +9,11 @@ from noesis.chat.hitl.pending import pending_hitl
 from noesis.runtime.logging import logger
 from noesis.config.env import MessagingConfig
 from noesis.chat.delivery.channels import route_inbound
-from noesis.chat.commands.registry import dispatch as dispatch_command
-from noesis.chat.commands.registry import list_command_descriptions
+from noesis.chat.commands.registry import (
+    CONTROL_COMMANDS,
+    dispatch as dispatch_command,
+    list_command_descriptions,
+)
 from noesis.chat.config_skills_scan import scan_installed_skills
 from noesis.chat.delivery.telegram.adapter import TelegramChannelAdapter
 from noesis.chat.delivery.telegram.client import TelegramBotClient, mask_bot_token
@@ -279,10 +282,10 @@ def _build_bot_commands() -> List[Dict[str, str]]:
     + scan_installed_skills），三端命令发现一致。
     """
     commands: List[Dict[str, str]] = []
-    for name, desc in list_command_descriptions():
+    for name, desc in list_command_descriptions(channel="telegram"):
         commands.append({"command": name, "description": (desc or name)[:256]})
     for name, desc in scan_installed_skills():
-        if name in {"help", "skills", "agents", "model", "status", "reset", "approve", "reject", "stop"}:
+        if name in CONTROL_COMMANDS:
             continue  # 控制命令保留字优先，skill 不得覆盖
         commands.append({"command": name, "description": (desc or name)[:256]})
     return commands

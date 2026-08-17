@@ -147,10 +147,13 @@ class SummarizationYamlSection(BaseModel):
     # 仅模型名单独配置；type / base_url / api_key 与 model 层一致
     model_name: str = ""
     temperature: float = 0.0
-    # trigger_tokens > 0 时优先；为 0 时用 trigger_fraction × 当前 model catalog limit.context
+    # 自动压缩触发阈值。trigger_tokens > 0 时用绝对 token（距 effective_limit 顶部的余量）优先；
+    # 为 0 时用 trigger_fraction × effective_limit（对齐 hermes compression.threshold）：
+    # fraction=0.75 表示请求 token 达 effective_limit 的 75% 时触发压缩。
     trigger_tokens: int = Field(default=0, ge=0)
     trigger_fraction: float = Field(default=0.75, gt=0, le=1)
-    max_input_tokens: int = Field(default=0, ge=0)
+    # model profile 不可用时的消息数量 fallback
+    messages_to_keep: int = Field(default=28, ge=1)
     # model profile 不可用时的消息数量 fallback
     messages_to_keep: int = Field(default=28, ge=1)
 

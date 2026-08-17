@@ -96,11 +96,9 @@ summarization:
   # 仅 model_name 单独配置；type / base_url / api_key 与 model 层一致
   model_name: ""
   temperature: 0.0
-  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × catalog limit.context
+  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × effective_limit
   trigger_tokens: 0
   trigger_fraction: 0.75
-  # 可选摘要窗口覆盖值；0 表示使用 model catalog 的 limit.context
-  max_input_tokens: 0
   # model profile 不可用时的消息数量 fallback
   messages_to_keep: 28
 

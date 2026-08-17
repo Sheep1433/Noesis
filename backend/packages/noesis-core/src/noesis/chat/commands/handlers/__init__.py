@@ -8,6 +8,7 @@ from noesis.chat.commands.handlers import (  # noqa: F401
     compact,
     help,
     model,
+    new,
     skills,
     status,
 )

@@ -51,7 +51,18 @@ def _compaction_deps(model: Any, model_id: str | None) -> dict[str, Any]:
     model_limit = resolve_context_max_tokens(model_id) or ModelConfig.context_max_input_tokens
     trigger = ModelConfig.summarization_trigger_tokens
     reserve = max(1, min(20_000, ModelConfig.max_tokens))
-    transient = max(1, model_limit - reserve - trigger) if trigger > 0 else max(2_000, model_limit // 20)
+    effective_limit = max(1, model_limit - reserve)
+    if trigger > 0:
+        # 绝对 token 触发：transient 是距 effective_limit 顶部的余量
+        transient = max(1, effective_limit - trigger)
+    else:
+        # 比例触发（对齐 hermes compression.threshold）：
+        # trigger_fraction 表示"用到 effective_limit 的多少比例时触发"，
+        # 0.75 → request_tokens >= 75% effective_limit 时压缩。
+        # transient = effective_limit × (1 - fraction) 推导自
+        # auto_compact_at = effective_limit - transient = effective_limit × fraction。
+        fraction = max(0.01, min(0.99, ModelConfig.summarization_trigger_fraction))
+        transient = max(1, int(effective_limit * (1.0 - fraction)))
 
     prompt = (
         "Extract continuation context from this conversation. Preserve user goals, "

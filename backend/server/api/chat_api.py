@@ -657,7 +657,12 @@ async def list_commands(
     """返回控制命令（name + description）。skill 命令由 /skills fs-tree 提供。"""
     from noesis.chat.commands.registry import list_command_descriptions
 
-    items = [{"name": name, "description": desc} for name, desc in list_command_descriptions()]
+    # web 通道过滤：声明 channels 的命令（如 /new）不在 web 补全列表中
+    # （Web 用「新对话」按钮，命令入口冗余）。
+    items = [
+        {"name": name, "description": desc}
+        for name, desc in list_command_descriptions(channel="web")
+    ]
     return ResponseUtil.success(msg="获取命令列表成功", data=items)
 
 
