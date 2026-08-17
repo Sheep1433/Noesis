@@ -1000,13 +1000,13 @@ async function saveCollectionConfig() {
   word-break: break-word;
 }
 
-@media (max-width: 720px) {
+@media (max-width: $bp-md) {
   .config-grid {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 1024px) {
+@media (max-width: $bp-lg) {
   .kb-detail {
     padding: 12px var(--noesis-content-gutter-mobile) 16px;
   }
@@ -1051,7 +1051,7 @@ async function saveCollectionConfig() {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: $bp-xs) {
   .detail-header-actions :deep(.n-button .n-button__content) {
     font-size: 13px;
   }

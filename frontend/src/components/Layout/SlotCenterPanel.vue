@@ -135,13 +135,13 @@ setTimeout(() => {
   border-radius: 0;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: $bp-lg) {
   .panel-shadow {
     --shadow: none;
   }
 }
 
-@media (min-width: 769px) and (max-width: 1024px) {
+@media (min-width: $bp-md + 1px) and (max-width: $bp-lg) {
   .app-shell__main {
     padding: 16px 16px 16px 0;
   }

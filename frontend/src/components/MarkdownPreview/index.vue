@@ -320,7 +320,7 @@ onMounted(() => {
   box-sizing: border-box;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .markdown-preview__body {
     padding-right: 8px !important;
     padding-left: 8px !important;

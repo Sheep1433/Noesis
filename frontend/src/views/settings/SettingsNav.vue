@@ -145,7 +145,7 @@ async function onKeydown(event: KeyboardEvent, index: number) {
   font-weight: 600;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .settings-nav {
     flex-direction: row;
     flex-wrap: nowrap;

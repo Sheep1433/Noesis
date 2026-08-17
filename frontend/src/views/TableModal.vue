@@ -281,7 +281,7 @@ watch(
   flex-shrink: 0;
 }
 
-@media (width <= 720px) {
+@media (max-width: $bp-md) {
   .session-manage-modal__footer {
     flex-direction: column;
     align-items: stretch;

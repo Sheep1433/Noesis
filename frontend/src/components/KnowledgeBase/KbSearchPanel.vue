@@ -169,7 +169,7 @@ function onSearch() {
   gap: 8px 16px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: $bp-md) {
   .advanced-grid {
     grid-template-columns: 1fr;
   }

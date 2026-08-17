@@ -30,5 +30,5 @@ export function useResponsiveDrawerWidth(options: UseResponsiveDrawerWidthOption
     return Math.min(w - tabletGutter * 2, max)
   })
 
-  return { drawerWidth, windowWidth }
+  return { drawerWidth }
 }

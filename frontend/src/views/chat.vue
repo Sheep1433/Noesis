@@ -526,7 +526,7 @@ function showAssistantReplyLoading(index: number, role: string): boolean {
 const currentRenderIndex = ref(0)
 
 // 开始输出时隐藏加载提示
-const onBeginRead = async (index: number) => {
+const onBeginRead = (_index: number) => {
   // 设置最上面的滚动提示图标隐藏
   contentLoadingStates.value[currentRenderIndex.value - 1] = false
 }
@@ -792,11 +792,6 @@ watchEffect(() => {
   conversationItemsSnapshot.value = items.slice()
 })
 
-// 添加 watch 验证 conversationItems 变化
-watch(() => conversationItems.value.length, (newLen) => {
-  // debug: length changed
-})
-
 // 这里控制内容加载状态
 const contentLoadingStates = ref(
   conversationItemsSnapshot.value.map(() => false),
@@ -855,7 +850,7 @@ async function onChatImageUploaded() {
   })
 }
 
-function buildComposingSessionExtra(): Record<string, unknown> {
+function buildSessionConfigExtra(): Record<string, unknown> {
   const extra: Record<string, unknown> = {
     qa_type: qa_type.value,
   }
@@ -883,6 +878,38 @@ const showContextIndicator = computed(
   () => qa_type.value !== 'TEST_CASE_QA' && hasValidContextWindow(sessionContext.value),
 )
 
+function applySessionConfig(extra: Record<string, unknown>) {
+  selectedKbCollections.value = normalizeKbCollections(extra.kb_collections)
+  kbSearchEnabled.value = extra.kb_search_enabled !== false
+
+  const storedModelId = String(extra.model_id ?? '').trim()
+  if (storedModelId) {
+    selectedModelId.value = storedModelId
+  }
+
+  selectedMcpServers.value = Object.prototype.hasOwnProperty.call(extra, 'mcp_servers')
+    ? normalizeIdList(extra.mcp_servers)
+    : []
+  if (Object.prototype.hasOwnProperty.call(extra, 'enabled_skills')) {
+    selectedSkills.value = normalizeIdList(extra.enabled_skills)
+    skillsAllEnabled.value = false
+  } else {
+    selectedSkills.value = []
+    skillsAllEnabled.value = true
+  }
+  sessionMaterialized.value = true
+}
+
+function clearSessionConfig() {
+  selectedKbCollections.value = []
+  kbSearchEnabled.value = true
+  selectedModelId.value = ''
+  selectedMcpServers.value = []
+  selectedSkills.value = []
+  skillsAllEnabled.value = true
+  sessionMaterialized.value = false
+}
+
 async function loadSessionContext(sessionId: string) {
   const loadId = ++sessionContextLoadId
   if (!sessionId || qa_type.value === 'TEST_CASE_QA') {
@@ -908,25 +935,7 @@ async function loadSessionContext(sessionId: string) {
     sessionContext.value = loaded
     sessionContextSessionId.value = loaded ? sessionId : ''
     sessionContextIsLive.value = Boolean(loaded && preserveLiveSnapshot)
-    selectedKbCollections.value = normalizeKbCollections(session.extra?.kb_collections)
-    kbSearchEnabled.value = session.extra?.kb_search_enabled !== false
-    const storedModelId = String(session.extra?.model_id ?? '').trim()
-    if (storedModelId) {
-      selectedModelId.value = storedModelId
-    }
-    if (Object.prototype.hasOwnProperty.call(session.extra ?? {}, 'mcp_servers')) {
-      selectedMcpServers.value = normalizeIdList(session.extra?.mcp_servers)
-    } else {
-      selectedMcpServers.value = []
-    }
-    if (Object.prototype.hasOwnProperty.call(session.extra ?? {}, 'enabled_skills')) {
-      selectedSkills.value = normalizeIdList(session.extra?.enabled_skills)
-      skillsAllEnabled.value = false
-    } else {
-      selectedSkills.value = []
-      skillsAllEnabled.value = true
-    }
-    sessionMaterialized.value = true
+    applySessionConfig(session.extra ?? {})
   } catch {
     if (loadId !== sessionContextLoadId || sessionId !== getChatSessionId()) {
       return
@@ -937,13 +946,7 @@ async function loadSessionContext(sessionId: string) {
       sessionContextSessionId.value = ''
       sessionContextIsLive.value = false
     }
-    selectedKbCollections.value = []
-    kbSearchEnabled.value = true
-    selectedModelId.value = ''
-    selectedMcpServers.value = []
-    selectedSkills.value = []
-    skillsAllEnabled.value = true
-    sessionMaterialized.value = false
+    clearSessionConfig()
   }
 }
 
@@ -1348,6 +1351,76 @@ const composerUploadMode = computed(() =>
     : 'kb',
 )
 
+function appendConversationTurn(
+  textContent: string,
+  upload_file_key: ChatAttachmentItem[],
+  send_text: string,
+): string {
+  if (showDefaultPage.value) {
+    conversationItems.value = []
+    showDefaultPage.value = false
+  }
+
+  const uuid_str = uuidv4()
+  const sessionId = uuids.value[qa_type.value] || (uuids.value[qa_type.value] = uuidv4())
+  const newItem = {
+    uuid: uuid_str,
+    key: inputTextString.value || send_text,
+    chat_id: sessionId,
+    qa_type: qa_type.value,
+  }
+  if (!tableData.value.some((item) => item.chat_id === sessionId)) {
+    tableData.value.unshift(newItem)
+  }
+
+  businessStore.todos = []
+  stylizingLoading.value = true
+  startProcessingClock()
+  inputTextString.value = ''
+
+  conversationItems.value.push({
+    uuid: uuid_str,
+    chat_id: sessionId,
+    qa_type: qa_type.value,
+    question: textContent,
+    content: '',
+    file_key: upload_file_key,
+    mentions: [...composerMentions.value],
+    role: 'user',
+    created_at: Date.now(),
+  })
+  currentRenderIndex.value = conversationItems.value.length - 1
+  pendingUploadFileInfoList.value = []
+  businessStore.clear_file_list()
+
+  nativeReasoningSeen.value = false
+  Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
+  conversationItems.value.push({
+    uuid: uuid_str,
+    chat_id: sessionId,
+    qa_type: qa_type.value,
+    question: textContent,
+    content: '',
+    file_key: [],
+    role: 'assistant',
+    messageContent: emptyMessageContent(),
+    created_at: Date.now(),
+  })
+  currentRenderIndex.value = conversationItems.value.length - 1
+  return sessionId
+}
+
+function buildStreamExtra(file_dict: Record<string, string> | undefined): Record<string, unknown> {
+  const extra = buildSessionConfigExtra()
+  extra.file_dict = file_dict
+  if (qa_type.value !== 'TEST_CASE_QA' && selectedMcpServers.value.length === 0) {
+    delete extra.mcp_servers
+  }
+  if (composerMentions.value.length > 0) {
+    extra.mentions = composerMentions.value.map(mentionToPayload)
+  }
+  return extra
+}
 
 // 提交对话
 const handleCreateStylized = async (send_text = '', file_key = []) => {
@@ -1387,7 +1460,7 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   // 发送才物化：merge COMPOSING overlay → session.extra
   const sessionIdForSend = getChatSessionId()
   try {
-    await ensureSession(sessionIdForSend, { extra: buildComposingSessionExtra() })
+    await ensureSession(sessionIdForSend, { extra: buildSessionConfigExtra() })
     sessionMaterialized.value = true
     void replaceChatSessionUrl(sessionIdForSend)
   } catch (error) {
@@ -1415,102 +1488,10 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
     file_dict = buildFileDict(upload_file_key)
   }
 
-  if (showDefaultPage.value) {
-    // 新建对话 时输入新问题 清空历史数据
-    conversationItems.value = []
-    showDefaultPage.value = false
-  }
-
-  // 自定义id
-  const uuid_str = uuidv4()
-  // 加入对话历史用于左边表格渲染
-  const newItem = {
-    uuid: uuid_str,
-    key: inputTextString.value ? inputTextString.value : send_text,
-    chat_id: uuids.value[qa_type.value],
-    qa_type: qa_type.value,
-  }
-
-  // 如果有相同的chat_id 则不添加 使用 unshift 方法将新元素添加到数组的最前面
-  const hasSameChatId = tableData.value.some((item) => item.chat_id === uuids.value[qa_type.value])
-  if (!hasSameChatId) {
-    tableData.value.unshift(newItem)
-  }
-
-  // 新一轮用户提问：清空上一轮的 Todo 面板（流结束后保留，便于对照报告）
-  businessStore.todos = []
-
-  // 调用大模型后台服务接口
-  stylizingLoading.value = true
-  startProcessingClock()
-  inputTextString.value = ''
-
-  if (!uuids.value[qa_type.value]) {
-    uuids.value[qa_type.value] = uuidv4()
-  }
-
-  // 存储该轮用户对话消息
-  if (textContent) {
-    conversationItems.value.push({
-      uuid: uuid_str,
-      chat_id: uuids.value[qa_type.value],
-      qa_type: qa_type.value,
-      question: textContent,
-      content: '',
-      file_key: upload_file_key,
-      mentions: [...composerMentions.value],
-      role: 'user',
-      created_at: Date.now(),
-    })
-    // 更新 currentRenderIndex 以包含新添加的项
-    currentRenderIndex.value = conversationItems.value.length - 1
-
-    // 清空文件上传列表
-    pendingUploadFileInfoList.value = []
-    businessStore.clear_file_list()
-  }
-
-  // 存储该轮AI回复的消息（初始为空）
-  nativeReasoningSeen.value = false
-  Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
-  conversationItems.value.push({
-    uuid: uuid_str,
-    chat_id: uuids.value[qa_type.value],
-    qa_type: qa_type.value,
-    question: textContent,
-    content: '',
-    file_key: [],
-    role: 'assistant',
-    messageContent: emptyMessageContent(),
-    created_at: Date.now(),
-  })
-
-  // 更新 currentRenderIndex 以包含新添加的项
-  currentRenderIndex.value = conversationItems.value.length - 1
-
-  // 使用 useSSEStream composable
-  const streamExtra: Record<string, unknown> = {
-    qa_type: qa_type.value,
-    file_dict,
-  }
-  if (qa_type.value === 'COMMON_QA' || qa_type.value === 'SUPER_AGENT_QA') {
-    streamExtra.kb_collections = selectedKbCollections.value
-    streamExtra.kb_search_enabled = kbSearchEnabled.value
-  }
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
-    streamExtra.model_id = selectedModelId.value
-  }
-  if (qa_type.value !== 'TEST_CASE_QA' && selectedMcpServers.value.length > 0) {
-    streamExtra.mcp_servers = selectedMcpServers.value
-  }
-  if (qa_type.value === 'SUPER_AGENT_QA' && !skillsAllEnabled.value) {
-    streamExtra.enabled_skills = selectedSkills.value
-  }
-  if (composerMentions.value.length > 0) {
-    streamExtra.mentions = composerMentions.value.map(mentionToPayload)
-  }
+  const sessionId = appendConversationTurn(textContent, upload_file_key, send_text)
+  const streamExtra = buildStreamExtra(file_dict)
   await sseStream.sendMessage(
-    uuids.value[qa_type.value],
+    sessionId,
     textContent,
     streamExtra,
   )
@@ -1566,19 +1547,25 @@ function closeMentionPicker() {
   mentionTriggerChar.value = ''
 }
 
+function resolveMentionMatch(before: string): { trigger: '/' | '@', query: string } | null {
+  const slashMatch = before.match(/(^|\n)\/(\S*)$/)
+  if (slashMatch) {
+    return { trigger: '/', query: slashMatch[2] || '' }
+  }
+  const atMatch = before.match(/(^|\s)@(\S*)$/)
+  if (atMatch) {
+    return { trigger: '@', query: atMatch[2] || '' }
+  }
+  return null
+}
+
 async function syncMentionPickerFromInput() {
   const ta = getComposerTextarea()
   const text = inputTextString.value
   const pos = ta?.selectionStart ?? text.length
   const before = text.slice(0, pos)
   // / 仅行首；@ 允许空白边界（行首或空格/制表后）
-  const slashMatch = before.match(/(^|\n)\/(\S*)$/)
-  const atMatch = before.match(/(^|\s)@(\S*)$/)
-  const match = slashMatch
-    ? { trigger: '/' as const, query: slashMatch[2] || '', prefix: slashMatch[1] }
-    : atMatch
-      ? { trigger: '@' as const, query: atMatch[2] || '', prefix: atMatch[1] }
-      : null
+  const match = resolveMentionMatch(before)
   if (!match) {
     closeMentionPicker()
     return
@@ -1720,10 +1707,6 @@ watch(inputTextString, () => {
   void syncMentionPickerFromInput()
 })
 
-const generateRandomSuffix = function () {
-  return Math.floor(Math.random() * 10000) // 生成0到9999之间的随机整数
-}
-
 // 重置状态
 const handleResetState = () => {
   inputTextString.value = ''
@@ -1738,12 +1721,6 @@ const handleResetState = () => {
   })
 }
 handleResetState()
-
-
-// 下面方法用于左侧对话列表点击 右侧内容滚动
-// 用于存储每个 MarkdownPreview 容器的引用
-// const markdownPreviews = ref<Array<HTMLElement | null>>([]) // 初始化为空数组
-const markdownPreviews = ref<Map<string, HTMLElement | null>>(new Map())
 
 
 // 会话列表右键菜单
@@ -1962,48 +1939,6 @@ const rowProps = (row: TableItem) => {
         historyDrawerOpen.value = false
       }
     },
-  }
-}
-
-// 递归查找最底层的元素
-const findDeepestElement = (element: HTMLElement): HTMLElement => {
-  if (element.children.length === 0) {
-    return element
-  }
-  return findDeepestElement(element.lastElementChild as HTMLElement)
-}
-
-// 设置 markdownPreviews 数组中的元素
-const setMarkdownPreview = (uuid: string, role: string, el: any) => {
-  if (role === 'user') {
-    if (el && el instanceof HTMLElement) {
-      // 查找最下面的元素
-      const deepestElement = findDeepestElement(el)
-      markdownPreviews.value.set(uuid, deepestElement)
-    }
-  }
-}
-
-// 滚动到指定位置的方法
-const scrollToItem = async (uuid: string) => {
-  // 等待 DOM 更新完成
-  await nextTick()
-  await nextTick()
-
-  const element = markdownPreviews.value.get(uuid)
-
-  if (element && element instanceof HTMLElement) {
-    try {
-      // 强制重排，确保元素位置和尺寸正确
-      void element.offsetWidth
-      element.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-        inline: 'nearest',
-      })
-    } catch (error) {
-      console.error('滚动到指定元素时出错:', error)
-    }
   }
 }
 
@@ -2620,7 +2555,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                 :status="entry.part.status"
                                 :state="entry.part.state"
                                 :error="entry.part.error"
-                                :duration_ms="entry.part.duration_ms"
+                                :duration-ms="entry.part.duration_ms"
                                 :child-parts="entry.childParts"
                               />
                               <div
@@ -2646,9 +2581,9 @@ function onComposerPaste(e: ClipboardEvent) {
                                         :status="tp.status"
                                         :state="tp.state"
                                         :error-category="tp.errorCategory"
-                                        :exit_code="tp.exit_code"
+                                        :exit-code="tp.exit_code"
                                         :truncated="tp.truncated"
-                                        :duration_ms="tp.duration_ms"
+                                        :duration-ms="tp.duration_ms"
                                       />
                                     </div>
                                   </n-collapse-item>
@@ -2664,9 +2599,9 @@ function onComposerPaste(e: ClipboardEvent) {
                                   :status="entry.part.status"
                                   :state="entry.part.state"
                                   :error-category="entry.part.errorCategory"
-                                  :exit_code="entry.part.exit_code"
+                                  :exit-code="entry.part.exit_code"
                                   :truncated="entry.part.truncated"
-                                  :duration_ms="entry.part.duration_ms"
+                                  :duration-ms="entry.part.duration_ms"
                                 />
                               </template>
                               <div
@@ -2715,7 +2650,7 @@ function onComposerPaste(e: ClipboardEvent) {
                               :qa-type="item.qa_type || 'COMMON_QA'"
                               :copy-text="extractLastTopLevelText(item.messageContent.parts)"
                               :time-text="formatHHmm(item.completed_at || item.created_at)"
-                              :langfuse_session_id="item.langfuse_session_id"
+                              :langfuse-session-id="item.langfuse_session_id"
                               :langfuse-ui-origin="langfuseUiOrigin"
                             >
                               <template #meta>
@@ -3552,7 +3487,6 @@ function onComposerPaste(e: ClipboardEvent) {
   margin-left: 0;
   margin-right: 0;
   margin-top: -8px;
-  padding-right: 8px;
 }
 
 .assistant-unified-card {
@@ -3668,7 +3602,7 @@ function onComposerPaste(e: ClipboardEvent) {
   margin-right: var(--noesis-content-gutter-desktop);
 }
 
-@media (max-width: 1024px) {
+@media (max-width: $bp-lg) {
   .chat-content-gutter {
     margin-left: var(--noesis-content-gutter-mobile);
     margin-right: var(--noesis-content-gutter-mobile);
@@ -3710,7 +3644,7 @@ function onComposerPaste(e: ClipboardEvent) {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .chat-top-bar {
     min-height: 48px;
     padding: 7px 8px;

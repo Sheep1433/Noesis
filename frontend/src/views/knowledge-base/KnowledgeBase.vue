@@ -516,7 +516,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   font-size: 12px;
 }
 
-@media (width <= 1024px) {
+@media (max-width: $bp-lg) {
 
   .kb-page {
     padding: 12px var(--noesis-content-gutter-mobile);
@@ -566,7 +566,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   }
 }
 
-@media (width <= 768px) {
+@media (max-width: $bp-md) {
 
   .kb-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -577,7 +577,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   }
 }
 
-@media (width <= 480px) {
+@media (max-width: $bp-xs) {
 
   .kb-hero-actions {
     width: 100%;

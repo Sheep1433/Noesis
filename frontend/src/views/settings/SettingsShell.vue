@@ -148,7 +148,7 @@ onBeforeRouteLeave(async () => confirmDiscard())
   overflow: auto;
 }
 
-@media (width <= 768px) {
+@media (max-width: $bp-md) {
 
   .settings {
     padding: var(--noesis-shell-padding-mobile, 16px);

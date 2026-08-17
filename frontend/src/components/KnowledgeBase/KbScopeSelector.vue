@@ -193,7 +193,7 @@ watch(
   color: var(--noesis-text-secondary, #6b7280);
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .kb-scope-label {
     display: none;
   }

@@ -696,7 +696,7 @@ async function onMarketInstalled() {
   flex-shrink: 0;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: $bp-lg) {
   .skills-management {
     padding: 6px 0 10px;
     gap: 6px;
@@ -711,7 +711,7 @@ async function onMarketInstalled() {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .panel-header-actions :deep(.n-button span:not(.n-button__icon)) {
     display: none;
   }

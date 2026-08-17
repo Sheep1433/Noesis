@@ -111,7 +111,7 @@ function onTabUpdate(value: string | number) {
   min-height: 0;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .extensions {
     padding: 8px var(--noesis-content-gutter-mobile) 0;
   }
