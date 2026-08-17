@@ -935,10 +935,12 @@ class ChatService:
         )
         sessions = list(result.scalars().all())
 
-        # 批量取每个 session 最近一条 run 的 status（用于列表展示会话状态）
+        # 批量取每个 session 最近一条 run 的 status 和 origin（用于列表展示会话状态和来源）
         run_status_map: Dict[str, str] = {}
+        run_origin_map: Dict[str, str] = {}
         if sessions:
             session_ids = [s.id for s in sessions]
+            # 活跃 run status
             run_rows = await db.execute(
                 select(
                     TAgentRun.session_id,
@@ -956,11 +958,29 @@ class ChatService:
             for row in run_rows.all():
                 run_status_map[row.session_id] = row.status
 
+            # 每个 session 最近一条 run 的 origin
+            latest_run_rows = await db.execute(
+                select(
+                    TAgentRun.session_id,
+                    TAgentRun.origin,
+                )
+                .where(
+                    TAgentRun.session_id.in_(session_ids),
+                )
+                .order_by(TAgentRun.created_at.desc())
+            )
+            seen_sessions: set[str] = set()
+            for row in latest_run_rows.all():
+                if row.session_id in seen_sessions:
+                    continue
+                seen_sessions.add(row.session_id)
+                run_origin_map[row.session_id] = row.origin
+
         logger.info(
             f"query_user_sessions_for_record: user_id={user_id}, total={total}, "
             f"page={safe_page}, limit={safe_limit}, has_search={bool(q)}, archived={archived}"
         )
-        return sessions, total, run_status_map
+        return sessions, total, run_status_map, run_origin_map
 
 
     @classmethod

@@ -557,6 +557,7 @@ interface TableItem {
   pinned?: boolean
   archived?: boolean
   run_status?: string
+  run_origin?: string
   last_read_at?: number
   update_time?: number
 }
@@ -594,6 +595,19 @@ function isSessionUnread(row: TableItem): boolean {
   }
   const lastRead = row.last_read_at || 0
   return row.update_time > lastRead
+}
+
+function sessionOriginConfig(origin: string): { label: string, icon: string, color: string, bg: string } | null {
+  switch (origin) {
+    case 'telegram':
+      return { label: 'TG', icon: 'i-hugeicons:telegram', color: '#2aabee', bg: 'rgba(42,171,238,0.1)' }
+    case 'feishu':
+      return { label: '飞书', icon: 'i-hugeicons:messenger', color: '#3370ff', bg: 'rgba(51,112,255,0.1)' }
+    case 'automation':
+      return { label: '定时', icon: 'i-hugeicons:clock-01', color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' }
+    default:
+      return null
+  }
 }
 
 function sessionQaIconColor(qt: string) {
@@ -639,6 +653,19 @@ const historySidebarColumns = computed(() => [
             style: { color: statusConfig.color, background: statusConfig.bg },
             title: statusConfig.label,
           }, statusConfig.label))
+        }
+      }
+      if (row.run_origin) {
+        const originConfig = sessionOriginConfig(row.run_origin)
+        if (originConfig) {
+          children.push(h('span', {
+            class: 'session-origin-badge shrink-0 inline-flex items-center gap-2px',
+            style: { color: originConfig.color, background: originConfig.bg },
+            title: `来源: ${originConfig.label}`,
+          }, [
+            h('span', { class: `size-12px ${originConfig.icon}` }),
+            h('span', originConfig.label),
+          ]))
         }
       }
       if (row.pinned) {
@@ -3098,6 +3125,17 @@ function onComposerPaste(e: ClipboardEvent) {
 .session-run-status-badge {
   display: inline-flex;
   align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--noesis-radius-sm);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.session-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   padding: 1px 6px;
   border-radius: var(--noesis-radius-sm);
   font-size: 11px;
