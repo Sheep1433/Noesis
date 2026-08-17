@@ -334,6 +334,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     streamSettled = true
+    isLoading.value = false
     const reason = finishReason ?? lastFinishReason
     onFinish?.(reason ? { finish_reason: reason } : undefined)
   }
@@ -342,6 +343,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
     streamSettled = true
+    isLoading.value = false
     onError?.(msg)
   }
 
@@ -625,7 +627,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       }
     }
   }
-
   async function resumeTestCase(sessionId: string, selectedPointNames: string[]) {
     const runId = sessionStorage.getItem(`noesis:active-run:${sessionId}`)
       || (activeSessionId === sessionId ? currentRunId : null)
