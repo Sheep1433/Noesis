@@ -1167,3 +1167,23 @@ backends/
 **可迁移原则：** 设计错误路径时要沿真实返回路径画图，不能默认“模型结束 hook 一定会触发”。任何绕过标准 hook 的 middleware return，都必须有专用事件或显式结果通道；流式系统还要同时处理半开连接、残留 buffer、事件类型覆盖和重复终态。
 
 **验证与遗留：** 提交 `3c5f325`、`a7f6e7a`、`381a6f1` 已补 custom event、flush、读超时和定时器清理；会话列表级 `run_status` 展示在 8/17 继续实现，仍需验证多窗口状态不会互相污染。
+
+## 2026-08-17 — 中间件重构：共享决策核心，隔离 I/O 与私有状态
+
+**问题/症状：** 代码审计发现多个 middleware 重复实现事件发射、sync/async 重试循环和工具结果更新；配置从全局读取，私有 state key 在 stack 中硬编码，改名或子 Agent 隔离时容易静默失效。jscpd 统计为 16 个 clone、1107 tokens。
+
+**解法/取舍：** 抽出 `_events.py` 统一 retry/fallback/compaction 的双通道事件发射；把重试判定收进共享决策核心，sync/async 只注入 sleep 与 emit hooks；`max_retries` 改为 factory 显式注入；各 middleware 导出 `PRIVATE_STATE_KEYS`，由 stack 聚合；删除没有生产调用方的 `CompactionMiddleware.compact()` host 入口。行为保持不变，jscpd 降为 13 个 clone、897 tokens。
+
+**可迁移原则：** 重构不是简单把 A 调 B；先识别真正稳定的决策核心，再把同步/异步、事件发送、等待和外部 I/O 作为边界注入。配置应沿装配链显式传递，私有 state 的所有者要由组件声明，不能由聚合层复制字符串。
+
+**验证与遗留：** 已补 middleware 重试耗尽、fallback SSE、显式 max_retries 注入和 stack 装配测试；剩余镜像主要集中在 `read_before_write` 与 `compaction` 的 I/O 相关路径，继续去重需要行为回归而不是机械合并。
+
+## 2026-08-17 — 定时任务：解析、排队、会话承接与无人值守要分层
+
+**问题/症状：** 原定时任务已有 cron 调度和 run 记录，但创建依赖手填 cron/prompt；立即运行会同步占住 HTTP 请求；定时会话续聊可能丢失原 `qa_type`；无人值守执行还可能卡在 HITL 等待。
+
+**解法/取舍：** 增加自然语言解析端点，将一句话生成 `name/cron_expr/prompt` 草稿并由后端二次校验；默认 Asia/Shanghai、SuperAgent、单任务单会话、不投递。创建任务时预建绑定 session，所有运行追加到同一线程；立即运行先写 `queued` 记录并后台异步执行；续聊未显式传 `qa_type` 时回退读取 session metadata；自动执行注入 headless prompt 并禁用 HITL，网页手动续聊仍保留 HITL。
+
+**可迁移原则：** 定时任务不是“换个 cron 入口调用 Agent”，而是独立的调度/执行生命周期：解析草稿 → 校验 → 排队 → 后台运行 → 终态与通知。无人值守约束只能作用于自动执行路径，不能污染用户后续手动续聊。
+
+**验证与遗留：** 提交 `4466b4a` 已覆盖自然语言解析、单会话承接、异步 run、qa_type 继承和 HITL 边界；仍需补 scheduler 重启恢复、后台任务进程崩溃和通知失败后的重试验收。
