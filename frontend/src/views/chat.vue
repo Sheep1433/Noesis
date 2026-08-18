@@ -38,7 +38,7 @@ import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
-import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
+import { formatDuration, formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
@@ -734,6 +734,8 @@ const conversationItems = ref<
     langfuse_session_id?: string
     created_at?: number
     completed_at?: number
+    /** 关联 run 的启动时间（历史加载）；缺省回退 created_at */
+    run_started_at?: number
   }>
 >([])
 
@@ -988,12 +990,15 @@ function rebuildSessionStatsFromHistory() {
 }
 /** 整轮回复结束信号：递增触发所有 ToolCallCollapse compact 收起。 */
 const runCollapseSignal = ref(0)
-/** 「全部展开」信号：递增触发所有 ToolCallCollapse compact 展开。 */
-const runExpandSignal = ref(0)
+/** 已主动展开整轮过程的 assistant 消息；未记录的已完成消息默认只展示最终文本。 */
+const expandedAssistantRuns = ref<Set<string>>(new Set())
 
-/** 单轮 assistant 耗时：完成（有 completed_at）显示固定差值；流式中实时；历史静载无 completed_at 不显示。 */
-function runElapsedText(item: { created_at?: number, completed_at?: number, messageContent?: { parts?: unknown[] } }): string {
-  const started = item.created_at
+/**
+ * 单轮 assistant 耗时：优先 run 时间（started_at→finished_at 纯执行时长）；
+ * 缺省回退 created_at→completed_at；流式中实时；历史静载无完成时间不显示。
+ */
+function runElapsedText(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: { parts?: unknown[] } }): string {
+  const started = item.run_started_at ?? item.created_at
   if (!started) {
     return ''
   }
@@ -1002,15 +1007,89 @@ function runElapsedText(item: { created_at?: number, completed_at?: number, mess
   }
   const parts = item.messageContent?.parts
   if (Array.isArray(parts) && assistantPartsStillStreaming(parts)) {
-    return formatElapsedSeconds(started, processingNow.value)
+    return formatElapsedSeconds(item.created_at ?? started, processingNow.value)
   }
   return ''
 }
 
-/** 该消息是否含工具调用（决定折叠/展开按钮是否出现）。 */
-function hasToolParts(item: { messageContent?: { parts?: unknown[] } }): boolean {
+/** 该消息是否含可折叠过程（决定折叠/展开按钮是否出现）。 */
+function hasCollapsibleParts(item: { messageContent?: { parts?: unknown[] } }): boolean {
   const parts = item.messageContent?.parts
-  return Array.isArray(parts) && parts.some((p) => (p as { type?: string })?.type === 'tool')
+  return Array.isArray(parts) && parts.some((p) => {
+    const type = (p as { type?: string })?.type
+    return type === 'tool' || type === 'reasoning'
+  })
+}
+
+function assistantRunKey(item: { uuid: string, message_id?: string }): string {
+  return item.message_id || item.uuid
+}
+
+function lastTopLevelTextEntry(parts: UiPart[]): DisplayPartEntry | null {
+  const entries = buildDisplayParts(parts)
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]
+    if (
+      entry.kind === 'part'
+      && entry.part.type === 'text'
+      && entry.part.content !== COMPACTION_BOUNDARY
+      && entry.part.content.trim()
+    ) {
+      return entry
+    }
+  }
+  return null
+}
+
+function shouldCollapseAssistantRun(item: { messageContent?: MessageContentV1 }): boolean {
+  const parts = item.messageContent?.parts
+  return Boolean(
+    toolDisplayMode.value === 'compact'
+    && Array.isArray(parts)
+    && !assistantPartsStillStreaming(parts)
+    && hasCollapsibleParts(item)
+    && lastTopLevelTextEntry(parts),
+  )
+}
+
+function isAssistantRunExpanded(item: { uuid: string, message_id?: string }): boolean {
+  return expandedAssistantRuns.value.has(assistantRunKey(item))
+}
+
+function toggleAssistantRun(item: { uuid: string, message_id?: string, messageContent?: MessageContentV1 }) {
+  if (!shouldCollapseAssistantRun(item)) {
+    return
+  }
+  const key = assistantRunKey(item)
+  const next = new Set(expandedAssistantRuns.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  expandedAssistantRuns.value = next
+}
+
+function assistantDisplayParts(item: { uuid: string, message_id?: string, messageContent?: MessageContentV1 }): DisplayPartEntry[] {
+  const parts = item.messageContent?.parts ?? []
+  if (!shouldCollapseAssistantRun(item) || isAssistantRunExpanded(item)) {
+    return buildDisplayParts(parts)
+  }
+  const finalText = lastTopLevelTextEntry(parts)
+  return finalText ? [finalText] : buildDisplayParts(parts)
+}
+
+function runElapsedLabel(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: MessageContentV1 }): string {
+  const started = item.run_started_at ?? item.created_at
+  if (!started) {
+    return '执行过程'
+  }
+  const end = item.completed_at || (assistantPartsStillStreaming(item.messageContent?.parts ?? []) ? processingNow.value : undefined)
+  if (!end) {
+    return '执行过程'
+  }
+  const seconds = Math.max(0, Math.floor((end - started) / 1000))
+  return `耗时 ${formatDuration(seconds).replace(/ 分/g, '分钟').replace(/ 秒/g, '秒')}`
 }
 
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
@@ -2597,20 +2676,30 @@ function onComposerPaste(e: ClipboardEvent) {
                     >
                       <template v-if="item.messageContent?.version === 1">
                         <div class="chat-message-column assistant-message-column">
-                          <div class="assistant-unified-card">
-                            <!-- 左上角运行元信息：耗时 + 折叠/展开全部（简洁模式有工具时） -->
-                            <div
-                              v-if="runElapsedText(item) || (toolDisplayMode === 'compact' && hasToolParts(item))"
-                              class="assistant-run-meta"
+                          <!-- Codex 风格的整轮过程摘要：放在回复卡片上方。 -->
+                          <div
+                            v-if="runElapsedText(item) || shouldCollapseAssistantRun(item)"
+                            class="assistant-run-meta"
+                          >
+                            <button
+                              v-if="shouldCollapseAssistantRun(item)"
+                              type="button"
+                              class="assistant-run-meta__toggle"
+                              :aria-expanded="isAssistantRunExpanded(item)"
+                              @click="toggleAssistantRun(item)"
                             >
-                              <span v-if="runElapsedText(item)" class="assistant-run-meta__elapsed">{{ runElapsedText(item) }}</span>
-                              <template v-if="toolDisplayMode === 'compact' && hasToolParts(item) && !assistantPartsStillStreaming(item.messageContent.parts)">
-                                <button type="button" class="assistant-run-meta__btn" @click="runCollapseSignal += 1">全部折叠</button>
-                                <button type="button" class="assistant-run-meta__btn" @click="runExpandSignal += 1">全部展开</button>
-                              </template>
-                            </div>
+                              <span>{{ runElapsedLabel(item) }}</span>
+                              <span
+                                class="assistant-run-meta__chevron"
+                                :class="{ 'assistant-run-meta__chevron--expanded': isAssistantRunExpanded(item) }"
+                                aria-hidden="true"
+                              >›</span>
+                            </button>
+                            <span v-else class="assistant-run-meta__elapsed">{{ runElapsedLabel(item) }}</span>
+                          </div>
+                          <div class="assistant-unified-card">
                             <template
-                              v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
+                              v-for="(entry, pi) in assistantDisplayParts(item)"
                               :key="entryKey(entry, pi)"
                             >
                               <ReasoningBlock
@@ -2619,6 +2708,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                 :defaultOpen="false"
                                 :streaming="entry.part.status === 'streaming'"
                                 appearance="light"
+                                :collapse-signal="runCollapseSignal"
                               />
                               <SubagentCollapse
                                 v-else-if="entry.kind === 'subagent'"
@@ -2634,11 +2724,12 @@ function onComposerPaste(e: ClipboardEvent) {
                               <div
                                 v-else-if="entry.kind === 'parallel_tools'"
                                 class="parallel-tools-group parallel-tools-group--light"
+                                :class="{ 'parallel-tools-group--compact': toolDisplayMode === 'compact' }"
                               >
                                 <n-collapse>
                                   <!-- 流式中展开看进度，回复完成（completed_at）后收起；key 随完成态变化触发重渲染（default-expanded 仅首渲染生效） -->
                                   <n-collapse-item
-                                    :key="`ptg-${item.completed_at ? 'done' : 'live'}`"
+                                    :key="`ptg-${item.completed_at ? 'done' : 'live'}-${runCollapseSignal}`"
                                     name="parallel-tools"
                                     :default-expanded="!item.completed_at"
                                   >
@@ -2663,7 +2754,6 @@ function onComposerPaste(e: ClipboardEvent) {
                                         :truncated="tp.truncated"
                                         :duration-ms="tp.duration_ms"
                                         :collapse-signal="runCollapseSignal"
-                                        :expand-signal="runExpandSignal"
                                       />
                                     </div>
                                   </n-collapse-item>
@@ -2683,7 +2773,6 @@ function onComposerPaste(e: ClipboardEvent) {
                                   :truncated="entry.part.truncated"
                                   :duration-ms="entry.part.duration_ms"
                                   :collapse-signal="runCollapseSignal"
-                                  :expand-signal="runExpandSignal"
                                 />
                               </template>
                               <div
@@ -3595,31 +3684,42 @@ function onComposerPaste(e: ClipboardEvent) {
   text-align: center;
 }
 
-/* 左上角运行元信息：耗时 + 折叠/展开全部按钮 */
+/* Codex 风格的整轮过程摘要入口 */
 .assistant-run-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  min-height: 24px;
   padding: 0 2px 6px;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.4;
   color: var(--noesis-color-text-hint);
   letter-spacing: 0.01em;
 }
-.assistant-run-meta__btn {
-  padding: 1px 6px;
-  border: none;
-  border-radius: 4px;
+.assistant-run-meta__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
   background: transparent;
   color: var(--noesis-color-text-muted);
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: color 0.15s ease;
 }
-.assistant-run-meta__btn:hover {
-  background: var(--noesis-color-bg-hover, rgba(0, 0, 0, 5%));
+.assistant-run-meta__toggle:hover {
   color: var(--noesis-color-text);
+}
+.assistant-run-meta__chevron {
+  display: inline-block;
+  font-size: 16px;
+  line-height: 12px;
+  transform: translateY(-1px);
+  transition: transform 0.15s ease;
+}
+.assistant-run-meta__chevron--expanded {
+  transform: translateY(-1px) rotate(90deg);
 }
 
 .assistant-message-actions {
@@ -3652,6 +3752,33 @@ function onComposerPaste(e: ClipboardEvent) {
   border-left: 3px solid var(--noesis-block-light-accent);
   border-radius: var(--noesis-radius-md);
   background: var(--noesis-block-light-bg);
+}
+
+/* 简洁模式与普通工具行共用同一条无框 disclosure 轨道。 */
+.parallel-tools-group--compact {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.parallel-tools-group--compact :deep(.n-collapse-item__header) {
+  min-height: 0;
+  padding: 1px 0 !important;
+}
+
+.parallel-tools-group--compact :deep(.n-collapse-item__header-main) {
+  min-width: 0;
+}
+
+.parallel-tools-group--compact :deep(.n-collapse-item__content-wrapper) {
+  border-top: none;
+}
+
+.parallel-tools-group--compact .parallel-tools-group__header {
+  min-height: 24px;
+  line-height: 24px;
 }
 
 .parallel-tools-group__header {

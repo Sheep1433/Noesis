@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from urllib.parse import quote
 
 from fastapi import Body, Depends, APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.db import get_db
@@ -49,7 +49,6 @@ from noesis.chat.message_builder import (
     normalize_message_content_for_delivery,
 )
 from noesis.runtime.logging import logger
-from noesis.config.code_enum import IntentEnum
 from noesis.schemas.qa_vo import (
     HitlResumeRequest,
     TestCaseExportRequest,
@@ -68,7 +67,7 @@ from noesis.chat.delivery.events import (
     RunSnapshotReplaced,
     StreamDone,
 )
-from noesis.chat.runs import SlowSubscriber, SubscriptionLimitExceeded, TERMINAL_RUN_STATUSES
+from noesis.chat.runs import SlowSubscriber, SubscriptionLimitExceeded
 
 
 chat_router = APIRouter(prefix="/api/chat")
@@ -446,7 +445,20 @@ async def get_session_messages(
         before_id=before_id
     )
 
-    message_responses = [_message_to_response(m) for m in messages]
+    # 批量带出 run 生命周期时间（assistant 消息的"本轮起止"）——消息表 updated_at
+    # 是 checkpoint 落库时间会被刷新，不能当完成时间；run.finished_at 是终态专用。
+    from noesis.repositories.agent_run_repository import AgentRunRepository
+
+    run_times = await AgentRunRepository(db).get_run_times_for_session(session_id)
+
+    message_responses = []
+    for m in messages:
+        resp = _message_to_response(m)
+        if m.role == 'assistant' and m.id in run_times:
+            started_at, finished_at = run_times[m.id]
+            resp.run_started_at = started_at
+            resp.run_finished_at = finished_at
+        message_responses.append(resp)
 
     return ResponseUtil.success(
         msg='获取消息历史成功',

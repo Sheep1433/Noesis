@@ -49,6 +49,25 @@ class AgentRunRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_run_times_for_session(self, session_id: str) -> dict[str, tuple[int | None, int | None]]:
+        """assistant_message_id → (started_at, finished_at)。
+
+        一条 session 维度查询（idx_agent_run_session_status 前缀命中），
+        供消息列表合并 run 生命周期时间——消息表的 updated_at 是 checkpoint
+        落库时间，会被持续刷新，不能当"本轮完成时间"用。
+        """
+        result = await self.db.execute(
+            select(
+                TAgentRun.assistant_message_id,
+                TAgentRun.started_at,
+                TAgentRun.finished_at,
+            ).where(TAgentRun.session_id == session_id)
+        )
+        return {
+            row.assistant_message_id: (row.started_at, row.finished_at)
+            for row in result.all()
+        }
+
     async def compare_and_set_status(
         self,
         run_id: str,

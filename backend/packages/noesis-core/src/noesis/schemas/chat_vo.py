@@ -101,6 +101,8 @@ class ChatMessageResponse(BaseModel):
     status: str = Field(..., description='状态: completed | partial')
     message_sequence: int = Field(..., description='会话内严格递增的消息序号')
     created_at: int = Field(..., description='创建时间戳（Unix 毫秒）')
+    run_started_at: Optional[int] = Field(None, description='关联 Agent run 的启动时间戳（Unix 毫秒）；仅 assistant 消息有值')
+    run_finished_at: Optional[int] = Field(None, description='关联 Agent run 的终态时间戳（Unix 毫秒）；未完成/无 run 为 None')
 
 
 class MessageListResponse(BaseModel):

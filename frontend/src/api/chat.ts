@@ -95,6 +95,9 @@ export interface ChatMessageResponse {
   status: string
   message_sequence: number
   created_at: number
+  /** 关联 Agent run 的启动/终态时间（Unix 毫秒）；仅 assistant 且有 run 时有值 */
+  run_started_at?: number | null
+  run_finished_at?: number | null
 }
 
 /** 消息列表响应 */

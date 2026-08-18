@@ -4,9 +4,6 @@ import { assertStrictMessageSequence } from '@/store/business/chatHistorySequenc
 import { isImagePreviewPath } from '@/utils/filePreview'
 import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, partsContainStreamFailureNotice, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
-const userStore = useUserStore()
-const router = useRouter()
-
 interface TableItem {
   uuid: string
   key: string
@@ -170,10 +167,10 @@ export const fetchConversationHistory = async function fetchConversationHistory(
         }
       }
     } else {
-      // debug: request failed
+      console.warn('[chat-history] failed to load conversation list', res.status)
     }
   } catch (error) {
-    // debug: error occurred
+    console.warn('[chat-history] failed to load conversation history', error)
   }
 }
 
@@ -285,7 +282,9 @@ export async function loadSessionMessages(
           parent_id: msg.parent_id,
           message_id: msg.id,
           created_at: msg.created_at,
-          completed_at: msg.updated_at,
+          // 优先 run 终态时间（语义正确）；消息 updated_at 是 checkpoint 落库时间会被刷新，仅作 fallback。
+          completed_at: msg.run_finished_at ?? msg.updated_at,
+          run_started_at: msg.run_started_at ?? undefined,
         }
       })
 
