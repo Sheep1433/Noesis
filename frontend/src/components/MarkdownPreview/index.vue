@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import type { RetrievalResultUi } from '@/views/chat/messageParts'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
@@ -47,6 +48,7 @@ const emit = defineEmits<Emits>()
 const isCompleted = ref(false)
 const refWrapperContent = ref<HTMLElement>()
 const markdownContentRef = ref<HTMLElement | null>(null)
+const router = useRouter()
 
 const displayText = ref('')
 
@@ -81,11 +83,46 @@ const onCompleted = () => {
 const praiseFeedback = () => emit('praiseFeadBack')
 const belittleFeedback = () => emit('belittleFeedback')
 
+// 解析正文内联 KB 引用角标的 `kb:Collection名/文件名` ref，点击跳转到文档
+function onContentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  const badge = target?.closest<HTMLElement>('.citation-badge--kb')
+  if (!badge) {
+    return
+  }
+  const kbRef = badge.dataset.kbRef
+  if (!kbRef || !kbRef.startsWith('kb:')) {
+    return
+  }
+  // ref 形如 kb:Collection名/文件名
+  const rest = kbRef.slice(3)
+  const slashIdx = rest.indexOf('/')
+  if (slashIdx < 0) {
+    return
+  }
+  const collectionName = decodeURIComponent(rest.slice(0, slashIdx))
+  const file = decodeURIComponent(rest.slice(slashIdx + 1))
+  if (!collectionName || !file) {
+    return
+  }
+  event.preventDefault()
+  void router.push({
+    name: 'KnowledgeBaseDetail',
+    params: { collectionName },
+    query: { file },
+  })
+}
+
 onMounted(() => {
+  markdownContentRef.value?.addEventListener('click', onContentClick)
   // segment 由父级 SSE 控制整轮加载态；挂载即有 content 不代表流结束
   if (props.variant === 'full' && props.content) {
     onCompleted()
   }
+})
+
+onBeforeUnmount(() => {
+  markdownContentRef.value?.removeEventListener('click', onContentClick)
 })
 </script>
 
@@ -257,7 +294,11 @@ onMounted(() => {
       border-radius: 9px;
       background: var(--noesis-color-primary-bg-icon);
       color: var(--noesis-color-primary);
-      cursor: default;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--noesis-color-primary-bg-hover, var(--noesis-color-primary-bg-icon));
+      }
     }
   }
 

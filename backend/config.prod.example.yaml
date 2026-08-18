@@ -38,23 +38,27 @@ model:
   # type: opencode
   # name: deepseek-v4-flash-free
   # base_url: https://opencode.ai/zen/v1
-  # default_catalog_id: flash
+  # default_catalog_id: deepseek-v4-flash-free
   # catalog:
-  #   - id: flash
+  #   - id: deepseek-v4-flash-free
   #     label: DeepSeek V4 Flash（快速）
-  #     name: deepseek-v4-flash-free
+  #     context_window: 200000
   #   - id: big-pickle
   #     label: Big Pickle（推理）
-  #     name: big-pickle
-  #   - id: mimo
+  #     temperature: 0.7
+  #     context_window: 200000
+  #   - id: mimo-v2.5-free
   #     label: MiMo V2.5（小米）
-  #     name: mimo-v2.5-free
-  #   - id: nemotron
+  #     temperature: 0.7
+  #     context_window: 200000
+  #   - id: nemotron-3-ultra-free
   #     label: Nemotron 3 Ultra（1M 上下文）
-  #     name: nemotron-3-ultra-free
-  #   - id: north
+  #     temperature: 0.6
+  #     context_window: 1000000
+  #   - id: north-mini-code-free
   #     label: North Mini Code（代码）
-  #     name: north-mini-code-free
+  #     temperature: 0.5
+  #     context_window: 256000
 
   # --- DeepSeek 官方直连（需 .env DEEPSEEK_API_KEY）---
   # type: deepseek
@@ -74,27 +78,7 @@ model:
   # temperature: 0.75
   # base_url: https://api.anthropic.com          
 
-  # --- 多 provider catalog 切换示例 ---
-  # default_catalog_id: deepseek-flash
-  # catalog:
-  #   - id: deepseek-flash
-  #     label: DeepSeek V4 Flash（官方）
-  #     type: deepseek
-  #     name: deepseek-v4-flash
-  #     base_url: https://api.deepseek.com/v1
-  #     context_window: 200000
-  #   - id: qwen-plus
-  #     label: Qwen Plus（DashScope）
-  #     type: qwen
-  #     name: qwen-plus
-  #     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  #     context_window: 129024
-  #   - id: claude-haiku
-  #     label: Claude Haiku 4.5
-  #     type: anthropic
-  #     name: claude-haiku-4-5-20251001
-  #     base_url: https://api.anthropic.com
-  #     context_window: 200000
+  # 多 provider catalog（每条目独立 type/name/base_url）已废弃，统一用顶层 model.type/name/base_url + catalog 仅 id/label/temperature/context_window。
 
   request_timeout: 120
   max_retries: 2

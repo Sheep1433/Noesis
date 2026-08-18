@@ -49,7 +49,7 @@ md.core.ruler.after('inline', 'citation-badges', (state) => {
         if (isWeb) {
           badge.content = `<sup class="citation-badge"><a href="${md.utils.escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${titleEsc}">${md.utils.escapeHtml(display)}</a></sup>`
         } else {
-          badge.content = `<sup class="citation-badge citation-badge--kb" title="${titleEsc}">${md.utils.escapeHtml(display)}</sup>`
+          badge.content = `<sup class="citation-badge citation-badge--kb" data-kb-ref="${md.utils.escapeHtml(ref)}" role="button" tabindex="0" title="${titleEsc}">${md.utils.escapeHtml(display)}</sup>`
         }
         children.push(badge)
         cursor = match.index + match[0].length

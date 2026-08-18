@@ -33,28 +33,28 @@ model:
   temperature: 0.75
   base_url: https://opencode.ai/zen/v1
   show_thinking_process: true
-  default_catalog_id: flash
+  default_catalog_id: deepseek-v4-flash-free
   # OpenCode Zen 免费模型目录（models.dev cost.input=0；.env MODEL_API_KEY=public）
   catalog:
-    - id: flash
-      label: DeepSeek V4 Flash
-      name: deepseek-v4-flash-free
+    - id: deepseek-v4-flash-free
+      label: DeepSeek V4 Flash（快速）
+      context_window: 200000
     - id: big-pickle
-      label: Big Pickle
-      name: big-pickle
+      label: Big Pickle（推理）
       temperature: 0.7
-    - id: mimo
-      label: MiMo V2.5
-      name: mimo-v2.5-free
+      context_window: 200000
+    - id: mimo-v2.5-free
+      label: MiMo V2.5（小米）
       temperature: 0.7
-    - id: nemotron
-      label: Nemotron 3 Ultra
-      name: nemotron-3-ultra-free
+      context_window: 200000
+    - id: nemotron-3-ultra-free
+      label: Nemotron 3 Ultra（1M 上下文）
       temperature: 0.6
-    - id: north
-      label: North Mini Code
-      name: north-mini-code-free
+      context_window: 1000000
+    - id: north-mini-code-free
+      label: North Mini Code（代码）
       temperature: 0.5
+      context_window: 256000
   request_timeout: 120
   max_retries: 2
   generation:

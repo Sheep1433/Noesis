@@ -24,6 +24,8 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 
+from noesis.chat.event_mapping.usage_normalize import normalize_usage
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,8 +44,8 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
             "cache_write_tokens": 0,
         }
 
-    def _extract_usage(self, response: Any) -> dict[str, Any] | None:
-        """从 ModelResponse / AIMessage 提取 usage_metadata。"""
+    def _resolve_msg(self, response: Any) -> AIMessage | None:
+        """从 ModelResponse / AIMessage 提取底层 AIMessage。"""
         messages = getattr(response, "messages", None)
         if messages and len(messages) > 0:
             msg = messages[0]
@@ -51,12 +53,29 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
             msg = response
         else:
             return None
-        if not isinstance(msg, AIMessage):
+        return msg if isinstance(msg, AIMessage) else None
+
+    def _extract_usage(self, response: Any) -> dict[str, Any] | None:
+        """从 ModelResponse / AIMessage 提取并归一化 token 用量。
+
+        覆盖两种来源：LangChain ``usage_metadata``（LangChain 已归一为
+        input_tokens/output_tokens/input_token_details.cache_read）与 OpenAI
+        兼容 provider 落在 ``response_metadata.token_usage`` 的原始字段
+        （prompt_tokens/completion_tokens/prompt_tokens_details.cached_tokens）。
+        后者多见于自定义 OpenCode/远程 OpenAI 兼容端点（opencode、tokenrhythm 等）。
+        统一经 ``normalize_usage`` 归一化，避免字段名不匹配导致 token 始终为 0。
+        """
+        msg = self._resolve_msg(response)
+        if msg is None:
             return None
+        # 优先 usage_metadata（LangChain 已归一）；缺失时回退 response_metadata.token_usage
         usage = getattr(msg, "usage_metadata", None)
-        if not isinstance(usage, dict):
+        if not isinstance(usage, dict) or not usage:
+            response_metadata = getattr(msg, "response_metadata", None) or {}
+            usage = response_metadata.get("token_usage") if isinstance(response_metadata, dict) else None
+        if not usage:
             return None
-        return usage
+        return normalize_usage(usage)
 
     def _record_step(self, response: Any, llm_ms: float) -> None:
         """记录一次模型调用的指标。"""

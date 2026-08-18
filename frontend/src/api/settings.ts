@@ -90,6 +90,7 @@ export type ScheduledTask = {
   id: string
   name: string
   cron_expr: string
+  summary?: string
   timezone: string
   enabled: boolean
   qa_type: string

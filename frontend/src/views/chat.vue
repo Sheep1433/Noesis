@@ -2532,20 +2532,6 @@ function onComposerPaste(e: ClipboardEvent) {
                     >
                       <template v-if="item.messageContent?.version === 1">
                         <div class="chat-message-column assistant-message-column">
-                          <div
-                            v-if="showAssistantReplyLoading(index, item.role) || item.completed_at"
-                            class="assistant-meta-above"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            <span class="assistant-processing-time-text">
-                              {{ sessionStats && formatStatsLine(sessionStats)
-                                ? formatStatsLine(sessionStats)
-                                : (item.completed_at
-                                  ? formatElapsedSeconds(item.created_at, item.completed_at)
-                                  : processingTimeText(item.created_at)) }}
-                            </span>
-                          </div>
                           <div class="assistant-unified-card">
                             <template
                               v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
@@ -2672,6 +2658,20 @@ function onComposerPaste(e: ClipboardEvent) {
                                 />
                               </template>
                             </AssistantReplyToolbar>
+                            <div
+                              v-if="showAssistantReplyLoading(index, item.role) || item.completed_at"
+                              class="assistant-meta-below"
+                              role="status"
+                              aria-live="polite"
+                            >
+                              <span class="assistant-processing-time-text">
+                                {{ sessionStats && formatStatsLine(sessionStats)
+                                  ? formatStatsLine(sessionStats)
+                                  : (item.completed_at
+                                    ? formatElapsedSeconds(item.created_at, item.completed_at)
+                                    : processingTimeText(item.created_at)) }}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </template>
@@ -3481,12 +3481,12 @@ function onComposerPaste(e: ClipboardEvent) {
   pointer-events: none;
 }
 
-.assistant-meta-above {
+.assistant-meta-below {
   box-sizing: border-box;
   width: 100%;
   margin-left: 0;
   margin-right: 0;
-  padding: 4px 16px 0;
+  padding: 0 16px 4px;
 }
 
 .assistant-processing-time-text {

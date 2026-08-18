@@ -93,6 +93,15 @@ def extract_input_token_details(d: Dict[str, Any]) -> Dict[str, int]:
             v = to_int(details.get(src_key))
             if v is not None and canon not in out:
                 out[canon] = v
+    # OpenAI / OpenAI-compatible (opencode, tokenrhythm, …) 把缓存命中放在
+    # prompt_tokens_details.cached_tokens。LangChain 不一定归一到 input_token_details，
+    # 故在此显式回退提取，保证 stats 与 context 圆环都能拿到 cache_read。
+    if "cache_read" not in out:
+        ptd = d.get("prompt_tokens_details")
+        if isinstance(ptd, dict):
+            v = to_int(ptd.get("cached_tokens"))
+            if v is not None:
+                out["cache_read"] = v
     if "cache_read" not in out:
         v = to_int(d.get("cache_read_input_tokens"))
         if v is not None:
