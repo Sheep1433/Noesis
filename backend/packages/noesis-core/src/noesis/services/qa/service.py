@@ -37,6 +37,7 @@ from noesis.services.qa.helpers import (
     case_coordinator,
     common_agent,
     fault_agent,
+    seed_session_stats_from_history,
     super_agent,
 )
 from noesis.storage.postgres.manager import pg_manager
