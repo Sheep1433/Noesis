@@ -39,6 +39,7 @@ from noesis.agents.middlewares.refreshing_skills_middleware import (
     RefreshingSkillsMiddleware,
     RefreshingSkillsState,
 )
+from noesis.agents.middlewares.session_stats_middleware import SessionStatsMiddleware
 from noesis.agents.middlewares.snip_middleware import (
     SnipError,
     SnipMiddleware,
@@ -75,6 +76,7 @@ __all__ = [
     "RefreshingSkillsMiddleware",
     "RefreshingSkillsState",
     "ReplacementRecord",
+    "SessionStatsMiddleware",
     "SnipError",
     "SnipMiddleware",
     "SnipRecord",

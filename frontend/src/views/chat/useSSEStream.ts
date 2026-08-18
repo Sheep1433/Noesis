@@ -53,6 +53,7 @@ export interface SSEStreamOptions {
   onMessageStart?: (data: Record<string, unknown>) => void
   onSnapshot?: (snapshot: AgentRunSnapshot) => void
   onRunStatus?: (status: string, message?: string) => void
+  onStatsUpdate?: (stats: Record<string, unknown>) => void
   onFinish?: (detail?: { finish_reason?: AgentStopReason }) => void
   onError?: (msg: string) => void
 }
@@ -93,6 +94,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onMessageStart,
     onSnapshot,
     onRunStatus,
+    onStatsUpdate,
     onFinish,
     onError,
   } = options
@@ -116,6 +118,170 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     return generation === streamGeneration
   }
 
+  function parentTaskCallId(data: Record<string, unknown>): string | undefined {
+    const value = data.parent_task_call_id
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined
+  }
+
+  function handleRunSnapshot(snapshot: AgentRunSnapshot) {
+    lastSequence = Number(snapshot.snapshot_sequence ?? 0)
+    sequenceGap = false
+    onSnapshot?.(snapshot)
+    onRunStatus?.(snapshot.status, snapshot.message ?? undefined)
+    if (snapshot.status === 'hitl_pending' && snapshot.pending_hitl) {
+      onCustomEvent?.('hitl-required', {
+        type: 'hitl-required',
+        ...snapshot.pending_hitl,
+        run_id: snapshot.run_id,
+        session_id: snapshot.session_id,
+      })
+    }
+    if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
+      terminalObserved = true
+      if (snapshot.status === 'error') {
+        settleFailure(snapshot.message || '生成失败')
+      } else {
+        settleSuccess(snapshot.finish_reason ?? snapshot.status)
+      }
+    }
+  }
+
+  function handleToolInputStart(data: Record<string, unknown>) {
+    const id = String(data.tool_call_id ?? '')
+    if (!id) {
+      return
+    }
+    tool_name_by_call_id.set(id, String(data.name ?? ''))
+    tool_step_id_by_call_id.set(id, typeof data.step_id === 'string' ? data.step_id : undefined)
+  }
+
+  function handleToolInputAvailable(data: Record<string, unknown>) {
+    const id = String(data.tool_call_id ?? '')
+    const nameFromFrame = typeof data.name === 'string' ? data.name : ''
+    const name = nameFromFrame || tool_name_by_call_id.get(id) || ''
+    if (id && nameFromFrame) {
+      tool_name_by_call_id.set(id, nameFromFrame)
+    }
+    const stepIdRaw = data.step_id
+    let stepId: string | undefined
+    if (typeof stepIdRaw === 'string' && stepIdRaw) {
+      stepId = stepIdRaw
+    } else if (id) {
+      stepId = tool_step_id_by_call_id.get(id)
+    }
+    if (id && typeof stepIdRaw === 'string' && stepIdRaw) {
+      tool_step_id_by_call_id.set(id, stepIdRaw)
+    }
+    onToolCall?.(
+      name,
+      (data.input as Record<string, unknown>) || {},
+      id,
+      parentTaskCallId(data),
+      stepId,
+    )
+  }
+
+  function handleToolOutput(data: Record<string, unknown>) {
+    const id = String(data.tool_call_id ?? '')
+    const duration = data.duration_ms != null ? Number(data.duration_ms) : undefined
+    const errorCategory = typeof data.errorCategory === 'string' && data.errorCategory.trim()
+      ? data.errorCategory.trim()
+      : undefined
+    const stepIdRaw = data.step_id
+    let stepId: string | undefined
+    if (typeof stepIdRaw === 'string' && stepIdRaw) {
+      stepId = stepIdRaw
+    } else if (id) {
+      stepId = tool_step_id_by_call_id.get(id)
+    }
+    onToolResult?.(id, {
+      output: typeof data.output === 'string' ? data.output : '',
+      error: data.error != null ? String(data.error) || undefined : undefined,
+      status: String(data.status ?? 'success') === 'error' ? 'error' : 'success',
+      duration_ms: duration != null && !Number.isNaN(duration) ? duration : undefined,
+      errorCategory,
+      state: typeof data.state === 'string' ? data.state as ToolLifecycleState : undefined,
+      outcome: typeof data.outcome === 'string' ? data.outcome : undefined,
+      exit_code: data.exit_code != null ? Number(data.exit_code) : undefined,
+      timed_out: data.timed_out != null ? Boolean(data.timed_out) : undefined,
+      truncated: data.truncated != null ? Boolean(data.truncated) : undefined,
+      step_id: stepId,
+    })
+  }
+
+  function handleFinish(data: Record<string, unknown>) {
+    const finishReason = String(data.finish_reason ?? 'stop')
+    lastFinishReason = finishReason
+    terminalObserved = finishReason !== 'hitl_pending'
+    if (finishReason === 'hitl_pending') {
+      onRunStatus?.('hitl_pending')
+    } else if (finishReason === 'error') {
+      const error = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : '生成失败'
+      settleFailure(error)
+    } else if (['context_exhausted', 'retryable_error'].includes(finishReason)) {
+      settleFailure(finishReason)
+    } else {
+      settleSuccess(finishReason)
+    }
+  }
+
+  function handleCustomEvent(type: string, data: Record<string, unknown>) {
+    onCustomEvent?.(type, {
+      ...data,
+      run_id: data.run_id ?? currentRunId,
+      session_id: data.session_id ?? activeSessionId,
+    })
+  }
+
+  const frameHandlers: Record<string, (data: Record<string, unknown>) => void> = {
+    'run-status': (data) => {
+      const message = typeof data.message === 'string' ? data.message : undefined
+      onRunStatus?.(String(data.status ?? 'running'), message)
+    },
+    'message-start': (data) => onMessageStart?.(data),
+    'text-delta': (data) => {
+      if (typeof data.text_delta === 'string') {
+        onTextDelta?.(data.text_delta, parentTaskCallId(data))
+      }
+    },
+    'retrieval-results-available': (data) => onRetrievalResults?.({ ...data, type: 'retrieval' }),
+    'reasoning-start': (data) => onReasoningStart?.(data),
+    'reasoning-delta': (data) => {
+      if (typeof data.text_delta === 'string') {
+        onReasoningDelta?.(data.text_delta, parentTaskCallId(data))
+      }
+    },
+    'reasoning-end': (data) => onReasoningEnd?.(data),
+    'tool-input-start': handleToolInputStart,
+    'tool-input-available': handleToolInputAvailable,
+    'tool-output-available': handleToolOutput,
+    'context-update': (data) => {
+      const context = data.context as ContextSnapshot | undefined
+      if (context && context.max_tokens != null && Number(context.max_tokens) > 0) {
+        onContextUpdate?.({
+          current_tokens: Number(context.current_tokens ?? 0),
+          max_tokens: Number(context.max_tokens),
+          used_percentage: Number(context.used_percentage ?? 0),
+        })
+      }
+    },
+    'stats-update': (data) => {
+      const stats = data as Record<string, unknown>
+      if (stats && typeof stats.steps === 'number') {
+        onStatsUpdate?.(stats)
+      }
+    },
+  }
+  const customEventTypes = new Set([
+    'scenario-start',
+    'testpoints-confirm-required',
+    'scene-cases',
+    'phase-start',
+    'phase-delta',
+    'phase-end',
+    'hitl-required',
+  ])
+
   function dispatchFrame(eventName: string, dataStr: string, generation = streamGeneration) {
     if (!isCurrentStream(generation) || userAborted) {
       return
@@ -134,33 +300,11 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
 
-    const t = (data.type as string) || eventName
-
-    if (t === 'run-snapshot') {
-      const snapshot = data as unknown as AgentRunSnapshot
-      lastSequence = Number(snapshot.snapshot_sequence ?? 0)
-      sequenceGap = false
-      onSnapshot?.(snapshot)
-      onRunStatus?.(snapshot.status, snapshot.message ?? undefined)
-      if (snapshot.status === 'hitl_pending' && snapshot.pending_hitl) {
-        onCustomEvent?.('hitl-required', {
-          type: 'hitl-required',
-          ...snapshot.pending_hitl,
-          run_id: snapshot.run_id,
-          session_id: snapshot.session_id,
-        })
-      }
-      if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
-        terminalObserved = true
-        if (snapshot.status === 'error') {
-          settleFailure(snapshot.message || '生成失败')
-        } else {
-          settleSuccess(snapshot.finish_reason ?? snapshot.status)
-        }
-      }
+    const type = (data.type as string) || eventName
+    if (type === 'run-snapshot') {
+      handleRunSnapshot(data as unknown as AgentRunSnapshot)
       return
     }
-
     const sequence = Number(data.sequence ?? 0)
     if (sequence > 0) {
       if (sequence <= lastSequence) {
@@ -173,158 +317,22 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       lastSequence = sequence
     }
 
-    if (t === 'run-status') {
-      const status = String(data.status ?? 'running')
-      onRunStatus?.(status, typeof data.message === 'string' ? data.message : undefined)
+    const handler = frameHandlers[type]
+    if (handler) {
+      handler(data)
       return
     }
-
-    if (t === 'message-start') {
-      onMessageStart?.(data)
+    if (customEventTypes.has(type)) {
+      handleCustomEvent(type, data)
       return
     }
-    if (t === 'text-delta' && typeof data.text_delta === 'string') {
-      const parent_task_call_id = typeof data.parent_task_call_id === 'string' && data.parent_task_call_id.trim()
-        ? data.parent_task_call_id.trim()
-        : undefined
-      onTextDelta?.(data.text_delta, parent_task_call_id)
+    if (type === 'finish') {
+      handleFinish(data)
       return
     }
-    if (t === 'retrieval-results-available') {
-      onRetrievalResults?.({ ...data, type: 'retrieval' })
-      return
-    }
-    if (t === 'reasoning-start') {
-      onReasoningStart?.(data)
-      return
-    }
-    if (t === 'reasoning-delta' && typeof data.text_delta === 'string') {
-      const parent_task_call_id = typeof data.parent_task_call_id === 'string' && data.parent_task_call_id.trim()
-        ? data.parent_task_call_id.trim()
-        : undefined
-      onReasoningDelta?.(data.text_delta, parent_task_call_id)
-      return
-    }
-    if (t === 'reasoning-end') {
-      onReasoningEnd?.(data)
-      return
-    }
-    if (t === 'tool-input-start') {
-      const id = String(data.tool_call_id ?? '')
-      const name = String(data.name ?? '')
-      const stepId = typeof data.step_id === 'string' ? data.step_id : undefined
-      if (id) {
-        tool_name_by_call_id.set(id, name)
-        tool_step_id_by_call_id.set(id, stepId)
-      }
-      return
-    }
-    if (t === 'tool-input-available') {
-      const id = String(data.tool_call_id ?? '')
-      const nameFromFrame = typeof data.name === 'string' ? data.name : ''
-      const name = nameFromFrame || tool_name_by_call_id.get(id) || ''
-      if (id && nameFromFrame) {
-        tool_name_by_call_id.set(id, nameFromFrame)
-      }
-      const stepIdRaw = data.step_id
-      const stepId = typeof stepIdRaw === 'string' && stepIdRaw
-        ? stepIdRaw
-        : (id ? tool_step_id_by_call_id.get(id) : undefined)
-      if (id && typeof stepIdRaw === 'string' && stepIdRaw) {
-        tool_step_id_by_call_id.set(id, stepIdRaw)
-      }
-      const input = (data.input as Record<string, unknown>) || {}
-      const parent_task_call_id = typeof data.parent_task_call_id === 'string' && data.parent_task_call_id.trim()
-        ? data.parent_task_call_id.trim()
-        : undefined
-      onToolCall?.(name, input, id, parent_task_call_id, stepId)
-      return
-    }
-    if (t === 'tool-output-available') {
-      const id = String(data.tool_call_id ?? '')
-      const status = String(data.status ?? 'success')
-      const out = typeof data.output === 'string' ? data.output : ''
-      const err = data.error != null ? String(data.error) : ''
-      const duration_ms = data.duration_ms != null ? Number(data.duration_ms) : undefined
-      const errorCategory = typeof data.errorCategory === 'string' && data.errorCategory.trim()
-        ? data.errorCategory.trim()
-        : undefined
-      const stepIdRaw = data.step_id
-      const stepId = typeof stepIdRaw === 'string' && stepIdRaw
-        ? stepIdRaw
-        : (id ? tool_step_id_by_call_id.get(id) : undefined)
-      onToolResult?.(id, {
-        output: out,
-        error: err || undefined,
-        status: status === 'error' ? 'error' : 'success',
-        duration_ms: duration_ms != null && !Number.isNaN(duration_ms) ? duration_ms : undefined,
-        errorCategory,
-        state: typeof data.state === 'string' ? data.state as ToolLifecycleState : undefined,
-        outcome: typeof data.outcome === 'string' ? data.outcome : undefined,
-        exit_code: data.exit_code != null ? Number(data.exit_code) : undefined,
-        timed_out: data.timed_out != null ? Boolean(data.timed_out) : undefined,
-        truncated: data.truncated != null ? Boolean(data.truncated) : undefined,
-        step_id: stepId,
-      })
-      return
-    }
-    if (t === 'context-update') {
-      const context = data.context as ContextSnapshot | undefined
-      if (context && context.max_tokens != null && Number(context.max_tokens) > 0) {
-        onContextUpdate?.({
-          current_tokens: Number(context.current_tokens ?? 0),
-          max_tokens: Number(context.max_tokens),
-          used_percentage: Number(context.used_percentage ?? 0),
-        })
-      }
-      return
-    }
-    if (
-      t === 'scenario-start'
-      || t === 'testpoints-confirm-required'
-      || t === 'scene-cases'
-      || t === 'phase-start'
-      || t === 'phase-delta'
-      || t === 'phase-end'
-      || t === 'hitl-required'
-    ) {
-      onCustomEvent?.(t, {
-        ...data,
-        run_id: data.run_id ?? currentRunId,
-        session_id: data.session_id ?? activeSessionId,
-      })
-      return
-    }
-    if (t === 'finish') {
-      const finish_reason = String(data.finish_reason ?? 'stop')
-      lastFinishReason = finish_reason
-      terminalObserved = finish_reason !== 'hitl_pending'
-      if (finish_reason === 'hitl_pending') {
-        onRunStatus?.('hitl_pending')
-        return
-      }
-      if (finish_reason === 'error') {
-        const errMsg = typeof data.error === 'string' && data.error.trim()
-          ? data.error.trim()
-          : '生成失败'
-        settleFailure(errMsg)
-        return
-      }
-      if (['context_exhausted', 'retryable_error'].includes(finish_reason)) {
-        settleFailure(finish_reason)
-        return
-      }
-      settleSuccess(finish_reason)
-      return
-    }
-    if (t === 'error') {
+    if (type === 'error') {
       terminalObserved = true
-      const msg = String(data.error ?? '请求失败')
-      settleFailure(msg)
-      return
-    }
-    if (t === 'abort') {
-      // 等待后续 finish / [DONE]，不在此结束流
+      settleFailure(String(data.error ?? '请求失败'))
     }
   }
 
@@ -463,6 +471,18 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     return streamGeneration
   }
 
+  function finalizeSubscription(sessionId: string, generation: number) {
+    if (!isCurrentStream(generation)) {
+      return
+    }
+    isLoading.value = false
+    abortController = null
+    if (streamSettled) {
+      sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
+      currentRunId = null
+    }
+  }
+
   async function sendMessage(
     sessionId: string,
     content: string,
@@ -550,14 +570,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         settleFailure(e.message ?? '未知错误')
       }
     } finally {
-      if (isCurrentStream(generation)) {
-        isLoading.value = false
-        abortController = null
-        if (streamSettled) {
-          sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
-          currentRunId = null
-        }
-      }
+      finalizeSubscription(sessionId, generation)
     }
   }
 
@@ -617,14 +630,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       error.value = message
       onRunStatus?.('disconnected', '连接已中断，可稍后重试')
     } finally {
-      if (isCurrentStream(generation)) {
-        isLoading.value = false
-        abortController = null
-        if (streamSettled) {
-          sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
-          currentRunId = null
-        }
-      }
+      finalizeSubscription(sessionId, generation)
     }
   }
   async function resumeTestCase(sessionId: string, selectedPointNames: string[]) {
@@ -678,14 +684,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           error.value = message
           onRunStatus?.('disconnected', '连接已中断，可稍后重试')
         } finally {
-          if (isCurrentStream(generation)) {
-            isLoading.value = false
-            abortController = null
-            if (streamSettled) {
-              sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
-              currentRunId = null
-            }
-          }
+          finalizeSubscription(sessionId, generation)
         }
       })()
     }

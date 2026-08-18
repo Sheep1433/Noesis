@@ -22,4 +22,5 @@ def test_inventory_is_generated_from_actual_instances() -> None:
         "DynamicContextMiddleware",
         "PatchToolCallsMiddleware",
         "LLMErrorHandlingMiddleware",
+        "SessionStatsMiddleware",
     ]

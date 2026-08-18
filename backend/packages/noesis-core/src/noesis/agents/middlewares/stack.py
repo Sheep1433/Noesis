@@ -27,6 +27,7 @@ from noesis.agents.middlewares import (
     ReadBeforeWriteMiddleware,
     RefreshingMemoryMiddleware,
     RefreshingSkillsMiddleware,
+    SessionStatsMiddleware,
     SnipMiddleware,
     ToolFailureMiddleware,
     ToolResultBudgetMiddleware,
@@ -169,6 +170,7 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
     if deps.tool_call_limit is not None:
         stack.append(ToolCallLimitMiddleware(run_limit=deps.tool_call_limit))
     stack.append(LLMErrorHandlingMiddleware(max_retries=deps.llm_max_retries))
+    stack.append(SessionStatsMiddleware())
     stack.extend(deps.middleware)
     if deps.interrupt_on:
         stack.append(HumanInTheLoopMiddleware(interrupt_on=deps.interrupt_on))

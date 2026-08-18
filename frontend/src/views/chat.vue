@@ -4,6 +4,7 @@ import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalo
 import type { ChatAttachmentItem } from '@/store/business'
 import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
+import type { SessionStats } from '@/utils/statsFormat'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { NCollapse, NCollapseItem } from 'naive-ui'
 import { createAgentRun, deleteSession, ensureSession, getSession, markSessionRead, updateSessionMeta, updateSessionTitle } from '@/api/chat'
@@ -40,6 +41,7 @@ import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
+import { formatStatsLine } from '@/utils/statsFormat'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import {
@@ -58,6 +60,7 @@ import {
   applyHitlPendingParts,
   applyToolOutput,
   assistantPartsStillStreaming,
+  COMPACTION_BOUNDARY,
   completeReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
@@ -258,6 +261,7 @@ function resetComposingSurface() {
   sessionContext.value = null
   sessionContextSessionId.value = ''
   sessionContextIsLive.value = false
+  sessionStats.value = null
   showDefaultPage.value = true
   isInit.value = true
   isView.value = false
@@ -916,6 +920,7 @@ async function loadSessionContext(sessionId: string) {
     sessionContext.value = null
     sessionContextSessionId.value = ''
     sessionContextIsLive.value = false
+    sessionStats.value = null
     return
   }
   try {
@@ -953,6 +958,7 @@ async function loadSessionContext(sessionId: string) {
 let lastRunStatusNotice = ''
 const reconnectAvailable = ref(false)
 const retryingLabel = ref('')
+const sessionStats = ref<SessionStats | null>(null)
 
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
 const sseStream = useSSEStream({
@@ -1178,6 +1184,9 @@ const sseStream = useSSEStream({
     sessionContext.value = context
     sessionContextSessionId.value = getChatSessionId()
     sessionContextIsLive.value = true
+  },
+  onStatsUpdate: (stats) => {
+    sessionStats.value = stats as unknown as SessionStats
   },
   onError: (msg) => {
     stylizingLoading.value = false
@@ -2530,9 +2539,11 @@ function onComposerPaste(e: ClipboardEvent) {
                             aria-live="polite"
                           >
                             <span class="assistant-processing-time-text">
-                              {{ item.completed_at
-                                ? formatElapsedSeconds(item.created_at, item.completed_at)
-                                : processingTimeText(item.created_at) }}
+                              {{ sessionStats && formatStatsLine(sessionStats)
+                                ? formatStatsLine(sessionStats)
+                                : (item.completed_at
+                                  ? formatElapsedSeconds(item.created_at, item.completed_at)
+                                  : processingTimeText(item.created_at)) }}
                             </span>
                           </div>
                           <div class="assistant-unified-card">
@@ -2605,7 +2616,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                 />
                               </template>
                               <div
-                                v-if="entry.kind === 'part' && entry.part.type === 'text' && (entry.part.content || '').startsWith('—— 以上对话已压缩摘要 ——')"
+                                v-if="entry.kind === 'part' && entry.part.type === 'text' && entry.part.content === COMPACTION_BOUNDARY"
                                 class="compact-boundary"
                                 role="separator"
                               >
@@ -3109,9 +3120,16 @@ function onComposerPaste(e: ClipboardEvent) {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 8px 0;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 14px 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--noesis-color-primary-muted);
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-color-primary-bg-subtle);
   color: var(--noesis-color-text-tertiary);
   font-size: 12px;
+  font-weight: 500;
 }
 
 .compact-boundary::before,

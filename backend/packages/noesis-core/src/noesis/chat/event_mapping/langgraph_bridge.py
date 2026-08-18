@@ -892,6 +892,13 @@ class LangGraphSseBridge:
                 out.append(_format_sse("run-status", payload))
             return
 
+        if lc_kind == "on_custom_event" and item.get("name") == "noesis_stats_update":
+            data = item.get("data") or {}
+            if isinstance(data, dict):
+                payload = {**data, "type": "stats-update"}
+                out.append(_format_sse("stats-update", payload))
+            return
+
         if lc_kind == "on_custom_event" and item.get("name") == "noesis_model_fallback":
             data = item.get("data") or {}
             if isinstance(data, dict):
@@ -926,13 +933,16 @@ class LangGraphSseBridge:
                     status = "running"
                 else:
                     status = "running"
-                    # compaction 完成时插入分割线标记（不引入新事件类型，
-                    # 复用 text-delta 推送，前端按标记渲染成分割线）
+                    # compaction 完成时插入独立分割线标记。必须先闭合已有
+                    # text part，否则前端会把标记拼到压缩前最后一句正文里。
                     if builder is not None:
-                        boundary_text = "—— 以上对话已压缩摘要 ——"
+                        self._flush_text_buffer(builder, ctx)
+                    self._close_text(out)
+                    boundary_text = "—— 以上对话已压缩摘要 ——"
+                    if builder is not None:
                         builder.append_text(boundary_text, parent_task_call_id=None)
-                        self._emit_text_delta(boundary_text, out, parent_task_call_id=None)
-                        self._close_text(out)
+                    self._emit_text_delta(boundary_text, out, parent_task_call_id=None)
+                    self._close_text(out)
                 payload = {**data, "type": "run-status", "status": status}
                 out.append(_format_sse("run-status", payload))
             return
