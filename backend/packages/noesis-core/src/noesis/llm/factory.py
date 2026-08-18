@@ -1,3 +1,5 @@
+import json
+from typing import Any
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
@@ -11,15 +13,50 @@ _OPENCODE_DEFAULT_HEADERS = {
     "HTTP-Referer": "https://opencode.ai/",
     "X-Title": "opencode",
 }
-class ChatOpenCode(ChatOpenAI):
-    """OpenCode Zen 统一适配：归一化不同模型的 reasoning 字段到 additional_kwargs["reasoning_content"]。
 
-    OpenCode 聚合了多家模型，reasoning 字段格式不统一：
+
+def _reasoning_to_text(reasoning: Any) -> str:
+    """Best-effort 把 reasoning 载荷（str/list/dict）转成可读文本。
+
+    参考 deer-flow vllm_provider：reasoning 可能是字符串、结构化数组或字典，
+    需递归提取 text/content 字段，最后兜底 JSON 序列化。
+    """
+    if reasoning is None:
+        return ""
+    if isinstance(reasoning, str):
+        return reasoning
+    if isinstance(reasoning, list):
+        return "".join(_reasoning_to_text(item) for item in reasoning)
+    if isinstance(reasoning, dict):
+        for key in ("text", "content", "reasoning"):
+            value = reasoning.get(key)
+            if isinstance(value, str):
+                return value
+            if value is not None:
+                text = _reasoning_to_text(value)
+                if text:
+                    return text
+        try:
+            return json.dumps(reasoning, ensure_ascii=False)
+        except TypeError:
+            return str(reasoning)
+    try:
+        return json.dumps(reasoning, ensure_ascii=False)
+    except TypeError:
+        return str(reasoning)
+
+
+class ChatOpenCode(ChatOpenAI):
+    """OpenAI 兼容端点统一适配：归一化不同模型的 reasoning 字段。
+
+    OpenCode / tokenrhythm 等聚合端点返回的 reasoning 字段格式不统一：
     - DeepSeek 系列：delta.reasoning_content（字符串）
-    - MiMo 系列：delta.reasoning（字符串）+ delta.reasoning_details（数组，含 type/text/format/index）
+    - MiMo / vLLM 系列：delta.reasoning（字符串或结构化）+ delta.reasoning_details（数组）
     - 其他模型：可能无 reasoning 或用不同字段
 
-    本类在流式和非流式两条路径上统一提取，上层只需读 additional_kwargs["reasoning_content"]。
+    本类在流式和非流式两条路径上统一提取，同时保留原始 reasoning 与
+    归一化文本 reasoning_content，上层读 additional_kwargs["reasoning_content"]
+    即可。参考 deer-flow vllm_provider 的处理方式。
     """
 
     @staticmethod
@@ -28,11 +65,11 @@ class ChatOpenCode(ChatOpenAI):
         # 1. DeepSeek 原生：reasoning_content（字符串）
         reasoning_content = delta.get("reasoning_content")
         if reasoning_content is not None:
-            return reasoning_content
-        # 2. MiMo / OpenRouter：reasoning（字符串）
+            return _reasoning_to_text(reasoning_content)
+        # 2. MiMo / vLLM / OpenRouter：reasoning（字符串或结构化）
         reasoning = delta.get("reasoning")
         if reasoning is not None:
-            return reasoning
+            return _reasoning_to_text(reasoning)
         # 3. reasoning_details 数组（MiMo 结构化格式）：拼接 text 字段
         details = delta.get("reasoning_details")
         if isinstance(details, list) and details:
@@ -51,7 +88,10 @@ class ChatOpenCode(ChatOpenAI):
             delta = choices[0].get("delta", {})
             reasoning = self._extract_reasoning_from_delta(delta)
             if reasoning is not None:
+                # 同时保留归一化文本与原始字段，便于序列化回传与上游消费
                 generation_chunk.message.additional_kwargs["reasoning_content"] = reasoning
+                if delta.get("reasoning") is not None:
+                    generation_chunk.message.additional_kwargs["reasoning"] = delta.get("reasoning")
             # 标记 provider 供上层区分
             generation_chunk.message.response_metadata = {
                 **generation_chunk.message.response_metadata,
