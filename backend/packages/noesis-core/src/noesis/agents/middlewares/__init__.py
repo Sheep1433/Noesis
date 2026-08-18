@@ -10,10 +10,6 @@ from noesis.agents.middlewares.compaction_middleware import (
     CompactionState,
     CompactionThresholds,
 )
-from noesis.agents.middlewares.deferred_tool_filter_middleware import (
-    DeferredToolFilterMiddleware,
-    DeferredToolState,
-)
 from noesis.agents.middlewares.durable_context_middleware import (
     DurableContext,
     DurableContextMiddleware,
@@ -60,8 +56,6 @@ __all__ = [
     "CompactionResult",
     "CompactionState",
     "CompactionThresholds",
-    "DeferredToolFilterMiddleware",
-    "DeferredToolState",
     "DurableContext",
     "DurableContextMiddleware",
     "DurableContextState",

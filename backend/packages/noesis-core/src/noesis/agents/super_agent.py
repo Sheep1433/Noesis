@@ -62,7 +62,6 @@ def _build_task_worker_subagents(
         skills=skill_sources,
         skills_user_id=user_id,
         skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
-        deferred_tools=bool(tools),
     )
     spec: SubAgent = {
         "name": "task-worker",
@@ -152,8 +151,7 @@ class SuperAgent(BaseAgent):
             memory=resolved_context.memory_sources,
             memory_system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
             todo=True,
-            deferred_tools=bool(tools),
-            subagents=_build_task_worker_subagents(
+                subagents=_build_task_worker_subagents(
                 backend,
                 tools,
                 skill_sources,

@@ -181,22 +181,6 @@ def derive_durable_context(state: DurableContextState) -> DurableContext:
             if (label := _label(skill, "path", "name", "skill_name"))
         ]
 
-    promoted = (
-        state.get("_tool_catalog_discovered")
-        or state.get("promoted_tools")
-        or state.get("promoted")
-    )
-    if isinstance(promoted, dict):
-        names: list[str] = []
-        for value in promoted.values():
-            if isinstance(value, (list, tuple, set)):
-                names.extend(str(name) for name in value)
-        direct_names = promoted.get("names")
-        if isinstance(direct_names, (list, tuple, set)):
-            names.extend(str(name) for name in direct_names)
-        if names:
-            derived["discovered_tool_refs"] = names
-
     read_versions = state.get("_read_before_write_versions")
     if isinstance(read_versions, dict):
         derived["active_file_refs"] = [str(path) for path in read_versions]

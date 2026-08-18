@@ -20,7 +20,6 @@ from langchain_core.tools import BaseTool
 from noesis.agents.middlewares import (
     CompactionMiddleware,
     CompactionThresholds,
-    DeferredToolFilterMiddleware,
     DurableContextMiddleware,
     DynamicContextMiddleware,
     LLMErrorHandlingMiddleware,
@@ -33,14 +32,12 @@ from noesis.agents.middlewares import (
     ToolResultBudgetMiddleware,
 )
 from noesis.agents.middlewares.compaction_middleware import PRIVATE_STATE_KEYS as _COMPACTION_KEYS
-from noesis.agents.middlewares.deferred_tool_filter_middleware import PRIVATE_STATE_KEYS as _DEFERRED_KEYS
 from noesis.agents.middlewares.durable_context_middleware import PRIVATE_STATE_KEYS as _DURABLE_KEYS
 from noesis.agents.middlewares.dynamic_context_middleware import PRIVATE_STATE_KEYS as _DYNAMIC_KEYS
 from noesis.agents.middlewares.read_before_write_middleware import PRIVATE_STATE_KEYS as _READ_BEFORE_WRITE_KEYS
 from noesis.agents.middlewares.refreshing_skills_middleware import PRIVATE_STATE_KEYS as _SKILLS_KEYS
 from noesis.agents.middlewares.snip_middleware import PRIVATE_STATE_KEYS as _SNIP_KEYS
 from noesis.agents.middlewares.tool_result_budget_middleware import PRIVATE_STATE_KEYS as _TOOL_BUDGET_KEYS
-from noesis.agents.runtime.tool_registry import ToolRegistry
 
 # Subagent isolation must carry each owning middleware's private state across the
 # subagent boundary. Aggregated from each middleware's exported key set so that
@@ -51,7 +48,6 @@ _PRIVATE_SUBAGENT_KEYS = frozenset(
     + _SKILLS_KEYS
     + _READ_BEFORE_WRITE_KEYS
     + _TOOL_BUDGET_KEYS
-    + _DEFERRED_KEYS
     + _SNIP_KEYS
     + _COMPACTION_KEYS
 )
@@ -71,8 +67,6 @@ class NoesisStackDeps:
     todo: bool = False
     subagents: Sequence[SubAgent | CompiledSubAgent] = ()
     async_subagents: Sequence[AsyncSubAgent] = ()
-    tool_registry: ToolRegistry | None = None
-    enable_deferred_tools: bool = False
     enable_snip: bool = False
     token_counter: Any = None
     request_token_counter: Any = None
@@ -146,9 +140,6 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
         stack.append(DurableContextMiddleware())
     if deps.enable_snip:
         stack.append(SnipMiddleware(token_counter=deps.token_counter))
-    if deps.enable_deferred_tools:
-        registry = deps.tool_registry or ToolRegistry(deps.tools)
-        stack.append(DeferredToolFilterMiddleware(registry=registry))
     stack.append(PatchToolCallsMiddleware())
     if all(
         value is not None

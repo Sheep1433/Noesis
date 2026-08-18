@@ -21,7 +21,6 @@ from noesis.agents.middlewares import (
     DynamicContextProvider,
 )
 from noesis.agents.middlewares.stack import NoesisStackDeps, build_noesis_stack
-from noesis.agents.runtime.tool_registry import ToolRegistry
 from noesis.config.env import HitlConfig, ModelConfig
 from noesis.llm.factory import get_llm
 from noesis.llm.model_limits import resolve_context_max_tokens
@@ -118,8 +117,6 @@ def build_noesis_middleware(
     todo: bool = False,
     subagents: Sequence[SubAgent | CompiledSubAgent] = (),
     async_subagents: Sequence[AsyncSubAgent] = (),
-    tool_registry: ToolRegistry | None = None,
-    deferred_tools: bool = False,
     snip: bool = False,
     middleware: Sequence[AgentMiddleware] = (),
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -150,8 +147,6 @@ def build_noesis_middleware(
             todo=todo,
             subagents=subagents,
             async_subagents=async_subagents,
-            tool_registry=tool_registry,
-            enable_deferred_tools=deferred_tools,
             enable_snip=snip,
             interrupt_on=interrupt_on if HitlConfig.enabled else None,
             model_call_limit=model_call_limit,
@@ -183,8 +178,6 @@ def create_noesis_agent(
     todo: bool = False,
     subagents: Sequence[SubAgent | CompiledSubAgent] = (),
     async_subagents: Sequence[AsyncSubAgent] = (),
-    tool_registry: ToolRegistry | None = None,
-    deferred_tools: bool = False,
     snip: bool = False,
     middleware: Sequence[AgentMiddleware] = (),
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -214,8 +207,6 @@ def create_noesis_agent(
         todo=todo,
         subagents=subagents,
         async_subagents=async_subagents,
-        tool_registry=tool_registry,
-        deferred_tools=deferred_tools,
         snip=snip,
         middleware=middleware,
         interrupt_on=interrupt_on,
