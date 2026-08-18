@@ -895,6 +895,60 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
     assert saved.get("errorCategory") == "infrastructure"
 
 
+def test_parallel_tool_error_uses_run_mapping_without_overwriting_sibling() -> None:
+    """并行工具的 error callback 没有 tool_call_id 时，按 run 映射回原工具。"""
+    bridge = LangGraphSseBridge("sess-parallel-tool-error")
+    builder = AssistantMessageBuilder(
+        session_id="sess-parallel-tool-error",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+
+    for name, run_id, tool_call_id in (
+        ("web_search", "run-web", "call-web"),
+        ("search_knowledge_base", "run-kb", "call-kb"),
+    ):
+        bridge.process_item(
+            {
+                "event": "on_tool_start",
+                "name": name,
+                "run_id": run_id,
+                "data": {"input": {"query": "怀孕怎么办"}, "tool_call_id": tool_call_id},
+            },
+            builder,
+            ctx,
+        )
+
+    bridge.process_item(
+        {
+            "event": "on_tool_error",
+            "name": "web_search",
+            "run_id": "run-web",
+            "data": {"error": RuntimeError("搜索 provider 不可用")},
+        },
+        builder,
+        ctx,
+    )
+    bridge.process_item(
+        {
+            "event": "on_tool_end",
+            "name": "search_knowledge_base",
+            "run_id": "run-kb",
+            "data": {"output": json.dumps({"results": [{"file_name": "妊娠.md", "excerpt": "资料"}]}, ensure_ascii=False)},
+        },
+        builder,
+        ctx,
+    )
+
+    tools = {
+        part["tool_call_id"]: part
+        for part in builder.to_dict()["parts"]
+        if part.get("type") == "tool"
+    }
+    assert tools["call-web"]["status"] == "error"
+    assert tools["call-kb"]["status"] == "success"
+
+
 def test_tool_output_error_frame_golden_fields() -> None:
     """error 帧须携带固定用户短句与 errorCategory。"""
     bridge = LangGraphSseBridge("sess-err-golden")
@@ -1351,6 +1405,40 @@ def test_noesis_compaction_event_emits_run_status_sse() -> None:
     failed = next(o for o in objs if o["type"] == "run-status")
     assert failed["status"] == "running"
     assert failed["reason"] == "summary_invalid"
+
+
+def test_compaction_boundary_closes_previous_text_part() -> None:
+    """压缩分割线必须独立成 text part，不能拼进压缩前的正文。"""
+    bridge = LangGraphSseBridge("sess-compact-boundary")
+    builder = AssistantMessageBuilder(
+        session_id="sess-compact-boundary",
+        message_id=bridge.assistant_message_id,
+    )
+    ctx = _ctx()
+
+    bridge.process_item(
+        {"type": "text-delta", "text_delta": "压缩前的正文"},
+        builder,
+        ctx,
+    )
+    lines = bridge.process_item(
+        {
+            "event": "on_custom_event",
+            "name": "noesis_compaction",
+            "data": {"compaction_type": "completed", "mode": "auto"},
+        },
+        builder,
+        ctx,
+    )
+
+    text_events = [obj for obj in _data_json_objects("".join(lines)) if obj["type"] in {"text-end", "text-start", "text-delta"}]
+    assert [event["type"] for event in text_events] == ["text-end", "text-start", "text-delta", "text-end"]
+    payload = builder.to_dict()
+    text_parts = [part for part in payload["parts"] if part.get("type") == "text"]
+    assert [part["content"] for part in text_parts] == [
+        "压缩前的正文",
+        "—— 以上对话已压缩摘要 ——",
+    ]
 
 
 def test_noesis_model_fallback_emits_error_and_marks_finished() -> None:

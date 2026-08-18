@@ -23,6 +23,26 @@ const results: RetrievalResultUi[] = [
 const markdown = `Web 结论。[1]\n\nKB 结论。[2]\n\n### 参考资料\n\n[1] Example report — https://example.com/report\n[2] 登录需求.md — Collection: requirement_docs`
 
 describe('numbered citation rendering', () => {
+  it('renders a raw citation marker as a superscript', () => {
+    const html = MarkdownInstance.render(
+      '酒精可致胎儿中枢神经系统异常citation:2',
+      { retrievalResults: results },
+    )
+
+    expect(html).toContain('class="citation-badge citation-badge--number"')
+    expect(html).toContain('data-citation-number="2"')
+    expect(html).toContain('>2</sup>')
+    expect(html).not.toContain('异常citation:2')
+  })
+
+  it('renders the prompt citation link format as a source badge', () => {
+    const html = MarkdownInstance.render('[citation:Example report](https://example.com/report)')
+
+    expect(html).toContain('class="citation-badge"')
+    expect(html).toContain('href="https://example.com/report"')
+    expect(html).not.toContain('[citation:Example report]')
+  })
+
   it('matches real Web and KB retrieval results and renders clickable superscripts', () => {
     const targets = citationTargets(
       markdown,

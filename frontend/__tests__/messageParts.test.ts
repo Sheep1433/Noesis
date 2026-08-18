@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { parseTaskToolOutput } from '@/utils/parseTaskTool'
 import {
   appendStreamFailureNotice,
+  appendTextDelta,
   applyToolOutput,
   assistantToolFailureSummary,
+  COMPACTION_BOUNDARY,
   completeReasoningPart,
   formatUsageSummary,
   hasValidContextWindow,
@@ -49,6 +51,56 @@ describe('message parts snapshot normalization', () => {
     expect(normalized.parts[0]).toMatchObject({ type: 'text', content: '旧消息' })
     expect(normalized.parts[1]).toMatchObject({ type: 'text', content: expect.stringContaining('参考资料') })
     expect(normalized.parts[2]).toMatchObject({ type: 'retrieval', results: [{ evidence_id: 'ev_1' }] })
+  })
+
+  it('压缩边界独立成一行，兼容历史正文中已合并的标记', () => {
+    const historical = normalizeApiContent({
+      parts: [{ type: 'text', content: `压缩前${COMPACTION_BOUNDARY}压缩后` }],
+    })
+    expect(historical.parts.map((part) => part.type === 'text' ? part.content : '')).toEqual([
+      '压缩前',
+      COMPACTION_BOUNDARY,
+      '压缩后',
+    ])
+
+    const streaming = appendTextDelta([
+      { id: 'text-1', type: 'text', content: '压缩前', status: 'streaming' },
+    ], `${COMPACTION_BOUNDARY}压缩后`)
+    expect(streaming.map((part) => part.type === 'text' ? part.content : '')).toEqual([
+      '压缩前',
+      COMPACTION_BOUNDARY,
+      '压缩后',
+    ])
+  })
+
+  it('已有有效 retrieval 结果时，不把同一工具显示为连接失败', () => {
+    const normalized = normalizeApiContent({
+      parts: [
+        {
+          type: 'tool',
+          name: 'search_knowledge_base',
+          tool_call_id: 'call-kb',
+          input: { query: '怀孕怎么办' },
+          output: '',
+          status: 'error',
+          state: 'failed',
+          error: '连接失败',
+          errorCategory: 'network_unreachable',
+        },
+        {
+          type: 'retrieval',
+          tool_call_id: 'call-kb',
+          query: '怀孕怎么办',
+          results: [{ evidence_id: 'ev-1', title: '妊娠生理.md', excerpt: '资料' }],
+        },
+      ],
+    })
+    expect(normalized.parts.find((part) => part.type === 'tool')).toMatchObject({
+      status: 'success',
+      state: 'succeeded',
+      output: '检索到 1 条来源',
+      error: null,
+    })
   })
 
   it('工具状态文案互斥且覆盖完整生命周期', () => {
