@@ -45,14 +45,25 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         }
 
     def _resolve_msg(self, response: Any) -> AIMessage | None:
-        """从 ModelResponse / AIMessage 提取底层 AIMessage。"""
-        messages = getattr(response, "messages", None)
-        if messages and len(messages) > 0:
-            msg = messages[0]
-        elif isinstance(response, AIMessage):
-            msg = response
+        """从 ModelResponse / AIMessage 提取底层 AIMessage。
+
+        ``wrap_model_call`` 的 handler 返回 ``ModelResponse``，消息列表在
+        ``result`` 字段（非 ``messages``）；旧代码误读 ``messages`` 导致
+        streaming 路径下始终取不到 usage，token 全为 0。
+        """
+        # ModelResponse.result: list[BaseMessage]
+        result = getattr(response, "result", None)
+        if result:
+            msg = result[0] if len(result) > 0 else None
         else:
-            return None
+            # 兼容 messages 字段或直接 AIMessage
+            messages = getattr(response, "messages", None)
+            if messages and len(messages) > 0:
+                msg = messages[0]
+            elif isinstance(response, AIMessage):
+                msg = response
+            else:
+                return None
         return msg if isinstance(msg, AIMessage) else None
 
     def _extract_usage(self, response: Any) -> dict[str, Any] | None:
