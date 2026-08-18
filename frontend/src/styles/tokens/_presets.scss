@@ -111,7 +111,7 @@ html:not([data-theme]) .chat-composer {
   --noesis-welcome-gradient-test: #ecfdf5;
 
   --noesis-block-light-accent: #3b82f6;
-  --noesis-block-light-bg: #f3f4f6;
+  --noesis-block-light-bg: #ffffff;
   --noesis-block-light-border: #e5e7eb;
   --noesis-block-light-divider: #e5e7eb;
   --noesis-block-light-text: #4b5563;
@@ -241,7 +241,7 @@ html[data-theme="light"] .chat-history-sider .n-layout-toggle-button {
 
 html[data-theme="light"] .assistant-unified-card {
   border: none;
-  background: var(--noesis-color-bg-muted);
+  background: var(--noesis-color-bg-elevated);
 }
 
 html[data-theme="light"] .link-btn {

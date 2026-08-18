@@ -159,7 +159,7 @@ onBeforeUnmount(() => {
           ref="refWrapperContent"
           text-16
           class="markdown-preview__body w-full h-full overflow-y-auto"
-          :class="variant === 'segment' ? 'px-15px py-2' : 'p-15px'"
+          :class="variant === 'segment' ? 'py-2' : 'p-15px'"
         >
           <div
             ref="markdownContentRef"
@@ -363,6 +363,8 @@ onBeforeUnmount(() => {
   width: 100%;
   border-radius: 0;
   box-sizing: border-box;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 @media (max-width: $bp-md) {
@@ -386,6 +388,11 @@ onBeforeUnmount(() => {
     li > p {
       line-height: 1.75;
     }
+  }
+
+  .markdown-wrapper.markdown-wrapper--segment {
+    padding-left: 0;
+    padding-right: 0;
   }
 }
 
