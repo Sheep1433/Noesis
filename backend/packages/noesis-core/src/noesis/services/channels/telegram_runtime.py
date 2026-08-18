@@ -49,6 +49,17 @@ def _worker_key(cfg: RuntimeChannelConfig) -> str:
     return f"{cfg.user_id}:{cfg.channel_id}"
 
 
+async def _stop_task(task: asyncio.Task[Any], *, key: str) -> None:
+    """取消并等待 worker，保留取消语义并记录非预期退出。"""
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.exception("telegram worker stopped with error key={}", key)
+
+
 async def _deliver_hitl_card(
     client: TelegramBotClient,
     *,
@@ -508,11 +519,7 @@ async def _reconcile_workers() -> None:
     """按当前磁盘配置启停 poll Task。"""
     if not MessagingConfig.telegram_runtime_enabled:
         for key, task in list(_tasks.items()):
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await _stop_task(task, key=key)
             _tasks.pop(key, None)
         return
 
@@ -532,11 +539,7 @@ async def _reconcile_workers() -> None:
     for key, task in list(_tasks.items()):
         if key in wanted:
             continue
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await _stop_task(task, key=key)
         _tasks.pop(key, None)
 
 
@@ -559,11 +562,7 @@ async def _supervisor_loop() -> None:
             continue
     # drain
     for key, task in list(_tasks.items()):
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await _stop_task(task, key=key)
         _tasks.pop(key, None)
 
 
@@ -583,16 +582,14 @@ async def stop_telegram_runtime() -> None:
     _stop.set()
     if _supervisor is None:
         for key, task in list(_tasks.items()):
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await _stop_task(task, key=key)
             _tasks.pop(key, None)
         return
     _supervisor.cancel()
     try:
         await _supervisor
-    except (asyncio.CancelledError, Exception):
+    except asyncio.CancelledError:
         pass
+    except Exception:
+        logger.exception("telegram supervisor stopped with error")
     _supervisor = None
