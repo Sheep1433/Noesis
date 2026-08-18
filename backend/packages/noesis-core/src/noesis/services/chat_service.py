@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis.storage.postgres.models.chat import TChatSession, TChatMessage, TAgentRun
 from noesis.errors.exceptions import ServiceException
 from noesis.runtime.logging import logger
+from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
 from noesis.chat.message_builder import AssistantMessageBuilder
 
 # ============================================================================
@@ -443,8 +444,7 @@ class ChatService:
             if isinstance(old_usage, dict):
                 merged_extra["usage"] = {
                     key: float(old_usage.get(key) or 0) + float(new_usage.get(key) or 0)
-                    for key in ("steps", "llm_ms", "input_tokens", "output_tokens",
-                                "cache_read_tokens", "cache_write_tokens")
+                    for key in USAGE_FIELDS if key != "turns"
                 }
             else:
                 merged_extra["usage"] = dict(new_usage)

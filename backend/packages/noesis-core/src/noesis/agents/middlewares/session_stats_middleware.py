@@ -29,20 +29,9 @@ from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 
 from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
-from noesis.chat.event_mapping.usage_normalize import normalize_usage
+from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS, normalize_usage
 
 logger = logging.getLogger(__name__)
-
-_LOCAL_STATS_FIELDS = (
-    "turns",
-    "steps",
-    "llm_ms",
-    "input_tokens",
-    "output_tokens",
-    "cache_read_tokens",
-    "cache_write_tokens",
-)
-
 
 class SessionStatsMiddleware(AgentMiddleware[AgentState]):
     """会话级统计：步数/LLM 耗时/token/缓存。主/子实例经 registry 共享累计。"""
@@ -54,7 +43,7 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         # 提问——不计轮数，步数/token 照常计入会话级累计。
         self._count_turns = count_turns
         # 无 session_id 时的回退存储（行为同旧版：实例内累计）
-        self._local_stats: dict[str, float] = {field: 0.0 for field in _LOCAL_STATS_FIELDS}
+        self._local_stats: dict[str, float] = dict.fromkeys(USAGE_FIELDS, 0.0)
 
     def _stats_snapshot(self) -> dict[str, float]:
         """当前累计快照：优先 registry，无 session_id 用实例内。"""

@@ -15,6 +15,19 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
+#: 会话/消息级 usage 统计的标准字段（stats registry、middleware、bridge 聚合、
+#: DB 落库 merge、历史回填共用，新增字段只改这里）。
+USAGE_FIELDS: tuple[str, ...] = (
+    "turns",
+    "steps",
+    "llm_ms",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
+
+
 def to_int(value: Any) -> int | None:
     if value is None:
         return None

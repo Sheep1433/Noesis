@@ -20,6 +20,7 @@ from noesis.chat.event_mapping.reasoning import (
     unsent_text_suffix,
 )
 from noesis.chat.event_mapping.usage_normalize import (
+    USAGE_FIELDS,
     compute_used_percentage,
     normalize_usage as _normalize_usage,
 )
@@ -96,14 +97,9 @@ class LangGraphSseBridge:
         self.last_error_message: str = ""
         # 本条 assistant 消息（本 run 内主+子 agent 全部模型调用）的 usage 聚合，
         # 终态落库时写入 message.extra.usage 供历史会话回放统计。
-        self.message_usage: Dict[str, float] = {
-            "steps": 0.0,
-            "llm_ms": 0.0,
-            "input_tokens": 0.0,
-            "output_tokens": 0.0,
-            "cache_read_tokens": 0.0,
-            "cache_write_tokens": 0.0,
-        }
+        self.message_usage: Dict[str, float] = dict.fromkeys(
+            (f for f in USAGE_FIELDS if f != "turns"), 0.0,
+        )
         self._model_call_starts: Dict[str, float] = {}
         self._current_attempt_id = 1
         self._model_attempt_ids: Dict[str, int] = {}

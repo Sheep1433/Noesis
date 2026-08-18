@@ -29,6 +29,7 @@ from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.failure_notice import (
     append_stream_failure_notice_to_content,
 )
+from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
 from noesis.chat.event_mapping.bridge import (
@@ -706,6 +707,9 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
     """
     if not session_id:
         return
+    # 本进程已在累计则直接跳过，避免每个 run 都全量拉取该会话消息做汇总。
+    if SessionStatsRegistry.peek(session_id) is not None:
+        return
     try:
         from sqlalchemy import select
         from noesis.storage.postgres.models.chat import TChatMessage
@@ -723,8 +727,9 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
             usage = extra.get("usage") if isinstance(extra, dict) else None
             if not isinstance(usage, dict):
                 continue
-            for key in ("steps", "llm_ms", "input_tokens", "output_tokens",
-                        "cache_read_tokens", "cache_write_tokens"):
+            for key in USAGE_FIELDS:
+                if key == "turns":
+                    continue
                 totals[key] = totals.get(key, 0.0) + float(usage.get(key) or 0)
             totals["turns"] = totals.get("turns", 0.0) + 1.0
         if totals:

@@ -10,6 +10,8 @@ import time
 from threading import Lock
 from typing import Any
 
+from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
+
 
 class SessionStatsRegistry:
     """会话级 LLM 统计累计：middleware 累加，stats-update 组装时快照读取。
@@ -24,15 +26,7 @@ class SessionStatsRegistry:
     _store: dict[str, dict[str, float]] = {}
     _last_active: dict[str, float] = {}
 
-    _STATS_FIELDS = (
-        "turns",
-        "steps",
-        "llm_ms",
-        "input_tokens",
-        "output_tokens",
-        "cache_read_tokens",
-        "cache_write_tokens",
-    )
+    _STATS_FIELDS = USAGE_FIELDS
 
     @classmethod
     def _ensure(cls, session_id: str) -> dict[str, float]:
