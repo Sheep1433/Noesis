@@ -8,6 +8,7 @@ import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { useMermaidRender } from '@/hooks/useMermaidRender'
 import { TASK_TOOL_NAME } from '@/utils/parseTaskTool'
 import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
+import { buildCitationIndex } from '@/views/chat/citationRendering'
 import MarkdownInstance from './plugins/markdown'
 
 interface Props {
@@ -64,7 +65,10 @@ watch(
 )
 
 const renderedMarkdown = computed(() => {
-  return MarkdownInstance.render(displayText.value)
+  return MarkdownInstance.render(displayText.value, {
+    retrievalResults: props.retrievalResults,
+    citationIndex: buildCitationIndex(props.retrievalResults),
+  })
 })
 
 const renderedContent = computed(() => {
@@ -269,7 +273,7 @@ onBeforeUnmount(() => {
     overflow-wrap: anywhere;
   }
 
-  .citation-badge {
+  .citation-badge, .citation-sup {
     margin-left: 2px;
     font-size: 0.72em;
     line-height: 0;

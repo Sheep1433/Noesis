@@ -4,7 +4,7 @@ import { DocumentsOutline, GlobeOutline } from '@vicons/ionicons-v5'
 import { NDrawer, NDrawerContent, NIcon } from 'naive-ui'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { safeWebUrl } from '@/views/chat/citationRendering'
+import { buildCitationIndex, safeWebUrl } from '@/views/chat/citationRendering'
 
 const props = defineProps<{
   results: RetrievalResultUi[]
@@ -15,23 +15,14 @@ const drawerOpen = ref(false)
 const selectedCitationNumber = ref<number | null>(null)
 const sourceListRef = ref<HTMLElement | null>(null)
 
-const sources = computed(() => {
-  const unique = new Map<string, RetrievalResultUi>()
-  for (const result of props.results) {
-    const key = result.source_type === 'web'
-      ? `web:${safeWebUrl(result.url) || result.evidence_id}`
-      : `kb:${result.collection_name || ''}:${result.title}`
-    if (!unique.has(key)) {
-      unique.set(key, result)
-    }
-  }
-  return [...unique.values()]
-})
+// 与正文 badge 共用同一份序号映射（buildCitationIndex），确保点击正文 [2]
+// 滚动到面板第 2 条。
+const citationIndex = computed(() => buildCitationIndex(props.results))
 
 const sourceList = computed(() => {
-  return sources.value.map((source, index) => ({
-    source,
-    number: index + 1,
+  return [...citationIndex.value.values()].map((entry) => ({
+    source: entry.result,
+    number: entry.number,
   }))
 })
 
@@ -74,18 +65,18 @@ defineExpose({ open })
   <button type="button" class="source-entry__button" @click="open()">
     <span class="source-entry__icons" aria-hidden="true">
       <span
-        v-for="source in sources.slice(0, 3)"
-        :key="source.evidence_id"
+        v-for="item in sourceList.slice(0, 3)"
+        :key="item.source.evidence_id"
         class="source-entry__icon"
       >
         <n-icon :size="12">
-          <GlobeOutline v-if="source.source_type === 'web'" />
+          <GlobeOutline v-if="item.source.source_type === 'web'" />
           <DocumentsOutline v-else />
         </n-icon>
       </span>
     </span>
     <span>来源</span>
-    <span class="source-entry__count">{{ sources.length }}</span>
+    <span class="source-entry__count">{{ sourceList.length }}</span>
   </button>
 
   <n-drawer
