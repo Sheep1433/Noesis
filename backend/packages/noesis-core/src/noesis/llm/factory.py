@@ -46,17 +46,22 @@ def _reasoning_to_text(reasoning: Any) -> str:
         return str(reasoning)
 
 
-class ChatOpenCode(ChatOpenAI):
-    """OpenAI 兼容端点统一适配：归一化不同模型的 reasoning 字段。
+class ChatOpenAICompatible(ChatOpenAI):
+    """OpenAI 兼容端点统一适配：自动探测并归一化 reasoning 字段。
 
-    OpenCode / tokenrhythm 等聚合端点返回的 reasoning 字段格式不统一：
+    reasoning 是模型能力（DeepSeek/MiMo 等支持思考的模型会产出），不是 vendor
+    能力——同一 OpenAI 协议端点后端可能是支持思考的模型，也可能是普通模型。
+    因此本类对所有响应都尝试提取 reasoning，响应无相关字段时返回 None 不影响。
+
+    兼容的字段格式：
     - DeepSeek 系列：delta.reasoning_content（字符串）
     - MiMo / vLLM 系列：delta.reasoning（字符串或结构化）+ delta.reasoning_details（数组）
-    - 其他模型：可能无 reasoning 或用不同字段
+    - 其他模型：无 reasoning 字段，自动跳过
 
-    本类在流式和非流式两条路径上统一提取，同时保留原始 reasoning 与
-    归一化文本 reasoning_content，上层读 additional_kwargs["reasoning_content"]
-    即可。参考 deer-flow vllm_provider 的处理方式。
+    在流式和非流式两条路径上统一提取，同时保留原始 reasoning 与归一化文本
+    reasoning_content，上层读 additional_kwargs["reasoning_content"] 即可。
+    序列化方向对所有 assistant 消息无差别回传 reasoning（API 不需要时忽略，
+    DeepSeek 思考模式多轮 tool call 需要时自动生效）。参考 deer-flow vllm_provider。
     """
 
     @staticmethod
@@ -194,17 +199,16 @@ class ChatOpenCode(ChatOpenAI):
         不认识 ``reasoning_content``，序列化时直接丢弃；``langchain_deepseek``
         也只在捕获方向写入、序列化方向未补。
 
-        OpenCode 聚合多家模型，仅 DeepSeek 系有此硬性回传要求，故只在
-        ``self.model_name`` 以 ``deepseek`` 开头时注入；无 tool call 的轮次
-        API 会忽略该字段，统一注入安全且正确。
+        本类对所有 assistant 消息无差别回传 reasoning_content（参考 deer-flow
+        vllm_provider）：API 不需要该字段时会忽略，需要它的模型（DeepSeek 思考
+        模式多轮 tool call）自动生效。无需按模型名判断——响应里没产出 reasoning
+        的模型，``additional_kwargs`` 本就为空，不会注入。
 
         实现要点：``_convert_message_to_dict`` 转出的 dict 已丢失
         ``additional_kwargs["reasoning_content"]``，因此先从原始 AIMessage
         列表按序提取，再按 assistant 出现顺序对齐回填到 dict 列表。
         """
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-        if not str(getattr(self, "model_name", "")).lower().startswith("deepseek"):
-            return payload
         messages = payload.get("messages")
         if not isinstance(messages, list):
             return payload
@@ -279,7 +283,9 @@ def build_chat_model(
     )
 
     model_map = {
-        "openai": lambda: ChatOpenAI(
+        # openai / minimax 走统一 OpenAI 兼容适配：reasoning 自动探测，
+        # 响应有 reasoning_content/reasoning 字段就提取，没有则正常工作。
+        "openai": lambda: ChatOpenAICompatible(
             model=model_name,
             temperature=temperature,
             base_url=model_base_url,
@@ -290,7 +296,7 @@ def build_chat_model(
             **stream_usage_kwargs,
             **http_kwargs,
         ),
-        "minimax": lambda: ChatOpenAI(
+        "minimax": lambda: ChatOpenAICompatible(
             model=model_name,
             temperature=temperature,
             base_url=model_base_url,
@@ -301,7 +307,9 @@ def build_chat_model(
             **stream_usage_kwargs,
             **http_kwargs,
         ),
-        "opencode": lambda: ChatOpenCode(
+        # opencode 与 openai 同为 OpenAI 兼容端点，复用同一适配类；
+        # 仅保留 opencode 默认 base_url 与 headers 的便捷默认值。
+        "opencode": lambda: ChatOpenAICompatible(
             model=model_name,
             temperature=temperature,
             base_url=model_base_url or _OPENCODE_DEFAULT_BASE_URL,
