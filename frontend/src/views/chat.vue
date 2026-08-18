@@ -34,10 +34,11 @@ import {
 } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
-import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
+import { formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
@@ -144,6 +145,7 @@ const businessStore = useBusinessStore()
 const router = useRouter()
 const route = useRoute()
 const naivePresetColors = useNaivePresetColors()
+const { mode: toolDisplayMode, toggle: toggleToolDisplayMode } = useToolDisplayMode()
 
 // 是否是刚登录到系统 批量渲染对话记录
 const isInit = ref(false)
@@ -416,10 +418,6 @@ function stopProcessingClock() {
   clearInterval(processingTimer)
   processingTimer = null
   retryingLabel.value = ''
-}
-
-function processingTimeText(startedAt?: number): string {
-  return formatElapsedSeconds(startedAt, processingNow.value)
 }
 
 type PendingHitlState = {
@@ -2658,20 +2656,6 @@ function onComposerPaste(e: ClipboardEvent) {
                                 />
                               </template>
                             </AssistantReplyToolbar>
-                            <div
-                              v-if="showAssistantReplyLoading(index, item.role) || item.completed_at"
-                              class="assistant-meta-below"
-                              role="status"
-                              aria-live="polite"
-                            >
-                              <span class="assistant-processing-time-text">
-                                {{ sessionStats && formatStatsLine(sessionStats)
-                                  ? formatStatsLine(sessionStats)
-                                  : (item.completed_at
-                                    ? formatElapsedSeconds(item.created_at, item.completed_at)
-                                    : processingTimeText(item.created_at)) }}
-                              </span>
-                            </div>
                           </div>
                         </div>
                       </template>
@@ -2836,6 +2820,30 @@ function onComposerPaste(e: ClipboardEvent) {
                             :context="sessionContext!"
                           />
 
+                          <n-tooltip placement="top">
+                            <template #trigger>
+                              <n-button
+                                quaternary
+                                circle
+                                size="small"
+                                class="shrink-0 tool-mode-toggle"
+                                :focusable="false"
+                                @click="toggleToolDisplayMode()"
+                              >
+                                <template #icon>
+                                  <n-icon size="16">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                      <line x1="4" y1="6" x2="20" y2="6" />
+                                      <line x1="4" y1="12" x2="14" y2="12" />
+                                      <line x1="4" y1="18" x2="18" y2="18" />
+                                    </svg>
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            {{ toolDisplayMode === 'compact' ? '简洁模式（点击切详细）' : '详细模式（点击切简洁）' }}
+                          </n-tooltip>
+
                           <div class="chat-send-btn-wrap shrink-0">
                             <n-tooltip
                               :disabled="!stylizingLoading"
@@ -2875,6 +2883,14 @@ function onComposerPaste(e: ClipboardEvent) {
                     </div>
                   </n-space>
                 </div>
+              </div>
+              <div
+                v-if="sessionStats && formatStatsLine(sessionStats)"
+                class="session-stats-line"
+                role="status"
+                aria-live="polite"
+              >
+                {{ formatStatsLine(sessionStats) }}
               </div>
             </div>
           </div>
@@ -3481,12 +3497,15 @@ function onComposerPaste(e: ClipboardEvent) {
   pointer-events: none;
 }
 
-.assistant-meta-below {
+.session-stats-line {
   box-sizing: border-box;
   width: 100%;
-  margin-left: 0;
-  margin-right: 0;
-  padding: 0 16px 4px;
+  padding: 2px 16px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--noesis-color-text-hint);
+  letter-spacing: 0.01em;
+  text-align: center;
 }
 
 .assistant-processing-time-text {
