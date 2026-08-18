@@ -95,19 +95,9 @@ function lookupByRef(index: CitationIndex | undefined, ref: string): { number: n
 md.core.ruler.after('inline', 'citation-badges', (state) => {
   const env = (state.env || {}) as CitationRenderEnv
   const index = env.citationIndex
-  let referencesStarted = false
   for (let tokenIndex = 0; tokenIndex < state.tokens.length; tokenIndex++) {
     const token = state.tokens[tokenIndex]
-    if (token.type === 'heading_open') {
-      const heading = state.tokens[tokenIndex + 1]
-      if (heading?.type === 'inline' && /^参考资料(?:（精选）|\s|$)/u.test(heading.content.trim())) {
-        referencesStarted = true
-      }
-    }
     if (token.type !== 'inline' || !token.children) {
-      continue
-    }
-    if (referencesStarted) {
       continue
     }
     const children: typeof token.children = []
