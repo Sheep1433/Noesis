@@ -112,7 +112,6 @@ class GeneralQAAgent(BaseAgent):
                     kb_scope_collections=scoped_collections or None,
                 ),
                 checkpointer=self.checkpointer,
-                deferred_tools=bool(mcp_tools),
                 session_id=session_id,
                 attachments=tuple(str(name) for name in (file_list or {})),
                 model_id=model_id,

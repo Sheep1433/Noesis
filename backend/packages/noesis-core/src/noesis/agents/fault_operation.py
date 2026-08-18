@@ -54,7 +54,6 @@ def _build_fault_operation_subagents(
                 model_id=model_id,
                 tools=mcp_tools,
                 backend=backend,
-                deferred_tools=bool(mcp_tools),
                 session_id=session_id,
             ),
         },
@@ -126,7 +125,6 @@ class FaultOperationAgent(BaseAgent):
                     workspace="/workspace",
                     session_id=session_id,
                     attachments=tuple(str(name) for name in (file_list or {})),
-                    deferred_tools=bool(resolved_mcp),
                     subagents=_build_fault_operation_subagents(
                         backend, resolved_mcp, model_id=model_id, session_id=session_id
                     ),
