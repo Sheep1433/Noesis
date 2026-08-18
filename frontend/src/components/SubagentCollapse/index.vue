@@ -21,7 +21,7 @@ interface Props {
   status?: ToolRunStatus
   state?: ToolLifecycleState
   error?: string | null
-  duration_ms?: number
+  durationMs?: number
   /** 子 Agent 内部 parts（text / reasoning / tool，带 parent_task_call_id） */
   childParts?: UiPart[]
   defaultOpen?: boolean
@@ -35,7 +35,7 @@ const props = withDefaults(defineProps<Props>(), {
   status: undefined,
   state: undefined,
   error: null,
-  duration_ms: undefined,
+  durationMs: undefined,
   childParts: () => [],
   defaultOpen: false,
   appearance: 'light',
@@ -113,10 +113,10 @@ const descriptionTooltip = computed(() => {
 })
 
 const durationDisplay = computed(() => {
-  if (props.duration_ms == null || props.duration_ms < 0) {
+  if (props.durationMs == null || props.durationMs < 0) {
     return ''
   }
-  return formatDurationMs(props.duration_ms)
+  return formatDurationMs(props.durationMs)
 })
 </script>
 
@@ -202,9 +202,9 @@ const durationDisplay = computed(() => {
                 :status="entry.part.status"
                 :state="entry.part.state"
                 :error-category="entry.part.errorCategory"
-                :exit_code="entry.part.exit_code"
+                :exit-code="entry.part.exit_code"
                 :truncated="entry.part.truncated"
-                :duration_ms="entry.part.duration_ms"
+                :duration-ms="entry.part.duration_ms"
               />
               <div
                 v-else-if="entry.kind === 'parallel_tools'"
@@ -229,9 +229,9 @@ const durationDisplay = computed(() => {
                         :status="tp.status"
                         :state="tp.state"
                         :error-category="tp.errorCategory"
-                        :exit_code="tp.exit_code"
+                        :exit-code="tp.exit_code"
                         :truncated="tp.truncated"
-                        :duration_ms="tp.duration_ms"
+                        :duration-ms="tp.duration_ms"
                       />
                     </div>
                   </n-collapse-item>

@@ -296,6 +296,7 @@ declare global {
   const useToNumber: typeof import('@vueuse/core')['useToNumber']
   const useToString: typeof import('@vueuse/core')['useToString']
   const useToggle: typeof import('@vueuse/core')['useToggle']
+  const useToolDisplayMode: typeof import('./src/hooks/useToolDisplayMode')['useToolDisplayMode']
   const useTransition: typeof import('@vueuse/core')['useTransition']
   const useUrlSearchParams: typeof import('@vueuse/core')['useUrlSearchParams']
   const useUserMedia: typeof import('@vueuse/core')['useUserMedia']
@@ -344,6 +345,9 @@ declare global {
   // @ts-ignore
   export type { UsePaneResizeOptions } from './src/hooks/usePaneResize'
   import('./src/hooks/usePaneResize')
+  // @ts-ignore
+  export type { ToolDisplayMode } from './src/hooks/useToolDisplayMode'
+  import('./src/hooks/useToolDisplayMode')
   // @ts-ignore
   export type { ChatAttachmentItem, BusinessState } from './src/store/business/index'
   import('./src/store/business/index')
@@ -642,6 +646,7 @@ declare module 'vue' {
     readonly useToNumber: UnwrapRef<typeof import('@vueuse/core')['useToNumber']>
     readonly useToString: UnwrapRef<typeof import('@vueuse/core')['useToString']>
     readonly useToggle: UnwrapRef<typeof import('@vueuse/core')['useToggle']>
+    readonly useToolDisplayMode: UnwrapRef<typeof import('./src/hooks/useToolDisplayMode')['useToolDisplayMode']>
     readonly useTransition: UnwrapRef<typeof import('@vueuse/core')['useTransition']>
     readonly useUrlSearchParams: UnwrapRef<typeof import('@vueuse/core')['useUrlSearchParams']>
     readonly useUserMedia: UnwrapRef<typeof import('@vueuse/core')['useUserMedia']>

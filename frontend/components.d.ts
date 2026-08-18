@@ -89,5 +89,7 @@ declare module 'vue' {
     ThemeSwitcher: typeof import('./src/components/ThemeSwitcher/index.vue')['default']
     TodoList: typeof import('./src/components/TodoList/index.vue')['default']
     ToolCallCollapse: typeof import('./src/components/ToolCallCollapse/index.vue')['default']
+    ToolCallCollapseSearchBlock: typeof import('./src/components/ToolCallCollapse/SearchBlock.vue')['default']
+    ToolCallCollapseTerminalBlock: typeof import('./src/components/ToolCallCollapse/TerminalBlock.vue')['default']
   }
 }
