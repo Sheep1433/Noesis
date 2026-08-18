@@ -154,6 +154,7 @@ def build_noesis_middleware(
             llm_max_retries=int(ModelConfig.max_retries),
             tool_result_max_chars=int(getattr(ModelConfig, "tool_output_max_chars", 24_000)),
             middleware=middleware,
+            session_id=session_id or "",
             **_compaction_deps(model, model_id),
         )
     )

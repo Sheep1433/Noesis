@@ -34,6 +34,7 @@ def _build_fault_operation_subagents(
     mcp_tools: list[Any],
     *,
     model_id: str | None = None,
+    session_id: str = "",
 ) -> list[SubAgent]:
     """与 deepagents 默认 general-purpose 对齐：独立上下文内执行多步 MCP 运维子任务。"""
     model = get_llm(model_id=model_id)
@@ -54,6 +55,7 @@ def _build_fault_operation_subagents(
                 tools=mcp_tools,
                 backend=backend,
                 deferred_tools=bool(mcp_tools),
+                session_id=session_id,
             ),
         },
     ]
@@ -126,7 +128,7 @@ class FaultOperationAgent(BaseAgent):
                     attachments=tuple(str(name) for name in (file_list or {})),
                     deferred_tools=bool(resolved_mcp),
                     subagents=_build_fault_operation_subagents(
-                        backend, resolved_mcp, model_id=model_id
+                        backend, resolved_mcp, model_id=model_id, session_id=session_id
                     ),
                     model_id=model_id,
                 )

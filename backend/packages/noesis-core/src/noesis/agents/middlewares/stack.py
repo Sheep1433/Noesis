@@ -80,6 +80,9 @@ class NoesisStackDeps:
     tool_call_limit: int | None = None
     llm_max_retries: int | None = None
     middleware: Sequence[AgentMiddleware] = ()
+    # 会话标识：SessionStatsMiddleware 据此把主/子实例的统计写入同一份
+    # SessionStatsRegistry，避免多实例各发各的 stats 在前端相互覆盖。
+    session_id: str = ""
 
 
 def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
@@ -161,7 +164,11 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
     if deps.tool_call_limit is not None:
         stack.append(ToolCallLimitMiddleware(run_limit=deps.tool_call_limit))
     stack.append(LLMErrorHandlingMiddleware(max_retries=deps.llm_max_retries))
-    stack.append(SessionStatsMiddleware())
+    # subagent（profile=SUBAGENT）的模型调用计入会话级步数/token，但不计轮数
+    stack.append(SessionStatsMiddleware(
+        session_id=deps.session_id,
+        count_turns=deps.profile != "SUBAGENT",
+    ))
     stack.extend(deps.middleware)
     if deps.interrupt_on:
         stack.append(HumanInTheLoopMiddleware(interrupt_on=deps.interrupt_on))

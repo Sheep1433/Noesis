@@ -7,7 +7,6 @@ LangGraph / LangChain astream_events → Noesis 标准 SSE，并同步累积 Ass
 from __future__ import annotations
 
 import json
-import re
 import time
 import uuid
 from dataclasses import replace
@@ -31,10 +30,22 @@ from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.tool_state import (
     ToolState,
     derive_tool_state,
-    extract_process_result,
 )
 from noesis.chat.event_mapping.bridge import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridgeError
 from noesis.chat.event_mapping.failure_notice import sanitize_stream_error, sanitize_tool_error
+from noesis.chat.event_mapping.tool_run_tracker import ToolRunTracker
+from noesis.chat.event_mapping.tool_payload import (
+    TOOL_INPUT_MAX,
+    TOOL_OUTPUT_DISPLAY_MAX,
+    bound_tool_output_for_display,
+    extract_tool_result,
+    new_id,
+    normalize_tool_input,
+    resolve_tool_call_id,
+    resolve_tool_output_call_id,
+    retrieval_payload,
+    tool_output_value,
+)
 from noesis.errors.tool_failure import (
     ToolFailure,
     classify_task_tool_output,
@@ -47,18 +58,7 @@ from noesis.errors.tool_failure import (
 def _show_thinking_process_enabled() -> bool:
     return str(ModelConfig.show_thinking_process).strip().lower() in ("true", "1", "yes")
 
-_TOOL_EXIT_PROTOCOL_RE = re.compile(
-    r"\s*\[Command (?P<result>succeeded|failed) with exit code (?P<exit_code>\d+)\]"
-    r"(?P<truncated>\s*\[Output was truncated due to size limits\])?\s*$"
-)
-_TOOL_INPUT_MAX = 65536
-_TOOL_OUTPUT_DISPLAY_MAX = 24000
 TASK_TOOL_NAME = "task"
-_OMIT_NON_JSON_TOOL_INPUT = object()
-
-
-def _new_id(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def _format_sse(event: str, data: Dict[str, Any]) -> RunEvent:
@@ -68,140 +68,6 @@ def _format_sse(event: str, data: Dict[str, Any]) -> RunEvent:
 
 def _format_done() -> RunEvent:
     return StreamDone()
-
-
-def _json_safe_tool_input(value: Any) -> Any:
-    """只保留模型可见的 JSON 输入，丢弃 ToolRuntime 等框架注入对象。"""
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, dict):
-        normalized: Dict[str, Any] = {}
-        for key, item in value.items():
-            safe_item = _json_safe_tool_input(item)
-            if safe_item is not _OMIT_NON_JSON_TOOL_INPUT:
-                normalized[str(key)] = safe_item
-        return normalized
-    if isinstance(value, (list, tuple, set)):
-        normalized_items = []
-        for item in value:
-            safe_item = _json_safe_tool_input(item)
-            if safe_item is not _OMIT_NON_JSON_TOOL_INPUT:
-                normalized_items.append(safe_item)
-        return normalized_items
-    return _OMIT_NON_JSON_TOOL_INPUT
-
-
-def _normalize_tool_input(raw: Any) -> tuple[Dict[str, Any], Optional[str]]:
-    """SSE / builder 统一使用 JSON-safe dict；返回前端 input_text。"""
-    if raw is None or raw == {}:
-        return {}, None
-    if isinstance(raw, dict):
-        normalized = _json_safe_tool_input(raw)
-        dumped = json.dumps(normalized, ensure_ascii=False)
-        return normalized, dumped
-    safe_raw = _json_safe_tool_input(raw)
-    if safe_raw is _OMIT_NON_JSON_TOOL_INPUT:
-        return {}, None
-    dumped = json.dumps(safe_raw, ensure_ascii=False)
-    if len(dumped) > _TOOL_INPUT_MAX:
-        dumped = f"{dumped[:_TOOL_INPUT_MAX]}..."
-    return {"_tw_tool_input": safe_raw}, dumped
-
-
-def _tool_output_value(raw_out: Any) -> str:
-    if raw_out is None:
-        return ""
-    return raw_out.content if hasattr(raw_out, "content") else str(raw_out)
-
-
-def _bound_tool_output_for_display(value: str) -> tuple[str, bool]:
-    """限制发往 UI 的单次工具输出，不影响模型侧原始工具结果。"""
-    if len(value) <= _TOOL_OUTPUT_DISPLAY_MAX:
-        return value, False
-    return (
-        f"{value[:_TOOL_OUTPUT_DISPLAY_MAX]}\n\n"
-        f"…（工具输出过长，已截断展示）",
-        True,
-    )
-
-
-def _retrieval_payload(raw: str) -> Optional[Dict[str, Any]]:
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list):
-        return None
-    return parsed
-
-
-def _extract_tool_result(raw_out: Any, content: str) -> tuple[str, Dict[str, Any]]:
-    """Extract explicit result metadata; DeepAgents' anchored suffix is its wire protocol."""
-    metadata = extract_process_result(raw_out)
-    artifact = getattr(raw_out, "artifact", None)
-    if artifact is not None:
-        metadata.update(extract_process_result(artifact))
-    match = _TOOL_EXIT_PROTOCOL_RE.search(content)
-    if match:
-        metadata["exit_code"] = int(match.group("exit_code"))
-        metadata["truncated"] = bool(match.group("truncated"))
-        metadata["timed_out"] = metadata["exit_code"] == 124
-        metadata["outcome"] = (
-            "timed_out"
-            if metadata["timed_out"]
-            else "ok"
-            if metadata["exit_code"] == 0
-            else "command_failed"
-        )
-        content = content[: match.start()].rstrip()
-    return content, metadata
-
-
-def _resolve_tool_call_id(item: Dict[str, Any], data: Dict[str, Any]) -> str:
-    """
-    依次尝试：data.tool_call_id → input 内 ToolCall id → run_id（callback 系统强制注入）。
-    实践中 run_id 必然存在，最终 fallback 用随机 id 兜底防御。
-    """
-    tid = data.get("tool_call_id")
-    if tid and str(tid).strip():
-        return str(tid)
-    inp = data.get("input")
-    if isinstance(inp, dict):
-        tid2 = inp.get("tool_call_id") or inp.get("id")
-        if tid2 and str(tid2).strip():
-            return str(tid2)
-    rid = item.get("run_id")
-    if rid and str(rid).strip():
-        return str(rid)
-    return _new_id("tool")
-
-
-def _resolve_tool_output_call_id(
-    item: Dict[str, Any],
-    data: Dict[str, Any],
-    ctx: Dict[str, Any],
-    tool_part_ids: Dict[str, str],
-) -> str:
-    """tool-output / tool-error 与 tool-input 对齐。"""
-    resolved = _resolve_tool_call_id(item, data)
-    if resolved in tool_part_ids:
-        return resolved
-
-    current = ctx.get("current_tool_call_id")
-    current_s = str(current).strip() if current else ""
-    event_name = str(item.get("name") or "")
-    current_name = str(ctx.get("current_tool_name") or "")
-    # MCP on_tool_error 等场景：回调 id 与模型 tool_call_id 不一致，但工具名一致
-    if (
-        current_s
-        and current_s in tool_part_ids
-        and event_name
-        and event_name == current_name
-    ):
-        return current_s
-    if current_s:
-        return current_s
-    return resolved
 
 
 class LangGraphSseBridge:
@@ -237,93 +103,6 @@ class LangGraphSseBridge:
         self._session_context_tick = False
         self.last_hitl_payload: Optional[Dict[str, Any]] = None
 
-    # ---------- metrics ctx ----------
-
-    @staticmethod
-    def _ensure_metrics_ctx(ctx: Dict[str, Any]) -> None:
-        if "tool_start_times" not in ctx:
-            ctx["tool_start_times"] = {}
-
-    @staticmethod
-    def _ensure_subagent_ctx(ctx: Dict[str, Any]) -> None:
-        if "run_id_to_tool_call_id" not in ctx:
-            ctx["run_id_to_tool_call_id"] = {}
-        if "task_tool_call_stack" not in ctx:
-            ctx["task_tool_call_stack"] = []
-
-    @staticmethod
-    def _resolve_parent_task_call_id(item: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[str]:
-        """子 Agent 内部 tool 归属到当前活跃的 task tool_call_id（支持 parent_ids 与并行 task）。"""
-        LangGraphSseBridge._ensure_subagent_ctx(ctx)
-        stack: List[str] = ctx["task_tool_call_stack"]
-        run_map: Dict[str, str] = ctx["run_id_to_tool_call_id"]
-        parent_ids = item.get("parent_ids")
-        if isinstance(parent_ids, (list, tuple)):
-            for pid in reversed(parent_ids):
-                if pid is None:
-                    continue
-                tid = run_map.get(str(pid))
-                if tid:
-                    return tid
-        return stack[-1] if stack else None
-
-    def _register_tool_run(self, item: Dict[str, Any], tool_call_id: str, ctx: Dict[str, Any]) -> None:
-        self._ensure_subagent_ctx(ctx)
-        run_id = item.get("run_id")
-        if run_id and str(run_id).strip():
-            ctx["run_id_to_tool_call_id"][str(run_id)] = tool_call_id
-
-    def _mint_step_id(self, ctx: Dict[str, Any], parent_task_call_id: Optional[str]) -> Optional[str]:
-        """为当前 model step 的并行工具调用 mint 分组 step_id。
-
-        ``on_chat_model_start`` 把 scope 加入 ``pending_model_step_scopes``；
-        本方法在首个 ``on_tool_start`` 时 mint 新 step_id（按 scope 递增），后续同
-        step 的工具复用同一 step_id。model step 若不产 tool 则永不 mint（不分组）。
-        scope = parent_task_call_id or "root"，顶层与每个子 Agent 独立计数。
-        """
-        scope = parent_task_call_id or "root"
-        pending = ctx.get("pending_model_step_scopes")
-        if pending and scope in pending:
-            pending.discard(scope)
-            counters = ctx.setdefault("step_counters", {})
-            n = counters.get(scope, 0) + 1
-            counters[scope] = n
-            ctx.setdefault("current_step_ids", {})[scope] = f"{scope}:{n}"
-        return ctx.get("current_step_ids", {}).get(scope)
-
-    def _resolve_tool_step_id(
-        self, builder: Optional[AssistantMessageBuilder], tool_call_id: str, ctx: Dict[str, Any],
-    ) -> Optional[str]:
-        """tool-output-available 回传与 start 一致的 step_id。
-
-        优先读 builder 里 ToolPart 已记录的 step_id（跨乱序 on_tool_end 仍精确匹配）。
-        ``on_tool_end`` 总在 ``on_tool_start`` 之后触发，ToolPart 已带 step_id，
-        故此 fallback 极少命中；命中则返回 None（不带 step_id）而非猜测 root scope，
-        避免把子 Agent 工具错挂到顶层 step_id。
-        """
-        if builder is not None:
-            tool_part = builder.get_tool(tool_call_id)
-            if tool_part is not None and tool_part.step_id:
-                return tool_part.step_id
-        return None
-
-
-
-    def _on_task_tool_start(self, tool_call_id: str, ctx: Dict[str, Any]) -> None:
-        self._ensure_subagent_ctx(ctx)
-        ctx["task_tool_call_stack"].append(tool_call_id)
-
-    def _on_task_tool_end(self, tool_call_id: str, ctx: Dict[str, Any]) -> None:
-        self._ensure_subagent_ctx(ctx)
-        stack: List[str] = ctx["task_tool_call_stack"]
-        if not stack:
-            return
-        if stack[-1] == tool_call_id:
-            stack.pop()
-            return
-        if tool_call_id in stack:
-            stack.remove(tool_call_id)
-
     def _accumulate_usage(
         self,
         ctx: Dict[str, Any],
@@ -335,7 +114,7 @@ class LangGraphSseBridge:
         usage = _normalize_usage(raw_usage)
         if not usage:
             return
-        self._ensure_metrics_ctx(ctx)
+        ToolRunTracker.ensure_metrics_ctx(ctx)
         rid = str(run_id or "").strip()
 
         # 单轮真实 input_tokens → 更新上下文指示器（非累计，每次覆盖）。
@@ -353,14 +132,6 @@ class LangGraphSseBridge:
             }
             ContextMetricsRegistry.put(self.session_id, snapshot, run_id=rid)
             self._emit_context_update(snapshot, out)
-
-    def _tool_duration_ms(self, ctx: Dict[str, Any], tool_call_id: str) -> Optional[int]:
-        self._ensure_metrics_ctx(ctx)
-        start = ctx["tool_start_times"].pop(tool_call_id, None)
-        if start is None:
-            return None
-        return max(0, int((time.perf_counter() - start) * 1000))
-
     # ---------- emit helpers ----------
 
     def _ensure_started(self, out: List[str]) -> None:
@@ -440,7 +211,7 @@ class LangGraphSseBridge:
         ):
             self._close_reasoning(out)
         if not self._reasoning_open:
-            self._current_reasoning_part_id = _new_id("part-reasoning")
+            self._current_reasoning_part_id = new_id("part-reasoning")
             self._current_reasoning_parent_task_call_id = parent_task_call_id
             out.append(_format_sse("reasoning-start", {
                 "type": "reasoning-start",
@@ -471,7 +242,7 @@ class LangGraphSseBridge:
         if self._text_open and parent_task_call_id != self._current_text_parent_task_call_id:
             self._close_text(out)
         if not self._text_open:
-            self._current_text_part_id = part_id or _new_id("part-text")
+            self._current_text_part_id = part_id or new_id("part-text")
             self._current_text_parent_task_call_id = parent_task_call_id
             out.append(_format_sse("text-start", {
                 "type": "text-start",
@@ -781,7 +552,7 @@ class LangGraphSseBridge:
             payload["message_id"] = self.assistant_message_id
             payload.setdefault("session_id", self.session_id)
             self.last_hitl_payload = payload
-            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
+            parent_task_call_id = ToolRunTracker.resolve_parent_task_call_id(item, ctx)
             for action in payload.get("action_requests") or []:
                 name = str(action.get("name") or "")
                 tool_call_id = action.get("tool_call_id") or ""
@@ -803,7 +574,7 @@ class LangGraphSseBridge:
                         state=ToolState.APPROVAL_PENDING,
                     )
                 else:
-                    part_id = _new_id("part-tool")
+                    part_id = new_id("part-tool")
                     if tool_call_id:
                         self._tool_part_ids[tool_call_id] = part_id
                     out.append(
@@ -951,12 +722,12 @@ class LangGraphSseBridge:
             self._close_reasoning(out)
             self._close_text(out)
             # 标记该 scope 下一次 on_tool_start 要 mint 新 step_id（并行工具分组）。
-            scope = self._resolve_parent_task_call_id(item, ctx) or "root"
+            scope = ToolRunTracker.resolve_parent_task_call_id(item, ctx) or "root"
             ctx.setdefault("pending_model_step_scopes", set()).add(scope)
             return
 
         if lc_kind == "on_chat_model_stream":
-            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
+            parent_task_call_id = ToolRunTracker.resolve_parent_task_call_id(item, ctx)
             chunk = (item.get("data") or {}).get("chunk")
             reasoning_delta = extract_reasoning_delta(chunk) if chunk is not None else ""
             if self._show_thinking and reasoning_delta:
@@ -980,7 +751,7 @@ class LangGraphSseBridge:
         if lc_kind == "on_chat_model_end":
             data = item.get("data") or {}
             output = data.get("output")
-            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
+            parent_task_call_id = ToolRunTracker.resolve_parent_task_call_id(item, ctx)
             if output is not None:
                 if self._show_thinking:
                     final_reasoning = extract_reasoning_delta(output)
@@ -1039,23 +810,23 @@ class LangGraphSseBridge:
 
         data = item.get("data") or {}
         tool_name = item.get("name") or ""
-        input_obj, input_text = _normalize_tool_input(data.get("input", {}))
-        tool_call_id = _resolve_tool_call_id(item, data)
+        input_obj, input_text = normalize_tool_input(data.get("input", {}))
+        tool_call_id = resolve_tool_call_id(item, data)
         if builder is not None and tool_call_id not in self._tool_part_ids:
             resumed_tool_call_id = builder.resolve_hitl_tool_call_id(tool_name, input_obj)
             if resumed_tool_call_id:
                 tool_call_id = resumed_tool_call_id
-        self._register_tool_run(item, tool_call_id, ctx)
+        ToolRunTracker.register_tool_run(item, tool_call_id, ctx)
 
         parent_task_call_id: Optional[str] = None
         if tool_name == TASK_TOOL_NAME:
-            self._on_task_tool_start(tool_call_id, ctx)
+            ToolRunTracker.on_task_tool_start(tool_call_id, ctx)
         else:
-            parent_task_call_id = self._resolve_parent_task_call_id(item, ctx)
+            parent_task_call_id = ToolRunTracker.resolve_parent_task_call_id(item, ctx)
 
-        step_id = self._mint_step_id(ctx, parent_task_call_id)
+        step_id = ToolRunTracker.mint_step_id(ctx, parent_task_call_id)
 
-        self._ensure_metrics_ctx(ctx)
+        ToolRunTracker.ensure_metrics_ctx(ctx)
         ctx["tool_start_times"][tool_call_id] = time.perf_counter()
 
         ctx["current_tool_name"] = tool_name
@@ -1071,7 +842,7 @@ class LangGraphSseBridge:
                 step_id=step_id,
             )
 
-        part_id = _new_id("part-tool")
+        part_id = new_id("part-tool")
         if tool_call_id:
             self._tool_part_ids[tool_call_id] = part_id
 
@@ -1113,14 +884,14 @@ class LangGraphSseBridge:
 
         data = item.get("data") or {}
         raw_output = data.get("output")
-        raw_content = _tool_output_value(raw_output) if raw_output else ""
-        clean_output, process_result = _extract_tool_result(raw_output, raw_content)
-        tool_call_id = _resolve_tool_output_call_id(item, data, ctx, self._tool_part_ids)
+        raw_content = tool_output_value(raw_output) if raw_output else ""
+        clean_output, process_result = extract_tool_result(raw_output, raw_content)
+        tool_call_id = resolve_tool_output_call_id(item, data, ctx, self._tool_part_ids)
         tool_name = item.get("name") or ctx.get("current_tool_name") or ""
         ctx["current_tool_name"] = tool_name
         ctx["current_tool_call_id"] = tool_call_id
 
-        duration_ms = self._tool_duration_ms(ctx, tool_call_id)
+        duration_ms = ToolRunTracker.tool_duration_ms(ctx, tool_call_id)
         output_status = getattr(raw_output, "status", None) if raw_output is not None else None
         failure = self._resolve_tool_failure(
             tool_name=tool_name,
@@ -1151,7 +922,7 @@ class LangGraphSseBridge:
             timed_out=timed_out,
         )
         display_output = "" if is_error else clean_output
-        display_output, display_truncated = _bound_tool_output_for_display(display_output)
+        display_output, display_truncated = bound_tool_output_for_display(display_output)
         truncated = bool(truncated) or display_truncated
         builder_output = clean_output if not is_error else (failure.message_for_llm if failure else clean_output)
 
@@ -1178,24 +949,24 @@ class LangGraphSseBridge:
             and not is_error
             and tool_name in {"search_knowledge_base", "web_search", "web_fetch"}
         ):
-            retrieval_payload = _retrieval_payload(clean_output)
-            if retrieval_payload is not None:
+            parsed_retrieval = retrieval_payload(clean_output)
+            if parsed_retrieval is not None:
                 tool_part = builder.get_tool(tool_call_id)
                 tool_input = tool_part.arguments if tool_part is not None else {}
                 retrieval_part = builder.register_retrieval_results(
                     tool_call_id=tool_call_id,
                     query=str((tool_input or {}).get("query") or (tool_input or {}).get("url") or ""),
-                    results=retrieval_payload["results"],
-                    truncated=bool(retrieval_payload.get("truncated")),
+                    results=parsed_retrieval["results"],
+                    truncated=bool(parsed_retrieval.get("truncated")),
                 )
                 if tool_part is not None:
                     tool_part.output = f"检索到 {len(retrieval_part.results)} 条来源"
 
         if tool_name == TASK_TOOL_NAME:
-            self._on_task_tool_end(tool_call_id, ctx)
+            ToolRunTracker.on_task_tool_end(tool_call_id, ctx)
 
-        part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
-        step_id = self._resolve_tool_step_id(builder, tool_call_id, ctx)
+        part_id = self._tool_part_ids.get(tool_call_id) or new_id("part-tool")
+        step_id = ToolRunTracker.resolve_tool_step_id(builder, tool_call_id, ctx)
         self._emit_tool_output(
             out, part_id, tool_call_id, display_output, sse_status, err_s, duration_ms,
             error_category=err_cat,
@@ -1221,7 +992,7 @@ class LangGraphSseBridge:
         data = item.get("data") or {}
         raw_err = data.get("error")
         err_text = str(raw_err) if raw_err is not None else ""
-        tool_call_id = _resolve_tool_output_call_id(item, data, ctx, self._tool_part_ids)
+        tool_call_id = resolve_tool_output_call_id(item, data, ctx, self._tool_part_ids)
         tool_name = item.get("name") or ctx.get("current_tool_name") or ""
         ctx["current_tool_name"] = tool_name
         ctx["current_tool_call_id"] = tool_call_id
@@ -1238,7 +1009,7 @@ class LangGraphSseBridge:
         err_fields = failure_to_sse_error_fields(failure) if failure else {}
         err_s = err_fields.get("error") or sanitize_tool_error(f"Tool error: {err_text}")
         err_cat = err_fields.get("errorCategory")
-        duration_ms = self._tool_duration_ms(ctx, tool_call_id)
+        duration_ms = ToolRunTracker.tool_duration_ms(ctx, tool_call_id)
 
         if builder is not None:
             ok = self._safe_append_tool_output(
@@ -1256,10 +1027,10 @@ class LangGraphSseBridge:
                 builder.append_text(err_s)
 
         if tool_name == TASK_TOOL_NAME:
-            self._on_task_tool_end(tool_call_id, ctx)
+            ToolRunTracker.on_task_tool_end(tool_call_id, ctx)
 
-        part_id = self._tool_part_ids.get(tool_call_id) or _new_id("part-tool")
-        step_id = self._resolve_tool_step_id(builder, tool_call_id, ctx)
+        part_id = self._tool_part_ids.get(tool_call_id) or new_id("part-tool")
+        step_id = ToolRunTracker.resolve_tool_step_id(builder, tool_call_id, ctx)
         self._emit_tool_output(
             out, part_id, tool_call_id, "", "error", err_s, duration_ms,
             error_category=err_cat,

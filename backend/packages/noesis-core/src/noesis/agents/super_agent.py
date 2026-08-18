@@ -51,6 +51,7 @@ def _build_task_worker_subagents(
     user_id: str,
     model_id: str | None = None,
     interrupt_on: dict | None = None,
+    session_id: str = "",
 ) -> list[SubAgent]:
     model = get_llm(model_id=model_id)
     subagent_middleware = build_noesis_middleware(
@@ -62,6 +63,7 @@ def _build_task_worker_subagents(
         skills=skill_sources,
         skills_user_id=user_id,
         skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+        session_id=session_id,
     )
     spec: SubAgent = {
         "name": "task-worker",
@@ -158,6 +160,7 @@ class SuperAgent(BaseAgent):
                 user_id=user_id,
                 model_id=model_id,
                 interrupt_on=interrupt_on,
+                session_id=session_id,
             ),
             interrupt_on=interrupt_on,
             model_id=model_id,

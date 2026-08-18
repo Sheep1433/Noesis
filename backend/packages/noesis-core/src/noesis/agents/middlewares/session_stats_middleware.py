@@ -1,10 +1,14 @@
 """Session-level LLM stats middleware: tracks steps/timing/tokens.
 
 在 wrap_model_call 层采集模型调用指标，发 noesis_stats_update custom event，
-bridge 转成 stats-update SSE 下发前端。不改 bridge 现有逻辑——只加一个接收 case。
+bridge 转成 stats-update SSE 下发前端。
 
-采集：步数、LLM 耗时、输入/输出 token、缓存命中。会话级累计。
-首 token 延迟和 tok/s 需要流式 callback，后续再接入。
+采集：步数、LLM 耗时、输入/输出 token、缓存命中。
+
+状态外置到 SessionStatsRegistry（按 session_id 键控）：主 Agent 与 subagent
+各自的中间件实例写同一份会话级累计，stats-update 从 registry 快照组装，
+避免多实例各发各的在前端相互覆盖、消耗总量不完整。
+session_id 缺失时退回实例内累计（兼容无会话上下文的构造路径）。
 """
 
 from __future__ import annotations
@@ -24,31 +28,46 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 
+from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
 from noesis.chat.event_mapping.usage_normalize import normalize_usage
 
 logger = logging.getLogger(__name__)
 
+_LOCAL_STATS_FIELDS = (
+    "turns",
+    "steps",
+    "llm_ms",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
+
 
 class SessionStatsMiddleware(AgentMiddleware[AgentState]):
-    """会话级统计：步数/LLM 耗时/token/缓存。会话级累计。"""
+    """会话级统计：步数/LLM 耗时/token/缓存。主/子实例经 registry 共享累计。"""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, session_id: str = "", count_turns: bool = True, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._stats: dict[str, int | float] = {
-            "turns": 0,
-            "steps": 0,
-            "llm_ms": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_write_tokens": 0,
-        }
+        self._session_id = session_id
+        # subagent（profile=SUBAGENT）的首步也是 HumanMessage 结尾，但不是用户
+        # 提问——不计轮数，步数/token 照常计入会话级累计。
+        self._count_turns = count_turns
+        # 无 session_id 时的回退存储（行为同旧版：实例内累计）
+        self._local_stats: dict[str, float] = {field: 0.0 for field in _LOCAL_STATS_FIELDS}
+
+    def _stats_snapshot(self) -> dict[str, float]:
+        """当前累计快照：优先 registry，无 session_id 用实例内。"""
+        if self._session_id:
+            snapshot = SessionStatsRegistry.peek(self._session_id)
+            return snapshot if snapshot is not None else dict(self._local_stats)
+        return dict(self._local_stats)
 
     def _resolve_msg(self, response: Any) -> AIMessage | None:
         """从 ModelResponse / AIMessage 提取底层 AIMessage。
 
         ``wrap_model_call`` 的 handler 返回 ``ModelResponse``，消息列表在
-        ``result`` 字段（非 ``messages``）；旧代码误读 ``messages`` 导致
+        ``result`` 字段（非 ``messages``）；误读 ``messages`` 会导致
         streaming 路径下始终取不到 usage，token 全为 0。
         """
         # ModelResponse.result: list[BaseMessage]
@@ -73,7 +92,6 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         input_tokens/output_tokens/input_token_details.cache_read）与 OpenAI
         兼容 provider 落在 ``response_metadata.token_usage`` 的原始字段
         （prompt_tokens/completion_tokens/prompt_tokens_details.cached_tokens）。
-        后者多见于自定义 OpenCode/远程 OpenAI 兼容端点（opencode、tokenrhythm 等）。
         统一经 ``normalize_usage`` 归一化，避免字段名不匹配导致 token 始终为 0。
         """
         msg = self._resolve_msg(response)
@@ -105,30 +123,27 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         return isinstance(messages[-1], HumanMessage)
 
     def _record_step(self, response: Any, llm_ms: float, request: ModelRequest | None = None) -> None:
-        """记录一次模型调用的指标。"""
-        self._stats["steps"] = self._stats["steps"] + 1
-        self._stats["llm_ms"] = self._stats["llm_ms"] + llm_ms
+        """记录一次模型调用的指标，累加进 registry（或实例回退存储）。"""
+        delta: dict[str, float] = {"steps": 1, "llm_ms": llm_ms}
 
-        # 轮数：仅在新轮次首个 step（messages 末尾为 HumanMessage）时 +1，
-        # 同轮后续模型调用（工具结果回写后）不计新轮。
-        if request is not None and self._is_new_turn(request):
-            self._stats["turns"] = self._stats["turns"] + 1
+        # 轮数：仅主 Agent 在新轮次首个 step（messages 末尾为 HumanMessage）时 +1；
+        # 同轮后续模型调用（工具结果回写后）与 subagent 调用不计新轮。
+        if self._count_turns and request is not None and self._is_new_turn(request):
+            delta["turns"] = 1
 
         usage = self._extract_usage(response)
         if usage:
-            self._stats["input_tokens"] = self._stats["input_tokens"] + int(
-                usage.get("input_tokens") or 0
-            )
-            self._stats["output_tokens"] = self._stats["output_tokens"] + int(
-                usage.get("output_tokens") or 0
-            )
+            delta["input_tokens"] = int(usage.get("input_tokens") or 0)
+            delta["output_tokens"] = int(usage.get("output_tokens") or 0)
             input_details = usage.get("input_token_details") or {}
-            self._stats["cache_read_tokens"] = self._stats["cache_read_tokens"] + int(
-                input_details.get("cache_read") or 0
-            )
-            self._stats["cache_write_tokens"] = self._stats["cache_write_tokens"] + int(
-                input_details.get("cache_write") or 0
-            )
+            delta["cache_read_tokens"] = int(input_details.get("cache_read") or 0)
+            delta["cache_write_tokens"] = int(input_details.get("cache_write") or 0)
+
+        if self._session_id:
+            SessionStatsRegistry.add(self._session_id, delta)
+        else:
+            for field, value in delta.items():
+                self._local_stats[field] += value
 
     def _emit_stats(self) -> None:
         """发 noesis_stats_update custom event。"""
@@ -136,7 +151,7 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
             from langgraph.config import get_stream_writer
             from langchain_core.callbacks import dispatch_custom_event
 
-            payload = {"type": "noesis_stats_update", **self._stats}
+            payload = {"type": "noesis_stats_update", **self._stats_snapshot()}
             writer = get_stream_writer()
             try:
                 writer(payload)
@@ -153,7 +168,7 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
             from langgraph.config import get_stream_writer
             from langchain_core.callbacks import adispatch_custom_event
 
-            payload = {"type": "noesis_stats_update", **self._stats}
+            payload = {"type": "noesis_stats_update", **self._stats_snapshot()}
             writer = get_stream_writer()
             try:
                 writer(payload)
