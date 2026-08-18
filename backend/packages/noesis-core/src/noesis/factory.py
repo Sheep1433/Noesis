@@ -127,7 +127,9 @@ def build_noesis_middleware(
         def dynamic_context_provider() -> DynamicContextBlock:
             now = datetime.now().astimezone()
             return DynamicContextBlock(
-                current_time=now.isoformat(timespec="seconds"),
+                # 小时精度：provider 缓存 TTL 本就在小时级，分钟级时间戳只会
+                # 让跨轮请求的 system 前缀必然失效
+                current_time=now.isoformat(timespec="hours"),
                 timezone=str(now.tzinfo),
                 workspace=workspace,
                 session_id=session_id,

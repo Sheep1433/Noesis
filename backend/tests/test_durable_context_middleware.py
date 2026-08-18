@@ -59,6 +59,7 @@ def test_empty_state_does_not_inject_block() -> None:
 def test_typed_state_injects_all_reference_categories() -> None:
     state = {
         "messages": [],
+        "compaction": {"event": {"summary_message": "summary", "cutoff_index": 4}},
         "durable_context": {
             "active_plan_ref": "PLAN-1",
             "pending_tasks": ["write tests"],
@@ -146,8 +147,19 @@ def test_middleware_exposes_no_ad_hoc_public_mutation_api() -> None:
 def test_durable_block_rebuilds_after_conversation_compaction() -> None:
     state = {
         "messages": ["full conversation"],
+        "compaction": {"event": {"summary_message": "summary", "cutoff_index": 4}},
         "durable_context": {"active_plan_ref": "PLAN-X"},
     }
     state["messages"] = ["[summary]"]
 
     assert "active_plan: PLAN-X" in _invoke(DurableContextMiddleware(), state)
+
+
+def test_no_injection_before_compaction() -> None:
+    """未触发压缩时对话历史本身携带 todos/文件/委派信息，不得注入便签。"""
+    state = {
+        "messages": [HumanMessage(content="hi")],
+        "durable_context": {"active_plan_ref": "PLAN-1", "pending_tasks": ["task"]},
+    }
+
+    assert _invoke(DurableContextMiddleware(), state) == "sys"

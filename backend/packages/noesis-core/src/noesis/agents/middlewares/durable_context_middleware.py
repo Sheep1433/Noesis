@@ -121,6 +121,17 @@ def _has_content(context: DurableContext) -> bool:
     )
 
 
+def _compaction_applied(state: DurableContextState) -> bool:
+    """本轮会话是否已触发过压缩（CompactionMiddleware 写入过 event）。
+
+    Durable context 是压缩后的关键状态兜底通道：未压缩时对话历史本身
+    携带 todos / 文件记录 / 委派信息，注入便签纯属重复，且每步变化会
+    打断 system prompt 前缀缓存。仅在压缩发生后才需要注入。
+    """
+    policy = state.get("compaction")
+    return isinstance(policy, dict) and isinstance(policy.get("event"), dict)
+
+
 def _join_refs(values: Iterable[str] | None) -> str:
     return ", ".join(values or ()) or "(none)"
 
@@ -235,6 +246,8 @@ class DurableContextMiddleware(
         state: DurableContextState,
         runtime: Runtime[ContextT],  # noqa: ARG002
     ) -> dict[str, DurableContext] | None:
+        if not _compaction_applied(state):
+            return None
         derived = derive_durable_context(state)
         if derived == normalize_durable_context(state.get("durable_context")):
             return None
@@ -252,6 +265,8 @@ class DurableContextMiddleware(
         return normalize_durable_context(request.state.get("durable_context"))
 
     def _with_context(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
+        if not _compaction_applied(request.state):  # type: ignore[arg-type]
+            return request
         context = self._context(request)
         if not _has_content(context):
             return request
