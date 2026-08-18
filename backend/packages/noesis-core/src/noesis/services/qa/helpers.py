@@ -30,6 +30,7 @@ from noesis.chat.event_mapping.failure_notice import (
     append_stream_failure_notice_to_content,
 )
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
 from noesis.chat.event_mapping.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
@@ -266,6 +267,7 @@ def _build_assistant_persist_extra(
     bridge: Optional[LangGraphSseBridge] = None,
     error_message: Optional[str] = None,
     model: Optional[str] = None,
+    include_usage: bool = False,
 ) -> Dict[str, Any]:
     extra: Dict[str, Any] = {"qa_type": qa_type}
     if model:
@@ -276,6 +278,11 @@ def _build_assistant_persist_extra(
         err = error_message or bridge.last_error_message
         if err:
             extra["error_message"] = err[:8000]
+        # 终态写入本条消息的 usage 聚合（主+子 agent 全部模型调用的 token/步数/耗时），
+        # 供历史会话打开时回放统计。checkpoint（streaming 态）不写——
+        # update_assistant_message 对 usage 键做累加合并，中途写会导致重复计数。
+        if include_usage and bridge.message_usage.get("steps"):
+            extra["usage"] = dict(bridge.message_usage)
     elif error_message:
         extra["error_message"] = error_message[:8000]
     return extra
@@ -443,7 +450,7 @@ async def _finalize_streaming_assistant(
     status = _assistant_status_for_finish(fin_reason)
     error_detail = bridge.last_error_message if fin_reason == "error" else ""
     content = _assistant_content_for_persist(builder, error_detail=error_detail)
-    extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge, model=model)
+    extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge, model=model, include_usage=True)
     aid = _resolve_assistant_message_id(ctx, builder)
     if not aid and (not builder or builder.is_empty()):
         return
@@ -689,3 +696,38 @@ def _flush_ctx_text_buffer(
     builder.append_text_delta(buf, parent_task_call_id=parent)
     ctx["text_buffer"] = ""
     ctx["text_buffer_parent_task_call_id"] = None
+
+
+async def seed_session_stats_from_history(session_id: str, user_id: str, db: AsyncSession) -> None:
+    """进程内首次遇到该会话时，从 DB 历史 assistant 消息 extra.usage 汇总预填 stats registry。
+
+    已累计（本进程一直在跑该会话）则忽略；查询失败静默跳过——seed 只影响
+    统计条起点，不值得为它让问答失败。
+    """
+    if not session_id:
+        return
+    try:
+        from sqlalchemy import select
+        from noesis.storage.postgres.models.chat import TChatMessage
+
+        result = await db.execute(
+            select(TChatMessage.extra).where(
+                TChatMessage.session_id == session_id,
+                TChatMessage.user_id == user_id,
+                TChatMessage.role == "assistant",
+                TChatMessage.deleted_at.is_(None),
+            )
+        )
+        totals: Dict[str, float] = {}
+        for (extra,) in result.all():
+            usage = extra.get("usage") if isinstance(extra, dict) else None
+            if not isinstance(usage, dict):
+                continue
+            for key in ("steps", "llm_ms", "input_tokens", "output_tokens",
+                        "cache_read_tokens", "cache_write_tokens"):
+                totals[key] = totals.get(key, 0.0) + float(usage.get(key) or 0)
+            totals["turns"] = totals.get("turns", 0.0) + 1.0
+        if totals:
+            SessionStatsRegistry.seed(session_id, totals)
+    except Exception:
+        logger.debug("seed_session_stats_from_history failed", exc_info=True)

@@ -68,6 +68,27 @@ class SessionStatsRegistry:
             cls._last_active.pop(session_id, None)
 
     @classmethod
+    def seed(cls, session_id: str, totals: dict[str, Any]) -> bool:
+        """进程首次遇到该会话时预填历史累计（从 DB 消息 extra.usage 汇总）。
+
+        仅当本进程内尚无该 session 的状态时写入；已存在（本进程一直在累计）
+        则忽略，返回 False。防止后端重启后 registry 从零累计、stats-update
+        覆盖前端历史重建值导致统计条变小。
+        """
+        if not session_id:
+            return False
+        with cls._lock:
+            if session_id in cls._store:
+                return False
+            stats = cls._ensure(session_id)
+            for field in cls._STATS_FIELDS:
+                value = totals.get(field)
+                if value is not None:
+                    stats[field] += float(value)
+            cls._last_active[session_id] = time.monotonic()
+            return True
+
+    @classmethod
     def peek(cls, session_id: str) -> dict[str, float] | None:
         if not session_id:
             return None

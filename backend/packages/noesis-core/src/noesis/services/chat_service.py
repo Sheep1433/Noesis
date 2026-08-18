@@ -433,6 +433,21 @@ class ChatService:
 
         old_extra = msg.extra if isinstance(msg.extra, dict) else {}
         merged_extra = {**old_extra, **(extra or {})}
+        # usage 键做累加合并而非覆盖：HITL resume / 同一 assistant_message_id 跨
+        # 多个 run 时，各 run 的 bridge 只含本 run 的 usage 聚合，终态 UPDATE 必须
+        # 与历史 run 已落库的 usage 累加。checkpoint（streaming 态）extra 不带
+        # usage，不会触发本合并。
+        new_usage = (extra or {}).get("usage")
+        if isinstance(new_usage, dict):
+            old_usage = old_extra.get("usage")
+            if isinstance(old_usage, dict):
+                merged_extra["usage"] = {
+                    key: float(old_usage.get(key) or 0) + float(new_usage.get(key) or 0)
+                    for key in ("steps", "llm_ms", "input_tokens", "output_tokens",
+                                "cache_read_tokens", "cache_write_tokens")
+                }
+            else:
+                merged_extra["usage"] = dict(new_usage)
 
         await db.execute(
             update(TChatMessage)

@@ -69,6 +69,10 @@ class QaService:
         bridge: Optional[LangGraphSseBridge] = None
         ctx: Dict[str, Any] = {}
 
+        # 进程重启后 stats registry 从零累计会导致统计条覆盖前端历史重建值；
+        # 首个模型调用前从 DB 历史 assistant extra.usage 预填（已累计则忽略）。
+        await seed_session_stats_from_history(session_id, str(current_user.user_id), db)
+
         resolved_mentions = MentionResolveService.resolve(
             mentions=req_obj.mentions,
             qa_type=req_obj.qa_type,
@@ -325,6 +329,7 @@ class QaService:
                 f"exec_test_case_resume 流式上游开始 session_id={session_id} user_id={current_user.user_id} point_count={len(names)}"
             )
 
+            resolved_model_id = get_default_model_id()
             agent_generator = case_coordinator.resume_agent(session_id, selected_point_names=names)
 
             bridge = LangGraphSseBridge(

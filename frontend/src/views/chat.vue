@@ -38,7 +38,7 @@ import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
-import { formatHHmm } from '@/utils/formatTime'
+import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
@@ -957,6 +957,61 @@ let lastRunStatusNotice = ''
 const reconnectAvailable = ref(false)
 const retryingLabel = ref('')
 const sessionStats = ref<SessionStats | null>(null)
+/** 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。 */
+function rebuildSessionStatsFromHistory() {
+  const totals: SessionStats = {
+    turns: 0,
+    steps: 0,
+    llm_ms: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+  }
+  for (const item of conversationItems.value) {
+    if (item.role !== 'assistant') {
+      continue
+    }
+    const usage = (item.msg_metadata as any)?.usage
+    if (!usage || typeof usage !== 'object') {
+      continue
+    }
+    totals.turns += 1
+    totals.steps += Number(usage.steps) || 0
+    totals.llm_ms += Number(usage.llm_ms) || 0
+    totals.input_tokens += Number(usage.input_tokens) || 0
+    totals.output_tokens += Number(usage.output_tokens) || 0
+    totals.cache_read_tokens += Number(usage.cache_read_tokens) || 0
+    totals.cache_write_tokens += Number(usage.cache_write_tokens) || 0
+  }
+  sessionStats.value = totals.steps > 0 ? totals : null
+}
+/** 整轮回复结束信号：递增触发所有 ToolCallCollapse compact 收起。 */
+const runCollapseSignal = ref(0)
+/** 「全部展开」信号：递增触发所有 ToolCallCollapse compact 展开。 */
+const runExpandSignal = ref(0)
+
+/** 单轮 assistant 耗时：完成（有 completed_at）显示固定差值；流式中实时；历史静载无 completed_at 不显示。 */
+function runElapsedText(item: { created_at?: number, completed_at?: number, messageContent?: { parts?: unknown[] } }): string {
+  const started = item.created_at
+  if (!started) {
+    return ''
+  }
+  if (item.completed_at) {
+    return formatElapsedSeconds(started, item.completed_at)
+  }
+  const parts = item.messageContent?.parts
+  if (Array.isArray(parts) && assistantPartsStillStreaming(parts)) {
+    return formatElapsedSeconds(started, processingNow.value)
+  }
+  return ''
+}
+
+/** 该消息是否含工具调用（决定折叠/展开按钮是否出现）。 */
+function hasToolParts(item: { messageContent?: { parts?: unknown[] } }): boolean {
+  const parts = item.messageContent?.parts
+  return Array.isArray(parts) && parts.some((p) => (p as { type?: string })?.type === 'tool')
+}
 
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
 const sseStream = useSSEStream({
@@ -1039,12 +1094,17 @@ const sseStream = useSSEStream({
       ...(lf ? { langfuse_session_id: lf } : {}),
     }
   },
-  onTextDelta: (text, parent_task_call_id) =>
+  onTextDelta: (text, parent_task_call_id) => {
+    // 重试成功后后端不发 run-status:running，只有内容到达才标志恢复——清重试标记。
+    if (retryingLabel.value && !parent_task_call_id) {
+      retryingLabel.value = ''
+    }
     patchLastAssistantParts((parts) =>
       nativeReasoningSeen.value
         ? appendTextDelta(parts, text, parent_task_call_id)
         : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parent_task_call_id),
-    ),
+    )
+  },
   onRetrievalResults: (part) => {
     patchLastAssistantParts((parts) => appendRetrievalPart(parts, part))
   },
@@ -1053,6 +1113,10 @@ const sseStream = useSSEStream({
   },
   onReasoningDelta: (delta, parent_task_call_id) => {
     nativeReasoningSeen.value = true
+    // 与 onTextDelta 同理：重试成功后内容到达即清重试标记。
+    if (retryingLabel.value && !parent_task_call_id) {
+      retryingLabel.value = ''
+    }
     patchLastAssistantParts((parts) => appendReasoningDelta(parts, delta, parent_task_call_id))
   },
   onReasoningEnd: (data) => {
@@ -1108,6 +1172,8 @@ const sseStream = useSSEStream({
   onFinish: (detail) => {
     stylizingLoading.value = false
     stopProcessingClock()
+    // 整轮结束：触发当前回复的所有 compact 工具收起。
+    runCollapseSignal.value += 1
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
     const lastIdx = conversationItems.value.findLastIndex((item) => item.role === 'assistant')
     if (lastIdx !== -1) {
@@ -1939,6 +2005,7 @@ const rowProps = (row: TableItem) => {
         row,
         '',
       )
+      rebuildSessionStatsFromHistory()
 
       await replaceChatSessionUrl(row.chat_id)
       await scrollToLatestMessage(true)
@@ -2531,6 +2598,17 @@ function onComposerPaste(e: ClipboardEvent) {
                       <template v-if="item.messageContent?.version === 1">
                         <div class="chat-message-column assistant-message-column">
                           <div class="assistant-unified-card">
+                            <!-- 左上角运行元信息：耗时 + 折叠/展开全部（简洁模式有工具时） -->
+                            <div
+                              v-if="runElapsedText(item) || (toolDisplayMode === 'compact' && hasToolParts(item))"
+                              class="assistant-run-meta"
+                            >
+                              <span v-if="runElapsedText(item)" class="assistant-run-meta__elapsed">{{ runElapsedText(item) }}</span>
+                              <template v-if="toolDisplayMode === 'compact' && hasToolParts(item) && !assistantPartsStillStreaming(item.messageContent.parts)">
+                                <button type="button" class="assistant-run-meta__btn" @click="runCollapseSignal += 1">全部折叠</button>
+                                <button type="button" class="assistant-run-meta__btn" @click="runExpandSignal += 1">全部展开</button>
+                              </template>
+                            </div>
                             <template
                               v-for="(entry, pi) in buildDisplayParts(item.messageContent.parts)"
                               :key="entryKey(entry, pi)"
@@ -2558,7 +2636,12 @@ function onComposerPaste(e: ClipboardEvent) {
                                 class="parallel-tools-group parallel-tools-group--light"
                               >
                                 <n-collapse>
-                                  <n-collapse-item name="parallel-tools" :default-expanded="true">
+                                  <!-- 流式中展开看进度，回复完成（completed_at）后收起；key 随完成态变化触发重渲染（default-expanded 仅首渲染生效） -->
+                                  <n-collapse-item
+                                    :key="`ptg-${item.completed_at ? 'done' : 'live'}`"
+                                    name="parallel-tools"
+                                    :default-expanded="!item.completed_at"
+                                  >
                                     <template #header>
                                       <div class="parallel-tools-group__header">
                                         并行工具 · {{ entry.parts.length }} 个
@@ -2579,6 +2662,8 @@ function onComposerPaste(e: ClipboardEvent) {
                                         :exit-code="tp.exit_code"
                                         :truncated="tp.truncated"
                                         :duration-ms="tp.duration_ms"
+                                        :collapse-signal="runCollapseSignal"
+                                        :expand-signal="runExpandSignal"
                                       />
                                     </div>
                                   </n-collapse-item>
@@ -2597,6 +2682,8 @@ function onComposerPaste(e: ClipboardEvent) {
                                   :exit-code="entry.part.exit_code"
                                   :truncated="entry.part.truncated"
                                   :duration-ms="entry.part.duration_ms"
+                                  :collapse-signal="runCollapseSignal"
+                                  :expand-signal="runExpandSignal"
                                 />
                               </template>
                               <div
@@ -3508,11 +3595,31 @@ function onComposerPaste(e: ClipboardEvent) {
   text-align: center;
 }
 
-.assistant-processing-time-text {
+/* 左上角运行元信息：耗时 + 折叠/展开全部按钮 */
+.assistant-run-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 2px 6px;
   font-size: 11px;
   line-height: 1.4;
   color: var(--noesis-color-text-hint);
   letter-spacing: 0.01em;
+}
+.assistant-run-meta__btn {
+  padding: 1px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--noesis-color-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.assistant-run-meta__btn:hover {
+  background: var(--noesis-color-bg-hover, rgba(0, 0, 0, 5%));
+  color: var(--noesis-color-text);
 }
 
 .assistant-message-actions {
