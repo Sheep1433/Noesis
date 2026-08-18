@@ -8,19 +8,19 @@ const props = withDefaults(defineProps<{
   /** 回复完成时间，显示在复制按钮左侧 */
   timeText?: string
   /** 与 SSE message-start.langfuse_session_id 一致 */
-  langfuse_session_id?: string
+  langfuseSessionId?: string
   /** VITE_LANGFUSE_UI_ORIGIN，非空时显示「观测」 */
   langfuseUiOrigin?: string
 }>(), {
   qaType: 'COMMON_QA',
   copyText: '',
   timeText: '',
-  langfuse_session_id: '',
+  langfuseSessionId: '',
   langfuseUiOrigin: '',
 })
 
 const showLangfuse = computed(
-  () => Boolean(props.langfuse_session_id?.trim() && props.langfuseUiOrigin?.trim()),
+  () => Boolean(props.langfuseSessionId?.trim() && props.langfuseUiOrigin?.trim()),
 )
 
 function openLangfuseUi() {
@@ -66,7 +66,7 @@ const handlePassClip = async () => {
           </n-button>
         </template>
         <div style="max-width: 280px; font-size: 12px; line-height: 1.5">
-          Langfuse 会话 ID：<span style="word-break: break-all">{{ langfuse_session_id }}</span>
+          Langfuse 会话 ID：<span style="word-break: break-all">{{ langfuseSessionId }}</span>
           。点击打开控制台后在 Session / Traces 中检索。
         </div>
       </n-tooltip>

@@ -4,13 +4,13 @@ import { qaTypeLabel } from '@/utils/qaType'
 
 // 定义 props
 const props = defineProps({
-  qa_type: {
+  qaType: {
     type: String,
     required: true,
   },
 })
 
-const buttonLabel = computed(() => qaTypeLabel(props.qa_type))
+const buttonLabel = computed(() => qaTypeLabel(props.qaType))
 </script>
 
 <template>
@@ -27,7 +27,7 @@ const buttonLabel = computed(() => qaTypeLabel(props.qa_type))
       'background': 'linear-gradient(to right, #625cee, #886ef4)',
     }"
   >
-    <template v-if="props.qa_type === 'COMMON_QA'" #icon>
+    <template v-if="props.qaType === 'COMMON_QA'" #icon>
       <n-icon size="14">
         <svg
           t="1742194713465"
@@ -47,7 +47,7 @@ const buttonLabel = computed(() => qaTypeLabel(props.qa_type))
         </svg>
       </n-icon>
     </template>
-    <template v-if="props.qa_type === 'SUPER_AGENT_QA' || props.qa_type === 'DEEP_RESEARCH_QA'" #icon>
+    <template v-if="props.qaType === 'SUPER_AGENT_QA' || props.qaType === 'DEEP_RESEARCH_QA'" #icon>
       <n-icon size="14">
         <svg
           t="1732528323504"
@@ -97,7 +97,7 @@ const buttonLabel = computed(() => qaTypeLabel(props.qa_type))
         </svg>
       </n-icon>
     </template>
-    <template v-if="props.qa_type === 'FAULT_OPERATION_QA'" #icon>
+    <template v-if="props.qaType === 'FAULT_OPERATION_QA'" #icon>
       <n-icon size="14">
         <svg
           t="1743292000000"
