@@ -8,7 +8,6 @@ from server.db import get_db
 from noesis.config.env import SessionConfig
 from noesis.services.auth.sessions import SessionService
 from server.api.auth_cookie import attach_session_cookie, clear_session_cookie
-from noesis.errors.exceptions import AuthException
 from noesis.schemas.login_vo import CurrentUser, UserLogin, UserRegistrationRequest
 from noesis.services.login_service import LoginService
 from server.auth_dependencies import get_current_user, require_csrf

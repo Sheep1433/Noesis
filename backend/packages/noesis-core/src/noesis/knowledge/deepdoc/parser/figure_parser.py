@@ -248,7 +248,7 @@ class VisionFigureParser:
         return self.assembled
 
     def __call__(self, **kwargs):
-        callback = kwargs.get("callback", lambda prog, msg: None)
+        callback = kwargs.get("callback", lambda _prog, msg: None)
 
         @timeout(30, 3)
         def process(figure_idx, figure_binary):

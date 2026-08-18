@@ -212,7 +212,6 @@ async def iter_sse_from_bus(
                     raise bus_error_exc(item)
                 for line in encode_filtered(item):
                     yield line
-            return
 
         while True:
             try:

@@ -11,7 +11,6 @@ from fastapi.responses import Response
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.skill_vo import (
     SkillFsFileContent,
-    SkillPackageItem,
     SkillSource,
     SkillMarketInstallRequest,
 )

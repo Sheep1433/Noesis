@@ -1,5 +1,4 @@
 <script lang="ts" setup>
-const link = ref('')
 </script>
 
 <template>

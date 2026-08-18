@@ -1,5 +1,4 @@
-"""鉴权：密码、访问令牌、流式停止凭据。"""
-"""Framework-free authentication domain."""
+"""Framework-free authentication domain: passwords, sessions, and stop tokens."""
 
 from noesis.auth.entities import AuthSession, AuthUser
 

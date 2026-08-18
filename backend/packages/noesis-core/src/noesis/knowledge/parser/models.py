@@ -6,6 +6,8 @@ from typing import List, Optional
 
 from langchain_core.documents import Document
 
+from noesis.knowledge.parser.deepdoc_result import DeepDocParseResult
+
 
 @dataclass
 class ParsedFile:

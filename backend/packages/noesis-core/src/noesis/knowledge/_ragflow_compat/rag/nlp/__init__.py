@@ -36,8 +36,6 @@ def find_codec(blob):
 
 
 def concat_img(img1, img2):
-    from io import BytesIO
-
     from PIL import Image
 
     from rag.utils.lazy_image import LazyImage, ensure_pil_image

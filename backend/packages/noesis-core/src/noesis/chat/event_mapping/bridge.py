@@ -69,7 +69,6 @@ class MemoryStreamBridge:
                     yield item
                     return
                 yield item
-            return
 
         while True:
             try:

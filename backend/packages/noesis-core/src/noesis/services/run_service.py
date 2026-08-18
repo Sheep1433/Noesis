@@ -727,30 +727,7 @@ class RunService:
         try:
             handle = run_manager.get(run_id)
         except KeyError:
-            parts = row.snapshot.get("parts", []) if isinstance(row.snapshot, dict) else []
-            pending_hitl = (
-                row.snapshot.get("_pending_hitl")
-                if isinstance(row.snapshot, dict)
-                and isinstance(row.snapshot.get("_pending_hitl"), dict)
-                else None
-            )
-            return RunSnapshot(
-                run_id=row.id,
-                user_id=str(row.user_id),
-                session_id=row.session_id,
-                assistant_message_id=row.assistant_message_id,
-                qa_type=row.qa_type,
-                origin=row.origin,
-                status=RunStatus(row.status),
-                sequence=row.last_sequence,
-                attempt_id=row.attempt_id,
-                parts=tuple(parts),
-                finish_reason=row.finish_reason,
-                error_code=row.error_code,
-                user_error_message=row.user_error_message,
-                pending_hitl=pending_hitl,
-                updated_at=row.updated_at,
-            )
+            return cls._snapshot_from_row(row)
         if handle.authoritative_snapshot is not None:
             return copy.deepcopy(handle.authoritative_snapshot)
         return handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)
@@ -774,30 +751,7 @@ class RunService:
         try:
             handle = run_manager.get(row.id)
         except KeyError:
-            parts = row.snapshot.get("parts", []) if isinstance(row.snapshot, dict) else []
-            pending_hitl = (
-                row.snapshot.get("_pending_hitl")
-                if isinstance(row.snapshot, dict)
-                and isinstance(row.snapshot.get("_pending_hitl"), dict)
-                else None
-            )
-            return RunSnapshot(
-                run_id=row.id,
-                user_id=str(row.user_id),
-                session_id=row.session_id,
-                assistant_message_id=row.assistant_message_id,
-                qa_type=row.qa_type,
-                origin=row.origin,
-                status=RunStatus(row.status),
-                sequence=row.last_sequence,
-                attempt_id=row.attempt_id,
-                parts=tuple(parts),
-                finish_reason=row.finish_reason,
-                error_code=row.error_code,
-                user_error_message=row.user_error_message,
-                pending_hitl=pending_hitl,
-                updated_at=row.updated_at,
-            )
+            return cls._snapshot_from_row(row)
         if handle.authoritative_snapshot is not None:
             return copy.deepcopy(handle.authoritative_snapshot)
         return handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)

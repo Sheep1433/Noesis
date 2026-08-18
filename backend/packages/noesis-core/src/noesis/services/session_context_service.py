@@ -24,14 +24,9 @@ from noesis.config.user_data_paths import (
     get_user_skills_dir,
     get_workspace_dir,
 )
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
 from noesis.schemas.session_context_vo import FsTreeNode, SessionContextResponse
-from noesis.errors.exceptions import NotFoundException, ServiceException
 
 from noesis.services.chat_service import ChatService
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
 from noesis.services.skill_fs_service import SkillFsService
 
 _MAX_READ_BYTES = 512 * 1024

@@ -956,7 +956,7 @@ class QdrantService(KnowledgeBase):
             embeddings = embedding.embed_documents(texts)
 
             if not embeddings:
-                logger.warning(f"[QdrantService] 生成 embedding 失败，使用零向量替代")
+                logger.warning("[QdrantService] 生成 embedding 失败，使用零向量替代")
                 embeddings = [[0.0] * vector_dim for _ in texts]
             else:
                 emb0 = embeddings[0] if embeddings[0] is not None else []
