@@ -98,6 +98,7 @@ def _to_dict(row: TUserScheduledTask) -> Dict[str, Any]:
         "user_id": row.user_id,
         "name": row.name,
         "cron_expr": row.cron_expr,
+        "summary": cron_summary(row.cron_expr, row.timezone),
         "timezone": row.timezone,
         "enabled": bool(row.enabled),
         "qa_type": row.qa_type,
@@ -119,8 +120,11 @@ def cron_summary(cron_expr: str, timezone: str) -> str:
     parts = cron_expr.split()
     if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2:] == ["*", "*", "*"]:
         return f"每天 {int(parts[1]):02d}:{int(parts[0]):02d}（{timezone}）"
-    if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2:4] == ["*", "*"] and parts[4].isdigit():
-        return f"每周 {parts[4]} {int(parts[1]):02d}:{int(parts[0]):02d}（{timezone}）"
+    if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2:4] == ["*", "*"]:
+        days = parts[4].split(",")
+        if days and all(day.isdigit() and 0 <= int(day) <= 7 for day in days):
+            labels = "、".join(f"周{['日', '一', '二', '三', '四', '五', '六'][int(day) % 7]}" for day in days)
+            return f"{labels} {int(parts[1]):02d}:{int(parts[0]):02d}（{timezone}）"
     return f"按 cron {cron_expr} 执行（{timezone}）"
 
 

@@ -41,6 +41,7 @@ def _task():
 
 def test_cron_preview_and_dst_boundary() -> None:
     assert cron_summary("0 9 * * *", "Asia/Shanghai") == "每天 09:00（Asia/Shanghai）"
+    assert cron_summary("0 9 * * 1,3,5", "Asia/Shanghai") == "周一、周三、周五 09:00（Asia/Shanghai）"
     before_dst = int(datetime(2026, 3, 7, 12, tzinfo=ZoneInfo("America/New_York")).timestamp() * 1000)
     next_ms = compute_next_run_ms("30 2 * * *", "America/New_York", after_ms=before_dst)
     next_local = datetime.fromtimestamp(next_ms / 1000, ZoneInfo("America/New_York"))

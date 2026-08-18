@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskRun } from '@/api/settings'
-import { NButton, NInput, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   createScheduledTask, deleteScheduledTask, listScheduledTaskRuns, listScheduledTasks,
-  parseScheduledTask, previewSchedule, retryScheduledTaskRun, runScheduledTask, setScheduledTaskEnabled,
-  updateScheduledTask,
+  parseScheduledTask, previewSchedule, retryScheduledTaskRun, runScheduledTask,
+  setScheduledTaskEnabled, updateScheduledTask,
 } from '@/api/settings'
 import { SettingsEmptyState, SettingsSection, SettingsStatus } from '../primitives'
 
@@ -16,6 +16,7 @@ const saving = ref(false)
 const parsing = ref(false)
 const tasks = ref<ScheduledTask[]>([])
 const editingId = ref<string | null>(null)
+const editingDelivery = ref('none')
 const preview = ref<{ summary: string, next_run_at: number } | null>(null)
 const histories = reactive<Record<string, ScheduledTaskRun[]>>({})
 const nlInput = ref('')
@@ -29,25 +30,29 @@ const form = reactive({
   prompt: '',
 })
 
-// 直观时间选择器：频率 + 时间 + 星期几，watch 同步生成 cron_expr。
-type Freq = 'daily' | 'weekly' | 'monthly'
-const freq = ref<Freq>('weekly')
-const atHour = ref(9)
-const atMinute = ref(0)
-const weekday = ref(1) // 1=周一 … 7=周日
+type RepeatMode = 'daily' | 'weekly' | 'monthly' | 'custom'
+const repeatMode = ref<RepeatMode>('weekly')
+const repeatTime = ref('09:00')
+const weekdays = ref<number[]>([1]) // cron: 1=周一 … 7=周日
 const monthDay = ref(1)
+const customCron = ref('0 9 * * 1')
 
 function buildCron(): string {
-  const hh = String(atHour.value).padStart(2, '0')
-  const mm = String(atMinute.value).padStart(2, '0')
-  switch (freq.value) {
+  if (repeatMode.value === 'custom') {
+    return customCron.value.trim()
+  }
+  const [hour, minute] = repeatTime.value.split(':').map(Number)
+  const hh = String(Number.isFinite(hour) ? hour : 9)
+  const mm = String(Number.isFinite(minute) ? minute : 0)
+  switch (repeatMode.value) {
     case 'daily': return `${mm} ${hh} * * *`
-    case 'weekly': return `${mm} ${hh} * * ${weekday.value}`
+    case 'weekly': return `${mm} ${hh} * * ${[...weekdays.value].sort((a, b) => a - b).join(',') || '1'}`
     case 'monthly': return `${mm} ${hh} ${monthDay.value} * *`
+    default: return customCron.value.trim()
   }
 }
 
-watch([freq, atHour, atMinute, weekday, monthDay], () => {
+watch([repeatMode, repeatTime, weekdays, monthDay, customCron], () => {
   form.cron_expr = buildCron()
 }, { deep: true })
 
@@ -99,25 +104,26 @@ function syncSelectorFromCron(cron: string) {
     return
   }
   const [m, h, dom, , dow] = parts
+  if (/^\d+$/.test(m) && /^\d+$/.test(h)) {
+    repeatTime.value = `${String(Number(h)).padStart(2, '0')}:${String(Number(m)).padStart(2, '0')}`
+  }
   if (/^\d+$/.test(m) && /^\d+$/.test(h) && dom === '*' && parts[3] === '*' && dow === '*') {
-    freq.value = 'daily'
-    atMinute.value = Number(m)
-    atHour.value = Number(h)
+    repeatMode.value = 'daily'
     return
   }
-  if (/^\d+$/.test(m) && /^\d+$/.test(h) && dom === '*' && parts[3] === '*' && /^\d+$/.test(dow)) {
-    freq.value = 'weekly'
-    atMinute.value = Number(m)
-    atHour.value = Number(h)
-    weekday.value = Number(dow)
+  const weeklyDays = dow.split(',')
+  if (/^\d+$/.test(m) && /^\d+$/.test(h) && dom === '*' && parts[3] === '*' && weeklyDays.length > 0 && weeklyDays.every((day) => /^[0-7]$/.test(day))) {
+    repeatMode.value = 'weekly'
+    weekdays.value = dow.split(',').map(Number).map((day) => day === 0 ? 7 : day)
     return
   }
   if (/^\d+$/.test(m) && /^\d+$/.test(h) && /^\d+$/.test(dom) && parts[3] === '*' && dow === '*') {
-    freq.value = 'monthly'
-    atMinute.value = Number(m)
-    atHour.value = Number(h)
+    repeatMode.value = 'monthly'
     monthDay.value = Number(dom)
+    return
   }
+  repeatMode.value = 'custom'
+  customCron.value = cron
 }
 
 function resetForm() {
@@ -126,10 +132,12 @@ function resetForm() {
   form.cron_expr = '0 9 * * 1'
   form.enabled = true
   form.prompt = ''
-  freq.value = 'weekly'
-  atHour.value = 9
-  atMinute.value = 0
-  weekday.value = 1
+  repeatMode.value = 'weekly'
+  repeatTime.value = '09:00'
+  weekdays.value = [1]
+  monthDay.value = 1
+  customCron.value = '0 9 * * 1'
+  editingDelivery.value = 'none'
   preview.value = null
   nlInput.value = ''
 }
@@ -140,24 +148,26 @@ function edit(task: ScheduledTask) {
   form.cron_expr = task.cron_expr
   form.enabled = task.enabled
   form.prompt = task.prompt
+  editingDelivery.value = task.delivery
   syncSelectorFromCron(task.cron_expr)
   void refreshPreview()
 }
 
 const submitPayload = computed(() => ({
   name: form.name,
-  cron_expr: form.cron_expr,
+  cron_expr: buildCron(),
   timezone: TIMEZONE,
   enabled: form.enabled,
   qa_type: 'SUPER_AGENT_QA',
   prompt: form.prompt,
   session_binding: 'single',
-  delivery: 'none',
+  delivery: editingId.value ? editingDelivery.value : 'none',
 }))
 
 async function save() {
   saving.value = true
   try {
+    form.cron_expr = buildCron()
     await refreshPreview()
     if (!preview.value) {
       return
@@ -225,18 +235,16 @@ async function retry(run: ScheduledTaskRun, task: ScheduledTask) {
   }
 }
 
-const freqOptions = [
+const repeatModeOptions = [
   { label: '每天', value: 'daily' },
   { label: '每周', value: 'weekly' },
   { label: '每月', value: 'monthly' },
+  { label: '自定义', value: 'custom' },
 ]
 const weekdayOptions = [
   { label: '周一', value: 1 }, { label: '周二', value: 2 }, { label: '周三', value: 3 },
   { label: '周四', value: 4 }, { label: '周五', value: 5 }, { label: '周六', value: 6 }, { label: '周日', value: 7 },
 ]
-const hourOptions = Array.from({ length: 24 }, (_, i) => ({ label: String(i).padStart(2, '0'), value: i }))
-const minuteOptions = [0, 15, 30, 45].map((v) => ({ label: String(v).padStart(2, '0'), value: v }))
-
 onMounted(() => void refresh())
 </script>
 
@@ -244,42 +252,71 @@ onMounted(() => void refresh())
   <SettingsSection title="自动化" description="用一句话描述任务，或选择时间手动配置。每次运行结果会落到一个固定会话，可像普通对话一样继续交互。">
     <SettingsStatus v-if="loading" title="正在加载">正在读取任务与最近状态…</SettingsStatus>
 
-    <div class="nl-box">
-      <n-input
-        v-model:value="nlInput"
-        type="textarea"
-        placeholder="用一句话描述定时任务，如「每周一早上9点，收集网上资料整理 AI Agent 的最新进展」"
-        :rows="2"
-      />
-      <n-button type="primary" :loading="parsing" :disabled="!nlInput.trim()" @click="onParse">解析为任务</n-button>
-    </div>
+    <div class="automation-layout">
+      <!-- 右列（桌面）/ 首段（移动）：任务设置表单 -->
+      <div class="automation-form">
+        <div class="nl-box">
+          <n-input
+            v-model:value="nlInput"
+            type="textarea"
+            placeholder="用一句话描述定时任务，如「每周一早上9点，收集网上资料整理 AI Agent 的最新进展」"
+            :rows="2"
+          />
+          <n-button type="primary" :loading="parsing" :disabled="!nlInput.trim()" @click="onParse">解析为任务</n-button>
+        </div>
 
-    <div class="task-form">
-      <n-input v-model:value="form.name" placeholder="任务名称" />
-      <div class="schedule-row">
-        <n-select v-model:value="freq" :options="freqOptions" style="width: 100px" />
-        <n-select v-if="freq === 'weekly'" v-model:value="weekday" :options="weekdayOptions" style="width: 100px" />
-        <n-select v-if="freq === 'monthly'" v-model:value="monthDay" :options="Array.from({ length: 28 }, (_, i) => ({ label: String(i + 1), value: i + 1 }))" style="width: 80px" />
-        <n-select v-model:value="atHour" :options="hourOptions" style="width: 80px" />
-        <span class="colon">:</span>
-        <n-select v-model:value="atMinute" :options="minuteOptions" style="width: 80px" />
+        <div class="task-form">
+          <n-input v-model:value="form.name" placeholder="任务名称" />
+          <div class="schedule-panel">
+            <div class="schedule-row">
+              <span class="schedule-label">重复</span>
+              <n-select v-model:value="repeatMode" :options="repeatModeOptions" />
+            </div>
+            <div v-if="repeatMode === 'weekly'" class="schedule-row">
+              <span class="schedule-label">开启</span>
+              <n-select
+                v-model:value="weekdays"
+                multiple
+                :options="weekdayOptions"
+                max-tag-count="responsive"
+                placeholder="选择星期"
+              />
+            </div>
+            <div v-if="repeatMode === 'monthly'" class="schedule-row">
+              <span class="schedule-label">日期</span>
+              <n-input-number v-model:value="monthDay" :min="1" :max="28" />
+              <span class="schedule-suffix">日</span>
+            </div>
+            <div v-if="repeatMode === 'custom'" class="custom-cron-row">
+              <span class="schedule-label">Cron</span>
+              <n-input v-model:value="customCron" placeholder="分 时 日 月 周，例如 0 9 * * 1,3,5" />
+            </div>
+            <div class="schedule-row">
+              <span class="schedule-label">时间</span>
+              <input v-model="repeatTime" class="time-input" type="time">
+            </div>
+            <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用</label>
+          </div>
+          <div v-if="preview" class="preview">{{ preview.summary }} · 下次 {{ new Date(preview.next_run_at).toLocaleString() }}</div>
+          <n-input v-model:value="form.prompt" type="textarea" placeholder="任务提示词" :rows="4" />
+          <div class="actions"><n-button type="primary" :loading="saving" :disabled="!form.name || !form.prompt" @click="save">{{ editingId ? '保存修改' : '创建任务' }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
+        </div>
       </div>
-      <div v-if="preview" class="preview">{{ preview.summary }} · 下次 {{ new Date(preview.next_run_at).toLocaleString() }}</div>
-      <n-input v-model:value="form.prompt" type="textarea" placeholder="任务提示词" :rows="4" />
-      <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用任务</label>
-      <div class="actions"><n-button type="primary" :loading="saving" :disabled="!form.name || !form.prompt" @click="save">{{ editingId ? '保存修改' : '创建任务' }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
-    </div>
 
-    <SettingsEmptyState v-if="!loading && tasks.length === 0" title="暂无自动化任务" description="用一句话描述或选择时间配置后，每次执行都会保留运行记录并落到对应会话。" />
-    <div v-for="task in tasks" :key="task.id" class="task-card">
-      <div class="task-head"><div><strong>{{ task.name }}</strong><div class="muted">{{ task.cron_expr }} · {{ task.timezone }}</div></div><n-tag size="small" :type="task.enabled ? 'success' : 'default'">{{ task.enabled ? '启用' : '停用' }}</n-tag></div>
-      <div class="muted prompt">{{ task.prompt }}</div>
-      <div class="actions"><n-switch :value="task.enabled" @update:value="value => onToggle(task, value)" /><n-button size="small" @click="onRun(task)">立即运行</n-button><n-button size="small" @click="loadHistory(task)">运行历史</n-button><n-button size="small" @click="edit(task)">编辑</n-button><n-button size="small" type="error" quaternary @click="onDelete(task)">删除</n-button></div>
-      <div v-if="histories[task.id]" class="history">
-        <div v-for="run in histories[task.id]" :key="run.id" class="run-row">
-          <div><n-tag size="small" :type="run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'error' : 'warning'">{{ run.status }}</n-tag> <span class="muted">{{ new Date(run.created_at).toLocaleString() }} · {{ run.trigger_source }} · {{ run.duration_ms ?? '—' }} ms</span></div>
-          <p v-if="run.result_summary">{{ run.result_summary }}</p><p v-if="run.error_message" class="error">{{ run.error_message }}</p>
-          <n-button v-if="run.status === 'failed' || run.status === 'cancelled'" size="tiny" @click="retry(run, task)">重试</n-button>
+      <!-- 左列（桌面）/ 次段（移动）：任务列表 -->
+      <div class="automation-list">
+        <SettingsEmptyState v-if="!loading && tasks.length === 0" title="暂无自动化任务" description="用一句话描述或选择时间配置后，每次执行都会保留运行记录并落到对应会话。" />
+        <div v-for="task in tasks" :key="task.id" class="task-card">
+          <div class="task-head"><div><strong>{{ task.name }}</strong><div class="muted">{{ task.summary || task.cron_expr }} · {{ task.timezone }}</div></div><n-tag size="small" :type="task.enabled ? 'success' : 'default'">{{ task.enabled ? '启用' : '停用' }}</n-tag></div>
+          <div class="muted prompt">{{ task.prompt }}</div>
+          <div class="actions"><n-switch :value="task.enabled" @update:value="value => onToggle(task, value)" /><n-button size="small" @click="onRun(task)">立即运行</n-button><n-button size="small" @click="loadHistory(task)">运行历史</n-button><n-button size="small" @click="edit(task)">编辑</n-button><n-button size="small" type="error" quaternary @click="onDelete(task)">删除</n-button></div>
+          <div v-if="histories[task.id]" class="history">
+            <div v-for="run in histories[task.id]" :key="run.id" class="run-row">
+              <div><n-tag size="small" :type="run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'error' : 'warning'">{{ run.status }}</n-tag> <span class="muted">{{ new Date(run.created_at).toLocaleString() }} · {{ run.trigger_source }} · {{ run.duration_ms ?? '—' }} ms</span></div>
+              <p v-if="run.result_summary">{{ run.result_summary }}</p><p v-if="run.error_message" class="error">{{ run.error_message }}</p>
+              <n-button v-if="run.status === 'failed' || run.status === 'cancelled'" size="tiny" @click="retry(run, task)">重试</n-button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -287,12 +324,32 @@ onMounted(() => void refresh())
 </template>
 
 <style scoped>
+/* 两列布局：桌面（≥1024px）左侧任务列表、右侧设置表单；窄屏单列表单在上 */
+.automation-layout { display: grid; gap: 0 40px; align-items: start; }
+.automation-form { min-width: 0; }
+.automation-list { min-width: 0; }
+@media (min-width: 1024px) {
+  .automation-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "list form";
+  }
+  .automation-list { grid-area: list; }
+  .automation-form { grid-area: form; }
+  /* 列表在左列时不再依赖顶部分隔线与表单区隔开，首卡去线 */
+  .automation-list .task-card:first-child { border-top: none; padding-top: 0; }
+}
+
 .nl-box { display: grid; gap: 10px; max-width: 700px; padding-bottom: 18px; }
 .task-form { display: grid; gap: 10px; max-width: 700px; padding-bottom: 22px; }
-.schedule-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.colon { font-weight: 600; }
+.schedule-panel { display: grid; gap: 0; max-width: 700px; border: 1px solid var(--noesis-color-border-subtle); border-radius: 14px; overflow: hidden; }
+.schedule-row, .custom-cron-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; border-bottom: 1px solid var(--noesis-color-border-subtle); }
+.schedule-row :deep(.n-select), .custom-cron-row :deep(.n-input) { min-width: 0; }
+.schedule-label { color: var(--noesis-color-text-secondary); font-size: 13px; }
+.schedule-suffix { color: var(--noesis-color-text-secondary); font-size: 13px; }
+.time-input { width: 120px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--noesis-color-border); border-radius: 6px; color: var(--noesis-color-text-primary); background: var(--noesis-color-bg-elevated); font: inherit; }
+.enabled { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 14px; color: var(--noesis-color-text-primary); }
 .preview { color: var(--noesis-color-success, #287a45); font-size: 12px; }
-.enabled, .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .task-card { padding: 16px 0; border-top: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); }
 .task-head { display: flex; justify-content: space-between; gap: 12px; }
 .muted { color: var(--noesis-color-text-secondary); font-size: 12px; }
