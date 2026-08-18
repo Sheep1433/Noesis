@@ -88,10 +88,31 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
             return None
         return normalize_usage(usage)
 
-    def _record_step(self, response: Any, llm_ms: float) -> None:
+    def _is_new_turn(self, request: ModelRequest) -> bool:
+        """判断本次 model call 是否开启新一轮（user 发起新消息）。
+
+        新轮次的首个 step 通常 messages 末尾是 HumanMessage（用户提问）；
+        同轮后续 step（工具结果回来后再调模型）末尾是 ToolMessage。
+        以此区分轮次与步数：用户问一次 = 1 轮，该轮内模型可被调多次 = 多步。
+        """
+        messages = getattr(request, "messages", None)
+        if messages is None and isinstance(request, dict):
+            messages = request.get("messages")
+        messages = messages or []
+        if not messages:
+            return False
+        from langchain_core.messages import HumanMessage
+        return isinstance(messages[-1], HumanMessage)
+
+    def _record_step(self, response: Any, llm_ms: float, request: ModelRequest | None = None) -> None:
         """记录一次模型调用的指标。"""
         self._stats["steps"] = self._stats["steps"] + 1
         self._stats["llm_ms"] = self._stats["llm_ms"] + llm_ms
+
+        # 轮数：仅在新轮次首个 step（messages 末尾为 HumanMessage）时 +1，
+        # 同轮后续模型调用（工具结果回写后）不计新轮。
+        if request is not None and self._is_new_turn(request):
+            self._stats["turns"] = self._stats["turns"] + 1
 
         usage = self._extract_usage(response)
         if usage:
@@ -108,9 +129,6 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
             self._stats["cache_write_tokens"] = self._stats["cache_write_tokens"] + int(
                 input_details.get("cache_write") or 0
             )
-
-        # 轮数：简化版——每个 step 视为一个 turn
-        self._stats["turns"] = self._stats["steps"]
 
     def _emit_stats(self) -> None:
         """发 noesis_stats_update custom event。"""
@@ -156,7 +174,7 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         start = time.perf_counter()
         response = handler(request)
         llm_ms = max(0, (time.perf_counter() - start) * 1000)
-        self._record_step(response, llm_ms)
+        self._record_step(response, llm_ms, request)
         self._emit_stats()
         return response
 
@@ -169,7 +187,7 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         start = time.perf_counter()
         response = await handler(request)
         llm_ms = max(0, (time.perf_counter() - start) * 1000)
-        self._record_step(response, llm_ms)
+        self._record_step(response, llm_ms, request)
         await self._aemit_stats()
         return response
 
