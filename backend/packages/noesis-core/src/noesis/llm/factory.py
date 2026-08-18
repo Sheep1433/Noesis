@@ -228,6 +228,15 @@ def build_chat_model(
         "http_client": http_client,
         "http_async_client": http_async_client,
     }
+    # 流式模式下，OpenAI 兼容端点（opencode/tokenrhythm/openai/deepseek/qwen）默认不返回 usage，
+    # 必须显式 stream_options.include_usage，最后一个 chunk 才带 token 计数；
+    # 否则 stats 中间件读到的 usage_metadata 为空，统计条只显示轮数/步数/耗时而无 token。
+    # Anthropic 流式自带 usage，不走此参数。
+    stream_usage_kwargs = (
+        {"model_kwargs": {"stream_options": {"include_usage": True}}}
+        if ModelConfig.streaming
+        else {}
+    )
 
     model_map = {
         "openai": lambda: ChatOpenAI(
@@ -238,6 +247,7 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "minimax": lambda: ChatOpenAI(
@@ -248,6 +258,7 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "opencode": lambda: ChatOpenCode(
@@ -259,6 +270,7 @@ def build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             default_headers=_OPENCODE_DEFAULT_HEADERS,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "qwen": lambda: ChatQwen(
@@ -273,6 +285,7 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "deepseek": lambda: ChatDeepSeek(
@@ -283,6 +296,7 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "anthropic": lambda: ChatAnthropic(
