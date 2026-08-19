@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -50,12 +51,49 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     return _saver
 
 
+async def create_isolated_checkpointer() -> AsyncPostgresSaver:
+    """为后台子 Agent 隔离 loop 创建专用 checkpointer（首次调用时惰性建池）。
+
+    psycopg AsyncConnectionPool 绑定创建时的 event loop；后台任务在隔离
+    线程 loop 上运行，复用主 loop 的池会 cross-loop 报错。此 saver 与主
+    saver 共用同一 checkpoint 数据库，实例互相独立。
+    """
+    global _isolated_pool, _isolated_saver
+    if _isolated_saver is not None:
+        return _isolated_saver
+    _isolated_pool = AsyncConnectionPool(
+        conninfo=checkpoint_connection_url(),
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+        open=False,
+    )
+    await _isolated_pool.open()
+    _isolated_saver = AsyncPostgresSaver(_isolated_pool)
+    await _isolated_saver.setup()
+    logger.info("后台子 Agent 隔离 checkpointer 已初始化")
+    return _isolated_saver
+
+
 async def close_checkpointer() -> None:
-    global _pool, _saver
+    global _pool, _saver, _isolated_pool, _isolated_saver
     if _pool is not None:
         await _pool.close()
     _pool = None
     _saver = None
+    if _isolated_pool is not None:
+        try:
+            # 隔离池绑定隔离 loop，需切到该 loop 关闭
+            from noesis.agents.subagents.executor import _loop
+
+            if _loop is not None and not _loop.is_closed():
+                fut = asyncio.run_coroutine_threadsafe(_isolated_pool.close(), _loop)
+                fut.result(timeout=5)
+            else:
+                await _isolated_pool.close()
+        except Exception:
+            # 隔离 loop 已停或池已失效：退出路径不因清理失败而中断
+            logger.warning("后台子 Agent 隔离 checkpointer 关闭异常（忽略）")
+    _isolated_pool = None
+    _isolated_saver = None
     logger.info("LangGraph PostgreSQL checkpointer 已关闭")
 
 
