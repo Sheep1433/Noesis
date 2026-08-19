@@ -88,8 +88,10 @@ class QaService:
                 if clean_query
                 else resolved_mentions.prompt_block
             )
-        # 后台子 Agent 终态通知：一次性 drain 前置到 agent_query（不落库）
-        agent_query = notify_agent_query(session_id, agent_query)
+        # 后台子 Agent 终态通知：一次性 drain 前置到 agent_query（不落库）。
+        # 仅 SuperAgent 注入——check_task 等工具只存在于 SUPER_AGENT_QA。
+        if req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
+            agent_query = notify_agent_query(session_id, agent_query)
 
         try:
             logger.info(

@@ -19,13 +19,14 @@ HITL 工具审批：子 Agent 带 checkpointer + interrupt_on 编译，遇审批
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 import time
 import uuid
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
@@ -143,10 +144,16 @@ def shutdown_loop() -> None:
 @dataclass
 class _TaskEntry:
     task: BackgroundTask
-    # 编译好的子 Agent runnable（带 checkpointer，可按不同 thread_id 复用）
-    agent: Any
+    # 在隔离 loop 内惰性调用的 worker 编译工厂（async）：
+    # worker 的 LLM 客户端 / checkpointer 连接池必须绑定隔离 loop，
+    # 不得复用主 loop 创建的实例（cross-loop 风险）
+    agent_factory: Callable[[], Any]
     recursion_limit: int
     timeout_seconds: float
+    hitl_timeout_seconds: float
+    # factory 首次调用后在隔离 loop 内缓存编译结果（同 executor 任务复用）
+    compiled_agent: Any = None
+    compiled_lock: threading.Lock = field(default_factory=threading.Lock)
     # 当前执行协程的 future（用于超时/取消）
     future: Optional[Future] = None
     watchdog_handle: Optional[asyncio.TimerHandle] = None
@@ -256,41 +263,49 @@ class BackgroundSubagentExecutor:
     def start(
         self,
         *,
-        agent: Any,
+        worker_factory: Callable[[], Any],
         description: str,
         session_id: str,
         user_id: str,
     ) -> str:
         """启动后台任务，立即返回 task_id；超并发抛 ValueError。"""
-        active = self._session_active_count(session_id)
-        if active >= self._max_concurrent:
-            raise ValueError(
-                f"本会话后台任务已达上限（{self._max_concurrent} 个），"
-                "请先 check/cancel 现有任务再启动新的"
-            )
         task_id = f"bg-{uuid.uuid4()}"
         task = BackgroundTask(
             task_id=task_id, session_id=session_id, user_id=user_id,
             description=description,
         )
         entry = _TaskEntry(
-            task=task, agent=agent, recursion_limit=self._recursion_limit,
+            task=task, agent_factory=worker_factory,
+            recursion_limit=self._recursion_limit,
             timeout_seconds=self._task_timeout,
+            hitl_timeout_seconds=self._hitl_timeout,
         )
+        # 上限检查与插入同锁，避免并发 start 的 TOCTOU 竞态
         with _TASKS_LOCK:
+            active = sum(
+                1 for e in _TASKS.values()
+                if e.task.session_id == session_id
+                and not e.task.status.is_terminal
+            )
+            if active >= self._max_concurrent:
+                raise ValueError(
+                    f"本会话后台任务已达上限（{self._max_concurrent} 个），"
+                    "请先 check/cancel 现有任务再启动新的"
+                )
             _TASKS[task_id] = entry
         loop = _ensure_loop()
         entry.future = asyncio.run_coroutine_threadsafe(
-            self._arun(entry, resume_command=None), loop,
+            _arun(entry, resume_command=None), loop,
         )
-        self._arm_watchdog(entry)
+        _arm_watchdog(entry)
         logger.info(
             "bg subagent started task_id={} session_id={} active={}/{}",
             task_id, session_id, active + 1, self._max_concurrent,
         )
         return task_id
 
-    def send_message(self, task_id: str, message: str) -> dict[str, Any]:
+    @staticmethod
+    def send_message(task_id: str, message: str) -> dict[str, Any]:
         """向运行中/待审批任务投递策略调整指令（下一次模型调用生效）。"""
         with _TASKS_LOCK:
             entry = _TASKS.get(task_id)
@@ -298,12 +313,14 @@ class BackgroundSubagentExecutor:
                 raise ValueError(f"后台任务不存在: {task_id}")
             if entry.task.status.is_terminal:
                 raise ValueError(f"任务已结束（{entry.task.status.value}），无法再调整")
+            snapshot = entry.task.to_dict()
         steering.put(task_id, message)
-        return entry.task.to_dict()
+        return snapshot
 
     # -- 审批 / 取消 ---------------------------------------------------
 
-    def submit_decisions(self, task_id: str, decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    @staticmethod
+    def submit_decisions(task_id: str, decisions: list[dict[str, Any]]) -> dict[str, Any]:
         """审批决策（approve / reject）→ 在同一 thread 续跑子 Agent。"""
         with _TASKS_LOCK:
             entry = _TASKS.get(task_id)
@@ -317,19 +334,20 @@ class BackgroundSubagentExecutor:
             entry.task.interrupt = None
         loop = _ensure_loop()
         entry.future = asyncio.run_coroutine_threadsafe(
-            self._arun(entry, resume_command=Command(resume={"decisions": decisions})), loop,
+            _arun(entry, resume_command=Command(resume={"decisions": decisions})), loop,
         )
-        self._arm_watchdog(entry)
+        _arm_watchdog(entry)
         return entry.task.to_dict()
 
-    def cancel(self, task_id: str) -> dict[str, Any]:
+    @staticmethod
+    def cancel(task_id: str) -> dict[str, Any]:
         with _TASKS_LOCK:
             entry = _TASKS.get(task_id)
             if entry is None:
                 raise ValueError(f"后台任务不存在: {task_id}")
             if entry.task.status.is_terminal:
                 return entry.task.to_dict()
-            self._disarm_watchdog(entry)
+            _disarm_watchdog(entry)
             steering.clear(task_id)
             if entry.future is not None:
                 entry.future.cancel()
@@ -339,96 +357,115 @@ class BackgroundSubagentExecutor:
             snapshot = entry.task.to_dict()
         return snapshot
 
-    # -- 内部：执行 ----------------------------------------------------
+    # -- 内部委托模块实现（见下方模块函数） ----------------------------
 
-    def _config(self, entry: _TaskEntry) -> dict[str, Any]:
-        return {
-            "configurable": {"thread_id": entry.task.task_id},
-            "recursion_limit": entry.recursion_limit,
-        }
 
-    async def _arun(self, entry: _TaskEntry, *, resume_command: Optional[Command]) -> None:
-        task = entry.task
-        try:
-            if resume_command is None:
-                state: Any = {"messages": [HumanMessage(content=task.description)]}
-                final = await entry.agent.ainvoke(state, self._config(entry))
-            else:
-                final = await entry.agent.ainvoke(resume_command, self._config(entry))
-            interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
-            payload = _extract_interrupt_payload(interrupts) if interrupts else None
-            if payload is not None:
-                task.status = BgTaskStatus.AWAITING_APPROVAL
-                task.interrupt = payload
-                self._disarm_watchdog(entry)
-                self._arm_hitl_watchdog(entry)
-                logger.info(
-                    "bg subagent awaiting approval task_id={} actions={}",
-                    task.task_id, len(payload.get("action_requests") or []),
-                )
-                return
-            task.result = _final_answer_text(final)
-            task.status = BgTaskStatus.COMPLETED
-            task.completed_at = time.time()
-            _notify_terminal(task)
-        except asyncio.CancelledError:
-            if not task.status.is_terminal:
-                task.status = BgTaskStatus.CANCELLED
-                task.completed_at = time.time()
-        except Exception as exc:
-            task.status = BgTaskStatus.FAILED
-            task.error = str(exc)
-            task.completed_at = time.time()
-            _notify_terminal(task)
-            logger.opt(exception=True).error(
-                "bg subagent failed task_id={}", task.task_id,
+def _config(entry: _TaskEntry) -> dict[str, Any]:
+    return {
+        "configurable": {"thread_id": entry.task.task_id},
+        "recursion_limit": entry.recursion_limit,
+    }
+
+
+async def _ensure_agent(entry: _TaskEntry) -> Any:
+    """惰性编译 worker：factory 在隔离 loop 内调用，其 LLM 客户端 /
+    checkpointer 连接池绑定隔离 loop（避免复用主 loop 实例的 cross-loop 风险）。"""
+    if entry.compiled_agent is None:
+        with entry.compiled_lock:
+            if entry.compiled_agent is None:
+                result = entry.agent_factory()
+                if inspect.isawaitable(result):
+                    result = await result
+                entry.compiled_agent = result
+    return entry.compiled_agent
+
+
+async def _arun(entry: _TaskEntry, *, resume_command: Optional[Command]) -> None:
+    task = entry.task
+    try:
+        agent = await _ensure_agent(entry)
+        if resume_command is None:
+            state: Any = {"messages": [HumanMessage(content=task.description)]}
+            final = await agent.ainvoke(state, _config(entry))
+        else:
+            final = await agent.ainvoke(resume_command, _config(entry))
+        interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
+        payload = _extract_interrupt_payload(interrupts) if interrupts else None
+        if payload is not None:
+            task.status = BgTaskStatus.AWAITING_APPROVAL
+            task.interrupt = payload
+            _disarm_watchdog(entry)
+            _arm_hitl_watchdog(entry)
+            logger.info(
+                "bg subagent awaiting approval task_id={} actions={}",
+                task.task_id, len(payload.get("action_requests") or []),
             )
-
-    # -- 内部：超时 / 事件 ---------------------------------------------
-
-    def _arm_watchdog(self, entry: _TaskEntry) -> None:
-        self._disarm_watchdog(entry)
-        loop = _ensure_loop()
-        entry.watchdog_handle = loop.call_later(
-            entry.timeout_seconds, self._on_task_timeout, entry,
+            return
+        task.result = _final_answer_text(final)
+        task.status = BgTaskStatus.COMPLETED
+        task.completed_at = time.time()
+        _notify_terminal(task)
+    except asyncio.CancelledError:
+        if not task.status.is_terminal:
+            task.status = BgTaskStatus.CANCELLED
+            task.completed_at = time.time()
+    except Exception as exc:
+        task.status = BgTaskStatus.FAILED
+        task.error = str(exc)
+        task.completed_at = time.time()
+        _notify_terminal(task)
+        logger.opt(exception=True).error(
+            "bg subagent failed task_id={}", task.task_id,
         )
 
-    def _disarm_watchdog(self, entry: _TaskEntry) -> None:
-        if entry.watchdog_handle is not None:
-            entry.watchdog_handle.cancel()
-            entry.watchdog_handle = None
 
-    def _arm_hitl_watchdog(self, entry: _TaskEntry) -> None:
-        """审批超时按拒绝续跑（对齐主 run HITL 超时语义）。"""
-        loop = _ensure_loop()
-        entry.watchdog_handle = loop.call_later(
-            self._hitl_timeout, self._on_hitl_timeout, entry,
+def _arm_watchdog(entry: _TaskEntry) -> None:
+    _disarm_watchdog(entry)
+    loop = _ensure_loop()
+    entry.watchdog_handle = loop.call_later(
+        entry.timeout_seconds, _on_task_timeout, entry,
+    )
+
+
+def _disarm_watchdog(entry: _TaskEntry) -> None:
+    if entry.watchdog_handle is not None:
+        entry.watchdog_handle.cancel()
+        entry.watchdog_handle = None
+
+
+def _arm_hitl_watchdog(entry: _TaskEntry) -> None:
+    """审批超时按拒绝续跑（对齐主 run HITL 超时语义）。"""
+    loop = _ensure_loop()
+    entry.watchdog_handle = loop.call_later(
+        entry.hitl_timeout_seconds, _on_hitl_timeout, entry,
+    )
+
+
+def _on_task_timeout(entry: _TaskEntry) -> None:
+    if entry.task.status.is_terminal or entry.task.status == BgTaskStatus.AWAITING_APPROVAL:
+        return
+    if entry.future is not None:
+        entry.future.cancel()
+    entry.task.status = BgTaskStatus.TIMED_OUT
+    entry.task.error = f"后台任务超时（{int(entry.timeout_seconds)}s）"
+    entry.task.completed_at = time.time()
+    _notify_terminal(entry.task)
+
+
+def _on_hitl_timeout(entry: _TaskEntry) -> None:
+    if entry.task.status != BgTaskStatus.AWAITING_APPROVAL:
+        return
+    logger.warning("bg subagent approval timeout task_id={}", entry.task.task_id)
+    try:
+        BackgroundSubagentExecutor.submit_decisions(
+            entry.task.task_id,
+            [{"type": "reject", "message": "审批超时，已自动拒绝"}],
         )
-
-    def _on_task_timeout(self, entry: _TaskEntry) -> None:
-        if entry.task.status.is_terminal or entry.task.status == BgTaskStatus.AWAITING_APPROVAL:
-            return
-        if entry.future is not None:
-            entry.future.cancel()
-        entry.task.status = BgTaskStatus.TIMED_OUT
-        entry.task.error = f"后台任务超时（{int(entry.timeout_seconds)}s）"
-        entry.task.completed_at = time.time()
-        _notify_terminal(entry.task)
-
-    def _on_hitl_timeout(self, entry: _TaskEntry) -> None:
-        if entry.task.status != BgTaskStatus.AWAITING_APPROVAL:
-            return
-        logger.warning("bg subagent approval timeout task_id={}", entry.task.task_id)
-        try:
-            self.submit_decisions(
-                entry.task.task_id,
-                [{"type": "reject", "message": "审批超时，已自动拒绝"}],
-            )
-        except Exception:
-            logger.opt(exception=True).error(
-                "bg subagent approval timeout reject failed task_id={}",
-                entry.task.task_id,
-            )
+    except Exception:
+        logger.opt(exception=True).error(
+            "bg subagent approval timeout reject failed task_id={}",
+            entry.task.task_id,
+        )
 
 
 def shutdown() -> None:

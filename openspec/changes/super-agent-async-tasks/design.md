@@ -12,6 +12,10 @@
 
 ## 2. 执行层（已实现，决策记录）
 
+### 2.0 资源绑定隔离 loop（自查修复）
+
+后台 worker 的 **LLM 客户端（httpx）与 checkpointer（psycopg 连接池）都绑定创建时的 event loop**；隔离线程 loop 复用主 loop 创建的实例会 cross-loop 报错。因此 worker 不在装配期编译，而由 `worker_factory`（async）在隔离 loop 内**惰性编译**：`create_isolated_checkpointer()` 为隔离 loop 建独立连接池（与主 saver 共用 checkpoint 库、实例独立）；`get_llm` 亦在工厂内调用。注册表操作（get / list / submit_decisions / cancel / send_message）为 **staticmethod**——Service 层经类名直调，不依赖任何 executor 实例存活。
+
 ### 2.1 隔离事件循环
 
 后台任务在专用守护线程的常驻 `asyncio` loop 上运行。它是**主 run 任务树之外的执行**：主 run 的 producer task 结束、取消、下一轮开始都不影响它。这是「任务活过调用方」的进程内实现，等价于 langgraph-api 服务器提供的托管能力。

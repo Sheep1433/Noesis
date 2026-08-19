@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from langchain_core.tools import StructuredTool
 
@@ -36,21 +36,22 @@ def _format_task(task: dict[str, Any]) -> str:
 
 def build_background_task_tools(
     *,
-    agent: Any,
+    worker_factory: Callable[[], Any],
     executor: BackgroundSubagentExecutor,
     session_id: str,
     user_id: str,
 ) -> list[StructuredTool]:
     """构造绑定到当前会话的后台任务工具集。
 
-    ``agent`` 为编译好的 task-worker runnable（带 checkpointer），由
-    ``compile_task_worker`` 产出，同一实例按不同 thread_id 复用。
+    ``worker_factory`` 在隔离 loop 内惰性调用（async 可等待），产出带
+    checkpointer 的 task-worker runnable；LLM 客户端与连接池随之绑定
+    隔离 loop。
     """
 
     def start_task(description: str) -> str:
         try:
             task_id = executor.start(
-                agent=agent, description=description,
+                worker_factory=worker_factory, description=description,
                 session_id=session_id, user_id=user_id,
             )
         except ValueError as exc:

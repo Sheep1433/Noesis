@@ -163,7 +163,10 @@ DEFAULT_COLLECTION_QUERY: Dict[str, Any] = {
     "recall_top_k": 20,
     "rerank_top_k": 15,
     "final_top_k": 10,
-    "score_threshold": None,
+    # rerank 相关性阈值（gte-rerank-v2 的 0~1 分）：低于 0.3 视为不相关，滤除。
+    # 仅 rerank 实际生效时应用（retrieval/service.py）；recall/RRF 分数量纲不兼容。
+    # null/缺省 = 跟随平台默认（normalize_query_execution_params 回填本值）；配 0 = 显式关闭。
+    "score_threshold": 0.3,
     "rrf_k": 60,
 }
 

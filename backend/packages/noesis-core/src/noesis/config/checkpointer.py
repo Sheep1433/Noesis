@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator
@@ -15,6 +16,9 @@ from noesis.config.env import DataBaseConfig, get_config
 
 _pool: AsyncConnectionPool | None = None
 _saver: AsyncPostgresSaver | None = None
+# 后台子 Agent 隔离 loop 专用：连接池绑定隔离 loop，不复用主 loop 实例
+_isolated_pool: AsyncConnectionPool | None = None
+_isolated_saver: AsyncPostgresSaver | None = None
 _checkpointer_override: ContextVar[Any | None] = ContextVar(
     "noesis_checkpointer_override", default=None
 )

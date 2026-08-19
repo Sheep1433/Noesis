@@ -234,6 +234,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
       currentRenderIndex,
     )
     const contextReady = loadSessionContext(sessionId)
+    stopBgTaskPolling()
     void refreshBgTasks(sessionId)
     reloadSessionFilesPanel()
     // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，

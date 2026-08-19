@@ -150,23 +150,31 @@ class SuperAgent(BaseAgent):
         # 后台子 Agent（全异步 task）：主 Agent 用 start/check 工具委派，
         # 子任务在进程内隔离 loop 跑，生命周期归属 session，跨 run 可收结果。
         # worker 不携带后台任务工具自身（避免递归委派）。
-        bg_worker = _compile_task_worker(
-            backend,
-            tools,
-            skill_sources,
-            user_id=user_id,
-            model_id=model_id,
-            interrupt_on=interrupt_on,
-            session_id=session_id,
-            checkpointer=self.checkpointer,
-        )
+        # worker 经工厂在隔离 loop 内惰性编译：LLM 客户端与 checkpointer
+        # 连接池必须绑定隔离 loop（复用主 loop 实例会 cross-loop 报错）。
+        worker_tools = list(tools)
+
+        async def _bg_worker_factory():
+            from noesis.config.checkpointer import create_isolated_checkpointer
+
+            return _compile_task_worker(
+                backend,
+                worker_tools,
+                skill_sources,
+                user_id=user_id,
+                model_id=model_id,
+                interrupt_on=interrupt_on,
+                session_id=session_id,
+                checkpointer=await create_isolated_checkpointer(),
+            )
+
         bg_executor = BackgroundSubagentExecutor(
             max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
             hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
         )
         tools.extend(build_background_task_tools(
-            agent=bg_worker,
+            worker_factory=_bg_worker_factory,
             executor=bg_executor,
             session_id=session_id,
             user_id=user_id,

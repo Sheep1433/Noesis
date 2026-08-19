@@ -138,7 +138,7 @@ def test_start_returns_immediately_and_completes() -> None:
 
     started = time.time()
     task_id = executor.start(
-        agent=worker, description="处理数据",
+        worker_factory=lambda: worker, description="处理数据",
         session_id="s1", user_id="u1",
     )
     assert task_id.startswith("bg-")
@@ -160,7 +160,7 @@ def test_approval_interrupt_pauses_then_resume_completes() -> None:
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
 
     task_id = executor.start(
-        agent=worker, description="需审批的任务",
+        worker_factory=lambda: worker, description="需审批的任务",
         session_id="s1", user_id="u1",
     )
     task = _wait_terminal(executor, task_id)
@@ -182,7 +182,7 @@ def test_reject_decision_resumes_and_completes() -> None:
         interrupt_on={"dangerous": True},
     )
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
 
@@ -194,7 +194,7 @@ def test_reject_decision_resumes_and_completes() -> None:
 def test_submit_decisions_rejects_when_not_awaiting() -> None:
     worker = _build_worker([AIMessage(content="直接完成")])
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     _wait_terminal(executor, task_id)
 
     with pytest.raises(ValueError, match="不存在|不在待审批"):
@@ -206,12 +206,12 @@ def test_concurrency_cap_per_session() -> None:
         [_slow_call(f"s{i}", f"c{i}") for i in range(20)], slow=True,
     )  # 慢工具多轮，保持运行
     executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
-    executor.start(agent=worker, description="t1", session_id="s1", user_id="u1")
+    executor.start(worker_factory=lambda: worker, description="t1", session_id="s1", user_id="u1")
     time.sleep(0.3)  # 让第一个进入 running
     with pytest.raises(ValueError, match="上限"):
-        executor.start(agent=worker, description="t2", session_id="s1", user_id="u1")
+        executor.start(worker_factory=lambda: worker, description="t2", session_id="s1", user_id="u1")
     # 其他会话不受影响
-    executor.start(agent=worker, description="t3", session_id="s2", user_id="u1")
+    executor.start(worker_factory=lambda: worker, description="t3", session_id="s2", user_id="u1")
 
 
 def test_cancel_running_task() -> None:
@@ -219,7 +219,7 @@ def test_cancel_running_task() -> None:
         [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
     )
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     time.sleep(0.2)
     snapshot = executor.cancel(task_id)
     assert snapshot["status"] in (BgTaskStatus.CANCELLED.value, BgTaskStatus.COMPLETED.value)
@@ -228,8 +228,8 @@ def test_cancel_running_task() -> None:
 def test_list_and_pending_approvals_scoped_by_session() -> None:
     worker = _build_worker([AIMessage(content="ok")])
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    executor.start(agent=worker, description="a", session_id="s1", user_id="u1")
-    executor.start(agent=worker, description="b", session_id="s2", user_id="u1")
+    executor.start(worker_factory=lambda: worker, description="a", session_id="s1", user_id="u1")
+    executor.start(worker_factory=lambda: worker, description="b", session_id="s2", user_id="u1")
     ids = [t["task_id"] for t in executor.list_for_session("s1")]
     assert len(ids) == 1
     assert executor.pending_approvals("s1") == []
@@ -251,7 +251,7 @@ def test_send_message_injects_on_next_model_call() -> None:
     # 挂 steering：模拟真实 worker 装配
     # （_build_worker 不含 steering，此处直接验证 middleware 契约）
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
 
     executor.send_message(task_id, "聚焦中文源")
     # 队列已入队；drain 模拟下一次模型调用边界
@@ -266,7 +266,7 @@ def test_send_message_injects_on_next_model_call() -> None:
 def test_send_message_rejects_terminal_task() -> None:
     worker = _build_worker([AIMessage(content="直接完成")])
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     _wait_terminal(executor, task_id)
 
     with pytest.raises(ValueError, match="已结束"):
@@ -282,7 +282,7 @@ def test_send_message_during_awaiting_approval_delivered_on_resume() -> None:
         interrupt_on={"dangerous": True},
     )
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
 
@@ -301,7 +301,7 @@ def test_terminal_records_session_notification_once() -> None:
 
     worker = _build_worker([AIMessage(content="调研完成：三个要点…")])
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(agent=worker, description="x", session_id="s-notif", user_id="u1")
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s-notif", user_id="u1")
     _wait_terminal(executor, task_id)
 
     notices = notifications.drain("s-notif")
@@ -363,3 +363,25 @@ def test_steering_middleware_injects_and_consumes() -> None:
         request, lambda req: seen.append(req.messages) or "ok",  # type: ignore[arg-type,return-value]
     )
     assert [m.content for m in seen[0]] == ["原始任务"]
+
+
+def test_registry_ops_callable_via_class_name() -> None:
+    """BgTaskService 经类名调用注册表操作（曾经因实例方法被类调而 TypeError）。"""
+    worker = _build_worker([AIMessage(content="直接完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="x",
+        session_id="s-cls", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+
+    # 类名直调（Service 层的调用方式）
+    assert BackgroundSubagentExecutor.get(task_id)["task_id"] == task_id
+    assert any(t["task_id"] == task_id for t in BackgroundSubagentExecutor.list_for_session("s-cls"))
+    assert BackgroundSubagentExecutor.pending_approvals("s-cls") == []
+    snapshot = BackgroundSubagentExecutor.cancel(task_id)
+    assert snapshot["status"] in (task["status"], BgTaskStatus.CANCELLED.value)
+    with pytest.raises(ValueError, match="不存在"):
+        BackgroundSubagentExecutor.submit_decisions("bg-none", [{"type": "approve"}])
+    with pytest.raises(ValueError, match="已结束"):
+        BackgroundSubagentExecutor.send_message(task_id, "late")
