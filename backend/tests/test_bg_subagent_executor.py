@@ -385,3 +385,20 @@ def test_registry_ops_callable_via_class_name() -> None:
         BackgroundSubagentExecutor.submit_decisions("bg-none", [{"type": "approve"}])
     with pytest.raises(ValueError, match="已结束"):
         BackgroundSubagentExecutor.send_message(task_id, "late")
+
+
+def test_completed_task_records_step_progress() -> None:
+    """执行过程摘要被捕获：工具调用名 + 工具结果 + 文本，经 to_dict 暴露。"""
+    worker = _build_worker([_call("data"), AIMessage(content="任务完成：已处理")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="处理数据",
+        session_id="s-prog", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+    kinds = [(p["kind"], p.get("name") or p.get("preview")) for p in task["progress"]]
+    assert any(k == "tool_call" and n == "dangerous" for k, n in kinds)
+    assert any(k == "tool_result" and n == "dangerous" for k, n in kinds)
+    assert any(k == "text" and "任务完成" in str(n) for k, n in kinds)

@@ -19,6 +19,7 @@ HITL 工具审批：子 Agent 带 checkpointer + interrupt_on 编译，遇审批
 from __future__ import annotations
 
 import asyncio
+import collections
 import inspect
 import threading
 import time
@@ -28,7 +29,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from noesis.agents.subagents import notifications, steering
@@ -71,6 +72,11 @@ class BackgroundTask:
     interrupt: Optional[dict[str, Any]] = None
     started_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
+    # 执行过程摘要（有界，前端任务卡展开显示）；lock 保护跨线程读写
+    progress: "collections.deque[dict[str, Any]]" = field(
+        default_factory=lambda: collections.deque(maxlen=MAX_PROGRESS_ENTRIES),
+    )
+    progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +90,7 @@ class BackgroundTask:
             "interrupt": self.interrupt,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "progress": list(self.progress),
         }
 
 
@@ -166,6 +173,9 @@ _TASKS_LOCK = threading.Lock()
 MAX_CONCURRENT_PER_SESSION = 3
 TASK_TIMEOUT_SECONDS = 900.0
 HITL_TIMEOUT_SECONDS = 86400.0
+# 执行过程摘要上限（超出丢最旧）
+MAX_PROGRESS_ENTRIES = 50
+_PROGRESS_PREVIEW_CHARS = 120
 
 
 def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
@@ -181,6 +191,50 @@ def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
     if not iid:
         return None
     return {"interrupt_id": str(iid), **payload}
+
+
+def _progress_append(task: BackgroundTask, entry: dict[str, Any]) -> None:
+    with task.progress_lock:
+        task.progress.append(entry)
+
+
+def _record_step_progress(task: BackgroundTask, final_state: Any, seen_ids: set) -> None:
+    """从 values 快照 diff 出新增消息，记录轻量步骤摘要。
+
+    deer-flow capture_new_step_messages 的简化版：按消息 id 去重，
+    AIMessage 记文本片段/工具调用名，ToolMessage 记名称与状态。
+    """
+    messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
+    for message in messages:
+        mid = getattr(message, "id", None) or id(message)
+        if mid in seen_ids:
+            continue
+        seen_ids.add(mid)
+        name = getattr(message, "name", None) or ""
+        if isinstance(message, AIMessage):
+            calls = getattr(message, "tool_calls", None) or []
+            for call in calls:
+                _progress_append(task, {
+                    "kind": "tool_call",
+                    "name": str(call.get("name") or ""),
+                    "ts": time.time(),
+                })
+            text = _final_answer_text({"messages": [message]})
+            if text:
+                _progress_append(task, {
+                    "kind": "text",
+                    "preview": text[:_PROGRESS_PREVIEW_CHARS],
+                    "ts": time.time(),
+                })
+        elif isinstance(message, ToolMessage):
+            content = message.content if isinstance(message.content, str) else str(message.content)
+            _progress_append(task, {
+                "kind": "tool_result",
+                "name": str(name),
+                "status": str(getattr(message, "status", None) or "success"),
+                "preview": content[:_PROGRESS_PREVIEW_CHARS],
+                "ts": time.time(),
+            })
 
 
 def _notify_terminal(task: BackgroundTask) -> None:
@@ -384,11 +438,17 @@ async def _arun(entry: _TaskEntry, *, resume_command: Optional[Command]) -> None
     task = entry.task
     try:
         agent = await _ensure_agent(entry)
-        if resume_command is None:
-            state: Any = {"messages": [HumanMessage(content=task.description)]}
-            final = await agent.ainvoke(state, _config(entry))
-        else:
-            final = await agent.ainvoke(resume_command, _config(entry))
+        seen_ids: set = set()
+        final: Any = None
+        # astream(values)：既拿到终态，又能逐步 diff 执行过程摘要
+        source = (
+            {"messages": [HumanMessage(content=task.description)]}
+            if resume_command is None
+            else resume_command
+        )
+        async for chunk in agent.astream(source, _config(entry), stream_mode="values"):
+            final = chunk
+            _record_step_progress(task, chunk, seen_ids)
         interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
         payload = _extract_interrupt_payload(interrupts) if interrupts else None
         if payload is not None:
@@ -404,6 +464,10 @@ async def _arun(entry: _TaskEntry, *, resume_command: Optional[Command]) -> None
         task.result = _final_answer_text(final)
         task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
+        logger.info(
+            "bg subagent completed task_id={} steps={} duration={:.1f}s",
+            task.task_id, len(task.progress), task.completed_at - task.started_at,
+        )
         _notify_terminal(task)
     except asyncio.CancelledError:
         if not task.status.is_terminal:

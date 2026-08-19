@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { BgTask } from '@/api/chat'
 import { NButton, NTag } from 'naive-ui'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps<{
   tasks: BgTask[]
@@ -44,6 +44,40 @@ function actionPreview(task: BgTask): string {
   const args = first.args ? JSON.stringify(first.args) : ''
   return `${first.name ?? 'tool'} ${args}`
 }
+
+// 执行过程展开状态（按 task_id）
+const expanded = ref(new Set<string>())
+
+function toggleExpand(task: BgTask): void {
+  const next = new Set(expanded.value)
+  if (next.has(task.task_id)) {
+    next.delete(task.task_id)
+  } else {
+    next.add(task.task_id)
+  }
+  expanded.value = next
+}
+
+function stepIcon(kind: string): string {
+  if (kind === 'tool_call') {
+    return '🔧'
+  }
+  if (kind === 'tool_result') {
+    return '↩'
+  }
+  return '💬'
+}
+
+function stepText(step: NonNullable<BgTask['progress']>[number]): string {
+  if (step.kind === 'text') {
+    return step.preview || ''
+  }
+  if (step.kind === 'tool_result') {
+    const status = step.status === 'error' ? ' ✗' : ''
+    return `${step.name || 'tool'}${status} ${step.preview || ''}`.trim()
+  }
+  return step.name || 'tool'
+}
 </script>
 
 <template>
@@ -74,16 +108,45 @@ function actionPreview(task: BgTask): string {
     </div>
 
     <div v-if="running.length || recent.length" class="bg-task-panel__list">
-      <div v-for="task in [...running, ...recent]" :key="task.task_id" class="bg-task-panel__row">
-        <NTag size="small" :type="statusLabel[task.status]?.type ?? 'default'">
-          {{ statusLabel[task.status]?.label ?? task.status }}
-        </NTag>
-        <span class="bg-task-panel__desc">{{ task.description }}</span>
-        <span v-if="task.status === 'running'" class="bg-task-panel__cancel">
-          <NButton size="tiny" quaternary type="error" @click="emit('cancel', task)">
-            取消
-          </NButton>
-        </span>
+      <div
+        v-for="task in [...running, ...recent]"
+        :key="task.task_id"
+        class="bg-task-panel__item"
+      >
+        <div class="bg-task-panel__row" @click="toggleExpand(task)">
+          <NTag size="small" :type="statusLabel[task.status]?.type ?? 'default'">
+            {{ statusLabel[task.status]?.label ?? task.status }}
+          </NTag>
+          <span class="bg-task-panel__desc">{{ task.description }}</span>
+          <span
+            v-if="task.progress?.length"
+            class="bg-task-panel__steps-hint"
+          >
+            {{ expanded.has(task.task_id) ? '收起' : `${task.progress.length} 步` }}
+          </span>
+          <span v-if="task.status === 'running'" class="bg-task-panel__cancel" @click.stop>
+            <NButton size="tiny" quaternary type="error" @click="emit('cancel', task)">
+              取消
+            </NButton>
+          </span>
+        </div>
+        <div v-if="expanded.has(task.task_id) && task.progress?.length" class="bg-task-panel__steps">
+          <div
+            v-for="(step, idx) in task.progress"
+            :key="idx"
+            class="bg-task-panel__step"
+            :class="{ 'bg-task-panel__step--error': step.kind === 'tool_result' && step.status === 'error' }"
+          >
+            <span class="bg-task-panel__step-icon">{{ stepIcon(step.kind) }}</span>
+            <span class="bg-task-panel__step-text">{{ stepText(step) }}</span>
+          </div>
+        </div>
+        <div
+          v-else-if="expanded.has(task.task_id)"
+          class="bg-task-panel__steps bg-task-panel__steps--empty"
+        >
+          暂无执行过程
+        </div>
       </div>
     </div>
   </section>
@@ -144,10 +207,66 @@ function actionPreview(task: BgTask): string {
   gap: 4px;
 }
 
+.bg-task-panel__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .bg-task-panel__row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 24px;
+  cursor: pointer;
+  border-radius: var(--noesis-radius-sm);
+}
+
+.bg-task-panel__row:hover {
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
+.bg-task-panel__steps-hint {
+  flex-shrink: 0;
+  color: var(--noesis-color-text-hint, #94a3b8);
+  font-size: 11px;
+}
+
+.bg-task-panel__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 6px 12px;
+  border-left: 2px solid var(--noesis-color-border-subtle);
+  margin-left: 14px;
+}
+
+.bg-task-panel__steps--empty {
+  color: var(--noesis-color-text-hint, #94a3b8);
+  font-size: 12px;
+}
+
+.bg-task-panel__step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bg-task-panel__step--error .bg-task-panel__step-text {
+  color: var(--noesis-color-error, #e5484d);
+}
+
+.bg-task-panel__step-icon {
+  flex-shrink: 0;
+}
+
+.bg-task-panel__step-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--noesis-color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

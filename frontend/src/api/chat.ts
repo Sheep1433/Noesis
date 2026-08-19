@@ -408,6 +408,13 @@ export interface BgTask {
   } | null
   started_at?: number
   completed_at?: number | null
+  progress?: Array<{
+    kind: 'tool_call' | 'tool_result' | 'text'
+    name?: string
+    status?: string
+    preview?: string
+    ts?: number
+  }>
 }
 
 export async function listBgTasks(sessionId: string): Promise<{ tasks: BgTask[], pending_approvals: BgTask[] }> {

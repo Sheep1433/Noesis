@@ -40,17 +40,6 @@ def _canonical_url(value: str) -> str:
 
 
 def _normalize_web_result(item: dict) -> dict:
-    # TEMP-DEBUG: 排查 web_search 结果被全量丢弃的原因
-    try:
-        _raw_url = str(item.get("url") or "")
-        logger.info(
-            "[TEMP-DEBUG] web_search 原始结果 url={!r} title={!r} keys={}",
-            _raw_url,
-            str(item.get("title") or "")[:80],
-            sorted(item.keys()),
-        )
-    except Exception as _dbg:
-        logger.info("[TEMP-DEBUG] 打印 web_search 原始结果失败: {}", _dbg)
     url = _canonical_url(str(item.get("url") or ""))
     title = str(item.get("title") or url)
     excerpt = str(item.get("snippet") or item.get("excerpt") or "").strip() or title
