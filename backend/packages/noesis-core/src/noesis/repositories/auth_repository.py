@@ -28,6 +28,7 @@ def session_from_orm(row: TUserSession) -> AuthSession:
         user_id=row.user_id,
         session_digest=row.session_digest,
         csrf_digest=row.csrf_digest,
+        prev_csrf_digest=row.prev_csrf_digest,
         created_at=row.created_at,
         last_seen_at=row.last_seen_at,
         idle_expires_at=row.idle_expires_at,
@@ -124,6 +125,7 @@ class SqlAlchemySessionRepository:
             .where(TUserSession.id == session.id)
             .values(
                 csrf_digest=session.csrf_digest,
+                prev_csrf_digest=session.prev_csrf_digest,
                 last_seen_at=session.last_seen_at,
                 idle_expires_at=session.idle_expires_at,
                 revoked_at=session.revoked_at,

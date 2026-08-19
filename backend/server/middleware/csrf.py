@@ -5,6 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from server.response import ResponseUtil
+from noesis.runtime.logging import logger
 from noesis.storage.postgres.manager import pg_manager
 from noesis.config.env import SessionConfig
 from noesis.services.auth.sessions import SessionService
@@ -33,5 +34,12 @@ class CsrfMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
             token = request.headers.get("X-CSRF-Token")
             if not SessionService.verify_csrf(session, token):
+                # 403 属业务拒绝：不抛异常也应有迹可查，否则多窗口 token 失效无从排查
+                logger.warning(
+                    "csrf_rejected path={} session_id={} user_id={}",
+                    request.url.path,
+                    session.id,
+                    session.user_id,
+                )
                 return ResponseUtil.forbidden(msg="会话验证失败，请刷新页面后重试")
         return await call_next(request)

@@ -107,6 +107,9 @@ class SessionService:
     @classmethod
     async def rotate_csrf(cls, db: AsyncSession, session: AuthSession) -> str:
         token = secrets.token_urlsafe(32)
+        # 旧摘要保留一代：其它已加载窗口（跨标签/跨浏览器）持有的旧 token
+        # 在本次轮换后仍有效，避免新窗口打开导致旧窗口全部 403。
+        session.prev_csrf_digest = session.csrf_digest
         session.csrf_digest = digest_secret(token)
         await cls._repository(db).save(session)
         await db.commit()

@@ -32,3 +32,4 @@ class AuthSession:
     device_name: str | None = None
     user_agent_digest: str | None = None
     last_ip: str | None = None
+    prev_csrf_digest: str | None = None

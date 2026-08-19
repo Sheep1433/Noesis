@@ -47,7 +47,13 @@ def remaining_seconds(session: AuthSession, now_ms: int) -> int:
 
 
 def verify_csrf(session: AuthSession, token: str | None) -> bool:
-    return bool(token) and hmac.compare_digest(session.csrf_digest, digest_secret(token))
+    if not token:
+        return False
+    digest = digest_secret(token)
+    # 当前或上一代摘要均可：/auth/session 轮换后，已加载窗口仍持旧 token
+    if hmac.compare_digest(session.csrf_digest, digest):
+        return True
+    return bool(session.prev_csrf_digest) and hmac.compare_digest(session.prev_csrf_digest, digest)
 
 
 def verify_invite_digest(stored_digest: str | None, code: str) -> bool:

@@ -34,6 +34,7 @@ class TUserSession(Base):
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True, comment="用户 ID")
     session_digest: Mapped[str] = mapped_column(VARCHAR(64), unique=True, nullable=False, comment="Session SHA-256 摘要")
     csrf_digest: Mapped[str] = mapped_column(VARCHAR(64), nullable=False, comment="CSRF Token SHA-256 摘要")
+    prev_csrf_digest: Mapped[Optional[str]] = mapped_column(VARCHAR(64), nullable=True, comment="上一次轮换前的 CSRF Token 摘要（宽容旧窗口一代 token）")
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="创建时间（毫秒）")
     last_seen_at: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="最近活跃时间（毫秒）")
     idle_expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="空闲过期时间（毫秒）")

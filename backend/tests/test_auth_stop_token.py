@@ -25,6 +25,25 @@ def test_csrf_token_matches_digest_only():
     assert not SessionService.verify_csrf(session, None)
 
 
+@pytest.mark.asyncio
+async def test_csrf_rotation_keeps_previous_token_valid_one_generation():
+    """多窗口回归：新窗口打开触发 /auth/session 轮换后，旧窗口的 token 仍可用一代。"""
+    session = _session()
+    old_token = "csrf"
+
+    with patch.object(SessionService, "_repository") as repo_cls:
+        repo_cls.return_value = MagicMock(save=AsyncMock())
+        db = MagicMock()
+        db.commit = AsyncMock()
+        new_token = await SessionService.rotate_csrf(db, session)
+
+    assert SessionService.verify_csrf(session, new_token)
+    # 旧 token（其它已加载窗口持有）在本次轮换后仍有效
+    assert SessionService.verify_csrf(session, old_token)
+    # 与两代摘要均无关的值仍拒绝
+    assert not SessionService.verify_csrf(session, "other")
+
+
 def test_raw_session_id_is_not_model_field():
     session = _session()
     assert "raw_session_id" not in session.__dict__
