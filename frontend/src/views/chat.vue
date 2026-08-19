@@ -42,7 +42,7 @@ import { formatDuration, formatElapsedSeconds, formatHHmm } from '@/utils/format
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
-import { formatStatsLine } from '@/utils/statsFormat'
+import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import {
@@ -959,6 +959,26 @@ let lastRunStatusNotice = ''
 const reconnectAvailable = ref(false)
 const retryingLabel = ref('')
 const sessionStats = ref<SessionStats | null>(null)
+/** 统计条展示模板（/statsline 配置，空 = 默认 pipe 格式）。 */
+const statsLineTemplate = useLocalStorage('noesis:statsline-template', '')
+const statslineModal = reactive({
+  show: false,
+  draft: '',
+})
+
+/** /statsline 弹窗：保存模板（空 = 默认格式）。 */
+function saveStatslineTemplate() {
+  statsLineTemplate.value = statslineModal.draft.trim()
+  statslineModal.show = false
+  window.$ModalMessage.success(
+    statsLineTemplate.value ? '统计条模板已保存' : '已恢复默认统计条',
+    { duration: 1500 },
+  )
+}
+
+function resetStatslineTemplate() {
+  statslineModal.draft = ''
+}
 /** 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。 */
 function rebuildSessionStatsFromHistory() {
   const totals: SessionStats = {
@@ -1576,6 +1596,15 @@ function buildStreamExtra(file_dict: Record<string, string> | undefined): Record
 
 // 提交对话
 const handleCreateStylized = async (send_text = '', file_key = []) => {
+  // /statsline：前端拦截，打开统计条模板编辑弹窗（不发送、不落库）
+  const directInput = inputTextString.value.trim()
+  if (!send_text && directInput === '/statsline') {
+    inputTextString.value = ''
+    statslineModal.draft = statsLineTemplate.value
+    statslineModal.show = true
+    return
+  }
+
   // 设置背景颜色
   backgroundColorVariable.value = cssVar(themeCssVar.bg)
 
@@ -3061,12 +3090,12 @@ function onComposerPaste(e: ClipboardEvent) {
                 </div>
               </div>
               <div
-                v-if="sessionStats && formatStatsLine(sessionStats)"
+                v-if="sessionStats && formatStatsLine(sessionStats, statsLineTemplate)"
                 class="session-stats-line"
                 role="status"
                 aria-live="polite"
               >
-                {{ formatStatsLine(sessionStats) }}
+                {{ formatStatsLine(sessionStats, statsLineTemplate) }}
               </div>
             </div>
           </div>
@@ -3189,6 +3218,42 @@ function onComposerPaste(e: ClipboardEvent) {
         <pre class="command-result-text">{{ commandResultModal.text }}</pre>
       </n-spin>
     </n-modal>
+    <n-modal
+      v-model:show="statslineModal.show"
+      preset="card"
+      title="/statsline 统计条模板"
+      style="max-width: 520px"
+      :bordered="false"
+    >
+      <div class="statsline-editor">
+        <n-input
+          v-model:value="statslineModal.draft"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 4 }"
+          :placeholder="`${'{'}turns} 轮 · {'{'}steps} 步 | LLM {'{'}llm} | {'{'}cache} | {'{'}in} → {'{'}out`"
+        />
+        <div class="statsline-editor__vars">
+          <div v-for="v in STATS_TEMPLATE_VARIABLES" :key="v.token" class="statsline-editor__var">
+            <code>{{ v.token }}</code>
+            <span>{{ v.label }}</span>
+          </div>
+        </div>
+        <div v-if="sessionStats" class="statsline-editor__preview">
+          预览：{{ formatStatsLine(sessionStats, statslineModal.draft) || '（无数据）' }}
+        </div>
+        <div class="statsline-editor__actions">
+          <n-button size="small" quaternary @click="resetStatslineTemplate">
+            恢复默认
+          </n-button>
+          <n-button size="small" secondary @click="statslineModal.show = false">
+            取消
+          </n-button>
+          <n-button size="small" type="primary" @click="saveStatslineTemplate">
+            保存
+          </n-button>
+        </div>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -3204,6 +3269,47 @@ function onComposerPaste(e: ClipboardEvent) {
   font-size: 13px;
   line-height: 1.5;
   color: var(--noesis-text, #222);
+}
+
+.statsline-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  &__vars {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px 16px;
+  }
+
+  &__var {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--noesis-color-text-secondary);
+
+    code {
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--noesis-color-bg-muted);
+      font-size: 11px;
+    }
+  }
+
+  &__preview {
+    padding: 8px 10px;
+    border-radius: var(--noesis-radius-md);
+    background: var(--noesis-color-bg-muted);
+    font-size: 12px;
+    color: var(--noesis-color-text-secondary);
+  }
+
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
 }
 
 .assistant-tool-failure-blocker {
@@ -3689,7 +3795,10 @@ function onComposerPaste(e: ClipboardEvent) {
   display: flex;
   align-items: center;
   min-height: 24px;
-  padding: 0 2px 6px;
+  position: relative;
+  z-index: 1;
+  margin-bottom: 6px;
+  padding: 0 2px;
   font-size: 13px;
   line-height: 1.4;
   color: var(--noesis-color-text-hint);

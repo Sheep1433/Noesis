@@ -51,6 +51,8 @@ class RunProjection:
         self.builder = AssistantMessageBuilder(
             session_id=self.session_id, message_id=self.assistant_message_id
         )
+        # 本 run 的 usage 聚合（RunCompleted.usage 捕获）；每 run 独立，不随 clone/snapshot 持久化
+        self.run_usage: dict[str, Any] | None = None
 
     def clone(self) -> "RunProjection":
         """复制 projection 数据，不复制 builder 内部的线程锁。"""
@@ -218,6 +220,10 @@ class RunProjection:
             self.status = RunStatus.COMPLETED
             self.finish_reason = event.finish_reason
             self.pending_hitl = None
+            # 本条 assistant 消息的 usage 聚合（finish 事件携带），
+            # 终态落库写入 message.extra.usage 供历史会话回放统计。
+            if event.usage and event.usage.get("steps"):
+                self.run_usage = dict(event.usage)
         elif isinstance(event, RunAborted):
             self.builder.reconcile_nonterminal_tools(ToolState.CANCELLED, "本次工具执行已停止")
             self.status = RunStatus.PARTIAL

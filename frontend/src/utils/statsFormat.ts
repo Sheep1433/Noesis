@@ -31,9 +31,14 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(whole / 60)}m${whole % 60}s`
 }
 
-export function formatStatsLine(stats: SessionStats | null): string {
+export function formatStatsLine(stats: SessionStats | null, template?: string): string {
   if (!stats || stats.steps === 0) {
     return ''
+  }
+
+  // 自定义模板（/statsline 配置）：{turns} {steps} {llm} {cache} {in} {out} 占位符
+  if (template && template.trim()) {
+    return applyStatsTemplate(template, stats)
   }
 
   const groups: string[] = []
@@ -61,4 +66,28 @@ export function formatStatsLine(stats: SessionStats | null): string {
   }
 
   return groups.join(' | ')
+}
+
+/** 模板可用占位符（/statsline 弹窗展示用）。 */
+export const STATS_TEMPLATE_VARIABLES: Array<{ token: string, label: string }> = [
+  { token: '{turns}', label: '轮数' },
+  { token: '{steps}', label: '步数' },
+  { token: '{llm}', label: 'LLM 耗时（如 9.2s / 2m42s）' },
+  { token: '{cache}', label: '缓存命中百分比' },
+  { token: '{in}', label: '输入 token（紧凑格式 13.1K）' },
+  { token: '{out}', label: '输出 token（紧凑格式 755）' },
+]
+
+export function applyStatsTemplate(template: string, stats: SessionStats): string {
+  const inputTotal = stats.input_tokens
+  const cacheHit = inputTotal > 0
+    ? Math.round(stats.cache_read_tokens / inputTotal * 100)
+    : 0
+  return template
+    .replaceAll('{turns}', String(stats.turns))
+    .replaceAll('{steps}', String(stats.steps))
+    .replaceAll('{llm}', formatDuration(stats.llm_ms))
+    .replaceAll('{cache}', `${cacheHit}%`)
+    .replaceAll('{in}', formatTokens(stats.input_tokens))
+    .replaceAll('{out}', formatTokens(stats.output_tokens))
 }

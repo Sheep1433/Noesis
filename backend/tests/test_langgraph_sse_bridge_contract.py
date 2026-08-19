@@ -299,7 +299,8 @@ def test_finish_usage_and_done() -> None:
     assert finish_objs
     fin = finish_objs[-1]
     assert fin["finish_reason"] == "stop"
-    assert "usage" not in fin
+    # 上游 finish 携带的 usage 原样透传（bridge 聚合仅在缺失时注入）
+    assert fin["usage"] == {"inputTokens": 3, "outputTokens": 4}
 
 
 def test_error_event_type() -> None:

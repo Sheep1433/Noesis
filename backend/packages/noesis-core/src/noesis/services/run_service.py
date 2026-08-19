@@ -532,6 +532,7 @@ class RunService:
                 finish_reason=projection.finish_reason or "stop",
                 error_code=projection.error_code,
                 user_error_message=projection.user_error_message,
+                usage=projection.run_usage,
             )
             if won:
                 await db.commit()
@@ -615,6 +616,7 @@ class RunService:
                     ),
                     error_code=projection.error_code,
                     user_error_message=projection.user_error_message,
+                    usage=projection.run_usage,
                 )
                 if not won:
                     await db.rollback()

@@ -146,6 +146,7 @@ class AgentRunRepository:
         error_code: str | None = None,
         user_error_message: str | None = None,
         snapshot: dict | None = None,
+        usage: dict | None = None,
     ) -> bool:
         """同一事务内抢占 run 终态并更新唯一 assistant 行。调用方负责 commit。"""
         if target not in {RunStatus.COMPLETED, RunStatus.PARTIAL, RunStatus.ERROR, RunStatus.INTERRUPTED}:
@@ -168,6 +169,14 @@ class AgentRunRepository:
         if run_result.rowcount != 1:
             return False
 
+        message_extra: dict = {
+            "finish_reason": finish_reason,
+            "error_code": error_code,
+            "error": user_error_message,
+        }
+        # 本条消息的 usage 聚合（steps/llm_ms/token），供历史会话回放统计条
+        if usage and usage.get("steps"):
+            message_extra["usage"] = dict(usage)
         message_result = await self.db.execute(
             update(TChatMessage)
             .where(
@@ -178,11 +187,7 @@ class AgentRunRepository:
             .values(
                 status=assistant_status,
                 content=content,
-                extra={
-                    "finish_reason": finish_reason,
-                    "error_code": error_code,
-                    "error": user_error_message,
-                },
+                extra=message_extra,
             )
         )
         if message_result.rowcount != 1:

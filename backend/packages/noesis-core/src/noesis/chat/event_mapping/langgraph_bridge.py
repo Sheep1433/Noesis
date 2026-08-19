@@ -324,6 +324,10 @@ class LangGraphSseBridge:
         if builder is not None and ctx is not None:
             self._flush_text_buffer(builder, ctx)
         self.last_finish_reason = str(payload.get("finish_reason") or "stop")
+        # 本条 assistant 消息的 usage 聚合随 finish 下发：projection 捕获后经
+        # 终态落库写入 message.extra.usage，供历史会话回放统计条。
+        if self.message_usage.get("steps") and not isinstance(payload.get("usage"), dict):
+            payload["usage"] = dict(self.message_usage)
         out.append(_format_sse("finish", payload))
         self._finish_emitted = True
 
@@ -549,7 +553,6 @@ class LangGraphSseBridge:
             payload = dict(item)
             payload.setdefault("type", "finish")
             payload.setdefault("message_id", self.assistant_message_id)
-            payload.pop("usage", None)
             self._emit_finish(out, payload, builder=builder, ctx=ctx)
             return
 
