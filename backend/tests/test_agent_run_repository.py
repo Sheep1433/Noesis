@@ -10,8 +10,15 @@ from noesis.repositories.agent_run_repository import AgentRunRepository
 @pytest.mark.asyncio
 async def test_finalize_only_accepts_first_terminal_writer() -> None:
     db = MagicMock()
+    # execute 序列：①首个 finalize 的 run UPDATE（rowcount=1）
+    # ②旧 extra SELECT ③assistant UPDATE（rowcount=1）；④第二个 finalize 的 run UPDATE（rowcount=0）
     db.execute = AsyncMock(
-        side_effect=[SimpleNamespace(rowcount=1), SimpleNamespace(rowcount=1), SimpleNamespace(rowcount=0)]
+        side_effect=[
+            SimpleNamespace(rowcount=1),
+            SimpleNamespace(rowcount=1, fetchone=lambda: None),
+            SimpleNamespace(rowcount=1),
+            SimpleNamespace(rowcount=0),
+        ]
     )
     repository = AgentRunRepository(db)
 
@@ -36,14 +43,19 @@ async def test_finalize_only_accepts_first_terminal_writer() -> None:
 
     assert first is True
     assert second is False
-    assert db.execute.await_count == 3
+    assert db.execute.await_count == 4
 
 
 @pytest.mark.asyncio
 async def test_finalize_requires_assistant_compare_and_set() -> None:
     db = MagicMock()
+    # execute 序列：run UPDATE（rowcount=1）→ 旧 extra SELECT → assistant UPDATE（rowcount=0）
     db.execute = AsyncMock(
-        side_effect=[SimpleNamespace(rowcount=1), SimpleNamespace(rowcount=0)]
+        side_effect=[
+            SimpleNamespace(rowcount=1),
+            SimpleNamespace(rowcount=1, fetchone=lambda: None),
+            SimpleNamespace(rowcount=0),
+        ]
     )
     repository = AgentRunRepository(db)
 

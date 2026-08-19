@@ -169,14 +169,34 @@ class AgentRunRepository:
         if run_result.rowcount != 1:
             return False
 
+        # 合并语义（与 chat_service.update_assistant_message 对齐）：旧键保留、
+        # 新键覆盖；usage 累加——HITL resume 同一 assistant 消息跨多个 run，
+        # 各 run 的 projection 只含本段 usage，终态必须与已落库 usage 累加。
+        message_id_row = await self.db.execute(
+            select(TChatMessage.extra).where(
+                TChatMessage.id
+                == select(TAgentRun.assistant_message_id).where(TAgentRun.id == run_id).scalar_subquery(),
+                TChatMessage.status == "streaming",
+            )
+        )
+        old_extra_row = message_id_row.fetchone()
+        old_extra = dict(old_extra_row[0]) if old_extra_row and isinstance(old_extra_row[0], dict) else {}
+
         message_extra: dict = {
+            **old_extra,
             "finish_reason": finish_reason,
             "error_code": error_code,
             "error": user_error_message,
         }
-        # 本条消息的 usage 聚合（steps/llm_ms/token），供历史会话回放统计条
         if usage and usage.get("steps"):
-            message_extra["usage"] = dict(usage)
+            old_usage = old_extra.get("usage")
+            if isinstance(old_usage, dict):
+                message_extra["usage"] = {
+                    key: float(old_usage.get(key) or 0) + float(usage.get(key) or 0)
+                    for key in usage
+                }
+            else:
+                message_extra["usage"] = dict(usage)
         message_result = await self.db.execute(
             update(TChatMessage)
             .where(
