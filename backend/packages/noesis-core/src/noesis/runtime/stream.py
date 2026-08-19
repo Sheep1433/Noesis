@@ -5,6 +5,8 @@ Platform delivery and evals both consume this; the core runtime owns HITL shapin
 
 from __future__ import annotations
 
+import time
+
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
@@ -95,10 +97,12 @@ async def stream_agent_events(
         agent_config["callbacks"] = [callbacks]
 
     try:
+        _last_event_at = time.monotonic()
         async for event in agent.astream_events(
             stream_input,
             config=agent_config,
         ):
+            _last_event_at = time.monotonic()
             if is_cancelled and is_cancelled():
                 logger.info(
                     f"astream_events 因 cancel_task 中断 task_id={task_id} message_id={message_id}"
@@ -130,6 +134,15 @@ async def stream_agent_events(
             yield event
 
         if not hitl_pending:
+            # astream_events 耗尽耗时（最后一个事件 → 循环退出）：图结束阶段的
+            # 终态 checkpoint 写入 / middleware 收尾钩子都在这段，无事件帧可观察。
+            # 慢于此阈值说明收尾被拖长（对比 SSE 尾部空转现象）。
+            drain_seconds = time.monotonic() - _last_event_at
+            if drain_seconds > 1.0:
+                logger.info(
+                    f"astream_drain_slow task_id={task_id} message_id={message_id} "
+                    f"drain_seconds={drain_seconds:.2f}"
+                )
             yield {"type": "__tw_finish__", "finish_reason": "stop"}
 
     except Exception as e:
