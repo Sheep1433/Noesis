@@ -55,6 +55,15 @@ class BgTaskService:
         return snapshot
 
     @classmethod
+    def get_messages(cls, task_id: str, user_id: str) -> list[dict[str, Any]]:
+        """子会话查看：只读该任务 thread 的完整消息历史。"""
+        cls.get_task(task_id, user_id)
+        try:
+            return BackgroundSubagentExecutor.read_messages(task_id)
+        except ValueError as exc:
+            raise NotFoundException(str(exc)) from exc
+
+    @classmethod
     def send_message(cls, task_id: str, user_id: str, message: str) -> dict[str, Any]:
         cls.get_task(task_id, user_id)
         try:

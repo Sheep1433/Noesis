@@ -327,6 +327,8 @@ class SubagentsYamlSection(BaseModel):
 
     max_concurrent_per_session: int = Field(default=3, ge=1)
     task_timeout_seconds: float = Field(default=900, gt=0)
+    # 前台等待上限：超过即自动转后台（同步转异步）
+    foreground_max_wait_seconds: float = Field(default=120, gt=0)
 
 
 class MessagingYamlSection(BaseModel):

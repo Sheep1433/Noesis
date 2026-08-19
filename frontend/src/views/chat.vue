@@ -3074,6 +3074,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         :tasks="bgTasks"
                         @decide="onBgTaskDecide"
                         @cancel="onBgTaskCancel"
+                        @changed="refreshBgTasks(currentIndex)"
                       />
 
                       <ChatComposerToolbar

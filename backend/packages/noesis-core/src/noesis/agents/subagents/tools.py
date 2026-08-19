@@ -1,11 +1,14 @@
-"""后台子 Agent 的模型侧工具（start / check / cancel / list）。
+"""后台子 Agent 的模型侧工具（start / check / cancel / send / list）。
 
-工具语义对齐 deepagents AsyncSubAgentMiddleware：start 立即返回 task_id，
-模型可继续其他工作，稍后 check 收结果。session/user 在装配时闭包捕获。
+单工具同异步：``start_task`` 的 ``run_in_background``（默认 true）由模型
+按依赖选择——后台立即返回 task_id；前台等待终态并把结果作为工具返回值，
+超过 ``foreground_max_wait_seconds`` 自动转后台（同步转异步）。
+session/user 在装配时闭包捕获。
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable
 
 from langchain_core.tools import StructuredTool
@@ -14,6 +17,7 @@ from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
     BgTaskStatus,
 )
+from noesis.config.env import SubagentConfig
 from noesis.runtime.logging import logger
 
 _CHECK_PENDING_HINT = {
@@ -48,21 +52,66 @@ def build_background_task_tools(
     隔离 loop。
     """
 
-    def start_task(description: str) -> str:
+    async def astart_task(
+        description: str,
+        run_in_background: bool = True,
+        one_shot: bool = False,
+    ) -> str:
         try:
             task_id = executor.start(
                 worker_factory=worker_factory, description=description,
-                session_id=session_id, user_id=user_id,
+                session_id=session_id, user_id=user_id, one_shot=one_shot,
             )
         except ValueError as exc:
             return f"启动失败：{exc}"
-        return (
-            f"后台任务已启动：{task_id}\n"
-            "无需等待——可继续其他工作，之后用 check_task 收结果。"
-        )
+        if run_in_background:
+            return (
+                f"后台任务已启动：{task_id}\n"
+                "无需等待——可继续其他工作，之后用 check_task 收结果。"
+            )
+        # 前台等待：执行仍走后台路径，跨 loop 等待终态；
+        # shield 保证超时取消不波及底层任务（自动转后台）
+        future = BackgroundSubagentExecutor.get_future(task_id)
+        if future is None:
+            return f"后台任务已启动：{task_id}（前台等待不可用，稍后 check_task 收结果）"
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(asyncio.wrap_future(future)),
+                timeout=SubagentConfig.foreground_max_wait_seconds,
+            )
+        except asyncio.TimeoutError:
+            return (
+                f"任务运行超过 {int(SubagentConfig.foreground_max_wait_seconds)}s，已自动转为后台：{task_id}\n"
+                "可继续其他工作，之后用 check_task 收结果。"
+            )
+        task = BackgroundSubagentExecutor.get(task_id) or {"task_id": task_id, "status": "unknown"}
+        status = task.get("status")
+        if status == BgTaskStatus.COMPLETED.value:
+            return f"任务完成：\n{task.get('result') or '(无结果文本)'}"
+        if status == BgTaskStatus.AWAITING_APPROVAL.value:
+            return (
+                f"任务等待用户审批（{task_id}）。审批通过后任务继续后台运行，"
+                "稍后用 check_task 收结果。"
+            )
+        if status in (BgTaskStatus.FAILED.value, BgTaskStatus.TIMED_OUT.value):
+            return f"任务{status}：{task.get('error') or ''}"
+        return _format_task(task)
 
-    async def astart_task(description: str) -> str:
-        return start_task(description)
+    def start_task(description: str, run_in_background: bool = True, one_shot: bool = False) -> str:
+        # 同步入口：langgraph 工具实际走 coroutine；保留同步回退
+        if run_in_background:
+            try:
+                task_id = executor.start(
+                    worker_factory=worker_factory, description=description,
+                    session_id=session_id, user_id=user_id, one_shot=one_shot,
+                )
+            except ValueError as exc:
+                return f"启动失败：{exc}"
+            return (
+                f"后台任务已启动：{task_id}\n"
+                "无需等待——可继续其他工作，之后用 check_task 收结果。"
+            )
+        return "前台等待需异步执行环境；请使用 run_in_background=true。"
 
     def check_task(task_id: str) -> str:
         task = executor.get(task_id)
@@ -91,7 +140,10 @@ def build_background_task_tools(
             executor.send_message(task_id, message)
         except ValueError as exc:
             return f"发送失败：{exc}"
-        return f"调整指令已下发：{task_id}（下一次执行步骤生效）"
+        return (
+            f"消息已提交：{task_id}（作为子任务的新一轮执行，"
+            "运行中任务在当前轮结束后生效；已完成任务立即续跑）"
+        )
 
     async def asend_message(task_id: str, message: str) -> str:
         return send_message(task_id, message)
@@ -110,9 +162,12 @@ def build_background_task_tools(
         coroutine=astart_task,
         name="start_task",
         description=(
-            "启动一个后台子 Agent 执行较重的独立子任务（多轮检索/调研/长命令）。"
-            "立即返回 task_id，不阻塞当前工作；之后用 check_task 收结果。"
+            "启动一个子 Agent 执行较重的独立子任务（多轮检索/调研/长命令）。"
             "description 写清子目标、约束与期望输出格式。"
+            "run_in_background（默认 true）：立即返回 task_id，可继续其他工作，之后用 check_task 收结果；"
+            "false：前台等待结果直接返回——仅当你的下一步动作依赖该结果时使用"
+            "（超过约 2 分钟会自动转后台）。"
+            "one_shot（默认 false）：一次性任务，完成后不可再用 send_message 追加。"
         ),
     )
     check = StructuredTool.from_function(
@@ -127,13 +182,14 @@ def build_background_task_tools(
         name="cancel_task",
         description="取消一个后台任务（不再需要其结果时使用）。",
     )
-    steering_tool = StructuredTool.from_function(
+    followup_tool = StructuredTool.from_function(
         func=send_message,
         coroutine=asend_message,
         name="send_message",
         description=(
-            "向运行中的后台任务下发策略调整指令（如聚焦范围/更换方向/输出格式），"
-            "在其下一次执行步骤生效，不影响已进行中的步骤。"
+            "向子任务追加一条消息，作为它的新一轮执行（子 Agent 带全部历史接续推理）："
+            "运行中任务在当前轮结束后执行该消息；已完成任务立即续跑并更新结果。"
+            "适用于方向调整、补充要求或继续追问。一次性任务（one_shot）不支持。"
         ),
     )
     listing = StructuredTool.from_function(
@@ -143,7 +199,7 @@ def build_background_task_tools(
         description="列出当前会话所有后台任务及状态。",
     )
     logger.info("background task tools ready session_id={}", session_id)
-    return [start, check, cancel, steering_tool, listing]
+    return [start, check, cancel, followup_tool, listing]
 
 
 __all__ = ["build_background_task_tools"]

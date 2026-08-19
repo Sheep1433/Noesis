@@ -32,7 +32,7 @@ from typing import Any, Callable, Optional
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
-from noesis.agents.subagents import notifications, steering
+from noesis.agents.subagents import notifications
 from noesis.runtime.logging import logger
 
 # ---------------------------------------------------------------------------
@@ -66,6 +66,8 @@ class BackgroundTask:
     session_id: str
     user_id: str
     description: str
+    # continuable：可经 send_message 追加 turn；one_shot：只能查看，不可续
+    kind: str = "continuable"
     status: BgTaskStatus = BgTaskStatus.RUNNING
     result: Optional[str] = None
     error: Optional[str] = None
@@ -84,6 +86,7 @@ class BackgroundTask:
             "session_id": self.session_id,
             "user_id": self.user_id,
             "description": self.description,
+            "kind": self.kind,
             "status": self.status.value,
             "result": self.result,
             "error": self.error,
@@ -158,9 +161,14 @@ class _TaskEntry:
     recursion_limit: int
     timeout_seconds: float
     hitl_timeout_seconds: float
+    # followup-turn 队列：send_message 入队，当前 turn 结束后链式开新 turn
+    followups: "collections.deque[str]" = field(
+        default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
+    )
+    followup_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # factory 首次调用后在隔离 loop 内缓存编译结果（同 executor 任务复用）
     compiled_agent: Any = None
-    compiled_lock: threading.Lock = field(default_factory=threading.Lock)
+    compiled_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # 当前执行协程的 future（用于超时/取消）
     future: Optional[Future] = None
     watchdog_handle: Optional[asyncio.TimerHandle] = None
@@ -173,6 +181,8 @@ _TASKS_LOCK = threading.Lock()
 MAX_CONCURRENT_PER_SESSION = 3
 TASK_TIMEOUT_SECONDS = 900.0
 HITL_TIMEOUT_SECONDS = 86400.0
+# followup 消息上限（超出丢最旧）
+MAX_FOLLOWUPS = 10
 # 执行过程摘要上限（超出丢最旧）
 MAX_PROGRESS_ENTRIES = 50
 _PROGRESS_PREVIEW_CHARS = 120
@@ -321,12 +331,14 @@ class BackgroundSubagentExecutor:
         description: str,
         session_id: str,
         user_id: str,
+        one_shot: bool = False,
     ) -> str:
         """启动后台任务，立即返回 task_id；超并发抛 ValueError。"""
         task_id = f"bg-{uuid.uuid4()}"
         task = BackgroundTask(
             task_id=task_id, session_id=session_id, user_id=user_id,
             description=description,
+            kind="one_shot" if one_shot else "continuable",
         )
         entry = _TaskEntry(
             task=task, agent_factory=worker_factory,
@@ -360,16 +372,62 @@ class BackgroundSubagentExecutor:
 
     @staticmethod
     def send_message(task_id: str, message: str) -> dict[str, Any]:
-        """向运行中/待审批任务投递策略调整指令（下一次模型调用生效）。"""
+        """followup-turn：向子任务追加一个 turn。
+
+        - running / awaiting_approval：入队，当前 turn 结束后链式开新 turn
+        - completed：冷恢复——同 thread 开新 turn，任务回到 running
+        - one_shot / failed / timed_out / cancelled：拒绝
+        """
+        text = message.strip()
+        if not text:
+            raise ValueError("消息不能为空")
         with _TASKS_LOCK:
             entry = _TASKS.get(task_id)
             if entry is None:
                 raise ValueError(f"后台任务不存在: {task_id}")
-            if entry.task.status.is_terminal:
-                raise ValueError(f"任务已结束（{entry.task.status.value}），无法再调整")
-            snapshot = entry.task.to_dict()
-        steering.put(task_id, message)
-        return snapshot
+            task = entry.task
+            if task.kind == "one_shot":
+                raise ValueError("该任务为一次性任务，不支持追加消息")
+            status = task.status
+            # completed → 冷恢复：同 thread 开新 turn（followup 队列一并排入）
+            if status == BgTaskStatus.COMPLETED:
+                task.status = BgTaskStatus.RUNNING
+                task.result = None
+                task.completed_at = None
+                loop = _ensure_loop()
+                entry.future = asyncio.run_coroutine_threadsafe(
+                    _arun(
+                        entry,
+                        initial_source={"messages": [HumanMessage(content=text)]},
+                    ), loop,
+                )
+                _arm_watchdog(entry)
+                return task.to_dict()
+            if status.is_terminal:
+                raise ValueError(f"任务已结束（{status.value}），无法追加消息")
+            with entry.followup_lock:
+                entry.followups.append(text)
+            return task.to_dict()
+
+    @staticmethod
+    def pop_followups(entry: _TaskEntry) -> list[str]:
+        """取出待续 turn 消息（链式调度点消费）。"""
+        with entry.followup_lock:
+            messages = list(entry.followups)
+            entry.followups.clear()
+            return messages
+
+    @staticmethod
+    def read_messages(task_id: str) -> list[dict[str, Any]]:
+        """子会话查看：只读该任务 thread 的消息历史。"""
+        return read_thread_messages(task_id)
+
+    @staticmethod
+    def get_future(task_id: str) -> Optional[Future]:
+        """取当前执行 future（前台等待用）。"""
+        with _TASKS_LOCK:
+            entry = _TASKS.get(task_id)
+            return entry.future if entry else None
 
     # -- 审批 / 取消 ---------------------------------------------------
 
@@ -402,7 +460,8 @@ class BackgroundSubagentExecutor:
             if entry.task.status.is_terminal:
                 return entry.task.to_dict()
             _disarm_watchdog(entry)
-            steering.clear(task_id)
+            with entry.followup_lock:
+                entry.followups.clear()
             if entry.future is not None:
                 entry.future.cancel()
             entry.task.status = BgTaskStatus.CANCELLED
@@ -434,34 +493,66 @@ async def _ensure_agent(entry: _TaskEntry) -> Any:
     return entry.compiled_agent
 
 
-async def _arun(entry: _TaskEntry, *, resume_command: Optional[Command]) -> None:
+def _pop_first_followup(entry: _TaskEntry) -> Optional[str]:
+    with entry.followup_lock:
+        return entry.followups.popleft() if entry.followups else None
+
+
+async def _arun(
+    entry: _TaskEntry,
+    *,
+    initial_source: Any = None,
+    resume_command: Optional[Command] = None,
+) -> None:
+    """执行一轮或多轮 turn。
+
+    - start：initial_source 为原始 description 的 HumanMessage state
+    - 审批 resume：resume_command 为 Command(resume=decisions)
+    - 冷恢复（send_message 对 completed 任务）：initial_source 为追加消息
+    turn 正常结束后若 followup 队列非空，链式开下一个 turn（同 thread
+    追加 HumanMessage），队列清空前任务保持 running。
+    """
     task = entry.task
     try:
         agent = await _ensure_agent(entry)
-        seen_ids: set = set()
-        final: Any = None
-        # astream(values)：既拿到终态，又能逐步 diff 执行过程摘要
-        source = (
-            {"messages": [HumanMessage(content=task.description)]}
-            if resume_command is None
-            else resume_command
+        # 首轮输入：优先显式 resume command（审批续跑），
+        # 否则 initial_source（start 的 description / 冷恢复的追加消息）
+        source = resume_command if resume_command is not None else (
+            initial_source
+            if initial_source is not None
+            else {"messages": [HumanMessage(content=task.description)]}
         )
-        async for chunk in agent.astream(source, _config(entry), stream_mode="values"):
-            final = chunk
-            _record_step_progress(task, chunk, seen_ids)
-        interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
-        payload = _extract_interrupt_payload(interrupts) if interrupts else None
-        if payload is not None:
-            task.status = BgTaskStatus.AWAITING_APPROVAL
-            task.interrupt = payload
-            _disarm_watchdog(entry)
-            _arm_hitl_watchdog(entry)
+        while True:
+            seen_ids: set = set()
+            final: Any = None
+            # astream(values)：既拿到终态，又能逐步 diff 执行过程摘要
+            async for chunk in agent.astream(source, _config(entry), stream_mode="values"):
+                final = chunk
+                _record_step_progress(task, chunk, seen_ids)
+            interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
+            payload = _extract_interrupt_payload(interrupts) if interrupts else None
+            if payload is not None:
+                task.status = BgTaskStatus.AWAITING_APPROVAL
+                task.interrupt = payload
+                _disarm_watchdog(entry)
+                _arm_hitl_watchdog(entry)
+                logger.info(
+                    "bg subagent awaiting approval task_id={} actions={}",
+                    task.task_id, len(payload.get("action_requests") or []),
+                )
+                return
+            task.result = _final_answer_text(final)
+            # followup 链：队列非空则同 thread 开下一个 turn
+            next_message = _pop_first_followup(entry)
+            if next_message is None:
+                break
+            task.status = BgTaskStatus.RUNNING
+            task.completed_at = None
             logger.info(
-                "bg subagent awaiting approval task_id={} actions={}",
-                task.task_id, len(payload.get("action_requests") or []),
+                "bg subagent followup turn task_id={} queued={}",
+                task.task_id, len(entry.followups),
             )
-            return
-        task.result = _final_answer_text(final)
+            source = {"messages": [HumanMessage(content=next_message)]}
         task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
         logger.info(
@@ -530,6 +621,59 @@ def _on_hitl_timeout(entry: _TaskEntry) -> None:
             "bg subagent approval timeout reject failed task_id={}",
             entry.task.task_id,
         )
+
+
+def _message_to_view_item(message: Any) -> Optional[dict[str, Any]]:
+    """LangChain 消息 → 轻量视图项（子会话查看用）。"""
+    if isinstance(message, HumanMessage):
+        text = message.content if isinstance(message.content, str) else str(message.content)
+        return {"role": "user", "text": text[:_PROGRESS_PREVIEW_CHARS * 2]} if text.strip() else None
+    if isinstance(message, AIMessage):
+        calls = [
+            {"name": str(call.get("name") or ""), "args": call.get("args") or {}}
+            for call in (getattr(message, "tool_calls", None) or [])
+        ]
+        text = _final_answer_text({"messages": [message]})
+        if not calls and not text.strip():
+            return None
+        return {
+            "role": "assistant",
+            "text": text[:_PROGRESS_PREVIEW_CHARS * 2],
+            "tool_calls": calls,
+        }
+    if isinstance(message, ToolMessage):
+        content = message.content if isinstance(message.content, str) else str(message.content)
+        return {
+            "role": "tool",
+            "name": str(getattr(message, "name", None) or ""),
+            "status": str(getattr(message, "status", None) or "success"),
+            "text": content[:_PROGRESS_PREVIEW_CHARS * 2],
+        }
+    return None
+
+
+async def _aread_thread_messages(entry: _TaskEntry) -> list[dict[str, Any]]:
+    """在隔离 loop 内只读 thread 状态并映射为视图项。"""
+    agent = await _ensure_agent(entry)
+    state = await agent.aget_state(_config(entry))
+    values = getattr(state, "values", None) or {}
+    items: list[dict[str, Any]] = []
+    for message in values.get("messages", []):
+        item = _message_to_view_item(message)
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def read_thread_messages(task_id: str, *, timeout: float = 10.0) -> list[dict[str, Any]]:
+    """读取后台任务子会话消息（跨线程切到隔离 loop 执行只读 aget_state）。"""
+    with _TASKS_LOCK:
+        entry = _TASKS.get(task_id)
+        if entry is None:
+            raise ValueError(f"后台任务不存在: {task_id}")
+    loop = _ensure_loop()
+    future = asyncio.run_coroutine_threadsafe(_aread_thread_messages(entry), loop)
+    return future.result(timeout=timeout)
 
 
 def shutdown() -> None:

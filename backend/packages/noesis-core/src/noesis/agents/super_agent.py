@@ -22,7 +22,6 @@ from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
 from noesis.agents.subagents import (
     BackgroundSubagentExecutor,
-    SteeringMiddleware,
     build_background_task_tools,
 )
 from noesis.config.env import HitlConfig, SubagentConfig
@@ -75,8 +74,6 @@ def _compile_task_worker(
         skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
         session_id=session_id,
     ))
-    # steering：主 Agent / 用户的中途策略调整在下一次模型调用边界注入
-    middleware.append(SteeringMiddleware())
     if interrupt_on:
         # 后台任务审批：interrupt 落 checkpoint，executor 转 awaiting_approval，
         # 审批 API 用 Command(resume) 在同一 thread 续跑

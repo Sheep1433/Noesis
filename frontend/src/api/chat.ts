@@ -398,6 +398,7 @@ export interface BgTask {
   session_id: string
   user_id?: string
   description: string
+  kind?: 'continuable' | 'one_shot'
   status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out'
   result?: string | null
   error?: string | null
@@ -430,6 +431,30 @@ export async function submitBgTaskDecisions(
     'POST',
     `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/decisions`,
     { decisions },
+  )
+  return parseResponse(await authFetch(req))
+}
+
+/** 子会话消息视图项（只读） */
+export interface BgTaskMessage {
+  role: 'user' | 'assistant' | 'tool'
+  text?: string
+  name?: string
+  status?: string
+  tool_calls?: Array<{ name: string, args: Record<string, unknown> }>
+}
+
+export async function getBgTaskMessages(taskId: string): Promise<BgTaskMessage[]> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/messages`)
+  const res = await parseResponse<{ messages: BgTaskMessage[] }>(await authFetch(req))
+  return res.messages ?? []
+}
+
+export async function sendBgTaskMessage(taskId: string, message: string): Promise<BgTask> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/message`,
+    { message },
   )
   return parseResponse(await authFetch(req))
 }

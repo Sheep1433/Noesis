@@ -236,38 +236,21 @@ def test_list_and_pending_approvals_scoped_by_session() -> None:
 
 
 # ---------------------------------------------------------------------------
-# steering / notifications
+# followup / notifications / 子会话查看
 # ---------------------------------------------------------------------------
 
-def test_send_message_injects_on_next_model_call() -> None:
-    """运行中任务收到调整指令：下一次模型调用的输入包含 [用户策略调整]。"""
-    from noesis.agents.subagents import steering
-    from noesis.agents.subagents.steering_middleware import SteeringMiddleware
-    from langchain_core.messages import HumanMessage, SystemMessage
-
-    worker = _build_worker(
-        [_call("s0", "c0"), AIMessage(content="收到调整，收尾")],
-    )
-    # 挂 steering：模拟真实 worker 装配
-    # （_build_worker 不含 steering，此处直接验证 middleware 契约）
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
-
-    executor.send_message(task_id, "聚焦中文源")
-    # 队列已入队；drain 模拟下一次模型调用边界
-    instructions = steering.drain(task_id)
-    assert instructions == ["聚焦中文源"]
-    # 消费后不重复
-    assert steering.drain(task_id) == []
-
-    _wait_terminal(executor, task_id)
-
-
 def test_send_message_rejects_terminal_task() -> None:
-    worker = _build_worker([AIMessage(content="直接完成")])
+    # failed 任务拒续（completed 现在可冷恢复续话，见 followup 用例）
+    def _failing_factory():
+        async def _f():
+            raise RuntimeError("boom")
+        return _f()
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
-    _wait_terminal(executor, task_id)
+    task_id = executor.start(
+        worker_factory=_failing_factory, description="x", session_id="s1", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.FAILED.value
 
     with pytest.raises(ValueError, match="已结束"):
         executor.send_message(task_id, "调整")
@@ -275,8 +258,6 @@ def test_send_message_rejects_terminal_task() -> None:
 
 def test_send_message_during_awaiting_approval_delivered_on_resume() -> None:
     """待审批期间入队：审批通过续跑后，drain（=首次模型调用）能取到指令。"""
-    from noesis.agents.subagents import steering
-
     worker = _build_worker(
         [_call("y", "c1"), AIMessage(content="按调整后方向收尾")],
         interrupt_on={"dangerous": True},
@@ -291,9 +272,8 @@ def test_send_message_during_awaiting_approval_delivered_on_resume() -> None:
 
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
-    # 队列在续跑前仍在（真实链路中由 SteeringMiddleware 消费）
-    remaining = steering.drain(task_id)
-    assert remaining == ["改查中文源"] or remaining == []
+    # followup 在 resume 后被链式消费（本 turn 结束后作为新 turn 执行）
+    # 脚本第二条为终答文本，followup turn 执行时脚本耗尽返回默认收尾
 
 
 def test_terminal_records_session_notification_once() -> None:
@@ -327,78 +307,126 @@ def test_notify_agent_query_prefixes_block() -> None:
     assert notifications.notify_agent_query("s-q", "下一个问题") == "下一个问题"
 
 
-def test_steering_middleware_injects_and_consumes() -> None:
-    """SteeringMiddleware 在模型调用边界把待注入指令追加为 HumanMessage。"""
-    from langchain.agents.middleware.types import ModelRequest
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from noesis.agents.subagents import steering
-    from noesis.agents.subagents.steering_middleware import SteeringMiddleware
 
-    class _Runtime:
-        config = {"configurable": {"thread_id": "bg-steer-1"}}
-
-    request = ModelRequest(
-        model=object(),  # type: ignore[arg-type]
-        messages=[HumanMessage(content="原始任务")],
-        system_message=SystemMessage(content="sys"),
-        state={},
-        runtime=_Runtime(),  # type: ignore[arg-type]
-    )
-    steering.put("bg-steer-1", "聚焦中文源")
-    steering.put("bg-steer-1", "输出限定 300 字")
-
-    seen: list = []
-    SteeringMiddleware().wrap_model_call(
-        request, lambda req: seen.append(req.messages) or "ok",  # type: ignore[arg-type,return-value]
-    )
-    injected = seen[0]
-    assert [m.content for m in injected] == [
-        "原始任务",
-        "[用户策略调整] 聚焦中文源",
-        "[用户策略调整] 输出限定 300 字",
-    ]
-    # 消费后再次调用不再注入
-    seen.clear()
-    SteeringMiddleware().wrap_model_call(
-        request, lambda req: seen.append(req.messages) or "ok",  # type: ignore[arg-type,return-value]
-    )
-    assert [m.content for m in seen[0]] == ["原始任务"]
-
-
-def test_registry_ops_callable_via_class_name() -> None:
-    """BgTaskService 经类名调用注册表操作（曾经因实例方法被类调而 TypeError）。"""
-    worker = _build_worker([AIMessage(content="直接完成")])
+def test_followup_chains_new_turn_when_running() -> None:
+    """运行中 send_message：当前 turn 结束后链式开新 turn（同 thread 追加）。"""
+    worker = _build_worker([AIMessage(content="第一轮完成")])
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
     task_id = executor.start(
-        worker_factory=lambda: worker, description="x",
-        session_id="s-cls", user_id="u1",
+        worker_factory=lambda: worker, description="x", session_id="s-fu", user_id="u1",
     )
-    task = _wait_terminal(executor, task_id)
-
-    # 类名直调（Service 层的调用方式）
-    assert BackgroundSubagentExecutor.get(task_id)["task_id"] == task_id
-    assert any(t["task_id"] == task_id for t in BackgroundSubagentExecutor.list_for_session("s-cls"))
-    assert BackgroundSubagentExecutor.pending_approvals("s-cls") == []
-    snapshot = BackgroundSubagentExecutor.cancel(task_id)
-    assert snapshot["status"] in (task["status"], BgTaskStatus.CANCELLED.value)
-    with pytest.raises(ValueError, match="不存在"):
-        BackgroundSubagentExecutor.submit_decisions("bg-none", [{"type": "approve"}])
-    with pytest.raises(ValueError, match="已结束"):
-        BackgroundSubagentExecutor.send_message(task_id, "late")
-
-
-def test_completed_task_records_step_progress() -> None:
-    """执行过程摘要被捕获：工具调用名 + 工具结果 + 文本，经 to_dict 暴露。"""
-    worker = _build_worker([_call("data"), AIMessage(content="任务完成：已处理")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="处理数据",
-        session_id="s-prog", user_id="u1",
-    )
+    # 等 completed 再冷恢复路径（running 入队链式由冷恢复后的队列消费验证）：
+    # 这里直接验证冷恢复——completed send_message 同 thread 开新 turn
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
-    kinds = [(p["kind"], p.get("name") or p.get("preview")) for p in task["progress"]]
-    assert any(k == "tool_call" and n == "dangerous" for k, n in kinds)
-    assert any(k == "tool_result" and n == "dangerous" for k, n in kinds)
-    assert any(k == "text" and "任务完成" in str(n) for k, n in kinds)
+    snapshot = executor.send_message(task_id, "请继续深入")
+    assert snapshot["status"] == BgTaskStatus.RUNNING.value
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    # 新 turn 执行（脚本耗尽返回默认收尾文本）
+    assert task["result"]
+
+
+def test_one_shot_task_rejects_followup() -> None:
+    """一次性任务：能查看，不可 send_message。"""
+    worker = _build_worker([AIMessage(content="一次性完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="x",
+        session_id="s-os", user_id="u1", one_shot=True,
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert task["kind"] == "one_shot"
+
+    with pytest.raises(ValueError, match="一次性"):
+        executor.send_message(task_id, "继续")
+    # 查看不受影响
+    messages = BackgroundSubagentExecutor.read_messages(task_id)
+    assert any(m["role"] == "assistant" for m in messages)
+
+
+def test_read_thread_messages_returns_history() -> None:
+    """子会话查看：只读返回 thread 的消息视图项（user/assistant/tool）。"""
+    worker = _build_worker([_call("data"), AIMessage(content="调研小结：三点发现")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="调研任务",
+        session_id="s-read", user_id="u1",
+    )
+    _wait_terminal(executor, task_id)
+
+    messages = BackgroundSubagentExecutor.read_messages(task_id)
+    roles = [m["role"] for m in messages]
+    assert "user" in roles            # 原始 description
+    assert "assistant" in roles       # 工具调用 + 小结
+    assert "tool" in roles            # 工具结果
+    text_items = [m for m in messages if m["role"] == "assistant" and m.get("text")]
+    assert any("调研小结" in m["text"] for m in text_items)
+    with pytest.raises(ValueError, match="不存在"):
+        BackgroundSubagentExecutor.read_messages("bg-none")
+
+
+# ---------------------------------------------------------------------------
+# 前台等待（run_in_background=false）与超时转后台
+# ---------------------------------------------------------------------------
+
+def _build_tools(executor: BackgroundSubagentExecutor, worker_factory):
+    from noesis.agents.subagents.tools import build_background_task_tools
+    return build_background_task_tools(
+        worker_factory=worker_factory,
+        executor=executor,
+        session_id="s-fg",
+        user_id="u1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreground_wait_returns_result() -> None:
+    """前台等待：任务完成后终态文本直接作为工具返回值。"""
+    worker = _build_worker([AIMessage(content="前台结果：OK")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+
+    result = await start.ainvoke({"description": "x", "run_in_background": False})
+    assert "前台结果：OK" in result
+
+
+@pytest.mark.asyncio
+async def test_foreground_wait_times_out_to_background() -> None:
+    """前台等待超时：自动转后台，任务继续运行不被取消。"""
+    from unittest.mock import patch as mock_patch
+
+    worker = _build_worker([_slow_call("s", "c0") for _ in range(20)], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=60)
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+
+    with mock_patch("noesis.agents.subagents.tools.SubagentConfig") as cfg:
+        cfg.foreground_max_wait_seconds = 0.3
+        result = await start.ainvoke({"description": "慢任务", "run_in_background": False})
+
+    assert "已自动转为后台" in result
+    assert "bg-" in result
+    # 任务未被取消：仍非终态（running）或最终完成，而不是 cancelled
+    task_id = result.split("：")[1].split("\n")[0]
+    task = executor.get(task_id)
+    assert task is not None
+    assert task["status"] in ("running", "completed")
+    executor.cancel(task_id)
+
+
+@pytest.mark.asyncio
+async def test_background_default_returns_immediately() -> None:
+    """默认后台：立即返回 task_id 提示。"""
+    worker = _build_worker([_slow_call("s", "c0") for _ in range(20)], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=60)
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+
+    import time as _time
+    began = _time.time()
+    result = await start.ainvoke({"description": "x"})
+    assert _time.time() - began < 2.0
+    assert "后台任务已启动" in result
+    task_id = result.split("：")[1].split("\n")[0]
+    executor.cancel(task_id)

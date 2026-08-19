@@ -1031,6 +1031,18 @@ async def send_bg_task_message(
     return ResponseUtil.success(msg='指令已下发', data=task)
 
 
+@chat_router.get("/bg-tasks/{task_id}/messages", summary="后台任务子会话消息")
+async def get_bg_task_messages(
+    task_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """只读后台子 Agent 的完整执行历史（模型轮次/工具调用/结果）。"""
+    from noesis.services.bg_task_service import BgTaskService
+
+    messages = BgTaskService.get_messages(task_id, str(current_user.user_id))
+    return ResponseUtil.success(msg='获取子会话消息成功', data={"messages": messages})
+
+
 @chat_router.post("/bg-tasks/{task_id}/cancel", summary="取消后台任务")
 async def cancel_bg_task(
     task_id: str,

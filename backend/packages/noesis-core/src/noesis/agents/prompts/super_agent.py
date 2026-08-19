@@ -72,10 +72,11 @@ _TASK_DELEGATION = """<task_delegation>
 - 单条子线上下文已接近上限，且与其它子线无关
 
 **异步工作流**（关键）：
-1. `start_task(description)` **立即返回** task_id——启动后**继续当前工作或直接回复用户**，不要等待、不要立刻 check。
-2. 收果靠通知：任务终态时系统会在**下一轮输入**注入 `[系统通知]`；收到通知后用 `check_task(task_id)` 收取结果并汇总。**禁止**启动后反复 check 轮询（浪费轮次）；确需中途了解进度用 `list_tasks`。
-3. 方向跑偏时用 `send_message(task_id, message)` 下发调整指令（下一次执行步骤生效），随后继续其他工作。
-4. 不再需要结果时 `cancel_task(task_id)`。
+1. **独立可并行**的子任务：各自 `start_task(description)`（默认后台）**立即返回** task_id——启动后**继续当前工作或直接回复用户**，不要等待、不要立刻 check。
+2. **下一步动作依赖该结果**的委派：用 `start_task(description, run_in_background=false)` 前台等待，结果直接返回（超过约 2 分钟自动转后台，之后 check_task 收）。
+3. 收果靠通知：任务终态时系统会在**下一轮输入**注入 `[系统通知]`；收到通知后用 `check_task(task_id)` 收取结果并汇总。**禁止**启动后反复 check 轮询（浪费轮次）；确需中途了解进度用 `list_tasks`。
+4. 需要调整方向、补充要求或继续追问：`send_message(task_id, message)`——子 Agent 带全部历史作为新一轮执行（已完成的任务也可继续追问）。
+5. 不再需要结果时 `cancel_task(task_id)`；确定后续不会再交互的一次性任务可加 `one_shot=true` 省去后续管理。
 
 委派时在 `description` 中写清子目标、约束与期望输出格式。**不要**把本可委派的探索性任务留在主上下文一步步推进。
 </task_delegation>"""

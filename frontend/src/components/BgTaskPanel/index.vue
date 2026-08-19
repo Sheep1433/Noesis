@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import type { BgTask } from '@/api/chat'
-import { NButton, NTag } from 'naive-ui'
+import type { BgTask, BgTaskMessage } from '@/api/chat'
+import { NButton, NDrawer, NDrawerContent, NInput, NTag } from 'naive-ui'
 import { computed, ref } from 'vue'
+import { getBgTaskMessages, sendBgTaskMessage } from '@/api/chat'
 
 const props = defineProps<{
   tasks: BgTask[]
@@ -10,6 +11,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'decide', payload: { task: BgTask, decisions: Array<{ type: 'approve' | 'reject' }> }): void
   (e: 'cancel', task: BgTask): void
+  (e: 'changed'): void
 }>()
 
 const pending = computed(() => props.tasks.filter((t) => {
@@ -18,12 +20,11 @@ const pending = computed(() => props.tasks.filter((t) => {
 const running = computed(() => props.tasks.filter((t) => {
   return t.status === 'running'
 }))
-const recent = computed(() =>
+const finished = computed(() =>
   props.tasks
     .filter((t) => {
-      return t.status === 'completed' || t.status === 'failed' || t.status === 'timed_out'
+      return t.status !== 'running' && t.status !== 'awaiting_approval'
     })
-    .slice(-5)
     .reverse(),
 )
 
@@ -45,10 +46,13 @@ function actionPreview(task: BgTask): string {
   return `${first.name ?? 'tool'} ${args}`
 }
 
-// 执行过程展开状态（按 task_id）
+// ---- 展开的步骤概览 ----
 const expanded = ref(new Set<string>())
 
 function toggleExpand(task: BgTask): void {
+  if (detailTaskId.value === task.task_id) {
+    return
+  }
   const next = new Set(expanded.value)
   if (next.has(task.task_id)) {
     next.delete(task.task_id)
@@ -77,6 +81,79 @@ function stepText(step: NonNullable<BgTask['progress']>[number]): string {
     return `${step.name || 'tool'}${status} ${step.preview || ''}`.trim()
   }
   return step.name || 'tool'
+}
+
+// ---- 子会话详情抽屉 ----
+const detailOpen = ref(false)
+const detailTask = ref<BgTask | null>(null)
+const detailMessages = ref<BgTaskMessage[]>([])
+const detailLoading = ref(false)
+const followupInput = ref('')
+const followupSending = ref(false)
+
+const canFollowup = computed(() => {
+  const t = detailTask.value
+  if (!t || t.kind === 'one_shot') {
+    return false
+  }
+  return ['running', 'awaiting_approval', 'completed'].includes(t.status)
+})
+
+async function openDetail(task: BgTask): Promise<void> {
+  detailOpen.value = true
+  detailTask.value = task
+  detailMessages.value = []
+  followupInput.value = ''
+  detailLoading.value = true
+  try {
+    detailMessages.value = await getBgTaskMessages(task.task_id)
+  } catch (err) {
+    console.warn('[bg-task] load messages failed', err)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function refreshDetail(): Promise<void> {
+  if (!detailTask.value) {
+    return
+  }
+  try {
+    detailMessages.value = await getBgTaskMessages(detailTask.value.task_id)
+  } catch {
+    // 忽略刷新失败
+  }
+}
+
+async function sendFollowup(): Promise<void> {
+  const task = detailTask.value
+  const message = followupInput.value.trim()
+  if (!task || !message || followupSending.value) {
+    return
+  }
+  followupSending.value = true
+  try {
+    await sendBgTaskMessage(task.task_id, message)
+    followupInput.value = ''
+    window.$message?.success('已发送，子任务将作为新一轮执行')
+    emit('changed')
+    await refreshDetail()
+  } catch (err) {
+    console.warn('[bg-task] send message failed', err)
+    window.$message?.error('发送失败')
+  } finally {
+    followupSending.value = false
+  }
+}
+
+function messageLabel(message: BgTaskMessage): string {
+  if (message.role === 'user') {
+    return '任务指令'
+  }
+  if (message.role === 'tool') {
+    return `${message.name || '工具'} 结果`
+  }
+  return '子 Agent'
 }
 </script>
 
@@ -107,9 +184,9 @@ function stepText(step: NonNullable<BgTask['progress']>[number]): string {
       </div>
     </div>
 
-    <div v-if="running.length || recent.length" class="bg-task-panel__list">
+    <div v-if="running.length || finished.length" class="bg-task-panel__list">
       <div
-        v-for="task in [...running, ...recent]"
+        v-for="task in [...running, ...finished]"
         :key="task.task_id"
         class="bg-task-panel__item"
       >
@@ -117,12 +194,18 @@ function stepText(step: NonNullable<BgTask['progress']>[number]): string {
           <NTag size="small" :type="statusLabel[task.status]?.type ?? 'default'">
             {{ statusLabel[task.status]?.label ?? task.status }}
           </NTag>
+          <span v-if="task.kind === 'one_shot'" class="bg-task-panel__kind">一次性</span>
           <span class="bg-task-panel__desc">{{ task.description }}</span>
           <span
             v-if="task.progress?.length"
             class="bg-task-panel__steps-hint"
           >
             {{ expanded.has(task.task_id) ? '收起' : `${task.progress.length} 步` }}
+          </span>
+          <span class="bg-task-panel__detail-btn" @click.stop>
+            <NButton size="tiny" quaternary type="primary" @click="openDetail(task)">
+              详情
+            </NButton>
           </span>
           <span v-if="task.status === 'running'" class="bg-task-panel__cancel" @click.stop>
             <NButton size="tiny" quaternary type="error" @click="emit('cancel', task)">
@@ -149,6 +232,67 @@ function stepText(step: NonNullable<BgTask['progress']>[number]): string {
         </div>
       </div>
     </div>
+
+    <n-drawer
+      v-model:show="detailOpen"
+      placement="right"
+      width="min(520px, 94vw)"
+    >
+      <n-drawer-content :title="`子任务 · ${detailTask?.description ?? ''}`" closable>
+        <div class="bg-task-detail">
+          <div class="bg-task-detail__toolbar">
+            <NTag size="small" :type="statusLabel[detailTask?.status ?? '']?.type ?? 'default'">
+              {{ statusLabel[detailTask?.status ?? '']?.label ?? detailTask?.status }}
+            </NTag>
+            <NTag v-if="detailTask?.kind === 'one_shot'" size="small" :bordered="false">
+              一次性
+            </NTag>
+            <span class="bg-task-detail__spacer"></span>
+            <NButton size="tiny" quaternary :loading="detailLoading" @click="refreshDetail">
+              刷新
+            </NButton>
+          </div>
+
+          <div class="bg-task-detail__messages">
+            <div
+              v-for="(message, idx) in detailMessages"
+              :key="idx"
+              class="bg-task-detail__message"
+              :class="`bg-task-detail__message--${message.role}`"
+            >
+              <div class="bg-task-detail__message-label">{{ messageLabel(message) }}</div>
+              <div v-if="message.tool_calls?.length" class="bg-task-detail__calls">
+                <div v-for="(call, ci) in message.tool_calls" :key="ci" class="bg-task-detail__call">
+                  🔧 {{ call.name }}
+                </div>
+              </div>
+              <div v-if="message.text" class="bg-task-detail__text">{{ message.text }}</div>
+              <div v-if="message.role === 'tool' && message.status === 'error'" class="bg-task-detail__error">
+                ✗ 执行失败
+              </div>
+            </div>
+            <div v-if="!detailMessages.length && !detailLoading" class="bg-task-detail__empty">
+              暂无执行记录
+            </div>
+          </div>
+
+          <div v-if="canFollowup" class="bg-task-detail__composer">
+            <NInput
+              v-model:value="followupInput"
+              size="small"
+              placeholder="向子任务追加指示（作为新一轮执行）"
+              @keyup.enter="sendFollowup"
+            />
+            <NButton size="small" type="primary" :loading="followupSending" @click="sendFollowup">
+              发送
+            </NButton>
+          </div>
+          <div v-else-if="detailTask?.kind === 'one_shot'" class="bg-task-detail__hint">
+            一次性任务不支持追加消息
+          </div>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
   </section>
 </template>
 
@@ -182,6 +326,12 @@ function stepText(step: NonNullable<BgTask['progress']>[number]): string {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.bg-task-panel__kind {
+  flex-shrink: 0;
+  color: var(--noesis-color-text-hint, #94a3b8);
+  font-size: 11px;
 }
 
 .bg-task-panel__preview {
@@ -226,8 +376,13 @@ function stepText(step: NonNullable<BgTask['progress']>[number]): string {
   background: var(--noesis-color-primary-bg-subtle);
 }
 
-.bg-task-panel__steps-hint {
+.bg-task-panel__steps-hint,
+.bg-task-panel__detail-btn,
+.bg-task-panel__cancel {
   flex-shrink: 0;
+}
+
+.bg-task-panel__steps-hint {
   color: var(--noesis-color-text-hint, #94a3b8);
   font-size: 11px;
 }
@@ -268,5 +423,84 @@ function stepText(step: NonNullable<BgTask['progress']>[number]): string {
   color: var(--noesis-color-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.bg-task-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+}
+
+.bg-task-detail__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bg-task-detail__spacer {
+  flex: 1;
+}
+
+.bg-task-detail__messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 8px 0;
+  overflow-y: auto;
+}
+
+.bg-task-detail__message {
+  padding: 8px 10px;
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-color-bg-muted);
+}
+
+.bg-task-detail__message--user {
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
+.bg-task-detail__message-label {
+  margin-bottom: 4px;
+  color: var(--noesis-color-text-hint, #94a3b8);
+  font-size: 11px;
+}
+
+.bg-task-detail__calls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+}
+
+.bg-task-detail__text {
+  color: var(--noesis-color-text);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.bg-task-detail__error {
+  margin-top: 4px;
+  color: var(--noesis-color-error, #e5484d);
+  font-size: 12px;
+}
+
+.bg-task-detail__empty,
+.bg-task-detail__hint {
+  color: var(--noesis-color-text-hint, #94a3b8);
+  font-size: 12px;
+}
+
+.bg-task-detail__composer {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--noesis-color-border-subtle);
 }
 </style>
