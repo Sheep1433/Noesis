@@ -1,6 +1,6 @@
 # Tasks: SuperAgent 全异步后台子 Agent
 
-> 基线（executor / 工具面 / HITL 审批 / API / BgTaskPanel）已在 `feat/async-subagent` 完成并勾选；剩余为 prompt 语义、steering、完成通知三块闭环。
+> 基线（executor / HITL 审批 / API / BgTaskPanel / 过程捕获）已完成；§3–§5 为初版闭环（已实现，其中 steering 将被 §7 修订取代）；§7 为对照 deepseek-harness 修订后的最终形态。
 
 ## 1. 执行层基线（已完成）
 
@@ -42,3 +42,13 @@
 - [x] 6.1 后端全量回归 + 前端 lint/build；确认无新增失败（基线 11 个既有失败除外）
 - [ ] 6.2 手动验收脚本：start → 主 Agent 继续回复 → send_message 调整 → 任务完成 → 下一轮收到系统通知 → check_task 收果；含审批路径（后台任务触发审批 → 面板批准 → 续跑完成）
 - [ ] 6.3 归档准备：spec delta 并入 `agent-background-tasks` / `agent-hitl` / `agent-profiles` 主规格
+
+## 7. 对照 dsh 修订：单工具同异步 / followup-turn / 子会话查看
+
+- [ ] 7.1 `start_task` 增加 `run_in_background` 参数（默认 true）；false 走 `asyncio.wrap_future` 跨 loop 前台等待终态并返回文本；契约测试（前台返回结果 / 审批期间持续等待 / 不阻塞事件循环）
+- [ ] 7.2 followup 队列（FIFO 上限 10）替代 steering 队列：running/awaiting_approval 入队，当前 turn 结束后链式 `ainvoke(HumanMessage)` 同 thread 开新 turn；completed 冷恢复回 running；failed/timed_out/cancelled 拒续；契约测试
+- [ ] 7.3 删除 SteeringMiddleware 与 steering.py（含 worker 装配与相关测试）；`POST /bg-tasks/{id}/message` 语义同步为 followup
+- [ ] 7.4 子会话读取：`GET /bg-tasks/{id}/messages`（只读 aget_state → 轻量视图项 + 归属校验）；契约测试
+- [ ] 7.5 前端：任务卡「查看详情」子会话抽屉（完整消息历史渲染）；`send_message` 用户侧入口复用
+- [ ] 7.6 prompt 更新：依赖结果选 `run_in_background=false`；send_message 语义改为追加 turn；更新关键词断言
+- [ ] 7.7 全量回归 + 手动验收脚本更新（前台等待路径 / followup 续话路径 / 子会话查看路径）
