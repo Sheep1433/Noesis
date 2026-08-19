@@ -13,7 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from noesis.agents.middlewares import CompactionThresholds
 from noesis.agents.middlewares.stack import NoesisStackDeps, build_noesis_stack
-from noesis.agents.super_agent import _build_task_worker_subagents
+from noesis.agents.super_agent import _compile_task_worker
 
 
 class _Backend:
@@ -140,19 +140,20 @@ def test_raw_task_worker_has_only_one_hitl_middleware() -> None:
         ),
         patch("noesis.factory.HitlConfig", SimpleNamespace(enabled=True)),
     ):
-        subagents = _build_task_worker_subagents(
+        worker = _compile_task_worker(
             _Backend(),  # type: ignore[arg-type]
             [dangerous],
             [],
             user_id="user-1",
             interrupt_on={"dangerous": True},
         )
-        stack = build_noesis_stack(
-            NoesisStackDeps(
-                profile="SUPER_AGENT_QA",
-                backend=_Backend(),  # type: ignore[arg-type]
-                subagents=subagents,
-            )
-        )
 
-    assert any(type(item).__name__ == "SubAgentMiddleware" for item in stack)
+    # 后台 worker：HITL 只挂一个 HumanInTheLoopMiddleware（来自 super_agent 侧，
+    # SUBAGENT 栈本身不含）；后台执行/审批续跑由 BackgroundSubagentExecutor 负责
+    stack = build_noesis_stack(
+        NoesisStackDeps(
+            profile="SUBAGENT",
+            backend=_Backend(),  # type: ignore[arg-type]
+        )
+    )
+    assert not any(type(item).__name__ == "HumanInTheLoopMiddleware" for item in stack)

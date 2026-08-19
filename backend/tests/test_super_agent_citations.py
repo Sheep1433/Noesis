@@ -12,8 +12,9 @@ def _capture_agent_options(monkeypatch) -> dict:
     monkeypatch.setattr(super_agent, "ensure_user_memory_files", lambda _user_id: None)
     monkeypatch.setattr(super_agent, "build_web_search_tools", lambda: [])
     monkeypatch.setattr(super_agent, "resolve_skill_sources_for_session", lambda *_args: [])
-    monkeypatch.setattr(super_agent, "_build_task_worker_subagents", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(super_agent, "HitlConfig", SimpleNamespace(enabled=False))
+    monkeypatch.setattr(super_agent, "_compile_task_worker", lambda *_args, **_kwargs: MagicMock())
+    monkeypatch.setattr(super_agent, "build_background_task_tools", lambda **_kwargs: [])
+    monkeypatch.setattr(super_agent, "HitlConfig", SimpleNamespace(enabled=False, ask_timeout_seconds=86_400))
     monkeypatch.setattr(super_agent.ContextResolver, "resolve", lambda *_args: SimpleNamespace(
         system_prompt="system",
         memory_sources=[],

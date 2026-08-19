@@ -7,7 +7,6 @@ import uuid
 from typing import AsyncGenerator, Optional
 
 from deepagents.backends.protocol import BackendProtocol
-from deepagents.middleware.subagents import SubAgent
 from langgraph.types import Command
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,12 +20,17 @@ from noesis.agents.prompts import PromptProfile, build_prompt
 from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
+from noesis.agents.subagents import (
+    BackgroundSubagentExecutor,
+    build_background_task_tools,
+)
+from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
 from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
-from noesis.config.env import ChatAttachmentConfig, HitlConfig
+from noesis.config.env import ChatAttachmentConfig
 from noesis.config.user_data_paths import ensure_user_memory_files
 from noesis.agents.context import ContextResolver
 from noesis.llm.factory import get_llm
@@ -43,7 +47,7 @@ def _resolve_user_id(current_user) -> Optional[str]:
     return str(uid) if uid is not None else None
 
 
-def _build_task_worker_subagents(
+def _compile_task_worker(
     backend: BackendProtocol,
     tools: list,
     skill_sources: list,
@@ -52,9 +56,14 @@ def _build_task_worker_subagents(
     model_id: str | None = None,
     interrupt_on: dict | None = None,
     session_id: str = "",
-) -> list[SubAgent]:
+    checkpointer=None,
+):
+    """编译后台 task-worker：独立上下文 + 自带 HITL interrupt，供 BackgroundSubagentExecutor 使用。"""
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
+
     model = get_llm(model_id=model_id)
-    subagent_middleware = build_noesis_middleware(
+    middleware = list(build_noesis_middleware(
         profile="SUBAGENT",
         model=model,
         model_id=model_id,
@@ -64,22 +73,19 @@ def _build_task_worker_subagents(
         skills_user_id=user_id,
         skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
         session_id=session_id,
-    )
-    spec: SubAgent = {
-        "name": "task-worker",
-        "description": (
-            "在独立上下文中完成主 Agent 委派的单个子任务：阅读 Skills、web_search/web_fetch、"
-            "工作区读写与多步执行，只返回短结构化小结（长文落盘）。"
-            "复杂任务应优先委派：多源检索、调研、批量读文件、实现与验证等，避免主上下文被工具原文撑满。"
-        ),
-        "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
-        "model": model,
-        "tools": tools,
-        "middleware": subagent_middleware,
-    }
+    ))
     if interrupt_on:
-        spec["interrupt_on"] = interrupt_on
-    return [spec]
+        # 后台任务审批：interrupt 落 checkpoint，executor 转 awaiting_approval，
+        # 审批 API 用 Command(resume) 在同一 thread 续跑
+        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+    return create_agent(
+        model,
+        system_prompt=build_prompt(PromptProfile.SUPER_AGENT_SUB),
+        tools=tools,
+        middleware=middleware,
+        name="task-worker",
+        checkpointer=checkpointer,
+    )
 
 
 class SuperAgent(BaseAgent):
@@ -138,6 +144,31 @@ class SuperAgent(BaseAgent):
                 db=db,
             )
 
+        # 后台子 Agent（全异步 task）：主 Agent 用 start/check 工具委派，
+        # 子任务在进程内隔离 loop 跑，生命周期归属 session，跨 run 可收结果。
+        # worker 不携带后台任务工具自身（避免递归委派）。
+        bg_worker = _compile_task_worker(
+            backend,
+            tools,
+            skill_sources,
+            user_id=user_id,
+            model_id=model_id,
+            interrupt_on=interrupt_on,
+            session_id=session_id,
+            checkpointer=self.checkpointer,
+        )
+        bg_executor = BackgroundSubagentExecutor(
+            max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
+            task_timeout_seconds=SubagentConfig.task_timeout_seconds,
+            hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
+        )
+        tools.extend(build_background_task_tools(
+            agent=bg_worker,
+            executor=bg_executor,
+            session_id=session_id,
+            user_id=user_id,
+        ))
+
         return create_noesis_agent(
             profile="SUPER_AGENT_QA",
             tools=tools,
@@ -153,15 +184,6 @@ class SuperAgent(BaseAgent):
             memory=resolved_context.memory_sources,
             memory_system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
             todo=True,
-                subagents=_build_task_worker_subagents(
-                backend,
-                tools,
-                skill_sources,
-                user_id=user_id,
-                model_id=model_id,
-                interrupt_on=interrupt_on,
-                session_id=session_id,
-            ),
             interrupt_on=interrupt_on,
             model_id=model_id,
         )

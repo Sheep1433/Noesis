@@ -975,3 +975,51 @@ async def get_message(
         msg='获取消息详情成功',
         data=_message_to_response(message).model_dump()
     )
+
+
+# ============================================================================
+# 后台子 Agent（全异步 task + HITL 审批）
+# ============================================================================
+
+@chat_router.get("/sessions/{session_id}/bg-tasks", summary="会话后台任务列表")
+async def list_bg_tasks(
+    session_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """后台任务 + 待审批任务（前端审批卡与状态徽标轮询入口）。"""
+    from noesis.services.bg_task_service import BgTaskService
+
+    tasks = BgTaskService.list_for_session(session_id, str(current_user.user_id))
+    pending = [t for t in tasks if t.get("status") == "awaiting_approval"]
+    return ResponseUtil.success(
+        msg='获取后台任务成功',
+        data={"tasks": tasks, "pending_approvals": pending},
+    )
+
+
+@chat_router.post("/bg-tasks/{task_id}/decisions", summary="审批后台任务")
+async def submit_bg_task_decisions(
+    task_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """批准/拒绝后台子 Agent 的待审批工具调用，决策后任务续跑。"""
+    from noesis.services.bg_task_service import BgTaskService
+
+    body = await request.json()
+    decisions = body.get("decisions")
+    if not isinstance(decisions, list) or not decisions:
+        return ResponseUtil.failure(msg='decisions 不能为空')
+    task = BgTaskService.submit_decisions(task_id, str(current_user.user_id), decisions)
+    return ResponseUtil.success(msg='审批已提交', data=task)
+
+
+@chat_router.post("/bg-tasks/{task_id}/cancel", summary="取消后台任务")
+async def cancel_bg_task(
+    task_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    from noesis.services.bg_task_service import BgTaskService
+
+    task = BgTaskService.cancel(task_id, str(current_user.user_id))
+    return ResponseUtil.success(msg='已取消', data=task)

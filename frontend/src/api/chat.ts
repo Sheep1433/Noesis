@@ -392,6 +392,46 @@ export async function stopAgentRun(runId: string): Promise<AgentRunSnapshot> {
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
 }
 
+/** 后台子 Agent 任务（含待审批） */
+export interface BgTask {
+  task_id: string
+  session_id: string
+  user_id?: string
+  description: string
+  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out'
+  result?: string | null
+  error?: string | null
+  interrupt?: {
+    interrupt_id: string
+    action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>
+    kind?: string
+  } | null
+  started_at?: number
+  completed_at?: number | null
+}
+
+export async function listBgTasks(sessionId: string): Promise<{ tasks: BgTask[], pending_approvals: BgTask[] }> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/bg-tasks`)
+  return parseResponse(await authFetch(req))
+}
+
+export async function submitBgTaskDecisions(
+  taskId: string,
+  decisions: Array<{ type: 'approve' | 'reject', message?: string }>,
+): Promise<BgTask> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/decisions`,
+    { decisions },
+  )
+  return parseResponse(await authFetch(req))
+}
+
+export async function cancelBgTask(taskId: string): Promise<BgTask> {
+  const req = makeRequest('POST', `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/cancel`)
+  return parseResponse(await authFetch(req))
+}
+
 export async function resumeAgentRunHitl(
   runId: string,
   params: ResumeAgentRunHitlParams,

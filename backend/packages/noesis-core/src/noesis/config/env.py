@@ -173,6 +173,12 @@ class HitlSettings:
 
 
 @dataclass(frozen=True)
+class SubagentSettings:
+    max_concurrent_per_session: int
+    task_timeout_seconds: float
+
+
+@dataclass(frozen=True)
 class MessagingSettings:
     telegram_runtime_enabled: bool
     telegram_poll_timeout_seconds: int
@@ -475,6 +481,14 @@ def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
     )
 
 
+def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
+    subagents = yaml_cfg.subagents
+    return SubagentSettings(
+        max_concurrent_per_session=subagents.max_concurrent_per_session,
+        task_timeout_seconds=subagents.task_timeout_seconds,
+    )
+
+
 def _build_messaging(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> MessagingSettings:
     m = yaml_cfg.messaging
     return MessagingSettings(
@@ -709,6 +723,10 @@ class GetConfig:
         return _build_hitl(self._yaml)
 
     @lru_cache
+    def get_subagent_config(self) -> SubagentSettings:
+        return _build_subagents(self._yaml)
+
+    @lru_cache
     def get_messaging_config(self) -> MessagingSettings:
         return _build_messaging(self._secrets, self._yaml)
 
@@ -768,6 +786,7 @@ WebToolsConfig = get_config.get_web_tools_config()
 CheckpointConfig = get_config.get_checkpoint_config()
 SandboxConfig = get_config.get_sandbox_config()
 HitlConfig = get_config.get_hitl_config()
+SubagentConfig = get_config.get_subagent_config()
 MessagingConfig = get_config.get_messaging_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
 KbConfig = get_config.get_kb_config()

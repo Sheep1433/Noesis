@@ -25,6 +25,7 @@ from server.api import (
 )
 from noesis.knowledge.runtime import init_knowledge_base, close_knowledge_base
 from noesis.agents.backends.sandbox_lifecycle import shutdown_sandboxes
+from noesis.agents.subagents import shutdown as shutdown_bg_subagents
 from server.wiring import wire_runtime_observability
 from noesis.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,
@@ -79,6 +80,8 @@ async def lifespan(app: FastAPI):
             run_manager.shutdown,
             drain_seconds=StreamConfig.run_shutdown_drain_seconds,
         )
+        # 后台子 Agent：进程退出时取消运行中任务并停掉隔离 loop
+        resources.callback(shutdown_bg_subagents)
 
         await sync_existing_kb_collection_configs()
         start_scheduled_task_scheduler()

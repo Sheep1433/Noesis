@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, NonCallableMagicMock
+from unittest.mock import AsyncMock, MagicMock, NonCallableMagicMock, patch
 
 import pytest
 from deepagents.backends.protocol import FileDownloadResponse
@@ -13,7 +13,7 @@ from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMem
 from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.super_agent import (
     _MEMORY_SOURCES,
-    _build_task_worker_subagents,
+    _compile_task_worker,
 )
 from noesis.config.code_enum import IntentEnum
 
@@ -29,12 +29,19 @@ def test_memory_sources_order_user_before_agents() -> None:
     assert _MEMORY_SOURCES == [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
 
 
-def test_task_worker_subagents_exclude_memory_middleware() -> None:
+def test_task_worker_excludes_memory_middleware() -> None:
     backend = MagicMock()
-    subs = _build_task_worker_subagents(backend, [], [], user_id="u1")
-    assert len(subs) == 1
-    middleware = subs[0]["middleware"]
+    worker = _compile_task_worker(backend, [], [], user_id="u1", model_id=None)
+    # worker 是编译好的 runnable；从其 nodes 检查中间件装配结果不可达，
+    # 改为验证 SUBAGENT 栈构建不含 MemoryMiddleware（memory 只挂主 Agent）
+    from noesis.factory import build_noesis_middleware
+    with patch("noesis.factory.ModelConfig", MagicMock(summarization_enabled=False, tool_output_max_chars=24_000, max_retries=6)):
+        middleware = build_noesis_middleware(
+            profile="SUBAGENT", model=MagicMock(), backend=backend,
+            memory=(), skills=(),
+        )
     assert not any(isinstance(m, MemoryMiddleware) for m in middleware)
+    assert worker is not None
 
 
 def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:

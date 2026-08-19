@@ -1,5 +1,6 @@
 <script lang="tsx" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
+import type { BgTask } from '@/api/chat'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
@@ -7,8 +8,9 @@ import type { ChatModeQaType } from '@/utils/qaType'
 import type { SessionStats } from '@/utils/statsFormat'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { NCollapse, NCollapseItem } from 'naive-ui'
-import { createAgentRun, deleteSession, ensureSession, getSession, markSessionRead, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { cancelBgTask, createAgentRun, deleteSession, ensureSession, getSession, listBgTasks, markSessionRead, submitBgTaskDecisions, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
+import BgTaskPanel from '@/components/BgTaskPanel/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
@@ -232,6 +234,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
       currentRenderIndex,
     )
     const contextReady = loadSessionContext(sessionId)
+    void refreshBgTasks(sessionId)
     reloadSessionFilesPanel()
     // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，
     // 防止慢历史响应覆盖新 Tab 已收到的实时内容。
@@ -259,6 +262,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 
 function resetComposingSurface() {
   sseStream.detachSubscription()
+  stopBgTaskPolling()
   stopProcessingClock()
   sessionContext.value = null
   sessionContextSessionId.value = ''
@@ -912,6 +916,64 @@ function clearSessionConfig() {
   selectedSkills.value = []
   skillsAllEnabled.value = true
   sessionMaterialized.value = false
+}
+
+// ---- 后台子 Agent：任务列表轮询 + 审批 ----
+const bgTasks = ref<BgTask[]>([])
+let bgTaskTimer: ReturnType<typeof setInterval> | null = null
+
+function bgTasksHaveActive(): boolean {
+  return bgTasks.value.some((t) => t.status === 'running' || t.status === 'awaiting_approval')
+}
+
+async function refreshBgTasks(sessionId: string): Promise<void> {
+  if (!sessionId || sessionId !== currentIndex.value) {
+    return
+  }
+  try {
+    const res = await listBgTasks(sessionId)
+    bgTasks.value = res.tasks ?? []
+  } catch {
+    bgTasks.value = []
+  }
+  if (bgTasksHaveActive() && bgTaskTimer === null) {
+    bgTaskTimer = setInterval(() => {
+      void refreshBgTasks(sessionId)
+    }, 5000)
+  } else if (!bgTasksHaveActive() && bgTaskTimer !== null) {
+    clearInterval(bgTaskTimer)
+    bgTaskTimer = null
+  }
+}
+
+function stopBgTaskPolling(): void {
+  if (bgTaskTimer !== null) {
+    clearInterval(bgTaskTimer)
+    bgTaskTimer = null
+  }
+  bgTasks.value = []
+}
+
+async function onBgTaskDecide(payload: { task: BgTask, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
+  const { task, decisions } = payload
+  try {
+    await submitBgTaskDecisions(task.task_id, decisions)
+    window.$message?.success(decisions[0]?.type === 'approve' ? '已批准，任务继续执行' : '已拒绝')
+  } catch (err) {
+    console.warn('[bg-task] submit decisions failed', err)
+    window.$message?.error('审批提交失败')
+  }
+  await refreshBgTasks(task.session_id)
+}
+
+async function onBgTaskCancel(task: BgTask): Promise<void> {
+  try {
+    await cancelBgTask(task.task_id)
+    window.$message?.success('已取消后台任务')
+  } catch (err) {
+    console.warn('[bg-task] cancel failed', err)
+  }
+  await refreshBgTasks(task.session_id)
 }
 
 async function loadSessionContext(sessionId: string) {
@@ -2365,6 +2427,7 @@ onMounted(() => {
 
 // 在组件卸载前移除事件监听
 onBeforeUnmount(() => {
+  stopBgTaskPolling()
   stopProcessingClock()
   if (messagesContainer.value) {
     messagesContainer.value.removeEventListener('scroll', handleScroll)
@@ -3003,6 +3066,13 @@ function onComposerPaste(e: ClipboardEvent) {
                         }"
                         @paste="onComposerPaste"
                         @keydown="onComposerKeydown"
+                      />
+
+                      <BgTaskPanel
+                        v-if="bgTasks.length"
+                        :tasks="bgTasks"
+                        @decide="onBgTaskDecide"
+                        @cancel="onBgTaskCancel"
                       />
 
                       <ChatComposerToolbar

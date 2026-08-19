@@ -322,6 +322,13 @@ class HitlYamlSection(BaseModel):
     ask_timeout_seconds: int = Field(default=86400, ge=1)
 
 
+class SubagentsYamlSection(BaseModel):
+    """SuperAgent 后台子 Agent（全异步 task + HITL 审批续跑）。"""
+
+    max_concurrent_per_session: int = Field(default=3, ge=1)
+    task_timeout_seconds: float = Field(default=900, gt=0)
+
+
 class MessagingYamlSection(BaseModel):
     """多通道运行时（与 settings 配置面分离）。"""
 
@@ -395,6 +402,7 @@ class AppYamlConfig(BaseModel):
     chat_attachment: ChatAttachmentYamlSection = Field(default_factory=ChatAttachmentYamlSection)
     sandbox: SandboxYamlSection = Field(default_factory=SandboxYamlSection)
     hitl: HitlYamlSection = Field(default_factory=HitlYamlSection)
+    subagents: SubagentsYamlSection = Field(default_factory=SubagentsYamlSection)
     messaging: MessagingYamlSection = Field(default_factory=MessagingYamlSection)
     settings_features: SettingsFeaturesYamlSection = Field(
         default_factory=SettingsFeaturesYamlSection
