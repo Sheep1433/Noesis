@@ -30,6 +30,7 @@ from typing import Any, Optional
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
+from noesis.agents.subagents import notifications, steering
 from noesis.runtime.logging import logger
 
 # ---------------------------------------------------------------------------
@@ -175,6 +176,16 @@ def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
     return {"interrupt_id": str(iid), **payload}
 
 
+def _notify_terminal(task: BackgroundTask) -> None:
+    """终态转换点统一记录会话通知（completed/failed/timed_out/cancelled）。"""
+    notifications.record(
+        session_id=task.session_id,
+        task_id=task.task_id,
+        status=task.status.value,
+        preview=task.result or task.error,
+    )
+
+
 def _final_answer_text(final_state: Any) -> str:
     messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
     for message in reversed(messages):
@@ -279,6 +290,17 @@ class BackgroundSubagentExecutor:
         )
         return task_id
 
+    def send_message(self, task_id: str, message: str) -> dict[str, Any]:
+        """向运行中/待审批任务投递策略调整指令（下一次模型调用生效）。"""
+        with _TASKS_LOCK:
+            entry = _TASKS.get(task_id)
+            if entry is None:
+                raise ValueError(f"后台任务不存在: {task_id}")
+            if entry.task.status.is_terminal:
+                raise ValueError(f"任务已结束（{entry.task.status.value}），无法再调整")
+        steering.put(task_id, message)
+        return entry.task.to_dict()
+
     # -- 审批 / 取消 ---------------------------------------------------
 
     def submit_decisions(self, task_id: str, decisions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -308,10 +330,12 @@ class BackgroundSubagentExecutor:
             if entry.task.status.is_terminal:
                 return entry.task.to_dict()
             self._disarm_watchdog(entry)
+            steering.clear(task_id)
             if entry.future is not None:
                 entry.future.cancel()
             entry.task.status = BgTaskStatus.CANCELLED
             entry.task.completed_at = time.time()
+            _notify_terminal(entry.task)
             snapshot = entry.task.to_dict()
         return snapshot
 
@@ -346,6 +370,7 @@ class BackgroundSubagentExecutor:
             task.result = _final_answer_text(final)
             task.status = BgTaskStatus.COMPLETED
             task.completed_at = time.time()
+            _notify_terminal(task)
         except asyncio.CancelledError:
             if not task.status.is_terminal:
                 task.status = BgTaskStatus.CANCELLED
@@ -354,6 +379,7 @@ class BackgroundSubagentExecutor:
             task.status = BgTaskStatus.FAILED
             task.error = str(exc)
             task.completed_at = time.time()
+            _notify_terminal(task)
             logger.opt(exception=True).error(
                 "bg subagent failed task_id={}", task.task_id,
             )
@@ -387,6 +413,7 @@ class BackgroundSubagentExecutor:
         entry.task.status = BgTaskStatus.TIMED_OUT
         entry.task.error = f"后台任务超时（{int(entry.timeout_seconds)}s）"
         entry.task.completed_at = time.time()
+        _notify_terminal(entry.task)
 
     def _on_hitl_timeout(self, entry: _TaskEntry) -> None:
         if entry.task.status != BgTaskStatus.AWAITING_APPROVAL:

@@ -233,3 +233,133 @@ def test_list_and_pending_approvals_scoped_by_session() -> None:
     ids = [t["task_id"] for t in executor.list_for_session("s1")]
     assert len(ids) == 1
     assert executor.pending_approvals("s1") == []
+
+
+# ---------------------------------------------------------------------------
+# steering / notifications
+# ---------------------------------------------------------------------------
+
+def test_send_message_injects_on_next_model_call() -> None:
+    """运行中任务收到调整指令：下一次模型调用的输入包含 [用户策略调整]。"""
+    from noesis.agents.subagents import steering
+    from noesis.agents.subagents.steering_middleware import SteeringMiddleware
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    worker = _build_worker(
+        [_call("s0", "c0"), AIMessage(content="收到调整，收尾")],
+    )
+    # 挂 steering：模拟真实 worker 装配
+    # （_build_worker 不含 steering，此处直接验证 middleware 契约）
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+
+    executor.send_message(task_id, "聚焦中文源")
+    # 队列已入队；drain 模拟下一次模型调用边界
+    instructions = steering.drain(task_id)
+    assert instructions == ["聚焦中文源"]
+    # 消费后不重复
+    assert steering.drain(task_id) == []
+
+    _wait_terminal(executor, task_id)
+
+
+def test_send_message_rejects_terminal_task() -> None:
+    worker = _build_worker([AIMessage(content="直接完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    _wait_terminal(executor, task_id)
+
+    with pytest.raises(ValueError, match="已结束"):
+        executor.send_message(task_id, "调整")
+
+
+def test_send_message_during_awaiting_approval_delivered_on_resume() -> None:
+    """待审批期间入队：审批通过续跑后，drain（=首次模型调用）能取到指令。"""
+    from noesis.agents.subagents import steering
+
+    worker = _build_worker(
+        [_call("y", "c1"), AIMessage(content="按调整后方向收尾")],
+        interrupt_on={"dangerous": True},
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(agent=worker, description="x", session_id="s1", user_id="u1")
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
+
+    executor.send_message(task_id, "改查中文源")
+    executor.submit_decisions(task_id, [{"type": "approve"}])
+
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    # 队列在续跑前仍在（真实链路中由 SteeringMiddleware 消费）
+    remaining = steering.drain(task_id)
+    assert remaining == ["改查中文源"] or remaining == []
+
+
+def test_terminal_records_session_notification_once() -> None:
+    from noesis.agents.subagents import notifications
+
+    worker = _build_worker([AIMessage(content="调研完成：三个要点…")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(agent=worker, description="x", session_id="s-notif", user_id="u1")
+    _wait_terminal(executor, task_id)
+
+    notices = notifications.drain("s-notif")
+    assert len(notices) == 1
+    assert notices[0]["task_id"] == task_id
+    assert notices[0]["status"] == "completed"
+    assert "调研完成" in notices[0]["preview"]
+    # drain 一次性
+    assert notifications.drain("s-notif") == []
+
+
+def test_notify_agent_query_prefixes_block() -> None:
+    from noesis.agents.subagents import notifications
+
+    notifications.record("s-q", "bg-1", "completed", "小结")
+    notifications.record("s-q", "bg-2", "failed", "boom")
+    query = notifications.notify_agent_query("s-q", "用户的问题")
+    assert query.startswith("[系统通知]")
+    assert "bg-1" in query and "check_task" in query
+    assert "bg-2" in query
+    assert query.endswith("用户的问题")
+    # 无通知时原样返回
+    assert notifications.notify_agent_query("s-q", "下一个问题") == "下一个问题"
+
+
+def test_steering_middleware_injects_and_consumes() -> None:
+    """SteeringMiddleware 在模型调用边界把待注入指令追加为 HumanMessage。"""
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from noesis.agents.subagents import steering
+    from noesis.agents.subagents.steering_middleware import SteeringMiddleware
+
+    class _Runtime:
+        config = {"configurable": {"thread_id": "bg-steer-1"}}
+
+    request = ModelRequest(
+        model=object(),  # type: ignore[arg-type]
+        messages=[HumanMessage(content="原始任务")],
+        system_message=SystemMessage(content="sys"),
+        state={},
+        runtime=_Runtime(),  # type: ignore[arg-type]
+    )
+    steering.put("bg-steer-1", "聚焦中文源")
+    steering.put("bg-steer-1", "输出限定 300 字")
+
+    seen: list = []
+    SteeringMiddleware().wrap_model_call(
+        request, lambda req: seen.append(req.messages) or "ok",  # type: ignore[arg-type,return-value]
+    )
+    injected = seen[0]
+    assert [m.content for m in injected] == [
+        "原始任务",
+        "[用户策略调整] 聚焦中文源",
+        "[用户策略调整] 输出限定 300 字",
+    ]
+    # 消费后再次调用不再注入
+    seen.clear()
+    SteeringMiddleware().wrap_model_call(
+        request, lambda req: seen.append(req.messages) or "ok",  # type: ignore[arg-type,return-value]
+    )
+    assert [m.content for m in seen[0]] == ["原始任务"]

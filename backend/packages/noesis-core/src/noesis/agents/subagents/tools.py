@@ -85,6 +85,16 @@ def build_background_task_tools(
     async def acancel_task(task_id: str) -> str:
         return cancel_task(task_id)
 
+    def send_message(task_id: str, message: str) -> str:
+        try:
+            executor.send_message(task_id, message)
+        except ValueError as exc:
+            return f"发送失败：{exc}"
+        return f"调整指令已下发：{task_id}（下一次执行步骤生效）"
+
+    async def asend_message(task_id: str, message: str) -> str:
+        return send_message(task_id, message)
+
     def list_tasks() -> str:
         tasks = executor.list_for_session(session_id)
         if not tasks:
@@ -116,6 +126,15 @@ def build_background_task_tools(
         name="cancel_task",
         description="取消一个后台任务（不再需要其结果时使用）。",
     )
+    steering_tool = StructuredTool.from_function(
+        func=send_message,
+        coroutine=asend_message,
+        name="send_message",
+        description=(
+            "向运行中的后台任务下发策略调整指令（如聚焦范围/更换方向/输出格式），"
+            "在其下一次执行步骤生效，不影响已进行中的步骤。"
+        ),
+    )
     listing = StructuredTool.from_function(
         func=list_tasks,
         coroutine=alist_tasks,
@@ -123,7 +142,7 @@ def build_background_task_tools(
         description="列出当前会话所有后台任务及状态。",
     )
     logger.info("background task tools ready session_id={}", session_id)
-    return [start, check, cancel, listing]
+    return [start, check, cancel, steering_tool, listing]
 
 
 __all__ = ["build_background_task_tools"]

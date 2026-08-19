@@ -55,6 +55,14 @@ class BgTaskService:
         return snapshot
 
     @classmethod
+    def send_message(cls, task_id: str, user_id: str, message: str) -> dict[str, Any]:
+        cls.get_task(task_id, user_id)
+        try:
+            return BackgroundSubagentExecutor.send_message(task_id, message)
+        except ValueError as exc:
+            raise NotFoundException(str(exc)) from exc
+
+    @classmethod
     def cancel(cls, task_id: str, user_id: str) -> dict[str, Any]:
         cls.get_task(task_id, user_id)
         try:

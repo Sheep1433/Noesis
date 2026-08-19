@@ -1014,6 +1014,23 @@ async def submit_bg_task_decisions(
     return ResponseUtil.success(msg='审批已提交', data=task)
 
 
+@chat_router.post("/bg-tasks/{task_id}/message", summary="向后台任务发送调整指令")
+async def send_bg_task_message(
+    task_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """向运行中/待审批的后台子 Agent 下发策略调整，下一次执行步骤生效。"""
+    from noesis.services.bg_task_service import BgTaskService
+
+    body = await request.json()
+    message = str(body.get("message") or "").strip()
+    if not message:
+        return ResponseUtil.failure(msg='message 不能为空')
+    task = BgTaskService.send_message(task_id, str(current_user.user_id), message)
+    return ResponseUtil.success(msg='指令已下发', data=task)
+
+
 @chat_router.post("/bg-tasks/{task_id}/cancel", summary="取消后台任务")
 async def cancel_bg_task(
     task_id: str,

@@ -24,6 +24,7 @@ from noesis.schemas.qa_vo import QaQueryRequest
 from noesis.services.chat_attachment_service import ChatAttachmentService
 from noesis.services.chat_service import ChatService
 from noesis.services.mention_resolve_service import MentionResolveService
+from noesis.agents.subagents.notifications import notify_agent_query
 from noesis.services.qa.helpers import (
     _finalize_sse_bridge_stream,
     _finalize_run_events,
@@ -87,6 +88,8 @@ class QaService:
                 if clean_query
                 else resolved_mentions.prompt_block
             )
+        # 后台子 Agent 终态通知：一次性 drain 前置到 agent_query（不落库）
+        agent_query = notify_agent_query(session_id, agent_query)
 
         try:
             logger.info(
