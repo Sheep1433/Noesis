@@ -25,6 +25,7 @@ from noesis.chat.runs.models import (
     TERMINAL_RUN_STATUSES,
     require_transition,
 )
+from noesis.chat.runs.session_signals import session_signal_bus
 
 
 class RunNotFound(KeyError):
@@ -443,6 +444,7 @@ class RunManager:
         async with handle.lock:
             handle.status = RunStatus.RUNNING
             generation = self._begin_producer_segment_locked(handle)
+            self._publish_session_signal(handle, RunStatus.RUNNING)
         handle.producer_task = asyncio.create_task(
             self._run_producer(handle, producer, generation), name=f"agent-run:{run_id}"
         )
@@ -450,6 +452,26 @@ class RunManager:
             self._expire_running_run(handle), name=f"agent-run-timeout:{run_id}"
         )
         return handle
+
+    def _publish_session_signal(self, handle: RunHandle, target: RunStatus) -> None:
+        """状态迁移后向 session 信令总线投递 hint（run-started / hitl-pending / terminal）。
+
+        start()/resume() 直接置 RUNNING 不走 transition()，须各自调用；
+        信令幂等，重复投递无害——客户端只据它去拉权威状态。
+        """
+        if target == RunStatus.RUNNING:
+            signal = {
+                "type": "run-started",
+                "run_id": handle.run_id,
+                "assistant_message_id": handle.assistant_message_id,
+            }
+        elif target == RunStatus.HITL_PENDING:
+            signal = {"type": "run-hitl-pending", "run_id": handle.run_id}
+        elif target in TERMINAL_RUN_STATUSES:
+            signal = {"type": "run-terminal", "run_id": handle.run_id, "status": target.value}
+        else:
+            return
+        session_signal_bus.publish(handle.user_id, handle.session_id, signal)
 
     def _sample_event_loop_lag(self) -> None:
         loop = asyncio.get_running_loop()
@@ -520,6 +542,7 @@ class RunManager:
             handle.limit_error = None
             handle.status = RunStatus.RUNNING
             generation = self._begin_producer_segment_locked(handle)
+            self._publish_session_signal(handle, RunStatus.RUNNING)
             handle.producer_task = asyncio.create_task(
                 self._run_producer(handle, producer, generation), name=f"agent-run-resume:{run_id}"
             )
@@ -651,6 +674,7 @@ class RunManager:
                     handle.watchdog_task = None
             if target in TERMINAL_RUN_STATUSES and handle.terminal_future is not None:
                 self._mark_terminal_locked(handle, target)
+            self._publish_session_signal(handle, target)
             return True
 
     def _mark_terminal_locked(self, handle: RunHandle, target: RunStatus) -> None:

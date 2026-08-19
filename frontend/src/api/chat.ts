@@ -392,6 +392,17 @@ export async function stopAgentRun(runId: string): Promise<AgentRunSnapshot> {
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
 }
 
+/** 订阅会话级信令流（跨窗口发现活跃 run）；帧为 event: session-signal 的轻量定位符 */
+export async function subscribeSessionEvents(sessionId: string, signal?: AbortSignal): Promise<Response> {
+  const url = new URL(`${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/events`)
+  return authFetch(new Request(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers: getAuthHeaders(),
+    signal,
+  }))
+}
+
 /** 后台子 Agent 任务（含待审批） */
 export interface BgTask {
   task_id: string

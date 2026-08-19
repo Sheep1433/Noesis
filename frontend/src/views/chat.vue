@@ -227,11 +227,18 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     businessStore.update_qa_type(qt)
     uuids.value[qt] = sessionId
     sessionMaterialized.value = true
+    // 会话切换即挂信令流：其它窗口发起 run 时本窗口实时加入
+    sseStream.watchSessionSignals(sessionId)
 
     const messagesReady = loadSessionMessages(
       sessionId,
       conversationItems,
       currentRenderIndex,
+    )
+    // 信令触发的加入（run-started）须等历史就位再 apply snapshot，防止 patch 丢失
+    sessionHistoryReady.set(
+      sessionId,
+      messagesReady.catch(() => {}).finally(() => sessionHistoryReady.delete(sessionId)),
     )
     const contextReady = loadSessionContext(sessionId)
     void refreshBgTasks(sessionId)
@@ -262,6 +269,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 
 function resetComposingSurface() {
   sseStream.detachSubscription()
+  sseStream.stopSessionSignals()
   stopBgTaskPolling()
   stopProcessingClock()
   sessionContext.value = null
@@ -812,6 +820,8 @@ const nativeReasoningSeen = ref(false)
 
 // 改为对象存储不同问答类型的uuid
 const uuids = ref<Record<string, string>>({})
+/** 各会话历史加载中的 promise（信令加入 run 时等待就位，见 restoreActiveSessionFromRoute） */
+const sessionHistoryReady = new Map<string, Promise<unknown>>()
 
 const sessionContext = ref<import('@/api/chat').ContextSnapshot | null>(null)
 const sessionContextSessionId = ref('')
@@ -1413,6 +1423,10 @@ const sseStream = useSSEStream({
   onStatsUpdate: (stats) => {
     sessionStats.value = stats as unknown as SessionStats
   },
+  onBusyConflict: () => {
+    window.$ModalMessage.warning('当前会话正在生成回复，你的消息将在本轮结束后自动发送')
+  },
+  historyReady: (sessionId) => sessionHistoryReady.get(sessionId) ?? null,
   onError: (msg) => {
     stylizingLoading.value = false
     stopProcessingClock()
@@ -1705,6 +1719,8 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   try {
     await ensureSession(sessionIdForSend, { extra: buildSessionConfigExtra() })
     sessionMaterialized.value = true
+    // 会话已物化：开启信令流，让其它窗口能发现本窗口发起的 run（已开启则 no-op）
+    sseStream.watchSessionSignals(sessionIdForSend)
     void replaceChatSessionUrl(sessionIdForSend)
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
@@ -2429,6 +2445,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopBgTaskPolling()
   stopProcessingClock()
+  // 停止信令流：SPA 内路由切换不会断开 fetch 连接，必须显式中止
+  sseStream.stopSessionSignals()
   if (messagesContainer.value) {
     messagesContainer.value.removeEventListener('scroll', handleScroll)
   }
