@@ -1,6 +1,6 @@
 
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 
 class MentionItem(BaseModel):
@@ -29,6 +29,10 @@ class QaQueryRequest(BaseModel):
     model_id: Optional[str] = Field(
         None,
         description="对话模型目录 id；省略时使用会话 extra 或默认模型",
+    )
+    extra: Optional[Dict[str, Any]] = Field(
+        None,
+        description="透传元数据（如 bg_continuation 自动续跑标记）；不进模型输入",
     )
     mcp_servers: Optional[List[str]] = Field(
         None,

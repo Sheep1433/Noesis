@@ -572,6 +572,7 @@ class RunService:
                 extra.get("enabled_skills") if isinstance(extra.get("enabled_skills"), list) else None
             ),
             mentions=extra.get("mentions") if isinstance(extra.get("mentions"), list) else None,
+            extra=extra or None,
         )
 
     @classmethod
