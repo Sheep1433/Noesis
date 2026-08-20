@@ -1221,3 +1221,35 @@ backends/
 **可迁移原则：** recall 负责找证据，reflect 负责综合，get_source 负责回溯原始 Run；不要把 top-k 原始片段直接塞进 system prompt。记忆写入要有 provenance、版本和冲突修订，只有重复成功且经过验证的经验才进入 Skill candidate。
 
 **验证与遗留：** 研究报告 `docs/research/agent-memory-2026/reports/final-report.md` 已归档；建议用 LongMemEval、MemoryAgentBench、PrecisionMemBench 和 Noesis RunMemory 场景验证跨会话召回、过期事实抑制、证据覆盖率和 token 成本，当前尚未实现 Cortex。
+
+## 2026-08-19 — Subagent：后台执行、前台等待和 follow-up 必须共用一条任务状态机
+
+**问题/症状：** 初版后台子 Agent 只能通过 5 秒轮询看摘要，主 run 结束后无法继续查看细节；尝试跨事件循环复用主连接池时出现 `create_isolated_checkpointer` 缺失和 cross-loop 资源风险；原 steering 注入只能影响当前模型调用，无法自然续聊。
+
+**解法/取舍：** 用专用守护线程事件循环和进程级任务注册表承载后台任务；同一个 `start_task` 工具通过 `run_in_background` 参数支持后台立即返回或前台等待，前台等待超过 120 秒自动转后台；checkpointer/httpx 在 worker loop 内惰性创建。`send_message` 改为子会话追加 follow-up turn，completed 可冷恢复，failed/timed_out/cancelled/one_shot 拒绝续话；子会话历史通过 checkpointer thread 只读查看，前端提供详情抽屉。
+
+**可迁移原则：** 同步/异步不是两套工具，而是同一任务状态机的两种等待策略；跨事件循环的资源必须在目标 loop 创建；人与子 Agent 的沟通应追加真实 turn，而不是偷偷修改当前模型调用上下文。
+
+**验证与遗留：** `6cdf05c` 已覆盖后台非阻塞、前台等待/超时转后台、审批续跑、follow-up、one_shot 和子会话读取；executor 契约 17/17、全量 1018 passed。运行中任务注册表仍是进程内存，进程重启恢复暂未实现。
+
+## 2026-08-19 — 跨窗口状态：信令是提示，active-run 才是权威
+
+**问题/症状：** A/B 两个浏览器窗口同时打开同一会话时，B 不会自动收到 A 的 SSE；B 发送消息可能触发 409；新窗口轮换 CSRF 后，旧窗口继续写请求得到 403 且日志没有足够线索。
+
+**解法/取舍：** 增加按 `(user_id, session_id)` 键控的有界 session signal bus；信令只负责提示 run-started/终态，丢帧时由 active-run API 和序列恢复自愈。409 时消息进入本地队列，当前 run 结束后自动重发。CSRF 轮换保留上一代 digest，在多窗口的一代时间内接受旧 token，并对拒绝请求写 warning。
+
+**可迁移原则：** 实时通知不应承担事实存储；跨窗口同步必须是“信令提示 + 服务端权威状态 + 可重放序列”。安全 token 轮换要考虑已有窗口的并发写入，否则安全增强会变成随机 403。
+
+**验证与遗留：** `b1c8bc9`、`9a036f5` 已补信令、409 排队和 CSRF 回归测试；慢订阅允许丢信令，依赖 active-run 恢复，仍需真实双浏览器 E2E。
+
+## 2026-08-19 — 统计落库必须覆盖正常终态与 HITL resume
+
+**问题/症状：** 统计条在实时运行中有数据，但刷新或重新打开会话归零；HITL pause/resume 后 usage 段可能被覆盖；`/statsline` 只显示本轮而不是完整会话。
+
+**根因：** 现代 run 终态走 `repository.finalize` 时 extra 没有带 usage；HITL resume 复用同一 assistant message，resume 段直接覆盖旧 extra 会丢掉 pause 段；内存 registry 不能替代持久化。
+
+**解法/取舍：** bridge 在 finish 注入 message usage，projection 捕获后传给 repository；`finalize` 采用 extra 合并、usage 字段累加；前端从消息历史汇总恢复 session stats，`/statsline` 只做展示模板定制，不改变统计真源。
+
+**可迁移原则：** 运行统计是 durable 业务数据，不是纯 UI 状态；终态落库、HITL resume、刷新回放必须使用同一合并语义，不能只验证实时 SSE。
+
+**验证与遗留：** `29df483`、`45c8091` 已补终态和 resume 合并测试；仍需验证跨进程恢复和不同 provider usage 字段的统一口径。
