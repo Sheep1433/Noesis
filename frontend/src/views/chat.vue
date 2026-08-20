@@ -234,8 +234,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
       currentRenderIndex,
     )
     const contextReady = loadSessionContext(sessionId)
-    stopBgTaskPolling()
-    void refreshBgTasks(sessionId)
+    openBgTaskStream(sessionId)
     reloadSessionFilesPanel()
     // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，
     // 防止慢历史响应覆盖新 Tab 已收到的实时内容。
@@ -919,14 +918,51 @@ function clearSessionConfig() {
   sessionMaterialized.value = false
 }
 
-// ---- 后台子 Agent：任务列表轮询 + 审批 ----
+// ---- 后台子 Agent：会话级 SSE 事件流 + 审批 ----
 const bgTasks = ref<BgTask[]>([])
-let bgTaskTimer: ReturnType<typeof setInterval> | null = null
+let bgTaskSource: EventSource | null = null
 
-function bgTasksHaveActive(): boolean {
-  return bgTasks.value.some((t) => t.status === 'running' || t.status === 'awaiting_approval')
+function applyBgTask(task: BgTask): void {
+  const idx = bgTasks.value.findIndex((t) => t.task_id === task.task_id)
+  if (idx >= 0) {
+    bgTasks.value.splice(idx, 1, task)
+  } else {
+    bgTasks.value.push(task)
+  }
+  bgTasks.value.sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0))
 }
 
+/** 打开（或重开）会话级后台任务事件流：连接即收存量快照，此后实时推送 */
+function openBgTaskStream(sessionId: string): void {
+  bgTaskSource?.close()
+  bgTaskSource = null
+  if (!sessionId || sessionId !== currentIndex.value) {
+    return
+  }
+  const source = new EventSource(
+    `${location.origin}/api/chat/sessions/${encodeURIComponent(sessionId)}/bg-tasks/stream`,
+  )
+  source.addEventListener('bg-task', (e: MessageEvent) => {
+    try {
+      const payload = JSON.parse(e.data)
+      if (payload?.task) {
+        applyBgTask(payload.task as BgTask)
+      }
+    } catch (err) {
+      console.warn('[bg-task] parse event failed', err)
+    }
+  })
+  // onerror 不手动重连：EventSource 内建自动重连，重连由服务端快照对齐
+  bgTaskSource = source
+}
+
+function stopBgTaskPolling(): void {
+  bgTaskSource?.close()
+  bgTaskSource = null
+  bgTasks.value = []
+}
+
+/** 操作后主动拉一次全量（审批/取消/发消息后对齐，事件流兜底） */
 async function refreshBgTasks(sessionId: string): Promise<void> {
   if (!sessionId || sessionId !== currentIndex.value) {
     return
@@ -935,24 +971,8 @@ async function refreshBgTasks(sessionId: string): Promise<void> {
     const res = await listBgTasks(sessionId)
     bgTasks.value = res.tasks ?? []
   } catch {
-    bgTasks.value = []
+    // 网络异常时事件流仍在，忽略
   }
-  if (bgTasksHaveActive() && bgTaskTimer === null) {
-    bgTaskTimer = setInterval(() => {
-      void refreshBgTasks(sessionId)
-    }, 5000)
-  } else if (!bgTasksHaveActive() && bgTaskTimer !== null) {
-    clearInterval(bgTaskTimer)
-    bgTaskTimer = null
-  }
-}
-
-function stopBgTaskPolling(): void {
-  if (bgTaskTimer !== null) {
-    clearInterval(bgTaskTimer)
-    bgTaskTimer = null
-  }
-  bgTasks.value = []
 }
 
 async function onBgTaskDecide(payload: { task: BgTask, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
@@ -1334,8 +1354,6 @@ const sseStream = useSSEStream({
   onFinish: (detail) => {
     stylizingLoading.value = false
     stopProcessingClock()
-    // 本轮 run 可能新启动了后台任务：结束后立即刷新任务面板
-    void refreshBgTasks(currentIndex.value)
     // 整轮结束：触发当前回复的所有 compact 工具收起。
     runCollapseSignal.value += 1
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))

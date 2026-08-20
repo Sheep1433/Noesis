@@ -1031,6 +1031,52 @@ async def send_bg_task_message(
     return ResponseUtil.success(msg='指令已下发', data=task)
 
 
+@chat_router.get("/sessions/{session_id}/bg-tasks/stream", summary="后台任务事件流")
+async def stream_bg_tasks(
+    session_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """会话级 SSE：连接即推存量任务快照，此后推送任务生命周期事件
+    （started / progress / followup / awaiting_approval / terminal），
+    25s 心跳保活；前端 EventSource 自动重连，重连由初始快照对齐状态。"""
+    import asyncio
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+    from noesis.agents.subagents.executor import (
+        BackgroundSubagentExecutor,
+        subscribe_bg_events,
+        unsubscribe_bg_events,
+    )
+
+    user_id = str(current_user.user_id)
+    keepalive = 25.0
+
+    async def _gen():
+        queue = subscribe_bg_events(session_id, user_id)
+        try:
+            # 存量快照（含其他用户隔离校验由 task.user_id 过滤）
+            for task in BackgroundSubagentExecutor.list_for_session(session_id):
+                if task.get("user_id") in (None, user_id):
+                    payload = {"event": "snapshot", "task": task}
+                    yield f"event: bg-task\ndata: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=keepalive)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"event: bg-task\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
+        finally:
+            unsubscribe_bg_events(session_id, queue)
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @chat_router.get("/bg-tasks/{task_id}/messages", summary="后台任务子会话消息")
 async def get_bg_task_messages(
     task_id: str,

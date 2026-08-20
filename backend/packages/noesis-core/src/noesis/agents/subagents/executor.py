@@ -177,6 +177,51 @@ class _TaskEntry:
 _TASKS: dict[str, _TaskEntry] = {}
 _TASKS_LOCK = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# 会话级事件订阅（SSE push，替代前端轮询）：executor 在隔离线程发布，
+# 经 call_soon_threadsafe 跨 loop 投递到订阅者的 asyncio.Queue
+# ---------------------------------------------------------------------------
+
+_BGSub = tuple[asyncio.AbstractEventLoop, asyncio.Queue, str]  # (loop, queue, user_id)
+_SUBSCRIBERS: dict[str, list[_BGSub]] = {}
+_SUBSCRIBERS_LOCK = threading.Lock()
+
+
+def subscribe_bg_events(session_id: str, user_id: str) -> asyncio.Queue:
+    """在调用方事件循环上注册订阅（SSE 端点连接时调用）。"""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+    with _SUBSCRIBERS_LOCK:
+        _SUBSCRIBERS.setdefault(session_id, []).append((loop, queue, user_id))
+    return queue
+
+
+def unsubscribe_bg_events(session_id: str, queue: asyncio.Queue) -> None:
+    with _SUBSCRIBERS_LOCK:
+        subs = _SUBSCRIBERS.get(session_id) or []
+        _SUBSCRIBERS[session_id] = [s for s in subs if s[1] is not queue]
+
+
+def _publish_task_event(task: BackgroundTask, event: str) -> None:
+    """向该会话所有订阅者推送任务快照事件；慢消费者丢事件（重连快照兜底）。"""
+    payload = {"event": event, "task": task.to_dict()}
+    with _SUBSCRIBERS_LOCK:
+        subs = list(_SUBSCRIBERS.get(task.session_id) or [])
+    for loop, queue, user_id in subs:
+        if task.user_id not in (None, user_id):
+            continue
+
+        def _put(q: asyncio.Queue = queue, p: dict = payload) -> None:
+            try:
+                q.put_nowait(p)
+            except asyncio.QueueFull:
+                pass
+
+        try:
+            loop.call_soon_threadsafe(_put)
+        except RuntimeError:
+            pass  # 订阅者 loop 已关闭（SSE 断开竞态）
+
 # 默认值；装配方（super_agent）可用 config 覆盖
 MAX_CONCURRENT_PER_SESSION = 3
 TASK_TIMEOUT_SECONDS = 900.0
@@ -364,6 +409,7 @@ class BackgroundSubagentExecutor:
             _arun(entry, resume_command=None), loop,
         )
         _arm_watchdog(entry)
+        _publish_task_event(task, "started")
         logger.info(
             "bg subagent started task_id={} session_id={} active={}/{}",
             task_id, session_id, active + 1, self._max_concurrent,
@@ -402,11 +448,13 @@ class BackgroundSubagentExecutor:
                     ), loop,
                 )
                 _arm_watchdog(entry)
+                _publish_task_event(task, "followup")
                 return task.to_dict()
             if status.is_terminal:
                 raise ValueError(f"任务已结束（{status.value}），无法追加消息")
             with entry.followup_lock:
                 entry.followups.append(text)
+            _publish_task_event(task, "followup")
             return task.to_dict()
 
     @staticmethod
@@ -466,6 +514,7 @@ class BackgroundSubagentExecutor:
                 entry.future.cancel()
             entry.task.status = BgTaskStatus.CANCELLED
             entry.task.completed_at = time.time()
+            _publish_task_event(entry.task, "terminal")
             _notify_terminal(entry.task)
             snapshot = entry.task.to_dict()
         return snapshot
@@ -559,6 +608,7 @@ async def _arun(
             "bg subagent completed task_id={} steps={} duration={:.1f}s",
             task.task_id, len(task.progress), task.completed_at - task.started_at,
         )
+        _publish_task_event(task, "terminal")
         _notify_terminal(task)
     except asyncio.CancelledError:
         if not task.status.is_terminal:
@@ -568,6 +618,7 @@ async def _arun(
         task.status = BgTaskStatus.FAILED
         task.error = str(exc)
         task.completed_at = time.time()
+        _publish_task_event(task, "terminal")
         _notify_terminal(task)
         logger.opt(exception=True).error(
             "bg subagent failed task_id={}", task.task_id,

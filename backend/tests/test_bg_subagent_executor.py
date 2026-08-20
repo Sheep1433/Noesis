@@ -430,3 +430,37 @@ async def test_background_default_returns_immediately() -> None:
     assert "后台任务已启动" in result
     task_id = result.split("：")[1].split("\n")[0]
     executor.cancel(task_id)
+
+
+# ---------------------------------------------------------------------------
+# 会话级事件订阅（SSE push，替代前端轮询）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_bg_event_subscription_receives_lifecycle() -> None:
+    """订阅者在自己的事件循环上收到 started / terminal 事件（跨线程推送）。"""
+    import asyncio as _asyncio
+
+    from noesis.agents.subagents.executor import (
+        subscribe_bg_events,
+        unsubscribe_bg_events,
+    )
+
+    worker = _build_worker([AIMessage(content="完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    queue = subscribe_bg_events("s-sse", "u1")
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: worker, description="x",
+            session_id="s-sse", user_id="u1",
+        )
+        events: list[dict] = []
+        for _ in range(2):  # started + terminal
+            event = await _asyncio.wait_for(queue.get(), timeout=5)
+            events.append(event)
+        assert events[0]["event"] == "started"
+        assert events[0]["task"]["task_id"] == task_id
+        assert events[-1]["event"] == "terminal"
+        assert events[-1]["task"]["status"] == "completed"
+    finally:
+        unsubscribe_bg_events("s-sse", queue)
