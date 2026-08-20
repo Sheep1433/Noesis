@@ -25,7 +25,15 @@ from server.api import (
 )
 from noesis.knowledge.runtime import init_knowledge_base, close_knowledge_base
 from noesis.agents.backends.sandbox_lifecycle import shutdown_sandboxes
-from noesis.agents.subagents import shutdown as shutdown_bg_subagents
+from noesis.agents.subagents import (
+    configure_task_store,
+    shutdown as shutdown_bg_subagents,
+)
+from noesis.repositories.bg_task_repository import (
+    BgTaskRepositoryAdapter,
+    reconcile_interrupted_tasks,
+)
+from noesis.runtime.main_loop import capture_main_loop
 from server.wiring import wire_runtime_observability
 from noesis.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,
@@ -42,6 +50,7 @@ from noesis.services.run_service import run_manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f'⏰️ {AppConfig.app_name}开始启动')
+    capture_main_loop()
     sync_langfuse_env_from_app_config()
     wire_runtime_observability()
     async with AsyncExitStack() as resources:
@@ -80,7 +89,12 @@ async def lifespan(app: FastAPI):
             run_manager.shutdown,
             drain_seconds=StreamConfig.run_shutdown_drain_seconds,
         )
-        # 后台子 Agent：进程退出时取消运行中任务并停掉隔离 loop
+        # 后台子 Agent：注入任务快照持久层（t_bg_task），重启后对账中断任务
+        configure_task_store(BgTaskRepositoryAdapter())
+        interrupted = await asyncio.to_thread(reconcile_interrupted_tasks)
+        if interrupted:
+            logger.warning(f"后台任务对账：{interrupted} 个遗留任务标记为中断")
+        # 进程退出时取消运行中任务并停掉隔离 loop
         resources.callback(shutdown_bg_subagents)
 
         await sync_existing_kb_collection_configs()

@@ -65,23 +65,26 @@ class GuardedFilesystemBackend(BackendProtocol):
         return self._inner.read(file_path, offset=offset, limit=limit)
 
     def write(self, file_path: str, content: str) -> WriteResult:
+        """记忆写入为显式 upsert：新文件走 write，已有文件全量替换。
+
+        （既有契约，见 tests/test_user_memory_backend.py：记忆文件允许
+        write_file 整体覆写；覆写同样经 interrupt_on write_file 审批。）
+        先读后写，不依赖上游 "already exists" 错误文案。
+        """
         name = self._basename(file_path)
         if name in self._read_only:
             return WriteResult(error=self._read_only_error)
         if not name:
             return WriteResult(error="file_not_found")
-        created = self._inner.write(file_path, content)
-        if created.error is None:
-            return created
-        if "already exists" not in (created.error or ""):
-            return created
         existing = self._inner.read(file_path, offset=0, limit=100_000)
-        if existing.error is not None:
-            return WriteResult(error=existing.error)
-        edited = self._inner.edit(file_path, file_data_to_string(existing.file_data), content)
-        if edited.error:
-            return WriteResult(error=edited.error)
-        return WriteResult(path=edited.path or file_path)
+        if existing.error is None:
+            edited = self._inner.edit(
+                file_path, file_data_to_string(existing.file_data), content
+            )
+            if edited.error:
+                return WriteResult(error=edited.error)
+            return WriteResult(path=edited.path or file_path)
+        return self._inner.write(file_path, content)
 
     def edit(
         self,

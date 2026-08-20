@@ -7,6 +7,7 @@ table.
 from __future__ import annotations
 
 from noesis.storage.postgres.models.auth import TUser, TUserSession
+from noesis.storage.postgres.models.bg_task import TBackgroundTask
 from noesis.storage.postgres.models.chat import (
     TAgentDelivery,
     TAgentRun,
@@ -25,6 +26,7 @@ from noesis.storage.postgres.models.settings import (
 __all__ = [
     "TUser",
     "TUserSession",
+    "TBackgroundTask",
     "TChatSession",
     "TChatMessage",
     "TAgentRun",

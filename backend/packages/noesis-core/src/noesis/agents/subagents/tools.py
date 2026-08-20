@@ -116,8 +116,8 @@ def build_background_task_tools(
     def check_task(task_id: str) -> str:
         task = executor.get(task_id)
         if task is None:
-            # 已终态的历史任务从注册表查询不到时给出可诊断的提示
-            return f"{task_id} 不存在（可能是进程重启前启动的旧任务）"
+            # 内存 miss 时 get 已查持久层；到这里说明任务 ID 确实未知
+            return f"{task_id} 不存在"
         if task["session_id"] != session_id:
             return f"{task_id} 不属于当前会话"
         return _format_task(task)

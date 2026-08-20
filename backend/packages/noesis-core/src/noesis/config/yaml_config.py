@@ -329,6 +329,8 @@ class SubagentsYamlSection(BaseModel):
     task_timeout_seconds: float = Field(default=900, gt=0)
     # 前台等待上限：超过即自动转后台（同步转异步）
     foreground_max_wait_seconds: float = Field(default=120, gt=0)
+    # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
+    auto_continue: bool = Field(default=True)
 
 
 class MessagingYamlSection(BaseModel):

@@ -1066,7 +1066,10 @@ async def stream_bg_tasks(
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                yield f"event: bg-task\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
+                if "task" in item:
+                    yield f"event: bg-task\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"event: bg-continuation\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
             unsubscribe_bg_events(session_id, queue)
 

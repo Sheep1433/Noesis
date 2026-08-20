@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
@@ -27,6 +28,7 @@ from pydantic import PrivateAttr
 from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
     BgTaskStatus,
+    configure_task_store,
     shutdown as bg_shutdown,
 )
 
@@ -522,3 +524,241 @@ def test_run_start_injection_marks_delivered_for_middleware() -> None:
         request, lambda req: seen.append(req.messages) or "ok",  # type: ignore[arg-type,return-value]
     )
     assert len(seen[0]) == 1
+
+
+# ---------------------------------------------------------------------------
+# 自动续跑（continuation run）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_maybe_continue_creates_run_when_idle(monkeypatch) -> None:
+    """无活跃 run + 有通知 → 创建 continuation run；通知标记已送达。"""
+    from noesis.services import bg_continuation_service as svc
+
+    svc.reset_for_tests()
+    created: list = []
+
+    class _FakeUser:
+        pass
+
+    async def fake_load_user(user_id: str):
+        return _FakeUser()
+
+    class _FakeRepo:
+        def __init__(self, db):
+            pass
+
+        async def get_active_for_session(self, user_id, session_id):
+            return None
+
+    class _FakeRun:
+        id = "run-x"
+        assistant_message_id = "am-x"
+
+    async def fake_create(request, current_user, db):
+        created.append(request)
+        return _FakeRun()
+
+    class _FakeCtx:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *a):
+            return False
+
+    from noesis.agents.subagents import notifications
+    notifications.record("s-cont", "bg-1", "completed", "小结")
+
+    monkeypatch.setattr(svc, "_load_user", fake_load_user)
+    monkeypatch.setattr(svc, "AgentRunRepository", _FakeRepo)
+    monkeypatch.setattr(svc, "RunService", type("RS", (), {"create": staticmethod(fake_create)}))
+    monkeypatch.setattr(svc, "pg_manager", type("PM", (), {"get_async_session_context": staticmethod(lambda: _FakeCtx())}))
+    monkeypatch.setattr(svc, "SubagentConfig", SimpleNamespace(auto_continue=True))
+
+    result = await svc.maybe_continue("s-cont", "u1")
+    assert result == {"run_id": "run-x", "assistant_message_id": "am-x"}
+    assert len(created) == 1
+    assert "[系统通知]" in created[0].content
+    assert "check_task" in created[0].content
+    assert created[0].extra.get("bg_continuation") is True
+    svc.reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_maybe_continue_skips_when_run_active(monkeypatch) -> None:
+    """会话有活跃 run：不创建，通知保留（留给 run 内中间件）。"""
+    from noesis.services import bg_continuation_service as svc
+    from noesis.agents.subagents import notifications
+
+    svc.reset_for_tests()
+    notifications.record("s-cont2", "bg-2", "completed", "x")
+
+    class _ActiveRun:
+        id = "run-active"
+
+    class _FakeRepo:
+        def __init__(self, db):
+            pass
+
+        async def get_active_for_session(self, user_id, session_id):
+            return _ActiveRun()
+
+    async def fail_create(*a, **k):
+        raise AssertionError("should not create")
+
+    monkeypatch.setattr(svc, "AgentRunRepository", _FakeRepo)
+    monkeypatch.setattr(svc, "RunService", type("RS", (), {"create": staticmethod(fail_create)}))
+
+    async def early_check(session_id, user_id):
+        # active 检查在 _load_user / db 之前无法短路（实现顺序）——直接调用并断言 None
+        return None
+
+    # 直接走到 active 检查：_load_user 和 pg_manager 需要 stub
+    async def fake_load_user(user_id):
+        return object()
+
+    class _FakeCtx:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(svc, "_load_user", fake_load_user)
+    monkeypatch.setattr(svc, "pg_manager", type("PM", (), {"get_async_session_context": staticmethod(lambda: _FakeCtx())}))
+
+    result = await svc.maybe_continue("s-cont2", "u1")
+    assert result is None
+    # 通知未被消费
+    remaining = notifications.take_undelivered("s-cont2", mark_delivered=False)
+    assert len(remaining) == 1
+    svc.reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_consecutive_wake_cap(monkeypatch) -> None:
+    """连续自动唤醒达上限后不再触发；note_user_activity 清零。"""
+    from noesis.services import bg_continuation_service as svc
+
+    svc.reset_for_tests()
+    for i in range(svc._MAX_CONSECUTIVE):
+        svc._wake_counts["s-cap"] = i + 1
+    assert svc._wake_counts["s-cap"] >= svc._MAX_CONSECUTIVE
+
+    from noesis.agents.subagents import notifications
+    notifications.record("s-cap", "bg-3", "completed", "x")
+    result = await svc.maybe_continue("s-cap", "u1")
+    assert result is None  # 触顶拒绝（无需 mock 创建路径，上限检查在 active 检查前）
+
+    svc.note_user_activity("s-cap")
+    assert "s-cap" not in svc._wake_counts
+    svc.reset_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# 任务元数据持久化（BgTaskStore 注入）
+# ---------------------------------------------------------------------------
+
+class _MemoryTaskStore:
+    """进程内 store：按 task_id 保留最新快照；history 记录全部 save 序列。"""
+
+    def __init__(self) -> None:
+        self.saved: dict[str, dict[str, Any]] = {}
+        self.history: list[dict[str, Any]] = []
+
+    def save(self, snapshot: dict[str, Any]) -> None:
+        self.history.append(dict(snapshot))
+        self.saved[snapshot["task_id"]] = dict(snapshot)
+
+    def get(self, task_id: str) -> dict[str, Any] | None:
+        return self.saved.get(task_id)
+
+    def list_for_session(self, session_id: str) -> list[dict[str, Any]]:
+        return [
+            dict(s) for s in self.saved.values() if s.get("session_id") == session_id
+        ]
+
+
+@pytest.fixture()
+def task_store():
+    store = _MemoryTaskStore()
+    configure_task_store(store)
+    yield store
+    configure_task_store(None)
+
+
+def test_persist_snapshots_on_start_and_terminal(task_store) -> None:
+    worker = _build_worker([_call("data"), AIMessage(content="任务完成：已处理")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="处理数据",
+        session_id="s1", user_id="u1",
+    )
+    _wait_terminal(executor, task_id)
+
+    assert task_store.saved[task_id]["status"] == BgTaskStatus.COMPLETED.value
+    statuses = [s["status"] for s in task_store.history]
+    assert BgTaskStatus.RUNNING.value in statuses  # start 即落快照
+
+
+def test_persist_failure_does_not_break_execution(task_store) -> None:
+    def _boom(snapshot: dict[str, Any]) -> None:
+        raise RuntimeError("db down")
+
+    task_store.save = _boom  # type: ignore[method-assign]
+    worker = _build_worker([AIMessage(content="任务完成：已处理")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="处理数据",
+        session_id="s1", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+
+def test_store_failure_on_get_is_non_fatal(task_store) -> None:
+    def _boom(task_id: str) -> dict[str, Any] | None:
+        raise RuntimeError("db down")
+
+    task_store.get = _boom  # type: ignore[method-assign]
+    assert BackgroundSubagentExecutor.get("bg-unknown") is None
+
+
+def test_get_falls_back_to_store_after_restart(task_store) -> None:
+    worker = _build_worker([AIMessage(content="任务完成：已处理")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="处理数据",
+        session_id="s1", user_id="u1",
+    )
+    _wait_terminal(executor, task_id)
+
+    # 模拟进程重启：清空内存注册表，保留持久层
+    from noesis.agents.subagents import executor as executor_module
+    with executor_module._TASKS_LOCK:
+        executor_module._TASKS.clear()
+
+    task = BackgroundSubagentExecutor.get(task_id)
+    assert task is not None
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    listed = BackgroundSubagentExecutor.list_for_session("s1")
+    assert [t["task_id"] for t in listed] == [task_id]
+
+
+def test_list_merges_memory_over_stale_store_snapshot(task_store) -> None:
+    """store 中旧快照（running）不得覆盖内存中的最新状态（completed）。"""
+    worker = _build_worker([AIMessage(content="任务完成：已处理")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="处理数据",
+        session_id="s1", user_id="u1",
+    )
+    _wait_terminal(executor, task_id)
+
+    # 篡改 store 里的快照为旧状态，内存应为准
+    task_store.saved[task_id]["status"] = BgTaskStatus.RUNNING.value
+
+    tasks = BackgroundSubagentExecutor.list_for_session("s1")
+    assert tasks[0]["status"] == BgTaskStatus.COMPLETED.value

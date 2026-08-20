@@ -462,12 +462,12 @@ class VectorStore:
             }
         }
 
-    def load_all_documents(self, limit: int = 10000) -> List[Document]:
+    def load_all_documents(self, scroll_batch_size: int = 10_000) -> List[Document]:
         """
-        从向量存储中加载所有文档
+        从向量存储中**全量**加载所有文档（scroll 滚动到尽头）。
 
         Args:
-            limit: 每次滚动查询的最大数量
+            scroll_batch_size: 每次滚动查询的批次大小（不是总量上限——循环直到取完）
 
         Returns:
             Document 列表
@@ -478,7 +478,7 @@ class VectorStore:
         while True:
             scroll_result = self.client.scroll(
                 collection_name=self.collection_name,
-                limit=limit,
+                limit=scroll_batch_size,
                 offset=offset,
                 with_payload=True,
                 with_vectors=False,
@@ -620,16 +620,16 @@ class Retrieval:
             )
             logger.info(f"BM25 索引重建完成: collection={self.vector_store.collection_name}, {len(self.documents)} 个文档")
 
-    def load_existing_documents(self, limit: int = 10000) -> int:
+    def load_existing_documents(self, scroll_batch_size: int = 10_000) -> int:
         """
-        从向量存储加载现有文档并重建 BM25 索引
+        从向量存储全量加载文档并重建 BM25 索引（加载到尽头，无总量上限）。
 
         适用场景：
         - 服务重启后恢复 BM25 索引
         - 手动触发重建索引
 
         Args:
-            limit: 每次滚动查询的最大数量
+            scroll_batch_size: 每次滚动查询的批次大小（不是总量上限）
 
         Returns:
             加载的文档数量
@@ -637,7 +637,7 @@ class Retrieval:
         logger.info("开始从向量存储加载现有文档...")
 
         # 从向量存储加载所有文档
-        self.documents = self.vector_store.load_all_documents(limit=limit)
+        self.documents = self.vector_store.load_all_documents(scroll_batch_size=scroll_batch_size)
 
         # 重建 BM25 索引
         if self.documents:

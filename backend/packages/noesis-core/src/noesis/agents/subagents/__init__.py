@@ -4,6 +4,7 @@ from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
     BackgroundTask,
     BgTaskStatus,
+    configure_task_store,
     shutdown,
     shutdown_loop,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "BackgroundTask",
     "BgTaskStatus",
     "BgNotifyMiddleware",
+    "configure_task_store",
     "build_background_task_tools",
     "shutdown",
     "shutdown_loop",

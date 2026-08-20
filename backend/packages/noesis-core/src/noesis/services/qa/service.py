@@ -88,6 +88,11 @@ class QaService:
                 if clean_query
                 else resolved_mentions.prompt_block
             )
+        # 用户真实消息（非自动续跑）清零连续唤醒计数（惰性导入避免环）
+        if not (req_obj.extra or {}).get("bg_continuation"):
+            from noesis.services.bg_continuation_service import note_user_activity
+
+            note_user_activity(session_id)
         # 后台子 Agent 终态通知：一次性 drain 前置到 agent_query（不落库）。
         # 仅 SuperAgent 注入——check_task 等工具只存在于 SUPER_AGENT_QA。
         if req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:

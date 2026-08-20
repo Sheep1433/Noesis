@@ -13,7 +13,11 @@ HITL 工具审批：子 Agent 带 checkpointer + interrupt_on 编译，遇审批
 转 ``awaiting_approval``，审批经 ``Command(resume={"decisions": [...]})``
 在同一 thread 续跑（与主 run HITL 的 resume 契约一致）。
 
-已知限制（设计决策）：注册表在内存，进程重启后运行中任务丢失。
+任务元数据持久化（对齐 deepagents 教程 ch6 async_tasks channel 的诉求）：
+状态转换点把快照 upsert 到注入的 task store（t_bg_task 表）；进程重启后
+running/awaiting_approval 由 startup 对账标记为 failed，终态任务经
+check/list 的 DB fallback 仍可查询。执行面本身（协程、future、followup
+队列）仍在进程内，不跨重启恢复。
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ import uuid
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
@@ -126,7 +130,9 @@ def _ensure_loop() -> asyncio.AbstractEventLoop:
             return _loop
         ready = threading.Event()
         _loop_thread = threading.Thread(
-            target=_run_isolated_loop, args=(ready,), daemon=True,
+            target=_run_isolated_loop,
+            args=(ready,),
+            daemon=True,
             name="noesis-bg-subagent-loop",
         )
         _loop_thread.start()
@@ -177,6 +183,45 @@ class _TaskEntry:
 _TASKS: dict[str, _TaskEntry] = {}
 _TASKS_LOCK = threading.Lock()
 
+
+# ---------------------------------------------------------------------------
+# 任务元数据持久化（重启后 fallback 查询 + startup 对账）
+# ---------------------------------------------------------------------------
+
+
+class BgTaskStore(Protocol):
+    """快照存储面；具体实现见 repositories/bg_task_repository（t_bg_task 表）。"""
+
+    def save(self, snapshot: dict[str, Any]) -> None: ...
+
+    def get(self, task_id: str) -> Optional[dict[str, Any]]: ...
+
+    def list_for_session(self, session_id: str) -> list[dict[str, Any]]: ...
+
+
+_TASK_STORE: Optional[BgTaskStore] = None
+
+
+def configure_task_store(store: BgTaskStore | None) -> None:
+    """进程启动时注入（server/main.py lifespan）；测试可传内存实现。"""
+    global _TASK_STORE
+    _TASK_STORE = store
+
+
+def _persist(task: BackgroundTask) -> None:
+    """状态转换点落快照；持久化失败只记日志，绝不影响任务执行。"""
+    store = _TASK_STORE
+    if store is None:
+        return
+    try:
+        store.save(task.to_dict())
+    except Exception:
+        logger.opt(exception=True).warning(
+            "bg task snapshot persist failed task_id={}",
+            task.task_id,
+        )
+
+
 # ---------------------------------------------------------------------------
 # 会话级事件订阅（SSE push，替代前端轮询）：executor 在隔离线程发布，
 # 经 call_soon_threadsafe 跨 loop 投递到订阅者的 asyncio.Queue
@@ -202,6 +247,28 @@ def unsubscribe_bg_events(session_id: str, queue: asyncio.Queue) -> None:
         _SUBSCRIBERS[session_id] = [s for s in subs if s[1] is not queue]
 
 
+def publish_session_event(
+    session_id: str, user_id: str, payload: dict[str, Any]
+) -> None:
+    """向该会话订阅者推送会话级事件（如 continuation run 启动）。"""
+    with _SUBSCRIBERS_LOCK:
+        subs = list(_SUBSCRIBERS.get(session_id) or [])
+    for loop, queue, sub_user in subs:
+        if user_id not in (None, sub_user):
+            continue
+
+        def _put(q: asyncio.Queue = queue, p: dict[str, Any] = payload) -> None:
+            try:
+                q.put_nowait(p)
+            except asyncio.QueueFull:
+                pass
+
+        try:
+            loop.call_soon_threadsafe(_put)
+        except RuntimeError:
+            pass
+
+
 def _publish_task_event(task: BackgroundTask, event: str) -> None:
     """向该会话所有订阅者推送任务快照事件；慢消费者丢事件（重连快照兜底）。"""
     payload = {"event": event, "task": task.to_dict()}
@@ -222,6 +289,7 @@ def _publish_task_event(task: BackgroundTask, event: str) -> None:
         except RuntimeError:
             pass  # 订阅者 loop 已关闭（SSE 断开竞态）
 
+
 # 默认值；装配方（super_agent）可用 config 覆盖
 MAX_CONCURRENT_PER_SESSION = 3
 TASK_TIMEOUT_SECONDS = 900.0
@@ -238,7 +306,9 @@ def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
     first = interrupts[0] if isinstance(interrupts, (list, tuple)) else interrupts
     if first is None:
         return None
-    iid = getattr(first, "id", None) or (first.get("id") if isinstance(first, dict) else None)
+    iid = getattr(first, "id", None) or (
+        first.get("id") if isinstance(first, dict) else None
+    )
     value = getattr(first, "value", None)
     if value is None and isinstance(first, dict):
         value = first.get("value")
@@ -253,7 +323,9 @@ def _progress_append(task: BackgroundTask, entry: dict[str, Any]) -> None:
         task.progress.append(entry)
 
 
-def _record_step_progress(task: BackgroundTask, final_state: Any, seen_ids: set) -> None:
+def _record_step_progress(
+    task: BackgroundTask, final_state: Any, seen_ids: set
+) -> None:
     """从 values 快照 diff 出新增消息，记录轻量步骤摘要。
 
     deer-flow capture_new_step_messages 的简化版：按消息 id 去重，
@@ -269,27 +341,40 @@ def _record_step_progress(task: BackgroundTask, final_state: Any, seen_ids: set)
         if isinstance(message, AIMessage):
             calls = getattr(message, "tool_calls", None) or []
             for call in calls:
-                _progress_append(task, {
-                    "kind": "tool_call",
-                    "name": str(call.get("name") or ""),
-                    "ts": time.time(),
-                })
+                _progress_append(
+                    task,
+                    {
+                        "kind": "tool_call",
+                        "name": str(call.get("name") or ""),
+                        "ts": time.time(),
+                    },
+                )
             text = _final_answer_text({"messages": [message]})
             if text:
-                _progress_append(task, {
-                    "kind": "text",
-                    "preview": text[:_PROGRESS_PREVIEW_CHARS],
-                    "ts": time.time(),
-                })
+                _progress_append(
+                    task,
+                    {
+                        "kind": "text",
+                        "preview": text[:_PROGRESS_PREVIEW_CHARS],
+                        "ts": time.time(),
+                    },
+                )
         elif isinstance(message, ToolMessage):
-            content = message.content if isinstance(message.content, str) else str(message.content)
-            _progress_append(task, {
-                "kind": "tool_result",
-                "name": str(name),
-                "status": str(getattr(message, "status", None) or "success"),
-                "preview": content[:_PROGRESS_PREVIEW_CHARS],
-                "ts": time.time(),
-            })
+            content = (
+                message.content
+                if isinstance(message.content, str)
+                else str(message.content)
+            )
+            _progress_append(
+                task,
+                {
+                    "kind": "tool_result",
+                    "name": str(name),
+                    "status": str(getattr(message, "status", None) or "success"),
+                    "preview": content[:_PROGRESS_PREVIEW_CHARS],
+                    "ts": time.time(),
+                },
+            )
 
 
 def _notify_terminal(task: BackgroundTask) -> None:
@@ -299,6 +384,25 @@ def _notify_terminal(task: BackgroundTask) -> None:
         task_id=task.task_id,
         status=task.status.value,
         preview=task.result or task.error,
+    )
+    _schedule_continuation(task)
+
+
+def _schedule_continuation(task: BackgroundTask) -> None:
+    """终态后尝试唤醒主 Agent（dsh parent.followup 的 run 级等价物）。
+
+    无活跃 run 时自动创建 continuation run；调度回主 loop（DB 引擎与
+    RunManager 绑定主 loop）。仅 completed 触发——失败/取消的交付由模型
+    在下次交互时按通知自行决定，自动唤醒只会空转。
+    """
+    if task.status != BgTaskStatus.COMPLETED:
+        return
+    from noesis.runtime.main_loop import run_on_main_loop
+    from noesis.services.bg_continuation_service import maybe_continue
+
+    run_on_main_loop(
+        maybe_continue(task.session_id, task.user_id),
+        name=f"bg-continue:{task.task_id}",
     )
 
 
@@ -310,7 +414,8 @@ def _final_answer_text(final_state: Any) -> str:
             return content
         if isinstance(content, list):
             text = "".join(
-                part.get("text", "") for part in content
+                part.get("text", "")
+                for part in content
                 if isinstance(part, dict) and part.get("type") == "text"
             )
             if text.strip():
@@ -340,29 +445,52 @@ class BackgroundSubagentExecutor:
     def get(task_id: str) -> Optional[dict[str, Any]]:
         with _TASKS_LOCK:
             entry = _TASKS.get(task_id)
-            return entry.task.to_dict() if entry else None
+            if entry is not None:
+                return entry.task.to_dict()
+        # 内存 miss（典型：进程重启后）→ 持久层 fallback
+        if _TASK_STORE is not None:
+            try:
+                return _TASK_STORE.get(task_id)
+            except Exception:
+                logger.opt(exception=True).warning(
+                    "bg task store get failed task_id={}",
+                    task_id,
+                )
+        return None
 
     @staticmethod
     def list_for_session(session_id: str) -> list[dict[str, Any]]:
         with _TASKS_LOCK:
-            tasks = [
-                entry.task.to_dict()
+            tasks = {
+                entry.task.task_id: entry.task.to_dict()
                 for entry in _TASKS.values()
                 if entry.task.session_id == session_id
-            ]
-        return sorted(tasks, key=lambda t: t["started_at"])
+            }
+        # 合并持久层历史（内存中的活任务优先，避免读到旧快照）
+        if _TASK_STORE is not None:
+            try:
+                for snapshot in _TASK_STORE.list_for_session(session_id):
+                    tasks.setdefault(snapshot["task_id"], snapshot)
+            except Exception:
+                logger.opt(exception=True).warning(
+                    "bg task store list failed session_id={}",
+                    session_id,
+                )
+        return sorted(tasks.values(), key=lambda t: t["started_at"])
 
     @staticmethod
     def pending_approvals(session_id: str) -> list[dict[str, Any]]:
         return [
-            t for t in BackgroundSubagentExecutor.list_for_session(session_id)
+            t
+            for t in BackgroundSubagentExecutor.list_for_session(session_id)
             if t["status"] == BgTaskStatus.AWAITING_APPROVAL.value
         ]
 
     def _session_active_count(self, session_id: str) -> int:
         with _TASKS_LOCK:
             return sum(
-                1 for entry in _TASKS.values()
+                1
+                for entry in _TASKS.values()
                 if entry.task.session_id == session_id
                 and not entry.task.status.is_terminal
             )
@@ -381,12 +509,15 @@ class BackgroundSubagentExecutor:
         """启动后台任务，立即返回 task_id；超并发抛 ValueError。"""
         task_id = f"bg-{uuid.uuid4()}"
         task = BackgroundTask(
-            task_id=task_id, session_id=session_id, user_id=user_id,
+            task_id=task_id,
+            session_id=session_id,
+            user_id=user_id,
             description=description,
             kind="one_shot" if one_shot else "continuable",
         )
         entry = _TaskEntry(
-            task=task, agent_factory=worker_factory,
+            task=task,
+            agent_factory=worker_factory,
             recursion_limit=self._recursion_limit,
             timeout_seconds=self._task_timeout,
             hitl_timeout_seconds=self._hitl_timeout,
@@ -394,9 +525,9 @@ class BackgroundSubagentExecutor:
         # 上限检查与插入同锁，避免并发 start 的 TOCTOU 竞态
         with _TASKS_LOCK:
             active = sum(
-                1 for e in _TASKS.values()
-                if e.task.session_id == session_id
-                and not e.task.status.is_terminal
+                1
+                for e in _TASKS.values()
+                if e.task.session_id == session_id and not e.task.status.is_terminal
             )
             if active >= self._max_concurrent:
                 raise ValueError(
@@ -404,15 +535,20 @@ class BackgroundSubagentExecutor:
                     "请先 check/cancel 现有任务再启动新的"
                 )
             _TASKS[task_id] = entry
+        _persist(task)
         loop = _ensure_loop()
         entry.future = asyncio.run_coroutine_threadsafe(
-            _arun(entry, resume_command=None), loop,
+            _arun(entry, resume_command=None),
+            loop,
         )
         _arm_watchdog(entry)
         _publish_task_event(task, "started")
         logger.info(
             "bg subagent started task_id={} session_id={} active={}/{}",
-            task_id, session_id, active + 1, self._max_concurrent,
+            task_id,
+            session_id,
+            active + 1,
+            self._max_concurrent,
         )
         return task_id
 
@@ -445,9 +581,11 @@ class BackgroundSubagentExecutor:
                     _arun(
                         entry,
                         initial_source={"messages": [HumanMessage(content=text)]},
-                    ), loop,
+                    ),
+                    loop,
                 )
                 _arm_watchdog(entry)
+                _persist(task)
                 _publish_task_event(task, "followup")
                 return task.to_dict()
             if status.is_terminal:
@@ -480,7 +618,9 @@ class BackgroundSubagentExecutor:
     # -- 审批 / 取消 ---------------------------------------------------
 
     @staticmethod
-    def submit_decisions(task_id: str, decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    def submit_decisions(
+        task_id: str, decisions: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """审批决策（approve / reject）→ 在同一 thread 续跑子 Agent。"""
         with _TASKS_LOCK:
             entry = _TASKS.get(task_id)
@@ -492,9 +632,11 @@ class BackgroundSubagentExecutor:
                 )
             entry.task.status = BgTaskStatus.RUNNING
             entry.task.interrupt = None
+        _persist(entry.task)
         loop = _ensure_loop()
         entry.future = asyncio.run_coroutine_threadsafe(
-            _arun(entry, resume_command=Command(resume={"decisions": decisions})), loop,
+            _arun(entry, resume_command=Command(resume={"decisions": decisions})),
+            loop,
         )
         _arm_watchdog(entry)
         return entry.task.to_dict()
@@ -514,6 +656,7 @@ class BackgroundSubagentExecutor:
                 entry.future.cancel()
             entry.task.status = BgTaskStatus.CANCELLED
             entry.task.completed_at = time.time()
+            _persist(entry.task)
             _publish_task_event(entry.task, "terminal")
             _notify_terminal(entry.task)
             snapshot = entry.task.to_dict()
@@ -566,16 +709,22 @@ async def _arun(
         agent = await _ensure_agent(entry)
         # 首轮输入：优先显式 resume command（审批续跑），
         # 否则 initial_source（start 的 description / 冷恢复的追加消息）
-        source = resume_command if resume_command is not None else (
-            initial_source
-            if initial_source is not None
-            else {"messages": [HumanMessage(content=task.description)]}
+        source = (
+            resume_command
+            if resume_command is not None
+            else (
+                initial_source
+                if initial_source is not None
+                else {"messages": [HumanMessage(content=task.description)]}
+            )
         )
         while True:
             seen_ids: set = set()
             final: Any = None
             # astream(values)：既拿到终态，又能逐步 diff 执行过程摘要
-            async for chunk in agent.astream(source, _config(entry), stream_mode="values"):
+            async for chunk in agent.astream(
+                source, _config(entry), stream_mode="values"
+            ):
                 final = chunk
                 _record_step_progress(task, chunk, seen_ids)
             interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
@@ -583,11 +732,13 @@ async def _arun(
             if payload is not None:
                 task.status = BgTaskStatus.AWAITING_APPROVAL
                 task.interrupt = payload
+                _persist(task)
                 _disarm_watchdog(entry)
                 _arm_hitl_watchdog(entry)
                 logger.info(
                     "bg subagent awaiting approval task_id={} actions={}",
-                    task.task_id, len(payload.get("action_requests") or []),
+                    task.task_id,
+                    len(payload.get("action_requests") or []),
                 )
                 return
             task.result = _final_answer_text(final)
@@ -599,14 +750,18 @@ async def _arun(
             task.completed_at = None
             logger.info(
                 "bg subagent followup turn task_id={} queued={}",
-                task.task_id, len(entry.followups),
+                task.task_id,
+                len(entry.followups),
             )
             source = {"messages": [HumanMessage(content=next_message)]}
         task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
+        _persist(task)
         logger.info(
             "bg subagent completed task_id={} steps={} duration={:.1f}s",
-            task.task_id, len(task.progress), task.completed_at - task.started_at,
+            task.task_id,
+            len(task.progress),
+            task.completed_at - task.started_at,
         )
         _publish_task_event(task, "terminal")
         _notify_terminal(task)
@@ -614,14 +769,17 @@ async def _arun(
         if not task.status.is_terminal:
             task.status = BgTaskStatus.CANCELLED
             task.completed_at = time.time()
+            _persist(task)
     except Exception as exc:
         task.status = BgTaskStatus.FAILED
         task.error = str(exc)
         task.completed_at = time.time()
+        _persist(task)
         _publish_task_event(task, "terminal")
         _notify_terminal(task)
         logger.opt(exception=True).error(
-            "bg subagent failed task_id={}", task.task_id,
+            "bg subagent failed task_id={}",
+            task.task_id,
         )
 
 
@@ -629,7 +787,9 @@ def _arm_watchdog(entry: _TaskEntry) -> None:
     _disarm_watchdog(entry)
     loop = _ensure_loop()
     entry.watchdog_handle = loop.call_later(
-        entry.timeout_seconds, _on_task_timeout, entry,
+        entry.timeout_seconds,
+        _on_task_timeout,
+        entry,
     )
 
 
@@ -643,18 +803,24 @@ def _arm_hitl_watchdog(entry: _TaskEntry) -> None:
     """审批超时按拒绝续跑（对齐主 run HITL 超时语义）。"""
     loop = _ensure_loop()
     entry.watchdog_handle = loop.call_later(
-        entry.hitl_timeout_seconds, _on_hitl_timeout, entry,
+        entry.hitl_timeout_seconds,
+        _on_hitl_timeout,
+        entry,
     )
 
 
 def _on_task_timeout(entry: _TaskEntry) -> None:
-    if entry.task.status.is_terminal or entry.task.status == BgTaskStatus.AWAITING_APPROVAL:
+    if (
+        entry.task.status.is_terminal
+        or entry.task.status == BgTaskStatus.AWAITING_APPROVAL
+    ):
         return
     if entry.future is not None:
         entry.future.cancel()
     entry.task.status = BgTaskStatus.TIMED_OUT
     entry.task.error = f"后台任务超时（{int(entry.timeout_seconds)}s）"
     entry.task.completed_at = time.time()
+    _persist(entry.task)
     _notify_terminal(entry.task)
 
 
@@ -677,8 +843,16 @@ def _on_hitl_timeout(entry: _TaskEntry) -> None:
 def _message_to_view_item(message: Any) -> Optional[dict[str, Any]]:
     """LangChain 消息 → 轻量视图项（子会话查看用）。"""
     if isinstance(message, HumanMessage):
-        text = message.content if isinstance(message.content, str) else str(message.content)
-        return {"role": "user", "text": text[:_PROGRESS_PREVIEW_CHARS * 2]} if text.strip() else None
+        text = (
+            message.content
+            if isinstance(message.content, str)
+            else str(message.content)
+        )
+        return (
+            {"role": "user", "text": text[: _PROGRESS_PREVIEW_CHARS * 2]}
+            if text.strip()
+            else None
+        )
     if isinstance(message, AIMessage):
         calls = [
             {"name": str(call.get("name") or ""), "args": call.get("args") or {}}
@@ -689,16 +863,20 @@ def _message_to_view_item(message: Any) -> Optional[dict[str, Any]]:
             return None
         return {
             "role": "assistant",
-            "text": text[:_PROGRESS_PREVIEW_CHARS * 2],
+            "text": text[: _PROGRESS_PREVIEW_CHARS * 2],
             "tool_calls": calls,
         }
     if isinstance(message, ToolMessage):
-        content = message.content if isinstance(message.content, str) else str(message.content)
+        content = (
+            message.content
+            if isinstance(message.content, str)
+            else str(message.content)
+        )
         return {
             "role": "tool",
             "name": str(getattr(message, "name", None) or ""),
             "status": str(getattr(message, "status", None) or "success"),
-            "text": content[:_PROGRESS_PREVIEW_CHARS * 2],
+            "text": content[: _PROGRESS_PREVIEW_CHARS * 2],
         }
     return None
 
@@ -716,7 +894,9 @@ async def _aread_thread_messages(entry: _TaskEntry) -> list[dict[str, Any]]:
     return items
 
 
-def read_thread_messages(task_id: str, *, timeout: float = 10.0) -> list[dict[str, Any]]:
+def read_thread_messages(
+    task_id: str, *, timeout: float = 10.0
+) -> list[dict[str, Any]]:
     """读取后台任务子会话消息（跨线程切到隔离 loop 执行只读 aget_state）。"""
     with _TASKS_LOCK:
         entry = _TASKS.get(task_id)
@@ -742,6 +922,8 @@ __all__ = [
     "BackgroundSubagentExecutor",
     "BackgroundTask",
     "BgTaskStatus",
+    "BgTaskStore",
+    "configure_task_store",
     "shutdown",
     "shutdown_loop",
 ]
