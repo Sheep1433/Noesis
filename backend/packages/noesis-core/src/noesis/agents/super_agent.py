@@ -22,6 +22,7 @@ from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
 from noesis.agents.subagents import (
     BackgroundSubagentExecutor,
+    BgNotifyMiddleware,
     build_background_task_tools,
 )
 from noesis.config.env import HitlConfig, SubagentConfig
@@ -182,6 +183,8 @@ class SuperAgent(BaseAgent):
             tools=tools,
             system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
+            # run 内即时感知后台任务终态：下一次模型调用注入 [系统通知]
+            middleware=[BgNotifyMiddleware(session_id=session_id)],
             backend=backend,
             workspace="/workspace",
             session_id=session_id,

@@ -7,12 +7,14 @@ from noesis.agents.subagents.executor import (
     shutdown,
     shutdown_loop,
 )
+from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
 from noesis.agents.subagents.tools import build_background_task_tools
 
 __all__ = [
     "BackgroundSubagentExecutor",
     "BackgroundTask",
     "BgTaskStatus",
+    "BgNotifyMiddleware",
     "build_background_task_tools",
     "shutdown",
     "shutdown_loop",

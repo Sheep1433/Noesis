@@ -30,11 +30,26 @@ def record(session_id: str, task_id: str, status: str, preview: str | None) -> N
             "task_id": task_id,
             "status": status,
             "preview": trimmed,
+            "delivered": False,
         })
 
 
+def take_undelivered(session_id: str, *, mark_delivered: bool = True) -> list[dict[str, Any]]:
+    """取未送达通知（run 内中间件 / 下一轮注入共用；默认同时标记已送达）。"""
+    with _LOCK:
+        pending = _PENDING.get(session_id) or []
+        undelivered = [dict(n) for n in pending if not n.get("delivered")]
+        if mark_delivered and undelivered:
+            for notice in pending:
+                if not notice.get("delivered"):
+                    notice["delivered"] = True
+            if all(n.get("delivered") for n in pending):
+                _PENDING.pop(session_id, None)
+        return undelivered
+
+
 def drain(session_id: str) -> list[dict[str, Any]]:
-    """取出并清空该会话的待送达通知（run 启动时消费，一次性）。"""
+    """取出并清空该会话的全部通知（兼容旧测试入口）。"""
     with _LOCK:
         return _PENDING.pop(session_id, [])
 
@@ -62,8 +77,8 @@ def render_block(notices: list[dict[str, Any]]) -> str:
 
 
 def notify_agent_query(session_id: str, agent_query: str) -> str:
-    """drain 会话通知并前置到 agent_query（无通知时原样返回）。"""
-    notices = drain(session_id)
+    """取未送达通知并前置到 agent_query（无通知时原样返回）。"""
+    notices = take_undelivered(session_id)
     if not notices:
         return agent_query
     block = render_block(notices)
@@ -74,4 +89,4 @@ def notify_agent_query(session_id: str, agent_query: str) -> str:
     return f"{block}\n\n{agent_query}".strip() if agent_query else block
 
 
-__all__ = ["PREVIEW_MAX_CHARS", "drain", "notify_agent_query", "record", "render_block"]
+__all__ = ["PREVIEW_MAX_CHARS", "drain", "notify_agent_query", "record", "render_block", "take_undelivered"]

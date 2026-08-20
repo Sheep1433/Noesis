@@ -464,3 +464,61 @@ async def test_bg_event_subscription_receives_lifecycle() -> None:
         assert events[-1]["task"]["status"] == "completed"
     finally:
         unsubscribe_bg_events("s-sse", queue)
+
+
+# ---------------------------------------------------------------------------
+# run 内即时感知（BgNotifyMiddleware）
+# ---------------------------------------------------------------------------
+
+def test_bg_notify_middleware_injects_once() -> None:
+    """主 Agent 模型调用边界注入未送达通知；已送达不重复。"""
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from noesis.agents.subagents import notifications
+    from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
+
+    notifications.record("s-mw", "bg-1", "completed", "小结")
+    request = ModelRequest(
+        model=object(),  # type: ignore[arg-type]
+        messages=[HumanMessage(content="继续干活")],
+        system_message=SystemMessage(content="sys"),
+        state={},
+    )
+    seen: list = []
+    mw = BgNotifyMiddleware(session_id="s-mw")
+    mw.wrap_model_call(request, lambda req: seen.append(req.messages) or "ok")  # type: ignore[arg-type,return-value]
+    injected = seen[0]
+    assert "[系统通知]" in injected[-1].content
+    assert "bg-1" in injected[-1].content
+    assert "check_task" in injected[-1].content
+
+    # 已送达：第二次模型调用与下一轮 agent_query 注入都不再出现
+    seen.clear()
+    mw.wrap_model_call(request, lambda req: seen.append(req.messages) or "ok")  # type: ignore[arg-type,return-value]
+    assert len(seen[0]) == 1
+    assert notifications.notify_agent_query("s-mw", "下一轮问题") == "下一轮问题"
+
+
+def test_run_start_injection_marks_delivered_for_middleware() -> None:
+    """exec_query 的下一轮注入与 run 内中间件共用 delivered 标记，不双发。"""
+    from noesis.agents.subagents import notifications
+    from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    notifications.record("s-mw2", "bg-2", "completed", "结果")
+    # 下一轮注入（run 启动）先消费
+    query = notifications.notify_agent_query("s-mw2", "新问题")
+    assert "[系统通知]" in query
+    # run 内中间件不再重复注入
+    request = ModelRequest(
+        model=object(),  # type: ignore[arg-type]
+        messages=[HumanMessage(content="x")],
+        system_message=SystemMessage(content="sys"),
+        state={},
+    )
+    seen: list = []
+    BgNotifyMiddleware(session_id="s-mw2").wrap_model_call(
+        request, lambda req: seen.append(req.messages) or "ok",  # type: ignore[arg-type,return-value]
+    )
+    assert len(seen[0]) == 1
