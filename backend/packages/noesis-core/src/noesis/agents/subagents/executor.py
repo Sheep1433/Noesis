@@ -885,13 +885,28 @@ def _message_to_view_item(message: Any) -> Optional[dict[str, Any]]:
     return None
 
 
-async def _aread_thread_messages(entry: _TaskEntry) -> list[dict[str, Any]]:
-    """在隔离 loop 内只读 thread 状态并映射为视图项。"""
-    agent = await _ensure_agent(entry)
-    state = await agent.aget_state(_config(entry))
-    values = getattr(state, "values", None) or {}
+async def _aread_thread_messages(task_id: str) -> list[dict[str, Any]]:
+    """在隔离 loop 内只读 thread 状态并映射为视图项。
+
+    注册表内的任务经其 worker 的 checkpointer 读（同实例，测试注入
+    MemorySaver 亦适用）；进程重启后的历史任务无 entry，经共享 isolated
+    checkpointer 直读 checkpoint（thread_id = task_id，消息仍在库）。
+    """
+    with _TASKS_LOCK:
+        entry = _TASKS.get(task_id)
+    if entry is not None:
+        agent = await _ensure_agent(entry)
+        state = await agent.aget_state(_config(entry))
+        messages = (getattr(state, "values", None) or {}).get("messages", [])
+    else:
+        from noesis.config.checkpointer import create_isolated_checkpointer
+
+        saver = await create_isolated_checkpointer()
+        state = await saver.aget_tuple({"configurable": {"thread_id": task_id}})
+        checkpoint = getattr(state, "checkpoint", None) if state is not None else None
+        messages = ((checkpoint or {}).get("channel_values") or {}).get("messages", [])
     items: list[dict[str, Any]] = []
-    for message in values.get("messages", []):
+    for message in messages:
         item = _message_to_view_item(message)
         if item is not None:
             items.append(item)
@@ -901,13 +916,26 @@ async def _aread_thread_messages(entry: _TaskEntry) -> list[dict[str, Any]]:
 def read_thread_messages(
     task_id: str, *, timeout: float = 10.0
 ) -> list[dict[str, Any]]:
-    """读取后台任务子会话消息（跨线程切到隔离 loop 执行只读 aget_state）。"""
+    """读取后台任务子会话消息（跨线程切到隔离 loop 执行只读）。
+
+    注册表 miss（典型：进程重启后的历史任务）回退持久层：快照存在即读
+    checkpoint 库的 thread 历史；快照也没有才按「任务不存在」处理。
+    """
     with _TASKS_LOCK:
-        entry = _TASKS.get(task_id)
-        if entry is None:
+        in_registry = task_id in _TASKS
+    if not in_registry:
+        snapshot = None
+        if _TASK_STORE is not None:
+            try:
+                snapshot = _TASK_STORE.get(task_id)
+            except Exception:
+                logger.opt(exception=True).warning(
+                    "bg task store get failed task_id={}", task_id,
+                )
+        if snapshot is None:
             raise ValueError(f"后台任务不存在: {task_id}")
     loop = _ensure_loop()
-    future = asyncio.run_coroutine_threadsafe(_aread_thread_messages(entry), loop)
+    future = asyncio.run_coroutine_threadsafe(_aread_thread_messages(task_id), loop)
     return future.result(timeout=timeout)
 
 

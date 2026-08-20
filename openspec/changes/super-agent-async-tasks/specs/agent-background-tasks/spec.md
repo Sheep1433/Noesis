@@ -106,6 +106,12 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 - **WHEN** 用户 A 读取用户 B 的后台任务会话
 - **THEN** SHALL 返回 404 语义
 
+#### Scenario: 进程重启后查看历史任务
+
+- **WHEN** 进程重启后请求重启前已完成任务的 messages
+- **THEN** SHALL 经持久层快照校验归属后，从 checkpoint 库返回该 thread 的完整子会话历史
+- **AND** 持久层也无快照的 task_id SHALL 返回 404 语义
+
 ### Requirement: 完成通知注入
 
 后台任务到达终态时 SHALL 向所属会话的待送达通知队列写入一条通知（task_id、终态、结果预览 ≤80 字）。该会话下一次 run 启动组装输入前 SHALL drain 队列并以 `[系统通知]` 前缀注入本轮上下文，注入一次性且 SHALL NOT 写入消息落库内容。系统 SHALL NOT 主动为通知启动 run；前端轮询为用户侧兜底触达。`awaiting_approval` SHALL NOT 注入模型通知。

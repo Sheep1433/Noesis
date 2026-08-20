@@ -370,6 +370,50 @@ def test_read_thread_messages_returns_history() -> None:
         BackgroundSubagentExecutor.read_messages("bg-none")
 
 
+def test_read_thread_messages_falls_back_after_restart(monkeypatch, task_store) -> None:
+    """进程重启后（注册表空、快照在持久层）：仍能读完整子会话历史。
+
+    重启后的任务经共享 isolated checkpointer 直读 checkpoint；
+    测试用 MemorySaver 替身，快照在 store、entry 已清空模拟重启。
+    """
+    saver = MemorySaver()
+    worker = create_agent(
+        _ScriptedToolModel(script=[AIMessage(content="历史小结")]),
+        tools=[_dangerous_tool()],
+        checkpointer=saver,
+        name="task-worker",
+    )
+
+    async def _fake_isolated():
+        return saver
+
+    monkeypatch.setattr(
+        "noesis.config.checkpointer.create_isolated_checkpointer", _fake_isolated,
+    )
+
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="历史任务",
+        session_id="s-hist", user_id="u1",
+    )
+    _wait_terminal(executor, task_id)
+    assert task_store.get(task_id) is not None
+
+    # 模拟重启：清空内存注册表，只留持久层快照与 checkpoint
+    from noesis.agents.subagents import executor as ex_mod
+
+    with ex_mod._TASKS_LOCK:
+        ex_mod._TASKS.clear()
+
+    messages = BackgroundSubagentExecutor.read_messages(task_id)
+    roles = [m["role"] for m in messages]
+    assert "user" in roles and "assistant" in roles
+    assert any("历史小结" in m["text"] for m in messages if m["role"] == "assistant")
+    # 快照也没有的任务仍按「不存在」处理
+    with pytest.raises(ValueError, match="不存在"):
+        BackgroundSubagentExecutor.read_messages("bg-none")
+
+
 # ---------------------------------------------------------------------------
 # 前台等待（run_in_background=false）与超时转后台
 # ---------------------------------------------------------------------------
