@@ -702,6 +702,7 @@ class BackgroundSubagentExecutor:
             entry.task.status = BgTaskStatus.RUNNING
             entry.task.interrupt = None
         _persist(entry.task)
+        _publish_task_event(entry.task, "followup")
         loop = _ensure_loop()
         entry.future = asyncio.run_coroutine_threadsafe(
             _arun(entry, resume_command=Command(resume={"decisions": decisions})),
@@ -806,6 +807,7 @@ async def _arun(
                 task.status = BgTaskStatus.AWAITING_APPROVAL
                 task.interrupt = payload
                 _persist(task)
+                _publish_task_event(task, "awaiting_approval")
                 _disarm_watchdog(entry)
                 _arm_hitl_watchdog(entry)
                 logger.info(
@@ -931,9 +933,15 @@ def fail_session_shell_tasks(session_id: str, reason: str) -> None:
             if e.task.session_id == session_id and not e.task.status.is_terminal
         ]
     for entry in entries:
+        # 跨线程竞态：协程可能在列举之后刚好落终态——先复查再连坐，
+        # 避免覆盖 COMPLETED 并造成双重通知
+        if entry.task.status.is_terminal:
+            continue
         _disarm_watchdog(entry)
-        if entry.future is not None:
+        if entry.future is not None and not entry.future.done():
             entry.future.cancel()
+        if entry.task.status.is_terminal:
+            continue
         entry.task.status = BgTaskStatus.FAILED
         entry.task.error = reason
         entry.task.completed_at = time.time()

@@ -808,3 +808,47 @@ def test_list_merges_memory_over_stale_store_snapshot(task_store) -> None:
 
     tasks = BackgroundSubagentExecutor.list_for_session("s1")
     assert tasks[0]["status"] == BgTaskStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_bg_event_subscription_receives_approval_lifecycle() -> None:
+    """审批全生命周期事件：started → awaiting_approval → followup(续跑) → terminal。
+
+    awaiting_approval / 审批续跑此前不发布事件，前端审批卡只在快照时
+    可见；回归断言每个状态转换都有 SSE 事件。
+    """
+    import asyncio as _asyncio
+
+    from noesis.agents.subagents.executor import (
+        subscribe_bg_events,
+        unsubscribe_bg_events,
+    )
+
+    worker = _build_worker(
+        [_call("x"), AIMessage(content="工具已批准，收尾")],
+        interrupt_on={"dangerous": True},
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    queue = subscribe_bg_events("s-sse-ap", "u1")
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: worker, description="需审批的任务",
+            session_id="s-sse-ap", user_id="u1",
+        )
+        events: list[dict] = []
+        for _ in range(2):  # started + awaiting_approval
+            events.append(await _asyncio.wait_for(queue.get(), timeout=5))
+        assert events[0]["event"] == "started"
+        assert events[1]["event"] == "awaiting_approval"
+        assert events[1]["task"]["status"] == BgTaskStatus.AWAITING_APPROVAL.value
+        assert events[1]["task"]["interrupt"]
+
+        executor.submit_decisions(task_id, [{"type": "approve"}])
+        for _ in range(2):  # followup(续跑) + terminal
+            events.append(await _asyncio.wait_for(queue.get(), timeout=5))
+        assert events[2]["event"] == "followup"
+        assert events[2]["task"]["status"] == BgTaskStatus.RUNNING.value
+        assert events[3]["event"] == "terminal"
+        assert events[3]["task"]["status"] == BgTaskStatus.COMPLETED.value
+    finally:
+        unsubscribe_bg_events("s-sse-ap", queue)

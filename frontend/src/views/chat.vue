@@ -967,7 +967,8 @@ function openBgTaskStream(sessionId: string): void {
     try {
       const payload = JSON.parse(e.data)
       if (payload?.run_id) {
-        insertBgNoticeItem(String(payload.notice || ''), String(payload.run_id))
+        // 用闭包 sessionId 而非 currentIndex：事件可能在切会话的瞬间到达
+        insertBgNoticeItem(sessionId, String(payload.notice || ''), String(payload.run_id))
         void sseStream.resumeActiveRun(sessionId)
       }
     } catch (err) {
@@ -979,14 +980,14 @@ function openBgTaskStream(sessionId: string): void {
 }
 
 /** 续跑通知条：与历史加载的 bg_task_notice 用户消息同一形态（run_id 去重） */
-function insertBgNoticeItem(notice: string, runId: string): void {
+function insertBgNoticeItem(sessionId: string, notice: string, runId: string): void {
   const uuid = `bgc-notice-${runId}`
   if (!notice.trim() || conversationItems.value.some((item) => item.uuid === uuid)) {
     return
   }
   conversationItems.value.push({
     uuid,
-    chat_id: currentIndex.value,
+    chat_id: sessionId,
     qa_type: qa_type.value,
     question: notice,
     role: 'user',
