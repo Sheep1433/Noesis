@@ -73,6 +73,34 @@ async def create_isolated_checkpointer() -> AsyncPostgresSaver:
     return _isolated_saver
 
 
+def close_isolated_checkpointer_on_loop() -> None:
+    """在隔离 loop 停止前关闭其连接池（executor.shutdown 调用）。
+
+    必须在隔离 loop 仍在运行时调用：psycopg 池绑定创建它的 loop，
+    在别的 loop（或已停 loop）上 close 会失败。
+    """
+    global _isolated_pool, _isolated_saver
+    pool = _isolated_pool
+    _isolated_pool = None
+    _isolated_saver = None
+    if pool is None:
+        return
+    from noesis.agents.subagents.executor import _ensure_loop
+
+    loop = _ensure_loop()
+
+    async def _close() -> None:
+        try:
+            await pool.close()
+        except Exception:
+            logger.warning("后台子 Agent 隔离连接池关闭异常（忽略）")
+
+    try:
+        asyncio.run_coroutine_threadsafe(_close(), loop).result(timeout=5)
+    except Exception:
+        logger.warning("后台子 Agent 隔离连接池关闭调度失败（忽略）")
+
+
 async def close_checkpointer() -> None:
     global _pool, _saver, _isolated_pool, _isolated_saver
     if _pool is not None:

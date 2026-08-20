@@ -919,6 +919,11 @@ def shutdown() -> None:
     for entry in entries:
         if entry.future is not None:
             entry.future.cancel()
+    # 先在隔离 loop 内关闭其 checkpointer 连接池，再停 loop
+    # （池绑定隔离 loop，停掉后无法正常关闭）
+    from noesis.config.checkpointer import close_isolated_checkpointer_on_loop
+
+    close_isolated_checkpointer_on_loop()
     shutdown_loop()
 
 
