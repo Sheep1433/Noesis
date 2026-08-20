@@ -1334,6 +1334,8 @@ const sseStream = useSSEStream({
   onFinish: (detail) => {
     stylizingLoading.value = false
     stopProcessingClock()
+    // 本轮 run 可能新启动了后台任务：结束后立即刷新任务面板
+    void refreshBgTasks(currentIndex.value)
     // 整轮结束：触发当前回复的所有 compact 工具收起。
     runCollapseSignal.value += 1
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))

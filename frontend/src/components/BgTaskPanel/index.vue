@@ -46,6 +46,17 @@ function actionPreview(task: BgTask): string {
   return `${first.name ?? 'tool'} ${args}`
 }
 
+// ---- 面板可见性：有活跃任务自动展示；否则单行入口可展开 ----
+const panelOpen = ref(false)
+const hasActive = computed(() =>
+  pending.value.length > 0 || running.value.length > 0,
+)
+const showEntryOnly = computed(() => !hasActive.value && !panelOpen.value && finished.value.length > 0)
+
+function togglePanel(): void {
+  panelOpen.value = !panelOpen.value
+}
+
 // ---- 展开的步骤概览 ----
 const expanded = ref(new Set<string>())
 
@@ -159,140 +170,162 @@ function messageLabel(message: BgTaskMessage): string {
 
 <template>
   <section v-if="tasks.length" class="bg-task-panel" aria-label="后台任务">
-    <div
-      v-for="task in pending"
-      :key="task.task_id"
-      class="bg-task-panel__card bg-task-panel__card--approval"
+    <button
+      v-if="showEntryOnly"
+      type="button"
+      class="bg-task-panel__entry"
+      @click="togglePanel"
     >
-      <div class="bg-task-panel__head">
-        <NTag size="small" type="warning">待审批</NTag>
-        <span class="bg-task-panel__desc">{{ task.description }}</span>
-      </div>
-      <pre class="bg-task-panel__preview">{{ actionPreview(task) }}</pre>
-      <div class="bg-task-panel__actions">
-        <NButton size="small" type="primary" @click="emit('decide', { task, decisions: [{ type: 'approve' }] })">
-          批准
-        </NButton>
-        <NButton
-          size="small"
-          type="error"
-          quaternary
-          @click="emit('decide', { task, decisions: [{ type: 'reject', message: '用户拒绝了该操作' }] })"
-        >
-          拒绝
-        </NButton>
-      </div>
-    </div>
+      <span class="i-hugeicons:ai-chat-01" aria-hidden="true"></span>
+      子任务 {{ finished.length }}
+      <span class="bg-task-panel__entry-chevron">›</span>
+    </button>
 
-    <div v-if="running.length || finished.length" class="bg-task-panel__list">
+    <template v-if="!showEntryOnly">
       <div
-        v-for="task in [...running, ...finished]"
+        v-for="task in pending"
         :key="task.task_id"
-        class="bg-task-panel__item"
+        class="bg-task-panel__card bg-task-panel__card--approval"
       >
-        <div class="bg-task-panel__row" @click="toggleExpand(task)">
-          <NTag size="small" :type="statusLabel[task.status]?.type ?? 'default'">
-            {{ statusLabel[task.status]?.label ?? task.status }}
-          </NTag>
-          <span v-if="task.kind === 'one_shot'" class="bg-task-panel__kind">一次性</span>
+        <div class="bg-task-panel__head">
+          <NTag size="small" type="warning">待审批</NTag>
           <span class="bg-task-panel__desc">{{ task.description }}</span>
-          <span
-            v-if="task.progress?.length"
-            class="bg-task-panel__steps-hint"
-          >
-            {{ expanded.has(task.task_id) ? '收起' : `${task.progress.length} 步` }}
-          </span>
-          <span class="bg-task-panel__detail-btn" @click.stop>
-            <NButton size="tiny" quaternary type="primary" @click="openDetail(task)">
-              详情
-            </NButton>
-          </span>
-          <span v-if="task.status === 'running'" class="bg-task-panel__cancel" @click.stop>
-            <NButton size="tiny" quaternary type="error" @click="emit('cancel', task)">
-              取消
-            </NButton>
-          </span>
         </div>
-        <div v-if="expanded.has(task.task_id) && task.progress?.length" class="bg-task-panel__steps">
-          <div
-            v-for="(step, idx) in task.progress"
-            :key="idx"
-            class="bg-task-panel__step"
-            :class="{ 'bg-task-panel__step--error': step.kind === 'tool_result' && step.status === 'error' }"
+        <pre class="bg-task-panel__preview">{{ actionPreview(task) }}</pre>
+        <div class="bg-task-panel__actions">
+          <NButton size="small" type="primary" @click="emit('decide', { task, decisions: [{ type: 'approve' }] })">
+            批准
+          </NButton>
+          <NButton
+            size="small"
+            type="error"
+            quaternary
+            @click="emit('decide', { task, decisions: [{ type: 'reject', message: '用户拒绝了该操作' }] })"
           >
-            <span class="bg-task-panel__step-icon">{{ stepIcon(step.kind) }}</span>
-            <span class="bg-task-panel__step-text">{{ stepText(step) }}</span>
-          </div>
-        </div>
-        <div
-          v-else-if="expanded.has(task.task_id)"
-          class="bg-task-panel__steps bg-task-panel__steps--empty"
-        >
-          暂无执行过程
+            拒绝
+          </NButton>
         </div>
       </div>
-    </div>
 
-    <n-drawer
-      v-model:show="detailOpen"
-      placement="right"
-      width="min(520px, 94vw)"
-    >
-      <n-drawer-content :title="`子任务 · ${detailTask?.description ?? ''}`" closable>
-        <div class="bg-task-detail">
-          <div class="bg-task-detail__toolbar">
-            <NTag size="small" :type="statusLabel[detailTask?.status ?? '']?.type ?? 'default'">
-              {{ statusLabel[detailTask?.status ?? '']?.label ?? detailTask?.status }}
+      <div v-if="running.length || finished.length" class="bg-task-panel__list">
+        <div
+          v-for="task in [...running, ...finished]"
+          :key="task.task_id"
+          class="bg-task-panel__item"
+        >
+          <div class="bg-task-panel__row" @click="toggleExpand(task)">
+            <NTag size="small" :type="statusLabel[task.status]?.type ?? 'default'">
+              {{ statusLabel[task.status]?.label ?? task.status }}
             </NTag>
-            <NTag v-if="detailTask?.kind === 'one_shot'" size="small" :bordered="false">
-              一次性
-            </NTag>
-            <span class="bg-task-detail__spacer"></span>
-            <NButton size="tiny" quaternary :loading="detailLoading" @click="refreshDetail">
-              刷新
-            </NButton>
-          </div>
-
-          <div class="bg-task-detail__messages">
-            <div
-              v-for="(message, idx) in detailMessages"
-              :key="idx"
-              class="bg-task-detail__message"
-              :class="`bg-task-detail__message--${message.role}`"
+            <span v-if="task.kind === 'one_shot'" class="bg-task-panel__kind">一次性</span>
+            <span class="bg-task-panel__desc">{{ task.description }}</span>
+            <span
+              v-if="task.progress?.length"
+              class="bg-task-panel__steps-hint"
             >
-              <div class="bg-task-detail__message-label">{{ messageLabel(message) }}</div>
-              <div v-if="message.tool_calls?.length" class="bg-task-detail__calls">
-                <div v-for="(call, ci) in message.tool_calls" :key="ci" class="bg-task-detail__call">
-                  🔧 {{ call.name }}
+              {{ expanded.has(task.task_id) ? '收起' : `${task.progress.length} 步` }}
+            </span>
+            <span class="bg-task-panel__detail-btn" @click.stop>
+              <NButton size="tiny" quaternary type="primary" @click="openDetail(task)">
+                详情
+              </NButton>
+            </span>
+            <span v-if="task.status === 'running'" class="bg-task-panel__cancel" @click.stop>
+              <NButton size="tiny" quaternary type="error" @click="emit('cancel', task)">
+                取消
+              </NButton>
+            </span>
+          </div>
+          <div v-if="expanded.has(task.task_id) && task.progress?.length" class="bg-task-panel__steps">
+            <div
+              v-for="(step, idx) in task.progress"
+              :key="idx"
+              class="bg-task-panel__step"
+              :class="{ 'bg-task-panel__step--error': step.kind === 'tool_result' && step.status === 'error' }"
+            >
+              <span class="bg-task-panel__step-icon">{{ stepIcon(step.kind) }}</span>
+              <span class="bg-task-panel__step-text">{{ stepText(step) }}</span>
+            </div>
+          </div>
+          <div
+            v-else-if="expanded.has(task.task_id)"
+            class="bg-task-panel__steps bg-task-panel__steps--empty"
+          >
+            暂无执行过程
+          </div>
+        </div>
+      </div>
+
+      <n-drawer
+        v-model:show="detailOpen"
+        placement="right"
+        width="min(520px, 94vw)"
+      >
+        <n-drawer-content :title="`子任务 · ${detailTask?.description ?? ''}`" closable>
+          <div class="bg-task-detail">
+            <div class="bg-task-detail__toolbar">
+              <NTag size="small" :type="statusLabel[detailTask?.status ?? '']?.type ?? 'default'">
+                {{ statusLabel[detailTask?.status ?? '']?.label ?? detailTask?.status }}
+              </NTag>
+              <NTag v-if="detailTask?.kind === 'one_shot'" size="small" :bordered="false">
+                一次性
+              </NTag>
+              <span class="bg-task-detail__spacer"></span>
+              <NButton size="tiny" quaternary :loading="detailLoading" @click="refreshDetail">
+                刷新
+              </NButton>
+            </div>
+
+            <div class="bg-task-detail__messages">
+              <div
+                v-for="(message, idx) in detailMessages"
+                :key="idx"
+                class="bg-task-detail__message"
+                :class="`bg-task-detail__message--${message.role}`"
+              >
+                <div class="bg-task-detail__message-label">{{ messageLabel(message) }}</div>
+                <div v-if="message.tool_calls?.length" class="bg-task-detail__calls">
+                  <div v-for="(call, ci) in message.tool_calls" :key="ci" class="bg-task-detail__call">
+                    🔧 {{ call.name }}
+                  </div>
+                </div>
+                <div v-if="message.text" class="bg-task-detail__text">{{ message.text }}</div>
+                <div v-if="message.role === 'tool' && message.status === 'error'" class="bg-task-detail__error">
+                  ✗ 执行失败
                 </div>
               </div>
-              <div v-if="message.text" class="bg-task-detail__text">{{ message.text }}</div>
-              <div v-if="message.role === 'tool' && message.status === 'error'" class="bg-task-detail__error">
-                ✗ 执行失败
+              <div v-if="!detailMessages.length && !detailLoading" class="bg-task-detail__empty">
+                暂无执行记录
               </div>
             </div>
-            <div v-if="!detailMessages.length && !detailLoading" class="bg-task-detail__empty">
-              暂无执行记录
+
+            <div v-if="canFollowup" class="bg-task-detail__composer">
+              <NInput
+                v-model:value="followupInput"
+                size="small"
+                placeholder="向子任务追加指示（作为新一轮执行）"
+                @keyup.enter="sendFollowup"
+              />
+              <NButton size="small" type="primary" :loading="followupSending" @click="sendFollowup">
+                发送
+              </NButton>
+            </div>
+            <div v-else-if="detailTask?.kind === 'one_shot'" class="bg-task-detail__hint">
+              一次性任务不支持追加消息
             </div>
           </div>
+        </n-drawer-content>
+      </n-drawer>
+    </template>
 
-          <div v-if="canFollowup" class="bg-task-detail__composer">
-            <NInput
-              v-model:value="followupInput"
-              size="small"
-              placeholder="向子任务追加指示（作为新一轮执行）"
-              @keyup.enter="sendFollowup"
-            />
-            <NButton size="small" type="primary" :loading="followupSending" @click="sendFollowup">
-              发送
-            </NButton>
-          </div>
-          <div v-else-if="detailTask?.kind === 'one_shot'" class="bg-task-detail__hint">
-            一次性任务不支持追加消息
-          </div>
-        </div>
-      </n-drawer-content>
-    </n-drawer>
+    <button
+      v-if="panelOpen && !hasActive"
+      type="button"
+      class="bg-task-panel__entry"
+      @click="togglePanel"
+    >
+      收起子任务
+    </button>
   </section>
 </template>
 
@@ -302,6 +335,35 @@ function messageLabel(message: BgTaskMessage): string {
   flex-direction: column;
   gap: 8px;
   padding: 10px 16px;
+}
+
+.bg-task-panel__entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 0;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: var(--noesis-radius-pill);
+  background: transparent;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.bg-task-panel__entry:hover {
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
+.bg-task-panel__entry span {
+  font-size: 14px;
+}
+
+.bg-task-panel__entry-chevron {
+  font-size: 12px;
 }
 
 .bg-task-panel__card--approval {
