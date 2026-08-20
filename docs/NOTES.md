@@ -1187,3 +1187,37 @@ backends/
 **可迁移原则：** 定时任务不是“换个 cron 入口调用 Agent”，而是独立的调度/执行生命周期：解析草稿 → 校验 → 排队 → 后台运行 → 终态与通知。无人值守约束只能作用于自动执行路径，不能污染用户后续手动续聊。
 
 **验证与遗留：** 提交 `4466b4a` 已覆盖自然语言解析、单会话承接、异步 run、qa_type 继承和 HITL 边界；仍需补 scheduler 重启恢复、后台任务进程崩溃和通知失败后的重试验收。
+
+## 2026-08-18 — 缓存命中率：稳定前缀优先于动态工具发现
+
+**问题/症状：** 一轮 6 步的统计显示缓存命中约 46%，明显低于 DeepSeek Harness 的高命中率；用户怀疑是 provider 或 `cache_control` 配置问题。
+
+**根因：** 当前工具数量有限，却启用了 DeferredToolFilter/ToolRegistry，每步动态改变工具 schema，直接破坏请求前缀稳定性；DurableContext 每步追加 todos、文件和委派快照，时间戳又精确到秒，也会让 system prompt 前缀持续变化。缓存问题不是单一开关，而是请求前缀在每轮发生了无必要变化。
+
+**解法/取舍：** 删除 DeferredToolFilterMiddleware、ToolRegistry 和 deferred_tools 接线，工具 schema 改为每步固定全量发送；DurableContext 只在发生 compaction 后作为恢复兜底注入；动态时间戳降为小时粒度。保留真实需要的 context 更新，不为当前有限工具集提前引入 tool search。
+
+**可迁移原则：** 提升 Prompt Cache 命中率先减少前缀变化，再讨论 provider cache 参数。工具发现、动态状态和时间字段都应按实际变化频率设计；“可动态”不等于“每步都动态”。
+
+**验证与遗留：** 提交 `b1d6fc6`、`f2c6c86` 已完成机制收敛；仍需用同一会话多轮真实请求对比 cache_read/input token，而不是只看本地计算值。
+
+## 2026-08-18 — 会话统计：采集、聚合、持久化要分开
+
+**问题/症状：** 统计条最初显示 token 和缓存命中为 0；主 Agent 与 subagent 的 stats 实例互相覆盖；刷新或重新打开会话后累计统计归零；修复过程中还出现缺失 import 导致运行时 `NameError`。
+
+**根因：** OpenAI 兼容流式响应默认不返回 usage；统计 middleware 误读 `ModelResponse.messages` 而实际结果在 `result`；轮数被错误按 model step 计数；状态只存在实例内存，subagent 事件到达后会覆盖主 Agent；历史数据没有持久化回放。
+
+**解法/取舍：** 开启 `stream_options.include_usage`；统一 usage normalize，兼容 `prompt_tokens_details.cached_tokens`；轮数只在新 user message 时增加；用 `SessionStatsRegistry(session_id)` 聚合主/子 Agent；每条 assistant 终态把 usage 写入 `message.extra.usage`，打开会话时从历史 seed registry，并用 `USAGE_FIELDS` 统一各层字段。
+
+**可迁移原则：** 运行统计至少分三层：单次调用采集、会话级聚合、持久化历史回放。bridge 只负责事件映射，不应成为统计状态 owner；字段口径必须有单一 schema，避免多处 shotgun surgery。
+
+**验证与遗留：** `6a13f4f`、`afe7bfe`、`c9a247b`、`f4132f7`、`87a8814`、`195ab05` 已覆盖主要修复；首 token 延迟和 tok/s 暂未接入，仍需真实多轮/子 Agent/刷新场景验收。
+
+## 2026-08-18 — Run-aware Memory Cortex 设计基线
+
+**问题/症状：** Noesis 原有记忆更接近文件记忆或 RAG 包装，难以沉淀工具失败、技术决策、验证结果和跨 Run 的经验；如果每轮同步调用 LLM 提取，成本和上下文扰动都不可控。
+
+**设计结论：** 记忆主对象应是 `Run experience`，而不是原始聊天文本。PostgreSQL 保存 typed、temporal、evidence-backed 状态和关系，Qdrant 只做派生语义索引；文件保留人工 Identity/Policy。Run 结束后异步 Reflect，Compaction 前提取 decision/experience，session-start 生成受 token budget 控制的 Memory Bulletin。
+
+**可迁移原则：** recall 负责找证据，reflect 负责综合，get_source 负责回溯原始 Run；不要把 top-k 原始片段直接塞进 system prompt。记忆写入要有 provenance、版本和冲突修订，只有重复成功且经过验证的经验才进入 Skill candidate。
+
+**验证与遗留：** 研究报告 `docs/research/agent-memory-2026/reports/final-report.md` 已归档；建议用 LongMemEval、MemoryAgentBench、PrecisionMemBench 和 Noesis RunMemory 场景验证跨会话召回、过期事实抑制、证据覆盖率和 token 成本，当前尚未实现 Cortex。
