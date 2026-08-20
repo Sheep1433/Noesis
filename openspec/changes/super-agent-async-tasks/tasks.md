@@ -52,3 +52,12 @@
 - [x] 7.5 前端：任务卡「查看详情」子会话抽屉（完整消息历史渲染）；`send_message` 用户侧入口复用
 - [x] 7.6 prompt 更新：依赖结果选 `run_in_background=false`；send_message 语义改为追加 turn；更新关键词断言
 - [ ] 7.7 全量回归 + 手动验收脚本更新（前台等待路径 / followup 续话路径 / 子会话查看路径）
+
+## 8. 后台命令任务（execute run_in_background）
+
+- [ ] 8.1 executor 泛化：`start` 支持 `kind="shell"`（不经 worker 编译，backend.aexecute 执行；无 awaiting_approval；`shell_task_timeout_seconds` 默认 0=不限时）；会话沙箱销毁时运行中 shell 任务转 failed
+- [ ] 8.2 工具替换：装配层替换 FilesystemMiddleware 生成的 `execute` 工具（同名 + `run_in_background` 默认 false；false 原样委托原工具，true 走 executor.start(kind="shell") 立即返回 task_id）；契约测试断言 interrupt_on["execute"] 审批仍生效
+- [ ] 8.3 check_task 对 shell 任务返回 exit code + 有界 stdout/stderr 尾部；shell 任务 one_shot 语义（send_message 拒绝）；cancel_task 复用
+- [ ] 8.4 前端 BgTaskPanel：shell 任务卡显示命令摘要 + 输出尾部，无 followup 输入；终态通知走既有 bg_task_notice 管线
+- [ ] 8.5 prompt：长命令后台化指引（预期超过几十秒设 run_in_background=true）+ 关键词断言
+- [ ] 8.6 契约测试：前台参数缺省行为零变化（超时/截断/错误语义）；后台启动/收果/取消/容器销毁路径

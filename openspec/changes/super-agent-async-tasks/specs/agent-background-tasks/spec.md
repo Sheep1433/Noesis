@@ -2,7 +2,7 @@
 
 ### Requirement: 后台子 Agent 执行模型
 
-SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任务：任务在专用守护线程的独立事件循环上运行，生命周期归属 session 而非主 run。任务状态机 SHALL 覆盖 running / awaiting_approval / completed / failed / cancelled / timed_out；每会话并发上限与单任务超时 SHALL 由 `subagents` 配置约束。进程重启后运行中任务 SHALL 丢失（注册表在内存，接受的设计限制），`check_task` 对不存在的 task_id SHALL 返回可诊断提示。
+SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任务：任务在专用守护线程的独立事件循环上运行，生命周期归属 session 而非主 run。任务状态机 SHALL 覆盖 running / awaiting_approval / completed / failed / cancelled / timed_out；每会话并发上限与单任务超时 SHALL 由 `subagents` 配置约束（后台命令任务见「后台命令任务」Requirement，超时独立约束）。进程重启后运行中任务 SHALL 丢失（注册表在内存，接受的设计限制），`check_task` 对不存在的 task_id SHALL 返回可诊断提示。
 
 #### Scenario: 委派后主 Agent 继续
 
@@ -138,3 +138,35 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 
 - **WHEN** 后台任务完成但用户未再发消息
 - **THEN** 系统 SHALL NOT 自行启动模型调用；前端任务面板 SHALL 经轮询显示终态
+
+### Requirement: 后台命令任务（execute run_in_background）
+
+`execute` 工具 SHALL 保留单工具形态并增加 `run_in_background` 参数（默认 false，前台执行路径与现状零变化）。`run_in_background=true` 时命令 SHALL 作为 `kind="shell"` 任务进入现有任务注册表、状态机、完成通知与前端任务面板管线——不经 worker 编译，直接经 agent backend 执行（local_shell 宿主机 / docker 容器内）。工具替换 SHALL 保留 `execute` 工具名（`interrupt_on` 审批按名匹配，危险命令审批仍发生在启动前）。文件系统工具（ls / read_file / write_file / edit_file / glob / grep）与 backend 接口 SHALL NOT 受影响。
+
+#### Scenario: 长命令后台执行
+
+- **WHEN** 模型调用 `execute(command, run_in_background=true)`
+- **THEN** 工具 SHALL 立即返回 task_id 与「可继续其他工作，稍后 check_task 收果」提示
+- **AND** 命令 SHALL 在原 backend 执行环境（docker 模式为会话容器内）运行，与文件系统工具共享同一文件系统
+
+#### Scenario: 前台行为不变
+
+- **WHEN** 模型调用 `execute(command)` 或 `execute(command, run_in_background=false)`
+- **THEN** 执行路径 SHALL 与参数引入前的 `execute` 工具完全一致（同步等待、timeout 参数语义、输出截断）
+
+#### Scenario: 收果与输出
+
+- **WHEN** shell 任务到达 completed 并被 `check_task` 收取
+- **THEN** SHALL 返回 exit code 与有界的 stdout/stderr 尾部摘要
+- **AND** shell 任务 SHALL 为 one_shot 语义：可查看、可 `cancel_task`，SHALL NOT 支持 `send_message` 续话
+
+#### Scenario: 超时与生命周期
+
+- **WHEN** shell 后台任务运行
+- **THEN** 其 SHALL NOT 受 subagent 任务超时（默认 900s）约束，超时由独立配置控制（默认不限时）
+- **AND** 会话沙箱销毁时运行中 shell 任务 SHALL 转 failed（错误注明容器回收）；进程重启丢失与 subagent 任务一致（接受的设计限制）
+
+#### Scenario: 完成通知复用
+
+- **WHEN** shell 任务到达终态
+- **THEN** SHALL 走与 subagent 任务相同的完成通知管线（run 内注入 / 续跑通知条），前端任务面板 SHALL 显示同形态任务卡

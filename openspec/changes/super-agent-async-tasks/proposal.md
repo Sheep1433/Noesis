@@ -15,7 +15,8 @@ SuperAgent 原用 deepagents `SubAgentMiddleware` 的同步 `task` 工具委派�
 - **followup-turn 续话（本变更，修订，替代 steering 注入）**：`send_message(task_id, message)` 语义从「注入当前轮模型调用」改为「子会话追加一个 turn」——运行中任务：消息排队，当前 turn 结束后 executor 链式 `ainvoke(HumanMessage)` 同 thread 开新 turn；completed 任务：冷恢复同 thread 开新 turn（结果更新，任务回到 running）。failed / timed_out / cancelled 不可续。SteeringMiddleware 退役（其语义被 followup-turn 覆盖）。
 - **子会话查看（本变更）**：后台任务的子 Agent 完整消息历史天然持久在 checkpointer thread（`thread_id = task_id`）；新增 `GET /bg-tasks/{id}/messages` 读取 thread 历史消息，前端任务卡「查看详情」打开子会话抽屉渲染完整过程（模型轮次 + 工具调用 + 结果），作为过程展示的主入口；步骤摘要轮询降级为紧凑概览。
 - **Prompt 语义（已完成，随修订微调）**：委派章节教模型——独立可并行任务**一起 start 后继续干活**；**下一步依赖结果时 `run_in_background=false` 前台等待**；收到 `[系统通知]` 后 `check_task` 收果；方向跑偏 `send_message` 追加指示。
-- **完成通知（已完成）**：终态写会话级待送达队列，下一次 run 组装输入时一次性 `[系统通知]` 前缀注入（不落库）。
+- **完成通知（已完成）**：终态写会话级待送达队列，下一次 run 组装输入时一次性 `[系统通知]` 前缀注入（不落库）；continuation run 的 user 消息带 `source_kind=bg_task_notice` 标记，前端渲染为系统通知条而非用户气泡。
+- **后台命令（本变更）**：`execute` 工具加 `run_in_background` 参数（默认 false，前台行为零变化）——true 时命令作为 `kind="shell"` 任务进现有注册表/状态机/通知/面板管线（不经 worker 编译，直接 backend 执行）；长命令不再靠 timeout=0 阻塞等待。
 - **已知限制（接受）**：注册表与通知队列在内存，进程重启丢运行中任务与未送达通知（子会话历史因在 checkpointer 仍保留）；通知不主动唤醒 run，前端轮询兜底。
 
 ## Capabilities
@@ -31,7 +32,7 @@ SuperAgent 原用 deepagents `SubAgentMiddleware` 的同步 `task` 工具委派�
 
 ## Impact
 
-- 后端：`noesis.agents.subagents`（executor / followup 队列 / tools / 子会话读取）、`super_agent.py` 装配与 prompt、`services/bg_task_service.py`、`server/api/chat_api.py`、`config subagents` 段、lifespan。
-- 前端：`BgTaskPanel`（审批卡 + 概览 + 子会话抽屉）、api/chat.ts、chat.vue 轮询。
-- 测试：executor 契约扩展（前台等待 / followup 链式 turn / 冷恢复 / 子会话读取）；steering 中间件测试随退役删除。
-- 非目标：通知主动唤醒 run、跨进程任务注册表持久化（重启恢复运行态）、FaultOperationAgent 迁移、远程 Agent Protocol 执行。
+- 后端：`noesis.agents.subagents`（executor / followup 队列 / tools / 子会话读取）、`super_agent.py` 装配与 prompt（execute 工具替换挂载点）、`services/bg_task_service.py`、`server/api/chat_api.py`、`config subagents` 段、lifespan。
+- 前端：`BgTaskPanel`（审批卡 + 概览 + 子会话抽屉 + shell 任务卡）、api/chat.ts、chat.vue（事件流 + 系统通知条）。
+- 测试：executor 契约扩展（前台等待 / followup 链式 turn / 冷恢复 / 子会话读取 / shell 任务生命周期）；steering 中间件测试随退役删除。
+- 非目标：通知主动唤醒 run、跨进程任务注册表持久化（重启恢复运行态）、FaultOperationAgent 迁移、远程 Agent Protocol 执行、文件系统工具（ls/read/write/edit/glob/grep）与 backend 接口改造。

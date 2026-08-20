@@ -24,7 +24,7 @@
 | deer-flow 模型（工具内轮询为默认） | 进程内后台 + 工具阻塞等待 | ❌ 默认同步拖住主 Agent；但其「执行后台化 + 工具等待」作为前台模式保留 |
 | **Noesis 进程内全异步 + 参数化前台** | 专用守护线程独立事件循环 | ✅ 默认后台；前台 = 同一执行路径 + 工具 await 终态 |
 
-关键机制对照 Claude Code：其后台 Agent 用完成通知推送 + SendMessage 调整。本设计对齐「通知收果 + followup 调整」两点；主动推送受「无用户消息不唤醒」架构限制（见 §6），以前端轮询兜底。
+关键机制对照 Claude Code：其后台 Agent 用完成通知推送 + SendMessage 调整。本设计对齐「通知收果 + followup 调整」两点；主动推送受「无用户消息不唤醒」架构限制（见 §7），以前端轮询兜底。
 
 ## 2. 执行层（已实现，决策记录）
 
@@ -94,19 +94,68 @@ return f"后台任务已启动：{task_id} ..."
 - 前端：任务卡「查看详情」打开抽屉，渲染完整子会话（模型轮次、工具调用、结果、审批暂停点）；5s 轮询的步骤摘要保留为收起态概览。
 - 运行中任务读取 thread state 与隔离 loop 并发访问同一 checkpointer saver：读取走 saver 的连接池（线程安全），不改写状态，只读安全。
 
-## 5. 完成通知（已实现，不变）
+## 5. 完成通知（已实现，随后台命令扩展）
 
 终态写会话级待送达队列；下一次 run 组装输入前 drain，以 `[系统通知]` 前缀注入 agent_query（不落库，仅 SUPER_AGENT_QA）。`awaiting_approval` 不注入模型通知（审批走用户面板）。不主动唤醒 run——架构边界，前端轮询兜底（非目标，见 proposal）。
 
-## 6. Prompt 语义（SUPER_AGENT_QA）
+continuation run 的通知消息不伪装用户输入：user 消息落库带 `extra.source_kind = bg_task_notice`，前端渲染为系统通知条；`bg-continuation` SSE 事件携带通知全文供实时插入。该标记为**通用来源标记**——subagent 终态与后台命令终态共用同一管线与同一形态。
+
+## 6. 后台命令（execute run_in_background）
+
+### 6.0 参照与决策记录
+
+| 参照 | 机制 | 采纳结论 |
+|------|------|---------|
+| dsh tool-bash | bash 工具 `run_in_background`（默认 true）→ `ctx.jobs` 通用任务注册表（kind='bash'）+ `job_output` / `job_kill` / `job_list` | ✅ 单工具+参数与通用任务管线；参数默认改为 false（见 6.2） |
+| dsh tool-jobs 完成通知 | busy owner inject / idle owner wakeup + 连续唤醒预算 | ✅ 已由 BgNotifyMiddleware / continuation run 等价实现，直接复用 |
+| deepagents execute | 同步阻塞 + timeout 参数（长命令靠 timeout=0 无限等） | ❌ 无后台原语——后台化为 Noesis harness 层职责 |
+| Claude Code Bash | `run_in_background`（默认 false）+ BashOutput / KillShell | ✅ 默认值对齐 false；收取复用 check_task 不另开工具 |
+
+deepagents `AsyncSubagentMiddleware`（0.6.12）有异步 subagent，但执行面经 LangGraph SDK 发到 Agent Protocol / langgraph-api 服务器（`url=None` ASGI 模式要求运行在 langgraph-api 进程内）——Noesis 不部署该服务，进程内自建 executor 的决策不变。
+
+### 6.1 工具替换（单工具 + 参数）
+
+`FilesystemMiddleware` 在构造时生成 `execute` 工具（挂在 `middleware.tools`）。Noesis 在装配层**替换**该工具：自建同名 `execute` 工具，schema 增加 `run_in_background`（bool，默认 false）：
+
+- `run_in_background=false`：原样委托给被替换的原工具（前台路径零变化：timeout 校验、输出截断、错误语义均不变）。
+- `run_in_background=true`：`executor.start(kind="shell", ...)` 立即返回 task_id。
+
+**必须保留工具名 `execute`**：`interrupt_on["execute"]`（危险 Shell 命令审批）按名匹配，替换后审批继续发生在启动前——HITL 与后台化天然组合，无需额外设计。
+
+### 6.2 参数默认值：false（与 dsh 相反的决策）
+
+dsh 默认 true（新会话无历史习惯）；Noesis 的 `execute` 已上线且模型语义为同步执行，默认 false 保证**存量行为零变化**，长命令由模型显式 opt-in（prompt 教「预期超过几十秒的命令设 run_in_background=true」）。
+
+### 6.3 shell 任务的执行路径
+
+`kind="shell"` 任务**不经 worker 编译**（无 LLM、无 checkpointer thread）：executor 侧直接经当前 session 的 agent backend 执行——`backend.aexecute(command)`（deepagents 的 aexecute 即 `asyncio.to_thread(execute)`，同步 httpx 客户端线程安全，与主 loop 并发使用同一模式）。
+
+- local_shell 模式：命令在宿主机 workspace 跑；docker 模式：经 sandbox-runner docker exec 在**会话容器**内跑。
+- **docker 模式下文件工具与 execute 共享容器文件系统**（BaseSandbox 的 ls/read/write 均经 execute）——后台命令写的文件 read_file 立即可见，这是 dsh「shares your workspace」的既有语义，非新增耦合。
+- 后台化只发生在**工具层**；`SandboxBackendProtocol.execute` 与文件系统工具（ls/read/write/edit/glob/grep）接口不动。
+
+### 6.4 状态机与收果
+
+- 状态机复用（running → completed/failed/cancelled），但 shell 任务**无 awaiting_approval**（审批在工具调用时已发生）。
+- 超时独立：不受 subagent 任务超时（900s）约束——长命令正是后台化动机；`subagents.shell_task_timeout_seconds`（默认 0=不限时），防泄漏靠 cancel_task + 容器生命周期。
+- `check_task` 收果：completed 返回 exit code + 有界 stdout/stderr 尾部；`cancel_task` 复用（cancel 后容器内进程由 sandbox-runner 终止或随容器回收，尽力而为）。
+- one_shot 语义：不可 `send_message` 续话（命令非对话性任务），面板可查看。
+- 会话沙箱销毁（session 删除 / 沙箱回收）时运行中任务转 failed，错误注明容器回收。
+
+### 6.5 暴露面汇总
+
+模型侧：`execute`（原工具 + run_in_background）、`check_task` / `cancel_task` / `list_tasks` 复用（不新增 job_output / job_kill——现有工具覆盖收取与取消）。用户侧：无新 API（面板/事件流复用）。前端：BgTaskPanel 任务卡对 shell 任务显示命令摘要 + 输出尾部，无 followup 输入。
+
+## 7. Prompt 语义（SUPER_AGENT_QA）
 
 1. **何时委派**：上下文隔离判据 + 独立并行子线（不变）。
 2. **同异步选择**：独立可并行的子任务**一起 `start_task` 后继续干活**；**下一步动作依赖该结果**时 `run_in_background=false` 前台等待。
 3. **收果**：`[系统通知]` 到达后 `check_task`；禁止启动后反复 check。
 4. **调整 / 追加**：`send_message` 向子任务追加指示或后续工作（新 turn 接续推理）；completed 任务可继续追问。
 5. **不委派**：依赖前序结果且需在主上下文连续推理的链——留主上下文（不变；需要结果但可隔离的链用前台模式）。
+6. **长命令后台化**：预期运行超过几十秒的命令 `execute(..., run_in_background=true)`，继续其他工作，`check_task` 收 exit code 与输出尾部；短命令保持前台同步。
 
-## 7. 风险与回归
+## 8. 风险与回归
 
 | 风险 | 缓解 |
 |------|------|
@@ -115,11 +164,15 @@ return f"后台任务已启动：{task_id} ..."
 | 冷恢复误续 failed 任务掩盖错误 | 仅 completed 可续；failed/timed_out/cancelled 显式拒绝 |
 | 子会话读取与执行并发竞争 | 只读 aget_state，不参与状态机；显示层容忍末尾截断 |
 | followup turn 与审批 resume 的 ainvoke 交错 | 链式 turn 只在前一次 ainvoke 返回后调度（同任务串行，注册表 future 单占） |
-| 通知注入污染用户消息原文 | 沿用 mention 块注入模式（agent_query 组装层，不写 DB） |
+| 通知注入污染用户消息原文 | 沿用 mention 块注入模式（agent_query 组装层，不写 DB）；continuation 消息带 source_kind 标记，渲染为通知条 |
+| 后台 shell 任务泄漏（不限时 + 命令挂死） | cancel_task 可终止；容器生命周期兜底（session 删除/沙箱回收连坐失败）；shell_task_timeout_seconds 可配置上限 |
+| execute 工具替换破坏 HITL 审批 | 替换保留工具名 `execute`，interrupt_on 按名匹配不感知替换；契约测试断言审批仍发生在启动前 |
+| 后台命令与文件工具并发（docker 共享容器） | 非冲突为设计语义（同一 workspace）；文件工具走自身同步路径不受后台任务影响 |
 
-## 8. 测试策略
+## 9. 测试策略
 
 - executor 契约：前台等待返回终态文本；followup 链式 turn（running 入队 → 当前 turn 完 → 新 turn 执行）；completed 冷恢复；failed 拒续；审批期入队 resume 后消费。
 - 子会话读取：真实 MemorySaver worker 跑完后 aget_state 映射的视图项断言。
-- prompt：`run_in_background` / 前台 / 通知 / followup 关键词断言。
+- shell 任务契约：run_in_background=true 立即返回 task_id；前台参数缺省委托原工具（超时/截断语义不变）；completed 返回 exit code + 输出尾部；不可 send_message；沙箱销毁转 failed。
+- prompt：`run_in_background` / 前台 / 通知 / followup / 长命令后台化关键词断言。
 - 通知注入与工具面回归不变。
