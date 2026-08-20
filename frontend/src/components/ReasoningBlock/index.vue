@@ -29,7 +29,7 @@ const props = withDefaults(defineProps<Props>(), {
 const { mode } = useToolDisplayMode()
 const isCompact = computed(() => mode.value === 'compact')
 
-// compact 行式：streaming 显示末行（滚到底），完成显示首行（对齐 dsh ReasoningRow）
+// compact 行式：streaming 显示末行（滚到底），完成显示首行
 function firstLine(text: string): string {
   const nl = text.indexOf('\n')
   return nl === -1 ? text : text.slice(0, nl)
@@ -94,7 +94,7 @@ watch(
 </script>
 
 <template>
-  <!-- compact 模式：行式 Think · 首行/末行（对齐 dsh ReasoningRow） -->
+  <!-- compact 模式：行式 Think · 首行/末行 -->
   <n-collapse
     v-if="isCompact"
     class="reasoning-compact"
@@ -445,7 +445,7 @@ watch(
 }
 
 .reasoning-body-compact {
-  border: 1px solid var(--noesis-color-border);
+  border: 1px solid var(--noesis-color-border-subtle);
   border-radius: 8px;
   background: var(--noesis-color-bg-elevated);
   padding: 8px 10px;

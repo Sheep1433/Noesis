@@ -6,13 +6,14 @@
 |------|------|---------|
 | deer-flow SubagentExecutor | 隔离 loop + 进程级注册表 + 状态机 + 并发上限 | ✅ 执行层照搬（已实现） |
 | deer-flow task 工具 | 后台执行 + **工具内轮询等待**（模型视角同步） | ⚠️ 部分采纳：前台等待模式采用「执行后台化 + 工具等待终态」，但默认不等待 |
-| deepseek-harness `subagent` 工具 | 单工具 + `run_in_background` 参数，**选择权归模型**，prompt 教「依赖结果选前台」 | ✅ 采纳参数化同异步（修订初版「同步整体退役」的结论） |
-| deepseek-harness continuable 子会话 | durable Session + Activation；点开=读持久化 transcript；followup=子会话追加 turn（steer or cold-resume）；人/模型同路径 | ✅ 采纳 followup-turn 语义与子会话查看；底层用现成 checkpointer thread 替代其 Session 持久层 |
+| Claude Code 后台 Agent | 完成通知推送（回合边界）+ SendMessage 中途调整 + 可展开子 Agent 视图 | ✅ 采纳通知驱动收果与 followup 调整 |
+| 通用参数化委派模式 | 单工具 + `run_in_background`，**选择权归模型**，依赖结果选前台 | ✅ 采纳参数化同异步（修订初版「同步整体退役」的结论） |
+| 持久子会话模式 | 子任务有独立持久对话；点开=读完整记录；followup=追加 turn（活则排下轮，闲则冷恢复）；人/模型同路径 | ✅ 采纳 followup-turn 语义与子会话查看；底层用现成 checkpointer thread 实现持久层 |
 
 初版三处设计被修订：
 
-1. **「同一 Agent 不该同异步并存」→ 错**。dsh 证明单工具 + 参数不产生选择混乱，且依赖链委派确实需要前台等待。改为 `run_in_background` 参数。
-2. **SteeringMiddleware 注入式调整 → 弱于 followup-turn**。注入只影响当前轮的下一次模型调用；dsh 的 followup 是子会话的完整新 turn（子 Agent 带全部历史接续推理，可多轮工具调用）。steering 退役，send_message 升级为 followup。
+1. **「同一 Agent 不该同异步并存」→ 错**。单工具 + 参数不产生选择混乱，且依赖链委派确实需要前台等待。改为 `run_in_background` 参数。
+2. **SteeringMiddleware 注入式调整 → 弱于 followup-turn**。注入只影响当前轮的下一次模型调用；followup 是子会话的完整新 turn（子 Agent 带全部历史接续推理，可多轮工具调用）。steering 退役，send_message 升级为 followup。
 3. **过程展示以轮询摘要为主 → 升级为子会话查看为主**。子 Agent 完整历史在 checkpointer thread 里，读取渲染即可，摘要轮询降级为概览。
 
 ## 1. 方案选型（执行位置）
@@ -48,7 +49,7 @@ running ──┬─→ completed ──send_message──→ running（冷恢�
 
 - 并发上限按会话计（默认 3），start 时与插入同锁预检（无 TOCTOU）。
 - 任务超时（默认 900s）watchdog cancel 执行 future；审批超时（复用 `hitl.ask_timeout_seconds`）自动按拒绝续跑。
-- thread_id = task_id：子 Agent 用隔离 checkpointer 的独立 thread——**这同时是子会话持久层**（见 §5），dsh 需要专门 Session 存储的能力我们由 checkpointer 免费获得。
+- thread_id = task_id：子 Agent 用隔离 checkpointer 的独立 thread——**这同时是子会话持久层**（见 §5），无需专门建 Session 存储即由 checkpointer 获得。
 
 ### 2.3 前台等待（run_in_background=false）
 
@@ -63,18 +64,18 @@ return f"后台任务已启动：{task_id} ..."
 ```
 
 - `asyncio.wrap_future` 把 concurrent.futures.Future 桥接为当前 loop 的 awaitable，不阻塞事件循环。
-- 前台等待期间主 run 的超时/取消语义不变（工具 await 被取消时任务继续后台跑——与 dsh foreground 的 abort 联动不同，v1 接受：模型下次可 check 收果）。
+- 前台等待期间主 run 的超时/取消语义不变（工具 await 被取消时任务继续后台跑，v1 接受：模型下次可 check 收果）。
 - 审批打断在前台模式下的表现：await 的是终态，awaiting_approval 期间工具持续等待，用户面板审批后任务续跑至终态、工具返回。若审批悬置超过主 run 时长，主 run 先结束（SSE 断），任务后台继续——前台等待退化为后台语义，可接受。
 
 ## 3. Followup-turn 续话（替代 steering 注入）
 
-### 3.1 语义（对齐 dsh followup）
+### 3.1 语义（followup-turn）
 
 `send_message(task_id, message)` = **子会话追加一个 turn**：
 
 - 任务 **running**：消息进入该任务的 followup 队列（FIFO，上限 10）；当前 turn 的 ainvoke 结束后，executor 检查队列，非空则同 thread `ainvoke({"messages": [HumanMessage(message)]})` 链式开新 turn，任务保持 running；循环直到队列清空，任务转终态。
 - 任务 **awaiting_approval**：消息入队；审批 resume 完成本 turn 后由同一条链消费。
-- 任务 **completed**：冷恢复——同 thread 追加 HumanMessage 开新 turn，任务回到 running，结束后更新结果。这是 dsh continuable session 的等价物（thread 即持久子会话）。
+- 任务 **completed**：冷恢复——同 thread 追加 HumanMessage 开新 turn，任务回到 running，结束后更新结果。thread 即持久子会话（可续任务模型）。
 - 任务 **failed / timed_out / cancelled**：不可续，返回错误说明（模型重新委派）。
 
 ### 3.2 与注入式 steering 的取舍
@@ -83,7 +84,7 @@ return f"后台任务已启动：{task_id} ..."
 
 ### 3.3 暴露面
 
-模型侧 `send_message(task_id, message)` 工具（不变）；用户侧 `POST /bg-tasks/{id}/message`（语义同步升级为 followup）。人 / 模型同路径（对齐 dsh）。
+模型侧 `send_message(task_id, message)` 工具（不变）；用户侧 `POST /bg-tasks/{id}/message`（语义同步升级为 followup）。人 / 模型同路径。
 
 ## 4. 子会话查看
 

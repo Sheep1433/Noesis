@@ -671,7 +671,7 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
   color: var(--noesis-block-light-text-result);
 }
 
-/* ===== compact 模式：无装饰行式（对齐 deepseek-harness ToolRow）===== */
+/* ===== compact 模式：无装饰行式 ===== */
 .tool-compact {
   /* 无 border/background/box-shadow/padding —— 一行文字混入正文流 */
 }
@@ -774,7 +774,7 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
 }
-/* running 扫光（dsh shimmer，可选装饰） */
+/* running 扫光（可选装饰） */
 .tool-compact[data-state='running'] :deep(.n-collapse-item__header) {
   position: relative;
 }
@@ -796,7 +796,7 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
 
 /* 展开内容：轻边框容器（收起时无此容器） */
 .tool-body-compact {
-  border: 1px solid var(--noesis-color-border);
+  border: 1px solid var(--noesis-color-border-subtle);
   border-radius: 8px;
   background: var(--noesis-color-bg-elevated);
   padding: 8px 10px;
@@ -813,7 +813,7 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
 .tool-body-compact pre + pre {
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid var(--noesis-color-border);
+  border-top: 1px solid var(--noesis-color-border-light);
 }
 .tool-body-compact__args {
   color: var(--noesis-color-text);

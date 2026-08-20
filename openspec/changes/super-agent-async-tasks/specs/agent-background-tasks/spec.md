@@ -62,7 +62,7 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 
 ### Requirement: Followup-turn 续话
 
-`send_message(task_id, message)` SHALL 向子任务的 checkpointer thread 追加一个 turn（对齐 dsh followup 语义），系统 SHALL NOT 以中途注入方式改写当前 turn 的模型输入：
+`send_message(task_id, message)` SHALL 向子任务的 checkpointer thread 追加一个 turn，系统 SHALL NOT 以中途注入方式改写当前 turn 的模型输入：
 
 - 任务 running：消息入 FIFO followup 队列（上限 10）；当前 turn 结束后 executor SHALL 同 thread 追加 `HumanMessage` 链式开新 turn，队列清空前任务保持 running。
 - 任务 awaiting_approval：消息入队，审批 resume 完成本 turn 后由同一条链消费。

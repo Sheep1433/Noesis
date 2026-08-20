@@ -1,7 +1,7 @@
 /**
  * 工具调用展示模型：variant 分类 + 一行摘要推导。
  *
- * 参考 deepseek-harness 的 ui-tool/tool-call-model.ts：按工具名映射到 variant，
+ * 按工具名映射到 variant，
  * 每个 variant 有专属标题、summary 取参优先级。纯函数，无副作用。
  */
 

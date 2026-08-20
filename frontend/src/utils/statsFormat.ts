@@ -1,4 +1,4 @@
-/** 统计条格式化，参考 deepseek-harness StatsLine.tsx。 */
+/** 统计条格式化。 */
 
 export interface SessionStats {
   turns: number

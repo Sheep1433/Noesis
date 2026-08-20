@@ -86,7 +86,7 @@ function parseJsonResults(text: string): { items: ResultItem[], total?: number }
   return null
 }
 
-/** 对齐 dsh CHAT_SEARCH_MAX_LINES：chat 行内最多展示 8 项，超出折叠（详情面才看全部）。 */
+/** chat 行内最多展示 8 项，超出折叠（详情面才看全部）。 */
 const MAX_ROWS = 8
 
 const view = computed(() => {
