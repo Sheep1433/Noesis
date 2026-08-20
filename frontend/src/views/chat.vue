@@ -7,6 +7,7 @@ import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { SessionStats } from '@/utils/statsFormat'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
+import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem } from 'naive-ui'
 import { cancelBgTask, createAgentRun, deleteSession, ensureSession, getSession, listBgTasks, markSessionRead, submitBgTaskDecisions, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
@@ -3115,6 +3116,33 @@ function onComposerPaste(e: ClipboardEvent) {
                             class="shrink-0"
                             :context="sessionContext!"
                           />
+
+                          <n-tooltip v-if="qa_type === 'SUPER_AGENT_QA'" placement="top">
+                            <template #trigger>
+                              <n-badge
+                                :value="bgActiveCount"
+                                :max="9"
+                                :type="bgPendingCount > 0 ? 'error' : 'info'"
+                                :show="bgActiveCount > 0"
+                              >
+                                <n-button
+                                  quaternary
+                                  circle
+                                  size="small"
+                                  class="shrink-0"
+                                  :focusable="false"
+                                  @click="bgPanelOpen = true"
+                                >
+                                  <template #icon>
+                                    <n-icon size="16">
+                                      <GitNetworkOutline />
+                                    </n-icon>
+                                  </template>
+                                </n-button>
+                              </n-badge>
+                            </template>
+                            后台子任务
+                          </n-tooltip>
 
                           <n-tooltip placement="top">
                             <template #trigger>
