@@ -83,6 +83,9 @@ class NoesisStackDeps:
     # 会话标识：SessionStatsMiddleware 据此把主/子实例的统计写入同一份
     # SessionStatsRegistry，避免多实例各发各的 stats 在前端相互覆盖。
     session_id: str = ""
+    # FilesystemMiddleware 构造后回调（super_agent 用它替换 execute 工具
+    # 为后台化变体；None 则不动）
+    filesystem_middleware_hook: Any = None
 
 
 def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
@@ -108,13 +111,14 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
             )
         )
     if deps.backend is not None:
-        stack.append(
-            FilesystemMiddleware(
-                backend=deps.backend,
-                tool_token_limit_before_evict=None,
-                human_message_token_limit_before_evict=None,
-            )
+        filesystem_middleware = FilesystemMiddleware(
+            backend=deps.backend,
+            tool_token_limit_before_evict=None,
+            human_message_token_limit_before_evict=None,
         )
+        if deps.filesystem_middleware_hook is not None:
+            deps.filesystem_middleware_hook(filesystem_middleware)
+        stack.append(filesystem_middleware)
     if deps.subagents:
         if deps.backend is None:
             raise ValueError("subagents require backend")

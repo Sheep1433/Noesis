@@ -122,6 +122,7 @@ def build_noesis_middleware(
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     model_call_limit: int | None = None,
     tool_call_limit: int | None = None,
+    filesystem_middleware_hook: Any = None,
 ) -> list[AgentMiddleware]:
     if dynamic_context_provider is None:
         def dynamic_context_provider() -> DynamicContextBlock:
@@ -157,6 +158,7 @@ def build_noesis_middleware(
             tool_result_max_chars=int(getattr(ModelConfig, "tool_output_max_chars", 24_000)),
             middleware=middleware,
             session_id=session_id or "",
+            filesystem_middleware_hook=filesystem_middleware_hook,
             **_compaction_deps(model, model_id),
         )
     )
@@ -186,6 +188,7 @@ def create_noesis_agent(
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     model_call_limit: int | None = None,
     tool_call_limit: int | None = None,
+    filesystem_middleware_hook: Any = None,
     model=None,
     model_id: str | None = None,
     **create_agent_kwargs: Any,
@@ -215,6 +218,7 @@ def create_noesis_agent(
         interrupt_on=interrupt_on,
         model_call_limit=model_call_limit,
         tool_call_limit=tool_call_limit,
+        filesystem_middleware_hook=filesystem_middleware_hook,
     )
     return create_agent(
         model=resolved_model,

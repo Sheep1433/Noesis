@@ -55,9 +55,9 @@
 
 ## 8. 后台命令任务（execute run_in_background）
 
-- [ ] 8.1 executor 泛化：`start` 支持 `kind="shell"`（不经 worker 编译，backend.aexecute 执行；无 awaiting_approval；`shell_task_timeout_seconds` 默认 0=不限时）；会话沙箱销毁时运行中 shell 任务转 failed
-- [ ] 8.2 工具替换：装配层替换 FilesystemMiddleware 生成的 `execute` 工具（同名 + `run_in_background` 默认 false；false 原样委托原工具，true 走 executor.start(kind="shell") 立即返回 task_id）；契约测试断言 interrupt_on["execute"] 审批仍生效
-- [ ] 8.3 check_task 对 shell 任务返回 exit code + 有界 stdout/stderr 尾部；shell 任务 one_shot 语义（send_message 拒绝）；cancel_task 复用
-- [ ] 8.4 前端 BgTaskPanel：shell 任务卡显示命令摘要 + 输出尾部，无 followup 输入；终态通知走既有 bg_task_notice 管线
-- [ ] 8.5 prompt：长命令后台化指引（预期超过几十秒设 run_in_background=true）+ 关键词断言
-- [ ] 8.6 契约测试：前台参数缺省行为零变化（超时/截断/错误语义）；后台启动/收果/取消/容器销毁路径
+- [x] 8.1 executor 泛化：`start_shell`（kind="shell"，不经 worker 编译，backend.aexecute 执行；无 awaiting_approval；`shell_task_timeout_seconds` 默认 0=不限时）；会话沙箱销毁时运行中任务转 failed（`fail_session_shell_tasks`，挂接 `destroy_session_sandbox`）
+- [x] 8.2 工具替换：`shell_tool.replace_execute_tool`（经 `filesystem_middleware_hook` 在 stack 装配层替换；同名 + `run_in_background` 默认 false；false 原样委托原工具，true 走 start_shell 立即返回 task_id）；同名断言覆盖 interrupt_on["execute"] 按名匹配；真实 FilesystemMiddleware 集成验证前台输出不变
+- [x] 8.3 check_task 对 shell 任务返回 exit code + 有界 stdout/stderr 尾部（`_format_shell_result`，尾部 4000 字符）；shell 任务 one_shot 语义（send_message 拒绝）；cancel_task 复用
+- [x] 8.4 前端 BgTaskPanel：shell 任务卡带「命令」标记 + 子会话视图由命令/结果合成（后端 shell 分支），无 followup 输入；终态通知走既有 bg_task_notice 管线（`_notify_terminal` 通用）
+- [x] 8.5 prompt：长命令后台化指引（预期超过几十秒设 run_in_background=true）+ 关键词断言
+- [x] 8.6 契约测试：tests/test_bg_shell_tasks.py（9 例：生命周期/输出截断/one_shot/沙箱销毁/超时/前台委托零变化/后台启动/超并发优雅拒绝/无 execute 工具静默跳过）

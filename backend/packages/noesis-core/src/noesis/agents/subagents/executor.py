@@ -166,9 +166,11 @@ class _TaskEntry:
     task: BackgroundTask
     # 在隔离 loop 内惰性调用的 worker 编译工厂（async）：
     # worker 的 LLM 客户端 / checkpointer 连接池必须绑定隔离 loop，
-    # 不得复用主 loop 创建的实例（cross-loop 风险）
-    agent_factory: Callable[[], Any]
+    # 不得复用主 loop 创建的实例（cross-loop 风险）。
+    # shell 任务不经 worker 编译（None），直接经 shell_backend 执行
+    agent_factory: Optional[Callable[[], Any]]
     recursion_limit: int
+    # > 0 时 watchdog 超时取消执行 future；0 = 不限时（shell 任务默认）
     timeout_seconds: float
     hitl_timeout_seconds: float
     # followup-turn 队列：send_message 入队，当前 turn 结束后链式开新 turn
@@ -182,6 +184,9 @@ class _TaskEntry:
     # 当前执行协程的 future（用于超时/取消）
     future: Optional[Future] = None
     watchdog_handle: Optional[asyncio.TimerHandle] = None
+    # kind="shell"：命令与执行 backend（local_shell 宿主机 / docker 容器）
+    shell_command: Optional[str] = None
+    shell_backend: Any = None
 
 
 _TASKS: dict[str, _TaskEntry] = {}
@@ -297,12 +302,17 @@ def _publish_task_event(task: BackgroundTask, event: str) -> None:
 # 默认值；装配方（super_agent）可用 config 覆盖
 MAX_CONCURRENT_PER_SESSION = 3
 TASK_TIMEOUT_SECONDS = 900.0
+# 后台命令任务超时：默认 0=不限时（长命令正是后台化动机，防泄漏靠
+# cancel_task + 会话容器生命周期兜底）
+SHELL_TASK_TIMEOUT_SECONDS = 0.0
 HITL_TIMEOUT_SECONDS = 86400.0
 # followup 消息上限（超出丢最旧）
 MAX_FOLLOWUPS = 10
 # 执行过程摘要上限（超出丢最旧）
 MAX_PROGRESS_ENTRIES = 50
 _PROGRESS_PREVIEW_CHARS = 120
+# shell 任务结果中 stdout/stderr 尾部保留长度
+_SHELL_RESULT_TAIL_CHARS = 4000
 
 
 def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
@@ -435,11 +445,13 @@ class BackgroundSubagentExecutor:
         *,
         max_concurrent_per_session: int = MAX_CONCURRENT_PER_SESSION,
         task_timeout_seconds: float = TASK_TIMEOUT_SECONDS,
+        shell_task_timeout_seconds: float = SHELL_TASK_TIMEOUT_SECONDS,
         hitl_timeout_seconds: float = HITL_TIMEOUT_SECONDS,
         recursion_limit: int = 9999,
     ) -> None:
         self._max_concurrent = max(1, max_concurrent_per_session)
         self._task_timeout = task_timeout_seconds
+        self._shell_timeout = max(0.0, shell_task_timeout_seconds)
         self._hitl_timeout = hitl_timeout_seconds
         self._recursion_limit = recursion_limit
 
@@ -526,6 +538,46 @@ class BackgroundSubagentExecutor:
             timeout_seconds=self._task_timeout,
             hitl_timeout_seconds=self._hitl_timeout,
         )
+        self._launch(entry)
+        return task_id
+
+    def start_shell(
+        self,
+        *,
+        command: str,
+        backend: Any,
+        session_id: str,
+        user_id: str,
+    ) -> str:
+        """启动后台命令任务（kind="shell"）：不经 worker 编译，直接经
+        backend 执行；超时独立（shell_task_timeout_seconds，默认 0=不限时），
+        并发上限与状态机复用。无 awaiting_approval（审批在工具调用时已发生）。
+        """
+        task_id = f"bg-{uuid.uuid4()}"
+        task = BackgroundTask(
+            task_id=task_id,
+            session_id=session_id,
+            user_id=user_id,
+            description=command,
+            kind="shell",
+        )
+        entry = _TaskEntry(
+            task=task,
+            agent_factory=None,
+            recursion_limit=self._recursion_limit,
+            timeout_seconds=self._shell_timeout,
+            hitl_timeout_seconds=self._hitl_timeout,
+            shell_command=command,
+            shell_backend=backend,
+        )
+        self._launch(entry)
+        return task_id
+
+    def _launch(self, entry: _TaskEntry) -> None:
+        """并发预检 + 插入注册表 + 调度执行（subagent / shell 同一入口）。"""
+        task = entry.task
+        session_id = task.session_id
+        task_id = task.task_id
         # 上限检查与插入同锁，避免并发 start 的 TOCTOU 竞态
         with _TASKS_LOCK:
             active = sum(
@@ -541,20 +593,18 @@ class BackgroundSubagentExecutor:
             _TASKS[task_id] = entry
         _persist(task)
         loop = _ensure_loop()
-        entry.future = asyncio.run_coroutine_threadsafe(
-            _arun(entry, resume_command=None),
-            loop,
-        )
-        _arm_watchdog(entry)
+        entry.future = asyncio.run_coroutine_threadsafe(_arun(entry), loop)
+        if entry.timeout_seconds > 0:
+            _arm_watchdog(entry)
         _publish_task_event(task, "started")
         logger.info(
-            "bg subagent started task_id={} session_id={} active={}/{}",
+            "bg task started task_id={} session_id={} kind={} active={}/{}",
             task_id,
             session_id,
+            task.kind,
             active + 1,
             self._max_concurrent,
         )
-        return task_id
 
     @staticmethod
     def send_message(task_id: str, message: str) -> dict[str, Any]:
@@ -562,7 +612,7 @@ class BackgroundSubagentExecutor:
 
         - running / awaiting_approval：入队，当前 turn 结束后链式开新 turn
         - completed：冷恢复——同 thread 开新 turn，任务回到 running
-        - one_shot / failed / timed_out / cancelled：拒绝
+        - one_shot / shell / failed / timed_out / cancelled：拒绝
         """
         text = message.strip()
         if not text:
@@ -574,6 +624,8 @@ class BackgroundSubagentExecutor:
             task = entry.task
             if task.kind == "one_shot":
                 raise ValueError("该任务为一次性任务，不支持追加消息")
+            if task.kind == "shell":
+                raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
             status = task.status
             # completed → 冷恢复：同 thread 开新 turn（followup 队列一并排入）
             if status == BgTaskStatus.COMPLETED:
@@ -705,10 +757,14 @@ async def _arun(
     - start：initial_source 为原始 description 的 HumanMessage state
     - 审批 resume：resume_command 为 Command(resume=decisions)
     - 冷恢复（send_message 对 completed 任务）：initial_source 为追加消息
+    - kind="shell"：分派到 _arun_shell（无 worker / 无 turn 概念）
     turn 正常结束后若 followup 队列非空，链式开下一个 turn（同 thread
     追加 HumanMessage），队列清空前任务保持 running。
     """
     task = entry.task
+    if entry.task.kind == "shell":
+        await _arun_shell(entry)
+        return
     try:
         agent = await _ensure_agent(entry)
         # 首轮输入：优先显式 resume command（审批续跑），
@@ -784,6 +840,86 @@ async def _arun(
         logger.opt(exception=True).error(
             "bg subagent failed task_id={}",
             task.task_id,
+        )
+
+
+async def _arun_shell(entry: _TaskEntry) -> None:
+    """kind="shell"：直接经 backend 执行命令，终态写结果与通知。
+
+    不经 worker 编译、无 turn / followup / 审批概念；backend 的
+    aexecute 即 to_thread(execute)，同步 httpx 客户端线程安全。
+    """
+    task = entry.task
+    try:
+        response = await entry.shell_backend.aexecute(entry.shell_command or "")
+        task.result = _format_shell_result(response)
+        task.status = BgTaskStatus.COMPLETED
+        task.completed_at = time.time()
+        _persist(task)
+        logger.info(
+            "bg shell task completed task_id={} exit_code={} duration={:.1f}s",
+            task.task_id,
+            getattr(response, "exit_code", None),
+            task.completed_at - task.started_at,
+        )
+    except asyncio.CancelledError:
+        # cancel：等待协程终止；容器内进程由 sandbox-runner 终止或随容器
+        # 回收（尽力而为）。不可续话（one_shot 语义）
+        if not task.status.is_terminal:
+            task.status = BgTaskStatus.CANCELLED
+            task.completed_at = time.time()
+            _persist(task)
+    except Exception as exc:
+        task.status = BgTaskStatus.FAILED
+        task.error = str(exc)
+        task.completed_at = time.time()
+        _persist(task)
+        logger.opt(exception=True).error(
+            "bg shell task failed task_id={}", task.task_id,
+        )
+    _publish_task_event(task, "terminal")
+    _notify_terminal(task)
+
+
+def _format_shell_result(response: Any) -> str:
+    """ExecuteResponse → check_task 结果文本（exit code + 有界输出尾部）。"""
+    output = str(getattr(response, "output", "") or "")
+    tail = output[-_SHELL_RESULT_TAIL_CHARS:]
+    parts = [f"exit code: {getattr(response, 'exit_code', None)}"]
+    if len(tail) < len(output):
+        parts.append(f"（输出超长，仅保留尾部 {_SHELL_RESULT_TAIL_CHARS} 字符）")
+    if getattr(response, "truncated", False):
+        parts.append("（sandbox 截断了输出）")
+    if tail:
+        parts.append(tail)
+    return "\n".join(parts)
+
+
+def fail_session_shell_tasks(session_id: str, reason: str) -> None:
+    """会话沙箱销毁时运行中 shell 任务转 failed（容器回收连坐）。
+
+    同样适用于 subagent 任务（其工具也在容器里执行），一并终结避免
+    挂死在已销毁的执行环境上。
+    """
+    with _TASKS_LOCK:
+        entries = [
+            e for e in _TASKS.values()
+            if e.task.session_id == session_id and not e.task.status.is_terminal
+        ]
+    for entry in entries:
+        _disarm_watchdog(entry)
+        if entry.future is not None:
+            entry.future.cancel()
+        entry.task.status = BgTaskStatus.FAILED
+        entry.task.error = reason
+        entry.task.completed_at = time.time()
+        _persist(entry.task)
+        _publish_task_event(entry.task, "terminal")
+        _notify_terminal(entry.task)
+    if entries:
+        logger.warning(
+            "bg tasks failed on session sandbox destroy session_id={} count={}",
+            session_id, len(entries),
         )
 
 
@@ -891,10 +1027,20 @@ async def _aread_thread_messages(task_id: str) -> list[dict[str, Any]]:
     注册表内的任务经其 worker 的 checkpointer 读（同实例，测试注入
     MemorySaver 亦适用）；进程重启后的历史任务无 entry，经共享 isolated
     checkpointer 直读 checkpoint（thread_id = task_id，消息仍在库）。
+    shell 任务无 thread，直接由任务字段合成视图（命令 + 结果）。
     """
     with _TASKS_LOCK:
         entry = _TASKS.get(task_id)
     if entry is not None:
+        if entry.task.kind == "shell":
+            items: list[dict[str, Any]] = [
+                {"role": "user", "text": entry.shell_command or entry.task.description},
+            ]
+            if entry.task.result:
+                items.append({"role": "assistant", "text": entry.task.result})
+            elif entry.task.error:
+                items.append({"role": "assistant", "text": f"错误：{entry.task.error}"})
+            return items
         agent = await _ensure_agent(entry)
         state = await agent.aget_state(_config(entry))
         messages = (getattr(state, "values", None) or {}).get("messages", [])
@@ -905,7 +1051,7 @@ async def _aread_thread_messages(task_id: str) -> list[dict[str, Any]]:
         state = await saver.aget_tuple({"configurable": {"thread_id": task_id}})
         checkpoint = getattr(state, "checkpoint", None) if state is not None else None
         messages = ((checkpoint or {}).get("channel_values") or {}).get("messages", [])
-    items: list[dict[str, Any]] = []
+    items = []
     for message in messages:
         item = _message_to_view_item(message)
         if item is not None:
@@ -961,6 +1107,7 @@ __all__ = [
     "BgTaskStatus",
     "BgTaskStore",
     "configure_task_store",
+    "fail_session_shell_tasks",
     "shutdown",
     "shutdown_loop",
 ]

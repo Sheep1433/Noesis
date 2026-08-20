@@ -50,7 +50,7 @@ const followupInput = ref('')
 const followupSending = ref(false)
 
 function canFollowup(task: BgTask): boolean {
-  if (task.kind === 'one_shot') {
+  if (task.kind === 'one_shot' || task.kind === 'shell') {
     return false
   }
   return ['running', 'awaiting_approval', 'completed'].includes(task.status)
@@ -204,6 +204,7 @@ watch(show, (open) => {
             <span class="bg-task-card__icon"><n-icon size="15"><GitNetworkOutline /></n-icon></span>
             <span class="bg-task-card__title">{{ task.description }}</span>
             <span v-if="task.kind === 'one_shot'" class="bg-task-card__kind">一次性</span>
+            <span v-else-if="task.kind === 'shell'" class="bg-task-card__kind">命令</span>
             <n-tag :type="statusLabel[task.status]?.type ?? 'default'" size="small" round>
               {{ statusLabel[task.status]?.label ?? task.status }}
             </n-tag>
@@ -257,6 +258,9 @@ watch(show, (open) => {
             </div>
             <div v-else-if="task.kind === 'one_shot'" class="bg-task-detail__hint">
               一次性任务不支持追加消息
+            </div>
+            <div v-else-if="task.kind === 'shell'" class="bg-task-detail__hint">
+              后台命令任务不支持追加消息
             </div>
           </div>
         </div>

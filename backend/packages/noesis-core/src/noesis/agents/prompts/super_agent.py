@@ -78,6 +78,8 @@ _TASK_DELEGATION = """<task_delegation>
 4. 需要调整方向、补充要求或继续追问：`send_message(task_id, message)`——子 Agent 带全部历史作为新一轮执行（已完成的任务也可继续追问）。
 5. 不再需要结果时 `cancel_task(task_id)`；确定后续不会再交互的一次性任务可加 `one_shot=true` 省去后续管理。
 
+**长命令后台化**：预期运行**超过几十秒**的 shell 命令（构建、批量测试、长训练、长时间抓取等）用 `execute(command, run_in_background=true)`——立即返回 task_id，继续其他工作，之后 `check_task` 收 exit code 与输出尾部；短命令保持前台同步执行。
+
 委派时在 `description` 中写清子目标、约束与期望输出格式。**不要**把本可委派的探索性任务留在主上下文一步步推进。
 </task_delegation>"""
 

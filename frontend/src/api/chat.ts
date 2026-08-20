@@ -398,7 +398,7 @@ export interface BgTask {
   session_id: string
   user_id?: string
   description: string
-  kind?: 'continuable' | 'one_shot'
+  kind?: 'continuable' | 'one_shot' | 'shell'
   status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out'
   result?: string | null
   error?: string | null

@@ -25,6 +25,7 @@ from noesis.agents.subagents import (
     BgNotifyMiddleware,
     build_background_task_tools,
 )
+from noesis.agents.subagents.shell_tool import replace_execute_tool
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
@@ -169,6 +170,7 @@ class SuperAgent(BaseAgent):
         bg_executor = BackgroundSubagentExecutor(
             max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
+            shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
             hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
         )
         tools.extend(build_background_task_tools(
@@ -186,6 +188,15 @@ class SuperAgent(BaseAgent):
             # run 内即时感知后台任务终态：下一次模型调用注入 [系统通知]
             middleware=[BgNotifyMiddleware(session_id=session_id)],
             backend=backend,
+            # execute 工具后台化（run_in_background，默认 false 前台零变化）；
+            # 仅主 Agent 挂载——task-worker 保持前台 execute（禁止递归后台化）
+            filesystem_middleware_hook=lambda fm: replace_execute_tool(
+                fm,
+                executor=bg_executor,
+                backend=backend,
+                session_id=session_id,
+                user_id=user_id,
+            ),
             workspace="/workspace",
             session_id=session_id,
             attachments=tuple(str(name) for name in (file_list or {})),

@@ -178,6 +178,7 @@ class SubagentSettings:
     task_timeout_seconds: float
     foreground_max_wait_seconds: float
     auto_continue: bool
+    shell_task_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -490,6 +491,7 @@ def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
         task_timeout_seconds=subagents.task_timeout_seconds,
         foreground_max_wait_seconds=subagents.foreground_max_wait_seconds,
         auto_continue=subagents.auto_continue,
+        shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
     )
 
 

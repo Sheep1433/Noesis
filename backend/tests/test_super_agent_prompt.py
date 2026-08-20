@@ -19,6 +19,8 @@ def test_super_agent_execution_discipline():
         "[系统通知]",
         "check_task",
         "send_message",
+        "长命令后台化",
+        "run_in_background=true",
         "<skills>",
         "Available Skills",
         "明确一致",
