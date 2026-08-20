@@ -11,15 +11,19 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from deepagents.backends.protocol import ExecuteResponse
-from langchain_core.messages import ToolMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel
+from langgraph.checkpoint.memory import MemorySaver
+from pydantic import BaseModel, PrivateAttr
 
 from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
@@ -320,3 +324,143 @@ async def test_replace_execute_tool_background_validates_timeout() -> None:
     bad2 = await _call(replaced, command="x", timeout=99999, run_in_background=True)
     bad2_content = bad2.content if hasattr(bad2, "content") else str(bad2)
     assert "exceeds maximum" in bad2_content
+
+
+# ---------------------------------------------------------------------------
+# 全栈集成：真实 middleware 栈（FilesystemMiddleware + 可选 HITL）× 替换后的 execute
+# 单元测试全部用假 middleware；这里验证替换工具在真实装配下与
+# 工具运行时注入、agent 循环、HITL 审批的实际交互。
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedModel(BaseChatModel):
+    """按脚本返回 AIMessage（可带 execute 工具调用）；脚本耗尽返回收尾文本。"""
+
+    script: list
+    _cursor: int = PrivateAttr(default=0)
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted-execute-fake"
+
+    def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ANN001, ANN003
+        with self._lock:
+            idx = self._cursor
+            self._cursor += 1
+        message = self.script[idx] if idx < len(self.script) else AIMessage(content="完成")
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+def _execute_call(command: str, call_id: str = "call_exec", **extra: Any) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": "execute", "args": {"command": command, **extra}, "id": call_id, "type": "tool_call"}],
+    )
+
+
+def _build_full_agent(tmp_path, *, executor, script, interrupt_on=None):
+    """真实装配：LocalShellBackend + FilesystemMiddleware（execute 替换）+ 可选 HITL。"""
+    from deepagents.backends.local_shell import LocalShellBackend
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
+
+    backend = LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, timeout=5)
+    fm = FilesystemMiddleware(backend=backend)
+    replace_execute_tool(fm, executor=executor, backend=backend, session_id="s-full", user_id="u1")
+    middleware = [fm]
+    if interrupt_on:
+        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+    return create_agent(
+        _ScriptedModel(script=list(script)),
+        tools=[],
+        middleware=middleware,
+        checkpointer=MemorySaver(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fullstack_foreground_execute_unchanged(tmp_path) -> None:
+    """真实栈前台：输出格式与 deepagents 原生一致；不产生后台任务。"""
+    executor = BackgroundSubagentExecutor()
+    agent = _build_full_agent(
+        tmp_path, executor=executor, script=[_execute_call("echo fg-ok")],
+    )
+    config = {"configurable": {"thread_id": "t-fg"}}
+    final_state = None
+    async for chunk in agent.astream(
+        {"messages": [HumanMessage(content="跑命令")]}, config, stream_mode="values",
+    ):
+        final_state = chunk
+    tool_msgs = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
+    assert tool_msgs, "应产生 execute 的 ToolMessage"
+    assert "fg-ok" in tool_msgs[-1].content
+    assert "[Command succeeded with exit code 0]" in tool_msgs[-1].content
+    assert BackgroundSubagentExecutor.list_for_session("s-full") == []
+
+
+@pytest.mark.asyncio
+async def test_fullstack_background_execute_string_return(tmp_path) -> None:
+    """真实栈后台：字符串返回值经 agent 循环转为 ToolMessage，任务入注册表。"""
+    executor = BackgroundSubagentExecutor()
+    agent = _build_full_agent(
+        tmp_path, executor=executor,
+        script=[_execute_call("echo bg-ok", run_in_background=True)],
+    )
+    config = {"configurable": {"thread_id": "t-bg"}}
+    final_state = None
+    async for chunk in agent.astream(
+        {"messages": [HumanMessage(content="跑长命令")]}, config, stream_mode="values",
+    ):
+        final_state = chunk
+    tool_msgs = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
+    assert tool_msgs, "后台分支的字符串返回应被 agent 转为 ToolMessage"
+    assert "后台命令任务已启动" in tool_msgs[-1].content
+    tasks = BackgroundSubagentExecutor.list_for_session("s-full")
+    assert len(tasks) == 1 and tasks[0]["kind"] == "shell"
+    task = _wait_terminal(executor, tasks[0]["task_id"])
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert "bg-ok" in (task["result"] or "")
+
+
+@pytest.mark.asyncio
+async def test_fullstack_hitl_interrupt_before_background_start(tmp_path) -> None:
+    """HITL × 后台化：interrupt_on["execute"] 按名匹配替换后的工具，
+    审批发生在启动前——interrupt 时注册表无任务；批准后续跑才启动。"""
+    from langgraph.types import Command
+
+    executor = BackgroundSubagentExecutor()
+    agent = _build_full_agent(
+        tmp_path, executor=executor,
+        script=[_execute_call("sleep 1 && echo approved-bg", run_in_background=True)],
+        interrupt_on={"execute": True},
+    )
+    config = {"configurable": {"thread_id": "t-hitl"}}
+    final_state = None
+    async for chunk in agent.astream(
+        {"messages": [HumanMessage(content="跑危险命令")]}, config, stream_mode="values",
+    ):
+        final_state = chunk
+    interrupts = final_state.get("__interrupt__") if isinstance(final_state, dict) else None
+    assert interrupts, "execute 调用应触发 HITL interrupt"
+    # 审批发生在启动前：此刻不应有任何后台任务
+    assert BackgroundSubagentExecutor.list_for_session("s-full") == []
+
+    # 批准 → 续跑 → 工具真正执行（resume 契约与 executor.submit_decisions
+    # 一致：{"decisions": [...]}）
+    final_state = None
+    async for chunk in agent.astream(
+        Command(resume={"decisions": [{"type": "approve"}]}), config, stream_mode="values",
+    ):
+        final_state = chunk
+    tool_msgs = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
+    assert tool_msgs and "后台命令任务已启动" in tool_msgs[-1].content
+    tasks = BackgroundSubagentExecutor.list_for_session("s-full")
+    assert len(tasks) == 1
+    task = _wait_terminal(executor, tasks[0]["task_id"])
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert "approved-bg" in (task["result"] or "")

@@ -14,8 +14,6 @@
 glob/grep）不动。
 """
 
-from __future__ import annotations
-
 from typing import Annotated, Any, Optional
 
 from langchain.tools import ToolRuntime
