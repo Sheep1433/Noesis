@@ -920,6 +920,13 @@ function clearSessionConfig() {
 
 // ---- 后台子 Agent：会话级 SSE 事件流 + 审批 ----
 const bgTasks = ref<BgTask[]>([])
+const bgPanelOpen = ref(false)
+const bgActiveCount = computed(() =>
+  bgTasks.value.filter((t) => t.status === 'running' || t.status === 'awaiting_approval').length,
+)
+const bgPendingCount = computed(() =>
+  bgTasks.value.filter((t) => t.status === 'awaiting_approval').length,
+)
 let bgTaskSource: EventSource | null = null
 
 function applyBgTask(task: BgTask): void {
@@ -3089,14 +3096,6 @@ function onComposerPaste(e: ClipboardEvent) {
                         @keydown="onComposerKeydown"
                       />
 
-                      <BgTaskPanel
-                        v-if="bgTasks.length"
-                        :tasks="bgTasks"
-                        @decide="onBgTaskDecide"
-                        @cancel="onBgTaskCancel"
-                        @changed="refreshBgTasks(currentIndex)"
-                      />
-
                       <ChatComposerToolbar
                         v-model:model-id="selectedModelId"
                         v-model:kb-collections="selectedKbCollections"
@@ -3346,6 +3345,15 @@ function onComposerPaste(e: ClipboardEvent) {
         </div>
       </div>
     </n-modal>
+
+    <!-- 后台子任务抽屉（SUPER_AGENT_QA） -->
+    <BgTaskPanel
+      v-model:show="bgPanelOpen"
+      :tasks="bgTasks"
+      @decide="onBgTaskDecide"
+      @cancel="onBgTaskCancel"
+      @changed="refreshBgTasks(currentIndex)"
+    />
   </div>
 </template>
 
