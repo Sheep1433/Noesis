@@ -735,6 +735,8 @@ const conversationItems = ref<
     reader?: ReadableStreamDefaultReader | null
     parent_id?: string | null
     message_id?: string
+    /** 系统注入消息标记（bg_task_notice 等）：渲染为通知条而非用户气泡 */
+    source_kind?: string
     /** 与后端 Langfuse metadata.langfuse_session_id 一致（chat_id） */
     langfuse_session_id?: string
     created_at?: number
@@ -960,8 +962,40 @@ function openBgTaskStream(sessionId: string): void {
       console.warn('[bg-task] parse event failed', err)
     }
   })
+  // 后台任务终态触发自动续跑：对话流插入系统通知条并附着新 run 的 SSE
+  source.addEventListener('bg-continuation', (e: MessageEvent) => {
+    try {
+      const payload = JSON.parse(e.data)
+      if (payload?.run_id) {
+        insertBgNoticeItem(String(payload.notice || ''), String(payload.run_id))
+        void sseStream.resumeActiveRun(sessionId)
+      }
+    } catch (err) {
+      console.warn('[bg-task] continuation event failed', err)
+    }
+  })
   // onerror 不手动重连：EventSource 内建自动重连，重连由服务端快照对齐
   bgTaskSource = source
+}
+
+/** 续跑通知条：与历史加载的 bg_task_notice 用户消息同一形态（run_id 去重） */
+function insertBgNoticeItem(notice: string, runId: string): void {
+  const uuid = `bgc-notice-${runId}`
+  if (!notice.trim() || conversationItems.value.some((item) => item.uuid === uuid)) {
+    return
+  }
+  conversationItems.value.push({
+    uuid,
+    chat_id: currentIndex.value,
+    qa_type: qa_type.value,
+    question: notice,
+    role: 'user',
+    content: '',
+    file_key: [],
+    reader: null,
+    source_kind: 'bg_task_notice',
+    created_at: Date.now(),
+  })
 }
 
 function stopBgTaskPolling(): void {
@@ -2690,7 +2724,32 @@ function onComposerPaste(e: ClipboardEvent) {
                     :key="`${item.uuid}-${index}`"
                     class="mb-4"
                   >
-                    <div v-if="item.role === 'user'" class="chat-user-message-row flex flex-col space-y-2 w-full">
+                    <!-- 系统注入通知（后台任务终态自动续跑）：非用户输入，渲染为通知条 -->
+                    <div
+                      v-if="item.role === 'user' && item.source_kind === 'bg_task_notice'"
+                      class="chat-bg-notice"
+                    >
+                      <div class="chat-bg-notice__row">
+                        <n-icon size="14" class="chat-bg-notice__icon">
+                          <GitNetworkOutline />
+                        </n-icon>
+                        <span class="chat-bg-notice__label">后台任务通知</span>
+                        <span
+                          class="chat-bg-notice__text"
+                          :class="{ 'chat-bg-notice__text--collapsed': shouldCollapseUserMessage(item.question || '') && !isUserMessageExpanded(item) }"
+                        >{{ item.question }}</span>
+                        <button
+                          v-if="shouldCollapseUserMessage(item.question || '')"
+                          type="button"
+                          class="chat-bg-notice__toggle"
+                          @click.stop="toggleUserMessage(item)"
+                        >
+                          {{ isUserMessageExpanded(item) ? '收起' : '展开' }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div v-if="item.role === 'user' && item.source_kind !== 'bg_task_notice'" class="chat-user-message-row flex flex-col space-y-2 w-full">
                       <div class="chat-message-column chat-user-message-column">
                         <!-- 用户消息 -->
                         <div class="chat-user-message">
@@ -3866,6 +3925,64 @@ function onComposerPaste(e: ClipboardEvent) {
 }
 
 .chat-user-message__toggle:hover {
+  color: var(--noesis-color-primary-hover);
+  text-decoration: underline;
+}
+
+/* 系统注入通知条（后台任务终态自动续跑）：非用户输入，弱化为居中信息行 */
+.chat-bg-notice {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.chat-bg-notice__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: min(680px, 92%);
+  margin: 0 auto;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--noesis-color-primary-border-soft, rgba(64, 128, 255, 0.08));
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--n-text-color-3, rgba(128, 128, 128, 0.9));
+}
+
+.chat-bg-notice__icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.chat-bg-notice__label {
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.chat-bg-notice__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-bg-notice__text--collapsed {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.chat-bg-notice__toggle {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--noesis-color-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-bg-notice__toggle:hover {
   color: var(--noesis-color-primary-hover);
   text-decoration: underline;
 }

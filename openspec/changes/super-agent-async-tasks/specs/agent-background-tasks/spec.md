@@ -127,6 +127,13 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 - **WHEN** 通知被注入某轮上下文
 - **THEN** 该轮用户消息的数据库持久化内容 SHALL 与用户原始输入一致
 
+#### Scenario: 续跑通知不伪装用户输入
+
+- **WHEN** continuation run 因通知自动创建
+- **THEN** 其 user 消息落库时 SHALL 携带来源标记（`extra.source_kind = bg_task_notice`）
+- **AND** 前端 SHALL 将带该标记的消息渲染为系统通知条（弱化信息行），SHALL NOT 渲染为用户消息气泡
+- **AND** 续跑事件（`bg-continuation`）SHALL 携带通知全文，前端据此在对话流实时插入同形态通知条
+
 #### Scenario: 不主动唤醒
 
 - **WHEN** 后台任务完成但用户未再发消息

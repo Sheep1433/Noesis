@@ -84,11 +84,14 @@ async def maybe_continue(session_id: str, user_id: str) -> dict[str, Any] | None
             if active is not None:
                 # run 仍活跃：通知留给 BgNotifyMiddleware / 下一轮注入
                 return None
+            content = f"{notifications.render_block(notices)}\n\n{CONTINUATION_INSTRUCTION}".strip()
             request = CreateRunRequest(
                 session_id=session_id,
-                content=f"{notifications.render_block(notices)}\n\n{CONTINUATION_INSTRUCTION}".strip(),
+                content=content,
                 client_request_id=f"bgc-{uuid.uuid4()}",
-                extra={"bg_continuation": True},
+                # source_kind 随 user message extra 落库：前端据此渲染为系统
+                # 通知条而非用户气泡（通知不伪装成用户输入）
+                extra={"bg_continuation": True, "source_kind": "bg_task_notice"},
             )
             run = await RunService.create(request, current_user, db)
     except ConflictException:
@@ -105,13 +108,15 @@ async def maybe_continue(session_id: str, user_id: str) -> dict[str, Any] | None
         "bg continuation run created run_id={} session_id={} wake={}/{}",
         run.id, session_id, _wake_counts[session_id], _MAX_CONSECUTIVE,
     )
-    # 通知前端附着新 run 的 SSE（页面开着即可实时看到主 Agent 自动续跑）
+    # 通知前端附着新 run 的 SSE（页面开着即可实时看到主 Agent 自动续跑）；
+    # notice 为本轮通知全文，前端据此在对话流插入系统通知条
     from noesis.agents.subagents.executor import publish_session_event
 
     publish_session_event(session_id, user_id, {
         "event": "continuation",
         "run_id": run.id,
         "assistant_message_id": run.assistant_message_id,
+        "notice": content,
     })
     return {"run_id": run.id, "assistant_message_id": run.assistant_message_id}
 

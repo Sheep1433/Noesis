@@ -625,6 +625,8 @@ async def test_maybe_continue_creates_run_when_idle(monkeypatch) -> None:
     assert "[系统通知]" in created[0].content
     assert "check_task" in created[0].content
     assert created[0].extra.get("bg_continuation") is True
+    # 消息源标记随 extra 落库：前端据此渲染为通知条而非用户气泡
+    assert created[0].extra.get("source_kind") == "bg_task_notice"
     svc.reset_for_tests()
 
 
