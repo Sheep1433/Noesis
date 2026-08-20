@@ -187,6 +187,8 @@ class _TaskEntry:
     # kind="shell"：命令与执行 backend（local_shell 宿主机 / docker 容器）
     shell_command: Optional[str] = None
     shell_backend: Any = None
+    # 命令级超时（None=不向 backend 传 timeout，走 backend 默认）
+    shell_command_timeout: Optional[int] = None
 
 
 _TASKS: dict[str, _TaskEntry] = {}
@@ -313,6 +315,9 @@ MAX_PROGRESS_ENTRIES = 50
 _PROGRESS_PREVIEW_CHARS = 120
 # shell 任务结果中 stdout/stderr 尾部保留长度
 _SHELL_RESULT_TAIL_CHARS = 4000
+# 后台命令默认命令级超时（模型未显式传 timeout 时）：对齐 deepagents
+# execute 工具的 max_execute_timeout；docker runner 侧 0=不限时由模型显式传
+_SHELL_DEFAULT_COMMAND_TIMEOUT = 3600
 
 
 def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
@@ -548,10 +553,15 @@ class BackgroundSubagentExecutor:
         backend: Any,
         session_id: str,
         user_id: str,
+        timeout: Optional[int] = None,
     ) -> str:
         """启动后台命令任务（kind="shell"）：不经 worker 编译，直接经
-        backend 执行；超时独立（shell_task_timeout_seconds，默认 0=不限时），
-        并发上限与状态机复用。无 awaiting_approval（审批在工具调用时已发生）。
+        backend 执行；任务超时独立（shell_task_timeout_seconds，默认 0=不限
+        时），并发上限与状态机复用。无 awaiting_approval（审批在工具调用时
+        已发生）。
+
+        ``timeout`` 为命令级超时（透传 backend）：None 用默认（1h）；
+        docker runner 侧 0=不限时（local_shell 不接受 0，同前台语义）。
         """
         task_id = f"bg-{uuid.uuid4()}"
         task = BackgroundTask(
@@ -569,6 +579,9 @@ class BackgroundSubagentExecutor:
             hitl_timeout_seconds=self._hitl_timeout,
             shell_command=command,
             shell_backend=backend,
+            shell_command_timeout=(
+                timeout if timeout is not None else _SHELL_DEFAULT_COMMAND_TIMEOUT
+            ),
         )
         self._launch(entry)
         return task_id
@@ -848,14 +861,22 @@ async def _arun_shell(entry: _TaskEntry) -> None:
 
     不经 worker 编译、无 turn / followup / 审批概念；backend 的
     aexecute 即 to_thread(execute)，同步 httpx 客户端线程安全。
+    终态发布（SSE + 通知）只在协程自身落终态的分支做——CancelledError
+    由触发方（cancel / watchdog / 沙箱销毁）负责发布，这里不重复。
     """
     task = entry.task
     try:
-        response = await entry.shell_backend.aexecute(entry.shell_command or "")
+        timeout = entry.shell_command_timeout
+        response = await entry.shell_backend.aexecute(
+            entry.shell_command or "",
+            **({"timeout": timeout} if timeout is not None else {}),
+        )
         task.result = _format_shell_result(response)
         task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
         _persist(task)
+        _publish_task_event(task, "terminal")
+        _notify_terminal(task)
         logger.info(
             "bg shell task completed task_id={} exit_code={} duration={:.1f}s",
             task.task_id,
@@ -863,22 +884,25 @@ async def _arun_shell(entry: _TaskEntry) -> None:
             task.completed_at - task.started_at,
         )
     except asyncio.CancelledError:
-        # cancel：等待协程终止；容器内进程由 sandbox-runner 终止或随容器
-        # 回收（尽力而为）。不可续话（one_shot 语义）
+        # cancel / 超时 / 沙箱销毁：终态由触发方设置并发布；此处仅确认
+        # 状态已落（未落则兜底标记，不重复发布）。容器内进程由
+        # sandbox-runner 终止或随容器回收（尽力而为）
         if not task.status.is_terminal:
             task.status = BgTaskStatus.CANCELLED
             task.completed_at = time.time()
             _persist(task)
+            _publish_task_event(task, "terminal")
+            _notify_terminal(task)
     except Exception as exc:
         task.status = BgTaskStatus.FAILED
         task.error = str(exc)
         task.completed_at = time.time()
         _persist(task)
+        _publish_task_event(task, "terminal")
+        _notify_terminal(task)
         logger.opt(exception=True).error(
             "bg shell task failed task_id={}", task.task_id,
         )
-    _publish_task_event(task, "terminal")
-    _notify_terminal(task)
 
 
 def _format_shell_result(response: Any) -> str:
@@ -961,6 +985,7 @@ def _on_task_timeout(entry: _TaskEntry) -> None:
     entry.task.error = f"后台任务超时（{int(entry.timeout_seconds)}s）"
     entry.task.completed_at = time.time()
     _persist(entry.task)
+    _publish_task_event(entry.task, "terminal")
     _notify_terminal(entry.task)
 
 

@@ -1086,9 +1086,15 @@ async def get_bg_task_messages(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """只读后台子 Agent 的完整执行历史（模型轮次/工具调用/结果）。"""
+    import asyncio
+
     from noesis.services.bg_task_service import BgTaskService
 
-    messages = BgTaskService.get_messages(task_id, str(current_user.user_id))
+    # read_thread_messages 经 run_coroutine_threadsafe + result 阻塞等待
+    # 隔离 loop（上限 10s）——丢线程执行，避免卡住主事件循环
+    messages = await asyncio.to_thread(
+        BgTaskService.get_messages, task_id, str(current_user.user_id)
+    )
     return ResponseUtil.success(msg='获取子会话消息成功', data={"messages": messages})
 
 

@@ -31,6 +31,20 @@ _BACKGROUND_HINT = (
     "collect its exit code and output tail with check_task later."
 )
 
+# 命令级超时上限（对齐 deepagents execute 工具的 max_execute_timeout）
+_MAX_COMMAND_TIMEOUT = 3600
+
+
+def _validate_background_timeout(timeout: Optional[int]) -> Optional[str]:
+    """后台路径复用原工具的 timeout 校验（原校验只覆盖前台分支）。"""
+    if timeout is None:
+        return None
+    if timeout < 0:
+        return f"timeout must be non-negative, got {timeout}."
+    if timeout > _MAX_COMMAND_TIMEOUT:
+        return f"timeout {timeout}s exceeds maximum allowed ({_MAX_COMMAND_TIMEOUT}s)."
+    return None
+
 
 class _ExecuteWithBackgroundSchema(BaseModel):
     """execute 工具入参：原 schema + run_in_background。"""
@@ -87,12 +101,16 @@ def replace_execute_tool(
         run_in_background: bool = False,
     ):
         if run_in_background:
+            invalid = _validate_background_timeout(timeout)
+            if invalid is not None:
+                return _reject_background(invalid, runtime.tool_call_id)
             try:
                 task_id = executor.start_shell(
                     command=command,
                     backend=backend,
                     session_id=session_id,
                     user_id=user_id,
+                    timeout=timeout,
                 )
             except ValueError as exc:
                 return _reject_background(str(exc), runtime.tool_call_id)
@@ -101,11 +119,9 @@ def replace_execute_tool(
                 "无需等待——可继续其他工作，之后用 check_task 收取 exit code 与输出尾部。"
             )
         # 前台：直接调原工具协程（runtime 透传），行为与替换前完全一致
-        if timeout is not None:
-            return await original.coroutine(
-                command=command, runtime=runtime, timeout=timeout,
-            )
-        return await original.coroutine(command=command, runtime=runtime)
+        return await original.coroutine(
+            command=command, runtime=runtime, timeout=timeout,
+        )
 
     def execute_bg(
         command: Annotated[str, "Shell command to execute in the sandbox environment."],
@@ -114,12 +130,16 @@ def replace_execute_tool(
         run_in_background: bool = False,
     ):
         if run_in_background:
+            invalid = _validate_background_timeout(timeout)
+            if invalid is not None:
+                return _reject_background(invalid, runtime.tool_call_id)
             try:
                 task_id = executor.start_shell(
                     command=command,
                     backend=backend,
                     session_id=session_id,
                     user_id=user_id,
+                    timeout=timeout,
                 )
             except ValueError as exc:
                 return _reject_background(str(exc), runtime.tool_call_id)
@@ -127,9 +147,7 @@ def replace_execute_tool(
                 f"后台命令任务已启动：{task_id}\n"
                 "无需等待——可继续其他工作，之后用 check_task 收取 exit code 与输出尾部。"
             )
-        if timeout is not None:
-            return original.func(command=command, runtime=runtime, timeout=timeout)
-        return original.func(command=command, runtime=runtime)
+        return original.func(command=command, runtime=runtime, timeout=timeout)
 
     replacement = StructuredTool.from_function(
         name="execute",

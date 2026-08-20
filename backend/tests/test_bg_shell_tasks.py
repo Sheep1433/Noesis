@@ -261,3 +261,62 @@ async def test_replace_execute_tool_noop_without_execute_tool() -> None:
         backend=_FakeShellBackend(), session_id="s", user_id="u1",
     )
     assert middleware.tools == []
+
+
+def test_shell_cancel_notifies_exactly_once() -> None:
+    """取消：终态通知只发一次（cancel 方发布，协程 CancelledError 不重复）。"""
+    from noesis.agents.subagents import notifications
+
+    notifications._PENDING.pop("s-cn", None)
+    backend = _FakeShellBackend(delay=30.0)
+    executor = BackgroundSubagentExecutor()
+    task_id = executor.start_shell(
+        command="sleep 30", backend=backend, session_id="s-cn", user_id="u1",
+    )
+    import time as _t
+    _t.sleep(0.3)
+    executor.cancel(task_id)
+    _t.sleep(0.3)
+    notices = notifications.take_undelivered("s-cn", mark_delivered=False)
+    cancelled = [n for n in notices if n.get("task_id") == task_id]
+    assert len(cancelled) == 1, f"expected exactly 1 notice, got {len(cancelled)}"
+    assert cancelled[0]["status"] == "cancelled"
+
+
+def test_shell_timeout_passthrough_to_backend() -> None:
+    """模型显式 timeout 透传 backend；缺省用默认命令超时（3600）。"""
+    received: list[int | None] = []
+
+    class _RecordingBackend(_FakeShellBackend):
+        async def aexecute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+            received.append(timeout)
+            return await super().aexecute(command, timeout=timeout)
+
+    executor = BackgroundSubagentExecutor()
+    tid1 = executor.start_shell(
+        command="a", backend=_RecordingBackend(), session_id="s-to2", user_id="u1", timeout=600,
+    )
+    tid2 = executor.start_shell(
+        command="b", backend=_RecordingBackend(), session_id="s-to2", user_id="u1",
+    )
+    _wait_terminal(executor, tid1)
+    _wait_terminal(executor, tid2)
+    assert received == [600, 3600]
+
+
+@pytest.mark.asyncio
+async def test_replace_execute_tool_background_validates_timeout() -> None:
+    """后台路径复用前台 timeout 校验（负数/超上限拒绝，不触达 backend）。"""
+    middleware, _ = _build_fake_filesystem_middleware()
+    executor = BackgroundSubagentExecutor()
+    replace_execute_tool(
+        middleware, executor=executor, backend=_FakeShellBackend(delay=30.0),
+        session_id="s-v", user_id="u1",
+    )
+    replaced = middleware.tools[0]
+    bad = await _call(replaced, command="x", timeout=-1, run_in_background=True)
+    bad_content = bad.content if hasattr(bad, "content") else str(bad)
+    assert "启动失败" in bad_content and "non-negative" in bad_content
+    bad2 = await _call(replaced, command="x", timeout=99999, run_in_background=True)
+    bad2_content = bad2.content if hasattr(bad2, "content") else str(bad2)
+    assert "exceeds maximum" in bad2_content
