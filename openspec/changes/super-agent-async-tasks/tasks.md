@@ -29,7 +29,7 @@
 - [x] 4.2 `SteeringMiddleware`：wrap_model_call 按 thread_id drain 指令，追加 `HumanMessage("[用户策略调整] …")` 后 override request.messages；消费即清空
 - [x] 4.3 task-worker 栈挂载 SteeringMiddleware（仅 SUBAGENT profile）；awaiting_approval 期间入队、resume 后首个模型调用生效的契约测试
 - [x] 4.4 模型工具 `send_message(task_id, message)`；用户侧 API `POST /bg-tasks/{id}/message`（BgTaskService 归属校验）
-- [ ] 4.5 BgTaskPanel 运行中任务卡加「发送指令」输入（可选增强，验收不阻塞）
+- [x] 4.5 BgTaskPanel 任务卡发送指令输入（抽屉详情底部 composer，运行中/已完成 continuable 任务可用）
 
 ## 5. 完成通知
 
@@ -40,7 +40,7 @@
 ## 6. 收口
 
 - [x] 6.1 后端全量回归 + 前端 lint/build；确认无新增失败（基线 11 个既有失败除外）
-- [ ] 6.2 手动验收脚本：start → 主 Agent 继续回复 → send_message 调整 → 任务完成 → 下一轮收到系统通知 → check_task 收果；含审批路径（后台任务触发审批 → 面板批准 → 续跑完成）
+- [x] 6.2 手动验收脚本：acceptance.md（8 节：委派/子会话/followup/通知/审批/前台等待/后台命令/回归基线）
 - [ ] 6.3 归档准备：spec delta 并入 `agent-background-tasks` / `agent-hitl` / `agent-profiles` 主规格
 
 ## 7. 设计修订：单工具同异步 / followup-turn / 子会话查看
@@ -51,7 +51,7 @@
 - [x] 7.4 子会话读取：`GET /bg-tasks/{id}/messages`（只读 aget_state → 轻量视图项 + 归属校验）；契约测试
 - [x] 7.5 前端：任务卡「查看详情」子会话抽屉（完整消息历史渲染）；`send_message` 用户侧入口复用
 - [x] 7.6 prompt 更新：依赖结果选 `run_in_background=false`；send_message 语义改为追加 turn；更新关键词断言
-- [ ] 7.7 全量回归 + 手动验收脚本更新（前台等待路径 / followup 续话路径 / 子会话查看路径）
+- [x] 7.7 全量回归 + 手动验收脚本更新（acceptance.md 覆盖前台等待 / followup / 子会话 / 后台命令路径；后端 1045 passed、前端 lint/test/build 绿）
 
 ## 8. 后台命令任务（execute run_in_background）
 
