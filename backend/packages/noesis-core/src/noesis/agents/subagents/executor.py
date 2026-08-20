@@ -84,8 +84,8 @@ class BackgroundTask:
     )
     progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, include_progress: bool = True) -> dict[str, Any]:
+        data = {
             "task_id": self.task_id,
             "session_id": self.session_id,
             "user_id": self.user_id,
@@ -97,8 +97,12 @@ class BackgroundTask:
             "interrupt": self.interrupt,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
-            "progress": list(self.progress),
+            # UI 只显示步数；SSE/列表负载裁掉明细，详情走 messages API
+            "progress_count": len(self.progress),
         }
+        if include_progress:
+            data["progress"] = list(self.progress)
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +275,7 @@ def publish_session_event(
 
 def _publish_task_event(task: BackgroundTask, event: str) -> None:
     """向该会话所有订阅者推送任务快照事件；慢消费者丢事件（重连快照兜底）。"""
-    payload = {"event": event, "task": task.to_dict()}
+    payload = {"event": event, "task": task.to_dict(include_progress=False)}
     with _SUBSCRIBERS_LOCK:
         subs = list(_SUBSCRIBERS.get(task.session_id) or [])
     for loop, queue, user_id in subs:
@@ -446,7 +450,7 @@ class BackgroundSubagentExecutor:
         with _TASKS_LOCK:
             entry = _TASKS.get(task_id)
             if entry is not None:
-                return entry.task.to_dict()
+                return entry.task.to_dict(include_progress=False)
         # 内存 miss（典型：进程重启后）→ 持久层 fallback
         if _TASK_STORE is not None:
             try:
@@ -462,7 +466,7 @@ class BackgroundSubagentExecutor:
     def list_for_session(session_id: str) -> list[dict[str, Any]]:
         with _TASKS_LOCK:
             tasks = {
-                entry.task.task_id: entry.task.to_dict()
+                entry.task.task_id: entry.task.to_dict(include_progress=False)
                 for entry in _TASKS.values()
                 if entry.task.session_id == session_id
             }
@@ -639,7 +643,7 @@ class BackgroundSubagentExecutor:
             loop,
         )
         _arm_watchdog(entry)
-        return entry.task.to_dict()
+        return entry.task.to_dict(include_progress=False)
 
     @staticmethod
     def cancel(task_id: str) -> dict[str, Any]:
@@ -648,7 +652,7 @@ class BackgroundSubagentExecutor:
             if entry is None:
                 raise ValueError(f"后台任务不存在: {task_id}")
             if entry.task.status.is_terminal:
-                return entry.task.to_dict()
+                return entry.task.to_dict(include_progress=False)
             _disarm_watchdog(entry)
             with entry.followup_lock:
                 entry.followups.clear()
@@ -659,7 +663,7 @@ class BackgroundSubagentExecutor:
             _persist(entry.task)
             _publish_task_event(entry.task, "terminal")
             _notify_terminal(entry.task)
-            snapshot = entry.task.to_dict()
+            snapshot = entry.task.to_dict(include_progress=False)
         return snapshot
 
     # -- 内部委托模块实现（见下方模块函数） ----------------------------

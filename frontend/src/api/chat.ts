@@ -416,6 +416,8 @@ export interface BgTask {
     preview?: string
     ts?: number
   }>
+  /** SSE/列表负载已裁掉 progress 明细时的步数 */
+  progress_count?: number
 }
 
 export async function listBgTasks(sessionId: string): Promise<{ tasks: BgTask[], pending_approvals: BgTask[] }> {

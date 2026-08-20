@@ -208,9 +208,9 @@ watch(show, (open) => {
               {{ statusLabel[task.status]?.label ?? task.status }}
             </n-tag>
             <span
-              v-if="task.status === 'running' && task.progress?.length"
+              v-if="task.status === 'running' && (task.progress_count ?? task.progress?.length)"
               class="bg-task-card__chevron"
-            >{{ task.progress.length }} 步</span>
+            >{{ task.progress_count ?? task.progress?.length }} 步</span>
             <span v-if="task.status === 'running'" class="bg-task-card__cancel" @click.stop>
               <NButton size="tiny" quaternary type="error" @click="emit('cancel', task)">
                 取消
