@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -14,6 +15,31 @@ from psycopg_pool import AsyncConnectionPool
 
 from noesis.runtime.logging import logger
 from noesis.config.env import DataBaseConfig, get_config
+
+_APUT_SLOW_SECONDS = 1.0
+
+
+class _TimingSaver(AsyncPostgresSaver):
+    """aput/aput_tuple 慢写计时：定位流式尾部空转（图结束阶段的 checkpoint 写入）。"""
+
+    async def aput(self, *args: Any, **kwargs: Any) -> None:
+        started = time.monotonic()
+        try:
+            return await super().aput(*args, **kwargs)
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed > _APUT_SLOW_SECONDS:
+                logger.info(f"checkpoint_aput_slow seconds={elapsed:.2f}")
+
+    async def aput_tuple(self, *args: Any, **kwargs: Any) -> None:
+        started = time.monotonic()
+        try:
+            return await super().aput_tuple(*args, **kwargs)
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed > _APUT_SLOW_SECONDS:
+                logger.info(f"checkpoint_aput_tuple_slow seconds={elapsed:.2f}")
+
 
 _pool: AsyncConnectionPool | None = None
 _saver: AsyncPostgresSaver | None = None
@@ -45,7 +71,7 @@ async def init_checkpointer() -> AsyncPostgresSaver:
         open=False,
     )
     await _pool.open()
-    _saver = AsyncPostgresSaver(_pool)
+    _saver = _TimingSaver(_pool)
     await _saver.setup()
     logger.info("LangGraph PostgreSQL checkpointer 已初始化")
     return _saver
@@ -67,7 +93,7 @@ async def create_isolated_checkpointer() -> AsyncPostgresSaver:
         open=False,
     )
     await _isolated_pool.open()
-    _isolated_saver = AsyncPostgresSaver(_isolated_pool)
+    _isolated_saver = _TimingSaver(_isolated_pool)
     await _isolated_saver.setup()
     logger.info("后台子 Agent 隔离 checkpointer 已初始化")
     return _isolated_saver
