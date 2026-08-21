@@ -48,7 +48,10 @@ watch(
   <n-drawer
     :show="show"
     :width="drawerWidth"
-    placement="right"
+    class="search-chunk-drawer-shell"
+    :class="{ 'search-chunk-drawer-shell--mobile': isMobile }"
+    :placement="isMobile ? 'bottom' : 'right'"
+    :height="isMobile ? 'min(82vh, 720px)' : undefined"
     @update:show="emit('update:show', $event)"
   >
     <n-drawer-content title="分块详情" closable class="search-chunk-drawer">
@@ -66,5 +69,9 @@ watch(
 .search-chunk-drawer :deep(.n-drawer-body-content-wrapper) {
   padding: 0;
   overflow: hidden;
+}
+
+.search-chunk-drawer-shell--mobile :deep(.n-drawer-content) {
+  border-radius: 16px 16px 0 0;
 }
 </style>

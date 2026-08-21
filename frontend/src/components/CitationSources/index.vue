@@ -4,6 +4,7 @@ import { DocumentsOutline, GlobeOutline } from '@vicons/ionicons-v5'
 import { NDrawer, NDrawerContent, NIcon } from 'naive-ui'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { buildCitationIndex, safeWebUrl } from '@/views/chat/citationRendering'
 
 const props = defineProps<{
@@ -11,6 +12,7 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const { isMobile } = useBreakpoint()
 const drawerOpen = ref(false)
 const selectedCitationNumber = ref<number | null>(null)
 const sourceListRef = ref<HTMLElement | null>(null)
@@ -81,8 +83,11 @@ defineExpose({ open })
 
   <n-drawer
     v-model:show="drawerOpen"
-    placement="right"
-    width="min(440px, 92vw)"
+    class="source-drawer"
+    :class="{ 'source-drawer--mobile': isMobile }"
+    :placement="isMobile ? 'bottom' : 'right'"
+    :width="isMobile ? '100%' : 'min(440px, 92vw)'"
+    :height="isMobile ? 'min(78vh, 620px)' : undefined"
     @after-enter="scrollToSelectedCitation"
   >
     <n-drawer-content title="来源" closable>
@@ -184,6 +189,8 @@ defineExpose({ open })
 .source-list {
   display: grid;
   gap: 2px;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .source-group + .source-group {
@@ -199,8 +206,10 @@ defineExpose({ open })
 
 .source-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   padding: 6px 8px;
   border-radius: var(--noesis-radius-sm);
 }
@@ -226,23 +235,26 @@ defineExpose({ open })
 
 .source-card__body {
   display: flex;
+  flex-direction: column;
   flex: 1;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 3px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .source-card__title {
+  display: block;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   color: var(--noesis-color-text-primary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .source-card__link {
@@ -256,10 +268,11 @@ defineExpose({ open })
 
 .source-card__meta {
   display: flex;
-  flex: 0 0 120px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: var(--noesis-color-text-secondary);
   font-size: 11px;
@@ -273,7 +286,12 @@ defineExpose({ open })
 .source-card__meta span {
   flex: 1;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.source-drawer--mobile :deep(.n-drawer-content) {
+  border-radius: 16px 16px 0 0;
 }
 </style>

@@ -2,6 +2,7 @@
 import type { ChatModelOption } from '@/api/models'
 import { ensureSession } from '@/api/chat'
 import { getChatModels } from '@/api/models'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 
 const props = defineProps<{
   sessionId: string
@@ -12,6 +13,8 @@ const props = defineProps<{
 }>()
 
 const modelValue = defineModel<string>({ default: '' })
+const { isMobile } = useBreakpoint()
+const mobileOpen = ref(false)
 
 const loading = ref(false)
 const options = ref<ChatModelOption[]>([])
@@ -67,6 +70,7 @@ async function persistModel(modelId: string) {
 
 async function onSelect(key: string) {
   modelValue.value = key
+  mobileOpen.value = false
   await persistModel(key)
 }
 
@@ -84,6 +88,7 @@ watch(
 
 <template>
   <n-dropdown
+    v-if="!isMobile"
     trigger="click"
     placement="top-start"
     :options="dropdownOptions"
@@ -102,6 +107,47 @@ watch(
       <span class="i-carbon:chevron-down text-12 opacity-60"></span>
     </button>
   </n-dropdown>
+  <template v-else>
+    <button
+      type="button"
+      class="composer-model-trigger"
+      :class="{ 'composer-model-trigger--menu': embedded }"
+      :disabled="disabled || loading || dropdownOptions.length === 0"
+      @click="mobileOpen = true"
+    >
+      <span v-if="embedded" class="i-carbon:machine-learning-model composer-model-trigger__icon"></span>
+      <span v-if="embedded" class="composer-model-trigger__title">模型</span>
+      <span class="composer-model-trigger__label">{{ currentLabel }}</span>
+      <span class="i-carbon:chevron-down text-12 opacity-60"></span>
+    </button>
+    <n-drawer
+      v-model:show="mobileOpen"
+      placement="bottom"
+      width="100%"
+      height="min(62vh, 520px)"
+      :block-scroll="true"
+    >
+      <n-drawer-content
+        title="选择模型"
+        closable
+        body-content-style="padding: 0 16px max(16px, env(safe-area-inset-bottom));"
+      >
+        <div class="composer-model-options">
+          <button
+            v-for="option in options"
+            :key="option.id"
+            type="button"
+            class="composer-model-option"
+            :class="{ 'composer-model-option--active': option.id === modelValue }"
+            @click="onSelect(option.id)"
+          >
+            <span>{{ option.label }}</span>
+            <span v-if="option.id === modelValue" class="i-carbon:checkmark"></span>
+          </button>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
+  </template>
 </template>
 
 <style scoped>
@@ -163,5 +209,32 @@ watch(
 .composer-model-trigger--menu .composer-model-trigger__label {
   max-width: 140px;
   color: var(--noesis-text-secondary, #6b7280);
+}
+
+.composer-model-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.composer-model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-md);
+  background: var(--noesis-color-bg-elevated);
+  color: var(--noesis-color-text-primary);
+  font-size: 14px;
+  text-align: left;
+}
+
+.composer-model-option--active {
+  border-color: var(--noesis-color-primary);
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 </style>

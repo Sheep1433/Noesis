@@ -1,13 +1,14 @@
 <script lang="ts" setup>
 import type { McpServerCatalogItem } from '@/api/mcp'
 import type FileUploadManager from '@/views/FileUploadManager.vue'
-import { NButton, NCheckbox, NPopover } from 'naive-ui'
+import { NButton, NCheckbox } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { ensureSession } from '@/api/chat'
 import { listMcpServers } from '@/api/mcp'
 import { getSkillsPackages } from '@/api/skills'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
+import ResponsiveSurface from '@/components/ResponsiveSurface.vue'
 
 type MenuView = 'root' | 'mcp' | 'skills' | 'kb'
 
@@ -216,14 +217,13 @@ const kbSummary = computed(() => {
         @change="onImageFilesSelected"
       >
 
-      <n-popover
+      <ResponsiveSurface
         v-model:show="plusOpen"
-        trigger="click"
         placement="top-start"
-        :show-arrow="false"
         :disabled="disabled"
         raw
-        class="composer-tools-popover"
+        title="附件与工具"
+        popup-class="composer-tools-popover"
       >
         <template #trigger>
           <button
@@ -382,7 +382,7 @@ const kbSummary = computed(() => {
             </div>
           </template>
         </div>
-      </n-popover>
+      </ResponsiveSurface>
 
       <ModelSelector
         v-model="selectedModelId"
