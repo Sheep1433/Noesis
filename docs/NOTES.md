@@ -1253,3 +1253,25 @@ backends/
 **可迁移原则：** 运行统计是 durable 业务数据，不是纯 UI 状态；终态落库、HITL resume、刷新回放必须使用同一合并语义，不能只验证实时 SSE。
 
 **验证与遗留：** `29df483`、`45c8091` 已补终态和 resume 合并测试；仍需验证跨进程恢复和不同 provider usage 字段的统一口径。
+
+## 2026-08-20 — 后台任务从 Subagent 扩展到长命令执行
+
+**问题/症状：** 后台子任务最初只有 Subagent，长时间 bash/execute 仍会阻塞主 Agent；前端任务面板依赖轮询，审批事件、超时和终态存在延迟或重复；后台 shell 任务还遇到 Docker 默认 120 秒、HTTP 等待上限和容器销毁竞态。
+
+**解法/取舍：** 保留 `execute` 工具名以维持 HITL 审批匹配，增加 `run_in_background` 参数；前台路径行为不变，后台路径把 shell 命令复用同一任务注册表/状态机/通知/SSE/详情面板。shell 任务不编译 Subagent worker，直接经 filesystem backend 执行；命令级 timeout 独立校验，默认可长时间运行；输出用 `check_task` 获取尾部摘要，one_shot 不允许 follow-up。会话级 SSE 取代前端轮询，持久化快照支持重启后查看。
+
+**关键修复：** 补齐 watchdog terminal 事件、避免 cancel/watchdog 与协程自身重复发布终态、放宽 Docker/HTTP 等待上限、审批事件实时推送、销毁时复查 terminal 防止 COMPLETED 被覆盖。最后发现 `from __future__ import annotations` 把 `ToolRuntime` 注解变成字符串，导致注入检测失效；移除后用真实 create_agent + FilesystemMiddleware + HITL 集成测试锁定。
+
+**可迁移原则：** 长命令和后台 Agent 本质都是可观察、可取消、可恢复的任务，不应为 bash 再造一条独立执行管线；所有终态必须单写、可重放，超时要贯穿工具、容器、HTTP 和前端四层。
+
+**验证与遗留：** `bdf8f2b`、`5689ab9`、`ee636ba`、`4747683` 已补后台 shell、超时、审批、竞态和真实注入测试；仍需做进程崩溃后的执行中任务恢复验收。
+
+## 2026-08-20 — Memory Cortex 进入实现前审查，而不是继续堆概念
+
+**问题/症状：** Memory Cortex 设计方向正确，但多轮审查发现“确定性修订”仍依赖 LLM 生成 topic/content，scope 没进入记忆身份，outbox 唯一键会吞掉 disable/delete 状态变化，多实例 job/lease fencing 也未闭合。
+
+**解法/取舍：** 暂停直接开发，先把设计修到可实施：确定性 `subject_key`/`resolution_key` 与 scope 进入唯一身份；重复内容要有 NOOP；状态变化使用独立 outbox event/version，不复用 embedding index version；job claim 需要 lease/fencing 和幂等状态迁移；失败经验、修复方式、provider/tool/environment 需保留 evidence。
+
+**可迁移原则：** 记忆系统的难点不是“如何召回”，而是身份稳定、修订安全、异步索引不丢状态和多实例并发正确。设计文档宣称“确定”前，必须逐项证明 key、锁、outbox、job retry 和 scope 都是确定的。
+
+**验证与遗留：** 当前仍处于设计审查阶段；PostgreSQL 事实源 + Qdrant 派生索引的边界保留，但必须先补齐上述 P0，再进入 OpenSpec 和实现。
