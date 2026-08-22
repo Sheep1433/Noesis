@@ -249,62 +249,83 @@ onMounted(() => void refresh())
 </script>
 
 <template>
-  <SettingsSection title="自动化" description="用一句话描述任务，或选择时间手动配置。每次运行结果会落到一个固定会话，可像普通对话一样继续交互。">
+  <SettingsSection class="automation-section" title="自动化" description="用一句话描述任务，或选择时间手动配置。每次运行结果会落到一个固定会话，可像普通对话一样继续交互。">
     <SettingsStatus v-if="loading" title="正在加载">正在读取任务与最近状态…</SettingsStatus>
 
     <div class="automation-layout">
       <!-- 右列（桌面）/ 首段（移动）：任务设置表单 -->
       <div class="automation-form">
-        <div class="nl-box">
-          <n-input
-            v-model:value="nlInput"
-            type="textarea"
-            placeholder="用一句话描述定时任务，如「每周一早上9点，收集网上资料整理 AI Agent 的最新进展」"
-            :rows="2"
-          />
-          <n-button type="primary" :loading="parsing" :disabled="!nlInput.trim()" @click="onParse">解析为任务</n-button>
-        </div>
-
-        <div class="task-form">
-          <n-input v-model:value="form.name" placeholder="任务名称" />
-          <div class="schedule-panel">
-            <div class="schedule-row">
-              <span class="schedule-label">重复</span>
-              <n-select v-model:value="repeatMode" :options="repeatModeOptions" />
+        <div class="automation-form-panel">
+          <header class="automation-form-header">
+            <div>
+              <h3>{{ editingId ? '编辑自动化任务' : '新建自动化任务' }}</h3>
+              <p>先用自然语言生成，也可以直接配置重复方式和执行时间。</p>
             </div>
-            <div v-if="repeatMode === 'weekly'" class="schedule-row">
-              <span class="schedule-label">开启</span>
-              <n-select
-                v-model:value="weekdays"
-                multiple
-                :options="weekdayOptions"
-                max-tag-count="responsive"
-                placeholder="选择星期"
+          </header>
+          <section class="automation-form-block automation-form-block--natural">
+            <h4>自然语言创建</h4>
+            <div class="nl-box">
+              <n-input
+                v-model:value="nlInput"
+                type="textarea"
+                placeholder="例如：每周一早上 9 点，整理 AI Agent 的最新进展"
+                :rows="2"
               />
+              <n-button type="primary" :loading="parsing" :disabled="!nlInput.trim()" @click="onParse">解析为任务</n-button>
             </div>
-            <div v-if="repeatMode === 'monthly'" class="schedule-row">
-              <span class="schedule-label">日期</span>
-              <n-input-number v-model:value="monthDay" :min="1" :max="28" />
-              <span class="schedule-suffix">日</span>
+          </section>
+
+          <section class="automation-form-block">
+            <h4>时间与任务内容</h4>
+            <div class="task-form">
+              <n-input v-model:value="form.name" placeholder="任务名称" />
+              <div class="schedule-panel">
+                <div class="schedule-row">
+                  <span class="schedule-label">重复</span>
+                  <n-select v-model:value="repeatMode" :options="repeatModeOptions" />
+                </div>
+                <div v-if="repeatMode === 'weekly'" class="schedule-row">
+                  <span class="schedule-label">星期</span>
+                  <n-select
+                    v-model:value="weekdays"
+                    multiple
+                    :options="weekdayOptions"
+                    max-tag-count="responsive"
+                    placeholder="选择星期"
+                  />
+                </div>
+                <div v-if="repeatMode === 'monthly'" class="schedule-row">
+                  <span class="schedule-label">日期</span>
+                  <n-input-number v-model:value="monthDay" :min="1" :max="28" />
+                  <span class="schedule-suffix">日</span>
+                </div>
+                <div v-if="repeatMode === 'custom'" class="custom-cron-row">
+                  <span class="schedule-label">Cron</span>
+                  <n-input v-model:value="customCron" placeholder="分 时 日 月 周，例如 0 9 * * 1,3,5" />
+                </div>
+                <div class="schedule-row">
+                  <span class="schedule-label">时间</span>
+                  <input v-model="repeatTime" class="time-input" type="time">
+                </div>
+                <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用</label>
+              </div>
+              <div v-if="preview" class="preview">{{ preview.summary }} · 下次 {{ new Date(preview.next_run_at).toLocaleString() }}</div>
+              <n-input v-model:value="form.prompt" type="textarea" placeholder="任务提示词" :rows="4" />
+              <div class="actions"><n-button type="primary" :loading="saving" :disabled="!form.name || !form.prompt" @click="save">{{ editingId ? '保存修改' : '创建任务' }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
             </div>
-            <div v-if="repeatMode === 'custom'" class="custom-cron-row">
-              <span class="schedule-label">Cron</span>
-              <n-input v-model:value="customCron" placeholder="分 时 日 月 周，例如 0 9 * * 1,3,5" />
-            </div>
-            <div class="schedule-row">
-              <span class="schedule-label">时间</span>
-              <input v-model="repeatTime" class="time-input" type="time">
-            </div>
-            <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用</label>
-          </div>
-          <div v-if="preview" class="preview">{{ preview.summary }} · 下次 {{ new Date(preview.next_run_at).toLocaleString() }}</div>
-          <n-input v-model:value="form.prompt" type="textarea" placeholder="任务提示词" :rows="4" />
-          <div class="actions"><n-button type="primary" :loading="saving" :disabled="!form.name || !form.prompt" @click="save">{{ editingId ? '保存修改' : '创建任务' }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
+          </section>
         </div>
       </div>
 
       <!-- 左列（桌面）/ 次段（移动）：任务列表 -->
       <div class="automation-list">
+        <header class="automation-list-header">
+          <div>
+            <h3>已配置任务</h3>
+            <p>管理已创建的任务，并查看最近运行情况。</p>
+          </div>
+          <span v-if="tasks.length" class="automation-list-count">{{ tasks.length }} 个</span>
+        </header>
         <SettingsEmptyState v-if="!loading && tasks.length === 0" title="暂无自动化任务" description="用一句话描述或选择时间配置后，每次执行都会保留运行记录并落到对应会话。" />
         <div v-for="task in tasks" :key="task.id" class="task-card">
           <div class="task-head"><div><strong>{{ task.name }}</strong><div class="muted">{{ task.summary || task.cron_expr }} · {{ task.timezone }}</div></div><n-tag size="small" :type="task.enabled ? 'success' : 'default'">{{ task.enabled ? '启用' : '停用' }}</n-tag></div>
@@ -324,23 +345,30 @@ onMounted(() => void refresh())
 </template>
 
 <style scoped>
-/* 两列布局：桌面（≥1024px）左侧任务列表、右侧设置表单；窄屏单列表单在上 */
-.automation-layout { display: grid; gap: 0 40px; align-items: start; }
+/* 两列布局：桌面左侧任务列表、右侧设置表单；窄屏单列展示。 */
+.automation-section { max-width: 1200px; }
+.automation-layout { display: grid; gap: 24px 40px; align-items: start; }
 .automation-form { min-width: 0; }
 .automation-list { min-width: 0; }
-@media (min-width: 1024px) {
+@media (min-width: $bp-lg) {
   .automation-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
     grid-template-areas: "list form";
   }
   .automation-list { grid-area: list; }
   .automation-form { grid-area: form; }
-  /* 列表在左列时不再依赖顶部分隔线与表单区隔开，首卡去线 */
-  .automation-list .task-card:first-child { border-top: none; padding-top: 0; }
 }
 
-.nl-box { display: grid; gap: 10px; max-width: 700px; padding-bottom: 18px; }
-.task-form { display: grid; gap: 10px; max-width: 700px; padding-bottom: 22px; }
+.automation-form-panel { padding: 18px; border: 1px solid var(--noesis-color-border-subtle); border-radius: 14px; background: var(--noesis-color-bg-elevated); }
+.automation-form-header { margin-bottom: 18px; }
+.automation-form-header h3, .automation-list-header h3 { margin: 0; color: var(--noesis-color-text-heading); font-size: 16px; font-weight: 650; }
+.automation-form-header p, .automation-list-header p { margin: 5px 0 0; color: var(--noesis-color-text-secondary); font-size: 12px; line-height: 1.5; }
+.automation-form-block + .automation-form-block { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--noesis-color-border-subtle); }
+.automation-form-block h4 { margin: 0 0 10px; color: var(--noesis-color-text-heading); font-size: 13px; font-weight: 600; }
+.automation-list-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.automation-list-count { flex-shrink: 0; color: var(--noesis-color-text-muted); font-size: 12px; }
+.nl-box { display: grid; gap: 10px; padding-bottom: 0; }
+.task-form { display: grid; gap: 10px; padding-bottom: 0; }
 .schedule-panel { display: grid; gap: 0; max-width: 700px; border: 1px solid var(--noesis-color-border-subtle); border-radius: 14px; overflow: hidden; }
 .schedule-row, .custom-cron-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; border-bottom: 1px solid var(--noesis-color-border-subtle); }
 .schedule-row :deep(.n-select), .custom-cron-row :deep(.n-input) { min-width: 0; }
@@ -350,7 +378,8 @@ onMounted(() => void refresh())
 .enabled { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 14px; color: var(--noesis-color-text-primary); }
 .preview { color: var(--noesis-color-success, #287a45); font-size: 12px; }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.task-card { padding: 16px 0; border-top: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); }
+.task-card { padding: 16px; border: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); border-radius: 12px; background: var(--noesis-color-bg-elevated); }
+.task-card + .task-card { margin-top: 10px; }
 .task-head { display: flex; justify-content: space-between; gap: 12px; }
 .muted { color: var(--noesis-color-text-secondary); font-size: 12px; }
 .prompt { margin: 8px 0; white-space: pre-wrap; }
