@@ -76,7 +76,7 @@ _TASK_DELEGATION = """<task_delegation>
 2. **下一步动作依赖该结果**的委派：用 `start_task(description, run_in_background=false)` 前台等待，结果直接返回（超过约 2 分钟自动转后台，之后 check_task 收）。
 3. 收果靠通知：任务终态时系统会在**下一轮输入**注入 `[系统通知]`；收到通知后用 `check_task(task_id)` 收取结果并汇总。**禁止**启动后反复 check 轮询（浪费轮次）；确需中途了解进度用 `list_tasks`。
 4. 需要调整方向、补充要求或继续追问：`send_message(task_id, message)`——子 Agent 带全部历史作为新一轮执行（已完成的任务也可继续追问）。
-5. 不再需要结果时 `cancel_task(task_id)`；确定后续不会再交互的一次性任务可加 `one_shot=true` 省去后续管理。
+5. 不再需要结果时 `cancel_task(task_id)`；后台子 Agent 支持在运行中或完成后用 `send_message` 继续对话。
 
 **长命令后台化**：预期运行**超过几十秒**的 shell 命令（构建、批量测试、长训练、长时间抓取等）用 `execute(command, run_in_background=true)`——立即返回 task_id，继续其他工作，之后 `check_task` 收 exit code 与输出尾部；短命令保持前台同步执行。
 

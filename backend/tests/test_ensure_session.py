@@ -70,3 +70,4 @@ async def test_ensure_session_creates_or_gets():
         body = json.loads(resp.body)
         assert body["code"] == 200
         assert body["data"]["id"] == "sess-1"
+        assert body["data"]["kind"] == "root"

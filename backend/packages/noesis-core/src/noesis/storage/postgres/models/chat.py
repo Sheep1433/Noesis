@@ -43,6 +43,9 @@ class TChatSession(Base):
 
     id: Mapped[str] = mapped_column(VARCHAR(36), primary_key=True, comment='UUID 主键')
     parent_id: Mapped[Optional[str]] = mapped_column(VARCHAR(36), ForeignKey('t_chat_session.id', ondelete='SET NULL'), nullable=True, comment='父会话 ID（subagent 场景）')
+    kind: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, default='root', server_default='root', comment='会话类型: root | subagent')
+    created_by_run_id: Mapped[Optional[str]] = mapped_column(VARCHAR(36), ForeignKey('t_agent_run.id', ondelete='SET NULL'), nullable=True, comment='创建该子会话的 Agent run ID')
+    created_by_tool_call_id: Mapped[Optional[str]] = mapped_column(VARCHAR(128), nullable=True, comment='创建该子会话的工具调用 ID')
     user_id: Mapped[str] = mapped_column(ChatUserId(), nullable=False, comment='用户 ID（冗余，便于查询）')
     title: Mapped[str] = mapped_column(VARCHAR(500), nullable=False, default='新对话', comment='会话标题')
     extra: Mapped[Optional[str]] = mapped_column(JSON, nullable=True, comment='JSON: {user_id, model, ...}')

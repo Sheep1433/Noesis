@@ -38,6 +38,7 @@ from noesis.agents.context import ContextResolver
 from noesis.llm.factory import get_llm
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
+from noesis.services.chat_service import ChatService
 
 _MEMORY_SOURCES = [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
 
@@ -173,11 +174,59 @@ class SuperAgent(BaseAgent):
             shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
             hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
         )
+
+        async def _create_child_session(description: str, tool_call_id: str = "") -> dict[str, str]:
+            # 工具可能在并行 tool-call 中同时创建多个子 Agent；不要复用请求级
+            # AsyncSession，单独取连接保证每个 launch 有独立事务边界。
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as child_db:
+                from noesis.services.subagent_session_service import SubagentSessionService
+
+                # The launch use case owns the child session, initial messages and
+                # standard AgentRun in one transaction.  Keep this callback small so
+                # the tool layer cannot accidentally create a second source of truth.
+                launch = await SubagentSessionService.launch(
+                    parent_session_id=session_id,
+                    user_id=user_id,
+                    description=description,
+                    tool_call_id=tool_call_id or None,
+                    db=child_db,
+                )
+                return launch.to_dict()
+
+        async def _delete_child_session(child_session_id: str) -> None:
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as child_db:
+                await ChatService.delete_session(child_session_id, user_id, db=child_db)
+
+        async def _create_followup_run(
+            child_session_id: str,
+            message: str,
+            user_message_id: str | None = None,
+        ) -> dict[str, str]:
+            from noesis.services.subagent_session_service import SubagentSessionService
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as child_db:
+                launch = await SubagentSessionService.create_followup_run(
+                    session_id=child_session_id,
+                    user_id=user_id,
+                    message=message,
+                    user_message_id=user_message_id,
+                    db=child_db,
+                )
+                return launch.to_dict()
+
         tools.extend(build_background_task_tools(
             worker_factory=_bg_worker_factory,
             executor=bg_executor,
             session_id=session_id,
             user_id=user_id,
+            create_child_session=_create_child_session,
+            delete_child_session=_delete_child_session,
+            create_followup_run=_create_followup_run,
         ))
 
         return create_noesis_agent(

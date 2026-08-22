@@ -18,7 +18,16 @@ _LOCK = threading.Lock()
 _PENDING: dict[str, list[dict[str, Any]]] = {}
 
 
-def record(session_id: str, task_id: str, status: str, preview: str | None) -> None:
+def record(
+    session_id: str,
+    task_id: str,
+    status: str,
+    preview: str | None,
+    label: str | None = None,
+    step_count: int | None = None,
+    duration_ms: int | None = None,
+    turn_count: int | None = None,
+) -> None:
     """记录一条终态通知（executor 终态转换点调用）。"""
     if not session_id:
         return
@@ -28,8 +37,12 @@ def record(session_id: str, task_id: str, status: str, preview: str | None) -> N
     with _LOCK:
         _PENDING.setdefault(session_id, []).append({
             "task_id": task_id,
+            "label": (label or "").strip()[:80],
             "status": status,
             "preview": trimmed,
+            "step_count": step_count,
+            "duration_ms": duration_ms,
+            "turn_count": turn_count,
             "delivered": False,
         })
 
@@ -59,20 +72,33 @@ def render_block(notices: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for notice in notices:
         status = str(notice.get("status") or "")
-        task_id = str(notice.get("task_id") or "")
+        label = str(notice.get("label") or "").strip() or "子 Agent"
         preview = str(notice.get("preview") or "")
+        metrics: list[str] = []
+        if notice.get("turn_count") is not None:
+            metrics.append(f"{int(notice['turn_count'])} 轮")
+        if notice.get("step_count") is not None:
+            metrics.append(f"{int(notice['step_count'])} 步")
+        if notice.get("duration_ms") is not None:
+            duration = max(0, int(notice["duration_ms"]))
+            if duration < 1000:
+                metrics.append("<1s")
+            elif duration < 60_000:
+                metrics.append(f"{duration // 1000}s")
+            else:
+                metrics.append(f"{duration // 60_000}m {duration // 1000 % 60:02d}s")
+        metric_suffix = f" · {' · '.join(metrics)}" if metrics else ""
         if status == "completed":
-            suffix = f"（结果预览：{preview}）" if preview else ""
-            lines.append(
-                f"[系统通知] 后台任务 {task_id} 已完成{suffix}，可用 check_task 收取完整结果。"
-            )
+            suffix = f"{metric_suffix}（结果预览：{preview}）" if preview else metric_suffix
+            lines.append(f"[系统通知] 子 Agent「{label}」已完成{suffix}，可打开详情查看完整过程。")
         elif status in {"failed", "timed_out"}:
-            suffix = f"：{preview}" if preview else ""
-            lines.append(f"[系统通知] 后台任务 {task_id} {status}{suffix}。可 list_tasks 查看或重新委派。")
+            suffix = f"{metric_suffix}：{preview}" if preview else metric_suffix
+            title = "执行超时" if status == "timed_out" else "执行失败"
+            lines.append(f"[系统通知] 子 Agent「{label}」{title}{suffix}，可打开详情查看原因。")
         elif status == "cancelled":
-            lines.append(f"[系统通知] 后台任务 {task_id} 已取消。")
+            lines.append(f"[系统通知] 子 Agent「{label}」已取消{metric_suffix}。")
         else:
-            lines.append(f"[系统通知] 后台任务 {task_id} 状态更新：{status}。")
+            lines.append(f"[系统通知] 子 Agent「{label}」状态更新：{status}。")
     return "\n".join(lines)
 
 

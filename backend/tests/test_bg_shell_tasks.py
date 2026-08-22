@@ -2,7 +2,7 @@
 
 覆盖 spec「后台命令任务」Requirement：
 - start_shell：不经 worker 编译，backend 执行，completed 带 exit code + 输出尾部
-- one_shot 语义：send_message 拒绝；read_messages 由任务字段合成视图
+- shell 任务不可对话：send_message 拒绝；read_messages 由任务字段合成视图
 - 会话沙箱销毁：运行中任务转 failed（容器回收连坐）
 - execute 工具替换：同名 + run_in_background 参数；false 原样委托原工具；
   true 立即返回 task_id；超并发优雅拒绝
@@ -104,7 +104,7 @@ def test_start_shell_truncates_long_output_tail() -> None:
 
 
 def test_shell_task_rejects_followup_and_reads_synthetic_view() -> None:
-    """one_shot 语义：send_message 拒绝；子会话视图由命令 + 结果合成。"""
+    """shell 命令不可追加对话；子会话视图由命令 + 结果合成。"""
     backend = _FakeShellBackend()
     executor = BackgroundSubagentExecutor()
     task_id = executor.start_shell(

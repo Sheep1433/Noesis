@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from types import SimpleNamespace
@@ -302,8 +303,8 @@ def test_notify_agent_query_prefixes_block() -> None:
     notifications.record("s-q", "bg-2", "failed", "boom")
     query = notifications.notify_agent_query("s-q", "用户的问题")
     assert query.startswith("[系统通知]")
-    assert "bg-1" in query and "check_task" in query
-    assert "bg-2" in query
+    assert "bg-1" not in query and "bg-2" not in query
+    assert "子 Agent" in query and "打开详情" in query
     assert query.endswith("用户的问题")
     # 无通知时原样返回
     assert notifications.notify_agent_query("s-q", "下一个问题") == "下一个问题"
@@ -328,25 +329,6 @@ def test_followup_chains_new_turn_when_running() -> None:
     assert task["status"] == BgTaskStatus.COMPLETED.value
     # 新 turn 执行（脚本耗尽返回默认收尾文本）
     assert task["result"]
-
-
-def test_one_shot_task_rejects_followup() -> None:
-    """一次性任务：能查看，不可 send_message。"""
-    worker = _build_worker([AIMessage(content="一次性完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="x",
-        session_id="s-os", user_id="u1", one_shot=True,
-    )
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-    assert task["kind"] == "one_shot"
-
-    with pytest.raises(ValueError, match="一次性"):
-        executor.send_message(task_id, "继续")
-    # 查看不受影响
-    messages = BackgroundSubagentExecutor.read_messages(task_id)
-    assert any(m["role"] == "assistant" for m in messages)
 
 
 def test_read_thread_messages_returns_history() -> None:
@@ -418,14 +400,24 @@ def test_read_thread_messages_falls_back_after_restart(monkeypatch, task_store) 
 # 前台等待（run_in_background=false）与超时转后台
 # ---------------------------------------------------------------------------
 
-def _build_tools(executor: BackgroundSubagentExecutor, worker_factory):
+def _build_tools(executor: BackgroundSubagentExecutor, worker_factory, create_child_session=None):
     from noesis.agents.subagents.tools import build_background_task_tools
     return build_background_task_tools(
         worker_factory=worker_factory,
         executor=executor,
         session_id="s-fg",
         user_id="u1",
+        create_child_session=create_child_session,
     )
+
+
+def test_start_task_schema_keeps_only_execution_mode_parameter():
+    """子 Agent 统一支持续话，模型不再选择对话模式参数。"""
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    start = next(t for t in _build_tools(executor, lambda: _build_worker([])) if t.name == "start_task")
+
+    properties = start.args_schema.model_json_schema()["properties"]
+    assert set(properties) == {"description", "run_in_background"}
 
 
 @pytest.mark.asyncio
@@ -473,9 +465,81 @@ async def test_background_default_returns_immediately() -> None:
     began = _time.time()
     result = await start.ainvoke({"description": "x"})
     assert _time.time() - began < 2.0
-    assert "后台任务已启动" in result
+    assert "子 Agent 已启动" in result
     task_id = result.split("：")[1].split("\n")[0]
     executor.cancel(task_id)
+
+
+@pytest.mark.asyncio
+async def test_start_task_uses_child_session_as_task_identity() -> None:
+    """每次委派先创建真实子会话，task_id 与 child session id 一致。"""
+    from unittest.mock import AsyncMock
+
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    create_child_session = AsyncMock(return_value="child-session-1")
+    start = next(
+        t for t in _build_tools(
+            executor,
+            lambda: _build_worker([]),
+            create_child_session=create_child_session,
+        ) if t.name == "start_task"
+    )
+
+    result = await start.ainvoke({"description": "检索资料"})
+
+    create_child_session.assert_awaited_once_with("检索资料", "")
+    assert "child-session-1" in result
+    assert executor.get("child-session-1") is not None
+    executor.cancel("child-session-1")
+
+
+@pytest.mark.asyncio
+async def test_start_task_persists_model_tool_call_reference() -> None:
+    """真实 ToolCall 的 id 进入 child session 创建用例，不靠输出文本关联。"""
+    from unittest.mock import AsyncMock
+
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    create_child_session = AsyncMock(return_value="child-session-call")
+    start = next(
+        t for t in _build_tools(
+            executor,
+            lambda: _build_worker([]),
+            create_child_session=create_child_session,
+        ) if t.name == "start_task"
+    )
+
+    await start.ainvoke({
+        "type": "tool_call",
+        "name": "start_task",
+        "args": {"description": "带引用的检索"},
+        "id": "call-start-1",
+    })
+
+    create_child_session.assert_awaited_once_with("带引用的检索", "call-start-1")
+    executor.cancel("child-session-call")
+
+
+def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
+    """带 run_id 的子 Agent 使用标准 multipart 投影，不走旧消息镜像。"""
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from noesis.agents.subagents.executor import _child_projection_content
+
+    messages = [
+        HumanMessage(content="检索政策"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "call-1", "name": "web_search", "args": {"query": "政策"}}],
+        ),
+        ToolMessage(content="找到 2 条结果", tool_call_id="call-1", name="web_search"),
+        AIMessage(content="结论如下。"),
+    ]
+
+    content = _child_projection_content(messages)
+    assert content["version"] == 1
+    assert [part["type"] for part in content["parts"]] == ["tool", "text"]
+    assert content["parts"][0]["status"] == "success"
+    assert content["parts"][0]["output"] == "找到 2 条结果"
+    assert content["parts"][1]["content"] == "结论如下。"
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +548,7 @@ async def test_background_default_returns_immediately() -> None:
 
 @pytest.mark.asyncio
 async def test_bg_event_subscription_receives_lifecycle() -> None:
-    """订阅者在自己的事件循环上收到 started / terminal 事件（跨线程推送）。"""
+    """订阅者实时收到 started / progress / terminal（跨线程推送）。"""
     import asyncio as _asyncio
 
     from noesis.agents.subagents.executor import (
@@ -501,15 +565,42 @@ async def test_bg_event_subscription_receives_lifecycle() -> None:
             session_id="s-sse", user_id="u1",
         )
         events: list[dict] = []
-        for _ in range(2):  # started + terminal
+        for _ in range(3):  # started + progress + terminal
             event = await _asyncio.wait_for(queue.get(), timeout=5)
             events.append(event)
         assert events[0]["event"] == "started"
         assert events[0]["task"]["task_id"] == task_id
+        assert events[1]["event"] == "progress"
+        assert events[1]["task"]["progress_count"] == 1
         assert events[-1]["event"] == "terminal"
         assert events[-1]["task"]["status"] == "completed"
     finally:
         unsubscribe_bg_events("s-sse", queue)
+
+
+@pytest.mark.asyncio
+async def test_standard_run_event_subscription_starts_on_run_id() -> None:
+    from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
+
+    queue = subscribe_run_events("run-sse", "u1")
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: _build_worker([AIMessage(content="完成")]),
+            description="x",
+            session_id="s-sse",
+            user_id="u1",
+            task_id="child-sse",
+            run_id="run-sse",
+            assistant_message_id="assistant-sse",
+        )
+        event = await asyncio.wait_for(queue.get(), timeout=5)
+        assert event["type"] == "run.started"
+        assert event["run_id"] == "run-sse"
+        assert event["session_id"] == "child-sse"
+    finally:
+        unsubscribe_run_events("run-sse", queue)
+        executor.cancel(task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -535,8 +626,8 @@ def test_bg_notify_middleware_injects_once() -> None:
     mw.wrap_model_call(request, lambda req: seen.append(req.messages) or "ok")  # type: ignore[arg-type,return-value]
     injected = seen[0]
     assert "[系统通知]" in injected[-1].content
-    assert "bg-1" in injected[-1].content
-    assert "check_task" in injected[-1].content
+    assert "bg-1" not in injected[-1].content
+    assert "打开详情" in injected[-1].content
 
     # 已送达：第二次模型调用与下一轮 agent_query 注入都不再出现
     seen.clear()
@@ -836,19 +927,18 @@ async def test_bg_event_subscription_receives_approval_lifecycle() -> None:
             session_id="s-sse-ap", user_id="u1",
         )
         events: list[dict] = []
-        for _ in range(2):  # started + awaiting_approval
+        while not events or events[-1]["event"] != "awaiting_approval":
             events.append(await _asyncio.wait_for(queue.get(), timeout=5))
         assert events[0]["event"] == "started"
-        assert events[1]["event"] == "awaiting_approval"
-        assert events[1]["task"]["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-        assert events[1]["task"]["interrupt"]
+        assert "progress" in [event["event"] for event in events]
+        assert events[-1]["task"]["status"] == BgTaskStatus.AWAITING_APPROVAL.value
+        assert events[-1]["task"]["interrupt"]
 
         executor.submit_decisions(task_id, [{"type": "approve"}])
-        for _ in range(2):  # followup(续跑) + terminal
+        while events[-1]["event"] != "terminal":
             events.append(await _asyncio.wait_for(queue.get(), timeout=5))
-        assert events[2]["event"] == "followup"
-        assert events[2]["task"]["status"] == BgTaskStatus.RUNNING.value
-        assert events[3]["event"] == "terminal"
-        assert events[3]["task"]["status"] == BgTaskStatus.COMPLETED.value
+        event_names = [event["event"] for event in events]
+        assert event_names.index("awaiting_approval") < event_names.index("followup")
+        assert events[-1]["task"]["status"] == BgTaskStatus.COMPLETED.value
     finally:
         unsubscribe_bg_events("s-sse-ap", queue)

@@ -22,6 +22,7 @@ from noesis.errors.exceptions import ServiceException
 from noesis.runtime.logging import logger
 from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
 from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.config.user_data_paths import delete_session_workspace
 
 # ============================================================================
 # 加载锁：服务启动完成 PostgreSQL 检查点恢复前，业务写入须等待
@@ -170,6 +171,9 @@ class ChatService:
             session_id: str,
             title: Optional[str] = None,
             parent_id: Optional[str] = None,
+            kind: Optional[str] = None,
+            created_by_run_id: Optional[str] = None,
+            created_by_tool_call_id: Optional[str] = None,
             extra: Optional[Dict[str, Any]] = None,
             db: AsyncSession = None
     ) -> TChatSession:
@@ -223,6 +227,9 @@ class ChatService:
         session = TChatSession(
             id=session_id,
             parent_id=parent_id,
+            kind=kind or ('subagent' if parent_id else 'root'),
+            created_by_run_id=created_by_run_id,
+            created_by_tool_call_id=created_by_tool_call_id,
             user_id=user_id,
             title=cls._normalize_session_title(title) or _DEFAULT_SESSION_TITLE,
             extra=extra,
@@ -241,6 +248,9 @@ class ChatService:
             user_id: str,
             title: Optional[str] = None,
             parent_id: Optional[str] = None,
+            kind: Optional[str] = None,
+            created_by_run_id: Optional[str] = None,
+            created_by_tool_call_id: Optional[str] = None,
             extra: Optional[Dict[str, Any]] = None,
             db: AsyncSession = None
     ) -> TChatSession:
@@ -266,6 +276,9 @@ class ChatService:
         session = TChatSession(
             id=session_id,
             parent_id=parent_id,
+            kind=kind or ('subagent' if parent_id else 'root'),
+            created_by_run_id=created_by_run_id,
+            created_by_tool_call_id=created_by_tool_call_id,
             user_id=user_id,
             title=cls._normalize_session_title(title) or _DEFAULT_SESSION_TITLE,
             extra=extra,
@@ -359,25 +372,26 @@ class ChatService:
                 pass
             raise
 
-        # 更新会话的 updated_at 时间
-        try:
-            await db.execute(
-                update(TChatSession)
-                .where(TChatSession.id == session_id)
-                .values(updated_at=now)
-            )
-            await db.commit()
-        except asyncio.CancelledError:
-            logger.info(
-                f"save_message 更新会话时间 commit 被取消 session_id={session_id} message_id={message_id}"
-            )
-            raise
-        except Exception as e:
-            logger.warning(f'更新会话时间失败: {e}')
+        # 自动化/定时任务写入历史内容，但不抢占用户左侧最近会话排序。
+        if (extra or {}).get("origin") != "automation":
             try:
-                await db.rollback()
-            except Exception:
-                pass
+                await db.execute(
+                    update(TChatSession)
+                    .where(TChatSession.id == session_id)
+                    .values(updated_at=now)
+                )
+                await db.commit()
+            except asyncio.CancelledError:
+                logger.info(
+                    f"save_message 更新会话时间 commit 被取消 session_id={session_id} message_id={message_id}"
+                )
+                raise
+            except Exception as e:
+                logger.warning(f'更新会话时间失败: {e}')
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
 
         # refresh 失败不影响
         try:
@@ -469,24 +483,25 @@ class ChatService:
                 pass
             raise
 
-        try:
-            await db.execute(
-                update(TChatSession)
-                .where(TChatSession.id == session_id)
-                .values(updated_at=now)
-            )
-            await db.commit()
-        except asyncio.CancelledError:
-            logger.info(
-                f"update_assistant_message 会话时间 commit 被取消 session_id={session_id} message_id={message_id}"
-            )
-            raise
-        except Exception as e:
-            logger.warning(f'更新会话时间失败: {e}')
+        if merged_extra.get("origin") != "automation":
             try:
-                await db.rollback()
-            except Exception:
-                pass
+                await db.execute(
+                    update(TChatSession)
+                    .where(TChatSession.id == session_id)
+                    .values(updated_at=now)
+                )
+                await db.commit()
+            except asyncio.CancelledError:
+                logger.info(
+                    f"update_assistant_message 会话时间 commit 被取消 session_id={session_id} message_id={message_id}"
+                )
+                raise
+            except Exception as e:
+                logger.warning(f'更新会话时间失败: {e}')
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
 
         logger.info(f'更新 assistant 消息成功: message_id={message_id}, session_id={session_id}, status={status}')
         return True
@@ -557,19 +572,34 @@ class ChatService:
         if not session_obj:
             raise ServiceException(message='会话不存在')
 
-        await cancel_session_agent_runs(session_id)
+        descendant_ids = await cls._descendant_session_ids(session_id, user_id, db)
+        for target_id in [session_id, *descendant_ids]:
+            await cancel_session_agent_runs(target_id)
+        # 子 Agent executor 的生命周期归属于父会话；父会话删除时一并取消。
+        try:
+            from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+
+            for task in BackgroundSubagentExecutor.list_for_session(session_id):
+                if not str(task.get('status', '')).endswith(('completed', 'failed', 'cancelled', 'timed_out')):
+                    try:
+                        BackgroundSubagentExecutor.cancel(str(task.get('task_id')))
+                    except ValueError:
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('取消子 Agent 失败 session_id={} err={}', session_id, exc)
 
         # 软删：更新 deleted_at（cascade 软删消息）
         now = _now_ms()
+        all_session_ids = [session_id, *descendant_ids]
         await db.execute(
             update(TChatSession)
-            .where(TChatSession.id == session_id)
+            .where(TChatSession.id.in_(all_session_ids))
             .values(deleted_at=now)
         )
-        # 级联软删该会话下的所有消息
+        # 级联软删该会话树下的所有消息
         await db.execute(
             update(TChatMessage)
-            .where(TChatMessage.session_id == session_id)
+            .where(TChatMessage.session_id.in_(all_session_ids))
             .values(deleted_at=now)
         )
         await db.commit()
@@ -588,18 +618,54 @@ class ChatService:
                 session_id,
                 exc,
             )
-        try:
-            from noesis.agents.backends.sandbox_lifecycle import destroy_session_sandbox
+        for target_id in all_session_ids:
+            try:
+                from noesis.agents.backends.sandbox_lifecycle import destroy_session_sandbox
 
-            await destroy_session_sandbox(user_id, session_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "destroy_session_sandbox 失败 session_id={} err={}",
-                session_id,
-                exc,
-            )
+                await destroy_session_sandbox(user_id, target_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "destroy_session_sandbox 失败 session_id={} err={}",
+                    target_id,
+                    exc,
+                )
+            try:
+                delete_session_workspace(user_id, target_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "delete_session_workspace 失败 session_id={} err={}",
+                    target_id,
+                    exc,
+                )
         logger.info(f'软删会话成功: session_id={session_id}, user_id={user_id}（已级联软删消息）')
         return True
+
+    @classmethod
+    async def _descendant_session_ids(
+        cls,
+        session_id: str,
+        user_id: str,
+        db: AsyncSession,
+    ) -> list[str]:
+        """读取会话树后代，供软删和沙箱生命周期级联使用。"""
+        pending = [session_id]
+        descendants: list[str] = []
+        seen = {session_id}
+        while pending:
+            result = await db.execute(
+                select(TChatSession.id).where(
+                    TChatSession.parent_id.in_(pending),
+                    TChatSession.user_id == str(user_id),
+                    TChatSession.deleted_at.is_(None),
+                )
+            )
+            next_ids = [str(value) for value in result.scalars().all() if str(value) not in seen]
+            if not next_ids:
+                break
+            descendants.extend(next_ids)
+            seen.update(next_ids)
+            pending = next_ids
+        return descendants
 
     @classmethod
     async def batch_delete_sessions(
@@ -646,23 +712,39 @@ class ChatService:
             )
 
         found_ids = [s.id for s in sessions]
+        all_ids: list[str] = []
         for sid in found_ids:
+            all_ids.extend([sid, *await cls._descendant_session_ids(sid, uid, db)])
+        all_ids = list(dict.fromkeys(all_ids))
+        for sid in all_ids:
             await cancel_session_agent_runs(sid)
+        try:
+            from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+
+            for sid in found_ids:
+                for task in BackgroundSubagentExecutor.list_for_session(sid):
+                    if not str(task.get('status', '')).endswith(('completed', 'failed', 'cancelled', 'timed_out')):
+                        try:
+                            BackgroundSubagentExecutor.cancel(str(task.get('task_id')))
+                        except ValueError:
+                            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('批量取消子 Agent 失败 user_id={} err={}', uid, exc)
 
         now = _now_ms()
         await db.execute(
             update(TChatSession)
-            .where(TChatSession.id.in_(found_ids))
+            .where(TChatSession.id.in_(all_ids))
             .values(deleted_at=now)
         )
         await db.execute(
             update(TChatMessage)
-            .where(TChatMessage.session_id.in_(found_ids))
+            .where(TChatMessage.session_id.in_(all_ids))
             .values(deleted_at=now)
         )
         await db.commit()
 
-        for sid in found_ids:
+        for sid in all_ids:
             try:
                 from noesis.services.scheduled_task_service import ScheduledTaskService
 
@@ -685,6 +767,14 @@ class ChatService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "destroy_session_sandbox 失败 session_id={} err={}",
+                    sid,
+                    exc,
+                )
+            try:
+                delete_session_workspace(uid, sid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "delete_session_workspace 失败 session_id={} err={}",
                     sid,
                     exc,
                 )
@@ -834,7 +924,11 @@ class ChatService:
             user_id: str,
             db: AsyncSession = None,
     ) -> None:
-        """标记会话已读：设 last_read_at 为当前时间。"""
+        """标记会话已读：设 last_read_at 为当前时间。
+
+        updated_at 显式保留原值，压掉列级 onupdate——读会话不算内容更新，
+        否则会话列表按 updated_at 排序时，仅被查看的会话会被顶到最前。
+        """
         now = _now_ms()
         await db.execute(
             update(TChatSession)
@@ -843,7 +937,7 @@ class ChatService:
                 TChatSession.user_id == user_id,
                 TChatSession.deleted_at.is_(None),
             ))
-            .values(last_read_at=now)
+            .values(last_read_at=now, updated_at=TChatSession.updated_at)
         )
         await db.commit()
 
@@ -866,6 +960,7 @@ class ChatService:
             TChatSession.user_id == user_id,
             TChatSession.deleted_at.is_(None),
             TChatSession.archived.is_(False),
+            TChatSession.parent_id.is_(None),
         ]
         # 侧栏/列表：仅展示至少有一条未删 user 消息的会话（过滤 ensure 空壳）
         conditions.append(
@@ -919,6 +1014,8 @@ class ChatService:
                 )
             ),
         ]
+        if not session_id:
+            conditions.append(TChatSession.parent_id.is_(None))
         if archived == "only":
             conditions.append(TChatSession.archived.is_(True))
         else:
@@ -1112,7 +1209,8 @@ class ChatService:
     async def get_child_sessions(
             cls,
             parent_id: str,
-            db: AsyncSession = None
+            db: AsyncSession = None,
+            user_id: Optional[str] = None,
     ) -> List[TChatSession]:
         """
         获取子会话列表（subagent 场景）
@@ -1121,17 +1219,83 @@ class ChatService:
         :param db: 数据库会话
         :return: 子会话列表
         """
+        child_conditions = [
+            TChatSession.parent_id == parent_id,
+            TChatSession.deleted_at.is_(None),
+        ]
+        if user_id is not None:
+            child_conditions.append(TChatSession.user_id == str(user_id))
         result = await db.execute(
-            select(TChatSession).where(
-                and_(
-                    TChatSession.parent_id == parent_id,
-                    TChatSession.deleted_at.is_(None)
-                )
-            ).order_by(TChatSession.created_at.desc())
+            select(TChatSession)
+            .where(and_(*child_conditions))
+            .order_by(TChatSession.created_at.desc())
         )
         sessions = result.scalars().all()
         logger.info(f'获取子会话列表: parent_id={parent_id}, count={len(sessions)}')
         return list(sessions)
+
+    @classmethod
+    async def get_child_session_catalog(
+        cls,
+        parent_id: str,
+        user_id: str,
+        db: AsyncSession,
+    ) -> list[dict[str, Any]]:
+        """返回子 Agent 目录摘要；不读取正文消息。"""
+        from sqlalchemy import func
+        from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+
+        parent = await cls.get_session_by_id(parent_id, user_id=user_id, db=db)
+        if parent is None:
+            raise ServiceException(message='会话不存在')
+        children = await cls.get_child_sessions(parent_id, db=db, user_id=user_id)
+        child_ids = [child.id for child in children]
+        latest_runs: dict[str, TAgentRun] = {}
+        if child_ids:
+            run_result = await db.execute(
+                select(TAgentRun)
+                .where(TAgentRun.session_id.in_(child_ids))
+                .order_by(TAgentRun.created_at.desc())
+            )
+            for run in run_result.scalars().all():
+                latest_runs.setdefault(run.session_id, run)
+            count_result = await db.execute(
+                select(TChatMessage.session_id, func.count(TChatMessage.id))
+                .where(
+                    TChatMessage.session_id.in_(child_ids),
+                    TChatMessage.role == 'user',
+                    TChatMessage.deleted_at.is_(None),
+                )
+                .group_by(TChatMessage.session_id)
+            )
+            turn_counts = {str(row[0]): int(row[1] or 0) for row in count_result.all()}
+        else:
+            turn_counts = {}
+        catalog: list[dict[str, Any]] = []
+        for child in children:
+            run = latest_runs.get(child.id)
+            task = BackgroundSubagentExecutor.get_memory(child.id)
+            snapshot = run.snapshot if run and isinstance(run.snapshot, dict) else {}
+            parts = snapshot.get('parts') if isinstance(snapshot, dict) else []
+            snapshot_step_count = sum(
+                1 for part in parts
+                if isinstance(part, dict) and part.get('type') == 'tool'
+            ) if isinstance(parts, list) else 0
+            catalog.append({
+                'session_id': child.id,
+                'parent_id': parent_id,
+                'created_by_tool_call_id': child.created_by_tool_call_id,
+                'title': child.title,
+                'profile_id': (child.extra or {}).get('agent_profile', 'task-worker') if isinstance(child.extra, dict) else 'task-worker',
+                'run_id': (task or {}).get('run_id') or (run.id if run else child.created_by_run_id),
+                'status': (task or {}).get('status') or (run.status if run else 'completed'),
+                'turn_count': turn_counts.get(child.id, 0),
+                'step_count': max(int((task or {}).get('progress_count') or 0), snapshot_step_count),
+                'started_at': (run.started_at if run else None),
+                'finished_at': (run.finished_at if run else None),
+                'interrupt': (task or {}).get('interrupt'),
+            })
+        return catalog
 
     @classmethod
     async def load_session_from_db(

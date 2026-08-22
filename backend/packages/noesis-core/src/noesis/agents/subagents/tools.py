@@ -2,15 +2,17 @@
 
 单工具同异步：``start_task`` 的 ``run_in_background``（默认 true）由模型
 按依赖选择——后台立即返回 task_id；前台等待终态并把结果作为工具返回值，
-超过 ``foreground_max_wait_seconds`` 自动转后台（同步转异步）。
+超过 ``foreground_max_wait_seconds`` 自动转后台（同步转异步）。所有后台
+subagent 都允许通过 ``send_message`` 继续对话；后台 shell 命令另行处理。
 session/user 在装配时闭包捕获。
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
+from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
 from noesis.agents.subagents.executor import (
@@ -26,16 +28,31 @@ _CHECK_PENDING_HINT = {
 }
 
 
+class _StartTaskArgs(BaseModel):
+    description: str = Field(..., description="子 Agent 要完成的独立目标")
+    run_in_background: bool = Field(True, description="是否立即返回并在后台执行")
+
+
+class _ToolCallAwareStructuredTool(StructuredTool):
+    """保留公开 schema，同时把模型真实 tool_call_id 注入实现函数。"""
+
+    def _to_args_and_kwargs(self, tool_input: Any, tool_call_id: str | None):
+        args, kwargs = super()._to_args_and_kwargs(tool_input, tool_call_id)
+        kwargs["tool_call_id"] = tool_call_id or ""
+        return args, kwargs
+
+
 def _format_task(task: dict[str, Any]) -> str:
+    public_id = str(task.get("child_session_id") or task.get("task_id") or "")
     status = task["status"]
     if status == BgTaskStatus.COMPLETED.value:
-        return f"[{task['task_id']}] completed：\n{task.get('result') or '(无结果文本)'}"
+        return f"[{public_id}] completed：\n{task.get('result') or '(无结果文本)'}"
     if status in (BgTaskStatus.FAILED.value, BgTaskStatus.TIMED_OUT.value):
-        return f"[{task['task_id']}] {status}：{task.get('error') or ''}"
+        return f"[{public_id}] {status}：{task.get('error') or ''}"
     if status == BgTaskStatus.CANCELLED.value:
-        return f"[{task['task_id']}] cancelled"
+        return f"[{public_id}] cancelled"
     hint = _CHECK_PENDING_HINT.get(BgTaskStatus(status), status)
-    return f"[{task['task_id']}] {hint}（description: {task['description']}）"
+    return f"[{public_id}] {hint}（description: {task['description']}）"
 
 
 def build_background_task_tools(
@@ -44,6 +61,9 @@ def build_background_task_tools(
     executor: BackgroundSubagentExecutor,
     session_id: str,
     user_id: str,
+    create_child_session: Callable[[str, str], Awaitable[str | dict[str, Any]]] | None = None,
+    delete_child_session: Callable[[str], Awaitable[None]] | None = None,
+    create_followup_run: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None,
 ) -> list[StructuredTool]:
     """构造绑定到当前会话的后台任务工具集。
 
@@ -55,25 +75,47 @@ def build_background_task_tools(
     async def astart_task(
         description: str,
         run_in_background: bool = True,
-        one_shot: bool = False,
+        tool_call_id: str = "",
     ) -> str:
+        launch = await create_child_session(description, tool_call_id) if create_child_session else None
+        if isinstance(launch, dict):
+            child_session_id = str(launch.get("child_session_id") or "") or None
+            run_id = str(launch.get("run_id") or "") or None
+            assistant_message_id = str(launch.get("assistant_message_id") or "") or None
+            created_by_tool_call_id = str(launch.get("created_by_tool_call_id") or "") or None
+        else:
+            child_session_id = launch
+            run_id = None
+            assistant_message_id = None
+            created_by_tool_call_id = None
         try:
             task_id = executor.start(
                 worker_factory=worker_factory, description=description,
-                session_id=session_id, user_id=user_id, one_shot=one_shot,
+                session_id=session_id, user_id=user_id,
+                child_session_id=child_session_id,
+                created_by_tool_call_id=created_by_tool_call_id,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+                followup_factory=create_followup_run,
             )
         except ValueError as exc:
+            if child_session_id and delete_child_session is not None:
+                try:
+                    await delete_child_session(child_session_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception("清理未启动的子 Agent 会话失败 child_session_id={}", child_session_id)
             return f"启动失败：{exc}"
         if run_in_background:
+            public_id = child_session_id or task_id
             return (
-                f"后台任务已启动：{task_id}\n"
+                f"子 Agent 已启动：{public_id}\n"
                 "无需等待——可继续其他工作，之后用 check_task 收结果。"
             )
         # 前台等待：执行仍走后台路径，跨 loop 等待终态；
         # shield 保证超时取消不波及底层任务（自动转后台）
         future = BackgroundSubagentExecutor.get_future(task_id)
         if future is None:
-            return f"后台任务已启动：{task_id}（前台等待不可用，稍后 check_task 收结果）"
+            return f"子 Agent 已启动：{child_session_id or task_id}（前台等待不可用，稍后 check_task 收结果）"
         try:
             await asyncio.wait_for(
                 asyncio.shield(asyncio.wrap_future(future)),
@@ -81,29 +123,38 @@ def build_background_task_tools(
             )
         except asyncio.TimeoutError:
             return (
-                f"任务运行超过 {int(SubagentConfig.foreground_max_wait_seconds)}s，已自动转为后台：{task_id}\n"
+                f"任务运行超过 {int(SubagentConfig.foreground_max_wait_seconds)}s，已自动转为后台：{child_session_id or task_id}\n"
                 "可继续其他工作，之后用 check_task 收结果。"
             )
         task = BackgroundSubagentExecutor.get(task_id) or {"task_id": task_id, "status": "unknown"}
+        public_id = str(task.get("child_session_id") or child_session_id or task_id)
         status = task.get("status")
         if status == BgTaskStatus.COMPLETED.value:
-            return f"任务完成：\n{task.get('result') or '(无结果文本)'}"
+            # Keep the task id in every foreground terminal response so the
+            # client can link the inline card to its persisted conversation.
+            return f"任务完成（{public_id}）：\n{task.get('result') or '(无结果文本)'}"
         if status == BgTaskStatus.AWAITING_APPROVAL.value:
             return (
-                f"任务等待用户审批（{task_id}）。审批通过后任务继续后台运行，"
+                f"任务等待用户审批（{public_id}）。审批通过后任务继续后台运行，"
                 "稍后用 check_task 收结果。"
             )
         if status in (BgTaskStatus.FAILED.value, BgTaskStatus.TIMED_OUT.value):
-            return f"任务{status}：{task.get('error') or ''}"
+            return f"任务{status}（{task_id}）：{task.get('error') or ''}"
         return _format_task(task)
 
-    def start_task(description: str, run_in_background: bool = True, one_shot: bool = False) -> str:
+    def start_task(
+        description: str,
+        run_in_background: bool = True,
+        tool_call_id: str = "",
+    ) -> str:
         # 同步入口：langgraph 工具实际走 coroutine；保留同步回退
         if run_in_background:
+            if create_child_session is not None:
+                return "启动失败：子 Agent 必须在异步执行环境中创建会话"
             try:
                 task_id = executor.start(
                     worker_factory=worker_factory, description=description,
-                    session_id=session_id, user_id=user_id, one_shot=one_shot,
+                    session_id=session_id, user_id=user_id,
                 )
             except ValueError as exc:
                 return f"启动失败：{exc}"
@@ -157,9 +208,10 @@ def build_background_task_tools(
     async def alist_tasks() -> str:
         return list_tasks()
 
-    start = StructuredTool.from_function(
+    start = _ToolCallAwareStructuredTool.from_function(
         func=start_task,
         coroutine=astart_task,
+        args_schema=_StartTaskArgs,
         name="start_task",
         description=(
             "启动一个子 Agent 执行较重的独立子任务（多轮检索/调研/长命令）。"
@@ -167,7 +219,6 @@ def build_background_task_tools(
             "run_in_background（默认 true）：立即返回 task_id，可继续其他工作，之后用 check_task 收结果；"
             "false：前台等待结果直接返回——仅当你的下一步动作依赖该结果时使用"
             "（超过约 2 分钟会自动转后台）。"
-            "one_shot（默认 false）：一次性任务，完成后不可再用 send_message 追加。"
         ),
     )
     check = StructuredTool.from_function(
@@ -189,7 +240,7 @@ def build_background_task_tools(
         description=(
             "向子任务追加一条消息，作为它的新一轮执行（子 Agent 带全部历史接续推理）："
             "运行中任务在当前轮结束后执行该消息；已完成任务立即续跑并更新结果。"
-            "适用于方向调整、补充要求或继续追问。一次性任务（one_shot）不支持。"
+            "适用于方向调整、补充要求或继续追问。"
         ),
     )
     listing = StructuredTool.from_function(

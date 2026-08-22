@@ -28,8 +28,10 @@ from noesis.schemas.chat_vo import (
     ChatSessionResponse,
     ChatMessageResponse,
     SessionListResponse,
+    ChildSessionCatalogResponse,
     MessageListResponse,
     SendMessageRequest,
+    SubagentFollowupRequest,
     SendMessageResponse,
     CreateRunRequest,
 )
@@ -49,6 +51,7 @@ from noesis.chat.message_builder import (
     normalize_message_content_for_delivery,
 )
 from noesis.runtime.logging import logger
+from noesis.errors.exceptions import ServiceException
 from noesis.schemas.qa_vo import (
     HitlResumeRequest,
     TestCaseExportRequest,
@@ -102,9 +105,20 @@ def _attachment_content_disposition(filename: str) -> str:
 
 def _session_to_response(session) -> ChatSessionResponse:
     """将会话模型转换为响应格式"""
+    raw_kind = getattr(session, 'kind', None)
+    kind = raw_kind if isinstance(raw_kind, str) else ('subagent' if session.parent_id else 'root')
+    created_by_run_id = getattr(session, 'created_by_run_id', None)
+    if not isinstance(created_by_run_id, str):
+        created_by_run_id = None
+    created_by_tool_call_id = getattr(session, 'created_by_tool_call_id', None)
+    if not isinstance(created_by_tool_call_id, str):
+        created_by_tool_call_id = None
     return ChatSessionResponse(
         id=session.id,
         parent_id=session.parent_id,
+        kind=kind,
+        created_by_run_id=created_by_run_id,
+        created_by_tool_call_id=created_by_tool_call_id,
         user_id=session.user_id,
         title=session.title,
         extra=session.extra,
@@ -394,24 +408,18 @@ async def get_child_sessions(
     """
     获取子会话列表（subagent 场景）
     """
-    session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db,
-    )
-    if not session:
+    try:
+        catalog = await ChatService.get_child_session_catalog(
+            parent_id=session_id,
+            user_id=str(current_user.user_id),
+            db=db,
+        )
+    except ServiceException:
         return ResponseUtil.not_found(msg='会话不存在')
 
-    sessions = await ChatService.get_child_sessions(
-        parent_id=session_id,
-        db=db
-    )
-
-    session_responses = [_session_to_response(s) for s in sessions]
-
     return ResponseUtil.success(
-        msg='获取子会话列表成功',
-        data=SessionListResponse(sessions=session_responses, total=len(session_responses)).model_dump()
+        msg='获取子 Agent 目录成功',
+        data=ChildSessionCatalogResponse(sessions=catalog, total=len(catalog)).model_dump()
     )
 
 
@@ -621,6 +629,29 @@ async def send_message(
     )
 
 
+@chat_router.post("/sessions/{session_id}/subagent-followup", summary="继续子 Agent 会话")
+async def send_subagent_followup(
+    session_id: str,
+    request: SubagentFollowupRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """向 child session 追加一轮 user message；详情和父卡片共用该入口。"""
+    from noesis.services.subagent_session_service import SubagentSessionService
+
+    try:
+        task = await SubagentSessionService.send_followup(
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            message=request.message,
+        )
+    except ServiceException as exc:
+        message = exc.message or "补充要求发送失败"
+        if "不存在" in message:
+            return ResponseUtil.not_found(msg=message)
+        return ResponseUtil.failure(msg=message)
+    return ResponseUtil.success(msg="补充要求已发送", data=task)
+
+
 async def _event_generator(generator, session_id: str):
     """将 QaService 产出的 SSE 文本帧编码为 UTF-8 字节流。"""
     completed_normally = False
@@ -775,6 +806,67 @@ async def stream_run(
     db: AsyncSession = Depends(get_db),
 ):
     snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+    if snapshot.origin == "subagent":
+        from noesis.services.subagent_session_service import SubagentSessionService
+
+        # 先订阅、再重新读取权威快照，避免 GET 与 subscribe 之间丢掉终态事件。
+        queue = None if snapshot.is_terminal else SubagentSessionService.subscribe_run_events(
+            run_id, str(current_user.user_id)
+        )
+        snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+        replay = SubagentSessionService.get_run_event_history(
+            run_id,
+            int(snapshot.snapshot_sequence or 0),
+        )
+        if snapshot.is_terminal and queue is not None:
+            SubagentSessionService.unsubscribe_run_events(run_id, queue)
+            queue = None
+
+        async def subagent_event_stream():
+            sent_events: set[tuple[str, int]] = set()
+            try:
+                yield format_sse("run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()})
+                if queue is None:
+                    yield format_done()
+                    return
+                for item in replay:
+                    event_key = (str(item.get("type") or "run.event"), int(item.get("sequence") or 0))
+                    if event_key in sent_events:
+                        continue
+                    sent_events.add(event_key)
+                    yield format_sse(str(item.get("type") or "run.event"), item)
+                    if item.get("type") == "run.finished":
+                        yield format_done()
+                        return
+                while True:
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield SSE_COMMENT_KEEPALIVE
+                        continue
+                    sequence = int(item.get("sequence") or 0)
+                    if (
+                        sequence <= max(0, after_sequence)
+                        and item.get("type") not in {"run.started", "run.finished", "approval.required", "approval.resumed"}
+                    ):
+                        continue
+                    event_key = (str(item.get("type") or "run.event"), sequence)
+                    if event_key in sent_events:
+                        continue
+                    sent_events.add(event_key)
+                    yield format_sse(str(item.get("type") or "run.event"), item)
+                    if item.get("type") == "run.finished":
+                        yield format_done()
+                        return
+            finally:
+                if queue is not None:
+                    SubagentSessionService.unsubscribe_run_events(run_id, queue)
+
+        return StreamingResponse(
+            subagent_event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
     try:
         subscription = await RunService.subscribe(
             run_id, str(current_user.user_id), max(0, after_sequence), db
@@ -857,6 +949,23 @@ async def stop_run(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    existing = await RunService.get(run_id, str(current_user.user_id), db)
+    if existing.origin == "subagent":
+        try:
+            from noesis.services.subagent_session_service import SubagentSessionService
+
+            snapshot = await SubagentSessionService.stop_run(
+                run_id=run_id,
+                user_id=str(current_user.user_id),
+                db=db,
+            )
+        except ServiceException as exc:
+            message = exc.message or "停止子 Agent 失败"
+            if "不存在" in message:
+                return ResponseUtil.not_found(msg=message)
+            return ResponseUtil.failure(msg=message)
+        snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+        return ResponseUtil.success(msg="已停止生成", data=snapshot.to_dict())
     # TEMP-DEBUG: 排查前端“停止请求失败”的真实原因
     try:
         snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
@@ -873,7 +982,29 @@ async def stop_run(
             "[TEMP-DEBUG] stop_run 失败 run_id={} user_id={} type={} msg={}",
             run_id, current_user.user_id, type(e).__name__, str(e),
         )
-        raise
+    raise
+
+
+@chat_router.get("/sessions/{session_id}/events", summary="订阅会话事件")
+async def stream_session_events(
+    session_id: str,
+    run_id: Optional[str] = None,
+    after_sequence: int = 0,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """会话级事件入口；子 Agent 详情可只传 session_id 自动选择最近一轮。"""
+    if not run_id:
+        latest = await RunService.get_latest_for_session(session_id, str(current_user.user_id), db)
+        if latest is None:
+            return ResponseUtil.not_found(msg="会话尚无 Agent run")
+        run_id = latest.run_id
+    return await stream_run(
+        run_id=run_id,
+        after_sequence=after_sequence,
+        current_user=current_user,
+        db=db,
+    )
 
 
 @chat_router.post("/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务")
@@ -898,6 +1029,24 @@ async def resume_hitl_run(
     db: AsyncSession = Depends(get_db),
 ):
     await require_csrf(http_request)
+    existing = await RunService.get(run_id, str(current_user.user_id), db)
+    if existing.origin == "subagent":
+        try:
+            from noesis.services.subagent_session_service import SubagentSessionService
+
+            snapshot = await SubagentSessionService.resume_hitl(
+                run_id=run_id,
+                user_id=str(current_user.user_id),
+                decisions=request.decisions,
+                db=db,
+            )
+        except ServiceException as exc:
+            message = exc.message or "子 Agent 审批失败"
+            if "不存在" in message:
+                return ResponseUtil.not_found(msg=message)
+            return ResponseUtil.failure(msg=message)
+        snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+        return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
     snapshot = await RunService.resume_hitl(run_id, request, current_user, db)
     return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
 
@@ -981,97 +1130,101 @@ async def get_message(
 # 后台子 Agent（全异步 task + HITL 审批）
 # ============================================================================
 
-@chat_router.get("/sessions/{session_id}/bg-tasks", summary="会话后台任务列表")
+@chat_router.get("/sessions/{session_id}/children/catalog", summary="子 Agent 与后台命令目录")
 async def list_bg_tasks(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """后台任务 + 待审批任务（前端审批卡与状态徽标轮询入口）。"""
-    from noesis.services.bg_task_service import BgTaskService
+    """返回统一的 Agent 目录快照；正文不从目录事件读取。"""
+    from noesis.services.agent_catalog_service import AgentCatalogService
 
-    tasks = BgTaskService.list_for_session(session_id, str(current_user.user_id))
-    pending = [t for t in tasks if t.get("status") == "awaiting_approval"]
+    try:
+        catalog = await AgentCatalogService.list_for_session(
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            db=db,
+        )
+    except ServiceException as exc:
+        return ResponseUtil.not_found(msg=exc.message or "会话不存在")
     return ResponseUtil.success(
         msg='获取后台任务成功',
-        data={"tasks": tasks, "pending_approvals": pending},
+        data=catalog,
     )
 
 
-@chat_router.post("/bg-tasks/{task_id}/decisions", summary="审批后台任务")
-async def submit_bg_task_decisions(
-    task_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    """批准/拒绝后台子 Agent 的待审批工具调用，决策后任务续跑。"""
-    from noesis.services.bg_task_service import BgTaskService
-
-    body = await request.json()
-    decisions = body.get("decisions")
-    if not isinstance(decisions, list) or not decisions:
-        return ResponseUtil.failure(msg='decisions 不能为空')
-    task = BgTaskService.submit_decisions(task_id, str(current_user.user_id), decisions)
-    return ResponseUtil.success(msg='审批已提交', data=task)
-
-
-@chat_router.post("/bg-tasks/{task_id}/message", summary="向后台任务发送调整指令")
-async def send_bg_task_message(
-    task_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    """向运行中/待审批的后台子 Agent 下发策略调整，下一次执行步骤生效。"""
-    from noesis.services.bg_task_service import BgTaskService
-
-    body = await request.json()
-    message = str(body.get("message") or "").strip()
-    if not message:
-        return ResponseUtil.failure(msg='message 不能为空')
-    task = BgTaskService.send_message(task_id, str(current_user.user_id), message)
-    return ResponseUtil.success(msg='指令已下发', data=task)
-
-
-@chat_router.get("/sessions/{session_id}/bg-tasks/stream", summary="后台任务事件流")
-async def stream_bg_tasks(
+@chat_router.get("/sessions/{session_id}/children/stream", summary="子 Agent 目录事件流")
+async def stream_child_catalog(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """会话级 SSE：连接即推存量任务快照，此后推送任务生命周期事件
-    （started / progress / followup / awaiting_approval / terminal），
-    25s 心跳保活；前端 EventSource 自动重连，重连由初始快照对齐状态。"""
+    """只推送子 Agent 摘要，不推送正文；正文由 child run SSE 按需订阅。"""
     import asyncio
     import json as _json
-
     from fastapi.responses import StreamingResponse
-    from noesis.agents.subagents.executor import (
-        BackgroundSubagentExecutor,
-        subscribe_bg_events,
-        unsubscribe_bg_events,
-    )
+    from noesis.services.agent_catalog_service import AgentCatalogService
 
     user_id = str(current_user.user_id)
-    keepalive = 25.0
+    if await ChatService.get_session_by_id(session_id, user_id, db) is None:
+        return ResponseUtil.not_found(msg="会话不存在")
+    queue = AgentCatalogService.subscribe(session_id, user_id)
+    catalog = (await AgentCatalogService.list_for_session(session_id, user_id, db))["tasks"]
 
     async def _gen():
-        queue = subscribe_bg_events(session_id, user_id)
         try:
-            # 存量快照（含其他用户隔离校验由 task.user_id 过滤）
-            for task in BackgroundSubagentExecutor.list_for_session(session_id):
-                if task.get("user_id") in (None, user_id):
-                    payload = {"event": "snapshot", "task": task}
-                    yield f"event: bg-task\ndata: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+            for task in catalog:
+                if task.get("kind") == "subagent":
+                    child = {
+                        "session_id": task.get("child_session_id") or task.get("task_id"),
+                        "parent_id": session_id,
+                        "title": task.get("description") or "子 Agent",
+                        "profile_id": "task-worker",
+                        "created_by_tool_call_id": task.get("created_by_tool_call_id"),
+                        "run_id": task.get("run_id"),
+                        "status": task.get("status"),
+                        "turn_count": task.get("turn_count", 0),
+                        "step_count": task.get("progress_count", 0),
+                        "started_at": task.get("started_at"),
+                        "finished_at": task.get("completed_at"),
+                        "interrupt": task.get("interrupt"),
+                    }
+                    yield f"event: child-session\ndata: {_json.dumps({'event': 'snapshot', 'child': child}, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"event: bg-task\ndata: {_json.dumps({'event': 'snapshot', 'task': task}, ensure_ascii=False)}\n\n"
             while True:
                 try:
-                    item = await asyncio.wait_for(queue.get(), timeout=keepalive)
+                    item = await asyncio.wait_for(queue.get(), timeout=25.0)
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                if "task" in item:
+                child_event = item.get("child") if isinstance(item, dict) else None
+                if isinstance(child_event, dict):
+                    yield f"event: child-session\ndata: {_json.dumps({'event': item.get('event'), 'child': child_event}, ensure_ascii=False)}\n\n"
+                    continue
+                task = item.get("task") if isinstance(item, dict) else None
+                if isinstance(task, dict) and task.get("kind") == "subagent":
+                    child = {
+                        "session_id": task.get("child_session_id") or task.get("task_id"),
+                        "parent_id": session_id,
+                        "title": task.get("description") or "子 Agent",
+                        "profile_id": "task-worker",
+                        "created_by_tool_call_id": task.get("created_by_tool_call_id"),
+                        "run_id": task.get("run_id"),
+                        "status": task.get("status"),
+                        "turn_count": task.get("turn_count", 0),
+                        "step_count": task.get("progress_count", 0),
+                        "started_at": task.get("started_at"),
+                        "finished_at": task.get("completed_at"),
+                        "interrupt": task.get("interrupt"),
+                    }
+                    yield f"event: child-session\ndata: {_json.dumps({'event': item.get('event'), 'child': child}, ensure_ascii=False)}\n\n"
+                elif isinstance(task, dict):
                     yield f"event: bg-task\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
-                else:
+                elif isinstance(item, dict):
                     yield f"event: bg-continuation\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
-            unsubscribe_bg_events(session_id, queue)
+            AgentCatalogService.unsubscribe(session_id, queue)
 
     return StreamingResponse(
         _gen(),
@@ -1080,30 +1233,20 @@ async def stream_bg_tasks(
     )
 
 
-@chat_router.get("/bg-tasks/{task_id}/messages", summary="后台任务子会话消息")
-async def get_bg_task_messages(
+@chat_router.post("/sessions/{session_id}/shell-jobs/{task_id}/stop", summary="停止后台命令")
+async def stop_shell_job(
+    session_id: str,
     task_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    """只读后台子 Agent 的完整执行历史（模型轮次/工具调用/结果）。"""
-    import asyncio
+    from noesis.services.agent_catalog_service import ShellJobService
 
-    from noesis.services.bg_task_service import BgTaskService
-
-    # read_thread_messages 经 run_coroutine_threadsafe + result 阻塞等待
-    # 隔离 loop（上限 10s）——丢线程执行，避免卡住主事件循环
-    messages = await asyncio.to_thread(
-        BgTaskService.get_messages, task_id, str(current_user.user_id)
-    )
-    return ResponseUtil.success(msg='获取子会话消息成功', data={"messages": messages})
-
-
-@chat_router.post("/bg-tasks/{task_id}/cancel", summary="取消后台任务")
-async def cancel_bg_task(
-    task_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    from noesis.services.bg_task_service import BgTaskService
-
-    task = BgTaskService.cancel(task_id, str(current_user.user_id))
-    return ResponseUtil.success(msg='已取消', data=task)
+    try:
+        task = ShellJobService.stop(
+            session_id=session_id,
+            task_id=task_id,
+            user_id=str(current_user.user_id),
+        )
+    except ServiceException as exc:
+        return ResponseUtil.not_found(msg=exc.message or "后台命令不存在")
+    return ResponseUtil.success(msg="后台命令已停止", data=task)
