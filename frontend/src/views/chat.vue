@@ -1,6 +1,6 @@
 <script lang="tsx" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
-import type { BgTask } from '@/api/chat'
+import type { TaskCatalogEntry } from '@/api/chat'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
 import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
@@ -9,14 +9,16 @@ import type { SessionStats } from '@/utils/statsFormat'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem } from 'naive-ui'
-import { cancelBgTask, createAgentRun, deleteSession, ensureSession, getSession, listBgTasks, markSessionRead, submitBgTaskDecisions, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { createAgentRun, deleteSession, ensureSession, getSession, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
+import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import BgTaskPanel from '@/components/BgTaskPanel/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
 import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
+import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
@@ -41,12 +43,13 @@ import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
-import { formatDuration, formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
+import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
+import { activateBgTaskSession, createBgTaskEventSource } from '@/views/chat/bgTaskStream'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import {
   pendingHitlForSession,
@@ -70,6 +73,7 @@ import {
   emptyMessageContent,
   extractLastTopLevelText,
   flushRedactedThinkingStreamCtx,
+  formatDurationMs,
   hasValidContextWindow,
   markStreamingPartsComplete,
   normalizeApiContent,
@@ -236,6 +240,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     )
     const contextReady = loadSessionContext(sessionId)
     openBgTaskStream(sessionId)
+    void refreshBgTasks(sessionId)
     reloadSessionFilesPanel()
     // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，
     // 防止慢历史响应覆盖新 Tab 已收到的实时内容。
@@ -735,8 +740,10 @@ const conversationItems = ref<
     reader?: ReadableStreamDefaultReader | null
     parent_id?: string | null
     message_id?: string
-    /** 系统注入消息标记（bg_task_notice 等）：渲染为通知条而非用户气泡 */
+    /** 系统注入消息标记（bg_task_notice 等）：渲染为系统状态条 */
     source_kind?: string
+    /** 系统通知关联的 child session，点击可直接定位到详情卡片 */
+    child_session_ids?: string[]
     /** 与后端 Langfuse metadata.langfuse_session_id 一致（chat_id） */
     langfuse_session_id?: string
     created_at?: number
@@ -922,8 +929,14 @@ function clearSessionConfig() {
 }
 
 // ---- 后台子 Agent：会话级 SSE 事件流 + 审批 ----
-const bgTasks = ref<BgTask[]>([])
+const bgTasks = ref<TaskCatalogEntry[]>([])
 const bgPanelOpen = ref(false)
+const bgFocusTaskId = ref<string | null>(null)
+watch(bgPanelOpen, (open) => {
+  if (!open) {
+    bgFocusTaskId.value = null
+  }
+})
 const bgActiveCount = computed(() =>
   bgTasks.value.filter((t) => t.status === 'running' || t.status === 'awaiting_approval').length,
 )
@@ -932,14 +945,21 @@ const bgPendingCount = computed(() =>
 )
 let bgTaskSource: EventSource | null = null
 
-function applyBgTask(task: BgTask): void {
+function applyBgTask(task: TaskCatalogEntry): void {
   const idx = bgTasks.value.findIndex((t) => t.task_id === task.task_id)
   if (idx >= 0) {
-    bgTasks.value.splice(idx, 1, task)
+    bgTasks.value.splice(idx, 1, { ...bgTasks.value[idx], ...task })
   } else {
     bgTasks.value.push(task)
   }
   bgTasks.value.sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0))
+}
+
+function backgroundTaskForToolPart(part: { name: string, output: string, child_session_id?: string, tool_call_id?: string }): TaskCatalogEntry | undefined {
+  return bgTasks.value.find((task) =>
+    (part.child_session_id && task.child_session_id === part.child_session_id)
+    || (part.tool_call_id && task.created_by_tool_call_id === part.tool_call_id),
+  )
 }
 
 /** 打开（或重开）会话级后台任务事件流：连接即收存量快照，此后实时推送 */
@@ -949,38 +969,30 @@ function openBgTaskStream(sessionId: string): void {
   if (!sessionId || sessionId !== currentIndex.value) {
     return
   }
-  const source = new EventSource(
-    `${location.origin}/api/chat/sessions/${encodeURIComponent(sessionId)}/bg-tasks/stream`,
-  )
-  source.addEventListener('bg-task', (e: MessageEvent) => {
-    try {
-      const payload = JSON.parse(e.data)
-      if (payload?.task) {
-        applyBgTask(payload.task as BgTask)
-      }
-    } catch (err) {
-      console.warn('[bg-task] parse event failed', err)
-    }
-  })
-  // 后台任务终态触发自动续跑：对话流插入系统通知条并附着新 run 的 SSE
-  source.addEventListener('bg-continuation', (e: MessageEvent) => {
-    try {
-      const payload = JSON.parse(e.data)
+  const source = createBgTaskEventSource(sessionId, {
+    onTask: applyBgTask,
+    onContinuation: (payload) => {
       if (payload?.run_id) {
         // 用闭包 sessionId 而非 currentIndex：事件可能在切会话的瞬间到达
-        insertBgNoticeItem(sessionId, String(payload.notice || ''), String(payload.run_id))
+        insertBgNoticeItem(
+          sessionId,
+          String(payload.notice || ''),
+          String(payload.run_id),
+          Array.isArray(payload.child_session_ids)
+            ? payload.child_session_ids.map(String)
+            : [],
+        )
         void sseStream.resumeActiveRun(sessionId)
       }
-    } catch (err) {
-      console.warn('[bg-task] continuation event failed', err)
-    }
+    },
+    onParseError: (err) => console.warn('[bg-task] parse event failed', err),
   })
   // onerror 不手动重连：EventSource 内建自动重连，重连由服务端快照对齐
   bgTaskSource = source
 }
 
-/** 续跑通知条：与历史加载的 bg_task_notice 用户消息同一形态（run_id 去重） */
-function insertBgNoticeItem(sessionId: string, notice: string, runId: string): void {
+/** 续跑通知条：插入会话时间线的系统状态条（run_id 去重） */
+function insertBgNoticeItem(sessionId: string, notice: string, runId: string, childSessionIds: string[] = []): void {
   const uuid = `bgc-notice-${runId}`
   if (!notice.trim() || conversationItems.value.some((item) => item.uuid === uuid)) {
     return
@@ -995,8 +1007,63 @@ function insertBgNoticeItem(sessionId: string, notice: string, runId: string): v
     file_key: [],
     reader: null,
     source_kind: 'bg_task_notice',
+    child_session_ids: childSessionIds,
     created_at: Date.now(),
   })
+}
+
+function openBackgroundNotice(childSessionIds: string[] = []): void {
+  bgFocusTaskId.value = childSessionIds[0] || null
+  bgPanelOpen.value = true
+}
+
+function bgTaskNoticeMeta(notice: string): { title: string, detail: string, tone: 'success' | 'warning' | 'error' | 'info' } {
+  const labelMatch = notice.match(/子 Agent「([^」]+)」/)
+  const label = labelMatch?.[1]?.trim()
+  const task = label
+    ? bgTasks.value.find((item) => item.description.trim() === label)
+    : undefined
+  const description = task?.description?.trim() || label
+  const agentLabel = description
+    ? `子 Agent「${description.length > 42 ? `${description.slice(0, 42)}…` : description}」`
+    : '后台子 Agent'
+  const metricText = notice.includes('·')
+    ? notice.split('·').slice(1).join('·').split(/[（：。]/, 1)[0].trim()
+    : ''
+  const withMetrics = (text: string) => metricText ? `${text}（${metricText}）` : text
+  if (/取消|cancelled/i.test(notice)) {
+    return {
+      title: `${agentLabel} 已取消`,
+      detail: withMetrics('任务已停止，可重新发起或调整任务要求。'),
+      tone: 'warning',
+    }
+  }
+  if (/超时|timed_out/i.test(notice)) {
+    return {
+      title: `${agentLabel} 执行超时`,
+      detail: withMetrics('任务超过执行时限，可打开任务详情查看已完成的过程。'),
+      tone: 'error',
+    }
+  }
+  if (/失败|failed/i.test(notice)) {
+    return {
+      title: `${agentLabel} 执行失败`,
+      detail: withMetrics('任务未能正常完成，可打开任务详情查看原因。'),
+      tone: 'error',
+    }
+  }
+  if (/已完成/.test(notice)) {
+    return {
+      title: `${agentLabel} 已完成`,
+      detail: withMetrics('执行结果已收到，可打开任务详情查看完整过程。'),
+      tone: 'success',
+    }
+  }
+  return {
+    title: `${agentLabel} 有新的状态`,
+    detail: withMetrics('可打开任务详情查看最新进度。'),
+    tone: 'info',
+  }
 }
 
 function stopBgTaskPolling(): void {
@@ -1011,17 +1078,25 @@ async function refreshBgTasks(sessionId: string): Promise<void> {
     return
   }
   try {
-    const res = await listBgTasks(sessionId)
+    const res = await listSessionTaskCatalog(sessionId)
     bgTasks.value = res.tasks ?? []
   } catch {
     // 网络异常时事件流仍在，忽略
   }
 }
 
-async function onBgTaskDecide(payload: { task: BgTask, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
+async function onBgTaskDecide(payload: { task: TaskCatalogEntry, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
   const { task, decisions } = payload
   try {
-    await submitBgTaskDecisions(task.task_id, decisions)
+    if (!task.run_id) {
+      throw new Error('子 Agent run 不存在')
+    }
+    const decision = decisions[0] || { type: 'reject' }
+    await resumeAgentRunHitl(task.run_id, {
+      interrupt_id: task.interrupt?.interrupt_id || '',
+      decisions,
+      grant_scope: decision.type === 'approve' ? 'once' : null,
+    })
     window.$message?.success(decisions[0]?.type === 'approve' ? '已批准，任务继续执行' : '已拒绝')
   } catch (err) {
     console.warn('[bg-task] submit decisions failed', err)
@@ -1030,10 +1105,14 @@ async function onBgTaskDecide(payload: { task: BgTask, decisions: Array<{ type: 
   await refreshBgTasks(task.session_id)
 }
 
-async function onBgTaskCancel(task: BgTask): Promise<void> {
+async function onBgTaskCancel(task: TaskCatalogEntry): Promise<void> {
   try {
-    await cancelBgTask(task.task_id)
-    window.$message?.success('已取消后台任务')
+    if (task.kind === 'shell') {
+      await stopShellTask(task.session_id, task.task_id)
+    } else if (task.run_id) {
+      await stopAgentRun(task.run_id)
+    }
+    window.$message?.success(task.kind === 'shell' ? '后台命令已停止' : '子 Agent 已停止')
   } catch (err) {
     console.warn('[bg-task] cancel failed', err)
   }
@@ -1222,7 +1301,34 @@ function assistantDisplayParts(item: { uuid: string, message_id?: string, messag
     return buildDisplayParts(parts)
   }
   const finalText = lastTopLevelTextEntry(parts)
-  return finalText ? [finalText] : buildDisplayParts(parts)
+  const agentEntries = buildDisplayParts(parts).filter((entry) =>
+    entry.kind === 'subagent'
+    || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
+  )
+  return finalText ? [...agentEntries, finalText] : buildDisplayParts(parts)
+}
+
+function canUseSharedConversationRenderer(item: { uuid: string, message_id?: string, messageContent?: MessageContentV1 }): boolean {
+  if (!item.messageContent || shouldCollapseAssistantRun(item)) {
+    return false
+  }
+  return buildDisplayParts(item.messageContent.parts).every((entry) =>
+    entry.kind === 'part' && !(entry.part.type === 'tool' && entry.part.name === 'start_task'),
+  )
+}
+
+function assistantSubagentCount(item: {
+  messageContent?: MessageContentV1
+  tool_calls?: Array<{ name?: string }>
+}): number {
+  const parts = item.messageContent?.parts
+  if (Array.isArray(parts)) {
+    return buildDisplayParts(parts).filter((entry) =>
+      entry.kind === 'subagent'
+      || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
+    ).length
+  }
+  return (item.tool_calls ?? []).filter((call) => call.name === 'task').length
 }
 
 function runElapsedLabel(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: MessageContentV1 }): string {
@@ -1234,8 +1340,7 @@ function runElapsedLabel(item: { created_at?: number, completed_at?: number, run
   if (!end) {
     return '执行过程'
   }
-  const seconds = Math.max(0, Math.floor((end - started) / 1000))
-  return `耗时 ${formatDuration(seconds).replace(/ 分/g, '分钟').replace(/ 秒/g, '秒')}`
+  return `耗时 ${formatDurationMs(Math.max(0, end - started))}`
 }
 
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
@@ -1769,6 +1874,15 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   try {
     await ensureSession(sessionIdForSend, { extra: buildSessionConfigExtra() })
     sessionMaterialized.value = true
+    activateBgTaskSession({
+      sessionId: sessionIdForSend,
+      currentSessionId: currentIndex.value,
+      hasStream: bgTaskSource !== null,
+      setCurrentSession: (sessionId) => {
+        currentIndex.value = sessionId
+      },
+      openStream: openBgTaskStream,
+    })
     void replaceChatSessionUrl(sessionIdForSend)
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
@@ -2417,15 +2531,20 @@ const { size: historySiderWidth, startResize: startHistorySiderResize } = usePan
 
 const { size: sessionPanelWidth, startResize: startSessionPanelResize } = usePaneResize({
   storageKey: 'noesis.chat.sessionPanelWidth',
-  defaultSize: 420,
+  defaultSize: 640,
   min: 280,
-  max: 720,
+  max: 960,
   invertDelta: true,
 })
 
+// 旧版本默认宽度较窄，首次升级时迁移到新的桌面端默认宽度；保留用户主动调整过的值。
+if (sessionPanelWidth.value === 420 || sessionPanelWidth.value === 560) {
+  sessionPanelWidth.value = 640
+}
+
 const { isMobile } = useBreakpoint()
 const { drawerWidth: historyDrawerWidth } = useResponsiveDrawerWidth({ max: 560, mobileRatio: 0.8 })
-const { drawerWidth: sessionDrawerWidth } = useResponsiveDrawerWidth({ max: 480, mobileRatio: 0.9 })
+const { drawerWidth: sessionDrawerWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.94 })
 const historyDrawerOpen = ref(false)
 const chatHistoryPanelRef = ref<InstanceType<typeof ChatHistoryPanel> | null>(null)
 
@@ -2725,32 +2844,29 @@ function onComposerPaste(e: ClipboardEvent) {
                     :key="`${item.uuid}-${index}`"
                     class="mb-4"
                   >
-                    <!-- 系统注入通知（后台任务终态自动续跑）：非用户输入，渲染为通知条 -->
-                    <div
-                      v-if="item.role === 'user' && item.source_kind === 'bg_task_notice'"
-                      class="chat-bg-notice"
-                    >
-                      <div class="chat-bg-notice__row">
-                        <n-icon size="14" class="chat-bg-notice__icon">
-                          <GitNetworkOutline />
-                        </n-icon>
-                        <span class="chat-bg-notice__label">后台任务通知</span>
+                    <div v-if="item.source_kind === 'bg_task_notice'" class="chat-system-notice-row">
+                      <div class="chat-system-notice" role="status">
                         <span
-                          class="chat-bg-notice__text"
-                          :class="{ 'chat-bg-notice__text--collapsed': shouldCollapseUserMessage(item.question || '') && !isUserMessageExpanded(item) }"
-                        >{{ item.question }}</span>
-                        <button
-                          v-if="shouldCollapseUserMessage(item.question || '')"
-                          type="button"
-                          class="chat-bg-notice__toggle"
-                          @click.stop="toggleUserMessage(item)"
+                          class="chat-system-notice__icon"
+                          :class="`chat-system-notice__icon--${bgTaskNoticeMeta(item.question || '').tone}`"
+                          aria-hidden="true"
                         >
-                          {{ isUserMessageExpanded(item) ? '收起' : '展开' }}
+                          <span class="i-carbon:notification-filled"></span>
+                        </span>
+                        <span class="chat-system-notice__copy">
+                          <strong>{{ bgTaskNoticeMeta(item.question || '').title }}</strong>
+                          <span>{{ bgTaskNoticeMeta(item.question || '').detail }}</span>
+                        </span>
+                        <button
+                          type="button"
+                          class="chat-system-notice__action"
+                          @click="openBackgroundNotice(item.child_session_ids)"
+                        >
+                          查看详情
                         </button>
                       </div>
                     </div>
-
-                    <div v-if="item.role === 'user' && item.source_kind !== 'bg_task_notice'" class="chat-user-message-row flex flex-col space-y-2 w-full">
+                    <div v-else-if="item.role === 'user'" class="chat-user-message-row flex flex-col space-y-2 w-full">
                       <div class="chat-message-column chat-user-message-column">
                         <!-- 用户消息 -->
                         <div class="chat-user-message">
@@ -2859,7 +2975,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         <div class="chat-message-column assistant-message-column">
                           <!-- Codex 风格的整轮过程摘要：放在回复卡片上方。 -->
                           <div
-                            v-if="runElapsedText(item) || shouldCollapseAssistantRun(item)"
+                            v-if="runElapsedText(item) || shouldCollapseAssistantRun(item) || assistantSubagentCount(item) > 0"
                             class="assistant-run-meta"
                           >
                             <button
@@ -2877,106 +2993,128 @@ function onComposerPaste(e: ClipboardEvent) {
                               >›</span>
                             </button>
                             <span v-else class="assistant-run-meta__elapsed">{{ runElapsedLabel(item) }}</span>
+                            <span v-if="assistantSubagentCount(item) > 0" class="assistant-run-meta__subagents">
+                              · {{ assistantSubagentCount(item) }} 个子 Agent
+                            </span>
                           </div>
                           <div class="assistant-unified-card">
+                            <ConversationPartsRenderer
+                              v-if="canUseSharedConversationRenderer(item)"
+                              :content="item.messageContent"
+                              appearance="light"
+                              :collapse-signal="runCollapseSignal"
+                              :retrieval-results="retrievedResults(item.messageContent.parts)"
+                              :msg-metadata="item.msg_metadata"
+                              :qa-type="item.qa_type || 'COMMON_QA'"
+                            />
                             <template
-                              v-for="(entry, pi) in assistantDisplayParts(item)"
-                              :key="entryKey(entry, pi)"
+                              v-else
                             >
-                              <ReasoningBlock
-                                v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
-                                :reasoning="entry.part.content"
-                                :defaultOpen="false"
-                                :streaming="entry.part.status === 'streaming'"
-                                appearance="light"
-                                :collapse-signal="runCollapseSignal"
-                              />
-                              <SubagentCollapse
-                                v-else-if="entry.kind === 'subagent'"
-                                appearance="light"
-                                :input="entry.part.input"
-                                :output="entry.part.output"
-                                :status="entry.part.status"
-                                :state="entry.part.state"
-                                :error="entry.part.error"
-                                :duration-ms="entry.part.duration_ms"
-                                :child-parts="entry.childParts"
-                              />
-                              <div
-                                v-else-if="entry.kind === 'parallel_tools'"
-                                class="parallel-tools-group parallel-tools-group--light"
-                                :class="{ 'parallel-tools-group--compact': toolDisplayMode === 'compact' }"
+                              <template
+                                v-for="(entry, pi) in assistantDisplayParts(item)"
+                                :key="entryKey(entry, pi)"
                               >
-                                <n-collapse>
-                                  <!-- 流式中展开看进度，回复完成（completed_at）后收起；key 随完成态变化触发重渲染（default-expanded 仅首渲染生效） -->
-                                  <n-collapse-item
-                                    :key="`ptg-${item.completed_at ? 'done' : 'live'}-${runCollapseSignal}`"
-                                    name="parallel-tools"
-                                    :default-expanded="!item.completed_at"
-                                  >
-                                    <template #header>
-                                      <div class="parallel-tools-group__header">
-                                        并行工具 · {{ entry.parts.length }} 个
-                                      </div>
-                                    </template>
-                                    <div class="parallel-tools-group__body">
-                                      <ToolCallCollapse
-                                        v-for="tp in entry.parts"
-                                        :key="tp.tool_call_id ?? tp.id"
-                                        appearance="light"
-                                        :name="tp.name"
-                                        :arguments="tp.input"
-                                        :result="tp.output"
-                                        :error="tp.error"
-                                        :status="tp.status"
-                                        :state="tp.state"
-                                        :error-category="tp.errorCategory"
-                                        :exit-code="tp.exit_code"
-                                        :truncated="tp.truncated"
-                                        :duration-ms="tp.duration_ms"
-                                        :collapse-signal="runCollapseSignal"
-                                      />
-                                    </div>
-                                  </n-collapse-item>
-                                </n-collapse>
-                              </div>
-                              <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
-                                <ToolCallCollapse
+                                <ReasoningBlock
+                                  v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
+                                  :reasoning="entry.part.content"
+                                  :defaultOpen="false"
+                                  :streaming="entry.part.status === 'streaming'"
                                   appearance="light"
-                                  :name="entry.part.name"
-                                  :arguments="entry.part.input"
-                                  :result="entry.part.output"
-                                  :error="entry.part.error"
-                                  :status="entry.part.status"
-                                  :state="entry.part.state"
-                                  :error-category="entry.part.errorCategory"
-                                  :exit-code="entry.part.exit_code"
-                                  :truncated="entry.part.truncated"
-                                  :duration-ms="entry.part.duration_ms"
                                   :collapse-signal="runCollapseSignal"
                                 />
+                                <SubagentCollapse
+                                  v-else-if="entry.kind === 'subagent'"
+                                  appearance="light"
+                                  :input="entry.part.input"
+                                  :output="entry.part.output"
+                                  :status="entry.part.status"
+                                  :state="entry.part.state"
+                                  :error="entry.part.error"
+                                  :duration-ms="entry.part.duration_ms"
+                                  :child-parts="entry.childParts"
+                                />
+                                <div
+                                  v-else-if="entry.kind === 'parallel_tools'"
+                                  class="parallel-tools-group parallel-tools-group--light"
+                                  :class="{ 'parallel-tools-group--compact': toolDisplayMode === 'compact' }"
+                                >
+                                  <n-collapse>
+                                    <!-- 流式中展开看进度，回复完成（completed_at）后收起；key 随完成态变化触发重渲染（default-expanded 仅首渲染生效） -->
+                                    <n-collapse-item
+                                      :key="`ptg-${item.completed_at ? 'done' : 'live'}-${runCollapseSignal}`"
+                                      name="parallel-tools"
+                                      :default-expanded="!item.completed_at"
+                                    >
+                                      <template #header>
+                                        <div class="parallel-tools-group__header">
+                                          并行工具 · {{ entry.parts.length }} 个
+                                        </div>
+                                      </template>
+                                      <div class="parallel-tools-group__body">
+                                        <ToolCallCollapse
+                                          v-for="tp in entry.parts"
+                                          :key="tp.tool_call_id ?? tp.id"
+                                          appearance="light"
+                                          :name="tp.name"
+                                          :arguments="tp.input"
+                                          :result="tp.output"
+                                          :error="tp.error"
+                                          :status="tp.status"
+                                          :state="tp.state"
+                                          :error-category="tp.errorCategory"
+                                          :exit-code="tp.exit_code"
+                                          :truncated="tp.truncated"
+                                          :duration-ms="tp.duration_ms"
+                                          :collapse-signal="runCollapseSignal"
+                                        />
+                                      </div>
+                                    </n-collapse-item>
+                                  </n-collapse>
+                                </div>
+                                <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
+                                  <BackgroundSubagentCollapse
+                                    v-if="entry.part.name === 'start_task'"
+                                    :tool-part="entry.part"
+                                    :task="backgroundTaskForToolPart(entry.part)"
+                                  />
+                                  <ToolCallCollapse
+                                    v-else
+                                    appearance="light"
+                                    :name="entry.part.name"
+                                    :arguments="entry.part.input"
+                                    :result="entry.part.output"
+                                    :error="entry.part.error"
+                                    :status="entry.part.status"
+                                    :state="entry.part.state"
+                                    :error-category="entry.part.errorCategory"
+                                    :exit-code="entry.part.exit_code"
+                                    :truncated="entry.part.truncated"
+                                    :duration-ms="entry.part.duration_ms"
+                                    :collapse-signal="runCollapseSignal"
+                                  />
+                                </template>
+                                <div
+                                  v-if="entry.kind === 'part' && entry.part.type === 'text' && entry.part.content === COMPACTION_BOUNDARY"
+                                  class="compact-boundary"
+                                  role="separator"
+                                >
+                                  <span class="compact-boundary__text">以上对话已压缩摘要</span>
+                                </div>
+                                <MarkdownPreview
+                                  v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
+                                  :content="entry.part.content || ''"
+                                  :retrieval-results="retrievedResults(item.messageContent.parts)"
+                                  :toolCalls="null"
+                                  :msgMetadata="item.msg_metadata"
+                                  :isInit="isInit"
+                                  :isView="isView"
+                                  :show-action-bar="false"
+                                  variant="segment"
+                                  :qa-type="item.qa_type || 'COMMON_QA'"
+                                  :parentScollBottomMethod="scrollToBottom"
+                                  @failed="() => onFailedReader(index)"
+                                />
                               </template>
-                              <div
-                                v-if="entry.kind === 'part' && entry.part.type === 'text' && entry.part.content === COMPACTION_BOUNDARY"
-                                class="compact-boundary"
-                                role="separator"
-                              >
-                                <span class="compact-boundary__text">以上对话已压缩摘要</span>
-                              </div>
-                              <MarkdownPreview
-                                v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
-                                :content="entry.part.content || ''"
-                                :retrieval-results="retrievedResults(item.messageContent.parts)"
-                                :toolCalls="null"
-                                :msgMetadata="item.msg_metadata"
-                                :isInit="isInit"
-                                :isView="isView"
-                                :show-action-bar="false"
-                                variant="segment"
-                                :qa-type="item.qa_type || 'COMMON_QA'"
-                                :parentScollBottomMethod="scrollToBottom"
-                                @failed="() => onFailedReader(index)"
-                              />
                             </template>
                             <div
                               v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
@@ -3438,6 +3576,7 @@ function onComposerPaste(e: ClipboardEvent) {
     <BgTaskPanel
       v-model:show="bgPanelOpen"
       :tasks="bgTasks"
+      :focus-task-id="bgFocusTaskId"
       @decide="onBgTaskDecide"
       @cancel="onBgTaskCancel"
       @changed="refreshBgTasks(currentIndex)"
@@ -3930,64 +4069,6 @@ function onComposerPaste(e: ClipboardEvent) {
   text-decoration: underline;
 }
 
-/* 系统注入通知条（后台任务终态自动续跑）：非用户输入，弱化为居中信息行 */
-.chat-bg-notice {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-}
-
-.chat-bg-notice__row {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  max-width: min(680px, 92%);
-  margin: 0 auto;
-  padding: 6px 12px;
-  border-radius: 6px;
-  background: var(--noesis-color-primary-border-soft, rgba(64, 128, 255, 0.08));
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--n-text-color-3, rgba(128, 128, 128, 0.9));
-}
-
-.chat-bg-notice__icon {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.chat-bg-notice__label {
-  flex-shrink: 0;
-  font-weight: 500;
-}
-
-.chat-bg-notice__text {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.chat-bg-notice__text--collapsed {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.chat-bg-notice__toggle {
-  flex-shrink: 0;
-  padding: 0 4px;
-  border: 0;
-  background: transparent;
-  color: var(--noesis-color-primary);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.chat-bg-notice__toggle:hover {
-  color: var(--noesis-color-primary-hover);
-  text-decoration: underline;
-}
-
 .chat-user-copy-btn {
   display: inline-flex;
   align-items: center;
@@ -4077,6 +4158,12 @@ function onComposerPaste(e: ClipboardEvent) {
   transform: translateY(-1px) rotate(90deg);
 }
 
+.assistant-run-meta__subagents {
+  margin-left: 8px;
+  color: var(--noesis-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .assistant-message-actions {
   display: flex;
   align-items: center;
@@ -4116,6 +4203,93 @@ function onComposerPaste(e: ClipboardEvent) {
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+.chat-system-notice-row {
+  display: flex;
+  justify-content: flex-end;
+  box-sizing: border-box;
+  width: 100%;
+  padding-right: 10%;
+  padding-left: 10%;
+}
+
+.chat-system-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(680px, 100%);
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-md);
+  background: var(--noesis-color-bg-muted);
+  color: var(--noesis-color-text-secondary);
+}
+
+.chat-system-notice__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--noesis-color-primary-bg-subtle);
+  color: var(--noesis-color-primary);
+}
+
+.chat-system-notice__icon--success {
+  background: var(--noesis-color-primary-bg-subtle);
+  color: var(--noesis-color-success);
+}
+
+.chat-system-notice__icon--warning {
+  background: var(--noesis-color-primary-bg-subtle);
+  color: var(--noesis-color-warning);
+}
+
+.chat-system-notice__icon--error {
+  background: var(--noesis-color-primary-bg-subtle);
+  color: var(--noesis-color-danger);
+}
+
+.chat-system-notice__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chat-system-notice__copy strong {
+  color: var(--noesis-color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chat-system-notice__action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--noesis-radius-sm);
+  background: transparent;
+  color: var(--noesis-color-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-system-notice__action:hover {
+  background: var(--noesis-color-primary-bg-subtle);
+}
+
+@media (max-width: $bp-lg) {
+  .chat-system-notice-row {
+    padding-right: 0;
+    padding-left: 0;
+  }
 }
 
 .parallel-tools-group--compact :deep(.n-collapse-item__header) {

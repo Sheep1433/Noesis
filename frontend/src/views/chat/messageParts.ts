@@ -35,6 +35,7 @@ export interface ToolUiPart {
   name: string
   input: Record<string, unknown>
   output: string
+  child_session_id?: string
   status: ToolRunStatus
   state: ToolLifecycleState
   error?: string | null
@@ -791,11 +792,22 @@ export function formatUsageSummary(usage: unknown): string {
 }
 
 export function formatDurationMs(ms: number): string {
-  if (ms < 1000) {
-    return `${ms}ms`
+  const value = Math.max(0, Math.round(Number(ms) || 0))
+  if (value < 1000) {
+    return '<1s'
   }
-  const sec = ms / 1000
-  return sec >= 10 ? `${Math.round(sec)}s` : `${sec.toFixed(1)}s`
+  const totalSeconds = Math.round(value / 1000)
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`
+  }
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) {
+    return seconds ? `${minutes}m ${String(seconds).padStart(2, '0')}s` : `${minutes}m`
+  }
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes ? `${hours}h ${String(restMinutes).padStart(2, '0')}m` : `${hours}h`
 }
 
 const MODEL_API_TIMEOUT_RE = /readtimeout|writetimeout|connecttimeout|pooltimeout|streamchunktimeouterror|stream_chunk_timeout|apitimeout|request timed out|timed out waiting/i

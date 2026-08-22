@@ -1,22 +1,32 @@
 <script setup lang="ts">
-import type { BgTask, BgTaskMessage } from '@/api/chat'
-import { GitNetworkOutline } from '@vicons/ionicons-v5'
-import { NButton, NDrawer, NDrawerContent, NInput, NTag } from 'naive-ui'
+import type { TaskCatalogEntry } from '@/api/chat'
+import { ChevronDownOutline, GitNetworkOutline } from '@vicons/ionicons-v5'
+import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
-import { getBgTaskMessages, sendBgTaskMessage } from '@/api/chat'
-import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
+import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/index.vue'
+import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 
 const props = defineProps<{
-  tasks: BgTask[]
+  tasks: TaskCatalogEntry[]
+  focusTaskId?: string | null
 }>()
 
 const emit = defineEmits<{
-  (e: 'decide', payload: { task: BgTask, decisions: Array<{ type: 'approve' | 'reject' }> }): void
-  (e: 'cancel', task: BgTask): void
+  (e: 'decide', payload: { task: TaskCatalogEntry, decisions: Array<{ type: 'approve' | 'reject' }> }): void
+  (e: 'cancel', task: TaskCatalogEntry): void
   (e: 'changed'): void
 }>()
 
 const show = defineModel<boolean>('show', { default: false })
+const { drawerWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.96 })
+const selectedTask = ref<TaskCatalogEntry | null>(null)
+const showDetail = ref(false)
+const selectedTaskResolved = computed(() => {
+  if (!selectedTask.value) {
+    return null
+  }
+  return props.tasks.find((task) => task.task_id === selectedTask.value?.task_id) || selectedTask.value
+})
 
 const pending = computed(() => props.tasks.filter((t) => {
   return t.status === 'awaiting_approval'
@@ -32,117 +42,45 @@ const finished = computed(() =>
     .reverse(),
 )
 const ordered = computed(() => [...pending.value, ...running.value, ...finished.value])
-
-const statusLabel: Record<string, { label: string, type: 'default' | 'info' | 'success' | 'warning' | 'error' }> = {
-  running: { label: '进行中', type: 'warning' },
-  awaiting_approval: { label: '待审批', type: 'warning' },
-  completed: { label: '已完成', type: 'success' },
-  failed: { label: '失败', type: 'error' },
-  cancelled: { label: '已取消', type: 'default' },
-  timed_out: { label: '超时', type: 'error' },
-}
-
-// ---- 展开（加载子会话详情） ----
-const expandedId = ref<string | null>(null)
-const detailMessages = ref<BgTaskMessage[]>([])
-const detailLoading = ref(false)
-const followupInput = ref('')
-const followupSending = ref(false)
-
-function canFollowup(task: BgTask): boolean {
-  if (task.kind === 'one_shot' || task.kind === 'shell') {
-    return false
+const taskSummary = computed(() => {
+  if (!ordered.value.length) {
+    return '任务进度会在这里实时更新'
   }
-  return ['running', 'awaiting_approval', 'completed'].includes(task.status)
-}
-
-async function toggleExpand(task: BgTask): Promise<void> {
-  if (expandedId.value === task.task_id) {
-    expandedId.value = null
-    return
+  const segments = []
+  if (running.value.length) {
+    segments.push(`${running.value.length} 个进行中`)
   }
-  expandedId.value = task.task_id
-  followupInput.value = ''
-  await loadDetail(task.task_id)
-}
-
-async function loadDetail(taskId: string): Promise<void> {
-  detailLoading.value = true
-  try {
-    detailMessages.value = await getBgTaskMessages(taskId)
-  } catch (err) {
-    console.warn('[bg-task] load messages failed', err)
-    detailMessages.value = []
-  } finally {
-    detailLoading.value = false
+  if (pending.value.length) {
+    segments.push(`${pending.value.length} 个待处理`)
   }
-}
-
-/** 子会话消息 → ToolCallCollapse 兼容的条目（assistant 工具调用与 tool 结果按名配对） */
-interface DetailItem {
-  kind: 'instruction' | 'text' | 'tool'
-  text: string
-  name?: string
-  arguments?: Record<string, unknown>
-  result?: string
-  status?: string
-}
-
-const detailItems = computed<DetailItem[]>(() => {
-  const items: DetailItem[] = []
-  const pendingCalls: Array<DetailItem & { kind: 'tool' }> = []
-  for (const message of detailMessages.value) {
-    if (message.role === 'user') {
-      items.push({ kind: 'instruction', text: message.text || '' })
-    } else if (message.role === 'assistant') {
-      for (const call of message.tool_calls ?? []) {
-        pendingCalls.push({
-          kind: 'tool',
-          text: '',
-          name: call.name,
-          arguments: call.args,
-          status: 'running',
-        })
-      }
-      if (message.text) {
-        items.push({ kind: 'text', text: message.text })
-      }
-    } else if (message.role === 'tool') {
-      const idx = pendingCalls.findIndex((c) => c.name === message.name)
-      const target = idx >= 0 ? pendingCalls.splice(idx, 1)[0] : { kind: 'tool' as const, text: '', name: message.name }
-      target.result = message.text || ''
-      target.status = message.status === 'error' ? 'error' : 'success'
-      items.push(target)
-    }
+  if (finished.value.length) {
+    segments.push(`${finished.value.length} 个已结束`)
   }
-  for (const leftover of pendingCalls) {
-    leftover.status = 'running'
-    items.push(leftover)
-  }
-  return items
+  return segments.join(' · ')
 })
 
-async function sendFollowup(task: BgTask): Promise<void> {
-  const message = followupInput.value.trim()
-  if (!message || followupSending.value) {
-    return
-  }
-  followupSending.value = true
-  try {
-    await sendBgTaskMessage(task.task_id, message)
-    followupInput.value = ''
-    window.$message?.success('已发送，子任务将作为新一轮执行')
-    emit('changed')
-    await loadDetail(task.task_id)
-  } catch (err) {
-    console.warn('[bg-task] send message failed', err)
-    window.$message?.error('发送失败')
-  } finally {
-    followupSending.value = false
-  }
+const statusLabel: Record<TaskCatalogEntry['status'], string> = {
+  running: '进行中',
+  awaiting_approval: '待审批',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  timed_out: '超时',
+  partial: '已停止',
+  error: '失败',
+  interrupted: '已中断',
 }
 
-function actionPreview(task: BgTask): string {
+function statusClass(status: TaskCatalogEntry['status']): string {
+  return status.replaceAll('_', '-')
+}
+
+function toggleExpand(task: TaskCatalogEntry): void {
+  selectedTask.value = task
+  showDetail.value = true
+}
+
+function actionPreview(task: TaskCatalogEntry): string {
   const first = task.interrupt?.action_requests?.[0]
   if (!first) {
     return task.description
@@ -151,31 +89,49 @@ function actionPreview(task: BgTask): string {
   return `${first.name ?? 'tool'} ${args}`
 }
 
-// 抽屉打开时刷新当前展开项
 watch(show, (open) => {
-  if (open && expandedId.value) {
-    void loadDetail(expandedId.value)
+  if (!open) {
+    showDetail.value = false
+  }
+})
+watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
+  if (!taskId) {
+    return
+  }
+  const task = props.tasks.find((item) => item.child_session_id === taskId || item.task_id === taskId)
+  if (task && task.kind !== 'shell') {
+    selectedTask.value = task
+    showDetail.value = true
   }
 })
 </script>
 
 <template>
-  <n-drawer v-model:show="show" placement="right" width="min(520px, 94vw)">
-    <n-drawer-content title="后台子任务" closable>
+  <n-drawer v-model:show="show" placement="right" :width="drawerWidth">
+    <n-drawer-content title="子 Agent 与后台命令" closable body-content-style="padding: 0;">
+      <div class="bg-task-overview">
+        <span>{{ taskSummary || '运行状态会在这里实时更新' }}</span>
+        <span v-if="ordered.length" class="bg-task-overview__count">共 {{ ordered.length }} 个</span>
+      </div>
       <div class="bg-task-list">
         <div v-if="!ordered.length" class="bg-task-empty">
-          当前会话暂无后台子任务
+          <span class="bg-task-empty__icon"><n-icon size="20"><GitNetworkOutline /></n-icon></span>
+          <strong>暂无后台子任务</strong>
+          <span>Agent 创建后台任务后，进度会实时显示在这里</span>
         </div>
 
-        <!-- 待审批（固定展开样式的卡片） -->
+        <!-- 待审批固定展开，避免高风险操作藏在折叠层级里。 -->
         <div
           v-for="task in pending"
           :key="task.task_id"
           class="bg-task-card bg-task-card--approval"
         >
           <div class="bg-task-card__head">
-            <n-tag type="warning" size="small" round>待审批</n-tag>
-            <span class="bg-task-card__title">{{ task.description }}</span>
+            <span class="bg-task-status-dot bg-task-status-dot--awaiting-approval"></span>
+            <div class="bg-task-card__content">
+              <span class="bg-task-card__title">{{ task.description }}</span>
+              <span class="bg-task-card__meta">等待确认后继续</span>
+            </div>
           </div>
           <pre class="bg-task-card__preview">{{ actionPreview(task) }}</pre>
           <div class="bg-task-card__actions">
@@ -193,114 +149,137 @@ watch(show, (open) => {
           </div>
         </div>
 
-        <!-- 任务卡片（SubagentCollapse 同形态：可折叠卡片） -->
+        <!-- 两行任务行：主信息、状态与指标分层，展开后再显示执行内容。 -->
         <div
           v-for="task in [...running, ...finished]"
           :key="task.task_id"
           class="bg-task-card"
-          :class="{ 'bg-task-card--open': expandedId === task.task_id }"
+          :class="{ 'bg-task-card--open': showDetail && selectedTaskResolved?.task_id === task.task_id }"
         >
           <button type="button" class="bg-task-card__row" @click="toggleExpand(task)">
-            <span class="bg-task-card__icon"><n-icon size="15"><GitNetworkOutline /></n-icon></span>
-            <span class="bg-task-card__title">{{ task.description }}</span>
-            <span v-if="task.kind === 'one_shot'" class="bg-task-card__kind">一次性</span>
-            <span v-else-if="task.kind === 'shell'" class="bg-task-card__kind">命令</span>
-            <n-tag :type="statusLabel[task.status]?.type ?? 'default'" size="small" round>
-              {{ statusLabel[task.status]?.label ?? task.status }}
-            </n-tag>
-            <span
-              v-if="task.status === 'running' && (task.progress_count ?? task.progress?.length)"
-              class="bg-task-card__chevron"
-            >{{ task.progress_count ?? task.progress?.length }} 步</span>
-            <span v-if="task.status === 'running'" class="bg-task-card__cancel" @click.stop>
-              <NButton size="tiny" quaternary type="error" @click="emit('cancel', task)">
-                取消
-              </NButton>
+            <span class="bg-task-card__disclosure" :class="{ 'bg-task-card__disclosure--open': showDetail && selectedTaskResolved?.task_id === task.task_id }">
+              <n-icon size="14"><ChevronDownOutline /></n-icon>
+            </span>
+            <span class="bg-task-status-dot" :class="`bg-task-status-dot--${statusClass(task.status)}`"></span>
+            <span class="bg-task-card__content">
+              <span class="bg-task-card__title">{{ task.description }}</span>
+              <span class="bg-task-card__meta">
+                <span v-if="task.kind === 'shell'">后台命令</span>
+                <span v-else>子 Agent</span>
+                <span>·</span>
+                <span>{{ statusLabel[task.status] ?? task.status }}</span>
+              </span>
+            </span>
+            <span v-if="task.progress_count ?? task.progress?.length" class="bg-task-card__metric">
+              {{ task.progress_count ?? task.progress?.length }} 步
             </span>
           </button>
-
-          <div v-if="expandedId === task.task_id" class="bg-task-card__body">
-            <div v-if="detailLoading" class="bg-task-detail__empty">加载中…</div>
-            <template v-else-if="detailItems.length">
-              <div
-                v-for="(item, idx) in detailItems"
-                :key="idx"
-                class="bg-task-detail__item"
-              >
-                <div v-if="item.kind === 'instruction'" class="bg-task-detail__instruction">
-                  {{ item.text }}
-                </div>
-                <div v-else-if="item.kind === 'text'" class="bg-task-detail__text">
-                  {{ item.text }}
-                </div>
-                <ToolCallCollapse
-                  v-else
-                  :name="item.name || 'tool'"
-                  :arguments="item.arguments"
-                  :result="item.result"
-                  :status="item.status || 'success'"
-                  :default-open="false"
-                />
-              </div>
-            </template>
-            <div v-else class="bg-task-detail__empty">暂无执行记录</div>
-
-            <div v-if="canFollowup(task)" class="bg-task-detail__composer">
-              <NInput
-                v-model:value="followupInput"
-                size="small"
-                placeholder="向子任务追加指示（作为新一轮执行）"
-                @keyup.enter="sendFollowup(task)"
-              />
-              <NButton size="small" type="primary" :loading="followupSending" @click="sendFollowup(task)">
-                发送
-              </NButton>
-            </div>
-            <div v-else-if="task.kind === 'one_shot'" class="bg-task-detail__hint">
-              一次性任务不支持追加消息
-            </div>
-            <div v-else-if="task.kind === 'shell'" class="bg-task-detail__hint">
-              后台命令任务不支持追加消息
-            </div>
-          </div>
         </div>
       </div>
+      <div
+        v-if="selectedTaskResolved && selectedTaskResolved.kind === 'shell' && showDetail"
+        class="shell-task-detail"
+      >
+        <div class="shell-task-detail__header">
+          <strong>后台命令输出</strong>
+          <NButton size="small" type="error" quaternary @click="emit('cancel', selectedTaskResolved)">
+            停止命令
+          </NButton>
+        </div>
+        <code class="shell-task-detail__command">{{ selectedTaskResolved.description }}</code>
+        <pre v-if="selectedTaskResolved.result || selectedTaskResolved.error" class="shell-task-detail__output">{{ selectedTaskResolved.result || selectedTaskResolved.error }}</pre>
+        <span v-else class="shell-task-detail__empty">命令仍在运行，输出完成后会显示在这里。</span>
+      </div>
+      <SubagentConversationDrawer
+        v-if="selectedTaskResolved && selectedTaskResolved.kind !== 'shell'"
+        v-model:show="showDetail"
+        :session-id="selectedTaskResolved.child_session_id || selectedTaskResolved.task_id"
+        :run-id="selectedTaskResolved.run_id"
+        :title="selectedTaskResolved.description"
+        @changed="emit('changed')"
+      />
     </n-drawer-content>
   </n-drawer>
 </template>
 
 <style scoped lang="scss">
+.bg-task-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--noesis-color-border-subtle);
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+}
+
+.bg-task-overview__count {
+  color: var(--noesis-color-text-hint);
+  font-variant-numeric: tabular-nums;
+}
+
 .bg-task-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  padding: 14px;
 }
 
-.bg-task-empty,
-.bg-task-detail__empty,
-.bg-task-detail__hint {
-  color: var(--noesis-color-text-hint, #94a3b8);
-  font-size: 13px;
+.bg-task-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 56px 16px;
+  color: var(--noesis-color-text-hint);
+  text-align: center;
 }
 
-/* 卡片形态对齐 SubagentCollapse（light 外观） */
+.bg-task-empty strong {
+  color: var(--noesis-color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.bg-task-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--noesis-color-bg-muted);
+  color: var(--noesis-color-text-hint);
+}
+
 .bg-task-card {
-  background: var(--noesis-block-light-bg, var(--noesis-color-bg-muted));
   border: 1px solid var(--noesis-color-border-subtle);
-  border-radius: var(--noesis-radius-md, 10px);
+  border-radius: var(--noesis-radius-lg);
+  background: var(--noesis-color-bg-elevated);
   overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bg-task-card:hover,
+.bg-task-card--open {
+  border-color: var(--noesis-color-border);
+  box-shadow: var(--noesis-shadow-sm);
 }
 
 .bg-task-card--approval {
-  border-left: 3px solid var(--noesis-color-warning, #f0a020);
+  border-color: var(--noesis-color-warning);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
 .bg-task-card__row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 8px 12px;
+  min-height: 58px;
+  padding: 10px 12px;
   border: 0;
   background: transparent;
   font: inherit;
@@ -309,94 +288,151 @@ watch(show, (open) => {
 }
 
 .bg-task-card__row:hover {
-  background: var(--noesis-color-primary-bg-subtle);
+  background: var(--noesis-color-bg-muted);
 }
 
-.bg-task-card__icon {
+.bg-task-card__disclosure {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  color: var(--noesis-color-primary);
+  width: 16px;
+  height: 18px;
+  color: var(--noesis-color-text-hint);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.bg-task-card__disclosure--open {
+  transform: rotate(0);
+}
+
+.bg-task-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border: 2px solid var(--noesis-color-text-hint);
+  border-radius: 50%;
+}
+
+.bg-task-status-dot--running {
+  border-color: var(--noesis-color-primary);
+  box-shadow: 0 0 0 3px var(--noesis-color-primary-bg-subtle);
+}
+
+.bg-task-status-dot--awaiting-approval {
+  border-color: var(--noesis-color-warning);
+  box-shadow: 0 0 0 3px var(--noesis-color-primary-bg-subtle);
+}
+
+.bg-task-status-dot--completed {
+  border-color: var(--noesis-color-success);
+  background: var(--noesis-color-success);
+}
+
+.bg-task-status-dot--failed,
+.bg-task-status-dot--timed-out {
+  border-color: var(--noesis-color-danger);
+  background: var(--noesis-color-danger);
+}
+
+.bg-task-card__content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .bg-task-card__title {
-  flex: 1;
-  min-width: 0;
   overflow: hidden;
   color: var(--noesis-color-text);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bg-task-card__kind {
-  flex-shrink: 0;
-  color: var(--noesis-color-text-hint, #94a3b8);
+.bg-task-card__meta {
+  display: flex;
+  gap: 4px;
+  color: var(--noesis-color-text-hint);
   font-size: 11px;
+  line-height: 16px;
 }
 
-.bg-task-card__chevron {
+.bg-task-card__metric {
   flex-shrink: 0;
-  color: var(--noesis-color-text-hint, #94a3b8);
+  margin-top: 18px;
+  color: var(--noesis-color-text-hint);
   font-size: 11px;
-}
-
-.bg-task-card__cancel {
-  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .bg-task-card__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  padding: 8px 12px 0;
+  padding: 12px 12px 0;
 }
 
 .bg-task-card__preview {
-  margin: 8px 12px;
-  padding: 6px 8px;
+  margin: 10px 12px;
+  padding: 8px 10px;
   max-height: 120px;
   overflow: auto;
   border-radius: var(--noesis-radius-sm);
-  background: var(--noesis-color-bg-muted);
-  color: var(--noesis-color-text);
+  background: var(--noesis-color-bg-elevated);
+  color: var(--noesis-color-text-secondary);
+  font-family: inherit;
   font-size: 12px;
+  line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .bg-task-card__actions {
   display: flex;
   gap: 8px;
-  padding: 0 12px 10px;
+  padding: 0 12px 12px 28px;
 }
 
-.bg-task-card__body {
+.shell-task-detail {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 4px 12px 10px;
-  border-top: 1px solid var(--noesis-color-border-subtle);
+  gap: 10px;
+  margin: 0 14px 14px;
+  padding: 12px;
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-md);
+  background: var(--noesis-color-bg-muted);
 }
 
-.bg-task-detail__instruction {
-  padding: 6px 8px;
-  border-radius: var(--noesis-radius-sm);
-  background: var(--noesis-color-primary-bg-subtle);
-  color: var(--noesis-color-text-secondary);
-  font-size: 13px;
-}
-
-.bg-task-detail__text {
+.shell-task-detail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   color: var(--noesis-color-text);
   font-size: 13px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
-.bg-task-detail__composer {
-  display: flex;
-  gap: 8px;
-  padding-top: 6px;
+.shell-task-detail__command,
+.shell-task-detail__output {
+  margin: 0;
+  padding: 8px;
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-color-bg-elevated);
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.shell-task-detail__empty {
+  color: var(--noesis-color-text-hint);
+  font-size: 12px;
 }
 </style>

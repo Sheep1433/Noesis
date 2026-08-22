@@ -300,9 +300,9 @@ function submitAll() {
 <style scoped lang="scss">
 .hitl-composer-panel {
   width: 100%;
-  border: 1px solid var(--noesis-border-subtle, #e5e5e5);
-  border-radius: 10px;
-  background: var(--noesis-surface-muted, #f7f7f5);
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-lg);
+  background: var(--noesis-color-bg-muted);
   overflow: hidden;
 }
 
@@ -328,7 +328,7 @@ function submitAll() {
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: var(--noesis-text-muted, #666);
+  color: var(--noesis-color-text-muted);
 }
 
 .hitl-pager-btn {
@@ -392,22 +392,22 @@ function submitAll() {
   width: 100%;
   padding: 8px 10px;
   text-align: left;
-  border: 1px solid var(--noesis-border-subtle, #e5e5e5);
-  border-radius: 8px;
-  background: var(--noesis-surface, #fff);
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-md);
+  background: var(--noesis-color-bg-elevated);
   cursor: pointer;
   font-size: 13px;
   line-height: 1.4;
   color: inherit;
 
   &:hover:not(:disabled) {
-    border-color: #c8c8c4;
-    background: #fafaf8;
+    border-color: var(--noesis-color-primary-border-soft);
+    background: var(--noesis-color-bg-hover);
   }
 
   &.selected {
-    border-color: #3b82f6;
-    background: #eff6ff;
+    border-color: var(--noesis-color-primary);
+    background: var(--noesis-color-primary-bg-subtle);
   }
 
   &:disabled {
@@ -420,7 +420,7 @@ function submitAll() {
   flex-shrink: 0;
   width: 18px;
   font-weight: 600;
-  color: var(--noesis-text-muted, #666);
+  color: var(--noesis-color-text-muted);
 }
 
 .hitl-option-text {
@@ -435,7 +435,7 @@ function submitAll() {
 
 .hitl-approval-meta {
   font-size: 12px;
-  color: var(--noesis-text-muted, #666);
+  color: var(--noesis-color-text-muted);
   margin-bottom: 6px;
 }
 
@@ -448,9 +448,9 @@ function submitAll() {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  border-radius: 6px;
-  background: var(--noesis-surface, #fff);
-  border: 1px solid var(--noesis-border-subtle, #ebebeb);
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-color-bg-elevated);
+  border: 1px solid var(--noesis-color-border-subtle);
 }
 
 .hitl-composer-panel__footer {

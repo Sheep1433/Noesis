@@ -69,6 +69,9 @@ export type AgentStopReason =
 export interface ChatSessionResponse {
   id: string
   parent_id: string | null
+  kind?: 'root' | 'subagent' | string
+  created_by_run_id?: string | null
+  created_by_tool_call_id?: string | null
   user_id: string
   title: string
   extra: Record<string, unknown> | null
@@ -80,6 +83,26 @@ export interface ChatSessionResponse {
 /** 会话列表响应 */
 export interface SessionListResponse {
   sessions: ChatSessionResponse[]
+  total: number
+}
+
+export interface ChildSessionCatalogItem {
+  session_id: string
+  parent_id: string
+  created_by_tool_call_id?: string | null
+  title: string
+  profile_id: string
+  run_id?: string | null
+  status: AgentRunStatus | 'awaiting_approval' | 'failed' | 'cancelled' | 'timed_out' | string
+  turn_count: number
+  step_count: number
+  started_at?: number | null
+  finished_at?: number | null
+  interrupt?: TaskCatalogEntry['interrupt'] | null
+}
+
+export interface ChildSessionCatalogResponse {
+  sessions: ChildSessionCatalogItem[]
   total: number
 }
 
@@ -178,6 +201,7 @@ export interface ResumeAgentRunHitlParams {
 export interface CreateSessionParams {
   title?: string
   parent_id?: string
+  kind?: 'root' | 'subagent'
   extra?: Record<string, unknown>
 }
 
@@ -392,14 +416,26 @@ export async function stopAgentRun(runId: string): Promise<AgentRunSnapshot> {
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
 }
 
+export async function stopShellTask(sessionId: string, taskId: string): Promise<TaskCatalogEntry> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/shell-jobs/${encodeURIComponent(taskId)}/stop`,
+  )
+  return parseResponse<TaskCatalogEntry>(await authFetch(req))
+}
+
 /** 后台子 Agent 任务（含待审批） */
-export interface BgTask {
+export interface TaskCatalogEntry {
   task_id: string
   session_id: string
+  child_session_id?: string | null
+  created_by_tool_call_id?: string | null
+  run_id?: string | null
+  assistant_message_id?: string | null
   user_id?: string
   description: string
-  kind?: 'continuable' | 'one_shot' | 'shell'
-  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out'
+  kind?: 'subagent' | 'shell'
+  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
   result?: string | null
   error?: string | null
   interrupt?: {
@@ -420,49 +456,8 @@ export interface BgTask {
   progress_count?: number
 }
 
-export async function listBgTasks(sessionId: string): Promise<{ tasks: BgTask[], pending_approvals: BgTask[] }> {
-  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/bg-tasks`)
-  return parseResponse(await authFetch(req))
-}
-
-export async function submitBgTaskDecisions(
-  taskId: string,
-  decisions: Array<{ type: 'approve' | 'reject', message?: string }>,
-): Promise<BgTask> {
-  const req = makeRequest(
-    'POST',
-    `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/decisions`,
-    { decisions },
-  )
-  return parseResponse(await authFetch(req))
-}
-
-/** 子会话消息视图项（只读） */
-export interface BgTaskMessage {
-  role: 'user' | 'assistant' | 'tool'
-  text?: string
-  name?: string
-  status?: string
-  tool_calls?: Array<{ name: string, args: Record<string, unknown> }>
-}
-
-export async function getBgTaskMessages(taskId: string): Promise<BgTaskMessage[]> {
-  const req = makeRequest('GET', `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/messages`)
-  const res = await parseResponse<{ messages: BgTaskMessage[] }>(await authFetch(req))
-  return res.messages ?? []
-}
-
-export async function sendBgTaskMessage(taskId: string, message: string): Promise<BgTask> {
-  const req = makeRequest(
-    'POST',
-    `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/message`,
-    { message },
-  )
-  return parseResponse(await authFetch(req))
-}
-
-export async function cancelBgTask(taskId: string): Promise<BgTask> {
-  const req = makeRequest('POST', `${location.origin}${BASE}/bg-tasks/${encodeURIComponent(taskId)}/cancel`)
+export async function listSessionTaskCatalog(sessionId: string): Promise<{ tasks: TaskCatalogEntry[], pending_approvals: TaskCatalogEntry[] }> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/children/catalog`)
   return parseResponse(await authFetch(req))
 }
 
@@ -551,9 +546,9 @@ export async function markSessionRead(id: string): Promise<void> {
  * 获取子会话列表
  * GET /api/chat/sessions/{id}/children
  */
-export async function getSessionChildren(id: string): Promise<SessionListResponse> {
+export async function getSessionChildren(id: string): Promise<ChildSessionCatalogResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${id}/children`)
-  return parseResponse<SessionListResponse>(await authFetch(req))
+  return parseResponse<ChildSessionCatalogResponse>(await authFetch(req))
 }
 
 // ============================================================================
@@ -724,6 +719,19 @@ export async function sendMessage(
 ): Promise<SendMessageResponse> {
   const req = makeRequest('POST', `${location.origin}${BASE}/sessions/${sessionId}/messages`, params)
   return parseResponse<SendMessageResponse>(await authFetch(req))
+}
+
+/** 向已有 child session 追加下一轮对话。 */
+export async function sendSubagentFollowup(
+  sessionId: string,
+  message: string,
+): Promise<TaskCatalogEntry> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-followup`,
+    { message },
+  )
+  return parseResponse<TaskCatalogEntry>(await authFetch(req))
 }
 
 /**

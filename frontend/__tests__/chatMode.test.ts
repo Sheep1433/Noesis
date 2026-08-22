@@ -94,10 +94,10 @@ describe('public product navigation', () => {
 describe('composer placeholder', () => {
   it('describes shortcuts in product language', () => {
     expect(composerPlaceholder('SUPER_AGENT_QA', false)).toBe(
-      '输入消息，使用 / 调用 Skill，使用 @ 引用文件或协作助手…',
+      '输入消息…',
     )
     expect(composerPlaceholder('FAULT_OPERATION_QA', false)).toBe(
-      '输入消息，使用 @ 引用文件或协作助手…',
+      '输入消息…',
     )
     expect(composerPlaceholder('COMMON_QA', false)).toBe('输入消息…')
     expect(composerPlaceholder('COMMON_QA', true)).toBe('正在上传附件…')
