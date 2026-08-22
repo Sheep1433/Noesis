@@ -255,6 +255,10 @@ defineExpose({ open })
   line-height: 1.35;
   text-decoration: none;
   white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .source-card__link {

@@ -306,6 +306,20 @@ onBeforeUnmount(() => {
     }
   }
 
+  /* 纸墨（默认主题）下 primary 与正文同为墨色，badge 与正文难以区分；
+     反转为「墨底纸字」，保持单色主题语言 */
+  html:not([data-theme]) & {
+    .citation-badge a,
+    .citation-badge.citation-badge--kb {
+      background: var(--noesis-color-primary);
+      color: var(--noesis-color-bg);
+    }
+
+    .citation-badge.citation-badge--kb:hover {
+      background: var(--noesis-color-primary-hover);
+    }
+  }
+
   p {
     line-height: 2;
     margin: 10px 16px;

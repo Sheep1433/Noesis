@@ -17,6 +17,12 @@ html:not([data-theme]) .detail-card {
   box-shadow: none;
 }
 
+/* 纸墨聊天只保留内容块边界，避免助手外框与工具输出框的竖线重合。 */
+html:not([data-theme]) .assistant-unified-card {
+  border: none;
+  box-shadow: none;
+}
+
 html:not([data-theme]) .chat-composer {
   background: var(--noesis-color-bg-composer) !important;
   border-color: var(--noesis-color-border) !important;

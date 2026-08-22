@@ -51,8 +51,16 @@ function lookupByRef(index: CitationIndex | undefined, ref: string): { number: n
   if (!index || index.size === 0) {
     return null
   }
-  if (/^https?:\/\//i.test(ref)) {
-    const targetKey = citationKey({ url: ref, source_type: 'web', evidence_id: ref, title: '', excerpt: '' } as RetrievalResultUi)
+  // markdown-it normalizeLink 会把 href 里的非 ASCII 百分号编码（中文文件名），
+  // 解码后再匹配；ref 本身已是明文时 decodeURIComponent 原样返回。
+  let decoded = ref
+  try {
+    decoded = decodeURIComponent(ref)
+  } catch {
+    decoded = ref
+  }
+  if (/^https?:\/\//i.test(decoded)) {
+    const targetKey = citationKey({ url: decoded, source_type: 'web', evidence_id: decoded, title: '', excerpt: '' } as RetrievalResultUi)
     const direct = index.get(targetKey)
     if (direct) {
       return direct
@@ -67,8 +75,8 @@ function lookupByRef(index: CitationIndex | undefined, ref: string): { number: n
     }
     return null
   }
-  if (ref.startsWith('kb:')) {
-    const rest = ref.slice(3)
+  if (decoded.startsWith('kb:')) {
+    const rest = decoded.slice(3)
     const slashIdx = rest.indexOf('/')
     if (slashIdx < 0) {
       return null
@@ -92,6 +100,54 @@ function lookupByRef(index: CitationIndex | undefined, ref: string): { number: n
   return null
 }
 
+/** 未被 markdown-it 解析成链接的原始引用文本（如 file: 协议被 validateLink 黑名单拒绝）。 */
+const RAW_CITATION_RE = /\[citation\s*:[^\]]*\]\([^)]*\)/gi
+
+/**
+ * 归一化模型可能编造的引用 ref。已知偏差：file:Collection/文件名 → kb:Collection/文件名
+ * （file: 在 markdown-it validateLink 黑名单内，整条链接退化为原始文本）。
+ */
+function normalizeCitationRef(ref: string): string {
+  if (/^file:/i.test(ref)) {
+    return `kb:${ref.slice(5)}`
+  }
+  return ref
+}
+
+/** markdown-it normalizeLink 会对 href 里的非 ASCII 百分号编码，解码后再匹配/展示。 */
+function decodeRef(ref: string): string {
+  try {
+    return decodeURIComponent(ref)
+  } catch {
+    return ref
+  }
+}
+
+/** 把单个 [citation:标题](ref) 原始文本转成上标 badge token。 */
+function pushBadgeFromRawCitation(state: StateCore, index: CitationIndex | undefined, label: string, refRaw: string, out: Token[]) {
+  const title = label.replace(/^citation\s*:/i, '').trim()
+  const ref = decodeRef(normalizeCitationRef(refRaw))
+  const matched = lookupByRef(index, ref)
+  if (matched) {
+    const isKb = ref.startsWith('kb:')
+    if (isKb) {
+      out.push(kbSupBadge(state, matched.number, title || matched.result.title, ref))
+    } else {
+      const webHref = safeWebUrl(ref) || safeWebUrl(matched.result.url) || ''
+      out.push(webSupBadge(state, matched.number, title || matched.result.title, webHref))
+    }
+    return
+  }
+  const isKb = ref.startsWith('kb:')
+  out.push(unnumberedBadge(state, title, isKb ? null : safeWebUrl(ref), isKb))
+}
+
+function appendTextToken(state: StateCore, out: Token[], content: string) {
+  const token = new state.Token('text', '', 0)
+  token.content = content
+  out.push(token)
+}
+
 md.core.ruler.after('inline', 'citation-badges', (state) => {
   const env = (state.env || {}) as CitationRenderEnv
   const index = env.citationIndex
@@ -109,18 +165,19 @@ md.core.ruler.after('inline', 'citation-badges', (state) => {
         const href = child.attrGet('href') || ''
         if (label?.type === 'text' && close?.type === 'link_close' && /^citation\s*:/i.test(label.content)) {
           const title = label.content.replace(/^citation\s*:/i, '').trim()
-          const matched = lookupByRef(index, href)
+          const ref = decodeRef(normalizeCitationRef(href))
+          const matched = lookupByRef(index, ref)
           if (matched) {
-            const isKb = href.startsWith('kb:')
+            const isKb = ref.startsWith('kb:')
             if (isKb) {
-              children.push(kbSupBadge(state, matched.number, title || matched.result.title, href))
+              children.push(kbSupBadge(state, matched.number, title || matched.result.title, ref))
             } else {
-              const webHref = safeWebUrl(href) || safeWebUrl(matched.result.url) || ''
+              const webHref = safeWebUrl(ref) || safeWebUrl(matched.result.url) || ''
               children.push(webSupBadge(state, matched.number, title || matched.result.title, webHref))
             }
           } else {
-            const isKb = href.startsWith('kb:')
-            children.push(unnumberedBadge(state, title, safeWebUrl(href), isKb))
+            const isKb = ref.startsWith('kb:')
+            children.push(unnumberedBadge(state, title, safeWebUrl(ref), isKb))
           }
           i += 2
           continue
@@ -132,7 +189,35 @@ md.core.ruler.after('inline', 'citation-badges', (state) => {
         children.push(child)
         continue
       }
-      children.push(child)
+      // 防御：file: 等被 validateLink 拒绝的引用链接不会产生 link_open，
+      // 整条 [citation:...](ref) 留在 text token 里，这里兜底转成上标 badge
+      const raw = child.content
+      if (!raw.includes('[citation:')) {
+        children.push(child)
+        continue
+      }
+      RAW_CITATION_RE.lastIndex = 0
+      const matches = Array.from(raw.matchAll(RAW_CITATION_RE))
+      if (matches.length === 0) {
+        children.push(child)
+        continue
+      }
+      let cursor = 0
+      for (const m of matches) {
+        const inner = /^\[citation\s*:([^\]]*)\]\(([^)]*)\)$/i.exec(m[0])
+        if (!inner) {
+          continue
+        }
+        const start = m.index ?? 0
+        if (start > cursor) {
+          appendTextToken(state, children, raw.slice(cursor, start))
+        }
+        pushBadgeFromRawCitation(state, index, inner[1], inner[2], children)
+        cursor = start + m[0].length
+      }
+      if (cursor < raw.length) {
+        appendTextToken(state, children, raw.slice(cursor))
+      }
     }
     token.children = children
   }
