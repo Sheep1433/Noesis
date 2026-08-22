@@ -341,3 +341,72 @@ export function applySettingsImport(manifest: Record<string, unknown>, previewId
 export function resetSettings() {
   return settingsJson<{ reset: string[] }>('/api/user/settings/reset', 'POST')
 }
+
+// ---------- 用户自定义对话模型 ----------
+
+export type UserLLMProvider = {
+  provider_id: string
+  name: string
+  api_type: string
+  base_url: string
+  enabled: boolean
+  has_key: boolean
+  api_key_masked?: string | null
+}
+
+export type UserLLMModel = {
+  entry_id: string
+  provider_id: string
+  api_type?: string | null
+  model_id: string
+  label: string
+  temperature?: number | null
+  context_window: number
+}
+
+export type UserLLMProviderPayload = {
+  name: string
+  api_type: string
+  base_url: string
+  enabled: boolean
+  api_key?: string
+  api_key_action: 'keep' | 'replace' | 'clear'
+}
+
+export async function listLLMProviders() {
+  const data = await settingsJson<{ providers: UserLLMProvider[] }>('/api/user/llm/providers')
+  return data?.providers || []
+}
+
+export function createLLMProvider(payload: UserLLMProviderPayload) {
+  return settingsJson<UserLLMProvider>('/api/user/llm/providers', 'POST', payload)
+}
+
+export function updateLLMProvider(id: string, payload: UserLLMProviderPayload) {
+  return settingsJson<UserLLMProvider>(`/api/user/llm/providers/${encodeURIComponent(id)}`, 'PUT', payload)
+}
+
+export function deleteLLMProvider(id: string) {
+  return settingsJson<null>(`/api/user/llm/providers/${encodeURIComponent(id)}`, 'DELETE')
+}
+
+export function testLLMProvider(id: string) {
+  return settingsJson<{ ok: boolean, message: string }>(`/api/user/llm/providers/${encodeURIComponent(id)}/test`, 'POST')
+}
+
+export async function listLLMModels() {
+  const data = await settingsJson<{ models: UserLLMModel[] }>('/api/user/llm/models')
+  return data?.models || []
+}
+
+export function createLLMModel(payload: Omit<UserLLMModel, 'entry_id' | 'api_type'>) {
+  return settingsJson<UserLLMModel>('/api/user/llm/models', 'POST', payload)
+}
+
+export function updateLLMModel(id: string, payload: Omit<UserLLMModel, 'entry_id' | 'api_type'>) {
+  return settingsJson<UserLLMModel>(`/api/user/llm/models/${encodeURIComponent(id)}`, 'PUT', payload)
+}
+
+export function deleteLLMModel(id: string) {
+  return settingsJson<null>(`/api/user/llm/models/${encodeURIComponent(id)}`, 'DELETE')
+}

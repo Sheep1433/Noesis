@@ -202,13 +202,30 @@ async def _resolve_model_for_query(
     request_model_id: Optional[str],
     db: AsyncSession,
 ) -> str:
-    """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。"""
+    """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。
+
+    用户自定义模型优先于内置目录：命中时把含解密 key 的快照注入 ContextVar，
+    factory/catalog 在本次 run 内据此路由到用户自己的端点。
+    """
     from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
+    from noesis.services.user_llm_service import UserLLMService
 
     set_runtime_model_snapshots([])
+
+    async def _apply_custom(model_id: Optional[str]) -> Optional[str]:
+        if not model_id:
+            return None
+        snapshots = await UserLLMService.resolve_runtime_snapshots(
+            db, user_id=int(user_id), model_id=model_id
+        )
+        if not snapshots:
+            return None
+        set_runtime_model_snapshots(snapshots)
+        return snapshots[0].id
+
     if request_model_id is not None:
         normalized = _normalize_model_id(request_model_id)
-        resolved = resolve_catalog_entry(normalized).id
+        resolved = await _apply_custom(normalized) or resolve_catalog_entry(normalized).id
         await ChatService.merge_session_extra(
             session_id,
             user_id,
@@ -225,7 +242,7 @@ async def _resolve_model_for_query(
     if session and session.extra:
         stored = _normalize_model_id(session.extra.get("model_id"))
         if stored:
-            return resolve_catalog_entry(stored).id
+            return await _apply_custom(stored) or resolve_catalog_entry(stored).id
     return get_default_model_id()
 
 

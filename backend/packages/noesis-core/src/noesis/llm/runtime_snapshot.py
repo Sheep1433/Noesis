@@ -14,6 +14,8 @@ class RuntimeModelSnapshot:
     model_type: str
     base_url: str
     api_key: str
+    label: str = ""
+    context_window: int = 0
 
 
 _snapshots: ContextVar[dict[str, RuntimeModelSnapshot]] = ContextVar(

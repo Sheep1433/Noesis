@@ -12,6 +12,7 @@ export interface ChatModelOption {
   is_default: boolean
   supports_vision?: boolean
   context_window?: number
+  custom?: boolean
 }
 
 export interface ChatModelCatalog {

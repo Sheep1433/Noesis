@@ -126,11 +126,12 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
     if snapshot is not None:
         return ModelCatalogEntry(
             id=snapshot.id,
-            label=snapshot.id,
+            label=snapshot.label or snapshot.id,
             model_type=snapshot.model_type,
             temperature=float(ModelConfig.model_temperature),
             base_url=snapshot.base_url,
             is_default=False,
+            context_window=snapshot.context_window,
         )
     catalog = get_model_catalog()
     normalized = str(model_id or "").strip()

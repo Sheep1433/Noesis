@@ -8,6 +8,7 @@ class ModelCatalogItem(BaseModel):
     context_window: int = Field(0, description="上下文窗口上限（token），圆环分母 / 压缩阈值")
     is_default: bool = Field(False, description="是否为默认模型")
     supports_vision: bool = Field(False, description="是否支持原生 multimodal 看图")
+    custom: bool = Field(False, description="是否为用户自定义模型")
 
 
 class ModelCatalogResponse(BaseModel):

@@ -21,6 +21,7 @@ from server.api import (
     auth_router,
     mcp_router,
     user_settings_router,
+    user_llm_router,
     settings_router,
 )
 from noesis.knowledge.runtime import init_knowledge_base, close_knowledge_base
@@ -131,6 +132,7 @@ controller_list = [
     {'router': auth_router, 'tags': ['认证模块']},
     {'router':  user_router, 'tags': ['用户模块']},
     {'router':  user_settings_router, 'tags': ['用户设置']},
+    {'router':  user_llm_router, 'tags': ['用户模型']},
     {'router':  settings_router, 'tags': ['设置控制面']},
     {'router':  chat_router, 'tags': ['聊天历史模块']},
     {'router':  knowledge_base_router, 'tags': ['知识库模块']},
