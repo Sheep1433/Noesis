@@ -805,7 +805,7 @@ async function saveCollectionConfig() {
 .config-default-hint {
   font-size: 11px;
   font-weight: normal;
-  color: var(--noesis-color-text-secondary, #8b949e);
+  color: var(--noesis-color-text-secondary);
 }
 
 .kb-detail {

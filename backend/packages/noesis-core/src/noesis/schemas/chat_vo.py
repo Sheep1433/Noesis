@@ -69,8 +69,8 @@ class ChildSessionCatalogItem(BaseModel):
 
 
 class ChildSessionCatalogResponse(BaseModel):
-    sessions: List[ChildSessionCatalogItem] = Field(default_factory=list)
-    total: int = 0
+    sessions: List[ChildSessionCatalogItem] = Field(default_factory=list, description='子 Agent 会话目录')
+    total: int = Field(0, description='子 Agent 会话总数')
 
 
 # ============================================================================

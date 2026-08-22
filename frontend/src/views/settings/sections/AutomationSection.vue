@@ -350,7 +350,7 @@ onMounted(() => void refresh())
 .automation-layout { display: grid; gap: 24px 40px; align-items: start; }
 .automation-form { min-width: 0; }
 .automation-list { min-width: 0; }
-@media (min-width: $bp-lg) {
+@media (min-width: $bp-lg + 1px) {
   .automation-layout {
     grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
     grid-template-areas: "list form";
@@ -359,7 +359,7 @@ onMounted(() => void refresh())
   .automation-form { grid-area: form; }
 }
 
-.automation-form-panel { padding: 18px; border: 1px solid var(--noesis-color-border-subtle); border-radius: 14px; background: var(--noesis-color-bg-elevated); }
+.automation-form-panel { padding: 18px; border: 1px solid var(--noesis-color-border-subtle); border-radius: var(--noesis-radius-lg); background: var(--noesis-color-bg-elevated); }
 .automation-form-header { margin-bottom: 18px; }
 .automation-form-header h3, .automation-list-header h3 { margin: 0; color: var(--noesis-color-text-heading); font-size: 16px; font-weight: 650; }
 .automation-form-header p, .automation-list-header p { margin: 5px 0 0; color: var(--noesis-color-text-secondary); font-size: 12px; line-height: 1.5; }
@@ -369,22 +369,22 @@ onMounted(() => void refresh())
 .automation-list-count { flex-shrink: 0; color: var(--noesis-color-text-muted); font-size: 12px; }
 .nl-box { display: grid; gap: 10px; padding-bottom: 0; }
 .task-form { display: grid; gap: 10px; padding-bottom: 0; }
-.schedule-panel { display: grid; gap: 0; max-width: 700px; border: 1px solid var(--noesis-color-border-subtle); border-radius: 14px; overflow: hidden; }
+.schedule-panel { display: grid; gap: 0; max-width: 700px; border: 1px solid var(--noesis-color-border-subtle); border-radius: var(--noesis-radius-lg); overflow: hidden; }
 .schedule-row, .custom-cron-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; border-bottom: 1px solid var(--noesis-color-border-subtle); }
 .schedule-row :deep(.n-select), .custom-cron-row :deep(.n-input) { min-width: 0; }
 .schedule-label { color: var(--noesis-color-text-secondary); font-size: 13px; }
 .schedule-suffix { color: var(--noesis-color-text-secondary); font-size: 13px; }
-.time-input { width: 120px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--noesis-color-border); border-radius: 6px; color: var(--noesis-color-text-primary); background: var(--noesis-color-bg-elevated); font: inherit; }
+.time-input { width: 120px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--noesis-color-border); border-radius: var(--noesis-radius-sm); color: var(--noesis-color-text-primary); background: var(--noesis-color-bg-elevated); font: inherit; }
 .enabled { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 14px; color: var(--noesis-color-text-primary); }
-.preview { color: var(--noesis-color-success, #287a45); font-size: 12px; }
+.preview { color: var(--noesis-color-success); font-size: 12px; }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.task-card { padding: 16px; border: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); border-radius: 12px; background: var(--noesis-color-bg-elevated); }
+.task-card { padding: 16px; border: 1px solid var(--noesis-color-border-subtle); border-radius: var(--noesis-radius-lg); background: var(--noesis-color-bg-elevated); }
 .task-card + .task-card { margin-top: 10px; }
 .task-head { display: flex; justify-content: space-between; gap: 12px; }
 .muted { color: var(--noesis-color-text-secondary); font-size: 12px; }
 .prompt { margin: 8px 0; white-space: pre-wrap; }
-.history { margin-top: 12px; padding: 4px 12px; border-radius: 8px; background: var(--noesis-color-bg-muted, rgba(0,0,0,.03)); }
-.run-row { padding: 10px 0; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
+.history { margin-top: 12px; padding: 4px 12px; border-radius: var(--noesis-radius-sm); background: var(--noesis-color-bg-muted); }
+.run-row { padding: 10px 0; border-bottom: 1px solid var(--noesis-color-border-subtle); }
 .run-row p { margin: 6px 0; font-size: 12px; }
-.error { color: var(--noesis-color-danger, #c2413b); }
+.error { color: var(--noesis-color-danger); }
 </style>
