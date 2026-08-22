@@ -8,6 +8,7 @@ run）需要访问主 loop 的资源（SQLAlchemy 引擎连接池、RunManager�
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future
 from typing import Any, Coroutine
 
 from noesis.runtime.logging import logger
@@ -21,13 +22,16 @@ def capture_main_loop() -> None:
     _MAIN_LOOP = asyncio.get_running_loop()
 
 
-def run_on_main_loop(coro: Coroutine[Any, Any, Any], *, name: str = "") -> None:
-    """把协程投递到主 loop 执行（不等待）；主 loop 不可用时丢弃并记日志。"""
+def run_on_main_loop(coro: Coroutine[Any, Any, Any], *, name: str = "") -> Future | None:
+    """把协程投递到主 loop；返回跨线程 Future，调用方可选择等待。"""
     loop = _MAIN_LOOP
     if loop is None or loop.is_closed():
+        coro.close()
         logger.debug("main loop unavailable, skip scheduled coro {}", name)
-        return
+        return None
     try:
-        asyncio.run_coroutine_threadsafe(coro, loop)
+        return asyncio.run_coroutine_threadsafe(coro, loop)
     except RuntimeError:
+        coro.close()
         logger.debug("main loop scheduling failed, skip {}", name)
+        return None

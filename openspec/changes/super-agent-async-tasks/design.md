@@ -1,4 +1,19 @@
-# Design: SuperAgent 全异步后台子 Agent
+# Design: SuperAgent 子 Agent 会话（最终设计）
+
+> 本文的最终决策以 [`docs/architecture/subagent-sessions.md`](../../../docs/architecture/subagent-sessions.md)
+> 为准。下方早期章节记录过渡期的 BgTask 执行方案，不能作为新的产品数据模型或前端协议。
+
+## 最终决策（2026-08-21）
+
+**subagent = 子 `TChatSession(parent_id=主会话)` + 标准 `TAgentRun` + 标准 `TChatMessage`；只有 shell 才是后台 Job。**
+
+- `run_in_background` 只控制父 Agent 是否等待，不表示 one-shot/continuable，也不改变 child session 身份。
+- 首轮和补充要求都是 child session 的普通 user message；每一轮创建标准 `TAgentRun`。
+- checkpointer 只负责 LangGraph 执行恢复，不能作为产品消息读模型；禁止 checkpoint → DB 的异步镜像作为长期方案。
+- 详情打开时加载标准会话历史并订阅 `/sessions/{id}/events`；关闭立即退订，不使用 progress 触发全量重拉。
+- 主 Agent 与子 Agent 共用同一个 `ConversationView`、MessagePartsRenderer、Markdown、审批和输入框。
+- 父会话只展示带 `child_session_id` 引用的卡片和轻量状态；完成通知必须包含 Agent label、状态、轮次、步骤、耗时。
+- 现有 BgTask 子 Agent 路径属于过渡实现，迁移完成后删除；shell job 可以保留独立执行器。
 
 ## 0. 参照系与结论修正
 
@@ -91,7 +106,7 @@ return f"后台任务已启动：{task_id} ..."
 子 Agent 的完整消息历史持久在隔离 checkpointer 的 `thread_id = task_id` 上。新增读取路径：
 
 - `GET /bg-tasks/{task_id}/messages`：`agent_factory` 产出 worker 后 `aget_state({thread_id})`，把 `state.values["messages"]` 映射为轻量视图项（role / 文本或工具调用名+参数摘要 / 工具结果状态与预览），归属校验同其他 bg API。
-- 前端：任务卡「查看详情」打开抽屉，渲染完整子会话（模型轮次、工具调用、结果、审批暂停点）；5s 轮询的步骤摘要保留为收起态概览。
+- 前端：任务卡展开后渲染完整子会话（模型轮次、工具调用、结果、审批暂停点）；executor 每记录一个新步骤即发布会话级 `progress` SSE，前端据 `progress_count` 重读当前展开项，收起态保留紧凑概览。
 - 运行中任务读取 thread state 与隔离 loop 并发访问同一 checkpointer saver：读取走 saver 的连接池（线程安全），不改写状态，只读安全。
 
 ## 5. 完成通知（已实现，随后台命令扩展）
@@ -139,7 +154,7 @@ dsh 默认 true（新会话无历史习惯）；Noesis 的 `execute` 已上线�
 - 状态机复用（running → completed/failed/cancelled），但 shell 任务**无 awaiting_approval**（审批在工具调用时已发生）。
 - 超时独立：不受 subagent 任务超时（900s）约束——长命令正是后台化动机；`subagents.shell_task_timeout_seconds`（默认 0=不限时），防泄漏靠 cancel_task + 容器生命周期。
 - `check_task` 收果：completed 返回 exit code + 有界 stdout/stderr 尾部；`cancel_task` 复用（cancel 后容器内进程由 sandbox-runner 终止或随容器回收，尽力而为）。
-- one_shot 语义：不可 `send_message` 续话（命令非对话性任务），面板可查看。
+- shell 任务不可 `send_message` 续话（命令不是对话性任务），面板可查看；所有 subagent 任务均支持 follow-up。
 - 会话沙箱销毁（session 删除 / 沙箱回收）时运行中任务转 failed，错误注明容器回收。
 
 ### 6.5 暴露面汇总
@@ -173,6 +188,6 @@ dsh 默认 true（新会话无历史习惯）；Noesis 的 `execute` 已上线�
 
 - executor 契约：前台等待返回终态文本；followup 链式 turn（running 入队 → 当前 turn 完 → 新 turn 执行）；completed 冷恢复；failed 拒续；审批期入队 resume 后消费。
 - 子会话读取：真实 MemorySaver worker 跑完后 aget_state 映射的视图项断言。
-- shell 任务契约：run_in_background=true 立即返回 task_id；前台参数缺省委托原工具（超时/截断语义不变）；completed 返回 exit code + 输出尾部；不可 send_message；沙箱销毁转 failed。
+- shell 任务契约：run_in_background=true 立即返回 task_id；前台参数缺省委托原工具（超时/截断语义不变）；completed 返回 exit code + 输出尾部；不可 send_message；沙箱销毁转 failed。subagent 任务统一支持 `send_message` follow-up。
 - prompt：`run_in_background` / 前台 / 通知 / followup / 长命令后台化关键词断言。
 - 通知注入与工具面回归不变。

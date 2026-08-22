@@ -39,10 +39,12 @@ def _to_row_values(snapshot: dict[str, Any]) -> dict[str, Any]:
     completed_at = snapshot.get("completed_at")
     return {
         "task_id": str(snapshot["task_id"]),
+        "child_session_id": snapshot.get("child_session_id"),
+        "run_id": snapshot.get("run_id"),
         "session_id": str(snapshot["session_id"]),
         "user_id": str(snapshot.get("user_id") or ""),
         "description": str(snapshot.get("description") or ""),
-        "kind": str(snapshot.get("kind") or "continuable"),
+        "kind": str(snapshot.get("kind") or "subagent"),
         "status": str(snapshot.get("status") or "running"),
         "result": snapshot.get("result"),
         "error": snapshot.get("error"),
@@ -55,6 +57,8 @@ def _to_row_values(snapshot: dict[str, Any]) -> dict[str, Any]:
 def _to_snapshot(row: TBackgroundTask) -> dict[str, Any]:
     return {
         "task_id": row.task_id,
+        "child_session_id": row.child_session_id,
+        "run_id": row.run_id,
         "session_id": row.session_id,
         "user_id": row.user_id,
         "description": row.description,
@@ -86,6 +90,16 @@ def save_task_snapshot(snapshot: dict[str, Any]) -> None:
 def get_task_snapshot(task_id: str) -> dict[str, Any] | None:
     with pg_manager.get_sync_session() as db:
         row = db.get(TBackgroundTask, task_id)
+        return _to_snapshot(row) if row is not None else None
+
+
+def get_task_snapshot_by_child_session_id(session_id: str) -> dict[str, Any] | None:
+    with pg_manager.get_sync_session() as db:
+        row = db.execute(
+            select(TBackgroundTask)
+            .where(TBackgroundTask.child_session_id == session_id)
+            .limit(1)
+        ).scalar_one_or_none()
         return _to_snapshot(row) if row is not None else None
 
 
@@ -135,6 +149,9 @@ class BgTaskRepositoryAdapter:
     def get(self, task_id: str) -> dict[str, Any] | None:
         return get_task_snapshot(task_id)
 
+    def get_by_child_session_id(self, session_id: str) -> dict[str, Any] | None:
+        return get_task_snapshot_by_child_session_id(session_id)
+
     def list_for_session(self, session_id: str) -> list[dict[str, Any]]:
         return list_task_snapshots(session_id)
 
@@ -142,6 +159,7 @@ class BgTaskRepositoryAdapter:
 __all__ = [
     "BgTaskRepositoryAdapter",
     "get_task_snapshot",
+    "get_task_snapshot_by_child_session_id",
     "list_task_snapshots",
     "reconcile_interrupted_tasks",
     "save_task_snapshot",

@@ -7,6 +7,7 @@ import {
   assistantToolFailureSummary,
   COMPACTION_BOUNDARY,
   completeReasoningPart,
+  formatDurationMs,
   formatUsageSummary,
   hasValidContextWindow,
   hasValidUsage,
@@ -17,6 +18,14 @@ import {
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
 } from '@/views/chat/messageParts'
+
+describe('duration formatting', () => {
+  it('uses one compact format across short, second and minute durations', () => {
+    expect(formatDurationMs(5.6)).toBe('<1s')
+    expect(formatDurationMs(12_300)).toBe('12s')
+    expect(formatDurationMs(65_000)).toBe('1m 05s')
+  })
+})
 
 describe('message parts snapshot normalization', () => {
   it('reasoning-end 按 part_id 闭合对应思考，不误关闭交错的 subagent 思考', () => {

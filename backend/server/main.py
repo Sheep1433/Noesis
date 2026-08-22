@@ -79,6 +79,11 @@ async def lifespan(app: FastAPI):
         await init_database()
         async with pg_manager.get_async_session_context() as recovery_db:
             await RunRecoveryService.recover_orphaned_runs(recovery_db)
+            from noesis.services.subagent_session_service import SubagentSessionService
+
+            orphaned_subagents = await SubagentSessionService.reconcile_orphaned_runs(recovery_db)
+            if orphaned_subagents:
+                logger.warning("子 Agent 对账：{} 个遗留 run 已标记为中断", orphaned_subagents)
 
         resources.push_async_callback(shutdown_sandboxes)
         await init_checkpointer()

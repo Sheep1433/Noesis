@@ -120,7 +120,13 @@ function mergeAdjacentParallelTools(entries: DisplayPartEntry[]): DisplayPartEnt
   let i = 0
   while (i < entries.length) {
     const entry = entries[i]
-    if (entry.kind !== 'part' || entry.part.type !== 'tool' || !entry.part.step_id) {
+    // 每次 start_task 委派都是独立卡片，不能折叠进通用并行工具组。
+    if (
+      entry.kind !== 'part'
+      || entry.part.type !== 'tool'
+      || entry.part.name === 'start_task'
+      || !entry.part.step_id
+    ) {
       result.push(entry)
       i += 1
       continue
@@ -130,7 +136,12 @@ function mergeAdjacentParallelTools(entries: DisplayPartEntry[]): DisplayPartEnt
     let j = i + 1
     while (j < entries.length) {
       const next = entries[j]
-      if (next.kind === 'part' && next.part.type === 'tool' && next.part.step_id === stepId) {
+      if (
+        next.kind === 'part'
+        && next.part.type === 'tool'
+        && next.part.name !== 'start_task'
+        && next.part.step_id === stepId
+      ) {
         group.push(next.part)
         j += 1
         continue

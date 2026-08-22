@@ -16,6 +16,15 @@ function makeTool(id: string, stepId?: string): ToolUiPart {
   }
 }
 
+function makeStartTask(id: string, stepId = 'root:1'): ToolUiPart {
+  return {
+    ...makeTool(id, stepId),
+    name: 'start_task',
+    input: { description: id },
+    output: `后台任务已启动：bg-${id}`,
+  }
+}
+
 function makeText(id: string, content = 'txt'): UiPart {
   return { id, type: 'text', content, status: 'completed' }
 }
@@ -67,5 +76,11 @@ describe('buildDisplayParts parallel tool grouping', () => {
     const parts: UiPart[] = [makeTool('a', 's:1'), makeTool('b', 's:2')]
     const out = buildDisplayParts(parts)
     expect(kinds(out)).toEqual(['part', 'part'])
+  })
+
+  it('并行 start_task 保持每次委派独立卡片', () => {
+    const out = buildDisplayParts([makeStartTask('a'), makeStartTask('b')])
+    expect(kinds(out)).toEqual(['part', 'part'])
+    expect(out.every((entry) => entry.kind === 'part' && entry.part.name === 'start_task')).toBe(true)
   })
 })

@@ -3,6 +3,7 @@ import type { SettingsSectionId } from './registry'
 import { useDialog } from 'naive-ui'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { resolveSettingsSection } from './registry'
 import AccountSection from './sections/AccountSection.vue'
 import AutomationSection from './sections/AutomationSection.vue'
@@ -17,6 +18,7 @@ import SettingsNav from './SettingsNav.vue'
 const route = useRoute()
 const router = useRouter()
 const dialog = useDialog()
+const { isMobile } = useBreakpoint()
 
 const section = computed<SettingsSectionId>(() => resolveSettingsSection(route.query.s))
 const hasUnsavedChanges = ref(false)
@@ -69,7 +71,7 @@ onBeforeRouteLeave(async () => confirmDiscard())
 </script>
 
 <template>
-  <div class="settings">
+  <div class="settings" :class="{ 'settings--mobile': isMobile }">
     <header class="settings-header">
       <h1 class="settings-title">
         设置
@@ -140,6 +142,14 @@ onBeforeRouteLeave(async () => confirmDiscard())
   gap: 24px;
   min-height: 0;
   flex: 1;
+}
+
+.settings--mobile {
+  padding: var(--noesis-shell-padding-mobile, 16px);
+}
+
+.settings--mobile .settings-body {
+  flex-direction: column;
 }
 
 .settings-main {

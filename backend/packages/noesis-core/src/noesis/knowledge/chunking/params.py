@@ -163,10 +163,12 @@ DEFAULT_COLLECTION_QUERY: Dict[str, Any] = {
     "recall_top_k": 20,
     "rerank_top_k": 15,
     "final_top_k": 10,
-    # rerank 相关性阈值（gte-rerank-v2 的 0~1 分）：低于 0.3 视为不相关，滤除。
+    # rerank 相关性阈值（gte-rerank-v2 的 0~1 分）：低于阈值视为不相关，滤除。
     # 仅 rerank 实际生效时应用（retrieval/service.py）；recall/RRF 分数量纲不兼容。
+    # 0.1 为 ERB 评测扫描（2026-08-20，21 题）校准值：正确文档 rerank 分中位数 ~0.20、
+    # p25 ~0.18，无关文档中位数 ~0.08；0.3 会杀掉近半正确答案（16/21）且中文跨语检索更低。
     # null/缺省 = 跟随平台默认（normalize_query_execution_params 回填本值）；配 0 = 显式关闭。
-    "score_threshold": 0.3,
+    "score_threshold": 0.1,
     "rrf_k": 60,
 }
 

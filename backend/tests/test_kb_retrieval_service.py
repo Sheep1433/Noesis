@@ -45,6 +45,7 @@ def test_search_vector_mode(mock_get_retrieval, mock_retrieval):
         query="test",
         search_mode="vector",
         limit=3,
+        score_threshold=0,
         vector_dimension=1024,
     )
 
@@ -133,6 +134,7 @@ def test_search_hybrid_uses_rrf(mock_get_retrieval, mock_retrieval):
         limit=5,
         recall_top_k=5,
         rrf_k=60,
+        score_threshold=0,
         vector_dimension=1024,
     )
 
@@ -236,3 +238,55 @@ def test_rerank_preserves_evidence_identity(mock_rerank) -> None:
     assert reranked[0].segment_id == "seg-1"
     assert reranked[0].locator == original.locator
     assert reranked[0].citable is True
+
+
+@patch("noesis.knowledge.retrieval.service.rerank_documents")
+@patch("noesis.knowledge.retrieval.service.is_rerank_available", return_value=True)
+@patch.object(knowledge_base, "_connected", True)
+@patch.object(KbRetrievalService, "_get_retrieval")
+def test_threshold_filters_low_rerank_scores(mock_get_retrieval, _avail, mock_rerank, mock_retrieval):
+    """rerank 生效时，低于 score_threshold 的命中被滤除（默认 0.1，ERB 评测校准）。"""
+    mock_get_retrieval.return_value = mock_retrieval
+    mock_retrieval.vector_search.return_value = [
+        (
+            Document(page_content="relevant", metadata={"file_name": "a.md", "point_id": "pt-1"}),
+            0.9,
+        ),
+        (
+            Document(page_content="irrelevant", metadata={"file_name": "b.md", "point_id": "pt-2"}),
+            0.8,
+        ),
+    ]
+    # rerank 给出高/低两档分数：0.6 过阈值，0.05 被滤
+    mock_rerank.return_value = [(0, 0.6), (1, 0.05)]
+
+    result = KbRetrievalService.search(
+        collection_name="kb1",
+        query="agent",
+        search_mode="vector",
+        vector_dimension=1024,
+    )
+    assert [h.file_name for h in result.hits] == ["a.md"]
+
+
+@patch("noesis.knowledge.retrieval.service.is_rerank_available", return_value=False)
+@patch.object(knowledge_base, "_connected", True)
+@patch.object(KbRetrievalService, "_get_retrieval")
+def test_threshold_not_applied_without_rerank(mock_get_retrieval, _unavail, mock_retrieval):
+    """rerank 未启用/降级时 score 是 RRF/向量分量纲，绝对阈值不应用（否则会滤空）。"""
+    mock_get_retrieval.return_value = mock_retrieval
+    # RRF 融合分量纲 ~0.0x，远低于阈值；不应被默认阈值滤掉
+    mock_retrieval.vector_search.return_value = [
+        (
+            Document(page_content="fused", metadata={"file_name": "a.md", "point_id": "pt-1"}),
+            0.03,
+        ),
+    ]
+
+    result = KbRetrievalService.search(
+        collection_name="kb1",
+        query="q",
+        search_mode="vector",
+        vector_dimension=1024,
+    )
+    assert len(result.hits) == 1

@@ -21,6 +21,7 @@ const props = defineProps<{
   defaultRerankTopK?: number
   defaultUseReranker?: boolean
   defaultRrfK?: number
+  defaultScoreThreshold?: number
 }>()
 
 const emit = defineEmits<{
@@ -125,7 +126,7 @@ function onSearch() {
               :max="1"
               :step="0.01"
               clearable
-              placeholder="使用集合默认"
+              :placeholder="`默认 ${props.defaultScoreThreshold ?? 0.1}`"
               style="width: 100%"
             />
           </n-form-item>

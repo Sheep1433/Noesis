@@ -128,8 +128,9 @@ export const fetchConversationHistory = async function fetchConversationHistory(
       msg_metadata?: any
       parent_id?: string | null
       message_id?: string
-      /** 系统注入消息标记（bg_task_notice 等）：渲染为通知条而非用户气泡 */
+      /** 系统注入消息标记（bg_task_notice 等）：渲染为系统状态条 */
       source_kind?: string
+      child_session_ids?: string[]
     }>
   >,
   tableData: Ref<TableItem[]>,
@@ -245,6 +246,9 @@ export async function loadSessionMessages(
             mentions: Array.isArray(msg.extra?.mentions) ? msg.extra.mentions : undefined,
             // 系统注入消息（如后台任务通知）标记：渲染为通知条而非用户气泡
             source_kind: typeof msg.extra?.source_kind === 'string' ? msg.extra.source_kind : undefined,
+            child_session_ids: Array.isArray(msg.extra?.child_session_ids)
+              ? msg.extra.child_session_ids.map(String)
+              : undefined,
             role: 'user' as const,
             reader: null,
             parent_id: msg.parent_id,

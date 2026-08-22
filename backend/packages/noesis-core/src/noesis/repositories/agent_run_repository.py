@@ -49,6 +49,15 @@ class AgentRunRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_latest_for_session(self, user_id: str, session_id: str) -> TAgentRun | None:
+        result = await self.db.execute(
+            select(TAgentRun)
+            .where(TAgentRun.user_id == user_id, TAgentRun.session_id == session_id)
+            .order_by(TAgentRun.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_run_times_for_session(self, session_id: str) -> dict[str, tuple[int | None, int | None]]:
         """assistant_message_id → (started_at, finished_at)。
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 
 import pytest
@@ -22,15 +21,18 @@ def test_merge_path_puts_homebrew_before_system() -> None:
     assert parts[-1] == "/custom/bin"
 
 
-def test_build_shell_execute_env_strips_secrets_keeps_gh_token(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_shell_execute_env_strips_secrets_and_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODEL_API_KEY", "sk-secret")
     monkeypatch.setenv("GH_TOKEN", "gho_test")
+    monkeypatch.setenv("GITHUB_TOKEN", "gho_test2")
     monkeypatch.setenv("MY_APP_SETTING", "ok")
 
     env = build_shell_execute_env()
 
     assert "MODEL_API_KEY" not in env
-    assert env.get("GH_TOKEN") == "gho_test"
+    # 凭证一律不进 shell 子进程（含 GitHub token：模型可借子进程读取外传）
+    assert "GH_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
     assert env.get("MY_APP_SETTING") == "ok"
     assert "/opt/homebrew/bin" in env["PATH"].split(":")
 

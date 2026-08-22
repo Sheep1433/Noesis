@@ -333,7 +333,10 @@ async def run_channel_agent(
         ctx = qs._new_stream_ctx()
 
         if await qs._insert_streaming_assistant_skeleton(
-            bridge.assistant_message_id, session_id, current_user.user_id
+            bridge.assistant_message_id,
+            session_id,
+            current_user.user_id,
+            {"qa_type": qa_type, "origin": origin},
         ):
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 

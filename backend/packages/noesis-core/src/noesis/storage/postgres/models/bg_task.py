@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import BigInteger, Index, String, Text
+from sqlalchemy import BigInteger, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from noesis.storage.postgres.base import Base
@@ -24,13 +24,19 @@ class TBackgroundTask(Base):
     task_id: Mapped[str] = mapped_column(
         String(40), primary_key=True, comment="任务 ID（bg-*）"
     )
+    child_session_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey('t_chat_session.id', ondelete='CASCADE'), nullable=True, comment="子 Agent 会话 ID（与内部 task_id 分离）"
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey('t_agent_run.id', ondelete='SET NULL'), nullable=True, comment="标准 t_agent_run ID"
+    )
     session_id: Mapped[str] = mapped_column(
         String(64), nullable=False, comment="所属会话"
     )
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="归属用户")
     description: Mapped[str] = mapped_column(Text, nullable=False, comment="子目标描述")
     kind: Mapped[str] = mapped_column(
-        String(16), nullable=False, comment="continuable | one_shot"
+        String(16), nullable=False, comment="shell（仅后台命令任务）"
     )
     status: Mapped[str] = mapped_column(
         String(24), nullable=False, comment="running/awaiting_approval/终态"

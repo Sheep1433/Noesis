@@ -470,6 +470,7 @@ async def _insert_streaming_assistant_skeleton(
     assistant_message_id: str,
     session_id: str,
     user_id: str,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """流开始前插入 assistant 骨架行（与 SSE assistant_message_id 同 id）。"""
     try:
@@ -479,7 +480,7 @@ async def _insert_streaming_assistant_skeleton(
                 user_id=user_id,
                 role="assistant",
                 content={"version": 1, "parts": []},
-                extra={},
+                extra=extra or {},
                 status="streaming",
                 message_id=assistant_message_id,
                 db=persist_db,

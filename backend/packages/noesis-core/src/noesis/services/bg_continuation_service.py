@@ -91,7 +91,15 @@ async def maybe_continue(session_id: str, user_id: str) -> dict[str, Any] | None
                 client_request_id=f"bgc-{uuid.uuid4()}",
                 # source_kind 随 user message extra 落库：前端据此渲染为系统
                 # 通知条而非用户气泡（通知不伪装成用户输入）
-                extra={"bg_continuation": True, "source_kind": "bg_task_notice"},
+                extra={
+                    "bg_continuation": True,
+                    "source_kind": "bg_task_notice",
+                    "child_session_ids": [
+                        str(notice.get("task_id"))
+                        for notice in notices
+                        if notice.get("task_id") and not str(notice.get("task_id")).startswith("bg-")
+                    ],
+                },
             )
             run = await RunService.create(request, current_user, db)
     except ConflictException:
@@ -117,6 +125,11 @@ async def maybe_continue(session_id: str, user_id: str) -> dict[str, Any] | None
         "run_id": run.id,
         "assistant_message_id": run.assistant_message_id,
         "notice": content,
+        "child_session_ids": [
+            str(notice.get("task_id"))
+            for notice in notices
+            if notice.get("task_id") and not str(notice.get("task_id")).startswith("bg-")
+        ],
     })
     return {"run_id": run.id, "assistant_message_id": run.assistant_message_id}
 

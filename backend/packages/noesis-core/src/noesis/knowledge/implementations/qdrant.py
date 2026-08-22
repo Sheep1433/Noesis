@@ -4,6 +4,7 @@ Qdrant 向量库服务
 import base64
 import hashlib
 import json
+import re
 from typing import Any, Dict, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -45,6 +46,20 @@ _SAFE_RAW_METADATA_KEYS = frozenset(
         "row_end",
     }
 )
+
+
+def _sanitize_source(source: Any) -> Optional[str]:
+    """source 元数据只保留原始文件名：历史数据可能写入了 staging 绝对路径
+    （暴露服务器目录结构），且文件名可能带 staging 追加的内容 hash 前缀
+    （sha256 hex + "_"），一并剥掉。"""
+    if not source or not isinstance(source, str):
+        return None
+    # 纯文件名（无 / 或 \）原样返回；路径取最后一段。
+    name = source.replace("\\", "/").rsplit("/", 1)[-1]
+    # 剥 staging hash 前缀：staging 文件名为 sha256 前 32 位 hex + "_" + 原名
+    name = re.sub(r"^[0-9a-f]{32}_", "", name)
+    return name or None
+
 
 class QdrantService(KnowledgeBase):
     """Qdrant 服务封装类"""
@@ -734,7 +749,9 @@ class QdrantService(KnowledgeBase):
                 'document_id': payload.get('document_id') or None,
                 'document_version_id': payload.get('document_version_id') or None,
                 'segment_id': payload.get('segment_id') or None,
-                'source': payload.get('source') or None,
+                # 防御性剥路径：历史/漏网数据可能把 staging 绝对路径写进了 source
+                # （暴露服务器目录结构与内容 hash），读出一律只留文件名。
+                'source': _sanitize_source(payload.get('source')),
                 'raw_text': payload.get('raw_text'),
                 'clean_text': payload.get('clean_text'),
                 'raw_metadata': safe_metadata,

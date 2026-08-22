@@ -76,9 +76,9 @@ function submit() {
 .hitl-clarification-card {
   margin: 8px 0 12px;
   padding: 12px 14px;
-  border: 1px solid var(--noesis-border-subtle, #e5e5e5);
-  border-radius: 8px;
-  background: var(--noesis-surface-muted, #f7f7f5);
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-lg);
+  background: var(--noesis-color-bg-muted);
 }
 
 .hitl-clarification-card__title {

@@ -34,6 +34,9 @@ class ChatSessionResponse(BaseModel):
     """会话响应"""
     id: str = Field(..., description='会话 UUID')
     parent_id: Optional[str] = Field(None, description='父会话 ID')
+    kind: str = Field('root', description='会话类型: root | subagent')
+    created_by_run_id: Optional[str] = Field(None, description='创建该子会话的 Agent run ID')
+    created_by_tool_call_id: Optional[str] = Field(None, description='创建该子会话的工具调用 ID')
     user_id: str = Field(..., description='用户 ID')
     title: str = Field(..., description='会话标题')
     extra: Optional[Dict[str, Any]] = Field(None, description='会话元数据')
@@ -48,6 +51,26 @@ class SessionListResponse(BaseModel):
     """会话列表响应"""
     sessions: List[ChatSessionResponse] = Field(..., description='会话列表')
     total: int = Field(..., description='总数')
+
+
+class ChildSessionCatalogItem(BaseModel):
+    """父会话中的子 Agent 目录项；正文仍通过标准 messages API 读取。"""
+    session_id: str = Field(..., description='子会话 ID')
+    parent_id: str = Field(..., description='父会话 ID')
+    title: str = Field(..., description='子 Agent 标题')
+    profile_id: str = Field('task-worker', description='子 Agent 配置标识')
+    run_id: Optional[str] = Field(None, description='当前或最近一轮 Agent run ID')
+    status: str = Field('completed', description='子 Agent 状态')
+    turn_count: int = Field(0, description='对话轮数')
+    step_count: int = Field(0, description='执行步数')
+    started_at: Optional[int] = Field(None, description='最近一轮开始时间（Unix 毫秒）')
+    finished_at: Optional[int] = Field(None, description='最近一轮结束时间（Unix 毫秒）')
+    interrupt: Optional[Dict[str, Any]] = Field(None, description='待审批信息')
+
+
+class ChildSessionCatalogResponse(BaseModel):
+    sessions: List[ChildSessionCatalogItem] = Field(default_factory=list, description='子 Agent 会话目录')
+    total: int = Field(0, description='子 Agent 会话总数')
 
 
 # ============================================================================
@@ -122,6 +145,11 @@ class SendMessageRequest(BaseModel):
     parent_id: Optional[str] = Field(None, description='父消息 ID')
     role: Literal['user', 'assistant'] = Field('user', description='角色: user | assistant')
     extra: Optional[Dict[str, Any]] = Field(None, description='额外元数据')
+
+
+class SubagentFollowupRequest(BaseModel):
+    """向现有 child session 发起下一轮对话。"""
+    message: str = Field(..., min_length=1, description='补充要求')
 
 
 class CreateRunRequest(BaseModel):

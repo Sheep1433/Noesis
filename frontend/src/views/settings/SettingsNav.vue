@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { SettingsSectionId } from './registry'
 import { computed, nextTick, ref } from 'vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { filterSettingsSections } from './registry'
 
 const props = defineProps<{
@@ -10,6 +11,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'select', value: SettingsSectionId): void
 }>()
+
+const { isMobile } = useBreakpoint()
 
 const query = ref('')
 const buttonRefs = ref<HTMLButtonElement[]>([])
@@ -40,7 +43,7 @@ async function onKeydown(event: KeyboardEvent, index: number) {
 </script>
 
 <template>
-  <aside class="settings-nav-wrap">
+  <aside class="settings-nav-wrap" :class="{ 'settings-nav-wrap--mobile': isMobile }">
     <label class="settings-nav-search">
       <span class="sr-only">搜索设置</span>
       <input v-model="query" type="search" placeholder="搜索设置" aria-label="搜索设置" autocomplete="off">
@@ -143,6 +146,21 @@ async function onKeydown(event: KeyboardEvent, index: number) {
   background: var(--noesis-color-bg-muted, rgba(0, 0, 0, 0.06));
   color: var(--noesis-color-text-heading);
   font-weight: 600;
+}
+
+.settings-nav-wrap--mobile .settings-nav {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.settings-nav-wrap--mobile .settings-nav__item {
+  flex: 0 0 auto;
+}
+
+.settings-nav-wrap--mobile .settings-nav__item small {
+  display: none;
 }
 
 @media (max-width: $bp-md) {

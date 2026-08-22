@@ -760,6 +760,19 @@ class RunService:
         return handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)
 
     @classmethod
+    async def get_latest_for_session(
+        cls, session_id: str, user_id: str, db: AsyncSession
+    ) -> RunSnapshot | None:
+        """查询会话最近一轮 run，供会话级 SSE 入口选择默认 run。"""
+        session = await ChatService.get_session_by_id(session_id, user_id, db)
+        if session is None:
+            raise NotFoundException(message="会话不存在")
+        row = await AgentRunRepository(db).get_latest_for_session(user_id, session_id)
+        if row is None:
+            return None
+        return await cls.get(row.id, user_id, db)
+
+    @classmethod
     async def stop(cls, run_id: str, user_id: str, db: AsyncSession) -> RunSnapshot:
         row = await AgentRunRepository(db).get(run_id, user_id)
         if row is None:

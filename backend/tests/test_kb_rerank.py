@@ -94,7 +94,8 @@ def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _svc_avail, _c
     result = KbRetrievalService.search(
         collection_name="kb1",
         query="test",
-        query_execution_params={"use_reranker": True, "final_top_k": 2, "recall_top_k": 10},
+        # score_threshold=0：显式关闭阈值（本测试验证降级排序，不验证相关性过滤）
+        query_execution_params={"use_reranker": True, "final_top_k": 2, "recall_top_k": 10, "score_threshold": 0},
         vector_dimension=1024,
     )
     hits = result.hits
@@ -137,6 +138,8 @@ def test_retrieval_caps_rerank_input(mock_get_retrieval, _avail, mock_rerank):
             "final_top_k": 3,
             "recall_top_k": 10,
             "rerank_top_k": 3,
+            # 显式关闭阈值：本测试验证 rerank 输入截断，mock 分数 0.1 低于默认阈值会被滤
+            "score_threshold": 0,
         },
         vector_dimension=1024,
     )
