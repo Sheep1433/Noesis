@@ -1,3 +1,7 @@
+> **最终修订（2026-08-21）**：subagent 审批不再使用 `/bg-tasks/*` 产品接口，统一复用
+> `/runs/{run_id}/hitl/resume`；详情抽屉直接渲染标准 run 的 `pending_hitl`，并可通过
+> `/runs/{run_id}/stop` 停止。下方旧条目是迁移前记录。
+
 ## ADDED Requirements
 
 ### Requirement: 后台子 Agent 工具审批

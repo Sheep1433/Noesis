@@ -1,3 +1,10 @@
+> **最终修订（2026-08-21）**：本文件早期条目记录的 `/bg-tasks` 子 Agent 产品接口已废弃。
+> 当前规范以 [`docs/architecture/subagent-sessions.md`](../../../../docs/architecture/subagent-sessions.md)
+> 为准：subagent 是 child `ChatSession` + 标准 `AgentRun` + 标准 `ChatMessage`；只有 shell
+> 是后台 Job。详情走 `/sessions/{id}/messages` 与 `/runs/{run_id}/stream`，follow-up 走
+> `/sessions/{id}/subagent-followup`，审批/停止走标准 run API。以下旧条目仅保留迁移记录，
+> 不得作为新代码实现依据。
+
 ## ADDED Requirements
 
 ### Requirement: 后台子 Agent 执行模型
@@ -89,12 +96,13 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 
 ### Requirement: 子会话查看
 
-后台任务的子 Agent 完整消息历史 SHALL 持久于隔离 checkpointer 的 `thread_id = task_id`。`GET /bg-tasks/{task_id}/messages` SHALL 读取该 thread 状态并返回轻量视图项（角色 / 文本或工具调用名与参数摘要 / 工具结果状态与预览），读取 SHALL 为只读操作（`aget_state`，不改写状态机），归属校验与其他后台任务 API 一致。前端 SHALL 在任务卡提供「查看详情」入口，渲染完整子会话（模型轮次、工具调用、结果、审批暂停点）；步骤摘要轮询 SHALL 保留为收起态概览。
+后台任务的子 Agent 完整消息历史 SHALL 持久于隔离 checkpointer 的 `thread_id = task_id`。`GET /bg-tasks/{task_id}/messages` SHALL 读取该 thread 状态并返回轻量视图项（角色 / 文本或工具调用名与参数摘要 / 工具结果状态与预览），读取 SHALL 为只读操作（`aget_state`，不改写状态机），归属校验与其他后台任务 API 一致。前端 SHALL 在任务卡提供「查看详情」入口，渲染完整子会话（模型轮次、工具调用、结果、审批暂停点）；executor 每记录一个新步骤 SHALL 发布会话级 `progress` SSE，负载携带递增 `progress_count`，前端 SHALL 据此刷新当前展开项并更新收起态概览。
 
 #### Scenario: 查看运行中任务过程
 
 - **WHEN** 任务 running 时请求其 messages
 - **THEN** SHALL 返回截至当前 turn 的已提交消息视图项，不干扰执行
+- **AND** 后续新增步骤的 `progress` SSE SHALL 触发已展开任务自动刷新，无需刷新页面
 
 #### Scenario: 查看已完成任务
 
@@ -158,7 +166,7 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 
 - **WHEN** shell 任务到达 completed 并被 `check_task` 收取
 - **THEN** SHALL 返回 exit code 与有界的 stdout/stderr 尾部摘要
-- **AND** shell 任务 SHALL 为 one_shot 语义：可查看、可 `cancel_task`，SHALL NOT 支持 `send_message` 续话
+- **AND** shell 任务 SHALL 为非对话任务：可查看、可 `cancel_task`，SHALL NOT 支持 `send_message` 续话；subagent 任务 SHALL 支持 `send_message` 续话
 
 #### Scenario: 超时与生命周期
 

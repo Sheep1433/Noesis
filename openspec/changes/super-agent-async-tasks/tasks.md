@@ -29,7 +29,7 @@
 - [x] 4.2 `SteeringMiddleware`：wrap_model_call 按 thread_id drain 指令，追加 `HumanMessage("[用户策略调整] …")` 后 override request.messages；消费即清空
 - [x] 4.3 task-worker 栈挂载 SteeringMiddleware（仅 SUBAGENT profile）；awaiting_approval 期间入队、resume 后首个模型调用生效的契约测试
 - [x] 4.4 模型工具 `send_message(task_id, message)`；用户侧 API `POST /bg-tasks/{id}/message`（BgTaskService 归属校验）
-- [x] 4.5 BgTaskPanel 任务卡发送指令输入（抽屉详情底部 composer，运行中/已完成 continuable 任务可用）
+- [x] 4.5 BgTaskPanel 任务卡发送指令输入（抽屉详情底部 composer，所有 subagent 任务可用；shell 任务除外）
 
 ## 5. 完成通知
 
@@ -57,7 +57,22 @@
 
 - [x] 8.1 executor 泛化：`start_shell`（kind="shell"，不经 worker 编译，backend.aexecute 执行；无 awaiting_approval；`shell_task_timeout_seconds` 默认 0=不限时）；会话沙箱销毁时运行中任务转 failed（`fail_session_shell_tasks`，挂接 `destroy_session_sandbox`）
 - [x] 8.2 工具替换：`shell_tool.replace_execute_tool`（经 `filesystem_middleware_hook` 在 stack 装配层替换；同名 + `run_in_background` 默认 false；false 原样委托原工具，true 走 start_shell 立即返回 task_id）；同名断言覆盖 interrupt_on["execute"] 按名匹配；真实 FilesystemMiddleware 集成验证前台输出不变
-- [x] 8.3 check_task 对 shell 任务返回 exit code + 有界 stdout/stderr 尾部（`_format_shell_result`，尾部 4000 字符）；shell 任务 one_shot 语义（send_message 拒绝）；cancel_task 复用
+- [x] 8.3 check_task 对 shell 任务返回 exit code + 有界 stdout/stderr 尾部（`_format_shell_result`，尾部 4000 字符）；shell 任务不可追加对话（send_message 拒绝）；cancel_task 复用
 - [x] 8.4 前端 BgTaskPanel：shell 任务卡带「命令」标记 + 子会话视图由命令/结果合成（后端 shell 分支），无 followup 输入；终态通知走既有 bg_task_notice 管线（`_notify_terminal` 通用）
 - [x] 8.5 prompt：长命令后台化指引（预期超过几十秒设 run_in_background=true）+ 关键词断言
-- [x] 8.6 契约测试：tests/test_bg_shell_tasks.py（9 例：生命周期/输出截断/one_shot/沙箱销毁/超时/前台委托零变化/后台启动/超并发优雅拒绝/无 execute 工具静默跳过）
+- [x] 8.6 契约测试：tests/test_bg_shell_tasks.py（9 例：生命周期/输出截断/不可追加对话/沙箱销毁/超时/前台委托零变化/后台启动/超并发优雅拒绝/无 execute 工具静默跳过）
+
+## 9. 最终架构收敛：子 Agent 会话化（当前实施目标）
+
+> 旧的 1–8 节描述的是过渡期 BgTask 实现。9 节覆盖最终方案；完成后删除 subagent 的
+> BgTask 产品路径，shell job 保留独立执行器。
+
+- [x] 9.1 固化 `TChatSession.kind`、`created_by_run_id`、`created_by_tool_call_id`，根历史只返回 `kind=root` 会话
+- [ ] 9.2 创建 child session、首条 user message、首个 `TAgentRun` 必须在同一 launch use case 中完成；task id 与 child session id 分离
+- [ ] 9.3 child 每个 turn 使用标准 `TAgentRun`，移除 executor 的产品消息镜像和 `persisted_message_ids`
+- [ ] 9.4 新增通用 session event stream（序号、重放、断线恢复）；详情打开才订阅正文事件，关闭立即退订
+- [ ] 9.5 `start_task` / follow-up / approval 改走 child session + RunService，工具输出返回结构化 child reference
+- [ ] 9.6 父会话卡片使用 `created_by_tool_call_id` 一一关联，禁止从工具文本正则提取 task id；同名并行调用保持独立
+- [ ] 9.7 抽取共享 `ConversationView`，主 Agent 与 child drawer 共用 Markdown、工具块、审批、输入框和耗时统计
+- [ ] 9.8 删除 `/bg-tasks/{id}/messages*`、subagent BgTaskPanel/BackgroundSubagentCollapse 消息分支及 progress 全量重拉
+- [ ] 9.9 补充并行、同名、多轮、审批、断线恢复、关闭退订、父会话软删级联回归测试
