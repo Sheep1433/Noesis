@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { ChatModelCatalog } from '@/api/models'
-import type { UserLLMModel, UserLLMProvider } from '@/api/settings'
+import type { UserLLMDiscoveredModel, UserLLMModel, UserLLMProvider } from '@/api/settings'
 import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { onMounted, reactive, ref } from 'vue'
 import { getChatModels } from '@/api/models'
 import {
   createLLMModel, createLLMProvider, deleteLLMModel, deleteLLMProvider,
-  listLLMModels, listLLMProviders, testLLMProvider, updateLLMModel, updateLLMProvider,
+  discoverLLMProvider, listLLMModels, listLLMProviders, testLLMProvider, updateLLMModel, updateLLMProvider,
 } from '@/api/settings'
 import { SettingsEmptyState, SettingsSection, SettingsStatus } from '../primitives'
 
@@ -16,6 +16,8 @@ const loading = ref(false)
 const catalog = ref<ChatModelCatalog>()
 const providers = ref<UserLLMProvider[]>([])
 const models = ref<UserLLMModel[]>([])
+const discoveryByProvider = ref<Record<string, { models: UserLLMDiscoveredModel[], message: string }>>({})
+const discoveringProviderId = ref<string | null>(null)
 
 const apiTypeOptions = [
   { label: 'OpenAI 兼容', value: 'openai' },
@@ -103,9 +105,42 @@ async function probe(provider: UserLLMProvider) {
   try {
     const result = await testLLMProvider(provider.provider_id)
     result.ok ? message.success(result.message) : message.warning(result.message)
+    if (result.ok || result.status === 'unsupported') {
+      discoveryByProvider.value = {
+        ...discoveryByProvider.value,
+        [provider.provider_id]: { models: result.models, message: result.message },
+      }
+    }
   } catch (error) {
     message.error(error instanceof Error ? error.message : '测试失败')
   }
+}
+
+async function discover(provider: UserLLMProvider) {
+  discoveringProviderId.value = provider.provider_id
+  try {
+    const result = await discoverLLMProvider(provider.provider_id)
+    discoveryByProvider.value = {
+      ...discoveryByProvider.value,
+      [provider.provider_id]: { models: result.models, message: result.message },
+    }
+    result.ok ? message.success(result.message) : message.warning(result.message)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '发现模型失败')
+  } finally {
+    discoveringProviderId.value = null
+  }
+}
+
+function useDiscoveredModel(provider: UserLLMProvider, discovered: UserLLMDiscoveredModel) {
+  resetModelForm()
+  Object.assign(modelForm, {
+    provider_id: provider.provider_id,
+    model_id: discovered.model_id,
+    label: discovered.label,
+    context_window: discovered.context_window,
+  })
+  message.info(`已填入「${discovered.model_id}」，确认上下文窗口后保存`)
 }
 
 function removeProvider(provider: UserLLMProvider) {
@@ -229,8 +264,22 @@ onMounted(() => {
           <div class="actions">
             <n-switch :value="provider.enabled" @update:value="value => toggleProvider(provider, value)" />
             <n-button size="small" :disabled="!provider.has_key" @click="probe(provider)">测试连接</n-button>
+            <n-button size="small" :loading="discoveringProviderId === provider.provider_id" :disabled="!provider.has_key" @click="discover(provider)">发现模型</n-button>
             <n-button size="small" @click="editProvider(provider)">编辑</n-button>
             <n-button size="small" type="error" quaternary @click="removeProvider(provider)">删除</n-button>
+          </div>
+        </div>
+        <div v-if="discoveryByProvider[provider.provider_id]" class="discovery-panel">
+          <div class="muted">{{ discoveryByProvider[provider.provider_id].message }}。发现结果不会自动保存。</div>
+          <div v-if="discoveryByProvider[provider.provider_id].models.length" class="discovery-list">
+            <div v-for="discovered in discoveryByProvider[provider.provider_id].models" :key="discovered.model_id" class="discovery-row">
+              <div class="discovery-model">
+                <strong>{{ discovered.label }}</strong>
+                <span class="muted">{{ discovered.model_id }}</span>
+                <span class="muted">{{ discovered.context_window ? `${discovered.context_window} tokens` : '窗口未知' }}</span>
+              </div>
+              <n-button size="small" @click="useDiscoveredModel(provider, discovered)">填入</n-button>
+            </div>
           </div>
         </div>
       </div>
@@ -286,4 +335,12 @@ onMounted(() => {
 .enabled, .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .channel-card { padding: 14px 0; border-top: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); max-width: 720px; }
 .channel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.discovery-panel { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--noesis-color-fill-subtle, rgba(0,0,0,.03)); }
+.discovery-list { display: grid; gap: 6px; margin-top: 8px; }
+.discovery-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
+.discovery-model { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+@media (max-width: $bp-md) {
+  .channel-head { flex-direction: column; }
+  .discovery-row { align-items: flex-start; }
+}
 </style>

@@ -13,6 +13,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+import httpx
 from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -353,32 +354,146 @@ class UserLLMService:
     # ---------- 连通测试 ----------
 
     @staticmethod
-    async def test_provider(db: AsyncSession, *, user_id: int, provider_id: str) -> Dict[str, Any]:
+    async def discover_provider_models(
+        db: AsyncSession, *, user_id: int, provider_id: str
+    ) -> Dict[str, Any]:
+        """从 Provider 的 OpenAI-compatible ``GET /models`` 发现模型。
+
+        发现结果只用于预览，不自动写入用户模型表。上下文窗口属于可选元数据；
+        大多数兼容端点不会在 ``/models`` 响应中提供，因此缺失时返回 0，由前端
+        保持“未知”并允许用户手动填写。
+        """
         provider = await UserLLMService._get_provider(db, user_id, provider_id)
         api_key = _decrypt_api_key(provider.api_key_cipher)
         if not api_key:
-            return {"ok": False, "message": "未配置 API Key"}
-        from noesis.llm.factory import build_chat_model
+            return {
+                "ok": False,
+                "status": "missing_key",
+                "provider_reachable": False,
+                "discovery_supported": False,
+                "models": [],
+                "message": "未配置 API Key",
+            }
+
+        base_url = provider.base_url.rstrip("/")
+        for suffix in ("/chat/completions", "/completions"):
+            if base_url.endswith(suffix):
+                base_url = base_url[: -len(suffix)]
+                break
+        models_url = f"{base_url}/models"
 
         try:
-            llm = build_chat_model(
-                model_type=provider.api_type,
-                model_name="probe-invalid-model",
-                temperature=0.0,
-                model_base_url=provider.base_url,
-                model_api_key=api_key,
-                provider_max_retries=0,
-            )
-            from langchain_core.messages import HumanMessage
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
+                response = await client.get(
+                    models_url,
+                    headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                )
+        except httpx.RequestError:
+            return {
+                "ok": False,
+                "status": "network_error",
+                "provider_reachable": False,
+                "discovery_supported": False,
+                "models": [],
+                "message": "无法连接模型服务，请检查端点地址和网络",
+            }
 
-            await llm.ainvoke([HumanMessage(content="ping")])
-            return {"ok": True, "message": "连接正常"}
-        except Exception as exc:  # noqa: BLE001 - 测试端点需要把根因归类回报
-            message = str(exc)
-            if "MODEL_API_KEY" in message:
-                return {"ok": False, "message": "Key 解析失败"}
-            # 端点可达但模型名探测失败（404/400 等）视为连通成功
-            lowered = message.lower()
-            if any(k in lowered for k in ("model", "404", "400", "not found", "invalid")):
-                return {"ok": True, "message": "端点连通（探测模型名的报错可忽略）"}
-            return {"ok": False, "message": message[:200]}
+        if response.status_code in (401, 403):
+            return {
+                "ok": False,
+                "status": "authentication_error",
+                "provider_reachable": True,
+                "discovery_supported": True,
+                "models": [],
+                "message": "API Key 无效或没有访问模型列表的权限",
+            }
+        if response.status_code in (404, 405):
+            return {
+                "ok": False,
+                "status": "unsupported",
+                "provider_reachable": True,
+                "discovery_supported": False,
+                "models": [],
+                "message": "该端点未提供 /models，请手动填写模型 ID",
+            }
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "status": "provider_error",
+                "provider_reachable": True,
+                "discovery_supported": True,
+                "models": [],
+                "message": f"模型服务返回 HTTP {response.status_code}",
+            }
+
+        try:
+            payload = response.json()
+        except ValueError:
+            return {
+                "ok": False,
+                "status": "invalid_response",
+                "provider_reachable": True,
+                "discovery_supported": True,
+                "models": [],
+                "message": "模型服务返回了无法解析的内容",
+            }
+
+        if isinstance(payload, list):
+            raw_models = payload
+        elif isinstance(payload, dict):
+            raw_models = payload.get("data") or payload.get("models")
+        else:
+            raw_models = None
+        if not isinstance(raw_models, list):
+            return {
+                "ok": False,
+                "status": "invalid_response",
+                "provider_reachable": True,
+                "discovery_supported": True,
+                "models": [],
+                "message": "模型服务返回格式不符合 OpenAI /models 协议",
+            }
+
+        models: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for raw_model in raw_models:
+            if isinstance(raw_model, str):
+                model_id = raw_model.strip()
+                metadata: Dict[str, Any] = {}
+            elif isinstance(raw_model, dict):
+                model_id = str(raw_model.get("id") or raw_model.get("model") or "").strip()
+                metadata = raw_model
+            else:
+                continue
+            if not model_id or model_id in seen_ids:
+                continue
+            seen_ids.add(model_id)
+            context_window = 0
+            for field in ("context_window", "context_length", "max_context_length", "context_window_tokens"):
+                value = metadata.get(field)
+                if isinstance(value, (int, float)) and value > 0:
+                    context_window = int(value)
+                    break
+            models.append({
+                "model_id": model_id,
+                "label": str(metadata.get("name") or model_id),
+                "owned_by": metadata.get("owned_by"),
+                "context_window": context_window,
+                "context_source": "provider" if context_window else "unknown",
+            })
+
+        return {
+            "ok": True,
+            "status": "discovered",
+            "provider_reachable": True,
+            "discovery_supported": True,
+            "models": models,
+            "message": f"已发现 {len(models)} 个模型",
+        }
+
+    @staticmethod
+    async def test_provider(db: AsyncSession, *, user_id: int, provider_id: str) -> Dict[str, Any]:
+        """兼容旧按钮语义：测试连接改为真实的模型列表发现。"""
+        return await UserLLMService.discover_provider_models(
+            db, user_id=user_id, provider_id=provider_id
+        )
