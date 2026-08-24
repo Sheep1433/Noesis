@@ -391,7 +391,28 @@ export function deleteLLMProvider(id: string) {
 }
 
 export function testLLMProvider(id: string) {
-  return settingsJson<{ ok: boolean, message: string }>(`/api/user/llm/providers/${encodeURIComponent(id)}/test`, 'POST')
+  return settingsJson<UserLLMDiscoveryResult>(`/api/user/llm/providers/${encodeURIComponent(id)}/test`, 'POST')
+}
+
+export type UserLLMDiscoveredModel = {
+  model_id: string
+  label: string
+  owned_by?: string | null
+  context_window: number
+  context_source: 'provider' | 'unknown'
+}
+
+export type UserLLMDiscoveryResult = {
+  ok: boolean
+  status: 'discovered' | 'missing_key' | 'authentication_error' | 'unsupported' | 'network_error' | 'provider_error' | 'invalid_response'
+  provider_reachable: boolean
+  discovery_supported: boolean
+  models: UserLLMDiscoveredModel[]
+  message: string
+}
+
+export function discoverLLMProvider(id: string) {
+  return settingsJson<UserLLMDiscoveryResult>(`/api/user/llm/providers/${encodeURIComponent(id)}/discover`, 'POST')
 }
 
 export async function listLLMModels() {

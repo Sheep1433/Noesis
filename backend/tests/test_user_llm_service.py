@@ -6,6 +6,7 @@ from typing import Any, List, Optional, Tuple
 
 import base64
 
+import httpx
 import pytest
 
 from noesis.errors.exceptions import NotFoundException
@@ -210,3 +211,108 @@ async def test_encrypt_refuses_without_encryption_key(monkeypatch: pytest.Monkey
             _Session(), user_id=1, name="x", api_type="openai",
             base_url="https://x.example", api_key="sk-plain",
         )
+
+
+@pytest.mark.asyncio
+async def test_discover_provider_models_reads_openai_models_without_persisting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"d"*32).decode())
+    from noesis.config.secrets import SecretCipher
+
+    plain = "sk-discovery-secret"
+    provider = _ProviderRow(
+        id="p-discovery",
+        base_url="https://api.example.com/v1/chat/completions",
+        api_key_cipher=f"enc:{SecretCipher().encrypt(plain)}",
+    )
+    db = _Session(providers=[(provider, None)])
+    request = {}
+
+    class _Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "data": [
+                    {"id": "deepseek-chat", "owned_by": "deepseek", "context_length": 128000},
+                    {"id": "deepseek-reasoner"},
+                    {"id": "deepseek-chat"},
+                    request,
+                ]
+            }
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> _Response:
+            request.update({"url": url, "headers": headers})
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _Client())
+    result = await UserLLMService.discover_provider_models(
+        db, user_id=1, provider_id="p-discovery"
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "discovered"
+    assert result["models"] == [
+        {
+            "model_id": "deepseek-chat",
+            "label": "deepseek-chat",
+            "owned_by": "deepseek",
+            "context_window": 128000,
+            "context_source": "provider",
+        },
+        {
+            "model_id": "deepseek-reasoner",
+            "label": "deepseek-reasoner",
+            "owned_by": None,
+            "context_window": 0,
+            "context_source": "unknown",
+        },
+    ]
+    assert request["url"] == "https://api.example.com/v1/models"
+    assert request["headers"]["Authorization"] == f"Bearer {plain}"
+    assert plain not in str(result)
+    assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_discover_provider_models_reports_unsupported_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"e"*32).decode())
+    from noesis.config.secrets import SecretCipher
+
+    provider = _ProviderRow(
+        api_key_cipher=f"enc:{SecretCipher().encrypt('sk-test')}",
+    )
+    db = _Session(providers=[(provider, None)])
+
+    class _Response:
+        status_code = 404
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, *args: object, **kwargs: object) -> _Response:
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _Client())
+    result = await UserLLMService.discover_provider_models(
+        db, user_id=1, provider_id="p1"
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "unsupported"
+    assert result["provider_reachable"] is True
+    assert result["discovery_supported"] is False

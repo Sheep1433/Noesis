@@ -133,6 +133,29 @@ async def test_provider(
     return ResponseUtil.success(data=result)
 
 
+@user_llm_router.post("/providers/{provider_id}/discover", summary="发现模型服务中的模型")
+async def discover_provider_models(
+    provider_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_csrf(request)
+    result = await UserLLMService.discover_provider_models(
+        db, user_id=current_user.user_id, provider_id=provider_id
+    )
+    await SettingsService.append_audit(
+        db, user_id=current_user.user_id, action="llm.provider.discover",
+        setting_domain="llm", target_id=provider_id,
+        summary={
+            "status": result.get("status"),
+            "model_count": len(result.get("models") or []),
+        },
+    )
+    await db.commit()
+    return ResponseUtil.success(data=result)
+
+
 # ---------- Model ----------
 
 
