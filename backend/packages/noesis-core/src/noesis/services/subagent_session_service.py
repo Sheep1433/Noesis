@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.chat.message_builder import UserMessageBuilder
 from noesis.chat.runs import RunStatus
-from noesis.errors.exceptions import ServiceException
+from noesis.errors.exceptions import NotFoundException, ServiceException
 from noesis.runtime.logging import logger
 from noesis.services.chat_service import ChatService
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage, TChatSession
@@ -177,7 +177,7 @@ class SubagentSessionService:
     ) -> TAgentRun:
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
-            raise ServiceException(message="子 Agent run 不存在")
+            raise NotFoundException(message="子 Agent run 不存在")
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
         try:
@@ -190,7 +190,7 @@ class SubagentSessionService:
     async def stop_run(cls, *, run_id: str, user_id: str, db: AsyncSession) -> TAgentRun:
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
-            raise ServiceException(message="子 Agent run 不存在")
+            raise NotFoundException(message="子 Agent run 不存在")
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
         try:

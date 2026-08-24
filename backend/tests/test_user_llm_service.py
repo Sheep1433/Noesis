@@ -8,6 +8,7 @@ import base64
 
 import pytest
 
+from noesis.errors.exceptions import NotFoundException
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
 from noesis.services.user_llm_service import UserLLMService
 
@@ -131,6 +132,20 @@ async def test_update_provider_key_actions(monkeypatch: pytest.MonkeyPatch) -> N
         await UserLLMService.update_provider(
             db, user_id=1, provider_id="p1", api_key=" ", api_key_action="replace"
         )
+
+
+@pytest.mark.asyncio
+async def test_missing_provider_raises_domain_not_found() -> None:
+    with pytest.raises(NotFoundException) as exc_info:
+        await UserLLMService._get_provider(_Session(), user_id=1, provider_id="missing")
+    assert exc_info.value.message == "模型服务不存在"
+
+
+@pytest.mark.asyncio
+async def test_missing_model_raises_domain_not_found() -> None:
+    with pytest.raises(NotFoundException) as exc_info:
+        await UserLLMService._get_model(_Session(), user_id=1, entry_id="missing")
+    assert exc_info.value.message == "模型条目不存在"
 
 
 # ---------- 解析为运行时快照 ----------

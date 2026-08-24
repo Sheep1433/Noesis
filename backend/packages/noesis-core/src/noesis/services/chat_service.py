@@ -996,7 +996,7 @@ class ChatService:
         page: int = 1,
         limit: int = 10,
         archived: Optional[str] = None,
-    ) -> tuple[List[TChatSession], int]:
+    ) -> tuple[List[TChatSession], int, Dict[str, str], Dict[str, str]]:
         """
         用户「聊天记录」列表：支持按标题模糊搜索、按会话 id 精确过滤、分页。
         archived='only' 仅返回归档会话；其余情况排除归档会话。置顶会话排到最前。

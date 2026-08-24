@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import server.main as server_main
+from noesis.services.subagent_session_service import SubagentSessionService
 
 
 @asynccontextmanager
@@ -52,6 +53,9 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
     recover = AsyncMock()
     monkeypatch.setattr(server_main.RunRecoveryService, "recover_orphaned_runs", recover)
     patched["recover"] = recover
+    reconcile_subagents = AsyncMock(return_value=0)
+    monkeypatch.setattr(SubagentSessionService, "reconcile_orphaned_runs", reconcile_subagents)
+    patched["reconcile_subagents"] = reconcile_subagents
     shutdown_run_manager = AsyncMock()
     monkeypatch.setattr(server_main.run_manager, "shutdown", shutdown_run_manager)
     patched["shutdown_run_manager"] = shutdown_run_manager

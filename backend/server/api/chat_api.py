@@ -1012,59 +1012,19 @@ async def stop_run(
 ):
     existing = await RunService.get(run_id, str(current_user.user_id), db)
     if existing.origin == "subagent":
-        try:
-            from noesis.services.subagent_session_service import SubagentSessionService
+        from noesis.services.subagent_session_service import SubagentSessionService
 
-            snapshot = await SubagentSessionService.stop_run(
-                run_id=run_id,
-                user_id=str(current_user.user_id),
-                db=db,
-            )
-        except ServiceException as exc:
-            message = exc.message or "停止子 Agent 失败"
-            if "不存在" in message:
-                return ResponseUtil.not_found(msg=message)
-            return ResponseUtil.failure(msg=message)
+        await SubagentSessionService.stop_run(
+            run_id=run_id,
+            user_id=str(current_user.user_id),
+            db=db,
+        )
         snapshot = await RunService.get(run_id, str(current_user.user_id), db)
         return ResponseUtil.success(msg="已停止生成", data=snapshot.to_dict())
-    # TEMP-DEBUG: 排查前端“停止请求失败”的真实原因
-    try:
-        snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
-        logger.info(
-            "[TEMP-DEBUG] stop_run 成功 run_id={} user_id={} status={}",
-            run_id, current_user.user_id, snapshot.status.value,
-        )
-        return ResponseUtil.success(
-            msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
-            data=snapshot.to_dict(),
-        )
-    except Exception as e:
-        logger.warning(
-            "[TEMP-DEBUG] stop_run 失败 run_id={} user_id={} type={} msg={}",
-            run_id, current_user.user_id, type(e).__name__, str(e),
-        )
-    raise
-
-
-@chat_router.get("/sessions/{session_id}/events", summary="订阅会话事件")
-async def stream_session_events(
-    session_id: str,
-    run_id: Optional[str] = None,
-    after_sequence: int = 0,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """会话级事件入口；子 Agent 详情可只传 session_id 自动选择最近一轮。"""
-    if not run_id:
-        latest = await RunService.get_latest_for_session(session_id, str(current_user.user_id), db)
-        if latest is None:
-            return ResponseUtil.not_found(msg="会话尚无 Agent run")
-        run_id = latest.run_id
-    return await stream_run(
-        run_id=run_id,
-        after_sequence=after_sequence,
-        current_user=current_user,
-        db=db,
+    snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
+    return ResponseUtil.success(
+        msg="已停止生成" if snapshot.status.value == "partial" else "任务已结束",
+        data=snapshot.to_dict(),
     )
 
 
@@ -1092,20 +1052,14 @@ async def resume_hitl_run(
     await require_csrf(http_request)
     existing = await RunService.get(run_id, str(current_user.user_id), db)
     if existing.origin == "subagent":
-        try:
-            from noesis.services.subagent_session_service import SubagentSessionService
+        from noesis.services.subagent_session_service import SubagentSessionService
 
-            snapshot = await SubagentSessionService.resume_hitl(
-                run_id=run_id,
-                user_id=str(current_user.user_id),
-                decisions=request.decisions,
-                db=db,
-            )
-        except ServiceException as exc:
-            message = exc.message or "子 Agent 审批失败"
-            if "不存在" in message:
-                return ResponseUtil.not_found(msg=message)
-            return ResponseUtil.failure(msg=message)
+        await SubagentSessionService.resume_hitl(
+            run_id=run_id,
+            user_id=str(current_user.user_id),
+            decisions=request.decisions,
+            db=db,
+        )
         snapshot = await RunService.get(run_id, str(current_user.user_id), db)
         return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
     snapshot = await RunService.resume_hitl(run_id, request, current_user, db)

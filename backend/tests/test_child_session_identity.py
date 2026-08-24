@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from noesis.errors.exceptions import NotFoundException
+from noesis.services.subagent_session_service import SubagentSessionService
 from server.api.chat_api import _session_to_response
 
 
@@ -75,3 +77,24 @@ async def test_launch_flushes_child_session_before_messages(monkeypatch) -> None
     assert len(db.flush_batches) >= 3
     assert len(db.flush_batches[0]) == 1
     assert db.flush_batches[0][0].__class__.__name__ == "TChatSession"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "extra"),
+    [
+        ("stop_run", {}),
+        ("resume_hitl", {"decisions": []}),
+    ],
+)
+async def test_missing_subagent_run_raises_not_found(method_name: str, extra: dict) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    method = getattr(SubagentSessionService, method_name)
+
+    with pytest.raises(NotFoundException) as exc_info:
+        await method(run_id="missing", user_id="user-1", db=db, **extra)
+    assert exc_info.value.message == "子 Agent run 不存在"

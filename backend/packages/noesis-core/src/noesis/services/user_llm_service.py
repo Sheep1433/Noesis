@@ -17,7 +17,7 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.secrets import SecretCipher, SecretEncryptionUnavailable, secret_suffix
-from noesis.errors.exceptions import ConflictException, ServiceException
+from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
 from noesis.storage.postgres.models.user_llm import TUserLLMModel, TUserLLMProvider
 

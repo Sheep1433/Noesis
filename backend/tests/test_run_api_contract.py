@@ -46,6 +46,73 @@ def test_run_routes_replace_legacy_stream_and_stop() -> None:
     assert ("/api/chat/sessions/{session_id}/hitl/resume", "POST") not in paths
 
 
+def test_session_events_route_has_single_signal_owner() -> None:
+    routes = [
+        route
+        for route in chat_router.routes
+        if route.path == "/api/chat/sessions/{session_id}/events"
+    ]
+
+    assert len(routes) == 1
+    assert "信令" in routes[0].summary
+
+
+@pytest.mark.asyncio
+async def test_stop_run_preserves_service_exception(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    failure = ServiceException(message="停止失败")
+    monkeypatch.setattr(
+        chat_api.RunService,
+        "get",
+        AsyncMock(return_value=SimpleNamespace(origin="web")),
+    )
+    monkeypatch.setattr(
+        chat_api.RunService,
+        "stop",
+        AsyncMock(side_effect=failure),
+    )
+
+    with pytest.raises(ServiceException) as exc_info:
+        await chat_api.stop_run(
+            "run-1",
+            current_user=SimpleNamespace(user_id="user-1"),
+            db=SimpleNamespace(),
+        )
+
+    assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_stop_subagent_run_preserves_service_exception(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from noesis.services.subagent_session_service import SubagentSessionService
+
+    failure = ServiceException(message="停止子 Agent 失败")
+    monkeypatch.setattr(
+        chat_api.RunService,
+        "get",
+        AsyncMock(return_value=SimpleNamespace(origin="subagent")),
+    )
+    monkeypatch.setattr(
+        SubagentSessionService,
+        "stop_run",
+        AsyncMock(side_effect=failure),
+    )
+
+    with pytest.raises(ServiceException) as exc_info:
+        await chat_api.stop_run(
+            "run-1",
+            current_user=SimpleNamespace(user_id="user-1"),
+            db=SimpleNamespace(),
+        )
+
+    assert exc_info.value is failure
+
+
 @pytest.mark.asyncio
 async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> None:
     """真实迭代 StreamingResponse generator，防止路由存在但首帧运行时报 NameError。"""
