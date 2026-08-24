@@ -164,4 +164,3 @@ def test_compatible_injects_reasoning_for_all_assistants() -> None:
     assistants = [m for m in payload["messages"] if m["role"] == "assistant"]
     assert len(assistants) == 1
     assert assistants[0]["reasoning_content"] == "think"
-

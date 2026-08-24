@@ -11,4 +11,3 @@ from __future__ import annotations
 
 # 导入 handlers 包即触发各 handler 模块的 @command 注册（进程级一次）。
 from noesis.chat.commands import handlers  # noqa: F401
-

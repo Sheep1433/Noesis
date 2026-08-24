@@ -485,24 +485,32 @@ describe('useSSEStream durable run recovery', () => {
     expect(onSnapshot).not.toHaveBeenCalled()
   })
 
-  it('409 冲突时加入已有 Run 而非当失败', async () => {
+  it('409 冲突时加入已有 Run，并在终态后自动重发排队消息', async () => {
     const conflictErr = new Error('当前会话仍在生成') as Error & { conflictRunId?: string }
     conflictErr.conflictRunId = 'run-existing'
     api.createAgentRun.mockRejectedValueOnce(conflictErr)
     api.getAgentRun.mockResolvedValue(snapshot({ run_id: 'run-existing', snapshot_sequence: 2 }))
-    api.subscribeAgentRun.mockResolvedValue(sseResponse([
-      { event: 'run-snapshot', data: snapshot({ status: 'completed', snapshot_sequence: 3, finish_reason: 'stop' }) },
-      { event: 'message', data: '[DONE]' },
-    ]))
+    api.subscribeAgentRun
+      .mockResolvedValueOnce(sseResponse([
+        { event: 'run-snapshot', data: snapshot({ run_id: 'run-existing', status: 'completed', snapshot_sequence: 3, finish_reason: 'stop' }) },
+        { event: 'message', data: '[DONE]' },
+      ]))
+      .mockResolvedValueOnce(sseResponse([
+        { event: 'run-snapshot', data: snapshot({ run_id: 'run-1', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
+        { event: 'message', data: '[DONE]' },
+      ]))
     const onSnapshot = vi.fn()
     const onFinish = vi.fn()
     const stream = useSSEStream({ onSnapshot, onFinish })
 
     await stream.sendMessage('session-1', 'hello')
 
-    expect(api.createAgentRun).toHaveBeenCalledTimes(1)
+    expect(api.createAgentRun).toHaveBeenCalledTimes(2)
     expect(api.getAgentRun).toHaveBeenCalledWith('run-existing')
+    expect(api.subscribeAgentRun).toHaveBeenNthCalledWith(1, 'run-existing', 2, expect.any(AbortSignal))
+    expect(api.subscribeAgentRun).toHaveBeenNthCalledWith(2, 'run-1', 0, expect.any(AbortSignal))
     expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run-existing' }))
-    expect(onFinish).toHaveBeenCalledOnce()
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run-1' }))
+    expect(onFinish).toHaveBeenCalledTimes(2)
   })
 })
