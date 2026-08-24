@@ -14,6 +14,7 @@ import {
   resumeAgentRunTestCase,
   stopAgentRun,
   subscribeAgentRun,
+  subscribeSessionEvents,
 } from '@/api/chat'
 
 export interface SSEStreamOptions {
@@ -56,6 +57,10 @@ export interface SSEStreamOptions {
   onStatsUpdate?: (stats: Record<string, unknown>) => void
   onFinish?: (detail?: { finish_reason?: AgentStopReason }) => void
   onError?: (msg: string) => void
+  /** 发送撞上「会话仍在生成」（409 加入已有 run）时通知宿主：消息已排队，本轮结束后自动重发 */
+  onBusyConflict?: () => void
+  /** 取某会话历史加载中的 promise；信令触发的加入须等历史就位再 apply snapshot，防止 patch 丢失 */
+  historyReady?: (sessionId: string) => Promise<unknown> | null
 }
 
 function parseSseFrames(buffer: string): { frames: string[], rest: string } {
@@ -97,6 +102,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     onStatsUpdate,
     onFinish,
     onError,
+    onBusyConflict,
+    historyReady,
   } = options
 
   const isLoading = ref(false)
@@ -110,6 +117,11 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   let lastSequence = 0
   let sequenceGap = false
   let terminalObserved = false
+  /** 409 撞上「会话仍在生成」时排队的消息：本轮终态后自动重发 */
+  let queuedSend: { sessionId: string, content: string, extra?: Record<string, unknown> } | null = null
+  let signalSessionId: string | null = null
+  let signalAbort: AbortController | null = null
+  let signalRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   const tool_name_by_call_id = new Map<string, string>()
   const tool_step_id_by_call_id = new Map<string, string | undefined>()
@@ -497,6 +509,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     error.value = null
     const generation = beginStream(sessionId)
     const clientRequestId = crypto.randomUUID()
+    // 409 加入路径的排队消息是否待重发（见 finally）
+    let pendingFlush = false
 
     try {
       let created
@@ -513,6 +527,9 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         if (conflictErr.conflictRunId) {
           currentRunId = conflictErr.conflictRunId
           sessionStorage.setItem(`noesis:active-run:${sessionId}`, conflictErr.conflictRunId)
+          // 本条消息不会进入本轮 run（服务端未落库）；排队待本轮终态后自动重发
+          queuedSend = { sessionId, content, extra }
+          onBusyConflict?.()
           // 从服务端获取已有 Run 的 snapshot 并 replace
           const snapshot = await getAgentRun(conflictErr.conflictRunId)
           if (!isCurrentStream(generation)) {
@@ -526,6 +543,9 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           if (!streamSettled) {
             await followRun(conflictErr.conflictRunId, generation)
           }
+          // 不能在这里直接 flush：isLoading 尚为 true（finalize 在 finally），
+          // 内层 sendMessage 的防重守卫会静默吞掉重发。标记后在 finally 里执行。
+          pendingFlush = true
           return
         }
         // 非 409：响应未知时只使用原幂等键重试一次，服务端会返回同一 run。
@@ -571,6 +591,11 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       }
     } finally {
       finalizeSubscription(sessionId, generation)
+      if (pendingFlush) {
+        // 本轮已终态且流已收尾（isLoading=false）：重发排队消息。
+        // followRun 抛异常（网络断）不 flush——本轮 run 服务端仍在跑，立即重发只会再 409。
+        await flushQueuedSend()
+      }
     }
   }
 
@@ -727,6 +752,141 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     await followRun(runId, streamGeneration)
   }
 
+  /** 本轮终态后重发排队的消息；用户已切走会话或手动停止则丢弃 */
+  async function flushQueuedSend() {
+    const queued = queuedSend
+    queuedSend = null
+    if (!queued) {
+      return
+    }
+    if (userAborted || queued.sessionId !== activeSessionId) {
+      return
+    }
+    await sendMessage(queued.sessionId, queued.content, queued.extra)
+  }
+
+  /**
+   * 会话信令流：run-started 时自动加入活跃 run（跨窗口/跨浏览器/跨设备发现）。
+   *
+   * 信令是 hint：连接建立时服务端先下发当前 active run，断线自动重连；
+   * 收到 run-started 后经 resumeActiveRun 从权威端点取状态，本窗口正在
+   * 流式中（isLoading 守卫）或已是同一 run 时跳过，不会重复订阅。
+   */
+  function watchSessionSignals(sessionId: string) {
+    if (sessionId === signalSessionId) {
+      return
+    }
+    stopSessionSignals()
+    signalSessionId = sessionId
+    void pumpSessionSignals(sessionId, 0)
+  }
+
+  function stopSessionSignals() {
+    if (signalRetryTimer !== null) {
+      clearTimeout(signalRetryTimer)
+      signalRetryTimer = null
+    }
+    signalAbort?.abort()
+    signalAbort = null
+    signalSessionId = null
+    queuedSend = null
+  }
+
+  async function pumpSessionSignals(sessionId: string, attempt: number) {
+    if (signalSessionId !== sessionId) {
+      return
+    }
+    const controller = new AbortController()
+    signalAbort = controller
+    try {
+      const res = await subscribeSessionEvents(sessionId, controller.signal)
+      if (!res.ok) {
+        // 401/404：登录失效或会话已删，重连无意义，静默退出
+        if (res.status === 401 || res.status === 404) {
+          if (signalAbort === controller) {
+            signalAbort = null
+          }
+          return
+        }
+        throw new Error(`连接失败（HTTP ${res.status}）`)
+      }
+      const reader = res.body?.getReader()
+      if (!reader) {
+        throw new Error('无法读取响应流')
+      }
+      const decoder = new TextDecoder()
+      let rawBuffer = ''
+      const READ_TIMEOUT_MS = 45_000
+      const READ_TIMEOUT = Symbol('read-timeout')
+      for (;;) {
+        // 会话已切走：停止消费（signalSessionId 由 stopSessionSignals/watchSessionSignals 修改）
+        if (signalSessionId !== sessionId) {
+          break
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const result = await Promise.race([
+          reader.read().then((r) => {
+            clearTimeout(timer)
+            return r
+          }),
+          new Promise<typeof READ_TIMEOUT>((resolve) => {
+            timer = setTimeout(() => resolve(READ_TIMEOUT), READ_TIMEOUT_MS)
+          }),
+        ])
+        if (result === READ_TIMEOUT) {
+          await reader.cancel()
+          break
+        }
+        const { done, value } = result
+        if (done) {
+          break
+        }
+        rawBuffer += decoder.decode(value, { stream: true })
+        const { frames, rest } = parseSseFrames(rawBuffer)
+        rawBuffer = rest
+        for (const frame of frames) {
+          parseAndDispatchFrame(frame, (eventName, dataStr) => {
+            if (eventName !== 'session-signal' || !dataStr) {
+              return
+            }
+            try {
+              const signal = JSON.parse(dataStr) as { type?: string, run_id?: string }
+              if (
+                signal.type === 'run-started'
+                && typeof signal.run_id === 'string'
+                && signal.run_id
+                && signal.run_id !== currentRunId
+                && !(isLoading.value && activeSessionId === sessionId)
+              ) {
+                // 该会话历史仍在加载时，等其就位再 apply snapshot（与刷新页路径一致），
+                // 否则 patchAssistantPartsAt 找不到目标行，整轮内容静默丢失
+                void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
+              }
+            } catch {
+              // 非 JSON 帧忽略：信令是 hint，坏帧无害
+            }
+          })
+        }
+      }
+      // 只清理自己这一代的 controller：新一代 pump 可能已接管 signalAbort
+      if (signalAbort === controller) {
+        signalAbort = null
+      }
+    } catch {
+      if (signalAbort === controller) {
+        signalAbort = null
+      }
+    }
+    // 断线重连：仍在该会话则退避重试（信令丢失靠 active-run 自愈，退避可放宽）
+    if (signalSessionId === sessionId) {
+      const delay = Math.min(30_000, 3_000 * 2 ** Math.min(attempt, 3))
+      signalRetryTimer = setTimeout(() => {
+        signalRetryTimer = null
+        void pumpSessionSignals(sessionId, attempt + 1)
+      }, delay)
+    }
+  }
+
   return {
     isLoading,
     error,
@@ -737,5 +897,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     stopCurrentRun,
     detachSubscription,
     resumeActiveRun,
+    watchSessionSignals,
+    stopSessionSignals,
   }
 }

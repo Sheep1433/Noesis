@@ -798,6 +798,67 @@ async def get_active_run(
     return ResponseUtil.success(msg="获取活跃任务成功", data=snapshot.to_dict())
 
 
+@chat_router.get("/sessions/{session_id}/events", summary="订阅会话级信令（跨窗口发现活跃任务）")
+async def stream_session_events(
+    session_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """轻量信令流：只推 run-started / run-hitl-pending / run-terminal 定位符。
+
+    同一会话的其它窗口（跨浏览器、跨设备）靠它实时发现活跃 run，收到后从
+    active-run / runs/{run_id} 取权威状态。连接建立时先下发当前 active run
+    作为首帧，覆盖「窗口先连、run 后建」之外的所有时序；信令是 hint，
+    丢失靠 active-run 自愈。流不主动结束，随页面关闭断开。
+    """
+    session = await ChatService.get_session_by_id(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    if not session:
+        return ResponseUtil.not_found(msg='会话不存在')
+
+    from noesis.chat.runs import session_signal_bus
+
+    user_id = str(current_user.user_id)
+    queue = session_signal_bus.subscribe(user_id, session_id)
+    if queue is None:
+        return ResponseUtil.too_many_requests(
+            msg='会话信令订阅数超限，请关闭其它标签页后重试',
+            data={"error_code": "SESSION_SIGNAL_LIMIT"},
+        )
+
+    active = await RunService.get_active_run(session_id, user_id, db)
+
+    async def event_stream():
+        try:
+            if active is not None:
+                yield format_sse(
+                    "session-signal",
+                    {
+                        "type": "run-started",
+                        "run_id": active.run_id,
+                        "assistant_message_id": active.assistant_message_id,
+                    },
+                )
+            while True:
+                try:
+                    signal = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield SSE_COMMENT_KEEPALIVE
+                    continue
+                yield format_sse("session-signal", signal)
+        finally:
+            session_signal_bus.unsubscribe(user_id, session_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @chat_router.get("/runs/{run_id}/stream", summary="订阅 Agent 任务事件")
 async def stream_run(
     run_id: str,
