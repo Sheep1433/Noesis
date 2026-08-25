@@ -587,12 +587,3 @@ class UserLLMService:
             "models": models,
             "message": f"已发现 {len(models)} 个模型",
         }
-
-    @staticmethod
-    async def test_provider(
-        db: AsyncSession, *, user_id: str, provider_id: str
-    ) -> Dict[str, Any]:
-        """兼容旧按钮语义：测试连接改为真实的模型列表发现。"""
-        return await UserLLMService.discover_provider_models(
-            db, user_id=user_id, provider_id=provider_id
-        )

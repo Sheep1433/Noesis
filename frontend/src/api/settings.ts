@@ -494,10 +494,6 @@ export function deleteLLMProvider(id: string) {
   return settingsJson<null>(`/api/user/llm/providers/${encodeURIComponent(id)}`, 'DELETE')
 }
 
-export function testLLMProvider(id: string) {
-  return settingsJson<UserLLMDiscoveryResult>(`/api/user/llm/providers/${encodeURIComponent(id)}/test`, 'POST')
-}
-
 export type UserLLMDiscoveredModel = {
   model_id: string
   label: string

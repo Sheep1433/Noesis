@@ -1,4 +1,5 @@
 """用户自定义对话模型 API（挂在 /api/user/llm）。"""
+
 from __future__ import annotations
 
 from typing import Literal, Optional
@@ -62,13 +63,22 @@ async def create_provider(
     provider = await UserLLMService.create_provider(
         db,
         user_id=current_user.user_id,
-        name=body.name, api_type=body.api_type, base_url=body.base_url,
-        api_key=body.api_key or "", enabled=body.enabled,
+        name=body.name,
+        api_type=body.api_type,
+        base_url=body.base_url,
+        api_key=body.api_key or "",
+        enabled=body.enabled,
     )
     await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.provider.create",
-        setting_domain="llm", target_id=provider["provider_id"],
-        summary={"fields": ["name", "api_type", "base_url", "api_key"], "secret_action": "set"},
+        db,
+        user_id=current_user.user_id,
+        action="llm.provider.create",
+        setting_domain="llm",
+        target_id=provider["provider_id"],
+        summary={
+            "fields": ["name", "api_type", "base_url", "api_key"],
+            "secret_action": "set",
+        },
     )
     await db.commit()
     return ResponseUtil.success(msg="已创建", data=provider)
@@ -85,14 +95,25 @@ async def update_provider(
     await require_csrf(request)
     provider = await UserLLMService.update_provider(
         db,
-        user_id=current_user.user_id, provider_id=provider_id,
-        name=body.name, api_type=body.api_type, base_url=body.base_url,
-        enabled=body.enabled, api_key=body.api_key, api_key_action=body.api_key_action,
+        user_id=current_user.user_id,
+        provider_id=provider_id,
+        name=body.name,
+        api_type=body.api_type,
+        base_url=body.base_url,
+        enabled=body.enabled,
+        api_key=body.api_key,
+        api_key_action=body.api_key_action,
     )
     await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.provider.update",
-        setting_domain="llm", target_id=provider_id,
-        summary={"fields": ["name", "api_type", "base_url", "enabled"], "secret_action": body.api_key_action},
+        db,
+        user_id=current_user.user_id,
+        action="llm.provider.update",
+        setting_domain="llm",
+        target_id=provider_id,
+        summary={
+            "fields": ["name", "api_type", "base_url", "enabled"],
+            "secret_action": body.api_key_action,
+        },
     )
     await db.commit()
     return ResponseUtil.success(msg="已更新", data=provider)
@@ -106,34 +127,23 @@ async def delete_provider(
     db: AsyncSession = Depends(get_db),
 ):
     await require_csrf(request)
-    await UserLLMService.delete_provider(db, user_id=current_user.user_id, provider_id=provider_id)
+    await UserLLMService.delete_provider(
+        db, user_id=current_user.user_id, provider_id=provider_id
+    )
     await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.provider.delete",
-        setting_domain="llm", target_id=provider_id,
+        db,
+        user_id=current_user.user_id,
+        action="llm.provider.delete",
+        setting_domain="llm",
+        target_id=provider_id,
     )
     await db.commit()
     return ResponseUtil.success(msg="已删除")
 
 
-@user_llm_router.post("/providers/{provider_id}/test", summary="测试模型服务连通性")
-async def test_provider(
-    provider_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await require_csrf(request)
-    result = await UserLLMService.test_provider(db, user_id=current_user.user_id, provider_id=provider_id)
-    await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.provider.test",
-        setting_domain="llm", target_id=provider_id,
-        summary={"ok": result.get("ok")},
-    )
-    await db.commit()
-    return ResponseUtil.success(data=result)
-
-
-@user_llm_router.post("/providers/{provider_id}/discover", summary="发现模型服务中的模型")
+@user_llm_router.post(
+    "/providers/{provider_id}/discover", summary="发现模型服务中的模型"
+)
 async def discover_provider_models(
     provider_id: str,
     request: Request,
@@ -145,8 +155,11 @@ async def discover_provider_models(
         db, user_id=current_user.user_id, provider_id=provider_id
     )
     await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.provider.discover",
-        setting_domain="llm", target_id=provider_id,
+        db,
+        user_id=current_user.user_id,
+        action="llm.provider.discover",
+        setting_domain="llm",
+        target_id=provider_id,
         summary={
             "status": result.get("status"),
             "model_count": len(result.get("models") or []),
@@ -178,12 +191,19 @@ async def create_model(
     await require_csrf(request)
     entry = await UserLLMService.create_model(
         db,
-        user_id=current_user.user_id, provider_id=body.provider_id, model_id=body.model_id,
-        label=body.label, temperature=body.temperature, context_window=body.context_window,
+        user_id=current_user.user_id,
+        provider_id=body.provider_id,
+        model_id=body.model_id,
+        label=body.label,
+        temperature=body.temperature,
+        context_window=body.context_window,
     )
     await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.model.create",
-        setting_domain="llm", target_id=entry["entry_id"],
+        db,
+        user_id=current_user.user_id,
+        action="llm.model.create",
+        setting_domain="llm",
+        target_id=entry["entry_id"],
         summary={"fields": ["provider_id", "model_id", "label"]},
     )
     await db.commit()
@@ -201,13 +221,20 @@ async def update_model(
     await require_csrf(request)
     entry = await UserLLMService.update_model(
         db,
-        user_id=current_user.user_id, entry_id=entry_id,
-        provider_id=body.provider_id, model_id=body.model_id, label=body.label,
-        temperature=body.temperature, context_window=body.context_window,
+        user_id=current_user.user_id,
+        entry_id=entry_id,
+        provider_id=body.provider_id,
+        model_id=body.model_id,
+        label=body.label,
+        temperature=body.temperature,
+        context_window=body.context_window,
     )
     await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.model.update",
-        setting_domain="llm", target_id=entry_id,
+        db,
+        user_id=current_user.user_id,
+        action="llm.model.update",
+        setting_domain="llm",
+        target_id=entry_id,
         summary={"fields": ["provider_id", "model_id", "label"]},
     )
     await db.commit()
@@ -222,10 +249,15 @@ async def delete_model(
     db: AsyncSession = Depends(get_db),
 ):
     await require_csrf(request)
-    await UserLLMService.delete_model(db, user_id=current_user.user_id, entry_id=entry_id)
+    await UserLLMService.delete_model(
+        db, user_id=current_user.user_id, entry_id=entry_id
+    )
     await SettingsService.append_audit(
-        db, user_id=current_user.user_id, action="llm.model.delete",
-        setting_domain="llm", target_id=entry_id,
+        db,
+        user_id=current_user.user_id,
+        action="llm.model.delete",
+        setting_domain="llm",
+        target_id=entry_id,
     )
     await db.commit()
     return ResponseUtil.success(msg="已删除")

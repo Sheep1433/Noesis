@@ -6,7 +6,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { getChatModels } from '@/api/models'
 import {
   createLLMModel, createLLMProvider, deleteLLMModel, deleteLLMProvider,
-  discoverLLMProvider, listLLMModels, listLLMProviders, testLLMProvider, updateLLMModel, updateLLMProvider,
+  discoverLLMProvider, listLLMModels, listLLMProviders, updateLLMModel, updateLLMProvider,
 } from '@/api/settings'
 import { SettingsEmptyState, SettingsSection, SettingsStatus } from '../primitives'
 
@@ -103,7 +103,7 @@ async function toggleProvider(provider: UserLLMProvider, enabled: boolean) {
 
 async function probe(provider: UserLLMProvider) {
   try {
-    const result = await testLLMProvider(provider.provider_id)
+    const result = await discoverLLMProvider(provider.provider_id)
     result.ok ? message.success(result.message) : message.warning(result.message)
     if (result.ok || result.status === 'unsupported') {
       discoveryByProvider.value = {
