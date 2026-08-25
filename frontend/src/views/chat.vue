@@ -43,7 +43,7 @@ import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
-import { formatElapsedSeconds, formatHHmm } from '@/utils/formatTime'
+import { formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
@@ -1285,22 +1285,34 @@ const runCollapseSignal = ref(0)
 const expandedAssistantRuns = ref<Set<string>>(new Set())
 
 /**
- * 单轮 assistant 耗时：优先 run 时间（started_at→finished_at 纯执行时长）；
- * 缺省回退 created_at→completed_at；流式中实时；历史静载无完成时间不显示。
+ * 单轮 assistant 耗时标签（四态）：运行中（本地时钟跳动）/ 等待审批 /
+ * 已完成（run 起止落库值）/ 已中断（无终态 run）。
+ * 「还在跑」的判据是流连接与本会话最后一条未完成轮——不依赖 parts
+ * 流式状态（模型调用间隙会误判闪烁）；等待审批期间不计耗时。
  */
-function runElapsedText(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: { parts?: unknown[] } }): string {
+function runElapsedText(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: { parts?: unknown[] }, uuid?: string }): string {
   const started = item.run_started_at ?? item.created_at
   if (!started) {
     return ''
   }
   if (item.completed_at) {
-    return formatElapsedSeconds(started, item.completed_at)
+    return `耗时 ${formatDurationMs(Math.max(0, item.completed_at - started))}`
   }
-  const parts = item.messageContent?.parts
-  if (Array.isArray(parts) && assistantPartsStillStreaming(parts)) {
-    return formatElapsedSeconds(item.created_at ?? started, processingNow.value)
+  // 未完成：仅当前视图最后一条 assistant 轮有资格是「运行中/等待审批」，
+  // 其余未完成轮都是中断的历史轮
+  const items = conversationItems.value
+  const lastAssistantIdx = items.findLastIndex((it) => it.role === 'assistant')
+  const isLiveRun = lastAssistantIdx >= 0 && items[lastAssistantIdx] === item
+  if (!isLiveRun) {
+    return '已中断'
   }
-  return ''
+  if (pendingHitl.value) {
+    return '等待审批'
+  }
+  if (sseIsLoading.value) {
+    return `耗时 ${formatDurationMs(Math.max(0, processingNow.value - started))}`
+  }
+  return '已中断'
 }
 
 /** 该消息是否含可折叠过程（决定折叠/展开按钮是否出现）。 */
@@ -1398,15 +1410,7 @@ function assistantSubagentCount(item: {
 }
 
 function runElapsedLabel(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: MessageContentV1 }): string {
-  const started = item.run_started_at ?? item.created_at
-  if (!started) {
-    return '执行过程'
-  }
-  const end = item.completed_at || (assistantPartsStillStreaming(item.messageContent?.parts ?? []) ? processingNow.value : undefined)
-  if (!end) {
-    return '执行过程'
-  }
-  return `耗时 ${formatDurationMs(Math.max(0, end - started))}`
+  return runElapsedText(item)
 }
 
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后

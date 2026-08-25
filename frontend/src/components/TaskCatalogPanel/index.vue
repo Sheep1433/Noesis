@@ -2,9 +2,10 @@
 import type { TaskCatalogEntry } from '@/api/chat'
 import { ChevronDownOutline, GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/index.vue'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { formatDurationMs } from '@/views/chat/messageParts'
 
 const props = defineProps<{
   tasks: TaskCatalogEntry[]
@@ -58,6 +59,48 @@ const taskSummary = computed(() => {
   }
   return segments.join(' · ')
 })
+
+// 运行中任务卡耗时：抽屉打开且有 running 任务时本地时钟跳动；
+// 终态用落库起止值；等待审批不计耗时（等人时间不算执行时长）
+const clockNow = ref(Date.now())
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+function refreshClockTimer(): void {
+  const need = show.value && running.value.length > 0
+  if (need && clockTimer === null) {
+    clockTimer = setInterval(() => {
+      clockNow.value = Date.now()
+    }, 1000)
+  } else if (!need && clockTimer !== null) {
+    clearInterval(clockTimer)
+    clockTimer = null
+  }
+}
+
+watch([show, running], refreshClockTimer, { immediate: true })
+onBeforeUnmount(refreshClockTimer)
+
+function timestampMs(value: number | null | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value)) {
+    return undefined
+  }
+  return Math.abs(value) < 1e12 ? value * 1000 : value
+}
+
+function taskElapsed(task: TaskCatalogEntry): string {
+  const started = timestampMs(task.started_at)
+  if (!started || task.status === 'awaiting_approval') {
+    return ''
+  }
+  if (task.status === 'running') {
+    return formatDurationMs(Math.max(0, clockNow.value - started))
+  }
+  const finished = timestampMs(task.completed_at)
+  if (!finished) {
+    return ''
+  }
+  return formatDurationMs(Math.max(0, finished - started))
+}
 
 const statusLabel: Record<TaskCatalogEntry['status'], string> = {
   running: '进行中',
@@ -168,6 +211,10 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
                 <span v-else>子 Agent</span>
                 <span>·</span>
                 <span>{{ statusLabel[task.status] ?? task.status }}</span>
+                <template v-if="taskElapsed(task)">
+                  <span>·</span>
+                  <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
+                </template>
               </span>
             </span>
             <span v-if="task.progress_count ?? task.progress?.length" class="bg-task-card__metric">
@@ -361,6 +408,10 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
   color: var(--noesis-color-text-hint);
   font-size: 11px;
   line-height: 16px;
+}
+
+.bg-task-card__elapsed {
+  font-variant-numeric: tabular-nums;
 }
 
 .bg-task-card__metric {
