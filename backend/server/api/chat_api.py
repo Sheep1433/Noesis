@@ -798,6 +798,61 @@ async def get_active_run(
     return ResponseUtil.success(msg="获取活跃任务成功", data=snapshot.to_dict())
 
 
+@chat_router.get("/events/stream", summary="订阅用户级信令（会话列表实时刷新）")
+async def stream_user_events(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """用户级信令流：该用户任意会话的 run 状态变化（run-started /
+    run-hitl-pending / run-terminal，携带 session_id）。
+
+    会话列表据此 patch 行级 run_status；信令是 hint——行不在列表（如新
+    会话）或断线重连时前端全量刷新列表。连接建立先下发用户全部活跃 run
+    作为首帧对齐。流不主动结束，随页面关闭断开。
+    """
+    from noesis.chat.runs import user_signal_bus
+
+    user_id = str(current_user.user_id)
+    queue = user_signal_bus.subscribe(user_id)
+    if queue is None:
+        return ResponseUtil.too_many_requests(
+            msg="用户信令订阅数超限，请关闭其它标签页后重试",
+            data={"error_code": "USER_SIGNAL_LIMIT"},
+        )
+
+    from noesis.repositories.agent_run_repository import AgentRunRepository
+
+    active_runs = await AgentRunRepository(db).get_active_runs_for_user(user_id)
+
+    async def event_stream():
+        try:
+            for run in active_runs:
+                yield format_sse(
+                    "user-signal",
+                    {
+                        "type": "run-started",
+                        "session_id": run.session_id,
+                        "run_id": run.id,
+                        "status": run.status,
+                    },
+                )
+            while True:
+                try:
+                    signal = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield SSE_COMMENT_KEEPALIVE
+                    continue
+                yield format_sse("user-signal", signal)
+        finally:
+            user_signal_bus.unsubscribe(user_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @chat_router.get(
     "/sessions/{session_id}/events", summary="订阅会话级信令（跨窗口发现活跃任务）"
 )

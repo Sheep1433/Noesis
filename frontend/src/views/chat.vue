@@ -85,6 +85,7 @@ import {
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
+import { createUserSignalEventSource } from '@/views/chat/userSignalStream'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
 import FileListItem from './FileListItem.vue'
@@ -1080,6 +1081,61 @@ function stopBgTaskPolling(): void {
   bgTaskSource?.close()
   bgTaskSource = null
   bgTasks.value = []
+}
+
+// 用户级信令流：会话列表 run_status 实时刷新（一条连接覆盖全部会话；
+// 信令是 hint——行不在列表时全量刷新，断线重连后同样对齐）
+let userSignalSource: EventSource | null = null
+let userSignalConnectedOnce = false
+
+function applyUserSignal(signal: { type?: string, session_id?: string, status?: string }): void {
+  const sessionId = signal.session_id
+  if (!sessionId) {
+    return
+  }
+  // 终态：清徽章 + 会话有新活动（排序位置本地先行对齐，下次全量刷新校正）
+  const nextStatus = signal.type === 'run-terminal'
+    ? undefined
+    : (signal.status || (signal.type === 'run-started' ? 'running' : undefined))
+  const lists = [tableData, archivedTableData]
+  let found = false
+  for (const list of lists) {
+    const row = list.value.find((item) => item.chat_id === sessionId || item.uuid === sessionId)
+    if (row) {
+      found = true
+      row.run_status = nextStatus
+      if (signal.type === 'run-terminal') {
+        row.update_time = Date.now()
+      }
+    }
+  }
+  // 行不在列表（他处新建会话触发的 run）：全量刷新
+  if (!found) {
+    void refreshHistoryLists(searchText.value)
+  }
+}
+
+function openUserSignalStream(): void {
+  userSignalSource?.close()
+  userSignalSource = null
+  const source = createUserSignalEventSource({
+    onSignal: applyUserSignal,
+    onOpen: () => {
+      // 首连只记录；重连后全量对齐（EventSource 内建自动重连）
+      if (userSignalConnectedOnce) {
+        void refreshHistoryLists(searchText.value)
+      }
+      userSignalConnectedOnce = true
+    },
+    onParseError: (err) => console.warn('[user-signal] parse failed', err),
+  })
+  userSignalSource = source
+}
+
+function stopUserSignalStream(): void {
+  userSignalSource?.close()
+  userSignalSource = null
+  userSignalConnectedOnce = false
 }
 
 /** 操作后主动拉一次全量（审批/取消/发消息后对齐，事件流兜底） */
@@ -2622,11 +2678,13 @@ onMounted(() => {
   if (messagesContainer.value) {
     messagesContainer.value.addEventListener('scroll', handleScroll)
   }
+  openUserSignalStream()
 })
 
 // 在组件卸载前移除事件监听
 onBeforeUnmount(() => {
   stopBgTaskPolling()
+  stopUserSignalStream()
   stopProcessingClock()
   // 停止信令流：SPA 内路由切换不会断开 fetch 连接，必须显式中止
   sseStream.stopSessionSignals()

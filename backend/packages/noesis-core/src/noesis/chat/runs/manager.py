@@ -26,6 +26,7 @@ from noesis.chat.runs.models import (
     require_transition,
 )
 from noesis.chat.runs.session_signals import session_signal_bus
+from noesis.chat.runs.user_signals import user_signal_bus
 
 
 class RunNotFound(KeyError):
@@ -113,7 +114,14 @@ class SequencedRunEvent:
     @property
     def estimated_bytes(self) -> int:
         try:
-            return len(json.dumps(self.event, default=str, ensure_ascii=False).encode("utf-8")) + 64
+            return (
+                len(
+                    json.dumps(self.event, default=str, ensure_ascii=False).encode(
+                        "utf-8"
+                    )
+                )
+                + 64
+            )
         except (TypeError, ValueError):
             return len(repr(self.event).encode("utf-8")) + 64
 
@@ -189,7 +197,10 @@ class PersistWriter:
     def submit(self, request: CheckpointRequest) -> bool:
         if self._closed:
             return False
-        if self._pending is not None and self._pending.snapshot_sequence >= request.snapshot_sequence:
+        if (
+            self._pending is not None
+            and self._pending.snapshot_sequence >= request.snapshot_sequence
+        ):
             return False
         self._pending = request
         self._idle.clear()
@@ -234,7 +245,10 @@ class PersistWriter:
             except BaseException as exc:
                 if self._on_blocked is not None:
                     self._on_blocked(exc)
-                if self._pending is None or self._pending.snapshot_sequence < request.snapshot_sequence:
+                if (
+                    self._pending is None
+                    or self._pending.snapshot_sequence < request.snapshot_sequence
+                ):
                     self._pending = request
                 await asyncio.sleep(self._retry_interval_seconds)
             if self._pending is not None:
@@ -259,12 +273,14 @@ class RunHandle:
     next_sequence: int = 1
     buffer: deque[SequencedRunEvent] = field(default_factory=deque)
     buffer_bytes: int = 0
-    subscribers: set[asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = field(default_factory=set)
+    subscribers: set[asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = field(
+        default_factory=set
+    )
     sse_subscribers: set[asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = field(
         default_factory=set
     )
-    delivery_queues: dict[str, asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = field(
-        default_factory=dict
+    delivery_queues: dict[str, asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = (
+        field(default_factory=dict)
     )
     delivery_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     delivery_failures: dict[str, BaseException] = field(default_factory=dict)
@@ -312,15 +328,18 @@ class RunManager:
         terminal_retry_interval_seconds: float = 5.0,
         checkpoint_retry_interval_seconds: float = 0.25,
     ) -> None:
-        if min(
-            max_buffer_events,
-            max_buffer_bytes,
-            subscriber_queue_events,
-            subscriber_queue_bytes,
-            max_run_duration_seconds,
-            max_output_bytes,
-            hitl_pending_timeout_seconds,
-        ) <= 0:
+        if (
+            min(
+                max_buffer_events,
+                max_buffer_bytes,
+                subscriber_queue_events,
+                subscriber_queue_bytes,
+                max_run_duration_seconds,
+                max_output_bytes,
+                hitl_pending_timeout_seconds,
+            )
+            <= 0
+        ):
             raise ValueError("run manager limits must be positive")
         if cancel_grace_seconds < 0:
             raise ValueError("cancel grace must not be negative")
@@ -406,15 +425,23 @@ class RunManager:
         async with self._registry_lock:
             if run_id in self._runs:
                 raise ValueError(f"run already registered: {run_id}")
-            active = [run for run in self._runs.values() if run.status not in TERMINAL_RUN_STATUSES]
+            active = [
+                run
+                for run in self._runs.values()
+                if run.status not in TERMINAL_RUN_STATUSES
+            ]
             if len(active) >= self.max_active_runs:
                 raise RunCapacityExceeded("active run limit exceeded")
-            if sum(1 for run in active if run.user_id == user_id) >= self.max_user_active_runs:
+            if (
+                sum(1 for run in active if run.user_id == user_id)
+                >= self.max_user_active_runs
+            ):
                 raise RunCapacityExceeded("user active run limit exceeded")
             self._runs[run_id] = handle
         for name, handler in (deliveries or {}).items():
             await self.register_delivery(run_id, name, handler)
         if checkpoint_handler is not None:
+
             def on_persistence_blocked(exc: BaseException) -> None:
                 self._metrics["persistence_blocked"] += 1
                 logger.error(
@@ -430,8 +457,8 @@ class RunManager:
                 checkpoint_handler,
                 retry_interval_seconds=self.checkpoint_retry_interval_seconds,
                 on_blocked=on_persistence_blocked,
-                on_persisted=lambda request, latency_ms: self._record_checkpoint_persisted(
-                    handle, request, latency_ms
+                on_persisted=lambda request, latency_ms: (
+                    self._record_checkpoint_persisted(handle, request, latency_ms)
                 ),
             )
         logger.info(
@@ -454,10 +481,12 @@ class RunManager:
         return handle
 
     def _publish_session_signal(self, handle: RunHandle, target: RunStatus) -> None:
-        """状态迁移后向 session 信令总线投递 hint（run-started / hitl-pending / terminal）。
+        """状态迁移后向 session / user 信令总线投递 hint（run-started / hitl-pending / terminal）。
 
         start()/resume() 直接置 RUNNING 不走 transition()，须各自调用；
-        信令幂等，重复投递无害——客户端只据它去拉权威状态。
+        信令幂等，重复投递无害——客户端只据它去拉权威状态。session 总线
+        服务同一会话的其它窗口；user 总线服务会话列表（携带 session_id
+        与 status，前端据此 patch 列表行，hint 语义不变）。
         """
         if target == RunStatus.RUNNING:
             signal = {
@@ -468,10 +497,22 @@ class RunManager:
         elif target == RunStatus.HITL_PENDING:
             signal = {"type": "run-hitl-pending", "run_id": handle.run_id}
         elif target in TERMINAL_RUN_STATUSES:
-            signal = {"type": "run-terminal", "run_id": handle.run_id, "status": target.value}
+            signal = {
+                "type": "run-terminal",
+                "run_id": handle.run_id,
+                "status": target.value,
+            }
         else:
             return
         session_signal_bus.publish(handle.user_id, handle.session_id, signal)
+        user_signal_bus.publish(
+            handle.user_id,
+            {
+                **signal,
+                "session_id": handle.session_id,
+                "status": target.value,
+            },
+        )
 
     def _sample_event_loop_lag(self) -> None:
         loop = asyncio.get_running_loop()
@@ -544,7 +585,8 @@ class RunManager:
             generation = self._begin_producer_segment_locked(handle)
             self._publish_session_signal(handle, RunStatus.RUNNING)
             handle.producer_task = asyncio.create_task(
-                self._run_producer(handle, producer, generation), name=f"agent-run-resume:{run_id}"
+                self._run_producer(handle, producer, generation),
+                name=f"agent-run-resume:{run_id}",
             )
             if handle.watchdog_task is None or handle.watchdog_task.done():
                 handle.watchdog_task = asyncio.create_task(
@@ -558,11 +600,16 @@ class RunManager:
         handle.producer_generation += 1
         return handle.producer_generation
 
-    async def _run_producer(self, handle: RunHandle, producer: Producer, generation: int) -> None:
+    async def _run_producer(
+        self, handle: RunHandle, producer: Producer, generation: int
+    ) -> None:
         try:
             await producer(
                 lambda event, attempt_id=None: self.apply_event(
-                    handle.run_id, event, producer_generation=generation, attempt_id=attempt_id
+                    handle.run_id,
+                    event,
+                    producer_generation=generation,
+                    attempt_id=attempt_id,
                 )
             )
         except asyncio.CancelledError:
@@ -593,9 +640,11 @@ class RunManager:
         async with handle.lock:
             if name in handle.delivery_tasks:
                 raise ValueError(f"delivery already registered: {name}")
-            queue: asyncio.Queue[SequencedRunEvent | SlowSubscriber] = BoundedEventQueue(
-                maxsize=self.subscriber_queue_events,
-                max_bytes=self.subscriber_queue_bytes,
+            queue: asyncio.Queue[SequencedRunEvent | SlowSubscriber] = (
+                BoundedEventQueue(
+                    maxsize=self.subscriber_queue_events,
+                    max_bytes=self.subscriber_queue_bytes,
+                )
             )
             handle.subscribers.add(queue)
             handle.delivery_queues[name] = queue
@@ -667,9 +716,13 @@ class RunManager:
                 if handle.hitl_timeout_task is not None:
                     handle.hitl_timeout_task.cancel()
                 handle.hitl_timeout_task = asyncio.create_task(
-                    self._expire_hitl_pending(handle), name=f"agent-run-hitl-timeout:{run_id}"
+                    self._expire_hitl_pending(handle),
+                    name=f"agent-run-hitl-timeout:{run_id}",
                 )
-                if handle.watchdog_task is not None and handle.watchdog_task is not asyncio.current_task():
+                if (
+                    handle.watchdog_task is not None
+                    and handle.watchdog_task is not asyncio.current_task()
+                ):
                     handle.watchdog_task.cancel()
                     handle.watchdog_task = None
             if target in TERMINAL_RUN_STATUSES and handle.terminal_future is not None:
@@ -701,9 +754,7 @@ class RunManager:
     async def publish(self, run_id: str, event: Any) -> SequencedRunEvent:
         return await self.publish_attempt(run_id, event)
 
-    def _assign_and_buffer(
-        self, handle: RunHandle, event: Any
-    ) -> SequencedRunEvent:
+    def _assign_and_buffer(self, handle: RunHandle, event: Any) -> SequencedRunEvent:
         """在 lock 内分配 sequence、写 buffer。无 I/O await，不 fan-out。
 
         如果 checkpoint_policy 命中，在同一 lock 内复制 immutable snapshot 并附加到 envelope。
@@ -728,7 +779,10 @@ class RunManager:
         # 即使普通输出已经触及上限，也必须允许 RunError / RunAborted
         # 投递终态，否则 producer 已经被限流后，终态事件还会再次触发同一个异常。
         terminal_event = isinstance(event, (RunCompleted, RunAborted, RunError))
-        if handle.output_bytes + envelope.estimated_bytes > self.max_output_bytes and not terminal_event:
+        if (
+            handle.output_bytes + envelope.estimated_bytes > self.max_output_bytes
+            and not terminal_event
+        ):
             handle.limit_error = RunOutputExceeded("run output limit exceeded")
             raise handle.limit_error
         handle.output_bytes += envelope.estimated_bytes
@@ -769,9 +823,7 @@ class RunManager:
             except asyncio.QueueFull:
                 pass
 
-    def _assign_and_fanout(
-        self, handle: RunHandle, event: Any
-    ) -> SequencedRunEvent:
+    def _assign_and_fanout(self, handle: RunHandle, event: Any) -> SequencedRunEvent:
         """在 lock 内分配 sequence、写 buffer、fan-out。无 I/O await。"""
         envelope = self._assign_and_buffer(handle, event)
         self._fanout(handle, envelope)
@@ -800,7 +852,10 @@ class RunManager:
                 return None
             if handle.pending_terminal is not None:
                 return None
-            if producer_generation is not None and producer_generation != handle.producer_generation:
+            if (
+                producer_generation is not None
+                and producer_generation != handle.producer_generation
+            ):
                 self._metrics["stale_producer_generation_events"] += 1
                 logger.warning(
                     "agent_run_stale_producer_generation run_id={} event_gen={} current_gen={}",
@@ -856,10 +911,13 @@ class RunManager:
                     )
                     # 终态事件不受普通输出累计上限阻断，确保超限后仍能完成状态机收尾。
                     if (
-                        handle.output_bytes + envelope.estimated_bytes > self.max_output_bytes
+                        handle.output_bytes + envelope.estimated_bytes
+                        > self.max_output_bytes
                         and not isinstance(event, (RunCompleted, RunAborted, RunError))
                     ):
-                        handle.limit_error = RunOutputExceeded("run output limit exceeded")
+                        handle.limit_error = RunOutputExceeded(
+                            "run output limit exceeded"
+                        )
                         raise handle.limit_error
                     terminal_candidate = TerminalCandidate(
                         envelope=envelope,
@@ -919,7 +977,10 @@ class RunManager:
                 return result
             await asyncio.sleep(min(0.1, max(0.0, deadline - loop.time())))
         async with handle.lock:
-            if handle.pending_terminal is candidate and handle.terminal_retry_task is None:
+            if (
+                handle.pending_terminal is candidate
+                and handle.terminal_retry_task is None
+            ):
                 self._metrics["persistence_blocked"] += 1
                 handle.cancel_requested = True
                 handle.terminal_retry_task = asyncio.create_task(
@@ -1053,7 +1114,9 @@ class RunManager:
                 f"current={global_subs} max={self.max_subscriptions_global}"
             )
 
-    async def subscribe(self, run_id: str, *, after_sequence: int = 0) -> RunSubscription:
+    async def subscribe(
+        self, run_id: str, *, after_sequence: int = 0
+    ) -> RunSubscription:
         handle = self.get(run_id)
         async with self._registry_lock:
             async with handle.lock:
@@ -1075,9 +1138,13 @@ class RunManager:
             snapshot = copy.deepcopy(handle.authoritative_snapshot)
         else:
             snapshot = copy.deepcopy(
-                handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)
+                handle.snapshot_provider(
+                    handle.last_sequence, handle.status, handle.attempt_id
+                )
             )
-        buffered = tuple(event for event in handle.buffer if event.sequence > after_sequence)
+        buffered = tuple(
+            event for event in handle.buffer if event.sequence > after_sequence
+        )
         continuous = not buffered or buffered[0].sequence == after_sequence + 1
         replay = buffered if after_sequence > 0 and continuous else ()
         return RunSubscription(snapshot=snapshot, queue=queue, replay=replay)
@@ -1099,7 +1166,11 @@ class RunManager:
             handle.cancel_requested = True
             task = handle.producer_task if first_request else None
             terminal_future = handle.terminal_future
-            if first_request and handle.state is not None and hasattr(handle.state, "cancel_requested"):
+            if (
+                first_request
+                and handle.state is not None
+                and hasattr(handle.state, "cancel_requested")
+            ):
                 handle.state.cancel_requested = True
         started = asyncio.get_running_loop().time()
         if task is not None and not task.done():
@@ -1134,7 +1205,11 @@ class RunManager:
             handle.limit_error = None
             handle.producer_task = None
             handle.terminal_future = None
-            for task in (handle.watchdog_task, handle.hitl_timeout_task, handle.terminal_retry_task):
+            for task in (
+                handle.watchdog_task,
+                handle.hitl_timeout_task,
+                handle.terminal_retry_task,
+            ):
                 if task is not None and task is not asyncio.current_task():
                     task.cancel()
             handle.watchdog_task = None
@@ -1146,7 +1221,9 @@ class RunManager:
         async with self._registry_lock:
             self._runs.pop(run_id, None)
         self._metrics["terminal_reclaimed"] += 1
-        logger.info("agent_run_reclaimed run_id={} status={}", run_id, handle.status.value)
+        logger.info(
+            "agent_run_reclaimed run_id={} status={}", run_id, handle.status.value
+        )
         if cleanup_task is not None and cleanup_task is not asyncio.current_task():
             cleanup_task.cancel()
         for task in delivery_tasks:
@@ -1188,11 +1265,14 @@ class RunManager:
             if handle.persist_writer is not None
         ]
         if writers:
-            await asyncio.gather(*(writer.close() for writer in writers), return_exceptions=True)
+            await asyncio.gather(
+                *(writer.close() for writer in writers), return_exceptions=True
+            )
         retry_tasks = [
             handle.terminal_retry_task
             for handle in self._runs.values()
-            if handle.terminal_retry_task is not None and not handle.terminal_retry_task.done()
+            if handle.terminal_retry_task is not None
+            and not handle.terminal_retry_task.done()
         ]
         for task in retry_tasks:
             task.cancel()
@@ -1219,7 +1299,9 @@ class RunManager:
             "event_buffer_events": sum(len(run.buffer) for run in runs),
             "event_buffer_bytes": sum(run.buffer_bytes for run in runs),
             "subscriber_count": len(subscriber_queues),
-            "subscriber_queue_events": sum(queue.qsize() for queue in subscriber_queues),
+            "subscriber_queue_events": sum(
+                queue.qsize() for queue in subscriber_queues
+            ),
             "subscriber_queue_bytes": sum(
                 getattr(queue, "current_bytes", 0) for queue in subscriber_queues
             ),

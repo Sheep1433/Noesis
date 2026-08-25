@@ -26,7 +26,9 @@ class AgentRunRepository:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_client_request(self, user_id: str, client_request_id: str) -> TAgentRun | None:
+    async def get_by_client_request(
+        self, user_id: str, client_request_id: str
+    ) -> TAgentRun | None:
         result = await self.db.execute(
             select(TAgentRun).where(
                 TAgentRun.user_id == user_id,
@@ -35,7 +37,22 @@ class AgentRunRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_active_for_session(self, user_id: str, session_id: str) -> TAgentRun | None:
+    async def get_active_runs_for_user(self, user_id: str) -> list[TAgentRun]:
+        """用户的全部活跃 run（会话列表信令流首帧对齐用）。"""
+        statuses = [status.value for status in ACTIVE_RUN_STATUSES]
+        result = await self.db.execute(
+            select(TAgentRun)
+            .where(
+                TAgentRun.user_id == user_id,
+                TAgentRun.status.in_(statuses),
+            )
+            .order_by(TAgentRun.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def get_active_for_session(
+        self, user_id: str, session_id: str
+    ) -> TAgentRun | None:
         statuses = [status.value for status in ACTIVE_RUN_STATUSES]
         result = await self.db.execute(
             select(TAgentRun)
@@ -49,7 +66,9 @@ class AgentRunRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_latest_for_session(self, user_id: str, session_id: str) -> TAgentRun | None:
+    async def get_latest_for_session(
+        self, user_id: str, session_id: str
+    ) -> TAgentRun | None:
         result = await self.db.execute(
             select(TAgentRun)
             .where(TAgentRun.user_id == user_id, TAgentRun.session_id == session_id)
@@ -58,7 +77,9 @@ class AgentRunRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_run_times_for_session(self, session_id: str) -> dict[str, tuple[int | None, int | None]]:
+    async def get_run_times_for_session(
+        self, session_id: str
+    ) -> dict[str, tuple[int | None, int | None]]:
         """assistant_message_id → (started_at, finished_at)。
 
         一条 session 维度查询（idx_agent_run_session_status 前缀命中），
@@ -94,7 +115,9 @@ class AgentRunRepository:
 
     async def list_non_terminal(self) -> list[TAgentRun]:
         statuses = [status.value for status in ACTIVE_RUN_STATUSES]
-        result = await self.db.execute(select(TAgentRun).where(TAgentRun.status.in_(statuses)))
+        result = await self.db.execute(
+            select(TAgentRun).where(TAgentRun.status.in_(statuses))
+        )
         return list(result.scalars().all())
 
     async def save_checkpoint(
@@ -158,7 +181,12 @@ class AgentRunRepository:
         usage: dict | None = None,
     ) -> bool:
         """同一事务内抢占 run 终态并更新唯一 assistant 行。调用方负责 commit。"""
-        if target not in {RunStatus.COMPLETED, RunStatus.PARTIAL, RunStatus.ERROR, RunStatus.INTERRUPTED}:
+        if target not in {
+            RunStatus.COMPLETED,
+            RunStatus.PARTIAL,
+            RunStatus.ERROR,
+            RunStatus.INTERRUPTED,
+        }:
             raise ValueError(f"target is not terminal: {target.value}")
         active = [status.value for status in ACTIVE_RUN_STATUSES]
         run_result = await self.db.execute(
@@ -184,12 +212,18 @@ class AgentRunRepository:
         message_id_row = await self.db.execute(
             select(TChatMessage.extra).where(
                 TChatMessage.id
-                == select(TAgentRun.assistant_message_id).where(TAgentRun.id == run_id).scalar_subquery(),
+                == select(TAgentRun.assistant_message_id)
+                .where(TAgentRun.id == run_id)
+                .scalar_subquery(),
                 TChatMessage.status == "streaming",
             )
         )
         old_extra_row = message_id_row.fetchone()
-        old_extra = dict(old_extra_row[0]) if old_extra_row and isinstance(old_extra_row[0], dict) else {}
+        old_extra = (
+            dict(old_extra_row[0])
+            if old_extra_row and isinstance(old_extra_row[0], dict)
+            else {}
+        )
 
         message_extra: dict = {
             **old_extra,
@@ -210,7 +244,9 @@ class AgentRunRepository:
             update(TChatMessage)
             .where(
                 TChatMessage.id
-                == select(TAgentRun.assistant_message_id).where(TAgentRun.id == run_id).scalar_subquery(),
+                == select(TAgentRun.assistant_message_id)
+                .where(TAgentRun.id == run_id)
+                .scalar_subquery(),
                 TChatMessage.status == "streaming",
             )
             .values(
