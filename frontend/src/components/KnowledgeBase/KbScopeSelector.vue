@@ -156,7 +156,7 @@ watch(
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .kb-scope-selector--inline {
   flex-shrink: 0;
 }

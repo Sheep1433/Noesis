@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import BigInteger, ForeignKey, Index, String, Text
+from sqlalchemy import BigInteger, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from noesis.storage.postgres.base import Base
@@ -33,7 +33,7 @@ class TBackgroundTask(Base):
     session_id: Mapped[str] = mapped_column(
         String(64), nullable=False, comment="所属会话"
     )
-    user_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="归属用户")
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), nullable=False, comment="归属用户 UUID")
     description: Mapped[str] = mapped_column(Text, nullable=False, comment="子目标描述")
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, comment="shell（仅后台命令任务）"

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import BigInteger, Boolean, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from noesis.storage.postgres.base import Base
@@ -18,7 +18,7 @@ class TUserScheduledTaskRun(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     task_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("t_user.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger_source: Mapped[str] = mapped_column(String(32), nullable=False)
     retry_of: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
@@ -41,7 +41,7 @@ class TUserNotificationPreference(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("t_user.id", ondelete="CASCADE"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     delivery_surface: Mapped[str] = mapped_column(String(64), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -55,7 +55,7 @@ class TUserSettingsAudit(Base):
     __table_args__ = (Index("idx_user_settings_audit_user_time", "user_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("t_user.id"), nullable=False)
     action: Mapped[str] = mapped_column(String(80), nullable=False)
     setting_domain: Mapped[str] = mapped_column(String(64), nullable=False)
     target_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)

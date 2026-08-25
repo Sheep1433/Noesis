@@ -127,6 +127,13 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
             input_details = usage.get("input_token_details") or {}
             delta["cache_read_tokens"] = int(input_details.get("cache_read") or 0)
             delta["cache_write_tokens"] = int(input_details.get("cache_write") or 0)
+            if usage.get("cache_metrics_available") is True:
+                delta["cache_metrics_available_calls"] = 1
+                delta["uncached_input_tokens"] = int(
+                    usage.get("uncached_input_tokens") or 0
+                )
+            elif usage.get("cache_metrics_available") is False:
+                delta["cache_metrics_unavailable_calls"] = 1
 
         if self._session_id:
             SessionStatsRegistry.add(self._session_id, delta)

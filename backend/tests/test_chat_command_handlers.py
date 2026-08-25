@@ -94,6 +94,30 @@ async def test_status_with_injected_run_manager() -> None:
         cmd_rt._run_manager_provider = prev
 
 
+async def test_compact_calls_host_provider_without_rewriting_to_agent_run() -> None:
+    """/compact must invoke the host seam and never turn into a model query."""
+    from types import SimpleNamespace
+
+    from noesis.chat.commands import runtime as cmd_rt
+
+    calls = []
+
+    async def _compact(session_id: str, user_id: str, instructions: str | None):
+        calls.append((session_id, user_id, instructions))
+        return SimpleNamespace(status="completed", pre_message_count=10, post_message_count=3)
+
+    previous = cmd_rt._compaction_provider
+    cmd_rt.set_compaction_provider(_compact)
+    try:
+        result = await dispatch(_msg("/compact 保留迁移表", channel="web"))
+        assert result.handled is True
+        assert result.rewrite_request is None
+        assert "已压缩" in result.text
+        assert calls == [("c1", "u1", "保留迁移表")]
+    finally:
+        cmd_rt._compaction_provider = previous
+
+
 def test_control_commands_reserved_against_skill_names() -> None:
     """skill 命令 fallback 须先校验不在 CONTROL_COMMANDS。"""
     assert "help" in reg.CONTROL_COMMANDS

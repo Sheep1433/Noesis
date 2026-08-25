@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import server.main as server_main
+from noesis.services.subagent_session_service import SubagentSessionService
 
 
 @asynccontextmanager
@@ -29,7 +30,7 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "shutdown_sandboxes",
         "sync_existing_kb_collection_configs",
         "stop_scheduled_task_scheduler",
-        "stop_memory_dream_scheduler",
+        "stop_machine_memory_worker",
         "stop_telegram_runtime",
         "stop_feishu_runtime",
     )
@@ -41,7 +42,7 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
 
     for name in (
         "start_scheduled_task_scheduler",
-        "start_memory_dream_scheduler",
+        "start_machine_memory_worker",
         "start_telegram_runtime",
         "start_feishu_runtime",
     ):
@@ -52,6 +53,9 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
     recover = AsyncMock()
     monkeypatch.setattr(server_main.RunRecoveryService, "recover_orphaned_runs", recover)
     patched["recover"] = recover
+    reconcile_subagents = AsyncMock(return_value=0)
+    monkeypatch.setattr(SubagentSessionService, "reconcile_orphaned_runs", reconcile_subagents)
+    patched["reconcile_subagents"] = reconcile_subagents
     shutdown_run_manager = AsyncMock()
     monkeypatch.setattr(server_main.run_manager, "shutdown", shutdown_run_manager)
     patched["shutdown_run_manager"] = shutdown_run_manager
@@ -71,8 +75,8 @@ async def test_lifespan_releases_resources_when_app_body_fails(
     for name in (
         "stop_feishu_runtime",
         "stop_telegram_runtime",
-        "stop_memory_dream_scheduler",
         "stop_scheduled_task_scheduler",
+        "stop_machine_memory_worker",
         "shutdown_run_manager",
         "close_knowledge_base",
         "close_checkpointer",

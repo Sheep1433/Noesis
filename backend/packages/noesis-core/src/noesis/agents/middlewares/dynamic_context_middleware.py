@@ -7,7 +7,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, NotRequired
 
-from deepagents.middleware._utils import append_to_system_message
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
@@ -18,6 +17,8 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langgraph.runtime import Runtime
+
+from noesis.agents.middlewares.late_context import insert_late_context
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -126,7 +127,9 @@ class DynamicContextMiddleware(
         if not text:
             return request
         return request.override(
-            system_message=append_to_system_message(request.system_message, text),
+            messages=insert_late_context(
+                list(request.messages), text=text, marker="runtime-context"
+            ),
         )
 
     def wrap_model_call(

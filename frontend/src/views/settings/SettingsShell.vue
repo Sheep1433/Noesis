@@ -110,7 +110,7 @@ onBeforeRouteLeave(async () => confirmDiscard())
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .settings {
   display: flex;
   flex-direction: column;
@@ -156,6 +156,7 @@ onBeforeRouteLeave(async () => confirmDiscard())
   flex: 1;
   min-width: 0;
   overflow: auto;
+  container: settings-content / inline-size;
 }
 
 @media (max-width: $bp-md) {

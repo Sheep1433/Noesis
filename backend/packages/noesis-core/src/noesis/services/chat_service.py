@@ -996,7 +996,7 @@ class ChatService:
         page: int = 1,
         limit: int = 10,
         archived: Optional[str] = None,
-    ) -> tuple[List[TChatSession], int]:
+    ) -> tuple[List[TChatSession], int, Dict[str, str], Dict[str, str]]:
         """
         用户「聊天记录」列表：支持按标题模糊搜索、按会话 id 精确过滤、分页。
         archived='only' 仅返回归档会话；其余情况排除归档会话。置顶会话排到最前。
@@ -1165,7 +1165,7 @@ class ChatService:
         :param db: 数据库会话
         :return: 会话对象
         """
-        # 聊天表以字符串保存用户标识；认证层当前使用整数主键。
+        # 聊天表和认证层统一使用 UUID 字符串作为用户标识。
         # 在服务边界统一转换，避免 PostgreSQL 对 VARCHAR = INTEGER 的严格类型检查失败。
         if user_id is not None:
             user_id = str(user_id)

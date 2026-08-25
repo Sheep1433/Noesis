@@ -22,6 +22,7 @@ from noesis.agents.middlewares import (
     CompactionThresholds,
     DurableContextMiddleware,
     DynamicContextMiddleware,
+    MemoryBulletinMiddleware,
     LLMErrorHandlingMiddleware,
     ReadBeforeWriteMiddleware,
     RefreshingMemoryMiddleware,
@@ -59,6 +60,7 @@ class NoesisStackDeps:
     tools: Sequence[BaseTool] = ()
     backend: BackendProtocol | None = None
     dynamic_context_provider: Any = None
+    memory_bulletin_middleware: MemoryBulletinMiddleware | None = None
     skills_sources: Sequence[str | tuple[str, str]] = ()
     skills_user_id: str | None = None
     skills_system_prompt: str | None = None
@@ -142,6 +144,8 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
             )
         )
 
+    if deps.memory_bulletin_middleware is not None and deps.profile != "SUBAGENT":
+        stack.append(deps.memory_bulletin_middleware)
     stack.append(DynamicContextMiddleware(deps.dynamic_context_provider))
     if deps.profile in {"SUPER_AGENT_QA", "FAULT_OPERATION_QA"}:
         stack.append(DurableContextMiddleware())

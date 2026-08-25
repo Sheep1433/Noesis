@@ -1,0 +1,648 @@
+{
+  "report_version": "memory-paired-integration-v1",
+  "mode": "production_integration",
+  "created_at": "2026-08-24T11:08:25.803465+00:00",
+  "evaluation_fingerprint": "09a3d3d27cbe3bc210a7832610d28800b6584917d614a6b79c39752235be792b",
+  "effective_config": {
+    "runtime_model": "hy3-free",
+    "runtime_model_type": "opencode",
+    "runtime_model_base_url": "https://opencode.ai/zen/v1",
+    "extraction_model": "hy3-free",
+    "embedding_model_name": "text-embedding-v4",
+    "embedding_model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "chunk_max_tokens": 1600,
+    "chunk_concurrency": 4,
+    "chunk_attempts": 2,
+    "embedding_template_version": "memory-item-v1",
+    "collection_name": "noesis_memory",
+    "retrieval_top_k": 3,
+    "retrieval_overfetch": 3,
+    "retrieval_min_score": 0.45,
+    "bulletin_max_tokens": 500,
+    "bulletin_timeout_seconds": 0.4,
+    "deep_query_timeout_seconds": 5.0,
+    "deep_query_max_steps": 6,
+    "deep_query_max_spans": 12,
+    "deep_query_concurrency": 4
+  },
+  "fixture_revision": "2026-08-24.7",
+  "seed": 20260824,
+  "runtime_model": "hy3-free",
+  "runtime_max_output_tokens": 2048,
+  "on_user_id": "00000000-0000-0000-0000-000000000301",
+  "off_user_id": "00000000-0000-0000-0000-000000000302",
+  "on_snapshot_digest": "2ab31da7eb5b65940e4a8cc272114bc0f516a8fd8d67ce49cdb0ffb8e56d5fde",
+  "off_snapshot_digest": "2ab31da7eb5b65940e4a8cc272114bc0f516a8fd8d67ce49cdb0ffb8e56d5fde",
+  "automatic_capture_paused": true,
+  "task_count": 12,
+  "observations": [
+    {
+      "task_id": "switch-control",
+      "expected_memory_id": "4dc9a5dd-43fd-50e6-920c-af48bbcde434",
+      "paired_seed": 20260824,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "one",
+          "user-controlled",
+          "switch"
+        ],
+        "tokens": 537,
+        "ttft_ms": 3149.673,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 182,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "b96b9a69289f8f9e298b42e7ddac8dc411429bf9b6bf8bfefc6a6c6c8b76ad9e",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "4dc9a5dd-43fd-50e6-920c-af48bbcde434"
+        ],
+        "bulletin_hash": "db1e90a696e6489286acfda13dce98b9d40dad2528a9afdd9ad6bfb2770d82bd",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [
+          "one"
+        ],
+        "tokens": 792,
+        "ttft_ms": 3550.597,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 109,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "4ce391e4862ab783fbc590a04fe752c900d62f8a4300d33c170ad64f6d8d97cb",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "stale-lock",
+      "expected_memory_id": "2be17013-e672-55e8-acf3-c60a3138e91c",
+      "paired_seed": 20260825,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "regenerate",
+          "lock",
+          "build"
+        ],
+        "tokens": 620,
+        "ttft_ms": 3097.654,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 181,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "6fcb3438c079025d960d9c966631f378af6099d623fd77add91c98bc586a9bf0",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "2be17013-e672-55e8-acf3-c60a3138e91c"
+        ],
+        "bulletin_hash": "120b8285de3b78779cfb15509b8ae0afadb35e372fa85c51ee2934d645952ad9",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": true,
+        "matched_criteria": [
+          "regenerate",
+          "lock",
+          "build"
+        ],
+        "tokens": 1195,
+        "ttft_ms": 2547.204,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 106,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "1f20105b616cd0f741ca1a2079bb786630b72447fa35c16ec310f7c0e4691424",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "diagnose-first",
+      "expected_memory_id": "7ffdbf99-f1c1-57eb-b833-961e90facda2",
+      "paired_seed": 20260826,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "reproduce",
+          "before",
+          "stop"
+        ],
+        "tokens": 505,
+        "ttft_ms": 2790.561,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 185,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "735802b450f3c51f30654bff530c5201dac29bb04a1a8d18860fe15b2622b168",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "7ffdbf99-f1c1-57eb-b833-961e90facda2"
+        ],
+        "bulletin_hash": "bf9acae2a6c226695ba6e4fee9b8b647ab05292c77b42299457064f3b53e9c66",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": true,
+        "matched_criteria": [
+          "reproduce",
+          "before",
+          "stop"
+        ],
+        "tokens": 1380,
+        "ttft_ms": 2230.133,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 109,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "15880cfade2068ac8ac3cdcaead97ffeb5cc5d5d28ba8cfe33a83a39bb75bb5c",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "workspace-boundary",
+      "expected_memory_id": "905177a2-fd44-5229-9fa5-a3fe39aa6bd2",
+      "paired_seed": 20260827,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "outside",
+          "workspace",
+          "fail"
+        ],
+        "tokens": 936,
+        "ttft_ms": 3649.631,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 187,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "f27b81fb6758a08f6042b5d4d5f339747ff2d4837c85a0d057c000fdf10c1241",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "905177a2-fd44-5229-9fa5-a3fe39aa6bd2"
+        ],
+        "bulletin_hash": "4c43c55f2e56c123bfa79f441639c01807e5038a31edf5c80365b6c5055e5f86",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [
+          "outside",
+          "workspace"
+        ],
+        "tokens": 935,
+        "ttft_ms": 2452.216,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 112,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "0c145949906480eaa37750d70d341d0863bbc6252514a708f7cbc2c01cce3bcf",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "partial-retry",
+      "expected_memory_id": "ea161743-84f0-5751-8e0b-e838ce5226b6",
+      "paired_seed": 20260828,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "preserve",
+          "completed",
+          "bounded retry",
+          "unfinished"
+        ],
+        "tokens": 543,
+        "ttft_ms": 2870.962,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 190,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "668d92d21289d420d538a304f49fdbd49f6dae0d86b85307e5c7f2388a1e9bbf",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "ea161743-84f0-5751-8e0b-e838ce5226b6"
+        ],
+        "bulletin_hash": "8681e62dca72a29d762f84fc4e5d97ec0b9ce4380ef7162548fb2b7a8db33085",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [
+          "completed",
+          "unfinished"
+        ],
+        "tokens": 1037,
+        "ttft_ms": 3393.72,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 113,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "601ab7a6cf7b7822932b73d2f190499e5aa74a2d6ddae049a6f2a297c7d31359",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "migration-plan",
+      "expected_memory_id": "1f5a6ff8-98ce-5f66-966a-3fa00c9e9bb2",
+      "paired_seed": 20260829,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": false,
+        "matched_criteria": [
+          "validated"
+        ],
+        "tokens": 982,
+        "ttft_ms": 3320.2,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 103,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "2f2b5159bfe03e0a7939475b85329918ddea06b683639af74ef0490bb6e982db",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": true
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [],
+        "tokens": 837,
+        "ttft_ms": 2554.408,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 103,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "1e9d5c1f4f8086e0f8ab54c09e114a85e40c6dffa8ae7be2e8eef110fc46587c",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "daily-files",
+      "expected_memory_id": "f4d47c97-0933-5f80-aa75-b592cf50ae64",
+      "paired_seed": 20260830,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "delete",
+          "not",
+          "migrate"
+        ],
+        "tokens": 499,
+        "ttft_ms": 2841.168,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 184,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "4d88631fd8d6efb34c7182d8cc2a6aac6d602fa3faaf1534580bbf8d15c50114",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "f4d47c97-0933-5f80-aa75-b592cf50ae64"
+        ],
+        "bulletin_hash": "4dbf511bc8c61b5219bcea8096ac7b4616cb42f76b795aa23957a30b8ca94d15",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [
+          "not",
+          "migrate"
+        ],
+        "tokens": 1288,
+        "ttft_ms": 2372.488,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 108,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "376fcf5fe1fd7fbaf738ef12ee9012ad9a0e3237ca40eb8d2ea69d233945c9a4",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "module-boundary",
+      "expected_memory_id": "b2f2965f-0741-5c56-98a8-b127cee24391",
+      "paired_seed": 20260831,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "module boundary"
+        ],
+        "tokens": 571,
+        "ttft_ms": 2815.446,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 175,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "26652457d847cafad179b37187189162734fd60548543de81ee84867de3255ba",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "b2f2965f-0741-5c56-98a8-b127cee24391"
+        ],
+        "bulletin_hash": "2a86ff1046fe5b17043d99d4392830d266719fcadb8fe9d78aece1566f87db7c",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [],
+        "tokens": 1327,
+        "ttft_ms": 2395.692,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 104,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "20afb5a6038df7dfcfc8710af32f4855b62702ae20fbc039bf7b637ea092961d",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "single-fact-source",
+      "expected_memory_id": "95c78682-8d34-5078-9948-d61ee733e375",
+      "paired_seed": 20260832,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": false,
+        "matched_criteria": [
+          "PostgreSQL",
+          "authoritative"
+        ],
+        "tokens": 451,
+        "ttft_ms": 3203.026,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 184,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "2d066e8128858a5548ff2a7e4debe4c4e5e46d01e890183d1401859a61f9c63f",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "95c78682-8d34-5078-9948-d61ee733e375"
+        ],
+        "bulletin_hash": "a5839a9be78bf457ab1b785cb8498c314487872df727ef27b55e0b3f4dfb988d",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [
+          "authoritative"
+        ],
+        "tokens": 1549,
+        "ttft_ms": 2542.875,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 108,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "c4e96ff607341ca1ecaa2f533ee68182a0813bf5cbae901f60ea239d7039ebb8",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "index-rebuild",
+      "expected_memory_id": "071183bd-bec5-5bec-993b-3a5f4280dbeb",
+      "paired_seed": 20260833,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "rebuild",
+          "PostgreSQL",
+          "desired state"
+        ],
+        "tokens": 468,
+        "ttft_ms": 3060.985,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 178,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "50db9b8fb80f586b6f7f17fc6bcdaf5921c4cec1911ca1ffd98ea1836bd0c7d6",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "071183bd-bec5-5bec-993b-3a5f4280dbeb"
+        ],
+        "bulletin_hash": "93ee84f3d7d0316e7b663f065dab88cf778ba52967b2838a7a42bc602949957c",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [],
+        "tokens": 814,
+        "ttft_ms": 2530.882,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 102,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "4ef0c16c43e17e804cd8f16fadbbcfb062f006b9f629602bc2604b4c80c90c47",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "source-retention",
+      "expected_memory_id": "df3b5597-8b2f-53e5-81a7-84d1c755d8e2",
+      "paired_seed": 20260834,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "source unavailable",
+          "not",
+          "invent"
+        ],
+        "tokens": 501,
+        "ttft_ms": 2745.217,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 183,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "9fb69be4cc3f629dbde3e6c3b65e622228b58ce5dbc179c60c30949f16893a16",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "df3b5597-8b2f-53e5-81a7-84d1c755d8e2"
+        ],
+        "bulletin_hash": "69ab5541352306adad903d9e09e34c0fd7ef81480b110bb55a19d1be973be5f5",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [
+          "not"
+        ],
+        "tokens": 980,
+        "ttft_ms": 2876.933,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 102,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "26b3ff3731d57d6b47afacaf42033876a4c23dece94bee44dd8534108d2c0840",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    },
+    {
+      "task_id": "cache-prefix",
+      "expected_memory_id": "e3806655-cba4-581e-9105-a79cd782db53",
+      "paired_seed": 20260835,
+      "model_seed_applied": true,
+      "on_user_id": "00000000-0000-0000-0000-000000000301",
+      "off_user_id": "00000000-0000-0000-0000-000000000302",
+      "memory_on": {
+        "success": true,
+        "matched_criteria": [
+          "stable",
+          "before",
+          "Bulletin",
+          "user"
+        ],
+        "tokens": 539,
+        "ttft_ms": 2691.909,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 183,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "f937414d78cfc7258989e56089853485360ec254e6f2740b64652dd511e64dec",
+        "failure_category": null,
+        "bulletin_memory_ids": [
+          "e3806655-cba4-581e-9105-a79cd782db53"
+        ],
+        "bulletin_hash": "6363df0b3cd44b58dc1c79b27afc486b57518ea492b675a6c102293f653a278e",
+        "bulletin_degraded": false
+      },
+      "memory_off": {
+        "success": false,
+        "matched_criteria": [],
+        "tokens": 2157,
+        "ttft_ms": 3407.529,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "uncached_input_tokens": 109,
+        "cache_read_ratio": 0.0,
+        "tool_calls": 0,
+        "answer_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "failure_category": null,
+        "bulletin_memory_ids": [],
+        "bulletin_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bulletin_degraded": false
+      }
+    }
+  ],
+  "metrics": {
+    "memory_off_task_success_rate": 0.16666666666666666,
+    "memory_on_task_success_rate": 0.8333333333333334,
+    "task_success_delta": {
+      "mean_delta": 0.6666666666666666,
+      "ci95_low": 0.4166666666666667,
+      "ci95_high": 0.9166666666666666
+    },
+    "repeated_failure_reduction": {
+      "measurement_status": "not_measured",
+      "reason": "This frozen task set measures task success, not repeated executions of a prior failure."
+    },
+    "memory_off_tokens": 14291,
+    "memory_on_tokens": 7152,
+    "memory_off_cache_read_tokens": 0,
+    "memory_on_cache_read_tokens": 0,
+    "memory_off_cache_write_tokens": 0,
+    "memory_on_cache_write_tokens": 0,
+    "memory_off_uncached_input_tokens": 1285,
+    "memory_on_uncached_input_tokens": 2115,
+    "memory_off_cache_read_ratio": 0.0,
+    "memory_on_cache_read_ratio": 0.0,
+    "memory_on_bulletin_degraded_rate": 0.08333333333333333,
+    "memory_on_expected_recall_rate": 0.9166666666666666,
+    "memory_off_mean_ttft_ms": 2737.88975,
+    "memory_on_mean_ttft_ms": 3019.7026666666666,
+    "memory_query_latency_ms": 309.84727074004087,
+    "background_extraction": {
+      "measurement_status": "paused_by_design",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "reason": "Automatic capture and extraction are paused for both paired groups."
+    },
+    "monetary_cost": 0.0,
+    "memory_off_tool_calls": 0,
+    "memory_on_tool_calls": 0
+  },
+  "gate_passed": true
+}

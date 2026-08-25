@@ -243,7 +243,8 @@ class TestConflict409Contract:
         assert exc.data["session_id"] == "session-1"
         assert exc.data["status"] == "running"
 
-    def test_conflict_response_via_handler(self) -> None:
+    @pytest.mark.asyncio
+    async def test_conflict_response_via_handler(self) -> None:
         """验证 ConflictException → ResponseUtil.conflict → HTTP 409 + code=409。"""
         from server.exception_handlers import handle_exception
         from fastapi import FastAPI
@@ -265,9 +266,7 @@ class TestConflict409Contract:
 
         # 直接调用 handler 验证响应
         handler = app.exception_handlers[ConflictException]
-        import asyncio
-
-        response = asyncio.get_event_loop().run_until_complete(handler(None, exc))
+        response = await handler(None, exc)
         assert response.status_code == 409
         body = json.loads(response.body.decode())
         assert body["code"] == 409

@@ -36,6 +36,7 @@ from noesis.chat.runs import (
     TerminalCandidate,
     TerminalCommitResult,
 )
+from noesis.chat.message_builder import normalize_message_content_for_delivery
 from noesis.chat.runs.projection import RunProjection
 from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis.storage.postgres.manager import pg_manager
@@ -47,6 +48,8 @@ from noesis.schemas.qa_vo import QaQueryRequest
 from noesis.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
 from noesis.services.qa import QaService
 from noesis.services.chat_service import ChatService
+from noesis.services.compaction_service import compact_session
+from noesis.services.memory.capture import MemoryCaptureService
 
 
 _OWNER_INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"
@@ -72,8 +75,16 @@ run_manager = RunManager(
 
 # 注入 run_manager 给命令层（/status），避免 noesis.chat 直接 import noesis.services。
 from noesis.chat.commands.runtime import set_run_manager_provider  # noqa: E402
+from noesis.chat.commands.runtime import set_compaction_provider  # noqa: E402
 
 set_run_manager_provider(lambda: run_manager)
+set_compaction_provider(
+    lambda session_id, user_id, instructions=None: compact_session(
+        session_id=session_id,
+        user_id=user_id,
+        instructions=instructions,
+    )
+)
 
 
 # 注入「建新会话」工厂给命令层（/new），避免 noesis.chat 直接 import noesis.services。
@@ -334,6 +345,9 @@ class RunService:
                 user_error_message="任务启动失败，请稍后重试",
             )
             if won:
+                await MemoryCaptureService.enqueue_for_terminal(
+                    cleanup_db, run_id=run.id, content=content
+                )
                 await cleanup_db.commit()
             else:
                 await cleanup_db.rollback()
@@ -385,6 +399,7 @@ class RunService:
                         current_user,
                         run_db,
                         assistant_message_id=run.assistant_message_id,
+                        run_id=run.id,
                     )
                     if run.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
                         # TEST_CASE_QA 不纳入本次 typed 主路径迁移；维持隔离的
@@ -535,6 +550,11 @@ class RunService:
                 usage=projection.run_usage,
             )
             if won:
+                await MemoryCaptureService.enqueue_for_terminal(
+                    db,
+                    run_id=candidate.envelope.run_id,
+                    content=content,
+                )
                 await db.commit()
                 return TerminalCommitResult("committed")
             await db.rollback()
@@ -622,6 +642,9 @@ class RunService:
                 if not won:
                     await db.rollback()
                     return
+                await MemoryCaptureService.enqueue_for_terminal(
+                    db, run_id=run_id, content=content
+                )
             else:
                 await repository.compare_and_set_status(
                     run_id,
@@ -696,7 +719,8 @@ class RunService:
 
     @staticmethod
     def _snapshot_from_row(row: TAgentRun) -> RunSnapshot:
-        parts = row.snapshot.get("parts", []) if isinstance(row.snapshot, dict) else []
+        raw_snapshot = row.snapshot if isinstance(row.snapshot, dict) else {}
+        parts = normalize_message_content_for_delivery(raw_snapshot).get("parts", [])
         pending_hitl = (
             row.snapshot.get("_pending_hitl")
             if isinstance(row.snapshot, dict)
@@ -842,6 +866,7 @@ class RunService:
                         grant_scope=request.grant_scope,
                         current_user=current_user,
                         db=run_db,
+                        run_id=run_id,
                     ):
                         await publish(event, projection.attempt_id)
                     await run_manager.drain_persistence(run_id)

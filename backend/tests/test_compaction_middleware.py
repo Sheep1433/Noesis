@@ -288,3 +288,39 @@ def test_manual_compact_bypasses_threshold_and_breaker() -> None:
     update = _command_update(result)
     assert update["compaction"]["last_mode"] == "manual"
     assert len(seen[0].messages) < 10  # messages 被压缩了
+
+
+@pytest.mark.asyncio
+async def test_host_manual_compaction_updates_policy_without_model_turn() -> None:
+    calls = []
+    checkpoints = []
+
+    async def summarize(messages):
+        calls.append(list(messages))
+        return "host summary"
+
+    middleware = CompactionMiddleware(
+        token_counter=lambda messages: len(messages) * 10,
+        summarize=lambda messages: "sync summary must not run",
+        async_summarize=summarize,
+        thresholds=_thresholds(),
+        keep_messages=2,
+    )
+    state = {"messages": _messages(10)}
+
+    async def checkpoint(update):
+        checkpoints.append(update)
+
+    compacted = await middleware.acompact_state(
+        state,
+        "session-host",
+        checkpoint=checkpoint,
+    )
+
+    assert compacted is not None
+    assert len(calls) == 1
+    assert compacted.result.mode == "manual"
+    assert compacted.pre_message_count == 10
+    assert compacted.post_message_count == 3
+    assert checkpoints[0]["compaction"]["event"]["cutoff_index"] == 8
+    assert "compaction" not in state

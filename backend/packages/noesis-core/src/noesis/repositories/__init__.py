@@ -11,6 +11,8 @@ from typing import Any
 __all__ = [
     "AgentRunRepository",
     "KbCollectionConfigRepository",
+    "MachineMemoryRepository",
+    "MemoryPreferenceRepository",
     "SettingsRepository",
     "SqlAlchemySessionRepository",
     "SqlAlchemyUserRepository",
@@ -36,6 +38,14 @@ def __getattr__(name: str) -> Any:
         from noesis.repositories.kb_collection_config_repository import KbCollectionConfigRepository
 
         return KbCollectionConfigRepository
+    if name == "MemoryPreferenceRepository":
+        from noesis.repositories.memory_preference_repository import MemoryPreferenceRepository
+
+        return MemoryPreferenceRepository
+    if name == "MachineMemoryRepository":
+        from noesis.repositories.machine_memory_repository import MachineMemoryRepository
+
+        return MachineMemoryRepository
     if name == "SettingsRepository":
         from noesis.repositories.settings_repository import SettingsRepository
 

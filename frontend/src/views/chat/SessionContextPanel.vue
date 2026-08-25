@@ -60,7 +60,7 @@ const { size: treeWidth, startResize: startTreeResize } = usePaneResize({
   max: 240,
 })
 const { isMobile } = useBreakpoint()
-const effectiveTreeWidth = computed(() => Math.min(treeWidth.value, isMobile.value ? 132 : 240))
+const effectiveTreeWidth = computed(() => Math.min(treeWidth.value, isMobile.value ? 150 : 240))
 
 function revokePreviewImage() {
   if (previewImageSrc.value) {
@@ -215,6 +215,7 @@ defineExpose({ reload })
 <template>
   <div
     class="session-files-panel"
+    :class="{ 'session-files-panel--mobile': isMobile }"
     :style="backgroundColor ? { backgroundColor, '--panel-bg': backgroundColor } : undefined"
   >
     <div class="panel-toolbar">
@@ -227,7 +228,7 @@ defineExpose({ reload })
       >
         在设置中打开
       </n-button>
-      <n-button quaternary size="tiny" :loading="loading" title="Refresh" @click="reload">
+      <n-button quaternary size="tiny" :loading="loading" title="刷新" aria-label="刷新文件列表" @click="reload">
         <template #icon>
           <n-icon size="16"><Refresh /></n-icon>
         </template>
@@ -375,5 +376,23 @@ defineExpose({ reload })
 
 .session-file-preview :deep(.n-code .n-code__line) {
   background-color: transparent !important;
+}
+
+.session-files-panel--mobile .panel-tree__scroll {
+  overflow-x: hidden;
+}
+
+.session-files-panel--mobile :deep(.workspace-file-tree__body),
+.session-files-panel--mobile :deep(.tree-node),
+.session-files-panel--mobile :deep(.tree-row) {
+  width: 100%;
+  min-width: 0;
+}
+
+.session-files-panel--mobile :deep(.tree-label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

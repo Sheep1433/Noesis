@@ -11,10 +11,12 @@ from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
+from noesis.agents.memory_runtime import build_memory_bulletin_middleware
 from noesis.factory import create_noesis_agent
 from noesis.agents.prompts import PromptProfile, build_prompt
 from noesis.agents.tools import build_kb_search_tools, build_web_search_tools, list_qdrant_collection_names
 from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
+from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.config.env import ChatAttachmentConfig
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
@@ -55,10 +57,12 @@ class GeneralQAAgent(BaseAgent):
         model_id: Optional[str] = None,
         mcp_tools: Optional[List[Any]] = None,
         db: Optional[AsyncSession] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         self.running_tasks[task_id] = {"cancelled": False}
+        user_id = str(getattr(current_user, "user_id", "") or "")
 
         scoped_collections = _normalize_kb_collections(kb_collections)
         kb_tools = build_kb_search_tools(
@@ -67,6 +71,13 @@ class GeneralQAAgent(BaseAgent):
         ) if kb_search_enabled else []
         web_tools = build_web_search_tools() if web_search_enabled else []
         tools = kb_tools + web_tools + list(mcp_tools or [])
+        if db is not None and user_id and session_id:
+            tools.extend(build_memory_tools(
+                db=db,
+                user_id=user_id,
+                session_id=session_id,
+                agent_profile="COMMON_QA",
+            ))
         kb_enabled = len(kb_tools) > 0
         if kb_enabled:
             scope_label = scoped_collections or list_qdrant_collection_names()
@@ -76,7 +87,6 @@ class GeneralQAAgent(BaseAgent):
         if mcp_tools:
             logger.info(f"GeneralQAAgent mcp_tools={len(mcp_tools)}")
 
-        user_id = str(getattr(current_user, "user_id", "") or "")
         attachments_enabled = False
 
         if (
@@ -114,6 +124,13 @@ class GeneralQAAgent(BaseAgent):
                 checkpointer=self.checkpointer,
                 session_id=session_id,
                 attachments=tuple(str(name) for name in (file_list or {})),
+                memory_bulletin_middleware=build_memory_bulletin_middleware(
+                    db=db,
+                    user_id=user_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    agent_profile="COMMON_QA",
+                ),
                 model_id=model_id,
             )
 

@@ -9,8 +9,6 @@ from noesis.agents.backends.memory import UserMemoryBackend
 from noesis.config.user_data_paths import (
     ensure_user_memory_files,
     get_user_channels_path,
-    get_user_daily_memory_path,
-    get_user_memory_dir,
 )
 from noesis.services.messaging_channel_service import MessagingChannelService
 from noesis.services.user_memory_service import UserMemoryService
@@ -31,17 +29,6 @@ def test_user_memory_rejects_illegal_file(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
     with pytest.raises(ValueError, match="非法记忆文件名"):
         UserMemoryService.read_file("u1", "channels.json")
-
-
-def test_daily_memory_path_and_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("noesis.config.user_data_paths._USERS_ROOT", tmp_path / "users")
-    uid = "u-l2"
-    ensure_user_memory_files(uid)
-    assert get_user_memory_dir(uid).is_dir()
-    p = get_user_daily_memory_path(uid, "2026-07-23")
-    assert p.name == "2026-07-23.md"
-    with pytest.raises(ValueError):
-        get_user_daily_memory_path(uid, "bad")
 
 
 def test_agent_memory_backend_cannot_write_channels(

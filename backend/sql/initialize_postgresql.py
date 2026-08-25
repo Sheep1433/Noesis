@@ -17,10 +17,10 @@ from noesis.config.env import DataBaseConfig, get_config  # noqa: E402
 from server.db import run_migrations  # noqa: E402
 
 
-def server_url() -> str:
+def server_url(database: str = "postgres") -> str:
     return (
         f"postgresql+psycopg://{DataBaseConfig.postgres_user}:{quote_plus(DataBaseConfig.postgres_password)}@"
-        f"{DataBaseConfig.postgres_host}:{DataBaseConfig.postgres_port}/postgres"
+        f"{DataBaseConfig.postgres_host}:{DataBaseConfig.postgres_port}/{database}"
     )
 
 
@@ -43,8 +43,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="初始化 PostgreSQL（建库 + Alembic）")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    ensure_database(DataBaseConfig.postgres_database, args.dry_run)
-    ensure_database(get_config.get_checkpoint_config().postgres_database, args.dry_run)
+    business_database = DataBaseConfig.postgres_database
+    checkpoint_database = get_config.get_checkpoint_config().postgres_database
+    ensure_database(business_database, args.dry_run)
+    ensure_database(checkpoint_database, args.dry_run)
     if not args.dry_run:
         run_migrations()
 

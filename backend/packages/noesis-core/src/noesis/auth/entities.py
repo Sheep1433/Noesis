@@ -8,7 +8,7 @@ from datetime import datetime
 
 @dataclass
 class AuthUser:
-    id: int | None
+    id: str | None
     username: str
     password_hash: str
     mobile: str | None = None
@@ -21,7 +21,7 @@ class AuthUser:
 @dataclass
 class AuthSession:
     id: str
-    user_id: int
+    user_id: str
     session_digest: str
     csrf_digest: str
     created_at: int

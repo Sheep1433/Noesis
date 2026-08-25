@@ -31,7 +31,10 @@ def _request(state: dict, system_prompt: str = "static") -> ModelRequest:
 def _invoke(middleware: DynamicContextMiddleware, state: dict) -> str:
     seen: list[ModelRequest] = []
     middleware.wrap_model_call(_request(state), lambda request: seen.append(request))  # type: ignore[arg-type,return-value]
-    return seen[0].system_message.text
+    return "\n".join([
+        seen[0].system_message.text,
+        *(str(message.content) for message in seen[0].messages),
+    ])
 
 
 def test_state_schema_marks_rendered_block_private() -> None:
@@ -145,7 +148,10 @@ def test_async_hook_resolves_provider_once_for_the_run() -> None:
         update = await middleware.abefore_agent({"messages": []}, runtime=None)  # type: ignore[arg-type]
 
         async def handler(request: ModelRequest) -> str:
-            return request.system_message.text
+            return "\n".join([
+                request.system_message.text,
+                *(str(message.content) for message in request.messages),
+            ])
 
         text = await middleware.awrap_model_call(
             _request({"messages": [], **(update or {})}),

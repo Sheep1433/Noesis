@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.auth.entities import AuthSession, AuthUser
@@ -44,7 +44,7 @@ class SqlAlchemyUserRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, user_id: int) -> AuthUser | None:
+    async def get_by_id(self, user_id: str) -> AuthUser | None:
         result = await self.db.execute(select(TUser).where(TUser.id == user_id))
         row = result.scalar_one_or_none()
         return user_from_orm(row) if row is not None else None
@@ -92,6 +92,10 @@ class SqlAlchemyUserRepository:
             )
         )
 
+    async def delete(self, user_id: str) -> bool:
+        result = await self.db.execute(delete(TUser).where(TUser.id == str(user_id)))
+        return bool(result.rowcount)
+
 
 class SqlAlchemySessionRepository:
     def __init__(self, db: AsyncSession):
@@ -104,7 +108,7 @@ class SqlAlchemySessionRepository:
         row = result.scalar_one_or_none()
         return session_from_orm(row) if row is not None else None
 
-    async def get_by_id_for_user(self, session_id: str, user_id: int) -> AuthSession | None:
+    async def get_by_id_for_user(self, session_id: str, user_id: str) -> AuthSession | None:
         result = await self.db.execute(
             select(TUserSession).where(
                 TUserSession.id == session_id,
@@ -135,14 +139,14 @@ class SqlAlchemySessionRepository:
             )
         )
 
-    async def revoke_all(self, user_id: int, revoked_at: int) -> None:
+    async def revoke_all(self, user_id: str, revoked_at: int) -> None:
         await self.db.execute(
             update(TUserSession)
             .where(TUserSession.user_id == user_id, TUserSession.revoked_at.is_(None))
             .values(revoked_at=revoked_at)
         )
 
-    async def list_active(self, user_id: int, now_ms: int) -> list[AuthSession]:
+    async def list_active(self, user_id: str, now_ms: int) -> list[AuthSession]:
         result = await self.db.execute(
             select(TUserSession)
             .where(

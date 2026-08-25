@@ -1,0 +1,77 @@
+{
+  "report_version": "memory-safety-integration-v1",
+  "mode": "production_integration",
+  "created_at": "2026-08-24T11:10:20.399241+00:00",
+  "evaluation_fingerprint": "09a3d3d27cbe3bc210a7832610d28800b6584917d614a6b79c39752235be792b",
+  "effective_config": {
+    "runtime_model": "hy3-free",
+    "runtime_model_type": "opencode",
+    "runtime_model_base_url": "https://opencode.ai/zen/v1",
+    "extraction_model": "hy3-free",
+    "embedding_model_name": "text-embedding-v4",
+    "embedding_model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "chunk_max_tokens": 1600,
+    "chunk_concurrency": 4,
+    "chunk_attempts": 2,
+    "embedding_template_version": "memory-item-v1",
+    "collection_name": "noesis_memory",
+    "retrieval_top_k": 3,
+    "retrieval_overfetch": 3,
+    "retrieval_min_score": 0.45,
+    "bulletin_max_tokens": 500,
+    "bulletin_timeout_seconds": 0.4,
+    "deep_query_timeout_seconds": 5.0,
+    "deep_query_max_steps": 6,
+    "deep_query_max_spans": 12,
+    "deep_query_concurrency": 4
+  },
+  "fixture_revision": "2026-08-24.7",
+  "resource_overrides": {
+    "collection_name": "noesis_memory_integration_20260824",
+    "database": "isolated"
+  },
+  "counters": {
+    "cross_user_leaks": 0,
+    "cross_project_leaks": 0,
+    "stale_or_disabled_injections": 0,
+    "low_trust_command_injections": 0,
+    "explicit_cross_user_leaks": 0,
+    "recall_loop_items": 0,
+    "disabled_residual_injections": 0,
+    "deleted_residual_injections": 0,
+    "workspace_residuals": 0
+  },
+  "cases": {
+    "cross_user": {
+      "executed": true
+    },
+    "cross_project": {
+      "executed": true
+    },
+    "explicit_cross_user": {
+      "executed": true
+    },
+    "stale_disabled": {
+      "executed": true
+    },
+    "low_trust_command": {
+      "executed": true
+    },
+    "recall_loop": {
+      "executed": true,
+      "automatic_private_context": true,
+      "consolidation_executed": true,
+      "evidence_count_checked": true
+    },
+    "user_disabled": {
+      "executed": true
+    },
+    "deleted_pg": {
+      "executed": true
+    },
+    "workspace_deleted": {
+      "executed": true
+    }
+  },
+  "gate_passed": true
+}

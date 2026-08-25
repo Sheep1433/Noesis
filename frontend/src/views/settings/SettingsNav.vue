@@ -70,7 +70,7 @@ async function onKeydown(event: KeyboardEvent, index: number) {
   </aside>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .settings-nav-wrap {
   display: flex;
   flex-direction: column;
@@ -153,6 +153,12 @@ async function onKeydown(event: KeyboardEvent, index: number) {
   flex-wrap: nowrap;
   overflow-x: auto;
   min-width: 0;
+  padding-right: 20px;
+  scrollbar-width: none;
+}
+
+.settings-nav-wrap--mobile .settings-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .settings-nav-wrap--mobile .settings-nav__item {

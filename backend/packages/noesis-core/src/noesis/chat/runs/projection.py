@@ -290,7 +290,7 @@ class RunProjection:
             status=effective_status,
             sequence=sequence,
             attempt_id=attempt_id,
-            parts=tuple(self.builder.to_dict().get("parts", [])),
+            parts=tuple(self.builder.to_public_dict().get("parts", [])),
             finish_reason=self.finish_reason,
             error_code=self.error_code,
             user_error_message=self.user_error_message,

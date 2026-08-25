@@ -1,0 +1,153 @@
+{
+  "report_version": "memory-cache-integration-v1",
+  "mode": "production_integration",
+  "created_at": "2026-08-24T11:09:43.155512+00:00",
+  "evaluation_fingerprint": "09a3d3d27cbe3bc210a7832610d28800b6584917d614a6b79c39752235be792b",
+  "effective_config": {
+    "runtime_model": "hy3-free",
+    "runtime_model_type": "opencode",
+    "runtime_model_base_url": "https://opencode.ai/zen/v1",
+    "extraction_model": "hy3-free",
+    "embedding_model_name": "text-embedding-v4",
+    "embedding_model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "chunk_max_tokens": 1600,
+    "chunk_concurrency": 4,
+    "chunk_attempts": 2,
+    "embedding_template_version": "memory-item-v1",
+    "collection_name": "noesis_memory",
+    "retrieval_top_k": 3,
+    "retrieval_overfetch": 3,
+    "retrieval_min_score": 0.45,
+    "bulletin_max_tokens": 500,
+    "bulletin_timeout_seconds": 0.4,
+    "deep_query_timeout_seconds": 5.0,
+    "deep_query_max_steps": 6,
+    "deep_query_max_spans": 12,
+    "deep_query_concurrency": 4
+  },
+  "fixture_revision": "2026-08-24.7",
+  "runtime_model": "hy3-free",
+  "runtime_max_output_tokens": 2048,
+  "scenarios": {
+    "same_run": {
+      "bulletin_hash_equal": true,
+      "bulletin_text_equal": true,
+      "middleware_second_freeze_was_noop": true,
+      "calls": [
+        {
+          "cache_read_tokens": 5632,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 360,
+          "input_tokens": 5992,
+          "output_tokens": 46,
+          "cache_metrics_available": true,
+          "ttft_ms": 4070.83,
+          "failure_category": null
+        },
+        {
+          "cache_read_tokens": 5888,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 161,
+          "input_tokens": 6049,
+          "output_tokens": 4,
+          "cache_metrics_available": true,
+          "ttft_ms": 0.806,
+          "failure_category": null
+        }
+      ]
+    },
+    "new_run_same_bulletin": {
+      "bulletin_hash_equal": true,
+      "bulletin_text_equal": true,
+      "calls": [
+        {
+          "cache_read_tokens": 5632,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 123,
+          "input_tokens": 5755,
+          "output_tokens": 607,
+          "cache_metrics_available": true,
+          "ttft_ms": 3820.69,
+          "failure_category": null
+        },
+        {
+          "cache_read_tokens": 5504,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 251,
+          "input_tokens": 5755,
+          "output_tokens": 417,
+          "cache_metrics_available": true,
+          "ttft_ms": 3616.192,
+          "failure_category": null
+        }
+      ]
+    },
+    "new_run_changed_bulletin": {
+      "bulletin_hash_changed": true,
+      "bulletin_text_changed": true,
+      "stable_prefix_hash_equal": true,
+      "stable_prefix_hash": "65da6af0052823352f9632b74a8c695fb54053aaa999f6e4e5f6f8e7de22a0f8",
+      "bulletin_after_stable_prefix": true,
+      "calls": [
+        {
+          "cache_read_tokens": 5504,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 251,
+          "input_tokens": 5755,
+          "output_tokens": 517,
+          "cache_metrics_available": true,
+          "ttft_ms": 6162.339,
+          "failure_category": null
+        },
+        {
+          "cache_read_tokens": 5632,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 123,
+          "input_tokens": 5755,
+          "output_tokens": 696,
+          "cache_metrics_available": true,
+          "ttft_ms": 4896.435,
+          "failure_category": null
+        }
+      ]
+    },
+    "deep_query_tool_result": {
+      "frozen_bulletin_unchanged": true,
+      "calls": [
+        {
+          "cache_read_tokens": 0,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 5859,
+          "input_tokens": 5859,
+          "output_tokens": 56,
+          "cache_metrics_available": true,
+          "ttft_ms": 4061.263,
+          "failure_category": null
+        },
+        {
+          "cache_read_tokens": 5632,
+          "cache_write_tokens": null,
+          "uncached_input_tokens": 693,
+          "input_tokens": 6325,
+          "output_tokens": 528,
+          "cache_metrics_available": true,
+          "ttft_ms": 89.119,
+          "failure_category": null
+        }
+      ]
+    }
+  },
+  "metrics": {
+    "cache_read_availability": 1.0,
+    "cache_write_availability": 0.0,
+    "cache_read_tokens": 39424,
+    "cache_write_tokens": 0,
+    "uncached_input_tokens": 7821,
+    "ttft_availability": 1.0,
+    "mean_ttft_ms": 3339.70925,
+    "monetary_cost": 0.0
+  },
+  "call_count": 8,
+  "failure_count": 0,
+  "gate_passed": true
+}

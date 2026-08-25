@@ -128,7 +128,7 @@ setTimeout(() => {
   padding:
     var(--noesis-safe-area-top)
     0
-    var(--noesis-safe-area-bottom);
+    calc(var(--noesis-mobile-nav-height) + var(--noesis-safe-area-bottom));
 }
 
 .app-shell__content--mobile-chat {

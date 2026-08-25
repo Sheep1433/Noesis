@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 
 export interface AuthUser {
-  id: number
   username: string
   mobile?: string | null
 }

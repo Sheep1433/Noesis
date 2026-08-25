@@ -40,10 +40,10 @@ async def test_get_session_by_id_normalizes_integer_user_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_session_normalizes_integer_user_id() -> None:
+async def test_get_or_create_session_uses_uuid_user_id_type() -> None:
     db = _Session()
-    await ChatService.get_or_create_session(1, "session-1", db=db)
-    assert TChatSession.user_id.type.process_bind_param(1, None) == "1"
+    await ChatService.get_or_create_session("00000000-0000-7000-8000-000000000001", "session-1", db=db)
+    assert TChatSession.user_id.type.python_type is str
 
 
 @pytest.mark.asyncio

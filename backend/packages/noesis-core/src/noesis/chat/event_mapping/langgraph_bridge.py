@@ -59,6 +59,15 @@ def _show_thinking_process_enabled() -> bool:
 TASK_TOOL_NAME = "task"
 
 
+def _tool_provider(item: Dict[str, Any]) -> tuple[str, str | None]:
+    metadata = item.get("metadata")
+    if not isinstance(metadata, dict):
+        return "unknown", None
+    key = str(metadata.get("noesis_provider_key") or "unknown").strip() or "unknown"
+    version = str(metadata.get("noesis_provider_version") or "").strip() or None
+    return key, version
+
+
 def _format_sse(event: str, data: Dict[str, Any]) -> RunEvent:
     """构造 typed wire frame；字符串编码只允许在 Delivery 边界发生。"""
     return WireFrame(event=event, data=dict(data))
@@ -101,6 +110,7 @@ class LangGraphSseBridge:
             (f for f in USAGE_FIELDS if f != "turns"), 0.0,
         )
         self._model_call_starts: Dict[str, float] = {}
+        self._model_first_token_seen: set[str] = set()
         self._current_attempt_id = 1
         self._model_attempt_ids: Dict[str, int] = {}
         self.last_context_snapshot: Dict[str, int] = {}
@@ -128,6 +138,13 @@ class LangGraphSseBridge:
         details = usage.get("input_token_details") or {}
         self.message_usage["cache_read_tokens"] += int(details.get("cache_read") or 0)
         self.message_usage["cache_write_tokens"] += int(details.get("cache_write") or 0)
+        if usage.get("cache_metrics_available") is True:
+            self.message_usage["cache_metrics_available_calls"] += 1
+            self.message_usage["uncached_input_tokens"] += int(
+                usage.get("uncached_input_tokens") or 0
+            )
+        elif usage.get("cache_metrics_available") is False:
+            self.message_usage["cache_metrics_unavailable_calls"] += 1
 
         # 单轮真实 input_tokens → 更新上下文指示器（非累计，每次覆盖）。
         # 仅主对话（无 parent_task_call_id）写入，子 Agent 的 input_tokens 不覆盖圆环。
@@ -739,6 +756,7 @@ class LangGraphSseBridge:
             run_id = str(item.get("run_id") or "")
             if run_id:
                 self._model_call_starts[run_id] = time.perf_counter()
+                self._model_first_token_seen.discard(run_id)
             # 标记该 scope 下一次 on_tool_start 要 mint 新 step_id（并行工具分组）。
             scope = ToolRunTracker.resolve_parent_task_call_id(item, ctx) or "root"
             ctx.setdefault("pending_model_step_scopes", set()).add(scope)
@@ -757,6 +775,18 @@ class LangGraphSseBridge:
                 ctx["reasoning_buffer"] = (ctx.get("reasoning_buffer") or "") + reasoning_delta
                 self._emit_reasoning_delta(reasoning_delta, out, parent_task_call_id)
             content = extract_text_content(chunk) if chunk is not None else ""
+            model_run_id = str(item.get("run_id") or "")
+            if (
+                model_run_id
+                and model_run_id not in self._model_first_token_seen
+                and (reasoning_delta or content)
+            ):
+                start = self._model_call_starts.get(model_run_id)
+                if start is not None:
+                    self.message_usage["ttft_ms"] += max(
+                        0.0, (time.perf_counter() - start) * 1000
+                    )
+                self._model_first_token_seen.add(model_run_id)
             if content:
                 if builder is not None:
                     ctx["text_buffer"] = (ctx.get("text_buffer") or "") + content
@@ -796,9 +826,14 @@ class LangGraphSseBridge:
             if not usage_meta and isinstance(output, dict):
                 usage_meta = output.get("usage_metadata")
             # steps / llm_ms 无条件累计（provider 不返回 usage 的调用也计步计时）
-            start = self._model_call_starts.pop(str(item.get("run_id") or ""), None)
+            model_run_id = str(item.get("run_id") or "")
+            start = self._model_call_starts.pop(model_run_id, None)
             if start is not None:
-                self.message_usage["llm_ms"] += max(0.0, (time.perf_counter() - start) * 1000)
+                elapsed_ms = max(0.0, (time.perf_counter() - start) * 1000)
+                self.message_usage["llm_ms"] += elapsed_ms
+                if model_run_id not in self._model_first_token_seen and output is not None:
+                    self.message_usage["ttft_ms"] += elapsed_ms
+            self._model_first_token_seen.discard(model_run_id)
             self.message_usage["steps"] += 1
             if usage_meta:
                 self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out, parent_task_call_id)
@@ -856,6 +891,7 @@ class LangGraphSseBridge:
         ctx["current_tool_call_id"] = tool_call_id
 
         if builder is not None:
+            provider_key, provider_version = _tool_provider(item)
             builder.append_tool(
                 tool_name,
                 input_obj,
@@ -863,6 +899,8 @@ class LangGraphSseBridge:
                 parent_task_call_id=parent_task_call_id,
                 state=ToolState.RUNNING,
                 step_id=step_id,
+                provider_key=provider_key,
+                provider_version=provider_version,
             )
 
         part_id = new_id("part-tool")

@@ -149,7 +149,7 @@ function onSearch() {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .kb-search-panel {
   display: flex;
   flex-direction: column;

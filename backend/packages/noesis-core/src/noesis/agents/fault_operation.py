@@ -9,10 +9,13 @@ import uuid
 from typing import Any, AsyncGenerator, Optional
 
 from langchain_core.messages import HumanMessage
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
+from noesis.agents.memory_runtime import build_memory_bulletin_middleware
 from noesis.factory import build_noesis_middleware, create_noesis_agent
 from noesis.agents.mcp.loader import load_mcp_tools
+from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.agents.prompts import PromptProfile, build_prompt
 from noesis.agents.backends import agent_sandbox_session, create_agent_backend
 from noesis.config.mcp_config import MCP_PROFILE_FAULT_OPERATION
@@ -80,6 +83,8 @@ class FaultOperationAgent(BaseAgent):
         qa_type: Optional[str] = None,
         model_id: Optional[str] = None,
         mcp_tools: Optional[list] = None,
+        db: Optional[AsyncSession] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """运行 Agent 并返回流式响应"""
         task_id = session_id or str(uuid.uuid4())
@@ -114,16 +119,31 @@ class FaultOperationAgent(BaseAgent):
                     if mcp_tools is not None
                     else await self._load_mcp_tools()
                 )
+                root_tools = [*resolved_mcp]
+                if db is not None:
+                    root_tools.extend(build_memory_tools(
+                        db=db,
+                        user_id=user_id,
+                        session_id=session_id,
+                        agent_profile="FAULT_OPERATION_QA",
+                    ))
                 backend = await create_agent_backend(user_id, session_id)
 
                 agent = create_noesis_agent(
                     profile="FAULT_OPERATION_QA",
-                    tools=resolved_mcp,
+                    tools=root_tools,
                     system_prompt=build_prompt(PromptProfile.FAULT_OPERATION),
                     checkpointer=self.checkpointer,
                     backend=backend,
                     workspace="/workspace",
                     session_id=session_id,
+                    memory_bulletin_middleware=build_memory_bulletin_middleware(
+                        db=db,
+                        user_id=user_id,
+                        session_id=session_id,
+                        run_id=run_id,
+                        agent_profile="FAULT_OPERATION_QA",
+                    ),
                     attachments=tuple(str(name) for name in (file_list or {})),
                     subagents=_build_fault_operation_subagents(
                         backend, resolved_mcp, model_id=model_id, session_id=session_id

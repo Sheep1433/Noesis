@@ -57,7 +57,7 @@ function onTabUpdate(value: string | number) {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .extensions {
   display: flex;
   flex-direction: column;

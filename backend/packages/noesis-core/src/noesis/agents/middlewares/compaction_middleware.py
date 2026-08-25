@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 from dataclasses import dataclass
-from typing import Annotated, Any, Awaitable, Callable, NotRequired
+from typing import Annotated, Any, Awaitable, Callable, Mapping, NotRequired
 
 from deepagents.backends import BackendProtocol
 from langchain.agents.middleware.types import (
@@ -92,6 +92,20 @@ class CompactionResult:
     original_message_count: int
     mode: str
     attempts: int
+
+
+@dataclass(frozen=True)
+class ManualCompactionState:
+    """Host-level compaction outcome after the checkpoint callback succeeds."""
+
+    result: CompactionResult
+    pre_message_count: int
+    post_message_count: int
+    pre_tokens: int
+    post_tokens: int
+
+
+CheckpointWriter = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 def _summary_is_invalid(text: str) -> bool:
@@ -218,9 +232,10 @@ class CompactionMiddleware(
     def _manual_compact_requested(request: ModelRequest[Any]) -> bool:
         """检查 runtime.context 是否有 manual compact 请求标记。
 
-        ``/compact`` 命令在 runtime.context 设 ``manual_compact_requested=True``，
-        CompactionMiddleware 检测到后强制触发压缩（绕过阈值和 breaker）。
-        design §12: 手动 compact 不受自动熔断限制。
+        Host/runtime entry may set ``manual_compact_requested=True`` to force
+        the normal model-call seam to compact, bypassing threshold and breaker.
+        The direct ``/compact`` command uses ``acompact_state`` instead, so it
+        does not create a model turn.
         """
         runtime = request.runtime
         context = getattr(runtime, "context", None)
@@ -373,13 +388,23 @@ class CompactionMiddleware(
         return CompactionResult(summary, archive_path, tuple(preserved), len(messages), mode, attempts)
 
     async def _abuild(
-        self, messages: list[AnyMessage], thread_id: str, mode: str
+        self,
+        messages: list[AnyMessage],
+        thread_id: str,
+        mode: str,
+        *,
+        instructions: str | None = None,
     ) -> CompactionResult | None:
         cutoff = _safe_cutoff(messages, self._keep_messages)
         if cutoff <= 0:
             return None
         prefix, preserved = messages[:cutoff], messages[cutoff:]
-        summary_result = await self._asummarize_with_retry(prefix)
+        summary_input = list(prefix)
+        if instructions:
+            summary_input.append(
+                HumanMessage(content=f"Retain these details in the summary: {instructions}")
+            )
+        summary_result = await self._asummarize_with_retry(summary_input)
         if summary_result is None:
             return None
         summary, attempts = summary_result
@@ -411,6 +436,17 @@ class CompactionMiddleware(
         self, request: ModelRequest[ContextT], result: CompactionResult
     ) -> ModelRequest[ContextT]:
         policy = self._policy_state(request.state)
+        state_update = self.state_update_for_result(result, policy)
+        return request.override(
+            messages=[self._summary_message(result), *result.preserved_messages],
+            state={**request.state, **state_update},
+        )
+
+    def state_update_for_result(
+        self, result: CompactionResult, previous_policy: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Build the checkpoint update shared by model-call and host compaction."""
+        policy = dict(previous_policy or {})
         cutoff = self._raw_cutoff(policy, result)
         policy.update(
             {
@@ -425,9 +461,55 @@ class CompactionMiddleware(
                 },
             }
         )
-        return request.override(
-            messages=[self._summary_message(result), *result.preserved_messages],
-            state={**request.state, "compaction": policy},
+        return {"compaction": policy}
+
+    async def acompact_state(
+        self,
+        state: Mapping[str, Any],
+        thread_id: str,
+        *,
+        instructions: str | None = None,
+        checkpoint: CheckpointWriter | None = None,
+    ) -> ManualCompactionState | None:
+        """Compact checkpointed history without starting a model turn.
+
+        This is the host/runtime seam used by ``/compact``. The effective history
+        is projected exactly as it is before a normal model call; only the
+        checkpointed compaction policy changes, so raw messages remain available
+        for resume and future re-compaction.
+        """
+        raw_messages = list(state.get("messages") or [])
+        if not raw_messages:
+            return None
+
+        request = ModelRequest(
+            model=object(),  # type: ignore[arg-type]
+            messages=raw_messages,
+            state=dict(state),
+        )
+        effective_messages = list(self._project(request).messages)
+        result = await self._abuild(
+            effective_messages,
+            thread_id,
+            "manual",
+            instructions=instructions,
+        )
+        if result is None:
+            return None
+
+        state_update = self.state_update_for_result(
+            result, self._policy_state(dict(state))
+        )
+        if checkpoint is not None:
+            await checkpoint(state_update)
+
+        compacted_messages = [self._summary_message(result), *result.preserved_messages]
+        return ManualCompactionState(
+            result=result,
+            pre_message_count=len(effective_messages),
+            post_message_count=len(compacted_messages),
+            pre_tokens=self._token_counter(effective_messages),
+            post_tokens=self._token_counter(compacted_messages),
         )
 
     @staticmethod
@@ -441,22 +523,7 @@ class CompactionMiddleware(
     def _state_command(
         self, result: CompactionResult, previous_policy: dict[str, Any] | None = None
     ) -> Command[Any]:
-        cutoff = self._raw_cutoff(previous_policy or {}, result)
-        return Command(
-            update={
-                "compaction": {
-                    "consecutive_failures": 0,
-                    "last_mode": result.mode,
-                    "last_archive_path": result.archive_path,
-                    "summary_attempts": result.attempts,
-                    "event": {
-                        "summary_message": self._summary_message(result),
-                        "cutoff_index": cutoff,
-                        "archive_path": result.archive_path,
-                    },
-                },
-            }
-        )
+        return Command(update=self.state_update_for_result(result, previous_policy))
 
     def _failure_request(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
         policy = self._policy_state(request.state)
@@ -582,4 +649,11 @@ class CompactionMiddleware(
         return response
 
 
-__all__ = ["CompactionMiddleware", "CompactionResult", "CompactionState", "CompactionThresholds", "PRIVATE_STATE_KEYS"]
+__all__ = [
+    "CompactionMiddleware",
+    "CompactionResult",
+    "CompactionState",
+    "CompactionThresholds",
+    "ManualCompactionState",
+    "PRIVATE_STATE_KEYS",
+]

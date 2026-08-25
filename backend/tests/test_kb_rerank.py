@@ -1,8 +1,6 @@
 """rerank 模块单测。"""
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from noesis.knowledge.rerank.client import is_rerank_available, rerank_documents
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot, set_runtime_model_snapshot
 
@@ -47,8 +45,8 @@ def test_rerank_documents_changes_order(mock_cfg, _avail, mock_client_cls):
 @patch("noesis.knowledge.rerank.client.httpx.Client")
 def test_rerank_uses_frozen_user_binding(mock_client_cls):
     snapshot = RuntimeModelSnapshot(
-        id="user:p1:rank", provider_id="p1", purpose="rerank", model_type="openai",
-        model_name="custom-rerank", base_url="https://provider.example/v1", api_key="user-key",
+        id="custom-rerank", provider_id="p1", purpose="rerank", model_type="openai",
+        base_url="https://provider.example/v1", api_key="user-key",
     )
     response = MagicMock()
     response.json.return_value = {"output": {"results": [{"index": 0, "relevance_score": 1}]}}

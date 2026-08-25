@@ -16,6 +16,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.tools import BaseTool
 
 from noesis.agents.middlewares import (
+    CompactionMiddleware,
     CompactionThresholds,
     DynamicContextBlock,
     DynamicContextProvider,
@@ -24,6 +25,15 @@ from noesis.agents.middlewares.stack import NoesisStackDeps, build_noesis_stack
 from noesis.config.env import HitlConfig, ModelConfig
 from noesis.llm.factory import get_llm
 from noesis.llm.model_limits import resolve_context_max_tokens
+
+
+def _annotate_builtin_tools(tools: Sequence[BaseTool]) -> None:
+    for tool in tools:
+        metadata = getattr(tool, "metadata", None)
+        if not isinstance(metadata, dict):
+            metadata = {}
+            tool.metadata = metadata
+        metadata.setdefault("noesis_provider_key", "builtin")
 
 
 @dataclass(frozen=True)
@@ -98,6 +108,21 @@ def _compaction_deps(model: Any, model_id: str | None) -> dict[str, Any]:
     }
 
 
+def build_compaction_middleware(
+    *, model_id: str | None = None, backend: BackendProtocol | None = None
+) -> CompactionMiddleware | None:
+    """Build the shared compaction engine for host/runtime operations.
+
+    Normal Agent calls receive the same dependencies through
+    ``build_noesis_middleware``. The host-level ``/compact`` command uses this
+    seam to update a checkpoint without creating a model turn.
+    """
+    deps = _compaction_deps(model=None, model_id=model_id)
+    if not deps:
+        return None
+    return CompactionMiddleware(backend=backend, **deps)
+
+
 def build_noesis_middleware(
     *,
     profile: str,
@@ -106,6 +131,7 @@ def build_noesis_middleware(
     tools: Sequence[BaseTool] = (),
     backend: BackendProtocol | None = None,
     dynamic_context_provider: DynamicContextProvider | None = None,
+    memory_bulletin_middleware: Any = None,
     workspace: str | None = None,
     session_id: str | None = None,
     attachments: Sequence[str] = (),
@@ -142,6 +168,7 @@ def build_noesis_middleware(
             tools=tools,
             backend=backend,
             dynamic_context_provider=dynamic_context_provider,
+            memory_bulletin_middleware=memory_bulletin_middleware,
             skills_sources=skills,
             skills_user_id=skills_user_id,
             skills_system_prompt=skills_system_prompt,
@@ -172,6 +199,7 @@ def create_noesis_agent(
     tools: Sequence[BaseTool] = (),
     backend: BackendProtocol | None = None,
     dynamic_context_provider: DynamicContextProvider | None = None,
+    memory_bulletin_middleware: Any = None,
     workspace: str | None = None,
     session_id: str | None = None,
     attachments: Sequence[str] = (),
@@ -194,6 +222,7 @@ def create_noesis_agent(
     **create_agent_kwargs: Any,
 ):
     """Map direct DeepAgents-style arguments to one LangChain middleware stack."""
+    _annotate_builtin_tools(tools)
     resolved_model = model if model is not None else get_llm(model_id=model_id)
     stack = build_noesis_middleware(
         profile=profile,
@@ -202,6 +231,7 @@ def create_noesis_agent(
         tools=tools,
         backend=backend,
         dynamic_context_provider=dynamic_context_provider,
+        memory_bulletin_middleware=memory_bulletin_middleware,
         workspace=workspace,
         session_id=session_id,
         attachments=attachments,
@@ -233,6 +263,7 @@ def create_noesis_agent(
 __all__ = [
     "MiddlewareInventoryEntry",
     "build_noesis_middleware",
+    "build_compaction_middleware",
     "create_noesis_agent",
     "middleware_inventory",
 ]

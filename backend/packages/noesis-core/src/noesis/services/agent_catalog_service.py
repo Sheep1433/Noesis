@@ -51,7 +51,6 @@ class AgentCatalogService:
                 "child_session_id": child["session_id"],
                 "created_by_tool_call_id": child.get("created_by_tool_call_id"),
                 "session_id": session_id,
-                "user_id": str(user_id),
                 "description": child["title"],
                 "kind": "subagent",
                 "status": runtime.get("status") or child["status"],
@@ -65,7 +64,9 @@ class AgentCatalogService:
                 "turn_count": runtime.get("turn_count") or child.get("turn_count", 0),
             })
         tasks.extend(
-            task for task in runtime_tasks if task.get("kind") == "shell"
+            {key: value for key, value in task.items() if key != "user_id"}
+            for task in runtime_tasks
+            if task.get("kind") == "shell"
         )
         return {
             "tasks": tasks,

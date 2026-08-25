@@ -19,7 +19,7 @@ async def test_query_user_sessions_for_record_excludes_sessions_without_user_mes
     list_result.scalars.return_value.all.return_value = []
     db.execute = AsyncMock(side_effect=[cnt_result, list_result])
 
-    sessions, total = await ChatService.query_user_sessions_for_record(
+    sessions, total, run_status_map, run_origin_map = await ChatService.query_user_sessions_for_record(
         user_id="u1",
         db=db,
         page=1,
@@ -28,6 +28,8 @@ async def test_query_user_sessions_for_record_excludes_sessions_without_user_mes
 
     assert sessions == []
     assert total == 0
+    assert run_status_map == {}
+    assert run_origin_map == {}
     assert db.execute.await_count == 2
     count_stmt = db.execute.await_args_list[0].args[0]
     sql = str(count_stmt.compile(compile_kwargs={"literal_binds": False}))

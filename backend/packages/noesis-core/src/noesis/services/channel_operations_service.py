@@ -23,7 +23,7 @@ _last_command: dict[tuple[str, str, str], float] = {}
 
 class ChannelOperationsService:
     @staticmethod
-    def _check_rate(user_id: int | str, channel_id: str, command: str) -> None:
+    def _check_rate(user_id: str, channel_id: str, command: str) -> None:
         key = (str(user_id), channel_id, command)
         now = time.monotonic()
         if now - _last_command.get(key, 0) < _RATE_LIMIT_SECONDS:
@@ -53,7 +53,7 @@ class ChannelOperationsService:
         return TelegramBotClient(cfg.bot_token, timeout=10)
 
     @classmethod
-    async def test_connection(cls, user_id: int | str, channel_id: str) -> dict:
+    async def test_connection(cls, user_id: str, channel_id: str) -> dict:
         cls._check_rate(user_id, channel_id, "connection")
         cfg = MessagingChannelService.get_runtime_channel(user_id, channel_id)
         correlation_id = str(uuid.uuid4())
@@ -75,7 +75,7 @@ class ChannelOperationsService:
             await client.aclose()
 
     @classmethod
-    async def test_delivery(cls, user_id: int | str, channel_id: str) -> dict:
+    async def test_delivery(cls, user_id: str, channel_id: str) -> dict:
         cls._check_rate(user_id, channel_id, "delivery")
         cfg = MessagingChannelService.get_runtime_channel(user_id, channel_id)
         correlation_id = str(uuid.uuid4())

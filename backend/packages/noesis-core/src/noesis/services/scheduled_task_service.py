@@ -195,7 +195,7 @@ class ScheduledTaskService:
 
     @staticmethod
     async def _provision_bound_session(
-        db: AsyncSession, user_id: int, title: str, qa_type: str
+        db: AsyncSession, user_id: str, title: str, qa_type: str
     ) -> str:
         """预建一个空会话供定时任务绑定，所有运行结果追加进同一线程。"""
         from noesis.services.chat_service import ChatService
@@ -209,7 +209,7 @@ class ScheduledTaskService:
         return session.id
 
     @staticmethod
-    async def _validate_targets(db: AsyncSession, user_id: int, session_binding: str, delivery: str) -> None:
+    async def _validate_targets(db: AsyncSession, user_id: str, session_binding: str, delivery: str) -> None:
         if session_binding != "none":
             if not session_binding.startswith("session:") or not session_binding.removeprefix("session:").strip():
                 raise ValueError("session_binding 须为 none 或 session:{id}")
@@ -226,8 +226,8 @@ class ScheduledTaskService:
                 raise ValueError("投递通道不存在或不属于当前用户")
 
     @staticmethod
-    async def list_tasks(db: AsyncSession, user_id: int | str) -> List[Dict[str, Any]]:
-        uid = int(user_id)
+    async def list_tasks(db: AsyncSession, user_id: str) -> List[Dict[str, Any]]:
+        uid = str(user_id)
         result = await db.execute(
             select(TUserScheduledTask)
             .where(TUserScheduledTask.user_id == uid, TUserScheduledTask.deleted_at.is_(None))
@@ -237,9 +237,9 @@ class ScheduledTaskService:
 
     @staticmethod
     async def get_task(
-        db: AsyncSession, user_id: int | str, task_id: str
+        db: AsyncSession, user_id: str, task_id: str
     ) -> Optional[Dict[str, Any]]:
-        uid = int(user_id)
+        uid = str(user_id)
         result = await db.execute(
             select(TUserScheduledTask).where(
                 and_(TUserScheduledTask.id == task_id, TUserScheduledTask.user_id == uid, TUserScheduledTask.deleted_at.is_(None))
@@ -298,9 +298,9 @@ class ScheduledTaskService:
 
     @classmethod
     async def create_task(
-        cls, db: AsyncSession, user_id: int | str, payload: Dict[str, Any], *, commit: bool = True
+        cls, db: AsyncSession, user_id: str, payload: Dict[str, Any], *, commit: bool = True
     ) -> Dict[str, Any]:
-        uid = int(user_id)
+        uid = str(user_id)
         name = str(payload.get("name") or "").strip() or "未命名任务"
         cron_expr = str(payload.get("cron_expr") or "").strip()
         timezone = str(payload.get("timezone") or "Asia/Shanghai").strip()
@@ -343,13 +343,13 @@ class ScheduledTaskService:
     async def update_task(
         cls,
         db: AsyncSession,
-        user_id: int | str,
+        user_id: str,
         task_id: str,
         payload: Dict[str, Any],
         *,
         commit: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        uid = int(user_id)
+        uid = str(user_id)
         result = await db.execute(
             select(TUserScheduledTask).where(
                 and_(TUserScheduledTask.id == task_id, TUserScheduledTask.user_id == uid, TUserScheduledTask.deleted_at.is_(None))
@@ -392,8 +392,8 @@ class ScheduledTaskService:
         return _to_dict(row)
 
     @staticmethod
-    async def delete_task(db: AsyncSession, user_id: int | str, task_id: str) -> bool:
-        uid = int(user_id)
+    async def delete_task(db: AsyncSession, user_id: str, task_id: str) -> bool:
+        uid = str(user_id)
         result = await db.execute(update(TUserScheduledTask).where(
             and_(TUserScheduledTask.id == task_id, TUserScheduledTask.user_id == uid, TUserScheduledTask.deleted_at.is_(None))
         ).values(enabled=False, deleted_at=_now_ms(), updated_at=_now_ms()))
@@ -402,20 +402,20 @@ class ScheduledTaskService:
 
     @classmethod
     async def set_enabled(
-        cls, db: AsyncSession, user_id: int | str, task_id: str, enabled: bool
+        cls, db: AsyncSession, user_id: str, task_id: str, enabled: bool
     ) -> Optional[Dict[str, Any]]:
         return await cls.update_task(db, user_id, task_id, {"enabled": enabled})
 
     @classmethod
     async def run_once(
-        cls, db: AsyncSession, user_id: int | str, task_id: str, idempotency_key: str | None = None
+        cls, db: AsyncSession, user_id: str, task_id: str, idempotency_key: str | None = None
     ) -> Optional[Dict[str, Any]]:
         """手动触发：只创建 queued 运行记录并后台派发执行，立即返回 run id，不阻塞 HTTP。
 
         真正的 agent 执行在后台 asyncio 任务里进行（独立 db session），避免 SuperAgent 深度任务
         导致 HTTP 请求超时。前端通过 run 记录状态（queued→running→succeeded/failed）追踪结果。
         """
-        uid = int(user_id)
+        uid = str(user_id)
         result = await db.execute(
             select(TUserScheduledTask).where(
                 and_(TUserScheduledTask.id == task_id, TUserScheduledTask.user_id == uid, TUserScheduledTask.deleted_at.is_(None))
@@ -466,7 +466,7 @@ class ScheduledTaskService:
         return run
 
     @classmethod
-    async def _run_in_background(cls, task_id: str, user_id: int, run_id: str) -> None:
+    async def _run_in_background(cls, task_id: str, user_id: str, run_id: str) -> None:
         """后台执行已创建的 run：标记 running → 执行 → 标记终态。独立 db session。"""
         from noesis.storage.postgres.manager import pg_manager
 
@@ -585,8 +585,8 @@ class ScheduledTaskService:
         return run
 
     @staticmethod
-    async def list_runs(db: AsyncSession, user_id: int | str, task_id: str, page: int, page_size: int) -> dict:
-        uid = int(user_id)
+    async def list_runs(db: AsyncSession, user_id: str, task_id: str, page: int, page_size: int) -> dict:
+        uid = str(user_id)
         task = await ScheduledTaskService.get_task(db, uid, task_id)
         if task is None:
             # 已删除任务仍允许查看其历史，但不得跨用户。
@@ -598,18 +598,18 @@ class ScheduledTaskService:
         return {"items": [_run_to_dict(row) for row in rows_result.scalars().all()], "total": int(total_result.scalar_one()), "page": page, "page_size": page_size}
 
     @staticmethod
-    async def get_run(db: AsyncSession, user_id: int | str, run_id: str) -> TUserScheduledTaskRun | None:
-        result = await db.execute(select(TUserScheduledTaskRun).where(TUserScheduledTaskRun.id == run_id, TUserScheduledTaskRun.user_id == int(user_id)))
+    async def get_run(db: AsyncSession, user_id: str, run_id: str) -> TUserScheduledTaskRun | None:
+        result = await db.execute(select(TUserScheduledTaskRun).where(TUserScheduledTaskRun.id == run_id, TUserScheduledTaskRun.user_id == str(user_id)))
         return result.scalar_one_or_none()
 
     @classmethod
-    async def retry_run(cls, db: AsyncSession, user_id: int | str, run_id: str, idempotency_key: str) -> dict | None:
+    async def retry_run(cls, db: AsyncSession, user_id: str, run_id: str, idempotency_key: str) -> dict | None:
         old = await cls.get_run(db, user_id, run_id)
         if old is None:
             return None
         if old.status not in {"failed", "cancelled"}:
             raise ValueError("只有失败或已取消的运行可以重试")
-        result = await db.execute(select(TUserScheduledTask).where(TUserScheduledTask.id == old.task_id, TUserScheduledTask.user_id == int(user_id), TUserScheduledTask.deleted_at.is_(None)))
+        result = await db.execute(select(TUserScheduledTask).where(TUserScheduledTask.id == old.task_id, TUserScheduledTask.user_id == str(user_id), TUserScheduledTask.deleted_at.is_(None)))
         task = result.scalar_one_or_none()
         if task is None:
             raise ValueError("任务已删除，无法重试")
@@ -617,8 +617,8 @@ class ScheduledTaskService:
         return _run_to_dict(run)
 
     @staticmethod
-    async def cleanup_runs(db: AsyncSession, user_id: int | str, *, retention_days: int = 30, max_records: int = 1000) -> int:
-        uid = int(user_id)
+    async def cleanup_runs(db: AsyncSession, user_id: str, *, retention_days: int = 30, max_records: int = 1000) -> int:
+        uid = str(user_id)
         cutoff = _now_ms() - retention_days * 24 * 60 * 60 * 1000
         ids_result = await db.execute(
             select(TUserScheduledTaskRun.id)
@@ -641,9 +641,9 @@ class ScheduledTaskService:
 
     @staticmethod
     async def disable_session_bound_tasks(
-        db: AsyncSession, user_id: int | str, session_id: str, *, reason: str
+        db: AsyncSession, user_id: str, session_id: str, *, reason: str
     ) -> int:
-        uid = int(user_id)
+        uid = str(user_id)
         binding = f"session:{session_id}"
         now = _now_ms()
         result = await db.execute(
@@ -665,8 +665,8 @@ class ScheduledTaskService:
         return int(result.rowcount or 0)
 
     @staticmethod
-    async def delete_all_for_user(db: AsyncSession, user_id: int | str) -> int:
-        uid = int(user_id)
+    async def delete_all_for_user(db: AsyncSession, user_id: str) -> int:
+        uid = str(user_id)
         result = await db.execute(
             delete(TUserScheduledTask).where(TUserScheduledTask.user_id == uid)
         )

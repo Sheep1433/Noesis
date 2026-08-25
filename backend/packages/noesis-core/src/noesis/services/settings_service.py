@@ -25,7 +25,7 @@ class SettingsService:
         cls,
         db: AsyncSession,
         *,
-        user_id: int,
+        user_id: str,
         action: str,
         setting_domain: str,
         target_id: str | None = None,
@@ -46,7 +46,7 @@ class SettingsService:
         return row
 
     @classmethod
-    async def list_audit(cls, db: AsyncSession, user_id: int, page: int, page_size: int) -> SettingsAuditPage:
+    async def list_audit(cls, db: AsyncSession, user_id: str, page: int, page_size: int) -> SettingsAuditPage:
         rows, total = await SettingsRepository(db).list_audit(user_id, (page - 1) * page_size, page_size)
         return SettingsAuditPage(
             items=[SettingsAuditItem.model_validate(row, from_attributes=True) for row in rows],

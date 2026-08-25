@@ -7,9 +7,19 @@
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Protocol
+
+
+class ManualCompactionResult(Protocol):
+    status: str
+    pre_message_count: int
+    post_message_count: int
 
 _run_manager_provider: Optional[Callable[[], Any]] = None
+ManualCompactionProvider = Callable[
+    [str, str, str | None], Awaitable[ManualCompactionResult]
+]
+_compaction_provider: Optional[ManualCompactionProvider] = None
 
 
 def set_run_manager_provider(provider: Callable[[], Any]) -> None:
@@ -26,6 +36,19 @@ def get_run_manager() -> Any:
         return _run_manager_provider()
     except Exception:  # noqa: BLE001 —— CLI/轻量环境可能缺少 DB 依赖
         return None
+
+
+def set_compaction_provider(
+    provider: ManualCompactionProvider,
+) -> None:
+    """Inject the host-level manual compaction use case."""
+    global _compaction_provider
+    _compaction_provider = provider
+
+
+def get_compaction_provider() -> Optional[ManualCompactionProvider]:
+    """Return the manual compaction use case, if the host wired it."""
+    return _compaction_provider
 
 
 #: 注入的会话工厂：``async (user_id, title=None, parent_id=None) -> new_session_id``。

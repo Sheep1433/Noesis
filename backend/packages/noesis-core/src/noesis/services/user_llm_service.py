@@ -17,7 +17,7 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.secrets import SecretCipher, SecretEncryptionUnavailable, secret_suffix
-from noesis.errors.exceptions import ConflictException, ServiceException
+from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
 from noesis.storage.postgres.models.user_llm import TUserLLMModel, TUserLLMProvider
 
@@ -65,7 +65,7 @@ class UserLLMService:
 
     @staticmethod
     async def _ensure_model_id_free(
-        db: AsyncSession, user_id: int, model_id: str, exclude_entry_id: Optional[str] = None
+        db: AsyncSession, user_id: str, model_id: str, exclude_entry_id: Optional[str] = None
     ) -> None:
         from noesis.llm.catalog import get_model_catalog
 
@@ -87,7 +87,7 @@ class UserLLMService:
 
     @staticmethod
     async def create_provider(
-        db: AsyncSession, *, user_id: int, name: str, api_type: str, base_url: str,
+        db: AsyncSession, *, user_id: str, name: str, api_type: str, base_url: str,
         api_key: str, enabled: bool = True,
     ) -> Dict[str, Any]:
         now = _now_ms()
@@ -106,7 +106,7 @@ class UserLLMService:
 
     @staticmethod
     async def update_provider(
-        db: AsyncSession, *, user_id: int, provider_id: str,
+        db: AsyncSession, *, user_id: str, provider_id: str,
         name: Optional[str] = None, api_type: Optional[str] = None,
         base_url: Optional[str] = None, enabled: Optional[bool] = None,
         api_key: Optional[str] = None, api_key_action: str = "keep",
@@ -134,7 +134,7 @@ class UserLLMService:
         return UserLLMService._provider_view(provider)
 
     @staticmethod
-    async def delete_provider(db: AsyncSession, *, user_id: int, provider_id: str) -> None:
+    async def delete_provider(db: AsyncSession, *, user_id: str, provider_id: str) -> None:
         provider = await UserLLMService._get_provider(db, user_id, provider_id)
         now = _now_ms()
         await db.execute(
@@ -151,7 +151,7 @@ class UserLLMService:
         await db.commit()
 
     @staticmethod
-    async def list_providers(db: AsyncSession, *, user_id: int) -> List[Dict[str, Any]]:
+    async def list_providers(db: AsyncSession, *, user_id: str) -> List[Dict[str, Any]]:
         result = await db.execute(
             select(TUserLLMProvider)
             .where(and_(TUserLLMProvider.user_id == user_id, TUserLLMProvider.deleted_at.is_(None)))
@@ -160,7 +160,7 @@ class UserLLMService:
         return [UserLLMService._provider_view(p) for p in result.scalars().all()]
 
     @staticmethod
-    async def _get_provider(db: AsyncSession, user_id: int, provider_id: str) -> TUserLLMProvider:
+    async def _get_provider(db: AsyncSession, user_id: str, provider_id: str) -> TUserLLMProvider:
         result = await db.execute(
             select(TUserLLMProvider).where(and_(
                 TUserLLMProvider.id == provider_id,
@@ -189,7 +189,7 @@ class UserLLMService:
 
     @staticmethod
     async def create_model(
-        db: AsyncSession, *, user_id: int, provider_id: str, model_id: str,
+        db: AsyncSession, *, user_id: str, provider_id: str, model_id: str,
         label: str = "", temperature: Optional[float] = None, context_window: int = 0,
     ) -> Dict[str, Any]:
         await UserLLMService._get_provider(db, user_id, provider_id)
@@ -210,7 +210,7 @@ class UserLLMService:
 
     @staticmethod
     async def update_model(
-        db: AsyncSession, *, user_id: int, entry_id: str,
+        db: AsyncSession, *, user_id: str, entry_id: str,
         provider_id: Optional[str] = None, model_id: Optional[str] = None,
         label: Optional[str] = None, temperature: Optional[float] = None,
         context_window: Optional[int] = None,
@@ -237,13 +237,13 @@ class UserLLMService:
         return UserLLMService._model_view(db_entry=entry, api_type=None)
 
     @staticmethod
-    async def delete_model(db: AsyncSession, *, user_id: int, entry_id: str) -> None:
+    async def delete_model(db: AsyncSession, *, user_id: str, entry_id: str) -> None:
         entry = await UserLLMService._get_model(db, user_id, entry_id)
         entry.deleted_at = _now_ms()
         await db.commit()
 
     @staticmethod
-    async def list_models(db: AsyncSession, *, user_id: int) -> List[Dict[str, Any]]:
+    async def list_models(db: AsyncSession, *, user_id: str) -> List[Dict[str, Any]]:
         rows = await UserLLMService._load_models(db, user_id)
         return [
             UserLLMService._model_view(db_entry=m, api_type=p.api_type if p else None)
@@ -251,7 +251,7 @@ class UserLLMService:
         ]
 
     @staticmethod
-    async def _load_models(db: AsyncSession, user_id: int):
+    async def _load_models(db: AsyncSession, user_id: str):
         result = await db.execute(
             select(TUserLLMModel, TUserLLMProvider)
             .outerjoin(
@@ -264,7 +264,7 @@ class UserLLMService:
         return result.all()
 
     @staticmethod
-    async def _get_model(db: AsyncSession, user_id: int, entry_id: str) -> TUserLLMModel:
+    async def _get_model(db: AsyncSession, user_id: str, entry_id: str) -> TUserLLMModel:
         result = await db.execute(
             select(TUserLLMModel).where(and_(
                 TUserLLMModel.id == entry_id,
@@ -309,7 +309,7 @@ class UserLLMService:
 
     @staticmethod
     async def resolve_runtime_snapshots(
-        db: AsyncSession, *, user_id: int, model_id: Optional[str]
+        db: AsyncSession, *, user_id: str, model_id: Optional[str]
     ) -> List[RuntimeModelSnapshot]:
         """把用户自定义模型解析为运行时快照（含解密 key），供 ContextVar 注入。
 
@@ -353,7 +353,7 @@ class UserLLMService:
     # ---------- 连通测试 ----------
 
     @staticmethod
-    async def test_provider(db: AsyncSession, *, user_id: int, provider_id: str) -> Dict[str, Any]:
+    async def test_provider(db: AsyncSession, *, user_id: str, provider_id: str) -> Dict[str, Any]:
         provider = await UserLLMService._get_provider(db, user_id, provider_id)
         api_key = _decrypt_api_key(provider.api_key_cipher)
         if not api_key:

@@ -18,6 +18,6 @@ class UserRegistrationRequest(UserRegister):
 
 
 class CurrentUser(BaseModel):
-    user_id: int
+    user_id: str
     username: str
     mobile: Optional[str] = None
