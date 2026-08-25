@@ -27,7 +27,11 @@ from noesis.storage.postgres.models.memory import (
     TMemoryUserPreference,
 )
 from noesis.storage.postgres.models.scheduled_task import TUserScheduledTask
-from noesis.storage.postgres.models.user_llm import TUserLLMModel, TUserLLMProvider
+from noesis.storage.postgres.models.user_llm import (
+    TUserLLMModel,
+    TUserLLMPreference,
+    TUserLLMProvider,
+)
 from noesis.storage.postgres.models.settings import (
     TUserNotificationPreference,
     TUserSettingsAudit,
@@ -38,6 +42,7 @@ __all__ = [
     "TUser",
     "TUserLLMProvider",
     "TUserLLMModel",
+    "TUserLLMPreference",
     "TUserSession",
     "TBackgroundTask",
     "TChatSession",

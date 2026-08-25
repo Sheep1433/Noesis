@@ -936,9 +936,10 @@ async def stream_run(
             )
         )
         snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+        # RunSnapshot 的属性名是 sequence（snapshot_sequence 仅是 to_dict 的 JSON 键）
         replay = SubagentSessionService.get_run_event_history(
             run_id,
-            int(snapshot.snapshot_sequence or 0),
+            int(snapshot.sequence or 0),
         )
         if snapshot.is_terminal and queue is not None:
             SubagentSessionService.unsubscribe_run_events(run_id, queue)

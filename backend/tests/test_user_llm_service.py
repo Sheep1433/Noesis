@@ -9,7 +9,7 @@ import base64
 import httpx
 import pytest
 
-from noesis.errors.exceptions import NotFoundException
+from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
 from noesis.services.user_llm_service import UserLLMService
 
@@ -20,6 +20,7 @@ from noesis.services.user_llm_service import UserLLMService
 class _ProviderRow:
     def __init__(self, **kw: Any) -> None:
         self.id = kw.get("id", "p1")
+        self.slug = kw.get("slug", "p1")
         self.name = kw.get("name", "svc")
         self.api_type = kw.get("api_type", "openai")
         self.base_url = kw.get("base_url", "https://api.example.com/v1")
@@ -183,14 +184,20 @@ async def test_resolve_missing_model_returns_empty() -> None:
 
 
 def test_public_model_rows_shape() -> None:
+    """复合身份：id = provider_slug/model_id；不同 Provider 同名不冲突。"""
     rows = [
-        {"model_id": "m1", "label": "M1", "api_type": "openai", "context_window": 64000},
+        {
+            "model_id": "m1", "label": "M1", "api_type": "openai",
+            "context_window": 64000, "provider_slug": "my-deepseek",
+            "provider_id": "p-uuid-0001",
+        },
     ]
     out = UserLLMService.public_model_rows(rows)
     assert out == [
         {
-            "id": "m1",
+            "id": "my-deepseek/m1",
             "label": "M1",
+            "provider": "my-deepseek",
             "model_type": "openai",
             "is_default": False,
             "supports_vision": False,
@@ -198,6 +205,20 @@ def test_public_model_rows_shape() -> None:
             "custom": True,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_same_model_id_allowed_across_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同名模型分属不同 Provider 合法（复合身份根治冲突）。"""
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"c"*32).decode())
+    provider = _ProviderRow(id="p1", slug="svc-a")
+    db = _Session(providers=[(provider, None)])
+    entry = await UserLLMService.create_model(
+        db, user_id=1, provider_id="p1", model_id="deepseek-chat", label="chat",
+    )
+    assert entry["model_id"] == "deepseek-chat"
+    # 内置目录同名也不再冲突：复合身份下两者选择器 id 不同
+    assert db.committed
 
 
 # ---------- 加密未配置时拒绝写入 ----------
@@ -254,8 +275,10 @@ async def test_discover_provider_models_reads_openai_models_without_persisting(
             return _Response()
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _Client())
-    result = await UserLLMService.discover_provider_models(
-        db, user_id=1, provider_id="p-discovery"
+    result = await UserLLMService.discover_draft_models(
+        db, user_id=1, api_type="openai",
+        base_url="https://api.example.com/v1/chat/completions",
+        api_key=plain, provider_id="p-discovery",
     )
 
     assert result["ok"] is True
@@ -308,11 +331,144 @@ async def test_discover_provider_models_reports_unsupported_endpoint(
             return _Response()
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _Client())
-    result = await UserLLMService.discover_provider_models(
-        db, user_id=1, provider_id="p1"
+    result = await UserLLMService.discover_draft_models(
+        db, user_id=1, api_type="openai",
+        base_url="https://api.example.com/v1",
+        api_key="sk-test", provider_id="p1",
     )
 
     assert result["ok"] is False
     assert result["status"] == "unsupported"
     assert result["provider_reachable"] is True
     assert result["discovery_supported"] is False
+
+
+@pytest.mark.asyncio
+async def test_discover_draft_falls_back_to_stored_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """编辑已保存 Provider 且 Key 留空 → 回退已存加密 Key，不强制重输。"""
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"f"*32).decode())
+    from noesis.config.secrets import SecretCipher
+
+    plain = "sk-stored"
+    provider = _ProviderRow(
+        id="p-fallback",
+        base_url="https://api.example.com/v1",
+        api_key_cipher=f"enc:{SecretCipher().encrypt(plain)}",
+    )
+    db = _Session(providers=[(provider, None)])
+    request = {}
+
+    class _Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"data": [{"id": "m1"}]}
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> _Response:
+            request.update({"headers": headers})
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _Client())
+    result = await UserLLMService.discover_draft_models(
+        db, user_id=1, api_type="openai",
+        base_url="https://api.example.com/v1",
+        api_key="", provider_id="p-fallback",
+    )
+
+    assert result["ok"] is True
+    assert request["headers"]["Authorization"] == f"Bearer {plain}"
+
+
+@pytest.mark.asyncio
+async def test_discover_draft_without_key_reports_missing_key() -> None:
+    """未保存、未填 Key 的草案 → missing_key，不发网络请求。"""
+    result = await UserLLMService.discover_draft_models(
+        _Session(), user_id=1, api_type="openai",
+        base_url="https://api.example.com/v1",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "missing_key"
+
+
+# ---------- Provider ID（slug） ----------
+
+@pytest.mark.asyncio
+async def test_create_provider_rejects_invalid_slug(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"a"*32).decode())
+    with pytest.raises(ServiceException) as exc_info:
+        await UserLLMService.create_provider(
+            _Session(), user_id=1, name="svc", slug="My Provider!",
+            api_type="openai", base_url="https://api.example.com/v1",
+            api_key="sk-x",
+        )
+    assert "Provider ID" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_create_provider_rejects_duplicate_slug(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"b"*32).decode())
+    # _Session.execute 对 providers 查询恒返回第一行 → 模拟 slug 已被占用
+    provider = _ProviderRow(id="p-existing", slug="my-gateway")
+    db = _Session(providers=[(provider, None)])
+    with pytest.raises(ConflictException) as exc_info:
+        await UserLLMService.create_provider(
+            db, user_id=1, name="svc", slug="my-gateway",
+            api_type="openai", base_url="https://api.example.com/v1",
+            api_key="sk-x",
+        )
+    assert "已被使用" in str(exc_info.value.message)
+    assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_runtime_snapshots_composite_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """复合身份「slug/model_id」解析：id 保持复合（选择器身份），wire_name 为线上名。"""
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"g"*32).decode())
+    from noesis.config.secrets import SecretCipher
+
+    provider = _ProviderRow(
+        id="p-zen", slug="my-zen",
+        api_key_cipher=f"enc:{SecretCipher().encrypt('public')}",
+    )
+    model = _ModelRow(model_id="hy3-free", label="HY3", context_window=200000)
+    db = _Session(models=[(model, provider)])
+
+    snapshots = await UserLLMService.resolve_runtime_snapshots(
+        db, user_id=1, model_id="my-zen/hy3-free"
+    )
+    assert len(snapshots) == 1
+    snap = snapshots[0]
+    assert snap.id == "my-zen/hy3-free"
+    assert snap.wire_name == "hy3-free"
+    assert snap.api_key == "public"
+
+
+@pytest.mark.asyncio
+async def test_resolve_runtime_snapshots_bare_id_legacy_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无斜杠裸 id 走 legacy 查找（历史会话的 model_id 兼容）。"""
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"h"*32).decode())
+    from noesis.config.secrets import SecretCipher
+
+    provider = _ProviderRow(
+        id="p-legacy", slug="old-svc",
+        api_key_cipher=f"enc:{SecretCipher().encrypt('sk-old')}",
+    )
+    model = _ModelRow(model_id="glm-custom", label="GLM", context_window=131072)
+    db = _Session(models=[(model, provider)])
+
+    snapshots = await UserLLMService.resolve_runtime_snapshots(
+        db, user_id=1, model_id="glm-custom"
+    )
+    assert len(snapshots) == 1
+    assert snapshots[0].wire_name == "glm-custom"
+    assert snapshots[0].id == "glm-custom"

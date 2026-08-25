@@ -1,8 +1,8 @@
 <script lang="ts" setup>
 import type { ChatModelOption } from '@/api/models'
+import { h } from 'vue'
 import { ensureSession } from '@/api/chat'
 import { getChatModels } from '@/api/models'
-import { useBreakpoint } from '@/hooks/useBreakpoint'
 
 const props = defineProps<{
   sessionId: string
@@ -13,19 +13,43 @@ const props = defineProps<{
 }>()
 
 const modelValue = defineModel<string>({ default: '' })
-const { isMobile } = useBreakpoint()
-const mobileOpen = ref(false)
 
 const loading = ref(false)
 const options = ref<ChatModelOption[]>([])
 
+/** 按 provider 分组：不知用的是谁家的模型就是事故 */
+const groupedOptions = computed(() => {
+  const groups = new Map<string, ChatModelOption[]>()
+  for (const item of options.value) {
+    const provider = item.provider || '其他'
+    if (!groups.has(provider)) {
+      groups.set(provider, [])
+    }
+    groups.get(provider)!.push(item)
+  }
+  return [...groups.entries()].map(([provider, items]) => ({ provider, items }))
+})
+
 const dropdownOptions = computed(() =>
-  options.value.map((item) => ({
-    label: item.label,
-    key: item.id,
+  groupedOptions.value.map(({ provider, items }) => ({
+    type: 'group' as const,
+    label: provider,
+    key: `group-${provider}`,
+    children: items.map((item) => ({ label: item.label, key: item.id })),
   })),
 )
 
+/** n-dropdown 官方 render-label：叶子选项渲染「模型名 + 激活勾选」（分组头不走此路径） */
+function renderDropdownLabel(option: { label?: string | number, key?: string | number }) {
+  const label = String(option.label ?? '')
+  const active = String(option.key) === modelValue.value
+  return h('span', { class: 'composer-model-dropdown__item' }, [
+    h('span', { class: 'composer-model-dropdown__label' }, label),
+    active ? h('span', { class: 'i-carbon:checkmark composer-model-dropdown__check' }) : null,
+  ])
+}
+
+/** 触发按钮只显示模型名（provider 信息留给下拉分组，避免过长） */
 const currentLabel = computed(() => {
   const hit = options.value.find((item) => item.id === modelValue.value)
   if (hit) {
@@ -70,7 +94,6 @@ async function persistModel(modelId: string) {
 
 async function onSelect(key: string) {
   modelValue.value = key
-  mobileOpen.value = false
   await persistModel(key)
 }
 
@@ -87,11 +110,12 @@ watch(
 </script>
 
 <template>
+  <!-- 桌面与移动端同一下拉：provider 分组，触发按钮只显示模型名 -->
   <n-dropdown
-    v-if="!isMobile"
     trigger="click"
     placement="top-start"
     :options="dropdownOptions"
+    :render-label="renderDropdownLabel"
     :disabled="disabled || loading || dropdownOptions.length === 0"
     @select="onSelect"
   >
@@ -107,47 +131,6 @@ watch(
       <span class="i-carbon:chevron-down text-12 opacity-60"></span>
     </button>
   </n-dropdown>
-  <template v-else>
-    <button
-      type="button"
-      class="composer-model-trigger"
-      :class="{ 'composer-model-trigger--menu': embedded }"
-      :disabled="disabled || loading || dropdownOptions.length === 0"
-      @click="mobileOpen = true"
-    >
-      <span v-if="embedded" class="i-carbon:machine-learning-model composer-model-trigger__icon"></span>
-      <span v-if="embedded" class="composer-model-trigger__title">模型</span>
-      <span class="composer-model-trigger__label">{{ currentLabel }}</span>
-      <span class="i-carbon:chevron-down text-12 opacity-60"></span>
-    </button>
-    <n-drawer
-      v-model:show="mobileOpen"
-      placement="bottom"
-      width="100%"
-      height="min(62vh, 520px)"
-      :block-scroll="true"
-    >
-      <n-drawer-content
-        title="选择模型"
-        closable
-        body-content-style="padding: 0 16px max(16px, env(safe-area-inset-bottom));"
-      >
-        <div class="composer-model-options">
-          <button
-            v-for="option in options"
-            :key="option.id"
-            type="button"
-            class="composer-model-option"
-            :class="{ 'composer-model-option--active': option.id === modelValue }"
-            @click="onSelect(option.id)"
-          >
-            <span>{{ option.label }}</span>
-            <span v-if="option.id === modelValue" class="i-carbon:checkmark"></span>
-          </button>
-        </div>
-      </n-drawer-content>
-    </n-drawer>
-  </template>
 </template>
 
 <style scoped>
@@ -210,31 +193,23 @@ watch(
   max-width: 140px;
   color: var(--noesis-text-secondary, #6b7280);
 }
+</style>
 
-.composer-model-options {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.composer-model-option {
-  display: flex;
+<style>
+/* n-dropdown 内容渲染在 teleport 层，需全局样式 */
+.composer-model-dropdown__item {
+  display: inline-flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
-  min-height: 44px;
-  padding: 10px 12px;
-  border: 1px solid var(--noesis-color-border-subtle);
-  border-radius: var(--noesis-radius-md);
-  background: var(--noesis-color-bg-elevated);
-  color: var(--noesis-color-text-primary);
-  font-size: 14px;
-  text-align: left;
+  gap: 12px;
+  min-width: 180px;
 }
-
-.composer-model-option--active {
-  border-color: var(--noesis-color-primary);
-  color: var(--noesis-color-primary);
-  background: var(--noesis-color-primary-bg-subtle);
+.composer-model-dropdown__label {
+  flex: 1;
+}
+.composer-model-dropdown__check {
+  flex-shrink: 0;
+  color: var(--noesis-color-primary, #111);
+  font-size: 14px;
 }
 </style>

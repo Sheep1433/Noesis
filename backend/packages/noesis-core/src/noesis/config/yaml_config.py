@@ -97,13 +97,28 @@ class ModelCatalogEntryYamlSection(BaseModel):
     context_window: int = Field(default=0, ge=0)
 
 
+class ProviderPresetYamlSection(BaseModel):
+    """用户自定义 Provider 的平台预设（dsh catalog provider 模式）：选预设只填 Key。"""
+
+    id: str = ""
+    label: str = ""
+    base_url: str = ""
+    # 归因类 header；敏感凭证不放预设，用户 Key 仍走加密存储
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
 class ModelYamlSection(BaseModel):
-    """主对话 LLM：type / name / base_url；api_key 在 .env MODEL_API_KEY。"""
+    """主对话 LLM：type / name / base_url / api_key。
+
+    api_key 承载非机密平台 Key（OpenCode Zen 公开值为 public）；
+    机密 Key 仍走 .env MODEL_API_KEY（env 优先于 yaml）。
+    """
 
     type: str = "qwen"
     name: str = "qwen-plus"
     temperature: float = 0.75
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: str = ""
     show_thinking_process: bool = True
     request_timeout: float = Field(default=30.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
@@ -114,6 +129,8 @@ class ModelYamlSection(BaseModel):
     # 上下文窗口（model 层默认，catalog 条目未配时继承）；0=未配置
     context_window: int = Field(default=0, ge=0)
     catalog: list[ModelCatalogEntryYamlSection] = Field(default_factory=list)
+    # 用户自定义 Provider 的平台预设目录（部署者维护；透出给前端快速填充）
+    provider_presets: list[ProviderPresetYamlSection] = Field(default_factory=list)
 
 
 class RemoteModelYamlSection(BaseModel):

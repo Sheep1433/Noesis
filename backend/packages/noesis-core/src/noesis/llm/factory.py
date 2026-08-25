@@ -8,11 +8,12 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk
 from noesis.config.env import ModelConfig
 
-_OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
-_OPENCODE_DEFAULT_HEADERS = {
-    "HTTP-Referer": "https://opencode.ai/",
-    "X-Title": "opencode",
-}
+def _opencode_preset() -> tuple[str, dict[str, str]]:
+    """opencode 便捷默认值来自 config.yaml model.provider_presets（部署者维护）。"""
+    for preset in ModelConfig.provider_presets:
+        if preset.get("id") == "opencode":
+            return str(preset.get("base_url") or ""), dict(preset.get("headers") or {})
+    return "", {}
 
 
 def _reasoning_to_text(reasoning: Any) -> str:
@@ -312,12 +313,12 @@ def build_chat_model(
         "opencode": lambda: ChatOpenAICompatible(
             model=model_name,
             temperature=temperature,
-            base_url=model_base_url or _OPENCODE_DEFAULT_BASE_URL,
+            base_url=model_base_url or _opencode_preset()[0],
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
-            default_headers=_OPENCODE_DEFAULT_HEADERS,
+            default_headers=_opencode_preset()[1],
             **stream_usage_kwargs,
             **http_kwargs,
         ),
@@ -387,7 +388,8 @@ def get_llm(
 
     if runtime_snapshot is not None:
         model_type = runtime_snapshot.model_type
-        model_name = runtime_snapshot.id
+        # 自定义模型：id 为复合「slug/model_id」选择器身份，线上名走 wire_name
+        model_name = runtime_snapshot.wire_name or runtime_snapshot.id
         temperature_str = ModelConfig.model_temperature
         model_base_url = runtime_snapshot.base_url
     elif use_summary_model:

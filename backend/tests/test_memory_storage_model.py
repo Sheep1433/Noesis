@@ -104,7 +104,7 @@ def test_memory_migration_chain_has_one_head_after_schema_reset() -> None:
     config.set_main_option("script_location", str(root))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["202608240003"]
+    assert scripts.get_heads() == ["202608250003"]
     reset = scripts.get_revision("202608240001")
     assert reset is not None
     assert reset.down_revision == "202608220003"

@@ -149,11 +149,23 @@ def list_public_models() -> List[dict[str, Any]]:
     from noesis.llm.vision_meta import model_name_supports_vision
 
     default_id = get_default_model_id()
+    # 内置目录的 provider 标签：预设名回退 model type（小写）
+    from noesis.config.env import ModelConfig
+
+    provider_label = next(
+        (
+            str(preset.get("label") or preset.get("id"))
+            for preset in ModelConfig.provider_presets
+            if preset.get("id") == ModelConfig.model_type
+        ),
+        ModelConfig.model_type,
+    )
     rows: List[dict[str, Any]] = []
     for entry in get_model_catalog():
         row: dict[str, Any] = {
             "id": entry.id,
             "label": entry.label,
+            "provider": provider_label,
             "model_type": entry.model_type,
             "is_default": entry.id == default_id,
             "supports_vision": model_name_supports_vision(entry.id),

@@ -16,6 +16,9 @@ class RuntimeModelSnapshot:
     api_key: str
     label: str = ""
     context_window: int = 0
+    # 发给端点的真实模型名；自定义模型 id 为复合「slug/model_id」身份，
+    # 线上名与选择器身份分离（对齐 dsh route/model 二段身份）
+    wire_name: str = ""
 
 
 _snapshots: ContextVar[dict[str, RuntimeModelSnapshot]] = ContextVar(

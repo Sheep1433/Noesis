@@ -23,6 +23,7 @@ user_llm_router = APIRouter(prefix="/api/user/llm", tags=["用户模型"])
 
 class ProviderUpsertBody(BaseModel):
     name: str = ""
+    slug: str = ""
     api_type: str = "openai"
     base_url: str = ""
     enabled: bool = True
@@ -64,6 +65,7 @@ async def create_provider(
         db,
         user_id=current_user.user_id,
         name=body.name,
+        slug=body.slug,
         api_type=body.api_type,
         base_url=body.base_url,
         api_key=body.api_key or "",
@@ -98,6 +100,7 @@ async def update_provider(
         user_id=current_user.user_id,
         provider_id=provider_id,
         name=body.name,
+        slug=body.slug or None,
         api_type=body.api_type,
         base_url=body.base_url,
         enabled=body.enabled,
@@ -141,25 +144,75 @@ async def delete_provider(
     return ResponseUtil.success(msg="已删除")
 
 
-@user_llm_router.post(
-    "/providers/{provider_id}/discover", summary="发现模型服务中的模型"
-)
-async def discover_provider_models(
-    provider_id: str,
+class LLMPreferenceUpdate(BaseModel):
+    default_model_id: Optional[str] = None
+
+
+@user_llm_router.get("/preferences", summary="用户级 LLM 偏好（默认模型）")
+async def get_llm_preferences(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    default_model_id = await UserLLMService.get_default_model(
+        db, user_id=current_user.user_id
+    )
+    return ResponseUtil.success(data={"default_model_id": default_model_id})
+
+
+@user_llm_router.put("/preferences", summary="设置默认对话模型")
+async def update_llm_preferences(
+    body: LLMPreferenceUpdate,
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     await require_csrf(request)
-    result = await UserLLMService.discover_provider_models(
-        db, user_id=current_user.user_id, provider_id=provider_id
+    default_model_id = await UserLLMService.set_default_model(
+        db, user_id=current_user.user_id, model_id=body.default_model_id
+    )
+    await SettingsService.append_audit(
+        db,
+        user_id=current_user.user_id,
+        action="llm.preference.default_model",
+        setting_domain="llm",
+        target_id=default_model_id or "",
+        summary={"default_model_id": default_model_id},
+    )
+    await db.commit()
+    return ResponseUtil.success(msg="已保存", data={"default_model_id": default_model_id})
+
+
+class ProviderDiscoverBody(BaseModel):
+    api_type: str
+    base_url: str
+    api_key: str = ""
+    provider_id: str | None = None
+
+
+@user_llm_router.post(
+    "/providers/discover", summary="草案发现模型服务中的模型（无需先保存）"
+)
+async def discover_provider_models(
+    request: Request,
+    body: ProviderDiscoverBody,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_csrf(request)
+    result = await UserLLMService.discover_draft_models(
+        db,
+        user_id=current_user.user_id,
+        api_type=body.api_type,
+        base_url=body.base_url,
+        api_key=body.api_key,
+        provider_id=body.provider_id,
     )
     await SettingsService.append_audit(
         db,
         user_id=current_user.user_id,
         action="llm.provider.discover",
         setting_domain="llm",
-        target_id=provider_id,
+        target_id=body.provider_id,
         summary={
             "status": result.get("status"),
             "model_count": len(result.get("models") or []),

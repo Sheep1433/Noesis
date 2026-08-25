@@ -450,6 +450,7 @@ export function resetSettings() {
 
 export type UserLLMProvider = {
   provider_id: string
+  slug: string
   name: string
   api_type: string
   base_url: string
@@ -461,6 +462,7 @@ export type UserLLMProvider = {
 export type UserLLMModel = {
   entry_id: string
   provider_id: string
+  provider_name?: string | null
   api_type?: string | null
   model_id: string
   label: string
@@ -470,6 +472,7 @@ export type UserLLMModel = {
 
 export type UserLLMProviderPayload = {
   name: string
+  slug?: string
   api_type: string
   base_url: string
   enabled: boolean
@@ -511,8 +514,13 @@ export type UserLLMDiscoveryResult = {
   message: string
 }
 
-export function discoverLLMProvider(id: string) {
-  return settingsJson<UserLLMDiscoveryResult>(`/api/user/llm/providers/${encodeURIComponent(id)}/discover`, 'POST')
+export function discoverLLMDraft(body: {
+  api_type: string
+  base_url: string
+  api_key?: string
+  provider_id?: string | null
+}) {
+  return settingsJson<UserLLMDiscoveryResult>('/api/user/llm/providers/discover', 'POST', body)
 }
 
 export async function listLLMModels() {
@@ -530,4 +538,15 @@ export function updateLLMModel(id: string, payload: Omit<UserLLMModel, 'entry_id
 
 export function deleteLLMModel(id: string) {
   return settingsJson<null>(`/api/user/llm/models/${encodeURIComponent(id)}`, 'DELETE')
+}
+
+export async function getLLMDefaultModel() {
+  const data = await settingsJson<{ default_model_id: string | null }>('/api/user/llm/preferences')
+  return data?.default_model_id || null
+}
+
+export function setLLMDefaultModel(modelId: string | null) {
+  return settingsJson<{ default_model_id: string | null }>('/api/user/llm/preferences', 'PUT', {
+    default_model_id: modelId,
+  })
 }

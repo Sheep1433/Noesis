@@ -125,6 +125,8 @@ class ModelSettings:
     governor_tool_calls_enabled: bool
     governor_tool_calls_total: int | None
     governor_tool_calls_per_name: int | None
+    # 用户自定义 Provider 平台预设（yaml model.provider_presets；dict 列表）
+    provider_presets: tuple
 
 
 @dataclass(frozen=True)
@@ -404,11 +406,21 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         secrets.rerank_model_api_key or secrets.embedding_model_api_key or ""
     ).strip()
     return ModelSettings(
+        provider_presets=tuple(
+            {
+                "id": preset.id,
+                "label": preset.label or preset.id,
+                "base_url": preset.base_url,
+                "headers": dict(preset.headers),
+            }
+            for preset in m.provider_presets
+            if preset.id and preset.base_url
+        ),
         model_type=_legacy_env("MODEL_TYPE", m.type),
         model_name=_legacy_env("MODEL_NAME", m.name),
         model_temperature=_legacy_env_float("MODEL_TEMPERATURE", m.temperature),
         model_base_url=_legacy_env("MODEL_BASE_URL", m.base_url),
-        model_api_key=secrets.model_api_key,
+        model_api_key=secrets.model_api_key or m.api_key,
         embedding_model_name=_legacy_env("EMBEDDING_MODEL_NAME", emb.name),
         embedding_model_base_url=_legacy_env("EMBEDDING_MODEL_BASE_URL", emb.base_url),
         embedding_model_api_key=secrets.embedding_model_api_key,
