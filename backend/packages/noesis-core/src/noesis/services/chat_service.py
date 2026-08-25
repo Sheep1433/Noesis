@@ -1165,7 +1165,7 @@ class ChatService:
         :param db: 数据库会话
         :return: 会话对象
         """
-        # 聊天表以字符串保存用户标识；认证层当前使用整数主键。
+        # 聊天表和认证层统一使用 UUID 字符串作为用户标识。
         # 在服务边界统一转换，避免 PostgreSQL 对 VARCHAR = INTEGER 的严格类型检查失败。
         if user_id is not None:
             user_id = str(user_id)

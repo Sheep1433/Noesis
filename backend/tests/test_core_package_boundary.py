@@ -79,6 +79,20 @@ def test_core_never_imports_server_namespace() -> None:
     assert not violations, "core package imports server namespace:\n" + "\n".join(violations)
 
 
+def test_repository_package_preserves_public_exports() -> None:
+    import noesis.repositories as repositories
+
+    expected = {
+        "AgentRunRepository",
+        "KbCollectionConfigRepository",
+        "MemoryPreferenceRepository",
+        "SettingsRepository",
+        "SqlAlchemySessionRepository",
+        "SqlAlchemyUserRepository",
+    }
+    assert expected <= set(repositories.__all__)
+
+
 def test_backend_has_no_legacy_imports_or_shims() -> None:
     legacy_imports: list[str] = []
     for path in sorted(BACKEND_ROOT.rglob("*.py")):

@@ -30,7 +30,7 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "shutdown_sandboxes",
         "sync_existing_kb_collection_configs",
         "stop_scheduled_task_scheduler",
-        "stop_memory_dream_scheduler",
+        "stop_machine_memory_worker",
         "stop_telegram_runtime",
         "stop_feishu_runtime",
     )
@@ -42,7 +42,7 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
 
     for name in (
         "start_scheduled_task_scheduler",
-        "start_memory_dream_scheduler",
+        "start_machine_memory_worker",
         "start_telegram_runtime",
         "start_feishu_runtime",
     ):
@@ -75,8 +75,8 @@ async def test_lifespan_releases_resources_when_app_body_fails(
     for name in (
         "stop_feishu_runtime",
         "stop_telegram_runtime",
-        "stop_memory_dream_scheduler",
         "stop_scheduled_task_scheduler",
+        "stop_machine_memory_worker",
         "shutdown_run_manager",
         "close_knowledge_base",
         "close_checkpointer",

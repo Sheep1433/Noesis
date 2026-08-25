@@ -19,7 +19,7 @@ class SettingsRepository:
         self.db.add(row)
         await self.db.flush()
 
-    async def list_audit(self, user_id: int, offset: int, limit: int) -> tuple[list[TUserSettingsAudit], int]:
+    async def list_audit(self, user_id: str, offset: int, limit: int) -> tuple[list[TUserSettingsAudit], int]:
         total_result = await self.db.execute(
             select(func.count()).select_from(TUserSettingsAudit).where(TUserSettingsAudit.user_id == user_id)
         )
@@ -32,10 +32,10 @@ class SettingsRepository:
         )
         return list(rows_result.scalars().all()), int(total_result.scalar_one())
 
-    async def list_notification_preferences(self, user_id: int) -> list[TUserNotificationPreference]:
+    async def list_notification_preferences(self, user_id: str) -> list[TUserNotificationPreference]:
         result = await self.db.execute(select(TUserNotificationPreference).where(TUserNotificationPreference.user_id == user_id).order_by(TUserNotificationPreference.event_type, TUserNotificationPreference.delivery_surface))
         return list(result.scalars().all())
 
-    async def get_notification_preference(self, user_id: int, event_type: str, delivery_surface: str) -> TUserNotificationPreference | None:
+    async def get_notification_preference(self, user_id: str, event_type: str, delivery_surface: str) -> TUserNotificationPreference | None:
         result = await self.db.execute(select(TUserNotificationPreference).where(TUserNotificationPreference.user_id == user_id, TUserNotificationPreference.event_type == event_type, TUserNotificationPreference.delivery_surface == delivery_surface))
         return result.scalar_one_or_none()

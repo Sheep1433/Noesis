@@ -255,7 +255,7 @@ async def run_channel_agent(
         qa_type = IntentEnum.SUPER_AGENT_QA.value[0]
 
     async with pg_manager.get_async_session_context() as db:
-        current_user = await UserService.get_user_by_id(int(user_id), db)
+        current_user = await UserService.get_user_by_id(str(user_id), db)
         await ChatService.get_or_create_session(
             user_id=current_user.user_id,
             session_id=session_id,
@@ -499,7 +499,7 @@ async def resume_channel_hitl(
     qa_type = IntentEnum.SUPER_AGENT_QA.value[0]
 
     async with pg_manager.get_async_session_context() as db:
-        current_user = await UserService.get_user_by_id(int(user_id), db)
+        current_user = await UserService.get_user_by_id(str(user_id), db)
         pending = pending_hitl.get(session_id)
         if (
             pending is None

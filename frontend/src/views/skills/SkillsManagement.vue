@@ -612,7 +612,7 @@ async function onMarketInstalled() {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .skills-management {
   display: flex;
   flex-direction: column;

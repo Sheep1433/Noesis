@@ -17,8 +17,16 @@ import httpx
 from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.config.secrets import SecretCipher, SecretEncryptionUnavailable, secret_suffix
-from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
+from noesis.config.secrets import (
+    SecretCipher,
+    SecretEncryptionUnavailable,
+    secret_suffix,
+)
+from noesis.errors.exceptions import (
+    ConflictException,
+    NotFoundException,
+    ServiceException,
+)
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
 from noesis.storage.postgres.models.user_llm import TUserLLMModel, TUserLLMProvider
 
@@ -66,7 +74,10 @@ class UserLLMService:
 
     @staticmethod
     async def _ensure_model_id_free(
-        db: AsyncSession, user_id: int, model_id: str, exclude_entry_id: Optional[str] = None
+        db: AsyncSession,
+        user_id: str,
+        model_id: str,
+        exclude_entry_id: Optional[str] = None,
     ) -> None:
         from noesis.llm.catalog import get_model_catalog
 
@@ -88,18 +99,30 @@ class UserLLMService:
 
     @staticmethod
     async def create_provider(
-        db: AsyncSession, *, user_id: int, name: str, api_type: str, base_url: str,
-        api_key: str, enabled: bool = True,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        name: str,
+        api_type: str,
+        base_url: str,
+        api_key: str,
+        enabled: bool = True,
     ) -> Dict[str, Any]:
         now = _now_ms()
         cipher, suffix = _encrypt_api_key(api_key)
         if not cipher:
             raise ServiceException(message="API Key 不能为空")
         provider = TUserLLMProvider(
-            id=str(uuid.uuid4()), user_id=user_id,
-            name=name.strip() or "未命名服务", api_type=UserLLMService._validate_api_type(api_type),
-            base_url=base_url.strip().rstrip("/"), api_key_cipher=cipher, api_key_suffix=suffix,
-            enabled=enabled, created_at=now, updated_at=now,
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            name=name.strip() or "未命名服务",
+            api_type=UserLLMService._validate_api_type(api_type),
+            base_url=base_url.strip().rstrip("/"),
+            api_key_cipher=cipher,
+            api_key_suffix=suffix,
+            enabled=enabled,
+            created_at=now,
+            updated_at=now,
         )
         db.add(provider)
         await db.commit()
@@ -107,10 +130,16 @@ class UserLLMService:
 
     @staticmethod
     async def update_provider(
-        db: AsyncSession, *, user_id: int, provider_id: str,
-        name: Optional[str] = None, api_type: Optional[str] = None,
-        base_url: Optional[str] = None, enabled: Optional[bool] = None,
-        api_key: Optional[str] = None, api_key_action: str = "keep",
+        db: AsyncSession,
+        *,
+        user_id: str,
+        provider_id: str,
+        name: Optional[str] = None,
+        api_type: Optional[str] = None,
+        base_url: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        api_key: Optional[str] = None,
+        api_key_action: str = "keep",
     ) -> Dict[str, Any]:
         provider = await UserLLMService._get_provider(db, user_id, provider_id)
         now = _now_ms()
@@ -135,7 +164,9 @@ class UserLLMService:
         return UserLLMService._provider_view(provider)
 
     @staticmethod
-    async def delete_provider(db: AsyncSession, *, user_id: int, provider_id: str) -> None:
+    async def delete_provider(
+        db: AsyncSession, *, user_id: str, provider_id: str
+    ) -> None:
         provider = await UserLLMService._get_provider(db, user_id, provider_id)
         now = _now_ms()
         await db.execute(
@@ -145,29 +176,43 @@ class UserLLMService:
         )
         await db.execute(
             update(TUserLLMModel)
-            .where(and_(TUserLLMModel.provider_id == provider_id, TUserLLMModel.deleted_at.is_(None)))
+            .where(
+                and_(
+                    TUserLLMModel.provider_id == provider_id,
+                    TUserLLMModel.deleted_at.is_(None),
+                )
+            )
             .values(deleted_at=now)
         )
         provider.updated_at = now
         await db.commit()
 
     @staticmethod
-    async def list_providers(db: AsyncSession, *, user_id: int) -> List[Dict[str, Any]]:
+    async def list_providers(db: AsyncSession, *, user_id: str) -> List[Dict[str, Any]]:
         result = await db.execute(
             select(TUserLLMProvider)
-            .where(and_(TUserLLMProvider.user_id == user_id, TUserLLMProvider.deleted_at.is_(None)))
+            .where(
+                and_(
+                    TUserLLMProvider.user_id == user_id,
+                    TUserLLMProvider.deleted_at.is_(None),
+                )
+            )
             .order_by(TUserLLMProvider.created_at)
         )
         return [UserLLMService._provider_view(p) for p in result.scalars().all()]
 
     @staticmethod
-    async def _get_provider(db: AsyncSession, user_id: int, provider_id: str) -> TUserLLMProvider:
+    async def _get_provider(
+        db: AsyncSession, user_id: str, provider_id: str
+    ) -> TUserLLMProvider:
         result = await db.execute(
-            select(TUserLLMProvider).where(and_(
-                TUserLLMProvider.id == provider_id,
-                TUserLLMProvider.user_id == user_id,
-                TUserLLMProvider.deleted_at.is_(None),
-            ))
+            select(TUserLLMProvider).where(
+                and_(
+                    TUserLLMProvider.id == provider_id,
+                    TUserLLMProvider.user_id == user_id,
+                    TUserLLMProvider.deleted_at.is_(None),
+                )
+            )
         )
         provider = result.scalar_one_or_none()
         if provider is None:
@@ -183,15 +228,23 @@ class UserLLMService:
             "base_url": provider.base_url,
             "enabled": provider.enabled,
             "has_key": bool(provider.api_key_cipher),
-            "api_key_masked": f"***{provider.api_key_suffix}" if provider.api_key_suffix else None,
+            "api_key_masked": f"***{provider.api_key_suffix}"
+            if provider.api_key_suffix
+            else None,
         }
 
     # ---------- Model CRUD ----------
 
     @staticmethod
     async def create_model(
-        db: AsyncSession, *, user_id: int, provider_id: str, model_id: str,
-        label: str = "", temperature: Optional[float] = None, context_window: int = 0,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        provider_id: str,
+        model_id: str,
+        label: str = "",
+        temperature: Optional[float] = None,
+        context_window: int = 0,
     ) -> Dict[str, Any]:
         await UserLLMService._get_provider(db, user_id, provider_id)
         normalized = str(model_id or "").strip()
@@ -200,10 +253,15 @@ class UserLLMService:
         await UserLLMService._ensure_model_id_free(db, user_id, normalized)
         now = _now_ms()
         entry = TUserLLMModel(
-            id=str(uuid.uuid4()), user_id=user_id, provider_id=provider_id,
-            model_id=normalized, label=(label or "").strip() or normalized,
-            temperature=temperature, context_window=int(context_window or 0),
-            created_at=now, updated_at=now,
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            provider_id=provider_id,
+            model_id=normalized,
+            label=(label or "").strip() or normalized,
+            temperature=temperature,
+            context_window=int(context_window or 0),
+            created_at=now,
+            updated_at=now,
         )
         db.add(entry)
         await db.commit()
@@ -211,9 +269,14 @@ class UserLLMService:
 
     @staticmethod
     async def update_model(
-        db: AsyncSession, *, user_id: int, entry_id: str,
-        provider_id: Optional[str] = None, model_id: Optional[str] = None,
-        label: Optional[str] = None, temperature: Optional[float] = None,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        entry_id: str,
+        provider_id: Optional[str] = None,
+        model_id: Optional[str] = None,
+        label: Optional[str] = None,
+        temperature: Optional[float] = None,
         context_window: Optional[int] = None,
     ) -> Dict[str, Any]:
         entry = await UserLLMService._get_model(db, user_id, entry_id)
@@ -225,7 +288,9 @@ class UserLLMService:
             if not normalized:
                 raise ServiceException(message="模型 ID 不能为空")
             if normalized != entry.model_id:
-                await UserLLMService._ensure_model_id_free(db, user_id, normalized, exclude_entry_id=entry.id)
+                await UserLLMService._ensure_model_id_free(
+                    db, user_id, normalized, exclude_entry_id=entry.id
+                )
                 entry.model_id = normalized
         if label is not None and label.strip():
             entry.label = label.strip()
@@ -238,13 +303,13 @@ class UserLLMService:
         return UserLLMService._model_view(db_entry=entry, api_type=None)
 
     @staticmethod
-    async def delete_model(db: AsyncSession, *, user_id: int, entry_id: str) -> None:
+    async def delete_model(db: AsyncSession, *, user_id: str, entry_id: str) -> None:
         entry = await UserLLMService._get_model(db, user_id, entry_id)
         entry.deleted_at = _now_ms()
         await db.commit()
 
     @staticmethod
-    async def list_models(db: AsyncSession, *, user_id: int) -> List[Dict[str, Any]]:
+    async def list_models(db: AsyncSession, *, user_id: str) -> List[Dict[str, Any]]:
         rows = await UserLLMService._load_models(db, user_id)
         return [
             UserLLMService._model_view(db_entry=m, api_type=p.api_type if p else None)
@@ -252,26 +317,37 @@ class UserLLMService:
         ]
 
     @staticmethod
-    async def _load_models(db: AsyncSession, user_id: int):
+    async def _load_models(db: AsyncSession, user_id: str):
         result = await db.execute(
             select(TUserLLMModel, TUserLLMProvider)
             .outerjoin(
                 TUserLLMProvider,
-                and_(TUserLLMProvider.id == TUserLLMModel.provider_id, TUserLLMProvider.deleted_at.is_(None)),
+                and_(
+                    TUserLLMProvider.id == TUserLLMModel.provider_id,
+                    TUserLLMProvider.deleted_at.is_(None),
+                ),
             )
-            .where(and_(TUserLLMModel.user_id == user_id, TUserLLMModel.deleted_at.is_(None)))
+            .where(
+                and_(
+                    TUserLLMModel.user_id == user_id, TUserLLMModel.deleted_at.is_(None)
+                )
+            )
             .order_by(TUserLLMModel.created_at)
         )
         return result.all()
 
     @staticmethod
-    async def _get_model(db: AsyncSession, user_id: int, entry_id: str) -> TUserLLMModel:
+    async def _get_model(
+        db: AsyncSession, user_id: str, entry_id: str
+    ) -> TUserLLMModel:
         result = await db.execute(
-            select(TUserLLMModel).where(and_(
-                TUserLLMModel.id == entry_id,
-                TUserLLMModel.user_id == user_id,
-                TUserLLMModel.deleted_at.is_(None),
-            ))
+            select(TUserLLMModel).where(
+                and_(
+                    TUserLLMModel.id == entry_id,
+                    TUserLLMModel.user_id == user_id,
+                    TUserLLMModel.deleted_at.is_(None),
+                )
+            )
         )
         entry = result.scalar_one_or_none()
         if entry is None:
@@ -279,7 +355,9 @@ class UserLLMService:
         return entry
 
     @staticmethod
-    def _model_view(*, db_entry: TUserLLMModel, api_type: Optional[str]) -> Dict[str, Any]:
+    def _model_view(
+        *, db_entry: TUserLLMModel, api_type: Optional[str]
+    ) -> Dict[str, Any]:
         return {
             "entry_id": db_entry.id,
             "provider_id": db_entry.provider_id,
@@ -310,7 +388,7 @@ class UserLLMService:
 
     @staticmethod
     async def resolve_runtime_snapshots(
-        db: AsyncSession, *, user_id: int, model_id: Optional[str]
+        db: AsyncSession, *, user_id: str, model_id: Optional[str]
     ) -> List[RuntimeModelSnapshot]:
         """把用户自定义模型解析为运行时快照（含解密 key），供 ContextVar 注入。
 
@@ -323,13 +401,18 @@ class UserLLMService:
             select(TUserLLMModel, TUserLLMProvider)
             .join(
                 TUserLLMProvider,
-                and_(TUserLLMProvider.id == TUserLLMModel.provider_id, TUserLLMProvider.deleted_at.is_(None)),
+                and_(
+                    TUserLLMProvider.id == TUserLLMModel.provider_id,
+                    TUserLLMProvider.deleted_at.is_(None),
+                ),
             )
-            .where(and_(
-                TUserLLMModel.user_id == user_id,
-                TUserLLMModel.model_id == normalized,
-                TUserLLMModel.deleted_at.is_(None),
-            ))
+            .where(
+                and_(
+                    TUserLLMModel.user_id == user_id,
+                    TUserLLMModel.model_id == normalized,
+                    TUserLLMModel.deleted_at.is_(None),
+                )
+            )
             .limit(1)
         )
         row = result.first()
@@ -355,7 +438,7 @@ class UserLLMService:
 
     @staticmethod
     async def discover_provider_models(
-        db: AsyncSession, *, user_id: int, provider_id: str
+        db: AsyncSession, *, user_id: str, provider_id: str
     ) -> Dict[str, Any]:
         """从 Provider 的 OpenAI-compatible ``GET /models`` 发现模型。
 
@@ -383,10 +466,15 @@ class UserLLMService:
         models_url = f"{base_url}/models"
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True
+            ) as client:
                 response = await client.get(
                     models_url,
-                    headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Accept": "application/json",
+                    },
                 )
         except httpx.RequestError:
             return {
@@ -461,7 +549,9 @@ class UserLLMService:
                 model_id = raw_model.strip()
                 metadata: Dict[str, Any] = {}
             elif isinstance(raw_model, dict):
-                model_id = str(raw_model.get("id") or raw_model.get("model") or "").strip()
+                model_id = str(
+                    raw_model.get("id") or raw_model.get("model") or ""
+                ).strip()
                 metadata = raw_model
             else:
                 continue
@@ -469,18 +559,25 @@ class UserLLMService:
                 continue
             seen_ids.add(model_id)
             context_window = 0
-            for field in ("context_window", "context_length", "max_context_length", "context_window_tokens"):
+            for field in (
+                "context_window",
+                "context_length",
+                "max_context_length",
+                "context_window_tokens",
+            ):
                 value = metadata.get(field)
                 if isinstance(value, (int, float)) and value > 0:
                     context_window = int(value)
                     break
-            models.append({
-                "model_id": model_id,
-                "label": str(metadata.get("name") or model_id),
-                "owned_by": metadata.get("owned_by"),
-                "context_window": context_window,
-                "context_source": "provider" if context_window else "unknown",
-            })
+            models.append(
+                {
+                    "model_id": model_id,
+                    "label": str(metadata.get("name") or model_id),
+                    "owned_by": metadata.get("owned_by"),
+                    "context_window": context_window,
+                    "context_source": "provider" if context_window else "unknown",
+                }
+            )
 
         return {
             "ok": True,
@@ -492,7 +589,9 @@ class UserLLMService:
         }
 
     @staticmethod
-    async def test_provider(db: AsyncSession, *, user_id: int, provider_id: str) -> Dict[str, Any]:
+    async def test_provider(
+        db: AsyncSession, *, user_id: str, provider_id: str
+    ) -> Dict[str, Any]:
         """兼容旧按钮语义：测试连接改为真实的模型列表发现。"""
         return await UserLLMService.discover_provider_models(
             db, user_id=user_id, provider_id=provider_id

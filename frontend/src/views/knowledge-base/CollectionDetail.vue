@@ -801,7 +801,7 @@ async function saveCollectionConfig() {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .config-default-hint {
   font-size: 11px;
   font-weight: normal;

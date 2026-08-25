@@ -28,6 +28,8 @@ def test_normalize_usage_langchain_form_with_cache_and_reasoning() -> None:
     assert out["output_tokens"] == 240
     assert out["total_tokens"] == 590
     assert out["input_token_details"] == {"cache_read": 100, "cache_write": 200}
+    assert out["uncached_input_tokens"] == 50
+    assert out["cache_metrics_available"] is True
     assert out["output_token_details"] == {"reasoning": 50}
 
 
@@ -66,6 +68,8 @@ def test_normalize_usage_missing_details_not_zero_filled() -> None:
     assert out["input_tokens"] == 100
     assert "input_token_details" not in out
     assert "output_token_details" not in out
+    assert out["cache_metrics_available"] is False
+    assert "uncached_input_tokens" not in out
 
 
 def test_normalize_usage_empty_and_none() -> None:

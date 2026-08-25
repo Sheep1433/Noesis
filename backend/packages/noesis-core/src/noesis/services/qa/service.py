@@ -53,6 +53,7 @@ class QaService:
         db: AsyncSession,
         *,
         assistant_message_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[RunEvent | str, None]:
         """
         执行问答。目标 Agent Run 返回 typed RunEvent；TEST_CASE_QA 返回旧 SSE 文本。
@@ -174,6 +175,8 @@ class QaService:
                     qa_type=req_obj.qa_type,
                     model_id=resolved_model_id,
                     mcp_tools=mcp_tools,
+                    db=db,
+                    run_id=run_id,
                 )
             elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
                 agent_generator = case_coordinator.run_agent(
@@ -195,6 +198,7 @@ class QaService:
                     db=db,
                     kb_collections=kb_collections or None,
                     kb_search_enabled=kb_search_enabled,
+                    run_id=run_id,
                 )
             else:
                 # 即时代码路径，连续产出多帧 SSE，无长时间阻塞，无需注释保活。
@@ -324,6 +328,7 @@ class QaService:
         selected_point_names: List[str],
         current_user: CurrentUser,
         db: AsyncSession,
+        run_id: Optional[str] = None,
         *,
         assistant_message_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
@@ -440,6 +445,7 @@ class QaService:
         grant_scope: Optional[str],
         current_user: CurrentUser,
         db: AsyncSession,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[RunEvent, None]:
         """HITL resume：新开 SSE，续写同一 assistant_message_id。"""
         from noesis.agents.guardrails.session_grants import session_grants
@@ -609,6 +615,7 @@ class QaService:
                 qa_type=qa_type,
                 db=db,
                 message_id=aid,
+                run_id=run_id,
             )
 
             float(StreamConfig.sse_keepalive_interval_seconds)

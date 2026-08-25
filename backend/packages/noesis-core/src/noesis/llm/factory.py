@@ -368,7 +368,12 @@ def build_chat_model(
     )
 
 
-def get_llm(purpose: str | None = None, *, model_id: str | None = None):
+def get_llm(
+    purpose: str | None = None,
+    *,
+    model_id: str | None = None,
+    temperature_override: float | None = None,
+):
     from noesis.llm.catalog import resolve_catalog_entry
     from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
@@ -414,6 +419,8 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
         temperature = float(temperature_str)
     except ValueError:
         raise ValueError(f"Invalid MODEL_TEMPERATURE value: {temperature_str}. Must be a float.")
+    if temperature_override is not None:
+        temperature = temperature_override
 
     return build_chat_model(
         model_type=model_type,

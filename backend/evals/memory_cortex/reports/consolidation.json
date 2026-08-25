@@ -1,0 +1,64 @@
+{
+  "report_version": "memory-consolidation-eval-v1",
+  "created_at": "2026-08-24T11:10:08.650099+00:00",
+  "evaluation_fingerprint": "09a3d3d27cbe3bc210a7832610d28800b6584917d614a6b79c39752235be792b",
+  "effective_config": {
+    "runtime_model": "hy3-free",
+    "runtime_model_type": "opencode",
+    "runtime_model_base_url": "https://opencode.ai/zen/v1",
+    "extraction_model": "hy3-free",
+    "embedding_model_name": "text-embedding-v4",
+    "embedding_model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "chunk_max_tokens": 1600,
+    "chunk_concurrency": 4,
+    "chunk_attempts": 2,
+    "embedding_template_version": "memory-item-v1",
+    "collection_name": "noesis_memory",
+    "retrieval_top_k": 3,
+    "retrieval_overfetch": 3,
+    "retrieval_min_score": 0.45,
+    "bulletin_max_tokens": 500,
+    "bulletin_timeout_seconds": 0.4,
+    "deep_query_timeout_seconds": 5.0,
+    "deep_query_max_steps": 6,
+    "deep_query_max_spans": 12,
+    "deep_query_concurrency": 4
+  },
+  "mode": "production_deterministic",
+  "fixture_schema_version": "memory-operation-fixture-v1",
+  "fixture_revision": "2026-08-24.7",
+  "operation_accuracy": 1.0,
+  "cases": [
+    {
+      "id": "add-new",
+      "expected": "ADD",
+      "observed": "ADD"
+    },
+    {
+      "id": "reinforce-same",
+      "expected": "REINFORCE",
+      "observed": "REINFORCE"
+    },
+    {
+      "id": "update-detail",
+      "expected": "UPDATE",
+      "observed": "UPDATE"
+    },
+    {
+      "id": "supersede-correction",
+      "expected": "SUPERSEDE",
+      "observed": "SUPERSEDE"
+    },
+    {
+      "id": "contradict-explicit",
+      "expected": "CONTRADICT",
+      "observed": "CONTRADICT"
+    },
+    {
+      "id": "noop-disabled",
+      "expected": "NOOP",
+      "observed": "NOOP"
+    }
+  ],
+  "gate_passed": true
+}

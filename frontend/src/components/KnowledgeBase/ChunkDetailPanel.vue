@@ -170,7 +170,7 @@ function score(value: number | null | undefined) {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .chunk-detail-panel {
   min-width: 0;
   height: 100%;

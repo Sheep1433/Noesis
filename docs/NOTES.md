@@ -1,5 +1,26 @@
 # 知识卡片（开发笔记）
 
+## 2026-08-24 — Alembic 迁移漂移：迁移执行后修改其依赖代码导致缺表
+
+- **症状**：后台留存清理任务报 `relation "t_memory_query_trace" does not exist`，但 `alembic upgrade head` 显示全部迁移已执行。
+- **根因**：迁移 `202608240001_reset_unreleased_memory` 执行时 import 的 `_create_schema` 还是旧版（无该表）；之后 schema 模块补上定义，但链头已是 `202608240002` 不会重跑 → 「迁移全跑完」与实际 schema 脱节。活跃 WIP + 多 agent 并行开发下高发。
+- **解法**：不重跑迁移（会 drop 重建既有表）；直接用 ORM `TMemoryQueryTrace.__table__.create()` 补建，以运行时代码为单一事实来源，结构与模型严格一致。
+- **可迁移**：修改被已执行迁移引用的 schema 函数时必须评估漂移风险；排查「迁移说完成但表不存在」先比对迁移版本执行时间与依赖代码的修改时间。
+- **验证**：原报错 DELETE 可执行；ORM 与迁移定义一致。
+
+## 2026-08-24 — user_id 切 UUIDv7 与数据库重置
+
+- **动机**：自增 id 在侧边栏暴露用户序号；AI Agent 产品数据可整体清空重建，切换成本低。
+- **变更**：user_id 改 UUIDv7；清空 `noesis` 业务库与 `noesis_langgraph` checkpoint 库并重新 Alembic 初始化；初始化 admin 用户（UUIDv7 已验证）。备份 dump 留 /tmp。
+- **脚本**：`initialize_postgresql.py` 曾加 `--reset` 后删除（避免误触发全量重置），保留正常迁移功能；`drop_tables.sql` 改为完整重置 public schema。
+- **边界**：Qdrant、`.noesis` 目录、Docker volume 未清理。
+
+## 2026-08-24 — RAG 评测基线：EnterpriseRAG-Bench 阈值标定
+
+- **规模**：500 题下载，211 题可评测（GT 文档全部可得）+ 20 题 info_not_found 负拒备用；1/10 试点入库（erb-eval 集合 48 篇 / 268 chunks，chunk_size=2000/overlap=200）。
+- **结论**：21 题阈值校准 Recall@1=100%；rerank 分中位数 GT 0.199 vs 无关 0.078 → 定版：平台默认阈值 0.1、erb-eval（跨语中→英）0.05。原始数据 `/tmp/erb_scan_raw.json`。
+- **顺手修复**：source 路径泄漏根治、xgboost 依赖、引用溯源 `file:` 协议容错。
+
 ## 2026-08-06 — 流式落库原则：durable vs ephemeral（streaming-persistence-principle）
 
 - **问题/症状**：原 spec 只约束"assistant 正文按骨架—检查点—终态单次落库"，未定义 tool output chunk、reasoning raw delta、progress 等流式内容的入库边界；各写入点自行判断粒度 → 行膨胀与恢复困难。

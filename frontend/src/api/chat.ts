@@ -72,7 +72,6 @@ export interface ChatSessionResponse {
   kind?: 'root' | 'subagent' | string
   created_by_run_id?: string | null
   created_by_tool_call_id?: string | null
-  user_id: string
   title: string
   extra: Record<string, unknown> | null
   created_at: number
@@ -111,7 +110,6 @@ export interface ChatMessageResponse {
   id: string
   session_id: string
   parent_id: string | null
-  user_id: string
   role: 'user' | 'assistant'
   content: MessageContent
   extra?: MessageMetadata
@@ -443,7 +441,6 @@ export interface TaskCatalogEntry {
   created_by_tool_call_id?: string | null
   run_id?: string | null
   assistant_message_id?: string | null
-  user_id?: string
   description: string
   kind?: 'subagent' | 'shell'
   status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'

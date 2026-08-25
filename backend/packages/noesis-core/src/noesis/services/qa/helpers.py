@@ -216,7 +216,7 @@ async def _resolve_model_for_query(
         if not model_id:
             return None
         snapshots = await UserLLMService.resolve_runtime_snapshots(
-            db, user_id=int(user_id), model_id=model_id
+            db, user_id=str(user_id), model_id=model_id
         )
         if not snapshots:
             return None

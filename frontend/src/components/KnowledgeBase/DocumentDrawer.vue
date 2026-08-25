@@ -328,7 +328,7 @@ async function moveSelection(direction: -1 | 1) {
   </n-drawer>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .chunk-drawer :deep(.n-drawer-body-content-wrapper) {
   display: flex;
   flex-direction: column;

@@ -8,10 +8,7 @@ export interface MainNavItem {
 }
 
 export const CHAT_ROUTE_NAMES = ['ChatRoot', 'ChatIndex', 'ChatNew', 'ChatSession'] as const
-const MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES = [
-  ...CHAT_ROUTE_NAMES,
-  'KnowledgeBaseDetail',
-] as const
+const MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES = ['KnowledgeBaseDetail'] as const
 
 export function isChatRouteName(routeName: unknown): boolean {
   return CHAT_ROUTE_NAMES.includes(routeName as (typeof CHAT_ROUTE_NAMES)[number])

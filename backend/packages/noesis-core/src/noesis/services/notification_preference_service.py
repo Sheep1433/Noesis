@@ -21,13 +21,13 @@ class NotificationPreferenceService:
         return {"event_type": row.event_type, "delivery_surface": row.delivery_surface, "enabled": row.enabled, "version": row.version, "updated_at": row.updated_at}
 
     @classmethod
-    async def list_preferences(cls, db: AsyncSession, user_id: int) -> list[dict]:
+    async def list_preferences(cls, db: AsyncSession, user_id: str) -> list[dict]:
         rows = await SettingsRepository(db).list_notification_preferences(user_id)
         indexed = {(row.event_type, row.delivery_surface): row for row in rows}
         return [cls._view(indexed[(event, surface)]) if (event, surface) in indexed else {"event_type": event, "delivery_surface": surface, "enabled": True, "version": 0, "updated_at": None} for event in sorted(EVENT_TYPES) for surface in sorted(SURFACES)]
 
     @classmethod
-    async def set_preference(cls, db: AsyncSession, user_id: int, event_type: str, surface: str, enabled: bool, expected_version: int | None = None) -> dict:
+    async def set_preference(cls, db: AsyncSession, user_id: str, event_type: str, surface: str, enabled: bool, expected_version: int | None = None) -> dict:
         if event_type not in EVENT_TYPES or surface not in SURFACES:
             raise ValueError("不支持的通知类型或接收方式")
         repo = SettingsRepository(db)
@@ -46,6 +46,6 @@ class NotificationPreferenceService:
         return cls._view(row)
 
     @staticmethod
-    async def should_notify(db: AsyncSession, user_id: int, event_type: str, surface: str) -> bool:
+    async def should_notify(db: AsyncSession, user_id: str, event_type: str, surface: str) -> bool:
         row = await SettingsRepository(db).get_notification_preference(user_id, event_type, surface)
         return True if row is None else bool(row.enabled)

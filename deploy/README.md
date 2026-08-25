@@ -68,6 +68,13 @@ docker build -t noesis/sandbox-slim:latest -f deploy/sandbox-slim/Dockerfile .
 
 首次部署或发版时，后端容器启动会自动执行 Alembic 迁移（`server.py` → `init_database()`）。Compose 会在空数据卷上创建业务库和 LangGraph checkpoint 库；本地非 Compose 环境使用 `cd backend && uv run python sql/initialize_postgresql.py`。
 
+### 经验记忆（Memory Cortex）迁移与恢复
+
+- 记忆相关表（item / evidence / snapshot / job / outbox）与 `user_id` 转 UUID 的迁移包含在同一次 Alembic 升级中；空库部署直接建表，存量库自动完成列类型转换，无需手工脚本。详见 `docs/architecture/platform/agent-memory.md`。
+- 用户「经验记忆」开关默认关闭：关闭期间不创建自动任务，不影响聊天与 `USER.md` / `AGENTS.md`；已有数据保留，可随时在设置页重新开启。
+- `partial` / `error` 终态 Run 由后台 job 按阶段幂等处理，重启 worker 会续租重试，达到上限进入 dead 并在设置页「处理失败」计数。
+- Qdrant 索引或派生 workspace 丢失时可安全删除，worker 会按 PostgreSQL desired state 自动全量重建。
+
 ### DeepDoc 模型（知识库 PDF 解析）
 
 知识库入库使用 RAGFlow DeepDoc，ONNX 权重 **不包含在镜像内**。Compose 将 `NOESIS_HOST_DATA_DIR` bind 到 backend 容器 `/data/noesis`；`deploy/config.docker.yaml` 中：

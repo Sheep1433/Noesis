@@ -152,7 +152,7 @@ const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.sl
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .welcome-root {
   position: relative;
   width: 100%;

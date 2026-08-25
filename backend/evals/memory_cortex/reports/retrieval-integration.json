@@ -1,0 +1,470 @@
+{
+  "report_version": "memory-retrieval-integration-v1",
+  "mode": "production_integration",
+  "created_at": "2026-08-24T11:10:18.958602+00:00",
+  "evaluation_fingerprint": "09a3d3d27cbe3bc210a7832610d28800b6584917d614a6b79c39752235be792b",
+  "effective_config": {
+    "runtime_model": "hy3-free",
+    "runtime_model_type": "opencode",
+    "runtime_model_base_url": "https://opencode.ai/zen/v1",
+    "extraction_model": "hy3-free",
+    "embedding_model_name": "text-embedding-v4",
+    "embedding_model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "chunk_max_tokens": 1600,
+    "chunk_concurrency": 4,
+    "chunk_attempts": 2,
+    "embedding_template_version": "memory-item-v1",
+    "collection_name": "noesis_memory",
+    "retrieval_top_k": 3,
+    "retrieval_overfetch": 3,
+    "retrieval_min_score": 0.45,
+    "bulletin_max_tokens": 500,
+    "bulletin_timeout_seconds": 0.4,
+    "deep_query_timeout_seconds": 5.0,
+    "deep_query_max_steps": 6,
+    "deep_query_max_spans": 12,
+    "deep_query_concurrency": 4
+  },
+  "fixture_revision": "2026-08-24.7",
+  "query_count": 12,
+  "resource_overrides": {
+    "collection_name": "noesis_memory_integration_20260824",
+    "database": "isolated"
+  },
+  "metrics": {
+    "exact_evidence_recall_at_5": 1.0,
+    "precision_at_5": 0.7986111111111112,
+    "bulletin_recall": 1.0,
+    "bulletin_precision": 1.0,
+    "fast_p95_ms": 241.971,
+    "max_bulletin_tokens": 71
+  },
+  "observations": [
+    {
+      "case_id": "switch-control",
+      "query": "How is memory enablement controlled?",
+      "expected_memory_id": "7ad15279-1506-5a05-ab95-4e50d54059e1",
+      "returned_memory_ids": [
+        "7ad15279-1506-5a05-ab95-4e50d54059e1",
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "7ad15279-1506-5a05-ab95-4e50d54059e1",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 0.8333333333333334,
+          "source_types": [
+            "message"
+          ]
+        },
+        {
+          "memory_id": "10c51ae3-b908-5df7-a77c-9000b1889ffd",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 0.5,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd:ae7d9f46-08c7-5731-b5d6-3287a98ed737:message",
+        "7ad15279-1506-5a05-ab95-4e50d54059e1:dc37fb86-d067-5ca5-a43d-8bfb19cf0443:message"
+      ],
+      "bulletin_memory_ids": [
+        "7ad15279-1506-5a05-ab95-4e50d54059e1"
+      ],
+      "latency_ms": 213.231,
+      "bulletin_tokens": 56,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "stale-lock",
+      "query": "How should a stale dependency lock be repaired?",
+      "expected_memory_id": "0dd2615f-a5e2-5109-bc32-a33653499ed6",
+      "returned_memory_ids": [
+        "0dd2615f-a5e2-5109-bc32-a33653499ed6"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "0dd2615f-a5e2-5109-bc32-a33653499ed6",
+          "memory_type": "experience",
+          "status": "active",
+          "score": 0.9,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "0dd2615f-a5e2-5109-bc32-a33653499ed6:390d6fa6-81a1-509d-ab2f-7991279f51e2:message"
+      ],
+      "bulletin_memory_ids": [
+        "0dd2615f-a5e2-5109-bc32-a33653499ed6"
+      ],
+      "latency_ms": 193.538,
+      "bulletin_tokens": 65,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "diagnose-first",
+      "query": "What workflow applies before code changes for a failure?",
+      "expected_memory_id": "0d701228-8ba1-5b43-bdf1-8b189a77801e",
+      "returned_memory_ids": [
+        "0d701228-8ba1-5b43-bdf1-8b189a77801e"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "0d701228-8ba1-5b43-bdf1-8b189a77801e",
+          "memory_type": "workflow",
+          "status": "active",
+          "score": 0.6759809,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "0d701228-8ba1-5b43-bdf1-8b189a77801e:499c80f7-6d27-5602-88bb-44b2f271e8e5:message"
+      ],
+      "bulletin_memory_ids": [
+        "0d701228-8ba1-5b43-bdf1-8b189a77801e"
+      ],
+      "latency_ms": 209.019,
+      "bulletin_tokens": 65,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "workspace-boundary",
+      "query": "Why did a write outside the workspace fail?",
+      "expected_memory_id": "2add0395-b39a-572b-8502-a80324294030",
+      "returned_memory_ids": [
+        "2add0395-b39a-572b-8502-a80324294030"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "2add0395-b39a-572b-8502-a80324294030",
+          "memory_type": "gotcha",
+          "status": "active",
+          "score": 0.7811198,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "2add0395-b39a-572b-8502-a80324294030:48ce3ec4-1f68-5349-aa10-7b5ebe68ecfb:message"
+      ],
+      "bulletin_memory_ids": [
+        "2add0395-b39a-572b-8502-a80324294030"
+      ],
+      "latency_ms": 193.51,
+      "bulletin_tokens": 57,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "partial-retry",
+      "query": "What progress did the bounded timeout retry preserve?",
+      "expected_memory_id": "1ea49dbd-f5b0-5bfc-847a-50bbf3511d37",
+      "returned_memory_ids": [
+        "1ea49dbd-f5b0-5bfc-847a-50bbf3511d37"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "1ea49dbd-f5b0-5bfc-847a-50bbf3511d37",
+          "memory_type": "experience",
+          "status": "active",
+          "score": 0.75,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "1ea49dbd-f5b0-5bfc-847a-50bbf3511d37:c0dc5a8c-d1a9-53a3-a5b9-932ec68cef23:message"
+      ],
+      "bulletin_memory_ids": [
+        "1ea49dbd-f5b0-5bfc-847a-50bbf3511d37"
+      ],
+      "latency_ms": 186.116,
+      "bulletin_tokens": 62,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "migration-plan",
+      "query": "Which migration artifact was validated?",
+      "expected_memory_id": "fa900248-8a37-5efe-968b-9e0193ace73a",
+      "returned_memory_ids": [
+        "fa900248-8a37-5efe-968b-9e0193ace73a"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "fa900248-8a37-5efe-968b-9e0193ace73a",
+          "memory_type": "experience",
+          "status": "active",
+          "score": 0.75,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "fa900248-8a37-5efe-968b-9e0193ace73a:b7296869-fb47-5849-9619-7868228f3630:message"
+      ],
+      "bulletin_memory_ids": [
+        "fa900248-8a37-5efe-968b-9e0193ace73a"
+      ],
+      "latency_ms": 185.889,
+      "bulletin_tokens": 62,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "daily-files",
+      "query": "What should happen to unreleased daily files?",
+      "expected_memory_id": "ae7489d3-ddc1-5031-ab80-29e011343c81",
+      "returned_memory_ids": [
+        "ae7489d3-ddc1-5031-ab80-29e011343c81"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "ae7489d3-ddc1-5031-ab80-29e011343c81",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 1.0,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "ae7489d3-ddc1-5031-ab80-29e011343c81:4c38c035-4698-5b29-a9f8-9ea3ec90f68c:message"
+      ],
+      "bulletin_memory_ids": [
+        "ae7489d3-ddc1-5031-ab80-29e011343c81"
+      ],
+      "latency_ms": 183.074,
+      "bulletin_tokens": 61,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "module-boundary",
+      "query": "What constraint applies to core package imports?",
+      "expected_memory_id": "afcc35d3-8229-5e44-84e4-0807bbd5f27a",
+      "returned_memory_ids": [
+        "afcc35d3-8229-5e44-84e4-0807bbd5f27a"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "afcc35d3-8229-5e44-84e4-0807bbd5f27a",
+          "memory_type": "gotcha",
+          "status": "active",
+          "score": 0.7199535,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "afcc35d3-8229-5e44-84e4-0807bbd5f27a:0765f601-70bd-5080-b7c3-dab4d520b4b0:message"
+      ],
+      "bulletin_memory_ids": [
+        "afcc35d3-8229-5e44-84e4-0807bbd5f27a"
+      ],
+      "latency_ms": 377.057,
+      "bulletin_tokens": 61,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "single-fact-source",
+      "query": "What is the authoritative memory fact source?",
+      "expected_memory_id": "10c51ae3-b908-5df7-a77c-9000b1889ffd",
+      "returned_memory_ids": [
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd",
+        "d2fe8d00-8f6a-50c8-9610-2956be7e000a"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "10c51ae3-b908-5df7-a77c-9000b1889ffd",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 0.6474154,
+          "source_types": [
+            "message"
+          ]
+        },
+        {
+          "memory_id": "d2fe8d00-8f6a-50c8-9610-2956be7e000a",
+          "memory_type": "gotcha",
+          "status": "active",
+          "score": 0.50746274,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "d2fe8d00-8f6a-50c8-9610-2956be7e000a:86609fcd-653b-53d9-8c0d-2f23a0317947:message",
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd:ae7d9f46-08c7-5731-b5d6-3287a98ed737:message"
+      ],
+      "bulletin_memory_ids": [
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd"
+      ],
+      "latency_ms": 196.338,
+      "bulletin_tokens": 60,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "index-rebuild",
+      "query": "How is a missing semantic memory collection recovered?",
+      "expected_memory_id": "72dfb872-6467-5ef3-a94e-97a247d4fe73",
+      "returned_memory_ids": [
+        "72dfb872-6467-5ef3-a94e-97a247d4fe73"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "72dfb872-6467-5ef3-a94e-97a247d4fe73",
+          "memory_type": "workflow",
+          "status": "active",
+          "score": 0.6150036,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "72dfb872-6467-5ef3-a94e-97a247d4fe73:1656fcae-a80e-5694-b85f-532f8f48143e:message"
+      ],
+      "bulletin_memory_ids": [
+        "72dfb872-6467-5ef3-a94e-97a247d4fe73"
+      ],
+      "latency_ms": 201.02,
+      "bulletin_tokens": 71,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "source-retention",
+      "query": "What happens after a memory source retention window expires?",
+      "expected_memory_id": "d2fe8d00-8f6a-50c8-9610-2956be7e000a",
+      "returned_memory_ids": [
+        "d2fe8d00-8f6a-50c8-9610-2956be7e000a",
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd",
+        "7ad15279-1506-5a05-ab95-4e50d54059e1",
+        "ae7489d3-ddc1-5031-ab80-29e011343c81"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "d2fe8d00-8f6a-50c8-9610-2956be7e000a",
+          "memory_type": "gotcha",
+          "status": "active",
+          "score": 0.77257967,
+          "source_types": [
+            "message"
+          ]
+        },
+        {
+          "memory_id": "10c51ae3-b908-5df7-a77c-9000b1889ffd",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 0.48142475,
+          "source_types": [
+            "message"
+          ]
+        },
+        {
+          "memory_id": "7ad15279-1506-5a05-ab95-4e50d54059e1",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 0.47800142,
+          "source_types": [
+            "message"
+          ]
+        },
+        {
+          "memory_id": "ae7489d3-ddc1-5031-ab80-29e011343c81",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 0.47547147,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "ae7489d3-ddc1-5031-ab80-29e011343c81:4c38c035-4698-5b29-a9f8-9ea3ec90f68c:message",
+        "d2fe8d00-8f6a-50c8-9610-2956be7e000a:86609fcd-653b-53d9-8c0d-2f23a0317947:message",
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd:ae7d9f46-08c7-5731-b5d6-3287a98ed737:message",
+        "7ad15279-1506-5a05-ab95-4e50d54059e1:dc37fb86-d067-5ca5-a43d-8bfb19cf0443:message"
+      ],
+      "bulletin_memory_ids": [
+        "d2fe8d00-8f6a-50c8-9610-2956be7e000a"
+      ],
+      "latency_ms": 186.831,
+      "bulletin_tokens": 63,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    },
+    {
+      "case_id": "cache-prefix",
+      "query": "Where should the late Memory Bulletin appear for cache stability?",
+      "expected_memory_id": "f2ae9038-b5fd-571b-9062-f66b839a3502",
+      "returned_memory_ids": [
+        "f2ae9038-b5fd-571b-9062-f66b839a3502",
+        "d2fe8d00-8f6a-50c8-9610-2956be7e000a",
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd"
+      ],
+      "returned_items": [
+        {
+          "memory_id": "f2ae9038-b5fd-571b-9062-f66b839a3502",
+          "memory_type": "workflow",
+          "status": "active",
+          "score": 0.7135233,
+          "source_types": [
+            "message"
+          ]
+        },
+        {
+          "memory_id": "d2fe8d00-8f6a-50c8-9610-2956be7e000a",
+          "memory_type": "gotcha",
+          "status": "active",
+          "score": 0.4983111,
+          "source_types": [
+            "message"
+          ]
+        },
+        {
+          "memory_id": "10c51ae3-b908-5df7-a77c-9000b1889ffd",
+          "memory_type": "decision",
+          "status": "active",
+          "score": 0.45941162,
+          "source_types": [
+            "message"
+          ]
+        }
+      ],
+      "source_spans": [
+        "d2fe8d00-8f6a-50c8-9610-2956be7e000a:86609fcd-653b-53d9-8c0d-2f23a0317947:message",
+        "10c51ae3-b908-5df7-a77c-9000b1889ffd:ae7d9f46-08c7-5731-b5d6-3287a98ed737:message",
+        "f2ae9038-b5fd-571b-9062-f66b839a3502:d207c92d-f9c6-5fbe-9bb5-1f9c3ce07d2b:message"
+      ],
+      "bulletin_memory_ids": [
+        "f2ae9038-b5fd-571b-9062-f66b839a3502"
+      ],
+      "latency_ms": 241.971,
+      "bulletin_tokens": 64,
+      "exact_evidence_hit": true,
+      "bulletin_hit": true
+    }
+  ],
+  "gate_passed": true
+}

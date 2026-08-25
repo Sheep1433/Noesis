@@ -136,6 +136,10 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
     retry_base_delay_ms: int = 1000
     retry_cap_delay_ms: int = 8000
     burst_retry_base_delay_ms: int = 5000
+    # Retry-After / retryAfterSeconds 遵循上限：限流窗口语义真实（分钟窗
+    # 重置），遵循优于自行指数退避（提前重试只会烧 attempt 预算）；但须
+    # clamp 防病态大值（网关配错 Retry-After: 3600 会挂死 run 一小时）
+    retry_after_cap_ms: int = 60_000
 
     def __init__(
         self,
@@ -252,7 +256,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
     def _build_retry_delay_ms(self, prev_delay_ms: int | None, exc: BaseException, reason: str = "transient") -> int:
         retry_after = _extract_retry_after_ms(exc)
         if retry_after is not None:
-            return retry_after
+            return min(retry_after, self.retry_after_cap_ms)
         base = self.burst_retry_base_delay_ms if reason == "burst_rate" else self.retry_base_delay_ms
         cap = self.retry_cap_delay_ms
         seed = base if prev_delay_ms is None else prev_delay_ms

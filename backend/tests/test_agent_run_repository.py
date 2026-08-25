@@ -8,7 +8,7 @@ from noesis.repositories.agent_run_repository import AgentRunRepository
 
 
 @pytest.mark.asyncio
-async def test_finalize_only_accepts_first_terminal_writer() -> None:
+async def test_finalize_only_accepts_first_terminal_writer(monkeypatch) -> None:
     db = MagicMock()
     # execute 序列：①首个 finalize 的 run UPDATE（rowcount=1）
     # ②旧 extra SELECT ③assistant UPDATE（rowcount=1）；④第二个 finalize 的 run UPDATE（rowcount=0）

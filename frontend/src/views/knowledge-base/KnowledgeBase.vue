@@ -307,7 +307,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .kb-page {
   display: flex;
   flex-direction: column;

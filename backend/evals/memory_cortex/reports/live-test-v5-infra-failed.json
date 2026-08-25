@@ -1,0 +1,277 @@
+{
+  "report_version": "memory-eval-report-v1",
+  "mode": "live",
+  "created_at": "2026-08-24T11:46:34.319879+00:00",
+  "evaluation_fingerprint": "36ee7919806651e83d7300b6093844d63f9c36820076b757fcbcc7a24147784b",
+  "effective_config": {
+    "runtime_model": "hy3-free",
+    "runtime_model_type": "opencode",
+    "runtime_model_base_url": "https://opencode.ai/zen/v1",
+    "extraction_model": "hy3-free",
+    "embedding_model_name": "text-embedding-v4",
+    "embedding_model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "chunk_max_tokens": 1600,
+    "chunk_concurrency": 4,
+    "chunk_attempts": 2,
+    "embedding_template_version": "memory-item-v1",
+    "collection_name": "noesis_memory",
+    "retrieval_top_k": 3,
+    "retrieval_overfetch": 3,
+    "retrieval_min_score": 0.45,
+    "bulletin_max_tokens": 500,
+    "bulletin_timeout_seconds": 0.4,
+    "deep_query_timeout_seconds": 5.0,
+    "deep_query_max_steps": 6,
+    "deep_query_max_spans": 12,
+    "deep_query_concurrency": 4
+  },
+  "config": {
+    "config_version": "memory-eval-v1",
+    "fixture_schema_version": "run-memory-fixture-v1",
+    "fixture_revision": "2026-08-24.10",
+    "test_fixture_file": "test_v5.json",
+    "model": "fake",
+    "embedding": "fake-deterministic-v1",
+    "prompt_version": "memory-extraction-v6",
+    "candidate_schema_version": "memory-candidate-v1",
+    "seed": 20260824,
+    "live_fixture_timeout_seconds": 60,
+    "retrieval_k": 5,
+    "bulletin_max_tokens": 500,
+    "min_retrieval_queries": 12,
+    "min_paired_tasks": 12,
+    "paired_max_output_tokens": 2048,
+    "deep_query": {
+      "max_steps": 6,
+      "max_spans": 12,
+      "timeout_ms": 5000
+    },
+    "release_gates": {
+      "capture_coverage": 1.0,
+      "silent_drop_rate": 0.0,
+      "extraction_precision": 0.85,
+      "extraction_recall": 0.8,
+      "source_span_precision": 0.9,
+      "source_span_recall": 0.9,
+      "operation_accuracy": 0.85,
+      "exact_evidence_recall_at_5": 0.8,
+      "precision_at_5": 0.7,
+      "bulletin_recall": 0.8,
+      "bulletin_precision": 0.7,
+      "fast_p95_ms": 500,
+      "cross_user_leaks": 0,
+      "cross_project_leaks": 0,
+      "stale_or_disabled_injections": 0,
+      "low_trust_command_injections": 0,
+      "recall_loop_items": 0,
+      "disabled_residual_injections": 0,
+      "task_success_ci95_lower_pp": -2.0
+    }
+  },
+  "structural": {
+    "fixtures": 20,
+    "capture": {
+      "coverage": 1.0,
+      "silent_drop_rate": 0.0,
+      "false_capture_rate": 0.0
+    }
+  },
+  "live_extraction": {
+    "split": "test",
+    "fixtures": 11,
+    "elapsed_seconds": 48.826,
+    "runtime_model": "hy3-free",
+    "metrics": {
+      "precision": 1.0,
+      "recall": 0.25,
+      "type_accuracy": 1.0,
+      "source_span_precision": 1.0,
+      "source_span_recall": 0.2857142857142857,
+      "no_output_accuracy": 1.0
+    },
+    "observations": [
+      {
+        "fixture_id": "test5-tenant-route-identity",
+        "captured": true,
+        "processed_chunk_ids": [
+          "5dfd7adbbf19c45e3e9c94c0960927226cd7e5ec00ac89174f53d78286c7d07a"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "5dfd7adbbf19c45e3e9c94c0960927226cd7e5ec00ac89174f53d78286c7d07a"
+        ],
+        "candidates": [
+          {
+            "memory_type": "decision",
+            "subject": "tenant_routing_key_policy",
+            "statement": "Key tenant routing by the canonical tenant slug and region, not by the current gateway process identifier.",
+            "applicability": "Applies to tasks that implement or modify tenant routing, gateway routing-key generation, or tenant identification; triggered when generating a routing key for a tenant in the gateway.",
+            "evidence_refs": [
+              "u1",
+              "v1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-disaster-recovery-workflow",
+        "captured": true,
+        "processed_chunk_ids": [
+          "f14f5496b6f97f41855a68aa95a5771d7f5466568f17b8c697f2951e8637170c"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "f14f5496b6f97f41855a68aa95a5771d7f5466568f17b8c697f2951e8637170c"
+        ],
+        "candidates": [
+          {
+            "memory_type": "workflow",
+            "subject": "disaster_recovery_procedure",
+            "statement": "For disaster recovery: execute in order: (1) restore latest verified snapshot, (2) replay journal, (3) run consistency checks, (4) stop before traffic switch if any check fails. Validation v1 confirms steps 1-3 completed successfully in isolated environment, so stop rule not triggered.",
+            "applicability": "Disaster recovery tasks (task category) triggered by need to restore service after failure; governs the operation of restoring system state via snapshot restore, journal replay, and consistency checks before traffic switch.",
+            "evidence_refs": [
+              "u1",
+              "v1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-timezone-filename-boundary",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "b4dbfb167253cf3e8ab73e3bbf85d7ff4337c8f466f4ddc22c11dc28d4e9d0cc"
+        ],
+        "expected_chunk_ids": [
+          "b4dbfb167253cf3e8ab73e3bbf85d7ff4337c8f466f4ddc22c11dc28d4e9d0cc"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-expired-certificate-repair",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "e71b44d0f650ced4e513bb80ae2e4a924554943678d92660369e48835f3ac243"
+        ],
+        "expected_chunk_ids": [
+          "e71b44d0f650ced4e513bb80ae2e4a924554943678d92660369e48835f3ac243"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-partial-index-progress",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "7e3f042cb6d204d4e88ab57be7f0e6320d82fb82d6f61fd67e4cac920cff6757"
+        ],
+        "expected_chunk_ids": [
+          "7e3f042cb6d204d4e88ab57be7f0e6320d82fb82d6f61fd67e4cac920cff6757"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-safe-cleanup-policy",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "bae4c2cde66a7a753a3c87fc1b765d636118466d91bda85c4e12335911d5a93e"
+        ],
+        "expected_chunk_ids": [
+          "bae4c2cde66a7a753a3c87fc1b765d636118466d91bda85c4e12335911d5a93e"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-external-secret-upload",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "9049d49dc30ece0c3a4a075b10bd8af9a0844d9ca784666723c89685277e501d"
+        ],
+        "expected_chunk_ids": [
+          "9049d49dc30ece0c3a4a075b10bd8af9a0844d9ca784666723c89685277e501d"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-recalled-only-content",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-routine-count",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "f32d1a98f8afa2d70c1c64dbb950e08974433615bbf274634da2fb1f8326c1e8"
+        ],
+        "expected_chunk_ids": [
+          "f32d1a98f8afa2d70c1c64dbb950e08974433615bbf274634da2fb1f8326c1e8"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-vector-derived-view-decision",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "e18c04d17ad73f2631a45b42e95a4320deeace61c15678940e5c796b62c2ad6b"
+        ],
+        "expected_chunk_ids": [
+          "e18c04d17ad73f2631a45b42e95a4320deeace61c15678940e5c796b62c2ad6b"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test5-bounded-protocol-output",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [
+          "4a50882355aed6db7c7b6a8c31b0c77e6c6ba7150636e727eee9823e0d0ff4d7"
+        ],
+        "expected_chunk_ids": [
+          "4a50882355aed6db7c7b6a8c31b0c77e6c6ba7150636e727eee9823e0d0ff4d7"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      }
+    ],
+    "passed": false
+  },
+  "release_ready": false,
+  "remaining_release_gates": [
+    "test_split_extraction",
+    "consolidation_operations",
+    "retrieval_and_bulletin",
+    "safety_zero_tolerance",
+    "paired_memory_on_off",
+    "cache_scenarios"
+  ]
+}

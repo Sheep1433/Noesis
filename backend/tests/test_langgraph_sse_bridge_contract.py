@@ -97,6 +97,33 @@ def test_kb_retrieval_event_preserves_sources() -> None:
     assert retrieval["results"][0]["evidence_id"].startswith("ev_")
     assert retrieval["results"][0]["tool_call_ids"] == ["call-1"]
 
+
+def test_tool_provider_metadata_is_internal_only() -> None:
+    bridge = LangGraphSseBridge("sess-provider")
+    builder = AssistantMessageBuilder(
+        session_id="sess-provider", message_id=bridge.assistant_message_id
+    )
+    ctx = _ctx()
+    lines = bridge.process_item(
+        {
+            "event": "on_tool_start",
+            "name": "search_knowledge_base",
+            "run_id": "call-provider",
+            "metadata": {
+                "noesis_provider_key": "mcp:secret-server",
+                "noesis_provider_version": "v1",
+            },
+            "data": {"input": {"query": "x"}},
+        },
+        builder,
+        ctx,
+    )
+    part = builder.to_dict()["parts"][0]
+    assert part["_provider_key"] == "mcp:secret-server"
+    assert part["_provider_version"] == "v1"
+    assert "secret-server" not in "".join(lines)
+    assert "_provider_key" not in builder.to_public_dict()["parts"][0]
+
 def test_reasoning_can_continue_after_retrieval_result() -> None:
     bridge = LangGraphSseBridge("sess-retrieval-reasoning")
     builder = AssistantMessageBuilder(

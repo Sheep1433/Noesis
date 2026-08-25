@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import secrets
 import time
-import uuid
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +19,7 @@ from noesis.auth.policy import (
     touch_session,
     verify_csrf,
 )
+from noesis.ids import new_uuid7
 from noesis.repositories.auth_repository import SqlAlchemySessionRepository
 
 
@@ -43,7 +43,7 @@ class SessionService:
     async def create(
         cls,
         db: AsyncSession,
-        user_id: int,
+        user_id: str,
         user_agent: str = "",
         client_ip: str | None = None,
     ) -> IssuedSession:
@@ -56,7 +56,7 @@ class SessionService:
             absolute_days=SessionConfig.absolute_expire_days,
         )
         session = AuthSession(
-            id=str(uuid.uuid4()),
+            id=new_uuid7(),
             user_id=user_id,
             session_digest=digest_secret(raw_session_id),
             csrf_digest=digest_secret(csrf_token),
@@ -123,16 +123,16 @@ class SessionService:
             await db.commit()
 
     @classmethod
-    async def revoke_all(cls, db: AsyncSession, user_id: int) -> None:
+    async def revoke_all(cls, db: AsyncSession, user_id: str) -> None:
         await cls._repository(db).revoke_all(user_id, _now_ms())
         await db.commit()
 
     @classmethod
-    async def list_active(cls, db: AsyncSession, user_id: int) -> list[AuthSession]:
+    async def list_active(cls, db: AsyncSession, user_id: str) -> list[AuthSession]:
         return await cls._repository(db).list_active(user_id, _now_ms())
 
     @classmethod
-    async def revoke_by_id(cls, db: AsyncSession, user_id: int, session_id: str) -> bool:
+    async def revoke_by_id(cls, db: AsyncSession, user_id: str, session_id: str) -> bool:
         repository = cls._repository(db)
         session = await repository.get_by_id_for_user(session_id, user_id)
         if session is None:

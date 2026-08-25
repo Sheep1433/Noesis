@@ -113,6 +113,8 @@ class ToolPart(MessagePart):
     exit_code: Optional[int] = None
     timed_out: Optional[bool] = None
     truncated: Optional[bool] = None
+    provider_key: Optional[str] = None
+    provider_version: Optional[str] = None
     type: str = "tool"
 
     def __post_init__(self) -> None:
@@ -154,6 +156,16 @@ class ToolPart(MessagePart):
             out["timed_out"] = self.timed_out
         if self.truncated is not None:
             out["truncated"] = self.truncated
+        if self.provider_key:
+            out["_provider_key"] = self.provider_key
+        if self.provider_version:
+            out["_provider_version"] = self.provider_version
+        return out
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        out = self.to_dict()
+        out.pop("_provider_key", None)
+        out.pop("_provider_version", None)
         return out
 
 
@@ -199,6 +211,8 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             exit_code=data.get("exit_code"),
             timed_out=data.get("timed_out"),
             truncated=data.get("truncated"),
+            provider_key=data.get("_provider_key"),
+            provider_version=data.get("_provider_version"),
         )
     if part_type == "retrieval":
         results = data.get("results")
@@ -221,6 +235,18 @@ class MessageContent:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "parts": [p.to_dict() if isinstance(p, MessagePart) else p for p in self.parts]
+        }
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        return {
+            "parts": [
+                p.to_public_dict()
+                if isinstance(p, ToolPart)
+                else p.to_dict()
+                if isinstance(p, MessagePart)
+                else p
+                for p in self.parts
+            ]
         }
 
     def to_json(self) -> str:
@@ -257,7 +283,7 @@ def normalize_message_content_for_delivery(data: Dict[str, Any]) -> Dict[str, An
                 isinstance(hitl, dict) and hitl.get("status") == "pending"
             ):
                 tool_data["state"] = ToolState.APPROVAL_PENDING.value
-            normalized.append(_part_from_dict(tool_data).to_dict())
+            normalized.append(_part_from_dict(tool_data).to_public_dict())
         elif isinstance(raw, dict):
             normalized.append(dict(raw))
         else:
@@ -470,6 +496,8 @@ class AssistantMessageBuilder:
         state: ToolState | str = ToolState.RUNNING,
         hitl: Optional[Dict[str, Any]] = None,
         step_id: Optional[str] = None,
+        provider_key: Optional[str] = None,
+        provider_version: Optional[str] = None,
     ) -> None:
         if tool_call_id:
             existing = self._tools_by_call_id.get(tool_call_id)
@@ -480,6 +508,10 @@ class AssistantMessageBuilder:
                     existing.parent_task_call_id = parent_task_call_id
                 if step_id:
                     existing.step_id = step_id
+                if provider_key:
+                    existing.provider_key = provider_key
+                if provider_version:
+                    existing.provider_version = provider_version
                 if hitl:
                     existing.hitl = {**(existing.hitl or {}), **hitl}
                 # 重放 tool start 只补充同一块的输入信息，不能把已有结果退回 running。
@@ -498,6 +530,8 @@ class AssistantMessageBuilder:
             status=status,
             state=ToolState(str(state)).value,
             hitl=hitl,
+            provider_key=provider_key,
+            provider_version=provider_version,
         )
         self._content.parts.append(part)
         self._last_tool = part
@@ -718,6 +752,9 @@ class AssistantMessageBuilder:
 
     def to_dict(self) -> Dict[str, Any]:
         return self._content.to_dict()
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        return self._content.to_public_dict()
 
     def serialize(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False)

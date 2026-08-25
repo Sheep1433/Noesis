@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from noesis.storage.postgres.base import Base
@@ -17,7 +17,7 @@ class TUserScheduledTask(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, comment="任务 ID")
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="用户 ID")
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("t_user.id", ondelete="CASCADE"), nullable=False, comment="用户 UUID")
     name: Mapped[str] = mapped_column(String(200), nullable=False, comment="显示名")
     cron_expr: Mapped[str] = mapped_column(String(120), nullable=False, comment="cron 表达式")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")

@@ -1,7 +1,6 @@
 """用户记忆 / 定时任务 / 通讯通道 API（挂在 /api/user）。"""
 from __future__ import annotations
 
-from datetime import date
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -12,24 +11,22 @@ from server.response import ResponseUtil
 from server.db import get_db
 
 from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.memory import CortexPreferenceUpdate, MemoryItemUpdate
 from noesis.services.messaging_channel_service import MessagingChannelService
-from noesis.services.memory_dream_service import MemoryDreamService
 from noesis.services.scheduled_task_service import ScheduledTaskService
 from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
 from noesis.services.user_memory_service import UserMemoryService
 from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.settings_service import SettingsService
+from noesis.services.memory.preferences import MemoryCortexPreferenceService
+from noesis.services.memory.management import MachineMemoryService
+from noesis.services.memory.source import MemorySourceService
 
 user_settings_router = APIRouter(prefix="/api/user", tags=["用户设置"])
 
 
 class MemoryWriteBody(BaseModel):
     content: str = Field(..., description="Markdown 正文")
-
-
-class MemoryDreamBody(BaseModel):
-    date: str = Field(default_factory=lambda: date.today().isoformat())
-    timezone: str = "Asia/Shanghai"
 
 
 class ScheduledTaskCreateBody(BaseModel):
@@ -100,68 +97,182 @@ async def put_user_memory_file(
     return ResponseUtil.success(msg="已保存", data=data)
 
 
-@user_settings_router.post("/memory/dream")
-async def run_memory_dream(
-    body: MemoryDreamBody,
+@user_settings_router.get("/memory/cortex/preferences")
+async def get_cortex_preferences(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    data = await MemoryCortexPreferenceService.get(
+        db, user_id=current_user.user_id
+    )
+    return ResponseUtil.success(data=data.model_dump())
+
+
+@user_settings_router.put("/memory/cortex/preferences")
+async def update_cortex_preferences(
+    body: CortexPreferenceUpdate,
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     await require_csrf(request)
-    try:
-        data = await MemoryDreamService.run(db, user_id=current_user.user_id, target_date=body.date, timezone_name=body.timezone)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ResponseUtil.success(msg="记忆整理完成", data=data)
+    data = await MemoryCortexPreferenceService.update(
+        db,
+        user_id=current_user.user_id,
+        enabled=body.enabled,
+    )
+    return ResponseUtil.success(msg="已保存", data=data.model_dump())
 
 
-@user_settings_router.get("/memory/daily/list")
-async def list_daily_memory(current_user: CurrentUser = Depends(get_current_user)):
-    return ResponseUtil.success(data={"items": UserMemoryService.list_daily(current_user.user_id)})
-
-
-@user_settings_router.get("/memory/daily/search")
-async def search_daily_memory(
-    q: str = Query(..., min_length=1, max_length=100),
-    limit: int = Query(20, ge=1, le=50),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    try:
-        items = UserMemoryService.search_daily(current_user.user_id, q, limit)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ResponseUtil.success(data={"items": items})
-
-
-@user_settings_router.get("/memory/daily/entries/search")
-async def search_memory_entries(
-    q: str = Query(..., min_length=1, max_length=100),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
-    limit: int = Query(10, ge=1, le=50),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    try:
-        items = UserMemoryService.search_entries(current_user.user_id, q, date_from=date_from, date_to=date_to, category=category, limit=limit)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ResponseUtil.success(data={"items": items})
-
-
-@user_settings_router.get("/memory/daily/source")
-async def get_memory_source(
-    session_id: str = Query(...),
-    message_id: str = Query(...),
-    context_messages: int = Query(1, ge=0, le=3),
+@user_settings_router.get("/memory/cortex/items")
+async def list_machine_memory_items(
+    status: Optional[
+        Literal["candidate", "active", "superseded", "disabled", "invalidated", "needs_review"]
+    ] = Query(None),
+    memory_type: Optional[Literal["decision", "experience", "workflow", "gotcha"]] = Query(None),
+    scope_id: str = Query("", max_length=64),
+    query: str = Query("", max_length=200),
+    limit: int = Query(100, ge=1, le=200),
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    try:
-        data = await MemoryDreamService.get_source(db, user_id=current_user.user_id, session_id=session_id, message_id=message_id, context_messages=context_messages)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ResponseUtil.success(data=data)
+    items = await MachineMemoryService.list_items(
+        db,
+        user_id=str(current_user.user_id),
+        statuses=(status,) if status else (),
+        memory_types=(memory_type,) if memory_type else (),
+        scope_id=scope_id,
+        query=query,
+        limit=limit,
+    )
+    return ResponseUtil.success(data={"items": [item.model_dump(mode="json") for item in items]})
+
+
+@user_settings_router.get("/memory/cortex/items/{memory_id}")
+async def get_machine_memory_item(
+    memory_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await MachineMemoryService.get_item(
+        db, user_id=str(current_user.user_id), memory_id=memory_id
+    )
+    return ResponseUtil.success(data=item.model_dump(mode="json"))
+
+
+@user_settings_router.put("/memory/cortex/items/{memory_id}")
+async def revise_machine_memory_item(
+    memory_id: str,
+    body: MemoryItemUpdate,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_csrf(request)
+    item = await MachineMemoryService.revise(
+        db,
+        user_id=str(current_user.user_id),
+        memory_id=memory_id,
+        statement=body.statement,
+        applicability=body.applicability,
+    )
+    return ResponseUtil.success(msg="已保存", data=item.model_dump(mode="json"))
+
+
+async def _change_machine_memory_state(
+    operation: str,
+    memory_id: str,
+    request: Request,
+    current_user: CurrentUser,
+    db: AsyncSession,
+):
+    await require_csrf(request)
+    result = await MachineMemoryService.change_state(
+        db,
+        user_id=str(current_user.user_id),
+        memory_id=memory_id,
+        operation=operation,
+    )
+    return ResponseUtil.success(data=result.model_dump(mode="json"))
+
+
+@user_settings_router.post("/memory/cortex/items/{memory_id}/activate")
+async def activate_machine_memory(
+    memory_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _change_machine_memory_state("activate", memory_id, request, current_user, db)
+
+
+@user_settings_router.post("/memory/cortex/items/{memory_id}/disable")
+async def disable_machine_memory(
+    memory_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _change_machine_memory_state("disable", memory_id, request, current_user, db)
+
+
+@user_settings_router.post("/memory/cortex/items/{memory_id}/enable")
+async def enable_machine_memory(
+    memory_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _change_machine_memory_state("enable", memory_id, request, current_user, db)
+
+
+@user_settings_router.post("/memory/cortex/items/{memory_id}/invalidate")
+async def invalidate_machine_memory(
+    memory_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _change_machine_memory_state("invalidate", memory_id, request, current_user, db)
+
+
+@user_settings_router.delete("/memory/cortex/items/{memory_id}")
+async def delete_machine_memory_item(
+    memory_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await require_csrf(request)
+    await MachineMemoryService.delete(
+        db, user_id=str(current_user.user_id), memory_id=memory_id
+    )
+    return ResponseUtil.success(msg="已删除")
+
+
+@user_settings_router.get("/memory/cortex/items/{memory_id}/evidence/{evidence_id}/source")
+async def get_machine_memory_source(
+    memory_id: str,
+    evidence_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    source = await MemorySourceService.get(
+        db,
+        user_id=str(current_user.user_id),
+        memory_id=memory_id,
+        evidence_id=evidence_id,
+    )
+    return ResponseUtil.success(data=source.model_dump(mode="json"))
+
+
+@user_settings_router.get("/memory/cortex/health")
+async def get_machine_memory_health(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    health = await MachineMemoryService.health(db, user_id=str(current_user.user_id))
+    return ResponseUtil.success(data=health.model_dump(mode="json"))
 
 
 @user_settings_router.get("/context/preview")
@@ -460,7 +571,7 @@ async def delete_channel(
     return ResponseUtil.success(msg="已删除")
 
 
-async def _validate_channel_session(db: AsyncSession, user_id: int, strategy: str, session_id: str | None) -> None:
+async def _validate_channel_session(db: AsyncSession, user_id: str, strategy: str, session_id: str | None) -> None:
     if strategy != "persistent" or not session_id:
         return
     from noesis.services.chat_service import ChatService

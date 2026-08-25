@@ -91,7 +91,7 @@ async def _deny_foreign_session(
         str(current_user.user_id),
         db,
     ):
-        return ResponseUtil.not_found(msg='会话不存在')
+        return ResponseUtil.not_found(msg="会话不存在")
     return None
 
 
@@ -99,18 +99,24 @@ def _attachment_content_disposition(filename: str) -> str:
     """Content-Disposition：filename 仅 ASCII，中文等非 ASCII 走 filename* UTF-8。"""
     encoded = quote(filename, safe="")
     if filename.isascii():
-        return f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded}'
-    return f"attachment; filename={_EXPORT_FALLBACK_FILENAME}; filename*=UTF-8''{encoded}"
+        return f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"
+    return (
+        f"attachment; filename={_EXPORT_FALLBACK_FILENAME}; filename*=UTF-8''{encoded}"
+    )
 
 
 def _session_to_response(session) -> ChatSessionResponse:
     """将会话模型转换为响应格式"""
-    raw_kind = getattr(session, 'kind', None)
-    kind = raw_kind if isinstance(raw_kind, str) else ('subagent' if session.parent_id else 'root')
-    created_by_run_id = getattr(session, 'created_by_run_id', None)
+    raw_kind = getattr(session, "kind", None)
+    kind = (
+        raw_kind
+        if isinstance(raw_kind, str)
+        else ("subagent" if session.parent_id else "root")
+    )
+    created_by_run_id = getattr(session, "created_by_run_id", None)
     if not isinstance(created_by_run_id, str):
         created_by_run_id = None
-    created_by_tool_call_id = getattr(session, 'created_by_tool_call_id', None)
+    created_by_tool_call_id = getattr(session, "created_by_tool_call_id", None)
     if not isinstance(created_by_tool_call_id, str):
         created_by_tool_call_id = None
     return ChatSessionResponse(
@@ -119,14 +125,13 @@ def _session_to_response(session) -> ChatSessionResponse:
         kind=kind,
         created_by_run_id=created_by_run_id,
         created_by_tool_call_id=created_by_tool_call_id,
-        user_id=session.user_id,
         title=session.title,
         extra=session.extra,
         created_at=session.created_at,
         updated_at=session.updated_at,
         deleted_at=session.deleted_at,
-        pinned=bool(getattr(session, 'pinned', False)),
-        archived=bool(getattr(session, 'archived', False)),
+        pinned=bool(getattr(session, "pinned", False)),
+        archived=bool(getattr(session, "archived", False)),
     )
 
 
@@ -164,13 +169,12 @@ def _message_to_response(message) -> ChatMessageResponse:
         id=message.id,
         session_id=message.session_id,
         parent_id=message.parent_id,
-        user_id=message.user_id,
         role=message.role,
         content=content,
         extra=extra if extra else None,
         status=message.status,
         message_sequence=message.message_sequence,
-        created_at=message.created_at
+        created_at=message.created_at,
     )
 
 
@@ -178,26 +182,27 @@ def _message_to_response(message) -> ChatMessageResponse:
 # Session API
 # ============================================================================
 
+
 @chat_router.get("/sessions", summary="获取会话列表")
 async def get_sessions(
     status: Optional[str] = None,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     获取当前用户的会话列表（过滤已删除）
     """
     sessions = await ChatService.get_user_sessions(
-        user_id=str(current_user.user_id),
-        status=status,
-        db=db
+        user_id=str(current_user.user_id), status=status, db=db
     )
 
     session_responses = [_session_to_response(s) for s in sessions]
 
     return ResponseUtil.success(
-        msg='获取会话列表成功',
-        data=SessionListResponse(sessions=session_responses, total=len(session_responses)).model_dump()
+        msg="获取会话列表成功",
+        data=SessionListResponse(
+            sessions=session_responses, total=len(session_responses)
+        ).model_dump(),
     )
 
 
@@ -205,7 +210,7 @@ async def get_sessions(
 async def create_session(
     request: CreateSessionRequest,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     创建新会话（可指定 parent_id 创建子会话）
@@ -217,19 +222,18 @@ async def create_session(
             db=db,
         )
         if not parent:
-            return ResponseUtil.not_found(msg='父会话不存在')
+            return ResponseUtil.not_found(msg="父会话不存在")
 
     session = await ChatService.create_session(
         user_id=str(current_user.user_id),
         title=request.title,
         parent_id=request.parent_id,
         extra=request.extra,
-        db=db
+        db=db,
     )
 
     return ResponseUtil.success(
-        msg='创建会话成功',
-        data=_session_to_response(session).model_dump()
+        msg="创建会话成功", data=_session_to_response(session).model_dump()
     )
 
 
@@ -251,7 +255,7 @@ async def batch_delete_sessions(
         user_id=str(current_user.user_id),
         db=db,
     )
-    return ResponseUtil.success(msg=f'已删除 {deleted} 个会话')
+    return ResponseUtil.success(msg=f"已删除 {deleted} 个会话")
 
 
 @chat_router.put("/sessions/{session_id}/ensure", summary="幂等物化会话")
@@ -290,7 +294,7 @@ async def ensure_session(
         if refreshed is not None:
             session = refreshed
     return ResponseUtil.success(
-        msg='会话已就绪',
+        msg="会话已就绪",
         data=_session_to_response(session).model_dump(),
     )
 
@@ -299,23 +303,20 @@ async def ensure_session(
 async def get_session(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     获取会话详情
     """
     session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db
+        session_id=session_id, user_id=str(current_user.user_id), db=db
     )
 
     if not session:
-        return ResponseUtil.not_found(msg='会话不存在')
+        return ResponseUtil.not_found(msg="会话不存在")
 
     return ResponseUtil.success(
-        msg='获取会话详情成功',
-        data=_session_to_response(session).model_dump()
+        msg="获取会话详情成功", data=_session_to_response(session).model_dump()
     )
 
 
@@ -323,25 +324,23 @@ async def get_session(
 async def delete_session(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     删除会话（软删）
     """
     await ChatService.delete_session(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db
+        session_id=session_id, user_id=str(current_user.user_id), db=db
     )
 
-    return ResponseUtil.success(msg='删除会话成功')
+    return ResponseUtil.success(msg="删除会话成功")
 
 
 @chat_router.put("/sessions/{session_id}/read", summary="标记会话已读")
 async def mark_session_read(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """标记会话已读：更新 last_read_at 为当前时间。"""
     await ChatService.mark_session_read(
@@ -349,7 +348,7 @@ async def mark_session_read(
         user_id=str(current_user.user_id),
         db=db,
     )
-    return ResponseUtil.success(msg='已标记已读')
+    return ResponseUtil.success(msg="已标记已读")
 
 
 @chat_router.put("/sessions/{session_id}/title", summary="更新会话标题")
@@ -357,7 +356,7 @@ async def update_session_title(
     session_id: str,
     request: UpdateSessionTitleRequest,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     更新会话标题
@@ -366,12 +365,11 @@ async def update_session_title(
         session_id=session_id,
         user_id=str(current_user.user_id),
         title=request.title,
-        db=db
+        db=db,
     )
 
     return ResponseUtil.success(
-        msg='更新会话标题成功',
-        data=_session_to_response(session).model_dump()
+        msg="更新会话标题成功", data=_session_to_response(session).model_dump()
     )
 
 
@@ -380,7 +378,7 @@ async def update_session_meta(
     session_id: str,
     request: UpdateSessionMetaRequest,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     更新会话置顶 / 归档状态；pinned / archived 为 null 表示不修改。
@@ -390,12 +388,11 @@ async def update_session_meta(
         user_id=str(current_user.user_id),
         pinned=request.pinned,
         archived=request.archived,
-        db=db
+        db=db,
     )
 
     return ResponseUtil.success(
-        msg='更新会话状态成功',
-        data=_session_to_response(session).model_dump()
+        msg="更新会话状态成功", data=_session_to_response(session).model_dump()
     )
 
 
@@ -403,7 +400,7 @@ async def update_session_meta(
 async def get_child_sessions(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     获取子会话列表（subagent 场景）
@@ -415,11 +412,13 @@ async def get_child_sessions(
             db=db,
         )
     except ServiceException:
-        return ResponseUtil.not_found(msg='会话不存在')
+        return ResponseUtil.not_found(msg="会话不存在")
 
     return ResponseUtil.success(
-        msg='获取子 Agent 目录成功',
-        data=ChildSessionCatalogResponse(sessions=catalog, total=len(catalog)).model_dump()
+        msg="获取子 Agent 目录成功",
+        data=ChildSessionCatalogResponse(
+            sessions=catalog, total=len(catalog)
+        ).model_dump(),
     )
 
 
@@ -427,13 +426,14 @@ async def get_child_sessions(
 # Message API
 # ============================================================================
 
+
 @chat_router.get("/sessions/{session_id}/messages", summary="获取消息历史")
 async def get_session_messages(
     session_id: str,
     limit: int = 100,
     before_id: str = None,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     获取会话消息历史（按 created_at 升序排序，支持分页）
@@ -444,13 +444,10 @@ async def get_session_messages(
         db=db,
     )
     if not session:
-        return ResponseUtil.not_found(msg='会话不存在')
+        return ResponseUtil.not_found(msg="会话不存在")
 
     messages = await ChatService.get_session_messages(
-        session_id=session_id,
-        db=db,
-        limit=limit,
-        before_id=before_id
+        session_id=session_id, db=db, limit=limit, before_id=before_id
     )
 
     # 批量带出 run 生命周期时间（assistant 消息的"本轮起止"）——消息表 updated_at
@@ -462,15 +459,17 @@ async def get_session_messages(
     message_responses = []
     for m in messages:
         resp = _message_to_response(m)
-        if m.role == 'assistant' and m.id in run_times:
+        if m.role == "assistant" and m.id in run_times:
             started_at, finished_at = run_times[m.id]
             resp.run_started_at = started_at
             resp.run_finished_at = finished_at
         message_responses.append(resp)
 
     return ResponseUtil.success(
-        msg='获取消息历史成功',
-        data=MessageListResponse(messages=message_responses, total=len(message_responses)).model_dump()
+        msg="获取消息历史成功",
+        data=MessageListResponse(
+            messages=message_responses, total=len(message_responses)
+        ).model_dump(),
     )
 
 
@@ -535,7 +534,11 @@ async def get_session_workspace_archive(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        filename, data, media_type = await SessionContextService.download_workspace_path(
+        (
+            filename,
+            data,
+            media_type,
+        ) = await SessionContextService.download_workspace_path(
             session_id=session_id,
             user_id=str(current_user.user_id),
             rel_path=path,
@@ -546,7 +549,7 @@ async def get_session_workspace_archive(
             content=data,
             media_type=media_type,
             headers={
-                'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_name}",
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}",
             },
         )
     except HTTPException as exc:
@@ -591,7 +594,7 @@ async def send_message(
     session_id: str,
     request: SendMessageRequest,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     发送消息（创建用户消息）
@@ -602,7 +605,7 @@ async def send_message(
         db=db,
     )
     if not session:
-        return ResponseUtil.not_found(msg='会话不存在')
+        return ResponseUtil.not_found(msg="会话不存在")
 
     # 构建消息内容
     builder = UserMessageBuilder(content=request.content)
@@ -611,25 +614,25 @@ async def send_message(
     message = await ChatService.save_message(
         session_id=session_id,
         user_id=str(current_user.user_id),
-        role='user',
+        role="user",
         content=content,
         extra=request.extra,
         parent_id=request.parent_id,
-        status='completed',
-        db=db
+        status="completed",
+        db=db,
     )
 
     return ResponseUtil.success(
-        msg='发送消息成功',
+        msg="发送消息成功",
         data=SendMessageResponse(
-            message_id=message.id,
-            session_id=message.session_id,
-            status=message.status
-        ).model_dump()
+            message_id=message.id, session_id=message.session_id, status=message.status
+        ).model_dump(),
     )
 
 
-@chat_router.post("/sessions/{session_id}/subagent-followup", summary="继续子 Agent 会话")
+@chat_router.post(
+    "/sessions/{session_id}/subagent-followup", summary="继续子 Agent 会话"
+)
 async def send_subagent_followup(
     session_id: str,
     request: SubagentFollowupRequest,
@@ -681,16 +684,13 @@ async def _event_generator(generator, session_id: str):
         )
         raise
     except Exception:
-        logger.exception(
-            f"SSE StreamingResponse 消费异常 session_id={session_id}"
-        )
+        logger.exception(f"SSE StreamingResponse 消费异常 session_id={session_id}")
         raise
     finally:
         if client_disconnected:
             await generator.aclose()
         if completed_normally:
             logger.info(f"SSE StreamingResponse 已完整发送 session_id={session_id}")
-
 
 
 @chat_router.get("/commands", summary="列出可用斜杠命令")
@@ -798,7 +798,9 @@ async def get_active_run(
     return ResponseUtil.success(msg="获取活跃任务成功", data=snapshot.to_dict())
 
 
-@chat_router.get("/sessions/{session_id}/events", summary="订阅会话级信令（跨窗口发现活跃任务）")
+@chat_router.get(
+    "/sessions/{session_id}/events", summary="订阅会话级信令（跨窗口发现活跃任务）"
+)
 async def stream_session_events(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -817,7 +819,7 @@ async def stream_session_events(
         db=db,
     )
     if not session:
-        return ResponseUtil.not_found(msg='会话不存在')
+        return ResponseUtil.not_found(msg="会话不存在")
 
     from noesis.chat.runs import session_signal_bus
 
@@ -825,7 +827,7 @@ async def stream_session_events(
     queue = session_signal_bus.subscribe(user_id, session_id)
     if queue is None:
         return ResponseUtil.too_many_requests(
-            msg='会话信令订阅数超限，请关闭其它标签页后重试',
+            msg="会话信令订阅数超限，请关闭其它标签页后重试",
             data={"error_code": "SESSION_SIGNAL_LIMIT"},
         )
 
@@ -871,8 +873,12 @@ async def stream_run(
         from noesis.services.subagent_session_service import SubagentSessionService
 
         # 先订阅、再重新读取权威快照，避免 GET 与 subscribe 之间丢掉终态事件。
-        queue = None if snapshot.is_terminal else SubagentSessionService.subscribe_run_events(
-            run_id, str(current_user.user_id)
+        queue = (
+            None
+            if snapshot.is_terminal
+            else SubagentSessionService.subscribe_run_events(
+                run_id, str(current_user.user_id)
+            )
         )
         snapshot = await RunService.get(run_id, str(current_user.user_id), db)
         replay = SubagentSessionService.get_run_event_history(
@@ -886,12 +892,17 @@ async def stream_run(
         async def subagent_event_stream():
             sent_events: set[tuple[str, int]] = set()
             try:
-                yield format_sse("run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()})
+                yield format_sse(
+                    "run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()}
+                )
                 if queue is None:
                     yield format_done()
                     return
                 for item in replay:
-                    event_key = (str(item.get("type") or "run.event"), int(item.get("sequence") or 0))
+                    event_key = (
+                        str(item.get("type") or "run.event"),
+                        int(item.get("sequence") or 0),
+                    )
                     if event_key in sent_events:
                         continue
                     sent_events.add(event_key)
@@ -906,10 +917,12 @@ async def stream_run(
                         yield SSE_COMMENT_KEEPALIVE
                         continue
                     sequence = int(item.get("sequence") or 0)
-                    if (
-                        sequence <= max(0, after_sequence)
-                        and item.get("type") not in {"run.started", "run.finished", "approval.required", "approval.resumed"}
-                    ):
+                    if sequence <= max(0, after_sequence) and item.get("type") not in {
+                        "run.started",
+                        "run.finished",
+                        "approval.required",
+                        "approval.resumed",
+                    }:
                         continue
                     event_key = (str(item.get("type") or "run.event"), sequence)
                     if event_key in sent_events:
@@ -954,7 +967,9 @@ async def stream_run(
     async def event_stream():
         if subscription is None:
             # 终态 + owner 不可达：返回 DB 权威终态 snapshot + [DONE]
-            yield format_sse("run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()})
+            yield format_sse(
+                "run-snapshot", {"type": "run-snapshot", **snapshot.to_dict()}
+            )
             yield format_done()
             return
 
@@ -974,7 +989,9 @@ async def stream_run(
 
             while True:
                 try:
-                    item = await asyncio.wait_for(subscription.queue.get(), timeout=15.0)
+                    item = await asyncio.wait_for(
+                        subscription.queue.get(), timeout=15.0
+                    )
                 except asyncio.TimeoutError:
                     yield SSE_COMMENT_KEEPALIVE
                     continue
@@ -1028,7 +1045,9 @@ async def stop_run(
     )
 
 
-@chat_router.post("/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务")
+@chat_router.post(
+    "/runs/{run_id}/test-case/resume", summary="采纳测试点后继续 Agent 任务"
+)
 async def resume_test_case_run(
     run_id: str,
     request: TestCaseResumeRequest,
@@ -1066,7 +1085,9 @@ async def resume_hitl_run(
     return ResponseUtil.success(msg="任务已继续", data=snapshot.to_dict())
 
 
-@chat_router.post("/sessions/{session_id}/test-case/export", summary="测试用例：导出 Markdown")
+@chat_router.post(
+    "/sessions/{session_id}/test-case/export", summary="测试用例：导出 Markdown"
+)
 async def export_test_case_markdown(
     session_id: str,
     request: TestCaseExportRequest = Body(default_factory=TestCaseExportRequest),
@@ -1108,7 +1129,7 @@ async def export_test_case_markdown(
 async def get_message(
     message_id: str,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     获取单条消息详情
@@ -1118,13 +1139,11 @@ async def get_message(
     from sqlalchemy import select
     from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
 
-    result = await db.execute(
-        select(TChatMessage).where(TChatMessage.id == message_id)
-    )
+    result = await db.execute(select(TChatMessage).where(TChatMessage.id == message_id))
     message = result.scalar_one_or_none()
 
     if not message:
-        return ResponseUtil.not_found(msg='消息不存在')
+        return ResponseUtil.not_found(msg="消息不存在")
 
     # 验证用户权限
     session_result = await db.execute(
@@ -1133,11 +1152,10 @@ async def get_message(
     session = session_result.scalar_one_or_none()
 
     if not session or session.user_id != str(current_user.user_id):
-        return ResponseUtil.not_found(msg='消息不存在')
+        return ResponseUtil.not_found(msg="消息不存在")
 
     return ResponseUtil.success(
-        msg='获取消息详情成功',
-        data=_message_to_response(message).model_dump()
+        msg="获取消息详情成功", data=_message_to_response(message).model_dump()
     )
 
 
@@ -1145,7 +1163,10 @@ async def get_message(
 # 后台子 Agent（全异步 task + HITL 审批）
 # ============================================================================
 
-@chat_router.get("/sessions/{session_id}/children/catalog", summary="子 Agent 与后台命令目录")
+
+@chat_router.get(
+    "/sessions/{session_id}/children/catalog", summary="子 Agent 与后台命令目录"
+)
 async def list_bg_tasks(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -1163,12 +1184,14 @@ async def list_bg_tasks(
     except ServiceException as exc:
         return ResponseUtil.not_found(msg=exc.message or "会话不存在")
     return ResponseUtil.success(
-        msg='获取后台任务成功',
+        msg="获取后台任务成功",
         data=catalog,
     )
 
 
-@chat_router.get("/sessions/{session_id}/children/stream", summary="子 Agent 目录事件流")
+@chat_router.get(
+    "/sessions/{session_id}/children/stream", summary="子 Agent 目录事件流"
+)
 async def stream_child_catalog(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -1184,14 +1207,17 @@ async def stream_child_catalog(
     if await ChatService.get_session_by_id(session_id, user_id, db) is None:
         return ResponseUtil.not_found(msg="会话不存在")
     queue = AgentCatalogService.subscribe(session_id, user_id)
-    catalog = (await AgentCatalogService.list_for_session(session_id, user_id, db))["tasks"]
+    catalog = (await AgentCatalogService.list_for_session(session_id, user_id, db))[
+        "tasks"
+    ]
 
     async def _gen():
         try:
             for task in catalog:
                 if task.get("kind") == "subagent":
                     child = {
-                        "session_id": task.get("child_session_id") or task.get("task_id"),
+                        "session_id": task.get("child_session_id")
+                        or task.get("task_id"),
                         "parent_id": session_id,
                         "title": task.get("description") or "子 Agent",
                         "profile_id": "task-worker",
@@ -1220,7 +1246,8 @@ async def stream_child_catalog(
                 task = item.get("task") if isinstance(item, dict) else None
                 if isinstance(task, dict) and task.get("kind") == "subagent":
                     child = {
-                        "session_id": task.get("child_session_id") or task.get("task_id"),
+                        "session_id": task.get("child_session_id")
+                        or task.get("task_id"),
                         "parent_id": session_id,
                         "title": task.get("description") or "子 Agent",
                         "profile_id": "task-worker",
@@ -1248,7 +1275,9 @@ async def stream_child_catalog(
     )
 
 
-@chat_router.post("/sessions/{session_id}/shell-jobs/{task_id}/stop", summary="停止后台命令")
+@chat_router.post(
+    "/sessions/{session_id}/shell-jobs/{task_id}/stop", summary="停止后台命令"
+)
 async def stop_shell_job(
     session_id: str,
     task_id: str,

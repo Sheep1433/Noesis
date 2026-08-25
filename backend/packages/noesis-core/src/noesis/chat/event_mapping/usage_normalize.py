@@ -25,6 +25,10 @@ USAGE_FIELDS: tuple[str, ...] = (
     "output_tokens",
     "cache_read_tokens",
     "cache_write_tokens",
+    "uncached_input_tokens",
+    "cache_metrics_available_calls",
+    "cache_metrics_unavailable_calls",
+    "ttft_ms",
 )
 
 
@@ -88,6 +92,16 @@ def normalize_usage(raw: Any) -> Dict[str, Any]:
     input_details = extract_input_token_details(d)
     if input_details:
         out["input_token_details"] = input_details
+        if "input_tokens" in out:
+            out["uncached_input_tokens"] = max(
+                0,
+                out["input_tokens"]
+                - int(input_details.get("cache_read") or 0)
+                - int(input_details.get("cache_write") or 0),
+            )
+        out["cache_metrics_available"] = True
+    elif "input_tokens" in out:
+        out["cache_metrics_available"] = False
     output_details = extract_output_token_details(d)
     if output_details:
         out["output_token_details"] = output_details

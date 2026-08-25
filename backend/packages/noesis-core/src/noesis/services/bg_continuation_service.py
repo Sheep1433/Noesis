@@ -43,14 +43,8 @@ def note_user_activity(session_id: str) -> None:
 
 
 async def _load_user(user_id: str) -> CurrentUser:
-    # t_user.id 为整型；传字符串会被绑成 VARCHAR 与整型列比较报
-    # UndefinedFunctionError，先转换（非数字 id 视为无此用户）
-    try:
-        numeric_id = int(user_id)
-    except ValueError:
-        return CurrentUser(user_id=user_id, username="")
     async with pg_manager.get_async_session_context() as db:
-        result = await db.execute(select(TUser).where(TUser.id == numeric_id))
+        result = await db.execute(select(TUser).where(TUser.id == user_id))
         user = result.scalar_one_or_none()
         return CurrentUser(
             user_id=user_id,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from noesis.storage.postgres.base import Base
@@ -16,7 +16,7 @@ class TUserLLMProvider(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, comment="Provider ID")
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="用户 ID")
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("t_user.id", ondelete="CASCADE"), nullable=False, comment="用户 UUID")
     name: Mapped[str] = mapped_column(String(120), nullable=False, comment="显示名")
     api_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="协议类型：openai/deepseek/qwen/minimax/opencode")
     base_url: Mapped[str] = mapped_column(String(500), nullable=False, comment="OpenAI 兼容端点")
@@ -36,7 +36,7 @@ class TUserLLMModel(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, comment="条目 ID")
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="用户 ID")
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("t_user.id", ondelete="CASCADE"), nullable=False, comment="用户 UUID")
     provider_id: Mapped[str] = mapped_column(String(36), ForeignKey("user_llm_providers.id"), nullable=False, comment="所属 Provider")
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, comment="发送给端点的模型 ID")
     label: Mapped[str] = mapped_column(String(200), nullable=False, comment="选择器显示名")

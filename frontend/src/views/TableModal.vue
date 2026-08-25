@@ -261,7 +261,7 @@ watch(
   </n-modal>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .session-manage-modal__body {
   min-height: 200px;
 }

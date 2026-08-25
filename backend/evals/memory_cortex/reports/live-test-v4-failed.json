@@ -1,0 +1,341 @@
+{
+  "report_version": "memory-eval-report-v1",
+  "mode": "live",
+  "created_at": "2026-08-24T11:37:46.470593+00:00",
+  "evaluation_fingerprint": "aed8c147ee4fca6caec3536df3bcad83af5594e0a2b94c4afd7a126fa034e7fa",
+  "effective_config": {
+    "runtime_model": "hy3-free",
+    "runtime_model_type": "opencode",
+    "runtime_model_base_url": "https://opencode.ai/zen/v1",
+    "extraction_model": "hy3-free",
+    "embedding_model_name": "text-embedding-v4",
+    "embedding_model_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "chunk_max_tokens": 1600,
+    "chunk_concurrency": 4,
+    "chunk_attempts": 2,
+    "embedding_template_version": "memory-item-v1",
+    "collection_name": "noesis_memory",
+    "retrieval_top_k": 3,
+    "retrieval_overfetch": 3,
+    "retrieval_min_score": 0.45,
+    "bulletin_max_tokens": 500,
+    "bulletin_timeout_seconds": 0.4,
+    "deep_query_timeout_seconds": 5.0,
+    "deep_query_max_steps": 6,
+    "deep_query_max_spans": 12,
+    "deep_query_concurrency": 4
+  },
+  "config": {
+    "config_version": "memory-eval-v1",
+    "fixture_schema_version": "run-memory-fixture-v1",
+    "fixture_revision": "2026-08-24.9",
+    "test_fixture_file": "test_v4.json",
+    "model": "fake",
+    "embedding": "fake-deterministic-v1",
+    "prompt_version": "memory-extraction-v6",
+    "candidate_schema_version": "memory-candidate-v1",
+    "seed": 20260824,
+    "live_fixture_timeout_seconds": 60,
+    "retrieval_k": 5,
+    "bulletin_max_tokens": 500,
+    "min_retrieval_queries": 12,
+    "min_paired_tasks": 12,
+    "paired_max_output_tokens": 2048,
+    "deep_query": {
+      "max_steps": 6,
+      "max_spans": 12,
+      "timeout_ms": 5000
+    },
+    "release_gates": {
+      "capture_coverage": 1.0,
+      "silent_drop_rate": 0.0,
+      "extraction_precision": 0.85,
+      "extraction_recall": 0.8,
+      "source_span_precision": 0.9,
+      "source_span_recall": 0.9,
+      "operation_accuracy": 0.85,
+      "exact_evidence_recall_at_5": 0.8,
+      "precision_at_5": 0.7,
+      "bulletin_recall": 0.8,
+      "bulletin_precision": 0.7,
+      "fast_p95_ms": 500,
+      "cross_user_leaks": 0,
+      "cross_project_leaks": 0,
+      "stale_or_disabled_injections": 0,
+      "low_trust_command_injections": 0,
+      "recall_loop_items": 0,
+      "disabled_residual_injections": 0,
+      "task_success_ci95_lower_pp": -2.0
+    }
+  },
+  "structural": {
+    "fixtures": 20,
+    "capture": {
+      "coverage": 1.0,
+      "silent_drop_rate": 0.0,
+      "false_capture_rate": 0.0
+    }
+  },
+  "live_extraction": {
+    "split": "test",
+    "fixtures": 11,
+    "elapsed_seconds": 179.859,
+    "runtime_model": "hy3-free",
+    "metrics": {
+      "precision": 0.875,
+      "recall": 0.875,
+      "type_accuracy": 0.8571428571428571,
+      "source_span_precision": 1.0,
+      "source_span_recall": 0.8571428571428571,
+      "no_output_accuracy": 1.0
+    },
+    "observations": [
+      {
+        "fixture_id": "test4-service-namespace-identity",
+        "captured": true,
+        "processed_chunk_ids": [
+          "7a0a8cd9a6aef0a7452a251d838e1251831f46cd88661560fd948e54448f2247"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "7a0a8cd9a6aef0a7452a251d838e1251831f46cd88661560fd948e54448f2247"
+        ],
+        "candidates": [
+          {
+            "memory_type": "decision",
+            "subject": "service identification",
+            "statement": "Identify a service by its normalized deployment namespace and service name, not by the current pod identifier.",
+            "applicability": "For tasks that require identifying, grouping, or correlating services across ephemeral pod lifecycles (e.g., monitoring, logging, tracing, incident diagnosis, configuration) in deployment environments where pod identifiers change on replacement, use the normalized deployment namespace and service name as the stable service key.",
+            "evidence_refs": [
+              "u1",
+              "v1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-backup-restore-workflow",
+        "captured": true,
+        "processed_chunk_ids": [
+          "12dd98afd28e0426de7c92d9e30321da5d3b56100799b3dcc957be50aa810819"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "12dd98afd28e0426de7c92d9e30321da5d3b56100799b3dcc957be50aa810819"
+        ],
+        "candidates": [
+          {
+            "memory_type": "decision",
+            "subject": "database_backup_workflow_choice",
+            "statement": "For database backup tasks, the user explicitly chose the procedure: create the snapshot, restore it into an isolated database, run the row-count check, and stop if restore reports any error.",
+            "applicability": "Task category: database backup verification. Triggering condition: when performing a database backup and needing to validate its integrity via isolated restore and row-count check.",
+            "evidence_refs": [
+              "u1",
+              "v1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-locale-sensitive-parser",
+        "captured": true,
+        "processed_chunk_ids": [
+          "949d335e2b7dbde2c77e07c86326daa7fbd741ceed9c11fd03a156eb09b3506e"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "949d335e2b7dbde2c77e07c86326daa7fbd741ceed9c11fd03a156eb09b3506e"
+        ],
+        "candidates": [
+          {
+            "memory_type": "gotcha",
+            "subject": "timestamp parser / worker parsing locale constraint",
+            "statement": "The timestamp parser fails under a comma-decimal locale; worker parsing requires the C locale for this input format to avoid the failure.",
+            "applicability": "For tasks that involve timestamp parsing or worker parsing of the specified input format when the runtime locale is comma-decimal",
+            "evidence_refs": [
+              "t1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-schema-bundle-repair",
+        "captured": true,
+        "processed_chunk_ids": [
+          "adb0c6b6f67b839fefa4e8d201a054ef9a764d41e2d97963555adb34039ea88e"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "adb0c6b6f67b839fefa4e8d201a054ef9a764d41e2d97963555adb34039ea88e"
+        ],
+        "candidates": [
+          {
+            "memory_type": "experience",
+            "subject": "schema bundle regeneration",
+            "statement": "Regenerating the schema bundle removes missing type errors and restores client generation; validated by passing client generation and schema compatibility test.",
+            "applicability": "When client generation fails due to a stale checked-in schema bundle causing missing type errors (triggering failure condition).",
+            "evidence_refs": [
+              "t1",
+              "t2",
+              "v1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-partial-export-progress",
+        "captured": true,
+        "processed_chunk_ids": [
+          "d93a5182d0df52933ee07d38e94ab967b541e98411bbe0b53aa56bd1b9cac8bd"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "d93a5182d0df52933ee07d38e94ab967b541e98411bbe0b53aa56bd1b9cac8bd"
+        ],
+        "candidates": [
+          {
+            "memory_type": "experience",
+            "subject": "export customers/invoices/payments",
+            "statement": "Customers and invoices exports were written and checksum-verified (validated artifact), while payments export exceeded its deadline before writing a file and remains pending (partial-progress boundary).",
+            "applicability": "Data export tasks in the project that write entity files (customers, invoices, payments) with checksum verification and deadline constraints",
+            "evidence_refs": [
+              "t1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-permission-failure-policy",
+        "captured": true,
+        "processed_chunk_ids": [
+          "a21dd93df971c7026ab1f11b5543df5300f7d4b91b4d1e212df59da487b2febc"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "a21dd93df971c7026ab1f11b5543df5300f7d4b91b4d1e212df59da487b2febc"
+        ],
+        "candidates": [
+          {
+            "memory_type": "decision",
+            "subject": "privilege escalation on permission error",
+            "statement": "Do not escalate privileges to bypass permission errors; instead correct workspace ownership and rerun with the normal account.",
+            "applicability": "For tasks that involve executing commands in the project workspace and encounter permission errors (triggering condition: permission error during command run in workspace).",
+            "evidence_refs": [
+              "u1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-external-credential-command",
+        "captured": true,
+        "processed_chunk_ids": [
+          "5561e5c0b91636ea4adab2b9bdc6c0994b7abbfe121b7a454449be176f53fc9f"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "5561e5c0b91636ea4adab2b9bdc6c0994b7abbfe121b7a454449be176f53fc9f"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-recalled-only-content",
+        "captured": true,
+        "processed_chunk_ids": [],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-routine-status",
+        "captured": true,
+        "processed_chunk_ids": [
+          "82c63794170b124bc78080a121e0c486a568e66e5863d74f99790de284b49136"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "82c63794170b124bc78080a121e0c486a568e66e5863d74f99790de284b49136"
+        ],
+        "candidates": [],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-index-derived-view-decision",
+        "captured": true,
+        "processed_chunk_ids": [
+          "bf19d95b1d8adc2e277b2776eedb18a4b224019748908f7c06f42aa37ca975e1"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "bf19d95b1d8adc2e277b2776eedb18a4b224019748908f7c06f42aa37ca975e1"
+        ],
+        "candidates": [
+          {
+            "memory_type": "decision",
+            "subject": "search_index_data_authority",
+            "statement": "Database records are the authoritative source; the search index must be rebuilt from those records, and index payloads must never be written back as facts.",
+            "applicability": "For tasks that rebuild, synchronize, or validate the search index, and for tasks that determine data provenance or source-of-truth in the project, specifically when the search collection is deleted, stale, or requires reconstruction, and when there is a risk of writing index-derived payloads back as authoritative facts.",
+            "evidence_refs": [
+              "u1",
+              "v1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      },
+      {
+        "fixture_id": "test4-bounded-codegen-output",
+        "captured": true,
+        "processed_chunk_ids": [
+          "7429c2d787ee2a17055fdc4134176824bbc5d121e7c76d05c3c19154ac2c694c"
+        ],
+        "failed_chunk_ids": [],
+        "expected_chunk_ids": [
+          "7429c2d787ee2a17055fdc4134176824bbc5d121e7c76d05c3c19154ac2c694c"
+        ],
+        "candidates": [
+          {
+            "memory_type": "experience",
+            "subject": "binding regeneration from current contract",
+            "statement": "Regenerating bindings from the current contract removes obsolete field names; after regeneration the binding compatibility test passed, validating the repair and producing reusable corrected bindings.",
+            "applicability": "Binding generation or update tasks where generated bindings contain obsolete field names (stale state)",
+            "evidence_refs": [
+              "t1",
+              "v1"
+            ]
+          }
+        ],
+        "operation": null,
+        "failure_category": null
+      }
+    ],
+    "passed": false
+  },
+  "release_ready": false,
+  "remaining_release_gates": [
+    "test_split_extraction",
+    "consolidation_operations",
+    "retrieval_and_bulletin",
+    "safety_zero_tolerance",
+    "paired_memory_on_off",
+    "cache_scenarios"
+  ]
+}

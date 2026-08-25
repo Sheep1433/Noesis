@@ -57,21 +57,125 @@ export async function putUserMemoryFile(file: 'USER.md' | 'AGENTS.md', content: 
   return parseAuthJson<MemoryFilePayload>(res)
 }
 
-export type DailyMemoryItem = { date: string, size: number, updated_at: string }
-export type MemorySourceRef = { session_id: string, message_id: string }
-export type DailyMemoryMatch = { id: string, date: string, category: string, summary: string, keywords: string[], score: number, sources: MemorySourceRef[] }
-export type MemoryDreamResult = { date: string, timezone: string, entries: number, status: string }
-
-export async function listDailyMemory() {
-  return (await settingsJson<{ items: DailyMemoryItem[] }>('/api/user/memory/daily/list')).items
+export type CortexMemoryPreference = {
+  enabled: boolean
 }
 
-export async function searchDailyMemory(query: string) {
-  return (await settingsJson<{ items: DailyMemoryMatch[] }>(`/api/user/memory/daily/entries/search?q=${encodeURIComponent(query)}`)).items
+export type MachineMemoryType = 'decision' | 'experience' | 'workflow' | 'gotcha'
+export type MachineMemoryStatus = 'candidate' | 'active' | 'superseded' | 'disabled' | 'invalidated' | 'needs_review'
+export type MachineMemoryEvidence = {
+  id: string
+  source_kind: 'message' | 'tool' | 'artifact' | 'chunk' | 'user_revision'
+  provenance: 'user' | 'assistant_derived' | 'tool_internal' | 'tool_external'
+  created_at: string
+}
+export type MachineMemoryItem = {
+  id: string
+  memory_type: MachineMemoryType
+  status: MachineMemoryStatus
+  subject: string
+  statement: string
+  applicability: string
+  scope_id: string
+  scope_label: string
+  effective_provenance: MachineMemoryEvidence['provenance']
+  version: number
+  valid_from: string
+  valid_to?: string | null
+  last_verified_at?: string | null
+  user_revision: boolean
+  evidence_count: number
+  evidence: MachineMemoryEvidence[]
+}
+export type MachineMemorySource = {
+  memory_id: string
+  evidence_id: string
+  availability: 'available' | 'source_deleted' | 'retention_expired'
+  source_kind: MachineMemoryEvidence['source_kind']
+  source_ref?: string | null
+  excerpt?: string | null
+  provenance?: MachineMemoryEvidence['provenance'] | null
+  captured_at?: string | null
+}
+export type MachineMemoryHealth = {
+  last_capture_at?: string | null
+  last_consolidation_at?: string | null
+  pending: number
+  partial: number
+  failed: number
+  dead: number
+  skipped: number
+  workspace_pending: number
+  index_pending: number
+  workspace_failed: number
+  index_failed: number
+  derived_view_lag_seconds?: number | null
 }
 
-export function runMemoryDream(date: string, timezone = 'Asia/Shanghai') {
-  return settingsJson<MemoryDreamResult>('/api/user/memory/dream', 'POST', { date, timezone })
+export function getCortexMemoryPreference() {
+  return settingsJson<CortexMemoryPreference>('/api/user/memory/cortex/preferences')
+}
+
+export function updateCortexMemoryPreference(
+  enabled: boolean,
+) {
+  return settingsJson<CortexMemoryPreference>('/api/user/memory/cortex/preferences', 'PUT', {
+    enabled,
+  })
+}
+
+export async function listMachineMemory(
+  status?: MachineMemoryStatus,
+  memoryType?: MachineMemoryType,
+  scopeId?: string,
+  query?: string,
+) {
+  const params = new URLSearchParams()
+  if (status) {
+    params.set('status', status)
+  }
+  if (memoryType) {
+    params.set('memory_type', memoryType)
+  }
+  if (scopeId) {
+    params.set('scope_id', scopeId)
+  }
+  if (query?.trim()) {
+    params.set('query', query.trim())
+  }
+  const suffix = params.size ? `?${params.toString()}` : ''
+  return (await settingsJson<{ items: MachineMemoryItem[] }>(`/api/user/memory/cortex/items${suffix}`)).items
+}
+
+export function reviseMachineMemory(memoryId: string, statement: string, applicability: string) {
+  return settingsJson<MachineMemoryItem>(
+    `/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}`,
+    'PUT',
+    { statement, applicability },
+  )
+}
+
+export type MachineMemoryStateOperation = 'activate' | 'disable' | 'enable' | 'invalidate'
+
+export function changeMachineMemoryState(memoryId: string, operation: MachineMemoryStateOperation) {
+  return settingsJson<{ id: string, status: MachineMemoryStatus }>(
+    `/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}/${operation}`,
+    'POST',
+  )
+}
+
+export function deleteMachineMemory(memoryId: string) {
+  return settingsJson<void>(`/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}`, 'DELETE')
+}
+
+export function getMachineMemorySource(memoryId: string, evidenceId: string) {
+  return settingsJson<MachineMemorySource>(
+    `/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}/evidence/${encodeURIComponent(evidenceId)}/source`,
+  )
+}
+
+export function getMachineMemoryHealth() {
+  return settingsJson<MachineMemoryHealth>('/api/user/memory/cortex/health')
 }
 
 export type ContextPreview = {

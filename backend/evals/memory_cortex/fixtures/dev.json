@@ -1,0 +1,404 @@
+[
+  {
+    "id": "dev-success-no-failure",
+    "split": "dev",
+    "category": "completed_no_tool_failure",
+    "description": "A successful run contains a confirmed design decision and validation without any tool failure.",
+    "run": {
+      "status": "completed",
+      "tool_failure_count": 0,
+      "evidence": [
+        {
+          "id": "u1",
+          "kind": "user_goal",
+          "provenance": "user",
+          "text": "Use one user-controlled memory switch."
+        },
+        {
+          "id": "a1",
+          "kind": "assistant_conclusion",
+          "provenance": "assistant_derived",
+          "text": "Implemented one enabled preference."
+        },
+        {
+          "id": "v1",
+          "kind": "validation",
+          "provenance": "tool_internal",
+          "text": "Preference contract tests passed."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "decision",
+        "subject": "memory enablement control",
+        "statement_contains": [
+          "single",
+          "user"
+        ],
+        "evidence_refs": [
+          "u1",
+          "v1"
+        ],
+        "expected_state": "active",
+        "automatic_injection_eligible": true
+      }
+    ],
+    "retrieval_probes": [
+      {
+        "query": "How is memory enabled?",
+        "mode": "exact",
+        "relevant_subjects": [
+          "memory enablement control"
+        ]
+      }
+    ],
+    "followup_task": {
+      "prompt": "Change memory settings.",
+      "success_criteria": [
+        "uses one switch"
+      ]
+    }
+  },
+  {
+    "id": "dev-partial-with-evidence",
+    "split": "dev",
+    "category": "partial_run",
+    "description": "A partial run preserves a verified workaround and the unfinished boundary.",
+    "run": {
+      "status": "partial",
+      "tool_failure_count": 1,
+      "evidence": [
+        {
+          "id": "t1",
+          "kind": "tool_outcome",
+          "provenance": "tool_internal",
+          "text": "Primary command timed out."
+        },
+        {
+          "id": "t2",
+          "kind": "validation",
+          "provenance": "tool_internal",
+          "text": "A bounded retry completed the first shard."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "experience",
+        "subject": "bounded retry after timeout",
+        "statement_contains": [
+          "retry"
+        ],
+        "statement_contains_any": [
+          [
+            "partial",
+            "first shard"
+          ]
+        ],
+        "applicability_contains": [
+          "timeout"
+        ],
+        "evidence_refs": [
+          "t1",
+          "t2"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "dev-error-gotcha",
+    "split": "dev",
+    "category": "error_run",
+    "description": "An error run retains a reproducible constraint even without recovery.",
+    "run": {
+      "status": "error",
+      "tool_failure_count": 1,
+      "evidence": [
+        {
+          "id": "t1",
+          "kind": "tool_outcome",
+          "provenance": "tool_internal",
+          "text": "Write failed because the target was outside the authorized workspace."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "gotcha",
+        "subject": "workspace write boundary",
+        "statement_contains": [
+          "authorized",
+          "workspace"
+        ],
+        "evidence_refs": [
+          "t1"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "dev-valid-interrupted",
+    "split": "dev",
+    "category": "interrupted_with_work",
+    "description": "A user-interrupted run still has a completed artifact and validation.",
+    "run": {
+      "status": "interrupted",
+      "user_cancelled": true,
+      "evidence": [
+        {
+          "id": "r1",
+          "kind": "artifact",
+          "provenance": "tool_internal",
+          "text": "Created a migration plan."
+        },
+        {
+          "id": "v1",
+          "kind": "validation",
+          "provenance": "tool_internal",
+          "text": "Plan schema validated."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "experience",
+        "subject": "validated migration plan",
+        "statement_contains": [
+          "validated",
+          "plan"
+        ],
+        "evidence_refs": [
+          "r1",
+          "v1"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "dev-cancel-no-work",
+    "split": "dev",
+    "category": "cancelled_without_work",
+    "description": "Cancellation before stable work is not captured.",
+    "run": {
+      "status": "interrupted",
+      "user_cancelled": true,
+      "evidence": []
+    },
+    "expected_capture": false
+  },
+  {
+    "id": "dev-failure-recovery",
+    "split": "dev",
+    "category": "failure_recovery",
+    "description": "A failed command followed by a validated repair produces an experience.",
+    "run": {
+      "status": "completed",
+      "tool_failure_count": 1,
+      "evidence": [
+        {
+          "id": "t1",
+          "kind": "tool_outcome",
+          "provenance": "tool_internal",
+          "text": "Dependency resolution failed with a stale lock."
+        },
+        {
+          "id": "t2",
+          "kind": "tool_outcome",
+          "provenance": "tool_internal",
+          "text": "Regenerated the lock using the project package manager."
+        },
+        {
+          "id": "v1",
+          "kind": "validation",
+          "provenance": "tool_internal",
+          "text": "Build passed."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "experience",
+        "subject": "stale dependency lock repair",
+        "statement_contains": [
+          "regenerate",
+          "lock",
+          "build"
+        ],
+        "evidence_refs": [
+          "t1",
+          "t2",
+          "v1"
+        ],
+        "expected_state": "active",
+        "automatic_injection_eligible": true
+      }
+    ]
+  },
+  {
+    "id": "dev-workflow-stop-rule",
+    "split": "dev",
+    "category": "workflow_and_gotcha",
+    "description": "A repeated sequence with validation and a stop rule becomes a workflow.",
+    "run": {
+      "status": "completed",
+      "evidence": [
+        {
+          "id": "u1",
+          "kind": "user_goal",
+          "provenance": "user",
+          "text": "Diagnose before changing code."
+        },
+        {
+          "id": "t1",
+          "kind": "tool_outcome",
+          "provenance": "tool_internal",
+          "text": "Reproduced the failure with a focused test."
+        },
+        {
+          "id": "v1",
+          "kind": "validation",
+          "provenance": "tool_internal",
+          "text": "Stop if the focused test cannot reproduce the issue."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "workflow",
+        "subject": "diagnosis before code change",
+        "statement_contains": [
+          "reproduce",
+          "stop"
+        ],
+        "applicability_contains": [
+          "diagnosis",
+          "code changes"
+        ],
+        "evidence_refs": [
+          "u1",
+          "t1",
+          "v1"
+        ],
+        "expected_state": "active",
+        "automatic_injection_eligible": true
+      }
+    ]
+  },
+  {
+    "id": "dev-no-value",
+    "split": "dev",
+    "category": "succeeded_no_output",
+    "description": "A routine acknowledgement is captured for coverage but produces no lasting item.",
+    "run": {
+      "status": "completed",
+      "evidence": [
+        {
+          "id": "a1",
+          "kind": "assistant_conclusion",
+          "provenance": "assistant_derived",
+          "text": "Done."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "expected_no_output": true
+  },
+  {
+    "id": "dev-user-learning-goal",
+    "split": "dev",
+    "category": "user_context",
+    "description": "A user-stated durable learning goal becomes a user-context decision.",
+    "run": {
+      "status": "completed",
+      "project_key": "global",
+      "evidence": [
+        {
+          "id": "u1",
+          "kind": "user_goal",
+          "provenance": "user",
+          "text": "I am currently learning Node.js and want to build a CLI tool with it next."
+        },
+        {
+          "id": "a1",
+          "kind": "assistant_conclusion",
+          "provenance": "assistant_derived",
+          "text": "Here is a Node.js learning plan starting with core modules, then building a small CLI tool."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "decision",
+        "subject": "user learning goal node.js",
+        "statement_contains": [
+          "node.js"
+        ],
+        "applicability_contains": [
+          "learning"
+        ],
+        "evidence_refs": [
+          "u1"
+        ],
+        "expected_state": "candidate",
+        "automatic_injection_eligible": false
+      }
+    ]
+  },
+  {
+    "id": "dev-user-preference-in-task",
+    "split": "dev",
+    "category": "user_context",
+    "description": "A preference stated inside a real task with a validating artifact becomes a decision.",
+    "run": {
+      "status": "completed",
+      "project_key": "global",
+      "evidence": [
+        {
+          "id": "u1",
+          "kind": "user_correction",
+          "provenance": "user",
+          "text": "From now on, every plan you make for me must be a table with a time column, in Simplified Chinese."
+        },
+        {
+          "id": "a1",
+          "kind": "assistant_conclusion",
+          "provenance": "assistant_derived",
+          "text": "Generated the fitness plan as a Simplified Chinese table with a time column."
+        },
+        {
+          "id": "v1",
+          "kind": "artifact",
+          "provenance": "tool_internal",
+          "text": "Saved plan.md containing a markdown table with time column, headings in Simplified Chinese."
+        }
+      ]
+    },
+    "expected_capture": true,
+    "gold_items": [
+      {
+        "memory_type": "decision",
+        "subject": "user output format preference",
+        "statement_contains": [
+          "table"
+        ],
+        "applicability_contains": [
+          "plan"
+        ],
+        "evidence_refs": [
+          "u1",
+          "v1"
+        ],
+        "expected_state": "candidate",
+        "automatic_injection_eligible": false
+      }
+    ]
+  }
+]

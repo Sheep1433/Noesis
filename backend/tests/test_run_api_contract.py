@@ -9,7 +9,12 @@ from sqlalchemy.exc import IntegrityError
 
 from server.api import chat_api
 from server.api.chat_api import chat_router
-from noesis.chat.delivery.events import HitlRequired, RunCompleted, StreamDone, WireFrame
+from noesis.chat.delivery.events import (
+    HitlRequired,
+    RunCompleted,
+    StreamDone,
+    WireFrame,
+)
 from noesis.chat.delivery.sse import encode_sequenced_event
 from noesis.chat.runs import (
     RunManager,
@@ -21,6 +26,8 @@ from noesis.chat.runs import (
 from noesis.errors.exceptions import ConflictException, ServiceException
 from noesis.schemas.chat_vo import CreateRunRequest
 from noesis.schemas.qa_vo import HitlResumeRequest
+from noesis.services import run_service
+from noesis.services.run_service import RunProjection, RunService
 
 
 async def _noop(*args: Any, **kwargs: Any) -> None:
@@ -28,12 +35,10 @@ async def _noop(*args: Any, **kwargs: Any) -> None:
     return None
 
 
-from noesis.services import run_service
-from noesis.services.run_service import RunProjection, RunService
-
-
 def test_run_routes_replace_legacy_stream_and_stop() -> None:
-    paths = {(route.path, method) for route in chat_router.routes for method in route.methods}
+    paths = {
+        (route.path, method) for route in chat_router.routes for method in route.methods
+    }
     assert ("/api/chat/runs", "POST") in paths
     assert ("/api/chat/runs/{run_id}", "GET") in paths
     assert ("/api/chat/runs/{run_id}/stream", "GET") in paths
@@ -165,7 +170,9 @@ async def test_active_run_route_returns_explicit_null(monkeypatch) -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    monkeypatch.setattr(chat_api.RunService, "get_active_run", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        chat_api.RunService, "get_active_run", AsyncMock(return_value=None)
+    )
     response = await chat_api.get_active_run(
         "session-1",
         current_user=SimpleNamespace(user_id="user-1"),
@@ -243,7 +250,9 @@ async def test_run_stream_returns_503_when_owner_is_unavailable(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_terminal_projection_atomically_finalizes_run_and_assistant(monkeypatch) -> None:
+async def test_terminal_projection_atomically_finalizes_run_and_assistant(
+    monkeypatch,
+) -> None:
     """自然完成不能只终结 t_agent_run 而把 assistant 永久留在 streaming。"""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -282,8 +291,15 @@ async def test_terminal_projection_atomically_finalizes_run_and_assistant(monkey
 
     repository = MagicMock()
     repository.finalize = AsyncMock(return_value=True)
-    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", DbContext)
+    capture = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
+        DbContext,
+    )
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
+    monkeypatch.setattr(
+        run_service.MemoryCaptureService, "enqueue_for_terminal", capture
+    )
     result = await RunService._persist_terminal_candidate(candidate)
 
     kwargs = repository.finalize.await_args.kwargs
@@ -291,8 +307,69 @@ async def test_terminal_projection_atomically_finalizes_run_and_assistant(monkey
     assert kwargs["last_sequence"] == 7
     assert kwargs["assistant_status"] == "completed"
     assert kwargs["content"] == {"parts": [{"type": "text", "content": "完成"}]}
+    capture.assert_awaited_once_with(
+        db,
+        run_id="run-terminal",
+        content={"parts": [{"type": "text", "content": "完成"}]},
+    )
     db.commit.assert_awaited_once()
     assert result.outcome == "committed"
+
+
+@pytest.mark.asyncio
+async def test_alternate_terminal_projection_also_enqueues_memory_capture(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    projection = RunProjection(
+        run_id="run-resume-terminal",
+        user_id="1",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        qa_type="TEST_CASE_QA",
+    )
+    projection.apply(WireFrame(event="text-delta", data={"text_delta": "完成恢复"}))
+    projection.apply(RunCompleted(finish_reason="stop"))
+    db = MagicMock()
+    db.commit = AsyncMock()
+
+    class DbContext:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *_args):
+            return False
+
+    repository = MagicMock()
+    repository.finalize = AsyncMock(return_value=True)
+    capture = AsyncMock(return_value=True)
+    transition = AsyncMock()
+    monkeypatch.setattr(
+        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
+        DbContext,
+    )
+    monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
+    monkeypatch.setattr(
+        run_service.MemoryCaptureService, "enqueue_for_terminal", capture
+    )
+    monkeypatch.setattr(
+        run_service.run_manager,
+        "get",
+        lambda _run_id: SimpleNamespace(last_sequence=9),
+    )
+    monkeypatch.setattr(run_service.run_manager, "transition", transition)
+
+    await RunService._persist_projection("run-resume-terminal", projection)
+
+    capture.assert_awaited_once_with(
+        db,
+        run_id="run-resume-terminal",
+        content={"parts": [{"type": "text", "content": "完成恢复"}]},
+    )
+    db.commit.assert_awaited_once()
+    transition.assert_awaited_once_with("run-resume-terminal", RunStatus.COMPLETED)
 
 
 def test_hitl_payload_is_present_in_authoritative_snapshot() -> None:
@@ -350,16 +427,27 @@ def test_hitl_decision_updates_authoritative_tool_part_before_resume() -> None:
         assistant_message_id="assistant-1",
         qa_type="SUPER_AGENT_QA",
     )
-    projection.apply(WireFrame(event="tool-call-start", data={
-        "tool_name": "execute",
-        "tool_call_id": "call-1",
-        "input": {"command": "curl https://example.com"},
-    }))
-    projection.apply(HitlRequired(payload={
-        "interrupt_id": "interrupt-1",
-        "kind": "approval",
-        "action_requests": [{"tool_call_id": "call-1", "name": "execute", "args": {}}],
-    }))
+    projection.apply(
+        WireFrame(
+            event="tool-call-start",
+            data={
+                "tool_name": "execute",
+                "tool_call_id": "call-1",
+                "input": {"command": "curl https://example.com"},
+            },
+        )
+    )
+    projection.apply(
+        HitlRequired(
+            payload={
+                "interrupt_id": "interrupt-1",
+                "kind": "approval",
+                "action_requests": [
+                    {"tool_call_id": "call-1", "name": "execute", "args": {}}
+                ],
+            }
+        )
+    )
 
     projection.apply_hitl_decisions([{"type": "approve"}])
     projection.begin_hitl_resume()
@@ -423,14 +511,18 @@ def test_sequenced_sse_contains_run_identity() -> None:
         event=WireFrame(event="text-delta", data={"type": "text-delta", "delta": "hi"}),
     )
     line = encode_sequenced_event(envelope)[0]
-    payload = json.loads(next(part[5:].strip() for part in line.splitlines() if part.startswith("data:")))
+    payload = json.loads(
+        next(part[5:].strip() for part in line.splitlines() if part.startswith("data:"))
+    )
     assert payload["run_id"] == "run-1"
     assert payload["sequence"] == 9
     assert payload["attempt_id"] == 2
 
 
 @pytest.mark.asyncio
-async def test_resume_hitl_uses_projection_pending_without_legacy_store(monkeypatch) -> None:
+async def test_resume_hitl_uses_projection_pending_without_legacy_store(
+    monkeypatch,
+) -> None:
     """网页 Run resume 以 projection 为权威，不依赖进程内 legacy pending store。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
@@ -442,13 +534,19 @@ async def test_resume_hitl_uses_projection_pending_without_legacy_store(monkeypa
         assistant_message_id="assistant-1",
         qa_type="SUPER_AGENT_QA",
     )
-    projection.apply(HitlRequired(payload={
-        "interrupt_id": "interrupt-1",
-        "kind": "approval",
-        "action_requests": [{"tool_call_id": "call-1", "name": "execute", "args": {}}],
-        "review_configs": [],
-        "expires_at": 9999999999,
-    }))
+    projection.apply(
+        HitlRequired(
+            payload={
+                "interrupt_id": "interrupt-1",
+                "kind": "approval",
+                "action_requests": [
+                    {"tool_call_id": "call-1", "name": "execute", "args": {}}
+                ],
+                "review_configs": [],
+                "expires_at": 9999999999,
+            }
+        )
+    )
     handle = SimpleNamespace(
         state=projection,
         last_sequence=3,
@@ -474,8 +572,10 @@ async def test_resume_hitl_uses_projection_pending_without_legacy_store(monkeypa
     async def resume(_run_id, producer, *, prepare=None):
         if prepare is not None:
             prepare()
+
         async def publish(_event, _attempt_id):
             return SimpleNamespace(sequence=4)
+
         await producer(publish)
         handle.status = RunStatus.RUNNING
         return handle
@@ -491,12 +591,18 @@ async def test_resume_hitl_uses_projection_pending_without_legacy_store(monkeypa
     monkeypatch.setattr(run_service.QaService, "exec_hitl_resume", exec_resume)
 
     run_db = MagicMock()
+
     class DbContext:
         async def __aenter__(self):
             return run_db
+
         async def __aexit__(self, *_args):
             return False
-    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", DbContext)
+
+    monkeypatch.setattr(
+        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
+        DbContext,
+    )
 
     db = MagicMock()
     db.commit = AsyncMock()
@@ -570,7 +676,11 @@ def test_run_projection_discards_late_tool_result_after_cancel() -> None:
     projection.apply(
         WireFrame(
             event="tool-output-available",
-            data={"tool_call_id": "call-1", "output": "late success", "status": "success"},
+            data={
+                "tool_call_id": "call-1",
+                "output": "late success",
+                "status": "success",
+            },
         )
     )
     part = projection.builder.to_dict()["parts"][0]
@@ -623,7 +733,9 @@ def test_projection_ignores_old_attempt_delta() -> None:
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_db_outage_fails_within_configured_deadline(monkeypatch) -> None:
+async def test_checkpoint_db_outage_fails_within_configured_deadline(
+    monkeypatch,
+) -> None:
     attempts = 0
 
     class FailingSession:
@@ -649,7 +761,10 @@ async def test_checkpoint_db_outage_fails_within_configured_deadline(monkeypatch
         sequence=1,
         attempt_id=1,
     )
-    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", FailingSession)
+    monkeypatch.setattr(
+        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
+        FailingSession,
+    )
     monkeypatch.setattr(
         run_service,
         "StreamConfig",
@@ -679,9 +794,11 @@ async def test_create_flushes_messages_before_adding_run(monkeypatch) -> None:
     sequence: list[str] = []
 
     db = MagicMock()
-    db.add = MagicMock(side_effect=lambda obj: sequence.append(
-        f"add:{'run' if isinstance(obj, TAgentRun) else 'message'}"
-    ))
+    db.add = MagicMock(
+        side_effect=lambda obj: sequence.append(
+            f"add:{'run' if isinstance(obj, TAgentRun) else 'message'}"
+        )
+    )
     db.flush = AsyncMock(side_effect=lambda: sequence.append("flush"))
     db.commit = AsyncMock(side_effect=lambda: sequence.append("commit"))
 
@@ -718,7 +835,11 @@ async def test_create_flushes_messages_before_adding_run(monkeypatch) -> None:
         "flush",
         "commit",
     ], sequence
-    added_messages = [call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], TChatMessage)]
+    added_messages = [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], TChatMessage)
+    ]
     assert [message.message_sequence for message in added_messages] == [7, 8]
     assert added_messages[0].role == "user"
     assert added_messages[1].role == "assistant"
@@ -808,9 +929,16 @@ async def test_start_failure_cleanup_finalizes_queued_run(monkeypatch) -> None:
 
     repository = MagicMock()
     repository.finalize = AsyncMock(return_value=True)
+    capture = AsyncMock(return_value=False)
     monkeypatch.setattr(run_service.run_manager, "get", MagicMock(side_effect=KeyError))
-    monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", DbContext)
+    monkeypatch.setattr(
+        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
+        DbContext,
+    )
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
+    monkeypatch.setattr(
+        run_service.MemoryCaptureService, "enqueue_for_terminal", capture
+    )
 
     await RunService._finalize_start_failure(run)
 
@@ -818,6 +946,7 @@ async def test_start_failure_cleanup_finalizes_queued_run(monkeypatch) -> None:
     assert kwargs["target"] == RunStatus.ERROR
     assert kwargs["assistant_status"] == "error"
     assert kwargs["error_code"] == "RUN_START_FAILED"
+    capture.assert_awaited_once_with(db, run_id="run-start-fail", content={"parts": []})
     db.commit.assert_awaited_once()
 
 
@@ -835,8 +964,14 @@ async def test_get_active_run_returns_none_when_no_active_run() -> None:
     repository.get_active_for_session = AsyncMock(return_value=None)
     db = MagicMock()
 
-    with patch.object(run_service, "AgentRunRepository", return_value=repository), \
-         patch.object(run_service.ChatService, "get_session_by_id", AsyncMock(return_value=object())):
+    with (
+        patch.object(run_service, "AgentRunRepository", return_value=repository),
+        patch.object(
+            run_service.ChatService,
+            "get_session_by_id",
+            AsyncMock(return_value=object()),
+        ),
+    ):
         result = await RunService.get_active_run("session-1", "user-1", db)
 
     assert result is None
@@ -889,9 +1024,15 @@ async def test_get_active_run_returns_live_snapshot() -> None:
     await handle.producer_task
 
     db = MagicMock()
-    with patch.object(run_service, "AgentRunRepository", return_value=repository), \
-         patch.object(run_service.ChatService, "get_session_by_id", AsyncMock(return_value=object())), \
-         patch.object(run_service, "run_manager", manager):
+    with (
+        patch.object(run_service, "AgentRunRepository", return_value=repository),
+        patch.object(
+            run_service.ChatService,
+            "get_session_by_id",
+            AsyncMock(return_value=object()),
+        ),
+        patch.object(run_service, "run_manager", manager),
+    ):
         result = await RunService.get_active_run("session-1", "user-1", db)
 
     assert result is not None
@@ -930,9 +1071,17 @@ async def test_get_active_run_returns_db_snapshot_when_owner_unavailable() -> No
 
     db = MagicMock()
     # run_manager.get raises KeyError (owner unavailable)
-    with patch.object(run_service, "AgentRunRepository", return_value=repository), \
-         patch.object(run_service.ChatService, "get_session_by_id", AsyncMock(return_value=object())), \
-         patch.object(run_service, "run_manager", MagicMock(get=MagicMock(side_effect=KeyError))):
+    with (
+        patch.object(run_service, "AgentRunRepository", return_value=repository),
+        patch.object(
+            run_service.ChatService,
+            "get_session_by_id",
+            AsyncMock(return_value=object()),
+        ),
+        patch.object(
+            run_service, "run_manager", MagicMock(get=MagicMock(side_effect=KeyError))
+        ),
+    ):
         result = await RunService.get_active_run("session-1", "user-1", db)
 
     assert result is not None

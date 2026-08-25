@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis.agents.backends import agent_sandbox_session, create_agent_backend
 from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
+from noesis.agents.memory_runtime import build_memory_bulletin_middleware
 from noesis.factory import build_noesis_middleware, create_noesis_agent
 from noesis.agents.tools.ask_user import ask_user_tool, build_interrupt_on
 from noesis.agents.prompts import PromptProfile, build_prompt
@@ -107,11 +108,19 @@ class SuperAgent(BaseAgent):
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
         disable_hitl: bool = False,
+        run_id: Optional[str] = None,
     ):
         ensure_user_memory_files(user_id)
         backend = await create_agent_backend(user_id, session_id)
         web_tools = build_web_search_tools()
         tools = list(web_tools) + list(mcp_tools or [])
+        if db is not None:
+            tools.extend(build_memory_tools(
+                db=db,
+                user_id=user_id,
+                session_id=session_id,
+                agent_profile="SUPER_AGENT_QA",
+            ))
         # KB 检索工具（用户勾选启用时挂载）
         if kb_search_enabled and kb_collections is not None:
             kb_tools = build_kb_search_tools(
@@ -120,8 +129,6 @@ class SuperAgent(BaseAgent):
             )
             if kb_tools:
                 tools.extend(kb_tools)
-        if db is not None:
-            tools.extend(build_memory_tools(user_id=user_id, db=db))
         interrupt_on = None
         # 无人值守场景（定时任务）禁用 HITL：不挂 ask_user、不设 interrupt_on，避免 agent 卡在等待审批。
         if HitlConfig.enabled and not disable_hitl:
@@ -152,7 +159,11 @@ class SuperAgent(BaseAgent):
         # worker 不携带后台任务工具自身（避免递归委派）。
         # worker 经工厂在隔离 loop 内惰性编译：LLM 客户端与 checkpointer
         # 连接池必须绑定隔离 loop（复用主 loop 实例会 cross-loop 报错）。
-        worker_tools = list(tools)
+        worker_tools = [
+            tool for tool in tools if getattr(tool, "name", "") not in {
+                "search_memory", "get_memory_source"
+            }
+        ]
 
         async def _bg_worker_factory():
             from noesis.config.checkpointer import create_isolated_checkpointer
@@ -254,6 +265,13 @@ class SuperAgent(BaseAgent):
             skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
             memory=resolved_context.memory_sources,
             memory_system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
+            memory_bulletin_middleware=build_memory_bulletin_middleware(
+                db=db,
+                user_id=user_id,
+                session_id=session_id,
+                run_id=run_id,
+                agent_profile="SUPER_AGENT_QA",
+            ),
             todo=True,
             interrupt_on=interrupt_on,
             model_id=model_id,
@@ -274,6 +292,7 @@ class SuperAgent(BaseAgent):
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
         disable_hitl: bool = False,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
@@ -310,6 +329,7 @@ class SuperAgent(BaseAgent):
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
                     disable_hitl=disable_hitl,
+                    run_id=run_id,
                 )
 
                 human_kwargs = {}
@@ -384,6 +404,7 @@ class SuperAgent(BaseAgent):
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
         disable_hitl: bool = False,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """从 HITL interrupt 以 ``Command(resume=...)`` 继续同一 thread。"""
         task_id = session_id
@@ -415,6 +436,7 @@ class SuperAgent(BaseAgent):
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
                     disable_hitl=disable_hitl,
+                    run_id=run_id,
                 )
                 stream_args = {
                     "input": Command(resume={"decisions": decisions}),

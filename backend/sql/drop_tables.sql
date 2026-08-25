@@ -1,10 +1,5 @@
--- 清空 Noesis 业务表（重建前执行，使用前请备份）
--- 表结构以 Alembic 为准：uv run alembic upgrade head
+-- 清空 Noesis 业务库（重建前执行，使用前请备份）。
+-- 该脚本会删除 public schema 下的全部对象，表结构以 Alembic 为准。
 
-DROP TABLE IF EXISTS t_chat_attachment CASCADE;
-DROP TABLE IF EXISTS t_chat_message CASCADE;
-DROP TABLE IF EXISTS t_chat_session CASCADE;
-DROP TABLE IF EXISTS t_user_session CASCADE;
-DROP TABLE IF EXISTS t_user CASCADE;
-DROP TABLE IF EXISTS kb_collection_config CASCADE;
-DROP TABLE IF EXISTS alembic_version CASCADE;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
