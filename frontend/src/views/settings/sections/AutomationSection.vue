@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskRun } from '@/api/settings'
-import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
+import { NButton, NTag, useDialog, useMessage } from 'naive-ui'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   createScheduledTask, deleteScheduledTask, listScheduledTaskRuns, listScheduledTasks,
   parseScheduledTask, previewSchedule, retryScheduledTaskRun, runScheduledTask,
   setScheduledTaskEnabled, updateScheduledTask,
 } from '@/api/settings'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { SettingsEmptyState, SettingsSection, SettingsStatus } from '../primitives'
+import AutomationTaskForm from './AutomationTaskForm.vue'
 
 const message = useMessage()
 const dialog = useDialog()
+const { isMobile } = useBreakpoint()
 const loading = ref(false)
 const saving = ref(false)
 const parsing = ref(false)
@@ -20,6 +23,7 @@ const editingDelivery = ref('none')
 const preview = ref<{ summary: string, next_run_at: number } | null>(null)
 const histories = reactive<Record<string, ScheduledTaskRun[]>>({})
 const nlInput = ref('')
+const formDrawerOpen = ref(false)
 
 // 字段固定默认值：qa_type 恒为 SuperAgent、时区 Asia/Shanghai、单任务单会话、不投递。
 const TIMEZONE = 'Asia/Shanghai'
@@ -140,6 +144,7 @@ function resetForm() {
   editingDelivery.value = 'none'
   preview.value = null
   nlInput.value = ''
+  formDrawerOpen.value = false
 }
 
 function edit(task: ScheduledTask) {
@@ -151,6 +156,9 @@ function edit(task: ScheduledTask) {
   editingDelivery.value = task.delivery
   syncSelectorFromCron(task.cron_expr)
   void refreshPreview()
+  if (isMobile.value) {
+    formDrawerOpen.value = true
+  }
 }
 
 const submitPayload = computed(() => ({
@@ -255,66 +263,35 @@ onMounted(() => void refresh())
     <div class="automation-layout">
       <!-- 右列（桌面）/ 首段（移动）：任务设置表单 -->
       <div class="automation-form">
-        <div class="automation-form-panel">
-          <header class="automation-form-header">
-            <div>
-              <h3>{{ editingId ? '编辑自动化任务' : '新建自动化任务' }}</h3>
-              <p>先用自然语言生成，也可以直接配置重复方式和执行时间。</p>
-            </div>
-          </header>
-          <section class="automation-form-block automation-form-block--natural">
-            <h4>自然语言创建</h4>
-            <div class="nl-box">
-              <n-input
-                v-model:value="nlInput"
-                type="textarea"
-                placeholder="例如：每周一早上 9 点，整理 AI Agent 的最新进展"
-                :rows="2"
-              />
-              <n-button type="primary" :loading="parsing" :disabled="!nlInput.trim()" @click="onParse">解析为任务</n-button>
-            </div>
-          </section>
-
-          <section class="automation-form-block">
-            <h4>时间与任务内容</h4>
-            <div class="task-form">
-              <n-input v-model:value="form.name" placeholder="任务名称" />
-              <div class="schedule-panel">
-                <div class="schedule-row">
-                  <span class="schedule-label">重复</span>
-                  <n-select v-model:value="repeatMode" :options="repeatModeOptions" />
-                </div>
-                <div v-if="repeatMode === 'weekly'" class="schedule-row">
-                  <span class="schedule-label">星期</span>
-                  <n-select
-                    v-model:value="weekdays"
-                    multiple
-                    :options="weekdayOptions"
-                    max-tag-count="responsive"
-                    placeholder="选择星期"
-                  />
-                </div>
-                <div v-if="repeatMode === 'monthly'" class="schedule-row">
-                  <span class="schedule-label">日期</span>
-                  <n-input-number v-model:value="monthDay" :min="1" :max="28" />
-                  <span class="schedule-suffix">日</span>
-                </div>
-                <div v-if="repeatMode === 'custom'" class="custom-cron-row">
-                  <span class="schedule-label">Cron</span>
-                  <n-input v-model:value="customCron" placeholder="分 时 日 月 周，例如 0 9 * * 1,3,5" />
-                </div>
-                <div class="schedule-row">
-                  <span class="schedule-label">时间</span>
-                  <input v-model="repeatTime" class="time-input" type="time">
-                </div>
-                <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用</label>
-              </div>
-              <div v-if="preview" class="preview">{{ preview.summary }} · 下次 {{ new Date(preview.next_run_at).toLocaleString() }}</div>
-              <n-input v-model:value="form.prompt" type="textarea" placeholder="任务提示词" :rows="4" />
-              <div class="actions"><n-button type="primary" :loading="saving" :disabled="!form.name || !form.prompt" @click="save">{{ editingId ? '保存修改' : '创建任务' }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
-            </div>
-          </section>
-        </div>
+        <AutomationTaskForm
+          v-if="!isMobile"
+          v-model:nl-input="nlInput"
+          v-model:name="form.name"
+          v-model:repeat-mode="repeatMode"
+          v-model:weekdays="weekdays"
+          v-model:month-day="monthDay"
+          v-model:custom-cron="customCron"
+          v-model:repeat-time="repeatTime"
+          v-model:enabled="form.enabled"
+          v-model:prompt="form.prompt"
+          :editing-id="editingId"
+          :parsing="parsing"
+          :saving="saving"
+          :preview="preview"
+          :repeat-mode-options="repeatModeOptions"
+          :weekday-options="weekdayOptions"
+          @parse="onParse"
+          @save="save"
+          @cancel="resetForm"
+        />
+        <button v-else type="button" class="automation-create-button" @click="formDrawerOpen = true">
+          <span class="automation-create-button__plus">＋</span>
+          <span>
+            <strong>{{ editingId ? '继续编辑任务' : '新建自动化任务' }}</strong>
+            <small>配置运行时间和任务提示词</small>
+          </span>
+          <span class="automation-create-button__arrow">›</span>
+        </button>
       </div>
 
       <!-- 左列（桌面）/ 次段（移动）：任务列表 -->
@@ -341,50 +318,206 @@ onMounted(() => void refresh())
         </div>
       </div>
     </div>
+
+    <n-drawer
+      v-if="isMobile"
+      v-model:show="formDrawerOpen"
+      placement="bottom"
+      width="100%"
+      height="min(92vh, 760px)"
+      :block-scroll="true"
+    >
+      <n-drawer-content
+        :title="editingId ? '编辑自动化任务' : '新建自动化任务'"
+        closable
+        body-content-style="padding: 0 16px max(16px, env(safe-area-inset-bottom)); overflow-y: auto;"
+      >
+        <AutomationTaskForm
+          v-model:nl-input="nlInput"
+          v-model:name="form.name"
+          v-model:repeat-mode="repeatMode"
+          v-model:weekdays="weekdays"
+          v-model:month-day="monthDay"
+          v-model:custom-cron="customCron"
+          v-model:repeat-time="repeatTime"
+          v-model:enabled="form.enabled"
+          v-model:prompt="form.prompt"
+          :editing-id="editingId"
+          :parsing="parsing"
+          :saving="saving"
+          :preview="preview"
+          :repeat-mode-options="repeatModeOptions"
+          :weekday-options="weekdayOptions"
+          @parse="onParse"
+          @save="save"
+          @cancel="resetForm"
+        />
+      </n-drawer-content>
+    </n-drawer>
   </SettingsSection>
 </template>
 
 <style scoped>
-/* 两列布局：桌面左侧任务列表、右侧设置表单；窄屏单列展示。 */
-.automation-section { max-width: 1200px; }
-.automation-layout { display: grid; gap: 24px 40px; align-items: start; }
-.automation-form { min-width: 0; }
-.automation-list { min-width: 0; }
-@media (min-width: $bp-lg + 1px) {
-  .automation-layout {
-    grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
-    grid-template-areas: "list form";
-  }
-  .automation-list { grid-area: list; }
-  .automation-form { grid-area: form; }
+/* 在实际可用宽度足够时并列展示，避免被侧栏或窗口宽度误判。 */
+
+.automation-section {
+  width: 100%;
+  max-width: none;
 }
 
-.automation-form-panel { padding: 18px; border: 1px solid var(--noesis-color-border-subtle); border-radius: var(--noesis-radius-lg); background: var(--noesis-color-bg-elevated); }
-.automation-form-header { margin-bottom: 18px; }
-.automation-form-header h3, .automation-list-header h3 { margin: 0; color: var(--noesis-color-text-heading); font-size: 16px; font-weight: 650; }
-.automation-form-header p, .automation-list-header p { margin: 5px 0 0; color: var(--noesis-color-text-secondary); font-size: 12px; line-height: 1.5; }
-.automation-form-block + .automation-form-block { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--noesis-color-border-subtle); }
-.automation-form-block h4 { margin: 0 0 10px; color: var(--noesis-color-text-heading); font-size: 13px; font-weight: 600; }
-.automation-list-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.automation-list-count { flex-shrink: 0; color: var(--noesis-color-text-muted); font-size: 12px; }
-.nl-box { display: grid; gap: 10px; padding-bottom: 0; }
-.task-form { display: grid; gap: 10px; padding-bottom: 0; }
-.schedule-panel { display: grid; gap: 0; max-width: 700px; border: 1px solid var(--noesis-color-border-subtle); border-radius: var(--noesis-radius-lg); overflow: hidden; }
-.schedule-row, .custom-cron-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; border-bottom: 1px solid var(--noesis-color-border-subtle); }
-.schedule-row :deep(.n-select), .custom-cron-row :deep(.n-input) { min-width: 0; }
-.schedule-label { color: var(--noesis-color-text-secondary); font-size: 13px; }
-.schedule-suffix { color: var(--noesis-color-text-secondary); font-size: 13px; }
-.time-input { width: 120px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--noesis-color-border); border-radius: var(--noesis-radius-sm); color: var(--noesis-color-text-primary); background: var(--noesis-color-bg-elevated); font: inherit; }
-.enabled { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 14px; color: var(--noesis-color-text-primary); }
-.preview { color: var(--noesis-color-success); font-size: 12px; }
-.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.task-card { padding: 16px; border: 1px solid var(--noesis-color-border-subtle); border-radius: var(--noesis-radius-lg); background: var(--noesis-color-bg-elevated); }
-.task-card + .task-card { margin-top: 10px; }
-.task-head { display: flex; justify-content: space-between; gap: 12px; }
-.muted { color: var(--noesis-color-text-secondary); font-size: 12px; }
-.prompt { margin: 8px 0; white-space: pre-wrap; }
-.history { margin-top: 12px; padding: 4px 12px; border-radius: var(--noesis-radius-sm); background: var(--noesis-color-bg-muted); }
-.run-row { padding: 10px 0; border-bottom: 1px solid var(--noesis-color-border-subtle); }
-.run-row p { margin: 6px 0; font-size: 12px; }
-.error { color: var(--noesis-color-danger); }
+.automation-layout {
+  display: grid;
+  gap: 24px 40px;
+  align-items: start;
+}
+
+.automation-form,
+.automation-list {
+  min-width: 0;
+}
+
+@container settings-content (min-width: 960px) {
+
+  .automation-layout {
+    grid-template-columns: minmax(0, 1.15fr) minmax(380px, 0.85fr);
+    grid-template-areas: "list form";
+  }
+
+  .automation-list {
+    grid-area: list;
+  }
+
+  .automation-form {
+    grid-area: form;
+  }
+
+  .automation-form :deep(.automation-form-panel) {
+    position: sticky;
+    top: 16px;
+  }
+}
+
+.automation-list-header h3 {
+  margin: 0;
+  color: var(--noesis-color-text-heading);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.automation-list-header p {
+  margin: 5px 0 0;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.automation-list-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.automation-list-count {
+  flex-shrink: 0;
+  color: var(--noesis-color-text-muted);
+  font-size: 12px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.automation-create-button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-lg);
+  color: var(--noesis-color-text-heading);
+  background: var(--noesis-color-bg-elevated);
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-create-button:hover {
+  border-color: var(--noesis-color-primary);
+}
+
+.automation-create-button__plus {
+  color: var(--noesis-color-primary);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.automation-create-button > span:nth-child(2) {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+}
+
+.automation-create-button small {
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+}
+
+.automation-create-button__arrow {
+  color: var(--noesis-color-text-muted);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.task-card {
+  padding: 16px;
+  border: 1px solid var(--noesis-color-border-subtle);
+  border-radius: var(--noesis-radius-lg);
+  background: var(--noesis-color-bg-elevated);
+}
+
+.task-card + .task-card {
+  margin-top: 10px;
+}
+
+.task-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.muted {
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+}
+
+.prompt {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+
+.history {
+  margin-top: 12px;
+  padding: 4px 12px;
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-color-bg-muted);
+}
+
+.run-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--noesis-color-border-subtle);
+}
+
+.run-row p {
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.error {
+  color: var(--noesis-color-danger);
+}
 </style>
