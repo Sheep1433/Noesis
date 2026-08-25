@@ -103,3 +103,39 @@ async def test_exhausted_retries_emit_fallback_and_return_aimessage() -> None:
 
 async def _noop() -> None:
     return None
+
+
+class _Response:
+    def __init__(self, headers: dict[str, str], status_code: int = 429) -> None:
+        self.headers = headers
+        self.status_code = status_code
+
+
+class _RetryAfterError(Exception):
+    def __init__(self, headers: dict[str, str]) -> None:
+        super().__init__("Error code: 429 - upstream rate limited")
+        self.response = _Response(headers)
+
+
+def test_retry_after_honored_within_cap() -> None:
+    """网关建议 60s（分钟窗限流重置）：遵循，等一个窗口后重试成功率高。"""
+    mw = _middleware()
+    delay = mw._build_retry_delay_ms(None, _RetryAfterError({"Retry-After": "60"}))
+    assert delay == 60_000
+
+
+def test_retry_after_clamped_to_cap() -> None:
+    """病态大值（网关配错 Retry-After: 3600）被 clamp 到上限，不挂死 run。"""
+    mw = _middleware()
+    delay = mw._build_retry_delay_ms(None, _RetryAfterError({"Retry-After": "3600"}))
+    assert delay == mw.retry_after_cap_ms
+    # 自定义上限生效
+    mw.retry_after_cap_ms = 30_000
+    assert mw._build_retry_delay_ms(None, _RetryAfterError({"retry-after-ms": "120000"})) == 30_000
+
+
+def test_retry_after_absent_falls_back_to_backoff() -> None:
+    """无 Retry-After：走自身指数退避（cap 8s），不受 clamp 影响。"""
+    mw = _middleware()
+    delay = mw._build_retry_delay_ms(None, _RetryAfterError({}))
+    assert 0 < delay <= mw.retry_cap_delay_ms
