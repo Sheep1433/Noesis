@@ -12,7 +12,6 @@ import { NCollapse, NCollapseItem } from 'naive-ui'
 import { createAgentRun, deleteSession, ensureSession, getSession, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
-import BgTaskPanel from '@/components/BgTaskPanel/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
@@ -23,6 +22,7 @@ import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
+import TaskCatalogPanel from '@/components/TaskCatalogPanel/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
@@ -49,8 +49,8 @@ import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteT
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
-import { activateBgTaskSession, createBgTaskEventSource } from '@/views/chat/bgTaskStream'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
+import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
 import {
   pendingHitlForSession,
   setPendingHitlForSession,
@@ -247,8 +247,8 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
       messagesReady.catch(() => {}).finally(() => sessionHistoryReady.delete(sessionId)),
     )
     const contextReady = loadSessionContext(sessionId)
-    openBgTaskStream(sessionId)
-    void refreshBgTasks(sessionId)
+    openCatalogStream(sessionId)
+    void refreshCatalogTasks(sessionId)
     reloadSessionFilesPanel()
     // active-run 请求与历史、上下文并行；snapshot 等历史落入 store 后再 replace，
     // 防止慢历史响应覆盖新 Tab 已收到的实时内容。
@@ -277,7 +277,7 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
 function resetComposingSurface() {
   sseStream.detachSubscription()
   sseStream.stopSessionSignals()
-  stopBgTaskPolling()
+  stopCatalogStream()
   stopProcessingClock()
   sessionContext.value = null
   sessionContextSessionId.value = ''
@@ -940,52 +940,52 @@ function clearSessionConfig() {
 }
 
 // ---- 后台子 Agent：会话级 SSE 事件流 + 审批 ----
-const bgTasks = ref<TaskCatalogEntry[]>([])
-const bgPanelOpen = ref(false)
+const catalogTasks = ref<TaskCatalogEntry[]>([])
+const taskPanelOpen = ref(false)
 const bgFocusTaskId = ref<string | null>(null)
-watch(bgPanelOpen, (open) => {
+watch(taskPanelOpen, (open) => {
   if (!open) {
     bgFocusTaskId.value = null
   }
 })
-const bgActiveCount = computed(() =>
-  bgTasks.value.filter((t) => t.status === 'running' || t.status === 'awaiting_approval').length,
+const activeTaskCount = computed(() =>
+  catalogTasks.value.filter((t) => t.status === 'running' || t.status === 'awaiting_approval').length,
 )
-const bgPendingCount = computed(() =>
-  bgTasks.value.filter((t) => t.status === 'awaiting_approval').length,
+const pendingTaskCount = computed(() =>
+  catalogTasks.value.filter((t) => t.status === 'awaiting_approval').length,
 )
-let bgTaskSource: EventSource | null = null
+let catalogSource: EventSource | null = null
 
-function applyBgTask(task: TaskCatalogEntry): void {
-  const idx = bgTasks.value.findIndex((t) => t.task_id === task.task_id)
+function applyCatalogTask(task: TaskCatalogEntry): void {
+  const idx = catalogTasks.value.findIndex((t) => t.task_id === task.task_id)
   if (idx >= 0) {
-    bgTasks.value.splice(idx, 1, { ...bgTasks.value[idx], ...task })
+    catalogTasks.value.splice(idx, 1, { ...catalogTasks.value[idx], ...task })
   } else {
-    bgTasks.value.push(task)
+    catalogTasks.value.push(task)
   }
-  bgTasks.value.sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0))
+  catalogTasks.value.sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0))
 }
 
 function backgroundTaskForToolPart(part: { name: string, output: string, child_session_id?: string, tool_call_id?: string }): TaskCatalogEntry | undefined {
-  return bgTasks.value.find((task) =>
+  return catalogTasks.value.find((task) =>
     (part.child_session_id && task.child_session_id === part.child_session_id)
     || (part.tool_call_id && task.created_by_tool_call_id === part.tool_call_id),
   )
 }
 
 /** 打开（或重开）会话级后台任务事件流：连接即收存量快照，此后实时推送 */
-function openBgTaskStream(sessionId: string): void {
-  bgTaskSource?.close()
-  bgTaskSource = null
+function openCatalogStream(sessionId: string): void {
+  catalogSource?.close()
+  catalogSource = null
   if (!sessionId || sessionId !== currentIndex.value) {
     return
   }
-  const source = createBgTaskEventSource(sessionId, {
-    onTask: applyBgTask,
+  const source = createChildCatalogEventSource(sessionId, {
+    onTask: applyCatalogTask,
     onContinuation: (payload) => {
       if (payload?.run_id) {
         // 用闭包 sessionId 而非 currentIndex：事件可能在切会话的瞬间到达
-        insertBgNoticeItem(
+        insertContinuationNotice(
           sessionId,
           String(payload.notice || ''),
           String(payload.run_id),
@@ -999,11 +999,11 @@ function openBgTaskStream(sessionId: string): void {
     onParseError: (err) => console.warn('[bg-task] parse event failed', err),
   })
   // onerror 不手动重连：EventSource 内建自动重连，重连由服务端快照对齐
-  bgTaskSource = source
+  catalogSource = source
 }
 
 /** 续跑通知条：插入会话时间线的系统状态条（run_id 去重） */
-function insertBgNoticeItem(sessionId: string, notice: string, runId: string, childSessionIds: string[] = []): void {
+function insertContinuationNotice(sessionId: string, notice: string, runId: string, childSessionIds: string[] = []): void {
   const uuid = `bgc-notice-${runId}`
   if (!notice.trim() || conversationItems.value.some((item) => item.uuid === uuid)) {
     return
@@ -1025,14 +1025,14 @@ function insertBgNoticeItem(sessionId: string, notice: string, runId: string, ch
 
 function openBackgroundNotice(childSessionIds: string[] = []): void {
   bgFocusTaskId.value = childSessionIds[0] || null
-  bgPanelOpen.value = true
+  taskPanelOpen.value = true
 }
 
-function bgTaskNoticeMeta(notice: string): { title: string, detail: string, tone: 'success' | 'warning' | 'error' | 'info' } {
+function taskNoticeMeta(notice: string): { title: string, detail: string, tone: 'success' | 'warning' | 'error' | 'info' } {
   const labelMatch = notice.match(/子 Agent「([^」]+)」/)
   const label = labelMatch?.[1]?.trim()
   const task = label
-    ? bgTasks.value.find((item) => item.description.trim() === label)
+    ? catalogTasks.value.find((item) => item.description.trim() === label)
     : undefined
   const description = task?.description?.trim() || label
   const agentLabel = description
@@ -1077,10 +1077,10 @@ function bgTaskNoticeMeta(notice: string): { title: string, detail: string, tone
   }
 }
 
-function stopBgTaskPolling(): void {
-  bgTaskSource?.close()
-  bgTaskSource = null
-  bgTasks.value = []
+function stopCatalogStream(): void {
+  catalogSource?.close()
+  catalogSource = null
+  catalogTasks.value = []
 }
 
 // 用户级信令流：会话列表 run_status 实时刷新（一条连接覆盖全部会话；
@@ -1139,19 +1139,19 @@ function stopUserSignalStream(): void {
 }
 
 /** 操作后主动拉一次全量（审批/取消/发消息后对齐，事件流兜底） */
-async function refreshBgTasks(sessionId: string): Promise<void> {
+async function refreshCatalogTasks(sessionId: string): Promise<void> {
   if (!sessionId || sessionId !== currentIndex.value) {
     return
   }
   try {
     const res = await listSessionTaskCatalog(sessionId)
-    bgTasks.value = res.tasks ?? []
+    catalogTasks.value = res.tasks ?? []
   } catch {
     // 网络异常时事件流仍在，忽略
   }
 }
 
-async function onBgTaskDecide(payload: { task: TaskCatalogEntry, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
+async function onTaskDecide(payload: { task: TaskCatalogEntry, decisions: Array<{ type: 'approve' | 'reject', message?: string }> }): Promise<void> {
   const { task, decisions } = payload
   try {
     if (!task.run_id) {
@@ -1168,10 +1168,10 @@ async function onBgTaskDecide(payload: { task: TaskCatalogEntry, decisions: Arra
     console.warn('[bg-task] submit decisions failed', err)
     window.$message?.error('审批提交失败')
   }
-  await refreshBgTasks(task.session_id)
+  await refreshCatalogTasks(task.session_id)
 }
 
-async function onBgTaskCancel(task: TaskCatalogEntry): Promise<void> {
+async function onTaskCancel(task: TaskCatalogEntry): Promise<void> {
   try {
     if (task.kind === 'shell') {
       await stopShellTask(task.session_id, task.task_id)
@@ -1182,7 +1182,7 @@ async function onBgTaskCancel(task: TaskCatalogEntry): Promise<void> {
   } catch (err) {
     console.warn('[bg-task] cancel failed', err)
   }
-  await refreshBgTasks(task.session_id)
+  await refreshCatalogTasks(task.session_id)
 }
 
 async function loadSessionContext(sessionId: string) {
@@ -1944,14 +1944,14 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   try {
     await ensureSession(sessionIdForSend, { extra: buildSessionConfigExtra() })
     sessionMaterialized.value = true
-    activateBgTaskSession({
+    activateChildCatalogSession({
       sessionId: sessionIdForSend,
       currentSessionId: currentIndex.value,
-      hasStream: bgTaskSource !== null,
+      hasStream: catalogSource !== null,
       setCurrentSession: (sessionId) => {
         currentIndex.value = sessionId
       },
-      openStream: openBgTaskStream,
+      openStream: openCatalogStream,
     })
     // 会话已物化：开启信令流，让其它窗口能发现本窗口发起的 run（已开启则 no-op）
     sseStream.watchSessionSignals(sessionIdForSend)
@@ -2683,7 +2683,7 @@ onMounted(() => {
 
 // 在组件卸载前移除事件监听
 onBeforeUnmount(() => {
-  stopBgTaskPolling()
+  stopCatalogStream()
   stopUserSignalStream()
   stopProcessingClock()
   // 停止信令流：SPA 内路由切换不会断开 fetch 连接，必须显式中止
@@ -2924,14 +2924,14 @@ function onComposerPaste(e: ClipboardEvent) {
                       <div class="chat-system-notice" role="status">
                         <span
                           class="chat-system-notice__icon"
-                          :class="`chat-system-notice__icon--${bgTaskNoticeMeta(item.question || '').tone}`"
+                          :class="`chat-system-notice__icon--${taskNoticeMeta(item.question || '').tone}`"
                           aria-hidden="true"
                         >
                           <span class="i-carbon:notification-filled"></span>
                         </span>
                         <span class="chat-system-notice__copy">
-                          <strong>{{ bgTaskNoticeMeta(item.question || '').title }}</strong>
-                          <span>{{ bgTaskNoticeMeta(item.question || '').detail }}</span>
+                          <strong>{{ taskNoticeMeta(item.question || '').title }}</strong>
+                          <span>{{ taskNoticeMeta(item.question || '').detail }}</span>
                         </span>
                         <button
                           type="button"
@@ -3394,10 +3394,10 @@ function onComposerPaste(e: ClipboardEvent) {
                           <n-tooltip v-if="qa_type === 'SUPER_AGENT_QA'" placement="top">
                             <template #trigger>
                               <n-badge
-                                :value="bgActiveCount"
+                                :value="activeTaskCount"
                                 :max="9"
-                                :type="bgPendingCount > 0 ? 'error' : 'info'"
-                                :show="bgActiveCount > 0"
+                                :type="pendingTaskCount > 0 ? 'error' : 'info'"
+                                :show="activeTaskCount > 0"
                               >
                                 <n-button
                                   quaternary
@@ -3405,7 +3405,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                   size="small"
                                   class="shrink-0"
                                   :focusable="false"
-                                  @click="bgPanelOpen = true"
+                                  @click="taskPanelOpen = true"
                                 >
                                   <template #icon>
                                     <n-icon size="16">
@@ -3649,13 +3649,13 @@ function onComposerPaste(e: ClipboardEvent) {
     </n-modal>
 
     <!-- 后台子任务抽屉（SUPER_AGENT_QA） -->
-    <BgTaskPanel
-      v-model:show="bgPanelOpen"
-      :tasks="bgTasks"
+    <TaskCatalogPanel
+      v-model:show="taskPanelOpen"
+      :tasks="catalogTasks"
       :focus-task-id="bgFocusTaskId"
-      @decide="onBgTaskDecide"
-      @cancel="onBgTaskCancel"
-      @changed="refreshBgTasks(currentIndex)"
+      @decide="onTaskDecide"
+      @cancel="onTaskCancel"
+      @changed="refreshCatalogTasks(currentIndex)"
     />
   </div>
 </template>

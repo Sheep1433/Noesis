@@ -5,7 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/index.vue'
-import { activateBgTaskSession, createBgTaskEventSource } from '@/views/chat/bgTaskStream'
+import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
 
 const api = vi.hoisted(() => ({
   getSessionMessages: vi.fn(),
@@ -98,7 +98,7 @@ describe('子 Agent 标准会话展示', () => {
     }))
     let currentSessionId: string | null = null
 
-    activateBgTaskSession({
+    activateChildCatalogSession({
       sessionId: 'parent-session-1',
       currentSessionId,
       hasStream: false,
@@ -106,7 +106,7 @@ describe('子 Agent 标准会话展示', () => {
         currentSessionId = sessionId
       },
       openStream: (sessionId) => {
-        createBgTaskEventSource(sessionId, { onTask, onContinuation: vi.fn() }, factory)
+        createChildCatalogEventSource(sessionId, { onTask, onContinuation: vi.fn() }, factory)
       },
     })
     listeners.get('bg-task')?.({ data: JSON.stringify({ event: 'started', task: runningTask }) } as MessageEvent)

@@ -1,23 +1,23 @@
 import type { TaskCatalogEntry } from '@/api/chat'
 
-interface BgTaskStreamCallbacks {
+interface ChildCatalogStreamCallbacks {
   onTask: (task: TaskCatalogEntry) => void
   onContinuation: (payload: Record<string, unknown>) => void
   onParseError?: (error: unknown) => void
 }
 
-export interface BgTaskEventSource {
+export interface ChildCatalogEventSource {
   addEventListener: (type: string, listener: (event: MessageEvent) => void) => void
   close: () => void
 }
 
-type EventSourceFactory = (url: string) => BgTaskEventSource
+type EventSourceFactory = (url: string) => ChildCatalogEventSource
 
-export function createBgTaskEventSource(
+export function createChildCatalogEventSource(
   sessionId: string,
-  callbacks: BgTaskStreamCallbacks,
+  callbacks: ChildCatalogStreamCallbacks,
   factory: EventSourceFactory = (url) => new EventSource(url),
-): BgTaskEventSource {
+): ChildCatalogEventSource {
   const source = factory(
     `${location.origin}/api/chat/sessions/${encodeURIComponent(sessionId)}/children/stream`,
   )
@@ -65,7 +65,7 @@ export function createBgTaskEventSource(
   return source
 }
 
-interface ActivateBgTaskSessionOptions {
+interface ActivateChildCatalogOptions {
   sessionId: string
   currentSessionId: string | null
   hasStream: boolean
@@ -74,7 +74,7 @@ interface ActivateBgTaskSessionOptions {
 }
 
 /** 首次物化或连接缺失时激活会话后台任务流，已有连接不重复重开。 */
-export function activateBgTaskSession(options: ActivateBgTaskSessionOptions): void {
+export function activateChildCatalogSession(options: ActivateChildCatalogOptions): void {
   const shouldOpen = options.currentSessionId !== options.sessionId || !options.hasStream
   options.setCurrentSession(options.sessionId)
   if (shouldOpen) {
