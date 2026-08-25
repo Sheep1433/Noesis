@@ -631,6 +631,9 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       // 同步 sessionStorage 作为当前 Tab hint
       sessionStorage.setItem(`noesis:active-run:${sessionId}`, runId)
     } else {
+      // 服务端确认无活跃 run：清除历史加载写入的 hint，避免残留 hint
+      // 让已中断的未完成轮被误判为运行中
+      sessionStorage.removeItem(`noesis:active-run:${sessionId}`)
       isLoading.value = false
       abortController = null
       return

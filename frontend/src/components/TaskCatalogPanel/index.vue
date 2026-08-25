@@ -68,6 +68,8 @@ let clockTimer: ReturnType<typeof setInterval> | null = null
 function refreshClockTimer(): void {
   const need = show.value && running.value.length > 0
   if (need && clockTimer === null) {
+    // 启动即刷新：抽屉关闭期间时钟冻结，重开第一帧不能用旧值
+    clockNow.value = Date.now()
     clockTimer = setInterval(() => {
       clockNow.value = Date.now()
     }, 1000)
@@ -78,7 +80,14 @@ function refreshClockTimer(): void {
 }
 
 watch([show, running], refreshClockTimer, { immediate: true })
-onBeforeUnmount(refreshClockTimer)
+onBeforeUnmount(() => {
+  // 卸载无条件清理：refreshClockTimer 在抽屉开着且有活跃任务时
+  // 会判定 need=true 而不清 interval
+  if (clockTimer !== null) {
+    clearInterval(clockTimer)
+    clockTimer = null
+  }
+})
 
 function timestampMs(value: number | null | undefined): number | undefined {
   if (value == null || !Number.isFinite(value)) {

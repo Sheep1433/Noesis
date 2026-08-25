@@ -1309,7 +1309,12 @@ function runElapsedText(item: { created_at?: number, completed_at?: number, run_
   if (pendingHitl.value) {
     return '等待审批'
   }
-  if (sseIsLoading.value) {
+  // 流已连接，或历史加载写入的 active-run hint（刷新恢复活跃 run 时
+  // attach 前的窗口）——都算运行中，避免闪「已中断」
+  const activeRunHint = currentIndex.value
+    ? sessionStorage.getItem(`noesis:active-run:${currentIndex.value}`)
+    : null
+  if (sseIsLoading.value || activeRunHint) {
     return `耗时 ${formatDurationMs(Math.max(0, processingNow.value - started))}`
   }
   return '已中断'
