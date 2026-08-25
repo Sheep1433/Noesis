@@ -136,3 +136,55 @@ async def test_hitl_pending_emits_user_signal() -> None:
     assert signal["type"] == "run-hitl-pending"
     assert signal["session_id"] == "session-1"
     assert signal["status"] == "hitl_pending"
+
+
+@pytest.mark.asyncio
+async def test_terminal_signal_via_production_apply_event_path() -> None:
+    """生产终态路径：apply_event + terminal_handler 落库回调（不经 transition()）。
+
+    transition() 唯一生产调用方是测试用例续跑的 _persist_projection；主对话
+    路径的终态经 _commit_terminal_candidate 直接赋 handle.status——回归保证
+    该路径同样发布 run-terminal（否则会话列表徽章完成不清）。
+    """
+    from noesis.chat.runs.manager import TerminalCommitResult
+    from noesis.chat.runs.models import RunStatus as _RS
+    from noesis.chat.runs.projection import RunProjection
+    from noesis.chat.delivery.events import RunCompleted
+
+    async def producer(publish):
+        await publish({"type": "text-delta", "delta": "好"})
+
+    manager = RunManager()
+    queue = user_signal_bus.subscribe("user-1")
+    assert queue is not None
+
+    projection = RunProjection(
+        run_id="run-1",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="message-1",
+        qa_type="COMMON_QA",
+    )
+
+    async def terminal_handler(candidate):
+        return TerminalCommitResult("committed")
+
+    await manager.start(
+        run_id="run-1",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="message-1",
+        snapshot_provider=_snapshot(),
+        producer=producer,
+        state=projection,
+        terminal_handler=terminal_handler,
+    )
+    started = await asyncio.wait_for(queue.get(), timeout=5)
+    assert started["type"] == "run-started"
+
+    # 生产等价：apply_event 投递终态事件 → terminal candidate → handler 提交
+    await manager.apply_event("run-1", RunCompleted(finish_reason="stop"))
+    terminal = await asyncio.wait_for(queue.get(), timeout=5)
+    assert terminal["type"] == "run-terminal"
+    assert terminal["session_id"] == "session-1"
+    assert terminal["status"] == _RS.COMPLETED.value

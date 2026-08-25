@@ -936,8 +936,14 @@ class RunManager:
                     applied = projection.apply(event, attempt_id=attempt_id)
                     if not applied:
                         return None
+                    prev_status = handle.status
                     handle.status = projection.status
                     handle.attempt_id = projection.attempt_id
+                    # 生产路径的状态迁移不经 transition()（其唯一调用方是
+                    # 测试用例续跑的 _persist_projection）——hitl_pending 等
+                    # 迁移在此发布信令，transition() 的发布保留不冲突
+                    if prev_status != projection.status:
+                        self._publish_session_signal(handle, projection.status)
             if terminal_candidate is not None:
                 envelope = terminal_candidate.envelope
             else:
@@ -1043,6 +1049,7 @@ class RunManager:
                 self._fanout(handle, candidate.envelope)
                 handle.pending_terminal = None
                 self._mark_terminal_locked(handle, candidate.status)
+                self._publish_session_signal(handle, candidate.status)
             elif result.outcome == "already_finalized" and result.snapshot is not None:
                 self._metrics["terminal_cas_loser"] += 1
                 handle.authoritative_snapshot = copy.deepcopy(result.snapshot)
@@ -1058,6 +1065,7 @@ class RunManager:
                 )
                 self._fanout(handle, replacement)
                 self._mark_terminal_locked(handle, result.snapshot.status)
+                self._publish_session_signal(handle, result.snapshot.status)
         return result
 
     async def publish_attempt(
