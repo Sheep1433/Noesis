@@ -1474,6 +1474,25 @@ const sseStream = useSSEStream({
           && !item.message_id,
       )
     }
+    if (lastIdx < 0) {
+      // 本地没有该 run 的 assistant 项：run 创建于历史加载之后（后台任务
+      // 自动续跑 / 其它窗口发起）。不创建占位项的话，message-start 会把
+      // 上一条已完成消息的 message_id 覆盖掉，正文 delta 全部流进旧气泡
+      conversationItems.value.push({
+        uuid: `assistant-${snapshot.assistant_message_id}`,
+        chat_id: snapshot.session_id,
+        qa_type: qa_type.value,
+        question: '',
+        content: '',
+        file_key: [],
+        role: 'assistant',
+        messageContent: emptyMessageContent(),
+        reader: null,
+        message_id: snapshot.assistant_message_id,
+        created_at: Date.now(),
+      })
+      lastIdx = conversationItems.value.length - 1
+    }
     patchAssistantPartsAt(lastIdx, () => normalized.parts)
     if (lastIdx >= 0) {
       conversationItems.value[lastIdx] = {
