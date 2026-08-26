@@ -291,15 +291,11 @@ async def test_terminal_projection_atomically_finalizes_run_and_assistant(
 
     repository = MagicMock()
     repository.finalize = AsyncMock(return_value=True)
-    capture = AsyncMock(return_value=True)
     monkeypatch.setattr(
         "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
         DbContext,
     )
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
-    monkeypatch.setattr(
-        run_service.MemoryCaptureService, "enqueue_for_terminal", capture
-    )
     result = await RunService._persist_terminal_candidate(candidate)
 
     kwargs = repository.finalize.await_args.kwargs
@@ -307,17 +303,12 @@ async def test_terminal_projection_atomically_finalizes_run_and_assistant(
     assert kwargs["last_sequence"] == 7
     assert kwargs["assistant_status"] == "completed"
     assert kwargs["content"] == {"parts": [{"type": "text", "content": "完成"}]}
-    capture.assert_awaited_once_with(
-        db,
-        run_id="run-terminal",
-        content={"parts": [{"type": "text", "content": "完成"}]},
-    )
     db.commit.assert_awaited_once()
     assert result.outcome == "committed"
 
 
 @pytest.mark.asyncio
-async def test_alternate_terminal_projection_also_enqueues_memory_capture(
+async def test_alternate_terminal_projection_finalizes_run(
     monkeypatch,
 ) -> None:
     from types import SimpleNamespace
@@ -344,16 +335,12 @@ async def test_alternate_terminal_projection_also_enqueues_memory_capture(
 
     repository = MagicMock()
     repository.finalize = AsyncMock(return_value=True)
-    capture = AsyncMock(return_value=True)
     transition = AsyncMock()
     monkeypatch.setattr(
         "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
         DbContext,
     )
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
-    monkeypatch.setattr(
-        run_service.MemoryCaptureService, "enqueue_for_terminal", capture
-    )
     monkeypatch.setattr(
         run_service.run_manager,
         "get",
@@ -363,11 +350,6 @@ async def test_alternate_terminal_projection_also_enqueues_memory_capture(
 
     await RunService._persist_projection("run-resume-terminal", projection)
 
-    capture.assert_awaited_once_with(
-        db,
-        run_id="run-resume-terminal",
-        content={"parts": [{"type": "text", "content": "完成恢复"}]},
-    )
     db.commit.assert_awaited_once()
     transition.assert_awaited_once_with("run-resume-terminal", RunStatus.COMPLETED)
 
@@ -929,16 +911,12 @@ async def test_start_failure_cleanup_finalizes_queued_run(monkeypatch) -> None:
 
     repository = MagicMock()
     repository.finalize = AsyncMock(return_value=True)
-    capture = AsyncMock(return_value=False)
     monkeypatch.setattr(run_service.run_manager, "get", MagicMock(side_effect=KeyError))
     monkeypatch.setattr(
         "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
         DbContext,
     )
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repository)
-    monkeypatch.setattr(
-        run_service.MemoryCaptureService, "enqueue_for_terminal", capture
-    )
 
     await RunService._finalize_start_failure(run)
 
@@ -946,7 +924,6 @@ async def test_start_failure_cleanup_finalizes_queued_run(monkeypatch) -> None:
     assert kwargs["target"] == RunStatus.ERROR
     assert kwargs["assistant_status"] == "error"
     assert kwargs["error_code"] == "RUN_START_FAILED"
-    capture.assert_awaited_once_with(db, run_id="run-start-fail", content={"parts": []})
     db.commit.assert_awaited_once()
 
 

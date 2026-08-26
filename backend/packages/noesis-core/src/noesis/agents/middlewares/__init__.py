@@ -32,7 +32,6 @@ from noesis.agents.middlewares.read_before_write_middleware import (
     WriteRejectedError,
 )
 from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMemoryMiddleware
-from noesis.agents.middlewares.memory_bulletin_middleware import MemoryBulletinMiddleware
 from noesis.agents.middlewares.refreshing_skills_middleware import (
     RefreshingSkillsMiddleware,
     RefreshingSkillsState,
@@ -71,7 +70,6 @@ __all__ = [
     "LLMErrorHandlingMiddleware",
     "ReadBeforeWriteMiddleware",
     "RefreshingMemoryMiddleware",
-    "MemoryBulletinMiddleware",
     "RefreshingSkillsMiddleware",
     "RefreshingSkillsState",
     "ReplacementRecord",

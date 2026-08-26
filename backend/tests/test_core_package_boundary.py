@@ -85,7 +85,6 @@ def test_repository_package_preserves_public_exports() -> None:
     expected = {
         "AgentRunRepository",
         "KbCollectionConfigRepository",
-        "MemoryPreferenceRepository",
         "SettingsRepository",
         "SqlAlchemySessionRepository",
         "SqlAlchemyUserRepository",

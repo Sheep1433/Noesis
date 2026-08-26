@@ -12,7 +12,6 @@ from noesis.runtime.logging import logger
 from noesis.chat.runs import RunStatus
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.repositories.agent_run_repository import AgentRunRepository
-from noesis.services.memory.capture import MemoryCaptureService
 from noesis.storage.postgres.models.chat import TAgentDelivery, TAgentRun, TChatMessage
 
 
@@ -52,9 +51,6 @@ class RunRecoveryService:
                 snapshot=content,
             )
             if finalized:
-                await MemoryCaptureService.enqueue_for_terminal(
-                    db, run_id=run.id, content=content
-                )
                 await db.execute(
                     TAgentDelivery.__table__.update()
                     .where(

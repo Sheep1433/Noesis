@@ -405,33 +405,6 @@ class KbYamlSection(BaseModel):
     parser: KbParserYamlSection = Field(default_factory=KbParserYamlSection)
 
 
-class MachineMemoryYamlSection(BaseModel):
-    poll_seconds: float = Field(default=5.0, gt=0)
-    claim_batch_size: int = Field(default=4, ge=1, le=32)
-    lease_seconds: float = Field(default=180.0, gt=0)
-    stage_timeout_seconds: float = Field(default=600.0, gt=0)
-    job_max_attempts: int = Field(default=8, ge=3, le=30)
-    retry_seconds: float = Field(default=30.0, gt=0)
-    chunk_max_tokens: int = Field(default=1600, ge=1200, le=8000)
-    chunk_concurrency: int = Field(default=4, ge=1, le=16)
-    chunk_attempts: int = Field(default=2, ge=1, le=5)
-    chunk_retry_delay_seconds: float = Field(default=1.0, ge=0, le=30)
-    extraction_model: str = ""
-    collection_name: str = "noesis_memory"
-    embedding_template_version: str = "memory-item-v1"
-    retrieval_top_k: int = Field(default=3, ge=1, le=10)
-    retrieval_overfetch: int = Field(default=3, ge=1, le=10)
-    retrieval_min_score: float = Field(default=0.45, ge=0, le=1)
-    bulletin_max_tokens: int = Field(default=500, ge=64, le=1000)
-    bulletin_timeout_seconds: float = Field(default=0.4, gt=0, le=2)
-    deep_query_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
-    deep_query_max_steps: int = Field(default=6, ge=1, le=10)
-    deep_query_max_spans: int = Field(default=12, ge=1, le=30)
-    deep_query_concurrency: int = Field(default=4, ge=1, le=32)
-    snapshot_retention_days: int = Field(default=30, ge=1)
-    job_retention_days: int = Field(default=30, ge=1)
-
-
 class AppYamlConfig(BaseModel):
     config_version: int = 1
     app: AppYamlSection = Field(default_factory=AppYamlSection)
@@ -471,9 +444,6 @@ class AppYamlConfig(BaseModel):
         default_factory=SettingsFeaturesYamlSection
     )
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
-    machine_memory: MachineMemoryYamlSection = Field(
-        default_factory=MachineMemoryYamlSection
-    )
 
 
 @lru_cache

@@ -195,33 +195,6 @@ qdrant:
   test_case_upload_collection: ""
   case_rag_historical_requirements_enabled: false
 
-# 机器经验后台预算；功能启停只由每个用户的单一开关控制。
-machine_memory:
-  poll_seconds: 5
-  claim_batch_size: 4
-  lease_seconds: 180
-  stage_timeout_seconds: 600
-  job_max_attempts: 8
-  retry_seconds: 30
-  chunk_max_tokens: 1600
-  chunk_concurrency: 4
-  chunk_attempts: 2
-  chunk_retry_delay_seconds: 1
-  extraction_model: ""
-  collection_name: noesis_memory
-  embedding_template_version: memory-item-v1
-  retrieval_top_k: 3
-  retrieval_overfetch: 3
-  retrieval_min_score: 0.45
-  bulletin_max_tokens: 500
-  bulletin_timeout_seconds: 0.4
-  deep_query_timeout_seconds: 5
-  deep_query_max_steps: 6
-  deep_query_max_spans: 12
-  deep_query_concurrency: 4
-  snapshot_retention_days: 30
-  job_retention_days: 30
-
 langfuse:
   tracing_enabled: false
   base_url: http://127.0.0.1:3000

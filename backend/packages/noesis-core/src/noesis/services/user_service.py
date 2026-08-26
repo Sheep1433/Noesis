@@ -8,8 +8,6 @@ from noesis.repositories.auth_repository import SqlAlchemyUserRepository
 from noesis.schemas.login_vo import CurrentUser
 from noesis.runtime.logging import logger
 from noesis.auth.password import PwdUtil
-from noesis.services.memory.source import MemorySourceService
-from noesis.repositories.machine_memory_repository import MachineMemoryRepository
 
 
 class UserService:
@@ -33,8 +31,6 @@ class UserService:
 
     @classmethod
     async def delete_user(cls, user_id: str, db: AsyncSession) -> bool:
-        await MemorySourceService.delete_derived_user_data(user_id=str(user_id))
-        await MachineMemoryRepository(db).delete_user_data(str(user_id))
         deleted = await SqlAlchemyUserRepository(db).delete(str(user_id))
         await db.commit()
         return deleted
