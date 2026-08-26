@@ -41,7 +41,7 @@
 
 - [x] 6.1 后端全量回归 + 前端 lint/build；确认无新增失败（基线 11 个既有失败除外）
 - [x] 6.2 手动验收脚本：acceptance.md（8 节：委派/子会话/followup/通知/审批/前台等待/后台命令/回归基线）
-- [ ] 6.3 归档准备：spec delta 并入 `agent-background-tasks` / `agent-hitl` / `agent-profiles` 主规格
+- [x] 6.3 归档准备：spec delta 并入 `agent-background-tasks` / `agent-hitl` / `agent-profiles` 主规格
 
 ## 7. 设计修订：单工具同异步 / followup-turn / 子会话查看
 
