@@ -1,5 +1,45 @@
 # 知识卡片（开发笔记）
 
+## 2026-08-25 — 记忆注入通道与 prompt cache 代价模型（spec 决策）
+
+- **问题**：每 Run 注入新记忆是否会显著降低 prompt cache 命中。
+- **机制**：cache 是前缀匹配，判定只看「注入后是否再变」与「位置」。三种放置方式：追加持久化（零损失）、临时末尾插入（损失上一轮 token，有界不随历史增长）、system 前缀区每轮变化（全历史重算，唯一红线）。
+- **Noesis 现状**：`late_context.insert_late_context` 是临时末尾插入，槽位里 `current_time` 本就每 Run 变——记忆放同一槽位零边际成本；Run 内部首调用付一次代价、后续全命中。
+- **落进 spec**：「注入通道与 prompt cache」小节；硬约束一条——**每 Run 变化内容 SHALL NOT 进稳定前缀区**；「持久 reminder 消息」降级为后续优化项；注入 = 每 Run 选条（稳定前缀 USER.md+索引 + 廉价模型选条 + alreadySurfaced 去重 + stale 警告）。
+- **同轮校正**：「蒸馏」→「记忆抽取」（对齐 extractMemories）；撤回索引分层 → 单层索引（一行一条）+ 行数/字节双保险预算，超预算走整理压缩——对齐 Claude Code MEMORY.md 设计（它用压缩而非分层解决膨胀）。
+- **可迁移**：分析 cache 影响区分三个变量——注入通道、变化频率、位置；方案引用业界设计前先读原始实现。
+
+## 2026-08-25 — run-terminal 信令在生产路径从未生效
+
+- **症状**：run 完成后前端徽章永远「运行中」，监听连接只收到 keepalive，`run-terminal` 帧不发。
+- **根因**：信令只在 `transition()` 发布，但生产代码只有测试用例续跑路径调用它；主对话终态走 `apply_event → _commit_terminal_candidate` 直接赋值 `handle.status` 不发信令。hitl_pending 迁移同样只走直接赋值——会话级跨窗口信令两类在生产均从未生效。此前测试直接调 `transition()`，没走生产路径所以假绿。
+- **修复**（`b643022`）：在真实状态赋值点补发信令三处（apply_event 普通分支状态变化时 / `_commit_terminal_candidate` 提交成功分支 / hitl_pending），补同状态幂等回归（测试用例续跑不双发）。
+- **可迁移**：事件/信令等副作用挂在内部方法上时，测试必须覆盖生产调用链，否则「测试全绿」可能只是副作用和测试一起绕开了真实路径。
+
+## 2026-08-25 — HTML 沙箱渲染：锚点导航白屏 + Vue SFC 字面 script 坑
+
+- **症状**：iframe `sandbox="allow-scripts"` 渲染生成的 HTML 报告，点击页内锚点（如「今日总结」）白屏。
+- **根因**：无 `allow-same-origin` 时点击 `#锚点` 被浏览器判为导航（目标 `about:srcdoc#summary`），opaque origin 导航被拦截 → iframe 空白。
+- **解法**（`6749b492`）：srcdoc 注入约 10 行垫片脚本，捕获 `a[href^="#"]` 点击 → `preventDefault()` → `scrollIntoView({behavior:'smooth'})`。
+- **附带坑**：Vue SFC 解析器按原文扫描标签块，script 模板字符串和注释里出现字面 `<script>`/`</script>` 都会提前闭合块导致编译失败，用字符串拼接规避。
+
+## 2026-08-25 — 记忆 scope 修正：沙箱工作区下 project_key 恒为 global
+
+- **问题/症状**：验证 SuperAgent 记忆功能时发现「项目级记忆」不存在——`resolve_project_key` 恒返回 `global`，scope 恒为 `profile:SUPER_AGENT:global`。
+- **根因**：design.md Decision 13 按「Agent 跑在 Git 仓库」假设写了三条 Git-based project key 规则，但 SuperAgent 工作区是 `.noesis/users/{uid}/sessions/{sid}/workspace` **每会话一次性沙箱**（`agents/backends/factory.py:109`），里面永远没有 .git/origin → 规则与产品现实脱节，无 origin 分支还会生成指向临时目录 digest 的死胡同 scope。
+- **解法**（实现 B + A）：
+  - `services/memory/scope.py`：带 origin 的 Git 仓库 → origin digest（跨会话共享）；其余（含无 origin 沙箱仓库）→ `global`。
+  - 三处文档 + tasks 对齐新规则；补「无 origin 沙箱归 global」及跨会话死胡同回归用例。
+- **可迁移**：spec 的 scope/身份规则必须基于运行时**真实输入**推演（这里是每会话沙箱路径），不能只按理想部署形态写规则；给用户的操作剧本先对照代码核实关键假设再交付。
+- **验证**：`uv run pytest tests/ -q` 1194 passed；`openspec validate --strict` 通过。
+
+## 2026-08-25 — LLM 429 重试：遵循厂商 Retry-After 但设 cap
+
+- **问题/症状**：网关 429 返回 `retryAfterSeconds: 60` 时原实现直接 sleep 60s，单次失败即阻塞一分钟。
+- **解法**：`llm_error_handling_middleware.py` 新增类属性 `retry_after_cap_ms = 60_000`（与 `retry_base_delay_ms` 同级，均未走 config，保持一致）；`_build_retry_delay_ms` 对提取到的 retry_after 做 `min(retry_after, cap)`。
+- **边界**：仅 header 提取链路生效（网关同时设 header；body 未解析）；无 Retry-After 时照旧指数退避（cap 8s）不受影响。
+- **验证**：3 个新增测试（遵循 / 病态值 clamp / 无 header 回退），全量回归 1193 passed；commit `196faa9`。
+
 ## 2026-08-24 — Alembic 迁移漂移：迁移执行后修改其依赖代码导致缺表
 
 - **症状**：后台留存清理任务报 `relation "t_memory_query_trace" does not exist`，但 `alembic upgrade head` 显示全部迁移已执行。
