@@ -68,11 +68,21 @@
 > BgTask 产品路径，shell job 保留独立执行器。
 
 - [x] 9.1 固化 `TChatSession.kind`、`created_by_run_id`、`created_by_tool_call_id`，根历史只返回 `kind=root` 会话
-- [ ] 9.2 创建 child session、首条 user message、首个 `TAgentRun` 必须在同一 launch use case 中完成；task id 与 child session id 分离
-- [ ] 9.3 child 每个 turn 使用标准 `TAgentRun`，移除 executor 的产品消息镜像和 `persisted_message_ids`
-- [ ] 9.4 新增通用 session event stream（序号、重放、断线恢复）；详情打开才订阅正文事件，关闭立即退订
-- [ ] 9.5 `start_task` / follow-up / approval 改走 child session + RunService，工具输出返回结构化 child reference
-- [ ] 9.6 父会话卡片使用 `created_by_tool_call_id` 一一关联，禁止从工具文本正则提取 task id；同名并行调用保持独立
-- [ ] 9.7 抽取共享 `ConversationView`，主 Agent 与 child drawer 共用 Markdown、工具块、审批、输入框和耗时统计
-- [ ] 9.8 删除 `/bg-tasks/{id}/messages*`、subagent BgTaskPanel/BackgroundSubagentCollapse 消息分支及 progress 全量重拉
+- [x] 9.2 创建 child session、首条 user message、首个 `TAgentRun` 必须在同一 launch use case 中完成；task id 与 child session id 分离
+- [x] 9.3 child 每个 turn 使用标准 `TAgentRun`，移除 executor 的产品消息镜像和 `persisted_message_ids`
+- [x] 9.4 新增通用 session event stream（序号、重放、断线恢复）；详情打开才订阅正文事件，关闭立即退订
+- [x] 9.5 `start_task` / follow-up / approval 改走 child session + RunService，工具输出返回结构化 child reference
+- [x] 9.6 父会话卡片使用 `created_by_tool_call_id` 一一关联，禁止从工具文本正则提取 task id；同名并行调用保持独立
+- [x] 9.7 抽取共享 `ConversationView`，主 Agent 与 child drawer 共用 Markdown、工具块、审批、输入框和耗时统计
+- [x] 9.8 删除 `/bg-tasks/{id}/messages*`、subagent BgTaskPanel/BackgroundSubagentCollapse 消息分支及 progress 全量重拉
 - [ ] 9.9 补充并行、同名、多轮、审批、断线恢复、关闭退订、父会话软删级联回归测试
+
+## 10. 过渡层清理（t_bg_task 退役）
+
+> 执行面收敛为纯进程内注册表（对齐 dsh ctx.jobs / deer-flow）；subagent 产品数据由标准
+> 会话/Run/消息表承载，shell job 不持久化。重启后运行中任务与 shell job 消失为接受行为。
+
+- [x] 10.1 删除 `t_bg_task` 表及三个相关 migration（无存量数据），修复迁移链
+- [x] 10.2 删除 `BgTaskStore` 协议、`configure_task_store` 注入、`bg_task_repository`、启动对账 `reconcile_interrupted_tasks`
+- [x] 10.3 删除 checkpoint thread 读路径（`read_messages` / `read_thread_messages` / `_message_to_view_item`，生产已无调用方）
+- [x] 10.4 `subagent-sessions.md` 删除清单回填为已删除状态

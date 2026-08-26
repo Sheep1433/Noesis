@@ -13,11 +13,10 @@ HITL 工具审批：子 Agent 带 checkpointer + interrupt_on 编译，遇审批
 转 ``awaiting_approval``，审批经 ``Command(resume={"decisions": [...]})``
 在同一 thread 续跑（与主 run HITL 的 resume 契约一致）。
 
-任务元数据持久化（对齐 deepagents 教程 ch6 async_tasks channel 的诉求）：
-状态转换点把快照 upsert 到注入的 task store（t_bg_task 表）；进程重启后
-running/awaiting_approval 由 startup 对账标记为 failed，终态任务经
-check/list 的 DB fallback 仍可查询。执行面本身（协程、future、followup
-队列）仍在进程内，不跨重启恢复。
+执行面（协程、future、followup 队列）完全在进程内：进程重启即丢，与
+dsh ``ctx.jobs`` / deer-flow 注册表同构。subagent 任务的产品数据由标准
+``TChatSession/TChatMessage/TAgentRun`` 持久化（见 SubagentSessionService）；
+shell job 是易逝的运行时作业，不做持久化。
 """
 
 from __future__ import annotations
@@ -224,50 +223,6 @@ class _TaskEntry:
 
 _TASKS: dict[str, _TaskEntry] = {}
 _TASKS_LOCK = threading.Lock()
-
-
-# ---------------------------------------------------------------------------
-# 任务元数据持久化（重启后 fallback 查询 + startup 对账）
-# ---------------------------------------------------------------------------
-
-
-class BgTaskStore(Protocol):
-    """快照存储面；具体实现见 repositories/bg_task_repository（t_bg_task 表）。"""
-
-    def save(self, snapshot: dict[str, Any]) -> None: ...
-
-    def get(self, task_id: str) -> Optional[dict[str, Any]]: ...
-
-    def get_by_child_session_id(self, session_id: str) -> Optional[dict[str, Any]]: ...
-
-    def list_for_session(self, session_id: str) -> list[dict[str, Any]]: ...
-
-
-_TASK_STORE: Optional[BgTaskStore] = None
-
-
-def configure_task_store(store: BgTaskStore | None) -> None:
-    """进程启动时注入（server/main.py lifespan）；测试可传内存实现。"""
-    global _TASK_STORE
-    _TASK_STORE = store
-
-
-def _persist(task: BackgroundTask) -> None:
-    """状态转换点落快照；持久化失败只记日志，绝不影响任务执行。"""
-    # 标准 child session 已由 TAgentRun/TChatMessage 持久化；仅 shell job
-    # 和没有标准 run 的 executor 契约测试走旧快照存储。
-    if task.kind == "subagent" and task.run_id:
-        return
-    store = _TASK_STORE
-    if store is None:
-        return
-    try:
-        store.save(task.to_dict())
-    except Exception:
-        logger.opt(exception=True).warning(
-            "bg task snapshot persist failed task_id={}",
-            task.task_id,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -782,18 +737,6 @@ class BackgroundSubagentExecutor:
                 )
             if entry is not None:
                 return entry.task.to_dict(include_progress=False)
-        # 内存 miss（典型：进程重启后）→ 持久层 fallback
-        if _TASK_STORE is not None:
-            try:
-                snapshot = _TASK_STORE.get(task_id)
-                if snapshot is None and hasattr(_TASK_STORE, "get_by_child_session_id"):
-                    snapshot = _TASK_STORE.get_by_child_session_id(task_id)
-                return snapshot
-            except Exception:
-                logger.opt(exception=True).warning(
-                    "bg task store get failed task_id={}",
-                    task_id,
-                )
         return None
 
     @staticmethod
@@ -814,16 +757,6 @@ class BackgroundSubagentExecutor:
                 for entry in _TASKS.values()
                 if entry.task.session_id == session_id
             }
-        # 合并持久层历史（内存中的活任务优先，避免读到旧快照）
-        if _TASK_STORE is not None:
-            try:
-                for snapshot in _TASK_STORE.list_for_session(session_id):
-                    tasks.setdefault(snapshot["task_id"], snapshot)
-            except Exception:
-                logger.opt(exception=True).warning(
-                    "bg task store list failed session_id={}",
-                    session_id,
-                )
         return sorted(tasks.values(), key=lambda t: t["started_at"])
 
     @staticmethod
@@ -943,7 +876,6 @@ class BackgroundSubagentExecutor:
                     "请先 check/cancel 现有任务再启动新的"
                 )
             _TASKS[task_id] = entry
-        _persist(task)
         loop = _ensure_loop()
         entry.future = asyncio.run_coroutine_threadsafe(_arun(entry), loop)
         if entry.timeout_seconds > 0:
@@ -1014,7 +946,6 @@ class BackgroundSubagentExecutor:
                     loop,
                 )
                 _arm_watchdog(entry)
-                _persist(task)
                 _publish_task_event(task, "followup")
                 return task.to_dict()
             if status.is_terminal:
@@ -1033,11 +964,6 @@ class BackgroundSubagentExecutor:
             entry.followups.clear()
             entry.followup_message_ids.clear()
             return messages
-
-    @staticmethod
-    def read_messages(task_id: str) -> list[dict[str, Any]]:
-        """子会话查看：只读该任务 thread 的消息历史。"""
-        return read_thread_messages(task_id)
 
     @staticmethod
     def get_future(task_id: str) -> Optional[Future]:
@@ -1074,7 +1000,6 @@ class BackgroundSubagentExecutor:
             entry.task.status = BgTaskStatus.RUNNING
             entry.task.interrupt = None
             entry.task.projection_sequence += 1
-        _persist(entry.task)
         _publish_task_event(entry.task, "followup")
         _publish_run_event(entry.task, "approval.resumed")
         if entry.task.run_id:
@@ -1114,7 +1039,6 @@ class BackgroundSubagentExecutor:
                 entry.future.cancel()
             entry.task.status = BgTaskStatus.CANCELLED
             entry.task.completed_at = time.time()
-            _persist(entry.task)
             _publish_task_event(entry.task, "terminal")
             _notify_terminal(entry.task)
             if entry.task.run_id:
@@ -1229,7 +1153,6 @@ async def _arun(
             if payload is not None:
                 task.status = BgTaskStatus.AWAITING_APPROVAL
                 task.interrupt = payload
-                _persist(task)
                 if task.run_id:
                     from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
                     from noesis.runtime.main_loop import run_on_main_loop
@@ -1309,7 +1232,6 @@ async def _arun(
             source = {"messages": [HumanMessage(content=next_message)]}
         task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
-        _persist(task)
         if task.run_id:
             from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
             from noesis.runtime.main_loop import run_on_main_loop
@@ -1342,12 +1264,10 @@ async def _arun(
         if not task.status.is_terminal:
             task.status = BgTaskStatus.CANCELLED
             task.completed_at = time.time()
-            _persist(task)
     except Exception as exc:
         task.status = BgTaskStatus.FAILED
         task.error = str(exc)
         task.completed_at = time.time()
-        _persist(task)
         if task.run_id:
             from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
             from noesis.runtime.main_loop import run_on_main_loop
@@ -1421,7 +1341,6 @@ async def _arun_shell(entry: _TaskEntry) -> None:
         task.result = _format_shell_result(response)
         task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
-        _persist(task)
         _publish_task_event(task, "terminal")
         _notify_terminal(task)
         logger.info(
@@ -1437,14 +1356,12 @@ async def _arun_shell(entry: _TaskEntry) -> None:
         if not task.status.is_terminal:
             task.status = BgTaskStatus.CANCELLED
             task.completed_at = time.time()
-            _persist(task)
             _publish_task_event(task, "terminal")
             _notify_terminal(task)
     except Exception as exc:
         task.status = BgTaskStatus.FAILED
         task.error = str(exc)
         task.completed_at = time.time()
-        _persist(task)
         _publish_task_event(task, "terminal")
         _notify_terminal(task)
         logger.opt(exception=True).error(
@@ -1490,7 +1407,6 @@ def fail_session_shell_tasks(session_id: str, reason: str) -> None:
         entry.task.status = BgTaskStatus.FAILED
         entry.task.error = reason
         entry.task.completed_at = time.time()
-        _persist(entry.task)
         if entry.task.run_id:
             from noesis.runtime.main_loop import run_on_main_loop
             from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
@@ -1551,7 +1467,6 @@ def _on_task_timeout(entry: _TaskEntry) -> None:
     entry.task.status = BgTaskStatus.TIMED_OUT
     entry.task.error = f"后台任务超时（{int(entry.timeout_seconds)}s）"
     entry.task.completed_at = time.time()
-    _persist(entry.task)
     if entry.task.run_id:
         from noesis.runtime.main_loop import run_on_main_loop
         from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
@@ -1584,113 +1499,6 @@ def _on_hitl_timeout(entry: _TaskEntry) -> None:
             "bg subagent approval timeout reject failed task_id={}",
             entry.task.task_id,
         )
-
-
-def _message_to_view_item(message: Any) -> Optional[dict[str, Any]]:
-    """LangChain 消息 → 轻量视图项（子会话查看用）。"""
-    if isinstance(message, HumanMessage):
-        text = (
-            message.content
-            if isinstance(message.content, str)
-            else str(message.content)
-        )
-        return (
-            {"role": "user", "text": text[: _PROGRESS_PREVIEW_CHARS * 2]}
-            if text.strip()
-            else None
-        )
-    if isinstance(message, AIMessage):
-        calls = [
-            {"name": str(call.get("name") or ""), "args": call.get("args") or {}}
-            for call in (getattr(message, "tool_calls", None) or [])
-        ]
-        text = _final_answer_text({"messages": [message]})
-        if not calls and not text.strip():
-            return None
-        return {
-            "role": "assistant",
-            "text": text[: _PROGRESS_PREVIEW_CHARS * 2],
-            "tool_calls": calls,
-        }
-    if isinstance(message, ToolMessage):
-        content = (
-            message.content
-            if isinstance(message.content, str)
-            else str(message.content)
-        )
-        return {
-            "role": "tool",
-            "name": str(getattr(message, "name", None) or ""),
-            "status": str(getattr(message, "status", None) or "success"),
-            "text": content[: _PROGRESS_PREVIEW_CHARS * 2],
-        }
-    return None
-
-
-async def _aread_thread_messages(task_id: str) -> list[dict[str, Any]]:
-    """在隔离 loop 内只读 thread 状态并映射为视图项。
-
-    注册表内的任务经其 worker 的 checkpointer 读（同实例，测试注入
-    MemorySaver 亦适用）；进程重启后的历史任务无 entry，经共享 isolated
-    checkpointer 直读 checkpoint（thread_id = task_id，消息仍在库）。
-    shell 任务无 thread，直接由任务字段合成视图（命令 + 结果）。
-    """
-    with _TASKS_LOCK:
-        entry = _TASKS.get(task_id)
-    if entry is not None:
-        if entry.task.kind == "shell":
-            items: list[dict[str, Any]] = [
-                {"role": "user", "text": entry.shell_command or entry.task.description},
-            ]
-            if entry.task.result:
-                items.append({"role": "assistant", "text": entry.task.result})
-            elif entry.task.error:
-                items.append({"role": "assistant", "text": f"错误：{entry.task.error}"})
-            return items
-        agent = await _ensure_agent(entry)
-        state = await agent.aget_state(_config(entry))
-        messages = (getattr(state, "values", None) or {}).get("messages", [])
-    else:
-        from noesis.config.checkpointer import create_isolated_checkpointer
-
-        saver = await create_isolated_checkpointer()
-        state = await saver.aget_tuple({"configurable": {"thread_id": task_id}})
-        checkpoint = getattr(state, "checkpoint", None) if state is not None else None
-        messages = ((checkpoint or {}).get("channel_values") or {}).get("messages", [])
-    items = []
-    for message in messages:
-        item = _message_to_view_item(message)
-        if item is not None:
-            items.append(item)
-    return items
-
-
-def read_thread_messages(
-    task_id: str, *, timeout: float = 10.0
-) -> list[dict[str, Any]]:
-    """读取后台任务子会话消息（跨线程切到隔离 loop 执行只读）。
-
-    注册表 miss（典型：进程重启后的历史任务）回退持久层：快照存在即读
-    checkpoint 库的 thread 历史；快照也没有才按「任务不存在」处理。
-    """
-    with _TASKS_LOCK:
-        in_registry = task_id in _TASKS
-    if not in_registry:
-        snapshot = None
-        if _TASK_STORE is not None:
-            try:
-                snapshot = _TASK_STORE.get(task_id)
-            except Exception:
-                logger.opt(exception=True).warning(
-                    "bg task store get failed task_id={}", task_id,
-                )
-        if snapshot is None:
-            raise ValueError(f"后台任务不存在: {task_id}")
-    loop = _ensure_loop()
-    future = asyncio.run_coroutine_threadsafe(_aread_thread_messages(task_id), loop)
-    return future.result(timeout=timeout)
-
-
 def shutdown() -> None:
     """清空注册表并停掉隔离 loop（测试 / 进程退出用）。"""
     with _TASKS_LOCK:
@@ -1730,8 +1538,6 @@ __all__ = [
     "BackgroundSubagentExecutor",
     "BackgroundTask",
     "BgTaskStatus",
-    "BgTaskStore",
-    "configure_task_store",
     "fail_session_shell_tasks",
     "shutdown",
     "shutdown_loop",

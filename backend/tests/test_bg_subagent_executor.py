@@ -29,7 +29,6 @@ from pydantic import PrivateAttr
 from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
     BgTaskStatus,
-    configure_task_store,
     shutdown as bg_shutdown,
 )
 
@@ -329,73 +328,6 @@ def test_followup_chains_new_turn_when_running() -> None:
     assert task["status"] == BgTaskStatus.COMPLETED.value
     # 新 turn 执行（脚本耗尽返回默认收尾文本）
     assert task["result"]
-
-
-def test_read_thread_messages_returns_history() -> None:
-    """子会话查看：只读返回 thread 的消息视图项（user/assistant/tool）。"""
-    worker = _build_worker([_call("data"), AIMessage(content="调研小结：三点发现")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="调研任务",
-        session_id="s-read", user_id="u1",
-    )
-    _wait_terminal(executor, task_id)
-
-    messages = BackgroundSubagentExecutor.read_messages(task_id)
-    roles = [m["role"] for m in messages]
-    assert "user" in roles            # 原始 description
-    assert "assistant" in roles       # 工具调用 + 小结
-    assert "tool" in roles            # 工具结果
-    text_items = [m for m in messages if m["role"] == "assistant" and m.get("text")]
-    assert any("调研小结" in m["text"] for m in text_items)
-    with pytest.raises(ValueError, match="不存在"):
-        BackgroundSubagentExecutor.read_messages("bg-none")
-
-
-def test_read_thread_messages_falls_back_after_restart(monkeypatch, task_store) -> None:
-    """进程重启后（注册表空、快照在持久层）：仍能读完整子会话历史。
-
-    重启后的任务经共享 isolated checkpointer 直读 checkpoint；
-    测试用 MemorySaver 替身，快照在 store、entry 已清空模拟重启。
-    """
-    saver = MemorySaver()
-    worker = create_agent(
-        _ScriptedToolModel(script=[AIMessage(content="历史小结")]),
-        tools=[_dangerous_tool()],
-        checkpointer=saver,
-        name="task-worker",
-    )
-
-    async def _fake_isolated():
-        return saver
-
-    monkeypatch.setattr(
-        "noesis.config.checkpointer.create_isolated_checkpointer", _fake_isolated,
-    )
-
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="历史任务",
-        session_id="s-hist", user_id="u1",
-    )
-    _wait_terminal(executor, task_id)
-    assert task_store.get(task_id) is not None
-
-    # 模拟重启：清空内存注册表，只留持久层快照与 checkpoint
-    from noesis.agents.subagents import executor as ex_mod
-
-    with ex_mod._TASKS_LOCK:
-        ex_mod._TASKS.clear()
-
-    messages = BackgroundSubagentExecutor.read_messages(task_id)
-    roles = [m["role"] for m in messages]
-    assert "user" in roles and "assistant" in roles
-    assert any("历史小结" in m["text"] for m in messages if m["role"] == "assistant")
-    # 快照也没有的任务仍按「不存在」处理
-    with pytest.raises(ValueError, match="不存在"):
-        BackgroundSubagentExecutor.read_messages("bg-none")
-
-
 # ---------------------------------------------------------------------------
 # 前台等待（run_in_background=false）与超时转后台
 # ---------------------------------------------------------------------------
@@ -790,115 +722,6 @@ async def test_consecutive_wake_cap(monkeypatch) -> None:
     svc.note_user_activity("s-cap")
     assert "s-cap" not in svc._wake_counts
     svc.reset_for_tests()
-
-
-# ---------------------------------------------------------------------------
-# 任务元数据持久化（BgTaskStore 注入）
-# ---------------------------------------------------------------------------
-
-class _MemoryTaskStore:
-    """进程内 store：按 task_id 保留最新快照；history 记录全部 save 序列。"""
-
-    def __init__(self) -> None:
-        self.saved: dict[str, dict[str, Any]] = {}
-        self.history: list[dict[str, Any]] = []
-
-    def save(self, snapshot: dict[str, Any]) -> None:
-        self.history.append(dict(snapshot))
-        self.saved[snapshot["task_id"]] = dict(snapshot)
-
-    def get(self, task_id: str) -> dict[str, Any] | None:
-        return self.saved.get(task_id)
-
-    def list_for_session(self, session_id: str) -> list[dict[str, Any]]:
-        return [
-            dict(s) for s in self.saved.values() if s.get("session_id") == session_id
-        ]
-
-
-@pytest.fixture()
-def task_store():
-    store = _MemoryTaskStore()
-    configure_task_store(store)
-    yield store
-    configure_task_store(None)
-
-
-def test_persist_snapshots_on_start_and_terminal(task_store) -> None:
-    worker = _build_worker([_call("data"), AIMessage(content="任务完成：已处理")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="处理数据",
-        session_id="s1", user_id="u1",
-    )
-    _wait_terminal(executor, task_id)
-
-    assert task_store.saved[task_id]["status"] == BgTaskStatus.COMPLETED.value
-    statuses = [s["status"] for s in task_store.history]
-    assert BgTaskStatus.RUNNING.value in statuses  # start 即落快照
-
-
-def test_persist_failure_does_not_break_execution(task_store) -> None:
-    def _boom(snapshot: dict[str, Any]) -> None:
-        raise RuntimeError("db down")
-
-    task_store.save = _boom  # type: ignore[method-assign]
-    worker = _build_worker([AIMessage(content="任务完成：已处理")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="处理数据",
-        session_id="s1", user_id="u1",
-    )
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-
-
-def test_store_failure_on_get_is_non_fatal(task_store) -> None:
-    def _boom(task_id: str) -> dict[str, Any] | None:
-        raise RuntimeError("db down")
-
-    task_store.get = _boom  # type: ignore[method-assign]
-    assert BackgroundSubagentExecutor.get("bg-unknown") is None
-
-
-def test_get_falls_back_to_store_after_restart(task_store) -> None:
-    worker = _build_worker([AIMessage(content="任务完成：已处理")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="处理数据",
-        session_id="s1", user_id="u1",
-    )
-    _wait_terminal(executor, task_id)
-
-    # 模拟进程重启：清空内存注册表，保留持久层
-    from noesis.agents.subagents import executor as executor_module
-    with executor_module._TASKS_LOCK:
-        executor_module._TASKS.clear()
-
-    task = BackgroundSubagentExecutor.get(task_id)
-    assert task is not None
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-    listed = BackgroundSubagentExecutor.list_for_session("s1")
-    assert [t["task_id"] for t in listed] == [task_id]
-
-
-def test_list_merges_memory_over_stale_store_snapshot(task_store) -> None:
-    """store 中旧快照（running）不得覆盖内存中的最新状态（completed）。"""
-    worker = _build_worker([AIMessage(content="任务完成：已处理")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="处理数据",
-        session_id="s1", user_id="u1",
-    )
-    _wait_terminal(executor, task_id)
-
-    # 篡改 store 里的快照为旧状态，内存应为准
-    task_store.saved[task_id]["status"] = BgTaskStatus.RUNNING.value
-
-    tasks = BackgroundSubagentExecutor.list_for_session("s1")
-    assert tasks[0]["status"] == BgTaskStatus.COMPLETED.value
 
 
 @pytest.mark.asyncio

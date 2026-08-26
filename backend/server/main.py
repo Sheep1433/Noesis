@@ -27,12 +27,7 @@ from server.api import (
 from noesis.knowledge.runtime import init_knowledge_base, close_knowledge_base
 from noesis.agents.backends.sandbox_lifecycle import shutdown_sandboxes
 from noesis.agents.subagents import (
-    configure_task_store,
     shutdown as shutdown_bg_subagents,
-)
-from noesis.repositories.bg_task_repository import (
-    BgTaskRepositoryAdapter,
-    reconcile_interrupted_tasks,
 )
 from noesis.runtime.main_loop import capture_main_loop
 from server.wiring import wire_runtime_observability
@@ -98,11 +93,6 @@ async def lifespan(app: FastAPI):
             run_manager.shutdown,
             drain_seconds=StreamConfig.run_shutdown_drain_seconds,
         )
-        # 后台子 Agent：注入任务快照持久层（t_bg_task），重启后对账中断任务
-        configure_task_store(BgTaskRepositoryAdapter())
-        interrupted = await asyncio.to_thread(reconcile_interrupted_tasks)
-        if interrupted:
-            logger.warning(f"后台任务对账：{interrupted} 个遗留任务标记为中断")
         # 进程退出时取消运行中任务并停掉隔离 loop
         resources.callback(shutdown_bg_subagents)
 

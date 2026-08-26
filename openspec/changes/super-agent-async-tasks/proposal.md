@@ -22,7 +22,7 @@ SuperAgent 原用 deepagents `SubAgentMiddleware` 的同步 `task` 工具委派�
 - **Prompt 语义（已完成，随修订微调）**：委派章节教模型——独立可并行任务**一起 start 后继续干活**；**下一步依赖结果时 `run_in_background=false` 前台等待**；收到 `[系统通知]` 后 `check_task` 收果；方向跑偏 `send_message` 追加指示。
 - **完成通知（已完成）**：终态写会话级待送达队列，下一次 run 组装输入时一次性 `[系统通知]` 前缀注入（不落库）；continuation run 的 user 消息带 `source_kind=bg_task_notice` 标记，前端渲染为系统通知条而非用户气泡。
 - **后台命令（本变更）**：`execute` 工具加 `run_in_background` 参数（默认 false，前台行为零变化）——true 时命令作为 `kind="shell"` 任务进现有注册表/状态机/通知/面板管线（不经 worker 编译，直接 backend 执行）；长命令不再靠 timeout=0 阻塞等待。
-- **已知限制（接受）**：注册表与通知队列在内存，进程重启丢运行中任务与未送达通知（子会话历史因在 checkpointer 仍保留）；通知不主动唤醒 run，前端轮询兜底。
+- **已知限制（接受）**：注册表与通知队列在内存，进程重启丢运行中任务与未送达通知（子会话历史由标准 TChatMessage/TAgentRun 持久化，不受影响）；通知不主动唤醒 run，前端轮询兜底。
 
 ## Capabilities
 

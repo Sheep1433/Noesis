@@ -198,16 +198,15 @@ DeepSeek Harness 的关键优势是：子 Agent 是独立 durable Session，有 
 需要复制 Harness 的 SessionManager 或另建前端消息协议；应把现有会话/Run/SSE 统一起来。Shell
 后台命令仍是 job，不创建对话型 child session。
 
-## 删除清单
+## 过渡层清理（已删除）
 
-完成迁移后删除：
-
-- `BackgroundTask` 作为产品模型及 `t_bg_task` 持久化
-- `BgTaskPanel`、`BackgroundSubagentCollapse` 的独立消息渲染
-- `/bg-tasks/{id}/messages` 与 `/messages/stream`
-- 从 tool output 正则提取 child id 的逻辑
+- `t_bg_task` 持久化及整套快照存储（`BgTaskStore` 协议、repository、启动对账接线）：执行面完全在进程内，重启即丢，与 dsh `ctx.jobs` / deer-flow 注册表同构；subagent 的产品数据由标准会话/Run/消息表承载，shell job 不持久化
+- `/bg-tasks/{id}/messages` 与 `/messages/stream` API 及 checkpoint thread 读路径（checkpointer 只负责执行恢复）
+- 从 tool output 正则提取 child id 的逻辑（卡片按 `child_session_id` / `created_by_tool_call_id` 结构化关联）
 - `progress_count` 驱动的全量消息重拉
 - `one_shot`、`continuable`、任何 continuation mode 参数
+
+`BackgroundSubagentCollapse` 已收敛为父会话内的子 Agent 卡片（点击打开统一的子会话抽屉），不再有独立消息渲染；`BackgroundTask` 仅剩进程内执行器的实现细节。
 
 保留但下沉为执行实现：
 

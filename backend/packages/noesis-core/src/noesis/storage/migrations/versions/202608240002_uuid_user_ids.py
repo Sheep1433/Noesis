@@ -27,7 +27,6 @@ _STRING_USER_TABLES = (
     "t_chat_message",
     "t_chat_attachment",
     "t_agent_run",
-    "t_bg_task",
     "t_memory_user_preference",
     "t_memory_run_snapshot",
     "t_memory_item",
