@@ -31,7 +31,7 @@
 
 | Change | 说明 |
 |--------|------|
-| [`kb-multimodal-retrieval`](../kb-multimodal-retrieval/README.md) | 图片向量与跨模态召回调研（**未实现**）；在文本 RAG 底座之上扩展 `alt_embedding` |
+| `kb-multimodal-retrieval`（已删除） | 图片向量与跨模态召回调研（**未实现，方向已放弃**）；在文本 RAG 底座之上扩展 `alt_embedding` |
 
 ## 参数字段（入库 processing_params）
 

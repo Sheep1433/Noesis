@@ -30,7 +30,6 @@
 |--------|------|
 | `sink-data-layer-into-harness` | 将业务 service、数据访问、知识库与交付运行时下沉到 harness，减少 DI 与转发 |
 | `improve-knowledge-base-workbench` | 知识库列表/集合/分片/检索调试调整为连续检查工作台 |
-| `kb-multimodal-retrieval` | 图表/架构图等多模态检索调研 |
 | `mobile-chat-focus` | 移动端聊天聚焦，按任务意图收敛入口 |
 | `retire-default-test-kb-collections` | 停止启动时隐式创建 `requirement_docs` / `test_case_docs` |
 
