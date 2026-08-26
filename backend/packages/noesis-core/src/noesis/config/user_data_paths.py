@@ -75,6 +75,11 @@ def get_user_profile_md_path(user_id: str | int) -> Path:
     return get_user_root(user_id) / "USER.md"
 
 
+def get_user_memory_index_path(user_id: str | int) -> Path:
+    """返回用户记忆索引 `.noesis/users/{user_id}/memory/MEMORY.md`（不创建）。"""
+    return get_user_root(user_id) / "memory" / "MEMORY.md"
+
+
 def get_user_channels_path(user_id: str | int) -> Path:
     """返回通道配置文件 `.noesis/users/{user_id}/channels.json`（不创建）。"""
     return get_user_root(user_id) / "channels.json"

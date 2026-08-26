@@ -11,16 +11,15 @@ from server.response import ResponseUtil
 from server.db import get_db
 
 from noesis.schemas.login_vo import CurrentUser
-from noesis.schemas.memory import CortexPreferenceUpdate, MemoryItemUpdate
 from noesis.services.messaging_channel_service import MessagingChannelService
 from noesis.services.scheduled_task_service import ScheduledTaskService
 from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
+from noesis.services.memory.store import MemoryStore
+from noesis.services.memory.types import MEMORY_TYPES, TYPE_LABELS
+from noesis.services.memory.user_settings import MemoryUserSettings
 from noesis.services.user_memory_service import UserMemoryService
 from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.settings_service import SettingsService
-from noesis.services.memory.preferences import MemoryCortexPreferenceService
-from noesis.services.memory.management import MachineMemoryService
-from noesis.services.memory.source import MemorySourceService
 
 user_settings_router = APIRouter(prefix="/api/user", tags=["用户设置"])
 
@@ -70,6 +69,161 @@ class ChannelUpsertBody(BaseModel):
 # ----- memory -----
 
 
+@user_settings_router.get("/memory/settings")
+async def get_memory_settings(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return ResponseUtil.success(data={"enabled": MemoryUserSettings.is_enabled(current_user.user_id)})
+
+
+class MemoryToggleBody(BaseModel):
+    enabled: bool
+
+
+@user_settings_router.put("/memory/settings")
+async def put_memory_settings(
+    body: MemoryToggleBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    enabled = MemoryUserSettings.set_enabled(current_user.user_id, body.enabled)
+    return ResponseUtil.success(msg="已保存", data={"enabled": enabled})
+
+
+@user_settings_router.get("/memory/tree")
+async def get_memory_tree(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """索引 + journal 文件列表（设置页文件管理入口）。"""
+    user_id = current_user.user_id
+    state = MemoryStore.read_index(user_id)
+    journal_days = sorted(
+        p.stem for p in (MemoryStore.memory_root(user_id) / "journal").glob("*.md")
+    )
+    return ResponseUtil.success(data={
+        "entries": [
+            {
+                "memory_type": e.memory_type,
+                "type_label": TYPE_LABELS[e.memory_type],
+                "slug": e.slug,
+                "rel_path": e.rel_path,
+                "label": e.label,
+                "description": e.description,
+            }
+            for e in state.entries
+        ],
+        "corrupt_lines": state.corrupt_lines,
+        "over_budget": state.over_budget,
+        "journal_days": journal_days,
+    })
+
+
+@user_settings_router.get("/memory/entry/{memory_type}/{slug}")
+async def get_memory_entry(
+    memory_type: str,
+    slug: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        entry = MemoryStore.read_entry(current_user.user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if entry is None:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    path = MemoryStore.entry_path(current_user.user_id, memory_type, slug)
+    return ResponseUtil.success(data={
+        "memory_type": memory_type,
+        "slug": slug,
+        "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+        **entry,
+    })
+
+
+class MemoryEntryWriteBody(BaseModel):
+    content: str = Field(..., description="条目文件 Markdown 原文")
+
+
+@user_settings_router.put("/memory/entry/{memory_type}/{slug}")
+async def put_memory_entry(
+    memory_type: str,
+    slug: str,
+    body: MemoryEntryWriteBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """用户直接编辑条目文件（最高权限）；索引行同步。"""
+    await require_csrf(request)
+    user_id = current_user.user_id
+    try:
+        path = MemoryStore.entry_path(user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="条目不存在")
+    from noesis.config.env import MemoryConfig as _Cfg
+
+    if len(body.content.encode("utf-8")) > _Cfg.max_entry_chars * 2:
+        raise HTTPException(status_code=400, detail="内容超出上限")
+    from noesis.services.memory.store import IndexEntry
+
+    path.write_text(body.content, encoding="utf-8")
+    front = MemoryStore.read_entry_file(path)
+    MemoryStore._sync_index_line(
+        user_id,
+        IndexEntry(
+            memory_type=memory_type,
+            slug=slug,
+            label=str(front.get("label") or slug),
+            description=str(front.get("description") or ""),
+        ),
+    )
+    return ResponseUtil.success(msg="已保存")
+
+
+@user_settings_router.delete("/memory/entry/{memory_type}/{slug}")
+async def delete_memory_entry(
+    memory_type: str,
+    slug: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    try:
+        removed = MemoryStore.remove_entry(current_user.user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not removed:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    return ResponseUtil.success(msg="已删除")
+
+
+@user_settings_router.get("/memory/journal/{day}")
+async def get_memory_journal(
+    day: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    import re as _re
+
+    if not _re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+        raise HTTPException(status_code=400, detail="非法日期")
+    path = MemoryStore.journal_path(current_user.user_id, day)
+    return ResponseUtil.success(data={
+        "day": day,
+        "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+    })
+
+
+@user_settings_router.post("/memory/index/rebuild")
+async def rebuild_memory_index(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    state = MemoryStore.rebuild_index(current_user.user_id)
+    return ResponseUtil.success(msg="索引已重建", data={"entries": len(state.entries)})
+
+
 @user_settings_router.get("/memory/{file_name}")
 async def get_user_memory_file(
     file_name: str,
@@ -97,182 +251,9 @@ async def put_user_memory_file(
     return ResponseUtil.success(msg="已保存", data=data)
 
 
-@user_settings_router.get("/memory/cortex/preferences")
-async def get_cortex_preferences(
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    data = await MemoryCortexPreferenceService.get(
-        db, user_id=current_user.user_id
-    )
-    return ResponseUtil.success(data=data.model_dump())
+# ----- 记忆层（md 文件）：设置开关 + 文件管理 -----
 
 
-@user_settings_router.put("/memory/cortex/preferences")
-async def update_cortex_preferences(
-    body: CortexPreferenceUpdate,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await require_csrf(request)
-    data = await MemoryCortexPreferenceService.update(
-        db,
-        user_id=current_user.user_id,
-        enabled=body.enabled,
-    )
-    return ResponseUtil.success(msg="已保存", data=data.model_dump())
-
-
-@user_settings_router.get("/memory/cortex/items")
-async def list_machine_memory_items(
-    status: Optional[
-        Literal["candidate", "active", "superseded", "disabled", "invalidated", "needs_review"]
-    ] = Query(None),
-    memory_type: Optional[Literal["decision", "experience", "workflow", "gotcha"]] = Query(None),
-    scope_id: str = Query("", max_length=64),
-    query: str = Query("", max_length=200),
-    limit: int = Query(100, ge=1, le=200),
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    items = await MachineMemoryService.list_items(
-        db,
-        user_id=str(current_user.user_id),
-        statuses=(status,) if status else (),
-        memory_types=(memory_type,) if memory_type else (),
-        scope_id=scope_id,
-        query=query,
-        limit=limit,
-    )
-    return ResponseUtil.success(data={"items": [item.model_dump(mode="json") for item in items]})
-
-
-@user_settings_router.get("/memory/cortex/items/{memory_id}")
-async def get_machine_memory_item(
-    memory_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    item = await MachineMemoryService.get_item(
-        db, user_id=str(current_user.user_id), memory_id=memory_id
-    )
-    return ResponseUtil.success(data=item.model_dump(mode="json"))
-
-
-@user_settings_router.put("/memory/cortex/items/{memory_id}")
-async def revise_machine_memory_item(
-    memory_id: str,
-    body: MemoryItemUpdate,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await require_csrf(request)
-    item = await MachineMemoryService.revise(
-        db,
-        user_id=str(current_user.user_id),
-        memory_id=memory_id,
-        statement=body.statement,
-        applicability=body.applicability,
-    )
-    return ResponseUtil.success(msg="已保存", data=item.model_dump(mode="json"))
-
-
-async def _change_machine_memory_state(
-    operation: str,
-    memory_id: str,
-    request: Request,
-    current_user: CurrentUser,
-    db: AsyncSession,
-):
-    await require_csrf(request)
-    result = await MachineMemoryService.change_state(
-        db,
-        user_id=str(current_user.user_id),
-        memory_id=memory_id,
-        operation=operation,
-    )
-    return ResponseUtil.success(data=result.model_dump(mode="json"))
-
-
-@user_settings_router.post("/memory/cortex/items/{memory_id}/activate")
-async def activate_machine_memory(
-    memory_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await _change_machine_memory_state("activate", memory_id, request, current_user, db)
-
-
-@user_settings_router.post("/memory/cortex/items/{memory_id}/disable")
-async def disable_machine_memory(
-    memory_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await _change_machine_memory_state("disable", memory_id, request, current_user, db)
-
-
-@user_settings_router.post("/memory/cortex/items/{memory_id}/enable")
-async def enable_machine_memory(
-    memory_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await _change_machine_memory_state("enable", memory_id, request, current_user, db)
-
-
-@user_settings_router.post("/memory/cortex/items/{memory_id}/invalidate")
-async def invalidate_machine_memory(
-    memory_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await _change_machine_memory_state("invalidate", memory_id, request, current_user, db)
-
-
-@user_settings_router.delete("/memory/cortex/items/{memory_id}")
-async def delete_machine_memory_item(
-    memory_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await require_csrf(request)
-    await MachineMemoryService.delete(
-        db, user_id=str(current_user.user_id), memory_id=memory_id
-    )
-    return ResponseUtil.success(msg="已删除")
-
-
-@user_settings_router.get("/memory/cortex/items/{memory_id}/evidence/{evidence_id}/source")
-async def get_machine_memory_source(
-    memory_id: str,
-    evidence_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    source = await MemorySourceService.get(
-        db,
-        user_id=str(current_user.user_id),
-        memory_id=memory_id,
-        evidence_id=evidence_id,
-    )
-    return ResponseUtil.success(data=source.model_dump(mode="json"))
-
-
-@user_settings_router.get("/memory/cortex/health")
-async def get_machine_memory_health(
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    health = await MachineMemoryService.health(db, user_id=str(current_user.user_id))
-    return ResponseUtil.success(data=health.model_dump(mode="json"))
 
 
 @user_settings_router.get("/context/preview")

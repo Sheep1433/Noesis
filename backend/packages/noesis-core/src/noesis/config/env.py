@@ -169,31 +169,21 @@ class RetrievalLimitSettings:
 
 
 @dataclass(frozen=True)
-class MachineMemorySettings:
-    poll_seconds: float
-    claim_batch_size: int
-    lease_seconds: float
-    stage_timeout_seconds: float
-    job_max_attempts: int
-    retry_seconds: float
-    chunk_max_tokens: int
-    chunk_concurrency: int
-    chunk_attempts: int
-    chunk_retry_delay_seconds: float
+class MemorySettings:
     extraction_model: str
-    collection_name: str
-    embedding_template_version: str
-    retrieval_top_k: int
-    retrieval_overfetch: int
-    retrieval_min_score: float
-    bulletin_max_tokens: int
-    bulletin_timeout_seconds: float
-    deep_query_timeout_seconds: float
-    deep_query_max_steps: int
-    deep_query_max_spans: int
-    deep_query_concurrency: int
-    snapshot_retention_days: int
-    job_retention_days: int
+    selection_model: str
+    enabled_by_default: bool
+    session_idle_minutes: int
+    sweep_interval_minutes: int
+    max_entries_per_extraction: int
+    index_max_lines: int
+    index_max_bytes: int
+    stale_warning_days: int
+    inject_budget_tokens: int
+    max_entry_chars: int
+    consolidation_min_interval_hours: int
+    consolidation_min_new_sessions: int
+    max_message_chars: int
 
 
 @dataclass(frozen=True)
@@ -534,35 +524,25 @@ def _build_retrieval_limits(yaml_cfg: AppYamlConfig) -> RetrievalLimitSettings:
     )
 
 
-def _build_machine_memory(yaml_cfg: AppYamlConfig) -> MachineMemorySettings:
-    value = yaml_cfg.machine_memory
-    return MachineMemorySettings(
-        poll_seconds=value.poll_seconds,
-        claim_batch_size=value.claim_batch_size,
-        lease_seconds=value.lease_seconds,
-        stage_timeout_seconds=value.stage_timeout_seconds,
-        job_max_attempts=value.job_max_attempts,
-        retry_seconds=value.retry_seconds,
-        chunk_max_tokens=value.chunk_max_tokens,
-        chunk_concurrency=value.chunk_concurrency,
-        chunk_attempts=value.chunk_attempts,
-        chunk_retry_delay_seconds=value.chunk_retry_delay_seconds,
+
+
+def _build_memory(yaml_cfg: AppYamlConfig) -> MemorySettings:
+    value = yaml_cfg.memory
+    return MemorySettings(
         extraction_model=value.extraction_model.strip(),
-        collection_name=value.collection_name.strip() or "noesis_memory",
-        embedding_template_version=(
-            value.embedding_template_version.strip() or "memory-item-v1"
-        ),
-        retrieval_top_k=value.retrieval_top_k,
-        retrieval_overfetch=value.retrieval_overfetch,
-        retrieval_min_score=value.retrieval_min_score,
-        bulletin_max_tokens=value.bulletin_max_tokens,
-        bulletin_timeout_seconds=value.bulletin_timeout_seconds,
-        deep_query_timeout_seconds=value.deep_query_timeout_seconds,
-        deep_query_max_steps=value.deep_query_max_steps,
-        deep_query_max_spans=value.deep_query_max_spans,
-        deep_query_concurrency=value.deep_query_concurrency,
-        snapshot_retention_days=value.snapshot_retention_days,
-        job_retention_days=value.job_retention_days,
+        selection_model=value.selection_model.strip(),
+        enabled_by_default=value.enabled_by_default,
+        session_idle_minutes=value.session_idle_minutes,
+        sweep_interval_minutes=value.sweep_interval_minutes,
+        max_entries_per_extraction=value.max_entries_per_extraction,
+        index_max_lines=value.index_max_lines,
+        index_max_bytes=value.index_max_bytes,
+        stale_warning_days=value.stale_warning_days,
+        inject_budget_tokens=value.inject_budget_tokens,
+        max_entry_chars=value.max_entry_chars,
+        consolidation_min_interval_hours=value.consolidation_min_interval_hours,
+        consolidation_min_new_sessions=value.consolidation_min_new_sessions,
+        max_message_chars=value.max_message_chars,
     )
 
 
@@ -855,8 +835,8 @@ class GetConfig:
         return _build_kb(self._yaml)
 
     @lru_cache
-    def get_machine_memory_config(self) -> MachineMemorySettings:
-        return _build_machine_memory(self._yaml)
+    def get_memory_config(self) -> MemorySettings:
+        return _build_memory(self._yaml)
 
     @staticmethod
     def parse_cli_args() -> None:
@@ -906,4 +886,4 @@ SubagentConfig = get_config.get_subagent_config()
 MessagingConfig = get_config.get_messaging_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
 KbConfig = get_config.get_kb_config()
-MachineMemoryConfig = get_config.get_machine_memory_config()
+MemoryConfig = get_config.get_memory_config()

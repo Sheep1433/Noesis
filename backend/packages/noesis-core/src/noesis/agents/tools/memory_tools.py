@@ -1,89 +1,58 @@
-"""Authenticated, scope-bound read-only memory tools."""
+"""Agent 记忆工具：grep 检索（md-memory-layer task 5.1）。"""
 
 from __future__ import annotations
 
 import json
-import asyncio
-from datetime import datetime
 
 from langchain_core.tools import StructuredTool
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
 
-from noesis.schemas.memory import MemorySearchInput, MemorySourceInput
-from noesis.services.memory.query import MemoryQueryService
-from noesis.services.memory.scope import resolve_scope_key
-from noesis.services.memory.source import MemorySourceService
+from noesis.services.memory.store import MemoryStore
+from noesis.services.memory.types import MEMORY_TYPES
 
 
-def build_memory_tools(
-    *,
-    db: AsyncSession,
-    user_id: str,
-    session_id: str,
-    agent_profile: str,
-) -> list[StructuredTool]:
-    scope_key = resolve_scope_key(
-        user_id=user_id, session_id=session_id, agent_profile=agent_profile
+class MemorySearchInput(BaseModel):
+    query: str = Field(description="关键词（多个词以空格分隔，任一命中即返回）")
+    memory_type: str = Field(
+        default="",
+        description=f"限定类型（{'/'.join(MEMORY_TYPES)}）；空 = 全部类型",
     )
-    query_lock = asyncio.Lock()
+    limit: int = Field(default=5, ge=1, le=10)
 
-    async def search_memory(
-        query: str,
-        memory_types: list[str] | None = None,
-        include_history: bool = False,
-        statuses: list[str] | None = None,
-        source_types: list[str] | None = None,
-        project_scope: str = "current_project",  # noqa: ARG001 - schema locks scope
-        expand_evidence: bool = True,
-        since: datetime | None = None,
-        until: datetime | None = None,
-        top_k: int = 5,
-    ) -> str:
-        async with query_lock:
-            result = await MemoryQueryService.search(
-                db,
-                user_id=user_id,
-                scope_key=scope_key,
-                query=query,
-                memory_types=tuple(memory_types or ()),
-                include_history=include_history,
-                statuses=tuple(statuses or ()),
-                source_types=tuple(source_types or ()),
-                expand_evidence=expand_evidence,
-                since=since,
-                until=until,
-                top_k=top_k,
-            )
-        return json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
 
-    async def get_memory_source(memory_id: str, evidence_id: str) -> str:
-        try:
-            async with query_lock:
-                result = await MemorySourceService.get(
-                    db,
-                    user_id=user_id,
-                    memory_id=memory_id,
-                    evidence_id=evidence_id,
-                    scope_key=scope_key,
+def build_memory_tools(*, user_id: str) -> list[StructuredTool]:
+    """绑定当前用户的只读记忆检索工具（grep 语义，无 DB 依赖）。"""
+
+    async def search_memory(query: str, memory_type: str = "", limit: int = 5) -> str:
+        types: tuple[str, ...] = ()
+        if memory_type:
+            if memory_type not in MEMORY_TYPES:
+                return json.dumps(
+                    {"error": f"非法类型 {memory_type!r}，仅允许 {'/'.join(MEMORY_TYPES)}"},
+                    ensure_ascii=False,
                 )
-        except LookupError:
-            return json.dumps({"error": "记忆来源不存在"}, ensure_ascii=False)
-        return json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
+            types = (memory_type,)
+        try:
+            hits = MemoryStore.search(user_id, query, memory_types=types, limit=limit)
+        except Exception:
+            return json.dumps({"error": "记忆检索暂不可用"}, ensure_ascii=False)
+        if not hits:
+            return json.dumps({"results": []}, ensure_ascii=False)
+        return json.dumps(
+            {"results": hits},
+            ensure_ascii=False,
+        )
 
-    return [
-        StructuredTool.from_function(
-            coroutine=search_memory,
-            name="search_memory",
-            description="Search scoped task experience and return bounded evidence references.",
-            args_schema=MemorySearchInput,
+    tool = StructuredTool.from_function(
+        coroutine=search_memory,
+        name="search_memory",
+        description=(
+            "在用户长期记忆（md 文件）中按关键词检索条目原文。"
+            "适用于需要回忆用户偏好、历史决策、既往经验或注意事项的场景。"
         ),
-        StructuredTool.from_function(
-            coroutine=get_memory_source,
-            name="get_memory_source",
-            description="Read one bounded source span returned by memory search.",
-            args_schema=MemorySourceInput,
-        ),
-    ]
+        args_schema=MemorySearchInput,
+    )
+    return [tool]
 
 
 __all__ = ["build_memory_tools"]

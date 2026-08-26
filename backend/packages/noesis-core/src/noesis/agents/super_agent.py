@@ -12,9 +12,8 @@ from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.backends import agent_sandbox_session, create_agent_backend
-from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE, AGENT_MEMORY_USER_FILE
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
-from noesis.agents.memory_runtime import build_memory_bulletin_middleware
 from noesis.factory import build_noesis_middleware, create_noesis_agent
 from noesis.agents.tools.ask_user import ask_user_tool, build_interrupt_on
 from noesis.agents.prompts import PromptProfile, build_prompt
@@ -30,6 +29,7 @@ from noesis.agents.subagents.shell_tool import replace_execute_tool
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
+from noesis.agents.middlewares.memory_entries_middleware import build_memory_entries_middleware
 from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
@@ -41,7 +41,7 @@ from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
 from noesis.services.chat_service import ChatService
 
-_MEMORY_SOURCES = [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
+_MEMORY_SOURCES = [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE]
 
 
 def _resolve_user_id(current_user) -> Optional[str]:
@@ -114,13 +114,7 @@ class SuperAgent(BaseAgent):
         backend = await create_agent_backend(user_id, session_id)
         web_tools = build_web_search_tools()
         tools = list(web_tools) + list(mcp_tools or [])
-        if db is not None:
-            tools.extend(build_memory_tools(
-                db=db,
-                user_id=user_id,
-                session_id=session_id,
-                agent_profile="SUPER_AGENT_QA",
-            ))
+        tools.extend(build_memory_tools(user_id=user_id))
         # KB 检索工具（用户勾选启用时挂载）
         if kb_search_enabled and kb_collections is not None:
             kb_tools = build_kb_search_tools(
@@ -160,9 +154,7 @@ class SuperAgent(BaseAgent):
         # worker 经工厂在隔离 loop 内惰性编译：LLM 客户端与 checkpointer
         # 连接池必须绑定隔离 loop（复用主 loop 实例会 cross-loop 报错）。
         worker_tools = [
-            tool for tool in tools if getattr(tool, "name", "") not in {
-                "search_memory", "get_memory_source"
-            }
+            tool for tool in tools if getattr(tool, "name", "") != "search_memory"
         ]
 
         async def _bg_worker_factory():
@@ -266,12 +258,11 @@ class SuperAgent(BaseAgent):
             skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
             memory=resolved_context.memory_sources,
             memory_system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
-            memory_bulletin_middleware=build_memory_bulletin_middleware(
+            memory_entries_middleware=await build_memory_entries_middleware(
                 db=db,
                 user_id=user_id,
                 session_id=session_id,
                 run_id=run_id,
-                agent_profile="SUPER_AGENT_QA",
             ),
             todo=True,
             interrupt_on=interrupt_on,

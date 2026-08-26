@@ -195,32 +195,22 @@ qdrant:
   test_case_upload_collection: ""
   case_rag_historical_requirements_enabled: false
 
-# 机器经验后台预算；功能启停只由每个用户的单一开关控制。
-machine_memory:
-  poll_seconds: 5
-  claim_batch_size: 4
-  lease_seconds: 180
-  stage_timeout_seconds: 600
-  job_max_attempts: 8
-  retry_seconds: 30
-  chunk_max_tokens: 1600
-  chunk_concurrency: 4
-  chunk_attempts: 2
-  chunk_retry_delay_seconds: 1
-  extraction_model: ""
-  collection_name: noesis_memory
-  embedding_template_version: memory-item-v1
-  retrieval_top_k: 3
-  retrieval_overfetch: 3
-  retrieval_min_score: 0.45
-  bulletin_max_tokens: 500
-  bulletin_timeout_seconds: 0.4
-  deep_query_timeout_seconds: 5
-  deep_query_max_steps: 6
-  deep_query_max_spans: 12
-  deep_query_concurrency: 4
-  snapshot_retention_days: 30
-  job_retention_days: 30
+# md 文件记忆层（索引 + 五类条目 + 情景日志）；功能启停由每个用户的单一开关控制。
+memory:
+  extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
+  selection_model: ""        # 空 = 默认对话模型（每 Run 注入选条，可用廉价模型）
+  enabled_by_default: false  # fail-closed：评测门禁通过后再默认开启
+  session_idle_minutes: 10   # 会话 idle 判定（终态触发抽取）
+  sweep_interval_minutes: 30 # 未抽取会话补扫间隔
+  max_entries_per_extraction: 3
+  index_max_lines: 200       # 索引预算双保险
+  index_max_bytes: 25600
+  stale_warning_days: 2      # 超龄条目注入时附 stale 警告
+  inject_budget_tokens: 2000
+  max_entry_chars: 4000
+  consolidation_min_interval_hours: 24   # AutoDream 门控：距上次整理最小间隔
+  consolidation_min_new_sessions: 5      # 且期间新抽取会话数达此值才整理
+  max_message_chars: 120000  # 抽取输入上限（会话消息截断）
 
 langfuse:
   tracing_enabled: false

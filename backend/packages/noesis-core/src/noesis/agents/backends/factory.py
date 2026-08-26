@@ -95,6 +95,7 @@ def build_agent_filesystem_backend(
     memory = UserMemoryBackend(
         agents_path=get_user_agents_md_path(user_id),
         user_path=get_user_profile_md_path(user_id),
+        user_id=user_id,
     )
 
     if sandbox is not None:

@@ -57,125 +57,111 @@ export async function putUserMemoryFile(file: 'USER.md' | 'AGENTS.md', content: 
   return parseAuthJson<MemoryFilePayload>(res)
 }
 
-export type CortexMemoryPreference = {
+export type MemorySettingsPayload = {
   enabled: boolean
 }
 
-export type MachineMemoryType = 'decision' | 'experience' | 'workflow' | 'gotcha'
-export type MachineMemoryStatus = 'candidate' | 'active' | 'superseded' | 'disabled' | 'invalidated' | 'needs_review'
-export type MachineMemoryEvidence = {
-  id: string
-  source_kind: 'message' | 'tool' | 'artifact' | 'chunk' | 'user_revision'
-  provenance: 'user' | 'assistant_derived' | 'tool_internal' | 'tool_external'
-  created_at: string
-}
-export type MachineMemoryItem = {
-  id: string
-  memory_type: MachineMemoryType
-  status: MachineMemoryStatus
-  subject: string
-  statement: string
-  applicability: string
-  scope_id: string
-  scope_label: string
-  effective_provenance: MachineMemoryEvidence['provenance']
-  version: number
-  valid_from: string
-  valid_to?: string | null
-  last_verified_at?: string | null
-  user_revision: boolean
-  evidence_count: number
-  evidence: MachineMemoryEvidence[]
-}
-export type MachineMemorySource = {
-  memory_id: string
-  evidence_id: string
-  availability: 'available' | 'source_deleted' | 'retention_expired'
-  source_kind: MachineMemoryEvidence['source_kind']
-  source_ref?: string | null
-  excerpt?: string | null
-  provenance?: MachineMemoryEvidence['provenance'] | null
-  captured_at?: string | null
-}
-export type MachineMemoryHealth = {
-  last_capture_at?: string | null
-  last_consolidation_at?: string | null
-  pending: number
-  partial: number
-  failed: number
-  dead: number
-  skipped: number
-  workspace_pending: number
-  index_pending: number
-  workspace_failed: number
-  index_failed: number
-  derived_view_lag_seconds?: number | null
+export type MemoryTreeEntry = {
+  memory_type: string
+  type_label: string
+  slug: string
+  rel_path: string
+  label: string
+  description: string
 }
 
-export function getCortexMemoryPreference() {
-  return settingsJson<CortexMemoryPreference>('/api/user/memory/cortex/preferences')
+export type MemoryTreePayload = {
+  entries: MemoryTreeEntry[]
+  corrupt_lines: number
+  over_budget: boolean
+  journal_days: string[]
 }
 
-export function updateCortexMemoryPreference(
-  enabled: boolean,
-) {
-  return settingsJson<CortexMemoryPreference>('/api/user/memory/cortex/preferences', 'PUT', {
-    enabled,
-  })
+export type MemoryEntryPayload = {
+  memory_type: string
+  slug: string
+  content: string
+  label?: string
+  body?: string
+  updated_at?: string
 }
 
-export async function listMachineMemory(
-  status?: MachineMemoryStatus,
-  memoryType?: MachineMemoryType,
-  scopeId?: string,
-  query?: string,
-) {
-  const params = new URLSearchParams()
-  if (status) {
-    params.set('status', status)
-  }
-  if (memoryType) {
-    params.set('memory_type', memoryType)
-  }
-  if (scopeId) {
-    params.set('scope_id', scopeId)
-  }
-  if (query?.trim()) {
-    params.set('query', query.trim())
-  }
-  const suffix = params.size ? `?${params.toString()}` : ''
-  return (await settingsJson<{ items: MachineMemoryItem[] }>(`/api/user/memory/cortex/items${suffix}`)).items
-}
-
-export function reviseMachineMemory(memoryId: string, statement: string, applicability: string) {
-  return settingsJson<MachineMemoryItem>(
-    `/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}`,
-    'PUT',
-    { statement, applicability },
+export async function getMemorySettings() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/settings`, { credentials: 'include' }),
   )
+  return parseAuthJson<MemorySettingsPayload>(res)
 }
 
-export type MachineMemoryStateOperation = 'activate' | 'disable' | 'enable' | 'invalidate'
-
-export function changeMachineMemoryState(memoryId: string, operation: MachineMemoryStateOperation) {
-  return settingsJson<{ id: string, status: MachineMemoryStatus }>(
-    `/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}/${operation}`,
-    'POST',
+export async function putMemorySettings(enabled: boolean) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/settings`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }),
   )
+  return parseAuthJson<MemorySettingsPayload>(res)
 }
 
-export function deleteMachineMemory(memoryId: string) {
-  return settingsJson<void>(`/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}`, 'DELETE')
-}
-
-export function getMachineMemorySource(memoryId: string, evidenceId: string) {
-  return settingsJson<MachineMemorySource>(
-    `/api/user/memory/cortex/items/${encodeURIComponent(memoryId)}/evidence/${encodeURIComponent(evidenceId)}/source`,
+export async function getMemoryTree() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/tree`, { credentials: 'include' }),
   )
+  return parseAuthJson<MemoryTreePayload>(res)
 }
 
-export function getMachineMemoryHealth() {
-  return settingsJson<MachineMemoryHealth>('/api/user/memory/cortex/health')
+export async function getMemoryEntry(memoryType: string, slug: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      { credentials: 'include' },
+    ),
+  )
+  return parseAuthJson<MemoryEntryPayload>(res)
+}
+
+export async function putMemoryEntry(memoryType: string, slug: string, content: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+    ),
+  )
+  return parseAuthJson<void>(res)
+}
+
+export async function deleteMemoryEntry(memoryType: string, slug: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      { method: 'DELETE', credentials: 'include' },
+    ),
+  )
+  return parseAuthJson<void>(res)
+}
+
+export async function getMemoryJournal(day: string) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/journal/${encodeURIComponent(day)}`, { credentials: 'include' }),
+  )
+  return parseAuthJson<{ day: string, content: string }>(res)
+}
+
+export async function rebuildMemoryIndex() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/index/rebuild`, {
+      method: 'POST',
+      credentials: 'include',
+    }),
+  )
+  return parseAuthJson<{ entries: number }>(res)
 }
 
 export type ContextPreview = {

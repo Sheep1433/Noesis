@@ -5,8 +5,17 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
-from noesis.config.user_data_paths import ensure_user_memory_files, get_user_agents_md_path, get_user_profile_md_path
+from noesis.agents.backends.paths import (
+    AGENT_MEMORY_AGENTS_FILE,
+    AGENT_MEMORY_INDEX_FILE,
+    AGENT_MEMORY_USER_FILE,
+)
+from noesis.config.user_data_paths import (
+    ensure_user_memory_files,
+    get_user_agents_md_path,
+    get_user_memory_index_path,
+    get_user_profile_md_path,
+)
 from noesis.agents.prompts import PromptProfile, build_prompt
 
 
@@ -46,13 +55,16 @@ class ContextResolver:
         key = profile.value if isinstance(profile, PromptProfile) else str(profile)
         prompt = build_prompt(key)
         memory_enabled = key in cls.MEMORY_PROFILES
-        memory_sources: tuple[str, ...] = (AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE) if memory_enabled else ()
+        memory_sources: tuple[str, ...] = (
+            AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE
+        ) if memory_enabled else ()
         sources = [cls._source("system", "Agent 规则", True, prompt)]
         if memory_enabled:
             ensure_user_memory_files(user_id)
             sources.extend([
                 cls._file_source("profile", "用户画像", get_user_profile_md_path(user_id)),
                 cls._file_source("memory", "长期记忆", get_user_agents_md_path(user_id)),
+                cls._file_source("memory-index", "记忆索引", get_user_memory_index_path(user_id)),
             ])
         compiled = "\n\n".join(f"## {source.label}\n{source.content}" for source in sources if source.injected and source.content.strip())
         return ResolvedAgentContext(key, prompt, memory_sources, tuple(sources), compiled)

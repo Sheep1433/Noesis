@@ -410,3 +410,75 @@ LangChain Provider adapter SHALL 在发送前完成 system 合并、message role
 - **THEN** 子 Agent SHALL 获得父 conversation snapshot 与白名单 durable state 的深拷贝
 - **AND** 子 Agent resume SHALL 从自己的 checkpoint 恢复，不重读父 Agent 当前 state
 
+### Requirement: Agent Runtime SHALL 按 Run 注入稳定的 Memory Bulletin
+
+启用经验记忆的主 Agent profile SHALL 在新 `run_id` 的 `before_agent` 边界执行 fast memory retrieval，并将有界 Bulletin、memory ids、source snapshot 和 `run_id` 写入 LangGraph private state。RunService SHALL 将 `run_id`、user id、agent profile 和 project key 显式传递至 agent factory/middleware；middleware SHALL NOT 从 session id 或模型文本推断。相同 Run 的模型调用和 HITL resume SHALL 复用逐字节相同的自动块，新 Run SHALL 刷新；该 private state SHALL NOT 自动复制给 subagent。
+
+Bulletin SHALL 只由当前用户/scope 的 active、有效、有合格 provenance/source evidence 且达到冻结相关性阈值的 item 构成。fast path SHALL 不额外调用生成模型；任一依赖失败 SHALL 零注入并继续 Run，不得用 raw、candidate、needs_review、过期或跨 scope 内容兜底。
+
+#### Scenario: 同一 Run 自动块稳定
+- **WHEN** 同一 Run 内发生多次模型调用
+- **THEN** 每次请求中的自动 Memory Bulletin SHALL 逐字节相同
+
+#### Scenario: HITL 跨进程恢复
+- **WHEN** Run 进入 HITL pending 并从 checkpoint 在另一进程恢复
+- **THEN** middleware SHALL 复用 checkpoint private state 中的原 Bulletin
+
+#### Scenario: subagent 不继承自动块
+- **WHEN** 主 Agent 创建 subagent
+- **THEN** Memory Bulletin private state SHALL NOT 因通用状态复制而自动传入 subagent
+
+#### Scenario: 记忆依赖降级
+- **WHEN** embedding、workspace、Qdrant 或 PostgreSQL memory 查询不可用
+- **THEN** Runtime SHALL 零注入并继续 Agent Run
+- **AND** SHALL NOT 放宽状态、scope 或 provenance 门槛
+
+#### Scenario: 用户关闭开关
+- **WHEN** 用户关闭经验记忆并开始新 Run
+- **THEN** Runtime SHALL 不执行自动检索或注入
+- **AND** `search_memory`、`get_memory_source` 和治理操作 SHALL 保持可用
+
+### Requirement: MemoryQueryService SHALL 使用独立只读运行边界
+
+MemoryQueryService SHALL 与主 Agent 的业务工具分离，只装配 manifest/item/Run span/artifact summary 只读工具，并显式禁止外部网络、远程 MCP、业务写工具、shell 写入、跨用户路径和递归 memory capture。Service SHALL 对每次查询记录 duration、step count、token usage、returned spans、evidence status 和失败分类；trace SHALL 脱敏并按保留期清理。
+
+#### Scenario: 查询 Controller 尝试调用业务工具
+- **WHEN** MemoryQueryService 模型请求未注册的业务写工具或外部工具
+- **THEN** Runtime SHALL 拒绝该工具调用
+- **AND** SHALL NOT扩大当前授权或继续以该输出作为证据
+
+#### Scenario: 查询无证据
+- **WHEN** 只读检索在预算内未找到支持当前问题的来源
+- **THEN** Service SHALL 返回 `insufficient`/abstain
+- **AND** SHALL NOT 根据相似摘要编造结论
+
+### Requirement: Runtime SHALL 保护稳定 Prompt 前缀的上下文缓存
+
+PromptAssembler SHALL 保持稳定 system/developer instructions、工具 schema 和可缓存历史前缀位于自动 Memory Bulletin 之前，并将 Bulletin 作为单一 late context segment 放在稳定前缀之后、当前用户输入/本轮新增内容之前。Bulletin SHALL 使用 canonical serialization：稳定排序、固定字段顺序/空白/转义，且模型可见文本 SHALL NOT 包含当前时间、当前 `run_id`、source run/span、evidence count、last verified time 或随机值。相同 `bulletin_hash` SHALL 生成逐字节相同文本；真实 memory 内容变化时 SHALL 生成新 hash，不得为了 cache 保留 stale 内容。
+
+`run_id`、source snapshot/span 和动态治理字段 SHALL 只保存在 private metadata，通过来源工具展开。显式 Deep Query SHALL 作为后续 tool result 追加，不改写稳定 system prompt 或冻结 Bulletin。Runtime SHALL 保持上述稳定前缀以支持 provider 的自动 prefix cache；系统 SHALL NOT 注入 provider 专用 cache breakpoint 标记（当前无显式缓存 provider 诉求），也不得因此增加用户开关。Runtime SHALL 记录 provider 可得的 cache-read、cache-write、uncached input 和 TTFT；provider 不返回时 SHALL 记录 unknown 而非 0。
+
+#### Scenario: 同 Run 后续调用复用 Bulletin
+- **WHEN** 同一 Run 的后续模型调用使用相同 `bulletin_hash`
+- **THEN** 模型可见 Bulletin SHALL 逐字节相同
+- **AND** Runtime SHALL 保留稳定 prefix 以允许 provider cache reuse
+
+#### Scenario: 新 Run 内容未变化
+- **WHEN** 新 Run 检索出与上一 Run 相同的 memory items 和可见字段
+- **THEN** canonical serializer SHALL 产生相同 `bulletin_hash` 和文本
+- **AND** SHALL NOT 因新 `run_id` 或当前时间制造 cache miss
+
+#### Scenario: Memory 内容真实变化
+- **WHEN** active statement、applicability 或 verification label 发生变化
+- **THEN** 系统 SHALL 生成新的 Bulletin/hash
+- **AND** SHALL 优先保证内容正确而非复用旧 cache
+
+#### Scenario: Provider 不返回 cache 指标
+- **WHEN** 模型响应没有 cache token details
+- **THEN** telemetry SHALL 标记 cache metrics unavailable
+- **AND** SHALL NOT 把缺失值计为零缓存命中
+
+#### Scenario: Provider 要求显式 cache breakpoint
+- **WHEN** 当前模型适配器声明支持且要求显式 prompt cache breakpoint
+- **THEN** Runtime SHALL 在稳定前缀末端设置 provider-native breakpoint
+- **AND** 动态 Bulletin、当前用户输入和后续 tool result SHALL 位于 breakpoint 之后

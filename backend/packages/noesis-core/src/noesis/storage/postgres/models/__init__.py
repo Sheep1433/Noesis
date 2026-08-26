@@ -15,16 +15,6 @@ from noesis.storage.postgres.models.chat import (
     TChatSession,
 )
 from noesis.storage.postgres.models.knowledge import TKbCollectionConfig
-from noesis.storage.postgres.models.memory import (
-    TMemoryEvidence,
-    TMemoryItem,
-    TMemoryJob,
-    TMemoryOutbox,
-    TMemoryQueryTrace,
-    TMemoryRelation,
-    TMemoryRunSnapshot,
-    TMemoryUserPreference,
-)
 from noesis.storage.postgres.models.scheduled_task import TUserScheduledTask
 from noesis.storage.postgres.models.user_llm import (
     TUserLLMModel,
@@ -49,14 +39,6 @@ __all__ = [
     "TAgentDelivery",
     "TChatAttachment",
     "TKbCollectionConfig",
-    "TMemoryEvidence",
-    "TMemoryItem",
-    "TMemoryJob",
-    "TMemoryOutbox",
-    "TMemoryQueryTrace",
-    "TMemoryRelation",
-    "TMemoryRunSnapshot",
-    "TMemoryUserPreference",
     "TUserScheduledTask",
     "TUserScheduledTaskRun",
     "TUserNotificationPreference",

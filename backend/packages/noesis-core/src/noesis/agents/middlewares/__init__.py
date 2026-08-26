@@ -31,8 +31,11 @@ from noesis.agents.middlewares.read_before_write_middleware import (
     ReadBeforeWriteMiddleware,
     WriteRejectedError,
 )
+from noesis.agents.middlewares.memory_entries_middleware import (
+    MemoryEntriesMiddleware,
+    build_memory_entries_middleware,
+)
 from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMemoryMiddleware
-from noesis.agents.middlewares.memory_bulletin_middleware import MemoryBulletinMiddleware
 from noesis.agents.middlewares.refreshing_skills_middleware import (
     RefreshingSkillsMiddleware,
     RefreshingSkillsState,
@@ -70,8 +73,9 @@ __all__ = [
     "FileFingerprint",
     "LLMErrorHandlingMiddleware",
     "ReadBeforeWriteMiddleware",
+    "MemoryEntriesMiddleware",
     "RefreshingMemoryMiddleware",
-    "MemoryBulletinMiddleware",
+    "build_memory_entries_middleware",
     "RefreshingSkillsMiddleware",
     "RefreshingSkillsState",
     "ReplacementRecord",

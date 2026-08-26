@@ -35,11 +35,12 @@ from noesis.services.scheduled_task_scheduler import (
     start_scheduled_task_scheduler,
     stop_scheduled_task_scheduler,
 )
-from noesis.services.memory.worker import (
-    start_machine_memory_worker,
-    stop_machine_memory_worker,
-)
 from noesis.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
+from noesis.services.memory.consolidation import (
+    start_memory_consolidator,
+    stop_memory_consolidator,
+)
+from noesis.services.memory.extraction import start_memory_sweeper, stop_memory_sweeper
 from noesis.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
 from server.bootstrap.kb import sync_existing_kb_collection_configs
 from noesis.services.run_recovery_service import RunRecoveryService
@@ -99,12 +100,14 @@ async def lifespan(app: FastAPI):
         await sync_existing_kb_collection_configs()
         start_scheduled_task_scheduler()
         resources.push_async_callback(stop_scheduled_task_scheduler)
-        start_machine_memory_worker()
-        resources.push_async_callback(stop_machine_memory_worker)
         start_telegram_runtime()
         resources.push_async_callback(stop_telegram_runtime)
         start_feishu_runtime()
         resources.push_async_callback(stop_feishu_runtime)
+        await start_memory_sweeper()
+        resources.push_async_callback(stop_memory_sweeper)
+        await start_memory_consolidator()
+        resources.push_async_callback(stop_memory_consolidator)
 
         logger.info(f'🚀 {AppConfig.app_name}启动成功')
         yield

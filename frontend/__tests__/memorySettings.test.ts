@@ -11,12 +11,17 @@ const api = readFileSync(
   'utf8',
 )
 
-describe('machine memory settings removal baseline', () => {
-  it('does not retain daily files or automatic dream controls', () => {
-    expect(section).not.toContain('整理记忆')
-    expect(section).not.toContain('按日')
-    expect(section).not.toContain('Dream')
-    expect(api).not.toContain('/memory/dream')
-    expect(api).not.toContain('/memory/daily')
+describe('memory cortex removal baseline', () => {
+  it('does not retain cortex governance in settings UI or API', () => {
+    expect(section).not.toContain('cortex')
+    expect(section).not.toContain('MachineMemory')
+    expect(api).not.toContain('/memory/cortex')
+    expect(api).not.toContain('MachineMemory')
+  })
+
+  it('keeps explicit USER.md / AGENTS.md file management', () => {
+    expect(section).toContain('getUserMemoryFile')
+    expect(section).toContain('putUserMemoryFile')
+    expect(api).toContain('/api/user/memory/')
   })
 })

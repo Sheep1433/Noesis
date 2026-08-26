@@ -56,7 +56,7 @@ async def test_recovery_closes_streaming_assistant_without_run(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_recovery_enqueues_interrupted_run_capture(monkeypatch) -> None:
+async def test_recovery_finalizes_interrupted_run(monkeypatch) -> None:
     run = SimpleNamespace(
         id="run-1",
         assistant_message_id="assistant-1",
@@ -75,19 +75,10 @@ async def test_recovery_enqueues_interrupted_run_capture(monkeypatch) -> None:
     repository = MagicMock()
     repository.list_non_terminal = AsyncMock(return_value=[run])
     repository.finalize = AsyncMock(return_value=True)
-    capture = AsyncMock(return_value=True)
     monkeypatch.setattr(run_recovery_service, "AgentRunRepository", lambda _db: repository)
-    monkeypatch.setattr(
-        run_recovery_service.MemoryCaptureService,
-        "enqueue_for_terminal",
-        capture,
-    )
 
     recovered = await RunRecoveryService.recover_orphaned_runs(db)
 
     assert recovered == 1
-    capture.assert_awaited_once_with(
-        db,
-        run_id="run-1",
-        content={"parts": [{"type": "text", "content": "Useful partial result"}]},
-    )
+    repository.finalize.assert_awaited_once()
+    db.commit.assert_awaited_once()

@@ -49,7 +49,6 @@ from noesis.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
 from noesis.services.qa import QaService
 from noesis.services.chat_service import ChatService
 from noesis.services.compaction_service import compact_session
-from noesis.services.memory.capture import MemoryCaptureService
 
 
 _OWNER_INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"
@@ -345,9 +344,6 @@ class RunService:
                 user_error_message="任务启动失败，请稍后重试",
             )
             if won:
-                await MemoryCaptureService.enqueue_for_terminal(
-                    cleanup_db, run_id=run.id, content=content
-                )
                 await cleanup_db.commit()
             else:
                 await cleanup_db.rollback()
@@ -550,11 +546,6 @@ class RunService:
                 usage=projection.run_usage,
             )
             if won:
-                await MemoryCaptureService.enqueue_for_terminal(
-                    db,
-                    run_id=candidate.envelope.run_id,
-                    content=content,
-                )
                 await db.commit()
                 return TerminalCommitResult("committed")
             await db.rollback()
@@ -642,9 +633,6 @@ class RunService:
                 if not won:
                     await db.rollback()
                     return
-                await MemoryCaptureService.enqueue_for_terminal(
-                    db, run_id=run_id, content=content
-                )
             else:
                 await repository.compare_and_set_status(
                     run_id,
