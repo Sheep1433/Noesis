@@ -106,6 +106,8 @@ lifespan 在 migration、recovery、scheduler 和 channel runtime 之前，通�
 
 SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理 read timeout 必须大于 keepalive 间隔并关闭响应缓冲。
 
+公网入口（宿主机 nginx，`/etc/nginx/sites-enabled/noesis`，certbot 管理）在 443 上启用 HTTP/2（`listen 443 ssl http2;`）：单 Tab 并发挂用户级信令流、主对话 run 流、子任务目录流与子会话 run 流，HTTP/1.1 下受浏览器同源 6 连接硬限，多 Tab / 多抽屉即占满导致请求排队挂起；h2 多路复用后所有流共用单连接（每连接并发 stream 上限约 100+），该瓶颈消除。容器内 nginx（`deploy/frontend/nginx.conf`）与 uvicorn 上游链路保持 HTTP/1.1 不变。
+
 ## 8. 代码入口
 
 - Run 单写入边界：`backend/packages/noesis-core/src/noesis/domain/chat/runs/manager.py`
