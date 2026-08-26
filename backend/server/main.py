@@ -114,9 +114,9 @@ async def lifespan(app: FastAPI):
         resources.push_async_callback(stop_telegram_runtime)
         start_feishu_runtime()
         resources.push_async_callback(stop_feishu_runtime)
-        start_memory_sweeper()
+        await start_memory_sweeper()
         resources.push_async_callback(stop_memory_sweeper)
-        start_memory_consolidator()
+        await start_memory_consolidator()
         resources.push_async_callback(stop_memory_consolidator)
 
         logger.info(f'🚀 {AppConfig.app_name}启动成功')

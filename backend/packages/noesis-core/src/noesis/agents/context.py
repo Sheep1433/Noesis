@@ -10,7 +10,12 @@ from noesis.agents.backends.paths import (
     AGENT_MEMORY_INDEX_FILE,
     AGENT_MEMORY_USER_FILE,
 )
-from noesis.config.user_data_paths import ensure_user_memory_files, get_user_agents_md_path, get_user_profile_md_path
+from noesis.config.user_data_paths import (
+    ensure_user_memory_files,
+    get_user_agents_md_path,
+    get_user_memory_index_path,
+    get_user_profile_md_path,
+)
 from noesis.agents.prompts import PromptProfile, build_prompt
 
 
@@ -59,6 +64,7 @@ class ContextResolver:
             sources.extend([
                 cls._file_source("profile", "用户画像", get_user_profile_md_path(user_id)),
                 cls._file_source("memory", "长期记忆", get_user_agents_md_path(user_id)),
+                cls._file_source("memory-index", "记忆索引", get_user_memory_index_path(user_id)),
             ])
         compiled = "\n\n".join(f"## {source.label}\n{source.content}" for source in sources if source.injected and source.content.strip())
         return ResolvedAgentContext(key, prompt, memory_sources, tuple(sources), compiled)

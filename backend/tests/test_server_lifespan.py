@@ -32,6 +32,10 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "stop_scheduled_task_scheduler",
         "stop_telegram_runtime",
         "stop_feishu_runtime",
+        "start_memory_sweeper",
+        "start_memory_consolidator",
+        "stop_memory_sweeper",
+        "stop_memory_consolidator",
     )
     patched: dict[str, object] = {"pg_manager": pg_manager}
     for name in async_names:

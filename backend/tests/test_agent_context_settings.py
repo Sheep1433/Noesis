@@ -46,7 +46,12 @@ def test_context_preview_uses_runtime_resolver_without_side_effects(tmp_path: Pa
         "/memory/AGENTS.md",
         "/memory/MEMORY.md",
     )
-    assert [source.id for source in resolved.sources] == ["system", "profile", "memory"]
+    assert [source.id for source in resolved.sources] == [
+        "system",
+        "profile",
+        "memory",
+        "memory-index",
+    ]
     assert "用户画像" in resolved.compiled_content
     assert before == after
 
