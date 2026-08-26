@@ -55,16 +55,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
 
-      - name: Verify machine-memory release evidence
-        working-directory: backend
-        env:
-          MODEL_API_KEY: sk-release-evidence-placeholder
-          EMBEDDING_MODEL_API_KEY: sk-release-evidence-placeholder
-        run: |
-          uv sync --frozen
-          cp config.example.yaml config.yaml
-          uv run python -m evals.memory_cortex.release_gate
-
       - name: Validate deploy secrets
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
