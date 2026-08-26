@@ -230,6 +230,27 @@ class StreamYamlSection(BaseModel):
     run_channel_drain_seconds: float = Field(default=5.0, gt=0)
 
 
+class DistributedRunsYamlSection(BaseModel):
+    """distributed_runs：分布式 Run 协调的非敏感调优参数。
+
+    模式（memory|redis）与 REDIS_URL/NOESIS_CLUSTER_ID 属敏感/环境项，
+    只经 .env 显式配置，不在此处提供默认。
+    """
+
+    leader_heartbeat_seconds: float = Field(default=30.0, gt=0)
+    queued_scan_interval_seconds: float = Field(default=5.0, gt=0)
+    command_scan_interval_seconds: float = Field(default=5.0, gt=0)
+    publisher_queue_max_events: int = Field(default=512, gt=0)
+    publisher_queue_max_bytes: int = Field(default=1024 * 1024, gt=0)
+    handshake_buffer_max_events: int = Field(default=256, gt=0)
+    handshake_buffer_max_bytes: int = Field(default=512 * 1024, gt=0)
+    reconciliation_interval_seconds: float = Field(default=30.0, gt=0)
+    periodic_checkpoint_interval_seconds: float = Field(default=15.0, gt=0)
+    redis_socket_timeout_seconds: float = Field(default=5.0, gt=0)
+    redis_connect_timeout_seconds: float = Field(default=3.0, gt=0)
+    redis_pool_max_connections: int = Field(default=20, gt=0)
+
+
 class QdrantYamlSection(BaseModel):
     host: str = "localhost"
     port: int = 6333
@@ -443,6 +464,9 @@ class AppYamlConfig(BaseModel):
         default_factory=RetrievalLimitsYamlSection
     )
     stream: StreamYamlSection = Field(default_factory=StreamYamlSection)
+    distributed_runs: DistributedRunsYamlSection = Field(
+        default_factory=DistributedRunsYamlSection
+    )
     qdrant: QdrantYamlSection = Field(default_factory=QdrantYamlSection)
     langfuse: LangfuseYamlSection = Field(default_factory=LangfuseYamlSection)
     other: OtherYamlSection = Field(default_factory=OtherYamlSection)
