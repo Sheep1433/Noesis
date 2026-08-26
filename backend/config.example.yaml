@@ -41,12 +41,12 @@ model:
   # 运行时可选模型目录；前端会话级切换 model_id，未配置时仅使用上方默认 model
   # 用户自定义 Provider 平台预设（部署者维护；选预设 → base_url 自动填，用户只填 Key）
   # 敏感凭证不放预设；归因类 header 可放
+  # 平台端点 Key：OpenCode Zen 为公开值 public（非机密，故放 yaml）；机密 Key 走 .env MODEL_API_KEY
+  api_key: public
   provider_presets:
     - id: opencode
       label: opencode
       base_url: https://opencode.ai/zen/v1
-  # 平台端点 Key：OpenCode Zen 为公开值 public（非机密，故放 yaml）；机密 Key 走 .env MODEL_API_KEY
-  api_key: public
       headers:
         HTTP-Referer: https://opencode.ai/
         X-Title: opencode
