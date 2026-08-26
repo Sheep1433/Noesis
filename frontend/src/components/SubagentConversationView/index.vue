@@ -3,16 +3,19 @@ import type { AgentRunSnapshot, ChatMessageResponse } from '@/api/chat'
 import { NButton, NInput } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
+  getSession,
   getSessionMessages,
   resumeAgentRunHitl,
   sendSubagentFollowup,
   stopAgentRun,
   subscribeAgentRun,
 } from '@/api/chat'
+import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
 import HitlApprovalCard from '@/components/HitlApprovalCard/index.vue'
 import {
   formatDurationMs,
+  hasValidContextWindow,
   normalizeApiContent,
 } from '@/views/chat/messageParts'
 
@@ -42,6 +45,7 @@ const activeRunId = ref<string | null>(props.runId)
 let requestSerial = 0
 const now = ref(Date.now())
 let durationTimer: ReturnType<typeof setInterval> | null = null
+const contextSnapshot = ref<Record<string, unknown> | null>(null)
 
 const assistantMessage = computed(() => messages.value.find((item) => item.id === run.value?.assistant_message_id))
 const turnCount = computed(() => messages.value.filter((item) => item.role === 'user').length)
@@ -128,6 +132,10 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   if (run.value && sequence > Number(run.value.snapshot_sequence ?? 0)) {
     run.value = { ...run.value, snapshot_sequence: sequence }
   }
+  if (event === 'context-update' && payload.context && typeof payload.context === 'object') {
+    contextSnapshot.value = { ...(payload.context as Record<string, unknown>) }
+    return
+  }
   if (event === 'message.updated') {
     upsertAssistant(payload.content)
     if (run.value) {
@@ -151,6 +159,17 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
         pending_hitl: null,
       }
     }
+  }
+}
+
+async function loadContextSnapshot() {
+  try {
+    const session = await getSession(props.sessionId)
+    if (hasValidContextWindow(session?.extra?.context)) {
+      contextSnapshot.value = session.extra.context
+    }
+  } catch {
+    // 上下文快照缺失只影响指示器，不影响会话展示
   }
 }
 
@@ -232,6 +251,7 @@ async function loadConversation() {
       return
     }
     messages.value = history.messages
+    void loadContextSnapshot()
     if (activeRunId.value) {
       void consumeStream(activeRunId.value, serial)
     }
@@ -334,6 +354,9 @@ onBeforeUnmount(() => {
       <span>{{ stepCount }} 步</span>
       <span v-if="duration">· {{ duration }}</span>
       <span v-if="run">· {{ run.status }}</span>
+      <span v-if="hasValidContextWindow(contextSnapshot)" class="subagent-conversation__context">
+        <ContextWindowIndicator :context="contextSnapshot as any" />
+      </span>
     </div>
     <div v-if="loading" class="subagent-conversation__empty">正在加载对话…</div>
     <div v-else class="subagent-conversation__body">
@@ -400,10 +423,17 @@ onBeforeUnmount(() => {
 
 .subagent-conversation__meta {
   display: flex;
+  align-items: center;
   gap: 6px;
   margin-bottom: 12px;
   color: var(--noesis-color-text-hint);
   font-size: 12px;
+}
+
+.subagent-conversation__context {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
 }
 
 .subagent-conversation__empty {

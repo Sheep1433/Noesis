@@ -238,6 +238,7 @@ class SuperAgent(BaseAgent):
             create_child_session=_create_child_session,
             delete_child_session=_delete_child_session,
             create_followup_run=_create_followup_run,
+            model_id=model_id,
         ))
 
         return create_noesis_agent(

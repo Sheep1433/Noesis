@@ -84,6 +84,10 @@ class BackgroundTask:
     message_offset: int = field(default=0, repr=False)
     # subagent 任务均可经 send_message 追加 turn；shell 任务使用独立 kind。
     kind: str = "subagent"
+    # worker 的 model_id：上下文窗口上限解析用（主对话同源 model_limits）
+    model_id: Optional[str] = None
+    # 最近一次上下文快照（worker usage 提取；变更才发布/落库）
+    context_snapshot: Optional[dict[str, Any]] = None
     status: BgTaskStatus = BgTaskStatus.RUNNING
     result: Optional[str] = None
     error: Optional[str] = None
@@ -352,6 +356,7 @@ def _publish_run_event(
     event: str,
     *,
     content: Optional[dict[str, Any]] = None,
+    context: Optional[dict[str, Any]] = None,
 ) -> None:
     if not task.run_id:
         return
@@ -366,6 +371,8 @@ def _publish_run_event(
         payload["content"] = content
         if isinstance(content, dict) and isinstance(content.get("_pending_hitl"), dict):
             payload["pending_hitl"] = content["_pending_hitl"]
+    if context is not None:
+        payload["context"] = context
     with _RUN_SUBSCRIBERS_LOCK:
         history = _RUN_EVENT_HISTORY.setdefault(
             task.run_id,
@@ -479,6 +486,64 @@ def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
 def _progress_append(task: BackgroundTask, entry: dict[str, Any]) -> None:
     with task.progress_lock:
         task.progress.append(entry)
+
+
+def _maybe_update_context_snapshot(task: BackgroundTask, messages: list) -> None:
+    """从 worker 最新一轮模型调用的 usage 提取上下文快照。
+
+    主对话的快照由 SSE bridge 在模型调用边界提取（usage.input_tokens，
+    单轮真实值、每次覆盖）；子 run 无 bridge，这里从 thread 消息的
+    usage_metadata 取同一口径。变更时发布 context-update run 事件并
+    落库到子会话 extra.context（与主对话同存储位）。
+    """
+    if not task.child_session_id:
+        return
+    snapshot = None
+    for message in reversed(messages):
+        usage = getattr(message, "usage_metadata", None)
+        if isinstance(usage, dict) and usage.get("input_tokens"):
+            from noesis.llm.model_limits import resolve_context_max_tokens
+            from noesis.chat.event_mapping.usage_normalize import compute_used_percentage
+
+            current = int(usage["input_tokens"])
+            limit = resolve_context_max_tokens(task.model_id)
+            snapshot = {
+                "current_tokens": current,
+                "max_tokens": limit,
+                "used_percentage": compute_used_percentage(current, limit),
+            }
+            break
+    if snapshot is None or snapshot == getattr(task, "context_snapshot", None):
+        return
+    task.context_snapshot = snapshot
+    _publish_run_event(task, "context-update", context=snapshot)
+    _schedule_context_persist(task, snapshot)
+
+
+def _schedule_context_persist(task: BackgroundTask, snapshot: dict[str, Any]) -> None:
+    """快照落库到子会话 extra.context（DB 引擎绑定主 loop，跨 loop 调度）。"""
+    import datetime as _dt
+
+    from noesis.runtime.main_loop import run_on_main_loop
+
+    payload = {**snapshot, "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat()}
+
+    async def _merge() -> None:
+        try:
+            from noesis.services.chat_service import ChatService
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as db:
+                await ChatService.merge_session_extra(
+                    task.child_session_id, task.user_id, {"context": payload}, db=db,
+                )
+        except Exception:
+            logger.opt(exception=True).warning(
+                "bg subagent context snapshot persist failed task_id={}",
+                task.task_id,
+            )
+
+    run_on_main_loop(_merge(), name=f"bg-ctx:{task.task_id}")
 
 
 def _record_step_progress(
@@ -793,6 +858,7 @@ class BackgroundSubagentExecutor:
         run_id: Optional[str] = None,
         assistant_message_id: Optional[str] = None,
         followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None,
+        model_id: Optional[str] = None,
     ) -> str:
         """启动后台任务，立即返回 task_id；超并发抛 ValueError。"""
         task_id = task_id or f"bg-{uuid.uuid4()}"
@@ -806,6 +872,7 @@ class BackgroundSubagentExecutor:
             run_id=run_id,
             assistant_message_id=assistant_message_id,
             kind="subagent",
+            model_id=model_id,
         )
         entry = _TaskEntry(
             task=task,
@@ -1156,6 +1223,7 @@ async def _arun(
                     if task.run_id:
                         await _persist_child_projection(task, messages[projection_offset:])
                     _publish_task_event(task, "progress")
+                    _maybe_update_context_snapshot(task, messages)
             interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
             payload = _extract_interrupt_payload(interrupts) if interrupts else None
             if payload is not None:

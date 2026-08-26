@@ -64,6 +64,7 @@ def build_background_task_tools(
     create_child_session: Callable[[str, str], Awaitable[str | dict[str, Any]]] | None = None,
     delete_child_session: Callable[[str], Awaitable[None]] | None = None,
     create_followup_run: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None,
+    model_id: str | None = None,
 ) -> list[StructuredTool]:
     """构造绑定到当前会话的后台任务工具集。
 
@@ -97,6 +98,7 @@ def build_background_task_tools(
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
                 followup_factory=create_followup_run,
+                model_id=model_id,
             )
         except ValueError as exc:
             if child_session_id and delete_child_session is not None:

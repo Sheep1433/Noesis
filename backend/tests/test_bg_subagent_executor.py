@@ -942,3 +942,36 @@ async def test_bg_event_subscription_receives_approval_lifecycle() -> None:
         assert events[-1]["task"]["status"] == BgTaskStatus.COMPLETED.value
     finally:
         unsubscribe_bg_events("s-sse-ap", queue)
+
+
+def test_context_snapshot_from_worker_usage_metadata() -> None:
+    """子会话上下文快照：worker 消息 usage_metadata → 快照变更发布/记录。
+
+    主对话的快照由 SSE bridge 提取；子 run 无 bridge，executor 从 thread
+    消息取同口径（单轮真实 input_tokens，每次覆盖）。
+    """
+    from noesis.agents.subagents import executor as ex_mod
+
+    worker = _build_worker([
+        AIMessage(
+            content="完成",
+            usage_metadata={"input_tokens": 12000, "output_tokens": 50, "total_tokens": 12050},
+        ),
+    ])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="调研任务",
+        session_id="s-ctx", user_id="u1",
+        child_session_id="child-ctx", model_id="deepseek-v4-flash",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+    with ex_mod._TASKS_LOCK:
+        entry = ex_mod._TASKS.get(task_id)
+    assert entry is not None
+    snapshot = entry.task.context_snapshot
+    assert snapshot is not None
+    assert snapshot["current_tokens"] == 12000
+    assert snapshot["max_tokens"] > 0
+    assert 0 < snapshot["used_percentage"] <= 100

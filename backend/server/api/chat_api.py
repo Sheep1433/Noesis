@@ -978,6 +978,7 @@ async def stream_run(
                         "run.finished",
                         "approval.required",
                         "approval.resumed",
+                        "context-update",
                     }:
                         continue
                     event_key = (str(item.get("type") or "run.event"), sequence)

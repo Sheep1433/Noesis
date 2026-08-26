@@ -29,3 +29,11 @@ const { drawerWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.96 }
     </n-drawer-content>
   </n-drawer>
 </template>
+
+<style scoped lang="scss">
+:deep(.n-drawer-header__main) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+</style>

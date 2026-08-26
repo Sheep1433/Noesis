@@ -304,6 +304,12 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
   color: var(--noesis-color-text);
 }
 
+:deep(.n-drawer-header__main) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .bg-task-overview {
   display: flex;
   align-items: center;
