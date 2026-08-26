@@ -136,6 +136,7 @@ distributed_runs:
   handshake_buffer_max_bytes: 524288
   reconciliation_interval_seconds: 30
   periodic_checkpoint_interval_seconds: 15
+  envelope_payload_max_bytes: 262144
   redis_socket_timeout_seconds: 5
   redis_connect_timeout_seconds: 3
   redis_pool_max_connections: 20
