@@ -94,3 +94,57 @@ def test_delete_user_skill_package_rejects_symlink(users_root: Path, tmp_path: P
     assert ok is False
     assert "链接" in msg
     assert link.is_symlink()
+
+
+def test_list_packages_returns_platform_and_user(
+    users_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """list_packages 返回 platform + user 顶层包名 + 描述，不递归文件。"""
+    platform_root = tmp_path / "platform-skills"
+    (platform_root / "alpha").mkdir(parents=True)
+    (platform_root / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: Alpha skill\n---\n# alpha", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        SkillFsService, "get_platform_root_path", classmethod(lambda cls: str(platform_root))
+    )
+    user_dir = paths.ensure_user_skills_dir("u1") / "beta"
+    user_dir.mkdir(parents=True)
+    (user_dir / "SKILL.md").write_text("---\nname: beta\ndescription: Beta\n---\n", encoding="utf-8")
+
+    items = SkillFsService.list_packages("u1")
+    by_name = {it.name: it for it in items}
+    assert by_name["alpha"].source == "platform"
+    assert by_name["alpha"].description == "Alpha skill"
+    assert by_name["beta"].source == "user"
+    assert by_name["beta"].description == "Beta"
+
+
+def test_get_tree_filters_noise_dirs(
+    users_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_tree 跳过 node_modules/vendor 等噪声目录，不进文件树。"""
+    platform_root = tmp_path / "platform-skills"
+    pkg = platform_root / "demo"
+    pkg.mkdir(parents=True)
+    (pkg / "SKILL.md").write_text("# demo", encoding="utf-8")
+    (pkg / "scripts" / "node_modules" / "dep").mkdir(parents=True)
+    (pkg / "scripts" / "node_modules" / "dep" / "index.js").write_text("module.exports")
+    (pkg / "scripts" / "vendor" / "lib.js").parent.mkdir(parents=True)
+    (pkg / "scripts" / "vendor" / "lib.js").write_text("vendor")
+    monkeypatch.setattr(
+        SkillFsService, "get_platform_root_path", classmethod(lambda cls: str(platform_root))
+    )
+
+    tree = SkillFsService.get_tree("u1")
+
+    labels: list[str] = []
+    def collect(nodes):
+        for n in nodes:
+            labels.append(n.label)
+            if n.children:
+                collect(n.children)
+    collect(tree.tree)
+    assert "node_modules" not in labels
+    assert "vendor" not in labels
+    assert "demo" in labels

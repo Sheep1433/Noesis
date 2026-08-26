@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from noesis.domain.chat.delivery.channels import channel_bindings, channel_registry, route_inbound
-from noesis.domain.chat.delivery.feishu.adapter import EventDeduplicator, FeishuChannelAdapter
-from noesis.domain.chat.delivery.feishu.client import FeishuBotClient
+from noesis.chat.delivery.channels import channel_bindings, channel_registry, route_inbound
+from noesis.chat.delivery.feishu.adapter import EventDeduplicator, FeishuChannelAdapter
+from noesis.chat.delivery.feishu.client import FeishuBotClient
 from noesis.services.messaging_channel_service import MessagingChannelService
 from server.api.user_settings_api import ChannelUpsertBody
-from noesis.domain.chat.hitl.pending import PendingHitl, pending_hitl
+from noesis.chat.hitl.pending import PendingHitl, pending_hitl
 from noesis.services.channels import feishu_runtime
 from noesis.services.channels.feishu_runtime import _HitlPrompt, _hitl_card
 

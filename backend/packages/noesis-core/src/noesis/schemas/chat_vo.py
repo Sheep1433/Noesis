@@ -34,7 +34,9 @@ class ChatSessionResponse(BaseModel):
     """会话响应"""
     id: str = Field(..., description='会话 UUID')
     parent_id: Optional[str] = Field(None, description='父会话 ID')
-    user_id: str = Field(..., description='用户 ID')
+    kind: str = Field('root', description='会话类型: root | subagent')
+    created_by_run_id: Optional[str] = Field(None, description='创建该子会话的 Agent run ID')
+    created_by_tool_call_id: Optional[str] = Field(None, description='创建该子会话的工具调用 ID')
     title: str = Field(..., description='会话标题')
     extra: Optional[Dict[str, Any]] = Field(None, description='会话元数据')
     created_at: int = Field(..., description='创建时间戳（Unix 毫秒）')
@@ -48,6 +50,26 @@ class SessionListResponse(BaseModel):
     """会话列表响应"""
     sessions: List[ChatSessionResponse] = Field(..., description='会话列表')
     total: int = Field(..., description='总数')
+
+
+class ChildSessionCatalogItem(BaseModel):
+    """父会话中的子 Agent 目录项；正文仍通过标准 messages API 读取。"""
+    session_id: str = Field(..., description='子会话 ID')
+    parent_id: str = Field(..., description='父会话 ID')
+    title: str = Field(..., description='子 Agent 标题')
+    profile_id: str = Field('task-worker', description='子 Agent 配置标识')
+    run_id: Optional[str] = Field(None, description='当前或最近一轮 Agent run ID')
+    status: str = Field('completed', description='子 Agent 状态')
+    turn_count: int = Field(0, description='对话轮数')
+    step_count: int = Field(0, description='执行步数')
+    started_at: Optional[int] = Field(None, description='最近一轮开始时间（Unix 毫秒）')
+    finished_at: Optional[int] = Field(None, description='最近一轮结束时间（Unix 毫秒）')
+    interrupt: Optional[Dict[str, Any]] = Field(None, description='待审批信息')
+
+
+class ChildSessionCatalogResponse(BaseModel):
+    sessions: List[ChildSessionCatalogItem] = Field(default_factory=list, description='子 Agent 会话目录')
+    total: int = Field(0, description='子 Agent 会话总数')
 
 
 # ============================================================================
@@ -94,13 +116,14 @@ class ChatMessageResponse(BaseModel):
     id: str = Field(..., description='消息 UUID')
     session_id: str = Field(..., description='所属会话 ID')
     parent_id: Optional[str] = Field(None, description='父消息 ID')
-    user_id: str = Field(..., description='用户 ID')
     role: str = Field(..., description='角色: user | assistant')
     content: Dict[str, Any] = Field(..., description='消息内容，JSON multipart 格式')
     extra: Optional[Dict[str, Any]] = Field(None, description='消息元数据')
     status: str = Field(..., description='状态: completed | partial')
     message_sequence: int = Field(..., description='会话内严格递增的消息序号')
     created_at: int = Field(..., description='创建时间戳（Unix 毫秒）')
+    run_started_at: Optional[int] = Field(None, description='关联 Agent run 的启动时间戳（Unix 毫秒）；仅 assistant 消息有值')
+    run_finished_at: Optional[int] = Field(None, description='关联 Agent run 的终态时间戳（Unix 毫秒）；未完成/无 run 为 None')
 
 
 class MessageListResponse(BaseModel):
@@ -120,6 +143,11 @@ class SendMessageRequest(BaseModel):
     parent_id: Optional[str] = Field(None, description='父消息 ID')
     role: Literal['user', 'assistant'] = Field('user', description='角色: user | assistant')
     extra: Optional[Dict[str, Any]] = Field(None, description='额外元数据')
+
+
+class SubagentFollowupRequest(BaseModel):
+    """向现有 child session 发起下一轮对话。"""
+    message: str = Field(..., min_length=1, description='补充要求')
 
 
 class CreateRunRequest(BaseModel):
@@ -152,8 +180,6 @@ class RunSnapshotResponse(BaseModel):
     finish_reason: Optional[str] = Field(None, description='终态原因')
     error_code: Optional[str] = Field(None, description='稳定错误码')
     message: Optional[str] = Field(None, description='用户安全提示')
-    retry_attempt: int = Field(0, description='当前重试次数')
-    retry_max: int = Field(0, description='最大重试次数')
 
 
 class SendMessageResponse(BaseModel):

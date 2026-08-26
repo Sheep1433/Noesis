@@ -125,7 +125,7 @@ async def get_collection_config(
     return ResponseUtil.success(data=data)
 
 
-@knowledge_base_router.patch("/collections/{collection_name}/config")
+@knowledge_base_router.put("/collections/{collection_name}/config")
 async def patch_collection_config(
     collection_name: str,
     body: PatchCollectionConfigRequest,

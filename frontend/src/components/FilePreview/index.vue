@@ -5,7 +5,7 @@ import { computed, ref, watch } from 'vue'
 import MarkdownInstance from '@/components/MarkdownPreview/plugins/markdown'
 import { useMermaidRender } from '@/hooks/useMermaidRender'
 import { downloadFile } from '@/utils/download'
-import { getCodeLanguage, getFileBaseName, isImagePreviewPath, isMarkdownPreviewPath, splitYamlFrontmatter } from '@/utils/filePreview'
+import { getCodeLanguage, getFileBaseName, isHtmlPreviewPath, isImagePreviewPath, isMarkdownPreviewPath, splitYamlFrontmatter } from '@/utils/filePreview'
 
 type MarkdownViewMode = 'preview' | 'source'
 
@@ -66,12 +66,26 @@ watch(
 
 const isImage = computed(() => isImagePreviewPath(props.path) && !!props.imageSrc)
 const isMarkdown = computed(() => isMarkdownPreviewPath(props.path))
+const isHtml = computed(() => isHtmlPreviewPath(props.path))
 const codeLanguage = computed(() => getCodeLanguage(props.path))
 const displayContent = computed(() => (isEditing.value ? draftContent.value : props.content))
 const markdownParts = computed(() => splitYamlFrontmatter(displayContent.value))
 const renderedMarkdown = computed(() => MarkdownInstance.render(markdownParts.value.body))
 const showMarkdownSource = computed(() => isMarkdown.value && viewMode.value === 'source' && !isEditing.value)
 const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value === 'preview' && !isEditing.value)
+/**
+ * HTML 渲染预览：沙箱 iframe srcdoc。sandbox 仅 allow-scripts（无 allow-same-origin），
+ * 脚本运行在 opaque origin，无法访问应用 cookie/localStorage。
+ */
+const showHtmlPreview = computed(() => isHtml.value && viewMode.value === 'preview' && !isEditing.value)
+
+/**
+ * 沙箱 srcdoc 下锚点跳转（href="#x"）会被浏览器当作导航并拦截（opaque origin），
+ * iframe 直接白屏。注入垫片脚本把锚点点击改为同文档 scrollIntoView，不发生导航。
+ * 注意：字符串与注释中都不能出现字面的 script 开闭标签（SFC 解析器按原文扫描标签块）。
+ */
+const HTML_ANCHOR_SHIM = `<${'script'}>(function(){document.addEventListener('click',function(e){var t=e.target;var a=t&&t.closest?t.closest('a[href^="#"]'):null;if(!a)return;var id=(a.getAttribute('href')||'').slice(1);if(!id)return;var el=document.getElementById(id)||document.getElementsByName(id)[0];if(el){e.preventDefault();el.scrollIntoView({behavior:'smooth'});}},true);})();</${'script'}>`
+const htmlSrcdoc = computed(() => (showHtmlPreview.value ? props.content + HTML_ANCHOR_SHIM : ''))
 const canEdit = computed(() => props.editable && !isImage.value && !props.loading)
 const canDownload = computed(() => !props.loading && (!!props.content || !!props.imageSrc))
 const mermaidSource = computed(() => (showMarkdownPreview.value ? renderedMarkdown.value : ''))
@@ -88,7 +102,7 @@ function startEdit() {
 function cancelEdit() {
   draftContent.value = props.content
   isEditing.value = false
-  if (isMarkdown.value) {
+  if (isMarkdown.value || isHtml.value) {
     viewMode.value = 'preview'
   }
 }
@@ -102,7 +116,7 @@ watch(
   (saving, wasSaving) => {
     if (wasSaving && !saving && isEditing.value) {
       isEditing.value = false
-      if (isMarkdown.value) {
+      if (isMarkdown.value || isHtml.value) {
         viewMode.value = 'preview'
       }
     }
@@ -129,13 +143,13 @@ async function downloadCurrentFile() {
       { 'file-preview--fill': fillHeight },
     ]"
   >
-    <div v-if="showToolbar && ((showPath && path) || isMarkdown || canDownload || canEdit)" class="file-preview__header">
+    <div v-if="showToolbar && ((showPath && path) || isMarkdown || isHtml || canDownload || canEdit)" class="file-preview__header">
       <div v-if="showPath && path" class="file-preview__path" :title="path">
         {{ path }}
       </div>
       <div class="file-preview__toolbar">
         <div class="file-preview__actions">
-          <n-button-group v-if="isMarkdown && !isEditing" size="tiny" class="file-preview__mode-toggle">
+          <n-button-group v-if="(isMarkdown || isHtml) && !isEditing" size="tiny" class="file-preview__mode-toggle">
             <n-button
               :type="viewMode === 'preview' ? 'primary' : 'default'"
               :ghost="viewMode !== 'preview'"
@@ -202,6 +216,13 @@ async function downloadCurrentFile() {
       >{{ markdownParts.frontmatter }}</pre>
       <div v-html="renderedMarkdown"></div>
     </div>
+    <iframe
+      v-else-if="showHtmlPreview"
+      class="file-preview__html"
+      :srcdoc="htmlSrcdoc"
+      sandbox="allow-scripts"
+      title="HTML 预览"
+    ></iframe>
     <n-input
       v-else-if="isEditing"
       v-model:value="draftContent"
@@ -278,9 +299,10 @@ async function downloadCurrentFile() {
 .file-preview__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
-  flex: 1;
+  flex: 0 1 auto;
+  margin-left: auto;
   min-width: 0;
 }
 
@@ -320,6 +342,21 @@ async function downloadCurrentFile() {
 .file-preview--fill .file-preview__image-wrap,
 .file-preview--fill .file-preview__editor {
   flex: 1;
+  min-height: 0;
+}
+
+/* HTML 沙箱预览：fill 模式占满剩余高度；普通模式给固定可滚视口 */
+.file-preview__html {
+  width: 100%;
+  height: min(60vh, 480px);
+  border: none;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.file-preview--fill .file-preview__html {
+  flex: 1;
+  height: auto;
   min-height: 0;
 }
 
@@ -392,6 +429,9 @@ async function downloadCurrentFile() {
 
 <style lang="scss">
 .markdown-wrapper.markdown-wrapper--file-preview {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding: 8px 12px;
   border-radius: 0;
@@ -399,6 +439,7 @@ async function downloadCurrentFile() {
   font-size: 13px;
   line-height: 1.65;
   color: var(--noesis-color-text-table);
+  overflow-wrap: anywhere;
 
   h1 { font-size: 1.35em; }
   h2 { font-size: 1.15em; padding-bottom: 0.25em; border-bottom: 1px solid var(--noesis-markdown-heading-border); }
@@ -413,6 +454,11 @@ async function downloadCurrentFile() {
   p {
     margin: 8px 0;
     line-height: 1.65;
+  }
+
+  a,
+  :not(pre) > code {
+    overflow-wrap: anywhere;
   }
 
   ul, ol {

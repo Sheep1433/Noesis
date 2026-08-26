@@ -43,6 +43,33 @@ Docker（或 Docker Compose）部署 SHALL 通过环境变量或挂载的 env �
 - **WHEN** 监控或编排组件访问文档约定的健康检查 URL
 - **THEN** 在后端正常启动且依赖就绪时返回表示健康的响应体，用于判定该实例可接收流量
 
+### Requirement: P0 backend SHALL 使用 PostgreSQL advisory lock 保证单 active 实例
+
+backend lifespan SHALL 在接收流量前通过专用 PostgreSQL 连接获取固定 application advisory lock。部署命令 SHALL 固定单 worker；第二个 worker、进程或容器无法获取 lock 时 SHALL fail-fast。lock 连接丢失时实例 SHALL 变为 not-ready、停止接收新 Run并停止 live producer。
+
+#### Scenario: 第二个 backend 启动
+
+- **WHEN** 已有实例持有 lock，第二实例请求同一 lock
+- **THEN** 第二实例 SHALL 在 migration、recovery 与后台 runtime 前启动失败
+
+### Requirement: Run recovery SHALL 在单实例所有权确立后执行
+
+Run recovery、scheduler 与 channel runtime SHALL 只在 advisory lock 获取成功后启动。未持 lock 的实例 SHALL NOT 扫描或收口数据库中的非终态 Run。
+
+#### Scenario: 未获得所有权
+
+- **WHEN** backend 未获取 advisory lock
+- **THEN** recovery、scheduler 与 channel runtime SHALL NOT 启动
+
+### Requirement: 单 worker 容量 SHALL 可观测且通过负载验收
+
+系统 SHALL 观测 active Run/subscription、event-loop lag、event-to-client latency、replay/subscriber bytes、overflow、checkpoint latency/lag、persistence blocked 与 terminal retention。发布前 SHALL 以 100 active Run、每 Run 2–3 Tab、每 Run 10–30 events/s，混入慢消费与重连，记录 p50/p95/p99、RSS、queue bytes、checkpoint lag 与回收结果。
+
+#### Scenario: 容量验收
+
+- **WHEN** 发布候选执行规定负载
+- **THEN** 报告 SHALL 保留延迟、event-loop lag、RSS、queue bytes、checkpoint lag、overflow、重连与回收数据
+
 ### Requirement: sandbox-runner SHALL 提供健康检查
 
 runner **SHALL** 暴露 `GET /health`；compose **SHALL** 配置 healthcheck 探测 runner。

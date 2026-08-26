@@ -30,13 +30,15 @@ export interface KbQueryParams {
   [key: string]: unknown
 }
 
+// 镜像后端 DEFAULT_COLLECTION_QUERY（noesis/knowledge/chunking/params.py）平台默认。
+// score_threshold：集合存 null = 跟随此平台默认；0 = 显式关闭阈值。
 export const KB_DEFAULT_QUERY: KbQueryParams = {
   final_top_k: 10,
   recall_top_k: 20,
   rerank_top_k: 15,
   search_mode: 'hybrid',
   use_reranker: true,
-  score_threshold: null,
+  score_threshold: 0.1,
   rrf_k: 60,
 }
 
@@ -435,7 +437,7 @@ export async function patchCollectionConfig(
   return kbJson<CollectionConfig>(
     `${API_BASE}/collections/${encodeURIComponent(collectionName)}/config`,
     {
-      method: 'PATCH',
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     },

@@ -76,6 +76,7 @@ pnpm stylelint      # 样式检查
 - **Naive UI**：`useTheme` + `themeOverrides` 使用 hex 色值（`:color` / `primaryColor` 禁止传 CSS var，seemly 无法解析）；页面样式仍用 CSS 变量
 - **UnoCSS**：`uno.config.ts` 的 `theme.colors` 引用同一套 CSS 变量；`presetIcons.collections` 须用 `() => require('@iconify-json/…')` 函数形式，否则 prod 不生成 Iconify 图标 CSS
 - **主题预设**：`newsprint`（纸墨，默认）/ `light`（Flat Design）/ `deep`（深色）；侧栏调色盘切换，定义见 `styles/tokens/_semantic.scss`（纸墨 `:root`）与 `_presets.scss`（浅/深色）
+- **响应式断点**：全站断点单一来源 `src/config/breakpoints.ts`（xs=480/sm=640/md=768/lg=1024/xl=1280/2xl=1536）。SCSS 侧通过 `naive-variables.scss` 的 `$bp-xs/$bp-sm/$bp-md/$bp-lg/$bp-xl/$bp-2xl` 引用（已全局注入，`<style>` 内直接用）。禁止硬编码 `@media (max-width: Npx)` 数值或自造非标准断点；`@media` 统一用 `max-width: $bp-*` 语法，区间用 `min-width: $bp-* + 1px` 写法。JS 侧用 `useBreakpoint`
 
 ## 技术要点
 

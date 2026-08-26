@@ -44,7 +44,7 @@
 
 浏览器实时响应 SHALL 使用 `/api/chat` 下的 run 创建与 SSE 订阅端点。系统 SHALL 提供独立的 run 创建、状态查询、SSE 订阅和停止能力，并 SHALL 删除 `POST /api/chat/sessions/stream`。浏览器主实时通道仍为 SSE，不要求 WebSocket。
 
-事件类型至少覆盖：`run-snapshot`、`run-status`、`reasoning-*`、`text-*`、`tool-call-*` / `tool-input-*`、`tool-output-available`、`usage-update`、`context-update`、`hitl-required`、`error`、`finish`、`[DONE]`。业务事件 SHALL 携带 `run_id` 与 sequence；keepalive 注释帧 SHALL 仅由传输层注入。
+事件类型至少覆盖：`run-snapshot`、`run-status`、`reasoning-*`、`text-*`、`tool-call-*` / `tool-input-*`、`tool-output-available`、`context-update`、`hitl-required`、`error`、`finish`、`[DONE]`。业务事件 SHALL 携带 `run_id` 与 sequence；keepalive 注释帧 SHALL 仅由传输层注入。
 
 #### Scenario: 创建后独立订阅
 - **WHEN** 已认证用户成功创建 run
@@ -103,37 +103,30 @@ HITL 暂停时 assistant SHALL 保持 `streaming`；resume 续写同一 `run_id`
 
 `tool-output-available` SHALL 携带单次工具耗时；错误帧 MAY 含 `errorCategory`；成功帧 MAY 含 outcome 元数据。assistant 落库 tool part SHALL 与 SSE 错误语义一致。细则见 `agent-tool-failure-handling`。
 
+`tool-input-start` / `tool-input-available` / `tool-output-available` MAY 携带可选 `step_id` 标识所属 model step；同一 model step 内并行调用的工具共享同一 `step_id`。`step_id` 为增量字段，client MAY 忽略；assistant 落库 tool part SHALL 保留 `step_id` 以支持重载后重建并行分组。
+
 #### Scenario: 耗时字段
 
 - **WHEN** 工具调用结束并发出 tool-output-available
 - **THEN** 帧 SHALL 含可解析的耗时（毫秒或约定单位）
 
-### Requirement: usage-update 与上下文指示
+### Requirement: 上下文占用指示
 
-流式路径 SHALL 发出消息级累计 LLM token 的 `usage-update` 与 `finish.usage`，并 SHALL 在 Provider 返回 usage 后发出当前上下文占用的 `context-update`。系统 SHALL 提供可配置的上下文窗口上限；会话 MAY 持久化最近上下文快照。
+流式路径 SHALL 在 Provider 返回 usage 后发出当前上下文占用的 `context-update`。系统 SHALL 提供可配置的上下文窗口上限；会话 MAY 持久化最近上下文快照。
 
-`usage-update` 与 `finish.usage` SHALL 保留 `input_tokens`、`output_tokens`、`total_tokens` 既有字段，并在可用时以向后兼容字段提供 `by_caller` 与 `by_model` 归属；Provider cache/reasoning details SHALL 在后端规范化保留并可经 SSE 字段传递，但 SHALL NOT 作为默认前端摘要展示项。`context-update` SHALL 保留 `current_tokens`、`max_tokens`、`used_percentage`，其 `current_tokens` 取自 Provider 最近一次 model call 返回的 `input_tokens`（非累计）。
+`context-update` SHALL 保留 `current_tokens`、`max_tokens`、`used_percentage`，其 `current_tokens` 取自主对话最近一次 model call 返回的 `input_tokens`（非累计）。子 Agent 的 model call SHALL NOT 写入 context 指示器，避免子 Agent 的输入占用覆盖主对话的上下文占用。
 
-chat 页 SHALL 将"当前上下文窗口占用"与"本轮 Agent run 累计实际 usage"分开展示。前者取自 Provider 最近一次 model call 的 `input_tokens`，后者按 model run id 累计。默认摘要 SHALL 只展示 input/output 与 caller/model 归属；cache/reasoning 等 Provider 明细 SHALL 仅在按需调试视图中展示。旧事件或部分字段缺失时 SHALL 降级到既有总量，SHALL NOT 阻断流式回答。
+chat 页 SHALL 展示"当前上下文窗口占用"，取自主对话最近一次 model call 的 `input_tokens`。Provider 不返回 usage 或部分字段缺失时 SHALL 降级到上一轮真实值，SHALL NOT 阻断流式回答。
 
-#### Scenario: finish 含 usage
-- **WHEN** 一轮正常完成
-- **THEN** `finish`（或等价）SHALL 含累计 usage，供 chat 页展示
-
-#### Scenario: context 用最近一次真实 input_tokens
-- **WHEN** 一轮 Agent run 已进行多次模型调用并收到 Provider usage
-- **THEN** `context-update` 的 `current_tokens` SHALL 取自最近一次 model call 的 `input_tokens`（非累计）
+#### Scenario: context 用主对话最近一次真实 input_tokens
+- **WHEN** 一轮 Agent run 中主对话与子 Agent 各进行模型调用
+- **THEN** `context-update` 的 `current_tokens` SHALL 取自主对话最近一次 model call 的 `input_tokens`（非累计）
+- **AND** 子 Agent 的 input_tokens SHALL NOT 覆盖主对话的 context 指示器
 - **AND** SHALL NOT 用累计 input token 作为当前 context window 占用
 
-#### Scenario: 新字段向后兼容
-- **WHEN** 客户端只识别既有 usage/context 总量字段
-- **THEN** 扩展后的 SSE 事件 SHALL 仍可被该客户端消费
-- **AND** 服务端 SHALL NOT 删除或重命名既有字段
-
 #### Scenario: Provider 不返回 usage
-- **WHEN** Provider 未返回 `input_tokens` 或 cache/reasoning 明细
+- **WHEN** Provider 未返回 `input_tokens`
 - **THEN** context 指示器 SHALL 沿用上一轮真实 `input_tokens`；首轮无数据时 SHALL NOT 展示指示器
-- **AND** SHALL NOT 将缺失明细显示为确定的零消耗
 
 ### Requirement: 停止生成
 
@@ -225,7 +218,7 @@ Agent runtime SHALL 支持独立摘要模型的 summarization offload；SHALL �
 
 ### Requirement: 流式问答入口 SHALL 经 Run Fan-out 投递
 
-`POST /api/chat/runs`（或本 change 约定的等价创建端点）SHALL 创建由 RunManager 持有的 producer，并注册 PersistSink；独立 SSE 订阅端点 SHALL 通过 RunEvent 总线的 SseDelivery 输出。问答编排 SHALL NOT 在单一 HTTP generator 内同时拥有 producer、落库和客户端生命周期。
+`POST /api/chat/runs` SHALL 创建由 RunManager 持有的 producer，并为该 Run 配置独立 PersistWriter；独立 SSE 订阅端点 SHALL 从 RunHandle subscription 消费带 sequence 的 RunEvent，并仅在 SSE delivery 边界编码。问答编排 SHALL NOT 在单一 HTTP generator 内同时拥有 producer、落库和客户端生命周期。
 
 旧 `POST /api/chat/sessions/stream` SHALL 被删除，问答编排 SHALL NOT 保留第二条发送路径。
 
@@ -250,16 +243,17 @@ Agent runtime SHALL 支持独立摘要模型的 summarization offload；SHALL �
 
 ### Requirement: HITL 分段流 SHALL 经同一 Fan-out
 
-`hitl-required` / `finish_reason=hitl_pending` 与 `POST .../hitl/resume` 返回的新 SSE **SHALL** 经同一 RunEvent → SseDelivery / PersistSink 路径，语义与主规格 `platform-chat` HITL 要求一致：pending 不 completed；resume 续写同一 `assistant_message_id`；**SHALL NOT** 在 Fan-out 外另起一套仅 generator 内可见的 HITL 落库分支（过渡期除外）。
+`hitl-required` / `finish_reason=hitl_pending` 与 `POST .../hitl/resume` 启动的新 producer segment **SHALL** 经同一 RuntimeEventMapper → RunHandle → SseDelivery / PersistWriter 路径，语义与主规格 `platform-chat` HITL 要求一致：pending 不 completed；resume 续写同一 `assistant_message_id`；**SHALL NOT** 在 RunHandle 外另起一套仅 generator 内可见的 HITL 落库分支。
 
 #### Scenario: resume 仍走 Fan-out
 
 - **WHEN** 用户对 pending HITL 调用 `hitl/resume`
-- **THEN** 响应 SHALL 为经 SseDelivery 编码的 `text/event-stream`，且 PersistSink SHALL 继续更新同一 assistant 行直至真正终态
+- **THEN** resume 响应 SHALL 返回同一 Run 的权威 running snapshot
+- **AND** 客户端 SHALL 重新订阅同一 `run_id`，PersistWriter SHALL 继续更新同一 assistant 行直至真正终态
 
 ### Requirement: chat 页 SHALL 从权威 run snapshot 恢复
 
-chat 页 SHALL 保存当前 run_id、assistant_message_id 与 last_sequence。页面重新加载或连接恢复时，若历史/session 信息表明存在 active run，客户端 SHALL 查询 run 并重新订阅；收到 `run-snapshot` 时 SHALL 按 replace 语义重建该 assistant parts，而不是重复 append。
+chat 页 SHALL 保存当前 run_id、assistant_message_id 与 last_sequence。页面重新加载或连接恢复时，客户端 SHALL 通过服务端 active-run API 查询权威 Run 并重新订阅，不得依赖 sessionStorage 或消息历史推测；收到 `run-snapshot` 时 SHALL 按 replace 语义重建该 assistant parts，而不是重复 append。
 
 #### Scenario: 刷新后继续显示增量
 - **WHEN** 用户在 run 进行中刷新并重新进入同一 session
@@ -441,9 +435,9 @@ RunEvent 到 `/api/chat` SSE 与 assistant 终态映射 SHALL 支持稳定的 Ag
 - **THEN** assistant SHALL 保存已有正文并进入 partial 或现行等价非 completed 终态
 - **AND** SSE 终态 SHALL 携带 `length_stop`
 
-#### Scenario: governor 停止仍可展示
+#### Scenario: 运行预算中间件停止仍可展示
 
-- **WHEN** Run Governor 因工具循环达到硬限制而停止
+- **WHEN** ToolLoopGuardMiddleware 因工具循环达到硬限制而停止
 - **THEN** assistant SHALL 保留停止前的 reasoning、tool parts 与正文
 - **AND** 终态 SHALL 携带 `tool_loop_limit`
 
@@ -547,3 +541,88 @@ chat 页 SHALL 按服务端 tool `state` 显示“正在执行、等待确认、
 - **WHEN** 关键工具失败并且 assistant 没有可见正文
 - **THEN** UI SHALL 告知本轮未完成
 - **AND** SHALL 提供重新执行本轮的操作
+
+### Requirement: 可靠 Web Agent Run SHALL 明确适用范围
+
+typed RuntimeEventMapper、可靠 Run、多 Tab、snapshot 恢复和统一 Delivery 的演进与验收范围 SHALL 为 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA`。
+
+`TEST_CASE_QA`、CaseCoordinator、`phase-*`、test-case resume/export 不再纳入本能力的演进与验收范围。现有 Web 入口 MAY 继续使用相同 `run_id`、assistant identity 与订阅 API 承载该旧流程，并在 producer 边界把 CaseCoordinator 的旧 SSE 帧适配为 RunEvent；该兼容适配 SHALL 保持隔离，SHALL NOT 进入上述三种目标 Agent 共用的 RuntimeEventMapper，也 SHALL NOT 成为新增可靠性设计的约束。
+
+#### Scenario: 测试用例生成不参与主路径验收
+
+- **WHEN** 执行本能力的实现或验收
+- **THEN** SHALL 只验收 `COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA` 的 typed 主路径
+- **AND** SHALL NOT 因 `TEST_CASE_QA` 的旧 SSE 形状向目标 Agent 的 RuntimeEventMapper 增加兼容 parser
+
+### Requirement: 服务端 SHALL 提供权威 active Run 发现
+
+系统 SHALL 提供 `GET /api/chat/sessions/{session_id}/active-run`，对已鉴权 owner 返回完整 RunSnapshot 或 `data=null`。未知、已删除或跨用户 session SHALL 返回 404 且不泄露 Run 身份。
+
+#### Scenario: 新 Tab 发现正在执行的 Run
+
+- **WHEN** Tab A 已启动 Run，Tab B 打开同一 session
+- **THEN** Tab B SHALL 从 active-run 获取相同 `run_id`、`assistant_message_id`、status、snapshot_sequence 与 content
+- **AND** SHALL NOT 依赖 Tab A 的 sessionStorage
+
+### Requirement: 多 Tab SHALL 独立订阅同一 Run
+
+同一用户的多个 Tab SHALL 使用独立 SSE subscription。断开、刷新或溢出任意一个 subscription SHALL 只移除自身，不取消 producer、Persistence 或其它 Delivery。
+
+#### Scenario: 关闭创建 Run 的 Tab
+
+- **WHEN** Tab A 与 Tab B 均订阅后关闭 Tab A
+- **THEN** producer SHALL 继续，Tab B SHALL 收到权威终态
+
+### Requirement: 客户端 SHALL 以 snapshot replace 和 sequence 连续性恢复
+
+客户端收到 run-snapshot SHALL replace 相同 assistant 的 parts，并设置 last_sequence。业务 sequence 小于等于 last_sequence SHALL 忽略；等于 last_sequence+1 SHALL apply；大于 last_sequence+1 SHALL 停止 reader并进行 snapshot recovery。无终态 EOF SHALL NOT 触发成功或失败终态回调。
+
+#### Scenario: sequence gap 不继续渲染
+
+- **WHEN** last_sequence=20 而下一事件 sequence=23
+- **THEN** 客户端 SHALL 丢弃该事件并进入 snapshot recovery
+
+### Requirement: 同 session 创建冲突 SHALL 加入已有 Run
+
+同一 session 已有 active Run 时，`POST /api/chat/runs` SHALL 返回 HTTP 409 和当前用户可访问的 `run_id`、`assistant_message_id`、`session_id`、status。客户端 SHALL 加入已有 Run，不启动第二 producer。
+
+#### Scenario: 两个 Tab 同时发送
+
+- **WHEN** 两个 Tab 对同一 session 并发创建 Run
+- **THEN** 最多一个 producer SHALL 启动，另一个请求 SHALL 能加入已有 Run
+
+### Requirement: stop 与 HITL resume SHALL 按 Run 鉴权且幂等
+
+stop 与 HITL resume SHALL 按 `(run_id,current_user_id)` 鉴权并验证 session/assistant 关联。重复 stop SHALL 最多取消一次 producer并产生一个 terminal transaction；重复或过期 HITL 命令 SHALL NOT 启动第二 producer。旧 Run 命令 SHALL NOT 作用于同 session 的后续 Run。
+
+#### Scenario: 旧 Tab 不能停止新 Run
+
+- **WHEN** 旧 Tab 对已终态 R1 发 stop，而同 session 已有新 Run R2
+- **THEN** R2 SHALL 不受影响
+
+### Requirement: 用户级信令流
+
+系统 SHALL 提供按用户订阅的信令流（`GET /api/chat/events/stream`），该用户任意会话的 run 状态迁移（running / hitl_pending / 终态）SHALL 向流内投递轻量信令（type + session_id + run_id + status），信令 SHALL 为「提示去拉取」的 hint——不承载 run 内容，队列有界满则丢弃，丢失不影响正确性。
+
+#### Scenario: 列表实时刷新
+
+- **WHEN** 用户停留在会话列表，任一会话的 run 发生状态迁移
+- **THEN** 前端 SHALL 经用户级信令流实时 patch 对应列表行的 run_status（终态清除徽章）
+- **AND** 信令对应的会话不在列表（他处新建）时 SHALL 全量刷新列表
+
+#### Scenario: 首帧对齐
+
+- **WHEN** 连接建立（含断线重连）
+- **THEN** 服务端 SHALL 先下发该用户全部活跃 run 的定位符作为首帧
+- **AND** 前端重连后 SHALL 全量刷新列表对齐
+
+#### Scenario: 订阅上限
+
+- **WHEN** 同一用户订阅数超过上限（每用户 16）
+- **THEN** 新订阅 SHALL 返回 429 语义，提示关闭其它标签页
+
+#### Scenario: 会话级信令不受影响
+
+- **WHEN** run 状态迁移
+- **THEN** 既有 `/sessions/{id}/events` 会话级信令的帧格式与语义 SHALL 保持不变
+

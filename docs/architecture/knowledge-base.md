@@ -1,7 +1,7 @@
 # 知识库 RAG 架构
 
 > 状态：Current
-> OpenSpec：`knowledge-base`；多模态规划见 active change `kb-multimodal-retrieval`
+> OpenSpec：`knowledge-base`（跨模态检索方向已放弃，规划已删除）
 
 ## 1. 目标
 

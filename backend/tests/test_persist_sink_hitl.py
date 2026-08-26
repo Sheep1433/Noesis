@@ -1,8 +1,8 @@
 """PersistSink HITL / 终态判定。"""
 from __future__ import annotations
 
-from noesis.domain.chat.delivery.events import HitlRequired, RunCompleted, RunPaused
-from noesis.domain.chat.delivery.persist_sink import PersistSink
+from noesis.chat.delivery.events import HitlRequired, RunCompleted, RunPaused
+from noesis.services.persist_sink import PersistSink
 
 
 def test_hitl_pending_is_not_completed() -> None:

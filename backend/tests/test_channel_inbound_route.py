@@ -1,8 +1,8 @@
 """入站路由：未配对拒绝。"""
 from __future__ import annotations
 
-from noesis.domain.chat.delivery.channels import ChannelBinding, ChannelBindingStore, InboundMessage
-from noesis.domain.chat.delivery.channels import route_inbound
+from noesis.chat.delivery.channels import ChannelBinding, ChannelBindingStore, InboundMessage
+from noesis.chat.delivery.channels import route_inbound
 
 
 def test_unpaired_inbound_rejected() -> None:

@@ -77,6 +77,12 @@ echo "==> 构建镜像"
 # --progress=plain 持续输出构建日志，避免 CI SSH 长时间无输出被断开（Broken pipe）
 compose build --progress=plain
 
+echo "==> 停旧 backend 并执行数据库迁移"
+# 顺序约束：旧容器对新 schema（如 uuid 主键改型）不兼容，须先停后迁；
+# --no-deps 不动已在运行的 postgres；迁移用新镜像执行 server/db.py（alembic upgrade head）。
+compose stop backend >/dev/null 2>&1 || true
+compose run --rm --no-deps backend python server/db.py
+
 echo "==> 启动栈"
 compose up -d --remove-orphans
 

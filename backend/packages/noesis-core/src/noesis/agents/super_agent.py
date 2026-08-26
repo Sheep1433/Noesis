@@ -7,36 +7,41 @@ import uuid
 from typing import AsyncGenerator, Optional
 
 from deepagents.backends.protocol import BackendProtocol
-from deepagents.middleware.subagents import SubAgent
-from langchain.agents.middleware import TodoListMiddleware
 from langgraph.types import Command
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.backends import agent_sandbox_session, create_agent_backend
-from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE, AGENT_MEMORY_USER_FILE
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
-from noesis.factory import build_subagent_default_middleware, create_noesis_agent
+from noesis.factory import build_noesis_middleware, create_noesis_agent
 from noesis.agents.tools.ask_user import ask_user_tool, build_interrupt_on
-from noesis.agents.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from noesis.agents.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
-from noesis.agents.middlewares.capabilities.versioned_skills_middleware import VersionedSkillsMiddleware
 from noesis.agents.prompts import PromptProfile, build_prompt
+from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
+from noesis.agents.subagents import (
+    BackgroundSubagentExecutor,
+    BgNotifyMiddleware,
+    build_background_task_tools,
+)
+from noesis.agents.subagents.shell_tool import replace_execute_tool
+from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
+from noesis.agents.middlewares.memory_entries_middleware import build_memory_entries_middleware
 from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
-from noesis.config.env import ChatAttachmentConfig, HitlConfig
+from noesis.config.env import ChatAttachmentConfig
 from noesis.config.user_data_paths import ensure_user_memory_files
 from noesis.agents.context import ContextResolver
 from noesis.llm.factory import get_llm
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
+from noesis.services.chat_service import ChatService
 
-_MEMORY_SOURCES = [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
+_MEMORY_SOURCES = [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE]
 
 
 def _resolve_user_id(current_user) -> Optional[str]:
@@ -46,7 +51,7 @@ def _resolve_user_id(current_user) -> Optional[str]:
     return str(uid) if uid is not None else None
 
 
-def _build_task_worker_subagents(
+def _compile_task_worker(
     backend: BackendProtocol,
     tools: list,
     skill_sources: list,
@@ -54,32 +59,37 @@ def _build_task_worker_subagents(
     user_id: str,
     model_id: str | None = None,
     interrupt_on: dict | None = None,
-) -> list[SubAgent]:
-    subagent_middleware = [
-        *build_subagent_default_middleware(backend),
-        VersionedSkillsMiddleware(
-            backend=backend,
-            sources=list(skill_sources),
-            system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
-            user_id=user_id,
-        ),
-    ]
-    spec: SubAgent = {
-        "name": "task-worker",
-        "description": (
-            "在独立上下文中完成主 Agent 委派的单个子任务：阅读 Skills、web_search/web_fetch、"
-            "工作区读写与多步执行，只返回短结构化小结（长文落盘）。"
-            "复杂任务应优先委派：多源检索、调研、批量读文件、实现与验证等，避免主上下文被工具原文撑满。"
-        ),
-        "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
-        "model": get_llm(model_id=model_id),
-        "tools": tools,
-        "middleware": subagent_middleware,
-        "skills": list(skill_sources),
-    }
+    session_id: str = "",
+    checkpointer=None,
+):
+    """编译后台 task-worker：独立上下文 + 自带 HITL interrupt，供 BackgroundSubagentExecutor 使用。"""
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
+
+    model = get_llm(model_id=model_id)
+    middleware = list(build_noesis_middleware(
+        profile="SUBAGENT",
+        model=model,
+        model_id=model_id,
+        tools=tools,
+        backend=backend,
+        skills=skill_sources,
+        skills_user_id=user_id,
+        skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+        session_id=session_id,
+    ))
     if interrupt_on:
-        spec["interrupt_on"] = interrupt_on
-    return [spec]
+        # 后台任务审批：interrupt 落 checkpoint，executor 转 awaiting_approval，
+        # 审批 API 用 Command(resume) 在同一 thread 续跑
+        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+    return create_agent(
+        model,
+        system_prompt=build_prompt(PromptProfile.SUPER_AGENT_SUB),
+        tools=tools,
+        middleware=middleware,
+        name="task-worker",
+        checkpointer=checkpointer,
+    )
 
 
 class SuperAgent(BaseAgent):
@@ -97,11 +107,14 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession],
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        disable_hitl: bool = False,
+        run_id: Optional[str] = None,
     ):
         ensure_user_memory_files(user_id)
         backend = await create_agent_backend(user_id, session_id)
         web_tools = build_web_search_tools()
         tools = list(web_tools) + list(mcp_tools or [])
+        tools.extend(build_memory_tools(user_id=user_id))
         # KB 检索工具（用户勾选启用时挂载）
         if kb_search_enabled and kb_collections is not None:
             kb_tools = build_kb_search_tools(
@@ -110,29 +123,13 @@ class SuperAgent(BaseAgent):
             )
             if kb_tools:
                 tools.extend(kb_tools)
-        if db is not None:
-            tools.extend(build_memory_tools(user_id=user_id, db=db))
         interrupt_on = None
-        if HitlConfig.enabled:
+        # 无人值守场景（定时任务）禁用 HITL：不挂 ask_user、不设 interrupt_on，避免 agent 卡在等待审批。
+        if HitlConfig.enabled and not disable_hitl:
             tools = tools + [ask_user_tool]
             interrupt_on = build_interrupt_on(session_id=session_id)
         skill_sources = resolve_skill_sources_for_session(user_id, enabled_skills)
         resolved_context = ContextResolver.resolve(user_id, PromptProfile.SUPER_AGENT)
-        extra_middleware: list = [
-            TodoListMiddleware(),
-            VersionedSkillsMiddleware(
-                backend=backend,
-                sources=list(skill_sources),
-                system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
-                user_id=user_id,
-            ),
-            TurnMemoryMiddleware(
-                backend=backend,
-                sources=list(resolved_context.memory_sources),
-                system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
-            ),
-        ]
-
         if (
             ChatAttachmentConfig.enabled
             and db is not None
@@ -151,21 +148,123 @@ class SuperAgent(BaseAgent):
                 db=db,
             )
 
+        # 后台子 Agent（全异步 task）：主 Agent 用 start/check 工具委派，
+        # 子任务在进程内隔离 loop 跑，生命周期归属 session，跨 run 可收结果。
+        # worker 不携带后台任务工具自身（避免递归委派）。
+        # worker 经工厂在隔离 loop 内惰性编译：LLM 客户端与 checkpointer
+        # 连接池必须绑定隔离 loop（复用主 loop 实例会 cross-loop 报错）。
+        worker_tools = [
+            tool for tool in tools if getattr(tool, "name", "") != "search_memory"
+        ]
+
+        async def _bg_worker_factory():
+            from noesis.config.checkpointer import create_isolated_checkpointer
+
+            return _compile_task_worker(
+                backend,
+                worker_tools,
+                skill_sources,
+                user_id=user_id,
+                model_id=model_id,
+                interrupt_on=interrupt_on,
+                session_id=session_id,
+                checkpointer=await create_isolated_checkpointer(),
+            )
+
+        bg_executor = BackgroundSubagentExecutor(
+            max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
+            task_timeout_seconds=SubagentConfig.task_timeout_seconds,
+            shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
+            hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
+        )
+
+        async def _create_child_session(description: str, tool_call_id: str = "") -> dict[str, str]:
+            # 工具可能在并行 tool-call 中同时创建多个子 Agent；不要复用请求级
+            # AsyncSession，单独取连接保证每个 launch 有独立事务边界。
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as child_db:
+                from noesis.services.subagent_session_service import SubagentSessionService
+
+                # The launch use case owns the child session, initial messages and
+                # standard AgentRun in one transaction.  Keep this callback small so
+                # the tool layer cannot accidentally create a second source of truth.
+                launch = await SubagentSessionService.launch(
+                    parent_session_id=session_id,
+                    user_id=user_id,
+                    description=description,
+                    tool_call_id=tool_call_id or None,
+                    db=child_db,
+                )
+                return launch.to_dict()
+
+        async def _delete_child_session(child_session_id: str) -> None:
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as child_db:
+                await ChatService.delete_session(child_session_id, user_id, db=child_db)
+
+        async def _create_followup_run(
+            child_session_id: str,
+            message: str,
+            user_message_id: str | None = None,
+        ) -> dict[str, str]:
+            from noesis.services.subagent_session_service import SubagentSessionService
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as child_db:
+                launch = await SubagentSessionService.create_followup_run(
+                    session_id=child_session_id,
+                    user_id=user_id,
+                    message=message,
+                    user_message_id=user_message_id,
+                    db=child_db,
+                )
+                return launch.to_dict()
+
+        tools.extend(build_background_task_tools(
+            worker_factory=_bg_worker_factory,
+            executor=bg_executor,
+            session_id=session_id,
+            user_id=user_id,
+            create_child_session=_create_child_session,
+            delete_child_session=_delete_child_session,
+            create_followup_run=_create_followup_run,
+            model_id=model_id,
+        ))
+
         return create_noesis_agent(
             profile="SUPER_AGENT_QA",
             tools=tools,
             system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
+            # run 内即时感知后台任务终态：下一次模型调用注入 [系统通知]
+            middleware=[BgNotifyMiddleware(session_id=session_id)],
             backend=backend,
-            subagents=_build_task_worker_subagents(
-                backend,
-                tools,
-                skill_sources,
+            # execute 工具后台化（run_in_background，默认 false 前台零变化）；
+            # 仅主 Agent 挂载——task-worker 保持前台 execute（禁止递归后台化）
+            filesystem_middleware_hook=lambda fm: replace_execute_tool(
+                fm,
+                executor=bg_executor,
+                backend=backend,
+                session_id=session_id,
                 user_id=user_id,
-                model_id=model_id,
-                interrupt_on=interrupt_on,
             ),
-            extra_middleware=extra_middleware,
+            workspace="/workspace",
+            session_id=session_id,
+            attachments=tuple(str(name) for name in (file_list or {})),
+            skills=skill_sources,
+            skills_user_id=user_id,
+            skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+            memory=resolved_context.memory_sources,
+            memory_system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
+            memory_entries_middleware=await build_memory_entries_middleware(
+                db=db,
+                user_id=user_id,
+                session_id=session_id,
+                run_id=run_id,
+            ),
+            todo=True,
             interrupt_on=interrupt_on,
             model_id=model_id,
         )
@@ -184,6 +283,8 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        disable_hitl: bool = False,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
@@ -219,6 +320,8 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    disable_hitl=disable_hitl,
+                    run_id=run_id,
                 )
 
                 human_kwargs = {}
@@ -292,6 +395,8 @@ class SuperAgent(BaseAgent):
         message_id: Optional[str] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        disable_hitl: bool = False,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """从 HITL interrupt 以 ``Command(resume=...)`` 继续同一 thread。"""
         task_id = session_id
@@ -322,6 +427,8 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    disable_hitl=disable_hitl,
+                    run_id=run_id,
                 )
                 stream_args = {
                     "input": Command(resume={"decisions": decisions}),

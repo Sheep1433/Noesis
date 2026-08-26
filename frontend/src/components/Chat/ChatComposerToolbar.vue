@@ -1,14 +1,14 @@
 <script lang="ts" setup>
 import type { McpServerCatalogItem } from '@/api/mcp'
 import type FileUploadManager from '@/views/FileUploadManager.vue'
-import { NButton, NCheckbox, NPopover } from 'naive-ui'
+import { NButton, NCheckbox } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { ensureSession } from '@/api/chat'
 import { listMcpServers } from '@/api/mcp'
-import { getSkillsFsTree } from '@/api/skills'
+import { getSkillsPackages } from '@/api/skills'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
-import { collectSkillPackages } from '@/utils/skillsTree'
+import ResponsiveSurface from '@/components/ResponsiveSurface.vue'
 
 type MenuView = 'root' | 'mcp' | 'skills' | 'kb'
 
@@ -45,7 +45,7 @@ const docInputRef = ref<HTMLInputElement | null>(null)
 const imageInputRef = ref<HTMLInputElement | null>(null)
 
 const mcpServers = ref<McpServerCatalogItem[]>([])
-const skillPackages = ref<{ id: string, source: string }[]>([])
+const skillPackages = ref<{ name: string, source: string }[]>([])
 const catalogLoaded = ref(false)
 const catalogLoading = ref(false)
 
@@ -57,7 +57,7 @@ async function loadCatalogs() {
   try {
     const [mcpResult, skillsResult] = await Promise.allSettled([
       listMcpServers(),
-      getSkillsFsTree(),
+      getSkillsPackages(),
     ])
     if (mcpResult.status === 'fulfilled') {
       mcpServers.value = mcpResult.value.servers ?? []
@@ -65,7 +65,7 @@ async function loadCatalogs() {
       console.warn('加载 MCP 目录失败', mcpResult.reason)
     }
     if (skillsResult.status === 'fulfilled') {
-      skillPackages.value = collectSkillPackages(skillsResult.value)
+      skillPackages.value = skillsResult.value
     } else {
       console.warn('加载 Skills 目录失败', skillsResult.reason)
     }
@@ -119,7 +119,7 @@ function toggleMcp(id: string, checked: boolean) {
 function toggleSkill(id: string, checked: boolean) {
   let current = selectedSkills.value
   if (skillsAllEnabled.value) {
-    current = skillPackages.value.map((p) => p.id)
+    current = skillPackages.value.map((p) => p.name)
     skillsAllEnabled.value = false
   }
   const set = new Set(current)
@@ -217,14 +217,13 @@ const kbSummary = computed(() => {
         @change="onImageFilesSelected"
       >
 
-      <n-popover
+      <ResponsiveSurface
         v-model:show="plusOpen"
-        trigger="click"
         placement="top-start"
-        :show-arrow="false"
         :disabled="disabled"
         raw
-        class="composer-tools-popover"
+        title="附件与工具"
+        popup-class="composer-tools-popover"
       >
         <template #trigger>
           <button
@@ -350,14 +349,14 @@ const kbSummary = computed(() => {
             </div>
             <label
               v-for="skill in skillPackages"
-              :key="skill.id"
+              :key="skill.name"
               class="composer-tool-row"
             >
               <n-checkbox
-                :checked="isSkillChecked(skill.id)"
-                @update:checked="(checked) => toggleSkill(skill.id, checked)"
+                :checked="isSkillChecked(skill.name)"
+                @update:checked="(checked) => toggleSkill(skill.name, checked)"
               />
-              <span class="composer-tool-row__label">{{ skill.id }} ({{ skill.source }})</span>
+              <span class="composer-tool-row__label">{{ skill.name }} ({{ skill.source }})</span>
             </label>
           </template>
 
@@ -383,7 +382,7 @@ const kbSummary = computed(() => {
             </div>
           </template>
         </div>
-      </n-popover>
+      </ResponsiveSurface>
 
       <ModelSelector
         v-model="selectedModelId"

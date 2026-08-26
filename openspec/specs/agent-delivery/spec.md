@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定一次 Agent run 的 **Delivery Fan-out 与 Run 生命周期**：内部 `RunEvent` 语言与多订阅总线、单调 sequence 与原子 snapshot、Run 身份与显式状态机、幂等创建与冲突防止、PersistSink 落库与重启恢复、模型重试 attempt 隔离与工具取消语义、RunManager 资源上限、SseDelivery（浏览器 SSE）、ChannelAdapter SPI 与绑定、以及 Telegram / 飞书通道运行时。配置/密钥/设置 UI 属于用户设置面（见 `user-settings`）；本能力只消费已持久化配置。代码锚点：`domain/chat/delivery/`、`services/channel_run_service.py`、`domain/chat/run/`。
+本能力规定一次 Agent run 的 **Delivery Fan-out 与 Run 生命周期**：内部 typed `RunEvent`、RunHandle 单写入边界、单调 sequence 与原子 snapshot、Run 身份与显式状态机、幂等创建与冲突防止、PersistWriter 落库与重启恢复、模型重试 attempt 隔离与工具取消语义、RunManager 资源上限、SseDelivery（浏览器 SSE）、ChannelAdapter SPI 与绑定、以及 Telegram / 飞书通道运行时。配置/密钥/设置 UI 属于用户设置面（见 `user-settings`）；本能力只消费已持久化配置。代码锚点：`backend/packages/noesis-core/src/noesis/chat/delivery/`、`backend/packages/noesis-core/src/noesis/chat/runs/`、`backend/packages/noesis-core/src/noesis/services/run_service.py`、`backend/packages/noesis-core/src/noesis/services/channel_run_service.py`。
 
 ## Requirements
 
@@ -17,19 +17,20 @@
 - **WHEN** LangGraph 产生 HITL interrupt
 - **THEN** 总线 SHALL 发布 HitlRequired（或等价），且可继以 RunPaused(reason=hitl_pending)；**SHALL NOT** 建模为 RunCompleted
 
-### Requirement: 可多订阅的 RunEvent 总线
+### Requirement: RunHandle SHALL 支持多 Delivery
 
-对每个 `run_id`，系统 SHALL 支持 PersistSink、一个或多个 SseDelivery、ChannelDelivery 等多个 Sink 并发订阅。RunEvent 总线与 producer SHALL 由 run 生命周期拥有，任一 Delivery 取消订阅或写失败 SHALL NOT 取消 producer 或其它 Sink。只有明确的用户停止、系统 run timeout、HITL 终态决策、服务 shutdown 或授权管理操作 MAY 取消 producer。keepalive SHALL 仅由 SseDelivery 注入，SHALL NOT 广播为业务 RunEvent，也 SHALL NOT 推进 run sequence。
+对每个 `run_id`，RunHandle SHALL 支持一个或多个 SseDelivery、ChannelDelivery 并发订阅。PersistWriter SHALL 使用独立 latest-wins 单槽，不得作为可因 queue overflow 注销的普通 subscriber。producer SHALL 由 run 生命周期拥有，任一 Delivery 取消订阅或写失败 SHALL NOT 取消 producer、PersistWriter 或其它 Delivery。只有明确的用户停止、系统 run timeout、持久化阻塞、HITL 终态决策、服务 shutdown 或授权管理操作 MAY 取消 producer。keepalive SHALL 仅由 SseDelivery 注入，SHALL NOT 广播为业务 RunEvent，也 SHALL NOT 推进 run sequence。
 
-#### Scenario: Persist 与多个 SSE 同时订阅
+#### Scenario: PersistWriter 与多个 SSE 同时工作
 
-- **WHEN** 同一 run 注册 PersistSink 与两个浏览器 SseDelivery
-- **THEN** 三者 SHALL 都能观察到后续完成类事件
+- **WHEN** 同一 run 启用独立 PersistWriter 且两个浏览器 SseDelivery 已订阅
+- **THEN** 两个 SseDelivery SHALL 在 terminal transaction 提交后观察到相同完成事件
+- **AND** PersistWriter SHALL 已先提交权威 terminal
 
 #### Scenario: 单个 SSE 断开不影响其它订阅
 
 - **WHEN** 两个 SseDelivery 中一个断开
-- **THEN** producer、PersistSink 与另一个 SseDelivery SHALL 继续工作
+- **THEN** producer、PersistWriter 与另一个 SseDelivery SHALL 继续工作
 
 #### Scenario: 无浏览器订阅仍完成
 
@@ -83,7 +84,8 @@ PersistSink SHALL NOT 静默丢弃状态或终态；终态 SHALL 通过可靠 co
 
 - **WHEN** PostgreSQL 持续不可写并达到 persistence timeout
 - **THEN** 系统 SHALL 停止继续生成不可保存的无限内容
-- **AND** SHALL 使用受控错误将 run 收口为 error 或已有正文对应的 partial
+- **AND** SHALL 保留最多一个 immutable terminal candidate 低频重试
+- **AND** SHALL NOT 在 terminal transaction 提交前发布 error、partial 或 completed
 
 ### Requirement: 每个 run SHALL 使用稳定身份与显式状态机
 
@@ -175,21 +177,21 @@ P0 系统 SHALL 默认限制同一 session 同时最多存在一个非终态交�
 - **THEN** 系统 SHALL 返回冲突及 active `run_id`
 - **AND** SHALL NOT 启动第二个 producer
 
-### Requirement: PersistSink 独占流式 assistant 落库
+### Requirement: PersistWriter SHALL 独占流式 assistant 落库
 
-PersistSink SHALL 负责骨架插入、节流语义检查点与终态（completed / error / partial），遵循同一 assistant 身份与终态互斥。检查点 MAY 更新完整 parts 快照，但 SHALL NOT 按 token 更新正文。落库 SHALL NOT 依赖浏览器 SSE 存活。消息/run 元数据 SHALL 记录 `origin`（如 `web`、`telegram`、`feishu`、`cron`、`eval`）。
+RunService SHALL 负责骨架插入；PersistWriter SHALL 负责节流语义检查点，terminal handler SHALL 负责 run + assistant 同事务终态（completed / error / partial / interrupted），并遵循同一 assistant 身份与终态互斥。检查点 MAY 更新完整 parts 快照，但 SHALL NOT 按 token 更新正文。落库 SHALL NOT 依赖浏览器 SSE 存活。消息/run 元数据 SHALL 记录 `origin`（如 `web`、`telegram`、`feishu`、`cron`、`eval`）。
 
 `hitl_pending` 时 SHALL 保持 assistant `streaming`；仅真实终态事件落库。resume SHALL 使用同一 `run_id` 与 `assistant_message_id`。
 
 #### Scenario: 无 SSE 仍终态
 
-- **WHEN** 仅 PersistSink 的 run 完成
+- **WHEN** 没有 SSE subscriber 的 run 完成
 - **THEN** assistant SHALL 为 completed（或等价成功态）
 
 #### Scenario: 用户停止经统一生命周期
 
 - **WHEN** 用户触发停止且 RunLifecycle 原因为用户停止
-- **THEN** PersistSink SHALL 将 assistant 更新为 partial 并带上与现网一致的停止语义，且其它 sink SHALL 能收到中止/完成类事件
+- **THEN** terminal handler SHALL 先将 assistant 更新为 partial 并带上与现网一致的停止语义，且其它 Delivery 随后 SHALL 收到同一终态
 
 ### Requirement: 后端重启 SHALL 安全收口悬空 run
 
@@ -303,6 +305,66 @@ run 终态可靠落库且超过 terminal 内存保留期后，RunManager SHALL �
 - **THEN** 运维记录 SHALL 能通过 run_id 定位独立 delivery_id 与失败原因
 - **AND** run 终态 SHALL 保持 completed
 
+### Requirement: Run 状态写入 SHALL 保证 sequence 与 projection 原子一致
+
+系统 SHALL 使每个 Run 的 sequence 分配、projection reduce、status 变更、replay buffer 写入、subscriber 注册和 snapshot 复制通过同一 RunHandle lock 完成。`snapshot_sequence=N` SHALL 精确对应 apply 到 N 的 projection，不得预先包含 N+1。
+
+#### Scenario: apply 与 subscribe 并发
+
+- **WHEN** 事件 N 正在 apply 时另一个 subscriber 加入
+- **THEN** subscriber SHALL 在 snapshot 或后续 tail 中有效观察到事件 N 一次
+- **AND** SHALL NOT 丢失或重复 apply 事件 N
+
+### Requirement: Runtime raw event SHALL 只经过一条 typed 主路径
+
+`COMMON_QA`、`FAULT_OPERATION_QA` 与 `SUPER_AGENT_QA` 的 raw event SHALL 由唯一 RuntimeEventMapper 映射为 typed RunEvent，再交给 RunHandle 和 Delivery。SSE 字符串 SHALL 只在 SseDelivery 边界编码；主路径 SHALL NOT 保留内部 SSE encode/parse 往返、Web 专用重复 EventBus 或 active registry。
+
+#### Scenario: 未知 raw event 不污染投影
+
+- **WHEN** RuntimeEventMapper 收到未支持的 raw event
+- **THEN** 系统 SHALL 记录可定位信息并丢弃
+- **AND** SHALL NOT 分配 sequence 或修改 projection
+
+### Requirement: PersistWriter SHALL 使用 immutable checkpoint 与 latest-wins 合并
+
+CheckpointRequest SHALL 携带与 `snapshot_sequence` 绑定的 immutable snapshot。每 Run待写单槽 SHALL 只保留 sequence 最大的 checkpoint；repository SHALL 以 stored sequence guard 防止回退，并在同一 transaction 更新 run snapshot/metadata 与 assistant content。
+
+#### Scenario: 高频 checkpoint 合并
+
+- **WHEN** writer 正在写 N 时收到 N+1 至 N+20
+- **THEN** pending SHALL 最多保留一份
+- **AND** 最终待写请求 SHALL 为已收到的最大 sequence
+
+#### Scenario: 迟到 checkpoint 不回退数据库
+
+- **WHEN** 数据库已存 sequence 50，随后收到 sequence 45
+- **THEN** run 与 assistant SHALL 均保持 sequence 50 对应内容
+
+### Requirement: 权威 terminal SHALL 先持久化再投递
+
+completed、partial、error、interrupted SHALL 使用 run 与 assistant 同事务 compare-and-set，并同时写 final snapshot 与 `last_sequence`。只有 transaction committed 后，系统才 SHALL 切换 live projection、写 replay、fan-out terminal 并发送 `[DONE]`。
+
+#### Scenario: terminal CAS 未赢
+
+- **WHEN** 其它合法路径已终态化该 Run
+- **THEN** 当前路径 SHALL 采用数据库权威 snapshot
+- **AND** SHALL NOT 发布当前 candidate 的冲突 terminal
+
+#### Scenario: terminal 持久化持续失败
+
+- **WHEN** terminal transaction 在同步 budget 内持续失败
+- **THEN** producer SHALL 停止且只保留一个 immutable candidate 低频重试
+- **AND** Delivery SHALL NOT 收到伪 terminal
+
+### Requirement: 迟到 producer 与 model attempt 事件 SHALL 被拒绝
+
+每个初始/HITL resume producer segment SHALL 使用递增的进程内 generation；每个新模型尝试 SHALL 使用递增 attempt_id。不匹配事件 SHALL 在 projection reduce 前被拒绝，不分配 sequence、不进入 replay 或 snapshot。generation SHALL NOT 持久化或进入 SSE payload。
+
+#### Scenario: HITL resume 后旧 producer 迟到
+
+- **WHEN** 新 generation 已启动后旧 task 发出 delta
+- **THEN** delta SHALL 被丢弃并增加 stale generation 指标
+
 ### Requirement: SseDelivery 保持既有 SSE 契约
 
 SseDelivery SHALL 将 RunEvent 编码为现网 stream 事件形状，并在新订阅或无法连续补发时支持 `run-snapshot` 与带 `sequence` 的业务事件。既有 reasoning/text/tool/HITL/finish 分支 SHALL 保持兼容；新增临时 run 状态 SHALL 使用 `run-status`，不得沿用会令旧客户端提前结束的终态 `error`。本能力 SHALL NOT 将替换 WebSocket 列为浏览器主通道必要条件。
@@ -395,7 +457,7 @@ Delivery SHALL 接受已鉴权设置服务发起的测试投递命令，向指�
 - **WHEN** 设置服务对健康且启用的通道发起测试投递
 - **THEN** Delivery SHALL 发送固定内容、记录结果并返回关联 id
 
-## Telegram 运行时
+**Telegram 运行时**
 
 ### Requirement: Telegram 运行时 SHALL 在开关启用时 long-poll 入站
 
@@ -443,7 +505,7 @@ Delivery SHALL 接受已鉴权设置服务发起的测试投递命令，向指�
 - **WHEN** 用户点击「拒绝」
 - **THEN** 系统 SHALL 以 reject decision resume，并移除键盘
 
-## 飞书运行时
+**飞书运行时**
 
 ### Requirement: 飞书运行时 SHALL 使用企业自建应用长连接接收入站事件
 

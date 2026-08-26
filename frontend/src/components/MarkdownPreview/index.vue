@@ -1,14 +1,14 @@
 <script lang="ts" setup>
 import type { RetrievalResultUi } from '@/views/chat/messageParts'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { useMermaidRender } from '@/hooks/useMermaidRender'
-import router from '@/router'
 import { TASK_TOOL_NAME } from '@/utils/parseTaskTool'
 import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
-import { citationBody, citationTargets } from '@/views/chat/citationRendering'
+import { buildCitationIndex } from '@/views/chat/citationRendering'
 import MarkdownInstance from './plugins/markdown'
 
 interface Props {
@@ -24,7 +24,6 @@ interface Props {
   /** 底部工具栏左侧问答类型角标 */
   qaType?: string
   retrievalResults?: RetrievalResultUi[]
-  referencesComplete?: boolean
 }
 
 interface Emits {
@@ -32,7 +31,6 @@ interface Emits {
   (e: 'failed', error: any): void
   (e: 'praiseFeadBack'): void
   (e: 'belittleFeedback'): void
-  (e: 'citationClick', number: number): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -44,7 +42,6 @@ const props = withDefaults(defineProps<Props>(), {
   variant: 'full',
   qaType: 'COMMON_QA',
   retrievalResults: () => [],
-  referencesComplete: true,
 })
 
 const emit = defineEmits<Emits>()
@@ -52,6 +49,7 @@ const emit = defineEmits<Emits>()
 const isCompleted = ref(false)
 const refWrapperContent = ref<HTMLElement>()
 const markdownContentRef = ref<HTMLElement | null>(null)
+const router = useRouter()
 
 const displayText = ref('')
 
@@ -67,21 +65,10 @@ watch(
 )
 
 const renderedMarkdown = computed(() => {
-  const targets = props.referencesComplete
-    ? citationTargets(
-        displayText.value,
-        props.retrievalResults,
-        (collectionName, fileName) => router.resolve({
-          name: 'KnowledgeBaseDetail',
-          params: { collectionName },
-          query: { file: fileName },
-        }).href,
-      )
-    : new Map()
-  return MarkdownInstance.render(
-    citationBody(displayText.value, targets, props.referencesComplete),
-    { citationTargets: targets },
-  )
+  return MarkdownInstance.render(displayText.value, {
+    retrievalResults: props.retrievalResults,
+    citationIndex: buildCitationIndex(props.retrievalResults),
+  })
 })
 
 const renderedContent = computed(() => {
@@ -100,21 +87,46 @@ const onCompleted = () => {
 const praiseFeedback = () => emit('praiseFeadBack')
 const belittleFeedback = () => emit('belittleFeedback')
 
-function handleMarkdownClick(event: MouseEvent) {
-  const target = event.target instanceof Element
-    ? event.target.closest<HTMLElement>('[data-citation-number]')
-    : null
-  const number = Number(target?.dataset.citationNumber)
-  if (Number.isInteger(number) && number > 0) {
-    emit('citationClick', number)
+// 解析正文内联 KB 引用角标的 `kb:Collection名/文件名` ref，点击跳转到文档
+function onContentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  const badge = target?.closest<HTMLElement>('.citation-badge--kb')
+  if (!badge) {
+    return
   }
+  const kbRef = badge.dataset.kbRef
+  if (!kbRef || !kbRef.startsWith('kb:')) {
+    return
+  }
+  // ref 形如 kb:Collection名/文件名
+  const rest = kbRef.slice(3)
+  const slashIdx = rest.indexOf('/')
+  if (slashIdx < 0) {
+    return
+  }
+  const collectionName = decodeURIComponent(rest.slice(0, slashIdx))
+  const file = decodeURIComponent(rest.slice(slashIdx + 1))
+  if (!collectionName || !file) {
+    return
+  }
+  event.preventDefault()
+  void router.push({
+    name: 'KnowledgeBaseDetail',
+    params: { collectionName },
+    query: { file },
+  })
 }
 
 onMounted(() => {
+  markdownContentRef.value?.addEventListener('click', onContentClick)
   // segment 由父级 SSE 控制整轮加载态；挂载即有 content 不代表流结束
   if (props.variant === 'full' && props.content) {
     onCompleted()
   }
+})
+
+onBeforeUnmount(() => {
+  markdownContentRef.value?.removeEventListener('click', onContentClick)
 })
 </script>
 
@@ -147,13 +159,12 @@ onMounted(() => {
           ref="refWrapperContent"
           text-16
           class="markdown-preview__body w-full h-full overflow-y-auto"
-          :class="variant === 'segment' ? 'px-15px py-2' : 'p-15px'"
+          :class="variant === 'segment' ? 'py-2' : 'p-15px'"
         >
           <div
             ref="markdownContentRef"
             class="markdown-wrapper"
             :class="{ 'markdown-wrapper--segment': variant === 'segment' }"
-            @click="handleMarkdownClick"
             v-html="renderedContent"
           ></div>
 
@@ -199,6 +210,9 @@ onMounted(() => {
 
 <style lang="scss">
 .markdown-wrapper {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   margin-left: 10%;
   margin-right: 10%;
   background-color: var(--noesis-color-bg-elevated);
@@ -215,6 +229,7 @@ onMounted(() => {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizelegibility;
+  overflow-wrap: anywhere;
 
   h1 { font-size: 2em; }
   h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--noesis-markdown-heading-border); }
@@ -251,20 +266,22 @@ onMounted(() => {
     text-decoration: underline;
     padding: 0 3px;
     display: inline;
+    overflow-wrap: anywhere;
   }
 
-  .citation-sup {
+  :not(pre) > code {
+    overflow-wrap: anywhere;
+  }
+
+  .citation-badge, .citation-sup {
     margin-left: 2px;
     font-size: 0.72em;
     line-height: 0;
     vertical-align: super;
 
-    .citation-link {
+    a {
       display: inline-flex;
-      min-width: 18px;
-      height: 18px;
       align-items: center;
-      justify-content: center;
       padding: 0 5px;
       border-radius: 9px;
       background: var(--noesis-color-primary-bg-icon);
@@ -272,6 +289,34 @@ onMounted(() => {
       border: 0;
       text-decoration: none;
       cursor: pointer;
+    }
+
+    &.citation-badge--kb {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 5px;
+      border-radius: 9px;
+      background: var(--noesis-color-primary-bg-icon);
+      color: var(--noesis-color-primary);
+      cursor: pointer;
+
+      &:hover {
+        background: var(--noesis-color-primary-bg-hover, var(--noesis-color-primary-bg-icon));
+      }
+    }
+  }
+
+  /* 纸墨（默认主题）下 primary 与正文同为墨色，badge 与正文难以区分；
+     反转为「墨底纸字」，保持单色主题语言 */
+  html:not([data-theme]) & {
+    .citation-badge a,
+    .citation-badge.citation-badge--kb {
+      background: var(--noesis-color-primary);
+      color: var(--noesis-color-bg);
+    }
+
+    .citation-badge.citation-badge--kb:hover {
+      background: var(--noesis-color-primary-hover);
     }
   }
 
@@ -332,9 +377,11 @@ onMounted(() => {
   width: 100%;
   border-radius: 0;
   box-sizing: border-box;
+  padding-left: 0;
+  padding-right: 0;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .markdown-preview__body {
     padding-right: 8px !important;
     padding-left: 8px !important;
@@ -355,6 +402,11 @@ onMounted(() => {
     li > p {
       line-height: 1.75;
     }
+  }
+
+  .markdown-wrapper.markdown-wrapper--segment {
+    padding-left: 0;
+    padding-right: 0;
   }
 }
 

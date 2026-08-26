@@ -55,7 +55,7 @@ def get_embedding(model: str | None = None):
     from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
     snapshot = get_runtime_model_snapshot(purpose="embedding")
-    model_name = (model or (snapshot.model_name if snapshot else ModelConfig.embedding_model_name)).strip()
+    model_name = (model or (snapshot.id if snapshot else ModelConfig.embedding_model_name)).strip()
     api_key = (snapshot.api_key if snapshot else ModelConfig.embedding_model_api_key).strip()
     base_url = (snapshot.base_url if snapshot else ModelConfig.embedding_model_base_url).strip()
     kwargs: dict = {

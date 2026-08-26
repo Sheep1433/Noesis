@@ -21,7 +21,7 @@ def is_vision_available(model_id: Optional[str] = None) -> bool:
     if not ChatAttachmentConfig.vision_enabled:
         return False
     entry = resolve_catalog_entry(model_id)
-    return model_name_supports_vision(entry.model_name)
+    return model_name_supports_vision(entry.id)
 
 
 def resolve_effective_vision_model_id(model_id: Optional[str]) -> Optional[str]:

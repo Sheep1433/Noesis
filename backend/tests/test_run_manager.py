@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from noesis.domain.chat.runs import (
+from noesis.chat.delivery.events import RunAborted
+from noesis.chat.runs import (
     HitlPendingExpired,
     RunCapacityExceeded,
     RunDurationExceeded,
@@ -14,7 +15,6 @@ from noesis.domain.chat.runs import (
     RunStatus,
     SequencedRunEvent,
     SlowSubscriber,
-    StaleAttemptEvent,
 )
 
 
@@ -260,7 +260,34 @@ async def test_run_output_limit_is_enforced_before_buffer_growth() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hitl_pending_expires_and_cannot_resume() -> None:
+async def test_terminal_event_remains_publishable_after_output_limit() -> None:
+    async def producer(publish):
+        return None
+
+    manager = RunManager(max_output_bytes=256)
+    handle = await manager.start(
+        run_id="run-terminal-after-limit",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="message-1",
+        snapshot_provider=_snapshot("run-terminal-after-limit"),
+        producer=producer,
+    )
+    with pytest.raises(RunOutputExceeded):
+        await manager.publish("run-terminal-after-limit", "x" * 2_000)
+
+    terminal = await manager.publish(
+        "run-terminal-after-limit",
+        RunAborted(reason="limit_exceeded", error_code="LIMIT_EXCEEDED"),
+    )
+
+    assert terminal.event.reason == "limit_exceeded"
+    assert terminal.sequence == 1
+    await handle.producer_task
+
+
+@pytest.mark.asyncio
+async def test_hitl_pending_expiry_does_not_fake_terminal_without_persistence() -> None:
     expired = asyncio.Event()
     errors = []
 
@@ -285,9 +312,7 @@ async def test_hitl_pending_expires_and_cannot_resume() -> None:
     await manager.transition("run-1", RunStatus.HITL_PENDING)
     await asyncio.wait_for(expired.wait(), timeout=1)
     assert isinstance(errors[0], HitlPendingExpired)
-    assert handle.status == RunStatus.ERROR
-    with pytest.raises(ValueError):
-        await manager.resume("run-1", producer)
+    assert handle.status == RunStatus.HITL_PENDING
 
 
 @pytest.mark.asyncio
@@ -344,36 +369,6 @@ async def test_terminal_retention_releases_run_handle() -> None:
     await asyncio.sleep(0.03)
     with pytest.raises(KeyError):
         manager.get("run-1")
-
-
-@pytest.mark.asyncio
-async def test_stale_attempt_event_is_dropped_before_sequence_assignment() -> None:
-    release = asyncio.Event()
-
-    async def producer(publish):
-        await release.wait()
-
-    manager = RunManager()
-    handle = await manager.start(
-        run_id="run-1",
-        session_id="session-1",
-        user_id="user-1",
-        assistant_message_id="message-1",
-        snapshot_provider=_snapshot(),
-        producer=producer,
-    )
-    await manager.advance_attempt("run-1", 2)
-    with pytest.raises(StaleAttemptEvent):
-        await manager.publish_attempt("run-1", "late", attempt_id=1)
-    assert handle.last_sequence == 0
-    current = await manager.publish_attempt("run-1", "current", attempt_id=2)
-    assert current.sequence == 1
-    release.set()
-    await handle.producer_task
-    metrics = manager.metrics_snapshot()
-    assert metrics["stale_attempt_events"] == 1
-    assert metrics["published_events"] == 1
-    assert metrics["event_buffer_bytes"] > 0
 
 
 @pytest.mark.asyncio

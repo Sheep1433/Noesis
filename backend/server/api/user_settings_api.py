@@ -1,7 +1,6 @@
 """用户记忆 / 定时任务 / 通讯通道 API（挂在 /api/user）。"""
 from __future__ import annotations
 
-from datetime import date
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -13,9 +12,11 @@ from server.db import get_db
 
 from noesis.schemas.login_vo import CurrentUser
 from noesis.services.messaging_channel_service import MessagingChannelService
-from noesis.services.memory_dream_service import MemoryDreamService
 from noesis.services.scheduled_task_service import ScheduledTaskService
 from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
+from noesis.services.memory.store import MemoryStore
+from noesis.services.memory.types import MEMORY_TYPES, TYPE_LABELS
+from noesis.services.memory.user_settings import MemoryUserSettings
 from noesis.services.user_memory_service import UserMemoryService
 from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.settings_service import SettingsService
@@ -25,11 +26,6 @@ user_settings_router = APIRouter(prefix="/api/user", tags=["用户设置"])
 
 class MemoryWriteBody(BaseModel):
     content: str = Field(..., description="Markdown 正文")
-
-
-class MemoryDreamBody(BaseModel):
-    date: str = Field(default_factory=lambda: date.today().isoformat())
-    timezone: str = "Asia/Shanghai"
 
 
 class ScheduledTaskCreateBody(BaseModel):
@@ -73,6 +69,161 @@ class ChannelUpsertBody(BaseModel):
 # ----- memory -----
 
 
+@user_settings_router.get("/memory/settings")
+async def get_memory_settings(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return ResponseUtil.success(data={"enabled": MemoryUserSettings.is_enabled(current_user.user_id)})
+
+
+class MemoryToggleBody(BaseModel):
+    enabled: bool
+
+
+@user_settings_router.put("/memory/settings")
+async def put_memory_settings(
+    body: MemoryToggleBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    enabled = MemoryUserSettings.set_enabled(current_user.user_id, body.enabled)
+    return ResponseUtil.success(msg="已保存", data={"enabled": enabled})
+
+
+@user_settings_router.get("/memory/tree")
+async def get_memory_tree(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """索引 + journal 文件列表（设置页文件管理入口）。"""
+    user_id = current_user.user_id
+    state = MemoryStore.read_index(user_id)
+    journal_days = sorted(
+        p.stem for p in (MemoryStore.memory_root(user_id) / "journal").glob("*.md")
+    )
+    return ResponseUtil.success(data={
+        "entries": [
+            {
+                "memory_type": e.memory_type,
+                "type_label": TYPE_LABELS[e.memory_type],
+                "slug": e.slug,
+                "rel_path": e.rel_path,
+                "label": e.label,
+                "description": e.description,
+            }
+            for e in state.entries
+        ],
+        "corrupt_lines": state.corrupt_lines,
+        "over_budget": state.over_budget,
+        "journal_days": journal_days,
+    })
+
+
+@user_settings_router.get("/memory/entry/{memory_type}/{slug}")
+async def get_memory_entry(
+    memory_type: str,
+    slug: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        entry = MemoryStore.read_entry(current_user.user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if entry is None:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    path = MemoryStore.entry_path(current_user.user_id, memory_type, slug)
+    return ResponseUtil.success(data={
+        "memory_type": memory_type,
+        "slug": slug,
+        "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+        **entry,
+    })
+
+
+class MemoryEntryWriteBody(BaseModel):
+    content: str = Field(..., description="条目文件 Markdown 原文")
+
+
+@user_settings_router.put("/memory/entry/{memory_type}/{slug}")
+async def put_memory_entry(
+    memory_type: str,
+    slug: str,
+    body: MemoryEntryWriteBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """用户直接编辑条目文件（最高权限）；索引行同步。"""
+    await require_csrf(request)
+    user_id = current_user.user_id
+    try:
+        path = MemoryStore.entry_path(user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="条目不存在")
+    from noesis.config.env import MemoryConfig as _Cfg
+
+    if len(body.content.encode("utf-8")) > _Cfg.max_entry_chars * 2:
+        raise HTTPException(status_code=400, detail="内容超出上限")
+    from noesis.services.memory.store import IndexEntry
+
+    path.write_text(body.content, encoding="utf-8")
+    front = MemoryStore.read_entry_file(path)
+    MemoryStore._sync_index_line(
+        user_id,
+        IndexEntry(
+            memory_type=memory_type,
+            slug=slug,
+            label=str(front.get("label") or slug),
+            description=str(front.get("description") or ""),
+        ),
+    )
+    return ResponseUtil.success(msg="已保存")
+
+
+@user_settings_router.delete("/memory/entry/{memory_type}/{slug}")
+async def delete_memory_entry(
+    memory_type: str,
+    slug: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    try:
+        removed = MemoryStore.remove_entry(current_user.user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not removed:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    return ResponseUtil.success(msg="已删除")
+
+
+@user_settings_router.get("/memory/journal/{day}")
+async def get_memory_journal(
+    day: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    import re as _re
+
+    if not _re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+        raise HTTPException(status_code=400, detail="非法日期")
+    path = MemoryStore.journal_path(current_user.user_id, day)
+    return ResponseUtil.success(data={
+        "day": day,
+        "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+    })
+
+
+@user_settings_router.post("/memory/index/rebuild")
+async def rebuild_memory_index(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    state = MemoryStore.rebuild_index(current_user.user_id)
+    return ResponseUtil.success(msg="索引已重建", data={"entries": len(state.entries)})
+
+
 @user_settings_router.get("/memory/{file_name}")
 async def get_user_memory_file(
     file_name: str,
@@ -100,68 +251,9 @@ async def put_user_memory_file(
     return ResponseUtil.success(msg="已保存", data=data)
 
 
-@user_settings_router.post("/memory/dream")
-async def run_memory_dream(
-    body: MemoryDreamBody,
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await require_csrf(request)
-    try:
-        data = await MemoryDreamService.run(db, user_id=current_user.user_id, target_date=body.date, timezone_name=body.timezone)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ResponseUtil.success(msg="记忆整理完成", data=data)
+# ----- 记忆层（md 文件）：设置开关 + 文件管理 -----
 
 
-@user_settings_router.get("/memory/daily/list")
-async def list_daily_memory(current_user: CurrentUser = Depends(get_current_user)):
-    return ResponseUtil.success(data={"items": UserMemoryService.list_daily(current_user.user_id)})
-
-
-@user_settings_router.get("/memory/daily/search")
-async def search_daily_memory(
-    q: str = Query(..., min_length=1, max_length=100),
-    limit: int = Query(20, ge=1, le=50),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    try:
-        items = UserMemoryService.search_daily(current_user.user_id, q, limit)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ResponseUtil.success(data={"items": items})
-
-
-@user_settings_router.get("/memory/daily/entries/search")
-async def search_memory_entries(
-    q: str = Query(..., min_length=1, max_length=100),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
-    limit: int = Query(10, ge=1, le=50),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    try:
-        items = UserMemoryService.search_entries(current_user.user_id, q, date_from=date_from, date_to=date_to, category=category, limit=limit)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ResponseUtil.success(data={"items": items})
-
-
-@user_settings_router.get("/memory/daily/source")
-async def get_memory_source(
-    session_id: str = Query(...),
-    message_id: str = Query(...),
-    context_messages: int = Query(1, ge=0, le=3),
-    current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    try:
-        data = await MemoryDreamService.get_source(db, user_id=current_user.user_id, session_id=session_id, message_id=message_id, context_messages=context_messages)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ResponseUtil.success(data=data)
 
 
 @user_settings_router.get("/context/preview")
@@ -178,6 +270,24 @@ async def preview_agent_context(
 
 
 # ----- scheduled tasks -----
+
+
+@user_settings_router.post("/scheduled-tasks/parse")
+async def parse_scheduled_task(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """自然语言解析为定时任务草稿，前端拿回预填表单后二次确认提交。"""
+    await require_csrf(request)
+    body = await request.json()
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="请输入任务描述")
+    try:
+        draft = await ScheduledTaskService.parse_natural_language(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseUtil.success(data=draft)
 
 
 @user_settings_router.get("/scheduled-tasks/preview")
@@ -442,7 +552,7 @@ async def delete_channel(
     return ResponseUtil.success(msg="已删除")
 
 
-async def _validate_channel_session(db: AsyncSession, user_id: int, strategy: str, session_id: str | None) -> None:
+async def _validate_channel_session(db: AsyncSession, user_id: str, strategy: str, session_id: str | None) -> None:
     if strategy != "persistent" or not session_id:
         return
     from noesis.services.chat_service import ChatService

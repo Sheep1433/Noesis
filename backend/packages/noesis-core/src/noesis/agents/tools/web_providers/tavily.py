@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from noesis.config.env import WebToolsConfig
-from noesis.runtime.logging import logger
 from noesis.errors.tool_failure import ToolValidationError
 
 

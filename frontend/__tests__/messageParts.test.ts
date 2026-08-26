@@ -1,18 +1,50 @@
 import { describe, expect, it } from 'vitest'
 import { parseTaskToolOutput } from '@/utils/parseTaskTool'
 import {
+  appendStreamFailureNotice,
+  appendTextDelta,
   applyToolOutput,
   assistantToolFailureSummary,
+  COMPACTION_BOUNDARY,
+  completeReasoningPart,
+  formatDurationMs,
   formatUsageSummary,
   hasValidContextWindow,
   hasValidUsage,
   markStreamingPartsComplete,
   normalizeApiContent,
+  resolveLoadedContextSnapshot,
+  shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
 } from '@/views/chat/messageParts'
 
+describe('duration formatting', () => {
+  it('uses one compact format across short, second and minute durations', () => {
+    expect(formatDurationMs(5.6)).toBe('<1s')
+    expect(formatDurationMs(12_300)).toBe('12s')
+    expect(formatDurationMs(65_000)).toBe('1m 05s')
+  })
+})
+
 describe('message parts snapshot normalization', () => {
+  it('reasoning-end 按 part_id 闭合对应思考，不误关闭交错的 subagent 思考', () => {
+    const parts = [
+      { id: 'root-reasoning', type: 'reasoning' as const, content: '主线', status: 'streaming' },
+      { id: 'child-reasoning', type: 'reasoning' as const, content: '子任务', status: 'streaming', parent_task_call_id: 'task-1' },
+    ]
+
+    const next = completeReasoningPart(parts, 'root-reasoning')
+
+    expect(next[0]).toMatchObject({ id: 'root-reasoning', status: 'completed' })
+    expect(next[1]).toMatchObject({ id: 'child-reasoning', status: 'streaming' })
+  })
+
+  it('仅对超过阈值的用户消息启用折叠', () => {
+    expect(shouldCollapseUserMessage('a'.repeat(800))).toBe(false)
+    expect(shouldCollapseUserMessage('a'.repeat(801))).toBe(true)
+  })
+
   it('解析普通文本与 retrieval parts', () => {
     const normalized = normalizeApiContent({ parts: [
       { type: 'text', content: '旧消息' },
@@ -30,6 +62,56 @@ describe('message parts snapshot normalization', () => {
     expect(normalized.parts[2]).toMatchObject({ type: 'retrieval', results: [{ evidence_id: 'ev_1' }] })
   })
 
+  it('压缩边界独立成一行，兼容历史正文中已合并的标记', () => {
+    const historical = normalizeApiContent({
+      parts: [{ type: 'text', content: `压缩前${COMPACTION_BOUNDARY}压缩后` }],
+    })
+    expect(historical.parts.map((part) => part.type === 'text' ? part.content : '')).toEqual([
+      '压缩前',
+      COMPACTION_BOUNDARY,
+      '压缩后',
+    ])
+
+    const streaming = appendTextDelta([
+      { id: 'text-1', type: 'text', content: '压缩前', status: 'streaming' },
+    ], `${COMPACTION_BOUNDARY}压缩后`)
+    expect(streaming.map((part) => part.type === 'text' ? part.content : '')).toEqual([
+      '压缩前',
+      COMPACTION_BOUNDARY,
+      '压缩后',
+    ])
+  })
+
+  it('已有有效 retrieval 结果时，不把同一工具显示为连接失败', () => {
+    const normalized = normalizeApiContent({
+      parts: [
+        {
+          type: 'tool',
+          name: 'search_knowledge_base',
+          tool_call_id: 'call-kb',
+          input: { query: '怀孕怎么办' },
+          output: '',
+          status: 'error',
+          state: 'failed',
+          error: '连接失败',
+          errorCategory: 'network_unreachable',
+        },
+        {
+          type: 'retrieval',
+          tool_call_id: 'call-kb',
+          query: '怀孕怎么办',
+          results: [{ evidence_id: 'ev-1', title: '妊娠生理.md', excerpt: '资料' }],
+        },
+      ],
+    })
+    expect(normalized.parts.find((part) => part.type === 'tool')).toMatchObject({
+      status: 'success',
+      state: 'succeeded',
+      output: '检索到 1 条来源',
+      error: null,
+    })
+  })
+
   it('工具状态文案互斥且覆盖完整生命周期', () => {
     expect(TOOL_STATE_LABELS).toEqual({
       running: '正在执行',
@@ -41,6 +123,21 @@ describe('message parts snapshot normalization', () => {
       cancelled: '已停止',
     })
   })
+
+  it('错误详情已经出现在正文时不重复追加原始错误', () => {
+    const detail = 'LLM 服务经多次重试后仍不可用，请稍候继续对话。'
+    const parts = appendStreamFailureNotice([
+      { id: 'text-1', type: 'text', content: detail, status: 'streaming' },
+    ], detail)
+    const text = parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.content)
+      .join('\n')
+
+    expect(text.match(/LLM 服务经多次重试后仍不可用/g)).toHaveLength(1)
+    expect(parts).toHaveLength(1)
+  })
+
   it('刷新或 HITL 续跑时按 tool_call_id 合并重复工具块', () => {
     const normalized = normalizeApiContent({
       parts: [
@@ -249,11 +346,29 @@ describe('hasValidUsage / hasValidContextWindow 降级', () => {
     expect(hasValidContextWindow({ current_tokens: 100 })).toBe(false)
     expect(hasValidContextWindow({ current_tokens: 100, max_tokens: 0, used_percentage: 1 })).toBe(false)
     expect(hasValidContextWindow({ current_tokens: 100, max_tokens: 128000, used_percentage: 1 })).toBe(true)
+    expect(hasValidContextWindow({ current_tokens: 128001, max_tokens: 128000, used_percentage: 100 })).toBe(false)
   })
 
   it('历史消息只有核心字段仍通过校验', () => {
     expect(hasValidContextWindow({
       current_tokens: 5000, max_tokens: 128000, used_percentage: 4,
     })).toBe(true)
+  })
+
+  it('刚收到的有效上下文不会被尚未落库的旧快照清空', () => {
+    const current = { current_tokens: 2400, max_tokens: 128000, used_percentage: 1.8 }
+    expect(resolveLoadedContextSnapshot(
+      { current_tokens: 39_000_000, max_tokens: 128000, used_percentage: 100 },
+      current,
+      'session-1',
+      'session-1',
+      true,
+    )).toEqual(current)
+    expect(resolveLoadedContextSnapshot(
+      { current_tokens: 39_000_000, max_tokens: 128000, used_percentage: 100 },
+      current,
+      'session-1',
+      'session-2',
+    )).toBeNull()
   })
 })

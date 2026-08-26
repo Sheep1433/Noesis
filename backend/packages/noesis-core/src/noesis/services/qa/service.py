@@ -1,7 +1,6 @@
 """QaService — Run-managed QA orchestration (exec_query / resume / export)."""
 
 import asyncio
-import logging
 import re
 import time
 import uuid
@@ -9,64 +8,40 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
 from noesis.agents.mcp.loader import load_mcp_tools_by_names
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.storage.postgres.manager import pg_manager
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
 from noesis.config.code_enum import IntentEnum
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.schemas.login_vo import CurrentUser
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.schemas.qa_vo import QaQueryRequest
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.services.chat_service import ChatService
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.services.chat_attachment_service import ChatAttachmentService
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.services.mention_resolve_service import MentionResolveService
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.runtime.logging import logger
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
-from noesis.domain.chat.tool_state import ToolState
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
+from noesis.config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
+from noesis.chat.delivery.events import RunEvent
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper
+from noesis.chat.tool_state import ToolState
+from noesis.errors.exceptions import NotFoundException
 from noesis.llm.catalog import get_default_model_id
-
-from noesis.errors.exceptions import NotFoundException, ServiceException
-
+from noesis.runtime.logging import logger
+from noesis.schemas.login_vo import CurrentUser
+from noesis.schemas.qa_vo import QaQueryRequest
+from noesis.services.chat_attachment_service import ChatAttachmentService
+from noesis.services.chat_service import ChatService
+from noesis.services.mention_resolve_service import MentionResolveService
+from noesis.agents.subagents.notifications import notify_agent_query
 from noesis.services.qa.helpers import (
     _finalize_sse_bridge_stream,
+    _finalize_run_events,
     _new_stream_ctx,
     _resolve_enabled_skills_for_query,
     _resolve_kb_settings_for_query,
     _resolve_mcp_servers_for_query,
     _resolve_model_for_query,
     _yield_sse_from_agent_bridge,
+    _yield_run_events_from_agent,
     case_coordinator,
     common_agent,
     fault_agent,
+    seed_session_stats_from_history,
     super_agent,
 )
+from noesis.storage.postgres.manager import pg_manager
 
 
 class QaService:
@@ -78,14 +53,15 @@ class QaService:
         db: AsyncSession,
         *,
         assistant_message_id: Optional[str] = None,
-    ) -> AsyncGenerator[str, None]:
+        run_id: Optional[str] = None,
+    ) -> AsyncGenerator[RunEvent | str, None]:
         """
-        执行问答，返回 Noesis 标准 SSE 文本帧（str）。
+        执行问答。目标 Agent Run 返回 typed RunEvent；TEST_CASE_QA 返回旧 SSE 文本。
 
         Yields:
-            str: SSE 帧（含换行），末尾由 bridge.finalize() 追加 [DONE]
+            RunEvent | str: typed 主路径事件，或 TEST_CASE_QA 的独立 SSE 帧。
         """
-        logging.info(f"query param: {req_obj.json()}")
+        logger.info(f"query param: {req_obj.json()}")
         clean_query = re.sub(r"\s+", "", req_obj.query or "")
 
         if ChatAttachmentConfig.enabled and req_obj.file_dict:
@@ -95,6 +71,10 @@ class QaService:
         builder: Optional[AssistantMessageBuilder] = None
         bridge: Optional[LangGraphSseBridge] = None
         ctx: Dict[str, Any] = {}
+
+        # 进程重启后 stats registry 从零累计会导致统计条覆盖前端历史重建值；
+        # 首个模型调用前从 DB 历史 assistant extra.usage 预填（已累计则忽略）。
+        await seed_session_stats_from_history(session_id, str(current_user.user_id), db)
 
         resolved_mentions = MentionResolveService.resolve(
             mentions=req_obj.mentions,
@@ -109,6 +89,15 @@ class QaService:
                 if clean_query
                 else resolved_mentions.prompt_block
             )
+        # 用户真实消息（非自动续跑）清零连续唤醒计数（惰性导入避免环）
+        if not (req_obj.extra or {}).get("bg_continuation"):
+            from noesis.services.bg_continuation_service import note_user_activity
+
+            note_user_activity(session_id)
+        # 后台子 Agent 终态通知：一次性 drain 前置到 agent_query（不落库）。
+        # 仅 SuperAgent 注入——check_task 等工具只存在于 SUPER_AGENT_QA。
+        if req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
+            agent_query = notify_agent_query(session_id, agent_query)
 
         try:
             logger.info(
@@ -186,6 +175,8 @@ class QaService:
                     qa_type=req_obj.qa_type,
                     model_id=resolved_model_id,
                     mcp_tools=mcp_tools,
+                    db=db,
+                    run_id=run_id,
                 )
             elif req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
                 agent_generator = case_coordinator.run_agent(
@@ -207,6 +198,7 @@ class QaService:
                     db=db,
                     kb_collections=kb_collections or None,
                     kb_search_enabled=kb_search_enabled,
+                    run_id=run_id,
                 )
             else:
                 # 即时代码路径，连续产出多帧 SSE，无长时间阻塞，无需注释保活。
@@ -243,23 +235,39 @@ class QaService:
                 if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]
                 else None
             )
-            async for sse_line in _yield_sse_from_agent_bridge(
-                agent_generator,
-                bridge=bridge,
-                builder=builder,
-                ctx=ctx,
-                session_id=session_id,
-                user_id=current_user.user_id,
-                qa_type=req_obj.qa_type,
-                keepalive_seconds=ka_sec,
-                langfuse_thread_id=lf_thread,
-            ):
-                yield sse_line
-
-            async for sse_line in _finalize_sse_bridge_stream(
-                bridge, builder, ctx, session_id, current_user.user_id
-            ):
-                yield sse_line
+            if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
+                async for sse_line in _yield_sse_from_agent_bridge(
+                    agent_generator,
+                    bridge=bridge,
+                    builder=builder,
+                    ctx=ctx,
+                    session_id=session_id,
+                    user_id=current_user.user_id,
+                    qa_type=req_obj.qa_type,
+                    keepalive_seconds=ka_sec,
+                    langfuse_thread_id=lf_thread,
+                ):
+                    yield sse_line
+                async for sse_line in _finalize_sse_bridge_stream(
+                    bridge, builder, ctx, session_id, current_user.user_id
+                ):
+                    yield sse_line
+            else:
+                async for event in _yield_run_events_from_agent(
+                    agent_generator,
+                    bridge=bridge,
+                    builder=builder,
+                    ctx=ctx,
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    qa_type=req_obj.qa_type,
+                    langfuse_thread_id=lf_thread,
+                ):
+                    yield event
+                async for event in _finalize_run_events(
+                    bridge, ctx, session_id, str(current_user.user_id)
+                ):
+                    yield event
 
             logger.info(
                 f"exec_query 流式正常结束 session_id={session_id} qa_type={req_obj.qa_type} "
@@ -283,7 +291,7 @@ class QaService:
             raise
 
         except Exception as e:
-            logging.exception(f"QA服务异常: {e}")
+            logger.exception(f"QA服务异常: {e}")
             if bridge is not None:
                 b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
@@ -291,22 +299,27 @@ class QaService:
                     "current_tool_name": None,
                     "current_tool_call_id": None,
                     "tool_start_times": {},
-                    "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-                    "usage_seen_run_ids": set(),
                 }
                 try:
-                    for line in bridge.process_item({"type": "__tw_error__", "content": str(e)}, b, c):
-                        yield line
-                    for line in bridge.process_item(
+                    if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
+                        map_item = bridge.process_item
+                        finalize = bridge.finalize
+                    else:
+                        mapper = RuntimeEventMapper(bridge)
+                        map_item = mapper.map_item
+                        finalize = mapper.finalize
+                    for event in map_item({"type": "__tw_error__", "content": str(e)}, b, c):
+                        yield event
+                    for event in map_item(
                         {"type": "__tw_finish__", "usage": {}, "finish_reason": "error"},
                         b,
                         c,
                     ):
-                        yield line
-                    for line in bridge.finalize():
-                        yield line
+                        yield event
+                    for event in finalize():
+                        yield event
                 except Exception:
-                    logging.exception("failed to emit SSE after QA exception")
+                    logger.exception("failed to emit SSE after QA exception")
 
     @classmethod
     async def exec_test_case_resume(
@@ -315,6 +328,7 @@ class QaService:
         selected_point_names: List[str],
         current_user: CurrentUser,
         db: AsyncSession,
+        run_id: Optional[str] = None,
         *,
         assistant_message_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
@@ -331,6 +345,7 @@ class QaService:
                 f"exec_test_case_resume 流式上游开始 session_id={session_id} user_id={current_user.user_id} point_count={len(names)}"
             )
 
+            resolved_model_id = get_default_model_id()
             agent_generator = case_coordinator.resume_agent(session_id, selected_point_names=names)
 
             bridge = LangGraphSseBridge(
@@ -398,7 +413,7 @@ class QaService:
             raise
 
         except Exception as e:
-            logging.exception(f"测试用例 resume 异常: {e}")
+            logger.exception(f"测试用例 resume 异常: {e}")
             if bridge is not None:
                 b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {
@@ -406,8 +421,6 @@ class QaService:
                     "current_tool_name": None,
                     "current_tool_call_id": None,
                     "tool_start_times": {},
-                    "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-                    "usage_seen_run_ids": set(),
                 }
                 try:
                     for line in bridge.process_item({"type": "__tw_error__", "content": str(e)}, b, c):
@@ -421,7 +434,7 @@ class QaService:
                     for line in bridge.finalize():
                         yield line
                 except Exception:
-                    logging.exception("failed to emit SSE after test case resume exception")
+                    logger.exception("failed to emit SSE after test case resume exception")
 
     @classmethod
     async def exec_hitl_resume(
@@ -432,7 +445,8 @@ class QaService:
         grant_scope: Optional[str],
         current_user: CurrentUser,
         db: AsyncSession,
-    ) -> AsyncGenerator[str, None]:
+        run_id: Optional[str] = None,
+    ) -> AsyncGenerator[RunEvent, None]:
         """HITL resume：新开 SSE，续写同一 assistant_message_id。"""
         from noesis.agents.guardrails.session_grants import session_grants
         from noesis.storage.postgres.models.chat import TChatMessage
@@ -451,21 +465,22 @@ class QaService:
                 session_id,
                 assistant_message_id=pending.assistant_message_id,
             )
+            mapper = RuntimeEventMapper(br)
             c = {}
-            for line in br.process_item(
+            for event in mapper.map_item(
                 {"type": "__tw_error__", "content": "HITL 已超时"},
                 None,
                 c,
             ):
-                yield line
-            for line in br.process_item(
+                yield event
+            for event in mapper.map_item(
                 {"type": "__tw_finish__", "finish_reason": "error", "usage": {}},
                 None,
                 c,
             ):
-                yield line
-            for line in br.finalize():
-                yield line
+                yield event
+            for event in mapper.finalize():
+                yield event
             return
 
         if grant_scope == "session":
@@ -504,13 +519,14 @@ class QaService:
                 emit_langfuse_session_hint=LangfuseConfig.langfuse_tracing_enabled,
                 assistant_message_id=aid,
             )
+            mapper = RuntimeEventMapper(bridge)
             builder = AssistantMessageBuilder(session_id=session_id, message_id=aid)
             builder.load_from_content_dict(existing_content)
             ctx = _new_stream_ctx()
             ctx["_assistant_db_id"] = aid
 
             # reject/respond 不经 on_tool_end：先合成 tool-output 与 hitl 状态
-            from noesis.domain.chat.streaming.langgraph_sse import _format_sse
+            from noesis.chat.event_mapping.langgraph_bridge import _format_sse
 
             for idx, decision in enumerate(decision_payloads):
                 action = actions[idx] if idx < len(actions) else {}
@@ -599,48 +615,48 @@ class QaService:
                 qa_type=qa_type,
                 db=db,
                 message_id=aid,
+                run_id=run_id,
             )
 
-            ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
-            async for sse_line in _yield_sse_from_agent_bridge(
+            float(StreamConfig.sse_keepalive_interval_seconds)
+            async for event in _yield_run_events_from_agent(
                 agent_generator,
                 bridge=bridge,
                 builder=builder,
                 ctx=ctx,
                 session_id=session_id,
-                user_id=current_user.user_id,
+                user_id=str(current_user.user_id),
                 qa_type=qa_type,
-                keepalive_seconds=ka_sec,
             ):
-                yield sse_line
+                yield event
 
-            async for sse_line in _finalize_sse_bridge_stream(
-                bridge, builder, ctx, session_id, current_user.user_id
+            async for event in _finalize_run_events(
+                bridge, ctx, session_id, str(current_user.user_id)
             ):
-                yield sse_line
+                yield event
 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logging.exception(f"HITL resume 异常: {e}")
+            logger.exception(f"HITL resume 异常: {e}")
             if bridge is not None:
                 b = builder or AssistantMessageBuilder(session_id=session_id)
                 c = ctx or {}
                 try:
-                    for line in bridge.process_item(
+                    for event in mapper.map_item(
                         {"type": "__tw_error__", "content": str(e)}, b, c
                     ):
-                        yield line
-                    for line in bridge.process_item(
+                        yield event
+                    for event in mapper.map_item(
                         {"type": "__tw_finish__", "finish_reason": "error", "usage": {}},
                         b,
                         c,
                     ):
-                        yield line
-                    for line in bridge.finalize():
-                        yield line
+                        yield event
+                    for event in mapper.finalize():
+                        yield event
                 except Exception:
-                    logging.exception("failed to emit SSE after HITL resume exception")
+                    logger.exception("failed to emit SSE after HITL resume exception")
 
     @classmethod
     async def export_test_case_markdown(

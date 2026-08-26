@@ -3,6 +3,7 @@ import type { SessionContextResponse } from '@/api/chat'
 import { Refresh } from '@vicons/ionicons-v5'
 import {
   NButton,
+  NDropdown,
   NIcon,
   NSpin,
   useMessage,
@@ -16,6 +17,7 @@ import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { invalidateMentionContextCache } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { authFetch } from '@/utils/authHttp'
+import { downloadFile } from '@/utils/download'
 import { getFilePreviewKind } from '@/utils/filePreview'
 import WorkspaceFileTree from '@/views/chat/WorkspaceFileTree.vue'
 
@@ -47,7 +49,7 @@ const settingsDeepLink = computed(() => {
   if (base === 'USER.md') {
     return { name: 'Settings' as const, query: { s: 'profile' } }
   }
-  if (base === 'AGENTS.md') {
+  if (base === 'AGENTS.md' || base === 'MEMORY.md' || base.startsWith('memory/')) {
     return { name: 'Settings' as const, query: { s: 'memory' } }
   }
   return null
@@ -60,7 +62,7 @@ const { size: treeWidth, startResize: startTreeResize } = usePaneResize({
   max: 240,
 })
 const { isMobile } = useBreakpoint()
-const effectiveTreeWidth = computed(() => Math.min(treeWidth.value, isMobile.value ? 132 : 240))
+const effectiveTreeWidth = computed(() => Math.min(treeWidth.value, isMobile.value ? 150 : 240))
 
 function revokePreviewImage() {
   if (previewImageSrc.value) {
@@ -98,6 +100,54 @@ function openArtifact(path: string) {
   const rel = sessionArtifactRelPath(path, props.sessionId) ?? path
   const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${rel}`
   window.open(url, '_blank', 'noopener')
+}
+
+// ---- 文件右键下载（不占常驻按钮位） ----
+const fileMenu = ref({ show: false, x: 0, y: 0, key: '' })
+
+function onFileContextMenu(node: { key: string, isLeaf?: boolean }, x: number, y: number) {
+  if (!node.isLeaf) {
+    return
+  }
+  fileMenu.value = { show: true, x, y, key: node.key }
+}
+
+function closeFileMenu() {
+  fileMenu.value = { ...fileMenu.value, show: false }
+}
+
+function fileBaseName(key: string): string {
+  return key.replace(/\/+$/, '').split('/').pop() || 'download'
+}
+
+async function downloadByKey(key: string) {
+  const rel = sessionArtifactRelPath(key, props.sessionId)
+  try {
+    if (rel) {
+      // uploads/attachments：走 artifacts 接口取原始字节
+      const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${rel}`
+      const res = await authFetch(url)
+      if (!res.ok) {
+        throw new Error(`下载失败（${res.status}）`)
+      }
+      downloadFile(await res.blob(), fileBaseName(key))
+      return
+    }
+    // 工作区文件：文本内容直接落盘
+    const res = await getWorkspaceFile(props.sessionId, key)
+    downloadFile(res.content, fileBaseName(key), 'text/plain;charset=utf-8')
+  } catch (e: unknown) {
+    const err = e as Error
+    message.error(err.message || '下载失败')
+  }
+}
+
+function onFileMenuSelect(action: string) {
+  const key = fileMenu.value.key
+  closeFileMenu()
+  if (action === 'download' && key) {
+    void downloadByKey(key)
+  }
 }
 
 async function loadArtifactImage(path: string) {
@@ -215,6 +265,7 @@ defineExpose({ reload })
 <template>
   <div
     class="session-files-panel"
+    :class="{ 'session-files-panel--mobile': isMobile }"
     :style="backgroundColor ? { backgroundColor, '--panel-bg': backgroundColor } : undefined"
   >
     <div class="panel-toolbar">
@@ -227,13 +278,23 @@ defineExpose({ reload })
       >
         在设置中打开
       </n-button>
-      <n-button quaternary size="tiny" :loading="loading" title="Refresh" @click="reload">
+      <n-button quaternary size="tiny" :loading="loading" title="刷新" aria-label="刷新文件列表" @click="reload">
         <template #icon>
           <n-icon size="16"><Refresh /></n-icon>
         </template>
       </n-button>
     </div>
 
+    <n-dropdown
+      trigger="manual"
+      placement="bottom-start"
+      :show="fileMenu.show"
+      :x="fileMenu.x"
+      :y="fileMenu.y"
+      :options="[{ label: '下载', key: 'download' }]"
+      @select="onFileMenuSelect"
+      @clickoutside="closeFileMenu"
+    />
     <n-spin :show="loading" class="panel-body">
       <div class="panel-split">
         <aside
@@ -246,6 +307,7 @@ defineExpose({ reload })
               v-if="context?.tree?.length"
               :nodes="context.tree"
               :selected-key="selectedKey"
+              :on-context-menu="onFileContextMenu"
               @select="onSelectFile"
             />
             <div v-else class="panel-empty-hint">
@@ -375,5 +437,23 @@ defineExpose({ reload })
 
 .session-file-preview :deep(.n-code .n-code__line) {
   background-color: transparent !important;
+}
+
+.session-files-panel--mobile .panel-tree__scroll {
+  overflow-x: hidden;
+}
+
+.session-files-panel--mobile :deep(.workspace-file-tree__body),
+.session-files-panel--mobile :deep(.tree-node),
+.session-files-panel--mobile :deep(.tree-row) {
+  width: 100%;
+  min-width: 0;
+}
+
+.session-files-panel--mobile :deep(.tree-label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

@@ -150,17 +150,23 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 **`task` 工具（Bridge 专节，依赖 builder 状态）**：
 
-在调用 `classify_tool_failure` 之前，若 `tool_name == "task"`：
+在调用 `classify_tool_failure` 之前，若 `tool_name == "task"`，父级 task 的明确终态优先：
 
-1. 若 `_task_has_subagent_tool_error(builder, task_call_id)` 为真（扫描 `builder` 内 `parent_task_call_id` 匹配且 `status=error` 的嵌套 parts）→ `subagent_failure`；
-2. 否则若 output 匹配 `classify_task_tool_output` 失败前缀 → `subagent_failure`；
-3. 否则按普通工具处理。
+1. 若 output 匹配 `classify_task_tool_output` 失败前缀 → `subagent_failure`；
+2. 若 output 以 `Task Succeeded. Result:` 开头 → 保持 task 成功；嵌套工具的失败只保留在对应子工具 part，不得升级父 task；
+3. 否则若 `_task_has_subagent_tool_error(builder, task_call_id)` 为真（扫描 `builder` 内 `parent_task_call_id` 匹配且 `status=error` 的嵌套 parts）→ `subagent_failure`；
+4. 否则按普通工具处理。
 
 **事件顺序假设**：嵌套 tool 的 `on_tool_end` **SHALL** 在对应 `task` 的 `on_tool_end` 之前进入 builder（LangGraph 默认嵌套完成顺序）。若漏标，**MAY** 在 `bridge.finalize()` 对仍为 `running`/`success` 的 task parts 做一次 reconcile 扫描；本规格不强制二次 reconcile，但单测 **SHALL** 覆盖「子 tool 先落库」主路径。
 
-#### Scenario: 子图含 error tool 标 subagent_failure
+#### Scenario: 子图含 error tool 但 task 明确成功
 
-- **WHEN** `task` 的 `on_tool_end` 时 builder 已有嵌套 `web_fetch` part 为 `status=error`
+- **WHEN** `task` 的 `on_tool_end` 时 builder 已有嵌套 `web_fetch` part 为 `status=error`，且 task 输出以 `Task Succeeded. Result:` 开头
+- **THEN** task part SHALL `status=success`；`web_fetch` part 仍 SHALL 保留自身的错误状态
+
+#### Scenario: 子图含 error tool 且 task 没有明确终态
+
+- **WHEN** `task` 的 `on_tool_end` 时 builder 已有嵌套 `web_fetch` part 为 `status=error`，但 task 输出没有成功或失败前缀
 - **THEN** task part SHALL `status=error`、`errorCategory=subagent_failure`
 
 #### Scenario: web_fetch 空正文
@@ -257,12 +263,19 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 ### Requirement: 调用失败 SHALL 转为可续推的 error ToolMessage
 
-`ToolErrorHandlingMiddleware` **SHALL** 捕获工具调用异常（`GraphBubbleUp` 除外）并转为 `status=error` 的 `ToolMessage`，content 含 `[tool_error category=...]`。**Non-Goal**：SSE/part **不**携带 `retryable`；`retryable` **仅**出现在 Agent 侧 `[tool_error ... retryable=...]` 供模型决策。
+工具调用异常（LangGraph 控制异常与整轮取消除外）SHALL 使用权威分类规则生成与原 tool call id 配对的 `status=error` ToolMessage。工具 adapter 在能够确定失败原因时 SHALL 主动抛 typed failure。通用异常翻译 SHALL NOT 同时管理 run budget、subagent scope、telemetry 或 artifact lifecycle。
 
-#### Scenario: GraphBubbleUp 不被吞掉
+#### Scenario: Graph 控制异常不被吞掉
 
-- **WHEN** 抛出 `GraphBubbleUp`
-- **THEN** middleware 原样重抛
+- **WHEN** 工具调用抛出 LangGraph 控制异常或整轮取消
+- **THEN** 工具错误处理 SHALL 原样传播
+- **AND** 若会话随后恢复，message canonicalization SHALL 在再次调用模型前修复不完整配对
+
+#### Scenario: Typed Failure 可续推
+
+- **WHEN** MCP、Web、KB 或 filesystem tool 抛出 `ToolFailureError`
+- **THEN** 系统 SHALL 返回同 tool call id 的 error ToolMessage
+- **AND** 模型 SHALL 能在合法 tool call/result history 上继续决策
 
 ### Requirement: 用户 error 短句 SHALL 固定且刻意粗粒度
 
@@ -326,7 +339,7 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 **网络辨析（N-）**：N-01 ConnectTimeout→network_timeout；N-02 ReadTimeout→execution_timeout；N-03 ConnectError→network_unreachable。
 
-**子 Agent（T-）**：T-01 全成功；T-02 嵌套网络失败→task subagent_failure；T-03 嵌套 command_failed 但 task 仍 success；T-04 parentTaskCallId UI；T-05 Task timed out 文案。
+**子 Agent（T-）**：T-01 全成功；T-02 嵌套网络失败且 task 无明确终态→task subagent_failure；T-03 嵌套 command_failed 但 task 仍 success；T-04 parentTaskCallId UI；T-05 Task timed out 文案。
 
 **并行（P-）**：P-01 并行不错位；P-02 GraphBubbleUp；P-03 unknown 可续推。
 
@@ -350,13 +363,19 @@ Bridge 在 `on_tool_end` **SHALL**：
 
 ### Requirement: Tool failure 语义 SHALL 接入统一 Tool Result Envelope
 
-现有 `status`、`errorCategory` 与 `outcome` 语义 SHALL 作为 Tool Execution 内部 result envelope 的字段继续保留。调用异常 SHALL 先按现有 typed exception 规则分类，再由统一 Tool Execution 产生 error ToolMessage；有界化 SHALL 在分类之后执行，且 SHALL NOT 把错误正文截断成 success。
+`status`、`errorCategory` 与 `outcome` SHALL 继续作为 ToolMessage、RunEvent 与 assistant part 的稳定字段，但 SHALL 直接来源于最终工具结果，不要求额外全局 envelope。Typed failure 在异常翻译边界确定；command outcome 在具体 tool adapter 确定；输出 bounding 不得改变二者语义。Stream 映射 SHALL 读取已有字段，不得重新猜测 typed category。
 
-#### Scenario: 大型错误详情仍保持 error
+#### Scenario: 大型错误详情仍保持 Error
 
-- **WHEN** 工具抛出带有超长技术详情的 `ToolInfrastructureError`
-- **THEN** Agent 侧结果 SHALL 保持 `status=error` 与对应 category
-- **AND** 用户可见错误 SHALL 继续使用脱敏短句
+- **WHEN** 工具抛出带超长内部详情的 `ToolInfrastructureError`
+- **THEN** 最终 ToolMessage SHALL 保持 `status=error` 与对应 category
+- **AND** 用户可见 error SHALL 继续使用固定脱敏短句
+
+#### Scenario: Command Failure 仍是 Outcome
+
+- **WHEN** execute 正常返回非零 exit code
+- **THEN** SHALL 保持 `status=success` 与 `outcome=command_failed`
+- **AND** 通用 failure 处理 SHALL NOT 将其重新分类为调用异常
 
 ### Requirement: 工具结果有界化 SHALL 不改变原始 Outcome
 
@@ -477,3 +496,42 @@ Noesis 控制的 `execute/bash` 包装 SHALL 返回真实 `exit_code`、`timed_o
 - **THEN** 系统 SHALL 按最终 exit code 记录执行成功
 - **AND** SHALL NOT 仅因 stdout/stderr 文本含错误词而改判失败
 
+### Requirement: Tool Result Budget SHALL 产生确定性 Replacement
+
+工具结果在写入 effective history 前 SHALL 先由工具源或 Filesystem artifact 机制处理；仍超限时 SHALL 生成包含 artifact path/reference、synopsis、原内容 hash 和 replacement reason 的有界结果。Replacement SHALL 保留原 `status`、`errorCategory`、`outcome` 和 tool call id，并 SHALL 在 checkpoint resume 后重放同一决策。
+
+#### Scenario: 恢复已替换的大结果
+
+- **WHEN** 包含大 ToolMessage 的 run 从 checkpoint 恢复
+- **THEN** 有效 history SHALL 继续使用原 replacement record
+- **AND** SHALL NOT 重新转存、重新摘要或将 error 改为 success
+
+### Requirement: ToolPart SHALL 持久化 Run evidence 所需的内部 provenance
+
+每个 in-scope 工具调用的后端持久化 ToolPart SHALL 保存稳定 `provider_key`、可选 `provider_version`、结构化 lifecycle state、execution outcome、tool call id、parent/step 关联和受控的 evidence classification，供终态 Run capture、scope 计算、来源追溯和记忆安全门控使用。内置工具 SHALL 使用稳定内置标识；MCP 工具 SHALL 使用不会因展示名称变化而改变的服务标识；无法确定时 SHALL 写入明确 unknown 值而非按当前配置猜测历史来源。
+
+这些字段是后端内部证据元数据，SHALL NOT 出现在用户可见 SSE、聊天历史 API、前端 tool card、用户错误文案或模型可控制的参数中。任何向客户端序列化 ToolPart 的路径 SHALL 显式剥离内部 provenance、provider 地址和服务端路径。记忆 capture SHALL 使用所有成功/失败/拒绝/超时 ToolPart，不得以 outcome 是否失败决定 Run 是否 eligible。
+
+#### Scenario: 成功工具保留来源和 outcome
+- **WHEN** `search_knowledge_base` 成功并持久化 ToolPart
+- **THEN** 后端 ToolPart SHALL 包含稳定内部 provider、success outcome 和 tool call id
+- **AND** 终态 Run capture SHALL 能把它作为 workflow/experience evidence
+
+#### Scenario: 失败工具保留结构化 outcome
+- **WHEN** 工具执行失败、超时或被拒绝
+- **THEN** 后端 ToolPart SHALL 保留调用层 state 与执行层 outcome
+- **AND** memory capture SHALL NOT 依赖用户可见错误短句重新推断失败类型
+
+#### Scenario: MCP 工具记录稳定来源
+- **WHEN** 来自某 MCP server 的工具完成
+- **THEN** 持久化 ToolPart SHALL 包含该 server 的稳定 provider key 和可得版本
+- **AND** SHALL NOT 依赖模型输出或事后扫描当前配置推断历史来源
+
+#### Scenario: provider 无法确定
+- **WHEN** 工具运行时无法取得稳定 provider identity
+- **THEN** 持久化元数据 SHALL 使用明确 unknown 值
+- **AND** SHALL NOT 将其它同名工具的 provider 误绑定到本次调用
+
+#### Scenario: 用户可见协议不泄露内部 provenance
+- **WHEN** 客户端订阅工具 SSE、刷新历史消息或展开工具卡片
+- **THEN** 响应 SHALL NOT 暴露 provider key、provider version、内部 server 名称、网络位置、evidence classification 或服务端路径

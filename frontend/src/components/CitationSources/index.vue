@@ -1,67 +1,31 @@
 <script setup lang="ts">
 import type { RetrievalResultUi } from '@/views/chat/messageParts'
 import { DocumentsOutline, GlobeOutline } from '@vicons/ionicons-v5'
-import { NButton, NDrawer, NDrawerContent, NIcon } from 'naive-ui'
+import { NDrawer, NDrawerContent, NIcon } from 'naive-ui'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { citationTargets, safeWebUrl } from '@/views/chat/citationRendering'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { buildCitationIndex, safeWebUrl } from '@/views/chat/citationRendering'
 
 const props = defineProps<{
-  content: string
   results: RetrievalResultUi[]
 }>()
 
 const router = useRouter()
+const { isMobile } = useBreakpoint()
 const drawerOpen = ref(false)
 const selectedCitationNumber = ref<number | null>(null)
 const sourceListRef = ref<HTMLElement | null>(null)
 
-const sources = computed(() => {
-  const unique = new Map<string, RetrievalResultUi>()
-  for (const result of props.results) {
-    const key = result.source_type === 'web'
-      ? `web:${safeWebUrl(result.url) || result.evidence_id}`
-      : `kb:${result.collection_name || ''}:${result.title}`
-    if (!unique.has(key)) {
-      unique.set(key, result)
-    }
-  }
-  return [...unique.values()]
-})
+// 与正文 badge 共用同一份序号映射（buildCitationIndex），确保点击正文 [2]
+// 滚动到面板第 2 条。
+const citationIndex = computed(() => buildCitationIndex(props.results))
 
-const targets = computed(() => citationTargets(
-  props.content,
-  props.results,
-  (collectionName, fileName) => router.resolve({
-    name: 'KnowledgeBaseDetail',
-    params: { collectionName },
-    query: { file: fileName },
-  }).href,
-))
-
-function sourceHref(source: RetrievalResultUi): string | null {
-  if (source.source_type === 'web') {
-    return safeWebUrl(source.url)
-  }
-  return source.collection_name ? router.resolve(kbLocation(source)).href : null
-}
-
-const sourceGroups = computed(() => {
-  const citationNumbers = new Map<string, number>()
-  for (const [number, target] of targets.value) {
-    citationNumbers.set(target.href, number)
-  }
-  const cited = sources.value
-    .filter((source) => citationNumbers.has(sourceHref(source) || ''))
-    .map((source) => ({ source, number: citationNumbers.get(sourceHref(source) || '')!, cited: true }))
-    .sort((a, b) => a.number - b.number)
-  const retrieved = sources.value
-    .filter((source) => !citationNumbers.has(sourceHref(source) || ''))
-    .map((source, index) => ({ source, number: index + 1, cited: false }))
-  return [
-    { title: '引用来源', items: cited },
-    { title: '其他检索结果', items: retrieved },
-  ].filter((group) => group.items.length > 0)
+const sourceList = computed(() => {
+  return [...citationIndex.value.values()].map((entry) => ({
+    source: entry.result,
+    number: entry.number,
+  }))
 })
 
 function kbLocation(result: RetrievalResultUi) {
@@ -100,40 +64,41 @@ defineExpose({ open })
 </script>
 
 <template>
-  <n-button quaternary size="tiny" class="source-entry__button" @click="open()">
+  <button type="button" class="source-entry__button" @click="open()">
     <span class="source-entry__icons" aria-hidden="true">
       <span
-        v-for="source in sources.slice(0, 3)"
-        :key="source.evidence_id"
+        v-for="item in sourceList.slice(0, 3)"
+        :key="item.source.evidence_id"
         class="source-entry__icon"
       >
         <n-icon :size="12">
-          <GlobeOutline v-if="source.source_type === 'web'" />
+          <GlobeOutline v-if="item.source.source_type === 'web'" />
           <DocumentsOutline v-else />
         </n-icon>
       </span>
     </span>
     <span>来源</span>
-    <span class="source-entry__count">{{ sources.length }}</span>
-  </n-button>
+    <span class="source-entry__count">{{ sourceList.length }}</span>
+  </button>
 
   <n-drawer
     v-model:show="drawerOpen"
-    placement="right"
-    width="min(440px, 92vw)"
+    class="source-drawer"
+    :class="{ 'source-drawer--mobile': isMobile }"
+    :placement="isMobile ? 'bottom' : 'right'"
+    :width="isMobile ? '100%' : 'min(440px, 92vw)'"
+    :height="isMobile ? 'min(78vh, 620px)' : undefined"
     @after-enter="scrollToSelectedCitation"
   >
     <n-drawer-content title="来源" closable>
       <div ref="sourceListRef">
-        <section v-for="group in sourceGroups" :key="group.title" class="source-group">
-          <h3 class="source-group__title">{{ group.title }}</h3>
+        <section class="source-group">
           <div class="source-list">
             <article
-              v-for="item in group.items"
+              v-for="item in sourceList"
               :key="item.source.evidence_id"
               class="source-card"
-              :class="{ 'source-card--selected': item.cited && item.number === selectedCitationNumber }"
-              :data-citation-number="item.cited ? item.number : undefined"
+              :data-citation-number="item.number"
             >
               <span class="source-card__number">{{ item.number }}</span>
               <div class="source-card__body">
@@ -178,8 +143,23 @@ defineExpose({ open })
 
 <style scoped>
 .source-entry__button {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-height: 26px;
+  border: 0;
+  padding: 0 4px;
+  border-radius: var(--noesis-radius-md);
+  background: transparent;
   color: var(--noesis-color-text-secondary);
+  cursor: pointer;
   font-size: 11px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.source-entry__button:hover {
+  color: var(--noesis-color-primary);
+  background: var(--noesis-color-primary-bg-subtle);
 }
 
 .source-entry__icons {
@@ -191,13 +171,10 @@ defineExpose({ open })
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin-left: -4px;
-  color: var(--noesis-color-primary);
-  background: var(--noesis-color-bg-elevated);
-  border: 1px solid var(--noesis-color-border);
-  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -1px;
+  color: var(--noesis-color-text-hint);
 }
 
 .source-entry__icon:first-child {
@@ -212,6 +189,8 @@ defineExpose({ open })
 .source-list {
   display: grid;
   gap: 2px;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .source-group + .source-group {
@@ -227,8 +206,10 @@ defineExpose({ open })
 
 .source-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   padding: 6px 8px;
   border-radius: var(--noesis-radius-sm);
 }
@@ -254,23 +235,30 @@ defineExpose({ open })
 
 .source-card__body {
   display: flex;
+  flex-direction: column;
   flex: 1;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 3px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .source-card__title {
+  display: block;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   color: var(--noesis-color-text-primary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .source-card__link {
@@ -284,10 +272,11 @@ defineExpose({ open })
 
 .source-card__meta {
   display: flex;
-  flex: 0 0 120px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: var(--noesis-color-text-secondary);
   font-size: 11px;
@@ -301,7 +290,12 @@ defineExpose({ open })
 .source-card__meta span {
   flex: 1;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.source-drawer--mobile :deep(.n-drawer-content) {
+  border-radius: 16px 16px 0 0;
 }
 </style>

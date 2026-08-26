@@ -33,7 +33,7 @@ class CollectionConfigResponse(BaseModel):
 
 
 class PatchCollectionConfigRequest(BaseModel):
-    """PATCH 集合配置（deep-merge）"""
+    """PUT 集合配置（deep-merge）"""
     processing_params: Optional[Dict[str, Any]] = Field(
         None, description="入库参数片段，与现有配置 deep-merge"
     )

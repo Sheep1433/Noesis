@@ -79,6 +79,19 @@ def test_core_never_imports_server_namespace() -> None:
     assert not violations, "core package imports server namespace:\n" + "\n".join(violations)
 
 
+def test_repository_package_preserves_public_exports() -> None:
+    import noesis.repositories as repositories
+
+    expected = {
+        "AgentRunRepository",
+        "KbCollectionConfigRepository",
+        "SettingsRepository",
+        "SqlAlchemySessionRepository",
+        "SqlAlchemyUserRepository",
+    }
+    assert expected <= set(repositories.__all__)
+
+
 def test_backend_has_no_legacy_imports_or_shims() -> None:
     legacy_imports: list[str] = []
     for path in sorted(BACKEND_ROOT.rglob("*.py")):
@@ -163,32 +176,33 @@ def test_platform_host_uses_single_namespace() -> None:
 
 
 def test_platform_core_does_not_depend_on_application_services() -> None:
-    # domain lives in core (noesis.domain); assert it does not import
+    # chat/auth live in core (noesis.chat, noesis.auth); assert they do not import
     # application services (noesis.services) — one-way dependency.
-    domain_root = NOESIS_ROOT / "domain"
+    domain_roots = [NOESIS_ROOT / "chat", NOESIS_ROOT / "auth"]
     violations: list[str] = []
-    for path in sorted(domain_root.rglob("*.py")):
-        if "_ragflow_compat" in path.parts or "deepdoc" in path.parts:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        modules = [
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        ]
-        modules.extend(
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module
-        )
-        if any(
-            name == prefix or name.startswith(prefix + ".")
-            for name in modules
-            for prefix in ("noesis.services", "noesis.agents")
-        ):
-            violations.append(str(path.relative_to(BACKEND_ROOT)))
-    assert not violations, "noesis.domain imports services/agents:\n" + "\n".join(violations)
+    for domain_root in domain_roots:
+        for path in sorted(domain_root.rglob("*.py")):
+            if "_ragflow_compat" in path.parts or "deepdoc" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            modules = [
+                alias.name
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            ]
+            modules.extend(
+                node.module
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module
+            )
+            if any(
+                name == prefix or name.startswith(prefix + ".")
+                for name in modules
+                for prefix in ("noesis.services", "noesis.agents")
+            ):
+                violations.append(str(path.relative_to(BACKEND_ROOT)))
+    assert not violations, "noesis.chat/auth imports services/agents:\n" + "\n".join(violations)
 
     # platform common may import core (noesis.*) but must not import
     # platform services/domain/kb top-level packages.
@@ -232,6 +246,67 @@ assert "fastapi" not in sys.modules
         capture_output=True,
         text=True,
     )
+
+
+def test_agent_middleware_package_is_lazy_and_has_one_authoritative_path() -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(CORE_PACKAGE_ROOT / "src"), str(BACKEND_ROOT)]
+    )
+    script = """
+import sys
+import noesis.agents
+import noesis.agents.middlewares
+from noesis.factory import create_noesis_agent
+
+assert callable(create_noesis_agent)
+for module in (
+    "noesis.agents.common_qa",
+    "noesis.agents.fault_operation",
+    "noesis.agents.simple_mcp",
+    "noesis.agents.super_agent",
+):
+    assert module not in sys.modules, module
+"""
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=BACKEND_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    middleware_root = NOESIS_ROOT / "agents" / "middlewares"
+    assert middleware_root.is_dir()
+    assert not (middleware_root / "capabilities").exists()
+    assert not (NOESIS_ROOT / "middleware").exists()
+
+    forbidden_prefixes = (
+        "noesis.factory",
+        "noesis.agents.common_qa",
+        "noesis.agents.fault_operation",
+        "noesis.agents.simple_mcp",
+        "noesis.agents.super_agent",
+    )
+    violations: list[str] = []
+    for path in sorted(middleware_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        modules = [
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        ]
+        modules.extend(
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        )
+        if any(module.startswith(forbidden_prefixes) for module in modules):
+            violations.append(str(path.relative_to(BACKEND_ROOT)))
+
+    assert not violations, "middleware imports factory or Agent scenes:\n" + "\n".join(violations)
 
 
 def test_public_subsystem_facades_are_lazy_and_authoritative() -> None:

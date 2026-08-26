@@ -170,7 +170,7 @@ function score(value: number | null | undefined) {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .chunk-detail-panel {
   min-width: 0;
   height: 100%;
@@ -275,7 +275,7 @@ function score(value: number | null | undefined) {
   overflow-wrap: anywhere;
 }
 
-@media (width <= 768px) {
+@media (max-width: $bp-md) {
 
   .chunk-detail-panel {
     padding: 14px;

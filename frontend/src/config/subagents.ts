@@ -40,10 +40,10 @@ export function composerPlaceholder(qaType: string, uploading: boolean): string 
     return '正在上传附件…'
   }
   if (supportsSlashSkills(qaType)) {
-    return '输入消息，使用 / 调用 Skill，使用 @ 引用文件或协作助手…'
+    return '输入消息…'
   }
   if (supportsAtMentions(qaType)) {
-    return '输入消息，使用 @ 引用文件或协作助手…'
+    return '输入消息…'
   }
   return '输入消息…'
 }

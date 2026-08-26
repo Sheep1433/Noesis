@@ -1,5 +1,66 @@
 # 知识卡片（开发笔记）
 
+## 2026-08-25 — 记忆注入通道与 prompt cache 代价模型（spec 决策）
+
+- **问题**：每 Run 注入新记忆是否会显著降低 prompt cache 命中。
+- **机制**：cache 是前缀匹配，判定只看「注入后是否再变」与「位置」。三种放置方式：追加持久化（零损失）、临时末尾插入（损失上一轮 token，有界不随历史增长）、system 前缀区每轮变化（全历史重算，唯一红线）。
+- **Noesis 现状**：`late_context.insert_late_context` 是临时末尾插入，槽位里 `current_time` 本就每 Run 变——记忆放同一槽位零边际成本；Run 内部首调用付一次代价、后续全命中。
+- **落进 spec**：「注入通道与 prompt cache」小节；硬约束一条——**每 Run 变化内容 SHALL NOT 进稳定前缀区**；「持久 reminder 消息」降级为后续优化项；注入 = 每 Run 选条（稳定前缀 USER.md+索引 + 廉价模型选条 + alreadySurfaced 去重 + stale 警告）。
+- **同轮校正**：「蒸馏」→「记忆抽取」（对齐 extractMemories）；撤回索引分层 → 单层索引（一行一条）+ 行数/字节双保险预算，超预算走整理压缩——对齐 Claude Code MEMORY.md 设计（它用压缩而非分层解决膨胀）。
+- **可迁移**：分析 cache 影响区分三个变量——注入通道、变化频率、位置；方案引用业界设计前先读原始实现。
+
+## 2026-08-25 — run-terminal 信令在生产路径从未生效
+
+- **症状**：run 完成后前端徽章永远「运行中」，监听连接只收到 keepalive，`run-terminal` 帧不发。
+- **根因**：信令只在 `transition()` 发布，但生产代码只有测试用例续跑路径调用它；主对话终态走 `apply_event → _commit_terminal_candidate` 直接赋值 `handle.status` 不发信令。hitl_pending 迁移同样只走直接赋值——会话级跨窗口信令两类在生产均从未生效。此前测试直接调 `transition()`，没走生产路径所以假绿。
+- **修复**（`b643022`）：在真实状态赋值点补发信令三处（apply_event 普通分支状态变化时 / `_commit_terminal_candidate` 提交成功分支 / hitl_pending），补同状态幂等回归（测试用例续跑不双发）。
+- **可迁移**：事件/信令等副作用挂在内部方法上时，测试必须覆盖生产调用链，否则「测试全绿」可能只是副作用和测试一起绕开了真实路径。
+
+## 2026-08-25 — HTML 沙箱渲染：锚点导航白屏 + Vue SFC 字面 script 坑
+
+- **症状**：iframe `sandbox="allow-scripts"` 渲染生成的 HTML 报告，点击页内锚点（如「今日总结」）白屏。
+- **根因**：无 `allow-same-origin` 时点击 `#锚点` 被浏览器判为导航（目标 `about:srcdoc#summary`），opaque origin 导航被拦截 → iframe 空白。
+- **解法**（`6749b492`）：srcdoc 注入约 10 行垫片脚本，捕获 `a[href^="#"]` 点击 → `preventDefault()` → `scrollIntoView({behavior:'smooth'})`。
+- **附带坑**：Vue SFC 解析器按原文扫描标签块，script 模板字符串和注释里出现字面 `<script>`/`</script>` 都会提前闭合块导致编译失败，用字符串拼接规避。
+
+## 2026-08-25 — 记忆 scope 修正：沙箱工作区下 project_key 恒为 global
+
+- **问题/症状**：验证 SuperAgent 记忆功能时发现「项目级记忆」不存在——`resolve_project_key` 恒返回 `global`，scope 恒为 `profile:SUPER_AGENT:global`。
+- **根因**：design.md Decision 13 按「Agent 跑在 Git 仓库」假设写了三条 Git-based project key 规则，但 SuperAgent 工作区是 `.noesis/users/{uid}/sessions/{sid}/workspace` **每会话一次性沙箱**（`agents/backends/factory.py:109`），里面永远没有 .git/origin → 规则与产品现实脱节，无 origin 分支还会生成指向临时目录 digest 的死胡同 scope。
+- **解法**（实现 B + A）：
+  - `services/memory/scope.py`：带 origin 的 Git 仓库 → origin digest（跨会话共享）；其余（含无 origin 沙箱仓库）→ `global`。
+  - 三处文档 + tasks 对齐新规则；补「无 origin 沙箱归 global」及跨会话死胡同回归用例。
+- **可迁移**：spec 的 scope/身份规则必须基于运行时**真实输入**推演（这里是每会话沙箱路径），不能只按理想部署形态写规则；给用户的操作剧本先对照代码核实关键假设再交付。
+- **验证**：`uv run pytest tests/ -q` 1194 passed；`openspec validate --strict` 通过。
+
+## 2026-08-25 — LLM 429 重试：遵循厂商 Retry-After 但设 cap
+
+- **问题/症状**：网关 429 返回 `retryAfterSeconds: 60` 时原实现直接 sleep 60s，单次失败即阻塞一分钟。
+- **解法**：`llm_error_handling_middleware.py` 新增类属性 `retry_after_cap_ms = 60_000`（与 `retry_base_delay_ms` 同级，均未走 config，保持一致）；`_build_retry_delay_ms` 对提取到的 retry_after 做 `min(retry_after, cap)`。
+- **边界**：仅 header 提取链路生效（网关同时设 header；body 未解析）；无 Retry-After 时照旧指数退避（cap 8s）不受影响。
+- **验证**：3 个新增测试（遵循 / 病态值 clamp / 无 header 回退），全量回归 1193 passed；commit `196faa9`。
+
+## 2026-08-24 — Alembic 迁移漂移：迁移执行后修改其依赖代码导致缺表
+
+- **症状**：后台留存清理任务报 `relation "t_memory_query_trace" does not exist`，但 `alembic upgrade head` 显示全部迁移已执行。
+- **根因**：迁移 `202608240001_reset_unreleased_memory` 执行时 import 的 `_create_schema` 还是旧版（无该表）；之后 schema 模块补上定义，但链头已是 `202608240002` 不会重跑 → 「迁移全跑完」与实际 schema 脱节。活跃 WIP + 多 agent 并行开发下高发。
+- **解法**：不重跑迁移（会 drop 重建既有表）；直接用 ORM `TMemoryQueryTrace.__table__.create()` 补建，以运行时代码为单一事实来源，结构与模型严格一致。
+- **可迁移**：修改被已执行迁移引用的 schema 函数时必须评估漂移风险；排查「迁移说完成但表不存在」先比对迁移版本执行时间与依赖代码的修改时间。
+- **验证**：原报错 DELETE 可执行；ORM 与迁移定义一致。
+
+## 2026-08-24 — user_id 切 UUIDv7 与数据库重置
+
+- **动机**：自增 id 在侧边栏暴露用户序号；AI Agent 产品数据可整体清空重建，切换成本低。
+- **变更**：user_id 改 UUIDv7；清空 `noesis` 业务库与 `noesis_langgraph` checkpoint 库并重新 Alembic 初始化；初始化 admin 用户（UUIDv7 已验证）。备份 dump 留 /tmp。
+- **脚本**：`initialize_postgresql.py` 曾加 `--reset` 后删除（避免误触发全量重置），保留正常迁移功能；`drop_tables.sql` 改为完整重置 public schema。
+- **边界**：Qdrant、`.noesis` 目录、Docker volume 未清理。
+
+## 2026-08-24 — RAG 评测基线：EnterpriseRAG-Bench 阈值标定
+
+- **规模**：500 题下载，211 题可评测（GT 文档全部可得）+ 20 题 info_not_found 负拒备用；1/10 试点入库（erb-eval 集合 48 篇 / 268 chunks，chunk_size=2000/overlap=200）。
+- **结论**：21 题阈值校准 Recall@1=100%；rerank 分中位数 GT 0.199 vs 无关 0.078 → 定版：平台默认阈值 0.1、erb-eval（跨语中→英）0.05。原始数据 `/tmp/erb_scan_raw.json`。
+- **顺手修复**：source 路径泄漏根治、xgboost 依赖、引用溯源 `file:` 协议容错。
+
 ## 2026-08-06 — 流式落库原则：durable vs ephemeral（streaming-persistence-principle）
 
 - **问题/症状**：原 spec 只约束"assistant 正文按骨架—检查点—终态单次落库"，未定义 tool output chunk、reasoning raw delta、progress 等流式内容的入库边界；各写入点自行判断粒度 → 行膨胀与恢复困难。
@@ -78,6 +139,8 @@
 - **API**：`GET /api/models`；流式 `extra.model_id`。
 - **前端**：输入区 `ModelSelector`（非 TEST_CASE_QA）；切换后 `ensureSession` 持久化。
 
+- **目录契约增补（2026-08-15）**：catalog 已收敛为 `id`（provider 模型全名）+ `label`（展示名）+ `model_type` + `context_window`；同步修改 Pydantic `ModelCatalogItem` 和前端 `ChatModelOption`。只改配置而不改 schema 会让 `/api/models` 继续要求已删除的 `model_name`/`limit`，最终在序列化阶段失败。
+
 ## OpenCode Zen 免费模型目录（2026-07-02）
 
 - **发现**：`https://models.dev/api.json` 中 `opencode` provider、`cost.input==0 && status==active`；网关 `https://opencode.ai/zen/v1`，`.env` `MODEL_API_KEY=public`。
@@ -92,6 +155,8 @@
 - **明确删除**：structured answer、虚拟 Tool、typed annotation、citation resolve API、前端 offset marker 和旧兼容分支。
 - **验证**：保留真实模型 Web citation 集成测试，同时检查实时流和终态消息中的 Markdown 来源。
 - **Provider 能力门禁（2026-08-03）**：MiMo 的 `function_calling`、`json_schema`、`json_mode` 在固定对照用例中均稳定返回 500；这不是偶发网络错误，也不是工具数量导致。移除 MiMo 的结构化引用白名单后，同一模型和工具集合可正常产生普通工具调用。以后不能用模型目录或单次成功请求声明结构化能力，必须在目标 provider + 实际工具集合上做能力门禁；门禁失败时关闭结构化引用，不阻断普通对话。
+
+- **引用匹配增补（2026-08-15）**：检索记录的 Web URL 可能带 tracking query，而模型在参考资料中输出的 URL 不带 query；用完整 URL 严格比较会导致引用编号无法变成上标。匹配键应规范化为 `origin + pathname`（忽略 query/hash），展示链接仍保留经过安全校验的完整 URL，并用真实 tracking URL 回归测试覆盖。
 
 ## 2026-07-30 — 评测 harness 收敛 + 中间件复核结论
 
@@ -293,6 +358,8 @@
 - **运行时**：`create_noesis_agent(model_id=...)` 将 `model_id` 传入 `ContextLifecycleMiddleware`；它独占压缩判断并生成 `ContextSnapshot`，`RuntimeTelemetryMiddleware` 只读取 snapshot。压缩触发默认 `trigger_tokens: 0` + `trigger_fraction × limit.context`。
 - **API**：`GET /api/models` 每项返回解析后的 `limit` 对象；embedding/rerank 配置未改。
 
+**2026-08-14 设计校正：** 配置字段应明确表达模型的 `contextWindow`，只用于上下文圆环、压缩阈值和输入容量判断；不要再用含义模糊的 `limit` 同时承载输出上限。输出长度应由 provider/model 的 `max_tokens` 或等价运行时参数控制，并为上下文保留空间；输入窗口和输出预算是两个不同约束。
+
 ## 2026-07-11 — sandbox-runner 残留容器 409 修复
 
 - **现象**：zzqroot 重部署 compose 后 `SUPER_AGENT_QA` 对话无正文；backend 报 `创建用户沙箱失败 HTTP 503`，Docker 409 同名容器已存在（`Exited` 状态）。
@@ -302,7 +369,7 @@
 
 ## 2026-07-11 — 前端 HTTP 环境复制失败
 
-- **现象**：zzqroot（`http://43.134.128.65:28468`）点击对话/知识库「复制」提示失败。
+- **现象**：zzqroot 服务器（Noesis 公网入口）点击对话/知识库「复制」提示失败。
 - **根因**：非安全上下文（HTTP）下 `navigator.clipboard` 不可用；曾短期加 `execCommand` 降级。
 - **现状**：去掉 `execCommand` 降级，仅保留 HTTPS 下 Clipboard API；待海外机绑定域名 + 免费证书后再启用复制。
 
@@ -1012,3 +1079,280 @@ backends/
 **解法/取舍：** 保留已登录状态变更接口的 CSRF 校验；对 login/register/logout 等认证生命周期入口做明确白名单；对用户返回“会话验证失败，请刷新页面后重试”，详细原因只留在服务端日志。修复后错误从 CSRF 拦截变成业务层密码校验，说明请求已经通过 middleware。
 
 **可迁移原则：** 安全 middleware 不能只按“所有 POST 都拦”设计，要区分会话建立、会话内状态变更和公开入口；错误信息对用户要可行动且不泄露安全机制，排查时再用日志和请求头确认真实边界。
+
+## 2026-08-11 — 上下文中间件收敛：Claude Code 的 context 是 pipeline 不是 summarizer
+
+**Why：** 旧五个 kernel middleware 靠 `ContextVar` 在 hook 间传隐式状态（ToolExecution 顺手管 governor、ContextLifecycle 顺手注入时钟、telemetry 再读全局快照），类名宏观但控制流隐蔽，跨 10+ 文件才追得完；目标是「DeepAgents 风格一次装配 + Claude Code 式上下文/重试策略 + Noesis delivery 稳定」。
+
+**研究基线（均 2026-08-11 只读）：** `@anthropic-ai/claude-code@2.1.88`（提取仓 `d907d498`）、DeepAgents `0.6.12`、LangChain、DeerFlow。
+
+**关键结论：**
+- Claude Code 2.1.88 的上下文管理是**一条显式 runtime pipeline**，不是单个 summarization middleware：canonical request → 分层减重 → safe compaction transaction → summary PTL retry → failure breaker → 压缩后权威状态重建 → tool/MCP schema 管理 → subagent 隔离/fork → usage/cache 观测。Noesis 若「行为几乎一致」必须整套具备，只补 auto compact 不够。
+- 现有 `ContextLifecycle` 捕获 compaction 异常后继续运行，并用本地近似 token 估算直接伪造模型答复——偏离 Claude Code 的「预留摘要空间 + 明确失败恢复」，且绕开 Provider 真实语义；重构必须消除这类隐式控制流。
+- DeepAgents 0.6.12 已覆盖 context strategy 大部分基础能力（走 `create_deep_agent()` → LangChain `create_agent()` 装 middleware，`recursion_limit=9999`），但不能原样承担完整 compaction policy：Summarization 加窄策略层、自行控制 middleware 顺序。
+- **保留的 Noesis middleware 收敛为 4 个**：`ToolFailureMiddleware`、`ToolResultLimitMiddleware`、`CompactionMiddleware`、`SafeModelRetryMiddleware`。其中 SafeModelRetry 必须自研：已安装的 LangChain `ModelRetryMiddleware` 不知道 SSE 是否已产生可见 token，也不知道工具副作用边界，异常后可能重放 model step；除非把安全判断迁到更合适的 provider/stream seam，否则不能直接用原生 retry。
+- `factory.py` 同时维护真实 stack 和手写 inventory，两者已分叉；重构时删旧装配，只保留单一装配点。
+
+**How to apply：**
+- 设计落地：`Interview/highlights/Middleware/agent-context-middleware-boundaries.md`（研究/评审，归档于知识库，实现稳定后回归 `docs/research/agents/`）；`openspec/changes/simplify-agent-context-architecture/`（proposal/design/specs/tasks，3 份 delta spec：行为化描述移除具体类名、subagent 默认隔离仅接收明确任务输入、remote trust 移出本 change）。
+- 实现前先对齐 outer-to-inner 目标顺序与 invariants；取消语义必须可终止；SafeModelRetry 沿用已验证 request、attempt 单独计数，只有改变 messages 才走完整 lifecycle。
+
+**验证与遗留：** 实现未开始（待单独 session）；OpenSpec 复审已通过。参考：`Knowledge/Claude-Code/Claude-Code-记忆机制.md`。
+
+## 2026-08-11 — reliable-sse-multitab 实现收官（spec 57/57）
+
+**Why：** 可靠 SSE 推送 + 多 tab 共同查看，服务端发现 active run，前端加入已有 run；TEST_CASE_QA 明确不演进（忽略测试用例生成场景）。
+
+**How to apply（关键正确性点）：**
+- `RunHandle.apply_event()` 原子边界：projection.apply + sequence + buffer + fan-out 在同一 lock 内。
+- `producer_generation` 隔离：旧 producer task 迟到事件被 `StaleProducerGeneration` 拒绝。
+- immutable checkpoint snapshot：lock 内捕获，PersistSink 不读 live projection；repository sequence guard 防回退。
+- terminal persistence barrier：terminal 事件只 buffer 不 fan-out，DB 写成功后才 fan-out；pending 期间 `pre_terminal_snapshot` 保证 GET/subscribe 返回 N-1。
+- stop 幂等：`cancel_requested` + 复用 terminal future。
+- `RuntimeEventMapper` 为 raw→typed RunEvent 唯一映射入口，`LcEventMapper` 收敛为别名。
+- `GET /sessions/{id}/active-run` 服务端发现 active Run，前端 `resumeActiveRun` 优先走服务端 API、sessionStorage 降级；409 join 冲突响应含完整 schema，前端自动加入。
+- SSE subscription 配额（per-run/per-user/global）+ 429；`OWNER_UNAVAILABLE` 503 在开流前拒绝；PG advisory lock 第二个 worker/容器 fail-fast。
+- 前端 `useSSEStream` 显式状态机（Discovering → SnapshotReplace → Subscribing → Applying → GapRecovery/Disconnected/Done）+ Playwright 双 Tab E2E 3 场景。
+- 429/503 统一走 `ResponseUtil`（code-review 硬性违规项）。
+
+**验证：** 后端 887 passed；前端 lint + build + 14 单元测试；tasks 57/57。spec 真源 `openspec/changes/reliable-sse-multitab/`。
+
+## 2026-08-12 — context 中间件重构落地：12 个自包含中间件
+
+**Why：** 8/11 定稿的 simplify-agent-context spec 需要落地，且用户对「哪些自研、哪些复用上游」有强约束：自研多个中间件可体现能力（支撑项目合理性），但每个 middleware 必须**自包含**（deepagents 风格：各自独立负责拦截/处理，不 import runtime/service/agents）。
+
+**成果（worktree `feat/simplify-agent-context`）：**
+- `noesis/agents/middlewares/` Agent runtime 子包：12 个平铺中间件 + `capabilities/` + `stack.py`（装配 + Profile 矩阵）；原顶层 `noesis/middleware/` 已确认是错误迁移并删除。
+- 自包含验证：12 中间件零 import `runtime`/`service`/`agents`，中间件互相零 import。
+- Profile 矩阵修正：`build_noesis_stack` 之前无条件加入 DurableContext、缺 SourceRefresh，与 design §16 矛盾 → 已按 profile 决定必需归属，5 个 Profile 实际 stack 与 design 一致。
+- 旧五 owner kernel 已删；`evals/compression/driver` 改用新 `CompactionMiddleware`。
+- middleware 清单：dynamic_context / source_refresh / durable_context / file_context / snip / micro_compaction / tool_catalog / compaction / subagents / tool_failure / tool_result_limit / safe_model_retry。subagent 的 isolated 已接入 DeepAgents `task` tool；fork/resume 当前只有纯状态函数，真实 task/checkpoint adapter 仍属于 OpenSpec §7 待办。
+
+**已知精化缺口（不影响「已实现」，待后续）：**
+1. Compaction 预算覆盖面：factory 注入的 `token_counter` 只数 messages，未覆盖 system prompt + tool definitions（design §17 / agent-runtime spec 要求覆盖最终 request 全部组成；需接真实 tokenizer）。
+2. `_context_budget.py` / `_summary_prompt.py` 未拆成独立文件（design 目录布局建议，当前内联，行为已实现）。
+
+**验证与遗留：** 核查已通过（stack 顺序、Profile 矩阵、自包含性、旧 kernel 删除、982 测试）；worktree 未合并 dev。spec 真源 `openspec/changes/simplify-agent-context-architecture/`。
+
+## 2026-08-13 — Middleware 接入契约比目录位置更关键
+
+**问题/症状：** `create_agent` 装配 `SubAgentContextMiddleware` 时抛出 `AttributeError: type object 'SubAgentContextMiddleware' has no attribute 'wrap_tool_call'`；同时 middleware 曾被迁到顶层 `noesis/middleware`，与 Agent runtime 的 `agents/middlewares` 语义边界脱节。
+
+**根因：** 文件放进“看起来合理”的目录，不会自动满足 LangChain/DeepAgents 的 middleware contract。参与 `create_agent` 的对象必须遵守框架识别的 `AgentMiddleware` 继承/方法覆盖与 hook 签名；如果只实现了自定义状态函数，却被当作完整 middleware 装配，就会在工厂扫描 hook 时直接失败。目录循环的真正风险是 factory 与 agents 场景模块双向 import，不是 middleware 是否位于 `agents/` 下。
+
+**排查路径：** 先对照 `langchain.agents.factory` 的 middleware 分类和 hook 检测，再沿 `factory → stack → create_agent → task/subagent` 生产链追踪；同时对照 DeerFlow 的 `agents/` 包边界，区分包位置、装配顺序和运行时接口三件事。
+
+**解法/取舍：** middleware 回到 `noesis/agents/middlewares/` 作为 Agent runtime 子包；每个自研 middleware 要么完整实现框架要求的 hook，要么只作为纯 helper/状态函数存在，不能伪装成 middleware。最终以真实 `create_agent` 和 DeepAgents `task` tool 验证，不能只测 mock handler 或纯函数。
+
+**可迁移原则：** 框架扩展先验证 integration contract，再讨论目录风格；“能 import”不等于“能被运行时装配”。测试至少覆盖工厂装配、真实 hook 调用和长时 subagent 生命周期。
+
+**验证与遗留：** 已定位当前 AttributeError 的接口契约原因；isolated/fork/resume 的真实 task/checkpoint 接线、并行工具事件分组和刷新恢复仍需 E2E 验收。
+
+## 2026-08-12 — 引用溯源是两段式：URL 校验把证据全拒
+
+**问题/症状：** 跑了一轮 web_search 搜索了很多结果，但一次引用溯源都没有（前端无 CitationSources 卡片、正文无 `[1]` 内联）。
+
+**根因：** 引用溯源是两段式，不是纯模型自觉：
+1. **结构化来源**（前端引用卡片）：结果经 `register_retrieval_results` 登记为 `RetrievalPart`，经 `retrieval-results-available` SSE 下发；要求每条 `citable=True`（`identity_status == "versioned"`）且通过 `EvidenceEnvelope` 校验。
+2. **正文内联**（`[1]`/`[2]` + `### 参考资料`）：`CITATION_EXTENSION` prompt 驱动模型把工具实际返回的来源编号嵌进正文（明确禁止输出 evidence_id/document_id/JSON）。
+
+当日 8 条结果**全部**被 `_canonical_url` 判为 `invalid web evidence URL` 过滤 → 模型实际拿到的检索结果是空的，自然无源可引。已在 `_normalize_web_result` 加临时 debug（打被拒结果和原始 item 的 url 字段/keys 命名），待复测。
+
+**可迁移原则：** 排查「为什么没有引用」先分清两段：结构化证据登记 vs prompt 内联生成。结构化段常见坑是 URL/身份校验过严把合法结果全拒（校验的字段命名或 provider 返回格式与预期不符）；「结果多但引用零」往往不是模型没遵循 prompt，而是模型根本没拿到可引用的源。
+
+**验证与遗留：** 根因已定位，临时日志待用户跑一轮带 web_search 的问答后确认；修复后 `_canonical_url` 的字段名/白名单需与 provider 实际返回对齐。
+
+**2026-08-13 表述校正：** “原始结果不进上下文”是不准确的。搜索结果全文会进入服务端模型上下文并计入 input token；客户端是否看到原文、引用片段是否明文，是另一条返回管线。分析官方 Anthropic 与非官方模型时，必须分别描述模型侧上下文、客户端可见 payload 和计费口径。
+
+## 2026-08-12 — usage 展示口径：多轮调用的 input 累加 ≠ 单轮用量（613.9K）
+
+**问题/症状：** 前端显示「本轮用量 ↑613.9K ↓4.8K · 共 618.8K」，明显夸张，用户怀疑重复统计。
+
+**根因链路：**
+- `_accumulate_usage`（`langgraph_bridge.py`）每次 `on_chat_model_end` 把 `input_tokens` **累加**到 `ctx["usage_cumulative"]`；工具调用循环里每轮 model 调用 input 都含完整上下文（~100K），6 次调用累加成 600K+。技术上正确（确实是 N 次调用 input 总和），但不是用户期望的口径。
+- 去重依赖 `run_id`，`run_id` 为空时跳过（两层去重都失效）。
+- `finalize_events` 发 finish 时读 `self._usage_cumulative`（Bridge 实例级），与 `_emit_usage_update` 走的 ctx 路径不一致；且日志显示 ctx 在两次调用之间被重置（疑似 HITL resume / 不同执行分段）。
+
+**决策（用户拍板）：** 去掉「本轮用量」文字，只保留圆环。理由：累计数字对用户无任何可操作性（不知道 613.9K 是多还是少），是开发者调试信息；圆环（上下文剩余）才有行动价值（决定是否开新会话）。
+
+- 圆环链路独立且正确：`on_chat_model_end → ContextMetricsRegistry.put(current_tokens=单次 input, max_tokens=模型上限)` → `context-update` SSE → 前端圆环。`current_tokens` 覆盖式不累积。
+- 顺带 UI 收口：已处理时间移到卡片上方空白区；复制按钮+时间移卡片下方（与用户消息一致）；完成后保留（`completed_at − created_at`）；历史加载补 `completed_at`。900 passed。
+
+**可迁移原则：** 统计口径要先问「这个数给谁看、看它做什么决策」：累计 input 只对计费/成本核算有意义，用户决策靠上下文剩余；展示层要把「本轮用量」和「当前上下文占用」分开（延续 8/10–8/11）。去重键缺失（run_id 为空）会静默失效，要保证权威终态只在唯一路径产出。
+
+## 2026-08-12 — 统一命令层（三端发现）+ 聊天场景解耦 /tree
+
+**Why：** Web/Telegram/CLI 三端命令能力不一致，且聊天窗口请求 `/tree` 下载整棵 3 万行 skills 文件树（`baoyu-url-to-markdown` 一个包带 `scripts/node_modules` 就 2210 个文件节点）。
+
+**统一命令层（feat/unified-slash-commands）：**
+- 命令发现三端：Web `useMentionCatalog` slash 模式并入控制命令 + `GET /api/chat/commands`；Telegram `TelegramBotClient.set_my_commands` 注册 Bot 原生命令菜单；CLI `noesis help` 子命令 + 交互模式 readline Tab 补全。三端共用单一数据源：控制命令 `@command(name, description=...)` + skill 命令 SKILL.md frontmatter。
+- 热加载：public skills 用目录 mtime 做 revision（无新文件），变了重注册。
+- 内置命令弹窗展示：选中 command 项 → `createAgentRun(content=/help)` → 后端 `command_reply` 拦截 → 前端 `n-modal` 弹窗，不插输入框、不发消息、不落库；MentionPicker 视觉区分 命令/系统/个人（蓝/绿/紫）。
+
+**接口解耦：**
+- 新增轻量 `GET /api/skills/fs/packages`（只返回顶层包 id+source+description），`useMentionCatalog`/`ChatComposerToolbar` 改调它（4 包 vs 2210 文件节点）。
+- `_scan_dir` 过滤噪声目录（`node_modules`/`.git`/`vendor`/`__pycache__`/`.venv`）→ `/tree` 从数万行降到 39 节点/10KB，只服务技能管理页文件浏览器。933 passed。
+
+**可迁移原则：** 大接口被「顺手复用」要按场景校验数据量：聊天要的是包名列表不是文件树；过滤只针对非 skill 内容的依赖目录，不能按大小/深度裁剪用户真正想浏览的内容。命令发现统一走「单一元数据源 + 每端适配」，不要每端各写一套命令表。
+
+## 2026-08-15 — LLM 重试耗尽不能静默降级
+
+**问题/症状：** provider 失败时前端曾看不到重试过程，重试耗尽后 run 仍可能被当作正常完成；用户只能看到空的 AIMessage 或没有可行动错误。一次修复还出现了 `error_fallback` 标记丢失，导致错误状态没有传到终态。
+
+**根因：** 重试、SSE 事件、文本 builder 和 RunProjection 分属不同层；中间件返回带 `noesis_error_fallback` 的降级 AIMessage 后，如果消费层不检查该标记，正常的 agent loop 会把失败伪装成 `completed`。另外 `on_chat_model_end` 发生时文本仍在 bridge buffer 中，过早标记找不到 text part，fallback 会被时序吞掉。
+
+**解法/取舍：** 用独立 `LLMErrorHandlingMiddleware` 统一捕获连接失败/超时/5xx，最多重试 6 次并发出 `noesis_model_retry`；耗尽后返回带结构化错误元数据的 AIMessage。bridge 先暂存 fallback，flush 文本后再标记；`RunProjection` 只消费顶层 text part，将 run 改为 `ERROR`，填充 `llm_error_fallback`、错误码和用户可见错误。补齐 message builder、bridge→projection 端到端测试；关闭 SDK 黑盒重试，避免两套计数。
+
+**可迁移原则：** 重试的正确性由“attempt 可见性、已输出保护、最终错误终态、持久化一致性”共同定义，不能只看循环次数。任何降级/兜底都必须在消费层有明确的失败标记和终态映射，禁止用正常 `stop` 掩盖 provider 故障。
+
+**验证与遗留：** 8/15 已补 6 次重试事件、fallback 持久化和 flush 时序测试；仍需用真实 provider 失败注入验收前台事件、最终消息和数据库状态，并完成当前错误处理中间件工作树改动的提交。
+
+## 2026-08-15 — 删除运行时 owner 前先回看 spec
+
+**问题/症状：** 清理 runtime 时发现 governor、thread context、context snapshot、旧 retry/预算状态和若干 delivery 事件从未接入真实路径，代码量大但没有运行时价值；直接删除后又暴露出工具循环检测、subagent 并发/总数/深度限制仍写在 spec 中。
+
+**解法/取舍：** 先用调用方搜索确认死代码，再删除未接线的 owner、数据库列和空转事件；同时把运行预算从 Run Governor 改成独立 Agent middleware 的契约。工具循环与 subagent 限制不能继续依赖被删除的 governor，必须另立职责清晰的 middleware 和验收场景。
+
+**可迁移原则：** “代码存在”不等于“能力存在”，而“删除死代码”也不等于“需求消失”。清理前要把 spec 要求映射到真实调用链；若需求仍有效，先迁移到可观测、可测试的独立组件，再删除旧 owner。
+
+**验证与遗留：** 8/15 已删除旧预算/重试死代码并同步 agent-delivery、platform-chat、agent-runtime spec；工具循环和 subagent 限制尚待独立 middleware 实现。
+
+## 2026-08-16 — fallback 返回路径必须覆盖 custom event，而不是假设有 model-end
+
+**问题/症状：** 重试耗尽后用户仍看不到错误，前端可能长时间停在某次 attempt；另一轮修复又出现 fallback 文本重复、残留流式文本丢失和读连接永久等待。
+
+**根因：** `awrap_model_call` 重试耗尽后直接返回 fallback `AIMessage`，不会经过 `model.ainvoke()` 的 `on_chat_model_end`，所以依赖该 hook 的旧消费链路实际上是死代码。与此同时，半开 TCP 连接没有读取超时，bridge 在 fallback 前也没有先 flush 已产生的文本；SSE custom event 的外层 `type` 合并顺序不一致时还会污染事件类型。
+
+**解法/取舍：** fallback 改走与 retry 相同的双通道 `noesis_model_fallback` custom event；bridge 收到后先 flush 残留文本，再写 fallback 文本、发 error 事件并让 projection 进入 ERROR；`useSSEStream` 增加 45 秒读超时并清理每轮 timer；重试次数统一 6 次，移除异常类型的 2 次 override；事件 payload 使用 `{**data, type: ...}` 保证外层类型权威。降级文案改成短句“服务暂时不可用，请稍候重试”。
+
+**可迁移原则：** 设计错误路径时要沿真实返回路径画图，不能默认“模型结束 hook 一定会触发”。任何绕过标准 hook 的 middleware return，都必须有专用事件或显式结果通道；流式系统还要同时处理半开连接、残留 buffer、事件类型覆盖和重复终态。
+
+**验证与遗留：** 提交 `3c5f325`、`a7f6e7a`、`381a6f1` 已补 custom event、flush、读超时和定时器清理；会话列表级 `run_status` 展示在 8/17 继续实现，仍需验证多窗口状态不会互相污染。
+
+## 2026-08-17 — 中间件重构：共享决策核心，隔离 I/O 与私有状态
+
+**问题/症状：** 代码审计发现多个 middleware 重复实现事件发射、sync/async 重试循环和工具结果更新；配置从全局读取，私有 state key 在 stack 中硬编码，改名或子 Agent 隔离时容易静默失效。jscpd 统计为 16 个 clone、1107 tokens。
+
+**解法/取舍：** 抽出 `_events.py` 统一 retry/fallback/compaction 的双通道事件发射；把重试判定收进共享决策核心，sync/async 只注入 sleep 与 emit hooks；`max_retries` 改为 factory 显式注入；各 middleware 导出 `PRIVATE_STATE_KEYS`，由 stack 聚合；删除没有生产调用方的 `CompactionMiddleware.compact()` host 入口。行为保持不变，jscpd 降为 13 个 clone、897 tokens。
+
+**可迁移原则：** 重构不是简单把 A 调 B；先识别真正稳定的决策核心，再把同步/异步、事件发送、等待和外部 I/O 作为边界注入。配置应沿装配链显式传递，私有 state 的所有者要由组件声明，不能由聚合层复制字符串。
+
+**验证与遗留：** 已补 middleware 重试耗尽、fallback SSE、显式 max_retries 注入和 stack 装配测试；剩余镜像主要集中在 `read_before_write` 与 `compaction` 的 I/O 相关路径，继续去重需要行为回归而不是机械合并。
+
+## 2026-08-17 — 定时任务：解析、排队、会话承接与无人值守要分层
+
+**问题/症状：** 原定时任务已有 cron 调度和 run 记录，但创建依赖手填 cron/prompt；立即运行会同步占住 HTTP 请求；定时会话续聊可能丢失原 `qa_type`；无人值守执行还可能卡在 HITL 等待。
+
+**解法/取舍：** 增加自然语言解析端点，将一句话生成 `name/cron_expr/prompt` 草稿并由后端二次校验；默认 Asia/Shanghai、SuperAgent、单任务单会话、不投递。创建任务时预建绑定 session，所有运行追加到同一线程；立即运行先写 `queued` 记录并后台异步执行；续聊未显式传 `qa_type` 时回退读取 session metadata；自动执行注入 headless prompt 并禁用 HITL，网页手动续聊仍保留 HITL。
+
+**可迁移原则：** 定时任务不是“换个 cron 入口调用 Agent”，而是独立的调度/执行生命周期：解析草稿 → 校验 → 排队 → 后台运行 → 终态与通知。无人值守约束只能作用于自动执行路径，不能污染用户后续手动续聊。
+
+**验证与遗留：** 提交 `4466b4a` 已覆盖自然语言解析、单会话承接、异步 run、qa_type 继承和 HITL 边界；仍需补 scheduler 重启恢复、后台任务进程崩溃和通知失败后的重试验收。
+
+## 2026-08-18 — 缓存命中率：稳定前缀优先于动态工具发现
+
+**问题/症状：** 一轮 6 步的统计显示缓存命中约 46%，明显低于 DeepSeek Harness 的高命中率；用户怀疑是 provider 或 `cache_control` 配置问题。
+
+**根因：** 当前工具数量有限，却启用了 DeferredToolFilter/ToolRegistry，每步动态改变工具 schema，直接破坏请求前缀稳定性；DurableContext 每步追加 todos、文件和委派快照，时间戳又精确到秒，也会让 system prompt 前缀持续变化。缓存问题不是单一开关，而是请求前缀在每轮发生了无必要变化。
+
+**解法/取舍：** 删除 DeferredToolFilterMiddleware、ToolRegistry 和 deferred_tools 接线，工具 schema 改为每步固定全量发送；DurableContext 只在发生 compaction 后作为恢复兜底注入；动态时间戳降为小时粒度。保留真实需要的 context 更新，不为当前有限工具集提前引入 tool search。
+
+**可迁移原则：** 提升 Prompt Cache 命中率先减少前缀变化，再讨论 provider cache 参数。工具发现、动态状态和时间字段都应按实际变化频率设计；“可动态”不等于“每步都动态”。
+
+**验证与遗留：** 提交 `b1d6fc6`、`f2c6c86` 已完成机制收敛；仍需用同一会话多轮真实请求对比 cache_read/input token，而不是只看本地计算值。
+
+## 2026-08-18 — 会话统计：采集、聚合、持久化要分开
+
+**问题/症状：** 统计条最初显示 token 和缓存命中为 0；主 Agent 与 subagent 的 stats 实例互相覆盖；刷新或重新打开会话后累计统计归零；修复过程中还出现缺失 import 导致运行时 `NameError`。
+
+**根因：** OpenAI 兼容流式响应默认不返回 usage；统计 middleware 误读 `ModelResponse.messages` 而实际结果在 `result`；轮数被错误按 model step 计数；状态只存在实例内存，subagent 事件到达后会覆盖主 Agent；历史数据没有持久化回放。
+
+**解法/取舍：** 开启 `stream_options.include_usage`；统一 usage normalize，兼容 `prompt_tokens_details.cached_tokens`；轮数只在新 user message 时增加；用 `SessionStatsRegistry(session_id)` 聚合主/子 Agent；每条 assistant 终态把 usage 写入 `message.extra.usage`，打开会话时从历史 seed registry，并用 `USAGE_FIELDS` 统一各层字段。
+
+**可迁移原则：** 运行统计至少分三层：单次调用采集、会话级聚合、持久化历史回放。bridge 只负责事件映射，不应成为统计状态 owner；字段口径必须有单一 schema，避免多处 shotgun surgery。
+
+**验证与遗留：** `6a13f4f`、`afe7bfe`、`c9a247b`、`f4132f7`、`87a8814`、`195ab05` 已覆盖主要修复；首 token 延迟和 tok/s 暂未接入，仍需真实多轮/子 Agent/刷新场景验收。
+
+## 2026-08-18 — Run-aware Memory Cortex 设计基线
+
+**问题/症状：** Noesis 原有记忆更接近文件记忆或 RAG 包装，难以沉淀工具失败、技术决策、验证结果和跨 Run 的经验；如果每轮同步调用 LLM 提取，成本和上下文扰动都不可控。
+
+**设计结论：** 记忆主对象应是 `Run experience`，而不是原始聊天文本。PostgreSQL 保存 typed、temporal、evidence-backed 状态和关系，Qdrant 只做派生语义索引；文件保留人工 Identity/Policy。Run 结束后异步 Reflect，Compaction 前提取 decision/experience，session-start 生成受 token budget 控制的 Memory Bulletin。
+
+**可迁移原则：** recall 负责找证据，reflect 负责综合，get_source 负责回溯原始 Run；不要把 top-k 原始片段直接塞进 system prompt。记忆写入要有 provenance、版本和冲突修订，只有重复成功且经过验证的经验才进入 Skill candidate。
+
+**验证与遗留：** 研究报告 `docs/research/agent-memory-2026/reports/final-report.md` 已归档；建议用 LongMemEval、MemoryAgentBench、PrecisionMemBench 和 Noesis RunMemory 场景验证跨会话召回、过期事实抑制、证据覆盖率和 token 成本，当前尚未实现 Cortex。
+
+## 2026-08-19 — Subagent：后台执行、前台等待和 follow-up 必须共用一条任务状态机
+
+**问题/症状：** 初版后台子 Agent 只能通过 5 秒轮询看摘要，主 run 结束后无法继续查看细节；尝试跨事件循环复用主连接池时出现 `create_isolated_checkpointer` 缺失和 cross-loop 资源风险；原 steering 注入只能影响当前模型调用，无法自然续聊。
+
+**解法/取舍：** 用专用守护线程事件循环和进程级任务注册表承载后台任务；同一个 `start_task` 工具通过 `run_in_background` 参数支持后台立即返回或前台等待，前台等待超过 120 秒自动转后台；checkpointer/httpx 在 worker loop 内惰性创建。`send_message` 改为子会话追加 follow-up turn，completed 可冷恢复，failed/timed_out/cancelled/one_shot 拒绝续话；子会话历史通过 checkpointer thread 只读查看，前端提供详情抽屉。
+
+**可迁移原则：** 同步/异步不是两套工具，而是同一任务状态机的两种等待策略；跨事件循环的资源必须在目标 loop 创建；人与子 Agent 的沟通应追加真实 turn，而不是偷偷修改当前模型调用上下文。
+
+**验证与遗留：** `6cdf05c` 已覆盖后台非阻塞、前台等待/超时转后台、审批续跑、follow-up、one_shot 和子会话读取；executor 契约 17/17、全量 1018 passed。运行中任务注册表仍是进程内存，进程重启恢复暂未实现。
+
+## 2026-08-19 — 跨窗口状态：信令是提示，active-run 才是权威
+
+**问题/症状：** A/B 两个浏览器窗口同时打开同一会话时，B 不会自动收到 A 的 SSE；B 发送消息可能触发 409；新窗口轮换 CSRF 后，旧窗口继续写请求得到 403 且日志没有足够线索。
+
+**解法/取舍：** 增加按 `(user_id, session_id)` 键控的有界 session signal bus；信令只负责提示 run-started/终态，丢帧时由 active-run API 和序列恢复自愈。409 时消息进入本地队列，当前 run 结束后自动重发。CSRF 轮换保留上一代 digest，在多窗口的一代时间内接受旧 token，并对拒绝请求写 warning。
+
+**可迁移原则：** 实时通知不应承担事实存储；跨窗口同步必须是“信令提示 + 服务端权威状态 + 可重放序列”。安全 token 轮换要考虑已有窗口的并发写入，否则安全增强会变成随机 403。
+
+**验证与遗留：** `b1c8bc9`、`9a036f5` 已补信令、409 排队和 CSRF 回归测试；慢订阅允许丢信令，依赖 active-run 恢复，仍需真实双浏览器 E2E。
+
+## 2026-08-19 — 统计落库必须覆盖正常终态与 HITL resume
+
+**问题/症状：** 统计条在实时运行中有数据，但刷新或重新打开会话归零；HITL pause/resume 后 usage 段可能被覆盖；`/statsline` 只显示本轮而不是完整会话。
+
+**根因：** 现代 run 终态走 `repository.finalize` 时 extra 没有带 usage；HITL resume 复用同一 assistant message，resume 段直接覆盖旧 extra 会丢掉 pause 段；内存 registry 不能替代持久化。
+
+**解法/取舍：** bridge 在 finish 注入 message usage，projection 捕获后传给 repository；`finalize` 采用 extra 合并、usage 字段累加；前端从消息历史汇总恢复 session stats，`/statsline` 只做展示模板定制，不改变统计真源。
+
+**可迁移原则：** 运行统计是 durable 业务数据，不是纯 UI 状态；终态落库、HITL resume、刷新回放必须使用同一合并语义，不能只验证实时 SSE。
+
+**验证与遗留：** `29df483`、`45c8091` 已补终态和 resume 合并测试；仍需验证跨进程恢复和不同 provider usage 字段的统一口径。
+
+## 2026-08-20 — 后台任务从 Subagent 扩展到长命令执行
+
+**问题/症状：** 后台子任务最初只有 Subagent，长时间 bash/execute 仍会阻塞主 Agent；前端任务面板依赖轮询，审批事件、超时和终态存在延迟或重复；后台 shell 任务还遇到 Docker 默认 120 秒、HTTP 等待上限和容器销毁竞态。
+
+**解法/取舍：** 保留 `execute` 工具名以维持 HITL 审批匹配，增加 `run_in_background` 参数；前台路径行为不变，后台路径把 shell 命令复用同一任务注册表/状态机/通知/SSE/详情面板。shell 任务不编译 Subagent worker，直接经 filesystem backend 执行；命令级 timeout 独立校验，默认可长时间运行；输出用 `check_task` 获取尾部摘要，one_shot 不允许 follow-up。会话级 SSE 取代前端轮询，持久化快照支持重启后查看。
+
+**关键修复：** 补齐 watchdog terminal 事件、避免 cancel/watchdog 与协程自身重复发布终态、放宽 Docker/HTTP 等待上限、审批事件实时推送、销毁时复查 terminal 防止 COMPLETED 被覆盖。最后发现 `from __future__ import annotations` 把 `ToolRuntime` 注解变成字符串，导致注入检测失效；移除后用真实 create_agent + FilesystemMiddleware + HITL 集成测试锁定。
+
+**可迁移原则：** 长命令和后台 Agent 本质都是可观察、可取消、可恢复的任务，不应为 bash 再造一条独立执行管线；所有终态必须单写、可重放，超时要贯穿工具、容器、HTTP 和前端四层。
+
+**验证与遗留：** `bdf8f2b`、`5689ab9`、`ee636ba`、`4747683` 已补后台 shell、超时、审批、竞态和真实注入测试；仍需做进程崩溃后的执行中任务恢复验收。
+
+## 2026-08-20 — Memory Cortex 进入实现前审查，而不是继续堆概念
+
+**问题/症状：** Memory Cortex 设计方向正确，但多轮审查发现“确定性修订”仍依赖 LLM 生成 topic/content，scope 没进入记忆身份，outbox 唯一键会吞掉 disable/delete 状态变化，多实例 job/lease fencing 也未闭合。
+
+**解法/取舍：** 暂停直接开发，先把设计修到可实施：确定性 `subject_key`/`resolution_key` 与 scope 进入唯一身份；重复内容要有 NOOP；状态变化使用独立 outbox event/version，不复用 embedding index version；job claim 需要 lease/fencing 和幂等状态迁移；失败经验、修复方式、provider/tool/environment 需保留 evidence。
+
+**可迁移原则：** 记忆系统的难点不是“如何召回”，而是身份稳定、修订安全、异步索引不丢状态和多实例并发正确。设计文档宣称“确定”前，必须逐项证明 key、锁、outbox、job retry 和 scope 都是确定的。
+
+**验证与遗留：** 当前仍处于设计审查阶段；PostgreSQL 事实源 + Qdrant 派生索引的边界保留，但必须先补齐上述 P0，再进入 OpenSpec 和实现。
+
+## 2026-08-21 — Subagent UX 不能只显示任务状态，要展示可理解的子会话
+
+**问题/症状：** 后台子任务已经能运行和推送，但用户看不出“哪个 Agent 做了什么”；系统通知、首轮任务、补充要求、后台任务列表和子 Agent 详情的展示形态不一致；轮询和 SSE 的实时边界也不清楚。
+
+**设计结论：** 子 Agent 应有自己的 thread/session、消息历史、工具调用和统计；主会话只展示轻量系统通知和任务入口。点击任务后打开与来源/详情统一的抽屉，按主对话相同的 user/assistant/tool 视觉语言渲染完整子会话；未打开详情时只接收任务级状态，打开后再订阅细粒度实时事件。
+
+**可迁移原则：** 后台任务、子 Agent、一次性 shell 都可以共享执行状态机，但“任务状态”和“子会话内容”是两个读模型；不要把完整 progress 数组塞进主 SSE，也不要用一条模糊系统文案代替来源、任务 ID 和结果。
+
+**验证与遗留：** 8/21 主要完成方案重审，尚未完成最终 Clowder/Agent Teams 风格的统一 UI；下一步应先冻结对象模型和事件契约，再改组件，避免继续在展示层堆补丁。
+
+## 2026-08-21 — 历史对话检索与长期记忆是互补能力
+
+**问题/症状：** 近期 Agent 产品开始支持 `@` 历史对话检索，用户担心上下文窗口变大后长期 Memory 是否还有价值；当前 Memory Cortex 又偏向工具失败提取，可能遗漏调研类 Run 的决策和结论。
+
+**设计结论：** 历史检索解决“用户主动找回某段原文”，长期记忆解决“系统主动维护跨 Run 的稳定经验”。两者共用 Run provenance，但查询、权限、返回形态和生命周期不同。Memory 提取不应只绑定工具失败：调研 Run 的决策、结论、来源和验证结果也应在 Run 完成后按价值门槛异步提取。
+
+**可迁移原则：** 不要用 `@history` 替代 Memory，也不要把所有历史对话自动升级成 Memory。原文检索负责 recall，结构化 Memory 负责 revision/active filtering，Reflect/Bulletin 负责受预算控制的上下文注入。
+
+**验证与遗留：** Memory Cortex 仍需用“主动历史检索 vs 主动记忆注入”的 A/B 场景验证增益；提取时机、价值门槛和调研 Run 的 evidence schema 尚未进入实现。

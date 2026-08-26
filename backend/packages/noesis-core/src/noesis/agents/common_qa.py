@@ -55,10 +55,12 @@ class GeneralQAAgent(BaseAgent):
         model_id: Optional[str] = None,
         mcp_tools: Optional[List[Any]] = None,
         db: Optional[AsyncSession] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         task_id = session_id or str(uuid.uuid4())
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         self.running_tasks[task_id] = {"cancelled": False}
+        user_id = str(getattr(current_user, "user_id", "") or "")
 
         scoped_collections = _normalize_kb_collections(kb_collections)
         kb_tools = build_kb_search_tools(
@@ -76,9 +78,7 @@ class GeneralQAAgent(BaseAgent):
         if mcp_tools:
             logger.info(f"GeneralQAAgent mcp_tools={len(mcp_tools)}")
 
-        user_id = str(getattr(current_user, "user_id", "") or "")
         attachments_enabled = False
-        extra_middleware = None
 
         if (
             ChatAttachmentConfig.enabled
@@ -98,7 +98,6 @@ class GeneralQAAgent(BaseAgent):
                     user_id=user_id,
                     db=db,
                 )
-                extra_middleware = []
 
         try:
             config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}
@@ -114,7 +113,8 @@ class GeneralQAAgent(BaseAgent):
                     kb_scope_collections=scoped_collections or None,
                 ),
                 checkpointer=self.checkpointer,
-                extra_middleware=extra_middleware,
+                session_id=session_id,
+                attachments=tuple(str(name) for name in (file_list or {})),
                 model_id=model_id,
             )
 

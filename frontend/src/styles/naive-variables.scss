@@ -7,3 +7,11 @@ $color-warning: #fab005;
 $color-danger: #ff6b6b;
 $color-info: #868e96;
 $color-default: #6750a4;
+
+// 响应式断点 — 与 src/config/breakpoints.ts 保持同步，全站 @media 统一引用这些变量。
+$bp-xs: 480px;
+$bp-sm: 640px;
+$bp-md: 768px;
+$bp-lg: 1024px;
+$bp-xl: 1280px;
+$bp-2xl: 1536px;

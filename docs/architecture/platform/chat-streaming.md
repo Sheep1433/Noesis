@@ -1,141 +1,142 @@
 # SSE 流式数据架构
 
 > 状态：Current
-> OpenSpec：`platform-chat`、`agent-delivery`、`agent-tool-failure-handling`
+> 关联 OpenSpec：`platform-chat`、`agent-delivery`、`container-deployment`
 
-## 1. 边界
+## 1. 目标与边界
 
-前端只消费 Noesis SSE，不直接处理 LangGraph 原始事件。网页发送先创建持久化 run，再单独订阅事件；浏览器连接不持有 producer 生命周期。
+Noesis 的可靠性目标不是维持一条永不断开的 TCP 连接，而是让 Agent Run 独立于浏览器连接，并通过权威 snapshot、单调 sequence 和重新订阅恢复界面。
 
-```text
-POST /api/chat/runs → RunService → RunManager → QaService producer
-                                      └─ sequenced event buffer
-                                             ├─ PersistSink → PostgreSQL snapshot
-                                             ├─ SseDelivery → Browser
-                                             └─ ChannelDelivery → Telegram / other channel
-```
+本架构适用于 `COMMON_QA`、`FAULT_OPERATION_QA`、`SUPER_AGENT_QA` 的 Web、Channel 和 HITL 路径。`TEST_CASE_QA` 仍由独立 CaseCoordinator 处理，不进入本管线。
 
-浏览器连接不是消息落库的权威。客户端断开后，producer 与检查点继续运行；刷新后由 run snapshot 和 sequence 恢复。消息通道使用同一个 `RunManager` 注册 run，并在内部通过 headless `RunOrchestrator` 映射事件，不依赖浏览器 SSE。
+## 2. 核心约束
 
-Web 路径只有一个持久化责任方：`RunService` 在同一事务中预建 user、assistant 骨架与 run，随后由 PersistSink 更新 checkpoint 和终态。`QaService` 只负责执行 Agent 并产生事件，不创建 Web 消息、不维护 Web active stream，也不处理 Web stop。Telegram、飞书等无浏览器通道可以使用共享的 channel persistence helper，但不得回流为第二套 Web 写入路径。
+1. 浏览器 subscription 不是 producer owner；关闭、刷新或慢消费只移除当前连接。
+2. Runtime raw event 只映射一次，SSE 字符串只在 HTTP Delivery 边界产生。
+3. sequence、projection、status、replay buffer 与 subscriber 注册由同一个 `RunHandle.lock` 串行化。
+4. checkpoint 可 latest-wins 合并；terminal 必须先在 PostgreSQL 提交，再对客户端可见。
+5. 同一 Run 的所有 Tab 使用相同 `run_id`、`assistant_message_id` 和权威终态。
+6. 当前 live owner 在进程内，因此部署只允许一个 active backend。
 
-PersistSink、每个 SseDelivery 和 ChannelDelivery 都使用独立的有界 subscriber queue。RunManager 发布事件时不等待各 Delivery 完成；某个 handler 写入失败只注销该 subscriber 并记录 `delivery_failures`，不会取消 producer、其它 subscriber 或改写 run 终态。PersistSink 在 producer 最终持久化前完成已入队事件的消费，SSE 断连只释放当前浏览器队列。
-
-## 2. 事件
-
-当前网页流除 `run-snapshot`、`run-status` 外，还使用以下事件族：
-
-- `reasoning-start` / `reasoning-delta` / `reasoning-end`
-- `text-start` / `text-delta` / `text-end`
-- `tool-call-start` / `tool-input-available` / `tool-output-available`
-- `retrieval-results-available`
-- `usage-update` / `context-update` / `token-details`
-- `hitl-required`
-- `error` / `finish-step` / `finish` / `[DONE]`
-
-业务字段使用现行协议约定。新增或修改事件时，必须同时更新 Bridge、前端解析、golden tests 和 `platform-chat` spec。
-
-## 3. assistant 持久化
-
-同一轮 run 对应一行 assistant，`message_id` 等于 `assistant_message_id`。user message、assistant 骨架和 run 在一个事务中创建：
+## 3. 组件与职责
 
 ```text
-streaming skeleton
-  → optional context checkpoint
-  → exactly one terminal update
+LangGraph / LangChain raw event
+  → RuntimeEventMapper
+  → RunManager.apply_event
+       ├─ immutable replay envelope → SseDelivery → Browser Tab A/B/...
+       ├─ immutable checkpoint      → PersistWriter → PostgreSQL
+       └─ immutable envelope        → ChannelDelivery
 ```
 
-终态互斥：`completed`、`partial`、`error`。HITL pending 保持 `streaming`，resume 继续写同一行。流式过程中禁止按 token 更新正文。
+- `RuntimeEventMapper`：将 raw event 转为封闭 typed `RunEvent`。不编码 SSE，不做持久化。
+- `RunHandle`：唯一 live state owner，维护 projection、sequence、状态、producer generation、replay 与订阅者。
+- `PersistWriter`：每 Run 单槽 latest-wins writer，不属于 subscriber 集合，不受 SSE overflow 策略影响。
+- `SseDelivery`：把 typed event 编码为 SSE；连接失败只释放当前 queue。
+- `RunService`：权限、active Run、checkpoint/terminal transaction 与 RunManager 编排。
+- `AgentRunRepository`：以 sequence guard 写 checkpoint，以 compare-and-set 抢占唯一 terminal。
 
-`content.parts` 是历史与实时 UI 的共同结构：
+## 4. 调用与数据流
 
-- `text`
-- `reasoning`
-- `tool`
-- `retrieval`：本轮知识库或 Web 检索工具返回的候选 evidence；不等价于正文已引用来源
-
-引用由 Agent 按 system prompt 直接生成在普通 Markdown `text` part 中，经既有 `text-delta` 交付。平台不维护 citation annotation、offset 或专用引用事件。
-
-检索完成后的顺序为：
+### 4.1 创建和订阅
 
 ```text
-tool-output-available
-  → retrieval-results-available
-  → text-delta
-  → text-end
-  → finish
+POST /api/chat/runs
+  → 单事务创建 user message + assistant skeleton + queued run
+  → commit 后注册 RunHandle 并启动 producer
+  ← run_id + assistant_message_id
+
+GET /api/chat/runs/{run_id}/stream?after_sequence=N
+  → 按 run/user 鉴权并检查配额
+  → lock 内先注册 bounded queue
+  → 返回 snapshot；buffer 连续时附带 sequence>N 的 replay
+  → live events
+  → 已提交 terminal + [DONE]
 ```
 
-`RunProjection` 必须消费 retrieval WireFrame，并与普通 `text-delta` 一起写入 authoritative builder。Bridge builder 只负责把 LangGraph 事件转换为实时协议，不能作为 durable snapshot 的唯一来源。
+同 session 已有 active Run 时，创建返回 409 和可加入的 `run_id`、`assistant_message_id`、`session_id`、status，不启动第二个 producer。
 
-### 3.1 上下文与用量字段语义
+### 4.2 新 Tab 与断线恢复
 
-`usage-update`、`context-update`、`finish.usage` 携带两类互不混淆的 token 视角，新增字段均向后兼容（旧客户端忽略新字段）。
+新 Tab 通过 `GET /api/chat/sessions/{session_id}/active-run` 查询服务端事实。`sessionStorage` 只保存当前 Tab hint，不能作为恢复前提。
 
-**当前上下文（context-update，Provider 真实值）**：描述当前上下文窗口占用，取自 Provider 最近一次 model call 返回的 `input_tokens`（非累计），每次调用覆盖前一次。
+客户端收到 `run-snapshot` 后按 `assistant_message_id` replace parts，并采用以下 sequence 规则：
 
-- 保留字段：`current_tokens`、`max_tokens`、`used_percentage`。
-- `current_tokens` = Provider `input_tokens`（单轮，非累计）；`max_tokens` 取自模型 catalog 的 `limit.context` 或 `context_max_input_tokens` 配置。
-- Provider 不返回 usage 时，沿用上一轮真实值；首轮无数据时不展示指示器。
-- model call 前的上下文耗尽拦截仍用本地估算（`estimate_model_request_input_tokens`），因为此刻 Provider 尚未返回 usage；该估算仅用于内部拦截，不发给前端。
+```text
+sequence <= last_sequence      忽略
+sequence == last_sequence + 1  apply
+sequence > last_sequence + 1   停止 reader，查询 snapshot，replace 后重订阅
+```
 
-**本轮消耗（usage-update / finish.usage，Provider 实际值）**：描述已发生的模型消耗，按 model run id 去重累计。
+无终态 EOF、网络错误、页面恢复可见或 subscriber overflow 都进入 snapshot recovery。旧 subscription generation 的迟到响应直接丢弃。
 
-- 保留字段：`input_tokens`、`output_tokens`、`total_tokens`。
-- 新增字段：`input_token_details`（`cache_read`/`cache_write`）、`output_token_details`（`reasoning`）。缺失 detail 不补零（区分"Provider 返回 0"与"不支持"）；detail 不参与 `total_tokens` 二次相加。
-- 归因（`finish.attribution`，按需调试）：`cumulative`、`by_caller`（lead_agent/subagent/middleware）、`by_model`、有界 `steps`（上限 200）。默认前端摘要只展示 input/output；cache/reasoning/by_caller/by_model 仅在按需调试视图展示。
-- usage 只在 `on_chat_model_end` 累计（不从 stream chunk 累计），避免部分 stream usage 冻结终态值（曾导致 ↓2 bug）。
-- 持久化只写终态 `last_finish_usage` 一次，不按 token delta 写库；attribution 不落库。
+### 4.3 HITL 与停止
 
-排障：`output_tokens` 异常小（如 ↓2）→ 检查是否有 stream chunk usage 抢先累计；`input_tokens` 偏大 → 检查 Provider 是否在 `input_tokens` 含 cache（LangChain 已规范化，但代理可能不符）。
+HITL 使用同一 `run_id` 和 `assistant_message_id`：`running → hitl_pending → running → terminal`。暂停只结束 LangGraph 执行分段，不发送整个 Run 的 `[DONE]`。任意 Tab 可提交 resume；CAS 保证只启动一个新 producer segment。
 
-## 4. 工具结果
+stop 在 RunHandle lock 内只设置一次 `cancel_requested` 并 cancel producer 一次。取消路径产生一个 terminal candidate；重复 stop 等待同一 terminal，不影响同 session 后续新 Run。
 
-工具 part 使用三层语义：`status` 表示工具调用是否抛异常，`outcome` 表示成功返回后的执行结果，`state` 是 UI、snapshot 和历史恢复的权威生命周期。详细状态机见 [工具生命周期与失败处理](../../engineering/agents/tool-lifecycle-and-failures.md)。
+## 5. 状态、数据与权限
 
-- 非终态：`running`、`approval_pending`。
-- 终态：`succeeded`、`failed`、`timed_out`、`rejected`、`cancelled`。
-- 调用错误：`status=error`，带脱敏错误和 `errorCategory`；超时映射为 `state=timed_out`。
-- 进程正常返回：`status=success`，保留 `exit_code/timed_out/truncated/outcome`；非零退出为 `outcome=command_failed + state=failed`。
-- 终态 Run 落库前统一 reconcile，禁止保存 `running/approval_pending` 工具。
+Run status：`queued | running | retrying | hitl_pending | completed | partial | error | interrupted`。终态互斥且不可覆盖。
 
-## 5. 消息顺序与会话标题
+同一轮 Run 对应一行 assistant。checkpoint transaction 同时更新：
 
-`t_chat_session.next_message_sequence` 是会话内序号分配器，所有消息入口在短事务内锁定会话行并分配 `t_chat_message.message_sequence`。历史 API 只按该字段排序和分页；`created_at` 不参与因果顺序判定。同一 Run 的 user 和 assistant 连续分配，user 始终在前。
+- `t_agent_run.snapshot/last_sequence/status/attempt/retry metadata`；
+- `t_chat_message.content`。
 
-首轮 Run 创建时，如果会话仍为“新对话”，服务端在 user、assistant 骨架与 run 的同一事务内用首条非空用户文本设置标题。创建响应立即返回最终 `session_title`；手动标题不会被覆盖。
+terminal transaction 同时更新 Run 终态、完整 snapshot、`last_sequence` 与 assistant 终态。客户端看到 terminal 时，该事务已经提交。
 
-## 6. 停止、断连与 HITL
+create/get/active-run/stream/stop/HITL resume 均按当前 Cookie Session 用户鉴权。未知、已删除或跨用户 session 的 active-run 查询统一返回 404。
 
-- 用户停止通过 `POST /api/chat/runs/{run_id}/stop` 取消，PersistSink 写 `partial`。
-- 客户端断连只移除该 subscriber，不取消 producer 或其它 subscriber。
-- HITL resume 必须继续同一 run/message 身份，禁止新建第二条 assistant。
-- HITL resume 同时恢复 retrieval manifest 的 run salt、evidence namespace 和已登记结果；retrieval evidence 按稳定 identity 去重。
-- HITL resume 或 snapshot 重放遇到相同 `tool_call_id` 时更新原工具块，禁止重复追加。
-- 审批面板按 session/run 绑定；切换会话只显示当前 session 的 pending 审批，多会话互不覆盖。
-- `[DONE]` 是整个 Run 的客户端传输结束标记，不是服务端落库条件；HITL 暂停只结束
-  当前 LangGraph 执行分段，不得向 Run subscriber 投递 `[DONE]`。
+## 6. 失败处理与可观测性
 
-## 7. 保活与部署
+- SSE queue 按事件数和字节数限制；溢出只断开慢 subscription。
+- checkpoint failure 由 PersistWriter 重试，pending 单槽只保留最大 sequence。
+- terminal 在 budget 内失败时保持非终态可见性，停止 producer，只保留一个 immutable candidate 低频重试。
+- terminal CAS loser 采用 PostgreSQL 权威 snapshot，不发布冲突终态。
+- 非终态 DB Run 找不到本地 RunHandle 时，stream 在开流前返回 503/`RUN_OWNER_UNAVAILABLE`，不重建 producer。
+- subscription 超额在开流前返回 429/`SSE_SUBSCRIPTION_LIMIT`。
 
-SSE 注释保活不推进 sequence，也不落库。反向代理 read timeout 必须大于保活间隔。连接写失败只结束当前订阅，不改写 run 终态。
+RunManager 指标包含 active/retained Run、subscriber/event/replay bytes、overflow、重连、event-loop lag、event-to-client latency、checkpoint latency/lag/coalescing、persistence blocked、terminal CAS loser 与回收数量。
 
-## 8. 当前限制
+## 7. 部署约束
 
-- live run owner 在单个后端进程内；生产必须单实例运行，或为 run API 配置 owner sticky routing。
-- 进程重启只把悬空 run 收口为 `interrupted/server_restart`，不会重放模型或工具。
-- 网页 subscriber queue 与事件缓存有事件数、字节数双上限；慢连接通过 snapshot 恢复。
-- 模型临时错误只在尚未输出正文、尚未开始工具/HITL 时自动 retry；每次重试递增 `attempt_id`，旧 attempt 迟到事件会被丢弃。Channel outbound 使用进程内有界队列，但不是 durable spool；进程退出时未完成投递记录为 lost，不会自动续发。
-- 前后端必须同步发布；旧 `/api/chat/sessions/stream`、session stop/resume 接口已删除。
-- 当前 `LcEventMapper` 仍通过 `LangGraphSseBridge` 生成 SSE 文本后再解析为 typed `RunEvent`。这段内部序列化往返增加了字段漂移和重复解析风险；后续应以独立变更改为 raw event 直接映射 typed event，SSE 仅保留在 Delivery 边界。在完成该变更前，不允许再增加另一套 Bridge 或 Mapper。
+lifespan 在 migration、recovery、scheduler 和 channel runtime 之前，通过专用 PostgreSQL 连接获取固定 advisory lock。第二个 worker/容器 fail-fast。lock 连接丢失后实例变为 not-ready、拒绝新 Run，并停止 live producer。
 
-## 9. 代码入口
+SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理 read timeout 必须大于 keepalive 间隔并关闭响应缓冲。
 
-- Bridge：`backend/packages/noesis-core/src/noesis/domain/chat/streaming/langgraph_sse.py`
-- Run lifecycle：`backend/packages/noesis-core/src/noesis/domain/chat/runs/`
+公网入口（宿主机 nginx，`/etc/nginx/sites-enabled/noesis`，certbot 管理）在 443 上启用 HTTP/2（`listen 443 ssl http2;`）：单 Tab 并发挂用户级信令流、主对话 run 流、子任务目录流与子会话 run 流，HTTP/1.1 下受浏览器同源 6 连接硬限，多 Tab / 多抽屉即占满导致请求排队挂起；h2 多路复用后所有流共用单连接（每连接并发 stream 上限约 100+），该瓶颈消除。容器内 nginx（`deploy/frontend/nginx.conf`）与 uvicorn 上游链路保持 HTTP/1.1 不变。
+
+## 8. 代码入口
+
+- Run 单写入边界：`backend/packages/noesis-core/src/noesis/domain/chat/runs/manager.py`
+- raw event mapper：`backend/packages/noesis-core/src/noesis/domain/chat/streaming/mapper.py`
+- SSE Delivery：`backend/packages/noesis-core/src/noesis/domain/chat/delivery/sse.py`
 - Run Service：`backend/packages/noesis-core/src/noesis/services/run_service.py`
-- Run API：`backend/server/api/chat_api.py`
-- QA 编排：`backend/packages/noesis-core/src/noesis/services/qa/`
-- 前端解析：`frontend/src/views/chat/useSSEStream.ts`
-- parts：`frontend/src/views/chat/messageParts.ts`
-- Tool state：`backend/packages/noesis-core/src/noesis/domain/chat/tool_state.py`
+- Repository：`backend/packages/noesis-core/src/noesis/repositories/agent_run_repository.py`
+- API：`backend/server/api/chat_api.py`
+- 前端状态机：`frontend/src/views/chat/useSSEStream.ts`
+- 双 Tab E2E：`frontend/e2e/multi-tab.spec.ts`
+
+## 9. 验证方式
+
+- 后端：`cd backend && uv run pytest tests/ -q`
+- 前端：`cd frontend && pnpm test && pnpm lint && pnpm build`
+- E2E 列表：`cd frontend && pnpm exec playwright test --list`
+- 容量：`cd backend && uv run python tests/load_test.py`
+- 真实 PostgreSQL 双实例：设置 `NOESIS_LIVE_POSTGRES_TEST=1` 后运行 `tests/test_advisory_lock.py`
+
+## 10. 已知限制
+
+- 进程崩溃后只用最近 checkpoint 收口为 `interrupted/server_restart`，不重放模型或工具。
+- 当前不支持多 active backend、owner 转移或跨进程 command routing；未引入 Redis Pub/Sub。
+- Channel outbound 是进程内有界队列，不是 durable spool。
+- `TEST_CASE_QA` 仍保留自己的旧 SSE 边界，不属于本架构的验收范围。
+
+## 11. 关联资料
+
+- [Durable Agent Run](durable-agent-runs.md)
+- [研究与方案评审](/Users/zzq/Library/Mobile%20Documents/iCloud~md~obsidian/Documents/knowledge-base/Interview/highlights/SSE/design/reliable-sse-multitab-refactor.md)（实现稳定后归档回 `docs/research/sse/`）
+- [发布 Runbook](../../engineering/reliable-sse-release-runbook.md)
+- `openspec/changes/reliable-sse-multitab/`

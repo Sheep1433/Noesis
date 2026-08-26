@@ -1,8 +1,8 @@
 """无 SseDelivery 时 PersistSink 仍可得出终态决策。"""
 from __future__ import annotations
 
-from noesis.domain.chat.delivery.events import RunCompleted, WireFrame
-from noesis.domain.chat.delivery.persist_sink import PersistSink
+from noesis.chat.delivery.events import RunCompleted, WireFrame
+from noesis.services.persist_sink import PersistSink
 
 
 def test_persist_sink_without_sse_subscriber() -> None:
@@ -20,9 +20,9 @@ def test_checkpoint_is_throttled_but_semantic_boundary_is_immediate() -> None:
     delta = WireFrame(event="text-delta", data={"type": "text-delta", "delta": "x"})
     tool_end = WireFrame(event="tool-output-available", data={"type": "tool-output-available"})
 
-    assert sink.should_checkpoint(delta, now=10.5) is False
-    assert sink.should_checkpoint(delta, now=12.0) is True
-    assert sink.should_checkpoint(tool_end, now=12.1) is True
+    assert sink.checkpoint_kind(delta, now=10.5) is None
+    assert sink.checkpoint_kind(delta, now=12.0) is not None
+    assert sink.checkpoint_kind(tool_end, now=12.1) is not None
 
 
 def test_long_text_checkpoint_count_is_time_bounded_not_token_bounded() -> None:
@@ -31,8 +31,8 @@ def test_long_text_checkpoint_count_is_time_bounded_not_token_bounded() -> None:
     delta = WireFrame(event="text-delta", data={"type": "text-delta", "delta": "x"})
 
     checkpoint_count = sum(
-        sink.should_checkpoint(delta, now=index / 1000)
-        for index in range(10_000)
+        1 for index in range(10_000)
+        if sink.checkpoint_kind(delta, now=index / 1000) is not None
     )
 
     # 10 秒、每毫秒一个 delta，只产生约 4 次正文检查点，不是 10,000 次 UPDATE。

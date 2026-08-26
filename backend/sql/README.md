@@ -54,3 +54,17 @@ uv run alembic upgrade head
 uv run alembic downgrade -1
 uv run alembic downgrade base
 ```
+
+## 经验记忆迁移
+
+经验记忆未上线的旧表与按日文件不迁移。`202608240001_reset_unreleased_memory` 只识别并删除旧原型表，再从空模型创建当前 snapshot/item/evidence/relation/job/outbox；不会读取或转换旧数据。用户 preference 独立保留，默认 `enabled=false`。
+
+部署顺序：
+
+```bash
+cd backend
+uv run alembic upgrade head
+# 后端 lifespan 启动唯一的 machine-memory worker
+```
+
+迁移后先保持用户开关关闭。需要恢复派生数据时，从 PostgreSQL desired state 重建服务端 memory workspace 和 `noesis_memory` collection；两者都不是事实源。关闭经验记忆不需要回滚 schema，也不会影响 `USER.md`、`AGENTS.md` 或聊天数据。

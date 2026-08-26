@@ -63,6 +63,8 @@ class SimpleMCPAgent(BaseAgent):
                 tools=all_tools,
                 system_prompt=build_prompt(PromptProfile.SIMPLE_MCP),
                 checkpointer=self.checkpointer,
+                session_id=session_id,
+                attachments=tuple(str(name) for name in (file_list or {})),
             )
 
             # 流式执行

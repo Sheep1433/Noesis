@@ -149,6 +149,9 @@ def _format_hits(
                 "rank": i,
                 "collection_name": collection_name,
                 "file_name": hit.file_name,
+                # 现成的引用 ref：模型逐字复制进 [citation:文件名](citation_ref)，
+                # 避免自行拼装时编造协议头（曾出现 file: 导致前端不渲染）
+                "citation_ref": f"kb:{collection_name}/{hit.file_name}",
                 "score": round(hit.score, 4),
                 "recall_score": round(hit.recall_score, 4) if hit.recall_score is not None else None,
                 "rerank_score": round(hit.rerank_score, 4) if hit.rerank_score is not None else None,

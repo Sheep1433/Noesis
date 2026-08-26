@@ -144,6 +144,13 @@ async def ensure_session_sandbox(user_id: str, session_id: str) -> SessionSandbo
 async def destroy_session_sandbox(user_id: str, session_id: str) -> None:
     """销毁会话沙箱容器（磁盘 workspace 保留或由调用方删除）。"""
     invalidate_session_sandbox_cache(user_id, session_id)
+    # 容器回收连坐：运行中的后台任务（shell 命令 / subagent）一并转
+    # failed，避免挂死在已销毁的执行环境上
+    from noesis.agents.subagents.executor import fail_session_shell_tasks
+
+    fail_session_shell_tasks(
+        session_id, reason="会话沙箱已销毁，任务随容器回收终止",
+    )
     try:
         resp = await _runner_request(
             "DELETE",

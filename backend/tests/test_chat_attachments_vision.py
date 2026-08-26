@@ -1,7 +1,7 @@
 """Vision 判定与图片预处理单测。"""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -25,10 +25,9 @@ def test_model_name_supports_vision() -> None:
 def test_is_vision_available_uses_model_id(mock_require_resolve, mock_cfg) -> None:
     mock_cfg.vision_enabled = True
     mock_require_resolve.return_value = ModelCatalogEntry(
-        id="vl",
+        id="qwen-vl-max",
         label="VL",
         model_type="qwen",
-        model_name="qwen-vl-max",
         temperature=0.7,
         base_url="http://example",
         is_default=False,

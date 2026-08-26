@@ -1,11 +1,11 @@
-"""Raw profile, L2 search, and side-effect-free context preview."""
+"""Raw profile and side-effect-free context preview."""
 
 from pathlib import Path
 
 import pytest
 
 from noesis.agents.context import ContextResolver
-from noesis.config.user_data_paths import ensure_user_memory_files, get_user_daily_memory_path, get_user_profile_md_path
+from noesis.config.user_data_paths import ensure_user_memory_files, get_user_profile_md_path
 from noesis.services.user_memory_service import UserMemoryService
 
 
@@ -34,19 +34,6 @@ def test_profile_accepts_custom_raw_document() -> None:
     assert result["content"] == "# 完全自定义画像\n"
 
 
-def test_daily_memory_list_and_search_are_user_scoped() -> None:
-    ensure_user_memory_files("u1")
-    ensure_user_memory_files("u2")
-    get_user_daily_memory_path("u1", "2026-07-25").write_text("今天完成了通道诊断", encoding="utf-8")
-    get_user_daily_memory_path("u2", "2026-07-25").write_text("另一个用户的秘密关键词", encoding="utf-8")
-
-    assert UserMemoryService.list_daily("u1")[0]["date"] == "2026-07-25"
-    assert UserMemoryService.search_daily("u1", "通道")[0]["line"] == 1
-    assert UserMemoryService.search_daily("u1", "秘密关键词") == []
-    with pytest.raises(ValueError):
-        UserMemoryService.daily_path("u1", "../u2")
-
-
 def test_context_preview_uses_runtime_resolver_without_side_effects(tmp_path: Path) -> None:
     ensure_user_memory_files("u1")
     before = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*"))
@@ -54,8 +41,17 @@ def test_context_preview_uses_runtime_resolver_without_side_effects(tmp_path: Pa
     resolved = ContextResolver.resolve("u1", "super_agent")
     after = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*"))
 
-    assert resolved.memory_sources == ("/memory/USER.md", "/memory/AGENTS.md")
-    assert [source.id for source in resolved.sources] == ["system", "profile", "memory"]
+    assert resolved.memory_sources == (
+        "/memory/USER.md",
+        "/memory/AGENTS.md",
+        "/memory/MEMORY.md",
+    )
+    assert [source.id for source in resolved.sources] == [
+        "system",
+        "profile",
+        "memory",
+        "memory-index",
+    ]
     assert "用户画像" in resolved.compiled_content
     assert before == after
 

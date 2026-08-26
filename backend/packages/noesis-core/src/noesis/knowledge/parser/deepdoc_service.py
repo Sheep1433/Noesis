@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from noesis.runtime.logging import logger
 
 from noesis.knowledge.parser.deepdoc_bootstrap import ensure_deepdoc_bootstrap
 from noesis.knowledge.parser.deepdoc_config import DEEPDOC_UPSTREAM_COMMIT, models_available
@@ -239,6 +238,12 @@ def _parse_markdown(
 
 
 def _parse_txt(file_path: str) -> List[DeepDocBlock]:
+    # txt_parser 内部 `from deepdoc.parser.utils import get_text` 会走正常包导入，
+    # 触发 deepdoc/parser/__init__ 顶层 import pdf_parser → vision → xgboost/shapely
+    # （txt 路径完全不需要它们，且缺依赖时直接崩）。预加载 utils 按文件方式塞进
+    # sys.modules，让 txt_parser 的 import 命中缓存、不触发包 __init__。
+    # utils 自身依赖干净：pypdf + noesis 自有 rag.nlp compat，无 vision。
+    _load_deepdoc_parser_module("utils")
     mod = _load_deepdoc_parser_module("txt_parser")
     chunks = mod.RAGFlowTxtParser()(file_path, chunk_token_num=128)
     blocks: List[DeepDocBlock] = []

@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, NonCallableMagicMock
+from unittest.mock import AsyncMock, MagicMock, NonCallableMagicMock, patch
 
 import pytest
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.middleware.memory import MemoryMiddleware
 
-from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
-from noesis.agents.middlewares.capabilities.memory_prompt import NOESIS_MEMORY_SYSTEM_PROMPT
-from noesis.agents.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
+from noesis.agents.backends.paths import (
+    AGENT_MEMORY_AGENTS_FILE,
+    AGENT_MEMORY_INDEX_FILE,
+    AGENT_MEMORY_USER_FILE,
+)
+from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMemoryMiddleware
+from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.super_agent import (
     _MEMORY_SOURCES,
-    _build_task_worker_subagents,
+    _compile_task_worker,
 )
 from noesis.config.code_enum import IntentEnum
 
@@ -26,15 +30,26 @@ def test_memory_prompt_contains_agent_memory_placeholder() -> None:
 
 
 def test_memory_sources_order_user_before_agents() -> None:
-    assert _MEMORY_SOURCES == [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
+    assert _MEMORY_SOURCES == [
+        AGENT_MEMORY_USER_FILE,
+        AGENT_MEMORY_AGENTS_FILE,
+        AGENT_MEMORY_INDEX_FILE,
+    ]
 
 
-def test_task_worker_subagents_exclude_memory_middleware() -> None:
+def test_task_worker_excludes_memory_middleware() -> None:
     backend = MagicMock()
-    subs = _build_task_worker_subagents(backend, [], [], user_id="u1")
-    assert len(subs) == 1
-    middleware = subs[0]["middleware"]
+    worker = _compile_task_worker(backend, [], [], user_id="u1", model_id=None)
+    # worker 是编译好的 runnable；从其 nodes 检查中间件装配结果不可达，
+    # 改为验证 SUBAGENT 栈构建不含 MemoryMiddleware（memory 只挂主 Agent）
+    from noesis.factory import build_noesis_middleware
+    with patch("noesis.factory.ModelConfig", MagicMock(summarization_enabled=False, tool_output_max_chars=24_000, max_retries=6)):
+        middleware = build_noesis_middleware(
+            profile="SUBAGENT", model=MagicMock(), backend=backend,
+            memory=(), skills=(),
+        )
     assert not any(isinstance(m, MemoryMiddleware) for m in middleware)
+    assert worker is not None
 
 
 def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:
@@ -43,13 +58,15 @@ def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:
         [
             FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile-v1", error=None),
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"rules-v1", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_INDEX_FILE, content=b"index-v1", error=None),
         ],
         [
             FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile-v2", error=None),
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"rules-v2", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_INDEX_FILE, content=b"index-v2", error=None),
         ],
     ]
-    mw = TurnMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
+    mw = RefreshingMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
     state = {"memory_contents": {AGENT_MEMORY_AGENTS_FILE: "stale"}}
     first = mw.before_agent(state, MagicMock(), {})
     second = mw.before_agent({**state, **(first or {})}, MagicMock(), {})
@@ -63,8 +80,8 @@ def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:
 
 
 def test_turn_memory_has_no_per_model_reload_hook() -> None:
-    assert "before_model" not in TurnMemoryMiddleware.__dict__
-    assert "abefore_model" not in TurnMemoryMiddleware.__dict__
+    assert "before_model" not in RefreshingMemoryMiddleware.__dict__
+    assert "abefore_model" not in RefreshingMemoryMiddleware.__dict__
 
 
 @pytest.mark.asyncio
@@ -74,9 +91,10 @@ async def test_turn_memory_async_path_ignores_checkpoint_cache() -> None:
         return_value=[
             FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile", error=None),
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"fresh", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_INDEX_FILE, content=b"index", error=None),
         ]
     )
-    middleware = TurnMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
+    middleware = RefreshingMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
 
     result = await middleware.abefore_agent(
         {"memory_contents": {AGENT_MEMORY_AGENTS_FILE: "stale"}},

@@ -47,7 +47,7 @@ def rerank_documents(
     from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
     snapshot = get_runtime_model_snapshot(purpose="rerank")
-    model_name = (snapshot.model_name if snapshot else ModelConfig.rerank_model_name).strip()
+    model_name = (snapshot.id if snapshot else ModelConfig.rerank_model_name).strip()
     api_key = (snapshot.api_key if snapshot else ModelConfig.rerank_model_api_key).strip()
     api_url = (
         f"{snapshot.base_url.rstrip('/')}/rerank" if snapshot else _RERANK_API_URL

@@ -1,13 +1,13 @@
 import pytest
 
-from noesis.domain.chat.runs import (
+from noesis.chat.runs import (
     InvalidRunTransition,
     RunSnapshot,
     RunStatus,
     can_transition,
     require_transition,
 )
-from noesis.domain.chat.delivery.events import HitlRequired, WireFrame
+from noesis.chat.delivery.events import HitlRequired, WireFrame
 from noesis.services.run_service import RunProjection
 
 
@@ -39,8 +39,6 @@ def test_snapshot_uses_wire_contract_names() -> None:
         sequence=7,
         attempt_id=2,
         parts=({"type": "text", "text": "部分结果"},),
-        retry_attempt=1,
-        retry_max=3,
     )
 
     payload = snapshot.to_dict()

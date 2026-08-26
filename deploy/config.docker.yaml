@@ -32,29 +32,50 @@ model:
   name: deepseek-v4-flash-free
   temperature: 0.75
   base_url: https://opencode.ai/zen/v1
+  # 平台端点 Key：OpenCode Zen 为公开值 public（非机密，故放 yaml）；机密 Key 走 .env MODEL_API_KEY
+  api_key: public
   show_thinking_process: true
-  default_catalog_id: flash
+  # 用户自定义 Provider 平台预设（部署者维护；选预设 → base_url 自动填，用户只填 Key）
+  # 敏感凭证不放预设；归因类 header 可放
+  provider_presets:
+    - id: opencode
+      label: opencode
+      base_url: https://opencode.ai/zen/v1
+      headers:
+        HTTP-Referer: https://opencode.ai/
+        X-Title: opencode
+    - id: deepseek
+      label: deepseek
+      base_url: https://api.deepseek.com/v1
+    - id: qwen
+      label: alibaba
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    - id: minimax
+      label: minimax
+      base_url: https://api.minimax.chat/v1
+
+  default_catalog_id: deepseek-v4-flash-free
   # OpenCode Zen 免费模型目录（models.dev cost.input=0；.env MODEL_API_KEY=public）
   catalog:
-    - id: flash
-      label: DeepSeek V4 Flash
-      name: deepseek-v4-flash-free
+    - id: deepseek-v4-flash-free
+      label: deepseek V4 Flash（快速）
+      context_window: 200000
     - id: big-pickle
-      label: Big Pickle
-      name: big-pickle
+      label: Big Pickle（推理）
       temperature: 0.7
-    - id: mimo
-      label: MiMo V2.5
-      name: mimo-v2.5-free
+      context_window: 200000
+    - id: mimo-v2.5-free
+      label: MiMo V2.5（小米）
       temperature: 0.7
-    - id: nemotron
-      label: Nemotron 3 Ultra
-      name: nemotron-3-ultra-free
+      context_window: 200000
+    - id: nemotron-3-ultra-free
+      label: Nemotron 3 Ultra（1M 上下文）
       temperature: 0.6
-    - id: north
-      label: North Mini Code
-      name: north-mini-code-free
+      context_window: 1000000
+    - id: north-mini-code-free
+      label: North Mini Code（代码）
       temperature: 0.5
+      context_window: 256000
   request_timeout: 120
   max_retries: 2
   generation:
@@ -102,6 +123,23 @@ agent_runtime:
     loop_hard_limit: 5
     loop_window_size: 20
 
+distributed_runs:
+  # 模式（memory|redis）、REDIS_URL、NOESIS_CLUSTER_ID 属环境项，只在 .env 显式配置：
+  #   NOESIS_RUN_BUS_BACKEND=memory|redis（必填，无默认）
+  #   REDIS_URL / NOESIS_CLUSTER_ID（backend=redis 时必填）
+  leader_heartbeat_seconds: 30
+  queued_scan_interval_seconds: 5
+  command_scan_interval_seconds: 5
+  publisher_queue_max_events: 512
+  publisher_queue_max_bytes: 1048576
+  handshake_buffer_max_events: 256
+  handshake_buffer_max_bytes: 524288
+  reconciliation_interval_seconds: 30
+  periodic_checkpoint_interval_seconds: 15
+  redis_socket_timeout_seconds: 5
+  redis_connect_timeout_seconds: 3
+  redis_pool_max_connections: 20
+
 stream:
   sse_keepalive_interval_seconds: 25
   checkpoint_interval_seconds: 2
@@ -115,7 +153,7 @@ stream:
   run_max_active_per_user: 4
   run_terminal_retention_seconds: 300
   run_max_duration_seconds: 900
-  run_max_output_bytes: 16777216
+  run_max_output_bytes: 67108864
   run_hitl_pending_timeout_seconds: 86400
   run_shutdown_drain_seconds: 10
   run_cancel_grace_seconds: 2
@@ -200,6 +238,23 @@ messaging:
   feishu_runtime_enabled: false
 
 # 知识库 DeepDoc（权重挂载至 noesis_data:/data/noesis/rag/res/deepdoc）
+# md 文件记忆层（索引 + 五类条目 + 情景日志）；功能启停由每个用户的单一开关控制。
+memory:
+  extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
+  selection_model: ""        # 空 = 默认对话模型（每 Run 注入选条）
+  enabled_by_default: false  # fail-closed：评测门禁未过不默认开启
+  session_idle_minutes: 10
+  sweep_interval_minutes: 30
+  max_entries_per_extraction: 3
+  index_max_lines: 200
+  index_max_bytes: 25600
+  stale_warning_days: 2
+  inject_budget_tokens: 2000
+  max_entry_chars: 4000
+  consolidation_min_interval_hours: 24
+  consolidation_min_new_sessions: 5
+  max_message_chars: 120000
+
 kb:
   deepdoc:
     enabled: true

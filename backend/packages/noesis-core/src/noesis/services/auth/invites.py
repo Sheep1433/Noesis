@@ -7,8 +7,8 @@ import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.domain.auth.policy import digest_secret, verify_invite_digest
-from noesis.domain.auth.ports import UserRepository
+from noesis.auth.policy import digest_secret, verify_invite_digest
+from noesis.auth.ports import UserRepository
 from noesis.errors.exceptions import LoginException
 from noesis.repositories.auth_repository import SqlAlchemyUserRepository
 

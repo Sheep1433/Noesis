@@ -69,7 +69,7 @@ class DockerExecSandboxBackend(BaseSandbox):
     def _api_prefix(self) -> str:
         return f"/internal/sandboxes/{self._user_id}/sessions/{self._session_id}"
 
-    def _post(self, path: str, payload: dict) -> httpx.Response:
+    def _post(self, path: str, payload: dict, *, http_timeout: float | None = None) -> httpx.Response:
         headers = sandbox_runner_headers()
         if self._http is not None:
             return self._http.post(
@@ -77,7 +77,8 @@ class DockerExecSandboxBackend(BaseSandbox):
                 headers=headers,
                 json=payload,
             )
-        timeout = self._default_timeout + 30.0
+        # HTTP 等待上限须覆盖命令时长（默认 default+30；exec 按命令超时放宽）
+        timeout = http_timeout if http_timeout is not None else self._default_timeout + 30.0
         with httpx.Client(timeout=timeout) as client:
             return client.post(
                 f"{self._runner_url}{path}",
@@ -86,6 +87,10 @@ class DockerExecSandboxBackend(BaseSandbox):
             )
 
     def _execute_once(self, command: str, effective_timeout: float) -> httpx.Response:
+        # 命令级超时 0/None=不限时：HTTP 等待用大上限（容器回收兜底）
+        http_timeout = (
+            effective_timeout + 30.0 if effective_timeout > 0 else 86400.0
+        )
         return self._post(
             f"{self._api_prefix()}/exec",
             {
@@ -93,6 +98,7 @@ class DockerExecSandboxBackend(BaseSandbox):
                 "exec_dir": self._workspace,
                 "timeout": effective_timeout,
             },
+            http_timeout=http_timeout,
         )
 
     def _ensure_sync(self) -> None:

@@ -261,7 +261,7 @@ watch(
   </n-modal>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .session-manage-modal__body {
   min-height: 200px;
 }
@@ -281,7 +281,7 @@ watch(
   flex-shrink: 0;
 }
 
-@media (width <= 720px) {
+@media (max-width: $bp-md) {
   .session-manage-modal__footer {
     flex-direction: column;
     align-items: stretch;

@@ -1,19 +1,97 @@
-"""The public middleware surface for the converged Agent runtime."""
+"""Noesis Agent runtime middleware.
 
-from noesis.agents.middlewares.capabilities.turn_memory_middleware import TurnMemoryMiddleware
-from noesis.agents.middlewares.capabilities.versioned_skills_middleware import VersionedSkillsMiddleware
-from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
-from noesis.agents.middlewares.kernel.model_execution_middleware import ModelExecutionMiddleware
-from noesis.agents.middlewares.kernel.run_governor_middleware import RunGovernorMiddleware
-from noesis.agents.middlewares.kernel.runtime_telemetry_middleware import RuntimeTelemetryMiddleware
-from noesis.agents.middlewares.kernel.tool_execution_middleware import ToolExecutionMiddleware
+Only Claude-Code policies missing from LangChain/DeepAgents live here. Public
+middleware never imports the factory or a concrete Agent scene.
+"""
+
+from noesis.agents.middlewares.compaction_middleware import (
+    CompactionMiddleware,
+    CompactionResult,
+    CompactionState,
+    CompactionThresholds,
+    ManualCompactionState,
+)
+from noesis.agents.middlewares.durable_context_middleware import (
+    DurableContext,
+    DurableContextMiddleware,
+    DurableContextState,
+    derive_durable_context,
+    render_durable_block,
+)
+from noesis.agents.middlewares.dynamic_context_middleware import (
+    DynamicContextBlock,
+    DynamicContextMiddleware,
+    DynamicContextProvider,
+    DynamicContextState,
+    render_dynamic_block,
+)
+from noesis.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
+from noesis.agents.middlewares.read_before_write_middleware import (
+    FileFingerprint,
+    ReadBeforeWriteMiddleware,
+    WriteRejectedError,
+)
+from noesis.agents.middlewares.memory_entries_middleware import (
+    MemoryEntriesMiddleware,
+    build_memory_entries_middleware,
+)
+from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMemoryMiddleware
+from noesis.agents.middlewares.refreshing_skills_middleware import (
+    RefreshingSkillsMiddleware,
+    RefreshingSkillsState,
+)
+from noesis.agents.middlewares.session_stats_middleware import SessionStatsMiddleware
+from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+from noesis.agents.middlewares.snip_middleware import (
+    SnipError,
+    SnipMiddleware,
+    SnipRecord,
+    SnipSelector,
+    SnipState,
+    apply_snip_projection,
+)
+from noesis.agents.middlewares.tool_failure_middleware import ToolFailureMiddleware
+from noesis.agents.middlewares.tool_result_budget_middleware import (
+    ReplacementRecord,
+    ToolResultBudgetMiddleware,
+    ToolResultBudgetState,
+)
 
 __all__ = [
-    "ContextLifecycleMiddleware",
-    "ModelExecutionMiddleware",
-    "RunGovernorMiddleware",
-    "RuntimeTelemetryMiddleware",
-    "ToolExecutionMiddleware",
-    "TurnMemoryMiddleware",
-    "VersionedSkillsMiddleware",
+    "CompactionMiddleware",
+    "CompactionResult",
+    "CompactionState",
+    "CompactionThresholds",
+    "ManualCompactionState",
+    "DurableContext",
+    "DurableContextMiddleware",
+    "DurableContextState",
+    "DynamicContextBlock",
+    "DynamicContextMiddleware",
+    "DynamicContextProvider",
+    "DynamicContextState",
+    "FileFingerprint",
+    "LLMErrorHandlingMiddleware",
+    "ReadBeforeWriteMiddleware",
+    "MemoryEntriesMiddleware",
+    "RefreshingMemoryMiddleware",
+    "build_memory_entries_middleware",
+    "RefreshingSkillsMiddleware",
+    "RefreshingSkillsState",
+    "ReplacementRecord",
+    "SessionStatsMiddleware",
+    "SessionStatsRegistry",
+    "SnipError",
+    "SnipMiddleware",
+    "SnipRecord",
+    "SnipSelector",
+    "SnipState",
+    "ToolFailureMiddleware",
+    "ToolResultBudgetMiddleware",
+    "ToolResultBudgetState",
+    "WriteRejectedError",
+    "apply_snip_projection",
+    "derive_durable_context",
+    "render_durable_block",
+    "render_dynamic_block",
 ]

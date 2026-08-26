@@ -1,48 +1,26 @@
-"""Agent runtime factory inventory and ordering contracts."""
-
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from langchain_core.messages import AIMessage, ToolMessage
-
-from noesis.factory import build_noesis_runtime_middleware
-from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
+from noesis.factory import build_noesis_middleware, middleware_inventory
 
 
-def test_runtime_stack_contains_only_the_five_kernel_owners() -> None:
-    config = SimpleNamespace(
-        context_display_enabled=False,
-        summarization_enabled=False,
-        max_retries=0,
-    )
+def test_inventory_is_generated_from_actual_instances() -> None:
+    config = SimpleNamespace(summarization_enabled=False, tool_output_max_chars=24_000, max_retries=6)
     with patch("noesis.factory.ModelConfig", config):
-        stack = build_noesis_runtime_middleware()
-
-    assert [type(item).__name__ for item in stack] == [
-        "RuntimeTelemetryMiddleware",
-        "ToolExecutionMiddleware",
-        "RunGovernorMiddleware",
-        "ContextLifecycleMiddleware",
-        "ModelExecutionMiddleware",
+        stack = build_noesis_middleware(
+            profile="COMMON_QA",
+            model=MagicMock(),
+        )
+    inventory = middleware_inventory(stack)
+    assert [entry.name for entry in inventory] == [type(item).__name__ for item in stack]
+    assert [entry.order for entry in inventory] == list(range(len(stack)))
+    assert [entry.name for entry in inventory] == [
+        "ToolResultBudgetMiddleware",
+        "ToolFailureMiddleware",
+        "DynamicContextMiddleware",
+        "PatchToolCallsMiddleware",
+        "LLMErrorHandlingMiddleware",
+        "SessionStatsMiddleware",
     ]
-
-
-def test_context_normalization_does_not_mutate_persisted_parts_shape() -> None:
-    persisted = {
-        "version": 1,
-        "parts": [{"type": "tool", "tool_call_id": "call_1", "status": "streaming"}],
-    }
-    messages = [
-        AIMessage(content="", tool_calls=[{"name": "bash", "id": "call_1", "args": {}}])
-    ]
-
-    normalized = ContextLifecycleMiddleware.normalize_messages(messages)
-
-    assert isinstance(normalized[-1], ToolMessage)
-    assert normalized[-1].tool_call_id == "call_1"
-    assert persisted == {
-        "version": 1,
-        "parts": [{"type": "tool", "tool_call_id": "call_1", "status": "streaming"}],
-    }

@@ -4,6 +4,7 @@ import { useSSEStream } from '@/views/chat/useSSEStream'
 
 const api = vi.hoisted(() => ({
   createAgentRun: vi.fn(),
+  getActiveRun: vi.fn(),
   getAgentRun: vi.fn(),
   resumeAgentRunHitl: vi.fn(),
   resumeAgentRunTestCase: vi.fn(),
@@ -79,6 +80,7 @@ describe('useSSEStream durable run recovery', () => {
       session_id: 'session-1',
       status: 'running',
     })
+    api.getActiveRun.mockResolvedValue(null)
   })
 
   it('独立投递 retrieval results', async () => {
@@ -97,7 +99,7 @@ describe('useSSEStream durable run recovery', () => {
 
   it('刷新后恢复同一 run，并以服务端终态 snapshot 收尾', async () => {
     sessionStorage.setItem('noesis:active-run:session-1', 'run-1')
-    api.getAgentRun.mockResolvedValue(snapshot({ snapshot_sequence: 4 }))
+    api.getActiveRun.mockResolvedValue(snapshot({ snapshot_sequence: 4 }))
     api.subscribeAgentRun.mockResolvedValue(sseResponse([
       {
         event: 'run-snapshot',
@@ -119,7 +121,7 @@ describe('useSSEStream durable run recovery', () => {
 
   it('从权威 snapshot 恢复 HITL 审批，不依赖实时事件仍在连接', async () => {
     sessionStorage.setItem('noesis:active-run:session-1', 'run-hitl')
-    api.getAgentRun.mockResolvedValue(snapshot({
+    api.getActiveRun.mockResolvedValue(snapshot({
       run_id: 'run-hitl',
       status: 'hitl_pending',
       snapshot_sequence: 8,
@@ -170,7 +172,7 @@ describe('useSSEStream durable run recovery', () => {
       snapshot_sequence: 9,
       pending_hitl: undefined,
     }))
-    api.getAgentRun.mockResolvedValue(snapshot({
+    api.getActiveRun.mockResolvedValue(snapshot({
       run_id: 'run-hitl',
       status: 'running',
       snapshot_sequence: 9,
@@ -207,9 +209,9 @@ describe('useSSEStream durable run recovery', () => {
   it('切换会话会释放旧订阅，旧 Run 后续事件不得污染新会话', async () => {
     sessionStorage.setItem('noesis:active-run:session-1', 'run-1')
     sessionStorage.setItem('noesis:active-run:session-2', 'run-2')
-    api.getAgentRun.mockImplementation(async (runId: string) => snapshot({
-      run_id: runId,
-      session_id: runId === 'run-1' ? 'session-1' : 'session-2',
+    api.getActiveRun.mockImplementation(async (sessionId: string) => snapshot({
+      run_id: sessionId === 'session-1' ? 'run-1' : 'run-2',
+      session_id: sessionId,
       snapshot_sequence: 1,
     }))
 
@@ -261,10 +263,10 @@ describe('useSSEStream durable run recovery', () => {
   it('hitl 审批严格使用目标 session 的 run id，不使用上一会话 currentRunId', async () => {
     sessionStorage.setItem('noesis:active-run:session-1', 'run-1')
     sessionStorage.setItem('noesis:active-run:session-2', 'run-2')
-    api.getAgentRun.mockImplementation(async (runId: string) => snapshot({
-      run_id: runId,
-      session_id: runId === 'run-1' ? 'session-1' : 'session-2',
-      status: runId === 'run-2' ? 'completed' : 'running',
+    api.getActiveRun.mockImplementation(async (sessionId: string) => snapshot({
+      run_id: sessionId === 'session-1' ? 'run-1' : 'run-2',
+      session_id: sessionId,
+      status: 'running',
     }))
     api.subscribeAgentRun.mockImplementation((_runId: string, _after: number, signal: AbortSignal) => (
       new Promise((_resolve, reject) => {
@@ -393,6 +395,43 @@ describe('useSSEStream durable run recovery', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
+  it('stop 返回 running 时继续订阅，不伪造本地终态', async () => {
+    let subscribeCall = 0
+    api.subscribeAgentRun.mockImplementation((_runId: string, _after: number, signal: AbortSignal) => {
+      subscribeCall += 1
+      if (subscribeCall === 1) {
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        })
+      }
+      return Promise.resolve(sseResponse([{
+        event: 'run-snapshot',
+        data: snapshot({
+          status: 'partial',
+          snapshot_sequence: 3,
+          finish_reason: 'stopped',
+        }),
+      }]))
+    })
+    api.stopAgentRun.mockResolvedValue(snapshot({
+      status: 'running',
+      snapshot_sequence: 2,
+    }))
+    const onFinish = vi.fn()
+    const onSnapshot = vi.fn()
+    const stream = useSSEStream({ onFinish, onSnapshot })
+
+    const pending = stream.sendMessage('session-1', 'hello')
+    await vi.waitFor(() => expect(api.subscribeAgentRun).toHaveBeenCalledTimes(1))
+    await stream.stopCurrentRun()
+    await pending
+
+    expect(api.subscribeAgentRun).toHaveBeenCalledTimes(2)
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }))
+    expect(onFinish).toHaveBeenCalledTimes(1)
+    expect(onFinish).toHaveBeenCalledWith({ finish_reason: 'stopped' })
+  })
+
   it('重连持续失败时保留 active run 并提供手动恢复，不伪造 Agent 失败', async () => {
     vi.useFakeTimers()
     try {
@@ -414,5 +453,64 @@ describe('useSSEStream durable run recovery', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('新 Tab 从服务端 active-run API 发现 active Run，不依赖 sessionStorage', async () => {
+    // 新 Tab 的 sessionStorage 为空——必须从服务端发现
+    api.getActiveRun.mockResolvedValue(snapshot({ run_id: 'run-server', snapshot_sequence: 3 }))
+    api.subscribeAgentRun.mockResolvedValue(sseResponse([
+      { event: 'run-snapshot', data: snapshot({ status: 'completed', snapshot_sequence: 4, finish_reason: 'stop' }) },
+      { event: 'message', data: '[DONE]' },
+    ]))
+    const onSnapshot = vi.fn()
+    const onFinish = vi.fn()
+    const stream = useSSEStream({ onSnapshot, onFinish })
+
+    await stream.resumeActiveRun('session-1')
+
+    expect(api.getActiveRun).toHaveBeenCalledWith('session-1')
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run-server' }))
+    expect(onFinish).toHaveBeenCalledOnce()
+  })
+
+  it('active-run API 返回 null 时不订阅', async () => {
+    api.getActiveRun.mockResolvedValue(null)
+    const onSnapshot = vi.fn()
+    const stream = useSSEStream({ onSnapshot })
+
+    await stream.resumeActiveRun('session-1')
+
+    expect(api.getActiveRun).toHaveBeenCalledWith('session-1')
+    expect(api.subscribeAgentRun).not.toHaveBeenCalled()
+    expect(onSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('409 冲突时加入已有 Run，并在终态后自动重发排队消息', async () => {
+    const conflictErr = new Error('当前会话仍在生成') as Error & { conflictRunId?: string }
+    conflictErr.conflictRunId = 'run-existing'
+    api.createAgentRun.mockRejectedValueOnce(conflictErr)
+    api.getAgentRun.mockResolvedValue(snapshot({ run_id: 'run-existing', snapshot_sequence: 2 }))
+    api.subscribeAgentRun
+      .mockResolvedValueOnce(sseResponse([
+        { event: 'run-snapshot', data: snapshot({ run_id: 'run-existing', status: 'completed', snapshot_sequence: 3, finish_reason: 'stop' }) },
+        { event: 'message', data: '[DONE]' },
+      ]))
+      .mockResolvedValueOnce(sseResponse([
+        { event: 'run-snapshot', data: snapshot({ run_id: 'run-1', status: 'completed', snapshot_sequence: 1, finish_reason: 'stop' }) },
+        { event: 'message', data: '[DONE]' },
+      ]))
+    const onSnapshot = vi.fn()
+    const onFinish = vi.fn()
+    const stream = useSSEStream({ onSnapshot, onFinish })
+
+    await stream.sendMessage('session-1', 'hello')
+
+    expect(api.createAgentRun).toHaveBeenCalledTimes(2)
+    expect(api.getAgentRun).toHaveBeenCalledWith('run-existing')
+    expect(api.subscribeAgentRun).toHaveBeenNthCalledWith(1, 'run-existing', 2, expect.any(AbortSignal))
+    expect(api.subscribeAgentRun).toHaveBeenNthCalledWith(2, 'run-1', 0, expect.any(AbortSignal))
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run-existing' }))
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run-1' }))
+    expect(onFinish).toHaveBeenCalledTimes(2)
   })
 })

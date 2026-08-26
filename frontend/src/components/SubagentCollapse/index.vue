@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { SubagentRunStatus } from '@/utils/parseTaskTool'
 import type { ToolLifecycleState, ToolRunStatus, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
 import { computed } from 'vue'
+import MarkdownPreview from '@/components/MarkdownPreview/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
+import { buildChildDisplayParts } from '@/utils/groupAssistantParts'
 import {
   parseTaskToolInput,
   parseTaskToolOutput,
@@ -19,7 +22,7 @@ interface Props {
   status?: ToolRunStatus
   state?: ToolLifecycleState
   error?: string | null
-  duration_ms?: number
+  durationMs?: number
   /** 子 Agent 内部 parts（text / reasoning / tool，带 parent_task_call_id） */
   childParts?: UiPart[]
   defaultOpen?: boolean
@@ -33,13 +36,21 @@ const props = withDefaults(defineProps<Props>(), {
   status: undefined,
   state: undefined,
   error: null,
-  duration_ms: undefined,
+  durationMs: undefined,
   childParts: () => [],
   defaultOpen: false,
   appearance: 'light',
 })
 
 const childTimelineParts = computed(() => props.childParts ?? [])
+const childDisplayParts = computed(() => buildChildDisplayParts(childTimelineParts.value))
+
+function entryKey(entry: DisplayPartEntry, fallback: number): string {
+  if (entry.kind === 'parallel_tools') {
+    return `pg:${entry.parts[0]?.tool_call_id ?? entry.parts[0]?.id ?? fallback}`
+  }
+  return entry.part.tool_call_id ?? entry.part.id ?? String(fallback)
+}
 
 const DISPLAY_MAX = 32_000
 
@@ -103,10 +114,10 @@ const descriptionTooltip = computed(() => {
 })
 
 const durationDisplay = computed(() => {
-  if (props.duration_ms == null || props.duration_ms < 0) {
+  if (props.durationMs == null || props.durationMs < 0) {
     return ''
   }
-  return formatDurationMs(props.duration_ms)
+  return formatDurationMs(props.durationMs)
 })
 </script>
 
@@ -146,53 +157,101 @@ const durationDisplay = computed(() => {
       <div class="subagent-content">
         <div v-if="promptDisplay" class="subagent-section subagent-section--prompt">
           <div class="subagent-section__label">任务指令</div>
-          <div class="subagent-section__body">
-            <pre>{{ promptDisplay }}</pre>
-          </div>
+          <MarkdownPreview
+            class="subagent-markdown"
+            :content="promptDisplay"
+            :show-action-bar="false"
+            variant="segment"
+          />
         </div>
         <div v-if="resultDisplay" class="subagent-section subagent-section--result">
           <div class="subagent-section__label">结果</div>
-          <div class="subagent-section__body">
-            <pre>{{ resultDisplay }}</pre>
-          </div>
+          <MarkdownPreview
+            class="subagent-markdown"
+            :content="resultDisplay"
+            :show-action-bar="false"
+            variant="segment"
+          />
         </div>
         <div v-if="errorDisplay" class="subagent-section subagent-section--error">
           <div class="subagent-section__label">错误</div>
-          <div class="subagent-section__body">
-            <pre>{{ errorDisplay }}</pre>
-          </div>
+          <MarkdownPreview
+            class="subagent-markdown"
+            :content="errorDisplay"
+            :show-action-bar="false"
+            variant="segment"
+          />
         </div>
         <div v-if="childTimelineParts.length > 0" class="subagent-section subagent-section--timeline">
           <div class="subagent-section__label">执行过程</div>
           <div class="subagent-timeline">
-            <template v-for="(child, ci) in childTimelineParts" :key="child.id ?? ci">
+            <template
+              v-for="(entry, ci) in childDisplayParts"
+              :key="entryKey(entry, ci)"
+            >
               <div
-                v-if="child.type === 'text' && (child.content || child.status === 'streaming')"
+                v-if="entry.kind === 'part' && entry.part.type === 'text' && (entry.part.content || entry.part.status === 'streaming')"
                 class="subagent-narrative"
               >
-                <pre>{{ child.content }}</pre>
+                <MarkdownPreview
+                  class="subagent-markdown"
+                  :content="entry.part.content"
+                  :show-action-bar="false"
+                  variant="segment"
+                />
               </div>
               <ReasoningBlock
-                v-else-if="child.type === 'reasoning' && (child.content || child.status === 'streaming')"
-                :reasoning="child.content"
+                v-else-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
+                :reasoning="entry.part.content"
                 :defaultOpen="false"
-                :streaming="child.status === 'streaming'"
+                :streaming="entry.part.status === 'streaming'"
                 appearance="light"
               />
               <ToolCallCollapse
-                v-else-if="child.type === 'tool' && shouldRenderToolCallCollapse(child.name, child.input)"
+                v-else-if="entry.kind === 'part' && entry.part.type === 'tool' && shouldRenderToolCallCollapse(entry.part.name, entry.part.input)"
                 appearance="light"
-                :name="child.name"
-                :arguments="child.input"
-                :result="child.output"
-                :error="child.error"
-                :status="child.status"
-                :state="child.state"
-                :error-category="child.errorCategory"
-                :exit_code="child.exit_code"
-                :truncated="child.truncated"
-                :duration_ms="child.duration_ms"
+                :name="entry.part.name"
+                :arguments="entry.part.input"
+                :result="entry.part.output"
+                :error="entry.part.error"
+                :status="entry.part.status"
+                :state="entry.part.state"
+                :error-category="entry.part.errorCategory"
+                :exit-code="entry.part.exit_code"
+                :truncated="entry.part.truncated"
+                :duration-ms="entry.part.duration_ms"
               />
+              <div
+                v-else-if="entry.kind === 'parallel_tools'"
+                class="subagent-parallel-tools"
+              >
+                <n-collapse>
+                  <n-collapse-item name="parallel-tools" :default-expanded="true">
+                    <template #header>
+                      <div class="subagent-parallel-tools__header">
+                        并行工具 · {{ entry.parts.length }} 个
+                      </div>
+                    </template>
+                    <div class="subagent-parallel-tools__body">
+                      <ToolCallCollapse
+                        v-for="tp in entry.parts"
+                        :key="tp.tool_call_id ?? tp.id"
+                        appearance="light"
+                        :name="tp.name"
+                        :arguments="tp.input"
+                        :result="tp.output"
+                        :error="tp.error"
+                        :status="tp.status"
+                        :state="tp.state"
+                        :error-category="tp.errorCategory"
+                        :exit-code="tp.exit_code"
+                        :truncated="tp.truncated"
+                        :duration-ms="tp.duration_ms"
+                      />
+                    </div>
+                  </n-collapse-item>
+                </n-collapse>
+              </div>
             </template>
           </div>
         </div>
@@ -204,6 +263,7 @@ const durationDisplay = computed(() => {
 <style scoped>
 .subagent-call {
   --tool-accent: var(--noesis-block-dark-accent);
+
   background: var(--noesis-block-dark-bg);
   border: 1px solid var(--noesis-block-dark-border);
   border-radius: var(--noesis-radius-lg);
@@ -214,6 +274,7 @@ const durationDisplay = computed(() => {
 
 .subagent-call--light {
   --tool-accent: var(--noesis-block-light-accent);
+
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
@@ -283,6 +344,8 @@ const durationDisplay = computed(() => {
 .subagent-header__tags {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
   flex-shrink: 0;
   gap: 6px;
 }
@@ -362,80 +425,79 @@ const durationDisplay = computed(() => {
   color: var(--noesis-color-text-muted);
 }
 
-.subagent-section__body {
-  border-radius: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--noesis-block-dark-border-section);
-  background: var(--noesis-block-dark-bg-section);
-}
-
-.subagent-section--prompt .subagent-section__body {
-  border-color: var(--noesis-block-dark-border-args);
-}
-
-.subagent-section--result .subagent-section__body {
-  border-color: var(--noesis-block-dark-border-result);
-  background: var(--noesis-block-dark-bg-result);
-}
-
-.subagent-section--error .subagent-section__body {
-  border-color: var(--noesis-block-dark-border-error);
-  background: var(--noesis-block-dark-bg-error);
-}
-
-.subagent-content pre {
-  margin: 0;
-  color: var(--noesis-block-dark-text-code);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-  line-height: 1.55;
-  font-family: ui-monospace, 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-}
-
-.subagent-section--result pre {
-  color: var(--noesis-block-dark-text-result);
-}
-
-.subagent-section--error pre {
-  color: var(--noesis-block-dark-text-error);
-}
-
-.subagent-call--light .subagent-section__body {
-  background: var(--noesis-color-bg-elevated);
+.subagent-markdown {
+  min-height: 0;
+  overflow: hidden;
   border: 1px solid var(--noesis-color-border-code);
+  border-radius: 8px;
+  background: var(--noesis-color-bg-elevated);
 }
 
-.subagent-call--light .subagent-section--prompt .subagent-section__body {
-  border-color: var(--noesis-color-border-args);
+.subagent-markdown :deep(.markdown-preview__body) {
+  height: auto;
+  overflow: visible;
+  padding: 0;
 }
 
-.subagent-call--light .subagent-content pre {
-  color: var(--noesis-block-light-text-code);
+.subagent-markdown :deep(.markdown-wrapper) {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--noesis-color-text-body);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.subagent-call--light .subagent-section--result .subagent-section__body {
+.subagent-section--result .subagent-markdown {
   border-color: var(--noesis-color-border-result);
-  background: var(--noesis-block-light-bg-result);
 }
 
-.subagent-call--light .subagent-section--result pre {
-  color: var(--noesis-block-light-text-result);
-}
-
-.subagent-call--light .subagent-section--error .subagent-section__body {
+.subagent-section--error .subagent-markdown {
   border-color: var(--noesis-color-border-error);
-  background: var(--noesis-block-light-bg-error);
-}
-
-.subagent-call--light .subagent-section--error pre {
-  color: var(--noesis-block-light-text-error);
 }
 
 .subagent-timeline {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.subagent-parallel-tools {
+  margin: 2px 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--noesis-block-light-accent);
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-block-light-bg);
+}
+
+.subagent-parallel-tools :deep(.n-collapse-item__header) {
+  padding: 0 !important;
+}
+
+.subagent-parallel-tools :deep(.n-collapse-item__content-inner) {
+  padding: 0 !important;
+}
+
+.subagent-parallel-tools :deep(.n-collapse-item__content-wrapper) {
+  border-top: 1px solid var(--noesis-block-light-divider);
+}
+
+.subagent-parallel-tools__header {
+  font-size: 11px;
+  color: var(--noesis-color-text-secondary);
+  margin-bottom: 2px;
+}
+
+.subagent-parallel-tools__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subagent-parallel-tools__body :deep(.tool-call) {
+  margin: 0;
+  box-shadow: none;
 }
 
 .subagent-timeline :deep(.tool-call),
@@ -447,6 +509,7 @@ const durationDisplay = computed(() => {
 }
 
 /* 子过程略缩小：与主时间线区分层级 */
+
 .subagent-timeline :deep(.reasoning-header),
 .subagent-timeline :deep(.tool-header) {
   padding: 5px 8px 5px 6px;
@@ -501,15 +564,5 @@ const durationDisplay = computed(() => {
 .subagent-call--light .subagent-narrative {
   border-color: var(--noesis-block-light-border);
   background: var(--noesis-block-light-bg-narrative);
-}
-
-.subagent-narrative pre {
-  margin: 0;
-  color: var(--noesis-block-light-text-code);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-  line-height: 1.55;
-  font-family: inherit;
 }
 </style>

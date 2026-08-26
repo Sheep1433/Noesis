@@ -1,0 +1,101 @@
+[
+  {
+    "id": "rev-01",
+    "type": "industry",
+    "title": "OpenAI Codex Memories README",
+    "year": 2026,
+    "url": "https://github.com/openai/codex/blob/main/codex-rs/memories/README.md",
+    "status": "official",
+    "summary": "Codex 开源两阶段记忆流水线：root session 启动后领取 rollout，Phase 1 逐 Run 提取，Phase 2 全局整理；包含 state DB、租约、重试、全局锁、usage-aware selection 和文件化记忆产物。"
+  },
+  {
+    "id": "rev-02",
+    "type": "industry",
+    "title": "OpenAI Codex Memory Consolidation Prompt",
+    "year": 2026,
+    "url": "https://github.com/openai/codex/blob/main/codex-rs/memories/write/templates/memories/consolidation.md",
+    "status": "official",
+    "summary": "Codex 整理阶段的文件结构、安全规则、证据约束、无变化 no-op 和渐进披露设计。"
+  },
+  {
+    "id": "rev-03",
+    "type": "industry",
+    "title": "MemEval Benchmark",
+    "year": 2026,
+    "url": "https://github.com/ProsusAI/MemEval",
+    "status": "third-party-benchmark",
+    "summary": "统一模型、embedding、judge 和 token 统计，对 9 个记忆系统运行 LoCoMo 与 LongMemEval；包含 OpenClaw、Hindsight、Graphiti、Mem0，不包含 Codex。"
+  },
+  {
+    "id": "rev-04",
+    "type": "industry",
+    "title": "OpenClaw Memory Architecture",
+    "year": 2026,
+    "url": "https://github.com/openclaw/openclaw/blob/main/docs/concepts/memory-architecture.md",
+    "status": "official",
+    "summary": "OpenClaw 以 plain files + SQLite index 组织 curated、episodic、prospective、review tiers，并通过 provenance 和后台 Dreaming 控制晋升。"
+  },
+  {
+    "id": "rev-05",
+    "type": "academic",
+    "title": "LongMemEval-V2",
+    "year": 2026,
+    "url": "https://xiaowu0162.github.io/longmemeval-v2/",
+    "status": "dataset-paper",
+    "summary": "面向 web-agent trajectory 的长期记忆评测，覆盖 static/dynamic state、workflow、gotchas 和 premise awareness。"
+  },
+  {
+    "id": "rev-06",
+    "type": "industry",
+    "title": "Codex memory stage-1 context overflow issue",
+    "year": 2026,
+    "url": "https://github.com/openai/codex/issues/38860",
+    "status": "user-reported-issue",
+    "summary": "用户报告大 rollout 的 memory_stage1 因 context overflow 失败，说明整段 transcript 输入会造成覆盖缺口；数字属于单机观测，不能直接推广为总体指标。"
+  },
+  {
+    "id": "rev-07",
+    "type": "industry",
+    "title": "Codex memory stage-1 truncation issue",
+    "year": 2026,
+    "url": "https://github.com/openai/codex/issues/35093",
+    "status": "user-reported-issue",
+    "summary": "用户报告基于固定 bytes/token 的截断仍可能超过实际 context window，重试后耗尽任务且没有候选输出。"
+  },
+  {
+    "id": "rev-08",
+    "type": "industry",
+    "title": "Codex memory missing injection issue",
+    "year": 2026,
+    "url": "https://github.com/openai/codex/issues/29033",
+    "status": "user-reported-issue",
+    "summary": "用户报告 stage1_outputs 已有内容但 Phase 2 不运行或新线程没有注入，说明生成、整理、读取之间需要独立健康检查。"
+  },
+  {
+    "id": "rev-09",
+    "type": "academic",
+    "title": "LongMemEval-V2 public evaluation harness",
+    "year": 2026,
+    "url": "https://github.com/xiaowu0162/LongMemEval-V2",
+    "status": "official-benchmark",
+    "summary": "公开的 Agent trajectory memory benchmark，包含 451 道题、5 类能力、100/500 条 trajectory haystack，并把 Codex 作为 coding-agent memory baseline。"
+  },
+  {
+    "id": "rev-10",
+    "type": "academic",
+    "title": "LongMemEval-V2 paper",
+    "year": 2026,
+    "url": "https://arxiv.org/html/2605.12493",
+    "status": "paper",
+    "summary": "报告 Codex baseline 在 LME-V2 Small/Medium 上达到 69.9%/68.7% accuracy，但 query latency 为 177.2s/185.8s；AgentRunbook-C 通过 workflow、manifest 和 helper 降低延迟并提升准确率。"
+  },
+  {
+    "id": "rev-11",
+    "type": "academic",
+    "title": "AgentRunbook-C V2",
+    "year": 2026,
+    "url": "https://xiaowu0162.github.io/longmemeval-v2/agentrunbook-c-v2/",
+    "status": "official-research-update",
+    "summary": "在 Codex-style file retrieval controller 上加入 retrieval-strategy consolidation 和在线经验记忆；报告 Small/GPT-5.4-mini accuracy 75.61%，高于 vanilla Codex 69.90%。"
+  }
+]

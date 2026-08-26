@@ -39,42 +39,52 @@ model:
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   show_thinking_process: true
   # 运行时可选模型目录；前端会话级切换 model_id，未配置时仅使用上方默认 model
-  default_catalog_id: default
+  # 用户自定义 Provider 平台预设（部署者维护；选预设 → base_url 自动填，用户只填 Key）
+  # 敏感凭证不放预设；归因类 header 可放
+  provider_presets:
+    - id: opencode
+      label: opencode
+      base_url: https://opencode.ai/zen/v1
+  # 平台端点 Key：OpenCode Zen 为公开值 public（非机密，故放 yaml）；机密 Key 走 .env MODEL_API_KEY
+  api_key: public
+      headers:
+        HTTP-Referer: https://opencode.ai/
+        X-Title: opencode
+    - id: deepseek
+      label: deepseek
+      base_url: https://api.deepseek.com/v1
+    - id: qwen
+      label: alibaba
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    - id: minimax
+      label: minimax
+      base_url: https://api.minimax.chat/v1
+
+  default_catalog_id: qwen-plus
   catalog:
-    - id: default
-      label: Qwen Plus（默认）
-      name: qwen-plus
-      limit:
-        context: 129024
-        output: 8192
+    - id: qwen-plus
+      label: Qwen Plus
+      context_window: 129024
     - id: qwen-vl-max
       label: Qwen VL Max（识图）
-      name: qwen-vl-max
     - id: qwen-max
       label: Qwen Max（更强）
-      name: qwen-max
       temperature: 0.7
-      limit:
-        context: 30720
-        output: 8192
+      context_window: 30720
   # --- OpenCode Zen 免费模型示例（取消注释并改 default_catalog_id；.env MODEL_API_KEY=public）---
   # type: opencode
   # name: deepseek-v4-flash-free
   # base_url: https://opencode.ai/zen/v1
-  # default_catalog_id: flash
+  # default_catalog_id: deepseek-v4-flash-free
   # catalog:
-  #   - id: flash
-  #     label: DeepSeek V4 Flash（快速）
-  #     name: deepseek-v4-flash-free
-  #     limit:
-  #       context: 200000
-  #       output: 128000
-  #   - id: nemotron
+  #   - id: deepseek-v4-flash-free
+  #     label: deepseek V4 Flash（快速）
+  #     context_window: 200000
+
+  #   - id: nemotron-3-ultra-free
   #     label: Nemotron 3 Ultra（1M 上下文）
-  #     name: nemotron-3-ultra-free
-  #     limit:
-  #       context: 1000000
-  #       output: 128000
+  #     context_window: 1000000
+
   # 单次 LLM HTTP 读超时（秒）：流式为相邻 chunk 间隔上限；深度研究建议 ≥120
   request_timeout: 120
   max_retries: 2
@@ -107,11 +117,9 @@ summarization:
   # 仅 model_name 单独配置；type / base_url / api_key 与 model 层一致
   model_name: ""
   temperature: 0.0
-  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × catalog limit.context
+  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × effective_limit
   trigger_tokens: 0
   trigger_fraction: 0.75
-  # 可选摘要窗口覆盖值；0 表示使用 model catalog 的 limit.context
-  max_input_tokens: 0
   # model profile 不可用时的消息数量 fallback
   messages_to_keep: 28
 
@@ -128,8 +136,8 @@ agent_runtime:
     loop_window_size: 20
 
 retrieval_limits:
-  max_results_per_call: 20
-  max_results_per_run: 100
+  max_results_per_call: 30
+  max_results_per_run: 500
   max_excerpt_chars: 2000
   max_excerpt_bytes: 8192
   max_locator_bytes: 2048
@@ -151,6 +159,8 @@ stream:
   run_hitl_pending_timeout_seconds: 86400
   run_shutdown_drain_seconds: 10
   run_cancel_grace_seconds: 2
+  run_terminal_persistence_budget_seconds: 5
+  run_terminal_retry_interval_seconds: 5
   run_tool_timeout_seconds: 120
   run_channel_queue_max_batches: 128
   run_channel_queue_max_bytes: 1048576
@@ -184,6 +194,23 @@ qdrant:
   test_case_docs_collection: test_case_docs
   test_case_upload_collection: ""
   case_rag_historical_requirements_enabled: false
+
+# md 文件记忆层（索引 + 五类条目 + 情景日志）；功能启停由每个用户的单一开关控制。
+memory:
+  extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
+  selection_model: ""        # 空 = 默认对话模型（每 Run 注入选条，可用廉价模型）
+  enabled_by_default: false  # fail-closed：评测门禁通过后再默认开启
+  session_idle_minutes: 10   # 会话 idle 判定（终态触发抽取）
+  sweep_interval_minutes: 30 # 未抽取会话补扫间隔
+  max_entries_per_extraction: 3
+  index_max_lines: 200       # 索引预算双保险
+  index_max_bytes: 25600
+  stale_warning_days: 2      # 超龄条目注入时附 stale 警告
+  inject_budget_tokens: 2000
+  max_entry_chars: 4000
+  consolidation_min_interval_hours: 24   # AutoDream 门控：距上次整理最小间隔
+  consolidation_min_new_sessions: 5      # 且期间新抽取会话数达此值才整理
+  max_message_chars: 120000  # 抽取输入上限（会话消息截断）
 
 langfuse:
   tracing_enabled: false

@@ -1,0 +1,10 @@
+[
+  {
+    "source_id": "excluded-01",
+    "reason": "只引用社区帖子或个人 benchmark，无法确认实现和实验协议"
+  },
+  {
+    "source_id": "excluded-02",
+    "reason": "只讲长上下文能力但没有 Agent memory 写入、检索或更新协议"
+  }
+]

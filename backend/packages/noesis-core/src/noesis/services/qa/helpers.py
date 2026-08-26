@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -24,15 +22,24 @@ from noesis.config.mcp_config import (
     get_profile_server_names,
 )
 from noesis.config.code_enum import IntentEnum
-from noesis.domain.chat.delivery.events import RunEvent
-from noesis.domain.chat.delivery.orchestrator import RunOrchestrator
-from noesis.domain.chat.delivery.persist_sink import PersistSink
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.domain.chat.streaming.failure_notice import (
-    append_disconnect_partial_content,
+from noesis.chat.delivery.events import RunEvent
+from noesis.chat.delivery.orchestrator import RunOrchestrator
+from noesis.services.persist_sink import PersistSink
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.failure_notice import (
     append_stream_failure_notice_to_content,
 )
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+from noesis.chat.event_mapping.bridge import (
+    END_SENTINEL,
+    HEARTBEAT_SENTINEL,
+    MemoryStreamBridge,
+    StreamBridgeError,
+    iter_bridge_events,
+)
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper
 from noesis.runtime.deps import langfuse_workflow_context, merge_langfuse_runnable_config
 from noesis.llm.catalog import get_default_model_id, resolve_catalog_entry
 from noesis.services.chat_service import ChatService
@@ -195,13 +202,30 @@ async def _resolve_model_for_query(
     request_model_id: Optional[str],
     db: AsyncSession,
 ) -> str:
-    """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。"""
+    """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。
+
+    用户自定义模型优先于内置目录：命中时把含解密 key 的快照注入 ContextVar，
+    factory/catalog 在本次 run 内据此路由到用户自己的端点。
+    """
     from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
+    from noesis.services.user_llm_service import UserLLMService
 
     set_runtime_model_snapshots([])
+
+    async def _apply_custom(model_id: Optional[str]) -> Optional[str]:
+        if not model_id:
+            return None
+        snapshots = await UserLLMService.resolve_runtime_snapshots(
+            db, user_id=str(user_id), model_id=model_id
+        )
+        if not snapshots:
+            return None
+        set_runtime_model_snapshots(snapshots)
+        return snapshots[0].id
+
     if request_model_id is not None:
         normalized = _normalize_model_id(request_model_id)
-        resolved = resolve_catalog_entry(normalized).id
+        resolved = await _apply_custom(normalized) or resolve_catalog_entry(normalized).id
         await ChatService.merge_session_extra(
             session_id,
             user_id,
@@ -218,12 +242,12 @@ async def _resolve_model_for_query(
     if session and session.extra:
         stored = _normalize_model_id(session.extra.get("model_id"))
         if stored:
-            return resolve_catalog_entry(stored).id
+            return await _apply_custom(stored) or resolve_catalog_entry(stored).id
     return get_default_model_id()
 
 
 def _resolved_model_name(model_id: str) -> str:
-    return resolve_catalog_entry(model_id).model_name
+    return resolve_catalog_entry(model_id).id
 
 def _assistant_content_snapshot(builder: Optional[AssistantMessageBuilder]) -> Dict[str, Any]:
     if builder and not builder.is_empty():
@@ -261,27 +285,22 @@ def _build_assistant_persist_extra(
     bridge: Optional[LangGraphSseBridge] = None,
     error_message: Optional[str] = None,
     model: Optional[str] = None,
+    include_usage: bool = False,
 ) -> Dict[str, Any]:
     extra: Dict[str, Any] = {"qa_type": qa_type}
     if model:
         extra["model"] = model
     if bridge is not None:
-        if bridge.last_finish_usage:
-            extra["usage"] = bridge.last_finish_usage
-            logger.debug(
-                "[DEBUG-TOKEN-USAGE] persist_usage session_id={} assistant_message_id={} "
-                "model={} usage={} finish_reason={}",
-                bridge.session_id,
-                bridge.assistant_message_id,
-                model or "",
-                bridge.last_finish_usage,
-                bridge.last_finish_reason or "",
-            )
         if bridge.last_finish_reason:
             extra["finish_reason"] = bridge.last_finish_reason
         err = error_message or bridge.last_error_message
         if err:
             extra["error_message"] = err[:8000]
+        # 终态写入本条消息的 usage 聚合（主+子 agent 全部模型调用的 token/步数/耗时），
+        # 供历史会话打开时回放统计。checkpoint（streaming 态）不写——
+        # update_assistant_message 对 usage 键做累加合并，中途写会导致重复计数。
+        if include_usage and bridge.message_usage.get("steps"):
+            extra["usage"] = dict(bridge.message_usage)
     elif error_message:
         extra["error_message"] = error_message[:8000]
     return extra
@@ -409,7 +428,7 @@ async def _persist_hitl_pending_assistant(
     )
     hitl = bridge.last_hitl_payload or {}
     if hitl.get("interrupt_id"):
-        from noesis.domain.chat.hitl.pending import PendingHitl, pending_hitl
+        from noesis.chat.hitl.pending import PendingHitl, pending_hitl
         from noesis.services.hitl_timeout import schedule_hitl_timeout
 
         pending = PendingHitl(
@@ -449,7 +468,7 @@ async def _finalize_streaming_assistant(
     status = _assistant_status_for_finish(fin_reason)
     error_detail = bridge.last_error_message if fin_reason == "error" else ""
     content = _assistant_content_for_persist(builder, error_detail=error_detail)
-    extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge, model=model)
+    extra = _build_assistant_persist_extra(qa_type=qa_type, bridge=bridge, model=model, include_usage=True)
     aid = _resolve_assistant_message_id(ctx, builder)
     if not aid and (not builder or builder.is_empty()):
         return
@@ -468,6 +487,7 @@ async def _insert_streaming_assistant_skeleton(
     assistant_message_id: str,
     session_id: str,
     user_id: str,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """流开始前插入 assistant 骨架行（与 SSE assistant_message_id 同 id）。"""
     try:
@@ -477,7 +497,7 @@ async def _insert_streaming_assistant_skeleton(
                 user_id=user_id,
                 role="assistant",
                 content={"version": 1, "parts": []},
-                extra={},
+                extra=extra or {},
                 status="streaming",
                 message_id=assistant_message_id,
                 db=persist_db,
@@ -526,9 +546,6 @@ async def _persist_stream_checkpoint(
 
 _run_orchestrator = RunOrchestrator()
 
-# Shared with QaService._active_streams (same dict object)
-ACTIVE_STREAMS: Dict[str, "_ActiveStreamState"] = {}
-
 
 def _langfuse_stream_context(
     session_id: str,
@@ -556,9 +573,12 @@ def _new_stream_ctx() -> Dict[str, Any]:
         "current_tool_name": None,
         "current_tool_call_id": None,
         "tool_start_times": {},
-        "usage_cumulative": {"input_tokens": 0, "output_tokens": 0},
-        "usage_seen_run_ids": set(),
         "_assistant_db_id": None,
+        # 并行工具分组：按 scope（parent_task_call_id 或 "root"）独立计数 step_id。
+        # on_chat_model_start 标 pending scope，首个 on_tool_start mint 新 step_id。
+        "pending_model_step_scopes": set(),
+        "step_counters": {},
+        "current_step_ids": {},
     }
 
 
@@ -601,6 +621,66 @@ async def _yield_sse_from_agent_bridge(
         yield sse_line
 
 
+async def _yield_run_events_from_agent(
+    agent_generator: AsyncGenerator[Any, None],
+    *,
+    bridge: LangGraphSseBridge,
+    builder: AssistantMessageBuilder,
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+    qa_type: str,
+    langfuse_thread_id: Optional[str] = None,
+    persist_sink: Optional[PersistSink] = None,
+) -> AsyncGenerator[RunEvent, None]:
+    """目标 Agent Run 的唯一 raw → typed path；不经过 EventBus 或 SSE parser。"""
+    sink = persist_sink or PersistSink()
+    ctx["_persist_sink"] = sink
+    mapper = RuntimeEventMapper(bridge)
+    runtime_bridge = MemoryStreamBridge()
+    lf_ctx = _langfuse_stream_context(
+        session_id, qa_type, thread_id=langfuse_thread_id
+    )
+    run_id = f"{session_id}:{bridge.assistant_message_id}"
+    async for raw in iter_bridge_events(
+        runtime_bridge,
+        run_id,
+        agent_generator,
+        keepalive_seconds=0,
+        langfuse_context=lf_ctx,
+    ):
+        if raw is HEARTBEAT_SENTINEL:
+            continue
+        if raw is END_SENTINEL:
+            break
+        if isinstance(raw, StreamBridgeError):
+            raise raw.exc
+        events = mapper.map_item(raw, builder, ctx)
+        for event in events:
+            sink.on_event(event)
+        # 任务模式不经过 SseDelivery 的 on_events 回调；在同一处消费
+        # model_end 产生的 context tick，确保实时事件与 session.extra.context
+        # 使用同一条持久化路径。函数内部仅在 tick 存在时写库，不会按 token 写库。
+        await _persist_stream_checkpoint(bridge, session_id, user_id)
+        for event in events:
+            yield event
+
+
+async def _finalize_run_events(
+    bridge: LangGraphSseBridge,
+    ctx: Dict[str, Any],
+    session_id: str,
+    user_id: str,
+) -> AsyncGenerator[RunEvent, None]:
+    mapper = RuntimeEventMapper(bridge)
+    finish_reason = "stopped" if ctx.get("user_stopped") else None
+    sink = ctx.get("_persist_sink")
+    for event in mapper.finalize(finish_reason=finish_reason):
+        if isinstance(sink, PersistSink):
+            sink.on_event(event)
+        yield event
+
+
 async def _finalize_sse_bridge_stream(
     bridge: LangGraphSseBridge,
     builder: AssistantMessageBuilder,
@@ -612,7 +692,7 @@ async def _finalize_sse_bridge_stream(
     lines = _run_orchestrator.finalize_sse(bridge, finish_reason=finish_reason)
     sink = ctx.get("_persist_sink")
     if isinstance(sink, PersistSink):
-        from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
+        from noesis.chat.delivery.sse import parse_sse_line_to_event
 
         for line in lines:
             for ev in parse_sse_line_to_event(line):
@@ -622,34 +702,6 @@ async def _finalize_sse_bridge_stream(
         await _persist_stream_checkpoint(bridge, session_id, user_id)
 
 
-@dataclass
-class _ActiveStreamState:
-    builder: AssistantMessageBuilder
-    ctx: Dict[str, Any]
-    qa_type: str
-    model_name: str = ""
-    user_stopped: bool = False
-
-
-def _register_active_stream(session_id: str, state: _ActiveStreamState) -> None:
-    from noesis.domain.chat.delivery.orchestrator import run_lifecycle
-
-    ACTIVE_STREAMS[session_id] = state
-    run_lifecycle.register(
-        session_id,
-        {
-            "ctx": state.ctx,
-            "builder": state.builder,
-            "qa_type": state.qa_type,
-        },
-    )
-
-
-def _unregister_active_stream(session_id: str) -> None:
-    from noesis.domain.chat.delivery.orchestrator import run_lifecycle
-
-    ACTIVE_STREAMS.pop(session_id, None)
-    run_lifecycle.pop(session_id)
 
 
 def _flush_ctx_text_buffer(
@@ -665,96 +717,40 @@ def _flush_ctx_text_buffer(
     ctx["text_buffer_parent_task_call_id"] = None
 
 
-async def _persist_disconnect_partial(
-    *,
-    builder: Optional[AssistantMessageBuilder],
-    ctx: Dict[str, Any],
-    session_id: str,
-    user_id: str,
-    qa_type: str,
-    assistant_message_id: Optional[str],
-) -> None:
-    """连接意外断开：partial 落库，无用户中断文案。"""
-    if _stream_terminal_persist_done(ctx):
+async def seed_session_stats_from_history(session_id: str, user_id: str, db: AsyncSession) -> None:
+    """进程内首次遇到该会话时，从 DB 历史 assistant 消息 extra.usage 汇总预填 stats registry。
+
+    已累计（本进程一直在跑该会话）则忽略；查询失败静默跳过——seed 只影响
+    统计条起点，不值得为它让问答失败。
+    """
+    if not session_id:
         return
-    _flush_ctx_text_buffer(ctx, builder)
-    if builder and not builder.is_empty():
-        content = append_disconnect_partial_content(builder.to_dict())
-        try:
-            await _persist_assistant(
-                content,
-                session_id,
-                user_id,
-                status="partial",
-                extra={"qa_type": qa_type},
-                assistant_message_id=assistant_message_id,
-            )
-        except Exception:
-            logger.exception(
-                f"连接中断 assistant 消息落库失败: session_id={session_id} user_id={user_id}"
-            )
-    elif assistant_message_id:
-        try:
-            await _persist_assistant(
-                {"version": 1, "parts": []},
-                session_id,
-                user_id,
-                status="partial",
-                extra={"qa_type": qa_type},
-                assistant_message_id=assistant_message_id,
-            )
-        except Exception:
-            logger.exception(
-                f"连接中断 assistant 空内容落库失败: session_id={session_id} user_id={user_id}"
-            )
-    _mark_stream_persist_finalized(ctx)
-
-
-async def _handle_stream_client_disconnect(
-    *,
-    session_id: str,
-    qa_type: str,
-    user_id: str,
-    ctx: Dict[str, Any],
-    builder: Optional[AssistantMessageBuilder],
-    log_label: str,
-) -> None:
-    """客户端断开连接：将已生成内容 partial 落库（shield 避免 CancelledError 打断 commit）。"""
-    from noesis.domain.chat.delivery.orchestrator import CancelReason, run_lifecycle
-
-    stream_ctx = ctx or {}
-    if _stream_terminal_persist_done(stream_ctx):
+    # 本进程已在累计则直接跳过，避免每个 run 都全量拉取该会话消息做汇总。
+    if SessionStatsRegistry.peek(session_id) is not None:
         return
-    run_lifecycle.notify_cancel(session_id, CancelReason.DISCONNECT)
-    stream_state = ACTIVE_STREAMS.get(session_id)
-    persist_b = stream_state.builder if stream_state else builder
-    aid = _resolve_assistant_message_id(stream_ctx, persist_b)
     try:
-        await asyncio.shield(
-            _persist_disconnect_partial(
-                builder=persist_b,
-                ctx=stream_ctx,
-                session_id=session_id,
-                user_id=user_id,
-                qa_type=qa_type,
-                assistant_message_id=aid,
+        from sqlalchemy import select
+        from noesis.storage.postgres.models.chat import TChatMessage
+
+        result = await db.execute(
+            select(TChatMessage.extra).where(
+                TChatMessage.session_id == session_id,
+                TChatMessage.user_id == user_id,
+                TChatMessage.role == "assistant",
+                TChatMessage.deleted_at.is_(None),
             )
         )
-    except asyncio.CancelledError:
-        if _stream_terminal_persist_done(stream_ctx):
-            raise
-        logger.warning(
-            f"{log_label} 断开落库被取消，尝试 detached 落库 session_id={session_id} "
-            f"assistant_db_id={aid}"
-        )
-        asyncio.create_task(
-            _persist_disconnect_partial(
-                builder=persist_b,
-                ctx=stream_ctx,
-                session_id=session_id,
-                user_id=user_id,
-                qa_type=qa_type,
-                assistant_message_id=aid,
-            )
-        )
-        raise
+        totals: Dict[str, float] = {}
+        for (extra,) in result.all():
+            usage = extra.get("usage") if isinstance(extra, dict) else None
+            if not isinstance(usage, dict):
+                continue
+            for key in USAGE_FIELDS:
+                if key == "turns":
+                    continue
+                totals[key] = totals.get(key, 0.0) + float(usage.get(key) or 0)
+            totals["turns"] = totals.get("turns", 0.0) + 1.0
+        if totals:
+            SessionStatsRegistry.seed(session_id, totals)
+    except Exception:
+        logger.debug("seed_session_stats_from_history failed", exc_info=True)

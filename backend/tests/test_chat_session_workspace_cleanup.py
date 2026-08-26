@@ -36,6 +36,11 @@ async def test_delete_session_removes_workspace(tmp_path: Path) -> None:
     with (
         patch.object(udp, "_USERS_ROOT", users_root),
         patch("noesis.services.chat_service.cancel_session_agent_runs", new_callable=AsyncMock),
+        # 与 sandbox_cleanup 测试对齐：单测不得向共享 sandbox runner 发真实 DELETE
+        patch(
+            "noesis.agents.backends.sandbox_lifecycle.destroy_session_sandbox",
+            new_callable=AsyncMock,
+        ),
     ):
         paths.ensure_workspace_dir(user_id, session_id)
         session_dir = users_root / user_id / "sessions" / session_id

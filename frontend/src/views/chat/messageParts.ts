@@ -35,6 +35,7 @@ export interface ToolUiPart {
   name: string
   input: Record<string, unknown>
   output: string
+  child_session_id?: string
   status: ToolRunStatus
   state: ToolLifecycleState
   error?: string | null
@@ -46,6 +47,8 @@ export interface ToolUiPart {
   truncated?: boolean
   /** 归属某次 task 委派；有值时仅在 SubagentCollapse 内展示 */
   parent_task_call_id?: string
+  /** 同一 model step 内并行调用的工具共享此 id，用于前端并行分组展示 */
+  step_id?: string
   /** HITL 审批/澄清状态（可选扩展） */
   hitl?: {
     kind?: string
@@ -91,6 +94,13 @@ export interface MessageContentV1 {
   parts: UiPart[]
 }
 
+/** 用户输入过长时默认收起，避免一条消息撑满整个对话页面。 */
+export const USER_MESSAGE_COLLAPSE_THRESHOLD = 800
+
+export function shouldCollapseUserMessage(content: string): boolean {
+  return content.length > USER_MESSAGE_COLLAPSE_THRESHOLD
+}
+
 export function genPartId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 }
@@ -101,6 +111,7 @@ export function emptyMessageContent(): MessageContentV1 {
 
 const REDACTED_OPEN = '<think>'
 const REDACTED_CLOSE = '</think>'
+export const COMPACTION_BOUNDARY = '—— 以上对话已压缩摘要 ——'
 
 function coerceToolStatus(p: Record<string, unknown>): ToolRunStatus {
   if (p.status === 'error' || p.error != null) {
@@ -234,20 +245,77 @@ function expandRedactedThinkingInParts(parts: UiPart[]): UiPart[] {
   return out
 }
 
-/** 将流式思考段标为已完成（redacted 闭合或 SSE reasoning-end） */
-export function completeLastReasoningPart(parts: UiPart[]): UiPart[] {
-  const next = parts.map((q) => ({ ...q })) as UiPart[]
-  for (let i = next.length - 1; i >= 0; i--) {
-    const cur = next[i]
-    if (cur.type === 'reasoning') {
-      const r = cur as ReasoningUiPart
-      if (r.status !== 'completed') {
-        next[i] = { ...r, status: 'completed' }
+function splitCompactionBoundaries(parts: UiPart[]): UiPart[] {
+  const out: UiPart[] = []
+  for (const part of parts) {
+    if (part.type !== 'text' || !part.content.includes(COMPACTION_BOUNDARY)) {
+      out.push(part)
+      continue
+    }
+    const segments = part.content.split(COMPACTION_BOUNDARY)
+    segments.forEach((segment, index) => {
+      if (segment) {
+        out.push({
+          ...part,
+          id: index === 0 ? part.id : genPartId('text'),
+          content: segment,
+        })
       }
-      return next
+      if (index < segments.length - 1) {
+        out.push({
+          id: genPartId('compaction-boundary'),
+          type: 'text',
+          content: COMPACTION_BOUNDARY,
+          status: 'completed',
+        })
+      }
+    })
+  }
+  return out
+}
+
+/**
+ * 将指定的流式思考段标为已完成。
+ *
+ * reasoning-end 会携带 part_id；只有旧 SSE 没有 part_id 时才按 parent
+ * 回退到最近一段，不能再跨主 Agent / subagent 全局取最后一段。
+ */
+export function completeReasoningPart(
+  parts: UiPart[],
+  part_id?: string,
+  parent_task_call_id?: string,
+): UiPart[] {
+  const next = parts.map((q) => ({ ...q })) as UiPart[]
+  const normalizedPartId = part_id?.trim() || undefined
+  const normalizedParentId = parent_task_call_id?.trim() || undefined
+  let targetIndex = -1
+
+  if (normalizedPartId) {
+    targetIndex = next.findIndex((part) => part.type === 'reasoning' && part.id === normalizedPartId)
+  }
+  if (targetIndex === -1) {
+    for (let i = next.length - 1; i >= 0; i--) {
+      const cur = next[i]
+      if (cur.type === 'reasoning' && part_parent_task_call_id(cur) === normalizedParentId) {
+        targetIndex = i
+        break
+      }
     }
   }
+  if (targetIndex === -1) {
+    return next
+  }
+
+  const cur = next[targetIndex]
+  if (cur.type === 'reasoning' && cur.status !== 'completed') {
+    next[targetIndex] = { ...cur, status: 'completed' }
+  }
   return next
+}
+
+/** 将流式思考段标为已完成（兼容没有 part_id 的旧调用方）。 */
+export function completeLastReasoningPart(parts: UiPart[], parent_task_call_id?: string): UiPart[] {
+  return completeReasoningPart(parts, undefined, parent_task_call_id)
 }
 
 /** API 落库可能把 list 等放在 input/arguments，统一包成 Record 便于 UI 展示 */
@@ -276,158 +344,215 @@ function normalizeToolPartInput(inputRaw: unknown): Record<string, unknown> {
   return { _tw_value: inputRaw }
 }
 
-export function normalizeApiContent(raw: unknown): MessageContentV1 {
-  let obj: any = raw
-  if (typeof raw === 'string') {
-    try {
-      obj = JSON.parse(raw)
-    } catch {
-      if (raw.trim()) {
-        const parts = expandRedactedThinkingInParts([
-          { id: genPartId('text'), type: 'text', content: raw, status: 'completed' },
-        ])
-        return { version: 1, parts }
-      }
-      return emptyMessageContent()
+function parentTaskCallIdFromRecord(record: Record<string, unknown>): string | undefined {
+  const value = record.parent_task_call_id
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function normalizeRetrievalPart(id: string, record: Record<string, unknown>): RetrievalUiPart {
+  const results = Array.isArray(record.results)
+    ? record.results.flatMap((raw): RetrievalResultUi[] => {
+        if (!raw || typeof raw !== 'object') {
+          return []
+        }
+        const item = raw as Record<string, unknown>
+        if (typeof item.evidence_id !== 'string' || typeof item.excerpt !== 'string') {
+          return []
+        }
+        return [{
+          evidence_id: item.evidence_id,
+          source_type: item.source_type === 'web' ? 'web' : 'knowledge_base',
+          document_id: String(item.document_id ?? ''),
+          document_version_id: String(item.document_version_id ?? ''),
+          segment_id: String(item.segment_id ?? ''),
+          collection_name: typeof item.collection_name === 'string' ? item.collection_name : undefined,
+          url: typeof item.url === 'string' ? item.url : undefined,
+          title: String(item.title ?? ''),
+          excerpt: item.excerpt,
+          locator: item.locator && typeof item.locator === 'object'
+            ? item.locator as Record<string, unknown>
+            : null,
+          score: item.score == null ? null : Number(item.score),
+        }]
+      })
+    : []
+  return {
+    id,
+    type: 'retrieval',
+    tool_call_id: String(record.tool_call_id ?? ''),
+    query: String(record.query ?? ''),
+    results,
+    truncated: Boolean(record.truncated),
+  }
+}
+
+function normalizeToolHitl(raw: unknown): ToolUiPart['hitl'] {
+  if (!raw || typeof raw !== 'object') {
+    return undefined
+  }
+  const hitl = raw as Record<string, unknown>
+  return {
+    kind: typeof hitl.kind === 'string' ? hitl.kind : undefined,
+    status: hitl.status,
+    interrupt_id: typeof hitl.interrupt_id === 'string' ? hitl.interrupt_id : undefined,
+    decision: typeof hitl.decision === 'string' ? hitl.decision : undefined,
+  }
+}
+
+function normalizeToolPart(
+  id: string,
+  record: Record<string, unknown>,
+): ToolUiPart {
+  const parent_task_call_id = parentTaskCallIdFromRecord(record)
+  const step_id = typeof record.step_id === 'string' && record.step_id ? record.step_id : undefined
+  const hitl = normalizeToolHitl(record.hitl)
+  return {
+    id,
+    type: 'tool',
+    tool_call_id: typeof record.tool_call_id === 'string' ? record.tool_call_id : undefined,
+    name: String(record.name ?? ''),
+    input: normalizeToolPartInput(record.input),
+    output: typeof record.output === 'string' ? record.output : '',
+    status: coerceToolStatus(record),
+    state: parseToolState(record),
+    error: record.error != null ? String(record.error) : null,
+    errorCategory: record.errorCategory != null ? String(record.errorCategory) : null,
+    duration_ms: record.duration_ms != null ? Number(record.duration_ms) : undefined,
+    outcome: record.outcome != null ? String(record.outcome) : null,
+    exit_code: record.exit_code != null ? Number(record.exit_code) : undefined,
+    timed_out: record.timed_out != null ? Boolean(record.timed_out) : undefined,
+    truncated: record.truncated != null ? Boolean(record.truncated) : undefined,
+    ...(parent_task_call_id ? { parent_task_call_id } : {}),
+    ...(step_id ? { step_id } : {}),
+    ...(hitl ? { hitl } : {}),
+  }
+}
+
+function mergeToolPart(parts: UiPart[], toolPart: ToolUiPart): void {
+  const toolCallId = toolPart.tool_call_id
+  let existingIndex = toolCallId
+    ? parts.findIndex((part) => part.type === 'tool' && part.tool_call_id === toolCallId)
+    : -1
+  if (existingIndex === -1 && !toolPart.hitl) {
+    const hitlCandidates = parts
+      .map((part, index) => ({ part, index }))
+      .filter(({ part }) => part.type === 'tool'
+        && !isTerminalToolState(part.state)
+        && Boolean(part.hitl)
+        && part.name === toolPart.name
+        && JSON.stringify(part.input) === JSON.stringify(toolPart.input))
+    if (hitlCandidates.length === 1) {
+      existingIndex = hitlCandidates[0].index
     }
   }
-  if (obj == null || typeof obj !== 'object') {
-    return emptyMessageContent()
+  if (existingIndex === -1) {
+    parts.push(toolPart)
+    return
   }
+  const existing = parts[existingIndex] as ToolUiPart
+  parts[existingIndex] = {
+    ...existing,
+    ...toolPart,
+    id: existing.id,
+    tool_call_id: existing.tool_call_id || toolPart.tool_call_id,
+    name: toolPart.name || existing.name,
+    input: Object.keys(toolPart.input).length > 0 ? toolPart.input : existing.input,
+    output: toolPart.output || existing.output,
+    step_id: toolPart.step_id ?? existing.step_id,
+    hitl: { ...(existing.hitl || {}), ...(toolPart.hitl || {}) },
+  }
+}
 
-  const partsIn = obj.parts
-  if (!Array.isArray(partsIn)) {
+function reconcileRetrievalToolStates(parts: UiPart[]): UiPart[] {
+  const resultCounts = new Map<string, number>()
+  for (const part of parts) {
+    if (part.type === 'retrieval' && part.tool_call_id && part.results.length > 0) {
+      resultCounts.set(part.tool_call_id, part.results.length)
+    }
+  }
+  if (resultCounts.size === 0) {
+    return parts
+  }
+  return parts.map((part) => {
+    if (part.type !== 'tool' || !part.tool_call_id || !resultCounts.has(part.tool_call_id)) {
+      return part
+    }
+    if (part.status === 'success' && part.state === 'succeeded') {
+      return part
+    }
+    return {
+      ...part,
+      output: `检索到 ${resultCounts.get(part.tool_call_id)} 条来源`,
+      status: 'success',
+      state: 'succeeded',
+      error: null,
+      errorCategory: null,
+      outcome: 'ok',
+    }
+  }) as UiPart[]
+}
+
+function normalizeApiPart(rawPart: unknown): UiPart | null {
+  if (!rawPart || typeof rawPart !== 'object') {
+    return null
+  }
+  const record = rawPart as Record<string, unknown>
+  const type = record.type
+  const id = typeof record.id === 'string' && record.id ? record.id : genPartId(String(type || 'p'))
+  const parent_task_call_id = parentTaskCallIdFromRecord(record)
+  if (type === 'text' || type === 'reasoning') {
+    return {
+      id,
+      type,
+      content: String(record.content ?? ''),
+      status: String(record.status || 'completed'),
+      ...(parent_task_call_id ? { parent_task_call_id } : {}),
+    }
+  }
+  if (type === 'retrieval') {
+    return normalizeRetrievalPart(id, record)
+  }
+  if (type === 'tool') {
+    return normalizeToolPart(id, record)
+  }
+  return null
+}
+
+export function normalizeApiContent(raw: unknown): MessageContentV1 {
+  let value: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw) as unknown
+    } catch {
+      if (!raw.trim()) {
+        return emptyMessageContent()
+      }
+      const parts = expandRedactedThinkingInParts([
+        { id: genPartId('text'), type: 'text', content: raw, status: 'completed' },
+      ])
+      return { version: 1, parts: reconcileRetrievalToolStates(splitCompactionBoundaries(parts)) }
+    }
+  }
+  if (!value || typeof value !== 'object' || !Array.isArray((value as Record<string, unknown>).parts)) {
     return emptyMessageContent()
   }
 
   const parts: UiPart[] = []
-  for (const p of partsIn) {
-    if (!p || typeof p !== 'object') {
+  for (const rawPart of (value as Record<string, unknown>).parts as unknown[]) {
+    const part = normalizeApiPart(rawPart)
+    if (!part) {
       continue
     }
-    const rec = p as Record<string, unknown>
-    const id = typeof rec.id === 'string' && rec.id ? rec.id : genPartId(String(rec.type || 'p'))
-    const parent_task_call_id = (() => {
-      const raw = rec.parent_task_call_id
-      return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
-    })()
-    if (rec.type === 'text') {
-      parts.push({
-        id,
-        type: 'text',
-        content: String(rec.content ?? ''),
-        status: String(rec.status || 'completed'),
-        ...(parent_task_call_id ? { parent_task_call_id } : {}),
-      })
-    } else if (rec.type === 'reasoning') {
-      parts.push({
-        id,
-        type: 'reasoning',
-        content: String(rec.content ?? ''),
-        status: String(rec.status || 'completed'),
-        ...(parent_task_call_id ? { parent_task_call_id } : {}),
-      })
-    } else if (rec.type === 'retrieval') {
-      const results = Array.isArray(rec.results)
-        ? rec.results.flatMap((raw): RetrievalResultUi[] => {
-            if (!raw || typeof raw !== 'object') {
-              return []
-            }
-            const item = raw as Record<string, unknown>
-            if (typeof item.evidence_id !== 'string' || typeof item.excerpt !== 'string') {
-              return []
-            }
-            return [{
-              evidence_id: item.evidence_id,
-              source_type: item.source_type === 'web' ? 'web' : 'knowledge_base',
-              document_id: String(item.document_id ?? ''),
-              document_version_id: String(item.document_version_id ?? ''),
-              segment_id: String(item.segment_id ?? ''),
-              collection_name: typeof item.collection_name === 'string' ? item.collection_name : undefined,
-              url: typeof item.url === 'string' ? item.url : undefined,
-              title: String(item.title ?? ''),
-              excerpt: item.excerpt,
-              locator: item.locator && typeof item.locator === 'object' ? item.locator as Record<string, unknown> : null,
-              score: item.score == null ? null : Number(item.score),
-            }]
-          })
-        : []
-      parts.push({
-        id,
-        type: 'retrieval',
-        tool_call_id: String(rec.tool_call_id ?? ''),
-        query: String(rec.query ?? ''),
-        results,
-        truncated: Boolean(rec.truncated),
-      })
-    } else if (rec.type === 'tool') {
-      const input = normalizeToolPartInput(rec.input)
-      const hitlRaw = rec.hitl
-      const hitl = hitlRaw && typeof hitlRaw === 'object'
-        ? {
-            kind: typeof (hitlRaw as any).kind === 'string' ? (hitlRaw as any).kind : undefined,
-            status: (hitlRaw as any).status,
-            interrupt_id: typeof (hitlRaw as any).interrupt_id === 'string'
-              ? (hitlRaw as any).interrupt_id
-              : undefined,
-            decision: typeof (hitlRaw as any).decision === 'string'
-              ? (hitlRaw as any).decision
-              : undefined,
-          }
-        : undefined
-      const toolPart: ToolUiPart = {
-        id,
-        type: 'tool',
-        tool_call_id: typeof rec.tool_call_id === 'string' ? rec.tool_call_id : undefined,
-        name: String(rec.name ?? ''),
-        input,
-        output: typeof rec.output === 'string' ? rec.output : '',
-        status: coerceToolStatus(rec),
-        state: parseToolState(rec),
-        error: rec.error != null ? String(rec.error) : null,
-        errorCategory: rec.errorCategory != null ? String(rec.errorCategory) : null,
-        duration_ms: rec.duration_ms != null ? Number(rec.duration_ms) : undefined,
-        outcome: rec.outcome != null ? String(rec.outcome) : null,
-        exit_code: rec.exit_code != null ? Number(rec.exit_code) : undefined,
-        timed_out: rec.timed_out != null ? Boolean(rec.timed_out) : undefined,
-        truncated: rec.truncated != null ? Boolean(rec.truncated) : undefined,
-        ...(parent_task_call_id ? { parent_task_call_id } : {}),
-        ...(hitl ? { hitl } : {}),
-      }
-      const toolCallId = toolPart.tool_call_id
-      let existingIndex = toolCallId
-        ? parts.findIndex((part) => part.type === 'tool' && part.tool_call_id === toolCallId)
-        : -1
-      if (existingIndex === -1 && !toolPart.hitl) {
-        const hitlCandidates = parts
-          .map((part, index) => ({ part, index }))
-          .filter(({ part }) => part.type === 'tool'
-            && !isTerminalToolState(part.state)
-            && Boolean(part.hitl)
-            && part.name === toolPart.name
-            && JSON.stringify(part.input) === JSON.stringify(toolPart.input))
-        if (hitlCandidates.length === 1) {
-          existingIndex = hitlCandidates[0].index
-        }
-      }
-      if (existingIndex === -1) {
-        parts.push(toolPart)
-      } else {
-        const existing = parts[existingIndex] as ToolUiPart
-        parts[existingIndex] = {
-          ...existing,
-          ...toolPart,
-          id: existing.id,
-          tool_call_id: existing.tool_call_id || toolPart.tool_call_id,
-          name: toolPart.name || existing.name,
-          input: Object.keys(toolPart.input).length > 0 ? toolPart.input : existing.input,
-          output: toolPart.output || existing.output,
-          hitl: { ...(existing.hitl || {}), ...(toolPart.hitl || {}) },
-        }
-      }
+    if (part.type === 'tool') {
+      mergeToolPart(parts, part)
+    } else {
+      parts.push(part)
     }
   }
-  return { version: 1, parts: expandRedactedThinkingInParts(parts) }
+  return {
+    version: 1,
+    parts: reconcileRetrievalToolStates(splitCompactionBoundaries(expandRedactedThinkingInParts(parts))),
+  }
 }
 
 export function syncLegacyFieldsFromParts(parts: UiPart[]): { content: string, reasoning?: string } {
@@ -451,11 +576,11 @@ export function appendRetrievalPart(parts: UiPart[], raw: Record<string, unknown
   }
   const index = parts.findIndex((part) => part.type === 'retrieval' && part.id === normalized.id)
   if (index === -1) {
-    return [...parts, normalized]
+    return reconcileRetrievalToolStates([...parts, normalized])
   }
   const next = [...parts]
   next[index] = normalized
-  return next
+  return reconcileRetrievalToolStates(next)
 }
 
 /**
@@ -592,21 +717,6 @@ function hasToolErrorPart(parts: UiPart[]): boolean {
   return parts.some((p) => p.type === 'tool' && p.status === 'error')
 }
 
-export interface TokenUsageSummary {
-  input_tokens: number
-  output_tokens: number
-  total_tokens?: number
-  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
-  input_token_details?: { cache_read?: number, cache_write?: number }
-  output_token_details?: { reasoning?: number }
-  /** 按 caller/model 归因摘要（调试视图按需展示） */
-  attribution?: {
-    cumulative?: Record<string, number>
-    by_caller?: Record<string, Record<string, number>>
-    by_model?: Record<string, Record<string, number>>
-  }
-}
-
 export interface ContextWindowSnapshot {
   current_tokens: number
   max_tokens: number
@@ -622,17 +732,24 @@ export function hasValidContextWindow(context: unknown): context is ContextWindo
   const max = Number(c.max_tokens ?? 0)
   const current = Number(c.current_tokens ?? 0)
   const pct = Number(c.used_percentage ?? Number.NaN)
-  return max > 0 && current >= 0 && !Number.isNaN(pct)
+  return max > 0 && current >= 0 && current <= max && !Number.isNaN(pct)
 }
 
-export function hasValidUsage(usage: unknown): usage is TokenUsageSummary {
-  if (!usage || typeof usage !== 'object') {
-    return false
+/** Keep a valid live snapshot when it races an older persisted snapshot. */
+export function resolveLoadedContextSnapshot(
+  raw: unknown,
+  current: ContextWindowSnapshot | null,
+  currentSessionId: string,
+  sessionId: string,
+  currentIsLive = false,
+): ContextWindowSnapshot | null {
+  if (currentIsLive && currentSessionId === sessionId && current) {
+    return current
   }
-  const u = usage as Record<string, unknown>
-  const input = Number(u.input_tokens ?? 0)
-  const output = Number(u.output_tokens ?? 0)
-  return input > 0 || output > 0
+  if (hasValidContextWindow(raw)) {
+    return raw
+  }
+  return currentSessionId === sessionId ? current : null
 }
 
 export function formatTokenCount(n: number): string {
@@ -648,17 +765,49 @@ export function formatTokenCount(n: number): string {
   return String(n)
 }
 
-export function formatDurationMs(ms: number): string {
-  if (ms < 1000) {
-    return `${ms}ms`
+export function hasValidUsage(usage: unknown): usage is {
+  input_tokens: number
+  output_tokens: number
+  total_tokens?: number
+} {
+  if (!usage || typeof usage !== 'object') {
+    return false
   }
-  const sec = ms / 1000
-  return sec >= 10 ? `${Math.round(sec)}s` : `${sec.toFixed(1)}s`
+  const value = usage as Record<string, unknown>
+  const input = Number(value.input_tokens ?? Number.NaN)
+  const output = Number(value.output_tokens ?? Number.NaN)
+  return Number.isFinite(input) && input >= 0
+    && Number.isFinite(output) && output >= 0
+    && (input > 0 || output > 0)
 }
 
-export function formatUsageSummary(usage: TokenUsageSummary): string {
-  const total = usage.total_tokens ?? usage.input_tokens + usage.output_tokens
-  return `本轮用量 ↑${formatTokenCount(usage.input_tokens)} ↓${formatTokenCount(usage.output_tokens)} · 共 ${formatTokenCount(total)}`
+export function formatUsageSummary(usage: unknown): string {
+  const value = usage && typeof usage === 'object'
+    ? usage as Record<string, unknown>
+    : {}
+  const input = Math.max(0, Number(value.input_tokens ?? 0))
+  const output = Math.max(0, Number(value.output_tokens ?? 0))
+  const total = Math.max(0, Number(value.total_tokens ?? input + output))
+  return `本轮用量 ↑${formatTokenCount(input)} ↓${formatTokenCount(output)} · 共 ${formatTokenCount(total)}`
+}
+
+export function formatDurationMs(ms: number): string {
+  const value = Math.max(0, Math.round(Number(ms) || 0))
+  if (value < 1000) {
+    return '<1s'
+  }
+  const totalSeconds = Math.round(value / 1000)
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`
+  }
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) {
+    return seconds ? `${minutes}m ${String(seconds).padStart(2, '0')}s` : `${minutes}m`
+  }
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes ? `${hours}h ${String(restMinutes).padStart(2, '0')}m` : `${hours}h`
 }
 
 const MODEL_API_TIMEOUT_RE = /readtimeout|writetimeout|connecttimeout|pooltimeout|streamchunktimeouterror|stream_chunk_timeout|apitimeout|request timed out|timed out waiting/i
@@ -722,6 +871,14 @@ export function partsContainStreamFailureNotice(parts: UiPart[]): boolean {
   })
 }
 
+function partsContainFailureDetail(parts: UiPart[], detail?: string): boolean {
+  const needle = detail?.trim()
+  if (!needle) {
+    return false
+  }
+  return parts.some((p) => p.type === 'text' && String(p.content ?? '').includes(needle))
+}
+
 /** 将 SSE/流式错误转为气泡内展示文案；null 表示不追加说明 */
 export function getStreamFailureNoticeText(
   detail: string | undefined,
@@ -780,6 +937,11 @@ export function appendStreamFailureNotice(parts: UiPart[], detail?: string): UiP
   }
   const completed = finalizePartsOnStreamError(parts)
 
+  // 模型 fallback 可能已经把用户可见错误写入正文；此时只收口，不再重复追加同一详情。
+  if (partsContainFailureDetail(completed, detail)) {
+    return completed
+  }
+
   const hasProse = completed.some((p) => {
     if (p.type === 'text' || p.type === 'reasoning') {
       return String((p as TextUiPart | ReasoningUiPart).content ?? '').trim().length > 0
@@ -834,6 +996,40 @@ export function appendTextDelta(
   delta: string,
   parent_task_call_id?: string,
 ): UiPart[] {
+  if (delta.includes(COMPACTION_BOUNDARY)) {
+    const segments = delta.split(COMPACTION_BOUNDARY)
+    let out = parts
+    segments.forEach((segment, index) => {
+      if (segment) {
+        if (index === 0) {
+          out = appendTextDelta(out, segment, parent_task_call_id)
+        } else {
+          out = [
+            ...out,
+            {
+              id: genPartId('text'),
+              type: 'text',
+              content: segment,
+              status: 'streaming',
+              ...(parent_task_call_id ? { parent_task_call_id } : {}),
+            },
+          ]
+        }
+      }
+      if (index < segments.length - 1) {
+        out = [
+          ...out,
+          {
+            id: genPartId('compaction-boundary'),
+            type: 'text',
+            content: COMPACTION_BOUNDARY,
+            status: 'completed',
+          },
+        ]
+      }
+    })
+    return out
+  }
   const parentId = parent_task_call_id?.trim() || undefined
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   // 跳过其它 parent 的交错 part，避免子 Agent 正文被拆碎
@@ -925,7 +1121,7 @@ export function appendTextDeltaWithRedactedThinking(
       if (before) {
         out = appendReasoningDelta(out, before, parent_task_call_id)
       }
-      out = completeLastReasoningPart(out)
+      out = completeReasoningPart(out, undefined, parent_task_call_id)
       s = s.slice(idx + REDACTED_CLOSE.length)
       ctx.mode = 'text'
       continue
@@ -998,6 +1194,7 @@ export function upsertToolInputPart(
   name: string,
   input: Record<string, unknown>,
   parent_task_call_id?: string,
+  step_id?: string,
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
   const idx = next.findIndex((p) => p.type === 'tool' && p.tool_call_id === tool_call_id)
@@ -1009,6 +1206,7 @@ export function upsertToolInputPart(
       name: name || tp.name,
       input,
       ...(parentId ? { parent_task_call_id: parentId } : {}),
+      ...(step_id ? { step_id } : {}),
     }
     return next
   }
@@ -1022,6 +1220,7 @@ export function upsertToolInputPart(
     status: 'running',
     state: 'running',
     ...(parentId ? { parent_task_call_id: parentId } : {}),
+    ...(step_id ? { step_id } : {}),
   })
   return next
 }
@@ -1040,6 +1239,7 @@ export function applyToolOutput(
     exit_code?: number
     timed_out?: boolean
     truncated?: boolean
+    step_id?: string
   },
 ): UiPart[] {
   const next = parts.map((p) => ({ ...p })) as UiPart[]
@@ -1063,6 +1263,7 @@ export function applyToolOutput(
       exit_code: payload.exit_code,
       timed_out: payload.timed_out,
       truncated: payload.truncated,
+      ...(payload.step_id ? { step_id: payload.step_id } : {}),
     })
     return next
   }
@@ -1082,6 +1283,7 @@ export function applyToolOutput(
     exit_code: payload.exit_code ?? tp.exit_code,
     timed_out: payload.timed_out ?? tp.timed_out,
     truncated: payload.truncated ?? tp.truncated,
+    step_id: payload.step_id ?? tp.step_id,
   }
   return next
 }

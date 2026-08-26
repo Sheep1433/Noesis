@@ -3,9 +3,7 @@
 ## Purpose
 
 本能力规定 Noesis **用户设置控制面**：设置壳与可搜索 section 注册表、一致交互与危险操作保护、设置导入导出与脱敏审计、用户画像（L0）与记忆（L1/L2）原文编辑、每日记忆整理与跨会话检索、上下文注入预览、定时任务与自动化运行记录、通讯通道配置面、模型目录只读、通知偏好与平台依赖健康诊断。设置 API 的鉴权、隔离、secret 语义与 Provider 凭据托管禁令见 `user-platform`；通道运行时见 `agent-delivery`；记忆磁盘布局与 `/memory/` 路由见 `agent-runtime`。
-
 ## Requirements
-
 ### Requirement: 系统 SHALL 提供个人与 Agent 设置壳
 
 系统 SHALL 提供需登录的设置界面（路由 `/settings`），以 URL 查询参数 `s=` 切换 section。侧栏用户头像（或等价入口）SHALL 可进入该设置壳。
@@ -62,101 +60,33 @@
 - **WHEN** 用户修改表单但尚未保存并切换 section
 - **THEN** 系统 SHALL 提示保存、放弃或留在当前 section
 
-## 画像与记忆
+**画像与记忆**
 
 ### Requirement: 设置页为用户记忆主编辑入口
 
 `profile` section SHALL 编辑 `users/{user_id}/USER.md`，`memory` section SHALL 编辑 `users/{user_id}/AGENTS.md`，且两者 SHALL 仅提供 Markdown 原文编辑。系统 SHALL 提供不依赖 `session_id` 的用户级读写 API（`GET/PUT /api/user/memory/USER.md` 与 `GET/PUT /api/user/memory/AGENTS.md`），写入结果 SHALL 与 Agent `/memory/` 为同一磁盘文件。
 
-系统 **SHALL NOT** 为 `USER.md` 维护固定“常用字段”区块或第二套结构化字段保存接口；`memory` section SHALL 展示文件最近修改时间（或等价元数据），便于用户发现 Agent 写入。会话上下文面板编辑 `USER.md` / `AGENTS.md` SHALL 作为兼容路径（见 `chat-composer`）。
+系统 SHALL NOT 为 `USER.md` 维护固定“常用字段”区块或第二套结构化字段保存接口；`memory` section SHALL 展示文件最近修改时间（或等价元数据），便于用户发现显式修改。会话上下文面板编辑 `USER.md` / `AGENTS.md` SHALL 作为兼容路径（见 `chat-composer`）。机器经验 SHALL 在独立区域通过结构化 API 治理，SHALL NOT 自动写入或修改 `USER.md` / `AGENTS.md`。设置页 SHALL NOT 再展示 Dream、按日记忆、日期整理、自动补写或 `memory/YYYY-MM-DD.md` 文件入口。
 
 #### Scenario: 设置页保存画像
-
 - **WHEN** 用户在 `profile` 编辑画像并保存成功
-- **THEN** `users/{user_id}/USER.md` SHALL 更新，且后续 `MemoryMiddleware` 加载可见新内容
+- **THEN** `users/{user_id}/USER.md` SHALL 更新，且后续显式上下文加载可见新内容
 
 #### Scenario: 设置页保存偏好记忆
-
 - **WHEN** 用户在 `memory` 编辑 `AGENTS.md` 并保存
 - **THEN** 磁盘文件 SHALL 更新且预览/编辑区展示最新内容
 
 #### Scenario: 不展示固定画像字段
-
 - **WHEN** 用户打开 `profile` section
 - **THEN** 页面 SHALL 直接展示原文编辑器且不展示称呼、时区、语言、角色固定表单
 
-#### Scenario: 未登录拒绝
+#### Scenario: 不展示旧按日记忆入口
+- **WHEN** 用户打开设置页的 Memory 区域
+- **THEN** 页面 SHALL NOT 展示日期整理、Dream 状态、按日文件、自动补写或旧 L2 搜索入口
 
+#### Scenario: 未登录拒绝
 - **WHEN** 未认证客户端请求用户级 memory API
 - **THEN** SHALL 返回 HTTP 401
-
-### Requirement: 记忆分层 L0/L1/L2
-
-系统 SHALL 将用户级记忆分为：L0 `USER.md` 稳定画像、L1 `AGENTS.md` 长期惯例、L2 `memory/YYYY-MM-DD.md` 按日整理的跨会话记忆。L0/L1 可按 Agent profile 注入，L2 SHALL NOT 默认注入，且 SHALL 只通过列表、检索或来源追溯按需读取。系统 SHALL NOT 因做梦任务自动修改 L0/L1。
-
-#### Scenario: L2 不默认注入
-
-- **WHEN** 用户存在 L0、L1 与多日 L2 文件并启动 SuperAgent
-- **THEN** 默认上下文 SHALL NOT 包含任一 L2 文件全文
-
-#### Scenario: 做梦不改长期规则
-
-- **WHEN** 系统完成每日记忆整理
-- **THEN** USER.md 与 AGENTS.md 的内容 SHALL 保持不变
-
-### Requirement: 系统 SHALL 按自然日整理跨会话记忆
-
-系统 SHALL 按当前用户和指定时区查询目标自然日内未删除会话的已完成 user/assistant 文本消息，并将可用信息整理到 `memory/YYYY-MM-DD.md`。系统 MUST 排除 reasoning、工具原始输出、错误、流式中和已删除消息。每条记忆 SHALL 包含稳定条目标识、分类、摘要、关键词和至少一个来源 session_id/message_id。重复整理同一日期 SHALL 重建同一目标文件，不得重复追加相同条目；写入失败 SHALL 保留旧文件。
-
-#### Scenario: 手动整理一天的消息
-
-- **WHEN** 已认证用户触发 2026-07-27 的记忆整理
-- **THEN** 系统 SHALL 汇总该用户当天所有符合条件会话并写入 `memory/2026-07-27.md`
-- **AND** 其他用户和其他日期的消息 SHALL NOT 出现在文件中
-
-#### Scenario: 当天没有可整理消息
-
-- **WHEN** 目标日期没有符合条件的消息
-- **THEN** 系统 SHALL 返回成功的空结果且不得生成虚假记忆条目
-
-#### Scenario: 重复整理同一天
-
-- **WHEN** 输入消息未变化且同一天连续整理两次
-- **THEN** 两次得到的条目标识和内容 SHALL 一致且文件中无重复条目
-
-#### Scenario: 读取记忆来源
-
-- **WHEN** 用户使用合法 session_id/message_id 请求来源上下文
-- **THEN** 系统 SHALL 仅返回该用户拥有的来源消息及有限相邻消息
-
-### Requirement: 系统 SHALL 提供受限的跨会话记忆检索
-
-系统 SHALL 支持按查询词、日期范围、分类和数量限制搜索当前用户的 L2 条目，并返回摘要、匹配分数、日期及来源标识。空查询、非法日期范围和超限参数 SHALL 返回可理解的校验错误。搜索 SHALL NOT 跨用户读取文件。设置页 memory 区域 SHALL 允许用户选择日期手动触发整理、查看最近 L2 文件，并按关键词检索；过程 SHALL 展示加载状态，失败时 SHALL 展示可理解的错误且不覆盖现有记忆。
-
-#### Scenario: 搜索历史记忆
-
-- **WHEN** 用户搜索与多个历史会话相关的关键词
-- **THEN** 系统 SHALL 返回按相关度和日期排序的有限条目，而非整篇每日文件
-
-#### Scenario: 用户隔离
-
-- **WHEN** 用户执行记忆搜索
-- **THEN** 搜索范围 SHALL 只包含该用户的 memory 目录
-
-#### Scenario: 展示记忆检索结果
-
-- **WHEN** 用户输入关键词执行搜索
-- **THEN** 页面 SHALL 展示日期、分类、摘要与来源标识，不直接展开全部原始聊天
-
-### Requirement: 系统 SHALL 自动补写上一日记忆
-
-应用内记忆调度器 SHALL 周期性检查用户上一自然日是否已成功整理；未成功时触发一次整理，失败后保留重试能力且不得阻止聊天服务启动。
-
-#### Scenario: 自动整理失败
-
-- **WHEN** 某用户上一日整理发生临时错误
-- **THEN** 系统 SHALL 记录失败并在后续周期重试
-- **AND** 其他用户与聊天请求 SHALL 继续运行
 
 ### Requirement: 设置页 SHALL 提供真实的上下文注入预览
 
@@ -167,7 +97,7 @@
 - **WHEN** 用户选择一个 Agent profile 请求上下文预览
 - **THEN** 系统 SHALL 返回该 profile 实际解析规则下的分段来源与最终只读内容
 
-## 自动化与定时任务
+**自动化与定时任务**
 
 ### Requirement: 系统 SHALL 持久化用户级定时任务
 
@@ -250,7 +180,7 @@
 - **WHEN** 用户 U 被删除且曾有启用中的定时任务
 - **THEN** 调度器 SHALL 不再执行这些任务
 
-## 通讯通道配置
+**通讯通道配置**
 
 ### Requirement: 系统 SHALL 提供可扩展的通讯通道配置模型
 
@@ -295,7 +225,7 @@
 - **WHEN** 用户关闭通道启用状态
 - **THEN** 后续入站 SHALL NOT 触发 Agent 且后续出站 SHALL NOT 投递到该通道
 
-## 模型与可观测性
+**模型与可观测性**
 
 ### Requirement: 用户 SHALL 只读查看平台模型目录
 
@@ -333,7 +263,7 @@
 - **WHEN** 后端诊断捕获数据库认证异常
 - **THEN** 用户响应 SHALL 仅包含数据库不可用摘要与关联 id，不包含 DSN 或口令
 
-## 导入导出与审计
+**导入导出与审计**
 
 ### Requirement: 设置导入导出 SHALL 版本化且默认排除敏感数据
 
@@ -357,3 +287,99 @@ MCP secret、通道 Token、自动化定义、通知策略和设置导入等变�
 
 - **WHEN** 用户替换通道 Token
 - **THEN** 系统 SHALL 记录 replace 动作但 SHALL NOT 在审计响应或日志中返回 Token 内容
+
+### Requirement: 用户显式上下文 SHALL 与机器经验分离
+
+`USER.md` / `AGENTS.md` SHALL 只由用户或明确的文件编辑操作修改，作为显式上下文来源；decision、experience、workflow 和 gotcha SHALL 保存在机器经验事实源，并经独立状态、scope、provenance 和 evidence 治理。自动 extraction/consolidation SHALL NOT 修改显式上下文，设置预览 SHALL 分别标注显式上下文和自动 Bulletin。
+
+#### Scenario: 自动整理不修改显式上下文
+- **WHEN** 系统完成 Run extraction 或 consolidation
+- **THEN** `USER.md` 与 `AGENTS.md` SHALL 保持不变
+
+#### Scenario: 预览区分来源
+- **WHEN** 用户查看下一次 Agent 上下文预览
+- **THEN** 页面 SHALL 分别展示显式上下文与自动 Memory Bulletin
+- **AND** SHALL NOT 把机器经验伪装成用户手写规则
+
+### Requirement: 设置页 SHALL 提供四类经验记忆治理入口
+
+设置页 Memory section SHALL 展示当前用户的 decision、experience、workflow 和 gotcha，至少包括 type、status、scope、statement、applicability、独立 Run evidence 数、last verified time、版本和来源入口。用户 SHALL 能按 type/status/project scope 搜索过滤，并执行查看来源、编辑、activate、disable、enable、invalidate 和 delete；candidate item SHALL 只能经用户显式确认（activate）转为 active；前端 SHALL 展示加载、成功、冲突和用户可理解的失败状态。
+
+#### Scenario: 查看四类记忆和证据
+- **WHEN** 已认证用户打开经验记忆列表
+- **THEN** 页面 SHALL 只展示该用户 item 和独立 Run evidence 数
+- **AND** 非 active 状态 SHALL 有明确标识且不暗示当前生效
+
+#### Scenario: 编辑记忆形成版本
+- **WHEN** 用户修改 statement 或 applicability
+- **THEN** Service SHALL 保存可审计的新 revision 和用户来源
+- **AND** 页面 SHALL 能识别当前版本
+
+#### Scenario: 显式确认 candidate 全局适用
+- **WHEN** 非 Git Run 自动产生的 global candidate 待用户确认
+- **THEN** 用户显式 activate 后 item SHALL 转为 active 并记录用户确认来源
+- **AND** 未经确认的 candidate SHALL NOT 自动注入
+
+#### Scenario: 删除确认说明再生成语义
+- **WHEN** 用户请求删除经验记忆
+- **THEN** 页面 SHALL 在确认前说明删除当前记录不阻止未来相似 Run 重新生成
+- **AND** 用户确认后 SHALL 清理 item/evidence/relation 并排队清理派生视图
+
+### Requirement: 自动化设置 SHALL 在窄屏可用
+
+设置页自动化区域 SHALL 在窄屏下保持单列堆叠与可点击的操作控件；新增任务表单 SHALL 独立组件化，不与任务列表渲染耦合。
+
+#### Scenario: 窄屏访问自动化设置
+- **WHEN** 用户在窄屏打开「定时与自动化」设置
+- **THEN** 控件 SHALL 单列堆叠且操作按钮完整可见可点击
+### Requirement: 设置页 SHALL 展示自动处理健康
+
+设置页 SHALL 展示当前用户最近成功 capture/consolidation 时间，以及 pending、partial、failed、dead、skipped-disabled 数量和 workspace/index 是否落后。用户文案 SHALL 使用业务含义，不得显示数据库表、claim token、provider key、服务端路径、内部网络位置或未脱敏错误。健康展示 SHALL 不改变单一用户开关语义。
+
+#### Scenario: 后台任务部分失败
+- **WHEN** 用户的长 Run 只有部分 chunk extraction 成功
+- **THEN** 设置页 SHALL 显示“部分处理”及安全摘要
+- **AND** SHALL NOT 把该 Run 展示为完整成功
+
+#### Scenario: dead job 可诊断
+- **WHEN** job 达到最大 attempts 进入 dead
+- **THEN** 设置页 SHALL 计入处理失败
+- **AND** SHALL 提供不泄露内部细节的处理建议或重试状态
+
+### Requirement: 经验记忆设置 API SHALL 鉴权并经 Service 执行
+
+系统 SHALL 在 `/api/user/memory/cortex` 静态前缀下提供 preference、item list/detail/update、source/evidence、activate、disable、enable、invalidate、delete 和 processing health API。所有接口 SHALL 使用 Cookie Session + CSRF、当前用户/授权 scope 校验、`noesis.schemas.memory`、统一响应和 Service 状态机；API SHALL NOT 定义同义 schema 或直接查询/修改 ORM。旧 Dream/按日记忆 API SHALL 被删除，该前缀 SHALL NOT 与 `USER.md` / `AGENTS.md` 文件 API 冲突。
+
+#### Scenario: 未认证请求
+- **WHEN** 未认证客户端请求任一经验记忆设置 API
+- **THEN** 系统 SHALL 返回 HTTP 401
+
+#### Scenario: 越权 memory/snapshot id
+- **WHEN** 用户提交不属于自己的 memory、evidence 或 snapshot id
+- **THEN** 系统 SHALL 返回 404 或等价不泄露响应
+- **AND** SHALL NOT 返回内容、scope、provider、来源或处理状态
+
+#### Scenario: 重复状态操作
+- **WHEN** 用户重复 activate、disable、enable 或 invalidate 同一 item
+- **THEN** Service SHALL 返回确定的幂等结果或明确冲突
+- **AND** SHALL NOT 产生两个 current row 或分叉 supersession 链
+
+### Requirement: 用户 SHALL 通过单一开关控制自动经验记忆
+
+设置页 SHALL 只提供一个“经验记忆”用户开关，持久化字段为 `enabled`，默认关闭；系统 SHALL NOT 提供平台总开关或拆分的 capture/extraction/consolidation/injection 用户开关。开启后允许后续有稳定证据的终态主 Run 自动 capture、后台整理和新 Run fast Bulletin；关闭后不创建新的自动任务、不继续后续阶段且新 Run 不自动注入。关闭 SHALL NOT 删除已有 item/snapshot，且 SHALL NOT 禁止已有记忆查看、显式搜索、来源读取或治理。
+
+#### Scenario: 用户开启经验记忆
+- **WHEN** 用户开启“经验记忆”
+- **THEN** 后续有稳定证据的终态主 Run SHALL 创建自动 capture job
+- **AND** 后续新 Run MAY 注入通过门控的 Bulletin
+
+#### Scenario: 用户关闭经验记忆
+- **WHEN** 用户关闭“经验记忆”
+- **THEN** 后续 eligible Run SHALL NOT 创建自动 capture job，claimed job SHALL 在阶段边界安全停止，后续新 Run SHALL 零自动注入
+- **AND** 已有记忆 SHALL 保留并可查看、显式搜索或治理
+
+#### Scenario: 重新开启不默认回放历史
+- **WHEN** 用户关闭一段时间后重新开启经验记忆
+- **THEN** 系统 SHALL 从重新开启后的有稳定证据终态主 Run 开始自动处理
+- **AND** SHALL NOT 未经用户显式操作回放关闭期间全部历史 Run
+

@@ -16,6 +16,19 @@ _TOOLS_CACHE: dict[tuple[frozenset[str], str], tuple[float, list[Any]]] = {}
 _TOOLS_CACHE_TTL_SEC = 60.0
 
 
+def _annotate_provider(tools: list[Any], server_id: str) -> list[Any]:
+    for tool in tools:
+        metadata = getattr(tool, "metadata", None)
+        if not isinstance(metadata, dict):
+            metadata = {}
+            tool.metadata = metadata
+        metadata["noesis_provider_key"] = f"mcp:{server_id}"
+        version = metadata.get("server_version") or metadata.get("version")
+        if version:
+            metadata["noesis_provider_version"] = str(version)
+    return tools
+
+
 def clear_mcp_tools_cache() -> None:
     _TOOLS_CACHE.clear()
 
@@ -43,8 +56,10 @@ async def load_mcp_tools(
     path: Path | None = None,
 ) -> list[Any]:
     connections = get_profile_connections(profile, path=path)
-    client = MultiServerMCPClient(connections)
-    tools = wrap_mcp_tools(await client.get_tools())
+    tools: list[Any] = []
+    for sid, cfg in connections.items():
+        client = MultiServerMCPClient({sid: cfg})
+        tools.extend(_annotate_provider(wrap_mcp_tools(await client.get_tools()), sid))
     logger.info(
         "MCP profile=%r 加载工具 %d 个（servers=%s）",
         profile,
@@ -79,7 +94,7 @@ async def load_mcp_tools_by_names(
     for sid, cfg in connections.items():
         try:
             client = MultiServerMCPClient({sid: cfg})
-            part = wrap_mcp_tools(await client.get_tools())
+            part = _annotate_provider(wrap_mcp_tools(await client.get_tools()), sid)
             tools.extend(part)
             logger.info("MCP server={!r} 加载工具 {} 个", sid, len(part))
         except Exception as e:

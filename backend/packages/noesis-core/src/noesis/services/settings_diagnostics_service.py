@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.domain.chat.delivery.channel_health import channel_health
+from noesis.chat.delivery.channel_health import channel_health
 from noesis.storage.postgres.manager import pg_manager
 from noesis.services.messaging_channel_service import MessagingChannelService
 
@@ -30,7 +30,7 @@ class SettingsDiagnosticsService:
         return {"key": name, "status": status, "checked_at": int(time.time() * 1000), "message": message, "action_code": action, "correlation_id": correlation_id}
 
     @classmethod
-    async def diagnose(cls, db: AsyncSession, user_id: int) -> dict:
+    async def diagnose(cls, db: AsyncSession, user_id: str) -> dict:
         async def database():
             async with pg_manager.get_async_session_context() as check_db:
                 await check_db.execute(text("SELECT 1"))

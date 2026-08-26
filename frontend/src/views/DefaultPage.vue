@@ -152,7 +152,7 @@ const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.sl
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .welcome-root {
   position: relative;
   width: 100%;
@@ -324,7 +324,7 @@ const visibleItems = computed(() => isMobile.value ? currentPanel.value.items.sl
   padding-left: 0;
 }
 
-@media (max-width: 768px) {
+@media (max-width: $bp-md) {
   .welcome-root--mobile {
     display: flex;
     align-items: center;

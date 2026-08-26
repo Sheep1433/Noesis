@@ -52,8 +52,6 @@ _ENV_ALLOWLIST_EXACT: frozenset[str] = frozenset(
         "TMP",
         "TEMP",
         "TERM",
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
         "SSL_CERT_FILE",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",

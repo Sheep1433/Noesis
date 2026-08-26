@@ -9,9 +9,10 @@ import uuid
 from typing import Any, AsyncGenerator, Optional
 
 from langchain_core.messages import HumanMessage
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
-from noesis.factory import build_subagent_default_middleware, create_noesis_agent
+from noesis.factory import build_noesis_middleware, create_noesis_agent
 from noesis.agents.mcp.loader import load_mcp_tools
 from noesis.agents.prompts import PromptProfile, build_prompt
 from noesis.agents.backends import agent_sandbox_session, create_agent_backend
@@ -34,8 +35,10 @@ def _build_fault_operation_subagents(
     mcp_tools: list[Any],
     *,
     model_id: str | None = None,
+    session_id: str = "",
 ) -> list[SubAgent]:
     """与 deepagents 默认 general-purpose 对齐：独立上下文内执行多步 MCP 运维子任务。"""
+    model = get_llm(model_id=model_id)
     return [
         {
             "name": "general-purpose",
@@ -44,9 +47,16 @@ def _build_fault_operation_subagents(
                 "配置读取等），具备与主 Agent 相同的 MCP 工具。适合可并行、上下文较重的排查子任务。"
             ),
             "system_prompt": build_prompt(PromptProfile.FAULT_OPERATION_SUB),
-            "model": get_llm(model_id=model_id),
+            "model": model,
             "tools": mcp_tools,
-            "middleware": build_subagent_default_middleware(backend),
+            "middleware": build_noesis_middleware(
+                profile="SUBAGENT",
+                model=model,
+                model_id=model_id,
+                tools=mcp_tools,
+                backend=backend,
+                session_id=session_id,
+            ),
         },
     ]
 
@@ -71,6 +81,8 @@ class FaultOperationAgent(BaseAgent):
         qa_type: Optional[str] = None,
         model_id: Optional[str] = None,
         mcp_tools: Optional[list] = None,
+        db: Optional[AsyncSession] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """运行 Agent 并返回流式响应"""
         task_id = session_id or str(uuid.uuid4())
@@ -105,16 +117,20 @@ class FaultOperationAgent(BaseAgent):
                     if mcp_tools is not None
                     else await self._load_mcp_tools()
                 )
+                root_tools = [*resolved_mcp]
                 backend = await create_agent_backend(user_id, session_id)
 
                 agent = create_noesis_agent(
                     profile="FAULT_OPERATION_QA",
-                    tools=resolved_mcp,
+                    tools=root_tools,
                     system_prompt=build_prompt(PromptProfile.FAULT_OPERATION),
                     checkpointer=self.checkpointer,
                     backend=backend,
+                    workspace="/workspace",
+                    session_id=session_id,
+                    attachments=tuple(str(name) for name in (file_list or {})),
                     subagents=_build_fault_operation_subagents(
-                        backend, resolved_mcp, model_id=model_id
+                        backend, resolved_mcp, model_id=model_id, session_id=session_id
                     ),
                     model_id=model_id,
                 )

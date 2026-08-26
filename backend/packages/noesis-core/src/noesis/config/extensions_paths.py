@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 from noesis.config.env import OtherConfig
-from noesis.config.paths import BACKEND_DIR, REPO_ROOT
+from noesis.config.paths import REPO_ROOT
 
 _SKILLS_SUBDIR = Path("skills")
 _MCP_SSH_SUBDIR = Path("mcp") / "ssh"

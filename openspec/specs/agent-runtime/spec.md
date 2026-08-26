@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定 Agent **运行时**：文件系统与沙箱（宿主机 `.noesis/users/` 布局、Agent/Shell 共用的绝对路径坐标系 `/workspace`、`/skills/public|personal`、`/memory`、backend 工厂 docker / local_shell、Skills 只读挂载与用户 ZIP、用户记忆、web_search / web_fetch）、公共 Runtime 执行 Lifecycle（Context Lifecycle、Model Execution、Tool Execution、Run Governor）与 Token / 上下文可观测性。代码锚点：`packages/noesis-core/src/noesis/config/user_data_paths.py`、`packages/noesis-core/src/noesis/agents/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`、`packages/noesis-core/src/noesis/agents/middlewares/`。
+本能力规定 Agent **运行时**：文件系统与沙箱（宿主机 `.noesis/users/` 布局、Agent/Shell 共用的绝对路径坐标系 `/workspace`、`/skills/public|personal`、`/memory`、backend 工厂 docker / local_shell、Skills 只读挂载与用户 ZIP、用户记忆、web_search / web_fetch）、公共 Runtime 执行 Lifecycle（Context Lifecycle、Model Execution、Tool Execution、运行预算中间件）与 Token / 上下文可观测性。代码锚点：`packages/noesis-core/src/noesis/config/user_data_paths.py`、`packages/noesis-core/src/noesis/agents/backends/{paths,agent_path,memory,factory,docker_exec,local_shell}.py`、`packages/noesis-core/src/noesis/agents/middlewares/`。
 
 ## 路径命名
 
@@ -172,211 +172,313 @@ SuperAgent SHALL 获得 `get_memory_source` 工具，并在数据库层校验 se
 - **WHEN** 请求的来源不属于当前用户
 - **THEN** 工具 SHALL 返回不存在或无权限且不得泄露来源内容
 
-## 运行时执行 Lifecycle
-
-### Requirement: 公共 Runtime SHALL 按五类职责组织
-
-系统 SHALL 将 ReAct Agent 的公共运行时职责限定为 Context Lifecycle、Model Execution、Tool Execution、Run Governor 与 Runtime Telemetry，并 SHALL 以 LangChain `AgentMiddleware` lifecycle hook 作为 `create_agent` 的权威接入点。Middleware MAY 将纯计算、存储或 policy 委托给 runtime service，但同一状态与决策 SHALL 只有一个权威 owner；系统 SHALL NOT 绕开 LangChain Agent loop 再建第二套执行循环，也 SHALL NOT 为 length stop、empty terminal、tool output budget 等单点问题继续叠加相互独立且依赖顺序的补丁中间件。
-
-#### Scenario: 工厂装配公共 Runtime
-
-- **WHEN** `create_noesis_agent` 装配任一 ReAct Agent Profile
-- **THEN** Agent SHALL 获得同一套公共 runtime middleware lifecycle
-- **AND** Profile capability SHALL NOT 复制其中任一 owner 的状态机
-
-#### Scenario: Middleware 委托内部 Service
-
-- **WHEN** Context Lifecycle 或 Tool Execution 需要 artifact 存储、token 估算或 policy 计算
-- **THEN** 对应 middleware MAY 调用无 Agent loop 控制权的内部 service
-- **AND** continue/retry/stop 与 state update SHALL 仍由该 middleware hook 返回给 LangChain
-
-### Requirement: Context Lifecycle SHALL 规范化并压缩模型上下文
-
-Context Lifecycle SHALL 在模型请求前使用同一份最终 context snapshot 完成 tool call/output 配对修复、上下文预算判断与 compaction。Compaction SHALL 区分持久 history 与可从权威来源重新构造的 context source；压缩完成后 Skills、Memory、任务信息等长期上下文 SHALL 从来源重建，瞬时时间提示与调试信息 SHALL NOT 被固化进 summary。
-
-#### Scenario: dangling tool call 后继续
-
-- **WHEN** 恢复的 history 含没有对应 ToolMessage 的 tool call
-- **THEN** Context Lifecycle SHALL 在请求 Provider 前补齐或剥离该不完整配对
-- **AND** Provider SHALL NOT 因协议配对错误拒绝请求
-
-#### Scenario: 压缩后重建长期上下文
-
-- **WHEN** Agent 触发 compaction 后继续模型调用
-- **THEN** 当前启用的 Skills、Memory 与任务上下文 SHALL 从权威来源重新加入最终请求
-- **AND** 旧的动态提示 SHALL NOT 因 summary 被重复注入
-
-#### Scenario: 压缩后仍超过窗口
-
-- **WHEN** tool output 有界化和 compaction 后最终 ModelRequest 仍超过模型输入上限
-- **THEN** Context Lifecycle SHALL 返回结构化 `context_exhausted` outcome
-- **AND** SHALL NOT 将超限请求发送给 Provider
+#### 分组：运行时执行 Lifecycle
 
 ### Requirement: Model Execution SHALL 产生统一 Outcome
 
-每次模型调用 SHALL 产生统一 model execution outcome，至少区分 `completed`、`retryable_error`、`length_stop`、`safety_stop`、`context_exhausted`、`partial_output` 与 `empty_after_tools`。模型重试 SHALL 仅发生在确认可重试且尚未产生用户可见输出、工具调用或 HITL 副作用时；达到边界后 SHALL 保留已有输出并终止，SHALL NOT 重放整个 step。
-
-#### Scenario: 流开始前连接中断
-
-- **WHEN** Provider 在产生可见 token 或 tool call 前返回可重试连接错误
-- **THEN** Model Execution MAY 按配置 backoff 重试
-- **AND** SHALL 发出可观测的 retry attempt 状态
-
-#### Scenario: 已有文本后连接中断
-
-- **WHEN** Provider 已产生用户可见文本后连接中断
-- **THEN** Model Execution SHALL 返回 `partial_output`
-- **AND** SHALL NOT 重试并产生重复文本
+模型重试、Provider finish reason 与 delivery stop reason SHALL 保持统一语义。瞬时 Provider attempt 重试 SHALL 沿用同一份已经完成 canonicalization、compaction 与预算校验的 request；每个 attempt SHALL 单独计数且可观测。重试 SHALL 由 Provider SDK 的 HTTP 层负责（在流式 body 开始前根据状态码决定），middleware 层不重复实现可见输出检测。需要改变 messages 的收敛继续 SHALL 重新经过完整 Agent lifecycle，不得直接调用内部 handler。
 
 #### Scenario: 工具后模型空终态
 
-- **WHEN** 当前 model step 的 request 末尾包含至少一个已结束工具结果，而后续模型调用没有正文、tool call 或 HITL 请求
-- **THEN** Model Execution SHALL 通过只作用于本次 request 的瞬时收敛提示最多再次调用 model handler 一次
-- **AND** SHALL NOT 将该提示写入 conversation state 或重放工具
-- **AND** 若再次为空，SHALL 返回固定可见 fallback 并记录 `empty_after_tools`
-- **AND** runtime SHALL NOT 静默完成或无限重试
+- **WHEN** 工具结束后的模型响应没有正文、tool call 或 HITL 请求
+- **THEN** 系统 SHALL 结束为可诊断状态，或通过可计数的完整 Agent lifecycle继续一次
+- **AND** SHALL NOT 在内部 handler 中发起不可观测的额外模型调用
 
 ### Requirement: Tool Execution SHALL 使用统一结果 Envelope
 
-每次 in-scope 工具调用写入 Agent history 前 SHALL 归一为包含 `status`、`content` 和可选 `category`、`outcome` 的内部结果 envelope。超出配置预算的正文 SHALL 在工具返回边界被有界化。已挂载 DeepAgents `FilesystemMiddleware` 时 SHALL 优先采用其通用 tool-result offload；`ToolExecutionMiddleware` SHALL 将 offload 后的 ToolMessage 作为权威 content，SHALL NOT 解析第三方提示文本来伪造结构化 artifact metadata。未挂载 filesystem capability、工具被第三方 offload 排除或返回结果仍未有界时，Noesis SHALL 执行一次 fallback head/tail 截断；SHALL NOT 对已处理结果二次转存或等待整体 context 接近上限后才处理。
+每次工具调用写入 history 前 SHALL 保持 `status`、`content` 和可选 `category`、`outcome` 的稳定语义。调用异常翻译、command outcome 与输出有界化 SHALL 按顺序处理且不得互相改写语义。大结果 SHALL 优先在工具返回源或已配置的 artifact backend 有界化；已经处理的结果 SHALL NOT 被再次转存或截断。
 
-#### Scenario: 大工具结果写入 artifact
+#### Scenario: 已有 Artifact 引用的大结果
 
-- **WHEN** 工具正文超过单结果预算且 Agent 具有当前 session filesystem backend
-- **THEN** DeepAgents `FilesystemMiddleware` SHALL 优先将完整正文写入该 session 的 artifact 路径
-- **AND** ToolMessage SHALL 使用 DeepAgents 生成的文件引用、省略说明与有界 preview
+- **WHEN** 工具结果已经包含可读取的 artifact 引用与有界 preview
+- **THEN** 后续处理 SHALL 原样保留该 content
+- **AND** SHALL NOT 再次转存、截断或从提示正文猜测 metadata
 
-#### Scenario: 无 filesystem 的大结果
+#### Scenario: Typed Tool Failure
 
-- **WHEN** 工具正文超过预算且当前 Agent 没有可写 artifact backend
-- **THEN** ToolMessage SHALL 保留配置允许的头尾和明确省略标记
-- **AND** SHALL NOT 将未限制的完整正文写入 history
+- **WHEN** 工具抛出可分类调用异常
+- **THEN** 系统 SHALL 生成同 tool call id 的 error ToolMessage
+- **AND** 输出预算处理 SHALL NOT 把 error 改写为 success
 
-#### Scenario: 已有第三方 offload 标记
+#### Scenario: 取消后恢复
 
-- **WHEN** Tool Execution 收到已经包含 DeepAgents large-tool-result 路径和 preview 的 ToolMessage
-- **THEN** SHALL 原样保留该有界 content
-- **AND** SHALL NOT 从提示文本解析路径、再次截断 preview 或创建 Noesis artifact
+- **WHEN** 工具因整轮取消而未产生 ToolMessage，随后同一会话恢复并准备再次调用模型
+- **THEN** canonicalization SHALL 在 Provider 请求前补齐或移除该不完整配对
+- **AND** 终止中的取消异常 SHALL NOT 被普通工具错误处理吞掉
 
-### Requirement: Run Governor SHALL 统一运行预算
+### Requirement: 运行预算 SHALL 由独立 AgentMiddleware 实现
 
-Run Governor SHALL 以 `run_id` 为作用域维护模型调用、工具调用、重复调用窗口、子 Agent 活跃数/总数/深度及可选累计 token 预算。所有限制 SHALL 产生稳定 stop reason；主 Agent 与子 Agent SHALL 使用同一预算模型，子 Agent 的本地限制 MAY 更严格但 SHALL NOT 绕过父 run 的总预算。
+系统 SHALL 以独立 `AgentMiddleware`（如 `ToolLoopGuardMiddleware`、`SubagentLimitMiddleware`）实现运行预算，各中间件通过 lifecycle hook 拦截，而非依赖集中式预算控制器。所有限制 SHALL 产生稳定 stop reason；主 Agent 与子 Agent SHALL 使用同一预算模型。
 
-#### Scenario: 子 Agent 并发槽位耗尽
+系统 SHALL 只启用具有真实配置、正确 platform run identity、生产记账入口和确定性测试的运行限制。未配置或没有真实数据源的限制 SHALL 不得被描述为已生效。父子 Agent 共享预算只有在子任务 admission、释放、取消和恢复均可追踪时才 SHALL 启用。
 
-- **WHEN** 活跃子 Agent 数已达到配置上限且模型再次委派
-- **THEN** Run Governor SHALL 拒绝新委派并返回稳定的 `subagent_concurrency_limit` reason
-- **AND** 已运行子 Agent SHALL 不受影响
+#### Scenario: 未配置的预算轴
 
-#### Scenario: 重复工具循环
+- **WHEN** 子 Agent 并发、深度或 token budget 没有生产配置或记账入口
+- **THEN** runtime SHALL 不宣称该限制已生效
+- **AND** inventory 与用户事件 SHALL 不产生对应 stop reason
 
-- **WHEN** 同一 run 的工具调用在配置窗口内达到循环硬限制
-- **THEN** Run Governor SHALL 停止继续调用工具并返回 `tool_loop_limit`
-- **AND** 最终响应 SHALL 保留停止前已有结果
+#### Scenario: Run 级限制隔离
 
-#### Scenario: token attribution 尚不可用
-
-- **WHEN** runtime 无法获得去重后的实际 Provider usage
-- **THEN** Run Governor SHALL 不启用实际累计 token 硬限制
-- **AND** MAY 继续记录估算 context occupancy，但 SHALL NOT 将其标记为实际 run cost
-
-## Token 与上下文可观测性
+- **WHEN** 同一 session 发起两个不同 platform run
+- **THEN** run-level counter SHALL 使用各自 run identity
+- **AND** SHALL NOT 从上一 run 的 checkpoint 继承本轮计数
 
 ### Requirement: Runtime Telemetry SHALL 观察而不改变执行决策
 
-Runtime Telemetry SHALL 消费 model、context、tool、subagent、compaction 与 governor outcome，并按 model run id 去重；它 SHALL NOT 单独维护会影响控制流的第二套预算或循环计数。
+模型 usage、上下文占用、finish reason、tool/subagent 归属与 compaction event SHALL 由唯一观测链消费。没有消费者的 observer SHALL 不参与运行；观测开关关闭时 retry、compaction、tool handling 与终止语义 SHALL 保持不变。
 
-#### Scenario: telemetry 关闭
+#### Scenario: 无外部观测消费者
 
-- **WHEN** context display 或外部 tracing 关闭
-- **THEN** Agent 的重试、压缩、工具治理和终止行为 SHALL 与开启时一致
+- **WHEN** runtime 没有配置 tracing 或 telemetry sink
+- **THEN** Agent SHALL 不执行无输出的重复观测路径
+- **AND** `/api/chat` 的 usage、context 与完成收尾 SHALL 正常工作
+
+### Requirement: 公共 Runtime SHALL 按 Lifecycle 边界归属职责
+
+公共 Runtime SHALL 保持单一 Agent loop。跨场景策略只有在必须拦截明确 lifecycle seam、能在该 seam 内完整表达且不会与其它组件维护同一控制状态时，才 SHALL 进入 middleware。上下文来源、场景装配、持久化、运行观测和资源生命周期 SHALL 各有唯一 owner；系统 SHALL NOT 因统一命名而要求所有 ReAct Agent 装配固定数量的自定义 middleware。
+
+#### Scenario: 同一决策只有一个 Owner
+
+- **WHEN** Agent 执行 retry、compaction、tool failure 转换或调用限制
+- **THEN** 每项决策 SHALL 只有一个组件维护控制状态
+- **AND** SHALL NOT 由两个可独立开关的组件重复计数或重复处理
+
+#### Scenario: Context 来源不依赖隐藏状态
+
+- **WHEN** 场景准备 system prompt、用户输入、附件或 Skills/Memory 路径
+- **THEN** SHALL 通过 `create_noesis_agent()` 的直接参数传入
+- **AND** SHALL NOT 依赖另一个 middleware 的隐藏 `ContextVar` 才能得到结果
+
+### Requirement: Context Management SHALL 实现 Claude Code 式分层策略
+
+场景 prompt、用户输入和附件 SHALL 在调用 Agent 前准备。稳定来源 SHALL 与 conversation 分离；压力处理 SHALL 按 tool-result replacement、snip、micro-compaction、conversation compaction 和 reactive overflow recovery 的顺序进行。LangChain/DeepAgents 能力只在行为契约符合时 SHALL 直接采用；缺失时 SHALL 由 Noesis 的窄 middleware 或 runtime adapter 补足。
+
+每次模型调用 SHALL 只有一份 canonical request。可从当前权威源重建的稳定内容 SHALL NOT 被固化进 conversation summary。
+
+Compaction SHALL 按最终 request 预算判断，预算至少覆盖 system instructions、conversation、tool results 与 tool definitions。淘汰的 history SHALL 在摘要替换前具有可恢复记录；摘要失败 SHALL NOT 以错误文本不可逆替换原 history。
+
+#### Scenario: Preview 是配置预览
+
+- **WHEN** 设置服务预览某用户与 Agent Profile 的上下文配置
+- **THEN** preview SHALL 展示场景 prompt 及配置的 Skills/Memory 来源
+- **AND** SHALL NOT声称等于最终 Provider request，也不得调用模型、创建 checkpoint或写入数据
+
+#### Scenario: 最终 Request 触发压缩
+
+- **WHEN** conversation history 单独未达到阈值，但稳定指令或 tool definitions 加入后达到 compaction threshold
+- **THEN** 系统 SHALL 在发送模型前执行 compaction
+- **AND** SHALL NOT 仅因 history 计数较小而直接进入超限终态
+
+#### Scenario: 压缩后重建稳定内容
+
+- **WHEN** history 被 summary 与 preserved tail 替代
+- **THEN** 当前场景指令、Skills、Memory、工具定义与动态时间 SHALL 由各自 owner 保持可用
+- **AND** preserved tail 已包含的 conversation 内容 SHALL NOT 重复注入
+
+#### Scenario: Tool Pair 不可切断
+
+- **WHEN** canonicalization 或 compaction 处理 tool call、invalid tool call、tool result 或 thinking block
+- **THEN** 下一次模型请求 SHALL 保持 Provider 接受的配对与顺序
+- **AND** SHALL NOT 从关联 call/result 中间切断 preserved tail
 
 ### Requirement: 当前上下文快照 SHALL 基于最终模型请求
 
-系统 SHALL 在每次模型调用前基于所有 Agent middleware 处理完成后的最终 `ModelRequest` 生成当前上下文快照。快照 SHALL 至少包含当前估算 token、模型上下文上限、占用比例，以及 system、conversation、tool results、tool definitions、other 顶层分类；快照 SHALL 表示单次即将发送的请求，SHALL NOT 累加为 run usage。
+系统 SHALL 在 compaction 决策与诊断时基于最终 canonical request 计算本地估算，覆盖 system、conversation、tool results、tool definitions 与未归属 framing。该估算 SHALL 与 Provider 实际 usage 明确区分；用户可见 `context-update.current_tokens` 继续使用 Provider 最近一次实际 `input_tokens`。
 
-#### Scenario: 工具定义计入当前上下文
+#### Scenario: Tool Definitions 计入预算
 
-- **WHEN** 最终模型请求包含对话消息和已绑定工具定义
-- **THEN** `current_tokens` SHALL 覆盖消息与工具定义
-- **AND** breakdown SHALL 单独提供 `tool_definitions`
+- **WHEN** 最终模型请求包含动态绑定的工具定义
+- **THEN** pre-call context estimate SHALL 覆盖这些定义
+- **AND** compaction threshold SHALL NOT 只统计 conversation messages
 
-#### Scenario: 多次模型调用只更新当前快照
+#### Scenario: Provider Usage 与本地估算并存
 
-- **WHEN** 同一 run 依次进行两次模型调用
-- **THEN** 当前 context 展示 SHALL 使用最后一次调用的快照
-- **AND** SHALL NOT 将两次 `current_tokens` 相加
+- **WHEN** Provider 返回的实际 `input_tokens` 与本地估算不同
+- **THEN** 系统 SHALL 保留两者的不同语义
+- **AND** SHALL NOT修改本地 breakdown 冒充 Provider 实际值
 
-### Requirement: 上下文来源细分 SHALL 依赖可靠 provenance
+### Requirement: Compaction SHALL 预留空间并可恢复失败
 
-系统 SHALL 支持 Skills、memory、RAG、attachments 等来源细分。来源注入方 SHALL 使用不进入 Provider 输入的内部 provenance 标记实际注入内容；统计器 SHALL 仅根据显式标记或已解析的权威工具路径归属来源，SHALL NOT 通过任意正文正则猜测。缺少可靠标记的内容 SHALL 保留在顶层分类或 `other`。
+系统 SHALL 根据模型输入上限、摘要输出预留与瞬时 request buffer 计算自动压缩阈值；具体数值 SHALL 来自模型配置和运行数据。Summary 调用 SHALL 禁用业务工具并防止递归 compaction。Summary request 自身超限时 SHALL 按完整 API round 移除最旧前缀并执行有界重试。连续失败 SHALL 有有界计数和熔断，失败时原始 history 与 archive SHALL 保持可恢复。
 
-#### Scenario: Skills 列表被标记
+#### Scenario: Summary 调用隔离
 
-- **WHEN** Skills middleware 将可用 Skills 列表注入最终 system message 并提供 provenance
-- **THEN** 快照 SHALL 在 system 总量内报告 `sources.skills`
-- **AND** 分类总量 SHALL NOT 因同一内容同时属于 system 与 Skills 而重复计入 `current_tokens`
+- **WHEN** runtime 生成 conversation summary
+- **THEN** summary model request SHALL 不包含业务工具
+- **AND** summary 调用 SHALL NOT 再触发自动 compaction
 
-#### Scenario: 未标记工具结果安全降级
+#### Scenario: Summary 返回错误文本
 
-- **WHEN** ToolMessage 没有可验证的来源标记
-- **THEN** 其 token SHALL 计入 `tool_results`
-- **AND** 系统 SHALL NOT 猜测其属于 RAG、Skills 或 attachments
+- **WHEN** summary model 返回空内容或框架错误标记文本
+- **THEN** compaction SHALL 将本次摘要判定为失败且不得发布新的 summary state
+- **AND** raw history 与已写 archive SHALL 保持可恢复
 
-### Requirement: 上下文分类 SHALL 明确估算语义
+#### Scenario: 连续压缩失败
 
-系统 SHALL 将本地上下文分类标记为估算，并记录可用的计数方法。分类 SHALL 使用一致的计数路径；本地序列化或 framing 差值 SHALL 进入 `other` 或等价未归属字段。系统 SHALL NOT 按比例改写分类以冒充 Provider 实际 input usage。
+- **WHEN** 自动 compaction 连续达到配置失败上限
+- **THEN** 系统 SHALL 停止本轮自动重试并返回稳定可诊断 reason
+- **AND** SHALL NOT 删除 raw history 或进入无限模型调用
 
-#### Scenario: Provider input 与本地估算不同
+#### Scenario: Summary Request 自身超限
 
-- **WHEN** Provider 返回的 `input_tokens` 与本地 `current_tokens` 不一致
-- **THEN** 系统 SHALL 保留两个原始值及其不同语义
-- **AND** SHALL NOT 强制修改各分类使二者相等
+- **WHEN** summary model 返回 prompt-too-long
+- **THEN** compaction SHALL 按完整 API round 移除最旧前缀并在配置上限内重试
+- **AND** SHALL NOT 切断 tool call/result，也 SHALL NOT 无限重试
 
-### Requirement: Provider usage SHALL 保留可用明细
+#### Scenario: 手动压缩不受自动熔断影响
 
-系统 SHALL 规范化每次模型响应的 input、output、total token，并在 Provider 提供时保留 cache read、cache write、reasoning 等 detail。缺失的 detail SHALL 表示为不可用，SHALL NOT 默认伪造为零。detail SHALL 作为后端规范化与按需调试展示字段保留，SHALL NOT 作为 chat 页默认 token 摘要展示项。
+- **WHEN** 自动 compaction 因连续失败进入熔断
+- **THEN** 系统 SHALL 停止自动尝试
+- **AND** 已启用的手动 compact 入口 SHALL 仍可触发一次显式压缩
 
-#### Scenario: Responses API 返回 cache 与 reasoning
+#### Scenario: 压缩事务失败
 
-- **WHEN** Provider usage 含 cached input tokens 与 reasoning output tokens
-- **THEN** 规范 usage SHALL 保留对应 `input_token_details` 与 `output_token_details`
-- **AND** total token SHALL NOT 因 detail 再次重复相加
-- **AND** chat 页默认摘要 SHALL NOT 展示 cache/reasoning，仅按需调试视图可读取
+- **WHEN** archive、summary、boundary、stable-source refs 或 checkpoint 任一步失败
+- **THEN** 新 compact state SHALL NOT 发布
+- **AND** history、file state 与 discovered tools SHALL 保持压缩前的可恢复状态
 
-#### Scenario: Provider 只返回基础 usage
+### Requirement: Stable Context Sources SHALL 支持 Revision 与压缩后重建
 
-- **WHEN** Provider 只返回 input、output 和 total
-- **THEN** 基础 usage SHALL 正常展示
-- **AND** cache/reasoning SHALL 显示不可用或省略
+每个来源 SHALL 由自己的 owner 定义 freshness：Skills 使用用户 revision，Memory 在顶层 invocation 刷新，tool catalog 使用 catalog hash，attachments 每轮解析，场景动态信息由 DynamicContext 提供。同一 run 内来源 SHALL 保持稳定；变更时 SHALL 只失效对应来源。
 
-### Requirement: Run usage SHALL 按 caller 和模型调用归属
+#### Scenario: Skill 在两个 Turn 之间变更
 
-系统 SHALL 将一轮 Agent run 的实际 Provider usage 按唯一 model run id 去重累计，并至少支持 `lead_agent`、`subagent`、`middleware` caller。系统 SHALL 支持按模型汇总，并为调试保留有界 step attribution；子 Agent usage SHALL 只计入 run 总量一次。
+- **WHEN** Skill 在上一个 turn 结束后被安装、删除或更新
+- **THEN** 下一个 turn SHALL 刷新 Skills private cache 并生成新 revision
+- **AND** 已在运行的当前 turn SHALL NOT 在中途突然改变 prompt
 
-#### Scenario: 主 Agent 与子 Agent 分别调用模型
+### Requirement: Effective History Reduction SHALL 保留 Raw Transcript
 
-- **WHEN** 一轮 run 中主 Agent 和子 Agent 各完成一次模型调用
-- **THEN** run cumulative SHALL 等于两次实际 usage 之和
-- **AND** `by_caller` SHALL 分别报告 `lead_agent` 与 `subagent`
+Tool-result replacement 与 Snip SHALL 产生可持久化、可重放的 effective-history projection，不得物理删除 raw transcript。每个 replacement SHALL 记录原内容 hash、原因、artifact/reference 和 token 变化。Tool Result micro-compaction SHALL 由 ToolResultBudget 承担，不得存在第二个同义 middleware。
 
-#### Scenario: 重复模型完成事件
+#### Scenario: Checkpoint Resume 重放局部减重
 
-- **WHEN** 同一 model run id 因流式与终态事件被观察两次
-- **THEN** usage SHALL 只累计一次
+- **WHEN** 同一 run 从 checkpoint 恢复
+- **THEN** 有效 history SHALL 重放与恢复前相同的 replacement/snip 决策
+- **AND** raw transcript SHALL 仍可用于诊断与重新压缩
 
-#### Scenario: 调试步骤数量受限
+### Requirement: Tool Registry 与 Deferred Filter SHALL 对大型 Schema 延迟加载
 
-- **WHEN** 长时间 Agent run 产生大量模型与工具事件
-- **THEN** step attribution SHALL 按配置上限或语义完成事件有界保存
-- **AND** SHALL NOT 按每个 token delta 生成 attribution 记录
+基础工具与已发现工具 SHALL 在最终 request 中可用；超过预算阈值的 MCP/extension 工具 SHALL 默认 deferred，并通过 tool search 加入 discovered set。工具已发现 SHALL NOT 等于获得执行权限。
 
-### Requirement: 内部 attribution 元数据 SHALL NOT 进入模型输入
+#### Scenario: MCP Catalog 超过预算
 
-用于 token 来源和 caller 归属的 Noesis 内部元数据 SHALL 保持 request/run scoped，并在 Provider wire payload 生成前被剥离或位于不可序列化的内部上下文。该元数据 SHALL NOT 改变 prompt 文本、tool schema 或 prompt cache key。
+- **WHEN** 全部 MCP tool schemas 超过配置预算
+- **THEN** 未发现工具的完整 schema SHALL NOT 进入最终 request
+- **AND** tool search 结果 SHALL 只在当前 run 激活对应 schema
 
-#### Scenario: 检查 Provider 请求载荷
+### Requirement: Read Before Write SHALL 防止基于过期内容写入
 
-- **WHEN** 带 Skills、memory 和 RAG provenance 的请求被序列化给 Provider
-- **THEN** wire payload SHALL 只包含原有模型输入
-- **AND** SHALL NOT 出现 Noesis attribution 调试字段
+Filesystem Profile SHALL 在成功 Read 的 ToolMessage metadata 中记录 path 与当前内容 hash。Edit/Write 前 SHALL 重新读取并验证现有文件具有当前版本的 read mark；成功写入 SHALL 使旧 mark 失效。同一路径的检查与执行 SHALL 串行化。
+
+#### Scenario: 已读文件被外部修改
+
+- **WHEN** Edit/Write 发现当前 mtime/hash 与最近 Read 记录不同
+- **THEN** tool adapter SHALL 拒绝基于过期内容的写入
+- **AND** 工具 SHALL 返回要求重新读取的有界 error ToolMessage
+
+### Requirement: Provider Adapter SHALL 生成唯一 Canonical Request
+
+LangChain Provider adapter SHALL 在发送前完成 system 合并、message role、tool call/result id、thinking/media block、schema 与 cache marker 的 Provider 适配。Noesis SHALL NOT 建立第二个 canonical request adapter。`PatchToolCallsMiddleware` SHALL 只修复中断导致的不完整 tool pair，不得被当成 Provider encoder。
+
+#### Scenario: 预算基于最终 Schema
+
+- **WHEN** DeferredToolFilter 与 Provider adapter 完成 tool schema 过滤和编码
+- **THEN** compaction 预算 SHALL 使用该最终 request
+- **AND** SHALL NOT 使用过滤前的全量 catalog 或早期 history 快照
+
+### Requirement: Subagent Context SHALL 默认隔离
+
+普通子 Agent SHALL 使用独立 message history 与私有运行状态，只接收任务输入和 Profile 明确允许的稳定上下文。父 Agent 只 SHALL 接收子任务的有界结果；子任务取消、失败或超时 SHALL 形成可识别结果，且不得把子 Agent 私有状态合并回父 Agent。
+
+#### Scenario: 普通 Task Worker
+
+- **WHEN** 主 Agent 创建普通 task worker
+- **THEN** worker SHALL 不自动获得父 Agent 全部 conversation 或私有 counters
+- **AND** SHALL 只获得任务描述、允许的稳定上下文与自身工具
+
+#### Scenario: 并行子任务独立完成
+
+- **WHEN** 主 Agent 同时运行多个子任务且其中一个失败或取消
+- **THEN** 其它已运行子任务 SHALL 不被错误合并或重复执行
+- **AND** 父 Agent SHALL 按 tool call id 接收每个子任务的独立有界结果
+
+#### Scenario: 显式 Fork 与 Resume
+
+- **WHEN** 调用方显式选择 fork
+- **THEN** 子 Agent SHALL 获得父 conversation snapshot 与白名单 durable state 的深拷贝
+- **AND** 子 Agent resume SHALL 从自己的 checkpoint 恢复，不重读父 Agent 当前 state
+
+### Requirement: Agent Runtime SHALL 按 Run 注入稳定的 Memory Bulletin
+
+启用经验记忆的主 Agent profile SHALL 在新 `run_id` 的 `before_agent` 边界执行 fast memory retrieval，并将有界 Bulletin、memory ids、source snapshot 和 `run_id` 写入 LangGraph private state。RunService SHALL 将 `run_id`、user id、agent profile 和 project key 显式传递至 agent factory/middleware；middleware SHALL NOT 从 session id 或模型文本推断。相同 Run 的模型调用和 HITL resume SHALL 复用逐字节相同的自动块，新 Run SHALL 刷新；该 private state SHALL NOT 自动复制给 subagent。
+
+Bulletin SHALL 只由当前用户/scope 的 active、有效、有合格 provenance/source evidence 且达到冻结相关性阈值的 item 构成。fast path SHALL 不额外调用生成模型；任一依赖失败 SHALL 零注入并继续 Run，不得用 raw、candidate、needs_review、过期或跨 scope 内容兜底。
+
+#### Scenario: 同一 Run 自动块稳定
+- **WHEN** 同一 Run 内发生多次模型调用
+- **THEN** 每次请求中的自动 Memory Bulletin SHALL 逐字节相同
+
+#### Scenario: HITL 跨进程恢复
+- **WHEN** Run 进入 HITL pending 并从 checkpoint 在另一进程恢复
+- **THEN** middleware SHALL 复用 checkpoint private state 中的原 Bulletin
+
+#### Scenario: subagent 不继承自动块
+- **WHEN** 主 Agent 创建 subagent
+- **THEN** Memory Bulletin private state SHALL NOT 因通用状态复制而自动传入 subagent
+
+#### Scenario: 记忆依赖降级
+- **WHEN** embedding、workspace、Qdrant 或 PostgreSQL memory 查询不可用
+- **THEN** Runtime SHALL 零注入并继续 Agent Run
+- **AND** SHALL NOT 放宽状态、scope 或 provenance 门槛
+
+#### Scenario: 用户关闭开关
+- **WHEN** 用户关闭经验记忆并开始新 Run
+- **THEN** Runtime SHALL 不执行自动检索或注入
+- **AND** `search_memory`、`get_memory_source` 和治理操作 SHALL 保持可用
+
+### Requirement: MemoryQueryService SHALL 使用独立只读运行边界
+
+MemoryQueryService SHALL 与主 Agent 的业务工具分离，只装配 manifest/item/Run span/artifact summary 只读工具，并显式禁止外部网络、远程 MCP、业务写工具、shell 写入、跨用户路径和递归 memory capture。Service SHALL 对每次查询记录 duration、step count、token usage、returned spans、evidence status 和失败分类；trace SHALL 脱敏并按保留期清理。
+
+#### Scenario: 查询 Controller 尝试调用业务工具
+- **WHEN** MemoryQueryService 模型请求未注册的业务写工具或外部工具
+- **THEN** Runtime SHALL 拒绝该工具调用
+- **AND** SHALL NOT扩大当前授权或继续以该输出作为证据
+
+#### Scenario: 查询无证据
+- **WHEN** 只读检索在预算内未找到支持当前问题的来源
+- **THEN** Service SHALL 返回 `insufficient`/abstain
+- **AND** SHALL NOT 根据相似摘要编造结论
+
+### Requirement: Runtime SHALL 保护稳定 Prompt 前缀的上下文缓存
+
+PromptAssembler SHALL 保持稳定 system/developer instructions、工具 schema 和可缓存历史前缀位于自动 Memory Bulletin 之前，并将 Bulletin 作为单一 late context segment 放在稳定前缀之后、当前用户输入/本轮新增内容之前。Bulletin SHALL 使用 canonical serialization：稳定排序、固定字段顺序/空白/转义，且模型可见文本 SHALL NOT 包含当前时间、当前 `run_id`、source run/span、evidence count、last verified time 或随机值。相同 `bulletin_hash` SHALL 生成逐字节相同文本；真实 memory 内容变化时 SHALL 生成新 hash，不得为了 cache 保留 stale 内容。
+
+`run_id`、source snapshot/span 和动态治理字段 SHALL 只保存在 private metadata，通过来源工具展开。显式 Deep Query SHALL 作为后续 tool result 追加，不改写稳定 system prompt 或冻结 Bulletin。Runtime SHALL 保持上述稳定前缀以支持 provider 的自动 prefix cache；系统 SHALL NOT 注入 provider 专用 cache breakpoint 标记（当前无显式缓存 provider 诉求），也不得因此增加用户开关。Runtime SHALL 记录 provider 可得的 cache-read、cache-write、uncached input 和 TTFT；provider 不返回时 SHALL 记录 unknown 而非 0。
+
+#### Scenario: 同 Run 后续调用复用 Bulletin
+- **WHEN** 同一 Run 的后续模型调用使用相同 `bulletin_hash`
+- **THEN** 模型可见 Bulletin SHALL 逐字节相同
+- **AND** Runtime SHALL 保留稳定 prefix 以允许 provider cache reuse
+
+#### Scenario: 新 Run 内容未变化
+- **WHEN** 新 Run 检索出与上一 Run 相同的 memory items 和可见字段
+- **THEN** canonical serializer SHALL 产生相同 `bulletin_hash` 和文本
+- **AND** SHALL NOT 因新 `run_id` 或当前时间制造 cache miss
+
+#### Scenario: Memory 内容真实变化
+- **WHEN** active statement、applicability 或 verification label 发生变化
+- **THEN** 系统 SHALL 生成新的 Bulletin/hash
+- **AND** SHALL 优先保证内容正确而非复用旧 cache
+
+#### Scenario: Provider 不返回 cache 指标
+- **WHEN** 模型响应没有 cache token details
+- **THEN** telemetry SHALL 标记 cache metrics unavailable
+- **AND** SHALL NOT 把缺失值计为零缓存命中
+
+#### Scenario: Provider 要求显式 cache breakpoint
+- **WHEN** 当前模型适配器声明支持且要求显式 prompt cache breakpoint
+- **THEN** Runtime SHALL 在稳定前缀末端设置 provider-native breakpoint
+- **AND** 动态 Bulletin、当前用户输入和后续 tool result SHALL 位于 breakpoint 之后

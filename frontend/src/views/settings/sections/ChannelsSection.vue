@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { MessagingChannel } from '@/api/settings'
 import { NButton, NInput, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import {
   createChannel, deleteChannel, listChannels, testChannelConnection,
   testChannelDelivery, updateChannel,
@@ -16,14 +16,13 @@ const editingId = ref<string | null>(null)
 const form = reactive({
   type: 'telegram' as 'telegram' | 'feishu', display_name: '我的 Telegram Bot', bot_token: '',
   pairing_chat_id: '', pairing_user_id: '', enabled: true,
-  default_qa_type: 'SUPER_AGENT_QA', default_session_id: '',
-  session_strategy: 'persistent' as 'persistent' | 'new_per_message',
-  delivery_preference: 'reply' as 'reply' | 'silent',
 })
 const channelOptions = [{ label: 'Telegram', value: 'telegram' }, { label: '飞书', value: 'feishu' }]
-const qaOptions = ['SUPER_AGENT_QA', 'COMMON_QA', 'FAULT_OPERATION_QA', 'TEST_CASE_QA'].map((value) => ({ label: value, value }))
-const sessionOptions = [{ label: '持续使用同一会话', value: 'persistent' }, { label: '每条消息创建新会话', value: 'new_per_message' }]
-const deliveryOptions = [{ label: '回复消息', value: 'reply' }, { label: '仅运行，不自动回复', value: 'silent' }]
+watch(() => form.type, (type) => {
+  if (!editingId.value) {
+    form.display_name = type === 'feishu' ? '我的飞书机器人' : '我的 Telegram Bot'
+  }
+})
 
 async function refresh() {
   try {
@@ -35,7 +34,7 @@ async function refresh() {
 
 function resetForm() {
   editingId.value = null
-  Object.assign(form, { type: 'telegram', display_name: '我的 Telegram Bot', bot_token: '', pairing_chat_id: '', pairing_user_id: '', enabled: true, default_qa_type: 'SUPER_AGENT_QA', default_session_id: '', session_strategy: 'persistent', delivery_preference: 'reply' })
+  Object.assign(form, { type: 'telegram', display_name: '我的 Telegram Bot', bot_token: '', pairing_chat_id: '', pairing_user_id: '', enabled: true })
 }
 
 function edit(channel: MessagingChannel) {
@@ -43,8 +42,6 @@ function edit(channel: MessagingChannel) {
   Object.assign(form, {
     type: channel.type as 'telegram' | 'feishu', display_name: channel.display_name, bot_token: '',
     pairing_chat_id: channel.pairing_chat_id || '', pairing_user_id: channel.pairing_user_id || '', enabled: channel.enabled,
-    default_qa_type: channel.default_qa_type || 'SUPER_AGENT_QA', default_session_id: channel.default_session_id || '',
-    session_strategy: channel.session_strategy || 'persistent', delivery_preference: channel.delivery_preference || 'reply',
   })
 }
 
@@ -74,10 +71,9 @@ async function toggle(channel: MessagingChannel, enabled: boolean) {
   try {
     await updateChannel(channel.channel_id, {
       type: channel.type, display_name: channel.display_name, enabled,
-      pairing_chat_id: channel.pairing_chat_id, default_qa_type: channel.default_qa_type,
+      pairing_chat_id: channel.pairing_chat_id,
       pairing_user_id: channel.pairing_user_id,
-      default_session_id: channel.default_session_id, session_strategy: channel.session_strategy || 'persistent',
-      delivery_preference: channel.delivery_preference || 'reply', bot_token_action: 'keep',
+      bot_token_action: 'keep',
     })
     await refresh()
   } catch (error) {
@@ -141,10 +137,6 @@ onMounted(() => void refresh())
         <n-input v-model:value="form.pairing_user_id" placeholder="发送者 Open ID（用于配对）" />
         <n-input v-model:value="form.pairing_chat_id" placeholder="接收测试消息的 Chat ID（可稍后填写）" />
       </template>
-      <n-select v-model:value="form.default_qa_type" :options="qaOptions" />
-      <n-select v-model:value="form.session_strategy" :options="sessionOptions" />
-      <n-input v-if="form.session_strategy === 'persistent'" v-model:value="form.default_session_id" placeholder="固定会话 ID（留空使用通道默认会话）" />
-      <n-select v-model:value="form.delivery_preference" :options="deliveryOptions" />
       <label class="enabled"><n-switch v-model:value="form.enabled" /> 启用通道</label>
       <div class="actions"><n-button type="primary" @click="save">{{ editingId ? '保存修改' : `添加${form.type === 'feishu' ? '飞书' : ' Telegram'}通道` }}</n-button><n-button v-if="editingId" @click="resetForm">取消</n-button></div>
     </div>

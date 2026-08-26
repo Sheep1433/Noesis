@@ -328,7 +328,7 @@ async function moveSelection(direction: -1 | 1) {
   </n-drawer>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .chunk-drawer :deep(.n-drawer-body-content-wrapper) {
   display: flex;
   flex-direction: column;
@@ -484,14 +484,14 @@ async function moveSelection(direction: -1 | 1) {
   flex: 1;
 }
 
-@media (width <= 900px) {
+@media (max-width: $bp-lg) {
 
   .inspector-toolbar {
     grid-template-columns: minmax(0, 1fr) 112px 88px;
   }
 }
 
-@media (width <= 768px) {
+@media (max-width: $bp-md) {
 
   .inspector-toolbar {
     grid-template-columns: minmax(0, 1fr) 112px 88px;
@@ -526,7 +526,7 @@ async function moveSelection(direction: -1 | 1) {
   }
 }
 
-@media (width <= 560px) {
+@media (max-width: $bp-sm) {
 
   .inspector-toolbar {
     grid-template-columns: minmax(0, 1fr) 104px;

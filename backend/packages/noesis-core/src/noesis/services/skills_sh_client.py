@@ -4,11 +4,9 @@ skills.sh 市场客户端：搜索发现 + 从 GitHub 拉取 skill 包。
 from __future__ import annotations
 
 import io
-import json
 import re
 import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal

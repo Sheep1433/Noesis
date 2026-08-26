@@ -76,6 +76,11 @@ export function isMarkdownPreviewPath(path: string): boolean {
   return ext === '.md' || ext === '.markdown'
 }
 
+export function isHtmlPreviewPath(path: string): boolean {
+  const ext = getPathExtension(path)
+  return ext === '.html' || ext === '.htm'
+}
+
 export function isInlinePreviewPath(path: string): boolean {
   return isTextPreviewPath(path) || isImagePreviewPath(path)
 }

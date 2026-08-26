@@ -1,93 +1,58 @@
-"""按用户绑定的跨会话记忆工具。"""
+"""Agent 记忆工具：grep 检索（md-memory-layer task 5.1）。"""
+
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.services.memory_dream_service import MemoryDreamService
-from noesis.services.user_memory_service import UserMemoryService
-
-
-class SearchMemoryInput(BaseModel):
-    query: str = Field(min_length=1, max_length=100, description="要回忆的关键词或短语")
-    date_from: str | None = Field(default=None, description="开始日期 YYYY-MM-DD")
-    date_to: str | None = Field(default=None, description="结束日期 YYYY-MM-DD")
-    category: str | None = Field(default=None, description="可选分类：fact/decision/preference/todo/problem")
-    top_k: int = Field(default=8, ge=1, le=20)
+from noesis.services.memory.store import MemoryStore
+from noesis.services.memory.types import MEMORY_TYPES
 
 
-class MemorySourceInput(BaseModel):
-    session_id: str
-    message_id: str
-    context_messages: int = Field(default=1, ge=0, le=3)
-
-
-def build_memory_tools(
-    *,
-    user_id: str,
-    db: AsyncSession,
-    memory_service: Any | None = None,
-) -> list[StructuredTool]:
-    search_entries = (
-        memory_service.search_entries
-        if memory_service is not None
-        else UserMemoryService.search_entries
+class MemorySearchInput(BaseModel):
+    query: str = Field(description="关键词（多个词以空格分隔，任一命中即返回）")
+    memory_type: str = Field(
+        default="",
+        description=f"限定类型（{'/'.join(MEMORY_TYPES)}）；空 = 全部类型",
     )
-    get_source = (
-        memory_service.get_source
-        if memory_service is not None
-        else MemoryDreamService.get_source
-    )
+    limit: int = Field(default=5, ge=1, le=10)
 
-    async def search_memory(
-        query: str,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        category: str | None = None,
-        top_k: int = 8,
-    ) -> str:
-        items = search_entries(
-            user_id,
-            query,
-            date_from=date_from,
-            date_to=date_to,
-            category=category,
-            limit=top_k,
-        )
-        return json.dumps({"items": items}, ensure_ascii=False)
 
-    async def get_memory_source(
-        session_id: str,
-        message_id: str,
-        context_messages: int = 1,
-    ) -> str:
+def build_memory_tools(*, user_id: str) -> list[StructuredTool]:
+    """绑定当前用户的只读记忆检索工具（grep 语义，无 DB 依赖）。"""
+
+    async def search_memory(query: str, memory_type: str = "", limit: int = 5) -> str:
+        types: tuple[str, ...] = ()
+        if memory_type:
+            if memory_type not in MEMORY_TYPES:
+                return json.dumps(
+                    {"error": f"非法类型 {memory_type!r}，仅允许 {'/'.join(MEMORY_TYPES)}"},
+                    ensure_ascii=False,
+                )
+            types = (memory_type,)
         try:
-            data = await get_source(
-                db,
-                user_id=user_id,
-                session_id=session_id,
-                message_id=message_id,
-                context_messages=context_messages,
-            )
-        except LookupError:
-            return json.dumps({"error": "记忆来源不存在或无权访问"}, ensure_ascii=False)
-        return json.dumps(data, ensure_ascii=False)
+            hits = MemoryStore.search(user_id, query, memory_types=types, limit=limit)
+        except Exception:
+            return json.dumps({"error": "记忆检索暂不可用"}, ensure_ascii=False)
+        if not hits:
+            return json.dumps({"results": []}, ensure_ascii=False)
+        return json.dumps(
+            {"results": hits},
+            ensure_ascii=False,
+        )
 
-    return [
-        StructuredTool.from_function(
-            coroutine=search_memory,
-            name="search_memory",
-            description="按需搜索当前用户在其他任务中形成的历史记忆。先搜索摘要，需要核对细节时再读取来源。",
-            args_schema=SearchMemoryInput,
+    tool = StructuredTool.from_function(
+        coroutine=search_memory,
+        name="search_memory",
+        description=(
+            "在用户长期记忆（md 文件）中按关键词检索条目原文。"
+            "适用于需要回忆用户偏好、历史决策、既往经验或注意事项的场景。"
         ),
-        StructuredTool.from_function(
-            coroutine=get_memory_source,
-            name="get_memory_source",
-            description="读取 search_memory 返回条目的有限原始消息上下文，用于核对记忆来源。",
-            args_schema=MemorySourceInput,
-        ),
-    ]
+        args_schema=MemorySearchInput,
+    )
+    return [tool]
+
+
+__all__ = ["build_memory_tools"]

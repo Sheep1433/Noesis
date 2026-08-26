@@ -1,70 +1,68 @@
+import json
+from typing import Any
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 from noesis.config.env import ModelConfig
-from noesis.runtime.logging import logger
 
-_OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
-_OPENCODE_DEFAULT_HEADERS = {
-    "HTTP-Referer": "https://opencode.ai/",
-    "X-Title": "opencode",
-}
-_DEBUG_TOKEN_USAGE_TAG = "[DEBUG-TOKEN-USAGE]"
-_PROVIDER_USAGE_KEYS = (
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-    "input_tokens",
-    "output_tokens",
-    "prompt_tokens_details",
-    "completion_tokens_details",
-    "input_tokens_details",
-    "output_tokens_details",
-)
+def _opencode_preset() -> tuple[str, dict[str, str]]:
+    """opencode 便捷默认值来自 config.yaml model.provider_presets（部署者维护）。"""
+    for preset in ModelConfig.provider_presets:
+        if preset.get("id") == "opencode":
+            return str(preset.get("base_url") or ""), dict(preset.get("headers") or {})
+    return "", {}
 
 
-def _debug_provider_usage(value):
-    """Log only numeric provider usage fields, never response content."""
-    if value is None:
-        return {"raw_type": "missing"}
-    if hasattr(value, "model_dump"):
-        value = value.model_dump()
-    elif hasattr(value, "dict"):
-        value = value.dict()
-    if not isinstance(value, dict):
-        return {"raw_type": type(value).__name__}
-    fields = {}
-    for key in _PROVIDER_USAGE_KEYS:
-        item = value.get(key)
-        if isinstance(item, dict):
-            numeric = {}
-            for nested_key, nested_value in item.items():
-                try:
-                    numeric[nested_key] = int(nested_value)
-                except (TypeError, ValueError):
-                    continue
-            if numeric:
-                fields[key] = numeric
-        else:
-            try:
-                fields[key] = int(item)
-            except (TypeError, ValueError):
-                continue
-    return {"raw_type": type(value).__name__, "fields": fields}
+def _reasoning_to_text(reasoning: Any) -> str:
+    """Best-effort 把 reasoning 载荷（str/list/dict）转成可读文本。
+
+    参考 deer-flow vllm_provider：reasoning 可能是字符串、结构化数组或字典，
+    需递归提取 text/content 字段，最后兜底 JSON 序列化。
+    """
+    if reasoning is None:
+        return ""
+    if isinstance(reasoning, str):
+        return reasoning
+    if isinstance(reasoning, list):
+        return "".join(_reasoning_to_text(item) for item in reasoning)
+    if isinstance(reasoning, dict):
+        for key in ("text", "content", "reasoning"):
+            value = reasoning.get(key)
+            if isinstance(value, str):
+                return value
+            if value is not None:
+                text = _reasoning_to_text(value)
+                if text:
+                    return text
+        try:
+            return json.dumps(reasoning, ensure_ascii=False)
+        except TypeError:
+            return str(reasoning)
+    try:
+        return json.dumps(reasoning, ensure_ascii=False)
+    except TypeError:
+        return str(reasoning)
 
 
-class ChatOpenCode(ChatOpenAI):
-    """OpenCode Zen 统一适配：归一化不同模型的 reasoning 字段到 additional_kwargs["reasoning_content"]。
+class ChatOpenAICompatible(ChatOpenAI):
+    """OpenAI 兼容端点统一适配：自动探测并归一化 reasoning 字段。
 
-    OpenCode 聚合了多家模型，reasoning 字段格式不统一：
+    reasoning 是模型能力（DeepSeek/MiMo 等支持思考的模型会产出），不是 vendor
+    能力——同一 OpenAI 协议端点后端可能是支持思考的模型，也可能是普通模型。
+    因此本类对所有响应都尝试提取 reasoning，响应无相关字段时返回 None 不影响。
+
+    兼容的字段格式：
     - DeepSeek 系列：delta.reasoning_content（字符串）
-    - MiMo 系列：delta.reasoning（字符串）+ delta.reasoning_details（数组，含 type/text/format/index）
-    - 其他模型：可能无 reasoning 或用不同字段
+    - MiMo / vLLM 系列：delta.reasoning（字符串或结构化）+ delta.reasoning_details（数组）
+    - 其他模型：无 reasoning 字段，自动跳过
 
-    本类在流式和非流式两条路径上统一提取，上层只需读 additional_kwargs["reasoning_content"]。
+    在流式和非流式两条路径上统一提取，同时保留原始 reasoning 与归一化文本
+    reasoning_content，上层读 additional_kwargs["reasoning_content"] 即可。
+    序列化方向对所有 assistant 消息无差别回传 reasoning（API 不需要时忽略，
+    DeepSeek 思考模式多轮 tool call 需要时自动生效）。参考 deer-flow vllm_provider。
     """
 
     @staticmethod
@@ -73,11 +71,11 @@ class ChatOpenCode(ChatOpenAI):
         # 1. DeepSeek 原生：reasoning_content（字符串）
         reasoning_content = delta.get("reasoning_content")
         if reasoning_content is not None:
-            return reasoning_content
-        # 2. MiMo / OpenRouter：reasoning（字符串）
+            return _reasoning_to_text(reasoning_content)
+        # 2. MiMo / vLLM / OpenRouter：reasoning（字符串或结构化）
         reasoning = delta.get("reasoning")
         if reasoning is not None:
-            return reasoning
+            return _reasoning_to_text(reasoning)
         # 3. reasoning_details 数组（MiMo 结构化格式）：拼接 text 字段
         details = delta.get("reasoning_details")
         if isinstance(details, list) and details:
@@ -88,14 +86,6 @@ class ChatOpenCode(ChatOpenAI):
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
         """流式：从每个 chunk 的 delta 提取 reasoning 并归一化。"""
-        if isinstance(chunk, dict) and chunk.get("usage"):
-            logger.debug(
-                "{} provider_stream_usage model={} response_id={} usage={}",
-                _DEBUG_TOKEN_USAGE_TAG,
-                self.model_name,
-                chunk.get("id") or "",
-                _debug_provider_usage(chunk.get("usage")),
-            )
         generation_chunk = super()._convert_chunk_to_generation_chunk(
             chunk, default_chunk_class, base_generation_info,
         )
@@ -104,13 +94,47 @@ class ChatOpenCode(ChatOpenAI):
             delta = choices[0].get("delta", {})
             reasoning = self._extract_reasoning_from_delta(delta)
             if reasoning is not None:
+                # 同时保留归一化文本与原始字段，便于序列化回传与上游消费
                 generation_chunk.message.additional_kwargs["reasoning_content"] = reasoning
+                if delta.get("reasoning") is not None:
+                    generation_chunk.message.additional_kwargs["reasoning"] = delta.get("reasoning")
             # 标记 provider 供上层区分
             generation_chunk.message.response_metadata = {
                 **generation_chunk.message.response_metadata,
                 "model_provider": "opencode",
             }
         return generation_chunk
+
+    def _stream(self, *args, **kwargs):
+        """Keep only the final cumulative usage in LangChain's stream reducer.
+
+        OpenCode repeats the running ``prompt_tokens``/``completion_tokens``
+        total on every chunk. ``generate_from_stream`` adds
+        ``AIMessageChunk.usage_metadata`` across chunks, so passing those
+        values through makes one request look like dozens of requests.
+        Keep one chunk buffered and strip usage from every preceding chunk;
+        the final provider chunk remains authoritative.
+        """
+        pending = None
+        last_usage = None
+        for chunk in super()._stream(*args, **kwargs):
+            usage = getattr(chunk.message, "usage_metadata", None)
+            if usage is not None:
+                last_usage = usage
+            if pending is not None:
+                message = pending.message
+                if getattr(message, "usage_metadata", None) is not None:
+                    pending = pending.model_copy(update={
+                        "message": message.model_copy(update={"usage_metadata": None}),
+                    })
+                yield pending
+            pending = chunk
+        if pending is not None:
+            if getattr(pending.message, "usage_metadata", None) is None and last_usage is not None:
+                pending = pending.model_copy(update={
+                    "message": pending.message.model_copy(update={"usage_metadata": last_usage}),
+                })
+            yield pending
 
     def _combine_llm_outputs(self, llm_outputs: list[dict | None]) -> dict:
         """Use the final cumulative usage instead of summing every stream chunk.
@@ -139,13 +163,6 @@ class ChatOpenCode(ChatOpenAI):
 
     def _create_chat_result(self, response, generation_info=None):
         """非流式：从完整 response 提取 reasoning 并归一化。"""
-        logger.debug(
-            "{} provider_response_usage model={} response_id={} usage={}",
-            _DEBUG_TOKEN_USAGE_TAG,
-            self.model_name,
-            getattr(response, "id", "") or "",
-            _debug_provider_usage(getattr(response, "usage", None)),
-        )
         rtn = super()._create_chat_result(response, generation_info)
         for generation in rtn.generations:
             if generation.message.response_metadata is None:
@@ -172,6 +189,50 @@ class ChatOpenCode(ChatOpenAI):
                     if reasoning is not None:
                         rtn.generations[0].message.additional_kwargs["reasoning_content"] = reasoning
         return rtn
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        """序列化方向：把 assistant 的 reasoning_content 回传到 API。
+
+        DeepSeek 思考模式要求，一旦某轮发生了 tool call，该 assistant 的
+        ``reasoning_content`` 必须在后续所有 turn 的上下文中原样回传，否则
+        返回 400 ``The `reasoning_content` in the thinking mode must be passed
+        back to the API.``。``langchain_openai`` 的 ``_convert_message_to_dict``
+        不认识 ``reasoning_content``，序列化时直接丢弃；``langchain_deepseek``
+        也只在捕获方向写入、序列化方向未补。
+
+        本类对所有 assistant 消息无差别回传 reasoning_content（参考 deer-flow
+        vllm_provider）：API 不需要该字段时会忽略，需要它的模型（DeepSeek 思考
+        模式多轮 tool call）自动生效。无需按模型名判断——响应里没产出 reasoning
+        的模型，``additional_kwargs`` 本就为空，不会注入。
+
+        实现要点：``_convert_message_to_dict`` 转出的 dict 已丢失
+        ``additional_kwargs["reasoning_content"]``，因此先从原始 AIMessage
+        列表按序提取，再按 assistant 出现顺序对齐回填到 dict 列表。
+        """
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return payload
+
+        # 原始消息按 assistant 顺序提取 reasoning_content，与 dict 列表中
+        # assistant 顺序一一对应（chat/completions 分支保持输入顺序）。
+        original = self._convert_input(input_).to_messages()
+        reasoning_queue = [
+            msg.additional_kwargs.get("reasoning_content")
+            for msg in original
+            if isinstance(msg, AIMessage)
+        ]
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            if message.get("reasoning_content"):
+                continue
+            if not reasoning_queue:
+                break
+            reasoning = reasoning_queue.pop(0)
+            if reasoning:
+                message["reasoning_content"] = reasoning
+        return payload
 
 
 def _llm_http_timeout() -> httpx.Timeout:
@@ -212,9 +273,20 @@ def build_chat_model(
         "http_client": http_client,
         "http_async_client": http_async_client,
     }
+    # 流式模式下，OpenAI 兼容端点（opencode/tokenrhythm/openai/deepseek/qwen）默认不返回 usage，
+    # 必须显式 stream_options.include_usage，最后一个 chunk 才带 token 计数；
+    # 否则 stats 中间件读到的 usage_metadata 为空，统计条只显示轮数/步数/耗时而无 token。
+    # Anthropic 流式自带 usage，不走此参数。
+    stream_usage_kwargs = (
+        {"model_kwargs": {"stream_options": {"include_usage": True}}}
+        if ModelConfig.streaming
+        else {}
+    )
 
     model_map = {
-        "openai": lambda: ChatOpenAI(
+        # openai / minimax 走统一 OpenAI 兼容适配：reasoning 自动探测，
+        # 响应有 reasoning_content/reasoning 字段就提取，没有则正常工作。
+        "openai": lambda: ChatOpenAICompatible(
             model=model_name,
             temperature=temperature,
             base_url=model_base_url,
@@ -222,9 +294,10 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
-        "minimax": lambda: ChatOpenAI(
+        "minimax": lambda: ChatOpenAICompatible(
             model=model_name,
             temperature=temperature,
             base_url=model_base_url,
@@ -232,17 +305,21 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
-        "opencode": lambda: ChatOpenCode(
+        # opencode 与 openai 同为 OpenAI 兼容端点，复用同一适配类；
+        # 仅保留 opencode 默认 base_url 与 headers 的便捷默认值。
+        "opencode": lambda: ChatOpenAICompatible(
             model=model_name,
             temperature=temperature,
-            base_url=model_base_url or _OPENCODE_DEFAULT_BASE_URL,
+            base_url=model_base_url or _opencode_preset()[0],
             api_key=model_api_key,
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
-            default_headers=_OPENCODE_DEFAULT_HEADERS,
+            default_headers=_opencode_preset()[1],
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "qwen": lambda: ChatQwen(
@@ -257,6 +334,7 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "deepseek": lambda: ChatDeepSeek(
@@ -267,6 +345,7 @@ def build_chat_model(
             timeout=timeout,
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
+            **stream_usage_kwargs,
             **http_kwargs,
         ),
         "anthropic": lambda: ChatAnthropic(
@@ -290,7 +369,12 @@ def build_chat_model(
     )
 
 
-def get_llm(purpose: str | None = None, *, model_id: str | None = None):
+def get_llm(
+    purpose: str | None = None,
+    *,
+    model_id: str | None = None,
+    temperature_override: float | None = None,
+):
     from noesis.llm.catalog import resolve_catalog_entry
     from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
@@ -304,7 +388,8 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
 
     if runtime_snapshot is not None:
         model_type = runtime_snapshot.model_type
-        model_name = runtime_snapshot.model_name
+        # 自定义模型：id 为复合「slug/model_id」选择器身份，线上名走 wire_name
+        model_name = runtime_snapshot.wire_name or runtime_snapshot.id
         temperature_str = ModelConfig.model_temperature
         model_base_url = runtime_snapshot.base_url
     elif use_summary_model:
@@ -315,7 +400,7 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
     elif model_id:
         entry = resolve_catalog_entry(model_id)
         model_type = entry.model_type
-        model_name = entry.model_name
+        model_name = entry.id
         temperature_str = str(entry.temperature)
         model_base_url = entry.base_url
     else:
@@ -336,6 +421,8 @@ def get_llm(purpose: str | None = None, *, model_id: str | None = None):
         temperature = float(temperature_str)
     except ValueError:
         raise ValueError(f"Invalid MODEL_TEMPERATURE value: {temperature_str}. Must be a float.")
+    if temperature_override is not None:
+        temperature = temperature_override
 
     return build_chat_model(
         model_type=model_type,

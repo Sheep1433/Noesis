@@ -117,7 +117,6 @@ class ModelSettings:
     summarization_model_temperature: float
     summarization_trigger_tokens: int
     summarization_trigger_fraction: float
-    summarization_max_input_tokens: int
     summarization_messages_to_keep: int
     governor_loop_enabled: bool
     governor_loop_hard_limit: int
@@ -126,6 +125,8 @@ class ModelSettings:
     governor_tool_calls_enabled: bool
     governor_tool_calls_total: int | None
     governor_tool_calls_per_name: int | None
+    # 用户自定义 Provider 平台预设（yaml model.provider_presets；dict 列表）
+    provider_presets: tuple
 
 
 @dataclass(frozen=True)
@@ -140,12 +141,18 @@ class StreamSettings:
     run_subscriber_queue_max_bytes: int
     run_max_active: int
     run_max_active_per_user: int
+    run_max_subscriptions_per_run: int
+    run_max_subscriptions_per_user: int
+    run_max_subscriptions_global: int
     run_terminal_retention_seconds: float
     run_max_duration_seconds: float
+    run_max_duration_seconds_super_agent: float
     run_max_output_bytes: int
     run_hitl_pending_timeout_seconds: float
     run_shutdown_drain_seconds: float
     run_cancel_grace_seconds: float
+    run_terminal_persistence_budget_seconds: float
+    run_terminal_retry_interval_seconds: float
     run_tool_timeout_seconds: float
     run_channel_queue_max_batches: int
     run_channel_queue_max_bytes: int
@@ -162,9 +169,36 @@ class RetrievalLimitSettings:
 
 
 @dataclass(frozen=True)
+class MemorySettings:
+    extraction_model: str
+    selection_model: str
+    enabled_by_default: bool
+    session_idle_minutes: int
+    sweep_interval_minutes: int
+    max_entries_per_extraction: int
+    index_max_lines: int
+    index_max_bytes: int
+    stale_warning_days: int
+    inject_budget_tokens: int
+    max_entry_chars: int
+    consolidation_min_interval_hours: int
+    consolidation_min_new_sessions: int
+    max_message_chars: int
+
+
+@dataclass(frozen=True)
 class HitlSettings:
     enabled: bool
     ask_timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class SubagentSettings:
+    max_concurrent_per_session: int
+    task_timeout_seconds: float
+    foreground_max_wait_seconds: float
+    auto_continue: bool
+    shell_task_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -313,9 +347,15 @@ def _build_app(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> AppSettings:
 def _build_session(yaml_cfg: AppYamlConfig) -> SessionSettings:
     session = yaml_cfg.session
     return SessionSettings(
-        idle_expire_days=_legacy_env_int("SESSION_IDLE_EXPIRE_DAYS", session.idle_expire_days),
-        absolute_expire_days=_legacy_env_int("SESSION_ABSOLUTE_EXPIRE_DAYS", session.absolute_expire_days),
-        renewal_window_minutes=_legacy_env_int("SESSION_RENEWAL_WINDOW_MINUTES", session.renewal_window_minutes),
+        idle_expire_days=_legacy_env_int(
+            "SESSION_IDLE_EXPIRE_DAYS", session.idle_expire_days
+        ),
+        absolute_expire_days=_legacy_env_int(
+            "SESSION_ABSOLUTE_EXPIRE_DAYS", session.absolute_expire_days
+        ),
+        renewal_window_minutes=_legacy_env_int(
+            "SESSION_RENEWAL_WINDOW_MINUTES", session.renewal_window_minutes
+        ),
         cookie_name=_legacy_env("SESSION_COOKIE_NAME", session.cookie_name),
     )
 
@@ -352,13 +392,25 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         or secrets.embedding_model_api_key
         or ""
     ).strip()
-    rerank_api_key = (secrets.rerank_model_api_key or secrets.embedding_model_api_key or "").strip()
+    rerank_api_key = (
+        secrets.rerank_model_api_key or secrets.embedding_model_api_key or ""
+    ).strip()
     return ModelSettings(
+        provider_presets=tuple(
+            {
+                "id": preset.id,
+                "label": preset.label or preset.id,
+                "base_url": preset.base_url,
+                "headers": dict(preset.headers),
+            }
+            for preset in m.provider_presets
+            if preset.id and preset.base_url
+        ),
         model_type=_legacy_env("MODEL_TYPE", m.type),
         model_name=_legacy_env("MODEL_NAME", m.name),
         model_temperature=_legacy_env_float("MODEL_TEMPERATURE", m.temperature),
         model_base_url=_legacy_env("MODEL_BASE_URL", m.base_url),
-        model_api_key=secrets.model_api_key,
+        model_api_key=secrets.model_api_key or m.api_key,
         embedding_model_name=_legacy_env("EMBEDDING_MODEL_NAME", emb.name),
         embedding_model_base_url=_legacy_env("EMBEDDING_MODEL_BASE_URL", emb.base_url),
         embedding_model_api_key=secrets.embedding_model_api_key,
@@ -378,8 +430,12 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         frequency_penalty=_legacy_env_float("FREQUENCY_PENALTY", gen.frequency_penalty),
         presence_penalty=_legacy_env_float("PRESENCE_PENALTY", gen.presence_penalty),
         streaming=_legacy_env_bool("STREAMING", gen.streaming),
-        context_max_input_tokens=_legacy_env_int("CONTEXT_MAX_INPUT_TOKENS", ctx.max_input_tokens),
-        context_display_enabled=_legacy_env_bool("CONTEXT_DISPLAY_ENABLED", ctx.display_enabled),
+        context_max_input_tokens=_legacy_env_int(
+            "CONTEXT_MAX_INPUT_TOKENS", ctx.max_input_tokens
+        ),
+        context_display_enabled=_legacy_env_bool(
+            "CONTEXT_DISPLAY_ENABLED", ctx.display_enabled
+        ),
         summarization_enabled=_legacy_env_bool("SUMMARIZATION_ENABLED", s.enabled),
         summarization_model_name=_legacy_env("SUMMARIZATION_MODEL_NAME", s.model_name),
         summarization_model_temperature=_legacy_env_float(
@@ -391,15 +447,18 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         summarization_trigger_fraction=_legacy_env_float(
             "SUMMARIZATION_TRIGGER_FRACTION", s.trigger_fraction
         ),
-        summarization_max_input_tokens=_legacy_env_int(
-            "SUMMARIZATION_MAX_INPUT_TOKENS", s.max_input_tokens
-        ),
         summarization_messages_to_keep=_legacy_env_int(
             "SUMMARIZATION_MESSAGES_TO_KEEP", s.messages_to_keep
         ),
-        governor_loop_enabled=_legacy_env_bool("GOVERNOR_LOOP_ENABLED", gov.loop_enabled),
-        governor_loop_hard_limit=_legacy_env_int("GOVERNOR_LOOP_HARD_LIMIT", gov.loop_hard_limit),
-        governor_loop_window_size=_legacy_env_int("GOVERNOR_LOOP_WINDOW_SIZE", gov.loop_window_size),
+        governor_loop_enabled=_legacy_env_bool(
+            "GOVERNOR_LOOP_ENABLED", gov.loop_enabled
+        ),
+        governor_loop_hard_limit=_legacy_env_int(
+            "GOVERNOR_LOOP_HARD_LIMIT", gov.loop_hard_limit
+        ),
+        governor_loop_window_size=_legacy_env_int(
+            "GOVERNOR_LOOP_WINDOW_SIZE", gov.loop_window_size
+        ),
         tool_output_max_chars=_legacy_env_int(
             "TOOL_OUTPUT_MAX_CHARS", runtime.tool_output_max_chars
         ),
@@ -435,12 +494,18 @@ def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
         run_subscriber_queue_max_bytes=stream.run_subscriber_queue_max_bytes,
         run_max_active=stream.run_max_active,
         run_max_active_per_user=stream.run_max_active_per_user,
+        run_max_subscriptions_per_run=stream.run_max_subscriptions_per_run,
+        run_max_subscriptions_per_user=stream.run_max_subscriptions_per_user,
+        run_max_subscriptions_global=stream.run_max_subscriptions_global,
         run_terminal_retention_seconds=stream.run_terminal_retention_seconds,
         run_max_duration_seconds=stream.run_max_duration_seconds,
+        run_max_duration_seconds_super_agent=stream.run_max_duration_seconds_super_agent,
         run_max_output_bytes=stream.run_max_output_bytes,
         run_hitl_pending_timeout_seconds=stream.run_hitl_pending_timeout_seconds,
         run_shutdown_drain_seconds=stream.run_shutdown_drain_seconds,
         run_cancel_grace_seconds=stream.run_cancel_grace_seconds,
+        run_terminal_persistence_budget_seconds=stream.run_terminal_persistence_budget_seconds,
+        run_terminal_retry_interval_seconds=stream.run_terminal_retry_interval_seconds,
         run_tool_timeout_seconds=stream.run_tool_timeout_seconds,
         run_channel_queue_max_batches=stream.run_channel_queue_max_batches,
         run_channel_queue_max_bytes=stream.run_channel_queue_max_bytes,
@@ -459,11 +524,44 @@ def _build_retrieval_limits(yaml_cfg: AppYamlConfig) -> RetrievalLimitSettings:
     )
 
 
+
+
+def _build_memory(yaml_cfg: AppYamlConfig) -> MemorySettings:
+    value = yaml_cfg.memory
+    return MemorySettings(
+        extraction_model=value.extraction_model.strip(),
+        selection_model=value.selection_model.strip(),
+        enabled_by_default=value.enabled_by_default,
+        session_idle_minutes=value.session_idle_minutes,
+        sweep_interval_minutes=value.sweep_interval_minutes,
+        max_entries_per_extraction=value.max_entries_per_extraction,
+        index_max_lines=value.index_max_lines,
+        index_max_bytes=value.index_max_bytes,
+        stale_warning_days=value.stale_warning_days,
+        inject_budget_tokens=value.inject_budget_tokens,
+        max_entry_chars=value.max_entry_chars,
+        consolidation_min_interval_hours=value.consolidation_min_interval_hours,
+        consolidation_min_new_sessions=value.consolidation_min_new_sessions,
+        max_message_chars=value.max_message_chars,
+    )
+
+
 def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
     hitl = yaml_cfg.hitl
     return HitlSettings(
         enabled=hitl.enabled,
         ask_timeout_seconds=hitl.ask_timeout_seconds,
+    )
+
+
+def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
+    subagents = yaml_cfg.subagents
+    return SubagentSettings(
+        max_concurrent_per_session=subagents.max_concurrent_per_session,
+        task_timeout_seconds=subagents.task_timeout_seconds,
+        foreground_max_wait_seconds=subagents.foreground_max_wait_seconds,
+        auto_continue=subagents.auto_continue,
+        shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
     )
 
 
@@ -481,7 +579,9 @@ def _build_messaging(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> MessagingS
 def _build_other(yaml_cfg: AppYamlConfig) -> OtherSettings:
     other = yaml_cfg.other
     return OtherSettings(
-        skills_filesystem_root=_legacy_env("SKILLS_FILESYSTEM_ROOT", other.skills_filesystem_root),
+        skills_filesystem_root=_legacy_env(
+            "SKILLS_FILESYSTEM_ROOT", other.skills_filesystem_root
+        ),
         mcp_config_path=_legacy_env("MCP_CONFIG_PATH", other.mcp_config_path),
     )
 
@@ -495,7 +595,9 @@ def _build_qdrant(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> QdrantSetting
         qdrant_timeout=_legacy_env_int("QDRANT_TIMEOUT", q.timeout),
         qdrant_grpc_port=_legacy_env_int("QDRANT_GRPC_PORT", q.grpc_port),
         qdrant_prefer_grpc=_legacy_env_bool("QDRANT_PREFER_GRPC", q.prefer_grpc),
-        qdrant_default_collection=_legacy_env("QDRANT_DEFAULT_COLLECTION", q.default_collection),
+        qdrant_default_collection=_legacy_env(
+            "QDRANT_DEFAULT_COLLECTION", q.default_collection
+        ),
         requirement_docs_collection=_legacy_env(
             "REQUIREMENT_DOCS_COLLECTION", q.requirement_docs_collection
         ),
@@ -515,7 +617,9 @@ def _build_qdrant(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> QdrantSetting
 def _build_langfuse(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> LangfuseSettings:
     lf = yaml_cfg.langfuse
     return LangfuseSettings(
-        langfuse_tracing_enabled=_legacy_env_bool("LANGFUSE_TRACING_ENABLED", lf.tracing_enabled),
+        langfuse_tracing_enabled=_legacy_env_bool(
+            "LANGFUSE_TRACING_ENABLED", lf.tracing_enabled
+        ),
         langfuse_secret_key=secrets.langfuse_secret_key,
         langfuse_public_key=secrets.langfuse_public_key,
         langfuse_base_url=_legacy_env("LANGFUSE_BASE_URL", lf.base_url),
@@ -548,10 +652,15 @@ def _build_skills_market(yaml_cfg: AppYamlConfig) -> SkillsMarketSettings:
 def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSettings:
     wt = yaml_cfg.web_tools
     return WebToolsSettings(
-        max_search_results=_legacy_env_int("WEB_MAX_SEARCH_RESULTS", wt.max_search_results),
+        max_search_results=_legacy_env_int(
+            "WEB_MAX_SEARCH_RESULTS", wt.max_search_results
+        ),
         fetch_max_chars=_legacy_env_int("WEB_FETCH_MAX_CHARS", wt.fetch_max_chars),
-        fetch_timeout_seconds=_legacy_env_int("WEB_FETCH_TIMEOUT_SECONDS", wt.fetch_timeout_seconds),
-        ddg_backends=_legacy_env("WEB_DDG_BACKENDS", wt.ddg_backends).strip() or "mojeek,yandex",
+        fetch_timeout_seconds=_legacy_env_int(
+            "WEB_FETCH_TIMEOUT_SECONDS", wt.fetch_timeout_seconds
+        ),
+        ddg_backends=_legacy_env("WEB_DDG_BACKENDS", wt.ddg_backends).strip()
+        or "mojeek,yandex",
         tavily_api_key=secrets.tavily_api_key,
     )
 
@@ -560,9 +669,7 @@ def _build_sandbox(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> SandboxSetti
     sb = yaml_cfg.sandbox
     backend = _legacy_env("SANDBOX_BACKEND", sb.backend).strip().lower() or "docker"
     if backend == "aio":
-        raise ValueError(
-            "sandbox.backend=aio 已移除；请使用 docker 或 local_shell"
-        )
+        raise ValueError("sandbox.backend=aio 已移除；请使用 docker 或 local_shell")
     if backend not in ("docker", "local_shell"):
         backend = "docker"
     return SandboxSettings(
@@ -605,7 +712,9 @@ def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
         max_file_mb=_legacy_env_int("CHAT_ATTACHMENT_MAX_FILE_MB", ca.max_file_mb),
         auto_convert=_legacy_env_bool("CHAT_ATTACHMENT_AUTO_CONVERT", ca.auto_convert),
         max_image_mb=_legacy_env_int("CHAT_ATTACHMENT_MAX_IMAGE_MB", ca.max_image_mb),
-        vision_enabled=_legacy_env_bool("CHAT_ATTACHMENT_VISION_ENABLED", ca.vision_enabled),
+        vision_enabled=_legacy_env_bool(
+            "CHAT_ATTACHMENT_VISION_ENABLED", ca.vision_enabled
+        ),
         reinject_session_images=_legacy_env_bool(
             "CHAT_ATTACHMENT_REINJECT_SESSION_IMAGES", ca.reinject_session_images
         ),
@@ -624,7 +733,9 @@ def _build_chat_attachment(yaml_cfg: AppYamlConfig) -> ChatAttachmentSettings:
         read_page_lines=_legacy_env_int(
             "CHAT_ATTACHMENT_READ_PAGE_LINES", ca.read_page_lines
         ),
-        preview_chars=_legacy_env_int("CHAT_ATTACHMENT_PREVIEW_CHARS", ca.preview_chars),
+        preview_chars=_legacy_env_int(
+            "CHAT_ATTACHMENT_PREVIEW_CHARS", ca.preview_chars
+        ),
     )
     return settings
 
@@ -634,7 +745,10 @@ def _build_kb(yaml_cfg: AppYamlConfig) -> KbSettings:
     return KbSettings(
         deepdoc_enabled=_legacy_env_bool("KB_DEEPDOC_ENABLED", kb.deepdoc.enabled),
         deepdoc_model_dir=_legacy_env("KB_DEEPDOC_MODEL_DIR", kb.deepdoc.model_dir),
-        parser_default=_legacy_env("KB_PARSER_DEFAULT", kb.parser.default).strip().lower() or "deepdoc",
+        parser_default=_legacy_env("KB_PARSER_DEFAULT", kb.parser.default)
+        .strip()
+        .lower()
+        or "deepdoc",
     )
 
 
@@ -701,6 +815,10 @@ class GetConfig:
         return _build_hitl(self._yaml)
 
     @lru_cache
+    def get_subagent_config(self) -> SubagentSettings:
+        return _build_subagents(self._yaml)
+
+    @lru_cache
     def get_messaging_config(self) -> MessagingSettings:
         return _build_messaging(self._secrets, self._yaml)
 
@@ -715,6 +833,10 @@ class GetConfig:
     @lru_cache
     def get_kb_config(self) -> KbSettings:
         return _build_kb(self._yaml)
+
+    @lru_cache
+    def get_memory_config(self) -> MemorySettings:
+        return _build_memory(self._yaml)
 
     @staticmethod
     def parse_cli_args() -> None:
@@ -760,6 +882,8 @@ WebToolsConfig = get_config.get_web_tools_config()
 CheckpointConfig = get_config.get_checkpoint_config()
 SandboxConfig = get_config.get_sandbox_config()
 HitlConfig = get_config.get_hitl_config()
+SubagentConfig = get_config.get_subagent_config()
 MessagingConfig = get_config.get_messaging_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
 KbConfig = get_config.get_kb_config()
+MemoryConfig = get_config.get_memory_config()

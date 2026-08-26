@@ -9,10 +9,8 @@ from typing import Any, List, Optional
 from noesis.config.env import ModelConfig
 from noesis.config.yaml_config import (
     ModelCatalogEntryYamlSection,
-    ModelLimitYamlSection,
     load_app_yaml,
 )
-from noesis.llm.model_limits import ModelLimit
 
 
 @dataclass(frozen=True)
@@ -20,21 +18,10 @@ class ModelCatalogEntry:
     id: str
     label: str
     model_type: str
-    model_name: str
     temperature: float
     base_url: str
     is_default: bool = False
-    limit: ModelLimit | None = None
-
-
-def _limit_from_yaml(raw: ModelLimitYamlSection | None) -> ModelLimit | None:
-    if raw is None or raw.context <= 0:
-        return None
-    return ModelLimit(
-        context=int(raw.context),
-        output=int(raw.output) if raw.output is not None else None,
-        input=int(raw.input) if raw.input is not None else None,
-    )
+    context_window: int = 0
 
 
 def _entry_from_yaml(
@@ -44,25 +31,23 @@ def _entry_from_yaml(
     default_name: str,
     default_temperature: float,
     default_base_url: str,
-    default_limit: ModelLimit | None,
+    default_context_window: int,
     is_default: bool,
 ) -> ModelCatalogEntry:
-    model_id = str(raw.id or "").strip()
+    model_id = str(raw.id or default_name).strip()
     label = str(raw.label or "").strip() or model_id
     model_type = str(raw.type or default_type).strip().lower()
-    model_name = str(raw.name or default_name).strip()
     temperature = float(raw.temperature if raw.temperature is not None else default_temperature)
     base_url = str(raw.base_url or default_base_url).strip()
-    limit = _limit_from_yaml(raw.limit) or default_limit
+    context_window = int(raw.context_window or default_context_window)
     return ModelCatalogEntry(
         id=model_id,
         label=label,
         model_type=model_type,
-        model_name=model_name,
         temperature=temperature,
         base_url=base_url,
         is_default=is_default,
-        limit=limit,
+        context_window=context_window,
     )
 
 
@@ -74,20 +59,19 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     default_name = str(m.name or ModelConfig.model_name).strip()
     default_temperature = float(m.temperature)
     default_base_url = str(m.base_url or ModelConfig.model_base_url).strip()
-    default_limit = _limit_from_yaml(m.limit)
+    default_context_window = int(m.context_window or 0)
 
     raw_entries = list(m.catalog or [])
     if not raw_entries:
         return (
             ModelCatalogEntry(
-                id="default",
+                id=default_name,
                 label=default_name,
                 model_type=default_type,
-                model_name=default_name,
                 temperature=default_temperature,
                 base_url=default_base_url,
                 is_default=True,
-                limit=default_limit,
+                context_window=default_context_window,
             ),
         )
 
@@ -97,7 +81,7 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     for idx, raw in enumerate(raw_entries):
         model_id = str(raw.id or "").strip()
         if not model_id:
-            model_id = "default" if idx == 0 else f"model-{idx + 1}"
+            model_id = default_name if idx == 0 else f"model-{idx + 1}"
         if model_id in seen:
             continue
         seen.add(model_id)
@@ -109,7 +93,7 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
                 default_name=default_name,
                 default_temperature=default_temperature,
                 default_base_url=default_base_url,
-                default_limit=default_limit,
+                default_context_window=default_context_window,
                 is_default=is_default,
             )
         )
@@ -120,11 +104,10 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
             id=first.id,
             label=first.label,
             model_type=first.model_type,
-            model_name=first.model_name,
             temperature=first.temperature,
             base_url=first.base_url,
             is_default=True,
-            limit=first.limit,
+            context_window=first.context_window,
         )
     return tuple(entries)
 
@@ -143,12 +126,12 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
     if snapshot is not None:
         return ModelCatalogEntry(
             id=snapshot.id,
-            label=snapshot.model_name,
+            label=snapshot.label or snapshot.id,
             model_type=snapshot.model_type,
-            model_name=snapshot.model_name,
             temperature=float(ModelConfig.model_temperature),
             base_url=snapshot.base_url,
             is_default=False,
+            context_window=snapshot.context_window,
         )
     catalog = get_model_catalog()
     normalized = str(model_id or "").strip()
@@ -163,21 +146,30 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
 
 
 def list_public_models() -> List[dict[str, Any]]:
-    from noesis.llm.model_limits import resolve_model_limit
     from noesis.llm.vision_meta import model_name_supports_vision
 
     default_id = get_default_model_id()
+    # 内置目录的 provider 标签：预设名回退 model type（小写）
+    from noesis.config.env import ModelConfig
+
+    provider_label = next(
+        (
+            str(preset.get("label") or preset.get("id"))
+            for preset in ModelConfig.provider_presets
+            if preset.get("id") == ModelConfig.model_type
+        ),
+        ModelConfig.model_type,
+    )
     rows: List[dict[str, Any]] = []
     for entry in get_model_catalog():
-        limit = resolve_model_limit(entry.id)
         row: dict[str, Any] = {
             "id": entry.id,
             "label": entry.label,
-            "model_name": entry.model_name,
+            "provider": provider_label,
             "model_type": entry.model_type,
             "is_default": entry.id == default_id,
-            "supports_vision": model_name_supports_vision(entry.model_name),
-            "limit": limit.as_dict(),
+            "supports_vision": model_name_supports_vision(entry.id),
+            "context_window": entry.context_window,
         }
         rows.append(row)
     return rows

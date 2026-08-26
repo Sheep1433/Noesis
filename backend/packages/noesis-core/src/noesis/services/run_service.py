@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
 import socket
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import update
@@ -19,21 +19,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis.runtime.logging import logger
 from noesis.config.env import StreamConfig
 from noesis.config.code_enum import IntentEnum
-from noesis.domain.chat.delivery.events import (
-    HitlRequired,
+from noesis.chat.delivery.events import (
     RunAborted,
-    RunCompleted,
     RunError,
     RunEvent,
-    RunPaused,
-    StreamDone,
     WireFrame,
 )
-from noesis.domain.chat.delivery.sse import parse_sse_line_to_event
-from noesis.domain.chat.delivery.persist_sink import PersistSink
-from noesis.domain.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
-from noesis.domain.chat.tool_state import ToolState
-from noesis.domain.chat.runs import RunLimitExceeded, RunManager, RunSnapshot, RunStatus
+from noesis.chat.delivery.sse import parse_sse_line_to_event
+from noesis.services.persist_sink import PersistSink
+from noesis.chat.message_builder import UserMessageBuilder
+from noesis.chat.runs import (
+    RunLimitExceeded,
+    RunManager,
+    RunSnapshot,
+    RunStatus,
+    TerminalCandidate,
+    TerminalCommitResult,
+)
+from noesis.chat.message_builder import normalize_message_content_for_delivery
+from noesis.chat.runs.projection import RunProjection
 from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis.storage.postgres.manager import pg_manager
 from noesis.repositories.agent_run_repository import AgentRunRepository
@@ -44,6 +48,7 @@ from noesis.schemas.qa_vo import QaQueryRequest
 from noesis.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
 from noesis.services.qa import QaService
 from noesis.services.chat_service import ChatService
+from noesis.services.compaction_service import compact_session
 
 
 _OWNER_INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"
@@ -54,16 +59,58 @@ run_manager = RunManager(
     subscriber_queue_bytes=StreamConfig.run_subscriber_queue_max_bytes,
     max_active_runs=StreamConfig.run_max_active,
     max_user_active_runs=StreamConfig.run_max_active_per_user,
+    max_subscriptions_per_run=StreamConfig.run_max_subscriptions_per_run,
+    max_subscriptions_per_user=StreamConfig.run_max_subscriptions_per_user,
+    max_subscriptions_global=StreamConfig.run_max_subscriptions_global,
     terminal_retention_seconds=StreamConfig.run_terminal_retention_seconds,
     max_run_duration_seconds=StreamConfig.run_max_duration_seconds,
     max_output_bytes=StreamConfig.run_max_output_bytes,
     hitl_pending_timeout_seconds=StreamConfig.run_hitl_pending_timeout_seconds,
     cancel_grace_seconds=StreamConfig.run_cancel_grace_seconds,
+    terminal_persistence_budget_seconds=StreamConfig.run_terminal_persistence_budget_seconds,
+    terminal_retry_interval_seconds=StreamConfig.run_terminal_retry_interval_seconds,
+    checkpoint_retry_interval_seconds=StreamConfig.persistence_retry_interval_seconds,
 )
+
+# 注入 run_manager 给命令层（/status），避免 noesis.chat 直接 import noesis.services。
+from noesis.chat.commands.runtime import set_run_manager_provider  # noqa: E402
+from noesis.chat.commands.runtime import set_compaction_provider  # noqa: E402
+
+set_run_manager_provider(lambda: run_manager)
+set_compaction_provider(
+    lambda session_id, user_id, instructions=None: compact_session(
+        session_id=session_id,
+        user_id=user_id,
+        instructions=instructions,
+    )
+)
+
+
+# 注入「建新会话」工厂给命令层（/new），避免 noesis.chat 直接 import noesis.services。
+# 工厂用 pg_manager 自建 db session（非 FastAPI 请求上下文，如 telegram poll loop）。
+from noesis.chat.commands.runtime import set_session_factory_provider  # noqa: E402
+
+
+async def _create_session_for_command(
+    user_id: str, title: str | None = None, parent_id: str | None = None
+) -> str:
+    async with pg_manager.get_async_session_context() as db:
+        session = await ChatService.create_session(
+            user_id=user_id, title=title, parent_id=parent_id, db=db
+        )
+        return str(session.id)
+
+
+set_session_factory_provider(lambda: _create_session_for_command)
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+class CheckpointGuarded(RuntimeError):
+    """checkpoint 被 sequence guard 拒绝（DB last_sequence >= incoming）。
+    不是错误——迟到 checkpoint 不应覆盖更新的 DB snapshot。"""
 
 
 def _request_digest(request: CreateRunRequest) -> str:
@@ -72,287 +119,17 @@ def _request_digest(request: CreateRunRequest) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-@dataclass
-class RunProjection:
-    run_id: str
-    user_id: str
-    session_id: str
-    assistant_message_id: str
-    qa_type: str
-    origin: str = "web"
-    status: RunStatus = RunStatus.RUNNING
-    attempt_id: int = 1
-    finish_reason: str | None = None
-    error_code: str | None = None
-    user_error_message: str | None = None
-    retry_attempt: int = 0
-    retry_max: int = 0
-    cancel_requested: bool = False
-    visible_output_started: bool = False
-    side_effect_boundary_crossed: bool = False
-    pending_hitl: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        self.builder = AssistantMessageBuilder(
-            session_id=self.session_id, message_id=self.assistant_message_id
-        )
-
-    def apply(self, event: RunEvent, *, attempt_id: int | None = None) -> bool:
-        if attempt_id is not None and attempt_id != self.attempt_id:
-            logger.warning(
-                "忽略旧 attempt 事件 run_id={} event_attempt={} current_attempt={}",
-                self.run_id,
-                attempt_id,
-                self.attempt_id,
-            )
-            return False
-        if self.status in {
-            RunStatus.COMPLETED,
-            RunStatus.PARTIAL,
-            RunStatus.ERROR,
-            RunStatus.INTERRUPTED,
-        } and isinstance(event, (RunCompleted, RunAborted, RunError)):
-            logger.warning(
-                "忽略终态 run 的迟到终态事件 run_id={} status={} event={}",
-                self.run_id,
-                self.status.value,
-                type(event).__name__,
-            )
-            return False
-        if isinstance(event, WireFrame):
-            data = event.data
-            if event.event == "text-delta":
-                delta = data.get("text_delta") or data.get("delta") or data.get("content")
-                self.visible_output_started = self.visible_output_started or bool(
-                    delta
-                )
-                self.builder.append_text_delta(
-                    str(delta or ""),
-                    parent_task_call_id=data.get("parent_task_call_id"),
-                    part_id=str(data.get("part_id") or "") or None,
-                )
-            elif event.event == "reasoning-delta":
-                delta = data.get("text_delta") or data.get("delta") or data.get("content")
-                self.visible_output_started = self.visible_output_started or bool(
-                    delta
-                )
-                self.builder.append_reasoning_delta(
-                    str(delta or ""),
-                    parent_task_call_id=data.get("parent_task_call_id"),
-                )
-            elif event.event in {"tool-call-start", "tool-input-start"}:
-                self.side_effect_boundary_crossed = True
-                if event.event == "tool-input-start":
-                    return True
-                self.builder.append_tool(
-                    str(data.get("tool_name") or data.get("name") or "tool"),
-                    data.get("input") if isinstance(data.get("input"), dict) else {},
-                    str(data.get("tool_call_id") or ""),
-                    data.get("parent_task_call_id"),
-                    state=data.get("state") or ToolState.RUNNING,
-                )
-            elif event.event == "tool-input-available":
-                self.side_effect_boundary_crossed = True
-                self.builder.append_tool(
-                    str(data.get("tool_name") or data.get("name") or "tool"),
-                    data.get("input") if isinstance(data.get("input"), dict) else {},
-                    str(data.get("tool_call_id") or ""),
-                    data.get("parent_task_call_id"),
-                    state=data.get("state") or ToolState.RUNNING,
-                )
-            elif event.event == "tool-output-available":
-                if self.cancel_requested or self.status in {
-                    RunStatus.COMPLETED,
-                    RunStatus.PARTIAL,
-                    RunStatus.ERROR,
-                    RunStatus.INTERRUPTED,
-                }:
-                    logger.warning(
-                        "忽略 run 终止后的工具结果 run_id={} tool_call_id={}",
-                        self.run_id,
-                        data.get("tool_call_id"),
-                    )
-                    return
-                try:
-                    self.builder.append_tool_output(
-                        str(data.get("tool_name") or data.get("name") or "tool"),
-                        str(data.get("output") or ""),
-                        str(data.get("tool_call_id") or ""),
-                        status=str(data.get("status") or "success"),
-                        state=data.get("state"),
-                        error=str(data.get("error")) if data.get("error") else None,
-                        error_category=(
-                            str(data.get("errorCategory")) if data.get("errorCategory") else None
-                        ),
-                        outcome=str(data.get("outcome")) if data.get("outcome") else None,
-                        exit_code=(int(data["exit_code"]) if data.get("exit_code") is not None else None),
-                        timed_out=(bool(data["timed_out"]) if data.get("timed_out") is not None else None),
-                        truncated=(bool(data["truncated"]) if data.get("truncated") is not None else None),
-                        duration_ms=(int(data["duration_ms"]) if data.get("duration_ms") is not None else None),
-                    )
-                except ValueError:
-                    logger.warning(
-                        "忽略无匹配 tool start 的 run 投影结果 run_id={} tool_call_id={}",
-                        self.run_id,
-                        data.get("tool_call_id"),
-                    )
-            elif event.event == "retrieval-results-available":
-                results = data.get("results")
-                if isinstance(results, list):
-                    self.builder.register_retrieval_results(
-                        tool_call_id=str(data.get("tool_call_id") or ""),
-                        query=str(data.get("query") or ""),
-                        results=[item for item in results if isinstance(item, dict)],
-                        truncated=bool(data.get("truncated")),
-                    )
-            elif event.event == "run-status":
-                status = str(data.get("status") or "")
-                event_attempt_id = int(data.get("attempt_id") or self.attempt_id)
-                if event_attempt_id >= self.attempt_id:
-                    self.attempt_id = event_attempt_id
-                if status in {item.value for item in RunStatus}:
-                    self.status = RunStatus(status)
-                self.retry_attempt = int(data.get("attempt") or self.retry_attempt)
-                self.retry_max = int(data.get("max_attempts") or self.retry_max)
-        elif isinstance(event, HitlRequired):
-            self.side_effect_boundary_crossed = True
-            self.status = RunStatus.HITL_PENDING
-            self.pending_hitl = dict(event.payload)
-            for action in event.payload.get("action_requests") or []:
-                if not isinstance(action, dict):
-                    continue
-                tool_call_id = str(action.get("tool_call_id") or "")
-                self.builder.update_tool_hitl(
-                    tool_call_id,
-                    {
-                        "kind": event.payload.get("kind") or "approval",
-                        "status": "pending",
-                        "interrupt_id": event.payload.get("interrupt_id"),
-                    },
-                    status="running",
-                    state=ToolState.APPROVAL_PENDING,
-                )
-            keep = {
-                str(action.get("tool_call_id") or "")
-                for action in event.payload.get("action_requests") or []
-                if isinstance(action, dict) and action.get("tool_call_id")
-            }
-            self.builder.reconcile_nonterminal_tools(
-                ToolState.CANCELLED,
-                "本次工具执行已停止",
-                keep_approval_call_ids=keep,
-            )
-        elif isinstance(event, RunPaused):
-            self.status = RunStatus.HITL_PENDING
-            self.finish_reason = event.finish_reason or event.reason
-        elif isinstance(event, RunCompleted):
-            self.builder.reconcile_nonterminal_tools(ToolState.CANCELLED, "本次工具执行已停止")
-            self.status = RunStatus.COMPLETED
-            self.finish_reason = event.finish_reason
-            self.pending_hitl = None
-        elif isinstance(event, RunAborted):
-            self.builder.reconcile_nonterminal_tools(ToolState.CANCELLED, "本次工具执行已停止")
-            self.status = RunStatus.PARTIAL
-            self.finish_reason = event.reason
-        elif isinstance(event, RunError):
-            terminal_state = (
-                ToolState.TIMED_OUT
-                if event.finish_reason in {"timeout", "hitl_timeout", "run_timeout"}
-                else ToolState.FAILED
-            )
-            self.builder.reconcile_nonterminal_tools(terminal_state, event.message)
-            self.status = RunStatus.ERROR
-            self.finish_reason = event.finish_reason
-            self.user_error_message = event.message
-        return True
-
-    def can_retry_model(self) -> bool:
-        return not self.visible_output_started and not self.side_effect_boundary_crossed
-
-    def begin_retry_attempt(self) -> int:
-        if not self.can_retry_model():
-            raise ValueError("model retry crossed output or side-effect boundary")
-        self.attempt_id += 1
-        self.retry_attempt = self.attempt_id
-        self.status = RunStatus.RETRYING
-        return self.attempt_id
-
-    def begin_hitl_resume(self) -> None:
-        if self.status != RunStatus.HITL_PENDING:
-            raise ValueError("run is not waiting for HITL")
-        self.status = RunStatus.RUNNING
-        self.pending_hitl = None
-
-    def apply_hitl_decisions(self, decisions: list[dict[str, Any]]) -> None:
-        payload = self.pending_hitl or {}
-        actions = payload.get("action_requests") or []
-        for index, decision in enumerate(decisions):
-            action = actions[index] if index < len(actions) and isinstance(actions[index], dict) else {}
-            tool_call_id = action.get("tool_call_id")
-            decision_type = str(decision.get("type") or "")
-            if decision_type == "approve":
-                self.builder.update_tool_hitl(
-                    tool_call_id,
-                    {"status": "approved", "decision": "approve"},
-                    status="running",
-                    state=ToolState.RUNNING,
-                )
-            elif decision_type == "reject":
-                self.builder.update_tool_hitl(
-                    tool_call_id,
-                    {"status": "rejected", "decision": "reject"},
-                    status="error",
-                    state=ToolState.REJECTED,
-                )
-            elif decision_type == "respond":
-                self.builder.update_tool_hitl(
-                    tool_call_id,
-                    {"status": "answered", "decision": "respond"},
-                    status="success",
-                    state=ToolState.SUCCEEDED,
-                )
-
-    def snapshot(self, sequence: int, status: RunStatus, attempt_id: int) -> RunSnapshot:
-        effective_status = self.status if self.status != RunStatus.RUNNING else status
-        return RunSnapshot(
-            run_id=self.run_id,
-            user_id=self.user_id,
-            session_id=self.session_id,
-            assistant_message_id=self.assistant_message_id,
-            qa_type=self.qa_type,
-            origin=self.origin,
-            status=effective_status,
-            sequence=sequence,
-            attempt_id=attempt_id,
-            parts=tuple(self.builder.to_dict().get("parts", [])),
-            finish_reason=self.finish_reason,
-            error_code=self.error_code,
-            user_error_message=self.user_error_message,
-            retry_attempt=self.retry_attempt,
-            retry_max=self.retry_max,
-            pending_hitl=self.pending_hitl,
-            updated_at=_now_ms(),
-        )
-
-    def persisted_snapshot(self) -> dict[str, Any]:
-        snapshot = self.builder.to_dict()
-        if self.pending_hitl is not None:
-            snapshot["_pending_hitl"] = dict(self.pending_hitl)
-        return snapshot
-
-
 class RunService:
     @staticmethod
     async def publish_projected_event(run_id, projection, event, publish):
-        if isinstance(event, WireFrame) and event.event == "run-status":
-            event_attempt_id = int(event.data.get("attempt_id") or projection.attempt_id)
-            if event_attempt_id > projection.attempt_id:
-                await run_manager.advance_attempt(run_id, event_attempt_id)
-        projection.apply(event)
-        # LangGraph 每个执行分段都会发 [DONE]。HITL pause 后仍属于同一个 Run，
-        # 不能把分段结束投递成整个订阅结束。
-        if isinstance(event, StreamDone) and projection.status == RunStatus.HITL_PENDING:
-            return None
+        """原子 apply + publish：projection.apply 在 RunHandle lock 内执行，
+        保证 snapshot sequence 与 projection 内容一致。
+
+        publish 是 RunManager.apply_event 的引用（由 _run_producer 的 lambda 传入），
+        它在 lock 内完成 apply、sequence 分配、buffer 写入和 subscriber fan-out。
+        """
+        # advance_attempt 逻辑已移入 apply_event（lock 内同步 handle.attempt_id）
+        # StreamDone + HITL_PENDING 检查已移入 RunProjection.apply（返回 False）
         return await publish(event, projection.attempt_id)
 
     @classmethod
@@ -376,19 +153,32 @@ class RunService:
 
         active = await repository.get_active_for_session(user_id, request.session_id)
         if active is not None:
-            raise ConflictException(message="当前会话仍在生成", data={"run_id": active.id})
+            raise ConflictException(
+                message="当前会话仍在生成",
+                data={
+                    "run_id": active.id,
+                    "assistant_message_id": active.assistant_message_id,
+                    "session_id": active.session_id,
+                    "status": active.status,
+                },
+            )
 
         now = _now_ms()
         run_id = str(uuid.uuid4())
         assistant_message_id = str(uuid.uuid4())
         extra = dict(request.extra or {})
-        qa_type = str(extra.get("qa_type") or IntentEnum.COMMON_QA.value[0])
+        qa_type = str(extra.get("qa_type") or "")
         try:
             session, message_sequences = await ChatService.reserve_message_sequences(
                 request.session_id, user_id, 2, db
             )
         except ServiceException as exc:
             raise NotFoundException(message="会话不存在") from exc
+        # 请求未显式指定 qa_type 时回退读会话 extra（定时任务会话续聊复用 SuperAgent 等类型）。
+        if not qa_type:
+            session_extra = getattr(session, "extra", None) or {}
+            qa_type = str(session_extra.get("qa_type") or IntentEnum.COMMON_QA.value[0])
+            extra["qa_type"] = qa_type
         ChatService.apply_default_session_title(session, request.content)
         user_message = TChatMessage(
             id=str(uuid.uuid4()),
@@ -426,8 +216,6 @@ class RunService:
             status=RunStatus.QUEUED.value,
             last_sequence=0,
             attempt_id=1,
-            retry_attempt=0,
-            retry_max=0,
             owner_instance_id=_OWNER_INSTANCE_ID,
             snapshot={"parts": []},
             created_at=now,
@@ -453,10 +241,15 @@ class RunService:
             if existing is None:
                 active = await repository.get_active_for_session(user_id, request.session_id)
                 if active is not None:
-                    # 确有活跃 run（含 queued 僵尸）——业务冲突，提示并返回 run_id 以便前端恢复
+                    # 确有活跃 run（含 queued 僵尸）——业务冲突，提示并返回完整字段以便前端加入
                     raise ConflictException(
                         message="当前会话仍在生成",
-                        data={"run_id": active.id},
+                        data={
+                            "run_id": active.id,
+                            "assistant_message_id": active.assistant_message_id,
+                            "session_id": active.session_id,
+                            "status": active.status,
+                        },
                     )
                 # 非活跃 run 冲突的约束违规（如 FK/校验）——不能误报成"当前会话仍在生成"，
                 # 否则会掩盖真实插入失败。抛出带原始约束信息的错误。
@@ -540,6 +333,11 @@ class RunService:
                 target=RunStatus.ERROR,
                 assistant_status="error",
                 content=content,
+                last_sequence=(
+                    handle.last_sequence
+                    if handle is not None
+                    else int(getattr(run, "last_sequence", 0))
+                ),
                 finished_at=now,
                 finish_reason="start_failed",
                 error_code="RUN_START_FAILED",
@@ -577,34 +375,50 @@ class RunService:
             checkpoint_interval_seconds=StreamConfig.checkpoint_interval_seconds
         )
 
-        async def persist_delivery(envelope) -> None:
-            event = envelope.event
+        async def persist_checkpoint(request) -> None:
+            await cls._persist_checkpoint(
+                request.run_id,
+                request.assistant_message_id,
+                request.snapshot,
+                request.snapshot_sequence,
+            )
+
+        def checkpoint_policy(event: RunEvent, _sequence: int) -> str | None:
             persist_sink.on_event(event)
-            if persist_sink.should_checkpoint(event):
-                await cls._persist_checkpoint(
-                    run.id,
-                    run.assistant_message_id,
-                    projection,
-                    envelope.sequence,
-                )
+            return persist_sink.checkpoint_kind(event)
 
         async def producer(publish) -> None:
             async with pg_manager.get_async_session_context() as run_db:
                 try:
-                    async for line in QaService.exec_query(
+                    stream = QaService.exec_query(
                         qa_request,
                         current_user,
                         run_db,
                         assistant_message_id=run.assistant_message_id,
-                    ):
-                        for event in parse_sse_line_to_event(line):
-                            envelope = await cls.publish_projected_event(
-                                run.id, projection, event, publish
+                        run_id=run.id,
+                    )
+                    if run.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
+                        # TEST_CASE_QA 不纳入本次 typed 主路径迁移；维持隔离的
+                        # CaseCoordinator SSE 边界，避免兼容 parser 污染目标 qa_type。
+                        async for line in stream:
+                            if not isinstance(line, str):
+                                raise TypeError("TEST_CASE_QA must emit SSE strings")
+                            for event in parse_sse_line_to_event(line):
+                                await publish(event, projection.attempt_id)
+                    else:
+                        async for event in stream:
+                            if isinstance(event, str):
+                                raise TypeError(
+                                    f"target Agent Run emitted SSE string qa_type={run.qa_type}"
+                                )
+                            event_attempt_id = (
+                                event.attempt_id
+                                if isinstance(event, WireFrame)
+                                and event.attempt_id is not None
+                                else projection.attempt_id
                             )
-                            if envelope is None:
-                                continue
-                    await run_manager.drain_delivery(run.id, "persist")
-                    await cls._persist_projection(run.id, projection)
+                            await publish(event, event_attempt_id)
+                    await run_manager.drain_persistence(run.id)
                 except BaseException as exc:
                     if isinstance(exc, GeneratorExit):
                         raise
@@ -626,7 +440,14 @@ class RunService:
             attempt_id=run.attempt_id,
             state=projection,
             limit_handler=persist_limit,
-            deliveries={"persist": persist_delivery},
+            checkpoint_policy=checkpoint_policy,
+            checkpoint_handler=persist_checkpoint,
+            terminal_handler=cls._persist_terminal_candidate,
+            max_run_duration_seconds=(
+                StreamConfig.run_max_duration_seconds_super_agent
+                if run.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]
+                else None
+            ),
         )
         async with pg_manager.get_async_session_context() as state_db:
             await AgentRunRepository(state_db).compare_and_set_status(
@@ -643,51 +464,102 @@ class RunService:
         cls,
         run_id: str,
         assistant_message_id: str,
-        projection: RunProjection,
+        snapshot: RunSnapshot,
         sequence: int,
     ) -> None:
+        """写入 immutable checkpoint snapshot。snapshot 在 apply_event lock 内捕获，
+        与 sequence 绑定。DB UPDATE 带 sequence guard：迟到 checkpoint 不覆盖更新状态。"""
         deadline = time.monotonic() + StreamConfig.persistence_timeout_seconds
         last_error: Exception | None = None
+        content = {"parts": [dict(part) for part in snapshot.parts]}
+        persisted = snapshot.to_dict()
+        if snapshot.pending_hitl is not None:
+            persisted["_pending_hitl"] = dict(snapshot.pending_hitl)
         while time.monotonic() < deadline:
             try:
                 async with pg_manager.get_async_session_context() as db:
-                    content = projection.builder.to_dict()
-                    await db.execute(
-                        update(TAgentRun)
-                        .where(
-                            TAgentRun.id == run_id,
-                            TAgentRun.status.in_(
-                                [status.value for status in {
-                                    RunStatus.RUNNING,
-                                    RunStatus.RETRYING,
-                                    RunStatus.HITL_PENDING,
-                                }]
-                            ),
-                        )
-                        .values(
-                            last_sequence=sequence,
-                            snapshot=projection.persisted_snapshot(),
-                            attempt_id=projection.attempt_id,
-                            retry_attempt=projection.retry_attempt,
-                            retry_max=projection.retry_max,
-                            updated_at=_now_ms(),
-                        )
+                    stored = await AgentRunRepository(db).save_checkpoint(
+                        run_id=run_id,
+                        assistant_message_id=assistant_message_id,
+                        sequence=sequence,
+                        snapshot=persisted,
+                        content=content,
+                        attempt_id=snapshot.attempt_id,
+                        status=snapshot.status,
+                        finish_reason=snapshot.finish_reason,
+                        updated_at=_now_ms(),
                     )
-                    await db.execute(
-                        update(TChatMessage)
-                        .where(
-                            TChatMessage.id == assistant_message_id,
-                            TChatMessage.status == "streaming",
+                    if stored:
+                        await db.commit()
+                    else:
+                        # sequence guard 拒绝：迟到 checkpoint 不覆盖更新的 DB snapshot。
+                        # 记录 metric 并抛异常，使 PersistWriter 的 on_persisted 不被调用
+                        # （避免 last_persisted_sequence 被错误更新到被拒绝的 sequence）。
+                        await db.rollback()
+                        run_manager.record_checkpoint_failure(run_id)
+                        logger.info(
+                            "agent_run_checkpoint_guarded run_id={} sequence={} "
+                            "(DB last_sequence >= incoming, ignored)",
+                            run_id,
+                            sequence,
                         )
-                        .values(content=content)
-                    )
-                    await db.commit()
+                        raise CheckpointGuarded(
+                            f"checkpoint sequence {sequence} guarded by newer DB state"
+                        )
+                return
+            except CheckpointGuarded:
+                # 被守卫拒绝不是错误，不需要重试
                 return
             except Exception as exc:
                 last_error = exc
                 run_manager.record_checkpoint_failure(run_id)
                 await asyncio.sleep(StreamConfig.persistence_retry_interval_seconds)
         raise RuntimeError("agent run checkpoint persistence timeout") from last_error
+
+    @classmethod
+    async def _persist_terminal_candidate(
+        cls, candidate: TerminalCandidate
+    ) -> TerminalCommitResult:
+        projection = candidate.projected_state
+        if not isinstance(projection, RunProjection):
+            raise TypeError("terminal candidate requires RunProjection")
+        content = projection.builder.to_dict()
+        assistant_status = {
+            RunStatus.COMPLETED: "completed",
+            RunStatus.PARTIAL: "partial",
+            RunStatus.ERROR: "error",
+            RunStatus.INTERRUPTED: "partial",
+        }[candidate.status]
+        async with pg_manager.get_async_session_context() as db:
+            repository = AgentRunRepository(db)
+            won = await repository.finalize(
+                run_id=candidate.envelope.run_id,
+                target=candidate.status,
+                assistant_status=assistant_status,
+                content=content,
+                last_sequence=candidate.envelope.sequence,
+                snapshot=projection.persisted_snapshot(),
+                finished_at=_now_ms(),
+                finish_reason=projection.finish_reason or "stop",
+                error_code=projection.error_code,
+                user_error_message=projection.user_error_message,
+                usage=projection.run_usage,
+            )
+            if won:
+                await db.commit()
+                return TerminalCommitResult("committed")
+            await db.rollback()
+            row = await repository.get(candidate.envelope.run_id)
+            if row is None or RunStatus(row.status) not in {
+                RunStatus.COMPLETED,
+                RunStatus.PARTIAL,
+                RunStatus.ERROR,
+                RunStatus.INTERRUPTED,
+            }:
+                return TerminalCommitResult("failed")
+            return TerminalCommitResult(
+                "already_finalized", cls._snapshot_from_row(row)
+            )
 
     @staticmethod
     def _to_qa_request(request: CreateRunRequest, qa_type: str) -> QaQueryRequest:
@@ -711,6 +583,7 @@ class RunService:
                 extra.get("enabled_skills") if isinstance(extra.get("enabled_skills"), list) else None
             ),
             mentions=extra.get("mentions") if isinstance(extra.get("mentions"), list) else None,
+            extra=extra or None,
         )
 
     @classmethod
@@ -747,6 +620,7 @@ class RunService:
                     target=target,
                     assistant_status=assistant_status,
                     content=content,
+                    last_sequence=run_manager.get(run_id).last_sequence,
                     snapshot=projection.persisted_snapshot(),
                     finished_at=now,
                     finish_reason=projection.finish_reason or (
@@ -754,6 +628,7 @@ class RunService:
                     ),
                     error_code=projection.error_code,
                     user_error_message=projection.user_error_message,
+                    usage=projection.run_usage,
                 )
                 if not won:
                     await db.rollback()
@@ -777,15 +652,28 @@ class RunService:
     async def _persist_cancel_or_error(
         cls, run_id: str, projection: RunProjection, exc: BaseException
     ) -> None:
-        logger.opt(exception=exc).error(
-            "agent run producer failed run_id={} session_id={} status={} exception_type={}",
-            run_id,
-            projection.session_id,
-            projection.status.value,
-            type(exc).__name__,
-        )
+        if isinstance(exc, RunLimitExceeded):
+            logger.warning(
+                "agent run stopped by limit run_id={} session_id={} status={} exception_type={}",
+                run_id,
+                projection.session_id,
+                projection.status.value,
+                type(exc).__name__,
+            )
+        else:
+            logger.opt(exception=exc).error(
+                "agent run producer failed run_id={} session_id={} status={} exception_type={}",
+                run_id,
+                projection.session_id,
+                projection.status.value,
+                type(exc).__name__,
+            )
         handle = run_manager.get(run_id)
-        limit_error = exc if isinstance(exc, RunLimitExceeded) else handle.limit_error
+        limit_error = (
+            exc
+            if isinstance(exc, RunLimitExceeded)
+            else getattr(handle, "limit_error", None)
+        )
         stopped = isinstance(exc, asyncio.CancelledError) and limit_error is None
         has_content = bool(projection.builder.to_dict().get("parts"))
         target = RunStatus.PARTIAL if stopped or (limit_error is not None and has_content) else RunStatus.ERROR
@@ -802,32 +690,48 @@ class RunService:
             if stopped
             else "生成失败，请稍后重试"
         )
-        projection.builder.reconcile_nonterminal_tools(
-            ToolState.TIMED_OUT
-            if error_code in {"RUN_TIMEOUT", "HITL_TIMEOUT"}
-            else ToolState.CANCELLED
-            if stopped
-            else ToolState.FAILED,
-            user_message or "本次工具执行已停止",
-        )
-        async with pg_manager.get_async_session_context() as db:
-            repository = AgentRunRepository(db)
-            won = await repository.finalize(
-                run_id=run_id,
-                target=target,
-                assistant_status="partial" if target == RunStatus.PARTIAL else "error",
-                content=projection.builder.to_dict(),
-                finished_at=_now_ms(),
+        terminal_event: RunEvent
+        if target == RunStatus.PARTIAL:
+            terminal_event = RunAborted(
+                reason=reason,
+                error_code=error_code,
+                message=user_message,
+            )
+        else:
+            terminal_event = RunError(
+                message=user_message or "生成失败，请稍后重试",
                 finish_reason=reason,
                 error_code=error_code,
-                user_error_message=user_message,
             )
-            if won:
-                await db.commit()
-            else:
-                await db.rollback()
-        if handle.status not in {RunStatus.PARTIAL, RunStatus.ERROR}:
-            await run_manager.transition(run_id, target)
+        await run_manager.apply_event(run_id, terminal_event, attempt_id=handle.attempt_id)
+
+    @staticmethod
+    def _snapshot_from_row(row: TAgentRun) -> RunSnapshot:
+        raw_snapshot = row.snapshot if isinstance(row.snapshot, dict) else {}
+        parts = normalize_message_content_for_delivery(raw_snapshot).get("parts", [])
+        pending_hitl = (
+            row.snapshot.get("_pending_hitl")
+            if isinstance(row.snapshot, dict)
+            and isinstance(row.snapshot.get("_pending_hitl"), dict)
+            else None
+        )
+        return RunSnapshot(
+            run_id=row.id,
+            user_id=str(row.user_id),
+            session_id=row.session_id,
+            assistant_message_id=row.assistant_message_id,
+            qa_type=row.qa_type,
+            origin=row.origin,
+            status=RunStatus(row.status),
+            sequence=row.last_sequence,
+            attempt_id=row.attempt_id,
+            parts=tuple(parts),
+            finish_reason=row.finish_reason,
+            error_code=row.error_code,
+            user_error_message=row.user_error_message,
+            pending_hitl=pending_hitl,
+            updated_at=row.updated_at,
+        )
 
     @classmethod
     async def get(cls, run_id: str, user_id: str, db: AsyncSession) -> RunSnapshot:
@@ -838,33 +742,47 @@ class RunService:
         try:
             handle = run_manager.get(run_id)
         except KeyError:
-            parts = row.snapshot.get("parts", []) if isinstance(row.snapshot, dict) else []
-            pending_hitl = (
-                row.snapshot.get("_pending_hitl")
-                if isinstance(row.snapshot, dict)
-                and isinstance(row.snapshot.get("_pending_hitl"), dict)
-                else None
-            )
-            return RunSnapshot(
-                run_id=row.id,
-                user_id=str(row.user_id),
-                session_id=row.session_id,
-                assistant_message_id=row.assistant_message_id,
-                qa_type=row.qa_type,
-                origin=row.origin,
-                status=RunStatus(row.status),
-                sequence=row.last_sequence,
-                attempt_id=row.attempt_id,
-                parts=tuple(parts),
-                finish_reason=row.finish_reason,
-                error_code=row.error_code,
-                user_error_message=row.user_error_message,
-                retry_attempt=row.retry_attempt,
-                retry_max=row.retry_max,
-                pending_hitl=pending_hitl,
-                updated_at=row.updated_at,
-            )
+            return cls._snapshot_from_row(row)
+        if handle.authoritative_snapshot is not None:
+            return copy.deepcopy(handle.authoritative_snapshot)
         return handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)
+
+    @classmethod
+    async def get_active_run(
+        cls, session_id: str, user_id: str, db: AsyncSession
+    ) -> RunSnapshot | None:
+        """查询 session 下的 active Run，返回完整 RunSnapshot 或 None。
+
+        优先返回 live owner 的实时 snapshot；owner 不可达时返回 DB snapshot。
+        对外契约：与 GET /runs/{run_id} 结构一致。
+        """
+        session = await ChatService.get_session_by_id(session_id, user_id, db)
+        if session is None:
+            raise NotFoundException(message="会话不存在")
+        repository = AgentRunRepository(db)
+        row = await repository.get_active_for_session(user_id, session_id)
+        if row is None:
+            return None
+        try:
+            handle = run_manager.get(row.id)
+        except KeyError:
+            return cls._snapshot_from_row(row)
+        if handle.authoritative_snapshot is not None:
+            return copy.deepcopy(handle.authoritative_snapshot)
+        return handle.snapshot_provider(handle.last_sequence, handle.status, handle.attempt_id)
+
+    @classmethod
+    async def get_latest_for_session(
+        cls, session_id: str, user_id: str, db: AsyncSession
+    ) -> RunSnapshot | None:
+        """查询会话最近一轮 run，供会话级 SSE 入口选择默认 run。"""
+        session = await ChatService.get_session_by_id(session_id, user_id, db)
+        if session is None:
+            raise NotFoundException(message="会话不存在")
+        row = await AgentRunRepository(db).get_latest_for_session(user_id, session_id)
+        if row is None:
+            return None
+        return await cls.get(row.id, user_id, db)
 
     @classmethod
     async def stop(cls, run_id: str, user_id: str, db: AsyncSession) -> RunSnapshot:
@@ -872,10 +790,6 @@ class RunService:
         if row is None:
             raise NotFoundException(message="任务不存在")
         try:
-            handle = run_manager.get(run_id)
-            if isinstance(handle.state, RunProjection):
-                handle.state.cancel_requested = True
-                handle.state.builder.mark_running_tools_unknown("已请求停止，工具执行结果无法确认")
             await run_manager.stop(run_id)
         except KeyError:
             pass
@@ -917,7 +831,7 @@ class RunService:
             or str(pending_payload.get("interrupt_id") or "") != request.interrupt_id
         ):
             raise ConflictException(message="确认请求已失效，请刷新后重试")
-        from noesis.domain.chat.hitl.pending import PendingHitl
+        from noesis.chat.hitl.pending import PendingHitl
 
         pending = PendingHitl(
             interrupt_id=request.interrupt_id,
@@ -934,21 +848,16 @@ class RunService:
         async def producer(publish) -> None:
             async with pg_manager.get_async_session_context() as run_db:
                 try:
-                    async for line in QaService.exec_hitl_resume(
+                    async for event in QaService.exec_hitl_resume(
                         pending=pending,
                         decisions=[item.model_dump(exclude_none=True) for item in request.decisions],
                         grant_scope=request.grant_scope,
                         current_user=current_user,
                         db=run_db,
+                        run_id=run_id,
                     ):
-                        for event in parse_sse_line_to_event(line):
-                            envelope = await cls.publish_projected_event(
-                                run_id, projection, event, publish
-                            )
-                            if envelope is None:
-                                continue
-                    await run_manager.drain_delivery(run_id, "persist")
-                    await cls._persist_projection(run_id, projection)
+                        await publish(event, projection.attempt_id)
+                    await run_manager.drain_persistence(run_id)
                 except BaseException as exc:
                     await cls._persist_cancel_or_error(run_id, projection, exc)
 

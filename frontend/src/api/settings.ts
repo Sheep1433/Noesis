@@ -57,26 +57,116 @@ export async function putUserMemoryFile(file: 'USER.md' | 'AGENTS.md', content: 
   return parseAuthJson<MemoryFilePayload>(res)
 }
 
-export type DailyMemoryItem = { date: string, size: number, updated_at: string }
-export type MemorySourceRef = { session_id: string, message_id: string }
-export type DailyMemoryMatch = { id: string, date: string, category: string, summary: string, keywords: string[], score: number, sources: MemorySourceRef[] }
-export type MemoryDreamResult = { date: string, timezone: string, entries: number, status: string }
-
-export async function listDailyMemory() {
-  return (await settingsJson<{ items: DailyMemoryItem[] }>('/api/user/memory/daily/list')).items
+export type MemorySettingsPayload = {
+  enabled: boolean
 }
 
-export async function searchDailyMemory(query: string) {
-  return (await settingsJson<{ items: DailyMemoryMatch[] }>(`/api/user/memory/daily/entries/search?q=${encodeURIComponent(query)}`)).items
+export type MemoryTreeEntry = {
+  memory_type: string
+  type_label: string
+  slug: string
+  rel_path: string
+  label: string
+  description: string
 }
 
-export function runMemoryDream(date: string, timezone = 'Asia/Shanghai') {
-  return settingsJson<MemoryDreamResult>('/api/user/memory/dream', 'POST', { date, timezone })
+export type MemoryTreePayload = {
+  entries: MemoryTreeEntry[]
+  corrupt_lines: number
+  over_budget: boolean
+  journal_days: string[]
+}
+
+export type MemoryEntryPayload = {
+  memory_type: string
+  slug: string
+  content: string
+  label?: string
+  body?: string
+  updated_at?: string
+}
+
+export async function getMemorySettings() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/settings`, { credentials: 'include' }),
+  )
+  return parseAuthJson<MemorySettingsPayload>(res)
+}
+
+export async function putMemorySettings(enabled: boolean) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/settings`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }),
+  )
+  return parseAuthJson<MemorySettingsPayload>(res)
+}
+
+export async function getMemoryTree() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/tree`, { credentials: 'include' }),
+  )
+  return parseAuthJson<MemoryTreePayload>(res)
+}
+
+export async function getMemoryEntry(memoryType: string, slug: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      { credentials: 'include' },
+    ),
+  )
+  return parseAuthJson<MemoryEntryPayload>(res)
+}
+
+export async function putMemoryEntry(memoryType: string, slug: string, content: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+    ),
+  )
+  return parseAuthJson<void>(res)
+}
+
+export async function deleteMemoryEntry(memoryType: string, slug: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      { method: 'DELETE', credentials: 'include' },
+    ),
+  )
+  return parseAuthJson<void>(res)
+}
+
+export async function getMemoryJournal(day: string) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/journal/${encodeURIComponent(day)}`, { credentials: 'include' }),
+  )
+  return parseAuthJson<{ day: string, content: string }>(res)
+}
+
+export async function rebuildMemoryIndex() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/index/rebuild`, {
+      method: 'POST',
+      credentials: 'include',
+    }),
+  )
+  return parseAuthJson<{ entries: number }>(res)
 }
 
 export type ContextPreview = {
   profile: string
-  sources: Array<{ id: string, label: string, priority: number, injected: boolean, characters: number, token_estimate: number, content: string }>
+  sources: Array<{ id: string, label: string, injected: boolean, characters: number, token_estimate: number, content: string }>
   compiled_content: string
   characters: number
   token_estimate: number
@@ -90,6 +180,7 @@ export type ScheduledTask = {
   id: string
   name: string
   cron_expr: string
+  summary?: string
   timezone: string
   enabled: boolean
   qa_type: string
@@ -190,6 +281,30 @@ export async function previewSchedule(cronExpr: string, timezone: string) {
   const params = new URLSearchParams({ cron_expr: cronExpr, timezone })
   const res = await authFetch(`${location.origin}/api/user/scheduled-tasks/preview?${params}`)
   return parseAuthJson<{ summary: string, next_run_at: number, timezone: string }>(res)
+}
+
+export type ScheduledTaskDraft = {
+  name: string
+  cron_expr: string
+  timezone: string
+  qa_type: string
+  prompt: string
+  session_binding: string
+  delivery: string
+  summary: string
+  next_run_at: number
+}
+
+export async function parseScheduledTask(text: string) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/scheduled-tasks/parse`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }),
+  )
+  return parseAuthJson<ScheduledTaskDraft>(res)
 }
 
 export async function listScheduledTaskRuns(taskId: string) {
@@ -315,4 +430,109 @@ export function applySettingsImport(manifest: Record<string, unknown>, previewId
 
 export function resetSettings() {
   return settingsJson<{ reset: string[] }>('/api/user/settings/reset', 'POST')
+}
+
+// ---------- 用户自定义对话模型 ----------
+
+export type UserLLMProvider = {
+  provider_id: string
+  slug: string
+  name: string
+  api_type: string
+  base_url: string
+  enabled: boolean
+  has_key: boolean
+  api_key_masked?: string | null
+}
+
+export type UserLLMModel = {
+  entry_id: string
+  provider_id: string
+  provider_name?: string | null
+  api_type?: string | null
+  model_id: string
+  label: string
+  temperature?: number | null
+  context_window: number
+}
+
+export type UserLLMProviderPayload = {
+  name: string
+  slug?: string
+  api_type: string
+  base_url: string
+  enabled: boolean
+  api_key?: string
+  api_key_action: 'keep' | 'replace' | 'clear'
+}
+
+export async function listLLMProviders() {
+  const data = await settingsJson<{ providers: UserLLMProvider[] }>('/api/user/llm/providers')
+  return data?.providers || []
+}
+
+export function createLLMProvider(payload: UserLLMProviderPayload) {
+  return settingsJson<UserLLMProvider>('/api/user/llm/providers', 'POST', payload)
+}
+
+export function updateLLMProvider(id: string, payload: UserLLMProviderPayload) {
+  return settingsJson<UserLLMProvider>(`/api/user/llm/providers/${encodeURIComponent(id)}`, 'PUT', payload)
+}
+
+export function deleteLLMProvider(id: string) {
+  return settingsJson<null>(`/api/user/llm/providers/${encodeURIComponent(id)}`, 'DELETE')
+}
+
+export type UserLLMDiscoveredModel = {
+  model_id: string
+  label: string
+  owned_by?: string | null
+  context_window: number
+  context_source: 'provider' | 'unknown'
+}
+
+export type UserLLMDiscoveryResult = {
+  ok: boolean
+  status: 'discovered' | 'missing_key' | 'authentication_error' | 'unsupported' | 'network_error' | 'provider_error' | 'invalid_response'
+  provider_reachable: boolean
+  discovery_supported: boolean
+  models: UserLLMDiscoveredModel[]
+  message: string
+}
+
+export function discoverLLMDraft(body: {
+  api_type: string
+  base_url: string
+  api_key?: string
+  provider_id?: string | null
+}) {
+  return settingsJson<UserLLMDiscoveryResult>('/api/user/llm/providers/discover', 'POST', body)
+}
+
+export async function listLLMModels() {
+  const data = await settingsJson<{ models: UserLLMModel[] }>('/api/user/llm/models')
+  return data?.models || []
+}
+
+export function createLLMModel(payload: Omit<UserLLMModel, 'entry_id' | 'api_type'>) {
+  return settingsJson<UserLLMModel>('/api/user/llm/models', 'POST', payload)
+}
+
+export function updateLLMModel(id: string, payload: Omit<UserLLMModel, 'entry_id' | 'api_type'>) {
+  return settingsJson<UserLLMModel>(`/api/user/llm/models/${encodeURIComponent(id)}`, 'PUT', payload)
+}
+
+export function deleteLLMModel(id: string) {
+  return settingsJson<null>(`/api/user/llm/models/${encodeURIComponent(id)}`, 'DELETE')
+}
+
+export async function getLLMDefaultModel() {
+  const data = await settingsJson<{ default_model_id: string | null }>('/api/user/llm/preferences')
+  return data?.default_model_id || null
+}
+
+export function setLLMDefaultModel(modelId: string | null) {
+  return settingsJson<{ default_model_id: string | null }>('/api/user/llm/preferences', 'PUT', {
+    default_model_id: modelId,
+  })
 }

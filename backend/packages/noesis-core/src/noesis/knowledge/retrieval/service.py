@@ -300,8 +300,14 @@ class KbRetrievalService:
             logger.warning("[KbRetrievalService] use_reranker=true 但 rerank 未配置，降级 recall 排序")
 
         t_post = time.perf_counter()
-        if threshold is not None:
+        # 阈值仅按 rerank 分（gte-rerank-v2 的 0~1 相关性分）过滤；rerank 未启用或
+        # 降级时 score 是 recall/RRF 融合分（量纲 ~0.0x），套用绝对阈值会把结果滤空。
+        if threshold is not None and rerank_applied:
+            pre_filter_count = len(hits)
             hits = [h for h in hits if h.score >= threshold]
+            filtered_out = pre_filter_count - len(hits)
+        else:
+            filtered_out = 0
 
         hits.sort(key=lambda h: h.score, reverse=True)
         final_hits = hits[:final_k]
@@ -330,6 +336,8 @@ class KbRetrievalService:
             f"post_ms={post_ms:.1f} recall_hits={recall_hit_count} "
             f"final_hits={len(final_hits)} recall_top_k={recall_k} "
             f"rerank_top_k={rerank_k} final_top_k={final_k} "
+            f"score_threshold={threshold if threshold is not None and rerank_applied else None} "
+            f"threshold_filtered={filtered_out} "
             f"total_ms={total_ms:.1f}"
         )
         return KbSearchResult(hits=final_hits, timing=timing)

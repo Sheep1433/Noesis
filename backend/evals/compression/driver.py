@@ -1,19 +1,18 @@
-"""加载 fixture → 调用 ContextLifecycle.before_model → 压缩后 messages。"""
+"""加载 fixture → 调用 CompactionMiddleware → 压缩后 messages。
+
+离线评测使用与线上相同的 ``noesis.agents.middlewares.CompactionMiddleware``
+（spec：离线评测使用同一 factory 入口与 middleware 参数）。
+"""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from langchain.agents.middleware.types import AgentState
+from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, convert_to_messages
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
-from langgraph.runtime import Runtime
 
-from noesis.agents.middlewares.kernel.context_metrics import get_agent_token_counter
+from noesis.agents.middlewares import CompactionMiddleware, CompactionThresholds
 from noesis.llm.model_limits import resolve_context_max_tokens
-from langchain.agents.middleware.summarization import SummarizationMiddleware
-from noesis.agents.middlewares.kernel.context_lifecycle_middleware import ContextLifecycleMiddleware
 from noesis.config.env import ModelConfig
 from noesis.llm import get_llm
 
@@ -51,7 +50,26 @@ def parse_fixture_messages(raw: List[Dict[str, Any]]) -> List[AnyMessage]:
     return convert_to_messages(lc_payload)
 
 
-def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> ContextLifecycleMiddleware:
+def _approx_token_counter(messages: List[AnyMessage]) -> int:
+    return sum(len(repr(m.content)) for m in messages) // 4
+
+
+def _build_summarize(model):
+    def _summarize(messages: List[AnyMessage]) -> str:
+        from langchain_core.messages import get_buffer_string
+
+        prompt = (
+            "Summarise the following conversation, preserving: user goals, key "
+            "technical decisions, files/code, errors and fixes, rejected "
+            "approaches, all user requirements, pending tasks, current work, "
+            "and the next step.\n\n"
+            f"{get_buffer_string(messages)}"
+        )
+        return str(model.invoke([HumanMessage(content=prompt)]).content or "")
+    return _summarize
+
+
+def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> CompactionMiddleware:
     _require_summarization_enabled()
     options = dict(compress_options or {})
     force = bool(options.get("force", True))
@@ -60,51 +78,38 @@ def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> 
     )
 
     model = get_llm(purpose="summarization")
-    max_input = resolve_context_max_tokens()
-    if not getattr(model, "profile", None):
-        model.profile = {"max_input_tokens": max_input}
+    max_input = resolve_context_max_tokens() or 128_000
+    reserve = int(getattr(ModelConfig, "summarization_output_reserve", 4_000))
 
     if force:
-        trigger: tuple[str, float | int] = ("tokens", 1)
+        auto_at = 1  # force compaction on first call
     elif ModelConfig.summarization_trigger_tokens > 0:
-        trigger = ("tokens", ModelConfig.summarization_trigger_tokens)
+        auto_at = ModelConfig.summarization_trigger_tokens
     else:
-        trigger = ("fraction", ModelConfig.summarization_trigger_fraction)
+        auto_at = int(max_input * getattr(ModelConfig, "summarization_trigger_fraction", 0.75))
 
-    engine = SummarizationMiddleware(
-        model,
-        trigger=trigger,
-        keep=("messages", keep_n),
-        token_counter=get_agent_token_counter(),
+    reserve = min(reserve, max_input - 2)
+    effective_limit = max_input - reserve
+    thresholds = CompactionThresholds(
+        model_input_limit=max_input,
+        summary_output_reserve=reserve,
+        transient_request_buffer=max(0, effective_limit - auto_at),
     )
-    return ContextLifecycleMiddleware(compaction_engine=engine)
-
-
-def _apply_message_update(original: List[AnyMessage], update: Dict[str, Any]) -> List[AnyMessage]:
-    patch = update.get("messages")
-    if not patch:
-        return list(original)
-
-    first = patch[0]
-    if getattr(first, "id", None) == REMOVE_ALL_MESSAGES:
-        return list(patch[1:])
-
-    by_id = {m.id: m for m in patch if getattr(m, "id", None)}
-    if not by_id:
-        return list(original)
-
-    merged: List[AnyMessage] = []
-    for msg in original:
-        mid = getattr(msg, "id", None)
-        merged.append(by_id[mid] if mid in by_id else msg)
-    return merged
+    return CompactionMiddleware(
+        token_counter=_approx_token_counter,
+        summarize=_build_summarize(model),
+        thresholds=thresholds,
+        keep_messages=keep_n,
+    )
 
 
 def _extract_summary_text(messages: List[AnyMessage]) -> str:
     for msg in messages:
         if isinstance(msg, (HumanMessage, AIMessage, SystemMessage)):
             content = msg.content
-            if isinstance(content, str) and "[Conversation Summary]" in content:
+            if msg.additional_kwargs.get("lc_source") == "summarization" and isinstance(content, str):
+                return content
+            if isinstance(content, str) and "[conversation summary]" in content:
                 return content
             if isinstance(content, str) and len(content) > 200 and "summary" in content.lower():
                 return content
@@ -117,28 +122,34 @@ def compress_fixture_messages(
     compress_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     middleware = build_eval_middleware(compress_options)
-    state: AgentState = {"messages": list(messages)}
-    runtime = Runtime(context=SimpleNamespace(backend=None))
 
-    token_counter = get_agent_token_counter()
-    pre_tokens = token_counter(messages)
+    pre_tokens = _approx_token_counter(messages)
     pre_count = len(messages)
 
-    update = middleware.before_model(state, runtime)
-    compressed = _apply_message_update(messages, update or {})
-    if update:
-        state = {**state, **update}
-        if "messages" in update and getattr(update["messages"][0], "id", None) == REMOVE_ALL_MESSAGES:
-            compressed = list(update["messages"][1:])
+    request = ModelRequest(
+        model=object(),  # type: ignore[arg-type]
+        messages=list(messages),
+        system_message=SystemMessage(content="eval"),
+        state={"messages": list(messages)},
+    )
 
-    post_tokens = token_counter(compressed)
+    effective: list[AnyMessage] = []
+
+    def handler(req: ModelRequest) -> ModelResponse:
+        effective.extend(req.messages)
+        return ModelResponse(result=[AIMessage(content="eval complete")])
+
+    middleware.wrap_model_call(request, handler)
+    compressed = effective or list(request.messages)
+
+    post_tokens = _approx_token_counter(compressed)
     post_count = len(compressed)
     ratio = (1.0 - post_tokens / pre_tokens) if pre_tokens > 0 else 0.0
 
     return {
         "compressed_messages": compressed,
         "summary_text": _extract_summary_text(compressed),
-        "compressed": update is not None,
+        "compressed": len(compressed) != pre_count,
         "pre_tokens": pre_tokens,
         "post_tokens": post_tokens,
         "compression_ratio": round(ratio, 4),

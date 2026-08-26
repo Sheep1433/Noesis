@@ -84,8 +84,8 @@ def test_get_embedding_dashscope_batch_size() -> None:
 
 def test_get_embedding_uses_frozen_user_binding() -> None:
     snapshot = RuntimeModelSnapshot(
-        id="user:p1:embed", provider_id="p1", purpose="embedding", model_type="openai",
-        model_name="custom-embed", base_url="https://provider.example/v1", api_key="user-key",
+        id="custom-embed", provider_id="p1", purpose="embedding", model_type="openai",
+        base_url="https://provider.example/v1", api_key="user-key",
     )
     set_runtime_model_snapshot(snapshot)
     try:

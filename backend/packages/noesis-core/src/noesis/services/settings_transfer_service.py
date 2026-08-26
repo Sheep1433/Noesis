@@ -40,7 +40,7 @@ def _strip_sensitive(value):
 
 class SettingsTransferService:
     @classmethod
-    async def export(cls, db: AsyncSession, user_id: int) -> dict:
+    async def export(cls, db: AsyncSession, user_id: str) -> dict:
         tasks = list((await db.execute(select(TUserScheduledTask).where(TUserScheduledTask.user_id == user_id, TUserScheduledTask.deleted_at.is_(None)))).scalars())
         preferences = list((await db.execute(select(TUserNotificationPreference).where(TUserNotificationPreference.user_id == user_id))).scalars())
         mcp = load_user_mcp_json(user_id).mcpServers
@@ -54,7 +54,7 @@ class SettingsTransferService:
         return {"schema_version": SCHEMA_VERSION, "generated_at": int(time.time() * 1000), "domains": domains}
 
     @classmethod
-    async def preview(cls, db: AsyncSession, user_id: int, manifest: dict) -> dict:
+    async def preview(cls, db: AsyncSession, user_id: str, manifest: dict) -> dict:
         cls._validate(manifest)
         current = await cls.export(db, user_id)
         changes = []
@@ -64,7 +64,7 @@ class SettingsTransferService:
         return {"preview_id": _fingerprint({"current": current["domains"], "incoming": manifest["domains"]}), "schema_version": SCHEMA_VERSION, "changes": changes, "conflicts": [], "errors": cls._domain_errors(manifest["domains"])}
 
     @classmethod
-    async def _apply_validated(cls, db: AsyncSession, user_id: int, manifest: dict, preview_id: str) -> dict:
+    async def _apply_validated(cls, db: AsyncSession, user_id: str, manifest: dict, preview_id: str) -> dict:
         preview = await cls.preview(db, user_id, manifest)
         if preview["errors"]:
             raise ValueError("设置文件包含无效配置，请修正后重新预览")
@@ -151,7 +151,7 @@ class SettingsTransferService:
         return {"applied": applied}
 
     @classmethod
-    async def apply(cls, db: AsyncSession, user_id: int, manifest: dict, preview_id: str) -> dict:
+    async def apply(cls, db: AsyncSession, user_id: str, manifest: dict, preview_id: str) -> dict:
         try:
             return await cls._apply_validated(db, user_id, manifest, preview_id)
         except Exception as exc:
@@ -161,7 +161,7 @@ class SettingsTransferService:
             raise
 
     @classmethod
-    async def reset(cls, db: AsyncSession, user_id: int) -> dict:
+    async def reset(cls, db: AsyncSession, user_id: str) -> dict:
         await db.execute(delete(TUserNotificationPreference).where(TUserNotificationPreference.user_id == user_id))
         await SettingsService.append_audit(db, user_id=user_id, action="settings.reset", setting_domain="settings", summary={"domains": ["notifications"]})
         await db.commit()

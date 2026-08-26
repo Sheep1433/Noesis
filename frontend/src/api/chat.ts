@@ -32,26 +32,16 @@ export interface MessageContent {
 /** 消息元数据 */
 export interface MessageMetadata {
   model?: string
-  input_tokens?: number
-  output_tokens?: number
-  total_tokens?: number
   finish_reason?: string
   error?: string
-  /** Provider cache/reasoning 明细（按需调试，非默认摘要展示） */
-  input_token_details?: { cache_read?: number, cache_write?: number }
-  output_token_details?: { reasoning?: number }
-  /** 按 caller/model 归因摘要（调试视图按需展示） */
-  attribution?: {
-    cumulative?: Record<string, number>
-    by_caller?: Record<string, Record<string, number>>
-    by_model?: Record<string, Record<string, number>>
-  }
   /** 最近一次模型请求的上下文快照（与累计 usage 分开） */
   context?: ContextSnapshot
 }
 
-/** 当前模型请求的上下文快照（context-update 事件 / 历史消息）。
- *  结构与 messageParts.ContextWindowSnapshot 对齐，避免循环 import。 */
+/**
+ * 当前模型请求的上下文快照（context-update 事件 / 历史消息）。
+ *  结构与 messageParts.ContextWindowSnapshot 对齐，避免循环 import。
+ */
 export interface ContextSnapshot {
   current_tokens: number
   max_tokens: number
@@ -79,7 +69,9 @@ export type AgentStopReason =
 export interface ChatSessionResponse {
   id: string
   parent_id: string | null
-  user_id: string
+  kind?: 'root' | 'subagent' | string
+  created_by_run_id?: string | null
+  created_by_tool_call_id?: string | null
   title: string
   extra: Record<string, unknown> | null
   created_at: number
@@ -93,18 +85,40 @@ export interface SessionListResponse {
   total: number
 }
 
+export interface ChildSessionCatalogItem {
+  session_id: string
+  parent_id: string
+  created_by_tool_call_id?: string | null
+  title: string
+  profile_id: string
+  run_id?: string | null
+  status: AgentRunStatus | 'awaiting_approval' | 'failed' | 'cancelled' | 'timed_out' | string
+  turn_count: number
+  step_count: number
+  started_at?: number | null
+  finished_at?: number | null
+  interrupt?: TaskCatalogEntry['interrupt'] | null
+}
+
+export interface ChildSessionCatalogResponse {
+  sessions: ChildSessionCatalogItem[]
+  total: number
+}
+
 /** 消息响应 */
 export interface ChatMessageResponse {
   id: string
   session_id: string
   parent_id: string | null
-  user_id: string
   role: 'user' | 'assistant'
   content: MessageContent
   extra?: MessageMetadata
   status: string
   message_sequence: number
   created_at: number
+  /** 关联 Agent run 的启动/终态时间（Unix 毫秒）；仅 assistant 且有 run 时有值 */
+  run_started_at?: number | null
+  run_finished_at?: number | null
 }
 
 /** 消息列表响应 */
@@ -136,6 +150,14 @@ export interface AgentRunCreated {
   session_id: string
   status: AgentRunStatus
   session_title: string
+  /** 命中斜杠命令时的 ephemeral 回复（不建 run、不落库）。存在时其余字段可缺省。 */
+  command_reply?: string
+}
+
+/** 命中斜杠命令时的 ephemeral 响应（字段与 AgentRunCreated 不同，故独立判别）。 */
+export interface CommandReplyResult {
+  command_reply: string
+  session_id: string
 }
 
 export interface AgentRunSnapshot {
@@ -151,8 +173,6 @@ export interface AgentRunSnapshot {
   finish_reason?: AgentStopReason | null
   error_code?: string | null
   message?: string | null
-  retry_attempt: number
-  retry_max: number
   pending_hitl?: {
     interrupt_id?: string
     kind?: string
@@ -179,6 +199,7 @@ export interface ResumeAgentRunHitlParams {
 export interface CreateSessionParams {
   title?: string
   parent_id?: string
+  kind?: 'root' | 'subagent'
   extra?: Record<string, unknown>
 }
 
@@ -278,6 +299,21 @@ async function parseResponse<T>(res: Response): Promise<T> {
 }
 
 // ============================================================================
+// Slash commands
+// ============================================================================
+
+export interface SlashCommand {
+  name: string
+  description: string
+}
+
+/** 列出可用控制命令（skill 命令由 skills fs-tree 提供）。 */
+export async function getSlashCommands(): Promise<SlashCommand[]> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/commands`)
+  return parseResponse<SlashCommand[]>(await authFetch(req))
+}
+
+// ============================================================================
 // Session API
 // ============================================================================
 
@@ -323,14 +359,39 @@ export async function ensureSession(
   return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
-export async function createAgentRun(params: CreateAgentRunParams): Promise<AgentRunCreated> {
+export async function createAgentRun(params: CreateAgentRunParams): Promise<AgentRunCreated | CommandReplyResult> {
   const req = makeRequest('POST', `${location.origin}${BASE}/runs`, params)
-  return parseResponse<AgentRunCreated>(await authFetch(req))
+  const res = await authFetch(req)
+  const json = await res.json() as { code?: number, msg?: string, data?: AgentRunCreated & CommandReplyResult & { run_id?: string, assistant_message_id?: string, session_id?: string, status?: string } }
+  // 409 冲突：返回可加入的已有 Run 信息，不当作普通失败
+  if (json.code === 409 && json.data?.run_id) {
+    const conflict = new Error(json.msg ?? '当前会话仍在生成') as Error & { conflictRunId?: string, conflictData?: unknown }
+    conflict.conflictRunId = json.data.run_id
+    conflict.conflictData = json.data
+    throw conflict
+  }
+  if (json.code !== 200 || !json.data) {
+    throw new Error(json.msg ?? `API error: ${json.code}`)
+  }
+  // 命中斜杠命令：ephemeral 回复，无 run_id
+  if (json.data.command_reply) {
+    return { command_reply: json.data.command_reply, session_id: json.data.session_id ?? params.session_id }
+  }
+  return json.data
 }
 
 export async function getAgentRun(runId: string): Promise<AgentRunSnapshot> {
   const req = makeRequest('GET', `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}`)
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
+}
+
+export async function getActiveRun(sessionId: string): Promise<AgentRunSnapshot | null> {
+  const req = makeRequest(
+    'GET',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/active-run`,
+  )
+  const data = await parseResponse<AgentRunSnapshot | null>(await authFetch(req))
+  return data
 }
 
 export async function subscribeAgentRun(
@@ -351,6 +412,61 @@ export async function subscribeAgentRun(
 export async function stopAgentRun(runId: string): Promise<AgentRunSnapshot> {
   const req = makeRequest('POST', `${location.origin}${BASE}/runs/${encodeURIComponent(runId)}/stop`)
   return parseResponse<AgentRunSnapshot>(await authFetch(req))
+}
+
+export async function stopShellTask(sessionId: string, taskId: string): Promise<TaskCatalogEntry> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/shell-jobs/${encodeURIComponent(taskId)}/stop`,
+  )
+  return parseResponse<TaskCatalogEntry>(await authFetch(req))
+}
+
+/** 订阅会话级信令流（跨窗口发现活跃 run）；帧为 event: session-signal 的轻量定位符 */
+export async function subscribeSessionEvents(sessionId: string, signal?: AbortSignal): Promise<Response> {
+  const url = new URL(`${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/events`)
+  return authFetch(new Request(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers: getAuthHeaders(),
+    signal,
+  }))
+}
+
+/** 后台子 Agent 任务（含待审批） */
+export interface TaskCatalogEntry {
+  task_id: string
+  session_id: string
+  child_session_id?: string | null
+  created_by_tool_call_id?: string | null
+  run_id?: string | null
+  assistant_message_id?: string | null
+  description: string
+  kind?: 'subagent' | 'shell'
+  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
+  result?: string | null
+  error?: string | null
+  interrupt?: {
+    interrupt_id: string
+    action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>
+    kind?: string
+  } | null
+  started_at?: number
+  completed_at?: number | null
+  progress?: Array<{
+    kind: 'tool_call' | 'tool_result' | 'text'
+    name?: string
+    status?: string
+    preview?: string
+    ts?: number
+  }>
+  /** SSE/列表负载已裁掉 progress 明细时的步数 */
+  progress_count?: number
+}
+
+export async function listSessionTaskCatalog(sessionId: string): Promise<{ tasks: TaskCatalogEntry[], pending_approvals: TaskCatalogEntry[] }> {
+  const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/children/catalog`)
+  return parseResponse(await authFetch(req))
 }
 
 export async function resumeAgentRunHitl(
@@ -397,13 +513,13 @@ export async function deleteSession(id: string): Promise<void> {
 
 /**
  * 更新会话标题
- * PATCH /api/chat/sessions/{id}/title
+ * PUT /api/chat/sessions/{id}/title
  */
 export async function updateSessionTitle(
   id: string,
   params: UpdateSessionTitleParams,
 ): Promise<ChatSessionResponse> {
-  const req = makeRequest('PATCH', `${location.origin}${BASE}/sessions/${id}/title`, params)
+  const req = makeRequest('PUT', `${location.origin}${BASE}/sessions/${id}/title`, params)
   return parseResponse<ChatSessionResponse>(await authFetch(req))
 }
 
@@ -415,23 +531,32 @@ export interface UpdateSessionMetaParams {
 
 /**
  * 更新会话置顶 / 归档状态
- * PATCH /api/chat/sessions/{id}/meta
+ * PUT /api/chat/sessions/{id}/meta
  */
 export async function updateSessionMeta(
   id: string,
   params: UpdateSessionMetaParams,
 ): Promise<ChatSessionResponse> {
-  const req = makeRequest('PATCH', `${location.origin}${BASE}/sessions/${id}/meta`, params)
+  const req = makeRequest('PUT', `${location.origin}${BASE}/sessions/${id}/meta`, params)
   return parseResponse<ChatSessionResponse>(await authFetch(req))
+}
+
+/**
+ * 标记会话已读
+ * PUT /api/chat/sessions/{id}/read
+ */
+export async function markSessionRead(id: string): Promise<void> {
+  const req = makeRequest('PUT', `${location.origin}${BASE}/sessions/${id}/read`)
+  await parseResponse<void>(await authFetch(req))
 }
 
 /**
  * 获取子会话列表
  * GET /api/chat/sessions/{id}/children
  */
-export async function getSessionChildren(id: string): Promise<SessionListResponse> {
+export async function getSessionChildren(id: string): Promise<ChildSessionCatalogResponse> {
   const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${id}/children`)
-  return parseResponse<SessionListResponse>(await authFetch(req))
+  return parseResponse<ChildSessionCatalogResponse>(await authFetch(req))
 }
 
 // ============================================================================
@@ -602,6 +727,19 @@ export async function sendMessage(
 ): Promise<SendMessageResponse> {
   const req = makeRequest('POST', `${location.origin}${BASE}/sessions/${sessionId}/messages`, params)
   return parseResponse<SendMessageResponse>(await authFetch(req))
+}
+
+/** 向已有 child session 追加下一轮对话。 */
+export async function sendSubagentFollowup(
+  sessionId: string,
+  message: string,
+): Promise<TaskCatalogEntry> {
+  const req = makeRequest(
+    'POST',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-followup`,
+    { message },
+  )
+  return parseResponse<TaskCatalogEntry>(await authFetch(req))
 }
 
 /**

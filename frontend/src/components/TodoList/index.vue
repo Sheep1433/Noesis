@@ -107,12 +107,11 @@ const completedTodos = computed(() => props.todos.filter((t) => t.status === 'co
 .todo-list {
   width: 100%;
   box-sizing: border-box;
-  background: rgba(92, 124, 250, 0.06);
-  border: 1px solid rgba(92, 124, 250, 0.15);
-  border-radius: 10px;
+  background: var(--noesis-color-primary-bg-subtle);
+  border: 1px solid var(--noesis-color-primary-border-soft);
+  border-radius: var(--noesis-radius-lg);
   margin: 0 0 8px;
   overflow: hidden;
-  backdrop-filter: blur(8px);
 }
 
 .todo-header {
@@ -126,17 +125,17 @@ const completedTodos = computed(() => props.todos.filter((t) => t.status === 'co
 }
 
 .todo-header:hover {
-  background: rgba(92, 124, 250, 0.08);
+  background: var(--noesis-color-primary-bg-hover);
 }
 
 .todo-title {
   font-size: 13px;
   font-weight: 600;
-  color: #495057;
+  color: var(--noesis-color-text-secondary);
 }
 
 .collapse-icon {
-  color: #999;
+  color: var(--noesis-color-text-muted);
   transition: transform 0.2s ease;
 }
 
@@ -158,7 +157,7 @@ const completedTodos = computed(() => props.todos.filter((t) => t.status === 'co
 
 .section-label {
   font-size: 11px;
-  color: #999;
+  color: var(--noesis-color-text-muted);
   margin-bottom: 4px;
   padding-left: 2px;
 }
@@ -177,23 +176,27 @@ const completedTodos = computed(() => props.todos.filter((t) => t.status === 'co
 }
 
 .todo-dot.pending {
-  color: #bbb;
+  color: var(--noesis-color-text-placeholder);
 }
 
-.todo-dot.in_progress {
+.todo-dot.completed {
+  color: var(--noesis-color-text-muted);
+}
+
+.todo-dot.in-progress {
   color: var(--noesis-color-primary);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
 .todo-text {
   font-size: 13px;
-  color: #333;
+  color: var(--noesis-color-text-body);
   line-height: 1.4;
 }
 
 .todo-item.completed .todo-text {
   text-decoration: line-through;
-  color: #bbb;
+  color: var(--noesis-color-text-muted);
 }
 
 /* 折叠动画 */

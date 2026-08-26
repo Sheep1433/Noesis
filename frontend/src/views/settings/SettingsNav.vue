@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { SettingsSectionId } from './registry'
 import { computed, nextTick, ref } from 'vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { filterSettingsSections } from './registry'
 
 const props = defineProps<{
@@ -10,6 +11,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'select', value: SettingsSectionId): void
 }>()
+
+const { isMobile } = useBreakpoint()
 
 const query = ref('')
 const buttonRefs = ref<HTMLButtonElement[]>([])
@@ -40,7 +43,7 @@ async function onKeydown(event: KeyboardEvent, index: number) {
 </script>
 
 <template>
-  <aside class="settings-nav-wrap">
+  <aside class="settings-nav-wrap" :class="{ 'settings-nav-wrap--mobile': isMobile }">
     <label class="settings-nav-search">
       <span class="sr-only">搜索设置</span>
       <input v-model="query" type="search" placeholder="搜索设置" aria-label="搜索设置" autocomplete="off">
@@ -67,7 +70,7 @@ async function onKeydown(event: KeyboardEvent, index: number) {
   </aside>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .settings-nav-wrap {
   display: flex;
   flex-direction: column;
@@ -145,7 +148,28 @@ async function onKeydown(event: KeyboardEvent, index: number) {
   font-weight: 600;
 }
 
-@media (max-width: 768px) {
+.settings-nav-wrap--mobile .settings-nav {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  min-width: 0;
+  padding-right: 20px;
+  scrollbar-width: none;
+}
+
+.settings-nav-wrap--mobile .settings-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-nav-wrap--mobile .settings-nav__item {
+  flex: 0 0 auto;
+}
+
+.settings-nav-wrap--mobile .settings-nav__item small {
+  display: none;
+}
+
+@media (max-width: $bp-md) {
   .settings-nav {
     flex-direction: row;
     flex-wrap: nowrap;

@@ -7,13 +7,10 @@ and the rule that details are preserved but NOT zero-filled or double-counted.
 
 from __future__ import annotations
 
-from typing import Any, Dict
-
-from noesis.domain.chat.streaming.langgraph_sse import (
-    _accumulate_detail,
-    _extract_input_token_details,
-    _extract_output_token_details,
-    _normalize_usage,
+from noesis.chat.event_mapping.usage_normalize import (
+    extract_input_token_details as _extract_input_token_details,
+    extract_output_token_details as _extract_output_token_details,
+    normalize_usage as _normalize_usage,
 )
 
 
@@ -31,6 +28,8 @@ def test_normalize_usage_langchain_form_with_cache_and_reasoning() -> None:
     assert out["output_tokens"] == 240
     assert out["total_tokens"] == 590
     assert out["input_token_details"] == {"cache_read": 100, "cache_write": 200}
+    assert out["uncached_input_tokens"] == 50
+    assert out["cache_metrics_available"] is True
     assert out["output_token_details"] == {"reasoning": 50}
 
 
@@ -69,6 +68,8 @@ def test_normalize_usage_missing_details_not_zero_filled() -> None:
     assert out["input_tokens"] == 100
     assert "input_token_details" not in out
     assert "output_token_details" not in out
+    assert out["cache_metrics_available"] is False
+    assert "uncached_input_tokens" not in out
 
 
 def test_normalize_usage_empty_and_none() -> None:
@@ -119,22 +120,6 @@ def test_extract_output_token_details_reasoning() -> None:
     d = {"output_token_details": {"reasoning": 200, "audio": 10}}
     out = _extract_output_token_details(d)
     assert out == {"reasoning": 200}
-
-
-def test_accumulate_detail_sums_subkeys() -> None:
-    """detail 子项累计：同子项求和，新子项初始化，缺失不补零。"""
-    cum: Dict[str, Any] = {}
-    _accumulate_detail(cum, "input_token_details", {"cache_read": 100, "cache_write": 50})
-    _accumulate_detail(cum, "input_token_details", {"cache_read": 60})
-    assert cum["input_token_details"] == {"cache_read": 160, "cache_write": 50}
-
-    # None 不影响
-    _accumulate_detail(cum, "input_token_details", None)
-    assert cum["input_token_details"] == {"cache_read": 160, "cache_write": 50}
-
-    # 新 detail 桶
-    _accumulate_detail(cum, "output_token_details", {"reasoning": 80})
-    assert cum["output_token_details"] == {"reasoning": 80}
 
 
 def test_normalize_usage_does_not_double_count_details_in_total() -> None:

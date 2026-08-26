@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from noesis.domain.auth.entities import AuthSession, AuthUser
-from noesis.domain.auth.policy import (
+from noesis.auth.entities import AuthSession, AuthUser
+from noesis.auth.policy import (
     digest_secret,
     is_session_valid,
     session_expiry,

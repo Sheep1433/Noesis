@@ -3,15 +3,21 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
-from noesis.domain.chat.hitl.pending import pending_hitl
+from noesis.chat.hitl.pending import pending_hitl
 from noesis.runtime.logging import logger
 from noesis.config.env import MessagingConfig
-from noesis.domain.chat.delivery.channels import route_inbound
-from noesis.domain.chat.delivery.telegram.adapter import TelegramChannelAdapter
-from noesis.domain.chat.delivery.telegram.client import TelegramBotClient, mask_bot_token
-from noesis.domain.chat.delivery.telegram.hitl_prompt import (
+from noesis.chat.delivery.channels import route_inbound
+from noesis.chat.commands.registry import (
+    CONTROL_COMMANDS,
+    dispatch as dispatch_command,
+    list_command_descriptions,
+)
+from noesis.chat.config_skills_scan import scan_installed_skills
+from noesis.chat.delivery.telegram.adapter import TelegramChannelAdapter
+from noesis.chat.delivery.telegram.client import TelegramBotClient, mask_bot_token
+from noesis.chat.delivery.telegram.hitl_prompt import (
     allow_session_grant_for_actions,
     build_approval_keyboard,
     decisions_for_op,
@@ -20,13 +26,13 @@ from noesis.domain.chat.delivery.telegram.hitl_prompt import (
     register_hitl_prompt,
     telegram_hitl_prompts,
 )
-from noesis.domain.chat.delivery.telegram.stream_out import TelegramOutbound, deliver_final_markdown
+from noesis.chat.delivery.telegram.stream_out import TelegramOutbound, deliver_final_markdown
 from noesis.services.channel_run_service import resume_channel_hitl, run_channel_agent
 from noesis.services.messaging_channel_service import (
     MessagingChannelService,
     RuntimeChannelConfig,
 )
-from noesis.domain.chat.delivery.channel_health import channel_health
+from noesis.chat.delivery.channel_health import channel_health
 
 _PAIRING_HINT = (
     "此聊天尚未与 Noesis 配对。\n"
@@ -41,6 +47,17 @@ _stop = asyncio.Event()
 
 def _worker_key(cfg: RuntimeChannelConfig) -> str:
     return f"{cfg.user_id}:{cfg.channel_id}"
+
+
+async def _stop_task(task: asyncio.Task[Any], *, key: str) -> None:
+    """取消并等待 worker，保留取消语义并记录非预期退出。"""
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.exception("telegram worker stopped with error key={}", key)
 
 
 async def _deliver_hitl_card(
@@ -269,6 +286,50 @@ async def _try_pending_clarification_reply(
     return True
 
 
+def _build_bot_commands() -> List[Dict[str, str]]:
+    """从统一命令层构建 Telegram BotCommand 列表：控制命令 + skill 命令。
+
+    数据源与 Web mention catalog、CLI /help 同源（list_command_descriptions
+    + scan_installed_skills），三端命令发现一致。
+    """
+    commands: List[Dict[str, str]] = []
+    for name, desc in list_command_descriptions(channel="telegram"):
+        commands.append({"command": name, "description": (desc or name)[:256]})
+    for name, desc in scan_installed_skills():
+        if name in CONTROL_COMMANDS:
+            continue  # 控制命令保留字优先，skill 不得覆盖
+        commands.append({"command": name, "description": (desc or name)[:256]})
+    return commands
+
+
+async def _sync_bot_commands(client: TelegramBotClient, masked: str) -> None:
+    """注册命令菜单；失败不阻断 poll。"""
+    try:
+        await client.set_my_commands(_build_bot_commands())
+    except Exception:
+        logger.warning("telegram setMyCommands failed bot={}", masked)
+
+
+# per-bot 已注册命令时的 skills 目录 mtime；变更才重注册，避免每条消息都调 API。
+_last_commands_mtime: Dict[str, float] = {}
+
+
+async def _maybe_refresh_bot_commands(client: TelegramBotClient, cfg: RuntimeChannelConfig) -> None:
+    """public skills 目录 mtime 变了才重新 setMyCommands。无变更时只一次 stat。"""
+    from noesis.config.extensions_paths import skills_root
+
+    try:
+        root = skills_root()
+        mtime = root.stat().st_mtime if root.exists() else 0.0
+    except OSError:
+        return
+    masked = mask_bot_token(cfg.bot_token)
+    if _last_commands_mtime.get(masked) == mtime:
+        return
+    _last_commands_mtime[masked] = mtime
+    await _sync_bot_commands(client, masked)
+
+
 async def _handle_message(
     cfg: RuntimeChannelConfig,
     client: TelegramBotClient,
@@ -279,6 +340,9 @@ async def _handle_message(
     if inbound is None:
         return
     channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "received")
+
+    # skills 热加载：public skills 目录 mtime 变了就重新注册命令菜单。
+    await _maybe_refresh_bot_commands(client, cfg)
 
     MessagingChannelService.iter_enabled_runtime("telegram", user_id=cfg.user_id)
     routed = route_inbound(inbound)
@@ -327,18 +391,33 @@ async def _handle_message(
                 pass
             return
 
+    # 统一命令层：消息进 Agent 前先 dispatch（ephemeral 回复，不落库、不启动 Agent）。
+    inbound.user_id = str(binding.user_id)
+    cmd_result = await dispatch_command(inbound)
+    if cmd_result.handled and not cmd_result.rewrite_request:
+        try:
+            await client.send_message(chat_id, cmd_result.text)
+        except Exception:
+            logger.exception("telegram command reply failed chat_id={}", chat_id)
+        channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "command_handled")
+        return
+
+    # D 类 skill 命令：改写 query + enabled_skills，走正常 Agent run。
+    rewrite = cmd_result.rewrite_request if cmd_result.handled else None
+
     try:
         outbound = TelegramOutbound(client, chat_id) if cfg.delivery_preference == "reply" else None
         session_id = str(uuid.uuid4()) if cfg.session_strategy == "new_per_message" else binding.session_id
         result = await run_channel_agent(
             user_id=binding.user_id,
             session_id=session_id,
-            query=inbound.text,
+            query=rewrite.query if rewrite else inbound.text,
             qa_type=cfg.default_qa_type,
             origin="telegram",
             external_message_id=inbound.external_message_id,
             channel_type="telegram",
             outbound=outbound,
+            force_enabled_skills=rewrite.enabled_skills if rewrite else None,
         )
         channel_health.report_activity(cfg.user_id, cfg.channel_id, "inbound", "succeeded")
         await _after_channel_result(
@@ -388,6 +467,7 @@ async def _poll_loop(cfg: RuntimeChannelConfig) -> None:
     )
     try:
         await adapter.start()
+        await _sync_bot_commands(client, masked)
         channel_health.report_status(cfg.user_id, cfg.channel_id, "healthy", "通道运行正常")
         while not _stop.is_set():
             try:
@@ -439,11 +519,7 @@ async def _reconcile_workers() -> None:
     """按当前磁盘配置启停 poll Task。"""
     if not MessagingConfig.telegram_runtime_enabled:
         for key, task in list(_tasks.items()):
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await _stop_task(task, key=key)
             _tasks.pop(key, None)
         return
 
@@ -463,11 +539,7 @@ async def _reconcile_workers() -> None:
     for key, task in list(_tasks.items()):
         if key in wanted:
             continue
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await _stop_task(task, key=key)
         _tasks.pop(key, None)
 
 
@@ -490,11 +562,7 @@ async def _supervisor_loop() -> None:
             continue
     # drain
     for key, task in list(_tasks.items()):
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await _stop_task(task, key=key)
         _tasks.pop(key, None)
 
 
@@ -514,16 +582,14 @@ async def stop_telegram_runtime() -> None:
     _stop.set()
     if _supervisor is None:
         for key, task in list(_tasks.items()):
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await _stop_task(task, key=key)
             _tasks.pop(key, None)
         return
     _supervisor.cancel()
     try:
         await _supervisor
-    except (asyncio.CancelledError, Exception):
+    except asyncio.CancelledError:
         pass
+    except Exception:
+        logger.exception("telegram supervisor stopped with error")
     _supervisor = None

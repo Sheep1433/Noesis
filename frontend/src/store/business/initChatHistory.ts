@@ -4,9 +4,6 @@ import { assertStrictMessageSequence } from '@/store/business/chatHistorySequenc
 import { isImagePreviewPath } from '@/utils/filePreview'
 import { appendStreamFailureNotice, appendUserStopNotice, normalizeApiContent, partsContainStreamFailureNotice, syncLegacyFieldsFromParts } from '@/views/chat/messageParts'
 
-const userStore = useUserStore()
-const router = useRouter()
-
 interface TableItem {
   uuid: string
   key: string
@@ -14,6 +11,10 @@ interface TableItem {
   qa_type: string
   pinned?: boolean
   archived?: boolean
+  run_status?: string
+  run_origin?: string
+  last_read_at?: number
+  update_time?: number
 }
 
 /**
@@ -127,6 +128,9 @@ export const fetchConversationHistory = async function fetchConversationHistory(
       msg_metadata?: any
       parent_id?: string | null
       message_id?: string
+      /** 系统注入消息标记（bg_task_notice 等）：渲染为系统状态条 */
+      source_kind?: string
+      child_session_ids?: string[]
     }>
   >,
   tableData: Ref<TableItem[]>,
@@ -152,6 +156,10 @@ export const fetchConversationHistory = async function fetchConversationHistory(
             qa_type: chat.qa_type || 'COMMON_QA',
             pinned: Boolean(chat.pinned),
             archived: Boolean(chat.archived),
+            run_status: chat.run_status || undefined,
+            run_origin: chat.run_origin || undefined,
+            last_read_at: chat.last_read_at || undefined,
+            update_time: chat.update_time || undefined,
           }))
         }
 
@@ -162,10 +170,10 @@ export const fetchConversationHistory = async function fetchConversationHistory(
         }
       }
     } else {
-      // debug: request failed
+      console.warn('[chat-history] failed to load conversation list', res.status)
     }
   } catch (error) {
-    // debug: error occurred
+    console.warn('[chat-history] failed to load conversation history', error)
   }
 }
 
@@ -190,6 +198,7 @@ export async function loadSessionMessages(
     )
     if (messages?.length) {
       assertStrictMessageSequence(messages)
+      // 当前 Tab hint；active Run 的发现始终以服务端 API 为准。
       const activeAssistant = [...messages].reverse().find(
         (message: any) => message.role === 'assistant'
           && message.status === 'streaming'
@@ -235,6 +244,11 @@ export async function loadSessionMessages(
             question: extractContent(msg.content, msg.role),
             file_key: fileKey,
             mentions: Array.isArray(msg.extra?.mentions) ? msg.extra.mentions : undefined,
+            // 系统注入消息（如后台任务通知）标记：渲染为通知条而非用户气泡
+            source_kind: typeof msg.extra?.source_kind === 'string' ? msg.extra.source_kind : undefined,
+            child_session_ids: Array.isArray(msg.extra?.child_session_ids)
+              ? msg.extra.child_session_ids.map(String)
+              : undefined,
             role: 'user' as const,
             reader: null,
             parent_id: msg.parent_id,
@@ -276,6 +290,9 @@ export async function loadSessionMessages(
           parent_id: msg.parent_id,
           message_id: msg.id,
           created_at: msg.created_at,
+          // 优先 run 终态时间（语义正确）；消息 updated_at 是 checkpoint 落库时间会被刷新，仅作 fallback。
+          completed_at: msg.run_finished_at ?? msg.updated_at,
+          run_started_at: msg.run_started_at ?? undefined,
         }
       })
 

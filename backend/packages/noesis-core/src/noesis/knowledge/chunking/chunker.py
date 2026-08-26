@@ -59,7 +59,9 @@ def _chunk_parsed_file(
     docs = MarkdownChunker.split_markdown_with_headers(
         raw_markdown=parsed.raw_markdown or text,
         clean_markdown=parsed.clean_markdown or text,
-        source=parsed.file_path,
+        # source 是对外展示的"来源标识"：用原始文件名，不得写入 staging 绝对路径
+        # （路径会向前端暴露服务器目录结构与文件内容 hash）。
+        source=parsed.file_name or parsed.file_path,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
     )

@@ -1,8 +1,6 @@
 """rerank 模块单测。"""
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from noesis.knowledge.rerank.client import is_rerank_available, rerank_documents
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot, set_runtime_model_snapshot
 
@@ -47,8 +45,8 @@ def test_rerank_documents_changes_order(mock_cfg, _avail, mock_client_cls):
 @patch("noesis.knowledge.rerank.client.httpx.Client")
 def test_rerank_uses_frozen_user_binding(mock_client_cls):
     snapshot = RuntimeModelSnapshot(
-        id="user:p1:rank", provider_id="p1", purpose="rerank", model_type="openai",
-        model_name="custom-rerank", base_url="https://provider.example/v1", api_key="user-key",
+        id="custom-rerank", provider_id="p1", purpose="rerank", model_type="openai",
+        base_url="https://provider.example/v1", api_key="user-key",
     )
     response = MagicMock()
     response.json.return_value = {"output": {"results": [{"index": 0, "relevance_score": 1}]}}
@@ -94,7 +92,8 @@ def test_retrieval_degrades_when_rerank_fails(mock_get_retrieval, _svc_avail, _c
     result = KbRetrievalService.search(
         collection_name="kb1",
         query="test",
-        query_execution_params={"use_reranker": True, "final_top_k": 2, "recall_top_k": 10},
+        # score_threshold=0：显式关闭阈值（本测试验证降级排序，不验证相关性过滤）
+        query_execution_params={"use_reranker": True, "final_top_k": 2, "recall_top_k": 10, "score_threshold": 0},
         vector_dimension=1024,
     )
     hits = result.hits
@@ -137,6 +136,8 @@ def test_retrieval_caps_rerank_input(mock_get_retrieval, _avail, mock_rerank):
             "final_top_k": 3,
             "recall_top_k": 10,
             "rerank_top_k": 3,
+            # 显式关闭阈值：本测试验证 rerank 输入截断，mock 分数 0.1 低于默认阈值会被滤
+            "score_threshold": 0,
         },
         vector_dimension=1024,
     )

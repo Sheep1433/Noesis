@@ -5,8 +5,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from noesis.domain.chat.delivery.events import WireFrame
-from noesis.domain.chat.delivery.telegram.stream_out import (
+from noesis.chat.delivery.events import WireFrame
+from noesis.chat.delivery.telegram.stream_out import (
     CURSOR,
     TelegramOutbound,
     TelegramTextStreamer,

@@ -369,8 +369,6 @@ def langfuse_workflow_context(
         yield
         return
 
-    from noesis.config.env import LangfuseConfig
-
     if not langfuse_tracing_enabled():
         yield
         return

@@ -9,7 +9,7 @@ import type {
   SearchResult,
   SearchTiming,
 } from '@/api/knowledgeBase'
-import { ArrowBack, CloudUpload, DocumentTextOutline, EllipsisHorizontal, Refresh, Search, SettingsOutline } from '@vicons/ionicons-v5'
+import { ArrowBack, CloudUpload, DocumentTextOutline, EllipsisHorizontal, Search, SettingsOutline } from '@vicons/ionicons-v5'
 import {
   NAlert,
   NButton,
@@ -142,6 +142,9 @@ const defaultUseReranker = computed(() =>
 )
 const defaultRrfK = computed(() =>
   collectionConfig.value?.query_params?.rrf_k ?? KB_DEFAULT_QUERY.rrf_k ?? 60,
+)
+const defaultScoreThreshold = computed(() =>
+  collectionConfig.value?.query_params?.score_threshold ?? KB_DEFAULT_QUERY.score_threshold ?? 0.1,
 )
 
 async function copyHash(hash: string | null | undefined) {
@@ -555,12 +558,6 @@ async function saveCollectionConfig() {
         </p>
       </div>
       <n-space class="detail-header-actions" :size="8" :wrap="isMobile">
-        <n-button quaternary :loading="loading" @click="loadData">
-          <template #icon>
-            <n-icon><Refresh /></n-icon>
-          </template>
-          刷新
-        </n-button>
         <n-dropdown
           trigger="click"
           :options="[{ label: '删除知识库', key: 'delete' }]"
@@ -640,6 +637,7 @@ async function saveCollectionConfig() {
             :default-rerank-top-k="defaultRerankTopK as number"
             :default-use-reranker="defaultUseReranker as boolean"
             :default-rrf-k="defaultRrfK as number"
+            :default-score-threshold="defaultScoreThreshold as number"
             @search="handleSearch"
           />
           <div class="search-results-scroll">
@@ -722,7 +720,11 @@ async function saveCollectionConfig() {
               <n-form-item label="use_reranker">
                 <n-switch :value="configUseReranker ?? defaultUseReranker" @update:value="(v: boolean) => configUseReranker = v" />
               </n-form-item>
-              <n-form-item label="score_threshold">
+              <n-form-item :show-feedback="false">
+                <template #label>
+                  score_threshold
+                  <span class="config-default-hint">留空跟随默认 {{ defaultScoreThreshold }}</span>
+                </template>
                 <n-input-number v-model:value="configScoreThreshold" :min="0" :max="1" :step="0.01" clearable style="width: 100%" />
               </n-form-item>
             </div>
@@ -799,7 +801,13 @@ async function saveCollectionConfig() {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
+.config-default-hint {
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--noesis-color-text-secondary);
+}
+
 .kb-detail {
   display: flex;
   flex-direction: column;
@@ -864,15 +872,24 @@ async function saveCollectionConfig() {
   min-height: 0;
 }
 
+.detail-tabs :deep(.n-tabs-content) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .detail-tabs :deep(.n-tabs-pane-wrapper) {
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
 }
 
 .detail-tabs :deep(.n-tab-pane) {
-  height: 100%;
+  min-height: 100%;
 }
 
 .tab-panel {
@@ -1000,13 +1017,13 @@ async function saveCollectionConfig() {
   word-break: break-word;
 }
 
-@media (max-width: 720px) {
+@media (max-width: $bp-md) {
   .config-grid {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 1024px) {
+@media (max-width: $bp-lg) {
   .kb-detail {
     padding: 12px var(--noesis-content-gutter-mobile) 16px;
   }
@@ -1051,7 +1068,7 @@ async function saveCollectionConfig() {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: $bp-xs) {
   .detail-header-actions :deep(.n-button .n-button__content) {
     font-size: 13px;
   }

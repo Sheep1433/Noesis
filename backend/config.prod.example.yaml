@@ -38,23 +38,27 @@ model:
   # type: opencode
   # name: deepseek-v4-flash-free
   # base_url: https://opencode.ai/zen/v1
-  # default_catalog_id: flash
+  # default_catalog_id: deepseek-v4-flash-free
   # catalog:
-  #   - id: flash
+  #   - id: deepseek-v4-flash-free
   #     label: DeepSeek V4 Flash（快速）
-  #     name: deepseek-v4-flash-free
+  #     context_window: 200000
   #   - id: big-pickle
   #     label: Big Pickle（推理）
-  #     name: big-pickle
-  #   - id: mimo
+  #     temperature: 0.7
+  #     context_window: 200000
+  #   - id: mimo-v2.5-free
   #     label: MiMo V2.5（小米）
-  #     name: mimo-v2.5-free
-  #   - id: nemotron
+  #     temperature: 0.7
+  #     context_window: 200000
+  #   - id: nemotron-3-ultra-free
   #     label: Nemotron 3 Ultra（1M 上下文）
-  #     name: nemotron-3-ultra-free
-  #   - id: north
+  #     temperature: 0.6
+  #     context_window: 1000000
+  #   - id: north-mini-code-free
   #     label: North Mini Code（代码）
-  #     name: north-mini-code-free
+  #     temperature: 0.5
+  #     context_window: 256000
 
   # --- DeepSeek 官方直连（需 .env DEEPSEEK_API_KEY）---
   # type: deepseek
@@ -74,33 +78,7 @@ model:
   # temperature: 0.75
   # base_url: https://api.anthropic.com          
 
-  # --- 多 provider catalog 切换示例 ---
-  # default_catalog_id: deepseek-flash
-  # catalog:
-  #   - id: deepseek-flash
-  #     label: DeepSeek V4 Flash（官方）
-  #     type: deepseek
-  #     name: deepseek-v4-flash
-  #     base_url: https://api.deepseek.com/v1
-  #     limit:
-  #       context: 200000
-  #       output: 128000
-  #   - id: qwen-plus
-  #     label: Qwen Plus（DashScope）
-  #     type: qwen
-  #     name: qwen-plus
-  #     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  #     limit:
-  #       context: 129024
-  #       output: 8192
-  #   - id: claude-haiku
-  #     label: Claude Haiku 4.5
-  #     type: anthropic
-  #     name: claude-haiku-4-5-20251001
-  #     base_url: https://api.anthropic.com
-  #     limit:
-  #       context: 200000
-  #       output: 8192
+  # 多 provider catalog（每条目独立 type/name/base_url）已废弃，统一用顶层 model.type/name/base_url + catalog 仅 id/label/temperature/context_window。
 
   request_timeout: 120
   max_retries: 2
@@ -133,11 +111,9 @@ summarization:
   # 仅 model_name 单独配置；type / base_url / api_key 与 model 层一致
   model_name: ""
   temperature: 0.0
-  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × catalog limit.context
+  # 触发压缩：trigger_tokens > 0 时用绝对 token 阈值；为 0 时用 trigger_fraction × effective_limit
   trigger_tokens: 0
   trigger_fraction: 0.75
-  # 可选摘要窗口覆盖值；0 表示使用 model catalog 的 limit.context
-  max_input_tokens: 0
   # model profile 不可用时的消息数量 fallback
   messages_to_keep: 28
 
@@ -162,12 +138,17 @@ stream:
   run_subscriber_queue_max_bytes: 1048576
   run_max_active: 100
   run_max_active_per_user: 4
+  run_max_subscriptions_per_run: 8
+  run_max_subscriptions_per_user: 16
+  run_max_subscriptions_global: 500
   run_terminal_retention_seconds: 300
   run_max_duration_seconds: 900
-  run_max_output_bytes: 16777216
+  run_max_output_bytes: 67108864
   run_hitl_pending_timeout_seconds: 86400
   run_shutdown_drain_seconds: 10
   run_cancel_grace_seconds: 2
+  run_terminal_persistence_budget_seconds: 5
+  run_terminal_retry_interval_seconds: 5
   run_tool_timeout_seconds: 120
   run_channel_queue_max_batches: 128
   run_channel_queue_max_bytes: 1048576

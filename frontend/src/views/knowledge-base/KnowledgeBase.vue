@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CollectionInfo, KnowledgeBaseStatus } from '@/api/knowledgeBase'
-import { Add, EllipsisHorizontal, InformationCircleOutline, Library, Refresh } from '@vicons/ionicons-v5'
+import { Add, EllipsisHorizontal, InformationCircleOutline, Library } from '@vicons/ionicons-v5'
 import {
   NAlert,
   NButton,
@@ -151,12 +151,6 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
         </p>
       </div>
       <n-space class="kb-hero-actions" :size="8">
-        <n-button quaternary :loading="loading" @click="loadData">
-          <template #icon>
-            <n-icon><Refresh /></n-icon>
-          </template>
-          刷新
-        </n-button>
         <n-button type="primary" :disabled="!status?.connected" @click="openCreateModal">
           <template #icon>
             <n-icon><Add /></n-icon>
@@ -313,7 +307,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   </div>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .kb-page {
   display: flex;
   flex-direction: column;
@@ -522,7 +516,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   font-size: 12px;
 }
 
-@media (width <= 1024px) {
+@media (max-width: $bp-lg) {
 
   .kb-page {
     padding: 12px var(--noesis-content-gutter-mobile);
@@ -572,7 +566,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   }
 }
 
-@media (width <= 768px) {
+@media (max-width: $bp-md) {
 
   .kb-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -583,7 +577,7 @@ function handleCollectionAction(key: string, collection: CollectionInfo) {
   }
 }
 
-@media (width <= 480px) {
+@media (max-width: $bp-xs) {
 
   .kb-hero-actions {
     width: 100%;

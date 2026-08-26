@@ -8,15 +8,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from noesis.config.env import LangfuseConfig
-from noesis.domain.chat.delivery.sse import SSE_COMMENT_KEEPALIVE
-from noesis.domain.chat.message_builder import AssistantMessageBuilder
-from noesis.domain.chat.streaming.bridge import (
+from noesis.chat.delivery.sse import SSE_COMMENT_KEEPALIVE
+from noesis.chat.message_builder import AssistantMessageBuilder
+from noesis.chat.event_mapping.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
     MemoryStreamBridge,
     iter_bridge_events,
 )
-from noesis.domain.chat.streaming.langgraph_sse import LangGraphSseBridge
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.services.qa.helpers import _yield_sse_from_agent_bridge
 
 

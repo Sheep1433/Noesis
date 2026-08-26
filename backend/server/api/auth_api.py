@@ -8,7 +8,6 @@ from server.db import get_db
 from noesis.config.env import SessionConfig
 from noesis.services.auth.sessions import SessionService
 from server.api.auth_cookie import attach_session_cookie, clear_session_cookie
-from noesis.errors.exceptions import AuthException
 from noesis.schemas.login_vo import CurrentUser, UserLogin, UserRegistrationRequest
 from noesis.services.login_service import LoginService
 from server.auth_dependencies import get_current_user, require_csrf
@@ -17,7 +16,7 @@ auth_router = APIRouter(prefix="/api/auth")
 
 
 def _payload(user: CurrentUser, session, csrf_token: str) -> dict:
-    return {"user": {"id": user.user_id, "username": user.username, "mobile": user.mobile},
+    return {"user": {"username": user.username, "mobile": user.mobile},
             "session": {"id": session.id, "created_at": session.created_at, "last_seen_at": session.last_seen_at,
                         "idle_expires_at": session.idle_expires_at, "absolute_expires_at": session.absolute_expires_at},
             "csrf_token": csrf_token}
@@ -36,7 +35,7 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
         request.headers.get("user-agent", ""),
         request.client.host if request.client else None,
     )
-    current = CurrentUser(user_id=user_id, username=username, mobile=mobile)
+    current = CurrentUser(user_id=str(user_id), username=username, mobile=mobile)
     response = ResponseUtil.success(msg="登录成功", data=_payload(current, issued.session, issued.csrf_token))
     attach_session_cookie(request, response, issued.raw_session_id, SessionConfig.idle_expire_days * 86_400)
     return response
@@ -51,7 +50,7 @@ async def register(request: Request, body: UserRegistrationRequest, db: AsyncSes
         request.headers.get("user-agent", ""),
         request.client.host if request.client else None,
     )
-    current = CurrentUser(user_id=user.id, username=user.username or "", mobile=user.mobile)
+    current = CurrentUser(user_id=str(user.id), username=user.username or "", mobile=user.mobile)
     response = ResponseUtil.success(msg="注册成功", data=_payload(current, issued.session, issued.csrf_token))
     attach_session_cookie(request, response, issued.raw_session_id, SessionConfig.idle_expire_days * 86_400)
     return response
