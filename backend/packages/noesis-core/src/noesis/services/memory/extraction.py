@@ -299,7 +299,7 @@ class MemoryExtractionService:
         result: ExtractionResult,
         injected: list[str],
     ) -> None:
-        date_str = datetime.now(timezone.utc).date().isoformat()
+        date_str = datetime.now().astimezone().date().isoformat()
         source = f"会话 {session_id[:8]} · {date_str}"
         injected_set = set(injected)
         new_count = 0
@@ -339,10 +339,15 @@ class MemoryExtractionService:
 
     @staticmethod
     async def _mark_extracted(db: AsyncSession, session_id: str) -> None:
+        # 显式携带 updated_at 自身以抑制列 onupdate——抽取标记不得改变
+        # 会话列表排序（updated_at 语义 = 用户最后活动，非引擎内部状态）
         await db.execute(
             update(TChatSession)
             .where(TChatSession.id == session_id)
-            .values(memory_extracted_at=int(time.time() * 1000))
+            .values(
+                memory_extracted_at=int(time.time() * 1000),
+                updated_at=TChatSession.updated_at,
+            )
         )
         await db.commit()
 

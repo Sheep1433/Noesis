@@ -52,7 +52,7 @@ class IndexState:
 
 
 def _now_date() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -376,7 +376,7 @@ class MemoryStore:
         """情景日志只追加（spec: journal 只追加永不改写）。"""
         cls.ensure_layout(user_id)
         path = cls.journal_path(user_id, day)
-        stamp = datetime.now(timezone.utc).strftime("%H:%M")
+        stamp = datetime.now().astimezone().strftime("%H:%M")
         block = f"\n## {stamp} · 会话 {str(session_id)[:8]}\n\n{text.strip()}\n"
         with path.open("a", encoding="utf-8") as handle:
             handle.write(block)

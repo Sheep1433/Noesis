@@ -310,3 +310,47 @@ def test_message_text_tolerates_legacy_formats() -> None:
     assert svc._message_text([{"type": "text", "content": "a"}, "b"]) == "a\nb"
     assert svc._message_text(None) == ""
     assert svc._message_text({"parts": "整段文本"}) == "整段文本"
+
+
+# ----- 抽取标记不改变会话排序（updated_at 保全） -----
+
+
+@pytest.mark.asyncio
+async def test_mark_extracted_preserves_updated_at() -> None:
+    """Core update 会触发列 onupdate；显式携带自身列抑制之（回归）。"""
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from noesis.storage.postgres.models.chat import TChatSession
+
+    engine = create_engine("sqlite://")
+    TChatSession.metadata.tables["t_chat_session"].create(engine)
+    original = 1_700_000_000_000
+    with Session(engine, expire_on_commit=False) as sync_db:
+        sync_db.add(TChatSession(
+            id="sess-order",
+            user_id="00000000-0000-0000-0000-000000000001",
+            title="t", kind="root",
+            created_at=original, updated_at=original,
+        ))
+        sync_db.commit()
+
+        import time as _time
+        from sqlalchemy import update as _update
+
+        # 与 MemoryExtractionService._mark_extracted 相同的语句形态
+        sync_db.execute(
+            _update(TChatSession)
+            .where(TChatSession.id == "sess-order")
+            .values(
+                memory_extracted_at=int(_time.time() * 1000),
+                updated_at=TChatSession.updated_at,
+            )
+        )
+        sync_db.commit()
+        session = sync_db.execute(
+            select(TChatSession).where(TChatSession.id == "sess-order")
+        ).scalar_one()
+        assert session.memory_extracted_at is not None
+        assert session.updated_at == original  # onupdate 被抑制
+    engine.dispose()
