@@ -37,7 +37,11 @@ class ExtractedEntry(BaseModel):
     """LLM 抽取候选。"""
 
     memory_type: str = Field(description="五选一：preference/goal/decision/experience/gotcha")
-    label: str = Field(description="条目标签（短，如「文档格式」）")
+    label: str = Field(description="条目标签：中文短语 2-6 字（如「文档格式」「包管理」「学习目标」）")
+    slug_hint: str = Field(
+        default="",
+        description="条目文件名：小写英文短横线（如 document-format）；留空则由系统生成",
+    )
     body: str = Field(description="结论正文：陈述句事实，一句话到几句")
     why: str = Field(default="", description="为什么（可选）")
     applicability: str = Field(default="", description="适用条件：何时应用（可选）")
@@ -76,6 +80,7 @@ _EXTRACTION_PROMPT = """你是记忆抽取器。从下面的会话中抽取值�
 
 ## 规则
 - 相对日期改写为绝对日期（「下周」→ 具体日期；今天按 {today} 算）
+- label 一律中文短语（2-6 字），英文只出现在 slug_hint
 - 与「现有记忆」语义重复 → 不新建，设 update_existing_label 为该条目 label
 - 明显过时的既有条目被会话推翻 → update_existing_label + 新正文
 - 至多 {max_entries} 条新条目；无长期价值 → entries 留空、journal_summary 也留空
@@ -321,7 +326,7 @@ class MemoryExtractionService:
                 why=candidate.why,
                 applicability=candidate.applicability,
                 sources=[source],
-                slug=target,
+                slug=target or (candidate.slug_hint or None),
                 max_entry_chars=MemoryConfig.max_entry_chars,
             )
         if result.journal_summary.strip():

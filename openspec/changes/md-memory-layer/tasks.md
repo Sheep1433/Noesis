@@ -1,7 +1,7 @@
 ## 0. 前置
 
 - [x] 0.1 归档 `add-run-aware-memory-cortex`（备注：11.1 未过，被本变更取代）
-- [ ] 0.2 现存 item 导出为初始条目文件 + 索引并人审（脚本 `backend/tools/export_memory_items.py` 已就绪，须在 drop 迁移前对生产库运行并人审；旧 workflow 类型映射到 experience）
+- [x] 0.2 ~~现存 item 导出~~（旧数据未上生产且无价值，经用户确认直接删除，不做导出）
 
 ## 1. 文件层
 
