@@ -23,7 +23,7 @@ from evals.loadtest.sse_client import SseStreamMetrics, consume_sse_stream
 
 # 默认指向本地后端；demo 账号 admin/123456（Alembic 初始迁移种入）
 DEFAULT_BASE_URL = "http://127.0.0.1:8089"
-DEFAULT_USERNAME = "admin"
+DEFAULT_USERNAME = "test"
 DEFAULT_PASSWORD = "123456"
 
 # SSE 单次消费安全上限（秒），防止真实 LLM 异常时挂死测试

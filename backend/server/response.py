@@ -115,8 +115,9 @@ class ResponseUtil:
 
         result.update({'success': False, 'time': datetime.now()})
 
+        # 未预期错误 HTTP 500（AGENTS.md 硬性约定）；此前误用 400 与 failure 相同
         return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=jsonable_encoder(result),
         )
 
