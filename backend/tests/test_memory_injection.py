@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from deepagents.backends.protocol import WriteResult
@@ -202,3 +202,82 @@ async def test_search_memory_tool_rejects_invalid_type(users_root: Path) -> None
         await tools[0].ainvoke({"query": "x", "memory_type": "workflow"})
     )
     assert "error" in payload
+
+
+# ----- 侧边栏记忆树（SessionContextService） -----
+
+
+@pytest.mark.asyncio
+async def test_session_context_includes_memory_tree(users_root: Path) -> None:
+    from unittest.mock import AsyncMock, MagicMock, patch, MagicMock
+
+    from noesis.services.session_context_service import SessionContextService
+
+    _seed(users_root)
+    MemoryStore.append_journal("u1", session_id="sess-1", text="日志")
+    with patch("noesis.services.session_context_service.ChatService.get_session_by_id", AsyncMock(return_value=MagicMock())):
+        payload = await SessionContextService.get_context(
+            session_id="sess-1", user_id="u1", db=MagicMock()
+        )
+    keys = [node.key for node in payload.tree[0].children or []]
+    assert "memory" in keys
+    memory = next(n for n in payload.tree[0].children if n.key == "memory")
+    child_keys = [c.key for c in memory.children or []]
+    assert "memory/MEMORY.md" in child_keys
+    assert "memory/preference" in child_keys
+    assert "memory/journal" in child_keys
+
+
+@pytest.mark.asyncio
+async def test_memory_tree_hidden_when_empty(users_root: Path) -> None:
+    from unittest.mock import AsyncMock, MagicMock, patch, MagicMock
+
+    from noesis.services.session_context_service import SessionContextService
+
+    with patch("noesis.services.session_context_service.ChatService.get_session_by_id", AsyncMock(return_value=MagicMock())):
+        payload = await SessionContextService.get_context(
+            session_id="sess-1", user_id="u1", db=MagicMock()
+        )
+    keys = [node.key for node in payload.tree[0].children or []]
+    assert "memory" not in keys
+
+
+@pytest.mark.asyncio
+async def test_sidebar_memory_entry_edit_syncs_index(users_root: Path) -> None:
+    from unittest.mock import AsyncMock, MagicMock, patch, MagicMock
+
+    from noesis.services.session_context_service import SessionContextService
+
+    entry = MemoryStore.upsert_entry(
+        "u1", memory_type="preference", label="文档格式", body="一律表格", sources=[]
+    )
+    with patch("noesis.services.session_context_service.ChatService.get_session_by_id", AsyncMock(return_value=MagicMock())):
+        rel, content = await SessionContextService.write_workspace_file(
+            session_id="sess-1",
+            user_id="u1",
+            rel_path=entry.rel_path if False else f"memory/{entry.rel_path}",
+            content="# 文档格式\n\n一律表格、带脚注\n",
+            db=MagicMock(),
+        )
+    assert rel == f"memory/{entry.rel_path}"
+    state = MemoryStore.read_index("u1")
+    assert any("带脚注" in e.description for e in state.entries)
+
+
+@pytest.mark.asyncio
+async def test_sidebar_memory_index_and_journal_read_only(users_root: Path) -> None:
+    from noesis.errors.exceptions import ServiceException
+    from noesis.services.session_context_service import SessionContextService
+
+    MemoryStore.append_journal("u1", session_id="sess-1", text="日志")
+    with patch(
+        "noesis.services.session_context_service.ChatService.get_session_by_id",
+        AsyncMock(return_value=MagicMock()),
+    ):
+        for path in ("memory/MEMORY.md", "memory/journal/2026-08-26.md"):
+            with pytest.raises(ServiceException) as exc_info:
+                await SessionContextService.write_workspace_file(
+                    session_id="sess-1", user_id="u1", rel_path=path,
+                    content="x", db=MagicMock(),
+                )
+            assert "只读" in str(exc_info.value.message)

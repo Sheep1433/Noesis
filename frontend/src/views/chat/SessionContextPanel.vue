@@ -47,7 +47,7 @@ const settingsDeepLink = computed(() => {
   if (base === 'USER.md') {
     return { name: 'Settings' as const, query: { s: 'profile' } }
   }
-  if (base === 'AGENTS.md') {
+  if (base === 'AGENTS.md' || base === 'MEMORY.md' || base.startsWith('memory/')) {
     return { name: 'Settings' as const, query: { s: 'memory' } }
   }
   return null

@@ -26,6 +26,8 @@ from noesis.config.user_data_paths import (
 from noesis.schemas.session_context_vo import FsTreeNode, SessionContextResponse
 
 from noesis.services.chat_service import ChatService
+from noesis.services.memory.store import IndexEntry, MemoryStore
+from noesis.services.memory.types import MEMORY_TYPES
 from noesis.services.skill_fs_service import SkillFsService
 
 _MAX_READ_BYTES = 512 * 1024
@@ -86,6 +88,52 @@ class SessionContextService:
         return entries
 
     @classmethod
+    def _is_memory_path(cls, rel: str, *, entry_only: bool = False) -> bool:
+        parts = rel.split('/')
+        if len(parts) == 2 and parts[0] == 'memory':
+            return parts[1] == 'MEMORY.md' and not entry_only
+        if len(parts) == 3 and parts[0] == 'memory':
+            if parts[1] in MEMORY_TYPES:
+                return parts[2].endswith('.md') and parts[2][:-3] != ''
+            return parts[1] == 'journal' and not entry_only and parts[2].endswith('.md')
+        return False
+
+    @classmethod
+    def _memory_nodes(cls, user_id: str) -> FsTreeNode | None:
+        """侧边栏记忆树：MEMORY.md 索引 + 有内容的类型目录 + journal。
+
+        无任何记忆内容时返回 None（不占侧边栏）。
+        """
+        root = MemoryStore.memory_root(user_id)
+        if not root.is_dir():
+            return None
+        children: List[FsTreeNode] = [
+            FsTreeNode(key='memory/MEMORY.md', label='MEMORY.md', isLeaf=True, children=None),
+        ]
+        for memory_type in MEMORY_TYPES:
+            type_children = cls._scan_directory(str(root / memory_type), f'memory/{memory_type}')
+            if type_children:
+                children.append(
+                    FsTreeNode(
+                        key=f'memory/{memory_type}',
+                        label=memory_type,
+                        isLeaf=False,
+                        children=type_children,
+                    ),
+                )
+        journal_children = cls._scan_directory(str(root / 'journal'), 'memory/journal')
+        if journal_children:
+            children.append(
+                FsTreeNode(key='memory/journal', label='journal', isLeaf=False, children=journal_children),
+            )
+        if len(children) == 1:
+            # 只有空索引（未启用/无条目）：仅当索引文件确有内容时才展示
+            index_file = root / 'MEMORY.md'
+            if not index_file.is_file() or len(index_file.read_text(encoding='utf-8').strip()) < 80:
+                return None
+        return FsTreeNode(key='memory', label='memory', isLeaf=False, children=children)
+
+    @classmethod
     def _current_session_nodes(cls, user_id: str, session_id: str) -> List[FsTreeNode]:
         subdirs: List[FsTreeNode] = []
         session_key = f'sessions/{session_id}'
@@ -141,6 +189,9 @@ class SessionContextService:
                         children=skills_children,
                     ),
                 )
+        memory_node = cls._memory_nodes(user_id)
+        if memory_node is not None:
+            children.append(memory_node)
         children.extend(cls._current_session_nodes(user_id, session_id))
         root_label = f'users/{user_id}'
         tree = [
@@ -164,6 +215,8 @@ class SessionContextService:
         if norm in _USER_ROOT_FILES:
             return norm
         if norm.startswith('skills/'):
+            return norm
+        if cls._is_memory_path(norm):
             return norm
         session_prefix = f'sessions/{session_id}/'
         if norm.startswith(session_prefix):
@@ -366,6 +419,8 @@ class SessionContextService:
     ) -> tuple[str, str]:
         await cls._ensure_owned(session_id, user_id, db)
         rel_norm = cls._normalize_rel_path(rel_path, session_id)
+        if rel_norm.startswith('memory/'):
+            return cls._write_memory_file(user_id, rel_norm, content)
         root = str(get_user_root(user_id))
         try:
             full = SkillFsService._safe_join(root, rel_norm)
@@ -377,6 +432,38 @@ class SessionContextService:
         try:
             with open(full, 'w', encoding='utf-8', newline='\n') as handle:
                 handle.write(content)
+        except OSError as exc:
+            raise ServiceException(message=f"写入失败: {exc}") from exc
+        return rel_norm, content
+
+    @classmethod
+    def _write_memory_file(cls, user_id: str, rel_norm: str, content: str) -> tuple[str, str]:
+        """侧边栏编辑记忆条目（用户最高权限）；索引行自动同步。
+
+        MEMORY.md 索引与 journal 由引擎维护，只读。
+        """
+        if not cls._is_memory_path(rel_norm, entry_only=True):
+            raise ServiceException(message='记忆索引与情景日志只读，条目文件可编辑')
+        cls._validate_write_size(content)
+        try:
+            MemoryStore.ensure_layout(user_id)
+            path = MemoryStore.memory_root(user_id) / rel_norm.removeprefix('memory/')
+            if not path.is_file():
+                raise NotFoundException(message="不是文件或不存在")
+            path.write_text(content, encoding='utf-8', newline='\n')
+            memory_type, slug = rel_norm.split('/')[1], rel_norm.split('/')[2][:-3]
+            front = MemoryStore.read_entry_file(path)
+            MemoryStore.sync_index_line(
+                user_id,
+                IndexEntry(
+                    memory_type=memory_type,
+                    slug=slug,
+                    label=str(front.get('label') or slug),
+                    description=str(front.get('description') or ''),
+                ),
+            )
+        except NotFoundException:
+            raise
         except OSError as exc:
             raise ServiceException(message=f"写入失败: {exc}") from exc
         return rel_norm, content

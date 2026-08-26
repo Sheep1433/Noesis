@@ -335,6 +335,11 @@ class MemoryStore:
         return None
 
     @classmethod
+    def sync_index_line(cls, user_id: str | int, entry: IndexEntry) -> None:
+        """公开入口：条目文件变更后维护索引行一致性。"""
+        cls._sync_index_line(user_id, entry)
+
+    @classmethod
     def _sync_index_line(cls, user_id: str | int, entry: IndexEntry) -> None:
         """索引行一致性：同一 type/slug 只保留最新一行。"""
         state = cls.read_index(user_id)
