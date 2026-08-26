@@ -3,9 +3,7 @@
 ## Purpose
 
 本能力规定 Noesis **用户设置控制面**：设置壳与可搜索 section 注册表、一致交互与危险操作保护、设置导入导出与脱敏审计、用户画像（L0）与记忆（L1/L2）原文编辑、每日记忆整理与跨会话检索、上下文注入预览、定时任务与自动化运行记录、通讯通道配置面、模型目录只读、通知偏好与平台依赖健康诊断。设置 API 的鉴权、隔离、secret 语义与 Provider 凭据托管禁令见 `user-platform`；通道运行时见 `agent-delivery`；记忆磁盘布局与 `/memory/` 路由见 `agent-runtime`。
-
 ## Requirements
-
 ### Requirement: 系统 SHALL 提供个人与 Agent 设置壳
 
 系统 SHALL 提供需登录的设置界面（路由 `/settings`），以 URL 查询参数 `s=` 切换 section。侧栏用户头像（或等价入口）SHALL 可进入该设置壳。
@@ -62,7 +60,7 @@
 - **WHEN** 用户修改表单但尚未保存并切换 section
 - **THEN** 系统 SHALL 提示保存、放弃或留在当前 section
 
-## 画像与记忆
+#### 分组：画像与记忆
 
 ### Requirement: 设置页为用户记忆主编辑入口
 
@@ -167,7 +165,7 @@
 - **WHEN** 用户选择一个 Agent profile 请求上下文预览
 - **THEN** 系统 SHALL 返回该 profile 实际解析规则下的分段来源与最终只读内容
 
-## 自动化与定时任务
+#### 分组：自动化与定时任务
 
 ### Requirement: 系统 SHALL 持久化用户级定时任务
 
@@ -250,7 +248,7 @@
 - **WHEN** 用户 U 被删除且曾有启用中的定时任务
 - **THEN** 调度器 SHALL 不再执行这些任务
 
-## 通讯通道配置
+#### 分组：通讯通道配置
 
 ### Requirement: 系统 SHALL 提供可扩展的通讯通道配置模型
 
@@ -295,7 +293,7 @@
 - **WHEN** 用户关闭通道启用状态
 - **THEN** 后续入站 SHALL NOT 触发 Agent 且后续出站 SHALL NOT 投递到该通道
 
-## 模型与可观测性
+#### 分组：模型与可观测性
 
 ### Requirement: 用户 SHALL 只读查看平台模型目录
 
@@ -333,7 +331,7 @@
 - **WHEN** 后端诊断捕获数据库认证异常
 - **THEN** 用户响应 SHALL 仅包含数据库不可用摘要与关联 id，不包含 DSN 或口令
 
-## 导入导出与审计
+#### 分组：导入导出与审计
 
 ### Requirement: 设置导入导出 SHALL 版本化且默认排除敏感数据
 
@@ -357,3 +355,12 @@ MCP secret、通道 Token、自动化定义、通知策略和设置导入等变�
 
 - **WHEN** 用户替换通道 Token
 - **THEN** 系统 SHALL 记录 replace 动作但 SHALL NOT 在审计响应或日志中返回 Token 内容
+
+### Requirement: 自动化设置 SHALL 在窄屏可用
+
+设置页自动化区域 SHALL 在窄屏下保持单列堆叠与可点击的操作控件；新增任务表单 SHALL 独立组件化，不与任务列表渲染耦合。
+
+#### Scenario: 窄屏访问自动化设置
+- **WHEN** 用户在窄屏打开「定时与自动化」设置
+- **THEN** 控件 SHALL 单列堆叠且操作按钮完整可见可点击
+

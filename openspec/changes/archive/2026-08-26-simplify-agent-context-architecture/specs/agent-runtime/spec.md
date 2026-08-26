@@ -1,10 +1,11 @@
 ## RENAMED Requirements
 
-- FROM: `公共 Runtime SHALL 按五类职责组织`
-- TO: `公共 Runtime SHALL 按 Lifecycle 边界归属职责`
+- FROM: `### Requirement: 公共 Runtime SHALL 按五类职责组织`
+- TO: `### Requirement: 公共 Runtime SHALL 按 Lifecycle 边界归属职责`
 
-- FROM: `Context Lifecycle SHALL 规范化并压缩模型上下文`
-- TO: `Context Management SHALL 实现 Claude Code 式分层策略`
+- FROM: `### Requirement: Context Lifecycle SHALL 规范化并压缩模型上下文`
+- TO: `### Requirement: Context Management SHALL 实现 Claude Code 式分层策略`
+
 
 ## MODIFIED Requirements
 
@@ -88,7 +89,9 @@ Compaction SHALL 按最终 request 预算判断，预算至少覆盖 system inst
 - **THEN** canonicalization SHALL 在 Provider 请求前补齐或移除该不完整配对
 - **AND** 终止中的取消异常 SHALL NOT 被普通工具错误处理吞掉
 
-### Requirement: Run Governor SHALL 统一运行预算
+### Requirement: 运行预算 SHALL 由独立 AgentMiddleware 实现
+
+系统 SHALL 以独立 `AgentMiddleware`（如 `ToolLoopGuardMiddleware`、`SubagentLimitMiddleware`）实现运行预算，各中间件通过 lifecycle hook 拦截，而非依赖集中式预算控制器。所有限制 SHALL 产生稳定 stop reason；主 Agent 与子 Agent SHALL 使用同一预算模型。
 
 系统 SHALL 只启用具有真实配置、正确 platform run identity、生产记账入口和确定性测试的运行限制。未配置或没有真实数据源的限制 SHALL 不得被描述为已生效。父子 Agent 共享预算只有在子任务 admission、释放、取消和恢复均可追踪时才 SHALL 启用。
 
@@ -114,6 +117,8 @@ Compaction SHALL 按最终 request 预算判断，预算至少覆盖 system inst
 - **THEN** Agent SHALL 不执行无输出的重复观测路径
 - **AND** `/api/chat` 的 usage、context 与完成收尾 SHALL 正常工作
 
+## ADDED Requirements
+
 ### Requirement: 当前上下文快照 SHALL 基于最终模型请求
 
 系统 SHALL 在 compaction 决策与诊断时基于最终 canonical request 计算本地估算，覆盖 system、conversation、tool results、tool definitions 与未归属 framing。该估算 SHALL 与 Provider 实际 usage 明确区分；用户可见 `context-update.current_tokens` 继续使用 Provider 最近一次实际 `input_tokens`。
@@ -130,7 +135,6 @@ Compaction SHALL 按最终 request 预算判断，预算至少覆盖 system inst
 - **THEN** 系统 SHALL 保留两者的不同语义
 - **AND** SHALL NOT修改本地 breakdown 冒充 Provider 实际值
 
-## ADDED Requirements
 
 ### Requirement: Compaction SHALL 预留空间并可恢复失败
 

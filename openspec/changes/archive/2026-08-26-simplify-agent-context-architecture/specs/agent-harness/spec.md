@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Skills 与 Memory SHALL 使用符合生命周期的缓存语义`
+- TO: `### Requirement: Skills 与 Memory SHALL 使用上游解析与独立 Freshness Adapter`
+
 ## MODIFIED Requirements
 
 ### Requirement: Agent 与 runtime 目录归属
