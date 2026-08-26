@@ -181,7 +181,8 @@ class MemorySettings:
     stale_warning_days: int
     inject_budget_tokens: int
     max_entry_chars: int
-    consolidation_interval_hours: int
+    consolidation_min_interval_hours: int
+    consolidation_min_new_sessions: int
     max_message_chars: int
 
 
@@ -539,7 +540,8 @@ def _build_memory(yaml_cfg: AppYamlConfig) -> MemorySettings:
         stale_warning_days=value.stale_warning_days,
         inject_budget_tokens=value.inject_budget_tokens,
         max_entry_chars=value.max_entry_chars,
-        consolidation_interval_hours=value.consolidation_interval_hours,
+        consolidation_min_interval_hours=value.consolidation_min_interval_hours,
+        consolidation_min_new_sessions=value.consolidation_min_new_sessions,
         max_message_chars=value.max_message_chars,
     )
 

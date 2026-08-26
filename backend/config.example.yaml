@@ -208,7 +208,8 @@ memory:
   stale_warning_days: 2      # 超龄条目注入时附 stale 警告
   inject_budget_tokens: 2000
   max_entry_chars: 4000
-  consolidation_interval_hours: 168  # 整理任务间隔（默认一周）
+  consolidation_min_interval_hours: 24   # AutoDream 门控：距上次整理最小间隔
+  consolidation_min_new_sessions: 5      # 且期间新抽取会话数达此值才整理
   max_message_chars: 120000  # 抽取输入上限（会话消息截断）
 
 langfuse:

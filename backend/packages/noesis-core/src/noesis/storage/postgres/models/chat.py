@@ -42,6 +42,7 @@ class TChatSession(Base):
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa_text("false"), comment='是否归档（归档会话从默认列表隐藏）')
     next_message_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default=sa_text("1"), comment='下一条会话消息序号')
     memory_extracted_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='记忆抽取完成时间戳（毫秒），NULL=未抽取；见 md-memory-layer')
+    memory_extracted_seq: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='记忆抽取水位：已成功抽取的最大消息序号；NULL=从未抽取')
     last_read_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='用户最后查看会话的时间戳（毫秒），NULL=从未读过；updated_at > last_read_at 表示有未读')
 
 

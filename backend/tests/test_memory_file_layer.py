@@ -226,18 +226,170 @@ async def test_apply_zero_value_session_writes_nothing(users_root: Path) -> None
     assert list((users_root / "u1" / "memory" / "journal").glob("*.md")) == []
 
 
+class _FakeResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return self.rows
+
+
+class _SegmentDB:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, *_a, **_k):
+        return _FakeResult(self._rows)
+
+
 @pytest.mark.asyncio
 async def test_extract_session_marks_and_skips_when_disabled(
     users_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from unittest.mock import MagicMock
+
     from noesis.services.memory.user_settings import MemoryUserSettings
 
     monkeypatch.setattr(MemoryUserSettings, "is_enabled", staticmethod(lambda _u: False))
-    db = SimpleNamespace(execute=AsyncMock(), commit=AsyncMock())
+    session = MagicMock(id="sess-off", memory_extracted_seq=7)
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=session),
+        execute=AsyncMock(return_value=_FakeResult([_msg(1, "user", "hi")])),
+        commit=AsyncMock(),
+    )
     assert await extraction.MemoryExtractionService.extract_session(
         db, session_id="sess-off", user_id="u1"
     )
     assert db.commit.await_count == 1
+
+
+# ----- 水位增量（bridge / head-tail / 成功才推进） -----
+
+
+from collections import namedtuple
+
+_MsgRow = namedtuple("_MsgRow", ["message_sequence", "role", "content"])
+
+
+def _msg(seq: int, role: str, text: str):
+    return _MsgRow(seq, role, {"parts": [{"type": "text", "content": text}]})
+
+
+@pytest.mark.asyncio
+async def test_load_segment_includes_bridge_and_new_messages() -> None:
+    rows = [
+        _msg(1, "user", "第一轮"),
+        _msg(2, "assistant", "回答一"),
+        _msg(3, "user", "第二轮"),
+        _msg(4, "assistant", "回答二"),
+    ]
+    text, new_max = await extraction.MemoryExtractionService._load_segment(
+        _SegmentDB(rows), "s", watermark=2
+    )
+    assert new_max == 4
+    # 水位=2：消息 1、2 都是背景（恰 2 条全带）
+    assert "[背景] [user] 第一轮" in text
+    assert "[背景] [assistant] 回答一" in text
+    assert "[user] 第二轮" in text  # 新段无背景前缀
+    assert "---" in text  # 背景与新段分隔
+
+
+@pytest.mark.asyncio
+async def test_load_segment_head_tail_truncation_keeps_both_ends(
+    users_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import noesis.services.memory.extraction as ext
+
+    rows = [_msg(i, "user", f"消息{i}" * 50) for i in range(1, 21)]
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        ext, "MemoryConfig", SimpleNamespace(max_message_chars=800)
+    )
+    text, new_max = await ext.MemoryExtractionService._load_segment(
+        _SegmentDB(rows), "s", watermark=None
+    )
+    assert new_max == 20
+    assert "消息1" in text  # 段头保留（目标陈述）
+    assert "消息20" in text  # 段尾保留（结论）
+    assert "（中间消息因长度上限省略）" in text
+
+
+@pytest.mark.asyncio
+async def test_watermark_advanced_only_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM 失败 → _mark_extracted 不被调用（水位不动，下次重试）。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from noesis.services.memory.extraction import MemoryExtractionService
+    from noesis.services.memory.user_settings import MemoryUserSettings
+
+    monkeypatch.setattr(MemoryUserSettings, "is_enabled", staticmethod(lambda _u: True))
+    session = MagicMock(id="s", memory_extracted_seq=None)
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=session),
+        execute=AsyncMock(return_value=_FakeResult([_msg(1, "user", "hi")])),
+        commit=AsyncMock(),
+    )
+
+    async def boom(**_kw):
+        raise RuntimeError("llm down")
+
+    from unittest.mock import patch
+
+    with (
+        patch.object(MemoryExtractionService, "_load_injected", AsyncMock(return_value=[])),
+        patch.object(MemoryExtractionService, "_run_llm", boom),
+    ):
+        with pytest.raises(RuntimeError):
+            await MemoryExtractionService.extract_session(db, session_id="s", user_id="u1")
+    db.commit.assert_not_awaited()  # 水位未推进
+
+
+@pytest.mark.asyncio
+async def test_subagent_sessions_excluded_from_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sweep 只捞 kind=root（subagent 结论经父会话通知回流，不直接抽）。"""
+    from noesis.services.memory.extraction import MemoryExtractionService
+
+    captured = {}
+
+    class _Result:
+        def all(self):
+            return []
+
+    async def fake_execute(stmt, *_a, **_k):
+        captured["query"] = str(stmt)
+        return _Result()
+
+    class _Ctx:
+        async def __aenter__(self):
+            return SimpleNamespace(execute=fake_execute)
+
+        async def __aexit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(
+        "noesis.services.memory.extraction.pg_manager.get_async_session_context",
+        _Ctx,
+    )
+    await MemoryExtractionService.sweep_once()
+    assert "t_chat_session.kind" in captured["query"]
+
+
+def test_updated_at_preserved_by_mark_extracted_statement() -> None:
+    """标记语句显式携带 updated_at 自身（抑制 onupdate，不扰动会话排序）。"""
+    import asyncio
+
+    from noesis.services.memory.extraction import MemoryExtractionService
+
+    async def run():
+        db = SimpleNamespace(execute=AsyncMock(), commit=AsyncMock())
+        await MemoryExtractionService._mark_extracted(db, "s", 42)
+        stmt = db.execute.await_args.args[0]
+        compiled = str(stmt)
+        assert "memory_extracted_seq" in compiled
+        assert "updated_at" in compiled
+
+    asyncio.run(run())
 
 
 # ----- 整理任务 -----

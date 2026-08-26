@@ -85,9 +85,9 @@
 - **THEN** 注入 SHALL 跳过损坏行且 SHALL NOT 失败
 - **AND** 索引 SHALL 可从条目目录重建
 
-### Requirement: 记忆写入 SHALL 在会话结束后自动抽取
+### Requirement: 记忆写入 SHALL 在会话结束后按水位增量抽取
 
-会话终态（系统 SHALL 以 idle 超时或用户显式关闭判定）后系统 SHALL 异步抽取，输入 SHALL 含会话消息（有界）、本轮注入清单与现有条目，自动写入条目与 journal，SHALL NOT 要求用户确认。同一用户的抽取任务 SHALL 串行执行。抽取 SHALL 将条目归入冻结五类之一；不属于任何类型的内容 SHALL 只进 journal 情景日志、SHALL NOT 进入语义层。抽取 SHALL 排除「不该存」内容（文件或代码本身可得的信息、临时任务状态）并将相对日期改写为绝对日期。写入时 SHALL 做轻量合并（语义重复更新既有条目并追加来源，明显过时当场改写）。守卫 SHALL 包括：敏感内容拒收、本轮注入条目的复述不记录（防自强化，注入清单来自 run 的 memory_context）、无价值会话零写入、单次至多 3 条新条目（超出 SHALL 只进 journal）。进程崩溃后系统 SHALL 补扫未抽取会话。
+会话 idle 超过阈值且最新合格消息序号超过水位（`memory_extracted_seq`）时，系统 SHALL 异步抽取该会话水位之后的新消息段，输入 SHALL 含新消息段（有界，超预算保段头与段尾）、水位前至多 2 条衔接背景消息、本轮注入清单与现有条目，自动写入条目与 journal，SHALL NOT 要求用户确认。同一用户的抽取任务 SHALL 串行执行。subagent 会话 SHALL NOT 抽取（结论经父会话终态通知回流）。抽取 SHALL 将条目归入冻结五类之一；不属于任何类型的内容 SHALL 只进 journal 情景日志、SHALL NOT 进入语义层。抽取 SHALL 排除「不该存」内容（文件或代码本身可得的信息、临时任务状态）并将相对日期改写为绝对日期。写入时 SHALL 做轻量合并（语义重复更新既有条目并追加来源，明显过时当场改写）。守卫 SHALL 包括：敏感内容拒收、本轮注入条目的复述不记录（防自强化，注入清单来自 run 的 memory_context）、无价值会话零写入、单段至多 3 条新条目（超出 SHALL 只进 journal）。水位 SHALL 仅在抽取成功后推进（失败保留原水位，下次 sweep 重试同段）；记忆关闭期间水位 SHALL 照常推进（不回溯）。抽取标记 SHALL NOT 改变会话列表排序（updated_at 语义 = 用户最后活动）。
 
 #### Scenario: 复述不产生新条目
 - **WHEN** 会话中 assistant 复述了本轮注入的记忆
@@ -101,6 +101,20 @@
 #### Scenario: 重复经验合并
 - **WHEN** 新会话经验与现有条目语义重复
 - **THEN** 抽取 SHALL 更新该条目文件并追加来源，而非新建
+
+#### Scenario: 续聊段增量抽取
+- **WHEN** 已抽取过的会话再次续聊并转入 idle
+- **THEN** 抽取 SHALL 只处理水位之后的新消息段
+- **AND** 水位前至多 2 条消息 SHALL 作为衔接背景进入输入
+
+#### Scenario: 抽取失败不推进水位
+- **WHEN** 某续聊段抽取因 LLM 失败未完成
+- **THEN** 水位 SHALL 保持原值
+- **AND** 下次 sweep SHALL 重试同一段
+
+#### Scenario: 抽取不扰动会话排序
+- **WHEN** 抽取推进水位
+- **THEN** 会话 updated_at SHALL NOT 被引擎内部状态改变
 
 ### Requirement: 整理 SHALL 由低频后台任务自动执行
 

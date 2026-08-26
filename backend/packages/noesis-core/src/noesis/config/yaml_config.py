@@ -418,7 +418,8 @@ class MemoryYamlSection(BaseModel):
     stale_warning_days: int = Field(default=2, ge=1, le=90)
     inject_budget_tokens: int = Field(default=2000, ge=500, le=10_000)
     max_entry_chars: int = Field(default=4000, ge=500, le=20_000)
-    consolidation_interval_hours: int = Field(default=168, ge=1, le=24 * 30)
+    consolidation_min_interval_hours: int = Field(default=24, ge=1, le=24 * 30)
+    consolidation_min_new_sessions: int = Field(default=5, ge=1, le=200)
     max_message_chars: int = Field(default=120_000, ge=10_000, le=1_000_000)
 
 

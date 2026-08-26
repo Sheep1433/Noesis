@@ -46,6 +46,17 @@
 - [x] 7.3 removal baseline 测试：旧表/类/路由不存在、应用可启动、USER.md/AGENTS.md 显式能力不受影响
 - [x] 7.4 全量回归（backend pytest / frontend lint+build）
 
+## 9. 水位增量与 AutoDream（2026-08-26 调研后增补）
+
+- [x] 9.1 水位列 memory_extracted_seq + 已抽取会话回填迁移
+- [x] 9.2 sweep 条件改「最新合格序号 > 水位」；subagent 排除保持
+- [x] 9.3 抽取输入：水位后新段 + 前 2 条衔接背景 + 保头保尾截断
+- [x] 9.4 水位成功才推进/失败保留；关闭期间照推；updated_at 不扰动
+- [x] 9.5 整理触发改 AutoDream 双门控（24h + ≥5 新抽取会话）+ 状态文件
+- [x] 9.6 近 7 天 journal 进整理 prompt（Gather 阶段）
+- [x] 9.7 注入选条日志（run 注入了哪些条目）
+- [x] 9.8 回归：水位推进/失败保留/背景/截断/排序保全（1152 passed）
+
 ## 8. 评测与门禁
 
 - [ ] 8.1 冻结抽取与整理 fixture，precision/recall/零写入/防自强化/敏感拒收/修正更新指标

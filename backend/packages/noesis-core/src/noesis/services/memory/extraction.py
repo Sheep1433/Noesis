@@ -1,11 +1,14 @@
-"""会话终态自动记忆抽取（md-memory-layer tasks 2.x）。
+"""会话终态自动记忆抽取（md-memory-layer tasks 2.x）——水位增量。
 
-流程：sweep 任务发现 idle 且未抽取的终态会话 → 读会话消息（有界）、
+流程：sweep 发现 idle 且有新消息越过水位的 root 会话 → 读取
+水位之后的新消息段（带水位前 2 条衔接背景，有界截断保头保尾）、
 本轮注入清单（run.memory_context）、现有条目 → LLM 五选一判定 →
-轻量合并/新建条目 + journal 追加 → 会话标记已抽取。
+轻量合并/新建条目 + journal 追加 → 推进水位。
 
+- 水位（memory_extracted_seq）= 已成功抽取的最大消息序号；
+  成功才推进，失败保留原水位（Claude Code cursor 同款语义）。
 - 同一用户串行执行（asyncio lock，防并发写覆盖）。
-- 崩溃恢复：抽取非事务，失败会话不标记，下次 sweep 补跑。
+- subagent 会话（kind='subagent'）不抽取：结论经父会话终态通知回流。
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import time
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.env import MemoryConfig
@@ -100,31 +103,48 @@ _EXTRACTION_PROMPT = """你是记忆抽取器。从下面的会话中抽取值�
 class MemoryExtractionService:
     @staticmethod
     async def sweep_once(*, limit: int = 8) -> int:
-        """扫描 idle 未抽取会话并抽取；返回处理数。崩溃安全（不标记即重试）。"""
+        """扫描 idle 且有新消息越过水位的 root 会话并抽取；返回处理数。
+
+        崩溃安全：抽取失败不推进水位，下次 sweep 重试同一段。
+        """
         now_ms = int(time.time() * 1000)
         idle_ms = MemoryConfig.session_idle_minutes * 60 * 1000
+        eligible_max = (
+            select(
+                TChatMessage.session_id.label("sid"),
+                func.max(TChatMessage.message_sequence).label("max_seq"),
+            )
+            .where(
+                TChatMessage.status.in_(("completed", "partial")),
+                TChatMessage.role.in_(("user", "assistant")),
+            )
+            .group_by(TChatMessage.session_id)
+            .subquery()
+        )
         async with pg_manager.get_async_session_context() as db:
-            sessions = (
+            candidates = (
                 (
                     await db.execute(
-                        select(TChatSession)
+                        select(TChatSession, eligible_max.c.max_seq)
+                        .join(eligible_max, eligible_max.c.sid == TChatSession.id)
                         .where(
                             TChatSession.deleted_at.is_(None),
                             TChatSession.kind == "root",
-                            TChatSession.memory_extracted_at.is_(None),
                             TChatSession.updated_at < now_ms - idle_ms,
                             TChatSession.created_at > now_ms - 90 * 24 * 3600 * 1000,
+                            or_(
+                                TChatSession.memory_extracted_seq.is_(None),
+                                eligible_max.c.max_seq > TChatSession.memory_extracted_seq,
+                            ),
                         )
                         .order_by(TChatSession.updated_at.asc())
                         .limit(limit)
                     )
                 )
-                .scalars()
                 .all()
             )
-            candidates = [s for s in sessions if await MemoryExtractionService._has_content(db, s.id)]
         processed = 0
-        for session in candidates:
+        for session, _max_seq in candidates:
             try:
                 async with pg_manager.get_async_session_context() as db:
                     done = await MemoryExtractionService.extract_session(
@@ -133,35 +153,35 @@ class MemoryExtractionService:
                 processed += int(done)
             except Exception:
                 logger.warning(
-                    "memory extraction failed session_id={}（下次 sweep 重试）",
+                    "memory extraction failed session_id={}（水位未推进，下次 sweep 重试）",
                     session.id,
                 )
         return processed
 
     @staticmethod
-    async def _has_content(db: AsyncSession, session_id: str) -> bool:
-        row = (
-            await db.execute(
-                select(TChatMessage.id)
-                .where(TChatMessage.session_id == session_id)
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        return row is not None
-
-    @staticmethod
     async def extract_session(
         db: AsyncSession, *, session_id: str, user_id: str
     ) -> bool:
-        """抽取单个会话；同一用户串行。返回是否完成（含禁用/无价值零写入）。"""
+        """抽取单个会话水位之后的新消息段；同一用户串行。
+
+        返回是否完成（含禁用/无价值段零写入但推进水位）。
+        """
         lock = _lock_for(user_id)
         async with lock:
+            session = await db.get(TChatSession, session_id)
+            if session is None:
+                return False
+            watermark = session.memory_extracted_seq
+            messages, new_max = await MemoryExtractionService._load_segment(
+                db, session_id, watermark
+            )
             if not MemoryUserSettings.is_enabled(user_id):
-                await MemoryExtractionService._mark_extracted(db, session_id)
+                # 关闭期间不回溯（spec：关闭后新终态不再抽取），水位照推
+                await MemoryExtractionService._mark_extracted(db, session_id, new_max)
                 return True
-            messages = await MemoryExtractionService._load_messages(db, session_id)
             if not messages:
-                await MemoryExtractionService._mark_extracted(db, session_id)
+                # 新段无合格文本（纯系统消息等）：推进水位，零写入
+                await MemoryExtractionService._mark_extracted(db, session_id, new_max)
                 return True
             injected = await MemoryExtractionService._load_injected(db, session_id)
             MemoryStore.ensure_layout(user_id)
@@ -179,17 +199,29 @@ class MemoryExtractionService:
                 result=result,
                 injected=injected,
             )
-            await MemoryExtractionService._mark_extracted(db, session_id)
+            await MemoryExtractionService._mark_extracted(db, session_id, new_max)
             return True
 
     # ----- 输入装载 -----
 
     @staticmethod
-    async def _load_messages(db: AsyncSession, session_id: str) -> str:
+    async def _load_segment(
+        db: AsyncSession, session_id: str, watermark: int | None
+    ) -> tuple[str, int | None]:
+        """装载水位之后的新消息段 + 水位前 2 条衔接背景。
+
+        返回 (输入文本, 本段最大合格序号)。文本超预算时保头（20%，目标
+        陈述）保尾（60%，结论），中间标注省略。背景消息仅用于指代消解
+        （「之前那个方案」类表述），不参与抽取判定。
+        """
         rows = (
             (
                 await db.execute(
-                    select(TChatMessage.role, TChatMessage.content)
+                    select(
+                        TChatMessage.message_sequence,
+                        TChatMessage.role,
+                        TChatMessage.content,
+                    )
                     .where(
                         TChatMessage.session_id == session_id,
                         TChatMessage.status.in_(("completed", "partial")),
@@ -200,18 +232,51 @@ class MemoryExtractionService:
             )
             .all()
         )
-        lines: list[str] = []
+        if not rows:
+            return "", None
+        new_max = rows[-1].message_sequence
+        rendered = [
+            (seq, role, MemoryExtractionService._message_text(content))
+            for seq, role, content in rows
+        ]
+        before = [
+            (role, text) for seq, role, text in rendered
+            if watermark is not None and seq <= watermark and text
+        ]
+        after = [
+            (role, text) for seq, role, text in rendered
+            if (watermark is None or seq > watermark) and text
+        ]
+        bridge = [f"[背景] [{role}] {text}" for role, text in before[-2:]]
+        segment = [f"[{role}] {text}" for role, text in after]
+
         budget = MemoryConfig.max_message_chars
-        for role, content in rows:
-            text = MemoryExtractionService._message_text(content)
-            if not text:
-                continue
-            line = f"[{role}] {text}"
-            if sum(len(l) for l in lines) + len(line) > budget:
-                lines.append("（其余消息因长度上限截断）")
-                break
-            lines.append(line)
-        return "\n\n".join(lines)
+        if sum(len(line) for line in segment) > budget:
+            head_budget, tail_budget = int(budget * 0.2), int(budget * 0.6)
+            head: list[str] = []
+            head_chars = 0
+            tail: list[str] = []
+            tail_chars = 0
+            for line in segment:
+                if head_chars + len(line) <= head_budget:
+                    head.append(line)
+                    head_chars += len(line)
+                else:
+                    break
+            for line in reversed(segment):
+                if tail_chars + len(line) <= tail_budget:
+                    tail.insert(0, line)
+                    tail_chars += len(line)
+                else:
+                    break
+            segment = [*head, "（中间消息因长度上限省略）", *tail]
+
+        parts = []
+        if bridge:
+            parts.append("\n\n".join(bridge))
+        if segment:
+            parts.append("\n\n".join(segment))
+        return "\n\n---\n\n".join(parts), new_max
 
     @staticmethod
     def _message_text(content: object) -> str:
@@ -338,16 +403,24 @@ class MemoryExtractionService:
             )
 
     @staticmethod
-    async def _mark_extracted(db: AsyncSession, session_id: str) -> None:
-        # 显式携带 updated_at 自身以抑制列 onupdate——抽取标记不得改变
-        # 会话列表排序（updated_at 语义 = 用户最后活动，非引擎内部状态）
+    async def _mark_extracted(
+        db: AsyncSession, session_id: str, seq: int | None
+    ) -> None:
+        """推进水位；仅在抽取路径成功后调用（失败抛出则水位不动）。
+
+        显式携带 updated_at 自身以抑制列 onupdate——抽取标记不得改变
+        会话列表排序（updated_at 语义 = 用户最后活动，非引擎内部状态）。
+        """
+        values = {
+            "memory_extracted_at": int(time.time() * 1000),
+            "updated_at": TChatSession.updated_at,
+        }
+        if seq is not None:
+            values["memory_extracted_seq"] = seq
         await db.execute(
             update(TChatSession)
             .where(TChatSession.id == session_id)
-            .values(
-                memory_extracted_at=int(time.time() * 1000),
-                updated_at=TChatSession.updated_at,
-            )
+            .values(**values)
         )
         await db.commit()
 
@@ -360,6 +433,8 @@ async def start_memory_sweeper() -> None:
     global _SWEEP_TASK
 
     async def _loop() -> None:
+        from noesis.services.memory.consolidation import maybe_consolidate
+
         await asyncio.sleep(60)
         while True:
             try:
@@ -370,6 +445,13 @@ async def start_memory_sweeper() -> None:
                 raise
             except Exception:
                 logger.warning("memory sweep iteration failed")
+            # AutoDream 门控整理：挂在 sweep 尾部顺带评估（双条件才真正执行）
+            try:
+                await maybe_consolidate()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("memory consolidation gate check failed")
             await asyncio.sleep(MemoryConfig.sweep_interval_minutes * 60)
 
     if _SWEEP_TASK is None or _SWEEP_TASK.done():
