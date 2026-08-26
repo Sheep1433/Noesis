@@ -3,6 +3,7 @@ import type { SessionContextResponse } from '@/api/chat'
 import { Refresh } from '@vicons/ionicons-v5'
 import {
   NButton,
+  NDropdown,
   NIcon,
   NSpin,
   useMessage,
@@ -16,6 +17,7 @@ import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { invalidateMentionContextCache } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { authFetch } from '@/utils/authHttp'
+import { downloadFile } from '@/utils/download'
 import { getFilePreviewKind } from '@/utils/filePreview'
 import WorkspaceFileTree from '@/views/chat/WorkspaceFileTree.vue'
 
@@ -98,6 +100,54 @@ function openArtifact(path: string) {
   const rel = sessionArtifactRelPath(path, props.sessionId) ?? path
   const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${rel}`
   window.open(url, '_blank', 'noopener')
+}
+
+// ---- 文件右键下载（不占常驻按钮位） ----
+const fileMenu = ref({ show: false, x: 0, y: 0, key: '' })
+
+function onFileContextMenu(node: { key: string, isLeaf?: boolean }, x: number, y: number) {
+  if (!node.isLeaf) {
+    return
+  }
+  fileMenu.value = { show: true, x, y, key: node.key }
+}
+
+function closeFileMenu() {
+  fileMenu.value = { ...fileMenu.value, show: false }
+}
+
+function fileBaseName(key: string): string {
+  return key.replace(/\/+$/, '').split('/').pop() || 'download'
+}
+
+async function downloadByKey(key: string) {
+  const rel = sessionArtifactRelPath(key, props.sessionId)
+  try {
+    if (rel) {
+      // uploads/attachments：走 artifacts 接口取原始字节
+      const url = `${location.origin}/api/chat/sessions/${encodeURIComponent(props.sessionId)}/artifacts/${rel}`
+      const res = await authFetch(url)
+      if (!res.ok) {
+        throw new Error(`下载失败（${res.status}）`)
+      }
+      downloadFile(await res.blob(), fileBaseName(key))
+      return
+    }
+    // 工作区文件：文本内容直接落盘
+    const res = await getWorkspaceFile(props.sessionId, key)
+    downloadFile(res.content, fileBaseName(key), 'text/plain;charset=utf-8')
+  } catch (e: unknown) {
+    const err = e as Error
+    message.error(err.message || '下载失败')
+  }
+}
+
+function onFileMenuSelect(action: string) {
+  const key = fileMenu.value.key
+  closeFileMenu()
+  if (action === 'download' && key) {
+    void downloadByKey(key)
+  }
 }
 
 async function loadArtifactImage(path: string) {
@@ -235,6 +285,16 @@ defineExpose({ reload })
       </n-button>
     </div>
 
+    <n-dropdown
+      trigger="manual"
+      placement="bottom-start"
+      :show="fileMenu.show"
+      :x="fileMenu.x"
+      :y="fileMenu.y"
+      :options="[{ label: '下载', key: 'download' }]"
+      @select="onFileMenuSelect"
+      @clickoutside="closeFileMenu"
+    />
     <n-spin :show="loading" class="panel-body">
       <div class="panel-split">
         <aside
@@ -247,6 +307,7 @@ defineExpose({ reload })
               v-if="context?.tree?.length"
               :nodes="context.tree"
               :selected-key="selectedKey"
+              :on-context-menu="onFileContextMenu"
               @select="onSelectFile"
             />
             <div v-else class="panel-empty-hint">

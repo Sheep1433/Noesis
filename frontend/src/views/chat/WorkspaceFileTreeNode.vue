@@ -9,6 +9,7 @@ const props = defineProps<{
   isExpanded: (key: string) => boolean
   toggleExpand: (key: string) => void
   onRowClick: (node: SessionFsTreeNode) => void
+  onContextMenu?: (node: SessionFsTreeNode, x: number, y: number) => void
 }>()
 
 const isFolder = computed(() => !props.node.isLeaf)
@@ -34,6 +35,13 @@ function onChevronClick(e: Event) {
 function handleRowClick() {
   props.onRowClick(props.node)
 }
+
+function handleContextMenu(e: MouseEvent) {
+  // 目录无下载语义，只对文件行弹菜单
+  if (!isFolder.value && props.onContextMenu) {
+    props.onContextMenu(props.node, e.clientX, e.clientY)
+  }
+}
 </script>
 
 <template>
@@ -46,6 +54,7 @@ function handleRowClick() {
       }"
       :style="{ paddingLeft: `${8 + depth * 14}px` }"
       @click="handleRowClick"
+      @contextmenu.prevent="handleContextMenu"
     >
       <span
         class="tree-chevron"
@@ -71,6 +80,7 @@ function handleRowClick() {
         :is-expanded="isExpanded"
         :toggle-expand="toggleExpand"
         :on-row-click="onRowClick"
+        :on-context-menu="onContextMenu"
       />
     </template>
   </div>

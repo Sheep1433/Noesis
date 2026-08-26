@@ -6,6 +6,7 @@ import WorkspaceFileTreeNode from './WorkspaceFileTreeNode.vue'
 const props = defineProps<{
   nodes: SessionFsTreeNode[]
   selectedKey?: string
+  onContextMenu?: (node: SessionFsTreeNode, x: number, y: number) => void
 }>()
 
 const emit = defineEmits<{
@@ -57,6 +58,7 @@ function onRowClick(node: SessionFsTreeNode) {
         :is-expanded="isExpanded"
         :toggle-expand="toggleExpand"
         :on-row-click="onRowClick"
+        :on-context-menu="onContextMenu"
       />
     </div>
   </div>
