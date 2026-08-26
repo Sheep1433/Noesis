@@ -265,7 +265,6 @@ defineExpose({ reload })
             :loading="previewLoading"
             :editable="previewEditable"
             :saving="previewSaving"
-            :show-download="false"
             density="compact"
             fill-height
             class="session-file-preview"
