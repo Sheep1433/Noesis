@@ -25,6 +25,7 @@ AGENT_PERSONAL_SKILLS_ROUTE = "/skills/personal/"
 AGENT_MEMORY_ROUTE = "/memory/"
 AGENT_MEMORY_AGENTS_FILE = "/memory/AGENTS.md"
 AGENT_MEMORY_USER_FILE = "/memory/USER.md"
+AGENT_MEMORY_INDEX_FILE = "/memory/MEMORY.md"
 
 READ_ONLY_SKILLS_ERROR = "Skills directory is read-only"
 

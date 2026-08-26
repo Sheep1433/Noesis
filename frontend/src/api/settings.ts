@@ -57,6 +57,113 @@ export async function putUserMemoryFile(file: 'USER.md' | 'AGENTS.md', content: 
   return parseAuthJson<MemoryFilePayload>(res)
 }
 
+export type MemorySettingsPayload = {
+  enabled: boolean
+}
+
+export type MemoryTreeEntry = {
+  memory_type: string
+  type_label: string
+  slug: string
+  rel_path: string
+  label: string
+  description: string
+}
+
+export type MemoryTreePayload = {
+  entries: MemoryTreeEntry[]
+  corrupt_lines: number
+  over_budget: boolean
+  journal_days: string[]
+}
+
+export type MemoryEntryPayload = {
+  memory_type: string
+  slug: string
+  content: string
+  label?: string
+  body?: string
+  updated_at?: string
+}
+
+export async function getMemorySettings() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/settings`, { credentials: 'include' }),
+  )
+  return parseAuthJson<MemorySettingsPayload>(res)
+}
+
+export async function putMemorySettings(enabled: boolean) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/settings`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }),
+  )
+  return parseAuthJson<MemorySettingsPayload>(res)
+}
+
+export async function getMemoryTree() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/tree`, { credentials: 'include' }),
+  )
+  return parseAuthJson<MemoryTreePayload>(res)
+}
+
+export async function getMemoryEntry(memoryType: string, slug: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      { credentials: 'include' },
+    ),
+  )
+  return parseAuthJson<MemoryEntryPayload>(res)
+}
+
+export async function putMemoryEntry(memoryType: string, slug: string, content: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+    ),
+  )
+  return parseAuthJson<void>(res)
+}
+
+export async function deleteMemoryEntry(memoryType: string, slug: string) {
+  const res = await authFetch(
+    new Request(
+      `${location.origin}/api/user/memory/entry/${encodeURIComponent(memoryType)}/${encodeURIComponent(slug)}`,
+      { method: 'DELETE', credentials: 'include' },
+    ),
+  )
+  return parseAuthJson<void>(res)
+}
+
+export async function getMemoryJournal(day: string) {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/journal/${encodeURIComponent(day)}`, { credentials: 'include' }),
+  )
+  return parseAuthJson<{ day: string, content: string }>(res)
+}
+
+export async function rebuildMemoryIndex() {
+  const res = await authFetch(
+    new Request(`${location.origin}/api/user/memory/index/rebuild`, {
+      method: 'POST',
+      credentials: 'include',
+    }),
+  )
+  return parseAuthJson<{ entries: number }>(res)
+}
+
 export type ContextPreview = {
   profile: string
   sources: Array<{ id: string, label: string, injected: boolean, characters: number, token_estimate: number, content: string }>

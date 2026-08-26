@@ -195,6 +195,22 @@ qdrant:
   test_case_upload_collection: ""
   case_rag_historical_requirements_enabled: false
 
+# md 文件记忆层（索引 + 五类条目 + 情景日志）；功能启停由每个用户的单一开关控制。
+memory:
+  extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
+  selection_model: ""        # 空 = 默认对话模型（每 Run 注入选条，可用廉价模型）
+  enabled_by_default: false  # fail-closed：评测门禁通过后再默认开启
+  session_idle_minutes: 10   # 会话 idle 判定（终态触发抽取）
+  sweep_interval_minutes: 30 # 未抽取会话补扫间隔
+  max_entries_per_extraction: 3
+  index_max_lines: 200       # 索引预算双保险
+  index_max_bytes: 25600
+  stale_warning_days: 2      # 超龄条目注入时附 stale 警告
+  inject_budget_tokens: 2000
+  max_entry_chars: 4000
+  consolidation_interval_hours: 168  # 整理任务间隔（默认一周）
+  max_message_chars: 120000  # 抽取输入上限（会话消息截断）
+
 langfuse:
   tracing_enabled: false
   base_url: http://127.0.0.1:3000

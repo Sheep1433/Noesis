@@ -8,7 +8,11 @@ import pytest
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.middleware.memory import MemoryMiddleware
 
-from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
+from noesis.agents.backends.paths import (
+    AGENT_MEMORY_AGENTS_FILE,
+    AGENT_MEMORY_INDEX_FILE,
+    AGENT_MEMORY_USER_FILE,
+)
 from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMemoryMiddleware
 from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.super_agent import (
@@ -26,7 +30,11 @@ def test_memory_prompt_contains_agent_memory_placeholder() -> None:
 
 
 def test_memory_sources_order_user_before_agents() -> None:
-    assert _MEMORY_SOURCES == [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE]
+    assert _MEMORY_SOURCES == [
+        AGENT_MEMORY_USER_FILE,
+        AGENT_MEMORY_AGENTS_FILE,
+        AGENT_MEMORY_INDEX_FILE,
+    ]
 
 
 def test_task_worker_excludes_memory_middleware() -> None:
@@ -50,10 +58,12 @@ def test_turn_memory_reloads_once_for_each_agent_invocation() -> None:
         [
             FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile-v1", error=None),
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"rules-v1", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_INDEX_FILE, content=b"index-v1", error=None),
         ],
         [
             FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile-v2", error=None),
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"rules-v2", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_INDEX_FILE, content=b"index-v2", error=None),
         ],
     ]
     mw = RefreshingMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))
@@ -81,6 +91,7 @@ async def test_turn_memory_async_path_ignores_checkpoint_cache() -> None:
         return_value=[
             FileDownloadResponse(path=AGENT_MEMORY_USER_FILE, content=b"profile", error=None),
             FileDownloadResponse(path=AGENT_MEMORY_AGENTS_FILE, content=b"fresh", error=None),
+            FileDownloadResponse(path=AGENT_MEMORY_INDEX_FILE, content=b"index", error=None),
         ]
     )
     middleware = RefreshingMemoryMiddleware(backend=backend, sources=list(_MEMORY_SOURCES))

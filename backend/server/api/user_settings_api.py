@@ -14,6 +14,9 @@ from noesis.schemas.login_vo import CurrentUser
 from noesis.services.messaging_channel_service import MessagingChannelService
 from noesis.services.scheduled_task_service import ScheduledTaskService
 from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
+from noesis.services.memory.store import MemoryStore
+from noesis.services.memory.types import MEMORY_TYPES, TYPE_LABELS
+from noesis.services.memory.user_settings import MemoryUserSettings
 from noesis.services.user_memory_service import UserMemoryService
 from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.settings_service import SettingsService
@@ -66,6 +69,161 @@ class ChannelUpsertBody(BaseModel):
 # ----- memory -----
 
 
+@user_settings_router.get("/memory/settings")
+async def get_memory_settings(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return ResponseUtil.success(data={"enabled": MemoryUserSettings.is_enabled(current_user.user_id)})
+
+
+class MemoryToggleBody(BaseModel):
+    enabled: bool
+
+
+@user_settings_router.put("/memory/settings")
+async def put_memory_settings(
+    body: MemoryToggleBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    enabled = MemoryUserSettings.set_enabled(current_user.user_id, body.enabled)
+    return ResponseUtil.success(msg="已保存", data={"enabled": enabled})
+
+
+@user_settings_router.get("/memory/tree")
+async def get_memory_tree(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """索引 + journal 文件列表（设置页文件管理入口）。"""
+    user_id = current_user.user_id
+    state = MemoryStore.read_index(user_id)
+    journal_days = sorted(
+        p.stem for p in (MemoryStore.memory_root(user_id) / "journal").glob("*.md")
+    )
+    return ResponseUtil.success(data={
+        "entries": [
+            {
+                "memory_type": e.memory_type,
+                "type_label": TYPE_LABELS[e.memory_type],
+                "slug": e.slug,
+                "rel_path": e.rel_path,
+                "label": e.label,
+                "description": e.description,
+            }
+            for e in state.entries
+        ],
+        "corrupt_lines": state.corrupt_lines,
+        "over_budget": state.over_budget,
+        "journal_days": journal_days,
+    })
+
+
+@user_settings_router.get("/memory/entry/{memory_type}/{slug}")
+async def get_memory_entry(
+    memory_type: str,
+    slug: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        entry = MemoryStore.read_entry(current_user.user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if entry is None:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    path = MemoryStore.entry_path(current_user.user_id, memory_type, slug)
+    return ResponseUtil.success(data={
+        "memory_type": memory_type,
+        "slug": slug,
+        "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+        **entry,
+    })
+
+
+class MemoryEntryWriteBody(BaseModel):
+    content: str = Field(..., description="条目文件 Markdown 原文")
+
+
+@user_settings_router.put("/memory/entry/{memory_type}/{slug}")
+async def put_memory_entry(
+    memory_type: str,
+    slug: str,
+    body: MemoryEntryWriteBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """用户直接编辑条目文件（最高权限）；索引行同步。"""
+    await require_csrf(request)
+    user_id = current_user.user_id
+    try:
+        path = MemoryStore.entry_path(user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="条目不存在")
+    from noesis.config.env import MemoryConfig as _Cfg
+
+    if len(body.content.encode("utf-8")) > _Cfg.max_entry_chars * 2:
+        raise HTTPException(status_code=400, detail="内容超出上限")
+    from noesis.services.memory.store import IndexEntry
+
+    path.write_text(body.content, encoding="utf-8")
+    front = MemoryStore.read_entry_file(path)
+    MemoryStore._sync_index_line(
+        user_id,
+        IndexEntry(
+            memory_type=memory_type,
+            slug=slug,
+            label=str(front.get("label") or slug),
+            description=str(front.get("description") or ""),
+        ),
+    )
+    return ResponseUtil.success(msg="已保存")
+
+
+@user_settings_router.delete("/memory/entry/{memory_type}/{slug}")
+async def delete_memory_entry(
+    memory_type: str,
+    slug: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    try:
+        removed = MemoryStore.remove_entry(current_user.user_id, memory_type, slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not removed:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    return ResponseUtil.success(msg="已删除")
+
+
+@user_settings_router.get("/memory/journal/{day}")
+async def get_memory_journal(
+    day: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    import re as _re
+
+    if not _re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+        raise HTTPException(status_code=400, detail="非法日期")
+    path = MemoryStore.journal_path(current_user.user_id, day)
+    return ResponseUtil.success(data={
+        "day": day,
+        "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+    })
+
+
+@user_settings_router.post("/memory/index/rebuild")
+async def rebuild_memory_index(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    await require_csrf(request)
+    state = MemoryStore.rebuild_index(current_user.user_id)
+    return ResponseUtil.success(msg="索引已重建", data={"entries": len(state.entries)})
+
+
 @user_settings_router.get("/memory/{file_name}")
 async def get_user_memory_file(
     file_name: str,
@@ -91,6 +249,11 @@ async def put_user_memory_file(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return ResponseUtil.success(msg="已保存", data=data)
+
+
+# ----- 记忆层（md 文件）：设置开关 + 文件管理 -----
+
+
 
 
 @user_settings_router.get("/context/preview")

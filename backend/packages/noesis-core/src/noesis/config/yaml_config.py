@@ -405,6 +405,23 @@ class KbYamlSection(BaseModel):
     parser: KbParserYamlSection = Field(default_factory=KbParserYamlSection)
 
 
+class MemoryYamlSection(BaseModel):
+    """md 文件记忆层（openspec: md-memory-layer）。"""
+    extraction_model: str = ""  # 空 = 默认对话模型
+    selection_model: str = ""  # 空 = 默认对话模型（注入选条）
+    enabled_by_default: bool = False  # fail-closed：抽取评测门禁未过不默认开启
+    session_idle_minutes: int = Field(default=10, ge=1, le=120)
+    sweep_interval_minutes: int = Field(default=30, ge=5, le=240)
+    max_entries_per_extraction: int = Field(default=3, ge=1, le=10)
+    index_max_lines: int = Field(default=200, ge=50, le=1000)
+    index_max_bytes: int = Field(default=25_600, ge=10_000, le=100_000)
+    stale_warning_days: int = Field(default=2, ge=1, le=90)
+    inject_budget_tokens: int = Field(default=2000, ge=500, le=10_000)
+    max_entry_chars: int = Field(default=4000, ge=500, le=20_000)
+    consolidation_interval_hours: int = Field(default=168, ge=1, le=24 * 30)
+    max_message_chars: int = Field(default=120_000, ge=10_000, le=1_000_000)
+
+
 class AppYamlConfig(BaseModel):
     config_version: int = 1
     app: AppYamlSection = Field(default_factory=AppYamlSection)
@@ -444,6 +461,7 @@ class AppYamlConfig(BaseModel):
         default_factory=SettingsFeaturesYamlSection
     )
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
+    memory: MemoryYamlSection = Field(default_factory=MemoryYamlSection)
 
 
 @lru_cache

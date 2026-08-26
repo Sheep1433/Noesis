@@ -169,6 +169,23 @@ class RetrievalLimitSettings:
 
 
 @dataclass(frozen=True)
+class MemorySettings:
+    extraction_model: str
+    selection_model: str
+    enabled_by_default: bool
+    session_idle_minutes: int
+    sweep_interval_minutes: int
+    max_entries_per_extraction: int
+    index_max_lines: int
+    index_max_bytes: int
+    stale_warning_days: int
+    inject_budget_tokens: int
+    max_entry_chars: int
+    consolidation_interval_hours: int
+    max_message_chars: int
+
+
+@dataclass(frozen=True)
 class HitlSettings:
     enabled: bool
     ask_timeout_seconds: int
@@ -507,6 +524,26 @@ def _build_retrieval_limits(yaml_cfg: AppYamlConfig) -> RetrievalLimitSettings:
 
 
 
+
+def _build_memory(yaml_cfg: AppYamlConfig) -> MemorySettings:
+    value = yaml_cfg.memory
+    return MemorySettings(
+        extraction_model=value.extraction_model.strip(),
+        selection_model=value.selection_model.strip(),
+        enabled_by_default=value.enabled_by_default,
+        session_idle_minutes=value.session_idle_minutes,
+        sweep_interval_minutes=value.sweep_interval_minutes,
+        max_entries_per_extraction=value.max_entries_per_extraction,
+        index_max_lines=value.index_max_lines,
+        index_max_bytes=value.index_max_bytes,
+        stale_warning_days=value.stale_warning_days,
+        inject_budget_tokens=value.inject_budget_tokens,
+        max_entry_chars=value.max_entry_chars,
+        consolidation_interval_hours=value.consolidation_interval_hours,
+        max_message_chars=value.max_message_chars,
+    )
+
+
 def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
     hitl = yaml_cfg.hitl
     return HitlSettings(
@@ -795,6 +832,10 @@ class GetConfig:
     def get_kb_config(self) -> KbSettings:
         return _build_kb(self._yaml)
 
+    @lru_cache
+    def get_memory_config(self) -> MemorySettings:
+        return _build_memory(self._yaml)
+
     @staticmethod
     def parse_cli_args() -> None:
         is_pytest = "pytest" in sys.modules or "pytest" in sys.argv[0]
@@ -843,3 +884,4 @@ SubagentConfig = get_config.get_subagent_config()
 MessagingConfig = get_config.get_messaging_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
 KbConfig = get_config.get_kb_config()
+MemoryConfig = get_config.get_memory_config()

@@ -25,10 +25,13 @@ def test_explicit_context_files_do_not_create_memory_dir(
 
 def test_old_cortex_modules_are_absent() -> None:
     removed = [
-        CORE_ROOT / "services" / "memory",
+        CORE_ROOT / "services" / "memory" / "bulletin.py",
+        CORE_ROOT / "services" / "memory" / "capture.py",
+        CORE_ROOT / "services" / "memory" / "index.py",
+        CORE_ROOT / "services" / "memory" / "query.py",
+        CORE_ROOT / "services" / "memory" / "worker.py",
         CORE_ROOT / "agents" / "middlewares" / "memory_bulletin_middleware.py",
         CORE_ROOT / "agents" / "memory_runtime.py",
-        CORE_ROOT / "agents" / "tools" / "memory_tools.py",
         CORE_ROOT / "repositories" / "machine_memory_repository.py",
         CORE_ROOT / "repositories" / "memory_preference_repository.py",
         CORE_ROOT / "schemas" / "memory.py",
@@ -46,7 +49,6 @@ def test_old_cortex_wiring_is_absent_from_source() -> None:
         "MemoryBulletinService",
         "MachineMemoryService",
         "build_memory_bulletin_middleware",
-        "build_memory_tools",
         "MachineMemoryConfig",
         "machine_memory",
         "TMemoryItem",

@@ -41,7 +41,11 @@ def test_context_preview_uses_runtime_resolver_without_side_effects(tmp_path: Pa
     resolved = ContextResolver.resolve("u1", "super_agent")
     after = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*"))
 
-    assert resolved.memory_sources == ("/memory/USER.md", "/memory/AGENTS.md")
+    assert resolved.memory_sources == (
+        "/memory/USER.md",
+        "/memory/AGENTS.md",
+        "/memory/MEMORY.md",
+    )
     assert [source.id for source in resolved.sources] == ["system", "profile", "memory"]
     assert "用户画像" in resolved.compiled_content
     assert before == after
