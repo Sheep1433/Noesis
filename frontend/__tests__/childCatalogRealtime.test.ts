@@ -70,7 +70,7 @@ function mountDrawer(show = true) {
     global: {
       stubs: {
         teleport: true,
-        NDrawer: { template: '<div><slot /></div>' },
+        NDrawer: { props: ['show'], template: '<div v-if="show"><slot /></div>' },
         NDrawerContent: { template: '<div><slot /></div>' },
         NInput: { template: '<textarea />' },
         NButton: { template: '<button><slot /></button>' },
@@ -133,8 +133,15 @@ describe('子 Agent 标准会话展示', () => {
     expect(wrapper.findAll('.subagent-conversation__user')).toHaveLength(2)
     expect(wrapper.find('.subagent-conversation__assistant .markdown-preview-stub').text()).toContain('### 正在检索')
 
+    // naive-ui 抽屉打开编排可能双挂载槽内容——订阅次数是实现细节；
+    // 契约是「打开时建立订阅、关闭时释放最新订阅」（全局同 run 去重）
+    expect(api.subscribeAgentRun.mock.calls.length).toBeGreaterThanOrEqual(1)
+    const signals = api.subscribeAgentRun.mock.calls.map((call) => call[2] as AbortSignal)
+    const lastSignal = signals[signals.length - 1]
+    expect(lastSignal.aborted).toBe(false)
+
     await wrapper.setProps({ show: false })
-    expect(api.subscribeAgentRun).toHaveBeenCalledTimes(1)
+    expect(lastSignal.aborted).toBe(true)
   })
 
   it('补充要求走标准 child session followup API', async () => {
