@@ -106,8 +106,10 @@ async def test_leadership_token_semantics_without_db() -> None:
 
 @requires_live_postgres
 @pytest.mark.asyncio
-async def test_elector_acquires_term_and_second_instance_fails_fast() -> None:
-    """获锁提交 term（递增）；第二个 elector 同锁 fail-fast。"""
+async def test_elector_acquires_increasing_term_and_blocks_other_instance() -> None:
+    """获锁提交 term（递增）；其它连接无法获取同一执行锁（跨实例 fail-fast 语义）。"""
+    import asyncpg
+
     await pg_manager.acquire_advisory_lock()
     try:
         async with pg_manager.get_async_session_context() as db:
@@ -119,13 +121,34 @@ async def test_elector_acquires_term_and_second_instance_fails_fast() -> None:
         assert token.valid
         assert token.term == previous_term + 1
 
-        second = LeaderElector(cluster_id="local")
-        with pytest.raises(RuntimeError, match="advisory lock"):
-            await second.acquire()
+        # 第二实例语义：进程外连接竞争同一锁必然失败（进程内 acquire 幂等，
+        # 不能用同一 pg_manager 模拟第二实例——跨实例 fail-fast 由
+        # tests/test_advisory_lock.py 与真实双进程冒烟覆盖）
+        dsn = (
+            f"postgresql://{DataBaseConfig.postgres_user}:"
+            f"{quote_plus(DataBaseConfig.postgres_password)}@"
+            f"{DataBaseConfig.postgres_host}:{DataBaseConfig.postgres_port}/"
+            f"{DataBaseConfig.postgres_database}"
+        )
+        conn = await asyncpg.connect(dsn)
+        try:
+            from noesis.storage.postgres.manager import (
+                _NOESIS_ADVISORY_LOCK_KEY1,
+                _NOESIS_ADVISORY_LOCK_KEY2,
+            )
+
+            acquired = await conn.fetchval(
+                "SELECT pg_try_advisory_lock($1, $2)",
+                _NOESIS_ADVISORY_LOCK_KEY1,
+                _NOESIS_ADVISORY_LOCK_KEY2,
+            )
+            assert acquired is False
+        finally:
+            await conn.close()
 
         await elector.release()
     finally:
-        await pg_manager.release_advisory_lock()
+        await pg_manager.close()
 
 
 @requires_live_postgres
@@ -143,7 +166,7 @@ async def test_foreign_cluster_id_fails_fast() -> None:
         with pytest.raises(ClusterIdMismatchError):
             await elector.acquire()
     finally:
-        await pg_manager.release_advisory_lock()
+        await pg_manager.close()
 
 
 @requires_live_postgres
@@ -165,4 +188,4 @@ async def test_migration_lock_serializes_and_releases() -> None:
         await pg_manager.acquire_migration_lock(timeout_seconds=0.5)
         await pg_manager.release_migration_lock()
     finally:
-        await pg_manager.release_advisory_lock()
+        await pg_manager.close()

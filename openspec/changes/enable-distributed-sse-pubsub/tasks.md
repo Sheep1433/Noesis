@@ -7,7 +7,7 @@
 ## 2. Leader角色与多进程lifespan
 
 - [x] 2.1 将现有advisory lock封装为leader elector（key 不变），新增含cluster identity的单行 t_runtime_leader term（migration 202608270001）；错cluster id时fail-fast（ClusterIdMismatchError）；token 失效拒绝 claim（claim 侧已接，checkpoint/terminal/Redis envelope 校验随 P4）
-- [x] 2.2 使用独立migration advisory lock串行执行 `init_database()`（阻塞轮询+超时）；双worker并发验证归入 2.4 双进程测试（migration lock 语义已单测，live-PG 用例在 test_leader_elector.py，待 dev server 停机后跑）
+- [x] 2.2 使用独立migration advisory lock串行执行 `init_database()`（阻塞轮询+超时）；双worker并发验证归入 2.4 双进程测试（migration lock 语义已单测；live-PG 用例已跑绿：term 递增/跨实例锁互斥/foreign cluster fail-fast）
 - [ ] 2.3 仅在leader启动/停止Run recovery、dispatcher、scheduler、memory dream、Telegram和Feishu runtime；follower不运行这些后台任务
 - [ ] 2.4 增加双进程测试，覆盖redis模式leader唯一、follower ready、失锁取消、优雅关闭先drain后释放lock、重新选举和singleton runtime不重复；memory模式第二进程fail-fast
 
