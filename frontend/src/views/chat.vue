@@ -3969,6 +3969,12 @@ function onComposerPaste(e: ClipboardEvent) {
   background-color: v-bind(backgroundColorVariable);
 }
 
+/* 会话列是 scroll-to-bottom 按钮的定位锚：右侧上下文栏展开时
+   按钮须跟随会话列居中，而不是跨全宽的外层布局 */
+.chat-main-inner {
+  position: relative;
+}
+
 .session-context-aside {
   position: relative;
   flex-shrink: 0;
