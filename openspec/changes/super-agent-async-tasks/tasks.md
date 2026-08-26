@@ -75,7 +75,7 @@
 - [x] 9.6 父会话卡片使用 `created_by_tool_call_id` 一一关联，禁止从工具文本正则提取 task id；同名并行调用保持独立
 - [x] 9.7 抽取共享 `ConversationView`，主 Agent 与 child drawer 共用 Markdown、工具块、审批、输入框和耗时统计
 - [x] 9.8 删除 `/bg-tasks/{id}/messages*`、subagent BgTaskPanel/BackgroundSubagentCollapse 消息分支及 progress 全量重拉
-- [ ] 9.9 补充并行、同名、多轮、审批、断线恢复、关闭退订、父会话软删级联回归测试
+- [x] 9.9 补充并行、同名、多轮、审批、断线恢复、关闭退订、父会话软删级联回归测试
 
 ## 10. 过渡层清理（t_bg_task 退役）
 
