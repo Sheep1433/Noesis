@@ -1093,10 +1093,9 @@ function applyUserSignal(signal: { type?: string, session_id?: string, status?: 
   if (!sessionId) {
     return
   }
-  // 终态：清徽章 + 会话有新活动（排序位置本地先行对齐，下次全量刷新校正）
-  const nextStatus = signal.type === 'run-terminal'
-    ? undefined
-    : (signal.status || (signal.type === 'run-started' ? 'running' : undefined))
+  // 终态：清徽章 + 会话有新活动（排序位置本地先行对齐，下次全量刷新校正）；
+  // 后端契约保证所有用户级信令与首帧都携带 status
+  const nextStatus = signal.type === 'run-terminal' ? undefined : signal.status
   const lists = [tableData, archivedTableData]
   let found = false
   for (const list of lists) {
@@ -1290,7 +1289,7 @@ const expandedAssistantRuns = ref<Set<string>>(new Set())
  * 「还在跑」的判据是流连接与本会话最后一条未完成轮——不依赖 parts
  * 流式状态（模型调用间隙会误判闪烁）；等待审批期间不计耗时。
  */
-function runElapsedText(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: { parts?: unknown[] }, uuid?: string }): string {
+function runElapsedText(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: { parts?: unknown[] } }): string {
   const started = item.run_started_at ?? item.created_at
   if (!started) {
     return ''
@@ -1412,10 +1411,6 @@ function assistantSubagentCount(item: {
     ).length
   }
   return (item.tool_calls ?? []).filter((call) => call.name === 'task').length
-}
-
-function runElapsedLabel(item: { created_at?: number, completed_at?: number, run_started_at?: number, messageContent?: MessageContentV1 }): string {
-  return runElapsedText(item)
 }
 
 // SSE：依赖 conversationItems / uuids / qa_type，须放在其后
@@ -3089,14 +3084,14 @@ function onComposerPaste(e: ClipboardEvent) {
                               :aria-expanded="isAssistantRunExpanded(item)"
                               @click="toggleAssistantRun(item)"
                             >
-                              <span>{{ runElapsedLabel(item) }}</span>
+                              <span>{{ runElapsedText(item) }}</span>
                               <span
                                 class="assistant-run-meta__chevron"
                                 :class="{ 'assistant-run-meta__chevron--expanded': isAssistantRunExpanded(item) }"
                                 aria-hidden="true"
                               >›</span>
                             </button>
-                            <span v-else class="assistant-run-meta__elapsed">{{ runElapsedLabel(item) }}</span>
+                            <span v-else class="assistant-run-meta__elapsed">{{ runElapsedText(item) }}</span>
                             <span v-if="assistantSubagentCount(item) > 0" class="assistant-run-meta__subagents">
                               · {{ assistantSubagentCount(item) }} 个子 Agent
                             </span>
