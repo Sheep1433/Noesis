@@ -54,6 +54,20 @@ def _stale_warning(mtime: float) -> str:
     return ""
 
 
+def _labels(user_id: str, paths: list[str]) -> list[str]:
+    """选条日志可读化：type/slug.md → [类型] 标签。"""
+    result: list[str] = []
+    for rel_path in paths:
+        try:
+            memory_type, slug = rel_path.removesuffix(".md").split("/", 1)
+            entry = MemoryStore.read_entry(user_id, memory_type, slug)
+            label = str((entry or {}).get("label") or slug)
+        except (ValueError, IndexError):
+            label = rel_path
+        result.append(f"[{label}]({rel_path})")
+    return result
+
+
 class MemoryEntriesMiddleware(
     AgentMiddleware[MemoryEntriesState, ContextT, ResponseT]
 ):
@@ -91,6 +105,17 @@ class MemoryEntriesMiddleware(
             )
             paths = []
         text = self._render(paths)
+        if paths:
+            labels = _labels(self.user_id, paths)
+            logger.info(
+                "memory entries injected run_id={} user_id={} entries={} "
+                "already_surfaced_skipped={} labels={}",
+                self.run_id,
+                self.user_id,
+                len(paths),
+                len(surfaced),
+                labels,
+            )
         return {
             "memory_entries_run_id": self.run_id,
             "memory_entries_text": text,
