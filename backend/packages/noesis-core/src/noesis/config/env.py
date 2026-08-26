@@ -180,6 +180,7 @@ class DistributedRunsSettings:
     handshake_buffer_max_bytes: int
     reconciliation_interval_seconds: float
     periodic_checkpoint_interval_seconds: float
+    envelope_payload_max_bytes: int
     redis_socket_timeout_seconds: float
     redis_connect_timeout_seconds: float
     redis_pool_max_connections: int
@@ -556,6 +557,7 @@ def _build_distributed_runs(
         handshake_buffer_max_bytes=dr.handshake_buffer_max_bytes,
         reconciliation_interval_seconds=dr.reconciliation_interval_seconds,
         periodic_checkpoint_interval_seconds=dr.periodic_checkpoint_interval_seconds,
+        envelope_payload_max_bytes=dr.envelope_payload_max_bytes,
         redis_socket_timeout_seconds=dr.redis_socket_timeout_seconds,
         redis_connect_timeout_seconds=dr.redis_connect_timeout_seconds,
         redis_pool_max_connections=dr.redis_pool_max_connections,

@@ -6,8 +6,6 @@ import asyncio
 import copy
 import hashlib
 import json
-import os
-import socket
 import time
 import uuid
 from typing import Any
@@ -17,7 +15,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.runtime.logging import logger
-from noesis.config.env import StreamConfig
+from noesis.config.env import DistributedRunsConfig, StreamConfig
+from noesis.chat.runs.bus import (
+    InMemoryRunBus,
+    RunBus,
+    WAKEUP_TOPIC_RUN_CREATED,
+)
+from noesis.chat.runs.launch_payload import LaunchPayload
 from noesis.config.code_enum import IntentEnum
 from noesis.chat.delivery.events import (
     RunAborted,
@@ -51,7 +55,6 @@ from noesis.services.chat_service import ChatService
 from noesis.services.compaction_service import compact_session
 
 
-_OWNER_INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"
 run_manager = RunManager(
     max_buffer_events=StreamConfig.run_event_buffer_max_events,
     max_buffer_bytes=StreamConfig.run_event_buffer_max_bytes,
@@ -71,6 +74,21 @@ run_manager = RunManager(
     terminal_retry_interval_seconds=StreamConfig.run_terminal_retry_interval_seconds,
     checkpoint_retry_interval_seconds=StreamConfig.persistence_retry_interval_seconds,
 )
+
+
+def _create_run_bus(settings: DistributedRunsConfig) -> RunBus:
+    if settings.backend == "redis":
+        # P4 接入 RedisRunBus；在此之前 redis 模式不提供「退化成 memory」的静默路径
+        raise NotImplementedError(
+            "redis run bus adapter 尚未接入（enable-distributed-sse-pubsub P4）"
+        )
+    return InMemoryRunBus(
+        envelope_payload_max_bytes=settings.envelope_payload_max_bytes
+    )
+
+
+run_bus = _create_run_bus(DistributedRunsConfig)
+
 
 # 注入 run_manager 给命令层（/status），避免 noesis.chat 直接 import noesis.services。
 from noesis.chat.commands.runtime import set_run_manager_provider  # noqa: E402
@@ -148,7 +166,9 @@ class RunService:
                 raise ConflictException(
                     message="请求标识已用于其他消息", data={"run_id": existing.id}
                 )
-            await cls._ensure_started_or_finalize(existing, request, current_user)
+            # 幂等重放：仍 queued 未 claim 则补发唤醒（wake-up 丢失由 dispatcher 补扫兜底）
+            if existing.status == RunStatus.QUEUED.value and not existing.owner_instance_id:
+                await cls._wakeup_run_created(existing.id)
             return existing
 
         active = await repository.get_active_for_session(user_id, request.session_id)
@@ -204,6 +224,26 @@ class RunService:
             message_sequence=message_sequences[1],
             created_at=now,
         )
+        # create 时冻结 model identity：排队期间会话默认模型变化不影响本 run
+        if qa_type == IntentEnum.TEST_CASE_QA.value[0]:
+            resolved_model: str | None = None
+        else:
+            from noesis.services.qa.helpers import _resolve_model_for_query
+
+            resolved_model = await _resolve_model_for_query(
+                session_id=request.session_id,
+                user_id=user_id,
+                request_model_id=str(extra["model_id"]) if extra.get("model_id") else None,
+                db=db,
+            )
+        launch_payload = LaunchPayload.from_create_request(
+            request,
+            user_id=user_id,
+            assistant_message_id=assistant_message_id,
+            qa_type=qa_type,
+            origin="web",
+            resolved_model=resolved_model,
+        )
         run = TAgentRun(
             id=run_id,
             user_id=user_id,
@@ -216,7 +256,9 @@ class RunService:
             status=RunStatus.QUEUED.value,
             last_sequence=0,
             attempt_id=1,
-            owner_instance_id=_OWNER_INSTANCE_ID,
+            owner_instance_id=None,
+            owner_term=0,
+            launch_payload=launch_payload.to_dict(),
             snapshot={"parts": []},
             created_at=now,
             updated_at=now,
@@ -261,57 +303,21 @@ class RunService:
                 raise ServiceException(message="创建任务失败，请稍后重试") from exc
             if existing.request_digest != digest:
                 raise ConflictException(message="请求标识已用于其他消息")
-            await cls._ensure_started_or_finalize(existing, request, current_user)
+            if existing.status == RunStatus.QUEUED.value and not existing.owner_instance_id:
+                await cls._wakeup_run_created(existing.id)
             return existing
 
-        await cls._ensure_started_or_finalize(run, request, current_user)
+        # 提交后唤醒 dispatcher；失败只记日志（补扫兜底），不影响创建结果
+        await cls._wakeup_run_created(run.id)
         return run
 
     @classmethod
-    async def _ensure_started_or_finalize(
-        cls, run: TAgentRun, request: CreateRunRequest, current_user: CurrentUser
-    ) -> None:
-        start_task = asyncio.create_task(
-            cls._ensure_started(run, request, current_user),
-            name=f"agent-run-register:{run.id}",
-        )
+    async def _wakeup_run_created(cls, run_id: str) -> None:
         try:
-            # HTTP 请求取消不能连带取消已提交 run 的注册；shield 后的启动任务会继续完成。
-            await asyncio.shield(start_task)
-        except asyncio.CancelledError:
-            # 确认已提交 run 最终完成注册或被收口，避免丢失后台任务异常。
-            try:
-                await asyncio.shield(start_task)
-            except Exception:
-                logger.exception(
-                    "agent run detached start failed run_id={} session_id={}",
-                    run.id,
-                    run.session_id,
-                )
-                try:
-                    await asyncio.shield(cls._finalize_start_failure(run))
-                except Exception:
-                    logger.exception(
-                        "agent run detached start cleanup failed run_id={} session_id={}",
-                        run.id,
-                        run.session_id,
-                    )
-            raise
-        except Exception as exc:
-            logger.exception(
-                "agent run start failed after commit run_id={} session_id={}",
-                run.id,
-                run.session_id,
-            )
-            try:
-                await cls._finalize_start_failure(run)
-            except Exception:
-                logger.exception(
-                    "agent run start failure cleanup failed run_id={} session_id={}",
-                    run.id,
-                    run.session_id,
-                )
-            raise ServiceException(message="任务启动失败，请稍后重试") from exc
+            await run_bus.wakeup(WAKEUP_TOPIC_RUN_CREATED, {"run_id": run_id})
+        except Exception:
+            # 唤醒失败不回滚创建：dispatcher 周期补扫兜底
+            logger.exception("run-created wakeup failed run_id={}", run_id)
 
     @classmethod
     async def _finalize_start_failure(cls, run: TAgentRun) -> None:
@@ -349,9 +355,17 @@ class RunService:
                 await cleanup_db.rollback()
 
     @classmethod
-    async def _ensure_started(
-        cls, run: TAgentRun, request: CreateRunRequest, current_user: CurrentUser
+    async def start_queued_run(
+        cls,
+        run: TAgentRun,
+        payload: LaunchPayload,
+        current_user: CurrentUser,
     ) -> None:
+        """启动已 claim 的 queued Run（dispatcher 调用；幂等，重复启动直接返回）。
+
+        run 参数须为 DB 权威行（launch_payload / owner_term 已就位）；
+        current_user 由调用方从 DB 用户记录重建，不依赖请求进程上下文。
+        """
         try:
             run_manager.get(run.id)
             return
@@ -370,7 +384,7 @@ class RunService:
             status=RunStatus.RUNNING,
             attempt_id=run.attempt_id,
         )
-        qa_request = cls._to_qa_request(request, run.qa_type)
+        qa_request = payload.to_qa_query_request()
         persist_sink = PersistSink(
             checkpoint_interval_seconds=StreamConfig.checkpoint_interval_seconds
         )
@@ -560,31 +574,6 @@ class RunService:
             return TerminalCommitResult(
                 "already_finalized", cls._snapshot_from_row(row)
             )
-
-    @staticmethod
-    def _to_qa_request(request: CreateRunRequest, qa_type: str) -> QaQueryRequest:
-        extra = request.extra or {}
-        return QaQueryRequest(
-            query=request.content,
-            qa_type=qa_type,
-            chat_id=request.session_id,
-            file_dict=extra.get("file_dict") if isinstance(extra.get("file_dict"), dict) else None,
-            kb_collections=(
-                extra.get("kb_collections") if isinstance(extra.get("kb_collections"), list) else None
-            ),
-            kb_search_enabled=(
-                extra.get("kb_search_enabled")
-                if isinstance(extra.get("kb_search_enabled"), bool)
-                else None
-            ),
-            model_id=str(extra["model_id"]) if extra.get("model_id") else None,
-            mcp_servers=extra.get("mcp_servers") if isinstance(extra.get("mcp_servers"), list) else None,
-            enabled_skills=(
-                extra.get("enabled_skills") if isinstance(extra.get("enabled_skills"), list) else None
-            ),
-            mentions=extra.get("mentions") if isinstance(extra.get("mentions"), list) else None,
-            extra=extra or None,
-        )
 
     @classmethod
     async def _persist_projection(cls, run_id: str, projection: RunProjection) -> None:

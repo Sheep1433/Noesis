@@ -916,6 +916,41 @@ async def stream_session_events(
     )
 
 
+async def _subscribe_with_queued_wait(
+    run_id: str,
+    user_id: str,
+    after_sequence: int,
+    db,
+    snapshot,
+):
+    """订阅 run 流；run 仍 queued（dispatcher 未 claim）时有界等待启动。
+
+    create 已与 producer 启动解耦（enable-distributed-sse-pubsub）：
+    前端在创建返回后立即开流，可能早于 dispatcher claim。memory 模式
+    claim 为毫秒级；等待窗口内 keepalive 由上层流循环负责。
+    返回订阅句柄；配额超限返回 SubscriptionLimitExceeded 实例。
+    """
+    import asyncio as _asyncio
+
+    from noesis.chat.runs import RunStatus
+
+    deadline = _asyncio.get_running_loop().time() + 10.0
+    while True:
+        subscription = await RunService.subscribe(run_id, user_id, after_sequence, db)
+        if subscription is not None:
+            return subscription
+        if snapshot.status != RunStatus.QUEUED:
+            return None
+        if _asyncio.get_running_loop().time() > deadline:
+            return None
+        await _asyncio.sleep(0.2)
+        # 刷新快照：dispatcher claim 启动会推进状态
+        try:
+            snapshot = await RunService.get(run_id, user_id, db)
+        except Exception:
+            return None
+
+
 @chat_router.get("/runs/{run_id}/stream", summary="订阅 Agent 任务事件")
 async def stream_run(
     run_id: str,
@@ -999,8 +1034,8 @@ async def stream_run(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     try:
-        subscription = await RunService.subscribe(
-            run_id, str(current_user.user_id), max(0, after_sequence), db
+        subscription = await _subscribe_with_queued_wait(
+            run_id, str(current_user.user_id), max(0, after_sequence), db, snapshot
         )
     except SubscriptionLimitExceeded:
         return ResponseUtil.too_many_requests(
@@ -1066,10 +1101,7 @@ async def stream_run(
                 if isinstance(item.event, StreamDone):
                     return
         finally:
-            try:
-                await run_manager.unsubscribe(run_id, subscription.queue)
-            except KeyError:
-                pass
+            await subscription.close()
 
     return StreamingResponse(
         event_stream(),

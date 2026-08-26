@@ -120,6 +120,50 @@ class AgentRunRepository:
         )
         return list(result.scalars().all())
 
+    async def list_claimable_queued(self, *, limit: int = 20) -> list[TAgentRun]:
+        """可 claim 的 queued Run：未被任何实例认领（owner IS NULL 且未写入 term）。"""
+        result = await self.db.execute(
+            select(TAgentRun)
+            .where(
+                TAgentRun.status == RunStatus.QUEUED.value,
+                TAgentRun.owner_instance_id.is_(None),
+                TAgentRun.owner_term == 0,
+            )
+            .order_by(TAgentRun.created_at)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def claim_queued(
+        self,
+        *,
+        run_id: str,
+        owner_instance_id: str,
+        owner_term: int,
+        now_ms: int,
+    ) -> bool:
+        """CAS claim：仅当仍 queued 且未被认领时写入 owner 与 term。
+
+        leader 任期有效性由调用方（dispatcher 的 leadership token）在进程内
+        校验；owner_term 落库供重启 recovery 区分「本任期内 claim」与
+        「旧任期残留」。
+        """
+        result = await self.db.execute(
+            update(TAgentRun)
+            .where(
+                TAgentRun.id == run_id,
+                TAgentRun.status == RunStatus.QUEUED.value,
+                TAgentRun.owner_instance_id.is_(None),
+                TAgentRun.owner_term == 0,
+            )
+            .values(
+                owner_instance_id=owner_instance_id,
+                owner_term=owner_term,
+                updated_at=now_ms,
+            )
+        )
+        return result.rowcount == 1
+
     async def save_checkpoint(
         self,
         *,

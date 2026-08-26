@@ -160,6 +160,16 @@ class RunSubscription:
     snapshot: RunSnapshot
     queue: asyncio.Queue[SequencedRunEvent | SlowSubscriber]
     replay: tuple[SequencedRunEvent, ...] = ()
+    closer: Callable[[], Awaitable[None]] | None = None
+
+    async def close(self) -> None:
+        """幂等注销订阅（API 层不得直调 RunManager.unsubscribe）。"""
+        closer, self.closer = self.closer, None
+        if closer is not None:
+            try:
+                await closer()
+            except KeyError:
+                pass  # run 已回收
 
 
 Producer = Callable[[Callable[[Any], Awaitable[SequencedRunEvent]]], Awaitable[None]]
@@ -616,6 +626,22 @@ class RunManager:
             raise
         except Exception:
             raise
+
+    async def check_run_capacity(self, user_id: str) -> None:
+        """容量预检（不注册）：dispatcher 在 claim 前调用，满则留 queued 等下轮。"""
+        async with self._registry_lock:
+            active = [
+                run
+                for run in self._runs.values()
+                if run.status not in TERMINAL_RUN_STATUSES
+            ]
+            if len(active) >= self.max_active_runs:
+                raise RunCapacityExceeded("active run limit exceeded")
+            if (
+                sum(1 for run in active if run.user_id == user_id)
+                >= self.max_user_active_runs
+            ):
+                raise RunCapacityExceeded("user active run limit exceeded")
 
     def get(self, run_id: str) -> RunHandle:
         try:
@@ -1155,7 +1181,13 @@ class RunManager:
         )
         continuous = not buffered or buffered[0].sequence == after_sequence + 1
         replay = buffered if after_sequence > 0 and continuous else ()
-        return RunSubscription(snapshot=snapshot, queue=queue, replay=replay)
+        run_id = handle.run_id
+        return RunSubscription(
+            snapshot=snapshot,
+            queue=queue,
+            replay=replay,
+            closer=lambda run_id=run_id, queue=queue: self.unsubscribe(run_id, queue),
+        )
 
     async def unsubscribe(
         self, run_id: str, queue: asyncio.Queue[SequencedRunEvent | SlowSubscriber]

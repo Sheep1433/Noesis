@@ -246,6 +246,7 @@ class DistributedRunsYamlSection(BaseModel):
     handshake_buffer_max_bytes: int = Field(default=512 * 1024, gt=0)
     reconciliation_interval_seconds: float = Field(default=30.0, gt=0)
     periodic_checkpoint_interval_seconds: float = Field(default=15.0, gt=0)
+    envelope_payload_max_bytes: int = Field(default=256 * 1024, gt=0)
     redis_socket_timeout_seconds: float = Field(default=5.0, gt=0)
     redis_connect_timeout_seconds: float = Field(default=3.0, gt=0)
     redis_pool_max_connections: int = Field(default=20, gt=0)

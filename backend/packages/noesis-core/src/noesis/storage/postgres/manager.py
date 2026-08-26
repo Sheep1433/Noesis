@@ -30,6 +30,9 @@ from noesis.runtime.logging import logger
 # 所有 Noesis backend 实例使用同一 key，保证只有一个能获取 lock。
 _NOESIS_ADVISORY_LOCK_KEY1 = 0x4E6F6573  # "Noes" (Noesis)
 _NOESIS_ADVISORY_LOCK_KEY2 = 0x69735F61  # "is_a" (is_active)
+# migration 专用 advisory lock key（与执行锁不同 key；多 worker 并发启动时串行跑 migration）
+_NOESIS_MIGRATION_LOCK_KEY1 = 0x4E6F6573  # "Noes" (Noesis)
+_NOESIS_MIGRATION_LOCK_KEY2 = 0x6D696772  # "migr" (migration)
 
 ASYNC_SQLALCHEMY_DATABASE_URL = (
     f'postgresql+asyncpg://{DataBaseConfig.postgres_user}:{quote_plus(DataBaseConfig.postgres_password)}@'
@@ -126,6 +129,7 @@ class PostgresManager:
         self._migrated = False
         self._advisory_lock_conn: asyncpg.Connection | None = None
         self._advisory_lock_ready: bool | None = None
+        self._migration_lock_conn: asyncpg.Connection | None = None
 
     @property
     def advisory_lock_ready(self) -> bool | None:
@@ -204,6 +208,59 @@ class PostgresManager:
         self._ensure_engine()
         assert self.inspector is not None
         return self.inspector
+
+    async def acquire_migration_lock(self, *, timeout_seconds: float = 120.0) -> None:
+        """获取 migration 专用 advisory lock（阻塞轮询 + 超时）。
+
+        执行锁移到 migration 之后（P3 起 follower 也需完成 migration 才 ready），
+        原先「执行锁保护 migration 串行」的保护消失，由本锁接管。
+        """
+        if self._migration_lock_conn is not None:
+            return
+        dsn = (
+            f"postgresql://{DataBaseConfig.postgres_user}:"
+            f"{quote_plus(DataBaseConfig.postgres_password)}@"
+            f"{DataBaseConfig.postgres_host}:{DataBaseConfig.postgres_port}/"
+            f"{DataBaseConfig.postgres_database}"
+        )
+        conn = await asyncpg.connect(dsn)
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        try:
+            while True:
+                acquired = await conn.fetchval(
+                    "SELECT pg_try_advisory_lock($1, $2)",
+                    _NOESIS_MIGRATION_LOCK_KEY1,
+                    _NOESIS_MIGRATION_LOCK_KEY2,
+                )
+                if acquired:
+                    break
+                if asyncio.get_running_loop().time() > deadline:
+                    raise TimeoutError(
+                        "等待 migration advisory lock 超时：另一实例可能正在执行迁移"
+                    )
+                await asyncio.sleep(0.5)
+        except Exception:
+            await conn.close()
+            raise
+        self._migration_lock_conn = conn
+        logger.info("已获取 migration advisory lock key=({}, {})", hex(_NOESIS_MIGRATION_LOCK_KEY1), hex(_NOESIS_MIGRATION_LOCK_KEY2))
+
+    async def release_migration_lock(self) -> None:
+        """释放 migration lock（init_database 完成后立即调用，非 lifespan 退出）。"""
+        conn = self._migration_lock_conn
+        self._migration_lock_conn = None
+        if conn is None:
+            return
+        try:
+            await conn.fetchval(
+                "SELECT pg_advisory_unlock($1, $2)",
+                _NOESIS_MIGRATION_LOCK_KEY1,
+                _NOESIS_MIGRATION_LOCK_KEY2,
+            )
+        except Exception:
+            logger.warning("释放 migration lock 时异常（连接断开则 lock 自动释放）")
+        finally:
+            await conn.close()
 
     async def acquire_advisory_lock(self) -> None:
         """获取固定 application advisory lock。专用连接在整个 lifespan 中保持。

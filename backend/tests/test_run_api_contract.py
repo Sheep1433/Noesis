@@ -142,15 +142,14 @@ async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> 
             event=StreamDone(),
         )
     )
-    subscription = SimpleNamespace(snapshot=snapshot, replay=(), queue=queue)
+    close = AsyncMock()
+    subscription = SimpleNamespace(snapshot=snapshot, replay=(), queue=queue, close=close)
     monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=snapshot))
     monkeypatch.setattr(
         chat_api.RunService,
         "subscribe",
         AsyncMock(return_value=subscription),
     )
-    unsubscribe = AsyncMock()
-    monkeypatch.setattr(chat_api.run_manager, "unsubscribe", unsubscribe)
 
     response = await chat_api.stream_run(
         "run-stream",
@@ -161,7 +160,8 @@ async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> 
 
     assert any("run-snapshot" in chunk for chunk in chunks)
     assert any("[DONE]" in chunk for chunk in chunks)
-    unsubscribe.assert_awaited_once_with("run-stream", queue)
+    # 订阅释放走 subscription.close()（API 不再直调 run_manager.unsubscribe）
+    close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -681,7 +681,17 @@ def test_all_qa_types_keep_run_and_assistant_identity(qa_type: str) -> None:
         client_request_id=f"request-{qa_type}",
         extra={"qa_type": qa_type},
     )
-    qa_request = RunService._to_qa_request(request, qa_type)
+    from noesis.chat.runs.launch_payload import LaunchPayload
+
+    payload = LaunchPayload.from_create_request(
+        request,
+        user_id="user-1",
+        assistant_message_id="message-1",
+        qa_type=qa_type,
+        origin="web",
+        resolved_model=None,
+    )
+    qa_request = payload.to_qa_query_request()
     projection = RunProjection(
         run_id="run-1",
         user_id="user-1",
@@ -795,7 +805,13 @@ async def test_create_flushes_messages_before_adding_run(monkeypatch) -> None:
     repo.get_by_client_request = AsyncMock(return_value=None)
     repo.get_active_for_session = AsyncMock(return_value=None)
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repo)
-    monkeypatch.setattr(RunService, "_ensure_started_or_finalize", AsyncMock())
+    # create 不再进程内启动 producer：模型解析在 create 时冻结，wakeup 唤醒 dispatcher
+    import noesis.services.qa.helpers as qa_helpers
+
+    monkeypatch.setattr(
+        qa_helpers, "_resolve_model_for_query", AsyncMock(return_value="model-x")
+    )
+    monkeypatch.setattr(run_service.run_bus, "wakeup", AsyncMock())
 
     request = CreateRunRequest(
         session_id="session-1",
@@ -850,6 +866,11 @@ async def test_create_rolls_back_integrity_error_from_run_flush(monkeypatch) -> 
     repo.get_by_client_request = AsyncMock(side_effect=[None, None])
     repo.get_active_for_session = AsyncMock(side_effect=[None, None])
     monkeypatch.setattr(run_service, "AgentRunRepository", lambda _db: repo)
+    import noesis.services.qa.helpers as qa_helpers
+
+    monkeypatch.setattr(
+        qa_helpers, "_resolve_model_for_query", AsyncMock(return_value="model-x")
+    )
 
     request = CreateRunRequest(
         session_id="session-1",
@@ -865,30 +886,6 @@ async def test_create_rolls_back_integrity_error_from_run_flush(monkeypatch) -> 
     assert exc_info.value.message == "创建任务失败，请稍后重试"
     db.rollback.assert_awaited_once()
     db.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_committed_run_start_failure_is_finalized(monkeypatch) -> None:
-    """commit 后 producer 注册失败时不得留下 queued run。"""
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock, MagicMock
-
-    run = SimpleNamespace(id="run-start-fail", session_id="session-1")
-    request = MagicMock()
-    current_user = MagicMock()
-    monkeypatch.setattr(
-        RunService,
-        "_ensure_started",
-        AsyncMock(side_effect=RuntimeError("cannot register producer")),
-    )
-    cleanup = AsyncMock()
-    monkeypatch.setattr(RunService, "_finalize_start_failure", cleanup)
-
-    with pytest.raises(ServiceException) as exc_info:
-        await RunService._ensure_started_or_finalize(run, request, current_user)
-
-    assert exc_info.value.message == "任务启动失败，请稍后重试"
-    cleanup.assert_awaited_once_with(run)
 
 
 @pytest.mark.asyncio
