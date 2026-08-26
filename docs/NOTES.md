@@ -369,7 +369,7 @@
 
 ## 2026-07-11 — 前端 HTTP 环境复制失败
 
-- **现象**：zzqroot（`http://43.134.128.65:28468`）点击对话/知识库「复制」提示失败。
+- **现象**：zzqroot 服务器（Noesis 公网入口）点击对话/知识库「复制」提示失败。
 - **根因**：非安全上下文（HTTP）下 `navigator.clipboard` 不可用；曾短期加 `execCommand` 降级。
 - **现状**：去掉 `execCommand` 降级，仅保留 HTTPS 下 Clipboard API；待海外机绑定域名 + 免费证书后再启用复制。
 
