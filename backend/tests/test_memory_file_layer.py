@@ -289,3 +289,24 @@ async def test_consolidation_drops_dead_index_lines(users_root: Path) -> None:
     removed = MCS._drop_dead_entries("u1", MemoryStore.read_index("u1"))
     assert removed == 1
     assert [e.slug for e in MemoryStore.read_index("u1").entries] == [entry.slug]
+
+
+# ----- 消息格式解析（{"parts": [...]} 落库形态回归） -----
+
+
+def test_message_text_parses_parts_dict_format() -> None:
+    text = extraction.MemoryExtractionService._message_text(
+        {"parts": [
+            {"type": "reasoning", "content": "思考过程"},
+            {"type": "text", "content": "正式回答"},
+        ]}
+    )
+    assert text == "正式回答"
+
+
+def test_message_text_tolerates_legacy_formats() -> None:
+    svc = extraction.MemoryExtractionService
+    assert svc._message_text("裸字符串") == "裸字符串"
+    assert svc._message_text([{"type": "text", "content": "a"}, "b"]) == "a\nb"
+    assert svc._message_text(None) == ""
+    assert svc._message_text({"parts": "整段文本"}) == "整段文本"

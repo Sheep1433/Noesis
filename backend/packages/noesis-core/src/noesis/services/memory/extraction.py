@@ -215,20 +215,27 @@ class MemoryExtractionService:
 
     @staticmethod
     def _message_text(content: object) -> str:
-        """multipart JSON 消息提取纯文本（工具输出等非文本段丢弃）。"""
+        """multipart 消息提取纯文本（reasoning/工具段丢弃）。
+
+        落库形态为 ``{"parts": [{"type": "text", ...}, ...]}``；旧/兼容
+        形态有裸字符串与裸 parts 列表，一并容忍。
+        """
         if isinstance(content, str):
             return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    parts.append(str(part.get("content", "")))
-                elif isinstance(part, str):
-                    parts.append(part)
-            return "\n".join(p for p in parts if p)
         if isinstance(content, dict):
-            return str(content.get("content", ""))
-        return ""
+            parts = content.get("parts")
+            if isinstance(parts, str):
+                return parts
+            content = parts if isinstance(parts, list) else []
+        if not isinstance(content, list):
+            return ""
+        texts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                texts.append(str(part.get("content", "")))
+            elif isinstance(part, str):
+                texts.append(part)
+        return "\n".join(t for t in texts if t)
 
     @staticmethod
     async def _load_injected(db: AsyncSession, session_id: str) -> list[str]:
@@ -273,17 +280,13 @@ class MemoryExtractionService:
             injected="\n".join(injected_lines),
             messages=messages,
         )
-        try:
-            llm = get_llm(model_id=MemoryConfig.extraction_model or None)
-            structured = llm.with_structured_output(ExtractionResult)
-            result = await structured.ainvoke(prompt)
-        except Exception as exc:
-            logger.warning(
-                "memory extraction llm failed user_id={} error={}", user_id, type(exc).__name__
-            )
-            return ExtractionResult()
+        # LLM 失败直接抛出：调用方不标记「已抽取」，下次 sweep 重试
+        # （spec：进程崩溃后系统 SHALL 补扫未抽取会话；失败≠无价值）。
+        llm = get_llm(model_id=MemoryConfig.extraction_model or None)
+        structured = llm.with_structured_output(ExtractionResult)
+        result = await structured.ainvoke(prompt)
         if not isinstance(result, ExtractionResult):
-            return ExtractionResult()
+            raise RuntimeError("extraction llm returned unexpected payload")
         return result
 
     # ----- 应用 -----
