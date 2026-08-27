@@ -55,10 +55,6 @@ model:
   #     label: Nemotron 3 Ultra（1M 上下文）
   #     temperature: 0.6
   #     context_window: 1000000
-  #   - id: north-mini-code-free
-  #     label: North Mini Code（代码）
-  #     temperature: 0.5
-  #     context_window: 256000
 
   # --- DeepSeek 官方直连（需 .env DEEPSEEK_API_KEY）---
   # type: deepseek
