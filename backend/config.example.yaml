@@ -33,23 +33,17 @@ database:
   pool_timeout: 30
 
 model:
-  type: qwen
-  name: qwen-plus
+  # 默认对话模型：kilo 免费网关（免费模型当前不校验 Key，占位 public）；
+  # 换付费/官方端点改 type/name/base_url，机密 Key 走 .env MODEL_API_KEY（env 优先）
+  type: openai
+  name: kilo-auto/free
   temperature: 0.75
-  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-  show_thinking_process: true
-  # 运行时可选模型目录；前端会话级切换 model_id，未配置时仅使用上方默认 model
-  # 用户自定义 Provider 平台预设（部署者维护；选预设 → base_url 自动填，用户只填 Key）
-  # 敏感凭证不放预设；归因类 header 可放
-  # 平台端点 Key：OpenCode Zen 为公开值 public（非机密，故放 yaml）；机密 Key 走 .env MODEL_API_KEY
+  base_url: https://api.kilo.ai/api/gateway
   api_key: public
+  show_thinking_process: true
+  # 用户自定义 Provider 的平台预设（部署者维护；选预设 → base_url 自动填，用户只填 Key）
+  # 敏感凭证不放预设；归因类 header 可放
   provider_presets:
-    - id: opencode
-      label: opencode
-      base_url: https://opencode.ai/zen/v1
-      headers:
-        HTTP-Referer: https://opencode.ai/
-        X-Title: opencode
     - id: deepseek
       label: deepseek
       base_url: https://api.deepseek.com/v1
@@ -60,30 +54,23 @@ model:
       label: minimax
       base_url: https://api.minimax.chat/v1
 
-  default_catalog_id: qwen-plus
+  # 目录只保留部署默认模型（开箱可用 + 服务端内部 LLM 任务的底座）；
+  # 免费模型会轮换，其余在设置页「获取可用模型」按当下真实列表勾选添加
+  default_catalog_id: kilo-auto/free
   catalog:
-    - id: qwen-plus
-      label: Qwen Plus
-      context_window: 129024
-    - id: qwen-vl-max
-      label: Qwen VL Max（识图）
-    - id: qwen-max
-      label: Qwen Max（更强）
-      temperature: 0.7
-      context_window: 30720
-  # --- OpenCode Zen 免费模型示例（取消注释并改 default_catalog_id；.env MODEL_API_KEY=public）---
+    - id: kilo-auto/free
+      label: Kilo Auto
+      context_window: 256000
+
+  # --- 其它端点示例 ---
+  # 阿里云 DashScope Qwen（需 .env MODEL_API_KEY）：
+  # type: qwen
+  # name: qwen-plus
+  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # OpenCode Zen 免费网关（公开 Key public；免费模型靠 -free 后缀识别）：
   # type: opencode
   # name: deepseek-v4-flash-free
   # base_url: https://opencode.ai/zen/v1
-  # default_catalog_id: deepseek-v4-flash-free
-  # catalog:
-  #   - id: deepseek-v4-flash-free
-  #     label: deepseek V4 Flash（快速）
-  #     context_window: 200000
-
-  #   - id: nemotron-3-ultra-free
-  #     label: Nemotron 3 Ultra（1M 上下文）
-  #     context_window: 1000000
 
   # 单次 LLM HTTP 读超时（秒）：流式为相邻 chunk 间隔上限；深度研究建议 ≥120
   request_timeout: 120

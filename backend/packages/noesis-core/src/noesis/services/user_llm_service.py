@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
@@ -34,6 +35,8 @@ from noesis.storage.postgres.models.user_llm import (
     TUserLLMPreference,
     TUserLLMProvider,
 )
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_API_TYPES = {"openai", "deepseek", "qwen", "minimax", "opencode"}
 
@@ -648,25 +651,39 @@ class UserLLMService:
                 break
         models_url = f"{base_url}/models"
 
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True
-            ) as client:
-                response = await client.get(
+        # 出网经本地代理时常见间歇性失败（代理握手慢 / TLS 被干扰）；
+        # 网络层异常重试一次再判失败，且必须留日志（否则服务端完全不可诊断）
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        }
+        response = None
+        last_error: Optional[httpx.RequestError] = None
+        for attempt in (1, 2):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True
+                ) as client:
+                    response = await client.get(models_url, headers=headers)
+                break
+            except httpx.RequestError as error:
+                last_error = error
+                logger.warning(
+                    "models endpoint probe failed (attempt %d, url=%s): %s: %s",
+                    attempt,
                     models_url,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Accept": "application/json",
-                    },
+                    type(error).__name__,
+                    error,
                 )
-        except httpx.RequestError:
+        if response is None:
+            detail = f"（{type(last_error).__name__}）" if last_error else ""
             return {
                 "ok": False,
                 "status": "network_error",
                 "provider_reachable": False,
                 "discovery_supported": False,
                 "models": [],
-                "message": "无法连接模型服务，请检查端点地址和网络",
+                "message": f"无法连接模型服务{detail}，请检查端点地址、网络或代理",
             }
 
         if response.status_code in (401, 403):
@@ -752,6 +769,13 @@ class UserLLMService:
                 if isinstance(value, (int, float)) and value > 0:
                     context_window = int(value)
                     break
+            # 布尔/数值原始字段透传（如 kilo 的 isFree），供预设筛选规则前端匹配；
+            # 字符串字段体积大且无筛选价值，不透传
+            flags = {
+                str(k): v
+                for k, v in list(metadata.items())[:16]
+                if isinstance(v, (bool, int, float))
+            }
             models.append(
                 {
                     "model_id": model_id,
@@ -759,6 +783,7 @@ class UserLLMService:
                     "owned_by": metadata.get("owned_by"),
                     "context_window": context_window,
                     "context_source": "provider" if context_window else "unknown",
+                    "flags": flags,
                 }
             )
 
