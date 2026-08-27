@@ -26,6 +26,8 @@ env:
   MODEL_API_KEY: sk-ci-placeholder
   EMBEDDING_MODEL_API_KEY: sk-ci-placeholder
   DASHSCOPE_API_KEY: sk-ci-placeholder
+  # 分布式 Run 协调：CI 单进程显式声明 memory（生产必填、无默认）
+  NOESIS_RUN_BUS_BACKEND: memory
 
 jobs:
   backend:
