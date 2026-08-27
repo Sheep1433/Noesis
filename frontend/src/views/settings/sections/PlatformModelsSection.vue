@@ -661,6 +661,7 @@ onMounted(() => {
             <span class="field-label">API 密钥</span>
             <n-input
               v-model:value="providerForm.api_key" size="small" class="flat-input" type="password" show-password-on="click"
+              :input-props="{ autocomplete: 'new-password' }"
               :placeholder="editingProviderId ? '已配置——输入新值可替换' : 'sk-…（加密存储）'"
             />
           </label>

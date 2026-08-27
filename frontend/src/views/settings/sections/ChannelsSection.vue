@@ -130,7 +130,7 @@ onMounted(() => void refresh())
       <n-select v-model:value="form.type" :options="channelOptions" :disabled="Boolean(editingId)" />
       <n-input v-model:value="form.display_name" placeholder="显示名称" />
       <template v-if="form.type === 'telegram'">
-        <n-input v-model:value="form.bot_token" type="password" show-password-on="click" :placeholder="editingId ? '留空则保留现有 Token' : 'Bot Token'" />
+        <n-input v-model:value="form.bot_token" type="password" show-password-on="click" :input-props="{ autocomplete: 'new-password' }" :placeholder="editingId ? '留空则保留现有 Token' : 'Bot Token'" />
         <n-input v-model:value="form.pairing_chat_id" placeholder="配对 Chat ID（可稍后填写）" />
       </template>
       <template v-else>
