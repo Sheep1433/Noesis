@@ -38,9 +38,11 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 | 模块 | 说明 |
 |------|------|
 | **知识库** | 文档上传、DeepDoc 解析、分块入库；hybrid 检索 + rerank；集合级处理/查询参数配置 |
+| **自动记忆** | 会话终态增量抽取五类记忆（偏好/目标/决策/经验/注意事项，md 文件层），新会话自动选条注入；AutoDream 定期整理；设置页单开关 |
+| **后台子 Agent** | 智能体对话可启动后台任务（异步子会话），支持审批、中途补充要求与终态通知回流 |
 | **Skills 管理** | 自定义 Agent Skills 包，深度研究/智能体场景以 `/skills/` 虚拟路径只读挂载 |
 | **MCP 客户端** | 独立页面调试 MCP 服务连接与工具调用 |
-| **会话管理** | 多会话历史、按 `qa_type` 分类、流式中断（stop token）与断连恢复 |
+| **会话管理** | 多会话历史、按 `qa_type` 分类、流式中断（stop token）、断连恢复与跨窗口信令发现 |
 | **模型目录** | `config.yaml` 配置多模型目录，前端会话级切换 |
 | **可观测性** | 可选接入 Langfuse 追踪 Agent 调用链 |
 
@@ -131,7 +133,7 @@ Agent 自主加载 Skills、在沙箱工作区创建研究目录、联网检索�
 
 `/settings` 提供模型与 Provider、MCP、自动化、通讯通道、画像与记忆、通知、系统诊断及设置迁移入口。新增设置 API 使用 Cookie Session 与 CSRF；导出文件不包含 API Key、Token、敏感 Header、消息、附件、checkpoint 或运行日志。
 
-- 数据库升级由启动流程执行 migration `202607260001`，新增 Provider、模型用途、自动化运行、通知偏好与设置审计表。
+- 数据库升级由启动流程自动执行 Alembic 迁移（迁移文件见 `backend/packages/noesis-core/src/noesis/storage/migrations/versions/`），无需手工干预。
 - `backend/config.yaml` 的 `settings_features` 可分别控制 `provider_models`、`mcp_management`、`automation_operations`、`channel_operations`、`agent_context`、`observability` 与 `import_export`。
 - 回滚前端时可关闭对应 capability；数据库新增表和已有设置数据应保留。
 - 自动化运行明细默认保留 30 天、每用户最多 1000 条；清理不删除任务的最新状态摘要。
