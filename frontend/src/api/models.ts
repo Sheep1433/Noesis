@@ -29,6 +29,15 @@ export interface PlatformProvider {
   base_url: string
 }
 
+/** 发现列表行（OpenAI /models 归一化 + 原始布尔/数值字段透传） */
+export interface DiscoveredModelRow {
+  model_id: string
+  label: string
+  context_window: number
+  context_source?: 'provider' | 'unknown' | 'catalog' | string
+  flags?: Record<string, boolean | number>
+}
+
 export interface ChatModelCatalog {
   models: ChatModelOption[]
   platform_provider?: PlatformProvider | null
@@ -52,7 +61,7 @@ export async function discoverPlatformModels() {
   return parseAuthJson<{
     ok: boolean
     status: string
-    models: { model_id: string, label: string, context_window: number }[]
+    models: DiscoveredModelRow[]
     message: string
   }>(res)
 }

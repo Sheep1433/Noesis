@@ -112,6 +112,24 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     return tuple(entries)
 
 
+def provider_display_label(model_type: str, base_url: str) -> str:
+    """Provider 展示标签：预设名优先，无预设回退端点域名（去 www./api. 前缀）。
+
+    model_type 是协议选择器（openai/qwen/...），不是厂商名——
+    默认端点无对应预设（如 kilo 走 openai 协议）时以域名展示，避免裸协议名误导。
+    """
+    from urllib.parse import urlparse
+
+    from noesis.config.env import ModelConfig
+
+    for preset in ModelConfig.provider_presets:
+        if preset.get("id") == model_type:
+            return str(preset.get("label") or preset.get("id"))
+    host = urlparse(base_url).hostname or ""
+    host = host.removeprefix("www.").removeprefix("api.")
+    return host or model_type
+
+
 def get_default_model_id() -> str:
     for entry in get_model_catalog():
         if entry.is_default:
@@ -149,23 +167,12 @@ def list_public_models() -> List[dict[str, Any]]:
     from noesis.llm.vision_meta import model_name_supports_vision
 
     default_id = get_default_model_id()
-    # 内置目录的 provider 标签：预设名回退 model type（小写）
-    from noesis.config.env import ModelConfig
-
-    provider_label = next(
-        (
-            str(preset.get("label") or preset.get("id"))
-            for preset in ModelConfig.provider_presets
-            if preset.get("id") == ModelConfig.model_type
-        ),
-        ModelConfig.model_type,
-    )
     rows: List[dict[str, Any]] = []
     for entry in get_model_catalog():
         row: dict[str, Any] = {
             "id": entry.id,
             "label": entry.label,
-            "provider": provider_label,
+            "provider": provider_display_label(entry.model_type, entry.base_url),
             "model_type": entry.model_type,
             "is_default": entry.id == default_id,
             "supports_vision": model_name_supports_vision(entry.id),

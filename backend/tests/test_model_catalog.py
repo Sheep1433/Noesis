@@ -65,3 +65,4 @@ def test_get_llm_accepts_model_id(mock_resolve, mock_build):
     assert kwargs["model_name"] == "deepseek-reasoner"
     assert kwargs["temperature"] == 0.6
     assert kwargs["model_base_url"] == "https://example.com/v1"
+
