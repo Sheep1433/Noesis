@@ -19,7 +19,7 @@ chat/commands/
 ├── registry.py            @command 装饰器 + dispatch() + CONTROL_COMMANDS 保留字
 ├── result.py              CommandResult + RequestRewrite（D 类预留）
 ├── runtime.py             run_manager 注入点（避免 chat 反向依赖 services）
-└── handlers/              内置命令（help / skills / agents / model / status）
+└── handlers/              内置命令（help / skills / agents / model / status / compact / new）
 chat/config_skills_scan.py /skills 扫描（与 D 类 skill 命令同源）
 ```
 
