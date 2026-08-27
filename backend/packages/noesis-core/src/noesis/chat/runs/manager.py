@@ -164,7 +164,9 @@ class RunSubscription:
 
     async def close(self) -> None:
         """幂等注销订阅（API 层不得直调 RunManager.unsubscribe）。"""
-        closer, self.closer = self.closer, None
+        closer = self.closer
+        # frozen dataclass：经 __setattr__ 消费 closer，重复 close 为 no-op
+        object.__setattr__(self, "closer", None)
         if closer is not None:
             try:
                 await closer()
