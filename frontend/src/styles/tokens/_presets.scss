@@ -94,8 +94,8 @@ html:not([data-theme]) .chat-composer {
   --noesis-motion-duration: 200ms;
   --noesis-motion-ease: ease;
 
-  --noesis-font-body: "Outfit", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --noesis-font-display: "Outfit", system-ui, sans-serif;
+  --noesis-font-body: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --noesis-font-display: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 
   --noesis-scrollbar-thumb: #d1d5db;
   --noesis-scrollbar-track: #f3f4f6;
@@ -392,9 +392,9 @@ html[data-theme="light"] .link-btn:hover {
   --noesis-mcp-hero-bg: linear-gradient(135deg, #78350f, #f59e0b);
   --noesis-markdown-heading-border: rgb(255 255 255 / 8%);
 
-  --noesis-font-body: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --noesis-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
-  --noesis-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --noesis-font-body: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --noesis-font-display: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --noesis-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "PingFang SC", monospace;
 }
 
 html[data-theme="deep"] {

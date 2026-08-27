@@ -60,6 +60,8 @@ projection@N-1
 - `POST /api/chat/runs`：幂等创建；同 session active 冲突返回 409 join data。
 - `GET /api/chat/runs/{run_id}`：读取 live 或 DB snapshot。
 - `GET /api/chat/sessions/{session_id}/active-run`：新 Tab 的权威发现入口。
+- `GET /api/chat/sessions/{session_id}/events`：会话级信令流（run-started / hitl-pending / terminal 定位符），其它窗口据此发现活跃 run 并加入；hint 语义，见 `chat-streaming.md` §4.2a。
+- `GET /api/chat/events/stream`：用户级信令流（携带 session_id），会话列表实时 patch run_status。
 - `GET /api/chat/runs/{run_id}/stream`：独立 bounded SSE subscription。
 - `POST /api/chat/runs/{run_id}/stop`：按 Run 鉴权且幂等。
 - `POST /api/chat/runs/{run_id}/hitl/resume`：同一身份续跑，CAS 防重。

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
 
 from dotenv import load_dotenv
+from loguru import logger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -46,6 +48,11 @@ class EnvSecrets(BaseSettings):
     settings_encryption_key: str = Field(default="", alias="SETTINGS_ENCRYPTION_KEY")
     feishu_app_id: str = Field(default="", alias="FEISHU_APP_ID")
     feishu_app_secret: str = Field(default="", alias="FEISHU_APP_SECRET")
+
+    # 分布式 Run 协调（enable-distributed-sse-pubsub）：显式选择，禁止静默默认
+    run_bus_backend: str = Field(default="", alias="NOESIS_RUN_BUS_BACKEND")
+    redis_url: str = Field(default="", alias="REDIS_URL")
+    cluster_id: str = Field(default="", alias="NOESIS_CLUSTER_ID")
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +164,26 @@ class StreamSettings:
     run_channel_queue_max_batches: int
     run_channel_queue_max_bytes: int
     run_channel_drain_seconds: float
+
+
+@dataclass(frozen=True)
+class DistributedRunsSettings:
+    backend: str
+    redis_url: str
+    cluster_id: str
+    leader_heartbeat_seconds: float
+    queued_scan_interval_seconds: float
+    command_scan_interval_seconds: float
+    publisher_queue_max_events: int
+    publisher_queue_max_bytes: int
+    handshake_buffer_max_events: int
+    handshake_buffer_max_bytes: int
+    reconciliation_interval_seconds: float
+    periodic_checkpoint_interval_seconds: float
+    envelope_payload_max_bytes: int
+    redis_socket_timeout_seconds: float
+    redis_connect_timeout_seconds: float
+    redis_pool_max_connections: int
 
 
 @dataclass(frozen=True)
@@ -479,6 +506,64 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
     )
 
 
+_CLUSTER_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _build_distributed_runs(
+    secrets: EnvSecrets, yaml_cfg: AppYamlConfig
+) -> DistributedRunsSettings:
+    """Run bus 后端与集群标识：显式选择、错误配置 fail-fast（禁止自动 fallback）。"""
+    dr = yaml_cfg.distributed_runs
+    backend = secrets.run_bus_backend.strip().lower()
+    if not backend:
+        raise ValueError(
+            "NOESIS_RUN_BUS_BACKEND 必填：显式设置为 memory 或 redis（不提供静默默认）"
+        )
+    if backend not in ("memory", "redis"):
+        raise ValueError(
+            f"NOESIS_RUN_BUS_BACKEND 非法值 {secrets.run_bus_backend!r}：仅支持 memory|redis"
+        )
+
+    redis_url = secrets.redis_url.strip()
+    cluster_id = secrets.cluster_id.strip()
+    if backend == "redis":
+        if not redis_url:
+            raise ValueError("run bus backend=redis 时 REDIS_URL 必填")
+        if not cluster_id:
+            raise ValueError("run bus backend=redis 时 NOESIS_CLUSTER_ID 必填")
+        if not _CLUSTER_ID_PATTERN.fullmatch(cluster_id):
+            raise ValueError(
+                "NOESIS_CLUSTER_ID 仅允许字母、数字、下划线、连字符"
+            )
+    else:
+        # memory 模式写入本地稳定 cluster_id，与 redis 模式保持同构；
+        # 残留的 Redis 配置只告警一次，不参与运行
+        if redis_url or cluster_id:
+            logger.warning(
+                "run bus backend=memory，REDIS_URL/NOESIS_CLUSTER_ID 配置被忽略"
+            )
+        cluster_id = cluster_id or "local"
+
+    return DistributedRunsSettings(
+        backend=backend,
+        redis_url=redis_url,
+        cluster_id=cluster_id,
+        leader_heartbeat_seconds=dr.leader_heartbeat_seconds,
+        queued_scan_interval_seconds=dr.queued_scan_interval_seconds,
+        command_scan_interval_seconds=dr.command_scan_interval_seconds,
+        publisher_queue_max_events=dr.publisher_queue_max_events,
+        publisher_queue_max_bytes=dr.publisher_queue_max_bytes,
+        handshake_buffer_max_events=dr.handshake_buffer_max_events,
+        handshake_buffer_max_bytes=dr.handshake_buffer_max_bytes,
+        reconciliation_interval_seconds=dr.reconciliation_interval_seconds,
+        periodic_checkpoint_interval_seconds=dr.periodic_checkpoint_interval_seconds,
+        envelope_payload_max_bytes=dr.envelope_payload_max_bytes,
+        redis_socket_timeout_seconds=dr.redis_socket_timeout_seconds,
+        redis_connect_timeout_seconds=dr.redis_connect_timeout_seconds,
+        redis_pool_max_connections=dr.redis_pool_max_connections,
+    )
+
+
 def _build_stream(yaml_cfg: AppYamlConfig) -> StreamSettings:
     stream = yaml_cfg.stream
     return StreamSettings(
@@ -791,6 +876,10 @@ class GetConfig:
         return _build_stream(self._yaml)
 
     @lru_cache
+    def get_distributed_runs_config(self) -> DistributedRunsSettings:
+        return _build_distributed_runs(self._secrets, self._yaml)
+
+    @lru_cache
     def get_retrieval_limit_config(self) -> RetrievalLimitSettings:
         return _build_retrieval_limits(self._yaml)
 
@@ -875,6 +964,7 @@ ModelConfig = get_config.get_model_config()
 OtherConfig = get_config.get_other_config()
 QdrantConfig = get_config.get_qdrant_config()
 StreamConfig = get_config.get_stream_config()
+DistributedRunsConfig = get_config.get_distributed_runs_config()
 RetrievalLimitConfig = get_config.get_retrieval_limit_config()
 LangfuseConfig = get_config.get_langfuse_config()
 SkillsMarketConfig = get_config.get_skills_market_config()

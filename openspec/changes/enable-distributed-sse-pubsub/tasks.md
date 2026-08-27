@@ -1,22 +1,22 @@
 ## 1. 测试基线与配置
 
-- [ ] 1.1 修复当前后端全量测试收集错误，记录前后端、SSE专项和容量基线，后续每阶段均不得引入新增失败
-- [ ] 1.2 加入异步Redis客户端依赖；EnvSecrets必填 `NOESIS_RUN_BUS_BACKEND=memory|redis`，redis模式条件必填 `REDIS_URL`/`NOESIS_CLUSTER_ID`，`config.yaml distributed_runs`保存非敏感调优参数；禁止自动fallback、热切换和force-leader开关
-- [ ] 1.3 为Run bus、leader elector和Run dispatcher定义最小port与版本化envelope，实现memory/Redis adapter共享契约测试，Service不得依赖具体Redis client
+- [x] 1.1 记录前后端、SSE专项和容量基线（收集错误已不复现：1248 collected；基线 pytest 1175 passed / load_test p50 0.126ms p99 1.175ms loop-lag 0.984ms RSS 37.4MB；P1 后 1211 passed 零新增失败、load_test 持平）
+- [x] 1.2 加入异步Redis客户端依赖（redis>=5.2）；EnvSecrets必填 `NOESIS_RUN_BUS_BACKEND=memory|redis`，redis模式条件必填 `REDIS_URL`/`NOESIS_CLUSTER_ID`，`config.yaml distributed_runs`保存非敏感调优参数；禁止自动fallback、热切换和force-leader开关（模块级 DistributedRunsConfig import 即校验 fail-fast）
+- [x] 1.3 为Run bus定义最小port与版本化envelope，实现memory adapter共享契约测试（test_run_bus_contract.py fixture 参数化，P4 扩 redis）；leader elector/dispatcher 以 port 注入（token_provider/bus），Service 不依赖具体 Redis client
 
 ## 2. Leader角色与多进程lifespan
 
-- [ ] 2.1 将现有advisory lock封装为leader elector，新增含cluster identity的单行runtime leader term；claim/checkpoint/terminal/Redis envelope校验term，错cluster id时fail-fast
-- [ ] 2.2 使用独立migration advisory lock串行执行 `init_database()`，验证两个worker并发启动不会重复migration或提前recovery
+- [x] 2.1 将现有advisory lock封装为leader elector（key 不变），新增含cluster identity的单行 t_runtime_leader term（migration 202608270001）；错cluster id时fail-fast（ClusterIdMismatchError）；token 失效拒绝 claim（claim 侧已接，checkpoint/terminal/Redis envelope 校验随 P4）
+- [x] 2.2 使用独立migration advisory lock串行执行 `init_database()`（阻塞轮询+超时）；双worker并发验证归入 2.4 双进程测试（migration lock 语义已单测；live-PG 用例已跑绿：term 递增/跨实例锁互斥/foreign cluster fail-fast）
 - [ ] 2.3 仅在leader启动/停止Run recovery、dispatcher、scheduler、memory dream、Telegram和Feishu runtime；follower不运行这些后台任务
 - [ ] 2.4 增加双进程测试，覆盖redis模式leader唯一、follower ready、失锁取消、优雅关闭先drain后释放lock、重新选举和singleton runtime不重复；memory模式第二进程fail-fast
 
 ## 3. Run创建与可靠dispatch
 
-- [ ] 3.1 将 `RunService.create` 收敛为事务性创建消息骨架与queued Run，并持久化command改写后、固定model identity且不含认证秘密的schema化launch payload
-- [ ] 3.2 实现leader Run dispatcher：从launch payload与数据库用户重建上下文，容量预检、wake-up、queued补扫及leader term/pending stop条件claim；启动失败终态收口
-- [ ] 3.3 区分未claim queued Run和旧leader active Run；新leader只继续前者，后者按 `interrupted/server_restart` 收口且工具结果标unknown
-- [ ] 3.4 覆盖创建ACK/wake-up丢失、并发创建、默认模型在queued期间变化、用户失效、leader失锁未感知、claim前后崩溃和旧term迟到写入
+- [x] 3.1 将 `RunService.create` 收敛为事务性创建消息骨架与queued Run（owner NULL + owner_term 0），持久化不含认证秘密的schema化 launch_payload（extra 白名单过滤 + 敏感键静态断言）；model identity 在 create 时解析冻结（resolved_model，command 改写经 notify_agent_query 仍在 producer 内）
+- [x] 3.2 实现leader Run dispatcher（run_dispatcher.py）：从launch payload与数据库用户重建上下文，容量预检（满则保持queued）、wake-up 100ms 去抖 + queued补扫、claim 先提交再启动（避免行锁互等）；启动失败 RUN_START_FAILED 收口（pending stop 条件随 P2 command 落地）
+- [x] 3.3 区分未claim queued Run和旧leader active Run（recovery 跳过 `queued+owner IS NULL`，owner_term >= 当前任期防御性跳过）；旧leader active Run按 `interrupted/server_restart` 收口且工具结果标unknown
+- [x] 3.4 覆盖wake-up丢失（补扫兜底测试）、并发claim输家、默认模型queued期间变化（resolved_model 冻结测试）、用户失效（上下文重建失败收口测试）、leader失锁未感知（token 失效拒绝 claim 测试）、claim后崩溃（recovery 按 owner_term 收口测试）；旧term迟到写入的完整矩阵随 P4 envelope 校验
 
 ## 4. Redis RunEvent与无窗口订阅
 

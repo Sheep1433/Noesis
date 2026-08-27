@@ -17,7 +17,7 @@ export const THEME_PRESET_OPTIONS: ThemePresetOption[] = [
   {
     id: 'light',
     label: '浅色',
-    description: 'Flat Design · 几何无阴影 · 蓝绿琥珀色块 · Outfit',
+    description: 'Flat Design · 几何无阴影 · 蓝绿琥珀色块',
   },
   {
     id: 'deep',

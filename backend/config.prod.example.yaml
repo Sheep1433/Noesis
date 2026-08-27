@@ -29,32 +29,33 @@ database:
   pool_timeout: 30
 
 model:
+  # 默认对话模型：kilo 免费网关（免费模型当前不校验 Key，占位 public）；
+  # 换付费/官方端点改 type/name/base_url，机密 Key 走 .env.prod MODEL_API_KEY（env 优先）
   type: openai
-  name: deepseek-v4-flash
+  name: kilo-auto/free
   temperature: 0.75
-  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  base_url: https://api.kilo.ai/api/gateway
+  api_key: public
   show_thinking_process: true
-  # OpenCode Zen 免费模型示例（改 type/name/base_url；.env MODEL_API_KEY=public）：
-  # type: opencode
-  # name: deepseek-v4-flash-free
-  # base_url: https://opencode.ai/zen/v1
-  # default_catalog_id: deepseek-v4-flash-free
-  # catalog:
-  #   - id: deepseek-v4-flash-free
-  #     label: DeepSeek V4 Flash（快速）
-  #     context_window: 200000
-  #   - id: big-pickle
-  #     label: Big Pickle（推理）
-  #     temperature: 0.7
-  #     context_window: 200000
-  #   - id: mimo-v2.5-free
-  #     label: MiMo V2.5（小米）
-  #     temperature: 0.7
-  #     context_window: 200000
-  #   - id: nemotron-3-ultra-free
-  #     label: Nemotron 3 Ultra（1M 上下文）
-  #     temperature: 0.6
-  #     context_window: 1000000
+
+  # 用户自定义 Provider 的平台预设（部署者维护；选预设 → base_url 自动填，用户只填 Key）
+  provider_presets:
+    - id: deepseek
+      label: deepseek
+      base_url: https://api.deepseek.com/v1
+    - id: qwen
+      label: alibaba
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    - id: minimax
+      label: minimax
+      base_url: https://api.minimax.chat/v1
+
+  # 目录只保留部署默认模型；其余在设置页「获取可用模型」按当下真实列表勾选添加
+  default_catalog_id: kilo-auto/free
+  catalog:
+    - id: kilo-auto/free
+      label: Kilo Auto
+      context_window: 256000
 
   # --- DeepSeek 官方直连（需 .env DEEPSEEK_API_KEY）---
   # type: deepseek
@@ -122,6 +123,24 @@ agent_runtime:
     loop_enabled: true
     loop_hard_limit: 5
     loop_window_size: 20
+
+distributed_runs:
+  # 模式（memory|redis）、REDIS_URL、NOESIS_CLUSTER_ID 属环境项，只在 .env 显式配置：
+  #   NOESIS_RUN_BUS_BACKEND=memory|redis（必填，无默认）
+  #   REDIS_URL / NOESIS_CLUSTER_ID（backend=redis 时必填）
+  leader_heartbeat_seconds: 30
+  queued_scan_interval_seconds: 5
+  command_scan_interval_seconds: 5
+  publisher_queue_max_events: 512
+  publisher_queue_max_bytes: 1048576
+  handshake_buffer_max_events: 256
+  handshake_buffer_max_bytes: 524288
+  reconciliation_interval_seconds: 30
+  periodic_checkpoint_interval_seconds: 15
+  envelope_payload_max_bytes: 262144
+  redis_socket_timeout_seconds: 5
+  redis_connect_timeout_seconds: 3
+  redis_pool_max_connections: 20
 
 stream:
   sse_keepalive_interval_seconds: 25

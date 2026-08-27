@@ -27,10 +27,28 @@ def mark_running_tools_unknown(content: dict[str, Any] | None) -> dict[str, Any]
 
 class RunRecoveryService:
     @classmethod
-    async def recover_orphaned_runs(cls, db: AsyncSession) -> int:
+    async def recover_orphaned_runs(
+        cls, db: AsyncSession, *, current_leader_term: int | None = None
+    ) -> int:
+        """收口上一任期遗留的非终态 Run。
+
+        - ``queued + owner IS NULL``：未被 claim 的排队 Run 存活，由本任
+          期 dispatcher 补扫启动（enable-distributed-sse-pubsub 决策 2）；
+        - 已 claim/运行中的 Run（owner_term <= current 或无从判断）收口为
+          ``interrupted/server_restart``，工具结果标 unknown，不重放。
+        """
         repository = AgentRunRepository(db)
         recovered = 0
         for run in await repository.list_non_terminal():
+            if run.status == RunStatus.QUEUED.value and not run.owner_instance_id:
+                continue  # 未 claim 的 queued Run 跨重启存活，交给 dispatcher
+            if (
+                current_leader_term is not None
+                and run.owner_term >= current_leader_term
+            ):
+                # 本任期 claim 的 Run：新 leader 上任时不可能出现（本方法只在
+                # 启动早期执行），防御性跳过避免误杀刚 claim 的行
+                continue
             message_result = await db.execute(
                 select(TChatMessage).where(TChatMessage.id == run.assistant_message_id)
             )

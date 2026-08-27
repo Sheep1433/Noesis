@@ -64,6 +64,38 @@ async def test_unsubscribe_does_not_cancel_producer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subscription_close_unsubscribes_and_is_idempotent() -> None:
+    """close() 必须真正退订（frozen dataclass 不得让幂等标记赋值抛错）。"""
+    release = asyncio.Event()
+
+    async def producer(publish):
+        await publish({"type": "text-delta", "delta": "a"})
+        await release.wait()
+
+    manager = RunManager()
+    handle = await manager.start(
+        run_id="run-close",
+        session_id="session-1",
+        user_id="user-1",
+        assistant_message_id="message-1",
+        snapshot_provider=_snapshot(),
+        producer=producer,
+    )
+    subscription = await manager.subscribe("run-close")
+    assert subscription.queue in handle.subscribers
+
+    await subscription.close()
+    assert subscription.queue not in handle.subscribers
+    assert subscription.closer is None
+
+    # 幂等：重复 close 不再退订、不抛异常
+    await subscription.close()
+
+    release.set()
+    await handle.producer_task
+
+
+@pytest.mark.asyncio
 async def test_sequence_and_buffer_replay_are_continuous() -> None:
     release = asyncio.Event()
 

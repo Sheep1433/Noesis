@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ChatModelCatalog, ChatModelOption } from '@/api/models'
+import type { ChatModelCatalog, ChatModelOption, DiscoveredModelRow, ProviderPreset } from '@/api/models'
 import type { UserLLMDiscoveredModel, UserLLMModel, UserLLMProvider } from '@/api/settings'
 import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -10,6 +10,7 @@ import {
   updateLLMModel, updateLLMProvider,
 } from '@/api/settings'
 import { SettingsEmptyState, SettingsSection, SettingsStatus } from '../primitives'
+import ModelDiscoveryPanel from './ModelDiscoveryPanel.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -36,16 +37,15 @@ const effectiveApiTypeOptions = computed(() => {
 })
 
 /** 平台预设目录（config.yaml model.provider_presets） */
-const providerPresets = ref<{ id: string, label: string, base_url: string }[]>([])
+const providerPresets = ref<ProviderPreset[]>([])
 /** 内置目录的平台 Provider（按 provider 分组展示的头卡） */
 const platformProvider = ref<{ id: string, label: string, base_url: string } | null>(null)
 const platformModels = ref<ChatModelOption[]>([])
-const platformDiscovery = ref<{ models: { model_id: string, label: string, context_window: number }[], message: string } | null>(null)
+/** 平台发现结果（多选与筛选在 ModelDiscoveryPanel 内） */
+const platformDiscovery = ref<{ models: DiscoveredModelRow[], message: string } | null>(null)
 const discoveringPlatform = ref(false)
 /** 分组折叠：默认收起，点 Provider 行展开模型列表 */
 const expandedGroups = ref(new Set<string>())
-/** 平台发现的多选：勾选后批量「添加所选」 */
-const platformPicked = ref(new Set<string>())
 const adoptingPlatform = ref(false)
 
 function toggleGroup(key: string) {
@@ -58,28 +58,66 @@ function toggleGroup(key: string) {
   expandedGroups.value = next
 }
 
-/** 已存在于目标 Provider（slug=平台 id）下的模型 id：发现列表里标「已添加」并禁选 */
-const adoptedPlatformIds = computed(() => {
-  const target = providers.value.find((p) => p.slug === platformProvider.value?.id)
-  if (!target) {
-    return new Set<string>()
-  }
-  return new Set(
-    models.value
-      .filter((m) => m.provider_id === target.provider_id)
-      .map((m) => m.model_id),
-  )
+/** 平台组承载采纳模型的用户级 Provider（slug = 平台 id；首次采纳时自动创建） */
+const platformProviderRow = computed(() =>
+  providers.value.find((p) => p.slug === platformProvider.value?.id))
+
+/** 平台组展示行：内置目录条目 + 用户在该组下采纳的模型，合并为一个列表 */
+interface PlatformGroupRow {
+  key: string
+  /** 裸 model_id：发现列表比对与「已下线」判定用 */
+  model_id: string
+  label: string
+  /** 目录身份：内置条目为裸 id，采纳条目为复合 id（设为默认 / 会话切换用） */
+  catalog_id: string
+  isDefault: boolean
+  contextWindow: number
+  supportsVision: boolean
+  offline: boolean
+}
+
+/** 最近一次发现返回的 model_id 集；null = 本会话未发现过，不做下线判定 */
+const platformDiscoveredIds = computed(() =>
+  platformDiscovery.value ? new Set(platformDiscovery.value.models.map((m) => m.model_id)) : null)
+
+const mergedPlatformRows = computed<PlatformGroupRow[]>(() => {
+  const discovered = platformDiscoveredIds.value
+  const yamlRows = platformModels.value.map((m) => ({
+    key: `yaml-${m.id}`,
+    model_id: m.id,
+    label: m.label,
+    catalog_id: m.id,
+    isDefault: m.id === catalog.value?.default_id,
+    contextWindow: m.context_window || 0,
+    supportsVision: !!m.supports_vision,
+    offline: discovered ? !discovered.has(m.id) : false,
+  }))
+  const owner = platformProviderRow.value
+  const adoptedRows = owner
+    ? models.value
+        .filter((m) => m.provider_id === owner.provider_id)
+        .map((m) => ({
+          key: `adopted-${m.entry_id}`,
+          model_id: m.model_id,
+          label: m.label,
+          catalog_id: compositeModelId(owner, m),
+          isDefault: compositeModelId(owner, m) === catalog.value?.default_id,
+          contextWindow: m.context_window || 0,
+          supportsVision: false,
+          offline: discovered ? !discovered.has(m.model_id) : false,
+        }))
+    : []
+  return [...yamlRows, ...adoptedRows]
 })
 
-function togglePick(modelId: string) {
-  const next = new Set(platformPicked.value)
-  if (next.has(modelId)) {
-    next.delete(modelId)
-  } else {
-    next.add(modelId)
-  }
-  platformPicked.value = next
-}
+/** 独立展示的自定义 Provider：其采纳模型已并入平台组的同名 Provider 不再单列 */
+const customProviders = computed(() =>
+  providers.value.filter((p) => p.slug !== platformProvider.value?.id))
+
+/** 发现面板的去重依据：平台组已有条目（内置 + 已采纳）的 model_id */
+const platformExistingIds = computed(() =>
+  new Set(mergedPlatformRows.value.map((row) => row.model_id)))
+
 const presetOptions = computed(() => [
   { label: '自定义', value: '' },
   ...providerPresets.value.map((p) => ({ label: p.label, value: p.id })),
@@ -270,6 +308,10 @@ function addDiscoveredModel(discovered: UserLLMDiscoveredModel) {
   })
 }
 
+/** 表单发现面板的去重依据：目录中已有的 model_id */
+const draftExistingIds = computed(() =>
+  new Set(draftModels.value.map((row) => row.model_id.trim())))
+
 async function saveProvider() {
   if (!canSubmit.value) {
     return
@@ -393,7 +435,6 @@ async function discoverPlatform() {
   try {
     const result = await discoverPlatformModels()
     platformDiscovery.value = { models: result.models, message: result.message }
-    platformPicked.value = new Set()
     result.ok ? message.success(result.message) : message.warning(result.message)
   } catch (error) {
     message.error(error instanceof Error ? error.message : '发现失败')
@@ -402,9 +443,9 @@ async function discoverPlatform() {
   }
 }
 
-/** 批量采纳勾选的平台模型：复用/创建平台 Provider（public key）后逐个落库 */
-async function adoptPickedPlatformModels() {
-  if (!platformProvider.value || !platformPicked.value.size) {
+/** 批量采纳勾选的平台模型（来自发现面板）：复用/创建平台 Provider（public key）后逐个落库 */
+async function adoptPickedPlatformModels(pickedRows: DiscoveredModelRow[]) {
+  if (!platformProvider.value || !pickedRows.length) {
     return
   }
   adoptingPlatform.value = true
@@ -423,9 +464,9 @@ async function adoptPickedPlatformModels() {
         enabled: true,
       })
     }
-    const picked = platformDiscovery.value?.models.filter(
-      (m) => platformPicked.value.has(m.model_id) && !adoptedPlatformIds.value.has(m.model_id),
-    ) || []
+    const picked = pickedRows.filter(
+      (discovered) => !platformExistingIds.value.has(discovered.model_id),
+    )
     let added = 0
     for (const discovered of picked) {
       await createLLMModel({
@@ -436,7 +477,6 @@ async function adoptPickedPlatformModels() {
       })
       added++
     }
-    platformPicked.value = new Set()
     message.success(added ? `已添加 ${added} 个模型` : '所选模型均已存在')
     await refresh()
   } catch (error) {
@@ -492,14 +532,14 @@ onMounted(() => {
     <template v-else>
       <!-- Provider 分组列表：平台 Provider + 自定义 Provider，模型挂在各组下 -->
       <div class="provider-list">
-        <!-- 平台 Provider（内置目录；免费模型轮换时可发现当前列表） -->
+        <!-- 平台 Provider：内置默认模型 + 用户采纳的模型合并为一组（同名用户 Provider 不再单列） -->
         <div v-if="platformProvider" class="provider-group">
           <div class="provider-row toggle" @click="toggleGroup('platform')">
             <div class="provider-id">
               <span class="status-dot ok"></span>
               <strong>{{ platformProvider.label }}</strong>
               <n-tag size="small" :bordered="false">平台</n-tag>
-              <span class="muted">（{{ platformModels.length }} 个模型）</span>
+              <span class="muted">（{{ mergedPlatformRows.length }} 个模型）</span>
             </div>
             <div class="muted provider-meta">
               {{ platformProvider.id }} · {{ platformProvider.base_url }}
@@ -511,64 +551,50 @@ onMounted(() => {
           <template v-if="expandedGroups.has('platform')">
             <!-- 展开区工具栏：发现动作与自定义组的行内操作同一层级 -->
             <div class="group-toolbar">
-              <span class="muted">免费模型会轮换</span>
-              <n-button size="tiny" :loading="discoveringPlatform" @click="discoverPlatform">
-                获取可用模型
-              </n-button>
+              <span class="muted">免费模型会轮换，获取后按当下真实列表勾选添加</span>
+              <div class="toolbar-actions">
+                <n-button
+                  v-if="platformProviderRow" size="tiny" quaternary
+                  @click.stop="platformProviderRow && editProvider(platformProviderRow)"
+                >
+                  管理
+                </n-button>
+                <n-button size="tiny" :loading="discoveringPlatform" @click="discoverPlatform">
+                  获取可用模型
+                </n-button>
+              </div>
             </div>
-            <div v-for="model in platformModels" :key="model.id" class="grouped-model-row">
+            <div v-for="row in mergedPlatformRows" :key="row.key" class="grouped-model-row">
               <div class="grouped-model">
-                <strong>{{ model.label }}</strong>
-                <span class="muted">{{ model.id }}</span>
+                <strong>{{ row.label }}</strong>
+                <span class="muted">{{ row.model_id }}</span>
               </div>
               <div class="tags">
-                <n-tag v-if="model.id === catalog?.default_id" size="small" type="success">默认</n-tag>
-                <n-tag v-if="model.supports_vision" size="small">视觉</n-tag>
+                <n-tag v-if="row.isDefault" size="small" type="success">默认</n-tag>
+                <n-tag v-if="row.offline" size="small" type="warning" :bordered="false">已下线</n-tag>
+                <n-tag v-if="row.supportsVision" size="small">视觉</n-tag>
+                <n-tag v-if="row.contextWindow" size="small" :bordered="false">{{ row.contextWindow }} tokens</n-tag>
                 <n-button
-                  v-if="model.id !== catalog?.default_id" size="tiny" quaternary
-                  @click.stop="makeDefault(model.id)"
+                  v-if="!row.isDefault" size="tiny" quaternary
+                  @click.stop="makeDefault(row.catalog_id)"
                 >
                   设为默认
                 </n-button>
               </div>
             </div>
-            <div v-if="platformDiscovery" class="discovery-panel">
-              <div class="discovery-toolbar">
-                <span class="muted">已选 {{ platformPicked.size }} 项</span>
-                <n-button
-                  size="tiny" type="primary" :disabled="!platformPicked.size" :loading="adoptingPlatform"
-                  @click="adoptPickedPlatformModels"
-                >
-                  添加所选
-                </n-button>
-              </div>
-              <div v-if="platformDiscovery.models.length" class="discovery-list">
-                <div
-                  v-for="discovered in platformDiscovery.models" :key="discovered.model_id"
-                  class="discovery-row pick" :class="{ picked: platformPicked.has(discovered.model_id) }"
-                  @click="adoptedPlatformIds.has(discovered.model_id) ? null : togglePick(discovered.model_id)"
-                >
-                  <div class="discovery-model">
-                    <input
-                      type="checkbox" class="pick-box"
-                      :checked="platformPicked.has(discovered.model_id)"
-                      :disabled="adoptedPlatformIds.has(discovered.model_id)"
-                      @click.stop="togglePick(discovered.model_id)"
-                    >
-                    <strong>{{ discovered.label }}</strong>
-                    <span class="muted">{{ discovered.model_id }}</span>
-                    <span class="muted">{{ discovered.context_window ? `${discovered.context_window} tokens` : '窗口未知' }}</span>
-                  </div>
-                  <n-tag v-if="adoptedPlatformIds.has(discovered.model_id)" size="small" type="success" :bordered="false">已添加</n-tag>
-                </div>
-              </div>
-            </div>
+            <ModelDiscoveryPanel
+              v-if="platformDiscovery"
+              :models="platformDiscovery.models"
+              :existing-ids="platformExistingIds"
+              :adopting="adoptingPlatform"
+              @adopt="adoptPickedPlatformModels"
+            />
           </template>
         </div>
         <SettingsEmptyState v-else title="暂无可用模型" description="可在下方添加自己的模型服务。" />
 
         <!-- 自定义 Provider：名称 + 自定义标签 + 状态点（绿 = Key 已配置）+ 编辑/删除 -->
-        <div v-for="provider in providers" :key="provider.provider_id" class="provider-group">
+        <div v-for="provider in customProviders" :key="provider.provider_id" class="provider-group">
           <div class="provider-row toggle" @click="toggleGroup(provider.provider_id)">
             <div class="provider-id">
               <span class="status-dot" :class="provider.has_key ? 'ok' : 'missing'"></span>
@@ -661,6 +687,7 @@ onMounted(() => {
             <span class="field-label">API 密钥</span>
             <n-input
               v-model:value="providerForm.api_key" size="small" class="flat-input" type="password" show-password-on="click"
+              :input-props="{ autocomplete: 'new-password' }"
               :placeholder="editingProviderId ? '已配置——输入新值可替换' : 'sk-…（加密存储）'"
             />
           </label>
@@ -692,18 +719,14 @@ onMounted(() => {
             <n-button size="tiny" quaternary type="error" @click="removeModelRow(index)">删除</n-button>
           </div>
 
-          <div v-if="draftDiscovery" class="discovery-panel">
-            <div class="muted">{{ draftDiscovery.message }}。发现结果不会自动保存。</div>
-            <div v-if="draftDiscovery.models.length" class="discovery-list">
-              <div v-for="discovered in draftDiscovery.models" :key="discovered.model_id" class="discovery-row">
-                <div class="discovery-model">
-                  <strong>{{ discovered.label }}</strong>
-                  <span class="muted">{{ discovered.model_id }}</span>
-                  <span class="muted">{{ discovered.context_window ? `${discovered.context_window} tokens` : '窗口未知' }}</span>
-                </div>
-                <n-button size="tiny" @click="addDiscoveredModel(discovered)">添加</n-button>
-              </div>
-            </div>
+          <div v-if="draftDiscovery" class="discovery-block">
+            <div class="muted">{{ draftDiscovery.message }}。发现结果不会自动保存，勾选后加入下方目录随表单一起保存。</div>
+            <ModelDiscoveryPanel
+              :models="draftDiscovery.models"
+              :existing-ids="draftExistingIds"
+              adopt-label="添加到目录"
+              @adopt="rows => rows.forEach(addDiscoveredModel)"
+            />
           </div>
         </div>
 
@@ -732,16 +755,13 @@ onMounted(() => {
 .provider-group .provider-row { border-bottom: none; }
 .provider-group:not(:last-of-type) { margin-bottom: 10px; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); padding-bottom: 4px; }
 .grouped-model-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 7px 0 7px 16px; border-top: 1px dashed var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
-.group-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 0 2px 16px; }
+.group-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0 2px 16px; }
 .group-toolbar .muted { margin-top: 0; }
+.toolbar-actions { display: flex; align-items: center; gap: 8px; }
 .grouped-model { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .provider-row.toggle { cursor: pointer; user-select: none; }
 .chevron { color: var(--noesis-color-text-muted); font-size: 11px; transition: transform 0.15s; display: inline-block; margin-left: 2px; }
 .chevron.open { transform: rotate(180deg); }
-.discovery-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.discovery-row.pick { cursor: pointer; border-radius: 6px; padding: 6px 6px; }
-.discovery-row.pick.picked { background: var(--noesis-color-primary-bg-subtle); }
-.pick-box { accent-color: var(--noesis-color-primary); width: 14px; height: 14px; flex-shrink: 0; }
 .provider-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); }
 .provider-row .muted { margin-top: 0; }
 .provider-id { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -806,10 +826,7 @@ onMounted(() => {
   font-size: 12px;
 }
 .catalog-row { display: grid; grid-template-columns: 1.4fr 1fr 0.9fr auto; gap: 8px; align-items: center; }
-.discovery-panel { margin-top: 4px; padding: 10px 12px; border-radius: 8px; background: var(--noesis-color-fill-subtle, rgba(0,0,0,.03)); }
-.discovery-list { display: grid; gap: 6px; margin-top: 8px; }
-.discovery-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
-.discovery-model { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.discovery-block { margin-top: 8px; }
 
 .form-footer { display: flex; justify-content: flex-end; gap: 8px; }
 .submit-btn { min-width: 96px; }
@@ -819,7 +836,6 @@ onMounted(() => {
   .field.span-2 { grid-column: span 1; }
   .catalog-row { grid-template-columns: 1fr; }
   .provider-row { flex-wrap: wrap; }
-  .discovery-row { align-items: flex-start; }
 
   /* 分组模型行：名称 + 标签 + 操作窄屏换行后，操作组靠右（与桌面一致） */
   .grouped-model-row { flex-wrap: wrap; padding-left: 8px; }
@@ -827,9 +843,6 @@ onMounted(() => {
   /* Provider 行换行后：元信息占满一行，操作组独立一行右对齐 */
   .provider-meta { flex-basis: 100%; order: 3; white-space: normal; }
   .row-actions { margin-left: auto; }
-  /* 发现候选行：勾选框 + 名称窄屏可换行 */
-  .discovery-model { align-items: flex-start; }
-  .pick-box { margin-top: 3px; }
   /* 分组头卡在窄屏的计数徽标换行 */
   .provider-id { flex-wrap: wrap; }
 }

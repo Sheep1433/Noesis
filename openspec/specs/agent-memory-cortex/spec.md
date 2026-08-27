@@ -1,310 +1,103 @@
 # agent-memory-cortex Specification
 
 ## Purpose
-TBD - created by archiving change add-run-aware-memory-cortex. Update Purpose after archive.
+用户级自动记忆：md 文件记忆层——五类条目、水位增量抽取、AutoDream 整理与每 Run 选条注入。取代已删除的 Memory Cortex（PG 权威条目 + Qdrant 派生）方案。
 ## Requirements
-### Requirement: 系统 SHALL 为每个有稳定证据的终态主 Run 创建一次 capture job
+### Requirement: 记忆 SHALL 以 md 文件为唯一真相并按情景/语义两层组织
 
-当主 Agent Run 权威终态为 `completed|partial|error|interrupted`、用户经验记忆 `enabled=true`、Run 不是内部整理/subagent Run，且存在持久化 assistant 结论、终态 ToolPart、产物/文件变更、验证结果或用户纠正中的至少一项时，系统 SHALL 按 `run_id` 幂等创建一次 capture job。资格 SHALL NOT 依赖工具是否失败、是否发生工具调用或最终是否成功。`hitl_pending` SHALL NOT 创建；没有产生任何稳定工作证据的用户取消 interrupted Run SHALL NOT 创建；HITL resume SHALL 沿用原 `run_id`。
+记忆 SHALL 存放于用户数据目录 `memory/` 下：`MEMORY.md` 索引（一行一条）+ 分类条目文件（一条一文件，含正文、Why、适用条件、来源引用与更新时间）+ `journal/` 按日情景日志（只追加）。语义记忆类型集 SHALL 冻结为五类：`preference` 偏好（用户要什么输出/行为）、`goal` 目标（用户在做什么，时效最强）、`decision` 决策（定了什么及原因）、`experience` 经验（什么做法有效）、`gotcha` 注意事项（什么要避开）；目录即枚举，新增类型 SHALL 需要新的变更提案。`USER.md` SHALL 保持纯手写，引擎 SHALL NOT 修改。条目淘汰 SHALL 表现为索引移除，journal SHALL 永久保留原始记录（可搜、可重建条目）。用户直接编辑文件 SHALL 为最高权限；引擎写入前 SHALL 重读文件，SHALL NOT 覆盖用户改动。索引 SHALL 设行数与字节双上限，超预算 SHALL 触发整理压缩，SHALL NOT 静默截断。
 
-#### Scenario: 无工具失败的成功 Run 仍被 capture
-- **WHEN** 启用经验记忆的用户完成一个包含决策和验证但没有工具失败的主 Run
-- **THEN** 系统 SHALL 创建该 Run 的 capture job
+#### Scenario: 用户直接编辑生效
+- **WHEN** 用户编辑条目文件或索引并保存
+- **THEN** 下次注入 SHALL 使用修改后内容
+- **AND** 引擎后续写入 SHALL 基于修改后文件增量进行
 
-#### Scenario: partial/error Run 保留失败经验
-- **WHEN** 启用经验记忆的主 Run 以 partial 或 error 终态结束且已持久化工具 outcome、用户纠正或产物/验证证据
-- **THEN** 系统 SHALL 创建 capture job
-- **AND** extraction MAY 产生 experience 或 gotcha
+#### Scenario: 淘汰不丢失
+- **WHEN** 条目被整理任务淘汰
+- **THEN** 索引行与条目文件 SHALL 移除
+- **AND** journal 中的原始记录 SHALL 保留且可被检索工具搜到
 
-#### Scenario: 无有效工作的用户取消不 capture
-- **WHEN** 用户在 assistant 结论、终态 ToolPart、产物或纠正产生前取消 Run
-- **THEN** 系统 SHALL NOT 创建 capture job
+#### Scenario: 索引损坏行容错
+- **WHEN** 用户手动编辑导致索引行格式损坏
+- **THEN** 注入 SHALL 跳过损坏行且 SHALL NOT 失败
+- **AND** 索引 SHALL 可从条目目录重建
 
-#### Scenario: 同一终态 Run 幂等
-- **WHEN** 同一 `run_id` 的权威终态因重试被处理多次
-- **THEN** 系统 SHALL 只保留一条该 Run 的 capture job
+### Requirement: 记忆写入 SHALL 在会话结束后按水位增量抽取
 
-#### Scenario: HITL 恢复只在最终完成后 capture
-- **WHEN** Run 进入 `hitl_pending`，随后以同一 `run_id` 恢复并 completed
-- **THEN** pending 阶段 SHALL NOT 创建 capture job
-- **AND** completed 后 SHALL 创建一次 job
+会话 idle 超过阈值且最新合格消息序号超过水位（`memory_extracted_seq`）时，系统 SHALL 异步抽取该会话水位之后的新消息段，输入 SHALL 含新消息段（有界，超预算保段头与段尾）、水位前至多 2 条衔接背景消息、本轮注入清单与现有条目，自动写入条目与 journal，SHALL NOT 要求用户确认。同一用户的抽取任务 SHALL 串行执行。subagent 会话 SHALL NOT 抽取（结论经父会话终态通知回流）。抽取 SHALL 将条目归入冻结五类之一；不属于任何类型的内容 SHALL 只进 journal 情景日志、SHALL NOT 进入语义层。抽取 SHALL 排除「不该存」内容（文件或代码本身可得的信息、临时任务状态）并将相对日期改写为绝对日期。写入时 SHALL 做轻量合并（语义重复更新既有条目并追加来源，明显过时当场改写）。守卫 SHALL 包括：敏感内容拒收、本轮注入条目的复述不记录（防自强化，注入清单来自 run 的 memory_context）、无价值会话零写入、单段至多 3 条新条目（超出 SHALL 只进 journal）。水位 SHALL 仅在抽取成功后推进（失败保留原水位，下次 sweep 重试同段）；记忆关闭期间水位 SHALL 照常推进（不回溯）。抽取标记 SHALL NOT 改变会话列表排序（updated_at 语义 = 用户最后活动）。
 
-#### Scenario: 内部整理 Run 不递归产生记忆
-- **WHEN** memory extraction、consolidation 或 query controller 自己完成内部 Run
-- **THEN** 系统 SHALL NOT 为该内部 Run 创建新的自动 capture job
+#### Scenario: 复述不产生新条目
+- **WHEN** 会话中 assistant 复述了本轮注入的记忆
+- **THEN** 抽取 SHALL NOT 据此新增或更新该条目
 
-### Requirement: Run snapshot SHALL 是稳定且可寻址的提取输入
+#### Scenario: 修正注入条目即更新
+- **WHEN** 会话中用户修正了本轮注入的记忆
+- **THEN** 抽取 SHALL 更新该条目而非拒绝记录
+- **AND** 该修正 SHALL NOT 被防自强化守卫拦截
 
-系统 SHALL 为 eligible Run 生成唯一 Run snapshot，记录 `user_id`、`session_id`、`run_id`、scope、schema version、source watermark、content digest、token estimate、chunk metadata 和安全的 evidence payload/路径。snapshot SHALL 在 extraction 重试期间保持稳定，不因后续记忆变化、索引变化或聊天列表刷新而改变。snapshot SHALL NOT 自动注入模型上下文。
+#### Scenario: 重复经验合并
+- **WHEN** 新会话经验与现有条目语义重复
+- **THEN** 抽取 SHALL 更新该条目文件并追加来源，而非新建
 
-#### Scenario: extraction 重试读取同一 snapshot
-- **WHEN** extraction 在部分 chunk 完成后重试
-- **THEN** worker SHALL 使用相同 source watermark 和 content digest 的 snapshot
-- **AND** SHALL NOT 从变化后的 UI 投影重建另一份输入
+#### Scenario: 续聊段增量抽取
+- **WHEN** 已抽取过的会话再次续聊并转入 idle
+- **THEN** 抽取 SHALL 只处理水位之后的新消息段
+- **AND** 水位前至多 2 条消息 SHALL 作为衔接背景进入输入
 
-#### Scenario: 来源软删除
-- **WHEN** snapshot 对应的消息在记忆生成后被软删除
-- **THEN** memory item MAY 保留
-- **AND** 来源接口 SHALL 返回来源不可用而非其它用户内容
+#### Scenario: 抽取失败不推进水位
+- **WHEN** 某续聊段抽取因 LLM 失败未完成
+- **THEN** 水位 SHALL 保持原值
+- **AND** 下次 sweep SHALL 重试同一段
 
-#### Scenario: 账户删除清理 snapshot
-- **WHEN** 用户账户被删除
-- **THEN** 系统 SHALL 按用户数据清理规则删除其 snapshot、item、evidence 和派生视图
+#### Scenario: 抽取不扰动会话排序
+- **WHEN** 抽取推进水位
+- **THEN** 会话 updated_at SHALL NOT 被引擎内部状态改变
 
-### Requirement: Capture SHALL 排除脚手架与 recall-loop 内容
+### Requirement: 整理 SHALL 由低频后台任务自动执行
 
-capture SHALL 保存用户目标/纠正、assistant 可见结论、结构化 ToolPart outcome、产物摘要、验证结果和 compaction 覆盖信息；SHALL 排除系统脚手架、reasoning、重复流式片段、既有 memory bootstrap、memory 搜索结果和内部整理提示。每个保留片段 SHALL 标记 `user|assistant_derived|tool_internal|tool_external` 之一作为 provenance；`system` 与 `memory_recall` 内容 SHALL NOT 保留为 span 或作为新 memory statement 的证据。
+系统 SHALL 提供低频整理任务（触发条件：条目数、索引大小或时间间隔），职责为全局去重、矛盾裁决、淘汰与索引压缩，自动执行无确认。整理质量 SHALL 由评测门禁与 journal 可重建性兜底。
 
-#### Scenario: 已召回记忆不被再次提取
-- **WHEN** 当前 Run 的 assistant 内容包含由自动 Bulletin 或 `search_memory` 返回的旧记忆
-- **THEN** capture SHALL 将该内容标记为 `memory_recall`
-- **AND** extraction SHALL NOT 把它作为新候选证据
+#### Scenario: 矛盾裁决
+- **WHEN** 整理发现新旧条目矛盾
+- **THEN** SHALL 按时间与证据改写条目
+- **AND** journal 中双方原始记录 SHALL 保留
 
-#### Scenario: 外部工具内容保留为低信任证据
-- **WHEN** ToolPart 内容来自网页或远程外部工具
-- **THEN** snapshot SHALL 标记 `tool_external`
-- **AND** 该来源单独 SHALL NOT 激活命令式 workflow 或 gotcha
+#### Scenario: 目标完结检查
+- **WHEN** goal 类条目对应的目标已完结或演进
+- **THEN** 整理 SHALL 将其改写为结果性条目或淘汰
+- **AND** journal 中原始记录 SHALL 保留
 
-#### Scenario: assistant 转述不提升外部来源信任
-- **WHEN** assistant statement 由一个或多个 `tool_external` span 推导
-- **THEN** candidate effective provenance SHALL 继承 supporting evidence 中最低信任等级
-- **AND** SHALL NOT 仅因内容出现在 assistant 文本中升级为可自动注入来源
+#### Scenario: 类型不匹配不入语义层
+- **WHEN** 抽取内容不属于冻结五类中任何一类
+- **THEN** 该内容 SHALL 只写入 journal
+- **AND** SHALL NOT 创建语义条目文件
 
-### Requirement: 长 Run SHALL 按结构边界分块且不得静默丢失
+#### Scenario: 索引超预算走压缩
+- **WHEN** 索引超出行数或字节上限
+- **THEN** 整理 SHALL 通过去重、删除死指针与条目降级压缩索引
+- **AND** SHALL NOT 静默截断最旧条目
 
-系统 SHALL 在 extraction 前估算 token，并按用户目标/纠正、assistant 结论、tool call+outcome、artifact+validation 和 compaction span 的完整边界分块。每个 chunk SHALL 有稳定 `chunk_id`、token 上限和 source spans。超大工具输出 SHALL 只保留安全摘录、结构化 outcome、digest 和来源指针。单个 chunk 失败 SHALL 记录 coverage gap；系统 SHALL NOT 将部分成功报告为完整成功。
+### Requirement: 注入 SHALL 使用稳定前缀与每 Run 选条
 
-#### Scenario: 超限 Run 被分块
-- **WHEN** normalized snapshot 超过 extraction 模型输入预算
-- **THEN** 系统 SHALL 生成多个边界完整的 chunk
-- **AND** SHALL NOT 只做固定首尾截断
+系统 SHALL 在稳定前缀注入 `USER.md` 与 `MEMORY.md` 索引（会话内不变），每个新 Run SHALL 以廉价模型按当前问题从索引选条并注入选中条目正文（记忆量小于预算时全量）；同 Run 冻结（tool loop 与 HITL resume 期间内容不变）、subagent 不重复注入、上一 Run 已注入条目 SHALL NOT 重复注入、头部 SHALL 含「历史经验可能过时」声明且 SHALL 按条目年龄附 stale 警告、任一依赖失败 SHALL 零注入且 Run 继续。注入条目清单 SHALL 回写 run 的 memory_context。系统 SHALL NOT 截断单条条目。
 
-#### Scenario: 单 chunk 失败
-- **WHEN** 多 chunk extraction 中一个 chunk 超时且其它 chunk 成功
-- **THEN** job SHALL 标记 partial 或进入可重试状态
-- **AND** coverage 指标 SHALL 记录未处理 chunk
+#### Scenario: 小模型选条
+- **WHEN** 记忆量超过全量预算
+- **THEN** 系统 SHALL 以廉价模型按当前问题从索引选条并注入选中条目正文
 
-#### Scenario: 无价值 Run 正常空结果
-- **WHEN** 所有 chunk 成功处理但没有值得跨 Session 保留的内容
-- **THEN** job SHALL 以 `succeeded_no_output` 完成
-- **AND** SHALL NOT 创建占位 memory item
+#### Scenario: 陈旧条目附警告
+- **WHEN** 注入条目的保存时间超过阈值
+- **THEN** 注入 SHALL 附带陈旧提示引导模型验证后再使用
 
-### Requirement: Extractor SHALL 只生成四类带证据候选
+### Requirement: 会话中主动写入 SHALL 经 HITL 确认
 
-Extractor SHALL 只输出 `decision|experience|workflow|gotcha`，并为每个 candidate 返回受限的 `subject`、`statement`、`applicability`、`evidence_refs`、`confidence_reason` 和可选关系建议。记忆维度同时覆盖任务经验与用户上下文：用户陈述的持久个人目标、兴趣、背景或输出偏好 SHALL 作为 decision candidate 提取（用户证据即可，无需任务产物），瞬时情绪、一次性好奇与单会话细节 SHALL NOT 提取。所有 evidence ref SHALL 属于当前 snapshot；代码 SHALL 计算 canonical subject key、校验类型/长度/角色标记/敏感信息并二次脱敏。模型 SHALL NOT 直接指定 user、scope、状态、有效期、数据库 id 或索引操作。
+会话进行中 Agent 提议写入记忆时 SHALL 经用户确认后写入条目文件与索引行，立即对下次会话生效。检索工具 SHALL 以 grep 与文件读取实现（类型目录过滤、预算限制沿用），本阶段 SHALL NOT 使用向量索引。
 
-#### Scenario: 决策候选引用确认来源
-- **WHEN** Extractor 输出 decision candidate
-- **THEN** candidate SHALL 引用用户确认或完成产物/验证证据
-- **AND** 无确认的 assistant 建议 SHALL 保持 candidate 或被拒绝
+#### Scenario: 主动写入需确认
+- **WHEN** Agent 会话中提议写入一条记忆
+- **THEN** 系统 SHALL 请求用户确认后才写入条目文件与索引行
+- **AND** 拒绝时 SHALL 不产生任何文件变更
 
-#### Scenario: 工作流候选包含验证和 stop rule
-- **WHEN** Extractor 输出 workflow candidate
-- **THEN** statement SHALL 包含适用条件、关键步骤和验证/停止条件
-- **AND** SHALL 引用对应 Run span
-
-#### Scenario: 伪造 evidence id
-- **WHEN** 模型返回不属于当前 snapshot 的 evidence ref
-- **THEN** 系统 SHALL 丢弃该 candidate 并记录 schema violation
-
-### Requirement: Memory identity SHALL 包含用户、scope、类型与 subject
-
-canonical identity SHALL 为 `(user_id, scope_key, memory_type, subject_key)`。scope SHALL 至少区分 agent profile 和 project key，并 MAY 包含 tool provider/environment。project key SHALL 由受控规则派生：会话工作区内带 `origin` 的 Git 仓库使用规范化 remote identity；其余情况（含会话沙箱内无 origin 的 Git 仓库与非 Git Run）一律为 `global`——Agent 工作区为每会话沙箱，无 origin 的沙箱仓库若按路径 digest 派生 key 将形成其他会话不可复现的死胡同 scope。模型和客户端不得指定其它用户或未授权 scope。跨项目 item 默认 SHALL NOT 自动注入，但 MAY 被当前用户显式搜索。
-
-#### Scenario: 同主题跨项目隔离
-- **WHEN** 两个带 origin 的仓库（项目）产生相同工具错误但修复方式不同
-- **THEN** 系统 SHALL 保留不同 scope 的 memory item
-- **AND** 一个项目的新 Run SHALL NOT 自动注入另一个项目条目
-
-#### Scenario: 沙箱内无 origin 的 Git 仓库归入 global
-- **WHEN** 会话沙箱内 `git init` 但未配置 origin 时自动提取记忆
-- **THEN** project key SHALL 为 `global`，产生的 item SHALL 保持 candidate
-- **AND** SHALL NOT 按会话沙箱路径派生其他会话无法复现的 scope
-
-#### Scenario: 客户端伪造 scope
-- **WHEN** 客户端或模型在 memory 请求中提交其它用户/project scope
-- **THEN** Service SHALL 使用当前认证用户和 Runtime scope 重新约束或拒绝请求
-
-#### Scenario: 非 Git 全局经验默认只可显式读取
-- **WHEN** 非 Git Run 自动产生 project_key=`global` 的 candidate
-- **THEN** 该 item SHALL 保持 candidate 或 pull-only
-- **AND** 只有用户明确确认适用于全部非项目任务后才 MAY active/自动注入
-
-### Requirement: Consolidation SHALL 执行有证据的确定性状态迁移
-
-系统 SHALL 在 canonical identity 的事务锁内，从当前 item、当前 snapshot candidates 和有界近邻中执行 `ADD|REINFORCE|UPDATE|SUPERSEDE|CONTRADICT|NOOP`。向量相似度 SHALL 只产生候选集，不得单独决定 UPDATE/SUPERSEDE。模型裁决 SHALL 只能引用代码提供的 candidate ids/operation enum/evidence refs。item 状态 SHALL 为 `candidate|active|superseded|disabled|invalidated|needs_review`；自动任务 SHALL NOT 复活 disabled 或 invalidated item。
-
-#### Scenario: 重复证据强化当前项
-- **WHEN** 新 candidate 与 active item 同 subject、同结论且来自独立 Run
-- **THEN** consolidation SHALL REINFORCE 当前 item 并追加 evidence
-- **AND** SHALL NOT 新建重复 current row
-
-#### Scenario: 用户纠正旧决策
-- **WHEN** 新 Run 中用户明确撤销同 subject 的旧 active decision
-- **THEN** consolidation SHALL SUPERSEDE 旧 item 并创建新的 current item
-- **AND** SHALL 保留旧版本和来源
-
-#### Scenario: 冲突证据不足
-- **WHEN** 两个可信来源对同 subject 冲突且没有明确时间/用户纠正可裁决
-- **THEN** 系统 SHALL 标记 needs_review/contradicts
-- **AND** SHALL NOT 自动注入任一命令式结论
-
-#### Scenario: disabled 不被自动复活
-- **WHEN** disabled item 后续再次出现相同候选
-- **THEN** 系统 MAY 追加 evidence
-- **AND** SHALL 保持 disabled
-
-### Requirement: Memory jobs SHALL 支持阶段恢复、fencing 与可见失败
-
-后台 job SHALL 明确区分 `capture|extract|consolidate` 阶段和 `pending|claimed|succeeded|succeeded_no_output|partial|failed|dead|skipped_disabled` 结果；`workspace_sync|index_sync` SHALL 作为带 claim/fencing 的 outbox 目标执行，复用同一结果与可靠性约束。claim SHALL 使用短事务、`SKIP LOCKED`、attempts-on-claim、lease 和唯一 claim token；完成、失败、续租和阶段提交 SHALL 校验 token。持久化的上阶段结果 SHALL 在重试中复用，不得重复调用模型。达到最大 attempts 的过期 claim SHALL 转为 dead，并能在用户健康界面中计数。
-
-#### Scenario: 旧 worker fencing
-- **WHEN** worker A lease 过期且 worker B 以新 token 接管
-- **THEN** worker A 的阶段提交 SHALL 影响零行
-
-#### Scenario: extract 结果已提交
-- **WHEN** chunk/candidate 结果已持久化后 consolidation 失败重试
-- **THEN** 系统 SHALL 复用已提交结果
-- **AND** SHALL NOT 重复调用 Extractor
-
-#### Scenario: 关闭开关停止 claimed job
-- **WHEN** 用户在 job 处理期间关闭经验记忆
-- **THEN** worker SHALL 在下一阶段边界标记 `skipped_disabled`
-- **AND** SHALL NOT 创建新 item 或自动注入
-
-### Requirement: PostgreSQL SHALL 是唯一权威事实源
-
-item、relation、evidence、snapshot、job、preference 和 desired-state outbox SHALL 保存在 PostgreSQL。文件 workspace 与 Qdrant SHALL 仅从 PostgreSQL 当前状态生成，并支持全量重建。状态变化与对应 outbox SHALL 在同一事务提交；派生 worker SHALL 每次重读 PostgreSQL current state，active upsert，其它状态/不存在 delete。
-
-#### Scenario: 删除后迟到同步事件
-- **WHEN** item 删除后较早的 workspace/index 事件才执行
-- **THEN** worker SHALL 读取到 item 不存在并执行删除
-- **AND** SHALL NOT 恢复旧内容
-
-#### Scenario: 派生视图可重建
-- **WHEN** memory workspace 或 Qdrant collection 丢失
-- **THEN** 系统 SHALL 从 PostgreSQL active/current items 重建
-
-### Requirement: 文件 workspace SHALL 提供安全的 manifest 与证据导航
-
-系统 SHALL 在服务端管理、按 user/scope 隔离的目录生成 `manifest.json`、`memory_summary.md`、四类 memory 文档和 Run summary。workspace SHALL 只包含安全摘要、检索 handles、memory ids 和 source span 引用，不得包含密钥、大工具输出、内部 provider 地址或跨用户路径。写入 SHALL 使用结构验证和 atomic replace；用户通过 API 修改后 SHALL 由 desired-state 同步更新。
-
-#### Scenario: manifest 缩小候选范围
-- **WHEN** deep query 需要搜索大量 Run
-- **THEN** query service SHALL 能先读取当前 scope manifest/summary
-- **AND** 无需扫描所有原始消息
-
-#### Scenario: 用户直接编辑派生文件
-- **WHEN** 派生 workspace 文件被外部修改
-- **THEN** 系统 SHALL NOT 将该修改自动写回 PostgreSQL
-- **AND** 下一次 desired-state 同步 MAY 覆盖该修改
-
-### Requirement: Fast Bulletin SHALL 经过 scope、状态、来源、有效期和相关性门控
-
-新 Run fast path SHALL 对 lexical/manifest 与 semantic candidates 做有界合并，再由 PostgreSQL 过滤当前用户、当前 project/profile scope、active、有效、来源合格且有可追溯 evidence 的 item。系统 SHALL 用结构化字段确定性渲染短 Bulletin，并设置总 item/token 预算。candidate、needs_review、superseded、disabled、invalidated、跨项目、外部来源命令和 raw evidence SHALL NOT 自动注入。任一依赖失败 SHALL 零注入且 Run 继续。
-
-#### Scenario: 低相关性零注入
-- **WHEN** 所有候选低于冻结阈值或不满足权威过滤
-- **THEN** 系统 SHALL 不注入 Memory Bulletin
-
-#### Scenario: stale index 被拒绝
-- **WHEN** Qdrant 返回已 superseded/disabled/invalidated item
-- **THEN** PostgreSQL 权威过滤 SHALL 排除该 item
-
-#### Scenario: 外部命令不自动注入
-- **WHEN** workflow 仅由 `tool_external` 内容支持且没有用户确认/受控验证
-- **THEN** 该条目 SHALL NOT 进入自动 Bulletin
-
-#### Scenario: 依赖故障降级
-- **WHEN** embedding、workspace、Qdrant 或 PostgreSQL memory 查询失败
-- **THEN** Runtime SHALL 零注入并继续当前 Run
-
-### Requirement: Deep query SHALL 是只读、有界且证据优先的检索
-
-当用户明确请求历史、当前问题需要多跳/时间/工作流证据，或 Agent 显式调用 `search_memory` 时，系统 MAY 运行受限 MemoryQueryService。该服务 SHALL 只拥有当前用户/scope 的 manifest、item、Run span 和 artifact summary 读取能力；SHALL 禁止网络、业务写工具、外部 MCP、shell 写入和跨用户路径；SHALL 限制 steps、timeout、token、并发和 returned spans。输出 SHALL 包含 bulletin、memory ids、source spans 和 evidence status；证据不足时 SHALL abstain。
-
-#### Scenario: 精确回到 Run span
-- **WHEN** query service 找到相关 workflow
-- **THEN** 返回结果 SHALL 包含支持结论的 memory id 和 Run source span
-- **AND** SHALL NOT 返回整条 Run 原文
-
-#### Scenario: 深度查询超时
-- **WHEN** query service 达到 timeout 或 step budget
-- **THEN** `search_memory` SHALL 返回已验证的部分结果或明确超时状态
-- **AND** SHALL NOT 降级为跨 scope/raw 全量注入
-
-#### Scenario: 来源存在未裁决冲突
-- **WHEN** 与查询相关的来源证据处于 `needs_review`
-- **THEN** query service SHALL 将 evidence status 标记为 `contradicts`
-- **AND** SHALL NOT 把待裁决结论作为已验证事实返回
-
-### Requirement: 自动 Bulletin SHALL 在同一 Run 内保持稳定
-
-Runtime SHALL 将 `run_id`、自动 Bulletin、`bulletin_hash`、memory ids 和 source snapshot 保存为 LangGraph private state。模型可见 Bulletin SHALL 只包含稳定 statement、applicability、verification label 和 memory id；当前 run id、source run/span、时间、evidence count、last verified 与随机值 SHALL 只存在于 private metadata。相同 Run 的多次模型调用、HITL resume 和跨进程 checkpoint 恢复 SHALL 复用逐字节相同的自动块；新 `run_id` SHALL 重新检索，但相同可见内容 SHALL 产生相同 hash/text。private state SHALL NOT 自动传给 subagent。显式 deep query 结果 SHALL 作为工具输出返回，不得改写已冻结自动块。
-
-#### Scenario: HITL 跨进程恢复
-- **WHEN** Run 注入后进入 HITL pending 并由另一进程恢复
-- **THEN** Runtime SHALL 复用 checkpoint 中的原 Bulletin
-
-#### Scenario: 新 Run 刷新
-- **WHEN** 同一 session 开始新的 `run_id`
-- **THEN** Runtime SHALL 忽略上一 Run 的自动块并重新检索
-
-### Requirement: 用户 SHALL 能治理 memory item 和来源
-
-用户 SHALL 能查看自己的四类 item、状态、scope、版本、独立 Run evidence 数、最后验证时间和处理健康；并能编辑安全展示字段、disable、enable、invalidate、delete 和查看来源。所有操作 SHALL 校验 user/scope 并经过 Service/状态机。用户编辑 SHALL 形成可审计 revision；delete SHALL 清理 item/evidence/relation 并同步派生视图，但 SHALL 明示未来相似 Run 可能重新生成。
-
-#### Scenario: 用户禁用 active item
-- **WHEN** 用户 disable 自己的 active item
-- **THEN** 该 item SHALL 停止自动注入
-- **AND** 自动 consolidation SHALL NOT 使其复活
-
-#### Scenario: 用户编辑结论
-- **WHEN** 用户修改 active item 的结论或适用范围
-- **THEN** 系统 SHALL 保存用户 revision 和旧版本
-- **AND** 新版本 SHALL 使用 `user` provenance
-
-#### Scenario: 越权治理
-- **WHEN** 用户请求其它用户的 memory id、snapshot 或来源
-- **THEN** 系统 SHALL 返回不存在或无权限
-- **AND** SHALL NOT 泄露内容、scope、路径或处理状态
-
-### Requirement: 新实现开始前 SHALL 删除旧机器经验行为路径
-
-实现 SHALL 在新增 Run snapshot、四类 Extractor、Consolidation、workspace、Bulletin 或 Deep Query 业务代码前，先删除旧 RecoveryAdapter、failure identity/resolution、experience-only Extractor/Revision/Retriever、raw action-card middleware、旧 worker/runtime/API/UI 装配和仅验证旧语义的测试；同时删除 `MemoryDreamService`、Dream scheduler/自动补写、按日整理 prompt、`memory/YYYY-MM-DD.md` 数据/API/UI/index/search 分支和测试。删除后 SHALL 建立应用可编译、用户显式 `USER.md` / `AGENTS.md` 上下文可运行、但机器经验自动 capture/注入暂不可用的空白基线。系统 SHALL NOT 通过兼容 flag、legacy module、双 worker、双 middleware、旧 L2 读取或版本选择保留旧行为。
-
-允许保留的代码 SHALL 限于独立的单一用户 preference 和现有通用 user/scope 鉴权。旧 item/evidence/job/outbox 表定义、运行数据和可靠性实现 SHALL 被删除；功能未上线，SHALL NOT 提供旧数据迁移、兼容读取或旧运行装配。新版 job/outbox SHALL 按新版状态机从零实现。
-
-#### Scenario: 删除门禁通过后才写新实现
-- **WHEN** 开发准备开始新增四类 memory pipeline
-- **THEN** 静态扫描和 removal baseline 测试 SHALL 已证明旧 adapter、action-card、failure-only job hook 和 legacy runtime wiring 不可达/不存在
-- **AND** 新实现任务 SHALL NOT 在该门禁前开始
-
-#### Scenario: 新版可靠性基础从空模型实现
-- **WHEN** 新版实现进入通用数据模型与后台可靠性阶段
-- **THEN** 系统 SHALL 按新版 phase/result/fencing 约束重新实现 lease、claim token 和 outbox
-- **AND** SHALL NOT import、包装或兼容旧 experience-only job/outbox 实现
-
-#### Scenario: 未上线旧数据不迁移
-- **WHEN** 新版 migration 创建 memory 表
-- **THEN** migration SHALL NOT 读取或转换旧 experience item/evidence/job/outbox
-- **AND** 旧 worker、middleware 和 API SHALL 不存在
-
-#### Scenario: 旧 Dream 和按日数据被删除
-- **WHEN** removal baseline 完成
-- **THEN** `MemoryDreamService`、Dream scheduler、自动补写、按日文件 API/UI/search 与 `memory/YYYY-MM-DD.md` 运行时数据 SHALL 不存在
-- **AND** `USER.md` / `AGENTS.md` 显式编辑 SHALL 继续可用
-
-### Requirement: 临时数据、错误和派生文件 SHALL 有界保留
-
-系统 SHALL 为 raw snapshot payload、chunk 结果、job result、dead job/outbox、query trace 和派生 Run summaries 配置独立保留期。错误和 trace SHALL 脱敏并截断；cleanup SHALL 不依赖 Qdrant 或 workspace worker 是否运行。健康页面 SHALL 在这些记录的配置保留期内展示非敏感状态和时间；保留期届满后 MAY 删除历史明细与对应计数，不得伪装成永久累计指标。
-
-#### Scenario: 大 snapshot 到期清理
-- **WHEN** snapshot 超过配置保留期且不再被 active item evidence 引用
-- **THEN** cleanup SHALL 删除大 payload/派生 Run 文件
-- **AND** MAY 保留 digest、状态、时间和计数
-
-#### Scenario: 索引 worker 停止
-- **WHEN** Qdrant 同步 worker 不运行
-- **THEN** job/snapshot/query trace cleanup SHALL 继续执行
-
+#### Scenario: grep 检索
+- **WHEN** 模型调用 search_memory
+- **THEN** 工具 SHALL 以关键词在 memory 目录检索并返回条目原文

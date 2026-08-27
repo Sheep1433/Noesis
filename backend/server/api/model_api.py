@@ -19,17 +19,13 @@ model_router = APIRouter(prefix="/api/models")
 
 
 def _platform_provider_info():
-    """内置目录的平台 Provider 元数据：id=type，label 取预设名回退 type。"""
+    """内置目录的平台 Provider 元数据：id=type，label 与目录行同一规则（见 catalog）。"""
     from noesis.config.env import ModelConfig
+    from noesis.llm.catalog import provider_display_label
 
-    label = ModelConfig.model_type
-    for preset in ModelConfig.provider_presets:
-        if preset.get("id") == ModelConfig.model_type:
-            label = str(preset.get("label") or label)
-            break
     return PlatformProviderInfo(
         id=ModelConfig.model_type,
-        label=label,
+        label=provider_display_label(ModelConfig.model_type, ModelConfig.model_base_url),
         base_url=ModelConfig.model_base_url,
     )
 

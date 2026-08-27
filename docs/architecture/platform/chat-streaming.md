@@ -60,6 +60,15 @@ GET /api/chat/runs/{run_id}/stream?after_sequence=N
 
 新 Tab 通过 `GET /api/chat/sessions/{session_id}/active-run` 查询服务端事实。`sessionStorage` 只保存当前 Tab hint，不能作为恢复前提。
 
+### 4.2a 信令流（跨窗口 / 会话列表实时刷新）
+
+run 内容流之外有两条**轻量信令流**，只推定位符（`run-started | run-hitl-pending | run-terminal`），不推内容：
+
+- `GET /api/chat/sessions/{session_id}/events`（event: `session-signal`）——同一会话的其它窗口（跨浏览器、跨设备）实时发现活跃 run，收到后经 `active-run` / `runs/{run_id}` 取权威状态并加入订阅。建连先下发当前 active run 作为首帧，覆盖「窗口先连、run 后建」之外的所有时序；超订阅数 429/`SESSION_SIGNAL_LIMIT`。
+- `GET /api/chat/events/stream`（event: `user-signal`）——该用户**任意**会话的 run 状态变化（携带 `session_id`/`status`），会话列表据此 patch 行级 run_status；建连先下发用户全部活跃 run。超订阅数 429/`USER_SIGNAL_LIMIT`。
+
+信令由 `RunManager` 在状态迁移点发布（`start()`/`resume()` 直接置 RUNNING 处，及 `transition()` 到 HITL_PENDING / 终态处；`chat/runs/{session_signals,user_signals}.py` 进程内总线，有界队列慢订阅丢帧）。**信令是 hint**：丢失或断线靠 `active-run` 自愈，不参与权威状态；流不主动结束，随页面关闭断开，15s 注释 keepalive。
+
 客户端收到 `run-snapshot` 后按 `assistant_message_id` replace parts，并采用以下 sequence 规则：
 
 ```text

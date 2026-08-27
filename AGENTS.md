@@ -61,13 +61,13 @@ Noesis/
 
 ### SSE 事件
 
-`reasoning-start/delta/end`、`text-start/delta/end`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`
+run 内容流：`reasoning-start/delta/end`、`text-start/delta/end`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见 `docs/architecture/platform/chat-streaming.md` §4.2a。
 
 **assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/architecture/platform/chat-streaming.md` §3.3。
 
 ### 认证
 
-认证使用 Cookie Session + CSRF；路由 `meta.requiresAuth`；401 跳转登录。
+认证使用 Cookie Session + CSRF；路由 `meta.requiresAuth`；401 跳转登录。CSRF token 由 `GET /api/auth/session` 轮换，旧 token 保留一代有效（`prev_csrf_digest`，多窗口互不失效）。
 
 ## 开发验证
 
@@ -77,7 +77,7 @@ cd frontend && pnpm lint        # 前端按影响范围 lint / build
 ```
 
 - Python 统一 `uv run`，禁止裸 `python`
-- 测试目录：`backend/tests/`、`frontend/tests/`
+- 测试目录：后端 `backend/tests/`（`api_contract/` = TestClient 级契约；`api/` = 真实服务级，`-m integration` 手动跑）；前端 `frontend/__tests__/`（vitest）与 `frontend/e2e/`（Playwright，`pnpm test:e2e`）
 - 每次测试完成后必须停止由 Agent 启动的后端、前端 dev/preview server 及临时测试进程，释放占用端口，避免与用户后续执行冲突
 - 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库
 - SSE、Agent、Qdrant、消息持久化相关改动优先补回归测试

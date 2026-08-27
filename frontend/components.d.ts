@@ -92,6 +92,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     SubagentCollapse: typeof import('./src/components/SubagentCollapse/index.vue')['default']
     SubagentConversationDrawer: typeof import('./src/components/SubagentConversationDrawer/index.vue')['default']
+    SubagentConversationView: typeof import('./src/components/SubagentConversationView/index.vue')['default']
     TaskCatalogPanel: typeof import('./src/components/TaskCatalogPanel/index.vue')['default']
     ThemeSwitcher: typeof import('./src/components/ThemeSwitcher/index.vue')['default']
     TodoList: typeof import('./src/components/TodoList/index.vue')['default']

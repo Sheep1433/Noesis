@@ -488,7 +488,9 @@ export type UserLLMDiscoveredModel = {
   label: string
   owned_by?: string | null
   context_window: number
-  context_source: 'provider' | 'unknown'
+  context_source: 'provider' | 'unknown' | 'catalog' | string
+  /** Provider 行原始布尔/数值字段透传（如 kilo 的 isFree），供预设筛选规则匹配 */
+  flags?: Record<string, boolean | number>
 }
 
 export type UserLLMDiscoveryResult = {

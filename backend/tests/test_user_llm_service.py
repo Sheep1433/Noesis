@@ -290,6 +290,7 @@ async def test_discover_provider_models_reads_openai_models_without_persisting(
             "owned_by": "deepseek",
             "context_window": 128000,
             "context_source": "provider",
+            "flags": {"context_length": 128000},
         },
         {
             "model_id": "deepseek-reasoner",
@@ -297,12 +298,74 @@ async def test_discover_provider_models_reads_openai_models_without_persisting(
             "owned_by": None,
             "context_window": 0,
             "context_source": "unknown",
+            "flags": {},
         },
     ]
     assert request["url"] == "https://api.example.com/v1/models"
     assert request["headers"]["Authorization"] == f"Bearer {plain}"
     assert plain not in str(result)
     assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_discover_probe_retries_once_on_transient_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """出网经本地代理常见间歇性失败：首次网络异常重试一次，成功即返回。"""
+    calls = {"count": 0}
+
+    class _Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"data": [{"id": "deepseek-chat"}]}
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> _Response:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise httpx.ConnectTimeout("flaky proxy")
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _Client())
+    result = await UserLLMService._probe_models_endpoint(
+        "https://api.example.com/v1", "sk-key"
+    )
+    assert result["ok"] is True
+    assert result["status"] == "discovered"
+    assert [m["model_id"] for m in result["models"]] == ["deepseek-chat"]
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_discover_probe_network_error_message_carries_exception_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """两次网络尝试均失败：network_error 消息带异常类名，便于区分代理/端点问题。"""
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> object:
+            raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _Client())
+    result = await UserLLMService._probe_models_endpoint(
+        "https://api.example.com/v1", "sk-key"
+    )
+    assert result["ok"] is False
+    assert result["status"] == "network_error"
+    assert "ConnectError" in result["message"]
 
 
 @pytest.mark.asyncio

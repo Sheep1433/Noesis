@@ -12,6 +12,8 @@ pnpm build:gh-pages # GitHub Pages（hash 路由）
 pnpm lint           # ESLint
 pnpm lint:fix       # ESLint 自动修复
 pnpm stylelint      # 样式检查
+pnpm test           # vitest 单测（__tests__/）
+pnpm test:e2e       # Playwright E2E（e2e/，需 E2E_BASE_URL 等环境变量）
 ```
 
 ## 核心架构

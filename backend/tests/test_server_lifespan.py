@@ -13,13 +13,69 @@ async def _session_context():
     yield MagicMock()
 
 
+class _FakeLeadershipToken:
+    def __init__(self, term: int = 1) -> None:
+        self.term = term
+        self.instance_id = "test-instance"
+        self.cluster_id = "local"
+        self.valid = True
+
+    def require_valid(self) -> None:
+        if not self.valid:
+            raise RuntimeError("leadership lost")
+
+
+class _FakeLeaderElector:
+    """绕过真实 advisory lock / t_runtime_leader 的测试替身。"""
+
+    def __init__(self, *, cluster_id: str) -> None:
+        self.cluster_id = cluster_id
+        self.instance_id = "test-instance"
+        self._token: _FakeLeadershipToken | None = None
+        self.release = AsyncMock()
+        self.invalidate = MagicMock()
+
+    @property
+    def token(self) -> _FakeLeadershipToken | None:
+        return self._token
+
+    async def acquire(self) -> _FakeLeadershipToken:
+        await pg_manager_for_tests.acquire_advisory_lock()
+        self._token = _FakeLeadershipToken()
+        return self._token
+
+
+class _FakeRunDispatcher:
+    def __init__(self, **_kwargs) -> None:
+        self.start = AsyncMock()
+        self.stop = AsyncMock()
+        self.running = False
+
+
+pg_manager_for_tests: MagicMock  # 由 _patch_lifespan_resources 注入
+
+
 def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    global pg_manager_for_tests
     pg_manager = MagicMock()
     pg_manager.get_async_session_context.return_value = _session_context()
     pg_manager.close = AsyncMock()
     pg_manager.acquire_advisory_lock = AsyncMock()
+    pg_manager.acquire_migration_lock = AsyncMock()
+    pg_manager.release_migration_lock = AsyncMock()
     pg_manager.monitor_advisory_lock = AsyncMock()
     monkeypatch.setattr(server_main, "pg_manager", pg_manager)
+    pg_manager_for_tests = pg_manager
+
+    elector_holder: dict[str, _FakeLeaderElector] = {}
+
+    def _fake_elector_factory(**kwargs):
+        elector = _FakeLeaderElector(**kwargs)
+        elector_holder["elector"] = elector
+        return elector
+
+    monkeypatch.setattr(server_main, "LeaderElector", _fake_elector_factory)
+    monkeypatch.setattr(server_main, "RunDispatcher", _FakeRunDispatcher)
 
     async_names = (
         "init_database",
@@ -116,7 +172,9 @@ async def test_lifespan_does_not_start_runtime_when_owner_lock_is_unavailable(
         async with server_main.lifespan(server_main.app):
             pass
 
-    patched["init_database"].assert_not_awaited()
+    # 新契约（enable-distributed-sse-pubsub）：migration 先于执行锁（follower 也需完成
+    # migration），获锁失败在 migration 之后 fail-fast；leader-only runtime 一律不启动
+    patched["init_database"].assert_awaited_once()
     patched["recover"].assert_not_awaited()
     patched["start_scheduled_task_scheduler"].assert_not_called()
 

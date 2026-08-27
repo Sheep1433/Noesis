@@ -42,6 +42,47 @@ function handleContextMenu(e: MouseEvent) {
     props.onContextMenu(props.node, e.clientX, e.clientY)
   }
 }
+
+// 触屏无右键：长按 500ms 等价右键；移动/抬起取消（避免与滚动冲突）
+let longPressTimer: ReturnType<typeof setTimeout> | null = null
+let longPressOrigin = { x: 0, y: 0 }
+
+function cancelLongPress() {
+  if (longPressTimer !== null) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+function onTouchStart(e: TouchEvent) {
+  if (isFolder.value || !props.onContextMenu) {
+    return
+  }
+  const t = e.touches[0]
+  if (!t) {
+    return
+  }
+  longPressOrigin = { x: t.clientX, y: t.clientY }
+  cancelLongPress()
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null
+    props.onContextMenu?.(props.node, longPressOrigin.x, longPressOrigin.y)
+  }, 500)
+}
+
+function onTouchMove(e: TouchEvent) {
+  if (longPressTimer === null) {
+    return
+  }
+  const t = e.touches[0]
+  if (!t) {
+    cancelLongPress()
+    return
+  }
+  if (Math.abs(t.clientX - longPressOrigin.x) > 10 || Math.abs(t.clientY - longPressOrigin.y) > 10) {
+    cancelLongPress()
+  }
+}
 </script>
 
 <template>
@@ -55,6 +96,10 @@ function handleContextMenu(e: MouseEvent) {
       :style="{ paddingLeft: `${8 + depth * 14}px` }"
       @click="handleRowClick"
       @contextmenu.prevent="handleContextMenu"
+      @touchstart.passive="onTouchStart"
+      @touchmove.passive="onTouchMove"
+      @touchend="cancelLongPress"
+      @touchcancel="cancelLongPress"
     >
       <span
         class="tree-chevron"
@@ -105,6 +150,7 @@ function handleContextMenu(e: MouseEvent) {
   cursor: pointer;
   color: #3f3f46;
   -webkit-touch-callout: none;
+  user-select: none;
   touch-action: manipulation;
 }
 

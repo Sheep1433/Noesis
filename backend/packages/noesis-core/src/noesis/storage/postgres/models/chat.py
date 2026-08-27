@@ -117,6 +117,15 @@ class TAgentRun(Base):
     error_code: Mapped[Optional[str]] = mapped_column(VARCHAR(80), nullable=True)
     user_error_message: Mapped[Optional[str]] = mapped_column(VARCHAR(500), nullable=True)
     owner_instance_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100), nullable=True)
+    owner_term: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="claim 时的 leader term；0=未被任何 leader claim",
+    )
+    launch_payload: Mapped[Optional[dict]] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="dispatcher 重建 producer 所需的 schema 化启动载荷（无认证秘密）",
+    )
     snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     memory_context: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True, comment="Run-private recalled memory ids/hash"

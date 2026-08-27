@@ -16,6 +16,7 @@ from noesis.storage.postgres.models.chat import (
 )
 from noesis.storage.postgres.models.knowledge import TKbCollectionConfig
 from noesis.storage.postgres.models.scheduled_task import TUserScheduledTask
+from noesis.storage.postgres.models.runtime_leader import TRuntimeLeader
 from noesis.storage.postgres.models.user_llm import (
     TUserLLMModel,
     TUserLLMPreference,
