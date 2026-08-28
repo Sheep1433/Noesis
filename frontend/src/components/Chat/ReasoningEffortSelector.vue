@@ -1,6 +1,5 @@
 <script lang="ts" setup>
 import type { ChatModelOption } from '@/api/models'
-import { h } from 'vue'
 import { ensureSession } from '@/api/chat'
 import { getChatModels } from '@/api/models'
 import {
@@ -34,26 +33,71 @@ const declaredLevels = computed<string[] | null>(() => {
   return ordered.length > 0 ? ordered : null
 })
 
-const dropdownOptions = computed(() => {
-  if (declaredLevels.value === null) {
-    return []
-  }
-  return [
-    { label: '自动', key: '' },
-    ...declaredLevels.value.map((level) => {
-      return { label: reasoningLevelLabel(level), key: level }
-    }),
-  ]
+/** 滑块索引 ↔ 档位值 */
+const sliderIndex = computed<number>({
+  get: () => {
+    if (declaredLevels.value === null) {
+      return 0
+    }
+    const index = declaredLevels.value.indexOf(modelValue.value)
+    return index >= 0 ? index : 0
+  },
+  set: (index) => {
+    if (declaredLevels.value === null) {
+      return
+    }
+    const level = declaredLevels.value[index]
+    if (level && level !== modelValue.value) {
+      modelValue.value = level
+      void persistEffort(level)
+    }
+  },
 })
 
-function renderDropdownLabel(option: { label?: string | number, key?: string | number }) {
-  const label = String(option.label ?? '')
-  const active = String(option.key) === modelValue.value
-  return h('span', { class: 'composer-model-dropdown__item' }, [
-    h('span', { class: 'composer-model-dropdown__label' }, label),
-    active ? h('span', { class: 'i-carbon:checkmark composer-model-dropdown__check' }) : null,
-  ])
+/** '' = 自动（不传参） */
+const autoMode = computed<boolean>({
+  get: () => {
+    return !modelValue.value
+  },
+  set: (auto) => {
+    const next = auto ? '' : defaultManualLevel()
+    modelValue.value = next
+    void persistEffort(next)
+  },
+})
+
+/** 关闭自动时的落点：声明含 medium 取 medium，否则取中间档 */
+function defaultManualLevel(): string {
+  const levels = declaredLevels.value ?? []
+  if (levels.includes('medium')) {
+    return 'medium'
+  }
+  return levels[Math.floor((levels.length - 1) / 2)] ?? ''
 }
+
+const sliderMarks = computed<Record<number, string>>(() => {
+  const marks: Record<number, string> = {}
+  const levels = declaredLevels.value ?? []
+  levels.forEach((level, index) => {
+    marks[index] = reasoningLevelLabel(level)
+  })
+  return marks
+})
+
+const HINTS: Record<string, string> = {
+  off: '关闭思考：直接回答，最快',
+  low: '低：快速思考，适合简单问题',
+  medium: '中：平衡思考与速度',
+  high: '高：更深入的推理，更慢',
+  max: '最高：最充分的思考，最慢',
+}
+
+const currentHint = computed(() => {
+  if (autoMode.value) {
+    return '自动：不干预，使用模型默认行为'
+  }
+  return HINTS[modelValue.value] ?? ''
+})
 
 const currentLabel = computed(() => {
   return reasoningLevelLabel(modelValue.value)
@@ -83,11 +127,6 @@ async function persistEffort(level: string) {
   }
 }
 
-async function onSelect(key: string) {
-  modelValue.value = key
-  await persistEffort(key)
-}
-
 /** 模型切换后档位不再在声明内 → 回退自动（下次发送不传参） */
 watch(
   () => [props.modelId, declaredLevels.value] as const,
@@ -111,27 +150,50 @@ watch(
 </script>
 
 <template>
-  <n-dropdown
+  <n-popover
     v-if="declaredLevels !== null"
     trigger="click"
     placement="top-start"
-    :options="dropdownOptions"
-    :render-label="renderDropdownLabel"
-    :disabled="disabled || dropdownOptions.length === 0"
-    @select="onSelect"
+    :disabled="disabled"
+    :show-arrow="true"
   >
-    <button
-      type="button"
-      class="composer-model-trigger"
-      :class="{ 'composer-model-trigger--menu': embedded }"
-      :disabled="disabled || dropdownOptions.length === 0"
-    >
-      <span v-if="embedded" class="i-carbon:ideas composer-model-trigger__icon"></span>
-      <span v-if="embedded" class="composer-model-trigger__title">思考</span>
-      <span class="composer-model-trigger__label">{{ currentLabel }}</span>
-      <span class="i-carbon:chevron-down text-12 opacity-60"></span>
-    </button>
-  </n-dropdown>
+    <template #trigger>
+      <button
+        type="button"
+        class="composer-model-trigger"
+        :class="{ 'composer-model-trigger--menu': embedded }"
+        :disabled="disabled"
+      >
+        <span v-if="embedded" class="i-carbon:ideas composer-model-trigger__icon"></span>
+        <span v-if="embedded" class="composer-model-trigger__title">思考</span>
+        <span class="composer-model-trigger__label">{{ currentLabel }}</span>
+        <span class="i-carbon:chevron-down text-12 opacity-60"></span>
+      </button>
+    </template>
+
+    <div class="reasoning-panel">
+      <div class="reasoning-panel__header">
+        <span class="reasoning-panel__title">推理预算</span>
+        <span class="reasoning-panel__auto">
+          自动
+          <n-switch v-model:value="autoMode" size="small" />
+        </span>
+      </div>
+      <n-slider
+        v-model:value="sliderIndex"
+        :min="0"
+        :max="(declaredLevels ?? []).length - 1"
+        :step="1"
+        :marks="sliderMarks"
+        :disabled="autoMode"
+        :tooltip="false"
+        class="reasoning-panel__slider"
+      />
+      <div class="reasoning-panel__hint" :class="{ 'reasoning-panel__hint--muted': autoMode }">
+        {{ currentHint }}
+      </div>
+    </div>
+  </n-popover>
 </template>
 
 <style scoped>
@@ -188,5 +250,47 @@ watch(
 
 .composer-model-trigger__title {
   flex: 1;
+}
+
+.reasoning-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 260px;
+  padding: 4px 2px;
+}
+
+.reasoning-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reasoning-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--noesis-text-primary, #111);
+}
+
+.reasoning-panel__auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--noesis-text-secondary, #6b7280);
+}
+
+.reasoning-panel__slider {
+  padding: 0 6px;
+}
+
+.reasoning-panel__hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--noesis-text-secondary, #6b7280);
+}
+
+.reasoning-panel__hint--muted {
+  opacity: 0.7;
 }
 </style>

@@ -68,14 +68,14 @@ describe('reasoning effort selector', () => {
     await flushPromises()
     expect(wrapper.find('button').exists()).toBe(false)
 
-    // 同一选择器在声明了档位的模型上渲染触发按钮
+    // 同一选择器在声明了档位的模型上渲染入口按钮
     await wrapper.setProps({ modelId: 'm2' })
     await flushPromises()
     expect(wrapper.find('button').exists()).toBe(true)
     expect(wrapper.find('button').text()).toContain('自动')
   })
 
-  it('shows the selected level on the trigger button', async () => {
+  it('shows the selected level on the entry button', async () => {
     getChatModels.mockResolvedValue({
       models: [{
         id: 'm2', label: 'M2', model_type: 'openai', is_default: true,
@@ -88,6 +88,32 @@ describe('reasoning effort selector', () => {
     await wrapper.setProps({ modelValue: 'high' })
     await flushPromises()
     expect(wrapper.find('button').text()).toContain('高')
+  })
+
+  it('declared levels drive the slider stops via entry label transitions', async () => {
+    getChatModels.mockResolvedValue({
+      models: [{
+        id: 'm2', label: 'M2', model_type: 'openai', is_default: true,
+        reasoning_levels: ['off', 'low', 'medium', 'high', 'max'],
+      }],
+      default_id: 'm2',
+    })
+    const wrapper = mountSelector({ modelId: 'm2' })
+    await flushPromises()
+
+    // 默认自动 → 入口显示「自动」；各档位值反映到入口标签
+    // （滑块停靠点由 declaredLevels 派生，入口标签是它的可观察投影）
+    expect(wrapper.find('button').text()).toContain('自动')
+    for (const [level, label] of [['off', '关'], ['low', '低'], ['medium', '中'], ['high', '高'], ['max', '最高']]) {
+      await wrapper.setProps({ modelValue: level })
+      await flushPromises()
+      expect(wrapper.find('button').text()).toContain(label)
+    }
+
+    // 回到自动（''）→ 标签恢复
+    await wrapper.setProps({ modelValue: '' })
+    await flushPromises()
+    expect(wrapper.find('button').text()).toContain('自动')
   })
 
   it('resets to auto when model switches to one without the selected level', async () => {
