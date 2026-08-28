@@ -937,7 +937,10 @@ function detailPrimaryLabel(item: SkillMarketItem): string {
     gap: 6px;
     margin-bottom: 0;
 
+    // 横排时的 flex-basis 10rem 在纵向容器里会变成 160px 高度预留，
+    // 造成标题与统计行之间的半屏空白，堆叠布局必须重置
     .name {
+      flex: 0 0 auto;
       font-size: 15px;
       line-height: 1.35;
       word-break: break-word;
