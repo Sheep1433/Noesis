@@ -13,23 +13,21 @@ from noesis.llm.reasoning import (
 )
 
 
-@pytest.mark.parametrize(
-    ("level", "wire"),
-    [
-        ("off", "none"),
-        ("low", "low"),
-        ("medium", "medium"),
-        ("high", "high"),
-        ("max", "max"),
-    ],
-)
-def test_wire_mapping(level: str, wire: str) -> None:
-    assert to_wire_reasoning_effort(level) == wire
+@pytest.mark.parametrize("level", ["low", "medium", "high"])
+def test_wire_mapping_is_identity(level: str) -> None:
+    """通用三档：wire 值即档位名（OpenAI chat/completions 顶层 reasoning_effort）。"""
+    assert to_wire_reasoning_effort(level) == level
 
 
-def test_wire_mapping_rejects_unknown_level() -> None:
+@pytest.mark.parametrize("level", ["off", "max", "none", "xhigh", ""])
+def test_wire_mapping_rejects_non_universal_level(level: str) -> None:
+    """非通用档位（off/max 等）已收窄掉，进档位通道直接拒绝。"""
     with pytest.raises(ValueError):
-        to_wire_reasoning_effort("xhigh")
+        to_wire_reasoning_effort(level)
+
+
+def test_levels_are_universal_three() -> None:
+    assert REASONING_LEVELS == ("low", "medium", "high")
 
 
 def test_request_reasoning_effort_contextvar_roundtrip() -> None:

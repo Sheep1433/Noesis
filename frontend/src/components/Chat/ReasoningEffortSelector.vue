@@ -1,66 +1,63 @@
 <script lang="ts" setup>
 import { ensureSession } from '@/api/chat'
-import { REASONING_LEVEL_ORDER, reasoningLevelLabel } from '@/utils/reasoningLevels'
+import {
+  modelSupportsReasoningEffort,
+  REASONING_LEVEL_ORDER,
+  reasoningLevelLabel,
+} from '@/utils/reasoningLevels'
 
 const props = defineProps<{
   sessionId: string
+  /** 当前模型 id：仅已知支持 reasoning_effort 的模型显示入口 */
+  modelId?: string
   disabled?: boolean
   /** ACTIVE 会话才写回 session.extra；COMPOSING 仅改本地 modelValue */
   persistSessionExtra?: boolean
   embedded?: boolean
 }>()
 
-/** '' = 自动（不传参）；off/low/medium/high/max = 推理档位 */
+/** '' = 自动（不传参）；low/medium/high = 推理档位 */
 const modelValue = defineModel<string>({ default: '' })
 
-const LEVELS = [...REASONING_LEVEL_ORDER]
+/** 滑块停靠点：自动（不发参数）+ 通用三档 */
+const STOPS: string[] = ['', ...REASONING_LEVEL_ORDER]
+
+const supported = computed(() => {
+  return modelSupportsReasoningEffort(props.modelId ?? '')
+})
 
 /** 滑块索引 ↔ 档位值 */
 const sliderIndex = computed<number>({
   get: () => {
-    const index = LEVELS.indexOf(modelValue.value)
+    const index = STOPS.indexOf(modelValue.value)
     return index >= 0 ? index : 0
   },
   set: (index) => {
-    const level = LEVELS[index]
-    if (level && level !== modelValue.value) {
+    const level = STOPS[index] ?? ''
+    if (level !== modelValue.value) {
       modelValue.value = level
       void persistEffort(level)
     }
   },
 })
 
-/** '' = 自动（不传参） */
-const autoMode = computed<boolean>({
-  get: () => {
-    return !modelValue.value
-  },
-  set: (auto) => {
-    const next = auto ? '' : 'medium'
-    modelValue.value = next
-    void persistEffort(next)
-  },
-})
-
 const sliderMarks = computed<Record<number, string>>(() => {
   const marks: Record<number, string> = {}
-  LEVELS.forEach((level, index) => {
+  STOPS.forEach((level, index) => {
     marks[index] = reasoningLevelLabel(level)
   })
   return marks
 })
 
 const HINTS: Record<string, string> = {
-  off: '关闭思考：直接回答，最快',
   low: '低：快速思考，适合简单问题',
   medium: '中：平衡思考与速度',
   high: '高：更深入的推理，更慢',
-  max: '最高：最充分的思考，最慢',
 }
 
 const currentHint = computed(() => {
-  if (autoMode.value) {
-    return '自动：不干预，使用模型默认行为；不支持的模型会忽略该参数'
+  if (!modelValue.value) {
+    return '自动：不干预，使用模型默认行为'
   }
   return HINTS[modelValue.value] ?? ''
 })
@@ -86,6 +83,7 @@ async function persistEffort(level: string) {
 
 <template>
   <n-popover
+    v-if="supported"
     trigger="click"
     placement="top-start"
     :disabled="disabled"
@@ -108,22 +106,17 @@ async function persistEffort(level: string) {
     <div class="reasoning-panel">
       <div class="reasoning-panel__header">
         <span class="reasoning-panel__title">推理预算</span>
-        <span class="reasoning-panel__auto">
-          自动
-          <n-switch v-model:value="autoMode" size="small" />
-        </span>
       </div>
       <n-slider
         v-model:value="sliderIndex"
         :min="0"
-        :max="LEVELS.length - 1"
+        :max="STOPS.length - 1"
         :step="1"
         :marks="sliderMarks"
-        :disabled="autoMode"
         :tooltip="false"
         class="reasoning-panel__slider"
       />
-      <div class="reasoning-panel__hint" :class="{ 'reasoning-panel__hint--muted': autoMode }">
+      <div class="reasoning-panel__hint" :class="{ 'reasoning-panel__hint--muted': !modelValue }">
         {{ currentHint }}
       </div>
     </div>
@@ -190,7 +183,7 @@ async function persistEffort(level: string) {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  width: 260px;
+  width: 240px;
   padding: 4px 2px;
 }
 
@@ -204,14 +197,6 @@ async function persistEffort(level: string) {
   font-size: 13px;
   font-weight: 600;
   color: var(--noesis-text-primary, #111);
-}
-
-.reasoning-panel__auto {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--noesis-text-secondary, #6b7280);
 }
 
 .reasoning-panel__slider {

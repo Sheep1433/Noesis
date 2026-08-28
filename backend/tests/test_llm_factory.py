@@ -172,29 +172,20 @@ from unittest.mock import patch  # noqa: E402
 
 
 def test_build_chat_model_injects_reasoning_effort_for_openai_family() -> None:
-    """openai 协议族（openai/minimax/opencode/deepseek）注入 wire 档位；off→none。"""
+    """openai 协议族（openai/minimax/opencode/deepseek）注入顶层 reasoning_effort。"""
     from noesis.llm.factory import build_chat_model
 
     for model_type in ("openai", "minimax", "opencode", "deepseek"):
-        model = build_chat_model(
-            model_type=model_type,
-            model_name="deepseek-v4-flash-free",
-            temperature=0.7,
-            model_base_url="https://opencode.ai/zen/v1",
-            model_api_key="test-key",
-            reasoning_effort="high",
-        )
-        assert model.reasoning_effort == "high", model_type
-
-        model_off = build_chat_model(
-            model_type=model_type,
-            model_name="deepseek-v4-flash-free",
-            temperature=0.7,
-            model_base_url="https://opencode.ai/zen/v1",
-            model_api_key="test-key",
-            reasoning_effort="off",
-        )
-        assert model_off.reasoning_effort == "none", model_type
+        for effort in ("low", "medium", "high"):
+            model = build_chat_model(
+                model_type=model_type,
+                model_name="deepseek-v4-flash",
+                temperature=0.7,
+                model_base_url="https://opencode.ai/zen/v1",
+                model_api_key="test-key",
+                reasoning_effort=effort,
+            )
+            assert model.reasoning_effort == effort, (model_type, effort)
 
 
 def test_build_chat_model_skips_reasoning_for_qwen() -> None:

@@ -1,9 +1,10 @@
 """推理档位（reasoning_effort）：统一档位枚举与当前 Run 的请求侧透传。
 
-- 档位轴 ``off/low/medium/high/max``，wire 映射 ``off -> "none"``，其余原值；
+- 档位轴 ``low/medium/high``（各家通用三档）；wire 值即档位名；
   「自动」= 键缺失 = 不传参数（provider 默认行为）。
-- 仅做顶层 ``reasoning_effort`` 通用透传；控件对所有模型常显，
-  端点不支持该参数时自行忽略（实测 OpenAI 协议网关均不报 400）。
+- 仅做顶层 ``reasoning_effort`` 通用透传（OpenAI 协议族）；入口只对
+  已知支持的模型显示（前端按模型名规则），qwen/anthropic 走专有
+  参数体系、构造层跳过注入。
 - 当前 Run 的档位经 ContextVar 传播（仿 runtime_snapshot 先例），
   不在 run_agent / create_noesis_agent 全链路加签名参数。
 """
@@ -12,17 +13,14 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
-REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high", "max")
-
-# UI「自动」不进枚举：它表示键缺失。wire 上 off 映射为 OpenAI 规范的 none。
-_WIRE_REASONING_EFFORT: dict[str, str] = {"off": "none"}
+REASONING_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 
 
 def to_wire_reasoning_effort(level: str) -> str:
-    """档位 → wire 值：off→none，其余原值。非法档位抛 ValueError（调用方已校验）。"""
+    """档位 → wire 值：三档通用值即档位名本身。非法档位抛 ValueError。"""
     if level not in REASONING_LEVELS:
         raise ValueError(f"非法推理档位: {level!r}，仅允许 {'/'.join(REASONING_LEVELS)}")
-    return _WIRE_REASONING_EFFORT.get(level, level)
+    return level
 
 
 _request_reasoning_effort: ContextVar[str | None] = ContextVar(

@@ -284,8 +284,8 @@ def build_chat_model(
         else {}
     )
     # 推理档位：仅 OpenAI 协议族（openai/minimax/opencode/deepseek）透传顶层
-    # reasoning_effort；qwen/anthropic 走专有参数体系（enable_thinking/budget_tokens），
-    # 本功能不做映射，不注入。
+    # reasoning_effort（通用三档 low/medium/high）；qwen/anthropic 走专有参数
+    # 体系（enable_thinking/budget_tokens），不注入。
     from noesis.llm.reasoning import REASONING_LEVELS, to_wire_reasoning_effort
 
     reasoning_kwargs = (

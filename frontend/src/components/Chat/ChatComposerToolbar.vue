@@ -398,6 +398,7 @@ const kbSummary = computed(() => {
         v-if="showReasoningEffort"
         v-model="selectedReasoningEffort"
         :session-id="sessionId"
+        :model-id="selectedModelId"
         :persist-session-extra="persistSessionExtra"
         :disabled="disabled"
       />
