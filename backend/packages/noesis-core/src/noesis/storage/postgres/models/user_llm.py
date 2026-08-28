@@ -44,10 +44,6 @@ class TUserLLMModel(Base):
     label: Mapped[str] = mapped_column(String(200), nullable=False, comment="选择器显示名")
     temperature: Mapped[Optional[float]] = mapped_column(nullable=True, comment="可选温度覆盖")
     context_window: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, comment="上下文窗口（token）")
-    reasoning_levels: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True,
-        comment="推理档位能力声明（逗号分隔子集 off,low,medium,high,max；NULL=未声明不显示控件）",
-    )
     deleted_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="软删除时间（毫秒）")
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

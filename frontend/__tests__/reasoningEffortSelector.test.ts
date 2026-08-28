@@ -5,16 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
 import {
   isReasoningLevel,
-  orderReasoningLevels,
   reasoningLevelLabel,
   reasoningLevelOptions,
 } from '@/utils/reasoningLevels'
-
-const getChatModels = vi.fn()
-
-vi.mock('@/api/models', () => ({
-  getChatModels: (...args: unknown[]) => getChatModels(...args),
-}))
 
 vi.mock('@/api/chat', () => ({
   ensureSession: vi.fn().mockResolvedValue({}),
@@ -30,14 +23,6 @@ function mountSelector(props: Record<string, unknown> = {}) {
 }
 
 describe('reasoning level utils', () => {
-  it('orders declared levels in fixed order and drops invalid ones', () => {
-    expect(orderReasoningLevels(['max', 'low', 'off'])).toEqual(['off', 'low', 'max'])
-    expect(orderReasoningLevels(['xhigh', 'medium', 'medium'])).toEqual(['medium'])
-    expect(orderReasoningLevels([])).toEqual([])
-    expect(orderReasoningLevels(null)).toEqual([])
-    expect(orderReasoningLevels('low')).toEqual([])
-  })
-
   it('exposes select options and labels', () => {
     expect(reasoningLevelOptions()).toEqual([
       { label: '关', value: 'off' },
@@ -48,91 +33,30 @@ describe('reasoning level utils', () => {
     ])
     expect(reasoningLevelLabel('')).toBe('自动')
     expect(reasoningLevelLabel('high')).toBe('高')
-    expect(reasoningLevelLabel('xhigh')).toBe('xhigh')
     expect(isReasoningLevel('low')).toBe(true)
     expect(isReasoningLevel('')).toBe(false)
-    expect(isReasoningLevel('xhigh')).toBe(false)
   })
 })
 
 describe('reasoning effort selector', () => {
-  it('hides when current model declares no reasoning levels', async () => {
-    getChatModels.mockResolvedValue({
-      models: [
-        { id: 'm1', label: 'M1', model_type: 'openai', is_default: true, reasoning_levels: [] },
-        { id: 'm2', label: 'M2', model_type: 'openai', is_default: false, reasoning_levels: ['low'] },
-      ],
-      default_id: 'm1',
-    })
-    const wrapper = mountSelector({ modelId: 'm1' })
-    await flushPromises()
-    expect(wrapper.find('button').exists()).toBe(false)
-
-    // 同一选择器在声明了档位的模型上渲染入口按钮
-    await wrapper.setProps({ modelId: 'm2' })
+  it('always renders for any model (no capability gating)', async () => {
+    // 无模型信息、无声明——控件常显
+    const wrapper = mountSelector()
     await flushPromises()
     expect(wrapper.find('button').exists()).toBe(true)
     expect(wrapper.find('button').text()).toContain('自动')
   })
 
-  it('shows the selected level on the entry button', async () => {
-    getChatModels.mockResolvedValue({
-      models: [{
-        id: 'm2', label: 'M2', model_type: 'openai', is_default: true,
-        reasoning_levels: ['low', 'high', 'max'],
-      }],
-      default_id: 'm2',
-    })
-    const wrapper = mountSelector({ modelId: 'm2' })
+  it('entry label reflects each level and returns to auto', async () => {
+    const wrapper = mountSelector()
     await flushPromises()
-    await wrapper.setProps({ modelValue: 'high' })
-    await flushPromises()
-    expect(wrapper.find('button').text()).toContain('高')
-  })
-
-  it('declared levels drive the slider stops via entry label transitions', async () => {
-    getChatModels.mockResolvedValue({
-      models: [{
-        id: 'm2', label: 'M2', model_type: 'openai', is_default: true,
-        reasoning_levels: ['off', 'low', 'medium', 'high', 'max'],
-      }],
-      default_id: 'm2',
-    })
-    const wrapper = mountSelector({ modelId: 'm2' })
-    await flushPromises()
-
-    // 默认自动 → 入口显示「自动」；各档位值反映到入口标签
-    // （滑块停靠点由 declaredLevels 派生，入口标签是它的可观察投影）
-    expect(wrapper.find('button').text()).toContain('自动')
     for (const [level, label] of [['off', '关'], ['low', '低'], ['medium', '中'], ['high', '高'], ['max', '最高']]) {
       await wrapper.setProps({ modelValue: level })
       await flushPromises()
       expect(wrapper.find('button').text()).toContain(label)
     }
-
-    // 回到自动（''）→ 标签恢复
     await wrapper.setProps({ modelValue: '' })
     await flushPromises()
     expect(wrapper.find('button').text()).toContain('自动')
-  })
-
-  it('resets to auto when model switches to one without the selected level', async () => {
-    getChatModels.mockResolvedValue({
-      models: [
-        { id: 'm2', label: 'M2', model_type: 'openai', is_default: true, reasoning_levels: ['low', 'high'] },
-        { id: 'm3', label: 'M3', model_type: 'openai', is_default: false, reasoning_levels: ['low'] },
-      ],
-      default_id: 'm2',
-    })
-    const wrapper = mountSelector({ modelId: 'm2' })
-    await flushPromises()
-    await wrapper.setProps({ modelValue: 'high' })
-    await flushPromises()
-    expect(wrapper.vm.modelValue as unknown as string).toBe('high')
-
-    // 切到只声明 low 的模型 → 回退自动（下次发送不传参）
-    await wrapper.setProps({ modelId: 'm3' })
-    await flushPromises()
-    expect(wrapper.vm.modelValue as unknown as string).toBe('')
   })
 })

@@ -44,39 +44,6 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
     get_model_catalog.cache_clear()
 
 
-@patch("noesis.llm.catalog.load_app_yaml")
-def test_model_catalog_reasoning_levels_declaration(mock_load_yaml):
-    """条目声明推理档位→entry/下拉行透出；未声明→空（控件不显示）；model 层默认可继承。"""
-    from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelYamlSection
-
-    mock_load_yaml.return_value = AppYamlConfig(
-        model=ModelYamlSection(
-            type="opencode",
-            name="deepseek-v4-flash-free",
-            reasoning_levels=["off", "low", "high", "max"],
-            catalog=[
-                ModelCatalogEntryYamlSection(id="deepseek-v4-flash-free", label="Flash"),
-                ModelCatalogEntryYamlSection(
-                    id="deepseek-reasoner",
-                    label="Reasoner",
-                    reasoning_levels=["low", "medium", "high"],
-                ),
-            ],
-        )
-    )
-    get_model_catalog.cache_clear()
-
-    # 未声明的条目继承 model 层默认；条目声明优先；非法值被过滤、按枚举序归一
-    assert resolve_catalog_entry("deepseek-v4-flash-free").reasoning_levels == ("off", "low", "high", "max")
-    assert resolve_catalog_entry("deepseek-reasoner").reasoning_levels == ("low", "medium", "high")
-
-    rows = {row["id"]: row for row in list_public_models()}
-    assert rows["deepseek-v4-flash-free"]["reasoning_levels"] == ["off", "low", "high", "max"]
-    assert rows["deepseek-reasoner"]["reasoning_levels"] == ["low", "medium", "high"]
-
-    get_model_catalog.cache_clear()
-
-
 @patch("noesis.llm.factory.build_chat_model")
 @patch("noesis.llm.catalog.resolve_catalog_entry")
 def test_get_llm_accepts_model_id(mock_resolve, mock_build):

@@ -9,7 +9,6 @@ import {
   discoverLLMDraft, listLLMModels, listLLMProviders, setLLMDefaultModel,
   updateLLMModel, updateLLMProvider,
 } from '@/api/settings'
-import { reasoningLevelOptions } from '@/utils/reasoningLevels'
 import { SettingsEmptyState, SettingsSection, SettingsStatus } from '../primitives'
 import ModelDiscoveryPanel from './ModelDiscoveryPanel.vue'
 
@@ -75,8 +74,6 @@ interface PlatformGroupRow {
   contextWindow: number
   supportsVision: boolean
   offline: boolean
-  /** 推理档位能力声明；空=未声明 */
-  reasoningLevels: string[]
 }
 
 /** 最近一次发现返回的 model_id 集；null = 本会话未发现过，不做下线判定 */
@@ -94,7 +91,6 @@ const mergedPlatformRows = computed<PlatformGroupRow[]>(() => {
     contextWindow: m.context_window || 0,
     supportsVision: !!m.supports_vision,
     offline: discovered ? !discovered.has(m.id) : false,
-    reasoningLevels: m.reasoning_levels || [],
   }))
   const owner = platformProviderRow.value
   const adoptedRows = owner
@@ -109,7 +105,6 @@ const mergedPlatformRows = computed<PlatformGroupRow[]>(() => {
           contextWindow: m.context_window || 0,
           supportsVision: false,
           offline: discovered ? !discovered.has(m.model_id) : false,
-          reasoningLevels: m.reasoning_levels || [],
         }))
     : []
   return [...yamlRows, ...adoptedRows]
@@ -155,20 +150,8 @@ function onPresetChange(presetId: string) {
     // 同时定形（slugTouched），后续显示名编辑不再自动覆盖
     providerForm.slug = preset.id
     slugTouched.value = true
-    // 预设声明了推理档位 → 预填到尚未落库的新行（仅预填，可改）
-    const presetLevels = preset.reasoning_levels
-    if (Array.isArray(presetLevels) && presetLevels.length > 0) {
-      for (const row of draftModels.value) {
-        if (!row.entry_id && row.reasoning_levels.length === 0) {
-          row.reasoning_levels = [...presetLevels]
-        }
-      }
-    }
   }
 }
-
-/** 推理档位多选选项（关/低/中/高/最高） */
-const reasoningSelectOptions = reasoningLevelOptions()
 
 /** 表单内模型目录行：entry_id 为空 = 尚未落库的新行 */
 interface DraftModelRow {
@@ -176,8 +159,6 @@ interface DraftModelRow {
   model_id: string
   label: string
   context_window: number
-  /** 推理档位能力声明（off/low/medium/high/max 子集）；空=未声明 */
-  reasoning_levels: string[]
 }
 
 
@@ -290,7 +271,6 @@ function editProvider(provider: UserLLMProvider) {
       model_id: m.model_id,
       label: m.label,
       context_window: m.context_window,
-      reasoning_levels: m.reasoning_levels || [],
     }))
 }
 
@@ -306,7 +286,7 @@ function onNameInput(value: string) {
 }
 
 function addModelRow() {
-  draftModels.value.push({ entry_id: null, model_id: '', label: '', context_window: 0, reasoning_levels: [] })
+  draftModels.value.push({ entry_id: null, model_id: '', label: '', context_window: 0 })
 }
 
 function removeModelRow(index: number) {
@@ -326,7 +306,6 @@ function addDiscoveredModel(discovered: UserLLMDiscoveredModel) {
     model_id: discovered.model_id,
     label: discovered.label,
     context_window: discovered.context_window,
-    reasoning_levels: [],
   })
 }
 
@@ -366,7 +345,6 @@ async function saveProvider() {
       const modelPayload = {
         provider_id: providerId, model_id: row.model_id.trim(), label: row.label || row.model_id.trim(),
         context_window: row.context_window || 0,
-        reasoning_levels: row.reasoning_levels,
       }
       if (row.entry_id) {
         await updateLLMModel(row.entry_id, modelPayload)
@@ -661,7 +639,6 @@ onMounted(() => {
                 <span class="muted">{{ model.model_id }}</span>
               </div>
               <div class="tags">
-                <n-tag v-if="model.reasoningLevels && model.reasoningLevels.length" size="small" :bordered="false" type="info">推理</n-tag>
                 <n-tag v-if="model.context_window" size="small" :bordered="false"><span class="token-num">{{ formatTokens(model.context_window) }} tokens</span></n-tag>
                 <n-tag v-if="compositeModelId(provider, model) === catalog?.default_id" size="small" type="success">默认</n-tag>
                 <n-button
@@ -758,7 +735,6 @@ onMounted(() => {
             <n-input v-model:value="row.model_id" size="small" class="flat-input" placeholder="模型 ID（如 deepseek-chat）" />
             <n-input v-model:value="row.label" size="small" class="flat-input" placeholder="显示名称（可选）" />
             <n-input-number v-model:value="row.context_window" size="small" class="flat-input" :min="0" placeholder="上下文窗口（tokens，可选）" />
-            <n-select v-model:value="row.reasoning_levels" size="small" class="flat-input" multiple :options="reasoningSelectOptions" max-tag-count="responsive" placeholder="推理档位（可选）" />
             <n-button size="tiny" quaternary type="error" @click="removeModelRow(index)">删除</n-button>
           </div>
 

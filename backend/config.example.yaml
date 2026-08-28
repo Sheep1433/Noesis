@@ -44,17 +44,12 @@ model:
   # 用户自定义 Provider 的平台预设（部署者维护；选预设 → base_url 自动填，用户只填 Key）
   # 敏感凭证不放预设；归因类 header 可放
   provider_presets:
-    # reasoning_levels：推理档位能力声明预填（off/low/medium/high/max 子集），
-    # 选中预设时预填到新增模型行，仅预填可改；空/缺省 = 未声明（不显示档位控件）
     - id: deepseek
       label: deepseek
       base_url: https://api.deepseek.com/v1
-      reasoning_levels: ["off", "low", "high", "max"]   # DeepSeek 实际支持档位（无 medium）；off 必须加引号（YAML 裸 off 解析为布尔）
     - id: qwen
       label: alibaba
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      # qwen 走 DashScope 专有参数体系（enable_thinking），通用 reasoning_effort
-      # 不生效——不声明
     - id: minimax
       label: minimax
       base_url: https://api.minimax.chat/v1
@@ -66,7 +61,6 @@ model:
     - id: kilo-auto/free
       label: Kilo Auto
       context_window: 256000
-      # reasoning_levels: ["low", "medium", "high"]   # 示例：声明后对话输入区显示「思考」档位控件
 
   # --- 其它端点示例 ---
   # 阿里云 DashScope Qwen（需 .env MODEL_API_KEY）：

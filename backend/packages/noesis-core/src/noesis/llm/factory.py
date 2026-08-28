@@ -414,35 +414,31 @@ def get_llm(
         model_name = runtime_snapshot.wire_name or runtime_snapshot.id
         temperature_str = ModelConfig.model_temperature
         model_base_url = runtime_snapshot.base_url
-        declared_reasoning_levels = runtime_snapshot.reasoning_levels
     elif use_summary_model:
         model_type = ModelConfig.model_type.strip().lower()
         model_name = ModelConfig.summarization_model_name.strip()
         temperature_str = str(ModelConfig.summarization_model_temperature)
         model_base_url = ModelConfig.model_base_url
-        declared_reasoning_levels = ()
     elif model_id:
         entry = resolve_catalog_entry(model_id)
         model_type = entry.model_type
         model_name = entry.id
         temperature_str = str(entry.temperature)
         model_base_url = entry.base_url
-        declared_reasoning_levels = entry.reasoning_levels
     else:
         model_type = ModelConfig.model_type.strip().lower()
         model_name = ModelConfig.model_name
         temperature_str = ModelConfig.model_temperature
         model_base_url = ModelConfig.model_base_url
-        declared_reasoning_levels = ()
 
     model_api_key = runtime_snapshot.api_key if runtime_snapshot is not None else ModelConfig.model_api_key
 
     # 推理档位：显式参数优先，回退本 Run 的 ContextVar（子 Agent 随
-    # create_task 自动继承）；摘要/压缩模型不吃档位；档位不在该模型
-    # 能力声明内 → no-op（不传参）
+    # create_task 自动继承）；摘要/压缩模型不吃档位。无能力门控——
+    # 不支持的端点自行忽略该参数。
     if reasoning_effort is None:
         reasoning_effort = get_request_reasoning_effort()
-    if use_summary_model or reasoning_effort not in declared_reasoning_levels:
+    if use_summary_model:
         reasoning_effort = None
 
     if not model_type:

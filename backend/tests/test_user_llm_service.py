@@ -37,7 +37,6 @@ class _ModelRow:
         self.label = kw.get("label", "我的模型")
         self.temperature = kw.get("temperature")
         self.context_window = kw.get("context_window", 0)
-        self.reasoning_levels = kw.get("reasoning_levels")
 
 
 class _ExecResult:
@@ -203,7 +202,6 @@ def test_public_model_rows_shape() -> None:
             "is_default": False,
             "supports_vision": False,
             "context_window": 64000,
-            "reasoning_levels": [],
             "custom": True,
         }
     ]
@@ -539,60 +537,3 @@ async def test_resolve_runtime_snapshots_bare_id_legacy_fallback(monkeypatch: py
     assert snapshots[0].id == "glm-custom"
 
 
-# ---------- 推理档位能力声明 ----------
-
-
-@pytest.mark.asyncio
-async def test_create_and_update_model_reasoning_levels(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """create 写入归一化逗号串；update None=不改、[]=清空（NULL）。"""
-    model = _ModelRow(model_id="m1", label="M1")
-    db = _Session(models=[(model, None)])
-    # fake session 的 scalar_one_or_none 返回 (model, provider) 元组，
-    # 这里直接注入 _get_model 返回模型本体
-    async def _fake_get_model(_db, _user_id, _entry_id):
-        return model
-
-    monkeypatch.setattr(UserLLMService, "_get_model", _fake_get_model)
-
-    await UserLLMService.update_model(
-        db, user_id=1, entry_id="e1",
-        provider_id=None, model_id=None, label=None,
-        temperature=None, context_window=None,
-        reasoning_levels=["high", "max", "xhigh"],
-    )
-    assert model.reasoning_levels == "high,max"  # 非法档位过滤 + 枚举序
-
-    await UserLLMService.update_model(
-        db, user_id=1, entry_id="e1",
-        provider_id=None, model_id=None, label=None,
-        temperature=None, context_window=None,
-        reasoning_levels=None,
-    )
-    assert model.reasoning_levels == "high,max"  # None 不改
-
-    await UserLLMService.update_model(
-        db, user_id=1, entry_id="e1",
-        provider_id=None, model_id=None, label=None,
-        temperature=None, context_window=None,
-        reasoning_levels=[],
-    )
-    assert model.reasoning_levels is None  # [] 清空
-
-
-@pytest.mark.asyncio
-async def test_resolve_runtime_snapshots_carries_reasoning_levels(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    model = _ModelRow(
-        model_id="glm-5", label="GLM", context_window=200000,
-        reasoning_levels="off,low,high,max",
-    )
-    provider = _ProviderRow(api_key_cipher=None, api_key_suffix=None)
-    db = _Session(models=[(model, provider)])
-
-    snapshots = await UserLLMService.resolve_runtime_snapshots(
-        db, user_id=1, model_id="glm-5"
-    )
-    assert snapshots[0].reasoning_levels == ("off", "low", "high", "max")

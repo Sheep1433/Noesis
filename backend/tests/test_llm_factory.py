@@ -218,10 +218,10 @@ def test_build_chat_model_skips_reasoning_for_qwen() -> None:
 
 @patch("noesis.llm.factory.build_chat_model")
 @patch("noesis.llm.catalog.resolve_catalog_entry")
-def test_get_llm_applies_declared_levels_and_contextvar(
+def test_get_llm_applies_contextvar_effort_without_capability_gate(
     mock_resolve, mock_build
 ) -> None:
-    """档位不在能力声明内 → no-op；ContextVar 档位经快照/目录声明生效。"""
+    """无能力门控：ContextVar 档位一律生效（不支持的端点自行忽略）；显式参数优先。"""
     from types import SimpleNamespace
 
     from noesis.llm.catalog import ModelCatalogEntry
@@ -237,7 +237,6 @@ def test_get_llm_applies_declared_levels_and_contextvar(
         model_type="opencode",
         temperature=0.7,
         base_url="https://opencode.ai/zen/v1",
-        reasoning_levels=("low", "high", "max"),
     )
     mock_build.return_value = SimpleNamespace()
 
@@ -250,18 +249,12 @@ def test_get_llm_applies_declared_levels_and_contextvar(
     mock_build.side_effect = _capture
 
     try:
-        # ContextVar 档位在声明内 → 透传
+        # ContextVar 档位直接透传，任何模型无门控
         set_request_reasoning_effort("high")
         get_llm(model_id="deepseek-v4-flash-free")
         assert captured["reasoning_effort"] == "high"
 
-        # 档位不在声明内 → no-op（不传参）
-        set_request_reasoning_effort("medium")
-        get_llm(model_id="deepseek-v4-flash-free")
-        assert captured["reasoning_effort"] is None
-
         # 显式参数优先于 ContextVar
-        set_request_reasoning_effort("high")
         get_llm(model_id="deepseek-v4-flash-free", reasoning_effort="max")
         assert captured["reasoning_effort"] == "max"
     finally:
@@ -269,19 +262,13 @@ def test_get_llm_applies_declared_levels_and_contextvar(
 
 
 @patch("noesis.llm.factory.build_chat_model")
-@patch("noesis.llm.runtime_snapshot.get_runtime_model_snapshot")
-def test_get_llm_ignores_effort_for_summarization_and_respects_snapshot_levels(
-    mock_snapshot, mock_build
-) -> None:
-    """summarization 分支不吃档位；runtime_snapshot 的能力声明生效。"""
-    from types import SimpleNamespace
-
+def test_get_llm_ignores_effort_for_summarization(mock_build) -> None:
+    """summarization 分支不吃档位。"""
     from noesis.llm.factory import get_llm
     from noesis.llm.reasoning import (
         clear_request_reasoning_effort,
         set_request_reasoning_effort,
     )
-    from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
 
     captured: dict[str, object] = {}
 
@@ -291,31 +278,7 @@ def test_get_llm_ignores_effort_for_summarization_and_respects_snapshot_levels(
 
     mock_build.side_effect = _capture
 
-    snapshot = RuntimeModelSnapshot(
-        id="my-svc/glm-5",
-        provider_id="p1",
-        purpose="chat",
-        model_type="openai",
-        base_url="https://api.example.com/v1",
-        api_key="sk-test",
-        label="GLM",
-        reasoning_levels=("low", "high"),
-    )
-
     try:
-        # 快照命中：ContextVar 档位在快照声明内 → 透传
-        mock_snapshot.return_value = snapshot
-        set_request_reasoning_effort("high")
-        get_llm(model_id="my-svc/glm-5")
-        assert captured["reasoning_effort"] == "high"
-
-        # 快照声明不含 medium → no-op
-        set_request_reasoning_effort("medium")
-        get_llm(model_id="my-svc/glm-5")
-        assert captured["reasoning_effort"] is None
-
-        # summarization 分支：快照不适用，档位一律忽略
-        mock_snapshot.return_value = None
         set_request_reasoning_effort("high")
         with patch("noesis.llm.factory.ModelConfig") as mock_cfg:
             mock_cfg.model_type = "opencode"

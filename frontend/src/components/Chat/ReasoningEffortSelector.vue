@@ -1,16 +1,9 @@
 <script lang="ts" setup>
-import type { ChatModelOption } from '@/api/models'
 import { ensureSession } from '@/api/chat'
-import { getChatModels } from '@/api/models'
-import {
-  orderReasoningLevels,
-  reasoningLevelLabel,
-} from '@/utils/reasoningLevels'
+import { REASONING_LEVEL_ORDER, reasoningLevelLabel } from '@/utils/reasoningLevels'
 
 const props = defineProps<{
   sessionId: string
-  /** 当前模型 id：按模型能力声明决定是否渲染与可选档位 */
-  modelId?: string
   disabled?: boolean
   /** ACTIVE 会话才写回 session.extra；COMPOSING 仅改本地 modelValue */
   persistSessionExtra?: boolean
@@ -20,33 +13,16 @@ const props = defineProps<{
 /** '' = 自动（不传参）；off/low/medium/high/max = 推理档位 */
 const modelValue = defineModel<string>({ default: '' })
 
-const options = ref<ChatModelOption[]>([])
-
-/** 当前模型声明的档位（固定序）；未声明返回 null（不渲染控件） */
-const declaredLevels = computed<string[] | null>(() => {
-  const hit = options.value.find((item) => item.id === props.modelId)
-  const levels = hit?.reasoning_levels
-  if (!hit || !Array.isArray(levels) || levels.length === 0) {
-    return null
-  }
-  const ordered = orderReasoningLevels(levels)
-  return ordered.length > 0 ? ordered : null
-})
+const LEVELS = [...REASONING_LEVEL_ORDER]
 
 /** 滑块索引 ↔ 档位值 */
 const sliderIndex = computed<number>({
   get: () => {
-    if (declaredLevels.value === null) {
-      return 0
-    }
-    const index = declaredLevels.value.indexOf(modelValue.value)
+    const index = LEVELS.indexOf(modelValue.value)
     return index >= 0 ? index : 0
   },
   set: (index) => {
-    if (declaredLevels.value === null) {
-      return
-    }
-    const level = declaredLevels.value[index]
+    const level = LEVELS[index]
     if (level && level !== modelValue.value) {
       modelValue.value = level
       void persistEffort(level)
@@ -60,25 +36,15 @@ const autoMode = computed<boolean>({
     return !modelValue.value
   },
   set: (auto) => {
-    const next = auto ? '' : defaultManualLevel()
+    const next = auto ? '' : 'medium'
     modelValue.value = next
     void persistEffort(next)
   },
 })
 
-/** 关闭自动时的落点：声明含 medium 取 medium，否则取中间档 */
-function defaultManualLevel(): string {
-  const levels = declaredLevels.value ?? []
-  if (levels.includes('medium')) {
-    return 'medium'
-  }
-  return levels[Math.floor((levels.length - 1) / 2)] ?? ''
-}
-
 const sliderMarks = computed<Record<number, string>>(() => {
   const marks: Record<number, string> = {}
-  const levels = declaredLevels.value ?? []
-  levels.forEach((level, index) => {
+  LEVELS.forEach((level, index) => {
     marks[index] = reasoningLevelLabel(level)
   })
   return marks
@@ -94,7 +60,7 @@ const HINTS: Record<string, string> = {
 
 const currentHint = computed(() => {
   if (autoMode.value) {
-    return '自动：不干预，使用模型默认行为'
+    return '自动：不干预，使用模型默认行为；不支持的模型会忽略该参数'
   }
   return HINTS[modelValue.value] ?? ''
 })
@@ -102,16 +68,6 @@ const currentHint = computed(() => {
 const currentLabel = computed(() => {
   return reasoningLevelLabel(modelValue.value)
 })
-
-async function loadModels() {
-  try {
-    const catalog = await getChatModels()
-    options.value = catalog.models ?? []
-  } catch (e) {
-    options.value = []
-    console.warn('加载模型列表失败', e)
-  }
-}
 
 async function persistEffort(level: string) {
   if (!props.persistSessionExtra || !props.sessionId) {
@@ -126,32 +82,10 @@ async function persistEffort(level: string) {
     console.warn('保存推理档位失败', e)
   }
 }
-
-/** 模型切换后档位不再在声明内 → 回退自动（下次发送不传参） */
-watch(
-  () => [props.modelId, declaredLevels.value] as const,
-  () => {
-    if (declaredLevels.value !== null && modelValue.value && !declaredLevels.value.includes(modelValue.value)) {
-      modelValue.value = ''
-    }
-  },
-)
-
-onMounted(() => {
-  void loadModels()
-})
-
-watch(
-  () => props.sessionId,
-  () => {
-    void loadModels()
-  },
-)
 </script>
 
 <template>
   <n-popover
-    v-if="declaredLevels !== null"
     trigger="click"
     placement="top-start"
     :disabled="disabled"
@@ -182,7 +116,7 @@ watch(
       <n-slider
         v-model:value="sliderIndex"
         :min="0"
-        :max="(declaredLevels ?? []).length - 1"
+        :max="LEVELS.length - 1"
         :step="1"
         :marks="sliderMarks"
         :disabled="autoMode"

@@ -11,7 +11,6 @@ from noesis.config.yaml_config import (
     ModelCatalogEntryYamlSection,
     load_app_yaml,
 )
-from noesis.llm.reasoning import normalize_reasoning_levels
 
 
 @dataclass(frozen=True)
@@ -23,7 +22,6 @@ class ModelCatalogEntry:
     base_url: str
     is_default: bool = False
     context_window: int = 0
-    reasoning_levels: tuple[str, ...] = ()
 
 
 def _entry_from_yaml(
@@ -34,7 +32,6 @@ def _entry_from_yaml(
     default_temperature: float,
     default_base_url: str,
     default_context_window: int,
-    default_reasoning_levels: tuple[str, ...],
     is_default: bool,
 ) -> ModelCatalogEntry:
     model_id = str(raw.id or default_name).strip()
@@ -43,9 +40,6 @@ def _entry_from_yaml(
     temperature = float(raw.temperature if raw.temperature is not None else default_temperature)
     base_url = str(raw.base_url or default_base_url).strip()
     context_window = int(raw.context_window or default_context_window)
-    reasoning_levels = normalize_reasoning_levels(
-        raw.reasoning_levels if raw.reasoning_levels else default_reasoning_levels
-    )
     return ModelCatalogEntry(
         id=model_id,
         label=label,
@@ -54,7 +48,6 @@ def _entry_from_yaml(
         base_url=base_url,
         is_default=is_default,
         context_window=context_window,
-        reasoning_levels=reasoning_levels,
     )
 
 
@@ -67,7 +60,6 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     default_temperature = float(m.temperature)
     default_base_url = str(m.base_url or ModelConfig.model_base_url).strip()
     default_context_window = int(m.context_window or 0)
-    default_reasoning_levels = normalize_reasoning_levels(m.reasoning_levels)
 
     raw_entries = list(m.catalog or [])
     if not raw_entries:
@@ -80,7 +72,6 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
                 base_url=default_base_url,
                 is_default=True,
                 context_window=default_context_window,
-                reasoning_levels=default_reasoning_levels,
             ),
         )
 
@@ -103,7 +94,6 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
                 default_temperature=default_temperature,
                 default_base_url=default_base_url,
                 default_context_window=default_context_window,
-                default_reasoning_levels=default_reasoning_levels,
                 is_default=is_default,
             )
         )
@@ -118,7 +108,6 @@ def get_model_catalog() -> tuple[ModelCatalogEntry, ...]:
             base_url=first.base_url,
             is_default=True,
             context_window=first.context_window,
-            reasoning_levels=first.reasoning_levels,
         )
     return tuple(entries)
 
@@ -161,7 +150,6 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
             base_url=snapshot.base_url,
             is_default=False,
             context_window=snapshot.context_window,
-            reasoning_levels=snapshot.reasoning_levels,
         )
     catalog = get_model_catalog()
     normalized = str(model_id or "").strip()
@@ -189,7 +177,6 @@ def list_public_models() -> List[dict[str, Any]]:
             "is_default": entry.id == default_id,
             "supports_vision": model_name_supports_vision(entry.id),
             "context_window": entry.context_window,
-            "reasoning_levels": list(entry.reasoning_levels),
         }
         rows.append(row)
     return rows

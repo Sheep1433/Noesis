@@ -14,8 +14,6 @@ export interface ChatModelOption {
   supports_vision?: boolean
   context_window?: number
   custom?: boolean
-  /** 推理档位能力声明（off/low/medium/high/max 子集）；空/缺省=未声明，不显示档位控件 */
-  reasoning_levels?: string[]
 }
 
 export interface ProviderPreset {
@@ -23,8 +21,6 @@ export interface ProviderPreset {
   label: string
   base_url: string
   headers?: Record<string, string>
-  /** 推理档位能力声明预填（仅预填，用户可改） */
-  reasoning_levels?: string[]
 }
 
 export interface PlatformProvider {

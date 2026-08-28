@@ -454,8 +454,6 @@ export type UserLLMModel = {
   label: string
   temperature?: number | null
   context_window: number
-  /** 推理档位能力声明（off/low/medium/high/max 子集）；空=未声明 */
-  reasoning_levels?: string[] | null
 }
 
 export type UserLLMProviderPayload = {

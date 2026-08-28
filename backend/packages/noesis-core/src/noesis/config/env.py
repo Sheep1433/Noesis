@@ -429,7 +429,6 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
                 "label": preset.label or preset.id,
                 "base_url": preset.base_url,
                 "headers": dict(preset.headers),
-                "reasoning_levels": list(preset.reasoning_levels),
             }
             for preset in m.provider_presets
             if preset.id and preset.base_url
