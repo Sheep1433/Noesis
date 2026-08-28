@@ -179,7 +179,11 @@ class SuperAgent(BaseAgent):
             hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
         )
 
-        async def _create_child_session(description: str, tool_call_id: str = "") -> dict[str, str]:
+        async def _create_child_session(
+            description: str,
+            prompt: str | None = None,
+            tool_call_id: str = "",
+        ) -> dict[str, str]:
             # 工具可能在并行 tool-call 中同时创建多个子 Agent；不要复用请求级
             # AsyncSession，单独取连接保证每个 launch 有独立事务边界。
             from noesis.storage.postgres.manager import pg_manager
@@ -190,10 +194,12 @@ class SuperAgent(BaseAgent):
                 # The launch use case owns the child session, initial messages and
                 # standard AgentRun in one transaction.  Keep this callback small so
                 # the tool layer cannot accidentally create a second source of truth.
+                # description = 简短标题（会话标题）；prompt = 完整任务指令（首条用户消息）
                 launch = await SubagentSessionService.launch(
                     parent_session_id=session_id,
                     user_id=user_id,
                     description=description,
+                    prompt=prompt,
                     tool_call_id=tool_call_id or None,
                     db=child_db,
                 )
@@ -204,6 +210,11 @@ class SuperAgent(BaseAgent):
 
             async with pg_manager.get_async_session_context() as child_db:
                 await ChatService.delete_session(child_session_id, user_id, db=child_db)
+
+        async def _fail_child_run(run_id: str, error: str) -> None:
+            from noesis.services.subagent_session_service import SubagentSessionService
+
+            await SubagentSessionService.mark_launch_rejected(run_id, error)
 
         async def _create_followup_run(
             child_session_id: str,
@@ -230,6 +241,7 @@ class SuperAgent(BaseAgent):
             user_id=user_id,
             create_child_session=_create_child_session,
             delete_child_session=_delete_child_session,
+            fail_child_run=_fail_child_run,
             create_followup_run=_create_followup_run,
             model_id=model_id,
         ))

@@ -47,6 +47,7 @@ from noesis.services.subagent_runtime_port import configure_executor_port
 
 
 class BgTaskStatus(str, Enum):
+    QUEUED = "queued"
     RUNNING = "running"
     AWAITING_APPROVAL = "awaiting_approval"
     COMPLETED = "completed"
@@ -64,6 +65,10 @@ class BgTaskStatus(str, Enum):
         }
 
 
+# 占用会话并发槽的状态：排队（QUEUED）只占队列不占槽
+_SLOT_STATUSES = frozenset({BgTaskStatus.RUNNING, BgTaskStatus.AWAITING_APPROVAL})
+
+
 @dataclass
 class BackgroundTask:
     """一个后台任务的公开快照（可安全序列化给 API / 工具）。"""
@@ -73,6 +78,8 @@ class BackgroundTask:
     session_id: str
     user_id: str
     description: str
+    # 完整任务指令（子 Agent 首轮输入）；缺省回退 description（旧调用兼容）
+    prompt: Optional[str] = None
     child_session_id: Optional[str] = None
     created_by_tool_call_id: Optional[str] = None
     # 标准 child session 对应的 AgentRun；shell job 无此字段。
@@ -200,6 +207,8 @@ class _TaskEntry:
     timeout_seconds: float
     hitl_timeout_seconds: float
     followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None
+    # 排队唤醒时按该值判断槽位（executor 实例不共享，cap 记在条目上）
+    session_max_concurrent: int = 1
     # followup-turn 队列：send_message 入队，当前 turn 结束后链式开新 turn
     followups: "collections.deque[str]" = field(
         default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
@@ -229,6 +238,8 @@ class _TaskEntry:
 
 _TASKS: dict[str, _TaskEntry] = {}
 _TASKS_LOCK = threading.Lock()
+# 会话级排队任务（超出并发上限时 FIFO 等待，不占并发槽、不启动 watchdog）
+_PENDING_QUEUES: dict[str, list[_TaskEntry]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +593,30 @@ def _child_message_text(message: Any) -> str:
     return str(content or "")
 
 
+def _fallback_terminal(fallback_error: Optional[str]) -> tuple[RunStatus, str]:
+    """最后模型调用为降级失败说明时的 run 终态与 finish_reason。"""
+    if fallback_error:
+        return RunStatus.ERROR, "error"
+    return RunStatus.COMPLETED, "stop"
+
+
+def _final_model_fallback_error(messages: list[Any]) -> Optional[str]:
+    """最后一次模型调用若为 LLM 降级失败说明，返回其文本。
+
+    middleware 重试耗尽会返回 content 为失败文案的 AIMessage（带
+    noesis_model_fallback 标记）；此时 run 不能标 completed——否则父 Agent
+    会把「服务暂时不可用」当作子任务产出。
+    """
+    from noesis.agents.middlewares.llm_error_handling_middleware import is_model_fallback_message
+
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            if is_model_fallback_message(message):
+                return _child_message_text(message) or "模型服务暂不可用"
+            return None
+    return None
+
+
 def _child_projection_content(messages: list[Any]) -> dict[str, Any]:
     """将 LangGraph 当前消息快照折叠成主 Agent 使用的 multipart。"""
     parts: list[dict[str, Any]] = []
@@ -678,6 +713,7 @@ def _notify_terminal(task: BackgroundTask) -> None:
         ),
     )
     _schedule_continuation(task)
+    _drain_session_queue(task.session_id)
 
 
 def _schedule_continuation(task: BackgroundTask) -> None:
@@ -686,14 +722,16 @@ def _schedule_continuation(task: BackgroundTask) -> None:
     无活跃 run 时自动创建 continuation run；调度回主 loop（DB 引擎与
     RunManager 绑定主 loop）。仅 completed 触发——失败/取消的交付由模型
     在下次交互时按通知自行决定，自动唤醒只会空转。
+    经 schedule_maybe_continue 去抖：窗口内多个终态合并为一次唤醒，
+    避免每个任务终态各产生一个重复发送全量上下文的 run。
     """
     if task.status != BgTaskStatus.COMPLETED:
         return
     from noesis.runtime.main_loop import run_on_main_loop
-    from noesis.services.bg_continuation_service import maybe_continue
+    from noesis.services.bg_continuation_service import schedule_maybe_continue
 
     run_on_main_loop(
-        maybe_continue(task.session_id, task.user_id),
+        schedule_maybe_continue(task.session_id, task.user_id),
         name=f"bg-continue:{task.task_id}",
     )
 
@@ -776,15 +814,6 @@ class BackgroundSubagentExecutor:
             if t["status"] == BgTaskStatus.AWAITING_APPROVAL.value
         ]
 
-    def _session_active_count(self, session_id: str) -> int:
-        with _TASKS_LOCK:
-            return sum(
-                1
-                for entry in _TASKS.values()
-                if entry.task.session_id == session_id
-                and not entry.task.status.is_terminal
-            )
-
     # -- 启动 ---------------------------------------------------------
 
     def start(
@@ -792,6 +821,7 @@ class BackgroundSubagentExecutor:
         *,
         worker_factory: Callable[..., Any],
         description: str,
+        prompt: Optional[str] = None,
         session_id: str,
         user_id: str,
         child_session_id: Optional[str] = None,
@@ -802,13 +832,18 @@ class BackgroundSubagentExecutor:
         followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None,
         model_id: Optional[str] = None,
     ) -> str:
-        """启动后台任务，立即返回 task_id；超并发抛 ValueError。"""
+        """启动后台任务，立即返回 task_id；超并发上限时按会话 FIFO 排队。
+
+        description = 简短标题（任务卡/列表展示）；prompt = 完整任务指令
+        （子 Agent 首轮输入，缺省回退 description）。
+        """
         task_id = task_id or f"bg-{uuid.uuid4()}"
         task = BackgroundTask(
             task_id=task_id,
             session_id=session_id,
             user_id=user_id,
             description=description,
+            prompt=prompt,
             child_session_id=child_session_id,
             created_by_tool_call_id=created_by_tool_call_id,
             run_id=run_id,
@@ -868,32 +903,45 @@ class BackgroundSubagentExecutor:
         return task_id
 
     def _launch(self, entry: _TaskEntry) -> None:
-        """并发预检 + 插入注册表 + 调度执行（subagent / shell 同一入口）。"""
+        """并发预检 + 插入注册表 + 调度执行（subagent / shell 同一入口）。
+
+        超上限不再拒绝：任务置 QUEUED 按会话 FIFO 排队，任一同会话任务落
+        终态后由 _drain_session_queue 调度。排队等待不占并发槽、不启动
+        watchdog（900s 预算从实际开始执行起算）。上限检查与插入同锁，
+        避免并发 start 的 TOCTOU 竞态。
+        """
         task = entry.task
         session_id = task.session_id
-        task_id = task.task_id
-        # 上限检查与插入同锁，避免并发 start 的 TOCTOU 竞态
+        entry.session_max_concurrent = self._max_concurrent
         with _TASKS_LOCK:
             active = sum(
                 1
                 for e in _TASKS.values()
-                if e.task.session_id == session_id and not e.task.status.is_terminal
+                if e.task.session_id == session_id
+                and e.task.status in _SLOT_STATUSES
             )
+            _TASKS[task.task_id] = entry
             if active >= self._max_concurrent:
-                raise ValueError(
-                    f"本会话后台任务已达上限（{self._max_concurrent} 个），"
-                    "请先 check/cancel 现有任务再启动新的"
-                )
-            _TASKS[task_id] = entry
-        loop = _ensure_loop()
-        entry.future = asyncio.run_coroutine_threadsafe(_arun(entry), loop)
-        if entry.timeout_seconds > 0:
-            _arm_watchdog(entry)
-        _publish_task_event(task, "started")
-        _publish_run_event(task, "run.started")
+                task.status = BgTaskStatus.QUEUED
+                _PENDING_QUEUES.setdefault(session_id, []).append(entry)
+                pending = len(_PENDING_QUEUES[session_id])
+                queued = True
+            else:
+                queued = False
+                _schedule_entry_locked(entry)
+        if queued:
+            # started 事件驱动目录刷新（消费端按 task_id upsert 幂等）；
+            # drain 唤醒时会再发一次，目录二次刷新无副作用
+            _publish_task_event(task, "started")
+            logger.info(
+                "bg task queued task_id={} session_id={} kind={} pending={}",
+                task.task_id, session_id, task.kind, pending,
+            )
+            return
+        _publish_entry_started(entry)
         logger.info(
             "bg task started task_id={} session_id={} kind={} active={}/{}",
-            task_id,
+            task.task_id,
             session_id,
             task.kind,
             active + 1,
@@ -1049,27 +1097,31 @@ class BackgroundSubagentExecutor:
                 entry.followups.clear()
                 entry.followup_message_ids.clear()
                 entry.followup_models.clear()
+            if entry.task.status == BgTaskStatus.QUEUED:
+                # 排队任务无执行 future，出队即完成取消
+                _dequeue_locked(entry.task)
             if entry.future is not None:
                 entry.future.cancel()
             entry.task.status = BgTaskStatus.CANCELLED
             entry.task.completed_at = time.time()
-            _publish_task_event(entry.task, "terminal")
-            _notify_terminal(entry.task)
-            if entry.task.run_id:
-                from noesis.runtime.main_loop import run_on_main_loop
-                from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
-
-                run_on_main_loop(
-                    SubagentSessionService.mark_terminal(
-                        run_id=entry.task.run_id,
-                        status=RunStatus.PARTIAL,
-                        content={"version": 1, "parts": []},
-                        error="任务已取消",
-                        finish_reason="cancelled",
-                    ),
-                    name=f"subagent-cancel:{entry.task.run_id}",
-                )
             snapshot = entry.task.to_dict(include_progress=False)
+        # 锁外发布：_notify_terminal 内的排队唤醒（drain）需要再拿 _TASKS_LOCK
+        _publish_task_event(entry.task, "terminal")
+        _notify_terminal(entry.task)
+        if entry.task.run_id:
+            from noesis.runtime.main_loop import run_on_main_loop
+            from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
+
+            run_on_main_loop(
+                SubagentSessionService.mark_terminal(
+                    run_id=entry.task.run_id,
+                    status=RunStatus.PARTIAL,
+                    content=None,
+                    error="任务已取消",
+                    finish_reason="cancelled",
+                ),
+                name=f"subagent-cancel:{entry.task.run_id}",
+            )
         return snapshot
 
     # -- 内部委托模块实现（见下方模块函数） ----------------------------
@@ -1143,6 +1195,9 @@ async def _arun(
     if entry.task.kind == "shell":
         await _arun_shell(entry)
         return
+    if task.status.is_terminal:
+        # 调度窗口内已被 cancel：终态与通知已由 cancel 发布，直接退出
+        return
     try:
         if task.run_id:
             from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
@@ -1163,7 +1218,7 @@ async def _arun(
             else (
                 initial_source
                 if initial_source is not None
-                else {"messages": [HumanMessage(content=task.description)]}
+                else {"messages": [HumanMessage(content=task.prompt or task.description)]}
             )
         )
         projection_offset = task.message_offset
@@ -1231,6 +1286,10 @@ async def _arun(
             turn_content = _child_projection_content(
                 final.get("messages", [])[projection_offset:] if isinstance(final, dict) else []
             )
+            turn_fallback_error = _final_model_fallback_error(
+                final.get("messages", []) if isinstance(final, dict) else []
+            )
+            turn_status, turn_reason = _fallback_terminal(turn_fallback_error)
             projection_offset = len(final.get("messages", [])) if isinstance(final, dict) else 0
             baseline_message_ids = {
                 getattr(message, "id", None) or id(message)
@@ -1243,9 +1302,10 @@ async def _arun(
                 current_run_future = run_on_main_loop(
                     SubagentSessionService.mark_terminal(
                         run_id=task.run_id,
-                        status=RunStatus.COMPLETED,
+                        status=turn_status,
                         content=turn_content,
-                        finish_reason="stop",
+                        error=turn_fallback_error,
+                        finish_reason=turn_reason,
                     ),
                     name=f"subagent-turn-terminal:{task.run_id}",
                 )
@@ -1272,7 +1332,14 @@ async def _arun(
                 len(entry.followups),
             )
             source = {"messages": [HumanMessage(content=next_message)]}
-        task.status = BgTaskStatus.COMPLETED
+        final_messages = final.get("messages", []) if isinstance(final, dict) else []
+        final_fallback_error = _final_model_fallback_error(final_messages)
+        final_status, final_reason = _fallback_terminal(final_fallback_error)
+        if final_fallback_error:
+            task.status = BgTaskStatus.FAILED
+            task.error = final_fallback_error
+        else:
+            task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
         if task.run_id:
             from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
@@ -1281,9 +1348,10 @@ async def _arun(
             terminal_future = run_on_main_loop(
                 SubagentSessionService.mark_terminal(
                     run_id=task.run_id,
-                    status=RunStatus.COMPLETED,
-                    content=_child_projection_content(final.get("messages", [])[projection_offset:] if isinstance(final, dict) else []),
-                    finish_reason="stop",
+                    status=final_status,
+                    content=_child_projection_content(final_messages[projection_offset:]),
+                    error=final_fallback_error,
+                    finish_reason=final_reason,
                 ),
                 name=f"subagent-terminal:{task.run_id}",
             )
@@ -1292,7 +1360,7 @@ async def _arun(
             _publish_run_event(
                 task,
                 "run.finished",
-                content=_child_projection_content(final.get("messages", [])[projection_offset:] if isinstance(final, dict) else []),
+                content=_child_projection_content(final_messages[projection_offset:]),
             )
         logger.info(
             "bg subagent completed task_id={} steps={} duration={:.1f}s",
@@ -1318,7 +1386,7 @@ async def _arun(
                 SubagentSessionService.mark_terminal(
                     run_id=task.run_id,
                     status=RunStatus.ERROR,
-                    content={"version": 1, "parts": []},
+                    content=None,
                     error=str(exc),
                     finish_reason="error",
                 ),
@@ -1441,6 +1509,11 @@ def fail_session_shell_tasks(session_id: str, reason: str) -> None:
             e for e in _TASKS.values()
             if e.task.session_id == session_id and not e.task.status.is_terminal
         ]
+        # 排队任务先出队再连坐：否则循环内每个终态通知都会触发 drain，
+        # 把排队任务调度进刚销毁的沙箱
+        for entry in entries:
+            if entry.task.status == BgTaskStatus.QUEUED:
+                _dequeue_locked(entry.task)
     for entry in entries:
         # 跨线程竞态：协程可能在列举之后刚好落终态——先复查再连坐，
         # 避免覆盖 COMPLETED 并造成双重通知
@@ -1462,7 +1535,7 @@ def fail_session_shell_tasks(session_id: str, reason: str) -> None:
                 SubagentSessionService.mark_terminal(
                     run_id=entry.task.run_id,
                     status=RunStatus.ERROR,
-                    content={"version": 1, "parts": []},
+                    content=None,
                     error=reason,
                     finish_reason="sandbox_destroyed",
                 ),
@@ -1485,6 +1558,78 @@ def _arm_watchdog(entry: _TaskEntry) -> None:
         _on_task_timeout,
         entry,
     )
+
+
+def _schedule_entry_locked(entry: _TaskEntry) -> None:
+    """把已获槽位的任务调度到执行 loop（须持 _TASKS_LOCK）。
+
+    future 创建与 watchdog 装载必须在锁内完成：若状态置 RUNNING 后、
+    future 尚未创建前被 cancel，cancel 拿不到 future 无法真正停止协程，
+    任务会跑完并以 COMPLETED 覆盖 CANCELLED。run_coroutine_threadsafe /
+    call_later 均为非阻塞提交，锁内调用安全；SSE 事件发布留待锁外。
+    """
+    loop = _ensure_loop()
+    entry.future = asyncio.run_coroutine_threadsafe(_arun(entry), loop)
+    if entry.timeout_seconds > 0:
+        _arm_watchdog(entry)
+
+
+def _publish_entry_started(entry: _TaskEntry) -> None:
+    _publish_task_event(entry.task, "started")
+    _publish_run_event(entry.task, "run.started")
+
+
+def _dequeue_locked(task: BackgroundTask) -> None:
+    """从会话排队队列移除条目（须持 _TASKS_LOCK）。"""
+    queue = _PENDING_QUEUES.get(task.session_id)
+    if not queue:
+        return
+    _PENDING_QUEUES[task.session_id] = [
+        item for item in queue if item.task is not task
+    ]
+    if not _PENDING_QUEUES[task.session_id]:
+        _PENDING_QUEUES.pop(task.session_id, None)
+
+
+def _drain_session_queue(session_id: str) -> None:
+    """同会话任务落终态后，按 FIFO 唤醒排队任务直到槽位占满。
+
+    跳过排队期间已被取消/连坐的陈旧条目。在 _notify_terminal 统一触发，
+    覆盖完成、失败、超时、取消、沙箱销毁全部终态路径。
+    """
+    while True:
+        with _TASKS_LOCK:
+            queue = _PENDING_QUEUES.get(session_id)
+            if not queue:
+                return
+            entry: Optional[_TaskEntry] = None
+            while queue:
+                candidate = queue[0]
+                if candidate.task.status != BgTaskStatus.QUEUED:
+                    queue.pop(0)
+                    continue
+                entry = candidate
+                break
+            if entry is None:
+                _PENDING_QUEUES.pop(session_id, None)
+                return
+            active = sum(
+                1
+                for e in _TASKS.values()
+                if e.task.session_id == session_id
+                and e.task.status in _SLOT_STATUSES
+            )
+            if active >= entry.session_max_concurrent:
+                return
+            queue.pop(0)
+            entry.task.status = BgTaskStatus.RUNNING
+            # 锁内调度（同 _launch：防 RUNNING 后 future 未建即被 cancel 的竞态）
+            _schedule_entry_locked(entry)
+        _publish_entry_started(entry)
+        logger.info(
+            "bg task dequeued task_id={} session_id={}",
+            entry.task.task_id, session_id,
+        )
 
 
 def _disarm_watchdog(entry: _TaskEntry) -> None:
@@ -1522,7 +1667,7 @@ def _on_task_timeout(entry: _TaskEntry) -> None:
             SubagentSessionService.mark_terminal(
                 run_id=entry.task.run_id,
                 status=RunStatus.ERROR,
-                content={"version": 1, "parts": []},
+                content=None,
                 error=entry.task.error,
                 finish_reason="timeout",
             ),
@@ -1551,6 +1696,7 @@ def shutdown() -> None:
     with _TASKS_LOCK:
         entries = list(_TASKS.values())
         _TASKS.clear()
+        _PENDING_QUEUES.clear()
     for entry in entries:
         if entry.future is not None:
             entry.future.cancel()

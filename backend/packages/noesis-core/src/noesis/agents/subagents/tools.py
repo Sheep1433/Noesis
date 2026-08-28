@@ -29,7 +29,8 @@ _CHECK_PENDING_HINT = {
 
 
 class _StartTaskArgs(BaseModel):
-    description: str = Field(..., description="子 Agent 要完成的独立目标")
+    description: str = Field(..., description="子任务的简短标题（10-20 字，用于任务卡与会话标题展示）")
+    prompt: str = Field("", description="子 Agent 要执行的完整任务指令：子目标、约束、期望输出格式")
     run_in_background: bool = Field(True, description="是否立即返回并在后台执行")
 
 
@@ -61,8 +62,9 @@ def build_background_task_tools(
     executor: BackgroundSubagentExecutor,
     session_id: str,
     user_id: str,
-    create_child_session: Callable[[str, str], Awaitable[str | dict[str, Any]]] | None = None,
+    create_child_session: Callable[[str, str, str | None], Awaitable[str | dict[str, Any]]] | None = None,
     delete_child_session: Callable[[str], Awaitable[None]] | None = None,
+    fail_child_run: Callable[[str, str], Awaitable[None]] | None = None,
     create_followup_run: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None,
     model_id: str | None = None,
 ) -> list[StructuredTool]:
@@ -75,10 +77,16 @@ def build_background_task_tools(
 
     async def astart_task(
         description: str,
+        prompt: str = "",
         run_in_background: bool = True,
         tool_call_id: str = "",
     ) -> str:
-        launch = await create_child_session(description, tool_call_id) if create_child_session else None
+        # description = 简短标题；prompt = 完整任务指令（缺省回退 description，兼容旧调用）
+        task_text = prompt.strip() or description
+        launch = (
+            await create_child_session(description, task_text, tool_call_id)
+            if create_child_session else None
+        )
         if isinstance(launch, dict):
             child_session_id = str(launch.get("child_session_id") or "") or None
             run_id = str(launch.get("run_id") or "") or None
@@ -92,6 +100,7 @@ def build_background_task_tools(
         try:
             task_id = executor.start(
                 worker_factory=worker_factory, description=description,
+                prompt=task_text,
                 session_id=session_id, user_id=user_id,
                 child_session_id=child_session_id,
                 created_by_tool_call_id=created_by_tool_call_id,
@@ -101,6 +110,14 @@ def build_background_task_tools(
                 model_id=model_id,
             )
         except ValueError as exc:
+            # 启动被拒（并发超限已改为排队，此分支仅剩其他启动失败）：
+            # run 必须先置 ERROR 再软删会话，否则残留 QUEUED run 会被
+            # dispatcher claim 并以 RUN_START_FAILED 失败。
+            if run_id and fail_child_run is not None:
+                try:
+                    await fail_child_run(run_id, str(exc))
+                except Exception:  # noqa: BLE001
+                    logger.exception("标记被拒子 Agent run 失败 run_id={}", run_id)
             if child_session_id and delete_child_session is not None:
                 try:
                     await delete_child_session(child_session_id)
@@ -146,6 +163,7 @@ def build_background_task_tools(
 
     def start_task(
         description: str,
+        prompt: str = "",
         run_in_background: bool = True,
         tool_call_id: str = "",
     ) -> str:
@@ -156,6 +174,7 @@ def build_background_task_tools(
             try:
                 task_id = executor.start(
                     worker_factory=worker_factory, description=description,
+                    prompt=prompt.strip() or description,
                     session_id=session_id, user_id=user_id,
                 )
             except ValueError as exc:
@@ -217,7 +236,8 @@ def build_background_task_tools(
         name="start_task",
         description=(
             "启动一个子 Agent 执行较重的独立子任务（多轮检索/调研/长命令）。"
-            "description 写清子目标、约束与期望输出格式。"
+            "description：子任务的简短标题（10-20 字，用于任务卡与会话标题）。"
+            "prompt：完整任务指令——写清子目标、约束与期望输出格式。"
             "run_in_background（默认 true）：立即返回 task_id，可继续其他工作，之后用 check_task 收结果；"
             "false：前台等待结果直接返回——仅当你的下一步动作依赖该结果时使用"
             "（超过约 2 分钟会自动转后台）。"

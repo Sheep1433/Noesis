@@ -260,6 +260,7 @@ class SubagentSessionService:
         parent_session_id: str,
         user_id: str,
         description: str,
+        prompt: Optional[str] = None,
         tool_call_id: Optional[str] = None,
         db: AsyncSession,
     ) -> ChildSessionLaunch:
@@ -289,9 +290,11 @@ class SubagentSessionService:
         user_message_id = str(uuid.uuid4())
         assistant_message_id = str(uuid.uuid4())
         client_request_id = f"subagent:{run_id}"
+        # description = 简短标题（会话标题/任务卡）；prompt = 完整任务指令（子 Agent 首条输入）
+        task_text = (prompt or description).strip() or description.strip()
         digest = hashlib.sha256(
             json.dumps(
-                {"parent_session_id": parent_session_id, "description": description},
+                {"parent_session_id": parent_session_id, "description": description, "prompt": task_text},
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -323,7 +326,7 @@ class SubagentSessionService:
             parent_id=None,
             user_id=str(user_id),
             role="user",
-            content=UserMessageBuilder(description.strip()).to_dict(),
+            content=UserMessageBuilder(task_text).to_dict(),
             extra={"origin": "subagent", "run_id": run_id},
             status="completed",
             message_sequence=1,
@@ -404,6 +407,33 @@ class SubagentSessionService:
                 update(TAgentRun)
                 .where(TAgentRun.id == run_id, TAgentRun.status == RunStatus.QUEUED.value)
                 .values(status=RunStatus.RUNNING.value, started_at=now, updated_at=now)
+            )
+            await db.commit()
+
+    @classmethod
+    async def mark_launch_rejected(cls, run_id: str, error: str) -> None:
+        """启动失败（子会话即将软删）：run 置 ERROR，避免 dispatcher claim 后重建上下文必然失败。
+
+        并发超限已改为排队（executor._launch），此方法仅覆盖排队之外的
+        启动失败路径。此时子会话与 assistant 消息即将被软删，不做消息终态化。
+        """
+        from noesis.storage.postgres.manager import pg_manager
+
+        if not run_id:
+            return
+        now = _now_ms()
+        async with pg_manager.get_async_session_context() as db:
+            await db.execute(
+                update(TAgentRun)
+                .where(TAgentRun.id == run_id, TAgentRun.status == RunStatus.QUEUED.value)
+                .values(
+                    status=RunStatus.ERROR.value,
+                    error_code="SUBAGENT_LAUNCH_REJECTED",
+                    user_error_message=error,
+                    finish_reason="error",
+                    finished_at=now,
+                    updated_at=now,
+                )
             )
             await db.commit()
 
@@ -602,10 +632,16 @@ class SubagentSessionService:
         *,
         run_id: str,
         status: RunStatus,
-        content: dict,
+        content: Optional[dict] = None,
         error: Optional[str] = None,
         finish_reason: Optional[str] = None,
     ) -> None:
+        """run 终态化并同步 assistant 消息。
+
+        content=None 表示沿用 run 当前快照——超时/异常/取消等非正常终态
+        必须走此语义，保留执行期间 persist_projection 积累的进度，
+        不得用空 parts 覆盖（否则用户打开详情只能看到空白）。
+        """
         from noesis.repositories.agent_run_repository import AgentRunRepository
         from noesis.storage.postgres.manager import pg_manager
 
@@ -616,6 +652,16 @@ class SubagentSessionService:
             run = await AgentRunRepository(db).get(run_id)
             if run is None:
                 return
+            if content is None:
+                content = (
+                    run.snapshot
+                    if isinstance(run.snapshot, dict)
+                    else {"version": 1, "parts": []}
+                )
+                # HITL 等待中的内部标记不得泄漏进 assistant 消息
+                # （mark_waiting_approval 写入、mark_resumed 摘除）
+                if isinstance(content.get("_pending_hitl"), dict):
+                    content = {k: v for k, v in content.items() if k != "_pending_hitl"}
             await AgentRunRepository(db).finalize(
                 run_id=run_id,
                 target=status,

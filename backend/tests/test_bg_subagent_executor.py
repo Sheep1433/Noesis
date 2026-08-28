@@ -204,17 +204,52 @@ def test_submit_decisions_rejects_when_not_awaiting() -> None:
         executor.submit_decisions(task_id, [{"type": "approve"}])
 
 
-def test_concurrency_cap_per_session() -> None:
+def test_concurrency_cap_queues_and_drains() -> None:
+    """超上限排队而非拒绝；占槽任务落终态后 FIFO 唤醒排队任务。"""
     worker = _build_worker(
         [_slow_call(f"s{i}", f"c{i}") for i in range(20)], slow=True,
     )  # 慢工具多轮，保持运行
     executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
-    executor.start(worker_factory=lambda: worker, description="t1", session_id="s1", user_id="u1")
+    first_id = executor.start(worker_factory=lambda: worker, description="t1", session_id="s1", user_id="u1")
     time.sleep(0.3)  # 让第一个进入 running
-    with pytest.raises(ValueError, match="上限"):
-        executor.start(worker_factory=lambda: worker, description="t2", session_id="s1", user_id="u1")
-    # 其他会话不受影响
-    executor.start(worker_factory=lambda: worker, description="t3", session_id="s2", user_id="u1")
+
+    # 同会话超上限：排队（不抛错、不占槽）
+    queued_id = executor.start(worker_factory=lambda: worker, description="t2", session_id="s1", user_id="u1")
+    task = executor.get(queued_id)
+    assert task is not None
+    assert task["status"] == BgTaskStatus.QUEUED.value
+
+    # 其他会话不受影响：直接运行
+    other_id = executor.start(worker_factory=lambda: worker, description="t3", session_id="s2", user_id="u1")
+    task = executor.get(other_id)
+    assert task is not None
+    assert task["status"] != BgTaskStatus.QUEUED.value
+
+    # 取消占槽任务 → 排队任务被 drain 唤醒，脚本耗尽后完成任务
+    executor.cancel(first_id)
+    task = _wait_terminal(executor, queued_id, timeout=30)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+
+def test_cancel_queued_task_removes_from_queue() -> None:
+    """排队中的任务可直接取消：出队、终态，不占槽也不被唤醒。"""
+    worker = _build_worker(
+        [_slow_call(f"s{i}", f"c{i}") for i in range(20)], slow=True,
+    )
+    executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
+    first_id = executor.start(worker_factory=lambda: worker, description="t1", session_id="s1", user_id="u1")
+    time.sleep(0.3)
+    queued_id = executor.start(worker_factory=lambda: worker, description="t2", session_id="s1", user_id="u1")
+
+    snapshot = executor.cancel(queued_id)
+    assert snapshot["status"] == BgTaskStatus.CANCELLED.value
+
+    # 占槽任务照常完成，被取消的排队任务不会被唤醒
+    task = _wait_terminal(executor, first_id, timeout=30)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    task = executor.get(queued_id)
+    assert task is not None
+    assert task["status"] == BgTaskStatus.CANCELLED.value
 
 
 def test_cancel_running_task() -> None:
@@ -392,7 +427,63 @@ def test_start_task_schema_keeps_only_execution_mode_parameter():
     start = next(t for t in _build_tools(executor, lambda: _build_worker([])) if t.name == "start_task")
 
     properties = start.args_schema.model_json_schema()["properties"]
-    assert set(properties) == {"description", "run_in_background"}
+    assert set(properties) == {"description", "prompt", "run_in_background"}
+
+
+@pytest.mark.asyncio
+async def test_start_task_splits_short_title_and_full_prompt() -> None:
+    """description=短标题 / prompt=完整任务：launch 与 executor 各取所需。
+
+    - create_child_session 收到 (短标题, 完整任务)——会话标题用短标题，
+      首条用户消息用完整任务
+    - task.description 保留短标题（任务卡/列表展示），
+      初轮 HumanMessage 内容用完整任务
+    """
+    seen: dict[str, Any] = {}
+
+    async def fake_create_child_session(description, prompt, tool_call_id=""):
+        seen["description"] = description
+        seen["prompt"] = prompt
+        return {
+            "child_session_id": "child-split-1",
+            "run_id": "run-1",
+            "assistant_message_id": "am-1",
+            "created_by_tool_call_id": tool_call_id,
+        }
+
+    worker = _build_worker([AIMessage(content="完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    start = next(
+        t for t in _build_tools(executor, lambda: worker, fake_create_child_session)
+        if t.name == "start_task"
+    )
+
+    result = await start.ainvoke({
+        "description": "调研 npm 版本",
+        "prompt": "请用 web_search 查 npm 最新稳定版本号与发布时间，返回不超过 50 字的小结。",
+        "run_in_background": True,
+    })
+    assert "child-split-1" in result
+    assert seen["description"] == "调研 npm 版本"
+    assert "web_search" in seen["prompt"]
+
+    task = _wait_terminal(executor, "child-split-1")
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert task["description"] == "调研 npm 版本"  # 任务卡展示短标题
+    entry = next(e for e in _TASKS.values() if e.task.child_session_id == "child-split-1")
+    assert entry.task.prompt and "web_search" in entry.task.prompt
+
+
+@pytest.mark.asyncio
+async def test_start_task_prompt_falls_back_to_description() -> None:
+    """旧调用只传 description：完整任务回退为 description，行为不变。"""
+    worker = _build_worker([AIMessage(content="完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+
+    await start.ainvoke({"description": "旧式单字段任务", "run_in_background": True})
+    entry = next(iter(_TASKS.values()))
+    assert entry.task.prompt == "旧式单字段任务"
 
 
 @pytest.mark.asyncio
@@ -462,7 +553,7 @@ async def test_start_task_uses_child_session_as_task_identity() -> None:
 
     result = await start.ainvoke({"description": "检索资料"})
 
-    create_child_session.assert_awaited_once_with("检索资料", "")
+    create_child_session.assert_awaited_once_with("检索资料", "检索资料", "")
     assert "child-session-1" in result
     assert executor.get("child-session-1") is not None
     executor.cancel("child-session-1")
@@ -490,7 +581,7 @@ async def test_start_task_persists_model_tool_call_reference() -> None:
         "id": "call-start-1",
     })
 
-    create_child_session.assert_awaited_once_with("带引用的检索", "call-start-1")
+    create_child_session.assert_awaited_once_with("带引用的检索", "带引用的检索", "call-start-1")
     executor.cancel("child-session-call")
 
 
