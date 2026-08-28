@@ -2,7 +2,7 @@
 import { NDrawer, NDrawerContent, NPopover } from 'naive-ui'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   title: string
   disabled?: boolean
   placement?: 'top-start' | 'top' | 'top-end' | 'bottom-start' | 'bottom' | 'bottom-end'
@@ -19,6 +19,14 @@ withDefaults(defineProps<{
 
 const show = defineModel<boolean>('show', { default: false })
 const { isMobile } = useBreakpoint()
+
+// 移动端没有 popover 的 trigger="click"，需自行切换 drawer
+function onTriggerClick() {
+  if (props.disabled) {
+    return
+  }
+  show.value = !show.value
+}
 </script>
 
 <template>
@@ -39,7 +47,10 @@ const { isMobile } = useBreakpoint()
   </n-popover>
 
   <template v-else>
-    <slot name="trigger"></slot>
+    <!-- display:contents 不产生盒子，避免干扰 flex 布局；点击事件仍正常冒泡 -->
+    <div class="responsive-surface-trigger" @click="onTriggerClick">
+      <slot name="trigger"></slot>
+    </div>
     <n-drawer
       v-model:show="show"
       placement="bottom"
@@ -58,3 +69,9 @@ const { isMobile } = useBreakpoint()
     </n-drawer>
   </template>
 </template>
+
+<style scoped>
+.responsive-surface-trigger {
+  display: contents;
+}
+</style>

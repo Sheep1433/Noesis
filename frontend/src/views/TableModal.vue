@@ -18,39 +18,45 @@ const tableData = ref([])
 const loading = ref(false)
 const checkedRowKeys = ref([])
 
-const columns = ref([
-  { type: 'selection' },
-  {
-    title: '会话标题',
-    key: 'title',
-    ellipsis: { tooltip: true },
-  },
-  {
-    title: '问答类型',
-    key: 'qa_type',
-    width: 120,
-    ellipsis: { tooltip: true },
-    render(row) {
-      return qaTypeLabel(row.qa_type)
+/** 移动端固定列（类型 88 + 时间 96 + 选择框）约 230px，标题列仍有空间；桌面保持全列 */
+const columns = computed(() => {
+  const base = [
+    { type: 'selection' },
+    {
+      title: '会话标题',
+      key: 'title',
+      ellipsis: { tooltip: true },
     },
-  },
-  {
-    title: '更新时间',
-    key: 'update_time',
-    width: 168,
-    render(row) {
-      return formatTime(row.update_time)
+    {
+      title: '问答类型',
+      key: 'qa_type',
+      width: isMobile.value ? 88 : 120,
+      ellipsis: { tooltip: true },
+      render(row) {
+        return qaTypeLabel(row.qa_type)
+      },
     },
-  },
-  {
-    title: '创建时间',
-    key: 'create_time',
-    width: 168,
-    render(row) {
-      return formatTime(row.create_time)
+    {
+      title: '更新时间',
+      key: 'update_time',
+      width: isMobile.value ? 96 : 168,
+      render(row) {
+        return formatTime(row.update_time, isMobile.value)
+      },
     },
-  },
-])
+  ]
+  if (!isMobile.value) {
+    base.push({
+      title: '创建时间',
+      key: 'create_time',
+      width: 168,
+      render(row) {
+        return formatTime(row.create_time, false)
+      },
+    })
+  }
+  return base
+})
 
 const pagination = ref({
   page: 1,
@@ -72,7 +78,7 @@ const modalTitle = computed(
 )
 
 /** 后端 create_time / update_time 为 Unix 毫秒 BIGINT，接口 JSON 中为 number */
-function formatTime(time) {
+function formatTime(time, compact = false) {
   if (time == null || time === '') {
     return '-'
   }
@@ -85,7 +91,12 @@ function formatTime(time) {
   if (!Number.isFinite(t)) {
     return '-'
   }
-  return new Date(t).toLocaleString('zh-CN', {
+  const date = new Date(t)
+  if (compact) {
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  }
+  return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
