@@ -2,6 +2,8 @@
  * 会话消息 content.parts 与 UI 对齐（PRD：聊天记录 / SSE）
  */
 
+import { parseStartTaskChildSessionId, START_TASK_TOOL_NAME } from '@/utils/parseTaskTool'
+
 export type ToolRunStatus = 'running' | 'success' | 'error'
 export type ToolLifecycleState =
   | 'running'
@@ -406,13 +408,22 @@ function normalizeToolPart(
   const parent_task_call_id = parentTaskCallIdFromRecord(record)
   const step_id = typeof record.step_id === 'string' && record.step_id ? record.step_id : undefined
   const hitl = normalizeToolHitl(record.hitl)
+  const output = typeof record.output === 'string' ? record.output : ''
+  // start_task 的 part→子会话关联：桥接层 tool_call_id 与子会话
+  // created_by_tool_call_id 不是同一体系，落库 part 也不含该字段，
+  // 只能从输出文本「子 Agent 已启动：<id>」提取（兼容存量数据）。
+  const childSessionId = String(record.name ?? '') === START_TASK_TOOL_NAME
+    ? (typeof record.child_session_id === 'string' && record.child_session_id
+        ? record.child_session_id
+        : parseStartTaskChildSessionId(output))
+    : (typeof record.child_session_id === 'string' ? record.child_session_id : undefined)
   return {
     id,
     type: 'tool',
     tool_call_id: typeof record.tool_call_id === 'string' ? record.tool_call_id : undefined,
     name: String(record.name ?? ''),
     input: normalizeToolPartInput(record.input),
-    output: typeof record.output === 'string' ? record.output : '',
+    output,
     status: coerceToolStatus(record),
     state: parseToolState(record),
     error: record.error != null ? String(record.error) : null,
@@ -423,6 +434,7 @@ function normalizeToolPart(
     timed_out: record.timed_out != null ? Boolean(record.timed_out) : undefined,
     truncated: record.truncated != null ? Boolean(record.truncated) : undefined,
     ...(parent_task_call_id ? { parent_task_call_id } : {}),
+    ...(childSessionId ? { child_session_id: childSessionId } : {}),
     ...(step_id ? { step_id } : {}),
     ...(hitl ? { hitl } : {}),
   }
@@ -458,6 +470,7 @@ function mergeToolPart(parts: UiPart[], toolPart: ToolUiPart): void {
     name: toolPart.name || existing.name,
     input: Object.keys(toolPart.input).length > 0 ? toolPart.input : existing.input,
     output: toolPart.output || existing.output,
+    child_session_id: existing.child_session_id || toolPart.child_session_id,
     step_id: toolPart.step_id ?? existing.step_id,
     hitl: { ...(existing.hitl || {}), ...(toolPart.hitl || {}) },
   }
@@ -642,8 +655,8 @@ export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
 }
 
 const USER_STOP_TOOL_ERROR = '用户已停止生成'
-const USER_STOP_NOTICE_PLAIN = '本轮回复已被用户中断。'
-const USER_STOP_NOTICE_INLINE = '（本轮回复已被用户中断。）'
+/** 统一单一形态：斜体括号附注（与后端 append_user_stop_notice_to_content 对齐） */
+const USER_STOP_NOTICE = '（本轮回复已被用户中断。）'
 
 function partsContainUserStopNotice(parts: UiPart[]): boolean {
   return parts.some((p) => {
@@ -651,7 +664,8 @@ function partsContainUserStopNotice(parts: UiPart[]): boolean {
       return false
     }
     const c = String(p.content ?? '')
-    return c.includes(USER_STOP_NOTICE_PLAIN) || c.includes(USER_STOP_NOTICE_INLINE)
+    // 兼容识别历史消息里的纯文本变体
+    return c.includes(USER_STOP_NOTICE) || c.includes('本轮回复已被用户中断')
   })
 }
 
@@ -666,43 +680,12 @@ export function appendUserStopNotice(parts: UiPart[]): UiPart[] {
       : p,
   ) as UiPart[]
 
-  const hasProse = completed.some((p) => {
-    if (p.type === 'text' || p.type === 'reasoning') {
-      return String((p as TextUiPart | ReasoningUiPart).content ?? '').trim().length > 0
-    }
-    return false
-  })
-
-  const notice = hasProse ? USER_STOP_NOTICE_INLINE : USER_STOP_NOTICE_PLAIN
-
-  if (!hasProse) {
-    if (completed.length === 0) {
-      return [
-        {
-          id: genPartId('text'),
-          type: 'text',
-          content: notice,
-          status: 'completed',
-        },
-      ]
-    }
-    return [
-      ...completed,
-      {
-        id: genPartId('text'),
-        type: 'text',
-        content: notice,
-        status: 'completed',
-      },
-    ]
-  }
-
   return [
     ...completed,
     {
       id: genPartId('text'),
       type: 'text',
-      content: `\n\n---\n\n*${notice}*`,
+      content: `\n\n*${USER_STOP_NOTICE}*`,
       status: 'completed',
     },
   ]
