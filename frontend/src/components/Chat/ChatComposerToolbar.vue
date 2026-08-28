@@ -7,6 +7,7 @@ import { ensureSession } from '@/api/chat'
 import { listMcpServers } from '@/api/mcp'
 import { getSkillsPackages } from '@/api/skills'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
+import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
 import ResponsiveSurface from '@/components/ResponsiveSurface.vue'
 
@@ -24,6 +25,7 @@ const props = defineProps<{
 const router = useRouter()
 
 const selectedModelId = defineModel<string>('modelId', { default: '' })
+const selectedReasoningEffort = defineModel<string>('reasoningEffort', { default: '' })
 const selectedKbCollections = defineModel<string[]>('kbCollections', { default: () => [] })
 const kbSearchEnabled = defineModel<boolean>('kbSearchEnabled', { default: true })
 const selectedMcpServers = defineModel<string[]>('mcpServers', { default: () => [] })
@@ -32,6 +34,8 @@ const skillsAllEnabled = defineModel<boolean>('skillsAllEnabled', { default: tru
 
 const showKbScope = computed(() => props.qaType === 'COMMON_QA' || props.qaType === 'SUPER_AGENT_QA')
 const showSkillsMenu = computed(() => props.qaType === 'SUPER_AGENT_QA')
+// 推理档位：与 model/mcp 同门控（TEST_CASE_QA 排除）；组件自身再按模型声明降级
+const showReasoningEffort = computed(() => props.qaType !== 'TEST_CASE_QA')
 const showFileUpload = computed(() =>
   props.qaType === 'COMMON_QA'
   || props.qaType === 'SUPER_AGENT_QA'
@@ -387,6 +391,14 @@ const kbSummary = computed(() => {
       <ModelSelector
         v-model="selectedModelId"
         :session-id="sessionId"
+        :persist-session-extra="persistSessionExtra"
+        :disabled="disabled"
+      />
+      <ReasoningEffortSelector
+        v-if="showReasoningEffort"
+        v-model="selectedReasoningEffort"
+        :session-id="sessionId"
+        :model-id="selectedModelId"
         :persist-session-extra="persistSessionExtra"
         :disabled="disabled"
       />

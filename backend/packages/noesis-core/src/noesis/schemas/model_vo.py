@@ -10,6 +10,10 @@ class ModelCatalogItem(BaseModel):
     is_default: bool = Field(False, description="是否为默认模型")
     supports_vision: bool = Field(False, description="是否支持原生 multimodal 看图")
     custom: bool = Field(False, description="是否为用户自定义模型")
+    reasoning_levels: list[str] = Field(
+        default_factory=list,
+        description="推理档位能力声明（off/low/medium/high/max 子集）；空=未声明，前端不显示档位控件",
+    )
 
 
 class ProviderPresetItem(BaseModel):
@@ -17,6 +21,10 @@ class ProviderPresetItem(BaseModel):
     label: str = Field(..., description="展示名称")
     base_url: str = Field(..., description="OpenAI 兼容端点，选中预设时自动填充")
     headers: dict[str, str] = Field(default_factory=dict, description="归因类 header（无敏感凭证）")
+    reasoning_levels: list[str] = Field(
+        default_factory=list,
+        description="推理档位能力声明预填（off/low/medium/high/max 子集）；选中预设时预填到新增模型行，可改",
+    )
 
 
 class PlatformProviderInfo(BaseModel):

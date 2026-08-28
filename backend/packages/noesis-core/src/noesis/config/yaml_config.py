@@ -95,6 +95,8 @@ class ModelCatalogEntryYamlSection(BaseModel):
     base_url: str = ""
     # 上下文窗口（圆环分母 / 压缩阈值）；0=未配置，继承 model 层或 fallback 默认
     context_window: int = Field(default=0, ge=0)
+    # 推理档位能力声明（reasoning_effort 子集）；空=未声明，前端不显示档位控件
+    reasoning_levels: list[str] = Field(default_factory=list)
 
 
 class ProviderPresetYamlSection(BaseModel):
@@ -105,6 +107,8 @@ class ProviderPresetYamlSection(BaseModel):
     base_url: str = ""
     # 归因类 header；敏感凭证不放预设，用户 Key 仍走加密存储
     headers: dict[str, str] = Field(default_factory=dict)
+    # 推理档位能力声明预填（仅预填，用户可改）；空=不预填
+    reasoning_levels: list[str] = Field(default_factory=list)
 
 
 class ModelYamlSection(BaseModel):
@@ -128,6 +132,8 @@ class ModelYamlSection(BaseModel):
     default_catalog_id: str = ""
     # 上下文窗口（model 层默认，catalog 条目未配时继承）；0=未配置
     context_window: int = Field(default=0, ge=0)
+    # 推理档位能力声明（model 层默认，catalog 条目未配时继承）；空=未声明
+    reasoning_levels: list[str] = Field(default_factory=list)
     catalog: list[ModelCatalogEntryYamlSection] = Field(default_factory=list)
     # 用户自定义 Provider 的平台预设目录（部署者维护；透出给前端快速填充）
     provider_presets: list[ProviderPresetYamlSection] = Field(default_factory=list)

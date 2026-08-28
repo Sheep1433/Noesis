@@ -47,6 +47,7 @@ import { formatHHmm } from '@/utils/formatTime'
 import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
+import { isReasoningLevel } from '@/utils/reasoningLevels'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
@@ -841,6 +842,7 @@ let sessionContextLoadId = 0
 const selectedKbCollections = ref<string[]>([])
 const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
+const selectedReasoningEffort = ref('')
 const selectedMcpServers = ref<string[]>([])
 const selectedSkills = ref<string[]>([])
 const skillsAllEnabled = ref(true)
@@ -890,6 +892,9 @@ function buildSessionConfigExtra(): Record<string, unknown> {
   if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
     extra.model_id = selectedModelId.value
   }
+  if (qa_type.value !== 'TEST_CASE_QA' && selectedReasoningEffort.value) {
+    extra.reasoning_effort = selectedReasoningEffort.value
+  }
   if (qa_type.value !== 'TEST_CASE_QA') {
     extra.mcp_servers = selectedMcpServers.value
   }
@@ -915,6 +920,8 @@ function applySessionConfig(extra: Record<string, unknown>) {
   if (storedModelId) {
     selectedModelId.value = storedModelId
   }
+  const storedEffort = String(extra.reasoning_effort ?? '').trim()
+  selectedReasoningEffort.value = isReasoningLevel(storedEffort) ? storedEffort : ''
 
   selectedMcpServers.value = Object.prototype.hasOwnProperty.call(extra, 'mcp_servers')
     ? normalizeIdList(extra.mcp_servers)
@@ -933,6 +940,7 @@ function clearSessionConfig() {
   selectedKbCollections.value = []
   kbSearchEnabled.value = true
   selectedModelId.value = ''
+  selectedReasoningEffort.value = ''
   selectedMcpServers.value = []
   selectedSkills.value = []
   skillsAllEnabled.value = true
@@ -3396,6 +3404,7 @@ function onComposerPaste(e: ClipboardEvent) {
 
                       <ChatComposerToolbar
                         v-model:model-id="selectedModelId"
+                        v-model:reasoning-effort="selectedReasoningEffort"
                         v-model:kb-collections="selectedKbCollections"
                         v-model:kb-search-enabled="kbSearchEnabled"
                         v-model:mcp-servers="selectedMcpServers"

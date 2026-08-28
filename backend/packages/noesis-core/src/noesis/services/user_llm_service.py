@@ -29,6 +29,7 @@ from noesis.errors.exceptions import (
     NotFoundException,
     ServiceException,
 )
+from noesis.llm.reasoning import normalize_reasoning_levels
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
 from noesis.storage.postgres.models.user_llm import (
     TUserLLMModel,
@@ -39,6 +40,12 @@ from noesis.storage.postgres.models.user_llm import (
 logger = logging.getLogger(__name__)
 
 _ALLOWED_API_TYPES = {"openai", "deepseek", "qwen", "minimax", "opencode"}
+
+
+def _serialize_reasoning_levels(levels: Optional[List[str]]) -> Optional[str]:
+    """能力声明数组 → 逗号串；空集合 → NULL（未声明）。"""
+    normalized = normalize_reasoning_levels(levels)
+    return ",".join(normalized) if normalized else None
 
 
 def _now_ms() -> int:
@@ -295,6 +302,7 @@ class UserLLMService:
         label: str = "",
         temperature: Optional[float] = None,
         context_window: int = 0,
+        reasoning_levels: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         await UserLLMService._get_provider(db, user_id, provider_id)
         normalized = str(model_id or "").strip()
@@ -312,6 +320,7 @@ class UserLLMService:
             label=(label or "").strip() or normalized,
             temperature=temperature,
             context_window=int(context_window or 0),
+            reasoning_levels=_serialize_reasoning_levels(reasoning_levels),
             created_at=now,
             updated_at=now,
         )
@@ -330,6 +339,7 @@ class UserLLMService:
         label: Optional[str] = None,
         temperature: Optional[float] = None,
         context_window: Optional[int] = None,
+        reasoning_levels: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         entry = await UserLLMService._get_model(db, user_id, entry_id)
         if provider_id is not None and provider_id != entry.provider_id:
@@ -351,6 +361,8 @@ class UserLLMService:
             entry.temperature = temperature
         if context_window is not None:
             entry.context_window = int(context_window or 0)
+        if reasoning_levels is not None:
+            entry.reasoning_levels = _serialize_reasoning_levels(reasoning_levels)
         entry.updated_at = _now_ms()
         await db.commit()
         return UserLLMService._model_view(db_entry=entry, api_type=None)
@@ -450,6 +462,7 @@ class UserLLMService:
             "label": db_entry.label,
             "temperature": db_entry.temperature,
             "context_window": db_entry.context_window,
+            "reasoning_levels": list(normalize_reasoning_levels(db_entry.reasoning_levels)),
         }
 
     # ---------- 用户级默认模型偏好 ----------
@@ -521,6 +534,7 @@ class UserLLMService:
                 "is_default": False,
                 "supports_vision": False,
                 "context_window": row["context_window"],
+                "reasoning_levels": row.get("reasoning_levels") or [],
                 "custom": True,
             }
             for row in rows
@@ -583,6 +597,7 @@ class UserLLMService:
                 label=entry.label,
                 context_window=entry.context_window,
                 wire_name=entry.model_id,
+                reasoning_levels=normalize_reasoning_levels(entry.reasoning_levels),
             )
         ]
 

@@ -261,6 +261,7 @@ def build_chat_model(
     model_base_url: str,
     model_api_key: str,
     provider_max_retries: int | None = None,
+    reasoning_effort: str | None = None,
 ):
     timeout = _llm_http_timeout()
     max_retries = (
@@ -282,6 +283,17 @@ def build_chat_model(
         if ModelConfig.streaming
         else {}
     )
+    # 推理档位：仅 OpenAI 协议族（openai/minimax/opencode/deepseek）透传顶层
+    # reasoning_effort；qwen/anthropic 走专有参数体系（enable_thinking/budget_tokens），
+    # 本功能不做映射，不注入。
+    from noesis.llm.reasoning import REASONING_LEVELS, to_wire_reasoning_effort
+
+    reasoning_kwargs = (
+        {"reasoning_effort": to_wire_reasoning_effort(reasoning_effort)}
+        if reasoning_effort in REASONING_LEVELS
+        and model_type in {"openai", "minimax", "opencode", "deepseek"}
+        else {}
+    )
 
     model_map = {
         # openai / minimax 走统一 OpenAI 兼容适配：reasoning 自动探测，
@@ -295,6 +307,7 @@ def build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
         "minimax": lambda: ChatOpenAICompatible(
@@ -306,6 +319,7 @@ def build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
         # opencode 与 openai 同为 OpenAI 兼容端点，复用同一适配类；
@@ -320,8 +334,11 @@ def build_chat_model(
             streaming=ModelConfig.streaming,
             default_headers=_opencode_preset()[1],
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
+        # qwen 走 DashScope 专有参数体系（enable_thinking/thinking_budget），
+        # 不支持通用 reasoning_effort，本功能不注入
         "qwen": lambda: ChatQwen(
             model=model_name,
             temperature=temperature,
@@ -346,8 +363,11 @@ def build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
+        # anthropic 走 thinking/budget_tokens 专有参数体系，不支持通用
+        # reasoning_effort，本功能不注入
         "anthropic": lambda: ChatAnthropic(
             model=model_name,
             temperature=temperature,
@@ -374,8 +394,10 @@ def get_llm(
     *,
     model_id: str | None = None,
     temperature_override: float | None = None,
+    reasoning_effort: str | None = None,
 ):
     from noesis.llm.catalog import resolve_catalog_entry
+    from noesis.llm.reasoning import get_request_reasoning_effort
     from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
     runtime_snapshot = get_runtime_model_snapshot(
@@ -392,24 +414,36 @@ def get_llm(
         model_name = runtime_snapshot.wire_name or runtime_snapshot.id
         temperature_str = ModelConfig.model_temperature
         model_base_url = runtime_snapshot.base_url
+        declared_reasoning_levels = runtime_snapshot.reasoning_levels
     elif use_summary_model:
         model_type = ModelConfig.model_type.strip().lower()
         model_name = ModelConfig.summarization_model_name.strip()
         temperature_str = str(ModelConfig.summarization_model_temperature)
         model_base_url = ModelConfig.model_base_url
+        declared_reasoning_levels = ()
     elif model_id:
         entry = resolve_catalog_entry(model_id)
         model_type = entry.model_type
         model_name = entry.id
         temperature_str = str(entry.temperature)
         model_base_url = entry.base_url
+        declared_reasoning_levels = entry.reasoning_levels
     else:
         model_type = ModelConfig.model_type.strip().lower()
         model_name = ModelConfig.model_name
         temperature_str = ModelConfig.model_temperature
         model_base_url = ModelConfig.model_base_url
+        declared_reasoning_levels = ()
 
     model_api_key = runtime_snapshot.api_key if runtime_snapshot is not None else ModelConfig.model_api_key
+
+    # 推理档位：显式参数优先，回退本 Run 的 ContextVar（子 Agent 随
+    # create_task 自动继承）；摘要/压缩模型不吃档位；档位不在该模型
+    # 能力声明内 → no-op（不传参）
+    if reasoning_effort is None:
+        reasoning_effort = get_request_reasoning_effort()
+    if use_summary_model or reasoning_effort not in declared_reasoning_levels:
+        reasoning_effort = None
 
     if not model_type:
         raise ValueError("MODEL_TYPE environment variable is not set.")
@@ -433,4 +467,5 @@ def get_llm(
         provider_max_retries=(
             int(ModelConfig.max_retries) if purpose == "summarization" else 0
         ),
+        reasoning_effort=reasoning_effort,
     )
