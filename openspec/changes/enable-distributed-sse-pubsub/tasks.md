@@ -8,6 +8,7 @@
 
 - [x] 2.1 将现有advisory lock封装为leader elector（key 不变），新增含cluster identity的单行 t_runtime_leader term（migration 202608270001）；错cluster id时fail-fast（ClusterIdMismatchError）；token 失效拒绝 claim（claim 侧已接，checkpoint/terminal/Redis envelope 校验随 P4）
 - [x] 2.2 使用独立migration advisory lock串行执行 `init_database()`（阻塞轮询+超时）；双worker并发验证归入 2.4 双进程测试（migration lock 语义已单测；live-PG 用例已跑绿：term 递增/跨实例锁互斥/foreign cluster fail-fast）
+- [ ] 2.0 P3 动工前补充子会话分布式 spec delta：ExecutorPort 跨 loop 订阅、children/stream 目录流与子会话 stop/HITL 的分布式语义（候选：子 run 事件复用 Run bus channel 命名空间 + catalog 独立 topic；或子会话端点 leader-only + 网关亲和路由）；确定方案后修订本 change 的 spec delta 与 tasks
 - [ ] 2.3 仅在leader启动/停止Run recovery、dispatcher、scheduler、memory dream、Telegram和Feishu runtime；follower不运行这些后台任务
 - [ ] 2.4 增加双进程测试，覆盖redis模式leader唯一、follower ready、失锁取消、优雅关闭先drain后释放lock、重新选举和singleton runtime不重复；memory模式第二进程fail-fast
 
@@ -27,13 +28,19 @@
 - [ ] 4.5 实现sequence gap、Redis重连和周期reconciliation；snapshot未追上时有界退避，超限只断开该subscriber并交给客户端重连
 - [ ] 4.6 覆盖snapshot/subscribe竞态、单条消息丢失后长静默、重复/乱序event、慢消费、多Tab共享Redis subscription和终态通知丢失
 
+- [ ] 4.7 会话/用户信令经Run bus广播：扩展bus port增加signal publish/subscribe（`signal:user:{user_id}` 与 `signal:session:{session_id}` 两类channel，复用envelope、不分配sequence）；redis模式follower信令SSE端点订阅远端channel并按user/session建fan-out hub（同Run hub模式）；memory模式进程内行为不变；端点代码不感知模式
+- [ ] 4.8 信令广播回归：多Tab连follower时run-terminal/hitl信令投递与leader侧一致；广播丢失后前端经active-run自愈；memory模式零行为变化
+
 ## 5. Stop与HITL durable command
 
 - [ ] 5.1 新增command model/repository/migration；stop按Run/type去重，HITL按Run/interrupt去重并保存decision digest，payload冲突返回409
 - [ ] 5.2 将stop/cancel与HITL resume移到Run Service command入口，API只负责HTTP解析、认证上下文和统一响应
 - [ ] 5.3 实现leader command consumer：Run bus wake-up + pending补扫；queued stop直接CAS终态并阻止dispatcher claim，active stop/HITL执行前重验状态
-- [ ] 5.4 stop/HITL统一返回HTTP 200的command_id/status/latest snapshot；accepted不伪装完成，前端保持状态并继续订阅Run
+- [ ] 5.4 stop/HITL统一返回HTTP 200的command_id/status/latest snapshot；API提交后对command完成做有界等待（默认5s，纯读取观察不回滚command）：leader同进程常见路径返回completed，超时返回accepted；accepted不伪装完成，前端保持状态并继续订阅Run
 - [ ] 5.5 覆盖wake-up丢失、重复stop、重复/过期HITL、旧Run command、leader切换和迟到ack
+
+- [ ] 5.6 command有界保留与清理：completed/rejected/no-op command保留 `distributed_runs.command_retention_days`（默认7天，新配置项）后由leader低频批量清理；保留期=幂等去重窗口（超窗重复提交按新command重验Run状态）；清理不阻塞dispatch/claim
+- [ ] 5.7 command清理回归：过期清理、清理期间新command提交、超窗重复stop对已终态Run返回rejected/no-op且无第二次副作用
 
 ## 6. 故障、鉴权与可观测性
 
@@ -57,3 +64,4 @@
 - [ ] 8.3 以一个leader、至少一个follower执行100 active Run、每Run 2–3 Tab、每Run 10–30 events/s容量测试，记录leader/follower p50/p95/p99、Redis吞吐、event-loop lag、RSS、queue/checkpoint lag、gap恢复和terminal delivery
 - [ ] 8.4 在staging执行Redis重启、leader崩溃/重选、滚动发布、跨worker stop/HITL与回滚演练，并将命令和结果写入release runbook
 - [ ] 8.5 运行 `openspec validate enable-distributed-sse-pubsub --strict`，再按原始Spec与项目规范执行code review；仅对review确认的复杂代码使用code simplification
+- [ ] 8.6 CI workflow增加真实Redis service：contract参数化用例与双backend集成测试在CI可跑（非仅本地），memory模式用例不依赖Redis服务

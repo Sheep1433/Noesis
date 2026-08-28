@@ -99,7 +99,10 @@ stop使用 `(run_id, stop)` 作为稳定dedupe identity；HITL使用 `(run_id, i
 
 stop/HITL API保持项目统一HTTP 200响应，但数据明确返回 `command_id`、`command_status=accepted|completed|rejected` 与最新Run snapshot。`accepted`只表示durable command已提交，不表示producer已经停止或恢复；前端立即订阅/继续订阅同一Run并显示“正在停止”或“正在继续”，直到SSE/snapshot出现权威状态。API可短暂等待快速ack，但超时仍返回accepted，不能仅凭Redis publish成功返回completed，也不新增仅用于轮询command的公开API。
 
-queued Run收到stop时，command consumer直接以CAS将其收口为partial/stopped而不创建producer；dispatcher claim条件必须排除pending stop。若dispatcher先成功claim为running，stop则按正常active Run取消路径执行。两种事务顺序都只能得到“未启动即停止”或“启动后取消”之一，不能出现stop已确认但producer随后启动。
+queued Run收到stop时，command consumer直接以CAS将其收口为partial/stopped而不创建producer；dispatcher claim条件必须排除pending stop。
+
+若dispatcher先成功claim为running，stop则按正常active Run取消路径执行。两种事务顺序都只能得到“未启动即停止”或“启动后取消”之一，不能出现stop已确认但producer随后启动。command完成后保留有限时长（`distributed_runs.command_retention_days`，默认7天），由leader低频批量清理；保留期同时是幂等去重窗口，超窗重复提交按新command处理并重验Run状态。API提交command后对完成做有界等待（默认5秒）：leader同进程执行的常见路径（如stop在cancel grace内完成）返回 `completed`，超时返回 `accepted`；该等待是纯读取观察，不得因等待失败回滚command。
+
 
 ### 6. bus与leader故障采用明确且不自动切换的降级
 
@@ -141,6 +144,15 @@ checkpointer、知识库读服务等每个HTTP进程需要的依赖可以各自�
 现有RunManager subscription quota是进程内计数，多worker后不得继续命名为部署级global limit。首版对每worker、每用户和每Run设置本地硬上限，并由网关设置部署级连接上限；容量与安全评估按 `worker_count × local_limit` 计算最坏上界。暂不为精确全局计数引入易泄漏的Redis连接租约。
 
 容量验收使用至少两个backend进程，仍保持一个execution leader，覆盖100 active Run、每Run 2–3 Tab，并让部分SSE固定连接follower。若结果显示execution leader达到CPU、event-loop、内存或Run上限，再以数据决定是否设计多execution owner。
+
+### 9. 会话与用户信令复用 Run bus 广播（redis 模式）
+
+会话级 `session_signal_bus` 与用户级 `user_signal_bus` 目前是进程内 dict-of-queues。多 worker 下 follower 承接信令 SSE 端点（`/api/chat/sessions/{id}/events`、`/api/chat/events/stream`）时必须收到跨进程信令，否则会话列表徽章等 hint 在 follower 上永不更新。
+
+- channel：`noesis:{cluster_id}:signal:user:{user_id}`（用户级，payload 含 session_id+status）与 `noesis:{cluster_id}:signal:session:{session_id}`（会话级）；
+- 信令复用版本化 envelope，但不分配 sequence、不进 checkpoint——hint 语义（at-most-once、满则丢、前端经 active-run/GET 自愈）保持不变；
+- worker 内每 user/session 一个 fan-out hub（与 Run hub 同模式：共享远端订阅、多 Tab fan-out、最后一个订阅者离开后释放）；
+- `memory` 模式进程内总线行为不变；信令端点与 Service 代码不感知运行模式（与 Run 事件同一「双模式共享状态机」原则）。
 
 ## Risks / Trade-offs
 
