@@ -3,7 +3,12 @@
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from noesis.llm.catalog import get_default_model_id, get_model_catalog, resolve_catalog_entry
+from noesis.llm.catalog import (
+    get_default_model_id,
+    get_model_catalog,
+    list_public_models,
+    resolve_catalog_entry,
+)
 from noesis.llm.factory import get_llm
 
 
@@ -35,6 +40,39 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
     assert resolve_catalog_entry("deepseek-reasoner").id == "deepseek-reasoner"
     assert resolve_catalog_entry("deepseek-reasoner").context_window == 200_000
     assert resolve_catalog_entry(None).id == "deepseek-v4-flash-free"
+
+    get_model_catalog.cache_clear()
+
+
+@patch("noesis.llm.catalog.load_app_yaml")
+def test_model_catalog_reasoning_levels_declaration(mock_load_yaml):
+    """条目声明推理档位→entry/下拉行透出；未声明→空（控件不显示）；model 层默认可继承。"""
+    from noesis.config.yaml_config import AppYamlConfig, ModelCatalogEntryYamlSection, ModelYamlSection
+
+    mock_load_yaml.return_value = AppYamlConfig(
+        model=ModelYamlSection(
+            type="opencode",
+            name="deepseek-v4-flash-free",
+            reasoning_levels=["off", "low", "high", "max"],
+            catalog=[
+                ModelCatalogEntryYamlSection(id="deepseek-v4-flash-free", label="Flash"),
+                ModelCatalogEntryYamlSection(
+                    id="deepseek-reasoner",
+                    label="Reasoner",
+                    reasoning_levels=["low", "medium", "high"],
+                ),
+            ],
+        )
+    )
+    get_model_catalog.cache_clear()
+
+    # 未声明的条目继承 model 层默认；条目声明优先；非法值被过滤、按枚举序归一
+    assert resolve_catalog_entry("deepseek-v4-flash-free").reasoning_levels == ("off", "low", "high", "max")
+    assert resolve_catalog_entry("deepseek-reasoner").reasoning_levels == ("low", "medium", "high")
+
+    rows = {row["id"]: row for row in list_public_models()}
+    assert rows["deepseek-v4-flash-free"]["reasoning_levels"] == ["off", "low", "high", "max"]
+    assert rows["deepseek-reasoner"]["reasoning_levels"] == ["low", "medium", "high"]
 
     get_model_catalog.cache_clear()
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Request
 from pydantic import BaseModel
@@ -39,6 +39,8 @@ class ModelUpsertBody(BaseModel):
     label: str = ""
     temperature: Optional[float] = None
     context_window: int = 0
+    # 推理档位能力声明（reasoning_effort 子集）；省略=不改（update）/未声明（create），[]=清空
+    reasoning_levels: Optional[List[str]] = None
 
 
 # ---------- Provider ----------
@@ -250,6 +252,7 @@ async def create_model(
         label=body.label,
         temperature=body.temperature,
         context_window=body.context_window,
+        reasoning_levels=body.reasoning_levels,
     )
     await SettingsService.append_audit(
         db,
@@ -281,6 +284,7 @@ async def update_model(
         label=body.label,
         temperature=body.temperature,
         context_window=body.context_window,
+        reasoning_levels=body.reasoning_levels,
     )
     await SettingsService.append_audit(
         db,

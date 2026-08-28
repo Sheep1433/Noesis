@@ -19,6 +19,8 @@ class RuntimeModelSnapshot:
     # 发给端点的真实模型名；自定义模型 id 为复合「slug/model_id」身份，
     # 线上名与选择器身份分离（对齐 dsh route/model 二段身份）
     wire_name: str = ""
+    # 推理档位能力声明（reasoning_effort 子集）；空=未声明
+    reasoning_levels: tuple[str, ...] = ()
 
 
 _snapshots: ContextVar[dict[str, RuntimeModelSnapshot]] = ContextVar(

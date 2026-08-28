@@ -16,6 +16,7 @@ declare module 'vue' {
     ChatMentionPicker: typeof import('./src/components/Chat/MentionPicker.vue')['default']
     ChatModelSelector: typeof import('./src/components/Chat/ModelSelector.vue')['default']
     ChatModeSelector: typeof import('./src/components/Chat/ChatModeSelector.vue')['default']
+    ChatReasoningEffortSelector: typeof import('./src/components/Chat/ReasoningEffortSelector.vue')['default']
     CitationSources: typeof import('./src/components/CitationSources/index.vue')['default']
     ContextWindowIndicator: typeof import('./src/components/ContextWindowIndicator/index.vue')['default']
     ConversationPartsRenderer: typeof import('./src/components/ConversationPartsRenderer/index.vue')['default']

@@ -112,6 +112,15 @@ class QaService:
                     request_model_id=req_obj.model_id,
                     db=db,
                 )
+            # 本 Run 的推理档位（get_llm 经 ContextVar 消费；子 Agent 随
+            # create_task 自动继承）。TEST_CASE_QA 不参与档位控制。
+            from noesis.llm.reasoning import set_request_reasoning_effort
+
+            set_request_reasoning_effort(
+                req_obj.reasoning_effort
+                if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]
+                else None
+            )
 
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
