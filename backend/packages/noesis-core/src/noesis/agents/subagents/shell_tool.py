@@ -49,6 +49,14 @@ class _ExecuteWithBackgroundSchema(BaseModel):
 
     command: str = Field(description="Shell command to execute in the sandbox environment.")
 
+    description: str = Field(
+        default="",
+        description=(
+            "Short plain-language summary of what this command does "
+            "(shown as the background task card title when run_in_background=true)."
+        ),
+    )
+
     timeout: Optional[int] = Field(
         default=None,
         description="Optional timeout in seconds for this command. Overrides the default timeout. Use 0 for no-timeout execution on backends that support it.",
@@ -97,6 +105,7 @@ def replace_execute_tool(
         runtime: ToolRuntime,
         timeout: Optional[int] = None,
         run_in_background: bool = False,
+        description: str = "",
     ):
         if run_in_background:
             invalid = _validate_background_timeout(timeout)
@@ -109,6 +118,7 @@ def replace_execute_tool(
                     session_id=session_id,
                     user_id=user_id,
                     timeout=timeout,
+                    description=description or None,
                 )
             except ValueError as exc:
                 return _reject_background(str(exc), runtime.tool_call_id)
@@ -126,6 +136,7 @@ def replace_execute_tool(
         runtime: ToolRuntime,
         timeout: Optional[int] = None,
         run_in_background: bool = False,
+        description: str = "",
     ):
         if run_in_background:
             invalid = _validate_background_timeout(timeout)
@@ -138,6 +149,7 @@ def replace_execute_tool(
                     session_id=session_id,
                     user_id=user_id,
                     timeout=timeout,
+                    description=description or None,
                 )
             except ValueError as exc:
                 return _reject_background(str(exc), runtime.tool_call_id)

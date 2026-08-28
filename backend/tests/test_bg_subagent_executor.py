@@ -932,3 +932,40 @@ def test_context_snapshot_from_worker_usage_metadata() -> None:
     assert snapshot["current_tokens"] == 12000
     assert snapshot["max_tokens"] > 0
     assert 0 < snapshot["used_percentage"] <= 100
+
+
+# ---------------------------------------------------------------------------
+# 后台命令任务（kind="shell"）：description 作为任务卡标题
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_start_shell_description_as_task_title() -> None:
+    """execute 后台化：description 作任务卡标题；缺省回退原始命令。"""
+    from unittest.mock import AsyncMock
+
+    class _Ok:
+        exit_code = 0
+        output = "ok"
+
+    backend = SimpleNamespace(aexecute=AsyncMock(return_value=_Ok()))
+    executor = BackgroundSubagentExecutor(shell_task_timeout_seconds=30)
+
+    task_id = executor.start_shell(
+        command="uv run pytest tests/ -q 2>&1 | tail -5",
+        backend=backend,
+        session_id="s-shell",
+        user_id="u1",
+        description="跑全量回归测试",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert task["description"] == "跑全量回归测试"
+
+    task_id2 = executor.start_shell(
+        command="pnpm lint",
+        backend=backend,
+        session_id="s-shell",
+        user_id="u1",
+    )
+    task2 = _wait_terminal(executor, task_id2)
+    assert task2["description"] == "pnpm lint"

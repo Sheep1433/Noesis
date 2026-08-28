@@ -870,6 +870,7 @@ class BackgroundSubagentExecutor:
         session_id: str,
         user_id: str,
         timeout: Optional[int] = None,
+        description: Optional[str] = None,
     ) -> str:
         """启动后台命令任务（kind="shell"）：不经 worker 编译，直接经
         backend 执行；任务超时独立（shell_task_timeout_seconds，默认 0=不限
@@ -878,13 +879,14 @@ class BackgroundSubagentExecutor:
 
         ``timeout`` 为命令级超时（透传 backend）：None 用默认（1h）；
         docker runner 侧 0=不限时（local_shell 不接受 0，同前台语义）。
+        ``description`` 为任务卡展示用简短说明；缺省回退原始命令。
         """
         task_id = f"bg-{uuid.uuid4()}"
         task = BackgroundTask(
             task_id=task_id,
             session_id=session_id,
             user_id=user_id,
-            description=command,
+            description=description or command,
             kind="shell",
         )
         entry = _TaskEntry(
