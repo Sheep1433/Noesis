@@ -526,6 +526,11 @@ async function makeDefault(modelId: string | null) {
   }
 }
 
+/** tokens 千分位 + 等宽数字（列表列对齐用） */
+function formatTokens(n: number): string {
+  return n.toLocaleString('en-US')
+}
+
 function removeProvider(provider: UserLLMProvider) {
   dialog.warning({
     title: `删除「${provider.name}」？`,
@@ -564,23 +569,23 @@ onMounted(() => {
               <n-tag size="small" :bordered="false">平台</n-tag>
               <span class="muted">（{{ mergedPlatformRows.length }} 个模型）</span>
             </div>
-            <div class="muted provider-meta">
-              {{ platformProvider.id }} · {{ platformProvider.base_url }}
+            <div class="muted provider-meta" :title="platformProvider.base_url">
+              {{ platformProvider.base_url }}
             </div>
             <div class="row-actions">
               <span class="chevron" :class="{ open: expandedGroups.has('platform') }">▾</span>
             </div>
           </div>
           <template v-if="expandedGroups.has('platform')">
-            <!-- 展开区工具栏：发现动作与自定义组的行内操作同一层级 -->
+            <!-- 展开区工具栏：编辑与发现动作（与自定义组的动作层级一致） -->
             <div class="group-toolbar">
-              <span class="muted">免费模型会轮换，获取后按当下真实列表勾选添加</span>
+              <span class="muted">免费模型会轮换，可随时获取最新列表</span>
               <div class="toolbar-actions">
                 <n-button
                   v-if="platformProviderRow" size="tiny" quaternary
                   @click.stop="platformProviderRow && editProvider(platformProviderRow)"
                 >
-                  管理
+                  编辑
                 </n-button>
                 <n-button size="tiny" :loading="discoveringPlatform" @click="discoverPlatform">
                   获取可用模型
@@ -593,12 +598,12 @@ onMounted(() => {
                 <span class="muted">{{ row.model_id }}</span>
               </div>
               <div class="tags">
-                <n-tag v-if="row.isDefault" size="small" type="success">默认</n-tag>
                 <n-tag v-if="row.offline" size="small" type="warning" :bordered="false">已下线</n-tag>
                 <n-tag v-if="row.supportsVision" size="small">视觉</n-tag>
-                <n-tag v-if="row.contextWindow" size="small" :bordered="false">{{ row.contextWindow }} tokens</n-tag>
+                <n-tag v-if="row.contextWindow" size="small" :bordered="false"><span class="token-num">{{ formatTokens(row.contextWindow) }} tokens</span></n-tag>
+                <n-tag v-if="row.isDefault" size="small" type="success">默认</n-tag>
                 <n-button
-                  v-if="!row.isDefault" size="tiny" quaternary
+                  v-else size="tiny" quaternary
                   @click.stop="makeDefault(row.catalog_id)"
                 >
                   设为默认
@@ -616,41 +621,51 @@ onMounted(() => {
         </div>
         <SettingsEmptyState v-else title="暂无可用模型" description="可在下方添加自己的模型服务。" />
 
-        <!-- 自定义 Provider：名称 + 自定义标签 + 状态点（绿 = Key 已配置）+ 编辑/删除 -->
+        <!-- 自定义 Provider：行头只做标识与折叠（与平台组同构）；动作在展开区工具栏 -->
         <div v-for="provider in customProviders" :key="provider.provider_id" class="provider-group">
           <div class="provider-row toggle" @click="toggleGroup(provider.provider_id)">
             <div class="provider-id">
               <span class="status-dot" :class="provider.has_key ? 'ok' : 'missing'"></span>
               <strong>{{ provider.name }}</strong>
               <n-tag size="small" :bordered="false">自定义</n-tag>
+              <n-tag v-if="!provider.enabled" size="small" type="warning" :bordered="false">已停用</n-tag>
               <span class="muted">（{{ models.filter(m => m.provider_id === provider.provider_id).length }} 个模型）</span>
             </div>
-            <div class="muted provider-meta">
-              {{ provider.slug || provider.provider_id.slice(0, 8) }} · {{ provider.base_url }}
+            <div class="muted provider-meta" :title="provider.base_url">
+              {{ provider.base_url }}
             </div>
             <div class="row-actions">
-              <n-switch size="small" :value="provider.enabled" @update:value="value => toggleProvider(provider, value)" @click.stop />
-              <n-button size="tiny" quaternary @click.stop="editProvider(provider)">
-                编辑
-              </n-button>
-              <n-button size="tiny" quaternary type="error" @click.stop="removeProvider(provider)">
-                删除
-              </n-button>
               <span class="chevron" :class="{ open: expandedGroups.has(provider.provider_id) }">▾</span>
             </div>
           </div>
           <template v-if="expandedGroups.has(provider.provider_id)">
+            <!-- 展开区工具栏：启用开关 + 编辑/删除（动作层级与平台组一致） -->
+            <div class="group-toolbar">
+              <span class="muted">{{ provider.slug || provider.provider_id.slice(0, 8) }} · {{ provider.base_url }}</span>
+              <div class="toolbar-actions">
+                <label class="enable-toggle">
+                  <n-switch size="small" :value="provider.enabled" @update:value="value => toggleProvider(provider, value)" />
+                  启用
+                </label>
+                <n-button size="tiny" quaternary @click="editProvider(provider)">
+                  编辑
+                </n-button>
+                <n-button size="tiny" quaternary type="error" @click="removeProvider(provider)">
+                  删除
+                </n-button>
+              </div>
+            </div>
             <div v-for="model in models.filter(m => m.provider_id === provider.provider_id)" :key="model.entry_id" class="grouped-model-row">
               <div class="grouped-model">
                 <strong>{{ model.label }}</strong>
                 <span class="muted">{{ model.model_id }}</span>
               </div>
               <div class="tags">
-                <n-tag v-if="compositeModelId(provider, model) === catalog?.default_id" size="small" type="success">默认</n-tag>
-                <n-tag v-if="model.context_window" size="small" :bordered="false">{{ model.context_window }} tokens</n-tag>
                 <n-tag v-if="model.reasoningLevels && model.reasoningLevels.length" size="small" :bordered="false" type="info">推理</n-tag>
+                <n-tag v-if="model.context_window" size="small" :bordered="false"><span class="token-num">{{ formatTokens(model.context_window) }} tokens</span></n-tag>
+                <n-tag v-if="compositeModelId(provider, model) === catalog?.default_id" size="small" type="success">默认</n-tag>
                 <n-button
-                  v-if="compositeModelId(provider, model) !== catalog?.default_id" size="tiny" quaternary
+                  v-else size="tiny" quaternary
                   @click.stop="makeDefault(compositeModelId(provider, model))"
                 >
                   设为默认
@@ -670,6 +685,9 @@ onMounted(() => {
 
       <!-- 自定义提供方表单（dsh 风格：Provider ID / 显示名称 / API 地址 / 协议 / 密钥 / 模型目录） -->
       <div v-if="providerFormVisible" class="provider-form-card">
+        <div class="form-card-head">
+          {{ editingProviderId ? `编辑提供方：${providerForm.name || providerForm.slug}` : '新建提供方' }}
+        </div>
         <label class="field preset-line">
           <span class="field-label">提供方</span>
           <n-select
@@ -739,7 +757,7 @@ onMounted(() => {
           <div v-for="(row, index) in draftModels" :key="row.entry_id || `new-${index}`" class="catalog-row">
             <n-input v-model:value="row.model_id" size="small" class="flat-input" placeholder="模型 ID（如 deepseek-chat）" />
             <n-input v-model:value="row.label" size="small" class="flat-input" placeholder="显示名称（可选）" />
-            <n-input-number v-model:value="row.context_window" size="small" class="flat-input" :min="0" placeholder="上下文窗口（可选）" />
+            <n-input-number v-model:value="row.context_window" size="small" class="flat-input" :min="0" placeholder="上下文窗口（tokens，可选）" />
             <n-select v-model:value="row.reasoning_levels" size="small" class="flat-input" multiple :options="reasoningSelectOptions" max-tag-count="responsive" placeholder="推理档位（可选）" />
             <n-button size="tiny" quaternary type="error" @click="removeModelRow(index)">删除</n-button>
           </div>
@@ -781,8 +799,11 @@ onMounted(() => {
 .provider-group:not(:last-of-type) { margin-bottom: 10px; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); padding-bottom: 4px; }
 .grouped-model-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 7px 0 7px 16px; border-top: 1px dashed var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
 .group-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0 2px 16px; }
-.group-toolbar .muted { margin-top: 0; }
-.toolbar-actions { display: flex; align-items: center; gap: 8px; }
+.group-toolbar .muted { margin-top: 0; min-width: 0; word-break: break-all; }
+.toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+.enable-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--noesis-color-text-secondary); }
+/* tokens 固定宽度右对齐：各行数值列竖向对齐（256,000 与 1,048,576 同一终止线） */
+.token-num { display: inline-block; min-width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
 .grouped-model { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .provider-row.toggle { cursor: pointer; user-select: none; }
 .chevron { color: var(--noesis-color-text-muted); font-size: 11px; transition: transform 0.15s; display: inline-block; margin-left: 2px; }
@@ -826,6 +847,7 @@ onMounted(() => {
   display: grid;
   gap: 14px;
 }
+.form-card-head { font-size: 13px; font-weight: 600; color: var(--noesis-color-text); }
 .preset-line { max-width: 360px; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .field { display: grid; gap: 6px; min-width: 0; }
@@ -861,6 +883,7 @@ onMounted(() => {
   .field.span-2 { grid-column: span 1; }
   .catalog-row { grid-template-columns: 1fr; }
   .provider-row { flex-wrap: wrap; }
+  .group-toolbar { flex-wrap: wrap; }
 
   /* 分组模型行：名称 + 标签 + 操作窄屏换行后，操作组靠右（与桌面一致） */
   .grouped-model-row { flex-wrap: wrap; padding-left: 8px; }
