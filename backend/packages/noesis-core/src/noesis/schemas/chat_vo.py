@@ -148,6 +148,7 @@ class SendMessageRequest(BaseModel):
 class SubagentFollowupRequest(BaseModel):
     """向现有 child session 发起下一轮对话。"""
     message: str = Field(..., min_length=1, description='补充要求')
+    model_id: Optional[str] = Field(None, description='该轮使用的模型（缺省沿用当前模型）')
 
 
 class CreateRunRequest(BaseModel):

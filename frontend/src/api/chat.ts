@@ -729,15 +729,16 @@ export async function sendMessage(
   return parseResponse<SendMessageResponse>(await authFetch(req))
 }
 
-/** 向已有 child session 追加下一轮对话。 */
+/** 向已有 child session 追加下一轮对话；modelId 缺省沿用当前模型。 */
 export async function sendSubagentFollowup(
   sessionId: string,
   message: string,
+  modelId?: string,
 ): Promise<TaskCatalogEntry> {
   const req = makeRequest(
     'POST',
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-followup`,
-    { message },
+    modelId ? { message, model_id: modelId } : { message },
   )
   return parseResponse<TaskCatalogEntry>(await authFetch(req))
 }

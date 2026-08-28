@@ -96,7 +96,14 @@ class SubagentSessionService:
         return count
 
     @classmethod
-    async def send_followup(cls, *, session_id: str, user_id: str, message: str) -> dict:
+    async def send_followup(
+        cls,
+        *,
+        session_id: str,
+        user_id: str,
+        message: str,
+        model_id: Optional[str] = None,
+    ) -> dict:
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
         task = await cls._owned_child(session_id, user_id)
@@ -116,6 +123,7 @@ class SubagentSessionService:
                 session_id,
                 message,
                 user_message_id=pending_user_message_id,
+                model_id=model_id,
             )
         except ValueError as exc:
             await cls._discard_pending_user_message(pending_user_message_id, user_id)

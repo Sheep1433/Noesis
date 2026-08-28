@@ -27,6 +27,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import PrivateAttr
 
 from noesis.agents.subagents.executor import (
+    _TASKS,
     BackgroundSubagentExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
@@ -328,6 +329,48 @@ def test_followup_chains_new_turn_when_running() -> None:
     assert task["status"] == BgTaskStatus.COMPLETED.value
     # 新 turn 执行（脚本耗尽返回默认收尾文本）
     assert task["result"]
+
+
+def test_followup_model_switch_recompiles_worker() -> None:
+    """followup 携带新模型：以覆盖值重编译 worker，task.model_id 跟随更新；
+    不带模型或同模型的 followup 不触发重编译。"""
+    factory_calls: list[Any] = []
+
+    def worker_factory(model_id_override=None):  # noqa: ANN001, ANN001
+        factory_calls.append(model_id_override)
+        return _build_worker([AIMessage(content="ok")])
+
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=worker_factory, description="x", session_id="s-model", user_id="u1",
+        model_id="model-a",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert factory_calls == [None]  # 首轮无覆盖
+    entry = _TASKS[task_id]
+    assert entry.task.model_id == "model-a"
+
+    # 冷恢复 + 换模型：factory 收到覆盖值，编译产物替换，task.model_id 更新
+    executor.send_message(task_id, "换个模型继续", model_id="model-b")
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert factory_calls == [None, "model-b"]
+    assert entry.task.model_id == "model-b"
+    assert entry.model_override == "model-b"
+
+    # 不带模型的 followup：沿用 model-b，不重编译
+    executor.send_message(task_id, "再问一句")
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert factory_calls == [None, "model-b"]
+    assert entry.task.model_id == "model-b"
+
+    # 同模型显式传参：与当前一致，不重编译
+    executor.send_message(task_id, "同模型再问", model_id="model-b")
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    assert factory_calls == [None, "model-b"]
 # ---------------------------------------------------------------------------
 # 前台等待（run_in_background=false）与超时转后台
 # ---------------------------------------------------------------------------

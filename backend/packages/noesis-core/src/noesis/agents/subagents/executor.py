@@ -31,7 +31,7 @@ import uuid
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
@@ -194,7 +194,7 @@ class _TaskEntry:
     # worker 的 LLM 客户端 / checkpointer 连接池必须绑定隔离 loop，
     # 不得复用主 loop 创建的实例（cross-loop 风险）。
     # shell 任务不经 worker 编译（None），直接经 shell_backend 执行
-    agent_factory: Optional[Callable[[], Any]]
+    agent_factory: Optional[Callable[..., Any]]
     recursion_limit: int
     # > 0 时 watchdog 超时取消执行 future；0 = 不限时（shell 任务默认）
     timeout_seconds: float
@@ -207,6 +207,12 @@ class _TaskEntry:
     followup_message_ids: "collections.deque[Optional[str]]" = field(
         default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
     )
+    # 与 followups 逐条对应的模型覆盖（None = 沿用当前模型）
+    followup_models: "collections.deque[Optional[str]]" = field(
+        default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
+    )
+    # 生效中的模型覆盖：非 None 时 _ensure_agent 以该模型重新编译 worker
+    model_override: Optional[str] = None
     followup_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # factory 首次调用后在隔离 loop 内缓存编译结果（同 executor 任务复用）
     compiled_agent: Any = None
@@ -322,6 +328,9 @@ def _publish_run_event(
         "sequence": task.projection_sequence,
         "status": task.status.value,
     }
+    # 终态时间：前端据此冻结 duration（重放历史事件同样可得）
+    if task.completed_at is not None:
+        payload["finished_at"] = task.completed_at
     if content is not None:
         payload["content"] = content
         if isinstance(content, dict) and isinstance(content.get("_pending_hitl"), dict):
@@ -781,7 +790,7 @@ class BackgroundSubagentExecutor:
     def start(
         self,
         *,
-        worker_factory: Callable[[], Any],
+        worker_factory: Callable[..., Any],
         description: str,
         session_id: str,
         user_id: str,
@@ -912,12 +921,14 @@ class BackgroundSubagentExecutor:
         task_id: str,
         message: str,
         user_message_id: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """followup-turn：向子任务追加一个 turn。
 
         - running / awaiting_approval：入队，当前 turn 结束后链式开新 turn
         - completed：冷恢复——同 thread 开新 turn，任务回到 running
         - shell / failed / timed_out / cancelled：拒绝
+        - model_id 非空且与当前不同：该 turn 起以新模型编译 worker（同 thread 续跑）
         """
         text = message.strip()
         if not text:
@@ -942,7 +953,7 @@ class BackgroundSubagentExecutor:
                 task.completed_at = None
                 loop = _ensure_loop()
                 entry.future = asyncio.run_coroutine_threadsafe(
-                    _arun_followup(entry, text, user_message_id),
+                    _arun_followup(entry, text, user_message_id, model_id),
                     loop,
                 )
                 _arm_watchdog(entry)
@@ -953,6 +964,7 @@ class BackgroundSubagentExecutor:
             with entry.followup_lock:
                 entry.followups.append(text)
                 entry.followup_message_ids.append(user_message_id)
+                entry.followup_models.append(model_id)
             _publish_task_event(task, "followup")
             return task.to_dict()
 
@@ -963,6 +975,7 @@ class BackgroundSubagentExecutor:
             messages = list(entry.followups)
             entry.followups.clear()
             entry.followup_message_ids.clear()
+            entry.followup_models.clear()
             return messages
 
     @staticmethod
@@ -1035,6 +1048,7 @@ class BackgroundSubagentExecutor:
             with entry.followup_lock:
                 entry.followups.clear()
                 entry.followup_message_ids.clear()
+                entry.followup_models.clear()
             if entry.future is not None:
                 entry.future.cancel()
             entry.task.status = BgTaskStatus.CANCELLED
@@ -1070,24 +1084,44 @@ def _config(entry: _TaskEntry) -> dict[str, Any]:
 
 async def _ensure_agent(entry: _TaskEntry) -> Any:
     """惰性编译 worker：factory 在隔离 loop 内调用，其 LLM 客户端 /
-    checkpointer 连接池绑定隔离 loop（避免复用主 loop 实例的 cross-loop 风险）。"""
+    checkpointer 连接池绑定隔离 loop（避免复用主 loop 实例的 cross-loop 风险）。
+
+    entry.model_override 非 None 时以覆盖模型编译（followup 切换模型后
+    compiled_agent 已被置空，这里按新模型重建；同 thread 续跑，历史保留）。
+    """
     if entry.compiled_agent is None:
         with entry.compiled_lock:
             if entry.compiled_agent is None:
-                result = entry.agent_factory()
+                if entry.model_override is None:
+                    result = entry.agent_factory()
+                else:
+                    result = entry.agent_factory(entry.model_override)
                 if inspect.isawaitable(result):
                     result = await result
                 entry.compiled_agent = result
     return entry.compiled_agent
 
 
-def _pop_first_followup(entry: _TaskEntry) -> Optional[tuple[str, Optional[str]]]:
+def _apply_model_override(entry: _TaskEntry, model_id: Optional[str]) -> bool:
+    """切换任务模型：更新 task.model_id（上下文窗口口径跟随）并使已编译
+    worker 失效，下一 turn 以新模型编译。返回是否发生切换。"""
+    if not model_id or model_id == entry.task.model_id:
+        return False
+    entry.task.model_id = model_id
+    entry.model_override = model_id
+    with entry.compiled_lock:
+        entry.compiled_agent = None
+    return True
+
+
+def _pop_first_followup(entry: _TaskEntry) -> Optional[tuple[str, Optional[str], Optional[str]]]:
     with entry.followup_lock:
         if not entry.followups:
             return None
         text = entry.followups.popleft()
         message_id = entry.followup_message_ids.popleft() if entry.followup_message_ids else None
-        return text, message_id
+        model_id = entry.followup_models.popleft() if entry.followup_models else None
+        return text, message_id, model_id
 
 
 async def _arun(
@@ -1185,7 +1219,15 @@ async def _arun(
             next_followup = _pop_first_followup(entry)
             if next_followup is None:
                 break
-            next_message, next_user_message_id = next_followup
+            next_message, next_user_message_id, next_model_id = next_followup
+            # 该 turn 指定了新模型 → 失效已编译 worker，下一轮以新模型续跑同 thread
+            if _apply_model_override(entry, next_model_id):
+                agent = await _ensure_agent(entry)
+                logger.info(
+                    "bg subagent model switched task_id={} model={}",
+                    task.task_id,
+                    next_model_id,
+                )
             turn_content = _child_projection_content(
                 final.get("messages", [])[projection_offset:] if isinstance(final, dict) else []
             )
@@ -1297,8 +1339,13 @@ async def _arun_followup(
     entry: _TaskEntry,
     text: str,
     user_message_id: Optional[str] = None,
+    model_id: Optional[str] = None,
 ) -> None:
-    """completed child session 的新 turn：先建标准 run，再进入 worker。"""
+    """completed child session 的新 turn：先建标准 run，再进入 worker。
+
+    model_id 非空且与当前不同：该 turn 起以新模型编译 worker（同 thread 续跑）。
+    """
+    _apply_model_override(entry, model_id)
     agent = await _ensure_agent(entry)
     entry.task.turn_count += 1
     baseline = 0

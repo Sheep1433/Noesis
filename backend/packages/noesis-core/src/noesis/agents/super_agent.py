@@ -157,7 +157,7 @@ class SuperAgent(BaseAgent):
             tool for tool in tools if getattr(tool, "name", "") != "search_memory"
         ]
 
-        async def _bg_worker_factory():
+        async def _bg_worker_factory(model_id_override: str | None = None):
             from noesis.config.checkpointer import create_isolated_checkpointer
 
             return _compile_task_worker(
@@ -165,7 +165,8 @@ class SuperAgent(BaseAgent):
                 worker_tools,
                 skill_sources,
                 user_id=user_id,
-                model_id=model_id,
+                # followup 可按 turn 切换模型：覆盖优先，否则沿用父 Agent 模型
+                model_id=model_id_override or model_id,
                 interrupt_on=interrupt_on,
                 session_id=session_id,
                 checkpointer=await create_isolated_checkpointer(),

@@ -10,6 +10,7 @@ import {
   stopAgentRun,
   subscribeAgentRun,
 } from '@/api/chat'
+import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
 import HitlApprovalCard from '@/components/HitlApprovalCard/index.vue'
@@ -46,6 +47,8 @@ let requestSerial = 0
 const now = ref(Date.now())
 let durationTimer: ReturnType<typeof setInterval> | null = null
 const contextSnapshot = ref<Record<string, unknown> | null>(null)
+/** followup 模型选择：初始取子会话 extra.model_id（ModelSelector 持久化），缺省目录默认 */
+const selectedModelId = ref('')
 
 const assistantMessage = computed(() => messages.value.find((item) => item.id === run.value?.assistant_message_id))
 const turnCount = computed(() => messages.value.filter((item) => item.role === 'user').length)
@@ -159,6 +162,16 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
         pending_hitl: null,
       }
     }
+    // 终态时刻落进 assistant 消息：流式建出的合成消息没有 run_finished_at，
+    // 不补的话 duration 会随 now 永远跳（「会话停了计时器还在跑」）
+    const finishedAt = timestampMs(payload.finished_at as number | null) ?? Date.now()
+    const assistantId = run.value?.assistant_message_id
+    if (assistantId) {
+      const index = messages.value.findIndex((item) => item.id === assistantId)
+      if (index >= 0 && !messages.value[index].run_finished_at) {
+        messages.value[index] = { ...messages.value[index], run_finished_at: finishedAt }
+      }
+    }
   }
 }
 
@@ -167,6 +180,11 @@ async function loadContextSnapshot() {
     const session = await getSession(props.sessionId)
     if (hasValidContextWindow(session?.extra?.context)) {
       contextSnapshot.value = session.extra.context
+    }
+    // 恢复该子会话上次的模型选择（ModelSelector 持久化在 extra.model_id）
+    const sessionModel = session?.extra?.model_id
+    if (typeof sessionModel === 'string' && sessionModel && !selectedModelId.value) {
+      selectedModelId.value = sessionModel
     }
   } catch {
     // 上下文快照缺失只影响指示器，不影响会话展示
@@ -273,7 +291,11 @@ async function sendFollowup() {
   }
   followupSending.value = true
   try {
-    const task = await sendSubagentFollowup(props.sessionId, message)
+    const task = await sendSubagentFollowup(
+      props.sessionId,
+      message,
+      selectedModelId.value || undefined,
+    )
     activeRunId.value = task.run_id || activeRunId.value
     followupInput.value = ''
     emit('changed')
@@ -338,7 +360,18 @@ watch([() => props.sessionId, () => props.runId], () => {
   activeRunId.value = props.runId
   void loadConversation()
 }, { immediate: true })
-watch(() => messages.value.length > 0, (has) => (has ? startDurationTimer() : stopDurationTimer()), { immediate: true })
+// 计时器只在「还有未终态的 run」或「终态时刻未落」时跳动；
+// completed 且 run_finished_at 已补齐 → 停表（不再空转）
+const needsTicker = computed(() => {
+  if (!messages.value.length) {
+    return false
+  }
+  if (run.value && ['queued', 'running', 'hitl_pending'].includes(run.value.status)) {
+    return true
+  }
+  return !assistantMessage.value?.run_finished_at
+})
+watch(needsTicker, (active) => (active ? startDurationTimer() : stopDurationTimer()), { immediate: true })
 onBeforeUnmount(() => {
   requestSerial += 1
   stopStream()
@@ -354,9 +387,6 @@ onBeforeUnmount(() => {
       <span>{{ stepCount }} 步</span>
       <span v-if="duration">· {{ duration }}</span>
       <span v-if="run">· {{ run.status }}</span>
-      <span v-if="hasValidContextWindow(contextSnapshot)" class="subagent-conversation__context">
-        <ContextWindowIndicator :context="contextSnapshot as any" />
-      </span>
     </div>
     <div v-if="loading" class="subagent-conversation__empty">正在加载对话…</div>
     <div v-else class="subagent-conversation__body">
@@ -396,6 +426,17 @@ onBeforeUnmount(() => {
         @keydown.enter.exact.prevent="sendFollowup"
       />
       <div class="subagent-conversation__composer-actions">
+        <ModelSelector
+          v-model="selectedModelId"
+          :session-id="sessionId"
+          class="subagent-conversation__model"
+          persist-session-extra
+        />
+        <ContextWindowIndicator
+          v-if="hasValidContextWindow(contextSnapshot)"
+          :context="contextSnapshot as any"
+          class="subagent-conversation__ring"
+        />
         <n-button
           v-if="run && ['running', 'hitl_pending'].includes(run.status)"
           quaternary
@@ -428,12 +469,6 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
   color: var(--noesis-color-text-hint);
   font-size: 12px;
-}
-
-.subagent-conversation__context {
-  display: inline-flex;
-  align-items: center;
-  margin-left: auto;
 }
 
 .subagent-conversation__empty {
@@ -501,6 +536,23 @@ onBeforeUnmount(() => {
 .subagent-conversation__composer-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
+}
+
+/* 模型选择器靠左、圆环与操作按钮靠右（与主 Agent composer 布局一致） */
+.subagent-conversation__model {
+  margin-right: auto;
+}
+
+.subagent-conversation__ring {
+  flex-shrink: 0;
+}
+
+@media (max-width: $bp-md) {
+  .subagent-conversation__composer-actions {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
 }
 </style>
