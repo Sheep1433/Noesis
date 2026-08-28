@@ -124,6 +124,7 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 - **禁止**在 `main` 上直接开发或 commit（历史例外须尽快合回 `dev` 对齐）
 - **禁止**`feat/*` 直接 push / merge 到 `main`（须经 `dev` 集成）
 - **禁止**未经合并就把大段未提交改动长期留在 `main` 工作区
+- **禁止**为开发 `feat/*` 在共享工作区直接 `git checkout` 切走分支——必须用 `git worktree add`（如 `git worktree add ../noesis-<feat> feat/<name>`）在独立目录开发，共享工作区保持用户当前分支（常为 `dev`）不被占用，否则会阻塞用户的联调测试
 - 合并到 `main` 前：`backend` 跑 `uv run pytest tests/ -q`，`frontend` 按影响范围 `pnpm lint` / `pnpm build`
 
 ## 协作约定
