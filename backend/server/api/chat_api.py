@@ -647,6 +647,7 @@ async def send_subagent_followup(
             user_id=str(current_user.user_id),
             message=request.message,
             model_id=request.model_id,
+            reasoning_effort=request.reasoning_effort,
         )
     except ServiceException as exc:
         message = exc.message or "补充要求发送失败"

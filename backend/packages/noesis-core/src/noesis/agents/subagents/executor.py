@@ -50,6 +50,7 @@ from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.runs import RunStatus
 
 from noesis.agents.subagents import notifications
+from noesis.llm.reasoning import get_request_reasoning_effort, set_request_reasoning_effort
 from noesis.runtime.logging import logger
 from noesis.runtime.stream import stream_agent_events
 from noesis.services.subagent_runtime_port import configure_executor_port
@@ -256,12 +257,15 @@ class _TaskEntry:
     followup_message_ids: "collections.deque[Optional[str]]" = field(
         default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
     )
-    # 与 followups 逐条对应的模型覆盖（None = 沿用当前模型）
-    followup_models: "collections.deque[Optional[str]]" = field(
+    # 与 followups 逐条对应的 turn 参数（模型 / 推理档位覆盖；None = 沿用当前）
+    followup_turn_params: "collections.deque[Optional[_TurnParams]]" = field(
         default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
     )
     # 生效中的模型覆盖：非 None 时 _ensure_agent 以该模型重新编译 worker
     model_override: Optional[str] = None
+    # 生效中的推理档位（turn 级；LLM 构造时经 ContextVar 固化为请求参数）。
+    # 创建时在父 run 上下文捕获（后台 worker 隔离 loop 干净上下文拿不到父档位）
+    turn_reasoning_effort: Optional[str] = None
     followup_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # factory 首次调用后在隔离 loop 内缓存编译结果（同 executor 任务复用）
     compiled_agent: Any = None
@@ -795,6 +799,9 @@ class BackgroundSubagentExecutor:
             recursion_limit=self._recursion_limit,
             timeout_seconds=self._task_timeout,
             hitl_timeout_seconds=self._hitl_timeout,
+            # 创建时档位继承：start 在父 run 上下文调用（ContextVar 可见）；
+            # worker 在隔离 loop 编译前经 _arun 显式设置回该档位
+            turn_reasoning_effort=get_request_reasoning_effort(),
         )
         self._launch(entry)
         return task_id
@@ -906,17 +913,19 @@ class BackgroundSubagentExecutor:
         message: str,
         user_message_id: Optional[str] = None,
         model_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         """followup-turn：向子任务追加一个 turn。
 
         - running / awaiting_approval：入队，当前 turn 结束后链式开新 turn
         - completed：冷恢复——同 thread 开新 turn，任务回到 running
         - shell / failed / timed_out / cancelled：拒绝
-        - model_id 非空且与当前不同：该 turn 起以新模型编译 worker（同 thread 续跑）
+        - model_id / reasoning_effort 非空：该 turn 起以新参数编译 worker（同 thread 续跑）
         """
         text = message.strip()
         if not text:
             raise ValueError("消息不能为空")
+        params = _TurnParams(model_id=model_id, reasoning_effort=reasoning_effort)
         with _TASKS_LOCK:
             entry = _find_entry_locked(task_id)
             if entry is None:
@@ -932,7 +941,7 @@ class BackgroundSubagentExecutor:
                 task.completed_at = None
                 loop = _ensure_loop()
                 entry.future = _submit_isolated(
-                    loop, _arun_followup(entry, text, user_message_id, model_id),
+                    loop, _arun_followup(entry, text, user_message_id, params),
                 )
                 _arm_watchdog(entry)
                 _publish_task_event(task, "followup")
@@ -942,7 +951,7 @@ class BackgroundSubagentExecutor:
             with entry.followup_lock:
                 entry.followups.append(text)
                 entry.followup_message_ids.append(user_message_id)
-                entry.followup_models.append(model_id)
+                entry.followup_turn_params.append(params)
             _publish_task_event(task, "followup")
             return task.to_dict()
 
@@ -953,7 +962,7 @@ class BackgroundSubagentExecutor:
             messages = list(entry.followups)
             entry.followups.clear()
             entry.followup_message_ids.clear()
-            entry.followup_models.clear()
+            entry.followup_turn_params.clear()
             return messages
 
     @staticmethod
@@ -1010,7 +1019,7 @@ class BackgroundSubagentExecutor:
             with entry.followup_lock:
                 entry.followups.clear()
                 entry.followup_message_ids.clear()
-                entry.followup_models.clear()
+                entry.followup_turn_params.clear()
             if entry.task.status == BgTaskStatus.QUEUED:
                 # 排队任务无执行 future，出队即完成取消
                 _dequeue_locked(entry.task)
@@ -1080,14 +1089,42 @@ def _apply_model_override(entry: _TaskEntry, model_id: Optional[str]) -> bool:
     return True
 
 
-def _pop_first_followup(entry: _TaskEntry) -> Optional[tuple[str, Optional[str], Optional[str]]]:
+@dataclass
+class _TurnParams:
+    """followup turn 的执行参数：模型与推理档位均逐 turn 覆盖。"""
+
+    model_id: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+
+
+def _apply_turn_params(entry: _TaskEntry, params: Optional[_TurnParams]) -> bool:
+    """应用 turn 参数：模型或推理档位任一变化即失效已编译 worker。
+
+    档位在 LLM 构造时（factory 读 ContextVar）固化为请求参数，因此
+    档位变化与模型变化一样需要重编译 worker（同 thread 续跑，历史保留）。
+    """
+    if params is None:
+        return False
+    changed = _apply_model_override(entry, params.model_id)
+    if params.reasoning_effort != entry.turn_reasoning_effort:
+        entry.turn_reasoning_effort = params.reasoning_effort
+        with entry.compiled_lock:
+            entry.compiled_agent = None
+        changed = True
+    return changed
+
+
+def _pop_first_followup(entry: _TaskEntry) -> Optional[tuple[str, Optional[str], _TurnParams]]:
     with entry.followup_lock:
         if not entry.followups:
             return None
         text = entry.followups.popleft()
         message_id = entry.followup_message_ids.popleft() if entry.followup_message_ids else None
-        model_id = entry.followup_models.popleft() if entry.followup_models else None
-        return text, message_id, model_id
+        params = (
+            entry.followup_turn_params.popleft()
+            if entry.followup_turn_params else None
+        )
+        return text, message_id, params
 
 
 @dataclass
@@ -1243,6 +1280,9 @@ async def _arun(
             )
             if started_future is not None:
                 await asyncio.wrap_future(started_future)
+        # 本 turn 推理档位：worker 在隔离 loop 的干净上下文编译，
+        # 父 run 的 ContextVar 到不了这里——编译前显式设置（start 时捕获 / followup 覆盖）
+        set_request_reasoning_effort(entry.turn_reasoning_effort)
         agent = await _ensure_agent(entry)
         # 首轮输入：优先显式 resume command（审批续跑），
         # 否则 initial_source（start 的 description / 冷恢复的追加消息）
@@ -1303,14 +1343,16 @@ async def _arun(
             next_followup = _pop_first_followup(entry)
             if next_followup is None:
                 break
-            next_message, next_user_message_id, next_model_id = next_followup
-            # 该 turn 指定了新模型 → 失效已编译 worker，下一轮以新模型续跑同 thread
-            if _apply_model_override(entry, next_model_id):
+            next_message, next_user_message_id, next_params = next_followup
+            # 该 turn 指定了新模型/新档位 → 失效已编译 worker，下一轮以新参数续跑同 thread
+            if _apply_turn_params(entry, next_params):
+                set_request_reasoning_effort(entry.turn_reasoning_effort)
                 agent = await _ensure_agent(entry)
                 logger.info(
-                    "bg subagent model switched task_id={} model={}",
+                    "bg subagent turn params switched task_id={} model={} effort={}",
                     task.task_id,
-                    next_model_id,
+                    next_params.model_id if next_params else None,
+                    next_params.reasoning_effort if next_params else None,
                 )
             turn_fallback_error = outcome.fallback_error
             turn_status, _ = _fallback_terminal(turn_fallback_error)
@@ -1429,14 +1471,14 @@ async def _arun_followup(
     entry: _TaskEntry,
     text: str,
     user_message_id: Optional[str] = None,
-    model_id: Optional[str] = None,
+    params: Optional[_TurnParams] = None,
 ) -> None:
     """completed child session 的新 turn：先建标准 run，再进入 worker。
 
-    model_id 非空且与当前不同：该 turn 起以新模型编译 worker（同 thread 续跑）。
-    新 turn 的投影由独立 builder 从零累积（统一管道），无需读基线消息数。
+    params 携带该 turn 的模型/推理档位覆盖；变化时以新参数编译 worker
+    （同 thread 续跑）。新 turn 的投影由独立 builder 从零累积（统一管道）。
     """
-    _apply_model_override(entry, model_id)
+    _apply_turn_params(entry, params)
     agent = await _ensure_agent(entry)
     entry.task.turn_count += 1
     if entry.followup_factory is not None:

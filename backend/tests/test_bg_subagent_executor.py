@@ -1152,3 +1152,57 @@ def test_task_lookup_rejects_ambiguous_prefix() -> None:
         with _TASKS_LOCK:
             for key in entries:
                 _TASKS.pop(key, None)
+
+
+def test_apply_turn_params_switches_effort() -> None:
+    """followup turn 参数：推理档位变化即使 worker 失效重编译（模型不变也生效）。"""
+    from noesis.agents.subagents.executor import (
+        BackgroundTask,
+        _TaskEntry,
+        _TurnParams,
+        _apply_turn_params,
+    )
+
+    task = BackgroundTask(
+        task_id="t", session_id="s", user_id="u", description="d", model_id="m1",
+    )
+    entry = _TaskEntry(
+        task=task, agent_factory=lambda: None,
+        recursion_limit=10, timeout_seconds=1, hitl_timeout_seconds=1,
+    )
+    entry.compiled_agent = object()
+
+    assert _apply_turn_params(entry, _TurnParams(reasoning_effort="high")) is True
+    assert entry.turn_reasoning_effort == "high"
+    assert entry.compiled_agent is None
+
+    # 同参数重复应用：无变化不失效
+    entry.compiled_agent = object()
+    assert _apply_turn_params(entry, _TurnParams(reasoning_effort="high")) is False
+    assert entry.compiled_agent is not None
+
+    # 模型切换照旧生效（上下文窗口口径跟随）
+    assert _apply_turn_params(entry, _TurnParams(model_id="m2")) is True
+    assert task.model_id == "m2"
+    assert entry.compiled_agent is None
+
+
+def test_start_captures_parent_reasoning_effort() -> None:
+    """创建时档位继承：start 在父 run 上下文捕获 ContextVar（隔离 loop 拿不到）。"""
+    from noesis.agents.subagents import executor as ex_mod
+    from noesis.llm.reasoning import clear_request_reasoning_effort, set_request_reasoning_effort
+
+    set_request_reasoning_effort("medium")
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: _build_worker([AIMessage(content="完成")]),
+            description="x", session_id="s-effort", user_id="u1",
+        )
+        with ex_mod._TASKS_LOCK:
+            entry = ex_mod._TASKS.get(task_id)
+        assert entry is not None
+        assert entry.turn_reasoning_effort == "medium"
+        executor.cancel(task_id)
+    finally:
+        clear_request_reasoning_effort()

@@ -105,6 +105,7 @@ class SubagentSessionService:
         user_id: str,
         message: str,
         model_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict:
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
@@ -126,6 +127,7 @@ class SubagentSessionService:
                 message,
                 user_message_id=pending_user_message_id,
                 model_id=model_id,
+                reasoning_effort=reasoning_effort,
             )
         except ValueError as exc:
             await cls._discard_pending_user_message(pending_user_message_id, user_id)
