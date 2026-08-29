@@ -24,8 +24,8 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextvars
+import copy
 import inspect
-import re
 import threading
 import time
 import uuid
@@ -34,14 +34,24 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
+from noesis.chat.delivery.events import (
+    HitlRequired,
+    RunAborted,
+    RunCompleted,
+    RunError,
+    RunPaused,
+    WireFrame,
+)
+from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
+from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.runs import RunStatus
-from noesis.chat.tool_state import ToolState
-from noesis.runtime.hitl import enrich_action_requests
 
 from noesis.agents.subagents import notifications
 from noesis.runtime.logging import logger
+from noesis.runtime.stream import stream_agent_events
 from noesis.services.subagent_runtime_port import configure_executor_port
 
 # ---------------------------------------------------------------------------
@@ -259,6 +269,8 @@ class _TaskEntry:
     # 当前执行协程的 future（用于超时/取消）
     future: Optional[Future] = None
     watchdog_handle: Optional[asyncio.TimerHandle] = None
+    # 审批挂起时的投影种子：resume 续写同一 assistant 消息（预中断 parts 恢复）
+    turn_seed_content: Optional[dict[str, Any]] = None
     # kind="shell"：命令与执行 backend（local_shell 宿主机 / docker 容器）
     shell_command: Optional[str] = None
     shell_backend: Any = None
@@ -497,65 +509,6 @@ _SHELL_RESULT_TAIL_CHARS = 4000
 _SHELL_DEFAULT_COMMAND_TIMEOUT = 3600
 
 
-def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
-    """LangGraph ``__interrupt__`` → {interrupt_id, action_requests, kind}。"""
-    first = interrupts[0] if isinstance(interrupts, (list, tuple)) else interrupts
-    if first is None:
-        return None
-    iid = getattr(first, "id", None) or (
-        first.get("id") if isinstance(first, dict) else None
-    )
-    value = getattr(first, "value", None)
-    if value is None and isinstance(first, dict):
-        value = first.get("value")
-    payload = dict(value) if isinstance(value, dict) else {"action_requests": []}
-    if not iid:
-        return None
-    return {"interrupt_id": str(iid), **payload}
-
-
-def _pending_tool_calls(messages: list[Any]) -> list[dict[str, Any]]:
-    """尚未有 ToolMessage 应答的 tool_calls——即被 interrupt 拦下的调用。"""
-    answered: set[str] = set()
-    pending: list[dict[str, Any]] = []
-    for message in messages:
-        if isinstance(message, AIMessage):
-            for call in getattr(message, "tool_calls", None) or []:
-                pending.append({
-                    "id": str(call.get("id") or ""),
-                    "name": str(call.get("name") or ""),
-                    "args": call.get("args") or {},
-                })
-        elif isinstance(message, ToolMessage):
-            answered.add(str(getattr(message, "tool_call_id", None) or ""))
-    return [call for call in pending if call["id"] and call["id"] not in answered]
-
-
-def _mark_approval_pending(content: dict[str, Any], payload: dict[str, Any]) -> None:
-    """审批挂起投影不变量：被 interrupt 的工具段转 approval_pending。
-
-    与主路 langgraph_bridge 的 update_tool_hitl 同语义（status 保持
-    running、附 hitl 元数据）；前端 approval_pending 渲染为静态
-    「等待确认」标签，不走 running 态扫光。
-    """
-    call_ids = {
-        str(action.get("tool_call_id"))
-        for action in payload.get("action_requests") or []
-        if isinstance(action, dict) and action.get("tool_call_id")
-    }
-    if not call_ids:
-        return
-    hitl_meta = {
-        "kind": payload.get("kind"),
-        "status": "pending",
-        "interrupt_id": payload.get("interrupt_id"),
-    }
-    for part in content.get("parts", []):
-        if part.get("type") == "tool" and part.get("tool_call_id") in call_ids:
-            part["state"] = ToolState.APPROVAL_PENDING.value
-            part["hitl"] = dict(hitl_meta)
-
-
 def _progress_append(task: BackgroundTask, entry: dict[str, Any]) -> None:
     with task.progress_lock:
         # 步数口径 = 工具调用数，与会话详情按 tool part 计数一致；
@@ -565,35 +518,18 @@ def _progress_append(task: BackgroundTask, entry: dict[str, Any]) -> None:
         task.progress.append(entry)
 
 
-def _maybe_update_context_snapshot(task: BackgroundTask, messages: list) -> None:
-    """从 worker 最新一轮模型调用的 usage 提取上下文快照。
+def _apply_context_snapshot(task: BackgroundTask, snapshot: dict[str, Any]) -> None:
+    """统一管道 context-update 帧驱动：变更才发布 + 落库子会话 extra.context。
 
-    主对话的快照由 SSE bridge 在模型调用边界提取（usage.input_tokens，
-    单轮真实值、每次覆盖）；子 run 无 bridge，这里从 thread 消息的
-    usage_metadata 取同一口径。变更时发布 context-update run 事件并
-    落库到子会话 extra.context（与主对话同存储位）。
+    与主对话同口径（usage.input_tokens 单轮真实值、每次覆盖）——
+    快照提取已收敛到 bridge 的模型调用边界，executor 不再自行提取。
     """
     if not task.child_session_id:
         return
-    snapshot = None
-    for message in reversed(messages):
-        usage = getattr(message, "usage_metadata", None)
-        if isinstance(usage, dict) and usage.get("input_tokens"):
-            from noesis.llm.model_limits import resolve_context_max_tokens
-            from noesis.chat.event_mapping.usage_normalize import compute_used_percentage
-
-            current = int(usage["input_tokens"])
-            limit = resolve_context_max_tokens(task.model_id)
-            snapshot = {
-                "current_tokens": current,
-                "max_tokens": limit,
-                "used_percentage": compute_used_percentage(current, limit),
-            }
-            break
-    if snapshot is None or snapshot == getattr(task, "context_snapshot", None):
+    if snapshot == getattr(task, "context_snapshot", None):
         return
-    task.context_snapshot = snapshot
-    _publish_run_event(task, "context-update", context=snapshot)
+    task.context_snapshot = dict(snapshot)
+    _publish_run_event(task, "context-update", context=dict(snapshot))
     _schedule_context_persist(task, snapshot)
 
 
@@ -623,63 +559,40 @@ def _schedule_context_persist(task: BackgroundTask, snapshot: dict[str, Any]) ->
     run_on_main_loop(_merge(), name=f"bg-ctx:{task.task_id}")
 
 
-def _record_step_progress(
-    task: BackgroundTask, final_state: Any, seen_ids: set
-) -> bool:
-    """从 values 快照 diff 出新增消息，记录轻量步骤摘要。
+def _record_progress_from_model_end(task: BackgroundTask, message: AIMessage) -> str:
+    """on_chat_model_end 边界的进度摘要：工具调用计数 + 文本预览。
 
-    deer-flow capture_new_step_messages 的简化版：按消息 id 去重，
-    AIMessage 记文本片段/工具调用名，ToolMessage 记名称与状态。
+    步数口径 = 工具调用数（与会话详情按 tool part 计数一致）；
+    text 只进预览不计步。返回本条消息的可见文本（task.result 口径）。
     """
-    changed = False
-    messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
-    for message in messages:
-        mid = getattr(message, "id", None) or id(message)
-        if mid in seen_ids:
-            continue
-        seen_ids.add(mid)
-        name = getattr(message, "name", None) or ""
-        if isinstance(message, AIMessage):
-            calls = getattr(message, "tool_calls", None) or []
-            for call in calls:
-                changed = True
-                _progress_append(
-                    task,
-                    {
-                        "kind": "tool_call",
-                        "name": str(call.get("name") or ""),
-                        "ts": time.time(),
-                    },
-                )
-            text = _final_answer_text({"messages": [message]})
-            if text:
-                changed = True
-                _progress_append(
-                    task,
-                    {
-                        "kind": "text",
-                        "preview": text[:_PROGRESS_PREVIEW_CHARS],
-                        "ts": time.time(),
-                    },
-                )
-        elif isinstance(message, ToolMessage):
-            changed = True
-            content = (
-                message.content
-                if isinstance(message.content, str)
-                else str(message.content)
-            )
-            _progress_append(
-                task,
-                {
-                    "kind": "tool_result",
-                    "name": str(name),
-                    "status": str(getattr(message, "status", None) or "success"),
-                    "preview": content[:_PROGRESS_PREVIEW_CHARS],
-                    "ts": time.time(),
-                },
-            )
-    return changed
+    text = _child_message_text(message)
+    for call in getattr(message, "tool_calls", None) or []:
+        _progress_append(
+            task,
+            {"kind": "tool_call", "name": str(call.get("name") or ""), "ts": time.time()},
+        )
+    if text.strip():
+        _progress_append(
+            task,
+            {"kind": "text", "preview": text[:_PROGRESS_PREVIEW_CHARS], "ts": time.time()},
+        )
+    return text
+
+
+def _record_progress_from_tool_end(task: BackgroundTask, message: Any) -> str:
+    """on_tool_end 边界的进度摘要（工具结果预览，不计步）。"""
+    text = _child_message_text(message)
+    _progress_append(
+        task,
+        {
+            "kind": "tool_result",
+            "name": str(getattr(message, "name", None) or ""),
+            "status": str(getattr(message, "status", None) or "success"),
+            "preview": text[:_PROGRESS_PREVIEW_CHARS],
+            "ts": time.time(),
+        },
+    )
+    return text
 
 
 def _child_message_text(message: Any) -> str:
@@ -702,78 +615,29 @@ def _fallback_terminal(fallback_error: Optional[str]) -> tuple[RunStatus, str]:
     return RunStatus.COMPLETED, "stop"
 
 
-def _final_model_fallback_error(messages: list[Any]) -> Optional[str]:
+def _final_model_fallback_error(message: Optional[AIMessage]) -> Optional[str]:
     """最后一次模型调用若为 LLM 降级失败说明，返回其文本。
 
     middleware 重试耗尽会返回 content 为失败文案的 AIMessage（带
     noesis_model_fallback 标记）；此时 run 不能标 completed——否则父 Agent
     会把「服务暂时不可用」当作子任务产出。
     """
+    if message is None:
+        return None
     from noesis.agents.middlewares.llm_error_handling_middleware import is_model_fallback_message
 
-    for message in reversed(messages):
-        if isinstance(message, AIMessage):
-            if is_model_fallback_message(message):
-                return _child_message_text(message) or "模型服务暂不可用"
-            return None
+    if is_model_fallback_message(message):
+        return _child_message_text(message) or "模型服务暂不可用"
     return None
 
 
-def _child_projection_content(messages: list[Any]) -> dict[str, Any]:
-    """将 LangGraph 当前消息快照折叠成主 Agent 使用的 multipart。"""
-    parts: list[dict[str, Any]] = []
-    tool_parts: dict[str, dict[str, Any]] = {}
-    for message in messages:
-        if isinstance(message, HumanMessage):
-            continue
-        if isinstance(message, AIMessage):
-            text = _child_message_text(message)
-            if text.strip():
-                parts.append({"type": "text", "id": str(getattr(message, "id", None) or uuid.uuid4()), "content": text})
-            for call in getattr(message, "tool_calls", None) or []:
-                call_id = str(call.get("id") or uuid.uuid4())
-                tool_part = {
-                    "type": "tool",
-                    "id": call_id,
-                    "tool_call_id": call_id,
-                    "name": str(call.get("name") or "tool"),
-                    "input": call.get("args") or {},
-                    "output": "",
-                    "status": "running",
-                    "state": "running",
-                }
-                parts.append(tool_part)
-                tool_parts[call_id] = tool_part
-        elif isinstance(message, ToolMessage):
-            call_id = str(getattr(message, "tool_call_id", None) or "")
-            target = tool_parts.get(call_id)
-            if target is None:
-                target = {
-                    "type": "tool",
-                    "id": call_id or str(getattr(message, "id", None) or uuid.uuid4()),
-                    "tool_call_id": call_id,
-                    "name": str(getattr(message, "name", None) or "tool"),
-                    "input": {},
-                    "output": "",
-                }
-                parts.append(target)
-                if call_id:
-                    tool_parts[call_id] = target
-            target["output"] = _child_message_text(message)
-            target["status"] = str(getattr(message, "status", None) or "success")
-            target["state"] = "failed" if target["status"] == "error" else "succeeded"
-            if target.get("name") == "start_task":
-                child_ref = re.search(
-                    r"(?:子 Agent 已启动|任务完成|任务等待用户审批)(?:[：:]\s*|（)([0-9a-f-]{36})",
-                    target["output"],
-                    flags=re.IGNORECASE,
-                )
-                if child_ref:
-                    target["child_session_id"] = child_ref.group(1)
-    return {"version": 1, "parts": parts}
-
-
-async def _persist_child_projection(task: BackgroundTask, messages: list[Any], *, status: str = "streaming") -> None:
+async def _persist_child_projection(
+    task: BackgroundTask,
+    content: dict[str, Any],
+    *,
+    status: str = "streaming",
+) -> None:
+    """子会话投影落库 + message.updated 事件（content 为统一管道 builder 产物）。"""
     if not task.run_id or not task.assistant_message_id:
         return
     task.projection_sequence += 1
@@ -784,7 +648,7 @@ async def _persist_child_projection(task: BackgroundTask, messages: list[Any], *
         SubagentSessionService.persist_projection(
             run_id=task.run_id,
             assistant_message_id=task.assistant_message_id,
-            content=_child_projection_content(messages),
+            content=copy.deepcopy(content),
             sequence=task.projection_sequence,
             status=status,
         ),
@@ -792,11 +656,7 @@ async def _persist_child_projection(task: BackgroundTask, messages: list[Any], *
     )
     if future is not None:
         await asyncio.wrap_future(future)
-    _publish_run_event(
-        task,
-        "message.updated",
-        content=_child_projection_content(messages),
-    )
+    _publish_run_event(task, "message.updated", content=copy.deepcopy(content))
 
 
 def _notify_terminal(task: BackgroundTask) -> None:
@@ -836,23 +696,6 @@ def _schedule_continuation(task: BackgroundTask) -> None:
         schedule_maybe_continue(task.session_id, task.user_id),
         name=f"bg-continue:{task.task_id}",
     )
-
-
-def _final_answer_text(final_state: Any) -> str:
-    messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
-    for message in reversed(messages):
-        content = getattr(message, "content", None)
-        if isinstance(content, str) and content.strip():
-            return content
-        if isinstance(content, list):
-            text = "".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
-            if text.strip():
-                return text
-    return ""
 
 
 class BackgroundSubagentExecutor:
@@ -1247,6 +1090,126 @@ def _pop_first_followup(entry: _TaskEntry) -> Optional[tuple[str, Optional[str],
         return text, message_id, model_id
 
 
+@dataclass
+class _TurnOutcome:
+    """统一管道单 turn 的结果：驱动 executor 的审批挂起 / 终态 / followup 决策。"""
+
+    # 非 None：本 turn 挂起等待审批（stream_agent_events 的 hitl-required 事件）
+    hitl_payload: Optional[dict[str, Any]] = None
+    finish_reason: str = "stop"
+    usage: dict[str, Any] = field(default_factory=dict)
+    # RunError 的用户可见消息（流异常经管道产出，等价旧值的异常路径）
+    error_message: Optional[str] = None
+    # 最后一次模型调用为 LLM 降级失败说明（终态不得标 completed）
+    fallback_error: Optional[str] = None
+    # 本 turn 最后一段可见文本（task.result 口径：倒序最后一条带文本消息）
+    final_text: str = ""
+    # 本 turn 的标准 multipart 投影（统一管道 builder 产物）
+    content: dict[str, Any] = field(default_factory=lambda: {"version": 1, "parts": []})
+
+
+class _TurnPipelineError(Exception):
+    """统一管道报告的流错误（走 _arun 的既有异常收尾路径）。"""
+
+
+async def _run_turn_via_pipeline(
+    entry: _TaskEntry,
+    task: BackgroundTask,
+    agent: Any,
+    source: Any,
+) -> _TurnOutcome:
+    """单 turn 经统一管道执行：astream_events → RuntimeEventMapper → typed RunEvent。
+
+    与主链路同一条事件映射（usage 累计 / 上下文快照 / HITL 投影语义同源）；
+    本函数只做 executor 侧消费：进度摘要、子会话投影、快照发布与终态汇总。
+    """
+    session_id = task.child_session_id or task.task_id
+    bridge = LangGraphSseBridge(
+        session_id,
+        assistant_message_id=task.assistant_message_id,
+        model_id=task.model_id,
+    )
+    builder = AssistantMessageBuilder(
+        session_id=session_id,
+        message_id=task.assistant_message_id or bridge.assistant_message_id,
+    )
+    if entry.turn_seed_content is not None:
+        # 审批 resume：续写同一 assistant 消息（预中断 parts 由种子恢复）
+        builder.load_from_content_dict(entry.turn_seed_content)
+        entry.turn_seed_content = None
+    ctx = new_stream_ctx()
+    mapper = RuntimeEventMapper(bridge)
+    outcome = _TurnOutcome()
+    last_ai_message: Optional[AIMessage] = None
+
+    def _consume(events: list) -> None:
+        for event in events:
+            if isinstance(event, WireFrame):
+                if event.event == "context-update":
+                    snapshot = event.data.get("context")
+                    if isinstance(snapshot, dict):
+                        _apply_context_snapshot(task, snapshot)
+                continue
+            if isinstance(event, HitlRequired):
+                outcome.hitl_payload = dict(event.payload)
+                outcome.content = builder.to_dict()
+            elif isinstance(event, RunPaused):
+                outcome.finish_reason = event.finish_reason or "hitl_pending"
+            elif isinstance(event, RunCompleted):
+                outcome.finish_reason = event.finish_reason
+                if event.usage:
+                    outcome.usage = dict(event.usage)
+            elif isinstance(event, RunAborted):
+                outcome.finish_reason = event.reason
+            elif isinstance(event, RunError):
+                outcome.error_message = event.message
+                outcome.finish_reason = event.finish_reason or "error"
+
+    stream_args = {
+        "input": source,
+        "config": _config(entry),
+        "langfuse_session_id": session_id,
+    }
+    async for raw in stream_agent_events(
+        agent,
+        stream_args,
+        task_id=task.task_id,
+        message_id=task.assistant_message_id or "",
+    ):
+        _consume(mapper.map_item(raw, builder, ctx))
+        raw_event = raw.get("event")
+        # 进度摘要与投影边界：模型消息 / 工具结束（与 values 每步 diff 同可见节奏）
+        if raw_event == "on_chat_model_end":
+            output = (raw.get("data") or {}).get("output")
+            if isinstance(output, AIMessage):
+                last_ai_message = output
+                text = _record_progress_from_model_end(task, output)
+                if text.strip():
+                    outcome.final_text = text
+                if task.run_id:
+                    await _persist_child_projection(task, builder.to_dict())
+                _publish_task_event(task, "progress")
+        elif raw_event == "on_tool_end":
+            output = (raw.get("data") or {}).get("output")
+            if output is not None:
+                text = _record_progress_from_tool_end(task, output)
+                if text.strip():
+                    outcome.final_text = text
+                if task.run_id:
+                    await _persist_child_projection(task, builder.to_dict())
+                _publish_task_event(task, "progress")
+    # 流收尾（stream_agent_events 必产 __tw_finish__，此处为幂等兜底）
+    _consume(mapper.finalize())
+    outcome.fallback_error = _final_model_fallback_error(last_ai_message)
+    outcome.content = builder.to_dict()
+    # 最终投影：末段文本在 finish 时才 flush 进 builder，此处发布一次完整内容
+    # （与旧 values 模式最后一个 chunk 含最终文本的可见节奏一致；
+    #  HITL 挂起走 mark_waiting_approval 专用投影，不在此重复发布）
+    if task.run_id and outcome.hitl_payload is None and outcome.content.get("parts"):
+        await _persist_child_projection(task, outcome.content)
+    return outcome
+
+
 async def _arun(
     entry: _TaskEntry,
     *,
@@ -1292,47 +1255,27 @@ async def _arun(
                 else {"messages": [HumanMessage(content=task.prompt or task.description)]}
             )
         )
-        projection_offset = task.message_offset
-        baseline_message_ids: set[Any] = set()
         while True:
-            seen_ids: set = set(baseline_message_ids)
-            final: Any = None
-            # astream(values)：既拿到终态，又能逐步 diff 执行过程摘要
-            async for chunk in agent.astream(
-                source, _config(entry), stream_mode="values"
-            ):
-                final = chunk
-                if _record_step_progress(task, chunk, seen_ids):
-                    messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
-                    if task.run_id:
-                        await _persist_child_projection(task, messages[projection_offset:])
-                    _publish_task_event(task, "progress")
-                    _maybe_update_context_snapshot(task, messages)
-            interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
-            payload = _extract_interrupt_payload(interrupts) if interrupts else None
-            if payload is not None:
-                # langchain HITL 的 ActionRequest 天生不带 tool_call_id（只有
-                # name/args/description），主路靠 enrich_action_requests 按名回填；
-                # 子路同样回填，快照/消息投影才能把被中断工具段置 approval_pending
-                payload["action_requests"] = enrich_action_requests(
-                    list(payload.get("action_requests") or []),
-                    _pending_tool_calls(final.get("messages", [])),
-                )
+            outcome = await _run_turn_via_pipeline(entry, task, agent, source)
+            if outcome.error_message is not None:
+                # 管道产出的流错误：走既有异常收尾（task FAILED + run ERROR）
+                raise _TurnPipelineError(outcome.error_message)
+            if outcome.hitl_payload is not None:
+                payload = outcome.hitl_payload
+                # HITL 的 ActionRequest 由 stream_agent_events 的 enrich_action_requests
+                # 按名回填 tool_call_id；bridge 已把被中断工具段置 approval_pending。
                 task.status = BgTaskStatus.AWAITING_APPROVAL
                 task.interrupt = payload
                 if task.run_id:
                     from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
                     from noesis.runtime.main_loop import run_on_main_loop
 
-                    approval_content = _child_projection_content(
-                        final.get("messages", [])[projection_offset:]
-                    )
-                    _mark_approval_pending(approval_content, payload)
+                    db_content = copy.deepcopy(outcome.content)
                     hitl_future = run_on_main_loop(
                         SubagentSessionService.mark_waiting_approval(
                             task.run_id,
                             payload,
-                            content=approval_content,
+                            content=db_content,
                             sequence=task.projection_sequence,
                             assistant_message_id=task.assistant_message_id,
                         ),
@@ -1340,8 +1283,11 @@ async def _arun(
                     )
                     if hitl_future is not None:
                         await asyncio.wrap_future(hitl_future)
-                    approval_content["_pending_hitl"] = payload
-                    _publish_run_event(task, "approval.required", content=approval_content)
+                    # resume 时续写同一 assistant 消息：种子保存预中断投影
+                    entry.turn_seed_content = copy.deepcopy(outcome.content)
+                    publish_content = copy.deepcopy(outcome.content)
+                    publish_content["_pending_hitl"] = payload
+                    _publish_run_event(task, "approval.required", content=publish_content)
                 _publish_task_event(task, "awaiting_approval")
                 _disarm_watchdog(entry)
                 _arm_hitl_watchdog(entry)
@@ -1351,7 +1297,8 @@ async def _arun(
                     len(payload.get("action_requests") or []),
                 )
                 return
-            task.result = _final_answer_text(final)
+            if outcome.final_text:
+                task.result = outcome.final_text
             # followup 链：队列非空则同 thread 开下一个 turn
             next_followup = _pop_first_followup(entry)
             if next_followup is None:
@@ -1365,18 +1312,9 @@ async def _arun(
                     task.task_id,
                     next_model_id,
                 )
-            turn_content = _child_projection_content(
-                final.get("messages", [])[projection_offset:] if isinstance(final, dict) else []
-            )
-            turn_fallback_error = _final_model_fallback_error(
-                final.get("messages", []) if isinstance(final, dict) else []
-            )
-            turn_status, turn_reason = _fallback_terminal(turn_fallback_error)
-            projection_offset = len(final.get("messages", [])) if isinstance(final, dict) else 0
-            baseline_message_ids = {
-                getattr(message, "id", None) or id(message)
-                for message in final.get("messages", [])
-            } if isinstance(final, dict) else set()
+            turn_fallback_error = outcome.fallback_error
+            turn_status, _ = _fallback_terminal(turn_fallback_error)
+            turn_reason = "error" if turn_fallback_error else (outcome.finish_reason or "stop")
             if task.run_id:
                 from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
                 from noesis.runtime.main_loop import run_on_main_loop
@@ -1385,9 +1323,10 @@ async def _arun(
                     SubagentSessionService.mark_terminal(
                         run_id=task.run_id,
                         status=turn_status,
-                        content=turn_content,
+                        content=copy.deepcopy(outcome.content),
                         error=turn_fallback_error,
                         finish_reason=turn_reason,
+                        usage=outcome.usage or None,
                     ),
                     name=f"subagent-turn-terminal:{task.run_id}",
                 )
@@ -1405,7 +1344,7 @@ async def _arun(
                     task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
                     task.turn_count += 1
                     task.projection_sequence = 0
-                    task.message_offset = projection_offset
+                    entry.turn_seed_content = None
             task.status = BgTaskStatus.RUNNING
             task.completed_at = None
             logger.info(
@@ -1414,9 +1353,9 @@ async def _arun(
                 len(entry.followups),
             )
             source = {"messages": [HumanMessage(content=next_message)]}
-        final_messages = final.get("messages", []) if isinstance(final, dict) else []
-        final_fallback_error = _final_model_fallback_error(final_messages)
-        final_status, final_reason = _fallback_terminal(final_fallback_error)
+        final_fallback_error = outcome.fallback_error
+        final_status, _ = _fallback_terminal(final_fallback_error)
+        final_reason = "error" if final_fallback_error else (outcome.finish_reason or "stop")
         if final_fallback_error:
             task.status = BgTaskStatus.FAILED
             task.error = final_fallback_error
@@ -1431,9 +1370,10 @@ async def _arun(
                 SubagentSessionService.mark_terminal(
                     run_id=task.run_id,
                     status=final_status,
-                    content=_child_projection_content(final_messages[projection_offset:]),
+                    content=copy.deepcopy(outcome.content),
                     error=final_fallback_error,
                     finish_reason=final_reason,
+                    usage=outcome.usage or None,
                 ),
                 name=f"subagent-terminal:{task.run_id}",
             )
@@ -1442,7 +1382,7 @@ async def _arun(
             _publish_run_event(
                 task,
                 "run.finished",
-                content=_child_projection_content(final_messages[projection_offset:]),
+                content=copy.deepcopy(outcome.content),
             )
         logger.info(
             "bg subagent completed task_id={} steps={} duration={:.1f}s",
@@ -1494,17 +1434,11 @@ async def _arun_followup(
     """completed child session 的新 turn：先建标准 run，再进入 worker。
 
     model_id 非空且与当前不同：该 turn 起以新模型编译 worker（同 thread 续跑）。
+    新 turn 的投影由独立 builder 从零累积（统一管道），无需读基线消息数。
     """
     _apply_model_override(entry, model_id)
     agent = await _ensure_agent(entry)
     entry.task.turn_count += 1
-    baseline = 0
-    try:
-        state = await agent.aget_state(_config(entry))
-        values = getattr(state, "values", None)
-        baseline = len(values.get("messages", [])) if isinstance(values, dict) else 0
-    except Exception:
-        logger.warning("读取子 Agent followup 基线失败 task_id={}", entry.task.task_id)
     if entry.followup_factory is not None:
         launch = entry.followup_factory(
             entry.task.child_session_id or entry.task.task_id,
@@ -1516,7 +1450,7 @@ async def _arun_followup(
         entry.task.run_id = str(launch.get("run_id") or "") or None
         entry.task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
         entry.task.projection_sequence = 0
-        entry.task.message_offset = baseline
+        entry.turn_seed_content = None
     await _arun(entry, initial_source={"messages": [HumanMessage(content=text)]})
 
 

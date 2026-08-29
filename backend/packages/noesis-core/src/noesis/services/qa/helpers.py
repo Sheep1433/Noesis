@@ -39,7 +39,7 @@ from noesis.chat.event_mapping.bridge import (
     StreamBridgeError,
     iter_bridge_events,
 )
-from noesis.chat.event_mapping.mapper import RuntimeEventMapper
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.runtime.deps import langfuse_workflow_context, merge_langfuse_runnable_config
 from noesis.llm.catalog import get_default_model_id, resolve_catalog_entry
 from noesis.services.chat_service import ChatService
@@ -568,18 +568,8 @@ def _langfuse_stream_context(
 
 
 def _new_stream_ctx() -> Dict[str, Any]:
-    return {
-        "text_buffer": "",
-        "current_tool_name": None,
-        "current_tool_call_id": None,
-        "tool_start_times": {},
-        "_assistant_db_id": None,
-        # 并行工具分组：按 scope（parent_task_call_id 或 "root"）独立计数 step_id。
-        # on_chat_model_start 标 pending scope，首个 on_tool_start mint 新 step_id。
-        "pending_model_step_scopes": set(),
-        "step_counters": {},
-        "current_step_ids": {},
-    }
+    # 共用构造（子 Agent executor 同源）：见 noesis.chat.event_mapping.mapper
+    return new_stream_ctx()
 
 
 async def _yield_sse_from_agent_bridge(

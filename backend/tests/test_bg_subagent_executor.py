@@ -585,27 +585,57 @@ async def test_start_task_persists_model_tool_call_reference() -> None:
     executor.cancel("child-session-call")
 
 
-def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
-    """带 run_id 的子 Agent 使用标准 multipart 投影，不走旧消息镜像。"""
-    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-    from noesis.agents.subagents.executor import _child_projection_content
+@pytest.mark.asyncio
+async def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
+    """统一管道下子 Agent 投影为标准 multipart：工具生命周期 + 最终文本。
 
-    messages = [
-        HumanMessage(content="检索政策"),
-        AIMessage(
-            content="",
-            tool_calls=[{"id": "call-1", "name": "web_search", "args": {"query": "政策"}}],
-        ),
-        ToolMessage(content="找到 2 条结果", tool_call_id="call-1", name="web_search"),
+    旧 values-diff 手拼投影已删除；本用例经完整管道（astream_events →
+    RuntimeEventMapper → builder）验证 message.updated 事件的投影结构。
+    """
+    from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
+
+    worker = _build_worker([
+        _call("政策", call_id="call-1"),
         AIMessage(content="结论如下。"),
-    ]
+    ])
+    queue = subscribe_run_events("run-proj", "u1")
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: worker, description="检索政策",
+            session_id="s-proj", user_id="u1",
+            child_session_id="child-proj",
+            run_id="run-proj", assistant_message_id="assistant-proj",
+        )
+        task = _wait_terminal(executor, task_id)
+        assert task["status"] == BgTaskStatus.COMPLETED.value
+        assert task["result"] == "结论如下。"
+        assert task["progress_count"] == 1  # 步数口径 = 工具调用数
 
-    content = _child_projection_content(messages)
-    assert content["version"] == 1
-    assert [part["type"] for part in content["parts"]] == ["tool", "text"]
-    assert content["parts"][0]["status"] == "success"
-    assert content["parts"][0]["output"] == "找到 2 条结果"
-    assert content["parts"][1]["content"] == "结论如下。"
+        # 终态投影：tool part（含输出与成功态）+ text part
+        # （事件经 call_soon_threadsafe 投递到本协程 loop，先让出控制权再收集）
+        await asyncio.sleep(0.1)
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+        updated = [e for e in events if e["type"] == "message.updated"]
+        assert updated, f"未收到 message.updated 事件: {[e['type'] for e in events]}"
+        content = updated[-1]["content"]
+        # 统一管道 builder 产物与主链路同构（version 由前端解析层规范化补齐）
+        assert "parts" in content
+        kinds = [part["type"] for part in content["parts"]]
+        assert kinds == ["tool", "text"]
+        tool_part = content["parts"][0]
+        assert tool_part["name"] == "dangerous"
+        assert tool_part["output"] == "done:政策"
+        assert tool_part["status"] == "success"
+        assert content["parts"][1]["content"] == "结论如下。"
+        # 终态 run.finished 事件同样携带该投影
+        finished = [e for e in events if e["type"] == "run.finished"]
+        assert finished and finished[-1]["content"] is not None
+    finally:
+        unsubscribe_run_events("run-proj", queue)
+        executor.cancel(task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -924,63 +954,17 @@ def test_interrupt_action_requests_carry_tool_call_id() -> None:
     assert actions[0]["tool_call_id"] == "c-enrich"
 
 
-def test_pending_tool_calls_excludes_answered() -> None:
-    """待审批回填的候选 = 尚无 ToolMessage 应答的 tool_calls。"""
-    from langchain_core.messages import ToolMessage
-
-    from noesis.agents.subagents.executor import _pending_tool_calls
-
-    messages = [
-        AIMessage(content="", tool_calls=[
-            {"name": "write_file", "args": {"path": "/memory/a.md"}, "id": "c1", "type": "tool_call"},
-            {"name": "execute", "args": {"command": "ls"}, "id": "c2", "type": "tool_call"},
-        ]),
-        ToolMessage(content="done", tool_call_id="c1", name="write_file"),
-        AIMessage(content="", tool_calls=[
-            {"name": "write_file", "args": {"path": "/memory/b.md"}, "id": "c3", "type": "tool_call"},
-        ]),
-    ]
-    pending = _pending_tool_calls(messages)
-    assert [call["id"] for call in pending] == ["c2", "c3"]
-    assert pending[0]["name"] == "execute"
-
-
-def test_mark_approval_pending_flips_matching_parts() -> None:
-    """审批挂起投影：匹配 tool_call_id 的工具段转 approval_pending 并附 hitl 元数据。"""
-    from noesis.agents.subagents.executor import _mark_approval_pending
-
-    content = {
-        "version": 1,
-        "parts": [
-            {"type": "tool", "tool_call_id": "c1", "name": "write_file", "state": "running", "status": "running"},
-            {"type": "tool", "tool_call_id": "c2", "name": "execute", "state": "succeeded", "status": "success"},
-        ],
-    }
-    payload = {
-        "interrupt_id": "iid-1",
-        "kind": "approval",
-        "action_requests": [{"name": "write_file", "args": {}, "tool_call_id": "c1"}],
-    }
-    _mark_approval_pending(content, payload)
-
-    part = content["parts"][0]
-    assert part["state"] == "approval_pending"
-    assert part["status"] == "running"
-    assert part["hitl"] == {"kind": "approval", "status": "pending", "interrupt_id": "iid-1"}
-    # 未被中断的段不受影响
-    assert content["parts"][1]["state"] == "succeeded"
-
-    # action_requests 缺 tool_call_id（未回填）时不得误伤任何段
-    content2 = {"parts": [{"type": "tool", "tool_call_id": "c9", "state": "running"}]}
-    _mark_approval_pending(content2, {"interrupt_id": "iid", "action_requests": [{"name": "write_file"}]})
-    assert content2["parts"][0]["state"] == "running"
+# 旧 values-diff 投影的单测（_pending_tool_calls / _mark_approval_pending）随实现删除：
+# 待审批 tool_call_id 回填收敛到 noesis.runtime.stream（enrich_action_requests），
+# 工具段置 approval_pending 收敛到 bridge 的 builder 路径——统一管道下由
+# 上方 HITL 集成用例与主链路 bridge 测试共同覆盖。
 
 
 def test_context_snapshot_from_worker_usage_metadata() -> None:
-    """子会话上下文快照：worker 消息 usage_metadata → 快照变更发布/记录。
+    """子会话上下文快照经统一管道产出：usage_metadata → bridge 模型调用边界提取。
 
-    主对话的快照由 SSE bridge 提取；子 run 无 bridge，executor 从 thread
-    消息取同口径（单轮真实 input_tokens，每次覆盖）。
+    与主对话同源（bridge _accumulate_usage → context-update 帧 → executor
+    发布/落库），executor 不再自行从消息提取。
     """
     from noesis.agents.subagents import executor as ex_mod
 

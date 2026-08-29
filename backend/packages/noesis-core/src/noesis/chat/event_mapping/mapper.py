@@ -23,6 +23,22 @@ from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 
 
+def new_stream_ctx() -> Dict[str, Any]:
+    """astream_events 消费的桥接上下文（主链路与子 Agent executor 共用）。"""
+    return {
+        "text_buffer": "",
+        "current_tool_name": None,
+        "current_tool_call_id": None,
+        "tool_start_times": {},
+        "_assistant_db_id": None,
+        # 并行工具分组：按 scope（parent_task_call_id 或 "root"）独立计数 step_id。
+        # on_chat_model_start 标 pending scope，首个 on_tool_start mint 新 step_id。
+        "pending_model_step_scopes": set(),
+        "step_counters": {},
+        "current_step_ids": {},
+    }
+
+
 class RuntimeEventMapper:
     """raw runtime event → typed RunEvent 的唯一映射入口。
 
