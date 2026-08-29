@@ -443,7 +443,7 @@ export interface TaskCatalogEntry {
   assistant_message_id?: string | null
   description: string
   kind?: 'subagent' | 'shell'
-  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
+  status: 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
   result?: string | null
   error?: string | null
   interrupt?: {

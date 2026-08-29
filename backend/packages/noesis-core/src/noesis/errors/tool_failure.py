@@ -135,6 +135,24 @@ _TOOL_ERROR_HEADER_RE = re.compile(
 
 _DETAIL_MAX_LEN = 10_000
 
+# 用户文案可携带的细节上限：invalid_arguments 是模型自身用法错误，
+# 细节对用户安全（多为单行原因），过长的截断保护 UI 不被撑爆
+_USER_MESSAGE_DETAIL_MAX_LEN = 120
+
+# deepagents 文件后端的 result 级错误文本是稳定契约（随版本锁定），
+# 与 task 工具输出前缀同等待遇：按固定片段归类为参数错误，不做任意
+# 正则推断。这些错误的细节（如「offset 780 超出文件长度 668 行」）
+# 是用户定位问题的关键信息，归 unknown 会被兜底文案吞掉。
+_FILE_TOOL_USAGE_ERROR_MARKERS: tuple[str, ...] = (
+    "exceeds file length",
+    "does not exist",
+    "read before write",
+    "changed since read",
+    "no file path",
+    "is a directory",
+    "path is outside",
+)
+
 USER_TOOL_ERROR_MESSAGES: dict[str, str] = {
     "network_unreachable": "连接失败",
     "network_timeout": "连接失败",
@@ -170,6 +188,24 @@ class ToolFailure:
 
 def _user_message_for_category(category: ToolFailureCategory) -> str:
     return USER_TOOL_ERROR_MESSAGES.get(category.value, DEFAULT_USER_TOOL_ERROR)
+
+
+def _user_message_with_detail(category: ToolFailureCategory, detail: str) -> str:
+    """用户文案；invalid_arguments 附带（有界）具体原因。
+
+    参数错误由模型自身的调用方式触发，原因文本不含服务端内部信息，
+    「参数错误：offset 780 超出文件长度」远比孤立的「参数错误」可定位。
+    """
+    base = _user_message_for_category(category)
+    if category is not ToolFailureCategory.INVALID_ARGUMENTS:
+        return base
+    first_line = next(
+        (line.strip() for line in (detail or "").splitlines() if line.strip()),
+        "",
+    )
+    if not first_line or len(first_line) > _USER_MESSAGE_DETAIL_MAX_LEN:
+        return base
+    return f"{base}：{first_line}"
 
 
 def _default_retryable(category: ToolFailureCategory) -> bool:
@@ -355,7 +391,7 @@ def _failure_from_parts(
             detail=detail,
             retryable=retryable,
         ),
-        message_for_user=_user_message_for_category(category),
+        message_for_user=_user_message_with_detail(category, detail),
         retryable=retryable,
     )
 
@@ -417,6 +453,14 @@ def classify_tool_failure(
             retryable=False,
         )
 
+    if (raw or "").strip() and _matches_file_tool_usage_error(raw):
+        return _failure_from_parts(
+            ToolFailureCategory.INVALID_ARGUMENTS,
+            tool_name=name,
+            detail=format_tool_error_detail(exc, raw),
+            retryable=False,
+        )
+
     detail = format_tool_error_detail(exc, raw)
     return _failure_from_parts(
         ToolFailureCategory.UNKNOWN,
@@ -424,6 +468,12 @@ def classify_tool_failure(
         detail=detail,
         retryable=False,
     )
+
+
+def _matches_file_tool_usage_error(raw: str) -> bool:
+    """deepagents 文件后端 result 级错误文本 → 参数错误（稳定契约，见 markers 注释）。"""
+    lowered = raw.lower()
+    return any(marker in lowered for marker in _FILE_TOOL_USAGE_ERROR_MARKERS)
 
 
 def build_error_tool_message(request: ToolCallRequest, failure: ToolFailure) -> ToolMessage:

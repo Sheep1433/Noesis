@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextvars
 import inspect
 import re
 import threading
@@ -36,6 +37,8 @@ from typing import Any, Callable, Optional
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 from noesis.chat.runs import RunStatus
+from noesis.chat.tool_state import ToolState
+from noesis.runtime.hitl import enrich_action_requests
 
 from noesis.agents.subagents import notifications
 from noesis.runtime.logging import logger
@@ -100,6 +103,9 @@ class BackgroundTask:
     interrupt: Optional[dict[str, Any]] = None
     started_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
+    # 步数：与 progress 分离的权威计数——progress 是有界预览（maxlen=50），
+    # 用其长度当步数会在 50 步后封顶（所有长任务都显示「50 步」）
+    step_count: int = 0
     # 执行过程摘要（有界，前端任务卡展开显示）；lock 保护跨线程读写
     progress: "collections.deque[dict[str, Any]]" = field(
         default_factory=lambda: collections.deque(maxlen=MAX_PROGRESS_ENTRIES),
@@ -125,7 +131,7 @@ class BackgroundTask:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             # UI 只显示步数；SSE/列表负载裁掉明细，详情走 messages API
-            "progress_count": len(self.progress),
+            "progress_count": self.step_count,
         }
         if include_progress:
             data["progress"] = list(self.progress)
@@ -189,6 +195,30 @@ def shutdown_loop() -> None:
         loop.call_soon_threadsafe(loop.stop)
 
 
+def _submit_isolated(loop: asyncio.AbstractEventLoop, coro) -> Future:
+    """调度协程到隔离 loop，并在干净的 contextvars 中执行。
+
+    ``run_coroutine_threadsafe`` 经 ``call_soon_threadsafe`` 复制调用线程的
+    contextvars；而调度点常在父 run 的 astream_events 追踪上下文内
+    （start_task / 审批 resume 等工具执行期间）。子 Agent 若继承父
+    tracer，其 LLM/工具事件会泄入父事件流——曾在父消息尾部生成幽灵
+    工具 part 并触发「本轮未完成」误报。这里把真实工作放进空 Context
+    的内层 Task 切断继承；取消经 await 传播，Future 语义与
+    run_coroutine_threadsafe 一致。子 Agent 自身依赖（backend/
+    checkpointer）均经闭包传参，不依赖 contextvars。
+    """
+    return asyncio.run_coroutine_threadsafe(_run_in_clean_context(coro), loop)
+
+
+async def _run_in_clean_context(coro):
+    task = asyncio.get_running_loop().create_task(coro, context=contextvars.Context())
+    try:
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 # ---------------------------------------------------------------------------
 # 注册表与执行器
 # ---------------------------------------------------------------------------
@@ -240,6 +270,32 @@ _TASKS: dict[str, _TaskEntry] = {}
 _TASKS_LOCK = threading.Lock()
 # 会话级排队任务（超出并发上限时 FIFO 等待，不占并发槽、不启动 watchdog）
 _PENDING_QUEUES: dict[str, list[_TaskEntry]] = {}
+
+
+# 任务不存在时的统一提示：模型惯用短 id，指路 list_tasks 避免盲试
+_TASK_NOT_FOUND = "后台任务不存在: {task_id}（可用 list_tasks 查看完整 task_id）"
+
+
+def _find_entry_locked(task_id: str) -> Optional[_TaskEntry]:
+    """按 task_id / child_session_id 查找任务（须持 _TASKS_LOCK）。
+
+    支持唯一前缀匹配（git 短哈希语义）：模型在表格里惯用 8 位短 id，
+    只做精确匹配会让 cancel/check 全部落空（曾在用户要求停止时整批
+    「后台任务不存在」而任务照跑）。前缀命中多个时返回 None，由调用
+    方按不存在处理——歧义 id 不猜测。
+    """
+    key = str(task_id or "").strip()
+    if not key:
+        return None
+    if key in _TASKS:
+        return _TASKS[key]
+    matches = [
+        entry
+        for entry in _TASKS.values()
+        if str(entry.task.child_session_id or "").startswith(key)
+        or entry.task.task_id.startswith(key)
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +448,7 @@ def _publish_run_event(
                     "profile_id": "task-worker",
                     "run_id": task.run_id,
                     "status": task.status.value,
-                    "step_count": len(task.progress),
+                    "step_count": task.step_count,
                     "started_at": task.started_at,
                     "finished_at": task.completed_at,
                     "interrupt": task.interrupt,
@@ -458,8 +514,54 @@ def _extract_interrupt_payload(interrupts: Any) -> Optional[dict[str, Any]]:
     return {"interrupt_id": str(iid), **payload}
 
 
+def _pending_tool_calls(messages: list[Any]) -> list[dict[str, Any]]:
+    """尚未有 ToolMessage 应答的 tool_calls——即被 interrupt 拦下的调用。"""
+    answered: set[str] = set()
+    pending: list[dict[str, Any]] = []
+    for message in messages:
+        if isinstance(message, AIMessage):
+            for call in getattr(message, "tool_calls", None) or []:
+                pending.append({
+                    "id": str(call.get("id") or ""),
+                    "name": str(call.get("name") or ""),
+                    "args": call.get("args") or {},
+                })
+        elif isinstance(message, ToolMessage):
+            answered.add(str(getattr(message, "tool_call_id", None) or ""))
+    return [call for call in pending if call["id"] and call["id"] not in answered]
+
+
+def _mark_approval_pending(content: dict[str, Any], payload: dict[str, Any]) -> None:
+    """审批挂起投影不变量：被 interrupt 的工具段转 approval_pending。
+
+    与主路 langgraph_bridge 的 update_tool_hitl 同语义（status 保持
+    running、附 hitl 元数据）；前端 approval_pending 渲染为静态
+    「等待确认」标签，不走 running 态扫光。
+    """
+    call_ids = {
+        str(action.get("tool_call_id"))
+        for action in payload.get("action_requests") or []
+        if isinstance(action, dict) and action.get("tool_call_id")
+    }
+    if not call_ids:
+        return
+    hitl_meta = {
+        "kind": payload.get("kind"),
+        "status": "pending",
+        "interrupt_id": payload.get("interrupt_id"),
+    }
+    for part in content.get("parts", []):
+        if part.get("type") == "tool" and part.get("tool_call_id") in call_ids:
+            part["state"] = ToolState.APPROVAL_PENDING.value
+            part["hitl"] = dict(hitl_meta)
+
+
 def _progress_append(task: BackgroundTask, entry: dict[str, Any]) -> None:
     with task.progress_lock:
+        # 步数口径 = 工具调用数，与会话详情按 tool part 计数一致；
+        # text / tool_result 只进预览不计步（曾按三类合计导致列表与详情相差一倍）
+        if entry.get("kind") == "tool_call":
+            task.step_count += 1
         task.progress.append(entry)
 
 
@@ -705,7 +807,7 @@ def _notify_terminal(task: BackgroundTask) -> None:
         status=task.status.value,
         preview=task.result or task.error,
         label=task.description,
-        step_count=len(task.progress),
+        step_count=task.step_count,
         turn_count=task.turn_count if task.kind == "subagent" else None,
         duration_ms=(
             int(max(0.0, (task.completed_at or time.time()) - task.started_at) * 1000)
@@ -776,12 +878,7 @@ class BackgroundSubagentExecutor:
     @staticmethod
     def get(task_id: str) -> Optional[dict[str, Any]]:
         with _TASKS_LOCK:
-            entry = _TASKS.get(task_id)
-            if entry is None:
-                entry = next(
-                    (item for item in _TASKS.values() if item.task.child_session_id == task_id),
-                    None,
-                )
+            entry = _find_entry_locked(task_id)
             if entry is not None:
                 return entry.task.to_dict(include_progress=False)
         return None
@@ -790,10 +887,7 @@ class BackgroundSubagentExecutor:
     def get_memory(task_id: str) -> Optional[dict[str, Any]]:
         """只查进程内注册表，供 async catalog 避免同步数据库 fallback。"""
         with _TASKS_LOCK:
-            entry = _TASKS.get(task_id) or next(
-                (item for item in _TASKS.values() if item.task.child_session_id == task_id),
-                None,
-            )
+            entry = _find_entry_locked(task_id)
             return entry.task.to_dict(include_progress=False) if entry else None
 
     @staticmethod
@@ -954,12 +1048,9 @@ class BackgroundSubagentExecutor:
     def validate_followup(task_id: str) -> None:
         """在写入标准 user message 前校验任务仍可接受追问。"""
         with _TASKS_LOCK:
-            entry = _TASKS.get(task_id) or next(
-                (item for item in _TASKS.values() if item.task.child_session_id == task_id),
-                None,
-            )
+            entry = _find_entry_locked(task_id)
             if entry is None:
-                raise ValueError(f"后台任务不存在: {task_id}")
+                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
             task = entry.task
             if task.kind == "shell":
                 raise ValueError("该任务为后台命令任务，不支持追加消息")
@@ -984,14 +1075,9 @@ class BackgroundSubagentExecutor:
         if not text:
             raise ValueError("消息不能为空")
         with _TASKS_LOCK:
-            entry = _TASKS.get(task_id)
+            entry = _find_entry_locked(task_id)
             if entry is None:
-                entry = next(
-                    (item for item in _TASKS.values() if item.task.child_session_id == task_id),
-                    None,
-                )
-            if entry is None:
-                raise ValueError(f"后台任务不存在: {task_id}")
+                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
             task = entry.task
             if task.kind == "shell":
                 raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
@@ -1002,9 +1088,8 @@ class BackgroundSubagentExecutor:
                 task.result = None
                 task.completed_at = None
                 loop = _ensure_loop()
-                entry.future = asyncio.run_coroutine_threadsafe(
-                    _arun_followup(entry, text, user_message_id, model_id),
-                    loop,
+                entry.future = _submit_isolated(
+                    loop, _arun_followup(entry, text, user_message_id, model_id),
                 )
                 _arm_watchdog(entry)
                 _publish_task_event(task, "followup")
@@ -1032,12 +1117,7 @@ class BackgroundSubagentExecutor:
     def get_future(task_id: str) -> Optional[Future]:
         """取当前执行 future（前台等待用）。"""
         with _TASKS_LOCK:
-            entry = _TASKS.get(task_id)
-            if entry is None:
-                entry = next(
-                    (item for item in _TASKS.values() if item.task.child_session_id == task_id),
-                    None,
-                )
+            entry = _find_entry_locked(task_id)
             return entry.future if entry else None
 
     # -- 审批 / 取消 ---------------------------------------------------
@@ -1048,14 +1128,9 @@ class BackgroundSubagentExecutor:
     ) -> dict[str, Any]:
         """审批决策（approve / reject）→ 在同一 thread 续跑子 Agent。"""
         with _TASKS_LOCK:
-            entry = _TASKS.get(task_id)
+            entry = _find_entry_locked(task_id)
             if entry is None:
-                entry = next(
-                    (item for item in _TASKS.values() if item.task.child_session_id == task_id),
-                    None,
-                )
-            if entry is None:
-                raise ValueError(f"后台任务不存在: {task_id}")
+                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
             if entry.task.status != BgTaskStatus.AWAITING_APPROVAL:
                 raise ValueError(
                     f"任务不在待审批状态（当前 {entry.task.status.value}）"
@@ -1074,9 +1149,8 @@ class BackgroundSubagentExecutor:
                 name=f"subagent-resume:{entry.task.run_id}",
             )
         loop = _ensure_loop()
-        entry.future = asyncio.run_coroutine_threadsafe(
-            _arun(entry, resume_command=Command(resume={"decisions": decisions})),
-            loop,
+        entry.future = _submit_isolated(
+            loop, _arun(entry, resume_command=Command(resume={"decisions": decisions})),
         )
         _arm_watchdog(entry)
         return entry.task.to_dict(include_progress=False)
@@ -1084,14 +1158,9 @@ class BackgroundSubagentExecutor:
     @staticmethod
     def cancel(task_id: str) -> dict[str, Any]:
         with _TASKS_LOCK:
-            entry = _TASKS.get(task_id)
+            entry = _find_entry_locked(task_id)
             if entry is None:
-                entry = next(
-                    (item for item in _TASKS.values() if item.task.child_session_id == task_id),
-                    None,
-                )
-            if entry is None:
-                raise ValueError(f"后台任务不存在: {task_id}")
+                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
             if entry.task.status.is_terminal:
                 return entry.task.to_dict(include_progress=False)
             _disarm_watchdog(entry)
@@ -1242,24 +1311,35 @@ async def _arun(
             interrupts = final.get("__interrupt__") if isinstance(final, dict) else None
             payload = _extract_interrupt_payload(interrupts) if interrupts else None
             if payload is not None:
+                # langchain HITL 的 ActionRequest 天生不带 tool_call_id（只有
+                # name/args/description），主路靠 enrich_action_requests 按名回填；
+                # 子路同样回填，快照/消息投影才能把被中断工具段置 approval_pending
+                payload["action_requests"] = enrich_action_requests(
+                    list(payload.get("action_requests") or []),
+                    _pending_tool_calls(final.get("messages", [])),
+                )
                 task.status = BgTaskStatus.AWAITING_APPROVAL
                 task.interrupt = payload
                 if task.run_id:
                     from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
                     from noesis.runtime.main_loop import run_on_main_loop
 
+                    approval_content = _child_projection_content(
+                        final.get("messages", [])[projection_offset:]
+                    )
+                    _mark_approval_pending(approval_content, payload)
                     hitl_future = run_on_main_loop(
                         SubagentSessionService.mark_waiting_approval(
                             task.run_id,
                             payload,
-                            content=_child_projection_content(final.get("messages", [])[projection_offset:]),
+                            content=approval_content,
                             sequence=task.projection_sequence,
+                            assistant_message_id=task.assistant_message_id,
                         ),
                         name=f"subagent-hitl:{task.run_id}",
                     )
                     if hitl_future is not None:
                         await asyncio.wrap_future(hitl_future)
-                    approval_content = _child_projection_content(final.get("messages", [])[projection_offset:])
                     approval_content["_pending_hitl"] = payload
                     _publish_run_event(task, "approval.required", content=approval_content)
                 _publish_task_event(task, "awaiting_approval")
@@ -1367,7 +1447,7 @@ async def _arun(
         logger.info(
             "bg subagent completed task_id={} steps={} duration={:.1f}s",
             task.task_id,
-            len(task.progress),
+            task.step_count,
             task.completed_at - task.started_at,
         )
         _publish_task_event(task, "terminal")
@@ -1571,7 +1651,7 @@ def _schedule_entry_locked(entry: _TaskEntry) -> None:
     call_later 均为非阻塞提交，锁内调用安全；SSE 事件发布留待锁外。
     """
     loop = _ensure_loop()
-    entry.future = asyncio.run_coroutine_threadsafe(_arun(entry), loop)
+    entry.future = _submit_isolated(loop, _arun(entry))
     if entry.timeout_seconds > 0:
         _arm_watchdog(entry)
 

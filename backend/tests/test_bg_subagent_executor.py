@@ -637,7 +637,8 @@ async def test_bg_event_subscription_receives_lifecycle() -> None:
         assert events[0]["event"] == "started"
         assert events[0]["task"]["task_id"] == task_id
         assert events[1]["event"] == "progress"
-        assert events[1]["task"]["progress_count"] == 1
+        # 步数口径 = 工具调用数：纯文本步（本脚本无工具调用）不计步
+        assert events[1]["task"]["progress_count"] == 0
         assert events[-1]["event"] == "terminal"
         assert events[-1]["task"]["status"] == "completed"
     finally:
@@ -901,6 +902,80 @@ async def test_bg_event_subscription_receives_approval_lifecycle() -> None:
         unsubscribe_bg_events("s-sse-ap", queue)
 
 
+def test_interrupt_action_requests_carry_tool_call_id() -> None:
+    """langchain HITL 的 ActionRequest 不带 tool_call_id（只有 name/args/description）。
+
+    不回填的话快照/消息投影匹配不到工具段，被中断的调用永远停在
+    running（扫光 + 「运行中」标签），与等待审批的事实不符。
+    """
+    worker = _build_worker(
+        [_call("y", "c-enrich"), AIMessage(content="收尾")],
+        interrupt_on={"dangerous": True},
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="x", session_id="s-enrich", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
+
+    actions = task["interrupt"]["action_requests"]
+    assert len(actions) == 1
+    assert actions[0]["tool_call_id"] == "c-enrich"
+
+
+def test_pending_tool_calls_excludes_answered() -> None:
+    """待审批回填的候选 = 尚无 ToolMessage 应答的 tool_calls。"""
+    from langchain_core.messages import ToolMessage
+
+    from noesis.agents.subagents.executor import _pending_tool_calls
+
+    messages = [
+        AIMessage(content="", tool_calls=[
+            {"name": "write_file", "args": {"path": "/memory/a.md"}, "id": "c1", "type": "tool_call"},
+            {"name": "execute", "args": {"command": "ls"}, "id": "c2", "type": "tool_call"},
+        ]),
+        ToolMessage(content="done", tool_call_id="c1", name="write_file"),
+        AIMessage(content="", tool_calls=[
+            {"name": "write_file", "args": {"path": "/memory/b.md"}, "id": "c3", "type": "tool_call"},
+        ]),
+    ]
+    pending = _pending_tool_calls(messages)
+    assert [call["id"] for call in pending] == ["c2", "c3"]
+    assert pending[0]["name"] == "execute"
+
+
+def test_mark_approval_pending_flips_matching_parts() -> None:
+    """审批挂起投影：匹配 tool_call_id 的工具段转 approval_pending 并附 hitl 元数据。"""
+    from noesis.agents.subagents.executor import _mark_approval_pending
+
+    content = {
+        "version": 1,
+        "parts": [
+            {"type": "tool", "tool_call_id": "c1", "name": "write_file", "state": "running", "status": "running"},
+            {"type": "tool", "tool_call_id": "c2", "name": "execute", "state": "succeeded", "status": "success"},
+        ],
+    }
+    payload = {
+        "interrupt_id": "iid-1",
+        "kind": "approval",
+        "action_requests": [{"name": "write_file", "args": {}, "tool_call_id": "c1"}],
+    }
+    _mark_approval_pending(content, payload)
+
+    part = content["parts"][0]
+    assert part["state"] == "approval_pending"
+    assert part["status"] == "running"
+    assert part["hitl"] == {"kind": "approval", "status": "pending", "interrupt_id": "iid-1"}
+    # 未被中断的段不受影响
+    assert content["parts"][1]["state"] == "succeeded"
+
+    # action_requests 缺 tool_call_id（未回填）时不得误伤任何段
+    content2 = {"parts": [{"type": "tool", "tool_call_id": "c9", "state": "running"}]}
+    _mark_approval_pending(content2, {"interrupt_id": "iid", "action_requests": [{"name": "write_file"}]})
+    assert content2["parts"][0]["state"] == "running"
+
+
 def test_context_snapshot_from_worker_usage_metadata() -> None:
     """子会话上下文快照：worker 消息 usage_metadata → 快照变更发布/记录。
 
@@ -969,3 +1044,127 @@ async def test_start_shell_description_as_task_title() -> None:
     )
     task2 = _wait_terminal(executor, task_id2)
     assert task2["description"] == "pnpm lint"
+
+
+def test_step_count_does_not_cap_at_progress_preview_limit() -> None:
+    """步数是与有界 progress 预览分离的权威计数：超过 50 步不得封顶。"""
+    from noesis.agents.subagents.executor import (
+        MAX_PROGRESS_ENTRIES,
+        BackgroundTask,
+        _progress_append,
+    )
+
+    task = BackgroundTask(
+        task_id="bg-steps",
+        session_id="s",
+        user_id="u",
+        description="步数计数",
+    )
+    total = MAX_PROGRESS_ENTRIES + 12
+    for i in range(total):
+        _progress_append(task, {"kind": "tool_call", "name": f"tool-{i}", "ts": 0})
+
+    assert len(task.progress) == MAX_PROGRESS_ENTRIES  # 预览有界
+    assert task.step_count == total  # 计数不封顶
+    assert task.to_dict(include_progress=False)["progress_count"] == total
+
+
+@pytest.mark.asyncio
+async def test_submit_isolated_cuts_caller_contextvar_inheritance() -> None:
+    """调度到隔离 loop 的协程不得继承调用线程的 contextvars。
+
+    run_coroutine_threadsafe 经 call_soon_threadsafe 复制调用线程上下文；
+    调度点若在父 run 的 astream_events 追踪上下文内，子 Agent 会继承父
+    tracer，其工具事件泄入父消息（幽灵工具 part +「本轮未完成」误报）。
+    """
+    import contextvars as _contextvars
+
+    from noesis.agents.subagents.executor import _ensure_loop, _submit_isolated
+
+    marker: _contextvars.ContextVar = _contextvars.ContextVar(
+        "noesis_test_leak_marker", default=None
+    )
+    marker.set("leaked")
+
+    async def probe():
+        return marker.get()
+
+    future = _submit_isolated(_ensure_loop(), probe())
+    assert await asyncio.wrap_future(future) is None
+
+
+def test_task_lookup_accepts_unique_short_id_prefix() -> None:
+    """cancel/check 支持唯一前缀（模型惯用 8 位短 id；精确匹配曾致整批取消失败）。"""
+    from noesis.agents.subagents.executor import (
+        _TASKS,
+        _TASKS_LOCK,
+        BackgroundSubagentExecutor,
+        BackgroundTask,
+        BgTaskStatus,
+    )
+
+    task = BackgroundTask(
+        task_id="bg-prefix-1",
+        session_id="s",
+        user_id="u",
+        description="前缀查找",
+        child_session_id="733021ae-06ef-45de-aaee-9e3913ffc785",
+        status=BgTaskStatus.COMPLETED,
+    )
+    from noesis.agents.subagents.executor import _TaskEntry
+
+    _TASKS[task.task_id] = _TaskEntry(
+        task=task,
+        agent_factory=None,
+        recursion_limit=10,
+        timeout_seconds=0,
+        hitl_timeout_seconds=1,
+    )
+    try:
+        # 8 位短 id（child_session_id 前缀）命中
+        snapshot = BackgroundSubagentExecutor.get("733021ae")
+        assert snapshot is not None and snapshot["task_id"] == "bg-prefix-1"
+        # 完整 child_session_id 与 task_id 仍然精确命中
+        assert BackgroundSubagentExecutor.get(task.child_session_id)["task_id"] == "bg-prefix-1"
+        assert BackgroundSubagentExecutor.get("bg-prefix-1")["task_id"] == "bg-prefix-1"
+    finally:
+        with _TASKS_LOCK:
+            _TASKS.pop("bg-prefix-1", None)
+
+
+def test_task_lookup_rejects_ambiguous_prefix() -> None:
+    """歧义前缀不得猜测：命中多个时按不存在处理。"""
+    from noesis.agents.subagents.executor import (
+        _TASKS,
+        _TASKS_LOCK,
+        BackgroundSubagentExecutor,
+        BackgroundTask,
+        BgTaskStatus,
+        _TaskEntry,
+    )
+
+    entries = {}
+    for i, suffix in enumerate(("aaaa1111", "aaaa2222")):
+        task = BackgroundTask(
+            task_id=f"bg-amb-{i}",
+            session_id="s",
+            user_id="u",
+            description=f"歧义{i}",
+            child_session_id=f"{suffix}-0000-0000-0000-00000000000{i}",
+            status=BgTaskStatus.COMPLETED,
+        )
+        entry = _TaskEntry(
+            task=task,
+            agent_factory=None,
+            recursion_limit=10,
+            timeout_seconds=0,
+            hitl_timeout_seconds=1,
+        )
+        _TASKS[task.task_id] = entry
+        entries[task.task_id] = entry
+    try:
+        assert BackgroundSubagentExecutor.get("aaaa") is None
+    finally:
+        with _TASKS_LOCK:
+            for key in entries:
+                _TASKS.pop(key, None)

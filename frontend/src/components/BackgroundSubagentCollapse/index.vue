@@ -4,7 +4,6 @@ import type { ToolUiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { computed, ref } from 'vue'
 import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/index.vue'
-import { formatDurationMs } from '@/views/chat/messageParts'
 
 const props = defineProps<{
   toolPart: ToolUiPart
@@ -19,50 +18,23 @@ const title = computed(() => {
   return value.trim() || '子 Agent'
 })
 
-const statusLabel: Record<TaskCatalogEntry['status'], string> = {
-  running: '进行中',
-  awaiting_approval: '待审批',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-  timed_out: '超时',
-  partial: '已停止',
-  error: '失败',
-  interrupted: '已中断',
-}
-
-function timestampMs(value: number | null | undefined): number | undefined {
-  if (value == null || !Number.isFinite(value)) {
-    return undefined
-  }
-  return Math.abs(value) < 1e12 ? value * 1000 : value
-}
-
-const duration = computed(() => {
-  const started = timestampMs(props.task?.started_at)
-  if (!started) {
-    return ''
-  }
-  const finished = timestampMs(props.task?.completed_at) ?? Date.now()
-  return formatDurationMs(Math.max(0, finished - started))
-})
-
-const status = computed(() => props.task?.status || (props.toolPart.status === 'running' ? 'running' : 'completed'))
+/** 下发即失败（工具调用 error 且目录无匹配）：没有子会话可开，卡片降级为失败提示 */
+const dispatchFailed = computed(() => props.toolPart.status === 'error' && !props.task)
 </script>
 
 <template>
-  <button type="button" class="subagent-card" @click="show = true">
-    <span class="subagent-card__icon"><n-icon size="16"><GitNetworkOutline /></n-icon></span>
-    <span class="subagent-card__main">
-      <span class="subagent-card__title">{{ title }}</span>
-      <span class="subagent-card__meta">
-        <span>子 Agent</span>
-        <span>·</span>
-        <span>{{ statusLabel[status] || status }}</span>
-        <span v-if="props.task?.progress_count">· {{ props.task.progress_count }} 步</span>
-      </span>
-    </span>
-    <span v-if="duration" class="subagent-card__duration">{{ duration }}</span>
+  <button
+    type="button"
+    class="subagent-card"
+    :class="{ 'subagent-card--failed': dispatchFailed }"
+    :disabled="dispatchFailed"
+    :title="dispatchFailed ? '子 Agent 启动失败' : '查看子 Agent 会话'"
+    @click="show = true"
+  >
+    <span class="subagent-card__icon"><n-icon size="14"><GitNetworkOutline /></n-icon></span>
+    <span class="subagent-card__title">{{ title }}</span>
+    <span v-if="dispatchFailed" class="subagent-card__failed">启动失败</span>
+    <span v-else class="subagent-card__chevron" aria-hidden="true">›</span>
   </button>
 
   <SubagentConversationDrawer
@@ -75,57 +47,60 @@ const status = computed(() => props.task?.status || (props.toolPart.status === '
 </template>
 
 <style scoped lang="scss">
+/* 静态任务入口：仅锚定「该轮派发了哪个后台任务」并提供跳转；
+   实时状态（进行中/步数/耗时）由后台任务目录承载，不在聊天流重复展示 */
 .subagent-card {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  min-height: 52px;
-  padding: 8px 12px;
+  min-height: 32px;
+  padding: 4px 10px;
   border: 1px solid var(--noesis-block-light-border);
   border-radius: var(--noesis-radius-md);
   background: var(--noesis-block-light-bg);
   color: var(--noesis-color-text);
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
 }
-.subagent-card:hover {
+
+.subagent-card:hover:not(:disabled) {
   border-color: var(--noesis-color-primary-border-soft);
   background: var(--noesis-color-primary-bg-hover);
 }
+
+.subagent-card:disabled {
+  cursor: default;
+}
+
+.subagent-card--failed {
+  border-color: var(--noesis-color-danger-border-soft, rgb(220 38 38 / 25%));
+}
+
 .subagent-card__icon {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--noesis-radius-md);
-  background: var(--noesis-color-primary-bg-icon);
-  color: var(--noesis-color-primary);
+  color: var(--noesis-color-text-secondary);
 }
-.subagent-card__main {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
+
 .subagent-card__title {
+  flex: 1 1 auto;
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
 }
-.subagent-card__meta,
-.subagent-card__duration {
-  color: var(--noesis-color-text-muted);
-  font-size: 11px;
-  line-height: 16px;
+
+.subagent-card__failed {
+  flex: none;
+  color: var(--noesis-color-danger);
 }
-.subagent-card__duration {
-  flex: 0 0 auto;
-  font-variant-numeric: tabular-nums;
+
+.subagent-card__chevron {
+  flex: none;
+  color: var(--noesis-color-text-hint);
+  font-size: 14px;
+  line-height: 1;
 }
 </style>

@@ -121,11 +121,17 @@ class AgentRunRepository:
         return list(result.scalars().all())
 
     async def list_claimable_queued(self, *, limit: int = 20) -> list[TAgentRun]:
-        """可 claim 的 queued Run：未被任何实例认领（owner IS NULL 且未写入 term）。"""
+        """可 claim 的 queued Run：未被任何实例认领（owner IS NULL 且未写入 term）。
+
+        subagent run 由进程内 executor 调度（mark_started / mark_terminal），
+        且不写 launch_payload——dispatcher claim 后重建上下文必然失败并把
+        run 收口成 RUN_START_FAILED（排队任务整段对话丢失），必须排除。
+        """
         result = await self.db.execute(
             select(TAgentRun)
             .where(
                 TAgentRun.status == RunStatus.QUEUED.value,
+                TAgentRun.origin != "subagent",
                 TAgentRun.owner_instance_id.is_(None),
                 TAgentRun.owner_term == 0,
             )

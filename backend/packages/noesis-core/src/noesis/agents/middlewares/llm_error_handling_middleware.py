@@ -90,6 +90,43 @@ _DEFAULT_CIRCUIT_RECOVERY_TIMEOUT_SEC = 60
 # 熔断打开时直接降级返回的固定文案
 _CIRCUIT_BREAKER_MESSAGE = "服务暂时不可用，请稍候再试。"
 
+# 降级 AIMessage 标记：run 终态判定（executor）据此把 completed 改判 error，
+# 避免「失败说明文本」被当成正常产出、父 Agent 误认任务成功。
+FALLBACK_MARKER = "noesis_model_fallback"
+
+
+def _fallback_aimessage(content: str) -> AIMessage:
+    return AIMessage(content=content, additional_kwargs={FALLBACK_MARKER: True})
+
+
+def warn_truncated_tool_calls(response: ModelResponse) -> ModelResponse:
+    """finish_reason=length 且带 tool_calls → 参数大概率被流式截断，告警留痕。
+
+    Provider 变体输出上限较低时，长工具参数（如 write_file 的大段
+    content）会在 JSON 中途被截断：排在后段的参数（file_path）整个
+    丢失，残缺参数进入工具后以「缺字段」形式失败。不改写响应——
+    工具错误反馈给模型的恢复路径（缩短输出重试）已验证有效，这里
+    只补足可观测性，配合文件工具层的明确报错定位根因。
+    """
+    messages = response if isinstance(response, list) else [response]
+    for message in messages:
+        if (
+            isinstance(message, AIMessage)
+            and message.tool_calls
+            and (message.response_metadata or {}).get("finish_reason") == "length"
+        ):
+            logger.warning(
+                "LLM 输出被截断（finish_reason=length），{} 个工具调用的参数可能不完整：{}",
+                len(message.tool_calls),
+                [call.get("name") for call in message.tool_calls],
+            )
+    return response
+
+
+def is_model_fallback_message(message: object) -> bool:
+    """该消息是否为 LLM 重试耗尽后的降级失败说明（而非模型真实产出）。"""
+    return bool(getattr(message, "additional_kwargs", {}).get(FALLBACK_MARKER))
+
 
 @dataclass(frozen=True)
 class _FailureOutcome:
@@ -345,7 +382,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
     ) -> ModelCallResult:
         if self._check_circuit():
             self._emit_fallback(_CIRCUIT_BREAKER_MESSAGE)
-            return AIMessage(content=_CIRCUIT_BREAKER_MESSAGE)
+            return _fallback_aimessage(_CIRCUIT_BREAKER_MESSAGE)
         return self._run_with_retry(request, handler, self._sync_retry_hooks())
 
     @override
@@ -356,7 +393,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
     ) -> ModelCallResult:
         if self._check_circuit():
             await self._aemit_fallback(_CIRCUIT_BREAKER_MESSAGE)
-            return AIMessage(content=_CIRCUIT_BREAKER_MESSAGE)
+            return _fallback_aimessage(_CIRCUIT_BREAKER_MESSAGE)
         return await self._arun_with_retry(request, handler, self._async_retry_hooks())
 
     # ---------- shared retry core ----------
@@ -373,7 +410,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             try:
                 response = handler(request)
                 self._record_success()
-                return response
+                return warn_truncated_tool_calls(response)
             except GraphBubbleUp:
                 self._release_half_open_probe()
                 raise
@@ -386,7 +423,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                     attempt += 1
                     continue
                 hooks.emit_fallback(outcome.fallback_message)
-                return AIMessage(content=outcome.fallback_message)
+                return _fallback_aimessage(outcome.fallback_message)
 
     async def _arun_with_retry(
         self,
@@ -400,7 +437,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             try:
                 response = await handler(request)
                 self._record_success()
-                return response
+                return warn_truncated_tool_calls(response)
             except GraphBubbleUp:
                 self._release_half_open_probe()
                 raise
@@ -413,7 +450,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                     attempt += 1
                     continue
                 await hooks.aemit_fallback(outcome.fallback_message)
-                return AIMessage(content=outcome.fallback_message)
+                return _fallback_aimessage(outcome.fallback_message)
 
     def _handle_call_failure(
         self, exc: BaseException, attempt: int, prev_delay_ms: int | None,

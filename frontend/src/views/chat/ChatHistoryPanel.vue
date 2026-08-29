@@ -5,6 +5,8 @@ import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import ThemeSwitcher from '@/components/ThemeSwitcher/index.vue'
 import { mobileHistoryNavItems } from '@/config/navigation'
 import { cssVar, themeCssVar } from '@/config/theme'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { toggleChatHistorySider } from '@/hooks/useChatHistorySider'
 
 interface TableItem {
   uuid: string
@@ -47,6 +49,9 @@ const emit = defineEmits<{
 
 const searchText = defineModel<string>('searchText', { required: true })
 const archiveExpanded = ref(false)
+
+/* 移动端历史抽屉复用本面板：抽屉有自己的关闭方式，收起按钮仅桌面端侧栏显示 */
+const { isMobile } = useBreakpoint()
 
 const searchChatRef = useTemplateRef('searchChatRef')
 
@@ -126,6 +131,18 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
           <span class="search-chat-input__icon i-hugeicons:search-01" aria-hidden="true"></span>
         </template>
       </n-input>
+
+      <!-- 收起侧栏（ChatGPT 式：与搜索并排，桌面端侧栏专属） -->
+      <button
+        v-if="!isMobile"
+        type="button"
+        class="search-chat-trigger"
+        title="收起对话历史"
+        aria-label="收起对话历史"
+        @click="toggleChatHistorySider()"
+      >
+        <span class="search-chat-trigger__icon i-hugeicons:panel-left-close" aria-hidden="true"></span>
+      </button>
     </div>
 
     <div flex="1 ~ col" class="scrollable-table-container">
@@ -286,11 +303,11 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
 
 .create-chat {
   width: 100%;
-  height: 40px;
+  height: 34px;
   text-align: center;
   font-family: inherit;
   font-weight: 500;
-  font-size: 14px;
+  font-size: 13px;
   border-radius: var(--noesis-radius-pill);
 
   &:deep(.n-button__border),
@@ -314,8 +331,8 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   margin: 0;
   padding: 0;
   border: 1px solid var(--noesis-color-border, #e8eaf3);
@@ -334,9 +351,9 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
 
 .search-chat-trigger__icon {
   display: inline-block;
-  width: 18px;
-  height: 18px;
-  font-size: 18px;
+  width: 15px;
+  height: 15px;
+  font-size: 15px;
   line-height: 1;
   color: var(--noesis-color-text-secondary);
   flex-shrink: 0;

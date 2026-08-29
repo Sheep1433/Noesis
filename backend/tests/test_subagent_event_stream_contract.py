@@ -73,14 +73,20 @@ def subagent_streams(monkeypatch):
 
 async def _open_subagent_stream(monkeypatch, snapshot, after_sequence: int = 0):
     """驱动 stream_run 的 subagent 分支，返回 StreamingResponse。"""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _null_sse_db():
+        yield SimpleNamespace()
+
     monkeypatch.setattr(
         chat_api.RunService, "get", AsyncMock(return_value=snapshot)
     )
+    monkeypatch.setattr(chat_api, "sse_prefetch_db", _null_sse_db)
     return await chat_api.stream_run(
         "r-1",
         after_sequence=after_sequence,
         current_user=SimpleNamespace(user_id="u1"),
-        db=SimpleNamespace(),
     )
 
 

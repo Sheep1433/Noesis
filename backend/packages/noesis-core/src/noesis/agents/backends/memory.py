@@ -69,6 +69,35 @@ def _writable(key: str) -> bool:
     return name in _ROOT_FILES or _is_entry(key)
 
 
+def is_memory_writable_path(path: str) -> bool:
+    """agent 可见路径是否在记忆写入白名单内（根文件 + 五类条目目录）。
+
+    HITL 的 memory_write_when 据此判定：白名单外的 /memory 写入不触发
+    审批——guard 必然拒绝，让模型直接收到拒绝反馈，而不是让用户批准
+    一笔注定失败的写入。入参是 agent 可见的完整路径（含 /memory 前缀），
+    这里先归一化并剥掉路由前缀，与 CompositeBackend 派发到 memory
+    backend 时的路径形态一致。
+    """
+    from noesis.agents.backends.paths import AGENT_MEMORY_ROUTE, canonicalize_agent_path
+
+    raw = (path or "").strip()
+    if not raw:
+        return False
+    try:
+        normalized = canonicalize_agent_path(raw)
+    except ValueError:
+        return False
+    root = AGENT_MEMORY_ROUTE.rstrip("/")
+    prefix = root + "/"
+    if normalized == root:
+        key = "/"
+    elif normalized.startswith(prefix):
+        key = "/" + normalized[len(prefix):]
+    else:
+        return False
+    return _writable(_memory_key(key))
+
+
 class GuardedFilesystemBackend(BackendProtocol):
     """限制可见/可写路径：根文件 + 记忆条目可写，索引与 journal 只读。"""
 
@@ -260,4 +289,4 @@ def UserMemoryBackend(*, agents_path: Path, user_path: Path, user_id: str | None
     )
 
 
-__all__ = ["GuardedFilesystemBackend", "UserMemoryBackend"]
+__all__ = ["GuardedFilesystemBackend", "UserMemoryBackend", "is_memory_writable_path"]

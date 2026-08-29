@@ -228,6 +228,7 @@ const kbSummary = computed(() => {
         raw
         title="附件与工具"
         popup-class="composer-tools-popover"
+        mobile-surface="popover"
       >
         <template #trigger>
           <button

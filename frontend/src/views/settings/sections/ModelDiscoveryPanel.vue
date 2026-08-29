@@ -25,6 +25,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'adopt', models: DiscoveredModelRow[]): void
+  (e: 'close'): void
 }>()
 
 /** 只看免费；关闭则平铺全部。初始随发现结果：含免费模型才默认开 */
@@ -85,12 +86,15 @@ function adoptPicked() {
         </n-tag>
         <span class="muted">已选 {{ picked.size }} 项</span>
       </div>
-      <n-button
-        size="tiny" type="primary" :disabled="!picked.size" :loading="adopting"
-        @click="adoptPicked"
-      >
-        {{ adoptLabel }}
-      </n-button>
+      <div class="toolbar-actions">
+        <n-button size="tiny" quaternary @click="emit('close')">收起</n-button>
+        <n-button
+          size="tiny" type="primary" :disabled="!picked.size" :loading="adopting"
+          @click="adoptPicked"
+        >
+          {{ adoptLabel }}
+        </n-button>
+      </div>
     </div>
     <div v-if="visibleModels.length" class="discovery-list">
       <div
@@ -121,6 +125,7 @@ function adoptPicked() {
 .discovery-panel { margin-top: 4px; padding: 10px 12px; border-radius: 8px; background: var(--noesis-color-fill-subtle, rgba(0,0,0,.03)); }
 .discovery-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .toolbar-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.toolbar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .discovery-list { display: grid; gap: 6px; margin-top: 8px; }
 .discovery-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
 .discovery-row.pick { cursor: pointer; border-radius: 6px; padding: 6px 6px; }

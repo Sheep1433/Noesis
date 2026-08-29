@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AgentRunSnapshot, ChatMessageResponse } from '@/api/chat'
-import { NButton, NInput } from 'naive-ui'
+import { NFloatButton, NInput } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   getSession,
@@ -13,7 +13,10 @@ import {
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
+import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlApprovalCard from '@/components/HitlApprovalCard/index.vue'
+import { getQueuedFollowups, setQueuedFollowups } from '@/components/SubagentConversationView/queuedFollowups'
+import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import {
   formatDurationMs,
   hasValidContextWindow,
@@ -83,6 +86,128 @@ const duration = computed(() => {
   return formatDurationMs(Math.max(0, finished - started))
 })
 
+/** run 进行中（含排队/待审批）：发送进入前端待发队列，终态后逐条自动提交 */
+const runActive = computed(() => !!run.value && ['queued', 'running', 'hitl_pending'].includes(run.value.status))
+const sendDisabled = computed(() => !followupInput.value.trim() || followupSending.value)
+
+/**
+ * 单按钮形态（与主 Agent 一致）：运行中且输入为空 → 停止当前 run；
+ * 有内容 → 发送（运行中发送自动进入待发队列）
+ */
+const composerStopMode = computed(() => runActive.value && !followupInput.value.trim())
+
+// ---- 前端待发队列（跨抽屉开关存活，见 queuedFollowups.ts） ----
+
+const queuedMessages = computed(() => getQueuedFollowups(props.sessionId))
+
+function removeQueued(index: number): void {
+  const next = [...queuedMessages.value]
+  next.splice(index, 1)
+  setQueuedFollowups(props.sessionId, next)
+}
+
+/** 编辑：文本回到输入框，从队列移除 */
+function editQueued(index: number): void {
+  followupInput.value = queuedMessages.value[index] ?? ''
+  removeQueued(index)
+}
+
+function reorderQueued(from: number, to: number): void {
+  if (from === to || from < 0 || to < 0 || from >= queuedMessages.value.length || to >= queuedMessages.value.length) {
+    return
+  }
+  const next = [...queuedMessages.value]
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  setQueuedFollowups(props.sessionId, next)
+}
+
+/** 立即提交指定排队消息：空闲即开新 run；运行中由后端衔接为下一轮 */
+async function submitQueuedNow(index: number): Promise<void> {
+  const message = queuedMessages.value[index]
+  if (!message || followupSending.value) {
+    return
+  }
+  followupSending.value = true
+  // 先出队再提交：同一子会话可能有多个视图实例（消息卡抽屉 + 任务目录），
+  // 出队是同步操作，天然防止两个实例重复提交同一条消息
+  removeQueued(index)
+  try {
+    const task = await sendSubagentFollowup(
+      props.sessionId,
+      message,
+      selectedModelId.value || undefined,
+    )
+    activeRunId.value = task.run_id || activeRunId.value
+    emit('changed')
+    await loadConversation()
+  } catch (error) {
+    console.warn('[subagent] queued followup submit failed', error)
+    const next = [...queuedMessages.value]
+    next.splice(Math.min(index, next.length), 0, message)
+    setQueuedFollowups(props.sessionId, next)
+    window.$message?.error('发送失败')
+  } finally {
+    followupSending.value = false
+  }
+}
+
+/** run 终态且有排队消息：提交队首（先出队，失败回插队首） */
+async function flushNextQueued(): Promise<void> {
+  const message = queuedMessages.value[0]
+  if (!message || followupSending.value) {
+    return
+  }
+  followupSending.value = true
+  removeQueued(0)
+  try {
+    const task = await sendSubagentFollowup(
+      props.sessionId,
+      message,
+      selectedModelId.value || undefined,
+    )
+    activeRunId.value = task.run_id || activeRunId.value
+    emit('changed')
+    await loadConversation()
+  } catch (error) {
+    // 任务失败/取消后 API 拒绝追加：消息回插队首，由用户编辑或删除
+    console.warn('[subagent] queued followup flush failed', error)
+    setQueuedFollowups(props.sessionId, [message, ...queuedMessages.value])
+  } finally {
+    followupSending.value = false
+  }
+}
+
+async function sendFollowup() {
+  const message = followupInput.value.trim()
+  if (!message || followupSending.value) {
+    return
+  }
+  if (runActive.value) {
+    // run 进行中：只进前端队列，等待终态后自动提交（保持可编辑/删除/排序）
+    followupInput.value = ''
+    setQueuedFollowups(props.sessionId, [...queuedMessages.value, message])
+    return
+  }
+  followupSending.value = true
+  try {
+    const task = await sendSubagentFollowup(
+      props.sessionId,
+      message,
+      selectedModelId.value || undefined,
+    )
+    activeRunId.value = task.run_id || activeRunId.value
+    followupInput.value = ''
+    emit('changed')
+    await loadConversation()
+  } catch (error) {
+    console.warn('[subagent] followup failed', error)
+    window.$message?.error('发送失败')
+  } finally {
+    followupSending.value = false
+  }
+}
+
 function stopStream() {
   const controller = streamAbort.value
   streamAbort.value = null
@@ -144,7 +269,15 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
     if (run.value) {
       run.value = { ...run.value, pending_hitl: null }
     }
+  } else if (event === 'run.started') {
+    // 排队任务被 executor 调度启动：快照仍是 queued，这里推进到 running
+    if (run.value && run.value.status === 'queued') {
+      run.value = { ...run.value, status: 'running' }
+    }
   } else if (event === 'approval.required') {
+    // 服务端权威投影（被中断工具段已置 approval_pending）先行落进消息，
+    // 再置 pending_hitl——工具行显示静态「等待确认」而非 running 扫光
+    upsertAssistant(payload.content)
     run.value = {
       ...(run.value as AgentRunSnapshot),
       status: 'hitl_pending',
@@ -181,9 +314,11 @@ async function loadContextSnapshot() {
     if (hasValidContextWindow(session?.extra?.context)) {
       contextSnapshot.value = session.extra.context
     }
-    // 恢复该子会话上次的模型选择（ModelSelector 持久化在 extra.model_id）
+    // 恢复该子会话的模型选择（launch 时写入 worker 实际模型，切换时由
+    // ModelSelector 持久化）。无条件覆盖：与 getSession 并发的
+    // getChatModels 会把空值先回填成目录默认模型，条件恢复会输掉竞态。
     const sessionModel = session?.extra?.model_id
-    if (typeof sessionModel === 'string' && sessionModel && !selectedModelId.value) {
+    if (typeof sessionModel === 'string' && sessionModel) {
       selectedModelId.value = sessionModel
     }
   } catch {
@@ -284,30 +419,6 @@ async function loadConversation() {
   }
 }
 
-async function sendFollowup() {
-  const message = followupInput.value.trim()
-  if (!message || followupSending.value) {
-    return
-  }
-  followupSending.value = true
-  try {
-    const task = await sendSubagentFollowup(
-      props.sessionId,
-      message,
-      selectedModelId.value || undefined,
-    )
-    activeRunId.value = task.run_id || activeRunId.value
-    followupInput.value = ''
-    emit('changed')
-    await loadConversation()
-  } catch (error) {
-    console.warn('[subagent] followup failed', error)
-    window.$message?.error('发送失败')
-  } finally {
-    followupSending.value = false
-  }
-}
-
 async function decideHitl(decision: { type: 'approve' | 'reject', grant_scope?: 'once' | 'session' }) {
   if (!run.value?.run_id || !run.value.pending_hitl?.interrupt_id) {
     return
@@ -372,6 +483,17 @@ const needsTicker = computed(() => {
   return !assistantMessage.value?.run_finished_at
 })
 watch(needsTicker, (active) => (active ? startDurationTimer() : stopDurationTimer()), { immediate: true })
+// 终态 + 有排队消息 → 逐条提交（首条成功开新 run，其余继续等它终态）；
+// 仅 run 权威快照确认终态才触发，避免 run 未加载完成时误发
+watch(
+  [runActive, () => queuedMessages.value.length],
+  ([active, count]) => {
+    if (run.value && !active && count > 0) {
+      void flushNextQueued()
+    }
+  },
+  { immediate: true },
+)
 onBeforeUnmount(() => {
   requestSerial += 1
   stopStream()
@@ -386,7 +508,7 @@ onBeforeUnmount(() => {
       <span>·</span>
       <span>{{ stepCount }} 步</span>
       <span v-if="duration">· {{ duration }}</span>
-      <span v-if="run">· {{ run.status }}</span>
+      <span v-if="run">· {{ taskStatusLabel(run.status) }}</span>
     </div>
     <div v-if="loading" class="subagent-conversation__empty">正在加载对话…</div>
     <div v-else class="subagent-conversation__body">
@@ -412,6 +534,14 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <div class="subagent-conversation__composer chat-composer">
+      <!-- 前端待发队列：run 进行中发送的消息在此排队，终态后逐条自动提交 -->
+      <FollowupQueue
+        :messages="queuedMessages"
+        @remove="removeQueued"
+        @edit="editQueued"
+        @send-now="submitQueuedNow"
+        @reorder="reorderQueued"
+      />
       <n-input
         v-model:value="followupInput"
         type="textarea"
@@ -421,34 +551,48 @@ onBeforeUnmount(() => {
           'font-size': '16px',
           'line-height': '1.5',
         }"
-        placeholder="继续向这个子 Agent 提问…"
+        :placeholder="runActive ? '继续输入以排队后续消息…' : '继续向这个子 Agent 提问…'"
         :autosize="{ minRows: 1, maxRows: 5 }"
         @keydown.enter.exact.prevent="sendFollowup"
       />
       <div class="subagent-conversation__composer-actions">
-        <ModelSelector
-          v-model="selectedModelId"
-          :session-id="sessionId"
-          class="subagent-conversation__model"
-          persist-session-extra
-        />
-        <ContextWindowIndicator
-          v-if="hasValidContextWindow(contextSnapshot)"
-          :context="contextSnapshot as any"
-          class="subagent-conversation__ring"
-        />
-        <n-button
-          v-if="run && ['running', 'hitl_pending'].includes(run.status)"
-          quaternary
-          type="error"
-          size="small"
-          @click="stopCurrentRun"
-        >
-          停止
-        </n-button>
-        <n-button type="primary" size="small" :loading="followupSending" @click="sendFollowup">
-          发送
-        </n-button>
+        <div class="subagent-conversation__composer-left">
+          <ModelSelector
+            v-model="selectedModelId"
+            :session-id="sessionId"
+            persist-session-extra
+          />
+        </div>
+        <div class="subagent-conversation__composer-right">
+          <ContextWindowIndicator
+            v-if="hasValidContextWindow(contextSnapshot)"
+            :context="contextSnapshot as any"
+          />
+          <!-- 单按钮（与主 Agent 一致）：运行中且输入为空 = 停止；有内容 = 发送（运行中入队） -->
+          <div class="subagent-conversation__send-btn-wrap">
+            <n-float-button
+              position="relative"
+              :width="36"
+              :height="36"
+              :disabled="!composerStopMode && sendDisabled"
+              :type="composerStopMode ? 'primary' : 'default'"
+              :data-testid="composerStopMode ? 'subagent-stop-button' : 'subagent-send-button'"
+              class="subagent-conversation__send-btn"
+              :class="{ 'subagent-conversation__send-btn--stop': composerStopMode }"
+              @click.stop="composerStopMode ? stopCurrentRun() : sendFollowup()"
+            >
+              <span
+                v-if="composerStopMode"
+                class="subagent-conversation__stop-icon"
+                aria-label="停止生成"
+              ></span>
+              <div
+                v-else
+                class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer"
+              ></div>
+            </n-float-button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -535,18 +679,47 @@ onBeforeUnmount(() => {
 
 .subagent-conversation__composer-actions {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-/* 模型选择器靠左、圆环与操作按钮靠右（与主 Agent composer 布局一致） */
-.subagent-conversation__model {
-  margin-right: auto;
+/* 左右分区（与主 Agent ChatComposerToolbar 同构）：模型选择器靠左，
+   上下文圆环与发送/停止按钮靠右 */
+.subagent-conversation__composer-left,
+.subagent-conversation__composer-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
-.subagent-conversation__ring {
+.subagent-conversation__composer-right {
   flex-shrink: 0;
+}
+
+.subagent-conversation__send-btn-wrap {
+  z-index: 1;
+  display: flex;
+  align-items: center;
+}
+
+.subagent-conversation__send-btn-wrap :deep(.n-float-button) {
+  position: relative !important;
+  inset: auto !important;
+}
+
+/* 停止态与主 Agent 同款：主色圆钮 + 白色方块 + 光环 */
+.subagent-conversation__send-btn--stop {
+  box-shadow: 0 0 0 2px var(--noesis-color-primary-ring);
+}
+
+.subagent-conversation__stop-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  background-color: var(--noesis-color-bg-elevated);
+  border-radius: 2px;
 }
 
 @media (max-width: $bp-md) {

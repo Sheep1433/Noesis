@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import Iterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,6 +21,7 @@ from noesis.config.env import SessionConfig
 from noesis.schemas.login_vo import CurrentUser
 from noesis.services.auth.sessions import SessionService
 from noesis.services.user_service import UserService
+from server.api import chat_api
 from server.db import get_db
 from server.main import app
 
@@ -86,6 +87,9 @@ def contract_client() -> Iterator[TestClient]:
             patch.object(UserService, "get_user_by_id", AsyncMock(return_value=build_contract_user())),
             # CSRF 中间件直接引用 pg_manager（非 Depends），必须单独 mock
             patch("server.middleware.csrf.pg_manager") as csrf_pg,
+            # SSE 端点用 sse_prefetch_db 短命会话（非 Depends），同样单独 mock；
+            # 传函数而非实例：每次调用生成全新 context manager，可重入
+            patch.object(chat_api, "sse_prefetch_db", _null_db_ctx),
         ):
             csrf_pg.get_async_session_context.return_value = _null_db_ctx()
             client = TestClient(app)

@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import type { ContextWindowSnapshot } from '@/views/chat/messageParts'
 import { computed, ref } from 'vue'
+import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { formatTokenCount } from '@/views/chat/messageParts'
 
 const props = defineProps<{
   context: ContextWindowSnapshot
 }>()
 
+// top-end 右缘对齐触发器向左展开：移动端触发器贴右缘时面板左端会溢出屏幕，
+// 换 top 居中对齐，配合 min(360px, 100vw - 32px) 宽度可完整落在视口内
+const { isMobile } = useBreakpoint()
+const placement = computed(() => (isMobile.value ? 'top' : 'top-end'))
 const panelOpen = ref(false)
 const percentage = computed(() => Math.min(100, Math.max(0, Math.round(props.context.used_percentage))))
 
@@ -29,7 +34,7 @@ const dashOffset = computed(() => {
 <template>
   <n-popover
     v-model:show="panelOpen"
-    placement="top-end"
+    :placement="placement"
     trigger="click"
     :show-arrow="false"
     raw
@@ -81,6 +86,7 @@ const dashOffset = computed(() => {
     <div
       data-testid="context-usage-panel"
       class="context-usage-panel"
+      :class="{ 'context-usage-panel--mobile': isMobile }"
       role="dialog"
       aria-label="Context Usage"
     >
@@ -127,6 +133,12 @@ const dashOffset = computed(() => {
   background: var(--noesis-color-bg-elevated);
   box-shadow: var(--noesis-shadow-float);
   color: var(--noesis-color-text-body);
+}
+
+/* 移动端触发器距右缘仅 ~126px：follower 居中放不下会退回 start/end 对齐导致
+   左缘溢出屏幕，收窄到 280px 让 top 居中对齐成立（阈值 ≈ 触发器右缘距离×2 + 52） */
+.context-usage-panel--mobile {
+  width: min(280px, calc(100vw - 32px));
 }
 
 .context-usage-panel__header,

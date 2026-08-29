@@ -373,6 +373,10 @@ class SubagentsYamlSection(BaseModel):
     foreground_max_wait_seconds: float = Field(default=120, gt=0)
     # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
     auto_continue: bool = Field(default=True)
+    # 续跑去抖窗口：终态到达后等待该秒数再唤醒（窗口内多个终态合并为
+    # 一次 continuation run，显著降低重复发送全量上下文的 token 成本）；
+    # 0 = 立即唤醒（旧行为）
+    auto_continue_debounce_seconds: float = Field(default=60, ge=0)
     # 后台命令任务（execute run_in_background）超时：0=不限时
     shell_task_timeout_seconds: float = Field(default=0, ge=0)
 

@@ -91,3 +91,22 @@ async def test_stale_checkpoint_does_not_touch_assistant() -> None:
 
     assert stored is False
     assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_claimable_queued_excludes_subagent_origin() -> None:
+    """dispatcher 只 claim web run：subagent run 归进程内 executor 调度，
+    且不带 launch_payload——被 claim 后必然 RUN_START_FAILED，排队任务整段
+    对话丢失。"""
+    db = MagicMock()
+    db.execute = AsyncMock(
+        return_value=SimpleNamespace(rowcount=0, scalars=lambda: MagicMock(all=lambda: []))
+    )
+    repository = AgentRunRepository(db)
+
+    await repository.list_claimable_queued()
+
+    statement = db.execute.await_args.args[0]
+    compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
+    assert "t_agent_run.status = 'queued'" in compiled
+    assert "t_agent_run.origin != 'subagent'" in compiled

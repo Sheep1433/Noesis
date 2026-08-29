@@ -12,6 +12,7 @@ from noesis.agents.mcp.loader import load_mcp_tools_by_names
 from noesis.config.code_enum import IntentEnum
 from noesis.config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
 from noesis.chat.delivery.events import RunEvent
+from noesis.chat.hitl import normalize_hitl_decisions
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper
@@ -496,12 +497,8 @@ class QaService:
             # 仅网络类 execute 可 grant；memory 写入不在此路径授予
             session_grants.grant(session_id, "network_execute")
 
-        decision_payloads = []
-        for d in decisions:
-            item: Dict[str, Any] = {"type": d.get("type")}
-            if d.get("message") is not None:
-                item["message"] = d["message"]
-            decision_payloads.append(item)
+        # 与子 Agent resume 路径同一归一化：reject 缺 message 补统一默认文案
+        decision_payloads = normalize_hitl_decisions(decisions)
 
         aid = pending.assistant_message_id
         actions = list(pending.action_requests or [])

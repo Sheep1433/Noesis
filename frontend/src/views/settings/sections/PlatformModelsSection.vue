@@ -504,9 +504,25 @@ async function makeDefault(modelId: string | null) {
   }
 }
 
-/** tokens 千分位 + 等宽数字（列表列对齐用） */
+/** tokens 千分位（tooltip 精确值用） */
 function formatTokens(n: number): string {
   return n.toLocaleString('en-US')
+}
+
+/** 上下文窗口缩写（列表展示用）：1,048,576 → 1M，256,000 → 256K */
+function formatContextCompact(n: number): string {
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  }
+  if (n >= 1_000) {
+    return `${Math.round(n / 1_000)}K`
+  }
+  return String(n)
+}
+
+/** 自定义模型是否为当前默认（radio 选中态） */
+function isDefaultModel(provider: UserLLMProvider, model: UserLLMModel): boolean {
+  return compositeModelId(provider, model) === catalog.value?.default_id
 }
 
 function removeProvider(provider: UserLLMProvider) {
@@ -539,25 +555,21 @@ onMounted(() => {
       <!-- Provider 分组列表：平台 Provider + 自定义 Provider，模型挂在各组下 -->
       <div class="provider-list">
         <!-- 平台 Provider：内置默认模型 + 用户采纳的模型合并为一组（同名用户 Provider 不再单列） -->
-        <div v-if="platformProvider" class="provider-group">
+        <div v-if="platformProvider" class="provider-group" :class="{ expanded: expandedGroups.has('platform') }">
           <div class="provider-row toggle" @click="toggleGroup('platform')">
             <div class="provider-id">
               <span class="status-dot ok"></span>
               <strong>{{ platformProvider.label }}</strong>
-              <n-tag size="small" :bordered="false">平台</n-tag>
-              <span class="muted">（{{ mergedPlatformRows.length }} 个模型）</span>
-            </div>
-            <div class="muted provider-meta" :title="platformProvider.base_url">
-              {{ platformProvider.base_url }}
+              <span class="muted inline">平台 · {{ mergedPlatformRows.length }} 个模型</span>
             </div>
             <div class="row-actions">
               <span class="chevron" :class="{ open: expandedGroups.has('platform') }">▾</span>
             </div>
           </div>
-          <template v-if="expandedGroups.has('platform')">
-            <!-- 展开区工具栏：编辑与发现动作（与自定义组的动作层级一致） -->
+          <div v-if="expandedGroups.has('platform')" class="group-body">
+            <!-- 展开区工具栏：URL 一次性展示 + 编辑与发现动作（与自定义组的动作层级一致） -->
             <div class="group-toolbar">
-              <span class="muted">免费模型会轮换，可随时获取最新列表</span>
+              <span class="muted inline url" :title="platformProvider.base_url">{{ platformProvider.base_url }}</span>
               <div class="toolbar-actions">
                 <n-button
                   v-if="platformProviderRow" size="tiny" quaternary
@@ -565,27 +577,34 @@ onMounted(() => {
                 >
                   编辑
                 </n-button>
-                <n-button size="tiny" :loading="discoveringPlatform" @click="discoverPlatform">
+                <n-button
+                  size="tiny" :loading="discoveringPlatform"
+                  title="免费模型会轮换，可随时获取最新列表"
+                  @click="discoverPlatform"
+                >
                   获取可用模型
                 </n-button>
               </div>
             </div>
-            <div v-for="row in mergedPlatformRows" :key="row.key" class="grouped-model-row">
+            <div
+              v-for="row in mergedPlatformRows" :key="row.key"
+              class="grouped-model-row" :class="{ 'is-default': row.isDefault }"
+              role="radio" :aria-checked="row.isDefault"
+              :title="row.isDefault ? '当前默认模型' : '设为默认对话模型'"
+              @click="!row.isDefault && makeDefault(row.catalog_id)"
+            >
+              <span class="radio" :class="{ on: row.isDefault }"></span>
               <div class="grouped-model">
                 <strong>{{ row.label }}</strong>
-                <span class="muted">{{ row.model_id }}</span>
+                <span v-if="row.model_id !== row.label" class="muted inline" :title="row.model_id">{{ row.model_id }}</span>
               </div>
               <div class="tags">
                 <n-tag v-if="row.offline" size="small" type="warning" :bordered="false">已下线</n-tag>
-                <n-tag v-if="row.supportsVision" size="small">视觉</n-tag>
-                <n-tag v-if="row.contextWindow" size="small" :bordered="false"><span class="token-num">{{ formatTokens(row.contextWindow) }} tokens</span></n-tag>
-                <n-tag v-if="row.isDefault" size="small" type="success">默认</n-tag>
-                <n-button
-                  v-else size="tiny" quaternary
-                  @click.stop="makeDefault(row.catalog_id)"
-                >
-                  设为默认
-                </n-button>
+                <span v-if="row.supportsVision" class="muted inline">视觉</span>
+                <span
+                  v-if="row.contextWindow" class="ctx"
+                  :title="`${formatTokens(row.contextWindow)} tokens`"
+                >{{ formatContextCompact(row.contextWindow) }}</span>
               </div>
             </div>
             <ModelDiscoveryPanel
@@ -594,37 +613,34 @@ onMounted(() => {
               :existing-ids="platformExistingIds"
               :adopting="adoptingPlatform"
               @adopt="adoptPickedPlatformModels"
+              @close="platformDiscovery = null"
             />
-          </template>
+          </div>
         </div>
         <SettingsEmptyState v-else title="暂无可用模型" description="可在下方添加自己的模型服务。" />
 
         <!-- 自定义 Provider：行头只做标识与折叠（与平台组同构）；动作在展开区工具栏 -->
-        <div v-for="provider in customProviders" :key="provider.provider_id" class="provider-group">
+        <div
+          v-for="provider in customProviders" :key="provider.provider_id"
+          class="provider-group" :class="{ expanded: expandedGroups.has(provider.provider_id) }"
+        >
           <div class="provider-row toggle" @click="toggleGroup(provider.provider_id)">
             <div class="provider-id">
               <span class="status-dot" :class="provider.has_key ? 'ok' : 'missing'"></span>
               <strong>{{ provider.name }}</strong>
-              <n-tag size="small" :bordered="false">自定义</n-tag>
               <n-tag v-if="!provider.enabled" size="small" type="warning" :bordered="false">已停用</n-tag>
-              <span class="muted">（{{ models.filter(m => m.provider_id === provider.provider_id).length }} 个模型）</span>
-            </div>
-            <div class="muted provider-meta" :title="provider.base_url">
-              {{ provider.base_url }}
+              <span class="muted inline">{{ models.filter(m => m.provider_id === provider.provider_id).length }} 个模型</span>
             </div>
             <div class="row-actions">
               <span class="chevron" :class="{ open: expandedGroups.has(provider.provider_id) }">▾</span>
             </div>
           </div>
-          <template v-if="expandedGroups.has(provider.provider_id)">
-            <!-- 展开区工具栏：启用开关 + 编辑/删除（动作层级与平台组一致） -->
+          <div v-if="expandedGroups.has(provider.provider_id)" class="group-body">
+            <!-- 展开区工具栏：URL 一次性展示 + 启用/编辑/删除（动作层级与平台组一致） -->
             <div class="group-toolbar">
-              <span class="muted">{{ provider.slug || provider.provider_id.slice(0, 8) }} · {{ provider.base_url }}</span>
+              <span class="muted inline url" :title="provider.base_url">{{ provider.base_url }}</span>
               <div class="toolbar-actions">
-                <label class="enable-toggle">
-                  <n-switch size="small" :value="provider.enabled" @update:value="value => toggleProvider(provider, value)" />
-                  启用
-                </label>
+                <n-switch size="small" :value="provider.enabled" @update:value="value => toggleProvider(provider, value)" />
                 <n-button size="tiny" quaternary @click="editProvider(provider)">
                   编辑
                 </n-button>
@@ -633,23 +649,27 @@ onMounted(() => {
                 </n-button>
               </div>
             </div>
-            <div v-for="model in models.filter(m => m.provider_id === provider.provider_id)" :key="model.entry_id" class="grouped-model-row">
+            <div
+              v-for="model in models.filter(m => m.provider_id === provider.provider_id)"
+              :key="model.entry_id"
+              class="grouped-model-row" :class="{ 'is-default': isDefaultModel(provider, model) }"
+              role="radio" :aria-checked="isDefaultModel(provider, model)"
+              :title="isDefaultModel(provider, model) ? '当前默认模型' : '设为默认对话模型'"
+              @click="!isDefaultModel(provider, model) && makeDefault(compositeModelId(provider, model))"
+            >
+              <span class="radio" :class="{ on: isDefaultModel(provider, model) }"></span>
               <div class="grouped-model">
                 <strong>{{ model.label }}</strong>
-                <span class="muted">{{ model.model_id }}</span>
+                <span v-if="model.model_id !== model.label" class="muted inline" :title="model.model_id">{{ model.model_id }}</span>
               </div>
               <div class="tags">
-                <n-tag v-if="model.context_window" size="small" :bordered="false"><span class="token-num">{{ formatTokens(model.context_window) }} tokens</span></n-tag>
-                <n-tag v-if="compositeModelId(provider, model) === catalog?.default_id" size="small" type="success">默认</n-tag>
-                <n-button
-                  v-else size="tiny" quaternary
-                  @click.stop="makeDefault(compositeModelId(provider, model))"
-                >
-                  设为默认
-                </n-button>
+                <span
+                  v-if="model.context_window" class="ctx"
+                  :title="`${formatTokens(model.context_window)} tokens`"
+                >{{ formatContextCompact(model.context_window) }}</span>
               </div>
             </div>
-          </template>
+          </div>
         </div>
       </div>
 
@@ -745,6 +765,7 @@ onMounted(() => {
               :existing-ids="draftExistingIds"
               adopt-label="添加到目录"
               @adopt="rows => rows.forEach(addDiscoveredModel)"
+              @close="draftDiscovery = null"
             />
           </div>
         </div>
@@ -765,7 +786,9 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .muted { margin-top: 4px; color: var(--noesis-color-text-secondary); font-size: 12px; }
-.tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* 行内 muted：随文字基线排布，不额外下移 */
+.muted.inline { margin-top: 0; }
+.tags { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .sub-title { margin: 28px 0 12px; font-size: 14px; }
 
 /* ── Provider 分组列表 ── */
@@ -773,21 +796,46 @@ onMounted(() => {
 .provider-group { display: grid; gap: 0; }
 .provider-group .provider-row { border-bottom: none; }
 .provider-group:not(:last-of-type) { margin-bottom: 10px; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); padding-bottom: 4px; }
-.grouped-model-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 7px 0 7px 16px; border-top: 1px dashed var(--noesis-color-border-subtle, rgba(0,0,0,.06)); }
-.group-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0 2px 16px; }
-.group-toolbar .muted { margin-top: 0; min-width: 0; word-break: break-all; }
+
+/* 展开区：浅底圆角块把「已展开的内容」框出来，折叠状态一眼可辨 */
+.group-body {
+  margin: 4px 0 8px;
+  padding: 6px 12px 6px;
+  border: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.06));
+  border-radius: 8px;
+  background: rgba(0, 0, 0, .02);
+}
+
+/* 模型行：整行 radio 语义——点选即设为默认，当前默认实心 */
+.grouped-model-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 0;
+  border-top: 1px dashed var(--noesis-color-border-subtle, rgba(0,0,0,.06));
+  cursor: pointer;
+}
+.radio {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  border: 1.5px solid var(--noesis-color-border, #d4d0c8);
+  transition: border-color .15s;
+}
+.grouped-model-row:hover .radio { border-color: var(--noesis-color-success, #34c759); }
+.radio.on {
+  border-color: var(--noesis-color-success, #34c759);
+  background: var(--noesis-color-success, #34c759);
+  box-shadow: inset 0 0 0 3px var(--noesis-color-bg-elevated, #fff);
+}
+.grouped-model-row.is-default strong { color: var(--noesis-color-success, #34c759); }
+.ctx { font-size: 12px; color: var(--noesis-color-text-muted); font-variant-numeric: tabular-nums; }
+
+.group-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; }
+.group-toolbar .url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
-.enable-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--noesis-color-text-secondary); }
-/* tokens 固定宽度右对齐：各行数值列竖向对齐（256,000 与 1,048,576 同一终止线） */
-.token-num { display: inline-block; min-width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
-.grouped-model { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.grouped-model { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; flex: 1; }
 .provider-row.toggle { cursor: pointer; user-select: none; }
 .chevron { color: var(--noesis-color-text-muted); font-size: 11px; transition: transform 0.15s; display: inline-block; margin-left: 2px; }
 .chevron.open { transform: rotate(180deg); }
 .provider-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--noesis-color-border-subtle, rgba(0,0,0,.08)); }
-.provider-row .muted { margin-top: 0; }
-.provider-id { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.provider-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-id { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.ok { background: var(--noesis-color-success, #34c759); }
 .status-dot.missing { background: var(--noesis-color-border, #d4d0c8); }
@@ -862,11 +910,8 @@ onMounted(() => {
   .group-toolbar { flex-wrap: wrap; }
 
   /* 分组模型行：名称 + 标签 + 操作窄屏换行后，操作组靠右（与桌面一致） */
-  .grouped-model-row { flex-wrap: wrap; padding-left: 8px; }
+  .grouped-model-row { flex-wrap: wrap; }
   .tags { justify-content: flex-end; margin-left: auto; }
-  /* Provider 行换行后：元信息占满一行，操作组独立一行右对齐 */
-  .provider-meta { flex-basis: 100%; order: 3; white-space: normal; }
-  .row-actions { margin-left: auto; }
   /* 分组头卡在窄屏的计数徽标换行 */
   .provider-id { flex-wrap: wrap; }
 }

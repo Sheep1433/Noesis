@@ -9,18 +9,24 @@ const props = withDefaults(defineProps<{
   raw?: boolean
   popupClass?: string
   height?: string | number
+  /** 移动端展示形态：drawer（默认，适合大面板）| popover（轻量菜单，与桌面一致） */
+  mobileSurface?: 'drawer' | 'popover'
 }>(), {
   disabled: false,
   placement: 'top-start',
   raw: false,
   popupClass: undefined,
   height: 'min(78vh, 620px)',
+  mobileSurface: 'drawer',
 })
 
 const show = defineModel<boolean>('show', { default: false })
 const { isMobile } = useBreakpoint()
 
-// 移动端没有 popover 的 trigger="click"，需自行切换 drawer
+/** 移动端 popover 模式：点击触发与桌面同一条 popover 路径（n-popover click 在触屏同样生效） */
+const usePopover = computed(() => !isMobile.value || props.mobileSurface === 'popover')
+
+// drawer 模式下移动端没有 popover 的 trigger="click"，需自行切换 drawer
 function onTriggerClick() {
   if (props.disabled) {
     return
@@ -31,7 +37,7 @@ function onTriggerClick() {
 
 <template>
   <n-popover
-    v-if="!isMobile"
+    v-if="usePopover"
     v-model:show="show"
     trigger="click"
     :placement="placement"

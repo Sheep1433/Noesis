@@ -777,6 +777,9 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
 /* running 扫光（可选装饰） */
 .tool-compact[data-state='running'] :deep(.n-collapse-item__header) {
   position: relative;
+  /* 扫光是行内装饰：越出行右缘的绝对定位盒会参与滚动容器溢出，
+     制造随动画涨缩的幽灵水平滚动条，必须在行内裁切 */
+  overflow: clip;
 }
 .tool-compact[data-state='running'] :deep(.n-collapse-item__header)::after {
   content: '';

@@ -5,6 +5,7 @@ import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 const props = defineProps<{
@@ -33,12 +34,12 @@ const pending = computed(() => props.tasks.filter((t) => {
   return t.status === 'awaiting_approval'
 }))
 const running = computed(() => props.tasks.filter((t) => {
-  return t.status === 'running'
+  return t.status === 'queued' || t.status === 'running'
 }))
 const finished = computed(() =>
   props.tasks
     .filter((t) => {
-      return t.status !== 'running' && t.status !== 'awaiting_approval'
+      return t.status !== 'queued' && t.status !== 'running' && t.status !== 'awaiting_approval'
     })
     .reverse(),
 )
@@ -109,18 +110,6 @@ function taskElapsed(task: TaskCatalogEntry): string {
     return ''
   }
   return formatDurationMs(Math.max(0, finished - started))
-}
-
-const statusLabel: Record<TaskCatalogEntry['status'], string> = {
-  running: '进行中',
-  awaiting_approval: '待审批',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-  timed_out: '超时',
-  partial: '已停止',
-  error: '失败',
-  interrupted: '已中断',
 }
 
 function statusClass(status: TaskCatalogEntry['status']): string {
@@ -257,7 +246,7 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
                   <span v-if="task.kind === 'shell'">后台命令</span>
                   <span v-else>子 Agent</span>
                   <span>·</span>
-                  <span>{{ statusLabel[task.status] ?? task.status }}</span>
+                  <span>{{ taskStatusLabel(task.status) }}</span>
                   <template v-if="taskElapsed(task)">
                     <span>·</span>
                     <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
@@ -421,6 +410,10 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
   margin-top: 5px;
   border: 2px solid var(--noesis-color-text-hint);
   border-radius: 50%;
+}
+
+.bg-task-status-dot--queued {
+  border-color: var(--noesis-color-text-hint);
 }
 
 .bg-task-status-dot--running {

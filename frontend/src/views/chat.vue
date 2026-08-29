@@ -1,4 +1,4 @@
-<script lang="tsx" setup>
+<script lang="ts" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { TaskCatalogEntry } from '@/api/chat'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
@@ -18,6 +18,7 @@ import MentionPicker from '@/components/Chat/MentionPicker.vue'
 import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
+import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
@@ -30,6 +31,7 @@ import { buildFileDict } from '@/config/chat'
 import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { chatHistorySiderCollapsed } from '@/hooks/useChatHistorySider'
 import {
   candidateToMention,
   ensureMentionCatalog,
@@ -49,6 +51,7 @@ import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteT
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { isReasoningLevel } from '@/utils/reasoningLevels'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
+import { taskNoticeMeta } from '@/utils/taskNotice'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
@@ -820,6 +823,171 @@ watchEffect(() => {
   conversationItemsSnapshot.value = items.slice()
 })
 
+/* ── 用户消息导航轨（桌面端左缘竖排刻度）：点击跳转，滚动 spy 高亮当前 ── */
+
+const userMessageTicks = computed(() => {
+  const items = conversationItemsSnapshot.value as Array<{
+    role?: string
+    question?: string
+    created_at?: number
+  }>
+  const ticks: Array<{ index: number, title: string, meta: string }> = []
+  let turn = 0
+  items.forEach((item, index) => {
+    if (item.role !== 'user') {
+      return
+    }
+    turn += 1
+    // 标题取整条消息的扁平文本（换行压平）：双行截断下更完整地传达用户意图
+    const text = (item.question || '').trim().replace(/\s+/g, ' ')
+    ticks.push({
+      index,
+      title: text.slice(0, 64) || '（空消息）',
+      meta: `第 ${turn} 轮 · ${formatHHmm(item.created_at)}`,
+    })
+  })
+  return ticks
+})
+
+const activeUserTickIndex = ref(-1)
+
+/* 刻度列布局：等间距 + 垂直居中（条数多到放不下时自动收紧间距，仍不够则滚动） */
+/** 滚动视口（overflow 裁切层），间距按其可视高度计算；与 CSS 中 item 的 height 保持一致 */
+const userMessageRailViewportRef = ref<HTMLElement | null>(null)
+/** 外层轨道（不裁切），浮动预览卡片以它定位 */
+const userMessageRailRef = ref<HTMLElement | null>(null)
+const tickGap = ref(4)
+const RAIL_TICK_HEIGHT = 8
+const RAIL_GAP_MAX = 4
+const RAIL_GAP_MIN = 2
+let railResizeObserver: ResizeObserver | null = null
+
+function layoutUserMessageRail() {
+  const viewport = userMessageRailViewportRef.value
+  const count = userMessageTicks.value.length
+  if (!viewport || count < 2) {
+    tickGap.value = RAIL_GAP_MAX
+    return
+  }
+  const even = (viewport.clientHeight - count * RAIL_TICK_HEIGHT) / (count - 1)
+  tickGap.value = Math.max(RAIL_GAP_MIN, Math.min(RAIL_GAP_MAX, Math.floor(even)))
+}
+
+/** 视口条件渲染后才存在，须用回调 ref 接挂载/卸载 */
+function bindUserMessageRailViewport(el: HTMLElement | null) {
+  railResizeObserver?.disconnect()
+  railResizeObserver = null
+  userMessageRailViewportRef.value = el
+  if (el) {
+    railResizeObserver = new ResizeObserver(layoutUserMessageRail)
+    railResizeObserver.observe(el)
+    layoutUserMessageRail()
+  }
+}
+
+/** 邻近感应：鼠标沿刻度列上下滑动时，离指针越近的刻度越长越深（--near ∈ [0,1]） */
+const RAIL_PROXIMITY_RADIUS = 56
+
+function onRailPointerMove(e: MouseEvent) {
+  const rail = userMessageRailRef.value
+  if (!rail) {
+    return
+  }
+  const items = rail.querySelectorAll<HTMLElement>('.user-message-rail__item')
+  for (const item of items) {
+    const rect = item.getBoundingClientRect()
+    const distance = Math.abs(rect.top + rect.height / 2 - e.clientY)
+    item.style.setProperty('--near', Math.max(0, 1 - distance / RAIL_PROXIMITY_RADIUS).toFixed(3))
+  }
+}
+
+function resetRailProximity() {
+  userMessageRailRef.value
+    ?.querySelectorAll<HTMLElement>('.user-message-rail__item')
+    .forEach((item) => {
+      item.style.setProperty('--near', '0')
+    })
+}
+
+/* 浮动预览卡片：渲染在滚动视口外避免被裁切；仅悬停刻度时出现，离开刻度列即消失 */
+interface RailCardState {
+  tick: { index: number, title: string, meta: string }
+  /** 卡片中线相对外层轨道顶缘的位置（px） */
+  top: number
+}
+
+const railCard = ref<RailCardState | null>(null)
+const railHoverTickIndex = ref<number | null>(null)
+
+function positionRailCard(index: number) {
+  const rail = userMessageRailRef.value
+  const tick = userMessageTicks.value.find((t) => t.index === index)
+  const item = rail?.querySelector(`[data-tick-index="${index}"]`)
+  if (!rail || !tick || !item) {
+    railCard.value = null
+    return
+  }
+  const itemRect = item.getBoundingClientRect()
+  const railRect = rail.getBoundingClientRect()
+  const center = itemRect.top - railRect.top + itemRect.height / 2
+  railCard.value = {
+    tick,
+    top: Math.min(Math.max(center, 16), Math.max(railRect.height - 16, 16)),
+  }
+}
+
+function onRailTickHover(index: number) {
+  railHoverTickIndex.value = index
+  positionRailCard(index)
+}
+
+function onRailLeave() {
+  resetRailProximity()
+  railHoverTickIndex.value = null
+  railCard.value = null
+}
+
+function scrollToUserMessage(index: number) {
+  const container = messagesContainer.value
+  const target = container?.querySelector<HTMLElement>(`[data-user-message-index="${index}"]`)
+  if (!container || !target) {
+    return
+  }
+  const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 24
+  container.scrollTo({ top, behavior: 'smooth' })
+  activeUserTickIndex.value = index
+}
+
+/** 滚动 spy：视口顶缘之上最后一条用户消息即为当前刻度 */
+function updateActiveUserTick() {
+  const container = messagesContainer.value
+  const ticks = userMessageTicks.value
+  if (!container || !ticks.length) {
+    return
+  }
+  const threshold = container.getBoundingClientRect().top + 80
+  let active = ticks[0].index
+  for (const tick of ticks) {
+    const el = container.querySelector<HTMLElement>(`[data-user-message-index="${tick.index}"]`)
+    if (el && el.getBoundingClientRect().top <= threshold) {
+      active = tick.index
+    }
+  }
+  activeUserTickIndex.value = active
+}
+
+// 消息列表变化（含首次加载）后重算当前刻度与刻度间距
+watch(userMessageTicks, () => {
+  nextTick(() => {
+    updateActiveUserTick()
+    layoutUserMessageRail()
+  })
+})
+
+onBeforeUnmount(() => {
+  railResizeObserver?.disconnect()
+})
+
 // 这里控制内容加载状态
 const contentLoadingStates = ref(
   conversationItemsSnapshot.value.map(() => false),
@@ -957,7 +1125,7 @@ watch(taskPanelOpen, (open) => {
   }
 })
 const activeTaskCount = computed(() =>
-  catalogTasks.value.filter((t) => t.status === 'running' || t.status === 'awaiting_approval').length,
+  catalogTasks.value.filter((t) => t.status === 'queued' || t.status === 'running' || t.status === 'awaiting_approval').length,
 )
 const pendingTaskCount = computed(() =>
   catalogTasks.value.filter((t) => t.status === 'awaiting_approval').length,
@@ -988,6 +1156,8 @@ function openCatalogStream(sessionId: string): void {
   if (!sessionId || sessionId !== currentIndex.value) {
     return
   }
+  // 会话切换即清旧目录：连接快照与全量刷新随后对齐，避免残留上一会话的任务
+  catalogTasks.value = []
   const source = createChildCatalogEventSource(sessionId, {
     onTask: applyCatalogTask,
     onContinuation: (payload) => {
@@ -1034,55 +1204,6 @@ function insertContinuationNotice(sessionId: string, notice: string, runId: stri
 function openBackgroundNotice(childSessionIds: string[] = []): void {
   bgFocusTaskId.value = childSessionIds[0] || null
   taskPanelOpen.value = true
-}
-
-function taskNoticeMeta(notice: string): { title: string, detail: string, tone: 'success' | 'warning' | 'error' | 'info' } {
-  const labelMatch = notice.match(/子 Agent「([^」]+)」/)
-  const label = labelMatch?.[1]?.trim()
-  const task = label
-    ? catalogTasks.value.find((item) => item.description.trim() === label)
-    : undefined
-  const description = task?.description?.trim() || label
-  const agentLabel = description
-    ? `子 Agent「${description.length > 42 ? `${description.slice(0, 42)}…` : description}」`
-    : '后台子 Agent'
-  const metricText = notice.includes('·')
-    ? notice.split('·').slice(1).join('·').split(/[（：。]/, 1)[0].trim()
-    : ''
-  const withMetrics = (text: string) => metricText ? `${text}（${metricText}）` : text
-  if (/取消|cancelled/i.test(notice)) {
-    return {
-      title: `${agentLabel} 已取消`,
-      detail: withMetrics('任务已停止，可重新发起或调整任务要求。'),
-      tone: 'warning',
-    }
-  }
-  if (/超时|timed_out/i.test(notice)) {
-    return {
-      title: `${agentLabel} 执行超时`,
-      detail: withMetrics('任务超过执行时限，可打开任务详情查看已完成的过程。'),
-      tone: 'error',
-    }
-  }
-  if (/失败|failed/i.test(notice)) {
-    return {
-      title: `${agentLabel} 执行失败`,
-      detail: withMetrics('任务未能正常完成，可打开任务详情查看原因。'),
-      tone: 'error',
-    }
-  }
-  if (/已完成/.test(notice)) {
-    return {
-      title: `${agentLabel} 已完成`,
-      detail: withMetrics('执行结果已收到，可打开任务详情查看完整过程。'),
-      tone: 'success',
-    }
-  }
-  return {
-    title: `${agentLabel} 有新的状态`,
-    detail: withMetrics('可打开任务详情查看最新进度。'),
-    tone: 'info',
-  }
 }
 
 function stopCatalogStream(): void {
@@ -1805,6 +1926,82 @@ const sendDisabled = computed(() => {
   return !inputTextString.value.trim()
 })
 
+/**
+ * 单按钮形态（与子 Agent 一致）：运行中且无可发送内容 → 停止当前 run；
+ * 有内容 → 发送（运行中发送自动进入待发队列）
+ */
+const composerStopMode = computed(() => stylizingLoading.value && sendDisabled.value)
+
+/* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ---- */
+
+const queuedComposerMessages = ref<string[]>([])
+
+// 队列属于当前对话上下文：会话切换即清空，避免跨会话误发
+watch(() => uuids.value[qa_type.value], () => {
+  queuedComposerMessages.value = []
+})
+
+function removeQueuedComposerMessage(index: number): void {
+  queuedComposerMessages.value = queuedComposerMessages.value.filter((_, i) => i !== index)
+}
+
+/** 编辑：文本回到输入框，从队列移除 */
+function editQueuedComposerMessage(index: number): void {
+  inputTextString.value = queuedComposerMessages.value[index] ?? ''
+  removeQueuedComposerMessage(index)
+}
+
+function reorderQueuedComposerMessages(from: number, to: number): void {
+  const next = [...queuedComposerMessages.value]
+  if (from === to || from < 0 || to < 0 || from >= next.length || to >= next.length) {
+    return
+  }
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  queuedComposerMessages.value = next
+}
+
+/** 立即发送：空闲直接发；运行中先停止当前 run，消息提为队首由终态 watcher 自动提交 */
+async function submitQueuedComposerNow(index: number): Promise<void> {
+  const message = queuedComposerMessages.value[index]
+  if (!message) {
+    return
+  }
+  if (stylizingLoading.value) {
+    const next = [...queuedComposerMessages.value]
+    next.splice(index, 1)
+    next.unshift(message)
+    queuedComposerMessages.value = next
+    await stopChatStream()
+    return
+  }
+  removeQueuedComposerMessage(index)
+  inputTextString.value = message
+  await handleCreateStylized()
+}
+
+/** run 终态：自动提交队首（等待期间新输入的文字排到队尾，不丢失） */
+async function flushNextQueuedComposerMessage(): Promise<void> {
+  const message = queuedComposerMessages.value[0]
+  if (!message) {
+    return
+  }
+  const currentInput = inputTextString.value.trim()
+  if (currentInput && currentInput !== message) {
+    queuedComposerMessages.value = [...queuedComposerMessages.value.slice(1), currentInput]
+  } else {
+    removeQueuedComposerMessage(0)
+  }
+  inputTextString.value = message
+  await handleCreateStylized()
+}
+
+watch(stylizingLoading, (loading) => {
+  if (!loading && queuedComposerMessages.value.length) {
+    void flushNextQueuedComposerMessage()
+  }
+})
+
 function clearComposerQueue() {
   pendingUploadFileInfoList.value = []
   businessStore.clear_file_list()
@@ -1952,9 +2149,17 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   // 清空推荐列表
   suggested_array.value = []
 
-  // 若正在加载，则点击后恢复初始状态
+  // 运行中：无可发送内容 → 停止当前 run；有内容 → 进入待发队列，本轮结束后自动提交
   if (stylizingLoading.value) {
-    void stopChatStream()
+    if (composerStopMode.value) {
+      void stopChatStream()
+      return
+    }
+    const queued = inputTextString.value.trim()
+    if (queued) {
+      inputTextString.value = ''
+      queuedComposerMessages.value = [...queuedComposerMessages.value, queued]
+    }
     return
   }
 
@@ -2052,6 +2257,9 @@ async function scrollToLatestMessage(smooth = false) {
 }
 
 const placeholder = computed(() => {
+  if (stylizingLoading.value) {
+    return '继续输入以排队后续消息…'
+  }
   return composerPlaceholder(qa_type.value, uploadingOnSend.value)
 })
 
@@ -2439,6 +2647,11 @@ const rowProps = (row: TableItem) => {
       // 不能在网络请求期间继续显示上一会话的 pending HITL。
       activateChatMode(row.qa_type, row.chat_id, true)
 
+      // 历史会话点入与 URL 恢复是两条独立入口：这里同样要挂后台任务流，
+      // 否则右下角任务目录永远为空（聊天里的子 Agent 卡片走 toolPart 不依赖目录）
+      openCatalogStream(row.chat_id)
+      void refreshCatalogTasks(row.chat_id)
+
       // 标记会话已读
       void markSessionRead(row.chat_id).then(() => {
         const idx = tableData.value.findIndex((s) => s.chat_id === row.chat_id)
@@ -2512,6 +2725,8 @@ const activateChatMode = (
     sessionContext.value = null
     sessionContextSessionId.value = ''
     sessionContextIsLive.value = false
+    // 回到新对话：旧会话的后台任务流与目录一并停掉
+    stopCatalogStream()
     selectedKbCollections.value = []
     kbSearchEnabled.value = true
     selectedModelId.value = ''
@@ -2620,10 +2835,8 @@ const handleClear = () => {
   }
 }
 
-const collapsed = useLocalStorage(
-  'collapsed-chat-menu',
-  ref(false),
-)
+/** 历史侧栏折叠态：与全局导航栏智枢 logo 的悬停开关共享同一实例 */
+const collapsed = chatHistorySiderCollapsed
 
 const { size: historySiderWidth, startResize: startHistorySiderResize } = usePaneResize({
   storageKey: 'noesis.chat.historySiderWidth',
@@ -2702,6 +2915,7 @@ const checkScrollPosition = () => {
 // 新增：监听滚动事件
 const handleScroll = () => {
   checkScrollPosition()
+  updateActiveUserTick()
 }
 
 // 在 onMounted 或 onBeforeMount 中添加事件监听
@@ -2847,7 +3061,6 @@ function onComposerPaste(e: ClipboardEvent) {
         :collapsed-width="0"
         :width="historySiderWidth"
         :show-collapsed-content="false"
-        show-trigger="arrow-circle"
         bordered
       >
         <ChatHistoryPanel
@@ -2910,6 +3123,60 @@ function onComposerPaste(e: ClipboardEvent) {
                     @select="changeChatMode"
                   />
                 </div>
+
+                <!-- 移动端：后台子任务与展示模式切换从输入工具栏上移到顶栏，缓解底部拥挤 -->
+                <div v-if="isMobile" class="chat-top-bar__actions">
+                  <n-tooltip v-if="qa_type === 'SUPER_AGENT_QA'" placement="bottom">
+                    <template #trigger>
+                      <n-badge
+                        :value="activeTaskCount"
+                        :max="9"
+                        :type="pendingTaskCount > 0 ? 'error' : 'info'"
+                        :show="activeTaskCount > 0"
+                      >
+                        <n-button
+                          quaternary
+                          circle
+                          size="small"
+                          :focusable="false"
+                          @click="taskPanelOpen = true"
+                        >
+                          <template #icon>
+                            <n-icon size="16">
+                              <GitNetworkOutline />
+                            </n-icon>
+                          </template>
+                        </n-button>
+                      </n-badge>
+                    </template>
+                    后台子任务
+                  </n-tooltip>
+
+                  <n-tooltip placement="bottom">
+                    <template #trigger>
+                      <n-button
+                        quaternary
+                        circle
+                        size="small"
+                        class="tool-mode-toggle"
+                        :focusable="false"
+                        @click="toggleToolDisplayMode()"
+                      >
+                        <template #icon>
+                          <n-icon size="16">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <line x1="4" y1="6" x2="20" y2="6" />
+                              <line x1="4" y1="12" x2="14" y2="12" />
+                              <line x1="4" y1="18" x2="18" y2="18" />
+                            </svg>
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    {{ toolDisplayMode === 'compact' ? '简洁模式（点击切详细）' : '详细模式（点击切简洁）' }}
+                  </n-tooltip>
+                </div>
+
                 <button
                   v-if="!showDefaultPage && uuids[qa_type]"
                   type="button"
@@ -2973,7 +3240,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         </button>
                       </div>
                     </div>
-                    <div v-else-if="item.role === 'user'" class="chat-user-message-row flex flex-col space-y-2 w-full">
+                    <div v-else-if="item.role === 'user'" :data-user-message-index="index" class="chat-user-message-row flex flex-col space-y-2 w-full">
                       <div class="chat-message-column chat-user-message-column">
                         <!-- 用户消息 -->
                         <div class="chat-user-message">
@@ -3370,6 +3637,15 @@ function onComposerPaste(e: ClipboardEvent) {
                         @chatImageUploaded="onChatImageUploaded"
                       />
 
+                      <!-- 待发队列：运行中发送的消息在此排队，当前 run 终态后逐条自动提交（与子 Agent 抽屉同构） -->
+                      <FollowupQueue
+                        :messages="queuedComposerMessages"
+                        @remove="removeQueuedComposerMessage"
+                        @edit="editQueuedComposerMessage"
+                        @send-now="submitQueuedComposerNow"
+                        @reorder="reorderQueuedComposerMessages"
+                      />
+
                       <MentionPicker
                         ref="mentionPickerRef"
                         :open="mentionPickerOpen"
@@ -3423,7 +3699,7 @@ function onComposerPaste(e: ClipboardEvent) {
                             :context="sessionContext!"
                           />
 
-                          <n-tooltip v-if="qa_type === 'SUPER_AGENT_QA'" placement="top">
+                          <n-tooltip v-if="!isMobile && qa_type === 'SUPER_AGENT_QA'" placement="top">
                             <template #trigger>
                               <n-badge
                                 :value="activeTaskCount"
@@ -3450,7 +3726,7 @@ function onComposerPaste(e: ClipboardEvent) {
                             后台子任务
                           </n-tooltip>
 
-                          <n-tooltip placement="top">
+                          <n-tooltip v-if="!isMobile" placement="top">
                             <template #trigger>
                               <n-button
                                 quaternary
@@ -3476,7 +3752,7 @@ function onComposerPaste(e: ClipboardEvent) {
 
                           <div class="chat-send-btn-wrap shrink-0">
                             <n-tooltip
-                              :disabled="!stylizingLoading"
+                              :disabled="!composerStopMode"
                               placement="top"
                             >
                               <template #trigger>
@@ -3484,18 +3760,18 @@ function onComposerPaste(e: ClipboardEvent) {
                                   position="relative"
                                   :width="36"
                                   :height="36"
-                                  :disabled="!stylizingLoading && sendDisabled"
-                                  :type="stylizingLoading ? 'primary' : 'default'"
-                                  :data-testid="stylizingLoading ? 'stop-button' : 'send-button'"
+                                  :disabled="!composerStopMode && sendDisabled"
+                                  :type="composerStopMode ? 'primary' : 'default'"
+                                  :data-testid="composerStopMode ? 'stop-button' : 'send-button'"
                                   color
                                   :class="[
                                     'chat-send-btn',
-                                    stylizingLoading && 'chat-send-btn--stop',
+                                    composerStopMode && 'chat-send-btn--stop',
                                   ]"
                                   @click.stop="handleCreateStylized()"
                                 >
                                   <span
-                                    v-if="stylizingLoading"
+                                    v-if="composerStopMode"
                                     class="chat-stop-icon"
                                     aria-label="停止生成"
                                   ></span>
@@ -3521,6 +3797,40 @@ function onComposerPaste(e: ClipboardEvent) {
                 aria-live="polite"
               >
                 {{ formatStatsLine(sessionStats, statsLineTemplate) }}
+              </div>
+            </div>
+
+            <!-- 桌面端左缘用户消息导航轨：等间距居中刻度，点击跳转；浮动预览卡片跟随悬停/当前项 -->
+            <div
+              v-if="!isMobile && !showDefaultPage && userMessageTicks.length >= 2"
+              ref="userMessageRailRef"
+              class="user-message-rail"
+              @mousemove="onRailPointerMove"
+              @mouseleave="onRailLeave"
+            >
+              <div :ref="bindUserMessageRailViewport" class="user-message-rail__viewport">
+                <div class="user-message-rail__list" :style="{ gap: `${tickGap}px` }">
+                  <div
+                    v-for="tick in userMessageTicks"
+                    :key="tick.index"
+                    :data-tick-index="tick.index"
+                    class="user-message-rail__item"
+                    :class="{ 'user-message-rail__item--active': tick.index === activeUserTickIndex }"
+                    @mouseenter="onRailTickHover(tick.index)"
+                  >
+                    <button
+                      type="button"
+                      class="user-message-rail__tick"
+                      :aria-label="`跳转到用户消息：${tick.title}`"
+                      @click="scrollToUserMessage(tick.index)"
+                    ></button>
+                  </div>
+                </div>
+              </div>
+              <!-- 卡片渲染在滚动视口外，避免被 overflow 裁切 -->
+              <div v-if="railCard" class="user-message-rail__card" :style="{ top: `${railCard.top}px` }">
+                <strong class="user-message-rail__card-title">{{ railCard.tick.title }}</strong>
+                <span class="user-message-rail__card-meta">{{ railCard.tick.meta }}</span>
               </div>
             </div>
           </div>
@@ -3982,6 +4292,108 @@ function onComposerPaste(e: ClipboardEvent) {
    按钮须跟随会话列居中，而不是跨全宽的外层布局 */
 .chat-main-inner {
   position: relative;
+}
+
+/* ── 用户消息导航轨：左缘竖排等间距刻度（垂直居中，从中间向上下扩散），浮动预览卡片 ── */
+.user-message-rail {
+  position: absolute;
+  top: 64px;
+  bottom: 190px;
+  left: 2px;
+  z-index: 6;
+  width: 26px;
+}
+
+/* 滚动视口：条数超出高度时可滚动（隐藏滚动条） */
+.user-message-rail__viewport {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.user-message-rail__viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/* margin auto：条数少时垂直居中；超出轨道高度时自然可滚动（flex 居中溢出裁切的规避写法） */
+.user-message-rail__list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-block: auto;
+}
+
+.user-message-rail__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 8px;
+}
+
+.user-message-rail__tick {
+  width: 26px;
+  height: 8px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* 邻近感应：--near 由 mousemove 按与指针的距离写入 [0,1]，刻度长度与颜色随距离衰减；
+   峰值（指针正下方的刻度）拉到与选中刻度等长 26px、趋近主色，滑动时反馈更直观 */
+.user-message-rail__tick::before {
+  content: '';
+  display: block;
+  width: calc(10px + var(--near, 0) * 16px);
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--noesis-color-primary, #111) calc(var(--near, 0) * 100%), var(--noesis-color-border, #d4d0c8));
+  transition: width 0.12s ease;
+}
+
+/* 当前项：加长加粗的主色刻度，与普通刻度拉开明显区分度 */
+.user-message-rail__item--active .user-message-rail__tick::before {
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--noesis-color-primary, #111);
+}
+
+/* 浮动预览卡片：渲染在滚动视口外（inline top 由 JS 按目标刻度定位）；
+   Codex 风格：消息双行截断 + 灰色「第 N 轮 · 时间」，小圆角、仅描边无投影 */
+.user-message-rail__card {
+  position: absolute;
+  left: 30px;
+  width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--noesis-color-border, rgb(0 0 0 / 9%));
+  border-radius: 6px;
+  background: var(--noesis-color-bg-elevated, #fff);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+/* 标题 = 用户消息扁平文本，双行截断：两行内容足够传达意图 */
+.user-message-rail__card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--noesis-color-text, #111);
+  word-break: break-all;
+}
+
+.user-message-rail__card-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--noesis-color-text-secondary, #8a8a8a);
 }
 
 .session-context-aside {
@@ -4470,6 +4882,13 @@ function onComposerPaste(e: ClipboardEvent) {
   justify-content: center;
 }
 
+.chat-top-bar__actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+
 .history-drawer-toggle {
   display: flex;
   align-items: center;
@@ -4560,14 +4979,25 @@ function onComposerPaste(e: ClipboardEvent) {
 
 @media (max-width: $bp-md) {
   .chat-top-bar {
+    position: relative;
     min-height: 48px;
     padding: 7px 8px;
     border-bottom: 1px solid var(--noesis-color-border-subtle);
+    justify-content: flex-start;
   }
 
+  /* 任务选择器绝对居中：不受左右两侧图标宽度差影响 */
   .chat-top-bar__mode {
-    flex: 1;
-    padding-right: 32px;
+    position: absolute;
+    left: 50%;
+    flex: none;
+    padding-right: 0;
+    transform: translateX(-50%);
+  }
+
+  /* 选择器移出文档流后，右侧动作组收拢到右缘（与文件区开关连排） */
+  .chat-top-bar__actions {
+    margin-left: auto;
   }
 
   .chat-input-footer {

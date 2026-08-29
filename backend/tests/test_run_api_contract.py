@@ -1,8 +1,9 @@
 import json
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +34,18 @@ from noesis.services.run_service import RunProjection, RunService
 async def _noop(*args: Any, **kwargs: Any) -> None:
     """空 async producer，用于不需要发事件的 Run 启动。"""
     return None
+
+
+@asynccontextmanager
+async def _null_sse_db():
+    """SSE 端点短命会话替身：真实查询都在被 mock 的 service 层。"""
+    yield MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def _stub_sse_prefetch_db(monkeypatch):
+    """stream_run 不再注入请求级 db，改用 sse_prefetch_db 短命会话。"""
+    monkeypatch.setattr(chat_api, "sse_prefetch_db", _null_sse_db)
 
 
 def test_run_routes_replace_legacy_stream_and_stop() -> None:
@@ -154,7 +167,6 @@ async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> 
     response = await chat_api.stream_run(
         "run-stream",
         current_user=SimpleNamespace(user_id=1),
-        db=SimpleNamespace(),
     )
     chunks = [chunk async for chunk in response.body_iterator]
 
@@ -210,7 +222,6 @@ async def test_run_stream_returns_429_before_opening_stream(monkeypatch) -> None
     response = await chat_api.stream_run(
         "run-quota",
         current_user=SimpleNamespace(user_id="user-1"),
-        db=SimpleNamespace(),
     )
     body = json.loads(response.body.decode())
 
@@ -240,7 +251,6 @@ async def test_run_stream_returns_503_when_owner_is_unavailable(monkeypatch) -> 
     response = await chat_api.stream_run(
         "run-orphan",
         current_user=SimpleNamespace(user_id="user-1"),
-        db=SimpleNamespace(),
     )
     body = json.loads(response.body.decode())
 
