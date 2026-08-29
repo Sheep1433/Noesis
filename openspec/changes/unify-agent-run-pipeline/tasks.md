@@ -27,8 +27,8 @@
 ## 4. turn 参数统一与前端收敛
 
 - [x] 4.1 followup 队列参数化：`followup_models` → `followup_turn_params`（`_TurnParams`）；schema/API/send_followup/send_message 全链路透传；**附带修复**创建时档位继承缺口（start 在父上下文捕获，worker 编译前显式设置——隔离 loop 干净上下文原本拿不到父档位）
-- [ ] 4.2 新建 `frontend/src/views/chat/runEventReducer.ts`（**后置可选步，未实施**——按 design.md D8 降级决定：useSSEStream 高风险低收益，默认只做子会话侧消费收敛；不影响后端统一完整性）。**后置可选步**：主链路 `useSSEStream.ts` 已被多窗口/重连/快照恢复反复打磨，将其改接 reducer 属高风险低收益——默认只让子会话消费走 reducer（4.3），主链路迁移作为本变更收尾后的独立小步，未做也不影响后端统一
-- [x] 4.3 子会话统计条：rebuildSessionStats 提为共享模块（`utils/sessionStats.ts`），主/子同口径；终态随消息重载更新（reducer 化仍留待 4.2）
+- [x] 4.2 新建 `frontend/src/views/chat/runEventReducer.ts`：领域事件（快照重置 + 增量：message-updated / context-update / run-started / approval-required/resumed / run-finished）→ run/contextSnapshot/内容投影/终态时刻的纯 reducer；`parseRunEvent` 承担子会话 wire 解析（字段名/时间归一化不进 reducer）；单测 10 用例。**主链路 useSSEStream 改接同一 reducer 仍为后续独立小步**（D8 风险决定），spec「主会话侧经同一 reducer」以此延后——待用户确认排期或维持延后
+- [x] 4.3 `SubagentConversationView.applyEvent` 改为「parseRunEvent → runEventReducer → 引用同步/副作用」，删除原 7 分支重复状态转移；统计条共享模块不变（reducer 化已随 4.2 落地）
 - [x] 4.4 子 Agent composer 接入 `ReasoningEffortSelector`，三处发送调用（直发/队列立即/终态 flush）携带 `reasoning_effort`；前端 158/158
 - [x] 4.5 `pnpm lint` + `pnpm build` + `npx vitest run __tests__/`（158/158）全绿
 

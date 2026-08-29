@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AgentRunSnapshot, ChatMessageResponse } from '@/api/chat'
+import type { RunEventState } from '@/views/chat/runEventReducer'
 import { NFloatButton, NInput } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
@@ -25,6 +26,12 @@ import {
   hasValidContextWindow,
   normalizeApiContent,
 } from '@/views/chat/messageParts'
+import {
+  initialRunEventState,
+  parseRunEvent,
+  runEventReducer,
+
+} from '@/views/chat/runEventReducer'
 
 const props = withDefaults(defineProps<{
   sessionId: string
@@ -55,6 +62,8 @@ let durationTimer: ReturnType<typeof setInterval> | null = null
 const contextSnapshot = ref<Record<string, unknown> | null>(null)
 /** followup 模型选择：初始取子会话 extra.model_id（ModelSelector 持久化），缺省目录默认 */
 const selectedModelId = ref('')
+/** run 事件消费单点状态（runEventReducer 持有；run / contextSnapshot 为其同步视图） */
+const reducerState = ref<RunEventState>(initialRunEventState())
 /** followup 推理档位：与主 Agent 同款选择器（按 turn 覆盖） */
 const selectedReasoningEffort = ref('')
 /** 子会话统计条：与主会话同口径（assistant 消息 extra.usage 重建，随消息加载/终态更新） */
@@ -233,9 +242,6 @@ function stopStream() {
 }
 
 function upsertAssistant(content: unknown, snapshot?: Partial<AgentRunSnapshot>) {
-  if (snapshot) {
-    run.value = { ...(run.value ?? {} as AgentRunSnapshot), ...snapshot } as AgentRunSnapshot
-  }
   const assistantId = snapshot?.assistant_message_id || run.value?.assistant_message_id
   if (!assistantId) {
     return
@@ -261,59 +267,31 @@ function upsertAssistant(content: unknown, snapshot?: Partial<AgentRunSnapshot>)
   })
 }
 
+/**
+ * run 事件消费收敛：wire 解析（parseRunEvent）→ 领域事件 → runEventReducer
+ * （纯函数，主/子会话共用的唯一状态转移）→ 同步本视图 refs 与消息列表副作用。
+ */
 function applyEvent(event: string, payload: Record<string, unknown>) {
-  if (event === 'run-snapshot') {
-    run.value = payload as unknown as AgentRunSnapshot
-    upsertAssistant(payload.content, payload as unknown as Partial<AgentRunSnapshot>)
+  const domain = parseRunEvent(event, payload)
+  if (!domain) {
     return
   }
-  const sequence = Number(payload.sequence ?? 0)
-  if (run.value && sequence > Number(run.value.snapshot_sequence ?? 0)) {
-    run.value = { ...run.value, snapshot_sequence: sequence }
+  const prev = reducerState.value
+  const next = runEventReducer(prev, domain)
+  reducerState.value = next
+  run.value = next.run
+  contextSnapshot.value = next.contextSnapshot
+  if (next.assistantContent !== prev.assistantContent) {
+    upsertAssistant(next.assistantContent, domain.type === 'run-snapshot' ? next.run ?? undefined : undefined)
   }
-  if (event === 'context-update' && payload.context && typeof payload.context === 'object') {
-    contextSnapshot.value = { ...(payload.context as Record<string, unknown>) }
-    return
-  }
-  if (event === 'message.updated') {
-    upsertAssistant(payload.content)
-    if (run.value) {
-      run.value = { ...run.value, pending_hitl: null }
-    }
-  } else if (event === 'run.started') {
-    // 排队任务被 executor 调度启动：快照仍是 queued，这里推进到 running
-    if (run.value && run.value.status === 'queued') {
-      run.value = { ...run.value, status: 'running' }
-    }
-  } else if (event === 'approval.required') {
-    // 服务端权威投影（被中断工具段已置 approval_pending）先行落进消息，
-    // 再置 pending_hitl——工具行显示静态「等待确认」而非 running 扫光
-    upsertAssistant(payload.content)
-    run.value = {
-      ...(run.value as AgentRunSnapshot),
-      status: 'hitl_pending',
-      pending_hitl: payload.pending_hitl as AgentRunSnapshot['pending_hitl'],
-    }
-  } else if (event === 'approval.resumed') {
-    if (run.value) {
-      run.value = { ...run.value, status: 'running', pending_hitl: null }
-    }
-  } else if (event === 'run.finished') {
-    if (run.value) {
-      run.value = {
-        ...run.value,
-        status: String(payload.status || 'completed') as AgentRunSnapshot['status'],
-        pending_hitl: null,
-      }
-    }
-    // 终态时刻落进 assistant 消息：流式建出的合成消息没有 run_finished_at，
-    // 不补的话 duration 会随 now 永远跳（「会话停了计时器还在跑」）
-    const finishedAt = timestampMs(payload.finished_at as number | null) ?? Date.now()
-    const assistantId = run.value?.assistant_message_id
+  // 终态时刻落进 assistant 消息：流式建出的合成消息没有 run_finished_at，
+  // 不补的话 duration 会随 now 永远跳（「会话停了计时器还在跑」）
+  if (next.finishedAt && next.finishedAt !== prev.finishedAt) {
+    const assistantId = next.run?.assistant_message_id
     if (assistantId) {
       const index = messages.value.findIndex((item) => item.id === assistantId)
       if (index >= 0 && !messages.value[index].run_finished_at) {
-        messages.value[index] = { ...messages.value[index], run_finished_at: finishedAt }
+        messages.value[index] = { ...messages.value[index], run_finished_at: next.finishedAt }
       }
     }
   }
@@ -323,6 +301,7 @@ async function loadContextSnapshot() {
   try {
     const session = await getSession(props.sessionId)
     if (hasValidContextWindow(session?.extra?.context)) {
+      reducerState.value = { ...reducerState.value, contextSnapshot: session.extra.context }
       contextSnapshot.value = session.extra.context
     }
     // 恢复该子会话的模型选择（launch 时写入 worker 实际模型，切换时由
@@ -435,11 +414,11 @@ async function decideHitl(decision: { type: 'approve' | 'reject', grant_scope?: 
     return
   }
   try {
-    run.value = await resumeAgentRunHitl(run.value.run_id, {
+    syncRunSnapshot(await resumeAgentRunHitl(run.value.run_id, {
       interrupt_id: run.value.pending_hitl.interrupt_id,
       decisions: [decision],
       grant_scope: decision.grant_scope ?? 'once',
-    })
+    }))
     await loadConversation()
   } catch (error) {
     console.warn('[subagent] approval failed', error)
@@ -452,12 +431,18 @@ async function stopCurrentRun() {
     return
   }
   try {
-    run.value = await stopAgentRun(run.value.run_id)
+    syncRunSnapshot(await stopAgentRun(run.value.run_id))
     emit('changed')
   } catch (error) {
     console.warn('[subagent] stop failed', error)
     window.$message?.error('停止失败')
   }
+}
+
+/** 非事件路径的 run 快照（审批提交/停止的 API 响应）：同步进 reducer 状态，防止后续事件序号回退 */
+function syncRunSnapshot(snapshot: AgentRunSnapshot) {
+  reducerState.value = { ...reducerState.value, run: snapshot }
+  run.value = snapshot
 }
 
 function startDurationTimer() {
