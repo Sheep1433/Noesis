@@ -27,9 +27,13 @@ LangGraph / LangChain raw event
        ├─ immutable replay envelope → SseDelivery → Browser Tab A/B/...
        ├─ immutable checkpoint      → PersistWriter → PostgreSQL
        └─ immutable envelope        → ChannelDelivery
+
+（子 Agent 同源：executor 消费 stream_agent_events + 同一 mapper，
+ 产出子会话投影与 run 事件，见 docs/architecture/subagent-sessions.md「统一 run 管道」）
 ```
 
-- `RuntimeEventMapper`：将 raw event 转为封闭 typed `RunEvent`。不编码 SSE，不做持久化。
+- `RuntimeEventMapper`：将 raw event 转为封闭 typed `RunEvent`。不编码 SSE，不做持久化。主/子
+  Agent run 共用（子 Agent 的 usage 累计、上下文快照、HITL 投影由同一条 bridge 状态机产出）。
 - `RunHandle`：唯一 live state owner，维护 projection、sequence、状态、producer generation、replay 与订阅者。
 - `PersistWriter`：每 Run 单槽 latest-wins writer，不属于 subscriber 集合，不受 SSE overflow 策略影响。
 - `SseDelivery`：把 typed event 编码为 SSE；连接失败只释放当前 queue。

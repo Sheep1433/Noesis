@@ -188,6 +188,21 @@ run.finished
 统一使用一套响应式宽度：桌面 760px（可拖拽到 920px），移动端 96vw。点击卡片、Agent 目录和
 输入框引用的子会话，全部调用同一个 drawer composable 和关闭退订逻辑。
 
+### 统一 run 管道（主/子同一条执行内核）
+
+主 Agent 与子 Agent 的 run 执行共用同一条管道：`runtime/stream.py` 消费
+`astream_events` → `RuntimeEventMapper`（raw event → typed RunEvent）→
+`LangGraphSseBridge` + `AssistantMessageBuilder` 聚合（usage 累计、上下文快照、
+HITL 投影、终态 payload）。主链路经 delivery 序列化为 SSE 帧；子 Agent 的
+executor（生命周期包装：任务注册表、隔离事件循环、watchdog、followup 队列）
+消费同一管道，产出子会话投影（`persist_projection`）与 run 事件。
+
+由此主/子能力同源：usage 双口径（父会话当轮「主+子合并」/ 各会话自身
+`extra.usage` 终态落库）、上下文快照（bridge 模型调用边界统一提取）、
+推理档位（创建时在父上下文捕获继承，followup 逐 turn 覆盖 model_id +
+reasoning_effort，参数变化即重编译 worker）。同一 run 级能力不得在主/子
+链路各写一份实现。
+
 ## 与 DeepSeek Harness 的关系
 
 DeepSeek Harness 的关键优势是：子 Agent 是独立 durable Session，有 parent/child 关系、独立事件
@@ -197,6 +212,9 @@ DeepSeek Harness 的关键优势是：子 Agent 是独立 durable Session，有 
 不同点：Noesis 已有 `TChatSession`、`TChatMessage`、`TAgentRun` 和 LangGraph run stream，因此不
 需要复制 Harness 的 SessionManager 或另建前端消息协议；应把现有会话/Run/SSE 统一起来。Shell
 后台命令仍是 job，不创建对话型 child session。
+
+Harness「子 Agent 经 `ctx.agents.create/resume` 复用同一 runtime」的形态已在本仓库落地为
+统一 run 管道（见上节）：executor 只保留生命周期差异，run 管道与主 Agent 一份实现。
 
 ## 过渡层清理（已删除）
 
