@@ -50,6 +50,7 @@ import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { isReasoningLevel } from '@/utils/reasoningLevels'
+import { rebuildSessionStats } from '@/utils/sessionStats'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { taskNoticeMeta } from '@/utils/taskNotice'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
@@ -1378,34 +1379,14 @@ function saveStatslineTemplate() {
 function resetStatslineTemplate() {
   statslineModal.draft = ''
 }
-/** 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。 */
+/**
+ * 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。
+ *  主/子会话共用同一计算（见 utils/sessionStats）。
+ */
 function rebuildSessionStatsFromHistory() {
-  const totals: SessionStats = {
-    turns: 0,
-    steps: 0,
-    llm_ms: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_tokens: 0,
-  }
-  for (const item of conversationItems.value) {
-    if (item.role !== 'assistant') {
-      continue
-    }
-    const usage = (item.msg_metadata as any)?.usage
-    if (!usage || typeof usage !== 'object') {
-      continue
-    }
-    totals.turns += 1
-    totals.steps += Number(usage.steps) || 0
-    totals.llm_ms += Number(usage.llm_ms) || 0
-    totals.input_tokens += Number(usage.input_tokens) || 0
-    totals.output_tokens += Number(usage.output_tokens) || 0
-    totals.cache_read_tokens += Number(usage.cache_read_tokens) || 0
-    totals.cache_write_tokens += Number(usage.cache_write_tokens) || 0
-  }
-  sessionStats.value = totals.steps > 0 ? totals : null
+  sessionStats.value = rebuildSessionStats(
+    conversationItems.value.map((item) => ({ role: item.role, extra: item.msg_metadata as unknown })),
+  )
 }
 /** 整轮回复结束信号：递增触发所有 ToolCallCollapse compact 收起。 */
 const runCollapseSignal = ref(0)

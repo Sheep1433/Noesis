@@ -11,11 +11,14 @@ import {
   subscribeAgentRun,
 } from '@/api/chat'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
+import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
 import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlApprovalCard from '@/components/HitlApprovalCard/index.vue'
 import { getQueuedFollowups, setQueuedFollowups } from '@/components/SubagentConversationView/queuedFollowups'
+import { rebuildSessionStats } from '@/utils/sessionStats'
+import { formatStatsLine } from '@/utils/statsFormat'
 import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import {
   formatDurationMs,
@@ -52,6 +55,11 @@ let durationTimer: ReturnType<typeof setInterval> | null = null
 const contextSnapshot = ref<Record<string, unknown> | null>(null)
 /** followup 模型选择：初始取子会话 extra.model_id（ModelSelector 持久化），缺省目录默认 */
 const selectedModelId = ref('')
+/** followup 推理档位：与主 Agent 同款选择器（按 turn 覆盖） */
+const selectedReasoningEffort = ref('')
+/** 子会话统计条：与主会话同口径（assistant 消息 extra.usage 重建，随消息加载/终态更新） */
+const sessionStats = computed(() => rebuildSessionStats(messages.value))
+const statsLine = computed(() => formatStatsLine(sessionStats.value))
 
 const assistantMessage = computed(() => messages.value.find((item) => item.id === run.value?.assistant_message_id))
 const turnCount = computed(() => messages.value.filter((item) => item.role === 'user').length)
@@ -137,6 +145,7 @@ async function submitQueuedNow(index: number): Promise<void> {
       props.sessionId,
       message,
       selectedModelId.value || undefined,
+      selectedReasoningEffort.value || undefined,
     )
     activeRunId.value = task.run_id || activeRunId.value
     emit('changed')
@@ -165,6 +174,7 @@ async function flushNextQueued(): Promise<void> {
       props.sessionId,
       message,
       selectedModelId.value || undefined,
+      selectedReasoningEffort.value || undefined,
     )
     activeRunId.value = task.run_id || activeRunId.value
     emit('changed')
@@ -195,6 +205,7 @@ async function sendFollowup() {
       props.sessionId,
       message,
       selectedModelId.value || undefined,
+      selectedReasoningEffort.value || undefined,
     )
     activeRunId.value = task.run_id || activeRunId.value
     followupInput.value = ''
@@ -562,6 +573,12 @@ onBeforeUnmount(() => {
             :session-id="sessionId"
             persist-session-extra
           />
+          <ReasoningEffortSelector
+            v-model="selectedReasoningEffort"
+            :session-id="sessionId"
+            :model-id="selectedModelId"
+            persist-session-extra
+          />
         </div>
         <div class="subagent-conversation__composer-right">
           <ContextWindowIndicator
@@ -594,6 +611,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <!-- 子会话统计条：与主会话同口径（extra.usage 重建，终态随消息重载更新） -->
+      <div v-if="statsLine" class="subagent-conversation__stats" role="status">
+        {{ statsLine }}
+      </div>
     </div>
   </div>
 </template>
@@ -604,6 +625,14 @@ onBeforeUnmount(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+
+.subagent-conversation__stats {
+  margin-top: 6px;
+  color: var(--noesis-color-text-hint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .subagent-conversation__meta {

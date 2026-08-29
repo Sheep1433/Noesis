@@ -729,16 +729,24 @@ export async function sendMessage(
   return parseResponse<SendMessageResponse>(await authFetch(req))
 }
 
-/** 向已有 child session 追加下一轮对话；modelId 缺省沿用当前模型。 */
+/** 向已有 child session 追加下一轮对话；modelId/reasoningEffort 缺省沿用当前值。 */
 export async function sendSubagentFollowup(
   sessionId: string,
   message: string,
   modelId?: string,
+  reasoningEffort?: string,
 ): Promise<TaskCatalogEntry> {
+  const body: Record<string, string> = { message }
+  if (modelId) {
+    body.model_id = modelId
+  }
+  if (reasoningEffort) {
+    body.reasoning_effort = reasoningEffort
+  }
   const req = makeRequest(
     'POST',
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-followup`,
-    modelId ? { message, model_id: modelId } : { message },
+    body,
   )
   return parseResponse<TaskCatalogEntry>(await authFetch(req))
 }

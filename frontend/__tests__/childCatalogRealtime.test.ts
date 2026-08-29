@@ -205,7 +205,7 @@ describe('子 Agent 标准会话展示', () => {
     await textarea.trigger('keydown.enter')
     await flushPromises()
 
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '请补充来源', undefined)
+    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '请补充来源', undefined, undefined)
   })
 
   it('父 Agent 中每次子 Agent 调用仍是独立卡片，并指向标准 run', async () => {
@@ -281,7 +281,7 @@ describe('子 Agent 标准会话展示', () => {
       finished_at: 1,
     })}\n\n`)
     await flushPromises()
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '排队消息 A', undefined)
+    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '排队消息 A', undefined, undefined)
     expect(wrapper.find('[data-testid="followup-queue-item"]').exists()).toBe(false)
   })
 
@@ -341,7 +341,7 @@ describe('子 Agent 标准会话展示', () => {
     const item = wrapper.find('[data-testid="followup-queue-item"]')
     await queueButton(item, '立即发送：空闲时立即开跑，运行中衔接为当前轮后的下一轮')!.trigger('click')
     await flushPromises()
-    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '立即这条', undefined)
+    expect(api.sendSubagentFollowup).toHaveBeenCalledWith('child-session-1', '立即这条', undefined, undefined)
     expect(wrapper.find('[data-testid="followup-queue-item"]').exists()).toBe(false)
   })
 })
