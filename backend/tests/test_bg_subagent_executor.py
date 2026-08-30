@@ -1181,6 +1181,14 @@ def test_apply_turn_params_switches_effort() -> None:
     assert _apply_turn_params(entry, _TurnParams(reasoning_effort="high")) is False
     assert entry.compiled_agent is not None
 
+    # 缺省（None）= 沿用当前档位，不视为覆盖：继承创建时档位
+    assert _apply_turn_params(entry, _TurnParams(model_id="m3")) is True
+    assert entry.turn_reasoning_effort == "high"
+    entry.compiled_agent = object()
+    assert _apply_turn_params(entry, _TurnParams(reasoning_effort=None)) is False
+    assert entry.turn_reasoning_effort == "high"
+    assert entry.compiled_agent is not None
+
     # 模型切换照旧生效（上下文窗口口径跟随）
     assert _apply_turn_params(entry, _TurnParams(model_id="m2")) is True
     assert task.model_id == "m2"

@@ -1,12 +1,14 @@
 import type { AgentRunSnapshot } from '@/api/chat'
+import { wireTimestampMs } from '@/utils/formatTime'
 
 /**
- * run 级领域事件 reducer（主/子会话共用消费单点）。
+ * run 级领域事件 reducer——子会话消费的单一状态转移（当前唯一消费方）。
  *
- * 领域事件与传输形态无关：子会话 run-event 经 parseRunEvent 产出、
- * 主会话 SSE 帧解析层可同样产出（后续迁移项）。reducer 是纯函数——
- * 输入 (state, event)，输出新 state；消息列表 upsert / 终态时间回填等
- * DOM 副作用由宿主根据 state 差异执行。
+ * 领域事件与传输形态无关：子会话 run-event 经 parseRunEvent 产出；
+ * 主会话 useSSEStream 的接入为后续独立小步（届时其帧解析层产出同一
+ * 事件 vocabulary）。reducer 是纯函数——输入 (state, event)，输出新
+ * state；消息列表 upsert / 终态时间回填等 DOM 副作用由宿主按 state
+ * 差异执行。
  */
 
 export type RunPendingHitl = AgentRunSnapshot['pending_hitl']
@@ -118,14 +120,6 @@ export function runEventReducer(state: RunEventState, event: RunDomainEvent): Ru
       }
     }
   }
-}
-
-/** wire 时间戳归一化（秒/毫秒自适应；无效值返回 undefined） */
-function wireTimestampMs(value: number | null | undefined): number | undefined {
-  if (value == null || !Number.isFinite(value)) {
-    return undefined
-  }
-  return Math.abs(value) < 1e12 ? value * 1000 : value
 }
 
 /**

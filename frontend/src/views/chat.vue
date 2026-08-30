@@ -32,6 +32,7 @@ import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { chatHistorySiderCollapsed } from '@/hooks/useChatHistorySider'
+import { useFollowupQueue } from '@/hooks/useFollowupQueue'
 import {
   candidateToMention,
   ensureMentionCatalog,
@@ -1913,8 +1914,13 @@ const sendDisabled = computed(() => {
  */
 const composerStopMode = computed(() => stylizingLoading.value && sendDisabled.value)
 
-/* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ---- */
+/* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ----
+   CRUD 走共享 composable（与子 Agent 抽屉同一份实现）；提交/终态衔接为主链路域语义 */
 
+const composerQueue = useFollowupQueue({
+  get: () => queuedComposerMessages.value,
+  set: (list) => (queuedComposerMessages.value = list),
+})
 const queuedComposerMessages = ref<string[]>([])
 
 // 队列属于当前对话上下文：会话切换即清空，避免跨会话误发
@@ -1922,24 +1928,9 @@ watch(() => uuids.value[qa_type.value], () => {
   queuedComposerMessages.value = []
 })
 
-function removeQueuedComposerMessage(index: number): void {
-  queuedComposerMessages.value = queuedComposerMessages.value.filter((_, i) => i !== index)
-}
-
 /** 编辑：文本回到输入框，从队列移除 */
 function editQueuedComposerMessage(index: number): void {
-  inputTextString.value = queuedComposerMessages.value[index] ?? ''
-  removeQueuedComposerMessage(index)
-}
-
-function reorderQueuedComposerMessages(from: number, to: number): void {
-  const next = [...queuedComposerMessages.value]
-  if (from === to || from < 0 || to < 0 || from >= next.length || to >= next.length) {
-    return
-  }
-  const [moved] = next.splice(from, 1)
-  next.splice(to, 0, moved)
-  queuedComposerMessages.value = next
+  inputTextString.value = composerQueue.edit(index)
 }
 
 /** 立即发送：空闲直接发；运行中先停止当前 run，消息提为队首由终态 watcher 自动提交 */
@@ -1956,7 +1947,7 @@ async function submitQueuedComposerNow(index: number): Promise<void> {
     await stopChatStream()
     return
   }
-  removeQueuedComposerMessage(index)
+  composerQueue.remove(index)
   inputTextString.value = message
   await handleCreateStylized()
 }
@@ -1971,7 +1962,7 @@ async function flushNextQueuedComposerMessage(): Promise<void> {
   if (currentInput && currentInput !== message) {
     queuedComposerMessages.value = [...queuedComposerMessages.value.slice(1), currentInput]
   } else {
-    removeQueuedComposerMessage(0)
+    composerQueue.remove(0)
   }
   inputTextString.value = message
   await handleCreateStylized()
@@ -3621,10 +3612,10 @@ function onComposerPaste(e: ClipboardEvent) {
                       <!-- 待发队列：运行中发送的消息在此排队，当前 run 终态后逐条自动提交（与子 Agent 抽屉同构） -->
                       <FollowupQueue
                         :messages="queuedComposerMessages"
-                        @remove="removeQueuedComposerMessage"
+                        @remove="composerQueue.remove"
                         @edit="editQueuedComposerMessage"
                         @send-now="submitQueuedComposerNow"
-                        @reorder="reorderQueuedComposerMessages"
+                        @reorder="composerQueue.reorder"
                       />
 
                       <MentionPicker

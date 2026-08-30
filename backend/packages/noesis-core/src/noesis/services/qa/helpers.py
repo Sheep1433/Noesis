@@ -567,11 +567,6 @@ def _langfuse_stream_context(
     return langfuse_workflow_context(lf_config)
 
 
-def _new_stream_ctx() -> Dict[str, Any]:
-    # 共用构造（子 Agent executor 同源）：见 noesis.chat.event_mapping.mapper
-    return new_stream_ctx()
-
-
 async def _yield_sse_from_agent_bridge(
     agent_generator: AsyncGenerator[Any, None],
     *,

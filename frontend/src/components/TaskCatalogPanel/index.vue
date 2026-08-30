@@ -5,6 +5,7 @@ import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { wireTimestampMs } from '@/utils/formatTime'
 import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
@@ -90,22 +91,15 @@ onBeforeUnmount(() => {
   }
 })
 
-function timestampMs(value: number | null | undefined): number | undefined {
-  if (value == null || !Number.isFinite(value)) {
-    return undefined
-  }
-  return Math.abs(value) < 1e12 ? value * 1000 : value
-}
-
 function taskElapsed(task: TaskCatalogEntry): string {
-  const started = timestampMs(task.started_at)
+  const started = wireTimestampMs(task.started_at)
   if (!started || task.status === 'awaiting_approval') {
     return ''
   }
   if (task.status === 'running') {
     return formatDurationMs(Math.max(0, clockNow.value - started))
   }
-  const finished = timestampMs(task.completed_at)
+  const finished = wireTimestampMs(task.completed_at)
   if (!finished) {
     return ''
   }

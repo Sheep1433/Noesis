@@ -5,7 +5,7 @@
 ## 1. 特征测试先行（护栏）
 
 - [x] 1.1 主链路帧序列特征测试：**实施时简化**——主链路映射逻辑（mapper/bridge）零改动（仅 ctx 构造移位为共用、mark_terminal 增可选参数），帧序列由构造保证不变，由全量回归（1255 用例，含 api_contract SSE 契约）覆盖
-- [x] 1.2 executor 现行为特征测试：停止与部分输出、followup 链式衔接（含 followup_models 逐 turn 切模型）、审批 resume、冷恢复、进程重启对账；**步数口径**（同输入下 progress_count 换核前后一致）与**父统计含子**（父会话当轮 usage 含子 Agent 消耗）两条口径断言（触点：`backend/tests/test_bg_subagent_executor.py`、`test_bg_shell_tasks.py`）
+- [x] 1.2 executor 现行为特征测试：停止与部分输出、followup 链式衔接（逐 turn 切模型/档位）、审批 resume、冷恢复、进程重启对账；**步数口径**（progress_count 断言）与**父统计含子**（bridge `_accumulate_usage` 的 parent_task_call_id 合并断言，`test_subagent_usage_persist.py`）两条口径断言（触点：`backend/tests/test_bg_subagent_executor.py`、`test_bg_shell_tasks.py`）
 - [x] 1.3 子会话消息接口契约测试：消息接口零改动，由全量回归覆盖`GET /api/chat/sessions/{id}/messages` 对子会话返回标准消息结构（步骤 2/3 后必须不变）
 - [x] 1.4 验证「checkpointing 与 stream mode 无关」假设：55 个 executor 特征测试以真实 MemorySaver + Command resume / 冷恢复覆盖（HITL 续跑与 followup 链换核后全绿）
 
@@ -13,7 +13,7 @@
 
 - [x] 2.1 定义 turn 终态聚合：随步骤 3 一步到位（bridge.message_usage → RunCompleted.usage → _TurnOutcome），未写过渡实现
 - [x] 2.2 `SubagentSessionService.mark_terminal` 扩展 usage 参数（persist_projection 检查点路径无需 usage）：终态把 usage 写入子 assistant 消息 `extra.usage`（与主链路同字段结构，sequence guard 保留）
-- [ ] 2.3 前端子会话统计条：复用主会话 `rebuildSessionStatsFromHistory` + `formatStatsLine` 渲染（复用组件，不加新接口）
+- [x] 2.3 前端子会话统计条：复用主会话统计重建（`utils/sessionStats.ts` 共享模块）+ `formatStatsLine`（含同一模板配置 localStorage）；run.finished 终态事件触发会话重载，统计与终态内容随落库值对齐（spec「流式终态对齐」）
 
 ## 3. executor 接入统一管道（换核）
 

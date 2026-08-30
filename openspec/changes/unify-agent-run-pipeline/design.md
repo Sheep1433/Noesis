@@ -83,7 +83,8 @@ LangGraph checkpointing 与 stream mode 无关（checkpointer 配置驱动），
 ### D7 前端共享 reducer
 
 - 新建 `frontend/src/views/chat/runEventReducer.ts`：消费统一形状的领域事件，输出消息 content/usage/run 状态变更。
-- `useSSEStream`：SSE 帧解析 → 领域事件 → reducer。`SubagentConversationView`：run-event 解析 → 领域事件 → reducer。
+- `SubagentConversationView`：run-event 解析（parseRunEvent）→ 领域事件 → reducer（已落地）。
+- `useSSEStream` 的帧解析层产出同一事件 vocabulary 接入 reducer：**后续独立小步**（见 D8 风险决定），未在本变更实施。
 - 已知成本：子链路 `run-snapshot` 是全量快照而非增量事件——reducer 需同时支持「快照重置」与「增量事件」两种入口（传输层形态适配，不追求 wire 层统一）。
 - 子会话统计：复用主会话 `rebuildSessionStatsFromHistory` + `formatStatsLine`。
 

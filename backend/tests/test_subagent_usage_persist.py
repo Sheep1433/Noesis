@@ -120,3 +120,43 @@ async def test_mark_terminal_usage_defaults_to_none(monkeypatch) -> None:
         finish_reason="cancelled",
     )
     assert captured["usage"] is None
+
+
+def test_parent_message_usage_includes_subagent_calls() -> None:
+    """父统计含子口径：子 Agent 的 usage（parent_task_call_id 标记）计入父
+    assistant 消息聚合，且不覆盖父会话的上下文快照（圆环只看主对话）。"""
+    from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+    from noesis.chat.event_mapping.mapper import new_stream_ctx
+
+    bridge = LangGraphSseBridge("parent-session", model_id="deepseek-v4-flash")
+    ctx = new_stream_ctx()
+    out: list = []
+
+    bridge._accumulate_usage(
+        ctx,
+        "run-child",
+        {
+            "input_tokens": 5000,
+            "output_tokens": 300,
+            "input_token_details": {"cache_read": 4000, "cache_write": 0},
+        },
+        out,
+        parent_task_call_id="call-child-1",
+    )
+    bridge._accumulate_usage(
+        ctx,
+        "run-parent",
+        {
+            "input_tokens": 20000,
+            "output_tokens": 100,
+            "input_token_details": {"cache_read": 8000, "cache_write": 0},
+        },
+        out,
+        parent_task_call_id=None,
+    )
+
+    assert bridge.message_usage["input_tokens"] == 25000
+    assert bridge.message_usage["output_tokens"] == 400
+    assert bridge.message_usage["cache_read_tokens"] == 12000
+    # 主对话单轮 input 覆盖圆环快照（子调用不覆盖）
+    assert bridge.last_context_snapshot.get("current_tokens") == 20000

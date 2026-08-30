@@ -9,9 +9,9 @@ from langchain_core.messages import AIMessage
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.bridge import END_SENTINEL
+from noesis.chat.event_mapping.mapper import new_stream_ctx
 from noesis.services.qa.helpers import (
     _flush_ctx_text_buffer,
-    _new_stream_ctx,
     _persist_stream_checkpoint,
     _yield_run_events_from_agent,
 )
@@ -81,7 +81,7 @@ async def test_run_event_path_persists_context_after_model_end(
             empty_agent(),
             bridge=bridge,
             builder=builder,
-            ctx=_new_stream_ctx(),
+            ctx=new_stream_ctx(),
             session_id="sess-run",
             user_id="u1",
             qa_type="SUPER_AGENT_QA",

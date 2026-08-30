@@ -30,3 +30,11 @@ export function formatDuration(seconds: number): string {
   const restMinutes = minutes % 60
   return restMinutes > 0 ? `${hours} 小时 ${restMinutes} 分` : `${hours} 小时`
 }
+
+/** wire 时间戳归一化（秒/毫秒自适应）：无效值返回 undefined。 */
+export function wireTimestampMs(value: number | null | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value)) {
+    return undefined
+  }
+  return Math.abs(value) < 1e12 ? value * 1000 : value
+}

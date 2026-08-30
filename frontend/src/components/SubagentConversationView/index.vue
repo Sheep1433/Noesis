@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AgentRunSnapshot, ChatMessageResponse } from '@/api/chat'
 import type { RunEventState } from '@/views/chat/runEventReducer'
+import { useLocalStorage } from '@vueuse/core'
 import { NFloatButton, NInput } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
@@ -18,6 +19,8 @@ import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/in
 import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlApprovalCard from '@/components/HitlApprovalCard/index.vue'
 import { getQueuedFollowups, setQueuedFollowups } from '@/components/SubagentConversationView/queuedFollowups'
+import { useFollowupQueue } from '@/hooks/useFollowupQueue'
+import { wireTimestampMs } from '@/utils/formatTime'
 import { rebuildSessionStats } from '@/utils/sessionStats'
 import { formatStatsLine } from '@/utils/statsFormat'
 import { taskStatusLabel } from '@/utils/taskStatusLabels'
@@ -50,7 +53,6 @@ const emit = defineEmits<{ (event: 'changed'): void }>()
 const activeRunStreams = new Map<string, AbortController>()
 
 const messages = ref<ChatMessageResponse[]>([])
-const run = ref<AgentRunSnapshot | null>(null)
 const loading = ref(false)
 const followupInput = ref('')
 const followupSending = ref(false)
@@ -59,16 +61,18 @@ const activeRunId = ref<string | null>(props.runId)
 let requestSerial = 0
 const now = ref(Date.now())
 let durationTimer: ReturnType<typeof setInterval> | null = null
-const contextSnapshot = ref<Record<string, unknown> | null>(null)
 /** followup 模型选择：初始取子会话 extra.model_id（ModelSelector 持久化），缺省目录默认 */
 const selectedModelId = ref('')
-/** run 事件消费单点状态（runEventReducer 持有；run / contextSnapshot 为其同步视图） */
+/** run 事件消费单点状态（runEventReducer 持有唯一真相；run / contextSnapshot 为派生视图） */
 const reducerState = ref<RunEventState>(initialRunEventState())
+const run = computed<AgentRunSnapshot | null>(() => reducerState.value.run)
+const contextSnapshot = computed<Record<string, unknown> | null>(() => reducerState.value.contextSnapshot)
 /** followup 推理档位：与主 Agent 同款选择器（按 turn 覆盖） */
 const selectedReasoningEffort = ref('')
 /** 子会话统计条：与主会话同口径（assistant 消息 extra.usage 重建，随消息加载/终态更新） */
 const sessionStats = computed(() => rebuildSessionStats(messages.value))
-const statsLine = computed(() => formatStatsLine(sessionStats.value))
+const statsLineTemplate = useLocalStorage('noesis:statsline-template', '')
+const statsLine = computed(() => formatStatsLine(sessionStats.value, statsLineTemplate.value))
 
 const assistantMessage = computed(() => messages.value.find((item) => item.id === run.value?.assistant_message_id))
 const turnCount = computed(() => messages.value.filter((item) => item.role === 'user').length)
@@ -87,19 +91,12 @@ function userText(message: ChatMessageResponse): string {
   return normalizeApiContent(message.content).parts.filter((part) => part.type === 'text' && typeof part.content === 'string').map((part) => part.content).join('')
 }
 
-function timestampMs(value: number | null | undefined): number | undefined {
-  if (value == null || !Number.isFinite(value)) {
-    return undefined
-  }
-  return Math.abs(value) < 1e12 ? value * 1000 : value
-}
-
 const duration = computed(() => {
-  const started = timestampMs(assistantMessage.value?.run_started_at)
+  const started = wireTimestampMs(assistantMessage.value?.run_started_at)
   if (!started) {
     return ''
   }
-  const finished = timestampMs(assistantMessage.value?.run_finished_at) ?? now.value
+  const finished = wireTimestampMs(assistantMessage.value?.run_finished_at) ?? now.value
   return formatDurationMs(Math.max(0, finished - started))
 })
 
@@ -113,30 +110,16 @@ const sendDisabled = computed(() => !followupInput.value.trim() || followupSendi
  */
 const composerStopMode = computed(() => runActive.value && !followupInput.value.trim())
 
-// ---- 前端待发队列（跨抽屉开关存活，见 queuedFollowups.ts） ----
+// ---- 前端待发队列（跨抽屉开关存活，见 queuedFollowups.ts；CRUD 走共享 composable） ----
 
-const queuedMessages = computed(() => getQueuedFollowups(props.sessionId))
-
-function removeQueued(index: number): void {
-  const next = [...queuedMessages.value]
-  next.splice(index, 1)
-  setQueuedFollowups(props.sessionId, next)
-}
-
+const followupQueue = useFollowupQueue({
+  get: () => getQueuedFollowups(props.sessionId),
+  set: (list) => setQueuedFollowups(props.sessionId, list),
+})
+const queuedMessages = followupQueue.messages
 /** 编辑：文本回到输入框，从队列移除 */
 function editQueued(index: number): void {
-  followupInput.value = queuedMessages.value[index] ?? ''
-  removeQueued(index)
-}
-
-function reorderQueued(from: number, to: number): void {
-  if (from === to || from < 0 || to < 0 || from >= queuedMessages.value.length || to >= queuedMessages.value.length) {
-    return
-  }
-  const next = [...queuedMessages.value]
-  const [moved] = next.splice(from, 1)
-  next.splice(to, 0, moved)
-  setQueuedFollowups(props.sessionId, next)
+  followupInput.value = followupQueue.edit(index)
 }
 
 /** 立即提交指定排队消息：空闲即开新 run；运行中由后端衔接为下一轮 */
@@ -148,7 +131,7 @@ async function submitQueuedNow(index: number): Promise<void> {
   followupSending.value = true
   // 先出队再提交：同一子会话可能有多个视图实例（消息卡抽屉 + 任务目录），
   // 出队是同步操作，天然防止两个实例重复提交同一条消息
-  removeQueued(index)
+  followupQueue.remove(index)
   try {
     const task = await sendSubagentFollowup(
       props.sessionId,
@@ -177,7 +160,7 @@ async function flushNextQueued(): Promise<void> {
     return
   }
   followupSending.value = true
-  removeQueued(0)
+  followupQueue.remove(0)
   try {
     const task = await sendSubagentFollowup(
       props.sessionId,
@@ -279,8 +262,6 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   const prev = reducerState.value
   const next = runEventReducer(prev, domain)
   reducerState.value = next
-  run.value = next.run
-  contextSnapshot.value = next.contextSnapshot
   if (next.assistantContent !== prev.assistantContent) {
     upsertAssistant(next.assistantContent, domain.type === 'run-snapshot' ? next.run ?? undefined : undefined)
   }
@@ -295,6 +276,10 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
       }
     }
   }
+  // 终态重载：落库后的 usage / 终态内容进入统计条与消息（流式终态对齐）
+  if (domain.type === 'run-finished') {
+    void loadConversation()
+  }
 }
 
 async function loadContextSnapshot() {
@@ -302,7 +287,6 @@ async function loadContextSnapshot() {
     const session = await getSession(props.sessionId)
     if (hasValidContextWindow(session?.extra?.context)) {
       reducerState.value = { ...reducerState.value, contextSnapshot: session.extra.context }
-      contextSnapshot.value = session.extra.context
     }
     // 恢复该子会话的模型选择（launch 时写入 worker 实际模型，切换时由
     // ModelSelector 持久化）。无条件覆盖：与 getSession 并发的
@@ -442,7 +426,6 @@ async function stopCurrentRun() {
 /** 非事件路径的 run 快照（审批提交/停止的 API 响应）：同步进 reducer 状态，防止后续事件序号回退 */
 function syncRunSnapshot(snapshot: AgentRunSnapshot) {
   reducerState.value = { ...reducerState.value, run: snapshot }
-  run.value = snapshot
 }
 
 function startDurationTimer() {
@@ -533,10 +516,10 @@ onBeforeUnmount(() => {
       <!-- 前端待发队列：run 进行中发送的消息在此排队，终态后逐条自动提交 -->
       <FollowupQueue
         :messages="queuedMessages"
-        @remove="removeQueued"
+        @remove="followupQueue.remove"
         @edit="editQueued"
         @send-now="submitQueuedNow"
-        @reorder="reorderQueued"
+        @reorder="followupQueue.reorder"
       />
       <n-input
         v-model:value="followupInput"

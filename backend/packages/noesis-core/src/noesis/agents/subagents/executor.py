@@ -101,7 +101,6 @@ class BackgroundTask:
     assistant_message_id: Optional[str] = None
     turn_count: int = 1
     projection_sequence: int = field(default=0, repr=False)
-    message_offset: int = field(default=0, repr=False)
     # subagent 任务均可经 send_message 追加 turn；shell 任务使用独立 kind。
     kind: str = "subagent"
     # worker 的 model_id：上下文窗口上限解析用（主对话同源 model_limits）
@@ -1063,10 +1062,13 @@ async def _ensure_agent(entry: _TaskEntry) -> Any:
 
     entry.model_override 非 None 时以覆盖模型编译（followup 切换模型后
     compiled_agent 已被置空，这里按新模型重建；同 thread 续跑，历史保留）。
+    编译前设置本 turn 推理档位——档位在 LLM 构造时经 ContextVar 固化为
+    请求参数，这里是所有编译路径（首轮/followup 切参/审批 resume）的唯一收口。
     """
     if entry.compiled_agent is None:
         with entry.compiled_lock:
             if entry.compiled_agent is None:
+                set_request_reasoning_effort(entry.turn_reasoning_effort)
                 if entry.model_override is None:
                     result = entry.agent_factory()
                 else:
@@ -1102,11 +1104,16 @@ def _apply_turn_params(entry: _TaskEntry, params: Optional[_TurnParams]) -> bool
 
     档位在 LLM 构造时（factory 读 ContextVar）固化为请求参数，因此
     档位变化与模型变化一样需要重编译 worker（同 thread 续跑，历史保留）。
+    字段缺省（None）= 沿用当前值，不视为覆盖（与 model_id 语义一致）：
+    followup 未指定档位时继承任务创建时捕获的档位。
     """
     if params is None:
         return False
     changed = _apply_model_override(entry, params.model_id)
-    if params.reasoning_effort != entry.turn_reasoning_effort:
+    if (
+        params.reasoning_effort is not None
+        and params.reasoning_effort != entry.turn_reasoning_effort
+    ):
         entry.turn_reasoning_effort = params.reasoning_effort
         with entry.compiled_lock:
             entry.compiled_agent = None
@@ -1280,9 +1287,6 @@ async def _arun(
             )
             if started_future is not None:
                 await asyncio.wrap_future(started_future)
-        # 本 turn 推理档位：worker 在隔离 loop 的干净上下文编译，
-        # 父 run 的 ContextVar 到不了这里——编译前显式设置（start 时捕获 / followup 覆盖）
-        set_request_reasoning_effort(entry.turn_reasoning_effort)
         agent = await _ensure_agent(entry)
         # 首轮输入：优先显式 resume command（审批续跑），
         # 否则 initial_source（start 的 description / 冷恢复的追加消息）
@@ -1345,15 +1349,9 @@ async def _arun(
                 break
             next_message, next_user_message_id, next_params = next_followup
             # 该 turn 指定了新模型/新档位 → 失效已编译 worker，下一轮以新参数续跑同 thread
+            # （档位 ContextVar 在 _ensure_agent 编译前统一设置）
             if _apply_turn_params(entry, next_params):
-                set_request_reasoning_effort(entry.turn_reasoning_effort)
                 agent = await _ensure_agent(entry)
-                logger.info(
-                    "bg subagent turn params switched task_id={} model={} effort={}",
-                    task.task_id,
-                    next_params.model_id if next_params else None,
-                    next_params.reasoning_effort if next_params else None,
-                )
             turn_fallback_error = outcome.fallback_error
             turn_status, _ = _fallback_terminal(turn_fallback_error)
             turn_reason = "error" if turn_fallback_error else (outcome.finish_reason or "stop")

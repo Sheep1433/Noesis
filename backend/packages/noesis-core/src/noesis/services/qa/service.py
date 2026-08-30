@@ -15,7 +15,7 @@ from noesis.chat.delivery.events import RunEvent
 from noesis.chat.hitl import normalize_hitl_decisions
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
-from noesis.chat.event_mapping.mapper import RuntimeEventMapper
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.chat.tool_state import ToolState
 from noesis.errors.exceptions import NotFoundException
 from noesis.llm.catalog import get_default_model_id
@@ -29,7 +29,6 @@ from noesis.agents.subagents.notifications import notify_agent_query
 from noesis.services.qa.helpers import (
     _finalize_sse_bridge_stream,
     _finalize_run_events,
-    _new_stream_ctx,
     _resolve_enabled_skills_for_query,
     _resolve_kb_settings_for_query,
     _resolve_mcp_servers_for_query,
@@ -236,7 +235,7 @@ class QaService:
                 session_id=session_id,
                 message_id=bridge.assistant_message_id,
             )
-            ctx = _new_stream_ctx()
+            ctx = new_stream_ctx()
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 
             ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
@@ -378,7 +377,7 @@ class QaService:
                 existing = result.scalar_one_or_none()
                 if existing is not None and isinstance(existing.content, dict):
                     builder.load_from_content_dict(existing.content)
-            ctx = _new_stream_ctx()
+            ctx = new_stream_ctx()
             tc_qa = IntentEnum.TEST_CASE_QA.value[0]
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 
@@ -528,7 +527,7 @@ class QaService:
             mapper = RuntimeEventMapper(bridge)
             builder = AssistantMessageBuilder(session_id=session_id, message_id=aid)
             builder.load_from_content_dict(existing_content)
-            ctx = _new_stream_ctx()
+            ctx = new_stream_ctx()
             ctx["_assistant_db_id"] = aid
 
             # reject/respond 不经 on_tool_end：先合成 tool-output 与 hitl 状态
