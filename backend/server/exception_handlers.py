@@ -3,6 +3,7 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic_validation_decorator import FieldValidationError
+from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from noesis.errors.exceptions import (
     AuthException,
     ConflictException,
@@ -81,4 +82,14 @@ def handle_exception(app: FastAPI):
     @app.exception_handler(Exception)
     async def exception_handler(request: Request, exc: Exception):
         logger.exception(exc)
-        return ResponseUtil.error(msg=str(exc))
+        # 原始异常文本可能含基础设施细节（SQL/路径/连接串），不透给终端用户
+        return ResponseUtil.error(msg='服务器内部错误，请稍后重试')
+
+    # 数据库层异常：连接失败/恢复中（503 可重试语义）；SQL/完整性等内部异常（500 通用文案）
+    @app.exception_handler(SQLAlchemyError)
+    async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+        logger.exception(exc)
+        if isinstance(exc, (OperationalError, InterfaceError)):
+            # 例：PG 崩溃恢复期 "not yet accepting connections"——曾整句透给登录页 toast
+            return ResponseUtil.service_unavailable(msg='服务暂时不可用，请稍后重试')
+        return ResponseUtil.error(msg='服务器内部错误，请稍后重试')
