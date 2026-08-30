@@ -596,17 +596,22 @@ class SubagentSessionService:
         content: dict,
         sequence: int,
         assistant_message_id: Optional[str] = None,
+        usage: Optional[dict] = None,
     ) -> None:
         """run 进入待审批的原子落库：run 状态 + 快照 + assistant 消息投影。
 
         消息与快照同源（被中断工具段为 approval_pending）；消息不更新的话
         重开抽屉时工具行仍是 running（扫光），与等待审批的事实不符。
+        usage 为中断前的管道累计（种子）：resume 后的 turn 终态与之合并，
+        该轮 extra.usage 才完整覆盖中断前后全部模型调用。
         """
         from noesis.storage.postgres.manager import pg_manager
 
         now = _now_ms()
         snapshot = dict(content)
         snapshot["_pending_hitl"] = interrupt
+        if usage:
+            snapshot["_hitl_usage"] = dict(usage)
         async with pg_manager.get_async_session_context() as db:
             run_result = await db.execute(
                 update(TAgentRun)
@@ -646,6 +651,7 @@ class SubagentSessionService:
             run = result.scalar_one_or_none()
             snapshot = dict(run.snapshot or {}) if run is not None else {}
             snapshot.pop("_pending_hitl", None)
+            # _hitl_usage（中断前审计种子）保留至终态：mark_terminal 统一摘除
             await db.execute(
                 update(TAgentRun)
                 .where(TAgentRun.id == run_id, TAgentRun.status == RunStatus.HITL_PENDING.value)
@@ -695,9 +701,15 @@ class SubagentSessionService:
                     else {"version": 1, "parts": []}
                 )
                 # HITL 等待中的内部标记不得泄漏进 assistant 消息
-                # （mark_waiting_approval 写入、mark_resumed 摘除）
-                if isinstance(content.get("_pending_hitl"), dict):
-                    content = {k: v for k, v in content.items() if k != "_pending_hitl"}
+                # （mark_waiting_approval 写入、mark_resumed 摘除；_hitl_usage
+                #  审计种子同样只留在 run 快照，不入消息）
+                if isinstance(content.get("_pending_hitl"), dict) or isinstance(
+                    content.get("_hitl_usage"), dict
+                ):
+                    content = {
+                        k: v for k, v in content.items()
+                        if k not in ("_pending_hitl", "_hitl_usage")
+                    }
             await AgentRunRepository(db).finalize(
                 run_id=run_id,
                 target=status,

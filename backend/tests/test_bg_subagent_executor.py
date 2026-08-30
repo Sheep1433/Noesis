@@ -1447,3 +1447,41 @@ async def test_truncated_run_terminal_partial() -> None:
         unsubscribe_run_events("run-trunc", queue)
         if task_id:
             executor.cancel(task_id)
+
+
+@pytest.mark.asyncio
+async def test_hitl_resume_merges_usage_across_interrupt() -> None:
+    """HITL usage 补齐（spec 6.2）：含审批的 turn 终态 usage 覆盖中断前后。"""
+    from noesis.agents.subagents import executor as ex_mod
+
+    worker = _build_worker(
+        [_call("v1"), AIMessage(content="审批后收尾")],
+        interrupt_on={"dangerous": True},
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="审批 usage",
+        session_id="s-hitl-usage", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
+
+    with ex_mod._TASKS_LOCK:
+        entry = ex_mod._TASKS.get(task_id)
+    assert entry is not None
+    assert entry.hitl_usage_seed is not None, "挂起时应存前半段 usage 种子"
+
+    # 审批通过 → resume 续跑至完成
+    executor.submit_decisions(task_id, [{"type": "approve"}])
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.COMPLETED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    # 种子已消费
+    with ex_mod._TASKS_LOCK:
+        entry = ex_mod._TASKS.get(task_id)
+    assert entry is not None and entry.hitl_usage_seed is None

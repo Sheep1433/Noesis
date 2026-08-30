@@ -289,6 +289,9 @@ class _TaskEntry:
     turn_seed_content: Optional[dict[str, Any]] = None
     # 协作停止宽限 watchdog（超时回退硬杀）
     stop_grace_handle: Optional[asyncio.TimerHandle] = None
+    # HITL 挂起时的前半段 usage 种子：resume 后续 turn 终态合并，
+    # 该轮 extra.usage 覆盖中断前后全部模型调用（DB 快照另存 _hitl_usage 审计）
+    hitl_usage_seed: Optional[dict[str, Any]] = None
     # 协作停止宽限（秒）：executor 实例配置
     stop_grace_seconds: float = STOP_GRACE_SECONDS
     # kind="shell"：命令与执行 backend（local_shell 宿主机 / docker 容器）
@@ -1383,6 +1386,8 @@ async def _run_turn_via_pipeline(
                 outcome.content = builder.to_dict()
             elif isinstance(event, RunPaused):
                 outcome.finish_reason = event.finish_reason or "hitl_pending"
+                if event.usage:
+                    outcome.usage = dict(event.usage)
             elif isinstance(event, RunCompleted):
                 outcome.finish_reason = event.finish_reason
                 if event.usage:
@@ -1454,6 +1459,17 @@ async def _run_turn_via_pipeline(
     _consume(mapper.finalize())
     outcome.fallback_error = _final_model_fallback_error(last_ai_message)
     outcome.content = builder.to_dict()
+    # HITL 续跑轮：合并中断前种子（本 turn bridge 只累计后半段）
+    seed = entry.hitl_usage_seed
+    if seed is not None:
+        entry.hitl_usage_seed = None
+        merged = dict(seed)
+        for key, value in outcome.usage.items():
+            if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
+                merged[key] = merged[key] + value
+            else:
+                merged[key] = value
+        outcome.usage = merged
     # 最终投影：末段文本在 finish 时才 flush 进 builder，此处发布一次完整内容
     # （与旧 values 模式最后一个 chunk 含最终文本的可见节奏一致；
     #  HITL 挂起走 mark_waiting_approval 专用投影，不在此重复发布）
@@ -1522,6 +1538,9 @@ async def _arun(
                 # 按名回填 tool_call_id；bridge 已把被中断工具段置 approval_pending。
                 task.status = BgTaskStatus.AWAITING_APPROVAL
                 task.interrupt = payload
+                # 种子无条件保存（无 run_id 场景同样需要 resume 合并；usage 审计另走 run 快照）
+                entry.turn_seed_content = copy.deepcopy(outcome.content)
+                entry.hitl_usage_seed = dict(outcome.usage) if outcome.usage else None
                 if task.run_id:
                     from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
                     from noesis.runtime.main_loop import run_on_main_loop
@@ -1534,13 +1553,12 @@ async def _arun(
                             content=db_content,
                             sequence=task.projection_sequence,
                             assistant_message_id=task.assistant_message_id,
+                            usage=outcome.usage or None,
                         ),
                         name=f"subagent-hitl:{task.run_id}",
                     )
                     if hitl_future is not None:
                         await asyncio.wrap_future(hitl_future)
-                    # resume 时续写同一 assistant 消息：种子保存预中断投影
-                    entry.turn_seed_content = copy.deepcopy(outcome.content)
                     publish_content = copy.deepcopy(outcome.content)
                     publish_content["_pending_hitl"] = payload
                     _publish_run_event(task, "approval.required", content=publish_content)
