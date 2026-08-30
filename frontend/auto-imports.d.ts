@@ -202,6 +202,7 @@ declare global {
   const useFileSystemAccess: typeof import('@vueuse/core')['useFileSystemAccess']
   const useFocus: typeof import('@vueuse/core')['useFocus']
   const useFocusWithin: typeof import('@vueuse/core')['useFocusWithin']
+  const useFollowupQueue: typeof import('./src/hooks/useFollowupQueue')['useFollowupQueue']
   const useFps: typeof import('@vueuse/core')['useFps']
   const useFullscreen: typeof import('@vueuse/core')['useFullscreen']
   const useGamepad: typeof import('@vueuse/core')['useGamepad']
@@ -341,6 +342,9 @@ declare global {
   // @ts-ignore
   export type { RouteRecordRaw, RouteLocationRaw } from 'vue-router'
   import('vue-router')
+  // @ts-ignore
+  export type { FollowupQueueStore } from './src/hooks/useFollowupQueue'
+  import('./src/hooks/useFollowupQueue')
   // @ts-ignore
   export type { MentionKind, MentionCandidate, ComposerMention } from './src/hooks/useMentionCatalog'
   import('./src/hooks/useMentionCatalog')
@@ -554,6 +558,7 @@ declare module 'vue' {
     readonly useFileSystemAccess: UnwrapRef<typeof import('@vueuse/core')['useFileSystemAccess']>
     readonly useFocus: UnwrapRef<typeof import('@vueuse/core')['useFocus']>
     readonly useFocusWithin: UnwrapRef<typeof import('@vueuse/core')['useFocusWithin']>
+    readonly useFollowupQueue: UnwrapRef<typeof import('./src/hooks/useFollowupQueue')['useFollowupQueue']>
     readonly useFps: UnwrapRef<typeof import('@vueuse/core')['useFps']>
     readonly useFullscreen: UnwrapRef<typeof import('@vueuse/core')['useFullscreen']>
     readonly useGamepad: UnwrapRef<typeof import('@vueuse/core')['useGamepad']>

@@ -32,6 +32,7 @@ import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { chatHistorySiderCollapsed } from '@/hooks/useChatHistorySider'
+import { useFollowupQueue } from '@/hooks/useFollowupQueue'
 import {
   candidateToMention,
   ensureMentionCatalog,
@@ -50,6 +51,7 @@ import { buildDisplayParts } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { isReasoningLevel } from '@/utils/reasoningLevels'
+import { rebuildSessionStats } from '@/utils/sessionStats'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { taskNoticeMeta } from '@/utils/taskNotice'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
@@ -1378,34 +1380,14 @@ function saveStatslineTemplate() {
 function resetStatslineTemplate() {
   statslineModal.draft = ''
 }
-/** 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。 */
+/**
+ * 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。
+ *  主/子会话共用同一计算（见 utils/sessionStats）。
+ */
 function rebuildSessionStatsFromHistory() {
-  const totals: SessionStats = {
-    turns: 0,
-    steps: 0,
-    llm_ms: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_tokens: 0,
-  }
-  for (const item of conversationItems.value) {
-    if (item.role !== 'assistant') {
-      continue
-    }
-    const usage = (item.msg_metadata as any)?.usage
-    if (!usage || typeof usage !== 'object') {
-      continue
-    }
-    totals.turns += 1
-    totals.steps += Number(usage.steps) || 0
-    totals.llm_ms += Number(usage.llm_ms) || 0
-    totals.input_tokens += Number(usage.input_tokens) || 0
-    totals.output_tokens += Number(usage.output_tokens) || 0
-    totals.cache_read_tokens += Number(usage.cache_read_tokens) || 0
-    totals.cache_write_tokens += Number(usage.cache_write_tokens) || 0
-  }
-  sessionStats.value = totals.steps > 0 ? totals : null
+  sessionStats.value = rebuildSessionStats(
+    conversationItems.value.map((item) => ({ role: item.role, extra: item.msg_metadata as unknown })),
+  )
 }
 /** 整轮回复结束信号：递增触发所有 ToolCallCollapse compact 收起。 */
 const runCollapseSignal = ref(0)
@@ -1932,8 +1914,13 @@ const sendDisabled = computed(() => {
  */
 const composerStopMode = computed(() => stylizingLoading.value && sendDisabled.value)
 
-/* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ---- */
+/* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ----
+   CRUD 走共享 composable（与子 Agent 抽屉同一份实现）；提交/终态衔接为主链路域语义 */
 
+const composerQueue = useFollowupQueue({
+  get: () => queuedComposerMessages.value,
+  set: (list) => (queuedComposerMessages.value = list),
+})
 const queuedComposerMessages = ref<string[]>([])
 
 // 队列属于当前对话上下文：会话切换即清空，避免跨会话误发
@@ -1941,24 +1928,9 @@ watch(() => uuids.value[qa_type.value], () => {
   queuedComposerMessages.value = []
 })
 
-function removeQueuedComposerMessage(index: number): void {
-  queuedComposerMessages.value = queuedComposerMessages.value.filter((_, i) => i !== index)
-}
-
 /** 编辑：文本回到输入框，从队列移除 */
 function editQueuedComposerMessage(index: number): void {
-  inputTextString.value = queuedComposerMessages.value[index] ?? ''
-  removeQueuedComposerMessage(index)
-}
-
-function reorderQueuedComposerMessages(from: number, to: number): void {
-  const next = [...queuedComposerMessages.value]
-  if (from === to || from < 0 || to < 0 || from >= next.length || to >= next.length) {
-    return
-  }
-  const [moved] = next.splice(from, 1)
-  next.splice(to, 0, moved)
-  queuedComposerMessages.value = next
+  inputTextString.value = composerQueue.edit(index)
 }
 
 /** 立即发送：空闲直接发；运行中先停止当前 run，消息提为队首由终态 watcher 自动提交 */
@@ -1975,7 +1947,7 @@ async function submitQueuedComposerNow(index: number): Promise<void> {
     await stopChatStream()
     return
   }
-  removeQueuedComposerMessage(index)
+  composerQueue.remove(index)
   inputTextString.value = message
   await handleCreateStylized()
 }
@@ -1990,7 +1962,7 @@ async function flushNextQueuedComposerMessage(): Promise<void> {
   if (currentInput && currentInput !== message) {
     queuedComposerMessages.value = [...queuedComposerMessages.value.slice(1), currentInput]
   } else {
-    removeQueuedComposerMessage(0)
+    composerQueue.remove(0)
   }
   inputTextString.value = message
   await handleCreateStylized()
@@ -3640,10 +3612,10 @@ function onComposerPaste(e: ClipboardEvent) {
                       <!-- 待发队列：运行中发送的消息在此排队，当前 run 终态后逐条自动提交（与子 Agent 抽屉同构） -->
                       <FollowupQueue
                         :messages="queuedComposerMessages"
-                        @remove="removeQueuedComposerMessage"
+                        @remove="composerQueue.remove"
                         @edit="editQueuedComposerMessage"
                         @send-now="submitQueuedComposerNow"
-                        @reorder="reorderQueuedComposerMessages"
+                        @reorder="composerQueue.reorder"
                       />
 
                       <MentionPicker

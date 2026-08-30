@@ -105,6 +105,7 @@ class SubagentSessionService:
         user_id: str,
         message: str,
         model_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict:
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
@@ -126,6 +127,7 @@ class SubagentSessionService:
                 message,
                 user_message_id=pending_user_message_id,
                 model_id=model_id,
+                reasoning_effort=reasoning_effort,
             )
         except ValueError as exc:
             await cls._discard_pending_user_message(pending_user_message_id, user_id)
@@ -659,12 +661,16 @@ class SubagentSessionService:
         content: Optional[dict] = None,
         error: Optional[str] = None,
         finish_reason: Optional[str] = None,
+        usage: Optional[dict] = None,
     ) -> None:
         """run 终态化并同步 assistant 消息。
 
         content=None 表示沿用 run 当前快照——超时/异常/取消等非正常终态
         必须走此语义，保留执行期间 persist_projection 积累的进度，
         不得用空 parts 覆盖（否则用户打开详情只能看到空白）。
+
+        usage 为统一管道的本会话 usage 聚合（steps/llm_ms/tokens/cache），
+        终态写入 message.extra.usage——与主链路同结构，子会话统计条据此重建。
         """
         from noesis.repositories.agent_run_repository import AgentRunRepository
         from noesis.storage.postgres.manager import pg_manager
@@ -702,6 +708,7 @@ class SubagentSessionService:
                 finish_reason=finish_reason or status.value,
                 error_code="SUBAGENT_FAILED" if error else None,
                 user_error_message=error,
+                usage=usage,
             )
             await db.commit()
 

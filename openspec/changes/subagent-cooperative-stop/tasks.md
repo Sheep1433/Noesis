@@ -1,3 +1,9 @@
+> **适配注记（2026-08-29，unify-agent-run-pipeline 已实施）**：executor 执行内核已切换为统一
+> run 管道（`stream_agent_events` → `RuntimeEventMapper`，见
+> `docs/architecture/subagent-sessions.md`「统一 run 管道」一节）。本变更的静止边界协作停止、
+> stopping 中间态、部分成果回收均应在统一管道的 turn 边界上实现——下方任务面按旧
+> `astream(values)` 内核编写，开工前须按新内核细化（如：静止边界 = mapper 事件流的
+> on_tool_end / RunPaused 边界；取消不再依赖 future.cancel 硬杀，改为管道内协作退出信号）。
 ## 1. executor 协作停止状态机
 
 - [ ] 1.1 `BgTaskStatus` 增加 `STOPPING`；`_SLOT_STATUSES` 包含 stopping（收尾仍占槽）；`BackgroundTask` 增加停止请求标记与宽限 watchdog 句柄字段

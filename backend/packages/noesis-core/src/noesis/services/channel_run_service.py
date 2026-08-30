@@ -20,6 +20,7 @@ from noesis.chat.delivery.channel_worker import ChannelDeliveryWorker
 from noesis.chat.message_builder import AssistantMessageBuilder, UserMessageBuilder
 from noesis.chat.tool_state import ToolState
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
+from noesis.chat.event_mapping.mapper import new_stream_ctx
 from noesis.services.chat_service import ChatService
 from noesis.services.user_service import UserService
 from noesis.storage.postgres.models.chat import TAgentDelivery, TAgentRun, TChatMessage
@@ -330,7 +331,7 @@ async def run_channel_agent(
             session_id=session_id,
             message_id=bridge.assistant_message_id,
         )
-        ctx = qs._new_stream_ctx()
+        ctx = new_stream_ctx()
 
         if await qs._insert_streaming_assistant_skeleton(
             bridge.assistant_message_id,
@@ -559,7 +560,7 @@ async def resume_channel_hitl(
         )
         builder = AssistantMessageBuilder(session_id=session_id, message_id=aid)
         builder.load_from_content_dict(existing_content)
-        ctx = qs._new_stream_ctx()
+        ctx = new_stream_ctx()
         ctx["_assistant_db_id"] = aid
 
         for idx, decision in enumerate(decision_payloads):
