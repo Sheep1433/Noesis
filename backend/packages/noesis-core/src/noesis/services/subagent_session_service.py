@@ -203,20 +203,26 @@ class SubagentSessionService:
 
     @classmethod
     async def stop_run(cls, *, run_id: str, user_id: str, db: AsyncSession) -> TAgentRun:
+        """请求协作停止：立即返回受理快照（status 覆写 stopping），不等待终态。
+
+        终态经 bg-task / run.finished 事件推送；即时取消路径（queued /
+        awaiting_approval / shell）返回的快照 status 已是终态。
+        """
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
             raise NotFoundException(message="子 Agent run 不存在")
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
         try:
-            BackgroundSubagentExecutor.cancel(run.session_id)
+            snapshot = BackgroundSubagentExecutor.cancel(run.session_id)
         except ValueError as exc:
             raise ServiceException(message=str(exc)) from exc
-        return await cls._wait_run(db, run_id, user_id, predicate=lambda row: row.status not in {
-            RunStatus.QUEUED.value,
-            RunStatus.RUNNING.value,
-            RunStatus.HITL_PENDING.value,
-        })
+        # 受理即返回：协作停止进行中（stopping）或即时终态（cancelled 等）
+        if snapshot.get("status") == "stopping":
+            run.status = "stopping"
+        else:
+            run.status = str(snapshot.get("status") or run.status)
+        return run
 
     @staticmethod
     async def _get_owned_run(run_id: str, user_id: str, db: AsyncSession) -> TAgentRun | None:
