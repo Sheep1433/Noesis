@@ -1485,3 +1485,78 @@ async def test_hitl_resume_merges_usage_across_interrupt() -> None:
     with ex_mod._TASKS_LOCK:
         entry = ex_mod._TASKS.get(task_id)
     assert entry is not None and entry.hitl_usage_seed is None
+
+
+def test_stop_during_turn_finish_window_not_overwritten() -> None:
+    """竞态修复（阻塞项1）：turn 收尾窗口内受理的停止不得被终态覆写。
+
+    模拟：执行侧流已结束（静止边界检查已过）但终态尚未写入时 cancel 受理——
+    _try_transition 在锁内复查 STOPPING，终态写入让位于取消收尾。
+    """
+    from noesis.agents.subagents import executor as ex_mod
+
+    worker = _build_worker([AIMessage(content="产出文本")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="竞态", session_id="s-race", user_id="u1",
+    )
+    time.sleep(0.05)
+    # 在任务即将完成时抢入停止：_try_transition 与终态写入竞争
+    # （快速完成的脚本模型下，此窗口极窄——改为直接验证机制：终态写入遇 STOPPING 让位）
+    with ex_mod._TASKS_LOCK:
+        entry = ex_mod._TASKS.get(task_id)
+    assert entry is not None
+    task = entry.task
+    # 机制验证：置 STOPPING 后，终态写入被拒
+    task.status = ex_mod.BgTaskStatus.STOPPING
+    task.stop_reason = "cancelled"
+    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.COMPLETED) is False
+    assert task.status == ex_mod.BgTaskStatus.STOPPING.value
+    # 恢复 RUNNING 后终态写入正常
+    task.status = ex_mod.BgTaskStatus.RUNNING
+    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.COMPLETED) is True
+    executor.cancel(task_id)
+
+
+def test_send_message_rejected_while_stopping() -> None:
+    """stopping 期间 send_message 拒绝（中等问题：避免孤儿 user 消息）。"""
+    worker = _build_worker([_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s-msg", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(task_id)
+    with pytest.raises(ValueError, match="正在停止"):
+        executor.send_message(task_id, "停止期间的追加消息")
+    executor.cancel(task_id)
+
+
+def test_cancel_notification_carries_partial_preview() -> None:
+    """通知注入携带部分成果（阻塞项2）：cancelled 通知渲染 preview。"""
+    from noesis.agents.subagents import notifications as notices
+    from noesis.agents.subagents.notifications import render_block
+
+    first = AIMessage(
+        content="通知应携带这段部分产出。",
+        tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
+    )
+    worker = _build_worker([first] + [_slow_call(f"s{i}", f"c{i}") for i in range(6)], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="通知部分产出", session_id="s-notify", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(task_id)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+
+    pending = notices.take_undelivered("s-notify", mark_delivered=False)
+    cancelled = [n for n in pending if n["status"] == "cancelled"]
+    assert cancelled, f"未收到取消通知: {pending}"
+    assert cancelled[0]["preview"].startswith("通知应携带这段部分产出。")
+
+    # 父 Agent 注入文本（render_block）同样携带
+    block = render_block(pending)
+    assert "已取消" in block
+    assert "通知应携带这段部分产出。" in block

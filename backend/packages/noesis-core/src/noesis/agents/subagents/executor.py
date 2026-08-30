@@ -938,6 +938,8 @@ class BackgroundSubagentExecutor:
             task = entry.task
             if task.kind == "shell":
                 raise ValueError("该任务为后台命令任务，不支持追加消息")
+            if task.status == BgTaskStatus.STOPPING:
+                raise ValueError("任务正在停止，无法追加消息")
             if task.status.is_terminal and task.status != BgTaskStatus.COMPLETED:
                 raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
 
@@ -967,6 +969,8 @@ class BackgroundSubagentExecutor:
             task = entry.task
             if task.kind == "shell":
                 raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
+            if task.status == BgTaskStatus.STOPPING:
+                raise ValueError("任务正在停止，无法追加消息")
             status = task.status
             # completed → 冷恢复：同 thread 开新 turn（followup 队列一并排入）
             if status == BgTaskStatus.COMPLETED:
@@ -1224,27 +1228,74 @@ _PARTIAL_OUTPUT_PREFIX = "中止前部分产出"
 _PARTIAL_RESULT_MAX_CHARS = 4000
 
 
-def _partial_output_text(outcome: Optional["_TurnOutcome"], task: BackgroundTask) -> str:
-    """提取中止前的部分文本产出（有界）。
+def _try_transition(task: BackgroundTask, next_status: BgTaskStatus) -> bool:
+    """executor 侧状态写入的唯一收口：STOPPING（停止已受理）不得被覆写。
 
-    协作退出（outcome 携带边界投影）取全部 text parts 拼接；
-    硬杀兜底（outcome=None）从进度摘要的 text 条目回收（预览级，聊胜于无）。
+    cancel()/_on_task_timeout 在 _TASKS_LOCK 内置 STOPPING；执行侧所有
+    终态/恢复/AWAITING 写入经此在同一把锁下复查——互斥关闭「检查后写入」
+    窗口（否则停止被终态覆写丢失，followup 甚至反向新开 run）。
+    返回 False = 停止已受理，调用方须走 _finalize_stop 取消收尾。
     """
-    if outcome is not None:
-        parts = [
-            part.get("content") or ""
-            for part in outcome.content.get("parts", [])
-            if part.get("type") == "text" and part.get("content")
-        ]
-        text = "\n".join(parts).strip()
-    else:
-        with task.progress_lock:
-            text = "\n".join(
-                str(item.get("preview") or "")
-                for item in task.progress
-                if item.get("kind") == "text" and item.get("preview")
-            ).strip()
-    return text[:_PARTIAL_RESULT_MAX_CHARS]
+    with _TASKS_LOCK:
+        if task.status == BgTaskStatus.STOPPING:
+            return False
+        task.status = next_status
+        return True
+
+
+def _turn_run_status(outcome: "_TurnOutcome", fallback_error: Optional[str]) -> RunStatus:
+    """turn 终态：降级失败 → ERROR；截断 → PARTIAL；否则 COMPLETED。"""
+    status, _ = _fallback_terminal(fallback_error)
+    if outcome.truncated and not fallback_error:
+        status = RunStatus.PARTIAL
+    return status
+
+
+def _turn_finish_reason(outcome: "_TurnOutcome", fallback_error: Optional[str]) -> str:
+    """turn finish_reason：error > truncated > 管道值（单处合成，两调用点共享）。"""
+    if fallback_error:
+        return "error"
+    if outcome.truncated:
+        return "truncated"
+    return outcome.finish_reason or "stop"
+
+
+def _turn_text_parts(outcome: "_TurnOutcome") -> str:
+    """当前 turn 投影的全部 text parts（协作退出时的兜底提取）。"""
+    return "\n".join(
+        str(part.get("content") or "")
+        for part in outcome.content.get("parts", [])
+        if part.get("type") == "text" and part.get("content")
+    ).strip()
+
+
+async def _collect_persisted_text(task: BackgroundTask) -> str:
+    """从子会话全部 assistant 消息投影提取 text parts（部分成果的权威来源）。
+
+    覆盖全部轮次（followup 链早轮）与硬杀场景（最后一次边界 persist 的投影）；
+    无标准 run（测试/无 run_id）由调用方退回 turn 投影兜底。
+    """
+    if not (task.child_session_id and task.run_id):
+        return ""
+    from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
+    from noesis.runtime.main_loop import run_on_main_loop
+
+    future = run_on_main_loop(
+        SubagentSessionService.collect_partial_output(
+            task.child_session_id, task.user_id,
+        ),
+        name=f"subagent-partial:{task.run_id}",
+    )
+    if future is None:
+        return ""
+    try:
+        return (await asyncio.wrap_future(future)) or ""
+    except Exception:
+        # 提取失败降级为空（spec：不阻塞终止）；调用方兜底
+        logger.opt(exception=True).warning(
+            "bg subagent partial output collect failed task_id={}", task.task_id,
+        )
+        return ""
 
 
 async def _finalize_stop(
@@ -1271,50 +1322,65 @@ async def _finalize_stop(
         task.status = BgTaskStatus.CANCELLED
     task.completed_at = time.time()
 
-    # 部分成果回收：先提取后记录通知（_notify_terminal 读 task.result 生成预览）
-    partial = _partial_output_text(outcome, task)
+    # 部分成果回收：落库投影是权威来源（覆盖全部轮次与硬杀边界前产出）；
+    # 无标准 run（测试）退回当前 turn 投影。先提取后记录通知。
+    partial = await _collect_persisted_text(task)
+    if not partial and outcome is not None:
+        partial = _turn_text_parts(outcome)
+    partial = partial[:_PARTIAL_RESULT_MAX_CHARS]
     if partial:
         task.result = f"{_PARTIAL_OUTPUT_PREFIX}\n{partial}"
 
-    if task.run_id:
-        from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
-        from noesis.runtime.main_loop import run_on_main_loop
+    try:
+        if task.run_id:
+            from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
+            from noesis.runtime.main_loop import run_on_main_loop
 
-        finish_reason = "timeout" if reason == "timed_out" else reason
-        error = task.error or ("任务已取消" if reason == "cancelled" else None)
-        terminal_future = run_on_main_loop(
-            SubagentSessionService.mark_terminal(
-                run_id=task.run_id,
-                status=RunStatus.PARTIAL,
+            finish_reason = "timeout" if reason == "timed_out" else reason
+            error = task.error or ("任务已取消" if reason == "cancelled" else None)
+            terminal_future = run_on_main_loop(
+                SubagentSessionService.mark_terminal(
+                    run_id=task.run_id,
+                    status=RunStatus.PARTIAL,
+                    content=copy.deepcopy(outcome.content) if outcome is not None else None,
+                    error=error,
+                    finish_reason=finish_reason,
+                    usage=outcome.usage or None if outcome is not None else None,
+                ),
+                name=f"subagent-stop-terminal:{task.run_id}",
+            )
+            if terminal_future is not None:
+                await asyncio.wrap_future(terminal_future)
+            _publish_run_event(
+                task,
+                "run.finished",
                 content=copy.deepcopy(outcome.content) if outcome is not None else None,
-                error=error,
                 finish_reason=finish_reason,
-                usage=outcome.usage or None if outcome is not None else None,
-            ),
-            name=f"subagent-stop-terminal:{task.run_id}",
+            )
+    except Exception:
+        # 终态落库失败不吞通知：事件与 drain 唤醒在 finally 兜底（否则会话队列停摆）
+        logger.opt(exception=True).error(
+            "bg subagent stop terminal persist failed task_id={}", task.task_id,
         )
-        if terminal_future is not None:
-            await asyncio.wrap_future(terminal_future)
-        _publish_run_event(
-            task,
-            "run.finished",
-            content=copy.deepcopy(outcome.content) if outcome is not None else None,
-            finish_reason=finish_reason,
+    finally:
+        logger.info(
+            "bg subagent stopped cooperatively task_id={} reason={} steps={} duration={:.1f}s partial={}",
+            task.task_id,
+            reason,
+            task.step_count,
+            (task.completed_at or time.time()) - task.started_at,
+            bool(task.result),
         )
-    logger.info(
-        "bg subagent stopped cooperatively task_id={} reason={} steps={} duration={:.1f}s partial={}",
-        task.task_id,
-        reason,
-        task.step_count,
-        (task.completed_at or time.time()) - task.started_at,
-        bool(task.result),
-    )
-    _publish_task_event(task, "terminal")
-    _notify_terminal(task)
+        _publish_task_event(task, "terminal")
+        _notify_terminal(task)
 
 
 def _arm_stop_grace(entry: _TaskEntry) -> None:
-    """停止宽限 watchdog：宽限内静止边界未到达即回退硬杀。"""
+    """停止宽限 watchdog：宽限内静止边界未到达即回退硬杀。
+
+    先摘旧句柄——cancel 与超时协作路径并发触发时不得泄漏定时器。
+    """
+    _disarm_stop_grace(entry)
     _disarm_watchdog(entry)
     loop = _ensure_loop()
     entry.stop_grace_handle = loop.call_later(
@@ -1534,9 +1600,12 @@ async def _arun(
                 return
             if outcome.hitl_payload is not None:
                 payload = outcome.hitl_payload
+                # 停止在流结束与审批写入间受理：取消收尾（不进 awaiting_approval）
+                if not _try_transition(task, BgTaskStatus.AWAITING_APPROVAL):
+                    await _finalize_stop(entry, task, outcome)
+                    return
                 # HITL 的 ActionRequest 由 stream_agent_events 的 enrich_action_requests
                 # 按名回填 tool_call_id；bridge 已把被中断工具段置 approval_pending。
-                task.status = BgTaskStatus.AWAITING_APPROVAL
                 task.interrupt = payload
                 # 种子无条件保存（无 run_id 场景同样需要 resume 合并；usage 审计另走 run 快照）
                 entry.turn_seed_content = copy.deepcopy(outcome.content)
@@ -1573,25 +1642,31 @@ async def _arun(
                 return
             if outcome.final_text:
                 task.result = outcome.final_text
+            if outcome.truncated:
+                # 截断一等终止（design D4）：task.result 走部分成果提取并标注截断原因，
+                # 通知预览随之反映（「已完成」+ 截断标注而非伪装完整产出）
+                partial = _turn_text_parts(outcome)
+                task.result = (
+                    f"输出截断（finish_reason=length）：\n{partial}"
+                    if partial else "输出截断（finish_reason=length）"
+                )
             # followup 链：队列非空则同 thread 开下一个 turn
             next_followup = _pop_first_followup(entry)
             if next_followup is None:
                 break
+            # 恢复 RUNNING 原子化并提前到 await 链之前：停止在 turn 收尾窗口受理时
+            # 此处直接取消收尾（不再新开 run）；链内再受理由下一 turn 的静止边界退出
+            if not _try_transition(task, BgTaskStatus.RUNNING):
+                await _finalize_stop(entry, task, outcome)
+                return
             next_message, next_user_message_id, next_params = next_followup
             # 该 turn 指定了新模型/新档位 → 失效已编译 worker，下一轮以新参数续跑同 thread
             # （档位 ContextVar 在 _ensure_agent 编译前统一设置）
             if _apply_turn_params(entry, next_params):
                 agent = await _ensure_agent(entry)
             turn_fallback_error = outcome.fallback_error
-            turn_status, _ = _fallback_terminal(turn_fallback_error)
-            if outcome.truncated and not turn_fallback_error:
-                # 输出截断一等终止：该轮终态 partial/truncated（部分产出可收）
-                turn_status = RunStatus.PARTIAL
-            turn_reason = (
-                "error" if turn_fallback_error
-                else "truncated" if outcome.truncated
-                else (outcome.finish_reason or "stop")
-            )
+            turn_status = _turn_run_status(outcome, turn_fallback_error)
+            turn_reason = _turn_finish_reason(outcome, turn_fallback_error)
             if task.run_id:
                 from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
                 from noesis.runtime.main_loop import run_on_main_loop
@@ -1622,7 +1697,6 @@ async def _arun(
                     task.turn_count += 1
                     task.projection_sequence = 0
                     entry.turn_seed_content = None
-            task.status = BgTaskStatus.RUNNING
             task.completed_at = None
             logger.info(
                 "bg subagent followup turn task_id={} queued={}",
@@ -1631,19 +1705,17 @@ async def _arun(
             )
             source = {"messages": [HumanMessage(content=next_message)]}
         final_fallback_error = outcome.fallback_error
-        final_status, _ = _fallback_terminal(final_fallback_error)
-        if outcome.truncated and not final_fallback_error:
-            final_status = RunStatus.PARTIAL
-        final_reason = (
-            "error" if final_fallback_error
-            else "truncated" if outcome.truncated
-            else (outcome.finish_reason or "stop")
-        )
+        final_status = _turn_run_status(outcome, final_fallback_error)
+        final_reason = _turn_finish_reason(outcome, final_fallback_error)
+        # 停止在流结束与终态写入间受理：取消收尾（部分成果保留）
+        if not _try_transition(
+            task,
+            BgTaskStatus.FAILED if final_fallback_error else BgTaskStatus.COMPLETED,
+        ):
+            await _finalize_stop(entry, task, outcome)
+            return
         if final_fallback_error:
-            task.status = BgTaskStatus.FAILED
             task.error = final_fallback_error
-        else:
-            task.status = BgTaskStatus.COMPLETED
         task.completed_at = time.time()
         if task.run_id:
             from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
@@ -1822,6 +1894,7 @@ def fail_session_shell_tasks(session_id: str, reason: str) -> None:
         if entry.task.status.is_terminal:
             continue
         _disarm_watchdog(entry)
+        _disarm_stop_grace(entry)
         if entry.future is not None and not entry.future.done():
             entry.future.cancel()
         if entry.task.status.is_terminal:
@@ -1954,20 +2027,25 @@ def _on_task_timeout(entry: _TaskEntry) -> None:
     """任务总时限：改走协作停止路径——置 stopping（timed_out）+ 宽限 watchdog。
 
     宽限内在静止边界协作退出（部分成果保留）；宽限超时由硬杀兜底。
+    置位持 _TASKS_LOCK：与 cancel() 的停止受理互斥，先到者保留 stop_reason
+    （用户先取消则报 cancelled，先超时则报 timed_out——后写者胜会误报）。
     """
-    if (
-        entry.task.status.is_terminal
-        or entry.task.status == BgTaskStatus.AWAITING_APPROVAL
-    ):
-        return
-    if entry.task.status == BgTaskStatus.STOPPING:
-        return
-    if entry.task.kind == "shell":
-        # shell 命令无协作边界：保持即时超时终态
+    # 锁内只做状态判定与置位；shell 硬杀/事件发布在锁外——
+    # _on_timeout_hard 的通知与 drain 需要再拿 _TASKS_LOCK，持锁调用即死锁
+    shell_hard = False
+    with _TASKS_LOCK:
+        task = entry.task
+        if task.status.is_terminal or task.status == BgTaskStatus.AWAITING_APPROVAL:
+            return
+        if task.kind == "shell":
+            shell_hard = True
+        elif task.status != BgTaskStatus.STOPPING:
+            task.status = BgTaskStatus.STOPPING
+            task.stop_reason = "timed_out"
+            # 已受理（取消先到）时保留原 stop_reason
+    if shell_hard:
         _on_timeout_hard(entry)
         return
-    entry.task.status = BgTaskStatus.STOPPING
-    entry.task.stop_reason = "timed_out"
     _arm_stop_grace(entry)
     _publish_task_event(entry.task, "stopping")
 

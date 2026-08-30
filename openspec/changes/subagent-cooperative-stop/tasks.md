@@ -46,3 +46,26 @@
 
 - [x] 6.1 HITL 挂起段 usage 补齐：`mark_waiting_approval` 时把 bridge 累计的 `message_usage` 一并落 run 快照，审批 resume 的新 turn 完成后与后半段 usage 合并落库（该 turn `extra.usage` 含中断前后全部调用）——中断/恢复路径与停止路径同属 turn 生命周期，随本变更一次收口
 - [x] 6.2 回归测试：含审批的子 turn 终态 usage ≥ 中断前模型调用的 usage（不再丢前半段）
+
+## 7. 两轴 review 修复轮（2026-08-30）
+
+- [x] 7.1 竞态修复：`_try_transition` 原子收口（executor 侧终态/AWAITING/恢复写入
+  持 `_TASKS_LOCK` 复查 STOPPING）——turn 收尾窗口内受理的停止不再被终态覆写，
+  followup 不再反向新开 run；followup 恢复 RUNNING 提前到 await 链之前
+- [x] 7.2 部分成果权威提取：`collect_partial_output`（子会话全部 assistant 消息
+  投影，覆盖多轮与硬杀场景）；无标准 run 时退回 turn 投影；删除 progress 预览兜底
+- [x] 7.3 通知注入 cancelled 分支携带 preview（父 Agent 注入与 check_task 同源）
+- [x] 7.4 截断标注：task.result 走「输出截断（finish_reason=length）」标注提取
+- [x] 7.5 stopping 期间 send_message/validate_followup 拒绝（避免孤儿 user 消息）
+- [x] 7.6 双停竞态：_on_task_timeout 置位持锁、_arm_stop_grace 先摘旧句柄；
+  shell 硬杀移出持锁块（修复由此引入的 _TASKS_LOCK 死锁）
+- [x] 7.7 _finalize_stop 韧性：try/except/finally——落库失败不吞终态通知与 drain
+- [x] 7.8 沙箱连坐路径补 _disarm_stop_grace；reason/status 合成去重（_turn_run_status/
+  _turn_finish_reason）；_format_task 非正常终态统一「原因+部分产出」；list_tasks 预算
+- [x] 7.9 前端发送统一：stopping 期间 Enter 与按钮同口径（提示不可发送）
+- [x] 7.10 回归：后端 1269 passed / 0 failed（新增竞态机制/STOOPING 拒绝/通知携带
+  三个用例）；前端 vitest 168/168 + build
+
+> 1.5 原「followup 可续跑冷恢复」表述修正：cancelled 任务按基础 spec
+> （agent-background-tasks「failed / timed_out / cancelled 不可续」）拒绝续跑；
+> 静止边界退出的不变量是 thread 干净（无悬空 tool_calls、投影含最后一步产出）。

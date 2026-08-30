@@ -133,6 +133,40 @@ class SubagentSessionService:
             await cls._discard_pending_user_message(pending_user_message_id, user_id)
             raise ServiceException(message=str(exc)) from exc
 
+    @classmethod
+    async def collect_partial_output(cls, session_id: str, user_id: str) -> str:
+        """从子会话全部 assistant 消息投影提取 text parts（部分成果回收的权威来源）。
+
+        覆盖全部轮次（followup 链早轮）与硬杀场景（最后一次边界 persist 的投影）；
+        按 message_sequence 顺序拼接，与消息流展示一致。
+        """
+        from sqlalchemy import select
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            rows = await db.execute(
+                select(TChatMessage.content)
+                .where(
+                    TChatMessage.session_id == session_id,
+                    TChatMessage.user_id == str(user_id),
+                    TChatMessage.role == "assistant",
+                    TChatMessage.deleted_at.is_(None),
+                )
+                .order_by(TChatMessage.message_sequence)
+            )
+            texts: list[str] = []
+            for (content,) in rows.all():
+                if not isinstance(content, dict):
+                    continue
+                for part in content.get("parts", []):
+                    if (
+                        isinstance(part, dict)
+                        and part.get("type") == "text"
+                        and part.get("content")
+                    ):
+                        texts.append(str(part["content"]))
+            return "\n".join(texts).strip()
+
     @staticmethod
     async def _discard_pending_user_message(message_id: str, user_id: str) -> None:
         from noesis.storage.postgres.manager import pg_manager

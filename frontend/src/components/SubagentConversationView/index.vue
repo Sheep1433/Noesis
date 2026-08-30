@@ -185,6 +185,11 @@ async function sendFollowup() {
   if (!message || followupSending.value) {
     return
   }
+  if (run.value?.status === 'stopping') {
+    // 与按钮禁用同口径：stopping 期间不可发送（后端也拒绝），两路径不分叉
+    window.$message?.warning('任务正在停止，无法发送')
+    return
+  }
   if (runActive.value) {
     // run 进行中：只进前端队列，等待终态后自动提交（保持可编辑/删除/排序）
     followupInput.value = ''

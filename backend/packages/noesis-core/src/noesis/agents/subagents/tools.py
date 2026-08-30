@@ -59,18 +59,16 @@ def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> s
         return f"[{public_id}] completed：\n{task.get('result') or '(无结果文本)'}"
     if status == BgTaskStatus.STOPPING.value:
         return f"[{public_id}] 正在停止（当前步骤完成后退出，稍后再查收部分产出）"
-    if status in (BgTaskStatus.FAILED.value, BgTaskStatus.TIMED_OUT.value):
-        # 超时走协作路径时部分产出在 result（error 只有原因）
-        partial = task.get("result")
-        head = f"[{public_id}] {status}：{task.get('error') or ''}"
-        if partial:
-            return f"{head}\n{_bounded(str(partial))}"
-        return head
+    # cancelled / failed / timed_out：非正常终态统一「原因 + 部分产出」形态
+    # （超时走协作路径时产出在 result，error 只有原因；取消同理）
+    partial = task.get("result")
     if status == BgTaskStatus.CANCELLED.value:
-        partial = task.get("result")
-        if partial:
-            return f"[{public_id}] cancelled（{task.get('stop_reason') or 'cancelled'}）：\n{_bounded(str(partial))}"
-        return f"[{public_id}] cancelled"
+        head = f"[{public_id}] cancelled（{task.get('stop_reason') or 'cancelled'}）" if partial else f"[{public_id}] cancelled"
+    else:
+        head = f"[{public_id}] {status}：{task.get('error') or ''}"
+    if partial:
+        return f"{head}\n{_bounded(str(partial))}"
+    return head
     hint = _CHECK_PENDING_HINT.get(BgTaskStatus(status), status)
     return f"[{public_id}] {hint}（description: {task['description']}）"
 
@@ -248,7 +246,9 @@ def build_background_task_tools(
         tasks = executor.list_for_session(session_id)
         if not tasks:
             return "当前会话没有后台任务"
-        return "\n".join(_format_task(t) for t in tasks)
+        return "\n".join(
+            _format_task(t, output_budget=OtherConfig.tool_output_max_chars) for t in tasks
+        )
 
     async def alist_tasks() -> str:
         return list_tasks()
