@@ -101,7 +101,7 @@ const duration = computed(() => {
 })
 
 /** run 进行中（含排队/待审批）：发送进入前端待发队列，终态后逐条自动提交 */
-const runActive = computed(() => !!run.value && ['queued', 'running', 'hitl_pending'].includes(run.value.status))
+const runActive = computed(() => !!run.value && ['queued', 'running', 'stopping', 'hitl_pending'].includes(run.value.status))
 const sendDisabled = computed(() => !followupInput.value.trim() || followupSending.value)
 
 /**
@@ -183,6 +183,11 @@ async function flushNextQueued(): Promise<void> {
 async function sendFollowup() {
   const message = followupInput.value.trim()
   if (!message || followupSending.value) {
+    return
+  }
+  if (run.value?.status === 'stopping') {
+    // 与按钮禁用同口径：stopping 期间不可发送（后端也拒绝），两路径不分叉
+    window.$message?.warning('任务正在停止，无法发送')
     return
   }
   if (runActive.value) {
@@ -411,7 +416,8 @@ async function decideHitl(decision: { type: 'approve' | 'reject', grant_scope?: 
 }
 
 async function stopCurrentRun() {
-  if (!run.value?.run_id) {
+  if (!run.value?.run_id || run.value.status === 'stopping') {
+    // stopping 期间重复停止无意义（受理已发出，等静止边界收尾）
     return
   }
   try {
@@ -559,7 +565,7 @@ onBeforeUnmount(() => {
               position="relative"
               :width="36"
               :height="36"
-              :disabled="!composerStopMode && sendDisabled"
+              :disabled="(!composerStopMode && sendDisabled) || run?.status === 'stopping'"
               :type="composerStopMode ? 'primary' : 'default'"
               :data-testid="composerStopMode ? 'subagent-stop-button' : 'subagent-send-button'"
               class="subagent-conversation__send-btn"

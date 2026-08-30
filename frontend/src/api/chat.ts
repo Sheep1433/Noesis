@@ -137,6 +137,7 @@ export interface SendMessageResponse {
 export type AgentRunStatus =
   | 'queued'
   | 'running'
+  | 'stopping'
   | 'retrying'
   | 'hitl_pending'
   | 'completed'
@@ -443,9 +444,11 @@ export interface TaskCatalogEntry {
   assistant_message_id?: string | null
   description: string
   kind?: 'subagent' | 'shell'
-  status: 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
+  status: 'queued' | 'running' | 'stopping' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
   result?: string | null
   error?: string | null
+  /** 协作停止受理原因（cancelled / timed_out）；status=stopping 时非空 */
+  stop_reason?: 'cancelled' | 'timed_out' | null
   interrupt?: {
     interrupt_id: string
     action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>

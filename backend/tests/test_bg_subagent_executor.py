@@ -253,14 +253,57 @@ def test_cancel_queued_task_removes_from_queue() -> None:
 
 
 def test_cancel_running_task() -> None:
+    """协作停止：cancel 即时受理返回 stopping，静止边界后落 CANCELLED 并保留部分产出。"""
+    # 首轮文本+工具调用同发：工具执行期间受理停止，退出时文本进部分成果回收
+    first = AIMessage(
+        content="先分析一下任务背景。",
+        tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
+    )
     worker = _build_worker(
-        [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
+        [first] + [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
     )
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     time.sleep(0.2)
     snapshot = executor.cancel(task_id)
-    assert snapshot["status"] in (BgTaskStatus.CANCELLED.value, BgTaskStatus.COMPLETED.value)
+    # 受理即时可见（无需等待当前步骤）
+    assert snapshot["status"] == BgTaskStatus.STOPPING.value
+    assert snapshot["stop_reason"] == "cancelled"
+    # 重复停止幂等返回同一快照
+    again = executor.cancel(task_id)
+    assert again["status"] == BgTaskStatus.STOPPING.value
+    # 静止边界（slow 工具 0.6s 完成）后协作退出为 CANCELLED
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+    # 部分成果回收：中止前已产出的文本以标注前缀保留
+    assert task["result"] and task["result"].startswith("中止前部分产出")
+    assert "先分析一下任务背景。" in task["result"]
+
+
+def test_cancel_without_text_output_no_placeholder() -> None:
+    """无文本产出的任务取消：不产生空占位文本（spec 2.4）。"""
+    worker = _build_worker(
+        [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s2", user_id="u1")
+    time.sleep(0.2)
+    assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+    assert task["result"] is None
 
 
 def test_list_and_pending_approvals_scoped_by_session() -> None:
@@ -1214,3 +1257,306 @@ def test_start_captures_parent_reasoning_effort() -> None:
         executor.cancel(task_id)
     finally:
         clear_request_reasoning_effort()
+
+
+def test_stopping_during_hitl_cancels_directly() -> None:
+    """stopping 期间触发 HITL interrupt：不进入 awaiting_approval，直接按取消收尾。"""
+    worker = _build_worker(
+        [_call("v1"), AIMessage(content="收尾")],
+        interrupt_on={"dangerous": True},
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="停止期间审批",
+        session_id="s-hitl-stop", user_id="u1",
+    )
+    time.sleep(0.15)
+    snapshot = executor.cancel(task_id)
+    # 时序两种受理形态均为正确：running → stopping（协作）；已 awaiting_approval → 即时 cancelled
+    assert snapshot["status"] in {
+        BgTaskStatus.STOPPING.value,
+        BgTaskStatus.CANCELLED.value,
+    }
+    # 无论哪种受理形态，最终必须 CANCELLED——stopping 期间触发 HITL 不得挂进 awaiting_approval
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+
+
+def test_stop_grace_timeout_falls_back_to_hard_cancel() -> None:
+    """停止宽限超时：回退硬杀，终态与通知不漏发。"""
+    worker = _build_worker(
+        [_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True,
+    )
+    # 宽限设为极短：slow 工具（0.6s）远超宽限 → 必走硬杀兜底
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30, stop_grace_seconds=1)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="宽限硬杀",
+        session_id="s-grace", user_id="u1",
+    )
+    time.sleep(0.2)
+    assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+    # 硬杀兜底同样走完整收尾：进度摘要中的文本进部分成果
+    assert task["result"] is None or task["result"].startswith("中止前部分产出")
+
+
+def test_task_timeout_goes_cooperative() -> None:
+    """任务总时限改走协作路径：置 stopping(timed_out)，静止边界退出 TIMED_OUT。"""
+    worker = _build_worker(
+        [_slow_call(f"s{i}", f"c{i}") for i in range(4)] + [AIMessage(content="超时前的产出文本。")],
+        slow=True,
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=1, stop_grace_seconds=10)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="超时协作",
+        session_id="s-timeout", user_id="u1",
+    )
+    # 超时触发（1s）后先进入 stopping
+    deadline = time.time() + 8
+    saw_stopping = False
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.STOPPING.value:
+            saw_stopping = True
+        if task and task["status"] == BgTaskStatus.TIMED_OUT.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert saw_stopping, "超时应先进入 stopping 中间态"
+    assert task["status"] == BgTaskStatus.TIMED_OUT.value
+    assert task["stop_reason"] == "timed_out"
+
+
+def test_stopping_counts_toward_concurrency_slot() -> None:
+    """stopping 收尾仍占并发槽：stopping 期间新任务排队。"""
+    worker = _build_worker(
+        [_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True,
+    )
+    executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
+    first_id = executor.start(worker_factory=lambda: worker, description="a", session_id="s-slot", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(first_id)
+    # 第一个任务 stopping（占槽）：第二个同会话任务应排队
+    second_id = executor.start(worker_factory=lambda: _build_worker([AIMessage(content="ok")]), description="b", session_id="s-slot", user_id="u1")
+    second = executor.get(second_id)
+    assert second["status"] == BgTaskStatus.QUEUED.value
+    # 收尾释放槽位后排队任务被调度
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        second = executor.get(second_id)
+        if second and second["status"] == BgTaskStatus.COMPLETED.value:
+            break
+        time.sleep(0.05)
+    assert executor.get(second_id)["status"] == BgTaskStatus.COMPLETED.value
+
+
+def test_partial_output_consistent_across_channels() -> None:
+    """部分成果三处一致（spec 2.4）：task.result / check_task(_format_task) / 通知预览。"""
+    from noesis.agents.subagents import notifications as notices
+    from noesis.agents.subagents.executor import _PARTIAL_OUTPUT_PREFIX
+    from noesis.agents.subagents.tools import _format_task
+
+    first = AIMessage(
+        content="阶段性结论：检索到 3 篇相关文献，主题集中在评测基准。",
+        tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
+    )
+    worker = _build_worker([first] + [_slow_call(f"s{i}", f"c{i}") for i in range(6)], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="部分成果", session_id="s-partial", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(task_id)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+
+    # task.result：带标注前缀的全文
+    assert task["result"] and task["result"].startswith(_PARTIAL_OUTPUT_PREFIX)
+    body = task["result"][len(_PARTIAL_OUTPUT_PREFIX):].strip()
+    assert "阶段性结论" in body
+
+    # check_task 文本：终止原因 + 部分产出（预算内不截断）
+    formatted = _format_task(task, output_budget=24000)
+    assert "cancelled" in formatted and "阶段性结论" in formatted
+
+    # 通知预览：内容本身开头（前缀不占 80 字预算）
+    pending = notices.take_undelivered("s-partial", mark_delivered=False)
+    cancelled_notices = [n for n in pending if n["status"] == "cancelled"]
+    assert cancelled_notices, f"未收到取消通知: {pending}"
+    preview = cancelled_notices[0]["preview"]
+    assert preview.startswith("阶段性结论")
+    assert _PARTIAL_OUTPUT_PREFIX not in preview
+
+
+def _truncated_call(call_id: str) -> AIMessage:
+    """finish_reason=length 的截断输出（模拟 provider 输出上限截断）。"""
+    msg = AIMessage(
+        content="输出被截断的部分文本",
+        tool_calls=[],
+    )
+    msg.response_metadata = {"finish_reason": "length"}
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_truncated_run_terminal_partial() -> None:
+    """输出截断一等终止（spec 3.3）：截断轮终态 partial/truncated 且携带部分产出。"""
+    from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
+
+    worker = _build_worker([_truncated_call("t1")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    queue = subscribe_run_events("run-trunc", "u1")
+    task_id = None
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: worker, description="截断",
+            session_id="s-trunc", user_id="u1",
+            run_id="run-trunc", assistant_message_id="am-trunc",
+        )
+        task = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: _wait_terminal(executor, task_id),
+        )
+        # 任务终态由最后一轮决定：截断轮的任务侧仍 completed，run 终态 partial
+        assert task["status"] == BgTaskStatus.COMPLETED.value
+        assert task["result"] and "输出被截断的部分文本" in task["result"]
+        # run.finished 事件携带 finish_reason=truncated（与 DB run 终态一致）
+        await asyncio.sleep(0.2)
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+        finished = [e for e in events if e["type"] == "run.finished"]
+        assert finished, f"未收到 run.finished: {[e['type'] for e in events]}"
+        assert finished[-1].get("finish_reason") == "truncated"
+    finally:
+        unsubscribe_run_events("run-trunc", queue)
+        if task_id:
+            executor.cancel(task_id)
+
+
+@pytest.mark.asyncio
+async def test_hitl_resume_merges_usage_across_interrupt() -> None:
+    """HITL usage 补齐（spec 6.2）：含审批的 turn 终态 usage 覆盖中断前后。"""
+    from noesis.agents.subagents import executor as ex_mod
+
+    worker = _build_worker(
+        [_call("v1"), AIMessage(content="审批后收尾")],
+        interrupt_on={"dangerous": True},
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="审批 usage",
+        session_id="s-hitl-usage", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
+
+    with ex_mod._TASKS_LOCK:
+        entry = ex_mod._TASKS.get(task_id)
+    assert entry is not None
+    assert entry.hitl_usage_seed is not None, "挂起时应存前半段 usage 种子"
+
+    # 审批通过 → resume 续跑至完成
+    executor.submit_decisions(task_id, [{"type": "approve"}])
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.COMPLETED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    # 种子已消费
+    with ex_mod._TASKS_LOCK:
+        entry = ex_mod._TASKS.get(task_id)
+    assert entry is not None and entry.hitl_usage_seed is None
+
+
+def test_stop_during_turn_finish_window_not_overwritten() -> None:
+    """竞态修复（阻塞项1）：turn 收尾窗口内受理的停止不得被终态覆写。
+
+    模拟：执行侧流已结束（静止边界检查已过）但终态尚未写入时 cancel 受理——
+    _try_transition 在锁内复查 STOPPING，终态写入让位于取消收尾。
+    """
+    from noesis.agents.subagents import executor as ex_mod
+
+    worker = _build_worker([AIMessage(content="产出文本")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="竞态", session_id="s-race", user_id="u1",
+    )
+    time.sleep(0.05)
+    # 在任务即将完成时抢入停止：_try_transition 与终态写入竞争
+    # （快速完成的脚本模型下，此窗口极窄——改为直接验证机制：终态写入遇 STOPPING 让位）
+    with ex_mod._TASKS_LOCK:
+        entry = ex_mod._TASKS.get(task_id)
+    assert entry is not None
+    task = entry.task
+    # 机制验证：置 STOPPING 后，终态写入被拒
+    task.status = ex_mod.BgTaskStatus.STOPPING
+    task.stop_reason = "cancelled"
+    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.COMPLETED) is False
+    assert task.status == ex_mod.BgTaskStatus.STOPPING.value
+    # 恢复 RUNNING 后终态写入正常
+    task.status = ex_mod.BgTaskStatus.RUNNING
+    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.COMPLETED) is True
+    executor.cancel(task_id)
+
+
+def test_send_message_rejected_while_stopping() -> None:
+    """stopping 期间 send_message 拒绝（中等问题：避免孤儿 user 消息）。"""
+    worker = _build_worker([_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s-msg", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(task_id)
+    with pytest.raises(ValueError, match="正在停止"):
+        executor.send_message(task_id, "停止期间的追加消息")
+    executor.cancel(task_id)
+
+
+def test_cancel_notification_carries_partial_preview() -> None:
+    """通知注入携带部分成果（阻塞项2）：cancelled 通知渲染 preview。"""
+    from noesis.agents.subagents import notifications as notices
+    from noesis.agents.subagents.notifications import render_block
+
+    first = AIMessage(
+        content="通知应携带这段部分产出。",
+        tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
+    )
+    worker = _build_worker([first] + [_slow_call(f"s{i}", f"c{i}") for i in range(6)], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="通知部分产出", session_id="s-notify", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(task_id)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+
+    pending = notices.take_undelivered("s-notify", mark_delivered=False)
+    cancelled = [n for n in pending if n["status"] == "cancelled"]
+    assert cancelled, f"未收到取消通知: {pending}"
+    assert cancelled[0]["preview"].startswith("通知应携带这段部分产出。")
+
+    # 父 Agent 注入文本（render_block）同样携带
+    block = render_block(pending)
+    assert "已取消" in block
+    assert "通知应携带这段部分产出。" in block

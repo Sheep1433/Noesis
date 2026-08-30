@@ -1125,12 +1125,13 @@ async def stop_run(
     if existing.origin == "subagent":
         from noesis.services.subagent_session_service import SubagentSessionService
 
-        await SubagentSessionService.stop_run(
+        # 协作停止：服务层返回受理快照（status 覆写 stopping / 即时终态），
+        # 不重查 DB——DB run 仍为 running，终态经事件推送
+        snapshot = await SubagentSessionService.stop_run(
             run_id=run_id,
             user_id=str(current_user.user_id),
             db=db,
         )
-        snapshot = await RunService.get(run_id, str(current_user.user_id), db)
         return ResponseUtil.success(msg="已停止生成", data=snapshot.to_dict())
     snapshot = await RunService.stop(run_id, str(current_user.user_id), db)
     return ResponseUtil.success(

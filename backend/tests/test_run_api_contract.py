@@ -1107,3 +1107,79 @@ async def test_conflict_409_response_contains_full_join_schema() -> None:
     assert conflict_data["assistant_message_id"] == "msg-existing"
     assert conflict_data["session_id"] == "session-1"
     assert conflict_data["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_stop_subagent_run_returns_stopping_snapshot(monkeypatch) -> None:
+    """协作停止契约：stop 即时返回受理快照，status 覆写 stopping（不等待终态）。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from noesis.services.subagent_session_service import SubagentSessionService
+
+    db_run = SimpleNamespace(origin="subagent", status="running", id="run-1")
+    monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=db_run))
+
+    class _StopSnapshot:
+        origin = "subagent"
+        status = "stopping"
+        id = "run-1"
+
+        def to_dict(self):
+            return {"id": self.id, "status": self.status, "origin": self.origin}
+
+    async def fake_stop_run(*, run_id, user_id, db):
+        return _StopSnapshot()
+
+    monkeypatch.setattr(SubagentSessionService, "stop_run", fake_stop_run)
+
+    result = await chat_api.stop_run(
+        "run-1",
+        current_user=SimpleNamespace(user_id="user-1"),
+        db=SimpleNamespace(),
+    )
+    body = json.loads(result.body.decode()) if getattr(result, "body", None) else {}
+    data = body.get("data") or {}
+    # 响应形状与 RunSnapshot 一致，status 为受理态 stopping
+    assert data.get("status") == "stopping"
+
+
+@pytest.mark.asyncio
+async def test_stop_run_service_overwrites_status_stopping(monkeypatch) -> None:
+    """服务层：cancel 返回 stopping → DB run 快照 status 覆写；即时终态 → 终态值。"""
+    from types import SimpleNamespace
+
+    from noesis.services.subagent_session_service import SubagentSessionService
+
+    class _FakeExec:
+        @staticmethod
+        def cancel(task_id):
+            if task_id == "s-coop":
+                return {"status": "stopping", "stop_reason": "cancelled"}
+            return {"status": "cancelled"}
+
+    monkeypatch.setattr(
+        "noesis.services.subagent_runtime_port.ExecutorPort", _FakeExec, raising=False,
+    )
+    import noesis.services.subagent_runtime_port as port
+
+    monkeypatch.setattr(port, "ExecutorPort", _FakeExec)
+
+    async def fake_get_owned(run_id, user_id, db):
+        return SimpleNamespace(origin="subagent", status="running", session_id="s-coop")
+
+    monkeypatch.setattr(SubagentSessionService, "_get_owned_run", fake_get_owned)
+
+    run = await SubagentSessionService.stop_run(
+        run_id="run-1", user_id="u1", db=SimpleNamespace(),
+    )
+    assert run.status == "stopping"
+
+    async def fake_get_owned_immediate(run_id, user_id, db):
+        return SimpleNamespace(origin="subagent", status="running", session_id="s-instant")
+
+    monkeypatch.setattr(SubagentSessionService, "_get_owned_run", fake_get_owned_immediate)
+    run = await SubagentSessionService.stop_run(
+        run_id="run-2", user_id="u1", db=SimpleNamespace(),
+    )
+    assert run.status == "cancelled"

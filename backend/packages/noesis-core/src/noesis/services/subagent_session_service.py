@@ -133,6 +133,40 @@ class SubagentSessionService:
             await cls._discard_pending_user_message(pending_user_message_id, user_id)
             raise ServiceException(message=str(exc)) from exc
 
+    @classmethod
+    async def collect_partial_output(cls, session_id: str, user_id: str) -> str:
+        """从子会话全部 assistant 消息投影提取 text parts（部分成果回收的权威来源）。
+
+        覆盖全部轮次（followup 链早轮）与硬杀场景（最后一次边界 persist 的投影）；
+        按 message_sequence 顺序拼接，与消息流展示一致。
+        """
+        from sqlalchemy import select
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            rows = await db.execute(
+                select(TChatMessage.content)
+                .where(
+                    TChatMessage.session_id == session_id,
+                    TChatMessage.user_id == str(user_id),
+                    TChatMessage.role == "assistant",
+                    TChatMessage.deleted_at.is_(None),
+                )
+                .order_by(TChatMessage.message_sequence)
+            )
+            texts: list[str] = []
+            for (content,) in rows.all():
+                if not isinstance(content, dict):
+                    continue
+                for part in content.get("parts", []):
+                    if (
+                        isinstance(part, dict)
+                        and part.get("type") == "text"
+                        and part.get("content")
+                    ):
+                        texts.append(str(part["content"]))
+            return "\n".join(texts).strip()
+
     @staticmethod
     async def _discard_pending_user_message(message_id: str, user_id: str) -> None:
         from noesis.storage.postgres.manager import pg_manager
@@ -203,20 +237,26 @@ class SubagentSessionService:
 
     @classmethod
     async def stop_run(cls, *, run_id: str, user_id: str, db: AsyncSession) -> TAgentRun:
+        """请求协作停止：立即返回受理快照（status 覆写 stopping），不等待终态。
+
+        终态经 bg-task / run.finished 事件推送；即时取消路径（queued /
+        awaiting_approval / shell）返回的快照 status 已是终态。
+        """
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
             raise NotFoundException(message="子 Agent run 不存在")
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
         try:
-            BackgroundSubagentExecutor.cancel(run.session_id)
+            snapshot = BackgroundSubagentExecutor.cancel(run.session_id)
         except ValueError as exc:
             raise ServiceException(message=str(exc)) from exc
-        return await cls._wait_run(db, run_id, user_id, predicate=lambda row: row.status not in {
-            RunStatus.QUEUED.value,
-            RunStatus.RUNNING.value,
-            RunStatus.HITL_PENDING.value,
-        })
+        # 受理即返回：协作停止进行中（stopping）或即时终态（cancelled 等）
+        if snapshot.get("status") == "stopping":
+            run.status = "stopping"
+        else:
+            run.status = str(snapshot.get("status") or run.status)
+        return run
 
     @staticmethod
     async def _get_owned_run(run_id: str, user_id: str, db: AsyncSession) -> TAgentRun | None:
@@ -590,17 +630,22 @@ class SubagentSessionService:
         content: dict,
         sequence: int,
         assistant_message_id: Optional[str] = None,
+        usage: Optional[dict] = None,
     ) -> None:
         """run 进入待审批的原子落库：run 状态 + 快照 + assistant 消息投影。
 
         消息与快照同源（被中断工具段为 approval_pending）；消息不更新的话
         重开抽屉时工具行仍是 running（扫光），与等待审批的事实不符。
+        usage 为中断前的管道累计（种子）：resume 后的 turn 终态与之合并，
+        该轮 extra.usage 才完整覆盖中断前后全部模型调用。
         """
         from noesis.storage.postgres.manager import pg_manager
 
         now = _now_ms()
         snapshot = dict(content)
         snapshot["_pending_hitl"] = interrupt
+        if usage:
+            snapshot["_hitl_usage"] = dict(usage)
         async with pg_manager.get_async_session_context() as db:
             run_result = await db.execute(
                 update(TAgentRun)
@@ -640,6 +685,7 @@ class SubagentSessionService:
             run = result.scalar_one_or_none()
             snapshot = dict(run.snapshot or {}) if run is not None else {}
             snapshot.pop("_pending_hitl", None)
+            # _hitl_usage（中断前审计种子）保留至终态：mark_terminal 统一摘除
             await db.execute(
                 update(TAgentRun)
                 .where(TAgentRun.id == run_id, TAgentRun.status == RunStatus.HITL_PENDING.value)
@@ -689,9 +735,15 @@ class SubagentSessionService:
                     else {"version": 1, "parts": []}
                 )
                 # HITL 等待中的内部标记不得泄漏进 assistant 消息
-                # （mark_waiting_approval 写入、mark_resumed 摘除）
-                if isinstance(content.get("_pending_hitl"), dict):
-                    content = {k: v for k, v in content.items() if k != "_pending_hitl"}
+                # （mark_waiting_approval 写入、mark_resumed 摘除；_hitl_usage
+                #  审计种子同样只留在 run 快照，不入消息）
+                if isinstance(content.get("_pending_hitl"), dict) or isinstance(
+                    content.get("_hitl_usage"), dict
+                ):
+                    content = {
+                        k: v for k, v in content.items()
+                        if k not in ("_pending_hitl", "_hitl_usage")
+                    }
             await AgentRunRepository(db).finalize(
                 run_id=run_id,
                 target=status,

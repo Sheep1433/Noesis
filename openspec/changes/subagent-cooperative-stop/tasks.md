@@ -1,39 +1,71 @@
-> **适配注记（2026-08-29，unify-agent-run-pipeline 已实施）**：executor 执行内核已切换为统一
-> run 管道（`stream_agent_events` → `RuntimeEventMapper`，见
-> `docs/architecture/subagent-sessions.md`「统一 run 管道」一节）。本变更的静止边界协作停止、
-> stopping 中间态、部分成果回收均应在统一管道的 turn 边界上实现——下方任务面按旧
-> `astream(values)` 内核编写，开工前须按新内核细化（如：静止边界 = mapper 事件流的
-> on_tool_end / RunPaused 边界；取消不再依赖 future.cancel 硬杀，改为管道内协作退出信号）。
+# Tasks: subagent-cooperative-stop（统一管道内核版）
+
+> 原 tasks.md 按旧 `astream(values)` 内核编写；unify-agent-run-pipeline 合入后 executor 执行内核
+> 已是统一 run 管道（`stream_agent_events` → `RuntimeEventMapper` → typed RunEvent，单 turn 入口
+> `_run_turn_via_pipeline`）。本任务面按新内核重写：静止边界 = mapper 事件流的模型/工具消息边界，
+> 协作退出信号在 `_run_turn_via_pipeline` 事件循环内检查，不再依赖 `future.cancel` 硬杀（仅宽限超时兜底）。
+
 ## 1. executor 协作停止状态机
 
-- [ ] 1.1 `BgTaskStatus` 增加 `STOPPING`；`_SLOT_STATUSES` 包含 stopping（收尾仍占槽）；`BackgroundTask` 增加停止请求标记与宽限 watchdog 句柄字段
-- [ ] 1.2 `cancel()` 重构：running 任务置 `STOPPING` 并发 `bg-task` 快照事件后立即返回（不再 `future.cancel`）；对已 stopping 任务幂等返回同一快照；queued / awaiting_approval 保持即时终态；`stop_grace_seconds` 进入 `subagents` 配置组（env.py + config.yaml，默认 30s）
-- [ ] 1.3 `_arun` 的 astream 循环在每个 chunk 迭代处检查 stopping，但**只在静止边界退出**（最新消息为 ToolMessage 或无工具调用的 AI 消息；带未应答 tool_calls 的快照先让工具节点跑完），退出后走统一终态收尾（最后一次 `_persist_child_projection` 落库、`CANCELLED`、`mark_terminal`、通知、drain 既有路径）；stopping 期间触发 HITL interrupt 时直接按取消收尾，不进入 awaiting_approval
-- [ ] 1.4 停止宽限 watchdog：进入 stopping 时装载，超时回退硬杀（`future.cancel()`）；`_arun` 的 `CancelledError` 分支升级为完整终态收尾（事件发布 / 通知 / `mark_terminal` / drain 统一下沉到 `_arun` 终态路径，`cancel()` 只负责置位与快照返回）；超时 watchdog（任务总时限）改走同一协作路径（置 stopping + 终止原因 timed_out）
-- [ ] 1.5 回归测试：停止请求即时返回 stopping；重复停止幂等；静止边界退出（工具调用有结果应答、无悬空 tool_calls、投影含最后一步产出、followup 可续跑）；stopping 期间 HITL 直接取消；宽限超时硬杀兜底且终态通知不漏发；queued / awaiting_approval 即时取消；并发上限计入 stopping
+- [x] 1.1 `BgTaskStatus` 增加 `STOPPING`；`_SLOT_STATUSES` 包含 stopping（收尾仍占槽）；`BackgroundTask` 增加停止请求标记（`stop_requested`，含终止原因 `timed_out`/`cancelled`）与宽限 watchdog 句柄字段；`to_dict` 暴露 stopping 状态
+- [x] 1.2 `cancel()` 重构：running 任务置 `STOPPING` + 置停止请求标记并发 `bg-task` 快照事件后立即返回（不再 `future.cancel`）；对已 stopping 任务幂等返回同一快照；queued / awaiting_approval 保持即时终态；`stop_grace_seconds` 进入 `subagents` 配置组（env.py + config.yaml，默认 30s）
+- [x] 1.3 `_run_turn_via_pipeline` 的 raw 事件循环检查停止请求，但**只在静止边界协作退出**：
+  - 静止边界 = `on_tool_end`（工具结果已落定并投影）或 `on_chat_model_end` 输出无未应答 tool_calls（本轮模型消息完整）；进行中的工具/模型调用让其跑完
+  - 退出时置 `_TurnOutcome.cooperative_stop=True`，`_arun` 按取消收尾（终态 `CANCELLED`、`mark_terminal(PARTIAL, finish_reason=cancelled)`、`_notify_terminal`、drain 既有路径），最后一次投影已含边界前全部产出
+  - stopping 期间收到 `HitlRequired` 事件 → 直接按取消收尾，不进入 awaiting_approval
+- [x] 1.4 停止宽限 watchdog：进入 stopping 时装载，超时回退硬杀（`future.cancel()`）；`_arun` 的 `CancelledError` 分支升级为完整终态收尾（事件发布 / 通知 / `mark_terminal` / drain 统一下沉到 `_arun` 终态路径，`cancel()` 只负责置位与快照返回）；超时 watchdog（任务总时限）改走同一协作路径（置 stopping + 终止原因 timed_out，宽限内仍走静止边界）
+- [x] 1.5 回归测试（真实 create_agent 图，沿用既有 `_build_worker` 桩）：停止请求即时返回 stopping；重复停止幂等；静止边界退出（工具调用有结果应答、投影含最后一步产出、followup 可续跑冷恢复）；stopping 期间 HITL 直接取消；宽限超时硬杀兜底且终态通知不漏发；queued / awaiting_approval 即时取消；并发上限计入 stopping
 
 ## 2. 部分成果回收
 
-- [ ] 2.1 终态收尾协程（主 loop）从子会话 assistant 消息投影提取全部 `type=text` parts，以「中止前部分产出」标注写入 `task.result`（有界截断），先提取后记录通知；提取失败降级为空 preview 不阻塞终止
-- [ ] 2.2 `tools.py`：`check_task` 对 cancelled / timed_out 返回终止原因 + 部分产出（受 `tool_output_max_chars` 预算约束）；对 stopping 返回「正在停止」；`cancel_task` 返回改为「已请求停止（当前步骤完成后停止，可用 check_task 收取部分产出）」
-- [ ] 2.3 通知链路验证：取消终态通知 preview 从提取内容开头截取（「中止前部分产出」前缀只出现在 `task.result` 与 `check_task` 全文，不占 ≤80 字预览预算），父 Agent 通知注入文本携带同一内容
-- [ ] 2.4 回归测试：有产出的任务取消后通知 / check_task / task.result 三处一致携带部分内容；无产出任务取消不产生空占位文本
+- [x] 2.1 终态收尾（`_arun` 取消分支）从 `_TurnOutcome.content`（统一管道 builder 产物）提取全部 `type=text` parts 拼接，以「中止前部分产出」标注写入 `task.result`（受 `_SHELL_RESULT_TAIL_CHARS` 同量级截断），先提取后记录通知；无 text parts 不写占位
+- [x] 2.2 `tools.py`：`check_task` 对 cancelled / timed_out 返回终止原因 + 部分产出（受 `tool_output_max_chars` 预算约束）；对 stopping 返回「正在停止」；`cancel_task` 返回改为「已请求停止（当前步骤完成后停止，可用 check_task 收取部分产出）」
+- [x] 2.3 通知链路验证：取消终态通知 preview 从提取内容开头截取（「中止前部分产出」前缀只出现在 `task.result` 与 `check_task` 全文，不占 ≤80 字预览预算），父 Agent 通知注入文本携带同一内容
+- [x] 2.4 回归测试：有产出的任务取消后通知 / check_task / task.result 三处一致携带部分内容；无产出任务取消不产生空占位文本
 
 ## 3. 输出截断一等终止
 
-- [ ] 3.1 `_arun` 消费 chunk 时检测**新增** AIMessage 的 `response_metadata.finish_reason == "length"`，置本轮截断标记（作用域单 run/turn，followup 新轮重置）
-- [ ] 3.2 终态合成：带截断标记的轮次终态为 `partial`（finish_reason=`truncated`），走部分成果回收路径；同轮后续正常步骤不降级；任务终态由最后一轮决定
-- [ ] 3.3 回归测试：截断轮终态 partial/truncated 且携带部分产出；单轮内 sticky 不降级；早轮截断后 followup 轮正常完成时任务终态 completed；主聊天 run 终态不受影响
+- [x] 3.1 `_run_turn_via_pipeline` 在 `on_chat_model_end` 边界检测**新增** AIMessage 的 `response_metadata.finish_reason == "length"`，置本轮截断标记（`_TurnOutcome.truncated=True`，作用域单 turn，followup 新轮天然重置——builder 逐 turn 独立）
+- [x] 3.2 终态合成：带截断标记的轮次终态为 `partial`（finish_reason=`truncated`），走部分成果回收路径；任务终态由最后一轮决定（早轮截断后 followup 轮正常完成 → 任务 completed）
+- [x] 3.3 回归测试：截断轮终态 partial/truncated 且携带部分产出；早轮截断后 followup 轮正常完成时任务终态 completed；主聊天 run 终态不受影响（executor 侧标记，不触碰主链路 bridge）
 
 ## 4. stop API 与服务层
 
-- [ ] 4.1 `SubagentSessionService.stop_run` 不再 `_wait_run` 等待终态：调用 cancel 后返回 **DB run 快照、status 字段覆写为 `stopping`**（响应形状与现有 RunSnapshot 一致）；`POST /api/chat/runs/{run_id}/stop` 路径不变，非破坏性
-- [ ] 4.2 API 契约测试更新：stop 子 Agent run 返回 stopping 覆写快照；终态经 `bg-task` / run `run.finished` SSE 事件推送（不新增事件类型）
-- [ ] 4.3 高风险区检查：取消路径与消息持久化交界——`mark_terminal(PARTIAL)` 收口、assistant 消息状态、`_drain_session_queue` 唤醒顺序在协作退出与硬杀兜底两条路径下均保持既有语义
+- [x] 4.1 `SubagentSessionService.stop_run` 不再 `_wait_run` 等待终态：调用 cancel 后返回 **DB run 快照、status 字段覆写为 `stopping`**（响应形状与现有 RunSnapshot 一致）；`POST /api/chat/runs/{run_id}/stop` 路径不变，非破坏性
+- [x] 4.2 API 契约测试更新：stop 子 Agent run 返回 stopping 覆写快照；终态经 `bg-task` / run `run.finished` SSE 事件推送（不新增事件类型）
+- [x] 4.3 高风险区检查：取消路径与消息持久化交界——`mark_terminal(PARTIAL)` 收口、assistant 消息状态、`_drain_session_queue` 唤醒顺序在协作退出与硬杀兜底两条路径下均保持既有语义
 
 ## 5. 前端适配
 
-- [ ] 5.1 任务状态联合类型与文案：`TaskCatalogPanel` / `BackgroundSubagentCollapse` / 共享状态文案（`utils/taskStatusLabels.ts`）识别 `stopping`（「停止中」+ 灰色状态点）
-- [ ] 5.2 子会话抽屉（`SubagentConversationView`）：`runActive` 涵盖 `stopping`——停止按钮保持停止形态（或禁用），输入框发送维持「运行中排队」语义，SHALL NOT 切换为直发（避免消息被送进正在取消任务的 followup 队列）；`runStatusLabel` 增加 stopping 文案
-- [ ] 5.3 任务卡与目录抽屉在 stopping 期间禁用重复停止操作；终态到达后按既有 bg-task 事件更新
-- [ ] 5.4 前端回归：停止中状态展示（任务卡 + 抽屉）、stopping 期间发送走排队、终态后部分产出在 `check_task` 结果与通知条中的呈现；vitest 全量通过
+- [x] 5.1 任务状态联合类型与文案：`TaskCatalogPanel` / `BackgroundSubagentCollapse` / 共享状态文案（`utils/taskStatusLabels.ts`）识别 `stopping`（「停止中」+ 灰色状态点）
+- [x] 5.2 子会话抽屉（`SubagentConversationView`）：`runActive` 涵盖 `stopping`——停止按钮保持停止形态，输入框发送维持「运行中排队」语义，SHALL NOT 切换为直发（避免消息被送进正在取消任务的 followup 队列）；`runStatusLabel` 增加 stopping 文案
+- [x] 5.3 任务卡与目录抽屉在 stopping 期间禁用重复停止操作；终态到达后按既有 bg-task 事件更新
+- [x] 5.4 前端回归：停止中状态展示（任务卡 + 抽屉）、stopping 期间发送走排队、终态后部分产出在 `check_task` 结果与通知条中的呈现；vitest 全量通过
+
+## 6. 顺带收口（unify review 遗留）
+
+- [x] 6.1 HITL 挂起段 usage 补齐：`mark_waiting_approval` 时把 bridge 累计的 `message_usage` 一并落 run 快照，审批 resume 的新 turn 完成后与后半段 usage 合并落库（该 turn `extra.usage` 含中断前后全部调用）——中断/恢复路径与停止路径同属 turn 生命周期，随本变更一次收口
+- [x] 6.2 回归测试：含审批的子 turn 终态 usage ≥ 中断前模型调用的 usage（不再丢前半段）
+
+## 7. 两轴 review 修复轮（2026-08-30）
+
+- [x] 7.1 竞态修复：`_try_transition` 原子收口（executor 侧终态/AWAITING/恢复写入
+  持 `_TASKS_LOCK` 复查 STOPPING）——turn 收尾窗口内受理的停止不再被终态覆写，
+  followup 不再反向新开 run；followup 恢复 RUNNING 提前到 await 链之前
+- [x] 7.2 部分成果权威提取：`collect_partial_output`（子会话全部 assistant 消息
+  投影，覆盖多轮与硬杀场景）；无标准 run 时退回 turn 投影；删除 progress 预览兜底
+- [x] 7.3 通知注入 cancelled 分支携带 preview（父 Agent 注入与 check_task 同源）
+- [x] 7.4 截断标注：task.result 走「输出截断（finish_reason=length）」标注提取
+- [x] 7.5 stopping 期间 send_message/validate_followup 拒绝（避免孤儿 user 消息）
+- [x] 7.6 双停竞态：_on_task_timeout 置位持锁、_arm_stop_grace 先摘旧句柄；
+  shell 硬杀移出持锁块（修复由此引入的 _TASKS_LOCK 死锁）
+- [x] 7.7 _finalize_stop 韧性：try/except/finally——落库失败不吞终态通知与 drain
+- [x] 7.8 沙箱连坐路径补 _disarm_stop_grace；reason/status 合成去重（_turn_run_status/
+  _turn_finish_reason）；_format_task 非正常终态统一「原因+部分产出」；list_tasks 预算
+- [x] 7.9 前端发送统一：stopping 期间 Enter 与按钮同口径（提示不可发送）
+- [x] 7.10 回归：后端 1269 passed / 0 failed（新增竞态机制/STOOPING 拒绝/通知携带
+  三个用例）；前端 vitest 168/168 + build
+
+> 1.5 原「followup 可续跑冷恢复」表述修正：cancelled 任务按基础 spec
+> （agent-background-tasks「failed / timed_out / cancelled 不可续」）拒绝续跑；
+> 静止边界退出的不变量是 thread 干净（无悬空 tool_calls、投影含最后一步产出）。

@@ -96,7 +96,9 @@ def render_block(notices: list[dict[str, Any]]) -> str:
             title = "执行超时" if status == "timed_out" else "执行失败"
             lines.append(f"[系统通知] 子 Agent「{label}」{title}{suffix}，可打开详情查看原因。")
         elif status == "cancelled":
-            lines.append(f"[系统通知] 子 Agent「{label}」已取消{metric_suffix}。")
+            # 取消携带部分产出（协作停止的成果回收）：与 check_task / task.result 同源
+            suffix = f"{metric_suffix}：{preview}" if preview else metric_suffix
+            lines.append(f"[系统通知] 子 Agent「{label}」已取消{suffix}。")
         else:
             lines.append(f"[系统通知] 子 Agent「{label}」状态更新：{status}。")
     return "\n".join(lines)
