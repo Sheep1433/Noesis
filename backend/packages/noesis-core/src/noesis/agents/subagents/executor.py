@@ -417,6 +417,7 @@ def _publish_run_event(
     *,
     content: Optional[dict[str, Any]] = None,
     context: Optional[dict[str, Any]] = None,
+    finish_reason: Optional[str] = None,
 ) -> None:
     if not task.run_id:
         return
@@ -427,6 +428,8 @@ def _publish_run_event(
         "sequence": task.projection_sequence,
         "status": task.status.value,
     }
+    if finish_reason:
+        payload["finish_reason"] = finish_reason
     # 终态时间：前端据此冻结 duration（重放历史事件同样可得）
     if task.completed_at is not None:
         payload["finished_at"] = task.completed_at
@@ -679,13 +682,21 @@ async def _persist_child_projection(
     _publish_run_event(task, "message.updated", content=copy.deepcopy(content))
 
 
+def _notify_preview(task: BackgroundTask) -> Optional[str]:
+    """通知预览：取消/超时携带部分产出内容本身（标注前缀不占预览预算）。"""
+    result = task.result
+    if result and result.startswith(_PARTIAL_OUTPUT_PREFIX):
+        return result[len(_PARTIAL_OUTPUT_PREFIX):].lstrip() or None
+    return result or task.error
+
+
 def _notify_terminal(task: BackgroundTask) -> None:
     """终态转换点统一记录会话通知（completed/failed/timed_out/cancelled）。"""
     notifications.record(
         session_id=task.session_id,
         task_id=task.child_session_id or task.task_id,
         status=task.status.value,
-        preview=task.result or task.error,
+        preview=_notify_preview(task),
         label=task.description,
         step_count=task.step_count,
         turn_count=task.turn_count if task.kind == "subagent" else None,
@@ -1285,6 +1296,7 @@ async def _finalize_stop(
             task,
             "run.finished",
             content=copy.deepcopy(outcome.content) if outcome is not None else None,
+            finish_reason=finish_reason,
         )
     logger.info(
         "bg subagent stopped cooperatively task_id={} reason={} steps={} duration={:.1f}s partial={}",
@@ -1636,6 +1648,7 @@ async def _arun(
                 task,
                 "run.finished",
                 content=copy.deepcopy(outcome.content),
+                finish_reason=final_reason,
             )
         logger.info(
             "bg subagent completed task_id={} steps={} duration={:.1f}s",

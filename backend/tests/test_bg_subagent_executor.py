@@ -1361,3 +1361,89 @@ def test_stopping_counts_toward_concurrency_slot() -> None:
             break
         time.sleep(0.05)
     assert executor.get(second_id)["status"] == BgTaskStatus.COMPLETED.value
+
+
+def test_partial_output_consistent_across_channels() -> None:
+    """部分成果三处一致（spec 2.4）：task.result / check_task(_format_task) / 通知预览。"""
+    from noesis.agents.subagents import notifications as notices
+    from noesis.agents.subagents.executor import _PARTIAL_OUTPUT_PREFIX
+    from noesis.agents.subagents.tools import _format_task
+
+    first = AIMessage(
+        content="阶段性结论：检索到 3 篇相关文献，主题集中在评测基准。",
+        tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
+    )
+    worker = _build_worker([first] + [_slow_call(f"s{i}", f"c{i}") for i in range(6)], slow=True)
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="部分成果", session_id="s-partial", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(task_id)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+
+    # task.result：带标注前缀的全文
+    assert task["result"] and task["result"].startswith(_PARTIAL_OUTPUT_PREFIX)
+    body = task["result"][len(_PARTIAL_OUTPUT_PREFIX):].strip()
+    assert "阶段性结论" in body
+
+    # check_task 文本：终止原因 + 部分产出（预算内不截断）
+    formatted = _format_task(task, output_budget=24000)
+    assert "cancelled" in formatted and "阶段性结论" in formatted
+
+    # 通知预览：内容本身开头（前缀不占 80 字预算）
+    pending = notices.take_undelivered("s-partial", mark_delivered=False)
+    cancelled_notices = [n for n in pending if n["status"] == "cancelled"]
+    assert cancelled_notices, f"未收到取消通知: {pending}"
+    preview = cancelled_notices[0]["preview"]
+    assert preview.startswith("阶段性结论")
+    assert _PARTIAL_OUTPUT_PREFIX not in preview
+
+
+def _truncated_call(call_id: str) -> AIMessage:
+    """finish_reason=length 的截断输出（模拟 provider 输出上限截断）。"""
+    msg = AIMessage(
+        content="输出被截断的部分文本",
+        tool_calls=[],
+    )
+    msg.response_metadata = {"finish_reason": "length"}
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_truncated_run_terminal_partial() -> None:
+    """输出截断一等终止（spec 3.3）：截断轮终态 partial/truncated 且携带部分产出。"""
+    from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
+
+    worker = _build_worker([_truncated_call("t1")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    queue = subscribe_run_events("run-trunc", "u1")
+    task_id = None
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: worker, description="截断",
+            session_id="s-trunc", user_id="u1",
+            run_id="run-trunc", assistant_message_id="am-trunc",
+        )
+        task = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: _wait_terminal(executor, task_id),
+        )
+        # 任务终态由最后一轮决定：截断轮的任务侧仍 completed，run 终态 partial
+        assert task["status"] == BgTaskStatus.COMPLETED.value
+        assert task["result"] and "输出被截断的部分文本" in task["result"]
+        # run.finished 事件携带 finish_reason=truncated（与 DB run 终态一致）
+        await asyncio.sleep(0.2)
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+        finished = [e for e in events if e["type"] == "run.finished"]
+        assert finished, f"未收到 run.finished: {[e['type'] for e in events]}"
+        assert finished[-1].get("finish_reason") == "truncated"
+    finally:
+        unsubscribe_run_events("run-trunc", queue)
+        if task_id:
+            executor.cancel(task_id)

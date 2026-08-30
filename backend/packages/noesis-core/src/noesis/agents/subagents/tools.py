@@ -19,7 +19,7 @@ from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
     BgTaskStatus,
 )
-from noesis.config.env import SubagentConfig
+from noesis.config.env import OtherConfig, SubagentConfig
 from noesis.runtime.logging import logger
 
 _CHECK_PENDING_HINT = {
@@ -43,14 +43,33 @@ class _ToolCallAwareStructuredTool(StructuredTool):
         return args, kwargs
 
 
-def _format_task(task: dict[str, Any]) -> str:
+def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> str:
+    """任务状态文本：终态携带结果/部分产出（受 output_budget 截断），stopping 提示进行中。"""
     public_id = str(task.get("child_session_id") or task.get("task_id") or "")
     status = task["status"]
+
+    def _bounded(text: str | None) -> str:
+        if not text:
+            return ""
+        if output_budget and len(text) > output_budget:
+            return f"{text[:output_budget]}…（已截断，全文见 task.result）"
+        return text
+
     if status == BgTaskStatus.COMPLETED.value:
         return f"[{public_id}] completed：\n{task.get('result') or '(无结果文本)'}"
+    if status == BgTaskStatus.STOPPING.value:
+        return f"[{public_id}] 正在停止（当前步骤完成后退出，稍后再查收部分产出）"
     if status in (BgTaskStatus.FAILED.value, BgTaskStatus.TIMED_OUT.value):
-        return f"[{public_id}] {status}：{task.get('error') or ''}"
+        # 超时走协作路径时部分产出在 result（error 只有原因）
+        partial = task.get("result")
+        head = f"[{public_id}] {status}：{task.get('error') or ''}"
+        if partial:
+            return f"{head}\n{_bounded(str(partial))}"
+        return head
     if status == BgTaskStatus.CANCELLED.value:
+        partial = task.get("result")
+        if partial:
+            return f"[{public_id}] cancelled（{task.get('stop_reason') or 'cancelled'}）：\n{_bounded(str(partial))}"
         return f"[{public_id}] cancelled"
     hint = _CHECK_PENDING_HINT.get(BgTaskStatus(status), status)
     return f"[{public_id}] {hint}（description: {task['description']}）"
@@ -192,7 +211,7 @@ def build_background_task_tools(
             return f"{task_id} 不存在（可用 list_tasks 查看当前任务与完整 task_id）"
         if task["session_id"] != session_id:
             return f"{task_id} 不属于当前会话"
-        return _format_task(task)
+        return _format_task(task, output_budget=OtherConfig.tool_output_max_chars)
 
     async def acheck_task(task_id: str) -> str:
         return check_task(task_id)
@@ -202,6 +221,11 @@ def build_background_task_tools(
             task = executor.cancel(task_id)
         except ValueError as exc:
             return f"取消失败：{exc}"
+        if task["status"] == BgTaskStatus.STOPPING.value:
+            return (
+                f"已请求停止：{task['task_id']}（协作式——当前步骤完成后停止，"
+                "可用 check_task 收取中止前的部分产出）"
+            )
         return f"已取消：{task['task_id']}（{task['status']}）"
 
     async def acancel_task(task_id: str) -> str:
