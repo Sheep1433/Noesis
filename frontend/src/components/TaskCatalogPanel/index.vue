@@ -35,12 +35,17 @@ const pending = computed(() => props.tasks.filter((t) => {
   return t.status === 'awaiting_approval'
 }))
 const running = computed(() => props.tasks.filter((t) => {
-  return t.status === 'queued' || t.status === 'running'
+  return t.status === 'queued' || t.status === 'running' || t.status === 'stopping'
 }))
 const finished = computed(() =>
   props.tasks
     .filter((t) => {
-      return t.status !== 'queued' && t.status !== 'running' && t.status !== 'awaiting_approval'
+      return (
+        t.status !== 'queued'
+        && t.status !== 'running'
+        && t.status !== 'stopping'
+        && t.status !== 'awaiting_approval'
+      )
     })
     .reverse(),
 )
@@ -96,7 +101,7 @@ function taskElapsed(task: TaskCatalogEntry): string {
   if (!started || task.status === 'awaiting_approval') {
     return ''
   }
-  if (task.status === 'running') {
+  if (task.status === 'running' || task.status === 'stopping') {
     return formatDurationMs(Math.max(0, clockNow.value - started))
   }
   const finished = wireTimestampMs(task.completed_at)

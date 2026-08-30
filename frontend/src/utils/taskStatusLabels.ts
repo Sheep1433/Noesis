@@ -17,6 +17,7 @@ export type TaskStatusKey =
 export const TASK_STATUS_LABELS: Record<TaskStatusKey, string> = {
   queued: '排队中',
   running: '进行中',
+  stopping: '停止中',
   retrying: '重试中',
   hitl_pending: '待审批',
   awaiting_approval: '待审批',
