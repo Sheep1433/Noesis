@@ -183,6 +183,7 @@ class SuperAgent(BaseAgent):
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
             shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
             hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
+            stop_grace_seconds=SubagentConfig.stop_grace_seconds,
         )
 
         async def _create_child_session(

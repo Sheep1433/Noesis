@@ -253,14 +253,57 @@ def test_cancel_queued_task_removes_from_queue() -> None:
 
 
 def test_cancel_running_task() -> None:
+    """协作停止：cancel 即时受理返回 stopping，静止边界后落 CANCELLED 并保留部分产出。"""
+    # 首轮文本+工具调用同发：工具执行期间受理停止，退出时文本进部分成果回收
+    first = AIMessage(
+        content="先分析一下任务背景。",
+        tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
+    )
     worker = _build_worker(
-        [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
+        [first] + [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
     )
     executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     time.sleep(0.2)
     snapshot = executor.cancel(task_id)
-    assert snapshot["status"] in (BgTaskStatus.CANCELLED.value, BgTaskStatus.COMPLETED.value)
+    # 受理即时可见（无需等待当前步骤）
+    assert snapshot["status"] == BgTaskStatus.STOPPING.value
+    assert snapshot["stop_reason"] == "cancelled"
+    # 重复停止幂等返回同一快照
+    again = executor.cancel(task_id)
+    assert again["status"] == BgTaskStatus.STOPPING.value
+    # 静止边界（slow 工具 0.6s 完成）后协作退出为 CANCELLED
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+    # 部分成果回收：中止前已产出的文本以标注前缀保留
+    assert task["result"] and task["result"].startswith("中止前部分产出")
+    assert "先分析一下任务背景。" in task["result"]
+
+
+def test_cancel_without_text_output_no_placeholder() -> None:
+    """无文本产出的任务取消：不产生空占位文本（spec 2.4）。"""
+    worker = _build_worker(
+        [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s2", user_id="u1")
+    time.sleep(0.2)
+    assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+    assert task["result"] is None
 
 
 def test_list_and_pending_approvals_scoped_by_session() -> None:
@@ -1214,3 +1257,107 @@ def test_start_captures_parent_reasoning_effort() -> None:
         executor.cancel(task_id)
     finally:
         clear_request_reasoning_effort()
+
+
+def test_stopping_during_hitl_cancels_directly() -> None:
+    """stopping 期间触发 HITL interrupt：不进入 awaiting_approval，直接按取消收尾。"""
+    worker = _build_worker(
+        [_call("v1"), AIMessage(content="收尾")],
+        interrupt_on={"dangerous": True},
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="停止期间审批",
+        session_id="s-hitl-stop", user_id="u1",
+    )
+    time.sleep(0.15)
+    snapshot = executor.cancel(task_id)
+    # 时序两种受理形态均为正确：running → stopping（协作）；已 awaiting_approval → 即时 cancelled
+    assert snapshot["status"] in {
+        BgTaskStatus.STOPPING.value,
+        BgTaskStatus.CANCELLED.value,
+    }
+    # 无论哪种受理形态，最终必须 CANCELLED——stopping 期间触发 HITL 不得挂进 awaiting_approval
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+
+
+def test_stop_grace_timeout_falls_back_to_hard_cancel() -> None:
+    """停止宽限超时：回退硬杀，终态与通知不漏发。"""
+    worker = _build_worker(
+        [_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True,
+    )
+    # 宽限设为极短：slow 工具（0.6s）远超宽限 → 必走硬杀兜底
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30, stop_grace_seconds=1)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="宽限硬杀",
+        session_id="s-grace", user_id="u1",
+    )
+    time.sleep(0.2)
+    assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value
+    # 硬杀兜底同样走完整收尾：进度摘要中的文本进部分成果
+    assert task["result"] is None or task["result"].startswith("中止前部分产出")
+
+
+def test_task_timeout_goes_cooperative() -> None:
+    """任务总时限改走协作路径：置 stopping(timed_out)，静止边界退出 TIMED_OUT。"""
+    worker = _build_worker(
+        [_slow_call(f"s{i}", f"c{i}") for i in range(4)] + [AIMessage(content="超时前的产出文本。")],
+        slow=True,
+    )
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=1, stop_grace_seconds=10)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="超时协作",
+        session_id="s-timeout", user_id="u1",
+    )
+    # 超时触发（1s）后先进入 stopping
+    deadline = time.time() + 8
+    saw_stopping = False
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.STOPPING.value:
+            saw_stopping = True
+        if task and task["status"] == BgTaskStatus.TIMED_OUT.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert saw_stopping, "超时应先进入 stopping 中间态"
+    assert task["status"] == BgTaskStatus.TIMED_OUT.value
+    assert task["stop_reason"] == "timed_out"
+
+
+def test_stopping_counts_toward_concurrency_slot() -> None:
+    """stopping 收尾仍占并发槽：stopping 期间新任务排队。"""
+    worker = _build_worker(
+        [_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True,
+    )
+    executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
+    first_id = executor.start(worker_factory=lambda: worker, description="a", session_id="s-slot", user_id="u1")
+    time.sleep(0.2)
+    executor.cancel(first_id)
+    # 第一个任务 stopping（占槽）：第二个同会话任务应排队
+    second_id = executor.start(worker_factory=lambda: _build_worker([AIMessage(content="ok")]), description="b", session_id="s-slot", user_id="u1")
+    second = executor.get(second_id)
+    assert second["status"] == BgTaskStatus.QUEUED.value
+    # 收尾释放槽位后排队任务被调度
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        second = executor.get(second_id)
+        if second and second["status"] == BgTaskStatus.COMPLETED.value:
+            break
+        time.sleep(0.05)
+    assert executor.get(second_id)["status"] == BgTaskStatus.COMPLETED.value

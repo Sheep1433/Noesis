@@ -379,6 +379,8 @@ class SubagentsYamlSection(BaseModel):
     auto_continue_debounce_seconds: float = Field(default=60, ge=0)
     # 后台命令任务（execute run_in_background）超时：0=不限时
     shell_task_timeout_seconds: float = Field(default=0, ge=0)
+    # 协作停止宽限：停止请求发出后等待静止边界的上限，超时回退硬杀
+    stop_grace_seconds: float = Field(default=30, gt=0)
 
 
 class MessagingYamlSection(BaseModel):
