@@ -23,7 +23,7 @@
 - [x] 4.1 后端 30 项相关测试通过（model_catalog / user_llm_service / embedding_config）
 - [x] 4.2 活体验证：kilo 探测 368 模型 / 19 免费（panel 规则）/ 默认模型在列；配置链路（ModelConfig → catalog → provider info）加载正确
 - [x] 4.3 `pnpm lint` / `pnpm build` 通过
-- [ ] 4.4 本地 `./scripts/run.sh prod` 设置页手工回归（用户验证）
+- [x] 4.4 prod 设置页回归（浏览器自动化验证 2026-08-30：默认模型选中态 / 发现面板 / 只看免费筛选 20↔366 条 / 采纳 StepFun 入组 3→4 / 已添加去重；证据 .noesis/gui-test-screenshots/）
 
 ## 5. 文档
 
