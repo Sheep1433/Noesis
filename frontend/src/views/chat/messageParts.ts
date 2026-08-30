@@ -413,10 +413,8 @@ function normalizeToolPart(
   // created_by_tool_call_id 不是同一体系，落库 part 也不含该字段，
   // 只能从输出文本「子 Agent 已启动：<id>」提取（兼容存量数据）。
   const childSessionId = String(record.name ?? '') === START_TASK_TOOL_NAME
-    ? (typeof record.child_session_id === 'string' && record.child_session_id
-        ? record.child_session_id
-        : parseStartTaskChildSessionId(output))
-    : (typeof record.child_session_id === 'string' ? record.child_session_id : undefined)
+    ? parseStartTaskChildSessionId(output)
+    : undefined
   return {
     id,
     type: 'tool',
@@ -1254,6 +1252,12 @@ export function applyToolOutput(
   if (isTerminalToolState(tp.state) && tp.state !== state) {
     return next
   }
+  // start_task 输出文本含「子 Agent 已启动：<uuid>」：流式路径同样要提取
+  // child_session_id，否则工具下发后任务卡匹配不到目录状态（只能显示
+  // 「已完成」fallback）。normalizeToolPart（落库回放路径）已有同一解析。
+  const streamedChildSessionId = tp.name === START_TASK_TOOL_NAME
+    ? parseStartTaskChildSessionId(payload.output)
+    : undefined
   next[idx] = {
     ...tp,
     output: payload.output,
@@ -1267,6 +1271,7 @@ export function applyToolOutput(
     timed_out: payload.timed_out ?? tp.timed_out,
     truncated: payload.truncated ?? tp.truncated,
     step_id: payload.step_id ?? tp.step_id,
+    ...(streamedChildSessionId ? { child_session_id: streamedChildSessionId } : {}),
   }
   return next
 }

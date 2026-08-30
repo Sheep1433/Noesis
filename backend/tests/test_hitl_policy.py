@@ -8,19 +8,28 @@ from unittest.mock import MagicMock, patch
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
 from noesis.factory import create_noesis_agent
-from noesis.agents.guardrails.policy import is_dangerous_execute, is_memory_write_path, is_network_execute
+from noesis.agents.guardrails.policy import is_dangerous_execute, is_network_execute, memory_write_when
 from noesis.agents.guardrails.session_grants import SessionGrantStore
 from noesis.agents.tools.ask_user import build_interrupt_on
 
 
-def test_memory_path_detection() -> None:
-    assert is_memory_write_path("/memory/USER.md")
-    assert is_memory_write_path("/memory/AGENTS.md")
-    assert is_memory_write_path("memory/USER.md")
-    assert is_memory_write_path("/memory/")
-    assert not is_memory_write_path("/notes.md")
-    assert not is_memory_write_path("/outputs/memory/fake.md")
-    assert not is_memory_write_path("/memory_backup.md")
+def _tool_req(path: str) -> SimpleNamespace:
+    return SimpleNamespace(tool_call={"args": {"file_path": path}})
+
+
+def test_memory_write_when_gates_on_guard_whitelist() -> None:
+    """审批只对 guard 白名单内的路径触发：白名单外写入直接放行给 guard 拒绝。"""
+    assert memory_write_when(_tool_req("/memory/USER.md"))
+    assert memory_write_when(_tool_req("/memory/AGENTS.md"))
+    assert memory_write_when(_tool_req("memory/USER.md"))
+    assert memory_write_when(_tool_req("/memory/preference/document-format.md"))
+    # 白名单外：根级任意文件（如研究产物）不触发审批——guard 必然拒绝
+    assert not memory_write_when(_tool_req("/memory/agent_evaluation_research.md"))
+    assert not memory_write_when(_tool_req("/memory/"))
+    # 非 memory 路径不触发
+    assert not memory_write_when(_tool_req("/notes.md"))
+    assert not memory_write_when(_tool_req("/outputs/memory/fake.md"))
+    assert not memory_write_when(_tool_req("/memory_backup.md"))
 
 
 def test_execute_policy_boundaries() -> None:

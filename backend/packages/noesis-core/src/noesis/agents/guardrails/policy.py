@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from noesis.agents.backends.paths import AGENT_MEMORY_ROUTE, canonicalize_agent_path
 
 # 少问策略：仅外联（网络出口 / pipe-to-shell）；workspace 内破坏性命令不审批
 _PIPE_TO_SHELL = re.compile(r"\|\s*(?:ba)?sh\b", re.IGNORECASE)
@@ -21,19 +20,6 @@ _NETWORK_CMDS = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-
-
-def is_memory_write_path(path: str | None) -> bool:
-    """目标路径规范化后是否以 ``/memory/`` 为前缀。"""
-    raw = (path or "").strip()
-    if not raw:
-        return False
-    try:
-        normalized = canonicalize_agent_path(raw)
-    except ValueError:
-        return False
-    prefix = AGENT_MEMORY_ROUTE.rstrip("/") + "/"
-    return normalized == AGENT_MEMORY_ROUTE.rstrip("/") or normalized.startswith(prefix)
 
 
 def is_network_execute(command: str | None) -> bool:
@@ -52,10 +38,17 @@ def is_dangerous_execute(command: str | None) -> bool:
 
 
 def memory_write_when(req: Any) -> bool:
-    """``InterruptOnConfig.when``：write_file / edit_file 指向 memory 时 interrupt。"""
+    """``InterruptOnConfig.when``：write_file / edit_file 指向 memory 时 interrupt。
+
+    仅白名单内路径（AGENTS.md/USER.md/五类条目目录）触发审批——白名单外
+    的 /memory 写入 guard 必然拒绝，直接放行让模型收到拒绝反馈，不拿
+    注定失败的写入打扰用户。
+    """
+    from noesis.agents.backends.memory import is_memory_writable_path
+
     args = (getattr(req, "tool_call", None) or {}).get("args") or {}
     path = args.get("path") or args.get("file_path") or ""
-    return is_memory_write_path(str(path))
+    return bool(path) and is_memory_writable_path(str(path))
 
 
 def execute_when(req: Any, *, session_id: str | None = None) -> bool:

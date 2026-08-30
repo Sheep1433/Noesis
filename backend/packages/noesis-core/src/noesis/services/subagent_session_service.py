@@ -17,6 +17,8 @@ from typing import Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.chat.hitl import normalize_hitl_decisions
+
 from noesis.chat.message_builder import UserMessageBuilder
 from noesis.chat.runs import RunStatus
 from noesis.errors.exceptions import NotFoundException, ServiceException
@@ -180,7 +182,7 @@ class SubagentSessionService:
         *,
         run_id: str,
         user_id: str,
-        decisions: list[dict],
+        decisions: list,
         db: AsyncSession,
     ) -> TAgentRun:
         run = await cls._get_owned_run(run_id, user_id, db)
@@ -188,8 +190,11 @@ class SubagentSessionService:
             raise NotFoundException(message="子 Agent run 不存在")
         from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
 
+        # 归一化：pydantic → 纯 dict（langchain HITL 中间件按下标取值，
+        # 对象会 TypeError 崩掉整个子 Agent）；reject 缺 message 补统一默认
+        decision_payloads = normalize_hitl_decisions(decisions)
         try:
-            BackgroundSubagentExecutor.submit_decisions(run.session_id, decisions)
+            BackgroundSubagentExecutor.submit_decisions(run.session_id, decision_payloads)
         except ValueError as exc:
             raise ServiceException(message=str(exc)) from exc
         return await cls._wait_run(db, run_id, user_id, predicate=lambda row: row.status != RunStatus.HITL_PENDING.value)
@@ -262,6 +267,7 @@ class SubagentSessionService:
         description: str,
         prompt: Optional[str] = None,
         tool_call_id: Optional[str] = None,
+        model_id: Optional[str] = None,
         db: AsyncSession,
     ) -> ChildSessionLaunch:
         parent = await ChatService.get_session_by_id(parent_session_id, user_id=user_id, db=db)
@@ -315,6 +321,9 @@ class SubagentSessionService:
                 "qa_type": "SUPER_AGENT_QA",
                 "origin": "subagent",
                 "agent_profile": cls.PROFILE_ID,
+                # worker 实际用父 run 模型编译：落库 extra.model_id 让子会话
+                # 详情的模型选择器显示真实模型（与主会话 extra.model_id 同键）
+                **({"model_id": model_id} if model_id else {}),
             },
             created_at=now,
             updated_at=now,
@@ -578,14 +587,20 @@ class SubagentSessionService:
         *,
         content: dict,
         sequence: int,
+        assistant_message_id: Optional[str] = None,
     ) -> None:
+        """run 进入待审批的原子落库：run 状态 + 快照 + assistant 消息投影。
+
+        消息与快照同源（被中断工具段为 approval_pending）；消息不更新的话
+        重开抽屉时工具行仍是 running（扫光），与等待审批的事实不符。
+        """
         from noesis.storage.postgres.manager import pg_manager
 
         now = _now_ms()
         snapshot = dict(content)
         snapshot["_pending_hitl"] = interrupt
         async with pg_manager.get_async_session_context() as db:
-            await db.execute(
+            run_result = await db.execute(
                 update(TAgentRun)
                 .where(
                     TAgentRun.id == run_id,
@@ -602,6 +617,15 @@ class SubagentSessionService:
                     updated_at=now,
                 )
             )
+            if run_result.rowcount != 1:
+                await db.rollback()
+                return
+            if assistant_message_id:
+                await db.execute(
+                    update(TChatMessage)
+                    .where(TChatMessage.id == assistant_message_id)
+                    .values(content=content)
+                )
             await db.commit()
 
     @classmethod

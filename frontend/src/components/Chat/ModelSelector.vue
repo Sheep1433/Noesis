@@ -166,6 +166,13 @@ watch(
   white-space: nowrap;
 }
 
+/* 移动端（≤768px，同 useBreakpoint md）：长模型名限幅截断，避免挤压右侧控件 */
+@media (max-width: 768px) {
+  .composer-model-trigger {
+    max-width: 36vw;
+  }
+}
+
 .composer-model-trigger--menu {
   width: 100%;
   max-width: none;

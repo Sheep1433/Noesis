@@ -161,13 +161,19 @@ class SuperAgent(BaseAgent):
             from noesis.config.checkpointer import create_isolated_checkpointer
 
             return _compile_task_worker(
-                backend,
+                # worker 专用 backend：/memory 只读（沙箱按 user+session 幂等
+                # 复用，二次组装不产生新容器）；记忆更新由主 Agent 收小结后
+                # 自行完成，避免「委派写记忆 → 连环审批 → 拒后重试」
+                await create_agent_backend(user_id, session_id, memory_read_only=True),
                 worker_tools,
                 skill_sources,
                 user_id=user_id,
                 # followup 可按 turn 切换模型：覆盖优先，否则沿用父 Agent 模型
                 model_id=model_id_override or model_id,
-                interrupt_on=interrupt_on,
+                interrupt_on=(
+                    build_interrupt_on(session_id=session_id, memory_write_guard=False)
+                    if interrupt_on is not None else None
+                ),
                 session_id=session_id,
                 checkpointer=await create_isolated_checkpointer(),
             )
@@ -201,6 +207,7 @@ class SuperAgent(BaseAgent):
                     description=description,
                     prompt=prompt,
                     tool_call_id=tool_call_id or None,
+                    model_id=model_id,
                     db=child_db,
                 )
                 return launch.to_dict()

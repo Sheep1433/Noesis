@@ -225,6 +225,7 @@ class SubagentSettings:
     task_timeout_seconds: float
     foreground_max_wait_seconds: float
     auto_continue: bool
+    auto_continue_debounce_seconds: float
     shell_task_timeout_seconds: float
 
 
@@ -646,6 +647,7 @@ def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
         task_timeout_seconds=subagents.task_timeout_seconds,
         foreground_max_wait_seconds=subagents.foreground_max_wait_seconds,
         auto_continue=subagents.auto_continue,
+        auto_continue_debounce_seconds=subagents.auto_continue_debounce_seconds,
         shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
     )
 

@@ -1,4 +1,4 @@
-<script lang="tsx" setup>
+<script lang="ts" setup>
 import { systemTitle } from '@/base'
 import { useNaivePresetColors } from '@/hooks/useThemePreset'
 

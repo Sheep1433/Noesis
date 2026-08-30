@@ -1,4 +1,4 @@
-<script lang="tsx" setup>
+<script lang="ts" setup>
 import { useMessage } from 'naive-ui'
 import * as GlobalAPI from '@/api'
 

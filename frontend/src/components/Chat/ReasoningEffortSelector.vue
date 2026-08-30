@@ -156,6 +156,13 @@ async function persistEffort(level: string) {
   white-space: nowrap;
 }
 
+/* 移动端（≤768px，同 useBreakpoint md）：档位标签限幅截断，避免与模型选择器互相挤压 */
+@media (max-width: 768px) {
+  .composer-model-trigger {
+    max-width: 80px;
+  }
+}
+
 .composer-model-trigger--menu {
   width: 100%;
   max-width: none;

@@ -31,6 +31,8 @@ from langchain_core.messages import ToolMessage
 
 from deepagents.backends import BackendProtocol
 
+from noesis.errors.tool_failure import ToolValidationError
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
@@ -55,8 +57,20 @@ def _merge_versions(left: dict[str, str], right: dict[str, str]) -> dict[str, st
     return merged
 
 
-class WriteRejectedError(RuntimeError):
-    """Raised before a write when no matching read version is available."""
+# 写入调用缺 file_path：多为模型输出被 provider 截断（finish_reason=length）
+# 时 JSON 后段参数丢失——错误文案给出原因与出路，模型可在下一轮分片重写
+_MISSING_PATH_MESSAGE = (
+    "写入缺少 file_path：模型输出可能被截断（finish_reason=length）。"
+    "请缩短单次写入内容、分片重试"
+)
+
+
+class WriteRejectedError(ToolValidationError):
+    """写前校验拒绝（未读先写 / 版本冲突 / 参数缺失）。
+
+    继承 ToolValidationError：归类 invalid_arguments，用户文案自动
+    携带具体原因（见 tool_failure._user_message_with_detail）。
+    """
 
 
 @dataclass(frozen=True)
@@ -277,7 +291,7 @@ class ReadBeforeWriteMiddleware(
         if tool_name in WRITE_TOOL_NAMES:
             path = _path(request)
             if path is None:
-                raise WriteRejectedError("write request has no file path")
+                raise WriteRejectedError(_MISSING_PATH_MESSAGE)
             claim = self._claim_write(request, self._observed_hash(request, path))
         try:
             result = handler(request)
@@ -331,7 +345,7 @@ class ReadBeforeWriteMiddleware(
         if tool_name in WRITE_TOOL_NAMES:
             path = _path(request)
             if path is None:
-                raise WriteRejectedError("write request has no file path")
+                raise WriteRejectedError(_MISSING_PATH_MESSAGE)
             claim = self._claim_write(request, await self._aobserved_hash(request, path))
         try:
             result = await handler(request)

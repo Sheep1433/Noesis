@@ -17,6 +17,7 @@ import {
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
+  upsertToolInputPart,
 } from '@/views/chat/messageParts'
 
 describe('duration formatting', () => {
@@ -285,6 +286,34 @@ describe('message parts snapshot normalization', () => {
       status: 'completed',
       result: undefined,
     })
+  })
+
+  it('流式 start_task 输出到达时提取 child_session_id（任务卡据此匹配目录状态）', () => {
+    const childSessionId = '8d82f4ad-e51b-48e3-b419-a6878f8dd51c'
+    const parts = upsertToolInputPart(
+      [],
+      'call-start-1',
+      'start_task',
+      { description: 'T1: 编码Agent评测', prompt: '完整指令' },
+    )
+    const withOutput = applyToolOutput(parts, 'call-start-1', {
+      output: `子 Agent 已启动：${childSessionId}\n无需等待——可继续其他工作，之后用 check_task 收结果。`,
+      status: 'success',
+      state: 'succeeded',
+    })
+
+    expect((withOutput[0] as any).child_session_id).toBe(childSessionId)
+  })
+
+  it('非 start_task 工具输出不产生 child_session_id', () => {
+    const parts = upsertToolInputPart([], 'call-web-1', 'web_search', { query: 'agent eval' })
+    const withOutput = applyToolOutput(parts, 'call-web-1', {
+      output: '子 Agent 已启动：8d82f4ad-e51b-48e3-b419-a6878f8dd51c',
+      status: 'success',
+      state: 'succeeded',
+    })
+
+    expect((withOutput[0] as any).child_session_id).toBeUndefined()
   })
 })
 

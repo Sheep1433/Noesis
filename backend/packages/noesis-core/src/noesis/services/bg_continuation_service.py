@@ -12,6 +12,7 @@ LangGraph checkpointer 保证同会话连续历史）。仅当该会话**无活�
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -36,10 +37,53 @@ CONTINUATION_INSTRUCTION = (
 _MAX_CONSECUTIVE = 5
 _wake_counts: dict[str, int] = {}
 
+# 去抖窗口内的待唤醒定时器（session_id -> asyncio.TimerHandle）。
+# 每个任务终态各触发一次 continuation run 会重复发送全量上下文，
+# 窗口合并后多个终态只产生一次唤醒（take_undelivered 取全部未送达通知）。
+_pending_wakes: dict[str, asyncio.TimerHandle] = {}
+
 
 def note_user_activity(session_id: str) -> None:
-    """用户真实消息到达时清零该会话的连续唤醒计数。"""
+    """用户真实消息到达时清零连续唤醒计数，并取消待唤醒。"""
     _wake_counts.pop(session_id, None)
+    handle = _pending_wakes.pop(session_id, None)
+    if handle is not None:
+        handle.cancel()
+
+
+def _fire_pending_wake(session_id: str, user_id: str) -> None:
+    _pending_wakes.pop(session_id, None)
+    asyncio.ensure_future(_run_maybe_continue(session_id, user_id))
+
+
+async def _run_maybe_continue(session_id: str, user_id: str) -> None:
+    try:
+        await maybe_continue(session_id, user_id)
+    except Exception:
+        logger.opt(exception=True).error(
+            "bg continuation failed session_id={}", session_id,
+        )
+
+
+async def schedule_maybe_continue(session_id: str, user_id: str) -> None:
+    """终态后去抖唤醒：重置窗口计时，窗口内多个终态合并为一次唤醒。
+
+    必须在主 loop 上调用（executor 经 run_on_main_loop 调度）。
+    debounce=0 时立即唤醒（保持旧行为）。
+    """
+    if not SubagentConfig.auto_continue or not session_id or not user_id:
+        return
+    debounce = SubagentConfig.auto_continue_debounce_seconds
+    if debounce <= 0:
+        await maybe_continue(session_id, user_id)
+        return
+    loop = asyncio.get_running_loop()
+    handle = _pending_wakes.pop(session_id, None)
+    if handle is not None:
+        handle.cancel()
+    _pending_wakes[session_id] = loop.call_later(
+        debounce, _fire_pending_wake, session_id, user_id,
+    )
 
 
 async def _load_user(user_id: str) -> CurrentUser:
@@ -130,6 +174,9 @@ async def maybe_continue(session_id: str, user_id: str) -> dict[str, Any] | None
 
 def reset_for_tests() -> None:
     _wake_counts.clear()
+    for handle in _pending_wakes.values():
+        handle.cancel()
+    _pending_wakes.clear()
 
 
-__all__ = ["maybe_continue", "note_user_activity", "reset_for_tests"]
+__all__ = ["maybe_continue", "note_user_activity", "reset_for_tests", "schedule_maybe_continue"]

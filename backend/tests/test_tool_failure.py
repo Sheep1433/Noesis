@@ -103,7 +103,8 @@ def test_validation_error_exception_type() -> None:
         M.model_validate({"x": "nope"})
     failure = classify_tool_failure(exc_info.value, tool_name="search")
     assert failure.category == ToolFailureCategory.INVALID_ARGUMENTS
-    assert failure.message_for_user == "参数错误"
+    # invalid_arguments 携带（有界）具体原因：孤立的「参数错误」不可定位
+    assert failure.message_for_user.startswith("参数错误：")
 
 
 def test_tool_network_error_explicit() -> None:
@@ -135,7 +136,23 @@ def test_user_tool_error_messages_fixed_phrases(category: str) -> None:
         "cancelled": "[tool_error category=cancelled retryable=false]\nx",
     }[category]
     failure = classify_tool_failure(None, raw=raw)
-    assert failure.message_for_user == USER_TOOL_ERROR_MESSAGES[category]
+    if category == "invalid_arguments":
+        # invalid_arguments 例外：携带首行具体原因（用法错误对用户可定位）
+        assert failure.message_for_user == f"{USER_TOOL_ERROR_MESSAGES[category]}：x"
+    else:
+        assert failure.message_for_user == USER_TOOL_ERROR_MESSAGES[category]
+
+
+def test_file_tool_usage_error_carries_reason() -> None:
+    """deepagents 文件后端 result 级错误（稳定文案契约）→ 参数错误 + 具体原因。"""
+    failure = classify_tool_failure(
+        None,
+        raw="Error: File '/workspace/report.md': Line offset 780 exceeds file length (668 lines)",
+        tool_name="read_file",
+    )
+    assert failure.category == ToolFailureCategory.INVALID_ARGUMENTS
+    assert "exceeds file length (668 lines)" in failure.message_for_user
+    assert failure.message_for_user.startswith("参数错误：")
 
 
 def test_format_tool_error_detail_truncates() -> None:

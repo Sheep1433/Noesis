@@ -84,12 +84,21 @@ def _read_only_fs(host_root: Path) -> AgentPathBackend:
     )
 
 
+# task-worker 的 /memory 只读提示：指引模型把产出写到 /workspace，
+# 记忆更新由主 Agent 收小结后自行完成（memory 写入需要用户审批，worker
+# 无审批上下文，曾经的「委派写记忆」造成过连环审批打扰）
+WORKER_MEMORY_READ_ONLY_ERROR = (
+    "用户记忆对子 Agent 只读：研究结果请写入 /workspace，由主 Agent 决定是否入记忆"
+)
+
+
 def build_agent_filesystem_backend(
     *,
     user_id: str,
     session_id: str,
     sandbox: SandboxBackendProtocol | None,
     shell_timeout: int,
+    memory_read_only: bool = False,
 ) -> CompositeBackend:
     """docker：default=沙箱（含 skills 挂载）；local：workspace strip + skills routes。"""
     memory = UserMemoryBackend(
@@ -97,6 +106,13 @@ def build_agent_filesystem_backend(
         user_path=get_user_profile_md_path(user_id),
         user_id=user_id,
     )
+    if memory_read_only:
+        memory = AgentPathBackend(
+            memory,
+            read_only=True,
+            canonicalize=False,
+            read_only_error=WORKER_MEMORY_READ_ONLY_ERROR,
+        )
 
     if sandbox is not None:
         default: BackendProtocol = AgentPathBackend(sandbox)
@@ -123,7 +139,12 @@ def build_agent_filesystem_backend(
     )
 
 
-async def create_agent_backend(user_id: str, session_id: str) -> CompositeBackend:
+async def create_agent_backend(
+    user_id: str,
+    session_id: str,
+    *,
+    memory_read_only: bool = False,
+) -> CompositeBackend:
     """选 sandbox runtime，再组装 workspace + skills + memory。"""
     sandbox: SandboxBackendProtocol | None = None
     kind = sandbox_backend_kind()
@@ -134,4 +155,5 @@ async def create_agent_backend(user_id: str, session_id: str) -> CompositeBacken
         session_id=session_id,
         sandbox=sandbox,
         shell_timeout=_shell_timeout(),
+        memory_read_only=memory_read_only,
     )

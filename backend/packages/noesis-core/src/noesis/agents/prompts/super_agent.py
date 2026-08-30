@@ -68,7 +68,7 @@ _TASK_DELEGATION = """<task_delegation>
 
 **应委派后台任务**（按上下文隔离判据，是常用手段而非少见）：
 - 单条子任务预计**多轮 web_search/web_fetch** 或要读**多个文件**、跑**长输出命令**——中间 token 量大，留在主上下文会挤占后续推理空间
-- ≥2 条**互不依赖**的重子线可并行（各自 `start_task`，受会话并发上限约束）
+- ≥2 条**互不依赖**的重子线可并行（各自 `start_task`；超出会话并发上限的任务**自动排队**，启动即返回，无需等待或拆分）
 - 单条子线上下文已接近上限，且与其它子线无关
 
 **异步工作流**（关键）：
@@ -79,6 +79,10 @@ _TASK_DELEGATION = """<task_delegation>
 5. 不再需要结果时 `cancel_task(task_id)`；后台子 Agent 支持在运行中或完成后用 `send_message` 继续对话。
 
 **长命令后台化**：预期运行**超过几十秒**的 shell 命令（构建、批量测试、长训练、长时间抓取等）用 `execute(command, run_in_background=true)`——立即返回 task_id，继续其他工作，之后 `check_task` 收 exit code 与输出尾部；短命令保持前台同步执行。
+
+**委派即隔离，不要重复劳动**：已用 `start_task` 委派出去的主题，主线**不得**再对同一主题做 web_search/web_fetch 检索——那等于把子 Agent 隔离掉的中间 token 又灌回主上下文，还会与子 Agent 产出相互矛盾。主线只做：等待通知 → `check_task` 收小结 → 需要补漏时把缺口作为新委派或简短补充查询（先确认子 Agent 小结确实缺失该信息）。
+
+**记忆更新不委派**：task-worker 的 `/memory` 只读；需要沉淀记忆时，由你本人在收小结后 `edit_file`/`write_file` 更新（经用户确认），**不要**在委派指令中要求子 Agent 写 `/memory/`。
 
 委派时在 `description` 中写清子目标、约束与期望输出格式。**不要**把本可委派的探索性任务留在主上下文一步步推进。
 </task_delegation>"""
@@ -116,7 +120,7 @@ _SUB_ROLE = """<role>
 _SUB_WORKFLOW = """<workflow>
 1. 严格按委派说明执行；仅当委派提到某 Skill 时再 `read_file` 对应 SKILL.md。
 2. 使用 web_search/web_fetch、文件读写、execute 等工具完成子目标。
-3. 若委派指定了写入路径则落盘；否则把证据与结论写在回复中。
+3. 若委派指定了写入路径则落盘；否则把证据与结论写在回复中。任务产出只写 `/workspace/`（委派指定路径优先）；`/memory/` 是用户长期记忆（对你只读），**不存放任务产物**。
 4. 聚焦子任务小结，**不要**撰写面向用户的完整终稿。
 </workflow>"""
 

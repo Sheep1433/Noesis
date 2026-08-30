@@ -29,6 +29,17 @@ const shouldShow = computed(() => props.todos.length > 0)
 const pendingTodos = computed(() => props.todos.filter((t) => t.status === 'pending'))
 const inProgressTodos = computed(() => props.todos.filter((t) => t.status === 'in_progress'))
 const completedTodos = computed(() => props.todos.filter((t) => t.status === 'completed'))
+
+// 标题随状态演进：全部完成时不再是「待处理」
+const title = computed(() => {
+  if (completedTodos.value.length === props.todos.length) {
+    return '已完成事项'
+  }
+  if (pendingTodos.value.length === 0 && inProgressTodos.value.length > 0) {
+    return '进行中事项'
+  }
+  return '待处理事项'
+})
 </script>
 
 <template>
@@ -38,7 +49,7 @@ const completedTodos = computed(() => props.todos.filter((t) => t.status === 'co
         <n-icon :size="16" :color="naivePresetColors.primary">
           <ListOutline />
         </n-icon>
-        <span class="todo-title">待处理事项</span>
+        <span class="todo-title">{{ title }}</span>
         <n-badge
           v-if="pendingCount > 0"
           :value="pendingCount"

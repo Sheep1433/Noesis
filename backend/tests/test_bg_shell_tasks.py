@@ -233,8 +233,8 @@ async def test_replace_execute_tool_background_starts_shell_task() -> None:
 
 
 @pytest.mark.asyncio
-async def test_replace_execute_tool_rejects_when_concurrency_full() -> None:
-    """超并发：返回可诊断说明（不抛异常），提示改前台执行。"""
+async def test_replace_execute_tool_queues_when_concurrency_full() -> None:
+    """超并发：shell 任务排队（与子 Agent 同语义），启动即返回 task_id。"""
     slow = _FakeShellBackend(delay=30.0)
     executor = BackgroundSubagentExecutor(max_concurrent_per_session=1)
     middleware, _ = _build_fake_filesystem_middleware()
@@ -247,9 +247,10 @@ async def test_replace_execute_tool_rejects_when_concurrency_full() -> None:
     assert "bg-" in first_content
     second = await _call(replaced, command="echo x", run_in_background=True)
     second_content = second.content if hasattr(second, "content") else str(second)
-    assert "启动失败" in second_content
-    assert "run_in_background=false" in second_content
+    assert "后台命令任务已启动" in second_content
+    assert "bg-" in second_content
     executor.cancel(first_content.split("：")[1].split("\n")[0])
+    executor.cancel(second_content.split("：")[1].split("\n")[0])
 
 
 @pytest.mark.asyncio

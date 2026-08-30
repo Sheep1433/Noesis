@@ -17,7 +17,7 @@ from fastapi import Body, Depends, APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from server.db import get_db
+from server.db import get_db, sse_prefetch_db
 
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.chat_vo import (
@@ -802,7 +802,6 @@ async def get_active_run(
 @chat_router.get("/events/stream", summary="订阅用户级信令（会话列表实时刷新）")
 async def stream_user_events(
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """用户级信令流：该用户任意会话的 run 状态变化（run-started /
     run-hitl-pending / run-terminal，携带 session_id）。
@@ -823,20 +822,22 @@ async def stream_user_events(
 
     from noesis.repositories.agent_run_repository import AgentRunRepository
 
-    active_runs = await AgentRunRepository(db).get_active_runs_for_user(user_id)
+    # 短命会话预取（物化成 plain dict，退出上下文后连接归还，
+    # 生成器闭包不得持有 ORM 实例——会话关闭后属性访问会失败）
+    async with sse_prefetch_db() as db:
+        active_runs = [
+            {
+                "session_id": run.session_id,
+                "run_id": run.id,
+                "status": run.status,
+            }
+            for run in await AgentRunRepository(db).get_active_runs_for_user(user_id)
+        ]
 
     async def event_stream():
         try:
             for run in active_runs:
-                yield format_sse(
-                    "user-signal",
-                    {
-                        "type": "run-started",
-                        "session_id": run.session_id,
-                        "run_id": run.id,
-                        "status": run.status,
-                    },
-                )
+                yield format_sse("user-signal", {"type": "run-started", **run})
             while True:
                 try:
                     signal = await asyncio.wait_for(queue.get(), timeout=15.0)
@@ -860,7 +861,6 @@ async def stream_user_events(
 async def stream_session_events(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """轻量信令流：只推 run-started / run-hitl-pending / run-terminal 定位符。
 
@@ -869,25 +869,26 @@ async def stream_session_events(
     作为首帧，覆盖「窗口先连、run 后建」之外的所有时序；信令是 hint，
     丢失靠 active-run 自愈。流不主动结束，随页面关闭断开。
     """
-    session = await ChatService.get_session_by_id(
-        session_id=session_id,
-        user_id=str(current_user.user_id),
-        db=db,
-    )
-    if not session:
-        return ResponseUtil.not_found(msg="会话不存在")
-
-    from noesis.chat.runs import session_signal_bus
-
-    user_id = str(current_user.user_id)
-    queue = session_signal_bus.subscribe(user_id, session_id)
-    if queue is None:
-        return ResponseUtil.too_many_requests(
-            msg="会话信令订阅数超限，请关闭其它标签页后重试",
-            data={"error_code": "SESSION_SIGNAL_LIMIT"},
+    async with sse_prefetch_db() as db:
+        session = await ChatService.get_session_by_id(
+            session_id=session_id,
+            user_id=str(current_user.user_id),
+            db=db,
         )
+        if not session:
+            return ResponseUtil.not_found(msg="会话不存在")
 
-    active = await RunService.get_active_run(session_id, user_id, db)
+        from noesis.chat.runs import session_signal_bus
+
+        user_id = str(current_user.user_id)
+        queue = session_signal_bus.subscribe(user_id, session_id)
+        if queue is None:
+            return ResponseUtil.too_many_requests(
+                msg="会话信令订阅数超限，请关闭其它标签页后重试",
+                data={"error_code": "SESSION_SIGNAL_LIMIT"},
+            )
+
+        active = await RunService.get_active_run(session_id, user_id, db)
 
     async def event_stream():
         try:
@@ -957,9 +958,9 @@ async def stream_run(
     run_id: str,
     after_sequence: int = 0,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+    async with sse_prefetch_db() as db:
+        snapshot = await RunService.get(run_id, str(current_user.user_id), db)
     if snapshot.origin == "subagent":
         from noesis.services.subagent_session_service import SubagentSessionService
 
@@ -971,7 +972,8 @@ async def stream_run(
                 run_id, str(current_user.user_id)
             )
         )
-        snapshot = await RunService.get(run_id, str(current_user.user_id), db)
+        async with sse_prefetch_db() as db:
+            snapshot = await RunService.get(run_id, str(current_user.user_id), db)
         # RunSnapshot 的属性名是 sequence（snapshot_sequence 仅是 to_dict 的 JSON 键）
         replay = SubagentSessionService.get_run_event_history(
             run_id,
@@ -1035,9 +1037,10 @@ async def stream_run(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     try:
-        subscription = await _subscribe_with_queued_wait(
-            run_id, str(current_user.user_id), max(0, after_sequence), db, snapshot
-        )
+        async with sse_prefetch_db() as db:
+            subscription = await _subscribe_with_queued_wait(
+                run_id, str(current_user.user_id), max(0, after_sequence), db, snapshot
+            )
     except SubscriptionLimitExceeded:
         return ResponseUtil.too_many_requests(
             msg="订阅连接数超限，请关闭其它标签页后重试",
@@ -1285,7 +1288,6 @@ async def list_bg_tasks(
 async def stream_child_catalog(
     session_id: str,
     current_user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """只推送子 Agent 摘要，不推送正文；正文由 child run SSE 按需订阅。"""
     import asyncio
@@ -1294,12 +1296,13 @@ async def stream_child_catalog(
     from noesis.services.agent_catalog_service import AgentCatalogService
 
     user_id = str(current_user.user_id)
-    if await ChatService.get_session_by_id(session_id, user_id, db) is None:
-        return ResponseUtil.not_found(msg="会话不存在")
-    queue = AgentCatalogService.subscribe(session_id, user_id)
-    catalog = (await AgentCatalogService.list_for_session(session_id, user_id, db))[
-        "tasks"
-    ]
+    async with sse_prefetch_db() as db:
+        if await ChatService.get_session_by_id(session_id, user_id, db) is None:
+            return ResponseUtil.not_found(msg="会话不存在")
+        queue = AgentCatalogService.subscribe(session_id, user_id)
+        catalog = (await AgentCatalogService.list_for_session(session_id, user_id, db))[
+            "tasks"
+        ]
 
     async def _gen():
         try:
