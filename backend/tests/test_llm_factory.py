@@ -1,8 +1,9 @@
+import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
 
-from noesis.llm.factory import ChatOpenAICompatible
+from noesis.llm.factory import ChatOpenAICompatible, StreamIdleTimeoutError
 
 
 def test_opencode_stream_usage_uses_final_cumulative_chunk() -> None:
@@ -284,3 +285,60 @@ def test_get_llm_ignores_effort_for_summarization(mock_build) -> None:
         assert captured["reasoning_effort"] is None
     finally:
         clear_request_reasoning_effort()
+
+
+
+# ---------------------------------------------------------------------------
+# _astream 流级空闲超时：网关挂流（只发 SSE ping 不出内容）时唯一能收口的层
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_astream_idle_timeout_raises_on_hung_stream() -> None:
+    """无 chunk 产出超过 request_timeout → StreamIdleTimeoutError（ping 续不了命）。"""
+    import asyncio as _asyncio
+    from unittest.mock import patch as _patch
+
+    llm = ChatOpenAICompatible(
+        model="m", base_url="http://localhost:1/v1", api_key="k",
+        max_retries=0, timeout=5, streaming=True,
+    )
+
+    async def hung_parent_stream(*args, **kwargs):
+        # 模拟挂死流：永不产出 chunk（对应网关只发 SSE 注释帧）
+        await _asyncio.sleep(30)
+        yield ChatGenerationChunk(message=AIMessageChunk(content="never"))
+
+    from types import SimpleNamespace as _NS
+    import noesis.llm.factory as factory_mod
+    with _patch.object(ChatOpenAI, "_astream", hung_parent_stream), \
+         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.2)):
+        with pytest.raises(StreamIdleTimeoutError):
+            async for _ in llm.astream("hi"):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_astream_idle_timeout_reset_by_real_chunks() -> None:
+    """真实 chunk 到达会重置计时器：慢速但活着的流不被误杀。"""
+    import asyncio as _asyncio
+    from unittest.mock import patch as _patch
+
+    llm = ChatOpenAICompatible(
+        model="m", base_url="http://localhost:1/v1", api_key="k",
+        max_retries=0, timeout=5, streaming=True,
+    )
+
+    async def slow_parent_stream(*args, **kwargs):
+        # 每 0.1s 一个 chunk 共 1s：远超单次空闲窗口 0.3s，但每次都有 chunk 续命
+        for i in range(10):
+            await _asyncio.sleep(0.1)
+            yield ChatGenerationChunk(message=AIMessageChunk(content=f"c{i}"))
+
+    from types import SimpleNamespace as _NS
+    import noesis.llm.factory as factory_mod
+    with _patch.object(ChatOpenAI, "_astream", slow_parent_stream), \
+         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.3)):
+        chunks = [c async for c in llm.astream("hi")]
+    # langchain stream reducer 结尾会追加聚合 chunk，>=10 即证明全部收到、未被误杀
+    assert len(chunks) >= 10

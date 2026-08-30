@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any
 import httpx
@@ -7,6 +8,17 @@ from langchain_qwq import ChatQwen
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk
 from noesis.config.env import ModelConfig
+
+
+class StreamIdleTimeoutError(TimeoutError):
+    """流式响应空闲超时：超过 request_timeout 未收到任何模型 chunk。
+
+    与 httpx 读超时（任意字节重置，SSE ping 即可续命）不同，本超时只在
+    **真实生成 chunk** 到达时重置——网关因风控/故障挂住流（只发 keep-alive
+    不出内容）时，这是唯一能收口的超时层。LLMErrorHandlingMiddleware 将其
+    分类为可重试瞬时错误（退避重试，耗尽后降级）。
+    """
+
 
 def _opencode_preset() -> tuple[str, dict[str, str]]:
     """opencode 便捷默认值来自 config.yaml model.provider_presets（部署者维护）。"""
@@ -135,6 +147,38 @@ class ChatOpenAICompatible(ChatOpenAI):
                     "message": pending.message.model_copy(update={"usage_metadata": last_usage}),
                 })
             yield pending
+
+    async def _astream(self, *args, **kwargs):
+        """流级空闲超时：request_timeout 内未产出任何 chunk 即判死流。
+
+        httpx 的读超时按「任意字节」计时——SSE ping/注释帧就能无限续命，
+        网关挂住流（风控拦截后只发 keep-alive）时没有任何层能超时，run
+        会永远停在生成阶段。这里按「真实生成 chunk」计时：只有 chunk
+        到达才重置计时器，ping 不算。超时抛 StreamIdleTimeoutError，
+        由 LLMErrorHandlingMiddleware 走重试/降级收口。
+        """
+        idle_seconds = float(ModelConfig.request_timeout or 0)
+        if idle_seconds <= 0:
+            async for chunk in super()._astream(*args, **kwargs):
+                yield chunk
+            return
+        iterator = super()._astream(*args, **kwargs)
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=idle_seconds
+                    )
+                except StopAsyncIteration:
+                    return
+                except asyncio.TimeoutError as exc:
+                    raise StreamIdleTimeoutError(
+                        f"No model chunk received in {idle_seconds:.0f}s (stream idle)"
+                    ) from exc
+                yield chunk
+        finally:
+            # 超时路径下 wait_for 已取消底层读取；正常结束路径 aclose 幂等
+            await iterator.aclose()
 
     def _combine_llm_outputs(self, llm_outputs: list[dict | None]) -> dict:
         """Use the final cumulative usage instead of summing every stream chunk.

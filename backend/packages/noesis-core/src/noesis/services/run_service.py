@@ -33,6 +33,7 @@ from noesis.chat.delivery.sse import parse_sse_line_to_event
 from noesis.services.persist_sink import PersistSink
 from noesis.chat.message_builder import UserMessageBuilder
 from noesis.chat.runs import (
+    ACTIVE_RUN_STATUSES,
     RunLimitExceeded,
     RunManager,
     RunSnapshot,
@@ -48,7 +49,6 @@ from noesis.repositories.agent_run_repository import AgentRunRepository
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage, TChatSession
 from noesis.schemas.chat_vo import CreateRunRequest
 from noesis.schemas.login_vo import CurrentUser
-from noesis.schemas.qa_vo import QaQueryRequest
 from noesis.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
 from noesis.services.qa import QaService
 from noesis.services.chat_service import ChatService
@@ -782,7 +782,41 @@ class RunService:
             await run_manager.stop(run_id)
         except KeyError:
             pass
+        # 兜底：内存 stop 后 DB 行仍非终态时强制收口。两种来源——
+        # 进程重启后 run 不在注册表（stop 全程 no-op），或 producer 取消
+        # 收尾失败（二次 cancel 打断 DB 写入）。不收口则 UI 永远显示
+        # 生成中，且行状态与内存注册表永久不一致。
+        await db.refresh(row)
+        if row.status in ACTIVE_RUN_STATUSES:
+            await cls._force_finalize_stopped(row, db)
         return await cls.get(run_id, user_id, db)
+
+    @classmethod
+    async def _force_finalize_stopped(cls, row: TAgentRun, db: AsyncSession) -> None:
+        """用户停止的强制终态：沿用 run 当前快照内容（保留已生成的进度）。"""
+        from noesis.chat.event_mapping.failure_notice import mark_running_tools_unknown
+
+        content = mark_running_tools_unknown(
+            row.snapshot if isinstance(row.snapshot, dict) else {"parts": []}
+        )
+        finalized = await AgentRunRepository(db).finalize(
+            run_id=row.id,
+            target=RunStatus.INTERRUPTED,
+            assistant_status="partial",
+            content=content,
+            last_sequence=row.last_sequence,
+            finished_at=_now_ms(),
+            finish_reason="stopped",
+            error_code="USER_STOP_FORCE",
+            user_error_message="本轮回复已被用户中断。",
+            snapshot=content,
+        )
+        if finalized:
+            await db.commit()
+            logger.warning(
+                "run 停止兜底收口（内存 stop 未达终态）run_id={} session_id={}",
+                row.id, row.session_id,
+            )
 
     @classmethod
     async def subscribe(cls, run_id: str, user_id: str, after_sequence: int, db: AsyncSession):

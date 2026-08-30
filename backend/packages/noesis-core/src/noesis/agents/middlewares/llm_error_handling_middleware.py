@@ -81,7 +81,9 @@ _BURST_PATTERNS = (
 )
 
 # 流式响应中断等异常类名，用于重试耗尽后的针对性失败提示
-_STREAM_DROP_EXCEPTIONS: frozenset[str] = frozenset({"StreamChunkTimeoutError"})
+_STREAM_DROP_EXCEPTIONS: frozenset[str] = frozenset(
+    {"StreamChunkTimeoutError", "StreamIdleTimeoutError"}
+)
 
 # Circuit breaker 默认阈值
 _DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 5
@@ -278,6 +280,9 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             "ReadError",
             "RemoteProtocolError",
             "StreamChunkTimeoutError",
+            # 网关挂流（只发 SSE ping 不出内容）时的流级空闲超时：
+            # 读超时被 ping 续命，这是唯一能发现死流的层，按瞬时错误重试
+            "StreamIdleTimeoutError",
         }:
             return True, "transient"
         if isinstance(exc, IndexError):
