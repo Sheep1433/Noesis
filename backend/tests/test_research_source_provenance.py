@@ -492,6 +492,22 @@ def test_multi_subagent_same_url_single_evidence_across_parts() -> None:
     # origin 徽标」发生在前端弧级聚合（canonical URL 去重），见前端回归测试。
 
 
+def test_cross_boundary_registration_not_capped_by_per_call_limit() -> None:
+    """跨边界登记不受单工具调用条数上限（30）截断：完整清单落库，面板计数真实。"""
+    sources = [
+        _web_search_result(f"https://example.com/doc/{i}", f"来源 {i}")
+        for i in range(45)
+    ]
+    register_pending_sources("sess-rsp-main", "调研 X", sources)
+    bridge = LangGraphSseBridge("sess-rsp-main")
+    builder = AssistantMessageBuilder(session_id="sess-rsp-main", message_id=bridge.assistant_message_id)
+    ctx = new_stream_ctx()
+    bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
+    parts = [p for p in builder.to_dict()["parts"] if p["type"] == "retrieval"]
+    assert len(parts) == 1
+    assert len(parts[0]["results"]) == 45
+
+
 def test_child_pipeline_drain_is_noop_for_subagent_sessions() -> None:
     """子 Agent 管道复用同一桥接层：其 session 无 pending 登记，finish 不产生额外 parts。"""
     register_pending_sources("sess-rsp-main", "调研 X", [

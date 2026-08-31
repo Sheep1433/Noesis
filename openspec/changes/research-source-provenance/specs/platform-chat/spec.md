@@ -20,7 +20,7 @@
 
 ### Requirement: 研究弧来源聚合展示
 
-来源面板 SHALL 按**研究弧**聚合展示：弧为一条真实用户消息（`source_kind != bg_task_notice` 的 user 消息）到下一条真实用户消息之间的全部 assistant 消息；弧内**过程消息**（派发、进度叙事）SHALL NOT 渲染来源面板；弧内**最后一条**消息 SHALL 渲染该弧全部消息落库 retrieval parts 的聚合面板（按 canonical URL 去重、按贡献者分组、组可折叠），被打断的弧以末条消息为聚合位。面板 SHALL 区分「引用 M / 共检索 N」：引用子集由 URL 归因判定（交付消息正文中出现的来源 URL 记为引用；过程消息正文不参与判定）；交付物为 workspace 文件且交付说明正文不含来源 URL 时，面板降级为仅「共检索 N」。面板 SHALL 为持久化消息数据的纯函数：来源 parts 落库即定稿（只追加、不回写历史），弧边界仅由消息历史决定，系统 SHALL NOT 维护会话级可变来源集合。
+来源面板 SHALL 按**研究弧**聚合展示：弧为一条真实用户消息（`source_kind != bg_task_notice` 的 user 消息）到下一条真实用户消息之间的全部 assistant 消息；弧内**过程消息**（派发、进度叙事）SHALL NOT 渲染来源面板；弧内**最后一条**消息 SHALL 渲染该弧全部消息落库 retrieval parts 的聚合面板（按 canonical URL 去重；**平铺展示，不按贡献者分组**——2026-08-31 用户裁决），被打断的弧以末条消息为聚合位。面板 SHALL 区分「引用 M / 共检索 N」：引用子集由 URL 归因判定（交付消息正文中出现的来源 URL 记为引用；过程消息正文不参与判定）；交付物为 workspace 文件且交付说明正文不含来源 URL 时，面板降级为仅「共检索 N」。面板 SHALL 为持久化消息数据的纯函数：来源 parts 落库即定稿（只追加、不回写历史），弧边界仅由消息历史决定，系统 SHALL NOT 维护会话级可变来源集合。
 
 #### Scenario: 过程消息无面板、交付消息聚合
 
@@ -44,8 +44,8 @@
 - **WHEN** 交付物写入 workspace 文件且交付说明正文不含来源 URL
 - **THEN** 该弧面板 SHALL 降级为仅「共检索 N」，SHALL NOT 展示无依据的引用子集
 
-#### Scenario: 贡献者分组
+#### Scenario: 平铺展示与计数
 
 - **WHEN** 弧内来源含主 Agent 自检索与多个子 Agent 贡献
-- **THEN** 面板 SHALL 按「主 Agent 检索 / 子 Agent『任务标题』」分组、组可折叠
-- **AND** 多贡献者共享的来源条目 SHALL 在涉及的组内出现，面板计数 SHALL 为去重数
+- **THEN** 面板 SHALL 平铺展示全部去重来源（引用项在前，其余检索来源折叠其后），SHALL NOT 按贡献者分组
+- **AND** 面板计数 SHALL 为去重数（retrieval part 的 origin 归因数据保留落库，不用于展示分组）

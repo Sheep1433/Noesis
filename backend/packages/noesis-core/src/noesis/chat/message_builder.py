@@ -380,11 +380,19 @@ class AssistantMessageBuilder:
         results: List[Dict[str, Any]],
         truncated: bool = False,
         origin: Optional[Dict[str, Any]] = None,
+        max_results: Optional[int] = None,
     ) -> RetrievalPart:
-        """登记 retrieval tool evidence，并持久化独立 retrieval part。"""
+        """登记 retrieval tool evidence，并持久化独立 retrieval part。
+
+        ``max_results`` 覆盖单次登记条数上限（缺省 RetrievalLimitConfig.
+        max_results_per_call）：跨边界来源清单是子会话多轮检索的去重汇总，
+        按更高上界登记（见 event_mapping/retrieval.py），不受单工具调用
+        上限约束——否则面板「共检索 N」被截成调用级上限。
+        """
+        per_call_limit = max_results if max_results is not None else RetrievalLimitConfig.max_results_per_call
         registered: List[Dict[str, Any]] = []
-        capacity_truncated = len(results) > RetrievalLimitConfig.max_results_per_call
-        for raw in results[:RetrievalLimitConfig.max_results_per_call]:
+        capacity_truncated = len(results) > per_call_limit
+        for raw in results[:per_call_limit]:
             if not isinstance(raw, dict) or not raw.get("citable", True):
                 continue
             try:

@@ -25,8 +25,9 @@ RETRIEVAL_TOOL_NAMES = frozenset({"search_knowledge_base", "web_search", "web_fe
 
 # 单子会话累计去重来源上界（任务级清单；完整数据以子会话落库 parts 为准）
 MAX_TASK_SOURCES = 200
-# 跨边界登记上界：主会话登记量按「弧级聚合展示所需」约束（去重头部）
-MAX_CROSS_BOUNDARY_SOURCES = 50
+# 跨边界登记上界：单子 Agent 去重后来源可达百条级（design 风险节），
+# 登记携带完整清单使面板「共检索 N」反映真实检索量
+MAX_CROSS_BOUNDARY_SOURCES = 200
 # 注入文本（通知 / check_task）中来源附录的条数与总字符上界
 SOURCES_APPENDIX_MAX_ITEMS = 30
 SOURCES_APPENDIX_MAX_CHARS = 2000
@@ -230,6 +231,8 @@ def register_cross_boundary_sources(builder: Any, session_id: str) -> list:
             results=sources,
             truncated=len(sources) >= MAX_CROSS_BOUNDARY_SOURCES,
             origin={"kind": "subagent", "label": label},
+            # 跨边界清单是多轮检索的去重汇总，不受单工具调用条数上限约束
+            max_results=MAX_CROSS_BOUNDARY_SOURCES,
         )
         parts.append(part)
         count += len(part.results)

@@ -25,39 +25,24 @@ const sourceListRef = ref<HTMLElement | null>(null)
 const totalCount = computed(() => props.entries.length)
 const citedCount = computed(() => props.entries.filter((e) => props.citedKeys.has(e.key)).length)
 
-const citedEntries = computed(() =>
-  props.entries.map((entry, index) => ({ entry, number: index + 1 }))
+interface NumberedEntry {
+  entry: ArcSourceEntry
+  number: number
+}
+
+/** 引用子集（交付正文 URL 归因命中；序号与正文 badge 一致） */
+const citedEntries = computed<NumberedEntry[]>(() =>
+  props.entries
+    .map((entry, index) => ({ entry, number: index + 1 }))
     .filter((item) => props.citedKeys.has(item.entry.key)),
 )
 
-interface SourceGroup {
-  id: string
-  title: string
-  items: Array<{ entry: ArcSourceEntry, number: number }>
-}
-
-/** 按贡献者分组（主 Agent 检索优先，子 Agent 按首见序）；条目在涉及的组内重复出现 */
-const groups = computed<SourceGroup[]>(() => {
-  const main: SourceGroup = { id: 'main', title: '主 Agent 检索', items: [] }
-  const subagent = new Map<string, SourceGroup>()
-  props.entries.forEach((entry, index) => {
-    const item = { entry, number: index + 1 }
-    for (const origin of entry.origins) {
-      if (origin.kind === 'main') {
-        main.items.push(item)
-      } else {
-        const label = origin.label || '子 Agent'
-        let group = subagent.get(label)
-        if (!group) {
-          group = { id: `subagent:${label}`, title: `子 Agent「${label}」`, items: [] }
-          subagent.set(label, group)
-        }
-        group.items.push(item)
-      }
-    }
-  })
-  return [main, ...subagent.values()].filter((group) => group.items.length > 0)
-})
+/** 其余检索来源（被检索但未被正文引用） */
+const uncitedEntries = computed<NumberedEntry[]>(() =>
+  props.entries
+    .map((entry, index) => ({ entry, number: index + 1 }))
+    .filter((item) => !props.citedKeys.has(item.entry.key)),
+)
 
 function kbLocation(result: RetrievalResultUi) {
   return {
@@ -124,7 +109,6 @@ defineExpose({ open })
     <n-drawer-content :title="citedCount ? `引用 ${citedCount} · 共检索 ${totalCount}` : `共检索 ${totalCount}`" closable>
       <div ref="sourceListRef">
         <section v-if="citedEntries.length" class="source-group">
-          <h4 class="source-group__title">引用（默认展开）</h4>
           <div class="source-list">
             <article
               v-for="item in citedEntries"
@@ -159,28 +143,22 @@ defineExpose({ open })
                     <DocumentsOutline v-else />
                   </n-icon>
                   <span>{{ sourceMeta(item.entry.result) }}</span>
-                  <span v-if="item.entry.origins.length > 1" class="source-card__origins">
-                    {{ item.entry.origins.length }} 个来源
-                  </span>
                 </div>
               </div>
             </article>
           </div>
         </section>
 
-        <section class="source-group source-group--contributors">
-          <h4 class="source-group__title">按贡献者（{{ totalCount }} 条去重来源）</h4>
+        <section v-if="uncitedEntries.length" class="source-group">
           <n-collapse>
             <n-collapse-item
-              v-for="group in groups"
-              :key="group.id"
-              :name="group.id"
-              :title="`${group.title} · ${group.items.length}`"
+              name="uncited"
+              :title="citedEntries.length ? `其余检索来源 · ${uncitedEntries.length}` : `检索来源 · ${uncitedEntries.length}`"
             >
               <div class="source-list">
                 <article
-                  v-for="item in group.items"
-                  :key="`${group.id}:${item.entry.key}`"
+                  v-for="item in uncitedEntries"
+                  :key="item.entry.key"
                   class="source-card"
                   :data-citation-number="item.number"
                 >
@@ -211,16 +189,6 @@ defineExpose({ open })
                         <DocumentsOutline v-else />
                       </n-icon>
                       <span>{{ sourceMeta(item.entry.result) }}</span>
-                    </div>
-                    <div v-if="item.entry.origins.length > 1" class="source-card__badges">
-                      <span
-                        v-for="origin in item.entry.origins"
-                        :key="`${item.entry.key}:${origin.kind}:${origin.label || ''}`"
-                        class="origin-badge"
-                        :class="{ 'origin-badge--main': origin.kind === 'main' }"
-                      >
-                        {{ origin.kind === 'main' ? '主 Agent' : (origin.label || '子 Agent') }}
-                      </span>
                     </div>
                   </div>
                 </article>
@@ -287,13 +255,6 @@ defineExpose({ open })
 
 .source-group + .source-group {
   margin-top: 14px;
-}
-
-.source-group__title {
-  margin: 0 0 5px;
-  color: var(--noesis-color-text-secondary);
-  font-size: 13px;
-  font-weight: 600;
 }
 
 .source-card {
@@ -386,37 +347,6 @@ defineExpose({ open })
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.source-card__origins {
-  color: var(--noesis-color-primary);
-}
-
-.source-card__badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-width: 100%;
-}
-
-.origin-badge {
-  display: inline-flex;
-  align-items: center;
-  max-width: 100%;
-  padding: 1px 6px;
-  border-radius: var(--noesis-radius-sm);
-  background: var(--noesis-color-primary-bg-subtle);
-  color: var(--noesis-color-text-secondary);
-  font-size: 10px;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.origin-badge--main {
-  background: var(--noesis-color-primary-bg-icon);
-  color: var(--noesis-color-primary);
 }
 
 .source-drawer--mobile :deep(.n-drawer-content) {
