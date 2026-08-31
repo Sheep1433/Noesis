@@ -269,6 +269,9 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
       return
     }
     await contextReady
+    // route 恢复路径（刷新/直链进入会话）与侧栏点击同口径回放统计；
+    // 此前只有点击路径刷新，刷新页面后统计条缺失
+    await refreshSessionStats(sessionId)
     await scrollToLatestMessage(false)
     // Run 订阅可能持续数分钟；页面与历史列表恢复不应等待整轮生成结束。
     void activeRunResume
@@ -1402,6 +1405,12 @@ async function refreshSessionStats(sessionId: string) {
   }
   try {
     const merged = await getSessionUsageSummary(sessionId)
+    // 迟到响应按会话身份丢弃：切换会话/新建对话后，旧会话的汇总请求
+    // 若晚于切换完成，不得回写统计条（同 loadSessionContext 的 loadId
+    // 守卫模式——统计条是会话级状态）
+    if (sessionId !== getChatSessionId()) {
+      return
+    }
     if (merged && Number(merged.steps) > 0) {
       sessionStats.value = merged as unknown as SessionStats
     }
@@ -2717,6 +2726,9 @@ const activateChatMode = (
     sessionContext.value = null
     sessionContextSessionId.value = ''
     sessionContextIsLive.value = false
+    // 切类型新建：旧会话统计一并清空（resetComposingSurface 之外的
+    // 另一条回到新对话的路径，统计条同样不得残留）
+    sessionStats.value = null
     // 回到新对话：旧会话的后台任务流与目录一并停掉
     stopCatalogStream()
     selectedKbCollections.value = []
