@@ -292,17 +292,13 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
     { name = "langfuse" },
-    { name = "lark-oapi" },
     { name = "loguru" },
     { name = "markdown" },
     { name = "markitdown", extra = ["docx"] },
     { name = "mcp" },
-    { name = "noesis-cli" },
     { name = "noesis-core" },
     { name = "numpy" },
-    { name = "onnxruntime" },
     { name = "openai" },
-    { name = "opencv-python-headless" },
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "pdfplumber" },
@@ -316,23 +312,37 @@ dependencies = [
     { name = "pyyaml" },
     { name = "qdrant-client" },
     { name = "rank-bm25" },
-    { name = "scikit-learn" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "xgboost", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [package.optional-dependencies]
+deepdoc-pdf = [
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
+    { name = "scikit-learn" },
+    { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "xgboost", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+feishu = [
+    { name = "lark-oapi" },
+]
 loadtest = [
     { name = "locust" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "lark-oapi" },
+    { name = "noesis-cli" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "scikit-learn" },
+    { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "xgboost", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [package.metadata]
@@ -354,18 +364,17 @@ requires-dist = [
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
     { name = "langfuse", specifier = ">=3.10.0,<4" },
-    { name = "lark-oapi", specifier = ">=1.5.3,<2" },
+    { name = "lark-oapi", marker = "extra == 'feishu'", specifier = ">=1.5.3,<2" },
     { name = "locust", marker = "extra == 'loadtest'", specifier = ">=2.31.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "markdown", specifier = ">=3.6" },
     { name = "markitdown", extras = ["docx"], specifier = ">=0.0.1" },
     { name = "mcp", specifier = ">=1.19.0" },
-    { name = "noesis-cli", editable = "packages/noesis-cli" },
     { name = "noesis-core", editable = "packages/noesis-core" },
     { name = "numpy", specifier = ">=2.2.6" },
-    { name = "onnxruntime", specifier = ">=1.19.0" },
+    { name = "onnxruntime", marker = "extra == 'deepdoc-pdf'", specifier = ">=1.19.0" },
     { name = "openai", specifier = ">=2.7.1" },
-    { name = "opencv-python-headless", specifier = ">=4.10.0.84" },
+    { name = "opencv-python-headless", marker = "extra == 'deepdoc-pdf'", specifier = ">=4.10.0.84" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pdfplumber", specifier = ">=0.10.4" },
@@ -379,18 +388,24 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "qdrant-client", specifier = ">=1.18.0" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
-    { name = "scikit-learn", specifier = ">=1.5.0" },
+    { name = "scikit-learn", marker = "extra == 'deepdoc-pdf'", specifier = ">=1.5.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
-    { name = "xgboost", specifier = ">=2.0.0" },
+    { name = "xgboost", marker = "extra == 'deepdoc-pdf'", specifier = ">=2.0.0" },
 ]
-provides-extras = ["loadtest"]
+provides-extras = ["deepdoc-pdf", "feishu", "loadtest"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "lark-oapi", specifier = ">=1.5.3,<2" },
+    { name = "noesis-cli", editable = "packages/noesis-cli" },
+    { name = "onnxruntime", specifier = ">=1.19.0" },
+    { name = "opencv-python-headless", specifier = ">=4.10.0.84" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.23.0" },
     { name = "pytest-cov", specifier = ">=4.1.0" },
+    { name = "scikit-learn", specifier = ">=1.5.0" },
+    { name = "xgboost", specifier = ">=2.0.0" },
 ]
 
 [[package]]
@@ -2957,7 +2972,6 @@ dependencies = [
     { name = "langfuse" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-postgres" },
-    { name = "lark-oapi" },
     { name = "loguru" },
     { name = "markitdown", extra = ["docx", "pdf", "pptx"] },
     { name = "mcp" },
@@ -2999,7 +3013,6 @@ requires-dist = [
     { name = "langfuse", specifier = ">=3.10.0,<4" },
     { name = "langgraph", specifier = "==1.2.11" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.0" },
-    { name = "lark-oapi", specifier = ">=1.5.3,<2" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "markitdown", extras = ["pdf", "docx", "pptx"], specifier = ">=0.1.4" },
     { name = "mcp", specifier = ">=1.19.0" },

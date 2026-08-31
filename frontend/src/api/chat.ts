@@ -615,6 +615,22 @@ export async function deleteSessionAttachment(
   await parseResponse<void>(await authFetch(req))
 }
 
+/** 会话 usage 汇总（主+子合并口径） GET /api/chat/sessions/{sessionId}/usage-summary */
+/** 无 usage 数据时返回 null（data 为 null），前端回退本地重建 */
+export async function getSessionUsageSummary(
+  sessionId: string,
+): Promise<Record<string, number> | null> {
+  const req = makeRequest(
+    'GET',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/usage-summary`,
+  )
+  const res = await authFetch(req)
+  if (res.status === 404) {
+    return null
+  }
+  return parseAuthJson<Record<string, number> | null>(res)
+}
+
 /** 会话上下文（工作区 + 附件） GET /api/chat/sessions/{sessionId}/context */
 /** 会话尚未物化时返回 null（HTTP 404），不视为错误 */
 export async function getSessionContext(sessionId: string): Promise<SessionContextResponse | null> {

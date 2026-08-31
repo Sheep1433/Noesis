@@ -9,7 +9,7 @@ import type { SessionStats } from '@/utils/statsFormat'
 import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem } from 'naive-ui'
-import { createAgentRun, deleteSession, ensureSession, getSession, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
@@ -1389,6 +1389,26 @@ function rebuildSessionStatsFromHistory() {
     conversationItems.value.map((item) => ({ role: item.role, extra: item.msg_metadata as unknown })),
   )
 }
+
+/**
+ * 打开/切换会话时的统计恢复：优先取服务端「主+子合并」汇总（与实时口径一致，
+ * 子 Agent 的 usage 落在子会话消息里，本地重建只汇总主会话会丢失子 Agent 部分）；
+ * 端点失败或无数据时回退本地重建。
+ */
+async function refreshSessionStats(sessionId: string) {
+  rebuildSessionStatsFromHistory()
+  if (!sessionId) {
+    return
+  }
+  try {
+    const merged = await getSessionUsageSummary(sessionId)
+    if (merged && Number(merged.steps) > 0) {
+      sessionStats.value = merged as unknown as SessionStats
+    }
+  } catch {
+    // 汇总端点失败不阻塞会话打开：本地重建值已就位
+  }
+}
 /** 整轮回复结束信号：递增触发所有 ToolCallCollapse compact 收起。 */
 const runCollapseSignal = ref(0)
 /** 已主动展开整轮过程的 assistant 消息；未记录的已完成消息默认只展示最终文本。 */
@@ -2641,7 +2661,7 @@ const rowProps = (row: TableItem) => {
         row,
         '',
       )
-      rebuildSessionStatsFromHistory()
+      await refreshSessionStats(row.chat_id)
 
       await replaceChatSessionUrl(row.chat_id)
       await scrollToLatestMessage(true)

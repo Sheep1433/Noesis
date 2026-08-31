@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 
 from server.exception_handlers import handle_exception
 from server.middleware.csrf import CsrfMiddleware
-from noesis.config.env import AppConfig, DistributedRunsConfig, StreamConfig
+from noesis.config.env import AppConfig, DistributedRunsConfig, MessagingConfig, StreamConfig
 from noesis.config.checkpointer import close_checkpointer, init_checkpointer
 from server.db import init_database
 from noesis.storage.postgres.manager import pg_manager
@@ -41,7 +41,6 @@ from noesis.services.memory.consolidation import (
     stop_memory_consolidator,
 )
 from noesis.services.memory.extraction import start_memory_sweeper, stop_memory_sweeper
-from noesis.services.channels.feishu_runtime import start_feishu_runtime, stop_feishu_runtime
 from server.bootstrap.kb import sync_existing_kb_collection_configs
 from noesis.services.run_recovery_service import RunRecoveryService
 from noesis.services.run_service import run_manager, run_bus
@@ -130,8 +129,24 @@ async def lifespan(app: FastAPI):
         resources.push_async_callback(stop_scheduled_task_scheduler)
         start_telegram_runtime()
         resources.push_async_callback(stop_telegram_runtime)
-        start_feishu_runtime()
-        resources.push_async_callback(stop_feishu_runtime)
+        # 飞书按需加载：lark-oapi 是 optional extra（≈95MB），仅启用时才
+        # import——未启用/未安装时零成本跳过
+        if MessagingConfig.feishu_runtime_enabled:
+            try:
+                from noesis.services.channels.feishu_runtime import (
+                    start_feishu_runtime,
+                    stop_feishu_runtime,
+                )
+
+                start_feishu_runtime()
+                resources.push_async_callback(stop_feishu_runtime)
+            except ImportError as exc:
+                logger.error(
+                    "飞书已启用但 lark-oapi 未安装（uv sync --extra feishu），通道不启动: {}",
+                    exc,
+                )
+        else:
+            logger.info("feishu runtime disabled (messaging.feishu_runtime_enabled=false)")
         await start_memory_sweeper()
         resources.push_async_callback(stop_memory_sweeper)
         await start_memory_consolidator()

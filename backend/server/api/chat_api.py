@@ -474,6 +474,26 @@ async def get_session_messages(
 
 
 @chat_router.get(
+    "/sessions/{session_id}/usage-summary",
+    summary="获取会话 usage 汇总（主+子合并口径）",
+)
+async def get_session_usage_summary(
+    session_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """刷新后统计条数据源：主会话 + 全部子会话 assistant 消息 usage 合并。"""
+    from noesis.services.qa.helpers import get_session_usage_summary as summarize
+
+    totals = await summarize(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        db=db,
+    )
+    return ResponseUtil.success(data=totals)
+
+
+@chat_router.get(
     "/sessions/{session_id}/context",
     summary="获取会话上下文（工作区产物 + 附件）",
 )

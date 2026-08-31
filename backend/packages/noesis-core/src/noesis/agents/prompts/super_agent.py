@@ -127,12 +127,6 @@ _SUB_WORKFLOW = """<workflow>
 5. 聚焦子任务小结，**不要**撰写面向用户的完整终稿。
 </workflow>"""
 
-_SUB_EXECUTION = """<sub_execution>
-## 并行工具调用
-
-多个彼此独立的信息需求（只读检索、并行 web_search/web_fetch、读多个文件）应在**同一轮**批量发起，而非每轮只调一个工具。
-仅当后一步确实依赖前一步结果时才串行（例如先 read_file 再 edit）。
-</sub_execution>"""
 
 _SUB_DELIVERABLE = """<deliverable>
 返回 Markdown 结构化小结，必含：
@@ -161,4 +155,4 @@ def build_super_agent_prompt() -> str:
 
 
 def build_super_agent_sub_prompt() -> str:
-    return build_sub_prompt(_SUB_ROLE, _SUB_WORKFLOW, _SUB_EXECUTION, _SUB_DELIVERABLE)
+    return build_sub_prompt(_SUB_ROLE, _SUB_WORKFLOW, _SUB_DELIVERABLE)

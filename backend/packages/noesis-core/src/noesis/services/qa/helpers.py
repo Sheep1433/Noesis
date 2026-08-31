@@ -702,6 +702,51 @@ def _flush_ctx_text_buffer(
     ctx["text_buffer_parent_task_call_id"] = None
 
 
+async def get_session_usage_summary(session_id: str, user_id: str, db: AsyncSession) -> Optional[Dict[str, float]]:
+    """主+子合并口径的会话 usage 汇总（刷新后统计条的数据源）。
+
+    汇总该会话与其全部子会话（parent_id）的 assistant 消息 extra.usage——
+    与实时统计口径一致（SessionStatsMiddleware 主/子共写同一 registry）。
+    无任何 usage 数据返回 None（前端回退本地重建）。
+    """
+    if not session_id:
+        return None
+    from sqlalchemy import or_, select
+    from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
+
+    result = await db.execute(
+        select(TChatMessage.extra).where(
+            TChatMessage.session_id.in_(
+                select(TChatSession.id).where(
+                    or_(
+                        TChatSession.id == session_id,
+                        TChatSession.parent_id == session_id,
+                    ),
+                )
+            ),
+            TChatMessage.user_id == user_id,
+            TChatMessage.role == "assistant",
+            TChatMessage.deleted_at.is_(None),
+        )
+    )
+    totals: Dict[str, float] = {}
+    for (extra,) in result.all():
+        usage = extra.get("usage") if isinstance(extra, dict) else None
+        if not isinstance(usage, dict):
+            continue
+        for key in USAGE_FIELDS:
+            if key == "turns":
+                continue
+            value = usage.get(key)
+            if isinstance(value, (int, float)):
+                totals[key] = totals.get(key, 0.0) + value
+        # turns 按消息数（每条 assistant 消息 = 一轮）
+        totals["turns"] = totals.get("turns", 0.0) + 1
+    if not totals or not totals.get("steps"):
+        return None
+    return totals
+
+
 async def seed_session_stats_from_history(session_id: str, user_id: str, db: AsyncSession) -> None:
     """进程内首次遇到该会话时，从 DB 历史 assistant 消息 extra.usage 汇总预填 stats registry。
 
@@ -714,12 +759,21 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
     if SessionStatsRegistry.peek(session_id) is not None:
         return
     try:
-        from sqlalchemy import select
-        from noesis.storage.postgres.models.chat import TChatMessage
+        from sqlalchemy import or_, select
+        from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
 
         result = await db.execute(
             select(TChatMessage.extra).where(
-                TChatMessage.session_id == session_id,
+                # 主+子合并口径：子会话（parent_id）的 usage 与主会话一起累计，
+                # 与实时统计（SessionStatsMiddleware 主/子共写一 registry）一致
+                TChatMessage.session_id.in_(
+                    select(TChatSession.id).where(
+                        or_(
+                            TChatSession.id == session_id,
+                            TChatSession.parent_id == session_id,
+                        ),
+                    )
+                ),
                 TChatMessage.user_id == user_id,
                 TChatMessage.role == "assistant",
                 TChatMessage.deleted_at.is_(None),

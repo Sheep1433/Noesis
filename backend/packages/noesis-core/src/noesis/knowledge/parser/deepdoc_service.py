@@ -36,6 +36,39 @@ def _require_models_for_pdf() -> None:
         )
 
 
+def _deepdoc_pdf_stack_available() -> bool:
+    """DeepDoc PDF 重栈（cv2/onnxruntime，optional extra deepdoc-pdf）是否已安装。
+
+    未安装的生产镜像按部署约定不做 PDF 版面识别/OCR——解析降级为
+    pdfplumber 纯文本抽取，其余格式（docx/excel/ppt/md/txt）不受影响。
+    """
+    try:
+        import cv2  # noqa: F401
+        import onnxruntime  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _parse_pdf_fallback(file_path: str) -> Tuple[List[DeepDocBlock], List[DeepDocTable], List[DeepDocBlock]]:
+    """无重栈时的 PDF 降级路径：pdfplumber 逐页纯文本抽取（无版面/表格结构）。"""
+    import logging
+
+    import pdfplumber
+
+    logging.getLogger(__name__).warning(
+        "DeepDoc PDF 重栈未安装（optional extra deepdoc-pdf），PDF 降级为 pdfplumber 纯文本抽取: %s",
+        file_path,
+    )
+    blocks: List[DeepDocBlock] = []
+    with pdfplumber.open(file_path) as pdf:
+        for page_no, page in enumerate(pdf.pages or [], start=1):
+            text = (page.extract_text() or "").strip()
+            if text:
+                blocks.append(DeepDocBlock(content=text, page_no=page_no, layout_type="text"))
+    return blocks, [], []
+
+
 def _read_markdown_file(file_path: str) -> str:
     text: Optional[str] = None
     for enc in ("utf-8", "utf-8-sig", "gbk"):
@@ -82,6 +115,8 @@ def _page_from_box(box: dict) -> Optional[int]:
 
 
 def _parse_pdf(file_path: str) -> Tuple[List[DeepDocBlock], List[DeepDocTable], List[DeepDocBlock]]:
+    if not _deepdoc_pdf_stack_available():
+        return _parse_pdf_fallback(file_path)
     _require_models_for_pdf()
     mod = _load_deepdoc_parser_module("pdf_parser")
     parser = mod.RAGFlowPdfParser()
