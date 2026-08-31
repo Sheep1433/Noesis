@@ -931,16 +931,15 @@ function detailPrimaryLabel(item: SkillMarketItem): string {
     padding: 12px 14px;
   }
 
+  // 两行紧凑卡：行 1 = 标题（rank+名称）+ 统计贴右；行 2 = 来源
+  // 不再用纵向 title（曾致 rank/统计/来源各占一行，三行密度过低）
   .market-card-title {
-    flex-direction: column;
-    align-items: flex-start;
     gap: 6px;
     margin-bottom: 0;
 
-    // 横排时的 flex-basis 10rem 在纵向容器里会变成 160px 高度预留，
-    // 造成标题与统计行之间的半屏空白，堆叠布局必须重置
     .name {
-      flex: 0 0 auto;
+      min-width: 0;
+      flex: 1 1 auto;   // 行方向：basis 是宽度语义（纵排时的 160px 高度预留问题不存在）
       font-size: 15px;
       line-height: 1.35;
       word-break: break-word;
@@ -948,7 +947,7 @@ function detailPrimaryLabel(item: SkillMarketItem): string {
   }
 
   .market-card-tags {
-    width: 100%;
+    flex-shrink: 0;
   }
 }
 </style>
