@@ -12,6 +12,7 @@ export function rebuildSessionStats(
     turns: 0,
     steps: 0,
     llm_ms: 0,
+    ttft_ms: 0,
     input_tokens: 0,
     output_tokens: 0,
     cache_read_tokens: 0,
@@ -28,6 +29,7 @@ export function rebuildSessionStats(
     totals.turns += 1
     totals.steps += Number(usage.steps) || 0
     totals.llm_ms += Number(usage.llm_ms) || 0
+    totals.ttft_ms += Number(usage.ttft_ms) || 0
     totals.input_tokens += Number(usage.input_tokens) || 0
     totals.output_tokens += Number(usage.output_tokens) || 0
     totals.cache_read_tokens += Number(usage.cache_read_tokens) || 0
