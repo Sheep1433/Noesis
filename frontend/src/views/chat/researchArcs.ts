@@ -116,7 +116,7 @@ export function arcDeliveryText(message: ArcMessage | null): string {
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()"'`）】。，、；！？]+/gi
 
-/** 正文中的 URL → canonical 集合（引用归因判定） */
+/** 正文中的 URL → canonical 集合（引用归因兜底通道） */
 export function canonicalUrlsInText(text: string): Set<string> {
   const out = new Set<string>()
   for (const match of text.matchAll(URL_IN_TEXT_RE)) {
@@ -129,17 +129,144 @@ export function canonicalUrlsInText(text: string): Set<string> {
   return out
 }
 
+// ---- 结构化引用标记解析（与后端 CITATION_EXTENSION 协议、markdown.ts
+// RAW_CITATION_RE 渲染层同一语法）：[citation:标题](ref)。ref 为 URL 或
+// kb:Collection/文件名；模型偶发输出无 ref 括号的残缺形态
+// [citation:domain]，作宽容线索匹配。 ----
+
+const CITATION_REF_RE = /\[citation\s*:[^\]]*\]\(([^()\s]+)\)/gi
+const BARE_CITATION_RE = /\[citation\s*:([^\]]+)\](?!\()/gi
+
+/** 引用归因信号：标记 ref 的精确 key 集 + 裸 URL 集 + 残缺标记线索 */
+export interface CitationSignal {
+  /** 精确命中键：`web:<canonical url>` 与 `kb:<collection>:<file>`（与 citationKey 同构） */
+  exactKeys: Set<string>
+  /** 残缺标记 token（domain / 文件名线索），宽容匹配用 */
+  bareHints: string[]
+  /** 归因文本中是否出现过任何信号（URL 或标记） */
+  hasAnySignal: boolean
+}
+
+function kbRefToKey(ref: string): string | null {
+  if (!ref.startsWith('kb:')) {
+    return null
+  }
+  let decoded = ref
+  try {
+    decoded = decodeURIComponent(ref)
+  } catch {
+    decoded = ref
+  }
+  const rest = decoded.slice(3)
+  const slashIdx = rest.indexOf('/')
+  if (slashIdx < 0) {
+    return null
+  }
+  const collection = rest.slice(0, slashIdx)
+  const file = rest.slice(slashIdx + 1)
+  return collection && file ? `kb:${collection}:${file}` : null
+}
+
+/** 从归因文本提取引用信号（完整标记 ref 精确 key + 残缺标记线索 + 裸 URL） */
+export function collectCitationSignals(text: string): CitationSignal {
+  const exactKeys = new Set<string>()
+  const bareHints: string[] = []
+  for (const match of text.matchAll(CITATION_REF_RE)) {
+    const ref = match[1]
+    if (/^https?:\/\//i.test(ref)) {
+      const canonical = canonicalUrl(ref)
+      if (canonical) {
+        exactKeys.add(`web:${canonical}`)
+      }
+    } else {
+      const kbKey = kbRefToKey(ref)
+      if (kbKey) {
+        exactKeys.add(kbKey)
+      }
+    }
+  }
+  for (const match of text.matchAll(BARE_CITATION_RE)) {
+    const hint = match[1].trim()
+    if (hint) {
+      bareHints.push(hint)
+    }
+  }
+  for (const canonical of canonicalUrlsInText(text)) {
+    exactKeys.add(`web:${canonical}`)
+  }
+  return { exactKeys, bareHints, hasAnySignal: exactKeys.size > 0 || bareHints.length > 0 }
+}
+
+function hostOfCanonicalWebKey(webKey: string): string {
+  try {
+    return new URL(webKey.slice(4)).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+/** 条目是否被引用：精确 key 命中 → 残缺标记宽容匹配（host / 标题） */
+function entryIsCited(entry: ArcSourceEntry, signal: CitationSignal): boolean {
+  if (signal.exactKeys.has(entry.key)) {
+    return true
+  }
+  if (entry.key.startsWith('web:')) {
+    const host = hostOfCanonicalWebKey(entry.key)
+    if (!host) {
+      return false
+    }
+    return signal.bareHints.some((hint) => host === hint.toLowerCase() || host.endsWith(`.${hint.toLowerCase()}`))
+  }
+  if (entry.key.startsWith('kb:')) {
+    const title = entry.result.title
+    if (!title || title.length < 2) {
+      return false
+    }
+    return signal.bareHints.some((hint) => hint.length >= 2 && (title.includes(hint) || hint.includes(title)))
+  }
+  return false
+}
+
+/**
+ * 弧内写入文件的内容（write_file.content / edit_file.new_string）：报告本体，
+ * 文件交付场景的引用归因文本（写入发生在弧内任何消息都算——文件是交付物）
+ */
+export function arcWrittenFileContents(messages: ArcMessage[]): string[] {
+  const out: string[] = []
+  for (const message of messages) {
+    for (const part of message.messageContent?.parts || []) {
+      if (part.type !== 'tool' || part.state === 'failed' || part.state === 'rejected' || part.state === 'cancelled') {
+        continue
+      }
+      if (part.name === 'write_file') {
+        const content = part.input?.content
+        if (typeof content === 'string' && content) {
+          out.push(content)
+        }
+      } else if (part.name === 'edit_file') {
+        const content = part.input?.new_string
+        if (typeof content === 'string' && content) {
+          out.push(content)
+        }
+      }
+    }
+  }
+  return out
+}
+
 export interface ArcPanelData {
   /** 弧内去重来源（首见序；与 buildCitationIndex 的编号序一致） */
   entries: ArcSourceEntry[]
-  /** 被交付正文引用（URL 归因）的条目 key 集合 */
+  /** 被引用的条目 key 集合（结构化标记精确命中优先，URL 归因兜底） */
   citedKeys: Set<string>
-  /** 交付正文不含任何来源 URL（如文件交付）：引用子集不可判定，降级为仅「共检索 N」 */
+  /** 归因文本无任何信号（无标记也无 URL）：引用子集不可判定，降级为仅「共检索 N」 */
   attributionUnavailable: boolean
 }
 
 /**
  * 某条消息的面板数据 = 其所属弧的全部消息 parts 合并去重 + 引用过滤的纯函数。
+ * 引用判定文本 = 交付消息顶层正文 + 弧内写入文件内容（报告本体）；
+ * 过程消息的叙述正文不参与（避免进度叙事误标）。
  * 返回 Map（key = arcMessageKey）：仅含「弧末条 assistant 消息且弧内有来源」的条目。
  */
 export function computeArcPanels<T extends ArcMessage>(messages: T[]): Map<string, ArcPanelData> {
@@ -153,15 +280,16 @@ export function computeArcPanels<T extends ArcMessage>(messages: T[]): Map<strin
     if (!key) {
       continue
     }
-    const deliveryText = arcDeliveryText(arc.terminal)
-    const urlsInText = canonicalUrlsInText(deliveryText)
-    const citedKeys = new Set(
-      entries.filter((entry) => entry.key.startsWith('web:') && urlsInText.has(entry.key.slice(4))).map((entry) => entry.key),
-    )
+    const attributionText = [
+      arcDeliveryText(arc.terminal),
+      ...arcWrittenFileContents(arc.messages),
+    ].join('\n')
+    const signal = collectCitationSignals(attributionText)
+    const citedKeys = new Set(entries.filter((entry) => entryIsCited(entry, signal)).map((entry) => entry.key))
     panels.set(key, {
       entries,
       citedKeys,
-      attributionUnavailable: urlsInText.size === 0,
+      attributionUnavailable: !signal.hasAnySignal,
     })
   }
   return panels

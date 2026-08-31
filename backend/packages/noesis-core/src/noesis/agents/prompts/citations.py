@@ -7,6 +7,7 @@ CITATION_EXTENSION = """<citations>
 - 知识库来源格式：[citation:文件名](逐字复制工具结果的 citation_ref 字段，形如 kb:Collection名/文件名)
 - 标题、文件名、Collection、citation_ref 和 URL 必须逐字复制工具结果提供的值，不得改写或编造
 - 工具结果没有提供来源时不添加引用，明确说明依据不足
+- 交付物为写入文件的报告时，报告文件正文中同样使用上述引用格式（不要只在聊天说明里引用）
 - 不要在回答末尾添加「### 参考资料」章节，来源列表由系统自动渲染
 - 不得在正文中输出 evidence_id、document_id、segment_id 或 JSON 结构
 </citations>"""

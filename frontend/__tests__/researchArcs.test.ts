@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   arcDeliveryText,
   arcMessageKey,
+  arcWrittenFileContents,
   canonicalUrlsInText,
   collectArcSources,
+  collectCitationSignals,
   computeArcPanels,
   computeResearchArcs,
   isRealUserMessage,
@@ -27,6 +29,19 @@ function retrievalPart(results: RetrievalResultUi[], origin?: { kind: 'main' | '
 
 function textPart(content: string): UiPart {
   return { id: `text-${Math.random().toString(36).slice(2, 8)}`, type: 'text', content }
+}
+
+function writeFilePart(content: string, state: 'succeeded' | 'failed' = 'succeeded'): UiPart {
+  return {
+    id: `tool-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'tool',
+    tool_call_id: `call-${Math.random().toString(36).slice(2, 8)}`,
+    name: 'write_file',
+    input: { file_path: '/workspace/report.md', content },
+    output: 'ok',
+    status: state === 'failed' ? 'error' : 'success',
+    state,
+  } as UiPart
 }
 
 function content(parts: UiPart[]): MessageContentV1 {
@@ -209,5 +224,99 @@ describe('弧聚合面板（纯函数）', () => {
       textPart('第二段'),
     ])
     expect(arcDeliveryText(delivery)).toBe('第一段\n第二段')
+  })
+})
+
+describe('引用判定：结构化标记优先 + URL 兜底 + 文件内容归因', () => {
+  it('完整 web 标记 ref 精确命中（tracking 参数不影响）', () => {
+    const delivery = msg('assistant', [
+      retrievalPart([webResult('w1', 'https://example.com/a')]),
+      textPart('结论见 [citation:来源 A](https://example.com/a?utm_source=x)。'),
+    ])
+    const panel = computeArcPanels([msg('user'), delivery]).get(arcMessageKey(delivery))!
+    expect(panel.citedKeys.has('web:https://example.com/a')).toBe(true)
+  })
+
+  it('完整 kb 标记 ref 命中（kb:Collection/文件名 → citationKey）', () => {
+    const kbResult: RetrievalResultUi = {
+      evidence_id: 'kb-1',
+      source_type: 'knowledge_base',
+      collection_name: 'requirement_docs',
+      title: '登录需求.md',
+      excerpt: '验证码五分钟内有效',
+    }
+    const delivery = msg('assistant', [
+      retrievalPart([kbResult]),
+      textPart('要求见 [citation:登录需求.md](kb:requirement_docs/登录需求.md)。'),
+    ])
+    const panel = computeArcPanels([msg('user'), delivery]).get(arcMessageKey(delivery))!
+    expect(panel.citedKeys.has('kb:requirement_docs:登录需求.md')).toBe(true)
+  })
+
+  it('残缺标记（无 ref 括号）按 domain 宽容命中，不误伤其他 host', () => {
+    const delivery = msg('assistant', [
+      retrievalPart([
+        webResult('w1', 'https://github.com/crewAIInc/crewAI'),
+        webResult('w2', 'https://docs.crewai.com/overview'),
+      ]),
+      textPart('见 [citation:github.com] 与 [citation:docs.crewai.com]。'),
+    ])
+    const panel = computeArcPanels([msg('user'), delivery]).get(arcMessageKey(delivery))!
+    expect(panel.citedKeys.has('web:https://github.com/crewAIInc/crewAI')).toBe(true)
+    expect(panel.citedKeys.has('web:https://docs.crewai.com/overview')).toBe(true)
+  })
+
+  it('子域后缀宽容命中（www.host 命中裸 host 线索）', () => {
+    const delivery = msg('assistant', [
+      retrievalPart([webResult('w1', 'https://www.anthropic.com/research')]),
+      textPart('见 [citation:anthropic.com]。'),
+    ])
+    const panel = computeArcPanels([msg('user'), delivery]).get(arcMessageKey(delivery))!
+    expect(panel.citedKeys.has('web:https://www.anthropic.com/research')).toBe(true)
+  })
+
+  it('文件交付：交付说明无 URL，但报告文件内容（write_file input）里的标记参与归因', () => {
+    const report = `# 调研报告\n\n结论一 [citation:来源 A](https://example.com/a)。\n\n结论二 [citation:来源 B](https://example.com/b)。`
+    const writer = msg('assistant', [
+      retrievalPart([webResult('w1', 'https://example.com/a'), webResult('w2', 'https://example.com/b')]),
+      writeFilePart(report),
+    ])
+    const delivery = msg('assistant', [textPart('报告已写入 workspace/report.md。')])
+    const messages = [msg('user'), writer, delivery]
+    const panel = computeArcPanels(messages).get(arcMessageKey(delivery))!
+    expect(panel.entries).toHaveLength(2)
+    expect(panel.citedKeys.has('web:https://example.com/a')).toBe(true)
+    expect(panel.citedKeys.has('web:https://example.com/b')).toBe(true)
+    expect(panel.attributionUnavailable).toBe(false)
+  })
+
+  it('文件交付且文件内无任何信号：仍降级为仅「共检索 N」', () => {
+    const writer = msg('assistant', [
+      retrievalPart([webResult('w1', 'https://example.com/a')]),
+      writeFilePart('# 报告\n\n纯文本结论，无标记无链接。'),
+    ])
+    const delivery = msg('assistant', [textPart('报告已写入 report.md。')])
+    const messages = [msg('user'), writer, delivery]
+    const panel = computeArcPanels(messages).get(arcMessageKey(delivery))!
+    expect(panel.citedKeys.size).toBe(0)
+    expect(panel.attributionUnavailable).toBe(true)
+  })
+
+  it('失败的 write_file 不参与归因', () => {
+    const writer = msg('assistant', [writeFilePart('[citation:来源 A](https://example.com/a)', 'failed')])
+    const delivery = msg('assistant', [textPart('写入失败，正文重述。')])
+    const contents = arcWrittenFileContents([writer, delivery])
+    expect(contents).toHaveLength(0)
+  })
+
+  it('collectCitationSignals：完整标记、残缺标记与裸 URL 分通道', () => {
+    const signal = collectCitationSignals(
+      'A [citation:标题](https://example.com/a?utm_source=x) B [citation:github.com] C https://example.com/b D [citation:文件](kb:col/file)',
+    )
+    expect(signal.exactKeys.has('web:https://example.com/a')).toBe(true)
+    expect(signal.exactKeys.has('web:https://example.com/b')).toBe(true)
+    expect(signal.exactKeys.has('kb:col:file')).toBe(true)
+    expect(signal.bareHints).toEqual(['github.com'])
+    expect(signal.hasAnySignal).toBe(true)
   })
 })
