@@ -19,6 +19,10 @@ from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
     BgTaskStatus,
 )
+from noesis.chat.event_mapping.retrieval import (
+    format_sources_appendix,
+    register_pending_sources,
+)
 from noesis.config.env import ModelConfig, SubagentConfig
 from noesis.runtime.logging import logger
 
@@ -209,7 +213,19 @@ def build_background_task_tools(
             return f"{task_id} 不存在（可用 list_tasks 查看当前任务与完整 task_id）"
         if task["session_id"] != session_id:
             return f"{task_id} 不属于当前会话"
-        return _format_task(task, output_budget=ModelConfig.tool_output_max_chars)
+        text = _format_task(task, output_budget=ModelConfig.tool_output_max_chars)
+        # 终态小结后附去重来源清单段（模型侧纯增益，受附录上界约束）；
+        # 结构化清单同步进入跨边界登记，主 run 桥接层 finish 时落为
+        # 带 origin（该子 Agent 任务）的 retrieval parts。
+        sources = BackgroundSubagentExecutor.sources_of(task_id)
+        if sources:
+            register_pending_sources(
+                session_id, str(task.get("description") or ""), sources,
+            )
+            appendix = format_sources_appendix(sources)
+            if appendix:
+                text = f"{text}\n\n{appendix}"
+        return text
 
     async def acheck_task(task_id: str) -> str:
         return check_task(task_id)

@@ -1,0 +1,213 @@
+import type { MessageContentV1, RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
+import { describe, expect, it } from 'vitest'
+import {
+  arcDeliveryText,
+  arcMessageKey,
+  canonicalUrlsInText,
+  collectArcSources,
+  computeArcPanels,
+  computeResearchArcs,
+  isRealUserMessage,
+} from '@/views/chat/researchArcs'
+
+function webResult(evidence_id: string, url: string, title = url): RetrievalResultUi {
+  return { evidence_id, source_type: 'web', url, title, excerpt: 'excerpt' }
+}
+
+function retrievalPart(results: RetrievalResultUi[], origin?: { kind: 'main' | 'subagent', label?: string }): UiPart {
+  return {
+    id: `retrieval-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'retrieval',
+    tool_call_id: `call-${Math.random().toString(36).slice(2, 8)}`,
+    query: 'q',
+    results,
+    ...(origin ? { origin } : {}),
+  }
+}
+
+function textPart(content: string): UiPart {
+  return { id: `text-${Math.random().toString(36).slice(2, 8)}`, type: 'text', content }
+}
+
+function content(parts: UiPart[]): MessageContentV1 {
+  return { version: 1, parts }
+}
+
+interface TestMessage {
+  uuid: string
+  message_id?: string
+  role: 'user' | 'assistant'
+  source_kind?: string
+  messageContent?: MessageContentV1
+}
+
+let seq = 0
+function msg(role: 'user' | 'assistant', parts: UiPart[] = [], source_kind?: string): TestMessage {
+  seq += 1
+  return { uuid: `m${seq}`, message_id: `id${seq}`, role, source_kind, messageContent: content(parts) }
+}
+
+describe('弧边界计算', () => {
+  it('系统通知注入（bg_task_notice）不构成弧边界：续跑多段消息同属一弧', () => {
+    const messages = [
+      msg('user'),
+      msg('assistant', [textPart('派发中…')]),
+      msg('user', [], 'bg_task_notice'),
+      msg('assistant', [textPart('进度…')]),
+      msg('user'), // 新弧边界
+      msg('assistant', [textPart('交付')]),
+    ]
+    const arcs = computeResearchArcs(messages)
+    expect(arcs).toHaveLength(2)
+    expect(arcs[0].messages).toHaveLength(4)
+    expect(arcMessageKey(arcs[0].terminal!)).toBe(messages[3].message_id)
+    expect(arcMessageKey(arcs[1].terminal!)).toBe(messages[5].message_id)
+  })
+
+  it('真实用户消息是弧边界；被打断的弧以末条 assistant 消息为聚合位', () => {
+    const messages = [
+      msg('user'),
+      msg('assistant', [textPart('只有过程，无交付')]),
+    ]
+    const arcs = computeResearchArcs(messages)
+    expect(arcs).toHaveLength(1)
+    expect(arcs[0].terminal).toBe(messages[1])
+  })
+
+  it('isRealUserMessage 排除 bg_task_notice', () => {
+    expect(isRealUserMessage(msg('user'))).toBe(true)
+    expect(isRealUserMessage(msg('user', [], 'bg_task_notice'))).toBe(false)
+    expect(isRealUserMessage(msg('assistant'))).toBe(false)
+  })
+})
+
+describe('弧聚合面板（纯函数）', () => {
+  it('过程消息不渲染面板；末条消息渲染弧内全部来源（含落位在过程消息上的 parts）', () => {
+    const process = msg('assistant', [retrievalPart([webResult('w1', 'https://example.com/a')])])
+    const dispatch = msg('assistant', [retrievalPart([webResult('w2', 'https://example.com/b')])])
+    const delivery = msg('assistant', [textPart('交付：见 https://example.com/a')])
+    const messages = [msg('user'), process, dispatch, delivery]
+    const panels = computeArcPanels(messages)
+
+    expect(panels.has(arcMessageKey(process))).toBe(false)
+    expect(panels.has(arcMessageKey(dispatch))).toBe(false)
+    const panel = panels.get(arcMessageKey(delivery))
+    expect(panel).toBeDefined()
+    expect(panel!.entries).toHaveLength(2)
+    // 引用归因：交付正文含 a 的 URL
+    expect(panel!.citedKeys.has('web:https://example.com/a')).toBe(true)
+    expect(panel!.citedKeys.has('web:https://example.com/b')).toBe(false)
+  })
+
+  it('多子 Agent 同源（同 canonical URL）合并为单条目带多 origin；计数为去重数', () => {
+    const process = msg('assistant', [
+      retrievalPart(
+        [webResult('w1', 'https://example.com/a?utm_source=x')],
+        { kind: 'subagent', label: '调研 X' },
+      ),
+    ])
+    const delivery = msg('assistant', [
+      retrievalPart([webResult('w2', 'https://example.com/a')], { kind: 'subagent', label: '调研 Y' }),
+      retrievalPart([webResult('w3', 'https://example.com/b')]), // 无 origin → main
+      textPart('报告正文'),
+    ])
+    const messages = [msg('user'), process, delivery]
+    const entries = collectArcSources(messages.slice(1))
+    expect(entries).toHaveLength(2)
+    const shared = entries.find((e) => e.key === 'web:https://example.com/a')!
+    expect(shared.origins).toEqual([
+      { kind: 'subagent', label: '调研 X' },
+      { kind: 'subagent', label: '调研 Y' },
+    ])
+    const mainEntry = entries.find((e) => e.key === 'web:https://example.com/b')!
+    expect(mainEntry.origins).toEqual([{ kind: 'main' }])
+  })
+
+  it('旧数据兼容：retrieval part 无 origin 按 main 归组，解析不报错', () => {
+    const entries = collectArcSources([msg('assistant', [retrievalPart([webResult('w1', 'https://example.com/a')])])])
+    expect(entries[0].origins).toEqual([{ kind: 'main' }])
+  })
+
+  it('多轮隔离：相邻研究弧面板互不渗透（30/40 不合并）', () => {
+    const firstSources = Array.from({ length: 30 }, (_, i) => webResult(`f${i}`, `https://example.com/first/${i}`))
+    const secondSources = Array.from({ length: 40 }, (_, i) => webResult(`s${i}`, `https://example.com/second/${i}`))
+    const shared = webResult('shared', 'https://example.com/shared')
+
+    const messages = [
+      msg('user'),
+      msg('assistant', [retrievalPart([...firstSources, shared]), textPart('交付一 https://example.com/shared')]),
+      msg('user'),
+      msg('assistant', [retrievalPart([...secondSources, shared]), textPart('交付二 https://example.com/shared')]),
+    ]
+    const panels = computeArcPanels(messages)
+    expect(panels.get(arcMessageKey(messages[1]))!.entries).toHaveLength(31)
+    expect(panels.get(arcMessageKey(messages[3]))!.entries).toHaveLength(41)
+    // 同一 URL 在两个弧的面板中各出现一次（跨弧不合并）
+    expect(panels.get(arcMessageKey(messages[1]))!.citedKeys.has('web:https://example.com/shared')).toBe(true)
+    expect(panels.get(arcMessageKey(messages[3]))!.citedKeys.has('web:https://example.com/shared')).toBe(true)
+  })
+
+  it('刷新后一致：纯函数同输入必同输出', () => {
+    const messages = [
+      msg('user'),
+      msg('assistant', [retrievalPart([webResult('w1', 'https://example.com/a')]), textPart('见 https://example.com/a')]),
+    ]
+    const first = computeArcPanels(messages)
+    const second = computeArcPanels(JSON.parse(JSON.stringify(messages)))
+    expect([...second.keys()]).toEqual([...first.keys()])
+    expect(second.get(arcMessageKey(messages[1]))!.entries.map((e) => e.key)).toEqual(
+      first.get(arcMessageKey(messages[1]))!.entries.map((e) => e.key),
+    )
+  })
+
+  it('文件交付降级：交付正文不含来源 URL 时仅「共检索 N」（无引用子集）', () => {
+    const messages = [
+      msg('user'),
+      msg('assistant', [retrievalPart([webResult('w1', 'https://example.com/a')]), textPart('报告已写入 workspace/report.md')]),
+    ]
+    const panel = computeArcPanels(messages).get(arcMessageKey(messages[1]))!
+    expect(panel.entries).toHaveLength(1)
+    expect(panel.citedKeys.size).toBe(0)
+    expect(panel.attributionUnavailable).toBe(true)
+  })
+
+  it('弧内无 retrieval parts 不渲染面板；无 assistant 消息的弧无聚合位', () => {
+    const noSources = computeArcPanels([msg('user'), msg('assistant', [textPart('纯文本回答')])])
+    expect(noSources.size).toBe(0)
+    const noAssistant = computeArcPanels([msg('user'), msg('user', [], 'bg_task_notice')])
+    expect(noAssistant.size).toBe(0)
+  })
+
+  it('引用归因只看交付消息顶层正文（子 Agent 嵌套正文不参与）', () => {
+    const childText: UiPart = {
+      id: 'text-child',
+      type: 'text',
+      content: '子 Agent 叙述 https://example.com/a',
+      parent_task_call_id: 'task-1',
+    }
+    const delivery = msg('assistant', [
+      retrievalPart([webResult('w1', 'https://example.com/a')]),
+      childText,
+      textPart('交付正文，无 URL'),
+    ])
+    const messages = [msg('user'), delivery]
+    const panel = computeArcPanels(messages).get(arcMessageKey(delivery))!
+    expect(panel.citedKeys.size).toBe(0)
+  })
+
+  it('canonicalUrlsInText 归一后匹配（tracking 参数与 fragment 不影响归因）', () => {
+    const urls = canonicalUrlsInText('参见 https://Example.com/a?utm_source=x#sec 与 http://example.com/b。')
+    expect(urls.has('https://example.com/a')).toBe(true)
+    expect(urls.has('https://example.com/b')).toBe(true)
+    expect(urls.size).toBe(2)
+  })
+
+  it('arcDeliveryText 取顶层 text parts', () => {
+    const delivery = msg('assistant', [
+      textPart('第一段'),
+      { id: 'text-child', type: 'text', content: '嵌套', parent_task_call_id: 'task-1' },
+      textPart('第二段'),
+    ])
+    expect(arcDeliveryText(delivery)).toBe('第一段\n第二段')
+  })
+})

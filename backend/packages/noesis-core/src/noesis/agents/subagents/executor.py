@@ -50,6 +50,7 @@ from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.runs import RunStatus
 
 from noesis.agents.subagents import notifications
+from noesis.chat.event_mapping.retrieval import extract_deduped_sources, source_identity
 from noesis.llm.reasoning import get_request_reasoning_effort, set_request_reasoning_effort
 from noesis.runtime.logging import logger
 from noesis.runtime.stream import stream_agent_events
@@ -133,6 +134,9 @@ class BackgroundTask:
         default_factory=lambda: collections.deque(maxlen=MAX_PROGRESS_ENTRIES),
     )
     progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # 子会话检索来源（来源身份 → result dict，插入序即首见序）：终态通知与
+    # check_task 携带的去重清单；完整数据以子会话落库 retrieval parts 为准
+    retrieval_sources: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
 
     def to_dict(self, *, include_progress: bool = True) -> dict[str, Any]:
         data = {
@@ -660,6 +664,22 @@ def _final_model_fallback_error(message: Optional[AIMessage]) -> Optional[str]:
     return None
 
 
+async def _projection_boundary(task: BackgroundTask, builder: AssistantMessageBuilder) -> None:
+    """投影边界统一收口：任务级来源合并（无条件）+ 子会话投影落库（有标准 run 时）。"""
+    content = builder.to_dict()
+    _merge_task_sources(task, content)
+    if task.run_id:
+        await _persist_child_projection(task, content)
+
+
+def _merge_task_sources(task: BackgroundTask, content: dict[str, Any]) -> None:
+    """投影内容中的 retrieval parts → 任务级去重来源清单（幂等合并）。"""
+    for item in extract_deduped_sources(content):
+        identity = source_identity(item)
+        if identity and identity not in task.retrieval_sources:
+            task.retrieval_sources[identity] = item
+
+
 async def _persist_child_projection(
     task: BackgroundTask,
     content: dict[str, Any],
@@ -704,6 +724,7 @@ def _notify_terminal(task: BackgroundTask) -> None:
         status=task.status.value,
         preview=_notify_preview(task),
         label=task.description,
+        sources=list(task.retrieval_sources.values()),
         step_count=task.step_count,
         turn_count=task.turn_count if task.kind == "subagent" else None,
         duration_ms=(
@@ -764,6 +785,13 @@ class BackgroundSubagentExecutor:
             if entry is not None:
                 return entry.task.to_dict(include_progress=False)
         return None
+
+    @staticmethod
+    def sources_of(task_id: str) -> list[dict[str, Any]]:
+        """任务级去重来源清单（跨边界传递用；check_task / 通知携带）。"""
+        with _TASKS_LOCK:
+            entry = _find_entry_locked(task_id)
+            return list(entry.task.retrieval_sources.values()) if entry else []
 
     @staticmethod
     def get_memory(task_id: str) -> Optional[dict[str, Any]]:
@@ -1499,8 +1527,7 @@ async def _run_turn_via_pipeline(
                 # 输出截断一等终止：provider 以 length 截断（含参数被截的工具调用）
                 if str((getattr(output, "response_metadata", None) or {}).get("finish_reason")) == "length":
                     outcome.truncated = True
-                if task.run_id:
-                    await _persist_child_projection(task, builder.to_dict())
+                await _projection_boundary(task, builder)
                 _publish_task_event(task, "progress")
                 # 协作停止·静止边界：模型消息完整且无未应答工具调用
                 if task.status == BgTaskStatus.STOPPING and not getattr(output, "tool_calls", None):
@@ -1512,8 +1539,7 @@ async def _run_turn_via_pipeline(
                 text = _record_progress_from_tool_end(task, output)
                 if text.strip():
                     outcome.final_text = text
-                if task.run_id:
-                    await _persist_child_projection(task, builder.to_dict())
+                await _projection_boundary(task, builder)
                 _publish_task_event(task, "progress")
                 # 协作停止·静止边界：工具结果已落定并投影
                 if task.status == BgTaskStatus.STOPPING:

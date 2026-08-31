@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AgentRunSnapshot, ChatMessageResponse } from '@/api/chat'
+import type { RetrievalResultUi } from '@/views/chat/messageParts'
 import type { RunEventState } from '@/views/chat/runEventReducer'
 import { useLocalStorage } from '@vueuse/core'
 import { NFloatButton, NInput } from 'naive-ui'
@@ -14,6 +15,7 @@ import {
 } from '@/api/chat'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
+import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
 import FollowupQueue from '@/components/FollowupQueue/index.vue'
@@ -24,6 +26,7 @@ import { wireTimestampMs } from '@/utils/formatTime'
 import { rebuildSessionStats } from '@/utils/sessionStats'
 import { formatStatsLine } from '@/utils/statsFormat'
 import { taskStatusLabel } from '@/utils/taskStatusLabels'
+import { citationKey } from '@/views/chat/citationRendering'
 import {
   formatDurationMs,
   hasValidContextWindow,
@@ -73,6 +76,28 @@ const selectedReasoningEffort = ref('')
 const sessionStats = computed(() => rebuildSessionStats(messages.value))
 const statsLineTemplate = useLocalStorage('noesis:statsline-template', '')
 const statsLine = computed(() => formatStatsLine(sessionStats.value, statsLineTemplate.value))
+
+/** 消息级检索结果：正文 badge 序号数据源（与主会话同构的 retrieval parts） */
+function messageRetrievalResults(message: ChatMessageResponse): RetrievalResultUi[] {
+  return normalizeApiContent(message.content).parts.filter((part) => part.type === 'retrieval').flatMap((part) => part.results)
+}
+
+/** 会话级来源面板：子会话全部落库 retrieval parts，按 canonical URL 去重 */
+const sessionSources = computed<RetrievalResultUi[]>(() => {
+  const seen = new Map<string, RetrievalResultUi>()
+  for (const message of messages.value) {
+    if (message.role !== 'assistant') {
+      continue
+    }
+    for (const result of messageRetrievalResults(message)) {
+      const key = citationKey(result)
+      if (!seen.has(key)) {
+        seen.set(key, result)
+      }
+    }
+  }
+  return [...seen.values()]
+})
 
 const assistantMessage = computed(() => messages.value.find((item) => item.id === run.value?.assistant_message_id))
 const turnCount = computed(() => messages.value.filter((item) => item.role === 'user').length)
@@ -494,6 +519,8 @@ onBeforeUnmount(() => {
       <span>{{ stepCount }} 步</span>
       <span v-if="duration">· {{ duration }}</span>
       <span v-if="run">· {{ taskStatusLabel(run.status) }}</span>
+      <!-- 子会话来源面板：基于落库 retrieval parts，会话内 canonical URL 去重 -->
+      <CitationSources v-if="sessionSources.length" :results="sessionSources" />
     </div>
     <div v-if="loading" class="subagent-conversation__empty">正在加载对话…</div>
     <div v-else class="subagent-conversation__body">
@@ -503,7 +530,11 @@ onBeforeUnmount(() => {
           <div class="subagent-conversation__user-text">{{ userText(message) }}</div>
         </div>
         <div v-else class="subagent-conversation__assistant">
-          <ConversationPartsRenderer :content="message.content" appearance="light" />
+          <ConversationPartsRenderer
+            :content="message.content"
+            appearance="light"
+            :retrieval-results="messageRetrievalResults(message)"
+          />
         </div>
       </template>
       <div v-if="!messages.length" class="subagent-conversation__empty">暂无对话内容</div>
