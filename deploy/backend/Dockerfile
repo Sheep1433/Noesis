@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Noesis 后端生产镜像（由 deploy/docker-compose.yml 引用，构建上下文为仓库根目录）
 #
 # 瘦身约定（约 −500MB）：
@@ -38,6 +37,14 @@ COPY extensions/mcp ./extensions/mcp
 
 # --no-install-package noesis-cli：workspace 成员默认全装，显式排除评测 CLI
 RUN uv sync --frozen --no-dev --no-install-package noesis-cli
+
+# onnxruntime 的 sympy/mpmath（≈82MB）只服务其量化/构建工具链；镜像内
+# onnxruntime 消费方只有 magika（文件类型 ONNX 推理），已实测不 import
+# sympy。删除后立即 import 自验证——未来版本若真依赖，构建会在此失败
+# 而不是运行时炸。
+RUN rm -rf .venv/lib/python3.11/site-packages/sympy \
+           .venv/lib/python3.11/site-packages/mpmath \
+  && .venv/bin/python -c "import onnxruntime, magika, markitdown"
 
 FROM python:3.11-slim-bookworm
 
