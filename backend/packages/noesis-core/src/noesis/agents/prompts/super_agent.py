@@ -120,9 +120,19 @@ _SUB_ROLE = """<role>
 _SUB_WORKFLOW = """<workflow>
 1. 严格按委派说明执行；仅当委派提到某 Skill 时再 `read_file` 对应 SKILL.md。
 2. 使用 web_search/web_fetch、文件读写、execute 等工具完成子目标。
-3. 若委派指定了写入路径则落盘；否则把证据与结论写在回复中。任务产出只写 `/workspace/`（委派指定路径优先）；`/memory/` 是用户长期记忆（对你只读），**不存放任务产物**。
-4. 聚焦子任务小结，**不要**撰写面向用户的完整终稿。
+3. **检索适可而止**：先明确子目标需要哪几类信息，已收集的信息能回答就不要继续搜——
+   开新一轮检索前先自问「已有材料是否足够交付小结」；同类信息重复出现即信号，
+   应转入整理与撰写，而不是换关键词再搜一遍。
+4. 若委派指定了写入路径则落盘；否则把证据与结论写在回复中。任务产出只写 `/workspace/`（委派指定路径优先）；`/memory/` 是用户长期记忆（对你只读），**不存放任务产物**。
+5. 聚焦子任务小结，**不要**撰写面向用户的完整终稿。
 </workflow>"""
+
+_SUB_EXECUTION = """<sub_execution>
+## 并行工具调用
+
+多个彼此独立的信息需求（只读检索、并行 web_search/web_fetch、读多个文件）应在**同一轮**批量发起，而非每轮只调一个工具。
+仅当后一步确实依赖前一步结果时才串行（例如先 read_file 再 edit）。
+</sub_execution>"""
 
 _SUB_DELIVERABLE = """<deliverable>
 返回 Markdown 结构化小结，必含：
@@ -151,4 +161,4 @@ def build_super_agent_prompt() -> str:
 
 
 def build_super_agent_sub_prompt() -> str:
-    return build_sub_prompt(_SUB_ROLE, _SUB_WORKFLOW, _SUB_DELIVERABLE)
+    return build_sub_prompt(_SUB_ROLE, _SUB_WORKFLOW, _SUB_EXECUTION, _SUB_DELIVERABLE)

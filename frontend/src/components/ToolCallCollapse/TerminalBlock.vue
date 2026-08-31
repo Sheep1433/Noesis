@@ -4,6 +4,8 @@ import { computed } from 'vue'
 interface Props {
   /** execute 工具的 combined stdout/stderr（含 `[Command ... with exit code N]` 后缀） */
   output: string
+  /** 命令行原文（compact 展开态显示在输出上方） */
+  command?: string
   /** 独立传入的退出码（若可用） */
   exitCode?: number
   truncated?: boolean
@@ -35,6 +37,7 @@ const hasExitInfo = computed(() => effectiveExitCode.value !== undefined || pars
 
 <template>
   <div class="terminal-block" :data-appearance="appearance" :data-state="hasExitInfo ? (succeeded ? 'ok' : 'error') : 'neutral'">
+    <div v-if="command" class="terminal-command"><span class="terminal-command__prompt" aria-hidden="true">$</span>{{ command }}</div>
     <pre v-if="parsed.body" class="terminal-body">{{ parsed.body }}</pre>
     <div v-if="hasExitInfo || truncated" class="terminal-meta">
       <span v-if="hasExitInfo" class="exit-badge" :data-ok="succeeded">
@@ -63,6 +66,22 @@ const hasExitInfo = computed(() => effectiveExitCode.value !== undefined || pars
   background: var(--noesis-color-bg-elevated, #f6f8fa);
   color: var(--noesis-color-text, #24292f);
   --terminal-muted-color: var(--noesis-color-text-secondary, #404040);
+}
+.terminal-command {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--terminal-muted-color, #8b949e);
+  opacity: 0.33;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 11px;
+}
+.terminal-command__prompt {
+  margin-right: 6px;
+}
+.terminal-block:hover .terminal-command {
+  opacity: 1;
 }
 .terminal-body {
   margin: 0;

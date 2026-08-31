@@ -142,6 +142,27 @@ function truncateOneLine(s: string, max: number): string {
   return `${t.slice(0, max - 1)}…`
 }
 
+/** 终端块命令行：从参数取完整 command（多行命令保留原样，不做单行截断） */
+const terminalCommand = computed(() => {
+  const args = props.arguments
+  if (args == null || args === '') {
+    return ''
+  }
+  if (typeof args === 'string') {
+    return args
+  }
+  if (typeof args === 'object' && !Array.isArray(args)) {
+    const record = args as Record<string, unknown>
+    for (const key of ['command', 'cmd', 'shell', 'bash', 'script']) {
+      const value = record[key]
+      if (typeof value === 'string' && value !== '') {
+        return value
+      }
+    }
+  }
+  return ''
+})
+
 /** 标题行右侧摘要：把命令/路径等从参数里提出来，避免 header-main 与 header-extra 之间大块空白 */
 const headerSummary = computed(() => {
   const args = props.arguments
@@ -327,10 +348,11 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
       </template>
 
       <div class="tool-body-compact">
-        <!-- bash → 终端块 -->
+        <!-- bash → 终端块（命令行 + 输出） -->
         <TerminalBlock
           v-if="compactCard === 'terminal' && resultDisplay"
           :output="resultDisplay"
+          :command="terminalCommand"
           :exit-code="exitCode"
           :truncated="truncated"
           :appearance="appearance"

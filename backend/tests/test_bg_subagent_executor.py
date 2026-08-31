@@ -1560,3 +1560,37 @@ def test_cancel_notification_carries_partial_preview() -> None:
     block = render_block(pending)
     assert "已取消" in block
     assert "通知应携带这段部分产出。" in block
+
+
+def test_check_and_list_task_tools_execute_without_error() -> None:
+    """回归：check_task / list_tasks 工具本体可执行（P1 笔误漏网的缝）。
+
+    此前单测只测 _format_task（直接传预算参数），不测引用配置类的工具闭包——
+    OtherConfig.tool_output_max_chars 笔误导致两个工具每次调用必抛 AttributeError。
+    """
+    from noesis.agents.subagents.tools import build_background_task_tools
+
+    worker = _build_worker([AIMessage(content="ok")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="x",
+        session_id="s-tools", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+    tools = build_background_task_tools(
+        worker_factory=lambda: worker,
+        executor=executor,
+        session_id="s-tools",
+        user_id="u1",
+    )
+    by_name = {t.name: t for t in tools}
+    check = by_name["check_task"]
+    listing = by_name["list_tasks"]
+
+    check_result = check.func(task_id) if check.func else None
+    assert check_result is not None and "completed" in check_result
+    list_result = listing.func() if listing.func else None
+    assert list_result is not None and "completed" in list_result
+    executor.cancel(task_id)

@@ -19,7 +19,7 @@ from noesis.agents.subagents.executor import (
     BackgroundSubagentExecutor,
     BgTaskStatus,
 )
-from noesis.config.env import OtherConfig, SubagentConfig
+from noesis.config.env import ModelConfig, SubagentConfig
 from noesis.runtime.logging import logger
 
 _CHECK_PENDING_HINT = {
@@ -209,7 +209,7 @@ def build_background_task_tools(
             return f"{task_id} 不存在（可用 list_tasks 查看当前任务与完整 task_id）"
         if task["session_id"] != session_id:
             return f"{task_id} 不属于当前会话"
-        return _format_task(task, output_budget=OtherConfig.tool_output_max_chars)
+        return _format_task(task, output_budget=ModelConfig.tool_output_max_chars)
 
     async def acheck_task(task_id: str) -> str:
         return check_task(task_id)
@@ -247,7 +247,7 @@ def build_background_task_tools(
         if not tasks:
             return "当前会话没有后台任务"
         return "\n".join(
-            _format_task(t, output_budget=OtherConfig.tool_output_max_chars) for t in tasks
+            _format_task(t, output_budget=ModelConfig.tool_output_max_chars) for t in tasks
         )
 
     async def alist_tasks() -> str:
