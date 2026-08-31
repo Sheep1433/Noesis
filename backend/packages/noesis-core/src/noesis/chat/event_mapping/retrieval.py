@@ -206,15 +206,18 @@ def drain_pending_sources(session_id: str) -> List[Dict[str, Any]]:
         return _PENDING.pop(session_id, [])
 
 
-def register_cross_boundary_sources(builder: Any, session_id: str) -> int:
+def register_cross_boundary_sources(builder: Any, session_id: str) -> list:
     """主 run 收尾：drain 跨边界来源，登记为带 origin 标记的 retrieval parts。
 
+    返回登记产生的 retrieval parts（桥接层须为其补发
+    retrieval-results-available 帧——持久化权威 RunProjection 按帧重建内容）。
     数据落位与展示位置解耦：收取消息（通常是过程消息）落库来源数据，
-    展示由前端按研究弧聚合。返回登记的来源条数。
+    展示由前端按研究弧聚合。
     """
     entries = drain_pending_sources(session_id)
     if not entries:
-        return 0
+        return []
+    parts = []
     count = 0
     for entry in entries:
         label = str(entry.get("label") or "").strip()
@@ -228,6 +231,7 @@ def register_cross_boundary_sources(builder: Any, session_id: str) -> int:
             truncated=len(sources) >= MAX_CROSS_BOUNDARY_SOURCES,
             origin={"kind": "subagent", "label": label},
         )
+        parts.append(part)
         count += len(part.results)
     if count:
         logger.info(
@@ -236,7 +240,7 @@ def register_cross_boundary_sources(builder: Any, session_id: str) -> int:
             len(entries),
             count,
         )
-    return count
+    return parts
 
 
 __all__ = [

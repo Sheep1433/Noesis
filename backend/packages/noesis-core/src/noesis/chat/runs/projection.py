@@ -175,11 +175,13 @@ class RunProjection:
             elif event.event == "retrieval-results-available":
                 results = data.get("results")
                 if isinstance(results, list):
+                    origin = data.get("origin")
                     self.builder.register_retrieval_results(
                         tool_call_id=str(data.get("tool_call_id") or ""),
                         query=str(data.get("query") or ""),
                         results=[item for item in results if isinstance(item, dict)],
                         truncated=bool(data.get("truncated")),
+                        origin=origin if isinstance(origin, dict) else None,
                     )
             elif event.event == "run-status":
                 status = str(data.get("status") or "")

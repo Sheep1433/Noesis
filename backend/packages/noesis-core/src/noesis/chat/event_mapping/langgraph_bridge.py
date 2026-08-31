@@ -405,8 +405,15 @@ class LangGraphSseBridge:
         # 跨边界来源收尾登记：子 Agent 终态清单（通知注入 / check_task）落为
         # 带 origin 的 retrieval parts，落在收取发生的这条 assistant 消息上
         # （子 Agent 管道复用本桥接层，其 session 无 pending 登记，drain 为空）。
+        # 持久化权威在 RunProjection 自己的 builder（消费 SSE 帧重建内容），
+        # 因此登记后必须补发 retrieval-results-available 帧，否则只进本桥接层
+        # builder、主消息落库缺这些 parts。
         if builder is not None and self.session_id:
-            register_cross_boundary_sources(builder, self.session_id)
+            for part in register_cross_boundary_sources(builder, self.session_id):
+                frame = part.to_dict()
+                frame["type"] = "retrieval-results-available"
+                frame["message_id"] = self.assistant_message_id
+                out.append(_format_sse("retrieval-results-available", frame))
         if builder is not None and ctx is not None:
             self._flush_text_buffer(builder, ctx)
         reason = str(payload.get("finish_reason") or "stop")

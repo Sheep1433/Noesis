@@ -405,7 +405,7 @@ def test_bridge_finish_registers_cross_boundary_parts_with_origin() -> None:
     bridge = LangGraphSseBridge("sess-rsp-main")
     builder = AssistantMessageBuilder(session_id="sess-rsp-main", message_id=bridge.assistant_message_id)
     ctx = new_stream_ctx()
-    bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
+    lines = bridge.process_item({"type": "__tw_finish__", "finish_reason": "stop"}, builder, ctx)
 
     parts = [p for p in builder.to_dict()["parts"] if p["type"] == "retrieval"]
     assert len(parts) == 1
@@ -413,8 +413,47 @@ def test_bridge_finish_registers_cross_boundary_parts_with_origin() -> None:
     assert part["origin"] == {"kind": "subagent", "label": "调研 X"}
     assert part["query"] == "调研 X"
     assert part["results"][0]["url"] == "https://example.com/a?utm_source=x"
+    # 持久化权威 RunProjection 按帧重建：跨边界 parts 必须补发
+    # retrieval-results-available 帧（先于 finish 帧），否则主消息落库缺失
+    raw = "".join(lines)
+    frames = [
+        json.loads(line.removeprefix("data: "))
+        for line in raw.split("\n")
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    retrieval_frames = [f for f in frames if f["type"] == "retrieval-results-available"]
+    assert len(retrieval_frames) == 1
+    assert retrieval_frames[0]["origin"] == {"kind": "subagent", "label": "调研 X"}
+    finish_idx = next(i for i, f in enumerate(frames) if f["type"] == "finish")
+    retrieval_idx = frames.index(retrieval_frames[0])
+    assert retrieval_idx < finish_idx
     # drain 一次性
     assert drain_pending_sources("sess-rsp-main") == []
+
+
+def test_run_projection_persists_cross_boundary_origin() -> None:
+    """RunProjection（主消息落库权威）消费跨边界帧：origin 透传进 parts。"""
+    from noesis.chat.delivery.events import WireFrame
+    from noesis.chat.runs.projection import RunProjection
+
+    projection = RunProjection(
+        run_id="run-rsp", user_id="u1", session_id="sess-rsp-main",
+        assistant_message_id="msg-rsp", qa_type="SUPER_AGENT_QA",
+    )
+    projection.apply(WireFrame(
+        event="retrieval-results-available",
+        data={
+            "type": "retrieval-results-available",
+            "message_id": "msg-rsp",
+            "tool_call_id": "subagent-sources-abc",
+            "query": "调研 X",
+            "results": [_web_search_result("https://example.com/a", "来源 A")],
+            "origin": {"kind": "subagent", "label": "调研 X"},
+        },
+    ))
+    parts = [p for p in projection.builder.to_dict()["parts"] if p["type"] == "retrieval"]
+    assert len(parts) == 1
+    assert parts[0]["origin"] == {"kind": "subagent", "label": "调研 X"}
 
 
 def test_pending_sources_merge_for_same_label_and_url() -> None:

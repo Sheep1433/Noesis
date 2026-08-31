@@ -1962,9 +1962,7 @@ const composerQueue = useFollowupQueue({
 const queuedComposerMessages = ref<string[]>([])
 
 // 队列属于当前对话上下文：会话切换即清空，避免跨会话误发
-watch(() => uuids.value[qa_type.value], () => {
-  queuedComposerMessages.value = []
-})
+// watch 声明在下方 qa_type 初始化之后（见该处说明）
 
 /** 编辑：文本回到输入框，从队列移除 */
 function editQueuedComposerMessage(index: number): void {
@@ -2692,6 +2690,12 @@ const rowProps = (row: TableItem) => {
 
 // 默认选中的对话类型
 const qa_type = ref('COMMON_QA')
+
+// 待发队列的会话切换清空：watch 创建即求值 getter，必须声明在 qa_type
+// 初始化之后——原先与队列实现放在一起，getter 触发 TDZ 使整页 setup 崩溃
+watch(() => uuids.value[qa_type.value], () => {
+  queuedComposerMessages.value = []
+})
 
 function ensureActiveSessionId() {
   const qt = qa_type.value
