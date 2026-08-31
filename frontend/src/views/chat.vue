@@ -6,7 +6,7 @@ import type { ChatAttachmentItem } from '@/store/business'
 import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { SessionStats } from '@/utils/statsFormat'
-import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
+import type { MessageContentV1, RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem } from 'naive-ui'
 import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
@@ -15,12 +15,12 @@ import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
-import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
 import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
+import ResearchSourcesPanel from '@/components/ResearchSourcesPanel/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TaskCatalogPanel from '@/components/TaskCatalogPanel/index.vue'
@@ -90,6 +90,7 @@ import {
   syncLegacyFieldsFromParts,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
+import { arcMessageKey, computeArcPanels } from '@/views/chat/researchArcs'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
 import { createUserSignalEventSource } from '@/views/chat/userSignalStream'
 import { useSSEStream } from '@/views/chat/useSSEStream'
@@ -106,6 +107,37 @@ function retrievedResults(parts: UiPart[]) {
     .flatMap((part) => part.type === 'retrieval' ? part.results : [])
 }
 
+// ---- 研究弧来源聚合（research-source-provenance）----
+// 面板 = 持久化消息数据的纯函数：弧边界由真实用户消息决定（系统通知注入
+// 不构成边界），弧内过程消息不渲染面板、末条 assistant 消息渲染聚合面板。
+type ArcPanelMessage = {
+  uuid?: string
+  message_id?: string
+  role: 'user' | 'assistant'
+  source_kind?: string
+  messageContent?: MessageContentV1
+}
+
+const arcPanels = computed(() => computeArcPanels(conversationItems.value as ArcPanelMessage[]))
+
+function arcPanelFor(item: ArcPanelMessage) {
+  const key = arcMessageKey(item)
+  return key ? arcPanels.value.get(key) : undefined
+}
+
+/**
+ * 消息级检索结果（正文 badge 序号的数据源）：
+ * 弧末条消息用弧内聚合去重结果（与聚合面板序号一致）；
+ * 过程消息保持消息内结果（不渲染面板）。
+ */
+function messageRetrievalResults(item: ArcPanelMessage): RetrievalResultUi[] {
+  const panel = arcPanelFor(item)
+  if (panel) {
+    return panel.entries.map((entry) => entry.result)
+  }
+  return retrievedResults(item.messageContent?.parts || [])
+}
+
 function entryKey(entry: DisplayPartEntry, fallback: number): string {
   if (entry.kind === 'parallel_tools') {
     return `pg:${entry.parts[0]?.tool_call_id ?? entry.parts[0]?.id ?? fallback}`
@@ -113,20 +145,6 @@ function entryKey(entry: DisplayPartEntry, fallback: number): string {
   return entry.part.tool_call_id ?? entry.part.id ?? String(fallback)
 }
 
-type CitationSourcesHandle = InstanceType<typeof CitationSources>
-const citationSourcesRefs = new Map<string, CitationSourcesHandle>()
-
-function citationSourcesKey(item: { message_id?: string, chat_id: string }, index: number): string {
-  return item.message_id || `${item.chat_id}:${index}`
-}
-
-function setCitationSourcesRef(key: string, component: unknown) {
-  if (component) {
-    citationSourcesRefs.set(key, component as CitationSourcesHandle)
-  } else {
-    citationSourcesRefs.delete(key)
-  }
-}
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
@@ -1953,9 +1971,7 @@ const composerQueue = useFollowupQueue({
 const queuedComposerMessages = ref<string[]>([])
 
 // 队列属于当前对话上下文：会话切换即清空，避免跨会话误发
-watch(() => uuids.value[qa_type.value], () => {
-  queuedComposerMessages.value = []
-})
+// watch 声明在下方 qa_type 初始化之后（见该处说明）
 
 /** 编辑：文本回到输入框，从队列移除 */
 function editQueuedComposerMessage(index: number): void {
@@ -2684,6 +2700,12 @@ const rowProps = (row: TableItem) => {
 // 默认选中的对话类型
 const qa_type = ref('COMMON_QA')
 
+// 待发队列的会话切换清空：watch 创建即求值 getter，必须声明在 qa_type
+// 初始化之后——原先与队列实现放在一起，getter 触发 TDZ 使整页 setup 崩溃
+watch(() => uuids.value[qa_type.value], () => {
+  queuedComposerMessages.value = []
+})
+
 function ensureActiveSessionId() {
   const qt = qa_type.value
   if (!uuids.value[qt]) {
@@ -3381,7 +3403,7 @@ function onComposerPaste(e: ClipboardEvent) {
                               :content="item.messageContent"
                               appearance="light"
                               :collapse-signal="runCollapseSignal"
-                              :retrieval-results="retrievedResults(item.messageContent.parts)"
+                              :retrieval-results="messageRetrievalResults(item)"
                               :msg-metadata="item.msg_metadata"
                               :qa-type="item.qa_type || 'COMMON_QA'"
                             />
@@ -3481,7 +3503,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                 <MarkdownPreview
                                   v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
                                   :content="entry.part.content || ''"
-                                  :retrieval-results="retrievedResults(item.messageContent.parts)"
+                                  :retrieval-results="messageRetrievalResults(item)"
                                   :toolCalls="null"
                                   :msgMetadata="item.msg_metadata"
                                   :isInit="isInit"
@@ -3522,10 +3544,10 @@ function onComposerPaste(e: ClipboardEvent) {
                               :langfuse-ui-origin="langfuseUiOrigin"
                             >
                               <template #meta>
-                                <CitationSources
-                                  v-if="retrievedResults(item.messageContent.parts).length"
-                                  :ref="(component) => setCitationSourcesRef(citationSourcesKey(item, index), component)"
-                                  :results="retrievedResults(item.messageContent.parts)"
+                                <ResearchSourcesPanel
+                                  v-if="arcPanelFor(item)"
+                                  :entries="arcPanelFor(item)!.entries"
+                                  :cited-keys="arcPanelFor(item)!.citedKeys"
                                 />
                               </template>
                             </AssistantReplyToolbar>

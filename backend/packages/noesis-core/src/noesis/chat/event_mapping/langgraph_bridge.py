@@ -41,8 +41,11 @@ from noesis.chat.event_mapping.tool_payload import (
     normalize_tool_input,
     resolve_tool_call_id,
     resolve_tool_output_call_id,
-    retrieval_payload,
     tool_output_value,
+)
+from noesis.chat.event_mapping.retrieval import (
+    register_cross_boundary_sources,
+    register_tool_retrieval,
 )
 from noesis.errors.tool_failure import (
     ToolFailure,
@@ -399,6 +402,18 @@ class LangGraphSseBridge:
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
+        # 跨边界来源收尾登记：子 Agent 终态清单（通知注入 / check_task）落为
+        # 带 origin 的 retrieval parts，落在收取发生的这条 assistant 消息上
+        # （子 Agent 管道复用本桥接层，其 session 无 pending 登记，drain 为空）。
+        # 持久化权威在 RunProjection 自己的 builder（消费 SSE 帧重建内容），
+        # 因此登记后必须补发 retrieval-results-available 帧，否则只进本桥接层
+        # builder、主消息落库缺这些 parts。
+        if builder is not None and self.session_id:
+            for part in register_cross_boundary_sources(builder, self.session_id):
+                frame = part.to_dict()
+                frame["type"] = "retrieval-results-available"
+                frame["message_id"] = self.assistant_message_id
+                out.append(_format_sse("retrieval-results-available", frame))
         if builder is not None and ctx is not None:
             self._flush_text_buffer(builder, ctx)
         reason = str(payload.get("finish_reason") or "stop")
@@ -1094,23 +1109,8 @@ class LangGraphSseBridge:
             )
 
         retrieval_part = None
-        if (
-            builder is not None
-            and not is_error
-            and tool_name in {"search_knowledge_base", "web_search", "web_fetch"}
-        ):
-            parsed_retrieval = retrieval_payload(clean_output)
-            if parsed_retrieval is not None:
-                tool_part = builder.get_tool(tool_call_id)
-                tool_input = tool_part.arguments if tool_part is not None else {}
-                retrieval_part = builder.register_retrieval_results(
-                    tool_call_id=tool_call_id,
-                    query=str((tool_input or {}).get("query") or (tool_input or {}).get("url") or ""),
-                    results=parsed_retrieval["results"],
-                    truncated=bool(parsed_retrieval.get("truncated")),
-                )
-                if tool_part is not None:
-                    tool_part.output = f"检索到 {len(retrieval_part.results)} 条来源"
+        if builder is not None and not is_error:
+            retrieval_part = register_tool_retrieval(builder, tool_name, tool_call_id, clean_output)
 
         if tool_name == TASK_TOOL_NAME:
             ToolRunTracker.on_task_tool_end(tool_call_id, ctx)

@@ -68,6 +68,9 @@ class RetrievalPart(MessagePart):
     query: str = ""
     results: List[Dict[str, Any]] = field(default_factory=list)
     truncated: bool = False
+    # 来源归属：{"kind": "main"|"subagent", "label": 任务标题}；缺省视为主 Agent
+    # 自检索（旧数据无该字段，前端按 main 归组）
+    origin: Optional[Dict[str, Any]] = None
     type: str = "retrieval"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -80,6 +83,8 @@ class RetrievalPart(MessagePart):
         }
         if self.truncated:
             out["truncated"] = True
+        if self.origin:
+            out["origin"] = dict(self.origin)
         return out
 
 
@@ -216,6 +221,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
         )
     if part_type == "retrieval":
         results = data.get("results")
+        origin = data.get("origin")
         return RetrievalPart(
             id=str(data.get("id") or ""),
             tool_call_id=str(data.get("tool_call_id") or ""),
@@ -224,6 +230,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             if isinstance(results, list)
             else [],
             truncated=bool(data.get("truncated")),
+            origin=origin if isinstance(origin, dict) else None,
         )
     raise ValueError(f"Unknown part type: {part_type}")
 
@@ -372,6 +379,7 @@ class AssistantMessageBuilder:
         query: str,
         results: List[Dict[str, Any]],
         truncated: bool = False,
+        origin: Optional[Dict[str, Any]] = None,
     ) -> RetrievalPart:
         """登记 retrieval tool evidence，并持久化独立 retrieval part。"""
         registered: List[Dict[str, Any]] = []
@@ -435,6 +443,8 @@ class AssistantMessageBuilder:
             existing_part.results = list(by_id.values())
             existing_part.query = existing_part.query or query
             existing_part.truncated = existing_part.truncated or truncated or capacity_truncated
+            if origin:
+                existing_part.origin = dict(origin)
             return existing_part
 
         part = RetrievalPart(
@@ -443,6 +453,7 @@ class AssistantMessageBuilder:
             query=query,
             results=registered,
             truncated=truncated or capacity_truncated,
+            origin=dict(origin) if origin else None,
         )
         self._content.parts.append(part)
         return part

@@ -401,3 +401,68 @@ describe('hasValidUsage / hasValidContextWindow 降级', () => {
     )).toBeNull()
   })
 })
+
+describe('retrieval part origin 解析（research-source-provenance）', () => {
+  it('解析 subagent origin（kind + label）', () => {
+    const normalized = normalizeApiContent({ parts: [{
+      id: 'r1',
+      type: 'retrieval',
+      tool_call_id: 'subagent-sources-abc',
+      query: '调研 X',
+      results: [{
+        evidence_id: 'ev_1',
+        source_type: 'web',
+        url: 'https://example.com/a',
+        title: 'A',
+        excerpt: 'e',
+      }],
+      origin: { kind: 'subagent', label: '调研 X' },
+    }] })
+    const part = normalized.parts[0]
+    expect(part.type).toBe('retrieval')
+    if (part.type === 'retrieval') {
+      expect(part.origin).toEqual({ kind: 'subagent', label: '调研 X' })
+    }
+  })
+
+  it('旧数据无 origin 字段：不报错、不写默认占位（按 main 归组）', () => {
+    const normalized = normalizeApiContent({ parts: [{
+      id: 'r2',
+      type: 'retrieval',
+      tool_call_id: 'call-1',
+      query: 'q',
+      results: [{
+        evidence_id: 'ev_2',
+        source_type: 'web',
+        url: 'https://example.com/b',
+        title: 'B',
+        excerpt: 'e',
+      }],
+    }] })
+    const part = normalized.parts[0]
+    if (part.type === 'retrieval') {
+      expect(part.origin).toBeUndefined()
+    }
+  })
+
+  it('未知 kind 按 main 归组（解析不失败）', () => {
+    const normalized = normalizeApiContent({ parts: [{
+      id: 'r3',
+      type: 'retrieval',
+      tool_call_id: 'call-3',
+      query: 'q',
+      results: [{
+        evidence_id: 'ev_3',
+        source_type: 'web',
+        url: 'https://example.com/c',
+        title: 'C',
+        excerpt: 'e',
+      }],
+      origin: { kind: 'whatever' },
+    }] })
+    const part = normalized.parts[0]
+    if (part.type === 'retrieval') {
+      expect(part.origin).toEqual({ kind: 'main' })
+    }
+  })
+})

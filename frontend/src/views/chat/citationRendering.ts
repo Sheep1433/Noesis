@@ -1,4 +1,5 @@
 import type { RetrievalResultUi } from './messageParts'
+import { canonicalUrl } from '@/utils/canonicalUrl'
 
 export function safeWebUrl(raw: string | undefined): string | null {
   if (!raw) {
@@ -15,20 +16,15 @@ export function safeWebUrl(raw: string | undefined): string | null {
 }
 
 /**
- * 去重 key：与 CitationSources 的去重逻辑保持一致，保证正文 badge 序号
- * 与底部来源面板序号一一对应。web 用 origin+pathname 归一（忽略 query/fragment），
- * 知识库用 collection + title。
+ * 去重 key：与来源面板的去重逻辑保持一致，保证正文 badge 序号与面板序号
+ * 一一对应。web 用 canonical URL（去 tracking 参数、协议/host 归一，与后端
+ * 共享规则），知识库用 collection + title。
  */
 export function citationKey(result: RetrievalResultUi): string {
   if (result.source_type === 'web') {
-    const url = safeWebUrl(result.url)
+    const url = canonicalUrl(result.url)
     if (url) {
-      try {
-        const u = new URL(url)
-        return `web:${u.origin}${u.pathname}`
-      } catch {
-        return `web:${result.evidence_id}`
-      }
+      return `web:${url}`
     }
     return `web:${result.evidence_id}`
   }

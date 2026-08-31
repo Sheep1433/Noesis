@@ -74,6 +74,12 @@ export interface RetrievalResultUi {
   score?: number | null
 }
 
+/** 来源归属：主 Agent 自检索 / 具体子 Agent 任务；缺省视为主 Agent（旧数据兼容） */
+export interface RetrievalOrigin {
+  kind: 'main' | 'subagent'
+  label?: string
+}
+
 export interface RetrievalUiPart {
   id: string
   type: 'retrieval'
@@ -82,6 +88,7 @@ export interface RetrievalUiPart {
   results: RetrievalResultUi[]
   truncated?: boolean
   parent_task_call_id?: string
+  origin?: RetrievalOrigin
 }
 
 export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart | RetrievalUiPart
@@ -378,6 +385,7 @@ function normalizeRetrievalPart(id: string, record: Record<string, unknown>): Re
         }]
       })
     : []
+  const origin = normalizeRetrievalOrigin(record.origin)
   return {
     id,
     type: 'retrieval',
@@ -385,7 +393,21 @@ function normalizeRetrievalPart(id: string, record: Record<string, unknown>): Re
     query: String(record.query ?? ''),
     results,
     truncated: Boolean(record.truncated),
+    ...(origin ? { origin } : {}),
   }
+}
+
+function normalizeRetrievalOrigin(raw: unknown): RetrievalOrigin | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined
+  }
+  const record = raw as Record<string, unknown>
+  const label = typeof record.label === 'string' && record.label.trim() ? record.label.trim() : undefined
+  if (record.kind === 'subagent') {
+    return { kind: 'subagent', ...(label ? { label } : {}) }
+  }
+  // 未知 kind / 缺省按主 Agent 归组（旧数据兼容，解析不失败）
+  return { kind: 'main' }
 }
 
 function normalizeToolHitl(raw: unknown): ToolUiPart['hitl'] {

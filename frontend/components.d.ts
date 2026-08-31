@@ -89,6 +89,7 @@ declare module 'vue' {
     NTree: typeof import('naive-ui')['NTree']
     NUpload: typeof import('naive-ui')['NUpload']
     ReasoningBlock: typeof import('./src/components/ReasoningBlock/index.vue')['default']
+    ResearchSourcesPanel: typeof import('./src/components/ResearchSourcesPanel/index.vue')['default']
     ResizeDivider: typeof import('./src/components/ResizeDivider.vue')['default']
     ResponsiveSurface: typeof import('./src/components/ResponsiveSurface.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
