@@ -355,3 +355,36 @@ class TestActiveRunResponseContract:
         exc = NotFoundException(message="会话不存在")
         assert exc.message == "会话不存在"
         assert exc.data is None
+
+
+class TestModelCallsContract:
+    """RunCompleted/RunPaused 携带每次模型调用明细（extra.model_calls 口径）。"""
+
+    def test_run_completed_carries_model_calls(self) -> None:
+        calls = [{"step": 1, "model": "m-a", "ttft_ms": 12.0, "finish_reason": "stop"}]
+        event = RunCompleted(finish_reason="stop", usage={"input": 10}, model_calls=calls)
+        assert event.model_calls == calls
+
+    def test_run_paused_carries_model_calls(self) -> None:
+        calls = [{"step": 1, "model": "m-a"}]
+        event = RunPaused(reason="hitl_pending", finish_reason="hitl_pending", model_calls=calls)
+        assert event.model_calls == calls
+
+    def test_encode_finish_includes_model_calls_only_when_non_empty(self) -> None:
+        calls = [{"step": 1, "model": "m-a"}]
+        lines = encode_run_event(RunCompleted(finish_reason="stop", usage={}, model_calls=calls))
+        data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        assert data["model_calls"] == calls
+        # 空明细不占字段：finish 帧保持旧契约形状
+        bare = encode_run_event(RunCompleted(finish_reason="stop", usage={}))
+        bare_data = json.loads(bare[0].split("data: ", 1)[1].strip())
+        assert "model_calls" not in bare_data
+
+    def test_parse_sse_roundtrip_finish_model_calls(self) -> None:
+        calls = [{"step": 2, "model": "m-a", "finish_reason": "length"}]
+        original = RunCompleted(finish_reason="length_stop", usage={"steps": 2}, model_calls=calls)
+        lines = encode_run_event(original)
+        events = parse_sse_line_to_event(lines[0])
+        assert isinstance(events[0], RunCompleted)
+        assert events[0].model_calls == calls
+        assert events[0].finish_reason == "length_stop"

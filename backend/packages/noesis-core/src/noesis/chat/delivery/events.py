@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 RunOrigin = Literal["web", "telegram", "wechat", "feishu", "cron", "eval", "cli"]
 
@@ -31,12 +31,17 @@ class RunPaused:
     reason: str  # hitl_pending
     finish_reason: str = ""
     usage: Dict[str, Any] = field(default_factory=dict)
+    # 中断前已发生的模型调用明细：resume 侧种子合并用（与 usage 同语义）
+    model_calls: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class RunCompleted:
     finish_reason: str = "stop"
     usage: Dict[str, Any] = field(default_factory=dict)
+    # 每次模型调用一条明细（step/model/ttft/llm_ms/tokens/finish_reason），
+    # 与 usage 同源下发，终态落 message.extra.model_calls。
+    model_calls: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

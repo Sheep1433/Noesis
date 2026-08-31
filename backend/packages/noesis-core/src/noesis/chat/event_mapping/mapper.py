@@ -74,17 +74,23 @@ class RuntimeEventMapper:
             elif event.event == "finish":
                 reason = str(data.get("finish_reason") or "stop")
                 usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+                model_calls = (
+                    data.get("model_calls") if isinstance(data.get("model_calls"), list) else []
+                )
                 if reason == "hitl_pending":
                     normalized.append(
                         RunPaused(
                             reason="hitl_pending",
                             finish_reason=reason,
                             usage=usage,
+                            model_calls=model_calls,
                         )
                     )
+                # length_stop / safety_stop 走 completed 分支：输出与 usage 完整
+                # （只是最后一步被 provider 截断/安全收尾），且客户端契约里这两
+                # 个值随 finish 帧以成功形态结算——转 RunAborted 会发 abort 帧，
+                # 客户端没有服务端主动 abort 的处理器，流会悬在不结束状态。
                 elif reason in {
-                    "length_stop",
-                    "safety_stop",
                     "partial_output",
                     "empty_after_tools",
                     "tool_loop_limit",
@@ -107,6 +113,7 @@ class RuntimeEventMapper:
                         RunCompleted(
                             finish_reason=reason,
                             usage=usage,
+                            model_calls=model_calls,
                         )
                     )
             elif event.event == "abort":

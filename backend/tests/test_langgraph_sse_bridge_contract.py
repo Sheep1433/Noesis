@@ -1505,3 +1505,170 @@ def test_llm_error_middleware_max_retries_is_injectable() -> None:
 
     default = LLMErrorHandlingMiddleware()
     assert default.retry_max_attempts == max(1, int(ModelConfig.max_retries))
+
+
+def _model_call_sequence(
+    bridge: LangGraphSseBridge,
+    builder: AssistantMessageBuilder,
+    ctx: Dict[str, Any],
+    *,
+    run_id: str,
+    model_name: str,
+    content: str,
+    usage: Dict[str, Any],
+    finish_reason: str,
+) -> List[str]:
+    """一次模型调用的最小事件序列：start（含模型名）→ stream → end。"""
+    lines: List[str] = []
+
+    class _StreamChunk:
+        additional_kwargs = {}
+
+    _StreamChunk.content = content
+
+    class _FakeOutput:
+        pass
+
+    _FakeOutput.content = content
+    _FakeOutput.usage_metadata = usage
+    _FakeOutput.response_metadata = {"finish_reason": finish_reason}
+
+    lines.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_start",
+                "run_id": run_id,
+                "metadata": {"ls_model_name": model_name},
+                "data": {},
+            },
+            builder,
+            ctx,
+        )
+    )
+    lines.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_stream",
+                "run_id": run_id,
+                "data": {"chunk": _StreamChunk()},
+            },
+            builder,
+            ctx,
+        )
+    )
+    lines.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_end",
+                "run_id": run_id,
+                "data": {"output": _FakeOutput()},
+            },
+            builder,
+            ctx,
+        )
+    )
+    return lines
+
+
+def test_model_call_records_accumulate_with_usage_and_finish_frame() -> None:
+    """每次模型调用落一条明细：step/model/ttft/llm_ms/tokens/finish_reason，
+    并随 finish 帧下发（终态落 message.extra.model_calls）。"""
+    bridge = LangGraphSseBridge("sess-calls")
+    builder = AssistantMessageBuilder(session_id="sess-calls", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="mc-1", model_name="provider/model-a",
+            content="第一段",
+            usage={"input_tokens": 100, "output_tokens": 10,
+                   "input_token_details": {"cache_read": 60, "cache_write": 5}},
+            finish_reason="stop",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="mc-2", model_name="provider/model-a",
+            content="第二段",
+            usage={"input_tokens": 200, "output_tokens": 20,
+                   "input_token_details": {"cache_read": 150, "cache_write": 0}},
+            finish_reason="stop",
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    assert [c["step"] for c in bridge.message_model_calls] == [1, 2]
+    first, second = bridge.message_model_calls
+    assert first["model"] == "provider/model-a"
+    assert first["input_tokens"] == 100
+    assert first["output_tokens"] == 10
+    assert first["cache_read_tokens"] == 60
+    assert first["cache_write_tokens"] == 5
+    assert first["finish_reason"] == "stop"
+    assert first["ttft_ms"] >= 0.0
+    assert first["llm_ms"] >= first["ttft_ms"]
+    assert second["step"] == 2
+    # 明细 token 与合计口径一致
+    assert bridge.message_usage["input_tokens"] == 300
+    assert bridge.message_usage["cache_read_tokens"] == 210
+    assert bridge.message_usage["steps"] == 2
+
+    fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
+    assert fin["model_calls"] == bridge.message_model_calls
+    assert fin["usage"]["steps"] == 2
+
+
+def test_finish_reason_promotes_last_call_provider_length() -> None:
+    """最后一步 provider finish_reason=length → 管道 stop 纠偏为 length_stop。"""
+    bridge = LangGraphSseBridge("sess-length")
+    builder = AssistantMessageBuilder(session_id="sess-length", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    # 第一步正常；第二步（最后）被 provider 以 length 截断
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="lc-1", model_name="m", content="ok",
+            usage={"input_tokens": 1, "output_tokens": 2}, finish_reason="stop",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="lc-2", model_name="m", content="被截断的",
+            usage={"input_tokens": 3, "output_tokens": 4}, finish_reason="length",
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
+    assert fin["finish_reason"] == "length_stop"
+    assert bridge.last_finish_reason == "length_stop"
+    # 中途 length（非最后一步）不纠偏整体终态：最后一步正常即保持 stop
+    bridge2 = LangGraphSseBridge("sess-length-mid")
+    builder2 = AssistantMessageBuilder(session_id="sess-length-mid", message_id=bridge2.assistant_message_id)
+    ctx2 = _ctx()
+    parts2: List[str] = []
+    parts2.extend(
+        _model_call_sequence(
+            bridge2, builder2, ctx2,
+            run_id="lm-1", model_name="m", content="参数被截",
+            usage={"input_tokens": 1, "output_tokens": 2}, finish_reason="length",
+        )
+    )
+    parts2.extend(
+        _model_call_sequence(
+            bridge2, builder2, ctx2,
+            run_id="lm-2", model_name="m", content="恢复后正常收尾",
+            usage={"input_tokens": 3, "output_tokens": 4}, finish_reason="stop",
+        )
+    )
+    parts2.extend(bridge2.process_item({"type": "__tw_finish__"}, builder2, ctx2))
+    parts2.extend(bridge2.finalize())
+    fin2 = [o for o in _data_json_objects("".join(parts2)) if o.get("type") == "finish"][-1]
+    assert fin2["finish_reason"] == "stop"
+    assert bridge2.message_model_calls[0]["finish_reason"] == "length"

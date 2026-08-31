@@ -708,6 +708,7 @@ class SubagentSessionService:
         error: Optional[str] = None,
         finish_reason: Optional[str] = None,
         usage: Optional[dict] = None,
+        model_calls: Optional[list] = None,
     ) -> None:
         """run 终态化并同步 assistant 消息。
 
@@ -717,6 +718,7 @@ class SubagentSessionService:
 
         usage 为统一管道的本会话 usage 聚合（steps/llm_ms/tokens/cache），
         终态写入 message.extra.usage——与主链路同结构，子会话统计条据此重建。
+        model_calls 为同源的每次模型调用明细，终态写入 message.extra.model_calls。
         """
         from noesis.repositories.agent_run_repository import AgentRunRepository
         from noesis.storage.postgres.manager import pg_manager
@@ -761,6 +763,7 @@ class SubagentSessionService:
                 error_code="SUBAGENT_FAILED" if error else None,
                 user_error_message=error,
                 usage=usage,
+                model_calls=model_calls,
             )
             await db.commit()
 

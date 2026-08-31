@@ -74,6 +74,8 @@ async def test_mark_terminal_passes_usage_to_finalize(monkeypatch) -> None:
     assert captured["usage"] == usage
     assert captured["finish_reason"] == "stop"
     assert captured["target"] == RunStatus.COMPLETED
+    # model_calls 缺省为 None：不写空占位
+    assert captured.get("model_calls") is None
 
 
 @pytest.mark.asyncio

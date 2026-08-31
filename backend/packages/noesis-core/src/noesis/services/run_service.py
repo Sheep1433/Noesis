@@ -558,6 +558,7 @@ class RunService:
                 error_code=projection.error_code,
                 user_error_message=projection.user_error_message,
                 usage=projection.run_usage,
+                model_calls=projection.run_model_calls,
             )
             if won:
                 await db.commit()
@@ -618,6 +619,7 @@ class RunService:
                     error_code=projection.error_code,
                     user_error_message=projection.user_error_message,
                     usage=projection.run_usage,
+                    model_calls=projection.run_model_calls,
                 )
                 if not won:
                     await db.rollback()

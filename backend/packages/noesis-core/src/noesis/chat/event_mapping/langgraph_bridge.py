@@ -58,6 +58,24 @@ def _show_thinking_process_enabled() -> bool:
 
 TASK_TOOL_NAME = "task"
 
+# provider finish_reason → 管道终止词汇：只纠偏截断/安全两类「模型没收尾完」
+# 的信号（length/max_tokens/content_filter），其余变体（end_turn/tool_use 等）
+# 属正常收尾，保持管道值。runtime 层正常路径硬编码 "stop" 只表示图跑完，
+# 不代表模型正常收尾——没有这层映射时 length 截断会被落库成 stop。
+_PROVIDER_FINISH_REMAP: Dict[str, str] = {
+    "length": "length_stop",
+    "max_tokens": "length_stop",
+    "content_filter": "safety_stop",
+}
+
+
+def _truthful_terminal_reason(model_calls: List[Dict[str, Any]]) -> str:
+    """最后一步模型调用的 finish_reason → 管道终止词汇；无需纠偏返回空。"""
+    if not model_calls:
+        return ""
+    reason = str(model_calls[-1].get("finish_reason") or "").strip().lower()
+    return _PROVIDER_FINISH_REMAP.get(reason, "")
+
 
 def _tool_provider(item: Dict[str, Any]) -> tuple[str, str | None]:
     metadata = item.get("metadata")
@@ -109,6 +127,12 @@ class LangGraphSseBridge:
         self.message_usage: Dict[str, float] = dict.fromkeys(
             (f for f in USAGE_FIELDS if f != "turns"), 0.0,
         )
+        # 每次模型调用一条明细（step/attempt/model/ttft/llm_ms/tokens/
+        # finish_reason），终态随 usage 一起落 message.extra.model_calls：
+        # 合计口径回答不了「首步延迟多少」「哪一步被截断」这类单步问题。
+        self.message_model_calls: List[Dict[str, Any]] = []
+        self._model_call_names: Dict[str, str] = {}
+        self._model_call_ttft: Dict[str, float] = {}
         self._model_call_starts: Dict[str, float] = {}
         self._model_first_token_seen: set[str] = set()
         self._current_attempt_id = 1
@@ -161,6 +185,43 @@ class LangGraphSseBridge:
             }
             ContextMetricsRegistry.put(self.session_id, snapshot, run_id=rid)
             self._emit_context_update(snapshot, out)
+
+    def _append_model_call_record(
+        self,
+        *,
+        model_run_id: str,
+        elapsed_ms: float,
+        ttft_ms: Optional[float],
+        usage_meta: Any,
+        output: Any,
+    ) -> None:
+        """单次模型调用明细（与 message_usage.steps 一一对应，step 为序号）。
+
+        未知字段直接缺省（不写 0 占位）：没有 token/finish_reason 就是
+        provider 没回报，落 0 会与真实 0 混淆。
+        """
+        record: Dict[str, Any] = {
+            "step": int(self.message_usage["steps"]),
+            "attempt": self._model_attempt_ids.get(model_run_id, 1),
+            "model": self._model_call_names.pop(model_run_id, "") or self._model_id or "",
+        }
+        if ttft_ms is not None:
+            record["ttft_ms"] = round(float(ttft_ms), 1)
+        if elapsed_ms:
+            record["llm_ms"] = round(float(elapsed_ms), 1)
+        response_meta = getattr(output, "response_metadata", None)
+        if isinstance(response_meta, dict):
+            reason = str(response_meta.get("finish_reason") or "").strip()
+            if reason:
+                record["finish_reason"] = reason
+        usage = _normalize_usage(usage_meta) if usage_meta else {}
+        if usage:
+            record["input_tokens"] = int(usage.get("input_tokens") or 0)
+            record["output_tokens"] = int(usage.get("output_tokens") or 0)
+            details = usage.get("input_token_details") or {}
+            record["cache_read_tokens"] = int(details.get("cache_read") or 0)
+            record["cache_write_tokens"] = int(details.get("cache_write") or 0)
+        self.message_model_calls.append(record)
     # ---------- emit helpers ----------
 
     def _ensure_started(self, out: List[str]) -> None:
@@ -340,11 +401,22 @@ class LangGraphSseBridge:
         self._close_text(out)
         if builder is not None and ctx is not None:
             self._flush_text_buffer(builder, ctx)
-        self.last_finish_reason = str(payload.get("finish_reason") or "stop")
+        reason = str(payload.get("finish_reason") or "stop")
+        # 管道 "stop" 只表示图跑完：最后一步若被 provider 以截断/安全类
+        # 原因收尾，用真实值改写，否则 length 截断会被落库成 stop。
+        if reason == "stop":
+            truthful = _truthful_terminal_reason(self.message_model_calls)
+            if truthful:
+                reason = truthful
+                payload["finish_reason"] = reason
+        self.last_finish_reason = reason
         # 本条 assistant 消息的 usage 聚合随 finish 下发：projection 捕获后经
         # 终态落库写入 message.extra.usage，供历史会话回放统计条。
         if self.message_usage.get("steps") and not isinstance(payload.get("usage"), dict):
             payload["usage"] = dict(self.message_usage)
+        # 每步模型调用明细同路下发，终态落 message.extra.model_calls。
+        if self.message_model_calls and "model_calls" not in payload:
+            payload["model_calls"] = list(self.message_model_calls)
         out.append(_format_sse("finish", payload))
         self._finish_emitted = True
 
@@ -757,6 +829,12 @@ class LangGraphSseBridge:
             if run_id:
                 self._model_call_starts[run_id] = time.perf_counter()
                 self._model_first_token_seen.discard(run_id)
+                meta = item.get("metadata")
+                self._model_call_names[run_id] = (
+                    str(meta.get("ls_model_name") or meta.get("model_name") or "")
+                    if isinstance(meta, dict)
+                    else ""
+                )
             # 标记该 scope 下一次 on_tool_start 要 mint 新 step_id（并行工具分组）。
             scope = ToolRunTracker.resolve_parent_task_call_id(item, ctx) or "root"
             ctx.setdefault("pending_model_step_scopes", set()).add(scope)
@@ -783,9 +861,9 @@ class LangGraphSseBridge:
             ):
                 start = self._model_call_starts.get(model_run_id)
                 if start is not None:
-                    self.message_usage["ttft_ms"] += max(
-                        0.0, (time.perf_counter() - start) * 1000
-                    )
+                    first_token_ms = max(0.0, (time.perf_counter() - start) * 1000)
+                    self.message_usage["ttft_ms"] += first_token_ms
+                    self._model_call_ttft[model_run_id] = first_token_ms
                 self._model_first_token_seen.add(model_run_id)
             if content:
                 if builder is not None:
@@ -828,13 +906,24 @@ class LangGraphSseBridge:
             # steps / llm_ms 无条件累计（provider 不返回 usage 的调用也计步计时）
             model_run_id = str(item.get("run_id") or "")
             start = self._model_call_starts.pop(model_run_id, None)
+            elapsed_ms = max(0.0, (time.perf_counter() - start) * 1000) if start is not None else 0.0
+            ttft_ms: Optional[float] = self._model_call_ttft.pop(model_run_id, None)
             if start is not None:
-                elapsed_ms = max(0.0, (time.perf_counter() - start) * 1000)
                 self.message_usage["llm_ms"] += elapsed_ms
-                if model_run_id not in self._model_first_token_seen and output is not None:
+                # 全程无任何 token 的调用（非流式/空输出）：ttft 以全程耗时兜底，
+                # 与既有 message_usage 口径一致。
+                if ttft_ms is None and output is not None:
+                    ttft_ms = elapsed_ms
                     self.message_usage["ttft_ms"] += elapsed_ms
             self._model_first_token_seen.discard(model_run_id)
             self.message_usage["steps"] += 1
+            self._append_model_call_record(
+                model_run_id=model_run_id,
+                elapsed_ms=elapsed_ms,
+                ttft_ms=ttft_ms,
+                usage_meta=usage_meta,
+                output=output,
+            )
             if usage_meta:
                 self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out, parent_task_call_id)
             return

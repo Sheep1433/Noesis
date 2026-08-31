@@ -462,6 +462,13 @@ class ChatService:
                 }
             else:
                 merged_extra["usage"] = dict(new_usage)
+        # model_calls 与 usage 同一跨 run 累加语义：列表拼接而非覆盖。
+        new_calls = (extra or {}).get("model_calls")
+        if isinstance(new_calls, list) and new_calls:
+            old_calls = old_extra.get("model_calls")
+            merged_extra["model_calls"] = (
+                list(old_calls) if isinstance(old_calls, list) else []
+            ) + list(new_calls)
 
         await db.execute(
             update(TChatMessage)

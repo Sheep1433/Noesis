@@ -264,9 +264,10 @@ def _assistant_status_for_finish(finish_reason: str) -> str:
         return "error"
     if finish_reason == "hitl_pending":
         return "streaming"
+    # length_stop / safety_stop 不入 partial：输出与 usage 完整（只是最后一步
+    # 被 provider 截断/安全收尾），与 mapper 的 RunCompleted 归类一致——
+    # 真实原因记在 extra.finish_reason，状态不伪装成被中断。
     if finish_reason in {
-        "length_stop",
-        "safety_stop",
         "partial_output",
         "empty_after_tools",
         "tool_loop_limit",
@@ -301,6 +302,9 @@ def _build_assistant_persist_extra(
         # update_assistant_message 对 usage 键做累加合并，中途写会导致重复计数。
         if include_usage and bridge.message_usage.get("steps"):
             extra["usage"] = dict(bridge.message_usage)
+        # 每次模型调用明细同条件落 message.extra.model_calls（单步诊断口径）。
+        if include_usage and bridge.message_model_calls:
+            extra["model_calls"] = list(bridge.message_model_calls)
     elif error_message:
         extra["error_message"] = error_message[:8000]
     return extra

@@ -229,6 +229,7 @@ class AgentRunRepository:
         user_error_message: str | None = None,
         snapshot: dict | None = None,
         usage: dict | None = None,
+        model_calls: list | None = None,
     ) -> bool:
         """同一事务内抢占 run 终态并更新唯一 assistant 行。调用方负责 commit。"""
         if target not in {
@@ -290,6 +291,18 @@ class AgentRunRepository:
                 }
             else:
                 message_extra["usage"] = dict(usage)
+        # model_calls 与 usage 同一跨 run 累加语义：HITL resume 各 run 只含本段
+        # 明细，终态与已落库列表拼接。追加段 step 重编为全局连续序号——
+        # 各 run 独立从 1 计数，直接拼接会重复（usage.steps 是数值累加无此问题）。
+        if model_calls:
+            old_calls = old_extra.get("model_calls")
+            base = list(old_calls) if isinstance(old_calls, list) else []
+            offset = len(base)
+            message_extra["model_calls"] = base + [
+                {**call, "step": offset + i + 1}
+                for i, call in enumerate(model_calls)
+                if isinstance(call, dict)
+            ]
         message_result = await self.db.execute(
             update(TChatMessage)
             .where(

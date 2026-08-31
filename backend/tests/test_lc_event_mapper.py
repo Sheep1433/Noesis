@@ -89,9 +89,13 @@ def test_finalize_emits_done() -> None:
 
 
 def test_finish_reason_maps_to_correct_terminal_semantics() -> None:
+    # length_stop / safety_stop 走 completed 分支：输出与 usage 完整（只是最后
+    # 一步被 provider 截断/安全收尾），客户端契约里这两个值随 finish 帧结算；
+    # 转 RunAborted 会发 abort 帧，客户端没有服务端主动 abort 的处理器。
     cases = {
         "stop": RunCompleted,
-        "length_stop": RunAborted,
+        "length_stop": RunCompleted,
+        "safety_stop": RunCompleted,
         "tool_loop_limit": RunAborted,
         "context_exhausted": RunError,
         "retryable_error": RunError,

@@ -63,19 +63,19 @@ def encode_run_event(event: RunEvent) -> List[str]:
         }
         if event.finish_reason:
             data["finish_reason"] = event.finish_reason
+        if event.model_calls:
+            data["model_calls"] = event.model_calls
         return [format_sse("finish", data)]
 
     if isinstance(event, RunCompleted):
-        return [
-            format_sse(
-                "finish",
-                {
-                    "type": "finish",
-                    "finish_reason": event.finish_reason or "stop",
-                    "usage": event.usage or {},
-                },
-            )
-        ]
+        data: Dict[str, Any] = {
+            "type": "finish",
+            "finish_reason": event.finish_reason or "stop",
+            "usage": event.usage or {},
+        }
+        if event.model_calls:
+            data["model_calls"] = event.model_calls
+        return [format_sse("finish", data)]
 
     if isinstance(event, RunAborted):
         return [format_sse("abort", {"type": "abort", "reason": event.reason})]
@@ -126,9 +126,19 @@ def parse_sse_line_to_event(line: str) -> List[RunEvent]:
     if event_name == "finish":
         reason = str(data.get("finish_reason") or "stop")
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        model_calls = (
+            data.get("model_calls") if isinstance(data.get("model_calls"), list) else []
+        )
         if reason == "hitl_pending":
-            return [RunPaused(reason="hitl_pending", finish_reason=reason, usage=usage)]
-        return [RunCompleted(finish_reason=reason, usage=usage)]
+            return [
+                RunPaused(
+                    reason="hitl_pending",
+                    finish_reason=reason,
+                    usage=usage,
+                    model_calls=model_calls,
+                )
+            ]
+        return [RunCompleted(finish_reason=reason, usage=usage, model_calls=model_calls)]
 
     if event_name == "abort":
         return [RunAborted(reason=str(data.get("reason") or "abort"))]

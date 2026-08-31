@@ -292,6 +292,9 @@ class _TaskEntry:
     # HITL 挂起时的前半段 usage 种子：resume 后续 turn 终态合并，
     # 该轮 extra.usage 覆盖中断前后全部模型调用（DB 快照另存 _hitl_usage 审计）
     hitl_usage_seed: Optional[dict[str, Any]] = None
+    # HITL 前半段模型调用明细种子：与 hitl_usage_seed 同生命周期，
+    # resume 后续 turn 终态拼接（extra.model_calls 覆盖中断前后全部调用）
+    hitl_model_calls_seed: Optional[list[dict[str, Any]]] = None
     # 协作停止宽限（秒）：executor 实例配置
     stop_grace_seconds: float = STOP_GRACE_SECONDS
     # kind="shell"：命令与执行 backend（local_shell 宿主机 / docker 容器）
@@ -1205,6 +1208,9 @@ class _TurnOutcome:
     hitl_payload: Optional[dict[str, Any]] = None
     finish_reason: str = "stop"
     usage: dict[str, Any] = field(default_factory=dict)
+    # 本 turn 每次模型调用明细（RunCompleted.model_calls 捕获），
+    # 终态随 usage 一起落 message.extra.model_calls
+    model_calls: list[dict[str, Any]] = field(default_factory=list)
     # RunError 的用户可见消息（流异常经管道产出，等价旧值的异常路径）
     error_message: Optional[str] = None
     # 最后一次模型调用为 LLM 降级失败说明（终态不得标 completed）
@@ -1346,6 +1352,7 @@ async def _finalize_stop(
                     error=error,
                     finish_reason=finish_reason,
                     usage=outcome.usage or None if outcome is not None else None,
+                    model_calls=outcome.model_calls or None if outcome is not None else None,
                 ),
                 name=f"subagent-stop-terminal:{task.run_id}",
             )
@@ -1454,10 +1461,14 @@ async def _run_turn_via_pipeline(
                 outcome.finish_reason = event.finish_reason or "hitl_pending"
                 if event.usage:
                     outcome.usage = dict(event.usage)
+                if event.model_calls:
+                    outcome.model_calls = list(event.model_calls)
             elif isinstance(event, RunCompleted):
                 outcome.finish_reason = event.finish_reason
                 if event.usage:
                     outcome.usage = dict(event.usage)
+                if event.model_calls:
+                    outcome.model_calls = list(event.model_calls)
             elif isinstance(event, RunAborted):
                 outcome.finish_reason = event.reason
             elif isinstance(event, RunError):
@@ -1536,6 +1547,10 @@ async def _run_turn_via_pipeline(
             else:
                 merged[key] = value
         outcome.usage = merged
+    seed_calls = entry.hitl_model_calls_seed
+    if seed_calls is not None:
+        entry.hitl_model_calls_seed = None
+        outcome.model_calls = list(seed_calls) + list(outcome.model_calls)
     # 最终投影：末段文本在 finish 时才 flush 进 builder，此处发布一次完整内容
     # （与旧 values 模式最后一个 chunk 含最终文本的可见节奏一致；
     #  HITL 挂起走 mark_waiting_approval 专用投影，不在此重复发布）
@@ -1610,6 +1625,7 @@ async def _arun(
                 # 种子无条件保存（无 run_id 场景同样需要 resume 合并；usage 审计另走 run 快照）
                 entry.turn_seed_content = copy.deepcopy(outcome.content)
                 entry.hitl_usage_seed = dict(outcome.usage) if outcome.usage else None
+                entry.hitl_model_calls_seed = list(outcome.model_calls) if outcome.model_calls else None
                 if task.run_id:
                     from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
                     from noesis.runtime.main_loop import run_on_main_loop
@@ -1679,6 +1695,7 @@ async def _arun(
                         error=turn_fallback_error,
                         finish_reason=turn_reason,
                         usage=outcome.usage or None,
+                        model_calls=outcome.model_calls or None,
                     ),
                     name=f"subagent-turn-terminal:{task.run_id}",
                 )
@@ -1729,6 +1746,7 @@ async def _arun(
                     error=final_fallback_error,
                     finish_reason=final_reason,
                     usage=outcome.usage or None,
+                    model_calls=outcome.model_calls or None,
                 ),
                 name=f"subagent-terminal:{task.run_id}",
             )
