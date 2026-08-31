@@ -1,5 +1,13 @@
 # 知识卡片（开发笔记）
 
+## 2026-08-29 — 记忆存储权威 + 召回模式（md 文件权威 vs DB、被动注入 vs Agentic）
+
+- **问题**：① 条目文件引入 frontmatter 元数据后，为什么不干脆用数据库权威？② 记忆召回应该在 Run 起点被动注入，还是让 Agent 主动检索？
+- **存储权威结论（md 文件不是模拟数据库）**：frontmatter 的动机是让文件自描述（引擎精确改 `updated`/`sources`、索引机械重建），不是模拟 DB。当前数据形态仅 7 个字段、无外键/join/跨条目查询，DB 关系模型优势落空；DB 权威 + 前台渲染 md 会撞上「md 还能不能编辑」的双向同步死结（能编辑=双向同步，不能=违反用户编辑最高权限）。查询需求的正确打开方式是**真相在文件、索引做派生**（Qdrant 影子索引，写后同步 + 定期对账）——老 Memory Cortex（PG 权威 + Qdrant 派生）正是被这套设计取代删掉的。
+- **召回模式结论（Agentic 主动召回是更好终态）**：现状是「廉价模型在 Run 起点、只看最新一条用户消息做一次性盲选」；改为「稳定前缀 = USER.md + MEMORY.md 索引（即菜单），Agent 任务中带完整上下文按需 `search_memory`」。理由：① 检索时机更对——记忆需求常在任务中途浮现（SuperAgent 深度研究跑到一半才撞到相关 gotcha），Run 起点盲选在信息量上严格占优的只有"不用工具"；② 发现能力不输——索引在稳定前缀里每轮可见，frontmatter 落地后每条记忆挂「是什么 + 何时调用」描述，Agent 看一行就能决定读不读。删除 `selection.py` + `memory_entries_middleware.py` 及挂载点，`run.memory_context` 写入方改 `search_memory`。
+- **落进 spec**：`openspec/changes/memory-quality-and-auditability`（frontmatter 七字段冻结 / description 索引投影 / 时效性禁入稳定类型 / 抽取决策落 journal / 整理前快照 / D9 Agentic 召回切换）。
+- **可迁移**：存储介质判断先问「有没有真正的关系查询需求」，没有就 md 自描述 + 影子索引，别把权威搬进 DB 再渲染同步；召回机制判断看「记忆需求出现在任务哪个时刻」，任务中途才需要的就交给 Agentic，不要为省一次工具调用牺牲检索时机。
+
 ## 2026-08-26 — 评测体系：6 维度 × 3 层框架设计
 
 - **维度**：RAG 检索质量（有 GT、离线可回归）、引用溯源/faithfulness（ERB answer_facts 直接可用）、压缩摘要（对照实验：触发 vs 不触发的任务保持率 Δ）、Agent 端到端（LLM-as-judge）、拒答与置信度校准（检索分数 vs 相关性对齐）、性能/延迟。
