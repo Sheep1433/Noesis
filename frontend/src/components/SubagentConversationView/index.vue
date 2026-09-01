@@ -655,7 +655,7 @@ onBeforeUnmount(() => {
 /* 来源面板：回复末尾（与主 Agent 的回复工具栏 meta 区同位置语义） */
 .subagent-conversation__sources {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   padding: 4px 2px 0;
 }
 
