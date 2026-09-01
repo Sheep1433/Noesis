@@ -6,16 +6,14 @@
 - [ ] 1.2 `store.py`：`read_entry_file` 重写——YAML frontmatter 解析为主、原散文解析为 fallback（存量/手写条目容错，见 spec「frontmatter 损坏容错」场景）；返回值增加 tags/created/updated，description 无 frontmatter 时回退正文截断
 - [ ] 1.3 `store.py`：`upsert_entry` 增加 `description`/`tags`/`created` 参数；更新路径合并来源、维护 updated、保留用户手工字段与既有 description（未提供新值时不清空）；frontmatter 与索引行在同一次调用中生成（`_sync_index_line` 用 frontmatter description）
 - [ ] 1.4 `store.py`：`rebuild_index` 改为 frontmatter label/description 机械投影；`search` 与 `read_entry` 经新解析路径回归（返回原文不变）
-- [ ] 1.5 `store.py`：`migrate_legacy_entries(user_id)`——幂等迁移存量条目（散文解析结果补写 frontmatter，created 取首个来源日期）；迁移状态写入 `.consolidation_state.json`
-- [ ] 1.6 单测（`backend/tests/`）：frontmatter 渲染/解析往返、YAML 损坏容错、索引投影一致性、迁移幂等（重复执行跳过已迁移）、散文 fallback 行为
+- [ ] 1.5 单测（`backend/tests/`）：frontmatter 渲染/解析往返、YAML 损坏容错、索引投影一致性、迁移幂等（重复执行跳过已迁移）、散文 fallback 行为
 
 ## 2. 抽取：路由防呆 + description 生成 + 决策落 journal
 
 - [ ] 2.1 `extraction.py`：`ExtractedEntry` 增加 `description` 字段；`ExtractionResult` 增加 `excluded: list[ExcludedItem]`（gist + reason）
 - [ ] 2.2 `_EXTRACTION_PROMPT`：description 两段式约束（「一句话结论；何时调用」）；时效性内容禁入稳定类型硬规则；灰色地带 few-shot 对照示例（decision vs preference、experience vs gotcha、goal vs decision）
 - [ ] 2.3 `extraction.py:_apply`：journal 追加「抽取决策」块（新建/更新及理由、排除内容及理由）；description 传入 `upsert_entry`
-- [ ] 2.4 sweeper 启动路径接入 `migrate_legacy_entries`（首次按用户执行一次）
-- [ ] 2.5 抽取 fixture 扩展（`backend/tests/`）：时效性内容路由进 goal、description 含触发场景语义、排除理由落 journal、既有守卫用例回归
+- [ ] 2.4 抽取 fixture 扩展（`backend/tests/`）：时效性内容路由进 goal、description 含触发场景语义、排除理由落 journal、既有守卫用例回归
 
 ## 3. 整理：裁决优先级 + 操作前快照 + 治理信号
 
@@ -26,7 +24,7 @@
 
 ## 4. Agent 侧：提示词与工具对齐
 
-- [ ] 4.1 `agents/prompts/memory.py`：Agent 主动写入条目的格式说明改为 frontmatter 模板；确认写入路径仍统一走 `upsert_entry`、经 HITL 确认（行为不变，仅格式说明更新）
+- [ ] 4.1 `agents/prompts/memory.py`：Agent 主动写入条目的格式说明改为 frontmatter 模板；确认直写路径（`GuardedFilesystemBackend` 白名单 + HITL `memory_write_when` 审批 + `_sync_index_line` 投影）行为不变，投影改从 frontmatter 解析
 - [ ] 4.2 稳定前缀回归：删除注入后 `RefreshingMemoryMiddleware`（USER.md + 索引）通道不受影响；Agent 经 `search_memory`/`read_file` 可召回条目原文
 
 ## 5. 召回模式切换（被动注入 → Agentic 检索）
@@ -40,5 +38,5 @@
 ## 6. 验证与收尾
 
 - [ ] 6.1 `cd backend && uv run pytest tests/ -q` 全量回归（重点 `tests/` 记忆相关与 `api_contract/`）
-- [ ] 6.2 手动验证：构造存量散文条目 → 启动后端触发迁移 → 确认 frontmatter 补写、索引投影一致、Agent 可经工具召回；结束后停掉 Agent 启动的服务进程
-- [ ] 6.3 归档：`openspec` 主规格 `agent-memory-cortex/spec.md` 与本 delta 对齐（含：frontmatter 损坏容错、时效性禁入稳定类型、抽取决策落 journal、改写与淘汰前快照、动态内容不得静默改写稳定条目、frontmatter 类型与目录不一致归位、存量条目惰性迁移；旧注入 requirement 移除、新召回 requirement 落主规格）
+- [ ] 6.2 手动验证：存量散文条目不迁移仍可读可检索；引擎更新该条目后自然补写 frontmatter、索引投影一致；Agent 可经工具召回；结束后停掉 Agent 启动的服务进程
+- [ ] 6.3 归档：`openspec` 主规格 `agent-memory-cortex/spec.md` 与本 delta 对齐（含：frontmatter 损坏容错、时效性禁入稳定类型、抽取决策落 journal、改写与淘汰前快照、动态内容不得静默改写稳定条目、frontmatter 类型与目录不一致归位、旧注入 requirement 移除、新召回 requirement 落主规格）

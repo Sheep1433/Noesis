@@ -51,12 +51,12 @@ sources:                  # 追加式：会话 id 前 8 位 + 日期
 
 **不进 frontmatter 的**：命中计数（从 `run.memory_context` 聚合的派生数据，写回会造成每次注入都动文件，违反「同 Run 冻结」精神）；status（淘汰语义已定义为删文件 + journal 快照，加 archived 会造出第二条淘汰路径，违反单方案原则）。
 
-### D2：description 权威在 frontmatter，索引行是投影，靠既有单一写路径消灭漂移
+### D2：description 权威在 frontmatter，索引行是投影，靠「单一解析点 + 单一索引同步点」消灭漂移
 
-所有写入（抽取 `_apply`、整理 `_apply_action`、Agent HITL 主动写入）都收敛在 `MemoryStore.upsert_entry`——这是现成的单一写路径。改造：
+写入面实际有三条（核对于 2026-08-31 代码）：引擎写入（抽取 `_apply`、整理 `_apply_action`）走 `MemoryStore.upsert_entry`；Agent HITL 主动写入走 `GuardedFilesystemBackend.write/edit` 直写文件（`agents/backends/memory.py:178/197`，HITL 审批判定见 `is_memory_writable_path`）；用户 UI 编辑走 `PUT /memory/entry` 直写文件（`user_settings_api.py`）。三条路径**不共享渲染**，但全部收敛于两个点：`read_entry_file`（唯一解析点）与 `_sync_index_line`（唯一索引同步点）——漂移防护由这两个收敛点承担，frontmatter 落地后三条写入面无需逐路径改造即自动获得结构化投影：
 
-- `ExtractedEntry` 增加 `description` 字段（LLM 显式生成，prompt 约束为「一句话结论 + 分号 + 何时调用」），`upsert_entry` 增加 `description` 参数写入 frontmatter；**更新路径未提供 description 时保留既有 frontmatter 值**（防清空权威字段）；
-- `IndexEntry` 不变（本就含 label/description），`_sync_index_line` 用 frontmatter 里的 description 同步索引行——**frontmatter 与索引行在同一次 `upsert_entry` 中一起生成**，漂移是代码 bug 而非库状态；
+- `ExtractedEntry` 增加 `description` 字段（LLM 显式生成，prompt 约束为「一句话结论 + 分号 + 何时调用」），`upsert_entry` 增加 `description` 参数写入 frontmatter；**更新路径未提供 description 时保留既有 frontmatter 值**（防清空权威字段）；Agent/用户直写路径的 description 由直写内容中的 frontmatter（或散文 fallback 截断）经解析点自然取得；
+- `IndexEntry` 不变（本就含 label/description），三个写入面的索引同步均经 `_sync_index_line` 用解析出的 description——**文件是权威，索引行是投影**，漂移是代码 bug 而非库状态；
 - **投影覆盖语义**：用户只手改索引行 description（不动条目文件）时，下次注入仍生效（读到改后索引），但该条目下次引擎写入时索引行被 frontmatter 覆盖——持久修改入口是条目 frontmatter，此语义写入 spec；
 - `rebuild_index` 改为读 frontmatter 的 label/description（不再 `body[:60]` 截断），索引重建成为纯机械投影；
 - 无 frontmatter 的存量/手写条目：description 回退现状（正文前 60 字），行为不劣化。
@@ -105,11 +105,10 @@ sources:                  # 追加式：会话 id 前 8 位 + 日期
 
 外加机械治理信号（不依赖 LLM）：整理任务扫描时发现 frontmatter `type` 与所在目录不一致 → **以所在目录为准修正 frontmatter `type`（不移动文件）**，journal 记录。定向依据：引擎写入路径 `entry_path` 自带 `validate_memory_type`，type 与目录必然一致；不一致几乎总源于用户挪动文件，而位置即用户意图。
 
-### D7：存量迁移——一次性惰性迁移，失败退化不阻塞
+### D7：存量条目不迁移——永久走散文容错，写入时自然升级
 
-`MemoryStore` 新增 `migrate_legacy_entries(user_id)`：遍历五类目录条目文件，用现有 `read_entry_file` 散文解析结果补写 frontmatter（`created` 取首个来源日期，无来源取当天）。迁移状态记入既有 `.consolidation_state.json`（`frontmatter_migrated: true`），由抽取 sweeper 启动时按用户惰性执行一次。
+存量无 frontmatter 的条目**不做迁移任务**：`read_entry_file` 的散文解析 fallback 长期保留（见 D8），存量条目照常可读、可检索、可注入索引（description 回退正文截断）。条目在被引擎**下次写入时**（抽取更新、整理改写或 Agent HITL 写入）经 `upsert_entry` 渲染 frontmatter，自然完成格式升级——惰性升级发生在正常写路径上，不引入专门迁移代码与迁移状态。
 
-- 迁移失败的条目（散文也解析不出）保持原样，走容错路径（D8），下次整理任务作为治理信号处理；
 - 回滚策略：本变更不删除散文约定解析能力（`read_entry_file` 保留散文 fallback 分支），回滚部署后旧代码可继续读写——**frontmatter 是增量信息，不是格式破坏**。回滚后 frontmatter 块会被旧解析器当作正文前缀读入（最多 8 行噪声），不致数据损坏。
 
 ### D8：frontmatter 容错——对齐既有「索引损坏行跳过」
@@ -120,7 +119,7 @@ YAML 解析失败 → 条目退化为无元数据条目：`read_entry_file` 回�
 
 **保留**：稳定前缀不变（`RefreshingMemoryMiddleware`：USER.md 全文 + MEMORY.md 索引，会话内不变）——索引即菜单，Agent 每轮可见，按 description 的「何时调用」判断读全文还是直接用索引行信息（Claude Code skills 同款模式）。
 
-**删除**：`services/memory/selection.py`（整个文件）、`agents/middlewares/memory_entries_middleware.py`（整个文件）、挂载点（`super_agent.py:281` 的 `build_memory_entries_middleware`、`factory.py` 透传、`stack.py:146` 装配、`middlewares/__init__.py` 导出）、alreadySurfaced 记账与 Run 级冻结语义、MemoryConfig 中仅注入使用的项（`selection_model`、注入预算全量判定）。工具结果作为消息持久化在会话历史中，后续 Run 天然可见——alreadySurfaced 的等价物免费获得。
+**删除**：`services/memory/selection.py`（整个文件）、`agents/middlewares/memory_entries_middleware.py`（整个文件）、挂载点（`super_agent.py:282` 的 `build_memory_entries_middleware`、`factory.py` 透传、`stack.py:146` 装配、`middlewares/__init__.py` 导出）、alreadySurfaced 记账与 Run 级冻结语义、MemoryConfig 中仅注入使用的项（`selection_model`、注入预算全量判定）。`insert_late_context` 工具函数**保留**——`dynamic_context_middleware`（current_time 通道）仍在使用，删除的只是记忆对它的引用；此后记忆召回就是**普通的工具调用与结果消息**（ToolMessage 进对话历史、随会话持久化，后续 Run 天然可见——alreadySurfaced 的等价物免费获得），不存在任何特殊插入机制。
 
 **召回清单回写**：`search_memory` 工具装配参数增加 `run_id` 与 db 句柄（root run 装配；subagent 只读不写，结论经父会话回流，与抽取语义一致），命中后**合并写入** `run.memory_context['entries']`（读-合并-写，去重追加）。防自强化守卫语义不变，输入从「注入清单」变为「工具召回清单」。Agent 经通用 `read_file`/`grep` 直接读条目不入清单——防自强化为尽力而为，主通道是 search_memory。
 
@@ -134,9 +133,7 @@ YAML 解析失败 → 条目退化为无元数据条目：`read_entry_file` 回�
 
 ### Agent 侧提示词同步
 
-`agents/prompts/memory.py` 中 Agent 主动写入的条目格式说明（现为「`# 标签` 开头 + 结论正文 + `**来源**` 小节」）改为 frontmatter 格式模板；Agent 写入仍经 HITL 确认，`memory_tools` 写入统一走 `upsert_entry`（现状即如此，无新路径）。召回纪律的 prompt 变更见 D9。
-
-`agents/prompts/memory.py` 中 Agent 主动写入的条目格式说明（现为「`# 标签` 开头 + 结论正文 + `**来源**` 小节」）改为 frontmatter 格式模板；Agent 写入仍经 HITL 确认，`memory_tools` 写入统一走 `upsert_entry`（现状即如此，无新路径）。
+`agents/prompts/memory.py` 中 Agent 主动写入的条目格式说明（现为「`# 标签` 开头 + 结论正文 + `**来源**` 小节」）改为 frontmatter 格式模板。现状写入路径：Agent 经 `GuardedFilesystemBackend` 直写条目文件（白名单 + HITL `memory_write_when` 审批，`is_memory_writable_path` 判定），写入后 `_sync_index_line` 自动重解析投影索引——该机制不变，frontmatter 化后投影自动从结构化字段取得（Agent 写坏 frontmatter 走 D8 容错）。
 
 ## Risks / Trade-offs
 
@@ -147,13 +144,11 @@ YAML 解析失败 → 条目退化为无元数据条目：`read_entry_file` 回�
 - [journal 快照与决策块增加体积，影响 `search_memory` grep 命中噪声] → 快照块/决策块有固定块头标记，检索结果摘要可识别；`_recent_journal` 排除快照块（D5）。
 - [tags 发散] → 默认不生成（D1：LLM 抽取不产 tags），仅用户手写或后续变更启用；字段存在但管线不主动填充。
 - [用户手改 frontmatter 破坏 YAML] → D8 容错路径；治理信号在整理任务归位。
-- [迁移中途崩溃留下半迁移状态] → 迁移按条目文件粒度幂等（已有 frontmatter 的跳过），重跑安全。
 
 ## Migration Plan
 
-1. 发布含 D1–D8 的后端；启动后首次 sweeper 运行时按用户惰性迁移（D7）。
-2. 迁移不设开关、不回填数据库——纯文件层变更，`.consolidation_state.json` 记录状态。
-3. 回滚：直接回滚部署即可（D7 回滚分析）；已写入 frontmatter 的条目在旧代码下多一段前置噪声，无数据损坏。
+1. 发布含 D1–D9 的后端；无迁移步骤——存量条目走散文容错（D7），引擎下次写入该条目时自然升级为 frontmatter 格式。
+2. 回滚：直接回滚部署即可（D7 回滚分析）；已写入 frontmatter 的条目在旧代码下多一段前置噪声，无数据损坏。
 
 ## Open Questions
 

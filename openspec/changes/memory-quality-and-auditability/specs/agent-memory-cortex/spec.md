@@ -26,10 +26,10 @@
 - **THEN** 该条目 SHALL 退化为无元数据条目（正文照常可检索，description 回退正文截断，type 取自目录）
 - **AND** 检索与索引重建 SHALL NOT 因此失败
 
-#### Scenario: 存量条目惰性迁移
-- **WHEN** 升级后首次对某用户运行抽取 sweeper 且该用户存在无 frontmatter 的存量条目
-- **THEN** 系统 SHALL 按现有散文约定解析并补写 frontmatter（幂等，已迁移跳过）
-- **AND** 解析失败的条目 SHALL 保持原样并走 frontmatter 容错路径，SHALL NOT 阻塞迁移
+#### Scenario: 存量条目写入时自然升级
+- **WHEN** 存量无 frontmatter 条目被引擎更新（抽取合并、整理改写或 Agent 写入）
+- **THEN** 写入结果 SHALL 含 frontmatter（散文解析结果迁入结构化字段）
+- **AND** 未被写入的存量条目 SHALL 保持原样并经散文容错路径照常可读可检索
 
 ### Requirement: 记忆写入 SHALL 在会话结束后按水位增量抽取
 
