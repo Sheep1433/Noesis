@@ -12,7 +12,7 @@
 | `bug/` | 当前仍需跟踪哪些 Bug？ |
 | `debugging/` | 哪些根因和诊断方法值得再次使用？ |
 | `test/` | 跨模块测试与评测如何设计？ |
-| `NOTES.md` | Noesis 决策卡片与 DeepDoc vendor 修改记录 |
+| `decisions/` | 一个决策当时为什么这么定、否了什么、代价是什么？ |
 
 ## 与 OpenSpec 的边界
 
@@ -23,6 +23,7 @@
 | 可验收行为 | `openspec/specs/` 与 change 内 `specs/` |
 | 实现任务 | `openspec/changes/<change>/tasks.md` |
 | 调研证据与外部方案比较 | `docs/research/` |
+| 长期决策依据与被否方案（跨变更） | `docs/decisions/` |
 | 当前长期架构 | `docs/architecture/` |
 | 高难度实现与经验 | `docs/engineering/` |
 

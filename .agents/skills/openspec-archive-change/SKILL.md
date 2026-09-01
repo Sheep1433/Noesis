@@ -82,7 +82,15 @@ Archive a completed change in the experimental workflow.
    mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
    ```
 
-6. **Display summary**
+6. **Distill the decision record**
+
+   The archived change is a change-time document and loses authority as the system evolves. Extract its durable rationale into the long-term decision record:
+
+   - Read `openspec/changes/archive/<dated-name>/design.md` and extract what a *future* change still needs: the binding judgment, the alternatives that were rejected and why they lose, and the accepted costs. Skip mechanical or trivial changes with no lasting decision — state that and move on.
+   - Write `docs/decisions/implemented/YYYY-MM-DD-<topic>.md` following [docs/decisions/README.md](../../../docs/decisions/README.md): `## 问题` / `## 决策` / `## 备选方案` (mandatory) / `## 后果与代价`. The date is when the change was first proposed (its `proposal.md` creation), not the archive date.
+   - Before writing, check for an existing decision record on the same topic (supersession rules in the decisions README): fully superseded → merge unique rationale and delete the old record; partially superseded → cross-link both.
+
+7. **Display summary**
 
    Show archive completion summary including:
    - Change name
