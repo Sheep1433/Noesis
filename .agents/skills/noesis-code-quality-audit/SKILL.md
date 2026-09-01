@@ -7,6 +7,8 @@ description: Audit the Noesis repository for AI-generated code smells, over-spli
 
 Audit first, refactor second. Produce an evidence-backed report and do not modify code unless the user explicitly asks for fixes.
 
+Job boundary: this skill surveys **accumulated debt across the repository** and reports without editing. It is not `code-review` (which gates one diff against standards and spec) and not `code-simplification` (which executes a behavior-preserving simplification pass). Its findings become simplification or fix work only when the user asks for it.
+
 ## 1. Establish scope and preserve the worktree
 
 Read these files before reviewing:
