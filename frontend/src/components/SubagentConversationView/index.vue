@@ -513,15 +513,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="subagent-conversation">
-    <div class="subagent-conversation__meta">
-      <span>{{ turnCount }} 轮对话</span>
-      <span>·</span>
-      <span>{{ stepCount }} 步</span>
-      <span v-if="duration">· {{ duration }}</span>
-      <span v-if="run">· {{ taskStatusLabel(run.status) }}</span>
-      <!-- 子会话来源面板：基于落库 retrieval parts，会话内 canonical URL 去重 -->
-      <CitationSources v-if="sessionSources.length" :results="sessionSources" />
-    </div>
     <div v-if="loading" class="subagent-conversation__empty">正在加载对话…</div>
     <div v-else class="subagent-conversation__body">
       <template v-for="message in messages" :key="message.id">
@@ -538,6 +529,11 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <div v-if="!messages.length" class="subagent-conversation__empty">暂无对话内容</div>
+      <!-- 子会话来源面板：与主 Agent 同位置（回复末尾而非底部统计行）；
+           基于落库 retrieval parts，会话内 canonical URL 去重 -->
+      <div v-if="sessionSources.length" class="subagent-conversation__sources">
+        <CitationSources :results="sessionSources" />
+      </div>
       <template v-if="run?.pending_hitl?.action_requests?.length">
         <HitlApprovalCard
           v-for="request in run.pending_hitl.action_requests"
@@ -617,9 +613,20 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-    <!-- 子会话统计条：与主会话同口径（extra.usage 重建，终态随消息重载更新）；置于输入框容器外，避免继承消息框底色 -->
-    <div v-if="statsLine" class="subagent-conversation__stats" role="status">
-      {{ statsLine }}
+    <!-- 子会话统计行：与主 Agent 同位置（输入框下方）。usage 统计与主会话同口径
+         （extra.usage 重建，终态随消息重载更新）；运行中尚无 usage 时以轮对话/
+         步数/时长兜底；任务状态同区。置于输入框容器外，避免继承消息框底色 -->
+    <div
+      v-if="statsLine || run"
+      class="subagent-conversation__stats"
+      role="status"
+    >
+      <template v-if="statsLine">{{ statsLine }}</template>
+      <template v-else>
+        <span>{{ turnCount }} 轮对话 · {{ stepCount }} 步</span>
+        <span v-if="duration"> · {{ duration }}</span>
+      </template>
+      <span v-if="run"> · {{ taskStatusLabel(run.status) }}</span>
     </div>
   </div>
 </template>
@@ -633,21 +640,23 @@ onBeforeUnmount(() => {
 }
 
 .subagent-conversation__stats {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
   margin-top: 2px;
   color: var(--noesis-color-text-hint);
   font-size: 11px;
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
-  text-align: center;
 }
 
-.subagent-conversation__meta {
+/* 来源面板：回复末尾（与主 Agent 的回复工具栏 meta 区同位置语义） */
+.subagent-conversation__sources {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 12px;
-  color: var(--noesis-color-text-hint);
-  font-size: 12px;
+  justify-content: flex-end;
+  padding: 4px 2px 0;
 }
 
 .subagent-conversation__empty {
