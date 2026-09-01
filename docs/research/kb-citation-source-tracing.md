@@ -2,7 +2,7 @@
 
 > 状态：Research
 > 调研日期：2026-07-28，结论更新：2026-08-01
-> 关联 OpenSpec：[`add-kb-citation-sources`](../../openspec/changes/archive/2026-08-04-add-kb-citation-sources/)
+> 关联 OpenSpec：[`add-kb-citation-sources`](../../openspec/changes/archive/2026-08-04-add-kb-citation-sources/proposal.md)
 
 ## 1. 调研目标与范围
 

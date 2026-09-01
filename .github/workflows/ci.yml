@@ -94,3 +94,23 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  docs-gates:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Markdown links check
+        run: python3 scripts/verify-md-links.py
+
+      - name: Decision record format check
+        run: python3 scripts/verify-decision-format.py

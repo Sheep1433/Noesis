@@ -9,7 +9,7 @@
 
 与 [dsh 调研](dsh-agent-collaboration.md) 同一镜头：DeerFlow 的开发者如何用 coding Agent 协作开发这个仓库。DeerFlow 是 LangGraph super-agent 全栈系统（FastAPI Gateway + Next.js 前端），关注对象同样不是其产品能力，而是仓库制度层：`AGENTS.md` 体系、`.agent/skills/` 内部 skill、`skills/public/` 质量流水线、`contracts/` 契约目录、CI。
 
-总评：DeerFlow 与 dsh 走了不同的路。dsh 的重心是文档与决策纪律（决策记录、写作标准、翻译 gate）；DeerFlow 没有这套，它把重量压在**机器可校验契约、skill 质量流水线、维护者工作委派**上。共同点只有骨架：AGENTS.md 分层 + CLAUDE.md 薄壳导入（`@AGENTS.md` 一行，声明「shared across coding agents」）、文档同变更集同步、backend TDD 强制、版本号四处锁死由 `scripts/verify_versions.sh` gate 强制。
+总评：DeerFlow 与 dsh 走了不同的路。dsh 的重心是文档与决策纪律（决策记录、写作标准、翻译 gate）；DeerFlow 没有这套，它把重量压在**机器可校验契约、skill 质量流水线、维护者工作委派**上。共同点只有骨架：`AGENTS.md` 分层 + `CLAUDE.md` 薄壳导入（`@AGENTS.md` 一行，声明「shared across coding agents」）、文档同变更集同步、backend TDD 强制、版本号四处锁死由 `scripts/verify_versions.sh` gate 强制。
 
 ## 2. Skill 质量审查流水线（对本仓库最有参考价值）
 
@@ -33,7 +33,7 @@ run 事件流、subagent 状态、slash skill、skill review 四套版本化 JSO
 
 ## 5. 其余机制
 
-- 根 `AGENTS.md` 是 monorepo 导向层：仓库地图 + 指向 module 深度（backend/frontend 各自 AGENTS.md），不内联模块细节。
+- 根 `AGENTS.md` 是 monorepo 导向层：仓库地图 + 指向 module 深度（backend/frontend 各自 `AGENTS.md`），不内联模块细节。
 - `plans/` 轻量方案文档：Source PRD + 架构决策 + 分阶段用户故事 + 验收标准 checkbox（无 openspec 类工具的替代品）。
 - pre-commit 常规军（ruff/eslint/prettier/uv-lock），本地 hooks 全部调项目内工具保证版本一致。
 
