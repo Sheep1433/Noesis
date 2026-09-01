@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ToolRowVariant } from '@/utils/toolCallModel'
-import type { ToolLifecycleState } from '@/views/chat/messageParts'
+import type { RetrievalUiPart, ToolLifecycleState } from '@/views/chat/messageParts'
 import { BuildOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
@@ -33,6 +33,11 @@ interface Props {
   expandSignal?: number
   /** dark：独立深色块；light：嵌入助手气泡、与正文对齐的浅色样式 */
   appearance?: 'dark' | 'light'
+  /**
+   * 同 tool_call_id 的检索结果 part：SearchBlock 的结构化数据来源
+   *  （主/子会话同构——tool part 只存摘要，完整结果在 retrieval part）。
+   */
+  retrievalPart?: RetrievalUiPart | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -49,6 +54,7 @@ const props = withDefaults(defineProps<Props>(), {
   collapseSignal: 0,
   expandSignal: 0,
   appearance: 'dark',
+  retrievalPart: null,
 })
 
 /** 展示上限，避免超大 JSON 阻塞主线程与布局 */
@@ -357,14 +363,15 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
           :truncated="truncated"
           :appearance="appearance"
         />
-        <!-- search → 搜索结果块 -->
+        <!-- search → 搜索结果块（结构化结果优先取 retrieval part，主/子会话同构） -->
         <SearchBlock
-          v-else-if="compactCard === 'search' && resultDisplay"
+          v-else-if="compactCard === 'search' && (resultDisplay || retrievalPart)"
           :name="name"
           :output="resultDisplay"
           :input="arguments"
           :truncated="truncated"
           :appearance="appearance"
+          :retrieval-part="retrievalPart"
         />
         <!-- 回退：参数 + 输出文本（read/write/edit/others 都走这里，read 保留后端 cat -n 行号） -->
         <template v-else>

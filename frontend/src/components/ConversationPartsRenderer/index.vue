@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MessageContent } from '@/api/chat'
-import type { RetrievalResultUi } from '@/views/chat/messageParts'
+import type { RetrievalResultUi, RetrievalUiPart } from '@/views/chat/messageParts'
 import { computed } from 'vue'
 import MarkdownPreview from '@/components/MarkdownPreview/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
@@ -25,6 +25,20 @@ const props = withDefaults(defineProps<{
 })
 
 const parts = computed(() => normalizeApiContent(props.content).parts)
+
+/**
+ * 检索 tool 卡的结构化结果来源：同消息 retrieval parts 按 tool_call_id 关联。
+ *  主/子会话同构——tool part 只存摘要，完整结果渲染自 retrieval part。
+ */
+const retrievalByToolCallId = computed(() => {
+  const map = new Map<string, RetrievalUiPart>()
+  for (const part of parts.value) {
+    if (part.type === 'retrieval' && part.tool_call_id) {
+      map.set(part.tool_call_id, part)
+    }
+  }
+  return map
+})
 </script>
 
 <template>
@@ -47,6 +61,7 @@ const parts = computed(() => normalizeApiContent(props.content).parts)
       :error="part.error"
       :duration-ms="part.duration_ms"
       :collapse-signal="collapseSignal"
+      :retrieval-part="part.tool_call_id ? retrievalByToolCallId.get(part.tool_call_id) : undefined"
     />
     <MarkdownPreview
       v-else-if="part.type === 'text'"

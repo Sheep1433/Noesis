@@ -616,10 +616,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-      <!-- 子会话统计条：与主会话同口径（extra.usage 重建，终态随消息重载更新） -->
-      <div v-if="statsLine" class="subagent-conversation__stats" role="status">
-        {{ statsLine }}
-      </div>
+    </div>
+    <!-- 子会话统计条：与主会话同口径（extra.usage 重建，终态随消息重载更新）；置于输入框容器外，避免继承消息框底色 -->
+    <div v-if="statsLine" class="subagent-conversation__stats" role="status">
+      {{ statsLine }}
     </div>
   </div>
 </template>
@@ -633,9 +633,10 @@ onBeforeUnmount(() => {
 }
 
 .subagent-conversation__stats {
-  margin-top: 6px;
+  margin-top: 2px;
   color: var(--noesis-color-text-hint);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.4;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }

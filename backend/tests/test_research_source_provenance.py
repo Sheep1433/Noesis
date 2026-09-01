@@ -520,3 +520,67 @@ def test_child_pipeline_drain_is_noop_for_subagent_sessions() -> None:
     assert builder.to_dict()["parts"] == []
     # 主会话的 pending 不被消费
     assert drain_pending_sources("sess-rsp-main") != []
+
+
+def test_run_projection_replaces_tool_output_with_retrieval_summary() -> None:
+    """主链路重放：retrieval 帧之后 tool part 展示输出必须是「检索到 N 条来源」摘要。
+
+    此前重放绕过了 register_tool_retrieval 的摘要替换，主会话 tool part
+    落库整份原始 JSON——与子会话「摘要 + retrieval part」数据形态不一致
+    （主/子 SearchBlock 渲染随之分叉）。
+    """
+    from noesis.chat.delivery.events import WireFrame
+    from noesis.chat.runs.projection import RunProjection
+
+    projection = RunProjection(
+        run_id="run-sum", user_id="u1", session_id="sess-sum",
+        assistant_message_id="msg-sum", qa_type="SUPER_AGENT_QA",
+    )
+    raw_output = json.dumps({
+        "query": "agent evaluation",
+        "results": [
+            _web_search_result("https://example.com/a", "来源 A"),
+            _web_search_result("https://example.com/b", "来源 B"),
+        ],
+    })
+    projection.apply(WireFrame(
+        event="tool-input-available",
+        data={
+            "type": "tool-input-available",
+            "message_id": "msg-sum",
+            "tool_call_id": "call-ws-1",
+            "tool_name": "web_search",
+            "input": {"query": "agent evaluation"},
+        },
+    ))
+    projection.apply(WireFrame(
+        event="tool-output-available",
+        data={
+            "type": "tool-output-available",
+            "message_id": "msg-sum",
+            "tool_call_id": "call-ws-1",
+            "output": raw_output,
+            "status": "success",
+        },
+    ))
+    projection.apply(WireFrame(
+        event="retrieval-results-available",
+        data={
+            "type": "retrieval-results-available",
+            "message_id": "msg-sum",
+            "tool_call_id": "call-ws-1",
+            "query": "agent evaluation",
+            "results": [
+                _web_search_result("https://example.com/a", "来源 A"),
+                _web_search_result("https://example.com/b", "来源 B"),
+            ],
+        },
+    ))
+
+    parts = projection.builder.to_dict()["parts"]
+    tool_part = next(p for p in parts if p["type"] == "tool")
+    # 摘要替换生效：原始 JSON 只活在 retrieval part，不落 tool part
+    assert tool_part["output"] == "检索到 2 条来源"
+    retrieval_parts = [p for p in parts if p["type"] == "retrieval"]
+    assert len(retrieval_parts) == 1
+    assert len(retrieval_parts[0]["results"]) == 2

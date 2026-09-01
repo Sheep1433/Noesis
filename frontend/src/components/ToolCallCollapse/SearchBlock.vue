@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { RetrievalUiPart } from '@/views/chat/messageParts'
 import { computed } from 'vue'
 
 interface Props {
@@ -10,12 +11,18 @@ interface Props {
   input?: unknown
   truncated?: boolean
   appearance?: 'dark' | 'light'
+  /**
+   * 同 tool_call_id 的检索结果 part：结构化结果的优先来源
+   *  （主/子会话同构——tool part 只存摘要；无 part 的旧数据回退解析 output）
+   */
+  retrievalPart?: RetrievalUiPart | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
   input: undefined,
   truncated: undefined,
   appearance: 'dark',
+  retrievalPart: null,
 })
 
 /** 解析 grep 的 content 模式：按文件分组。 */
@@ -92,6 +99,15 @@ const MAX_ROWS = 8
 const view = computed(() => {
   const out = props.output || ''
   const name = props.name
+
+  // retrieval part 的结构化结果优先（主/子会话统一数据来源）
+  if (props.retrievalPart && props.retrievalPart.results.length > 0) {
+    return {
+      kind: 'results' as const,
+      items: props.retrievalPart.results as unknown as ResultItem[],
+      total: props.retrievalPart.results.length,
+    }
+  }
 
   // JSON 结构化结果（web_search / search_knowledge_base / search_memory）
   const json = parseJsonResults(out)

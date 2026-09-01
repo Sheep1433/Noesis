@@ -176,13 +176,21 @@ class RunProjection:
                 results = data.get("results")
                 if isinstance(results, list):
                     origin = data.get("origin")
-                    self.builder.register_retrieval_results(
-                        tool_call_id=str(data.get("tool_call_id") or ""),
+                    tool_call_id = str(data.get("tool_call_id") or "")
+                    part = self.builder.register_retrieval_results(
+                        tool_call_id=tool_call_id,
                         query=str(data.get("query") or ""),
                         results=[item for item in results if isinstance(item, dict)],
                         truncated=bool(data.get("truncated")),
                         origin=origin if isinstance(origin, dict) else None,
                     )
+                    # 与 register_tool_retrieval 的共享投影语义对齐：tool part
+                    # 展示输出替换为「检索到 N 条来源」摘要，原始结果只持久化
+                    # 在 retrieval part——主链路重放此前绕过该替换，导致主/
+                    # 子会话 tool part 数据形态不一致（主会话存了整份 JSON）。
+                    tool_part = self.builder.get_tool(tool_call_id)
+                    if tool_part is not None:
+                        tool_part.output = f"检索到 {len(part.results)} 条来源"
             elif event.event == "run-status":
                 status = str(data.get("status") or "")
                 event_attempt_id = int(data.get("attempt_id") or self.attempt_id)

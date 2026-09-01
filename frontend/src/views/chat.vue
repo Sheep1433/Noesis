@@ -6,7 +6,7 @@ import type { ChatAttachmentItem } from '@/store/business'
 import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { SessionStats } from '@/utils/statsFormat'
-import type { MessageContentV1, RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
+import type { MessageContentV1, RetrievalResultUi, RetrievalUiPart, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem } from 'naive-ui'
 import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
@@ -136,6 +136,22 @@ function messageRetrievalResults(item: ArcPanelMessage): RetrievalResultUi[] {
     return panel.entries.map((entry) => entry.result)
   }
   return retrievedResults(item.messageContent?.parts || [])
+}
+
+/**
+ * 检索 tool 卡的结构化结果关联（遗留渲染路径用；共享渲染器内部自算同构 map）。
+ * 主/子会话同构：tool part 只存摘要，完整结果按 tool_call_id 取 retrieval part。
+ */
+function retrievalPartForToolPart(
+  item: { messageContent?: MessageContentV1 },
+  toolCallId?: string,
+): RetrievalUiPart | undefined {
+  if (!toolCallId) {
+    return undefined
+  }
+  return normalizeApiContent(item.messageContent).parts.find(
+    (part): part is RetrievalUiPart => part.type === 'retrieval' && part.tool_call_id === toolCallId,
+  )
 }
 
 function entryKey(entry: DisplayPartEntry, fallback: number): string {
@@ -3466,6 +3482,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                           :truncated="tp.truncated"
                                           :duration-ms="tp.duration_ms"
                                           :collapse-signal="runCollapseSignal"
+                                          :retrieval-part="retrievalPartForToolPart(item, tp.tool_call_id)"
                                         />
                                       </div>
                                     </n-collapse-item>
@@ -3491,6 +3508,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                     :truncated="entry.part.truncated"
                                     :duration-ms="entry.part.duration_ms"
                                     :collapse-signal="runCollapseSignal"
+                                    :retrieval-part="retrievalPartForToolPart(item, entry.part.tool_call_id)"
                                   />
                                 </template>
                                 <div
