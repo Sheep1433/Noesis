@@ -93,12 +93,42 @@ function parseJsonResults(text: string): { items: ResultItem[], total?: number }
   return null
 }
 
+/** 解析 web_fetch 旧格式原始 JSON 输出（{url, content}）。 */
+function parseJsonFetch(text: string): { url: string, content: string } | null {
+  try {
+    const j = JSON.parse(text)
+    if (j && typeof j === 'object' && typeof (j as Record<string, unknown>).url === 'string') {
+      const rec = j as Record<string, unknown>
+      return { url: rec.url, content: String(rec.content ?? '') }
+    }
+  } catch {
+    // 非 JSON
+  }
+  return null
+}
+
 /** chat 行内最多展示 8 项，超出折叠（详情面才看全部）。 */
 const MAX_ROWS = 8
+
+/** web_fetch 正文展示上限：抓取内容可能很长，行内给预览即可。 */
+const FETCH_CONTENT_MAX = 6_000
 
 const view = computed(() => {
   const out = props.output || ''
   const name = props.name
+
+  // web_fetch：抓取内容（URL + 正文）——输出已被替换为「检索到 N 条来源」
+  // 摘要，内容在 retrieval part 的单条结果里；旧数据的原始 JSON 输出回退解析
+  if (name === 'web_fetch') {
+    const fetched = props.retrievalPart?.results[0]
+    if (fetched) {
+      return { kind: 'fetch' as const, url: fetched.url || '', content: fetched.excerpt || fetched.title || '' }
+    }
+    const legacy = parseJsonFetch(out)
+    if (legacy) {
+      return { kind: 'fetch' as const, ...legacy }
+    }
+  }
 
   // retrieval part 的结构化结果优先（主/子会话统一数据来源）
   if (props.retrievalPart && props.retrievalPart.results.length > 0) {
@@ -146,6 +176,14 @@ const view = computed(() => {
   // 回退：纯文本
   return { kind: 'text' as const, text: out }
 })
+
+/** fetch 正文截断展示（原文在 retrieval part / 原始输出中，未丢失）。 */
+const fetchTruncated = computed(() =>
+  view.value.kind === 'fetch' && view.value.content.length > FETCH_CONTENT_MAX,
+)
+const fetchDisplay = computed(() =>
+  view.value.kind === 'fetch' ? view.value.content.slice(0, FETCH_CONTENT_MAX) : '',
+)
 </script>
 
 <template>
@@ -192,6 +230,13 @@ const view = computed(() => {
     <template v-else-if="view.kind === 'paths'">
       <div v-for="(p, i) in view.paths.slice(0, MAX_ROWS)" :key="i" class="path-row">{{ p }}</div>
       <div v-if="view.paths.length > MAX_ROWS" class="capped-hint">仅展示前 {{ MAX_ROWS }} 条，共 {{ view.paths.length }} 条</div>
+    </template>
+
+    <!-- web_fetch：抓取内容（URL + 正文预览） -->
+    <template v-else-if="view.kind === 'fetch'">
+      <a v-if="view.url" :href="view.url" target="_blank" rel="noopener" class="fetch-url">{{ view.url }}</a>
+      <pre v-if="view.content" class="fetch-content">{{ fetchDisplay }}</pre>
+      <div v-if="fetchTruncated" class="capped-hint">正文较长，仅展示前 {{ FETCH_CONTENT_MAX }} 字符</div>
     </template>
 
     <!-- 回退纯文本 -->
@@ -246,6 +291,23 @@ a.result-item__title {
   color: var(--noesis-color-text, #24292f);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.fetch-url {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 500;
+  color: var(--noesis-color-text, #24292f);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.fetch-content {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  max-height: 320px;
+  overflow-y: auto;
 }
 .result-item__score {
   margin-left: auto;

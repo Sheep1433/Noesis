@@ -317,7 +317,10 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
   if (variant.value === 'bash') {
     return 'terminal'
   }
-  if (variant.value === 'search') {
+  // web_fetch 的抓取内容在 retrieval part（输出已被替换为「检索到 N 条来源」
+  // 摘要），与检索工具同路走 SearchBlock 渲染富内容；无 part 的旧数据由
+  // SearchBlock 解析原始 JSON 输出兜底
+  if (variant.value === 'search' || (props.name === 'web_fetch' && props.retrievalPart)) {
     return 'search'
   }
   return 'text'
