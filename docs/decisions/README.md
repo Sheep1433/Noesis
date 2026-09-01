@@ -9,6 +9,7 @@
 - `proposed/` — 尚未实现的提案，实现它的提交把它改写为 implemented 现在时态并核实路径与机制。
 - `implemented/` — 已生效的决策，**随代码同提交保持事实同步**（路径、名称、机制变了就同一提交更新对应事实；判断依据本身不改，被推翻就新开记录）。
 - `rejected/` — 被否的提案，状态行必须带一行落选理由。只在「该方案仍是一个诱人的错误」时保留，否则连同删除。
+- `archived/` — 只读历史素材（原 NOTES.md 决策卡片整体迁入），不算现行权威，不参与校验，新决策禁止落入。
 
 ## 何时必须写
 
@@ -46,4 +47,4 @@ openspec 归档接缝：change 归档时把 `design.md` 中有长期价值的判
 
 ## legacy 说明
 
-`implemented/` 中带「迁移：自 docs/NOTES.md 机械拆分」标记的 138 条为历史迁入：正文零改写，不满足新格式（多数无备选方案节），**格式校验豁免**。它们的价值密度参差，后续按「是否仍能指导未来改动」逐条判断：保留、归档或并入新记录；在完成一轮整理前整体视为可搜索的历史素材，其中被后续记录取代的以新记录为准。未带决策日期的工程操作记录在 [docs/engineering/legacy-worklog.md](../engineering/legacy-worklog.md)，不属于本体系。
+原 `docs/NOTES.md` 的 138 张决策卡片已**整体移入 `archived/`**（2026-09-01 裁决：不做逐条整理，历史不增加维护负担）。archived/ 是只读历史素材：正文零改写、不满足新格式、**不参与格式校验、不算现行权威**——需要历史依据时搜索它，引用时注明是历史记录；现行判断依据只看 `implemented/` 的新格式记录与各 owning 文档（`docs/architecture/`、openspec specs）。新决策禁止落入 archived/。未带决策日期的工程操作记录在 [docs/engineering/legacy-worklog.md](../engineering/legacy-worklog.md)，不属于本体系。
