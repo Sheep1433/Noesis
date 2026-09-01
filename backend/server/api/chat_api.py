@@ -1031,6 +1031,14 @@ async def stream_run(
                     except asyncio.TimeoutError:
                         yield SSE_COMMENT_KEEPALIVE
                         continue
+                    # 瞬态事件（流式 delta / 实时统计，executor 标记 transient）：
+                    # 不进 history、不参与 sequence 去重——同一 sequence 下多次
+                    # 发布各自独立，按到达顺序直发；重连由 run-snapshot 全量恢复
+                    if item.get("transient"):
+                        yield format_sse(
+                            str(item.get("type") or "run.event"), item,
+                        )
+                        continue
                     sequence = int(item.get("sequence") or 0)
                     if sequence <= max(0, after_sequence) and item.get("type") not in {
                         "run.started",

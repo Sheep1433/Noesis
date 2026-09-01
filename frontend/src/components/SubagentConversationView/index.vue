@@ -75,7 +75,15 @@ const selectedReasoningEffort = ref('')
 /** 子会话统计条：与主会话同口径（assistant 消息 extra.usage 重建，随消息加载/终态更新） */
 const sessionStats = computed(() => rebuildSessionStats(messages.value))
 const statsLineTemplate = useLocalStorage('noesis:statsline-template', '')
-const statsLine = computed(() => formatStatsLine(sessionStats.value, statsLineTemplate.value))
+/** 运行中优先流式统计（executor 每次模型调用发布，与主 Agent 同口径含 tok/s）；
+ *  终态后 reducer stats 清空，回落落库 usage 重建。 */
+const effectiveStats = computed(() => {
+  if (runActive.value && reducerState.value.stats) {
+    return reducerState.value.stats
+  }
+  return sessionStats.value
+})
+const statsLine = computed(() => formatStatsLine(effectiveStats.value, statsLineTemplate.value))
 
 /** 消息级检索结果：正文 badge 序号数据源（与主会话同构的 retrieval parts） */
 function messageRetrievalResults(message: ChatMessageResponse): RetrievalResultUi[] {
@@ -289,11 +297,18 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   if (!domain) {
     return
   }
+  // 流式正文增量（瞬态）：直改合成消息的末尾 part（O(1) 追加），边界
+  // message-updated 会以权威投影整体收口，此处不进 reducer
+  if (domain.type === 'content-delta') {
+    appendStreamingDelta(domain.kind, domain.text)
+    return
+  }
   const prev = reducerState.value
   const next = runEventReducer(prev, domain)
   reducerState.value = next
   if (next.assistantContent !== prev.assistantContent) {
     upsertAssistant(next.assistantContent, domain.type === 'run-snapshot' ? next.run ?? undefined : undefined)
+    streamingTextActive.value = false
   }
   // 终态时刻落进 assistant 消息：流式建出的合成消息没有 run_finished_at，
   // 不补的话 duration 会随 now 永远跳（「会话停了计时器还在跑」）
@@ -308,8 +323,45 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   }
   // 终态重载：落库后的 usage / 终态内容进入统计条与消息（流式终态对齐）
   if (domain.type === 'run-finished') {
+    streamingTextActive.value = false
     void loadConversation()
   }
+}
+
+/** 流式正文正在到达（delta 进来置位；边界投影/终态收口）——驱动「生成中」标记 */
+const streamingTextActive = ref(false)
+
+/** 追加流式增量到合成 assistant 消息的末尾同类型 part（无则新建）。 */
+function appendStreamingDelta(kind: 'text' | 'reasoning', text: string) {
+  const assistantId = run.value?.assistant_message_id
+  if (!assistantId) {
+    return
+  }
+  const index = messages.value.findIndex((item) => item.id === assistantId)
+  if (index === -1) {
+    // 首个 delta 先于任何边界投影：建流式骨架（upsertAssistant 的合成路径）
+    upsertAssistant({ version: 1, parts: [] })
+  }
+  const i = messages.value.findIndex((item) => item.id === assistantId)
+  if (i === -1) {
+    return
+  }
+  const content = messages.value[i].content as { version: number, parts: Array<Record<string, unknown>> }
+  if (!Array.isArray(content.parts)) {
+    content.parts = []
+  }
+  const partType = kind === 'text' ? 'text' : 'reasoning'
+  let last = content.parts[content.parts.length - 1]
+  if (!last || last.type !== partType || typeof last.content !== 'string') {
+    last = { id: `part-stream-${partType}-${content.parts.length}`, type: partType, content: '', status: 'streaming' }
+    content.parts.push(last)
+  }
+  last.content = (last.content as string) + text
+  if (kind === 'text') {
+    last.status = 'streaming'
+  }
+  messages.value[i] = { ...messages.value[i], content: { ...content, parts: [...content.parts] } }
+  streamingTextActive.value = true
 }
 
 async function loadContextSnapshot() {
@@ -545,6 +597,11 @@ onBeforeUnmount(() => {
         />
       </template>
     </div>
+    <!-- 生成中标记：流式正文到达时点亮（与主 Agent 流式效果对齐），边界投影/终态熄灭 -->
+    <div v-if="streamingTextActive" class="subagent-conversation__generating" role="status">
+      <span class="subagent-conversation__generating-dot" aria-hidden="true"></span>
+      正在生成…
+    </div>
     <div class="subagent-conversation__composer chat-composer">
       <!-- 前端待发队列：run 进行中发送的消息在此排队，终态后逐条自动提交 -->
       <FollowupQueue
@@ -657,6 +714,29 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-start;
   padding: 4px 2px 0;
+}
+
+.subagent-conversation__generating {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 0;
+  color: var(--noesis-color-text-hint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.subagent-conversation__generating-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--noesis-color-primary, #18a058);
+  animation: subagent-generating-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes subagent-generating-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
 
 .subagent-conversation__empty {

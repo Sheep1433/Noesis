@@ -1623,3 +1623,54 @@ def test_followup_cold_resume_prelude_failure_fails_task() -> None:
     # 收口为显式失败：状态可见、错误信息可定位（而非永远 RUNNING）
     assert task["status"] == BgTaskStatus.FAILED.value
     assert "followup run 创建失败" in (task["error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_run_stream_publishes_transient_deltas_and_stats() -> None:
+    """流式转发：子会话 run 流收到 text-delta / stats-update（transient），
+    且瞬态事件不进 history（重连由 run-snapshot 全量恢复，不叠放旧 delta）。"""
+    from noesis.agents.subagents.executor import (
+        get_run_event_history,
+        subscribe_run_events,
+        unsubscribe_run_events,
+    )
+
+    queue = subscribe_run_events("run-stream", "u1")
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    try:
+        task_id = executor.start(
+            worker_factory=lambda: _build_worker([AIMessage(content="流式内容")]),
+            description="x",
+            session_id="s-stream",
+            user_id="u1",
+            task_id="child-stream",
+            run_id="run-stream",
+            assistant_message_id="assistant-stream",
+        )
+        events: list[dict] = []
+        while True:
+            event = await asyncio.wait_for(queue.get(), timeout=10)
+            events.append(event)
+            if event.get("type") == "run.finished":
+                break
+        task = executor.get(task_id)
+        assert task is not None and task["status"] == "completed"
+
+        deltas = [e for e in events if e.get("type") == "text-delta"]
+        assert deltas, "run 流必须转发 text-delta（瞬态流式正文）"
+        assert all(e.get("transient") is True for e in deltas)
+        assert any("流式内容" in str(e.get("text_delta") or "") for e in deltas)
+
+        stats = [e for e in events if e.get("type") == "stats-update"]
+        assert stats, "run 流必须发布实时统计 stats-update"
+        assert all(e.get("transient") is True for e in stats)
+        assert stats[-1].get("steps", 0) >= 1
+        assert stats[-1].get("turns", 0) >= 1
+
+        # 瞬态事件不进 history：回放通道只保留边界/生命周期事件
+        history = list(get_run_event_history("run-stream", 0))
+        assert not any(e.get("transient") for e in history), "瞬态事件不得进入 history"
+        assert any(e.get("type") == "run.finished" for e in history)
+    finally:
+        unsubscribe_run_events("run-stream", queue)
+        executor.cancel(task_id)

@@ -293,6 +293,9 @@ class _TaskEntry:
     turn_seed_content: Optional[dict[str, Any]] = None
     # 协作停止宽限 watchdog（超时回退硬杀）
     stop_grace_handle: Optional[asyncio.TimerHandle] = None
+    # 已完成 turn 的 usage 累计（数值字段相加）：实时统计发布时与当前
+    # turn 的 bridge.message_usage 合并，保证跨轮口径与终态 DB 重建一致
+    accumulated_usage: Optional[dict[str, Any]] = None
     # HITL 挂起时的前半段 usage 种子：resume 后续 turn 终态合并，
     # 该轮 extra.usage 覆盖中断前后全部模型调用（DB 快照另存 _hitl_usage 审计）
     hitl_usage_seed: Optional[dict[str, Any]] = None
@@ -428,7 +431,16 @@ def _publish_run_event(
     content: Optional[dict[str, Any]] = None,
     context: Optional[dict[str, Any]] = None,
     finish_reason: Optional[str] = None,
+    wire: Optional[dict[str, Any]] = None,
+    transient: bool = False,
 ) -> None:
+    """发布子会话 run 事件（history 回放 + 在线订阅双通道）。
+
+    wire：桥接层 wire 帧字段（text-delta 等），原样并入 payload。
+    transient：瞬态事件（流式 delta / 实时统计）——只发在线订阅、不进
+    history：重连方由 run-snapshot 全量内容恢复，回放叠加旧 delta 反而
+    重复；且 delta 频率高，进 history 会挤占边界事件的有界容量。
+    """
     if not task.run_id:
         return
     payload = {
@@ -438,6 +450,10 @@ def _publish_run_event(
         "sequence": task.projection_sequence,
         "status": task.status.value,
     }
+    if transient:
+        payload["transient"] = True
+    if wire is not None:
+        payload.update(wire)
     if finish_reason:
         payload["finish_reason"] = finish_reason
     # 终态时间：前端据此冻结 duration（重放历史事件同样可得）
@@ -450,11 +466,12 @@ def _publish_run_event(
     if context is not None:
         payload["context"] = context
     with _RUN_SUBSCRIBERS_LOCK:
-        history = _RUN_EVENT_HISTORY.setdefault(
-            task.run_id,
-            collections.deque(maxlen=_RUN_EVENT_HISTORY_LIMIT),
-        )
-        history.append(dict(payload))
+        if not transient:
+            history = _RUN_EVENT_HISTORY.setdefault(
+                task.run_id,
+                collections.deque(maxlen=_RUN_EVENT_HISTORY_LIMIT),
+            )
+            history.append(dict(payload))
         subs = list(_RUN_SUBSCRIBERS.get(task.run_id) or [])
     for loop, queue, user_id in subs:
         if task.user_id not in (None, user_id):
@@ -1444,6 +1461,28 @@ def _on_stop_grace_timeout(entry: _TaskEntry) -> None:
         entry.future.cancel()
 
 
+def _merge_usage(base: Optional[dict[str, Any]], extra: dict[str, Any]) -> dict[str, Any]:
+    """usage 数值字段合并（相加）；非数值以 extra 覆盖。"""
+    merged = dict(base or {})
+    for key, value in extra.items():
+        if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
+            merged[key] = merged[key] + value
+        else:
+            merged[key] = value
+    return merged
+
+
+def _merged_live_usage(entry: "_TaskEntry", bridge: Any) -> dict[str, Any]:
+    """实时统计口径：已完成 turn 累计 + 当前 turn bridge 累计（数值相加）。
+
+    bridge 每 turn 重建（message_usage 从零起算），跨轮合并保证与终态
+    DB 重建（各 turn extra.usage 累加）一致；turns 按已完成轮次 +1。
+    """
+    merged = _merge_usage(entry.accumulated_usage, bridge.message_usage)
+    merged["turns"] = entry.task.turn_count + 1
+    return merged
+
+
 async def _run_turn_via_pipeline(
     entry: _TaskEntry,
     task: BackgroundTask,
@@ -1481,6 +1520,12 @@ async def _run_turn_via_pipeline(
                     snapshot = event.data.get("context")
                     if isinstance(snapshot, dict):
                         _apply_context_snapshot(task, snapshot)
+                elif event.event in ("text-delta", "reasoning-delta"):
+                    # 流式正文转发（瞬态）：子会话详情页逐 token 渲染；
+                    # 内容边界仍由 message.updated 全量投影权威收口
+                    _publish_run_event(
+                        task, event.event, wire=dict(event.data), transient=True,
+                    )
                 continue
             if isinstance(event, HitlRequired):
                 outcome.hitl_payload = dict(event.payload)
@@ -1524,6 +1569,12 @@ async def _run_turn_via_pipeline(
                 text = _record_progress_from_model_end(task, output)
                 if text.strip():
                     outcome.final_text = text
+                # 实时统计（瞬态）：跨轮累计 + 本 turn bridge 累计，口径与
+                # 终态 DB 重建一致；子会话详情页据此渲染主 Agent 同款统计行
+                _publish_run_event(
+                    task, "stats-update",
+                    wire=_merged_live_usage(entry, bridge), transient=True,
+                )
                 # 输出截断一等终止：provider 以 length 截断（含参数被截的工具调用）
                 if str((getattr(output, "response_metadata", None) or {}).get("finish_reason")) == "length":
                     outcome.truncated = True
@@ -1691,6 +1742,12 @@ async def _arun(
                 task.result = (
                     f"输出截断（finish_reason=length）：\n{partial}"
                     if partial else "输出截断（finish_reason=length）"
+                )
+            # 实时统计的跨轮累计：本 turn usage 并入（HITL 暂停路径不经此处，
+            # 由 hitl_usage_seed 在 resume turn 的 outcome 中合并，无重复计数）
+            if outcome.usage:
+                entry.accumulated_usage = _merge_usage(
+                    entry.accumulated_usage, outcome.usage,
                 )
             # followup 链：队列非空则同 thread 开下一个 turn
             next_followup = _pop_first_followup(entry)

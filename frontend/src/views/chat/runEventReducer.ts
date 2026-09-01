@@ -1,4 +1,5 @@
 import type { AgentRunSnapshot } from '@/api/chat'
+import type { SessionStats } from '@/utils/statsFormat'
 import { wireTimestampMs } from '@/utils/formatTime'
 
 /**
@@ -8,7 +9,8 @@ import { wireTimestampMs } from '@/utils/formatTime'
  * 主会话 useSSEStream 的接入为后续独立小步（届时其帧解析层产出同一
  * 事件 vocabulary）。reducer 是纯函数——输入 (state, event)，输出新
  * state；消息列表 upsert / 终态时间回填等 DOM 副作用由宿主按 state
- * 差异执行。
+ * 差异执行。content-delta 不改 reducer 状态（消息内容追加是宿主侧
+ * 副作用，边界 message-updated 才是权威内容转移）。
  */
 
 export type RunPendingHitl = AgentRunSnapshot['pending_hitl']
@@ -19,6 +21,10 @@ export type RunDomainEvent =
   /** assistant 内容投影更新（message.updated） */
   | { type: 'message-updated', content: unknown, sequence?: number }
   | { type: 'context-update', context: Record<string, unknown>, sequence?: number }
+  /** 流式正文增量（text-delta / reasoning-delta；瞬态，边界投影权威收口） */
+  | { type: 'content-delta', kind: 'text' | 'reasoning', text: string }
+  /** 实时统计（executor 每次模型调用发布；终态由宿主回落 DB 重建） */
+  | { type: 'stats-update', stats: SessionStats }
   /** 排队任务被调度启动（快照仍是 queued，推进到 running） */
   | { type: 'run-started', sequence?: number }
   /** 审批挂起：内容投影 + pending_hitl */
@@ -32,12 +38,14 @@ export interface RunEventState {
   contextSnapshot: Record<string, unknown> | null
   /** 事件携带的最新 assistant 内容（run-snapshot / message-updated / approval-required） */
   assistantContent: unknown
+  /** 运行中流式统计（stats-update 累进；run-snapshot 重置、终态后宿主回落 DB 重建） */
+  stats: SessionStats | null
   /** 终态时刻（run.finished 一次性置位；宿主回填后可忽略后续） */
   finishedAt: number | null
 }
 
 export function initialRunEventState(): RunEventState {
-  return { run: null, contextSnapshot: null, assistantContent: null, finishedAt: null }
+  return { run: null, contextSnapshot: null, assistantContent: null, stats: null, finishedAt: null }
 }
 
 function advanceSequence(
@@ -56,8 +64,14 @@ function advanceSequence(
 export function runEventReducer(state: RunEventState, event: RunDomainEvent): RunEventState {
   switch (event.type) {
     case 'run-snapshot':
-      // 新 run 快照重置终态时刻（上一 run 的 finishedAt 不得泄漏到新 turn）
-      return { ...state, run: event.snapshot, assistantContent: event.snapshot.content, finishedAt: null }
+      // 新 run 快照重置终态时刻与流式统计（上一 run 的不得泄漏到新 turn）
+      return {
+        ...state,
+        run: event.snapshot,
+        assistantContent: event.snapshot.content,
+        stats: null,
+        finishedAt: null,
+      }
 
     case 'message-updated': {
       const run = advanceSequence(state.run, event.sequence)
@@ -74,6 +88,14 @@ export function runEventReducer(state: RunEventState, event: RunDomainEvent): Ru
         run: advanceSequence(state.run, event.sequence),
         contextSnapshot: { ...event.context },
       }
+
+    case 'content-delta':
+      // 瞬态流式增量：不改 reducer 状态——消息内容追加是宿主侧副作用
+      // （upsertAssistant 直改合成消息），边界 message-updated 权威收口
+      return state
+
+    case 'stats-update':
+      return { ...state, stats: event.stats }
 
     case 'run-started': {
       const run = advanceSequence(state.run, event.sequence)
@@ -148,6 +170,27 @@ export function parseRunEvent(
         type: 'context-update',
         context: payload.context as Record<string, unknown>,
         sequence: Number(payload.sequence ?? 0) || undefined,
+      }
+    case 'text-delta':
+    case 'reasoning-delta': {
+      const text = String(payload.text_delta ?? payload.delta ?? payload.content ?? '')
+      if (!text) {
+        return null
+      }
+      return {
+        type: 'content-delta',
+        kind: event === 'text-delta' ? 'text' : 'reasoning',
+        text,
+      }
+    }
+    case 'stats-update':
+      // executor 发布时 usage 字段直接并入 payload 顶层（wire 合并）
+      if (typeof payload.steps !== 'number') {
+        return null
+      }
+      return {
+        type: 'stats-update',
+        stats: payload as unknown as SessionStats,
       }
     case 'run.started':
       return { type: 'run-started', sequence: Number(payload.sequence ?? 0) || undefined }

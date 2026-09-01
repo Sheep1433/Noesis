@@ -101,3 +101,39 @@ describe('parseRunEvent（子会话 wire → 领域事件）', () => {
     expect(approval).toMatchObject({ type: 'approval-required', pendingHitl: { kind: 'approval' } })
   })
 })
+
+describe('runEventReducer 流式扩展', () => {
+  it('stats-update：usage 字段在 payload 顶层，落入 state.stats', () => {
+    const domain = parseRunEvent('stats-update', {
+      type: 'stats-update', run_id: 'r', sequence: 2, status: 'running', transient: true,
+      turns: 1, steps: 3, llm_ms: 9000, ttft_ms: 1200,
+      input_tokens: 500, output_tokens: 80, cache_read_tokens: 300, cache_write_tokens: 0,
+    })
+    expect(domain).toEqual({ type: 'stats-update', stats: expect.objectContaining({ steps: 3, ttft_ms: 1200 }) })
+    const state = runEventReducer(initialRunEventState(), domain!)
+    expect(state.stats?.steps).toBe(3)
+  })
+
+  it('stats-update 无 steps 字段（无效载荷）不产出事件', () => {
+    expect(parseRunEvent('stats-update', { type: 'stats-update' })).toBeNull()
+  })
+
+  it('run-snapshot 重置流式统计（新 turn 不得泄漏上一 turn 的 stats）', () => {
+    let state = runEventReducer(initialRunEventState(), { type: 'run-snapshot', snapshot: snapshot as never })
+    state = runEventReducer(state, { type: 'stats-update', stats: { steps: 2 } as never })
+    expect(state.stats?.steps).toBe(2)
+    state = runEventReducer(state, { type: 'run-snapshot', snapshot: { ...snapshot, snapshot_sequence: 9 } as never })
+    expect(state.stats).toBeNull()
+  })
+
+  it('text-delta / reasoning-delta 解析为 content-delta（不改 reducer 状态）', () => {
+    const text = parseRunEvent('text-delta', { type: 'text-delta', text_delta: '你好' })
+    expect(text).toEqual({ type: 'content-delta', kind: 'text', text: '你好' })
+    const reasoning = parseRunEvent('reasoning-delta', { type: 'reasoning-delta', text_delta: '想想' })
+    expect(reasoning).toEqual({ type: 'content-delta', kind: 'reasoning', text: '想想' })
+    const before = initialRunEventState()
+    const state = runEventReducer(before, text!)
+    expect(state).toBe(before)
+    expect(parseRunEvent('text-delta', { type: 'text-delta', text_delta: '' })).toBeNull()
+  })
+})
