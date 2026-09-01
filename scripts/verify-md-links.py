@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parent.parent
 SCAN_GLOBS = [
     "docs/**/*.md",
     "AGENTS.md",
+    "openspec/AGENTS.md",
     "frontend/AGENTS.md",
     "backend/AGENTS.md",
     ".agents/skills/**/*.md",

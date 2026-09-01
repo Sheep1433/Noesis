@@ -107,4 +107,13 @@ Three economics rules bind the final report:
 2. **Separate blockers from suggestions.** Blockers carry location, impact, and evidence; suggestions are everything else. One substantiated blocker beats a list of nits — if there are only nits, say the diff is clean at blocker level.
 3. **Receiving review: verify or rebut, never perform agreement.** When responding to review findings (from humans or other agents), each point gets a technical verification result — accept-and-fix, or rebut on technical grounds. Unverified agreement ("你说得对" with no verification) is a process violation.
 
+### 6. Prose in the diff is a blocking review surface
+
+Any new or changed prose in the diff (spec text, design docs, `docs/`, comments, decision records) gets semantic review against two repo standards — mechanical gates do not cover writing quality:
+
+- [noesis-prose-standard](../noesis-prose-standard/SKILL.md): readability — conclusion-first, present-state narration, tables for enumerable facts only, nesting ≤ 2, and the AI-flavor symptom checklist (boilerplate openings, mechanical structure, homogenized wording).
+- [noesis-prose-hygiene](../noesis-prose-hygiene/SKILL.md): session-perspective residue — dead references, change narration, review choreography.
+
+A diff whose prose fails either standard is a blocker, not a suggestion.
+
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.

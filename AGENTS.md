@@ -62,7 +62,7 @@ Noesis/
 
 ### SSE 事件
 
-run 内容流：`reasoning-start/delta/end`、`text-start/delta/end`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见 `docs/architecture/platform/chat-streaming.md` §4.2a。
+run 内容流事件清单（message-start、reasoning/text/tool-input 系列、stats-update、hitl-required、finish、`[DONE]` 等）的**唯一权威**在 `docs/architecture/platform/chat-streaming.md` §4.2b，由契约测试钉住（漂移即 CI 红）。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见同文档 §4.2a。
 
 **assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/architecture/platform/chat-streaming.md` §3.3。
 
@@ -184,6 +184,7 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 | 功能或重构完成、准备提交或合并 | `code-review` | 同时检查项目规范与原始 spec；重点检查需求遗漏、范围扩大及 Fowler code smells；遵守审查经济学三条 |
 | review 已确认存在冗余、浅 wrapper、无需求支撑的抽象或复杂控制流 | `code-simplification` | 仅修改本次范围；保持输入、输出、异常和副作用顺序不变；测试通过不是简化成立的唯一依据，还要证明更易理解 |
 | 注释/文档写作或怀疑存在过期注释 | `noesis-prose-hygiene` | 会话视角残留审计，报告制执行（默认只报告不修改） |
+| 写 spec / design / 决策记录 / 架构文档，或文档「难读 / AI 味重」 | `noesis-prose-standard` | 结论先行、现算态、表格只放可枚举事实、AI 味症状清单；探针只发现候选，判断靠语义 |
 
 - 简单逻辑默认直接表达。只有概念需要命名、存在多个真实调用方、需要隔离变化或形成有效测试 seam 时才提取函数、类或接口。
 - Bug 修复必须删除被新方案取代的补丁、临时日志和不可达分支，不保留“以后可能有用”的兼容实现。

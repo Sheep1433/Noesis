@@ -27,7 +27,7 @@
 
 - [x] 4.1 创建 `docs/decisions/{proposed,implemented,rejected}/` 目录结构与 README（格式骨架、生命周期规则、取代审计规则）
 - [x] 4.2 `docs/NOTES.md` 决策卡片按日期标题机械拆分迁入 `implemented/`（一卡一文件，内容零改写，独立提交）；DeepDoc vendor 修改记录迁至 `docs/engineering/`
-- [x] 4.3 `openspec-archive-change` skill（及对应 source-command 副本）增加归档提炼步骤：design.md 长期 rationale 与被否方案提炼为 implemented 决策记录
+- [x] 4.3 归档提炼规则落地：原拟改 openspec-archive-change skill，终版改落 `openspec/AGENTS.md`（CLI 生成的 skill 禁止本地改动，`openspec update` 会覆写；standing order 对 Agent 同样生效）
 - [x] 4.4 补一条本变更自身的 implemented 决策记录（作为体系首条，验证格式与流程）
 
 ## 5. 影响面工具与最小执法层

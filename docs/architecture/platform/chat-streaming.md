@@ -83,6 +83,23 @@ sequence > last_sequence + 1   停止 reader，查询 snapshot，replace 后重�
 
 无终态 EOF、网络错误、页面恢复可见或 subscriber overflow 都进入 snapshot recovery。旧 subscription generation 的迟到响应直接丢弃。
 
+### 4.2b run 内容流事件清单
+
+run 内容流（`/api/chat/runs/{run_id}/events` 与创建 run 的响应流）的完整事件词表如下。**本清单由契约测试钉住**（`backend/tests/test_doc_contract.py` 从 `langgraph_bridge.py` 提取事件名与本节比对）：新增或改名事件而未更新本节，CI 红。
+
+| 分组 | 事件 |
+|---|---|
+| 消息与生命周期 | `message-start`、`finish`、`abort`、`error`、`run-status` |
+| reasoning | `reasoning-start`、`reasoning-delta`、`reasoning-end` |
+| 正文 | `text-start`、`text-delta`、`text-end` |
+| 工具 | `tool-input-start`、`tool-input-available`、`tool-output-available` |
+| 检索与统计 | `retrieval-results-available`、`stats-update`、`context-update` |
+| HITL | `hitl-required` |
+| Phase（TEST_CASE 遗留） | `phase-start`、`phase-delta`、`phase-end`、`scenario-start`、`testpoints-confirm-required`、`scene-cases` |
+| 传输层哨兵 | `data: [DONE]`（流传输收尾，不表示业务终态；`chat/delivery/sse.py`） |
+
+历史兼容：`tool-call-start` 是 `tool-input-start` 的旧名，仅在 `runs/projection.py` 的重放路径中作为别名接受，新代码不得发射；`token-details`、`finish-step` 已不存在于当前事件流。
+
 ### 4.3 HITL 与停止
 
 HITL 使用同一 `run_id` 和 `assistant_message_id`：`running → hitl_pending → running → terminal`。暂停只结束 LangGraph 执行分段，不发送整个 Run 的 `[DONE]`。任意 Tab 可提交 resume；CAS 保证只启动一个新 producer segment。
