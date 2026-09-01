@@ -232,18 +232,34 @@ class SuperAgent(BaseAgent):
             message: str,
             user_message_id: str | None = None,
         ) -> dict[str, str]:
+            """冷恢复 / 链式 followup 的新 run 创建。
+
+            经 run_on_main_loop 在主 loop 执行：pg_manager 连接池绑定主
+            loop，而本工厂在 executor 隔离 loop 上被调用（send_message 冷
+            恢复与运行中 followup 链两处）——直连会触发 asyncpg 跨 loop
+            连接错误，冷恢复曾因此静默失败（任务卡 RUNNING、追问无回复）。
+            """
+            from noesis.runtime.main_loop import run_on_main_loop
             from noesis.services.subagent_session_service import SubagentSessionService
             from noesis.storage.postgres.manager import pg_manager
 
-            async with pg_manager.get_async_session_context() as child_db:
-                launch = await SubagentSessionService.create_followup_run(
-                    session_id=child_session_id,
-                    user_id=user_id,
-                    message=message,
-                    user_message_id=user_message_id,
-                    db=child_db,
-                )
-                return launch.to_dict()
+            async def _launch() -> dict[str, str]:
+                async with pg_manager.get_async_session_context() as child_db:
+                    launch = await SubagentSessionService.create_followup_run(
+                        session_id=child_session_id,
+                        user_id=user_id,
+                        message=message,
+                        user_message_id=user_message_id,
+                        db=child_db,
+                    )
+                    return launch.to_dict()
+
+            future = run_on_main_loop(
+                _launch(), name=f"subagent-followup-launch:{child_session_id}",
+            )
+            if future is None:
+                raise RuntimeError("主 loop 不可用，followup run 创建失败")
+            return await asyncio.wrap_future(future)
 
         tools.extend(build_background_task_tools(
             worker_factory=_bg_worker_factory,

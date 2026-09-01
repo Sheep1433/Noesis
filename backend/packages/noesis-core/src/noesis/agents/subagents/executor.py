@@ -1837,23 +1837,81 @@ async def _arun_followup(
 
     params 携带该 turn 的模型/推理档位覆盖；变化时以新参数编译 worker
     （同 thread 续跑）。新 turn 的投影由独立 builder 从零累积（统一管道）。
+
+    前置段（worker 编译 / run 创建）失败必须显式收口 FAILED：send_message
+    对本协程 fire-and-forget，异常会滞留在未观察的 concurrent Future 里被
+    静默吞掉——任务卡 RUNNING、后续追问进队列无人消费（冷恢复静默失败
+    事故：跨 loop 连接错误曾走此路径无任何日志）。
     """
-    _apply_turn_params(entry, params)
-    agent = await _ensure_agent(entry)
-    entry.task.turn_count += 1
-    if entry.followup_factory is not None:
-        launch = entry.followup_factory(
-            entry.task.child_session_id or entry.task.task_id,
-            text,
-            user_message_id,
-        )
-        if inspect.isawaitable(launch):
-            launch = await launch
-        entry.task.run_id = str(launch.get("run_id") or "") or None
-        entry.task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
-        entry.task.projection_sequence = 0
-        entry.turn_seed_content = None
+    task = entry.task
+    try:
+        _apply_turn_params(entry, params)
+        agent = await _ensure_agent(entry)
+        task.turn_count += 1
+        if entry.followup_factory is not None:
+            launch = entry.followup_factory(
+                task.child_session_id or task.task_id,
+                text,
+                user_message_id,
+            )
+            if inspect.isawaitable(launch):
+                launch = await launch
+            task.run_id = str(launch.get("run_id") or "") or None
+            task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
+            task.projection_sequence = 0
+            entry.turn_seed_content = None
+    except Exception as exc:
+        await _finalize_followup_prelude_failure(entry, task, exc)
+        return
     await _arun(entry, initial_source={"messages": [HumanMessage(content=text)]})
+
+
+async def _finalize_followup_prelude_failure(
+    entry: _TaskEntry,
+    task: BackgroundTask,
+    exc: BaseException,
+) -> None:
+    """冷恢复前置段失败收口：task FAILED + run ERROR + 终态事件与通知。
+
+    与 _arun 主体的异常兜底同语义但独立实现——终态 CAS 天然幂等，run
+    未创建时（factory 抛出）task.run_id 仍指向上一个已完成 run，
+    mark_terminal 的 compare-and-set 会安全跳过。
+    """
+    task.error = str(exc)
+    task.completed_at = time.time()
+    if not task.status.is_terminal:
+        task.status = BgTaskStatus.FAILED
+    if task.run_id:
+        try:
+            from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
+            from noesis.runtime.main_loop import run_on_main_loop
+
+            error_future = run_on_main_loop(
+                SubagentSessionService.mark_terminal(
+                    run_id=task.run_id,
+                    status=RunStatus.ERROR,
+                    content=None,
+                    error=str(exc),
+                    finish_reason="error",
+                ),
+                name=f"subagent-error:{task.run_id}",
+            )
+            if error_future is not None:
+                await asyncio.wrap_future(error_future)
+        except Exception:
+            logger.opt(exception=True).error(
+                "bg subagent followup prelude error terminal persist failed task_id={}",
+                task.task_id,
+            )
+    if _claim_terminal_publish(entry):
+        if task.run_id:
+            _publish_run_event(task, "run.finished")
+        _publish_task_event(task, "terminal")
+        _notify_terminal(task)
+    logger.opt(exception=True).error(
+        "bg subagent followup prelude failed task_id={}",
+        task.task_id,
+    )
 
 
 async def _arun_shell(entry: _TaskEntry) -> None:

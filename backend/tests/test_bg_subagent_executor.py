@@ -1594,3 +1594,32 @@ def test_check_and_list_task_tools_execute_without_error() -> None:
     list_result = listing.func() if listing.func else None
     assert list_result is not None and "completed" in list_result
     executor.cancel(task_id)
+
+
+def test_followup_cold_resume_prelude_failure_fails_task() -> None:
+    """冷恢复前置段（run 创建）异常：显式收口 FAILED，不得静默卡 RUNNING。
+
+    回归背景：send_message 对 _arun_followup fire-and-forget，前置段异常
+    滞留在未观察的 concurrent Future 里被吞——任务卡 RUNNING、后续追问
+    进队列无人消费（跨 loop 连接错误曾走此路径且无任何日志）。
+    """
+    worker = _build_worker([AIMessage(content="第一轮完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="x",
+        session_id="s-fu-prelude", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("followup run 创建失败")
+
+    entry = _TASKS[task_id]
+    entry.followup_factory = _boom
+
+    executor.send_message(task_id, "继续深入")
+    task = _wait_terminal(executor, task_id)
+    # 收口为显式失败：状态可见、错误信息可定位（而非永远 RUNNING）
+    assert task["status"] == BgTaskStatus.FAILED.value
+    assert "followup run 创建失败" in (task["error"] or "")
