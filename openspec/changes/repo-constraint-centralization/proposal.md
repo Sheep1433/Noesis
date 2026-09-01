@@ -8,7 +8,7 @@ Noesis 对 coding Agent 的开发纪律约束目前分裂在两处：仓库内�
 
 ## What Changes
 
-- **迁入三个开发纪律 skill**：`code-review`、`code-simplification`、`diagnosing-bugs` 从 `~/.agents/skills/` 迁移（move，非 copy）到仓库 `.agents/skills/`，用户级副本删除，单一归属。迁入时修复经质量验证发现的问题：code-review 的外部生态死引用（`/setup-matt-pocock-skills`、`docs/agents/issue-tracker.md`）与 spec 源查找对 openspec 的适配；diagnosing-bugs 对不存在文件（`CONTEXT.md`、`scripts/hitl-loop.template.sh`）的引用改指向仓库既有文档；code-simplification 的代码示例压缩到 Noesis 技术栈（TS + Python）。
+- **迁入三个开发纪律 skill**：`code-review`、`code-simplification`、`diagnosing-bugs` 从 `~/.agents/skills/` 迁移（move，非 copy）到仓库 `.agents/skills/`，用户级副本删除，单一归属。迁入时修复经质量验证发现的问题：code-review 的外部生态死引用（`/setup-matt-pocock-skills`、`docs/agents/issue-tracker.md`）与 spec 源查找对 openspec 的适配；diagnosing-bugs 的 `CONTEXT.md`/ADR 引用改指向仓库既有文档（`hitl-loop.template.sh` 随 skill 携带，非死引用）；code-simplification 的代码示例压缩到 Noesis 技术栈（TS + Python）。
 - **迁入时做 Noesis 化改造**：`code-review` 并入审查经济学三条（CI/gate 已证明的属性不得作为发现；blocker 与 suggestion 分离；逐条技术性回应禁止表演性认同）并挂接高关注区；三个 skill 各补「Sources of truth」节，链接仓库权威文档而不复述。
 - **新建写作卫生 skill**（`noesis-prose-hygiene`）：会话视角残留的缺陷分类与「仓库读者可独立解析」唯一检验，报告制执行。
 - **新建轻量影响面工具**（`scripts/change-scope`）：给定 base ref 输出改动路径集、分层归类与各层 owning checks 映射——使审查经济学与最小证据原则可执行，而非口号。

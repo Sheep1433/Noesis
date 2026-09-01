@@ -11,7 +11,7 @@
 
 调研范围是**协作方式**，不是产品代码：dsh 本身是一个 Agent harness，其 `packages/` 下的 subagent、debate-room 等属于「他们开发出来的产品能力」，不在本报告关注范围内。关注对象是仓库里的制度层：`AGENTS.md` 体系、`.agents/`（notes + skills）、`scripts/` 的 gate、git 历史中的协作痕迹。
 
-调研动机：Noesis 目前的 Agent 协作依赖 AGENTS.md + openspec + 用户个人记忆约束，实际开发中长期存在几个痛点——代码与文档不一致、过期注释干扰判断、Agent 产出的方案质量难控、Agent 互审总能翻出新的低价值问题、人类审查无法覆盖全部内容。本报告评估 dsh 的制度对这些问题有哪些可借鉴的解法。
+调研动机：Noesis 目前的 Agent 协作依赖 `AGENTS.md` + openspec + 用户个人记忆约束，实际开发中长期存在几个痛点——代码与文档不一致、过期注释干扰判断、Agent 产出的方案质量难控、Agent 互审总能翻出新的低价值问题、人类审查无法覆盖全部内容。本报告评估 dsh 的制度对这些问题有哪些可借鉴的解法。
 
 ## 2. 证据前提：上游内容与本地内容的区分
 
@@ -35,7 +35,7 @@ dsh 对 coding Agent 的约束分三层，各管一段、互不重复：
 | 流程知识 | `.agents/skills/`（12 个 skill） | 「怎么做好某类事」的操作手册 | frontmatter 描述触发，按需加载 |
 | 机器执法 | `scripts/` 60+ gate + lefthook + CI | 一切可机械检查的属性 | 违规时红灯 |
 
-衔接方式是关键：AGENTS.md 里的规则不展开解释，只写一行然后**按名指向 skill**（如推送前检查走 `dsh-pre-push-checks`）；skill 开头必有「Sources of truth: read, don't re-summarize」节，指向契约原文而不自己复制内容；gate 兜底机械属性。即 **AGENTS.md 是索引，skill 是手册，gate 是执法**。
+衔接方式是关键：`AGENTS.md` 里的规则不展开解释，只写一行然后**按名指向 skill**（如推送前检查走 `dsh-pre-push-checks`）；skill 开头必有「Sources of truth: read, don't re-summarize」节，指向契约原文而不自己复制内容；gate 兜底机械属性。即 **`AGENTS.md` 是索引，skill 是手册，gate 是执法**。
 
 两个配套细节：
 
@@ -107,13 +107,13 @@ dsh 的审查是三级流水线：gate + review bot 机器初审 → 持有 `dsh
 
 ## 4. 与 Noesis 的横向比较
 
-先看一个贯穿性的结构差异：**Noesis 的约束住在两个地方**——仓库（AGENTS.md、openspec、仓库级 skill）和**用户个人记忆系统**（`~/.agents/skills` 的 diagnosing-bugs / code-review / code-simplification，以及记忆中的汇报纪律、验证纪律、根因纪律）。dsh 的约束**全部住在仓库里**。这意味着换一个没有用户记忆的 Agent 实例（例如直接用任意 Claude Code 会话打开 Noesis），约一半流程约束失效。这是比任何单条规则都重要的差距。
+先看一个贯穿性的结构差异：**Noesis 的约束住在两个地方**——仓库（`AGENTS.md`、openspec、仓库级 skill）和**用户个人记忆系统**（`~/.agents/skills` 的 diagnosing-bugs / code-review / code-simplification，以及记忆中的汇报纪律、验证纪律、根因纪律）。dsh 的约束**全部住在仓库里**。这意味着换一个没有用户记忆的 Agent 实例（例如直接用任意 Claude Code 会话打开 Noesis），约一半流程约束失效。这是比任何单条规则都重要的差距。
 
 ### 4.1 两边都有的流程
 
 | 流程 | Noesis | dsh 多出的优点 |
 |---|---|---|
-| 分层 AGENTS.md | 根 + frontend/backend 三份 | 字数预算 gate；每条规则 1–3 行 + 链到唯一 rationale；文件自指修订说明 |
+| 分层 `AGENTS.md` | 根 + frontend/backend 三份 | 字数预算 gate；每条规则 1–3 行 + 链到唯一 rationale；文件自指修订说明 |
 | 流程 skills | openspec-* 8 个 + 仓库级 3 个（code-quality-audit / run-trace-analysis / product-facing-copy-audit） | invocation policy；「read, don't re-summarize」指向契约原文；规定汇报格式；skill 间显式声明边界 |
 | 决策记录 | `docs/NOTES.md` 决策卡片 + openspec `design.md`（变更期） | 同 PR 硬性交付；强制 Alternatives considered；supersession 审计；归档 hash 冻结。Noesis 的 NOTES.md 自由格式、无生命周期、无取代检查 |
 | Bug / 根因沉淀 | `docs/bug/` 状态流转 + `docs/debugging/` 根因沉淀 | 精神一致（Noesis 的「没长期价值就删」甚至更干净），dsh 优点仅在格式 gate。**不需要抄** |
@@ -137,10 +137,10 @@ dsh 的审查是三级流水线：gate + review bot 机器初审 → 持有 `dsh
 
 按性价比排序，均为候选，未经拍板：
 
-- **P0 — 补机器执法层（成本最低，直击文档漂移）**：写 `verify-md-links` 脚本进 CI（校验 docs/ 与 AGENTS.md 的相对链接与锚点，拒绝裸文件名引用），给根 AGENTS.md 定字数预算。小改动，可直接在 dev 上做。
-- **P1 — 决策记录升级**：NOTES.md → 轻量决策记录体系。只借三个机制：生命周期路径编码、Alternatives considered 强制节（Noesis 历史上多个裁决被反复推翻，正是缺此节的代价）、supersession 审计。可与 openspec 归档流程接通：archive 时把 design.md 中有长期价值的 rationale 提炼进决策记录，而非随 change 沉没。
-- **P2 — 审查经济学写进仓库**：AGENTS.md 协作约定或仓库级 review skill 增加三条：gate/CI 已证明的属性不许出现在 review 发现里；blocker 与 suggestion 强制分离；收到 review 逐条技术性验证或反驳、禁止表演性同意。
-- **P3 — CoT 泄漏修剪 skill**：将 8 类分类学适配为 Noesis 版仓库 skill，配检索探针。AGENTS.md 开发原则已有「禁止叙述性注释」，但缺可检索的缺陷模式。
+- **P0 — 补机器执法层（成本最低，直击文档漂移）**：写 `verify-md-links` 脚本进 CI（校验 docs/ 与 `AGENTS.md` 的相对链接与锚点，拒绝裸文件名引用），给根 `AGENTS.md` 定字数预算。小改动，可直接在 dev 上做。
+- **P1 — 决策记录升级**：`NOTES.md` → 轻量决策记录体系。只借三个机制：生命周期路径编码、Alternatives considered 强制节（Noesis 历史上多个裁决被反复推翻，正是缺此节的代价）、supersession 审计。可与 openspec 归档流程接通：archive 时把 `design.md` 中有长期价值的 rationale 提炼进决策记录，而非随 change 沉没。
+- **P2 — 审查经济学写进仓库**：`AGENTS.md` 协作约定或仓库级 review skill 增加三条：gate/CI 已证明的属性不许出现在 review 发现里；blocker 与 suggestion 强制分离；收到 review 逐条技术性验证或反驳、禁止表演性同意。
+- **P3 — CoT 泄漏修剪 skill**：将 8 类分类学适配为 Noesis 版仓库 skill，配检索探针。`AGENTS.md` 开发原则已有「禁止叙述性注释」，但缺可检索的缺陷模式。
 - **P4 — 约束仓库化**：把当前住在用户个人记忆里的纪律（根因汇报、交付前动态验证）沉淀进仓库。记忆约束的是「有记忆的 Agent」，仓库约束的是「任何 Agent」。
 
 P1 / P2 属方向性新能力，落地时各自开 OpenSpec change（design 以第一性口吻自洽叙述，不引用本报告中的外部项目，证据出处反向链接到本文档）；P0 可直接 dev 提交。
@@ -156,9 +156,9 @@ P1 / P2 属方向性新能力，落地时各自开 OpenSpec change（design 以�
 ## 7. 待验证问题
 
 - `verify-md-links` 在 Noesis 的中文文档 + 大量 mermaid/代码块场景下的误报率，需要实现后实测。
-- 决策记录与 openspec 的接缝：归档提炼的粒度（整篇 design.md 摘要 vs 只留被否方案与长期 rationale）没有定论，P1 立项时需要试跑几份样本。
+- 决策记录与 openspec 的接缝：归档提炼的粒度（整篇 `design.md` 摘要 vs 只留被否方案与长期 rationale）没有定论，P1 立项时需要试跑几份样本。
 - 审查经济学三条对互审质量的实际改善效果，需要在 research-harness 等多 Agent 协作场景中观察（该场景尚未落地，见 openspec `super-agent-research-harness`）。
-- dsh 制度的 token 成本：per-session 常驻 AGENTS.md 有预算，但 12 个 skill + 按需加载的隐性成本未见他们披露数字，Noesis 引入 P2/P3 后应关注。
+- dsh 制度的 token 成本：per-session 常驻 `AGENTS.md` 有预算，但 12 个 skill + 按需加载的隐性成本未见他们披露数字，Noesis 引入 P2/P3 后应关注。
 
 ## 8. 资料来源
 

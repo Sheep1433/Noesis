@@ -75,7 +75,7 @@ D 类（skill 快捷命令，所有 skill 自动暴露为 `/命令名`）**已�
 | Telegram | `TelegramBotClient.set_my_commands` 注册 Bot 命令菜单，输入 `/` 时原生弹出 |
 | CLI | `noesis help` 子命令 + 交互模式 readline Tab 补全（`_install_command_completer`） |
 
-`@command(name, description=...)` 是控制命令描述的单一来源；skill 命令描述取自 SKILL.md frontmatter。
+`@command(name, description=...)` 是控制命令描述的单一来源；skill 命令描述取自 `SKILL.md` frontmatter。
 
 ## 热加载
 

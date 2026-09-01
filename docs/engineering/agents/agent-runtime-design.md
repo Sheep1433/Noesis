@@ -4,7 +4,7 @@
 >
 > 代码基线：DeepAgents `0.6.12`、LangChain `1.3.15`、LangGraph `1.2.11`
 >
-> 变更设计：[`simplify-agent-context-architecture`](../../../openspec/changes/simplify-agent-context-architecture/design.md)
+> 变更设计：[`simplify-agent-context-architecture`](../../../openspec/changes/archive/2026-08-26-simplify-agent-context-architecture/design.md)
 
 ## 结论
 

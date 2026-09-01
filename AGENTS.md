@@ -13,6 +13,7 @@
 | `docs/research/` | 项目现状与外部技术调研 |
 | `docs/architecture/` | 当前长期架构与数据流 |
 | `docs/engineering/` | 高难度实现与工程经验 |
+| `docs/decisions/` | 决策记录：为什么这么定、否了什么、代价是什么 |
 | `docs/bug/` | Bug 记录 |
 | `docs/debugging/` | 疑难排查沉淀 |
 
@@ -74,10 +75,12 @@ run 内容流：`reasoning-start/delta/end`、`text-start/delta/end`、`tool-cal
 ```bash
 cd backend && uv run app.py     # 后端改动后必跑
 cd frontend && pnpm lint        # 前端按影响范围 lint / build
+python3 scripts/change-scope.py # 任何 diff 审查/选检查的起点（影响面 + 各层 owning checks）
 ```
 
-- Python 统一 `uv run`，禁止裸 `python`
+- Python 统一 `uv run`，禁止裸 `python`（`scripts/` 下校验脚本例外，纯标准库）
 - 测试目录：后端 `backend/tests/`（`api_contract/` = TestClient 级契约；`api/` = 真实服务级，`-m integration` 手动跑）；前端 `frontend/__tests__/`（vitest）与 `frontend/e2e/`（Playwright，`pnpm test:e2e`）
+- 文档改动跑 `python3 scripts/verify-md-links.py` 与 `python3 scripts/verify-decision-format.py`（CI 同款 gate，本地先红先修）
 - 每次测试完成后必须停止由 Agent 启动的后端、前端 dev/preview server 及临时测试进程，释放占用端口，避免与用户后续执行冲突
 - 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库
 - SSE、Agent、Qdrant、消息持久化相关改动优先补回归测试
@@ -167,14 +170,20 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 - 方案变更同步更新对应 `docs/architecture/` 或 `docs/engineering/` 文档，单文件演进，不做版本对比
 - 多次未解决的问题记录到 `docs/debugging/`（现象、根因、排查、方案）
 - 高关注区：SSE 持久化、Qdrant 异常、配置硬编码、JWT/DB 默认密钥、MCP 远程执行
+- **非平凡改动同提交附决策记录**（`docs/decisions/`，含被否方案）；实现 proposed 记录时将其改写为 implemented 并核实事实
+- **审查经济学**（见 `code-review` skill）：CI/gate 已证明的属性不进 review 发现；blocker 与 suggestion 分离；收到 review 逐条技术性验证或反驳，禁止表演性认同
+- **写作卫生**（见 `noesis-prose-hygiene` skill）：注释与文档以仓库当前状态为视角，不留「原先/被 review 否决/见讨论稿」类会话残留
 
 ### 代码质量 Skills
+
+以下 skill 全部位于仓库 `.agents/skills/`，随仓库对任何 Agent 实例生效；**仓库 skill 禁止在用户级目录保留同名副本**（单一归属，冲突以仓库版本为准）。
 
 | 场景 | 必须使用 | 约束 |
 |------|----------|------|
 | 修复 Bug、性能回退或偶发故障 | `diagnosing-bugs` | 先建立能捕获原始问题的稳定反馈，再定位根因；禁止先加 fallback、兼容分支或笼统 `try/except` |
-| 功能或重构完成、准备提交或合并 | `code-review` | 同时检查项目规范与原始 spec；重点检查需求遗漏、范围扩大及 Fowler code smells |
+| 功能或重构完成、准备提交或合并 | `code-review` | 同时检查项目规范与原始 spec；重点检查需求遗漏、范围扩大及 Fowler code smells；遵守审查经济学三条 |
 | review 已确认存在冗余、浅 wrapper、无需求支撑的抽象或复杂控制流 | `code-simplification` | 仅修改本次范围；保持输入、输出、异常和副作用顺序不变；测试通过不是简化成立的唯一依据，还要证明更易理解 |
+| 注释/文档写作或怀疑存在过期注释 | `noesis-prose-hygiene` | 会话视角残留审计，报告制执行（默认只报告不修改） |
 
 - 简单逻辑默认直接表达。只有概念需要命名、存在多个真实调用方、需要隔离变化或形成有效测试 seam 时才提取函数、类或接口。
 - Bug 修复必须删除被新方案取代的补丁、临时日志和不可达分支，不保留“以后可能有用”的兼容实现。
