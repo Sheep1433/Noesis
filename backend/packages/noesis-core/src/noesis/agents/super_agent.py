@@ -29,7 +29,6 @@ from noesis.agents.subagents.shell_tool import replace_execute_tool
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
-from noesis.agents.middlewares.memory_entries_middleware import build_memory_entries_middleware
 from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
@@ -114,7 +113,9 @@ class SuperAgent(BaseAgent):
         backend = await create_agent_backend(user_id, session_id)
         web_tools = build_web_search_tools()
         tools = list(web_tools) + list(mcp_tools or [])
-        tools.extend(build_memory_tools(user_id=user_id))
+        # Agentic 召回：root run 装配检索工具（命中后合并回写 run.memory_context，
+        # 作为抽取防自强化输入）；run_id/db 缺席时退化为纯只读检索
+        tools.extend(build_memory_tools(user_id=user_id, run_id=run_id, db=db))
         # KB 检索工具（用户勾选启用时挂载）
         if kb_search_enabled and kb_collections is not None:
             kb_tools = build_kb_search_tools(
@@ -153,9 +154,11 @@ class SuperAgent(BaseAgent):
         # worker 不携带后台任务工具自身（避免递归委派）。
         # worker 经工厂在隔离 loop 内惰性编译：LLM 客户端与 checkpointer
         # 连接池必须绑定隔离 loop（复用主 loop 实例会 cross-loop 报错）。
+        # worker 的检索只读不写：召回清单只归 root run（防自强化输入），
+        # 子 Agent 结论经父会话终态回流
         worker_tools = [
             tool for tool in tools if getattr(tool, "name", "") != "search_memory"
-        ]
+        ] + build_memory_tools(user_id=user_id)
 
         async def _bg_worker_factory(model_id_override: str | None = None):
             from noesis.config.checkpointer import create_isolated_checkpointer
@@ -279,12 +282,6 @@ class SuperAgent(BaseAgent):
             skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
             memory=resolved_context.memory_sources,
             memory_system_prompt=NOESIS_MEMORY_SYSTEM_PROMPT,
-            memory_entries_middleware=await build_memory_entries_middleware(
-                db=db,
-                user_id=user_id,
-                session_id=session_id,
-                run_id=run_id,
-            ),
             todo=True,
             interrupt_on=interrupt_on,
             model_id=model_id,

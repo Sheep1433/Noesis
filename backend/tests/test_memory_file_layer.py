@@ -135,15 +135,173 @@ def test_invalid_type_rejected(users_root: Path) -> None:
         )
 
 
+# ----- frontmatter：渲染/解析往返、容错、索引投影 -----
+
+
+def test_frontmatter_round_trip(users_root: Path) -> None:
+    entry = MemoryStore.upsert_entry(
+        "u1",
+        memory_type="preference",
+        label="文档格式",
+        body="一律表格、简体中文",
+        why="阅读快",
+        applicability="写文档时",
+        description="偏好表格化简体中文输出；涉及文档/报告/说明输出时调用",
+        sources=["会话 abc12345 · 2026-08-26"],
+    )
+    path = users_root / "u1" / "memory" / entry.rel_path
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    assert "type: preference" in text
+    assert "description: 偏好表格化简体中文输出；涉及文档/报告/说明输出时调用" in text
+    assert "**来源**" not in text  # 散文来源行迁入 frontmatter
+    assert "**更新时间**" not in text
+    parsed = MemoryStore.read_entry_file(path)
+    assert parsed["memory_type"] == "preference"
+    assert parsed["label"] == "文档格式"
+    assert parsed["description"] == "偏好表格化简体中文输出；涉及文档/报告/说明输出时调用"
+    assert parsed["body"] == "一律表格、简体中文"
+    assert parsed["why"] == "阅读快"
+    assert parsed["applicability"] == "写文档时"
+    assert parsed["sources"] == ["会话 abc12345 · 2026-08-26"]
+    assert parsed["created"] and parsed["updated_at"]
+
+
+def test_update_preserves_description_created_and_merges_sources(users_root: Path) -> None:
+    """更新路径：未提供新 description 保留既有值（防清空权威字段）、
+    created 不被重置、来源去重追加（引擎改写幂等）。"""
+    first = MemoryStore.upsert_entry(
+        "u1",
+        memory_type="decision",
+        label="包管理",
+        body="统一 pnpm",
+        description="包管理器统一 pnpm；新增前端项目或讨论工具链选型时调用",
+        sources=["会话 aaaa0000 · 2026-08-01"],
+    )
+    path = users_root / "u1" / "memory" / first.rel_path
+    created_before = MemoryStore.read_entry_file(path)["created"]
+    MemoryStore.upsert_entry(
+        "u1",
+        memory_type="decision",
+        label="包管理",
+        body="统一 pnpm（workspace 用 pnpm -w）",
+        sources=["会话 bbbb0000 · 2026-09-01", "会话 aaaa0000 · 2026-08-01"],
+    )
+    parsed = MemoryStore.read_entry_file(path)
+    assert parsed["description"] == "包管理器统一 pnpm；新增前端项目或讨论工具链选型时调用"
+    assert parsed["created"] == created_before
+    assert parsed["sources"] == ["会话 aaaa0000 · 2026-08-01", "会话 bbbb0000 · 2026-09-01"]
+    # 索引行 = frontmatter description 的投影
+    state = MemoryStore.read_index("u1")
+    assert state.entries[0].description == parsed["description"]
+
+
+def test_legacy_prose_entry_parses_via_fallback(users_root: Path) -> None:
+    """存量散文条目不迁移：散文容错路径长期保留。"""
+    entry = MemoryStore.upsert_entry(
+        "u1", memory_type="gotcha", label="边界", body="不要越过工作区", sources=["s0"]
+    )
+    path = users_root / "u1" / "memory" / entry.rel_path
+    legacy = (
+        "# 边界\n\n不要越过工作区（旧格式）\n\n"
+        "**Why**\n安全边界\n\n**适用条件**\n执行文件操作时\n\n"
+        "**来源**\n- 会话 cccc0000 · 2026-07-01\n\n**更新时间** 2026-07-01\n"
+    )
+    path.write_text(legacy, encoding="utf-8")
+    parsed = MemoryStore.read_entry_file(path)
+    assert parsed["label"] == "边界"
+    assert parsed["body"] == "不要越过工作区（旧格式）"
+    assert parsed["sources"] == ["会话 cccc0000 · 2026-07-01"]
+    assert parsed["updated_at"] == "2026-07-01"
+    assert parsed["description"] == "不要越过工作区（旧格式）"
+    assert parsed["memory_type"] == "gotcha"  # type 取自目录
+
+
+def test_broken_frontmatter_degrades_to_prose(users_root: Path) -> None:
+    """frontmatter YAML 写坏 → 退化为无元数据条目，检索与重建不失败。"""
+    entry = MemoryStore.upsert_entry(
+        "u1", memory_type="experience", label="重试", body="指数退避", sources=["s"]
+    )
+    path = users_root / "u1" / "memory" / entry.rel_path
+    path.write_text(
+        "---\ntype: experience\nlabel: 坏掉的: frontmatter\n  bad indent\n---\n\n# 重试\n\n指数退避\n",
+        encoding="utf-8",
+    )
+    parsed = MemoryStore.read_entry_file(path)
+    assert parsed["body"]  # 正文照常可读
+    assert parsed["memory_type"] == "experience"  # type 取自目录
+    assert MemoryStore.search("u1", "指数退避")  # 检索不失败
+    rebuilt = MemoryStore.rebuild_index("u1")  # 索引重建不失败
+    assert [e.label for e in rebuilt.entries] == ["重试"]
+
+
+def test_legacy_entry_upgraded_on_engine_write(users_root: Path) -> None:
+    """存量条目被引擎写入时自然升级为 frontmatter（散文解析结果迁入字段）。"""
+    directory = users_root / "u1" / "memory" / "goal"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "nodejs.md"
+    path.write_text(
+        "# 学习路线\n\n在学 Node.js\n\n**来源**\n- 会话 dddd0000 · 2026-08-01\n\n**更新时间** 2026-08-01\n",
+        encoding="utf-8",
+    )
+    MemoryStore.upsert_entry(
+        "u1",
+        memory_type="goal",
+        label="学习路线",
+        body="在学 Node.js（已到异步篇）",
+        sources=["会话 eeee0000 · 2026-09-01"],
+        slug="nodejs",
+    )
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    parsed = MemoryStore.read_entry_file(path)
+    assert parsed["sources"] == ["会话 dddd0000 · 2026-08-01", "会话 eeee0000 · 2026-09-01"]
+    assert parsed["body"] == "在学 Node.js（已到异步篇）"
+
+
+def test_index_projection_overrides_manual_index_edit(users_root: Path) -> None:
+    """用户只手改索引行 description：条目下次引擎写入时被 frontmatter 覆盖。"""
+    entry = MemoryStore.upsert_entry(
+        "u1",
+        memory_type="preference",
+        label="文档格式",
+        body="一律表格",
+        description="偏好表格化输出；写文档时调用",
+        sources=["s"],
+    )
+    index = users_root / "u1" / "memory" / "MEMORY.md"
+    index.write_text(
+        index.read_text(encoding="utf-8").replace(
+            "偏好表格化输出；写文档时调用", "手改的索引描述"
+        ),
+        encoding="utf-8",
+    )
+    assert MemoryStore.read_index("u1").entries[0].description == "手改的索引描述"
+    MemoryStore.upsert_entry(
+        "u1",
+        memory_type="preference",
+        label="文档格式",
+        body="一律表格、带脚注",
+        sources=["s2"],
+        slug=entry.slug,
+    )
+    assert (
+        MemoryStore.read_index("u1").entries[0].description
+        == "偏好表格化输出；写文档时调用"
+    )
+
+
 # ----- 抽取守卫 -----
 
 
-def _result(entries, journal="摘要"):
-    return extraction.ExtractionResult(entries=entries, journal_summary=journal)
+def _result(entries, journal="摘要", excluded=()):
+    return extraction.ExtractionResult(
+        entries=entries, journal_summary=journal, excluded=list(excluded)
+    )
 
 
 @pytest.mark.asyncio
-async def test_apply_restatement_of_injected_entry_is_skipped(
+async def test_apply_restatement_of_recalled_entry_is_skipped(
     users_root: Path,
 ) -> None:
     entry = MemoryStore.upsert_entry(
@@ -156,14 +314,14 @@ async def test_apply_restatement_of_injected_entry_is_skipped(
         user_id="u1",
         session_id="sess-restated",
         result=result,
-        injected=[entry.rel_path],
+        recalled=[entry.rel_path],
     )
     text = (users_root / "u1" / "memory" / entry.rel_path).read_text(encoding="utf-8")
     assert "sess-restated" not in text  # 复述未追加来源
 
 
 @pytest.mark.asyncio
-async def test_apply_correction_of_injected_entry_updates(users_root: Path) -> None:
+async def test_apply_correction_of_recalled_entry_updates(users_root: Path) -> None:
     entry = MemoryStore.upsert_entry(
         "u1", memory_type="decision", label="包管理", body="统一 pnpm", sources=["s0"]
     )
@@ -182,7 +340,7 @@ async def test_apply_correction_of_injected_entry_updates(users_root: Path) -> N
         user_id="u1",
         session_id="sess-correct",
         result=result,
-        injected=[entry.rel_path],
+        recalled=[entry.rel_path],
     )
     text = (users_root / "u1" / "memory" / entry.rel_path).read_text(encoding="utf-8")
     assert "改用 bun" in text
@@ -198,7 +356,7 @@ async def test_apply_caps_new_entries_and_drops_extra(users_root: Path) -> None:
         ]
     )
     await extraction.MemoryExtractionService._apply(
-        user_id="u1", session_id="sess-cap", result=result, injected=[]
+        user_id="u1", session_id="sess-cap", result=result, recalled=[]
     )
     state = MemoryStore.read_index("u1")
     assert len(state.entries) == 3  # max_entries_per_extraction
@@ -210,7 +368,7 @@ async def test_apply_invalid_type_goes_nowhere(users_root: Path) -> None:
         [extraction.ExtractedEntry(memory_type="workflow", label="w", body="b")]
     )
     await extraction.MemoryExtractionService._apply(
-        user_id="u1", session_id="sess-type", result=result, injected=[]
+        user_id="u1", session_id="sess-type", result=result, recalled=[]
     )
     assert MemoryStore.read_index("u1").entries == []
     assert list((users_root / "u1" / "memory" / "journal").glob("*.md"))
@@ -220,7 +378,7 @@ async def test_apply_invalid_type_goes_nowhere(users_root: Path) -> None:
 async def test_apply_zero_value_session_writes_nothing(users_root: Path) -> None:
     result = extraction.ExtractionResult(entries=[], journal_summary="")
     await extraction.MemoryExtractionService._apply(
-        user_id="u1", session_id="sess-empty", result=result, injected=[]
+        user_id="u1", session_id="sess-empty", result=result, recalled=[]
     )
     assert MemoryStore.read_index("u1").entries == []
     assert list((users_root / "u1" / "memory" / "journal").glob("*.md")) == []
@@ -337,7 +495,7 @@ async def test_watermark_advanced_only_on_success(monkeypatch: pytest.MonkeyPatc
     from unittest.mock import patch
 
     with (
-        patch.object(MemoryExtractionService, "_load_injected", AsyncMock(return_value=[])),
+        patch.object(MemoryExtractionService, "_load_recalled", AsyncMock(return_value=[])),
         patch.object(MemoryExtractionService, "_run_llm", boom),
     ):
         with pytest.raises(RuntimeError):
@@ -506,3 +664,252 @@ async def test_mark_extracted_preserves_updated_at() -> None:
         assert session.memory_extracted_at is not None
         assert session.updated_at == original  # onupdate 被抑制
     engine.dispose()
+
+
+# ----- 抽取决策落 journal（含排除理由） -----
+
+
+@pytest.mark.asyncio
+async def test_apply_records_extraction_decisions_in_journal(users_root: Path) -> None:
+    result = _result(
+        [
+            extraction.ExtractedEntry(
+                memory_type="preference",
+                label="文档格式",
+                body="一律表格",
+                description="偏好表格化输出；写文档时调用",
+                reason="用户两次纠正输出格式",
+            )
+        ],
+        journal="讨论文档格式",
+        excluded=[
+            extraction.ExcludedItem(gist="本次部署的临时端口", reason="临时任务状态")
+        ],
+    )
+    await extraction.MemoryExtractionService._apply(
+        user_id="u1", session_id="sess-dec", result=result, recalled=[]
+    )
+    text = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in (users_root / "u1" / "memory" / "journal").glob("*.md")
+    )
+    assert "（抽取决策）" in text
+    assert "- 新建：preference/" in text
+    assert "用户两次纠正输出格式" in text
+    assert "本次部署的临时端口" in text and "临时任务状态" in text
+    # description 进入 frontmatter 并投影到索引行
+    state = MemoryStore.read_index("u1")
+    assert state.entries[0].description == "偏好表格化输出；写文档时调用"
+
+
+@pytest.mark.asyncio
+async def test_apply_exclusions_only_still_records_decisions(users_root: Path) -> None:
+    """零新条目但有排除：决策块仍落 journal（spec 场景）。"""
+    result = extraction.ExtractionResult(
+        entries=[],
+        excluded=[
+            extraction.ExcludedItem(gist="git 历史可得的信息", reason="代码本身可得")
+        ],
+        journal_summary="技术闲聊",
+    )
+    await extraction.MemoryExtractionService._apply(
+        user_id="u1", session_id="sess-excl", result=result, recalled=[]
+    )
+    assert MemoryStore.read_index("u1").entries == []
+    journal = list((users_root / "u1" / "memory" / "journal").glob("*.md"))
+    text = journal[0].read_text(encoding="utf-8")
+    assert "（抽取决策）" in text
+    assert "git 历史可得的信息" in text
+
+
+@pytest.mark.asyncio
+async def test_apply_restatement_exclusion_recorded(users_root: Path) -> None:
+    """防自强化拦截也进决策块（线上坏记忆可对账）。"""
+    entry = MemoryStore.upsert_entry(
+        "u1", memory_type="preference", label="文档格式", body="一律表格", sources=["s0"]
+    )
+    result = _result(
+        [extraction.ExtractedEntry(memory_type="preference", label="文档格式", body="一律表格")]
+    )
+    await extraction.MemoryExtractionService._apply(
+        user_id="u1",
+        session_id="sess-restated",
+        result=result,
+        recalled=[entry.rel_path],
+    )
+    text = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in (users_root / "u1" / "memory" / "journal").glob("*.md")
+    )
+    assert "复述本轮召回条目" in text
+
+
+# ----- 抽取/整理 prompt 防呆断言 -----
+
+
+def test_extraction_prompt_contains_routing_guardrails() -> None:
+    prompt = extraction._EXTRACTION_PROMPT
+    # 时效性禁入稳定类型（硬规则）
+    assert "只能进 goal" in prompt
+    assert "不得写入 preference/decision/experience/gotcha" in prompt
+    # 灰色地带 few-shot 对照示例
+    assert "定了包管理用 pnpm」→ decision" in prompt
+    assert "就是喜欢 pnpm 的简洁」→ preference" in prompt
+    assert "Q3 要做完迁移」→ goal" in prompt
+    # description 两段式约束
+    assert "何时调用" in prompt
+
+
+def test_consolidation_prompt_contains_priority_rules() -> None:
+    from noesis.services.memory.consolidation import _CONSOLIDATION_PROMPT
+
+    prompt = _CONSOLIDATION_PROMPT
+    assert "用户显式修正" in prompt
+    assert "稳定类型" in prompt
+    assert "时间与证据" in prompt
+    assert "不得静默改写" in prompt
+    assert "new_description" in prompt
+
+
+# ----- 整理：改写/淘汰前快照 + description 同步 + type 归位 -----
+
+
+@pytest.mark.asyncio
+async def test_consolidation_snapshots_and_syncs_description(users_root: Path) -> None:
+    from noesis.services.memory.consolidation import (
+        ConsolidateAction,
+        MemoryConsolidationService as MCS,
+    )
+
+    keep = MemoryStore.upsert_entry(
+        "u1", memory_type="experience", label="索引重建", body="超预算时重建索引", sources=["s1"]
+    )
+    dup = MemoryStore.upsert_entry(
+        "u1",
+        memory_type="experience",
+        label="重复经验",
+        body="超预算时重建索引（重复）",
+        description="重复条目；测试用",
+        sources=["s2"],
+    )
+    stale = MemoryStore.upsert_entry(
+        "u1", memory_type="goal", label="临时目标", body="一次性的旧目标", sources=["s3"]
+    )
+    dup_text_before = (users_root / "u1" / "memory" / dup.rel_path).read_text(encoding="utf-8")
+    result = type("R", (), {"actions": [
+        ConsolidateAction(
+            op="merge", target=dup.rel_path, merge_into=keep.rel_path,
+            new_body="超预算时重建索引", new_label="索引重建",
+        ),
+        ConsolidateAction(
+            op="rewrite", target=keep.rel_path, new_body="超预算时重建索引（v2）",
+            new_description="索引超预算时从条目目录重建；整理压缩索引时调用",
+        ),
+        ConsolidateAction(op="remove", target=stale.rel_path, reason="目标已完结"),
+    ]})()
+    applied = MCS._apply("u1", result, 0)
+    assert applied == 4  # merge 记 2、rewrite 记 1、remove 记 1
+    journal_text = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in (users_root / "u1" / "memory" / "journal").glob("*.md")
+    )
+    # merge 双方、rewrite/remove 目标的改前全文快照（含 frontmatter）落 journal
+    for rel in (dup.rel_path, keep.rel_path, stale.rel_path):
+        assert f"（整理快照 · 原条目 {rel}）" in journal_text
+    assert dup_text_before.strip() in journal_text  # 快照含 frontmatter 原文
+    assert not (users_root / "u1" / "memory" / stale.rel_path).is_file()
+    # rewrite 后 description 同步（new_description 生效）
+    kept = MemoryStore.read_entry("u1", "experience", keep.slug)
+    assert kept["description"] == "索引超预算时从条目目录重建；整理压缩索引时调用"
+    assert MemoryStore.read_index("u1").entries[0].description == kept["description"]
+
+
+@pytest.mark.asyncio
+async def test_consolidation_rewrite_without_description_preserves(users_root: Path) -> None:
+    from noesis.services.memory.consolidation import (
+        ConsolidateAction,
+        MemoryConsolidationService as MCS,
+    )
+
+    entry = MemoryStore.upsert_entry(
+        "u1",
+        memory_type="decision",
+        label="包管理",
+        body="统一 pnpm",
+        description="包管理器统一 pnpm；选型讨论时调用",
+        sources=["s"],
+    )
+    result = type("R", (), {"actions": [
+        ConsolidateAction(op="rewrite", target=entry.rel_path, new_body="统一 pnpm（corepack）"),
+    ]})()
+    assert MCS._apply("u1", result, 0) == 1
+    parsed = MemoryStore.read_entry("u1", "decision", entry.slug)
+    assert parsed["body"] == "统一 pnpm（corepack）"
+    assert parsed["description"] == "包管理器统一 pnpm；选型讨论时调用"  # 留空保留原值
+
+
+def test_consolidation_aligns_frontmatter_type(users_root: Path) -> None:
+    from noesis.services.memory.consolidation import (
+        MemoryConsolidationService as MCS,
+    )
+
+    entry = MemoryStore.upsert_entry(
+        "u1", memory_type="preference", label="文档格式", body="一律表格", sources=["s"]
+    )
+    path = users_root / "u1" / "memory" / entry.rel_path
+    # 模拟用户挪动文件后 frontmatter type 与目录不一致
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("type: preference", "type: goal"),
+        encoding="utf-8",
+    )
+    fixes = MCS._align_frontmatter_types("u1")
+    assert fixes == [f"preference/{entry.slug}.md（frontmatter goal → preference）"]
+    assert "type: preference" in path.read_text(encoding="utf-8")
+    # 文件未移动、其余字段保留
+    assert path.is_file()
+    parsed = MemoryStore.read_entry_file(path)
+    assert parsed["label"] == "文档格式" and parsed["body"] == "一律表格"
+    # 归位动作记录进 journal
+    journal_text = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in (users_root / "u1" / "memory" / "journal").glob("*.md")
+    )
+    assert "整理归位" in journal_text
+
+
+def test_recent_journal_excludes_snapshot_blocks(users_root: Path) -> None:
+    from noesis.services.memory.consolidation import (
+        MemoryConsolidationService as MCS,
+    )
+
+    MemoryStore.append_journal("u1", session_id="sess-1", text="正常情景块")
+    MemoryStore.append_journal(
+        "u1",
+        session_id=None,
+        text="快照正文（不应进入整理信号）",
+        label="整理快照 · 原条目 goal/x.md",
+    )
+    journal = MCS._recent_journal("u1")
+    assert "正常情景块" in journal
+    assert "快照正文" not in journal
+
+
+def test_recent_journal_strips_snapshot_with_embedded_headers(users_root: Path) -> None:
+    """快照正文内嵌 ``## `` 标题行时整块剔除，不漏进整理信号（回归）。"""
+    from noesis.services.memory.consolidation import (
+        MemoryConsolidationService as MCS,
+    )
+
+    MemoryStore.append_journal("u1", session_id="sess-a", text="正常情景块")
+    MemoryStore.append_journal(
+        "u1",
+        session_id=None,
+        text="快照正文首行\n\n## 内嵌小节（非时间戳块头）\n\n快照正文尾巴",
+        label="整理快照 · 原条目 goal/x.md",
+    )
+    MemoryStore.append_journal("u1", session_id="sess-b", text="后续正常块")
+    journal = MCS._recent_journal("u1")
+    assert "正常情景块" in journal and "后续正常块" in journal
+    assert "快照正文首行" not in journal
+    assert "内嵌小节" not in journal
+    assert "快照正文尾巴" not in journal

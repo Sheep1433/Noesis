@@ -203,15 +203,13 @@ qdrant:
 # md 文件记忆层（索引 + 五类条目 + 情景日志）；功能启停由每个用户的单一开关控制。
 memory:
   extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
-  selection_model: ""        # 空 = 默认对话模型（每 Run 注入选条，可用廉价模型）
   enabled_by_default: false  # fail-closed：评测门禁通过后再默认开启
   session_idle_minutes: 10   # 会话 idle 判定（终态触发抽取）
   sweep_interval_minutes: 30 # 未抽取会话补扫间隔
   max_entries_per_extraction: 3
   index_max_lines: 200       # 索引预算双保险
   index_max_bytes: 25600
-  stale_warning_days: 2      # 超龄条目注入时附 stale 警告
-  inject_budget_tokens: 2000
+  stale_warning_days: 2      # 超龄条目检索结果附 stale 警告
   max_entry_chars: 4000
   consolidation_min_interval_hours: 24   # AutoDream 门控：距上次整理最小间隔
   consolidation_min_new_sessions: 5      # 且期间新抽取会话数达此值才整理

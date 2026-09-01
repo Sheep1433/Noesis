@@ -64,7 +64,6 @@ class NoesisStackDeps:
     skills_system_prompt: str | None = None
     memory_sources: Sequence[str] = ()
     memory_system_prompt: str | None = None
-    memory_entries_middleware: Any = None
     todo: bool = False
     subagents: Sequence[SubAgent | CompiledSubAgent] = ()
     async_subagents: Sequence[AsyncSubAgent] = ()
@@ -143,8 +142,6 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
             )
         )
 
-    if deps.memory_entries_middleware is not None and deps.profile != "SUBAGENT":
-        stack.append(deps.memory_entries_middleware)
     stack.append(DynamicContextMiddleware(deps.dynamic_context_provider))
     if deps.profile in {"SUPER_AGENT_QA", "FAULT_OPERATION_QA"}:
         stack.append(DurableContextMiddleware())
