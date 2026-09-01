@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noesis Code Quality Audit"
+  short_description: "Scan Noesis for AI code smells and dead code"
+  default_prompt: "Use $noesis-code-quality-audit to scan this Noesis project for code smells, complexity, duplication, dead code, and AI-generated abstractions."
