@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,7 +29,8 @@ SCAN_GLOBS = [
 ]
 SCAN_DIRS = ["openspec/changes"]  # 排除 archive/
 
-EXCLUDE_PARTS = {"node_modules", "archive", ".git"}
+# .noesis/.zcode 为 gitignore 的本地运行时数据，不参与「仓库存在该文件」判定
+EXCLUDE_PARTS = {"node_modules", "archive", ".git", ".noesis", ".zcode"}
 
 LINK_RE = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 BARE_MD_RE = re.compile(r"(?<![\w/.-])([A-Za-z0-9_\-.\u4e00-\u9fff]+\.md)\b")
@@ -99,8 +101,12 @@ def strip_code(text: str) -> tuple[str, str]:
 
 def main() -> int:
     files = collect_files()
-    all_md_names = {p.name for p in REPO.rglob("*.md")
-                    if not any(part in EXCLUDE_PARTS for part in p.parts)}
+    # 「仓库存在该文件」以 git 跟踪文件为准（CI 同一视野；本地运行时数据
+    # 与未跟踪产物不参与判定）
+    tracked = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "--", "*.md"],
+        capture_output=True, text=True, check=True).stdout
+    all_md_names = {Path(line).name for line in tracked.splitlines() if line}
     findings: list[str] = []
     heading_cache: dict[Path, set[str]] = {}
 
