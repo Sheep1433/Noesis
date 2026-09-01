@@ -140,9 +140,9 @@ SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理
 
 ## 8. 代码入口
 
-- Run 单写入边界：`backend/packages/noesis-core/src/noesis/domain/chat/runs/manager.py`
-- raw event mapper：`backend/packages/noesis-core/src/noesis/domain/chat/streaming/mapper.py`
-- SSE Delivery：`backend/packages/noesis-core/src/noesis/domain/chat/delivery/sse.py`
+- Run 单写入边界：`backend/packages/noesis-core/src/noesis/chat/runs/manager.py`
+- raw event mapper：`backend/packages/noesis-core/src/noesis/chat/event_mapping/mapper.py`
+- SSE Delivery：`backend/packages/noesis-core/src/noesis/chat/delivery/sse.py`
 - Run Service：`backend/packages/noesis-core/src/noesis/services/run_service.py`
 - Repository：`backend/packages/noesis-core/src/noesis/repositories/agent_run_repository.py`
 - API：`backend/server/api/chat_api.py`
