@@ -41,6 +41,11 @@ _SUMMARY_FAILURE_PREFIXES = (
     "summary is unavailable",
 )
 
+# 摘要生成调用的 run tag：该调用在图内执行，其 astream_events 事件若不过滤
+# 会被 bridge 当成正文模型调用——摘要 JSON 变成 assistant text part 上屏，
+# usage/步数也混入基础设施调用。stream_agent_events 据此丢弃。
+COMPACTION_SUMMARY_TAG = "noesis_compaction_summary"
+
 
 class CompactionState(AgentState[ResponseT]):
     """Checkpointed policy state which is hidden from agent output."""

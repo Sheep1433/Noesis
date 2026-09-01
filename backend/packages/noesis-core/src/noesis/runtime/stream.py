@@ -15,6 +15,7 @@ from langgraph.types import Command
 
 from noesis.runtime.logging import logger
 from noesis.runtime.deps import langfuse_tracing_enabled, merge_langfuse_runnable_config
+from noesis.agents.middlewares.compaction_middleware import COMPACTION_SUMMARY_TAG
 from noesis.runtime.hitl import (
     _tool_calls_from_model_end,
     build_hitl_required_event,
@@ -102,6 +103,11 @@ async def stream_agent_events(
             stream_input,
             config=agent_config,
         ):
+            # 压缩摘要生成是图内基础设施调用（factory 打 tag）：其模型事件
+            # 不得进入消息投影——否则摘要 JSON 被当成正文 text part 上屏，
+            # usage/步数也混入该调用
+            if COMPACTION_SUMMARY_TAG in (event.get("tags") or []):
+                continue
             _last_event_at = time.monotonic()
             if is_cancelled and is_cancelled():
                 logger.info(

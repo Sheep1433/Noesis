@@ -21,6 +21,7 @@ from noesis.agents.middlewares import (
     DynamicContextBlock,
     DynamicContextProvider,
 )
+from noesis.agents.middlewares.compaction_middleware import COMPACTION_SUMMARY_TAG
 from noesis.agents.middlewares.stack import NoesisStackDeps, build_noesis_stack
 from noesis.config.env import HitlConfig, ModelConfig
 from noesis.llm.factory import get_llm
@@ -81,10 +82,16 @@ def _compaction_deps(model: Any, model_id: str | None) -> dict[str, Any]:
     )
 
     def summarize(messages: list) -> str:
-        return summary_model.invoke(prompt.format(messages=messages)).text.strip()
+        return summary_model.invoke(
+            prompt.format(messages=messages),
+            config={"tags": [COMPACTION_SUMMARY_TAG]},
+        ).text.strip()
 
     async def async_summarize(messages: list) -> str:
-        response = await summary_model.ainvoke(prompt.format(messages=messages))
+        response = await summary_model.ainvoke(
+            prompt.format(messages=messages),
+            config={"tags": [COMPACTION_SUMMARY_TAG]},
+        )
         return response.text.strip()
 
     def request_tokens(request) -> int:
@@ -139,7 +146,6 @@ def build_noesis_middleware(
     skills_system_prompt: str | None = None,
     memory: Sequence[str] = (),
     memory_system_prompt: str | None = None,
-    memory_entries_middleware: Any = None,
     todo: bool = False,
     subagents: Sequence[SubAgent | CompiledSubAgent] = (),
     async_subagents: Sequence[AsyncSubAgent] = (),
@@ -173,7 +179,6 @@ def build_noesis_middleware(
             skills_system_prompt=skills_system_prompt,
             memory_sources=memory,
             memory_system_prompt=memory_system_prompt,
-            memory_entries_middleware=memory_entries_middleware,
             todo=todo,
             subagents=subagents,
             async_subagents=async_subagents,
@@ -207,7 +212,6 @@ def create_noesis_agent(
     skills_system_prompt: str | None = None,
     memory: Sequence[str] = (),
     memory_system_prompt: str | None = None,
-    memory_entries_middleware: Any = None,
     todo: bool = False,
     subagents: Sequence[SubAgent | CompiledSubAgent] = (),
     async_subagents: Sequence[AsyncSubAgent] = (),
@@ -239,7 +243,6 @@ def create_noesis_agent(
         skills_system_prompt=skills_system_prompt,
         memory=memory,
         memory_system_prompt=memory_system_prompt,
-        memory_entries_middleware=memory_entries_middleware,
         todo=todo,
         subagents=subagents,
         async_subagents=async_subagents,
