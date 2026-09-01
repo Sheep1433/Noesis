@@ -1,6 +1,6 @@
 # openspec 目录约定
 
-本目录的 standing orders。openspec-* skill 由 openspec CLI 生成（`openspec update` 会重写它们），**禁止本地修改**——Noesis 特有的流程要求全部写在本文件，经 AGENTS.md 层级对任何 Agent 生效。
+本目录的 standing orders。Noesis 特有的流程要求全部写在本文件，经 AGENTS.md 层级对任何 Agent 生效。
 
 ## 提案门禁（propose）
 

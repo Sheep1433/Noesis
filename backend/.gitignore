@@ -73,3 +73,6 @@ evals/agent/browsecomp/data/*.csv
 config.yaml
 config.yaml.bak
 config.prod.yaml
+
+# ERB 检索评测数据集（几百 MB 语料 + 题目 + 清单，不入库）
+evals/kb/erb_data/

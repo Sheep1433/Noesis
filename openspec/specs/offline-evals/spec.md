@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力索引 Noesis **离线评测**入口：`evals.agent`（BrowseComp / Harbor / Agentic RAG）、`evals.case`（测试用例两阶段 promptfoo）、`evals.compression`（消息摘要压缩）、`evals.kb`（单集合检索）。在线 chat 与 CaseCoordinator 产品行为见 `agent-profiles` / `platform-chat`。
+本能力索引 Noesis **离线评测**入口：`evals.agent`（BrowseComp / Harbor / Agentic RAG）、`evals.case`（测试用例两阶段 promptfoo）、`evals.compression`（消息摘要压缩）、`evals.kb`（单集合检索 + ERB 企业级基准）。在线 chat 与 CaseCoordinator 产品行为见 `agent-profiles` / `platform-chat`。
 ## Requirements
 ### Requirement: Agent 离线评测经 harness
 
@@ -85,6 +85,20 @@
 
 - **WHEN** 开发者打开 `backend/evals/` 文档
 - **THEN** SHALL 能找到 kb / case / agent / compression 各类入口说明
+
+### Requirement: ERB 企业级检索基准
+
+`evals.kb.erb` SHALL 对 `erb-eval` 集合执行 EnterpriseRAG-Bench 子集评测：正样本题（GT 文档全部在语料内）SHALL 输出 Recall 与 GT 命中排名，负样本（info_not_found）SHALL 输出各阈值档位的拒答/误检判定。评测 SHALL 单次检索记录原始 rerank 分并离线模拟阈值，SHALL NOT 为同一题重复调用检索 API。数据集与语料清单 SHALL 位于 gitignored 目录，经 `ERB_DATA_DIR` 可覆盖。
+
+#### Scenario: 抽样冒烟
+
+- **WHEN** 运行 `uv run python -m evals.kb.erb --sample 2`
+- **THEN** SHALL 各抽一道正样本与负样本，打印 top-10、GT 命中标记与阈值模拟结果
+
+#### Scenario: GT 不在语料的题不参与正样本评测
+
+- **WHEN** 题目的 `expected_doc_ids` 存在未入库文档（如 gmail 来源）
+- **THEN** 该题 SHALL 被排除出正样本集（检索不到是正确行为，不应计为 miss）
 
 ### Requirement: Run memory 评测 SHALL 使用冻结且带 source span 的数据集
 

@@ -11,6 +11,7 @@
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
 | 知识库检索（单集合） | `uv run python -m evals.kb.run --collection <name>` | 已实现 |
+| 知识库检索（ERB 基准） | `uv run python -m evals.kb.erb --all` | 已实现 |
 
 ```bash
 cd backend
@@ -326,5 +327,20 @@ uv run python -m evals.kb.run --collection requirement_docs --dataset evals/kb/f
 ```
 
 可选 `--k`、`--query-params '{"use_reranker":false}'`。默认读取目标集合 PostgreSQL `query_params` 并走 `KbRetrievalService` 全链路。
+
+### 5.1 ERB 企业级基准（`evals.kb.erb`）
+
+EnterpriseRAG-Bench（Onyx）子集：**211 正样本题**（GT 全部在语料内）+ **20 info_not_found 负样本**，语料 `erb-eval` 集合（312 GT + 220 confluence 干扰，文件名已转短名，`ingest_plan.json` 为语料清单与 dsid 映射）。
+
+```bash
+cd backend
+uv run python -m evals.kb.erb --sample 2   # 抽样冒烟（正/负各一）
+uv run python -m evals.kb.erb --all        # 全量 211+20，rerank 成本 ~2 元
+```
+
+- 指标：Recall@K（top-10 + GT 命中排名）、阈值离线模拟（正样本 GT 保留 vs 负样本拒答，档位 0.30~0.0）、负拒率
+- 设计：单次检索记录原始 rerank 分（`score_threshold=0`），阈值效果离线模拟，不重复调用 API
+- 数据集：`evals/kb/erb_data/`（gitignored；`ERB_DATA_DIR` 可覆盖）。语料入库用集合级 `chunk_size=2000/overlap=200`，阈值 `score_threshold=0.05`
+- 方案文档：`/Users/zzq/Desktop/docs/knowledge-base/Interview/highlights/evals/Noesis-评测体系-方案.md` §3.1
 
 `sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/architecture/platform/chat-streaming.md`）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。
