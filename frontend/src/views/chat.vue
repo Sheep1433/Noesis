@@ -3415,125 +3415,21 @@ function onComposerPaste(e: ClipboardEvent) {
                           </div>
                           <div class="assistant-unified-card">
                             <ConversationPartsRenderer
-                              v-if="canUseSharedConversationRenderer(item)"
                               :content="item.messageContent"
                               appearance="light"
                               :collapse-signal="runCollapseSignal"
                               :retrieval-results="messageRetrievalResults(item)"
                               :msg-metadata="item.msg_metadata"
                               :qa-type="item.qa_type || 'COMMON_QA'"
+                              :task-for-tool-part="backgroundTaskForToolPart"
+                              :compact-tools="toolDisplayMode === 'compact'"
+                              :live-streaming="!item.completed_at"
+                              :collapsed="shouldCollapseAssistantRun(item) && !isAssistantRunExpanded(item)"
+                              :is-init="isInit"
+                              :is-view="isView"
+                              :show-action-bar="false"
+                              @reader-failed="() => onFailedReader(index)"
                             />
-                            <template
-                              v-else
-                            >
-                              <template
-                                v-for="(entry, pi) in assistantDisplayParts(item)"
-                                :key="entryKey(entry, pi)"
-                              >
-                                <ReasoningBlock
-                                  v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
-                                  :reasoning="entry.part.content"
-                                  :defaultOpen="false"
-                                  :streaming="entry.part.status === 'streaming'"
-                                  appearance="light"
-                                  :collapse-signal="runCollapseSignal"
-                                />
-                                <SubagentCollapse
-                                  v-else-if="entry.kind === 'subagent'"
-                                  appearance="light"
-                                  :input="entry.part.input"
-                                  :output="entry.part.output"
-                                  :status="entry.part.status"
-                                  :state="entry.part.state"
-                                  :error="entry.part.error"
-                                  :duration-ms="entry.part.duration_ms"
-                                  :child-parts="entry.childParts"
-                                />
-                                <div
-                                  v-else-if="entry.kind === 'parallel_tools'"
-                                  class="parallel-tools-group parallel-tools-group--light"
-                                  :class="{ 'parallel-tools-group--compact': toolDisplayMode === 'compact' }"
-                                >
-                                  <n-collapse>
-                                    <!-- 流式中展开看进度，回复完成（completed_at）后收起；key 随完成态变化触发重渲染（default-expanded 仅首渲染生效） -->
-                                    <n-collapse-item
-                                      :key="`ptg-${item.completed_at ? 'done' : 'live'}-${runCollapseSignal}`"
-                                      name="parallel-tools"
-                                      :default-expanded="!item.completed_at"
-                                    >
-                                      <template #header>
-                                        <div class="parallel-tools-group__header">
-                                          并行工具 · {{ entry.parts.length }} 个
-                                        </div>
-                                      </template>
-                                      <div class="parallel-tools-group__body">
-                                        <ToolCallCollapse
-                                          v-for="tp in entry.parts"
-                                          :key="tp.tool_call_id ?? tp.id"
-                                          appearance="light"
-                                          :name="tp.name"
-                                          :arguments="tp.input"
-                                          :result="tp.output"
-                                          :error="tp.error"
-                                          :status="tp.status"
-                                          :state="tp.state"
-                                          :error-category="tp.errorCategory"
-                                          :exit-code="tp.exit_code"
-                                          :truncated="tp.truncated"
-                                          :duration-ms="tp.duration_ms"
-                                          :collapse-signal="runCollapseSignal"
-                                          :retrieval-part="retrievalPartForToolPart(item, tp.tool_call_id)"
-                                        />
-                                      </div>
-                                    </n-collapse-item>
-                                  </n-collapse>
-                                </div>
-                                <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
-                                  <BackgroundSubagentCollapse
-                                    v-if="entry.part.name === 'start_task'"
-                                    :tool-part="entry.part"
-                                    :task="backgroundTaskForToolPart(entry.part)"
-                                  />
-                                  <ToolCallCollapse
-                                    v-else
-                                    appearance="light"
-                                    :name="entry.part.name"
-                                    :arguments="entry.part.input"
-                                    :result="entry.part.output"
-                                    :error="entry.part.error"
-                                    :status="entry.part.status"
-                                    :state="entry.part.state"
-                                    :error-category="entry.part.errorCategory"
-                                    :exit-code="entry.part.exit_code"
-                                    :truncated="entry.part.truncated"
-                                    :duration-ms="entry.part.duration_ms"
-                                    :collapse-signal="runCollapseSignal"
-                                    :retrieval-part="retrievalPartForToolPart(item, entry.part.tool_call_id)"
-                                  />
-                                </template>
-                                <div
-                                  v-if="entry.kind === 'part' && entry.part.type === 'text' && entry.part.content === COMPACTION_BOUNDARY"
-                                  class="compact-boundary"
-                                  role="separator"
-                                >
-                                  <span class="compact-boundary__text">以上对话已压缩摘要</span>
-                                </div>
-                                <MarkdownPreview
-                                  v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
-                                  :content="entry.part.content || ''"
-                                  :retrieval-results="messageRetrievalResults(item)"
-                                  :toolCalls="null"
-                                  :msgMetadata="item.msg_metadata"
-                                  :isInit="isInit"
-                                  :isView="isView"
-                                  :show-action-bar="false"
-                                  variant="segment"
-                                  :qa-type="item.qa_type || 'COMMON_QA'"
-                                  :parentScollBottomMethod="scrollToBottom"
-                                  @failed="() => onFailedReader(index)"
-                                />
-                              </template>
-                            </template>
                             <div
                               v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
                               class="assistant-tool-failure-blocker"

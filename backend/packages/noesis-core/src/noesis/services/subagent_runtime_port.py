@@ -55,6 +55,10 @@ class SubagentSessionPort:
     async def mark_terminal(*args: Any, **kwargs: Any) -> Any:
         return await _service().mark_terminal(*args, **kwargs)
 
+    @staticmethod
+    async def collect_partial_output(*args: Any, **kwargs: Any) -> Any:
+        return await _service().collect_partial_output(*args, **kwargs)
+
 
 class ExecutorPort:
     @staticmethod

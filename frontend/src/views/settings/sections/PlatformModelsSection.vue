@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { ChatModelCatalog, ChatModelOption, DiscoveredModelRow, ProviderPreset } from '@/api/models'
+import type { ChatModelCatalog, ChatModelOption, ProviderPreset } from '@/api/models'
 import type { UserLLMDiscoveredModel, UserLLMModel, UserLLMProvider } from '@/api/settings'
 import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { discoverPlatformModels, getChatModels } from '@/api/models'
+import { getChatModels } from '@/api/models'
 import {
   createLLMModel, createLLMProvider, deleteLLMModel, deleteLLMProvider,
   discoverLLMDraft, listLLMModels, listLLMProviders, setLLMDefaultModel,
@@ -41,12 +41,8 @@ const providerPresets = ref<ProviderPreset[]>([])
 /** 内置目录的平台 Provider（按 provider 分组展示的头卡） */
 const platformProvider = ref<{ id: string, label: string, base_url: string } | null>(null)
 const platformModels = ref<ChatModelOption[]>([])
-/** 平台发现结果（多选与筛选在 ModelDiscoveryPanel 内） */
-const platformDiscovery = ref<{ models: DiscoveredModelRow[], message: string } | null>(null)
-const discoveringPlatform = ref(false)
 /** 分组折叠：默认收起，点 Provider 行展开模型列表 */
 const expandedGroups = ref(new Set<string>())
-const adoptingPlatform = ref(false)
 
 function toggleGroup(key: string) {
   const next = new Set(expandedGroups.value)
@@ -58,14 +54,14 @@ function toggleGroup(key: string) {
   expandedGroups.value = next
 }
 
-/** 平台组承载采纳模型的用户级 Provider（slug = 平台 id；首次采纳时自动创建） */
+/** 平台组承载采纳模型的用户级 Provider（slug = 平台 id；由编辑表单保存时创建） */
 const platformProviderRow = computed(() =>
   providers.value.find((p) => p.slug === platformProvider.value?.id))
 
 /** 平台组展示行：内置目录条目 + 用户在该组下采纳的模型，合并为一个列表 */
 interface PlatformGroupRow {
   key: string
-  /** 裸 model_id：发现列表比对与「已下线」判定用 */
+  /** 裸 model_id（展示用） */
   model_id: string
   label: string
   /** 目录身份：内置条目为裸 id，采纳条目为复合 id（设为默认 / 会话切换用） */
@@ -73,15 +69,9 @@ interface PlatformGroupRow {
   isDefault: boolean
   contextWindow: number
   supportsVision: boolean
-  offline: boolean
 }
 
-/** 最近一次发现返回的 model_id 集；null = 本会话未发现过，不做下线判定 */
-const platformDiscoveredIds = computed(() =>
-  platformDiscovery.value ? new Set(platformDiscovery.value.models.map((m) => m.model_id)) : null)
-
 const mergedPlatformRows = computed<PlatformGroupRow[]>(() => {
-  const discovered = platformDiscoveredIds.value
   const yamlRows = platformModels.value.map((m) => ({
     key: `yaml-${m.id}`,
     model_id: m.id,
@@ -90,7 +80,6 @@ const mergedPlatformRows = computed<PlatformGroupRow[]>(() => {
     isDefault: m.id === catalog.value?.default_id,
     contextWindow: m.context_window || 0,
     supportsVision: !!m.supports_vision,
-    offline: discovered ? !discovered.has(m.id) : false,
   }))
   const owner = platformProviderRow.value
   const adoptedRows = owner
@@ -104,7 +93,6 @@ const mergedPlatformRows = computed<PlatformGroupRow[]>(() => {
           isDefault: compositeModelId(owner, m) === catalog.value?.default_id,
           contextWindow: m.context_window || 0,
           supportsVision: false,
-          offline: discovered ? !discovered.has(m.model_id) : false,
         }))
     : []
   return [...yamlRows, ...adoptedRows]
@@ -113,10 +101,6 @@ const mergedPlatformRows = computed<PlatformGroupRow[]>(() => {
 /** 独立展示的自定义 Provider：其采纳模型已并入平台组的同名 Provider 不再单列 */
 const customProviders = computed(() =>
   providers.value.filter((p) => p.slug !== platformProvider.value?.id))
-
-/** 发现面板的去重依据：平台组已有条目（内置 + 已采纳）的 model_id */
-const platformExistingIds = computed(() =>
-  new Set(mergedPlatformRows.value.map((row) => row.model_id)))
 
 const presetOptions = computed(() => [
   { label: '自定义', value: '' },
@@ -274,6 +258,35 @@ function editProvider(provider: UserLLMProvider) {
     }))
 }
 
+/**
+ * 平台组的唯一编辑入口：已有用户级 Provider 走编辑；尚无则以平台身份预填
+ * 新建表单（Key 为部署侧公开占位值），发现与采纳在表单内完成——
+ * 与其他自定义 Provider 完全同一入口，平台组不再单设发现按钮。
+ */
+function editPlatformProvider() {
+  const meta = platformProvider.value
+  if (!meta) {
+    return
+  }
+  const row = platformProviderRow.value
+  if (row) {
+    editProvider(row)
+    return
+  }
+  resetProviderForm()
+  providerFormVisible.value = true
+  slugTouched.value = true
+  Object.assign(providerForm, {
+    preset_id: '',
+    slug: meta.id,
+    name: meta.label,
+    api_type: 'openai',
+    base_url: meta.base_url,
+    api_key: 'public',
+    enabled: true,
+  })
+}
+
 /** 显示名变化且 slug 尚未定形时，自动跟随建议；建议为空不清空已填值 */
 function onNameInput(value: string) {
   providerForm.name = value
@@ -309,9 +322,20 @@ function addDiscoveredModel(discovered: UserLLMDiscoveredModel) {
   })
 }
 
-/** 表单发现面板的去重依据：目录中已有的 model_id */
-const draftExistingIds = computed(() =>
-  new Set(draftModels.value.map((row) => row.model_id.trim())))
+/**
+ * 表单发现面板的去重依据：目录中已有的 model_id；编辑平台 Provider 时并入
+ * 内置目录 id，避免把内置条目重复采纳为自定义模型
+ */
+const draftExistingIds = computed(() => {
+  const ids = new Set(draftModels.value.map((row) => row.model_id.trim()))
+  const meta = platformProvider.value
+  if (meta && providerForm.slug.trim() === meta.id && normalizeUrl(providerForm.base_url) === normalizeUrl(meta.base_url)) {
+    for (const m of platformModels.value) {
+      ids.add(m.id)
+    }
+  }
+  return ids
+})
 
 async function saveProvider() {
   if (!canSubmit.value) {
@@ -429,65 +453,6 @@ async function discoverDraft() {
   }
 }
 
-async function discoverPlatform() {
-  // 平台 Provider 用部署侧端点 + 平台 Key（opencode 为 public）拉当前模型；
-  // OpenCode Zen 免费模型轮换时，这里看到的就是当下真实可用列表
-  discoveringPlatform.value = true
-  try {
-    const result = await discoverPlatformModels()
-    platformDiscovery.value = { models: result.models, message: result.message }
-    result.ok ? message.success(result.message) : message.warning(result.message)
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : '发现失败')
-  } finally {
-    discoveringPlatform.value = false
-  }
-}
-
-/** 批量采纳勾选的平台模型（来自发现面板）：复用/创建平台 Provider（public key）后逐个落库 */
-async function adoptPickedPlatformModels(pickedRows: DiscoveredModelRow[]) {
-  if (!platformProvider.value || !pickedRows.length) {
-    return
-  }
-  adoptingPlatform.value = true
-  try {
-    let target = providers.value.find((p) => p.slug === platformProvider.value!.id)
-    if (target && normalizeUrl(target.base_url) !== normalizeUrl(platformProvider.value.base_url)) {
-      return message.warning(`已有同名 Provider ID 但端点不同，请在下方表单手动添加`)
-    }
-    if (!target) {
-      target = await createLLMProvider({
-        name: platformProvider.value.label,
-        slug: platformProvider.value.id,
-        api_type: 'openai',
-        base_url: platformProvider.value.base_url,
-        api_key: 'public',
-        enabled: true,
-      })
-    }
-    const picked = pickedRows.filter(
-      (discovered) => !platformExistingIds.value.has(discovered.model_id),
-    )
-    let added = 0
-    for (const discovered of picked) {
-      await createLLMModel({
-        provider_id: target.provider_id,
-        model_id: discovered.model_id,
-        label: discovered.label,
-        context_window: discovered.context_window,
-      })
-      added++
-    }
-    message.success(added ? `已添加 ${added} 个模型` : '所选模型均已存在')
-    await refresh()
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : '添加失败')
-    await refresh()
-  } finally {
-    adoptingPlatform.value = false
-  }
-}
-
 /** 自定义模型的目录复合 id（与后端 public_model_rows 构造一致） */
 function compositeModelId(provider: UserLLMProvider, model: UserLLMModel) {
   return `${provider.slug || model.provider_id.slice(0, 8)}/${model.model_id}`
@@ -567,22 +532,12 @@ onMounted(() => {
             </div>
           </div>
           <div v-if="expandedGroups.has('platform')" class="group-body">
-            <!-- 展开区工具栏：URL 一次性展示 + 编辑与发现动作（与自定义组的动作层级一致） -->
+            <!-- 展开区工具栏：URL 一次性展示 + 编辑（发现入口在编辑表单内，与自定义组一致） -->
             <div class="group-toolbar">
               <span class="muted inline url" :title="platformProvider.base_url">{{ platformProvider.base_url }}</span>
               <div class="toolbar-actions">
-                <n-button
-                  v-if="platformProviderRow" size="tiny" quaternary
-                  @click.stop="platformProviderRow && editProvider(platformProviderRow)"
-                >
+                <n-button size="tiny" quaternary @click.stop="editPlatformProvider">
                   编辑
-                </n-button>
-                <n-button
-                  size="tiny" :loading="discoveringPlatform"
-                  title="免费模型会轮换，可随时获取最新列表"
-                  @click="discoverPlatform"
-                >
-                  获取可用模型
                 </n-button>
               </div>
             </div>
@@ -599,7 +554,6 @@ onMounted(() => {
                 <span v-if="row.model_id !== row.label" class="muted inline" :title="row.model_id">{{ row.model_id }}</span>
               </div>
               <div class="tags">
-                <n-tag v-if="row.offline" size="small" type="warning" :bordered="false">已下线</n-tag>
                 <span v-if="row.supportsVision" class="muted inline">视觉</span>
                 <span
                   v-if="row.contextWindow" class="ctx"
@@ -607,14 +561,6 @@ onMounted(() => {
                 >{{ formatContextCompact(row.contextWindow) }}</span>
               </div>
             </div>
-            <ModelDiscoveryPanel
-              v-if="platformDiscovery"
-              :models="platformDiscovery.models"
-              :existing-ids="platformExistingIds"
-              :adopting="adoptingPlatform"
-              @adopt="adoptPickedPlatformModels"
-              @close="platformDiscovery = null"
-            />
           </div>
         </div>
         <SettingsEmptyState v-else title="暂无可用模型" description="可在下方添加自己的模型服务。" />

@@ -226,6 +226,7 @@ class SubagentSettings:
     auto_continue_debounce_seconds: float
     shell_task_timeout_seconds: float
     stop_grace_seconds: float
+    stop_reconcile_seconds: float
 
 
 @dataclass(frozen=True)
@@ -647,6 +648,7 @@ def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
         auto_continue_debounce_seconds=subagents.auto_continue_debounce_seconds,
         shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
         stop_grace_seconds=subagents.stop_grace_seconds,
+        stop_reconcile_seconds=subagents.stop_reconcile_seconds,
     )
 
 

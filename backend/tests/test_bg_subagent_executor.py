@@ -1596,6 +1596,197 @@ def test_check_and_list_task_tools_execute_without_error() -> None:
     executor.cancel(task_id)
 
 
+def test_stop_reconcile_finalizes_when_cancel_absorbed() -> None:
+    """硬杀后 CancelledError 被深层链路吸收时，对账定时器强制落终态。
+
+    回归：曾出现停止宽限超时硬取消后，_arun 的 except CancelledError
+    收口未执行——run 永久 RUNNING、UI 卡「停止中」、并发槽泄漏。终态
+    不能依赖被取消协程的配合：用吞掉 CancelledError 并永久挂起的工具
+    复现该场景，断言 reconcile 兜底把任务收口为 CANCELLED。
+    """
+    import noesis.agents.subagents.executor as executor_mod
+
+    @tool
+    async def stuck(value: str) -> str:
+        """A tool that absorbs cancellation and never returns."""
+        try:
+            await asyncio.sleep(999)
+        except asyncio.CancelledError:
+            # 模拟深层执行链吸收取消：挂起且不再传播
+            await asyncio.sleep(999)
+        return f"stuck:{value}"
+
+    worker = create_agent(
+        _ScriptedToolModel(
+            script=[AIMessage(
+                content="", tool_calls=[
+                    {"name": "stuck", "args": {"value": "x"}, "id": "c1", "type": "tool_call"},
+                ],
+            )],
+        ),
+        tools=[stuck],
+        checkpointer=MemorySaver(),
+        name="task-worker",
+    )
+    executor = BackgroundSubagentExecutor(
+        task_timeout_seconds=30,
+        stop_grace_seconds=1,
+        stop_reconcile_seconds=1,
+    )
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="吸收取消",
+        session_id="s-reconcile", user_id="u1",
+    )
+    time.sleep(0.3)
+    assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
+
+    # 绕过墙钟：直接触发宽限超时硬杀（真实路径为 call_later 回调）
+    with executor_mod._TASKS_LOCK:
+        entry = executor_mod._TASKS[task_id]
+    executor_mod._on_stop_grace_timeout(entry)
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        if task and task["status"] == BgTaskStatus.CANCELLED.value:
+            break
+        time.sleep(0.05)
+    task = executor.get(task_id)
+    assert task["status"] == BgTaskStatus.CANCELLED.value, (
+        "硬取消被吸收时 reconcile 必须强制收口（协程仍挂起也不能卡 stopping）"
+    )
+    assert task["stop_reason"] == "cancelled"
+
+
+def test_late_finalize_stop_does_not_republish_after_force_terminal() -> None:
+    """对账兜底已发布终态后，晚到的 _finalize_stop 重入只补落库、不重发事件。
+
+    归属权（terminal_published）在事件实际发布时置位：硬取消被吸收、
+    _force_terminal 已收口的任务，被卡死协程事后苏醒再走 _finalize_stop，
+    run.finished / terminal 事件 / 通知 / drain 不得二次触发。
+    """
+    import noesis.agents.subagents.executor as executor_mod
+    from noesis.agents.subagents import notifications
+
+    @tool
+    async def stuck(value: str) -> str:
+        """A tool that absorbs cancellation and never returns."""
+        try:
+            await asyncio.sleep(999)
+        except asyncio.CancelledError:
+            await asyncio.sleep(999)
+        return f"stuck:{value}"
+
+    worker = create_agent(
+        _ScriptedToolModel(
+            script=[AIMessage(
+                content="", tool_calls=[
+                    {"name": "stuck", "args": {"value": "x"}, "id": "c1", "type": "tool_call"},
+                ],
+            )],
+        ),
+        tools=[stuck],
+        checkpointer=MemorySaver(),
+        name="task-worker",
+    )
+    executor = BackgroundSubagentExecutor(
+        task_timeout_seconds=30,
+        stop_grace_seconds=1,
+        stop_reconcile_seconds=1,
+    )
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="晚到重入",
+        session_id="s-late", user_id="u1",
+    )
+    time.sleep(0.3)
+    assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
+    with executor_mod._TASKS_LOCK:
+        entry = executor_mod._TASKS[task_id]
+    executor_mod._on_stop_grace_timeout(entry)
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        task = executor.get(task_id)
+        reconcile_done = (
+            entry.stop_reconcile_task is not None and entry.stop_reconcile_task.done()
+        )
+        if task and task["status"] == BgTaskStatus.CANCELLED.value and reconcile_done:
+            break
+        time.sleep(0.05)
+    assert executor.get(task_id)["status"] == BgTaskStatus.CANCELLED.value
+    assert entry.stop_reconcile_task is not None and entry.stop_reconcile_task.done()
+
+    notices = notifications.drain("s-late")
+    assert len(notices) == 1, "对账兜底应恰好发布一次终态通知"
+    assert notices[0]["status"] == BgTaskStatus.CANCELLED.value
+
+    # 模拟被卡死协程晚到苏醒：_finalize_stop 重入不重发事件
+    loop = executor_mod._ensure_loop()
+    late = asyncio.run_coroutine_threadsafe(
+        executor_mod._finalize_stop(entry, entry.task, None), loop,
+    )
+    late.result(timeout=10)
+    assert notifications.drain("s-late") == [], "晚到重入不得二次发布终态通知"
+    assert executor.get(task_id)["status"] == BgTaskStatus.CANCELLED.value
+
+
+def test_session_port_covers_executor_call_surface() -> None:
+    """端口契约：executor 经 SubagentSessionPort 调用的方法必须全部存在。
+
+    回归：collect_partial_output 曾只加在 SubagentSessionService 而漏了
+    端口委托，executor 经端口调用直接 AttributeError 逃逸，炸穿
+    _finalize_stop 使 run 永久 RUNNING（测试因 run_id=None 走不到端口
+    而全绿）。从 executor 源码提取实际调用面做契约，未来新增调用自动覆盖。
+    """
+    import inspect
+    import re
+
+    from noesis.agents.subagents import executor as executor_mod
+    from noesis.services import subagent_session_service
+    from noesis.services.subagent_runtime_port import SubagentSessionPort
+
+    # executor 内统一别名：SubagentSessionPort as SubagentSessionService
+    called = set(re.findall(r"\bSubagentSessionService\.(\w+)\(", inspect.getsource(executor_mod)))
+    port_methods = {
+        name for name, _ in inspect.getmembers(SubagentSessionPort)
+        if not name.startswith("_")
+    }
+    service_methods = {
+        name for name, _ in inspect.getmembers(subagent_session_service.SubagentSessionService)
+        if not name.startswith("_")
+    }
+    assert called, "契约提取失败：executor 应有端口调用"
+    missing_on_port = called - port_methods
+    assert not missing_on_port, (
+        f"SubagentSessionPort 缺少 executor 调用的方法：{sorted(missing_on_port)}"
+    )
+    missing_on_service = called - service_methods
+    assert not missing_on_service, (
+        f"SubagentSessionService 缺少端口目标方法：{sorted(missing_on_service)}"
+    )
+    # 事故方法必须在场（防止契约测试本身被误删）
+    assert "collect_partial_output" in called
+
+
+async def test_collect_persisted_text_degrades_on_port_failure() -> None:
+    """部分成果提取失败必须降级为空，不允许炸穿 _finalize_stop。
+
+    回归：端口缺方法时 AttributeError 在协程构造期同步抛出，原 try 只包住
+    await，导致异常逃逸、run 永久 RUNNING。
+    """
+    from noesis.agents.subagents.executor import BackgroundTask, _collect_persisted_text
+
+    task = BackgroundTask(
+        task_id="bg-x", session_id="s1", user_id="u1",
+        description="x",
+        child_session_id="child-1", run_id="run-1",
+    )
+    # 端口未注册（未 configure_service_port）：调用即 RuntimeError；
+    # 模拟任意端口侧失败都不得逃逸
+    text = await _collect_persisted_text(task)
+    assert text == ""
+
+
 def test_followup_cold_resume_prelude_failure_fails_task() -> None:
     """冷恢复前置段（run 创建）异常：显式收口 FAILED，不得静默卡 RUNNING。
 
@@ -1674,3 +1865,79 @@ async def test_run_stream_publishes_transient_deltas_and_stats() -> None:
     finally:
         unsubscribe_run_events("run-stream", queue)
         executor.cancel(task_id)
+
+
+@pytest.mark.asyncio
+async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
+    """瞬态转发契约：订阅方收到 text-delta / stats-update（transient 标记）。
+
+    回归：单测假模型全部非流式（仅 _generate），on_chat_model_stream 从未
+    发生——子会话详情页「正在生成」与 token/s 统计行的整个数据源
+    （executor 瞬态转发）此前零覆盖。流式假模型 + 订阅队列直接实证。
+    """
+    import noesis.agents.subagents.executor as executor_mod
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGenerationChunk
+
+    class _StreamingScriptedModel(_ScriptedToolModel):
+        """流式假模型：按 chunk 产出脚本消息（触发 on_chat_model_stream）。"""
+
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ANN001, ANN003
+            with self._lock:
+                idx = self._cursor
+                self._cursor += 1
+            message = self.script[idx] if idx < len(self.script) else AIMessage(content="任务完成")
+            for piece in (message.content or "ok")[:8]:
+                yield ChatGenerationChunk(message=AIMessageChunk(content=piece))
+            if message.tool_calls:
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="", tool_calls=[
+                            {"name": message.tool_calls[0]["name"],
+                             "args": message.tool_calls[0]["args"],
+                             "id": message.tool_calls[0]["id"], "type": "tool_call"},
+                        ],
+                    )
+                )
+
+    first = AIMessage(
+        content="流式正文第一段。",
+        tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
+    )
+    rest = [
+        AIMessage(
+            content="", tool_calls=[
+                {"name": "slow", "args": {"value": f"s{i}"}, "id": f"c{i}", "type": "tool_call"},
+            ],
+        )
+        for i in range(1, 10)
+    ]
+    model = _StreamingScriptedModel(script=[first] + rest)
+    worker = create_agent(model, tools=[_slow_tool()], checkpointer=MemorySaver(), name="task-worker")
+
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    run_id = "run-transient-test"
+    queue = executor_mod.subscribe_run_events(run_id, "u1")
+    try:
+        executor.start(
+            worker_factory=lambda: worker, description="瞬态转发",
+            session_id="s-transient", user_id="u1",
+            child_session_id="child-transient", run_id=run_id,
+        )
+        deadline = time.perf_counter() + 15
+        seen_types: list[str] = []
+        while time.perf_counter() < deadline:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                if "stats-update" in seen_types:
+                    break
+                continue
+            seen_types.append(str(item.get("type")))
+            if item.get("type") in ("text-delta", "stats-update"):
+                assert item.get("transient") is True, "流式 delta 必须带 transient 标记"
+        assert "text-delta" in seen_types, f"未收到 text-delta 瞬态事件: {seen_types[:10]}"
+        assert "stats-update" in seen_types, f"未收到 stats-update 瞬态事件: {seen_types[:10]}"
+    finally:
+        executor_mod.unsubscribe_run_events(run_id, queue)
+        bg_shutdown()

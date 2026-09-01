@@ -381,6 +381,8 @@ class SubagentsYamlSection(BaseModel):
     shell_task_timeout_seconds: float = Field(default=0, ge=0)
     # 协作停止宽限：停止请求发出后等待静止边界的上限，超时回退硬杀
     stop_grace_seconds: float = Field(default=30, gt=0)
+    # 硬杀后强制终态对账延迟：硬取消协程未按约收口时的兜底窗口
+    stop_reconcile_seconds: float = Field(default=30, gt=0)
 
 
 class MessagingYamlSection(BaseModel):

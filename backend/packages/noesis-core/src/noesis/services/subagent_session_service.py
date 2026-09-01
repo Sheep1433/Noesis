@@ -760,7 +760,10 @@ class SubagentSessionService:
                 snapshot=content,
                 finished_at=now,
                 finish_reason=finish_reason or status.value,
-                error_code="SUBAGENT_FAILED" if error else None,
+                # SUBAGENT_FAILED 只标注真失败（run ERROR）。timeout/cancelled
+                # 是 PARTIAL 终态：error 文案（超时/取消说明）仍进
+                # user_error_message 供详情展示，但不得标失败错误码
+                error_code="SUBAGENT_FAILED" if status is RunStatus.ERROR else None,
                 user_error_message=error,
                 usage=usage,
                 model_calls=model_calls,

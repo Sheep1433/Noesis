@@ -78,9 +78,24 @@ class ReplacementRecord:
     replacement_text: str = ""
 
 
+def merge_replacement_records(
+    left: dict[str, ReplacementRecord] | None,
+    right: dict[str, ReplacementRecord] | None,
+) -> dict[str, ReplacementRecord]:
+    """并行工具任务各自全量快照写入时的合并 reducer。
+
+    LangGraph 只认 Annotated metadata 末位的 callable 作为 reducer；无 reducer
+    时该键为 LastValue 通道，同一步并行工具任务各写一次会抛
+    ``InvalidUpdateError: Can receive only one value per step``（曾导致子 Agent
+    整 run 崩溃）。写入方携带的是累积快照，按 tool_call_id 后写覆盖即与
+    串行语义一致。reducer 必须放在 ``PrivateStateAttr`` 之后（末位）。
+    """
+    return {**(left or {}), **(right or {})}
+
+
 class ToolResultBudgetState(AgentState[ResponseT]):
     _tool_result_replacements: NotRequired[
-        Annotated[dict[str, ReplacementRecord], PrivateStateAttr]
+        Annotated[dict[str, ReplacementRecord], PrivateStateAttr, merge_replacement_records]
     ]
 
 
@@ -556,4 +571,5 @@ __all__ = [
     "ReplacementRecord",
     "ToolResultBudgetState",
     "ToolResultBudgetMiddleware",
+    "merge_replacement_records",
 ]

@@ -319,3 +319,63 @@ def test_immediate_replacement_is_not_replaced_again_as_history() -> None:
 
     assert projected.messages[0] is replacement
     assert len(backend.written) == 1
+
+
+def test_parallel_tool_tasks_merge_replacement_records_in_one_step() -> None:
+    """同一步并行工具任务各写一次 _tool_result_replacements 不再崩溃。
+
+    回归：该键曾解析为 LastValue 通道（Annotated metadata 末位不是 callable
+    时 langgraph 不装 reducer），两个并行超限工具结果在同一 superstep 各写
+    一次 → ``InvalidUpdateError: Can receive only one value per step`` →
+    子 Agent 整 run 以 SUBAGENT_FAILED 终止。 reducer 必须位于
+    ``PrivateStateAttr`` 之后（langgraph 只认 metadata 末位的 callable）。
+    """
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.tools import tool
+
+    class _ToolCallingFakeModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):  # noqa: ANN001
+            return self
+
+    @tool
+    def big_fetch(url: str) -> str:
+        """Fetch a large page."""
+        return f"page:{url}:" + "x" * 500
+
+    model = _ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "big_fetch", "args": {"url": "a"}, "id": "call-1"},
+                    {"name": "big_fetch", "args": {"url": "b"}, "id": "call-2"},
+                ],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+
+    agent = create_agent(
+        model=model,
+        tools=[big_fetch],
+        middleware=[ToolResultBudgetMiddleware(_FakeBackend(), max_chars=100)],
+    )
+
+    # 通道解析：merge reducer 必须把该键装成可合并通道（曾为 LastValue）
+    from langgraph.channels.binop import BinaryOperatorAggregate
+
+    assert isinstance(
+        agent.channels["_tool_result_replacements"], BinaryOperatorAggregate
+    ), "私有键未解析为可合并通道：reducer 必须位于 Annotated metadata 末位"
+
+    snapshots = list(
+        agent.stream(
+            {"messages": [HumanMessage(content="fetch a and b")]},
+            stream_mode="values",
+        )
+    )
+    records = snapshots[-1].get("_tool_result_replacements")
+
+    assert records is not None, "并行替换必须留下可重放的 replacement 记录"
+    assert set(records) == {"call-1", "call-2"}

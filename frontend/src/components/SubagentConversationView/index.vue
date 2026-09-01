@@ -13,6 +13,7 @@ import {
   stopAgentRun,
   subscribeAgentRun,
 } from '@/api/chat'
+import AssistantStreamingIndicator from '@/components/AssistantStreamingIndicator/index.vue'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
 import CitationSources from '@/components/CitationSources/index.vue'
@@ -75,8 +76,10 @@ const selectedReasoningEffort = ref('')
 /** 子会话统计条：与主会话同口径（assistant 消息 extra.usage 重建，随消息加载/终态更新） */
 const sessionStats = computed(() => rebuildSessionStats(messages.value))
 const statsLineTemplate = useLocalStorage('noesis:statsline-template', '')
-/** 运行中优先流式统计（executor 每次模型调用发布，与主 Agent 同口径含 tok/s）；
- *  终态后 reducer stats 清空，回落落库 usage 重建。 */
+/**
+ * 运行中优先流式统计（executor 每次模型调用发布，与主 Agent 同口径含 tok/s）；
+ *  终态后 reducer stats 清空，回落落库 usage 重建。
+ */
 const effectiveStats = computed(() => {
   if (runActive.value && reducerState.value.stats) {
     return reducerState.value.stats
@@ -328,6 +331,15 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   }
 }
 
+/**
+ * 生成中标记：与主 Agent 同口径——由 run 活动驱动（模型思考/工具执行阶段
+ *  也常亮），而非仅文本 delta 到达时刻点亮；标签区分首段/续段。此前仅
+ *  delta 到达时点亮，工具批与长模型调用期间无任何指示，观感即「卡住」。
+ */
+const runGenerating = computed(() => run.value?.status === 'running')
+const assistantHasParts = computed(() =>
+  messages.value.some((m) => m.role === 'assistant' && normalizeApiContent(m.content).parts.length > 0),
+)
 /** 流式正文正在到达（delta 进来置位；边界投影/终态收口）——驱动「生成中」标记 */
 const streamingTextActive = ref(false)
 
@@ -577,6 +589,7 @@ onBeforeUnmount(() => {
             :content="message.content"
             appearance="light"
             :retrieval-results="messageRetrievalResults(message)"
+            :qa-type="message.qa_type || 'SUPER_AGENT_QA'"
           />
         </div>
       </template>
@@ -597,11 +610,13 @@ onBeforeUnmount(() => {
         />
       </template>
     </div>
-    <!-- 生成中标记：流式正文到达时点亮（与主 Agent 流式效果对齐），边界投影/终态熄灭 -->
-    <div v-if="streamingTextActive" class="subagent-conversation__generating" role="status">
-      <span class="subagent-conversation__generating-dot" aria-hidden="true"></span>
-      正在生成…
-    </div>
+    <!-- 生成中标记：共享 AssistantStreamingIndicator（与主 Agent 同组件/文案逻辑） -->
+    <AssistantStreamingIndicator
+      v-if="runGenerating"
+      section
+      :divided="assistantHasParts"
+      :label="assistantHasParts ? '正在继续生成' : '正在生成'"
+    />
     <div class="subagent-conversation__composer chat-composer">
       <!-- 前端待发队列：run 进行中发送的消息在此排队，终态后逐条自动提交 -->
       <FollowupQueue
@@ -716,23 +731,6 @@ onBeforeUnmount(() => {
   padding: 4px 2px 0;
 }
 
-.subagent-conversation__generating {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 2px 0;
-  color: var(--noesis-color-text-hint);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.subagent-conversation__generating-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--noesis-color-primary, #18a058);
-  animation: subagent-generating-pulse 1.2s ease-in-out infinite;
-}
 
 @keyframes subagent-generating-pulse {
   0%, 100% { opacity: 0.35; }
