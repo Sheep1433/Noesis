@@ -14,7 +14,7 @@ description: >-
 本地优先：**Postgres + backend logs = 默认事实来源**；**Langfuse = 可选的模型级观测补充**。
 不要因为 Langfuse 不可达就放弃本地分析，也不要只看一条 trace 或只信 `status=success`。
 
-Noesis 连接细节、API、陷阱见 [reference.md](reference.md)。
+Noesis 连接细节、API、陷阱见 [references/reference.md](references/reference.md)。
 
 单轮指标脚本：
 
