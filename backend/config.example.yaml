@@ -125,8 +125,8 @@ agent_runtime:
 retrieval_limits:
   max_results_per_call: 30
   max_results_per_run: 500
-  max_excerpt_chars: 2000
-  max_excerpt_bytes: 8192
+  max_excerpt_chars: 8000
+  max_excerpt_bytes: 32768
   max_locator_bytes: 2048
 
 distributed_runs:

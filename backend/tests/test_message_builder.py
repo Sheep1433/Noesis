@@ -104,7 +104,10 @@ def test_retrieval_capacity_is_deterministic_and_utf8_safe() -> None:
     assert retrieval.truncated is True
     assert len({item["evidence_id"] for item in retrieval.results}) == RetrievalLimitConfig.max_results_per_call
     assert all(item["evidence_id"].startswith("ev_") for item in retrieval.results)
-    assert all(len(item["excerpt"].encode("utf-8")) <= 8192 for item in retrieval.results)
+    assert all(
+        len(item["excerpt"].encode("utf-8")) <= RetrievalLimitConfig.max_excerpt_bytes
+        for item in retrieval.results
+    )
 
 
 def test_worst_case_retrieval_snapshot_stays_under_assistant_budget() -> None:

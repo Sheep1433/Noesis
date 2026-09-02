@@ -191,6 +191,7 @@ const fetchDisplay = computed(() =>
     <!-- 结构化检索结果 -->
     <template v-if="view.kind === 'results'">
       <div v-if="view.total !== undefined" class="result-meta">共 {{ view.total }} 条结果</div>
+      <div v-if="!view.items.length" class="result-meta">无匹配结果</div>
       <div v-for="(item, i) in view.items.slice(0, MAX_ROWS)" :key="i" class="result-item">
         <div class="result-item__head">
           <span v-if="item.collection_name" class="result-item__src">{{ item.collection_name }}</span>

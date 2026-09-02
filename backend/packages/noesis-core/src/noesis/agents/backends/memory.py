@@ -11,6 +11,7 @@ from deepagents.backends.protocol import (
     BackendProtocol,
     EditResult,
     FileDownloadResponse,
+    FileInfo,
     FileUploadResponse,
     GlobResult,
     GrepResult,
@@ -241,12 +242,15 @@ class GuardedFilesystemBackend(BackendProtocol):
         return GrepResult(matches=matches[:50])
 
     def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """按 FileInfo 契约返回（deepagents CompositeBackend 对路由命中路径
+        做 _remap_file_info_path 字典重映射，裸字符串会 TypeError——
+        /memory 上的 glob 曾因此 9ms 即败且归类 unknown）。"""
         base = _memory_key(path)
         wanted = pattern.lstrip("/")
-        matches = ["/MEMORY.md"]
+        matches: list[FileInfo] = [{"path": "/MEMORY.md", "type": "file"}]
         for type_dir in _TYPE_DIRS:
             for file_path in MemoryStore.memory_root(self._user_id).joinpath(type_dir).glob(wanted or "*.md"):
-                matches.append(f"/{type_dir}/{file_path.name}")
+                matches.append({"path": f"/{type_dir}/{file_path.name}", "type": "file"})
         return GlobResult(matches=matches[:100])
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
