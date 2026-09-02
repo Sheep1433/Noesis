@@ -13,6 +13,7 @@ import {
   stopAgentRun,
   subscribeAgentRun,
 } from '@/api/chat'
+import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import AssistantStreamingIndicator from '@/components/AssistantStreamingIndicator/index.vue'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
 import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
@@ -22,17 +23,20 @@ import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/in
 import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlApprovalCard from '@/components/HitlApprovalCard/index.vue'
 import { getQueuedFollowups, setQueuedFollowups } from '@/components/SubagentConversationView/queuedFollowups'
+import { langfuseUiOrigin } from '@/config'
 import { useFollowupQueue } from '@/hooks/useFollowupQueue'
-import { wireTimestampMs } from '@/utils/formatTime'
+import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
+import { formatHHmm, wireTimestampMs } from '@/utils/formatTime'
+import { buildDisplayParts, lastTopLevelTextEntry } from '@/utils/groupAssistantParts'
 import { rebuildSessionStats } from '@/utils/sessionStats'
 import { formatStatsLine } from '@/utils/statsFormat'
-import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import { citationKey } from '@/views/chat/citationRendering'
-import {
+import { assistantPartsStillStreaming,
+  extractLastTopLevelText,
   formatDurationMs,
   hasValidContextWindow,
   normalizeApiContent,
-} from '@/views/chat/messageParts'
+  shouldShowAssistantToolFailureBlocker } from '@/views/chat/messageParts'
 import {
   initialRunEventState,
   parseRunEvent,
@@ -84,7 +88,9 @@ const effectiveStats = computed(() => {
   if (runActive.value && reducerState.value.stats) {
     return reducerState.value.stats
   }
-  return sessionStats.value
+  // 失败终态不落 usage（后端缺口）时，DB 重建为空——保留终态前最后一次
+  // 实时统计（bridge 真实累计，非估算），统计条不因此消失
+  return sessionStats.value ?? reducerState.value.stats ?? null
 })
 const statsLine = computed(() => formatStatsLine(effectiveStats.value, statsLineTemplate.value))
 
@@ -111,14 +117,6 @@ const sessionSources = computed<RetrievalResultUi[]>(() => {
 })
 
 const assistantMessage = computed(() => messages.value.find((item) => item.id === run.value?.assistant_message_id))
-const turnCount = computed(() => messages.value.filter((item) => item.role === 'user').length)
-const stepCount = computed(() => messages.value.reduce((count, message) => {
-  if (message.role !== 'assistant') {
-    return count
-  }
-  return count + normalizeApiContent(message.content).parts.filter((part) => part.type === 'tool').length
-}, 0))
-
 /**
  * 用户消息取纯文本：主对话的用户气泡就是纯文本渲染，保持一致
  * （MarkdownPreview 在 fit-content 气泡里会因循环百分比按 max-content 溢出）
@@ -127,17 +125,53 @@ function userText(message: ChatMessageResponse): string {
   return normalizeApiContent(message.content).parts.filter((part) => part.type === 'text' && typeof part.content === 'string').map((part) => part.content).join('')
 }
 
-const duration = computed(() => {
-  const started = wireTimestampMs(assistantMessage.value?.run_started_at)
+/** run 进行中（含排队/待审批）：发送进入前端待发队列，终态后逐条自动提交 */
+const runActive = computed(() => !!run.value && ['queued', 'running', 'stopping', 'hitl_pending'].includes(run.value.status))
+
+/** 工具展示模式：与主 Agent 共享同一存储实例（useToolDisplayMode 模块级单例） */
+const { mode: toolDisplayMode } = useToolDisplayMode()
+
+// ---- compact 折叠（与主 Agent assistant-run-meta 同语义）----
+const expandedRuns = ref(new Set<string>())
+
+/** 已完结 + 有可折叠过程 + 有终稿 → compact 模式折叠为终稿（主 Agent 同判据） */
+function shouldCollapseMessage(message: ChatMessageResponse): boolean {
+  if (toolDisplayMode.value !== 'compact' || message.status === 'streaming') {
+    return false
+  }
+  const parts = normalizeApiContent(message.content).parts
+  if (!parts.some((part) => part.type === 'tool' || part.type === 'reasoning')) {
+    return false
+  }
+  return lastTopLevelTextEntry(buildDisplayParts(parts)) !== null
+}
+
+function isMessageExpanded(message: ChatMessageResponse): boolean {
+  return expandedRuns.value.has(message.id)
+}
+
+function toggleMessageCollapse(message: ChatMessageResponse) {
+  if (!shouldCollapseMessage(message)) {
+    return
+  }
+  const next = new Set(expandedRuns.value)
+  if (next.has(message.id)) {
+    next.delete(message.id)
+  } else {
+    next.add(message.id)
+  }
+  expandedRuns.value = next
+}
+
+/** 回复级耗时（主 Agent runElapsedText 同构）：run 起止毫秒 → 可读时长 */
+function messageElapsedText(message: ChatMessageResponse): string {
+  const started = wireTimestampMs(message.run_started_at)
   if (!started) {
     return ''
   }
-  const finished = wireTimestampMs(assistantMessage.value?.run_finished_at) ?? now.value
-  return formatDurationMs(Math.max(0, finished - started))
-})
-
-/** run 进行中（含排队/待审批）：发送进入前端待发队列，终态后逐条自动提交 */
-const runActive = computed(() => !!run.value && ['queued', 'running', 'stopping', 'hitl_pending'].includes(run.value.status))
+  const finished = wireTimestampMs(message.run_finished_at) ?? now.value
+  return `耗时 ${formatDurationMs(Math.max(0, finished - started))}`
+}
 const sendDisabled = computed(() => !followupInput.value.trim() || followupSending.value)
 
 /**
@@ -327,9 +361,16 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   // 终态重载：落库后的 usage / 终态内容进入统计条与消息（流式终态对齐）
   if (domain.type === 'run-finished') {
     streamingTextActive.value = false
+    runCollapseSignal.value += 1
     void loadConversation()
   }
 }
+
+/**
+ * 回合结束收起脉冲：与主视图 runCollapseSignal 同机制——run 终态时 +1，
+ *  广播让本回合工具卡（ToolCallCollapse / 并行组）自动收起。
+ */
+const runCollapseSignal = ref(0)
 
 /**
  * 生成中标记：与主 Agent 同口径——由 run 活动驱动（模型思考/工具执行阶段
@@ -585,12 +626,56 @@ onBeforeUnmount(() => {
           <div class="subagent-conversation__user-text">{{ userText(message) }}</div>
         </div>
         <div v-else class="subagent-conversation__assistant">
+          <!-- 回复级元信息（主 Agent assistant-run-meta 同构）：耗时在回复上方，
+               compact 可折叠轮为展开开关 -->
+          <div v-if="messageElapsedText(message)" class="subagent-conversation__run-meta">
+            <button
+              v-if="shouldCollapseMessage(message)"
+              type="button"
+              class="subagent-conversation__run-meta-toggle"
+              :aria-expanded="isMessageExpanded(message)"
+              @click="toggleMessageCollapse(message)"
+            >
+              <span>{{ messageElapsedText(message) }}</span>
+              <span
+                class="subagent-conversation__run-meta-chevron"
+                :class="{ 'subagent-conversation__run-meta-chevron--expanded': isMessageExpanded(message) }"
+                aria-hidden="true"
+              >›</span>
+            </button>
+            <span v-else class="subagent-conversation__run-meta-elapsed">{{ messageElapsedText(message) }}</span>
+          </div>
           <ConversationPartsRenderer
             :content="message.content"
             appearance="light"
             :retrieval-results="messageRetrievalResults(message)"
             :qa-type="message.qa_type || 'SUPER_AGENT_QA'"
+            :collapse-signal="runCollapseSignal"
+            :compact-tools="toolDisplayMode === 'compact'"
+            :collapsed="shouldCollapseMessage(message) && !isMessageExpanded(message)"
+            :live-streaming="runGenerating && message.status === 'streaming'"
           />
+          <div
+            v-if="shouldShowAssistantToolFailureBlocker(normalizeApiContent(message.content).parts, runGenerating && message.status === 'streaming')"
+            class="subagent-conversation__failure-blocker"
+            role="status"
+          >
+            <span class="subagent-conversation__failure-blocker-icon" aria-hidden="true">!</span>
+            <span>本轮未完成</span>
+          </div>
+          <div
+            v-if="normalizeApiContent(message.content).parts.length > 0 && !assistantPartsStillStreaming(normalizeApiContent(message.content).parts)"
+            class="subagent-conversation__message-actions"
+          >
+            <AssistantReplyToolbar
+              :bordered="false"
+              :qa-type="message.qa_type || 'SUPER_AGENT_QA'"
+              :copy-text="extractLastTopLevelText(normalizeApiContent(message.content).parts)"
+              :time-text="formatHHmm(wireTimestampMs(message.run_finished_at ?? message.created_at) || message.created_at)"
+              :langfuse-session-id="sessionId"
+              :langfuse-ui-origin="langfuseUiOrigin"
+            />
+          </div>
         </div>
       </template>
       <div v-if="!messages.length" class="subagent-conversation__empty">暂无对话内容</div>
@@ -689,16 +774,11 @@ onBeforeUnmount(() => {
          （extra.usage 重建，终态随消息重载更新）；运行中尚无 usage 时以轮对话/
          步数/时长兜底；任务状态同区。置于输入框容器外，避免继承消息框底色 -->
     <div
-      v-if="statsLine || run"
+      v-if="statsLine"
       class="subagent-conversation__stats"
       role="status"
     >
-      <template v-if="statsLine">{{ statsLine }}</template>
-      <template v-else>
-        <span>{{ turnCount }} 轮对话 · {{ stepCount }} 步</span>
-        <span v-if="duration"> · {{ duration }}</span>
-      </template>
-      <span v-if="run"> · {{ taskStatusLabel(run.status) }}</span>
+      {{ statsLine }}
     </div>
   </div>
 </template>
@@ -709,6 +789,90 @@ onBeforeUnmount(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+
+/* 回复工具条容器：主视图 assistant-message-actions 同构 */
+.subagent-conversation__message-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: -8px;
+}
+
+/* 本轮未完成 blocker：主视图 assistant-tool-failure-blocker 同构 */
+.subagent-conversation__failure-blocker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 2px 3px;
+  color: var(--noesis-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.subagent-conversation__failure-blocker-icon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--noesis-color-warning);
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+/* 头部元信息：主 Agent assistant-run-meta 同构（耗时 + 状态在对话上方） */
+.subagent-conversation__run-meta {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  margin-bottom: 6px;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--noesis-color-text-hint);
+  letter-spacing: 0.01em;
+}
+
+.subagent-conversation__run-meta-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--noesis-color-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.subagent-conversation__run-meta-toggle:hover {
+  color: var(--noesis-color-text);
+}
+
+.subagent-conversation__run-meta-chevron {
+  display: inline-block;
+  font-size: 16px;
+  line-height: 12px;
+  transform: translateY(-1px);
+  transition: transform 0.15s ease;
+}
+
+.subagent-conversation__run-meta-chevron--expanded {
+  transform: translateY(-1px) rotate(90deg);
+}
+
+.subagent-conversation__run-meta-status {
+  margin-left: 4px;
+  color: var(--noesis-color-text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .subagent-conversation__stats {

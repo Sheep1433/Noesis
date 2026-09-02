@@ -255,12 +255,43 @@ export function arcWrittenFileContents(messages: ArcMessage[]): string[] {
 }
 
 export interface ArcPanelData {
-  /** 弧内去重来源（首见序；与 buildCitationIndex 的编号序一致） */
+  /** 弧内去重来源（首见序存储；展示序号见 numbers） */
   entries: ArcSourceEntry[]
   /** 被引用的条目 key 集合（结构化标记精确命中优先，URL 归因兜底） */
   citedKeys: Set<string>
+  /**
+   * 引用优先编号（key → 序号）：被引用条目按引用信号首现序编 1..N（残缺标记
+   * 宽容命中无出现位置，排精确命中之后按首见序），未引用条目按首见序接续
+   * N+1..M。正文 badge 与来源面板共用该映射。
+   */
+  numbers: Map<string, number>
   /** 归因文本无任何信号（无标记也无 URL）：引用子集不可判定，降级为仅「共检索 N」 */
   attributionUnavailable: boolean
+}
+
+/**
+ * 引用优先编号：被引用条目编 1..N（精确命中按归因文本首现序——exactKeys 为
+ * 有序 Set；宽容命中排其后按首见序），未引用条目按首见序接续 N+1..M，全局连续。
+ */
+function assignCitationFirstNumbers(entries: ArcSourceEntry[], citedKeys: Set<string>, signal: CitationSignal): Map<string, number> {
+  const numbers = new Map<string, number>()
+  let next = 1
+  for (const key of signal.exactKeys) {
+    if (citedKeys.has(key) && !numbers.has(key)) {
+      numbers.set(key, next++)
+    }
+  }
+  for (const entry of entries) {
+    if (citedKeys.has(entry.key) && !numbers.has(entry.key)) {
+      numbers.set(entry.key, next++)
+    }
+  }
+  for (const entry of entries) {
+    if (!citedKeys.has(entry.key) && !numbers.has(entry.key)) {
+      numbers.set(entry.key, next++)
+    }
+  }
+  return numbers
 }
 
 /**
@@ -289,6 +320,7 @@ export function computeArcPanels<T extends ArcMessage>(messages: T[]): Map<strin
     panels.set(key, {
       entries,
       citedKeys,
+      numbers: assignCitationFirstNumbers(entries, citedKeys, signal),
       attributionUnavailable: !signal.hasAnySignal,
     })
   }

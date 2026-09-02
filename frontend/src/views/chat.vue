@@ -3,15 +3,13 @@ import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { TaskCatalogEntry } from '@/api/chat'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
-import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { SessionStats } from '@/utils/statsFormat'
-import type { MessageContentV1, RetrievalResultUi, RetrievalUiPart, UiPart } from '@/views/chat/messageParts'
+import type { CitationIndex } from '@/views/chat/citationRendering'
+import type { MessageContentV1, RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
-import { NCollapse, NCollapseItem } from 'naive-ui'
 import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
-import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
@@ -22,10 +20,8 @@ import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResearchSourcesPanel from '@/components/ResearchSourcesPanel/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
-import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TaskCatalogPanel from '@/components/TaskCatalogPanel/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
-import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
 import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
@@ -47,7 +43,7 @@ import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
 import { formatHHmm } from '@/utils/formatTime'
-import { buildDisplayParts } from '@/utils/groupAssistantParts'
+import { buildDisplayParts, lastTopLevelTextEntry } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { isReasoningLevel } from '@/utils/reasoningLevels'
@@ -57,6 +53,7 @@ import { taskNoticeMeta } from '@/utils/taskNotice'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
+import { buildCitationIndexFromNumbers } from '@/views/chat/citationRendering'
 import {
   pendingHitlForSession,
   setPendingHitlForSession,
@@ -73,7 +70,6 @@ import {
   applyHitlPendingParts,
   applyToolOutput,
   assistantPartsStillStreaming,
-  COMPACTION_BOUNDARY,
   completeReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
@@ -139,28 +135,25 @@ function messageRetrievalResults(item: ArcPanelMessage): RetrievalResultUi[] {
 }
 
 /**
- * 检索 tool 卡的结构化结果关联（遗留渲染路径用；共享渲染器内部自算同构 map）。
- * 主/子会话同构：tool part 只存摘要，完整结果按 tool_call_id 取 retrieval part。
+ * 弧末条消息的正文 badge 序号索引：与聚合面板共用的引用优先编号
+ * （被引用 1..N 按引用首现序，未引用接续排后）；非弧消息返回 undefined，
+ * 走 MarkdownPreview 内部按 retrievalResults 现算首见序。
  */
-function retrievalPartForToolPart(
-  item: { messageContent?: MessageContentV1 },
-  toolCallId?: string,
-): RetrievalUiPart | undefined {
-  if (!toolCallId) {
+function arcCitationIndex(item: ArcPanelMessage): CitationIndex | undefined {
+  const panel = arcPanelFor(item)
+  if (!panel) {
     return undefined
   }
-  return normalizeApiContent(item.messageContent).parts.find(
-    (part): part is RetrievalUiPart => part.type === 'retrieval' && part.tool_call_id === toolCallId,
+  return buildCitationIndexFromNumbers(
+    panel.entries.map((entry) => entry.result),
+    panel.numbers,
   )
 }
 
-function entryKey(entry: DisplayPartEntry, fallback: number): string {
-  if (entry.kind === 'parallel_tools') {
-    return `pg:${entry.parts[0]?.tool_call_id ?? entry.parts[0]?.id ?? fallback}`
-  }
-  return entry.part.tool_call_id ?? entry.part.id ?? String(fallback)
-}
-
+/**
+ * 检索 tool 卡的结构化结果关联（遗留渲染路径用；共享渲染器内部自算同构 map）。
+ * 主/子会话同构：tool part 只存摘要，完整结果按 tool_call_id 取 retrieval part。
+ */
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
@@ -457,7 +450,6 @@ function changeChatMode(targetQaType: ChatModeQaType) {
  */
 // currentChatId 已移除，使用 useChat 管理 sessionId
 
-
 // 对话等待提示词图标
 const stylizingLoading = ref(false)
 const processingNow = ref(Date.now())
@@ -475,6 +467,7 @@ function startProcessingClock() {
 
 function stopProcessingClock() {
   if (processingTimer === null) {
+    retryingLabel.value = ''
     return
   }
   clearInterval(processingTimer)
@@ -1506,22 +1499,6 @@ function assistantRunKey(item: { uuid: string, message_id?: string }): string {
   return item.message_id || item.uuid
 }
 
-function lastTopLevelTextEntry(parts: UiPart[]): DisplayPartEntry | null {
-  const entries = buildDisplayParts(parts)
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (
-      entry.kind === 'part'
-      && entry.part.type === 'text'
-      && entry.part.content !== COMPACTION_BOUNDARY
-      && entry.part.content.trim()
-    ) {
-      return entry
-    }
-  }
-  return null
-}
-
 function shouldCollapseAssistantRun(item: { messageContent?: MessageContentV1 }): boolean {
   const parts = item.messageContent?.parts
   return Boolean(
@@ -1529,7 +1506,7 @@ function shouldCollapseAssistantRun(item: { messageContent?: MessageContentV1 })
     && Array.isArray(parts)
     && !assistantPartsStillStreaming(parts)
     && hasCollapsibleParts(item)
-    && lastTopLevelTextEntry(parts),
+    && lastTopLevelTextEntry(buildDisplayParts(parts)),
   )
 }
 
@@ -1549,28 +1526,6 @@ function toggleAssistantRun(item: { uuid: string, message_id?: string, messageCo
     next.add(key)
   }
   expandedAssistantRuns.value = next
-}
-
-function assistantDisplayParts(item: { uuid: string, message_id?: string, messageContent?: MessageContentV1 }): DisplayPartEntry[] {
-  const parts = item.messageContent?.parts ?? []
-  if (!shouldCollapseAssistantRun(item) || isAssistantRunExpanded(item)) {
-    return buildDisplayParts(parts)
-  }
-  const finalText = lastTopLevelTextEntry(parts)
-  const agentEntries = buildDisplayParts(parts).filter((entry) =>
-    entry.kind === 'subagent'
-    || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
-  )
-  return finalText ? [...agentEntries, finalText] : buildDisplayParts(parts)
-}
-
-function canUseSharedConversationRenderer(item: { uuid: string, message_id?: string, messageContent?: MessageContentV1 }): boolean {
-  if (!item.messageContent || shouldCollapseAssistantRun(item)) {
-    return false
-  }
-  return buildDisplayParts(item.messageContent.parts).every((entry) =>
-    entry.kind === 'part' && !(entry.part.type === 'tool' && entry.part.name === 'start_task'),
-  )
 }
 
 function assistantSubagentCount(item: {
@@ -1593,7 +1548,9 @@ const sseStream = useSSEStream({
     // retrying 每次带不同 attempt 编号（1/6、2/6…），必须每次刷新 label，
     // 不走 status 去重——否则只显示首次重试。
     if (status === 'retrying') {
-      retryingLabel.value = message || '连接中断，正在重试'
+      // retrying 唯一来源是 LLM 网关限流/瞬时错误的自动重试（带 attempt
+      // 明细 message）；快照驱动无 message 时的兜底文案不得谎称连接断开
+      retryingLabel.value = message || '模型服务不稳定，自动重试中'
       lastRunStatusNotice = status
       return
     }
@@ -2487,7 +2444,6 @@ const handleResetState = () => {
 }
 handleResetState()
 
-
 // 会话列表右键菜单
 const sessionContextMenuShow = ref(false)
 const sessionContextMenuX = ref(0)
@@ -2935,7 +2891,6 @@ function closeHistoryDrawer() {
 
 // 背景颜色 默认页面和内容页面动态调整
 const backgroundColorVariable = ref(cssVar(themeCssVar.bgElevated))
-
 
 // 添加一键滚动到底部功能的相关代码
 const showScrollToBottom = ref(false)
@@ -3419,6 +3374,7 @@ function onComposerPaste(e: ClipboardEvent) {
                               appearance="light"
                               :collapse-signal="runCollapseSignal"
                               :retrieval-results="messageRetrievalResults(item)"
+                              :citation-index="arcCitationIndex(item)"
                               :msg-metadata="item.msg_metadata"
                               :qa-type="item.qa_type || 'COMMON_QA'"
                               :task-for-tool-part="backgroundTaskForToolPart"
@@ -3462,6 +3418,7 @@ function onComposerPaste(e: ClipboardEvent) {
                                   v-if="arcPanelFor(item)"
                                   :entries="arcPanelFor(item)!.entries"
                                   :cited-keys="arcPanelFor(item)!.citedKeys"
+                                  :numbers="arcPanelFor(item)!.numbers"
                                 />
                               </template>
                             </AssistantReplyToolbar>
@@ -4099,34 +4056,6 @@ function onComposerPaste(e: ClipboardEvent) {
   background: var(--noesis-color-primary);
 }
 
-.compact-boundary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  box-sizing: border-box;
-  margin: 14px 0;
-  padding: 8px 12px;
-  border: 1px dashed var(--noesis-color-primary-muted);
-  border-radius: var(--noesis-radius-sm);
-  background: var(--noesis-color-primary-bg-subtle);
-  color: var(--noesis-color-text-tertiary);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.compact-boundary::before,
-.compact-boundary::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--noesis-color-border-subtle);
-}
-
-.compact-boundary__text {
-  white-space: nowrap;
-}
-
 /* 聊天记录侧栏折叠钮 — 使用 Naive 右缘定位，仅对齐主题色 */
 .chat-history-sider :deep(.n-layout-toggle-button) {
   border-color: var(--noesis-color-border);
@@ -4653,24 +4582,6 @@ function onComposerPaste(e: ClipboardEvent) {
   box-shadow: var(--noesis-shadow-sm);
 }
 
-.parallel-tools-group--light {
-  margin: 5px 0;
-  padding: 6px 10px;
-  border: 1px solid var(--noesis-block-light-border);
-  border-left: 3px solid var(--noesis-block-light-accent);
-  border-radius: var(--noesis-radius-md);
-  background: var(--noesis-block-light-bg);
-}
-
-/* 简洁模式与普通工具行共用同一条无框 disclosure 轨道。 */
-.parallel-tools-group--compact {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
 .chat-system-notice-row {
   display: flex;
   justify-content: flex-end;
@@ -4756,56 +4667,6 @@ function onComposerPaste(e: ClipboardEvent) {
     padding-right: 0;
     padding-left: 0;
   }
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__header) {
-  min-height: 0;
-  padding: 1px 0 !important;
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__header-main) {
-  min-width: 0;
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__content-wrapper) {
-  border-top: none;
-}
-
-.parallel-tools-group--compact .parallel-tools-group__header {
-  min-height: 24px;
-  line-height: 24px;
-}
-
-.parallel-tools-group__header {
-  display: flex;
-  align-items: center;
-  min-height: 22px;
-  width: 100%;
-  font-size: 12px;
-  color: var(--noesis-color-text-secondary);
-}
-
-.parallel-tools-group :deep(.n-collapse-item__header) {
-  padding: 0 !important;
-}
-
-.parallel-tools-group :deep(.n-collapse-item__content-inner) {
-  padding: 0 !important;
-}
-
-.parallel-tools-group :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-block-light-divider);
-}
-
-.parallel-tools-group__body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.parallel-tools-group__body :deep(.tool-call--light) {
-  margin: 0;
-  box-shadow: none;
 }
 
 .chat-top-bar {

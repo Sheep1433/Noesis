@@ -734,25 +734,13 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     const runId = currentRunId
     userAborted = true
     abortController?.abort()
-    const snapshot = await stopAgentRun(runId)
-    onSnapshot?.(snapshot)
-    if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
-      terminalObserved = true
-      if (snapshot.status === 'error') {
-        settleFailure(snapshot.message ?? '生成失败')
-      } else {
-        settleSuccess(snapshot.finish_reason ?? 'stopped')
-      }
-      isLoading.value = false
-      return
-    }
-
-    // cancel grace 内终态持久化尚未完成时，不能把 running snapshot 当作成功。
-    // 建立新订阅，等待服务端权威 terminal transaction 后再收尾。
-    userAborted = false
-    abortController = new AbortController()
-    onRunStatus?.('running', '正在停止')
-    await followRun(runId, streamGeneration)
+    // 乐观收尾：点击即终态——后端 stop 实测 1ms 内落 partial，API 往返
+    // 是唯一延迟。不等 API：点击后立即让 UI 进入终态（消息收尾 + 停止
+    // 标注），API 后台执行；失败时服务端协程仍在跑，用户可用停止重试
+    terminalObserved = true
+    settleSuccess('stopped')
+    isLoading.value = false
+    stopAgentRun(runId).catch(() => {})
   }
 
   /** 本轮终态后重发排队的消息；用户已切走会话或手动停止则丢弃 */

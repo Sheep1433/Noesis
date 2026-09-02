@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import type { CitationIndex } from '@/views/chat/citationRendering'
 import type { RetrievalResultUi } from '@/views/chat/messageParts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -24,6 +25,8 @@ interface Props {
   /** 底部工具栏左侧问答类型角标 */
   qaType?: string
   retrievalResults?: RetrievalResultUi[]
+  /** 外部预建的引用序号索引（弧聚合面板的引用优先编号）；提供时优先于 retrievalResults 现算 */
+  citationIndex?: CitationIndex
 }
 
 interface Emits {
@@ -42,6 +45,7 @@ const props = withDefaults(defineProps<Props>(), {
   variant: 'full',
   qaType: 'COMMON_QA',
   retrievalResults: () => [],
+  citationIndex: undefined,
 })
 
 const emit = defineEmits<Emits>()
@@ -75,7 +79,7 @@ watch(
 const renderedMarkdown = computed(() => {
   return MarkdownInstance.render(displayText.value, {
     retrievalResults: props.retrievalResults,
-    citationIndex: buildCitationIndex(props.retrievalResults),
+    citationIndex: props.citationIndex ?? buildCitationIndex(props.retrievalResults),
   })
 })
 
@@ -194,7 +198,6 @@ onBeforeUnmount(() => {
             <template v-for="(call, index) in toolCalls" :key="call.tool_call_id || index">
               <SubagentCollapse
                 v-if="call.name === TASK_TOOL_NAME"
-                appearance="light"
                 :input="call.arguments ?? {}"
                 :output="call.result ?? ''"
                 :status="call.status || 'success'"

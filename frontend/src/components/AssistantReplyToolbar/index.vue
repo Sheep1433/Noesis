@@ -11,12 +11,15 @@ const props = withDefaults(defineProps<{
   langfuseSessionId?: string
   /** VITE_LANGFUSE_UI_ORIGIN，非空时显示「观测」 */
   langfuseUiOrigin?: string
+  /** 顶部边框：主视图卡片内 true（内容/页脚分隔），平铺宿主 false */
+  bordered?: boolean
 }>(), {
   qaType: 'COMMON_QA',
   copyText: '',
   timeText: '',
   langfuseSessionId: '',
   langfuseUiOrigin: '',
+  bordered: true,
 })
 
 const showLangfuse = computed(
@@ -50,7 +53,7 @@ const handlePassClip = async () => {
 </script>
 
 <template>
-  <div class="assistant-reply-toolbar">
+  <div class="assistant-reply-toolbar" :class="{ 'assistant-reply-toolbar--borderless': !bordered }">
     <div class="assistant-reply-toolbar__left">
       <slot name="meta"></slot>
       <n-tooltip v-if="showLangfuse" placement="top">
@@ -99,6 +102,11 @@ const handlePassClip = async () => {
   border-bottom-left-radius: 15px;
   background-color: transparent;
   color: var(--noesis-color-text-secondary);
+}
+
+.assistant-reply-toolbar--borderless {
+  border-top: none;
+  padding-top: 2px;
 }
 
 .assistant-reply-toolbar__left {

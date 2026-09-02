@@ -225,6 +225,22 @@ describe('弧聚合面板（纯函数）', () => {
     ])
     expect(arcDeliveryText(delivery)).toBe('第一段\n第二段')
   })
+
+  it('引用优先编号：被引用条目按引用首现序编 1..N，未引用按首见序接续排后', () => {
+    const delivery = msg('assistant', [
+      retrievalPart([
+        webResult('w1', 'https://example.com/a'),
+        webResult('w2', 'https://example.com/b'),
+        webResult('w3', 'https://example.com/c'),
+      ]),
+      // 首见序为 a,b,c；正文先引 c 再引 b——c=1、b=2，未被引用的 a 排 3
+      textPart('结论见 [citation:C](https://example.com/c) 与 [citation:B](https://example.com/b)。'),
+    ])
+    const panel = computeArcPanels([msg('user'), delivery]).get(arcMessageKey(delivery))!
+    expect(panel.numbers.get('web:https://example.com/c')).toBe(1)
+    expect(panel.numbers.get('web:https://example.com/b')).toBe(2)
+    expect(panel.numbers.get('web:https://example.com/a')).toBe(3)
+  })
 })
 
 describe('引用判定：结构化标记优先 + URL 兜底 + 文件内容归因', () => {

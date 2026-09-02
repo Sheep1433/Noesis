@@ -94,7 +94,6 @@ function entryKey(entry: (typeof entries.value)[number], fallback: number): stri
     />
     <SubagentCollapse
       v-else-if="entry.kind === 'subagent'"
-      :appearance="appearance"
       :input="entry.part.input"
       :output="entry.part.output"
       :status="entry.part.status"
@@ -185,3 +184,102 @@ function entryKey(entry: (typeof entries.value)[number], fallback: number): stri
     />
   </template>
 </template>
+
+<style lang="scss" scoped>
+/* 迁自 chat.vue：并行工具组与压缩边界样式随渲染器走（scoped 样式不跨组件） */
+.parallel-tools-group--light {
+  margin: 5px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--noesis-block-light-border);
+  border-left: 3px solid var(--noesis-block-light-accent);
+  border-radius: var(--noesis-radius-md);
+  background: var(--noesis-block-light-bg);
+}
+
+/* 简洁模式与普通工具行共用同一条无框 disclosure 轨道。 */
+.parallel-tools-group--compact {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.parallel-tools-group--compact :deep(.n-collapse-item__header) {
+  min-height: 0;
+  padding: 1px 0 !important;
+}
+
+.parallel-tools-group--compact :deep(.n-collapse-item__header-main) {
+  min-width: 0;
+}
+
+.parallel-tools-group--compact :deep(.n-collapse-item__content-wrapper) {
+  border-top: none;
+}
+
+.parallel-tools-group--compact .parallel-tools-group__header {
+  min-height: 24px;
+  line-height: 24px;
+}
+
+.parallel-tools-group__header {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  width: 100%;
+  font-size: 12px;
+  color: var(--noesis-color-text-secondary);
+}
+
+.parallel-tools-group :deep(.n-collapse-item__header) {
+  padding: 0 !important;
+}
+
+.parallel-tools-group :deep(.n-collapse-item__content-inner) {
+  padding: 0 !important;
+}
+
+.parallel-tools-group :deep(.n-collapse-item__content-wrapper) {
+  border-top: 1px solid var(--noesis-block-light-divider);
+}
+
+.parallel-tools-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.parallel-tools-group__body :deep(.tool-call--light) {
+  margin: 0;
+  box-shadow: none;
+}
+
+.compact-boundary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 14px 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--noesis-color-primary-muted);
+  border-radius: var(--noesis-radius-sm);
+  background: var(--noesis-color-primary-bg-subtle);
+  color: var(--noesis-color-text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.compact-boundary::before,
+.compact-boundary::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--noesis-color-border-subtle);
+}
+
+.compact-boundary__text {
+  white-space: nowrap;
+}
+</style>

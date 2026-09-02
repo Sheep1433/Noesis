@@ -9,10 +9,12 @@ import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { safeWebUrl } from '@/views/chat/citationRendering'
 
 const props = defineProps<{
-  /** 弧内去重来源（首见序；序号 = index+1，与正文 badge 编号一致） */
+  /** 弧内去重来源（首见序存储；展示序号见 numbers） */
   entries: ArcSourceEntry[]
   /** 被交付正文引用（URL 归因）的条目 key 集合 */
   citedKeys: Set<string>
+  /** 引用优先编号（key → 序号）：被引用 1..N 按引用首现序，未引用接续排后 */
+  numbers: Map<string, number>
 }>()
 
 const router = useRouter()
@@ -30,19 +32,19 @@ interface NumberedEntry {
   number: number
 }
 
+/** 按共享编号映射取序号并升序排列（正文 badge 与本面板同一映射） */
+function numbered(entries: ArcSourceEntry[], cited: boolean): NumberedEntry[] {
+  return props.entries
+    .map((entry) => ({ entry, number: props.numbers.get(entry.key) ?? 0 }))
+    .filter((item) => props.citedKeys.has(item.entry.key) === cited)
+    .sort((a, b) => a.number - b.number)
+}
+
 /** 引用子集（交付正文 URL 归因命中；序号与正文 badge 一致） */
-const citedEntries = computed<NumberedEntry[]>(() =>
-  props.entries
-    .map((entry, index) => ({ entry, number: index + 1 }))
-    .filter((item) => props.citedKeys.has(item.entry.key)),
-)
+const citedEntries = computed<NumberedEntry[]>(() => numbered(props.entries, true))
 
 /** 其余检索来源（被检索但未被正文引用） */
-const uncitedEntries = computed<NumberedEntry[]>(() =>
-  props.entries
-    .map((entry, index) => ({ entry, number: index + 1 }))
-    .filter((item) => !props.citedKeys.has(item.entry.key)),
-)
+const uncitedEntries = computed<NumberedEntry[]>(() => numbered(props.entries, false))
 
 function kbLocation(result: RetrievalResultUi) {
   return {

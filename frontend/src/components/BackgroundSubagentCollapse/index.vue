@@ -32,9 +32,9 @@ const dispatchFailed = computed(() => props.toolPart.status === 'error' && !prop
     @click="show = true"
   >
     <span class="subagent-card__icon"><n-icon size="14"><GitNetworkOutline /></n-icon></span>
+    <span class="subagent-card__kind">子智能体</span>
     <span class="subagent-card__title">{{ title }}</span>
     <span v-if="dispatchFailed" class="subagent-card__failed">启动失败</span>
-    <span v-else class="subagent-card__chevron" aria-hidden="true">›</span>
   </button>
 
   <SubagentConversationDrawer
@@ -47,39 +47,39 @@ const dispatchFailed = computed(() => props.toolPart.status === 'error' && !prop
 </template>
 
 <style scoped lang="scss">
-/* 静态任务入口：仅锚定「该轮派发了哪个后台任务」并提供跳转；
-   实时状态（进行中/步数/耗时）由后台任务目录承载，不在聊天流重复展示 */
+/* 扁平行入口：与主时间线的子 Agent 头部同构——kind 灰字 + 标题主题色可点。
+   仅锚定「该轮派发了哪个后台任务」；实时状态（进行中/步数/耗时）由后台任务目录承载 */
 .subagent-card {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  min-height: 32px;
-  padding: 4px 10px;
-  border: 1px solid var(--noesis-block-light-border);
+  padding: 3px 8px;
+  border: none;
   border-radius: var(--noesis-radius-md);
-  background: var(--noesis-block-light-bg);
+  background: transparent;
   color: var(--noesis-color-text);
-  font-size: 12px;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
+  transition: background 0.15s ease;
 }
 
 .subagent-card:hover:not(:disabled) {
-  border-color: var(--noesis-color-primary-border-soft);
-  background: var(--noesis-color-primary-bg-hover);
+  background: var(--noesis-color-primary-bg-subtle, rgb(0 0 0 / 4%));
 }
 
 .subagent-card:disabled {
   cursor: default;
 }
 
-.subagent-card--failed {
-  border-color: var(--noesis-color-danger-border-soft, rgb(220 38 38 / 25%));
-}
-
 .subagent-card__icon {
   display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--noesis-color-text-secondary);
+}
+
+.subagent-card__kind {
   flex: 0 0 auto;
   color: var(--noesis-color-text-secondary);
 }
@@ -90,17 +90,19 @@ const dispatchFailed = computed(() => props.toolPart.status === 'error' && !prop
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+  color: var(--noesis-color-primary);
+}
+
+.subagent-card:hover:not(:disabled) .subagent-card__title {
+  text-decoration: underline;
+}
+
+.subagent-card--failed .subagent-card__title {
+  color: var(--noesis-color-text-secondary);
 }
 
 .subagent-card__failed {
   flex: none;
   color: var(--noesis-color-danger);
-}
-
-.subagent-card__chevron {
-  flex: none;
-  color: var(--noesis-color-text-hint);
-  font-size: 14px;
-  line-height: 1;
 }
 </style>

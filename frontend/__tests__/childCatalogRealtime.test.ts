@@ -223,6 +223,7 @@ describe('子 Agent 标准会话展示', () => {
     })
     await wrapper.find('.subagent-card').trigger('click')
     expect(wrapper.find('.drawer-stub').exists()).toBe(true)
+    expect(wrapper.text()).toContain('子智能体')
     expect(wrapper.text()).toContain('检索')
   })
 

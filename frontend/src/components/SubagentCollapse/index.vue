@@ -3,8 +3,8 @@ import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { SubagentRunStatus } from '@/utils/parseTaskTool'
 import type { ToolLifecycleState, ToolRunStatus, UiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
-import { NCollapse, NCollapseItem, NIcon, NTag, NTooltip } from 'naive-ui'
-import { computed } from 'vue'
+import { NCollapse, NCollapseItem, NIcon, NTooltip } from 'naive-ui'
+import { computed, ref, useId } from 'vue'
 import MarkdownPreview from '@/components/MarkdownPreview/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
@@ -26,8 +26,6 @@ interface Props {
   /** 子 Agent 内部 parts（text / reasoning / tool，带 parent_task_call_id） */
   childParts?: UiPart[]
   defaultOpen?: boolean
-  /** dark：独立深色块；light：嵌入助手气泡、与 ToolCallCollapse 对齐 */
-  appearance?: 'dark' | 'light'
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -39,8 +37,12 @@ const props = withDefaults(defineProps<Props>(), {
   durationMs: undefined,
   childParts: () => [],
   defaultOpen: false,
-  appearance: 'light',
 })
+
+/** collapse name 须跨实例唯一，否则同名子 Agent 会联动展开/收起 */
+const collapseName = `subagent-${useId()}`
+const expandedNames = ref<string[]>(props.defaultOpen ? [collapseName] : [])
+const expanded = computed(() => expandedNames.value.includes(collapseName))
 
 const childTimelineParts = computed(() => props.childParts ?? [])
 const childDisplayParts = computed(() => buildChildDisplayParts(childTimelineParts.value))
@@ -73,6 +75,12 @@ const parsedOutput = computed(() =>
 )
 
 const runStatus = computed<SubagentRunStatus>(() => parsedOutput.value.status)
+
+const STATUS_LABELS: Record<SubagentRunStatus, string> = {
+  in_progress: '进行中',
+  completed: '已完成',
+  failed: '失败',
+}
 
 const resultDisplay = computed(() => {
   const raw = parsedOutput.value.result?.trim()
@@ -122,35 +130,41 @@ const durationDisplay = computed(() => {
 </script>
 
 <template>
-  <n-collapse class="subagent-call" :class="{ 'subagent-call--light': appearance === 'light' }">
-    <n-collapse-item :name="parsedInput.description" :default-expanded="defaultOpen">
+  <n-collapse v-model:expanded-names="expandedNames" class="subagent-call">
+    <n-collapse-item :name="collapseName">
       <template #header>
         <div class="subagent-header">
-          <div class="subagent-header__icon">
-            <n-icon :size="17">
+          <span class="subagent-header__icon">
+            <n-icon :size="15">
               <GitNetworkOutline />
             </n-icon>
+          </span>
+          <span class="subagent-header__kind">子智能体</span>
+          <n-tooltip
+            placement="top"
+            :delay="2000"
+            :disabled="!descriptionTooltip"
+            :style="{ maxWidth: '420px' }"
+          >
+            <template #trigger>
+              <span class="subagent-header__main">
+                <span v-if="subagentTypeLabel" class="subagent-header__type">{{ subagentTypeLabel }}</span>
+                <span v-if="subagentTypeLabel" class="subagent-header__sep">·</span>
+                <span class="subagent-header__desc">{{ parsedInput.description }}</span>
+              </span>
+            </template>
+            {{ descriptionTooltip }}
+          </n-tooltip>
+          <div class="subagent-header__meta">
+            <span v-if="durationDisplay" class="subagent-header__duration">{{ durationDisplay }}</span>
+            <span class="subagent-header__status" :class="`is-${runStatus}`">{{ STATUS_LABELS[runStatus] }}</span>
           </div>
-          <div class="subagent-header__middle">
-            <n-tooltip
-              placement="top"
-              :delay="2000"
-              :disabled="!descriptionTooltip"
-              :style="{ maxWidth: '420px' }"
-            >
-              <template #trigger>
-                <span class="subagent-title">{{ parsedInput.description }}</span>
-              </template>
-              {{ descriptionTooltip }}
-            </n-tooltip>
-            <div class="subagent-header__tags">
-              <span v-if="durationDisplay" class="subagent-duration">{{ durationDisplay }}</span>
-              <n-tag type="info" size="small" round bordered>{{ subagentTypeLabel }}</n-tag>
-              <n-tag v-if="runStatus === 'in_progress'" type="warning" size="small" round bordered>进行中</n-tag>
-              <n-tag v-else-if="runStatus === 'completed'" type="success" size="small" round bordered>已完成</n-tag>
-              <n-tag v-else-if="runStatus === 'failed'" type="error" size="small" round bordered>失败</n-tag>
-            </div>
-          </div>
+          <span
+            class="subagent-header__chevron"
+            :class="{ 'subagent-header__chevron--open': expanded }"
+          >
+            <span class="i-carbon:chevron--right"></span>
+          </span>
         </div>
       </template>
 
@@ -174,7 +188,7 @@ const durationDisplay = computed(() => {
           />
         </div>
         <div v-if="errorDisplay" class="subagent-section subagent-section--error">
-          <div class="subagent-section__label">错误</div>
+          <div class="subagent-section__label subagent-section__label--error">错误</div>
           <MarkdownPreview
             class="subagent-markdown"
             :content="errorDisplay"
@@ -262,28 +276,7 @@ const durationDisplay = computed(() => {
 
 <style scoped>
 .subagent-call {
-  --tool-accent: var(--noesis-block-dark-accent);
-
-  background: var(--noesis-block-dark-bg);
-  border: 1px solid var(--noesis-block-dark-border);
-  border-radius: var(--noesis-radius-lg);
-  margin: 10px 0;
-  box-shadow: var(--noesis-shadow-block-dark-lg);
-  border-left: 3px solid var(--tool-accent);
-}
-
-.subagent-call--light {
-  --tool-accent: var(--noesis-block-light-accent);
-
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  margin: 5px 0;
-  background: var(--noesis-block-light-bg);
-  border: 1px solid var(--noesis-block-light-border);
-  border-radius: var(--noesis-radius-md);
-  border-left: 3px solid var(--tool-accent);
-  box-shadow: var(--noesis-shadow-sm);
+  margin: 2px 0;
 }
 
 .subagent-call :deep(.n-collapse-item) {
@@ -294,9 +287,9 @@ const durationDisplay = computed(() => {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: 0;
   min-width: 0;
-  padding: 0 10px 0 0;
+  padding: 0;
 }
 
 .subagent-call :deep(.n-collapse-item__header-main) {
@@ -310,127 +303,134 @@ const durationDisplay = computed(() => {
   padding-top: 0;
 }
 
-.subagent-call :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-block-dark-border-inner);
+/* 默认箭头改用行内 chevron（随 expandedNames 旋转） */
+.subagent-call :deep(.n-collapse-item-arrow) {
+  display: none;
 }
 
-.subagent-call--light :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-block-light-divider);
-}
-
+/* 扁平时间线：无卡片边框，hover 才出浅底 */
 .subagent-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  color: var(--noesis-block-dark-text);
   font-size: 13px;
-  padding: 11px 14px 11px 12px;
+  line-height: 1.5;
+  padding: 6px 10px;
+  border-radius: var(--noesis-radius-md, 8px);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
-.subagent-header__middle {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
-}
-
-.subagent-header__tags {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  margin-left: auto;
-  flex-shrink: 0;
-  gap: 6px;
-}
-
-.subagent-duration {
-  font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
-  font-size: 11px;
-  color: var(--noesis-block-dark-text-muted);
-  flex-shrink: 0;
-}
-
-.subagent-call--light .subagent-duration {
-  color: var(--noesis-color-text-muted);
+.subagent-header:hover {
+  background: var(--noesis-color-primary-bg-subtle, rgb(0 0 0 / 4%));
 }
 
 .subagent-header__icon {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--noesis-radius-md);
-  background: var(--noesis-block-dark-bg-icon);
-  color: var(--noesis-block-dark-icon);
+  color: var(--noesis-color-text-muted, #9ca3af);
   flex-shrink: 0;
 }
 
-.subagent-header:hover {
-  background: var(--noesis-block-dark-bg-hover);
+.subagent-header__kind {
+  color: var(--noesis-color-text-secondary, #6b7280);
+  flex-shrink: 0;
 }
 
-.subagent-call--light .subagent-header {
-  color: var(--noesis-block-light-text);
-}
-
-.subagent-call--light .subagent-header__icon {
-  background: var(--noesis-color-primary-bg-icon);
-  color: var(--noesis-block-light-icon);
-}
-
-.subagent-call--light .subagent-header:hover {
-  background: var(--noesis-color-primary-bg-hover);
-}
-
-.subagent-title {
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  font-size: 13px;
-  color: var(--noesis-block-dark-text-name);
+.subagent-header__main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1;
   min-width: 0;
-  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.subagent-header__type {
+  color: var(--noesis-color-primary, #2563eb);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.subagent-header__sep {
+  color: var(--noesis-color-text-muted, #9ca3af);
+  flex-shrink: 0;
+}
+
+.subagent-header__desc {
+  color: var(--noesis-color-text-body, #374151);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
-.subagent-call--light .subagent-title {
-  color: var(--noesis-block-light-text-name);
+.subagent-header__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--noesis-color-text-muted, #9ca3af);
+}
+
+.subagent-header__duration {
+  font-family: ui-monospace, 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.subagent-header__status.is-in_progress {
+  color: var(--noesis-color-warning, #d97706);
+}
+
+.subagent-header__status.is-completed {
+  color: var(--noesis-color-text-muted, #9ca3af);
+}
+
+.subagent-header__status.is-failed {
+  color: var(--noesis-color-error, #dc2626);
+}
+
+.subagent-header__chevron {
+  display: flex;
+  align-items: center;
+  color: var(--noesis-color-text-muted, #9ca3af);
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.subagent-header__chevron--open {
+  transform: rotate(90deg);
 }
 
 .subagent-content {
-  padding: 0 14px 14px;
+  padding: 2px 10px 10px 33px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .subagent-section__label {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--noesis-block-dark-text-label);
-  margin-bottom: 6px;
+  color: var(--noesis-color-text-muted, #9ca3af);
+  margin-bottom: 4px;
 }
 
-.subagent-call--light .subagent-section__label {
-  color: var(--noesis-color-text-muted);
+.subagent-section__label--error {
+  color: var(--noesis-color-error, #dc2626);
 }
 
+/* 正文平铺：不套边框底色 */
 .subagent-markdown {
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--noesis-color-border-code);
-  border-radius: 8px;
-  background: var(--noesis-color-bg-elevated);
 }
 
 .subagent-markdown :deep(.markdown-preview__body) {
@@ -441,20 +441,12 @@ const durationDisplay = computed(() => {
 
 .subagent-markdown :deep(.markdown-wrapper) {
   margin: 0;
-  padding: 10px 12px;
+  padding: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--noesis-color-text-body);
+  color: var(--noesis-color-text-body, #374151);
   font-size: 13px;
   line-height: 1.6;
-}
-
-.subagent-section--result .subagent-markdown {
-  border-color: var(--noesis-color-border-result);
-}
-
-.subagent-section--error .subagent-markdown {
-  border-color: var(--noesis-color-border-error);
 }
 
 .subagent-timeline {
@@ -555,14 +547,6 @@ const durationDisplay = computed(() => {
 }
 
 .subagent-narrative {
-  border-radius: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--noesis-color-border-code);
-  background: var(--noesis-color-bg-elevated);
-}
-
-.subagent-call--light .subagent-narrative {
-  border-color: var(--noesis-block-light-border);
-  background: var(--noesis-block-light-bg-narrative);
+  padding: 0;
 }
 </style>

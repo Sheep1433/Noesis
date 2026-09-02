@@ -54,4 +54,21 @@ export function buildCitationIndex(results: RetrievalResultUi[]): Map<string, Ci
   return index
 }
 
+/**
+ * 用外部编号映射构建索引（弧聚合面板的引用优先编号：被引用 1..N、未引用接续），
+ * 保证正文 badge 序号与来源面板编号一一对应。无编号的条目不进索引；
+ * 单条消息内的默认编号仍用 buildCitationIndex。
+ */
+export function buildCitationIndexFromNumbers(results: RetrievalResultUi[], numbers: Map<string, number>): CitationIndex {
+  const index = new Map<string, CitationIndexEntry>()
+  for (const result of results) {
+    const key = citationKey(result)
+    const number = numbers.get(key)
+    if (number !== undefined && !index.has(key)) {
+      index.set(key, { number, result })
+    }
+  }
+  return index
+}
+
 export type CitationIndex = Map<string, CitationIndexEntry>
