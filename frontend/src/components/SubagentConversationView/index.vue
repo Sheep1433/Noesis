@@ -6,6 +6,8 @@ import { useLocalStorage } from '@vueuse/core'
 import { NFloatButton, NInput } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
+  getActiveRun,
+  getAgentRun,
   getSession,
   getSessionMessages,
   resumeAgentRunHitl,
@@ -209,7 +211,7 @@ async function submitQueuedNow(index: number): Promise<void> {
       selectedModelId.value || undefined,
       selectedReasoningEffort.value || undefined,
     )
-    activeRunId.value = task.run_id || activeRunId.value
+    activeRunId.value = (await resolveActiveRunId(task.run_id)) || activeRunId.value
     emit('changed')
     await loadConversation()
   } catch (error) {
@@ -238,7 +240,7 @@ async function flushNextQueued(): Promise<void> {
       selectedModelId.value || undefined,
       selectedReasoningEffort.value || undefined,
     )
-    activeRunId.value = task.run_id || activeRunId.value
+    activeRunId.value = (await resolveActiveRunId(task.run_id)) || activeRunId.value
     emit('changed')
     await loadConversation()
   } catch (error) {
@@ -248,6 +250,28 @@ async function flushNextQueued(): Promise<void> {
   } finally {
     followupSending.value = false
   }
+}
+
+/**
+ * 冷恢复 run_id 竞态：send_followup 响应可能携带旧 run_id（新 run 在
+ *  隔离 loop 异步创建，响应可先于创建完成返回）——以服务端 active-run
+ *  发现为准，短重试覆盖创建窗口；发现不到回退响应值。
+ */
+async function resolveActiveRunId(fallbackRunId?: string | null): Promise<string | null> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    try {
+      const active = await getActiveRun(props.sessionId)
+      if (active?.run_id) {
+        return active.run_id
+      }
+    } catch {
+      return fallbackRunId ?? null
+    }
+  }
+  return fallbackRunId ?? null
 }
 
 async function sendFollowup() {
@@ -274,7 +298,7 @@ async function sendFollowup() {
       selectedModelId.value || undefined,
       selectedReasoningEffort.value || undefined,
     )
-    activeRunId.value = task.run_id || activeRunId.value
+    activeRunId.value = (await resolveActiveRunId(task.run_id)) || activeRunId.value
     followupInput.value = ''
     emit('changed')
     await loadConversation()
@@ -345,7 +369,6 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   reducerState.value = next
   if (next.assistantContent !== prev.assistantContent) {
     upsertAssistant(next.assistantContent, domain.type === 'run-snapshot' ? next.run ?? undefined : undefined)
-    streamingTextActive.value = false
   }
   // 终态时刻落进 assistant 消息：流式建出的合成消息没有 run_finished_at，
   // 不补的话 duration 会随 now 永远跳（「会话停了计时器还在跑」）
@@ -360,7 +383,6 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   }
   // 终态重载：落库后的 usage / 终态内容进入统计条与消息（流式终态对齐）
   if (domain.type === 'run-finished') {
-    streamingTextActive.value = false
     runCollapseSignal.value += 1
     void loadConversation()
   }
@@ -381,9 +403,6 @@ const runGenerating = computed(() => run.value?.status === 'running')
 const assistantHasParts = computed(() =>
   messages.value.some((m) => m.role === 'assistant' && normalizeApiContent(m.content).parts.length > 0),
 )
-/** 流式正文正在到达（delta 进来置位；边界投影/终态收口）——驱动「生成中」标记 */
-const streamingTextActive = ref(false)
-
 /** 追加流式增量到合成 assistant 消息的末尾同类型 part（无则新建）。 */
 function appendStreamingDelta(kind: 'text' | 'reasoning', text: string) {
   const assistantId = run.value?.assistant_message_id
@@ -414,7 +433,6 @@ function appendStreamingDelta(kind: 'text' | 'reasoning', text: string) {
     last.status = 'streaming'
   }
   messages.value[i] = { ...messages.value[i], content: { ...content, parts: [...content.parts] } }
-  streamingTextActive.value = true
 }
 
 async function loadContextSnapshot() {
@@ -435,7 +453,7 @@ async function loadContextSnapshot() {
   }
 }
 
-async function consumeStream(runId: string, serial: number) {
+async function consumeStream(runId: string, serial: number, attempt = 0) {
   stopStream()
   const previous = activeRunStreams.get(runId)
   if (previous) {
@@ -445,6 +463,7 @@ async function consumeStream(runId: string, serial: number) {
   const controller = new AbortController()
   activeRunStreams.set(runId, controller)
   streamAbort.value = controller
+  let streamEndedNormally = false
   try {
     const response = await subscribeAgentRun(runId, Number(run.value?.snapshot_sequence ?? 0), controller.signal)
     if (!response.body) {
@@ -461,6 +480,9 @@ async function consumeStream(runId: string, serial: number) {
       }
       try {
         const payload = JSON.parse(dataLines.join('\n')) as Record<string, unknown>
+        if (payload.type === 'run.finished') {
+          streamEndedNormally = true
+        }
         applyEvent(eventName, payload)
       } catch (error) {
         console.warn('[subagent] event parse failed', error)
@@ -501,7 +523,43 @@ async function consumeStream(runId: string, serial: number) {
     if (activeRunStreams.get(runId) === controller) {
       activeRunStreams.delete(runId)
     }
+    // 断流自愈：流结束但未见过终态事件且 run 仍非终态——连接中断会把
+    // 「运行中」永久卡死（终态事件随断连丢失，此前无任何补救路径：
+    // 对话已结束仍显示生成中标记与停止按钮）
+    if (!streamEndedNormally && serial === requestSerial && runActive.value) {
+      void resyncRunAfterStreamEnd(runId, serial, attempt)
+    }
   }
+}
+
+/** 断流后重取权威 run 状态：终态则按快照+终态收口；仍在跑则重订阅（有界退避）。 */
+async function resyncRunAfterStreamEnd(runId: string, serial: number, attempt: number) {
+  if (serial !== requestSerial || attempt >= 6) {
+    return
+  }
+  await new Promise((resolve) => setTimeout(resolve, Math.min(800 * (attempt + 1), 4000)))
+  if (serial !== requestSerial) {
+    return
+  }
+  try {
+    const snapshot = await getAgentRun(runId)
+    if (serial !== requestSerial) {
+      return
+    }
+    const status = String(snapshot.status || '')
+    if (['completed', 'error', 'partial', 'interrupted'].includes(status)) {
+      applyEvent('run-snapshot', { type: 'run-snapshot', ...snapshot })
+      applyEvent('run.finished', {
+        type: 'run.finished',
+        status,
+        finished_at: snapshot.finished_at ?? null,
+      })
+      return
+    }
+  } catch {
+    // 权威状态暂不可达：直接重订阅再试
+  }
+  void consumeStream(runId, serial, attempt + 1)
 }
 
 async function loadConversation() {
@@ -679,6 +737,14 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <div v-if="!messages.length" class="subagent-conversation__empty">暂无对话内容</div>
+      <!-- 生成中标记：消息流末尾（与主 Agent 的消息内同位置语义，而非
+           消息区与输入框之间的独立悬浮行） -->
+      <AssistantStreamingIndicator
+        v-if="runGenerating"
+        section
+        :divided="assistantHasParts"
+        :label="assistantHasParts ? '正在继续生成' : '正在生成'"
+      />
       <!-- 子会话来源面板：与主 Agent 同位置（回复末尾而非底部统计行）；
            基于落库 retrieval parts，会话内 canonical URL 去重 -->
       <div v-if="sessionSources.length" class="subagent-conversation__sources">
@@ -695,13 +761,6 @@ onBeforeUnmount(() => {
         />
       </template>
     </div>
-    <!-- 生成中标记：共享 AssistantStreamingIndicator（与主 Agent 同组件/文案逻辑） -->
-    <AssistantStreamingIndicator
-      v-if="runGenerating"
-      section
-      :divided="assistantHasParts"
-      :label="assistantHasParts ? '正在继续生成' : '正在生成'"
-    />
     <div class="subagent-conversation__composer chat-composer">
       <!-- 前端待发队列：run 进行中发送的消息在此排队，终态后逐条自动提交 -->
       <FollowupQueue
