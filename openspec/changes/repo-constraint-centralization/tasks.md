@@ -7,12 +7,12 @@
 - [x] 1.3 将 `~/.agents/skills/diagnosing-bugs/` 整目录移动到 `.agents/skills/diagnosing-bugs/`
 - [x] 1.4 确认用户级目录下三个同名 skill 已删除，无残留副本
 - [x] 1.5 code-review 清理外部生态死引用：移除 `/setup-matt-pocock-skills`、`docs/agents/issue-tracker.md`、`.scratch/` 依赖；spec 源查找第一优先级改为 openspec change（change 名取自 commit/分支/用户指定）
-- [x] 1.6 diagnosing-bugs 将 `CONTEXT.md` 与 `scripts/hitl-loop.template.sh` 引用改为指向 `docs/architecture/` 与 `docs/debugging/`
+- [x] 1.6 diagnosing-bugs 将 `CONTEXT.md` 与 `scripts/hitl-loop.template.sh` 引用改为指向 `docs/engineering/` 与 `docs/debugging/`
 - [x] 1.7 code-simplification 示例压缩到 TS + Python，删除 React/JSX 节；行为契约（输入/输出/异常/副作用顺序不变）零改动
 
 ## 2. 迁入 skill 的 Noesis 化改造
 
-- [x] 2.1 三个 skill 各补「Sources of truth」节：链接根 AGENTS.md 协作约定、`docs/architecture/` 相关页、openspec specs，不复述其内容
+- [x] 2.1 三个 skill 各补「Sources of truth」节：链接根 AGENTS.md 协作约定、`docs/engineering/` 相关页、openspec specs，不复述其内容
 - [x] 2.2 `code-review` 并入审查经济学三条（CI/gate 已证明属性禁提、blocker/suggestion 分离、逐条技术性回应禁止表演性认同），并链接高关注区清单（SSE 持久化、Qdrant 异常、配置硬编码、密钥、MCP 远程执行）
 - [x] 2.3 三个 skill 与 `noesis-code-quality-audit` 在各自开头声明职责边界（diff 把关 / 安全执行简化 / 全库找债）
 - [x] 2.4 核对 `code-simplification` 与 `diagnosing-bugs` 行为契约未被改动（简化不改行为顺序；诊断先稳定反馈再定位根因、禁止先加 fallback）

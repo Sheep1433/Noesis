@@ -19,7 +19,7 @@ Job boundary: this skill gates **one diff**. It is not `code-simplification` (wh
 - [AGENTS.md](../../../AGENTS.md) — collaboration rules, conventions, and the **high-concern list** (SSE 持久化、Qdrant 异常、配置硬编码、JWT/DB 密钥、MCP 远程执行). Findings in these areas outrank style findings.
 - [frontend/AGENTS.md](../../../frontend/AGENTS.md) / [backend/AGENTS.md](../../../backend/AGENTS.md) — module standards.
 - `openspec/specs/**` and the originating change under `openspec/changes/**` — the Spec axis' authority.
-- [docs/architecture/](../../../docs/architecture/) — current long-term architecture; a diff that contradicts it without a spec change is a Spec finding.
+- [docs/engineering/](../../../docs/engineering/) — current long-term architecture; a diff that contradicts it without a spec change is a Spec finding.
 
 ## Process
 

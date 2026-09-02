@@ -11,7 +11,7 @@
 - provider 原生或 structured output 产生 typed citation；
 - 检索工具保留来源元数据，模型按 system prompt 在普通 Markdown 中引用。
 
-可验收行为以 OpenSpec 为准；当前数据流见 [`chat-streaming.md`](../architecture/platform/chat-streaming.md)。
+可验收行为以 OpenSpec 为准；当前数据流见 [`chat-streaming.md`](../engineering/platform/chat-streaming.md)。
 
 ## 2. Noesis 现状
 

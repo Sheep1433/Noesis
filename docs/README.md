@@ -7,8 +7,7 @@
 | 目录 | 回答的问题 |
 |---|---|
 | `research/` | Noesis 当前情况怎样，外部项目怎样实现，有哪些选择和证据？ |
-| `architecture/` | 当前系统如何组成，边界、数据流和约束是什么？ |
-| `engineering/` | 某个困难机制为什么难，如何实现、验证和排障？ |
+| `engineering/` | 系统如何组成（边界、数据流、约束），困难机制如何实现与排障？ |
 | `bug/` | 当前仍需跟踪哪些 Bug？ |
 | `debugging/` | 哪些根因和诊断方法值得再次使用？ |
 | `test/` | 跨模块测试与评测如何设计？ |
@@ -24,18 +23,17 @@
 | 实现任务 | `openspec/changes/<change>/tasks.md` |
 | 调研证据与外部方案比较 | `docs/research/` |
 | 长期决策依据与被否方案（跨变更） | `docs/decisions/` |
-| 当前长期架构 | `docs/architecture/` |
-| 高难度实现与经验 | `docs/engineering/` |
+| 当前长期架构与高难度实现 | `docs/engineering/` |
 
 `openspec-explore` 可以执行代码调查、外部调研和方案比较，但没有固定输出，也不会默认生成 `research.md`。需要保留完整研究过程时写入 `docs/research/`，再将最终结论分别写入 OpenSpec artifacts。
 
 ## 核心文档
 
-- [知识库 RAG 架构](architecture/knowledge-base.md)
-- [SSE 流式数据](architecture/platform/chat-streaming.md)
-- [Durable Agent Run 与断线恢复架构](architecture/platform/durable-agent-runs.md)
-- [聊天记录与持久化](architecture/platform/chat-persistence.md)
-- [设置控制面](architecture/platform/settings-control-plane.md)
+- [知识库 RAG 架构](engineering/knowledge-base.md)
+- [SSE 流式数据](engineering/platform/chat-streaming.md)
+- [Durable Agent Run 与断线恢复架构](engineering/platform/durable-agent-runs.md)
+- [聊天记录与持久化](engineering/platform/chat-persistence.md)
+- [设置控制面](engineering/platform/settings-control-plane.md)
 - [测试用例生成](engineering/agents/test-case-generation.md)
 - [Agent 评测运行指南](engineering/agents/agent-evaluation.md)
 - [Agent Runtime 设计（Proposed）](engineering/agents/agent-runtime-design.md)

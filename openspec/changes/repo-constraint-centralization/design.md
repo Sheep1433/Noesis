@@ -43,9 +43,9 @@
 
 质量验证支持保留自有版本；改造限于四类：
 
-- **死引用清理**：code-review 移除 `/setup-matt-pocock-skills` 与 `docs/agents/issue-tracker.md` 依赖；spec 源查找第一优先级改为 openspec（change 名来自 commit/分支名或用户指定，其次才是散置文档）；diagnosing-bugs 的 `CONTEXT.md`/ADR 引用改指 `docs/architecture/` 与 `docs/debugging/`（`hitl-loop.template.sh` 随迁保留，标注为 skill 自带文件）。
+- **死引用清理**：code-review 移除 `/setup-matt-pocock-skills` 与 `docs/agents/issue-tracker.md` 依赖；spec 源查找第一优先级改为 openspec（change 名来自 commit/分支名或用户指定，其次才是散置文档）；diagnosing-bugs 的 `CONTEXT.md`/ADR 引用改指 `docs/engineering/` 与 `docs/debugging/`（`hitl-loop.template.sh` 随迁保留，标注为 skill 自带文件）。
 - **瘦身**：code-simplification 示例压缩到 TS + Python（Noesis 栈），React/JSX 节删除；行为契约（输入/输出/异常/副作用顺序不变）不动。
-- **Sources of truth 节**：链接根 AGENTS.md、`docs/architecture/`、openspec specs，不复述内容——skill 与仓库文档的双份陈述必然漂移，指向则不会。
+- **Sources of truth 节**：链接根 AGENTS.md、`docs/engineering/`、openspec specs，不复述内容——skill 与仓库文档的双份陈述必然漂移，指向则不会。
 - **职责边界声明**：code-review（diff 把关）/ code-simplification（安全执行简化）/ noesis-code-quality-audit（全库找债）三方在各自开头声明边界，防触发混淆。
 
 ### D3. 审查经济学并入 `code-review`，不单独开 skill

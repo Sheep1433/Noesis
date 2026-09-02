@@ -16,7 +16,7 @@ first when the subject is a Noesis run, then return here for the causal loop.
 
 ## Sources of truth (read, don't re-summarize)
 
-- [docs/architecture/](../../../docs/architecture/) — the relevant module's current architecture, before forming hypotheses about paths and boundaries.
+- [docs/engineering/](../../../docs/engineering/) — the relevant module's current architecture, before forming hypotheses about paths and boundaries.
 - [docs/debugging/](../../../docs/debugging/) — root causes and diagnosis methods that paid off before; check it before re-deriving a known diagnosis.
 - [AGENTS.md](../../../AGENTS.md) — verification commands and the rule that a root cause comes before any fallback or compatibility patch.
 

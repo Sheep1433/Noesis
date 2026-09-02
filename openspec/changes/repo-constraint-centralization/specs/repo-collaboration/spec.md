@@ -92,7 +92,7 @@ CI SHALL 运行 md 链接校验，覆盖 `docs/`、根与子树 `AGENTS.md`、�
 
 ### Requirement: skill 与仓库权威文档的指向关系
 
-迁入与新建的 skill SHALL 以链接指向仓库权威文档（根 AGENTS.md、`docs/architecture/`、openspec specs）作为展开规则的来源，MUST NOT 在 skill 内复述这些文档的规则内容。
+迁入与新建的 skill SHALL 以链接指向仓库权威文档（根 AGENTS.md、`docs/engineering/`、openspec specs）作为展开规则的来源，MUST NOT 在 skill 内复述这些文档的规则内容。
 
 #### Scenario: skill 引用而非复制
 - **WHEN** AGENTS.md 的某个被 skill 引用的规则发生修改

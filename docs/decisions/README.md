@@ -47,4 +47,4 @@ openspec 归档接缝：change 归档时把 `design.md` 中有长期价值的判
 
 ## legacy 说明
 
-原 `docs/NOTES.md` 的 138 张决策卡片已**整体移入 `archived/`**（2026-09-01 裁决：不做逐条整理，历史不增加维护负担）。archived/ 是只读历史素材：正文零改写、不满足新格式、**不参与格式校验、不算现行权威**——需要历史依据时搜索它，引用时注明是历史记录；现行判断依据只看 `implemented/` 的新格式记录与各 owning 文档（`docs/architecture/`、openspec specs）。新决策禁止落入 archived/。未带决策日期的工程操作记录在 [docs/engineering/legacy-worklog.md](../engineering/legacy-worklog.md)，不属于本体系。
+原 `docs/NOTES.md` 的 138 张决策卡片已**整体移入 `archived/`**（2026-09-01 裁决：不做逐条整理，历史不增加维护负担）。archived/ 是只读历史素材：正文零改写、不满足新格式、**不参与格式校验、不算现行权威**——需要历史依据时搜索它，引用时注明是历史记录；现行判断依据只看 `implemented/` 的新格式记录与各 owning 文档（`docs/engineering/`、openspec specs）。新决策禁止落入 archived/。未带决策日期的工程操作记录在 [docs/engineering/legacy-worklog.md](../engineering/legacy-worklog.md)，不属于本体系。

@@ -29,7 +29,7 @@ LangGraph / LangChain raw event
        └─ immutable envelope        → ChannelDelivery
 
 （子 Agent 同源：executor 消费 stream_agent_events + 同一 mapper，
- 产出子会话投影与 run 事件，见 docs/architecture/subagent-sessions.md「统一 run 管道」）
+ 产出子会话投影与 run 事件，见 docs/engineering/subagent-sessions.md「统一 run 管道」）
 ```
 
 - `RuntimeEventMapper`：将 raw event 转为封闭 typed `RunEvent`。不编码 SSE，不做持久化。主/子

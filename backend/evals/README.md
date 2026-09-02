@@ -10,7 +10,6 @@
 | Agent / Agentic RAG | `uv run python -m evals.agent.rag` | 已实现 |
 | 消息压缩 | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
-| 知识库检索（单集合） | `uv run python -m evals.kb.run --collection <name>` | 已实现 |
 | 知识库检索（ERB 基准） | `uv run python -m evals.kb.erb --all` | 已实现 |
 
 ```bash
@@ -45,7 +44,7 @@ Noesis **没有**统一的评测结果 Web 页面；各子模块产物与查看�
 | BrowseComp | `evals/agent/browsecomp/results/<tag>/` | **无** | `summary.json` / `convos.jsonl`；可选 Langfuse trace |
 | Terminal-Bench（Harbor） | `evals/agent/harbor/results/<job>/` | **有**（Harbor） | `harbor view evals/agent/harbor/results/<job>` |
 | 消息压缩 | `evals/compression/results/<tag>/` | **无** | `summary.json`；`--compare-to` 对比历史 |
-| 知识库检索 `evals.kb` | 无持久化目录 | **无** | 命令行直接输出 Recall@K / Hit@K |
+| 知识库检索 `evals.kb.erb` | 无持久化目录 | **无** | 命令行直接输出 Recall@K / 阈值模拟 |
 | 负载测试 Locust | Locust Web（运行时） | **有**（Locust） | `http://localhost:8089`（仅压测进行中） |
 
 ### 测试用例（promptfoo）
@@ -130,8 +129,8 @@ uv run python -m evals.compression --tag after-tweak --compare-to results/compre
 无 `results/<tag>/` 目录；指标在命令行 stdout。需要留档时自行重定向：
 
 ```bash
-uv run python -m evals.kb.run --collection requirement_docs \
-  > evals/kb/results/manual-$(date +%Y%m%d).log
+uv run python -m evals.kb.erb --all \
+  > evals/kb/erb_results-$(date +%Y%m%d).log
 ```
 
 ### 负载测试（Locust）
@@ -243,9 +242,9 @@ GeneralQAAgent → create_noesis_agent → search_knowledge_base
   → noesis.runtime.deps → KbRetrievalService
 ```
 
-结果记录 KB Tool 调用率、期望来源 recall 和最终回答。它用于验证 Agentic RAG 集成，不替代 `evals.kb` 的 Recall@K / Hit@K：
+结果记录 KB Tool 调用率、期望来源 recall 和最终回答。它用于验证 Agentic RAG 集成，不替代 `evals.kb.erb` 的检索层指标：
 
-- `evals.kb`：直接评价检索与排序，适合确定性回归。
+- `evals.kb.erb`：直接评价检索与排序（组件层），适合确定性回归。
 - `evals.agent.rag`：评价 Agent 是否调用知识库、是否命中来源并基于证据回答。
 
 ---
@@ -317,18 +316,7 @@ uv run locust -f evals/loadtest/locustfile.py --host=http://127.0.0.1:8089 \
 
 ---
 
-## 5. 知识库检索（`evals.kb`）
-
-单集合 JSONL 基准，计算 Recall@K / Hit@K；与 `evals.case --phase rag` 互补（后者测场景级 Agent RAG）。
-
-```bash
-cd backend
-uv run python -m evals.kb.run --collection requirement_docs --dataset evals/kb/fixtures/sample.jsonl
-```
-
-可选 `--k`、`--query-params '{"use_reranker":false}'`。默认读取目标集合 PostgreSQL `query_params` 并走 `KbRetrievalService` 全链路。
-
-### 5.1 ERB 企业级基准（`evals.kb.erb`）
+## 5. 知识库检索（`evals.kb.erb`）— ERB 企业级基准
 
 EnterpriseRAG-Bench（Onyx）子集：**211 正样本题**（GT 全部在语料内）+ **20 info_not_found 负样本**，语料 `erb-eval` 集合（312 GT + 220 confluence 干扰，文件名已转短名，`ingest_plan.json` 为语料清单与 dsid 映射）。
 
@@ -341,6 +329,6 @@ uv run python -m evals.kb.erb --all        # 全量 211+20，rerank 成本 ~2 �
 - 指标：Recall@K（top-10 + GT 命中排名）、阈值离线模拟（正样本 GT 保留 vs 负样本拒答，档位 0.30~0.0）、负拒率
 - 设计：单次检索记录原始 rerank 分（`score_threshold=0`），阈值效果离线模拟，不重复调用 API
 - 数据集：`evals/kb/erb_data/`（gitignored；`ERB_DATA_DIR` 可覆盖）。语料入库用集合级 `chunk_size=2000/overlap=200`，阈值 `score_threshold=0.05`
-- 方案文档：`/Users/zzq/Desktop/docs/knowledge-base/Interview/highlights/evals/Noesis-评测体系-方案.md` §3.1
+- 与 `evals.case --phase rag` / `evals.agent.rag`（场景级 Agent RAG）互补。方案文档：`/Users/zzq/Desktop/docs/knowledge-base/Interview/highlights/evals/Noesis-评测体系-方案.md` §3.1
 
-`sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/architecture/platform/chat-streaming.md`）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。
+`sse_client.consume_sse_stream` 读到 `data: [DONE]` 才计为成功端到端（与前端一致）；**提前断开**不影响服务端 partial 落库（见 `docs/engineering/platform/chat-streaming.md`）。压测验证落库时请查 `t_chat_message` 同一 session 仅一条 assistant 行。

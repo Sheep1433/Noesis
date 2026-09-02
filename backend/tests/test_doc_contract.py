@@ -26,7 +26,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 BRIDGE = (
     BACKEND / "packages/noesis-core/src/noesis/chat/event_mapping/langgraph_bridge.py"
 )
-STREAMING_DOC = REPO / "docs/architecture/platform/chat-streaming.md"
+STREAMING_DOC = REPO / "docs/engineering/platform/chat-streaming.md"
 
 
 def _bridge_events() -> set[str]:

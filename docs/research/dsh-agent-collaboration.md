@@ -129,7 +129,7 @@ dsh 的审查是三级流水线：gate + review bot 机器初审 → 持有 `dsh
 2. **CoT 泄漏修剪**（`dsh-trim-cot-leakage`）。直接对应「过期注释影响判断」痛点：Agent 恰恰是最容易留下 "used to"、"rejected in review" 类文字的作者，dsh 把这类残留编成了 8 种可检索的缺陷模式加探针。Noesis 的注释和 architecture 文档没有这道防线。
 3. **通用写作标准**（`dsh-prose-standard`）。Noesis 的 product-facing-copy-audit 只管 UI 文案一个面；没有覆盖注释/JSDoc/文档的写作契约。
 4. **change-scope 影响面工具**。一条命令算出 diff 触及路径与「脏层」，审查和测试选择都以它为起点。
-5. **生成式目录**。从源码再生成、禁手改。Noesis 的 `docs/architecture/` 全手写。
+5. **生成式目录**。从源码再生成、禁手改。Noesis 的 `docs/engineering/` 全手写。
 6. **同任务双 Agent 竞争分支**。一种用真实任务评测 Agent 的方式。
 7. **Stacked PR 规程**、**双语配对流水线**。前者 Noesis 单人流程用不上；后者单语不适用（但其「hash 配对记录进 PR 作为可 review 的一致性声明」思想可迁移到其它一致性场景）。
 

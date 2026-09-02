@@ -16,7 +16,7 @@ Read these files before reviewing:
 - `AGENTS.md`
 - `frontend/AGENTS.md` when reviewing frontend code
 - `backend/AGENTS.md` when reviewing backend code
-- relevant `docs/architecture/` and `docs/engineering/` documents
+- relevant `docs/engineering/` and `docs/engineering/` documents
 - `CONTEXT.md` if present
 
 Run:

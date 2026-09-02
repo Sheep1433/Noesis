@@ -11,8 +11,7 @@
 | [frontend/AGENTS.md](frontend/AGENTS.md) | 前端目录地图、命令、流式/UI 约定 |
 | [backend/AGENTS.md](backend/AGENTS.md) | 后端分层规范、配置、Service/API 模板 |
 | `docs/research/` | 项目现状与外部技术调研 |
-| `docs/architecture/` | 当前长期架构与数据流 |
-| `docs/engineering/` | 高难度实现与工程经验 |
+| `docs/engineering/` | 系统组成与数据流，高难度实现与工程经验 |
 | `docs/decisions/` | 决策记录：为什么这么定、否了什么、代价是什么 |
 | `docs/bug/` | Bug 记录 |
 | `docs/debugging/` | 疑难排查沉淀 |
@@ -62,9 +61,9 @@ Noesis/
 
 ### SSE 事件
 
-run 内容流事件清单（message-start、reasoning/text/tool-input 系列、stats-update、hitl-required、finish、`[DONE]` 等）的**唯一权威**在 `docs/architecture/platform/chat-streaming.md` §4.2b，由契约测试钉住（漂移即 CI 红）。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见同文档 §4.2a。
+run 内容流事件清单（message-start、reasoning/text/tool-input 系列、stats-update、hitl-required、finish、`[DONE]` 等）的**唯一权威**在 `docs/engineering/platform/chat-streaming.md` §4.2b，由契约测试钉住（漂移即 CI 红）。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见同文档 §4.2a。
 
-**assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/architecture/platform/chat-streaming.md` §3.3。
+**assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/engineering/platform/chat-streaming.md` §3.3。
 
 ### 认证
 
@@ -167,7 +166,7 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 
 - 先解决根因，再考虑容错；安全问题禁止吞异常或扩大权限绕过
 - **禁止**多套方案并行（v2 / 备选）；废弃方案立即删除；遇到兼容方案的代码主动向用户提问是否要保留
-- 方案变更同步更新对应 `docs/architecture/` 或 `docs/engineering/` 文档，单文件演进，不做版本对比
+- 方案变更同步更新对应 `docs/engineering/` 文档，单文件演进，不做版本对比
 - 多次未解决的问题记录到 `docs/debugging/`（现象、根因、排查、方案）
 - 高关注区：SSE 持久化、Qdrant 异常、配置硬编码、JWT/DB 默认密钥、MCP 远程执行
 - **非平凡改动同提交附决策记录**（`docs/decisions/`，含被否方案）；实现 proposed 记录时将其改写为 implemented 并核实事实

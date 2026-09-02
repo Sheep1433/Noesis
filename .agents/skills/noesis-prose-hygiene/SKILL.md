@@ -59,7 +59,7 @@ description: 审计与修复 Noesis 仓库 prose 中的会话视角残留（"原
 - **内部注释**：非局部结构与复杂局部结构的取向——不变量、竞态顺序、所有权、安全边界、反直觉的失败行为。删控制流复述与代码重述。
 - **模块级 docstring**：角色、依赖、职责、非显然的架构选择；架构选择链接到 owning 文档。
 - **测试**：只解释非显然的测试设计（为何这个 fixture/断言/平台适配/间接观察是必要的），删走查与清单。
-- **docs/architecture/、README**：当前状态口径；边界、数据流、约束（见 `docs/README.md` 文档地图）。
+- **docs/engineering/、README**：当前状态口径；边界、数据流、约束（见 `docs/README.md` 文档地图）。
 - **prompts 与用户可见字符串**：措辞即行为，走快照或行为验证，不在本 skill 静默改写（转 `product-facing-copy-audit`）。
 
 ## 执行流程
