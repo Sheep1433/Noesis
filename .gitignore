@@ -41,6 +41,3 @@ backend/.env.*
 !backend/.env.prod.example
 backend/config.yaml
 backend/config.prod.yaml
-
-# 个人工具类 skill 不进仓库（开发纪律与工作流才归属 .agents/skills）
-.agents/skills/find-free-models/
