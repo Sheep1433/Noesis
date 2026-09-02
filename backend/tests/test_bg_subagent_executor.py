@@ -1941,3 +1941,61 @@ async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
     finally:
         executor_mod.unsubscribe_run_events(run_id, queue)
         bg_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_asend_message_cold_resume_returns_new_run_id() -> None:
+    """异步冷恢复契约：响应前完成新 run 创建——run_id 权威，订阅方据此
+    订阅即可收到全部事件。同步版响应可携带旧 run_id（新 run 异步创建），
+    前端曾被迫轮询 active-run 绕过（契约缺陷的补丁，已回归根因修复）。"""
+    worker = _build_worker([AIMessage(content="冷恢复完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="x",
+        session_id="s-asend", user_id="u1",
+        task_id="child-asend", run_id="run-old", assistant_message_id="am-old",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+    old_run_id = task["run_id"]
+
+    async def _factory(child_session_id, message, user_message_id=None):  # noqa: ANN001
+        return {"run_id": "run-new", "assistant_message_id": "am-new"}
+
+    entry = _TASKS[task_id]
+    entry.followup_factory = _factory
+
+    snapshot = await BackgroundSubagentExecutor.asend_message(task_id, "继续")
+    # 契约：返回时新 run_id 已就绪（不是旧值），状态 running
+    assert snapshot["run_id"] == "run-new"
+    assert snapshot["run_id"] != old_run_id
+    assert snapshot["assistant_message_id"] == "am-new"
+    assert snapshot["status"] == BgTaskStatus.RUNNING.value
+    assert entry.task.run_id == "run-new"
+
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_asend_message_factory_failure_fails_task() -> None:
+    """异步冷恢复的前置失败（factory 抛异常）：显式收口 FAILED，
+    响应携带失败状态与错误信息（而非静默卡 RUNNING）。"""
+    worker = _build_worker([AIMessage(content="第一轮完成")])
+    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    task_id = executor.start(
+        worker_factory=lambda: worker, description="x",
+        session_id="s-asend-fail", user_id="u1",
+    )
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+    async def _boom(child_session_id, message, user_message_id=None):  # noqa: ANN001
+        raise RuntimeError("run 创建失败")
+
+    entry = _TASKS[task_id]
+    entry.followup_factory = _boom
+
+    snapshot = await BackgroundSubagentExecutor.asend_message(task_id, "继续")
+    assert snapshot["status"] == BgTaskStatus.FAILED.value
+    assert "run 创建失败" in (snapshot["error"] or "")

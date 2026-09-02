@@ -1082,6 +1082,85 @@ class BackgroundSubagentExecutor:
             return task.to_dict()
 
     @staticmethod
+    async def asend_message(
+        task_id: str,
+        message: str,
+        user_message_id: Optional[str] = None,
+        model_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """异步 send_message：冷恢复分支在返回前完成新 run 创建。
+
+        同步版立即返回任务快照——新 run 在隔离 loop 异步创建，响应携带
+        旧 run_id，订阅方据此订阅旧通道、错过新 run 全部事件（前端曾以
+        轮询 active-run 绕过该竞态，属掩盖契约缺陷的补丁）。本方法在
+        调用方（主 loop）上下文先经 factory 创建 run，run_id 就绪后再
+        提交执行；运行中入队语义与同步版一致。
+        """
+        text = message.strip()
+        if not text:
+            raise ValueError("消息不能为空")
+        params = _TurnParams(model_id=model_id, reasoning_effort=reasoning_effort)
+        with _TASKS_LOCK:
+            entry = _find_entry_locked(task_id)
+            if entry is None:
+                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
+            task = entry.task
+            if task.kind == "shell":
+                raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
+            if task.status == BgTaskStatus.STOPPING:
+                raise ValueError("任务正在停止，无法追加消息")
+            if task.status != BgTaskStatus.COMPLETED:
+                if task.status.is_terminal:
+                    raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
+                with entry.followup_lock:
+                    entry.followups.append(text)
+                    entry.followup_message_ids.append(user_message_id)
+                    entry.followup_turn_params.append(params)
+                _publish_task_event(task, "followup")
+                return task.to_dict()
+            # 先占位 RUNNING：run 创建窗口内受理的停止由宽限对账兜底
+            task.status = BgTaskStatus.RUNNING
+            task.result = None
+            task.completed_at = None
+        if entry.followup_factory is None:
+            loop = _ensure_loop()
+            entry.future = _submit_isolated(
+                loop, _arun_followup(entry, text, user_message_id, params),
+            )
+            _arm_watchdog(entry)
+            _publish_task_event(task, "followup")
+            return task.to_dict()
+        try:
+            _apply_turn_params(entry, params)
+            task.turn_count += 1
+            launch = entry.followup_factory(
+                task.child_session_id or task.task_id, text, user_message_id,
+            )
+            if inspect.isawaitable(launch):
+                launch = await launch
+        except Exception as exc:
+            await _finalize_followup_prelude_failure(entry, task, exc)
+            return task.to_dict()
+        with _TASKS_LOCK:
+            task.run_id = str(launch.get("run_id") or "") or None
+            task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
+            task.projection_sequence = 0
+            entry.turn_seed_content = None
+            # 创建窗口内已受理停止：不提交执行——宽限 watchdog 对账时
+            # task.run_id 已是新 run，终态化正确收口
+            stopped_during_launch = task.status == BgTaskStatus.STOPPING
+        if not stopped_during_launch:
+            loop = _ensure_loop()
+            entry.future = _submit_isolated(
+                loop,
+                _arun(entry, initial_source={"messages": [HumanMessage(content=text)]}),
+            )
+            _arm_watchdog(entry)
+        _publish_task_event(task, "followup")
+        return task.to_dict()
+
+    @staticmethod
     def pop_followups(entry: _TaskEntry) -> list[str]:
         """取出待续 turn 消息（链式调度点消费）。"""
         with entry.followup_lock:

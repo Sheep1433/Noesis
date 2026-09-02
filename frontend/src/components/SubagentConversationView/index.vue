@@ -6,7 +6,6 @@ import { useLocalStorage } from '@vueuse/core'
 import { NFloatButton, NInput } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  getActiveRun,
   getAgentRun,
   getSession,
   getSessionMessages,
@@ -211,7 +210,7 @@ async function submitQueuedNow(index: number): Promise<void> {
       selectedModelId.value || undefined,
       selectedReasoningEffort.value || undefined,
     )
-    activeRunId.value = (await resolveActiveRunId(task.run_id)) || activeRunId.value
+    activeRunId.value = task.run_id || activeRunId.value
     emit('changed')
     await loadConversation()
   } catch (error) {
@@ -240,7 +239,7 @@ async function flushNextQueued(): Promise<void> {
       selectedModelId.value || undefined,
       selectedReasoningEffort.value || undefined,
     )
-    activeRunId.value = (await resolveActiveRunId(task.run_id)) || activeRunId.value
+    activeRunId.value = task.run_id || activeRunId.value
     emit('changed')
     await loadConversation()
   } catch (error) {
@@ -250,28 +249,6 @@ async function flushNextQueued(): Promise<void> {
   } finally {
     followupSending.value = false
   }
-}
-
-/**
- * 冷恢复 run_id 竞态：send_followup 响应可能携带旧 run_id（新 run 在
- *  隔离 loop 异步创建，响应可先于创建完成返回）——以服务端 active-run
- *  发现为准，短重试覆盖创建窗口；发现不到回退响应值。
- */
-async function resolveActiveRunId(fallbackRunId?: string | null): Promise<string | null> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (attempt > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 250))
-    }
-    try {
-      const active = await getActiveRun(props.sessionId)
-      if (active?.run_id) {
-        return active.run_id
-      }
-    } catch {
-      return fallbackRunId ?? null
-    }
-  }
-  return fallbackRunId ?? null
 }
 
 async function sendFollowup() {
@@ -298,7 +275,7 @@ async function sendFollowup() {
       selectedModelId.value || undefined,
       selectedReasoningEffort.value || undefined,
     )
-    activeRunId.value = (await resolveActiveRunId(task.run_id)) || activeRunId.value
+    activeRunId.value = task.run_id || activeRunId.value
     followupInput.value = ''
     emit('changed')
     await loadConversation()

@@ -70,6 +70,10 @@ class ExecutorPort:
         return _executor().send_message(*args, **kwargs)
 
     @staticmethod
+    async def asend_message(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().asend_message(*args, **kwargs)
+
+    @staticmethod
     def submit_decisions(*args: Any, **kwargs: Any) -> Any:
         return _executor().submit_decisions(*args, **kwargs)
 

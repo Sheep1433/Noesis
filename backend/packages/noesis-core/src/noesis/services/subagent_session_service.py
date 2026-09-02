@@ -122,7 +122,9 @@ class SubagentSessionService:
             message=message,
         )
         try:
-            return BackgroundSubagentExecutor.send_message(
+            # 异步版冷恢复：响应前完成新 run 创建（run_id 权威），
+            # 同步版响应可携带旧 run_id 导致订阅方错过新 run 全部事件
+            return await BackgroundSubagentExecutor.asend_message(
                 session_id,
                 message,
                 user_message_id=pending_user_message_id,
