@@ -76,3 +76,7 @@ config.prod.yaml
 
 # ERB 检索评测数据集（几百 MB 语料 + 题目 + 清单，不入库）
 evals/kb/erb_data/
+
+# LongMemEval 数据（~270MB，脚本下载）
+evals/agent/memory/data/
+evals/compression/fixtures/real/

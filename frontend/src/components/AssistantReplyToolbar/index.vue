@@ -55,6 +55,14 @@ const handlePassClip = async () => {
 <template>
   <div class="assistant-reply-toolbar" :class="{ 'assistant-reply-toolbar--borderless': !bordered }">
     <div class="assistant-reply-toolbar__left">
+      <button
+        type="button"
+        class="assistant-reply-toolbar__btn"
+        aria-label="复制回复"
+        @click="handlePassClip()"
+      >
+        <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
+      </button>
       <slot name="meta"></slot>
       <n-tooltip v-if="showLangfuse" placement="top">
         <template #trigger>
@@ -73,17 +81,7 @@ const handlePassClip = async () => {
           。点击打开控制台后在 Session / Traces 中检索。
         </div>
       </n-tooltip>
-    </div>
-    <div class="assistant-reply-toolbar__actions">
       <span v-if="timeText" class="assistant-reply-toolbar__time">{{ timeText }}</span>
-      <button
-        type="button"
-        class="assistant-reply-toolbar__btn"
-        aria-label="复制回复"
-        @click="handlePassClip()"
-      >
-        <span class="i-hugeicons:copy-01" aria-hidden="true"></span>
-      </button>
     </div>
   </div>
 </template>
@@ -114,13 +112,6 @@ const handlePassClip = async () => {
   align-items: center;
   gap: 8px;
   min-width: 0;
-}
-
-.assistant-reply-toolbar__actions {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 4px;
 }
 
 .assistant-reply-toolbar__btn {

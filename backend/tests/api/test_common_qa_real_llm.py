@@ -6,6 +6,8 @@ import re
 
 import pytest
 
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
+
 
 @pytest.mark.integration
 def test_common_qa_kb_answer_uses_numbered_citation(

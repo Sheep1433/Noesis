@@ -158,7 +158,9 @@ onBeforeUnmount(() => {
     <template #icon>
       <div class="i-svg-spinners:3-dots-rotate"></div>
     </template>
-    <div :class="['min-w-0', isFull ? 'flex-1 min-h-0' : '']">
+    <!-- flex-1 必须无条件保留：content-class 的 flex 行里子项默认 shrink-to-fit，
+         短行内容（如中文列表）会把整块正文缩到最长行宽，分隔线/引用框随之变窄 -->
+    <div :class="['min-w-0 flex-1', isFull ? 'min-h-0' : '']">
       <div
         text-16
         :class="['w-full', isFull ? 'h-full overflow-hidden' : '', !displayText && 'flex items-center justify-center']"

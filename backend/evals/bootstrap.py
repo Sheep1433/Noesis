@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -53,3 +54,84 @@ async def agentic_rag_runtime() -> AsyncIterator[None]:
     finally:
         await close_knowledge_base()
         await pg_manager.close()
+
+
+async def resolve_user_model(user_id: str, model_id: str) -> "list":
+    """解析用户自定义模型为 runtime snapshot 列表（含解密 key），不注入 ContextVar。
+
+    user_id 接受用户名或 uuid。未命中时抛错：离线评测拒绝静默回退内置
+    目录——那会让被评/judge 分离与成本核算全部失真。
+    使用一次性 engine（asyncpg 池绑定创建时的 loop，同步 CLI 多次
+    asyncio.run 复用全局池会炸）。
+    """
+    from noesis.services.user_llm_service import UserLLMService
+    from noesis.storage.postgres.manager import ASYNC_SQLALCHEMY_DATABASE_URL
+    from noesis.storage.postgres.models.auth import TUser
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(ASYNC_SQLALCHEMY_DATABASE_URL)
+    try:
+        async with async_sessionmaker(bind=engine, expire_on_commit=False)() as db:
+            # 用户名 → t_user.id（uuid 直通）
+            normalized_user = str(user_id).strip()
+            try:
+                import uuid as _uuid
+                _uuid.UUID(normalized_user)
+            except ValueError:
+                row = (await db.execute(
+                    select(TUser.id).where(TUser.username == normalized_user))).first()
+                if row is None:
+                    raise ValueError(f"用户不存在: {normalized_user!r}")
+                normalized_user = str(row[0])
+            snapshots = await UserLLMService.resolve_runtime_snapshots(
+                db, user_id=normalized_user, model_id=model_id)
+    finally:
+        await engine.dispose()
+    if not snapshots:
+        raise ValueError(
+            f"用户 {user_id} 无自定义模型 {model_id!r}（拒绝静默回退内置目录；"
+            f"检查 --model-user / --model-id）"
+        )
+    return snapshots
+
+
+def bind_snapshots(snapshots: "list", *, include_summarization: bool = False) -> str:
+    """在当前线程上下文注入模型快照；返回 snapshot id（后续 get_llm 应使用返回值）。
+
+    include_summarization：同时以 summarization purpose 注入同一模型
+    （压缩评测的摘要引擎走 get_llm(purpose="summarization")）。
+    """
+    import dataclasses
+
+    from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
+
+    bound = list(snapshots)
+    if include_summarization and snapshots:
+        bound.append(dataclasses.replace(snapshots[0], purpose="summarization"))
+    set_runtime_model_snapshots(bound)
+    return snapshots[0].id
+
+
+async def bind_user_model(
+    user_id: str, model_id: str, *, include_summarization: bool = False
+) -> str:
+    """异步调用方一步到位（在当前协程上下文注入，注意不要包在 asyncio.run 里）。"""
+    return bind_snapshots(
+        await resolve_user_model(user_id, model_id),
+        include_summarization=include_summarization,
+    )
+
+
+def bind_user_model_sync(
+    user_id: str, model_id: str, *, include_summarization: bool = False
+) -> str:
+    """同步调用方专用：解析与注入都在主线程上下文完成。
+
+    禁止用 asyncio.run 包 bind_user_model 代替本函数——任务内的
+    ContextVar 修改不会传回调用方，快照会静默丢失。
+    """
+    return bind_snapshots(
+        asyncio.run(resolve_user_model(user_id, model_id)),
+        include_summarization=include_summarization,
+    )

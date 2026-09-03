@@ -911,7 +911,7 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
     assert len(outputs) == 1
     assert outputs[0]["tool_call_id"] == model_call_id
     assert outputs[0]["status"] == "error"
-    assert outputs[0]["error"] == "环境不可用"
+    assert outputs[0]["error"] == "环境暂时不可用，可稍后重试"
     assert outputs[0]["errorCategory"] == "infrastructure"
 
     saved = builder.to_dict()["parts"][0]
@@ -1025,6 +1025,8 @@ def test_tool_output_error_frame_golden_fields() -> None:
     saved = builder.to_dict()["parts"][0]
     assert saved["error"] == "执行失败"
     assert saved["errorCategory"] == "unknown"
+    # 错误返回型：入库正文 = ToolMessage 原文（权威文案逐字）
+    assert saved["output"] == "command timed out after 30s"
 
 
 def test_task_tool_success_with_child_error_keeps_parent_success() -> None:
@@ -1147,7 +1149,7 @@ def test_task_tool_child_error_without_parent_result_maps_subagent_failure() -> 
     out = [o for o in _data_json_objects(blob) if o.get("type") == "tool-output-available"][-1]
     assert out["status"] == "error"
     assert out["errorCategory"] == "subagent_failure"
-    assert out["error"] == "执行失败"
+    assert out["error"] == "partial result without task wrapper"
 
 
 def test_task_tool_failed_maps_subagent_failure() -> None:
@@ -1184,7 +1186,7 @@ def test_task_tool_failed_maps_subagent_failure() -> None:
     out = [o for o in _data_json_objects(blob) if o.get("type") == "tool-output-available"][-1]
     assert out["status"] == "error"
     assert out["errorCategory"] == "subagent_failure"
-    assert out["error"] == "执行失败"
+    assert out["error"].startswith("Task failed.")
 
 
 def test_reasoning_disabled_when_show_thinking_off() -> None:
@@ -1672,3 +1674,90 @@ def test_finish_reason_promotes_last_call_provider_length() -> None:
     fin2 = [o for o in _data_json_objects("".join(parts2)) if o.get("type") == "finish"][-1]
     assert fin2["finish_reason"] == "stop"
     assert bridge2.message_model_calls[0]["finish_reason"] == "length"
+
+
+def test_finish_reason_gateway_duplication_collapsed() -> None:
+    """网关在多个 chunk 上重复 finish_reason，LangChain 聚合拼接成
+    tool_callstool_calls / lengthlength；bridge 落库前折叠为单值，
+    lengthlength 必须仍然触发截断纠偏（否则截断会被落成正常 stop）。"""
+    bridge = LangGraphSseBridge("sess-dup")
+    builder = AssistantMessageBuilder(session_id="sess-dup", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="dup-1", model_name="m", content="a",
+            usage={"input_tokens": 1, "output_tokens": 2},
+            finish_reason="tool_callstool_calls",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="dup-2", model_name="m", content="b",
+            usage={"input_tokens": 3, "output_tokens": 4},
+            finish_reason="lengthlength",
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    assert [c["finish_reason"] for c in bridge.message_model_calls] == ["tool_calls", "length"]
+    fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
+    assert fin["finish_reason"] == "length_stop"
+    assert bridge.last_finish_reason == "length_stop"
+
+
+def test_model_attempt_ordinal_is_per_call() -> None:
+    """attempt 是单次模型调用的重试位次，不是整条消息的单调计数：
+    一次重试抬升计数后，后续首次调用必须复位为 1（否则全部被错标 att=2）。"""
+    bridge = LangGraphSseBridge("sess-att")
+    builder = AssistantMessageBuilder(session_id="sess-att", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="att-1", model_name="m", content="a",
+            usage={"input_tokens": 1, "output_tokens": 1}, finish_reason="stop",
+        )
+    )
+    # att-1 失败后中间件产出的重试事件（结构与 _build_retry_event 一致）
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_custom_event",
+                "name": "noesis_model_retry",
+                "run_id": "att-1",
+                "data": {
+                    "type": "noesis_model_retry",
+                    "status": "retrying",
+                    "attempt_id": 2,
+                    "max_attempts": 6,
+                    "wait_ms": 1000,
+                    "reason": "transient",
+                    "message": "正在重试 (2/6)",
+                },
+            },
+            builder,
+            ctx,
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="att-2", model_name="m", content="b",
+            usage={"input_tokens": 2, "output_tokens": 2}, finish_reason="stop",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="att-3", model_name="m", content="c",
+            usage={"input_tokens": 3, "output_tokens": 3}, finish_reason="stop",
+        )
+    )
+    parts.extend(bridge.finalize())
+
+    assert [c["attempt"] for c in bridge.message_model_calls] == [1, 2, 1]

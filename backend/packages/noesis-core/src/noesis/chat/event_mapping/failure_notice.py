@@ -28,11 +28,11 @@ def is_internal_infrastructure_error(raw: str) -> bool:
 
 
 def sanitize_tool_error(raw: str, *, default: str = DEFAULT_USER_TOOL_ERROR) -> str:
-    """单 tool 失败：委托 classify_tool_failure。"""
+    """单 tool 失败兜底：委托 classify（UNKNOWN 纯文本固定为「执行失败」）。"""
     s = strip_tool_error_prefix(raw)
     if not s:
         return default
-    return classify_tool_failure(None, raw=s).message_for_user
+    return classify_tool_failure(None, raw=s).text
 
 
 def sanitize_stream_error(raw: str, *, default: str = "操作失败，请稍后重试。") -> str:

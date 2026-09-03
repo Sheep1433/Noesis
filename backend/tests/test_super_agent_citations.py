@@ -10,7 +10,7 @@ def _capture_agent_options(monkeypatch) -> dict:
     captured = {}
     monkeypatch.setattr(super_agent, "create_agent_backend", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(super_agent, "ensure_user_memory_files", lambda _user_id: None)
-    monkeypatch.setattr(super_agent, "build_web_search_tools", lambda: [])
+    monkeypatch.setattr(super_agent, "build_web_search_tools", lambda backend=None: [])
     monkeypatch.setattr(super_agent, "resolve_skill_sources_for_session", lambda *_args: [])
     monkeypatch.setattr(super_agent, "_compile_task_worker", lambda *_args, **_kwargs: MagicMock())
     monkeypatch.setattr(super_agent, "build_background_task_tools", lambda **_kwargs: [])

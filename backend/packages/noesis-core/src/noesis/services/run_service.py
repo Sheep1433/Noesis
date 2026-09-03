@@ -27,13 +27,17 @@ from noesis.chat.delivery.events import (
     RunAborted,
     RunError,
     RunEvent,
-    WireFrame,
 )
 from noesis.chat.delivery.sse import parse_sse_line_to_event
 from noesis.services.persist_sink import PersistSink
-from noesis.chat.message_builder import UserMessageBuilder
+from noesis.chat.runs.skeleton import (
+    build_assistant_skeleton_row,
+    build_queued_run_row,
+    build_user_message_row,
+)
 from noesis.chat.runs import (
     ACTIVE_RUN_STATUSES,
+    ASSISTANT_TERMINAL_STATUS,
     RunLimitExceeded,
     RunManager,
     RunSnapshot,
@@ -46,7 +50,7 @@ from noesis.chat.runs.projection import RunProjection
 from noesis.errors.exceptions import ConflictException, NotFoundException, ServiceException
 from noesis.storage.postgres.manager import pg_manager
 from noesis.repositories.agent_run_repository import AgentRunRepository
-from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage, TChatSession
+from noesis.storage.postgres.models.chat import TAgentRun, TChatSession
 from noesis.schemas.chat_vo import CreateRunRequest
 from noesis.schemas.login_vo import CurrentUser
 from noesis.schemas.qa_vo import HitlResumeRequest, TestCaseResumeRequest
@@ -200,27 +204,21 @@ class RunService:
             qa_type = str(session_extra.get("qa_type") or IntentEnum.COMMON_QA.value[0])
             extra["qa_type"] = qa_type
         ChatService.apply_default_session_title(session, request.content)
-        user_message = TChatMessage(
-            id=str(uuid.uuid4()),
+        user_message = build_user_message_row(
+            message_id=str(uuid.uuid4()),
             session_id=request.session_id,
-            parent_id=None,
             user_id=user_id,
-            role="user",
-            content=UserMessageBuilder(request.content.strip()).to_dict(),
+            text=request.content,
             extra={"qa_type": qa_type, **extra},
-            status="completed",
             message_sequence=message_sequences[0],
             created_at=now,
         )
-        assistant_message = TChatMessage(
-            id=assistant_message_id,
+        assistant_message = build_assistant_skeleton_row(
+            message_id=assistant_message_id,
             session_id=request.session_id,
-            parent_id=user_message.id,
             user_id=user_id,
-            role="assistant",
-            content={"parts": []},
+            parent_id=user_message.id,
             extra={"qa_type": qa_type, "run_id": run_id},
-            status="streaming",
             message_sequence=message_sequences[1],
             created_at=now,
         )
@@ -244,8 +242,8 @@ class RunService:
             origin="web",
             resolved_model=resolved_model,
         )
-        run = TAgentRun(
-            id=run_id,
+        run = build_queued_run_row(
+            run_id=run_id,
             user_id=user_id,
             session_id=request.session_id,
             assistant_message_id=assistant_message_id,
@@ -253,15 +251,8 @@ class RunService:
             request_digest=digest,
             qa_type=qa_type,
             origin="web",
-            status=RunStatus.QUEUED.value,
-            last_sequence=0,
-            attempt_id=1,
-            owner_instance_id=None,
-            owner_term=0,
-            launch_payload=launch_payload.to_dict(),
-            snapshot={"parts": []},
             created_at=now,
-            updated_at=now,
+            launch_payload=launch_payload.to_dict(),
         )
         try:
             # ORM 未声明 relationship，须显式建立 FK 插入顺序。两次 flush 与 session
@@ -425,13 +416,12 @@ class RunService:
                                 raise TypeError(
                                     f"target Agent Run emitted SSE string qa_type={run.qa_type}"
                                 )
-                            event_attempt_id = (
-                                event.attempt_id
-                                if isinstance(event, WireFrame)
-                                and event.attempt_id is not None
-                                else projection.attempt_id
-                            )
-                            await publish(event, event_attempt_id)
+                            # WireFrame.attempt_id 是单次模型调用的重试位次
+                            # （遥测字段，进 model_calls.attempt），不是 run 级
+                            # attempt——透传进 apply_event 会与其严格一致校验
+                            # 冲突，把迟到帧升级成 StaleAttemptEvent 杀死
+                            # producer（2026-09-03：重试后 run 误判 RUN_FAILED）。
+                            await publish(event, projection.attempt_id)
                     await run_manager.drain_persistence(run.id)
                 except BaseException as exc:
                     if isinstance(exc, GeneratorExit):
@@ -463,15 +453,25 @@ class RunService:
                 else None
             ),
         )
-        async with pg_manager.get_async_session_context() as state_db:
-            await AgentRunRepository(state_db).compare_and_set_status(
-                run.id,
+        await cls.mark_run_started(run.id)
+
+    @classmethod
+    async def mark_run_started(cls, run_id: str) -> None:
+        """启跑标记（queued→running 的 CAS，主链路与 channel 路径共用）。
+
+        producer 已在 run_manager.start 内并发执行，毫秒级失败时终态可能
+        先落库——无条件覆写会把终态 run 改回 running，制造「消息已终态而
+        run 遗留非终态」的脏数据（炸下次启动对账）。CAS 落空即 no-op。
+        """
+        async with pg_manager.get_async_session_context() as db:
+            await AgentRunRepository(db).compare_and_set_status(
+                run_id,
                 [RunStatus.QUEUED],
                 RunStatus.RUNNING,
                 started_at=_now_ms(),
                 updated_at=_now_ms(),
             )
-            await state_db.commit()
+            await db.commit()
 
     @classmethod
     async def _persist_checkpoint(
@@ -538,12 +538,7 @@ class RunService:
         if not isinstance(projection, RunProjection):
             raise TypeError("terminal candidate requires RunProjection")
         content = projection.builder.to_dict()
-        assistant_status = {
-            RunStatus.COMPLETED: "completed",
-            RunStatus.PARTIAL: "partial",
-            RunStatus.ERROR: "error",
-            RunStatus.INTERRUPTED: "partial",
-        }[candidate.status]
+        assistant_status = ASSISTANT_TERMINAL_STATUS[candidate.status]
         async with pg_manager.get_async_session_context() as db:
             repository = AgentRunRepository(db)
             won = await repository.finalize(
@@ -599,12 +594,7 @@ class RunService:
                 RunStatus.ERROR,
                 RunStatus.INTERRUPTED,
             }:
-                assistant_status = {
-                    RunStatus.COMPLETED: "completed",
-                    RunStatus.PARTIAL: "partial",
-                    RunStatus.ERROR: "error",
-                    RunStatus.INTERRUPTED: "partial",
-                }[target]
+                assistant_status = ASSISTANT_TERMINAL_STATUS[target]
                 won = await repository.finalize(
                     run_id=run_id,
                     target=target,
@@ -650,6 +640,15 @@ class RunService:
                 projection.session_id,
                 projection.status.value,
                 type(exc).__name__,
+            )
+        elif isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+            # 协程取消是停止/超时兜底的预期路径（run 照常落 partial 终态）；
+            # 打 ERROR 级堆栈只会制造「取消报错」的假象
+            logger.info(
+                "agent run producer cancelled run_id={} session_id={} status={}",
+                run_id,
+                projection.session_id,
+                projection.status.value,
             )
         else:
             logger.opt(exception=exc).error(
@@ -796,7 +795,7 @@ class RunService:
     @classmethod
     async def _force_finalize_stopped(cls, row: TAgentRun, db: AsyncSession) -> None:
         """用户停止的强制终态：沿用 run 当前快照内容（保留已生成的进度）。"""
-        from noesis.chat.event_mapping.failure_notice import mark_running_tools_unknown
+        from noesis.services.run_recovery_service import mark_running_tools_unknown
 
         content = mark_running_tools_unknown(
             row.snapshot if isinstance(row.snapshot, dict) else {"parts": []}
@@ -804,7 +803,7 @@ class RunService:
         finalized = await AgentRunRepository(db).finalize(
             run_id=row.id,
             target=RunStatus.INTERRUPTED,
-            assistant_status="partial",
+            assistant_status=ASSISTANT_TERMINAL_STATUS[RunStatus.INTERRUPTED],
             content=content,
             last_sequence=row.last_sequence,
             finished_at=_now_ms(),
@@ -870,6 +869,12 @@ class RunService:
         )
         if pending.expires_at > 0 and pending.expires_at <= time.time():
             raise ConflictException(message="确认请求已超时，请重新发起")
+        # run 冻结的模型 id 随 resume 段传递：exec_hitl_resume 重建 Agent 时
+        # 若不传，get_llm(None) 会静默落平台默认（2026-09-03：HITL 批准后续跑
+        # 段从 glm 漂移到 kilo）。旧 run 无 payload 时保持 None（平台默认）。
+        payload_data = row.launch_payload if isinstance(row.launch_payload, dict) else {}
+        resume_model_id = str(payload_data.get("resolved_model") or "") or None
+
         async def producer(publish) -> None:
             async with pg_manager.get_async_session_context() as run_db:
                 try:
@@ -880,6 +885,7 @@ class RunService:
                         current_user=current_user,
                         db=run_db,
                         run_id=run_id,
+                        model_id=resume_model_id,
                     ):
                         await publish(event, projection.attempt_id)
                     await run_manager.drain_persistence(run_id)

@@ -1,9 +1,9 @@
 # Agent Memory（md 文件记忆层）
 
 > 状态：Current
-> 关联 OpenSpec：`md-memory-layer`（实现合入；归档流程待走，届时取代 `agent-memory-cortex` 旧规格）
+> 关联 OpenSpec：`openspec/specs/agent-memory/spec.md`（md 文件记忆层现行规格，旧 Memory Cortex 方案已删除）
 
-Noesis 只有一套自动记忆方案：**md 文件记忆层**。会话终态后由后台 sweeper 增量抽取可复用结论，写入用户目录下的 md 文件（索引 + 条目 + journal）；每个新 Run 由小模型从索引选条注入。旧 Memory Cortex 方案（PostgreSQL 权威条目 + Qdrant 派生索引 + worker/outbox + Bulletin）及其 `t_memory*` 表已整体删除，不做数据迁移（未上生产）。
+Noesis 只有一套自动记忆方案：**md 文件记忆层**。会话终态后由后台 sweeper 增量抽取可复用结论，写入用户目录下的 md 文件（索引 + 条目 + journal）；Agent 经 `search_memory` 工具按需主动召回条目正文（索引注入稳定前缀，正文不被动注入）。旧 Memory Cortex 方案（PostgreSQL 权威条目 + Qdrant 派生索引 + worker/outbox + Bulletin）及其 `t_memory*` 表已整体删除，不做数据迁移（未上生产）。
 
 `USER.md` 与 `AGENTS.md` 仍由用户显式维护，不属于自动记忆流水线。
 

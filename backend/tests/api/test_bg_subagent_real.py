@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 _CHILD_POLL_TIMEOUT_SECONDS = 300.0
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled", "timed_out"}

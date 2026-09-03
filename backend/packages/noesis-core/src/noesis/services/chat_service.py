@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis.storage.postgres.models.chat import TChatSession, TChatMessage, TAgentRun
 from noesis.errors.exceptions import ServiceException
 from noesis.runtime.logging import logger
-from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
+from noesis.chat.event_mapping.usage_normalize import merge_model_calls, merge_usage
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.config.user_data_paths import delete_session_workspace
 
@@ -243,6 +243,44 @@ class ChatService:
         return session
 
     @classmethod
+    def build_session(
+        cls,
+        *,
+        user_id: str,
+        title: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        kind: Optional[str] = None,
+        created_by_run_id: Optional[str] = None,
+        created_by_tool_call_id: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        next_message_sequence: Optional[int] = None,
+        created_at: Optional[int] = None,
+    ) -> TChatSession:
+        """会话行的单一构造点：只构造 ORM 行，不 add/commit——事务边界由调用方持有。
+
+        `create_session`（独立提交）与子 Agent launch（child 会话与消息/run
+        同事务）共用；标题规范化在此单点。
+        """
+        now = created_at if created_at is not None else _now_ms()
+        fields: Dict[str, Any] = {
+            "id": session_id or str(uuid.uuid4()),
+            "parent_id": parent_id,
+            "kind": kind or ('subagent' if parent_id else 'root'),
+            "created_by_run_id": created_by_run_id,
+            "created_by_tool_call_id": created_by_tool_call_id,
+            "user_id": user_id,
+            "title": cls._normalize_session_title(title) or _DEFAULT_SESSION_TITLE,
+            "extra": extra,
+            "created_at": now,
+            "updated_at": now,
+        }
+        # None 会覆盖列级 default=1，仅在调用方显式指定时传入
+        if next_message_sequence is not None:
+            fields["next_message_sequence"] = next_message_sequence
+        return TChatSession(**fields)
+
+    @classmethod
     async def create_session(
             cls,
             user_id: str,
@@ -271,24 +309,19 @@ class ChatService:
             if not parent:
                 raise ServiceException(message='父会话不存在')
 
-        session_id = str(uuid.uuid4())
-        now = _now_ms()
-        session = TChatSession(
-            id=session_id,
+        session = cls.build_session(
+            user_id=user_id,
+            title=title,
             parent_id=parent_id,
-            kind=kind or ('subagent' if parent_id else 'root'),
+            kind=kind,
             created_by_run_id=created_by_run_id,
             created_by_tool_call_id=created_by_tool_call_id,
-            user_id=user_id,
-            title=cls._normalize_session_title(title) or _DEFAULT_SESSION_TITLE,
             extra=extra,
-            created_at=now,
-            updated_at=now
         )
         db.add(session)
         await db.commit()
         await db.refresh(session)
-        logger.info(f'创建会话成功: session_id={session_id}, user_id={user_id}, parent_id={parent_id}')
+        logger.info(f'创建会话成功: session_id={session.id}, user_id={user_id}, parent_id={parent_id}')
         return session
 
     @classmethod
@@ -456,19 +489,20 @@ class ChatService:
         if isinstance(new_usage, dict):
             old_usage = old_extra.get("usage")
             if isinstance(old_usage, dict):
-                merged_extra["usage"] = {
-                    key: float(old_usage.get(key) or 0) + float(new_usage.get(key) or 0)
-                    for key in USAGE_FIELDS if key != "turns"
-                }
+                # usage 键做累加合并而非覆盖：HITL resume / 同一 assistant_message_id 跨
+                # 多个 run 时，各 run 的 bridge 只含本 run 的 usage 聚合，终态 UPDATE 必须
+                # 与历史 run 已落库的 usage 累加（merge_usage 单点，turns 不参与累加）。
+                # checkpoint（streaming 态）extra 不带 usage，不会触发本合并。
+                merged_extra["usage"] = merge_usage(old_usage, new_usage)
             else:
                 merged_extra["usage"] = dict(new_usage)
-        # model_calls 与 usage 同一跨 run 累加语义：列表拼接而非覆盖。
+        # model_calls 与 usage 同一跨 run 累加语义：拼接且 step 全局重编
+        # （merge_model_calls 单点）。
         new_calls = (extra or {}).get("model_calls")
         if isinstance(new_calls, list) and new_calls:
-            old_calls = old_extra.get("model_calls")
-            merged_extra["model_calls"] = (
-                list(old_calls) if isinstance(old_calls, list) else []
-            ) + list(new_calls)
+            merged_extra["model_calls"] = merge_model_calls(
+                old_extra.get("model_calls"), new_calls,
+            )
 
         await db.execute(
             update(TChatMessage)

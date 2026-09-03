@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from noesis.chat.event_mapping.usage_normalize import merge_model_calls, merge_usage
 from noesis.chat.runs import ACTIVE_RUN_STATUSES, RunStatus
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage
 
@@ -215,6 +216,43 @@ class AgentRunRepository:
             raise RuntimeError("assistant checkpoint update failed")
         return True
 
+    async def finalize_run_only(
+        self,
+        *,
+        run_id: str,
+        target: RunStatus,
+        finished_at: int,
+        finish_reason: str,
+        error_code: str | None = None,
+        user_error_message: str | None = None,
+        snapshot: dict | None = None,
+        last_sequence: int | None = None,
+    ) -> bool:
+        """仅对 run 行做终态 CAS，不动 assistant 消息行。调用方负责 commit。"""
+        if target not in {
+            RunStatus.COMPLETED,
+            RunStatus.PARTIAL,
+            RunStatus.ERROR,
+            RunStatus.INTERRUPTED,
+        }:
+            raise ValueError(f"target is not terminal: {target.value}")
+        active = [status.value for status in ACTIVE_RUN_STATUSES]
+        run_result = await self.db.execute(
+            update(TAgentRun)
+            .where(TAgentRun.id == run_id, TAgentRun.status.in_(active))
+            .values(
+                status=target.value,
+                finish_reason=finish_reason,
+                error_code=error_code,
+                user_error_message=user_error_message,
+                snapshot=snapshot,
+                **({"last_sequence": last_sequence} if last_sequence is not None else {}),
+                updated_at=finished_at,
+                finished_at=finished_at,
+            )
+        )
+        return run_result.rowcount == 1
+
     async def finalize(
         self,
         *,
@@ -232,29 +270,17 @@ class AgentRunRepository:
         model_calls: list | None = None,
     ) -> bool:
         """同一事务内抢占 run 终态并更新唯一 assistant 行。调用方负责 commit。"""
-        if target not in {
-            RunStatus.COMPLETED,
-            RunStatus.PARTIAL,
-            RunStatus.ERROR,
-            RunStatus.INTERRUPTED,
-        }:
-            raise ValueError(f"target is not terminal: {target.value}")
-        active = [status.value for status in ACTIVE_RUN_STATUSES]
-        run_result = await self.db.execute(
-            update(TAgentRun)
-            .where(TAgentRun.id == run_id, TAgentRun.status.in_(active))
-            .values(
-                status=target.value,
-                finish_reason=finish_reason,
-                error_code=error_code,
-                user_error_message=user_error_message,
-                snapshot=snapshot if snapshot is not None else content,
-                last_sequence=last_sequence,
-                updated_at=finished_at,
-                finished_at=finished_at,
-            )
+        won = await self.finalize_run_only(
+            run_id=run_id,
+            target=target,
+            finished_at=finished_at,
+            finish_reason=finish_reason,
+            error_code=error_code,
+            user_error_message=user_error_message,
+            snapshot=snapshot if snapshot is not None else content,
+            last_sequence=last_sequence,
         )
-        if run_result.rowcount != 1:
+        if not won:
             return False
 
         # 合并语义（与 chat_service.update_assistant_message 对齐）：旧键保留、
@@ -284,25 +310,18 @@ class AgentRunRepository:
         }
         if usage and usage.get("steps"):
             old_usage = old_extra.get("usage")
-            if isinstance(old_usage, dict):
-                message_extra["usage"] = {
-                    key: float(old_usage.get(key) or 0) + float(usage.get(key) or 0)
-                    for key in usage
-                }
-            else:
-                message_extra["usage"] = dict(usage)
+            # 各 run 的 projection 只含本段 usage，终态与已落库 usage 累加
+            # （merge_usage 单点：与 executor 跨轮累计、chat_service 消息
+            # UPDATE 同一语义）。
+            message_extra["usage"] = merge_usage(
+                old_usage if isinstance(old_usage, dict) else {}, usage,
+            )
         # model_calls 与 usage 同一跨 run 累加语义：HITL resume 各 run 只含本段
-        # 明细，终态与已落库列表拼接。追加段 step 重编为全局连续序号——
-        # 各 run 独立从 1 计数，直接拼接会重复（usage.steps 是数值累加无此问题）。
+        # 明细，终态与已落库列表拼接（step 全局重编见 merge_model_calls）。
         if model_calls:
-            old_calls = old_extra.get("model_calls")
-            base = list(old_calls) if isinstance(old_calls, list) else []
-            offset = len(base)
-            message_extra["model_calls"] = base + [
-                {**call, "step": offset + i + 1}
-                for i, call in enumerate(model_calls)
-                if isinstance(call, dict)
-            ]
+            message_extra["model_calls"] = merge_model_calls(
+                old_extra.get("model_calls"), model_calls,
+            )
         message_result = await self.db.execute(
             update(TChatMessage)
             .where(

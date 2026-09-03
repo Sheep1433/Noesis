@@ -49,7 +49,7 @@ kb:
 
 ```bash
 cd backend
-uv run python -m evals.kb.run --collection requirement_docs --dataset evals/kb/fixtures/sample.jsonl
+uv run python -m evals.kb.erb --sample 2   # ERB 检索基准冒烟
 ```
 
 ## Vendor 维护

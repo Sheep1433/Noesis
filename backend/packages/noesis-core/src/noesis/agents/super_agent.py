@@ -28,7 +28,7 @@ from noesis.agents.subagents import (
 from noesis.agents.subagents.shell_tool import replace_execute_tool
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
-from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
+from noesis.agents.tools.chat_attachment_tools import resolve_attachment_tools
 from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
@@ -36,7 +36,6 @@ from noesis.config.env import ChatAttachmentConfig
 from noesis.config.user_data_paths import ensure_user_memory_files
 from noesis.agents.context import ContextResolver
 from noesis.llm.factory import get_llm
-from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
 from noesis.services.chat_service import ChatService
 
@@ -111,7 +110,8 @@ class SuperAgent(BaseAgent):
     ):
         ensure_user_memory_files(user_id)
         backend = await create_agent_backend(user_id, session_id)
-        web_tools = build_web_search_tools()
+        # backend 注入 web_fetch：超限页面全文落盘、模型可 read_file 续读
+        web_tools = build_web_search_tools(backend=backend)
         tools = list(web_tools) + list(mcp_tools or [])
         # Agentic 召回：root run 装配检索工具（命中后合并回写 run.memory_context，
         # 作为抽取防自强化输入）；run_id/db 缺席时退化为纯只读检索
@@ -136,17 +136,11 @@ class SuperAgent(BaseAgent):
             and db is not None
             and session_id
             and user_id
-            and await require_attachment_service().session_has_attachments(
-                session_id=session_id,
-                user_id=user_id,
-                db=db,
-                file_dict=file_list,
-            )
         ):
-            tools = tools + build_attachment_tools(
+            tools = tools + await resolve_attachment_tools(
                 session_id=session_id,
                 user_id=user_id,
-                db=db,
+                file_list=file_list,
             )
 
         # 后台子 Agent（全异步 task）：主 Agent 用 start/check 工具委派，
@@ -160,8 +154,27 @@ class SuperAgent(BaseAgent):
             tool for tool in tools if getattr(tool, "name", "") != "search_memory"
         ] + build_memory_tools(user_id=user_id)
 
+        # 捕获父 run 解析出的自定义模型快照（纯数据，跨线程安全）：
+        # ContextVar 不跨线程，隔离 loop 里 get_llm 看不到它，自定义模型
+        # 会被目录解析静默回退平台默认。worker 开局重放（见工厂体）。
+        from noesis.llm.runtime_snapshot import (
+            get_runtime_model_snapshot,
+            replay_runtime_model_snapshot,
+        )
+
+        _worker_model_snapshot = (
+            get_runtime_model_snapshot(model_id, purpose="chat") if model_id else None
+        )
+
         async def _bg_worker_factory(model_id_override: str | None = None):
             from noesis.config.checkpointer import create_isolated_checkpointer
+
+            # 重放快照供 worker 的 LLM 构建消费；覆盖的模型 id 与快照不一致
+            # 时不重放（strict 解析大声失败），绝不用错模型
+            replay_runtime_model_snapshot(
+                _worker_model_snapshot,
+                target_model_id=model_id_override or model_id,
+            )
 
             return _compile_task_worker(
                 # worker 专用 backend：/memory 只读（沙箱按 user+session 幂等

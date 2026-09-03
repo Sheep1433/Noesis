@@ -117,20 +117,26 @@ result、approval 均按主 Agent 的消息协议落库和渲染。系统状态�
 GET /api/chat/sessions/{session_id}/events?after_sequence=N
 ```
 
-事件按会话内严格递增序号发布，至少包含：
+事件按会话内严格递增序号发布（与主聊天同一帧词表，见
+`platform/chat-streaming.md` §4.2b），至少包含：
 
 ```text
-session.snapshot
+run-snapshot
 run.started
-message.created
-message.updated
-reasoning.delta
-tool.started
-tool.output
-approval.required
-run.status
-run.finished
+message-start
+text-delta / text-end
+reasoning-start / reasoning-delta / reasoning-end
+tool-input-start / tool-input-available / tool-output-available
+retrieval-results-available
+stats-update
+context-update
+approval.required / approval.resumed
+run.finished（唯一终态标记，后随 [DONE]）
 ```
+
+流式 delta / 实时统计为 transient（不占序号、只投在线订阅）；内容投影由
+前端 `messageParts` appenders 从帧组装，权威恢复走 `getAgentRun` 快照 +
+durable 重放（`message.updated` 全量投影事件已退役）。
 
 打开子 Agent 详情时：先拉历史消息和当前 run 快照，再从最后序号订阅 SSE；事件直接增量更新当前
 视图。关闭抽屉立即退订。没有打开详情时，只订阅父会话的轻量 `child_session` 状态事件；不传输
@@ -195,7 +201,9 @@ run.finished
 `LangGraphSseBridge` + `AssistantMessageBuilder` 聚合（usage 累计、上下文快照、
 HITL 投影、终态 payload）。主链路经 delivery 序列化为 SSE 帧；子 Agent 的
 executor（生命周期包装：任务注册表、隔离事件循环、watchdog、followup 队列）
-消费同一管道，产出子会话投影（`persist_projection`）与 run 事件。
+消费同一管道：投递走统一投递内核（`chat/runs/delivery_bus.py`，主/子同一
+语义实现），投影经 `AgentRunRepository.save_checkpoint` 落库（与主链路同一
+事务实现）。
 
 由此主/子能力同源：usage 双口径（父会话当轮「主+子合并」/ 各会话自身
 `extra.usage` 终态落库）、上下文快照（bridge 模型调用边界统一提取）、

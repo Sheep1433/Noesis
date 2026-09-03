@@ -67,7 +67,9 @@ def _extract_html(page_html: str) -> tuple[str, str]:
     return title, body
 
 
-def fetch_with_local(url: str, max_chars: int, timeout: int) -> dict[str, Any]:
+def fetch_with_local(url: str, timeout: int) -> dict[str, Any]:
+    """抓取页面转 Markdown，正文不做截断——截断（头尾窗口 + 落盘 +
+    续读提示）统一由 web_fetch 工具层按 fetch_max_chars 处理。"""
     ok, err = validate_fetch_url(url)
     if not ok:
         raise ToolValidationError(err or "URL 校验失败")
@@ -100,7 +102,6 @@ def fetch_with_local(url: str, max_chars: int, timeout: int) -> dict[str, Any]:
         title = url
         body = raw
 
-    body = body[:max_chars]
     heading = title or url
     markdown = f"<!-- provider: local -->\n# {heading}\n\n{body}"
     return {"provider": "local", "url": url, "markdown": markdown}

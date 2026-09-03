@@ -129,6 +129,7 @@ class ModelSettings:
     governor_loop_hard_limit: int
     governor_loop_window_size: int
     tool_output_max_chars: int
+    read_file_max_chars: int
     governor_tool_calls_enabled: bool
     governor_tool_calls_total: int | None
     governor_tool_calls_per_name: int | None
@@ -489,6 +490,9 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         ),
         tool_output_max_chars=_legacy_env_int(
             "TOOL_OUTPUT_MAX_CHARS", runtime.tool_output_max_chars
+        ),
+        read_file_max_chars=_legacy_env_int(
+            "READ_FILE_MAX_CHARS", runtime.read_file_max_chars
         ),
         governor_tool_calls_enabled=_legacy_env_bool(
             "GOVERNOR_TOOL_CALLS_ENABLED", gov.tool_calls_enabled

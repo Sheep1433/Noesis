@@ -89,7 +89,7 @@ describe('useSSEStream durable run recovery', () => {
         event: 'retrieval-results-available',
         data: { type: 'retrieval-results-available', id: 'r1', results: [{ evidence_id: 'ev_1' }] },
       },
-      { event: 'finish', data: { type: 'finish', finish_reason: 'stop' } },
+      { event: 'run.finished', data: { type: 'run.finished', status: 'completed', finish_reason: 'stop' } },
     ]))
     const onRetrievalResults = vi.fn()
     const stream = useSSEStream({ onRetrievalResults })
@@ -354,8 +354,8 @@ describe('useSSEStream durable run recovery', () => {
         data: { type: 'run-status', sequence: 2, status: 'running' },
       },
       {
-        event: 'error',
-        data: { type: 'error', sequence: 3, error: '暂时无法生成，请稍后重试' },
+        event: 'run.finished',
+        data: { type: 'run.finished', status: 'error', sequence: 3, error: '暂时无法生成，请稍后重试', finish_reason: 'error' },
       },
     ]))
     const onRunStatus = vi.fn()

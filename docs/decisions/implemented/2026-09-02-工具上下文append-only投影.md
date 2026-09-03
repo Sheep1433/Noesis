@@ -32,6 +32,8 @@
 - **调小上游 `tool_token_limit_before_evict` 实现 read_file 截断**：否决。该参数同时控制结果驱逐，调小会在 20k 处重启上游卸载，与预算中间件形成双份替换且上游不保留 status/errorCategory/outcome。
 - **每条用户消息携带日期戳（替代冻结块）**：否决。语义等价且 append-only，但每轮多一行重复信息；冻结块 + 尾部纠正在同日常态下零额外注入。
 
+5. **工具失败通道单源化**（同日追加）：`ToolFailure` 双文案（message_for_llm/message_for_user）+ Suggestion 行 + `[tool_error]` header + 前端分类文案表四件全部删除，改为**单份短文案**（≤600 字符）：模型 / 入库 / 用户展开态逐字一致（`Error: <短文案>`），前端折叠行通用「执行失败」；pydantic ValidationError 走结构化提取（`file_path: Field required（传入字段：…）`），不再灌 str(exc) 全文；可重试类（网络/超时/基础设施）统一后缀「，可稍后重试」、不可重试不带——重试语义由文案承载，不设显式布尔；errorCategory/retryable 降级为纯 metadata（DB 统计、SUBAGENT_FAILED 判定、预算中间件保语义）。LLM 上游服务商失败（429/503/451）不在本通道，由 `LLMErrorHandlingMiddleware` 承载（退避/上限/熔断/不可重试直达降级），重试决策者是代码不是模型。
+
 ## 后果与代价
 
 - 升级后首个请求对既有会话的大参数做一次性入口定型（一次性缓存重置）；替换记录兼容（hash 键控重放机制未变）。

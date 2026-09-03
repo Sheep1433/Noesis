@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { AgentRunSnapshot, ChatMessageResponse } from '@/api/chat'
-import type { RetrievalResultUi } from '@/views/chat/messageParts'
+import type { RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
 import type { RunEventState } from '@/views/chat/runEventReducer'
 import { useLocalStorage } from '@vueuse/core'
-import { NFloatButton, NInput } from 'naive-ui'
+import { NInput } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   getAgentRun,
@@ -16,34 +16,46 @@ import {
 } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
 import AssistantStreamingIndicator from '@/components/AssistantStreamingIndicator/index.vue'
-import ModelSelector from '@/components/Chat/ModelSelector.vue'
-import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
-import CitationSources from '@/components/CitationSources/index.vue'
+import AssistantToolFailureBlocker from '@/components/AssistantToolFailureBlocker/index.vue'
+import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
 import FollowupQueue from '@/components/FollowupQueue/index.vue'
-import HitlApprovalCard from '@/components/HitlApprovalCard/index.vue'
+import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
+import ResearchSourcesPanel from '@/components/ResearchSourcesPanel/index.vue'
+import RunMetaLine from '@/components/RunMetaLine/index.vue'
+import SessionStatsLine from '@/components/SessionStatsLine/index.vue'
+import StopSendButton from '@/components/StopSendButton/index.vue'
 import { getQueuedFollowups, setQueuedFollowups } from '@/components/SubagentConversationView/queuedFollowups'
 import { langfuseUiOrigin } from '@/config'
 import { useFollowupQueue } from '@/hooks/useFollowupQueue'
+import { useTicker } from '@/hooks/useTicker'
 import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { formatHHmm, wireTimestampMs } from '@/utils/formatTime'
 import { buildDisplayParts, lastTopLevelTextEntry } from '@/utils/groupAssistantParts'
 import { rebuildSessionStats } from '@/utils/sessionStats'
 import { formatStatsLine } from '@/utils/statsFormat'
 import { citationKey } from '@/views/chat/citationRendering'
-import { assistantPartsStillStreaming,
+import {
+  appendReasoningDelta,
+  appendRetrievalPart,
+  appendTextDelta,
+  applyToolOutput,
+  assistantPartsStillStreaming,
   extractLastTopLevelText,
   formatDurationMs,
   hasValidContextWindow,
   normalizeApiContent,
-  shouldShowAssistantToolFailureBlocker } from '@/views/chat/messageParts'
+  shouldShowAssistantToolFailureBlocker,
+  upsertToolInputPart,
+} from '@/views/chat/messageParts'
 import {
   initialRunEventState,
   parseRunEvent,
   runEventReducer,
-
 } from '@/views/chat/runEventReducer'
+import { consumeRunStream } from '@/views/chat/useRunStreamClient'
+import { createFrameHandlerTable } from '@/views/chat/useSSEStream'
 
 const props = withDefaults(defineProps<{
   sessionId: string
@@ -68,8 +80,7 @@ const followupSending = ref(false)
 const streamAbort = ref<AbortController | null>(null)
 const activeRunId = ref<string | null>(props.runId)
 let requestSerial = 0
-const now = ref(Date.now())
-let durationTimer: ReturnType<typeof setInterval> | null = null
+const { now, start: startDurationTimer, stop: stopDurationTimer } = useTicker()
 /** followup 模型选择：初始取子会话 extra.model_id（ModelSelector 持久化），缺省目录默认 */
 const selectedModelId = ref('')
 /** run 事件消费单点状态（runEventReducer 持有唯一真相；run / contextSnapshot 为派生视图） */
@@ -335,17 +346,12 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   if (!domain) {
     return
   }
-  // 流式正文增量（瞬态）：直改合成消息的末尾 part（O(1) 追加），边界
-  // message-updated 会以权威投影整体收口，此处不进 reducer
-  if (domain.type === 'content-delta') {
-    appendStreamingDelta(domain.kind, domain.text)
-    return
-  }
   const prev = reducerState.value
   const next = runEventReducer(prev, domain)
   reducerState.value = next
-  if (next.assistantContent !== prev.assistantContent) {
-    upsertAssistant(next.assistantContent, domain.type === 'run-snapshot' ? next.run ?? undefined : undefined)
+  // 审批挂起携带权威投影（中断点内容 + pending_hitl）：同步合成消息
+  if (domain.type === 'approval-required' && domain.content) {
+    upsertAssistant(domain.content)
   }
   // 终态时刻落进 assistant 消息：流式建出的合成消息没有 run_finished_at，
   // 不补的话 duration 会随 now 永远跳（「会话停了计时器还在跑」）
@@ -361,6 +367,7 @@ function applyEvent(event: string, payload: Record<string, unknown>) {
   // 终态重载：落库后的 usage / 终态内容进入统计条与消息（流式终态对齐）
   if (domain.type === 'run-finished') {
     runCollapseSignal.value += 1
+    streamFailed.value = false
     void loadConversation()
   }
 }
@@ -380,36 +387,109 @@ const runGenerating = computed(() => run.value?.status === 'running')
 const assistantHasParts = computed(() =>
   messages.value.some((m) => m.role === 'assistant' && normalizeApiContent(m.content).parts.length > 0),
 )
-/** 追加流式增量到合成 assistant 消息的末尾同类型 part（无则新建）。 */
-function appendStreamingDelta(kind: 'text' | 'reasoning', text: string) {
+/**
+ * 流式帧游标（durable 事件单调推进；快照重置）——与主聊天 lastSequence
+ * 同一记账职责，作为重订阅的 after_sequence。
+ */
+const streamCursor = ref(0)
+/** 断流自愈重试耗尽的可见失败（重连或新 run 清除；消灭静默卡「生成中」） */
+const streamFailed = ref(false)
+/**
+ * 本流会话内已见终态（run.finished / 终态快照置位，活跃快照清除）：
+ * 读循环不再因 runActive 为假提前退出——快照本身来自流首帧；
+ * 终态后仅用于阻止无意义重连。
+ */
+let terminalSeen = false
+const LIFECYCLE_EVENTS = new Set(['run.started', 'approval.required', 'approval.resumed', 'run.finished'])
+
+/** 对流式 assistant 消息的 parts 应用一次投影变换（appenders 纯函数族）。 */
+function mutateStreamingParts(apply: (parts: UiPart[]) => UiPart[], createSkeleton = false) {
   const assistantId = run.value?.assistant_message_id
   if (!assistantId) {
     return
   }
-  const index = messages.value.findIndex((item) => item.id === assistantId)
+  let index = messages.value.findIndex((item) => item.id === assistantId)
   if (index === -1) {
-    // 首个 delta 先于任何边界投影：建流式骨架（upsertAssistant 的合成路径）
+    if (!createSkeleton) {
+      return
+    }
+    // 首个帧先于任何边界投影：建流式骨架（upsertAssistant 的合成路径）
     upsertAssistant({ version: 1, parts: [] })
+    index = messages.value.findIndex((item) => item.id === assistantId)
+    if (index === -1) {
+      return
+    }
   }
-  const i = messages.value.findIndex((item) => item.id === assistantId)
-  if (i === -1) {
+  const parts = apply(normalizeApiContent(messages.value[index].content).parts)
+  messages.value[index] = { ...messages.value[index], content: { version: 1, parts } }
+}
+
+/**
+ * 共享帧分派表：帧词汇 → messageParts appenders（与主聊天 useSSEStream
+ * 同一份映射与工具元数据富集）。内容投影与主聊天同一实现。
+ */
+const frameTable = createFrameHandlerTable({
+  onTextDelta: (text, parent) => mutateStreamingParts((parts) => appendTextDelta(parts, text, parent), true),
+  onReasoningDelta: (text, parent) => mutateStreamingParts((parts) => appendReasoningDelta(parts, text, parent), true),
+  onToolCall: (name, args, toolCallId, parent, stepId) =>
+    mutateStreamingParts((parts) => upsertToolInputPart(parts, toolCallId, name, args, parent, stepId), true),
+  onToolResult: (toolCallId, payload) =>
+    mutateStreamingParts((parts) => applyToolOutput(parts, toolCallId, payload)),
+  onRetrievalResults: (part) => mutateStreamingParts((parts) => appendRetrievalPart(parts, part), true),
+  onStatsUpdate: (stats) => applyEvent('stats-update', stats as unknown as Record<string, unknown>),
+})
+
+/** 快照重置：reducer run-snapshot + 内容整体 replace + 游标对齐。 */
+function handleSnapshot(snapshot: AgentRunSnapshot) {
+  const domain = parseRunEvent('run-snapshot', snapshot as unknown as Record<string, unknown>)
+  if (domain) {
+    reducerState.value = runEventReducer(reducerState.value, domain)
+  }
+  upsertAssistant(snapshot.content, snapshot)
+  streamCursor.value = Number(snapshot.snapshot_sequence ?? 0)
+  frameTable.reset()
+  terminalSeen = ['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)
+}
+
+/**
+ * 单帧分派（内核 onFrame）：transient 直接应用；durable 做序号记账与
+ * gap 检测（gap → 'stop' 交内核走快照恢复）；生命周期事件走 reducer，
+ * 其余帧走共享分派表（appenders）。
+ */
+function dispatchRunFrame(event: string, data: Record<string, unknown> | null, dataStr: string): 'stop' | void {
+  if (data === null) {
+    // [DONE] 传输层结束标记；终态判定只认 run.finished
     return
   }
-  const content = messages.value[i].content as { version: number, parts: Array<Record<string, unknown>> }
-  if (!Array.isArray(content.parts)) {
-    content.parts = []
+  if (data.transient) {
+    const type = String(data.type ?? event)
+    frameTable.dispatch(type, data)
+    return
   }
-  const partType = kind === 'text' ? 'text' : 'reasoning'
-  let last = content.parts[content.parts.length - 1]
-  if (!last || last.type !== partType || typeof last.content !== 'string') {
-    last = { id: `part-stream-${partType}-${content.parts.length}`, type: partType, content: '', status: 'streaming' }
-    content.parts.push(last)
+  const sequence = Number(data.sequence ?? 0)
+  if (sequence > 0) {
+    if (sequence <= streamCursor.value) {
+      return
+    }
+    if (streamCursor.value > 0 && sequence !== streamCursor.value + 1) {
+      // sequence gap：停止当前连接，内核经权威快照恢复
+      return 'stop'
+    }
+    streamCursor.value = sequence
   }
-  last.content = (last.content as string) + text
-  if (kind === 'text') {
-    last.status = 'streaming'
+  const type = String(data.type ?? event)
+  if (type === 'run-snapshot') {
+    handleSnapshot(data as unknown as AgentRunSnapshot)
+    return
   }
-  messages.value[i] = { ...messages.value[i], content: { ...content, parts: [...content.parts] } }
+  if (LIFECYCLE_EVENTS.has(type)) {
+    if (type === 'run.finished') {
+      terminalSeen = true
+    }
+    applyEvent(type, data)
+    return
+  }
+  frameTable.dispatch(type, data)
 }
 
 async function loadContextSnapshot() {
@@ -430,7 +510,7 @@ async function loadContextSnapshot() {
   }
 }
 
-async function consumeStream(runId: string, serial: number, attempt = 0) {
+async function consumeStream(runId: string, serial: number) {
   stopStream()
   const previous = activeRunStreams.get(runId)
   if (previous) {
@@ -440,58 +520,40 @@ async function consumeStream(runId: string, serial: number, attempt = 0) {
   const controller = new AbortController()
   activeRunStreams.set(runId, controller)
   streamAbort.value = controller
-  let streamEndedNormally = false
+  streamFailed.value = false
+  terminalSeen = false
   try {
-    const response = await subscribeAgentRun(runId, Number(run.value?.snapshot_sequence ?? 0), controller.signal)
-    if (!response.body) {
-      return
-    }
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let eventName = 'message'
-    let dataLines: string[] = []
-    const flush = () => {
-      if (!dataLines.length) {
-        return
-      }
-      try {
-        const payload = JSON.parse(dataLines.join('\n')) as Record<string, unknown>
-        if (payload.type === 'run.finished') {
-          streamEndedNormally = true
+    await consumeRunStream({
+      subscribe: (signal) => subscribeAgentRun(runId, streamCursor.value, signal),
+      onFrame: dispatchRunFrame,
+      // 代际失效或已见终态即安静退出（读循环不依赖 runActive——快照来自流首帧）
+      isActive: () => serial === requestSerial && !terminalSeen,
+      maxAttempts: 6,
+      backoffMs: (attempt) => Math.min(800 * (attempt + 1), 4000),
+      // 断流自愈：权威快照收口（终态即就地收尾），否则退避重订阅
+      resync: async () => {
+        const snapshot = await getAgentRun(runId)
+        handleSnapshot(snapshot)
+        if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
+          applyEvent('run.finished', {
+            type: 'run.finished',
+            status: snapshot.status,
+            finished_at: snapshot.updated_at ?? Date.now(),
+          })
         }
-        applyEvent(eventName, payload)
-      } catch (error) {
-        console.warn('[subagent] event parse failed', error)
-      }
-      eventName = 'message'
-      dataLines = []
-    }
-    while (true) {
-      if (serial !== requestSerial) {
-        break
-      }
-      const { value, done } = await reader.read()
-      if (done) {
-        flush()
-        break
-      }
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split(/\r?\n/)
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (!line) {
-          flush()
-        } else if (line.startsWith('event:')) {
-          eventName = line.slice(6).trim()
-        } else if (line.startsWith('data:')) {
-          dataLines.push(line.slice(5).trim())
+      },
+      // 重试耗尽：可见失败（不再静默卡「生成中」），手动重连入口
+      onExhausted: () => {
+        if (serial === requestSerial) {
+          streamFailed.value = true
         }
-      }
-    }
+      },
+      signal: controller.signal,
+    })
   } catch (error) {
-    if ((error as Error)?.name !== 'AbortError') {
+    if ((error as Error)?.name !== 'AbortError' && serial === requestSerial) {
       console.warn('[subagent] stream failed', error)
+      streamFailed.value = true
     }
   } finally {
     if (streamAbort.value === controller) {
@@ -500,43 +562,7 @@ async function consumeStream(runId: string, serial: number, attempt = 0) {
     if (activeRunStreams.get(runId) === controller) {
       activeRunStreams.delete(runId)
     }
-    // 断流自愈：流结束但未见过终态事件且 run 仍非终态——连接中断会把
-    // 「运行中」永久卡死（终态事件随断连丢失，此前无任何补救路径：
-    // 对话已结束仍显示生成中标记与停止按钮）
-    if (!streamEndedNormally && serial === requestSerial && runActive.value) {
-      void resyncRunAfterStreamEnd(runId, serial, attempt)
-    }
   }
-}
-
-/** 断流后重取权威 run 状态：终态则按快照+终态收口；仍在跑则重订阅（有界退避）。 */
-async function resyncRunAfterStreamEnd(runId: string, serial: number, attempt: number) {
-  if (serial !== requestSerial || attempt >= 6) {
-    return
-  }
-  await new Promise((resolve) => setTimeout(resolve, Math.min(800 * (attempt + 1), 4000)))
-  if (serial !== requestSerial) {
-    return
-  }
-  try {
-    const snapshot = await getAgentRun(runId)
-    if (serial !== requestSerial) {
-      return
-    }
-    const status = String(snapshot.status || '')
-    if (['completed', 'error', 'partial', 'interrupted'].includes(status)) {
-      applyEvent('run-snapshot', { type: 'run-snapshot', ...snapshot })
-      applyEvent('run.finished', {
-        type: 'run.finished',
-        status,
-        finished_at: snapshot.finished_at ?? null,
-      })
-      return
-    }
-  } catch {
-    // 权威状态暂不可达：直接重订阅再试
-  }
-  void consumeStream(runId, serial, attempt + 1)
 }
 
 async function loadConversation() {
@@ -563,15 +589,25 @@ async function loadConversation() {
   }
 }
 
-async function decideHitl(decision: { type: 'approve' | 'reject', grant_scope?: 'once' | 'session' }) {
+/** 手动重连（可见失败后的重试入口）。 */
+function retryStream() {
+  if (activeRunId.value) {
+    void consumeStream(activeRunId.value, requestSerial)
+  }
+}
+
+async function decideHitl(payload: {
+  decisions: Array<{ type: 'approve' | 'reject', message?: string }>
+  grant_scope?: 'once' | 'session' | null
+}) {
   if (!run.value?.run_id || !run.value.pending_hitl?.interrupt_id) {
     return
   }
   try {
     syncRunSnapshot(await resumeAgentRunHitl(run.value.run_id, {
       interrupt_id: run.value.pending_hitl.interrupt_id,
-      decisions: [decision],
-      grant_scope: decision.grant_scope ?? 'once',
+      decisions: payload.decisions,
+      grant_scope: payload.grant_scope ?? 'once',
     }))
     await loadConversation()
   } catch (error) {
@@ -595,24 +631,9 @@ async function stopCurrentRun() {
 }
 
 /** 非事件路径的 run 快照（审批提交/停止的 API 响应）：同步进 reducer 状态，防止后续事件序号回退 */
+
 function syncRunSnapshot(snapshot: AgentRunSnapshot) {
   reducerState.value = { ...reducerState.value, run: snapshot }
-}
-
-function startDurationTimer() {
-  now.value = Date.now()
-  if (durationTimer === null) {
-    durationTimer = setInterval(() => {
-      now.value = Date.now()
-    }, 1000)
-  }
-}
-
-function stopDurationTimer() {
-  if (durationTimer !== null) {
-    clearInterval(durationTimer)
-    durationTimer = null
-  }
 }
 
 // 挂载即加载（可见性由父级挂载/卸载控制）；多源 watch 逐源比较，
@@ -663,23 +684,13 @@ onBeforeUnmount(() => {
         <div v-else class="subagent-conversation__assistant">
           <!-- 回复级元信息（主 Agent assistant-run-meta 同构）：耗时在回复上方，
                compact 可折叠轮为展开开关 -->
-          <div v-if="messageElapsedText(message)" class="subagent-conversation__run-meta">
-            <button
-              v-if="shouldCollapseMessage(message)"
-              type="button"
-              class="subagent-conversation__run-meta-toggle"
-              :aria-expanded="isMessageExpanded(message)"
-              @click="toggleMessageCollapse(message)"
-            >
-              <span>{{ messageElapsedText(message) }}</span>
-              <span
-                class="subagent-conversation__run-meta-chevron"
-                :class="{ 'subagent-conversation__run-meta-chevron--expanded': isMessageExpanded(message) }"
-                aria-hidden="true"
-              >›</span>
-            </button>
-            <span v-else class="subagent-conversation__run-meta-elapsed">{{ messageElapsedText(message) }}</span>
-          </div>
+          <RunMetaLine
+            v-if="messageElapsedText(message)"
+            :elapsed="messageElapsedText(message)"
+            :collapsible="shouldCollapseMessage(message)"
+            :expanded="isMessageExpanded(message)"
+            @toggle="toggleMessageCollapse(message)"
+          />
           <ConversationPartsRenderer
             :content="message.content"
             appearance="light"
@@ -690,14 +701,9 @@ onBeforeUnmount(() => {
             :collapsed="shouldCollapseMessage(message) && !isMessageExpanded(message)"
             :live-streaming="runGenerating && message.status === 'streaming'"
           />
-          <div
+          <AssistantToolFailureBlocker
             v-if="shouldShowAssistantToolFailureBlocker(normalizeApiContent(message.content).parts, runGenerating && message.status === 'streaming')"
-            class="subagent-conversation__failure-blocker"
-            role="status"
-          >
-            <span class="subagent-conversation__failure-blocker-icon" aria-hidden="true">!</span>
-            <span>本轮未完成</span>
-          </div>
+          />
           <div
             v-if="normalizeApiContent(message.content).parts.length > 0 && !assistantPartsStillStreaming(normalizeApiContent(message.content).parts)"
             class="subagent-conversation__message-actions"
@@ -714,6 +720,11 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <div v-if="!messages.length" class="subagent-conversation__empty">暂无对话内容</div>
+      <!-- 断流自愈重试耗尽的可见失败（不再静默卡「生成中」）：手动重连入口 -->
+      <div v-if="streamFailed" class="subagent-conversation__stream-failed">
+        <span>连接已中断，未能自动恢复</span>
+        <button type="button" class="subagent-conversation__retry" @click="retryStream">重新连接</button>
+      </div>
       <!-- 生成中标记：消息流末尾（与主 Agent 的消息内同位置语义，而非
            消息区与输入框之间的独立悬浮行） -->
       <AssistantStreamingIndicator
@@ -725,18 +736,16 @@ onBeforeUnmount(() => {
       <!-- 子会话来源面板：与主 Agent 同位置（回复末尾而非底部统计行）；
            基于落库 retrieval parts，会话内 canonical URL 去重 -->
       <div v-if="sessionSources.length" class="subagent-conversation__sources">
-        <CitationSources :results="sessionSources" />
+        <ResearchSourcesPanel :results="sessionSources" />
       </div>
-      <template v-if="run?.pending_hitl?.action_requests?.length">
-        <HitlApprovalCard
-          v-for="request in run.pending_hitl.action_requests"
-          :key="request.tool_call_id || request.name"
-          :tool-name="request.name || 'tool'"
-          :command="JSON.stringify(request.args || {})"
-          allow-session-grant
-          @decide="decideHitl"
-        />
-      </template>
+      <!-- 审批卡：与主 Agent 同一 HitlComposerPanel（子会话恒可选会话级放行） -->
+      <HitlComposerPanel
+        v-if="run?.pending_hitl?.action_requests?.length"
+        kind="approval"
+        :action-requests="run.pending_hitl.action_requests"
+        session-grant-policy="always"
+        @submit="decideHitl"
+      />
     </div>
     <div class="subagent-conversation__composer chat-composer">
       <!-- 前端待发队列：run 进行中发送的消息在此排队，终态后逐条自动提交 -->
@@ -760,62 +769,40 @@ onBeforeUnmount(() => {
         :autosize="{ minRows: 1, maxRows: 5 }"
         @keydown.enter.exact.prevent="sendFollowup"
       />
-      <div class="subagent-conversation__composer-actions">
-        <div class="subagent-conversation__composer-left">
-          <ModelSelector
-            v-model="selectedModelId"
-            :session-id="sessionId"
-            persist-session-extra
-          />
-          <ReasoningEffortSelector
-            v-model="selectedReasoningEffort"
-            :session-id="sessionId"
-            :model-id="selectedModelId"
-            persist-session-extra
-          />
-        </div>
-        <div class="subagent-conversation__composer-right">
+      <!-- 复用主 Agent 的 composer 容器：收窄为纯模型/档位工具栏（无附件/KB/MCP/Skills）；
+           右槽组上下文环与单按钮（运行中且输入为空 = 停止；有内容 = 发送/入队） -->
+      <ChatComposerToolbar
+        v-model:model-id="selectedModelId"
+        v-model:reasoning-effort="selectedReasoningEffort"
+        qa-type="SUPER_AGENT_QA"
+        :session-id="sessionId"
+        :persist-session-extra="true"
+        :disabled="followupSending"
+        :show-tools-menu="false"
+      >
+        <template #right>
           <ContextWindowIndicator
             v-if="hasValidContextWindow(contextSnapshot)"
             :context="contextSnapshot as any"
           />
-          <!-- 单按钮（与主 Agent 一致）：运行中且输入为空 = 停止；有内容 = 发送（运行中入队） -->
-          <div class="subagent-conversation__send-btn-wrap">
-            <n-float-button
-              position="relative"
-              :width="36"
-              :height="36"
-              :disabled="(!composerStopMode && sendDisabled) || run?.status === 'stopping'"
-              :type="composerStopMode ? 'primary' : 'default'"
-              :data-testid="composerStopMode ? 'subagent-stop-button' : 'subagent-send-button'"
-              class="subagent-conversation__send-btn"
-              :class="{ 'subagent-conversation__send-btn--stop': composerStopMode }"
-              @click.stop="composerStopMode ? stopCurrentRun() : sendFollowup()"
-            >
-              <span
-                v-if="composerStopMode"
-                class="subagent-conversation__stop-icon"
-                aria-label="停止生成"
-              ></span>
-              <div
-                v-else
-                class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer"
-              ></div>
-            </n-float-button>
-          </div>
-        </div>
-      </div>
+          <StopSendButton
+            :stop-mode="composerStopMode"
+            :send-disabled="sendDisabled"
+            :stopping="run?.status === 'stopping'"
+            testid-prefix="subagent-"
+            @action="(kind) => (kind === 'stop' ? stopCurrentRun() : sendFollowup())"
+          />
+        </template>
+      </ChatComposerToolbar>
     </div>
     <!-- 子会话统计行：与主 Agent 同位置（输入框下方）。usage 统计与主会话同口径
          （extra.usage 重建，终态随消息重载更新）；运行中尚无 usage 时以轮对话/
          步数/时长兜底；任务状态同区。置于输入框容器外，避免继承消息框底色 -->
-    <div
+    <SessionStatsLine
       v-if="statsLine"
       class="subagent-conversation__stats"
-      role="status"
-    >
-      {{ statsLine }}
-    </div>
+      :line="statsLine"
+    />
   </div>
 </template>
 
@@ -837,91 +824,8 @@ onBeforeUnmount(() => {
   margin-top: -8px;
 }
 
-/* 本轮未完成 blocker：主视图 assistant-tool-failure-blocker 同构 */
-.subagent-conversation__failure-blocker {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 7px 2px 3px;
-  color: var(--noesis-color-text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.subagent-conversation__failure-blocker-icon {
-  display: inline-flex;
-  flex: 0 0 16px;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  color: var(--noesis-color-warning);
-  font-size: 11px;
-  font-weight: 700;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-}
-
-/* 头部元信息：主 Agent assistant-run-meta 同构（耗时 + 状态在对话上方） */
-.subagent-conversation__run-meta {
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-  margin-bottom: 6px;
-  padding: 0 2px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
-  letter-spacing: 0.01em;
-}
-
-.subagent-conversation__run-meta-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--noesis-color-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-  cursor: pointer;
-  transition: color 0.15s ease;
-}
-
-.subagent-conversation__run-meta-toggle:hover {
-  color: var(--noesis-color-text);
-}
-
-.subagent-conversation__run-meta-chevron {
-  display: inline-block;
-  font-size: 16px;
-  line-height: 12px;
-  transform: translateY(-1px);
-  transition: transform 0.15s ease;
-}
-
-.subagent-conversation__run-meta-chevron--expanded {
-  transform: translateY(-1px) rotate(90deg);
-}
-
-.subagent-conversation__run-meta-status {
-  margin-left: 4px;
-  color: var(--noesis-color-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
 .subagent-conversation__stats {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 4px;
   margin-top: 2px;
-  color: var(--noesis-color-text-hint);
-  font-size: 11px;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
 }
 
 /* 来源面板：回复末尾（与主 Agent 的回复工具栏 meta 区同位置语义） */
@@ -932,9 +836,27 @@ onBeforeUnmount(() => {
 }
 
 
-@keyframes subagent-generating-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
+.subagent-conversation__stream-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  padding: 8px 0;
+  color: var(--noesis-color-error, #d03050);
+  font-size: 12px;
+}
+
+.subagent-conversation__retry {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--noesis-color-primary, #18a058);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.subagent-conversation__retry:hover {
+  text-decoration: underline;
 }
 
 .subagent-conversation__empty {
@@ -999,55 +921,12 @@ onBeforeUnmount(() => {
   background: var(--noesis-color-bg-composer);
 }
 
-.subagent-conversation__composer-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
 
 /* 左右分区（与主 Agent ChatComposerToolbar 同构）：模型选择器靠左，
    上下文圆环与发送/停止按钮靠右 */
-.subagent-conversation__composer-left,
-.subagent-conversation__composer-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
 
-.subagent-conversation__composer-right {
-  flex-shrink: 0;
-}
-
-.subagent-conversation__send-btn-wrap {
-  z-index: 1;
-  display: flex;
-  align-items: center;
-}
-
-.subagent-conversation__send-btn-wrap :deep(.n-float-button) {
-  position: relative !important;
-  inset: auto !important;
-}
 
 /* 停止态与主 Agent 同款：主色圆钮 + 白色方块 + 光环 */
-.subagent-conversation__send-btn--stop {
-  box-shadow: 0 0 0 2px var(--noesis-color-primary-ring);
-}
-
-.subagent-conversation__stop-icon {
-  display: block;
-  width: 12px;
-  height: 12px;
-  background-color: var(--noesis-color-bg-elevated);
-  border-radius: 2px;
-}
-
 @media (max-width: $bp-md) {
-  .subagent-conversation__composer-actions {
-    flex-wrap: wrap;
-    row-gap: 6px;
-  }
 }
 </style>

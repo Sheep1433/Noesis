@@ -23,7 +23,7 @@ from noesis.agents.middlewares.dynamic_context_middleware import (
     DynamicContextMiddleware,
     DynamicContextProvider,
     DynamicContextState,
-    render_dynamic_block,
+    render_head_block,
 )
 from noesis.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
 from noesis.agents.middlewares.read_before_write_middleware import (
@@ -87,5 +87,5 @@ __all__ = [
     "apply_snip_projection",
     "derive_durable_context",
     "render_durable_block",
-    "render_dynamic_block",
+    "render_head_block",
 ]

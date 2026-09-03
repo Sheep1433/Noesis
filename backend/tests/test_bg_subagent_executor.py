@@ -633,7 +633,8 @@ async def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
     """统一管道下子 Agent 投影为标准 multipart：工具生命周期 + 最终文本。
 
     旧 values-diff 手拼投影已删除；本用例经完整管道（astream_events →
-    RuntimeEventMapper → builder）验证 message.updated 事件的投影结构。
+    RuntimeEventMapper → builder）验证：帧词汇逐条转发（与主链路同源）、
+    message.updated 退役、run.finished 携带权威投影结构。
     """
     from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
 
@@ -661,10 +662,19 @@ async def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
         events = []
         while not queue.empty():
             events.append(queue.get_nowait())
-        updated = [e for e in events if e["type"] == "message.updated"]
-        assert updated, f"未收到 message.updated 事件: {[e['type'] for e in events]}"
-        content = updated[-1]["content"]
-        # 统一管道 builder 产物与主链路同构（version 由前端解析层规范化补齐）
+        # 统一帧词汇（与主链路同源）：边界帧逐条投递，message.updated 退役
+        frame_types = [e["type"] for e in events]
+        assert "message.updated" not in frame_types, frame_types
+        for expected in (
+            "message-start", "tool-input-start", "tool-input-available",
+            "tool-output-available", "text-delta",
+        ):
+            assert expected in frame_types, frame_types
+        # 终态 run.finished 携带权威投影：tool part（含输出与成功态）+ text part
+        # （统一管道 builder 产物与主链路同构，version 由前端解析层规范化补齐）
+        finished = [e for e in events if e["type"] == "run.finished"]
+        assert finished, frame_types
+        content = finished[-1]["content"]
         assert "parts" in content
         kinds = [part["type"] for part in content["parts"]]
         assert kinds == ["tool", "text"]
@@ -673,9 +683,6 @@ async def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
         assert tool_part["output"] == "done:政策"
         assert tool_part["status"] == "success"
         assert content["parts"][1]["content"] == "结论如下。"
-        # 终态 run.finished 事件同样携带该投影
-        finished = [e for e in events if e["type"] == "run.finished"]
-        assert finished and finished[-1]["content"] is not None
     finally:
         unsubscribe_run_events("run-proj", queue)
         executor.cancel(task_id)
@@ -1363,6 +1370,21 @@ def test_stopping_counts_toward_concurrency_slot() -> None:
     assert executor.get(second_id)["status"] == BgTaskStatus.COMPLETED.value
 
 
+def test_check_task_pending_hint_text() -> None:
+    """进行中状态（queued/running/awaiting_approval）输出状态提示，不落入终态形态。"""
+    from noesis.agents.subagents.tools import _format_task
+
+    for status, hint in (
+        ("queued", "排队中"),
+        ("running", "仍在运行"),
+        ("awaiting_approval", "等待用户审批"),
+    ):
+        formatted = _format_task(
+            {"status": status, "task_id": "t1", "child_session_id": "s1", "description": "调研任务"},
+        )
+        assert formatted == f"[s1] {hint}（description: 调研任务）", formatted
+
+
 def test_partial_output_consistent_across_channels() -> None:
     """部分成果三处一致（spec 2.4）：task.result / check_task(_format_task) / 通知预览。"""
     from noesis.agents.subagents import notifications as notices
@@ -1858,9 +1880,14 @@ async def test_run_stream_publishes_transient_deltas_and_stats() -> None:
         assert stats[-1].get("steps", 0) >= 1
         assert stats[-1].get("turns", 0) >= 1
 
-        # 瞬态事件不进 history：回放通道只保留边界/生命周期事件
-        history = list(get_run_event_history("run-stream", 0))
-        assert not any(e.get("transient") for e in history), "瞬态事件不得进入 history"
+        # 瞬态事件不进缓存：回放通道只保留边界/生命周期事件。
+        # 首连（after=0）只放行 run.started——内容恢复走首帧快照；
+        # 正常重放（after=1 起）携带 run.finished。
+        first_connect = list(get_run_event_history("run-stream", 0))
+        assert not any(e.get("transient") for e in first_connect), "瞬态事件不得进入重放缓存"
+        assert all(e.get("type") == "run.started" for e in first_connect)
+        history = list(get_run_event_history("run-stream", 1))
+        assert not any(e.get("transient") for e in history)
         assert any(e.get("type") == "run.finished" for e in history)
     finally:
         unsubscribe_run_events("run-stream", queue)

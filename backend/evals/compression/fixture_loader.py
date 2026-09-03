@@ -8,17 +8,28 @@ from typing import Any, Dict, List, Optional
 
 COMPRESSION_ROOT = Path(__file__).resolve().parent
 FIXTURES_DIR = COMPRESSION_ROOT / "fixtures"
+REAL_FIXTURES_DIR = FIXTURES_DIR / "real"
 PROBES_DIR = COMPRESSION_ROOT / "probes"
 
 PROBE_TYPES = frozenset({"recall", "artifact", "continuation", "decision"})
 
 
+def _fixture_path(fixture_id: str) -> Path:
+    for base in (FIXTURES_DIR, REAL_FIXTURES_DIR):
+        path = base / f"{fixture_id}.json"
+        if path.is_file():
+            return path
+    return FIXTURES_DIR / f"{fixture_id}.json"
+
+
 def list_fixture_ids() -> List[str]:
-    return sorted(p.stem for p in FIXTURES_DIR.glob("*.json"))
+    ids = {p.stem for p in FIXTURES_DIR.glob("*.json")}
+    ids |= {p.stem for p in REAL_FIXTURES_DIR.glob("*.json")}
+    return sorted(ids)
 
 
 def load_fixture(fixture_id: str) -> Dict[str, Any]:
-    path = FIXTURES_DIR / f"{fixture_id}.json"
+    path = _fixture_path(fixture_id)
     if not path.is_file():
         raise FileNotFoundError(f"fixture 不存在: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))

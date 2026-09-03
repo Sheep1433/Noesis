@@ -12,6 +12,9 @@ class RunStatus(str, Enum):
     RUNNING = "running"
     RETRYING = "retrying"
     HITL_PENDING = "hitl_pending"
+    # 协作停止中间态（子 Agent run）：停止请求已受理，静止边界退出后转终态。
+    # 仅存在于受理快照与事件流，不落库——DB 在终态事件到达前保持原状态。
+    STOPPING = "stopping"
     COMPLETED = "completed"
     PARTIAL = "partial"
     ERROR = "error"
@@ -26,6 +29,15 @@ ACTIVE_RUN_STATUSES = frozenset(
         RunStatus.HITL_PENDING,
     }
 )
+
+#: run 终态 → assistant 消息终态的权威映射（主/子链路落库共用单点；
+#: interrupted 落 partial——中断的内容视作部分产出）。
+ASSISTANT_TERMINAL_STATUS: dict[RunStatus, str] = {
+    RunStatus.COMPLETED: "completed",
+    RunStatus.PARTIAL: "partial",
+    RunStatus.ERROR: "error",
+    RunStatus.INTERRUPTED: "partial",
+}
 TERMINAL_RUN_STATUSES = frozenset(
     {
         RunStatus.COMPLETED,

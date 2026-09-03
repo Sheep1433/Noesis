@@ -12,6 +12,29 @@ _SERVICE: Any = None
 _EXECUTOR: Any = None
 
 
+def child_session_summary(task: dict, *, parent_id: str) -> dict:
+    """child 会话目录摘要的单一构造点（纯函数，无服务依赖）。
+
+    三处共用（executor 事件推送 / 目录快照 / 目录事件流）：输入为
+    BackgroundTask.to_dict() 形状的 task dict。放端口模块——运行器与
+    产品服务共同依赖的中立位置，执行器热路径不依赖服务注册状态。
+    """
+    return {
+        "session_id": task.get("child_session_id") or task.get("task_id"),
+        "parent_id": parent_id,
+        "title": task.get("description") or "子 Agent",
+        "profile_id": "task-worker",
+        "created_by_tool_call_id": task.get("created_by_tool_call_id"),
+        "run_id": task.get("run_id"),
+        "status": task.get("status"),
+        "turn_count": task.get("turn_count", 0),
+        "step_count": task.get("progress_count", 0),
+        "started_at": task.get("started_at"),
+        "finished_at": task.get("completed_at"),
+        "interrupt": task.get("interrupt"),
+    }
+
+
 def configure_service_port(service: Any) -> None:
     global _SERVICE
     _SERVICE = service
@@ -58,6 +81,8 @@ class SubagentSessionPort:
     @staticmethod
     async def collect_partial_output(*args: Any, **kwargs: Any) -> Any:
         return await _service().collect_partial_output(*args, **kwargs)
+
+    # child_session_summary 为模块级纯函数（上方），不经服务委托
 
 
 class ExecutorPort:

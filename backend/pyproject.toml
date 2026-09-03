@@ -103,5 +103,6 @@ asyncio_default_fixture_loop_scope = "function"
 # 默认跳过 integration（真实 LLM / 外部服务），需手动 `-m integration` 或设环境变量开启
 addopts = "-m 'not integration'"
 markers = [
-    "integration: marks tests that call real LLM or external services",
+    "integration: marks tests that call real services (本地起后端后手动跑)",
+    "llm: marks tests that call a real LLM（耗时取决于网关，快速轮用 -m 'integration and not llm' 跳过）",
 ]

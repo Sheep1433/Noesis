@@ -6,6 +6,7 @@ import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTooltip } from 'naive-ui'
 import { computed, ref, useId } from 'vue'
 import MarkdownPreview from '@/components/MarkdownPreview/index.vue'
+import ParallelToolsGroup from '@/components/ParallelToolsGroup/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { buildChildDisplayParts } from '@/utils/groupAssistantParts'
@@ -235,37 +236,11 @@ const durationDisplay = computed(() => {
                 :truncated="entry.part.truncated"
                 :duration-ms="entry.part.duration_ms"
               />
-              <div
+              <ParallelToolsGroup
                 v-else-if="entry.kind === 'parallel_tools'"
-                class="subagent-parallel-tools"
-              >
-                <n-collapse>
-                  <n-collapse-item name="parallel-tools" :default-expanded="true">
-                    <template #header>
-                      <div class="subagent-parallel-tools__header">
-                        并行工具 · {{ entry.parts.length }} 个
-                      </div>
-                    </template>
-                    <div class="subagent-parallel-tools__body">
-                      <ToolCallCollapse
-                        v-for="tp in entry.parts"
-                        :key="tp.tool_call_id ?? tp.id"
-                        appearance="light"
-                        :name="tp.name"
-                        :arguments="tp.input"
-                        :result="tp.output"
-                        :error="tp.error"
-                        :status="tp.status"
-                        :state="tp.state"
-                        :error-category="tp.errorCategory"
-                        :exit-code="tp.exit_code"
-                        :truncated="tp.truncated"
-                        :duration-ms="tp.duration_ms"
-                      />
-                    </div>
-                  </n-collapse-item>
-                </n-collapse>
-              </div>
+                :parts="entry.parts"
+                appearance="light"
+              />
             </template>
           </div>
         </div>
@@ -455,13 +430,6 @@ const durationDisplay = computed(() => {
   gap: 4px;
 }
 
-.subagent-parallel-tools {
-  margin: 2px 0;
-  padding: 4px 8px;
-  border-left: 3px solid var(--noesis-block-light-accent);
-  border-radius: var(--noesis-radius-sm);
-  background: var(--noesis-block-light-bg);
-}
 
 .subagent-parallel-tools :deep(.n-collapse-item__header) {
   padding: 0 !important;

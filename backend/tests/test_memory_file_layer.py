@@ -913,3 +913,19 @@ def test_recent_journal_strips_snapshot_with_embedded_headers(users_root: Path) 
     assert "快照正文首行" not in journal
     assert "内嵌小节" not in journal
     assert "快照正文尾巴" not in journal
+
+
+def test_index_renders_no_empty_group_headers(users_root: Path) -> None:
+    """空组不渲染：索引是路由面，空库不输出五个裸组头。"""
+    MemoryStore.ensure_layout("u1")
+    index = users_root / "u1" / "memory" / "MEMORY.md"
+    text = index.read_text(encoding="utf-8")
+    assert "## 偏好" not in text and "## 注意事项" not in text
+    assert "Noesis 记忆索引" in text  # 注释头保留
+
+    entry = MemoryStore.upsert_entry(
+        "u1", memory_type="gotcha", label="边界", body="不要越过工作区", sources=["s"]
+    )
+    text = index.read_text(encoding="utf-8")
+    assert "## 注意事项" in text and entry.rel_path in text
+    assert "## 偏好" not in text, "仍空的组不出现"

@@ -39,7 +39,7 @@ from noesis.chat.event_mapping.bridge import (
     StreamBridgeError,
     iter_bridge_events,
 )
-from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper
 from noesis.runtime.deps import langfuse_workflow_context, merge_langfuse_runnable_config
 from noesis.llm.catalog import get_default_model_id, resolve_catalog_entry
 from noesis.services.chat_service import ChatService
@@ -202,10 +202,14 @@ async def _resolve_model_for_query(
     request_model_id: Optional[str],
     db: AsyncSession,
 ) -> str:
-    """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。
+    """请求显式携带 model_id 时写入会话；否则读会话 extra；再读用户默认偏好；
+    最后无任何选择时回退平台默认目录项。
 
     用户自定义模型优先于内置目录：命中时把含解密 key 的快照注入 ContextVar，
     factory/catalog 在本次 run 内据此路由到用户自己的端点。
+
+    显式选择的 id（请求/会话/偏好）不可解析时直接报错——不静默回退平台
+    默认，否则「用户配了 A 实际跑 B」无声发生（2026-09-03 实证）。
     """
     from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
     from noesis.services.user_llm_service import UserLLMService
@@ -223,9 +227,14 @@ async def _resolve_model_for_query(
         set_runtime_model_snapshots(snapshots)
         return snapshots[0].id
 
+    def _strict(model_id: Optional[str]) -> str:
+        from noesis.llm.catalog import resolve_catalog_entry_strict
+
+        return resolve_catalog_entry_strict(model_id).id
+
     if request_model_id is not None:
         normalized = _normalize_model_id(request_model_id)
-        resolved = await _apply_custom(normalized) or resolve_catalog_entry(normalized).id
+        resolved = await _apply_custom(normalized) or _strict(normalized)
         await ChatService.merge_session_extra(
             session_id,
             user_id,
@@ -242,7 +251,12 @@ async def _resolve_model_for_query(
     if session and session.extra:
         stored = _normalize_model_id(session.extra.get("model_id"))
         if stored:
-            return await _apply_custom(stored) or resolve_catalog_entry(stored).id
+            return await _apply_custom(stored) or _strict(stored)
+    # 用户默认偏好（设置页「默认对话模型」）：会话未显式选模型时的兜底，
+    # 先于平台目录默认。偏好不可解析同样报错，不静默换模型。
+    preferred = await UserLLMService.get_default_model(db, user_id=str(user_id))
+    if preferred:
+        return await _apply_custom(preferred) or _strict(preferred)
     return get_default_model_id()
 
 
@@ -337,7 +351,7 @@ def _resolve_assistant_message_id(
 
 
 def _stream_terminal_persist_done(ctx: Dict[str, Any]) -> bool:
-    return bool(ctx.get("user_stopped") or ctx.get("_stream_persist_finalized"))
+    return bool(ctx.get("_stream_persist_finalized"))
 
 
 def _mark_stream_persist_finalized(ctx: Dict[str, Any]) -> None:
@@ -408,8 +422,6 @@ async def _persist_hitl_pending_assistant(
     model: Optional[str] = None,
 ) -> None:
     """HITL 等待：UPDATE content + status=streaming，不标记终态 finalized。"""
-    if ctx.get("user_stopped"):
-        return
     if ctx.get("text_buffer") and builder:
         builder.append_text_delta(
             ctx["text_buffer"],
@@ -662,9 +674,8 @@ async def _finalize_run_events(
     user_id: str,
 ) -> AsyncGenerator[RunEvent, None]:
     mapper = RuntimeEventMapper(bridge)
-    finish_reason = "stopped" if ctx.get("user_stopped") else None
     sink = ctx.get("_persist_sink")
-    for event in mapper.finalize(finish_reason=finish_reason):
+    for event in mapper.finalize():
         if isinstance(sink, PersistSink):
             sink.on_event(event)
         yield event
@@ -677,8 +688,7 @@ async def _finalize_sse_bridge_stream(
     session_id: str,
     user_id: str,
 ) -> AsyncGenerator[str, None]:
-    finish_reason = "stopped" if ctx.get("user_stopped") else None
-    lines = _run_orchestrator.finalize_sse(bridge, finish_reason=finish_reason)
+    lines = _run_orchestrator.finalize_sse(bridge)
     sink = ctx.get("_persist_sink")
     if isinstance(sink, PersistSink):
         from noesis.chat.delivery.sse import parse_sse_line_to_event

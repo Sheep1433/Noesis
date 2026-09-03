@@ -85,11 +85,11 @@ sequence > last_sequence + 1   停止 reader，查询 snapshot，replace 后重�
 
 ### 4.2b run 内容流事件清单
 
-run 内容流（`/api/chat/runs/{run_id}/events` 与创建 run 的响应流）的完整事件词表如下。**本清单由契约测试钉住**（`backend/tests/test_doc_contract.py` 从 `langgraph_bridge.py` 提取事件名与本节比对）：新增或改名事件而未更新本节，CI 红。
+run 内容流（`GET /api/chat/runs/{run_id}/stream`，主会话与子 Agent run 同一 URL、同一词表、同一投递内核 `chat/runs/delivery_bus.py`）的事件词表如下。**本清单由契约测试钉住**（`backend/tests/test_doc_contract.py` 从 `langgraph_bridge.py` 提取事件名与本节比对；终态编码由 `test_run_contract.py` 钉住）：新增或改名事件而未更新本节，CI 红。
 
 | 分组 | 事件 |
 |---|---|
-| 消息与生命周期 | `message-start`、`finish`、`abort`、`error`、`run-status` |
+| 消息与生命周期 | `message-start`、`run-status`（`retrying` / `hitl_pending` 等非终态）、`run.started`、`run.finished`、`approval.required`、`approval.resumed` |
 | reasoning | `reasoning-start`、`reasoning-delta`、`reasoning-end` |
 | 正文 | `text-start`、`text-delta`、`text-end` |
 | 工具 | `tool-input-start`、`tool-input-available`、`tool-output-available` |
@@ -98,7 +98,11 @@ run 内容流（`/api/chat/runs/{run_id}/events` 与创建 run 的响应流）�
 | Phase（TEST_CASE 遗留） | `phase-start`、`phase-delta`、`phase-end`、`scenario-start`、`testpoints-confirm-required`、`scene-cases` |
 | 传输层哨兵 | `data: [DONE]`（流传输收尾，不表示业务终态；`chat/delivery/sse.py`） |
 
-历史兼容：`tool-call-start` 是 `tool-input-start` 的旧名，仅在 `runs/projection.py` 的重放路径中作为别名接受，新代码不得发射；`token-details`、`finish-step` 已不存在于当前事件流。
+**终态标记统一**：`run.finished` 是唯一流终止事件（载荷含 `status` / `finish_reason` / `usage` / `model_calls`），后随 `[DONE]`。主链路 typed 终态事件（RunCompleted / RunAborted / RunError）在 `sse.py` 统一编码为 `run.finished`；子 Agent run 由 executor 发布同词汇事件。bridge 内部仍有 `finish` / `abort` / `error` 帧名——它们经 `RuntimeEventMapper._normalize` 归一化为 typed 终态事件后才上 wire，**线上不出现**（保留在词表提取源中仅为 bridge 内部实现，新代码不得直发）。
+
+**durable / transient**：durable 事件占 sequence、进有界重放缓存、按连续性校验重放；transient 事件（流式 `text-delta` / `reasoning-delta` / `stats-update`，载荷带 `transient: true`）不占号、只投在线订阅者，重连方由 `run-snapshot` 快照恢复。恢复模型一份：重连 = `getAgentRun` 快照 replace + durable 重放 + live 接收。
+
+历史兼容：`tool-call-start` 是 `tool-input-start` 的旧名，仅在 `runs/projection.py` 的重放路径中作为别名接受，新代码不得发射；`token-details`、`finish-step` 已不存在；`message.updated`（子会话旧全量投影事件）已退役——子会话内容投影由前端 `messageParts` appenders 从帧事件组装，与主聊天同一实现。
 
 ### 4.3 HITL 与停止
 
@@ -108,7 +112,7 @@ stop 在 RunHandle lock 内只设置一次 `cancel_requested` 并 cancel produce
 
 ## 5. 状态、数据与权限
 
-Run status：`queued | running | retrying | hitl_pending | completed | partial | error | interrupted`。终态互斥且不可覆盖。
+Run status：`queued | running | hitl_pending | completed | partial | error | interrupted`。终态互斥且不可覆盖。`retrying` 只作为 wire 上 `run-status` 帧的瞬态值（单次模型调用的重试提示），不写入 run 生命周期状态——终态事件应用在 projection clone 上，瞬态一旦写入会在终态交接后钉死原始 projection（GET 在终态保留窗口内持续报非终态）。`attempt_id` 同理：帧内值是单次模型调用的重试位次（遥测字段 `model_calls.attempt`），不是 run 级 attempt。
 
 同一轮 Run 对应一行 assistant。checkpoint transaction 同时更新：
 

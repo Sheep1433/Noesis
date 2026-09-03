@@ -78,7 +78,22 @@ python3 scripts/change-scope.py # 任何 diff 审查/选检查的起点（影响
 ```
 
 - Python 统一 `uv run`，禁止裸 `python`（`scripts/` 下校验脚本例外，纯标准库）
-- 测试目录：后端 `backend/tests/`（`api_contract/` = TestClient 级契约；`api/` = 真实服务级，`-m integration` 手动跑）；前端 `frontend/__tests__/`（vitest）与 `frontend/e2e/`（Playwright，`pnpm test:e2e`）
+- 测试目录：后端 `backend/tests/`（`api_contract/` = TestClient 级契约；`api/` = 真实服务级手动跑，快速轮 `-m 'integration and not llm'` 只跑不触 LLM 的接口用例，全量 `-m integration` 含真实 LLM）；前端 `frontend/__tests__/`（vitest）与 `frontend/e2e/`（Playwright，`pnpm test:e2e`）
+
+### 接口测试执行步骤（后端）
+
+1. **起服务**：`cd backend && uv run app.py`（需 PostgreSQL / noesis_langgraph DB / Qdrant / 有效 MODEL_API_KEY；sandbox-runner 由启动自动拉起，8090）。
+2. **分层执行**（按目的选层，均可独立跑）：
+
+   | 层 | 命令（backend/ 下） | 规模与耗时 |
+   |---|---|---|
+   | CI 门禁 | `uv run pytest tests/api_contract -q` | 21 条，秒级 |
+   | 快速轮（不触 LLM） | `uv run pytest tests/api -m 'integration and not llm' -q` | 39 条，约 40s |
+   | 全量（含真实 LLM） | `uv run pytest tests/api -m integration -q` | 71 条，受免费网关限流影响可达半小时 |
+
+3. **测试账号**：统一使用 demo 账号 `test`/`123456`（Alembic 种子账号，用户确认即测试专用）——测试产生的会话、Provider、审计行等数据落在该账号下属预期行为，不额外建测试账户，也无需逐轮清理。
+4. **失败判定**：免费网关限流的降级文案（「生成失败，请稍后重试」「服务暂时不可用」）导致的 error 终态由 `gateway_skip` fixture 自动 skip，不算回归；DuckDuckGo/外网不可达属环境限制，记录但不算接口回归。
+5. **执行后记录**：把分层计数、失败明细（含测试名、断言/异常原文、复现所需环境备注）写入 `docs/bug/`（遵循既有 Bug 记录格式，状态 🆕 新增）。执行角色为测试时**只记录问题、禁止顺手修改代码**，分析定位交给后续处理者。
 - 文档改动跑 `python3 scripts/verify-md-links.py` 与 `python3 scripts/verify-decision-format.py`（CI 同款 gate，本地先红先修）
 - 每次测试完成后必须停止由 Agent 启动的后端、前端 dev/preview server 及临时测试进程，释放占用端口，避免与用户后续执行冲突
 - 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库

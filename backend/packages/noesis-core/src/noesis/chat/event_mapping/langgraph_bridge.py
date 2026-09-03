@@ -12,6 +12,10 @@ from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from noesis.runtime.observability import ContextMetricsRegistry
+from noesis.llm.finish_reason import (
+    PROVIDER_FINISH_REMAP,
+    normalize_provider_finish_reason,
+)
 from noesis.llm.model_limits import resolve_context_max_tokens
 from noesis.config.env import ModelConfig
 from noesis.chat.event_mapping.reasoning import (
@@ -52,6 +56,7 @@ from noesis.errors.tool_failure import (
     classify_task_tool_output,
     classify_tool_failure,
     failure_to_sse_error_fields,
+    strip_error_prefix,
     subagent_failure_from_context,
 )
 
@@ -61,23 +66,17 @@ def _show_thinking_process_enabled() -> bool:
 
 TASK_TOOL_NAME = "task"
 
-# provider finish_reason → 管道终止词汇：只纠偏截断/安全两类「模型没收尾完」
-# 的信号（length/max_tokens/content_filter），其余变体（end_turn/tool_use 等）
-# 属正常收尾，保持管道值。runtime 层正常路径硬编码 "stop" 只表示图跑完，
-# 不代表模型正常收尾——没有这层映射时 length 截断会被落库成 stop。
-_PROVIDER_FINISH_REMAP: Dict[str, str] = {
-    "length": "length_stop",
-    "max_tokens": "length_stop",
-    "content_filter": "safety_stop",
-}
+# provider finish_reason 的词表与归一化（含网关重复 chunk 拼接折叠）在
+# noesis.llm.finish_reason 单点维护；runtime 层正常路径硬编码 "stop" 只表示
+# 图跑完，不代表模型正常收尾——没有这层映射时 length 截断会被落库成 stop。
 
 
 def _truthful_terminal_reason(model_calls: List[Dict[str, Any]]) -> str:
     """最后一步模型调用的 finish_reason → 管道终止词汇；无需纠偏返回空。"""
     if not model_calls:
         return ""
-    reason = str(model_calls[-1].get("finish_reason") or "").strip().lower()
-    return _PROVIDER_FINISH_REMAP.get(reason, "")
+    reason = normalize_provider_finish_reason(model_calls[-1].get("finish_reason")).lower()
+    return PROVIDER_FINISH_REMAP.get(reason, "")
 
 
 def _tool_provider(item: Dict[str, Any]) -> tuple[str, str | None]:
@@ -214,7 +213,7 @@ class LangGraphSseBridge:
             record["llm_ms"] = round(float(elapsed_ms), 1)
         response_meta = getattr(output, "response_metadata", None)
         if isinstance(response_meta, dict):
-            reason = str(response_meta.get("finish_reason") or "").strip()
+            reason = normalize_provider_finish_reason(response_meta.get("finish_reason"))
             if reason:
                 record["finish_reason"] = reason
         usage = _normalize_usage(usage_meta) if usage_meta else {}
@@ -939,6 +938,11 @@ class LangGraphSseBridge:
                 usage_meta=usage_meta,
                 output=output,
             )
+            # attempt 序号是「单次模型调用」的重试位次，不是整条消息的单调
+            # 计数：重试事件抬升计数后若不复位，后续所有首次调用都会被
+            # 错标成重试（att=2）。调用成功即复位；失败路径不产生 end 事件，
+            # 下一次 start 仍能拿到重试事件抬升后的位次。
+            self._current_attempt_id = 1
             if usage_meta:
                 self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out, parent_task_call_id)
             return
@@ -1058,10 +1062,18 @@ class LangGraphSseBridge:
 
         duration_ms = ToolRunTracker.tool_duration_ms(ctx, tool_call_id)
         output_status = getattr(raw_output, "status", None) if raw_output is not None else None
+        # middleware 产出的错误 ToolMessage 自带 errorCategory metadata——
+        # 权威来源，直接取用；无 metadata（错误返回型）才走文本分类
+        output_kwargs = getattr(raw_output, "additional_kwargs", None) if raw_output is not None else None
+        output_category = (
+            output_kwargs.get("errorCategory")
+            if isinstance(output_kwargs, dict) and output_status == "error"
+            else None
+        )
         failure = self._resolve_tool_failure(
             tool_name=tool_name,
             clean_output=clean_output,
-            output_status=output_status,
+            output_status=None if output_category else output_status,
             builder=builder,
             task_tool_call_id=tool_call_id if tool_name == TASK_TOOL_NAME else None,
         )
@@ -1072,13 +1084,15 @@ class LangGraphSseBridge:
         is_error = failure is not None or output_status == "error"
         err_fields = failure_to_sse_error_fields(failure) if failure else {}
         err_s = err_fields.get("error") if is_error else None
-        err_cat = err_fields.get("errorCategory") if is_error else None
+        err_cat = (output_category or err_fields.get("errorCategory")) if is_error else None
         if outcome == "command_failed":
             err_cat = "command_failed"
         elif outcome == "timed_out":
             err_cat = "execution_timeout"
+        # 错误正文（ToolMessage.content）即唯一权威文案：模型/入库/SSE
+        # 展示共用同一段短文本，无二次改写
         if is_error and not err_s:
-            err_s = sanitize_tool_error(clean_output)
+            err_s = strip_error_prefix(clean_output) or sanitize_tool_error(clean_output)
         sse_status = "error" if is_error else "success"
         state = derive_tool_state(
             status=sse_status,
@@ -1089,7 +1103,7 @@ class LangGraphSseBridge:
         display_output = "" if is_error else clean_output
         display_output, display_truncated = bound_tool_output_for_display(display_output)
         truncated = bool(truncated) or display_truncated
-        builder_output = clean_output if not is_error else (failure.message_for_llm if failure else clean_output)
+        builder_output = clean_output
 
         if builder is not None:
             self._safe_append_tool_output(
@@ -1165,7 +1179,8 @@ class LangGraphSseBridge:
             ok = self._safe_append_tool_output(
                 builder,
                 tool_name,
-                failure.message_for_llm if failure else err_s,
+                # 未被 middleware 捕获的工具异常：正文即权威文案
+                f"Error: {err_s}" if failure is None else f"Error: {failure.text}",
                 tool_call_id,
                 duration_ms=duration_ms,
                 status="error",

@@ -193,10 +193,13 @@ class RunProjection:
                         tool_part.output = f"检索到 {len(part.results)} 条来源"
             elif event.event == "run-status":
                 status = str(data.get("status") or "")
-                event_attempt_id = int(data.get("attempt_id") or self.attempt_id)
-                if event_attempt_id >= self.attempt_id:
-                    self.attempt_id = event_attempt_id
-                if status in {item.value for item in RunStatus}:
+                if status == "retrying":
+                    # retrying 是单次模型调用的重试瞬态，不是 run 生命周期
+                    # 状态：写进 self.status 会在恢复后钉死到终态交接（终态
+                    # 事件只应用在 clone 上），且终态保留窗口内 GET 永远报
+                    # retrying。帧照常放行 fan-out，前端重试提示不受影响。
+                    pass
+                elif status in {item.value for item in RunStatus}:
                     self.status = RunStatus(status)
         elif isinstance(event, HitlRequired):
             self.status = RunStatus.HITL_PENDING

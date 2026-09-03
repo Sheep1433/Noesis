@@ -16,11 +16,16 @@ export type HitlDraftDecision = {
   grant_scope?: 'once' | 'session'
 } | null
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   kind: 'approval' | 'clarification' | string
   actionRequests: HitlActionRequest[]
   disabled?: boolean
-}>()
+  /**
+   * 「本会话允许」的放行策略：auto = 主聊天（仅网络类 execute）；always =
+   * 子会话（沙箱工具审批恒可选会话级放行）
+   */
+  sessionGrantPolicy?: 'auto' | 'always'
+}>(), { sessionGrantPolicy: 'auto' })
 
 const emit = defineEmits<{
   (e: 'submit', payload: {
@@ -82,6 +87,9 @@ const questionOptions = computed(() => {
 })
 
 const allowSessionGrant = computed(() => {
+  if (props.sessionGrantPolicy === 'always') {
+    return true
+  }
   return current.value.name === 'execute' && isNetworkExecute(current.value.args?.command)
 })
 

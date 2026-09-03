@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 QUESTIONS = [
     "用一句话说明什么是 HTTP 200 状态码",

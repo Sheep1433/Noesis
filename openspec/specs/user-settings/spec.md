@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定 Noesis **用户设置控制面**：设置壳与可搜索 section 注册表、一致交互与危险操作保护、设置导入导出与脱敏审计、用户画像（L0）与记忆（L1/L2）原文编辑、每日记忆整理与跨会话检索、上下文注入预览、定时任务与自动化运行记录、通讯通道配置面、模型目录只读、通知偏好与平台依赖健康诊断。设置 API 的鉴权、隔离、secret 语义与 Provider 凭据托管禁令见 `user-platform`；通道运行时见 `agent-delivery`；记忆磁盘布局与 `/memory/` 路由见 `agent-runtime`。
+本能力规定 Noesis **用户设置控制面**：设置壳与可搜索 section 注册表、一致交互与危险操作保护、设置导入导出与脱敏审计、用户画像（`USER.md`）与记忆（`MEMORY.md` 索引、条目文件与 journal）原文编辑、上下文注入预览、定时任务与自动化运行记录、通讯通道配置面、模型目录只读、通知偏好与平台依赖健康诊断。设置 API 的鉴权、隔离、secret 语义与 Provider 凭据托管禁令见 `user-platform`；通道运行时见 `agent-delivery`；记忆条目格式与引擎写入语义见 `agent-memory`；记忆磁盘布局与 `/memory/` 路由见 `agent-runtime`。
 ## Requirements
 ### Requirement: 系统 SHALL 提供个人与 Agent 设置壳
 
@@ -14,8 +14,8 @@
 |------------|------|
 | `overview` | 配置健康与常用入口 |
 | `models` | 平台可用模型目录与模型服务管理（见下文） |
-| `profile` | 用户画像（L0，`USER.md` 原文编辑） |
-| `memory` | 记忆与偏好（L1 `AGENTS.md`，及 L2 入口） |
+| `profile` | 用户画像（`USER.md` 原文编辑） |
+| `memory` | 记忆管理（`MEMORY.md` 索引、条目文件与 journal 入口） |
 | `capabilities` | 深链至 Skills / MCP / 知识库管理页 |
 | `automation` | 定时任务（cron）列表与编辑 |
 | `channels` | 通讯通道配置 |
@@ -82,7 +82,9 @@
 
 #### Scenario: 未登录拒绝
 - **WHEN** 未认证客户端请求用户级 memory API
-- **THEN** SHALL 返回 HTTP 401### Requirement: 设置页 SHALL 提供真实的上下文注入预览
+- **THEN** SHALL 返回 HTTP 401
+
+### Requirement: 设置页 SHALL 提供真实的上下文注入预览
 
 系统 SHALL 复用运行时 resolver/compiler 生成只读预览，展示来源、优先级、是否注入、字符或 Token 估算和最终编译内容。生成预览 SHALL NOT 调用模型、创建 checkpoint 或修改记忆。
 
@@ -311,19 +313,6 @@ MCP secret、通道 Token、自动化定义、通知策略和设置导入等变�
 - **WHEN** 用户替换通道 Token
 - **THEN** 系统 SHALL 记录 replace 动作但 SHALL NOT 在审计响应或日志中返回 Token 内容
 
-### Requirement: 用户显式上下文 SHALL 与机器经验分离
-
-`USER.md` / `AGENTS.md` SHALL 只由用户或明确的文件编辑操作修改，作为显式上下文来源；decision、experience、workflow 和 gotcha SHALL 保存在机器经验事实源，并经独立状态、scope、provenance 和 evidence 治理。自动 extraction/consolidation SHALL NOT 修改显式上下文，设置预览 SHALL 分别标注显式上下文和自动 Bulletin。
-
-#### Scenario: 自动整理不修改显式上下文
-- **WHEN** 系统完成 Run extraction 或 consolidation
-- **THEN** `USER.md` 与 `AGENTS.md` SHALL 保持不变
-
-#### Scenario: 预览区分来源
-- **WHEN** 用户查看下一次 Agent 上下文预览
-- **THEN** 页面 SHALL 分别展示显式上下文与自动 Memory Bulletin
-- **AND** SHALL NOT 把机器经验伪装成用户手写规则
-
 ### Requirement: 自动化设置 SHALL 在窄屏可用
 
 设置页自动化区域 SHALL 在窄屏下保持单列堆叠与可点击的操作控件；新增任务表单 SHALL 独立组件化，不与任务列表渲染耦合。
@@ -331,17 +320,3 @@ MCP secret、通道 Token、自动化定义、通知策略和设置导入等变�
 #### Scenario: 窄屏访问自动化设置
 - **WHEN** 用户在窄屏打开「定时与自动化」设置
 - **THEN** 控件 SHALL 单列堆叠且操作按钮完整可见可点击
-### Requirement: 设置页 SHALL 展示自动处理健康
-
-设置页 SHALL 展示当前用户最近成功 capture/consolidation 时间，以及 pending、partial、failed、dead、skipped-disabled 数量和 workspace/index 是否落后。用户文案 SHALL 使用业务含义，不得显示数据库表、claim token、provider key、服务端路径、内部网络位置或未脱敏错误。健康展示 SHALL 不改变单一用户开关语义。
-
-#### Scenario: 后台任务部分失败
-- **WHEN** 用户的长 Run 只有部分 chunk extraction 成功
-- **THEN** 设置页 SHALL 显示“部分处理”及安全摘要
-- **AND** SHALL NOT 把该 Run 展示为完整成功
-
-#### Scenario: dead job 可诊断
-- **WHEN** job 达到最大 attempts 进入 dead
-- **THEN** 设置页 SHALL 计入处理失败
-- **AND** SHALL 提供不泄露内部细节的处理建议或重试状态
-

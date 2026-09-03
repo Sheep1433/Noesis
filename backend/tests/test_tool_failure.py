@@ -1,4 +1,4 @@
-"""tool_failure 分类与用户文案单测。"""
+"""tool_failure 分类与单份短文案单测（模型/入库/展示三通道同源）。"""
 from __future__ import annotations
 
 import errno
@@ -10,18 +10,16 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import BaseModel, ValidationError
 
 from noesis.errors.tool_failure import (
+    DEFAULT_USER_TOOL_ERROR,
     ToolFailureCategory,
     ToolInfrastructureError,
     ToolNetworkError,
-)
-from noesis.errors.tool_failure import (
-    DEFAULT_USER_TOOL_ERROR,
-    USER_TOOL_ERROR_MESSAGES,
     build_error_tool_message,
     classify_task_tool_output,
     classify_tool_failure,
     failure_to_sse_error_fields,
     format_tool_error_detail,
+    strip_error_prefix,
 )
 
 
@@ -49,7 +47,7 @@ def test_free_text_must_not_misclassify(raw: str, forbidden: ToolFailureCategory
     failure = classify_tool_failure(None, raw=raw, tool_name="bash")
     assert failure.category == ToolFailureCategory.UNKNOWN
     assert failure.category != forbidden
-    assert failure.message_for_user == DEFAULT_USER_TOOL_ERROR
+    assert failure.text == DEFAULT_USER_TOOL_ERROR
 
 
 def test_runtime_error_without_cause_is_unknown() -> None:
@@ -71,13 +69,15 @@ def test_tool_infrastructure_error_explicit() -> None:
         tool_name="bash",
     )
     assert failure.category == ToolFailureCategory.INFRASTRUCTURE
-    assert failure.message_for_user == "环境不可用"
+    # 可重试类：固定短文案 + 统一后缀（防模型盲目重试由「不可重试不带后缀」承担）
+    assert failure.text == "环境暂时不可用，可稍后重试"
 
 
 def test_httpx_connect_timeout_maps_network_timeout() -> None:
     failure = classify_tool_failure(httpx.ConnectTimeout("connect timeout"), tool_name="web_fetch")
     assert failure.category == ToolFailureCategory.NETWORK_TIMEOUT
     assert failure.retryable is True
+    assert failure.text == "网络超时，可稍后重试"
 
 
 def test_wrapped_httpx_connect_error_maps_unreachable() -> None:
@@ -87,6 +87,7 @@ def test_wrapped_httpx_connect_error_maps_unreachable() -> None:
     except RuntimeError as exc:
         failure = classify_tool_failure(exc, tool_name="web_fetch")
     assert failure.category == ToolFailureCategory.NETWORK_UNREACHABLE
+    assert failure.text == "连接失败，可稍后重试"
 
 
 def test_oserror_econnrefused() -> None:
@@ -95,16 +96,36 @@ def test_oserror_econnrefused() -> None:
     assert failure.category == ToolFailureCategory.NETWORK_UNREACHABLE
 
 
-def test_validation_error_exception_type() -> None:
+def test_validation_error_structured_one_liner() -> None:
+    """pydantic ValidationError → 结构化一行，不灌 str(exc) 全文 dump。"""
+
     class M(BaseModel):
         x: int
 
     with pytest.raises(ValidationError) as exc_info:
-        M.model_validate({"x": "nope"})
+        M.model_validate({"y": "nope"})
     failure = classify_tool_failure(exc_info.value, tool_name="search")
     assert failure.category == ToolFailureCategory.INVALID_ARGUMENTS
-    # invalid_arguments 携带（有界）具体原因：孤立的「参数错误」不可定位
-    assert failure.message_for_user.startswith("参数错误：")
+    assert failure.retryable is False
+    # 不可重试类不带后缀；文案 = 字段: 错误（传入字段：…）
+    assert failure.text == "x: Field required（传入字段：y）"
+    assert "errors.pydantic.dev" not in failure.text
+    assert "input_value" not in failure.text
+
+
+def test_validation_error_multi_field_bounded() -> None:
+    class M(BaseModel):
+        a: int
+        b: int
+        c: int
+
+    with pytest.raises(ValidationError) as exc_info:
+        M.model_validate({"z": 1})
+    failure = classify_tool_failure(exc_info.value, tool_name="write_file")
+    text = failure.text
+    assert "a: Field required" in text
+    assert "；" in text  # 多字段用分号连接
+    assert len(text) <= 600
 
 
 def test_tool_network_error_explicit() -> None:
@@ -113,34 +134,14 @@ def test_tool_network_error_explicit() -> None:
         tool_name="fetch",
     )
     assert failure.category == ToolFailureCategory.NETWORK_UNREACHABLE
+    assert failure.text == "连接失败，可稍后重试"
 
 
 def test_parsed_tool_error_header_infrastructure() -> None:
     raw = "[tool_error category=infrastructure retryable=true]\nsandbox not ready"
     failure = classify_tool_failure(None, raw=raw, tool_name="bash")
     assert failure.category == ToolFailureCategory.INFRASTRUCTURE
-    assert failure.message_for_user == "环境不可用"
-
-
-@pytest.mark.parametrize(
-    "category",
-    list(USER_TOOL_ERROR_MESSAGES.keys()),
-)
-def test_user_tool_error_messages_fixed_phrases(category: str) -> None:
-    raw = {
-        "network_unreachable": "[tool_error category=network_unreachable retryable=true]\nx",
-        "network_timeout": "[tool_error category=network_timeout retryable=true]\nx",
-        "execution_timeout": "[tool_error category=execution_timeout retryable=true]\nx",
-        "invalid_arguments": "[tool_error category=invalid_arguments retryable=false]\nx",
-        "infrastructure": "[tool_error category=infrastructure retryable=true]\nx",
-        "cancelled": "[tool_error category=cancelled retryable=false]\nx",
-    }[category]
-    failure = classify_tool_failure(None, raw=raw)
-    if category == "invalid_arguments":
-        # invalid_arguments 例外：携带首行具体原因（用法错误对用户可定位）
-        assert failure.message_for_user == f"{USER_TOOL_ERROR_MESSAGES[category]}：x"
-    else:
-        assert failure.message_for_user == USER_TOOL_ERROR_MESSAGES[category]
+    assert failure.text == "环境暂时不可用，可稍后重试"
 
 
 def test_file_tool_usage_error_carries_reason() -> None:
@@ -151,8 +152,8 @@ def test_file_tool_usage_error_carries_reason() -> None:
         tool_name="read_file",
     )
     assert failure.category == ToolFailureCategory.INVALID_ARGUMENTS
-    assert "exceeds file length (668 lines)" in failure.message_for_user
-    assert failure.message_for_user.startswith("参数错误：")
+    # 具体原因直接作为短文案（模型与用户都可定位），不再加「参数错误：」前缀包装
+    assert failure.text.startswith("File '/workspace/report.md': Line offset 780 exceeds file length")
 
 
 def test_format_tool_error_detail_truncates() -> None:
@@ -162,7 +163,16 @@ def test_format_tool_error_detail_truncates() -> None:
     assert "RuntimeError" in detail
 
 
-def test_build_error_tool_message_has_structured_content() -> None:
+def test_short_text_bounded_to_600() -> None:
+    failure = classify_tool_failure(
+        None,
+        raw="Error: " + "z" * 5_000,
+        tool_name="bash",
+    )
+    assert len(failure.text) <= 600
+
+
+def test_build_error_tool_message_short_content() -> None:
     cause = httpx.ConnectError("connection refused")
     try:
         raise RuntimeError("fail") from cause
@@ -170,8 +180,9 @@ def test_build_error_tool_message_has_structured_content() -> None:
         failure = classify_tool_failure(exc, tool_name="bash")
     msg = build_error_tool_message(_request(), failure)
     assert msg.status == "error"
-    assert msg.content.startswith("[tool_error category=network_unreachable")
-    assert "fail" in msg.content
+    assert msg.content == "Error: 连接失败，可稍后重试"
+    assert msg.additional_kwargs["errorCategory"] == "network_unreachable"
+    assert msg.additional_kwargs["retryable"] is True
 
 
 def test_failure_to_sse_error_fields() -> None:
@@ -181,7 +192,7 @@ def test_failure_to_sse_error_fields() -> None:
         tool_name="bash",
     )
     fields = failure_to_sse_error_fields(failure)
-    assert fields["error"] == "执行超时"
+    assert fields["error"] == "执行超时，可稍后重试"
     assert fields["errorCategory"] == "execution_timeout"
 
 
@@ -193,7 +204,8 @@ def test_classify_task_tool_output_failure() -> None:
     failure = classify_task_tool_output("Task failed. tool bash broke")
     assert failure is not None
     assert failure.category == ToolFailureCategory.SUBAGENT_FAILURE
-    assert failure.message_for_user == DEFAULT_USER_TOOL_ERROR
+    # task 包装文本首行即权威文案
+    assert failure.text == "Task failed. tool bash broke"
 
 
 def test_passthrough_tool_error_prefix() -> None:
@@ -204,6 +216,7 @@ def test_passthrough_tool_error_prefix() -> None:
     failure = classify_tool_failure(None, raw=raw, tool_name="search")
     assert failure.category == ToolFailureCategory.INVALID_ARGUMENTS
     assert failure.retryable is False
+    assert failure.text == "Tool 'search' failed: bad query"
 
 
 def test_chain_non_unknown_not_overridden_by_raw_text() -> None:
@@ -217,3 +230,10 @@ def test_chain_non_unknown_not_overridden_by_raw_text() -> None:
             tool_name="bash",
         )
     assert failure.category == ToolFailureCategory.NETWORK_UNREACHABLE
+
+
+def test_strip_error_prefix() -> None:
+    assert strip_error_prefix("Error: 连接失败") == "连接失败"
+    assert strip_error_prefix("error: lower") == "lower"
+    assert strip_error_prefix("连接失败") == "连接失败"
+    assert strip_error_prefix("") == ""

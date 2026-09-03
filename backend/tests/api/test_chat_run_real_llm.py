@@ -12,9 +12,13 @@ import uuid
 
 import pytest
 
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
+
 
 @pytest.mark.integration
-def test_common_qa_happy_path(auth_client, create_session, create_run, consume_run_stream):
+def test_common_qa_happy_path(
+    auth_client, create_session, create_run, consume_run_stream, gateway_skip
+):
     """COMMON_QA 端到端：建会话 → 起 run → 消费 SSE → 校验落库。"""
     session_id = create_session(title="api-test-common-qa")
     run = create_run(
@@ -28,6 +32,7 @@ def test_common_qa_happy_path(auth_client, create_session, create_run, consume_r
     print(f"event_counts={metrics.event_counts} finish_reason={metrics.finish_reason} "
           f"error={metrics.error_message}")
 
+    gateway_skip(metrics.error_message)
     assert metrics.succeeded, f"SSE 未成功结束: {metrics.error_message}"
     assert metrics.finish_reason == "stop"
     assert metrics.event_counts.get("text-delta", 0) > 0, "未收到 text-delta，疑似未走真实 LLM"
@@ -77,7 +82,7 @@ def test_default_title_and_message_sequence_survive_refresh(
 
 
 @pytest.mark.integration
-def test_run_snapshot_terminal(auth_client, create_session, create_run, consume_run_stream):
+def test_run_snapshot_terminal(auth_client, create_session, create_run, consume_run_stream, gateway_skip):
     """run 完成后 GET /runs/{run_id} 应为终态。"""
     session_id = create_session(title="api-test-snapshot")
     run = create_run(
@@ -92,6 +97,8 @@ def test_run_snapshot_terminal(auth_client, create_session, create_run, consume_
     resp = auth_client.get(f"/api/chat/runs/{run_id}")
     resp.raise_for_status()
     snapshot = resp.json()["data"]
+    if snapshot["status"] == "error":
+        gateway_skip(snapshot.get("user_error_message"))
     assert snapshot["status"] in {"completed", "partial"}, f"非终态: {snapshot['status']}"
     assert snapshot.get("finish_reason"), "finish_reason 为空"
 

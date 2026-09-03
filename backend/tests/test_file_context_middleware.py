@@ -353,4 +353,4 @@ def test_write_without_file_path_reports_truncation_guidance() -> None:
     # 类型化错误：归类 invalid_arguments，用户文案携带具体原因
     failure = classify_tool_failure(exc_info.value, tool_name="write_file")
     assert failure.category == ToolFailureCategory.INVALID_ARGUMENTS
-    assert "file_path" in failure.message_for_user
+    assert "file_path" in failure.text

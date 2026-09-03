@@ -1,0 +1,81 @@
+{
+  "fixture_id": "cc-33963066",
+  "transcript_sha256": "8a6cb367c7cf0688cf5e8bc4df33351f0e3e0d6e495852dbccd6e5c294c8e372",
+  "gen_prompt_version": "gen-probes/v1",
+  "region_messages": 359,
+  "region_tokens": 66383,
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "question": "定时任务调度器每隔多少秒执行一次 _tick_once()？",
+      "reference_answer": "每 30 秒（_POLL_SECONDS = 30.0）"
+    },
+    {
+      "id": "p2",
+      "type": "recall",
+      "question": "调度器通过 ScheduledTaskService.claim_due_tasks() 抢占到期的任务时，使用的 PostgreSQL 锁机制是什么？",
+      "reference_answer": "FOR UPDATE SKIP LOCKED（见 scheduled_task_service.py 第 470-496 行）"
+    },
+    {
+      "id": "p3",
+      "type": "recall",
+      "question": "cron 表达式校验和下次运行计算使用哪个第三方 Python 库？定时任务支持的默认时区是什么？",
+      "reference_answer": "croniter 库；默认时区 Asia/Shanghai"
+    },
+    {
+      "id": "p4",
+      "type": "recall",
+      "question": "前端会话列表中，origin 为 'automation' 的会话显示什么文字标签和什么颜色的 badge？",
+      "reference_answer": "文字标签为'定时'（图标 i-hugeicons:clock-01），颜色为紫色"
+    },
+    {
+      "id": "p5",
+      "type": "recall",
+      "question": "用户对三个决策问题（会话承接方式、创建任务入口、默认 qa_type）分别给出了什么选择？",
+      "reference_answer": "①单任务单会话（续聊在同一线程）；②设置页 NL 输入框（最稳，推荐）；③默认 SuperAgent（深度任务）"
+    },
+    {
+      "id": "p6",
+      "type": "recall",
+      "question": "新增的自然语言解析端点的 HTTP 方法和路径是什么？",
+      "reference_answer": "POST /api/user/scheduled-tasks/parse"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "question": "探查发现网页续聊的 RunService.create 不读 session.extra.qa_type，那么定时任务创建的会话在网页续聊时，run 的 qa_type 会默认落到什么值？",
+      "reference_answer": "COMMON_QA（若前端没传 qa_type，extra.get 为 None 则默认 COMMON_QA）"
+    },
+    {
+      "id": "p8",
+      "type": "recall",
+      "question": "用户批准的实施计划被保存在哪个文件路径？",
+      "reference_answer": "~/.claude/plans/tender-scribbling-clock.md"
+    },
+    {
+      "id": "p9",
+      "type": "recall",
+      "question": "定时任务运行记录 user_scheduled_task_runs 的幂等键（idempotency_key）格式是什么？",
+      "reference_answer": "schedule:{task_id}:{next_run_at}"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "question": "frontend/src/config/breakpoints.ts 中定义的六个标准断点值分别是什么？",
+      "reference_answer": "xs=480, sm=640, md=768, lg=1024, xl=1280, 2xl=1536"
+    },
+    {
+      "id": "p11",
+      "type": "recall",
+      "question": "分辨率适配中，非标准断点 900px、720px、560px 分别被收敛到哪个 SCSS 变量（对应什么标准值）？",
+      "reference_answer": "900px→$bp-lg(1024)；720px→$bp-md(768)；560px→$bp-sm(640)"
+    },
+    {
+      "id": "p12",
+      "type": "recall",
+      "question": "SCSS 断点变量被添加在哪个文件，通过 vite 的什么配置机制全局注入到所有 SFC 的 style 中？",
+      "reference_answer": "src/styles/naive-variables.scss；通过 vite.config.ts 中 preprocessorOptions.scss 的 additionalData 注入（@use '@/styles/naive-variables.scss' as *;）"
+    }
+  ]
+}

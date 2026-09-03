@@ -194,12 +194,53 @@ class TestSSEFrameContract:
         data = json.loads(lines[0].split("data: ", 1)[1].strip())
         assert data["kind"] == "approval"
 
-    def test_encode_run_completed_as_finish(self) -> None:
+    def test_encode_terminal_events_as_run_finished(self) -> None:
+        """终态词汇统一：completed / aborted / error 均编码 run.finished，RunPaused 走 run-status。"""
         event = RunCompleted(finish_reason="stop", usage={"input": 5})
         lines = encode_run_event(event)
-        assert "event: finish" in lines[0]
+        assert "event: run.finished" in lines[0]
         data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        assert data["type"] == "run.finished"
+        assert data["status"] == "completed"
         assert data["finish_reason"] == "stop"
+        assert data["usage"] == {"input": 5}
+
+        lines = encode_run_event(RunAborted(reason="stopped"))
+        data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        assert data["status"] == "interrupted"
+        assert data["finish_reason"] == "stopped"
+
+        lines = encode_run_event(RunError(message="生成失败", finish_reason="error"))
+        data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        assert data["status"] == "error"
+        assert data["finish_reason"] == "error"
+        assert data["error"] == "生成失败"
+
+        lines = encode_run_event(
+            RunPaused(reason="hitl_pending", finish_reason="hitl_pending", usage={})
+        )
+        assert "event: run-status" in lines[0]
+        data = json.loads(lines[0].split("data: ", 1)[1].strip())
+        assert data["status"] == "hitl_pending"
+
+    def test_parse_sse_roundtrip_run_finished(self) -> None:
+        """编码→解码往返：run.finished 三态还原为对应 typed 终态事件。"""
+        for event, expected_type in (
+            (RunCompleted(finish_reason="stop", usage={"input": 5}), RunCompleted),
+            (RunAborted(reason="stopped"), RunAborted),
+            (RunError(message="生成失败", finish_reason="error"), RunError),
+        ):
+            lines = encode_run_event(event)
+            events = parse_sse_line_to_event(lines[0])
+            assert len(events) == 1
+            assert isinstance(events[0], expected_type)
+
+        lines = encode_run_event(
+            RunPaused(reason="hitl_pending", finish_reason="hitl_pending", usage={})
+        )
+        events = parse_sse_line_to_event(lines[0])
+        assert len(events) == 1
+        assert isinstance(events[0], RunPaused)
 
     def test_parse_sse_roundtrip_text_delta(self) -> None:
         original = WireFrame(event="text-delta", data={"type": "text-delta", "text_delta": "roundtrip"})

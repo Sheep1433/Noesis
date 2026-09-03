@@ -461,12 +461,7 @@ async def run_channel_agent(
             terminal_handler=RunService._persist_terminal_candidate,
             max_run_duration_seconds=StreamConfig.run_max_duration_seconds_super_agent,
         )
-        await db.execute(
-            TAgentRun.__table__.update()
-            .where(TAgentRun.id == run_id)
-            .values(status=RunStatus.RUNNING.value, started_at=now, updated_at=now)
-        )
-        await db.commit()
+        await RunService.mark_run_started(run_id)
 
         logger.info(
             "channel_run start origin={} session_id={} user_id={} qa_type={}",

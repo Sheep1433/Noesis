@@ -69,31 +69,22 @@ const taskSummary = computed(() => {
 
 // 运行中任务卡耗时：抽屉打开且有 running 任务时本地时钟跳动；
 // 终态用落库起止值；等待审批不计耗时（等人时间不算执行时长）
-const clockNow = ref(Date.now())
-let clockTimer: ReturnType<typeof setInterval> | null = null
+const { now: clockNow, start: startClock, stop: stopClock } = useTicker()
 
 function refreshClockTimer(): void {
-  const need = show.value && running.value.length > 0
-  if (need && clockTimer === null) {
-    // 启动即刷新：抽屉关闭期间时钟冻结，重开第一帧不能用旧值
-    clockNow.value = Date.now()
-    clockTimer = setInterval(() => {
-      clockNow.value = Date.now()
-    }, 1000)
-  } else if (!need && clockTimer !== null) {
-    clearInterval(clockTimer)
-    clockTimer = null
+  // 启动即刷新：抽屉关闭期间时钟冻结，重开第一帧不能用旧值
+  if (show.value && running.value.length > 0) {
+    startClock()
+  } else {
+    stopClock()
   }
 }
 
 watch([show, running], refreshClockTimer, { immediate: true })
 onBeforeUnmount(() => {
   // 卸载无条件清理：refreshClockTimer 在抽屉开着且有活跃任务时
-  // 会判定 need=true 而不清 interval
-  if (clockTimer !== null) {
-    clearInterval(clockTimer)
-    clockTimer = null
-  }
+  // 会判定 need=true 而不停表
+  stopClock()
 })
 
 function taskElapsed(task: TaskCatalogEntry): string {

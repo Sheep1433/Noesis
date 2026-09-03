@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力是知识库 RAG **统一规格**：HTTP API 与集合配置、DeepDoc 文档解析、分块、hybrid 检索门面、以及单集合评测入口。关系数据在 PostgreSQL；向量在 Qdrant。详细设计可对照 `docs/prd/knowledge-base/`；在线 Agent 引用见 `agent-profiles`（COMMON_QA / TEST_CASE）。
+本能力是知识库 RAG **统一规格**：HTTP API 与集合配置、DeepDoc 文档解析、分块、hybrid 检索门面、以及单集合评测入口。关系数据在 PostgreSQL；向量在 Qdrant。工程设计细节见 `docs/engineering/knowledge-base.md`；在线 Agent 引用见 `agent-profiles`（COMMON_QA / TEST_CASE）。
 ## Requirements
 ### Requirement: 集合配置与 HTTP API
 
@@ -40,9 +40,9 @@
 - **WHEN** 集合已有向量且查询相关
 - **THEN** API/服务 SHALL 返回带分值的命中列表
 
-### Requirement: 单集合评测入口
+### Requirement: 检索评测入口
 
-`evals.kb`（或现行 CLI）SHALL 能对单集合跑检索评测；与 `evals.case` 的 RAG phase 互补，职责边界在 `offline-evals` 索引。
+`evals.kb.erb` SHALL 能对知识库集合跑 ERB（EnterpriseRAG-Bench）检索评测，输出 Recall@K 与阈值校准；Agent 级 RAG 评测见 `evals.agent.rag`，职责边界在 `offline-evals` 索引。
 
 #### Scenario: CLI 可跑
 

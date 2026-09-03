@@ -51,12 +51,11 @@ def resolve_web_fetch(url: str) -> str:
     if not raw_url:
         return '{"error": "url 不能为空"}'
 
-    max_chars = WebToolsConfig.fetch_max_chars
     timeout = WebToolsConfig.fetch_timeout_seconds
 
     if tavily.tavily_available():
         try:
-            result = tavily.fetch_with_tavily(raw_url, max_chars)
+            result = tavily.fetch_with_tavily(raw_url)
             return result["markdown"]
         except Exception as e:
             logger.info(
@@ -66,7 +65,7 @@ def resolve_web_fetch(url: str) -> str:
             )
 
     try:
-        result = local_fetch.fetch_with_local(raw_url, max_chars, timeout)
+        result = local_fetch.fetch_with_local(raw_url, timeout)
         return result["markdown"]
     except ValueError as e:
         return json.dumps({"error": str(e), "url": raw_url}, ensure_ascii=False)

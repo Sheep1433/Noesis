@@ -57,7 +57,9 @@ def middleware_inventory(stack: Sequence[AgentMiddleware]) -> tuple[MiddlewareIn
 def _compaction_deps(model: Any, model_id: str | None) -> dict[str, Any]:
     if not ModelConfig.summarization_enabled:
         return {}
-    summary_model = get_llm(purpose="summarization")
+    # 摘要器未单独配置 model_name 时沿用本 run 模型（自定义模型经快照命中）；
+    # 不传 model_id 会静默落平台默认——压缩调用漂移到 kilo 的来源之一
+    summary_model = get_llm(purpose="summarization", model_id=model_id)
     model_limit = resolve_context_max_tokens(model_id) or ModelConfig.context_max_input_tokens
     trigger = ModelConfig.summarization_trigger_tokens
     reserve = max(1, min(20_000, ModelConfig.max_tokens))
@@ -160,12 +162,11 @@ def build_noesis_middleware(
         def dynamic_context_provider() -> DynamicContextBlock:
             now = datetime.now().astimezone()
             return DynamicContextBlock(
-                # 小时精度：provider 缓存 TTL 本就在小时级，分钟级时间戳只会
-                # 让跨轮请求的 system 前缀必然失效
-                current_time=now.isoformat(timespec="hours"),
+                # 日期粒度（Claude Code 同款）：头部冻结块一天内逐字节不变，
+                # 跨日由中间件尾部纠正声明处理
+                date=now.date().isoformat(),
                 timezone=str(now.tzinfo),
                 workspace=workspace,
-                session_id=session_id,
                 attachments=tuple(sorted(set(attachments))),
             )
     return build_noesis_stack(
@@ -188,6 +189,7 @@ def build_noesis_middleware(
             tool_call_limit=tool_call_limit,
             llm_max_retries=int(ModelConfig.max_retries),
             tool_result_max_chars=int(getattr(ModelConfig, "tool_output_max_chars", 24_000)),
+            read_file_max_chars=int(getattr(ModelConfig, "read_file_max_chars", 20_000)),
             middleware=middleware,
             session_id=session_id or "",
             filesystem_middleware_hook=filesystem_middleware_hook,

@@ -208,8 +208,97 @@ def test_build_chat_model_skips_reasoning_for_qwen() -> None:
     assert getattr(model, "reasoning_effort", None) is None
 
 
+def test_reasoning_wire_kwargs_kilo_family_sends_nested_effort() -> None:
+    """Kilo 网关拒收顶层 reasoning_effort（归一化冲突 400），改发嵌套 reasoning.effort。
+
+    回归锚点：子 Agent 继承 turn 档位 low 后请求 Kilo 网关，报 400
+    '"reasoning_effort" and "reasoning.effort" are both provided with
+    conflicting values'。嵌套形态实测通过网关校验。
+    """
+    from noesis.llm.factory import _reasoning_wire_kwargs
+
+    assert _reasoning_wire_kwargs("low", "openai", "https://api.kilo.ai/api/gateway") == {
+        "extra_body": {"reasoning": {"effort": "low"}}
+    }
+
+
+def test_reasoning_wire_kwargs_official_endpoints_keep_top_level_effort() -> None:
+    """OpenAI 官方 chat completions 只认顶层 reasoning_effort，维持原形态。
+
+    tokenrhythm 等未实测网关保持顶层原形态（无证据不改行为）。
+    """
+    from noesis.llm.factory import _reasoning_wire_kwargs
+
+    for base_url, model_type in (
+        ("https://api.openai.com/v1", "openai"),
+        ("https://opencode.ai/zen/v1", "opencode"),
+        ("https://tokenrhythm.studio/v1", "openai"),
+        ("", "minimax"),
+    ):
+        assert _reasoning_wire_kwargs("high", model_type, base_url) == {
+            "reasoning_effort": "high"
+        }, (base_url, model_type)
+
+
+def test_reasoning_wire_kwargs_skips_invalid_input() -> None:
+    from noesis.llm.factory import _reasoning_wire_kwargs
+
+    assert _reasoning_wire_kwargs(None, "openai", "https://api.kilo.ai/api/gateway") == {}
+    assert _reasoning_wire_kwargs("off", "openai", "https://api.kilo.ai/api/gateway") == {}
+    assert _reasoning_wire_kwargs("high", "qwen", "https://api.kilo.ai/api/gateway") == {}
+
+
+def test_build_chat_model_kilo_gateway_wire_payload_is_nested() -> None:
+    """端到端锚点：Kilo 方言的实际 HTTP body 为嵌套 reasoning.effort，
+    且不含顶层 reasoning_effort（openai SDK extra_body 合并行为钉住）。"""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from noesis.llm.factory import ChatOpenAICompatible, _reasoning_wire_kwargs
+
+    captured: dict = {}
+
+    class Echo(BaseHTTPRequestHandler):
+        def do_POST(self):
+            captured["payload"] = json.loads(
+                self.rfile.read(int(self.headers["Content-Length"]))
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "id": "x", "object": "chat.completion", "created": 0, "model": "m",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"},
+                             "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Echo)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        model = ChatOpenAICompatible(
+            model="glm-5.3-flash",
+            temperature=0.5,
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            api_key="probe",
+            streaming=False,
+            **_reasoning_wire_kwargs("low", "openai", "https://api.kilo.ai/api/gateway"),
+        )
+        model.invoke([("user", "hi")])
+    finally:
+        server.shutdown()
+
+    payload = captured["payload"]
+    assert payload.get("reasoning") == {"effort": "low"}
+    assert "reasoning_effort" not in payload
+
+
 @patch("noesis.llm.factory.build_chat_model")
-@patch("noesis.llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry_strict")
 def test_get_llm_applies_contextvar_effort_without_capability_gate(
     mock_resolve, mock_build
 ) -> None:
@@ -243,11 +332,19 @@ def test_get_llm_applies_contextvar_effort_without_capability_gate(
     try:
         # ContextVar 档位直接透传，任何模型无门控
         set_request_reasoning_effort("high")
-        get_llm(model_id="deepseek-v4-flash-free")
+        with patch(
+            "noesis.llm.factory.ModelConfig",
+            SimpleNamespace(model_api_key="test-key", summarization_model_name=""),
+        ):
+            get_llm(model_id="deepseek-v4-flash-free")
         assert captured["reasoning_effort"] == "high"
 
         # 显式参数优先于 ContextVar
-        get_llm(model_id="deepseek-v4-flash-free", reasoning_effort="max")
+        with patch(
+            "noesis.llm.factory.ModelConfig",
+            SimpleNamespace(model_api_key="test-key", summarization_model_name=""),
+        ):
+            get_llm(model_id="deepseek-v4-flash-free", reasoning_effort="max")
         assert captured["reasoning_effort"] == "max"
     finally:
         clear_request_reasoning_effort()

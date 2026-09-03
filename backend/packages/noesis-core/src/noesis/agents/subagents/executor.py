@@ -46,11 +46,15 @@ from noesis.chat.delivery.events import (
 )
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
+from noesis.chat.event_mapping.usage_normalize import merge_model_calls, merge_usage
 from noesis.chat.message_builder import AssistantMessageBuilder
-from noesis.chat.runs import RunStatus
+from noesis.chat.runs import RunStatus, SubscriptionLimitExceeded
+from noesis.chat.runs.delivery_bus import DeliveryCore, SequencedPayload
+from noesis.config.env import StreamConfig
 
 from noesis.agents.subagents import notifications
 from noesis.chat.event_mapping.retrieval import extract_deduped_sources, source_identity
+from noesis.llm.finish_reason import normalize_provider_finish_reason
 from noesis.llm.reasoning import get_request_reasoning_effort, set_request_reasoning_effort
 from noesis.runtime.logging import logger
 from noesis.runtime.stream import stream_agent_events
@@ -388,10 +392,22 @@ def _find_entry_locked(task_id: str) -> Optional[_TaskEntry]:
 _BGSub = tuple[asyncio.AbstractEventLoop, asyncio.Queue, str]  # (loop, queue, user_id)
 _SUBSCRIBERS: dict[str, list[_BGSub]] = {}
 _SUBSCRIBERS_LOCK = threading.Lock()
-_RUN_SUBSCRIBERS: dict[str, list[_BGSub]] = {}
-_RUN_SUBSCRIBERS_LOCK = threading.Lock()
-_RUN_EVENT_HISTORY: dict[str, collections.deque[dict[str, Any]]] = {}
-_RUN_EVENT_HISTORY_LIMIT = 128
+# 子会话 run 事件投递：统一投递内核实例注册表（按 run_id 持有，语义实现
+# 在 DeliveryCore 单点）。缓存上限与订阅配额与主链路同一份 StreamConfig。
+_RUN_DELIVERY: dict[str, DeliveryCore] = {}
+_RUN_DELIVERY_LOCK = threading.Lock()
+
+
+def _delivery_core(run_id: str) -> DeliveryCore:
+    with _RUN_DELIVERY_LOCK:
+        core = _RUN_DELIVERY.get(run_id)
+        if core is None:
+            core = DeliveryCore(
+                max_buffer_events=StreamConfig.run_event_buffer_max_events,
+                max_buffer_bytes=StreamConfig.run_event_buffer_max_bytes,
+            )
+            _RUN_DELIVERY[run_id] = core
+        return core
 
 
 def subscribe_bg_events(session_id: str, user_id: str) -> asyncio.Queue:
@@ -432,33 +448,71 @@ def publish_session_event(
 
 
 def subscribe_run_events(run_id: str, user_id: str) -> asyncio.Queue:
-    """按标准 AgentRun 订阅 child session 事件（详情打开时使用）。"""
+    """按标准 AgentRun 订阅 child session 事件（详情打开时使用）。
+
+    per-run 订阅上限与主链路同一份配置（超限抛 SubscriptionLimitExceeded，
+    端点映射 429）。
+    """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue(maxsize=256)
-    with _RUN_SUBSCRIBERS_LOCK:
-        _RUN_SUBSCRIBERS.setdefault(run_id, []).append((loop, queue, user_id))
+    with _RUN_DELIVERY_LOCK:
+        core = _RUN_DELIVERY.get(run_id)
+        if core is None:
+            core = DeliveryCore(
+                max_buffer_events=StreamConfig.run_event_buffer_max_events,
+                max_buffer_bytes=StreamConfig.run_event_buffer_max_bytes,
+            )
+            _RUN_DELIVERY[run_id] = core
+        if len(core.subscribers) >= StreamConfig.run_max_subscriptions_per_run:
+            raise SubscriptionLimitExceeded(
+                f"per-run subscription limit exceeded: run={run_id} "
+                f"max={StreamConfig.run_max_subscriptions_per_run}"
+            )
+        core.subscribers.append((loop, queue, user_id))
     return queue
 
 
 def unsubscribe_run_events(run_id: str, queue: asyncio.Queue) -> None:
-    with _RUN_SUBSCRIBERS_LOCK:
-        subs = _RUN_SUBSCRIBERS.get(run_id) or []
-        remaining = [s for s in subs if s[1] is not queue]
-        if remaining:
-            _RUN_SUBSCRIBERS[run_id] = remaining
-        else:
-            _RUN_SUBSCRIBERS.pop(run_id, None)
+    with _RUN_DELIVERY_LOCK:
+        core = _RUN_DELIVERY.get(run_id)
+        if core is not None:
+            core.subscribers = [s for s in core.subscribers if s[1] is not queue]
 
 
 def get_run_event_history(run_id: str, after_sequence: int = 0) -> list[dict[str, Any]]:
-    """返回最近一段可重放事件；详情断线重连不依赖进程内 queue 的存活。"""
-    with _RUN_SUBSCRIBERS_LOCK:
-        history = list(_RUN_EVENT_HISTORY.get(run_id) or ())
-    return [
-        item for item in history
-        if int(item.get("sequence") or 0) > max(0, after_sequence)
-        or (after_sequence <= 0 and item.get("type") == "run.started")
-    ]
+    """按投递内核重放：断档只发快照（首帧 run-snapshot），不假装连续补齐。
+
+    首连（after_sequence<=0）只放行 run.started——内容恢复走首帧快照。
+    """
+    with _RUN_DELIVERY_LOCK:
+        core = _RUN_DELIVERY.get(run_id)
+    if core is None:
+        return []
+    if after_sequence <= 0:
+        return [
+            item.payload for item in core.buffer
+            if isinstance(item.payload, dict) and item.payload.get("type") == "run.started"
+        ]
+    replay, snapshot_required = core.replay_after(after_sequence)
+    if snapshot_required:
+        return []
+    return [item.payload for item in replay]
+
+
+def _put_run_subscriber(sub: "_BGSub", payload: dict[str, Any]) -> None:
+    """跨 loop 投递到订阅队列（满则丢弃——重连方由快照+重放恢复）。"""
+    loop, queue, _user = sub
+
+    def _put(q: asyncio.Queue = queue, p: dict[str, Any] = payload) -> None:
+        try:
+            q.put_nowait(p)
+        except asyncio.QueueFull:
+            pass
+
+    try:
+        loop.call_soon_threadsafe(_put)
+    except RuntimeError:
+        pass
 
 
 def _publish_run_event(
@@ -470,88 +524,79 @@ def _publish_run_event(
     finish_reason: Optional[str] = None,
     wire: Optional[dict[str, Any]] = None,
     transient: bool = False,
+    sequence: Optional[int] = None,
 ) -> None:
-    """发布子会话 run 事件（history 回放 + 在线订阅双通道）。
+    """发布子会话 run 事件（统一投递内核：重放缓存 + 在线订阅双通道）。
 
     wire：桥接层 wire 帧字段（text-delta 等），原样并入 payload。
-    transient：瞬态事件（流式 delta / 实时统计）——只发在线订阅、不进
-    history：重连方由 run-snapshot 全量内容恢复，回放叠加旧 delta 反而
-    重复；且 delta 频率高，进 history 会挤占边界事件的有界容量。
+    transient：瞬态事件（流式 delta / 实时统计）——只发在线订阅、不占
+    sequence、不进缓存：重连方由 run-snapshot 全量内容恢复，回放叠加旧
+    delta 反而重复。durable 事件的 sequence 由内核分配（投影事件可经
+    ``sequence=`` 显式指定，与投影落库 guard 同号——投递与 DB 一个数空间）。
     """
     if not task.run_id:
         return
-    payload = {
-        "type": event,
-        "run_id": task.run_id,
-        "session_id": task.child_session_id or task.task_id,
-        "sequence": task.projection_sequence,
-        "status": task.status.value,
-    }
-    if transient:
-        payload["transient"] = True
-    if wire is not None:
-        payload.update(wire)
-    if finish_reason:
-        payload["finish_reason"] = finish_reason
-    # 终态时间：前端据此冻结 duration（重放历史事件同样可得）
-    if task.completed_at is not None:
-        payload["finished_at"] = task.completed_at
-    if content is not None:
-        payload["content"] = content
-        if isinstance(content, dict) and isinstance(content.get("_pending_hitl"), dict):
-            payload["pending_hitl"] = content["_pending_hitl"]
-    if context is not None:
-        payload["context"] = context
-    with _RUN_SUBSCRIBERS_LOCK:
+    core = _delivery_core(task.run_id)
+    with _RUN_DELIVERY_LOCK:
+        if transient:
+            payload = {
+                "type": event,
+                "run_id": task.run_id,
+                "session_id": task.child_session_id or task.task_id,
+                "sequence": core.next_sequence - 1,
+                "status": task.status.value,
+                "transient": True,
+            }
+        else:
+            if sequence is None:
+                sequence = core.assign_sequence()
+            payload = {
+                "type": event,
+                "run_id": task.run_id,
+                "session_id": task.child_session_id or task.task_id,
+                "sequence": sequence,
+                "status": task.status.value,
+            }
+        if wire is not None:
+            payload.update(wire)
+        if finish_reason:
+            payload["finish_reason"] = finish_reason
+        # 终态时间：前端据此冻结 duration（重放历史事件同样可得）
+        if task.completed_at is not None:
+            payload["finished_at"] = task.completed_at
+        if content is not None:
+            payload["content"] = content
+            if isinstance(content, dict) and isinstance(content.get("_pending_hitl"), dict):
+                payload["pending_hitl"] = content["_pending_hitl"]
+        if context is not None:
+            payload["context"] = context
+        subscribers = list(core.subscribers)
         if not transient:
-            history = _RUN_EVENT_HISTORY.setdefault(
-                task.run_id,
-                collections.deque(maxlen=_RUN_EVENT_HISTORY_LIMIT),
-            )
-            history.append(dict(payload))
-        subs = list(_RUN_SUBSCRIBERS.get(task.run_id) or [])
-    for loop, queue, user_id in subs:
-        if task.user_id not in (None, user_id):
+            core.commit(SequencedPayload(sequence, payload))
+    for sub in subscribers:
+        if task.user_id not in (None, sub[2]):
             continue
-
-        def _put(q: asyncio.Queue = queue, p: dict[str, Any] = payload) -> None:
-            try:
-                q.put_nowait(p)
-            except asyncio.QueueFull:
-                pass
-
-        try:
-            loop.call_soon_threadsafe(_put)
-        except RuntimeError:
-            pass
+        _put_run_subscriber(sub, payload)
     if event == "run.finished":
-        def _expire_history(run_id: str = task.run_id) -> None:
-            with _RUN_SUBSCRIBERS_LOCK:
-                _RUN_EVENT_HISTORY.pop(run_id, None)
+        def _expire_delivery(run_id: str = task.run_id) -> None:
+            with _RUN_DELIVERY_LOCK:
+                _RUN_DELIVERY.pop(run_id, None)
 
-        timer = threading.Timer(300.0, _expire_history)
+        timer = threading.Timer(300.0, _expire_delivery)
         timer.daemon = True
         timer.start()
     # 父会话只接收摘要目录更新；正文仍只在 child drawer 打开时订阅 run SSE。
     if task.child_session_id:
+        from noesis.services.subagent_runtime_port import child_session_summary
+
         publish_session_event(
             task.session_id,
             task.user_id,
             {
                 "event": "child-session",
-                "child": {
-                    "session_id": task.child_session_id,
-                    "parent_id": task.session_id,
-                    "created_by_tool_call_id": task.created_by_tool_call_id,
-                    "title": task.description,
-                    "profile_id": "task-worker",
-                    "run_id": task.run_id,
-                    "status": task.status.value,
-                    "step_count": task.step_count,
-                    "started_at": task.started_at,
-                    "finished_at": task.completed_at,
-                    "interrupt": task.interrupt,
-                },
+                "child": child_session_summary(
+                    task.to_dict(include_progress=False), parent_id=task.session_id,
+                ),
             },
         )
 
@@ -737,13 +782,19 @@ def _merge_task_sources(task: BackgroundTask, content: dict[str, Any]) -> None:
 async def _persist_child_projection(
     task: BackgroundTask,
     content: dict[str, Any],
-    *,
-    status: str = "streaming",
 ) -> None:
-    """子会话投影落库 + message.updated 事件（content 为统一管道 builder 产物）。"""
+    """子会话投影落库（content 为统一管道 builder 产物）。
+
+    投影序号 = 投递内核已提交的最后一帧序号（边界时 builder 内容与全部
+    已提交帧一致）——DB guard 与投递事件同一个数空间，且不产生缓存空洞。
+    内容恢复走 run-snapshot 快照 + 帧重放（message.updated 退役）。
+    """
     if not task.run_id or not task.assistant_message_id:
         return
-    task.projection_sequence += 1
+    core = _delivery_core(task.run_id)
+    with _RUN_DELIVERY_LOCK:
+        sequence = core.next_sequence - 1
+    task.projection_sequence = sequence
     from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
     from noesis.runtime.main_loop import run_on_main_loop
 
@@ -752,14 +803,12 @@ async def _persist_child_projection(
             run_id=task.run_id,
             assistant_message_id=task.assistant_message_id,
             content=copy.deepcopy(content),
-            sequence=task.projection_sequence,
-            status=status,
+            sequence=sequence,
         ),
-        name=f"subagent-projection:{task.run_id}:{task.projection_sequence}",
+        name=f"subagent-projection:{task.run_id}:{sequence}",
     )
     if future is not None:
         await asyncio.wrap_future(future)
-    _publish_run_event(task, "message.updated", content=copy.deepcopy(content))
 
 
 def _notify_preview(task: BackgroundTask) -> Optional[str]:
@@ -1194,8 +1243,8 @@ class BackgroundSubagentExecutor:
                 )
             entry.task.status = BgTaskStatus.RUNNING
             entry.task.interrupt = None
-            entry.task.projection_sequence += 1
         _publish_task_event(entry.task, "followup")
+        # approval.resumed 的序号由投递内核分配（durable 事件逐条占号）
         _publish_run_event(entry.task, "approval.resumed")
         if entry.task.run_id:
             from noesis.runtime.main_loop import run_on_main_loop
@@ -1376,7 +1425,23 @@ class _TurnOutcome:
 
 
 class _TurnPipelineError(Exception):
-    """统一管道报告的流错误（走 _arun 的既有异常收尾路径）。"""
+    """统一管道报告的流错误（走 _arun 的既有异常收尾路径）。
+
+    携带出错 turn 的 usage / model_calls：失败终态此前不落 usage，子会话
+    统计条在失败后无数据可重建（只能靠实时统计兜底）——错误发生前模型
+    调用的真实累计随终态一并落库。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        usage: Optional[dict[str, Any]] = None,
+        model_calls: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.model_calls = model_calls
 
 
 # 协作停止收尾标注：前缀只出现在 task.result / check_task 全文，不占通知预览预算
@@ -1775,24 +1840,13 @@ def _on_stop_reconcile_timeout(entry: _TaskEntry) -> None:
     entry.stop_reconcile_task = loop.create_task(_force_terminal(entry))
 
 
-def _merge_usage(base: Optional[dict[str, Any]], extra: dict[str, Any]) -> dict[str, Any]:
-    """usage 数值字段合并（相加）；非数值以 extra 覆盖。"""
-    merged = dict(base or {})
-    for key, value in extra.items():
-        if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
-            merged[key] = merged[key] + value
-        else:
-            merged[key] = value
-    return merged
-
-
 def _merged_live_usage(entry: "_TaskEntry", bridge: Any) -> dict[str, Any]:
     """实时统计口径：已完成 turn 累计 + 当前 turn bridge 累计（数值相加）。
 
     bridge 每 turn 重建（message_usage 从零起算），跨轮合并保证与终态
     DB 重建（各 turn extra.usage 累加）一致；turns 按已完成轮次 +1。
     """
-    merged = _merge_usage(entry.accumulated_usage, bridge.message_usage)
+    merged = merge_usage(entry.accumulated_usage, bridge.message_usage)
     merged["turns"] = entry.task.turn_count + 1
     return merged
 
@@ -1834,12 +1888,14 @@ async def _run_turn_via_pipeline(
                     snapshot = event.data.get("context")
                     if isinstance(snapshot, dict):
                         _apply_context_snapshot(task, snapshot)
-                elif event.event in ("text-delta", "reasoning-delta"):
-                    # 流式正文转发（瞬态）：子会话详情页逐 token 渲染；
-                    # 内容边界仍由 message.updated 全量投影权威收口
-                    _publish_run_event(
-                        task, event.event, wire=dict(event.data), transient=True,
-                    )
+                # 全部 bridge 帧经投递内核转发（与主链路同一帧词汇）：
+                # delta / 实时统计为 transient（不占号不进缓存），边界帧
+                # durable（占号可重放）；内容权威=落库检查点 + 快照恢复
+                _publish_run_event(
+                    task, event.event,
+                    wire=dict(event.data),
+                    transient=event.event in ("text-delta", "reasoning-delta", "stats-update"),
+                )
                 continue
             if isinstance(event, HitlRequired):
                 outcome.hitl_payload = dict(event.payload)
@@ -1890,7 +1946,9 @@ async def _run_turn_via_pipeline(
                     wire=_merged_live_usage(entry, bridge), transient=True,
                 )
                 # 输出截断一等终止：provider 以 length 截断（含参数被截的工具调用）
-                if str((getattr(output, "response_metadata", None) or {}).get("finish_reason")) == "length":
+                if normalize_provider_finish_reason(
+                    (getattr(output, "response_metadata", None) or {}).get("finish_reason")
+                ) == "length":
                     outcome.truncated = True
                 await _projection_boundary(task, builder)
                 _publish_task_event(task, "progress")
@@ -1931,17 +1989,11 @@ async def _run_turn_via_pipeline(
     seed = entry.hitl_usage_seed
     if seed is not None:
         entry.hitl_usage_seed = None
-        merged = dict(seed)
-        for key, value in outcome.usage.items():
-            if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
-                merged[key] = merged[key] + value
-            else:
-                merged[key] = value
-        outcome.usage = merged
+        outcome.usage = merge_usage(seed, outcome.usage or {})
     seed_calls = entry.hitl_model_calls_seed
     if seed_calls is not None:
         entry.hitl_model_calls_seed = None
-        outcome.model_calls = list(seed_calls) + list(outcome.model_calls)
+        outcome.model_calls = merge_model_calls(seed_calls, outcome.model_calls)
     # 最终投影：末段文本在 finish 时才 flush 进 builder，此处发布一次完整内容
     # （与旧 values 模式最后一个 chunk 含最终文本的可见节奏一致；
     #  HITL 挂起走 mark_waiting_approval 专用投影，不在此重复发布）
@@ -1999,7 +2051,11 @@ async def _arun(
             outcome = await _run_turn_via_pipeline(entry, task, agent, source)
             if outcome.error_message is not None:
                 # 管道产出的流错误：走既有异常收尾（task FAILED + run ERROR）
-                raise _TurnPipelineError(outcome.error_message)
+                raise _TurnPipelineError(
+                    outcome.error_message,
+                    usage=outcome.usage or None,
+                    model_calls=outcome.model_calls or None,
+                )
             if outcome.cooperative_stop:
                 # 协作停止在静止边界退出：统一取消收尾（部分成果保留）
                 await _finalize_stop(entry, task, outcome)
@@ -2060,7 +2116,7 @@ async def _arun(
             # 实时统计的跨轮累计：本 turn usage 并入（HITL 暂停路径不经此处，
             # 由 hitl_usage_seed 在 resume turn 的 outcome 中合并，无重复计数）
             if outcome.usage:
-                entry.accumulated_usage = _merge_usage(
+                entry.accumulated_usage = merge_usage(
                     entry.accumulated_usage, outcome.usage,
                 )
             # followup 链：队列非空则同 thread 开下一个 turn
@@ -2169,6 +2225,8 @@ async def _arun(
                 run_status=RunStatus.ERROR,
                 finish_reason="error",
                 error=str(exc),
+                usage=getattr(exc, "usage", None),
+                model_calls=getattr(exc, "model_calls", None),
             ),
         )
         if not finalized:

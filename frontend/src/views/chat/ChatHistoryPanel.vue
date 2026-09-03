@@ -82,9 +82,9 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
         class="create-chat-box"
         :class="{ hide: isFocusSearchChat }"
       >
+        <!-- 多会话并发：run 在服务端继续执行，新建对话不因其它会话生成中而置灰 -->
         <ChatModeSelector
           :qa-type="currentQaType"
-          :disabled="stylizingLoading"
           placement="bottom-start"
           @select="emit('newChat', $event)"
         >
@@ -94,7 +94,6 @@ defineExpose({ focusSearch: () => searchChatRef.value?.focus() })
               icon-placement="left"
               strong
               class="create-chat"
-              :disabled="stylizingLoading"
             >
               <template #icon>
                 <n-icon>

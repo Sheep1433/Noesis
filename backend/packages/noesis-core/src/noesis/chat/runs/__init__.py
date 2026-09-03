@@ -2,6 +2,7 @@
 
 from noesis.chat.runs.models import (
     ACTIVE_RUN_STATUSES,
+    ASSISTANT_TERMINAL_STATUS,
     TERMINAL_RUN_STATUSES,
     InvalidRunTransition,
     RunSnapshot,
@@ -34,6 +35,7 @@ from noesis.chat.runs.user_signals import UserSignalBus, user_signal_bus
 
 __all__ = [
     "ACTIVE_RUN_STATUSES",
+    "ASSISTANT_TERMINAL_STATUS",
     "TERMINAL_RUN_STATUSES",
     "InvalidRunTransition",
     "RunSnapshot",

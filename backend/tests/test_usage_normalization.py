@@ -10,6 +10,8 @@ from __future__ import annotations
 from noesis.chat.event_mapping.usage_normalize import (
     extract_input_token_details as _extract_input_token_details,
     extract_output_token_details as _extract_output_token_details,
+    merge_model_calls,
+    merge_usage,
     normalize_usage as _normalize_usage,
 )
 
@@ -134,3 +136,34 @@ def test_normalize_usage_does_not_double_count_details_in_total() -> None:
     # total 不因 detail 再次相加
     assert out["total_tokens"] == 590
     assert out["total_tokens"] == out["input_tokens"] + out["output_tokens"]
+
+
+def test_merge_usage_numeric_accumulation() -> None:
+    """数值键累加、缺键直取、非数值覆盖（三处调用点的统一语义）。"""
+    base = {"steps": 2, "llm_ms": 100.0, "input_tokens": 10}
+    extra = {"steps": 3, "llm_ms": 50.0, "output_tokens": 7}
+    merged = merge_usage(base, extra)
+    assert merged == {
+        "steps": 5,
+        "llm_ms": 150.0,
+        "input_tokens": 10,
+        "output_tokens": 7,
+    }
+
+
+def test_merge_usage_empty_base_and_non_numeric_override() -> None:
+    assert merge_usage(None, {"steps": 1}) == {"steps": 1}
+    assert merge_usage({"steps": 1}, None) == {"steps": 1}
+    # 布尔不是数值：覆盖而非相加
+    assert merge_usage({"flag": True}, {"flag": False}) == {"flag": False}
+
+
+def test_merge_model_calls_renumbers_steps_globally() -> None:
+    """step 跨 run 全局重编：直接拼接会重复计数。"""
+    base = [{"step": 1, "model": "a"}, {"step": 2, "model": "a"}]
+    extra = [{"step": 1, "model": "b"}, "garbage"]
+    merged = merge_model_calls(base, extra)
+    assert [call["step"] for call in merged] == [1, 2, 3]
+    assert merged[2]["model"] == "b"
+    assert all(isinstance(call, dict) for call in merged)
+    assert merge_model_calls(None, None) == []

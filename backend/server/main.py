@@ -99,7 +99,10 @@ async def lifespan(app: FastAPI):
                     pass
         resources.push_async_callback(_cancel_lock_monitor)
 
-        # ---- leader-only：recovery 跳过未 claim 的 queued Run（dispatcher 补扫启动）
+        # ---- leader-only：启动对账。两 pass 的 scope 显式互斥——通用
+        # recovery 只管主链路 run（origin != subagent；queued 未 claim 存活
+        # 交 dispatcher）；子 Agent run 由 executor 进程内调度、重启即不可
+        # 恢复，统一走 reconcile_orphaned_runs（ERROR/SUBAGENT_PROCESS_RESTARTED）
         async with pg_manager.get_async_session_context() as recovery_db:
             await RunRecoveryService.recover_orphaned_runs(
                 recovery_db, current_leader_term=leadership_token.term

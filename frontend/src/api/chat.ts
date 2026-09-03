@@ -127,13 +127,6 @@ export interface MessageListResponse {
   total: number
 }
 
-/** 发送消息响应 */
-export interface SendMessageResponse {
-  message_id: string
-  session_id: string
-  status: string
-}
-
 export type AgentRunStatus =
   | 'queued'
   | 'running'
@@ -207,22 +200,6 @@ export interface CreateSessionParams {
 /** 更新会话标题参数 */
 export interface UpdateSessionTitleParams {
   title: string
-}
-
-/** 发送消息参数 */
-export interface SendMessageParams {
-  content: string
-  parent_id?: string
-  role?: 'user' | 'assistant'
-  extra?: Record<string, unknown>
-}
-
-/** 流式发送消息参数（带 qa_type 和 file_dict） */
-export interface StreamSendMessageParams extends SendMessageParams {
-  extra?: SendMessageParams['extra'] & {
-    qa_type?: string
-    file_dict?: Record<string, string>
-  }
 }
 
 /** 获取消息历史参数 */
@@ -734,18 +711,6 @@ export async function getSessionMessages(
   }
   const req = makeRequest('GET', url.toString())
   return parseResponse<MessageListResponse>(await authFetch(req))
-}
-
-/**
- * 发送消息（创建用户消息）
- * POST /api/chat/sessions/{sessionId}/messages
- */
-export async function sendMessage(
-  sessionId: string,
-  params: SendMessageParams,
-): Promise<SendMessageResponse> {
-  const req = makeRequest('POST', `${location.origin}${BASE}/sessions/${sessionId}/messages`, params)
-  return parseResponse<SendMessageResponse>(await authFetch(req))
 }
 
 /** 向已有 child session 追加下一轮对话；modelId/reasoningEffort 缺省沿用当前值。 */

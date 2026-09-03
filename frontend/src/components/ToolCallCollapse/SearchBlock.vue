@@ -76,7 +76,8 @@ interface ResultItem {
   excerpt?: string
   file_name?: string
   collection_name?: string
-  score?: number
+  /** KB 结果才有分数；web 检索结果无 score（归一化后为 null） */
+  score?: number | null
 }
 function parseJsonResults(text: string): { items: ResultItem[], total?: number } | null {
   try {
@@ -184,10 +185,26 @@ const fetchTruncated = computed(() =>
 const fetchDisplay = computed(() =>
   view.value.kind === 'fetch' ? view.value.content.slice(0, FETCH_CONTENT_MAX) : '',
 )
+
+/**
+ * 入参 pretty JSON（对齐 read/write 回退分支的 args 形态）：块内首行展示，
+ * 与输出同块同构——展开必须同时可见输入与输出。空对象不显示。
+ */
+const inputDisplay = computed(() => {
+  const obj = (typeof props.input === 'object' && props.input !== null)
+    ? props.input as Record<string, unknown>
+    : undefined
+  if (!obj || Object.keys(obj).length === 0) {
+    return ''
+  }
+  return JSON.stringify(obj, null, 2)
+})
 </script>
 
 <template>
   <div class="search-block" :data-appearance="appearance">
+    <!-- 入参 pretty JSON 置顶（对齐 bash/回退分支：入参在输出上方，无标签） -->
+    <pre v-if="inputDisplay" class="search-args">{{ inputDisplay }}</pre>
     <!-- 结构化检索结果 -->
     <template v-if="view.kind === 'results'">
       <div v-if="view.total !== undefined" class="result-meta">共 {{ view.total }} 条结果</div>
@@ -197,7 +214,7 @@ const fetchDisplay = computed(() =>
           <span v-if="item.collection_name" class="result-item__src">{{ item.collection_name }}</span>
           <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="result-item__title">{{ item.title || item.url }}</a>
           <span v-else class="result-item__title">{{ item.file_name || item.title || `结果 ${i + 1}` }}</span>
-          <span v-if="item.score !== undefined" class="result-item__score">{{ item.score.toFixed(2) }}</span>
+          <span v-if="item.score !== null && item.score !== undefined" class="result-item__score">{{ item.score.toFixed(2) }}</span>
         </div>
         <div v-if="item.excerpt" class="result-item__excerpt">{{ item.excerpt }}</div>
       </div>
@@ -268,6 +285,14 @@ const fetchDisplay = computed(() =>
 .result-meta {
   color: var(--search-summary-color, #404040);
   margin-bottom: 6px;
+}
+.search-args {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--noesis-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 .result-item {
   padding: 6px 0;

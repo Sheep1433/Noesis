@@ -27,6 +27,7 @@ from noesis.config.env import ModelConfig, SubagentConfig
 from noesis.runtime.logging import logger
 
 _CHECK_PENDING_HINT = {
+    BgTaskStatus.QUEUED: "排队中",
     BgTaskStatus.RUNNING: "仍在运行",
     BgTaskStatus.AWAITING_APPROVAL: "等待用户审批",
 }
@@ -63,6 +64,11 @@ def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> s
         return f"[{public_id}] completed：\n{task.get('result') or '(无结果文本)'}"
     if status == BgTaskStatus.STOPPING.value:
         return f"[{public_id}] 正在停止（当前步骤完成后退出，稍后再查收部分产出）"
+    # 进行中（queued / running / awaiting_approval）：状态提示，无产出可带
+    pending_status = BgTaskStatus(status)
+    if pending_status in _CHECK_PENDING_HINT:
+        hint = _CHECK_PENDING_HINT[pending_status]
+        return f"[{public_id}] {hint}（description: {task['description']}）"
     # cancelled / failed / timed_out：非正常终态统一「原因 + 部分产出」形态
     # （超时走协作路径时产出在 result，error 只有原因；取消同理）
     partial = task.get("result")
@@ -73,8 +79,6 @@ def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> s
     if partial:
         return f"{head}\n{_bounded(str(partial))}"
     return head
-    hint = _CHECK_PENDING_HINT.get(BgTaskStatus(status), status)
-    return f"[{public_id}] {hint}（description: {task['description']}）"
 
 
 def build_background_task_tools(

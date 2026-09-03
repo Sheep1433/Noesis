@@ -14,9 +14,8 @@ from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
 from noesis.factory import create_noesis_agent
 from noesis.agents.prompts import PromptProfile, build_prompt
 from noesis.agents.tools import build_kb_search_tools, build_web_search_tools, list_qdrant_collection_names
-from noesis.agents.tools.chat_attachment_tools import build_attachment_tools
+from noesis.agents.tools.chat_attachment_tools import resolve_attachment_tools
 from noesis.config.env import ChatAttachmentConfig
-from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
 from noesis.runtime.logging import logger
 
@@ -86,18 +85,13 @@ class GeneralQAAgent(BaseAgent):
             and session_id
             and user_id
         ):
-            attachments_enabled = await require_attachment_service().session_has_attachments(
+            attachment_tools = await resolve_attachment_tools(
                 session_id=session_id,
                 user_id=user_id,
-                db=db,
-                file_dict=file_list,
+                file_list=file_list,
             )
-            if attachments_enabled:
-                tools = tools + build_attachment_tools(
-                    session_id=session_id,
-                    user_id=user_id,
-                    db=db,
-                )
+            attachments_enabled = bool(attachment_tools)
+            tools = tools + attachment_tools
 
         try:
             config = {"configurable": {"thread_id": task_id}, "recursion_limit": DEFAULT_RECURSION_LIMIT}

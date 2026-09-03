@@ -38,7 +38,7 @@ export interface CitationIndexEntry {
 
 /**
  * 从本轮检索结果构建「来源 key → 序号」索引。按出现顺序去重分配 1-based 编号，
- * 正文 badge 与 CitationSources 来源面板共用同一份映射，确保点击 [2] 能定位到
+ * 正文 badge 与来源面板（ResearchSourcesPanel）共用同一份映射，确保点击 [2] 能定位到
  * 面板第 2 条。
  */
 export function buildCitationIndex(results: RetrievalResultUi[]): Map<string, CitationIndexEntry> {

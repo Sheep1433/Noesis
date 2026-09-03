@@ -16,6 +16,7 @@ import {
   subscribeAgentRun,
   subscribeSessionEvents,
 } from '@/api/chat'
+import { consumeRunStream } from './useRunStreamClient'
 
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
@@ -63,126 +64,59 @@ export interface SSEStreamOptions {
   historyReady?: (sessionId: string) => Promise<unknown> | null
 }
 
-function parseSseFrames(buffer: string): { frames: string[], rest: string } {
-  const parts = buffer.split('\n\n')
-  const rest = parts.pop() ?? ''
-  return { frames: parts.filter(Boolean), rest }
+
+function parentTaskCallId(data: Record<string, unknown>): string | undefined {
+  const value = data.parent_task_call_id
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-/** 解析单条 SSE frame（event + 多行 data）并交给 dispatchFrame */
-function parseAndDispatchFrame(frame: string, dispatchFrame: (eventName: string, dataStr: string) => void) {
-  let eventName = 'message'
-  const dataLines: string[] = []
-  for (const line of frame.split('\n')) {
-    if (line.startsWith('event:')) {
-      eventName = line.slice(6).trim()
-    } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart())
-    }
-  }
-  const dataStr = dataLines.join('\n')
-  dispatchFrame(eventName, dataStr)
-}
-
-export function useSSEStream(options: SSEStreamOptions = {}) {
+/**
+ * 帧词汇 → 回调的共享分派表：主聊天 useSSEStream 与子会话视图共用同一
+ * 份映射与工具元数据富集（tool-input-start 记名/step → available/output
+ * 补齐）。跨流（新 run）须 reset() 清富集缓存。
+ */
+export function createFrameHandlerTable(handlers: SSEStreamOptions) {
   const {
-    onTitleUpdate,
-    onContextUpdate,
+    onRunStatus,
+    onMessageStart,
     onTextDelta,
     onRetrievalResults,
-    onReasoningDelta,
     onReasoningStart,
+    onReasoningDelta,
     onReasoningEnd,
     onToolCall,
     onToolResult,
-    onCustomEvent,
-    onMessageStart,
-    onSnapshot,
-    onRunStatus,
+    onContextUpdate,
     onStatsUpdate,
-    onFinish,
-    onError,
-    onBusyConflict,
-    historyReady,
-  } = options
-
-  const isLoading = ref(false)
-  const error = ref<string | null>(null)
-  let lastFinishReason: string | undefined
-  let abortController: AbortController | null = null
-  let activeSessionId: string | null = null
-  let streamGeneration = 0
-  let userAborted = false
-  let currentRunId: string | null = null
-  let lastSequence = 0
-  let sequenceGap = false
-  let terminalObserved = false
-  /** 409 撞上「会话仍在生成」时排队的消息：本轮终态后自动重发 */
-  let queuedSend: { sessionId: string, content: string, extra?: Record<string, unknown> } | null = null
-  let signalSessionId: string | null = null
-  let signalAbort: AbortController | null = null
-  let signalRetryTimer: ReturnType<typeof setTimeout> | null = null
-
-  const tool_name_by_call_id = new Map<string, string>()
-  const tool_step_id_by_call_id = new Map<string, string | undefined>()
-
-  function isCurrentStream(generation: number) {
-    return generation === streamGeneration
-  }
-
-  function parentTaskCallId(data: Record<string, unknown>): string | undefined {
-    const value = data.parent_task_call_id
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined
-  }
-
-  function handleRunSnapshot(snapshot: AgentRunSnapshot) {
-    lastSequence = Number(snapshot.snapshot_sequence ?? 0)
-    sequenceGap = false
-    onSnapshot?.(snapshot)
-    onRunStatus?.(snapshot.status, snapshot.message ?? undefined)
-    if (snapshot.status === 'hitl_pending' && snapshot.pending_hitl) {
-      onCustomEvent?.('hitl-required', {
-        type: 'hitl-required',
-        ...snapshot.pending_hitl,
-        run_id: snapshot.run_id,
-        session_id: snapshot.session_id,
-      })
-    }
-    if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
-      terminalObserved = true
-      if (snapshot.status === 'error') {
-        settleFailure(snapshot.message || '生成失败')
-      } else {
-        settleSuccess(snapshot.finish_reason ?? snapshot.status)
-      }
-    }
-  }
+  } = handlers
+  const toolNameByCallId = new Map<string, string>()
+  const toolStepIdByCallId = new Map<string, string | undefined>()
 
   function handleToolInputStart(data: Record<string, unknown>) {
     const id = String(data.tool_call_id ?? '')
     if (!id) {
       return
     }
-    tool_name_by_call_id.set(id, String(data.name ?? ''))
-    tool_step_id_by_call_id.set(id, typeof data.step_id === 'string' ? data.step_id : undefined)
+    toolNameByCallId.set(id, String(data.name ?? ''))
+    toolStepIdByCallId.set(id, typeof data.step_id === 'string' ? data.step_id : undefined)
   }
 
   function handleToolInputAvailable(data: Record<string, unknown>) {
     const id = String(data.tool_call_id ?? '')
     const nameFromFrame = typeof data.name === 'string' ? data.name : ''
-    const name = nameFromFrame || tool_name_by_call_id.get(id) || ''
+    const name = nameFromFrame || toolNameByCallId.get(id) || ''
     if (id && nameFromFrame) {
-      tool_name_by_call_id.set(id, nameFromFrame)
+      toolNameByCallId.set(id, nameFromFrame)
     }
     const stepIdRaw = data.step_id
     let stepId: string | undefined
     if (typeof stepIdRaw === 'string' && stepIdRaw) {
       stepId = stepIdRaw
     } else if (id) {
-      stepId = tool_step_id_by_call_id.get(id)
+      stepId = toolStepIdByCallId.get(id)
     }
     if (id && typeof stepIdRaw === 'string' && stepIdRaw) {
-      tool_step_id_by_call_id.set(id, stepIdRaw)
+      toolStepIdByCallId.set(id, stepIdRaw)
     }
     onToolCall?.(
       name,
@@ -204,7 +138,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     if (typeof stepIdRaw === 'string' && stepIdRaw) {
       stepId = stepIdRaw
     } else if (id) {
-      stepId = tool_step_id_by_call_id.get(id)
+      stepId = toolStepIdByCallId.get(id)
     }
     onToolResult?.(id, {
       output: typeof data.output === 'string' ? data.output : '',
@@ -218,30 +152,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       timed_out: data.timed_out != null ? Boolean(data.timed_out) : undefined,
       truncated: data.truncated != null ? Boolean(data.truncated) : undefined,
       step_id: stepId,
-    })
-  }
-
-  function handleFinish(data: Record<string, unknown>) {
-    const finishReason = String(data.finish_reason ?? 'stop')
-    lastFinishReason = finishReason
-    terminalObserved = finishReason !== 'hitl_pending'
-    if (finishReason === 'hitl_pending') {
-      onRunStatus?.('hitl_pending')
-    } else if (finishReason === 'error') {
-      const error = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : '生成失败'
-      settleFailure(error)
-    } else if (['context_exhausted', 'retryable_error'].includes(finishReason)) {
-      settleFailure(finishReason)
-    } else {
-      settleSuccess(finishReason)
-    }
-  }
-
-  function handleCustomEvent(type: string, data: Record<string, unknown>) {
-    onCustomEvent?.(type, {
-      ...data,
-      run_id: data.run_id ?? currentRunId,
-      session_id: data.session_id ?? activeSessionId,
     })
   }
 
@@ -284,6 +194,119 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       }
     },
   }
+
+  return {
+    /** 分派一帧（未知类型静默忽略）；返回是否命中已知帧 */
+    dispatch(type: string, data: Record<string, unknown>): boolean {
+      const handler = frameHandlers[type]
+      if (handler) {
+        handler(data)
+        return true
+      }
+      return false
+    },
+    /** 新 run/新流开始：清工具元数据富集缓存 */
+    reset() {
+      toolNameByCallId.clear()
+      toolStepIdByCallId.clear()
+    },
+  }
+}
+
+export function useSSEStream(options: SSEStreamOptions = {}) {
+  const {
+    onTitleUpdate,
+    onContextUpdate,
+    onTextDelta,
+    onRetrievalResults,
+    onReasoningDelta,
+    onReasoningStart,
+    onReasoningEnd,
+    onToolCall,
+    onToolResult,
+    onCustomEvent,
+    onMessageStart,
+    onSnapshot,
+    onRunStatus,
+    onStatsUpdate,
+    onFinish,
+    onError,
+    onBusyConflict,
+    historyReady,
+  } = options
+
+  const isLoading = ref(false)
+  const error = ref<string | null>(null)
+  let lastFinishReason: string | undefined
+  let abortController: AbortController | null = null
+  let activeSessionId: string | null = null
+  let streamGeneration = 0
+  let userAborted = false
+  let currentRunId: string | null = null
+  let lastSequence = 0
+  let terminalObserved = false
+  /** 409 撞上「会话仍在生成」时排队的消息：本轮终态后自动重发 */
+  let queuedSend: { sessionId: string, content: string, extra?: Record<string, unknown> } | null = null
+  let signalSessionId: string | null = null
+  let signalAbort: AbortController | null = null
+
+  const frameTable = createFrameHandlerTable(options)
+
+  function isCurrentStream(generation: number) {
+    return generation === streamGeneration
+  }
+
+  function handleRunSnapshot(snapshot: AgentRunSnapshot) {
+    lastSequence = Number(snapshot.snapshot_sequence ?? 0)
+    onSnapshot?.(snapshot)
+    onRunStatus?.(snapshot.status, snapshot.message ?? undefined)
+    if (snapshot.status === 'hitl_pending' && snapshot.pending_hitl) {
+      onCustomEvent?.('hitl-required', {
+        type: 'hitl-required',
+        ...snapshot.pending_hitl,
+        run_id: snapshot.run_id,
+        session_id: snapshot.session_id,
+      })
+    }
+    if (['completed', 'partial', 'error', 'interrupted'].includes(snapshot.status)) {
+      terminalObserved = true
+      if (snapshot.status === 'error') {
+        settleFailure(snapshot.message || '生成失败')
+      } else {
+        settleSuccess(snapshot.finish_reason ?? snapshot.status)
+      }
+    }
+  }
+
+  function handleRunFinished(data: Record<string, unknown>) {
+    // 终态词汇统一：run.finished（status=completed/interrupted/error）为唯一
+    // 流终止标记；hitl 分段暂停走 run-status（非终态）
+    const status = String(data.status ?? 'completed')
+    const finishReason = String(data.finish_reason ?? 'stop')
+    lastFinishReason = finishReason
+    if (status === 'hitl_pending') {
+      onRunStatus?.('hitl_pending')
+      return
+    }
+    terminalObserved = true
+    if (status === 'error') {
+      const error = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : '生成失败'
+      settleFailure(error)
+    } else if (['context_exhausted', 'retryable_error'].includes(finishReason)) {
+      settleFailure(finishReason)
+    } else {
+      settleSuccess(finishReason)
+    }
+  }
+
+  function handleCustomEvent(type: string, data: Record<string, unknown>) {
+    onCustomEvent?.(type, {
+      ...data,
+      run_id: data.run_id ?? currentRunId,
+      session_id: data.session_id ?? activeSessionId,
+    })
+  }
+
   const customEventTypes = new Set([
     'scenario-start',
     'testpoints-confirm-required',
@@ -294,7 +317,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     'hitl-required',
   ])
 
-  function dispatchFrame(eventName: string, dataStr: string, generation = streamGeneration) {
+  function dispatchFrame(eventName: string, dataStr: string, generation = streamGeneration): 'stop' | void {
     if (!isCurrentStream(generation) || userAborted) {
       return
     }
@@ -323,28 +346,21 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
         return
       }
       if (lastSequence > 0 && sequence !== lastSequence + 1) {
-        sequenceGap = true
-        return
+        // sequence gap：停止当前连接读取，交给内核走快照恢复流程
+        return 'stop'
       }
       lastSequence = sequence
     }
 
-    const handler = frameHandlers[type]
-    if (handler) {
-      handler(data)
+    if (frameTable.dispatch(type, data)) {
       return
     }
     if (customEventTypes.has(type)) {
       handleCustomEvent(type, data)
       return
     }
-    if (type === 'finish') {
-      handleFinish(data)
-      return
-    }
-    if (type === 'error') {
-      terminalObserved = true
-      settleFailure(String(data.error ?? '请求失败'))
+    if (type === 'run.finished') {
+      handleRunFinished(data)
     }
   }
 
@@ -368,94 +384,23 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
   }
 
   async function followRun(runId: string, generation: number): Promise<void> {
-    for (let retry = 0; retry <= 5; retry += 1) {
-      if (!isCurrentStream(generation) || streamSettled || userAborted) {
-        break
-      }
-      sequenceGap = false
-      try {
-        const res = await subscribeAgentRun(runId, lastSequence, abortController?.signal)
-        if (!res.ok) {
-          throw new Error(`连接失败（HTTP ${res.status}）`)
-        }
-        const reader = res.body?.getReader()
-        if (!reader) {
-          throw new Error('无法读取响应流')
-        }
-        const decoder = new TextDecoder()
-        let rawBuffer = ''
-        // 读超时：防止 TCP half-open 导致 reader.read() 永久挂住。
-        // 超时后 break 出 while，让 followRun 重连查 getAgentRun 拿终态。
-        const READ_TIMEOUT_MS = 45_000
-        const READ_TIMEOUT = Symbol('read-timeout')
-        while (true) {
-          if (streamSettled || userAborted) {
-            break
-          }
-          let timer: ReturnType<typeof setTimeout> | undefined
-          const result = await Promise.race([
-            reader.read().then((r) => {
-              clearTimeout(timer)
-              return r
-            }),
-            new Promise<typeof READ_TIMEOUT>((resolve) => {
-              timer = setTimeout(() => resolve(READ_TIMEOUT), READ_TIMEOUT_MS)
-            }),
-          ])
-          if (result === READ_TIMEOUT) {
-            await reader.cancel()
-            break
-          }
-          const { done, value } = result
-          if (value) {
-            rawBuffer += decoder.decode(value, { stream: true })
-          }
-          const { frames, rest } = parseSseFrames(rawBuffer)
-          rawBuffer = rest
-          for (const frame of frames) {
-            parseAndDispatchFrame(
-              frame,
-              (eventName, dataStr) => dispatchFrame(eventName, dataStr, generation),
-            )
-            if (sequenceGap) {
-              break
-            }
-          }
-          if (done || sequenceGap) {
-            if (sequenceGap) {
-              await reader.cancel()
-            }
-            break
-          }
-        }
-      } catch (streamError) {
-        if (!isCurrentStream(generation) || userAborted) {
-          break
-        }
-        if (retry >= 5) {
-          throw streamError
-        }
-      }
-      if (!isCurrentStream(generation) || streamSettled || userAborted) {
-        break
-      }
-      const snapshot = await getAgentRun(runId)
-      dispatchFrame(
-        'run-snapshot',
-        JSON.stringify({ type: 'run-snapshot', ...snapshot }),
-        generation,
-      )
-      if (streamSettled) {
-        break
-      }
-      if (retry < 5) {
-        const delay = Math.min(8000, 500 * (2 ** retry)) + Math.floor(Math.random() * 250)
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
-    }
-    if (isCurrentStream(generation) && !streamSettled && !userAborted) {
-      throw new Error('连接已中断，请重新连接')
-    }
+    await consumeRunStream({
+      subscribe: (signal) => subscribeAgentRun(runId, lastSequence, signal),
+      onFrame: (event, _data, dataStr) => dispatchFrame(event, dataStr, generation),
+      isActive: () => isCurrentStream(generation) && !streamSettled && !userAborted,
+      maxAttempts: 6,
+      backoffMs: (attempt) => Math.min(8000, 500 * (2 ** attempt)) + Math.floor(Math.random() * 250),
+      // 断流后先经权威快照收口（run-snapshot 终态即就地 settle），再退避重连
+      resync: async () => {
+        const snapshot = await getAgentRun(runId)
+        dispatchFrame(
+          'run-snapshot',
+          JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+          generation,
+        )
+      },
+      signal: abortController?.signal,
+    })
   }
 
   function detachSubscription() {
@@ -478,7 +423,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     abortController = new AbortController()
     isLoading.value = true
     lastSequence = 0
-    sequenceGap = false
     terminalObserved = false
     return streamGeneration
   }
@@ -504,8 +448,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
       return
     }
 
-    tool_name_by_call_id.clear()
-    tool_step_id_by_call_id.clear()
+    frameTable.reset()
     error.value = null
     const generation = beginStream(sessionId)
     const clientRequestId = crypto.randomUUID()
@@ -769,112 +712,52 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     }
     stopSessionSignals()
     signalSessionId = sessionId
-    void pumpSessionSignals(sessionId, 0)
+    void pumpSessionSignals(sessionId)
   }
 
   function stopSessionSignals() {
-    if (signalRetryTimer !== null) {
-      clearTimeout(signalRetryTimer)
-      signalRetryTimer = null
-    }
+    // 无需清理重连 timer：传输内核的退避等待可被 abort 打断
     signalAbort?.abort()
     signalAbort = null
     signalSessionId = null
     queuedSend = null
   }
 
-  async function pumpSessionSignals(sessionId: string, attempt: number) {
-    if (signalSessionId !== sessionId) {
-      return
-    }
+  async function pumpSessionSignals(sessionId: string) {
     const controller = new AbortController()
     signalAbort = controller
     try {
-      const res = await subscribeSessionEvents(sessionId, controller.signal)
-      if (!res.ok) {
-        // 401/404：登录失效或会话已删，重连无意义，静默退出
-        if (res.status === 401 || res.status === 404) {
-          if (signalAbort === controller) {
-            signalAbort = null
+      await consumeRunStream({
+        subscribe: (signal) => subscribeSessionEvents(sessionId, signal),
+        onFrame: (event, data) => {
+          if (event !== 'session-signal' || !data) {
+            return
           }
-          return
-        }
-        throw new Error(`连接失败（HTTP ${res.status}）`)
-      }
-      const reader = res.body?.getReader()
-      if (!reader) {
-        throw new Error('无法读取响应流')
-      }
-      const decoder = new TextDecoder()
-      let rawBuffer = ''
-      const READ_TIMEOUT_MS = 45_000
-      const READ_TIMEOUT = Symbol('read-timeout')
-      for (;;) {
-        // 会话已切走：停止消费（signalSessionId 由 stopSessionSignals/watchSessionSignals 修改）
-        if (signalSessionId !== sessionId) {
-          break
-        }
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const result = await Promise.race([
-          reader.read().then((r) => {
-            clearTimeout(timer)
-            return r
-          }),
-          new Promise<typeof READ_TIMEOUT>((resolve) => {
-            timer = setTimeout(() => resolve(READ_TIMEOUT), READ_TIMEOUT_MS)
-          }),
-        ])
-        if (result === READ_TIMEOUT) {
-          await reader.cancel()
-          break
-        }
-        const { done, value } = result
-        if (done) {
-          break
-        }
-        rawBuffer += decoder.decode(value, { stream: true })
-        const { frames, rest } = parseSseFrames(rawBuffer)
-        rawBuffer = rest
-        for (const frame of frames) {
-          parseAndDispatchFrame(frame, (eventName, dataStr) => {
-            if (eventName !== 'session-signal' || !dataStr) {
-              return
-            }
-            try {
-              const signal = JSON.parse(dataStr) as { type?: string, run_id?: string }
-              if (
-                signal.type === 'run-started'
-                && typeof signal.run_id === 'string'
-                && signal.run_id
-                && signal.run_id !== currentRunId
-                && !(isLoading.value && activeSessionId === sessionId)
-              ) {
-                // 该会话历史仍在加载时，等其就位再 apply snapshot（与刷新页路径一致），
-                // 否则 patchAssistantPartsAt 找不到目标行，整轮内容静默丢失
-                void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
-              }
-            } catch {
-              // 非 JSON 帧忽略：信令是 hint，坏帧无害
-            }
-          })
-        }
-      }
-      // 只清理自己这一代的 controller：新一代 pump 可能已接管 signalAbort
+          const signal = data as { type?: string, run_id?: string }
+          if (
+            signal.type === 'run-started'
+            && typeof signal.run_id === 'string'
+            && signal.run_id
+            && signal.run_id !== currentRunId
+            && !(isLoading.value && activeSessionId === sessionId)
+          ) {
+            // 该会话历史仍在加载时，等其就位再 apply snapshot（与刷新页路径一致），
+            // 否则 patchAssistantPartsAt 找不到目标行，整轮内容静默丢失
+            void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
+          }
+        },
+        isActive: () => signalSessionId === sessionId,
+        // 信令丢失靠 active-run 自愈，重连无限、退避放宽（封顶 30s）
+        maxAttempts: Infinity,
+        backoffMs: (attempt) => Math.min(30_000, 3_000 * 2 ** Math.min(attempt, 3)),
+        // 401/404：登录失效或会话已删，重连无意义，静默退出
+        fatalStatuses: [401, 404],
+        signal: controller.signal,
+      })
+    } finally {
       if (signalAbort === controller) {
         signalAbort = null
       }
-    } catch {
-      if (signalAbort === controller) {
-        signalAbort = null
-      }
-    }
-    // 断线重连：仍在该会话则退避重试（信令丢失靠 active-run 自愈，退避可放宽）
-    if (signalSessionId === sessionId) {
-      const delay = Math.min(30_000, 3_000 * 2 ** Math.min(attempt, 3))
-      signalRetryTimer = setTimeout(() => {
-        signalRetryTimer = null
-        void pumpSessionSignals(sessionId, attempt + 1)
-      }, delay)
     }
   }
 

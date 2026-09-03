@@ -38,7 +38,12 @@ def format_done() -> str:
 
 
 def encode_run_event(event: RunEvent) -> List[str]:
-    """将单个 RunEvent 编码为 0..n 条 SSE 行。"""
+    """将单个 RunEvent 编码为 0..n 条 SSE 行。
+
+    终态词汇统一：RunCompleted / RunAborted / RunError 均编码为
+    ``run.finished``（唯一流终止标记，载荷含 status / finish_reason /
+    usage / model_calls）；RunPaused(hitl_pending) 为非终态，走 run-status。
+    """
     if isinstance(event, StreamDone):
         return [format_done()]
 
@@ -57,37 +62,49 @@ def encode_run_event(event: RunEvent) -> List[str]:
 
     if isinstance(event, RunPaused):
         data: Dict[str, Any] = {
-            "type": "finish",
+            "type": "run-status",
+            "status": "hitl_pending",
             "finish_reason": event.finish_reason or event.reason,
             "usage": event.usage or {},
         }
-        if event.finish_reason:
-            data["finish_reason"] = event.finish_reason
         if event.model_calls:
             data["model_calls"] = event.model_calls
-        return [format_sse("finish", data)]
+        return [format_sse("run-status", data)]
 
     if isinstance(event, RunCompleted):
-        data: Dict[str, Any] = {
-            "type": "finish",
+        data = {
+            "type": "run.finished",
+            "status": "completed",
             "finish_reason": event.finish_reason or "stop",
             "usage": event.usage or {},
         }
         if event.model_calls:
             data["model_calls"] = event.model_calls
-        return [format_sse("finish", data)]
+        return [format_sse("run.finished", data)]
 
     if isinstance(event, RunAborted):
-        return [format_sse("abort", {"type": "abort", "reason": event.reason})]
+        return [
+            format_sse(
+                "run.finished",
+                {
+                    "type": "run.finished",
+                    "status": "interrupted",
+                    "finish_reason": event.reason,
+                    "usage": {},
+                },
+            )
+        ]
 
     if isinstance(event, RunError):
         return [
             format_sse(
-                "error",
+                "run.finished",
                 {
-                    "type": "error",
+                    "type": "run.finished",
+                    "status": "error",
                     "error": event.message,
                     "finish_reason": event.finish_reason or "error",
+                    "usage": {},
                 },
             )
         ]
@@ -123,29 +140,40 @@ def parse_sse_line_to_event(line: str) -> List[RunEvent]:
     if event_name == "hitl-required":
         return [HitlRequired(payload=data)]
 
-    if event_name == "finish":
+    if event_name == "run-status":
+        # hitl_pending 分段结束：非终态，usage 随载荷保留
+        if str(data.get("status") or "") == "hitl_pending":
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            model_calls = (
+                data.get("model_calls") if isinstance(data.get("model_calls"), list) else []
+            )
+            return [
+                RunPaused(
+                    reason="hitl_pending",
+                    finish_reason="hitl_pending",
+                    usage=usage,
+                    model_calls=model_calls,
+                )
+            ]
+        return []
+
+    if event_name == "run.finished":
         reason = str(data.get("finish_reason") or "stop")
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
         model_calls = (
             data.get("model_calls") if isinstance(data.get("model_calls"), list) else []
         )
-        if reason == "hitl_pending":
+        status = str(data.get("status") or "completed")
+        if status == "error":
             return [
-                RunPaused(
-                    reason="hitl_pending",
+                RunError(
+                    message=str(data.get("error") or "生成失败，请稍后重试"),
                     finish_reason=reason,
-                    usage=usage,
-                    model_calls=model_calls,
                 )
             ]
+        if status == "interrupted":
+            return [RunAborted(reason=reason)]
         return [RunCompleted(finish_reason=reason, usage=usage, model_calls=model_calls)]
-
-    if event_name == "abort":
-        return [RunAborted(reason=str(data.get("reason") or "abort"))]
-
-    if event_name == "error":
-        msg = str(data.get("error") or data.get("content") or "error")
-        return [RunError(message=msg, finish_reason=str(data.get("finish_reason") or "error"))]
 
     return [WireFrame(event=event_name, data=data)]
 

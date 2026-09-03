@@ -40,4 +40,4 @@ def test_sanitize_tool_error_unknown_for_free_text() -> None:
 
 def test_sanitize_tool_error_from_explicit_header() -> None:
     raw = "[tool_error category=network_unreachable retryable=true]\nConnectError"
-    assert sanitize_tool_error(raw) == "连接失败"
+    assert sanitize_tool_error(raw) == "连接失败，可稍后重试"

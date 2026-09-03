@@ -70,3 +70,37 @@ RECALL_SCENARIOS: list[dict[str, Any]] = [
         "expect_label": "学习计划",
     },
 ]
+
+# 自建配对负例：同领域但无记忆线索的提问 → 断言不误召回
+# （LongMemEval S 档无拒答类题型，负例全部来自这里）
+NEGATIVE_SCENARIOS: list[dict[str, Any]] = [
+    {
+        "id": "neg-doc-format-generic",
+        "query": "写技术文档一般有哪些通用的排版建议？",
+        "forbidden_snippets": ["表格化、简体中文"],
+    },
+    {
+        "id": "neg-package-manager-generic",
+        "query": "npm、yarn 和 pnpm 各自的特点是什么？（通用知识角度）",
+        "forbidden_snippets": ["workspace 用 pnpm -w"],
+    },
+    {
+        "id": "neg-timeout-generic",
+        "query": "常见的 HTTP 超时排查思路有哪些？",
+        "forbidden_snippets": ["指数退避重试解决过多次"],
+    },
+    {
+        "id": "neg-learning-generic",
+        "query": "现在学前端还是后端就业前景更好？",
+        "forbidden_snippets": ["异步编程篇"],
+    },
+]
+
+# LongMemEval 路径的负例提问（通用常识，与导入会话无关；行为断言为主）
+NEGATIVE_QUERIES: list[str] = [
+    "一千米等于多少米？请直接回答。",
+    "快速排序的平均时间复杂度是多少？请直接回答。",
+    "水的沸点在标准大气压下是多少摄氏度？请直接回答。",
+    "HTTP 200 状态码代表什么？请直接回答。",
+    "字符串 'hello' 的长度是多少？请直接回答。",
+]

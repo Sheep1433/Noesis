@@ -116,6 +116,7 @@ summarization:
 
 agent_runtime:
   tool_output_max_chars: 24000
+  read_file_max_chars: 20000
   governor:
     tool_calls_enabled: true
     tool_calls_total: null
@@ -221,7 +222,7 @@ checkpoint:
 # Web 检索工具（COMMON_QA / SUPER_AGENT_QA；TAVILY_API_KEY 见 .env.prod）
 web_tools:
   max_search_results: 8
-  fetch_max_chars: 4096
+  fetch_max_chars: 16000
   fetch_timeout_seconds: 30
   ddg_backends: mojeek,yandex
 

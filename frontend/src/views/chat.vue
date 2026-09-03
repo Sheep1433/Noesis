@@ -38,6 +38,7 @@ import {
 } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { useTicker } from '@/hooks/useTicker'
 import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
@@ -261,6 +262,13 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     currentIndex.value = sessionId
     clearComposerQueue()
     businessStore.todos = []
+    // 生成中态是「当前视图」的状态：切会话即换视图，必须重置——
+    // 目标会话无活跃 run 时 resumeActiveRun 直接返回（不派发快照、
+    // 不触发 onSnapshot 重置），旧会话的 loading 会残留成假「继续生成」
+    stylizingLoading.value = false
+    retryingLabel.value = ''
+    reconnectAvailable.value = false
+    lastRunStatusNotice = ''
 
     qa_type.value = qt
     businessStore.update_qa_type(qt)
@@ -452,26 +460,14 @@ function changeChatMode(targetQaType: ChatModeQaType) {
 
 // 对话等待提示词图标
 const stylizingLoading = ref(false)
-const processingNow = ref(Date.now())
-let processingTimer: ReturnType<typeof setInterval> | null = null
+const { now: processingNow, start: startTicker, stop: stopTicker } = useTicker()
 
 function startProcessingClock() {
-  processingNow.value = Date.now()
-  if (processingTimer !== null) {
-    return
-  }
-  processingTimer = setInterval(() => {
-    processingNow.value = Date.now()
-  }, 1000)
+  startTicker()
 }
 
 function stopProcessingClock() {
-  if (processingTimer === null) {
-    retryingLabel.value = ''
-    return
-  }
-  clearInterval(processingTimer)
-  processingTimer = null
+  stopTicker()
   retryingLabel.value = ''
 }
 
@@ -3114,9 +3110,9 @@ function onComposerPaste(e: ClipboardEvent) {
                   :background-color="backgroundColorVariable"
                 />
                 <div class="chat-top-bar__mode">
+                  <!-- 多会话并发：切换模式=新开会话，不因当前会话生成中而置灰 -->
                   <ChatModeSelector
                     :qa-type="qa_type"
-                    :disabled="sseIsLoading"
                     @select="changeChatMode"
                   />
                 </div>
@@ -3345,29 +3341,14 @@ function onComposerPaste(e: ClipboardEvent) {
                       <template v-if="item.messageContent?.version === 1">
                         <div class="chat-message-column assistant-message-column">
                           <!-- Codex 风格的整轮过程摘要：放在回复卡片上方。 -->
-                          <div
+                          <RunMetaLine
                             v-if="runElapsedText(item) || shouldCollapseAssistantRun(item) || assistantSubagentCount(item) > 0"
-                            class="assistant-run-meta"
-                          >
-                            <button
-                              v-if="shouldCollapseAssistantRun(item)"
-                              type="button"
-                              class="assistant-run-meta__toggle"
-                              :aria-expanded="isAssistantRunExpanded(item)"
-                              @click="toggleAssistantRun(item)"
-                            >
-                              <span>{{ runElapsedText(item) }}</span>
-                              <span
-                                class="assistant-run-meta__chevron"
-                                :class="{ 'assistant-run-meta__chevron--expanded': isAssistantRunExpanded(item) }"
-                                aria-hidden="true"
-                              >›</span>
-                            </button>
-                            <span v-else class="assistant-run-meta__elapsed">{{ runElapsedText(item) }}</span>
-                            <span v-if="assistantSubagentCount(item) > 0" class="assistant-run-meta__subagents">
-                              · {{ assistantSubagentCount(item) }} 个子 Agent
-                            </span>
-                          </div>
+                            :elapsed="runElapsedText(item)"
+                            :collapsible="shouldCollapseAssistantRun(item)"
+                            :expanded="isAssistantRunExpanded(item)"
+                            :suffix="assistantSubagentCount(item) > 0 ? `· ${assistantSubagentCount(item)} 个子 Agent` : ''"
+                            @toggle="toggleAssistantRun(item)"
+                          />
                           <div class="assistant-unified-card">
                             <ConversationPartsRenderer
                               :content="item.messageContent"
@@ -3386,14 +3367,9 @@ function onComposerPaste(e: ClipboardEvent) {
                               :show-action-bar="false"
                               @reader-failed="() => onFailedReader(index)"
                             />
-                            <div
+                            <AssistantToolFailureBlocker
                               v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
-                              class="assistant-tool-failure-blocker"
-                              role="status"
-                            >
-                              <span class="assistant-tool-failure-blocker__icon" aria-hidden="true">!</span>
-                              <span>本轮未完成</span>
-                            </div>
+                            />
                             <AssistantStreamingIndicator
                               v-if="showAssistantReplyLoading(index, item.role)"
                               data-testid="streaming-indicator"
@@ -3647,54 +3623,31 @@ function onComposerPaste(e: ClipboardEvent) {
                             {{ toolDisplayMode === 'compact' ? '简洁模式（点击切详细）' : '详细模式（点击切简洁）' }}
                           </n-tooltip>
 
-                          <div class="chat-send-btn-wrap shrink-0">
-                            <n-tooltip
-                              :disabled="!composerStopMode"
-                              placement="top"
-                            >
-                              <template #trigger>
-                                <n-float-button
-                                  position="relative"
-                                  :width="36"
-                                  :height="36"
-                                  :disabled="!composerStopMode && sendDisabled"
-                                  :type="composerStopMode ? 'primary' : 'default'"
-                                  :data-testid="composerStopMode ? 'stop-button' : 'send-button'"
-                                  color
-                                  :class="[
-                                    'chat-send-btn',
-                                    composerStopMode && 'chat-send-btn--stop',
-                                  ]"
-                                  @click.stop="handleCreateStylized()"
-                                >
-                                  <span
-                                    v-if="composerStopMode"
-                                    class="chat-stop-icon"
-                                    aria-label="停止生成"
-                                  ></span>
-                                  <div
-                                    v-else
-                                    class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
-                                  ></div>
-                                </n-float-button>
-                              </template>
-                              停止生成
-                            </n-tooltip>
-                          </div>
+                          <n-tooltip
+                            :disabled="!composerStopMode"
+                            placement="top"
+                          >
+                            <template #trigger>
+                              <StopSendButton
+                                class="shrink-0"
+                                :stop-mode="composerStopMode"
+                                :send-disabled="sendDisabled"
+                                @action="handleCreateStylized()"
+                              />
+                            </template>
+                            停止生成
+                          </n-tooltip>
                         </template>
                       </ChatComposerToolbar>
                     </div>
                   </n-space>
                 </div>
               </div>
-              <div
+              <SessionStatsLine
                 v-if="sessionStats && formatStatsLine(sessionStats, statsLineTemplate)"
-                class="session-stats-line"
-                role="status"
-                aria-live="polite"
-              >
-                {{ formatStatsLine(sessionStats, statsLineTemplate) }}
-              </div>
+                class="chat__stats-line"
+                :line="formatStatsLine(sessionStats, statsLineTemplate)"
+              />
             </div>
 
             <!-- 桌面端左缘用户消息导航轨：等间距居中刻度，点击跳转；浮动预览卡片跟随悬停/当前项 -->
@@ -3954,30 +3907,6 @@ function onComposerPaste(e: ClipboardEvent) {
   }
 }
 
-.assistant-tool-failure-blocker {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 7px 2px 3px;
-  color: var(--noesis-color-text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.assistant-tool-failure-blocker__icon {
-  display: inline-flex;
-  flex: 0 0 16px;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  color: var(--noesis-color-warning);
-  font-size: 11px;
-  font-weight: 700;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-}
-
 .chat-composer--dragover {
   border-color: var(--noesis-color-primary);
   background: var(--noesis-color-primary-bg-subtle);
@@ -3999,29 +3928,6 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .chat-composer-row {
   min-height: 36px;
-}
-
-.chat-send-btn-wrap {
-  z-index: 1;
-  display: flex;
-  align-items: center;
-}
-
-.chat-send-btn-wrap :deep(.n-float-button) {
-  position: relative !important;
-  inset: auto !important;
-}
-
-.chat-send-btn--stop {
-  box-shadow: 0 0 0 2px var(--noesis-color-primary-ring);
-}
-
-.chat-stop-icon {
-  display: block;
-  width: 12px;
-  height: 12px;
-  background-color: var(--noesis-color-bg-elevated);
-  border-radius: 2px;
 }
 
 .chat-history-sider {
@@ -4501,64 +4407,14 @@ function onComposerPaste(e: ClipboardEvent) {
   pointer-events: none;
 }
 
-.session-stats-line {
+.chat__stats-line {
   box-sizing: border-box;
   width: 100%;
   padding: 2px 16px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
   letter-spacing: 0.01em;
-  text-align: center;
 }
 
 /* Codex 风格的整轮过程摘要入口 */
-.assistant-run-meta {
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-  position: relative;
-  z-index: 1;
-  margin-bottom: 6px;
-  padding: 0 2px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
-  letter-spacing: 0.01em;
-}
-.assistant-run-meta__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--noesis-color-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-  cursor: pointer;
-  transition: color 0.15s ease;
-}
-.assistant-run-meta__toggle:hover {
-  color: var(--noesis-color-text);
-}
-.assistant-run-meta__chevron {
-  display: inline-block;
-  font-size: 16px;
-  line-height: 12px;
-  transform: translateY(-1px);
-  transition: transform 0.15s ease;
-}
-.assistant-run-meta__chevron--expanded {
-  transform: translateY(-1px) rotate(90deg);
-}
-
-.assistant-run-meta__subagents {
-  margin-left: 8px;
-  color: var(--noesis-color-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
 .assistant-message-actions {
   display: flex;
   align-items: center;
@@ -4756,6 +4612,7 @@ function onComposerPaste(e: ClipboardEvent) {
 
   .chat-user-message-actions {
     width: 100%;
+    margin-top: 4px;
     margin-left: 0;
     margin-right: 0;
   }

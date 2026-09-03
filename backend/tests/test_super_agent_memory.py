@@ -38,8 +38,25 @@ def test_memory_sources_order_user_before_agents() -> None:
 
 
 def test_task_worker_excludes_memory_middleware() -> None:
+    from types import SimpleNamespace
+
     backend = MagicMock()
-    worker = _compile_task_worker(backend, [], [], user_id="u1", model_id=None)
+    with patch(
+        "noesis.llm.factory.ModelConfig",
+        SimpleNamespace(
+        model_api_key="test-key",
+        summarization_model_name="",
+        model_type="openai",
+        model_name="test-model",
+        model_temperature="0.7",
+        model_base_url="https://example.invalid/v1",
+        max_tokens=1024,
+        max_retries=1,
+        streaming=False,
+        request_timeout=30.0,
+    ),
+    ):
+        worker = _compile_task_worker(backend, [], [], user_id="u1", model_id=None)
     # worker 是编译好的 runnable；从其 nodes 检查中间件装配结果不可达，
     # 改为验证 SUBAGENT 栈构建不含 MemoryMiddleware（memory 只挂主 Agent）
     from noesis.factory import build_noesis_middleware

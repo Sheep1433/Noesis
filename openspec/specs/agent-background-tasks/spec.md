@@ -1,7 +1,7 @@
 # agent-background-tasks Specification
 
 ## Purpose
-TBD - created by archiving change super-agent-async-tasks. Update Purpose after archive.
+本能力规定 SuperAgent 后台子 Agent 任务：子会话身份与进程内执行模型、`start_task` 单工具同异步（run_in_background）、task-worker 编译契约、followup 续话、子会话详情与事件流、完成通知注入（含来源清单回流）、后台 shell 命令任务、协作式停止与部分成果回收、输出截断终态与子会话用量统计。Run 事件流投递契约见 `agent-delivery`；审批策略见 `agent-hitl`；研究弧来源聚合见 `platform-chat`。
 ## Requirements
 ### Requirement: 子 Agent 会话身份
 
@@ -49,8 +49,6 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 - **WHEN** 后端进程重启
 - **THEN** 重启前活跃的 child run SHALL 被启动对账标记为 error，assistant 消息同步置 error
 - **AND** `check_task` 对重启前任务 SHALL 返回「任务不存在」类提示，不抛异常
-
-## ADDED Requirements
 
 ### Requirement: 单工具同异步参数（run_in_background）
 
@@ -119,19 +117,49 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 
 ### Requirement: 子会话详情与事件流
 
-子会话正文 SHALL 读取标准会话消息（`GET /sessions/{id}/messages`，与其他会话同一协议）；实时过程 SHALL 经 run 事件流订阅（`GET /runs/{run_id}/stream`）。checkpointer SHALL 只用于 LangGraph 执行恢复，SHALL NOT 作为产品消息读模型。事件流契约：
+子会话正文 SHALL 读取标准会话消息（`GET /sessions/{id}/messages`，与其他会话同一协议）；实时过程 SHALL 经 run 事件流订阅（`GET /runs/{run_id}/stream`），事件词汇、编码与恢复语义 SHALL 与主会话 run 完全一致（见 `agent-delivery`）：帧级事件（`text-delta` / `reasoning-delta` / `tool-input-*` / `tool-output-available` / `context-update` / `stats-update` 等）+ run 级生命周期事件（`hitl-required` / `run.finished`）。checkpointer SHALL 只用于 LangGraph 执行恢复，SHALL NOT 作为产品消息读模型。
 
-- 连接 SHALL 先订阅、再取权威快照、从快照序号重放历史（不重不漏，按 (type, sequence) 去重）；
-- live 队列中低于客户端游标的事件 SHALL 跳过（run.started / run.finished / approval 事件不受过滤）；
+子会话的 assistant 消息内容 SHALL 与主会话使用同一 multipart 格式，并由共享投影逻辑生成：检索类工具（`web_search` / `web_fetch` / `search_knowledge_base`）的输出 SHALL 被解析为结构化 retrieval parts 持久化（与主 run 桥接层同构），检索工具 part 的展示输出 SHALL 为「检索到 N 条来源」摘要。子会话详情视图 SHALL 展示该子会话的来源面板（基于其落库 retrieval parts，会话内按 canonical URL 去重）。
+
+事件流契约：
+
+- 连接 SHALL 先订阅、再取权威快照、按 sequence 连续性重放 durable 事件（transient 事件仅在线投递，不重放）；SHALL NOT 存在按事件类型的序号豁免白名单；
+- 前端 SHALL 从帧级事件自组装 assistant 投影，投影函数族与主聊天为同一实现；SHALL NOT 依赖服务端 `message.updated` 全量投影事件；
 - `run.finished` SHALL 终止流并发送 `[DONE]`；
-- 客户端断开（关闭详情抽屉）SHALL 立即退订（generator finally），终态 run 只发快照 + `[DONE]`、不建立订阅。
+- 客户端断开（关闭详情抽屉）SHALL 立即退订（generator finally），终态 run 只发快照 + `[DONE]`、不建立订阅；
+- 断流自愈 SHALL 与主聊天同模式：有界重试 + 权威 run 快照收口；重试耗尽且 run 非终态时 SHALL 向用户展示可感知的失败/重连入口，SHALL NOT 静默停留在「生成中」。
 
 前端 SHALL 复用主 Agent 的消息渲染组件（Markdown / 工具块 / 审批卡 / 输入框）；父会话只展示带 child session 引用的轻量卡片，目录与卡片打开同一详情视图。
+
+#### Scenario: 子会话来源同构落库
+
+- **WHEN** 子 Agent 执行 `web_search` 并获得结果
+- **THEN** 子会话 assistant 消息内容 SHALL 含对应 retrieval part（query、results、truncated），与主会话同格式
+- **AND** 该工具 part 的输出 SHALL 为「检索到 N 条来源」而非原始结果文本
+
+#### Scenario: 子会话详情展示来源
+
+- **WHEN** 用户打开子会话详情（抽屉 / 任务目录）
+- **THEN** 视图 SHALL 基于子会话落库 retrieval parts 渲染来源面板，会话内按 canonical URL 去重
+- **AND** 存量子会话（无 retrieval parts）SHALL 不渲染来源面板，其余展示不变
 
 #### Scenario: 断线重连恢复
 
 - **WHEN** 详情抽屉重开或刷新后按游标重连
-- **THEN** SHALL 从权威快照序号之后重放，不重复、不丢消息
+- **THEN** SHALL 从权威快照 sequence 之后连续重放 durable 事件，不重复、不丢消息
+- **AND** 断线期间的 transient 事件 SHALL NOT 被补发，客户端状态仍与快照一致
+
+#### Scenario: 帧级事件自组装投影
+
+- **WHEN** 子 Agent run 产生 text delta 与工具调用
+- **THEN** 详情抽屉 SHALL 以与主聊天相同的投影函数族从帧事件组装 assistant parts
+- **AND** 流式中与终态后的渲染结果 SHALL 与落库消息回放一致
+
+#### Scenario: 重试耗尽可见失败
+
+- **WHEN** 详情抽屉的流订阅连续重试达到上限且 run 仍非终态
+- **THEN** 视图 SHALL 展示连接失败提示或重连入口
+- **AND** SHALL NOT 持续显示「正在生成」或可用停止按钮
 
 #### Scenario: 关闭详情退订
 
@@ -145,12 +173,19 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 
 ### Requirement: 完成通知注入
 
-后台任务到达终态时 SHALL 向所属会话的待送达通知队列写入一条通知（task_id、终态、结果预览 ≤80 字）。该会话下一次 run 启动组装输入前 SHALL drain 队列并以 `[系统通知]` 前缀注入本轮上下文，注入一次性且 SHALL NOT 写入消息落库内容。系统 SHALL NOT 主动为通知启动 run；前端轮询为用户侧兜底触达。`awaiting_approval` SHALL NOT 注入模型通知。
+后台任务到达终态时 SHALL 向所属会话的待送达通知队列写入一条通知（task_id、终态、结果预览 ≤80 字），且通知负载 SHALL 附带该子会话的**去重来源清单**（canonical URL 归一化去重、有界；结构化字段，不混入预览文本）。该会话下一次 run 启动组装输入前 SHALL drain 队列并以 `[系统通知]` 前缀注入本轮上下文（注入文本以小结为主、来源清单以有界附录段携带），注入一次性且 SHALL NOT 写入消息落库内容；主 run 桥接层 SHALL 将通知携带的来源清单登记为带 origin 标记（归属该子 Agent 任务）的 retrieval parts，落在收取发生的 assistant 消息上持久化。系统 SHALL NOT 主动为通知启动 run；前端轮询为用户侧兜底触达。`awaiting_approval` SHALL NOT 注入模型通知。
+
+#### Scenario: 通知携带来源清单并登记
+
+- **WHEN** 子 Agent 终态且其子会话含检索来源
+- **THEN** 终态通知负载 SHALL 携带去重来源清单（有界）
+- **AND** 通知注入轮的 assistant 消息 SHALL 落库带 origin（该子 Agent 任务）标记的 retrieval parts
+- **AND** 注入的用户消息落库内容 SHALL 与通知注入前一致（来源只进 assistant parts）
 
 #### Scenario: 下一轮收到通知
 
 - **WHEN** 后台任务完成，用户随后发送新消息
-- **THEN** 本轮模型输入 SHALL 以 `[系统通知]` 前缀包含该任务完成提示与 check_task 指引
+- **THEN** 本轮模型输入 SHALL 以 `[系统通知]` 前缀包含该任务完成提示、有界来源附录与 check_task 指引
 - **AND** 再下一轮 SHALL NOT 重复出现该通知
 
 #### Scenario: 用户消息原文不受污染
@@ -169,6 +204,57 @@ SuperAgent SHALL 通过进程内 `BackgroundSubagentExecutor` 执行委派子任
 
 - **WHEN** 后台任务完成但用户未再发消息
 - **THEN** 系统 SHALL NOT 自行启动模型调用；前端任务面板 SHALL 显示终态
+
+### Requirement: check_task 携带来源清单
+
+`check_task` 收取子任务结果时，返回文本 SHALL 在终态小结后附该子会话的**去重来源清单段**（有界，受工具输出预算约束）；主 run 桥接层 SHALL 将其登记为带 origin 标记（归属该子 Agent 任务）的 retrieval parts，落在收取发生的 assistant 消息上持久化。清单为模型侧纯增益：模型 SHALL NOT 被要求在正文中复述来源清单。
+
+#### Scenario: check_task 收取登记来源
+
+- **WHEN** 主 Agent `check_task` 收取一个含检索来源的终态子任务
+- **THEN** 返回文本 SHALL 附有界来源清单段
+- **AND** 收取轮的 assistant 消息 SHALL 落库带 origin（该子 Agent 任务）标记的 retrieval parts
+
+#### Scenario: 无来源子任务
+
+- **WHEN** 子任务无任何检索来源
+- **THEN** `check_task` 返回与通知负载 SHALL NOT 携带空清单占位
+
+### Requirement: 来源身份与跨边界去重
+
+来源身份 SHALL 为 canonical URL（去 tracking 参数、统一协议与 host 大小写等归一化）；子会话来源清单提取与主会话研究弧聚合 SHALL 按同一归一化规则去重，前后端 SHALL 共享同一规则（含测试对齐）。同一 canonical URL 被多个贡献者检索或引用时 SHALL 合并为单一条目并携带完整 origin 列表；去重作用域为单个子会话内与研究弧内（跨弧不去重、不渗透）。
+
+#### Scenario: 多子 Agent 同源合并
+
+- **WHEN** 两个子 Agent 均检索并引用了同一 canonical URL
+- **THEN** 主会话研究弧聚合面板中该来源 SHALL 为单一条目，origin 列表含两个子 Agent 任务
+- **AND** 面板计数 SHALL 只计一次
+
+#### Scenario: 跨弧不渗透
+
+- **WHEN** 相邻两个研究弧（两次真实用户消息发起）均使用了同一来源
+- **THEN** 该来源 SHALL 在两个弧的面板中各出现一次，SHALL NOT 相互合并或递增对方计数
+
+### Requirement: 子 Agent run 写操作 SHALL 对齐主链路错误契约
+
+子 Agent run 的写操作端点（stop、HITL resume、subagent-followup）SHALL 使用类型化异常映射：资源不存在 SHALL 返回 404，状态冲突（重复决策、非法状态迁移）SHALL 返回 409，SHALL NOT 以 500 或字符串嗅探表达业务冲突。`POST /api/chat/runs/{run_id}/stop` 对子 Agent run SHALL 返回 `RunSnapshot` 契约的响应体（status 覆写 stopping 的受理快照）。写操作族 SHALL 与 `hitl/resume` 一致实施 CSRF 校验。
+
+#### Scenario: stop 响应为快照契约
+
+- **WHEN** 用户对 running 子 Agent run 调用 stop
+- **THEN** 响应 data SHALL 为 RunSnapshot 形状（含 id/status/sequence 等字段）
+- **AND** SHALL NOT 因响应序列化失败返回 500
+
+#### Scenario: 重复审批决策返回 409
+
+- **WHEN** 用户对非 awaiting_approval 的子 Agent run 再次提交审批决策
+- **THEN** 系统 SHALL 返回 409 与冲突语义文案
+- **AND** SHALL NOT 返回 500
+
+#### Scenario: 写操作 CSRF 一致
+
+- **WHEN** 客户端不带 CSRF token 调用子 Agent run 的 stop / followup 写端点
+- **THEN** 系统 SHALL 与 hitl/resume 一致拒绝请求
 
 ### Requirement: 后台命令任务（execute run_in_background）
 

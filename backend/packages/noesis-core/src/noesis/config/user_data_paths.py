@@ -50,18 +50,13 @@ def ensure_user_root(user_id: str | int) -> Path:
 
 
 _AGENTS_MD_SEED = """<!-- Noesis 用户记忆：Agent 会在你明确要求「记住」时更新此文件 -->
-
 ## 关于我
-（待补充）
 
 ## 工作偏好
-（待补充）
 """
 
 _USER_MD_SEED = """<!-- Noesis 用户画像：可在设置页或上下文面板编辑 -->
-
 ## 基本信息
-（待补充）
 """
 
 

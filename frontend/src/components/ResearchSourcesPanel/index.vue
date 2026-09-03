@@ -6,15 +6,17 @@ import { NCollapse, NCollapseItem, NDrawer, NDrawerContent, NIcon } from 'naive-
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
-import { safeWebUrl } from '@/views/chat/citationRendering'
+import { buildCitationIndex, citationKey, safeWebUrl } from '@/views/chat/citationRendering'
 
 const props = defineProps<{
-  /** 弧内去重来源（首见序存储；展示序号见 numbers） */
-  entries: ArcSourceEntry[]
-  /** 被交付正文引用（URL 归因）的条目 key 集合 */
-  citedKeys: Set<string>
-  /** 引用优先编号（key → 序号）：被引用 1..N 按引用首现序，未引用接续排后 */
-  numbers: Map<string, number>
+  /** 弧内去重来源（首见序存储；展示序号见 numbers）——弧模式 */
+  entries?: ArcSourceEntry[]
+  /** 被交付正文引用（URL 归因）的条目 key 集合——弧模式 */
+  citedKeys?: Set<string>
+  /** 引用优先编号（key → 序号）：被引用 1..N 按引用首现序，未引用接续排后——弧模式 */
+  numbers?: Map<string, number>
+  /** 扁平来源列表（子会话等场景）：按 canonical key 去重、首见序编号、无引用分组 */
+  results?: RetrievalResultUi[]
 }>()
 
 const router = useRouter()
@@ -23,9 +25,34 @@ const drawerOpen = ref(false)
 const selectedCitationNumber = ref<number | null>(null)
 const sourceListRef = ref<HTMLElement | null>(null)
 
+/** 扁平模式归一：去重条目（首见序）+ 序号映射（与正文 badge 同一映射） */
+const flatEntries = computed<ArcSourceEntry[]>(() => {
+  if (!props.results) {
+    return []
+  }
+  const seen = new Map<string, RetrievalResultUi>()
+  for (const result of props.results) {
+    const key = citationKey(result)
+    if (!seen.has(key)) {
+      seen.set(key, result)
+    }
+  }
+  return [...seen.entries()].map(([key, result]) => ({ key, result, origins: [] }))
+})
+
+const effectiveEntries = computed<ArcSourceEntry[]>(() =>
+  props.results ? flatEntries.value : (props.entries ?? []),
+)
+const effectiveCitedKeys = computed<Set<string>>(() =>
+  props.results ? new Set() : (props.citedKeys ?? new Set()),
+)
+const effectiveNumbers = computed<Map<string, number>>(() =>
+  props.results ? buildCitationIndex(props.results) : (props.numbers ?? new Map()),
+)
+
 /** 计数为去重数（条目已按 canonical URL 去重） */
-const totalCount = computed(() => props.entries.length)
-const citedCount = computed(() => props.entries.filter((e) => props.citedKeys.has(e.key)).length)
+const totalCount = computed(() => effectiveEntries.value.length)
+const citedCount = computed(() => effectiveEntries.value.filter((e) => effectiveCitedKeys.value.has(e.key)).length)
 
 interface NumberedEntry {
   entry: ArcSourceEntry
@@ -33,18 +60,18 @@ interface NumberedEntry {
 }
 
 /** 按共享编号映射取序号并升序排列（正文 badge 与本面板同一映射） */
-function numbered(entries: ArcSourceEntry[], cited: boolean): NumberedEntry[] {
-  return props.entries
-    .map((entry) => ({ entry, number: props.numbers.get(entry.key) ?? 0 }))
-    .filter((item) => props.citedKeys.has(item.entry.key) === cited)
+function numbered(cited: boolean): NumberedEntry[] {
+  return effectiveEntries.value
+    .map((entry) => ({ entry, number: effectiveNumbers.value.get(entry.key) ?? 0 }))
+    .filter((item) => effectiveCitedKeys.value.has(item.entry.key) === cited)
     .sort((a, b) => a.number - b.number)
 }
 
 /** 引用子集（交付正文 URL 归因命中；序号与正文 badge 一致） */
-const citedEntries = computed<NumberedEntry[]>(() => numbered(props.entries, true))
+const citedEntries = computed<NumberedEntry[]>(() => numbered(true))
 
-/** 其余检索来源（被检索但未被正文引用） */
-const uncitedEntries = computed<NumberedEntry[]>(() => numbered(props.entries, false))
+/** 其余检索来源（被检索但未被正文引用；扁平模式即全部条目） */
+const uncitedEntries = computed<NumberedEntry[]>(() => numbered(false))
 
 function kbLocation(result: RetrievalResultUi) {
   return {

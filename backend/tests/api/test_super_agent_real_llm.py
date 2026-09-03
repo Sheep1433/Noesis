@@ -12,6 +12,8 @@ import re
 
 import pytest
 
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
+
 # 深度研究可能跑较久，给足上限
 DEEP_RESEARCH_DEADLINE = 600
 

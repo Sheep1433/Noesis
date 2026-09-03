@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { MessageContent, TaskCatalogEntry } from '@/api/chat'
+import type { CitationIndex } from '@/views/chat/citationRendering'
 import type { RetrievalResultUi, RetrievalUiPart, ToolUiPart } from '@/views/chat/messageParts'
-import { NCollapse, NCollapseItem } from 'naive-ui'
 import { computed } from 'vue'
 import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import MarkdownPreview from '@/components/MarkdownPreview/index.vue'
+import ParallelToolsGroup from '@/components/ParallelToolsGroup/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
@@ -22,6 +23,8 @@ const props = withDefaults(defineProps<{
   collapseSignal?: number
   showActionBar?: boolean
   retrievalResults?: RetrievalResultUi[]
+  /** 引用编号索引（研究弧的引用优先编号）；缺省时 MarkdownPreview 回退自算首见序 */
+  citationIndex?: CitationIndex
   msgMetadata?: Record<string, unknown> | null
   qaType?: string
   /** start_task 委派卡的后台任务目录查询（主会话宿主提供） */
@@ -39,6 +42,7 @@ const props = withDefaults(defineProps<{
   collapseSignal: 0,
   showActionBar: false,
   retrievalResults: () => [],
+  citationIndex: undefined,
   msgMetadata: null,
   qaType: 'COMMON_QA',
   taskForToolPart: undefined,
@@ -102,44 +106,16 @@ function entryKey(entry: (typeof entries.value)[number], fallback: number): stri
       :duration-ms="entry.part.duration_ms"
       :child-parts="entry.childParts"
     />
-    <div
+    <ParallelToolsGroup
       v-else-if="entry.kind === 'parallel_tools'"
-      class="parallel-tools-group"
-      :class="[{ 'parallel-tools-group--compact': compactTools }, appearance === 'light' ? 'parallel-tools-group--light' : '']"
-    >
-      <n-collapse>
-        <n-collapse-item
-          :key="`${parallelGroupKey}-${index}`"
-          name="parallel-tools"
-          :default-expanded="liveStreaming"
-        >
-          <template #header>
-            <div class="parallel-tools-group__header">
-              并行工具 · {{ entry.parts.length }} 个
-            </div>
-          </template>
-          <div class="parallel-tools-group__body">
-            <ToolCallCollapse
-              v-for="toolPart in entry.parts"
-              :key="toolPart.tool_call_id ?? toolPart.id"
-              :appearance="appearance"
-              :name="toolPart.name"
-              :arguments="toolPart.input"
-              :result="toolPart.output"
-              :error="toolPart.error"
-              :status="toolPart.status"
-              :state="toolPart.state"
-              :error-category="toolPart.errorCategory"
-              :exit-code="toolPart.exitCode"
-              :truncated="toolPart.truncated"
-              :duration-ms="toolPart.duration_ms"
-              :collapse-signal="collapseSignal"
-              :retrieval-part="toolPart.tool_call_id ? retrievalByToolCallId.get(toolPart.tool_call_id) : undefined"
-            />
-          </div>
-        </n-collapse-item>
-      </n-collapse>
-    </div>
+      :parts="entry.parts"
+      :appearance="appearance"
+      :compact="compactTools"
+      :default-expanded="liveStreaming"
+      :group-key="parallelGroupKey"
+      :collapse-signal="collapseSignal"
+      :retrieval-by-tool-call-id="retrievalByToolCallId"
+    />
     <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
       <BackgroundSubagentCollapse
         v-if="entry.part.name === 'start_task'"
@@ -174,6 +150,7 @@ function entryKey(entry: (typeof entries.value)[number], fallback: number): stri
       v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
       :content="entry.part.content || ''"
       :retrieval-results="retrievalResults"
+      :citation-index="citationIndex"
       :msg-metadata="msgMetadata"
       :is-init="isInit"
       :is-view="isView"
@@ -186,75 +163,6 @@ function entryKey(entry: (typeof entries.value)[number], fallback: number): stri
 </template>
 
 <style lang="scss" scoped>
-/* 迁自 chat.vue：并行工具组与压缩边界样式随渲染器走（scoped 样式不跨组件） */
-.parallel-tools-group--light {
-  margin: 5px 0;
-  padding: 6px 10px;
-  border: 1px solid var(--noesis-block-light-border);
-  border-left: 3px solid var(--noesis-block-light-accent);
-  border-radius: var(--noesis-radius-md);
-  background: var(--noesis-block-light-bg);
-}
-
-/* 简洁模式与普通工具行共用同一条无框 disclosure 轨道。 */
-.parallel-tools-group--compact {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__header) {
-  min-height: 0;
-  padding: 1px 0 !important;
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__header-main) {
-  min-width: 0;
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__content-wrapper) {
-  border-top: none;
-}
-
-.parallel-tools-group--compact .parallel-tools-group__header {
-  min-height: 24px;
-  line-height: 24px;
-}
-
-.parallel-tools-group__header {
-  display: flex;
-  align-items: center;
-  min-height: 22px;
-  width: 100%;
-  font-size: 12px;
-  color: var(--noesis-color-text-secondary);
-}
-
-.parallel-tools-group :deep(.n-collapse-item__header) {
-  padding: 0 !important;
-}
-
-.parallel-tools-group :deep(.n-collapse-item__content-inner) {
-  padding: 0 !important;
-}
-
-.parallel-tools-group :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-block-light-divider);
-}
-
-.parallel-tools-group__body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.parallel-tools-group__body :deep(.tool-call--light) {
-  margin: 0;
-  box-shadow: none;
-}
-
 .compact-boundary {
   display: flex;
   align-items: center;

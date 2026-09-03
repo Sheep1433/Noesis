@@ -31,12 +31,12 @@
 
 ### Requirement: Auth 域与框架和持久化隔离
 
-系统 SHALL 使 `noesis_server.domain.auth` 的 entity、policy 与 repository port 可在不加载 FastAPI、SQLAlchemy、ORM model 或平台 exception 的环境中导入和测试。Session 领域规则 SHALL 与 ORM/数据库隔离。
+系统 SHALL 使 `noesis.auth` 的 entity、policy 与 repository port 可在不加载 FastAPI、SQLAlchemy、ORM model 或平台 exception 的环境中导入和测试。Session 领域规则 SHALL 与 ORM/数据库隔离。
 
 #### Scenario: 静态边界检查
 
-- **WHEN** AST 扫描 `noesis_server/domain/auth`
-- **THEN** SHALL 不存在对 FastAPI、SQLAlchemy、`noesis_server.models`、`noesis_server.infrastructure`、`noesis_server.services` 或 `noesis_server.exceptions` 的 import
+- **WHEN** AST 扫描 `noesis.auth`
+- **THEN** SHALL 不存在对 FastAPI、SQLAlchemy、`noesis.storage` ORM model 或 `noesis.services` 的 import
 
 #### Scenario: 无数据库测试领域规则
 
@@ -45,7 +45,7 @@
 
 ### Requirement: Auth 持久化经窄 Repository Port 与事务边界
 
-用户与会话的读取写入 SHALL 通过 auth 专用 repository port 完成，SQLAlchemy adapter SHALL 位于 `noesis_server.infrastructure.database.repositories`，且 SHALL NOT 将 ORM 实例返回给 domain 或 API。Auth repository SHALL NOT 自行 commit 或 rollback；application service SHALL 在完整用例成功后 commit，并在预期数据库冲突时 rollback 和映射业务错误。
+用户与会话的读取写入 SHALL 通过 auth 专用 repository port 完成，SQLAlchemy adapter SHALL 位于 `noesis.repositories`，且 SHALL NOT 将 ORM 实例返回给 domain 或 API。Auth repository SHALL NOT 自行 commit 或 rollback；application service SHALL 在完整用例成功后 commit，并在预期数据库冲突时 rollback 和映射业务错误。
 
 #### Scenario: 注册唯一键冲突
 

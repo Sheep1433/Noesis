@@ -54,7 +54,7 @@ class AgentEventCollector:
     output_tokens: int = 0
     error: str | None = None
     outcome: dict[str, Any] | None = None
-    _pending_tools: dict[str, str] = field(default_factory=dict)
+    _pending_tools: dict[str, tuple[str, Any]] = field(default_factory=dict)
 
     def consume(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
@@ -82,13 +82,15 @@ class AgentEventCollector:
             name = str(event.get("name") or "unknown")
             run_id = str(event.get("run_id") or f"tool-{len(self.tool_outputs)}")
             self.tool_stats[name] = self.tool_stats.get(name, 0) + 1
-            self._pending_tools[run_id] = name
+            self._pending_tools[run_id] = (name, (event.get("data") or {}).get("input"))
             return
         if event_name == "on_tool_end":
             run_id = str(event.get("run_id") or "")
-            name = self._pending_tools.pop(run_id, str(event.get("name") or "unknown"))
+            name, tool_input = self._pending_tools.pop(
+                run_id, (str(event.get("name") or "unknown"), None))
             output = (event.get("data") or {}).get("output")
-            self.tool_outputs.append({"name": name, "output": _text(output)})
+            self.tool_outputs.append(
+                {"name": name, "input": tool_input, "output": _text(output)})
             return
         if event_name == "on_chat_model_stream":
             chunk = (event.get("data") or {}).get("chunk")

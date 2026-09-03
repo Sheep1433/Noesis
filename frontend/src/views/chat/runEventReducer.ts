@@ -5,24 +5,19 @@ import { wireTimestampMs } from '@/utils/formatTime'
 /**
  * run 级领域事件 reducer——子会话消费的单一状态转移（当前唯一消费方）。
  *
- * 领域事件与传输形态无关：子会话 run-event 经 parseRunEvent 产出；
- * 主会话 useSSEStream 的接入为后续独立小步（届时其帧解析层产出同一
- * 事件 vocabulary）。reducer 是纯函数——输入 (state, event)，输出新
- * state；消息列表 upsert / 终态时间回填等 DOM 副作用由宿主按 state
- * 差异执行。content-delta 不改 reducer 状态（消息内容追加是宿主侧
- * 副作用，边界 message-updated 才是权威内容转移）。
+ * 统一帧词汇后 reducer 收窄为 run 生命周期 + 统计 + 上下文：内容投影由
+ * 宿主经 messageParts appenders（与主聊天同一投影函数族）从帧事件组装，
+ * 权威恢复走 run-snapshot 快照 replace——assistantContent / message-updated
+ * 已退役。reducer 是纯函数；消息列表 upsert / 终态时间回填等 DOM 副作用
+ * 由宿主按 state 差异执行。
  */
 
 export type RunPendingHitl = AgentRunSnapshot['pending_hitl']
 
 export type RunDomainEvent =
-  /** 快照重置（订阅起点 / 断线重连的权威全量） */
+  /** 快照重置（订阅起点 / 断线重连的权威全量；宿主同步 replace 消息内容） */
   | { type: 'run-snapshot', snapshot: AgentRunSnapshot }
-  /** assistant 内容投影更新（message.updated） */
-  | { type: 'message-updated', content: unknown, sequence?: number }
   | { type: 'context-update', context: Record<string, unknown>, sequence?: number }
-  /** 流式正文增量（text-delta / reasoning-delta；瞬态，边界投影权威收口） */
-  | { type: 'content-delta', kind: 'text' | 'reasoning', text: string }
   /** 实时统计（executor 每次模型调用发布；终态由宿主回落 DB 重建） */
   | { type: 'stats-update', stats: SessionStats }
   /** 排队任务被调度启动（快照仍是 queued，推进到 running） */
@@ -36,8 +31,6 @@ export type RunDomainEvent =
 export interface RunEventState {
   run: AgentRunSnapshot | null
   contextSnapshot: Record<string, unknown> | null
-  /** 事件携带的最新 assistant 内容（run-snapshot / message-updated / approval-required） */
-  assistantContent: unknown
   /** 运行中流式统计（stats-update 累进；run-snapshot 重置、终态后宿主回落 DB 重建） */
   stats: SessionStats | null
   /** 终态时刻（run.finished 一次性置位；宿主回填后可忽略后续） */
@@ -45,7 +38,7 @@ export interface RunEventState {
 }
 
 export function initialRunEventState(): RunEventState {
-  return { run: null, contextSnapshot: null, assistantContent: null, stats: null, finishedAt: null }
+  return { run: null, contextSnapshot: null, stats: null, finishedAt: null }
 }
 
 function advanceSequence(
@@ -68,19 +61,9 @@ export function runEventReducer(state: RunEventState, event: RunDomainEvent): Ru
       return {
         ...state,
         run: event.snapshot,
-        assistantContent: event.snapshot.content,
         stats: null,
         finishedAt: null,
       }
-
-    case 'message-updated': {
-      const run = advanceSequence(state.run, event.sequence)
-      return {
-        ...state,
-        run: run ? { ...run, pending_hitl: null } : run,
-        assistantContent: event.content,
-      }
-    }
 
     case 'context-update':
       return {
@@ -88,11 +71,6 @@ export function runEventReducer(state: RunEventState, event: RunDomainEvent): Ru
         run: advanceSequence(state.run, event.sequence),
         contextSnapshot: { ...event.context },
       }
-
-    case 'content-delta':
-      // 瞬态流式增量：不改 reducer 状态——消息内容追加是宿主侧副作用
-      // （upsertAssistant 直改合成消息），边界 message-updated 权威收口
-      return state
 
     case 'stats-update':
       return { ...state, stats: event.stats }
@@ -114,7 +92,6 @@ export function runEventReducer(state: RunEventState, event: RunDomainEvent): Ru
           status: 'hitl_pending',
           pending_hitl: event.pendingHitl,
         },
-        assistantContent: event.content ?? state.assistantContent,
       }
     }
 
@@ -156,12 +133,6 @@ export function parseRunEvent(
   switch (event) {
     case 'run-snapshot':
       return { type: 'run-snapshot', snapshot: payload as unknown as AgentRunSnapshot }
-    case 'message.updated':
-      return {
-        type: 'message-updated',
-        content: payload.content,
-        sequence: Number(payload.sequence ?? 0) || undefined,
-      }
     case 'context-update':
       if (!payload.context || typeof payload.context !== 'object') {
         return null
@@ -171,18 +142,6 @@ export function parseRunEvent(
         context: payload.context as Record<string, unknown>,
         sequence: Number(payload.sequence ?? 0) || undefined,
       }
-    case 'text-delta':
-    case 'reasoning-delta': {
-      const text = String(payload.text_delta ?? payload.delta ?? payload.content ?? '')
-      if (!text) {
-        return null
-      }
-      return {
-        type: 'content-delta',
-        kind: event === 'text-delta' ? 'text' : 'reasoning',
-        text,
-      }
-    }
     case 'stats-update':
       // executor 发布时 usage 字段直接并入 payload 顶层（wire 合并）
       if (typeof payload.steps !== 'number') {

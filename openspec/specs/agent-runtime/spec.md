@@ -145,11 +145,11 @@ SuperAgent 装配 SHALL 注入记忆相关中间件/提示（见 `agent-profiles
 - **WHEN** 设置服务请求上下文预览
 - **THEN** 运行时 SHALL NOT 调用模型、创建 checkpoint、写入 `/memory/` 或创建聊天消息
 
-### Requirement: L2 记忆查询 SHALL 保持用户路径隔离
-运行时或记忆服务 SHALL 只在当前用户权威记忆目录内列出和搜索 L2 日记，规范化并校验日期/相对路径；查询结果 SHALL NOT 改变 L0/L1 默认注入规则。
+### Requirement: 记忆查询 SHALL 保持用户路径隔离
+运行时或记忆服务 SHALL 只在当前用户权威记忆目录内列出和搜索（索引、条目与 journal），SHALL 规范化并校验日期/相对路径；查询结果 SHALL NOT 改变注入规则。
 
 #### Scenario: 路径穿越查询
-- **WHEN** L2 查询参数试图越出当前用户记忆根
+- **WHEN** 记忆查询参数试图越出当前用户记忆根
 - **THEN** 系统 SHALL 拒绝请求且 SHALL NOT 读取其它用户或宿主文件
 
 ### Requirement: Model Execution SHALL 产生统一 Outcome
@@ -388,13 +388,14 @@ LangChain Provider adapter SHALL 在发送前完成 system 合并、message role
 - **THEN** 子 Agent SHALL 获得父 conversation snapshot 与白名单 durable state 的深拷贝
 - **AND** 子 Agent resume SHALL 从自己的 checkpoint 恢复，不重读父 Agent 当前 state
 
-### Requirement: 记忆注入 SHALL 区分稳定前缀与 Run 级选条通道
+### Requirement: 记忆注入 SHALL 经 MemoryMiddleware 在 run 边界刷新
 
-Runtime SHALL 经上下文文件通道注入记忆：`USER.md` 与 `MEMORY.md` 索引 SHALL 位于稳定前缀（会话内不变），每 Run 选中的条目正文 SHALL 经 Run 级 late-context 快照通道注入；每 Run 变化的内容 SHALL NOT 进入稳定前缀区（防全历史缓存失效）。注入 SHALL 在 Run 级冻结，subagent 不重复注入。`search_memory` 工具 SHALL 以 grep 与文件读取实现并遵循既有预算限制。旧 Bulletin 中间件注入路径 SHALL 移除。
+记忆文件加载与注入 SHALL 由上游 MemoryMiddleware 完成，`RefreshingMemoryMiddleware` SHALL 只在顶层 run 边界失效缓存：同一 run 内记忆内容 SHALL 冻结，跨 run SHALL 重新加载。引擎 SHALL NOT 被动向对话注入任何记忆条目正文；Agent 需要条目内容时 SHALL 经 `search_memory` 工具或文件读取主动召回（细则见 `agent-memory`）。subagent SHALL NOT 重复注入记忆。
 
 #### Scenario: 注入位置稳定
 - **WHEN** 同一会话多轮对话
-- **THEN** 稳定前缀内容 SHALL 不变，记忆内容 SHALL 位于相同注入位置
+- **THEN** 同一 run 内记忆内容 SHALL 不变
+- **AND** 新 run SHALL 重新加载用户可能已修改的记忆文件
 
 #### Scenario: 检索预算
 - **WHEN** 模型调用 search_memory

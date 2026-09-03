@@ -18,28 +18,27 @@ const snapshot = {
 }
 
 describe('runEventReducer', () => {
-  it('快照重置：run 与内容投影整体替换', () => {
+  it('快照重置：run 整体替换并清统计与终态时刻', () => {
     const state = runEventReducer(initialRunEventState(), { type: 'run-snapshot', snapshot: snapshot as never })
     expect(state.run?.run_id).toBe('run-1')
-    expect(state.assistantContent).toEqual(snapshot.content)
+    expect(state.stats).toBeNull()
     expect(state.finishedAt).toBeNull()
   })
 
   it('增量事件推进 snapshot_sequence，迟到序号不回退', () => {
     let state = runEventReducer(initialRunEventState(), { type: 'run-snapshot', snapshot: snapshot as never })
-    state = runEventReducer(state, { type: 'message-updated', content: {}, sequence: 5 })
+    state = runEventReducer(state, { type: 'context-update', context: { current_tokens: 1 }, sequence: 5 })
     expect(state.run?.snapshot_sequence).toBe(5)
-    state = runEventReducer(state, { type: 'context-update', context: { current_tokens: 1 }, sequence: 4 })
+    state = runEventReducer(state, { type: 'context-update', context: { current_tokens: 2 }, sequence: 4 })
     expect(state.run?.snapshot_sequence).toBe(5)
-    expect(state.contextSnapshot).toEqual({ current_tokens: 1 })
+    expect(state.contextSnapshot).toEqual({ current_tokens: 2 })
   })
 
-  it('message-updated 清空 pending_hitl 并更新内容', () => {
+  it('approval-resumed 清空 pending_hitl 并回到 running', () => {
     let state = runEventReducer(initialRunEventState(), { type: 'run-snapshot', snapshot: { ...snapshot, pending_hitl: { kind: 'approval' } } as never })
-    const content = { version: 1, parts: [] }
-    state = runEventReducer(state, { type: 'message-updated', content, sequence: 6 })
+    state = runEventReducer(state, { type: 'approval-resumed', sequence: 6 })
     expect(state.run?.pending_hitl).toBeNull()
-    expect(state.assistantContent).toBe(content)
+    expect(state.run?.status).toBe('running')
   })
 
   it('run-started 仅把 queued 推进到 running', () => {
@@ -126,14 +125,11 @@ describe('runEventReducer 流式扩展', () => {
     expect(state.stats).toBeNull()
   })
 
-  it('text-delta / reasoning-delta 解析为 content-delta（不改 reducer 状态）', () => {
-    const text = parseRunEvent('text-delta', { type: 'text-delta', text_delta: '你好' })
-    expect(text).toEqual({ type: 'content-delta', kind: 'text', text: '你好' })
-    const reasoning = parseRunEvent('reasoning-delta', { type: 'reasoning-delta', text_delta: '想想' })
-    expect(reasoning).toEqual({ type: 'content-delta', kind: 'reasoning', text: '想想' })
-    const before = initialRunEventState()
-    const state = runEventReducer(before, text!)
-    expect(state).toBe(before)
-    expect(parseRunEvent('text-delta', { type: 'text-delta', text_delta: '' })).toBeNull()
+  it('帧词汇（text-delta 等）不经 reducer——内容投影由宿主 appenders 组装', () => {
+    // 帧事件在宿主 dispatchRunFrame 层经共享帧分派表处理（appenders），
+    // 不进 parseRunEvent / reducer；reducer 只认生命周期与统计事件
+    expect(parseRunEvent('text-delta', { type: 'text-delta', text_delta: '你好' })).toBeNull()
+    expect(parseRunEvent('message.updated', { type: 'message.updated', content: {} })).toBeNull()
+    expect(parseRunEvent('tool-input-available', { type: 'tool-input-available' })).toBeNull()
   })
 })

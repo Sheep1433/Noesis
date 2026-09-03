@@ -108,10 +108,22 @@ def test_langchain_hook_contract_is_before_wrap_after() -> None:
 
 def test_inventory_has_no_legacy_loop_or_tool_call_limit_middleware() -> None:
     """旧 LoopDetection registry、五-owner kernel 与重复 ToolCallLimit 装配已删除。"""
-    stack = build_noesis_middleware(
-        profile="COMMON_QA",
-        model=FakeListChatModel(responses=["ok"]),
-    )
+    with patch("noesis.llm.factory.ModelConfig", SimpleNamespace(
+        model_api_key="test-key",
+        summarization_model_name="",
+        model_type="openai",
+        model_name="test-model",
+        model_temperature="0.7",
+        model_base_url="https://example.invalid/v1",
+        max_tokens=1024,
+        max_retries=1,
+        streaming=False,
+        request_timeout=30.0,
+    )):
+        stack = build_noesis_middleware(
+            profile="COMMON_QA",
+            model=FakeListChatModel(responses=["ok"]),
+        )
     names = {entry.name for entry in middleware_inventory(stack)}
     assert "LoopDetectionMiddleware" not in names
     assert "ToolCallLimitMiddleware" not in names

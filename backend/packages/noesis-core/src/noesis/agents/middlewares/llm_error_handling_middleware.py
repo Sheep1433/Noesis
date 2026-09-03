@@ -32,6 +32,7 @@ from langgraph.errors import GraphBubbleUp
 
 from noesis.agents.middlewares._events import aemit_noesis_event, emit_noesis_event
 from noesis.config.env import ModelConfig
+from noesis.llm.finish_reason import normalize_provider_finish_reason
 from noesis.runtime.logging import logger
 
 # 可重试的 HTTP 状态码（与 OpenAI SDK _should_retry 一致）
@@ -115,7 +116,9 @@ def warn_truncated_tool_calls(response: ModelResponse) -> ModelResponse:
         if (
             isinstance(message, AIMessage)
             and message.tool_calls
-            and (message.response_metadata or {}).get("finish_reason") == "length"
+            and normalize_provider_finish_reason(
+                (message.response_metadata or {}).get("finish_reason")
+            ) == "length"
         ):
             logger.warning(
                 "LLM 输出被截断（finish_reason=length），{} 个工具调用的参数可能不完整：{}",

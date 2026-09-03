@@ -22,6 +22,15 @@ vi.mock('@/api/chat', () => ({
 
 // ModelSelector 经 api/models → authHttp → router 拉起全部视图与 pinia
 // devtools（happy-dom 无可用 localStorage，收集阶段即崩）；这里 mock 掉目录 API
+// ChatComposerToolbar 经 vue-router→devtools→localStorage 传递链在 happy-dom
+// 收集期崩溃（已知坑：组件级 stub 断链）
+vi.mock('@/components/Chat/ChatComposerToolbar.vue', () => ({
+  default: {
+    name: 'ChatComposerToolbarStub',
+    template: '<div class="composer-toolbar-stub"><slot name="right" /></div>',
+  },
+}))
+
 vi.mock('@/api/models', () => ({
   getChatModels: vi.fn().mockResolvedValue({ models: [], default_id: '' }),
 }))
@@ -111,6 +120,8 @@ function controllableSseStream() {
       pump()
     },
     response: {
+      ok: true,
+      status: 200,
       body: {
         getReader: () => ({
           read: () => new Promise<ReadResult>((resolve) => {

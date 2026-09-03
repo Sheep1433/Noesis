@@ -221,8 +221,10 @@ class MemoryStore:
     def _render_index(cls, entries: list[IndexEntry]) -> str:
         lines: list[str] = []
         for memory_type in MEMORY_TYPES:
-            lines.append(f"## {TYPE_LABELS[memory_type]}")
             grouped = [e for e in entries if e.memory_type == memory_type]
+            if not grouped:
+                continue  # 空组不渲染：索引是路由面，类型说明由 prompt 承载
+            lines.append(f"## {TYPE_LABELS[memory_type]}")
             for entry in grouped:
                 lines.append(
                     f"- [{entry.label}] {entry.description} → {entry.rel_path}"

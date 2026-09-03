@@ -656,63 +656,22 @@ async def send_message(
 async def send_subagent_followup(
     session_id: str,
     request: SubagentFollowupRequest,
+    http_request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """向 child session 追加一轮 user message；详情和父卡片共用该入口。"""
     from noesis.services.subagent_session_service import SubagentSessionService
 
-    try:
-        task = await SubagentSessionService.send_followup(
-            session_id=session_id,
-            user_id=str(current_user.user_id),
-            message=request.message,
-            model_id=request.model_id,
-            reasoning_effort=request.reasoning_effort,
-        )
-    except ServiceException as exc:
-        message = exc.message or "补充要求发送失败"
-        if "不存在" in message:
-            return ResponseUtil.not_found(msg=message)
-        return ResponseUtil.failure(msg=message)
+    await require_csrf(http_request)
+    # 类型化异常直接上抛：NotFoundException→404、ConflictException→409
+    task = await SubagentSessionService.send_followup(
+        session_id=session_id,
+        user_id=str(current_user.user_id),
+        message=request.message,
+        model_id=request.model_id,
+        reasoning_effort=request.reasoning_effort,
+    )
     return ResponseUtil.success(msg="补充要求已发送", data=task)
-
-
-async def _event_generator(generator, session_id: str):
-    """将 QaService 产出的 SSE 文本帧编码为 UTF-8 字节流。"""
-    completed_normally = False
-    client_disconnected = False
-    try:
-        async for sse_str in generator:
-            try:
-                yield sse_str.encode("utf-8")
-            except (BrokenPipeError, ConnectionResetError):
-                logger.info(
-                    f"SSE 客户端已断开（连接重置），停止写入 session_id={session_id}"
-                )
-                client_disconnected = True
-                return
-            except OSError as exc:
-                if getattr(exc, "errno", None) in (errno.EPIPE, errno.ECONNRESET):
-                    logger.info(
-                        f"SSE 客户端已断开 errno={exc.errno} session_id={session_id}"
-                    )
-                    client_disconnected = True
-                    return
-                raise
-        completed_normally = True
-    except asyncio.CancelledError:
-        logger.info(
-            f"SSE StreamingResponse 消费被取消（多为客户端断开）session_id={session_id}"
-        )
-        raise
-    except Exception:
-        logger.exception(f"SSE StreamingResponse 消费异常 session_id={session_id}")
-        raise
-    finally:
-        if client_disconnected:
-            await generator.aclose()
-        if completed_normally:
-            logger.info(f"SSE StreamingResponse 已完整发送 session_id={session_id}")
 
 
 @chat_router.get("/commands", summary="列出可用斜杠命令")
@@ -734,9 +693,11 @@ async def list_commands(
 @chat_router.post("/runs", summary="创建 Agent 任务")
 async def create_run(
     request: CreateRunRequest,
+    http_request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await require_csrf(http_request)
     if pg_manager.advisory_lock_ready is False:
         return ResponseUtil.service_unavailable(
             msg="任务运行实例暂时不可用，请稍后重试",
@@ -986,13 +947,20 @@ async def stream_run(
         from noesis.services.subagent_session_service import SubagentSessionService
 
         # 先订阅、再重新读取权威快照，避免 GET 与 subscribe 之间丢掉终态事件。
-        queue = (
-            None
-            if snapshot.is_terminal
-            else SubagentSessionService.subscribe_run_events(
-                run_id, str(current_user.user_id)
+        # 配额与主链路同语义：per-run 订阅上限超限 → 429。
+        try:
+            queue = (
+                None
+                if snapshot.is_terminal
+                else SubagentSessionService.subscribe_run_events(
+                    run_id, str(current_user.user_id)
+                )
             )
-        )
+        except SubscriptionLimitExceeded:
+            return ResponseUtil.too_many_requests(
+                msg="订阅连接数超限，请关闭其它标签页后重试",
+                data={"error_code": "SSE_SUBSCRIPTION_LIMIT"},
+            )
         async with sse_prefetch_db() as db:
             snapshot = await RunService.get(run_id, str(current_user.user_id), db)
         # RunSnapshot 的属性名是 sequence（snapshot_sequence 仅是 to_dict 的 JSON 键）
@@ -1040,13 +1008,7 @@ async def stream_run(
                         )
                         continue
                     sequence = int(item.get("sequence") or 0)
-                    if sequence <= max(0, after_sequence) and item.get("type") not in {
-                        "run.started",
-                        "run.finished",
-                        "approval.required",
-                        "approval.resumed",
-                        "context-update",
-                    }:
+                    if sequence <= max(0, after_sequence):
                         continue
                     event_key = (str(item.get("type") or "run.event"), sequence)
                     if event_key in sent_events:
@@ -1146,15 +1108,17 @@ async def stream_run(
 @chat_router.post("/runs/{run_id}/stop", summary="停止 Agent 任务")
 async def stop_run(
     run_id: str,
+    http_request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await require_csrf(http_request)
     existing = await RunService.get(run_id, str(current_user.user_id), db)
     if existing.origin == "subagent":
         from noesis.services.subagent_session_service import SubagentSessionService
 
-        # 协作停止：服务层返回受理快照（status 覆写 stopping / 即时终态），
-        # 不重查 DB——DB run 仍为 running，终态经事件推送
+        # 协作停止：服务层返回受理快照（RunSnapshot 契约，status 覆写
+        # stopping / 即时终态映射 interrupted），不等待终态——终态经事件推送
         snapshot = await SubagentSessionService.stop_run(
             run_id=run_id,
             user_id=str(current_user.user_id),
@@ -1174,9 +1138,11 @@ async def stop_run(
 async def resume_test_case_run(
     run_id: str,
     request: TestCaseResumeRequest,
+    http_request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await require_csrf(http_request)
     if not request.selected_point_names:
         return ResponseUtil.failure(msg="请至少选择一个测试点")
     snapshot = await RunService.resume_test_case(run_id, request, current_user, db)
@@ -1324,6 +1290,7 @@ async def stream_child_catalog(
     import json as _json
     from fastapi.responses import StreamingResponse
     from noesis.services.agent_catalog_service import AgentCatalogService
+    from noesis.services.subagent_session_service import SubagentSessionService
 
     user_id = str(current_user.user_id)
     async with sse_prefetch_db() as db:
@@ -1338,21 +1305,7 @@ async def stream_child_catalog(
         try:
             for task in catalog:
                 if task.get("kind") == "subagent":
-                    child = {
-                        "session_id": task.get("child_session_id")
-                        or task.get("task_id"),
-                        "parent_id": session_id,
-                        "title": task.get("description") or "子 Agent",
-                        "profile_id": "task-worker",
-                        "created_by_tool_call_id": task.get("created_by_tool_call_id"),
-                        "run_id": task.get("run_id"),
-                        "status": task.get("status"),
-                        "turn_count": task.get("turn_count", 0),
-                        "step_count": task.get("progress_count", 0),
-                        "started_at": task.get("started_at"),
-                        "finished_at": task.get("completed_at"),
-                        "interrupt": task.get("interrupt"),
-                    }
+                    child = SubagentSessionService.child_session_summary(task, parent_id=session_id)
                     yield f"event: child-session\ndata: {_json.dumps({'event': 'snapshot', 'child': child}, ensure_ascii=False)}\n\n"
                 else:
                     yield f"event: bg-task\ndata: {_json.dumps({'event': 'snapshot', 'task': task}, ensure_ascii=False)}\n\n"
@@ -1368,21 +1321,7 @@ async def stream_child_catalog(
                     continue
                 task = item.get("task") if isinstance(item, dict) else None
                 if isinstance(task, dict) and task.get("kind") == "subagent":
-                    child = {
-                        "session_id": task.get("child_session_id")
-                        or task.get("task_id"),
-                        "parent_id": session_id,
-                        "title": task.get("description") or "子 Agent",
-                        "profile_id": "task-worker",
-                        "created_by_tool_call_id": task.get("created_by_tool_call_id"),
-                        "run_id": task.get("run_id"),
-                        "status": task.get("status"),
-                        "turn_count": task.get("turn_count", 0),
-                        "step_count": task.get("progress_count", 0),
-                        "started_at": task.get("started_at"),
-                        "finished_at": task.get("completed_at"),
-                        "interrupt": task.get("interrupt"),
-                    }
+                    child = SubagentSessionService.child_session_summary(task, parent_id=session_id)
                     yield f"event: child-session\ndata: {_json.dumps({'event': item.get('event'), 'child': child}, ensure_ascii=False)}\n\n"
                 elif isinstance(task, dict):
                     yield f"event: bg-task\ndata: {_json.dumps(item, ensure_ascii=False)}\n\n"
