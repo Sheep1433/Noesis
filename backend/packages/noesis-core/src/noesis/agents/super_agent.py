@@ -21,9 +21,12 @@ from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
 from noesis.agents.subagents import (
-    BackgroundSubagentExecutor,
+    BackgroundTaskExecutor,
     BgNotifyMiddleware,
-    build_background_task_tools,
+    NoesisSubagentMiddleware,
+    SubagentRegistry,
+    SubagentRole,
+    assert_no_bg_task_tools,
 )
 from noesis.agents.subagents.shell_tool import replace_execute_tool
 from noesis.config.env import HitlConfig, SubagentConfig
@@ -60,7 +63,7 @@ def _compile_task_worker(
     session_id: str = "",
     checkpointer=None,
 ):
-    """编译后台 task-worker：独立上下文 + 自带 HITL interrupt，供 BackgroundSubagentExecutor 使用。"""
+    """编译后台 task-worker：独立上下文 + 自带 HITL interrupt，供 BackgroundTaskExecutor 使用。"""
     from langchain.agents import create_agent
     from langchain.agents.middleware import HumanInTheLoopMiddleware
 
@@ -143,16 +146,17 @@ class SuperAgent(BaseAgent):
                 file_list=file_list,
             )
 
-        # 后台子 Agent（全异步 task）：主 Agent 用 start/check 工具委派，
-        # 子任务在进程内隔离 loop 跑，生命周期归属 session，跨 run 可收结果。
-        # worker 不携带后台任务工具自身（避免递归委派）。
-        # worker 经工厂在隔离 loop 内惰性编译：LLM 客户端与 checkpointer
-        # 连接池必须绑定隔离 loop（复用主 loop 实例会 cross-loop 报错）。
-        # worker 的检索只读不写：召回清单只归 root run（防自强化输入），
-        # 子 Agent 结论经父会话终态回流
+        # 后台子 Agent（全异步 task）：主 Agent 经 NoesisSubagentMiddleware 的
+        # start/check 工具委派，子任务在进程内隔离 loop 跑，生命周期归属
+        # session，跨 run 可收结果。worker 不携带后台任务工具自身（装配期
+        # 断言，禁止递归委派）。worker 经角色工厂在隔离 loop 内惰性编译：
+        # LLM 客户端与 checkpointer 连接池必须绑定隔离 loop（复用主 loop
+        # 实例会 cross-loop 报错）。worker 的检索只读不写：召回清单只归
+        # root run（防自强化输入），子 Agent 结论经父会话终态回流
         worker_tools = [
             tool for tool in tools if getattr(tool, "name", "") != "search_memory"
         ] + build_memory_tools(user_id=user_id)
+        assert_no_bg_task_tools(worker_tools)
 
         # 捕获父 run 解析出的自定义模型快照（纯数据，跨线程安全）：
         # ContextVar 不跨线程，隔离 loop 里 get_llm 看不到它，自定义模型
@@ -194,7 +198,7 @@ class SuperAgent(BaseAgent):
                 checkpointer=await create_isolated_checkpointer(),
             )
 
-        bg_executor = BackgroundSubagentExecutor(
+        bg_executor = BackgroundTaskExecutor(
             max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
             shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
@@ -203,10 +207,22 @@ class SuperAgent(BaseAgent):
             stop_reconcile_seconds=SubagentConfig.stop_reconcile_seconds,
         )
 
+        # 角色注册表：类型分发的唯一声明面（v1 单一 general，配方 = 既有
+        # worker 工厂原样搬家，零行为变化）。未来种类在此注册各自的角色
+        # 声明（prompt / 工具集 / 模型绑定闭包在各自 worker_factory 内）。
+        subagent_registry = SubagentRegistry()
+        subagent_registry.register(SubagentRole(
+            name="general",
+            description="通用子 Agent：多轮检索、调研、长命令等独立子任务",
+            worker_factory=_bg_worker_factory,
+        ))
+
         async def _create_child_session(
             description: str,
             prompt: str | None = None,
             tool_call_id: str = "",
+            subagent_type: str = "general",
+            effective_model_id: str | None = None,
         ) -> dict[str, str]:
             # 工具可能在并行 tool-call 中同时创建多个子 Agent；不要复用请求级
             # AsyncSession，单独取连接保证每个 launch 有独立事务边界。
@@ -219,13 +235,15 @@ class SuperAgent(BaseAgent):
                 # standard AgentRun in one transaction.  Keep this callback small so
                 # the tool layer cannot accidentally create a second source of truth.
                 # description = 简短标题（会话标题）；prompt = 完整任务指令（首条用户消息）
+                # effective_model_id = 角色解析后的生效模型（绑定值或父模型）
                 launch = await SubagentSessionService.launch(
                     parent_session_id=session_id,
                     user_id=user_id,
                     description=description,
                     prompt=prompt,
                     tool_call_id=tool_call_id or None,
-                    model_id=model_id,
+                    model_id=effective_model_id,
+                    subagent_type=subagent_type,
                     db=child_db,
                 )
                 return launch.to_dict()
@@ -275,25 +293,28 @@ class SuperAgent(BaseAgent):
                 raise RuntimeError("主 loop 不可用，followup run 创建失败")
             return await asyncio.wrap_future(future)
 
-        tools.extend(build_background_task_tools(
-            worker_factory=_bg_worker_factory,
-            executor=bg_executor,
-            session_id=session_id,
-            user_id=user_id,
-            create_child_session=_create_child_session,
-            delete_child_session=_delete_child_session,
-            fail_child_run=_fail_child_run,
-            create_followup_run=_create_followup_run,
-            model_id=model_id,
-        ))
-
         return create_noesis_agent(
             profile="SUPER_AGENT_QA",
             tools=tools,
             system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
-            # run 内即时感知后台任务终态：下一次模型调用注入 [系统通知]
-            middleware=[BgNotifyMiddleware(session_id=session_id)],
+            middleware=[
+                # 子 Agent 工具面 + 任务身份 graph state（start_task 按
+                # subagent_type 分发；类型清单注入 system prompt）
+                NoesisSubagentMiddleware(
+                    registry=subagent_registry,
+                    executor=bg_executor,
+                    session_id=session_id,
+                    user_id=user_id,
+                    create_child_session=_create_child_session,
+                    delete_child_session=_delete_child_session,
+                    fail_child_run=_fail_child_run,
+                    create_followup_run=_create_followup_run,
+                    model_id=model_id,
+                ),
+                # run 内即时感知后台任务终态：下一次模型调用注入 [系统通知]
+                BgNotifyMiddleware(session_id=session_id),
+            ],
             backend=backend,
             # execute 工具后台化（run_in_background，默认 false 前台零变化）；
             # 仅主 Agent 挂载——task-worker 保持前台 execute（禁止递归后台化）

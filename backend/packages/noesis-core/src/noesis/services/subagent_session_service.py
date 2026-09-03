@@ -39,6 +39,36 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+# subagent descriptor 当前版本：child session extra["subagent"] 的结构版本，
+# 读取方按版本校验，不识别的版本按数据不完整处理（大声失败，不猜测回退）
+SUBAGENT_DESCRIPTOR_VERSION = 1
+
+
+def parse_subagent_descriptor(extra: Optional[dict]) -> Optional[dict]:
+    """读取并校验 child session 的 subagent descriptor。
+
+    返回 ``{"version", "type", "model"}``；无该键（历史会话或非 subagent
+    会话）返回 None，结构或版本不符抛 ValueError。
+    """
+    if not isinstance(extra, dict):
+        return None
+    raw = extra.get("subagent")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("subagent descriptor 结构损坏（非对象）")
+    version = raw.get("version")
+    if version != SUBAGENT_DESCRIPTOR_VERSION:
+        raise ValueError(f"subagent descriptor 版本不支持：{version}")
+    if not isinstance(raw.get("type"), str) or not raw["type"]:
+        raise ValueError("subagent descriptor 缺少 type 字段")
+    return {
+        "version": version,
+        "type": raw["type"],
+        "model": raw.get("model") if isinstance(raw.get("model"), str) else None,
+    }
+
+
 @dataclass(frozen=True)
 class ChildSessionLaunch:
     session_id: str
@@ -134,13 +164,13 @@ class SubagentSessionService:
         model_id: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
     ) -> dict:
-        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
+        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundTaskExecutor
 
         task = await cls._owned_child(session_id, user_id)
         if task is None:
             raise NotFoundException(message="子会话不存在")
         try:
-            BackgroundSubagentExecutor.validate_followup(session_id)
+            BackgroundTaskExecutor.validate_followup(session_id)
         except ValueError as exc:
             raise ConflictException(message=str(exc)) from exc
         pending_user_message_id = await cls.create_pending_user_message(
@@ -151,7 +181,7 @@ class SubagentSessionService:
         try:
             # 异步版冷恢复：响应前完成新 run 创建（run_id 权威），
             # 同步版响应可携带旧 run_id 导致订阅方错过新 run 全部事件
-            return await BackgroundSubagentExecutor.asend_message(
+            return await BackgroundTaskExecutor.asend_message(
                 session_id,
                 message,
                 user_message_id=pending_user_message_id,
@@ -250,13 +280,13 @@ class SubagentSessionService:
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
             raise NotFoundException(message="子 Agent run 不存在")
-        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
+        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundTaskExecutor
 
         # 归一化：pydantic → 纯 dict（langchain HITL 中间件按下标取值，
         # 对象会 TypeError 崩掉整个子 Agent）；reject 缺 message 补统一默认
         decision_payloads = normalize_hitl_decisions(decisions)
         try:
-            BackgroundSubagentExecutor.submit_decisions(run.session_id, decision_payloads)
+            BackgroundTaskExecutor.submit_decisions(run.session_id, decision_payloads)
         except ValueError as exc:
             raise ConflictException(message=str(exc)) from exc
         return await cls._wait_run(db, run_id, user_id, predicate=lambda row: row.status != RunStatus.HITL_PENDING.value)
@@ -275,10 +305,10 @@ class SubagentSessionService:
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
             raise NotFoundException(message="子 Agent run 不存在")
-        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundSubagentExecutor
+        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundTaskExecutor
 
         try:
-            accepted = BackgroundSubagentExecutor.cancel(run.session_id)
+            accepted = BackgroundTaskExecutor.cancel(run.session_id)
         except ValueError as exc:
             raise ConflictException(message=str(exc)) from exc
         snapshot = await RunService.get(run_id, user_id, db)
@@ -345,6 +375,7 @@ class SubagentSessionService:
         prompt: Optional[str] = None,
         tool_call_id: Optional[str] = None,
         model_id: Optional[str] = None,
+        subagent_type: str = "general",
         db: AsyncSession,
     ) -> ChildSessionLaunch:
         parent = await ChatService.get_session_by_id(parent_session_id, user_id=user_id, db=db)
@@ -397,7 +428,15 @@ class SubagentSessionService:
                 "qa_type": "SUPER_AGENT_QA",
                 "origin": "subagent",
                 "agent_profile": cls.PROFILE_ID,
-                # worker 实际用父 run 模型编译：落库 extra.model_id 让子会话
+                # 版本化 subagent descriptor（独立子 dict + 显式字段）：
+                # 重启后重建 worker 按 type+model 取角色配方，不回读父会话。
+                # model = 该角色解析后的生效模型（绑定值或父模型）
+                "subagent": {
+                    "version": SUBAGENT_DESCRIPTOR_VERSION,
+                    "type": subagent_type,
+                    "model": model_id,
+                },
+                # worker 实际用生效模型编译：落库 extra.model_id 让子会话
                 # 详情的模型选择器显示真实模型（与主会话 extra.model_id 同键）
                 **({"model_id": model_id} if model_id else {}),
             },

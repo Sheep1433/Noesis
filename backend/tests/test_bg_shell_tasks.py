@@ -26,7 +26,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, PrivateAttr
 
 from noesis.agents.subagents.executor import (
-    BackgroundSubagentExecutor,
+    BackgroundTaskExecutor,
     BgTaskStatus,
     fail_session_shell_tasks,
     shutdown as bg_shutdown,
@@ -58,7 +58,7 @@ def _cleanup():
     bg_shutdown()
 
 
-def _wait_terminal(executor: BackgroundSubagentExecutor, task_id: str, timeout: float = 10.0) -> dict[str, Any]:
+def _wait_terminal(executor: BackgroundTaskExecutor, task_id: str, timeout: float = 10.0) -> dict[str, Any]:
     deadline = time.time() + timeout
     while time.time() < deadline:
         task = executor.get(task_id)
@@ -77,7 +77,7 @@ def _wait_terminal(executor: BackgroundSubagentExecutor, task_id: str, timeout: 
 def test_start_shell_completes_with_exit_code_and_output_tail() -> None:
     """shell 任务完成：result 带 exit code + 输出；kind=shell；无 worker。"""
     backend = _FakeShellBackend(response=ExecuteResponse(output="line1\nline2", exit_code=3))
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     task_id = executor.start_shell(
         command="make build", backend=backend, session_id="s-sh", user_id="u1",
     )
@@ -93,7 +93,7 @@ def test_start_shell_truncates_long_output_tail() -> None:
     """输出超长：仅保留尾部有界字符。"""
     output = "x" * 10_000
     backend = _FakeShellBackend(response=ExecuteResponse(output=output, exit_code=0))
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     task_id = executor.start_shell(
         command="cat big", backend=backend, session_id="s-sh", user_id="u1",
     )
@@ -106,19 +106,19 @@ def test_start_shell_truncates_long_output_tail() -> None:
 def test_shell_task_rejects_followup() -> None:
     """shell 命令不可追加对话（不是对话型任务）。"""
     backend = _FakeShellBackend()
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     task_id = executor.start_shell(
         command="echo hi", backend=backend, session_id="s-sh", user_id="u1",
     )
     _wait_terminal(executor, task_id)
     with pytest.raises(ValueError, match="后台命令任务"):
-        BackgroundSubagentExecutor.send_message(task_id, "再跑一次")
+        BackgroundTaskExecutor.send_message(task_id, "再跑一次")
 
 
 def test_fail_session_shell_tasks_on_sandbox_destroy() -> None:
     """沙箱销毁：运行中 shell 任务转 failed（容器回收连坐）。"""
     backend = _FakeShellBackend(delay=30.0)
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     task_id = executor.start_shell(
         command="sleep 30", backend=backend, session_id="s-destroy", user_id="u1",
     )
@@ -139,7 +139,7 @@ def test_fail_session_shell_tasks_on_sandbox_destroy() -> None:
 def test_shell_timeout_watchdog_when_configured() -> None:
     """shell_task_timeout_seconds > 0 时 watchdog 生效（默认 0 不限时）。"""
     backend = _FakeShellBackend(delay=30.0)
-    executor = BackgroundSubagentExecutor(shell_task_timeout_seconds=0.5)
+    executor = BackgroundTaskExecutor(shell_task_timeout_seconds=0.5)
     task_id = executor.start_shell(
         command="sleep 30", backend=backend, session_id="s-to", user_id="u1",
     )
@@ -196,7 +196,7 @@ async def _call(tool: StructuredTool, **kwargs: Any) -> Any:
 async def test_replace_execute_tool_foreground_delegates_unchanged() -> None:
     """run_in_background 缺省/false：原样委托原工具，输出与替换前一致。"""
     middleware, _ = _build_fake_filesystem_middleware()
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     replace_execute_tool(
         middleware, executor=executor, backend=_FakeShellBackend(), session_id="s", user_id="u1",
     )
@@ -217,7 +217,7 @@ async def test_replace_execute_tool_background_starts_shell_task() -> None:
     """run_in_background=true：立即返回 task_id，命令进 shell 任务管线。"""
     middleware, _ = _build_fake_filesystem_middleware()
     shell_backend = _FakeShellBackend()
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     replace_execute_tool(
         middleware, executor=executor, backend=shell_backend, session_id="s-bg", user_id="u1",
     )
@@ -236,7 +236,7 @@ async def test_replace_execute_tool_background_starts_shell_task() -> None:
 async def test_replace_execute_tool_queues_when_concurrency_full() -> None:
     """超并发：shell 任务排队（与子 Agent 同语义），启动即返回 task_id。"""
     slow = _FakeShellBackend(delay=30.0)
-    executor = BackgroundSubagentExecutor(max_concurrent_per_session=1)
+    executor = BackgroundTaskExecutor(max_concurrent_per_session=1)
     middleware, _ = _build_fake_filesystem_middleware()
     replace_execute_tool(
         middleware, executor=executor, backend=slow, session_id="s-cap", user_id="u1",
@@ -258,7 +258,7 @@ async def test_replace_execute_tool_noop_without_execute_tool() -> None:
     """无 execute 工具（backend 不支持执行）：静默跳过。"""
     middleware = SimpleNamespace(tools=[])
     replace_execute_tool(
-        middleware, executor=BackgroundSubagentExecutor(),
+        middleware, executor=BackgroundTaskExecutor(),
         backend=_FakeShellBackend(), session_id="s", user_id="u1",
     )
     assert middleware.tools == []
@@ -270,7 +270,7 @@ def test_shell_cancel_notifies_exactly_once() -> None:
 
     notifications._PENDING.pop("s-cn", None)
     backend = _FakeShellBackend(delay=30.0)
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     task_id = executor.start_shell(
         command="sleep 30", backend=backend, session_id="s-cn", user_id="u1",
     )
@@ -293,7 +293,7 @@ def test_shell_timeout_passthrough_to_backend() -> None:
             received.append(timeout)
             return await super().aexecute(command, timeout=timeout)
 
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     tid1 = executor.start_shell(
         command="a", backend=_RecordingBackend(), session_id="s-to2", user_id="u1", timeout=600,
     )
@@ -309,7 +309,7 @@ def test_shell_timeout_passthrough_to_backend() -> None:
 async def test_replace_execute_tool_background_validates_timeout() -> None:
     """后台路径复用前台 timeout 校验（负数/超上限拒绝，不触达 backend）。"""
     middleware, _ = _build_fake_filesystem_middleware()
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     replace_execute_tool(
         middleware, executor=executor, backend=_FakeShellBackend(delay=30.0),
         session_id="s-v", user_id="u1",
@@ -383,7 +383,7 @@ def _build_full_agent(tmp_path, *, executor, script, interrupt_on=None):
 @pytest.mark.asyncio
 async def test_fullstack_foreground_execute_unchanged(tmp_path) -> None:
     """真实栈前台：输出格式与 deepagents 原生一致；不产生后台任务。"""
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     agent = _build_full_agent(
         tmp_path, executor=executor, script=[_execute_call("echo fg-ok")],
     )
@@ -397,13 +397,13 @@ async def test_fullstack_foreground_execute_unchanged(tmp_path) -> None:
     assert tool_msgs, "应产生 execute 的 ToolMessage"
     assert "fg-ok" in tool_msgs[-1].content
     assert "[Command succeeded with exit code 0]" in tool_msgs[-1].content
-    assert BackgroundSubagentExecutor.list_for_session("s-full") == []
+    assert BackgroundTaskExecutor.list_for_session("s-full") == []
 
 
 @pytest.mark.asyncio
 async def test_fullstack_background_execute_string_return(tmp_path) -> None:
     """真实栈后台：字符串返回值经 agent 循环转为 ToolMessage，任务入注册表。"""
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     agent = _build_full_agent(
         tmp_path, executor=executor,
         script=[_execute_call("echo bg-ok", run_in_background=True)],
@@ -417,7 +417,7 @@ async def test_fullstack_background_execute_string_return(tmp_path) -> None:
     tool_msgs = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
     assert tool_msgs, "后台分支的字符串返回应被 agent 转为 ToolMessage"
     assert "后台命令任务已启动" in tool_msgs[-1].content
-    tasks = BackgroundSubagentExecutor.list_for_session("s-full")
+    tasks = BackgroundTaskExecutor.list_for_session("s-full")
     assert len(tasks) == 1 and tasks[0]["kind"] == "shell"
     task = _wait_terminal(executor, tasks[0]["task_id"])
     assert task["status"] == BgTaskStatus.COMPLETED.value
@@ -430,7 +430,7 @@ async def test_fullstack_hitl_interrupt_before_background_start(tmp_path) -> Non
     审批发生在启动前——interrupt 时注册表无任务；批准后续跑才启动。"""
     from langgraph.types import Command
 
-    executor = BackgroundSubagentExecutor()
+    executor = BackgroundTaskExecutor()
     agent = _build_full_agent(
         tmp_path, executor=executor,
         script=[_execute_call("sleep 1 && echo approved-bg", run_in_background=True)],
@@ -445,7 +445,7 @@ async def test_fullstack_hitl_interrupt_before_background_start(tmp_path) -> Non
     interrupts = final_state.get("__interrupt__") if isinstance(final_state, dict) else None
     assert interrupts, "execute 调用应触发 HITL interrupt"
     # 审批发生在启动前：此刻不应有任何后台任务
-    assert BackgroundSubagentExecutor.list_for_session("s-full") == []
+    assert BackgroundTaskExecutor.list_for_session("s-full") == []
 
     # 批准 → 续跑 → 工具真正执行（resume 契约与 executor.submit_decisions
     # 一致：{"decisions": [...]}）
@@ -456,7 +456,7 @@ async def test_fullstack_hitl_interrupt_before_background_start(tmp_path) -> Non
         final_state = chunk
     tool_msgs = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
     assert tool_msgs and "后台命令任务已启动" in tool_msgs[-1].content
-    tasks = BackgroundSubagentExecutor.list_for_session("s-full")
+    tasks = BackgroundTaskExecutor.list_for_session("s-full")
     assert len(tasks) == 1
     task = _wait_terminal(executor, tasks[0]["task_id"])
     assert task["status"] == BgTaskStatus.COMPLETED.value

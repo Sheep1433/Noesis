@@ -149,7 +149,7 @@ def test_raw_task_worker_has_only_one_hitl_middleware() -> None:
         )
 
     # 后台 worker：HITL 只挂一个 HumanInTheLoopMiddleware（来自 super_agent 侧，
-    # SUBAGENT 栈本身不含）；后台执行/审批续跑由 BackgroundSubagentExecutor 负责
+    # SUBAGENT 栈本身不含）；后台执行/审批续跑由 BackgroundTaskExecutor 负责
     stack = build_noesis_stack(
         NoesisStackDeps(
             profile="SUBAGENT",

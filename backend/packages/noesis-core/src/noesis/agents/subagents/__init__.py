@@ -1,7 +1,7 @@
-"""进程内后台子 Agent（全异步 task + HITL 审批续跑）。"""
+"""进程内后台任务运行时（subagent / shell 双 kind）与子 Agent 角色注册表。"""
 
 from noesis.agents.subagents.executor import (
-    BackgroundSubagentExecutor,
+    BackgroundTaskExecutor,
     BackgroundTask,
     BgTaskStatus,
     fail_session_shell_tasks,
@@ -9,15 +9,25 @@ from noesis.agents.subagents.executor import (
     shutdown_loop,
 )
 from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
-from noesis.agents.subagents.tools import build_background_task_tools
+from noesis.agents.subagents.registry import (
+    BG_TASK_TOOL_NAMES,
+    SubagentRegistry,
+    SubagentRole,
+    assert_no_bg_task_tools,
+)
+from noesis.agents.subagents.tools_middleware import NoesisSubagentMiddleware
 
 __all__ = [
-    "BackgroundSubagentExecutor",
+    "BG_TASK_TOOL_NAMES",
+    "BackgroundTaskExecutor",
     "BackgroundTask",
-    "BgTaskStatus",
     "BgNotifyMiddleware",
+    "BgTaskStatus",
+    "NoesisSubagentMiddleware",
+    "SubagentRegistry",
+    "SubagentRole",
+    "assert_no_bg_task_tools",
     "fail_session_shell_tasks",
-    "build_background_task_tools",
     "shutdown",
     "shutdown_loop",
 ]

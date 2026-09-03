@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.subagents.executor import (
-    BackgroundSubagentExecutor,
+    BackgroundTaskExecutor,
     subscribe_bg_events,
     unsubscribe_bg_events,
 )
@@ -29,7 +29,7 @@ class AgentCatalogService:
     ) -> dict[str, list[dict[str, Any]]]:
         runtime_tasks = [
             task
-            for task in BackgroundSubagentExecutor.list_for_session(session_id)
+            for task in BackgroundTaskExecutor.list_for_session(session_id)
             if str(task.get("user_id") or user_id) == str(user_id)
         ]
         catalog = await ChatService.get_child_session_catalog(
@@ -87,7 +87,7 @@ class AgentCatalogService:
 class ShellJobService:
     @staticmethod
     def stop(*, session_id: str, task_id: str, user_id: str) -> dict[str, Any]:
-        tasks = BackgroundSubagentExecutor.list_for_session(session_id)
+        tasks = BackgroundTaskExecutor.list_for_session(session_id)
         task = next(
             (
                 item for item in tasks
@@ -100,7 +100,7 @@ class ShellJobService:
         if task is None:
             raise ServiceException(message="后台命令不存在")
         try:
-            return BackgroundSubagentExecutor.cancel(task_id)
+            return BackgroundTaskExecutor.cancel(task_id)
         except ValueError as exc:
             raise ServiceException(message=str(exc)) from exc
 

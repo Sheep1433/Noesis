@@ -28,7 +28,7 @@ from pydantic import PrivateAttr
 
 from noesis.agents.subagents.executor import (
     _TASKS,
-    BackgroundSubagentExecutor,
+    BackgroundTaskExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
 )
@@ -109,7 +109,7 @@ def _build_worker(script: list[AIMessage], *, interrupt_on: dict | None = None, 
     )
 
 
-def _wait_terminal(executor: BackgroundSubagentExecutor, task_id: str, timeout: float = 10.0) -> dict[str, Any]:
+def _wait_terminal(executor: BackgroundTaskExecutor, task_id: str, timeout: float = 10.0) -> dict[str, Any]:
     deadline = time.time() + timeout
     while time.time() < deadline:
         task = executor.get(task_id)
@@ -137,7 +137,7 @@ def _cleanup():
 
 def test_start_returns_immediately_and_completes() -> None:
     worker = _build_worker([_call("data"), AIMessage(content="任务完成：已处理")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
 
     started = time.time()
     task_id = executor.start(
@@ -160,7 +160,7 @@ def test_approval_interrupt_pauses_then_resume_completes() -> None:
         [_call("x"), AIMessage(content="工具已批准，收尾")],
         interrupt_on={"dangerous": True},
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
 
     task_id = executor.start(
         worker_factory=lambda: worker, description="需审批的任务",
@@ -184,7 +184,7 @@ def test_reject_decision_resumes_and_completes() -> None:
         [_call("y"), AIMessage(content="被拒绝，改用直接回答")],
         interrupt_on={"dangerous": True},
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
@@ -196,7 +196,7 @@ def test_reject_decision_resumes_and_completes() -> None:
 
 def test_submit_decisions_rejects_when_not_awaiting() -> None:
     worker = _build_worker([AIMessage(content="直接完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     _wait_terminal(executor, task_id)
 
@@ -209,7 +209,7 @@ def test_concurrency_cap_queues_and_drains() -> None:
     worker = _build_worker(
         [_slow_call(f"s{i}", f"c{i}") for i in range(20)], slow=True,
     )  # 慢工具多轮，保持运行
-    executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
     first_id = executor.start(worker_factory=lambda: worker, description="t1", session_id="s1", user_id="u1")
     time.sleep(0.3)  # 让第一个进入 running
 
@@ -236,7 +236,7 @@ def test_cancel_queued_task_removes_from_queue() -> None:
     worker = _build_worker(
         [_slow_call(f"s{i}", f"c{i}") for i in range(20)], slow=True,
     )
-    executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
     first_id = executor.start(worker_factory=lambda: worker, description="t1", session_id="s1", user_id="u1")
     time.sleep(0.3)
     queued_id = executor.start(worker_factory=lambda: worker, description="t2", session_id="s1", user_id="u1")
@@ -262,7 +262,7 @@ def test_cancel_running_task() -> None:
     worker = _build_worker(
         [first] + [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     time.sleep(0.2)
     snapshot = executor.cancel(task_id)
@@ -291,7 +291,7 @@ def test_cancel_without_text_output_no_placeholder() -> None:
     worker = _build_worker(
         [_slow_call(f"s{i}", f"c{i}") for i in range(10)], slow=True,
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s2", user_id="u1")
     time.sleep(0.2)
     assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
@@ -308,7 +308,7 @@ def test_cancel_without_text_output_no_placeholder() -> None:
 
 def test_list_and_pending_approvals_scoped_by_session() -> None:
     worker = _build_worker([AIMessage(content="ok")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     executor.start(worker_factory=lambda: worker, description="a", session_id="s1", user_id="u1")
     executor.start(worker_factory=lambda: worker, description="b", session_id="s2", user_id="u1")
     ids = [t["task_id"] for t in executor.list_for_session("s1")]
@@ -326,7 +326,7 @@ def test_send_message_rejects_terminal_task() -> None:
         async def _f():
             raise RuntimeError("boom")
         return _f()
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=_failing_factory, description="x", session_id="s1", user_id="u1",
     )
@@ -343,7 +343,7 @@ def test_send_message_during_awaiting_approval_delivered_on_resume() -> None:
         [_call("y", "c1"), AIMessage(content="按调整后方向收尾")],
         interrupt_on={"dangerous": True},
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
@@ -361,7 +361,7 @@ def test_terminal_records_session_notification_once() -> None:
     from noesis.agents.subagents import notifications
 
     worker = _build_worker([AIMessage(content="调研完成：三个要点…")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s-notif", user_id="u1")
     _wait_terminal(executor, task_id)
 
@@ -392,7 +392,7 @@ def test_notify_agent_query_prefixes_block() -> None:
 def test_followup_chains_new_turn_when_running() -> None:
     """运行中 send_message：当前 turn 结束后链式开新 turn（同 thread 追加）。"""
     worker = _build_worker([AIMessage(content="第一轮完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="x", session_id="s-fu", user_id="u1",
     )
@@ -418,7 +418,7 @@ def test_followup_model_switch_recompiles_worker() -> None:
         factory_calls.append(model_id_override)
         return _build_worker([AIMessage(content="ok")])
 
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=worker_factory, description="x", session_id="s-model", user_id="u1",
         model_id="model-a",
@@ -453,24 +453,50 @@ def test_followup_model_switch_recompiles_worker() -> None:
 # 前台等待（run_in_background=false）与超时转后台
 # ---------------------------------------------------------------------------
 
-def _build_tools(executor: BackgroundSubagentExecutor, worker_factory, create_child_session=None):
-    from noesis.agents.subagents.tools import build_background_task_tools
-    return build_background_task_tools(
+def _build_tools(executor: BackgroundTaskExecutor, worker_factory, create_child_session=None):
+    """以角色注册表 + 中间件构造工具面（与生产装配同构，单 general 角色）。"""
+    from noesis.agents.subagents.registry import SubagentRegistry, SubagentRole
+    from noesis.agents.subagents.tools_middleware import NoesisSubagentMiddleware
+
+    registry = SubagentRegistry()
+    registry.register(SubagentRole(
+        name="general",
+        description="通用子 Agent",
         worker_factory=worker_factory,
+    ))
+    middleware = NoesisSubagentMiddleware(
+        registry=registry,
         executor=executor,
         session_id="s-fg",
         user_id="u1",
         create_child_session=create_child_session,
     )
+    return middleware.tools
+
+
+def _tool_text(result) -> str:
+    """工具返回值可能是纯文本或 Command（回 ToolMessage + 写 bg_tasks state）：
+    统一提取模型可见文本。"""
+    from langgraph.types import Command
+
+    if isinstance(result, Command):
+        messages = result.update.get("messages", [])
+        return str(messages[0].content) if messages else ""
+    return str(result)
 
 
 def test_start_task_schema_keeps_only_execution_mode_parameter():
-    """子 Agent 统一支持续话，模型不再选择对话模式参数。"""
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    """参数面固定为四字段：标题/完整指令/角色类型/执行模式，无对话模式参数。
+
+    subagent_type 必填——运行时只选角色不选模型，模型参数不出现在工具面。
+    """
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     start = next(t for t in _build_tools(executor, lambda: _build_worker([])) if t.name == "start_task")
 
-    properties = start.args_schema.model_json_schema()["properties"]
-    assert set(properties) == {"description", "prompt", "run_in_background"}
+    schema = start.args_schema.model_json_schema()
+    properties = schema["properties"]
+    assert set(properties) == {"description", "prompt", "subagent_type", "run_in_background"}
+    assert "subagent_type" in schema.get("required", [])
 
 
 @pytest.mark.asyncio
@@ -484,9 +510,11 @@ async def test_start_task_splits_short_title_and_full_prompt() -> None:
     """
     seen: dict[str, Any] = {}
 
-    async def fake_create_child_session(description, prompt, tool_call_id=""):
+    async def fake_create_child_session(description, prompt, tool_call_id="", subagent_type="general", model_id=None):
         seen["description"] = description
         seen["prompt"] = prompt
+        seen["subagent_type"] = subagent_type
+        seen["model_id"] = model_id
         return {
             "child_session_id": "child-split-1",
             "run_id": "run-1",
@@ -495,7 +523,7 @@ async def test_start_task_splits_short_title_and_full_prompt() -> None:
         }
 
     worker = _build_worker([AIMessage(content="完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     start = next(
         t for t in _build_tools(executor, lambda: worker, fake_create_child_session)
         if t.name == "start_task"
@@ -504,11 +532,14 @@ async def test_start_task_splits_short_title_and_full_prompt() -> None:
     result = await start.ainvoke({
         "description": "调研 npm 版本",
         "prompt": "请用 web_search 查 npm 最新稳定版本号与发布时间，返回不超过 50 字的小结。",
+        "subagent_type": "general",
         "run_in_background": True,
     })
+    result = _tool_text(result)
     assert "child-split-1" in result
     assert seen["description"] == "调研 npm 版本"
     assert "web_search" in seen["prompt"]
+    assert seen["subagent_type"] == "general"
 
     task = _wait_terminal(executor, "child-split-1")
     assert task["status"] == BgTaskStatus.COMPLETED.value
@@ -521,10 +552,10 @@ async def test_start_task_splits_short_title_and_full_prompt() -> None:
 async def test_start_task_prompt_falls_back_to_description() -> None:
     """旧调用只传 description：完整任务回退为 description，行为不变。"""
     worker = _build_worker([AIMessage(content="完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
 
-    await start.ainvoke({"description": "旧式单字段任务", "run_in_background": True})
+    await start.ainvoke({"description": "旧式单字段任务", "subagent_type": "general", "run_in_background": True})
     entry = next(iter(_TASKS.values()))
     assert entry.task.prompt == "旧式单字段任务"
 
@@ -533,10 +564,11 @@ async def test_start_task_prompt_falls_back_to_description() -> None:
 async def test_foreground_wait_returns_result() -> None:
     """前台等待：任务完成后终态文本直接作为工具返回值。"""
     worker = _build_worker([AIMessage(content="前台结果：OK")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
 
-    result = await start.ainvoke({"description": "x", "run_in_background": False})
+    result = await start.ainvoke({"description": "x", "subagent_type": "general", "run_in_background": False})
+    result = _tool_text(result)
     assert "前台结果：OK" in result
 
 
@@ -546,13 +578,14 @@ async def test_foreground_wait_times_out_to_background() -> None:
     from unittest.mock import patch as mock_patch
 
     worker = _build_worker([_slow_call("s", "c0") for _ in range(20)], slow=True)
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=60)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=60)
     start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
 
-    with mock_patch("noesis.agents.subagents.tools.SubagentConfig") as cfg:
+    with mock_patch("noesis.agents.subagents.tools_middleware.SubagentConfig") as cfg:
         cfg.foreground_max_wait_seconds = 0.3
-        result = await start.ainvoke({"description": "慢任务", "run_in_background": False})
+        result = await start.ainvoke({"description": "慢任务", "subagent_type": "general", "run_in_background": False})
 
+    result = _tool_text(result)
     assert "已自动转为后台" in result
     assert "bg-" in result
     # 任务未被取消：仍非终态（running）或最终完成，而不是 cancelled
@@ -567,13 +600,14 @@ async def test_foreground_wait_times_out_to_background() -> None:
 async def test_background_default_returns_immediately() -> None:
     """默认后台：立即返回 task_id 提示。"""
     worker = _build_worker([_slow_call("s", "c0") for _ in range(20)], slow=True)
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=60)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=60)
     start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
 
     import time as _time
     began = _time.time()
-    result = await start.ainvoke({"description": "x"})
+    result = await start.ainvoke({"description": "x", "subagent_type": "general"})
     assert _time.time() - began < 2.0
+    result = _tool_text(result)
     assert "子 Agent 已启动" in result
     task_id = result.split("：")[1].split("\n")[0]
     executor.cancel(task_id)
@@ -584,7 +618,7 @@ async def test_start_task_uses_child_session_as_task_identity() -> None:
     """每次委派先创建真实子会话，task_id 与 child session id 一致。"""
     from unittest.mock import AsyncMock
 
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     create_child_session = AsyncMock(return_value="child-session-1")
     start = next(
         t for t in _build_tools(
@@ -594,9 +628,12 @@ async def test_start_task_uses_child_session_as_task_identity() -> None:
         ) if t.name == "start_task"
     )
 
-    result = await start.ainvoke({"description": "检索资料"})
+    result = await start.ainvoke({"description": "检索资料", "subagent_type": "general"})
+    result = _tool_text(result)
 
-    create_child_session.assert_awaited_once_with("检索资料", "检索资料", "")
+    create_child_session.assert_awaited_once_with(
+        "检索资料", "检索资料", "", "general", None,
+    )
     assert "child-session-1" in result
     assert executor.get("child-session-1") is not None
     executor.cancel("child-session-1")
@@ -607,7 +644,7 @@ async def test_start_task_persists_model_tool_call_reference() -> None:
     """真实 ToolCall 的 id 进入 child session 创建用例，不靠输出文本关联。"""
     from unittest.mock import AsyncMock
 
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     create_child_session = AsyncMock(return_value="child-session-call")
     start = next(
         t for t in _build_tools(
@@ -620,11 +657,13 @@ async def test_start_task_persists_model_tool_call_reference() -> None:
     await start.ainvoke({
         "type": "tool_call",
         "name": "start_task",
-        "args": {"description": "带引用的检索"},
+        "args": {"description": "带引用的检索", "subagent_type": "general"},
         "id": "call-start-1",
     })
 
-    create_child_session.assert_awaited_once_with("带引用的检索", "带引用的检索", "call-start-1")
+    create_child_session.assert_awaited_once_with(
+        "带引用的检索", "带引用的检索", "call-start-1", "general", None,
+    )
     executor.cancel("child-session-call")
 
 
@@ -643,7 +682,7 @@ async def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
         AIMessage(content="结论如下。"),
     ])
     queue = subscribe_run_events("run-proj", "u1")
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     try:
         task_id = executor.start(
             worker_factory=lambda: worker, description="检索政策",
@@ -703,7 +742,7 @@ async def test_bg_event_subscription_receives_lifecycle() -> None:
     )
 
     worker = _build_worker([AIMessage(content="完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     queue = subscribe_bg_events("s-sse", "u1")
     try:
         task_id = executor.start(
@@ -730,7 +769,7 @@ async def test_standard_run_event_subscription_starts_on_run_id() -> None:
     from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
 
     queue = subscribe_run_events("run-sse", "u1")
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     try:
         task_id = executor.start(
             worker_factory=lambda: _build_worker([AIMessage(content="完成")]),
@@ -957,7 +996,7 @@ async def test_bg_event_subscription_receives_approval_lifecycle() -> None:
         [_call("x"), AIMessage(content="工具已批准，收尾")],
         interrupt_on={"dangerous": True},
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     queue = subscribe_bg_events("s-sse-ap", "u1")
     try:
         task_id = executor.start(
@@ -992,7 +1031,7 @@ def test_interrupt_action_requests_carry_tool_call_id() -> None:
         [_call("y", "c-enrich"), AIMessage(content="收尾")],
         interrupt_on={"dangerous": True},
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="x", session_id="s-enrich", user_id="u1",
     )
@@ -1024,7 +1063,7 @@ def test_context_snapshot_from_worker_usage_metadata() -> None:
             usage_metadata={"input_tokens": 12000, "output_tokens": 50, "total_tokens": 12050},
         ),
     ])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="调研任务",
         session_id="s-ctx", user_id="u1",
@@ -1057,7 +1096,7 @@ async def test_start_shell_description_as_task_title() -> None:
         output = "ok"
 
     backend = SimpleNamespace(aexecute=AsyncMock(return_value=_Ok()))
-    executor = BackgroundSubagentExecutor(shell_task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(shell_task_timeout_seconds=30)
 
     task_id = executor.start_shell(
         command="uv run pytest tests/ -q 2>&1 | tail -5",
@@ -1132,7 +1171,7 @@ def test_task_lookup_accepts_unique_short_id_prefix() -> None:
     from noesis.agents.subagents.executor import (
         _TASKS,
         _TASKS_LOCK,
-        BackgroundSubagentExecutor,
+        BackgroundTaskExecutor,
         BackgroundTask,
         BgTaskStatus,
     )
@@ -1156,11 +1195,11 @@ def test_task_lookup_accepts_unique_short_id_prefix() -> None:
     )
     try:
         # 8 位短 id（child_session_id 前缀）命中
-        snapshot = BackgroundSubagentExecutor.get("733021ae")
+        snapshot = BackgroundTaskExecutor.get("733021ae")
         assert snapshot is not None and snapshot["task_id"] == "bg-prefix-1"
         # 完整 child_session_id 与 task_id 仍然精确命中
-        assert BackgroundSubagentExecutor.get(task.child_session_id)["task_id"] == "bg-prefix-1"
-        assert BackgroundSubagentExecutor.get("bg-prefix-1")["task_id"] == "bg-prefix-1"
+        assert BackgroundTaskExecutor.get(task.child_session_id)["task_id"] == "bg-prefix-1"
+        assert BackgroundTaskExecutor.get("bg-prefix-1")["task_id"] == "bg-prefix-1"
     finally:
         with _TASKS_LOCK:
             _TASKS.pop("bg-prefix-1", None)
@@ -1171,7 +1210,7 @@ def test_task_lookup_rejects_ambiguous_prefix() -> None:
     from noesis.agents.subagents.executor import (
         _TASKS,
         _TASKS_LOCK,
-        BackgroundSubagentExecutor,
+        BackgroundTaskExecutor,
         BackgroundTask,
         BgTaskStatus,
         _TaskEntry,
@@ -1197,7 +1236,7 @@ def test_task_lookup_rejects_ambiguous_prefix() -> None:
         _TASKS[task.task_id] = entry
         entries[task.task_id] = entry
     try:
-        assert BackgroundSubagentExecutor.get("aaaa") is None
+        assert BackgroundTaskExecutor.get("aaaa") is None
     finally:
         with _TASKS_LOCK:
             for key in entries:
@@ -1251,7 +1290,7 @@ def test_start_captures_parent_reasoning_effort() -> None:
     from noesis.llm.reasoning import clear_request_reasoning_effort, set_request_reasoning_effort
 
     set_request_reasoning_effort("medium")
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     try:
         task_id = executor.start(
             worker_factory=lambda: _build_worker([AIMessage(content="完成")]),
@@ -1272,7 +1311,7 @@ def test_stopping_during_hitl_cancels_directly() -> None:
         [_call("v1"), AIMessage(content="收尾")],
         interrupt_on={"dangerous": True},
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="停止期间审批",
         session_id="s-hitl-stop", user_id="u1",
@@ -1301,7 +1340,7 @@ def test_stop_grace_timeout_falls_back_to_hard_cancel() -> None:
         [_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True,
     )
     # 宽限设为极短：slow 工具（0.6s）远超宽限 → 必走硬杀兜底
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30, stop_grace_seconds=1)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30, stop_grace_seconds=1)
     task_id = executor.start(
         worker_factory=lambda: worker, description="宽限硬杀",
         session_id="s-grace", user_id="u1",
@@ -1326,7 +1365,7 @@ def test_task_timeout_goes_cooperative() -> None:
         [_slow_call(f"s{i}", f"c{i}") for i in range(4)] + [AIMessage(content="超时前的产出文本。")],
         slow=True,
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=1, stop_grace_seconds=10)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=1, stop_grace_seconds=10)
     task_id = executor.start(
         worker_factory=lambda: worker, description="超时协作",
         session_id="s-timeout", user_id="u1",
@@ -1352,7 +1391,7 @@ def test_stopping_counts_toward_concurrency_slot() -> None:
     worker = _build_worker(
         [_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True,
     )
-    executor = BackgroundSubagentExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(max_concurrent_per_session=1, task_timeout_seconds=30)
     first_id = executor.start(worker_factory=lambda: worker, description="a", session_id="s-slot", user_id="u1")
     time.sleep(0.2)
     executor.cancel(first_id)
@@ -1372,7 +1411,7 @@ def test_stopping_counts_toward_concurrency_slot() -> None:
 
 def test_check_task_pending_hint_text() -> None:
     """进行中状态（queued/running/awaiting_approval）输出状态提示，不落入终态形态。"""
-    from noesis.agents.subagents.tools import _format_task
+    from noesis.agents.subagents.tools_middleware import _format_task
 
     for status, hint in (
         ("queued", "排队中"),
@@ -1389,14 +1428,14 @@ def test_partial_output_consistent_across_channels() -> None:
     """部分成果三处一致（spec 2.4）：task.result / check_task(_format_task) / 通知预览。"""
     from noesis.agents.subagents import notifications as notices
     from noesis.agents.subagents.executor import _PARTIAL_OUTPUT_PREFIX
-    from noesis.agents.subagents.tools import _format_task
+    from noesis.agents.subagents.tools_middleware import _format_task
 
     first = AIMessage(
         content="阶段性结论：检索到 3 篇相关文献，主题集中在评测基准。",
         tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
     )
     worker = _build_worker([first] + [_slow_call(f"s{i}", f"c{i}") for i in range(6)], slow=True)
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="部分成果", session_id="s-partial", user_id="u1")
     time.sleep(0.2)
     executor.cancel(task_id)
@@ -1442,7 +1481,7 @@ async def test_truncated_run_terminal_partial() -> None:
     from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
 
     worker = _build_worker([_truncated_call("t1")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     queue = subscribe_run_events("run-trunc", "u1")
     task_id = None
     try:
@@ -1480,7 +1519,7 @@ async def test_hitl_resume_merges_usage_across_interrupt() -> None:
         [_call("v1"), AIMessage(content="审批后收尾")],
         interrupt_on={"dangerous": True},
     )
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="审批 usage",
         session_id="s-hitl-usage", user_id="u1",
@@ -1518,7 +1557,7 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
     from noesis.agents.subagents import executor as ex_mod
 
     worker = _build_worker([AIMessage(content="产出文本")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="竞态", session_id="s-race", user_id="u1",
     )
@@ -1543,7 +1582,7 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
 def test_send_message_rejected_while_stopping() -> None:
     """stopping 期间 send_message 拒绝（中等问题：避免孤儿 user 消息）。"""
     worker = _build_worker([_slow_call("s1", "c1"), _slow_call("s2", "c2")], slow=True)
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s-msg", user_id="u1")
     time.sleep(0.2)
     executor.cancel(task_id)
@@ -1562,7 +1601,7 @@ def test_cancel_notification_carries_partial_preview() -> None:
         tool_calls=[{"name": "slow", "args": {"value": "s0"}, "id": "c0", "type": "tool_call"}],
     )
     worker = _build_worker([first] + [_slow_call(f"s{i}", f"c{i}") for i in range(6)], slow=True)
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(worker_factory=lambda: worker, description="通知部分产出", session_id="s-notify", user_id="u1")
     time.sleep(0.2)
     executor.cancel(task_id)
@@ -1590,23 +1629,16 @@ def test_check_and_list_task_tools_execute_without_error() -> None:
     此前单测只测 _format_task（直接传预算参数），不测引用配置类的工具闭包——
     OtherConfig.tool_output_max_chars 笔误导致两个工具每次调用必抛 AttributeError。
     """
-    from noesis.agents.subagents.tools import build_background_task_tools
-
     worker = _build_worker([AIMessage(content="ok")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="x",
-        session_id="s-tools", user_id="u1",
+        session_id="s-fg", user_id="u1",
     )
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
-    tools = build_background_task_tools(
-        worker_factory=lambda: worker,
-        executor=executor,
-        session_id="s-tools",
-        user_id="u1",
-    )
+    tools = _build_tools(executor, lambda: worker)
     by_name = {t.name: t for t in tools}
     check = by_name["check_task"]
     listing = by_name["list_tasks"]
@@ -1650,7 +1682,7 @@ def test_stop_reconcile_finalizes_when_cancel_absorbed() -> None:
         checkpointer=MemorySaver(),
         name="task-worker",
     )
-    executor = BackgroundSubagentExecutor(
+    executor = BackgroundTaskExecutor(
         task_timeout_seconds=30,
         stop_grace_seconds=1,
         stop_reconcile_seconds=1,
@@ -1711,7 +1743,7 @@ def test_late_finalize_stop_does_not_republish_after_force_terminal() -> None:
         checkpointer=MemorySaver(),
         name="task-worker",
     )
-    executor = BackgroundSubagentExecutor(
+    executor = BackgroundTaskExecutor(
         task_timeout_seconds=30,
         stop_grace_seconds=1,
         stop_reconcile_seconds=1,
@@ -1817,7 +1849,7 @@ def test_followup_cold_resume_prelude_failure_fails_task() -> None:
     进队列无人消费（跨 loop 连接错误曾走此路径且无任何日志）。
     """
     worker = _build_worker([AIMessage(content="第一轮完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="x",
         session_id="s-fu-prelude", user_id="u1",
@@ -1849,7 +1881,7 @@ async def test_run_stream_publishes_transient_deltas_and_stats() -> None:
     )
 
     queue = subscribe_run_events("run-stream", "u1")
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     try:
         task_id = executor.start(
             worker_factory=lambda: _build_worker([AIMessage(content="流式内容")]),
@@ -1942,7 +1974,7 @@ async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
     model = _StreamingScriptedModel(script=[first] + rest)
     worker = create_agent(model, tools=[_slow_tool()], checkpointer=MemorySaver(), name="task-worker")
 
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     run_id = "run-transient-test"
     queue = executor_mod.subscribe_run_events(run_id, "u1")
     try:
@@ -1976,7 +2008,7 @@ async def test_asend_message_cold_resume_returns_new_run_id() -> None:
     订阅即可收到全部事件。同步版响应可携带旧 run_id（新 run 异步创建），
     前端曾被迫轮询 active-run 绕过（契约缺陷的补丁，已回归根因修复）。"""
     worker = _build_worker([AIMessage(content="冷恢复完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="x",
         session_id="s-asend", user_id="u1",
@@ -1992,7 +2024,7 @@ async def test_asend_message_cold_resume_returns_new_run_id() -> None:
     entry = _TASKS[task_id]
     entry.followup_factory = _factory
 
-    snapshot = await BackgroundSubagentExecutor.asend_message(task_id, "继续")
+    snapshot = await BackgroundTaskExecutor.asend_message(task_id, "继续")
     # 契约：返回时新 run_id 已就绪（不是旧值），状态 running
     assert snapshot["run_id"] == "run-new"
     assert snapshot["run_id"] != old_run_id
@@ -2009,7 +2041,7 @@ async def test_asend_message_factory_failure_fails_task() -> None:
     """异步冷恢复的前置失败（factory 抛异常）：显式收口 FAILED，
     响应携带失败状态与错误信息（而非静默卡 RUNNING）。"""
     worker = _build_worker([AIMessage(content="第一轮完成")])
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=lambda: worker, description="x",
         session_id="s-asend-fail", user_id="u1",
@@ -2023,6 +2055,6 @@ async def test_asend_message_factory_failure_fails_task() -> None:
     entry = _TASKS[task_id]
     entry.followup_factory = _boom
 
-    snapshot = await BackgroundSubagentExecutor.asend_message(task_id, "继续")
+    snapshot = await BackgroundTaskExecutor.asend_message(task_id, "继续")
     assert snapshot["status"] == BgTaskStatus.FAILED.value
     assert "run 创建失败" in (snapshot["error"] or "")

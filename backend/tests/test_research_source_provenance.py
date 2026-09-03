@@ -22,12 +22,13 @@ from pydantic import PrivateAttr
 
 from noesis.agents.subagents import notifications
 from noesis.agents.subagents.executor import (
-    BackgroundSubagentExecutor,
+    BackgroundTaskExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
 )
 from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
-from noesis.agents.subagents.tools import build_background_task_tools
+from noesis.agents.subagents.registry import SubagentRegistry, SubagentRole
+from noesis.agents.subagents.tools_middleware import NoesisSubagentMiddleware
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.chat.event_mapping.retrieval import (
@@ -217,7 +218,7 @@ def _search_tool(payloads: list[str]):
     return web_search
 
 
-def _wait_terminal(executor: BackgroundSubagentExecutor, task_id: str, timeout: float = 10.0) -> dict:
+def _wait_terminal(executor: BackgroundTaskExecutor, task_id: str, timeout: float = 10.0) -> dict:
     import time
 
     deadline = time.time() + timeout
@@ -277,7 +278,7 @@ def test_subagent_accumulates_deduped_sources_and_notifies() -> None:
             name="task-worker",
         )
 
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=worker_factory, description="调研 X",
         session_id="sess-rsp-exec", user_id="u1",
@@ -285,7 +286,7 @@ def test_subagent_accumulates_deduped_sources_and_notifies() -> None:
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
-    sources = BackgroundSubagentExecutor.sources_of(task_id)
+    sources = BackgroundTaskExecutor.sources_of(task_id)
     # 同一 canonical URL（带/不带 tracking 参数）合并为一条
     assert [s["url"] for s in sources] == [
         "https://example.com/a?utm_source=x",
@@ -311,13 +312,13 @@ def test_subagent_without_retrieval_has_no_sources_placeholder() -> None:
             name="task-worker",
         )
 
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=worker_factory, description="纯计算",
         session_id="sess-rsp-exec", user_id="u1",
     )
     _wait_terminal(executor, task_id)
-    assert BackgroundSubagentExecutor.sources_of(task_id) == []
+    assert BackgroundTaskExecutor.sources_of(task_id) == []
     notice = notifications.take_undelivered("sess-rsp-exec")[0]
     assert "sources" not in notice
     assert "检索来源" not in notifications.render_block([notice])
@@ -372,7 +373,7 @@ def test_check_task_appends_sources_and_registers_pending() -> None:
             name="task-worker",
         )
 
-    executor = BackgroundSubagentExecutor(task_timeout_seconds=30)
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     task_id = executor.start(
         worker_factory=worker_factory, description="调研 X",
         session_id="sess-rsp-tools", user_id="u1",
@@ -380,12 +381,16 @@ def test_check_task_appends_sources_and_registers_pending() -> None:
     task = _wait_terminal(executor, task_id)
     child_id = task["child_session_id"] or task_id
 
-    tools = build_background_task_tools(
-        worker_factory=worker_factory,
+    registry = SubagentRegistry()
+    registry.register(SubagentRole(
+        name="general", description="通用子 Agent", worker_factory=worker_factory,
+    ))
+    tools = NoesisSubagentMiddleware(
+        registry=registry,
         executor=executor,
         session_id="sess-rsp-tools",
         user_id="u1",
-    )
+    ).tools
     check = next(t for t in tools if t.name == "check_task")
     text = check.func(task_id)
     assert text.startswith(f"[{child_id}] completed")

@@ -33,7 +33,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import PrivateAttr
 
 from noesis.agents.subagents.executor import (
-    BackgroundSubagentExecutor,
+    BackgroundTaskExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
 )
@@ -187,7 +187,7 @@ async def _fetch_run_and_message_status(pg_manager, ids: dict[str, str]) -> tupl
     return run, message_status
 
 
-async def _wait_cancelled(executor: BackgroundSubagentExecutor, task_id: str) -> dict:
+async def _wait_cancelled(executor: BackgroundTaskExecutor, task_id: str) -> dict:
     deadline = time.perf_counter() + 30
     while time.perf_counter() < deadline:
         task = executor.get(task_id)
@@ -203,7 +203,7 @@ async def _run_stop_scenario(pg_manager, *, hard_kill: bool) -> None:
         user_id = await _fetch_user_id(db)
         ids = await _insert_child_rows(db, user_id)
 
-    executor = BackgroundSubagentExecutor(
+    executor = BackgroundTaskExecutor(
         task_timeout_seconds=60, stop_grace_seconds=1, stop_reconcile_seconds=1,
     )
     try:

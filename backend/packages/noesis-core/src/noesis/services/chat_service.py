@@ -618,12 +618,12 @@ class ChatService:
             await cancel_session_agent_runs(target_id)
         # 子 Agent executor 的生命周期归属于父会话；父会话删除时一并取消。
         try:
-            from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+            from noesis.agents.subagents.executor import BackgroundTaskExecutor
 
-            for task in BackgroundSubagentExecutor.list_for_session(session_id):
+            for task in BackgroundTaskExecutor.list_for_session(session_id):
                 if not str(task.get('status', '')).endswith(('completed', 'failed', 'cancelled', 'timed_out')):
                     try:
-                        BackgroundSubagentExecutor.cancel(str(task.get('task_id')))
+                        BackgroundTaskExecutor.cancel(str(task.get('task_id')))
                     except ValueError:
                         pass
         except Exception as exc:  # noqa: BLE001
@@ -760,13 +760,13 @@ class ChatService:
         for sid in all_ids:
             await cancel_session_agent_runs(sid)
         try:
-            from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+            from noesis.agents.subagents.executor import BackgroundTaskExecutor
 
             for sid in found_ids:
-                for task in BackgroundSubagentExecutor.list_for_session(sid):
+                for task in BackgroundTaskExecutor.list_for_session(sid):
                     if not str(task.get('status', '')).endswith(('completed', 'failed', 'cancelled', 'timed_out')):
                         try:
-                            BackgroundSubagentExecutor.cancel(str(task.get('task_id')))
+                            BackgroundTaskExecutor.cancel(str(task.get('task_id')))
                         except ValueError:
                             pass
         except Exception as exc:  # noqa: BLE001
@@ -1284,7 +1284,7 @@ class ChatService:
     ) -> list[dict[str, Any]]:
         """返回子 Agent 目录摘要；不读取正文消息。"""
         from sqlalchemy import func
-        from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+        from noesis.agents.subagents.executor import BackgroundTaskExecutor
 
         parent = await cls.get_session_by_id(parent_id, user_id=user_id, db=db)
         if parent is None:
@@ -1315,7 +1315,7 @@ class ChatService:
         catalog: list[dict[str, Any]] = []
         for child in children:
             run = latest_runs.get(child.id)
-            task = BackgroundSubagentExecutor.get_memory(child.id)
+            task = BackgroundTaskExecutor.get_memory(child.id)
             snapshot = run.snapshot if run and isinstance(run.snapshot, dict) else {}
             parts = snapshot.get('parts') if isinstance(snapshot, dict) else []
             snapshot_step_count = sum(

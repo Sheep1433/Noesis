@@ -1,22 +1,25 @@
-"""进程内后台子 Agent 执行器。
+"""进程内后台任务运行时（BackgroundTaskExecutor）。
 
-全异步 task：``start_task`` 立即返回 task_id，子 Agent 在专用守护线程的
-独立事件循环里运行，生命周期归属 session 而非主 run——主 run 结束后任务
-继续跑，任意后续轮次 ``check_task`` 收结果。
+承载两类后台任务，外壳共享、执行内核分开：
 
-执行模型参考 deer-flow SubagentExecutor（隔离 loop + 进程级注册表 +
-状态机 + 并发上限），但不做工具内轮询：start/check 拆开暴露给模型，
-语义对齐 deepagents AsyncSubAgentMiddleware 的工具面，执行层为本进程。
+- ``subagent``：委派子 Agent——worker 经角色注册表解析的工厂在专用守护
+  线程的隔离事件循环里惰性编译运行，产品数据由标准
+  ``TChatSession/TChatMessage/TAgentRun`` 持久化（见 SubagentSessionService）；
+- ``shell``：``execute`` 工具的 ``run_in_background`` 命令——不经 worker
+  编译，直接经 agent backend 执行，易逝作业不持久化。
+
+全异步 task：``start_task`` 立即返回 task_id，任务生命周期归属 session
+而非主 run——主 run 结束后继续跑，任意后续轮次 ``check_task`` 收结果。
+执行器类型无关：subagent 特性（worker 工厂 / followup / 落库投影）经
+注入携带，状态机、并发上限、协作停止对两类任务一致。
 
 HITL 工具审批：子 Agent 带 checkpointer + interrupt_on 编译，遇审批工具
 时 LangGraph 落 checkpoint 并 interrupt；executor 捕获 ``__interrupt__``
 转 ``awaiting_approval``，审批经 ``Command(resume={"decisions": [...]})``
 在同一 thread 续跑（与主 run HITL 的 resume 契约一致）。
 
-执行面（协程、future、followup 队列）完全在进程内：进程重启即丢，与
-dsh ``ctx.jobs`` / deer-flow 注册表同构。subagent 任务的产品数据由标准
-``TChatSession/TChatMessage/TAgentRun`` 持久化（见 SubagentSessionService）；
-shell job 是易逝的运行时作业，不做持久化。
+执行面（协程、future、followup 队列）完全在进程内：注册表在内存，
+进程重启即丢（接受的设计限制，启动对账收口遗留 run）。
 """
 
 from __future__ import annotations
@@ -123,6 +126,10 @@ class BackgroundTask:
     projection_sequence: int = field(default=0, repr=False)
     # subagent 任务均可经 send_message 追加 turn；shell 任务使用独立 kind。
     kind: str = "subagent"
+    # 任务的角色类型（start_task 的 subagent_type）；shell 任务为 None。
+    # 投影与任务卡展示用——worker 编译配方由角色注册表在启动前解析，
+    # 执行器不感知类型差异。
+    subagent_type: Optional[str] = None
     # worker 的 model_id：上下文窗口上限解析用（主对话同源 model_limits）
     model_id: Optional[str] = None
     # 最近一次上下文快照（worker usage 提取；变更才发布/落库）
@@ -159,6 +166,7 @@ class BackgroundTask:
             "assistant_message_id": self.assistant_message_id,
             "turn_count": self.turn_count,
             "kind": self.kind,
+            "subagent_type": self.subagent_type,
             "status": self.status.value,
             "result": self.result,
             "error": self.error,
@@ -859,7 +867,7 @@ def _schedule_continuation(task: BackgroundTask) -> None:
     )
 
 
-class BackgroundSubagentExecutor:
+class BackgroundTaskExecutor:
     """start/check/cancel/list 的进程内执行面。"""
 
     def __init__(
@@ -919,7 +927,7 @@ class BackgroundSubagentExecutor:
     def pending_approvals(session_id: str) -> list[dict[str, Any]]:
         return [
             t
-            for t in BackgroundSubagentExecutor.list_for_session(session_id)
+            for t in BackgroundTaskExecutor.list_for_session(session_id)
             if t["status"] == BgTaskStatus.AWAITING_APPROVAL.value
         ]
 
@@ -940,11 +948,13 @@ class BackgroundSubagentExecutor:
         assistant_message_id: Optional[str] = None,
         followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None,
         model_id: Optional[str] = None,
+        subagent_type: Optional[str] = None,
     ) -> str:
         """启动后台任务，立即返回 task_id；超并发上限时按会话 FIFO 排队。
 
         description = 简短标题（任务卡/列表展示）；prompt = 完整任务指令
-        （子 Agent 首轮输入，缺省回退 description）。
+        （子 Agent 首轮输入，缺省回退 description）。worker 编译配方由
+        调用方（角色注册表）解析为 worker_factory 注入——执行器类型无关。
         """
         task_id = task_id or f"bg-{uuid.uuid4()}"
         task = BackgroundTask(
@@ -959,6 +969,7 @@ class BackgroundSubagentExecutor:
             assistant_message_id=assistant_message_id,
             kind="subagent",
             model_id=model_id,
+            subagent_type=subagent_type,
         )
         entry = _TaskEntry(
             task=task,
@@ -2551,7 +2562,7 @@ def _on_hitl_timeout(entry: _TaskEntry) -> None:
         return
     logger.warning("bg subagent approval timeout task_id={}", entry.task.task_id)
     try:
-        BackgroundSubagentExecutor.submit_decisions(
+        BackgroundTaskExecutor.submit_decisions(
             entry.task.task_id,
             [{"type": "reject", "message": "审批超时，已自动拒绝"}],
         )
@@ -2584,10 +2595,10 @@ def shutdown() -> None:
 
 
 class _ExecutorRuntimePort:
-    validate_followup = staticmethod(BackgroundSubagentExecutor.validate_followup)
-    send_message = staticmethod(BackgroundSubagentExecutor.send_message)
-    submit_decisions = staticmethod(BackgroundSubagentExecutor.submit_decisions)
-    cancel = staticmethod(BackgroundSubagentExecutor.cancel)
+    validate_followup = staticmethod(BackgroundTaskExecutor.validate_followup)
+    send_message = staticmethod(BackgroundTaskExecutor.send_message)
+    submit_decisions = staticmethod(BackgroundTaskExecutor.submit_decisions)
+    cancel = staticmethod(BackgroundTaskExecutor.cancel)
     subscribe_run_events = staticmethod(subscribe_run_events)
     unsubscribe_run_events = staticmethod(unsubscribe_run_events)
     get_run_event_history = staticmethod(get_run_event_history)
@@ -2597,7 +2608,7 @@ configure_executor_port(_ExecutorRuntimePort)
 
 
 __all__ = [
-    "BackgroundSubagentExecutor",
+    "BackgroundTaskExecutor",
     "BackgroundTask",
     "BgTaskStatus",
     "fail_session_shell_tasks",

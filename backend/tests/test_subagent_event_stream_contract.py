@@ -387,13 +387,13 @@ async def test_parent_soft_delete_cascades_to_children(monkeypatch) -> None:
         AsyncMock(side_effect=lambda sid: cancel_calls.append(sid)),
     )
     monkeypatch.setattr(
-        executor_module.BackgroundSubagentExecutor,
+        executor_module.BackgroundTaskExecutor,
         "list_for_session",
         lambda session_id: [{"task_id": "bg-1", "status": "running"}],
     )
     cancel_task_calls: list[str] = []
     monkeypatch.setattr(
-        executor_module.BackgroundSubagentExecutor,
+        executor_module.BackgroundTaskExecutor,
         "cancel",
         lambda task_id: cancel_task_calls.append(task_id) or {"task_id": task_id, "status": "cancelled"},
     )
