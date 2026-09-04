@@ -23,7 +23,7 @@ _MAX_STORED_CHARS = 2_000_000
 class WebSearchInput(BaseModel):
     query: str = Field(description="检索关键词或问题改写")
     limit: int = Field(
-        default=8,
+        default=20,
         ge=1,
         le=20,
         description="返回结果数量上限",
@@ -55,7 +55,7 @@ def _normalize_web_result(item: dict) -> dict:
     return {**item, "source_type": "web", "url": url, "title": title, "excerpt": excerpt}
 
 
-def web_search(query: str, limit: int = 8) -> str:
+def web_search(query: str, limit: int = 20) -> str:
     """关键词 Web 搜索，返回 JSON 结果列表。"""
     try:
         result = resolve_web_search(query, limit)
