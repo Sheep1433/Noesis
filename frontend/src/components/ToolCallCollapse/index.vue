@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ToolRowVariant } from '@/utils/toolCallModel'
-import type { ToolLifecycleState } from '@/views/chat/messageParts'
+import type { RetrievalUiPart, ToolLifecycleState } from '@/views/chat/messageParts'
 import { BuildOutline } from '@vicons/ionicons-v5'
 import { NCollapse, NCollapseItem, NIcon, NTag } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
@@ -33,6 +33,11 @@ interface Props {
   expandSignal?: number
   /** dark：独立深色块；light：嵌入助手气泡、与正文对齐的浅色样式 */
   appearance?: 'dark' | 'light'
+  /**
+   * 同 tool_call_id 的检索结果 part：SearchBlock 的结构化数据来源
+   *  （主/子会话同构——tool part 只存摘要，完整结果在 retrieval part）。
+   */
+  retrievalPart?: RetrievalUiPart | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -49,6 +54,7 @@ const props = withDefaults(defineProps<Props>(), {
   collapseSignal: 0,
   expandSignal: 0,
   appearance: 'dark',
+  retrievalPart: null,
 })
 
 /** 展示上限，避免超大 JSON 阻塞主线程与布局 */
@@ -97,18 +103,11 @@ const argumentsDisplay = computed(() => {
 })
 
 const errorDisplay = computed(() => {
-  const categoryCopy: Record<string, string> = {
-    network_unreachable: '连接失败，请稍后重试',
-    execution_timeout: '执行超时，可调整任务后重试',
-    tool_timeout: '执行超时，可调整任务后重试',
-    permission_denied: '当前操作没有所需权限',
-    environment_unavailable: '执行环境暂时不可用',
-    command_failed: '命令执行失败',
-  }
-  const category = props.errorCategory || ''
+  // 后端下发的短文案（与模型/入库同一段）为唯一来源；本地不再维护
+  // 分类文案表（曾与后端表漂移、展开后细节丢失）
   const stateCopy: Partial<Record<ToolLifecycleState, string>> = {
-    failed: categoryCopy[category] || '执行失败，请检查后重试',
-    timed_out: '执行超时，可调整任务后重试',
+    failed: props.error?.trim() || (props.exitCode != null ? '命令执行失败' : '执行失败，请检查后重试'),
+    timed_out: '执行超时，可稍后重试',
     rejected: '你已拒绝本次操作',
     cancelled: '本次操作已停止',
   }
@@ -141,6 +140,27 @@ function truncateOneLine(s: string, max: number): string {
   }
   return `${t.slice(0, max - 1)}…`
 }
+
+/** 终端块命令行：从参数取完整 command（多行命令保留原样，不做单行截断） */
+const terminalCommand = computed(() => {
+  const args = props.arguments
+  if (args == null || args === '') {
+    return ''
+  }
+  if (typeof args === 'string') {
+    return args
+  }
+  if (typeof args === 'object' && !Array.isArray(args)) {
+    const record = args as Record<string, unknown>
+    for (const key of ['command', 'cmd', 'shell', 'bash', 'script']) {
+      const value = record[key]
+      if (typeof value === 'string' && value !== '') {
+        return value
+      }
+    }
+  }
+  return ''
+})
 
 /** 标题行右侧摘要：把命令/路径等从参数里提出来，避免 header-main 与 header-extra 之间大块空白 */
 const headerSummary = computed(() => {
@@ -218,23 +238,21 @@ const compactSummary = computed(() => {
   return deriveSummary(variant.value, props.arguments)
 })
 
-/** compact 模式失败行：错误首行替代 summary（红色）。 */
+/** compact 模式失败行：通用「执行失败」红显（具体原因看展开态）。 */
 const failureLine = computed(() => {
   if (!failed.value) {
     return null
   }
-  const err = props.error?.trim()
-  if (err) {
-    const nl = err.indexOf('\n')
-    return nl === -1 ? err : err.slice(0, nl)
+  if (props.state === 'rejected') {
+    return '你已拒绝本次操作'
   }
-  // 回退到 result 首行
-  const r = props.result?.trim()
-  if (r) {
-    const nl = r.indexOf('\n')
-    return nl === -1 ? r : r.slice(0, nl)
+  if (props.state === 'cancelled') {
+    return '本次操作已停止'
   }
-  return null
+  if (props.state === 'timed_out') {
+    return '执行超时'
+  }
+  return '执行失败'
 })
 
 /** compact 模式 header 实际显示的摘要：失败时用错误首行，否则用 deriveSummary。 */
@@ -290,7 +308,10 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
   if (variant.value === 'bash') {
     return 'terminal'
   }
-  if (variant.value === 'search') {
+  // web_fetch 的抓取内容在 retrieval part（输出已被替换为「检索到 N 条来源」
+  // 摘要），与检索工具同路走 SearchBlock 渲染富内容；无 part 的旧数据由
+  // SearchBlock 解析原始 JSON 输出兜底
+  if (variant.value === 'search' || (props.name === 'web_fetch' && props.retrievalPart)) {
     return 'search'
   }
   return 'text'
@@ -327,22 +348,24 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
       </template>
 
       <div class="tool-body-compact">
-        <!-- bash → 终端块 -->
+        <!-- bash → 终端块（命令行 + 输出） -->
         <TerminalBlock
           v-if="compactCard === 'terminal' && resultDisplay"
           :output="resultDisplay"
+          :command="terminalCommand"
           :exit-code="exitCode"
           :truncated="truncated"
           :appearance="appearance"
         />
-        <!-- search → 搜索结果块 -->
+        <!-- search → 搜索结果块（结构化结果优先取 retrieval part，主/子会话同构） -->
         <SearchBlock
-          v-else-if="compactCard === 'search' && resultDisplay"
+          v-else-if="compactCard === 'search' && (resultDisplay || retrievalPart)"
           :name="name"
           :output="resultDisplay"
           :input="arguments"
           :truncated="truncated"
           :appearance="appearance"
+          :retrieval-part="retrievalPart"
         />
         <!-- 回退：参数 + 输出文本（read/write/edit/others 都走这里，read 保留后端 cat -n 行号） -->
         <template v-else>
@@ -404,7 +427,24 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
             <pre>{{ errorDisplay }}</pre>
           </div>
         </div>
-        <div v-if="resultDisplay && !failed" class="tool-section tool-section--result">
+        <!-- 检索类工具：与 compact 模式同构走 SearchBlock（结构化结果取 retrieval part） -->
+        <div
+          v-if="compactCard === 'search' && (resultDisplay || retrievalPart) && !failed"
+          class="tool-section tool-section--result"
+        >
+          <div class="tool-section__label">输出</div>
+          <div class="tool-section__body">
+            <SearchBlock
+              :name="name"
+              :output="resultDisplay"
+              :input="arguments"
+              :truncated="truncated"
+              :appearance="appearance"
+              :retrieval-part="retrievalPart"
+            />
+          </div>
+        </div>
+        <div v-else-if="resultDisplay && !failed" class="tool-section tool-section--result">
           <div class="tool-section__label">输出</div>
           <div class="tool-section__body">
             <pre>{{ resultDisplay }}</pre>
@@ -777,6 +817,9 @@ const compactCard = computed<'terminal' | 'search' | 'text'>(() => {
 /* running 扫光（可选装饰） */
 .tool-compact[data-state='running'] :deep(.n-collapse-item__header) {
   position: relative;
+  /* 扫光是行内装饰：越出行右缘的绝对定位盒会参与滚动容器溢出，
+     制造随动画涨缩的幽灵水平滚动条，必须在行内裁切 */
+  overflow: clip;
 }
 .tool-compact[data-state='running'] :deep(.n-collapse-item__header)::after {
   content: '';

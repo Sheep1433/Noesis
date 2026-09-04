@@ -1,4 +1,8 @@
-"""五维 0–5 分 Judge rubric（对齐 hermes-compression-eval / Factory 方法论）。"""
+"""Judge rubric：headline recall 判卷（2/1/0）+ 五维 0–5 诊断维度。
+
+recall 决定 headline（recall% @ retained tokens）；五维只进 raw 记录做失败诊断。
+judge 可见 reference，作答方不可见。
+"""
 
 from __future__ import annotations
 
@@ -13,6 +17,9 @@ DIMENSIONS: List[str] = [
     "continuity",
     "completeness",
 ]
+
+# headline 判分：2=正确 / 1=部分 / 0=错误
+RECALL_VALUES = (2, 1, 0)
 
 DIMENSION_DESCRIPTIONS: Dict[str, str] = {
     "accuracy": (
@@ -52,15 +59,20 @@ def build_judge_prompt(
 ) -> str:
     dim_block = "\n".join(f"- {d}: {DIMENSION_DESCRIPTIONS[d]}" for d in DIMENSIONS)
     scale_block = "\n".join(f"  {k}: {v}" for k, v in sorted(SCORE_SCALE.items()))
-    schema = "\n".join(f'  "{d}": <0-5 integer>,' for d in DIMENSIONS)
+    dim_schema = "\n".join(f'  "{d}": <0-5 integer>,' for d in DIMENSIONS)
 
     return f"""你是消息压缩评测裁判。助手仅基于**压缩后的会话上下文**回答了 probe 问题。
-请评判该答案相对 reference 的质量，五个维度各打 0–5 整数分（禁止小数）。
+请先给 recall 判分，再按五个诊断维度打分。
 
-维度说明：
+recall 判分（headline，三档）：
+  2: 回答正确且覆盖 reference 的关键事实。
+  1: 部分正确：关键事实有遗漏或不精确，但方向正确。
+  0: 错误、臆造或答非所问。
+
+诊断维度说明：
 {dim_block}
 
-0–5 量表：
+诊断维度 0–5 量表：
 {scale_block}
 
 PROBE TYPE: {probe_type}
@@ -76,7 +88,8 @@ ASSISTANT ANSWER（待评分）:
 
 仅输出 JSON，不要其它文字：
 {{
-{schema}
+  "recall": <2|1|0>,
+{dim_schema}
   "notes": "一句话说明主要扣分点（可空）"
 }}"""
 
@@ -94,6 +107,12 @@ def parse_judge_response(raw: str) -> Dict[str, Any]:
         raise ValueError(f"no JSON object in judge response: {raw[:200]!r}")
     parsed = json.loads(brace.group(0))
 
+    if "recall" not in parsed:
+        raise ValueError("missing recall verdict")
+    recall = int(round(float(parsed["recall"])))
+    if recall not in RECALL_VALUES:
+        raise ValueError(f"recall out of range: {recall}")
+
     scores: Dict[str, int] = {}
     for dim in DIMENSIONS:
         if dim not in parsed:
@@ -105,4 +124,9 @@ def parse_judge_response(raw: str) -> Dict[str, Any]:
 
     notes = str(parsed.get("notes") or "")[:200]
     overall = sum(scores.values()) / len(scores)
-    return {"scores": scores, "notes": notes, "overall_probe_score": round(overall, 4)}
+    return {
+        "recall": recall,
+        "scores": scores,
+        "notes": notes,
+        "overall_probe_score": round(overall, 4),
+    }

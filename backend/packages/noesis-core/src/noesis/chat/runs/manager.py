@@ -25,6 +25,7 @@ from noesis.chat.runs.models import (
     TERMINAL_RUN_STATUSES,
     require_transition,
 )
+from noesis.chat.runs.delivery_bus import DeliveryCore
 from noesis.chat.runs.session_signals import session_signal_bus
 from noesis.chat.runs.user_signals import user_signal_bus
 
@@ -282,9 +283,9 @@ class RunHandle:
     producer_task: Optional[asyncio.Task[None]] = None
     producer_generation: int = 0
     cancel_requested: bool = False
-    next_sequence: int = 1
-    buffer: deque[SequencedRunEvent] = field(default_factory=deque)
-    buffer_bytes: int = 0
+    # 投递内核（被动数据结构）：sequence 分配、有界重放缓存、连续性重放。
+    # 由 RunManager 在创建 handle 时按配置注入；全部访问须持 handle.lock。
+    delivery: "DeliveryCore" = field(init=False)
     subscribers: set[asyncio.Queue[SequencedRunEvent | SlowSubscriber]] = field(
         default_factory=set
     )
@@ -315,7 +316,7 @@ class RunHandle:
 
     @property
     def last_sequence(self) -> int:
-        return self.next_sequence - 1
+        return self.delivery.next_sequence - 1
 
 
 class RunManager:
@@ -433,6 +434,10 @@ class RunManager:
             limit_handler=limit_handler,
             checkpoint_policy=checkpoint_policy,
             terminal_handler=terminal_handler,
+        )
+        handle.delivery = DeliveryCore(
+            max_buffer_events=self.max_buffer_events,
+            max_buffer_bytes=self.max_buffer_bytes,
         )
         async with self._registry_lock:
             if run_id in self._runs:
@@ -790,7 +795,7 @@ class RunManager:
         checkpoint_snapshot: RunSnapshot | None = None
         checkpoint_kind: str | None = None
         if handle.checkpoint_policy is not None:
-            sequence = handle.next_sequence
+            sequence = handle.delivery.next_sequence
             checkpoint_kind = handle.checkpoint_policy(event, sequence)
             if checkpoint_kind is not None:
                 checkpoint_snapshot = copy.deepcopy(
@@ -798,7 +803,7 @@ class RunManager:
                 )
         envelope = SequencedRunEvent(
             run_id=handle.run_id,
-            sequence=handle.next_sequence,
+            sequence=handle.delivery.next_sequence,
             attempt_id=handle.attempt_id,
             event=event,
             checkpoint_snapshot=checkpoint_snapshot,
@@ -816,10 +821,7 @@ class RunManager:
         handle.output_bytes += envelope.estimated_bytes
         self._metrics["published_events"] += 1
         self._metrics["published_bytes"] += envelope.estimated_bytes
-        handle.next_sequence += 1
-        handle.buffer.append(envelope)
-        handle.buffer_bytes += envelope.estimated_bytes
-        self._trim_buffer(handle)
+        handle.delivery.commit(envelope)
         return envelope
 
     def _fanout(self, handle: RunHandle, envelope: SequencedRunEvent) -> None:
@@ -925,14 +927,14 @@ class RunManager:
                         return None
                     terminal_snapshot = copy.deepcopy(
                         projected_state.snapshot(
-                            handle.next_sequence,
+                            handle.delivery.next_sequence,
                             projected_state.status,
                             projected_state.attempt_id,
                         )
                     )
                     envelope = SequencedRunEvent(
                         run_id=handle.run_id,
-                        sequence=handle.next_sequence,
+                        sequence=handle.delivery.next_sequence,
                         attempt_id=projected_state.attempt_id,
                         event=event,
                         checkpoint_snapshot=terminal_snapshot,
@@ -1065,15 +1067,18 @@ class RunManager:
                 if handle.persist_writer is not None:
                     handle.persist_writer.discard_through(candidate.envelope.sequence)
                 handle.state = candidate.projected_state
+                # snapshot_provider 换绑到终态 projection：终态事件只应用在
+                # clone 上，原始 projection 若停在 retrying 等瞬态，provider
+                # 不换绑会在整个终态保留窗口内持续报非终态（2026-09-03 问题
+                # 1/5：GET 返回 retrying + finish_reason=None 长达 300s）。
+                handle.snapshot_provider = candidate.projected_state.snapshot
                 handle.status = candidate.status
                 handle.attempt_id = candidate.envelope.attempt_id
-                handle.next_sequence = candidate.envelope.sequence + 1
+                handle.delivery.next_sequence = candidate.envelope.sequence + 1
                 handle.output_bytes += candidate.envelope.estimated_bytes
                 self._metrics["published_events"] += 1
                 self._metrics["published_bytes"] += candidate.envelope.estimated_bytes
-                handle.buffer.append(candidate.envelope)
-                handle.buffer_bytes += candidate.envelope.estimated_bytes
-                self._trim_buffer(handle)
+                handle.delivery.append(candidate.envelope)
                 self._fanout(handle, candidate.envelope)
                 handle.pending_terminal = None
                 self._mark_terminal_locked(handle, candidate.status)
@@ -1083,7 +1088,7 @@ class RunManager:
                 handle.authoritative_snapshot = copy.deepcopy(result.snapshot)
                 handle.status = result.snapshot.status
                 handle.attempt_id = result.snapshot.attempt_id
-                handle.next_sequence = result.snapshot.sequence + 1
+                handle.delivery.next_sequence = result.snapshot.sequence + 1
                 handle.pending_terminal = None
                 replacement = SequencedRunEvent(
                     run_id=handle.run_id,
@@ -1113,14 +1118,6 @@ class RunManager:
                     f"stale attempt event: run={run_id} event={attempt_id} current={handle.attempt_id}"
                 )
             return self._assign_and_fanout(handle, event)
-
-    def _trim_buffer(self, handle: RunHandle) -> None:
-        while handle.buffer and (
-            len(handle.buffer) > self.max_buffer_events
-            or handle.buffer_bytes > self.max_buffer_bytes
-        ):
-            removed = handle.buffer.popleft()
-            handle.buffer_bytes -= removed.estimated_bytes
 
     def _check_subscription_quota(self, handle: RunHandle) -> None:
         """检查 SSE subscription 配额：per-run、per-user、global。超限抛 SubscriptionLimitExceeded。"""
@@ -1178,11 +1175,7 @@ class RunManager:
                     handle.last_sequence, handle.status, handle.attempt_id
                 )
             )
-        buffered = tuple(
-            event for event in handle.buffer if event.sequence > after_sequence
-        )
-        continuous = not buffered or buffered[0].sequence == after_sequence + 1
-        replay = buffered if after_sequence > 0 and continuous else ()
+        replay, _snapshot_required = handle.delivery.replay_after(after_sequence)
         run_id = handle.run_id
         return RunSubscription(
             snapshot=snapshot,
@@ -1241,8 +1234,7 @@ class RunManager:
             delivery_tasks = tuple(handle.delivery_tasks.values())
             handle.delivery_tasks.clear()
             handle.delivery_queues.clear()
-            handle.buffer.clear()
-            handle.buffer_bytes = 0
+            handle.delivery.clear()
             handle.output_bytes = 0
             handle.limit_error = None
             handle.producer_task = None
@@ -1338,8 +1330,8 @@ class RunManager:
             **self._metrics,
             "active_runs": len(active),
             "retained_runs": len(runs),
-            "event_buffer_events": sum(len(run.buffer) for run in runs),
-            "event_buffer_bytes": sum(run.buffer_bytes for run in runs),
+            "event_buffer_events": sum(len(run.delivery.buffer) for run in runs),
+            "event_buffer_bytes": sum(run.delivery.buffer_bytes for run in runs),
             "subscriber_count": len(subscriber_queues),
             "subscriber_queue_events": sum(
                 queue.qsize() for queue in subscriber_queues

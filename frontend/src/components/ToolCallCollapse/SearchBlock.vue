@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { RetrievalUiPart } from '@/views/chat/messageParts'
 import { computed } from 'vue'
 
 interface Props {
@@ -10,12 +11,18 @@ interface Props {
   input?: unknown
   truncated?: boolean
   appearance?: 'dark' | 'light'
+  /**
+   * 同 tool_call_id 的检索结果 part：结构化结果的优先来源
+   *  （主/子会话同构——tool part 只存摘要；无 part 的旧数据回退解析 output）
+   */
+  retrievalPart?: RetrievalUiPart | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
   input: undefined,
   truncated: undefined,
   appearance: 'dark',
+  retrievalPart: null,
 })
 
 /** 解析 grep 的 content 模式：按文件分组。 */
@@ -69,7 +76,8 @@ interface ResultItem {
   excerpt?: string
   file_name?: string
   collection_name?: string
-  score?: number
+  /** KB 结果才有分数；web 检索结果无 score（归一化后为 null） */
+  score?: number | null
 }
 function parseJsonResults(text: string): { items: ResultItem[], total?: number } | null {
   try {
@@ -86,12 +94,51 @@ function parseJsonResults(text: string): { items: ResultItem[], total?: number }
   return null
 }
 
-/** chat 行内最多展示 8 项，超出折叠（详情面才看全部）。 */
+/** 解析 web_fetch 旧格式原始 JSON 输出（{url, content}）。 */
+function parseJsonFetch(text: string): { url: string, content: string } | null {
+  try {
+    const j = JSON.parse(text)
+    if (j && typeof j === 'object' && typeof (j as Record<string, unknown>).url === 'string') {
+      const rec = j as Record<string, unknown>
+      return { url: rec.url, content: String(rec.content ?? '') }
+    }
+  } catch {
+    // 非 JSON
+  }
+  return null
+}
+
+/** grep 分组 / count / 路径列表的行内展示上限（结果列表不截断，全部展示）。 */
 const MAX_ROWS = 8
+
+/** web_fetch 正文展示上限：抓取内容可能很长，行内给预览即可。 */
+const FETCH_CONTENT_MAX = 6_000
 
 const view = computed(() => {
   const out = props.output || ''
   const name = props.name
+
+  // web_fetch：抓取内容（URL + 正文）——输出已被替换为「检索到 N 条来源」
+  // 摘要，内容在 retrieval part 的单条结果里；旧数据的原始 JSON 输出回退解析
+  if (name === 'web_fetch') {
+    const fetched = props.retrievalPart?.results[0]
+    if (fetched) {
+      return { kind: 'fetch' as const, url: fetched.url || '', content: fetched.excerpt || fetched.title || '' }
+    }
+    const legacy = parseJsonFetch(out)
+    if (legacy) {
+      return { kind: 'fetch' as const, ...legacy }
+    }
+  }
+
+  // retrieval part 的结构化结果优先（主/子会话统一数据来源）
+  if (props.retrievalPart && props.retrievalPart.results.length > 0) {
+    return {
+      kind: 'results' as const,
+      items: props.retrievalPart.results as unknown as ResultItem[],
+      total: props.retrievalPart.results.length,
+    }
+  }
 
   // JSON 结构化结果（web_search / search_knowledge_base / search_memory）
   const json = parseJsonResults(out)
@@ -130,23 +177,47 @@ const view = computed(() => {
   // 回退：纯文本
   return { kind: 'text' as const, text: out }
 })
+
+/** fetch 正文截断展示（原文在 retrieval part / 原始输出中，未丢失）。 */
+const fetchTruncated = computed(() =>
+  view.value.kind === 'fetch' && view.value.content.length > FETCH_CONTENT_MAX,
+)
+const fetchDisplay = computed(() =>
+  view.value.kind === 'fetch' ? view.value.content.slice(0, FETCH_CONTENT_MAX) : '',
+)
+
+/**
+ * 入参单行 JSON（对齐其它工具的参数形态，无美化缩进）：块内首行展示，
+ * 与输出同块同构——展开必须同时可见输入与输出。空对象不显示。
+ */
+const inputDisplay = computed(() => {
+  const obj = (typeof props.input === 'object' && props.input !== null)
+    ? props.input as Record<string, unknown>
+    : undefined
+  if (!obj || Object.keys(obj).length === 0) {
+    return ''
+  }
+  return JSON.stringify(obj)
+})
 </script>
 
 <template>
   <div class="search-block" :data-appearance="appearance">
+    <!-- 入参 pretty JSON 置顶（对齐 bash/回退分支：入参在输出上方，无标签） -->
+    <pre v-if="inputDisplay" class="search-args">{{ inputDisplay }}</pre>
     <!-- 结构化检索结果 -->
     <template v-if="view.kind === 'results'">
       <div v-if="view.total !== undefined" class="result-meta">共 {{ view.total }} 条结果</div>
-      <div v-for="(item, i) in view.items.slice(0, MAX_ROWS)" :key="i" class="result-item">
+      <div v-if="!view.items.length" class="result-meta">无匹配结果</div>
+      <div v-for="(item, i) in view.items" :key="i" class="result-item">
         <div class="result-item__head">
           <span v-if="item.collection_name" class="result-item__src">{{ item.collection_name }}</span>
           <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="result-item__title">{{ item.title || item.url }}</a>
           <span v-else class="result-item__title">{{ item.file_name || item.title || `结果 ${i + 1}` }}</span>
-          <span v-if="item.score !== undefined" class="result-item__score">{{ item.score.toFixed(2) }}</span>
+          <span v-if="item.score !== null && item.score !== undefined" class="result-item__score">{{ item.score.toFixed(2) }}</span>
         </div>
         <div v-if="item.excerpt" class="result-item__excerpt">{{ item.excerpt }}</div>
       </div>
-      <div v-if="view.items.length > MAX_ROWS" class="capped-hint">仅展示前 {{ MAX_ROWS }} 条，共 {{ view.items.length }} 条</div>
     </template>
 
     <!-- grep content 分组 -->
@@ -178,6 +249,13 @@ const view = computed(() => {
       <div v-if="view.paths.length > MAX_ROWS" class="capped-hint">仅展示前 {{ MAX_ROWS }} 条，共 {{ view.paths.length }} 条</div>
     </template>
 
+    <!-- web_fetch：抓取内容（URL + 正文预览） -->
+    <template v-else-if="view.kind === 'fetch'">
+      <a v-if="view.url" :href="view.url" target="_blank" rel="noopener" class="fetch-url">{{ view.url }}</a>
+      <pre v-if="view.content" class="fetch-content">{{ fetchDisplay }}</pre>
+      <div v-if="fetchTruncated" class="capped-hint">正文较长，仅展示前 {{ FETCH_CONTENT_MAX }} 字符</div>
+    </template>
+
     <!-- 回退纯文本 -->
     <pre v-else class="search-text">{{ view.text }}</pre>
 
@@ -207,6 +285,14 @@ const view = computed(() => {
   color: var(--search-summary-color, #404040);
   margin-bottom: 6px;
 }
+.search-args {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--noesis-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
 .result-item {
   padding: 6px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -230,6 +316,23 @@ a.result-item__title {
   color: var(--noesis-color-text, #24292f);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.fetch-url {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 500;
+  color: var(--noesis-color-text, #24292f);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.fetch-content {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  max-height: 320px;
+  overflow-y: auto;
 }
 .result-item__score {
   margin-left: auto;

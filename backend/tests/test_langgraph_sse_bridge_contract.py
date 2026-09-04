@@ -81,8 +81,7 @@ def test_kb_retrieval_event_preserves_sources() -> None:
             "segment_id": "seg_1",
             "file_name": "登录.md",
             "excerpt": "验证码五分钟有效",
-            "citable": True,
-        }],
+            }],
     }
     end = {
         "event": "on_tool_end",
@@ -154,8 +153,7 @@ def test_reasoning_can_continue_after_retrieval_result() -> None:
                                 "url": "https://example.com/llm-wiki",
                                 "title": "LLM Wiki",
                                 "excerpt": "A research project",
-                                "citable": True,
-                            }
+                                                    }
                         ]
                     }
                 )
@@ -911,7 +909,7 @@ def test_tool_error_uses_inflight_tool_call_id() -> None:
     assert len(outputs) == 1
     assert outputs[0]["tool_call_id"] == model_call_id
     assert outputs[0]["status"] == "error"
-    assert outputs[0]["error"] == "环境不可用"
+    assert outputs[0]["error"] == "环境暂时不可用，可稍后重试"
     assert outputs[0]["errorCategory"] == "infrastructure"
 
     saved = builder.to_dict()["parts"][0]
@@ -1025,6 +1023,8 @@ def test_tool_output_error_frame_golden_fields() -> None:
     saved = builder.to_dict()["parts"][0]
     assert saved["error"] == "执行失败"
     assert saved["errorCategory"] == "unknown"
+    # 错误返回型：入库正文 = ToolMessage 原文（权威文案逐字）
+    assert saved["output"] == "command timed out after 30s"
 
 
 def test_task_tool_success_with_child_error_keeps_parent_success() -> None:
@@ -1147,7 +1147,7 @@ def test_task_tool_child_error_without_parent_result_maps_subagent_failure() -> 
     out = [o for o in _data_json_objects(blob) if o.get("type") == "tool-output-available"][-1]
     assert out["status"] == "error"
     assert out["errorCategory"] == "subagent_failure"
-    assert out["error"] == "执行失败"
+    assert out["error"] == "partial result without task wrapper"
 
 
 def test_task_tool_failed_maps_subagent_failure() -> None:
@@ -1184,7 +1184,7 @@ def test_task_tool_failed_maps_subagent_failure() -> None:
     out = [o for o in _data_json_objects(blob) if o.get("type") == "tool-output-available"][-1]
     assert out["status"] == "error"
     assert out["errorCategory"] == "subagent_failure"
-    assert out["error"] == "执行失败"
+    assert out["error"].startswith("Task failed.")
 
 
 def test_reasoning_disabled_when_show_thinking_off() -> None:
@@ -1505,3 +1505,362 @@ def test_llm_error_middleware_max_retries_is_injectable() -> None:
 
     default = LLMErrorHandlingMiddleware()
     assert default.retry_max_attempts == max(1, int(ModelConfig.max_retries))
+
+
+def _model_call_sequence(
+    bridge: LangGraphSseBridge,
+    builder: AssistantMessageBuilder,
+    ctx: Dict[str, Any],
+    *,
+    run_id: str,
+    model_name: str,
+    content: str,
+    usage: Dict[str, Any],
+    finish_reason: str,
+) -> List[str]:
+    """一次模型调用的最小事件序列：start（含模型名）→ stream → end。"""
+    lines: List[str] = []
+
+    class _StreamChunk:
+        additional_kwargs = {}
+
+    _StreamChunk.content = content
+
+    class _FakeOutput:
+        pass
+
+    _FakeOutput.content = content
+    _FakeOutput.usage_metadata = usage
+    _FakeOutput.response_metadata = {"finish_reason": finish_reason}
+
+    lines.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_start",
+                "run_id": run_id,
+                "metadata": {"ls_model_name": model_name},
+                "data": {},
+            },
+            builder,
+            ctx,
+        )
+    )
+    lines.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_stream",
+                "run_id": run_id,
+                "data": {"chunk": _StreamChunk()},
+            },
+            builder,
+            ctx,
+        )
+    )
+    lines.extend(
+        bridge.process_item(
+            {
+                "event": "on_chat_model_end",
+                "run_id": run_id,
+                "data": {"output": _FakeOutput()},
+            },
+            builder,
+            ctx,
+        )
+    )
+    return lines
+
+
+def test_model_call_records_accumulate_with_usage_and_finish_frame() -> None:
+    """每次模型调用落一条明细：step/model/ttft/llm_ms/tokens/finish_reason，
+    并随 finish 帧下发（终态落 message.extra.model_calls）。"""
+    bridge = LangGraphSseBridge("sess-calls")
+    builder = AssistantMessageBuilder(session_id="sess-calls", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="mc-1", model_name="provider/model-a",
+            content="第一段",
+            usage={"input_tokens": 100, "output_tokens": 10,
+                   "input_token_details": {"cache_read": 60, "cache_write": 5}},
+            finish_reason="stop",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="mc-2", model_name="provider/model-a",
+            content="第二段",
+            usage={"input_tokens": 200, "output_tokens": 20,
+                   "input_token_details": {"cache_read": 150, "cache_write": 0}},
+            finish_reason="stop",
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    assert [c["step"] for c in bridge.message_model_calls] == [1, 2]
+    first, second = bridge.message_model_calls
+    assert first["model"] == "provider/model-a"
+    assert first["input_tokens"] == 100
+    assert first["output_tokens"] == 10
+    assert first["cache_read_tokens"] == 60
+    assert first["cache_write_tokens"] == 5
+    assert first["finish_reason"] == "stop"
+    assert first["ttft_ms"] >= 0.0
+    assert first["llm_ms"] >= first["ttft_ms"]
+    assert second["step"] == 2
+    # 明细 token 与合计口径一致
+    assert bridge.message_usage["input_tokens"] == 300
+    assert bridge.message_usage["cache_read_tokens"] == 210
+    assert bridge.message_usage["steps"] == 2
+
+    fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
+    assert fin["model_calls"] == bridge.message_model_calls
+    assert fin["usage"]["steps"] == 2
+
+
+def test_ttft_feeds_session_stats_registry() -> None:
+    """首包延迟同步写入会话级 registry：stats-update 快照（middleware 无从感知
+    首包）与终态落库的 extra.usage 同源，否则统计条 ttft 只剩历史 seed 值。"""
+    from noesis.runtime.session_stats_registry import SessionStatsRegistry
+
+    session_id = "sess-ttft-registry"
+    SessionStatsRegistry.clear(session_id)
+    try:
+        bridge = LangGraphSseBridge(session_id)
+        builder = AssistantMessageBuilder(session_id=session_id, message_id=bridge.assistant_message_id)
+        parts = _model_call_sequence(
+            bridge, builder, _ctx(),
+            run_id="run-ttft",
+            model_name="glm-5.3-flash",
+            content="你好",
+            usage={"input_tokens": 100, "output_tokens": 10, "total_tokens": 110},
+            finish_reason="stop",
+        )
+        assert parts
+        snapshot = SessionStatsRegistry.peek(session_id)
+        assert snapshot is not None
+        assert snapshot["ttft_ms"] >= 0.0
+        assert snapshot["ttft_ms"] == bridge.message_usage["ttft_ms"]
+    finally:
+        SessionStatsRegistry.clear(session_id)
+
+
+def test_finish_reason_promotes_last_call_provider_length() -> None:
+    """最后一步 provider finish_reason=length → 管道 stop 纠偏为 length_stop。"""
+    bridge = LangGraphSseBridge("sess-length")
+    builder = AssistantMessageBuilder(session_id="sess-length", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    # 第一步正常；第二步（最后）被 provider 以 length 截断
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="lc-1", model_name="m", content="ok",
+            usage={"input_tokens": 1, "output_tokens": 2}, finish_reason="stop",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="lc-2", model_name="m", content="被截断的",
+            usage={"input_tokens": 3, "output_tokens": 4}, finish_reason="length",
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
+    assert fin["finish_reason"] == "length_stop"
+    assert bridge.last_finish_reason == "length_stop"
+    # 中途 length（非最后一步）不纠偏整体终态：最后一步正常即保持 stop
+    bridge2 = LangGraphSseBridge("sess-length-mid")
+    builder2 = AssistantMessageBuilder(session_id="sess-length-mid", message_id=bridge2.assistant_message_id)
+    ctx2 = _ctx()
+    parts2: List[str] = []
+    parts2.extend(
+        _model_call_sequence(
+            bridge2, builder2, ctx2,
+            run_id="lm-1", model_name="m", content="参数被截",
+            usage={"input_tokens": 1, "output_tokens": 2}, finish_reason="length",
+        )
+    )
+    parts2.extend(
+        _model_call_sequence(
+            bridge2, builder2, ctx2,
+            run_id="lm-2", model_name="m", content="恢复后正常收尾",
+            usage={"input_tokens": 3, "output_tokens": 4}, finish_reason="stop",
+        )
+    )
+    parts2.extend(bridge2.process_item({"type": "__tw_finish__"}, builder2, ctx2))
+    parts2.extend(bridge2.finalize())
+    fin2 = [o for o in _data_json_objects("".join(parts2)) if o.get("type") == "finish"][-1]
+    assert fin2["finish_reason"] == "stop"
+    assert bridge2.message_model_calls[0]["finish_reason"] == "length"
+
+
+def test_finish_reason_gateway_duplication_collapsed() -> None:
+    """网关在多个 chunk 上重复 finish_reason，LangChain 聚合拼接成
+    tool_callstool_calls / lengthlength；bridge 落库前折叠为单值，
+    lengthlength 必须仍然触发截断纠偏（否则截断会被落成正常 stop）。"""
+    bridge = LangGraphSseBridge("sess-dup")
+    builder = AssistantMessageBuilder(session_id="sess-dup", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="dup-1", model_name="m", content="a",
+            usage={"input_tokens": 1, "output_tokens": 2},
+            finish_reason="tool_callstool_calls",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="dup-2", model_name="m", content="b",
+            usage={"input_tokens": 3, "output_tokens": 4},
+            finish_reason="lengthlength",
+        )
+    )
+    parts.extend(bridge.process_item({"type": "__tw_finish__"}, builder, ctx))
+    parts.extend(bridge.finalize())
+
+    assert [c["finish_reason"] for c in bridge.message_model_calls] == ["tool_calls", "length"]
+    fin = [o for o in _data_json_objects("".join(parts)) if o.get("type") == "finish"][-1]
+    assert fin["finish_reason"] == "length_stop"
+    assert bridge.last_finish_reason == "length_stop"
+
+
+def test_model_attempt_ordinal_is_per_call() -> None:
+    """attempt 是单次模型调用的重试位次，不是整条消息的单调计数：
+    一次重试抬升计数后，后续首次调用必须复位为 1（否则全部被错标 att=2）。"""
+    bridge = LangGraphSseBridge("sess-att")
+    builder = AssistantMessageBuilder(session_id="sess-att", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    parts: List[str] = []
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="att-1", model_name="m", content="a",
+            usage={"input_tokens": 1, "output_tokens": 1}, finish_reason="stop",
+        )
+    )
+    # att-1 失败后中间件产出的重试事件（结构与 _build_retry_event 一致）
+    parts.extend(
+        bridge.process_item(
+            {
+                "event": "on_custom_event",
+                "name": "noesis_model_retry",
+                "run_id": "att-1",
+                "data": {
+                    "type": "noesis_model_retry",
+                    "status": "retrying",
+                    "attempt_id": 2,
+                    "max_attempts": 6,
+                    "wait_ms": 1000,
+                    "reason": "transient",
+                    "message": "正在重试 (2/6)",
+                },
+            },
+            builder,
+            ctx,
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="att-2", model_name="m", content="b",
+            usage={"input_tokens": 2, "output_tokens": 2}, finish_reason="stop",
+        )
+    )
+    parts.extend(
+        _model_call_sequence(
+            bridge, builder, ctx,
+            run_id="att-3", model_name="m", content="c",
+            usage={"input_tokens": 3, "output_tokens": 3}, finish_reason="stop",
+        )
+    )
+    parts.extend(bridge.finalize())
+
+    assert [c["attempt"] for c in bridge.message_model_calls] == [1, 2, 1]
+
+
+def _stream_attempt_partial(bridge, builder, ctx) -> None:
+    """失败模型尝试的部分流式输出：一个工具 part 边界 + 尾部 text/reasoning。"""
+    builder.append_tool("web_search", {"query": "q"}, tool_call_id="b1")
+    builder.append_reasoning_delta("Now Phase 6: the final report.", parent_task_call_id=None)
+    builder.append_text_delta("Phase 3-5 完成。", parent_task_call_id=None)
+    ctx["text_buffer"] = "Phase 3-5 完成。"
+    ctx["reasoning_buffer"] = "Now Phase 6: the final report."
+
+
+def test_model_retry_rolls_back_partial_stream_output() -> None:
+    """LLM 重试：失败尝试已流出的 text/reasoning 回滚 + 下发 stream-rollback 帧。
+
+    回归场景：免费网关连续断流 × 重试不回滚 → 同一消息累积 N 份重复的
+    正文/思考（dd43c1ad 会话 5 组重复实锤）。
+    """
+    bridge = LangGraphSseBridge("sess-retry-rollback")
+    builder = AssistantMessageBuilder(session_id="sess-retry-rollback", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    _stream_attempt_partial(bridge, builder, ctx)
+
+    out = bridge.process_item(
+        {
+            "event": "on_custom_event",
+            "name": "noesis_model_retry",
+            "data": {
+                "type": "noesis_model_retry",
+                "status": "retrying",
+                "attempt_id": 2,
+                "max_attempts": 6,
+                "wait_ms": 2000,
+                "reason": "transient",
+                "message": "正在重试 (2/6)",
+            },
+        },
+        builder,
+        ctx,
+    )
+    blob = "".join(out)
+
+    # 回滚信号 + 原有重试提示帧都下发
+    assert '"stream-rollback"' in blob
+    assert '"run-status"' in blob and '"retrying"' in blob
+    # builder：尾部 text/reasoning 已丢弃，工具 part（attempt 边界）保留
+    types = [p["type"] for p in builder.to_dict()["parts"]]
+    assert types == ["tool"]
+    # 流式缓冲与开放 part 状态复位
+    assert ctx["text_buffer"] == ""
+    assert ctx["reasoning_buffer"] == ""
+    assert bridge._text_open is False and bridge._reasoning_open is False
+
+
+def test_model_fallback_rolls_back_partial_stream_and_appends_notice() -> None:
+    """重试耗尽降级：最后一次尝试的部分输出同样回滚，降级文案单独成段。"""
+    bridge = LangGraphSseBridge("sess-fallback-rollback")
+    builder = AssistantMessageBuilder(session_id="sess-fallback-rollback", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    _stream_attempt_partial(bridge, builder, ctx)
+
+    out = bridge.process_item(
+        {
+            "event": "on_custom_event",
+            "name": "noesis_model_fallback",
+            "data": {"type": "noesis_model_fallback", "content": "服务暂时不可用，请稍候重试。"},
+        },
+        builder,
+        ctx,
+    )
+    blob = "".join(out)
+
+    assert '"stream-rollback"' in blob
+    assert '"error"' in blob
+    parts = builder.to_dict()["parts"]
+    types = [p["type"] for p in parts]
+    # 工具边界保留 + 尾部只剩降级文案（失败尝试的 text/reasoning 不在）
+    assert types == ["tool", "text"]
+    assert parts[1]["content"] == "服务暂时不可用，请稍候重试。"

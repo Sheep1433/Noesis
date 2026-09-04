@@ -109,10 +109,7 @@ class RunOrchestrator:
                 langfuse_context=langfuse_context,
                 on_events=on_events,
             )
-            fr = finish_reason
-            if fr is None and ctx.get("user_stopped"):
-                fr = "stopped"
-            events = mapper.finalize(finish_reason=fr)
+            events = mapper.finalize(finish_reason=finish_reason)
             if on_events is not None and events:
                 await on_events(events)
             for ev in events:

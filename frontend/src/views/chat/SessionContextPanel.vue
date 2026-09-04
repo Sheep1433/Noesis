@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SessionContextResponse } from '@/api/chat'
+import type { CitationIndex } from '@/views/chat/citationRendering'
 import { Refresh } from '@vicons/ionicons-v5'
 import {
   NButton,
@@ -21,10 +22,14 @@ import { downloadFile } from '@/utils/download'
 import { getFilePreviewKind } from '@/utils/filePreview'
 import WorkspaceFileTree from '@/views/chat/WorkspaceFileTree.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   sessionId: string
   backgroundColor?: string
-}>()
+  /** 归一化路径（去前导 /）→ 所属弧引用编号索引；文件无所属弧时不映射 */
+  citationIndexByFile?: Map<string, CitationIndex>
+}>(), {
+  citationIndexByFile: undefined,
+})
 
 const message = useMessage()
 const router = useRouter()
@@ -36,6 +41,14 @@ const previewContent = ref('')
 const previewImageSrc = ref('')
 const previewLoading = ref(false)
 const previewSaving = ref(false)
+
+/** 当前预览文件的弧引用索引：报告文件上标与所属弧来源面板同号 */
+const previewCitationIndex = computed(() => {
+  if (!previewPath.value || !props.citationIndexByFile) {
+    return undefined
+  }
+  return props.citationIndexByFile.get(previewPath.value.replace(/^\/+/, ''))
+})
 
 const previewEditable = computed(() => {
   if (!previewPath.value) {
@@ -327,6 +340,7 @@ defineExpose({ reload })
             :editable="previewEditable"
             :saving="previewSaving"
             :show-download="false"
+            :citation-index="previewCitationIndex"
             density="compact"
             fill-height
             class="session-file-preview"

@@ -3,7 +3,6 @@
 from noesis.agents.guardrails.policy import (
     execute_when,
     is_dangerous_execute,
-    is_memory_write_path,
     is_network_execute,
     memory_write_when,
 )
@@ -13,7 +12,6 @@ __all__ = [
     "SessionGrantStore",
     "execute_when",
     "is_dangerous_execute",
-    "is_memory_write_path",
     "is_network_execute",
     "memory_write_when",
     "session_grants",

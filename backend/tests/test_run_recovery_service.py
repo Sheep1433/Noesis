@@ -59,6 +59,7 @@ async def test_recovery_closes_streaming_assistant_without_run(monkeypatch) -> N
 async def test_recovery_finalizes_interrupted_run(monkeypatch) -> None:
     run = SimpleNamespace(
         id="run-1",
+        origin="web",
         assistant_message_id="assistant-1",
         snapshot={"parts": [{"type": "text", "content": "Useful partial result"}]},
         last_sequence=3,
@@ -66,7 +67,7 @@ async def test_recovery_finalizes_interrupted_run(monkeypatch) -> None:
         owner_instance_id="dead-instance",
         owner_term=0,
     )
-    message = SimpleNamespace(content=run.snapshot)
+    message = SimpleNamespace(content=run.snapshot, status="streaming")
     message_result = MagicMock()
     message_result.scalar_one_or_none.return_value = message
     orphan_result = MagicMock()
@@ -95,6 +96,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
 
     queued_unclaimed = SimpleNamespace(
         id="run-queued",
+        origin="web",
         assistant_message_id="assistant-queued",
         snapshot={"parts": []},
         last_sequence=0,
@@ -104,6 +106,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
     )
     running_old_term = SimpleNamespace(
         id="run-running",
+        origin="web",
         assistant_message_id="assistant-running",
         snapshot={"parts": []},
         last_sequence=5,
@@ -113,7 +116,7 @@ async def test_recovery_keeps_unclaimed_queued_runs(monkeypatch) -> None:
     )
     message_result = MagicMock()
     message_result.scalar_one_or_none.return_value = SimpleNamespace(
-        content={"parts": []}
+        content={"parts": []}, status="streaming"
     )
     orphan_result = MagicMock()
     orphan_result.scalars.return_value.all.return_value = []
@@ -149,6 +152,7 @@ async def test_recovery_skips_current_term_runs(monkeypatch) -> None:
 
     current_term_run = SimpleNamespace(
         id="run-current",
+        origin="web",
         assistant_message_id="assistant-current",
         snapshot={"parts": []},
         last_sequence=1,
@@ -175,3 +179,84 @@ async def test_recovery_skips_current_term_runs(monkeypatch) -> None:
 
     repository.finalize.assert_not_awaited()
     assert recovered == 0
+
+
+@pytest.mark.asyncio
+async def test_recovery_skips_subagent_runs(monkeypatch) -> None:
+    """子 Agent run 不走通用对账（统一由 reconcile_orphaned_runs 收口 ERROR）。"""
+    subagent_run = SimpleNamespace(
+        id="run-sub",
+        origin="subagent",
+        assistant_message_id="assistant-sub",
+        snapshot={"parts": []},
+        last_sequence=2,
+        status="running",
+        owner_instance_id=None,
+        owner_term=0,
+    )
+    orphan_result = MagicMock()
+    orphan_result.scalars.return_value.all.return_value = []
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=orphan_result)
+    db.commit = AsyncMock()
+    repository = MagicMock()
+    repository.list_non_terminal = AsyncMock(return_value=[subagent_run])
+    repository.finalize = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "noesis.services.run_recovery_service.AgentRunRepository",
+        lambda _db: repository,
+    )
+
+    recovered = await RunRecoveryService.recover_orphaned_runs(db)
+
+    repository.finalize.assert_not_awaited()
+    assert recovered == 0
+
+
+@pytest.mark.asyncio
+async def test_recovery_run_only_finalize_for_poisoned_message(monkeypatch) -> None:
+    """毒丸数据回归：assistant 消息已终态而 run 遗留非终态——不炸启动，
+    仅收口 run 行（完整 finalize 不调用，消息保持原终态不被覆盖）。"""
+    from noesis.chat.runs import RunStatus
+    poisoned_run = SimpleNamespace(
+        id="run-poison",
+        origin="web",
+        assistant_message_id="assistant-poison",
+        snapshot={"parts": []},
+        last_sequence=4,
+        status="running",
+        owner_instance_id="dead-instance",
+        owner_term=0,
+    )
+    # SELECT 消息：已终态 error（automation/channel 链路写入方只写了消息未收 run）
+    message_result = MagicMock()
+    message_result.scalar_one_or_none.return_value = SimpleNamespace(
+        content={"parts": [{"type": "text", "content": "操作失败，请稍候重试"}]},
+        status="error",
+    )
+    delivery_update = SimpleNamespace(rowcount=1)
+    orphan_result = MagicMock()
+    orphan_result.scalars.return_value.all.return_value = []
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=[message_result, delivery_update, orphan_result])
+    db.commit = AsyncMock()
+    repository = MagicMock()
+    repository.list_non_terminal = AsyncMock(return_value=[poisoned_run])
+    repository.finalize = AsyncMock(return_value=True)
+    repository.finalize_run_only = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "noesis.services.run_recovery_service.AgentRunRepository",
+        lambda _db: repository,
+    )
+
+    recovered = await RunRecoveryService.recover_orphaned_runs(db)
+
+    repository.finalize.assert_not_awaited()
+    repository.finalize_run_only.assert_awaited_once()
+    call = repository.finalize_run_only.await_args
+    assert call.kwargs["run_id"] == "run-poison"
+    assert call.kwargs["target"] is RunStatus.INTERRUPTED
+    assert call.kwargs["finish_reason"] == "server_restart"
+    assert call.kwargs["last_sequence"] == 4
+    assert recovered == 1
+    db.commit.assert_awaited_once()

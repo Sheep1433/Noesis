@@ -8,7 +8,6 @@ import {
   presetAttributify,
   presetIcons,
   presetWind3,
-  transformerAttributifyJsx,
   transformerDirectives,
 } from 'unocss'
 
@@ -35,6 +34,8 @@ const DYNAMIC_ICON_SAFELIST = [
   'i-hugeicons:ai-chat-02',
   'i-hugeicons:add-01',
   'i-hugeicons:voice-id',
+  'i-hugeicons:panel-left-close',
+  'i-hugeicons:panel-left-open',
   'i-carbon:side-panel-close',
   'i-carbon:side-panel-open',
   'i-carbon:document-blank',
@@ -89,7 +90,6 @@ export default defineConfig({
   ],
   transformers: [
     transformerDirectives(),
-    transformerAttributifyJsx(),
   ],
   theme: {
     colors: {

@@ -48,6 +48,10 @@ def can_transition_tool_state(current: ToolState | str, target: ToolState | str)
             ToolState.CANCELLED,
             ToolState.FAILED,
             ToolState.TIMED_OUT,
+            # ask_user 已回答：resume 不重跑工具，用户答案直接作为工具结果
+            # 落地（SUCCEEDED）。缺这条边会让已回答的提问停在 pending，
+            # 被 run 终态 reconcile 错杀为 cancelled。
+            ToolState.SUCCEEDED,
         }
     return target_state != ToolState.APPROVAL_PENDING or current_state == ToolState.RUNNING
 

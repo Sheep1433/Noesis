@@ -27,7 +27,8 @@ async def test_web_command_reply_does_not_create_run(monkeypatch: pytest.MonkeyP
     req = CreateRunRequest(session_id="s1", content="/help", client_request_id="abcdefgh")
     user = SimpleNamespace(user_id=1)
 
-    resp = await api.create_run(req, user, db=None)
+    monkeypatch.setattr(api, "require_csrf", AsyncMock())
+    resp = await api.create_run(req, http_request=SimpleNamespace(), current_user=user, db=None)
 
     assert resp.status_code == 200
     data = json.loads(resp.body)["data"]
@@ -57,7 +58,8 @@ async def test_web_non_command_proceeds_to_create_run(monkeypatch: pytest.Monkey
     req = CreateRunRequest(
         session_id="s1", content="帮我查天气", client_request_id="abcdefgh"
     )
-    resp = await api.create_run(req, SimpleNamespace(user_id=1), db=None)
+    monkeypatch.setattr(api, "require_csrf", AsyncMock())
+    resp = await api.create_run(req, http_request=SimpleNamespace(), current_user=SimpleNamespace(user_id=1), db=None)
 
     create_mock.assert_awaited_once()
     data = json.loads(resp.body)["data"]
@@ -108,7 +110,8 @@ async def test_web_skill_command_rewrites_then_creates_run(monkeypatch: pytest.M
         content="/baoyu-url-to-markdown 抓取 https://example.com",
         client_request_id="abcdefgh",
     )
-    resp = await api.create_run(req, SimpleNamespace(user_id=1), db=None)
+    monkeypatch.setattr(api, "require_csrf", AsyncMock())
+    resp = await api.create_run(req, http_request=SimpleNamespace(), current_user=SimpleNamespace(user_id=1), db=None)
 
     # 走了正常 create（不是 command_reply）
     data = json.loads(resp.body)["data"]

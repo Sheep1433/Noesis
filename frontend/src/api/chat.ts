@@ -127,16 +127,10 @@ export interface MessageListResponse {
   total: number
 }
 
-/** 发送消息响应 */
-export interface SendMessageResponse {
-  message_id: string
-  session_id: string
-  status: string
-}
-
 export type AgentRunStatus =
   | 'queued'
   | 'running'
+  | 'stopping'
   | 'retrying'
   | 'hitl_pending'
   | 'completed'
@@ -206,22 +200,6 @@ export interface CreateSessionParams {
 /** 更新会话标题参数 */
 export interface UpdateSessionTitleParams {
   title: string
-}
-
-/** 发送消息参数 */
-export interface SendMessageParams {
-  content: string
-  parent_id?: string
-  role?: 'user' | 'assistant'
-  extra?: Record<string, unknown>
-}
-
-/** 流式发送消息参数（带 qa_type 和 file_dict） */
-export interface StreamSendMessageParams extends SendMessageParams {
-  extra?: SendMessageParams['extra'] & {
-    qa_type?: string
-    file_dict?: Record<string, string>
-  }
 }
 
 /** 获取消息历史参数 */
@@ -442,10 +420,14 @@ export interface TaskCatalogEntry {
   run_id?: string | null
   assistant_message_id?: string | null
   description: string
+  /** kind=shell 的原始命令；subagent 任务为空 */
+  command?: string | null
   kind?: 'subagent' | 'shell'
-  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
+  status: 'queued' | 'running' | 'stopping' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
   result?: string | null
   error?: string | null
+  /** 协作停止受理原因（cancelled / timed_out）；status=stopping 时非空 */
+  stop_reason?: 'cancelled' | 'timed_out' | null
   interrupt?: {
     interrupt_id: string
     action_requests: Array<{ tool_call_id?: string, name?: string, args?: Record<string, unknown> }>
@@ -612,6 +594,22 @@ export async function deleteSessionAttachment(
   await parseResponse<void>(await authFetch(req))
 }
 
+/** 会话 usage 汇总（主+子合并口径） GET /api/chat/sessions/{sessionId}/usage-summary */
+/** 无 usage 数据时返回 null（data 为 null），前端回退本地重建 */
+export async function getSessionUsageSummary(
+  sessionId: string,
+): Promise<Record<string, number> | null> {
+  const req = makeRequest(
+    'GET',
+    `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/usage-summary`,
+  )
+  const res = await authFetch(req)
+  if (res.status === 404) {
+    return null
+  }
+  return parseAuthJson<Record<string, number> | null>(res)
+}
+
 /** 会话上下文（工作区 + 附件） GET /api/chat/sessions/{sessionId}/context */
 /** 会话尚未物化时返回 null（HTTP 404），不视为错误 */
 export async function getSessionContext(sessionId: string): Promise<SessionContextResponse | null> {
@@ -717,27 +715,24 @@ export async function getSessionMessages(
   return parseResponse<MessageListResponse>(await authFetch(req))
 }
 
-/**
- * 发送消息（创建用户消息）
- * POST /api/chat/sessions/{sessionId}/messages
- */
-export async function sendMessage(
-  sessionId: string,
-  params: SendMessageParams,
-): Promise<SendMessageResponse> {
-  const req = makeRequest('POST', `${location.origin}${BASE}/sessions/${sessionId}/messages`, params)
-  return parseResponse<SendMessageResponse>(await authFetch(req))
-}
-
-/** 向已有 child session 追加下一轮对话。 */
+/** 向已有 child session 追加下一轮对话；modelId/reasoningEffort 缺省沿用当前值。 */
 export async function sendSubagentFollowup(
   sessionId: string,
   message: string,
+  modelId?: string,
+  reasoningEffort?: string,
 ): Promise<TaskCatalogEntry> {
+  const body: Record<string, string> = { message }
+  if (modelId) {
+    body.model_id = modelId
+  }
+  if (reasoningEffort) {
+    body.reasoning_effort = reasoningEffort
+  }
   const req = makeRequest(
     'POST',
     `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/subagent-followup`,
-    { message },
+    body,
   )
   return parseResponse<TaskCatalogEntry>(await authFetch(req))
 }

@@ -31,7 +31,7 @@ from noesis.chat.event_mapping.failure_notice import (
 )
 from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
-from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+from noesis.runtime.session_stats_registry import SessionStatsRegistry
 from noesis.chat.event_mapping.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
@@ -202,10 +202,14 @@ async def _resolve_model_for_query(
     request_model_id: Optional[str],
     db: AsyncSession,
 ) -> str:
-    """请求显式携带 model_id 时写入会话；否则读会话 extra；最后回退默认目录项。
+    """请求显式携带 model_id 时写入会话；否则读会话 extra；再读用户默认偏好；
+    最后无任何选择时回退平台默认目录项。
 
     用户自定义模型优先于内置目录：命中时把含解密 key 的快照注入 ContextVar，
     factory/catalog 在本次 run 内据此路由到用户自己的端点。
+
+    显式选择的 id（请求/会话/偏好）不可解析时直接报错——不静默回退平台
+    默认，否则「用户配了 A 实际跑 B」无声发生（2026-09-03 实证）。
     """
     from noesis.llm.runtime_snapshot import set_runtime_model_snapshots
     from noesis.services.user_llm_service import UserLLMService
@@ -223,9 +227,14 @@ async def _resolve_model_for_query(
         set_runtime_model_snapshots(snapshots)
         return snapshots[0].id
 
+    def _strict(model_id: Optional[str]) -> str:
+        from noesis.llm.catalog import resolve_catalog_entry_strict
+
+        return resolve_catalog_entry_strict(model_id).id
+
     if request_model_id is not None:
         normalized = _normalize_model_id(request_model_id)
-        resolved = await _apply_custom(normalized) or resolve_catalog_entry(normalized).id
+        resolved = await _apply_custom(normalized) or _strict(normalized)
         await ChatService.merge_session_extra(
             session_id,
             user_id,
@@ -242,7 +251,12 @@ async def _resolve_model_for_query(
     if session and session.extra:
         stored = _normalize_model_id(session.extra.get("model_id"))
         if stored:
-            return await _apply_custom(stored) or resolve_catalog_entry(stored).id
+            return await _apply_custom(stored) or _strict(stored)
+    # 用户默认偏好（设置页「默认对话模型」）：会话未显式选模型时的兜底，
+    # 先于平台目录默认。偏好不可解析同样报错，不静默换模型。
+    preferred = await UserLLMService.get_default_model(db, user_id=str(user_id))
+    if preferred:
+        return await _apply_custom(preferred) or _strict(preferred)
     return get_default_model_id()
 
 
@@ -264,9 +278,10 @@ def _assistant_status_for_finish(finish_reason: str) -> str:
         return "error"
     if finish_reason == "hitl_pending":
         return "streaming"
+    # length_stop / safety_stop 不入 partial：输出与 usage 完整（只是最后一步
+    # 被 provider 截断/安全收尾），与 mapper 的 RunCompleted 归类一致——
+    # 真实原因记在 extra.finish_reason，状态不伪装成被中断。
     if finish_reason in {
-        "length_stop",
-        "safety_stop",
         "partial_output",
         "empty_after_tools",
         "tool_loop_limit",
@@ -301,6 +316,9 @@ def _build_assistant_persist_extra(
         # update_assistant_message 对 usage 键做累加合并，中途写会导致重复计数。
         if include_usage and bridge.message_usage.get("steps"):
             extra["usage"] = dict(bridge.message_usage)
+        # 每次模型调用明细同条件落 message.extra.model_calls（单步诊断口径）。
+        if include_usage and bridge.message_model_calls:
+            extra["model_calls"] = list(bridge.message_model_calls)
     elif error_message:
         extra["error_message"] = error_message[:8000]
     return extra
@@ -333,7 +351,7 @@ def _resolve_assistant_message_id(
 
 
 def _stream_terminal_persist_done(ctx: Dict[str, Any]) -> bool:
-    return bool(ctx.get("user_stopped") or ctx.get("_stream_persist_finalized"))
+    return bool(ctx.get("_stream_persist_finalized"))
 
 
 def _mark_stream_persist_finalized(ctx: Dict[str, Any]) -> None:
@@ -404,8 +422,6 @@ async def _persist_hitl_pending_assistant(
     model: Optional[str] = None,
 ) -> None:
     """HITL 等待：UPDATE content + status=streaming，不标记终态 finalized。"""
-    if ctx.get("user_stopped"):
-        return
     if ctx.get("text_buffer") and builder:
         builder.append_text_delta(
             ctx["text_buffer"],
@@ -567,21 +583,6 @@ def _langfuse_stream_context(
     return langfuse_workflow_context(lf_config)
 
 
-def _new_stream_ctx() -> Dict[str, Any]:
-    return {
-        "text_buffer": "",
-        "current_tool_name": None,
-        "current_tool_call_id": None,
-        "tool_start_times": {},
-        "_assistant_db_id": None,
-        # 并行工具分组：按 scope（parent_task_call_id 或 "root"）独立计数 step_id。
-        # on_chat_model_start 标 pending scope，首个 on_tool_start mint 新 step_id。
-        "pending_model_step_scopes": set(),
-        "step_counters": {},
-        "current_step_ids": {},
-    }
-
-
 async def _yield_sse_from_agent_bridge(
     agent_generator: AsyncGenerator[Any, None],
     *,
@@ -673,9 +674,8 @@ async def _finalize_run_events(
     user_id: str,
 ) -> AsyncGenerator[RunEvent, None]:
     mapper = RuntimeEventMapper(bridge)
-    finish_reason = "stopped" if ctx.get("user_stopped") else None
     sink = ctx.get("_persist_sink")
-    for event in mapper.finalize(finish_reason=finish_reason):
+    for event in mapper.finalize():
         if isinstance(sink, PersistSink):
             sink.on_event(event)
         yield event
@@ -688,8 +688,7 @@ async def _finalize_sse_bridge_stream(
     session_id: str,
     user_id: str,
 ) -> AsyncGenerator[str, None]:
-    finish_reason = "stopped" if ctx.get("user_stopped") else None
-    lines = _run_orchestrator.finalize_sse(bridge, finish_reason=finish_reason)
+    lines = _run_orchestrator.finalize_sse(bridge)
     sink = ctx.get("_persist_sink")
     if isinstance(sink, PersistSink):
         from noesis.chat.delivery.sse import parse_sse_line_to_event
@@ -717,6 +716,53 @@ def _flush_ctx_text_buffer(
     ctx["text_buffer_parent_task_call_id"] = None
 
 
+async def get_session_usage_summary(session_id: str, user_id: str, db: AsyncSession) -> Optional[Dict[str, float]]:
+    """主+子合并口径的会话 usage 汇总（刷新后统计条的数据源）。
+
+    汇总该会话与其全部子会话（parent_id）的 assistant 消息 extra.usage——
+    与实时统计口径一致（SessionStatsMiddleware 主/子共写同一 registry）。
+    turns 只数主会话轮次：子会话消息是子 Agent 执行明细，不是用户轮次
+    （实时侧仅主 Agent 计轮）。无任何 usage 数据返回 None。
+    """
+    if not session_id:
+        return None
+    from sqlalchemy import or_, select
+    from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
+
+    result = await db.execute(
+        select(TChatMessage.session_id, TChatMessage.extra).where(
+            TChatMessage.session_id.in_(
+                select(TChatSession.id).where(
+                    or_(
+                        TChatSession.id == session_id,
+                        TChatSession.parent_id == session_id,
+                    ),
+                )
+            ),
+            TChatMessage.user_id == user_id,
+            TChatMessage.role == "assistant",
+            TChatMessage.deleted_at.is_(None),
+        )
+    )
+    totals: Dict[str, float] = {}
+    for row_session_id, extra in result.all():
+        usage = extra.get("usage") if isinstance(extra, dict) else None
+        if not isinstance(usage, dict):
+            continue
+        for key in USAGE_FIELDS:
+            if key == "turns":
+                continue
+            value = usage.get(key)
+            if isinstance(value, (int, float)):
+                totals[key] = totals.get(key, 0.0) + value
+        # turns 只数主会话的 assistant 消息（一条 = 一轮），与实时口径一致
+        if row_session_id == session_id:
+            totals["turns"] = totals.get("turns", 0.0) + 1
+    if not totals or not totals.get("steps"):
+        return None
+    return totals
+
+
 async def seed_session_stats_from_history(session_id: str, user_id: str, db: AsyncSession) -> None:
     """进程内首次遇到该会话时，从 DB 历史 assistant 消息 extra.usage 汇总预填 stats registry。
 
@@ -729,19 +775,28 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
     if SessionStatsRegistry.peek(session_id) is not None:
         return
     try:
-        from sqlalchemy import select
-        from noesis.storage.postgres.models.chat import TChatMessage
+        from sqlalchemy import or_, select
+        from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
 
         result = await db.execute(
-            select(TChatMessage.extra).where(
-                TChatMessage.session_id == session_id,
+            select(TChatMessage.session_id, TChatMessage.extra).where(
+                # 主+子合并口径：子会话（parent_id）的 usage 与主会话一起累计，
+                # 与实时统计（SessionStatsMiddleware 主/子共写一 registry）一致
+                TChatMessage.session_id.in_(
+                    select(TChatSession.id).where(
+                        or_(
+                            TChatSession.id == session_id,
+                            TChatSession.parent_id == session_id,
+                        ),
+                    )
+                ),
                 TChatMessage.user_id == user_id,
                 TChatMessage.role == "assistant",
                 TChatMessage.deleted_at.is_(None),
             )
         )
         totals: Dict[str, float] = {}
-        for (extra,) in result.all():
+        for row_session_id, extra in result.all():
             usage = extra.get("usage") if isinstance(extra, dict) else None
             if not isinstance(usage, dict):
                 continue
@@ -749,7 +804,9 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
                 if key == "turns":
                     continue
                 totals[key] = totals.get(key, 0.0) + float(usage.get(key) or 0)
-            totals["turns"] = totals.get("turns", 0.0) + 1.0
+            # turns 只数主会话轮次（实时侧仅主 Agent 计轮，子会话消息不计）
+            if row_session_id == session_id:
+                totals["turns"] = totals.get("turns", 0.0) + 1.0
         if totals:
             SessionStatsRegistry.seed(session_id, totals)
     except Exception:

@@ -23,7 +23,7 @@ from noesis.agents.middlewares.dynamic_context_middleware import (
     DynamicContextMiddleware,
     DynamicContextProvider,
     DynamicContextState,
-    render_dynamic_block,
+    render_head_block,
 )
 from noesis.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
 from noesis.agents.middlewares.read_before_write_middleware import (
@@ -31,17 +31,13 @@ from noesis.agents.middlewares.read_before_write_middleware import (
     ReadBeforeWriteMiddleware,
     WriteRejectedError,
 )
-from noesis.agents.middlewares.memory_entries_middleware import (
-    MemoryEntriesMiddleware,
-    build_memory_entries_middleware,
-)
 from noesis.agents.middlewares.refreshing_memory_middleware import RefreshingMemoryMiddleware
 from noesis.agents.middlewares.refreshing_skills_middleware import (
     RefreshingSkillsMiddleware,
     RefreshingSkillsState,
 )
 from noesis.agents.middlewares.session_stats_middleware import SessionStatsMiddleware
-from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+from noesis.runtime.session_stats_registry import SessionStatsRegistry
 from noesis.agents.middlewares.snip_middleware import (
     SnipError,
     SnipMiddleware,
@@ -73,9 +69,7 @@ __all__ = [
     "FileFingerprint",
     "LLMErrorHandlingMiddleware",
     "ReadBeforeWriteMiddleware",
-    "MemoryEntriesMiddleware",
     "RefreshingMemoryMiddleware",
-    "build_memory_entries_middleware",
     "RefreshingSkillsMiddleware",
     "RefreshingSkillsState",
     "ReplacementRecord",
@@ -93,5 +87,5 @@ __all__ = [
     "apply_snip_projection",
     "derive_durable_context",
     "render_durable_block",
-    "render_dynamic_block",
+    "render_head_block",
 ]

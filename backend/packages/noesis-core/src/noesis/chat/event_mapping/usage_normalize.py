@@ -41,6 +41,41 @@ def to_int(value: Any) -> int | None:
         return None
 
 
+def merge_usage(base: Dict[str, Any] | None, extra: Dict[str, Any] | None) -> Dict[str, Any]:
+    """usage 数值字段累加合并（相加）；非数值以 extra 覆盖。
+
+    三处调用共用（executor 跨轮累计 / run 终态 finalize / assistant 消息
+    UPDATE）：bridge 的 message_usage 恒为 USAGE_FIELDS−{turns} 的零填充
+    数值表，输入同形；turns 是外层生命周期语义，不参与累加。
+    """
+    merged = dict(base or {})
+    for key, value in (extra or {}).items():
+        old = merged.get(key)
+        if (
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            and isinstance(old, (int, float)) and not isinstance(old, bool)
+        ):
+            merged[key] = old + value
+        else:
+            merged[key] = value
+    return merged
+
+
+def merge_model_calls(base: Any, extra: Any) -> list[Dict[str, Any]]:
+    """model_calls 列表拼接并全局重编 step。
+
+    各 run 的明细独立从 1 计数（step 是「跨 run 全局连续」的展示契约），
+    直接拼接会重复；非 dict 条目过滤。
+    """
+    merged = [call for call in (base or []) if isinstance(call, dict)]
+    offset = len(merged)
+    incoming = [call for call in (extra or []) if isinstance(call, dict)]
+    merged.extend(
+        {**call, "step": offset + i + 1} for i, call in enumerate(incoming)
+    )
+    return merged
+
+
 def compute_used_percentage(current_tokens: int, max_tokens: int) -> int:
     """占用百分比；有占用但四舍五入为 0 时显示 1%，避免圆环长期为 0%。"""
     if max_tokens <= 0 or current_tokens <= 0:

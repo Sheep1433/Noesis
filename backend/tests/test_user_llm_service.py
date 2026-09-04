@@ -535,3 +535,5 @@ async def test_resolve_runtime_snapshots_bare_id_legacy_fallback(monkeypatch: py
     assert len(snapshots) == 1
     assert snapshots[0].wire_name == "glm-custom"
     assert snapshots[0].id == "glm-custom"
+
+

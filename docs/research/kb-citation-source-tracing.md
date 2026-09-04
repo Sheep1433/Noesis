@@ -2,7 +2,7 @@
 
 > 状态：Research
 > 调研日期：2026-07-28，结论更新：2026-08-01
-> 关联 OpenSpec：[`add-kb-citation-sources`](../../openspec/changes/archive/2026-08-04-add-kb-citation-sources/)
+> 关联 OpenSpec：[`add-kb-citation-sources`](../../openspec/changes/archive/2026-08-04-add-kb-citation-sources/proposal.md)
 
 ## 1. 调研目标与范围
 
@@ -11,7 +11,7 @@
 - provider 原生或 structured output 产生 typed citation；
 - 检索工具保留来源元数据，模型按 system prompt 在普通 Markdown 中引用。
 
-可验收行为以 OpenSpec 为准；当前数据流见 [`chat-streaming.md`](../architecture/platform/chat-streaming.md)。
+可验收行为以 OpenSpec 为准；当前数据流见 [`chat-streaming.md`](../engineering/platform/chat-streaming.md)。
 
 ## 2. Noesis 现状
 

@@ -41,7 +41,8 @@ def search_with_tavily(query: str, limit: int) -> dict[str, Any]:
     }
 
 
-def fetch_with_tavily(url: str, max_chars: int) -> dict[str, Any]:
+def fetch_with_tavily(url: str) -> dict[str, Any]:
+    """Tavily extract：返回完整正文，截断统一由 web_fetch 工具层处理。"""
     client = _get_client()
     res = client.extract([url])
     failed = res.get("failed_results") or []
@@ -55,6 +56,6 @@ def fetch_with_tavily(url: str, max_chars: int) -> dict[str, Any]:
 
     item = items[0]
     title = item.get("title") or url
-    body = (item.get("raw_content") or item.get("content") or "")[:max_chars]
+    body = item.get("raw_content") or item.get("content") or ""
     markdown = f"<!-- provider: tavily -->\n# {title}\n\n{body}"
     return {"provider": "tavily", "url": url, "markdown": markdown}

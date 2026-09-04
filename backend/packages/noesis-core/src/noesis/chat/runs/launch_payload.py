@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
+from noesis.llm.reasoning import REASONING_LEVELS
 from noesis.schemas.chat_vo import CreateRunRequest
 from noesis.schemas.qa_vo import QaQueryRequest
 
@@ -27,6 +28,7 @@ _EXTRA_ALLOWED_KEYS = (
     "enabled_skills",
     "mentions",
     "qa_type",
+    "reasoning_effort",
 )
 
 # 禁止字段断言：命中即拒绝构建（防未来误加敏感键）
@@ -43,6 +45,9 @@ def _sanitize_extra(extra: Mapping[str, Any]) -> dict[str, Any]:
     for key in _EXTRA_ALLOWED_KEYS:
         if key in extra and extra[key] is not None:
             sanitized[key] = extra[key]
+    # 推理档位只接受合法枚举，非法值静默丢弃（自动=键缺失）
+    if sanitized.get("reasoning_effort") not in REASONING_LEVELS:
+        sanitized.pop("reasoning_effort", None)
     # 静态不变量：白名单本身不得含敏感键（防未来误加）
     for key in sanitized:
         if any(part in str(key).lower() for part in _FORBIDDEN_KEY_FRAGMENTS):
@@ -152,6 +157,8 @@ class LaunchPayload:
                 else None
             ),
             model_id=self.resolved_model,
+            # extra 经 _sanitize_extra 归一，档位值必在合法枚举内；缺失/None = 自动
+            reasoning_effort=self.extra.get("reasoning_effort"),
             mcp_servers=(
                 self.extra.get("mcp_servers")
                 if isinstance(self.extra.get("mcp_servers"), list)

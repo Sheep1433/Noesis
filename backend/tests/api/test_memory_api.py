@@ -1,6 +1,6 @@
 """记忆层接口用例（integration）：真实 HTTP 验证 md 文件记忆层全部 API。
 
-前置：后端已启动（uv run app.py）；demo 账号 admin/123456。
+前置：后端已启动（uv run app.py）；demo 账号 test/123456（与 conftest 登录一致）。
 运行：``uv run pytest tests/api/test_memory_api.py -m integration -v``
 
 覆盖面：
@@ -30,7 +30,11 @@ TEST_LABEL = f"接口验证{uuid.uuid4().hex[:6]}"
 
 
 def _current_user_id() -> str:
-    """登录接口不回传 user_id；按登录用户名从 DB 查（admin 为种子账号）。"""
+    """登录接口不回传 user_id；按登录用户名从 DB 查。
+
+    种子身份必须与 conftest 的登录账号一致（test）——文件层种子写的
+    是该用户的 memory 目录，API 侧按会话用户过滤，两边错位则种子永远不可见。
+    """
     import asyncio
     import os
 
@@ -38,7 +42,7 @@ def _current_user_id() -> str:
 
     from noesis.storage.postgres.manager import pg_manager
 
-    username = os.environ.get("NOESIS_TEST_USER", "admin")
+    username = os.environ.get("NOESIS_TEST_USER", "test")
 
     async def run() -> str:
         async with pg_manager.get_async_session_context() as db:
@@ -212,11 +216,18 @@ def test_context_preview_includes_memory_index(auth_client) -> None:
         "/api/user/context/preview", params={"profile": "super_agent"}
     )
     resp.raise_for_status()
-    sources = resp.json()["data"]["sources"]
+    data = resp.json()["data"]
+    sources = data["sources"]
     memory_source = next((s for s in sources if s.get("id") == "memory-index"), None)
     assert memory_source is not None, "预览应包含 MEMORY.md 索引源"
-    compiled = resp.json()["data"]["compiled_content"]
-    assert "MEMORY.md" in str(sources) or "记忆索引" in compiled
+    compiled = data["compiled_content"]
+    # compiled = 模型真实所见：XML 包裹 + 文件路径头 + guidelines，
+    # 与自拼标签预览（## 用户画像）区分
+    assert "<agent_memory>" in compiled and "</agent_memory>" in compiled
+    assert "/memory/USER.md" in compiled and "/memory/AGENTS.md" in compiled
+    assert "<memory_guidelines>" in compiled
+    assert "<!--" not in compiled, "HTML 注释应被剥离（与真实注入一致）"
+    assert "## 用户画像" not in compiled, "预览不得使用自拼标签替代真实形态"
 
 
 def test_session_context_contains_memory_tree(

@@ -1,5 +1,10 @@
-# syntax=docker/dockerfile:1
 # Noesis 后端生产镜像（由 deploy/docker-compose.yml 引用，构建上下文为仓库根目录）
+#
+# 瘦身约定（约 −500MB）：
+# - DeepDoc PDF 重栈（cv2/onnxruntime/sklearn/xgboost）与飞书 SDK 是
+#   optional extras，uv sync 默认不装；PDF 解析降级 pdfplumber 纯文本
+# - noesis-cli（评测用）不在生产镜像安装
+# - healthcheck 用 python urllib，无需 apt 安装 curl
 FROM python:3.11-slim-bookworm AS builder
 
 RUN apt-get update \
@@ -30,13 +35,21 @@ COPY extensions/skills ./extensions/skills
 # 平台 MCP 配置（故障运维 profile、probe 合并目录）
 COPY extensions/mcp ./extensions/mcp
 
-RUN uv sync --frozen --no-dev
+# --no-install-package noesis-cli：workspace 成员默认全装，显式排除评测 CLI
+RUN uv sync --frozen --no-dev --no-install-package noesis-cli
+
+# onnxruntime 的 sympy/mpmath（≈82MB）只服务其量化/构建工具链；镜像内
+# onnxruntime 消费方只有 magika（文件类型 ONNX 推理），已实测不 import
+# sympy。删除后立即 import 自验证——未来版本若真依赖，构建会在此失败
+# 而不是运行时炸。
+RUN rm -rf .venv/lib/python3.11/site-packages/sympy \
+           .venv/lib/python3.11/site-packages/mpmath \
+  && .venv/bin/python -c "import onnxruntime, magika, markitdown"
 
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    curl \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
@@ -50,7 +63,7 @@ COPY --from=builder /app /app
 EXPOSE 8089
 
 HEALTHCHECK --interval=20s --timeout=5s --start-period=90s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:8089/health >/dev/null || exit 1
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8089/health', timeout=4).status == 200 else 1)"
 
 # 单 worker：Noesis P0 只允许一个 active backend 进程。
 # PostgreSQL advisory lock 是多容器/多进程的最终保护——第二个实例无法获取 lock 会 fail-fast。

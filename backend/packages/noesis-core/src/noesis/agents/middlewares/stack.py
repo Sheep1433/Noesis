@@ -38,6 +38,7 @@ from noesis.agents.middlewares.read_before_write_middleware import PRIVATE_STATE
 from noesis.agents.middlewares.refreshing_skills_middleware import PRIVATE_STATE_KEYS as _SKILLS_KEYS
 from noesis.agents.middlewares.snip_middleware import PRIVATE_STATE_KEYS as _SNIP_KEYS
 from noesis.agents.middlewares.tool_result_budget_middleware import PRIVATE_STATE_KEYS as _TOOL_BUDGET_KEYS
+from noesis.agents.tools.read_file_bound import apply_read_file_bound
 
 # Subagent isolation must carry each owning middleware's private state across the
 # subagent boundary. Aggregated from each middleware's exported key set so that
@@ -64,7 +65,6 @@ class NoesisStackDeps:
     skills_system_prompt: str | None = None
     memory_sources: Sequence[str] = ()
     memory_system_prompt: str | None = None
-    memory_entries_middleware: Any = None
     todo: bool = False
     subagents: Sequence[SubAgent | CompiledSubAgent] = ()
     async_subagents: Sequence[AsyncSubAgent] = ()
@@ -76,6 +76,7 @@ class NoesisStackDeps:
     compaction_thresholds: CompactionThresholds | None = None
     compaction_keep_messages: int = 28
     tool_result_max_chars: int = 24_000
+    read_file_max_chars: int = 20_000
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None
     model_call_limit: int | None = None
     tool_call_limit: int | None = None
@@ -117,6 +118,9 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
             tool_token_limit_before_evict=None,
             human_message_token_limit_before_evict=None,
         )
+        # read_file 源头封顶（主/子 Agent 共用）：关闭 deepagents 驱逐的同时
+        # read_file 失去了上游截断，这里单独补上，新鲜读取不触发预算替换
+        apply_read_file_bound(filesystem_middleware, max_chars=deps.read_file_max_chars)
         if deps.filesystem_middleware_hook is not None:
             deps.filesystem_middleware_hook(filesystem_middleware)
         stack.append(filesystem_middleware)
@@ -143,8 +147,6 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
             )
         )
 
-    if deps.memory_entries_middleware is not None and deps.profile != "SUBAGENT":
-        stack.append(deps.memory_entries_middleware)
     stack.append(DynamicContextMiddleware(deps.dynamic_context_provider))
     if deps.profile in {"SUPER_AGENT_QA", "FAULT_OPERATION_QA"}:
         stack.append(DurableContextMiddleware())

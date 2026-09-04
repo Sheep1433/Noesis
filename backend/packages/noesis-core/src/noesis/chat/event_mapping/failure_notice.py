@@ -28,11 +28,11 @@ def is_internal_infrastructure_error(raw: str) -> bool:
 
 
 def sanitize_tool_error(raw: str, *, default: str = DEFAULT_USER_TOOL_ERROR) -> str:
-    """单 tool 失败：委托 classify_tool_failure。"""
+    """单 tool 失败兜底：委托 classify（UNKNOWN 纯文本固定为「执行失败」）。"""
     s = strip_tool_error_prefix(raw)
     if not s:
         return default
-    return classify_tool_failure(None, raw=s).message_for_user
+    return classify_tool_failure(None, raw=s).text
 
 
 def sanitize_stream_error(raw: str, *, default: str = "操作失败，请稍后重试。") -> str:
@@ -190,8 +190,8 @@ def _content_has_stream_failure_notice(parts: List[Dict[str, Any]]) -> bool:
 
 
 USER_STOP_TOOL_ERROR = "用户已停止生成"
-USER_STOP_NOTICE_PLAIN = "本轮回复已被用户中断。"
-USER_STOP_NOTICE_INLINE = "（本轮回复已被用户中断。）"
+# 统一单一形态：斜体括号附注（无横线/无纯文本变体——双形态曾让用户误判为不一致 bug）
+USER_STOP_NOTICE = "（本轮回复已被用户中断。）"
 
 
 def _mark_running_tools_error(
@@ -209,51 +209,28 @@ def _mark_running_tools_error(
                 p["error"] = error_message
 
 
-def get_user_stop_notice_text(has_prose: bool) -> str:
-    return USER_STOP_NOTICE_INLINE if has_prose else USER_STOP_NOTICE_PLAIN
-
-
 def append_user_stop_notice_to_content(
     content_dict: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """用户主动停止：running 工具标 error，追加可读中断说明。"""
+    """用户主动停止：running 工具标 error，追加可读中断说明。
+
+    统一形态：斜体括号附注一段（有残文时经空行自然衔接；markdown 忽略
+    段首空行，无残文时独立成段不影响渲染）。
+    """
     parts: List[Dict[str, Any]] = list(content_dict.get("parts") or [])
     _mark_running_tools_error(
         parts,
         error_message=USER_STOP_TOOL_ERROR,
         state="cancelled",
     )
-    has_prose = _has_prose(parts)
-    notice = get_user_stop_notice_text(has_prose)
-
-    if not has_prose:
-        if not parts:
-            parts = [
-                {
-                    "id": f"part-text-{uuid.uuid4().hex[:12]}",
-                    "type": "text",
-                    "content": notice,
-                    "status": "completed",
-                }
-            ]
-        else:
-            parts.append(
-                {
-                    "id": f"part-text-{uuid.uuid4().hex[:12]}",
-                    "type": "text",
-                    "content": notice,
-                    "status": "completed",
-                }
-            )
-    else:
-        parts.append(
-            {
-                "id": f"part-text-{uuid.uuid4().hex[:12]}",
-                "type": "text",
-                "content": f"\n\n---\n\n*{notice}*",
-                "status": "completed",
-            }
-        )
+    parts.append(
+        {
+            "id": f"part-text-{uuid.uuid4().hex[:12]}",
+            "type": "text",
+            "content": f"\n\n*{USER_STOP_NOTICE}*",
+            "status": "completed",
+        }
+    )
 
     return {"version": content_dict.get("version", 1), "parts": parts}
 

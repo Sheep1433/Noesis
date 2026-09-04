@@ -10,6 +10,10 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from noesis.chat.event_mapping.retrieval import (
+    MAX_CROSS_BOUNDARY_SOURCES,
+    format_sources_appendix,
+)
 from noesis.runtime.logging import logger
 
 PREVIEW_MAX_CHARS = 80
@@ -27,24 +31,33 @@ def record(
     step_count: int | None = None,
     duration_ms: int | None = None,
     turn_count: int | None = None,
+    sources: list[dict[str, Any]] | None = None,
 ) -> None:
-    """记录一条终态通知（executor 终态转换点调用）。"""
+    """记录一条终态通知（executor 终态转换点调用）。
+
+    sources 为该子会话的去重来源清单（结构化字段，不混入预览文本）；
+    无来源不写空清单占位。
+    """
     if not session_id:
         return
     trimmed = (preview or "").strip()
     if len(trimmed) > PREVIEW_MAX_CHARS:
         trimmed = f"{trimmed[:PREVIEW_MAX_CHARS]}…"
+    notice: dict[str, Any] = {
+        "task_id": task_id,
+        "label": (label or "").strip()[:80],
+        "status": status,
+        "preview": trimmed,
+        "step_count": step_count,
+        "duration_ms": duration_ms,
+        "turn_count": turn_count,
+        "delivered": False,
+    }
+    clean_sources = [s for s in (sources or []) if isinstance(s, dict)]
+    if clean_sources:
+        notice["sources"] = clean_sources[:MAX_CROSS_BOUNDARY_SOURCES]
     with _LOCK:
-        _PENDING.setdefault(session_id, []).append({
-            "task_id": task_id,
-            "label": (label or "").strip()[:80],
-            "status": status,
-            "preview": trimmed,
-            "step_count": step_count,
-            "duration_ms": duration_ms,
-            "turn_count": turn_count,
-            "delivered": False,
-        })
+        _PENDING.setdefault(session_id, []).append(notice)
 
 
 def take_undelivered(session_id: str, *, mark_delivered: bool = True) -> list[dict[str, Any]]:
@@ -96,9 +109,16 @@ def render_block(notices: list[dict[str, Any]]) -> str:
             title = "执行超时" if status == "timed_out" else "执行失败"
             lines.append(f"[系统通知] 子 Agent「{label}」{title}{suffix}，可打开详情查看原因。")
         elif status == "cancelled":
-            lines.append(f"[系统通知] 子 Agent「{label}」已取消{metric_suffix}。")
+            # 取消携带部分产出（协作停止的成果回收）：与 check_task / task.result 同源
+            suffix = f"{metric_suffix}：{preview}" if preview else metric_suffix
+            lines.append(f"[系统通知] 子 Agent「{label}」已取消{suffix}。")
         else:
             lines.append(f"[系统通知] 子 Agent「{label}」状态更新：{status}。")
+        sources = notice.get("sources")
+        if isinstance(sources, list) and sources:
+            appendix = format_sources_appendix(sources)
+            if appendix:
+                lines.append(appendix)
     return "\n".join(lines)
 
 

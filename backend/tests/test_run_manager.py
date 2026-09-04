@@ -241,7 +241,7 @@ async def test_hitl_resume_keeps_run_identity_and_sequence() -> None:
     await resumed.producer_task
     assert resumed.run_id == "run-1"
     assert resumed.assistant_message_id == "message-1"
-    assert [event.sequence for event in resumed.buffer] == [1, 2]
+    assert [event.sequence for event in resumed.delivery.buffer] == [1, 2]
 
 
 @pytest.mark.asyncio
@@ -288,7 +288,7 @@ async def test_run_output_limit_is_enforced_before_buffer_growth() -> None:
     )
     results = await asyncio.gather(handle.producer_task, return_exceptions=True)
     assert isinstance(results[0], RunOutputExceeded)
-    assert handle.buffer_bytes == 0
+    assert handle.delivery.buffer_bytes == 0
 
 
 @pytest.mark.asyncio

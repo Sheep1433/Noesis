@@ -73,7 +73,8 @@ def test_search_all_collections_hybrid_and_merge(
     data = json.loads(raw)
     assert len(data["results"]) == 2
     assert data["results"][0]["collection_name"] == "req_docs"
-    assert data["results"][0]["citable"] is True
+    assert "citable" not in data["results"][0]
+    assert data["results"][0]["citation_ref"] == "kb:req_docs/doc.md"
     assert data["results"][0]["excerpt"] == "片段-req_docs"
     assert "evidence_id" not in data["results"][0]
     assert "content" not in data["results"][0]
@@ -247,3 +248,17 @@ def test_get_knowledge_document_respects_scope(_names, _connected):
         get_knowledge_document("kb2", "a.md", allowed_collection_names=["kb1"])
     )
     assert "不在当前会话检索范围内" in data["error"]
+
+
+def test_format_hits_supplies_citation_ref_only_for_versioned_hits():
+    versioned = KbSearchHit(
+        id="p1", score=0.9, content="片段", file_name="a.md", search_mode="hybrid",
+        document_id="doc-1", document_version_id="docv-1", segment_id="seg-1",
+    )
+    legacy = KbSearchHit(id="p2", score=0.8, content="旧片段", file_name="b.md", search_mode="hybrid")
+    data = json.loads(kb_search_tool_module._format_hits([("req_docs", versioned), ("req_docs", legacy)]))
+    assert "citable" not in data["results"][0]
+    assert data["results"][0]["citation_ref"] == "kb:req_docs/a.md"
+    # 旧文档缺稳定身份：不供引用 ref（模型不引用），注册层身份校验亦拒收
+    assert "citation_ref" not in data["results"][1]
+    assert "citable" not in data["results"][1]

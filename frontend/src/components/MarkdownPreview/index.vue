@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import type { CitationIndex } from '@/views/chat/citationRendering'
 import type { RetrievalResultUi } from '@/views/chat/messageParts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -24,6 +25,8 @@ interface Props {
   /** 底部工具栏左侧问答类型角标 */
   qaType?: string
   retrievalResults?: RetrievalResultUi[]
+  /** 外部预建的引用序号索引（弧聚合面板的引用优先编号）；提供时优先于 retrievalResults 现算 */
+  citationIndex?: CitationIndex
 }
 
 interface Emits {
@@ -42,6 +45,7 @@ const props = withDefaults(defineProps<Props>(), {
   variant: 'full',
   qaType: 'COMMON_QA',
   retrievalResults: () => [],
+  citationIndex: undefined,
 })
 
 const emit = defineEmits<Emits>()
@@ -52,6 +56,14 @@ const markdownContentRef = ref<HTMLElement | null>(null)
 const router = useRouter()
 
 const displayText = ref('')
+
+/**
+ * full：外层给定确定高度（独立气泡），内部滚动，整链 h-full/flex-1。
+ * segment：嵌入正文片段（消息流/抽屉），高度必须由内容决定——
+ * 祖先若是 flex item，h-full 链会把本组件拉伸到最长兄弟内容的高度，
+ * 短文本下方出现巨型空白（见 docs/bug/subagent-drawer-blank-area.md）。
+ */
+const isFull = computed(() => props.variant === 'full')
 
 watch(
   () => props.content,
@@ -67,7 +79,7 @@ watch(
 const renderedMarkdown = computed(() => {
   return MarkdownInstance.render(displayText.value, {
     retrievalResults: props.retrievalResults,
-    citationIndex: buildCitationIndex(props.retrievalResults),
+    citationIndex: props.citationIndex ?? buildCitationIndex(props.retrievalResults),
   })
 })
 
@@ -133,33 +145,35 @@ onBeforeUnmount(() => {
 <template>
   <n-spin
     relative
-    flex="1 ~"
-    min-h-0
     w-full
-    h-full
-    content-class="w-full h-full flex"
-    :show="false"
-    :rotate="false"
     :class="[
+      isFull ? 'h-full flex-1 min-h-0' : '',
       variant === 'full' ? 'bg-bgcolor' : 'bg-transparent',
     ]"
+    :content-class="['w-full flex', isFull ? 'h-full' : '']"
+    :show="false"
+    :rotate="false"
     :style="{ '--n-opacity-spinning': '0.3' }"
   >
     <template #icon>
       <div class="i-svg-spinners:3-dots-rotate"></div>
     </template>
-    <div flex="1 ~" min-w-0 min-h-0>
+    <!-- flex-1 必须无条件保留：content-class 的 flex 行里子项默认 shrink-to-fit，
+         短行内容（如中文列表）会把整块正文缩到最长行宽，分隔线/引用框随之变窄 -->
+    <div :class="['min-w-0 flex-1', isFull ? 'min-h-0' : '']">
       <div
         text-16
-        class="w-full h-full overflow-hidden"
-        :class="[!displayText && 'flex items-center justify-center']"
+        :class="['w-full', isFull ? 'h-full overflow-hidden' : '', !displayText && 'flex items-center justify-center']"
       >
         <div
           v-if="displayText"
           ref="refWrapperContent"
           text-16
-          class="markdown-preview__body w-full h-full overflow-y-auto"
-          :class="variant === 'segment' ? 'py-2' : 'p-15px'"
+          :class="[
+            'markdown-preview__body w-full',
+            isFull ? 'h-full overflow-y-auto' : '',
+            variant === 'segment' ? 'py-2' : 'p-15px',
+          ]"
         >
           <div
             ref="markdownContentRef"
@@ -186,7 +200,6 @@ onBeforeUnmount(() => {
             <template v-for="(call, index) in toolCalls" :key="call.tool_call_id || index">
               <SubagentCollapse
                 v-if="call.name === TASK_TOOL_NAME"
-                appearance="light"
                 :input="call.arguments ?? {}"
                 :output="call.result ?? ''"
                 :status="call.status || 'success'"
@@ -347,6 +360,9 @@ onBeforeUnmount(() => {
     border: 1px solid var(--noesis-color-bg);
     padding: 8px;
     text-align: left;
+    // 容器级 overflow-wrap: anywhere 会在窄列把英文单词拦腰截断
+    // （Observabili/ty）；break-word 不收缩列的固有宽度，单词保持完整
+    overflow-wrap: break-word;
   }
 
   th { background-color: var(--noesis-color-bg-muted); }

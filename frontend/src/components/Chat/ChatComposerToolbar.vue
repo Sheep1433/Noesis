@@ -7,23 +7,27 @@ import { ensureSession } from '@/api/chat'
 import { listMcpServers } from '@/api/mcp'
 import { getSkillsPackages } from '@/api/skills'
 import ModelSelector from '@/components/Chat/ModelSelector.vue'
+import ReasoningEffortSelector from '@/components/Chat/ReasoningEffortSelector.vue'
 import KbScopeSelector from '@/components/KnowledgeBase/KbScopeSelector.vue'
 import ResponsiveSurface from '@/components/ResponsiveSurface.vue'
 
 type MenuView = 'root' | 'mcp' | 'skills' | 'kb'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   qaType: string
   sessionId: string
   disabled?: boolean
   /** ACTIVE 才 ensure 写 extra；COMPOSING 只改本地 v-model */
   persistSessionExtra?: boolean
   fileUploadRef?: InstanceType<typeof FileUploadManager> | null
-}>()
+  /** 附件与工具菜单（上传/KB/MCP/Skills）：子会话等场景收窄为纯模型/档位工具栏 */
+  showToolsMenu?: boolean
+}>(), { showToolsMenu: true })
 
 const router = useRouter()
 
 const selectedModelId = defineModel<string>('modelId', { default: '' })
+const selectedReasoningEffort = defineModel<string>('reasoningEffort', { default: '' })
 const selectedKbCollections = defineModel<string[]>('kbCollections', { default: () => [] })
 const kbSearchEnabled = defineModel<boolean>('kbSearchEnabled', { default: true })
 const selectedMcpServers = defineModel<string[]>('mcpServers', { default: () => [] })
@@ -32,6 +36,8 @@ const skillsAllEnabled = defineModel<boolean>('skillsAllEnabled', { default: tru
 
 const showKbScope = computed(() => props.qaType === 'COMMON_QA' || props.qaType === 'SUPER_AGENT_QA')
 const showSkillsMenu = computed(() => props.qaType === 'SUPER_AGENT_QA')
+// 推理档位：与 model/mcp 同门控（TEST_CASE_QA 排除）；组件自身再按模型声明降级
+const showReasoningEffort = computed(() => props.qaType !== 'TEST_CASE_QA')
 const showFileUpload = computed(() =>
   props.qaType === 'COMMON_QA'
   || props.qaType === 'SUPER_AGENT_QA'
@@ -217,176 +223,188 @@ const kbSummary = computed(() => {
         @change="onImageFilesSelected"
       >
 
-      <ResponsiveSurface
-        v-model:show="plusOpen"
-        placement="top-start"
-        :disabled="disabled"
-        raw
-        title="附件与工具"
-        popup-class="composer-tools-popover"
-      >
-        <template #trigger>
-          <button
-            type="button"
-            class="composer-plus-btn"
-            :disabled="disabled"
-            aria-label="附件与工具"
-          >
-            <span class="i-carbon:add text-18"></span>
-          </button>
-        </template>
 
-        <div class="composer-tools-panel" @click.stop>
-          <!-- 一级：上传 / MCP / Skills -->
-          <template v-if="menuView === 'root'">
-            <button
-              v-if="showFileUpload"
-              type="button"
-              class="composer-menu-item"
-              @click="pickDocuments"
-            >
-              <span class="i-material-symbols:file-open-outline composer-menu-item__icon"></span>
-              <span class="composer-menu-item__label">上传文件</span>
-            </button>
-            <button
-              v-if="showUploadImage"
-              type="button"
-              class="composer-menu-item"
-              @click="pickImages"
-            >
-              <span class="i-mdi:file-image-outline composer-menu-item__icon"></span>
-              <span class="composer-menu-item__label">上传图片</span>
-            </button>
-
-            <button
-              v-if="showKbScope"
-              type="button"
-              class="composer-menu-item"
-              @click="menuView = 'kb'"
-            >
-              <span class="i-carbon:book composer-menu-item__icon"></span>
-              <span class="composer-menu-item__label">知识库</span>
-              <span v-if="kbSummary" class="composer-menu-item__badge">{{ kbSummary }}</span>
-              <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
-            </button>
-
+      <template v-if="showToolsMenu">
+        <ResponsiveSurface
+          v-model:show="plusOpen"
+          placement="top-start"
+          :disabled="disabled"
+          raw
+          title="附件与工具"
+          popup-class="composer-tools-popover"
+          mobile-surface="popover"
+        >
+          <template #trigger>
             <button
               type="button"
-              class="composer-menu-item"
-              @click="menuView = 'mcp'"
+              class="composer-plus-btn"
+              :disabled="disabled"
+              aria-label="附件与工具"
             >
-              <span class="i-carbon:api composer-menu-item__icon"></span>
-              <span class="composer-menu-item__label">MCP</span>
-              <span v-if="mcpSummary" class="composer-menu-item__badge">{{ mcpSummary }}</span>
-              <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
-            </button>
-
-            <button
-              v-if="showSkillsMenu"
-              type="button"
-              class="composer-menu-item"
-              @click="menuView = 'skills'"
-            >
-              <span class="i-carbon:notebook composer-menu-item__icon"></span>
-              <span class="composer-menu-item__label">Skills</span>
-              <span v-if="skillSummary" class="composer-menu-item__badge">{{ skillSummary }}</span>
-              <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
+              <span class="i-carbon:add text-18"></span>
             </button>
           </template>
 
-          <!-- 二级：MCP -->
-          <template v-else-if="menuView === 'mcp'">
-            <button
-              type="button"
-              class="composer-menu-back"
-              @click="menuView = 'root'"
-            >
-              <span class="i-carbon:chevron-left"></span>
-              <span>MCP</span>
-            </button>
-            <div v-if="catalogLoading" class="composer-tools-empty">
-              加载中…
-            </div>
-            <div v-else-if="!mcpServers.length" class="composer-tools-empty">
-              暂无 MCP Server
-            </div>
-            <label
-              v-for="server in mcpServers"
-              :key="server.id"
-              class="composer-tool-row"
-            >
-              <n-checkbox
-                :checked="selectedMcpServers.includes(server.id)"
-                @update:checked="(checked) => toggleMcp(server.id, checked)"
-              />
-              <span class="composer-tool-row__label">{{ server.display_name || server.id }} · {{ server.source }}</span>
-            </label>
-            <n-button
-              quaternary
-              size="tiny"
-              class="composer-tools-config-btn"
-              @click="openMcpConfig"
-            >
-              打开 MCP 配置…
-            </n-button>
-          </template>
+          <div class="composer-tools-panel" @click.stop>
+            <!-- 一级：上传 / MCP / Skills -->
+            <template v-if="menuView === 'root'">
+              <button
+                v-if="showFileUpload"
+                type="button"
+                class="composer-menu-item"
+                @click="pickDocuments"
+              >
+                <span class="i-material-symbols:file-open-outline composer-menu-item__icon"></span>
+                <span class="composer-menu-item__label">上传文件</span>
+              </button>
+              <button
+                v-if="showUploadImage"
+                type="button"
+                class="composer-menu-item"
+                @click="pickImages"
+              >
+                <span class="i-mdi:file-image-outline composer-menu-item__icon"></span>
+                <span class="composer-menu-item__label">上传图片</span>
+              </button>
 
-          <!-- 二级：Skills -->
-          <template v-else-if="menuView === 'skills'">
-            <button
-              type="button"
-              class="composer-menu-back"
-              @click="menuView = 'root'"
-            >
-              <span class="i-carbon:chevron-left"></span>
-              <span>Skills</span>
-            </button>
-            <div v-if="catalogLoading" class="composer-tools-empty">
-              加载中…
-            </div>
-            <div v-else-if="!skillPackages.length" class="composer-tools-empty">
-              暂无 Skills
-            </div>
-            <label
-              v-for="skill in skillPackages"
-              :key="skill.name"
-              class="composer-tool-row"
-            >
-              <n-checkbox
-                :checked="isSkillChecked(skill.name)"
-                @update:checked="(checked) => toggleSkill(skill.name, checked)"
-              />
-              <span class="composer-tool-row__label">{{ skill.name }} ({{ skill.source }})</span>
-            </label>
-          </template>
+              <button
+                v-if="showKbScope"
+                type="button"
+                class="composer-menu-item"
+                @click="menuView = 'kb'"
+              >
+                <span class="i-carbon:book composer-menu-item__icon"></span>
+                <span class="composer-menu-item__label">知识库</span>
+                <span v-if="kbSummary" class="composer-menu-item__badge">{{ kbSummary }}</span>
+                <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
+              </button>
 
-          <!-- 二级：知识库 -->
-          <template v-else-if="menuView === 'kb'">
-            <button
-              type="button"
-              class="composer-menu-back"
-              @click="menuView = 'root'"
-            >
-              <span class="i-carbon:chevron-left"></span>
-              <span>知识库</span>
-            </button>
-            <div class="composer-kb-panel">
-              <KbScopeSelector
-                v-model="selectedKbCollections"
-                v-model:kb-search-enabled="kbSearchEnabled"
-                embedded
-                :session-id="sessionId"
-                :persist-session-extra="persistSessionExtra"
-                :disabled="disabled"
-              />
-            </div>
-          </template>
-        </div>
-      </ResponsiveSurface>
+              <button
+                type="button"
+                class="composer-menu-item"
+                @click="menuView = 'mcp'"
+              >
+                <span class="i-carbon:api composer-menu-item__icon"></span>
+                <span class="composer-menu-item__label">MCP</span>
+                <span v-if="mcpSummary" class="composer-menu-item__badge">{{ mcpSummary }}</span>
+                <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
+              </button>
+
+              <button
+                v-if="showSkillsMenu"
+                type="button"
+                class="composer-menu-item"
+                @click="menuView = 'skills'"
+              >
+                <span class="i-carbon:notebook composer-menu-item__icon"></span>
+                <span class="composer-menu-item__label">Skills</span>
+                <span v-if="skillSummary" class="composer-menu-item__badge">{{ skillSummary }}</span>
+                <span class="i-carbon:chevron-right composer-menu-item__chevron"></span>
+              </button>
+            </template>
+
+            <!-- 二级：MCP -->
+            <template v-else-if="menuView === 'mcp'">
+              <button
+                type="button"
+                class="composer-menu-back"
+                @click="menuView = 'root'"
+              >
+                <span class="i-carbon:chevron-left"></span>
+                <span>MCP</span>
+              </button>
+              <div v-if="catalogLoading" class="composer-tools-empty">
+                加载中…
+              </div>
+              <div v-else-if="!mcpServers.length" class="composer-tools-empty">
+                暂无 MCP Server
+              </div>
+              <label
+                v-for="server in mcpServers"
+                :key="server.id"
+                class="composer-tool-row"
+              >
+                <n-checkbox
+                  :checked="selectedMcpServers.includes(server.id)"
+                  @update:checked="(checked) => toggleMcp(server.id, checked)"
+                />
+                <span class="composer-tool-row__label">{{ server.display_name || server.id }} · {{ server.source }}</span>
+              </label>
+              <n-button
+                quaternary
+                size="tiny"
+                class="composer-tools-config-btn"
+                @click="openMcpConfig"
+              >
+                打开 MCP 配置…
+              </n-button>
+            </template>
+
+            <!-- 二级：Skills -->
+            <template v-else-if="menuView === 'skills'">
+              <button
+                type="button"
+                class="composer-menu-back"
+                @click="menuView = 'root'"
+              >
+                <span class="i-carbon:chevron-left"></span>
+                <span>Skills</span>
+              </button>
+              <div v-if="catalogLoading" class="composer-tools-empty">
+                加载中…
+              </div>
+              <div v-else-if="!skillPackages.length" class="composer-tools-empty">
+                暂无 Skills
+              </div>
+              <label
+                v-for="skill in skillPackages"
+                :key="skill.name"
+                class="composer-tool-row"
+              >
+                <n-checkbox
+                  :checked="isSkillChecked(skill.name)"
+                  @update:checked="(checked) => toggleSkill(skill.name, checked)"
+                />
+                <span class="composer-tool-row__label">{{ skill.name }} ({{ skill.source }})</span>
+              </label>
+            </template>
+
+            <!-- 二级：知识库 -->
+            <template v-else-if="menuView === 'kb'">
+              <button
+                type="button"
+                class="composer-menu-back"
+                @click="menuView = 'root'"
+              >
+                <span class="i-carbon:chevron-left"></span>
+                <span>知识库</span>
+              </button>
+              <div class="composer-kb-panel">
+                <KbScopeSelector
+                  v-model="selectedKbCollections"
+                  v-model:kb-search-enabled="kbSearchEnabled"
+                  embedded
+                  :session-id="sessionId"
+                  :persist-session-extra="persistSessionExtra"
+                  :disabled="disabled"
+                />
+              </div>
+            </template>
+          </div>
+        </ResponsiveSurface>
+      </template>
 
       <ModelSelector
         v-model="selectedModelId"
         :session-id="sessionId"
+        :persist-session-extra="persistSessionExtra"
+        :disabled="disabled"
+      />
+      <ReasoningEffortSelector
+        v-if="showReasoningEffort"
+        v-model="selectedReasoningEffort"
+        :session-id="sessionId"
+        :model-id="selectedModelId"
         :persist-session-extra="persistSessionExtra"
         :disabled="disabled"
       />

@@ -7,6 +7,10 @@ from typing import Any, Iterable
 
 
 def retrieved_sources(tool_outputs: Iterable[dict[str, Any]]) -> set[str]:
+    """从 search_knowledge_base 工具输出提取来源文件名。
+
+    工具载荷契约是 ``{"results": [{"file_name": ...}, ...]}``（kb_search_tool._format_hits）。
+    """
     sources: set[str] = set()
     for item in tool_outputs:
         if item.get("name") != "search_knowledge_base":
@@ -18,7 +22,7 @@ def retrieved_sources(tool_outputs: Iterable[dict[str, Any]]) -> set[str]:
             continue
         if not isinstance(payload, dict):
             continue
-        for hit in payload.get("hits") or []:
+        for hit in payload.get("results") or []:
             if isinstance(hit, dict) and str(hit.get("file_name") or "").strip():
                 sources.add(str(hit["file_name"]).strip())
     return sources

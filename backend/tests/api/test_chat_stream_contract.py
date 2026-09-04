@@ -1,7 +1,7 @@
 """SSE 流式输出接口契约测试（真实 HTTP，``-m integration``）。
 
 补 ``test_chat_run_real_llm.py`` 未覆盖的 SSE 接口分支：未知 run、终态重订阅、
-停止后订阅、事件顺序、finish 契约、并发订阅广播、创建幂等等。
+停止后订阅、事件顺序、run.finished 终态契约、并发订阅广播、创建幂等等。
 
 前置与运行：
 
@@ -15,6 +15,8 @@ import threading
 import uuid
 
 import pytest
+
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 # 真实 LLM 单轮通常数秒；给足消费上限
 STREAM_DEADLINE = 180
@@ -93,10 +95,10 @@ def test_message_start_precedes_first_text_delta(
 
 
 @pytest.mark.integration
-def test_finish_event_carries_finish_reason_before_done(
-    auth_client, create_session, create_run, collect_run_stream
+def test_run_finished_carries_finish_reason_before_done(
+    auth_client, create_session, create_run, collect_run_stream, gateway_skip
 ) -> None:
-    """finish 帧带 finish_reason 且早于 [DONE]；[DONE] 是传输收尾，不进事件列表。"""
+    """run.finished 帧带 finish_reason 且早于 [DONE]；[DONE] 是传输收尾，不进事件列表。"""
     session_id = create_session(title="api-test-finish-frame")
     run = create_run(
         session_id=session_id,
@@ -106,14 +108,16 @@ def test_finish_event_carries_finish_reason_before_done(
     events = collect_run_stream(auth_client, run["run_id"], deadline_seconds=STREAM_DEADLINE)
 
     assert events.done, f"未收到 [DONE]: {events.error}"
-    assert events.events[-1][0] == "finish", f"末帧非 finish: {events.events[-1]}"
+    assert events.events[-1][0] == "run.finished", f"末帧非 run.finished: {events.events[-1]}"
     finish_payload = events.events[-1][1]
+    gateway_skip(finish_payload.get("error"))
+    assert finish_payload["status"] == "completed", finish_payload
     assert finish_payload["finish_reason"] == "stop", finish_payload
 
 
 @pytest.mark.integration
 def test_resubscribe_completed_run_emits_terminal_snapshot_and_done(
-    auth_client, create_session, create_run, consume_run_stream, collect_run_stream
+    auth_client, create_session, create_run, consume_run_stream, collect_run_stream, gateway_skip
 ) -> None:
     """run 完成后再订阅：只发 run-snapshot（终态）+ [DONE]，不重跑 LLM、不发 text-delta。"""
     session_id = create_session(title="api-test-resubscribe")
@@ -125,6 +129,7 @@ def test_resubscribe_completed_run_emits_terminal_snapshot_and_done(
     run_id = run["run_id"]
     # 先完整消费一轮，让 run 落到终态
     first = consume_run_stream(auth_client, run_id)
+    gateway_skip(first.error_message)
     assert first.succeeded, f"首轮未成功: {first.error_message}"
 
     # 再次订阅同一 run
@@ -134,14 +139,14 @@ def test_resubscribe_completed_run_emits_terminal_snapshot_and_done(
     names = [name for name, _ in events.events]
     assert "run-snapshot" in names
     assert "text-delta" not in names, "终态重订阅不应再发 text-delta（疑似重跑 LLM）"
-    assert "finish" not in names, "终态短路不应发 finish 帧"
+    assert "run.finished" not in names, "终态短路不应发 run.finished 帧"
     snapshot = next(p for name, p in events.events if name == "run-snapshot")
     assert snapshot["status"] in {"completed", "partial"}, snapshot["status"]
 
 
 @pytest.mark.integration
 def test_resubscribe_completed_run_snapshot_has_authoritative_content(
-    auth_client, create_session, create_run, consume_run_stream, collect_run_stream
+    auth_client, create_session, create_run, consume_run_stream, collect_run_stream, gateway_skip
 ) -> None:
     """终态重订阅的 run-snapshot 应携带服务端权威落库的 assistant 文本内容。"""
     session_id = create_session(title="api-test-resubscribe-content")
@@ -152,6 +157,7 @@ def test_resubscribe_completed_run_snapshot_has_authoritative_content(
     )
     run_id = run["run_id"]
     first = consume_run_stream(auth_client, run_id)
+    gateway_skip(first.error_message)
     assert first.succeeded, f"首轮未成功: {first.error_message}"
 
     events = collect_run_stream(auth_client, run_id, deadline_seconds=STREAM_DEADLINE)

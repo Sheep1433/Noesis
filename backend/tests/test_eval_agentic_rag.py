@@ -14,7 +14,7 @@ def test_agentic_rag_source_scoring_uses_kb_tool_outputs():
         {
             "name": "search_knowledge_base",
             "output": json.dumps(
-                {"hits": [{"file_name": "a.md"}, {"file_name": "b.md"}]},
+                {"results": [{"file_name": "a.md"}, {"file_name": "b.md"}]},
                 ensure_ascii=False,
             ),
         },
@@ -56,7 +56,7 @@ async def test_agentic_rag_runner_uses_general_qa_harness_profile(monkeypatch):
                 "run_id": "1",
                 "data": {
                     "output": SimpleNamespace(
-                        content=json.dumps({"hits": [{"file_name": "guide.md"}]})
+                        content=json.dumps({"results": [{"file_name": "guide.md"}]})
                     )
                 },
             }

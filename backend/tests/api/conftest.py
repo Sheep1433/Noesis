@@ -1,8 +1,10 @@
-"""接口测试 fixtures：本地起后端服务后，用真实 HTTP + 真实 LLM 调接口。
+"""接口测试 fixtures：本地起后端服务后，用真实 HTTP 调接口。
 
 前置：
 1. ``cd backend && uv run app.py`` 启动服务（需 PostgreSQL / noesis_langgraph DB / Qdrant / 有效 MODEL_API_KEY）。
-2. ``uv run pytest tests/api/ -m integration -s``
+2. 按层选择运行：
+   - 快速轮（不触 LLM，纯接口/CRUD，~1 分钟）：``uv run pytest tests/api -m 'integration and not llm'``
+   - 全量（含真实 LLM 用例，受网关限流影响耗时可达半小时）：``uv run pytest tests/api -m integration``
 
 认证模型为 cookie session + CSRF（非 Bearer）：登录后从 ``data.csrf_token`` 取令牌、
 ``Set-Cookie: noesis_session`` 由 httpx cookie jar 自动保管，后续写操作带 ``X-CSRF-Token`` 头。
@@ -21,13 +23,29 @@ import pytest
 
 from evals.loadtest.sse_client import SseStreamMetrics, consume_sse_stream
 
-# 默认指向本地后端；demo 账号 admin/123456（Alembic 初始迁移种入）
+# 默认指向本地后端；统一使用 demo 账号 test/123456（Alembic 种子账号，
+# 用户确认该账号即测试专用，测试数据落在其名下属预期行为）。
 DEFAULT_BASE_URL = "http://127.0.0.1:8089"
 DEFAULT_USERNAME = "test"
 DEFAULT_PASSWORD = "123456"
 
 # SSE 单次消费安全上限（秒），防止真实 LLM 异常时挂死测试
 SSE_DEADLINE_SECONDS = 300
+
+
+@pytest.fixture
+def gateway_skip():
+    """免费网关 5 次退避重试耗尽后 run 以 error 终态收尾（降级文案「生成失败」）。
+
+    属环境依赖而非接口回归：命中时 skip，避免限流时段整套误报。
+    """
+
+    def _check(message: str | None) -> None:
+        text = message or ""
+        if "生成失败" in text or "服务暂时不可用" in text:
+            pytest.skip(f"网关生成失败（环境依赖）: {text}")
+
+    return _check
 
 
 @pytest.fixture(scope="session")
@@ -249,6 +267,13 @@ def _collect_run_stream(
             result.finish_reason = str(payload.get("finish_reason") or "")
             if result.finish_reason != "stop":
                 result.error = str(payload.get("error") or result.finish_reason)
+        elif event_type == "run.finished":
+            # run 流的终态帧（unify-run-delivery 后唯一流终止事件，随后 [DONE]）
+            result.finish_reason = str(payload.get("finish_reason") or "")
+            if payload.get("status") != "completed" or result.finish_reason != "stop":
+                result.error = (
+                    str(payload.get("error") or result.finish_reason or "run failed")
+                )
         elif event_type == "error":
             result.error = str(payload.get("error") or payload.get("message") or "stream error")
         elif event_type == "abort":

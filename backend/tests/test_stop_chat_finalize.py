@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from noesis.chat.event_mapping.failure_notice import (
-    USER_STOP_NOTICE_PLAIN,
+    USER_STOP_NOTICE,
     USER_STOP_TOOL_ERROR,
     append_disconnect_partial_content,
     append_user_stop_notice_to_content,
@@ -26,7 +26,7 @@ def test_append_user_stop_notice_running_tool() -> None:
     assert out["parts"][0]["status"] == "error"
     assert out["parts"][0]["error"] == USER_STOP_TOOL_ERROR
     assert any(
-        USER_STOP_NOTICE_PLAIN in str(p.get("content", ""))
+        USER_STOP_NOTICE in str(p.get("content", ""))
         for p in out["parts"]
         if p.get("type") == "text"
     )
@@ -52,4 +52,4 @@ def test_disconnect_partial_no_user_stop_notice() -> None:
     out = append_disconnect_partial_content(content)
     assert out["parts"][0]["error"] == "工具未返回结果"
     assert not any(p.get("type") == "text" for p in out["parts"])
-    assert USER_STOP_NOTICE_PLAIN not in str(out)
+    assert USER_STOP_NOTICE not in str(out)

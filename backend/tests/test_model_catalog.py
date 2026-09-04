@@ -3,7 +3,12 @@
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from noesis.llm.catalog import get_default_model_id, get_model_catalog, resolve_catalog_entry
+from noesis.llm.catalog import (
+    get_default_model_id,
+    get_model_catalog,
+    list_public_models,
+    resolve_catalog_entry,
+)
 from noesis.llm.factory import get_llm
 
 
@@ -40,7 +45,7 @@ def test_model_catalog_uses_yaml_entries(mock_load_yaml):
 
 
 @patch("noesis.llm.factory.build_chat_model")
-@patch("noesis.llm.catalog.resolve_catalog_entry")
+@patch("noesis.llm.catalog.resolve_catalog_entry_strict")
 def test_get_llm_accepts_model_id(mock_resolve, mock_build):
     from noesis.llm.catalog import ModelCatalogEntry
 

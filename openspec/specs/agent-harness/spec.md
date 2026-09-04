@@ -1,66 +1,33 @@
 # agent-harness Specification
 
 ## Purpose
+本能力规定后端**包边界与依赖方向**：Agent 内核与业务服务层（agents、factory、llm、runtime、chat、services、auth、knowledge、storage、errors、config）统一位于 workspace distribution `noesis-core`（唯一 Python 顶层包 `noesis`）；HTTP 壳（api、bootstrap、middleware、wiring）位于 `backend/server`，import `server.*`。依赖方向 SHALL 单向：`server → noesis`，`noesis` SHALL NOT import `server` 或任何历史顶层平台包。运行时行为见 `agent-runtime`；评测消费见 `offline-evals`。边界由 `backend/tests/test_core_package_boundary.py` 钉住。
 
-本能力规定 **harness 包边界与依赖隔离**：Agent 内核（工厂、LLM、agents、runtime、backends、middlewares、tools、prompts、mcp、skills、guardrails）作为独立 distribution `noesis-harness`（顶层包 `noesis`），SHALL NOT 静态依赖上层平台包（services/domain/models/api/kb/config/common）；平台 Delivery 与 HTTP 编排 SHALL NOT 位于该包内。需要附件存储、KB 检索等宿主能力时 SHALL 经 `noesis.runtime.deps` 由宿主按运行场景绑定。运行时行为细节见 `agent-runtime`；评测消费见 `offline-evals`。
 ## Requirements
-### Requirement: Harness 为独立 Agent 内核包
 
-系统 SHALL 将 Agent 工厂、LLM、agents、runtime、backends、middlewares、tools、prompts、mcp、skills、guardrails 置于 backend workspace distribution `noesis-harness`。distribution 目录 SHALL 为 `packages/harness`，其唯一 Python 顶层包 SHALL 为 `noesis`。平台 Delivery 与 HTTP 编排 **SHALL NOT** 位于该包内。
+### Requirement: noesis 为唯一内核包且不反向依赖 HTTP 壳
 
-#### Scenario: 评测可 import noesis
+系统 SHALL 将 Agent 工厂、LLM、agents、runtime、backends、middlewares、tools、prompts、mcp、skills、guardrails 及业务 service、chat、auth、knowledge、storage 置于 distribution `noesis-core`（目录 `backend/packages/noesis-core`，唯一顶层包 `noesis`）。`noesis` 包源码 **SHALL NOT** 静态 import `server` 或历史顶层平台包（`api` / `services` / `domain` / `models` / `kb` / `config` / `common` 等旧名）。HTTP 编排、FastAPI app 与平台 wiring SHALL 位于 `backend/server`。
+
+#### Scenario: 边界静态检查
+
+- **WHEN** CI 运行 `test_core_package_boundary`
+- **THEN** `noesis` 包内 SHALL 不存在对 `server` 或历史顶层平台包的 import
+- **AND** 违例 SHALL 使测试失败
+
+#### Scenario: 评测可独立 import
 
 - **WHEN** 离线评测进程启动
-- **THEN** SHALL 能 `from noesis.factory import create_noesis_agent`，且 **SHALL NOT** 需要启动 FastAPI 或预先绑定平台 deps 才能加载工厂
-
-#### Scenario: LLM 与 Agent 内核同包
-
-- **WHEN** Agent 或评测加载模型工厂
-- **THEN** SHALL 从 `noesis.llm` 导入，且 SHALL NOT 存在平级 `packages/llm` distribution
-
-### Requirement: 禁止 harness 反向依赖平台与能力实现
-
-`noesis` 包源码 **SHALL NOT** 静态 import 上层平台包：`services`、`domain`、`models`、`api`、`kb`，也 SHALL NOT 依赖 backend 外层 `config` / `common`。需要附件存储、KB 检索、Langfuse、VLM 判定时，SHALL 经 `noesis.runtime.deps` 由宿主按运行场景绑定。
-
-Agent 运行时配置与日志 SHALL 由 `noesis.config` / `noesis.runtime.logging` 提供。该允许列表不包含 FastAPI app、ORM model 或平台 service。
-
-#### Scenario: 静态依赖检查
-
-- **WHEN** 审查 `packages/harness/noesis/**/*.py`
-- **THEN** AST 边界检查 SHALL 不存在对 `services` / `domain` / `models` / `api` / `kb` / 顶层 `config` / 顶层 `common` 的静态 import
-
-#### Scenario: wheel 隔离导入
-
-- **WHEN** 将构建出的 `noesis-harness` wheel 安装到 backend 源码目录外的新环境
-- **THEN** SHALL 能导入 `noesis.factory` 与 `noesis.llm`，且不依赖 backend 源码出现在 `PYTHONPATH`
+- **THEN** SHALL 能 `from noesis.factory import create_noesis_agent`，且 SHALL NOT 需要启动 FastAPI 或加载 `server` 包
 
 #### Scenario: 单一 import 权威路径
 
 - **WHEN** 扫描 backend Python 源码
-- **THEN** SHALL 不存在顶层 `agent.*` / `harness.*` / `llm.*` import 或转发 shim，仓内统一使用 `noesis.*`
+- **THEN** SHALL 不存在顶层 `agent.*` / `harness.*` / `llm.*` import 或转发 shim，内核统一使用 `noesis.*`、HTTP 壳统一使用 `server.*`
 
-### Requirement: 共享流式核
+### Requirement: noesis 提供稳定的公共门面
 
-系统 SHALL 提供 `noesis.runtime.stream.stream_agent_events`，线上 BaseAgent 与评测/Harbor **SHALL** 复用该入口产出 LC/LG 事件 dict（含 HITL 哨兵）。
-
-#### Scenario: Harbor 不旁路 stream
-
-- **WHEN** Harbor `BaseAgent` 执行一轮
-- **THEN** SHALL 调用 `stream_agent_events`（或等价委托），**SHALL NOT** 仅复制一份无 HITL 处理的裸 `astream_events` 循环作为长期权威路径
-
-### Requirement: Agent 与 runtime 目录归属
-
-Agent 场景、公共 middleware、backend adapter 与 runtime host SHALL 保持明确依赖方向。公共运行能力 SHALL 不依赖具体 Agent 场景；`agents.__init__` SHALL 使用 lazy 场景导出，使 `factory → agents.middlewares` 与场景模块按需导入 factory 可以共存，不得使用兼容 shim。具体物理布局与迁移路径由 design 规定。
-
-#### Scenario: Package 依赖无环
-
-- **WHEN** 独立导入 factory、公共运行能力与 Agent 场景
-- **THEN** 导入 SHALL 成功，且 package lazy export SHALL NOT eager 导入所有场景实现
-- **AND** 静态依赖检查 SHALL 不存在公共运行能力反向依赖具体场景
-
-### Requirement: Harness 提供稳定的公共门面
-
-宿主与评测常用的配置对象、路径函数、logger、共享 stream 和依赖绑定函数 SHALL 可直接从 `noesis.config` / `noesis.runtime` 导入，而无需依赖 `env.py`、`stream.py`、`deps.py` 等内部文件布局。公共门面 SHALL 避免在仅导入子系统时急切加载重型运行时或产生配置与日志循环依赖。
+宿主与评测常用的配置对象、路径函数、logger、共享 stream 和依赖绑定函数 SHALL 可直接从 `noesis.config` / `noesis.runtime` 导入（如 `ModelConfig`、`data_path`、`logger`、`stream_agent_events`、`noesis.runtime.deps`），无需依赖 `env.py`、`stream.py`、`deps.py` 等内部文件布局。公共门面 SHALL 避免在仅导入子系统时急切加载重型运行时或产生配置与日志循环依赖。
 
 #### Scenario: 调用公共配置与运行时能力
 
@@ -72,48 +39,23 @@ Agent 场景、公共 middleware、backend adapter 与 runtime host SHALL 保持
 - **WHEN** 进程仅执行 `import noesis.config` 或 `import noesis.runtime`
 - **THEN** SHALL NOT 因门面导出而立即加载全部配置、LangGraph stream 或平台 wiring
 
-### Requirement: 平台宿主使用单一 Python 命名空间
+### Requirement: 共享流式核
 
-Web API、应用服务、平台领域逻辑、数据库、KB、ORM、Schema、中间件与平台公共模块 SHALL 位于 `backend/noesis_server`，并使用 `noesis_server.*` 导入。backend 根目录 SHALL NOT 并列保留这些旧顶层 Python package 或兼容 shim。`evals`、`packages/harness`、Alembic/SQL 工具与启动脚本不属于平台 package，保持独立。
+系统 SHALL 提供 `noesis.runtime.stream.stream_agent_events`，线上 BaseAgent 与评测 **SHALL** 复用该入口产出 LC/LG 事件 dict（含 HITL 哨兵）。
 
-#### Scenario: backend 顶层目录扫描
+#### Scenario: 评测不旁路 stream
 
-- **WHEN** 扫描 backend 根目录
-- **THEN** SHALL 不存在顶层 `api` / `services` / `domain` / `config` / `common` / `constants` / `exceptions` / `middleware` / `models` / `schemas` / `kb` Python package
+- **WHEN** 评测 `BaseAgent` 执行一轮
+- **THEN** SHALL 调用 `stream_agent_events`（或等价委托），SHALL NOT 复制一份无 HITL 处理的裸 `astream_events` 循环作为长期权威路径
 
-#### Scenario: 平台 import 权威路径
+### Requirement: server 为薄 HTTP 壳
 
-- **WHEN** 扫描 backend 与测试 Python 源码
-- **THEN** 平台模块 SHALL 从 `noesis_server.*` 导入，且 SHALL 不存在旧顶层平台 package import
-
-### Requirement: 平台内部依赖方向保持单向
-
-平台 SHALL 遵循 API → application services → domain / KB / harness 的依赖方向。进程启动与外部通道轮询属于 bootstrap/application。domain 和 KB 核心 SHALL NOT 静态 import application services；通用模块 SHALL NOT 承担服务启动编排。
-
-#### Scenario: 平台边界静态检查
-
-- **WHEN** AST 扫描 `noesis_server/domain`、`noesis_server/kb` 与 `noesis_server/common`
-- **THEN** domain/KB SHALL 不 import `noesis_server.services`，common SHALL 不 import services/domain/KB/harness
+`backend/server` SHALL 只承载 HTTP 关注点：api 路由、bootstrap、middleware、异常处理、wiring；业务逻辑与数据访问 SHALL 位于 `noesis`（services / chat / repositories）。server 模块 SHALL NOT 内联业务规则或直接访问数据库连接之外的实现细节。
 
 #### Scenario: QA 服务单一入口
 
-- **WHEN** 调用 QA 应用服务
-- **THEN** SHALL 使用 `noesis_server.services.qa`，且 SHALL 不存在重新导出私有 helper 的 `qa_service.py` 兼容入口
-
-#### Scenario: Knowledge Base API 不直连基础设施
-
-- **WHEN** AST 扫描 `noesis_server/api/knowledge_base_api.py`
-- **THEN** 该模块 SHALL 通过 `noesis_server.services.knowledge_base_service` 编排，且 SHALL NOT 直接 import `noesis_server.kb`、Qdrant client 或集合配置 service
-
-### Requirement: Harness SHALL 分离 Kernel 与 Profile Capability
-
-Harness SHALL 参考 DeepAgents 的直接装配方式，由 factory 根据调用参数选择上游与 Noesis middleware；附件 SHALL 在 Agent 调用前解析。系统 SHALL NOT 为了减少类数而删除 Claude Code 基线能力，也 SHALL NOT 引入 compiler/spec 中间模型。所有 ReAct Profile SHALL 通过同一 LangChain Agent loop 创建。
-
-#### Scenario: COMMON_QA 不加载 SuperAgent 能力
-
-- **WHEN** factory 创建 `COMMON_QA`
-- **THEN** SHALL NOT 加载 Skills、Memory、Todo、Filesystem 或 SubAgent capability
-- **AND** SHALL 只启用该 Profile 实际配置的 context、tool 与 model policy
+- **WHEN** server api 调用问答编排
+- **THEN** SHALL 经 `noesis.services` 的应用服务入口，且 SHALL NOT 存在重新导出私有 helper 的兼容层
 
 ### Requirement: Harness SHALL 只有一条运行时装配权威路径
 
@@ -130,6 +72,16 @@ Harness SHALL 参考 DeepAgents 的直接装配方式，由 factory 根据调用
 - **WHEN** 离线评测执行某一 Agent Profile
 - **THEN** SHALL 使用与线上相同的 factory 入口与 middleware 参数
 - **AND** adapter SHALL NOT 复制 retry、compaction 或 tool bounding 状态机
+
+### Requirement: Harness SHALL 分离 Kernel 与 Profile Capability
+
+Harness SHALL 由 factory 根据调用参数选择上游与 Noesis middleware；附件 SHALL 在 Agent 调用前解析。系统 SHALL NOT 为了减少类数而删除上游基线能力，也 SHALL NOT 引入 compiler/spec 中间模型。所有 ReAct Profile SHALL 通过同一 LangChain Agent loop 创建。
+
+#### Scenario: COMMON_QA 不加载 SuperAgent 能力
+
+- **WHEN** factory 创建 `COMMON_QA`
+- **THEN** SHALL NOT 加载 Skills、Memory、Todo、Filesystem 或 SubAgent capability
+- **AND** SHALL 只启用该 Profile 实际配置的 context、tool 与 model policy
 
 ### Requirement: Harness SHALL 维护可审计的 Middleware Inventory
 
@@ -149,7 +101,7 @@ Harness SHALL 从实际构造结果生成 middleware inventory，记录每个实
 
 ### Requirement: 各 Agent Profile SHALL 使用确定的 Middleware 集合
 
-最终装配 SHALL 满足下列行为矩阵；“可选”能力只有在配置或 Profile 明确启用时才出现。`TEST_CASE_QA` 继续使用 CaseCoordinator workflow。
+最终装配 SHALL 满足下列行为矩阵；"可选"能力只有在配置或 Profile 明确启用时才出现。`TEST_CASE_QA` 继续使用 CaseCoordinator workflow。
 
 | Profile | 必需能力 | 可选能力 |
 |---|---|---|
@@ -157,7 +109,7 @@ Harness SHALL 从实际构造结果生成 middleware inventory，记录每个实
 | `SUPER_AGENT_QA` | COMMON 全部 + ReadBeforeWrite、DurableContext、Filesystem、RefreshingSkills、RefreshingMemory、Todo、SubAgent、DeferredToolFilter | Snip、manual compact、HITL、call limits |
 | `FAULT_OPERATION_QA` | DynamicContext、DurableContext、ToolResultBudget、Compaction、PatchToolCalls、ToolFailure、SubAgent、DeferredToolFilter | ReadBeforeWrite、Snip、HITL、call limits |
 | SimpleMCP | DynamicContext、ToolResultBudget、Compaction、DeferredToolFilter、PatchToolCalls、ToolFailure | Snip、manual compact、call limits |
-| Super/Fault 子 Agent | DeepAgents isolated task context、ToolResultBudget、Compaction、PatchToolCalls、ToolFailure | ReadBeforeWrite、RefreshingSkills、Filesystem、DeferredToolFilter、Snip、局部 call limits；fork/resume 待上游公开 state-builder hook |
+| Super/Fault 子 Agent | DeepAgents isolated task context、ToolResultBudget、Compaction、PatchToolCalls、ToolFailure | ReadBeforeWrite、RefreshingSkills、Filesystem、DeferredToolFilter、Snip、局部 call limits |
 
 #### Scenario: 未配置能力不出现
 
@@ -173,7 +125,7 @@ Harness SHALL 从实际构造结果生成 middleware inventory，记录每个实
 
 ### Requirement: Skills 与 Memory SHALL 使用上游解析与独立 Freshness Adapter
 
-Skills 与 Memory SHALL 直接使用选定 DeepAgents 版本的来源解析、private state 与 prompt 注入行为。Noesis SHALL NOT 维护第二套 parser 或 prompt 模板；`RefreshingSkillsMiddleware` 和 `RefreshingMemoryMiddleware` SHALL 分别补足 DeepAgents 默认只加载一次的 freshness 差异，系统 SHALL NOT 建立统一 source hash middleware。
+Skills 与 Memory SHALL 直接使用选定 DeepAgents 版本的来源解析、private state 与 prompt 注入行为。Noesis SHALL NOT 维护第二套 parser 或 prompt 模板；`RefreshingSkillsMiddleware` 和 `RefreshingMemoryMiddleware` SHALL 分别补足上游默认只加载一次的 freshness 差异，系统 SHALL NOT 建立统一 source hash middleware。
 
 #### Scenario: Skills 来源变化
 
@@ -184,7 +136,7 @@ Skills 与 Memory SHALL 直接使用选定 DeepAgents 版本的来源解析、pr
 #### Scenario: Memory 使用上游生命周期
 
 - **WHEN** Agent 使用配置的 memory 路径
-- **THEN** 加载与注入 SHALL 由 DeepAgents MemoryMiddleware 完成
+- **THEN** 加载与注入 SHALL 由上游 MemoryMiddleware 完成
 - **AND** RefreshingMemory SHALL 只在顶层 invocation 边界失效缓存，不得在 run 中途突变
 
 ### Requirement: Harness SHALL 固定依赖行为契约
@@ -202,4 +154,3 @@ Harness SHALL 使用可重复安装的确定依赖版本。依赖升级 SHALL �
 - **WHEN** lockfile 中 Agent framework 或 middleware library 版本变化
 - **THEN** 上游行为契约测试 SHALL 在 CI 执行
 - **AND** 失败时 SHALL 阻止在未知 hook/state 语义下继续升级
-

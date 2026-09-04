@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
@@ -51,7 +52,18 @@ def parse_fixture_messages(raw: List[Dict[str, Any]]) -> List[AnyMessage]:
 
 
 def _approx_token_counter(messages: List[AnyMessage]) -> int:
-    return sum(len(repr(m.content)) for m in messages) // 4
+    """chars/4 口径：content + tool_calls 序列化长度（与评分口径一致，进 manifest）。"""
+    total = 0
+    for m in messages:
+        content = m.content
+        if isinstance(content, str):
+            total += len(content)
+        else:
+            total += len(str(content or ""))
+        tool_calls = getattr(m, "tool_calls", None)
+        if tool_calls:
+            total += len(json.dumps(tool_calls, default=str, ensure_ascii=False))
+    return total // 4
 
 
 def _build_summarize(model):
@@ -77,7 +89,11 @@ def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> 
         options.get("summarization_messages_to_keep") or ModelConfig.summarization_messages_to_keep
     )
 
-    model = get_llm(purpose="summarization")
+    # 零 LLM 冒烟路径：可注入假 summarize（合成 fixture 的可种植事实断言）
+    summarize = options.get("summarize")
+    if not callable(summarize):
+        model = get_llm(purpose="summarization")
+        summarize = _build_summarize(model)
     max_input = resolve_context_max_tokens() or 128_000
     reserve = int(getattr(ModelConfig, "summarization_output_reserve", 4_000))
 
@@ -97,22 +113,18 @@ def build_eval_middleware(compress_options: Optional[Dict[str, Any]] = None) -> 
     )
     return CompactionMiddleware(
         token_counter=_approx_token_counter,
-        summarize=_build_summarize(model),
+        summarize=summarize,
         thresholds=thresholds,
         keep_messages=keep_n,
     )
 
 
 def _extract_summary_text(messages: List[AnyMessage]) -> str:
+    """只认压缩中间件写入的结构化标记；无标记显式返回空（不靠内容猜测）。"""
     for msg in messages:
         if isinstance(msg, (HumanMessage, AIMessage, SystemMessage)):
-            content = msg.content
-            if msg.additional_kwargs.get("lc_source") == "summarization" and isinstance(content, str):
-                return content
-            if isinstance(content, str) and "[conversation summary]" in content:
-                return content
-            if isinstance(content, str) and len(content) > 200 and "summary" in content.lower():
-                return content
+            if msg.additional_kwargs.get("lc_source") == "summarization" and isinstance(msg.content, str):
+                return msg.content
     return ""
 
 
@@ -149,6 +161,7 @@ def compress_fixture_messages(
     return {
         "compressed_messages": compressed,
         "summary_text": _extract_summary_text(compressed),
+        "summary_marker_found": bool(_extract_summary_text(compressed)),
         "compressed": len(compressed) != pre_count,
         "pre_tokens": pre_tokens,
         "post_tokens": post_tokens,

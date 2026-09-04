@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import type { ChatModelOption } from '@/api/models'
 import { h } from 'vue'
+import { useRouter } from 'vue-router'
 import { ensureSession } from '@/api/chat'
 import { getChatModels } from '@/api/models'
 
@@ -9,13 +10,20 @@ const props = defineProps<{
   disabled?: boolean
   /** ACTIVE 会话才写回 session.extra；COMPOSING 仅改本地 modelValue */
   persistSessionExtra?: boolean
-  embedded?: boolean
 }>()
+
+const MANAGE_KEY = '__manage_models__'
+
+const router = useRouter()
 
 const modelValue = defineModel<string>({ default: '' })
 
 const loading = ref(false)
 const options = ref<ChatModelOption[]>([])
+
+const optionsById = computed(() => new Map(options.value.map((item) => [item.id, item])))
+
+const currentModel = computed(() => optionsById.value.get(modelValue.value))
 
 /** 按 provider 分组：不知用的是谁家的模型就是事故 */
 const groupedOptions = computed(() => {
@@ -30,30 +38,53 @@ const groupedOptions = computed(() => {
   return [...groups.entries()].map(([provider, items]) => ({ provider, items }))
 })
 
-const dropdownOptions = computed(() =>
-  groupedOptions.value.map(({ provider, items }) => ({
-    type: 'group' as const,
+/** 两级级联：一级 = 提供商（hover 展开子菜单），二级 = 模型；末尾「管理模型」跳设置页 */
+const dropdownOptions = computed(() => [
+  ...groupedOptions.value.map(({ provider, items }) => ({
     label: provider,
-    key: `group-${provider}`,
+    key: `provider-${provider}`,
     children: items.map((item) => ({ label: item.label, key: item.id })),
   })),
-)
+  { type: 'divider' as const, key: 'manage-divider' },
+  { label: '管理模型', key: MANAGE_KEY },
+])
 
-/** n-dropdown 官方 render-label：叶子选项渲染「模型名 + 激活勾选」（分组头不走此路径） */
-function renderDropdownLabel(option: { label?: string | number, key?: string | number }) {
+interface DropdownRawNode {
+  label?: string | number
+  key?: string | number
+  children?: unknown[]
+}
+
+/** n-dropdown 官方 render-label：提供商行渲染「名称 + 当前勾选」，模型行渲染「名称 + 视觉标签 + 激活勾选」 */
+function renderDropdownLabel(option: DropdownRawNode) {
+  const key = String(option.key)
   const label = String(option.label ?? '')
-  const active = String(option.key) === modelValue.value
+  if (Array.isArray(option.children)) {
+    const activeProvider = currentModel.value?.provider || '其他'
+    return h('span', { class: 'composer-model-dropdown__item' }, [
+      h('span', { class: 'composer-model-dropdown__label' }, label),
+      activeProvider === label
+        ? h('span', { class: 'i-carbon:checkmark composer-model-dropdown__check' })
+        : null,
+    ])
+  }
+  const item = optionsById.value.get(key)
   return h('span', { class: 'composer-model-dropdown__item' }, [
     h('span', { class: 'composer-model-dropdown__label' }, label),
-    active ? h('span', { class: 'i-carbon:checkmark composer-model-dropdown__check' }) : null,
+    item?.supports_vision
+      ? h('span', { class: 'composer-model-dropdown__tag' }, '视觉')
+      : null,
+    key === modelValue.value
+      ? h('span', { class: 'i-carbon:checkmark composer-model-dropdown__check' })
+      : null,
   ])
 }
 
-/** 触发按钮只显示模型名（provider 信息留给下拉分组，避免过长） */
+/** 触发按钮显示「提供商/模型」，与级联菜单的归属语义一致 */
 const currentLabel = computed(() => {
-  const hit = options.value.find((item) => item.id === modelValue.value)
+  const hit = currentModel.value
   if (hit) {
-    return hit.label
+    return hit.provider ? `${hit.provider}/${hit.label}` : hit.label
   }
   if (loading.value) {
     return '加载中…'
@@ -92,9 +123,14 @@ async function persistModel(modelId: string) {
   }
 }
 
-async function onSelect(key: string) {
-  modelValue.value = key
-  await persistModel(key)
+function onSelect(key: string | number) {
+  if (key === MANAGE_KEY) {
+    void router.push({ name: 'Settings', query: { s: 'models' } })
+    return
+  }
+  const modelId = String(key)
+  modelValue.value = modelId
+  void persistModel(modelId)
 }
 
 onMounted(() => {
@@ -110,7 +146,7 @@ watch(
 </script>
 
 <template>
-  <!-- 桌面与移动端同一下拉：provider 分组，触发按钮只显示模型名 -->
+  <!-- 桌面与移动端同一下拉：提供商 → 模型两级级联，触发按钮显示「提供商/模型」 -->
   <n-dropdown
     trigger="click"
     placement="top-start"
@@ -122,11 +158,8 @@ watch(
     <button
       type="button"
       class="composer-model-trigger"
-      :class="{ 'composer-model-trigger--menu': embedded }"
       :disabled="disabled || loading || dropdownOptions.length === 0"
     >
-      <span v-if="embedded" class="i-carbon:machine-learning-model composer-model-trigger__icon"></span>
-      <span v-if="embedded" class="composer-model-trigger__title">模型</span>
       <span class="composer-model-trigger__label">{{ currentLabel }}</span>
       <span class="i-carbon:chevron-down text-12 opacity-60"></span>
     </button>
@@ -166,32 +199,11 @@ watch(
   white-space: nowrap;
 }
 
-.composer-model-trigger--menu {
-  width: 100%;
-  max-width: none;
-  gap: 10px;
-  padding: 8px 14px;
-  border-radius: 0;
-  color: var(--noesis-text-primary, #111);
-  font-size: 13px;
-  text-align: left;
-}
-
-.composer-model-trigger__icon {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  color: var(--noesis-text-secondary, #6b7280);
-  font-size: 16px;
-}
-
-.composer-model-trigger__title {
-  flex: 1;
-}
-
-.composer-model-trigger--menu .composer-model-trigger__label {
-  max-width: 140px;
-  color: var(--noesis-text-secondary, #6b7280);
+/* 移动端（≤768px，同 useBreakpoint md）：长模型名限幅截断，避免挤压右侧控件 */
+@media (max-width: 768px) {
+  .composer-model-trigger {
+    max-width: 36vw;
+  }
 }
 </style>
 
@@ -206,6 +218,15 @@ watch(
 }
 .composer-model-dropdown__label {
   flex: 1;
+}
+.composer-model-dropdown__tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--noesis-color-bg-muted, rgb(0 0 0 / 6%));
+  color: var(--noesis-text-secondary, #6b7280);
+  font-size: 11px;
+  line-height: 1.4;
 }
 .composer-model-dropdown__check {
   flex-shrink: 0;

@@ -213,3 +213,35 @@ Redis不可用而PostgreSQL和Web依赖正常时，实例 SHALL 保持可路由�
 
 - **WHEN** 至少两个worker运行规定的多Run、多Tab、慢消费与重连负载
 - **THEN** 报告 SHALL 分别记录leader/follower延迟、Redis吞吐/失败、sequence gap、snapshot恢复、checkpoint lag、terminal delivery与资源回收
+
+### Requirement: 会话与用户信令 SHALL 跨 worker 广播
+
+会话级与用户级信令流（run-started/hitl/terminal 等 hint 事件）在 `redis` 模式下 SHALL 经 Run bus 广播到所有 worker；任一 worker 本地的信令 SSE 端点 SHALL 能投递其它进程发布的信令。信令 SHALL 保持 hint 语义（at-most-once、订阅满则丢、前端经 active-run/GET 自愈），SHALL NOT 分配 sequence、进入 checkpoint 或触发 Run 状态迁移。`memory` 模式 SHALL 保持进程内总线行为不变，信令端点代码 SHALL NOT 感知运行模式。
+
+#### Scenario: follower 承接用户级信令流
+
+- **WHEN** 浏览器连接非 leader worker 的 `/api/chat/events/stream`，leader 上的 Run 进入终态
+- **THEN** 该 worker SHALL 向该浏览器投递 run-terminal 信令
+- **AND** 会话列表徽章表现 SHALL 与直连 leader worker 一致
+
+#### Scenario: 信令广播丢失
+
+- **WHEN** 信令 Pub/Sub 消息丢失
+- **THEN** 前端 SHALL 经既有 active-run 拉取与快照对齐自愈
+- **AND** 系统 SHALL NOT 因信令丢失重置或阻塞任何 Run 状态
+
+### Requirement: durable command SHALL 有界保留
+
+已完成（completed/rejected/no-op）的 command SHALL 在保留期（`distributed_runs.command_retention_days`，默认 7 天）后由 leader 低频批量清理；清理 SHALL NOT 阻塞 dispatch、claim 或新 command 提交。command 保留期 SHALL 同时作为幂等去重窗口；超出窗口的重复提交 SHALL 按新 command 处理并重新校验 Run 状态。
+
+#### Scenario: 过期 command 清理
+
+- **WHEN** command 完成时间早于「当前时间 - 保留期」
+- **THEN** leader 清理任务 SHALL 批量删除该 command
+- **AND** 清理执行期间新 command 提交与 queued Run claim SHALL 不受影响
+
+#### Scenario: 去重窗口外的重复 stop
+
+- **WHEN** 同一 Run 的 stop command 已完成且超过保留期，再次提交 stop
+- **THEN** 系统 SHALL 按新 command 处理并重验 Run 当前状态
+- **AND** 已终态 Run SHALL 返回 rejected/no-op，SHALL NOT 产生第二次副作用

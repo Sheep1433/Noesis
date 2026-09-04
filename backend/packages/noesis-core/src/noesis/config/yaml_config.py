@@ -190,14 +190,15 @@ class GovernorYamlSection(BaseModel):
 
 class AgentRuntimeYamlSection(BaseModel):
     tool_output_max_chars: int = Field(default=24_000, ge=1)
+    read_file_max_chars: int = Field(default=20_000, ge=1)
     governor: GovernorYamlSection = Field(default_factory=GovernorYamlSection)
 
 
 class RetrievalLimitsYamlSection(BaseModel):
     max_results_per_call: int = Field(default=30, ge=1)
     max_results_per_run: int = Field(default=500, ge=1)
-    max_excerpt_chars: int = Field(default=2000, ge=1)
-    max_excerpt_bytes: int = Field(default=8192, ge=1)
+    max_excerpt_chars: int = Field(default=8000, ge=1)
+    max_excerpt_bytes: int = Field(default=32768, ge=1)
     max_locator_bytes: int = Field(default=2048, ge=1)
 
 
@@ -339,7 +340,7 @@ class SkillsMarketYamlSection(BaseModel):
 
 class WebToolsYamlSection(BaseModel):
     max_search_results: int = Field(default=8, ge=1, le=20)
-    fetch_max_chars: int = Field(default=4096, ge=1)
+    fetch_max_chars: int = Field(default=16000, ge=1)
     fetch_timeout_seconds: int = Field(default=30, ge=1)
     # DDG 回退时使用的引擎列表（逗号分隔）；避免 auto 轮询不可达源导致 N×timeout 延迟
     ddg_backends: str = Field(default="mojeek,yandex")
@@ -373,8 +374,16 @@ class SubagentsYamlSection(BaseModel):
     foreground_max_wait_seconds: float = Field(default=120, gt=0)
     # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
     auto_continue: bool = Field(default=True)
+    # 续跑去抖窗口：终态到达后等待该秒数再唤醒（窗口内多个终态合并为
+    # 一次 continuation run，显著降低重复发送全量上下文的 token 成本）；
+    # 0 = 立即唤醒（旧行为）
+    auto_continue_debounce_seconds: float = Field(default=60, ge=0)
     # 后台命令任务（execute run_in_background）超时：0=不限时
     shell_task_timeout_seconds: float = Field(default=0, ge=0)
+    # 协作停止宽限：停止请求发出后等待静止边界的上限，超时回退硬杀
+    stop_grace_seconds: float = Field(default=30, gt=0)
+    # 硬杀后强制终态对账延迟：硬取消协程未按约收口时的兜底窗口
+    stop_reconcile_seconds: float = Field(default=30, gt=0)
 
 
 class MessagingYamlSection(BaseModel):
@@ -428,9 +437,8 @@ class KbYamlSection(BaseModel):
 
 
 class MemoryYamlSection(BaseModel):
-    """md 文件记忆层（openspec: md-memory-layer）。"""
+    """md 文件记忆层（openspec: agent-memory-cortex）。"""
     extraction_model: str = ""  # 空 = 默认对话模型
-    selection_model: str = ""  # 空 = 默认对话模型（注入选条）
     enabled_by_default: bool = False  # fail-closed：抽取评测门禁未过不默认开启
     session_idle_minutes: int = Field(default=10, ge=1, le=120)
     sweep_interval_minutes: int = Field(default=30, ge=5, le=240)
@@ -438,7 +446,6 @@ class MemoryYamlSection(BaseModel):
     index_max_lines: int = Field(default=200, ge=50, le=1000)
     index_max_bytes: int = Field(default=25_600, ge=10_000, le=100_000)
     stale_warning_days: int = Field(default=2, ge=1, le=90)
-    inject_budget_tokens: int = Field(default=2000, ge=500, le=10_000)
     max_entry_chars: int = Field(default=4000, ge=500, le=20_000)
     consolidation_min_interval_hours: int = Field(default=24, ge=1, le=24 * 30)
     consolidation_min_new_sessions: int = Field(default=5, ge=1, le=200)

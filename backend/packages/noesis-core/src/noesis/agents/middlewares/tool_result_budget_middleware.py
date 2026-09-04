@@ -11,15 +11,19 @@ record.
 Design contract (``simplify-agent-context-architecture`` §14 +
 ``agent-tool-failure-handling`` spec delta):
 
-- replacement happens before the result enters effective history;
+- replacement happens before the result enters the effective history;
 - a replacement record (artifact path, synopsis, original hash, tokens freed)
   is persisted in private state so checkpoint resume replays the same decision;
-- the replacement preserves ``status``, ``errorCategory``, ``outcome`` and the
-  original ``tool_call_id``;
+- the replacement preserves ``status``, ``errorCategory``, ``outcome`` and
+  the original ``tool_call_id``;
 - a result that already carries an artifact reference is kept as-is (no
   re-offload / re-truncation);
 - when the injected backend offload fails, a final bounded text fallback is
-  used — but ``status``/``category``/``outcome`` are never rewritten.
+  used — but ``status``/``category``/``outcome`` are never rewritten;
+- projection is deterministic and append-only: the same history projects to
+  byte-identical messages on every model call, so the prefix cache never
+  forks mid-run (no keep-recent sliding window over tool arguments, no
+  per-batch aggregate replacement).
 
 Self-containment: depends only on an injected ``BackendProtocol`` and
 LangGraph private state. No ``runtime``/``service`` calls.
@@ -62,6 +66,10 @@ synopsis:
 
 Use the artifact path to read the full result in chunks."""
 
+# 参数替换文本的稳定前缀（哨兵）：既是模型可识别的契约格式，
+# 也让投影幂等——已替换的参数不再被当作新的超限参数二次替换
+_ARG_REPLACEMENT_PREFIX = "[large content omitted"
+
 
 @dataclass(frozen=True)
 class ReplacementRecord:
@@ -78,9 +86,24 @@ class ReplacementRecord:
     replacement_text: str = ""
 
 
+def merge_replacement_records(
+    left: dict[str, ReplacementRecord] | None,
+    right: dict[str, ReplacementRecord] | None,
+) -> dict[str, ReplacementRecord]:
+    """并行工具任务各自全量快照写入时的合并 reducer。
+
+    LangGraph 只认 Annotated metadata 末位的 callable 作为 reducer；无 reducer
+    时该键为 LastValue 通道，同一步并行工具任务各写一次会抛
+    ``InvalidUpdateError: Can receive only one value per step``（曾导致子 Agent
+    整 run 崩溃）。写入方携带的是累积快照，按 tool_call_id 后写覆盖即与
+    串行语义一致。reducer 必须放在 ``PrivateStateAttr`` 之后（末位）。
+    """
+    return {**(left or {}), **(right or {})}
+
+
 class ToolResultBudgetState(AgentState[ResponseT]):
     _tool_result_replacements: NotRequired[
-        Annotated[dict[str, ReplacementRecord], PrivateStateAttr]
+        Annotated[dict[str, ReplacementRecord], PrivateStateAttr, merge_replacement_records]
     ]
 
 
@@ -155,22 +178,15 @@ class ToolResultBudgetMiddleware(
         backend: BackendProtocol | None = None,
         *,
         max_chars: int = 24_000,
-        aggregate_max_chars: int | None = None,
         artifact_prefix: str = "/large_tool_results",
-        head_chars: int = 400,
-        tail_chars: int = 200,
-        argument_keep_recent_messages: int = 12,
+        head_chars: int = 2_000,
+        tail_chars: int = 1_000,
     ) -> None:
         self._backend = backend
         self._max_chars = max(1, max_chars)
-        self._aggregate_max_chars = max(
-            self._max_chars,
-            aggregate_max_chars if aggregate_max_chars is not None else self._max_chars * 2,
-        )
         self._artifact_prefix = artifact_prefix
         self._head = max(0, head_chars)
         self._tail = max(0, tail_chars)
-        self._argument_keep_recent_messages = max(1, argument_keep_recent_messages)
 
     @staticmethod
     def _tool_call_id(request: ToolCallRequest) -> str:
@@ -273,12 +289,8 @@ class ToolResultBudgetMiddleware(
         self,
         message: ToolMessage,
         records: dict[str, ReplacementRecord],
-        *,
-        force: bool = False,
     ) -> tuple[ToolMessage, bool]:
-        if _has_artifact_reference(message) or (
-            not force and _content_size(message.content) <= self._max_chars
-        ):
+        if _has_artifact_reference(message) or _content_size(message.content) <= self._max_chars:
             return message, False
         text = _content_text(message.content)
         if text is None:
@@ -297,44 +309,18 @@ class ToolResultBudgetMiddleware(
         messages: list[ToolMessage],
         records: dict[str, ReplacementRecord],
     ) -> tuple[list[ToolMessage], bool]:
-        """Apply per-result and aggregate budgets to one parallel result batch."""
+        """Apply the per-result budget to one parallel result batch.
+
+        只有单条预算，没有批次合计：合计层会在并行批次总超限时强制替换
+        「中间大小」的结果（每条都没超单条预算），与单条预算职责重叠且
+        砍掉的是并行检索的可用结果；上下文总量护栏归 Compaction 层。
+        """
         projected: list[ToolMessage] = []
         created = False
         for message in messages:
             replacement, was_created = self._replace_message(message, records)
             projected.append(replacement)
             created = created or was_created
-
-        original_sizes = [_content_size(message.content) for message in messages]
-        remaining = sum(
-            size
-            for message, size in zip(projected, original_sizes, strict=True)
-            if not _has_artifact_reference(message)
-        )
-        if remaining <= self._aggregate_max_chars:
-            return projected, created
-
-        candidates = sorted(
-            (
-                (size, index)
-                for index, (message, size) in enumerate(
-                    zip(projected, original_sizes, strict=True)
-                )
-                if not _has_artifact_reference(message)
-            ),
-            reverse=True,
-        )
-        for size, index in candidates:
-            replacement, was_created = self._replace_message(
-                messages[index],
-                records,
-                force=True,
-            )
-            projected[index] = replacement
-            created = created or was_created
-            remaining -= size
-            if remaining <= self._aggregate_max_chars:
-                break
         return projected, created
 
     def _replace_tool_arguments(
@@ -353,7 +339,13 @@ class ToolResultBudgetMiddleware(
             bounded_args = dict(args)
             for field in ("content", "new_string"):
                 text = bounded_args.get(field)
-                if not isinstance(text, str) or len(text) <= self._max_chars:
+                if (
+                    not isinstance(text, str)
+                    or text.startswith(_ARG_REPLACEMENT_PREFIX)
+                    or len(text) <= self._max_chars
+                ):
+                    # 已替换文本（前缀哨兵）不再二次替换：投影必须幂等，
+                    # 否则第二次模型调用会改写第一次发送的内容、分叉前缀缓存
                     continue
                 original_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
                 record_key = f"arg:{call_id}:{field}"
@@ -363,9 +355,9 @@ class ToolResultBudgetMiddleware(
                     changed = True
                     continue
                 artifact_path = self._offload(record_key, original_hash, text)
-                synopsis = _synopsis(text, head=min(self._head, 200), tail=0)
+                synopsis = _synopsis(text, head=self._head, tail=0)
                 replacement = (
-                    f"[large {field} omitted; artifact_path={artifact_path or '<unavailable>'}; "
+                    f"{_ARG_REPLACEMENT_PREFIX}; artifact_path={artifact_path or '<unavailable>'}; "
                     f"original_hash={original_hash}; original_size_chars={len(text)}]\n"
                     f"{synopsis}"
                 )
@@ -436,11 +428,15 @@ class ToolResultBudgetMiddleware(
         projected: list[AnyMessage] = []
         index = 0
         messages = list(request.messages)
-        argument_cutoff = max(0, len(messages) - self._argument_keep_recent_messages)
+        # 大参数入口即定型（无保鲜窗口）：对所有 assistant 消息无差别投影，
+        # 消息第一次进入有效历史时就被替换、之后按 hash 重放完全一致——
+        # 有效历史纯追加、从不改写已发送内容，前缀缓存不会中途分叉。
+        # 「最近 N 条保留原文」的滑动窗口会让边界每步前移一格、每步改写
+        # 一条已发送消息，等于每步丢一段前缀缓存。
         while index < len(messages):
             if not isinstance(messages[index], ToolMessage):
                 message = messages[index]
-                if isinstance(message, AIMessage) and index < argument_cutoff:
+                if isinstance(message, AIMessage):
                     message, argument_created = self._replace_tool_arguments(message, records)
                     created = created or argument_created
                 projected.append(message)
@@ -556,4 +552,5 @@ __all__ = [
     "ReplacementRecord",
     "ToolResultBudgetState",
     "ToolResultBudgetMiddleware",
+    "merge_replacement_records",
 ]

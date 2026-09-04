@@ -104,7 +104,7 @@ def test_already_artifact_referenced_result_not_re_offloaded() -> None:
 
 def test_backend_failure_falls_back_to_text_without_changing_status() -> None:
     mw = ToolResultBudgetMiddleware(_FakeBackend(fail=True), max_chars=10)
-    big = _big_result("x" * 2000, status="error")
+    big = _big_result("x" * 5000, status="error")
     out = mw.wrap_tool_call(_call_request(), _handler_returning(big))
     replaced = out.update["messages"][0]
     assert isinstance(replaced, ToolMessage)
@@ -229,38 +229,30 @@ def test_immediate_command_message_is_replaced_without_losing_command_update() -
     assert "command-call" in result.update["_tool_result_replacements"]
 
 
-def test_parallel_results_are_bounded_by_aggregate_budget() -> None:
-    mw = ToolResultBudgetMiddleware(
-        _FakeBackend(),
-        max_chars=100,
-        aggregate_max_chars=120,
-    )
-    command = Command(
-        update={
-            "messages": [
-                _big_result("a" * 80, call_id="a"),
-                _big_result("b" * 80, call_id="b"),
-            ],
-        },
-    )
+def test_parallel_results_each_under_budget_pass_batch_unchanged() -> None:
+    """批次合计已删除：每条都在单条预算内的并行结果整体放行，不因
+    批次总超限强制替换「中间大小」的结果（那会砍掉并行检索的可用来源）。"""
+    backend = _FakeBackend()
+    mw = ToolResultBudgetMiddleware(backend, max_chars=100)
+    batch = [
+        _big_result("a" * 80, call_id="a"),
+        _big_result("b" * 80, call_id="b"),
+    ]
+    command = Command(update={"messages": list(batch)})
 
     result = mw.wrap_tool_call(_call_request("batch"), _handler_returning(command))
 
     assert isinstance(result, Command)
-    assert len(result.update["_tool_result_replacements"]) == 1
-    assert sum(
-        bool(message.additional_kwargs.get("tool_result_replacement"))
-        for message in result.update["messages"]
-    ) == 1
+    assert result.update["messages"][0] is batch[0]
+    assert result.update["messages"][1] is batch[1]
+    assert backend.written == {}
 
 
-def test_old_write_argument_is_replaced_but_recent_argument_is_kept() -> None:
+def test_write_argument_offloaded_at_entry_regardless_of_position() -> None:
+    """大参数入口即定型：无保鲜窗口，新旧 assistant 的大参数一律替换——
+    有效历史纯追加，不存在「越过 N 条边界被中途改写」的前缀分叉。"""
     backend = _FakeBackend()
-    mw = ToolResultBudgetMiddleware(
-        backend,
-        max_chars=20,
-        argument_keep_recent_messages=2,
-    )
+    mw = ToolResultBudgetMiddleware(backend, max_chars=20)
     old = AIMessage(
         content="",
         tool_calls=[
@@ -292,8 +284,55 @@ def test_old_write_argument_is_replaced_but_recent_argument_is_kept() -> None:
     projected = mw.modify_request(request)
 
     assert "large content omitted" in projected.messages[0].tool_calls[0]["args"]["content"]
-    assert projected.messages[2].tool_calls[0]["args"]["content"] == "y" * 100
+    assert "large content omitted" in projected.messages[2].tool_calls[0]["args"]["content"]
     assert "arg:write-old:content" in projected.state["_tool_result_replacements"]
+    assert "arg:write-new:content" in projected.state["_tool_result_replacements"]
+
+
+def test_projection_is_stable_across_model_calls() -> None:
+    """append-only 不变量：同一历史第二次投影与第一次逐字段一致——
+    已替换消息按 record 重放同一替换文本、不产生新 record、不改写原文。
+
+    该性质即前缀缓存安全性的直接表达：第 N+1 次请求与第 N 次的公共
+    前缀不会因投影而中途变化。
+    """
+    backend = _FakeBackend()
+    mw = ToolResultBudgetMiddleware(backend, max_chars=20)
+    write_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_file",
+                "args": {"file_path": "/r.txt", "content": "z" * 100},
+                "id": "write-1",
+            }
+        ],
+    )
+    raw = [
+        write_msg,
+        _big_result("big-result-body" * 10, call_id="res-1"),
+    ]
+    request = ModelRequest(
+        model=object(),  # type: ignore[arg-type]
+        messages=list(raw),
+        system_message=SystemMessage(content="sys"),
+        state={"messages": list(raw)},
+    )
+
+    first = mw.modify_request(request)
+    # 第二次模型调用：state 已携带第一次产生的 records
+    second_request = ModelRequest(
+        model=object(),  # type: ignore[arg-type]
+        messages=list(first.messages),
+        system_message=SystemMessage(content="sys"),
+        state={"messages": list(raw), "_tool_result_replacements": first.state["_tool_result_replacements"]},
+    )
+    second = mw.modify_request(second_request)
+
+    assert [str(m.content) for m in second.messages] == [str(m.content) for m in first.messages]
+    # 无新增 offload（第一次已定型），backend 只写过一次
+    assert len(backend.written) == 2  # arg 替换 + result 替换各一次
+    assert second.state["_tool_result_replacements"].keys() == first.state["_tool_result_replacements"].keys()
 
 
 def test_immediate_replacement_is_not_replaced_again_as_history() -> None:
@@ -319,3 +358,63 @@ def test_immediate_replacement_is_not_replaced_again_as_history() -> None:
 
     assert projected.messages[0] is replacement
     assert len(backend.written) == 1
+
+
+def test_parallel_tool_tasks_merge_replacement_records_in_one_step() -> None:
+    """同一步并行工具任务各写一次 _tool_result_replacements 不再崩溃。
+
+    回归：该键曾解析为 LastValue 通道（Annotated metadata 末位不是 callable
+    时 langgraph 不装 reducer），两个并行超限工具结果在同一 superstep 各写
+    一次 → ``InvalidUpdateError: Can receive only one value per step`` →
+    子 Agent 整 run 以 SUBAGENT_FAILED 终止。 reducer 必须位于
+    ``PrivateStateAttr`` 之后（langgraph 只认 metadata 末位的 callable）。
+    """
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.tools import tool
+
+    class _ToolCallingFakeModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):  # noqa: ANN001
+            return self
+
+    @tool
+    def big_fetch(url: str) -> str:
+        """Fetch a large page."""
+        return f"page:{url}:" + "x" * 500
+
+    model = _ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "big_fetch", "args": {"url": "a"}, "id": "call-1"},
+                    {"name": "big_fetch", "args": {"url": "b"}, "id": "call-2"},
+                ],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+
+    agent = create_agent(
+        model=model,
+        tools=[big_fetch],
+        middleware=[ToolResultBudgetMiddleware(_FakeBackend(), max_chars=100)],
+    )
+
+    # 通道解析：merge reducer 必须把该键装成可合并通道（曾为 LastValue）
+    from langgraph.channels.binop import BinaryOperatorAggregate
+
+    assert isinstance(
+        agent.channels["_tool_result_replacements"], BinaryOperatorAggregate
+    ), "私有键未解析为可合并通道：reducer 必须位于 Annotated metadata 末位"
+
+    snapshots = list(
+        agent.stream(
+            {"messages": [HumanMessage(content="fetch a and b")]},
+            stream_mode="values",
+        )
+    )
+    records = snapshots[-1].get("_tool_result_replacements")
+
+    assert records is not None, "并行替换必须留下可重放的 replacement 记录"
+    assert set(records) == {"call-1", "call-2"}

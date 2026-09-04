@@ -30,6 +30,10 @@ class QaQueryRequest(BaseModel):
         None,
         description="对话模型目录 id；省略时使用会话 extra 或默认模型",
     )
+    reasoning_effort: Optional[str] = Field(
+        None,
+        description="推理档位（off/low/medium/high/max，仅 OpenAI 协议族透传 reasoning_effort）；None=自动（不传参）",
+    )
     extra: Optional[Dict[str, Any]] = Field(
         None,
         description="透传元数据（如 bg_continuation 自动续跑标记）；不进模型输入",

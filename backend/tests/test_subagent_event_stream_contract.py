@@ -73,14 +73,20 @@ def subagent_streams(monkeypatch):
 
 async def _open_subagent_stream(monkeypatch, snapshot, after_sequence: int = 0):
     """驱动 stream_run 的 subagent 分支，返回 StreamingResponse。"""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _null_sse_db():
+        yield SimpleNamespace()
+
     monkeypatch.setattr(
         chat_api.RunService, "get", AsyncMock(return_value=snapshot)
     )
+    monkeypatch.setattr(chat_api, "sse_prefetch_db", _null_sse_db)
     return await chat_api.stream_run(
         "r-1",
         after_sequence=after_sequence,
         current_user=SimpleNamespace(user_id="u1"),
-        db=SimpleNamespace(),
     )
 
 
@@ -173,7 +179,7 @@ async def test_terminal_run_stream_skips_subscription(monkeypatch, subagent_stre
 
 @pytest.mark.asyncio
 async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) -> None:
-    from noesis.errors.exceptions import NotFoundException, ServiceException
+    from noesis.errors.exceptions import ConflictException, NotFoundException
     from noesis.schemas.chat_vo import SubagentFollowupRequest
     from noesis.services.subagent_session_service import SubagentSessionService
 
@@ -182,9 +188,11 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
         "send_followup",
         AsyncMock(return_value={"session_id": "child-1", "status": "running"}),
     )
+    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
     ok = await chat_api.send_subagent_followup(
         "child-1",
         SubagentFollowupRequest(message="再查一下"),
+        http_request=SimpleNamespace(),
         current_user=SimpleNamespace(user_id="u1"),
     )
     assert ok.status_code == 200
@@ -200,21 +208,24 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
         await chat_api.send_subagent_followup(
             "child-none",
             SubagentFollowupRequest(message="再查一下"),
+            http_request=SimpleNamespace(),
             current_user=SimpleNamespace(user_id="u1"),
         )
 
-    # ServiceException 带「不存在」文案在端点内直接映射 404
+    # 状态冲突抛 ConflictException 上抛（全局异常处理器映射 409），
+    # 端点不再做字符串嗅探
     monkeypatch.setattr(
         SubagentSessionService,
         "send_followup",
-        AsyncMock(side_effect=ServiceException(message="父会话不存在")),
+        AsyncMock(side_effect=ConflictException(message="任务正在停止，无法追加消息")),
     )
-    missing = await chat_api.send_subagent_followup(
-        "root-none",
-        SubagentFollowupRequest(message="再查一下"),
-        current_user=SimpleNamespace(user_id="u1"),
-    )
-    assert missing.status_code == 404
+    with pytest.raises(ConflictException):
+        await chat_api.send_subagent_followup(
+            "root-none",
+            SubagentFollowupRequest(message="再查一下"),
+            http_request=SimpleNamespace(),
+            current_user=SimpleNamespace(user_id="u1"),
+        )
 
 
 @pytest.mark.asyncio
@@ -376,13 +387,13 @@ async def test_parent_soft_delete_cascades_to_children(monkeypatch) -> None:
         AsyncMock(side_effect=lambda sid: cancel_calls.append(sid)),
     )
     monkeypatch.setattr(
-        executor_module.BackgroundSubagentExecutor,
+        executor_module.BackgroundTaskExecutor,
         "list_for_session",
         lambda session_id: [{"task_id": "bg-1", "status": "running"}],
     )
     cancel_task_calls: list[str] = []
     monkeypatch.setattr(
-        executor_module.BackgroundSubagentExecutor,
+        executor_module.BackgroundTaskExecutor,
         "cancel",
         lambda task_id: cancel_task_calls.append(task_id) or {"task_id": task_id, "status": "cancelled"},
     )

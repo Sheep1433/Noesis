@@ -1,9 +1,10 @@
-"""会话终态自动记忆抽取（md-memory-layer tasks 2.x）——水位增量。
+"""会话终态自动记忆抽取（agent-memory-cortex）——水位增量。
 
 流程：sweep 发现 idle 且有新消息越过水位的 root 会话 → 读取
 水位之后的新消息段（带水位前 2 条衔接背景，有界截断保头保尾）、
-本轮注入清单（run.memory_context）、现有条目 → LLM 五选一判定 →
-轻量合并/新建条目 + journal 追加 → 推进水位。
+本轮召回清单（run.memory_context，经检索工具聚合）、现有条目 →
+LLM 五选一判定 → 轻量合并/新建条目 + journal 追加（情景摘要 +
+抽取决策块）→ 推进水位。
 
 - 水位（memory_extracted_seq）= 已成功抽取的最大消息序号；
   成功才推进，失败保留原水位（Claude Code cursor 同款语义）。
@@ -45,21 +46,40 @@ class ExtractedEntry(BaseModel):
         default="",
         description="条目文件名：小写英文短横线（如 document-format）；留空则由系统生成",
     )
+    description: str = Field(
+        default="",
+        description="两段式描述：一句话结论 + 分号 + 何时调用（如「偏好表格化简体中文输出；涉及文档/报告/说明输出时调用」）",
+    )
     body: str = Field(description="结论正文：陈述句事实，一句话到几句")
     why: str = Field(default="", description="为什么（可选）")
     applicability: str = Field(default="", description="适用条件：何时应用（可选）")
+    reason: str = Field(
+        default="",
+        description="抽取决策理由（一句话：为什么值得记 / 为什么并入既有条目）",
+    )
     update_existing_label: str = Field(
         default="",
         description="若为更新/修正既有条目，填该条目的 label；新建留空",
     )
     is_correction: bool = Field(
         default=False,
-        description="是否为用户对已注入记忆的修正（修正允许更新注入条目）",
+        description="是否为用户对已召回记忆的修正（修正允许更新已召回条目）",
     )
+
+
+class ExcludedItem(BaseModel):
+    """抽取排除项：内容摘要 + 理由（journal 决策块的原料）。"""
+
+    gist: str = Field(description="被排除内容的一句话摘要")
+    reason: str = Field(description="排除理由（如「临时任务状态」「与现有条目重复」「文件本身可得」）")
 
 
 class ExtractionResult(BaseModel):
     entries: list[ExtractedEntry] = Field(default_factory=list)
+    excluded: list[ExcludedItem] = Field(
+        default_factory=list,
+        description="判定为「不该存」的内容及理由（落入 journal 决策块，不建条目）",
+    )
     journal_summary: str = Field(
         default="",
         description="当日情景摘要（2-4 句，含做了什么、关键结论；无价值会话留空）",
@@ -75,26 +95,37 @@ _EXTRACTION_PROMPT = """你是记忆抽取器。从下面的会话中抽取值�
 - experience 经验：什么做法有效
 - gotcha 注意事项：什么要避开（坑、边界、限制）
 
-## 不该存（负面清单，出现即跳过）
+## 路由防呆（硬规则）
+- 带时效性或阶段性的内容（「正在」「本周」「接下来三个月」「Q3 要完成」）只能进 goal，
+  不得写入 preference/decision/experience/gotcha——错误条目越稳定越难被整理淘汰
+- 灰色地带对照：
+  - 「定了包管理用 pnpm」→ decision；「就是喜欢 pnpm 的简洁」→ preference
+  - 「这个做法绕过了缓存失效的坑」→ gotcha；「先复现再定位的三步法很有效」→ experience
+  - 「Q3 要做完迁移」→ goal（时效性）；「迁移已完成，最终选了双写方案」→ decision
+
+## 不该存（出现即记入 excluded，含理由）
 - grep/读文件/代码本身能得出的信息（文件路径、代码结构、git 历史）
 - USER.md/AGENTS.md 已写过的内容（见「现有记忆」）
 - 临时任务状态、当前对话上下文、寒暄
-- 与「本轮已注入条目」相同的内容（除非 is_correction=true，即用户明确修正了它）
+- 与「本轮已召回条目」相同的内容（除非 is_correction=true，即用户明确修正了它）
 
 ## 规则
 - 相对日期改写为绝对日期（「下周」→ 具体日期；今天按 {today} 算）
 - label 一律中文短语（2-6 字），英文只出现在 slug_hint
+- description 两段式：一句话结论 + 分号 + 何时调用（「是什么；何时调用」），
+  不写成正文复读
 - 与「现有记忆」语义重复 → 不新建，设 update_existing_label 为该条目 label
 - 明显过时的既有条目被会话推翻 → update_existing_label + 新正文
+- 每条 entry 附 reason（为什么值得记 / 为什么并入）
 - 至多 {max_entries} 条新条目；无长期价值 → entries 留空、journal_summary 也留空
-- 敏感内容（密钥、凭据、身份证件等）一律不存
+- 敏感内容（密钥、凭据、身份证件等）一律不存（也不进 excluded）
 - journal_summary 无论如何概述本会话（除非整场无价值）
 
 ## 现有记忆
 {existing}
 
-## 本轮已注入条目（复述不算新记忆；用户修正 → is_correction）
-{injected}
+## 本轮已召回条目（复述不算新记忆；用户修正 → is_correction）
+{recalled}
 
 ## 会话消息
 {messages}"""
@@ -183,21 +214,21 @@ class MemoryExtractionService:
                 # 新段无合格文本（纯系统消息等）：推进水位，零写入
                 await MemoryExtractionService._mark_extracted(db, session_id, new_max)
                 return True
-            injected = await MemoryExtractionService._load_injected(db, session_id)
+            recalled = await MemoryExtractionService._load_recalled(db, session_id)
             MemoryStore.ensure_layout(user_id)
             existing = MemoryStore.read_index(user_id)
 
             result = await MemoryExtractionService._run_llm(
                 user_id=user_id,
                 messages=messages,
-                injected=injected,
+                recalled=recalled,
                 existing=existing,
             )
             await MemoryExtractionService._apply(
                 user_id=user_id,
                 session_id=session_id,
                 result=result,
-                injected=injected,
+                recalled=recalled,
             )
             await MemoryExtractionService._mark_extracted(db, session_id, new_max)
             return True
@@ -303,8 +334,9 @@ class MemoryExtractionService:
         return "\n".join(t for t in texts if t)
 
     @staticmethod
-    async def _load_injected(db: AsyncSession, session_id: str) -> list[str]:
-        """聚合本会话各 run 注入清单（run.memory_context['entries']）。"""
+    async def _load_recalled(db: AsyncSession, session_id: str) -> list[str]:
+        """聚合本会话各 run 召回清单（run.memory_context['entries']，
+        由 search_memory 工具命中后合并写入）。"""
         rows = (
             (
                 await db.execute(
@@ -329,7 +361,7 @@ class MemoryExtractionService:
 
     @staticmethod
     async def _run_llm(
-        *, user_id: str, messages: str, injected: list[str], existing
+        *, user_id: str, messages: str, recalled: list[str], existing
     ) -> ExtractionResult:
         from noesis.llm.factory import get_llm
 
@@ -337,12 +369,12 @@ class MemoryExtractionService:
             f"- [{e.label}] {e.description}（{e.memory_type}/{e.slug}.md）"
             for e in existing.entries
         ] or ["（空）"]
-        injected_lines = [f"- {path}" for path in injected] or ["（无）"]
+        recalled_lines = [f"- {path}" for path in recalled] or ["（无）"]
         prompt = _EXTRACTION_PROMPT.format(
             today=datetime.now(timezone.utc).date().isoformat(),
             max_entries=MemoryConfig.max_entries_per_extraction,
             existing="\n".join(existing_lines),
-            injected="\n".join(injected_lines),
+            recalled="\n".join(recalled_lines),
             messages=messages,
         )
         # LLM 失败直接抛出：调用方不标记「已抽取」，下次 sweep 重试
@@ -362,14 +394,20 @@ class MemoryExtractionService:
         user_id: str,
         session_id: str,
         result: ExtractionResult,
-        injected: list[str],
+        recalled: list[str],
     ) -> None:
         date_str = datetime.now().astimezone().date().isoformat()
         source = f"会话 {session_id[:8]} · {date_str}"
-        injected_set = set(injected)
+        recalled_set = set(recalled)
         new_count = 0
+        decisions: list[str] = []
         for candidate in result.entries:
+            reason = candidate.reason.strip() or "会话中确认的长期事实"
             if candidate.memory_type not in MEMORY_TYPES:
+                decisions.append(
+                    f"- 排除：{candidate.label or candidate.body[:24]}"
+                    f"（类型 {candidate.memory_type} 不在冻结五类，不入语义层）"
+                )
                 continue  # 类型不匹配不入语义层
             target = MemoryStore.slug_of(
                 user_id,
@@ -378,28 +416,48 @@ class MemoryExtractionService:
             )
             if (
                 target
-                and f"{candidate.memory_type}/{target}.md" in injected_set
+                and f"{candidate.memory_type}/{target}.md" in recalled_set
                 and not candidate.is_correction
             ):
-                continue  # 防自强化：复述注入条目不记录（用户修正除外）
+                decisions.append(
+                    f"- 排除：{candidate.label}（复述本轮召回条目，防自强化）"
+                )
+                continue  # 防自强化：复述召回条目不记录（用户修正除外）
             if target is None:
                 if new_count >= MemoryConfig.max_entries_per_extraction:
-                    continue  # 超出上限：素材由 journal 覆盖，不建语义条目
+                    decisions.append(
+                        f"- 排除：{candidate.label}（超出单次上限，素材由 journal 覆盖）"
+                    )
+                    continue
                 new_count += 1
-            MemoryStore.upsert_entry(
+            entry = MemoryStore.upsert_entry(
                 user_id,
                 memory_type=candidate.memory_type,
                 label=candidate.label,
                 body=candidate.body,
                 why=candidate.why,
                 applicability=candidate.applicability,
+                description=candidate.description,
                 sources=[source],
                 slug=target or (candidate.slug_hint or None),
                 max_entry_chars=MemoryConfig.max_entry_chars,
             )
+            op = "更新" if target is not None else "新建"
+            decisions.append(f"- {op}：{entry.rel_path}（{reason}）")
+        decisions.extend(
+            f"- 排除：{item.gist}（{item.reason}）" for item in result.excluded
+        )
         if result.journal_summary.strip():
             MemoryStore.append_journal(
                 user_id, session_id=session_id, text=result.journal_summary
+            )
+        # 抽取决策块：写入与排除决策对账（无决策的零价值会话不落块）
+        if decisions:
+            MemoryStore.append_journal(
+                user_id,
+                session_id=session_id,
+                text="\n".join(decisions),
+                label="抽取决策",
             )
 
     @staticmethod

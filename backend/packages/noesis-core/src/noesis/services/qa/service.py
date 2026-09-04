@@ -12,9 +12,10 @@ from noesis.agents.mcp.loader import load_mcp_tools_by_names
 from noesis.config.code_enum import IntentEnum
 from noesis.config.env import ChatAttachmentConfig, LangfuseConfig, StreamConfig
 from noesis.chat.delivery.events import RunEvent
+from noesis.chat.hitl import normalize_hitl_decisions
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
-from noesis.chat.event_mapping.mapper import RuntimeEventMapper
+from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.chat.tool_state import ToolState
 from noesis.errors.exceptions import NotFoundException
 from noesis.llm.catalog import get_default_model_id
@@ -28,7 +29,6 @@ from noesis.agents.subagents.notifications import notify_agent_query
 from noesis.services.qa.helpers import (
     _finalize_sse_bridge_stream,
     _finalize_run_events,
-    _new_stream_ctx,
     _resolve_enabled_skills_for_query,
     _resolve_kb_settings_for_query,
     _resolve_mcp_servers_for_query,
@@ -43,6 +43,13 @@ from noesis.services.qa.helpers import (
 )
 from noesis.storage.postgres.manager import pg_manager
 
+
+
+def _encode_events(events) -> List[str]:
+    """typed RunEvent → SSE 行（错误兜底路径与主投递路径同一编码器）。"""
+    from noesis.chat.delivery.sse import encode_run_event
+
+    return [line for event in events for line in encode_run_event(event)]
 
 class QaService:
     @classmethod
@@ -112,6 +119,15 @@ class QaService:
                     request_model_id=req_obj.model_id,
                     db=db,
                 )
+            # 本 Run 的推理档位（get_llm 经 ContextVar 消费；子 Agent 随
+            # create_task 自动继承）。TEST_CASE_QA 不参与档位控制。
+            from noesis.llm.reasoning import set_request_reasoning_effort
+
+            set_request_reasoning_effort(
+                req_obj.reasoning_effort
+                if req_obj.qa_type != IntentEnum.TEST_CASE_QA.value[0]
+                else None
+            )
 
             # 根据 qa_type 选择 agent 并执行
             kb_collections: List[str] = []
@@ -208,11 +224,11 @@ class QaService:
                     model_id=resolved_model_id,
                 )
                 ctx_err: Dict[str, Any] = {}
-                for line in br.process_item({"type": "error", "content": "未知的qa_type"}, None, ctx_err):
+                # 经 mapper 归一化：错误/终态走统一 run.finished 词汇
+                err_mapper = RuntimeEventMapper(br)
+                for line in _encode_events(err_mapper.map_item({"type": "__tw_error__", "content": "未知的qa_type"}, None, ctx_err)):
                     yield line
-                for line in br.process_item({"type": "finish", "finish_reason": "error", "usage": {}}, None, ctx_err):
-                    yield line
-                for line in br.finalize():
+                for line in _encode_events(err_mapper.finalize(finish_reason="error")):
                     yield line
                 return
 
@@ -226,7 +242,7 @@ class QaService:
                 session_id=session_id,
                 message_id=bridge.assistant_message_id,
             )
-            ctx = _new_stream_ctx()
+            ctx = new_stream_ctx()
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 
             ka_sec = float(StreamConfig.sse_keepalive_interval_seconds)
@@ -278,8 +294,7 @@ class QaService:
         except asyncio.CancelledError:
             logger.info(
                 f"exec_query 流式任务被取消(CancelledError) session_id={session_id} qa_type={req_obj.qa_type} "
-                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
-                f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
+                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
             )
             raise
 
@@ -301,13 +316,9 @@ class QaService:
                     "tool_start_times": {},
                 }
                 try:
-                    if req_obj.qa_type == IntentEnum.TEST_CASE_QA.value[0]:
-                        map_item = bridge.process_item
-                        finalize = bridge.finalize
-                    else:
-                        mapper = RuntimeEventMapper(bridge)
-                        map_item = mapper.map_item
-                        finalize = mapper.finalize
+                    mapper = RuntimeEventMapper(bridge)
+                    map_item = mapper.map_item
+                    finalize = mapper.finalize
                     for event in map_item({"type": "__tw_error__", "content": str(e)}, b, c):
                         yield event
                     for event in map_item(
@@ -368,7 +379,7 @@ class QaService:
                 existing = result.scalar_one_or_none()
                 if existing is not None and isinstance(existing.content, dict):
                     builder.load_from_content_dict(existing.content)
-            ctx = _new_stream_ctx()
+            ctx = new_stream_ctx()
             tc_qa = IntentEnum.TEST_CASE_QA.value[0]
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 
@@ -400,8 +411,7 @@ class QaService:
         except asyncio.CancelledError:
             logger.info(
                 f"exec_test_case_resume 流式被取消(CancelledError) session_id={session_id} "
-                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')} "
-                f"user_stopped={bool((ctx or {}).get('user_stopped'))}"
+                f"user_id={current_user.user_id} assistant_db_id={(ctx or {}).get('_assistant_db_id')}"
             )
             raise
 
@@ -423,15 +433,10 @@ class QaService:
                     "tool_start_times": {},
                 }
                 try:
-                    for line in bridge.process_item({"type": "__tw_error__", "content": str(e)}, b, c):
+                    err_mapper = RuntimeEventMapper(bridge)
+                    for line in _encode_events(err_mapper.map_item({"type": "__tw_error__", "content": str(e)}, b, c)):
                         yield line
-                    for line in bridge.process_item(
-                        {"type": "__tw_finish__", "usage": {}, "finish_reason": "error"},
-                        b,
-                        c,
-                    ):
-                        yield line
-                    for line in bridge.finalize():
+                    for line in _encode_events(err_mapper.finalize(finish_reason="error")):
                         yield line
                 except Exception:
                     logger.exception("failed to emit SSE after test case resume exception")
@@ -446,8 +451,14 @@ class QaService:
         current_user: CurrentUser,
         db: AsyncSession,
         run_id: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> AsyncGenerator[RunEvent, None]:
-        """HITL resume：新开 SSE，续写同一 assistant_message_id。"""
+        """HITL resume：新开 SSE，续写同一 assistant_message_id。
+
+        ``model_id`` 为本 run 冻结的模型（launch_payload.resolved_model）：
+        resume 段重建 Agent 必须沿用同一模型并重设运行时快照，否则
+        ``get_llm(None)`` 静默落平台默认——模型漂移不可回退地发生在续跑段。
+        """
         from noesis.agents.guardrails.session_grants import session_grants
         from noesis.storage.postgres.models.chat import TChatMessage
         from sqlalchemy import and_, select
@@ -487,12 +498,8 @@ class QaService:
             # 仅网络类 execute 可 grant；memory 写入不在此路径授予
             session_grants.grant(session_id, "network_execute")
 
-        decision_payloads = []
-        for d in decisions:
-            item: Dict[str, Any] = {"type": d.get("type")}
-            if d.get("message") is not None:
-                item["message"] = d["message"]
-            decision_payloads.append(item)
+        # 与子 Agent resume 路径同一归一化：reject 缺 message 补统一默认文案
+        decision_payloads = normalize_hitl_decisions(decisions)
 
         aid = pending.assistant_message_id
         actions = list(pending.action_requests or [])
@@ -522,7 +529,7 @@ class QaService:
             mapper = RuntimeEventMapper(bridge)
             builder = AssistantMessageBuilder(session_id=session_id, message_id=aid)
             builder.load_from_content_dict(existing_content)
-            ctx = _new_stream_ctx()
+            ctx = new_stream_ctx()
             ctx["_assistant_db_id"] = aid
 
             # reject/respond 不经 on_tool_end：先合成 tool-output 与 hitl 状态
@@ -608,11 +615,24 @@ class QaService:
                         },
                     )
 
+            # resume 段沿用 run 冻结模型：解析同时把含 key 的快照注入本
+            # task 的 ContextVar，供重建的 Agent 与其子 Agent 消费
+            resume_model_id = model_id
+            if resume_model_id:
+                from noesis.services.qa.helpers import _resolve_model_for_query
+
+                resume_model_id = await _resolve_model_for_query(
+                    session_id=session_id,
+                    user_id=str(current_user.user_id),
+                    request_model_id=resume_model_id,
+                    db=db,
+                )
             agent_generator = super_agent.resume_agent(
                 session_id=session_id,
                 decisions=decision_payloads,
                 current_user=current_user,
                 qa_type=qa_type,
+                model_id=resume_model_id,
                 db=db,
                 message_id=aid,
                 run_id=run_id,

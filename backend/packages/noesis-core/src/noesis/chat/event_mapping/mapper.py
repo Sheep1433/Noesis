@@ -23,6 +23,22 @@ from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 
 
+def new_stream_ctx() -> Dict[str, Any]:
+    """astream_events 消费的桥接上下文（主链路与子 Agent executor 共用）。"""
+    return {
+        "text_buffer": "",
+        "current_tool_name": None,
+        "current_tool_call_id": None,
+        "tool_start_times": {},
+        "_assistant_db_id": None,
+        # 并行工具分组：按 scope（parent_task_call_id 或 "root"）独立计数 step_id。
+        # on_chat_model_start 标 pending scope，首个 on_tool_start mint 新 step_id。
+        "pending_model_step_scopes": set(),
+        "step_counters": {},
+        "current_step_ids": {},
+    }
+
+
 class RuntimeEventMapper:
     """raw runtime event → typed RunEvent 的唯一映射入口。
 
@@ -58,17 +74,23 @@ class RuntimeEventMapper:
             elif event.event == "finish":
                 reason = str(data.get("finish_reason") or "stop")
                 usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+                model_calls = (
+                    data.get("model_calls") if isinstance(data.get("model_calls"), list) else []
+                )
                 if reason == "hitl_pending":
                     normalized.append(
                         RunPaused(
                             reason="hitl_pending",
                             finish_reason=reason,
                             usage=usage,
+                            model_calls=model_calls,
                         )
                     )
+                # length_stop / safety_stop 走 completed 分支：输出与 usage 完整
+                # （只是最后一步被 provider 截断/安全收尾），且客户端契约里这两
+                # 个值随 finish 帧以成功形态结算——转 RunAborted 会发 abort 帧，
+                # 客户端没有服务端主动 abort 的处理器，流会悬在不结束状态。
                 elif reason in {
-                    "length_stop",
-                    "safety_stop",
                     "partial_output",
                     "empty_after_tools",
                     "tool_loop_limit",
@@ -91,6 +113,7 @@ class RuntimeEventMapper:
                         RunCompleted(
                             finish_reason=reason,
                             usage=usage,
+                            model_calls=model_calls,
                         )
                     )
             elif event.event == "abort":

@@ -87,7 +87,6 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         "sync_existing_kb_collection_configs",
         "stop_scheduled_task_scheduler",
         "stop_telegram_runtime",
-        "stop_feishu_runtime",
         "start_memory_sweeper",
         "start_memory_consolidator",
         "stop_memory_sweeper",
@@ -102,7 +101,6 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
     for name in (
         "start_scheduled_task_scheduler",
         "start_telegram_runtime",
-        "start_feishu_runtime",
     ):
         mock = MagicMock()
         monkeypatch.setattr(server_main, name, mock)
@@ -131,7 +129,6 @@ async def test_lifespan_releases_resources_when_app_body_fails(
             raise RuntimeError("request failed")
 
     for name in (
-        "stop_feishu_runtime",
         "stop_telegram_runtime",
         "stop_scheduled_task_scheduler",
         "shutdown_run_manager",

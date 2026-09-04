@@ -15,12 +15,17 @@
 
 ### Requirement: 消息列表与详情
 
-系统 SHALL 提供按会话拉取消息历史的 API；返回结构 SHALL 支持前端按 parts 渲染（含 tool / reasoning / HITL 部件）。
+系统 SHALL 提供按会话拉取消息历史的 API；返回结构 SHALL 支持前端按 parts 渲染（含 tool / reasoning / HITL 部件）。retrieval part SHALL 支持可选 `origin` 字段标记来源归属（主 Agent 自检索 / 具体子 Agent 任务；缺省视为主 Agent，旧数据兼容）。
 
 #### Scenario: 历史含通道来源消息
 
 - **WHEN** 同会话存在经 Telegram 入站写入的 user 消息
 - **THEN** 网页历史 API SHALL 可见该消息（来源元数据 MAY 暴露）
+
+#### Scenario: origin 字段兼容
+
+- **WHEN** 历史 retrieval part 无 origin 字段
+- **THEN** 前端 SHALL 按主 Agent 自检索归组渲染，SHALL NOT 解析失败
 
 ### Requirement: qa_type 路由
 
@@ -44,7 +49,7 @@
 
 浏览器实时响应 SHALL 使用 `/api/chat` 下的 run 创建与 SSE 订阅端点。系统 SHALL 提供独立的 run 创建、状态查询、SSE 订阅和停止能力，并 SHALL 删除 `POST /api/chat/sessions/stream`。浏览器主实时通道仍为 SSE，不要求 WebSocket。
 
-事件类型至少覆盖：`run-snapshot`、`run-status`、`reasoning-*`、`text-*`、`tool-call-*` / `tool-input-*`、`tool-output-available`、`context-update`、`hitl-required`、`error`、`finish`、`[DONE]`。业务事件 SHALL 携带 `run_id` 与 sequence；keepalive 注释帧 SHALL 仅由传输层注入。
+事件类型至少覆盖：`run-snapshot`、`run-status`、`message-start`、`reasoning-*`、`text-*`、`tool-input-*`、`tool-output-available`、`context-update`、`stats-update`、`retrieval-results-available`、`hitl-required`、`run.finished`、`[DONE]`。`run.finished` 为唯一终态事件（载荷含 status / finish_reason / usage / model_calls），主路径 `finish` / `abort` / `error` 终态编码名退役（CaseCoordinator 兼容适配路径除外，见适用范围 Requirement）。durable 业务事件 SHALL 携带 `run_id` 与 sequence；transient 事件 SHALL 带 transient 标记且不占 sequence；keepalive 注释帧 SHALL 仅由传输层注入。该事件词汇对主会话 run 与子 Agent run 为同一套；事件名清单的权威记录在 `docs/engineering/platform/chat-streaming.md` §4.2b，由契约测试钉住。
 
 #### Scenario: 创建后独立订阅
 - **WHEN** 已认证用户成功创建 run
@@ -59,7 +64,7 @@
 
 流式路径 SHALL 配置合理的代理/应用超时；服务端 MAY 按可配置间隔发送 SSE 注释保活帧。连接类写入失败 SHALL 可观测，并 SHALL 只关闭对应 subscription，不得笼统降级为 run 业务错误或取消 producer。
 
-客户端 SHALL 检查业务事件 sequence。发现 sequence gap、网络异常或未收到终态的 EOF 时，客户端 SHALL 查询权威 run 状态并重新订阅，SHALL NOT 把该 EOF 当作成功完成。
+客户端 SHALL 检查 durable 业务事件 sequence；transient 事件 SHALL 直接应用、不参与 sequence 记账。发现 sequence gap、网络异常或未收到终态的 EOF 时，客户端 SHALL 查询权威 run 状态并重新订阅，SHALL NOT 把该 EOF 当作成功完成。客户端 SHALL 对流读取实施读超时：超过阈值未收到任何字节（含 keepalive）SHALL 视为半开连接并主动断开进入恢复流程，SHALL NOT 无限期等待。
 
 #### Scenario: 保活不污染总线
 - **WHEN** SseDelivery 注入 keepalive
@@ -69,6 +74,12 @@
 - **WHEN** 浏览器流在未收到终态事件时结束
 - **THEN** chat 页 SHALL 保持 run 未完成语义并查询/重订阅
 - **AND** SHALL NOT 调用成功收尾回调
+
+#### Scenario: 半开连接读超时
+
+- **WHEN** TCP 连接半开导致流读取在超时阈值内无任何字节到达
+- **THEN** 客户端 SHALL 主动取消读取并进入权威快照恢复流程
+- **AND** SHALL NOT 永久停留在等待读取状态
 
 ### Requirement: 流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库
 
@@ -182,12 +193,23 @@ chat 页 SHALL 从 `write_todos` 的 tool-input-available 更新 TodoList；生�
 
 ### Requirement: 子 Agent（task）展示
 
-chat 页 SHALL 对 `task` 工具 parts 渲染折叠 UI；子 Agent 内部 tool/text/reasoning parts SHALL 嵌套展示。流式帧与 parts MAY 含 `parentTaskCallId`。非法 input/output SHALL 防御性处理。
+chat 页 SHALL 对 `task` 工具 parts 渲染折叠 UI；子 Agent 内部 tool/text/reasoning parts SHALL 嵌套展示。流式帧与 parts MAY 含 `parentTaskCallId`。非法 input/output SHALL 防御性处理。子会话详情抽屉 SHALL 与主会话界面同构复用：消息渲染、统计条与 composer（模型选择、推理档位选择、单按钮发送/停止、待发队列）均 SHALL 使用与主 Agent 相同的组件或同一共享实现；两侧 UI 行为差异 SHALL 仅源于会话上下文（父/子），不源于重复实现。
 
 #### Scenario: 嵌套 tool
 
 - **WHEN** 子 Agent 产生工具调用
 - **THEN** UI SHALL 在父 task 折叠块内展示，而非与顶层工具平铺混淆
+
+#### Scenario: 推理档位选择同构
+
+- **WHEN** 用户在子会话抽屉 composer 打开推理档位选择器
+- **THEN** 交互与展示 SHALL 与主 Agent composer 的同一选择器一致
+- **AND** 选择结果 SHALL 随该条 followup 消息提交
+
+#### Scenario: 领域事件消费单点
+
+- **WHEN** 前端新增对某领域事件（如 usage 终态）的 UI 反应
+- **THEN** 主会话与子会话消费路径 SHALL 经同一 reducer 生效，无需分别实现解析逻辑
 
 ### Requirement: Agent runtime 防护（摘要）
 
@@ -425,6 +447,44 @@ chat 页 SHALL 为一次用户发送生成稳定 `client_request_id`，在创建
 - **THEN** `[n]` SHALL 继续显示为一个可点击上标
 - **AND** 点击目标 SHALL 与首次流式生成完成时一致
 
+### Requirement: 研究弧来源聚合展示
+
+来源面板 SHALL 按**研究弧**聚合展示：弧为一条真实用户消息（`source_kind != bg_task_notice` 的 user 消息）到下一条真实用户消息之间的全部 assistant 消息；弧内**过程消息**（派发、进度叙事）SHALL NOT 渲染来源面板；弧内**最后一条**消息 SHALL 渲染该弧全部消息落库 retrieval parts 的聚合面板（按 canonical URL 去重；**平铺展示，不按贡献者分组**），被打断的弧以末条消息为聚合位。面板 SHALL 区分「引用 M / 共检索 N」：引用子集按「结构化引用标记优先、URL 归因兜底」判定——交付文本中的协议化引用标记 `[citation:标题](ref)`（ref 为原始 URL 或 kb 引用，与正文角标渲染同一语法）精确命中；模型输出的残缺标记（无 ref 括号）按 host / 标题宽容匹配；正文与报告文件中的裸 URL canonical 匹配兜底。归因文本 = 交付消息顶层正文 + 弧内写入文件内容（write_file / edit_file 的写入正文，文件交付场景的报告本体）；过程消息的叙述正文不参与判定。归因文本无任何信号（无标记也无 URL）时面板降级为仅「共检索 N」。面板 SHALL 为持久化消息数据的纯函数：来源 parts 落库即定稿（只追加、不回写历史），弧边界仅由消息历史决定，系统 SHALL NOT 维护会话级可变来源集合。
+
+#### Scenario: 过程消息无面板、交付消息聚合
+
+- **WHEN** 一轮研究被续跑拆为派发、进度、交付多条 assistant 消息，且收取来源落在过程消息上
+- **THEN** 过程消息 SHALL NOT 渲染来源面板
+- **AND** 交付消息 SHALL 渲染弧内全部来源的聚合面板（含落位在过程消息上的 parts）
+
+#### Scenario: 引用分层
+
+- **WHEN** 弧内共检索去重 40 个来源，交付正文出现其中 12 个 URL
+- **THEN** 面板 SHALL 显示「引用 12 · 共检索 40」，默认展开 12 条引用项
+
+#### Scenario: 结构化标记与文件内容归因
+
+- **WHEN** 交付文本含 `[citation:标题](https://…)` 标记或模型残缺输出 `[citation:github.com]`
+- **THEN** 引用判定 SHALL 按标记 ref（或残缺线索的 host / 标题）命中弧内来源条目
+- **AND** 交付物为写入文件的报告时，报告文件内容（write_file / edit_file 写入正文）SHALL 参与引用归因，报告内标记 / URL 命中的来源计入引用子集
+
+#### Scenario: 多轮隔离与历史稳定
+
+- **WHEN** 上一轮研究引用 30 个来源、同会话下一轮研究引用 40 个来源
+- **THEN** 两轮交付消息的面板 SHALL 各自显示 30 与 40，SHALL NOT 合并
+- **AND** 页面刷新后历史交付消息的面板 SHALL 与交付当时一致（纯函数重算）
+
+#### Scenario: 文件交付降级
+
+- **WHEN** 交付物写入 workspace 文件且交付说明正文与报告文件内容均不含来源 URL 与引用标记
+- **THEN** 该弧面板 SHALL 降级为仅「共检索 N」，SHALL NOT 展示无依据的引用子集
+
+#### Scenario: 平铺展示与计数
+
+- **WHEN** 弧内来源含主 Agent 自检索与多个子 Agent 贡献
+- **THEN** 面板 SHALL 平铺展示全部去重来源（引用项在前，其余检索来源折叠其后），SHALL NOT 按贡献者分组
+- **AND** 面板计数 SHALL 为去重数（retrieval part 的 origin 归因数据保留落库，不用于展示分组）
+
 ### Requirement: SSE SHALL 表达统一 Agent Stop Reason
 
 RunEvent 到 `/api/chat` SSE 与 assistant 终态映射 SHALL 支持稳定的 Agent stop reason，至少覆盖 `context_exhausted`、`length_stop`、`safety_stop`、`partial_output`、`empty_after_tools`、`tool_loop_limit`、`tool_call_limit`、`subagent_concurrency_limit`、`subagent_total_limit` 与 `subagent_depth_limit`。新增 reason SHALL 作为兼容字段出现在 `finish`、`error` 或现行终态事件中；旧客户端忽略该字段时 SHALL 仍能完成消息收尾。
@@ -575,12 +635,56 @@ typed RuntimeEventMapper、可靠 Run、多 Tab、snapshot 恢复和统一 Deliv
 
 ### Requirement: 客户端 SHALL 以 snapshot replace 和 sequence 连续性恢复
 
-客户端收到 run-snapshot SHALL replace 相同 assistant 的 parts，并设置 last_sequence。业务 sequence 小于等于 last_sequence SHALL 忽略；等于 last_sequence+1 SHALL apply；大于 last_sequence+1 SHALL 停止 reader并进行 snapshot recovery。无终态 EOF SHALL NOT 触发成功或失败终态回调。
+客户端收到 run-snapshot SHALL replace 相同 assistant 的 parts，并设置 last_sequence。durable 业务 sequence 小于等于 last_sequence SHALL 忽略；等于 last_sequence+1 SHALL apply；大于 last_sequence+1 SHALL 停止 reader并进行 snapshot recovery。transient 事件 SHALL 不经 sequence 判定直接 apply。无终态 EOF SHALL NOT 触发成功或失败终态回调。
 
 #### Scenario: sequence gap 不继续渲染
 
-- **WHEN** last_sequence=20 而下一事件 sequence=23
+- **WHEN** last_sequence=20 而下一 durable 事件 sequence=23
 - **THEN** 客户端 SHALL 丢弃该事件并进入 snapshot recovery
+
+#### Scenario: transient 事件不触发 gap
+
+- **WHEN** last_sequence=20 时先到达一条 transient text-delta，随后 sequence=21 的 durable 事件
+- **THEN** transient 事件 SHALL 正常应用
+- **AND** sequence=21 的事件 SHALL 正常 apply，SHALL NOT 被误判为 gap
+
+### Requirement: run 流客户端 SHALL 为单一传输实现
+
+chat 页的 run 流消费、会话信令流与子会话详情视图的流消费 SHALL 由同一传输客户端实现提供（SSE 帧解析含 `[DONE]`/CRLF、读超时、退避重连、sequence 记账、终态判定、abort/代际隔离、断流后权威快照收口）；各视图仅保留各自的领域事件分派，SHALL NOT 各自维护一套流传输代码。`[DONE]` SHALL 被协议层正确处理，SHALL NOT 产生解析错误日志。
+
+#### Scenario: 子会话视图具备读超时保护
+
+- **WHEN** 子会话详情视图订阅的流出现半开连接
+- **THEN** 传输客户端 SHALL 在读超时后进入恢复流程
+- **AND** SHALL NOT 永久挂起等待
+
+#### Scenario: DONE 不产生解析噪音
+
+- **WHEN** 任一流以 `[DONE]` 正常结束
+- **THEN** 传输客户端 SHALL 将其识别为流结束标记
+- **AND** SHALL NOT 在控制台产生解析失败警告
+
+#### Scenario: 传输语义单实现
+
+- **WHEN** 代码审查发现主聊天与子会话的流重连/超时/sequence 逻辑
+- **THEN** 其 SHALL 委托同一传输客户端
+- **AND** SHALL NOT 存在第二套 SSE 解析或重连实现
+
+### Requirement: 子会话视图 SHALL 复用主聊天的投影函数与宿主壳组件
+
+子会话详情视图的 assistant 流式投影 SHALL 使用与主聊天相同的投影函数族（text/reasoning/tool 增量追加、工具输出应用）；消息行宿主壳——run-meta 行（轮数/步数/耗时与折叠）、「本轮未完成」blocker、统计条、stop/send 单按钮、composer 工具栏、HITL 审批卡、来源面板——SHALL 为共享组件，两视图 SHALL NOT 各持一份同构实现。差异行为（如乐观停止 vs 等待往返）SHALL 经组件参数表达。
+
+#### Scenario: 子会话流式追加与主聊天同实现
+
+- **WHEN** 子会话详情视图处理 text-delta / reasoning-delta 帧
+- **THEN** 投影 SHALL 由主聊天同一投影函数族完成
+- **AND** redacted-thinking 缓冲等富语义 SHALL 在两侧一致生效
+
+#### Scenario: 宿主壳组件单一来源
+
+- **WHEN** 修改统计条或停止按钮的视觉与交互
+- **THEN** 修改 SHALL 只发生在一处共享组件
+- **AND** 主聊天与子会话视图 SHALL 同步获得更新
 
 ### Requirement: 同 session 创建冲突 SHALL 加入已有 Run
 

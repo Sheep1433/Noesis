@@ -51,17 +51,3 @@ export async function getChatModels(): Promise<ChatModelCatalog> {
   const res = await authFetch(API_BASE)
   return parseAuthJson<ChatModelCatalog>(res)
 }
-
-/** 平台 Provider 当前可用模型（OpenCode Zen 免费模型轮换时刷新用） */
-export async function discoverPlatformModels() {
-  const res = await authFetch(new Request(`${API_BASE}/discover-platform`, {
-    method: 'POST',
-    credentials: 'include',
-  }))
-  return parseAuthJson<{
-    ok: boolean
-    status: string
-    models: DiscoveredModelRow[]
-    message: string
-  }>(res)
-}

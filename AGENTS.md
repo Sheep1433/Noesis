@@ -11,8 +11,8 @@
 | [frontend/AGENTS.md](frontend/AGENTS.md) | 前端目录地图、命令、流式/UI 约定 |
 | [backend/AGENTS.md](backend/AGENTS.md) | 后端分层规范、配置、Service/API 模板 |
 | `docs/research/` | 项目现状与外部技术调研 |
-| `docs/architecture/` | 当前长期架构与数据流 |
-| `docs/engineering/` | 高难度实现与工程经验 |
+| `docs/engineering/` | 系统组成与数据流，高难度实现与工程经验 |
+| `docs/decisions/` | 决策记录：为什么这么定、否了什么、代价是什么 |
 | `docs/bug/` | Bug 记录 |
 | `docs/debugging/` | 疑难排查沉淀 |
 
@@ -61,9 +61,9 @@ Noesis/
 
 ### SSE 事件
 
-run 内容流：`reasoning-start/delta/end`、`text-start/delta/end`、`tool-call-start`、`tool-output-available`、`token-details`、`error`、`finish-step`、`finish`、`[DONE]`。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见 `docs/architecture/platform/chat-streaming.md` §4.2a。
+run 内容流事件清单（message-start、reasoning/text/tool-input 系列、stats-update、hitl-required、finish、`[DONE]` 等）的**唯一权威**在 `docs/engineering/platform/chat-streaming.md` §4.2b，由契约测试钉住（漂移即 CI 红）。另有两条轻量信令流（hint 语义）：`session-signal`（`/sessions/{id}/events`，跨窗口发现活跃 run）与 `user-signal`（`/events/stream`，会话列表实时刷新），详见同文档 §4.2a。
 
-**assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/architecture/platform/chat-streaming.md` §3.3。
+**assistant 落库（服务端 authoritative，不依赖客户端收到 `[DONE]`）**：同一轮 SSE 对应 DB **一行**（`message_id` = `assistant_message_id`），经骨架 → 检查点 → 终态 UPDATE；终态互斥见 `openspec/specs/platform-chat/spec.md`「流式 assistant 消息 SHALL 按骨架—检查点—终态单次落库」与 `docs/engineering/platform/chat-streaming.md` §3.3。
 
 ### 认证
 
@@ -74,10 +74,27 @@ run 内容流：`reasoning-start/delta/end`、`text-start/delta/end`、`tool-cal
 ```bash
 cd backend && uv run app.py     # 后端改动后必跑
 cd frontend && pnpm lint        # 前端按影响范围 lint / build
+python3 scripts/change-scope.py # 任何 diff 审查/选检查的起点（影响面 + 各层 owning checks）
 ```
 
-- Python 统一 `uv run`，禁止裸 `python`
-- 测试目录：后端 `backend/tests/`（`api_contract/` = TestClient 级契约；`api/` = 真实服务级，`-m integration` 手动跑）；前端 `frontend/__tests__/`（vitest）与 `frontend/e2e/`（Playwright，`pnpm test:e2e`）
+- Python 统一 `uv run`，禁止裸 `python`（`scripts/` 下校验脚本例外，纯标准库）
+- 测试目录：后端 `backend/tests/`（`api_contract/` = TestClient 级契约；`api/` = 真实服务级手动跑，快速轮 `-m 'integration and not llm'` 只跑不触 LLM 的接口用例，全量 `-m integration` 含真实 LLM）；前端 `frontend/__tests__/`（vitest）与 `frontend/e2e/`（Playwright，`pnpm test:e2e`）
+
+### 接口测试执行步骤（后端）
+
+1. **起服务**：`cd backend && uv run app.py`（需 PostgreSQL / noesis_langgraph DB / Qdrant / 有效 MODEL_API_KEY；sandbox-runner 由启动自动拉起，8090）。
+2. **分层执行**（按目的选层，均可独立跑）：
+
+   | 层 | 命令（backend/ 下） | 规模与耗时 |
+   |---|---|---|
+   | CI 门禁 | `uv run pytest tests/api_contract -q` | 21 条，秒级 |
+   | 快速轮（不触 LLM） | `uv run pytest tests/api -m 'integration and not llm' -q` | 39 条，约 40s |
+   | 全量（含真实 LLM） | `uv run pytest tests/api -m integration -q` | 71 条，受免费网关限流影响可达半小时 |
+
+3. **测试账号**：统一使用 demo 账号 `test`/`123456`（Alembic 种子账号，用户确认即测试专用）——测试产生的会话、Provider、审计行等数据落在该账号下属预期行为，不额外建测试账户，也无需逐轮清理。
+4. **失败判定**：免费网关限流的降级文案（「生成失败，请稍后重试」「服务暂时不可用」）导致的 error 终态由 `gateway_skip` fixture 自动 skip，不算回归；DuckDuckGo/外网不可达属环境限制，记录但不算接口回归。
+5. **执行后记录**：把分层计数、失败明细（含测试名、断言/异常原文、复现所需环境备注）写入 `docs/bug/`（遵循既有 Bug 记录格式，状态 🆕 新增）。执行角色为测试时**只记录问题、禁止顺手修改代码**，分析定位交给后续处理者。
+- 文档改动跑 `python3 scripts/verify-md-links.py` 与 `python3 scripts/verify-decision-format.py`（CI 同款 gate，本地先红先修）
 - 每次测试完成后必须停止由 Agent 启动的后端、前端 dev/preview server 及临时测试进程，释放占用端口，避免与用户后续执行冲突
 - 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库
 - SSE、Agent、Qdrant、消息持久化相关改动优先补回归测试
@@ -124,6 +141,7 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 - **禁止**在 `main` 上直接开发或 commit（历史例外须尽快合回 `dev` 对齐）
 - **禁止**`feat/*` 直接 push / merge 到 `main`（须经 `dev` 集成）
 - **禁止**未经合并就把大段未提交改动长期留在 `main` 工作区
+- **禁止**为开发 `feat/*` 在共享工作区直接 `git checkout` 切走分支——必须用 `git worktree add`（如 `git worktree add ../noesis-<feat> feat/<name>`）在独立目录开发，共享工作区保持用户当前分支（常为 `dev`）不被占用，否则会阻塞用户的联调测试
 - 合并到 `main` 前：`backend` 跑 `uv run pytest tests/ -q`，`frontend` 按影响范围 `pnpm lint` / `pnpm build`
 
 ## 协作约定
@@ -163,17 +181,24 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 
 - 先解决根因，再考虑容错；安全问题禁止吞异常或扩大权限绕过
 - **禁止**多套方案并行（v2 / 备选）；废弃方案立即删除；遇到兼容方案的代码主动向用户提问是否要保留
-- 方案变更同步更新对应 `docs/architecture/` 或 `docs/engineering/` 文档，单文件演进，不做版本对比
+- 方案变更同步更新对应 `docs/engineering/` 文档，单文件演进，不做版本对比
 - 多次未解决的问题记录到 `docs/debugging/`（现象、根因、排查、方案）
 - 高关注区：SSE 持久化、Qdrant 异常、配置硬编码、JWT/DB 默认密钥、MCP 远程执行
+- **非平凡改动同提交附决策记录**（`docs/decisions/`，含被否方案）；实现 proposed 记录时将其改写为 implemented 并核实事实
+- **审查经济学**（见 `code-review` skill）：CI/gate 已证明的属性不进 review 发现；blocker 与 suggestion 分离；收到 review 逐条技术性验证或反驳，禁止表演性认同
+- **写作卫生**（见 `noesis-prose-hygiene` skill）：注释与文档以仓库当前状态为视角，不留「原先/被 review 否决/见讨论稿」类会话残留
 
 ### 代码质量 Skills
+
+以下 skill 全部位于仓库 `.agents/skills/`，随仓库对任何 Agent 实例生效；**仓库 skill 禁止在用户级目录保留同名副本**（单一归属，冲突以仓库版本为准）。仓库只收开发纪律与工作流 skill，个人工具类留在用户级、不进版本管理。
 
 | 场景 | 必须使用 | 约束 |
 |------|----------|------|
 | 修复 Bug、性能回退或偶发故障 | `diagnosing-bugs` | 先建立能捕获原始问题的稳定反馈，再定位根因；禁止先加 fallback、兼容分支或笼统 `try/except` |
-| 功能或重构完成、准备提交或合并 | `code-review` | 同时检查项目规范与原始 spec；重点检查需求遗漏、范围扩大及 Fowler code smells |
+| 功能或重构完成、准备提交或合并 | `code-review` | 同时检查项目规范与原始 spec；重点检查需求遗漏、范围扩大及 Fowler code smells；遵守审查经济学三条 |
 | review 已确认存在冗余、浅 wrapper、无需求支撑的抽象或复杂控制流 | `code-simplification` | 仅修改本次范围；保持输入、输出、异常和副作用顺序不变；测试通过不是简化成立的唯一依据，还要证明更易理解 |
+| 注释/文档写作或怀疑存在过期注释 | `noesis-prose-hygiene` | 会话视角残留审计，报告制执行（默认只报告不修改） |
+| 写 spec / design / 决策记录 / 架构文档，或文档「难读 / AI 味重」 | `noesis-prose-standard` | 结论先行、现算态、表格只放可枚举事实、AI 味症状清单；探针只发现候选，判断靠语义 |
 
 - 简单逻辑默认直接表达。只有概念需要命名、存在多个真实调用方、需要隔离变化或形成有效测试 seam 时才提取函数、类或接口。
 - Bug 修复必须删除被新方案取代的补丁、临时日志和不可达分支，不保留“以后可能有用”的兼容实现。

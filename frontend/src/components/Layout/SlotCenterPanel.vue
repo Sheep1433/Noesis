@@ -46,7 +46,7 @@ setTimeout(() => {
             v-if="!isMobile"
             flex="~ col"
             min-w-0
-            w-70
+            w-56
             h-full
             overflow-hidden
             relative

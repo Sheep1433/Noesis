@@ -49,7 +49,8 @@ def consume_sse_stream(
 ) -> SseStreamMetrics:
     """逐行读取 SSE 响应，直到 ``data: [DONE]``（与前端 useSSEStream 一致）。
 
-    ``finish`` / ``error`` / ``abort`` 仅记录指标，不提前关闭连接。
+    ``run.finished`` 是唯一流终止事件（载荷含 ``status`` / ``finish_reason``），
+    仅记录指标，不提前关闭连接。
     """
     metrics = SseStreamMetrics()
     started_at = started_at or time.perf_counter()
@@ -76,18 +77,17 @@ def consume_sse_stream(
         if event_type in _TOKEN_EVENTS and metrics.ttft_ms is None:
             metrics.ttft_ms = (time.perf_counter() - started_at) * 1000
 
-        if event_type == "finish":
-            metrics.finish_reason = str(payload.get("finish_reason") or "")
-            if metrics.finish_reason != "stop":
-                metrics.error_message = str(payload.get("error") or metrics.finish_reason)
-            return False
-
-        if event_type == "error":
-            metrics.error_message = str(payload.get("error") or payload.get("message") or "stream error")
-            return False
-
-        if event_type == "abort":
-            metrics.error_message = str(payload.get("content") or "aborted")
+        if event_type == "run.finished":
+            status = str(payload.get("status") or "")
+            metrics.finish_reason = str(payload.get("finish_reason") or "") or None
+            if status == "error":
+                metrics.error_message = str(
+                    payload.get("error") or metrics.finish_reason or "run error"
+                )
+            elif status == "interrupted":
+                metrics.error_message = str(payload.get("error") or "aborted")
+            elif metrics.finish_reason != "stop":
+                metrics.error_message = metrics.finish_reason
             return False
 
         return False

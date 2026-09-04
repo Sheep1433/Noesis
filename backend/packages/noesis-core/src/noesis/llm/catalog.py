@@ -142,15 +142,7 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
 
     snapshot = get_runtime_model_snapshot(model_id)
     if snapshot is not None:
-        return ModelCatalogEntry(
-            id=snapshot.id,
-            label=snapshot.label or snapshot.id,
-            model_type=snapshot.model_type,
-            temperature=float(ModelConfig.model_temperature),
-            base_url=snapshot.base_url,
-            is_default=False,
-            context_window=snapshot.context_window,
-        )
+        return _entry_from_snapshot(snapshot)
     catalog = get_model_catalog()
     normalized = str(model_id or "").strip()
     if normalized:
@@ -161,6 +153,38 @@ def resolve_catalog_entry(model_id: Optional[str]) -> ModelCatalogEntry:
         if entry.is_default:
             return entry
     return catalog[0]
+
+
+def resolve_catalog_entry_strict(model_id: Optional[str]) -> ModelCatalogEntry:
+    """显式选择的模型必须可解析，不可解析即报错——不静默回退平台默认。
+
+    回退会让「用户配了 A 实际跑 B」无声发生（2026-09-03：会话显式模型的
+    运行环境缺快照，静默落到平台默认 kilo，用户全程无感知）。快照命中、
+    内置目录命中之外的一切取值都视为配置错误。
+    """
+    from noesis.errors.exceptions import NotFoundException
+    from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
+
+    normalized = str(model_id or "").strip()
+    snapshot = get_runtime_model_snapshot(model_id)
+    if snapshot is not None:
+        return _entry_from_snapshot(snapshot)
+    for entry in get_model_catalog():
+        if normalized and entry.id == normalized:
+            return entry
+    raise NotFoundException(message=f"模型不存在或已失效: {normalized}")
+
+
+def _entry_from_snapshot(snapshot) -> ModelCatalogEntry:
+    return ModelCatalogEntry(
+        id=snapshot.id,
+        label=snapshot.label or snapshot.id,
+        model_type=snapshot.model_type,
+        temperature=float(ModelConfig.model_temperature),
+        base_url=snapshot.base_url,
+        is_default=False,
+        context_window=snapshot.context_window,
+    )
 
 
 def list_public_models() -> List[dict[str, Any]]:

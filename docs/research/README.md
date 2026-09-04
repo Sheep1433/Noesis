@@ -13,6 +13,7 @@
 ## 当前报告
 
 - [知识库引用来源追踪](kb-citation-source-tracing.md)
+- [dsh 的 Agent 协作方式调研](dsh-agent-collaboration.md)（DeerFlow 同题调研已清理：语义消费者表并入 code-review skill，裁决见 `docs/decisions/implemented/2026-09-01-协作约束体系仓库化.md`）
 
 ## Historical
 

@@ -2,6 +2,8 @@
  * 会话消息 content.parts 与 UI 对齐（PRD：聊天记录 / SSE）
  */
 
+import { parseStartTaskChildSessionId, START_TASK_TOOL_NAME } from '@/utils/parseTaskTool'
+
 export type ToolRunStatus = 'running' | 'success' | 'error'
 export type ToolLifecycleState =
   | 'running'
@@ -72,6 +74,12 @@ export interface RetrievalResultUi {
   score?: number | null
 }
 
+/** 来源归属：主 Agent 自检索 / 具体子 Agent 任务；缺省视为主 Agent（旧数据兼容） */
+export interface RetrievalOrigin {
+  kind: 'main' | 'subagent'
+  label?: string
+}
+
 export interface RetrievalUiPart {
   id: string
   type: 'retrieval'
@@ -80,6 +88,7 @@ export interface RetrievalUiPart {
   results: RetrievalResultUi[]
   truncated?: boolean
   parent_task_call_id?: string
+  origin?: RetrievalOrigin
 }
 
 export type UiPart = TextUiPart | ReasoningUiPart | ToolUiPart | RetrievalUiPart
@@ -376,6 +385,7 @@ function normalizeRetrievalPart(id: string, record: Record<string, unknown>): Re
         }]
       })
     : []
+  const origin = normalizeRetrievalOrigin(record.origin)
   return {
     id,
     type: 'retrieval',
@@ -383,7 +393,21 @@ function normalizeRetrievalPart(id: string, record: Record<string, unknown>): Re
     query: String(record.query ?? ''),
     results,
     truncated: Boolean(record.truncated),
+    ...(origin ? { origin } : {}),
   }
+}
+
+function normalizeRetrievalOrigin(raw: unknown): RetrievalOrigin | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined
+  }
+  const record = raw as Record<string, unknown>
+  const label = typeof record.label === 'string' && record.label.trim() ? record.label.trim() : undefined
+  if (record.kind === 'subagent') {
+    return { kind: 'subagent', ...(label ? { label } : {}) }
+  }
+  // 未知 kind / 缺省按主 Agent 归组（旧数据兼容，解析不失败）
+  return { kind: 'main' }
 }
 
 function normalizeToolHitl(raw: unknown): ToolUiPart['hitl'] {
@@ -406,13 +430,20 @@ function normalizeToolPart(
   const parent_task_call_id = parentTaskCallIdFromRecord(record)
   const step_id = typeof record.step_id === 'string' && record.step_id ? record.step_id : undefined
   const hitl = normalizeToolHitl(record.hitl)
+  const output = typeof record.output === 'string' ? record.output : ''
+  // start_task 的 part→子会话关联：桥接层 tool_call_id 与子会话
+  // created_by_tool_call_id 不是同一体系，落库 part 也不含该字段，
+  // 只能从输出文本「子 Agent 已启动：<id>」提取（兼容存量数据）。
+  const childSessionId = String(record.name ?? '') === START_TASK_TOOL_NAME
+    ? parseStartTaskChildSessionId(output)
+    : undefined
   return {
     id,
     type: 'tool',
     tool_call_id: typeof record.tool_call_id === 'string' ? record.tool_call_id : undefined,
     name: String(record.name ?? ''),
     input: normalizeToolPartInput(record.input),
-    output: typeof record.output === 'string' ? record.output : '',
+    output,
     status: coerceToolStatus(record),
     state: parseToolState(record),
     error: record.error != null ? String(record.error) : null,
@@ -423,6 +454,7 @@ function normalizeToolPart(
     timed_out: record.timed_out != null ? Boolean(record.timed_out) : undefined,
     truncated: record.truncated != null ? Boolean(record.truncated) : undefined,
     ...(parent_task_call_id ? { parent_task_call_id } : {}),
+    ...(childSessionId ? { child_session_id: childSessionId } : {}),
     ...(step_id ? { step_id } : {}),
     ...(hitl ? { hitl } : {}),
   }
@@ -458,6 +490,7 @@ function mergeToolPart(parts: UiPart[], toolPart: ToolUiPart): void {
     name: toolPart.name || existing.name,
     input: Object.keys(toolPart.input).length > 0 ? toolPart.input : existing.input,
     output: toolPart.output || existing.output,
+    child_session_id: existing.child_session_id || toolPart.child_session_id,
     step_id: toolPart.step_id ?? existing.step_id,
     hitl: { ...(existing.hitl || {}), ...(toolPart.hitl || {}) },
   }
@@ -642,8 +675,8 @@ export function markStreamingPartsComplete(parts: UiPart[]): UiPart[] {
 }
 
 const USER_STOP_TOOL_ERROR = '用户已停止生成'
-const USER_STOP_NOTICE_PLAIN = '本轮回复已被用户中断。'
-const USER_STOP_NOTICE_INLINE = '（本轮回复已被用户中断。）'
+/** 统一单一形态：斜体括号附注（与后端 append_user_stop_notice_to_content 对齐） */
+const USER_STOP_NOTICE = '（本轮回复已被用户中断。）'
 
 function partsContainUserStopNotice(parts: UiPart[]): boolean {
   return parts.some((p) => {
@@ -651,7 +684,8 @@ function partsContainUserStopNotice(parts: UiPart[]): boolean {
       return false
     }
     const c = String(p.content ?? '')
-    return c.includes(USER_STOP_NOTICE_PLAIN) || c.includes(USER_STOP_NOTICE_INLINE)
+    // 兼容识别历史消息里的纯文本变体
+    return c.includes(USER_STOP_NOTICE) || c.includes('本轮回复已被用户中断')
   })
 }
 
@@ -666,43 +700,12 @@ export function appendUserStopNotice(parts: UiPart[]): UiPart[] {
       : p,
   ) as UiPart[]
 
-  const hasProse = completed.some((p) => {
-    if (p.type === 'text' || p.type === 'reasoning') {
-      return String((p as TextUiPart | ReasoningUiPart).content ?? '').trim().length > 0
-    }
-    return false
-  })
-
-  const notice = hasProse ? USER_STOP_NOTICE_INLINE : USER_STOP_NOTICE_PLAIN
-
-  if (!hasProse) {
-    if (completed.length === 0) {
-      return [
-        {
-          id: genPartId('text'),
-          type: 'text',
-          content: notice,
-          status: 'completed',
-        },
-      ]
-    }
-    return [
-      ...completed,
-      {
-        id: genPartId('text'),
-        type: 'text',
-        content: notice,
-        status: 'completed',
-      },
-    ]
-  }
-
   return [
     ...completed,
     {
       id: genPartId('text'),
       type: 'text',
-      content: `\n\n---\n\n*${notice}*`,
+      content: `\n\n*${USER_STOP_NOTICE}*`,
       status: 'completed',
     },
   ]
@@ -1031,14 +1034,16 @@ export function appendTextDelta(
     return out
   }
   const parentId = parent_task_call_id?.trim() || undefined
-  const next = parts.map((p) => ({ ...p })) as UiPart[]
   // 跳过其它 parent 的交错 part，避免子 Agent 正文被拆碎
-  for (let i = next.length - 1; i >= 0; i--) {
-    const p = next[i]
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
     if (part_parent_task_call_id(p) !== parentId) {
       continue
     }
     if (p.type === 'text') {
+      // copy-on-write：只替换命中的尾部 text part，其余 part 复用引用
+      // （流式热路径；逐 delta 克隆全部 part 是渲染进程内存膨胀主因之一）
+      const next = parts.slice()
       next[i] = {
         ...p,
         content: p.content + delta,
@@ -1048,14 +1053,16 @@ export function appendTextDelta(
     }
     break
   }
-  next.push({
-    id: genPartId('text'),
-    type: 'text',
-    content: delta,
-    status: 'streaming',
-    ...(parentId ? { parent_task_call_id: parentId } : {}),
-  })
-  return next
+  return [
+    ...parts,
+    {
+      id: genPartId('text'),
+      type: 'text',
+      content: delta,
+      status: 'streaming',
+      ...(parentId ? { parent_task_call_id: parentId } : {}),
+    },
+  ]
 }
 
 export type RedactedThinkingStreamMode = 'text' | 'thinking'
@@ -1160,15 +1167,16 @@ export function appendReasoningDelta(
   parent_task_call_id?: string,
 ): UiPart[] {
   const parentId = parent_task_call_id?.trim() || undefined
-  const next = parts.map((p) => ({ ...p })) as UiPart[]
   // 跳过其它 parent 的交错 part（主 Agent 与子 Agent 事件交错时），
   // 合并进「同 parent 最近一条 reasoning」；同 parent 的 text/tool 之后才新开块。
-  for (let i = next.length - 1; i >= 0; i--) {
-    const p = next[i]
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
     if (part_parent_task_call_id(p) !== parentId) {
       continue
     }
     if (p.type === 'reasoning') {
+      // copy-on-write：只替换命中的 reasoning part，其余 part 复用引用（流式热路径）
+      const next = parts.slice()
       next[i] = {
         ...p,
         content: p.content + delta,
@@ -1178,14 +1186,16 @@ export function appendReasoningDelta(
     }
     break
   }
-  next.push({
-    id: genPartId('reasoning'),
-    type: 'reasoning',
-    content: delta,
-    status: 'streaming',
-    ...(parentId ? { parent_task_call_id: parentId } : {}),
-  })
-  return next
+  return [
+    ...parts,
+    {
+      id: genPartId('reasoning'),
+      type: 'reasoning',
+      content: delta,
+      status: 'streaming',
+      ...(parentId ? { parent_task_call_id: parentId } : {}),
+    },
+  ]
 }
 
 export function upsertToolInputPart(
@@ -1271,6 +1281,12 @@ export function applyToolOutput(
   if (isTerminalToolState(tp.state) && tp.state !== state) {
     return next
   }
+  // start_task 输出文本含「子 Agent 已启动：<uuid>」：流式路径同样要提取
+  // child_session_id，否则工具下发后任务卡匹配不到目录状态（只能显示
+  // 「已完成」fallback）。normalizeToolPart（落库回放路径）已有同一解析。
+  const streamedChildSessionId = tp.name === START_TASK_TOOL_NAME
+    ? parseStartTaskChildSessionId(payload.output)
+    : undefined
   next[idx] = {
     ...tp,
     output: payload.output,
@@ -1284,6 +1300,7 @@ export function applyToolOutput(
     timed_out: payload.timed_out ?? tp.timed_out,
     truncated: payload.truncated ?? tp.truncated,
     step_id: payload.step_id ?? tp.step_id,
+    ...(streamedChildSessionId ? { child_session_id: streamedChildSessionId } : {}),
   }
   return next
 }
@@ -1321,4 +1338,21 @@ export function applyHitlPendingParts(
     }
   }
   return next
+}
+
+/**
+ * LLM 重试/降级回滚：丢弃末尾连续的 text/reasoning parts（失败尝试被断流
+ * 前已流出的部分输出）。工具/检索等 part 是模型调用边界，遇到即停——与
+ * 后端 builder.rollback_trailing_stream_parts 同一规则。
+ */
+export function rollbackTrailingStreamParts(parts: UiPart[]): UiPart[] {
+  let end = parts.length
+  while (end > 0) {
+    const p = parts[end - 1]
+    if (p.type !== 'text' && p.type !== 'reasoning') {
+      break
+    }
+    end -= 1
+  }
+  return end === parts.length ? parts : parts.slice(0, end)
 }

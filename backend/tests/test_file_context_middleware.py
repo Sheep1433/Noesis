@@ -20,6 +20,10 @@ from noesis.agents.middlewares.read_before_write_middleware import (
     WriteRejectedError,
     _merge_versions,
 )
+from noesis.errors.tool_failure import (
+    ToolFailureCategory,
+    classify_tool_failure,
+)
 
 
 def _read_call(path: str, state, call_id: str = "r1", offset=None, limit=None, tool=None) -> ToolCallRequest:
@@ -331,3 +335,22 @@ def test_file_not_found_with_path_prefix_allows_new_file() -> None:
 
     assert isinstance(result, Command)
     assert result.update["_read_before_write_versions"] == {}
+
+
+def test_write_without_file_path_reports_truncation_guidance() -> None:
+    """缺 file_path 的写入调用给出可自纠的原因（多为模型输出被截断）。"""
+    mw = ReadBeforeWriteMiddleware(current_hash=lambda _path: "h1")
+    request = ToolCallRequest(
+        tool_call={"name": "write_file", "args": {"content": "半篇报告…"}, "id": "w9"},
+        tool=None,
+        state={"messages": []},
+        runtime=None,
+    )
+
+    with pytest.raises(WriteRejectedError, match="被截断") as exc_info:
+        mw.wrap_tool_call(request, _handler_returning("must not run"))
+
+    # 类型化错误：归类 invalid_arguments，用户文案携带具体原因
+    failure = classify_tool_failure(exc_info.value, tool_name="write_file")
+    assert failure.category == ToolFailureCategory.INVALID_ARGUMENTS
+    assert "file_path" in failure.text

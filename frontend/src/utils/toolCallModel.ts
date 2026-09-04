@@ -28,6 +28,7 @@ const TOOL_TITLES: Record<string, string> = {
   web_fetch: '网页抓取',
   search_knowledge_base: '知识库搜索',
   search_memory: '记忆搜索',
+  ls: '列出文件',
   read_file: '读取文件',
   read_attachment: '读取附件',
   get_knowledge_document: '读取文档',

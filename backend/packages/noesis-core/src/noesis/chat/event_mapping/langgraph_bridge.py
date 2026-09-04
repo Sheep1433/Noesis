@@ -12,6 +12,10 @@ from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from noesis.runtime.observability import ContextMetricsRegistry
+from noesis.llm.finish_reason import (
+    PROVIDER_FINISH_REMAP,
+    normalize_provider_finish_reason,
+)
 from noesis.llm.model_limits import resolve_context_max_tokens
 from noesis.config.env import ModelConfig
 from noesis.chat.event_mapping.reasoning import (
@@ -41,14 +45,18 @@ from noesis.chat.event_mapping.tool_payload import (
     normalize_tool_input,
     resolve_tool_call_id,
     resolve_tool_output_call_id,
-    retrieval_payload,
     tool_output_value,
+)
+from noesis.chat.event_mapping.retrieval import (
+    register_cross_boundary_sources,
+    register_tool_retrieval,
 )
 from noesis.errors.tool_failure import (
     ToolFailure,
     classify_task_tool_output,
     classify_tool_failure,
     failure_to_sse_error_fields,
+    strip_error_prefix,
     subagent_failure_from_context,
 )
 
@@ -57,6 +65,18 @@ def _show_thinking_process_enabled() -> bool:
     return str(ModelConfig.show_thinking_process).strip().lower() in ("true", "1", "yes")
 
 TASK_TOOL_NAME = "task"
+
+# provider finish_reason 的词表与归一化（含网关重复 chunk 拼接折叠）在
+# noesis.llm.finish_reason 单点维护；runtime 层正常路径硬编码 "stop" 只表示
+# 图跑完，不代表模型正常收尾——没有这层映射时 length 截断会被落库成 stop。
+
+
+def _truthful_terminal_reason(model_calls: List[Dict[str, Any]]) -> str:
+    """最后一步模型调用的 finish_reason → 管道终止词汇；无需纠偏返回空。"""
+    if not model_calls:
+        return ""
+    reason = normalize_provider_finish_reason(model_calls[-1].get("finish_reason")).lower()
+    return PROVIDER_FINISH_REMAP.get(reason, "")
 
 
 def _tool_provider(item: Dict[str, Any]) -> tuple[str, str | None]:
@@ -109,6 +129,12 @@ class LangGraphSseBridge:
         self.message_usage: Dict[str, float] = dict.fromkeys(
             (f for f in USAGE_FIELDS if f != "turns"), 0.0,
         )
+        # 每次模型调用一条明细（step/attempt/model/ttft/llm_ms/tokens/
+        # finish_reason），终态随 usage 一起落 message.extra.model_calls：
+        # 合计口径回答不了「首步延迟多少」「哪一步被截断」这类单步问题。
+        self.message_model_calls: List[Dict[str, Any]] = []
+        self._model_call_names: Dict[str, str] = {}
+        self._model_call_ttft: Dict[str, float] = {}
         self._model_call_starts: Dict[str, float] = {}
         self._model_first_token_seen: set[str] = set()
         self._current_attempt_id = 1
@@ -161,6 +187,56 @@ class LangGraphSseBridge:
             }
             ContextMetricsRegistry.put(self.session_id, snapshot, run_id=rid)
             self._emit_context_update(snapshot, out)
+
+    def _append_model_call_record(
+        self,
+        *,
+        model_run_id: str,
+        elapsed_ms: float,
+        ttft_ms: Optional[float],
+        usage_meta: Any,
+        output: Any,
+    ) -> None:
+        """单次模型调用明细（与 message_usage.steps 一一对应，step 为序号）。
+
+        未知字段直接缺省（不写 0 占位）：没有 token/finish_reason 就是
+        provider 没回报，落 0 会与真实 0 混淆。
+        """
+        record: Dict[str, Any] = {
+            "step": int(self.message_usage["steps"]),
+            "attempt": self._model_attempt_ids.get(model_run_id, 1),
+            "model": self._model_call_names.pop(model_run_id, "") or self._model_id or "",
+        }
+        if ttft_ms is not None:
+            record["ttft_ms"] = round(float(ttft_ms), 1)
+        if elapsed_ms:
+            record["llm_ms"] = round(float(elapsed_ms), 1)
+        response_meta = getattr(output, "response_metadata", None)
+        if isinstance(response_meta, dict):
+            reason = normalize_provider_finish_reason(response_meta.get("finish_reason"))
+            if reason:
+                record["finish_reason"] = reason
+        usage = _normalize_usage(usage_meta) if usage_meta else {}
+        if usage:
+            record["input_tokens"] = int(usage.get("input_tokens") or 0)
+            record["output_tokens"] = int(usage.get("output_tokens") or 0)
+            details = usage.get("input_token_details") or {}
+            record["cache_read_tokens"] = int(details.get("cache_read") or 0)
+            record["cache_write_tokens"] = int(details.get("cache_write") or 0)
+        self.message_model_calls.append(record)
+
+    def _record_ttft(self, ms: float) -> None:
+        """首包延迟计入本条消息 usage 与会话级统计源。
+
+        middleware 感知不到流式首包，registry 快照里的 ttft_ms 只剩历史 seed；
+        bridge 在此补上本 run 增量，stats-update 与终态落库（extra.usage）同源。
+        """
+        self.message_usage["ttft_ms"] += ms
+        if self.session_id:
+            from noesis.runtime.session_stats_registry import SessionStatsRegistry
+
+            SessionStatsRegistry.add(self.session_id, {"ttft_ms": ms})
+
     # ---------- emit helpers ----------
 
     def _ensure_started(self, out: List[str]) -> None:
@@ -187,6 +263,35 @@ class LangGraphSseBridge:
         self._text_open = False
         self._current_text_part_id = None
         self._current_text_parent_task_call_id = None
+
+    def _rollback_attempt_stream(
+        self,
+        builder: Optional[AssistantMessageBuilder],
+        ctx: Dict[str, Any],
+        out: List[str],
+    ) -> None:
+        """回滚失败模型尝试的部分流式输出（重试/降级共用）。
+
+        被断流前已流出的正文与思考从 builder 丢弃、流式缓冲清零、开放
+        part 状态复位（不发 close 帧——内容整体作废），并下发
+        ``stream-rollback`` 帧让 projection 与前端做同样回滚。不回滚则
+        N 次重试在同一消息里累积 N 份重复的正文/思考。
+        """
+        if builder is not None:
+            builder.rollback_trailing_stream_parts()
+        ctx["text_buffer"] = ""
+        ctx["reasoning_buffer"] = ""
+        self._text_open = False
+        self._current_text_part_id = None
+        self._current_text_parent_task_call_id = None
+        self._reasoning_open = False
+        self._current_reasoning_part_id = None
+        self._current_reasoning_parent_task_call_id = None
+        out.append(_format_sse("stream-rollback", {
+            "type": "stream-rollback",
+            "message_id": self.assistant_message_id,
+            "scope": "model_attempt",
+        }))
 
     def _close_reasoning(self, out: List[str]) -> None:
         if not self._reasoning_open or not self._current_reasoning_part_id:
@@ -338,13 +443,36 @@ class LangGraphSseBridge:
         self._ensure_started(out)
         self._close_reasoning(out)
         self._close_text(out)
+        # 跨边界来源收尾登记：子 Agent 终态清单（通知注入 / check_task）落为
+        # 带 origin 的 retrieval parts，落在收取发生的这条 assistant 消息上
+        # （子 Agent 管道复用本桥接层，其 session 无 pending 登记，drain 为空）。
+        # 持久化权威在 RunProjection 自己的 builder（消费 SSE 帧重建内容），
+        # 因此登记后必须补发 retrieval-results-available 帧，否则只进本桥接层
+        # builder、主消息落库缺这些 parts。
+        if builder is not None and self.session_id:
+            for part in register_cross_boundary_sources(builder, self.session_id):
+                frame = part.to_dict()
+                frame["type"] = "retrieval-results-available"
+                frame["message_id"] = self.assistant_message_id
+                out.append(_format_sse("retrieval-results-available", frame))
         if builder is not None and ctx is not None:
             self._flush_text_buffer(builder, ctx)
-        self.last_finish_reason = str(payload.get("finish_reason") or "stop")
+        reason = str(payload.get("finish_reason") or "stop")
+        # 管道 "stop" 只表示图跑完：最后一步若被 provider 以截断/安全类
+        # 原因收尾，用真实值改写，否则 length 截断会被落库成 stop。
+        if reason == "stop":
+            truthful = _truthful_terminal_reason(self.message_model_calls)
+            if truthful:
+                reason = truthful
+                payload["finish_reason"] = reason
+        self.last_finish_reason = reason
         # 本条 assistant 消息的 usage 聚合随 finish 下发：projection 捕获后经
         # 终态落库写入 message.extra.usage，供历史会话回放统计条。
         if self.message_usage.get("steps") and not isinstance(payload.get("usage"), dict):
             payload["usage"] = dict(self.message_usage)
+        # 每步模型调用明细同路下发，终态落 message.extra.model_calls。
+        if self.message_model_calls and "model_calls" not in payload:
+            payload["model_calls"] = list(self.message_model_calls)
         out.append(_format_sse("finish", payload))
         self._finish_emitted = True
 
@@ -689,6 +817,8 @@ class LangGraphSseBridge:
         if lc_kind == "on_custom_event" and item.get("name") == "noesis_model_retry":
             data = item.get("data") or {}
             if isinstance(data, dict):
+                # 失败尝试的部分流式输出先回滚，再进入下一次重试
+                self._rollback_attempt_stream(builder, ctx, out)
                 # 先展开 data 再覆盖 type：中间件 payload 含 type=noesis_model_retry，
                 # 不得覆盖外层 run-status，否则前端按 data.type 分发匹配不到 run-status 分支。
                 payload = {**data, "type": "run-status"}
@@ -706,9 +836,9 @@ class LangGraphSseBridge:
             data = item.get("data") or {}
             if isinstance(data, dict):
                 content = str(data.get("content") or "")
-                # 先 flush 可能在 text_buffer 中的残留流式文本（重试前的部分输出）
-                if builder is not None and ctx.get("text_buffer"):
-                    self._flush_text_buffer(builder, ctx)
+                # 最后一次尝试的部分流式输出同样回滚（重试路径之外 attempt
+                # 数耗尽直落降级时没有 retry 事件兜底），降级文案单独成段
+                self._rollback_attempt_stream(builder, ctx, out)
                 # fallback 文本写进 builder（用户在消息体看到失败说明）
                 if builder is not None and content:
                     builder.append_text(content, parent_task_call_id=None)
@@ -757,6 +887,12 @@ class LangGraphSseBridge:
             if run_id:
                 self._model_call_starts[run_id] = time.perf_counter()
                 self._model_first_token_seen.discard(run_id)
+                meta = item.get("metadata")
+                self._model_call_names[run_id] = (
+                    str(meta.get("ls_model_name") or meta.get("model_name") or "")
+                    if isinstance(meta, dict)
+                    else ""
+                )
             # 标记该 scope 下一次 on_tool_start 要 mint 新 step_id（并行工具分组）。
             scope = ToolRunTracker.resolve_parent_task_call_id(item, ctx) or "root"
             ctx.setdefault("pending_model_step_scopes", set()).add(scope)
@@ -783,9 +919,9 @@ class LangGraphSseBridge:
             ):
                 start = self._model_call_starts.get(model_run_id)
                 if start is not None:
-                    self.message_usage["ttft_ms"] += max(
-                        0.0, (time.perf_counter() - start) * 1000
-                    )
+                    first_token_ms = max(0.0, (time.perf_counter() - start) * 1000)
+                    self._record_ttft(first_token_ms)
+                    self._model_call_ttft[model_run_id] = first_token_ms
                 self._model_first_token_seen.add(model_run_id)
             if content:
                 if builder is not None:
@@ -828,13 +964,29 @@ class LangGraphSseBridge:
             # steps / llm_ms 无条件累计（provider 不返回 usage 的调用也计步计时）
             model_run_id = str(item.get("run_id") or "")
             start = self._model_call_starts.pop(model_run_id, None)
+            elapsed_ms = max(0.0, (time.perf_counter() - start) * 1000) if start is not None else 0.0
+            ttft_ms: Optional[float] = self._model_call_ttft.pop(model_run_id, None)
             if start is not None:
-                elapsed_ms = max(0.0, (time.perf_counter() - start) * 1000)
                 self.message_usage["llm_ms"] += elapsed_ms
-                if model_run_id not in self._model_first_token_seen and output is not None:
-                    self.message_usage["ttft_ms"] += elapsed_ms
+                # 全程无任何 token 的调用（非流式/空输出）：ttft 以全程耗时兜底，
+                # 与既有 message_usage 口径一致。
+                if ttft_ms is None and output is not None:
+                    ttft_ms = elapsed_ms
+                    self._record_ttft(elapsed_ms)
             self._model_first_token_seen.discard(model_run_id)
             self.message_usage["steps"] += 1
+            self._append_model_call_record(
+                model_run_id=model_run_id,
+                elapsed_ms=elapsed_ms,
+                ttft_ms=ttft_ms,
+                usage_meta=usage_meta,
+                output=output,
+            )
+            # attempt 序号是「单次模型调用」的重试位次，不是整条消息的单调
+            # 计数：重试事件抬升计数后若不复位，后续所有首次调用都会被
+            # 错标成重试（att=2）。调用成功即复位；失败路径不产生 end 事件，
+            # 下一次 start 仍能拿到重试事件抬升后的位次。
+            self._current_attempt_id = 1
             if usage_meta:
                 self._accumulate_usage(ctx, item.get("run_id"), usage_meta, out, parent_task_call_id)
             return
@@ -954,10 +1106,18 @@ class LangGraphSseBridge:
 
         duration_ms = ToolRunTracker.tool_duration_ms(ctx, tool_call_id)
         output_status = getattr(raw_output, "status", None) if raw_output is not None else None
+        # middleware 产出的错误 ToolMessage 自带 errorCategory metadata——
+        # 权威来源，直接取用；无 metadata（错误返回型）才走文本分类
+        output_kwargs = getattr(raw_output, "additional_kwargs", None) if raw_output is not None else None
+        output_category = (
+            output_kwargs.get("errorCategory")
+            if isinstance(output_kwargs, dict) and output_status == "error"
+            else None
+        )
         failure = self._resolve_tool_failure(
             tool_name=tool_name,
             clean_output=clean_output,
-            output_status=output_status,
+            output_status=None if output_category else output_status,
             builder=builder,
             task_tool_call_id=tool_call_id if tool_name == TASK_TOOL_NAME else None,
         )
@@ -968,13 +1128,15 @@ class LangGraphSseBridge:
         is_error = failure is not None or output_status == "error"
         err_fields = failure_to_sse_error_fields(failure) if failure else {}
         err_s = err_fields.get("error") if is_error else None
-        err_cat = err_fields.get("errorCategory") if is_error else None
+        err_cat = (output_category or err_fields.get("errorCategory")) if is_error else None
         if outcome == "command_failed":
             err_cat = "command_failed"
         elif outcome == "timed_out":
             err_cat = "execution_timeout"
+        # 错误正文（ToolMessage.content）即唯一权威文案：模型/入库/SSE
+        # 展示共用同一段短文本，无二次改写
         if is_error and not err_s:
-            err_s = sanitize_tool_error(clean_output)
+            err_s = strip_error_prefix(clean_output) or sanitize_tool_error(clean_output)
         sse_status = "error" if is_error else "success"
         state = derive_tool_state(
             status=sse_status,
@@ -985,7 +1147,7 @@ class LangGraphSseBridge:
         display_output = "" if is_error else clean_output
         display_output, display_truncated = bound_tool_output_for_display(display_output)
         truncated = bool(truncated) or display_truncated
-        builder_output = clean_output if not is_error else (failure.message_for_llm if failure else clean_output)
+        builder_output = clean_output
 
         if builder is not None:
             self._safe_append_tool_output(
@@ -1005,23 +1167,8 @@ class LangGraphSseBridge:
             )
 
         retrieval_part = None
-        if (
-            builder is not None
-            and not is_error
-            and tool_name in {"search_knowledge_base", "web_search", "web_fetch"}
-        ):
-            parsed_retrieval = retrieval_payload(clean_output)
-            if parsed_retrieval is not None:
-                tool_part = builder.get_tool(tool_call_id)
-                tool_input = tool_part.arguments if tool_part is not None else {}
-                retrieval_part = builder.register_retrieval_results(
-                    tool_call_id=tool_call_id,
-                    query=str((tool_input or {}).get("query") or (tool_input or {}).get("url") or ""),
-                    results=parsed_retrieval["results"],
-                    truncated=bool(parsed_retrieval.get("truncated")),
-                )
-                if tool_part is not None:
-                    tool_part.output = f"检索到 {len(retrieval_part.results)} 条来源"
+        if builder is not None and not is_error:
+            retrieval_part = register_tool_retrieval(builder, tool_name, tool_call_id, clean_output)
 
         if tool_name == TASK_TOOL_NAME:
             ToolRunTracker.on_task_tool_end(tool_call_id, ctx)
@@ -1076,7 +1223,8 @@ class LangGraphSseBridge:
             ok = self._safe_append_tool_output(
                 builder,
                 tool_name,
-                failure.message_for_llm if failure else err_s,
+                # 未被 middleware 捕获的工具异常：正文即权威文案
+                f"Error: {err_s}" if failure is None else f"Error: {failure.text}",
                 tool_call_id,
                 duration_ms=duration_ms,
                 status="error",

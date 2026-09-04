@@ -139,3 +139,60 @@ def test_retry_after_absent_falls_back_to_backoff() -> None:
     mw = _middleware()
     delay = mw._build_retry_delay_ms(None, _RetryAfterError({}))
     assert 0 < delay <= mw.retry_cap_delay_ms
+
+
+# ---------------------------------------------------------------------------
+# 流级空闲超时（StreamIdleTimeoutError）：网关挂流（只发 SSE ping 不出内容）
+# ---------------------------------------------------------------------------
+
+def test_stream_idle_timeout_classified_transient() -> None:
+    """挂流空闲超时按瞬时错误重试——它是唯一能发现死流的层。"""
+    from noesis.llm.factory import StreamIdleTimeoutError
+
+    mw = _middleware()
+    retriable, reason = mw._classify_error(
+        StreamIdleTimeoutError("No model chunk received in 120s (stream idle)")
+    )
+    assert retriable is True
+    assert reason == "transient"
+
+
+def test_stream_idle_timeout_fallback_message() -> None:
+    """重试耗尽后的失败提示走「模型响应中断」文案（流挂死语义）。"""
+    from noesis.llm.factory import StreamIdleTimeoutError
+
+    mw = _middleware()
+    msg = mw._fallback_message_for_reason(
+        StreamIdleTimeoutError("idle"), "transient"
+    )
+    assert "模型响应中断" in msg
+
+
+@pytest.mark.asyncio
+async def test_stream_idle_timeout_retries_then_falls_back() -> None:
+    """挂流：空闲超时 → 重试 → 耗尽 → 降级 AIMessage（run 可终态）。"""
+    from noesis.llm.factory import StreamIdleTimeoutError
+
+    mw = _middleware()
+    mw.retry_base_delay_ms = 1
+    mw.retry_cap_delay_ms = 1
+    calls = {"n": 0}
+
+    async def handler(request: Any) -> Any:
+        calls["n"] += 1
+        raise StreamIdleTimeoutError("No model chunk received in 120s (stream idle)")
+
+    from unittest.mock import AsyncMock
+
+    retry_mock = AsyncMock()
+    fallback_mock = AsyncMock()
+
+    with patch.object(mw, "_aemit_retry", retry_mock), \
+         patch.object(mw, "_aemit_fallback", fallback_mock):
+        result = await mw.awrap_model_call(_make_request(), handler)
+
+    assert calls["n"] == mw.retry_max_attempts  # 每次尝试都撞空闲超时
+    assert retry_mock.await_count == mw.retry_max_attempts - 1
+    assert fallback_mock.await_count == 1
+    assert "模型响应中断" in result.content
+    assert getattr(result, "tool_calls", None) in (None, [])

@@ -22,6 +22,7 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import HumanMessage
 
 from noesis.agents.subagents.notifications import take_undelivered, render_block
+from noesis.chat.event_mapping.retrieval import register_pending_sources
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -38,6 +39,15 @@ class BgNotifyMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respon
         notices = take_undelivered(self._session_id)
         if not notices:
             return []
+        # 通知携带的结构化来源清单进入跨边界登记：主 run 桥接层 finish 时
+        # 落为带 origin（该子 Agent 任务）的 retrieval parts（注入文本本身
+        # 不落库，来源只进 assistant parts）。
+        for notice in notices:
+            sources = notice.get("sources")
+            if isinstance(sources, list) and sources:
+                register_pending_sources(
+                    self._session_id, str(notice.get("label") or ""), sources,
+                )
         block = render_block(notices)
         return [HumanMessage(content=block)] if block else []
 

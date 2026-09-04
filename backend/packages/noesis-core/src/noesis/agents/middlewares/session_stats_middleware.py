@@ -28,7 +28,7 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 
-from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+from noesis.runtime.session_stats_registry import SessionStatsRegistry
 from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS, normalize_usage
 
 logger = logging.getLogger(__name__)

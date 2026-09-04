@@ -1,8 +1,9 @@
 import json
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +34,18 @@ from noesis.services.run_service import RunProjection, RunService
 async def _noop(*args: Any, **kwargs: Any) -> None:
     """空 async producer，用于不需要发事件的 Run 启动。"""
     return None
+
+
+@asynccontextmanager
+async def _null_sse_db():
+    """SSE 端点短命会话替身：真实查询都在被 mock 的 service 层。"""
+    yield MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def _stub_sse_prefetch_db(monkeypatch):
+    """stream_run 不再注入请求级 db，改用 sse_prefetch_db 短命会话。"""
+    monkeypatch.setattr(chat_api, "sse_prefetch_db", _null_sse_db)
 
 
 def test_run_routes_replace_legacy_stream_and_stop() -> None:
@@ -79,9 +92,11 @@ async def test_stop_run_preserves_service_exception(monkeypatch) -> None:
         AsyncMock(side_effect=failure),
     )
 
+    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
     with pytest.raises(ServiceException) as exc_info:
         await chat_api.stop_run(
             "run-1",
+            http_request=SimpleNamespace(),
             current_user=SimpleNamespace(user_id="user-1"),
             db=SimpleNamespace(),
         )
@@ -108,9 +123,11 @@ async def test_stop_subagent_run_preserves_service_exception(monkeypatch) -> Non
         AsyncMock(side_effect=failure),
     )
 
+    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
     with pytest.raises(ServiceException) as exc_info:
         await chat_api.stop_run(
             "run-1",
+            http_request=SimpleNamespace(),
             current_user=SimpleNamespace(user_id="user-1"),
             db=SimpleNamespace(),
         )
@@ -154,7 +171,6 @@ async def test_run_stream_consumes_stream_done_without_crashing(monkeypatch) -> 
     response = await chat_api.stream_run(
         "run-stream",
         current_user=SimpleNamespace(user_id=1),
-        db=SimpleNamespace(),
     )
     chunks = [chunk async for chunk in response.body_iterator]
 
@@ -210,7 +226,6 @@ async def test_run_stream_returns_429_before_opening_stream(monkeypatch) -> None
     response = await chat_api.stream_run(
         "run-quota",
         current_user=SimpleNamespace(user_id="user-1"),
-        db=SimpleNamespace(),
     )
     body = json.loads(response.body.decode())
 
@@ -240,7 +255,6 @@ async def test_run_stream_returns_503_when_owner_is_unavailable(monkeypatch) -> 
     response = await chat_api.stream_run(
         "run-orphan",
         current_user=SimpleNamespace(user_id="user-1"),
-        db=SimpleNamespace(),
     )
     body = json.loads(response.body.decode())
 
@@ -542,6 +556,7 @@ async def test_resume_hitl_uses_projection_pending_without_legacy_store(
         session_id="session-1",
         assistant_message_id="assistant-1",
         status=RunStatus.HITL_PENDING.value,
+        launch_payload=None,
     )
     repository = MagicMock()
     repository.get = AsyncMock(return_value=row)
@@ -1097,3 +1112,146 @@ async def test_conflict_409_response_contains_full_join_schema() -> None:
     assert conflict_data["assistant_message_id"] == "msg-existing"
     assert conflict_data["session_id"] == "session-1"
     assert conflict_data["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_stop_subagent_run_returns_stopping_snapshot(monkeypatch) -> None:
+    """协作停止契约：stop 即时返回受理快照，status 覆写 stopping（不等待终态）。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from noesis.chat.runs.models import RunSnapshot, RunStatus
+    from noesis.services.subagent_session_service import SubagentSessionService
+
+    db_run = SimpleNamespace(origin="subagent", status="running", id="run-1")
+    monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=db_run))
+
+    stop_snapshot = RunSnapshot(
+        run_id="run-1",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="msg-1",
+        qa_type="SUPER_AGENT_QA",
+        origin="subagent",
+        status=RunStatus.STOPPING,
+        sequence=7,
+    )
+
+    async def fake_stop_run(*, run_id, user_id, db):
+        return stop_snapshot
+
+    monkeypatch.setattr(SubagentSessionService, "stop_run", fake_stop_run)
+
+    monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
+    result = await chat_api.stop_run(
+        "run-1",
+        http_request=SimpleNamespace(),
+        current_user=SimpleNamespace(user_id="user-1"),
+        db=SimpleNamespace(),
+    )
+    body = json.loads(result.body.decode()) if getattr(result, "body", None) else {}
+    data = body.get("data") or {}
+    # 响应形状与 RunSnapshot 一致，status 为受理态 stopping
+    assert data.get("status") == "stopping"
+    assert data.get("run_id") == "run-1"
+    assert data.get("snapshot_sequence") == 7
+
+
+@pytest.mark.asyncio
+async def test_stop_run_service_overwrites_status_stopping(monkeypatch) -> None:
+    """服务层：cancel 受理 → RunSnapshot 覆写；stopping 保持、即时取消映射 interrupted。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from noesis.chat.runs.models import RunSnapshot, RunStatus
+    from noesis.services.subagent_session_service import SubagentSessionService
+
+    class _FakeExec:
+        @staticmethod
+        def cancel(task_id):
+            if task_id == "s-coop":
+                return {"status": "stopping", "stop_reason": "cancelled"}
+            return {"status": "cancelled"}
+
+    import noesis.services.subagent_runtime_port as port
+
+    monkeypatch.setattr(port, "ExecutorPort", _FakeExec)
+
+    def _base_snapshot() -> RunSnapshot:
+        return RunSnapshot(
+            run_id="run-1",
+            user_id="u1",
+            session_id="s-coop",
+            assistant_message_id="msg-1",
+            qa_type="SUPER_AGENT_QA",
+            origin="subagent",
+            status=RunStatus.RUNNING,
+        )
+
+    monkeypatch.setattr(
+        "noesis.services.run_service.RunService.get",
+        AsyncMock(return_value=_base_snapshot()),
+    )
+
+    async def fake_get_owned(run_id, user_id, db):
+        return SimpleNamespace(origin="subagent", status="running", session_id="s-coop")
+
+    monkeypatch.setattr(SubagentSessionService, "_get_owned_run", fake_get_owned)
+
+    snapshot = await SubagentSessionService.stop_run(
+        run_id="run-1", user_id="u1", db=SimpleNamespace(),
+    )
+    assert isinstance(snapshot, RunSnapshot)
+    assert snapshot.to_dict()["status"] == "stopping"
+
+    async def fake_get_owned_immediate(run_id, user_id, db):
+        return SimpleNamespace(origin="subagent", status="running", session_id="s-instant")
+
+    monkeypatch.setattr(SubagentSessionService, "_get_owned_run", fake_get_owned_immediate)
+    snapshot = await SubagentSessionService.stop_run(
+        run_id="run-2", user_id="u1", db=SimpleNamespace(),
+    )
+    assert snapshot.to_dict()["status"] == "interrupted"
+    assert snapshot.finish_reason == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_write_endpoints_gate_on_csrf() -> None:
+    """写操作族（create run / stop / followup / test-case resume）统一 CSRF 门禁。
+
+    无认证会话的请求在触达业务层之前即被拒绝（403 语义）。
+    """
+    from types import SimpleNamespace
+
+    from noesis.errors.exceptions import PermissionException
+    from noesis.schemas.chat_vo import CreateRunRequest, SubagentFollowupRequest
+    from noesis.schemas.qa_vo import TestCaseResumeRequest
+
+    user = SimpleNamespace(user_id="u1")
+    db = SimpleNamespace()
+    no_auth = SimpleNamespace(state=SimpleNamespace(auth_session=None), headers={})
+
+    with pytest.raises(PermissionException):
+        await chat_api.create_run(
+            CreateRunRequest(session_id="s1", content="hi", client_request_id="abcdefgh"),
+            http_request=no_auth,
+            current_user=user,
+            db=db,
+        )
+    with pytest.raises(PermissionException):
+        await chat_api.stop_run("run-1", http_request=no_auth, current_user=user, db=db)
+    with pytest.raises(PermissionException):
+        await chat_api.send_subagent_followup(
+            "child-1",
+            SubagentFollowupRequest(message="hi"),
+            http_request=no_auth,
+            current_user=user,
+        )
+    with pytest.raises(PermissionException):
+        await chat_api.resume_test_case_run(
+            "run-1",
+            TestCaseResumeRequest(selected_point_names=["p1"]),
+            http_request=no_auth,
+            current_user=user,
+            db=db,
+        )

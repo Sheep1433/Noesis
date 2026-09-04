@@ -68,6 +68,9 @@ class RetrievalPart(MessagePart):
     query: str = ""
     results: List[Dict[str, Any]] = field(default_factory=list)
     truncated: bool = False
+    # 来源归属：{"kind": "main"|"subagent", "label": 任务标题}；缺省视为主 Agent
+    # 自检索（旧数据无该字段，前端按 main 归组）
+    origin: Optional[Dict[str, Any]] = None
     type: str = "retrieval"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -80,6 +83,8 @@ class RetrievalPart(MessagePart):
         }
         if self.truncated:
             out["truncated"] = True
+        if self.origin:
+            out["origin"] = dict(self.origin)
         return out
 
 
@@ -216,6 +221,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
         )
     if part_type == "retrieval":
         results = data.get("results")
+        origin = data.get("origin")
         return RetrievalPart(
             id=str(data.get("id") or ""),
             tool_call_id=str(data.get("tool_call_id") or ""),
@@ -224,6 +230,7 @@ def _part_from_dict(data: Dict[str, Any]) -> MessagePart:
             if isinstance(results, list)
             else [],
             truncated=bool(data.get("truncated")),
+            origin=origin if isinstance(origin, dict) else None,
         )
     raise ValueError(f"Unknown part type: {part_type}")
 
@@ -372,12 +379,24 @@ class AssistantMessageBuilder:
         query: str,
         results: List[Dict[str, Any]],
         truncated: bool = False,
+        origin: Optional[Dict[str, Any]] = None,
+        max_results: Optional[int] = None,
     ) -> RetrievalPart:
-        """登记 retrieval tool evidence，并持久化独立 retrieval part。"""
+        """登记 retrieval tool evidence，并持久化独立 retrieval part。
+
+        ``max_results`` 覆盖单次登记条数上限（缺省 RetrievalLimitConfig.
+        max_results_per_call）：跨边界来源清单是子会话多轮检索的去重汇总，
+        按更高上界登记（见 event_mapping/retrieval.py），不受单工具调用
+        上限约束——否则面板「共检索 N」被截成调用级上限。
+        """
+        per_call_limit = max_results if max_results is not None else RetrievalLimitConfig.max_results_per_call
         registered: List[Dict[str, Any]] = []
-        capacity_truncated = len(results) > RetrievalLimitConfig.max_results_per_call
-        for raw in results[:RetrievalLimitConfig.max_results_per_call]:
-            if not isinstance(raw, dict) or not raw.get("citable", True):
+        capacity_truncated = len(results) > per_call_limit
+        for raw in results[:per_call_limit]:
+            # 可引用性准入由 EvidenceEnvelope 身份校验独立判定（KB 需 collection/
+            # document/version/segment 四元身份，web 需 url），缺身份条目在下方
+            # 校验处拒收并计入 invalid_evidence_envelope
+            if not isinstance(raw, dict):
                 continue
             try:
                 excerpt, excerpt_truncated = self._truncate_utf8(
@@ -435,6 +454,8 @@ class AssistantMessageBuilder:
             existing_part.results = list(by_id.values())
             existing_part.query = existing_part.query or query
             existing_part.truncated = existing_part.truncated or truncated or capacity_truncated
+            if origin:
+                existing_part.origin = dict(origin)
             return existing_part
 
         part = RetrievalPart(
@@ -443,6 +464,7 @@ class AssistantMessageBuilder:
             query=query,
             results=registered,
             truncated=truncated or capacity_truncated,
+            origin=dict(origin) if origin else None,
         )
         self._content.parts.append(part)
         return part
@@ -484,6 +506,23 @@ class AssistantMessageBuilder:
         self._content.parts.append(
             ReasoningPart(content=reasoning, parent_task_call_id=parent_task_call_id),
         )
+
+    def rollback_trailing_stream_parts(self) -> int:
+        """丢弃末尾连续的 text/reasoning parts，返回丢弃数量。
+
+        用于 LLM 重试/降级：失败尝试在被断流前已流出的部分正文与思考
+        不应留在消息里（否则 N 次重试累积 N 份重复）。工具/检索等 part
+        是模型调用边界——模型流式阶段不产生它们，遇到即停。
+        """
+        dropped = 0
+        while self._content.parts:
+            last = self._content.parts[-1]
+            if isinstance(last, (TextPart, ReasoningPart)):
+                self._content.parts.pop()
+                dropped += 1
+                continue
+            break
+        return dropped
 
     def append_tool(
         self,

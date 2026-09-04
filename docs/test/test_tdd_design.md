@@ -32,9 +32,11 @@ pnpm build
 
 | 目录 | 目的 |
 |------|------|
-| `backend/evals/agent/` | Agent benchmark / Harbor |
+| `backend/evals/agent/` | Agent benchmark / Harbor / 记忆召回 / Agentic RAG |
 | `backend/evals/case/` | 测试用例生成与 RAG 两阶段评测 |
 | `backend/evals/compression/` | 摘要与上下文压缩评测 |
 | `backend/evals/kb/` | 单集合 retrieval 评测 |
+
+评测集怎么设计（压缩五维 probe、记忆召回断言、Agentic RAG dataset）见 [eval-set-design.md](eval-set-design.md)。
 
 默认测试不得依赖外部模型。需要真实模型、Qdrant 或 Langfuse 的评测必须使用显式环境开关并输出可保存的结果。

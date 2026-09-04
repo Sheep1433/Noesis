@@ -40,10 +40,12 @@ class AgentPathBackend(SandboxBackendProtocol):
         strip_root: str | None = None,
         read_only: bool = False,
         canonicalize: bool = True,
+        read_only_error: str = READ_ONLY_SKILLS_ERROR,
     ) -> None:
         self._inner = inner
         self._strip_root = strip_root.rstrip("/") if strip_root else None
         self._read_only = read_only
+        self._read_only_error = read_only_error
         self._canonicalize = canonicalize
 
     def _map_in(self, path: str) -> str:
@@ -80,7 +82,7 @@ class AgentPathBackend(SandboxBackendProtocol):
 
     def write(self, file_path: str, content: str) -> WriteResult:
         if self._read_only:
-            return WriteResult(error=READ_ONLY_SKILLS_ERROR)
+            return WriteResult(error=self._read_only_error)
         return self._inner.write(self._map_in(file_path), content)
 
     def edit(
@@ -91,7 +93,7 @@ class AgentPathBackend(SandboxBackendProtocol):
         replace_all: bool = False,
     ) -> EditResult:
         if self._read_only:
-            return EditResult(error=READ_ONLY_SKILLS_ERROR)
+            return EditResult(error=self._read_only_error)
         return self._inner.edit(
             self._map_in(file_path),
             old_string,

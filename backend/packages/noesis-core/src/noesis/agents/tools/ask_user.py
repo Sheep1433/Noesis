@@ -42,30 +42,41 @@ ask_user_tool = StructuredTool.from_function(
 )
 
 
-def build_interrupt_on(*, session_id: str | None = None) -> dict[str, InterruptOnConfig]:
-    """组装 SuperAgent（及 task-worker）的 ``interrupt_on``。"""
+def build_interrupt_on(
+    *,
+    session_id: str | None = None,
+    memory_write_guard: bool = True,
+) -> dict[str, InterruptOnConfig]:
+    """组装 SuperAgent（及 task-worker）的 ``interrupt_on``。
+
+    task-worker 传 ``memory_write_guard=False``：其 /memory 路由在 backend
+    层已只读（写入直接报错），无需审批——若仍挂审批会出现「批准后写入
+    又报只读错」的双重挫败。
+    """
 
     def _execute_when(req: Any) -> bool:
         return execute_when(req, session_id=session_id)
 
-    return {
+    config: dict[str, InterruptOnConfig] = {
         "execute": {
             "allowed_decisions": list(_APPROVE_REJECT),
             "description": "危险 Shell 命令需要用户确认后执行",
             "when": _execute_when,
         },
-        "write_file": {
+    }
+    if memory_write_guard:
+        config["write_file"] = {
             "allowed_decisions": list(_APPROVE_REJECT),
             "description": "写入用户记忆（/memory/）需要确认",
             "when": memory_write_when,
-        },
-        "edit_file": {
+        }
+        config["edit_file"] = {
             "allowed_decisions": list(_APPROVE_REJECT),
             "description": "编辑用户记忆（/memory/）需要确认",
             "when": memory_write_when,
-        },
-        "ask_user": {
-            "allowed_decisions": list(_RESPOND_ONLY),
-            "description": "等待用户回答澄清问题",
-        },
+        }
+    config["ask_user"] = {
+        "allowed_decisions": list(_RESPOND_ONLY),
+        "description": "等待用户回答澄清问题",
     }
+    return config

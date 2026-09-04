@@ -1,4 +1,4 @@
-<script lang="tsx" setup>
+<script lang="ts" setup>
 import type { ScrollbarInst, UploadCustomRequestOptions } from 'naive-ui'
 import type { TestCaseExportCaseItem } from '@/api/chat'
 import type { CaseGenStatus, TcScene, TcTestCase } from '@/views/TestAssistant/scenesToMarkmap'

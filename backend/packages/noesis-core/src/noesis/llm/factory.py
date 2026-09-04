@@ -1,5 +1,7 @@
+import asyncio
 import json
 from typing import Any
+from urllib.parse import urlsplit
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
@@ -7,6 +9,48 @@ from langchain_qwq import ChatQwen
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk
 from noesis.config.env import ModelConfig
+
+
+# 支持通用三档透传的 OpenAI 协议族（qwen/anthropic 走专有参数体系不注入）
+REASONING_MODEL_TYPES = frozenset({"openai", "minimax", "opencode", "deepseek"})
+
+# 实证拒收顶层 reasoning_effort 的网关方言：Kilo 把顶层参数折算成自己的
+# reasoning.effort 后与网关侧注入的上游默认档位构成冲突对，直接 400
+# '"reasoning_effort" and "reasoning.effort" are both provided with
+# conflicting values'（单独发顶层参数即触发、与模型无关，实测 4/4 复现）。
+# 这类端点改发嵌套 reasoning.effort（Kilo/OpenRouter 统一形态，实测可通过
+# 网关校验）。OpenAI 官方 chat completions 只认顶层 reasoning_effort，不能
+# 全局换嵌套。
+_NESTED_REASONING_HOSTS = frozenset({"api.kilo.ai"})
+
+
+def _reasoning_wire_kwargs(reasoning_effort: str | None, model_type: str, model_base_url: str) -> dict:
+    """推理档位的请求侧 wire 形态（唯一收敛点）。
+
+    默认顶层 ``reasoning_effort``；``_NESTED_REASONING_HOSTS`` 中的网关
+    方言改发嵌套 ``reasoning.effort``——经 ``extra_body`` 透传而非
+    langchain 的 ``reasoning`` 字段，后者会把整条请求切到 Responses API。
+    """
+    from noesis.llm.reasoning import REASONING_LEVELS, to_wire_reasoning_effort
+
+    if reasoning_effort not in REASONING_LEVELS or model_type not in REASONING_MODEL_TYPES:
+        return {}
+    effort = to_wire_reasoning_effort(reasoning_effort)
+    host = (urlsplit(model_base_url or "").hostname or "").lower()
+    if host in _NESTED_REASONING_HOSTS:
+        return {"extra_body": {"reasoning": {"effort": effort}}}
+    return {"reasoning_effort": effort}
+
+
+class StreamIdleTimeoutError(TimeoutError):
+    """流式响应空闲超时：超过 request_timeout 未收到任何模型 chunk。
+
+    与 httpx 读超时（任意字节重置，SSE ping 即可续命）不同，本超时只在
+    **真实生成 chunk** 到达时重置——网关因风控/故障挂住流（只发 keep-alive
+    不出内容）时，这是唯一能收口的超时层。LLMErrorHandlingMiddleware 将其
+    分类为可重试瞬时错误（退避重试，耗尽后降级）。
+    """
+
 
 def _opencode_preset() -> tuple[str, dict[str, str]]:
     """opencode 便捷默认值来自 config.yaml model.provider_presets（部署者维护）。"""
@@ -136,6 +180,38 @@ class ChatOpenAICompatible(ChatOpenAI):
                 })
             yield pending
 
+    async def _astream(self, *args, **kwargs):
+        """流级空闲超时：request_timeout 内未产出任何 chunk 即判死流。
+
+        httpx 的读超时按「任意字节」计时——SSE ping/注释帧就能无限续命，
+        网关挂住流（风控拦截后只发 keep-alive）时没有任何层能超时，run
+        会永远停在生成阶段。这里按「真实生成 chunk」计时：只有 chunk
+        到达才重置计时器，ping 不算。超时抛 StreamIdleTimeoutError，
+        由 LLMErrorHandlingMiddleware 走重试/降级收口。
+        """
+        idle_seconds = float(ModelConfig.request_timeout or 0)
+        if idle_seconds <= 0:
+            async for chunk in super()._astream(*args, **kwargs):
+                yield chunk
+            return
+        iterator = super()._astream(*args, **kwargs)
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=idle_seconds
+                    )
+                except StopAsyncIteration:
+                    return
+                except asyncio.TimeoutError as exc:
+                    raise StreamIdleTimeoutError(
+                        f"No model chunk received in {idle_seconds:.0f}s (stream idle)"
+                    ) from exc
+                yield chunk
+        finally:
+            # 超时路径下 wait_for 已取消底层读取；正常结束路径 aclose 幂等
+            await iterator.aclose()
+
     def _combine_llm_outputs(self, llm_outputs: list[dict | None]) -> dict:
         """Use the final cumulative usage instead of summing every stream chunk.
 
@@ -261,6 +337,7 @@ def build_chat_model(
     model_base_url: str,
     model_api_key: str,
     provider_max_retries: int | None = None,
+    reasoning_effort: str | None = None,
 ):
     timeout = _llm_http_timeout()
     max_retries = (
@@ -282,6 +359,9 @@ def build_chat_model(
         if ModelConfig.streaming
         else {}
     )
+    # 推理档位：按端点方言选择 wire 形态（见 _reasoning_wire_kwargs）；
+    # qwen/anthropic 走专有参数体系（enable_thinking/budget_tokens），不注入。
+    reasoning_kwargs = _reasoning_wire_kwargs(reasoning_effort, model_type, model_base_url)
 
     model_map = {
         # openai / minimax 走统一 OpenAI 兼容适配：reasoning 自动探测，
@@ -295,6 +375,7 @@ def build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
         "minimax": lambda: ChatOpenAICompatible(
@@ -306,6 +387,7 @@ def build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
         # opencode 与 openai 同为 OpenAI 兼容端点，复用同一适配类；
@@ -320,8 +402,11 @@ def build_chat_model(
             streaming=ModelConfig.streaming,
             default_headers=_opencode_preset()[1],
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
+        # qwen 走 DashScope 专有参数体系（enable_thinking/thinking_budget），
+        # 不支持通用 reasoning_effort，本功能不注入
         "qwen": lambda: ChatQwen(
             model=model_name,
             temperature=temperature,
@@ -346,8 +431,11 @@ def build_chat_model(
             max_retries=max_retries,
             streaming=ModelConfig.streaming,
             **stream_usage_kwargs,
+            **reasoning_kwargs,
             **http_kwargs,
         ),
+        # anthropic 走 thinking/budget_tokens 专有参数体系，不支持通用
+        # reasoning_effort，本功能不注入
         "anthropic": lambda: ChatAnthropic(
             model=model_name,
             temperature=temperature,
@@ -374,8 +462,10 @@ def get_llm(
     *,
     model_id: str | None = None,
     temperature_override: float | None = None,
+    reasoning_effort: str | None = None,
 ):
-    from noesis.llm.catalog import resolve_catalog_entry
+    from noesis.llm.catalog import resolve_catalog_entry_strict
+    from noesis.llm.reasoning import get_request_reasoning_effort
     from noesis.llm.runtime_snapshot import get_runtime_model_snapshot
 
     runtime_snapshot = get_runtime_model_snapshot(
@@ -398,7 +488,9 @@ def get_llm(
         temperature_str = str(ModelConfig.summarization_model_temperature)
         model_base_url = ModelConfig.model_base_url
     elif model_id:
-        entry = resolve_catalog_entry(model_id)
+        # 显式指定的模型 id 必须可解析：ContextVar 快照（跨线程丢失场景）
+        # 与内置目录都不命中时抛错，不静默回退平台默认
+        entry = resolve_catalog_entry_strict(model_id)
         model_type = entry.model_type
         model_name = entry.id
         temperature_str = str(entry.temperature)
@@ -410,6 +502,14 @@ def get_llm(
         model_base_url = ModelConfig.model_base_url
 
     model_api_key = runtime_snapshot.api_key if runtime_snapshot is not None else ModelConfig.model_api_key
+
+    # 推理档位：显式参数优先，回退本 Run 的 ContextVar（子 Agent 随
+    # create_task 自动继承）；摘要/压缩模型不吃档位。无能力门控——
+    # 不支持的端点自行忽略该参数。
+    if reasoning_effort is None:
+        reasoning_effort = get_request_reasoning_effort()
+    if use_summary_model:
+        reasoning_effort = None
 
     if not model_type:
         raise ValueError("MODEL_TYPE environment variable is not set.")
@@ -433,4 +533,5 @@ def get_llm(
         provider_max_retries=(
             int(ModelConfig.max_retries) if purpose == "summarization" else 0
         ),
+        reasoning_effort=reasoning_effort,
     )

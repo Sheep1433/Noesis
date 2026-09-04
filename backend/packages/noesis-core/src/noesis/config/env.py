@@ -129,6 +129,7 @@ class ModelSettings:
     governor_loop_hard_limit: int
     governor_loop_window_size: int
     tool_output_max_chars: int
+    read_file_max_chars: int
     governor_tool_calls_enabled: bool
     governor_tool_calls_total: int | None
     governor_tool_calls_per_name: int | None
@@ -198,7 +199,6 @@ class RetrievalLimitSettings:
 @dataclass(frozen=True)
 class MemorySettings:
     extraction_model: str
-    selection_model: str
     enabled_by_default: bool
     session_idle_minutes: int
     sweep_interval_minutes: int
@@ -206,7 +206,6 @@ class MemorySettings:
     index_max_lines: int
     index_max_bytes: int
     stale_warning_days: int
-    inject_budget_tokens: int
     max_entry_chars: int
     consolidation_min_interval_hours: int
     consolidation_min_new_sessions: int
@@ -225,7 +224,10 @@ class SubagentSettings:
     task_timeout_seconds: float
     foreground_max_wait_seconds: float
     auto_continue: bool
+    auto_continue_debounce_seconds: float
     shell_task_timeout_seconds: float
+    stop_grace_seconds: float
+    stop_reconcile_seconds: float
 
 
 @dataclass(frozen=True)
@@ -489,6 +491,9 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         tool_output_max_chars=_legacy_env_int(
             "TOOL_OUTPUT_MAX_CHARS", runtime.tool_output_max_chars
         ),
+        read_file_max_chars=_legacy_env_int(
+            "READ_FILE_MAX_CHARS", runtime.read_file_max_chars
+        ),
         governor_tool_calls_enabled=_legacy_env_bool(
             "GOVERNOR_TOOL_CALLS_ENABLED", gov.tool_calls_enabled
         ),
@@ -615,7 +620,6 @@ def _build_memory(yaml_cfg: AppYamlConfig) -> MemorySettings:
     value = yaml_cfg.memory
     return MemorySettings(
         extraction_model=value.extraction_model.strip(),
-        selection_model=value.selection_model.strip(),
         enabled_by_default=value.enabled_by_default,
         session_idle_minutes=value.session_idle_minutes,
         sweep_interval_minutes=value.sweep_interval_minutes,
@@ -623,7 +627,6 @@ def _build_memory(yaml_cfg: AppYamlConfig) -> MemorySettings:
         index_max_lines=value.index_max_lines,
         index_max_bytes=value.index_max_bytes,
         stale_warning_days=value.stale_warning_days,
-        inject_budget_tokens=value.inject_budget_tokens,
         max_entry_chars=value.max_entry_chars,
         consolidation_min_interval_hours=value.consolidation_min_interval_hours,
         consolidation_min_new_sessions=value.consolidation_min_new_sessions,
@@ -646,7 +649,10 @@ def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
         task_timeout_seconds=subagents.task_timeout_seconds,
         foreground_max_wait_seconds=subagents.foreground_max_wait_seconds,
         auto_continue=subagents.auto_continue,
+        auto_continue_debounce_seconds=subagents.auto_continue_debounce_seconds,
         shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
+        stop_grace_seconds=subagents.stop_grace_seconds,
+        stop_reconcile_seconds=subagents.stop_reconcile_seconds,
     )
 
 

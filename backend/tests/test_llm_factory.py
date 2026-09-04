@@ -1,8 +1,9 @@
+import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
 
-from noesis.llm.factory import ChatOpenAICompatible
+from noesis.llm.factory import ChatOpenAICompatible, StreamIdleTimeoutError
 
 
 def test_opencode_stream_usage_uses_final_cumulative_chunk() -> None:
@@ -164,3 +165,277 @@ def test_compatible_injects_reasoning_for_all_assistants() -> None:
     assistants = [m for m in payload["messages"] if m["role"] == "assistant"]
     assert len(assistants) == 1
     assert assistants[0]["reasoning_content"] == "think"
+
+
+# ============ 推理档位（reasoning_effort）注入 ============
+
+from unittest.mock import patch  # noqa: E402
+
+
+def test_build_chat_model_injects_reasoning_effort_for_openai_family() -> None:
+    """openai 协议族（openai/minimax/opencode/deepseek）注入顶层 reasoning_effort。"""
+    from noesis.llm.factory import build_chat_model
+
+    for model_type in ("openai", "minimax", "opencode", "deepseek"):
+        for effort in ("low", "medium", "high"):
+            model = build_chat_model(
+                model_type=model_type,
+                model_name="deepseek-v4-flash",
+                temperature=0.7,
+                model_base_url="https://opencode.ai/zen/v1",
+                model_api_key="test-key",
+                reasoning_effort=effort,
+            )
+            assert model.reasoning_effort == effort, (model_type, effort)
+
+
+def test_build_chat_model_skips_reasoning_for_qwen() -> None:
+    """qwen 走 DashScope 专有参数体系（enable_thinking），不注入通用 reasoning_effort。
+
+    anthropic 分支同理跳过注入，但其真构造在测试环境不可行（httpx Timeout
+    类型不兼容，与档位改动无关），由 model_map 代码结构与 qwen 用例共同覆盖。
+    """
+    from noesis.llm.factory import build_chat_model
+
+    model = build_chat_model(
+        model_type="qwen",
+        model_name="qwen-plus",
+        temperature=0.7,
+        model_base_url="",
+        model_api_key="test-key",
+        reasoning_effort="high",
+    )
+    assert getattr(model, "reasoning_effort", None) is None
+
+
+def test_reasoning_wire_kwargs_kilo_family_sends_nested_effort() -> None:
+    """Kilo 网关拒收顶层 reasoning_effort（归一化冲突 400），改发嵌套 reasoning.effort。
+
+    回归锚点：子 Agent 继承 turn 档位 low 后请求 Kilo 网关，报 400
+    '"reasoning_effort" and "reasoning.effort" are both provided with
+    conflicting values'。嵌套形态实测通过网关校验。
+    """
+    from noesis.llm.factory import _reasoning_wire_kwargs
+
+    assert _reasoning_wire_kwargs("low", "openai", "https://api.kilo.ai/api/gateway") == {
+        "extra_body": {"reasoning": {"effort": "low"}}
+    }
+
+
+def test_reasoning_wire_kwargs_official_endpoints_keep_top_level_effort() -> None:
+    """OpenAI 官方 chat completions 只认顶层 reasoning_effort，维持原形态。
+
+    tokenrhythm 等未实测网关保持顶层原形态（无证据不改行为）。
+    """
+    from noesis.llm.factory import _reasoning_wire_kwargs
+
+    for base_url, model_type in (
+        ("https://api.openai.com/v1", "openai"),
+        ("https://opencode.ai/zen/v1", "opencode"),
+        ("https://tokenrhythm.studio/v1", "openai"),
+        ("", "minimax"),
+    ):
+        assert _reasoning_wire_kwargs("high", model_type, base_url) == {
+            "reasoning_effort": "high"
+        }, (base_url, model_type)
+
+
+def test_reasoning_wire_kwargs_skips_invalid_input() -> None:
+    from noesis.llm.factory import _reasoning_wire_kwargs
+
+    assert _reasoning_wire_kwargs(None, "openai", "https://api.kilo.ai/api/gateway") == {}
+    assert _reasoning_wire_kwargs("off", "openai", "https://api.kilo.ai/api/gateway") == {}
+    assert _reasoning_wire_kwargs("high", "qwen", "https://api.kilo.ai/api/gateway") == {}
+
+
+def test_build_chat_model_kilo_gateway_wire_payload_is_nested() -> None:
+    """端到端锚点：Kilo 方言的实际 HTTP body 为嵌套 reasoning.effort，
+    且不含顶层 reasoning_effort（openai SDK extra_body 合并行为钉住）。"""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from noesis.llm.factory import ChatOpenAICompatible, _reasoning_wire_kwargs
+
+    captured: dict = {}
+
+    class Echo(BaseHTTPRequestHandler):
+        def do_POST(self):
+            captured["payload"] = json.loads(
+                self.rfile.read(int(self.headers["Content-Length"]))
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "id": "x", "object": "chat.completion", "created": 0, "model": "m",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"},
+                             "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Echo)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        model = ChatOpenAICompatible(
+            model="glm-5.3-flash",
+            temperature=0.5,
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            api_key="probe",
+            streaming=False,
+            **_reasoning_wire_kwargs("low", "openai", "https://api.kilo.ai/api/gateway"),
+        )
+        model.invoke([("user", "hi")])
+    finally:
+        server.shutdown()
+
+    payload = captured["payload"]
+    assert payload.get("reasoning") == {"effort": "low"}
+    assert "reasoning_effort" not in payload
+
+
+@patch("noesis.llm.factory.build_chat_model")
+@patch("noesis.llm.catalog.resolve_catalog_entry_strict")
+def test_get_llm_applies_contextvar_effort_without_capability_gate(
+    mock_resolve, mock_build
+) -> None:
+    """无能力门控：ContextVar 档位一律生效（不支持的端点自行忽略）；显式参数优先。"""
+    from types import SimpleNamespace
+
+    from noesis.llm.catalog import ModelCatalogEntry
+    from noesis.llm.factory import get_llm
+    from noesis.llm.reasoning import (
+        clear_request_reasoning_effort,
+        set_request_reasoning_effort,
+    )
+
+    mock_resolve.return_value = ModelCatalogEntry(
+        id="deepseek-v4-flash-free",
+        label="Flash",
+        model_type="opencode",
+        temperature=0.7,
+        base_url="https://opencode.ai/zen/v1",
+    )
+    mock_build.return_value = SimpleNamespace()
+
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return mock_build.return_value
+
+    mock_build.side_effect = _capture
+
+    try:
+        # ContextVar 档位直接透传，任何模型无门控
+        set_request_reasoning_effort("high")
+        with patch(
+            "noesis.llm.factory.ModelConfig",
+            SimpleNamespace(model_api_key="test-key", summarization_model_name=""),
+        ):
+            get_llm(model_id="deepseek-v4-flash-free")
+        assert captured["reasoning_effort"] == "high"
+
+        # 显式参数优先于 ContextVar
+        with patch(
+            "noesis.llm.factory.ModelConfig",
+            SimpleNamespace(model_api_key="test-key", summarization_model_name=""),
+        ):
+            get_llm(model_id="deepseek-v4-flash-free", reasoning_effort="max")
+        assert captured["reasoning_effort"] == "max"
+    finally:
+        clear_request_reasoning_effort()
+
+
+@patch("noesis.llm.factory.build_chat_model")
+def test_get_llm_ignores_effort_for_summarization(mock_build) -> None:
+    """summarization 分支不吃档位。"""
+    from noesis.llm.factory import get_llm
+    from noesis.llm.reasoning import (
+        clear_request_reasoning_effort,
+        set_request_reasoning_effort,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return mock_build.return_value
+
+    mock_build.side_effect = _capture
+
+    try:
+        set_request_reasoning_effort("high")
+        with patch("noesis.llm.factory.ModelConfig") as mock_cfg:
+            mock_cfg.model_type = "opencode"
+            mock_cfg.model_name = "kilo-auto/free"
+            mock_cfg.model_temperature = "0.7"
+            mock_cfg.model_base_url = "https://opencode.ai/zen/v1"
+            mock_cfg.model_api_key = "sk-test"
+            mock_cfg.summarization_model_name = "sum-model"
+            mock_cfg.summarization_model_temperature = 0.3
+            mock_cfg.max_retries = 1
+            get_llm(purpose="summarization")
+        assert captured["reasoning_effort"] is None
+    finally:
+        clear_request_reasoning_effort()
+
+
+
+# ---------------------------------------------------------------------------
+# _astream 流级空闲超时：网关挂流（只发 SSE ping 不出内容）时唯一能收口的层
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_astream_idle_timeout_raises_on_hung_stream() -> None:
+    """无 chunk 产出超过 request_timeout → StreamIdleTimeoutError（ping 续不了命）。"""
+    import asyncio as _asyncio
+    from unittest.mock import patch as _patch
+
+    llm = ChatOpenAICompatible(
+        model="m", base_url="http://localhost:1/v1", api_key="k",
+        max_retries=0, timeout=5, streaming=True,
+    )
+
+    async def hung_parent_stream(*args, **kwargs):
+        # 模拟挂死流：永不产出 chunk（对应网关只发 SSE 注释帧）
+        await _asyncio.sleep(30)
+        yield ChatGenerationChunk(message=AIMessageChunk(content="never"))
+
+    from types import SimpleNamespace as _NS
+    import noesis.llm.factory as factory_mod
+    with _patch.object(ChatOpenAI, "_astream", hung_parent_stream), \
+         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.2)):
+        with pytest.raises(StreamIdleTimeoutError):
+            async for _ in llm.astream("hi"):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_astream_idle_timeout_reset_by_real_chunks() -> None:
+    """真实 chunk 到达会重置计时器：慢速但活着的流不被误杀。"""
+    import asyncio as _asyncio
+    from unittest.mock import patch as _patch
+
+    llm = ChatOpenAICompatible(
+        model="m", base_url="http://localhost:1/v1", api_key="k",
+        max_retries=0, timeout=5, streaming=True,
+    )
+
+    async def slow_parent_stream(*args, **kwargs):
+        # 每 0.1s 一个 chunk 共 1s：远超单次空闲窗口 0.3s，但每次都有 chunk 续命
+        for i in range(10):
+            await _asyncio.sleep(0.1)
+            yield ChatGenerationChunk(message=AIMessageChunk(content=f"c{i}"))
+
+    from types import SimpleNamespace as _NS
+    import noesis.llm.factory as factory_mod
+    with _patch.object(ChatOpenAI, "_astream", slow_parent_stream), \
+         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.3)):
+        chunks = [c async for c in llm.astream("hi")]
+    # langchain stream reducer 结尾会追加聚合 chunk，>=10 即证明全部收到、未被误杀
+    assert len(chunks) >= 10

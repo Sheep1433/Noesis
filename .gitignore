@@ -12,7 +12,6 @@ wheels/
 .cursor/
 .claude/
 .codex/
-.agents/
 # docs：正式 PRD / Bug / debugging / 测试设计进入版本库；仅忽略个人草稿与临时产物
 docs/drafts/
 docs/.tmp/

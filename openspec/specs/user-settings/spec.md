@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本能力规定 Noesis **用户设置控制面**：设置壳与可搜索 section 注册表、一致交互与危险操作保护、设置导入导出与脱敏审计、用户画像（L0）与记忆（L1/L2）原文编辑、每日记忆整理与跨会话检索、上下文注入预览、定时任务与自动化运行记录、通讯通道配置面、模型目录只读、通知偏好与平台依赖健康诊断。设置 API 的鉴权、隔离、secret 语义与 Provider 凭据托管禁令见 `user-platform`；通道运行时见 `agent-delivery`；记忆磁盘布局与 `/memory/` 路由见 `agent-runtime`。
+本能力规定 Noesis **用户设置控制面**：设置壳与可搜索 section 注册表、一致交互与危险操作保护、设置导入导出与脱敏审计、用户画像（`USER.md`）与记忆（`MEMORY.md` 索引、条目文件与 journal）原文编辑、上下文注入预览、定时任务与自动化运行记录、通讯通道配置面、模型目录只读、通知偏好与平台依赖健康诊断。设置 API 的鉴权、隔离、secret 语义与 Provider 凭据托管禁令见 `user-platform`；通道运行时见 `agent-delivery`；记忆条目格式与引擎写入语义见 `agent-memory`；记忆磁盘布局与 `/memory/` 路由见 `agent-runtime`。
 ## Requirements
 ### Requirement: 系统 SHALL 提供个人与 Agent 设置壳
 
@@ -13,9 +13,9 @@
 | Section id | 职责 |
 |------------|------|
 | `overview` | 配置健康与常用入口 |
-| `models` | 平台可用模型目录（只读，见下文） |
-| `profile` | 用户画像（L0，`USER.md` 原文编辑） |
-| `memory` | 记忆与偏好（L1 `AGENTS.md`，及 L2 入口） |
+| `models` | 平台可用模型目录与模型服务管理（见下文） |
+| `profile` | 用户画像（`USER.md` 原文编辑） |
+| `memory` | 记忆管理（`MEMORY.md` 索引、条目文件与 journal 入口） |
 | `capabilities` | 深链至 Skills / MCP / 知识库管理页 |
 | `automation` | 定时任务（cron）列表与编辑 |
 | `channels` | 通讯通道配置 |
@@ -82,7 +82,9 @@
 
 #### Scenario: 未登录拒绝
 - **WHEN** 未认证客户端请求用户级 memory API
-- **THEN** SHALL 返回 HTTP 401### Requirement: 设置页 SHALL 提供真实的上下文注入预览
+- **THEN** SHALL 返回 HTTP 401
+
+### Requirement: 设置页 SHALL 提供真实的上下文注入预览
 
 系统 SHALL 复用运行时 resolver/compiler 生成只读预览，展示来源、优先级、是否注入、字符或 Token 估算和最终编译内容。生成预览 SHALL NOT 调用模型、创建 checkpoint 或修改记忆。
 
@@ -221,14 +223,43 @@
 
 **模型与可观测性**
 
-### Requirement: 用户 SHALL 只读查看平台模型目录
+### Requirement: 用户 SHALL 管理对话模型目录（默认端点 + 发现-采纳）
 
-设置页 `models` section SHALL 展示平台已配置的可用模型、默认模型及用户可理解的能力信息，不得提供 Provider、Base URL 或 API Key 输入。
+设置页 `models` section SHALL 展示部署默认模型与用户自定义 Provider 模型：内置目录条目与用户在同名 Provider（slug=默认端点标识）下采纳的模型渲染为同一组，同名 Provider SHALL NOT 再单列为独立自定义组。
+
+默认端点组 SHALL NOT 单设发现按钮：其发现入口与自定义 Provider 完全一致——点「编辑」打开提供方表单（尚无同名 Provider 时以部署侧端点、显示名与公开占位 Key 预填新建表单），在表单模型目录点击「获取可用模型」以部署侧端点与 Key 探测 `GET /models` 返回当下真实可用列表；勾选结果进入表单草稿、随表单保存落库。编辑平台 Provider 时，发现面板 SHALL 将内置目录已有条目标记为已添加，避免重复采纳为自定义模型。自定义 Provider 表单内的发现 SHALL 使用同一勾选批量交互。
+
+发现结果含免费模型时，面板 SHALL 提供「只看免费」筛选项（默认激活、可关闭）；无免费模型的 Provider SHALL 平铺全部结果。免费判定为 model_id 含 `-free` 或 `:free` 片段，或发现行原始字段标记免费（如 kilo 的 `isFree`）。系统 SHALL NOT 在代码内固化任何特定平台特判。
+
+探测 SHALL 在网络层异常时重试一次；最终失败 SHALL 记录含异常类型与服务端日志，错误消息 SHALL 携带异常类名。
+
+API Key 加密存储与凭据禁令（不得展示明文 Key）沿用 `user-platform` 既有要求。
+
+#### Scenario: 默认模型开箱可用
+
+- **WHEN** 部署以默认配置启动且用户未做任何模型配置
+- **THEN** 默认对话模型 SHALL 可用（kilo 免费网关 + 公开占位 Key）
+
+#### Scenario: 发现并采纳免费模型
+
+- **WHEN** 用户在默认端点组点击「编辑」，在表单模型目录点击「获取可用模型」并勾选若干模型后保存
+- **THEN** 所选模型 SHALL 随表单保存落库为该用户在同名 Provider 下的模型行
+- **AND** 分组展示 SHALL 将其与内置目录条目合并为同一组
+
+#### Scenario: 只看免费筛选
+
+- **WHEN** 用户打开发现结果（如 kilo 的 368 个模型）
+- **THEN** 面板 SHALL 默认仅展示免费模型（19 个）且提供关闭筛选的入口
+
+#### Scenario: 探测网络抖动重试
+
+- **WHEN** 出网探测首次因网络层异常失败
+- **THEN** 系统 SHALL 自动重试一次，成功即正常返回
 
 #### Scenario: 查看模型设置
 
 - **WHEN** 用户打开模型设置
-- **THEN** 页面 SHALL 展示 `/api/models` 返回的目录且不出现凭据管理操作
+- **THEN** 页面 SHALL 展示 `/api/models` 返回的目录且不出现明文凭据
 
 ### Requirement: 用户 SHALL 配置通知偏好
 
@@ -282,19 +313,6 @@ MCP secret、通道 Token、自动化定义、通知策略和设置导入等变�
 - **WHEN** 用户替换通道 Token
 - **THEN** 系统 SHALL 记录 replace 动作但 SHALL NOT 在审计响应或日志中返回 Token 内容
 
-### Requirement: 用户显式上下文 SHALL 与机器经验分离
-
-`USER.md` / `AGENTS.md` SHALL 只由用户或明确的文件编辑操作修改，作为显式上下文来源；decision、experience、workflow 和 gotcha SHALL 保存在机器经验事实源，并经独立状态、scope、provenance 和 evidence 治理。自动 extraction/consolidation SHALL NOT 修改显式上下文，设置预览 SHALL 分别标注显式上下文和自动 Bulletin。
-
-#### Scenario: 自动整理不修改显式上下文
-- **WHEN** 系统完成 Run extraction 或 consolidation
-- **THEN** `USER.md` 与 `AGENTS.md` SHALL 保持不变
-
-#### Scenario: 预览区分来源
-- **WHEN** 用户查看下一次 Agent 上下文预览
-- **THEN** 页面 SHALL 分别展示显式上下文与自动 Memory Bulletin
-- **AND** SHALL NOT 把机器经验伪装成用户手写规则
-
 ### Requirement: 自动化设置 SHALL 在窄屏可用
 
 设置页自动化区域 SHALL 在窄屏下保持单列堆叠与可点击的操作控件；新增任务表单 SHALL 独立组件化，不与任务列表渲染耦合。
@@ -302,17 +320,3 @@ MCP secret、通道 Token、自动化定义、通知策略和设置导入等变�
 #### Scenario: 窄屏访问自动化设置
 - **WHEN** 用户在窄屏打开「定时与自动化」设置
 - **THEN** 控件 SHALL 单列堆叠且操作按钮完整可见可点击
-### Requirement: 设置页 SHALL 展示自动处理健康
-
-设置页 SHALL 展示当前用户最近成功 capture/consolidation 时间，以及 pending、partial、failed、dead、skipped-disabled 数量和 workspace/index 是否落后。用户文案 SHALL 使用业务含义，不得显示数据库表、claim token、provider key、服务端路径、内部网络位置或未脱敏错误。健康展示 SHALL 不改变单一用户开关语义。
-
-#### Scenario: 后台任务部分失败
-- **WHEN** 用户的长 Run 只有部分 chunk extraction 成功
-- **THEN** 设置页 SHALL 显示“部分处理”及安全摘要
-- **AND** SHALL NOT 把该 Run 展示为完整成功
-
-#### Scenario: dead job 可诊断
-- **WHEN** job 达到最大 attempts 进入 dead
-- **THEN** 设置页 SHALL 计入处理失败
-- **AND** SHALL 提供不泄露内部细节的处理建议或重试状态
-

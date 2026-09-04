@@ -7,7 +7,6 @@ from typing import List, Optional
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.env import ChatAttachmentConfig
 from noesis.runtime.deps import require_attachment_service
@@ -30,19 +29,52 @@ class GrepAttachmentInput(BaseModel):
     path: Optional[str] = Field(default=None, description="限定 virtual_path 或 file_name；省略则搜索全部文档")
 
 
+async def resolve_attachment_tools(
+    *,
+    session_id: str,
+    user_id: str,
+    file_list: Optional[dict] = None,
+) -> List[StructuredTool]:
+    """装配期附件探测 + 工具装配（主/子 Agent 装配点共用）。
+
+    探测自开短命 session：装配期共享的请求级 AsyncSession 可能正被
+    producer 并发使用（InvalidRequestError: concurrent operations）。
+    """
+    from noesis.storage.postgres.manager import pg_manager
+
+    async with pg_manager.get_async_session_context() as db:
+        has_attachments = await require_attachment_service().session_has_attachments(
+            session_id=session_id,
+            user_id=user_id,
+            db=db,
+            file_dict=file_list,
+        )
+    if not has_attachments:
+        return []
+    return build_attachment_tools(session_id=session_id, user_id=user_id)
+
+
 def build_attachment_tools(
     *,
     session_id: str,
     user_id: str,
-    db: AsyncSession,
 ) -> List[StructuredTool]:
+    """附件读取工具。
+
+    不接受调用方 session：工具在 Agent 运行期内被调用，此时装配 run 的
+    请求级 AsyncSession 可能正被 producer 并发使用（InvalidRequestError:
+    concurrent operations）；每次调用自开短命 session。
+    """
+    from noesis.storage.postgres.manager import pg_manager
+
     async def read_attachment(path: str, offset: int = 0, limit: int = ChatAttachmentConfig.read_page_lines) -> str:
-        row = await require_attachment_service().find_document(
-            session_id=session_id,
-            user_id=user_id,
-            path=path,
-            db=db,
-        )
+        async with pg_manager.get_async_session_context() as db:
+            row = await require_attachment_service().find_document(
+                session_id=session_id,
+                user_id=user_id,
+                path=path,
+                db=db,
+            )
         if not row:
             return f"未找到文档附件: {path}"
         text, _ = require_attachment_service()._read_document_text(row)
@@ -62,12 +94,13 @@ def build_attachment_tools(
         except re.error as exc:
             return f"无效正则: {exc}"
 
-        rows = await require_attachment_service().list_session_documents(session_id, user_id, db)
-        if path:
-            row = await require_attachment_service().find_document(
-                session_id=session_id, user_id=user_id, path=path, db=db
-            )
-            rows = [row] if row else []
+        async with pg_manager.get_async_session_context() as db:
+            rows = await require_attachment_service().list_session_documents(session_id, user_id, db)
+            if path:
+                row = await require_attachment_service().find_document(
+                    session_id=session_id, user_id=user_id, path=path, db=db
+                )
+                rows = [row] if row else []
 
         if not rows:
             return "当前会话无可用文档附件"

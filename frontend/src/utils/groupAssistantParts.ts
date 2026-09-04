@@ -1,7 +1,7 @@
 import type { ReasoningUiPart, ToolUiPart, UiPart } from '@/views/chat/messageParts'
 import { shouldRenderSubagentPart } from '@/utils/parseTaskTool'
 import { shouldRenderToolCallCollapse } from '@/utils/parseWriteTodosInput'
-import { part_parent_task_call_id } from '@/views/chat/messageParts'
+import { COMPACTION_BOUNDARY, part_parent_task_call_id } from '@/views/chat/messageParts'
 
 export type DisplayPartEntry =
   | { kind: 'part', part: UiPart }
@@ -156,4 +156,36 @@ function mergeAdjacentParallelTools(entries: DisplayPartEntry[]): DisplayPartEnt
     i = j
   }
   return result
+}
+
+/** compact 工具模式折叠视图的终稿判定：最后一段非边界、非空的顶层正文 */
+export function lastTopLevelTextEntry(entries: DisplayPartEntry[]): DisplayPartEntry | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (
+      entry.kind === 'part'
+      && entry.part.type === 'text'
+      && entry.part.content !== COMPACTION_BOUNDARY
+      && entry.part.content.trim()
+    ) {
+      return entry
+    }
+  }
+  return null
+}
+
+/**
+ * compact 工具模式的折叠条目：只保留委派卡（前台 task / 后台 start_task）
+ * 与最后一段终稿正文，其余工具与推理收起（点击气泡头部展开全量）。
+ */
+export function collapseDisplayEntries(entries: DisplayPartEntry[]): DisplayPartEntry[] {
+  const finalText = lastTopLevelTextEntry(entries)
+  if (!finalText) {
+    return entries
+  }
+  const kept = entries.filter((entry) =>
+    entry.kind === 'subagent'
+    || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
+  )
+  return [...kept, finalText]
 }

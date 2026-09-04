@@ -1,35 +1,35 @@
-<script lang="tsx" setup>
+<script lang="ts" setup>
 import type { InputInst, UploadFileInfo } from 'naive-ui'
 import type { TaskCatalogEntry } from '@/api/chat'
 import type { ComposerMention, MentionCandidate } from '@/hooks/useMentionCatalog'
 import type { ChatAttachmentItem } from '@/store/business'
-import type { DisplayPartEntry } from '@/utils/groupAssistantParts'
 import type { ChatModeQaType } from '@/utils/qaType'
 import type { SessionStats } from '@/utils/statsFormat'
-import type { MessageContentV1, UiPart } from '@/views/chat/messageParts'
+import type { CitationIndex } from '@/views/chat/citationRendering'
+import type { MessageContentV1, RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
+import type { StreamDelta } from '@/views/chat/streamDeltaBatcher'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
-import { NCollapse, NCollapseItem } from 'naive-ui'
-import { createAgentRun, deleteSession, ensureSession, getSession, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
+import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
-import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
 import ChatComposerToolbar from '@/components/Chat/ChatComposerToolbar.vue'
 import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
-import CitationSources from '@/components/CitationSources/index.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
+import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
+import ResearchSourcesPanel from '@/components/ResearchSourcesPanel/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
-import SubagentCollapse from '@/components/SubagentCollapse/index.vue'
 import TaskCatalogPanel from '@/components/TaskCatalogPanel/index.vue'
 import TodoList from '@/components/TodoList/index.vue'
-import ToolCallCollapse from '@/components/ToolCallCollapse/index.vue'
 import { langfuseUiOrigin } from '@/config'
 import { buildFileDict } from '@/config/chat'
 import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/config/subagents'
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { chatHistorySiderCollapsed } from '@/hooks/useChatHistorySider'
+import { useFollowupQueue } from '@/hooks/useFollowupQueue'
 import {
   candidateToMention,
   ensureMentionCatalog,
@@ -39,18 +39,22 @@ import {
 } from '@/hooks/useMentionCatalog'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { useTicker } from '@/hooks/useTicker'
 import { useToolDisplayMode } from '@/hooks/useToolDisplayMode'
 import { loadSessionMessages } from '@/store/business/initChatHistory'
 import { isUnauthorizedError } from '@/utils/authHttp'
 import { copyToClipboard } from '@/utils/copy'
 import { formatHHmm } from '@/utils/formatTime'
-import { buildDisplayParts } from '@/utils/groupAssistantParts'
+import { buildDisplayParts, lastTopLevelTextEntry } from '@/utils/groupAssistantParts'
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
+import { isReasoningLevel } from '@/utils/reasoningLevels'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
+import { taskNoticeMeta } from '@/utils/taskNotice'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
 import ChatHistoryPanel from '@/views/chat/ChatHistoryPanel.vue'
 import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
+import { buildCitationIndexFromNumbers } from '@/views/chat/citationRendering'
 import {
   pendingHitlForSession,
   setPendingHitlForSession,
@@ -67,7 +71,6 @@ import {
   applyHitlPendingParts,
   applyToolOutput,
   assistantPartsStillStreaming,
-  COMPACTION_BOUNDARY,
   completeReasoningPart,
   createRedactedThinkingStreamCtx,
   emptyMessageContent,
@@ -78,13 +81,16 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
+  rollbackTrailingStreamParts,
   shortenChatErrorToast,
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
   syncLegacyFieldsFromParts,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
+import { arcMessageKey, computeArcPanels } from '@/views/chat/researchArcs'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
+import { createStreamDeltaBatcher } from '@/views/chat/streamDeltaBatcher'
 import { createUserSignalEventSource } from '@/views/chat/userSignalStream'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
@@ -100,27 +106,79 @@ function retrievedResults(parts: UiPart[]) {
     .flatMap((part) => part.type === 'retrieval' ? part.results : [])
 }
 
-function entryKey(entry: DisplayPartEntry, fallback: number): string {
-  if (entry.kind === 'parallel_tools') {
-    return `pg:${entry.parts[0]?.tool_call_id ?? entry.parts[0]?.id ?? fallback}`
+// ---- 研究弧来源聚合（research-source-provenance）----
+// 面板 = 持久化消息数据的纯函数：弧边界由真实用户消息决定（系统通知注入
+// 不构成边界），弧内过程消息不渲染面板、末条 assistant 消息渲染聚合面板。
+type ArcPanelMessage = {
+  uuid?: string
+  message_id?: string
+  role: 'user' | 'assistant'
+  source_kind?: string
+  messageContent?: MessageContentV1
+}
+
+const arcPanels = computed(() => computeArcPanels(conversationItems.value as ArcPanelMessage[]))
+
+function arcPanelFor(item: ArcPanelMessage) {
+  const key = arcMessageKey(item)
+  return key ? arcPanels.value.get(key) : undefined
+}
+
+/**
+ * 消息级检索结果（正文 badge 序号的数据源）：
+ * 弧末条消息用弧内聚合去重结果（与聚合面板序号一致）；
+ * 过程消息保持消息内结果（不渲染面板）。
+ */
+function messageRetrievalResults(item: ArcPanelMessage): RetrievalResultUi[] {
+  const panel = arcPanelFor(item)
+  if (panel) {
+    return panel.entries.map((entry) => entry.result)
   }
-  return entry.part.tool_call_id ?? entry.part.id ?? String(fallback)
+  return retrievedResults(item.messageContent?.parts || [])
 }
 
-type CitationSourcesHandle = InstanceType<typeof CitationSources>
-const citationSourcesRefs = new Map<string, CitationSourcesHandle>()
-
-function citationSourcesKey(item: { message_id?: string, chat_id: string }, index: number): string {
-  return item.message_id || `${item.chat_id}:${index}`
-}
-
-function setCitationSourcesRef(key: string, component: unknown) {
-  if (component) {
-    citationSourcesRefs.set(key, component as CitationSourcesHandle)
-  } else {
-    citationSourcesRefs.delete(key)
+/**
+ * 弧末条消息的正文 badge 序号索引：与聚合面板共用的引用优先编号
+ * （被引用 1..N 按引用首现序，未引用接续排后）；非弧消息返回 undefined，
+ * 走 MarkdownPreview 内部按 retrievalResults 现算首见序。
+ */
+function arcCitationIndex(item: ArcPanelMessage): CitationIndex | undefined {
+  const panel = arcPanelFor(item)
+  if (!panel) {
+    return undefined
   }
+  return buildCitationIndexFromNumbers(
+    panel.entries.map((entry) => entry.result),
+    panel.numbers,
+  )
 }
+
+/**
+ * 文件路径 → 所属弧引用编号索引：预览弧内 write_file / edit_file 写入的报告时，
+ * 文件内引用上标与该弧来源面板同号。同文件被多个弧写过取最近的弧（Map 后写覆盖，
+ * 面板按消息序生成）；无写入记录的文件不进映射。路径按去前导 `/` 归一匹配。
+ */
+const arcCitationIndexByFile = computed(() => {
+  const byFile = new Map<string, CitationIndex>()
+  for (const panel of arcPanels.value.values()) {
+    if (panel.writtenFilePaths.length === 0) {
+      continue
+    }
+    const index = buildCitationIndexFromNumbers(
+      panel.entries.map((entry) => entry.result),
+      panel.numbers,
+    )
+    for (const rawPath of panel.writtenFilePaths) {
+      byFile.set(rawPath.replace(/^\/+/, ''), index)
+    }
+  }
+  return byFile
+})
+
+/**
+ * 检索 tool 卡的结构化结果关联（遗留渲染路径用；共享渲染器内部自算同构 map）。
+ * 主/子会话同构：tool part 只存摘要，完整结果按 tool_call_id 取 retrieval part。
+ */
 /** 会话上下文侧栏（产物/附件）是否展开，默认关闭 */
 const sessionFilesPanelOpen = ref(false)
 
@@ -214,6 +272,8 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
   // 切换会话只释放浏览器 subscription，不停止服务端 Run。必须先隔离旧流，
   // 否则旧会话的 snapshot/delta 会写入新会话页面。
   sseStream.detachSubscription()
+  // 同理丢弃旧会话未 flush 的缓冲 delta，防止迟到的 timer flush 写入新会话
+  streamDeltaBatcher.clear()
   try {
     const session = await getSession(sessionId)
     const qt = String(session.extra?.qa_type ?? '').trim() || 'COMMON_QA'
@@ -228,6 +288,13 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
     currentIndex.value = sessionId
     clearComposerQueue()
     businessStore.todos = []
+    // 生成中态是「当前视图」的状态：切会话即换视图，必须重置——
+    // 目标会话无活跃 run 时 resumeActiveRun 直接返回（不派发快照、
+    // 不触发 onSnapshot 重置），旧会话的 loading 会残留成假「继续生成」
+    stylizingLoading.value = false
+    retryingLabel.value = ''
+    reconnectAvailable.value = false
+    lastRunStatusNotice = ''
 
     qa_type.value = qt
     businessStore.update_qa_type(qt)
@@ -263,6 +330,9 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
       return
     }
     await contextReady
+    // route 恢复路径（刷新/直链进入会话）与侧栏点击同口径回放统计；
+    // 此前只有点击路径刷新，刷新页面后统计条缺失
+    await refreshSessionStats(sessionId)
     await scrollToLatestMessage(false)
     // Run 订阅可能持续数分钟；页面与历史列表恢复不应等待整轮生成结束。
     void activeRunResume
@@ -279,6 +349,8 @@ function resetComposingSurface() {
   sseStream.stopSessionSignals()
   stopCatalogStream()
   stopProcessingClock()
+  // 丢弃未 flush 的流式 delta：整个消息面即将清空，残留缓冲不得流入下一会话
+  streamDeltaBatcher.clear()
   sessionContext.value = null
   sessionContextSessionId.value = ''
   sessionContextIsLive.value = false
@@ -414,28 +486,16 @@ function changeChatMode(targetQaType: ChatModeQaType) {
  */
 // currentChatId 已移除，使用 useChat 管理 sessionId
 
-
 // 对话等待提示词图标
 const stylizingLoading = ref(false)
-const processingNow = ref(Date.now())
-let processingTimer: ReturnType<typeof setInterval> | null = null
+const { now: processingNow, start: startTicker, stop: stopTicker } = useTicker()
 
 function startProcessingClock() {
-  processingNow.value = Date.now()
-  if (processingTimer !== null) {
-    return
-  }
-  processingTimer = setInterval(() => {
-    processingNow.value = Date.now()
-  }, 1000)
+  startTicker()
 }
 
 function stopProcessingClock() {
-  if (processingTimer === null) {
-    return
-  }
-  clearInterval(processingTimer)
-  processingTimer = null
+  stopTicker()
   retryingLabel.value = ''
 }
 
@@ -819,6 +879,171 @@ watchEffect(() => {
   conversationItemsSnapshot.value = items.slice()
 })
 
+/* ── 用户消息导航轨（桌面端左缘竖排刻度）：点击跳转，滚动 spy 高亮当前 ── */
+
+const userMessageTicks = computed(() => {
+  const items = conversationItemsSnapshot.value as Array<{
+    role?: string
+    question?: string
+    created_at?: number
+  }>
+  const ticks: Array<{ index: number, title: string, meta: string }> = []
+  let turn = 0
+  items.forEach((item, index) => {
+    if (item.role !== 'user') {
+      return
+    }
+    turn += 1
+    // 标题取整条消息的扁平文本（换行压平）：双行截断下更完整地传达用户意图
+    const text = (item.question || '').trim().replace(/\s+/g, ' ')
+    ticks.push({
+      index,
+      title: text.slice(0, 64) || '（空消息）',
+      meta: `第 ${turn} 轮 · ${formatHHmm(item.created_at)}`,
+    })
+  })
+  return ticks
+})
+
+const activeUserTickIndex = ref(-1)
+
+/* 刻度列布局：等间距 + 垂直居中（条数多到放不下时自动收紧间距，仍不够则滚动） */
+/** 滚动视口（overflow 裁切层），间距按其可视高度计算；与 CSS 中 item 的 height 保持一致 */
+const userMessageRailViewportRef = ref<HTMLElement | null>(null)
+/** 外层轨道（不裁切），浮动预览卡片以它定位 */
+const userMessageRailRef = ref<HTMLElement | null>(null)
+const tickGap = ref(4)
+const RAIL_TICK_HEIGHT = 8
+const RAIL_GAP_MAX = 4
+const RAIL_GAP_MIN = 2
+let railResizeObserver: ResizeObserver | null = null
+
+function layoutUserMessageRail() {
+  const viewport = userMessageRailViewportRef.value
+  const count = userMessageTicks.value.length
+  if (!viewport || count < 2) {
+    tickGap.value = RAIL_GAP_MAX
+    return
+  }
+  const even = (viewport.clientHeight - count * RAIL_TICK_HEIGHT) / (count - 1)
+  tickGap.value = Math.max(RAIL_GAP_MIN, Math.min(RAIL_GAP_MAX, Math.floor(even)))
+}
+
+/** 视口条件渲染后才存在，须用回调 ref 接挂载/卸载 */
+function bindUserMessageRailViewport(el: HTMLElement | null) {
+  railResizeObserver?.disconnect()
+  railResizeObserver = null
+  userMessageRailViewportRef.value = el
+  if (el) {
+    railResizeObserver = new ResizeObserver(layoutUserMessageRail)
+    railResizeObserver.observe(el)
+    layoutUserMessageRail()
+  }
+}
+
+/** 邻近感应：鼠标沿刻度列上下滑动时，离指针越近的刻度越长越深（--near ∈ [0,1]） */
+const RAIL_PROXIMITY_RADIUS = 56
+
+function onRailPointerMove(e: MouseEvent) {
+  const rail = userMessageRailRef.value
+  if (!rail) {
+    return
+  }
+  const items = rail.querySelectorAll<HTMLElement>('.user-message-rail__item')
+  for (const item of items) {
+    const rect = item.getBoundingClientRect()
+    const distance = Math.abs(rect.top + rect.height / 2 - e.clientY)
+    item.style.setProperty('--near', Math.max(0, 1 - distance / RAIL_PROXIMITY_RADIUS).toFixed(3))
+  }
+}
+
+function resetRailProximity() {
+  userMessageRailRef.value
+    ?.querySelectorAll<HTMLElement>('.user-message-rail__item')
+    .forEach((item) => {
+      item.style.setProperty('--near', '0')
+    })
+}
+
+/* 浮动预览卡片：渲染在滚动视口外避免被裁切；仅悬停刻度时出现，离开刻度列即消失 */
+interface RailCardState {
+  tick: { index: number, title: string, meta: string }
+  /** 卡片中线相对外层轨道顶缘的位置（px） */
+  top: number
+}
+
+const railCard = ref<RailCardState | null>(null)
+const railHoverTickIndex = ref<number | null>(null)
+
+function positionRailCard(index: number) {
+  const rail = userMessageRailRef.value
+  const tick = userMessageTicks.value.find((t) => t.index === index)
+  const item = rail?.querySelector(`[data-tick-index="${index}"]`)
+  if (!rail || !tick || !item) {
+    railCard.value = null
+    return
+  }
+  const itemRect = item.getBoundingClientRect()
+  const railRect = rail.getBoundingClientRect()
+  const center = itemRect.top - railRect.top + itemRect.height / 2
+  railCard.value = {
+    tick,
+    top: Math.min(Math.max(center, 16), Math.max(railRect.height - 16, 16)),
+  }
+}
+
+function onRailTickHover(index: number) {
+  railHoverTickIndex.value = index
+  positionRailCard(index)
+}
+
+function onRailLeave() {
+  resetRailProximity()
+  railHoverTickIndex.value = null
+  railCard.value = null
+}
+
+function scrollToUserMessage(index: number) {
+  const container = messagesContainer.value
+  const target = container?.querySelector<HTMLElement>(`[data-user-message-index="${index}"]`)
+  if (!container || !target) {
+    return
+  }
+  const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 24
+  container.scrollTo({ top, behavior: 'smooth' })
+  activeUserTickIndex.value = index
+}
+
+/** 滚动 spy：视口顶缘之上最后一条用户消息即为当前刻度 */
+function updateActiveUserTick() {
+  const container = messagesContainer.value
+  const ticks = userMessageTicks.value
+  if (!container || !ticks.length) {
+    return
+  }
+  const threshold = container.getBoundingClientRect().top + 80
+  let active = ticks[0].index
+  for (const tick of ticks) {
+    const el = container.querySelector<HTMLElement>(`[data-user-message-index="${tick.index}"]`)
+    if (el && el.getBoundingClientRect().top <= threshold) {
+      active = tick.index
+    }
+  }
+  activeUserTickIndex.value = active
+}
+
+// 消息列表变化（含首次加载）后重算当前刻度与刻度间距
+watch(userMessageTicks, () => {
+  nextTick(() => {
+    updateActiveUserTick()
+    layoutUserMessageRail()
+  })
+})
+
+onBeforeUnmount(() => {
+  railResizeObserver?.disconnect()
+})
+
 // 这里控制内容加载状态
 const contentLoadingStates = ref(
   conversationItemsSnapshot.value.map(() => false),
@@ -828,6 +1053,25 @@ const contentLoadingStates = ref(
 const redactedThinkingStreamCtx = createRedactedThinkingStreamCtx()
 /** 本轮已收到后端 reasoning-* 时，不再对 text-delta 做标签拆分 */
 const nativeReasoningSeen = ref(false)
+
+/* ---- 流式 delta 批量应用：text/reasoning delta 先入缓冲，定时/阈值触发单次 parts patch。
+   顺序契约：结构性帧回调（message-start / tool / retrieval / snapshot / finish / error）
+   顶部先 flush；会话整体重置点 clear；新 run 开始前 flush（清空上一轮残留）。 */
+function applyStreamDeltas(deltas: StreamDelta[]): void {
+  if (!deltas.length) {
+    return
+  }
+  patchLastAssistantParts((parts) => deltas.reduce((acc, delta) => {
+    if (delta.kind === 'reasoning') {
+      return appendReasoningDelta(acc, delta.data, delta.parentTaskCallId)
+    }
+    return delta.redactedThinking
+      ? appendTextDeltaWithRedactedThinking(acc, delta.data, redactedThinkingStreamCtx, delta.parentTaskCallId)
+      : appendTextDelta(acc, delta.data, delta.parentTaskCallId)
+  }, parts))
+}
+
+const streamDeltaBatcher = createStreamDeltaBatcher(applyStreamDeltas)
 
 // 改为对象存储不同问答类型的uuid
 const uuids = ref<Record<string, string>>({})
@@ -841,6 +1085,7 @@ let sessionContextLoadId = 0
 const selectedKbCollections = ref<string[]>([])
 const kbSearchEnabled = ref(true)
 const selectedModelId = ref('')
+const selectedReasoningEffort = ref('')
 const selectedMcpServers = ref<string[]>([])
 const selectedSkills = ref<string[]>([])
 const skillsAllEnabled = ref(true)
@@ -890,6 +1135,9 @@ function buildSessionConfigExtra(): Record<string, unknown> {
   if (qa_type.value !== 'TEST_CASE_QA' && selectedModelId.value) {
     extra.model_id = selectedModelId.value
   }
+  if (qa_type.value !== 'TEST_CASE_QA' && selectedReasoningEffort.value) {
+    extra.reasoning_effort = selectedReasoningEffort.value
+  }
   if (qa_type.value !== 'TEST_CASE_QA') {
     extra.mcp_servers = selectedMcpServers.value
   }
@@ -915,6 +1163,8 @@ function applySessionConfig(extra: Record<string, unknown>) {
   if (storedModelId) {
     selectedModelId.value = storedModelId
   }
+  const storedEffort = String(extra.reasoning_effort ?? '').trim()
+  selectedReasoningEffort.value = isReasoningLevel(storedEffort) ? storedEffort : ''
 
   selectedMcpServers.value = Object.prototype.hasOwnProperty.call(extra, 'mcp_servers')
     ? normalizeIdList(extra.mcp_servers)
@@ -933,6 +1183,7 @@ function clearSessionConfig() {
   selectedKbCollections.value = []
   kbSearchEnabled.value = true
   selectedModelId.value = ''
+  selectedReasoningEffort.value = ''
   selectedMcpServers.value = []
   selectedSkills.value = []
   skillsAllEnabled.value = true
@@ -949,7 +1200,7 @@ watch(taskPanelOpen, (open) => {
   }
 })
 const activeTaskCount = computed(() =>
-  catalogTasks.value.filter((t) => t.status === 'running' || t.status === 'awaiting_approval').length,
+  catalogTasks.value.filter((t) => t.status === 'queued' || t.status === 'running' || t.status === 'awaiting_approval').length,
 )
 const pendingTaskCount = computed(() =>
   catalogTasks.value.filter((t) => t.status === 'awaiting_approval').length,
@@ -980,6 +1231,8 @@ function openCatalogStream(sessionId: string): void {
   if (!sessionId || sessionId !== currentIndex.value) {
     return
   }
+  // 会话切换即清旧目录：连接快照与全量刷新随后对齐，避免残留上一会话的任务
+  catalogTasks.value = []
   const source = createChildCatalogEventSource(sessionId, {
     onTask: applyCatalogTask,
     onContinuation: (payload) => {
@@ -1026,55 +1279,6 @@ function insertContinuationNotice(sessionId: string, notice: string, runId: stri
 function openBackgroundNotice(childSessionIds: string[] = []): void {
   bgFocusTaskId.value = childSessionIds[0] || null
   taskPanelOpen.value = true
-}
-
-function taskNoticeMeta(notice: string): { title: string, detail: string, tone: 'success' | 'warning' | 'error' | 'info' } {
-  const labelMatch = notice.match(/子 Agent「([^」]+)」/)
-  const label = labelMatch?.[1]?.trim()
-  const task = label
-    ? catalogTasks.value.find((item) => item.description.trim() === label)
-    : undefined
-  const description = task?.description?.trim() || label
-  const agentLabel = description
-    ? `子 Agent「${description.length > 42 ? `${description.slice(0, 42)}…` : description}」`
-    : '后台子 Agent'
-  const metricText = notice.includes('·')
-    ? notice.split('·').slice(1).join('·').split(/[（：。]/, 1)[0].trim()
-    : ''
-  const withMetrics = (text: string) => metricText ? `${text}（${metricText}）` : text
-  if (/取消|cancelled/i.test(notice)) {
-    return {
-      title: `${agentLabel} 已取消`,
-      detail: withMetrics('任务已停止，可重新发起或调整任务要求。'),
-      tone: 'warning',
-    }
-  }
-  if (/超时|timed_out/i.test(notice)) {
-    return {
-      title: `${agentLabel} 执行超时`,
-      detail: withMetrics('任务超过执行时限，可打开任务详情查看已完成的过程。'),
-      tone: 'error',
-    }
-  }
-  if (/失败|failed/i.test(notice)) {
-    return {
-      title: `${agentLabel} 执行失败`,
-      detail: withMetrics('任务未能正常完成，可打开任务详情查看原因。'),
-      tone: 'error',
-    }
-  }
-  if (/已完成/.test(notice)) {
-    return {
-      title: `${agentLabel} 已完成`,
-      detail: withMetrics('执行结果已收到，可打开任务详情查看完整过程。'),
-      tone: 'success',
-    }
-  }
-  return {
-    title: `${agentLabel} 有新的状态`,
-    detail: withMetrics('可打开任务详情查看最新进度。'),
-    tone: 'info',
-  }
 }
 
 function stopCatalogStream(): void {
@@ -1249,34 +1453,28 @@ function saveStatslineTemplate() {
 function resetStatslineTemplate() {
   statslineModal.draft = ''
 }
-/** 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。 */
-function rebuildSessionStatsFromHistory() {
-  const totals: SessionStats = {
-    turns: 0,
-    steps: 0,
-    llm_ms: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_tokens: 0,
+/**
+ * 打开/切换会话时的统计恢复：服务端「主+子合并」汇总（与流式实时同口径）。
+ * 不做本地重建回退——本地只见主会话消息，是另一个口径；汇总失败宁可不显示。
+ */
+async function refreshSessionStats(sessionId: string) {
+  if (!sessionId) {
+    return
   }
-  for (const item of conversationItems.value) {
-    if (item.role !== 'assistant') {
-      continue
+  try {
+    const merged = await getSessionUsageSummary(sessionId)
+    // 迟到响应按会话身份丢弃：切换会话/新建对话后，旧会话的汇总请求
+    // 若晚于切换完成，不得回写统计条（同 loadSessionContext 的 loadId
+    // 守卫模式——统计条是会话级状态）
+    if (sessionId !== getChatSessionId()) {
+      return
     }
-    const usage = (item.msg_metadata as any)?.usage
-    if (!usage || typeof usage !== 'object') {
-      continue
+    if (merged && Number(merged.steps) > 0) {
+      sessionStats.value = merged as unknown as SessionStats
     }
-    totals.turns += 1
-    totals.steps += Number(usage.steps) || 0
-    totals.llm_ms += Number(usage.llm_ms) || 0
-    totals.input_tokens += Number(usage.input_tokens) || 0
-    totals.output_tokens += Number(usage.output_tokens) || 0
-    totals.cache_read_tokens += Number(usage.cache_read_tokens) || 0
-    totals.cache_write_tokens += Number(usage.cache_write_tokens) || 0
+  } catch {
+    // 汇总失败不阻塞会话打开：统计条保持空，不用口径不一致的本地值顶替
   }
-  sessionStats.value = totals.steps > 0 ? totals : null
 }
 /** 整轮回复结束信号：递增触发所有 ToolCallCollapse compact 收起。 */
 const runCollapseSignal = ref(0)
@@ -1332,22 +1530,6 @@ function assistantRunKey(item: { uuid: string, message_id?: string }): string {
   return item.message_id || item.uuid
 }
 
-function lastTopLevelTextEntry(parts: UiPart[]): DisplayPartEntry | null {
-  const entries = buildDisplayParts(parts)
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (
-      entry.kind === 'part'
-      && entry.part.type === 'text'
-      && entry.part.content !== COMPACTION_BOUNDARY
-      && entry.part.content.trim()
-    ) {
-      return entry
-    }
-  }
-  return null
-}
-
 function shouldCollapseAssistantRun(item: { messageContent?: MessageContentV1 }): boolean {
   const parts = item.messageContent?.parts
   return Boolean(
@@ -1355,7 +1537,7 @@ function shouldCollapseAssistantRun(item: { messageContent?: MessageContentV1 })
     && Array.isArray(parts)
     && !assistantPartsStillStreaming(parts)
     && hasCollapsibleParts(item)
-    && lastTopLevelTextEntry(parts),
+    && lastTopLevelTextEntry(buildDisplayParts(parts)),
   )
 }
 
@@ -1375,28 +1557,6 @@ function toggleAssistantRun(item: { uuid: string, message_id?: string, messageCo
     next.add(key)
   }
   expandedAssistantRuns.value = next
-}
-
-function assistantDisplayParts(item: { uuid: string, message_id?: string, messageContent?: MessageContentV1 }): DisplayPartEntry[] {
-  const parts = item.messageContent?.parts ?? []
-  if (!shouldCollapseAssistantRun(item) || isAssistantRunExpanded(item)) {
-    return buildDisplayParts(parts)
-  }
-  const finalText = lastTopLevelTextEntry(parts)
-  const agentEntries = buildDisplayParts(parts).filter((entry) =>
-    entry.kind === 'subagent'
-    || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
-  )
-  return finalText ? [...agentEntries, finalText] : buildDisplayParts(parts)
-}
-
-function canUseSharedConversationRenderer(item: { uuid: string, message_id?: string, messageContent?: MessageContentV1 }): boolean {
-  if (!item.messageContent || shouldCollapseAssistantRun(item)) {
-    return false
-  }
-  return buildDisplayParts(item.messageContent.parts).every((entry) =>
-    entry.kind === 'part' && !(entry.part.type === 'tool' && entry.part.name === 'start_task'),
-  )
 }
 
 function assistantSubagentCount(item: {
@@ -1419,7 +1579,9 @@ const sseStream = useSSEStream({
     // retrying 每次带不同 attempt 编号（1/6、2/6…），必须每次刷新 label，
     // 不走 status 去重——否则只显示首次重试。
     if (status === 'retrying') {
-      retryingLabel.value = message || '连接中断，正在重试'
+      // retrying 唯一来源是 LLM 网关限流/瞬时错误的自动重试（带 attempt
+      // 明细 message）；快照驱动无 message 时的兜底文案不得谎称连接断开
+      retryingLabel.value = message || '模型服务不稳定，自动重试中'
       lastRunStatusNotice = status
       return
     }
@@ -1444,6 +1606,8 @@ const sseStream = useSSEStream({
     }
   },
   onSnapshot: (snapshot) => {
+    // 快照整体替换 parts 前先落缓冲 delta，保持与逐 delta 应用相同的到达顺序
+    streamDeltaBatcher.flush()
     reconnectAvailable.value = false
     stylizingLoading.value = shouldShowRunContinuation(snapshot.status)
     if (stylizingLoading.value) {
@@ -1497,6 +1661,7 @@ const sseStream = useSSEStream({
     }
   },
   onMessageStart: (data) => {
+    streamDeltaBatcher.flush()
     nativeReasoningSeen.value = false
     Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
     const aid = String(data.assistant_message_id ?? '')
@@ -1513,18 +1678,28 @@ const sseStream = useSSEStream({
       ...(lf ? { langfuse_session_id: lf } : {}),
     }
   },
+  onStreamRollback: () => {
+    // LLM 重试/降级：失败尝试的部分流式输出整体作废——先冲刷批处理缓冲
+    // （失败增量可能还挂在批处理里），再丢弃尾部 text/reasoning parts
+    streamDeltaBatcher.flush()
+    patchLastAssistantParts((parts) => rollbackTrailingStreamParts(parts))
+  },
   onTextDelta: (text, parent_task_call_id) => {
     // 重试成功后后端不发 run-status:running，只有内容到达才标志恢复——清重试标记。
     if (retryingLabel.value && !parent_task_call_id) {
       retryingLabel.value = ''
     }
-    patchLastAssistantParts((parts) =>
-      nativeReasoningSeen.value
-        ? appendTextDelta(parts, text, parent_task_call_id)
-        : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parent_task_call_id),
-    )
+    streamDeltaBatcher.push({
+      kind: 'text',
+      data: text,
+      // 与 reducer 同口径归一（trim / 空串 → undefined），保证同语义 delta 落进同一桶
+      parentTaskCallId: parent_task_call_id?.trim() || undefined,
+      // push 时捕获拆分开关：reasoning-start 之后到达的 text 不再走 <think> 拆分
+      redactedThinking: !nativeReasoningSeen.value,
+    })
   },
   onRetrievalResults: (part) => {
+    streamDeltaBatcher.flush()
     patchLastAssistantParts((parts) => appendRetrievalPart(parts, part))
   },
   onReasoningStart: () => {
@@ -1536,9 +1711,14 @@ const sseStream = useSSEStream({
     if (retryingLabel.value && !parent_task_call_id) {
       retryingLabel.value = ''
     }
-    patchLastAssistantParts((parts) => appendReasoningDelta(parts, delta, parent_task_call_id))
+    streamDeltaBatcher.push({
+      kind: 'reasoning',
+      data: delta,
+      parentTaskCallId: parent_task_call_id?.trim() || undefined,
+    })
   },
   onReasoningEnd: (data) => {
+    streamDeltaBatcher.flush()
     const partId = typeof data.part_id === 'string' ? data.part_id : undefined
     const parentId = typeof data.parent_task_call_id === 'string'
       ? data.parent_task_call_id
@@ -1546,6 +1726,7 @@ const sseStream = useSSEStream({
     patchLastAssistantParts((parts) => completeReasoningPart(parts, partId, parentId))
   },
   onToolCall: (name, args, tool_call_id, parent_task_call_id, step_id) => {
+    streamDeltaBatcher.flush()
     patchLastAssistantParts((parts) =>
       upsertToolInputPart(parts, tool_call_id, name, args, parent_task_call_id, step_id),
     )
@@ -1557,12 +1738,14 @@ const sseStream = useSSEStream({
     }
   },
   onToolResult: (tool_call_id, payload) => {
+    streamDeltaBatcher.flush()
     patchLastAssistantParts((parts) => applyToolOutput(parts, tool_call_id, payload))
   },
   onCustomEvent: (eventType, data) => {
     if (eventType !== 'hitl-required') {
       return
     }
+    streamDeltaBatcher.flush()
     const interrupt_id = String(data.interrupt_id ?? '')
     const kind = String(data.kind ?? 'approval')
     const action_requests = Array.isArray(data.action_requests)
@@ -1589,6 +1772,8 @@ const sseStream = useSSEStream({
     )
   },
   onFinish: (detail) => {
+    // 终态前落缓冲：所有已到达 delta 先于终态投影（完成标记/停止通知）应用
+    streamDeltaBatcher.flush()
     stylizingLoading.value = false
     stopProcessingClock()
     // 整轮结束：触发当前回复的所有 compact 工具收起。
@@ -1676,6 +1861,7 @@ const sseStream = useSSEStream({
   },
   historyReady: (sessionId) => sessionHistoryReady.get(sessionId) ?? null,
   onError: (msg) => {
+    streamDeltaBatcher.flush()
     stylizingLoading.value = false
     stopProcessingClock()
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
@@ -1797,6 +1983,70 @@ const sendDisabled = computed(() => {
   return !inputTextString.value.trim()
 })
 
+/**
+ * 单按钮形态（与子 Agent 一致）：运行中且无可发送内容 → 停止当前 run；
+ * 有内容 → 发送（运行中发送自动进入待发队列）
+ */
+const composerStopMode = computed(() => stylizingLoading.value && sendDisabled.value)
+
+/* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ----
+   CRUD 走共享 composable（与子 Agent 抽屉同一份实现）；提交/终态衔接为主链路域语义 */
+
+const composerQueue = useFollowupQueue({
+  get: () => queuedComposerMessages.value,
+  set: (list) => (queuedComposerMessages.value = list),
+})
+const queuedComposerMessages = ref<string[]>([])
+
+// 队列属于当前对话上下文：会话切换即清空，避免跨会话误发
+// watch 声明在下方 qa_type 初始化之后（见该处说明）
+
+/** 编辑：文本回到输入框，从队列移除 */
+function editQueuedComposerMessage(index: number): void {
+  inputTextString.value = composerQueue.edit(index)
+}
+
+/** 立即发送：空闲直接发；运行中先停止当前 run，消息提为队首由终态 watcher 自动提交 */
+async function submitQueuedComposerNow(index: number): Promise<void> {
+  const message = queuedComposerMessages.value[index]
+  if (!message) {
+    return
+  }
+  if (stylizingLoading.value) {
+    const next = [...queuedComposerMessages.value]
+    next.splice(index, 1)
+    next.unshift(message)
+    queuedComposerMessages.value = next
+    await stopChatStream()
+    return
+  }
+  composerQueue.remove(index)
+  inputTextString.value = message
+  await handleCreateStylized()
+}
+
+/** run 终态：自动提交队首（等待期间新输入的文字排到队尾，不丢失） */
+async function flushNextQueuedComposerMessage(): Promise<void> {
+  const message = queuedComposerMessages.value[0]
+  if (!message) {
+    return
+  }
+  const currentInput = inputTextString.value.trim()
+  if (currentInput && currentInput !== message) {
+    queuedComposerMessages.value = [...queuedComposerMessages.value.slice(1), currentInput]
+  } else {
+    composerQueue.remove(0)
+  }
+  inputTextString.value = message
+  await handleCreateStylized()
+}
+
+watch(stylizingLoading, (loading) => {
+  if (!loading && queuedComposerMessages.value.length) {
+    void flushNextQueuedComposerMessage()
+  }
+})
+
 function clearComposerQueue() {
   pendingUploadFileInfoList.value = []
   businessStore.clear_file_list()
@@ -1852,6 +2102,9 @@ function appendConversationTurn(
   upload_file_key: ChatAttachmentItem[],
   send_text: string,
 ): string {
+  // 新 run 开始前落上一轮残留缓冲（正常路径 finish 已 drain，此处兜底），
+  // 避免旧 delta 在下方 ctx 重置后用错误解析状态回放
+  streamDeltaBatcher.flush()
   if (showDefaultPage.value) {
     conversationItems.value = []
     showDefaultPage.value = false
@@ -1944,9 +2197,17 @@ const handleCreateStylized = async (send_text = '', file_key = []) => {
   // 清空推荐列表
   suggested_array.value = []
 
-  // 若正在加载，则点击后恢复初始状态
+  // 运行中：无可发送内容 → 停止当前 run；有内容 → 进入待发队列，本轮结束后自动提交
   if (stylizingLoading.value) {
-    void stopChatStream()
+    if (composerStopMode.value) {
+      void stopChatStream()
+      return
+    }
+    const queued = inputTextString.value.trim()
+    if (queued) {
+      inputTextString.value = ''
+      queuedComposerMessages.value = [...queuedComposerMessages.value, queued]
+    }
     return
   }
 
@@ -2044,6 +2305,9 @@ async function scrollToLatestMessage(smooth = false) {
 }
 
 const placeholder = computed(() => {
+  if (stylizingLoading.value) {
+    return '继续输入以排队后续消息…'
+  }
   return composerPlaceholder(qa_type.value, uploadingOnSend.value)
 })
 
@@ -2238,7 +2502,6 @@ const handleResetState = () => {
 }
 handleResetState()
 
-
 // 会话列表右键菜单
 const sessionContextMenuShow = ref(false)
 const sessionContextMenuX = ref(0)
@@ -2431,6 +2694,11 @@ const rowProps = (row: TableItem) => {
       // 不能在网络请求期间继续显示上一会话的 pending HITL。
       activateChatMode(row.qa_type, row.chat_id, true)
 
+      // 历史会话点入与 URL 恢复是两条独立入口：这里同样要挂后台任务流，
+      // 否则右下角任务目录永远为空（聊天里的子 Agent 卡片走 toolPart 不依赖目录）
+      openCatalogStream(row.chat_id)
+      void refreshCatalogTasks(row.chat_id)
+
       // 标记会话已读
       void markSessionRead(row.chat_id).then(() => {
         const idx = tableData.value.findIndex((s) => s.chat_id === row.chat_id)
@@ -2448,7 +2716,7 @@ const rowProps = (row: TableItem) => {
         row,
         '',
       )
-      rebuildSessionStatsFromHistory()
+      await refreshSessionStats(row.chat_id)
 
       await replaceChatSessionUrl(row.chat_id)
       await scrollToLatestMessage(true)
@@ -2461,6 +2729,12 @@ const rowProps = (row: TableItem) => {
 
 // 默认选中的对话类型
 const qa_type = ref('COMMON_QA')
+
+// 待发队列的会话切换清空：watch 创建即求值 getter，必须声明在 qa_type
+// 初始化之后——原先与队列实现放在一起，getter 触发 TDZ 使整页 setup 崩溃
+watch(() => uuids.value[qa_type.value], () => {
+  queuedComposerMessages.value = []
+})
 
 function ensureActiveSessionId() {
   const qt = qa_type.value
@@ -2482,6 +2756,7 @@ const activateChatMode = (
   if (qa_type.value !== targetQaType) {
     suggested_array.value = []
     if (!fromHistorySelection) {
+      streamDeltaBatcher.clear()
       conversationItems.value = []
       showDefaultPage.value = true
       currentIndex.value = null
@@ -2504,6 +2779,11 @@ const activateChatMode = (
     sessionContext.value = null
     sessionContextSessionId.value = ''
     sessionContextIsLive.value = false
+    // 切类型新建：旧会话统计一并清空（resetComposingSurface 之外的
+    // 另一条回到新对话的路径，统计条同样不得残留）
+    sessionStats.value = null
+    // 回到新对话：旧会话的后台任务流与目录一并停掉
+    stopCatalogStream()
     selectedKbCollections.value = []
     kbSearchEnabled.value = true
     selectedModelId.value = ''
@@ -2612,10 +2892,8 @@ const handleClear = () => {
   }
 }
 
-const collapsed = useLocalStorage(
-  'collapsed-chat-menu',
-  ref(false),
-)
+/** 历史侧栏折叠态：与全局导航栏智枢 logo 的悬停开关共享同一实例 */
+const collapsed = chatHistorySiderCollapsed
 
 const { size: historySiderWidth, startResize: startHistorySiderResize } = usePaneResize({
   storageKey: 'noesis.chat.historySiderWidth',
@@ -2673,7 +2951,6 @@ function closeHistoryDrawer() {
 // 背景颜色 默认页面和内容页面动态调整
 const backgroundColorVariable = ref(cssVar(themeCssVar.bgElevated))
 
-
 // 添加一键滚动到底部功能的相关代码
 const showScrollToBottom = ref(false)
 const scrollThreshold = 1000 // 滚动超过100px时显示按钮
@@ -2694,6 +2971,7 @@ const checkScrollPosition = () => {
 // 新增：监听滚动事件
 const handleScroll = () => {
   checkScrollPosition()
+  updateActiveUserTick()
 }
 
 // 在 onMounted 或 onBeforeMount 中添加事件监听
@@ -2709,6 +2987,7 @@ onBeforeUnmount(() => {
   stopCatalogStream()
   stopUserSignalStream()
   stopProcessingClock()
+  streamDeltaBatcher.dispose()
   // 停止信令流：SPA 内路由切换不会断开 fetch 连接，必须显式中止
   sseStream.stopSessionSignals()
   if (messagesContainer.value) {
@@ -2839,7 +3118,6 @@ function onComposerPaste(e: ClipboardEvent) {
         :collapsed-width="0"
         :width="historySiderWidth"
         :show-collapsed-content="false"
-        show-trigger="arrow-circle"
         bordered
       >
         <ChatHistoryPanel
@@ -2896,12 +3174,66 @@ function onComposerPaste(e: ClipboardEvent) {
                   :background-color="backgroundColorVariable"
                 />
                 <div class="chat-top-bar__mode">
+                  <!-- 多会话并发：切换模式=新开会话，不因当前会话生成中而置灰 -->
                   <ChatModeSelector
                     :qa-type="qa_type"
-                    :disabled="sseIsLoading"
                     @select="changeChatMode"
                   />
                 </div>
+
+                <!-- 移动端：后台子任务与展示模式切换从输入工具栏上移到顶栏，缓解底部拥挤 -->
+                <div v-if="isMobile" class="chat-top-bar__actions">
+                  <n-tooltip v-if="qa_type === 'SUPER_AGENT_QA'" placement="bottom">
+                    <template #trigger>
+                      <n-badge
+                        :value="activeTaskCount"
+                        :max="9"
+                        :type="pendingTaskCount > 0 ? 'error' : 'info'"
+                        :show="activeTaskCount > 0"
+                      >
+                        <n-button
+                          quaternary
+                          circle
+                          size="small"
+                          :focusable="false"
+                          @click="taskPanelOpen = true"
+                        >
+                          <template #icon>
+                            <n-icon size="16">
+                              <GitNetworkOutline />
+                            </n-icon>
+                          </template>
+                        </n-button>
+                      </n-badge>
+                    </template>
+                    后台子任务
+                  </n-tooltip>
+
+                  <n-tooltip placement="bottom">
+                    <template #trigger>
+                      <n-button
+                        quaternary
+                        circle
+                        size="small"
+                        class="tool-mode-toggle"
+                        :focusable="false"
+                        @click="toggleToolDisplayMode()"
+                      >
+                        <template #icon>
+                          <n-icon size="16">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <line x1="4" y1="6" x2="20" y2="6" />
+                              <line x1="4" y1="12" x2="14" y2="12" />
+                              <line x1="4" y1="18" x2="18" y2="18" />
+                            </svg>
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    {{ toolDisplayMode === 'compact' ? '简洁模式（点击切详细）' : '详细模式（点击切简洁）' }}
+                  </n-tooltip>
+                </div>
+
                 <button
                   v-if="!showDefaultPage && uuids[qa_type]"
                   type="button"
@@ -2965,7 +3297,7 @@ function onComposerPaste(e: ClipboardEvent) {
                         </button>
                       </div>
                     </div>
-                    <div v-else-if="item.role === 'user'" class="chat-user-message-row flex flex-col space-y-2 w-full">
+                    <div v-else-if="item.role === 'user'" :data-user-message-index="index" class="chat-user-message-row flex flex-col space-y-2 w-full">
                       <div class="chat-message-column chat-user-message-column">
                         <!-- 用户消息 -->
                         <div class="chat-user-message">
@@ -3073,156 +3405,35 @@ function onComposerPaste(e: ClipboardEvent) {
                       <template v-if="item.messageContent?.version === 1">
                         <div class="chat-message-column assistant-message-column">
                           <!-- Codex 风格的整轮过程摘要：放在回复卡片上方。 -->
-                          <div
+                          <RunMetaLine
                             v-if="runElapsedText(item) || shouldCollapseAssistantRun(item) || assistantSubagentCount(item) > 0"
-                            class="assistant-run-meta"
-                          >
-                            <button
-                              v-if="shouldCollapseAssistantRun(item)"
-                              type="button"
-                              class="assistant-run-meta__toggle"
-                              :aria-expanded="isAssistantRunExpanded(item)"
-                              @click="toggleAssistantRun(item)"
-                            >
-                              <span>{{ runElapsedText(item) }}</span>
-                              <span
-                                class="assistant-run-meta__chevron"
-                                :class="{ 'assistant-run-meta__chevron--expanded': isAssistantRunExpanded(item) }"
-                                aria-hidden="true"
-                              >›</span>
-                            </button>
-                            <span v-else class="assistant-run-meta__elapsed">{{ runElapsedText(item) }}</span>
-                            <span v-if="assistantSubagentCount(item) > 0" class="assistant-run-meta__subagents">
-                              · {{ assistantSubagentCount(item) }} 个子 Agent
-                            </span>
-                          </div>
+                            :elapsed="runElapsedText(item)"
+                            :collapsible="shouldCollapseAssistantRun(item)"
+                            :expanded="isAssistantRunExpanded(item)"
+                            :suffix="assistantSubagentCount(item) > 0 ? `· ${assistantSubagentCount(item)} 个子 Agent` : ''"
+                            @toggle="toggleAssistantRun(item)"
+                          />
                           <div class="assistant-unified-card">
                             <ConversationPartsRenderer
-                              v-if="canUseSharedConversationRenderer(item)"
                               :content="item.messageContent"
                               appearance="light"
                               :collapse-signal="runCollapseSignal"
-                              :retrieval-results="retrievedResults(item.messageContent.parts)"
+                              :retrieval-results="messageRetrievalResults(item)"
+                              :citation-index="arcCitationIndex(item)"
                               :msg-metadata="item.msg_metadata"
                               :qa-type="item.qa_type || 'COMMON_QA'"
+                              :task-for-tool-part="backgroundTaskForToolPart"
+                              :compact-tools="toolDisplayMode === 'compact'"
+                              :live-streaming="!item.completed_at"
+                              :collapsed="shouldCollapseAssistantRun(item) && !isAssistantRunExpanded(item)"
+                              :is-init="isInit"
+                              :is-view="isView"
+                              :show-action-bar="false"
+                              @reader-failed="() => onFailedReader(index)"
                             />
-                            <template
-                              v-else
-                            >
-                              <template
-                                v-for="(entry, pi) in assistantDisplayParts(item)"
-                                :key="entryKey(entry, pi)"
-                              >
-                                <ReasoningBlock
-                                  v-if="entry.kind === 'part' && entry.part.type === 'reasoning' && (entry.part.content || entry.part.status === 'streaming')"
-                                  :reasoning="entry.part.content"
-                                  :defaultOpen="false"
-                                  :streaming="entry.part.status === 'streaming'"
-                                  appearance="light"
-                                  :collapse-signal="runCollapseSignal"
-                                />
-                                <SubagentCollapse
-                                  v-else-if="entry.kind === 'subagent'"
-                                  appearance="light"
-                                  :input="entry.part.input"
-                                  :output="entry.part.output"
-                                  :status="entry.part.status"
-                                  :state="entry.part.state"
-                                  :error="entry.part.error"
-                                  :duration-ms="entry.part.duration_ms"
-                                  :child-parts="entry.childParts"
-                                />
-                                <div
-                                  v-else-if="entry.kind === 'parallel_tools'"
-                                  class="parallel-tools-group parallel-tools-group--light"
-                                  :class="{ 'parallel-tools-group--compact': toolDisplayMode === 'compact' }"
-                                >
-                                  <n-collapse>
-                                    <!-- 流式中展开看进度，回复完成（completed_at）后收起；key 随完成态变化触发重渲染（default-expanded 仅首渲染生效） -->
-                                    <n-collapse-item
-                                      :key="`ptg-${item.completed_at ? 'done' : 'live'}-${runCollapseSignal}`"
-                                      name="parallel-tools"
-                                      :default-expanded="!item.completed_at"
-                                    >
-                                      <template #header>
-                                        <div class="parallel-tools-group__header">
-                                          并行工具 · {{ entry.parts.length }} 个
-                                        </div>
-                                      </template>
-                                      <div class="parallel-tools-group__body">
-                                        <ToolCallCollapse
-                                          v-for="tp in entry.parts"
-                                          :key="tp.tool_call_id ?? tp.id"
-                                          appearance="light"
-                                          :name="tp.name"
-                                          :arguments="tp.input"
-                                          :result="tp.output"
-                                          :error="tp.error"
-                                          :status="tp.status"
-                                          :state="tp.state"
-                                          :error-category="tp.errorCategory"
-                                          :exit-code="tp.exit_code"
-                                          :truncated="tp.truncated"
-                                          :duration-ms="tp.duration_ms"
-                                          :collapse-signal="runCollapseSignal"
-                                        />
-                                      </div>
-                                    </n-collapse-item>
-                                  </n-collapse>
-                                </div>
-                                <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
-                                  <BackgroundSubagentCollapse
-                                    v-if="entry.part.name === 'start_task'"
-                                    :tool-part="entry.part"
-                                    :task="backgroundTaskForToolPart(entry.part)"
-                                  />
-                                  <ToolCallCollapse
-                                    v-else
-                                    appearance="light"
-                                    :name="entry.part.name"
-                                    :arguments="entry.part.input"
-                                    :result="entry.part.output"
-                                    :error="entry.part.error"
-                                    :status="entry.part.status"
-                                    :state="entry.part.state"
-                                    :error-category="entry.part.errorCategory"
-                                    :exit-code="entry.part.exit_code"
-                                    :truncated="entry.part.truncated"
-                                    :duration-ms="entry.part.duration_ms"
-                                    :collapse-signal="runCollapseSignal"
-                                  />
-                                </template>
-                                <div
-                                  v-if="entry.kind === 'part' && entry.part.type === 'text' && entry.part.content === COMPACTION_BOUNDARY"
-                                  class="compact-boundary"
-                                  role="separator"
-                                >
-                                  <span class="compact-boundary__text">以上对话已压缩摘要</span>
-                                </div>
-                                <MarkdownPreview
-                                  v-else-if="entry.kind === 'part' && entry.part.type === 'text'"
-                                  :content="entry.part.content || ''"
-                                  :retrieval-results="retrievedResults(item.messageContent.parts)"
-                                  :toolCalls="null"
-                                  :msgMetadata="item.msg_metadata"
-                                  :isInit="isInit"
-                                  :isView="isView"
-                                  :show-action-bar="false"
-                                  variant="segment"
-                                  :qa-type="item.qa_type || 'COMMON_QA'"
-                                  :parentScollBottomMethod="scrollToBottom"
-                                  @failed="() => onFailedReader(index)"
-                                />
-                              </template>
-                            </template>
-                            <div
+                            <AssistantToolFailureBlocker
                               v-if="shouldShowAssistantToolFailureBlocker(item.messageContent.parts, showAssistantReplyLoading(index, item.role))"
-                              class="assistant-tool-failure-blocker"
-                              role="status"
-                            >
-                              <span class="assistant-tool-failure-blocker__icon" aria-hidden="true">!</span>
-                              <span>本轮未完成</span>
-                            </div>
+                            />
                             <AssistantStreamingIndicator
                               v-if="showAssistantReplyLoading(index, item.role)"
                               data-testid="streaming-indicator"
@@ -3243,10 +3454,11 @@ function onComposerPaste(e: ClipboardEvent) {
                               :langfuse-ui-origin="langfuseUiOrigin"
                             >
                               <template #meta>
-                                <CitationSources
-                                  v-if="retrievedResults(item.messageContent.parts).length"
-                                  :ref="(component) => setCitationSourcesRef(citationSourcesKey(item, index), component)"
-                                  :results="retrievedResults(item.messageContent.parts)"
+                                <ResearchSourcesPanel
+                                  v-if="arcPanelFor(item)"
+                                  :entries="arcPanelFor(item)!.entries"
+                                  :cited-keys="arcPanelFor(item)!.citedKeys"
+                                  :numbers="arcPanelFor(item)!.numbers"
                                 />
                               </template>
                             </AssistantReplyToolbar>
@@ -3362,6 +3574,15 @@ function onComposerPaste(e: ClipboardEvent) {
                         @chatImageUploaded="onChatImageUploaded"
                       />
 
+                      <!-- 待发队列：运行中发送的消息在此排队，当前 run 终态后逐条自动提交（与子 Agent 抽屉同构） -->
+                      <FollowupQueue
+                        :messages="queuedComposerMessages"
+                        @remove="composerQueue.remove"
+                        @edit="editQueuedComposerMessage"
+                        @send-now="submitQueuedComposerNow"
+                        @reorder="composerQueue.reorder"
+                      />
+
                       <MentionPicker
                         ref="mentionPickerRef"
                         :open="mentionPickerOpen"
@@ -3396,6 +3617,7 @@ function onComposerPaste(e: ClipboardEvent) {
 
                       <ChatComposerToolbar
                         v-model:model-id="selectedModelId"
+                        v-model:reasoning-effort="selectedReasoningEffort"
                         v-model:kb-collections="selectedKbCollections"
                         v-model:kb-search-enabled="kbSearchEnabled"
                         v-model:mcp-servers="selectedMcpServers"
@@ -3414,7 +3636,7 @@ function onComposerPaste(e: ClipboardEvent) {
                             :context="sessionContext!"
                           />
 
-                          <n-tooltip v-if="qa_type === 'SUPER_AGENT_QA'" placement="top">
+                          <n-tooltip v-if="!isMobile && qa_type === 'SUPER_AGENT_QA'" placement="top">
                             <template #trigger>
                               <n-badge
                                 :value="activeTaskCount"
@@ -3441,7 +3663,7 @@ function onComposerPaste(e: ClipboardEvent) {
                             后台子任务
                           </n-tooltip>
 
-                          <n-tooltip placement="top">
+                          <n-tooltip v-if="!isMobile" placement="top">
                             <template #trigger>
                               <n-button
                                 quaternary
@@ -3465,53 +3687,64 @@ function onComposerPaste(e: ClipboardEvent) {
                             {{ toolDisplayMode === 'compact' ? '简洁模式（点击切详细）' : '详细模式（点击切简洁）' }}
                           </n-tooltip>
 
-                          <div class="chat-send-btn-wrap shrink-0">
-                            <n-tooltip
-                              :disabled="!stylizingLoading"
-                              placement="top"
-                            >
-                              <template #trigger>
-                                <n-float-button
-                                  position="relative"
-                                  :width="36"
-                                  :height="36"
-                                  :disabled="!stylizingLoading && sendDisabled"
-                                  :type="stylizingLoading ? 'primary' : 'default'"
-                                  :data-testid="stylizingLoading ? 'stop-button' : 'send-button'"
-                                  color
-                                  :class="[
-                                    'chat-send-btn',
-                                    stylizingLoading && 'chat-send-btn--stop',
-                                  ]"
-                                  @click.stop="handleCreateStylized()"
-                                >
-                                  <span
-                                    v-if="stylizingLoading"
-                                    class="chat-stop-icon"
-                                    aria-label="停止生成"
-                                  ></span>
-                                  <div
-                                    v-else
-                                    class="flex items-center justify-center i-mingcute:send-fill text-20 cursor-pointer transition-colors duration-300 hover:c-primary/80"
-                                  ></div>
-                                </n-float-button>
-                              </template>
-                              停止生成
-                            </n-tooltip>
-                          </div>
+                          <n-tooltip
+                            :disabled="!composerStopMode"
+                            placement="top"
+                          >
+                            <template #trigger>
+                              <StopSendButton
+                                class="shrink-0"
+                                :stop-mode="composerStopMode"
+                                :send-disabled="sendDisabled"
+                                @action="handleCreateStylized()"
+                              />
+                            </template>
+                            停止生成
+                          </n-tooltip>
                         </template>
                       </ChatComposerToolbar>
                     </div>
                   </n-space>
                 </div>
               </div>
-              <div
+              <SessionStatsLine
                 v-if="sessionStats && formatStatsLine(sessionStats, statsLineTemplate)"
-                class="session-stats-line"
-                role="status"
-                aria-live="polite"
-              >
-                {{ formatStatsLine(sessionStats, statsLineTemplate) }}
+                class="chat__stats-line"
+                :line="formatStatsLine(sessionStats, statsLineTemplate)"
+              />
+            </div>
+
+            <!-- 桌面端左缘用户消息导航轨：等间距居中刻度，点击跳转；浮动预览卡片跟随悬停/当前项 -->
+            <div
+              v-if="!isMobile && !showDefaultPage && userMessageTicks.length >= 2"
+              ref="userMessageRailRef"
+              class="user-message-rail"
+              @mousemove="onRailPointerMove"
+              @mouseleave="onRailLeave"
+            >
+              <div :ref="bindUserMessageRailViewport" class="user-message-rail__viewport">
+                <div class="user-message-rail__list" :style="{ gap: `${tickGap}px` }">
+                  <div
+                    v-for="tick in userMessageTicks"
+                    :key="tick.index"
+                    :data-tick-index="tick.index"
+                    class="user-message-rail__item"
+                    :class="{ 'user-message-rail__item--active': tick.index === activeUserTickIndex }"
+                    @mouseenter="onRailTickHover(tick.index)"
+                  >
+                    <button
+                      type="button"
+                      class="user-message-rail__tick"
+                      :aria-label="`跳转到用户消息：${tick.title}`"
+                      @click="scrollToUserMessage(tick.index)"
+                    ></button>
+                  </div>
+                </div>
+              </div>
+              <!-- 卡片渲染在滚动视口外，避免被 overflow 裁切 -->
+              <div v-if="railCard" class="user-message-rail__card" :style="{ top: `${railCard.top}px` }">
+                <strong class="user-message-rail__card-title">{{ railCard.tick.title }}</strong>
+                <span class="user-message-rail__card-meta">{{ railCard.tick.meta }}</span>
               </div>
             </div>
           </div>
@@ -3531,6 +3764,7 @@ function onComposerPaste(e: ClipboardEvent) {
               ref="sessionFilesPanelRef"
               :session-id="uuids[qa_type] || ''"
               :background-color="backgroundColorVariable"
+              :citation-index-by-file="arcCitationIndexByFile"
             />
           </aside>
         </div>
@@ -3597,6 +3831,7 @@ function onComposerPaste(e: ClipboardEvent) {
           ref="sessionFilesPanelRef"
           :session-id="uuids[qa_type] || ''"
           :background-color="backgroundColorVariable"
+          :citation-index-by-file="arcCitationIndexByFile"
         />
       </n-drawer-content>
     </n-drawer>
@@ -3738,30 +3973,6 @@ function onComposerPaste(e: ClipboardEvent) {
   }
 }
 
-.assistant-tool-failure-blocker {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 7px 2px 3px;
-  color: var(--noesis-color-text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.assistant-tool-failure-blocker__icon {
-  display: inline-flex;
-  flex: 0 0 16px;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  color: var(--noesis-color-warning);
-  font-size: 11px;
-  font-weight: 700;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-}
-
 .chat-composer--dragover {
   border-color: var(--noesis-color-primary);
   background: var(--noesis-color-primary-bg-subtle);
@@ -3783,29 +3994,6 @@ function onComposerPaste(e: ClipboardEvent) {
 
 .chat-composer-row {
   min-height: 36px;
-}
-
-.chat-send-btn-wrap {
-  z-index: 1;
-  display: flex;
-  align-items: center;
-}
-
-.chat-send-btn-wrap :deep(.n-float-button) {
-  position: relative !important;
-  inset: auto !important;
-}
-
-.chat-send-btn--stop {
-  box-shadow: 0 0 0 2px var(--noesis-color-primary-ring);
-}
-
-.chat-stop-icon {
-  display: block;
-  width: 12px;
-  height: 12px;
-  background-color: var(--noesis-color-bg-elevated);
-  border-radius: 2px;
 }
 
 .chat-history-sider {
@@ -3838,34 +4026,6 @@ function onComposerPaste(e: ClipboardEvent) {
   height: 8px;
   border-radius: 50%;
   background: var(--noesis-color-primary);
-}
-
-.compact-boundary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  box-sizing: border-box;
-  margin: 14px 0;
-  padding: 8px 12px;
-  border: 1px dashed var(--noesis-color-primary-muted);
-  border-radius: var(--noesis-radius-sm);
-  background: var(--noesis-color-primary-bg-subtle);
-  color: var(--noesis-color-text-tertiary);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.compact-boundary::before,
-.compact-boundary::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--noesis-color-border-subtle);
-}
-
-.compact-boundary__text {
-  white-space: nowrap;
 }
 
 /* 聊天记录侧栏折叠钮 — 使用 Naive 右缘定位，仅对齐主题色 */
@@ -3973,6 +4133,108 @@ function onComposerPaste(e: ClipboardEvent) {
    按钮须跟随会话列居中，而不是跨全宽的外层布局 */
 .chat-main-inner {
   position: relative;
+}
+
+/* ── 用户消息导航轨：左缘竖排等间距刻度（垂直居中，从中间向上下扩散），浮动预览卡片 ── */
+.user-message-rail {
+  position: absolute;
+  top: 64px;
+  bottom: 190px;
+  left: 2px;
+  z-index: 6;
+  width: 26px;
+}
+
+/* 滚动视口：条数超出高度时可滚动（隐藏滚动条） */
+.user-message-rail__viewport {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.user-message-rail__viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/* margin auto：条数少时垂直居中；超出轨道高度时自然可滚动（flex 居中溢出裁切的规避写法） */
+.user-message-rail__list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-block: auto;
+}
+
+.user-message-rail__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 8px;
+}
+
+.user-message-rail__tick {
+  width: 26px;
+  height: 8px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* 邻近感应：--near 由 mousemove 按与指针的距离写入 [0,1]，刻度长度与颜色随距离衰减；
+   峰值（指针正下方的刻度）拉到与选中刻度等长 26px、趋近主色，滑动时反馈更直观 */
+.user-message-rail__tick::before {
+  content: '';
+  display: block;
+  width: calc(10px + var(--near, 0) * 16px);
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--noesis-color-primary, #111) calc(var(--near, 0) * 100%), var(--noesis-color-border, #d4d0c8));
+  transition: width 0.12s ease;
+}
+
+/* 当前项：加长加粗的主色刻度，与普通刻度拉开明显区分度 */
+.user-message-rail__item--active .user-message-rail__tick::before {
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--noesis-color-primary, #111);
+}
+
+/* 浮动预览卡片：渲染在滚动视口外（inline top 由 JS 按目标刻度定位）；
+   Codex 风格：消息双行截断 + 灰色「第 N 轮 · 时间」，小圆角、仅描边无投影 */
+.user-message-rail__card {
+  position: absolute;
+  left: 30px;
+  width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--noesis-color-border, rgb(0 0 0 / 9%));
+  border-radius: 6px;
+  background: var(--noesis-color-bg-elevated, #fff);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+/* 标题 = 用户消息扁平文本，双行截断：两行内容足够传达意图 */
+.user-message-rail__card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--noesis-color-text, #111);
+  word-break: break-all;
+}
+
+.user-message-rail__card-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--noesis-color-text-secondary, #8a8a8a);
 }
 
 .session-context-aside {
@@ -4211,64 +4473,14 @@ function onComposerPaste(e: ClipboardEvent) {
   pointer-events: none;
 }
 
-.session-stats-line {
+.chat__stats-line {
   box-sizing: border-box;
   width: 100%;
   padding: 2px 16px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
   letter-spacing: 0.01em;
-  text-align: center;
 }
 
 /* Codex 风格的整轮过程摘要入口 */
-.assistant-run-meta {
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-  position: relative;
-  z-index: 1;
-  margin-bottom: 6px;
-  padding: 0 2px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--noesis-color-text-hint);
-  letter-spacing: 0.01em;
-}
-.assistant-run-meta__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--noesis-color-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-  cursor: pointer;
-  transition: color 0.15s ease;
-}
-.assistant-run-meta__toggle:hover {
-  color: var(--noesis-color-text);
-}
-.assistant-run-meta__chevron {
-  display: inline-block;
-  font-size: 16px;
-  line-height: 12px;
-  transform: translateY(-1px);
-  transition: transform 0.15s ease;
-}
-.assistant-run-meta__chevron--expanded {
-  transform: translateY(-1px) rotate(90deg);
-}
-
-.assistant-run-meta__subagents {
-  margin-left: 8px;
-  color: var(--noesis-color-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
 .assistant-message-actions {
   display: flex;
   align-items: center;
@@ -4290,24 +4502,6 @@ function onComposerPaste(e: ClipboardEvent) {
   border-radius: 16px;
   overflow: visible;
   box-shadow: var(--noesis-shadow-sm);
-}
-
-.parallel-tools-group--light {
-  margin: 5px 0;
-  padding: 6px 10px;
-  border: 1px solid var(--noesis-block-light-border);
-  border-left: 3px solid var(--noesis-block-light-accent);
-  border-radius: var(--noesis-radius-md);
-  background: var(--noesis-block-light-bg);
-}
-
-/* 简洁模式与普通工具行共用同一条无框 disclosure 轨道。 */
-.parallel-tools-group--compact {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
 }
 
 .chat-system-notice-row {
@@ -4397,56 +4591,6 @@ function onComposerPaste(e: ClipboardEvent) {
   }
 }
 
-.parallel-tools-group--compact :deep(.n-collapse-item__header) {
-  min-height: 0;
-  padding: 1px 0 !important;
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__header-main) {
-  min-width: 0;
-}
-
-.parallel-tools-group--compact :deep(.n-collapse-item__content-wrapper) {
-  border-top: none;
-}
-
-.parallel-tools-group--compact .parallel-tools-group__header {
-  min-height: 24px;
-  line-height: 24px;
-}
-
-.parallel-tools-group__header {
-  display: flex;
-  align-items: center;
-  min-height: 22px;
-  width: 100%;
-  font-size: 12px;
-  color: var(--noesis-color-text-secondary);
-}
-
-.parallel-tools-group :deep(.n-collapse-item__header) {
-  padding: 0 !important;
-}
-
-.parallel-tools-group :deep(.n-collapse-item__content-inner) {
-  padding: 0 !important;
-}
-
-.parallel-tools-group :deep(.n-collapse-item__content-wrapper) {
-  border-top: 1px solid var(--noesis-block-light-divider);
-}
-
-.parallel-tools-group__body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.parallel-tools-group__body :deep(.tool-call--light) {
-  margin: 0;
-  box-shadow: none;
-}
-
 .chat-top-bar {
   flex-shrink: 0;
   gap: 8px;
@@ -4459,6 +4603,13 @@ function onComposerPaste(e: ClipboardEvent) {
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
+}
+
+.chat-top-bar__actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
 }
 
 .history-drawer-toggle {
@@ -4527,6 +4678,7 @@ function onComposerPaste(e: ClipboardEvent) {
 
   .chat-user-message-actions {
     width: 100%;
+    margin-top: 4px;
     margin-left: 0;
     margin-right: 0;
   }
@@ -4551,14 +4703,25 @@ function onComposerPaste(e: ClipboardEvent) {
 
 @media (max-width: $bp-md) {
   .chat-top-bar {
+    position: relative;
     min-height: 48px;
     padding: 7px 8px;
     border-bottom: 1px solid var(--noesis-color-border-subtle);
+    justify-content: flex-start;
   }
 
+  /* 任务选择器绝对居中：不受左右两侧图标宽度差影响 */
   .chat-top-bar__mode {
-    flex: 1;
-    padding-right: 32px;
+    position: absolute;
+    left: 50%;
+    flex: none;
+    padding-right: 0;
+    transform: translateX(-50%);
+  }
+
+  /* 选择器移出文档流后，右侧动作组收拢到右缘（与文件区开关连排） */
+  .chat-top-bar__actions {
+    margin-left: auto;
   }
 
   .chat-input-footer {

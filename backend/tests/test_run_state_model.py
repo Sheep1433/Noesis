@@ -107,7 +107,6 @@ def test_run_projection_preserves_retrieval_results() -> None:
         "url": "https://example.com/source",
         "title": "Example source",
         "excerpt": "Source excerpt",
-        "citable": True,
     }
     projection.apply(WireFrame("retrieval-results-available", {
         "tool_call_id": "call-search",
@@ -124,3 +123,40 @@ def test_run_projection_preserves_retrieval_results() -> None:
     assert retrieval["results"][0]["evidence_id"].startswith("ev_")
     assert retrieval["results"][0]["tool_call_ids"] == ["call-search"]
     assert text["content"] == "A supported statement."
+
+
+def test_run_projection_rolls_back_stream_on_rollback_frame() -> None:
+    """stream-rollback 帧（LLM 重试/降级）：失败尝试的部分流式输出不进落库投影。"""
+    projection = RunProjection(
+        run_id="run-rollback",
+        user_id="user-1",
+        session_id="session-1",
+        assistant_message_id="message-1",
+        qa_type="SUPER_AGENT_QA",
+    )
+    projection.apply(WireFrame("text-delta", {"text_delta": "第一段正文。"}))
+    projection.apply(WireFrame("tool-input-available", {
+        "tool_call_id": "c1",
+        "tool_name": "web_search",
+        "input": {"query": "q"},
+    }))
+    projection.apply(WireFrame("tool-output-available", {
+        "tool_call_id": "c1",
+        "tool_name": "web_search",
+        "output": "ok",
+        "status": "success",
+    }))
+    # 失败尝试的部分流式输出（重试前的正文与思考）
+    projection.apply(WireFrame("reasoning-delta", {"text_delta": "Now Phase 6:"}))
+    projection.apply(WireFrame("text-delta", {"text_delta": "Phase 3-5 完成。"}))
+    # 重试信号：回滚
+    projection.apply(WireFrame("stream-rollback", {"message_id": "message-1", "scope": "model_attempt"}))
+    # 重试成功后的新输出
+    projection.apply(WireFrame("text-delta", {"text_delta": "重试后的正文。"}))
+
+    parts = projection.persisted_snapshot()["parts"]
+    types = [part["type"] for part in parts]
+    # 失败尝试的 reasoning/text 已丢弃，工具边界与重试后的正文保留
+    assert types == ["text", "tool", "text"]
+    assert parts[0]["content"] == "第一段正文。"
+    assert parts[2]["content"] == "重试后的正文。"

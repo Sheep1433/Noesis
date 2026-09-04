@@ -11,6 +11,7 @@ from deepagents.backends.protocol import (
     BackendProtocol,
     EditResult,
     FileDownloadResponse,
+    FileInfo,
     FileUploadResponse,
     GlobResult,
     GrepResult,
@@ -67,6 +68,35 @@ def _readable(key: str) -> bool:
 def _writable(key: str) -> bool:
     name = key.lstrip("/")
     return name in _ROOT_FILES or _is_entry(key)
+
+
+def is_memory_writable_path(path: str) -> bool:
+    """agent 可见路径是否在记忆写入白名单内（根文件 + 五类条目目录）。
+
+    HITL 的 memory_write_when 据此判定：白名单外的 /memory 写入不触发
+    审批——guard 必然拒绝，让模型直接收到拒绝反馈，而不是让用户批准
+    一笔注定失败的写入。入参是 agent 可见的完整路径（含 /memory 前缀），
+    这里先归一化并剥掉路由前缀，与 CompositeBackend 派发到 memory
+    backend 时的路径形态一致。
+    """
+    from noesis.agents.backends.paths import AGENT_MEMORY_ROUTE, canonicalize_agent_path
+
+    raw = (path or "").strip()
+    if not raw:
+        return False
+    try:
+        normalized = canonicalize_agent_path(raw)
+    except ValueError:
+        return False
+    root = AGENT_MEMORY_ROUTE.rstrip("/")
+    prefix = root + "/"
+    if normalized == root:
+        key = "/"
+    elif normalized.startswith(prefix):
+        key = "/" + normalized[len(prefix):]
+    else:
+        return False
+    return _writable(_memory_key(key))
 
 
 class GuardedFilesystemBackend(BackendProtocol):
@@ -212,12 +242,15 @@ class GuardedFilesystemBackend(BackendProtocol):
         return GrepResult(matches=matches[:50])
 
     def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """按 FileInfo 契约返回（deepagents CompositeBackend 对路由命中路径
+        做 _remap_file_info_path 字典重映射，裸字符串会 TypeError——
+        /memory 上的 glob 曾因此 9ms 即败且归类 unknown）。"""
         base = _memory_key(path)
         wanted = pattern.lstrip("/")
-        matches = ["/MEMORY.md"]
+        matches: list[FileInfo] = [{"path": "/MEMORY.md", "type": "file"}]
         for type_dir in _TYPE_DIRS:
             for file_path in MemoryStore.memory_root(self._user_id).joinpath(type_dir).glob(wanted or "*.md"):
-                matches.append(f"/{type_dir}/{file_path.name}")
+                matches.append({"path": f"/{type_dir}/{file_path.name}", "type": "file"})
         return GlobResult(matches=matches[:100])
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
@@ -260,4 +293,4 @@ def UserMemoryBackend(*, agents_path: Path, user_path: Path, user_id: str | None
     )
 
 
-__all__ = ["GuardedFilesystemBackend", "UserMemoryBackend"]
+__all__ = ["GuardedFilesystemBackend", "UserMemoryBackend", "is_memory_writable_path"]

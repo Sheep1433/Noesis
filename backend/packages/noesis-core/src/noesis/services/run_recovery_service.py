@@ -40,6 +40,11 @@ class RunRecoveryService:
         repository = AgentRunRepository(db)
         recovered = 0
         for run in await repository.list_non_terminal():
+            # 子 Agent run 由 SubagentSessionService.reconcile_orphaned_runs
+            # 统一对账（ERROR/SUBAGENT_PROCESS_RESTARTED——executor 状态在进程内，
+            # 重启即不可恢复）；此处收口会与其终态语义按调用顺序隐式切分。
+            if run.origin == "subagent":
+                continue
             if run.status == RunStatus.QUEUED.value and not run.owner_instance_id:
                 continue  # 未 claim 的 queued Run 跨重启存活，交给 dispatcher
             if (
@@ -49,38 +54,64 @@ class RunRecoveryService:
                 # 本任期 claim 的 Run：新 leader 上任时不可能出现（本方法只在
                 # 启动早期执行），防御性跳过避免误杀刚 claim 的行
                 continue
+            # 字段先固化：后续 UPDATE 落空会使 ORM 属性过期
+            run_id = run.id
+            run_last_sequence = run.last_sequence
+            run_snapshot = run.snapshot if isinstance(run.snapshot, dict) else {}
+            now = int(time.time() * 1000)
+            terminal = dict(
+                target=RunStatus.INTERRUPTED,
+                finished_at=now,
+                finish_reason="server_restart",
+                error_code="SERVER_RESTART",
+                user_error_message="服务重启，本轮已中断",
+            )
             message_result = await db.execute(
                 select(TChatMessage).where(TChatMessage.id == run.assistant_message_id)
             )
             message = message_result.scalar_one_or_none()
-            content = mark_running_tools_unknown(
-                message.content if message is not None and isinstance(message.content, dict) else run.snapshot
-            )
-            finalized = await repository.finalize(
-                run_id=run.id,
-                target=RunStatus.INTERRUPTED,
-                assistant_status="partial",
-                content=content,
-                last_sequence=run.last_sequence,
-                finished_at=int(time.time() * 1000),
-                finish_reason="server_restart",
-                error_code="SERVER_RESTART",
-                user_error_message="服务重启，本轮已中断",
-                snapshot=content,
-            )
+            if message is None or message.status != "streaming":
+                # 历史脏数据（消息终态写入方未同步收口 run，如 automation/channel
+                # 链路）：仅收口 run 行、不动消息，下次启动不再重复对账。启动
+                # 对账持有 leader 锁且先于 dispatcher/scheduler/channel 启动，
+                # SELECT 即权威，无需 CAS 兜底。
+                finalized = await repository.finalize_run_only(
+                    run_id=run_id,
+                    snapshot=run_snapshot,
+                    last_sequence=run_last_sequence,
+                    **terminal,
+                )
+                if finalized:
+                    logger.warning(
+                        "启动恢复：run {} 的 assistant 消息已终态或缺失，仅收口 run 行 "
+                        "(消息终态写入方未同步收口 run，属历史脏数据)",
+                        run_id,
+                    )
+            else:
+                content = mark_running_tools_unknown(
+                    message.content if isinstance(message.content, dict) else run_snapshot
+                )
+                finalized = await repository.finalize(
+                    run_id=run_id,
+                    assistant_status="partial",
+                    content=content,
+                    last_sequence=run_last_sequence,
+                    snapshot=content,
+                    **terminal,
+                )
             if finalized:
                 await db.execute(
                     TAgentDelivery.__table__.update()
                     .where(
-                        TAgentDelivery.run_id == run.id,
+                        TAgentDelivery.run_id == run_id,
                         TAgentDelivery.status == "running",
                     )
                     .values(
                         status="lost",
                         error_code="SERVER_RESTART",
                         error_message="服务重启，平台发送状态无法确认",
-                        updated_at=int(time.time() * 1000),
-                        finished_at=int(time.time() * 1000),
+                        updated_at=now,
+                        finished_at=now,
                     )
                 )
                 recovered += 1

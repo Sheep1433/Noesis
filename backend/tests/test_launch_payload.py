@@ -107,3 +107,42 @@ def test_dispatcher_context_has_no_request_objects() -> None:
     data = payload.to_dict()
     assert isinstance(data, dict)
     assert "current_user" not in data and "request" not in data
+
+
+# ============ 推理档位（reasoning_effort）白名单 ============
+
+
+def _reasoning_payload(extra: dict):
+    """构造带 reasoning_effort 的 create 请求载荷（复用现有测试的请求形状）。"""
+    from noesis.chat.runs.launch_payload import LaunchPayload
+    from noesis.schemas.chat_vo import CreateRunRequest
+
+    request = CreateRunRequest(
+        session_id="sess-1",
+        content="hello",
+        client_request_id="cr-reasoning-0001",
+        extra=extra,
+    )
+    return LaunchPayload.from_create_request(
+        request,
+        user_id="user-1",
+        assistant_message_id="msg-1",
+        qa_type="COMMON_QA",
+        origin="web",
+        resolved_model="model-x",
+    )
+
+
+def test_reasoning_effort_passes_whitelist_and_freezes() -> None:
+    payload = _reasoning_payload({"reasoning_effort": "high", "unknown_key": 1})
+    assert payload.extra["reasoning_effort"] == "high"
+    assert "unknown_key" not in payload.extra
+    qa_request = payload.to_qa_query_request()
+    assert qa_request.reasoning_effort == "high"
+
+
+def test_reasoning_effort_invalid_value_silently_dropped() -> None:
+    for bad in ("xhigh", "auto", 123, None):
+        payload = _reasoning_payload({"reasoning_effort": bad})
+        assert "reasoning_effort" not in payload.extra
+        assert payload.to_qa_query_request().reasoning_effort is None

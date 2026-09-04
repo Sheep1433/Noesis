@@ -1,12 +1,16 @@
+import type { UiPart } from '@/views/chat/messageParts'
 import { describe, expect, it } from 'vitest'
 import { parseTaskToolOutput } from '@/utils/parseTaskTool'
 import {
+  appendReasoningDelta,
   appendStreamFailureNotice,
   appendTextDelta,
+  appendTextDeltaWithRedactedThinking,
   applyToolOutput,
   assistantToolFailureSummary,
   COMPACTION_BOUNDARY,
   completeReasoningPart,
+  createRedactedThinkingStreamCtx,
   formatDurationMs,
   formatUsageSummary,
   hasValidContextWindow,
@@ -14,9 +18,11 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
+  rollbackTrailingStreamParts,
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
+  upsertToolInputPart,
 } from '@/views/chat/messageParts'
 
 describe('duration formatting', () => {
@@ -286,6 +292,34 @@ describe('message parts snapshot normalization', () => {
       result: undefined,
     })
   })
+
+  it('流式 start_task 输出到达时提取 child_session_id（任务卡据此匹配目录状态）', () => {
+    const childSessionId = '8d82f4ad-e51b-48e3-b419-a6878f8dd51c'
+    const parts = upsertToolInputPart(
+      [],
+      'call-start-1',
+      'start_task',
+      { description: 'T1: 编码Agent评测', prompt: '完整指令' },
+    )
+    const withOutput = applyToolOutput(parts, 'call-start-1', {
+      output: `子 Agent 已启动：${childSessionId}\n无需等待——可继续其他工作，之后用 check_task 收结果。`,
+      status: 'success',
+      state: 'succeeded',
+    })
+
+    expect((withOutput[0] as any).child_session_id).toBe(childSessionId)
+  })
+
+  it('非 start_task 工具输出不产生 child_session_id', () => {
+    const parts = upsertToolInputPart([], 'call-web-1', 'web_search', { query: 'agent eval' })
+    const withOutput = applyToolOutput(parts, 'call-web-1', {
+      output: '子 Agent 已启动：8d82f4ad-e51b-48e3-b419-a6878f8dd51c',
+      status: 'success',
+      state: 'succeeded',
+    })
+
+    expect((withOutput[0] as any).child_session_id).toBeUndefined()
+  })
 })
 
 describe('usage summary 兼容零值与缺失 details', () => {
@@ -370,5 +404,211 @@ describe('hasValidUsage / hasValidContextWindow 降级', () => {
       'session-1',
       'session-2',
     )).toBeNull()
+  })
+})
+
+describe('retrieval part origin 解析（research-source-provenance）', () => {
+  it('解析 subagent origin（kind + label）', () => {
+    const normalized = normalizeApiContent({ parts: [{
+      id: 'r1',
+      type: 'retrieval',
+      tool_call_id: 'subagent-sources-abc',
+      query: '调研 X',
+      results: [{
+        evidence_id: 'ev_1',
+        source_type: 'web',
+        url: 'https://example.com/a',
+        title: 'A',
+        excerpt: 'e',
+      }],
+      origin: { kind: 'subagent', label: '调研 X' },
+    }] })
+    const part = normalized.parts[0]
+    expect(part.type).toBe('retrieval')
+    if (part.type === 'retrieval') {
+      expect(part.origin).toEqual({ kind: 'subagent', label: '调研 X' })
+    }
+  })
+
+  it('旧数据无 origin 字段：不报错、不写默认占位（按 main 归组）', () => {
+    const normalized = normalizeApiContent({ parts: [{
+      id: 'r2',
+      type: 'retrieval',
+      tool_call_id: 'call-1',
+      query: 'q',
+      results: [{
+        evidence_id: 'ev_2',
+        source_type: 'web',
+        url: 'https://example.com/b',
+        title: 'B',
+        excerpt: 'e',
+      }],
+    }] })
+    const part = normalized.parts[0]
+    if (part.type === 'retrieval') {
+      expect(part.origin).toBeUndefined()
+    }
+  })
+
+  it('未知 kind 按 main 归组（解析不失败）', () => {
+    const normalized = normalizeApiContent({ parts: [{
+      id: 'r3',
+      type: 'retrieval',
+      tool_call_id: 'call-3',
+      query: 'q',
+      results: [{
+        evidence_id: 'ev_3',
+        source_type: 'web',
+        url: 'https://example.com/c',
+        title: 'C',
+        excerpt: 'e',
+      }],
+      origin: { kind: 'whatever' },
+    }] })
+    const part = normalized.parts[0]
+    if (part.type === 'retrieval') {
+      expect(part.origin).toEqual({ kind: 'main' })
+    }
+  })
+})
+
+/* ---- 流式热路径：copy-on-write 身份保持 + 批量合并应用等价性 ----
+   见 docs/bug/chat-stream-hotpath-memory-bloat.md：append* 每次克隆全部 part、
+   每 delta 全链重建是渲染进程内存膨胀主因。此组测试钉住两点：
+   1) 未命中 part 复用对象引用（copy-on-write 契约，防止回退成全量克隆）；
+   2) 连续同签名 delta 合并成一条后应用，与逐条应用产出一致（批量应用语义中性）。 */
+describe('streaming hot-path copy-on-write 与批量应用等价性', () => {
+  /** genPartId 含随机数，等价性比较需剥掉 id */
+  function stripIds(parts: UiPart[]): Array<Record<string, unknown>> {
+    return parts.map(({ id, ...rest }) => rest)
+  }
+
+  it('appendTextDelta 并入尾部 text 时仅替换命中 part，其余 part 复用引用', () => {
+    const parts: UiPart[] = [
+      { id: 't0', type: 'text', content: '头', status: 'completed' },
+      { id: 't1', type: 'text', content: '尾', status: 'completed' },
+    ]
+    const next = appendTextDelta(parts, '+')
+
+    expect(next).toHaveLength(2)
+    expect(next[0]).toBe(parts[0])
+    expect(next[1]).not.toBe(parts[1])
+    expect(next[1]).toMatchObject({ id: 't1', content: '尾+', status: 'streaming' })
+    // 输入不可变
+    expect(parts[1]).toMatchObject({ content: '尾', status: 'completed' })
+  })
+
+  it('appendTextDelta 尾部非 text 时新开 part，既有 part 全部复用引用', () => {
+    const parts: UiPart[] = [
+      { id: 't0', type: 'text', content: '正文', status: 'streaming' },
+      { id: 'r0', type: 'reasoning', content: '思考', status: 'streaming' },
+    ]
+    const next = appendTextDelta(parts, '续')
+
+    expect(next).toHaveLength(3)
+    expect(next[0]).toBe(parts[0])
+    expect(next[1]).toBe(parts[1])
+    expect(next[2]).toMatchObject({ type: 'text', content: '续' })
+  })
+
+  it('appendTextDelta 跳过其它 parent 的交错 part，并入同 parent 的最近 text', () => {
+    const parts: UiPart[] = [
+      { id: 'main-t', type: 'text', content: '主', status: 'streaming' },
+      { id: 'child-r', type: 'reasoning', content: '子思考', status: 'streaming', parent_task_call_id: 'task-1' },
+    ]
+    const next = appendTextDelta(parts, '续')
+
+    expect(next).toHaveLength(2)
+    expect(next[0]).not.toBe(parts[0])
+    expect(next[0]).toMatchObject({ id: 'main-t', content: '主续' })
+    expect(next[1]).toBe(parts[1])
+  })
+
+  it('appendReasoningDelta 同样只替换命中 part，其余复用引用', () => {
+    const parts: UiPart[] = [
+      { id: 'r0', type: 'reasoning', content: '想', status: 'completed' },
+    ]
+    const next = appendReasoningDelta(parts, '继续')
+
+    expect(next).toHaveLength(1)
+    expect(next[0]).not.toBe(parts[0])
+    expect(next[0]).toMatchObject({ id: 'r0', content: '想继续', status: 'streaming' })
+    expect(parts[0]).toMatchObject({ content: '想', status: 'completed' })
+  })
+
+  it('连续同签名 delta 合并应用与逐条应用产出相同 parts（批量语义中性）', () => {
+    const seq: Array<{ kind: 'text' | 'reasoning', data: string }> = [
+      { kind: 'reasoning', data: '思' },
+      { kind: 'reasoning', data: '考' },
+      { kind: 'text', data: 'He' },
+      { kind: 'text', data: 'llo' },
+      { kind: 'text', data: '!' },
+      { kind: 'reasoning', data: '再想' },
+      { kind: 'text', data: '答' },
+    ]
+    const stepwise = seq.reduce<UiPart[]>((parts, d) =>
+      d.kind === 'text' ? appendTextDelta(parts, d.data) : appendReasoningDelta(parts, d.data), [])
+
+    // 模拟 streamDeltaBatcher 的合并：连续同签名拼成一条
+    const merged: Array<{ kind: 'text' | 'reasoning', data: string }> = []
+    for (const d of seq) {
+      const tail = merged[merged.length - 1]
+      if (tail && tail.kind === d.kind) {
+        tail.data += d.data
+      } else {
+        merged.push({ ...d })
+      }
+    }
+    const batched = merged.reduce<UiPart[]>((parts, d) =>
+      d.kind === 'text' ? appendTextDelta(parts, d.data) : appendReasoningDelta(parts, d.data), [])
+
+    expect(stripIds(batched)).toEqual(stripIds(stepwise))
+  })
+
+  it('<think> 标签在任意切分点分批应用与整段应用结果一致（合并 chunk 不改变解析）', () => {
+    const src = '前文<think>推理中段</think>后文'
+    const whole = appendTextDeltaWithRedactedThinking([], src, createRedactedThinkingStreamCtx())
+
+    for (let split = 0; split <= src.length; split++) {
+      const ctx = createRedactedThinkingStreamCtx()
+      let chunked = appendTextDeltaWithRedactedThinking([], src.slice(0, split), ctx)
+      chunked = appendTextDeltaWithRedactedThinking(chunked, src.slice(split), ctx)
+      expect(stripIds(chunked)).toEqual(stripIds(whole))
+    }
+  })
+
+  it('多批 text delta 共享同一 redacted ctx，顺序应用与整段应用结果一致', () => {
+    const src = 'a<think>b1 b2</think>c1 c2'
+    const whole = appendTextDeltaWithRedactedThinking([], src, createRedactedThinkingStreamCtx())
+
+    // 三个切分点（含标签内部与闭合标签跨点）
+    for (const [i, j] of [[1, 10], [7, 14], [8, 20]] as const) {
+      const ctx = createRedactedThinkingStreamCtx()
+      let chunked = appendTextDeltaWithRedactedThinking([], src.slice(0, i), ctx)
+      chunked = appendTextDeltaWithRedactedThinking(chunked, src.slice(i, j), ctx)
+      chunked = appendTextDeltaWithRedactedThinking(chunked, src.slice(j), ctx)
+      expect(stripIds(chunked)).toEqual(stripIds(whole))
+    }
+  })
+})
+
+describe('rollbackTrailingStreamParts', () => {
+  it('丢弃末尾连续 text/reasoning，遇到工具边界即停（LLM 重试回滚）', () => {
+    const parts: UiPart[] = [
+      { type: 'text', content: '第一段正文。', id: 'p1' },
+      { type: 'tool', tool_call_id: 'c1', name: 'web_search', input: {}, output: 'ok', status: 'success', duration_ms: 10 },
+      { type: 'reasoning', content: 'Now Phase 6:', id: 'p2' },
+      { type: 'text', content: 'Phase 3-5 完成。', id: 'p3' },
+    ]
+    const rolled = rollbackTrailingStreamParts(parts)
+    expect(rolled.map((p) => p.type)).toEqual(['text', 'tool'])
+    expect((rolled[0] as { content: string }).content).toBe('第一段正文。')
+  })
+
+  it('无可回滚时原样返回引用', () => {
+    const parts: UiPart[] = [
+      { type: 'tool', tool_call_id: 'c1', name: 'web_search', input: {}, output: '', status: 'success' },
+    ]
+    expect(rollbackTrailingStreamParts(parts)).toBe(parts)
   })
 })

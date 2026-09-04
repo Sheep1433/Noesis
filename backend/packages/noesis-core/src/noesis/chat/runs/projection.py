@@ -53,6 +53,9 @@ class RunProjection:
         )
         # 本 run 的 usage 聚合（RunCompleted.usage 捕获）；每 run 独立，不随 clone/snapshot 持久化
         self.run_usage: dict[str, Any] | None = None
+        # 本 run 的每次模型调用明细（RunCompleted.model_calls 捕获）；
+        # 与 run_usage 同生命周期，终态落 message.extra.model_calls
+        self.run_model_calls: list[dict[str, Any]] | None = None
 
     def clone(self) -> "RunProjection":
         """复制 projection 数据，不复制 builder 内部的线程锁。"""
@@ -115,6 +118,9 @@ class RunProjection:
                     str(delta or ""),
                     parent_task_call_id=data.get("parent_task_call_id"),
                 )
+            elif event.event == "stream-rollback":
+                # LLM 重试/降级：失败尝试的部分流式输出不进落库投影
+                self.builder.rollback_trailing_stream_parts()
             elif event.event in {"tool-call-start", "tool-input-start"}:
                 if event.event == "tool-input-start":
                     return True
@@ -172,18 +178,31 @@ class RunProjection:
             elif event.event == "retrieval-results-available":
                 results = data.get("results")
                 if isinstance(results, list):
-                    self.builder.register_retrieval_results(
-                        tool_call_id=str(data.get("tool_call_id") or ""),
+                    origin = data.get("origin")
+                    tool_call_id = str(data.get("tool_call_id") or "")
+                    part = self.builder.register_retrieval_results(
+                        tool_call_id=tool_call_id,
                         query=str(data.get("query") or ""),
                         results=[item for item in results if isinstance(item, dict)],
                         truncated=bool(data.get("truncated")),
+                        origin=origin if isinstance(origin, dict) else None,
                     )
+                    # 与 register_tool_retrieval 的共享投影语义对齐：tool part
+                    # 展示输出替换为「检索到 N 条来源」摘要，原始结果只持久化
+                    # 在 retrieval part——主链路重放此前绕过该替换，导致主/
+                    # 子会话 tool part 数据形态不一致（主会话存了整份 JSON）。
+                    tool_part = self.builder.get_tool(tool_call_id)
+                    if tool_part is not None:
+                        tool_part.output = f"检索到 {len(part.results)} 条来源"
             elif event.event == "run-status":
                 status = str(data.get("status") or "")
-                event_attempt_id = int(data.get("attempt_id") or self.attempt_id)
-                if event_attempt_id >= self.attempt_id:
-                    self.attempt_id = event_attempt_id
-                if status in {item.value for item in RunStatus}:
+                if status == "retrying":
+                    # retrying 是单次模型调用的重试瞬态，不是 run 生命周期
+                    # 状态：写进 self.status 会在恢复后钉死到终态交接（终态
+                    # 事件只应用在 clone 上），且终态保留窗口内 GET 永远报
+                    # retrying。帧照常放行 fan-out，前端重试提示不受影响。
+                    pass
+                elif status in {item.value for item in RunStatus}:
                     self.status = RunStatus(status)
         elif isinstance(event, HitlRequired):
             self.status = RunStatus.HITL_PENDING
@@ -221,9 +240,11 @@ class RunProjection:
             self.finish_reason = event.finish_reason
             self.pending_hitl = None
             # 本条 assistant 消息的 usage 聚合（finish 事件携带），
-            # 终态落库写入 message.extra.usage 供历史会话回放统计。
+            # 终态落库写入 message.extra.usage 供历史会话回放。
             if event.usage and event.usage.get("steps"):
                 self.run_usage = dict(event.usage)
+            if event.model_calls:
+                self.run_model_calls = list(event.model_calls)
         elif isinstance(event, RunAborted):
             self.builder.reconcile_nonterminal_tools(ToolState.CANCELLED, "本次工具执行已停止")
             self.status = RunStatus.PARTIAL

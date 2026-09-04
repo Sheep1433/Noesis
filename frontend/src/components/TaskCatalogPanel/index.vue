@@ -5,6 +5,8 @@ import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import { wireTimestampMs } from '@/utils/formatTime'
+import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import { formatDurationMs } from '@/views/chat/messageParts'
 
 const props = defineProps<{
@@ -33,12 +35,17 @@ const pending = computed(() => props.tasks.filter((t) => {
   return t.status === 'awaiting_approval'
 }))
 const running = computed(() => props.tasks.filter((t) => {
-  return t.status === 'running'
+  return t.status === 'queued' || t.status === 'running' || t.status === 'stopping'
 }))
 const finished = computed(() =>
   props.tasks
     .filter((t) => {
-      return t.status !== 'running' && t.status !== 'awaiting_approval'
+      return (
+        t.status !== 'queued'
+        && t.status !== 'running'
+        && t.status !== 'stopping'
+        && t.status !== 'awaiting_approval'
+      )
     })
     .reverse(),
 )
@@ -62,65 +69,37 @@ const taskSummary = computed(() => {
 
 // 运行中任务卡耗时：抽屉打开且有 running 任务时本地时钟跳动；
 // 终态用落库起止值；等待审批不计耗时（等人时间不算执行时长）
-const clockNow = ref(Date.now())
-let clockTimer: ReturnType<typeof setInterval> | null = null
+const { now: clockNow, start: startClock, stop: stopClock } = useTicker()
 
 function refreshClockTimer(): void {
-  const need = show.value && running.value.length > 0
-  if (need && clockTimer === null) {
-    // 启动即刷新：抽屉关闭期间时钟冻结，重开第一帧不能用旧值
-    clockNow.value = Date.now()
-    clockTimer = setInterval(() => {
-      clockNow.value = Date.now()
-    }, 1000)
-  } else if (!need && clockTimer !== null) {
-    clearInterval(clockTimer)
-    clockTimer = null
+  // 启动即刷新：抽屉关闭期间时钟冻结，重开第一帧不能用旧值
+  if (show.value && running.value.length > 0) {
+    startClock()
+  } else {
+    stopClock()
   }
 }
 
 watch([show, running], refreshClockTimer, { immediate: true })
 onBeforeUnmount(() => {
   // 卸载无条件清理：refreshClockTimer 在抽屉开着且有活跃任务时
-  // 会判定 need=true 而不清 interval
-  if (clockTimer !== null) {
-    clearInterval(clockTimer)
-    clockTimer = null
-  }
+  // 会判定 need=true 而不停表
+  stopClock()
 })
 
-function timestampMs(value: number | null | undefined): number | undefined {
-  if (value == null || !Number.isFinite(value)) {
-    return undefined
-  }
-  return Math.abs(value) < 1e12 ? value * 1000 : value
-}
-
 function taskElapsed(task: TaskCatalogEntry): string {
-  const started = timestampMs(task.started_at)
+  const started = wireTimestampMs(task.started_at)
   if (!started || task.status === 'awaiting_approval') {
     return ''
   }
-  if (task.status === 'running') {
+  if (task.status === 'running' || task.status === 'stopping') {
     return formatDurationMs(Math.max(0, clockNow.value - started))
   }
-  const finished = timestampMs(task.completed_at)
+  const finished = wireTimestampMs(task.completed_at)
   if (!finished) {
     return ''
   }
   return formatDurationMs(Math.max(0, finished - started))
-}
-
-const statusLabel: Record<TaskCatalogEntry['status'], string> = {
-  running: '进行中',
-  awaiting_approval: '待审批',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-  timed_out: '超时',
-  partial: '已停止',
-  error: '失败',
-  interrupted: '已中断',
 }
 
 function statusClass(status: TaskCatalogEntry['status']): string {
@@ -164,7 +143,8 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
 </script>
 
 <template>
-  <n-drawer v-model:show="show" placement="right" :width="drawerWidth">
+  <!-- 监控面板常开数分钟，默认黑遮罩会把主界面压暗成"换主题"的观感；透明遮罩保持主界面视觉不变 -->
+  <n-drawer v-model:show="show" placement="right" :width="drawerWidth" show-mask="transparent">
     <n-drawer-content
       :title="showDetail && selectedTaskResolved ? selectedTaskResolved.description : '子 Agent 与后台命令'"
       closable
@@ -180,11 +160,17 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
           <div v-if="selectedTaskResolved.kind === 'shell'" class="shell-task-detail">
             <div class="shell-task-detail__header">
               <strong>后台命令输出</strong>
-              <NButton size="small" type="error" quaternary @click="emit('cancel', selectedTaskResolved)">
+              <NButton
+                v-if="selectedTaskResolved.status === 'queued' || selectedTaskResolved.status === 'running'"
+                size="small"
+                type="error"
+                quaternary
+                @click="emit('cancel', selectedTaskResolved)"
+              >
                 停止命令
               </NButton>
             </div>
-            <code class="shell-task-detail__command">{{ selectedTaskResolved.description }}</code>
+            <code class="shell-task-detail__command">{{ selectedTaskResolved.command || selectedTaskResolved.description }}</code>
             <pre v-if="selectedTaskResolved.result || selectedTaskResolved.error" class="shell-task-detail__output">{{ selectedTaskResolved.result || selectedTaskResolved.error }}</pre>
             <span v-else class="shell-task-detail__empty">命令仍在运行，输出完成后会显示在这里。</span>
           </div>
@@ -257,7 +243,7 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
                   <span v-if="task.kind === 'shell'">后台命令</span>
                   <span v-else>子 Agent</span>
                   <span>·</span>
-                  <span>{{ statusLabel[task.status] ?? task.status }}</span>
+                  <span>{{ taskStatusLabel(task.status) }}</span>
                   <template v-if="taskElapsed(task)">
                     <span>·</span>
                     <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
@@ -421,6 +407,10 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
   margin-top: 5px;
   border: 2px solid var(--noesis-color-text-hint);
   border-radius: 50%;
+}
+
+.bg-task-status-dot--queued {
+  border-color: var(--noesis-color-text-hint);
 }
 
 .bg-task-status-dot--running {

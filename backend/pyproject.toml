@@ -7,8 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     # 核心后端包（import noesis）
     "noesis-core",
-    # 本地 Agent CLI（评测用，直调 Agent，不走 HTTP）
-    "noesis-cli",
     # API / 持久化
     "alembic>=1.18.5",
     "asyncpg>=0.30.0",
@@ -39,8 +37,6 @@ dependencies = [
     "markdown>=3.6",
     "markitdown[docx]>=0.0.1",
     "numpy>=2.2.6",
-    "onnxruntime>=1.19.0",
-    "opencv-python-headless>=4.10.0.84",
     "openai>=2.7.1",
     "openpyxl>=3.1.5",
     "pandas>=2.3.3",
@@ -50,12 +46,30 @@ dependencies = [
     "python-pptx>=1.0.2",
     "qdrant-client>=1.18.0",
     "rank-bm25>=0.2.2",
-    "scikit-learn>=1.5.0",
-    "xgboost>=2.0.0",
     # 可观测
     "langfuse>=3.10.0,<4",
     "croniter>=6.2.4",
+]
+
+[project.optional-dependencies]
+# DeepDoc PDF 版面识别/OCR/表格结构重栈（cv2+onnxruntime+sklearn+xgboost
+# 及其传递依赖 scipy/sympy ≈ 390MB）。未安装时 PDF 自动降级 pdfplumber
+# 纯文本抽取（deepdoc_service._parse_pdf 回退），其余格式不受影响。
+# 生产镜像默认不装（uv sync 不带 --extra）；本地经 dev group 默认安装。
+deepdoc-pdf = [
+    "onnxruntime>=1.19.0",
+    "opencv-python-headless>=4.10.0.84",
+    "scikit-learn>=1.5.0",
+    "xgboost>=2.0.0",
+]
+# 飞书通道 SDK（≈95MB）。messaging.feishu_runtime_enabled=true 时才需要；
+# 未安装且未启用时启动优雅跳过。
+feishu = [
     "lark-oapi>=1.5.3,<2",
+]
+# 压测（backend/evals/loadtest）
+loadtest = [
+    "locust>=2.31.0",
 ]
 
 [dependency-groups]
@@ -63,6 +77,15 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
+    # 本地 Agent CLI（评测用，直调 Agent，不走 HTTP）——生产镜像不装
+    "noesis-cli",
+    # 本地默认全功能：DeepDoc PDF 重栈与飞书 SDK（生产镜像经
+    # optional-dependencies 按需安装，此处保证 uv run 默认可用）
+    "onnxruntime>=1.19.0",
+    "opencv-python-headless>=4.10.0.84",
+    "scikit-learn>=1.5.0",
+    "xgboost>=2.0.0",
+    "lark-oapi>=1.5.3,<2",
 ]
 
 [tool.uv]
@@ -72,10 +95,6 @@ default-groups = ["dev"]
 noesis-core = { path = "packages/noesis-core", editable = true }
 noesis-cli = { path = "packages/noesis-cli", editable = true }
 
-[project.optional-dependencies]
-loadtest = [
-    "locust>=2.31.0",
-]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -84,5 +103,6 @@ asyncio_default_fixture_loop_scope = "function"
 # 默认跳过 integration（真实 LLM / 外部服务），需手动 `-m integration` 或设环境变量开启
 addopts = "-m 'not integration'"
 markers = [
-    "integration: marks tests that call real LLM or external services",
+    "integration: marks tests that call real services (本地起后端后手动跑)",
+    "llm: marks tests that call a real LLM（耗时取决于网关，快速轮用 -m 'integration and not llm' 跳过）",
 ]

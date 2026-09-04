@@ -89,7 +89,7 @@ describe('useSSEStream durable run recovery', () => {
         event: 'retrieval-results-available',
         data: { type: 'retrieval-results-available', id: 'r1', results: [{ evidence_id: 'ev_1' }] },
       },
-      { event: 'finish', data: { type: 'finish', finish_reason: 'stop' } },
+      { event: 'run.finished', data: { type: 'run.finished', status: 'completed', finish_reason: 'stop' } },
     ]))
     const onRetrievalResults = vi.fn()
     const stream = useSSEStream({ onRetrievalResults })
@@ -354,8 +354,8 @@ describe('useSSEStream durable run recovery', () => {
         data: { type: 'run-status', sequence: 2, status: 'running' },
       },
       {
-        event: 'error',
-        data: { type: 'error', sequence: 3, error: '暂时无法生成，请稍后重试' },
+        event: 'run.finished',
+        data: { type: 'run.finished', status: 'error', sequence: 3, error: '暂时无法生成，请稍后重试', finish_reason: 'error' },
       },
     ]))
     const onRunStatus = vi.fn()
@@ -395,41 +395,31 @@ describe('useSSEStream durable run recovery', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
-  it('stop 返回 running 时继续订阅，不伪造本地终态', async () => {
-    let subscribeCall = 0
+  it('乐观停止：点击即终态收尾，stop API 后台执行不等返回', async () => {
     api.subscribeAgentRun.mockImplementation((_runId: string, _after: number, signal: AbortSignal) => {
-      subscribeCall += 1
-      if (subscribeCall === 1) {
-        return new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
-        })
-      }
-      return Promise.resolve(sseResponse([{
-        event: 'run-snapshot',
-        data: snapshot({
-          status: 'partial',
-          snapshot_sequence: 3,
-          finish_reason: 'stopped',
-        }),
-      }]))
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })
     })
     api.stopAgentRun.mockResolvedValue(snapshot({
-      status: 'running',
+      status: 'partial',
       snapshot_sequence: 2,
+      finish_reason: 'stopped',
     }))
     const onFinish = vi.fn()
-    const onSnapshot = vi.fn()
-    const stream = useSSEStream({ onFinish, onSnapshot })
+    const stream = useSSEStream({ onFinish })
 
     const pending = stream.sendMessage('session-1', 'hello')
     await vi.waitFor(() => expect(api.subscribeAgentRun).toHaveBeenCalledTimes(1))
     await stream.stopCurrentRun()
     await pending
 
-    expect(api.subscribeAgentRun).toHaveBeenCalledTimes(2)
-    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }))
+    // 点击即 settle：不建第二订阅（无 re-follow）、立即 onFinish
+    expect(api.subscribeAgentRun).toHaveBeenCalledTimes(1)
     expect(onFinish).toHaveBeenCalledTimes(1)
     expect(onFinish).toHaveBeenCalledWith({ finish_reason: 'stopped' })
+    // stop API 已发出（后台 fire-and-forget）
+    expect(api.stopAgentRun).toHaveBeenCalledTimes(1)
   })
 
   it('重连持续失败时保留 active run 并提供手动恢复，不伪造 Agent 失败', async () => {

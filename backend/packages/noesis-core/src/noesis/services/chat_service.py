@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from noesis.storage.postgres.models.chat import TChatSession, TChatMessage, TAgentRun
 from noesis.errors.exceptions import ServiceException
 from noesis.runtime.logging import logger
-from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
+from noesis.chat.event_mapping.usage_normalize import merge_model_calls, merge_usage
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.config.user_data_paths import delete_session_workspace
 
@@ -243,6 +243,44 @@ class ChatService:
         return session
 
     @classmethod
+    def build_session(
+        cls,
+        *,
+        user_id: str,
+        title: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        kind: Optional[str] = None,
+        created_by_run_id: Optional[str] = None,
+        created_by_tool_call_id: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        next_message_sequence: Optional[int] = None,
+        created_at: Optional[int] = None,
+    ) -> TChatSession:
+        """会话行的单一构造点：只构造 ORM 行，不 add/commit——事务边界由调用方持有。
+
+        `create_session`（独立提交）与子 Agent launch（child 会话与消息/run
+        同事务）共用；标题规范化在此单点。
+        """
+        now = created_at if created_at is not None else _now_ms()
+        fields: Dict[str, Any] = {
+            "id": session_id or str(uuid.uuid4()),
+            "parent_id": parent_id,
+            "kind": kind or ('subagent' if parent_id else 'root'),
+            "created_by_run_id": created_by_run_id,
+            "created_by_tool_call_id": created_by_tool_call_id,
+            "user_id": user_id,
+            "title": cls._normalize_session_title(title) or _DEFAULT_SESSION_TITLE,
+            "extra": extra,
+            "created_at": now,
+            "updated_at": now,
+        }
+        # None 会覆盖列级 default=1，仅在调用方显式指定时传入
+        if next_message_sequence is not None:
+            fields["next_message_sequence"] = next_message_sequence
+        return TChatSession(**fields)
+
+    @classmethod
     async def create_session(
             cls,
             user_id: str,
@@ -271,24 +309,19 @@ class ChatService:
             if not parent:
                 raise ServiceException(message='父会话不存在')
 
-        session_id = str(uuid.uuid4())
-        now = _now_ms()
-        session = TChatSession(
-            id=session_id,
+        session = cls.build_session(
+            user_id=user_id,
+            title=title,
             parent_id=parent_id,
-            kind=kind or ('subagent' if parent_id else 'root'),
+            kind=kind,
             created_by_run_id=created_by_run_id,
             created_by_tool_call_id=created_by_tool_call_id,
-            user_id=user_id,
-            title=cls._normalize_session_title(title) or _DEFAULT_SESSION_TITLE,
             extra=extra,
-            created_at=now,
-            updated_at=now
         )
         db.add(session)
         await db.commit()
         await db.refresh(session)
-        logger.info(f'创建会话成功: session_id={session_id}, user_id={user_id}, parent_id={parent_id}')
+        logger.info(f'创建会话成功: session_id={session.id}, user_id={user_id}, parent_id={parent_id}')
         return session
 
     @classmethod
@@ -456,12 +489,20 @@ class ChatService:
         if isinstance(new_usage, dict):
             old_usage = old_extra.get("usage")
             if isinstance(old_usage, dict):
-                merged_extra["usage"] = {
-                    key: float(old_usage.get(key) or 0) + float(new_usage.get(key) or 0)
-                    for key in USAGE_FIELDS if key != "turns"
-                }
+                # usage 键做累加合并而非覆盖：HITL resume / 同一 assistant_message_id 跨
+                # 多个 run 时，各 run 的 bridge 只含本 run 的 usage 聚合，终态 UPDATE 必须
+                # 与历史 run 已落库的 usage 累加（merge_usage 单点，turns 不参与累加）。
+                # checkpoint（streaming 态）extra 不带 usage，不会触发本合并。
+                merged_extra["usage"] = merge_usage(old_usage, new_usage)
             else:
                 merged_extra["usage"] = dict(new_usage)
+        # model_calls 与 usage 同一跨 run 累加语义：拼接且 step 全局重编
+        # （merge_model_calls 单点）。
+        new_calls = (extra or {}).get("model_calls")
+        if isinstance(new_calls, list) and new_calls:
+            merged_extra["model_calls"] = merge_model_calls(
+                old_extra.get("model_calls"), new_calls,
+            )
 
         await db.execute(
             update(TChatMessage)
@@ -577,12 +618,12 @@ class ChatService:
             await cancel_session_agent_runs(target_id)
         # 子 Agent executor 的生命周期归属于父会话；父会话删除时一并取消。
         try:
-            from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+            from noesis.agents.subagents.executor import BackgroundTaskExecutor
 
-            for task in BackgroundSubagentExecutor.list_for_session(session_id):
+            for task in BackgroundTaskExecutor.list_for_session(session_id):
                 if not str(task.get('status', '')).endswith(('completed', 'failed', 'cancelled', 'timed_out')):
                     try:
-                        BackgroundSubagentExecutor.cancel(str(task.get('task_id')))
+                        BackgroundTaskExecutor.cancel(str(task.get('task_id')))
                     except ValueError:
                         pass
         except Exception as exc:  # noqa: BLE001
@@ -719,13 +760,13 @@ class ChatService:
         for sid in all_ids:
             await cancel_session_agent_runs(sid)
         try:
-            from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+            from noesis.agents.subagents.executor import BackgroundTaskExecutor
 
             for sid in found_ids:
-                for task in BackgroundSubagentExecutor.list_for_session(sid):
+                for task in BackgroundTaskExecutor.list_for_session(sid):
                     if not str(task.get('status', '')).endswith(('completed', 'failed', 'cancelled', 'timed_out')):
                         try:
-                            BackgroundSubagentExecutor.cancel(str(task.get('task_id')))
+                            BackgroundTaskExecutor.cancel(str(task.get('task_id')))
                         except ValueError:
                             pass
         except Exception as exc:  # noqa: BLE001
@@ -1243,7 +1284,7 @@ class ChatService:
     ) -> list[dict[str, Any]]:
         """返回子 Agent 目录摘要；不读取正文消息。"""
         from sqlalchemy import func
-        from noesis.agents.subagents.executor import BackgroundSubagentExecutor
+        from noesis.agents.subagents.executor import BackgroundTaskExecutor
 
         parent = await cls.get_session_by_id(parent_id, user_id=user_id, db=db)
         if parent is None:
@@ -1269,18 +1310,29 @@ class ChatService:
                 .group_by(TChatMessage.session_id)
             )
             turn_counts = {str(row[0]): int(row[1] or 0) for row in count_result.all()}
+            usage_result = await db.execute(
+                select(TChatMessage.session_id, TChatMessage.extra)
+                .where(
+                    TChatMessage.session_id.in_(child_ids),
+                    TChatMessage.role == 'assistant',
+                    TChatMessage.deleted_at.is_(None),
+                )
+            )
+            # 步数 DB 回退（运行时进度丢失后重建）：各 assistant 消息
+            # extra.usage.steps 求和，口径 = 模型调用次数，与统计条
+            # 「N 轮 · M 步」及 executor 运行时计数同源
+            usage_steps: dict[str, int] = {}
+            for row in usage_result.all():
+                extra = row[1] if isinstance(row[1], dict) else {}
+                steps = int((extra.get('usage') or {}).get('steps') or 0)
+                usage_steps[str(row[0])] = usage_steps.get(str(row[0]), 0) + steps
         else:
             turn_counts = {}
+            usage_steps = {}
         catalog: list[dict[str, Any]] = []
         for child in children:
             run = latest_runs.get(child.id)
-            task = BackgroundSubagentExecutor.get_memory(child.id)
-            snapshot = run.snapshot if run and isinstance(run.snapshot, dict) else {}
-            parts = snapshot.get('parts') if isinstance(snapshot, dict) else []
-            snapshot_step_count = sum(
-                1 for part in parts
-                if isinstance(part, dict) and part.get('type') == 'tool'
-            ) if isinstance(parts, list) else 0
+            task = BackgroundTaskExecutor.get_memory(child.id)
             catalog.append({
                 'session_id': child.id,
                 'parent_id': parent_id,
@@ -1290,7 +1342,7 @@ class ChatService:
                 'run_id': (task or {}).get('run_id') or (run.id if run else child.created_by_run_id),
                 'status': (task or {}).get('status') or (run.status if run else 'completed'),
                 'turn_count': turn_counts.get(child.id, 0),
-                'step_count': max(int((task or {}).get('progress_count') or 0), snapshot_step_count),
+                'step_count': max(int((task or {}).get('progress_count') or 0), usage_steps.get(child.id, 0)),
                 'started_at': (run.started_at if run else None),
                 'finished_at': (run.finished_at if run else None),
                 'interrupt': (task or {}).get('interrupt'),

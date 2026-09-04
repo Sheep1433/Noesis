@@ -19,7 +19,7 @@ from typing import Iterator
 import httpx
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 _SIGNAL_TIMEOUT_SECONDS = 120.0
 
@@ -61,8 +61,8 @@ def _read_signal_frames(
 
 @pytest.fixture
 def signal_session(create_session) -> Iterator[dict]:
-    session = create_session(title="信令集成测试")
-    yield session
+    # create_session 返回会话 id 字符串；测试按 {"id": ...} 取用
+    yield {"id": create_session(title="信令集成测试")}
 
 
 def test_events_stream_emits_run_lifecycle(
