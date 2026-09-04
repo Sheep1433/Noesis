@@ -307,3 +307,20 @@ async def test_start_task_command_persists_bg_tasks_across_turns() -> None:
 
     for task_id in list(bg_tasks):
         executor.cancel(task_id)
+
+
+# ---------------------------------------------------------------------------
+# 端口方法面契约：ExecutorPort 白名单与执行器公开方法同步
+# ---------------------------------------------------------------------------
+
+def test_executor_port_exposes_asend_message() -> None:
+    """回归：端口白名单漏 asend_message，用户侧 followup 全部 AttributeError。
+
+    send_followup（SubagentSessionService）走 ExecutorPort.asend_message
+    （冷恢复竞态修复后），白名单与执行器公开方法面必须同步维护。
+    """
+    import noesis.agents.subagents.executor  # noqa: F401  导入即注册端口
+    from noesis.services.subagent_runtime_port import ExecutorPort
+
+    for method in ("validate_followup", "send_message", "asend_message", "submit_decisions", "cancel"):
+        assert hasattr(ExecutorPort, method), f"ExecutorPort 缺少 {method}（调用方将 AttributeError）"

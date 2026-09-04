@@ -2597,6 +2597,10 @@ def shutdown() -> None:
 class _ExecutorRuntimePort:
     validate_followup = staticmethod(BackgroundTaskExecutor.validate_followup)
     send_message = staticmethod(BackgroundTaskExecutor.send_message)
+    # 异步版必须与同步版成对暴露：send_followup 走 asend_message（冷恢复
+    # 分支在返回前完成新 run 创建），缺失即所有用户侧 followup 请求
+    # AttributeError
+    asend_message = staticmethod(BackgroundTaskExecutor.asend_message)
     submit_decisions = staticmethod(BackgroundTaskExecutor.submit_decisions)
     cancel = staticmethod(BackgroundTaskExecutor.cancel)
     subscribe_run_events = staticmethod(subscribe_run_events)
