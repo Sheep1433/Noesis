@@ -12,7 +12,7 @@ from noesis.errors.tool_failure import ToolNetworkError
 
 def _configure_web_tools(*mocks, **overrides) -> None:
     for mock_cfg in mocks:
-        mock_cfg.max_search_results = overrides.get("max_search_results", 20)
+        mock_cfg.max_search_results = overrides.get("max_search_results", 8)
         mock_cfg.fetch_max_chars = overrides.get("fetch_max_chars", 4096)
         mock_cfg.fetch_timeout_seconds = overrides.get("fetch_timeout_seconds", 30)
         mock_cfg.ddg_backends = overrides.get("ddg_backends", "mojeek,yandex")
