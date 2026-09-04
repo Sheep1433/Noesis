@@ -393,7 +393,10 @@ class AssistantMessageBuilder:
         registered: List[Dict[str, Any]] = []
         capacity_truncated = len(results) > per_call_limit
         for raw in results[:per_call_limit]:
-            if not isinstance(raw, dict) or not raw.get("citable", True):
+            # 可引用性准入由 EvidenceEnvelope 身份校验独立判定（KB 需 collection/
+            # document/version/segment 四元身份，web 需 url），缺身份条目在下方
+            # 校验处拒收并计入 invalid_evidence_envelope
+            if not isinstance(raw, dict):
                 continue
             try:
                 excerpt, excerpt_truncated = self._truncate_utf8(

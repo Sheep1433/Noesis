@@ -149,9 +149,6 @@ def _format_hits(
                 "rank": i,
                 "collection_name": collection_name,
                 "file_name": hit.file_name,
-                # 现成的引用 ref：模型逐字复制进 [citation:文件名](citation_ref)，
-                # 避免自行拼装时编造协议头（曾出现 file: 导致前端不渲染）
-                "citation_ref": f"kb:{collection_name}/{hit.file_name}",
                 "score": round(hit.score, 4),
                 "recall_score": round(hit.recall_score, 4) if hit.recall_score is not None else None,
                 "rerank_score": round(hit.rerank_score, 4) if hit.rerank_score is not None else None,
@@ -163,8 +160,13 @@ def _format_hits(
                 "segment_id": hit.segment_id,
                 "locator": hit.locator,
                 "identity_status": hit.identity_status,
-                "citable": hit.citable,
             }
+        # citation_ref 是现成的引用 ref：模型逐字复制进 [citation:文件名](citation_ref)，
+        # 避免自行拼装时编造协议头（曾出现 file: 导致前端不渲染）。仅稳定版本身份
+        # （document/version/segment 齐全）的命中供 ref——旧文档无法稳定回源，
+        # 注册层 EvidenceEnvelope 身份校验亦会拒收此类条目
+        if hit.citable:
+            row["citation_ref"] = f"kb:{collection_name}/{hit.file_name}"
         rows.append(row)
     return json.dumps({"results": rows}, ensure_ascii=False)
 

@@ -50,7 +50,9 @@ def _normalize_web_result(item: dict) -> dict:
     url = _canonical_url(str(item.get("url") or ""))
     title = str(item.get("title") or url)
     excerpt = str(item.get("snippet") or item.get("excerpt") or "").strip() or title
-    return {**item, "source_type": "web", "url": url, "title": title, "excerpt": excerpt, "citable": True}
+    # 可引用性准入在注册层由 EvidenceEnvelope 身份校验判定（url 必填），
+    # 模型可见输出不携带资格标记字段——引用与否由模型输出阶段决定
+    return {**item, "source_type": "web", "url": url, "title": title, "excerpt": excerpt}
 
 
 def web_search(query: str, limit: int = 8) -> str:

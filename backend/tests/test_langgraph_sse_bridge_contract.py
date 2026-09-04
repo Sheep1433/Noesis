@@ -81,8 +81,7 @@ def test_kb_retrieval_event_preserves_sources() -> None:
             "segment_id": "seg_1",
             "file_name": "登录.md",
             "excerpt": "验证码五分钟有效",
-            "citable": True,
-        }],
+            }],
     }
     end = {
         "event": "on_tool_end",
@@ -154,8 +153,7 @@ def test_reasoning_can_continue_after_retrieval_result() -> None:
                                 "url": "https://example.com/llm-wiki",
                                 "title": "LLM Wiki",
                                 "excerpt": "A research project",
-                                "citable": True,
-                            }
+                                                    }
                         ]
                     }
                 )

@@ -15,7 +15,6 @@ def _evidence_result(**overrides):
         "file_name": "登录需求.md",
         "excerpt": "验证码发送后 5 分钟内有效。",
         "locator": {"type": "page", "page_start": 3, "page_end": 3},
-        "citable": True,
         **overrides,
     }
 
@@ -263,3 +262,15 @@ def test_running_tool_is_marked_unknown_when_cancel_cannot_be_confirmed() -> Non
     assert part["status"] == "error"
     assert part["outcome"] == "unknown"
     assert part["errorCategory"] == "unknown"
+
+
+def test_unversioned_kb_evidence_rejected_by_identity_validation() -> None:
+    """可引用性准入由 EvidenceEnvelope 身份校验独立判定：缺 segment_id 拒收。"""
+    builder = AssistantMessageBuilder()
+    retrieval = builder.register_retrieval_results(
+        tool_call_id="call-1",
+        query="验证码",
+        results=[_evidence_result(segment_id=None)],
+    )
+    assert retrieval.results == []
+    assert all(part["type"] != "retrieval" or not part["results"] for part in builder.to_dict()["parts"])

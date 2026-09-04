@@ -107,7 +107,6 @@ def test_run_projection_preserves_retrieval_results() -> None:
         "url": "https://example.com/source",
         "title": "Example source",
         "excerpt": "Source excerpt",
-        "citable": True,
     }
     projection.apply(WireFrame("retrieval-results-available", {
         "tool_call_id": "call-search",

@@ -152,6 +152,28 @@ function arcCitationIndex(item: ArcPanelMessage): CitationIndex | undefined {
 }
 
 /**
+ * 文件路径 → 所属弧引用编号索引：预览弧内 write_file / edit_file 写入的报告时，
+ * 文件内引用上标与该弧来源面板同号。同文件被多个弧写过取最近的弧（Map 后写覆盖，
+ * 面板按消息序生成）；无写入记录的文件不进映射。路径按去前导 `/` 归一匹配。
+ */
+const arcCitationIndexByFile = computed(() => {
+  const byFile = new Map<string, CitationIndex>()
+  for (const panel of arcPanels.value.values()) {
+    if (panel.writtenFilePaths.length === 0) {
+      continue
+    }
+    const index = buildCitationIndexFromNumbers(
+      panel.entries.map((entry) => entry.result),
+      panel.numbers,
+    )
+    for (const rawPath of panel.writtenFilePaths) {
+      byFile.set(rawPath.replace(/^\/+/, ''), index)
+    }
+  }
+  return byFile
+})
+
+/**
  * 检索 tool 卡的结构化结果关联（遗留渲染路径用；共享渲染器内部自算同构 map）。
  * 主/子会话同构：tool part 只存摘要，完整结果按 tool_call_id 取 retrieval part。
  */
@@ -3700,6 +3722,7 @@ function onComposerPaste(e: ClipboardEvent) {
               ref="sessionFilesPanelRef"
               :session-id="uuids[qa_type] || ''"
               :background-color="backgroundColorVariable"
+              :citation-index-by-file="arcCitationIndexByFile"
             />
           </aside>
         </div>
@@ -3766,6 +3789,7 @@ function onComposerPaste(e: ClipboardEvent) {
           ref="sessionFilesPanelRef"
           :session-id="uuids[qa_type] || ''"
           :background-color="backgroundColorVariable"
+          :citation-index-by-file="arcCitationIndexByFile"
         />
       </n-drawer-content>
     </n-drawer>

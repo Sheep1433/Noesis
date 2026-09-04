@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import type { CitationIndex } from '@/views/chat/citationRendering'
 import { CreateOutline, DownloadOutline } from '@vicons/ionicons-v5'
 import { NButton, NButtonGroup, NCode, NIcon, NInput, NSpin } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import MarkdownInstance from '@/components/MarkdownPreview/plugins/markdown'
 import { useMermaidRender } from '@/hooks/useMermaidRender'
 import { downloadFile } from '@/utils/download'
@@ -22,6 +24,8 @@ const props = withDefaults(defineProps<{
   downloadTitle?: string
   showDownload?: boolean
   showToolbar?: boolean
+  /** 弧引用编号索引（报告文件预览与来源面板同号）；缺省时引用标记渲染为无编号上标 */
+  citationIndex?: CitationIndex
 }>(), {
   content: '',
   imageSrc: '',
@@ -34,6 +38,7 @@ const props = withDefaults(defineProps<{
   downloadTitle: '下载当前文件',
   showDownload: true,
   showToolbar: true,
+  citationIndex: undefined,
 })
 
 const emit = defineEmits<{
@@ -70,7 +75,9 @@ const isHtml = computed(() => isHtmlPreviewPath(props.path))
 const codeLanguage = computed(() => getCodeLanguage(props.path))
 const displayContent = computed(() => (isEditing.value ? draftContent.value : props.content))
 const markdownParts = computed(() => splitYamlFrontmatter(displayContent.value))
-const renderedMarkdown = computed(() => MarkdownInstance.render(markdownParts.value.body))
+const renderedMarkdown = computed(() => MarkdownInstance.render(markdownParts.value.body, {
+  citationIndex: props.citationIndex,
+}))
 const showMarkdownSource = computed(() => isMarkdown.value && viewMode.value === 'source' && !isEditing.value)
 const showMarkdownPreview = computed(() => isMarkdown.value && viewMode.value === 'preview' && !isEditing.value)
 /**
@@ -92,6 +99,37 @@ const mermaidSource = computed(() => (showMarkdownPreview.value ? renderedMarkdo
 const mermaidEnabled = computed(() => showMarkdownPreview.value && !!mermaidSource.value)
 
 useMermaidRender(markdownPreviewRef, mermaidSource, mermaidEnabled)
+
+const router = useRouter()
+
+/** 解析正文内联 KB 引用角标的 `kb:Collection名/文件名` ref，点击跳转到文档（与 MarkdownPreview 同逻辑） */
+function onContentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  const badge = target?.closest<HTMLElement>('.citation-badge--kb')
+  if (!badge) {
+    return
+  }
+  const kbRef = badge.dataset.kbRef
+  if (!kbRef || !kbRef.startsWith('kb:')) {
+    return
+  }
+  const rest = kbRef.slice(3)
+  const slashIdx = rest.indexOf('/')
+  if (slashIdx < 0) {
+    return
+  }
+  const collectionName = decodeURIComponent(rest.slice(0, slashIdx))
+  const file = decodeURIComponent(rest.slice(slashIdx + 1))
+  if (!collectionName || !file) {
+    return
+  }
+  event.preventDefault()
+  void router.push({
+    name: 'KnowledgeBaseDetail',
+    params: { collectionName },
+    query: { file },
+  })
+}
 
 function startEdit() {
   draftContent.value = props.content
@@ -209,6 +247,7 @@ async function downloadCurrentFile() {
       v-else-if="showMarkdownPreview"
       ref="markdownPreviewRef"
       class="file-preview__markdown markdown-wrapper markdown-wrapper--file-preview"
+      @click="onContentClick"
     >
       <pre
         v-if="markdownParts.frontmatter"

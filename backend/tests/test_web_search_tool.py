@@ -186,13 +186,15 @@ def test_build_returns_both_tools():
 
 
 @patch("noesis.agents.tools.web_search_tool.resolve_web_search")
-def test_web_search_normalizes_citable_source_metadata(mock_resolve):
+def test_web_search_normalizes_source_metadata_without_citable_flag(mock_resolve):
     mock_resolve.return_value = {"query": "q", "results": [{"title": "Docs", "url": "https://example.com/a#section", "snippet": "answer"}]}
     data = json.loads(web_search("q"))
     result = data["results"][0]
     assert result["source_type"] == "web"
     assert result["url"] == "https://example.com/a"
     assert "evidence_id" not in result
+    # 可引用性由注册层身份校验判定，模型可见输出不携带资格标记字段
+    assert "citable" not in result
 
 
 @patch("noesis.agents.tools.web_search_tool.resolve_web_search")
