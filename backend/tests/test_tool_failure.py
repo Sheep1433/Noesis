@@ -237,3 +237,20 @@ def test_strip_error_prefix() -> None:
     assert strip_error_prefix("error: lower") == "lower"
     assert strip_error_prefix("连接失败") == "连接失败"
     assert strip_error_prefix("") == ""
+
+
+def test_sandbox_error_codes_classified_as_invalid_arguments() -> None:
+    """沙箱 backend 的错误码原样（file_not_found / is_a_directory）→ 参数错误，
+    短文案保留路径等具体信息而非退化「执行失败」。"""
+    for raw in (
+        "Error: File '/workspace/不存在.md': file_not_found",
+        "Error: is_a_directory",
+    ):
+        failure = classify_tool_failure(None, raw=raw, tool_name="read_file")
+        assert failure.category is ToolFailureCategory.INVALID_ARGUMENTS, raw
+        assert failure.text != DEFAULT_USER_TOOL_ERROR
+    not_found = classify_tool_failure(
+        None, raw="Error: File '/workspace/不存在.md': file_not_found", tool_name="read_file"
+    )
+    assert "file_not_found" in not_found.text
+    assert "/workspace/不存在.md" in not_found.text

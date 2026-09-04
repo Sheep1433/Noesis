@@ -2,8 +2,8 @@ import type { SessionStats } from './statsFormat'
 import type { ChatMessageResponse } from '@/api/chat'
 
 /**
- * 从历史 assistant 消息 extra.usage 重建会话级统计（主/子会话同口径）。
- * usage 由统一 run 管道在终态落库；子会话统计条与主会话统计条共用本函数。
+ * 从历史 assistant 消息 extra.usage 重建单会话统计（子会话统计条使用）。
+ * 主会话统计条不走本地重建——刷新时取服务端「主+子合并」汇总，与流式实时同口径。
  */
 export function rebuildSessionStats(
   messages: ReadonlyArray<Pick<ChatMessageResponse, 'role' | 'extra'>>,

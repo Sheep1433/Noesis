@@ -37,7 +37,7 @@ from noesis.agents.middlewares.refreshing_skills_middleware import (
     RefreshingSkillsState,
 )
 from noesis.agents.middlewares.session_stats_middleware import SessionStatsMiddleware
-from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+from noesis.runtime.session_stats_registry import SessionStatsRegistry
 from noesis.agents.middlewares.snip_middleware import (
     SnipError,
     SnipMiddleware,

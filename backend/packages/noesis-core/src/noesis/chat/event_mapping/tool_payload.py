@@ -12,6 +12,8 @@ import re
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
+from langgraph.types import Command
+
 from noesis.chat.tool_state import extract_process_result
 
 TOOL_EXIT_PROTOCOL_RE = re.compile(
@@ -68,6 +70,15 @@ def normalize_tool_input(raw: Any) -> Tuple[Dict[str, Any], Optional[str]]:
 
 def tool_output_value(raw_out: Any) -> str:
     if raw_out is None:
+        return ""
+    if isinstance(raw_out, Command):
+        # 工具以 Command 返回（如 start_task 携带 bg_tasks 身份 update）时，
+        # 模型可见文本在 update.messages 的 ToolMessage 里；str(Command) repr
+        # 对模型与 UI 都不是合法输出（曾整段入库成为工具结果展示）
+        for message in (raw_out.update or {}).get("messages") or []:
+            content = getattr(message, "content", None)
+            if isinstance(content, str) and content:
+                return content
         return ""
     return raw_out.content if hasattr(raw_out, "content") else str(raw_out)
 

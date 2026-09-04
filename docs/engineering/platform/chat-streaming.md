@@ -89,7 +89,7 @@ run 内容流（`GET /api/chat/runs/{run_id}/stream`，主会话与子 Agent run
 
 | 分组 | 事件 |
 |---|---|
-| 消息与生命周期 | `message-start`、`run-status`（`retrying` / `hitl_pending` 等非终态）、`run.started`、`run.finished`、`approval.required`、`approval.resumed` |
+| 消息与生命周期 | `message-start`、`run-status`（`retrying` / `hitl_pending` 等非终态）、`stream-rollback`（LLM 重试/降级：失败尝试的部分流式输出作废，消费方回滚末尾 text/reasoning parts）、`run.started`、`run.finished`、`approval.required`、`approval.resumed` |
 | reasoning | `reasoning-start`、`reasoning-delta`、`reasoning-end` |
 | 正文 | `text-start`、`text-delta`、`text-end` |
 | 工具 | `tool-input-start`、`tool-input-available`、`tool-output-available` |

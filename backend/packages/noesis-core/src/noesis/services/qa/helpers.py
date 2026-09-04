@@ -31,7 +31,7 @@ from noesis.chat.event_mapping.failure_notice import (
 )
 from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
-from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+from noesis.runtime.session_stats_registry import SessionStatsRegistry
 from noesis.chat.event_mapping.bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
@@ -721,7 +721,8 @@ async def get_session_usage_summary(session_id: str, user_id: str, db: AsyncSess
 
     汇总该会话与其全部子会话（parent_id）的 assistant 消息 extra.usage——
     与实时统计口径一致（SessionStatsMiddleware 主/子共写同一 registry）。
-    无任何 usage 数据返回 None（前端回退本地重建）。
+    turns 只数主会话轮次：子会话消息是子 Agent 执行明细，不是用户轮次
+    （实时侧仅主 Agent 计轮）。无任何 usage 数据返回 None。
     """
     if not session_id:
         return None
@@ -729,7 +730,7 @@ async def get_session_usage_summary(session_id: str, user_id: str, db: AsyncSess
     from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
 
     result = await db.execute(
-        select(TChatMessage.extra).where(
+        select(TChatMessage.session_id, TChatMessage.extra).where(
             TChatMessage.session_id.in_(
                 select(TChatSession.id).where(
                     or_(
@@ -744,7 +745,7 @@ async def get_session_usage_summary(session_id: str, user_id: str, db: AsyncSess
         )
     )
     totals: Dict[str, float] = {}
-    for (extra,) in result.all():
+    for row_session_id, extra in result.all():
         usage = extra.get("usage") if isinstance(extra, dict) else None
         if not isinstance(usage, dict):
             continue
@@ -754,8 +755,9 @@ async def get_session_usage_summary(session_id: str, user_id: str, db: AsyncSess
             value = usage.get(key)
             if isinstance(value, (int, float)):
                 totals[key] = totals.get(key, 0.0) + value
-        # turns 按消息数（每条 assistant 消息 = 一轮）
-        totals["turns"] = totals.get("turns", 0.0) + 1
+        # turns 只数主会话的 assistant 消息（一条 = 一轮），与实时口径一致
+        if row_session_id == session_id:
+            totals["turns"] = totals.get("turns", 0.0) + 1
     if not totals or not totals.get("steps"):
         return None
     return totals
@@ -777,7 +779,7 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
         from noesis.storage.postgres.models.chat import TChatMessage, TChatSession
 
         result = await db.execute(
-            select(TChatMessage.extra).where(
+            select(TChatMessage.session_id, TChatMessage.extra).where(
                 # 主+子合并口径：子会话（parent_id）的 usage 与主会话一起累计，
                 # 与实时统计（SessionStatsMiddleware 主/子共写一 registry）一致
                 TChatMessage.session_id.in_(
@@ -794,7 +796,7 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
             )
         )
         totals: Dict[str, float] = {}
-        for (extra,) in result.all():
+        for row_session_id, extra in result.all():
             usage = extra.get("usage") if isinstance(extra, dict) else None
             if not isinstance(usage, dict):
                 continue
@@ -802,7 +804,9 @@ async def seed_session_stats_from_history(session_id: str, user_id: str, db: Asy
                 if key == "turns":
                     continue
                 totals[key] = totals.get(key, 0.0) + float(usage.get(key) or 0)
-            totals["turns"] = totals.get("turns", 0.0) + 1.0
+            # turns 只数主会话轮次（实时侧仅主 Agent 计轮，子会话消息不计）
+            if row_session_id == session_id:
+                totals["turns"] = totals.get("turns", 0.0) + 1.0
         if totals:
             SessionStatsRegistry.seed(session_id, totals)
     except Exception:

@@ -46,6 +46,7 @@ import {
   formatDurationMs,
   hasValidContextWindow,
   normalizeApiContent,
+  rollbackTrailingStreamParts,
   shouldShowAssistantToolFailureBlocker,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
@@ -429,6 +430,7 @@ function mutateStreamingParts(apply: (parts: UiPart[]) => UiPart[], createSkelet
  * 同一份映射与工具元数据富集）。内容投影与主聊天同一实现。
  */
 const frameTable = createFrameHandlerTable({
+  onStreamRollback: () => mutateStreamingParts((parts) => rollbackTrailingStreamParts(parts)),
   onTextDelta: (text, parent) => mutateStreamingParts((parts) => appendTextDelta(parts, text, parent), true),
   onReasoningDelta: (text, parent) => mutateStreamingParts((parts) => appendReasoningDelta(parts, text, parent), true),
   onToolCall: (name, args, toolCallId, parent, stepId) =>

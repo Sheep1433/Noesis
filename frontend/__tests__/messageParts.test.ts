@@ -18,6 +18,7 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
+  rollbackTrailingStreamParts,
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
@@ -588,5 +589,26 @@ describe('streaming hot-path copy-on-write 与批量应用等价性', () => {
       chunked = appendTextDeltaWithRedactedThinking(chunked, src.slice(j), ctx)
       expect(stripIds(chunked)).toEqual(stripIds(whole))
     }
+  })
+})
+
+describe('rollbackTrailingStreamParts', () => {
+  it('丢弃末尾连续 text/reasoning，遇到工具边界即停（LLM 重试回滚）', () => {
+    const parts: UiPart[] = [
+      { type: 'text', content: '第一段正文。', id: 'p1' },
+      { type: 'tool', tool_call_id: 'c1', name: 'web_search', input: {}, output: 'ok', status: 'success', duration_ms: 10 },
+      { type: 'reasoning', content: 'Now Phase 6:', id: 'p2' },
+      { type: 'text', content: 'Phase 3-5 完成。', id: 'p3' },
+    ]
+    const rolled = rollbackTrailingStreamParts(parts)
+    expect(rolled.map((p) => p.type)).toEqual(['text', 'tool'])
+    expect((rolled[0] as { content: string }).content).toBe('第一段正文。')
+  })
+
+  it('无可回滚时原样返回引用', () => {
+    const parts: UiPart[] = [
+      { type: 'tool', tool_call_id: 'c1', name: 'web_search', input: {}, output: '', status: 'success' },
+    ]
+    expect(rollbackTrailingStreamParts(parts)).toBe(parts)
   })
 })

@@ -143,7 +143,8 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
 </script>
 
 <template>
-  <n-drawer v-model:show="show" placement="right" :width="drawerWidth">
+  <!-- 监控面板常开数分钟，默认黑遮罩会把主界面压暗成"换主题"的观感；透明遮罩保持主界面视觉不变 -->
+  <n-drawer v-model:show="show" placement="right" :width="drawerWidth" show-mask="transparent">
     <n-drawer-content
       :title="showDetail && selectedTaskResolved ? selectedTaskResolved.description : '子 Agent 与后台命令'"
       closable
@@ -159,11 +160,17 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
           <div v-if="selectedTaskResolved.kind === 'shell'" class="shell-task-detail">
             <div class="shell-task-detail__header">
               <strong>后台命令输出</strong>
-              <NButton size="small" type="error" quaternary @click="emit('cancel', selectedTaskResolved)">
+              <NButton
+                v-if="selectedTaskResolved.status === 'queued' || selectedTaskResolved.status === 'running'"
+                size="small"
+                type="error"
+                quaternary
+                @click="emit('cancel', selectedTaskResolved)"
+              >
                 停止命令
               </NButton>
             </div>
-            <code class="shell-task-detail__command">{{ selectedTaskResolved.description }}</code>
+            <code class="shell-task-detail__command">{{ selectedTaskResolved.command || selectedTaskResolved.description }}</code>
             <pre v-if="selectedTaskResolved.result || selectedTaskResolved.error" class="shell-task-detail__output">{{ selectedTaskResolved.result || selectedTaskResolved.error }}</pre>
             <span v-else class="shell-task-detail__empty">命令仍在运行，输出完成后会显示在这里。</span>
           </div>

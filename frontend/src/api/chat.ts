@@ -420,6 +420,8 @@ export interface TaskCatalogEntry {
   run_id?: string | null
   assistant_message_id?: string | null
   description: string
+  /** kind=shell 的原始命令；subagent 任务为空 */
+  command?: string | null
   kind?: 'subagent' | 'shell'
   status: 'queued' | 'running' | 'stopping' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
   result?: string | null

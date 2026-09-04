@@ -139,13 +139,17 @@ _DETAIL_MAX_LEN = 10_000
 # 与 task 工具输出前缀同等待遇：按固定片段归类为参数错误，不做任意
 # 正则推断。这些错误的细节（如「offset 780 超出文件长度 668 行」）
 # 是模型与用户定位问题的关键信息，归 unknown 会被兜底文案吞掉。
+# file_not_found / is_a_directory 是沙箱 backend 脚本的错误码原样
+# （无自然语言形态），与英文短语形态并列收录。
 _FILE_TOOL_USAGE_ERROR_MARKERS: tuple[str, ...] = (
     "exceeds file length",
     "does not exist",
+    "file_not_found",
     "read before write",
     "changed since read",
     "no file path",
     "is a directory",
+    "is_a_directory",
     "path is outside",
 )
 

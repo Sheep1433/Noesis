@@ -118,6 +118,9 @@ class RunProjection:
                     str(delta or ""),
                     parent_task_call_id=data.get("parent_task_call_id"),
                 )
+            elif event.event == "stream-rollback":
+                # LLM 重试/降级：失败尝试的部分流式输出不进落库投影
+                self.builder.rollback_trailing_stream_parts()
             elif event.event in {"tool-call-start", "tool-input-start"}:
                 if event.event == "tool-input-start":
                     return True

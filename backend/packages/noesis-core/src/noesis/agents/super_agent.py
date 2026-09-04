@@ -29,6 +29,7 @@ from noesis.agents.subagents import (
     assert_no_bg_task_tools,
 )
 from noesis.agents.subagents.shell_tool import replace_execute_tool
+from noesis.agents.tools.fs_hints import augment_filesystem_tool_descriptions
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import resolve_attachment_tools
@@ -78,6 +79,8 @@ def _compile_task_worker(
         skills_user_id=user_id,
         skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
         session_id=session_id,
+        # worker 同样享用下沉到工具描述的运行规则（仅描述增强，无后台化）
+        filesystem_middleware_hook=augment_filesystem_tool_descriptions,
     ))
     if interrupt_on:
         # 后台任务审批：interrupt 落 checkpoint，executor 转 awaiting_approval，
@@ -217,6 +220,18 @@ class SuperAgent(BaseAgent):
             worker_factory=_bg_worker_factory,
         ))
 
+        def _filesystem_hook(fm):
+            # 规则下沉（cwd/路径/读后改 → 工具描述）+ execute 后台化。
+            # 顺序敏感：先增强描述再替换 execute（替换时保留原描述并追加后台提示）
+            augment_filesystem_tool_descriptions(fm)
+            replace_execute_tool(
+                fm,
+                executor=bg_executor,
+                backend=backend,
+                session_id=session_id,
+                user_id=user_id,
+            )
+
         async def _create_child_session(
             description: str,
             prompt: str | None = None,
@@ -318,13 +333,7 @@ class SuperAgent(BaseAgent):
             backend=backend,
             # execute 工具后台化（run_in_background，默认 false 前台零变化）；
             # 仅主 Agent 挂载——task-worker 保持前台 execute（禁止递归后台化）
-            filesystem_middleware_hook=lambda fm: replace_execute_tool(
-                fm,
-                executor=bg_executor,
-                backend=backend,
-                session_id=session_id,
-                user_id=user_id,
-            ),
+            filesystem_middleware_hook=_filesystem_hook,
             workspace="/workspace",
             session_id=session_id,
             attachments=tuple(str(name) for name in (file_list or {})),

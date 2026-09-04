@@ -140,8 +140,9 @@ def test_model_retry_event_is_emitted_as_run_status_type() -> None:
         None,
         {},
     )
-    assert len(events) == 1
-    wf = events[0]
+    # 两帧：stream-rollback（失败尝试部分输出作废信号）+ run-status（重试提示）
+    assert [e.event for e in events] == ["stream-rollback", "run-status"]
+    wf = events[-1]
     assert isinstance(wf, WireFrame)
     assert wf.event == "run-status"
     # 前端 useSSEStream 按 data.type 分发，必须是 run-status

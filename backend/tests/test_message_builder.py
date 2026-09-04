@@ -274,3 +274,21 @@ def test_unversioned_kb_evidence_rejected_by_identity_validation() -> None:
     )
     assert retrieval.results == []
     assert all(part["type"] != "retrieval" or not part["results"] for part in builder.to_dict()["parts"])
+
+
+def test_rollback_trailing_stream_parts_stops_at_tool_boundary() -> None:
+    """LLM 重试回滚：丢弃末尾连续 text/reasoning，工具 part 是模型调用边界。"""
+    b = AssistantMessageBuilder(session_id="s", message_id="m")
+    b.append_text("第一段正文", parent_task_call_id=None)
+    b.append_tool("web_search", {"query": "q"}, tool_call_id="c1")
+    b.append_reasoning_delta("失败尝试的思考", parent_task_call_id=None)
+    b.append_text_delta("失败尝试的正文", parent_task_call_id=None)
+
+    dropped = b.rollback_trailing_stream_parts()
+
+    assert dropped == 2
+    parts = b.to_dict()["parts"]
+    assert [p["type"] for p in parts] == ["text", "tool"]
+    assert parts[0]["content"] == "第一段正文"
+    # 幂等：再次回滚无 text/reasoning 可丢
+    assert b.rollback_trailing_stream_parts() == 0

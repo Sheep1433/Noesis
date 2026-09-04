@@ -1339,3 +1339,20 @@ export function applyHitlPendingParts(
   }
   return next
 }
+
+/**
+ * LLM 重试/降级回滚：丢弃末尾连续的 text/reasoning parts（失败尝试被断流
+ * 前已流出的部分输出）。工具/检索等 part 是模型调用边界，遇到即停——与
+ * 后端 builder.rollback_trailing_stream_parts 同一规则。
+ */
+export function rollbackTrailingStreamParts(parts: UiPart[]): UiPart[] {
+  let end = parts.length
+  while (end > 0) {
+    const p = parts[end - 1]
+    if (p.type !== 'text' && p.type !== 'reasoning') {
+      break
+    }
+    end -= 1
+  }
+  return end === parts.length ? parts : parts.slice(0, end)
+}

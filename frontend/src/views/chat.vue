@@ -49,7 +49,6 @@ import { buildDisplayParts, lastTopLevelTextEntry } from '@/utils/groupAssistant
 import { parseWriteTodosInput, shouldApplyWriteTodos } from '@/utils/parseWriteTodosInput'
 import { isChatModeChange, qaTypeLabel } from '@/utils/qaType'
 import { isReasoningLevel } from '@/utils/reasoningLevels'
-import { rebuildSessionStats } from '@/utils/sessionStats'
 import { formatStatsLine, STATS_TEMPLATE_VARIABLES } from '@/utils/statsFormat'
 import { taskNoticeMeta } from '@/utils/taskNotice'
 import { ensureVisionModelForImageUpload } from '@/utils/visionModel'
@@ -82,6 +81,7 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
+  rollbackTrailingStreamParts,
   shortenChatErrorToast,
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
@@ -1454,22 +1454,10 @@ function resetStatslineTemplate() {
   statslineModal.draft = ''
 }
 /**
- * 从历史 assistant 消息 extra.usage 重建会话级统计（打开旧会话时回放）。
- *  主/子会话共用同一计算（见 utils/sessionStats）。
- */
-function rebuildSessionStatsFromHistory() {
-  sessionStats.value = rebuildSessionStats(
-    conversationItems.value.map((item) => ({ role: item.role, extra: item.msg_metadata as unknown })),
-  )
-}
-
-/**
- * 打开/切换会话时的统计恢复：优先取服务端「主+子合并」汇总（与实时口径一致，
- * 子 Agent 的 usage 落在子会话消息里，本地重建只汇总主会话会丢失子 Agent 部分）；
- * 端点失败或无数据时回退本地重建。
+ * 打开/切换会话时的统计恢复：服务端「主+子合并」汇总（与流式实时同口径）。
+ * 不做本地重建回退——本地只见主会话消息，是另一个口径；汇总失败宁可不显示。
  */
 async function refreshSessionStats(sessionId: string) {
-  rebuildSessionStatsFromHistory()
   if (!sessionId) {
     return
   }
@@ -1485,7 +1473,7 @@ async function refreshSessionStats(sessionId: string) {
       sessionStats.value = merged as unknown as SessionStats
     }
   } catch {
-    // 汇总端点失败不阻塞会话打开：本地重建值已就位
+    // 汇总失败不阻塞会话打开：统计条保持空，不用口径不一致的本地值顶替
   }
 }
 /** 整轮回复结束信号：递增触发所有 ToolCallCollapse compact 收起。 */
@@ -1689,6 +1677,12 @@ const sseStream = useSSEStream({
       ...(aid ? { message_id: aid } : {}),
       ...(lf ? { langfuse_session_id: lf } : {}),
     }
+  },
+  onStreamRollback: () => {
+    // LLM 重试/降级：失败尝试的部分流式输出整体作废——先冲刷批处理缓冲
+    // （失败增量可能还挂在批处理里），再丢弃尾部 text/reasoning parts
+    streamDeltaBatcher.flush()
+    patchLastAssistantParts((parts) => rollbackTrailingStreamParts(parts))
   },
   onTextDelta: (text, parent_task_call_id) => {
     // 重试成功后后端不发 run-status:running，只有内容到达才标志恢复——清重试标记。

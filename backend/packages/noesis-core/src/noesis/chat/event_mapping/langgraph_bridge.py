@@ -233,7 +233,7 @@ class LangGraphSseBridge:
         """
         self.message_usage["ttft_ms"] += ms
         if self.session_id:
-            from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+            from noesis.runtime.session_stats_registry import SessionStatsRegistry
 
             SessionStatsRegistry.add(self.session_id, {"ttft_ms": ms})
 
@@ -263,6 +263,35 @@ class LangGraphSseBridge:
         self._text_open = False
         self._current_text_part_id = None
         self._current_text_parent_task_call_id = None
+
+    def _rollback_attempt_stream(
+        self,
+        builder: Optional[AssistantMessageBuilder],
+        ctx: Dict[str, Any],
+        out: List[str],
+    ) -> None:
+        """回滚失败模型尝试的部分流式输出（重试/降级共用）。
+
+        被断流前已流出的正文与思考从 builder 丢弃、流式缓冲清零、开放
+        part 状态复位（不发 close 帧——内容整体作废），并下发
+        ``stream-rollback`` 帧让 projection 与前端做同样回滚。不回滚则
+        N 次重试在同一消息里累积 N 份重复的正文/思考。
+        """
+        if builder is not None:
+            builder.rollback_trailing_stream_parts()
+        ctx["text_buffer"] = ""
+        ctx["reasoning_buffer"] = ""
+        self._text_open = False
+        self._current_text_part_id = None
+        self._current_text_parent_task_call_id = None
+        self._reasoning_open = False
+        self._current_reasoning_part_id = None
+        self._current_reasoning_parent_task_call_id = None
+        out.append(_format_sse("stream-rollback", {
+            "type": "stream-rollback",
+            "message_id": self.assistant_message_id,
+            "scope": "model_attempt",
+        }))
 
     def _close_reasoning(self, out: List[str]) -> None:
         if not self._reasoning_open or not self._current_reasoning_part_id:
@@ -788,6 +817,8 @@ class LangGraphSseBridge:
         if lc_kind == "on_custom_event" and item.get("name") == "noesis_model_retry":
             data = item.get("data") or {}
             if isinstance(data, dict):
+                # 失败尝试的部分流式输出先回滚，再进入下一次重试
+                self._rollback_attempt_stream(builder, ctx, out)
                 # 先展开 data 再覆盖 type：中间件 payload 含 type=noesis_model_retry，
                 # 不得覆盖外层 run-status，否则前端按 data.type 分发匹配不到 run-status 分支。
                 payload = {**data, "type": "run-status"}
@@ -805,9 +836,9 @@ class LangGraphSseBridge:
             data = item.get("data") or {}
             if isinstance(data, dict):
                 content = str(data.get("content") or "")
-                # 先 flush 可能在 text_buffer 中的残留流式文本（重试前的部分输出）
-                if builder is not None and ctx.get("text_buffer"):
-                    self._flush_text_buffer(builder, ctx)
+                # 最后一次尝试的部分流式输出同样回滚（重试路径之外 attempt
+                # 数耗尽直落降级时没有 retry 事件兜底），降级文案单独成段
+                self._rollback_attempt_stream(builder, ctx, out)
                 # fallback 文本写进 builder（用户在消息体看到失败说明）
                 if builder is not None and content:
                     builder.append_text(content, parent_task_call_id=None)

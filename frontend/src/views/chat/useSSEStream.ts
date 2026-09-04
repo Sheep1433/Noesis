@@ -22,6 +22,8 @@ export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
   onContextUpdate?: (context: ContextSnapshot) => void
   onTextDelta?: (text: string, parent_task_call_id?: string) => void
+  /** LLM 重试/降级：丢弃失败尝试已流出的尾部 text/reasoning parts */
+  onStreamRollback?: () => void
   onRetrievalResults?: (part: Record<string, unknown>) => void
   onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
   onReasoningStart?: (data: Record<string, unknown>) => void
@@ -80,6 +82,7 @@ export function createFrameHandlerTable(handlers: SSEStreamOptions) {
     onRunStatus,
     onMessageStart,
     onTextDelta,
+    onStreamRollback,
     onRetrievalResults,
     onReasoningStart,
     onReasoningDelta,
@@ -161,6 +164,7 @@ export function createFrameHandlerTable(handlers: SSEStreamOptions) {
       onRunStatus?.(String(data.status ?? 'running'), message)
     },
     'message-start': (data) => onMessageStart?.(data),
+    'stream-rollback': () => onStreamRollback?.(),
     'text-delta': (data) => {
       if (typeof data.text_delta === 'string') {
         onTextDelta?.(data.text_delta, parentTaskCallId(data))

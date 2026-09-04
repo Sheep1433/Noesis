@@ -1310,18 +1310,29 @@ class ChatService:
                 .group_by(TChatMessage.session_id)
             )
             turn_counts = {str(row[0]): int(row[1] or 0) for row in count_result.all()}
+            usage_result = await db.execute(
+                select(TChatMessage.session_id, TChatMessage.extra)
+                .where(
+                    TChatMessage.session_id.in_(child_ids),
+                    TChatMessage.role == 'assistant',
+                    TChatMessage.deleted_at.is_(None),
+                )
+            )
+            # 步数 DB 回退（运行时进度丢失后重建）：各 assistant 消息
+            # extra.usage.steps 求和，口径 = 模型调用次数，与统计条
+            # 「N 轮 · M 步」及 executor 运行时计数同源
+            usage_steps: dict[str, int] = {}
+            for row in usage_result.all():
+                extra = row[1] if isinstance(row[1], dict) else {}
+                steps = int((extra.get('usage') or {}).get('steps') or 0)
+                usage_steps[str(row[0])] = usage_steps.get(str(row[0]), 0) + steps
         else:
             turn_counts = {}
+            usage_steps = {}
         catalog: list[dict[str, Any]] = []
         for child in children:
             run = latest_runs.get(child.id)
             task = BackgroundTaskExecutor.get_memory(child.id)
-            snapshot = run.snapshot if run and isinstance(run.snapshot, dict) else {}
-            parts = snapshot.get('parts') if isinstance(snapshot, dict) else []
-            snapshot_step_count = sum(
-                1 for part in parts
-                if isinstance(part, dict) and part.get('type') == 'tool'
-            ) if isinstance(parts, list) else 0
             catalog.append({
                 'session_id': child.id,
                 'parent_id': parent_id,
@@ -1331,7 +1342,7 @@ class ChatService:
                 'run_id': (task or {}).get('run_id') or (run.id if run else child.created_by_run_id),
                 'status': (task or {}).get('status') or (run.status if run else 'completed'),
                 'turn_count': turn_counts.get(child.id, 0),
-                'step_count': max(int((task or {}).get('progress_count') or 0), snapshot_step_count),
+                'step_count': max(int((task or {}).get('progress_count') or 0), usage_steps.get(child.id, 0)),
                 'started_at': (run.started_at if run else None),
                 'finished_at': (run.finished_at if run else None),
                 'interrupt': (task or {}).get('interrupt'),

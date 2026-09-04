@@ -507,6 +507,23 @@ class AssistantMessageBuilder:
             ReasoningPart(content=reasoning, parent_task_call_id=parent_task_call_id),
         )
 
+    def rollback_trailing_stream_parts(self) -> int:
+        """丢弃末尾连续的 text/reasoning parts，返回丢弃数量。
+
+        用于 LLM 重试/降级：失败尝试在被断流前已流出的部分正文与思考
+        不应留在消息里（否则 N 次重试累积 N 份重复）。工具/检索等 part
+        是模型调用边界——模型流式阶段不产生它们，遇到即停。
+        """
+        dropped = 0
+        while self._content.parts:
+            last = self._content.parts[-1]
+            if isinstance(last, (TextPart, ReasoningPart)):
+                self._content.parts.pop()
+                dropped += 1
+                continue
+            break
+        return dropped
+
     def append_tool(
         self,
         tool: str,

@@ -71,7 +71,13 @@ class _StartTaskArgs(BaseModel):
     description: str = Field(..., description="子任务的简短标题（10-20 字，用于任务卡与会话标题展示）")
     prompt: str = Field("", description="子 Agent 要执行的完整任务指令：子目标、约束、期望输出格式")
     subagent_type: str = Field(..., description="子 Agent 角色类型（可用值见系统提示的类型清单；按任务性质选择）")
-    run_in_background: bool = Field(True, description="是否立即返回并在后台执行")
+    run_in_background: bool = Field(
+        False,
+        description=(
+            "默认 false：前台等待结果直接返回，超过约 2 分钟自动转后台（之后用 check_task 收结果）；"
+            "仅当任务预计远超数分钟、或要与其它子任务并行时才传 true（立即返回 task_id）"
+        ),
+    )
 
 
 class _ToolCallAwareStructuredTool(StructuredTool):
@@ -440,16 +446,20 @@ class NoesisSubagentMiddleware(
                 "description：子任务的简短标题（10-20 字，用于任务卡与会话标题）。"
                 "prompt：完整任务指令——写清子目标、约束与期望输出格式。"
                 "subagent_type（必填）：子 Agent 角色类型，按任务性质从系统提示的类型清单中选择。"
-                "run_in_background（默认 true）：立即返回 task_id，可继续其他工作，之后用 check_task 收结果；"
-                "false：前台等待结果直接返回——仅当你的下一步动作依赖该结果时使用"
-                "（超过约 2 分钟会自动转后台）。"
+                "run_in_background（默认 false）：前台等待，结果直接随本次调用返回；"
+                "超过约 2 分钟自动转后台，之后用 check_task 收结果。"
+                "仅当子任务预计远超数分钟、或要与其它子任务并行推进时才显式传 true（立即返回 task_id）。"
             ),
         )
         check = StructuredTool.from_function(
             func=check_task,
             coroutine=acheck_task,
             name="check_task",
-            description="查询后台任务状态并收取结果（completed 时返回最终小结）。",
+            description=(
+                "查询后台任务状态并收取结果（completed 时返回最终小结）。"
+                "由任务终态的 [系统通知] 驱动调用；启动后不要反复轮询——"
+                "确需中途了解进度用 list_tasks。"
+            ),
         )
         cancel = StructuredTool.from_function(
             func=cancel_task,

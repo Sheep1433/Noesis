@@ -597,20 +597,15 @@ async def test_foreground_wait_times_out_to_background() -> None:
 
 
 @pytest.mark.asyncio
-async def test_background_default_returns_immediately() -> None:
-    """默认后台：立即返回 task_id 提示。"""
-    worker = _build_worker([_slow_call("s", "c0") for _ in range(20)], slow=True)
-    executor = BackgroundTaskExecutor(task_timeout_seconds=60)
+async def test_default_omitted_arg_is_foreground() -> None:
+    """默认（省略 run_in_background）走前台等待路径：快任务直接收结果。"""
+    worker = _build_worker([AIMessage(content="默认前台结果")])
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
 
-    import time as _time
-    began = _time.time()
     result = await start.ainvoke({"description": "x", "subagent_type": "general"})
-    assert _time.time() - began < 2.0
     result = _tool_text(result)
-    assert "子 Agent 已启动" in result
-    task_id = result.split("：")[1].split("\n")[0]
-    executor.cancel(task_id)
+    assert "默认前台结果" in result
 
 
 @pytest.mark.asyncio
@@ -693,7 +688,8 @@ async def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
         task = _wait_terminal(executor, task_id)
         assert task["status"] == BgTaskStatus.COMPLETED.value
         assert task["result"] == "结论如下。"
-        assert task["progress_count"] == 1  # 步数口径 = 工具调用数
+        # 步数口径 = 模型调用次数：脚本两次模型调用（工具调用步 + 文本步）
+        assert task["progress_count"] == 2
 
         # 终态投影：tool part（含输出与成功态）+ text part
         # （事件经 call_soon_threadsafe 投递到本协程 loop，先让出控制权再收集）
@@ -756,8 +752,8 @@ async def test_bg_event_subscription_receives_lifecycle() -> None:
         assert events[0]["event"] == "started"
         assert events[0]["task"]["task_id"] == task_id
         assert events[1]["event"] == "progress"
-        # 步数口径 = 工具调用数：纯文本步（本脚本无工具调用）不计步
-        assert events[1]["task"]["progress_count"] == 0
+        # 步数口径 = 模型调用次数：纯文本步也是一次模型调用，计 1 步
+        assert events[1]["task"]["progress_count"] == 1
         assert events[-1]["event"] == "terminal"
         assert events[-1]["task"]["status"] == "completed"
     finally:
@@ -1088,7 +1084,10 @@ def test_context_snapshot_from_worker_usage_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_start_shell_description_as_task_title() -> None:
-    """execute 后台化：description 作任务卡标题；缺省回退原始命令。"""
+    """execute 后台化：description 作任务卡标题；缺省回退原始命令。
+
+    command 字段始终保留原始命令——任务详情展示执行内容不依赖回退。
+    """
     from unittest.mock import AsyncMock
 
     class _Ok:
@@ -1108,6 +1107,7 @@ async def test_start_shell_description_as_task_title() -> None:
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert task["description"] == "跑全量回归测试"
+    assert task["command"] == "uv run pytest tests/ -q 2>&1 | tail -5"
 
     task_id2 = executor.start_shell(
         command="pnpm lint",
@@ -1117,14 +1117,18 @@ async def test_start_shell_description_as_task_title() -> None:
     )
     task2 = _wait_terminal(executor, task_id2)
     assert task2["description"] == "pnpm lint"
+    assert task2["command"] == "pnpm lint"
 
 
 def test_step_count_does_not_cap_at_progress_preview_limit() -> None:
-    """步数是与有界 progress 预览分离的权威计数：超过 50 步不得封顶。"""
+    """步数是与有界 progress 预览分离的权威计数：超过 50 步不得封顶。
+
+    口径 = 模型调用次数：每个 on_chat_model_end 边界 +1，与预览条目数解耦。
+    """
     from noesis.agents.subagents.executor import (
         MAX_PROGRESS_ENTRIES,
         BackgroundTask,
-        _progress_append,
+        _record_progress_from_model_end,
     )
 
     task = BackgroundTask(
@@ -1135,7 +1139,7 @@ def test_step_count_does_not_cap_at_progress_preview_limit() -> None:
     )
     total = MAX_PROGRESS_ENTRIES + 12
     for i in range(total):
-        _progress_append(task, {"kind": "tool_call", "name": f"tool-{i}", "ts": 0})
+        _record_progress_from_model_end(task, AIMessage(content=f"step {i}"))
 
     assert len(task.progress) == MAX_PROGRESS_ENTRIES  # 预览有界
     assert task.step_count == total  # 计数不封顶

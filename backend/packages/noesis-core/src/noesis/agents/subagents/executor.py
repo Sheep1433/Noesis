@@ -130,6 +130,8 @@ class BackgroundTask:
     # 投影与任务卡展示用——worker 编译配方由角色注册表在启动前解析，
     # 执行器不感知类型差异。
     subagent_type: Optional[str] = None
+    # kind="shell" 的原始命令（任务详情展示执行内容用）；subagent 任务为 None
+    command: Optional[str] = None
     # worker 的 model_id：上下文窗口上限解析用（主对话同源 model_limits）
     model_id: Optional[str] = None
     # 最近一次上下文快照（worker usage 提取；变更才发布/落库）
@@ -142,7 +144,8 @@ class BackgroundTask:
     stop_reason: Optional[str] = None
     started_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
-    # 步数：与 progress 分离的权威计数——progress 是有界预览（maxlen=50），
+    # 步数：与 progress 分离的权威计数，口径 = 模型调用次数（与会话统计条
+    # usage.steps / TTFT/步 同源）——progress 是有界预览（maxlen=50），
     # 用其长度当步数会在 50 步后封顶（所有长任务都显示「50 步」）
     step_count: int = 0
     # 执行过程摘要（有界，前端任务卡展开显示）；lock 保护跨线程读写
@@ -167,6 +170,7 @@ class BackgroundTask:
             "turn_count": self.turn_count,
             "kind": self.kind,
             "subagent_type": self.subagent_type,
+            "command": self.command,
             "status": self.status.value,
             "result": self.result,
             "error": self.error,
@@ -353,8 +357,8 @@ class _TaskEntry:
     stop_grace_seconds: float = STOP_GRACE_SECONDS
     # 硬杀后强制终态对账延迟（秒）：executor 实例配置
     stop_reconcile_seconds: float = STOP_RECONCILE_SECONDS
-    # kind="shell"：命令与执行 backend（local_shell 宿主机 / docker 容器）
-    shell_command: Optional[str] = None
+    # kind="shell"：执行 backend（local_shell 宿主机 / docker 容器）；
+    # 命令本体在 task.command（展示与执行同源）
     shell_backend: Any = None
     # 命令级超时（None=不向 backend 传 timeout，走 backend 默认）
     shell_command_timeout: Optional[int] = None
@@ -651,10 +655,6 @@ _SHELL_DEFAULT_COMMAND_TIMEOUT = 3600
 
 def _progress_append(task: BackgroundTask, entry: dict[str, Any]) -> None:
     with task.progress_lock:
-        # 步数口径 = 工具调用数，与会话详情按 tool part 计数一致；
-        # text / tool_result 只进预览不计步（曾按三类合计导致列表与详情相差一倍）
-        if entry.get("kind") == "tool_call":
-            task.step_count += 1
         task.progress.append(entry)
 
 
@@ -700,11 +700,14 @@ def _schedule_context_persist(task: BackgroundTask, snapshot: dict[str, Any]) ->
 
 
 def _record_progress_from_model_end(task: BackgroundTask, message: AIMessage) -> str:
-    """on_chat_model_end 边界的进度摘要：工具调用计数 + 文本预览。
+    """on_chat_model_end 边界的进度摘要：步数 +1 + 工具调用/文本预览。
 
-    步数口径 = 工具调用数（与会话详情按 tool part 计数一致）；
-    text 只进预览不计步。返回本条消息的可见文本（task.result 口径）。
+    步数口径 = 模型调用次数，与子会话统计条 usage.steps（「N 轮 · M 步」、
+    TTFT/步）同源；tool_calls / text / tool_result 只进预览不计步。
+    返回本条消息的可见文本（task.result 口径）。
     """
+    with task.progress_lock:
+        task.step_count += 1
     text = _child_message_text(message)
     for call in getattr(message, "tool_calls", None) or []:
         _progress_append(
@@ -1011,6 +1014,7 @@ class BackgroundTaskExecutor:
             user_id=user_id,
             description=description or command,
             kind="shell",
+            command=command,
         )
         entry = _TaskEntry(
             task=task,
@@ -1018,7 +1022,6 @@ class BackgroundTaskExecutor:
             recursion_limit=self._recursion_limit,
             timeout_seconds=self._shell_timeout,
             hitl_timeout_seconds=self._hitl_timeout,
-            shell_command=command,
             shell_backend=backend,
             shell_command_timeout=(
                 timeout if timeout is not None else _SHELL_DEFAULT_COMMAND_TIMEOUT
@@ -2333,7 +2336,7 @@ async def _arun_shell(entry: _TaskEntry) -> None:
     try:
         timeout = entry.shell_command_timeout
         response = await entry.shell_backend.aexecute(
-            entry.shell_command or "",
+            task.command or "",
             **({"timeout": timeout} if timeout is not None else {}),
         )
         task.result = _format_shell_result(response)

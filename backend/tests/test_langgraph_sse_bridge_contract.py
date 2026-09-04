@@ -1624,7 +1624,7 @@ def test_model_call_records_accumulate_with_usage_and_finish_frame() -> None:
 def test_ttft_feeds_session_stats_registry() -> None:
     """首包延迟同步写入会话级 registry：stats-update 快照（middleware 无从感知
     首包）与终态落库的 extra.usage 同源，否则统计条 ttft 只剩历史 seed 值。"""
-    from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+    from noesis.runtime.session_stats_registry import SessionStatsRegistry
 
     session_id = "sess-ttft-registry"
     SessionStatsRegistry.clear(session_id)
@@ -1786,3 +1786,81 @@ def test_model_attempt_ordinal_is_per_call() -> None:
     parts.extend(bridge.finalize())
 
     assert [c["attempt"] for c in bridge.message_model_calls] == [1, 2, 1]
+
+
+def _stream_attempt_partial(bridge, builder, ctx) -> None:
+    """失败模型尝试的部分流式输出：一个工具 part 边界 + 尾部 text/reasoning。"""
+    builder.append_tool("web_search", {"query": "q"}, tool_call_id="b1")
+    builder.append_reasoning_delta("Now Phase 6: the final report.", parent_task_call_id=None)
+    builder.append_text_delta("Phase 3-5 完成。", parent_task_call_id=None)
+    ctx["text_buffer"] = "Phase 3-5 完成。"
+    ctx["reasoning_buffer"] = "Now Phase 6: the final report."
+
+
+def test_model_retry_rolls_back_partial_stream_output() -> None:
+    """LLM 重试：失败尝试已流出的 text/reasoning 回滚 + 下发 stream-rollback 帧。
+
+    回归场景：免费网关连续断流 × 重试不回滚 → 同一消息累积 N 份重复的
+    正文/思考（dd43c1ad 会话 5 组重复实锤）。
+    """
+    bridge = LangGraphSseBridge("sess-retry-rollback")
+    builder = AssistantMessageBuilder(session_id="sess-retry-rollback", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    _stream_attempt_partial(bridge, builder, ctx)
+
+    out = bridge.process_item(
+        {
+            "event": "on_custom_event",
+            "name": "noesis_model_retry",
+            "data": {
+                "type": "noesis_model_retry",
+                "status": "retrying",
+                "attempt_id": 2,
+                "max_attempts": 6,
+                "wait_ms": 2000,
+                "reason": "transient",
+                "message": "正在重试 (2/6)",
+            },
+        },
+        builder,
+        ctx,
+    )
+    blob = "".join(out)
+
+    # 回滚信号 + 原有重试提示帧都下发
+    assert '"stream-rollback"' in blob
+    assert '"run-status"' in blob and '"retrying"' in blob
+    # builder：尾部 text/reasoning 已丢弃，工具 part（attempt 边界）保留
+    types = [p["type"] for p in builder.to_dict()["parts"]]
+    assert types == ["tool"]
+    # 流式缓冲与开放 part 状态复位
+    assert ctx["text_buffer"] == ""
+    assert ctx["reasoning_buffer"] == ""
+    assert bridge._text_open is False and bridge._reasoning_open is False
+
+
+def test_model_fallback_rolls_back_partial_stream_and_appends_notice() -> None:
+    """重试耗尽降级：最后一次尝试的部分输出同样回滚，降级文案单独成段。"""
+    bridge = LangGraphSseBridge("sess-fallback-rollback")
+    builder = AssistantMessageBuilder(session_id="sess-fallback-rollback", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    _stream_attempt_partial(bridge, builder, ctx)
+
+    out = bridge.process_item(
+        {
+            "event": "on_custom_event",
+            "name": "noesis_model_fallback",
+            "data": {"type": "noesis_model_fallback", "content": "服务暂时不可用，请稍候重试。"},
+        },
+        builder,
+        ctx,
+    )
+    blob = "".join(out)
+
+    assert '"stream-rollback"' in blob
+    assert '"error"' in blob
+    parts = builder.to_dict()["parts"]
+    types = [p["type"] for p in parts]
+    # 工具边界保留 + 尾部只剩降级文案（失败尝试的 text/reasoning 不在）
+    assert types == ["tool", "text"]
+    assert parts[1]["content"] == "服务暂时不可用，请稍候重试。"
