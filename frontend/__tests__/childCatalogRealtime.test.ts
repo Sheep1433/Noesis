@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatMessageResponse, TaskCatalogEntry } from '@/api/chat'
+import type { AgentRunSnapshot, ChatMessageResponse, TaskCatalogEntry } from '@/api/chat'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import BackgroundSubagentCollapse from '@/components/BackgroundSubagentCollapse/index.vue'
@@ -9,15 +9,26 @@ import { clearQueuedFollowups, setQueuedFollowups } from '@/components/SubagentC
 import { activateChildCatalogSession, createChildCatalogEventSource } from '@/views/chat/childCatalogStream'
 
 const api = vi.hoisted(() => ({
+  getSession: vi.fn(),
   getSessionMessages: vi.fn(),
-  subscribeAgentRun: vi.fn(),
+  getAgentRun: vi.fn(),
+  resumeAgentRunHitl: vi.fn(),
   sendSubagentFollowup: vi.fn(),
+  stopAgentRun: vi.fn(),
+  subscribeAgentRun: vi.fn(),
 }))
 
+// mock 门面必须覆盖 SubagentConversationView 消费的全部值导出：缺导出时
+// 断流自愈路径（resync → getAgentRun）会抛 vitest mock 错误，退避重试的
+// rejection 落在用例结束后成为未处理拒绝（全量跑时序敏感）
 vi.mock('@/api/chat', () => ({
+  getSession: api.getSession,
   getSessionMessages: api.getSessionMessages,
-  subscribeAgentRun: api.subscribeAgentRun,
+  getAgentRun: api.getAgentRun,
+  resumeAgentRunHitl: api.resumeAgentRunHitl,
   sendSubagentFollowup: api.sendSubagentFollowup,
+  stopAgentRun: api.stopAgentRun,
+  subscribeAgentRun: api.subscribeAgentRun,
 }))
 
 // ModelSelector 经 api/models → authHttp → router 拉起全部视图与 pinia
@@ -49,6 +60,21 @@ vi.mock('@/components/ReasoningBlock/index.vue', () => ({
 vi.mock('@/components/ToolCallCollapse/index.vue', () => ({
   default: { template: '<div class="tool-call-stub" />' },
 }))
+
+/** 断流自愈的权威快照（默认终态：run 流安静退出不再重试） */
+function agentRunSnapshot(status: AgentRunSnapshot['status'] = 'completed'): AgentRunSnapshot {
+  return {
+    run_id: 'run-1',
+    assistant_message_id: 'am-1',
+    session_id: 'child-session-1',
+    qa_type: 'SUPER_AGENT_QA',
+    origin: 'subagent',
+    status,
+    snapshot_sequence: 1,
+    attempt_id: 1,
+    content: { version: 1, parts: [] },
+  }
+}
 
 const runningTask: TaskCatalogEntry = {
   task_id: 'child-session-1',
@@ -139,8 +165,10 @@ describe('子 Agent 标准会话展示', () => {
     api.getSessionMessages.mockReset()
     api.subscribeAgentRun.mockReset()
     api.sendSubagentFollowup.mockReset()
+    api.getAgentRun.mockReset()
     api.subscribeAgentRun.mockResolvedValue({ body: null })
     api.sendSubagentFollowup.mockResolvedValue(runningTask)
+    api.getAgentRun.mockResolvedValue(agentRunSnapshot())
     clearQueuedFollowups('child-session-1')
   })
 
@@ -205,6 +233,20 @@ describe('子 Agent 标准会话展示', () => {
 
     await wrapper.setProps({ show: false })
     expect(lastSignal.aborted).toBe(true)
+  })
+
+  it('断流自愈拿到终态快照后不再重订阅（run-finished 重载不得回到订阅循环）', async () => {
+    api.getSessionMessages.mockResolvedValue({ messages: [], total: 0 })
+    const wrapper = mountDrawer(true)
+    await flushPromises()
+
+    // 订阅失败（body: null）→ resync 终态快照 → run-finished → 重载恰好一轮。
+    // 若重载再次订阅同一终态 run，会形成无退避的微任务死循环——各环节都是
+    // 已 resolve 的 mock promise，宏任务（含 vitest 超时）被饿死，套件表现为
+    // 永久挂死。抽屉双挂载属编排细节，上限放宽到 2 实例 × 各一轮。
+    expect(api.subscribeAgentRun.mock.calls.length).toBeLessThanOrEqual(2)
+    expect(api.getSessionMessages.mock.calls.length).toBeLessThanOrEqual(4)
+    await wrapper.setProps({ show: false })
   })
 
   it('补充要求走标准 child session followup API', async () => {
@@ -327,6 +369,10 @@ describe('子 Agent 标准会话展示', () => {
   it('排队消息支持删除、编辑回填与立即提交', async () => {
     setQueuedFollowups('child-session-1', ['先问 A', '再问 B'])
     api.getSessionMessages.mockResolvedValue({ messages: [], total: 0 })
+    // 队列 CRUD 场景要求 run 仍活跃：终态 run + 队列会触发队首自动提交
+    // （watcher 契约，见「run 终态后自动提交队首」用例）。流端点故障
+    // （body: null）下 resync 拿 running 快照 → 后台退避重连，不影响 CRUD。
+    api.getAgentRun.mockResolvedValue(agentRunSnapshot('running'))
     const wrapper = mountDrawer(true)
     await flushPromises()
 

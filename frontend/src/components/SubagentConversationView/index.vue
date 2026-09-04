@@ -511,6 +511,13 @@ async function loadContextSnapshot() {
 }
 
 async function consumeStream(runId: string, serial: number) {
+  // 已知终态的 run 不再（重）订阅。run-finished 触发的重载会再次走到这里；
+  // 若继续订阅且订阅立即失败（网关错误 / 响应异常），resync 又拿到终态快照 →
+  // run-finished → 再重载，形成无退避间隔的死循环（各环节皆已 resolve 的
+  // promise 时还会饿死宏任务）。新 run id 不受影响（排队续跑 / followup）。
+  if (run.value?.run_id === runId && !runActive.value) {
+    return
+  }
   stopStream()
   const previous = activeRunStreams.get(runId)
   if (previous) {
