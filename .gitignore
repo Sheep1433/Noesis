@@ -41,3 +41,4 @@ backend/.env.*
 !backend/.env.prod.example
 backend/config.yaml
 backend/config.prod.yaml
+deploy/config.docker.yaml
