@@ -69,6 +69,36 @@ describe('searchBlock 渲染 retrieval part 检索结果', () => {
     expect(wrapper.findAll('.result-item').length).toBe(3)
   })
 
+  it('结果条目超过 8 条时行内全部展示，不出现截断提示', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      evidence_id: `w${i}`,
+      source_type: 'web',
+      url: `https://example.com/r${i}`,
+      title: `结果 ${i}`,
+      excerpt: `摘要 ${i}`,
+    }))
+    const content = JSON.stringify({
+      version: 1,
+      parts: [{
+        type: 'tool',
+        tool_call_id: 'call-web',
+        name: 'web_search',
+        input: { query: 'q' },
+        output: '检索到 12 条来源',
+        status: 'success',
+        state: 'succeeded',
+      }, {
+        type: 'retrieval',
+        tool_call_id: 'call-web',
+        query: 'q',
+        results: many,
+      }],
+    })
+    const wrapper = await mountAndExpandWebSearchCard({ content, compactTools: true })
+    expect(wrapper.findAll('.result-item').length).toBe(12)
+    expect(wrapper.find('.capped-hint').exists()).toBe(false)
+  })
+
   it('无 score 的 web 结果不渲染分数（null 不触发分数位）', async () => {
     const wrapper = await mountAndExpandWebSearchCard({ content: fixture, compactTools: true })
     expect(wrapper.find('.search-block').find('.result-item__score').exists()).toBe(false)

@@ -108,7 +108,7 @@ function parseJsonFetch(text: string): { url: string, content: string } | null {
   return null
 }
 
-/** chat 行内最多展示 8 项，超出折叠（详情面才看全部）。 */
+/** grep 分组 / count / 路径列表的行内展示上限（结果列表不截断，全部展示）。 */
 const MAX_ROWS = 8
 
 /** web_fetch 正文展示上限：抓取内容可能很长，行内给预览即可。 */
@@ -209,7 +209,7 @@ const inputDisplay = computed(() => {
     <template v-if="view.kind === 'results'">
       <div v-if="view.total !== undefined" class="result-meta">共 {{ view.total }} 条结果</div>
       <div v-if="!view.items.length" class="result-meta">无匹配结果</div>
-      <div v-for="(item, i) in view.items.slice(0, MAX_ROWS)" :key="i" class="result-item">
+      <div v-for="(item, i) in view.items" :key="i" class="result-item">
         <div class="result-item__head">
           <span v-if="item.collection_name" class="result-item__src">{{ item.collection_name }}</span>
           <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="result-item__title">{{ item.title || item.url }}</a>
@@ -218,7 +218,6 @@ const inputDisplay = computed(() => {
         </div>
         <div v-if="item.excerpt" class="result-item__excerpt">{{ item.excerpt }}</div>
       </div>
-      <div v-if="view.items.length > MAX_ROWS" class="capped-hint">仅展示前 {{ MAX_ROWS }} 条，共 {{ view.items.length }} 条</div>
     </template>
 
     <!-- grep content 分组 -->
