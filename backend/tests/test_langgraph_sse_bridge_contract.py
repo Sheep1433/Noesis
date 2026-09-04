@@ -1621,6 +1621,33 @@ def test_model_call_records_accumulate_with_usage_and_finish_frame() -> None:
     assert fin["usage"]["steps"] == 2
 
 
+def test_ttft_feeds_session_stats_registry() -> None:
+    """首包延迟同步写入会话级 registry：stats-update 快照（middleware 无从感知
+    首包）与终态落库的 extra.usage 同源，否则统计条 ttft 只剩历史 seed 值。"""
+    from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+
+    session_id = "sess-ttft-registry"
+    SessionStatsRegistry.clear(session_id)
+    try:
+        bridge = LangGraphSseBridge(session_id)
+        builder = AssistantMessageBuilder(session_id=session_id, message_id=bridge.assistant_message_id)
+        parts = _model_call_sequence(
+            bridge, builder, _ctx(),
+            run_id="run-ttft",
+            model_name="glm-5.3-flash",
+            content="你好",
+            usage={"input_tokens": 100, "output_tokens": 10, "total_tokens": 110},
+            finish_reason="stop",
+        )
+        assert parts
+        snapshot = SessionStatsRegistry.peek(session_id)
+        assert snapshot is not None
+        assert snapshot["ttft_ms"] >= 0.0
+        assert snapshot["ttft_ms"] == bridge.message_usage["ttft_ms"]
+    finally:
+        SessionStatsRegistry.clear(session_id)
+
+
 def test_finish_reason_promotes_last_call_provider_length() -> None:
     """最后一步 provider finish_reason=length → 管道 stop 纠偏为 length_stop。"""
     bridge = LangGraphSseBridge("sess-length")

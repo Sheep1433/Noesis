@@ -24,6 +24,17 @@ export function formatTokens(n: number): string {
 }
 
 /**
+ * 平均首字延迟（TTFT/步）：ttft_ms 在数据源里是各次调用求和（解码吞吐
+ * 公式的分母原料），展示侧除以步数还原成单次调用的均值。
+ */
+export function averageTtftMs(stats: SessionStats): number | null {
+  if (stats.ttft_ms <= 0 || stats.steps <= 0) {
+    return null
+  }
+  return stats.ttft_ms / stats.steps
+}
+
+/**
  * 解码吞吐（tok/s）：输出 token ÷ 各次调用的解码时长之和（llm_ms − ttft_ms）。
  * 分母是「每路流时长总和」而非墙钟时间——多个子 Agent 并行输出时速率不虚增，
  * 展示的始终是模型的平均解码速度；解码样本不足 1s 噪声过大，返回 null 不展示。
@@ -64,9 +75,11 @@ export function formatStatsLine(stats: SessionStats | null, template?: string): 
   // 轮数 · 步数
   groups.push(`${stats.turns} 轮 · ${stats.steps} 步`)
 
-  // LLM 耗时
+  // LLM 耗时（含平均首字延迟）
   if (stats.llm_ms > 0) {
-    groups.push(`LLM ${formatDuration(stats.llm_ms)}`)
+    const avgTtft = averageTtftMs(stats)
+    const ttft = avgTtft !== null ? ` · 首字 ${formatDuration(avgTtft)}` : ''
+    groups.push(`LLM ${formatDuration(stats.llm_ms)}${ttft}`)
   }
 
   // 缓存命中
@@ -93,6 +106,7 @@ export const STATS_TEMPLATE_VARIABLES: Array<{ token: string, label: string }> =
   { token: '{turns}', label: '轮数' },
   { token: '{steps}', label: '步数' },
   { token: '{llm}', label: 'LLM 耗时（如 9.2s / 2m42s）' },
+  { token: '{ttft}', label: '平均首字延迟（TTFT/步，如 0.9s / 1m12s）' },
   { token: '{cache}', label: '缓存命中百分比' },
   { token: '{in}', label: '输入 token（紧凑格式 13.1K）' },
   { token: '{out}', label: '输出 token（紧凑格式 755）' },
@@ -105,10 +119,13 @@ export function applyStatsTemplate(template: string, stats: SessionStats): strin
     ? Math.round(stats.cache_read_tokens / inputTotal * 100)
     : 0
   const tps = decodeTokensPerSecond(stats)
+  const avgTtft = averageTtftMs(stats)
+  const ttftText = avgTtft !== null ? formatDuration(avgTtft) : '—'
   return template
     .replaceAll('{turns}', String(stats.turns))
     .replaceAll('{steps}', String(stats.steps))
     .replaceAll('{llm}', formatDuration(stats.llm_ms))
+    .replaceAll('{ttft}', ttftText)
     .replaceAll('{cache}', `${cacheHit}%`)
     .replaceAll('{in}', formatTokens(stats.input_tokens))
     .replaceAll('{out}', formatTokens(stats.output_tokens))

@@ -224,6 +224,19 @@ class LangGraphSseBridge:
             record["cache_read_tokens"] = int(details.get("cache_read") or 0)
             record["cache_write_tokens"] = int(details.get("cache_write") or 0)
         self.message_model_calls.append(record)
+
+    def _record_ttft(self, ms: float) -> None:
+        """首包延迟计入本条消息 usage 与会话级统计源。
+
+        middleware 感知不到流式首包，registry 快照里的 ttft_ms 只剩历史 seed；
+        bridge 在此补上本 run 增量，stats-update 与终态落库（extra.usage）同源。
+        """
+        self.message_usage["ttft_ms"] += ms
+        if self.session_id:
+            from noesis.agents.middlewares.session_stats_registry import SessionStatsRegistry
+
+            SessionStatsRegistry.add(self.session_id, {"ttft_ms": ms})
+
     # ---------- emit helpers ----------
 
     def _ensure_started(self, out: List[str]) -> None:
@@ -876,7 +889,7 @@ class LangGraphSseBridge:
                 start = self._model_call_starts.get(model_run_id)
                 if start is not None:
                     first_token_ms = max(0.0, (time.perf_counter() - start) * 1000)
-                    self.message_usage["ttft_ms"] += first_token_ms
+                    self._record_ttft(first_token_ms)
                     self._model_call_ttft[model_run_id] = first_token_ms
                 self._model_first_token_seen.add(model_run_id)
             if content:
@@ -928,7 +941,7 @@ class LangGraphSseBridge:
                 # 与既有 message_usage 口径一致。
                 if ttft_ms is None and output is not None:
                     ttft_ms = elapsed_ms
-                    self.message_usage["ttft_ms"] += elapsed_ms
+                    self._record_ttft(elapsed_ms)
             self._model_first_token_seen.discard(model_run_id)
             self.message_usage["steps"] += 1
             self._append_model_call_record(

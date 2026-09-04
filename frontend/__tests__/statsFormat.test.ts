@@ -74,6 +74,22 @@ describe('formatStatsLine', () => {
     expect(line).toContain('输出 755 · 50 tok/s')
   })
 
+  it('耗时组附带首字延迟（ttft_ms > 0 时）', () => {
+    const line = formatStatsLine(stats({ steps: 1, llm_ms: 7_300, ttft_ms: 900 }))
+    expect(line).toContain('LLM 7.3s · 首字 0.9s')
+  })
+
+  it('首字延迟按步数求均值：数据源是求和值，展示为单次调用均值', () => {
+    const line = formatStatsLine(stats({ steps: 3, llm_ms: 21_000, ttft_ms: 3_000 }))
+    expect(line).toContain('首字 1s')
+  })
+
+  it('ttft 缺省为 0 时不追加首字段', () => {
+    const line = formatStatsLine(stats({ steps: 1, llm_ms: 7_300 }))
+    expect(line).toContain('LLM 7.3s')
+    expect(line).not.toContain('首字')
+  })
+
   it('吞吐无效时不追加，统计条其余部分不受影响', () => {
     const line = formatStatsLine(stats({ steps: 1, llm_ms: 1_200, ttft_ms: 1_000, output_tokens: 20 }))
     expect(line).toContain('输出 20')
@@ -85,6 +101,14 @@ describe('formatStatsLine', () => {
     expect(applyStatsTemplate('{out} @ {tps}', s)).toBe('755 @ 50 tok/s')
     const tiny = stats({ steps: 1, llm_ms: 1_200, ttft_ms: 1_000, output_tokens: 20 })
     expect(applyStatsTemplate('{tps}', tiny)).toBe('—')
+  })
+
+  it('模板 {ttft} 有效值与无效占位', () => {
+    expect(applyStatsTemplate('首字 {ttft}', stats({ steps: 1, llm_ms: 7_300, ttft_ms: 900 })))
+      .toBe('首字 0.9s')
+    expect(applyStatsTemplate('首字 {ttft}', stats({ steps: 2, llm_ms: 7_300, ttft_ms: 1_800 })))
+      .toBe('首字 0.9s')
+    expect(applyStatsTemplate('首字 {ttft}', stats({ steps: 1, llm_ms: 7_300 }))).toBe('首字 —')
   })
 })
 
