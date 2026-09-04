@@ -28,6 +28,7 @@ export_compose_host_env() {
 }
 
 [[ -f "$COMPOSE_FILE" ]] || die "缺少 ${COMPOSE_FILE}（请使用 deploy/docker-compose.yml，勿用仓库根目录旧 compose）"
+[[ -f "$CONFIG_FILE" ]] || die "缺少 ${CONFIG_FILE}（真实配置不入库：cp deploy/config.docker.example.yaml deploy/config.docker.yaml 后按需修改）"
 [[ -f "$ENV_FILE" ]] || die "缺少 ${ENV_FILE}，请从 deploy/.env.docker.example 复制并填写"
 [[ -f "$CONFIG_FILE" ]] || die "缺少 ${CONFIG_FILE}"
 
