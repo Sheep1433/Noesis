@@ -187,7 +187,7 @@ const fetchDisplay = computed(() =>
 )
 
 /**
- * 入参 pretty JSON（对齐 read/write 回退分支的 args 形态）：块内首行展示，
+ * 入参单行 JSON（对齐其它工具的参数形态，无美化缩进）：块内首行展示，
  * 与输出同块同构——展开必须同时可见输入与输出。空对象不显示。
  */
 const inputDisplay = computed(() => {
@@ -197,7 +197,7 @@ const inputDisplay = computed(() => {
   if (!obj || Object.keys(obj).length === 0) {
     return ''
   }
-  return JSON.stringify(obj, null, 2)
+  return JSON.stringify(obj)
 })
 </script>
 
