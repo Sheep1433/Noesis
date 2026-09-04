@@ -123,3 +123,51 @@ def test_late_completed_cannot_overwrite_run_error() -> None:
     projection.apply(RunError(message="执行环境不可用"))
     assert projection.apply(RunCompleted()) is False
     assert projection.status.value == "error"
+
+
+def test_ask_user_respond_resolves_pending_part_and_survives_terminal_reconcile() -> None:
+    """回归：ask_user 被回答后 part 停留 approval_pending，被终态 reconcile 错杀为
+    cancelled「本次工具执行已停止」——实际用户已回答且 run 成功续跑完成。
+
+    真实序列：ask_user interrupt（approval_pending）→ 用户 respond → resume 合成
+    tool-output（answer, succeeded）→ run 完成 reconcile。
+    """
+    projection = _projection()
+    projection.apply(WireFrame("tool-input-available", {
+        "tool_call_id": "call-ask", "name": "ask_user",
+        "input": {"question": "clone 哪个仓库？"}, "state": "running",
+    }))
+    projection.apply(HitlRequired({
+        "interrupt_id": "interrupt-1",
+        "kind": "ask",
+        "action_requests": [{"tool_call_id": "call-ask", "name": "ask_user", "args": {}}],
+    }))
+    assert projection.builder.to_dict()["parts"][0]["state"] == "approval_pending"
+
+    # resume：apply_hitl_decisions（prepare 阶段）+ 合成 tool-output 帧
+    projection.apply_hitl_decisions([
+        {"type": "respond", "message": "就是你这个项目的源码"},
+    ])
+    projection.apply(WireFrame("tool-output-available", {
+        "tool_call_id": "call-ask", "name": "ask_user",
+        "output": "就是你这个项目的源码",
+        "status": "success", "state": "succeeded",
+    }))
+
+    part = projection.builder.to_dict()["parts"][0]
+    assert part["state"] == "succeeded"
+    assert part["output"] == "就是你这个项目的源码"
+
+    # run 完成：reconcile 不得改写已回答的 ask part
+    projection.apply(RunCompleted())
+    part = projection.builder.to_dict()["parts"][0]
+    assert part["state"] == "succeeded"
+    assert not part.get("error")
+
+
+def test_approval_pending_to_succeeded_transition_allowed() -> None:
+    from noesis.chat.tool_state import can_transition_tool_state
+
+    assert can_transition_tool_state("approval_pending", "succeeded") is True
+    # 已回答即终态：不允许再回到 running
+    assert can_transition_tool_state("succeeded", "running") is False
