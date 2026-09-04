@@ -1,12 +1,16 @@
+import type { UiPart } from '@/views/chat/messageParts'
 import { describe, expect, it } from 'vitest'
 import { parseTaskToolOutput } from '@/utils/parseTaskTool'
 import {
+  appendReasoningDelta,
   appendStreamFailureNotice,
   appendTextDelta,
+  appendTextDeltaWithRedactedThinking,
   applyToolOutput,
   assistantToolFailureSummary,
   COMPACTION_BOUNDARY,
   completeReasoningPart,
+  createRedactedThinkingStreamCtx,
   formatDurationMs,
   formatUsageSummary,
   hasValidContextWindow,
@@ -463,6 +467,126 @@ describe('retrieval part origin 解析（research-source-provenance）', () => {
     const part = normalized.parts[0]
     if (part.type === 'retrieval') {
       expect(part.origin).toEqual({ kind: 'main' })
+    }
+  })
+})
+
+/* ---- 流式热路径：copy-on-write 身份保持 + 批量合并应用等价性 ----
+   见 docs/bug/chat-stream-hotpath-memory-bloat.md：append* 每次克隆全部 part、
+   每 delta 全链重建是渲染进程内存膨胀主因。此组测试钉住两点：
+   1) 未命中 part 复用对象引用（copy-on-write 契约，防止回退成全量克隆）；
+   2) 连续同签名 delta 合并成一条后应用，与逐条应用产出一致（批量应用语义中性）。 */
+describe('streaming hot-path copy-on-write 与批量应用等价性', () => {
+  /** genPartId 含随机数，等价性比较需剥掉 id */
+  function stripIds(parts: UiPart[]): Array<Record<string, unknown>> {
+    return parts.map(({ id, ...rest }) => rest)
+  }
+
+  it('appendTextDelta 并入尾部 text 时仅替换命中 part，其余 part 复用引用', () => {
+    const parts: UiPart[] = [
+      { id: 't0', type: 'text', content: '头', status: 'completed' },
+      { id: 't1', type: 'text', content: '尾', status: 'completed' },
+    ]
+    const next = appendTextDelta(parts, '+')
+
+    expect(next).toHaveLength(2)
+    expect(next[0]).toBe(parts[0])
+    expect(next[1]).not.toBe(parts[1])
+    expect(next[1]).toMatchObject({ id: 't1', content: '尾+', status: 'streaming' })
+    // 输入不可变
+    expect(parts[1]).toMatchObject({ content: '尾', status: 'completed' })
+  })
+
+  it('appendTextDelta 尾部非 text 时新开 part，既有 part 全部复用引用', () => {
+    const parts: UiPart[] = [
+      { id: 't0', type: 'text', content: '正文', status: 'streaming' },
+      { id: 'r0', type: 'reasoning', content: '思考', status: 'streaming' },
+    ]
+    const next = appendTextDelta(parts, '续')
+
+    expect(next).toHaveLength(3)
+    expect(next[0]).toBe(parts[0])
+    expect(next[1]).toBe(parts[1])
+    expect(next[2]).toMatchObject({ type: 'text', content: '续' })
+  })
+
+  it('appendTextDelta 跳过其它 parent 的交错 part，并入同 parent 的最近 text', () => {
+    const parts: UiPart[] = [
+      { id: 'main-t', type: 'text', content: '主', status: 'streaming' },
+      { id: 'child-r', type: 'reasoning', content: '子思考', status: 'streaming', parent_task_call_id: 'task-1' },
+    ]
+    const next = appendTextDelta(parts, '续')
+
+    expect(next).toHaveLength(2)
+    expect(next[0]).not.toBe(parts[0])
+    expect(next[0]).toMatchObject({ id: 'main-t', content: '主续' })
+    expect(next[1]).toBe(parts[1])
+  })
+
+  it('appendReasoningDelta 同样只替换命中 part，其余复用引用', () => {
+    const parts: UiPart[] = [
+      { id: 'r0', type: 'reasoning', content: '想', status: 'completed' },
+    ]
+    const next = appendReasoningDelta(parts, '继续')
+
+    expect(next).toHaveLength(1)
+    expect(next[0]).not.toBe(parts[0])
+    expect(next[0]).toMatchObject({ id: 'r0', content: '想继续', status: 'streaming' })
+    expect(parts[0]).toMatchObject({ content: '想', status: 'completed' })
+  })
+
+  it('连续同签名 delta 合并应用与逐条应用产出相同 parts（批量语义中性）', () => {
+    const seq: Array<{ kind: 'text' | 'reasoning', data: string }> = [
+      { kind: 'reasoning', data: '思' },
+      { kind: 'reasoning', data: '考' },
+      { kind: 'text', data: 'He' },
+      { kind: 'text', data: 'llo' },
+      { kind: 'text', data: '!' },
+      { kind: 'reasoning', data: '再想' },
+      { kind: 'text', data: '答' },
+    ]
+    const stepwise = seq.reduce<UiPart[]>((parts, d) =>
+      d.kind === 'text' ? appendTextDelta(parts, d.data) : appendReasoningDelta(parts, d.data), [])
+
+    // 模拟 streamDeltaBatcher 的合并：连续同签名拼成一条
+    const merged: Array<{ kind: 'text' | 'reasoning', data: string }> = []
+    for (const d of seq) {
+      const tail = merged[merged.length - 1]
+      if (tail && tail.kind === d.kind) {
+        tail.data += d.data
+      } else {
+        merged.push({ ...d })
+      }
+    }
+    const batched = merged.reduce<UiPart[]>((parts, d) =>
+      d.kind === 'text' ? appendTextDelta(parts, d.data) : appendReasoningDelta(parts, d.data), [])
+
+    expect(stripIds(batched)).toEqual(stripIds(stepwise))
+  })
+
+  it('<think> 标签在任意切分点分批应用与整段应用结果一致（合并 chunk 不改变解析）', () => {
+    const src = '前文<think>推理中段</think>后文'
+    const whole = appendTextDeltaWithRedactedThinking([], src, createRedactedThinkingStreamCtx())
+
+    for (let split = 0; split <= src.length; split++) {
+      const ctx = createRedactedThinkingStreamCtx()
+      let chunked = appendTextDeltaWithRedactedThinking([], src.slice(0, split), ctx)
+      chunked = appendTextDeltaWithRedactedThinking(chunked, src.slice(split), ctx)
+      expect(stripIds(chunked)).toEqual(stripIds(whole))
+    }
+  })
+
+  it('多批 text delta 共享同一 redacted ctx，顺序应用与整段应用结果一致', () => {
+    const src = 'a<think>b1 b2</think>c1 c2'
+    const whole = appendTextDeltaWithRedactedThinking([], src, createRedactedThinkingStreamCtx())
+
+    // 三个切分点（含标签内部与闭合标签跨点）
+    for (const [i, j] of [[1, 10], [7, 14], [8, 20]] as const) {
+      const ctx = createRedactedThinkingStreamCtx()
+      let chunked = appendTextDeltaWithRedactedThinking([], src.slice(0, i), ctx)
+      chunked = appendTextDeltaWithRedactedThinking(chunked, src.slice(i, j), ctx)
+      chunked = appendTextDeltaWithRedactedThinking(chunked, src.slice(j), ctx)
+      expect(stripIds(chunked)).toEqual(stripIds(whole))
     }
   })
 })

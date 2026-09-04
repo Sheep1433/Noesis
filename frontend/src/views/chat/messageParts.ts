@@ -1034,14 +1034,16 @@ export function appendTextDelta(
     return out
   }
   const parentId = parent_task_call_id?.trim() || undefined
-  const next = parts.map((p) => ({ ...p })) as UiPart[]
   // 跳过其它 parent 的交错 part，避免子 Agent 正文被拆碎
-  for (let i = next.length - 1; i >= 0; i--) {
-    const p = next[i]
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
     if (part_parent_task_call_id(p) !== parentId) {
       continue
     }
     if (p.type === 'text') {
+      // copy-on-write：只替换命中的尾部 text part，其余 part 复用引用
+      // （流式热路径；逐 delta 克隆全部 part 是渲染进程内存膨胀主因之一）
+      const next = parts.slice()
       next[i] = {
         ...p,
         content: p.content + delta,
@@ -1051,14 +1053,16 @@ export function appendTextDelta(
     }
     break
   }
-  next.push({
-    id: genPartId('text'),
-    type: 'text',
-    content: delta,
-    status: 'streaming',
-    ...(parentId ? { parent_task_call_id: parentId } : {}),
-  })
-  return next
+  return [
+    ...parts,
+    {
+      id: genPartId('text'),
+      type: 'text',
+      content: delta,
+      status: 'streaming',
+      ...(parentId ? { parent_task_call_id: parentId } : {}),
+    },
+  ]
 }
 
 export type RedactedThinkingStreamMode = 'text' | 'thinking'
@@ -1163,15 +1167,16 @@ export function appendReasoningDelta(
   parent_task_call_id?: string,
 ): UiPart[] {
   const parentId = parent_task_call_id?.trim() || undefined
-  const next = parts.map((p) => ({ ...p })) as UiPart[]
   // 跳过其它 parent 的交错 part（主 Agent 与子 Agent 事件交错时），
   // 合并进「同 parent 最近一条 reasoning」；同 parent 的 text/tool 之后才新开块。
-  for (let i = next.length - 1; i >= 0; i--) {
-    const p = next[i]
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
     if (part_parent_task_call_id(p) !== parentId) {
       continue
     }
     if (p.type === 'reasoning') {
+      // copy-on-write：只替换命中的 reasoning part，其余 part 复用引用（流式热路径）
+      const next = parts.slice()
       next[i] = {
         ...p,
         content: p.content + delta,
@@ -1181,14 +1186,16 @@ export function appendReasoningDelta(
     }
     break
   }
-  next.push({
-    id: genPartId('reasoning'),
-    type: 'reasoning',
-    content: delta,
-    status: 'streaming',
-    ...(parentId ? { parent_task_call_id: parentId } : {}),
-  })
-  return next
+  return [
+    ...parts,
+    {
+      id: genPartId('reasoning'),
+      type: 'reasoning',
+      content: delta,
+      status: 'streaming',
+      ...(parentId ? { parent_task_call_id: parentId } : {}),
+    },
+  ]
 }
 
 export function upsertToolInputPart(

@@ -7,6 +7,7 @@ import type { ChatModeQaType } from '@/utils/qaType'
 import type { SessionStats } from '@/utils/statsFormat'
 import type { CitationIndex } from '@/views/chat/citationRendering'
 import type { MessageContentV1, RetrievalResultUi, UiPart } from '@/views/chat/messageParts'
+import type { StreamDelta } from '@/views/chat/streamDeltaBatcher'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { createAgentRun, deleteSession, ensureSession, getSession, getSessionUsageSummary, listSessionTaskCatalog, markSessionRead, resumeAgentRunHitl, stopAgentRun, stopShellTask, updateSessionMeta, updateSessionTitle } from '@/api/chat'
 import AssistantReplyToolbar from '@/components/AssistantReplyToolbar/index.vue'
@@ -89,6 +90,7 @@ import {
 } from '@/views/chat/messageParts'
 import { arcMessageKey, computeArcPanels } from '@/views/chat/researchArcs'
 import SessionContextPanel from '@/views/chat/SessionContextPanel.vue'
+import { createStreamDeltaBatcher } from '@/views/chat/streamDeltaBatcher'
 import { createUserSignalEventSource } from '@/views/chat/userSignalStream'
 import { useSSEStream } from '@/views/chat/useSSEStream'
 import DefaultPage from './DefaultPage.vue'
@@ -270,6 +272,8 @@ async function restoreActiveSessionFromRoute(sessionId: string) {
   // 切换会话只释放浏览器 subscription，不停止服务端 Run。必须先隔离旧流，
   // 否则旧会话的 snapshot/delta 会写入新会话页面。
   sseStream.detachSubscription()
+  // 同理丢弃旧会话未 flush 的缓冲 delta，防止迟到的 timer flush 写入新会话
+  streamDeltaBatcher.clear()
   try {
     const session = await getSession(sessionId)
     const qt = String(session.extra?.qa_type ?? '').trim() || 'COMMON_QA'
@@ -345,6 +349,8 @@ function resetComposingSurface() {
   sseStream.stopSessionSignals()
   stopCatalogStream()
   stopProcessingClock()
+  // 丢弃未 flush 的流式 delta：整个消息面即将清空，残留缓冲不得流入下一会话
+  streamDeltaBatcher.clear()
   sessionContext.value = null
   sessionContextSessionId.value = ''
   sessionContextIsLive.value = false
@@ -1048,6 +1054,25 @@ const redactedThinkingStreamCtx = createRedactedThinkingStreamCtx()
 /** 本轮已收到后端 reasoning-* 时，不再对 text-delta 做标签拆分 */
 const nativeReasoningSeen = ref(false)
 
+/* ---- 流式 delta 批量应用：text/reasoning delta 先入缓冲，定时/阈值触发单次 parts patch。
+   顺序契约：结构性帧回调（message-start / tool / retrieval / snapshot / finish / error）
+   顶部先 flush；会话整体重置点 clear；新 run 开始前 flush（清空上一轮残留）。 */
+function applyStreamDeltas(deltas: StreamDelta[]): void {
+  if (!deltas.length) {
+    return
+  }
+  patchLastAssistantParts((parts) => deltas.reduce((acc, delta) => {
+    if (delta.kind === 'reasoning') {
+      return appendReasoningDelta(acc, delta.data, delta.parentTaskCallId)
+    }
+    return delta.redactedThinking
+      ? appendTextDeltaWithRedactedThinking(acc, delta.data, redactedThinkingStreamCtx, delta.parentTaskCallId)
+      : appendTextDelta(acc, delta.data, delta.parentTaskCallId)
+  }, parts))
+}
+
+const streamDeltaBatcher = createStreamDeltaBatcher(applyStreamDeltas)
+
 // 改为对象存储不同问答类型的uuid
 const uuids = ref<Record<string, string>>({})
 /** 各会话历史加载中的 promise（信令加入 run 时等待就位，见 restoreActiveSessionFromRoute） */
@@ -1593,6 +1618,8 @@ const sseStream = useSSEStream({
     }
   },
   onSnapshot: (snapshot) => {
+    // 快照整体替换 parts 前先落缓冲 delta，保持与逐 delta 应用相同的到达顺序
+    streamDeltaBatcher.flush()
     reconnectAvailable.value = false
     stylizingLoading.value = shouldShowRunContinuation(snapshot.status)
     if (stylizingLoading.value) {
@@ -1646,6 +1673,7 @@ const sseStream = useSSEStream({
     }
   },
   onMessageStart: (data) => {
+    streamDeltaBatcher.flush()
     nativeReasoningSeen.value = false
     Object.assign(redactedThinkingStreamCtx, createRedactedThinkingStreamCtx())
     const aid = String(data.assistant_message_id ?? '')
@@ -1667,13 +1695,17 @@ const sseStream = useSSEStream({
     if (retryingLabel.value && !parent_task_call_id) {
       retryingLabel.value = ''
     }
-    patchLastAssistantParts((parts) =>
-      nativeReasoningSeen.value
-        ? appendTextDelta(parts, text, parent_task_call_id)
-        : appendTextDeltaWithRedactedThinking(parts, text, redactedThinkingStreamCtx, parent_task_call_id),
-    )
+    streamDeltaBatcher.push({
+      kind: 'text',
+      data: text,
+      // 与 reducer 同口径归一（trim / 空串 → undefined），保证同语义 delta 落进同一桶
+      parentTaskCallId: parent_task_call_id?.trim() || undefined,
+      // push 时捕获拆分开关：reasoning-start 之后到达的 text 不再走 <think> 拆分
+      redactedThinking: !nativeReasoningSeen.value,
+    })
   },
   onRetrievalResults: (part) => {
+    streamDeltaBatcher.flush()
     patchLastAssistantParts((parts) => appendRetrievalPart(parts, part))
   },
   onReasoningStart: () => {
@@ -1685,9 +1717,14 @@ const sseStream = useSSEStream({
     if (retryingLabel.value && !parent_task_call_id) {
       retryingLabel.value = ''
     }
-    patchLastAssistantParts((parts) => appendReasoningDelta(parts, delta, parent_task_call_id))
+    streamDeltaBatcher.push({
+      kind: 'reasoning',
+      data: delta,
+      parentTaskCallId: parent_task_call_id?.trim() || undefined,
+    })
   },
   onReasoningEnd: (data) => {
+    streamDeltaBatcher.flush()
     const partId = typeof data.part_id === 'string' ? data.part_id : undefined
     const parentId = typeof data.parent_task_call_id === 'string'
       ? data.parent_task_call_id
@@ -1695,6 +1732,7 @@ const sseStream = useSSEStream({
     patchLastAssistantParts((parts) => completeReasoningPart(parts, partId, parentId))
   },
   onToolCall: (name, args, tool_call_id, parent_task_call_id, step_id) => {
+    streamDeltaBatcher.flush()
     patchLastAssistantParts((parts) =>
       upsertToolInputPart(parts, tool_call_id, name, args, parent_task_call_id, step_id),
     )
@@ -1706,12 +1744,14 @@ const sseStream = useSSEStream({
     }
   },
   onToolResult: (tool_call_id, payload) => {
+    streamDeltaBatcher.flush()
     patchLastAssistantParts((parts) => applyToolOutput(parts, tool_call_id, payload))
   },
   onCustomEvent: (eventType, data) => {
     if (eventType !== 'hitl-required') {
       return
     }
+    streamDeltaBatcher.flush()
     const interrupt_id = String(data.interrupt_id ?? '')
     const kind = String(data.kind ?? 'approval')
     const action_requests = Array.isArray(data.action_requests)
@@ -1738,6 +1778,8 @@ const sseStream = useSSEStream({
     )
   },
   onFinish: (detail) => {
+    // 终态前落缓冲：所有已到达 delta 先于终态投影（完成标记/停止通知）应用
+    streamDeltaBatcher.flush()
     stylizingLoading.value = false
     stopProcessingClock()
     // 整轮结束：触发当前回复的所有 compact 工具收起。
@@ -1825,6 +1867,7 @@ const sseStream = useSSEStream({
   },
   historyReady: (sessionId) => sessionHistoryReady.get(sessionId) ?? null,
   onError: (msg) => {
+    streamDeltaBatcher.flush()
     stylizingLoading.value = false
     stopProcessingClock()
     patchLastAssistantParts((parts) => flushRedactedThinkingStreamCtx(parts, redactedThinkingStreamCtx))
@@ -2065,6 +2108,9 @@ function appendConversationTurn(
   upload_file_key: ChatAttachmentItem[],
   send_text: string,
 ): string {
+  // 新 run 开始前落上一轮残留缓冲（正常路径 finish 已 drain，此处兜底），
+  // 避免旧 delta 在下方 ctx 重置后用错误解析状态回放
+  streamDeltaBatcher.flush()
   if (showDefaultPage.value) {
     conversationItems.value = []
     showDefaultPage.value = false
@@ -2716,6 +2762,7 @@ const activateChatMode = (
   if (qa_type.value !== targetQaType) {
     suggested_array.value = []
     if (!fromHistorySelection) {
+      streamDeltaBatcher.clear()
       conversationItems.value = []
       showDefaultPage.value = true
       currentIndex.value = null
@@ -2946,6 +2993,7 @@ onBeforeUnmount(() => {
   stopCatalogStream()
   stopUserSignalStream()
   stopProcessingClock()
+  streamDeltaBatcher.dispose()
   // 停止信令流：SPA 内路由切换不会断开 fetch 连接，必须显式中止
   sseStream.stopSessionSignals()
   if (messagesContainer.value) {
