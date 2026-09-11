@@ -80,8 +80,6 @@ STOP_RECONCILE_SECONDS = 30.0
 class BgTaskStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    # 协作停止中间态：停止请求已受理，当前步骤完成后在静止边界退出
-    STOPPING = "stopping"
     AWAITING_APPROVAL = "awaiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -98,10 +96,10 @@ class BgTaskStatus(str, Enum):
         }
 
 
-# 占用会话并发槽的状态：排队（QUEUED）只占队列不占槽；stopping 收尾仍占槽
+# 占用会话并发槽的状态：排队（QUEUED）只占队列不占槽。
+# 停止是乐观终态（受理即 CANCELLED），无中间收口态占槽
 _SLOT_STATUSES = frozenset({
     BgTaskStatus.RUNNING,
-    BgTaskStatus.STOPPING,
     BgTaskStatus.AWAITING_APPROVAL,
 })
 
@@ -335,6 +333,10 @@ class _TaskEntry:
     watchdog_handle: Optional[asyncio.TimerHandle] = None
     # 审批挂起时的投影种子：resume 续写同一 assistant 消息（预中断 parts 恢复）
     turn_seed_content: Optional[dict[str, Any]] = None
+    # 协作停止信号：cancel 受理时置位（线程同步可见），执行循环在静止边界
+    # 观察退出。停止已是乐观终态（受理即落 CANCELLED），该信号只驱动执行侧
+    # 干净退出，不构成对外状态
+    cooperative_stop_signalled: bool = False
     # 协作停止宽限 watchdog（超时回退硬杀）
     stop_grace_handle: Optional[asyncio.TimerHandle] = None
     # 硬杀后强制终态对账 watchdog（协程未按约收口时兜底）
@@ -1089,9 +1091,7 @@ class BackgroundTaskExecutor:
             task = entry.task
             if task.kind == "shell":
                 raise ValueError("该任务为后台命令任务，不支持追加消息")
-            if task.status == BgTaskStatus.STOPPING:
-                raise ValueError("任务正在停止，无法追加消息")
-            if task.status.is_terminal and task.status != BgTaskStatus.COMPLETED:
+            if task.status.is_terminal and task.status not in _RESUMABLE_TERMINALS:
                 raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
 
     @staticmethod
@@ -1105,8 +1105,9 @@ class BackgroundTaskExecutor:
         """followup-turn：向子任务追加一个 turn。
 
         - running / awaiting_approval：入队，当前 turn 结束后链式开新 turn
-        - completed：冷恢复——同 thread 开新 turn，任务回到 running
-        - shell / failed / timed_out / cancelled：拒绝
+        - completed / cancelled：冷恢复——同 thread 开新 turn，任务回到
+          running（执行/意图分离：停止只终止执行，续聊意图保留）
+        - shell / failed / timed_out：拒绝
         - model_id / reasoning_effort 非空：该 turn 起以新参数编译 worker（同 thread 续跑）
         """
         text = message.strip()
@@ -1120,14 +1121,27 @@ class BackgroundTaskExecutor:
             task = entry.task
             if task.kind == "shell":
                 raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
-            if task.status == BgTaskStatus.STOPPING:
-                raise ValueError("任务正在停止，无法追加消息")
             status = task.status
-            # completed → 冷恢复：同 thread 开新 turn（followup 队列一并排入）
-            if status == BgTaskStatus.COMPLETED:
+            # completed / cancelled → 冷恢复：同 thread 开新 turn（followup 队列一并排入）
+            if status in _RESUMABLE_TERMINALS:
                 task.status = BgTaskStatus.RUNNING
                 task.result = None
                 task.completed_at = None
+                # 复活中和（锁内）：停止信号清除（旧协程的静止边界不再触发，
+                # 消亡于 CancelledError 且不收口）；旧执行协程与在飞对账 task
+                # 一并取消（防双流竞争共享 run/result、防迟到的 _force_terminal
+                # 终态化复活任务）；terminal_published 重置（复活轮有自己的
+                # 终态事件与通知要发——COMPLETED 冷恢复的历史缺陷，CANCELLED
+                # 续聊成为一等路径后必须补上）
+                entry.cooperative_stop_signalled = False
+                if entry.future is not None and not entry.future.done():
+                    entry.future.cancel()
+                entry.future = None
+                if entry.stop_reconcile_task is not None and not entry.stop_reconcile_task.done():
+                    entry.stop_reconcile_task.cancel()
+                entry.stop_reconcile_task = None
+                entry.terminal_published = False
+                _disarm_terminal_timers(entry)
                 loop = _ensure_loop()
                 entry.future = _submit_isolated(
                     loop, _arun_followup(entry, text, user_message_id, params),
@@ -1171,9 +1185,7 @@ class BackgroundTaskExecutor:
             task = entry.task
             if task.kind == "shell":
                 raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
-            if task.status == BgTaskStatus.STOPPING:
-                raise ValueError("任务正在停止，无法追加消息")
-            if task.status != BgTaskStatus.COMPLETED:
+            if task.status not in _RESUMABLE_TERMINALS:
                 if task.status.is_terminal:
                     raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
                 with entry.followup_lock:
@@ -1186,6 +1198,17 @@ class BackgroundTaskExecutor:
             task.status = BgTaskStatus.RUNNING
             task.result = None
             task.completed_at = None
+            # 复活中和（与同步版同款）：清停止信号、取消旧协程与在飞对账
+            # task、重置 terminal_published（复活轮发自己的终态事件与通知）
+            entry.cooperative_stop_signalled = False
+            if entry.future is not None and not entry.future.done():
+                entry.future.cancel()
+            entry.future = None
+            if entry.stop_reconcile_task is not None and not entry.stop_reconcile_task.done():
+                entry.stop_reconcile_task.cancel()
+            entry.stop_reconcile_task = None
+            entry.terminal_published = False
+            _disarm_terminal_timers(entry)
         if entry.followup_factory is None:
             loop = _ensure_loop()
             entry.future = _submit_isolated(
@@ -1212,7 +1235,7 @@ class BackgroundTaskExecutor:
             entry.turn_seed_content = None
             # 创建窗口内已受理停止：不提交执行——宽限 watchdog 对账时
             # task.run_id 已是新 run，终态化正确收口
-            stopped_during_launch = task.status == BgTaskStatus.STOPPING
+            stopped_during_launch = entry.cooperative_stop_signalled
         if not stopped_during_launch:
             loop = _ensure_loop()
             entry.future = _submit_isolated(
@@ -1277,12 +1300,12 @@ class BackgroundTaskExecutor:
 
     @staticmethod
     def cancel(task_id: str) -> dict[str, Any]:
-        """请求停止一个后台任务（协作式）。
+        """请求停止一个后台任务：乐观终态，对齐主 Agent 停止语义。
 
-        - running：置 STOPPING + 受理标记并立即返回快照——执行循环在下一个
-          静止边界（工具结果落定 / 模型消息完整）协作退出，投影与部分成果
-          经统一终态收尾保留；宽限 watchdog 超时回退硬杀
-        - stopping：幂等返回同一快照
+        - 受理即落 CANCELLED 终态（UI 同步停止），协程取消 fire-and-forget
+        - 部分成果回收与终态通知在后台异步完成：投影回收（跨 loop DB 往返，
+          大投影可达秒级）不挡受理路径；通知在回收完成后发送（含部分成果）
+        - 已终态幂等返回；回收失败由对账 watchdog 兜底（通知降级发送）
         - queued / awaiting_approval：无进行中的步骤，即时终态
         """
         with _TASKS_LOCK:
@@ -1292,19 +1315,17 @@ class BackgroundTaskExecutor:
             task = entry.task
             if task.status.is_terminal:
                 return task.to_dict(include_progress=False)
-            if task.status == BgTaskStatus.STOPPING:
-                # 已受理（取消或超时触发的停止）：幂等返回
-                return task.to_dict(include_progress=False)
-            with entry.followup_lock:
-                # 正在停止的任务不续跑 followup
-                entry.followups.clear()
-                entry.followup_message_ids.clear()
-                entry.followup_turn_params.clear()
             if task.status == BgTaskStatus.RUNNING and task.kind != "shell":
-                # 协作停止：信号同步置位，收尾在执行侧静止边界完成
-                task.status = BgTaskStatus.STOPPING
+                # 乐观终态：状态直接落 CANCELLED（快照立即对前端生效）；
+                # 执行侧经协作停止信号在静止边界干净退出，收口异步补
+                # 投影回收与通知。宽限/对账 watchdog 保持武装：异步收口
+                # 卡死时对账兜底（此时终态已落，只补通知与落库）
+                task.status = BgTaskStatus.CANCELLED
                 task.stop_reason = "cancelled"
+                task.completed_at = time.time()
+                entry.cooperative_stop_signalled = True
                 _arm_stop_grace(entry)
+                snapshot = task.to_dict(include_progress=False)
             else:
                 # queued（无执行 future）/ awaiting_approval（步骤已静止）/
                 # shell（命令在 backend 不可中断，无协作边界）：即时终态
@@ -1316,13 +1337,15 @@ class BackgroundTaskExecutor:
                 task.status = BgTaskStatus.CANCELLED
                 task.stop_reason = "cancelled"
                 task.completed_at = time.time()
-            snapshot = task.to_dict(include_progress=False)
+                snapshot = task.to_dict(include_progress=False)
         # 锁外发布：drain / 终态通知需要再拿 _TASKS_LOCK
-        if task.status == BgTaskStatus.STOPPING:
-            _publish_task_event(task, "stopping")
-        else:
+        if not entry.cooperative_stop_signalled:
             # 即时终态（锁内已置状态供快照返回）：收口只补落库与事件
             _finalize_task_sync(entry, _stop_terminal(entry))
+        # RUNNING 协作停止：终态事件与通知由执行协程的静止边界收口发布
+        # （携带完整 outcome 的部分成果回收）；宽限超时经硬杀的 CancelledError
+        # 路径收口（outcome=None，进度摘要回收），对账 watchdog 兜底不依赖
+        # 协程配合——cancel 不自起收口协程，避免与执行侧收口竞争 outcome
         return snapshot
 
     # -- 内部委托模块实现（见下方模块函数） ----------------------------
@@ -1465,15 +1488,15 @@ _PARTIAL_RESULT_MAX_CHARS = 4000
 
 def _try_transition(task: BackgroundTask, next_status: BgTaskStatus) -> bool:
     """非终态状态写入收口（RUNNING / AWAITING_APPROVAL 恢复）：
-    STOPPING（停止已受理）不得被覆写。
+    终态不得被覆写（乐观停止受理即落 CANCELLED，执行侧的恢复/审批/
+    followup 写入不得复活已停任务）。
 
-    cancel()/_on_task_timeout 在 _TASKS_LOCK 内置 STOPPING；执行侧恢复/
-    审批写入经此在同一把锁下复查——互斥关闭「检查后写入」窗口（否则停止
-    被覆写丢失，followup 甚至反向新开 run）。终态写入走 _set_terminal_status。
-    返回 False = 停止已受理，调用方须走 _finalize_stop 取消收尾。
+    执行侧恢复/审批写入经此在同一把锁下复查——互斥关闭「检查后写入」
+    窗口（否则停止被覆写丢失，followup 甚至反向新开 run）。
+    返回 False = 任务已终态（多为停止受理），调用方走取消收尾。
     """
     with _TASKS_LOCK:
-        if task.status == BgTaskStatus.STOPPING:
+        if task.status.is_terminal:
             return False
         task.status = next_status
         return True
@@ -1540,6 +1563,13 @@ _STOP_TERMINALS: frozenset[BgTaskStatus] = frozenset(
     {BgTaskStatus.CANCELLED, BgTaskStatus.TIMED_OUT}
 )
 
+# 可冷恢复续聊的终态：停止是乐观终态且只终止执行（执行/意图分离），
+# 排队与后续的 followup 意图保留——completed / cancelled 均可经
+# send_message 同 thread 续跑；failed / timed_out 语义上不可续
+_RESUMABLE_TERMINALS: frozenset[BgTaskStatus] = frozenset(
+    {BgTaskStatus.COMPLETED, BgTaskStatus.CANCELLED}
+)
+
 
 @dataclass(frozen=True)
 class TaskTerminal:
@@ -1588,17 +1618,16 @@ def _disarm_terminal_timers(entry: _TaskEntry) -> None:
 
 
 def _accept_terminal(entry: _TaskEntry, terminal: TaskTerminal) -> Optional[TaskTerminal]:
-    """持锁受理终态：STOPPING 分流 + 规格归一化 + 状态写入。
+    """持锁受理终态：规格归一化 + 状态写入。
 
-    返回生效规格；None = 停止已受理且规格非停止族（调用方走停止收口，
-    定时器不得拆除）。归一化与写入必须同锁完成：sync 收口（主线程）与
-    async 收口（隔离 loop）跨线程并发时，锁外的「先归一化后写入」会以
-    过期状态决策，破坏先到终态语义获胜的约束。
+    停止为乐观终态（cancel 受理即落 CANCELLED）：执行侧静止边界到达的
+    停止族规格不再分流拒绝，与既有终态一致走「晚到规格降级保留载荷」。
+    归一化与写入必须同锁完成：sync 收口（主线程）与 async 收口（隔离
+    loop）跨线程并发时，锁外的「先归一化后写入」会以过期状态决策，
+    破坏先到终态语义获胜的约束。
     """
     task = entry.task
     with _TASKS_LOCK:
-        if task.status == BgTaskStatus.STOPPING and terminal.task_status not in _STOP_TERMINALS:
-            return None
         if task.status.is_terminal:
             if task.status != terminal.task_status and task.status in _STOP_TERMINALS:
                 # 先到的停止终态获胜：晚到规格降级为停止语义，仅保留载荷
@@ -1678,17 +1707,12 @@ async def _finalize_task(
 ) -> bool:
     """唯一终态收口（异步）：状态转移 + run 落库 + 终态事件恰好一次。
 
-    - 返回 False = 停止已受理（STOPPING 且规格非停止族终态），不落库不发
-      事件，调用方须改走 _finalize_stop
-    - 已终态重入（先前收口中途崩溃后补跑）不覆盖状态，按既有终态语义
-      补落库；事件以 terminal_published 归属权保证不重发
+    - 已终态重入（先前收口中途崩溃后补跑 / 乐观停止后执行侧到达）不覆盖
+      状态，按既有终态语义补落库；事件以 terminal_published 归属权保证不重发
     - persist_timeout：对账路径的有界落库（超时记错误，事件照发）
     """
     task = entry.task
-    accepted = _accept_terminal(entry, terminal)
-    if accepted is None:
-        return False
-    terminal = accepted
+    terminal = _accept_terminal(entry, terminal)
     _disarm_terminal_timers(entry)
     try:
         if persist_timeout is not None:
@@ -1716,10 +1740,7 @@ def _finalize_task_sync(entry: _TaskEntry, terminal: TaskTerminal) -> bool:
     主 loop 异步落库失败只在主 loop 侧日志可见。
     """
     task = entry.task
-    accepted = _accept_terminal(entry, terminal)
-    if accepted is None:
-        return False
-    terminal = accepted
+    terminal = _accept_terminal(entry, terminal)
     _disarm_terminal_timers(entry)
     if task.run_id:
         from noesis.runtime.main_loop import run_on_main_loop
@@ -1820,7 +1841,7 @@ def _disarm_stop_reconcile(entry: _TaskEntry) -> None:
 def _on_stop_grace_timeout(entry: _TaskEntry) -> None:
     """停止宽限超时：回退硬杀（CancelledError → _finalize_stop(outcome=None)）。"""
     entry.stop_grace_handle = None
-    if entry.task.status != BgTaskStatus.STOPPING:
+    if not entry.cooperative_stop_signalled:
         return
     logger.warning(
         "bg subagent stop grace exceeded, hard cancel task_id={}",
@@ -1967,7 +1988,7 @@ async def _run_turn_via_pipeline(
                 await _projection_boundary(task, builder)
                 _publish_task_event(task, "progress")
                 # 协作停止·静止边界：模型消息完整且无未应答工具调用
-                if task.status == BgTaskStatus.STOPPING and not getattr(output, "tool_calls", None):
+                if entry.cooperative_stop_signalled and not getattr(output, "tool_calls", None):
                     outcome.cooperative_stop = True
                     break
         elif raw_event == "on_tool_end":
@@ -1979,12 +2000,12 @@ async def _run_turn_via_pipeline(
                 await _projection_boundary(task, builder)
                 _publish_task_event(task, "progress")
                 # 协作停止·静止边界：工具结果已落定并投影
-                if task.status == BgTaskStatus.STOPPING:
+                if entry.cooperative_stop_signalled:
                     outcome.cooperative_stop = True
                     break
-        # stopping 期间触发 HITL：不进入审批等待，直接按停止收尾
+        # 停止受理期间触发 HITL：不进入审批等待，直接按停止收尾
         if (
-            task.status == BgTaskStatus.STOPPING
+            entry.cooperative_stop_signalled
             and outcome.hitl_payload is not None
         ):
             outcome.hitl_payload = None
@@ -2036,7 +2057,12 @@ async def _arun(
         await _arun_shell(entry)
         return
     if task.status.is_terminal:
-        # 调度窗口内已被 cancel：终态与通知已由 cancel 发布，直接退出
+        # 调度窗口内已被 cancel（乐观终态已落）：本协程按未启动处理。
+        # 停止族终态直接走停止收口（落库/事件/通知立即补齐——任务未
+        # 执行、无产出可回收，收口本身很快）；其他终态意味着已有完整
+        # 收口路径负责，不重复
+        if task.status in _STOP_TERMINALS and not entry.terminal_published:
+            await _finalize_stop(entry, task, None)
         return
     try:
         if task.run_id:
@@ -2189,9 +2215,9 @@ async def _arun(
             )
             source = {"messages": [HumanMessage(content=next_message)]}
         final_fallback_error = outcome.fallback_error
-        # 停止在流结束与终态写入间受理：_finalize_task 拒绝非停止族终态，
-        # 取消收尾（部分成果保留）
-        finalized = await _finalize_task(
+        # 终态收口（先到获胜）：若停止已抢先受理（乐观 CANCELLED），
+        # _accept_terminal 把本规格降级为停止语义并保留载荷
+        await _finalize_task(
             entry,
             TaskTerminal(
                 task_status=(
@@ -2205,9 +2231,6 @@ async def _arun(
                 model_calls=outcome.model_calls or None,
             ),
         )
-        if not finalized:
-            await _finalize_stop(entry, task, outcome)
-            return
         logger.info(
             "bg subagent completed task_id={} steps={} duration={:.1f}s",
             task.task_id,
@@ -2217,8 +2240,14 @@ async def _arun(
     except asyncio.CancelledError:
         # 硬杀兜底（停止宽限超时 / 沙箱销毁连坐）：完整终态收尾。
         # 投影沿用最后一次边界 persist（mark_terminal content=None 语义）；
-        # 部分成果从进度摘要的 text 条目回收（有界）。
-        if not task.status.is_terminal:
+        # 部分成果从落库投影回收（覆盖边界前产出；无 DB 降级为空）。
+        # 乐观终态下 status 在受理时已落 CANCELLED/TIMED_OUT——守卫不得查
+        # is_terminal（恒 False 导致本分支死亡），以 terminal_published（收口
+        # 是否已发布）为准；停止信号已被冷恢复清除的旧协程消亡于此（不收口，
+        # 复活轮的生命周期归新协程）
+        if not entry.terminal_published and (
+            entry.cooperative_stop_signalled or not task.status.is_terminal
+        ):
             await _finalize_stop(entry, task, None)
     except Exception as exc:
         # 收口已完整发布（状态+落库+事件）：迟到异常只记录，不覆盖终态、不重发
@@ -2228,23 +2257,24 @@ async def _arun(
                 task.task_id,
             )
             return
-        # 收口中途崩溃（停止终态已置、落库未达——如 _finalize_stop 异常
-        # 逃逸）：保留既有停止语义补收口；普通异常才判 FAILED。
-        # 停止已受理但尚未终态时（STOPPING），规格被拒绝——异常协程正在
-        # 消亡，不会再有静止边界，须立即走停止收口而非等宽限超时
-        finalized = await _finalize_task(
-            entry,
-            TaskTerminal(
-                task_status=BgTaskStatus.FAILED,
-                run_status=RunStatus.ERROR,
-                finish_reason="error",
-                error=str(exc),
-                usage=getattr(exc, "usage", None),
-                model_calls=getattr(exc, "model_calls", None),
-            ),
-        )
-        if not finalized:
+        # 停止受理中（乐观终态已落）：异常协程正在消亡，不会再有静止
+        # 边界，立即走停止收口（保留部分成果回收），不再判 FAILED；
+        # 普通异常走 FAILED（若终态已是停止族，_accept_terminal 自动
+        # 降级保留载荷）
+        if entry.cooperative_stop_signalled:
             await _finalize_stop(entry, task, None)
+        else:
+            await _finalize_task(
+                entry,
+                TaskTerminal(
+                    task_status=BgTaskStatus.FAILED,
+                    run_status=RunStatus.ERROR,
+                    finish_reason="error",
+                    error=str(exc),
+                    usage=getattr(exc, "usage", None),
+                    model_calls=getattr(exc, "model_calls", None),
+                ),
+            )
         logger.opt(exception=True).error(
             "bg subagent failed task_id={}",
             task.task_id,
@@ -2299,10 +2329,10 @@ async def _finalize_followup_prelude_failure(
     """冷恢复前置段失败收口：task FAILED + run ERROR + 终态事件与通知。
 
     run 未创建时（factory 抛出）task.run_id 仍指向上一个已完成 run，
-    mark_terminal 的 compare-and-set 会安全跳过。停止已受理时由停止
-    收口负责终态（_finalize_task 拒绝非停止族规格）。
+    mark_terminal 的 compare-and-set 会安全跳过。停止抢先受理时
+    _accept_terminal 把 FAILED 降级为停止语义并保留异常载荷。
     """
-    finalized = await _finalize_task(
+    await _finalize_task(
         entry,
         TaskTerminal(
             task_status=BgTaskStatus.FAILED,
@@ -2311,17 +2341,10 @@ async def _finalize_followup_prelude_failure(
             error=str(exc),
         ),
     )
-    if finalized:
-        logger.opt(exception=True).error(
-            "bg subagent followup prelude failed task_id={}",
-            task.task_id,
-        )
-    else:
-        # 停止已受理：终态由停止收口负责，异常原因仍须留痕
-        logger.opt(exception=True).warning(
-            "bg subagent followup prelude failed while stopping task_id={}",
-            task.task_id,
-        )
+    logger.opt(exception=True).error(
+        "bg subagent followup prelude failed task_id={}",
+        task.task_id,
+    )
 
 
 async def _arun_shell(entry: _TaskEntry) -> None:
@@ -2517,11 +2540,12 @@ def _arm_hitl_watchdog(entry: _TaskEntry) -> None:
 
 
 def _on_task_timeout(entry: _TaskEntry) -> None:
-    """任务总时限：改走协作停止路径——置 stopping（timed_out）+ 宽限 watchdog。
+    """任务总时限：乐观终态（TIMED_OUT）+ 协作停止信号 + 宽限 watchdog。
 
-    宽限内在静止边界协作退出（部分成果保留）；宽限超时由硬杀兜底。
-    置位持 _TASKS_LOCK：与 cancel() 的停止受理互斥，先到者保留 stop_reason
-    （用户先取消则报 cancelled，先超时则报 timed_out——后写者胜会误报）。
+    受理即落 TIMED_OUT（UI 同步可见）；执行侧经静止边界协作退出（部分
+    成果保留），宽限超时由硬杀兜底。置位持 _TASKS_LOCK：与 cancel() 的
+    停止受理互斥，先到者保留 stop_reason（用户先取消则报 cancelled，
+    先超时则报 timed_out——后写者胜会误报）。
     """
     # 锁内只做状态判定与置位；shell 硬杀/事件发布在锁外——
     # _on_timeout_hard 的通知与 drain 需要再拿 _TASKS_LOCK，持锁调用即死锁
@@ -2532,15 +2556,15 @@ def _on_task_timeout(entry: _TaskEntry) -> None:
             return
         if task.kind == "shell":
             shell_hard = True
-        elif task.status != BgTaskStatus.STOPPING:
-            task.status = BgTaskStatus.STOPPING
+        else:
+            task.status = BgTaskStatus.TIMED_OUT
             task.stop_reason = "timed_out"
-            # 已受理（取消先到）时保留原 stop_reason
+            task.completed_at = time.time()
+            entry.cooperative_stop_signalled = True
     if shell_hard:
         _on_timeout_hard(entry)
         return
     _arm_stop_grace(entry)
-    _publish_task_event(entry.task, "stopping")
 
 
 def _on_timeout_hard(entry: _TaskEntry) -> None:

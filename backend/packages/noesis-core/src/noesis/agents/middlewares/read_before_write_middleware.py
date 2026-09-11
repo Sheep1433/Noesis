@@ -121,7 +121,17 @@ def _hash_read_result(result: Any, path: str) -> str | None:
     error = getattr(result, "error", None)
     if error:
         err_text = str(error).casefold()
-        if "file_not_found" in err_text or "path_not_found" in err_text:
+        # 「不存在」= 新建文件，放行（write 工具自身会暴露真实写入错误）。
+        # 错误形态因后端而异：docker 沙箱给结构化错误码
+        # （file_not_found/path_not_found），local_shell 的 FilesystemBackend
+        # 给文案（File '...' not found / No such file or directory）——
+        # 只认前者会让 local_shell 模式下所有新建文件被误拒
+        if (
+            "file_not_found" in err_text
+            or "path_not_found" in err_text
+            or "not found" in err_text
+            or "no such file" in err_text
+        ):
             return None
         raise WriteRejectedError(f"cannot verify current version of {path}: {error}")
     if isinstance(result, str):

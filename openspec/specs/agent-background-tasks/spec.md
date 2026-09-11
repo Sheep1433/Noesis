@@ -30,7 +30,7 @@
 
 ### Requirement: 后台子 Agent 执行模型
 
-SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` 执行委派子任务与后台命令任务：任务在专用守护线程的独立事件循环上运行，生命周期归属 session 而非主 run。执行器为双 kind 运行时（`subagent`：worker 编译 / child session / HITL / followup；`shell`：命令直执行、无落库无 followup），subagent 特性经工厂与端口注入，类型维度对执行器不可见。任务状态机 SHALL 覆盖 running / stopping / awaiting_approval / completed / failed / cancelled / timed_out（`stopping` 为停止已受理、执行收尾中的中间态，仍占并发槽）；每会话并发上限与单任务超时 SHALL 由 `subagents` 配置约束（后台命令任务超时独立约束，停止宽限期 `stop_grace_seconds` 同组配置）。注册表在内存：进程重启 SHALL 丢失运行中任务与 shell job（接受的设计限制）；重启后遗留的活跃 child run SHALL 由启动对账收口为 error（`SUBAGENT_PROCESS_RESTARTED`）；`check_task` 对不存在的 task_id SHALL 返回可诊断提示。任务投影 SHALL 携带 `subagent_type` 字段（shell 任务为 null）。
+SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` 执行委派子任务与后台命令任务：任务在专用守护线程的独立事件循环上运行，生命周期归属 session 而非主 run。执行器为双 kind 运行时（`subagent`：worker 编译 / child session / HITL / followup；`shell`：命令直执行、无落库无 followup），subagent 特性经工厂与端口注入，类型维度对执行器不可见。任务状态机 SHALL 覆盖 running / awaiting_approval / completed / failed / cancelled / timed_out（停止为乐观终态：受理即落 cancelled/timed_out，无中间态；收尾异步完成）；每会话并发上限与单任务超时 SHALL 由 `subagents` 配置约束（后台命令任务超时独立约束，停止宽限期 `stop_grace_seconds` 同组配置）。注册表在内存：进程重启 SHALL 丢失运行中任务与 shell job（接受的设计限制）；重启后遗留的活跃 child run SHALL 由启动对账收口为 error（`SUBAGENT_PROCESS_RESTARTED`）；`check_task` 对不存在的 task_id SHALL 返回可诊断提示。任务投影 SHALL 携带 `subagent_type` 字段（shell 任务为 null）。
 
 #### Scenario: 委派后主 Agent 继续
 
@@ -45,7 +45,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 #### Scenario: 并发上限
 
-- **WHEN** 某会话 running + stopping + awaiting_approval 任务数已达 `max_concurrent_per_session`
+- **WHEN** 某会话 running + awaiting_approval 任务数已达 `max_concurrent_per_session`
 - **THEN** `start_task` SHALL 返回错误说明，已创建的 child session SHALL 被清理
 - **AND** 其他会话不受影响
 
@@ -98,7 +98,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 ### Requirement: 单工具同异步参数（run_in_background）
 
-委派 SHALL 只有一个工具入口 `start_task`，其参数由模型按依赖关系选择：`run_in_background`（默认 true）——true 立即返回（后台）；false 为**前台等待**——执行仍走同一后台路径（隔离 loop / 注册表 / 超时），工具 await 终态并把终态文本作为工具返回值。前台等待超过 `foreground_max_wait_seconds`（默认 120s）SHALL 自动转为后台并提示稍后 `check_task` 收果（等待经 shield 实现，取消不波及底层任务）。`subagent_type`（必填）按注册表校验与分发（见「子 Agent 类型注册表与分发」）。系统 SHALL NOT 提供第二条同步委派执行路径。
+委派 SHALL 只有一个工具入口 `start_task`，其参数由模型按依赖关系选择：`run_in_background`（默认 true）——true 立即返回（后台）；false 为**前台等待**——执行仍走同一后台路径（隔离 loop / 注册表 / 超时），工具 await 终态并把终态文本作为工具返回值。前台等待超过 `foreground_max_wait_seconds`（默认 600s）SHALL 自动转为后台并提示稍后 `check_task` 收果（等待经 shield 实现，取消不波及底层任务）。`subagent_type`（必填）按注册表校验与分发（见「子 Agent 类型注册表与分发」）。系统 SHALL NOT 提供第二条同步委派执行路径。
 
 #### Scenario: 前台等待返回结果
 
@@ -159,8 +159,8 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 - 任务 running：消息排队（FIFO，上限 10）；当前 turn 结束后 executor SHALL 同 thread 链式开新 turn，队列清空前任务保持 running。
 - 任务 awaiting_approval：消息入队，审批 resume 完成本 turn 后由同一条链消费。
-- 任务 completed：SHALL 冷恢复——同 thread 追加消息开新 turn，任务回到 running，结束后更新结果。
-- 任务 failed / timed_out / cancelled：SHALL 返回错误说明，不可续。
+- 任务 completed / cancelled：SHALL 冷恢复——同 thread 追加消息开新 turn，任务回到 running，结束后更新结果（cancelled 可续为执行/意图分离语义：停止只终止执行，续聊意图保留）。
+- 任务 failed / timed_out：SHALL 返回错误说明，不可续。
 - 每条 followup turn SHALL 支持逐 turn 覆盖执行参数：`model_id`（现有）与 `reasoning_effort`（新增，可选）；用户侧 API 请求体新增可选 `reasoning_effort` 字段，缺省 SHALL 继承任务创建时的档位，旧客户端不传字段时行为不变。turn 参数在排队期间 SHALL 与消息绑定，链式开新 turn 时逐条生效。
 
 #### Scenario: 运行中追加指示
@@ -174,9 +174,14 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 - **WHEN** 向 completed 任务 send_message 追问
 - **THEN** 任务 SHALL 回到 running 并开新 turn，结束后结果 SHALL 更新
 
+#### Scenario: 取消任务续聊（执行/意图分离）
+
+- **WHEN** 向 cancelled 任务 send_message（用户停止后又想继续）
+- **THEN** 任务 SHALL 回到 running 并同 thread 开新 turn（排队中的 followup 一并消费）
+
 #### Scenario: 失败任务拒绝续话
 
-- **WHEN** 向 failed / timed_out / cancelled 任务 send_message
+- **WHEN** 向 failed / timed_out 任务 send_message
 - **THEN** SHALL 返回「任务已结束（原因）」类错误说明
 
 #### Scenario: 逐 turn 切换推理档位
@@ -307,7 +312,7 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 ### Requirement: 子 Agent run 写操作 SHALL 对齐主链路错误契约
 
-子 Agent run 的写操作端点（stop、HITL resume、subagent-followup）SHALL 使用类型化异常映射：资源不存在 SHALL 返回 404，状态冲突（重复决策、非法状态迁移）SHALL 返回 409，SHALL NOT 以 500 或字符串嗅探表达业务冲突。`POST /api/chat/runs/{run_id}/stop` 对子 Agent run SHALL 返回 `RunSnapshot` 契约的响应体（status 覆写 stopping 的受理快照）。写操作族 SHALL 与 `hitl/resume` 一致实施 CSRF 校验。
+子 Agent run 的写操作端点（stop、HITL resume、subagent-followup）SHALL 使用类型化异常映射：资源不存在 SHALL 返回 404，状态冲突（重复决策、非法状态迁移）SHALL 返回 409，SHALL NOT 以 500 或字符串嗅探表达业务冲突。`POST /api/chat/runs/{run_id}/stop` 对子 Agent run SHALL 返回 `RunSnapshot` 契约的响应体（status 覆写 interrupted——乐观终态，受理即达）。写操作族 SHALL 与 `hitl/resume` 一致实施 CSRF 校验。
 
 #### Scenario: stop 响应为快照契约
 
@@ -360,28 +365,35 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 ### Requirement: 协作式停止与部分成果回收
 
-停止一个后台子 Agent SHALL 是「同步信号 + 协作退出 + 成果回收」：`cancel`（用户 stop API、主 Agent `cancel_task` 工具或超时 watchdog）SHALL 同步把任务置为 `stopping` 并立即返回该快照，SHALL NOT 直接取消执行协程；对已处于 `stopping` 的任务再次调用 SHALL 幂等返回同一快照。执行循环 SHALL 只在**静止边界**（最新消息为工具结果、或无工具调用的 AI 消息）检查停止请求——带未应答 tool_calls 的快照点 SHALL 先让工具节点执行完毕再退出，保证线程不残留悬空工具调用；退出后终态为 `cancelled`（超时触发的为 `timed_out`）。任务因 cancelled / timed_out 终止时，系统 SHALL 从子会话已落库投影中提取全部文本产出作为部分成果，以「中止前部分产出」标注写入 `task.result`，并使 `check_task` 返回与父 Agent 通知注入一致携带（终态通知 preview 从提取内容开头截取，标注前缀不占预览字符预算）。`stopping` 期间当前步骤触发 HITL interrupt 时停止请求 SHALL 优先：任务直接按取消收尾，SHALL NOT 进入 awaiting_approval。`stopping` 超过 `stop_grace_seconds`（默认 30s）SHALL 回退为硬杀收尾（终态与成果回收语义不变）；排队与 awaiting_approval 任务的停止 SHALL 即时终态（无执行面，无 `stopping`）。
+停止一个后台子 Agent SHALL 是「乐观终态 + 协作退出 + 成果回收」（对齐主 Agent 停止语义，决策记录 `2026-09-07-子代理停止乐观终态化`）：`cancel`（用户 stop API、主 Agent `cancel_task` 工具）SHALL 同步把任务落为 `cancelled` 终态并立即返回该快照（并发槽随之释放），执行协程取消 fire-and-forget；对已终态任务再次调用 SHALL 幂等返回。执行循环经停止信号在**静止边界**（最新消息为工具结果、或无工具调用的 AI 消息）协作退出——带未应答 tool_calls 的快照点 SHALL 先让工具节点执行完毕再退出，保证线程不残留悬空工具调用。部分成果回收与终态通知 SHALL 由执行协程自身的收口路径完成（静止边界到达时携带完整产出；宽限超时走硬杀收尾，成果从落库投影回收）；终态事件与通知以归属权保证恰好一次。停止受理期间当前步骤触发 HITL interrupt 时停止 SHALL 优先：任务按取消收尾，SHALL NOT 进入 awaiting_approval。超时 watchdog 同为乐观终态（受理即 `timed_out`）；排队与 awaiting_approval 任务的停止 SHALL 即时终态（无执行面）。
 
-#### Scenario: 停止请求即时受理
+停止与续聊 SHALL 执行/意图分离：`cancelled` 与 `completed` 同为可冷恢复终态——停止后 `send_message` SHALL 经冷恢复同 thread 开新 turn（排队中的 followup 意图一并保留消费），受理时 SHALL 清除停止信号并中和旧执行协程与在飞对账任务；`failed` / `timed_out` SHALL 拒绝续聊。任务终态因 cancelled / timed_out 到达时，系统 SHALL 从子会话已落库投影中提取全部文本产出作为部分成果，以「中止前部分产出」标注写入 `task.result`，并使 `check_task` 返回与父 Agent 通知注入一致携带（终态通知 preview 从提取内容开头截取，标注前缀不占预览字符预算）。
+
+#### Scenario: 停止请求乐观终态受理
 
 - **WHEN** 用户对 running 子任务调用 `POST /api/chat/runs/{run_id}/stop`
-- **THEN** 响应 SHALL 为 DB run 快照形状且 status 覆写为 stopping（不等待终态）
-- **AND** `bg-task` SSE 事件 SHALL 同步推送 stopping 快照，前端任务卡 SHALL 显示「停止中」
+- **THEN** 响应 SHALL 为 DB run 快照形状且 status 覆写为 interrupted（乐观终态，不等待收尾）
+- **AND** 前端任务卡 SHALL 同步显示「已取消」（部分产出稍后由后台收口写入，check_task 可查收）
 
 #### Scenario: 重复停止幂等
 
-- **WHEN** 对已处于 stopping 的任务再次调用 stop 或 `cancel_task`
-- **THEN** SHALL 返回同一 stopping 快照，不产生重复状态事件或副作用
+- **WHEN** 对已终态（cancelled）的任务再次调用 stop 或 `cancel_task`
+- **THEN** SHALL 返回同一终态快照，不产生重复状态事件或副作用
 
 #### Scenario: 当前步骤完整结束且不残留悬空工具调用
 
-- **WHEN** 停止请求到达时子 Agent 正在执行某一步骤，或刚产出一条带 tool_calls 的 AI 消息
-- **THEN** 该步骤（含其工具调用与结果）SHALL 完整结束：产出进入子会话投影并落库，thread 停在无未应答 tool_calls 的快照点
-- **AND** 任务 SHALL 随后终态为 cancelled，子会话历史保持可 followup 续跑
+- **WHEN** 停止受理时子 Agent 正在执行某一步骤，或刚产出一条带 tool_calls 的 AI 消息
+- **THEN** 该步骤（含其工具调用与结果）SHALL 完整结束：产出进入子会话投影并落库，thread 停在无未应答 tool_calls 的快照点后协作退出
+- **AND** 子会话历史保持可 followup 续跑（cancelled 可冷恢复）
 
-#### Scenario: stopping 期间触发 HITL
+#### Scenario: 停止后续聊（执行/意图分离）
 
-- **WHEN** 已请求停止的任务在收尾期间当前步骤触发审批中断
+- **WHEN** 任务因用户停止落为 cancelled 后，主 Agent 或用户对该任务 `send_message`
+- **THEN** 系统 SHALL 同 thread 冷恢复开新 turn（任务回到 running，排队 followup 一并消费），SHALL NOT 以「已结束」拒绝
+
+#### Scenario: 停止受理期间触发 HITL
+
+- **WHEN** 停止受理后当前步骤触发审批中断
 - **THEN** 任务 SHALL 直接按取消收尾，SHALL NOT 进入 awaiting_approval 等待审批
 
 #### Scenario: 部分成果回收
@@ -393,21 +405,21 @@ SuperAgent SHALL 通过进程内后台任务执行器 `BackgroundTaskExecutor` �
 
 #### Scenario: 停止宽限兜底
 
-- **WHEN** 任务处于 stopping 超过 `stop_grace_seconds` 仍未退出（如极长的单步骤工具执行）
-- **THEN** 系统 SHALL 硬杀执行协程完成终止，终态与部分成果回收语义与协作路径一致（回收终止前最后一个完整步骤的产出）
-- **AND** 硬杀路径 SHALL 走完整终态收尾（事件发布、通知、落库、排队唤醒），SHALL NOT 漏发终态通知
+- **WHEN** 停止受理后超过 `stop_grace_seconds` 执行协程仍未到静止边界（如极长的单步骤工具执行）
+- **THEN** 系统 SHALL 硬杀执行协程完成收口，终态与部分成果回收语义与协作路径一致（回收终止前最后一个完整步骤的落库投影产出）
+- **AND** 硬杀路径 SHALL 走完整终态收尾（事件发布、通知、落库、排队唤醒），SHALL NOT 漏发终态通知；对账 watchdog SHALL 在协程未按约收口时强制终态
 
 #### Scenario: 无执行面的停止即时完成
 
 - **WHEN** 对 queued 或 awaiting_approval 任务请求停止
-- **THEN** 任务 SHALL 即时终态为 cancelled，不经过 stopping
+- **THEN** 任务 SHALL 即时终态为 cancelled（与 running 停止同为乐观受理，无收尾窗口）
 
 #### Scenario: 工具与状态查询语义
 
 - **WHEN** 主 Agent 对 running 任务调用 `cancel_task`
-- **THEN** 工具 SHALL 返回「已请求停止（当前步骤完成后停止，可用 check_task 收取部分产出）」
-- **WHEN** 主 Agent 对 stopping 任务调用 `check_task`
-- **THEN** SHALL 返回「正在停止（当前步骤完成后退出）」
+- **THEN** 工具 SHALL 返回「已取消（部分产出在后台回收中，稍后可用 check_task 查收）」；对无执行面的任务（queued/awaiting_approval/shell）SHALL 只返回「已取消」
+- **WHEN** 主 Agent 对 cancelled 任务的收尾窗口内调用 `check_task` 且部分成果尚未回收完成
+- **THEN** SHALL 返回「已取消」形态（result 为空），稍后重查可见部分产出
 
 ### Requirement: 输出截断的一等终止语义
 

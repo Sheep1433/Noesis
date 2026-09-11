@@ -33,6 +33,7 @@ from noesis.agents.tools.fs_hints import augment_filesystem_tool_descriptions
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import resolve_attachment_tools
+from noesis.agents.tools.history_search_tool import build_history_search_tools
 from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
@@ -111,6 +112,8 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession],
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        history_search_enabled: bool = True,
+        compaction_enabled: bool = True,
         disable_hitl: bool = False,
         run_id: Optional[str] = None,
     ):
@@ -122,6 +125,11 @@ class SuperAgent(BaseAgent):
         # Agentic 召回：root run 装配检索工具（命中后合并回写 run.memory_context，
         # 作为抽取防自强化输入）；run_id/db 缺席时退化为纯只读检索
         tools.extend(build_memory_tools(user_id=user_id, run_id=run_id, db=db))
+        # 原文层召回：会话历史检索（与 search_memory 蒸馏层成对，工具内开
+        # 独立 DB 短事务，不依赖请求级 session 的存活窗口）；
+        # history_search_enabled=False 供压缩评测构造「无会话检索」对照组
+        if history_search_enabled:
+            tools.extend(build_history_search_tools(user_id=user_id, session_id=session_id))
         # KB 检索工具（用户勾选启用时挂载）
         if kb_search_enabled and kb_collections is not None:
             kb_tools = build_kb_search_tools(
@@ -155,9 +163,13 @@ class SuperAgent(BaseAgent):
         # 断言，禁止递归委派）。worker 经角色工厂在隔离 loop 内惰性编译：
         # LLM 客户端与 checkpointer 连接池必须绑定隔离 loop（复用主 loop
         # 实例会 cross-loop 报错）。worker 的检索只读不写：召回清单只归
-        # root run（防自强化输入），子 Agent 结论经父会话终态回流
+        # root run（防自强化输入），子 Agent 结论经父会话终态回流。
+        # 会话历史检索工具同样只在主 loop：worker 内调用会撞 pg_manager
+        # 主 loop 绑定的连接池（cross-loop 直连报错），且 worker 场景
+        # （独立子任务）不需要跨 run 的会话原文召回
+        _loop_bound_tools = {"search_memory", "search_history", "search_sessions"}
         worker_tools = [
-            tool for tool in tools if getattr(tool, "name", "") != "search_memory"
+            tool for tool in tools if getattr(tool, "name", "") not in _loop_bound_tools
         ] + build_memory_tools(user_id=user_id)
         assert_no_bg_task_tools(worker_tools)
 
@@ -219,6 +231,40 @@ class SuperAgent(BaseAgent):
             description="通用子 Agent：多轮检索、调研、长命令等独立子任务",
             worker_factory=_bg_worker_factory,
         ))
+
+        # 同步子 Agent（deepagents 原生 SubAgentMiddleware → task 工具）：
+        # 子图跑在父 run 同一流内、父 Agent 阻塞等结果，适合需要立即拿到
+        # 结果的子任务；长任务 / 并行仍走 start_task 后台路径。工具与
+        # middleware 配方对齐后台 worker，但不带 ask_user——审批中断依赖
+        # executor 转 awaiting_approval，同步子图没有这条处理链。
+        sync_subagent_model = get_llm(model_id=model_id)
+        sync_subagent_tools = [
+            tool for tool in worker_tools
+            if getattr(tool, "name", "") != "ask_user"
+        ]
+        sync_subagents = [{
+            "name": "general-purpose",
+            "description": (
+                "同步子 Agent：在独立上下文中执行多步子任务，调用期间父 Agent "
+                "阻塞等待、结果当场返回。适合需要立即拿到结果的检索、调研类子任务；"
+                "预计耗时较长或需与其它子任务并行时改用 start_task"
+            ),
+            "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
+            "model": sync_subagent_model,
+            "tools": sync_subagent_tools,
+            "middleware": build_noesis_middleware(
+                profile="SUBAGENT",
+                model=sync_subagent_model,
+                model_id=model_id,
+                tools=sync_subagent_tools,
+                backend=backend,
+                skills=skill_sources,
+                skills_user_id=user_id,
+                skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+                session_id=session_id,
+                filesystem_middleware_hook=augment_filesystem_tool_descriptions,
+            ),
+        }]
 
         def _filesystem_hook(fm):
             # 规则下沉（cwd/路径/读后改 → 工具描述）+ execute 后台化。
@@ -313,6 +359,9 @@ class SuperAgent(BaseAgent):
             tools=tools,
             system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
+            compaction_enabled=compaction_enabled,
+            model=sync_subagent_model,
+            subagents=sync_subagents,
             middleware=[
                 # 子 Agent 工具面 + 任务身份 graph state（start_task 按
                 # subagent_type 分发；类型清单注入 system prompt）
@@ -361,6 +410,8 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        history_search_enabled: bool = True,
+        compaction_enabled: bool = True,
         disable_hitl: bool = False,
         run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
@@ -398,6 +449,8 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    history_search_enabled=history_search_enabled,
+                    compaction_enabled=compaction_enabled,
                     disable_hitl=disable_hitl,
                     run_id=run_id,
                 )
@@ -473,6 +526,8 @@ class SuperAgent(BaseAgent):
         message_id: Optional[str] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        history_search_enabled: bool = True,
+        compaction_enabled: bool = True,
         disable_hitl: bool = False,
         run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
@@ -505,6 +560,8 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    history_search_enabled=history_search_enabled,
+                    compaction_enabled=compaction_enabled,
                     disable_hitl=disable_hitl,
                     run_id=run_id,
                 )

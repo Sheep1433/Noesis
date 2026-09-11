@@ -2,7 +2,12 @@
 
 import pytest
 
-from evals.compression.rubric import DIMENSIONS, build_judge_prompt, parse_judge_response
+from evals.compression.rubric import (
+    DIMENSIONS,
+    JUDGE_PROMPT_VERSION,
+    build_judge_prompt,
+    parse_judge_response,
+)
 
 
 def test_build_judge_prompt_contains_dimensions_and_recall_scale():
@@ -16,6 +21,18 @@ def test_build_judge_prompt_contains_dimensions_and_recall_scale():
         assert dim in prompt
     assert '"recall"' in prompt
     assert "REFERENCE ANSWER" in prompt
+
+
+def test_judge_prompt_premise_is_arm_neutral():
+    """判卷前提不得声称「仅基于压缩后上下文」：三组对比下对不压缩/检索组是假前提。"""
+    prompt = build_judge_prompt(
+        probe_question="q", probe_type="recall",
+        reference_answer="a", continuation_text="ans",
+    )
+    assert "压缩后的会话上下文" not in prompt
+    assert "可用的会话上下文" in prompt
+    # 版本号随判分口径变更递增，manifest 可追溯
+    assert JUDGE_PROMPT_VERSION == "recall-2-1-0+v5dims/v2"
 
 
 def _valid_response(recall=2, score=5):

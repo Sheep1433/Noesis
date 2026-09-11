@@ -69,3 +69,52 @@ def filter_fixtures(
             raise ValueError(f"未找到 fixture={fixture!r}")
         return [fixture]
     return fixture_ids
+
+
+def parse_fixture_messages(raw: List[Dict[str, Any]]) -> List[Any]:
+    """fixture 消息 → LangChain 消息（AnyMessage）。
+
+    tool 消息带占位 tool_call_id：真实配对由
+    ``agent_path.normalize_fixture_for_state`` 回填（生产状态形状）。
+    """
+    from langchain_core.messages import convert_to_messages
+
+    lc_payload: List[Dict[str, Any]] = []
+    for msg in raw:
+        mtype = str(msg.get("type") or "")
+        content = msg.get("content", "")
+        if mtype == "human":
+            lc_payload.append({"role": "user", "content": content})
+        elif mtype in ("ai", "assistant"):
+            lc_payload.append({"role": "assistant", "content": content})
+        elif mtype == "system":
+            lc_payload.append({"role": "system", "content": content})
+        elif mtype == "tool":
+            lc_payload.append(
+                {
+                    "role": "tool",
+                    "content": content,
+                    "tool_call_id": msg.get("tool_call_id") or "call_tool",
+                    "name": msg.get("name") or "tool",
+                }
+            )
+        else:
+            raise ValueError(f"未知 message type: {mtype}")
+    return convert_to_messages(lc_payload)
+
+
+def _approx_token_counter(messages: List[Any]) -> int:
+    """chars/4 口径：content + tool_calls 序列化长度（与评分口径一致，进 manifest）。"""
+    import json as _json
+
+    total = 0
+    for m in messages:
+        content = m.content
+        if isinstance(content, str):
+            total += len(content)
+        else:
+            total += len(str(content or ""))
+        tool_calls = getattr(m, "tool_calls", None)
+        if tool_calls:
+            total += len(_json.dumps(tool_calls, default=str, ensure_ascii=False))
+    return total // 4

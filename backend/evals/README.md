@@ -5,11 +5,10 @@
 | 场景 | 命令 | 状态 |
 |------|------|------|
 | 测试用例 Agent | `uv run python -m evals.case` | 已实现 |
-| Agent / BrowseComp | `uv run python -m evals.agent.browsecomp` | 已实现 |
-| Agent / Terminal-Bench | `./evals/agent/harbor/run-noesis.sh` | 已实现 |
+| 深度研究（DeepResearch Bench 子集） | `uv run python -m evals.agent.deepresearch` | 已实现（官方判分未接入） |
 | Agent E2E（判卷/引用/归因） | `uv run python -m evals.agent.rag` | 已实现 |
 | 记忆召回（LongMemEval） | `uv run python -m evals.agent.memory` | 已实现 |
-| 消息压缩（多臂对照） | `uv run python -m evals.compression` | 已实现 |
+| 消息压缩（三组对照，真 Agent 路径） | `uv run python -m evals.compression` | 已实现 |
 | 深度研究负载测试 | `uv run locust -f evals/loadtest/locustfile.py` | 已实现 |
 | 知识库检索（ERB 基准） | `uv run python -m evals.kb.erb --all` | 已实现 |
 
@@ -42,8 +41,7 @@ Noesis **没有**统一的评测结果 Web 页面；各子模块产物与查看�
 | 评测线 | 产物目录 | 专用 Web UI | 推荐查看方式 |
 |--------|----------|-------------|--------------|
 | 测试用例 `evals.case` | `evals/case/results/<tag>/` | **有**（promptfoo） | 控制台汇总 + `npx promptfoo view` |
-| BrowseComp | `evals/agent/browsecomp/results/<tag>/` | **无** | `summary.json` / `convos.jsonl`；可选 Langfuse trace |
-| Terminal-Bench（Harbor） | `evals/agent/harbor/results/<job>/` | **有**（Harbor） | `harbor view evals/agent/harbor/results/<job>` |
+| 深度研究 | `evals/agent/deepresearch/results/<tag>/` | **无** | `articles.jsonl`（直接喂官方 RACE/FACT 判分脚本）+ `summary.json` |
 | Agent E2E | `evals/agent/rag/results/<tag>/` | **无** | `summary.md` + `attribution.md`（失败归因） |
 | 记忆召回 | `evals/agent/memory/results/<tag>/` | **无** | `summary.md`（三层指标） |
 | 消息压缩 | `evals/compression/results/<tag>/` | **无** | `summary.md`；`--compare-to` 对比历史 |
@@ -73,54 +71,30 @@ npx promptfoo@latest view
 
 控制台若打印了 `eval id`，在 promptfoo UI 里按该 id 定位本次跑分。
 
-### BrowseComp（无专用结果页）
+### 深度研究（DeepResearch Bench 中文 5 题子集）
 
-**整批题目跑完后**才写入（跑的过程中目录可能为空）：
+题库 `fixtures/tasks-5.json`（HuggingFace `muset-ai/DeepResearch-Bench-Dataset` 确定性子集），SuperAgent 逐题生成调研报告，产物：
 
 ```
-evals/agent/browsecomp/results/<tag>/
-  summary.json    # accuracy、耗时、题数
-  convos.jsonl    # 每行一题：{ "index", "convo": [user, assistant] }
+evals/agent/deepresearch/results/<tag>/
+  articles.jsonl  # 每行一题：{ "id", "prompt", "article" }
+  summary.json
 ```
+
+`articles.jsonl` 可直接喂官方 RACE/FACT 判分脚本（评测线暂未接入判分，先产出报告原文）。
 
 ```bash
-# 汇总
-jq . evals/agent/browsecomp/results/bc-smoke-new-12/summary.json
-
-# 逐题（每行一题）
-jq . evals/agent/browsecomp/results/bc-smoke-new-12/convos.jsonl
+NOESIS_WEB_PROXY=http://127.0.0.1:7897 \
+uv run python -m evals.agent.deepresearch --tag smoke-1p --limit 1
 ```
 
-终端结束时会打印 `BrowseComp accuracy: ...` 与 `Results: ...` 路径。
+- 被测对象经 noesis CLI 子进程驱动（每题一个进程，`SANDBOX_BACKEND=local_shell`）；被测模型走 env 直连：`evals/.env` 配 `NOESIS_API_KEY` / `NOESIS_BASE_URL` / `NOESIS_MODEL`，`--model-id` 即端点真实模型名
+- `--eval-user` 须为真实账号（默认 `test`）：子 Agent 会话血缘按 user_id 落库，假用户名会导致派发失败、主 Agent 单干
+- `NOESIS_WEB_PROXY` 为 web_fetch 的代理回退（直连失败时自动走代理重试）
+- 子 Agent 前台等待窗口经 `SUBAGENT_*_SECONDS` env 注入（评测单回合无通知回合，等待窗口须长于生产默认）
+- trace：配置 `evals/.env` 后可在 Langfuse 按 `eval_tag=<tag>`、`eval_line=agent` 筛选
 
-**过程/trace（非成绩表）**：配置 `evals/.env` 后可在 Langfuse 按 `eval_tag=<tag>`、`eval_line=agent` 筛选；整次 session 为 `browsecomp-<tag>`，单题为 `browsecomp-<uuid>`。单题工作区与卸载文件在 `.noesis/users/eval-browsecomp/sessions/`。
-
-BrowseComp 走仓库内 Python 模块（`uv run python -m evals.agent.browsecomp`），直接调 Noesis `SuperAgent`，因此**未**集成 Harbor / promptfoo 类 viewer。
-
-### Terminal-Bench（Harbor 自带 Web UI）
-
-Harbor 通过 **外部 CLI + Docker** 跑题（`./evals/agent/harbor/run*.sh` → `harbor run`），产物在：
-
-```
-evals/agent/harbor/results/<job-name>/
-```
-
-本地 Web 查看（Harbor 提供，非 Noesis 前端）：
-
-```bash
-cd backend
-harbor view evals/agent/harbor/results/<job-name>
-```
-
-**Harbor 残留容器**：任务结束后部分容器会以 `sleep infinity` 保持运行，便于查看挂载日志。评测结果已落在 `results/<job>/` 且不再调试时，可停止并删除，例如：
-
-```bash
-docker stop <container-id> && docker rm <container-id>
-# 或批量清理已退出的 Harbor 相关容器
-docker container prune
-```
-
-镜像 `alexgshaw/*` 为 Terminal-Bench 官方任务环境，删除容器**不会**删镜像；下次 `harbor run` 会按需复用本地镜像。
+**未**集成 promptfoo 类 viewer。
 
 ### 消息压缩
 
@@ -187,53 +161,29 @@ coverage 走 Python 确定性 scorer（`shared/coverage_scorer.py`）；borderli
 
 ---
 
-## 2. Agent 评测（BrowseComp + Harbor + Agentic RAG）
+## 2. Agent 评测（DeepResearch + Agentic RAG）
 
 个人学习与日常回归推荐 **两条主线**：
 
-1. **BrowseComp** — 多步检索 + 短答案（`SuperAgent` / 深度研究能力）
-2. **Harbor + Terminal-Bench** — 终端任务执行（`harbor view` 看轨迹）
-3. **Agentic RAG** — 验证 GeneralQAAgent 经 core KB Tool/Port 检索并引用期望来源
+1. **DeepResearch Bench 子集** — 开放调研任务（`SuperAgent` / 深度研究能力）
+2. **Agentic RAG** — 验证 GeneralQAAgent 经 core KB Tool/Port 检索并引用期望来源
 
 ```
 evals/agent/
   runtime.py                # 公共事件 Collector 与 run manifest
   _agent.py                 # SuperAgent 共用执行
-  browsecomp/
-    official.py
-    __main__.py               # uv run python -m evals.agent.browsecomp
+  deepresearch/
+    __main__.py               # uv run python -m evals.agent.deepresearch
+    fixtures/tasks-5.json
     results/<tag>/
-  harbor/
-    run-noesis.sh             # Noesis SuperAgent
-    run-opencode.sh           # OpenCode 对照组
-    README.md
-    results/<job-name>/
   rag/
     __main__.py             # GeneralQAAgent + core KB Tool
     fixtures/sample.jsonl
 ```
 
-### BrowseComp
+### DeepResearch（中文 5 题子集）
 
-```bash
-uv run python -m evals.agent.browsecomp \
-  --tag bc-smoke --num-examples 5 --model-id flash
-```
-
-首次运行会从官方 URL 下载 CSV 并缓存到 `evals/agent/browsecomp/data/`；离线重跑复用缓存。也可设置 `BROWSECOMP_CSV_PATH` 指向本地文件。
-
-官方 CSV + `BrowseCompEval` → 指标 **accuracy**。结果：`browsecomp/results/<tag>/summary.json`。
-
-### Terminal-Bench（Harbor）
-
-```bash
-cd backend
-./evals/agent/harbor/run-noesis.sh          # 单题
-./evals/agent/harbor/run-noesis.sh cli-10   # 10 题
-harbor view evals/agent/harbor/results/noesis-cli-10
-```
-
-OpenCode 对照组将脚本替换为 `run-opencode.sh`。产物：`evals/agent/harbor/results/<job-name>/`。
+题库来源、运行方式与产物见上文「各评测线如何查看结果 → 深度研究」；官方 RACE/FACT 判分暂未接入，当前产出报告原文供外部脚本判分。
 
 ### Agentic RAG → Agent E2E（判卷 / 引用溯源 / 失败归因）
 
@@ -257,45 +207,73 @@ uv run python -m evals.agent.rag ... --tag t1 --resume
 ### 记忆召回（LongMemEval 三层指标）
 
 ```bash
+# 成本试跑：先 --sample 3 确认链路（单题 haystack 导入 + SuperAgent 全程
+# 约 30-50 万 input token），再上 20+ 题出基线
+# 被测模型走 env 直连：evals/.env 配 NOESIS_API_KEY / NOESIS_BASE_URL /
+# NOESIS_MODEL，--model-id 即端点真实模型名（无 provider 前缀）
 uv run python -m evals.agent.memory \
-  --model-id <m> --judge-model-id <j> --tag t1 [--sample 30] [--negative-every 5]
+  --model-id glm-5.3-flash \
+  --judge-model-user admin --judge-model-id openai/stepfun/step-3.7-flash:free \
+  --tag t1 [--sample 30] [--negative-every 5]
 # 旧四场景冒烟（不依赖 LongMemEval 数据）
-uv run python -m evals.agent.memory --mode smoke --model-id <m> --judge-model-id <j>
+uv run python -m evals.agent.memory --mode smoke \
+  --model-id glm-5.3-flash --judge-model-user admin \
+  --judge-model-id openai/stepfun/step-3.7-flash:free
 ```
+
+被测对象经 noesis CLI 子进程驱动（每题一个进程，`SANDBOX_BACKEND=local_shell`
+不产生 runner 沙箱容器）：评测与被测之间只隔 argv + env + stream-json，
+工具轨迹采集、wall-clock 超时与部分结果保留由 `evals/agent/cli_driver.py`
+负责。judge 在宿主机侧单次 LLM 调用，沿用用户模型绑定（`--judge-model-user`）。
 
 数据集 LongMemEval（v1，S 档，HuggingFace 公开 500 题）：首次运行自动下载到 `evals/agent/memory/data/`（gitignored，约 270MB；走 `HTTPS_PROXY` 等环境代理）。每题的 haystack 会话导入该题专属的隔离评测用户（upsert 幂等，不碰真实用户数据），SuperAgent 提问后按三层报告：
 
-1. **答案正确性**：judge 对 gold answer 判卷（复用 E2E 判卷口径）
+1. **答案正确性**：judge 对 gold answer 判卷（复用 E2E 判卷口径，部分采纳折半口径并列报告）；超时题只要有 final_text 仍判卷
 2. **检索命中**：`search_memory` 返回条目对 `answer_session_ids` 的 recall@k / precision@k
 3. **行为级召回**：需要记忆线索的题，Agent 是否主动访问记忆——`search_memory` 工具调用或 `/memory` 虚拟路径读取（SuperAgent 两条合法路径，实跑发现 agent 偏爱直读）
 
 负例为自建配对场景（S 档无拒答类题型）：无记忆线索的提问断言两条路径都未走且回答未引用种子事实。行为级断言是公开基准都不覆盖的层（AML 平台代调 Search、LoCoMo/LongMemEval 纯检索问答），这层只有自研。
 
+单题时间预算默认 600s（haystack 大、SuperAgent 多轮检索，实测 240s 大概率超时；超时在 summary 按 `timeout` 单独计数，与链路错误 `agent_error` 区分）。
+
 ---
 
-### 消息压缩（多臂对照，recall% @ retained tokens）
+### 消息压缩（三组对照，真 Agent 路径，recall% @ retained tokens）
 
-评测线上同款 `CompactionMiddleware`：压缩是否丢事实、丢多少。**headline 口径于 2026-09-03 切换**
-（旧五维 rubric 分 → recall% @ retained tokens，judge 2/1/0 判卷），旧 `results/` 与新口径不可比，
-新基线从切换后起算。五维保留为诊断维度，只进逐题 raw 记录。
+评测线上同款压缩链路：压缩是否丢事实、丢多少。**作答侧于 2026-09-08 切换为真 Agent 路径**
+（此前为自造作答循环 + 三套评测专用提示词，旧 `results/` 与新口径不可比）：作答即生产
+SuperAgent（真系统提示词、真实压缩、生产 `search_history`），无任何评测专用提示词。
 
 ```
-fixture → 每臂（uncompacted 对照 / 压缩策略档）→ 闭卷 probe 作答 → judge 2/1/0 + 五维诊断
-       → recall% @ retained tokens + 任务保持率 Δ（压缩臂 − uncompacted 臂）
+fixture 按生产行状落库（t_chat_session + t_chat_message，search_history 的真实数据源）
+       → 消息规范化后 aupdate_state 灌入 checkpoint → 一条真实消息触发线上 CompactionMiddleware
+       → 每题把「压缩后状态」灌到独立 thread（同题同摘要，题间互不污染）→ 真 Agent 作答
+       → judge 2/1/0 + 五维诊断 → recall% @ retained tokens + 分层召回
+       + 任务保持率 Δ（压缩组 − uncompacted 组）+ 检索兜底收益（recovery − current）
 ```
 
 ```bash
 uv run python -m evals.compression --tag t1 \
-  --model-id <作答模型> --judge-model-id <判卷模型> [--arms uncompacted,current,aggressive]
-uv run python -m evals.compression --tag tweak --fixture debug_session --runs 3 \
-  --model-id <m> --judge-model-id <j>
+  --model-id <作答模型> --judge-model-id <判卷模型> [--arms uncompacted,current,recovery]
+# 只跑微观层（成本试跑常用；题库分层见下方 gen_probes）
+uv run python -m evals.compression --tag t1 --fixture cc-0146daeb --layer detail \
+  --arms uncompacted,current,recovery --model-id <m> --judge-model-id <j>
 ```
 
-- **评测臂**：`--arms` 逗号分隔，`uncompacted` 为不压缩直接闭卷作答的 recall 上限；其余为策略名（`policies.py` 预设：current / aggressive / keep-10）
+- **三组配置矩阵**（见 `agent_path.ARM_FLAGS`，严格单变量对照链）：
+  `uncompacted` = 完整原文 + 压缩关闭 + 无会话检索（原生召回上限，与 `current` 只差压缩）；
+  `current` = 压缩后历史 + 无会话检索（旧线上形态，与 `recovery` 只差检索）；
+  `recovery` = 压缩后历史 + 生产 `search_history`（新线上形态）
+- 压缩由**线上 `/compact` 宿主路径**触发（`build_compaction_middleware` + `acompact_state`，
+  与 `compact_session` 服务同构，仅模型绑定来自评测快照）：显式命令语义，无合成消息、
+  不依赖阈值；产物写回 checkpoint 后由 current/recovery 共享（对照只差工具）
 - **judge 解析失败**：重试一次后剔除出分母并单列 `judge_parse_error_rate`，不记 0 分
-- 摘要模型：`get_llm(purpose="summarization")`，需 `summarization.enabled=true`
-- token 口径：chars/4（content + tool_calls 序列化长度），写进 manifest
+- 摘要模型：`get_llm(purpose="summarization")`，需 `summarization.enabled=true`；评测经
+  `--model-user` 绑定时以 `include_summarization` 与作答同模型
+- token 口径：chars/4（content + tool_calls 序列化长度），写进 manifest；作答/触发轮真实
+  usage 由生产事件流采集
 - 摘要识别只认中间件写入的结构化标记（`lc_source=summarization`），不猜内容
+- 压缩一律走 `agent_path` 的 /compact 宿主触发；旧离线压缩路径（中间件直调 + 自建 summarize 接线）已删——两套实现会漂移。fixture 解析与 chars/4 token 口径在 `fixture_loader.py`
 
 **评测集来源**（真实长会话）：
 
@@ -303,8 +281,10 @@ uv run python -m evals.compression --tag tweak --fixture debug_session --runs 3 
 # 从本地 Claude Code 会话导出脱敏 transcript（--list 列最大会话）
 uv run python -m evals.compression.export_session --list
 uv run python -m evals.compression.export_session <session.jsonl> --out fixtures/real/<id>.json
-# 从「将被压缩区域」生成事实 recall 题库（按 transcript 内容 hash 缓存，fixture 变更后重生成）
-uv run python -m evals.compression.gen_probes --fixture <id> [--questions 15]
+# 从「将被压缩区域」生成分层事实 recall 题库（按 transcript hash + 出题 prompt 版本缓存）
+# 题目分三层：macro（目标/结论/决策，摘要必须保留）、meso（文件级改动与根因）、
+# detail（错误串/数值/原文措辞，通常需检索兜底）；报告按层分别报召回
+uv run python -m evals.compression.gen_probes --fixture <id> [--questions 12]
 ```
 
 导出脱敏为规则级（邮箱/key/绝对路径占位替换），产物必须人工过审后才可作为 fixture。旧三个合成 fixture 保留为手写题库档；`evals/compression/synthetic.py` 提供可种植事实的零 LLM 冒烟（CI 回归压缩机制，不依赖真实数据）。

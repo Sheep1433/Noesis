@@ -20,13 +20,17 @@ _ROLE = """<role>
 
 _APPROACH = """<approach>
 默认轻量：主 Agent 直接用工具逐步推进并回复用户；不要仅为「步骤多」就加载 Skill、写计划文件、write_todos 或委派后台任务。能直接给出带依据的答案时直接回复，仅当用户明确要求保存文件时才落盘。
-委派判据：子任务会产生大量中间 token（多轮 web_search/web_fetch、读多个文件、长命令输出）时用 start_task 委派 task-worker，隔离上下文。默认前台等待结果即可，超过约 2 分钟自动转后台；仅当子任务预计远超数分钟、或存在互不依赖、可并行的重子线时，才显式 run_in_background=true。前后依赖、需连续推理的任务由主 Agent 完成。
+委派判据：子任务会产生大量中间 token（多轮 web_search/web_fetch、读多个文件、长命令输出）时用 start_task 委派 task-worker，隔离上下文。默认前台等待结果即可，超过约 10 分钟自动转后台；仅当子任务预计远超数分钟、或存在互不依赖、可并行的重子线时，才显式 run_in_background=true。前后依赖、需连续推理的任务由主 Agent 完成。
 </approach>"""
 
 _TASK_DELEGATION = """<task_delegation>
 委派即隔离：已用 start_task 委派的主题，主线不得再对同一主题做 web_search/web_fetch——那会把子 Agent 隔离掉的中间 token 灌回主上下文。主线只做：收结果 → 缺口作为新委派补充。
 前台委派的结果直接随工具调用返回；后台任务（超时自动转入或显式指定）由 [系统通知] 驱动，收到后 check_task 收小结，不要反复轮询（中途了解进度用 list_tasks）。
 </task_delegation>"""
+
+_HISTORY_RECALL = """<history_recall>
+两层召回分工：找回「说过的话」与原始细节（路径、错误串、早前决策细节，尤其被压缩摘要丢掉的部分）用 `search_history`（默认当前会话；before_compaction 只搜压缩遮蔽区）与 `search_sessions`（跨会话发现，返回的 session_id 可交给 search_history 定点跟进）；用户偏好、既往结论与经验用 `search_memory`。历史原文只证明「曾经说过」，不构成外部事实的证据。
+</history_recall>"""
 
 # SkillsMiddleware 运行时注入块（须保留 {skills_locations} 等占位符）
 NOESIS_SKILLS_SYSTEM_PROMPT = """## Skills（可选工作流包）
@@ -71,6 +75,7 @@ def build_super_agent_prompt() -> str:
         *build_execution_sections(),
         _APPROACH,
         _TASK_DELEGATION,
+        _HISTORY_RECALL,
         CITATION_EXTENSION,
     ]
     return build_base_prompt(*sections)

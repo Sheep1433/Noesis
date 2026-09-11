@@ -16,6 +16,7 @@ manual_review_queue.json}
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,15 +57,22 @@ RESULTS_ROOT = ROOT / "results"
 
 def _render_summary_md(summary: dict[str, Any]) -> str:
     judged_display = f"{summary['answer_accepted_rate']:.1%}" if summary["judged"] else "-"
+    half_display = f"{summary['answer_score_rate_half']:.1%}" if summary["judged"] else "-"
+    breakdown = summary.get("error_breakdown") or {}
+    error_note = (
+        "：".join(f"{k} {v}" for k, v in breakdown.items())
+        if breakdown else "无")
+    invalid_note = f"，judge 解析失败 {summary['judge_invalid']}" if summary["judge_invalid"] else ""
     lines = [
         "# 记忆召回评测 summary",
         "",
         f"- 样本 {summary['samples']}（正例 {summary['positives']} / 负例 {summary['negatives']}"
-        f" / error {summary['errors']}）",
+        f" / error {summary['errors']}，其中 {error_note}{invalid_note}）",
         "",
         "| 指标 | 值 |",
         "|---|---:|",
         f"| 答案正确率（judge 采纳） | {judged_display} |",
+        f"| 答案得分率（部分采纳折半） | {half_display} |",
         f"| 条目级 recall@k（均值） | {summary['mean_recall@k']} |",
         f"| 条目级 precision@k（均值） | {summary['mean_precision@k']} |",
         f"| 行为级召回率（主动调用 search_memory） | {summary['behavior_recall_rate']:.1%} |",
@@ -87,19 +95,16 @@ def _run(args: argparse.Namespace) -> int:
     from evals.langfuse_env import eval_langfuse_run
     from noesis.llm import get_llm
 
-    # judge 对象在 judge 模型绑定期间构造一次（端点随对象固定），
-    # 之后再绑定被测模型快照供每次 run 使用
+    # judge 在宿主机侧运行（单次 LLM 调用，不进 CLI 子进程），沿用用户模型
+    # 绑定；被测模型走 CLI 子进程的 env 直连（evals/.env 的 NOESIS_*），
+    # --model-id 即端点真实模型名
     judge_user = args.judge_model_user or args.model_user
     if judge_user:
         judge_snapshot_id = bind_user_model_sync(judge_user, args.judge_model_id)
     else:
         judge_snapshot_id = args.judge_model_id
     judge_llm = get_llm(model_id=judge_snapshot_id)
-    if args.model_user:
-        subject_snapshot_id = bind_user_model_sync(
-            args.model_user, args.model_id, include_summarization=True)
-    else:
-        subject_snapshot_id = args.model_id
+    subject_model = args.model_id
     todo_meta: list[dict[str, Any]] = []  # {kind: positive|negative, payload}
 
     if args.mode == "smoke":
@@ -107,20 +112,24 @@ def _run(args: argparse.Namespace) -> int:
         for scenario in RECALL_SCENARIOS:
             todo_meta.append({"kind": "positive", "payload": scenario})
         for scenario in NEGATIVE_SCENARIOS:
-            todo_meta.append({"kind": "negative", "payload": scenario})
+            todo_meta.append({
+                "kind": "negative",
+                "payload": {**scenario, "user_id": args.user_id},
+            })
     else:
-        from evals.agent.memory.longmemeval import load_questions
+        from evals.agent.memory.longmemeval import eval_user_id, load_questions
 
         questions = load_questions(sample=args.sample or 30)
         for i, question in enumerate(questions):
             todo_meta.append({"kind": "positive", "payload": question})
-            # 配对负例：同用户、无记忆线索提问（默认每 5 题一条）
+            # 配对负例：绑定到同题隔离用户（构造时确定，resume 跳过正例后
+            # 负例仍能定位到自己的 haystack，不依赖本进程执行顺序）
             if args.negative_every and (i + 1) % args.negative_every == 0:
                 todo_meta.append({
                     "kind": "negative",
                     "payload": {
                         "id": f"neg-{question['question_id']}",
-                        "user_id": None,  # 绑定到上一正例的隔离用户
+                        "user_id": eval_user_id(question["question_id"]),
                         "query": NEGATIVE_QUERIES[(i // args.negative_every) % len(NEGATIVE_QUERIES)],
                     },
                 })
@@ -135,47 +144,48 @@ def _run(args: argparse.Namespace) -> int:
                      if str(t["payload"].get("id") or t["payload"].get("question_id")) not in done]
 
     print(f"mode={args.mode} tag={args.tag} todo={len(todo_meta)} → {out_dir}")
-    last_positive_user = None
-    for item in todo_meta:
-        payload = item["payload"]
-        with eval_langfuse_run(line="agent", tag=args.tag,
-                               session_id=f"memory-eval-{args.tag}"):
-            if item["kind"] == "positive":
-                if args.mode == "smoke":
-                    record = run_memory_recall_sample(
-                        payload, user_id=args.user_id,
-                        time_budget_seconds=args.time_budget, model_id=subject_snapshot_id or None)
-                    record["question_type"] = "smoke"
+
+    async def _run_samples() -> None:
+        for item in todo_meta:
+            payload = item["payload"]
+            with eval_langfuse_run(line="agent", tag=args.tag,
+                                   session_id=f"memory-eval-{args.tag}"):
+                if item["kind"] == "positive":
+                    if args.mode == "smoke":
+                        record = await run_memory_recall_sample(
+                            payload, user_id=payload.get("user_id") or args.user_id,
+                            time_budget_seconds=args.time_budget,
+                            model_id=subject_model or None)
+                        record["question_type"] = "smoke"
+                    else:
+                        record = await run_longmemeval_positive(
+                            payload, model_id=subject_model or None,
+                            time_budget_seconds=args.time_budget)
+                    # 层 1：judge 判卷（gold answer）——超时题只要有 final_text
+                    # 也判卷，预算问题不应白白丢掉已产出的作答
+                    if record.get("final_text") and record.get("answer"):
+                        record["judge"] = judge_answer(
+                            question=record.get("question") or record.get("query"),
+                            gold_answer=record["answer"],
+                            answer=record["final_text"],
+                            llm=judge_llm,
+                        )
                 else:
-                    record = run_longmemeval_positive(
-                        payload, model_id=subject_snapshot_id or None,
-                        time_budget_seconds=args.time_budget)
-                    last_positive_user = record["user_id"]
-                # 层 1：judge 判卷（gold answer）
-                if record["completed"] and record.get("answer"):
-                    record["judge"] = judge_answer(
-                        question=record.get("question") or record.get("query"),
-                        gold_answer=record["answer"],
-                        answer=record["final_text"],
-                        llm=judge_llm,
-                    )
-            else:
-                # smoke 负例用 --user-id；longmemeval 负例绑定上一正例的隔离用户
-                user_id = payload.get("user_id") or last_positive_user or (
-                    args.user_id if args.mode == "smoke" else None)
-                if not user_id:
-                    continue
-                record = run_negative_sample(
-                    user_id=user_id, query=payload["query"],
-                    time_budget_seconds=args.time_budget,
-                    model_id=subject_snapshot_id or None,
-                    forbidden_snippets=payload.get("forbidden_snippets"),
-                    sample_id=str(payload.get("id") or ""))
-        append_raw_record(raw_path, record)
-        verdict = (record.get("judge") or {}).get("verdict", "-")
-        print(f"  {record['sample_id']} kind={'neg' if record['negative'] else 'pos'} "
-              f"completed={record['completed']} judge={verdict} "
-              f"recall@k={(record.get('retrieval') or {}).get('recall@k')}", flush=True)
+                    record = await run_negative_sample(
+                        user_id=payload["user_id"], query=payload["query"],
+                        time_budget_seconds=args.time_budget,
+                        model_id=subject_model or None,
+                        forbidden_snippets=payload.get("forbidden_snippets"),
+                        sample_id=str(payload.get("id") or ""))
+            append_raw_record(raw_path, record)
+            verdict = (record.get("judge") or {}).get("verdict", "-")
+            print(f"  {record['sample_id']} kind={'neg' if record['negative'] else 'pos'} "
+                  f"completed={record['completed']} judge={verdict} "
+                  f"recall@k={(record.get('retrieval') or {}).get('recall@k')}", flush=True)
+
+    # 每样本一个 CLI 子进程，无跨样本共享状态；judge 调用是同步 LLM 请求，
+    # 阻塞事件循环无碍（循环内无并发任务）
+    asyncio.run(_run_samples())
 
     all_records = list(load_raw_records(raw_path).values())
     summary = summarize_memory_eval(all_records)
@@ -188,7 +198,9 @@ def _run(args: argparse.Namespace) -> int:
         dataset={"mode": args.mode, "count": len(all_records),
                  "negative_every": args.negative_every},
         config={"time_budget_s": args.time_budget, "sample": args.sample,
-                "user_id": args.user_id if args.mode == "smoke" else None},
+                "user_id": args.user_id if args.mode == "smoke" else None,
+                "model_user": args.model_user or None,
+                "judge_model_user": args.judge_model_user or args.model_user or None},
         usage=aggregate_usage(all_records),
     ))
     positives = [r for r in all_records if not r.get("negative")]
@@ -208,7 +220,8 @@ def main() -> None:
     parser.add_argument("--sample", type=int, default=30, help="LongMemEval 抽样题数")
     parser.add_argument("--negative-every", type=int, default=5,
                         help="每 N 个正例跑一条配对负例（0 关闭）")
-    parser.add_argument("--time-budget", type=int, default=240)
+    parser.add_argument("--time-budget", type=int, default=600,
+                        help="单题时间预算（秒）；LongMemEval haystack 大，实测 240s 大概率超时")
     parser.add_argument("--user-id", default=EVAL_USER_ID, help="smoke 模式评测用户")
     parser.add_argument("--model-user", default="",
                         help="自定义模型归属用户（用户名或 id）；提供时经用户模型解析，未命中即报错")

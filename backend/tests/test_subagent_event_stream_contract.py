@@ -217,7 +217,7 @@ async def test_followup_endpoint_passes_through_and_maps_not_found(monkeypatch) 
     monkeypatch.setattr(
         SubagentSessionService,
         "send_followup",
-        AsyncMock(side_effect=ConflictException(message="任务正在停止，无法追加消息")),
+        AsyncMock(side_effect=ConflictException(message="任务已结束（failed），无法追加消息")),
     )
     with pytest.raises(ConflictException):
         await chat_api.send_subagent_followup(

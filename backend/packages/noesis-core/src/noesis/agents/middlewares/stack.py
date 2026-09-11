@@ -75,6 +75,9 @@ class NoesisStackDeps:
     async_summarize: Any = None
     compaction_thresholds: CompactionThresholds | None = None
     compaction_keep_messages: int = 28
+    compaction_user_message_tokens: int = 20_000
+    # 压缩成功后写会话遮蔽边界（session-history-search）；None = 不写
+    compaction_boundary_writer: Any = None
     tool_result_max_chars: int = 24_000
     read_file_max_chars: int = 20_000
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None
@@ -164,8 +167,9 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
                 summarize=deps.summarize,
                 async_summarize=deps.async_summarize,
                 thresholds=deps.compaction_thresholds,
-                backend=deps.backend,
                 keep_messages=deps.compaction_keep_messages,
+                user_message_budget_tokens=deps.compaction_user_message_tokens,
+                boundary_writer=deps.compaction_boundary_writer,
             )
         )
     if deps.model_call_limit is not None:

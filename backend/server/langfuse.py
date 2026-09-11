@@ -110,6 +110,18 @@ def activate_eval_langfuse(
         if settings.base_url:
             client_kwargs["host"] = settings.base_url
         eval_client = Langfuse(**client_kwargs)
+        # 补 deps 绑定（与 server/wiring.py 同款，幂等）：否则走 stream.py 的
+        # Agent 评测线（deepresearch/rag/memory）里 langfuse_tracing_enabled()
+        # 恒为 False，逐 LLM/工具调用的 CallbackHandler 永远不会挂上
+        from noesis.runtime.deps import bind_langfuse
+
+        bind_langfuse(
+            tracing_enabled=langfuse_tracing_enabled,
+            merge_runnable_config=merge_langfuse_runnable_config,
+            hits_to_payload=hits_to_langfuse_payload,
+            retrieval_observation=langfuse_retrieval_observation,
+            workflow_context=langfuse_workflow_context,
+        )
         yield
     finally:
         if eval_client is not None:
@@ -134,7 +146,12 @@ def eval_langfuse_observation(
     name: str,
     input_data: Optional[Dict[str, Any]] = None,
 ) -> Iterator[Any]:
-    """评测 fixture / item 级根 span（压缩线等无 LangChain callback 时使用）。"""
+    """评测 fixture / item 级根 span（压缩线等无 LangChain callback 时使用）。
+
+    只有「创建 span」可降级；with 块内的业务异常必须原样传播——yield 不得
+    落在 except 内，否则业务异常会被吞掉，替换成 contextlib 的
+    "generator didn't stop after throw()"。
+    """
     if not langfuse_tracing_enabled():
         yield None
         return
@@ -149,24 +166,123 @@ def eval_langfuse_observation(
             public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
             if public_key:
                 client = get_client(public_key=public_key)
-        with client.start_as_current_observation(
+        span_cm = client.start_as_current_observation(
             name=name,
             as_type="span",
             input={**(input_data or {}), **meta},
             trace_context=trace_context,
-        ) as span:
-            if span is not None and session_id:
-                span.update_trace(session_id=str(session_id), metadata=meta)
-            yield span
+        )
     except Exception:
-        logger.warning("评测 Langfuse observation 失败，降级继续", exc_info=True)
+        logger.warning("评测 Langfuse observation 创建失败，降级继续", exc_info=True)
         yield None
+        return
+    with span_cm as span:
+        if span is not None and session_id:
+            try:
+                span.update_trace(session_id=str(session_id), metadata=meta)
+            except Exception:
+                logger.debug("评测 Langfuse update_trace 失败（降级）", exc_info=True)
+        yield span
+
+
+def _nested_trace_context() -> Optional[Dict[str, str]]:
+    """record_eval_* 系列的 trace_context 取值：处于活动 OTel span 内时返回 None。
+
+    Langfuse SDK 只要收到带 trace_id 的 trace_context 就走 remote-parent 分支
+    （parent=None、挂 trace 根层），不会挂到当前 span 之下。处于臂 span 的
+    with 块内省略 trace_context，SDK 才会按 OTel 当前上下文嵌套；脱离 span
+    上下文调用时退回入口注入的 trace_context，保证仍落在同一条 trace。
+    """
+    from opentelemetry.trace import get_current_span
+
+    current = get_current_span()
+    if current is not None and current.get_span_context().is_valid:
+        return None
+    return _lf_trace_context.get()
+
+
+def record_eval_tool_span(
+    *,
+    name: str,
+    input_data: Optional[Dict[str, Any]] = None,
+    output_text: str = "",
+) -> None:
+    """评测工具执行级 TOOL observation（检索循环等）。
+
+    与 record_eval_generation 同款降级语义；须在 eval_langfuse_observation
+    的 with 块内调用，经 OTel 当前上下文挂到臂 span 之下。没有它，agent
+    循环里只能看到一串 LLM 调用，工具执行只能从下轮 input 的 ToolMessage
+    间接推断。
+    """
+    if _eval_langfuse_active.get() is None:
+        return
+    try:
+        from langfuse import get_client
+
+        client = get_client()
+        public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+        if public_key:
+            client = get_client(public_key=public_key)
+        with client.start_as_current_observation(
+            name=name,
+            as_type="tool",
+            input=input_data or {},
+            output=output_text,
+            trace_context=_nested_trace_context(),
+        ):
+            pass
+    except Exception:
+        logger.debug("评测 tool span 记录失败（降级）", exc_info=True)
+
+
+def record_eval_generation(
+    *,
+    name: str,
+    input_messages: Any,
+    output_payload: Any,
+    usage: Optional[Dict[str, int]] = None,
+    model: Optional[str] = None,
+) -> None:
+    """评测 LLM 调用级 GENERATION（手动记录，input/output 由调用方截断）。
+
+    input_messages 为 Langfuse 消息数组（role/content/tool_calls，UI 按角色
+    渲染）；output_payload 为文本或 {text, tool_calls}（调工具轮次 content
+    为空，载荷在 tool_calls——只记文本会显示 undefined）。
+    须在 eval_langfuse_observation 的 with 块内调用：经 OTel 当前上下文挂到
+    臂 span 之下；脱离 span 上下文时退回入口 trace_context（挂 trace 根层）。
+    Langfuse 失败静默降级，不阻断评测。
+    """
+    if _eval_langfuse_active.get() is None:
+        return
+    try:
+        from langfuse import get_client
+
+        client = get_client()
+        public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+        if public_key:
+            client = get_client(public_key=public_key)
+        with client.start_as_current_observation(
+            name=name,
+            as_type="generation",  # SDK Literal 仅认小写；大写会静默降级为 span
+            input=input_messages,
+            output=output_payload,
+            # usage 走 usage_details（start_as_current_observation 无 usage 参数）
+            usage_details={"input": int((usage or {}).get("input") or 0),
+                           "output": int((usage or {}).get("output") or 0)},
+            model=model or "",
+            trace_context=_nested_trace_context(),
+        ):
+            pass
+    except Exception:
+        logger.debug("评测 generation 记录失败（降级）", exc_info=True)
 
 
 def normalize_langfuse_trace_id(raw: Optional[str]) -> Optional[str]:
     """
     Langfuse trace_id 须为 32 位小写 hex（W3C trace id 格式）。
-    会话 UUID（含连字符）在此转为去连字符形式；其它自定义 id 原样保留。
+    会话 UUID（含连字符）在此转为去连字符形式；其它非法 id 确定性哈希为合法
+    32 位 hex——原样透传会让 start_as_current_observation 抛异常（SDK 只在
+    CallbackHandler 路径忽略非法 id），整条上报链路静默失效。
     """
     if not raw:
         return None
@@ -174,7 +290,9 @@ def normalize_langfuse_trace_id(raw: Optional[str]) -> Optional[str]:
     compact = s.replace("-", "").lower()
     if len(compact) == 32 and all(c in "0123456789abcdef" for c in compact):
         return compact
-    return s
+    import hashlib
+
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:32]
 
 
 def _langfuse_direct_httpx_client(**kwargs: Any) -> Any:
@@ -364,6 +482,9 @@ def langfuse_workflow_context(
     """
     从 run_config.metadata 读取 session/trace id，一次注入全链路复用。
     配合 merge_langfuse_runnable_config 在 workflow 入口调用即可。
+
+    只有「构造 propagate 上下文」可降级；with 块内的业务异常必须原样传播
+    （yield 不得落在 except 内，同 eval_langfuse_observation）。
     """
     if not run_config:
         yield
@@ -382,21 +503,28 @@ def langfuse_workflow_context(
         yield
         return
 
-    tok_trace = _lf_trace_context.set(trace_context)
-    tok_session = _lf_session_id.set(session_id)
+    propagate_meta: Optional[Dict[str, str]] = dict(eval_langfuse_metadata())
+    if qa_type:
+        propagate_meta["qa_type"] = str(qa_type)
+    if not propagate_meta:
+        propagate_meta = None
     try:
         from langfuse import propagate_attributes
 
-        propagate_meta: Optional[Dict[str, str]] = dict(eval_langfuse_metadata())
-        if qa_type:
-            propagate_meta["qa_type"] = str(qa_type)
-        if not propagate_meta:
-            propagate_meta = None
-        with propagate_attributes(session_id=str(session_id), metadata=propagate_meta):
-            yield
+        propagate_cm = propagate_attributes(
+            session_id=str(session_id), metadata=propagate_meta)
     except Exception:
         logger.warning("Langfuse workflow 上下文传播失败，降级继续", exc_info=True)
-        yield
+        propagate_cm = None
+
+    tok_trace = _lf_trace_context.set(trace_context)
+    tok_session = _lf_session_id.set(session_id)
+    try:
+        if propagate_cm is None:
+            yield
+            return
+        with propagate_cm:
+            yield
     finally:
         _lf_trace_context.reset(tok_trace)
         _lf_session_id.reset(tok_session)
@@ -437,6 +565,9 @@ def langfuse_retrieval_observation(
 ) -> Iterator[Any]:
     """
     可选 Langfuse retrieval span；trace/session id 从 langfuse_workflow_context 自动读取。
+
+    只有「创建 span」可降级；with 块内的业务异常必须原样传播
+    （yield 不得落在 except 内，同 eval_langfuse_observation）。
     """
     if enabled is None:
         enabled = langfuse_tracing_enabled()
@@ -455,15 +586,20 @@ def langfuse_retrieval_observation(
             public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
             if public_key:
                 langfuse = get_client(public_key=public_key)
-        with langfuse.start_as_current_observation(
+        span_cm = langfuse.start_as_current_observation(
             name=name,
             as_type="retrieval",
             input=input_data or {},
             trace_context=trace_context,
-        ) as span:
-            if span is not None and session_id:
-                span.update_trace(session_id=str(session_id))
-            yield span
+        )
     except Exception:
-        logger.warning("Langfuse retrieval span 失败，降级继续", exc_info=True)
+        logger.warning("Langfuse retrieval span 创建失败，降级继续", exc_info=True)
         yield None
+        return
+    with span_cm as span:
+        if span is not None and session_id:
+            try:
+                span.update_trace(session_id=str(session_id))
+            except Exception:
+                logger.debug("Langfuse update_trace 失败（降级）", exc_info=True)
+        yield span

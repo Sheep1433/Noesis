@@ -16,7 +16,7 @@
 | Agentic 记忆（该召回时主动召回） | 记忆 `evals.agent.memory` | 召回纪律 recall、检索命中质量 |
 | RAG 回答带来源（引用溯源） | Agentic RAG `evals.agent.rag` | KB 调用率、来源召回 |
 
-BrowseComp / Harbor 是**官方 benchmark**（BrowseComp 从官方 URL 下载 CSV、Harbor 用官方任务环境），评测集不自建、无法改题，只做回归基线——不在本文设计范围内，仅记录「无评测集设计空间」这一结论供简历叙事使用（跑官方 benchmark 本身就有说服力）。
+DeepResearch Bench 属**官方 benchmark**（HuggingFace 公开数据集的确定性子集），评测集不自建、无法改题，只做回归基线——不在本文设计范围内，仅记录「无评测集设计空间」这一结论供简历叙事使用（跑官方 benchmark 本身就有说服力）。
 
 ---
 

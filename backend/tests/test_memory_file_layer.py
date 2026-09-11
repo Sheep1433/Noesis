@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -115,17 +116,37 @@ def test_journal_is_append_only(users_root: Path) -> None:
     assert "第一段" in text and "第二段" in text
 
 
-def test_search_matches_entry_content(users_root: Path) -> None:
+def test_search_returns_line_matches(users_root: Path) -> None:
     MemoryStore.upsert_entry(
-        "u1", memory_type="experience", label="重试", body="超时后指数退避重试", sources=[]
-    )
-    MemoryStore.upsert_entry(
-        "u1", memory_type="gotcha", label="边界", body="工作区外写入会失败", sources=[]
-    )
+        "u1", memory_type="experience", label="重试", body="超时后指数退避重试", sources=[])
     hits = MemoryStore.search("u1", "重试")
-    assert len(hits) == 1
-    assert hits[0]["memory_type"] == "experience"
+    # 行级命中只来自正文（frontmatter 的 label/description 不参与）；
+    # 正文标题行（# 重试）与内容行都算合法命中
+    assert hits, "正文行未命中"
+    assert all(h["rel_path"] == f"experience/{hits[0]['slug']}.md" for h in hits)
+    assert any("指数退避" in str(h["content"]) for h in hits)
+    assert all(h["line"] >= 1 for h in hits)
     assert MemoryStore.search("u1", "不存在的关键词") == []
+
+
+def test_search_multi_keyword_line_ranks_first(users_root: Path) -> None:
+    # 同行双词命中排在单词命中之前；跨行单 词不参与排序竞争
+    MemoryStore.upsert_entry(
+        "u1", memory_type="experience", label="aa",
+        body="只有 超时 一词\n另一行只有 重试 一词", sources=[])
+    MemoryStore.upsert_entry(
+        "u1", memory_type="preference", label="zz",
+        body="这一行同时有 超时 和 重试", sources=[])
+    hits = MemoryStore.search("u1", "超时 重试")
+    assert hits[0]["rel_path"].startswith("preference/")
+    assert "同时" in str(hits[0]["content"])
+
+
+def test_search_line_matches_cover_journal(users_root: Path) -> None:
+    MemoryStore.append_journal("u1", session_id="s1", text="今天试了 pnpm workspace")
+    hits = MemoryStore.search("u1", "pnpm")
+    assert any(h["memory_type"] == "journal" for h in hits)
+    assert any("pnpm" in str(h["content"]) for h in hits)
 
 
 def test_invalid_type_rejected(users_root: Path) -> None:
@@ -423,8 +444,6 @@ async def test_extract_session_marks_and_skips_when_disabled(
 
 # ----- 水位增量（bridge / head-tail / 成功才推进） -----
 
-
-from collections import namedtuple
 
 _MsgRow = namedtuple("_MsgRow", ["message_sequence", "role", "content"])
 
@@ -929,3 +948,23 @@ def test_index_renders_no_empty_group_headers(users_root: Path) -> None:
     text = index.read_text(encoding="utf-8")
     assert "## 注意事项" in text and entry.rel_path in text
     assert "## 偏好" not in text, "仍空的组不出现"
+
+
+def test_search_supports_regex_alternation(users_root: Path) -> None:
+    # grep 契约：模型自然使用 a|b|c 交替语法；字面子串会让整串模式落空
+    MemoryStore.upsert_entry(
+        "u1", memory_type="experience", label="婚礼",
+        body="Congratulations to Rachel on her upcoming wedding!", sources=[])
+    MemoryStore.upsert_entry(
+        "u1", memory_type="experience", label="无关", body="完全不相关的内容", sources=[])
+    hits = MemoryStore.search("u1", "wedding|marry|married|engaged")
+    assert hits and "upcoming wedding" in str(hits[0]["content"])
+    assert all(h["rel_path"] != "experience/无关.md" or False for h in hits)
+
+
+def test_search_invalid_regex_falls_back_to_literal(users_root: Path) -> None:
+    # 非法正则（如 C++ 的 ++）不炸，按字面子串匹配
+    MemoryStore.upsert_entry(
+        "u1", memory_type="gotcha", label="编译错误", body="编译器报错 C++ 语法问题", sources=[])
+    hits = MemoryStore.search("u1", "C++")
+    assert hits and "C++" in str(hits[0]["content"])

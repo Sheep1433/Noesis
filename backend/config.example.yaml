@@ -72,8 +72,11 @@ model:
   # name: deepseek-v4-flash-free
   # base_url: https://opencode.ai/zen/v1
 
-  # 单次 LLM HTTP 读超时（秒）：流式为相邻 chunk 间隔上限；深度研究建议 ≥120
+  # 单次 LLM HTTP 请求超时（秒，非流式语义）
   request_timeout: 120
+  # 流式块间隔超时（秒）：两块生成之间的最长等待——thinking 模型大上下文
+  # 首字延迟常超 30s，不能与 request_timeout 复用否则误杀长请求
+  stream_idle_timeout: 120
   max_retries: 2
   generation:
     max_tokens: 32000
@@ -109,6 +112,8 @@ summarization:
   trigger_fraction: 0.75
   # model profile 不可用时的消息数量 fallback
   messages_to_keep: 28
+  # 被压缩区用户消息原文装回预算（token，对齐 codex compact）；0 = 关闭
+  user_message_tokens: 20000
 
 agent_runtime:
   # 无 filesystem backend 时，单条 ToolMessage 写入 history 前的字符上限
@@ -215,6 +220,13 @@ memory:
   consolidation_min_interval_hours: 24   # AutoDream 门控：距上次整理最小间隔
   consolidation_min_new_sessions: 5      # 且期间新抽取会话数达此值才整理
   max_message_chars: 120000  # 抽取输入上限（会话消息截断）
+
+# Agent 会话历史检索（search_history / search_sessions，pg_trgm 确定性全文）
+history_search:
+  max_hits: 10              # 单次调用命中/会话条数上限（limit 参数的服务端钳制）
+  max_excerpt_chars: 2000   # 单条命中截断长度
+  max_total_chars: 12000    # 单次返回总字符上限
+  max_window: 10            # 滚动深读 window 服务端上限
 
 langfuse:
   tracing_enabled: false

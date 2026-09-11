@@ -2,11 +2,11 @@
 
 ## Purpose
 
-本能力索引 Noesis **离线评测**入口：`evals.agent`（BrowseComp / Harbor / Agentic RAG / 记忆应召回）、`evals.case`（测试用例两阶段 promptfoo）、`evals.compression`（消息摘要压缩）、`evals.kb`（单集合检索 + ERB 企业级基准）。在线 chat 与 CaseCoordinator 产品行为见 `agent-profiles` / `platform-chat`。
+本能力索引 Noesis **离线评测**入口：`evals.agent`（DeepResearch / Harbor / Agentic RAG / 记忆应召回）、`evals.case`（测试用例两阶段 promptfoo）、`evals.compression`（消息摘要压缩）、`evals.kb`（单集合检索 + ERB 企业级基准）。在线 chat 与 CaseCoordinator 产品行为见 `agent-profiles` / `platform-chat`。
 ## Requirements
 ### Requirement: Agent 离线评测经 harness
 
-`evals.agent`（含 BrowseComp、Harbor 和 Agentic RAG）SHALL 通过 `noesis` 包的 Agent Profile 或工厂与流式核执行被测 Agent。Harbor 自定义 Agent SHALL 基于官方 `harbor.agents.base.BaseAgent` 生命周期直接运行，不得为加载 Harness 额外维护 Worker 或进程间代理。评测专用 backend、prompt、collector 和 benchmark adapter 可以注入。各 Agent benchmark SHALL 共用最小事件结果模型，专用报告可以在该结果之上扩展。
+`evals.agent`（含 DeepResearch、Harbor 和 Agentic RAG）SHALL 通过 `noesis` 包的 Agent Profile 或工厂与流式核执行被测 Agent。Harbor 自定义 Agent SHALL 基于官方 `harbor.agents.base.BaseAgent` 生命周期直接运行，不得为加载 Harness 额外维护 Worker 或进程间代理。评测专用 backend、prompt、collector 和 benchmark adapter 可以注入。各 Agent benchmark SHALL 共用最小事件结果模型，专用报告可以在该结果之上扩展。
 
 #### Scenario: Harbor 使用 harness factory
 
@@ -15,9 +15,9 @@
 - **AND** SHALL 直接使用 Harbor 传入的 `BaseEnvironment`，不得启动 Noesis Worker 或 TCP 环境代理
 - **AND** 公共完成状态、文本、工具统计、usage 和错误 SHALL 由共享 Agent event collector 生成
 
-#### Scenario: BrowseComp 使用 SuperAgent Profile
+#### Scenario: DeepResearch 使用 SuperAgent Profile
 
-- **WHEN** 运行 BrowseComp
+- **WHEN** 运行 DeepResearch Bench 子集
 - **THEN** 系统 SHALL 通过 `noesis.agents.super_agent.SuperAgent` 执行题目
 - **AND** SHALL 使用与 Harbor 相同的公共 Agent event result
 

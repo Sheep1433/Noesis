@@ -1115,7 +1115,7 @@ async def test_conflict_409_response_contains_full_join_schema() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stop_subagent_run_returns_stopping_snapshot(monkeypatch) -> None:
+async def test_stop_subagent_run_returns_interrupted_snapshot(monkeypatch) -> None:
     """协作停止契约：stop 即时返回受理快照，status 覆写 stopping（不等待终态）。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -1133,7 +1133,7 @@ async def test_stop_subagent_run_returns_stopping_snapshot(monkeypatch) -> None:
         assistant_message_id="msg-1",
         qa_type="SUPER_AGENT_QA",
         origin="subagent",
-        status=RunStatus.STOPPING,
+        status=RunStatus.INTERRUPTED,
         sequence=7,
     )
 
@@ -1151,15 +1151,15 @@ async def test_stop_subagent_run_returns_stopping_snapshot(monkeypatch) -> None:
     )
     body = json.loads(result.body.decode()) if getattr(result, "body", None) else {}
     data = body.get("data") or {}
-    # 响应形状与 RunSnapshot 一致，status 为受理态 stopping
-    assert data.get("status") == "stopping"
+    # 响应形状与 RunSnapshot 一致，status 为乐观终态 interrupted（受理即达）
+    assert data.get("status") == "interrupted"
     assert data.get("run_id") == "run-1"
     assert data.get("snapshot_sequence") == 7
 
 
 @pytest.mark.asyncio
-async def test_stop_run_service_overwrites_status_stopping(monkeypatch) -> None:
-    """服务层：cancel 受理 → RunSnapshot 覆写；stopping 保持、即时取消映射 interrupted。"""
+async def test_stop_run_service_maps_cancel_to_interrupted(monkeypatch) -> None:
+    """服务层：cancel 乐观终态受理 → RunSnapshot 覆写为 interrupted。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -1169,9 +1169,8 @@ async def test_stop_run_service_overwrites_status_stopping(monkeypatch) -> None:
     class _FakeExec:
         @staticmethod
         def cancel(task_id):
-            if task_id == "s-coop":
-                return {"status": "stopping", "stop_reason": "cancelled"}
-            return {"status": "cancelled"}
+            # 乐观终态：无论协作还是即时路径，受理即 cancelled
+            return {"status": "cancelled", "stop_reason": "cancelled"}
 
     import noesis.services.subagent_runtime_port as port
 
@@ -1202,7 +1201,7 @@ async def test_stop_run_service_overwrites_status_stopping(monkeypatch) -> None:
         run_id="run-1", user_id="u1", db=SimpleNamespace(),
     )
     assert isinstance(snapshot, RunSnapshot)
-    assert snapshot.to_dict()["status"] == "stopping"
+    assert snapshot.to_dict()["status"] == "interrupted"
 
     async def fake_get_owned_immediate(run_id, user_id, db):
         return SimpleNamespace(origin="subagent", status="running", session_id="s-instant")

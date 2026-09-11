@@ -74,7 +74,7 @@ class _StartTaskArgs(BaseModel):
     run_in_background: bool = Field(
         False,
         description=(
-            "默认 false：前台等待结果直接返回，超过约 2 分钟自动转后台（之后用 check_task 收结果）；"
+            "默认 false：前台等待结果直接返回，超过约 10 分钟自动转后台（之后用 check_task 收结果）；"
             "仅当任务预计远超数分钟、或要与其它子任务并行时才传 true（立即返回 task_id）"
         ),
     )
@@ -115,7 +115,7 @@ class SubagentTasksState(AgentState):
 
 
 def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> str:
-    """任务状态文本：终态携带结果/部分产出（受 output_budget 截断），stopping 提示进行中。"""
+    """任务状态文本：终态携带结果/部分产出（受 output_budget 截断）。"""
     public_id = str(task.get("child_session_id") or task.get("task_id") or "")
     status = task["status"]
 
@@ -128,15 +128,13 @@ def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> s
 
     if status == BgTaskStatus.COMPLETED.value:
         return f"[{public_id}] completed：\n{task.get('result') or '(无结果文本)'}"
-    if status == BgTaskStatus.STOPPING.value:
-        return f"[{public_id}] 正在停止（当前步骤完成后退出，稍后再查收部分产出）"
     # 进行中（queued / running / awaiting_approval）：状态提示，无产出可带
     pending_status = BgTaskStatus(status)
     if pending_status in _CHECK_PENDING_HINT:
         hint = _CHECK_PENDING_HINT[pending_status]
         return f"[{public_id}] {hint}（description: {task['description']}）"
     # cancelled / failed / timed_out：非正常终态统一「原因 + 部分产出」形态
-    # （超时走协作路径时产出在 result，error 只有原因；取消同理）
+    # （停止为乐观终态：部分产出由后台收口异步补入 result，稍后 check 可见）
     partial = task.get("result")
     if status == BgTaskStatus.CANCELLED.value:
         head = f"[{public_id}] cancelled（{task.get('stop_reason') or 'cancelled'}）" if partial else f"[{public_id}] cancelled"
@@ -402,12 +400,14 @@ class NoesisSubagentMiddleware(
                 task = executor.cancel(task_id)
             except ValueError as exc:
                 return f"取消失败：{exc}"
-            if task["status"] == BgTaskStatus.STOPPING.value:
+            if task.get("kind") == "subagent" or task["status"] == "timed_out":
+                # 协作路径（running 受理）/ 超时：执行侧收口异步回收部分产出
                 return (
-                    f"已请求停止：{task['task_id']}（协作式——当前步骤完成后停止，"
-                    "可用 check_task 收取中止前的部分产出）"
+                    f"已取消：{task['task_id']}（部分产出在后台回收中，"
+                    "稍后可用 check_task 查收）"
                 )
-            return f"已取消：{task['task_id']}（{task['status']}）"
+            # 即时终态（queued / awaiting_approval / shell）：无执行产出可回收
+            return f"已取消：{task['task_id']}"
 
         async def acancel_task(task_id: str) -> str:
             return cancel_task(task_id)
@@ -447,7 +447,7 @@ class NoesisSubagentMiddleware(
                 "prompt：完整任务指令——写清子目标、约束与期望输出格式。"
                 "subagent_type（必填）：子 Agent 角色类型，按任务性质从系统提示的类型清单中选择。"
                 "run_in_background（默认 false）：前台等待，结果直接随本次调用返回；"
-                "超过约 2 分钟自动转后台，之后用 check_task 收结果。"
+                "超过约 10 分钟自动转后台，之后用 check_task 收结果。"
                 "仅当子任务预计远超数分钟、或要与其它子任务并行推进时才显式传 true（立即返回 task_id）。"
             ),
         )

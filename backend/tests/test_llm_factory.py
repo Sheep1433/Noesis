@@ -409,7 +409,7 @@ async def test_astream_idle_timeout_raises_on_hung_stream() -> None:
     from types import SimpleNamespace as _NS
     import noesis.llm.factory as factory_mod
     with _patch.object(ChatOpenAI, "_astream", hung_parent_stream), \
-         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.2)):
+         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.2, stream_idle_timeout=0.2)):
         with pytest.raises(StreamIdleTimeoutError):
             async for _ in llm.astream("hi"):
                 pass
@@ -435,7 +435,7 @@ async def test_astream_idle_timeout_reset_by_real_chunks() -> None:
     from types import SimpleNamespace as _NS
     import noesis.llm.factory as factory_mod
     with _patch.object(ChatOpenAI, "_astream", slow_parent_stream), \
-         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.3)):
+         _patch.object(factory_mod, "ModelConfig", _NS(request_timeout=0.3, stream_idle_timeout=0.3)):
         chunks = [c async for c in llm.astream("hi")]
     # langchain stream reducer 结尾会追加聚合 chunk，>=10 即证明全部收到、未被误杀
     assert len(chunks) >= 10

@@ -18,12 +18,12 @@ from noesis.storage.postgres.models.chat import TAgentRun
 
 
 class MemorySearchInput(BaseModel):
-    query: str = Field(description="关键词（多个词以空格分隔，任一命中即返回）")
+    query: str = Field(description="检索词（支持正则如 a|b；多个词以空格分隔，同行命中越多越靠前）")
     memory_type: str = Field(
         default="",
-        description=f"限定类型（{'/'.join(MEMORY_TYPES)}）；空 = 全部类型",
+        description=f"限定类型（{'/'.join(MEMORY_TYPES)}）；空 = 全部类型 + journal",
     )
-    limit: int = Field(default=5, ge=1, le=10)
+    limit: int = Field(default=50, ge=1, le=100)
 
 
 def _stale_warning(mtime: float) -> str:
@@ -75,7 +75,7 @@ def build_memory_tools(
     （抽取防自强化输入）；subagent 只读不传，结论经父会话终态回流。
     """
 
-    async def search_memory(query: str, memory_type: str = "", limit: int = 5) -> str:
+    async def search_memory(query: str, memory_type: str = "", limit: int = 50) -> str:
         types: tuple[str, ...] = ()
         if memory_type:
             if memory_type not in MEMORY_TYPES:
@@ -90,17 +90,20 @@ def build_memory_tools(
             return json.dumps({"error": "记忆检索暂不可用"}, ensure_ascii=False)
         if hits and run_id and db is not None:
             await _merge_memory_context(
-                db, run_id, [str(hit["rel_path"]) for hit in hits]
+                db, run_id, list(dict.fromkeys(str(h["rel_path"]) for h in hits))
             )
         if not hits:
             return json.dumps({"results": []}, ensure_ascii=False)
+        stale_cache: dict[str, str] = {}
         rendered = []
         for hit in hits:
-            path = MemoryStore.entry_path(
-                user_id, str(hit["memory_type"]), str(hit["slug"])
-            )
-            warning = _stale_warning(path.stat().st_mtime) if path.is_file() else ""
-            rendered.append({**hit, "stale_warning": warning})
+            rel_path = str(hit["rel_path"])
+            if rel_path not in stale_cache:
+                path = MemoryStore.memory_root(user_id) / rel_path
+                stale_cache[rel_path] = (
+                    _stale_warning(path.stat().st_mtime) if path.is_file() else ""
+                )
+            rendered.append({**hit, "stale_warning": stale_cache[rel_path]})
         return json.dumps(
             {"results": rendered},
             ensure_ascii=False,
@@ -110,7 +113,9 @@ def build_memory_tools(
         coroutine=search_memory,
         name="search_memory",
         description=(
-            "在用户长期记忆（md 文件）中按关键词检索条目原文。"
+            "在用户长期记忆中按关键词做行级检索（grep 语义）：返回命中行的"
+            "路径、行号与内容（同行命中越多越靠前）。看到有价值的行后，"
+            "用 read_file 读对应文件（可带 offset 定点读）。"
             "涉及用户偏好、历史决策、既往经验或注意事项时先检索再产出；"
             "结果附条目年龄提示，陈旧条目使用前先验证。"
         ),

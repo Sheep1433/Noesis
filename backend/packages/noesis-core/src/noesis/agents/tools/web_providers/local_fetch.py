@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -69,7 +70,11 @@ def _extract_html(page_html: str) -> tuple[str, str]:
 
 def fetch_with_local(url: str, timeout: int) -> dict[str, Any]:
     """抓取页面转 Markdown，正文不做截断——截断（头尾窗口 + 落盘 +
-    续读提示）统一由 web_fetch 工具层按 fetch_max_chars 处理。"""
+    续读提示）统一由 web_fetch 工具层按 fetch_max_chars 处理。
+
+    抓取链路：直连优先；失败且配置了 NOESIS_WEB_PROXY 时改走代理重试
+    （外网站点直连常被重置，代理节点对个别站点也可能失效，两方向都兜住）。
+    """
     ok, err = validate_fetch_url(url)
     if not ok:
         raise ToolValidationError(err or "URL 校验失败")
@@ -81,17 +86,31 @@ def fetch_with_local(url: str, timeout: int) -> dict[str, Any]:
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
     }
 
+    proxy = (os.environ.get("NOESIS_WEB_PROXY") or "").strip()
+
+    def _get(use_proxy: bool) -> httpx.Response:
+        kwargs: dict[str, Any] = {"timeout": timeout, "follow_redirects": True}
+        if use_proxy:
+            kwargs["proxy"] = proxy
+        with httpx.Client(**kwargs) as client:
+            return client.get(url, headers=headers)
+
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.get(url, headers=headers)
-            resp.raise_for_status()
-            # 重定向后再次校验最终 URL
-            final_url = str(resp.url)
-            ok_final, err_final = validate_fetch_url(final_url)
-            if not ok_final:
-                raise ToolValidationError(f"重定向目标被拒绝: {err_final}")
-            content_type = (resp.headers.get("content-type") or "").lower()
-            raw = resp.text
+        try:
+            resp = _get(use_proxy=False)
+        except httpx.HTTPError:
+            if not proxy:
+                raise
+            logger.info("local_fetch 直连失败，改走代理重试 url={}", url)
+            resp = _get(use_proxy=True)
+        resp.raise_for_status()
+        # 重定向后再次校验最终 URL
+        final_url = str(resp.url)
+        ok_final, err_final = validate_fetch_url(final_url)
+        if not ok_final:
+            raise ToolValidationError(f"重定向目标被拒绝: {err_final}")
+        content_type = (resp.headers.get("content-type") or "").lower()
+        raw = resp.text
     except httpx.HTTPError as e:
         logger.warning("local_fetch HTTP 失败 url={}: {}", url, e)
         raise RuntimeError("页面抓取失败") from e

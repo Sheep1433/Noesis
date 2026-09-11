@@ -146,6 +146,7 @@ def test_compaction_summarizer_follows_run_model() -> None:
         deps = _compaction_deps(model=object(), model_id="token/glm-5.3-flash")
 
     assert deps, "summarization_enabled 时必须产出 compaction deps"
+    # 摘要输出不设上限（对齐 codex compact），质量防线在中间件校验层
     get_llm.assert_called_once_with(
-        purpose="summarization", model_id="token/glm-5.3-flash"
+        purpose="summarization", model_id="token/glm-5.3-flash",
     )

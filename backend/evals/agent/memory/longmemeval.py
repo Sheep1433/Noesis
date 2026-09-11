@@ -14,6 +14,7 @@ import json
 import os
 import random
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -26,11 +27,13 @@ SOURCE_URL = (
 EXPECTED_COUNT = 500
 # 会话正文导入上限（默认 4000 会截断长会话、伤检索）
 SESSION_MAX_CHARS = 50_000
-USER_PREFIX = "eval-longmemeval"
+# 评测用户必须是合法 UUID（t_chat_session.user_id 为 UUID 列）：
+# uuid5 确定性派生，同题始终得到同一隔离用户，幂等语义不变
+_EVAL_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "noesis-eval/longmemeval")
 
 
 def eval_user_id(question_id: str) -> str:
-    return f"{USER_PREFIX}-{question_id}"
+    return str(uuid.uuid5(_EVAL_NAMESPACE, str(question_id)))
 
 
 def download_dataset(data_dir: Path | None = None) -> Path:

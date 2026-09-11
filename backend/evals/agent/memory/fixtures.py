@@ -7,10 +7,12 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
-# 评测专用用户（记忆种子写入其用户数据目录，幂等 upsert）
-EVAL_USER_ID = "eval-memory-recall"
+# 评测专用用户（记忆种子写入其用户数据目录，幂等 upsert）。
+# 必须是合法 UUID（t_chat_session.user_id 为 UUID 列），uuid5 确定性派生。
+EVAL_USER_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, "noesis-eval/memory-smoke"))
 
 # 记忆种子：四类各一条（label 与场景一一对应）
 SEEDED_ENTRIES: list[dict[str, Any]] = [

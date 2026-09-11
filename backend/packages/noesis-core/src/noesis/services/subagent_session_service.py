@@ -313,8 +313,6 @@ class SubagentSessionService:
             raise ConflictException(message=str(exc)) from exc
         snapshot = await RunService.get(run_id, user_id, db)
         accepted_status = str(accepted.get("status") or "")
-        if accepted_status == "stopping":
-            return replace(snapshot, status=RunStatus.STOPPING)
         if accepted_status == "cancelled":
             return replace(snapshot, status=RunStatus.INTERRUPTED, finish_reason="stopped")
         return snapshot

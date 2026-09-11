@@ -1,0 +1,154 @@
+{
+  "fixture_id": "cc-1b34e49d",
+  "transcript_sha256": "5ebb4f573dd2564cb92e37aab2f8e101c7f4311e14d24394beccf538ebec8c97",
+  "gen_prompt_version": "gen-probes/v2-stratified",
+  "layer_split": {
+    "macro": 10,
+    "meso": 5,
+    "detail": 5
+  },
+  "region_messages": 3595,
+  "region_tokens": 543585,
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话开头用户报告的核心问题是什么？AI 为此定位了哪些关键文件来研究引用机制？",
+      "reference_answer": "用户跑了一轮问答，搜索返回了很多结果，但一次引用溯源都没有。AI 通过 grep 定位了引用相关文件，关键文件包括 kb_search_tool.py、web_search_tool.py、prompts/citations.py、prompts/common_qa.py，并阅读了 CITATION_EXTENSION 提示词契约和知识库检索工具实现。"
+    },
+    {
+      "id": "p2",
+      "type": "recall",
+      "layer": "macro",
+      "question": "关于上下文占用圆环（ContextMetricsRegistry）的显示问题，调研后确认的根因结论是什么？",
+      "reference_answer": "langgraph_bridge.py:400-413 中圆环的 current_tokens 取\"最近一次 model run 的 input_tokens\"（单次覆盖不累计），而 _accumulate_usage 对所有 on_chat_model_end 事件都触发——包括 subagent 的 model call。因此 lead agent 调了 subagent 后，圆环会被 subagent 那次调用的 input_tokens 覆盖，显示的不是主对话上下文。用户的怀疑成立。"
+    },
+    {
+      "id": "p3",
+      "type": "recall",
+      "layer": "macro",
+      "question": "用户在改动执行过程中报告了什么运行时报错？AI 对该报错的定性和核实结论是什么？",
+      "reference_answer": "报错是 openai.APIConnectionError: Connection error（请求 https://opencode.ai/zen/v1/chat/completions 失败）。AI 结论：与本次改动无关——llm/ 目录本次零改动，factory.py 特意用 trust_env=False（不走系统代理）；是 opencode.ai 端点那一刻不可达（服务端抖动、网络波动或限流/熔断）；错误处理链路正常工作：bridge 在 _handle_tw_or_business:754 捕获异常并发出 SSE error 事件（detail=连接失败，请稍后重试），重试一次即可。"
+    },
+    {
+      "id": "p4",
+      "type": "recall",
+      "layer": "macro",
+      "question": "针对\"连接失败不触发重试\"的问题，最终获批的实施计划（LLM 调用失败重试 + 失败轮次感知）包含哪些要点？",
+      "reference_answer": "要点：1) factory.py chat 路径关掉 SDK 重试（provider_max_retries 改回 0），由应用层重试接管；2) 新增应用层重试器 runtime/model_retry.py，参考 Claude Code withRetry，可重试 APIConnectionError/APITimeoutError/5xx/429，退避 500*2^(n-1) ms 上限 32s+抖动，重试次数用 config 的 6 次；3) 通过 noesis_model_retry custom event 复用 bridge 已有的 run-status SSE 透传链路，前端 chat.vue 用 retryingLabel 内联显示\"重试中 (n/M)\"而不弹全局提示；4) 失败轮次给 AIMessage 打 additional_kwargs[\"noesis_outcome\"]=\"interrupted\" 标记，下一轮 before_model 中间件改写发给模型的 content（落库原貌不变）；5) 清理旧重试半成品死代码（model_attempt.py 等）。"
+    },
+    {
+      "id": "p5",
+      "type": "recall",
+      "layer": "macro",
+      "question": "本轮死代码清理的整体成果是什么？后台排查 agent 的哪个\"死代码\"判断被推翻，如何处理的？",
+      "reference_answer": "删除了整个 model_attempt.py（ModelAttemptTracker 等）、usage_attribution.py、governor 相关死代码，以及 RuntimeOutcome/RunProjection/RunSnapshot/TAgentRun 中的 visible_output_started/retry_attempt/retry_max 等死字段和 DB 列（新增 migration 202607300001_drop_dead_retry_columns.py），run_service/channel_run_service 的相应读写全删。被推翻的判断：排查 agent 报告 RunSnapshot.is_terminal 是死代码，但实际 chat_api.py:786 在用（生产代码 AttributeError 证实），因此恢复 is_terminal property（基于 TERMINAL_RUN_STATUSES）并恢复对应测试；should_checkpoint 测试改用 checkpoint_kind，advance_attempt 测试删除。"
+    },
+    {
+      "id": "p6",
+      "type": "recall",
+      "layer": "macro",
+      "question": "引用溯源渲染方向调研的结论和最终获批的方案是什么？",
+      "reference_answer": "调研发现主流工具都不把引用最终渲染交给模型：Perplexity 用 API 结构化 citations 字段，ChatGPT 由系统层处理，deer-flow 让模型写 [citation:标题](URL) 内联链接、框架解析渲染成 badge+来源面板。最终采纳类 deer-flow 方案：prompt 改为让模型写 [citation:来源标题](URL) 标准 markdown 链接（不再要求 [N] 编号和 ### 参考资料），前端渲染成 badge（域名+hover 卡片），来源面板直接从结构化 retrieval results 渲染；模型写了就有内联 badge，没写也有来源面板兜底，两条路径独立、不依赖模型遵循度。用户批准\"可以，按照这个方向进行改\"。"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话级统计条（StatsLine）功能中，用户通过提问确认了哪两个选择？用户否决第一版计划时提出了什么约束？",
+      "reference_answer": "用户选择：统计条放在每条助手消息上方（assistant-meta-above，替代现有单耗时文字），且为会话级累计（跨多轮不重置）。用户否决 ExitPlanMode 时约束：\"我希望最好是通过中间件拦截，不要再改原来的桥接代码，之前桥接代码已经很臃肿了\"——即采集指标要走中间件而非修改 langgraph_bridge。"
+    },
+    {
+      "id": "p8",
+      "type": "recall",
+      "layer": "macro",
+      "question": "Memory Cortex 设计复查发现哪三个高严重度问题？各自的修正方案是什么？",
+      "reference_answer": "1) memory_turn_log 表与既有持久化冗余（ToolPart 已带 status/error/error_category/outcome/duration_ms/tool_call_id 随 assistant 消息落库）——删除该表，Extractor 直接读三张既有表，对齐\"harness 拥有全量数据层\"；2) ToolFailureCaptureMiddleware 对 MVP 冗余（失败信号已持久化，唯一增量是 subagent 内部工具调用）——MVP 删掉，降为演进项；3) SUPERSEDE 判定用\"向量相似度>阈值\"与确定性修订主张自相矛盾——修订路径完全去向量化：decision 提取带归一化 topic_key，同 key→SUPERSEDE（last-write-wins），无匹配→ADD，向量只用于检索。"
+    },
+    {
+      "id": "p9",
+      "type": "recall",
+      "layer": "macro",
+      "question": "Memory Cortex 文档最终交付了什么？（文件名变化与内容结构）",
+      "reference_answer": "文件从 Run-aware-Memory-Cortex-开发设计报告.md 重命名为 Run-aware-Memory-Cortex-详细设计.md（位于 ~/Desktop/docs/knowledge-base/Interview/highlights/Agent-Memory/），并整体重写为详细设计文档体：友商与文献调研压缩为第 2 章（只保留影响设计决策的结论），第 3-10 章全是本项目工程细节——完整 DDL（含索引和不变量）、文件级模块划分、每个模块的接口签名/流程/规则表、三个 mermaid 时序图、配置键、异常边界表、性能预算、逐条断言的测试用例清单。修正后 MVP 为 1 张表+1 个中间件+1 个提取任务+1 个修订服务。"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话最后完成的\"记忆提取接线\"工作是什么？如何保证幂等与用户偏好？测试结果如何？",
+      "reference_answer": "在 run_service.py 新增 _enqueue_memory_extraction 静态方法（调 MemoryRepository(db).enqueue_extraction_job(run_id, max_attempts=MemoryCortexConfig.job_max_attempts)），并在两条终态落库路径（_persist_terminal_candidate 和 _persist_projection）中 CAS 赢得 finalize 后、同一事务内、仅当状态为 RunStatus.COMPLETED 时插入提取任务。幂等靠 run_id 唯一；用户级偏好（run_memory_enabled）不在写入侧判断，由提取 worker 领取后检查，关闭 Cortex 的用户只是 job 立即完成不产生记忆。相关测试 48 passed 1 skipped；全量 1094 passed、9 failed（均为预先存在的失败，已用 git stash 验证与本次改动无关）。"
+    },
+    {
+      "id": "p11",
+      "type": "recall",
+      "layer": "meso",
+      "question": "为删除累计 usage 统计，langgraph_bridge.py 做了哪些具体修改？",
+      "reference_answer": "__tw_finish__ 分支不再构造 usage（删掉 item_usage/_build_usage_payload 逻辑，只发 type/message_id/finish_reason）；finish 事件按\"没用到的都删\"原则 payload.pop(\"usage\", None)（上游已带 usage 也清掉）；删除整个 usage_attribution import（ModelCallAttribution/RunUsageCollector/resolve_caller）和不再使用的 accumulate_detail（_accumulate_detail）import；确认 Set 不再被使用后从 typing import 中删掉；grep 验证 usage_cumulative/usage_seen_run_ids/_usage_collector 等零残留。"
+    },
+    {
+      "id": "p12",
+      "type": "recall",
+      "layer": "meso",
+      "question": "本次会话对 platform-chat/spec.md 和 agent-runtime/spec.md 两份 spec 文档分别做了什么改动？",
+      "reference_answer": "platform-chat/spec.md：事件列表删 usage-update；\"usage-update 与上下文指示\" Requirement 改为\"上下文占用指示\"，删 usage-update/finish.usage/by_caller/by_model 契约；context-update 的 current_tokens 改为\"取自主对话最近一次 model call 的 input_tokens\"；新增\"子 Agent SHALL NOT 写入 context 指示器\"约束。agent-runtime/spec.md：删\"Run usage SHALL 按 caller 和模型调用归属\"整组、删\"内部 attribution 元数据 SHALL NOT 进入模型输入\"整组、删\"当前上下文快照 SHALL 基于最终模型请求\"/\"上下文来源细分\"/\"上下文分类\"/\"Provider usage SHALL 保留可用明细\"四组未实现估算条款；Governor 预算 Requirement 删\"可选累计 token 预算\"和 token attribution scenario。"
+    },
+    {
+      "id": "p13",
+      "type": "recall",
+      "layer": "meso",
+      "question": "调研 Claude Code 源码的重试机制后，得出了哪些关键结论？哪些被 Noesis 采纳、哪条未照搬？",
+      "reference_answer": "结论：Claude Code 禁用 SDK 自动重试（maxRetries: 0），自实现应用层 withRetry async generator；重试 APIConnectionError/408/409/429/401/5xx/529，4xx 其它不重试；退避为指数 500*2^(n-1) ms 上限 32s+25% 抖动并尊重 Retry-After；默认 10 次（CLAUDE_CODE_MAX_RETRIES 可覆盖）；重试时 yield system/api_retry 消息（含 attempt/max_retries/retry_delay_ms）；失败轮次不作为 assistant 消息进历史（API 错误用 system 消息）。Noesis 采纳应用层重试思路并复用已半实现的 noesis_model_retry 透传链路（bridge 已有接收端转 run-status SSE，前端 chat.vue:895 已处理 retrying）；失败轮次处理未照搬 system 消息做法（Noesis 走 OpenAI 兼容协议，中途塞 role:system 各 provider 行为不一致且破坏 prompt cache），改为 noesis_outcome=interrupted 标记+中间件改写。"
+    },
+    {
+      "id": "p14",
+      "type": "recall",
+      "layer": "meso",
+      "question": "对字节 OpenViking 组件的调研（通过 hermes-agent 插件源码）发现了哪些关键事实？",
+      "reference_answer": "OpenViking 是火山引擎（ByteDance）的 context database，把 agent 知识组织成文件系统层级，用 viking:// URI 访问。能力：session commit 时自动记忆抽取（6 类）、分层上下文 L0（约 100 tokens）/L1（约 2k）/L2（完整）、带层级目录检索的语义搜索、viking:// 文件式浏览、资源摄取（URL/文档/代码）。配置经环境变量 OPENVIKING_ENDPOINT（默认 http://127.0.0.1:1933）、OPENVIKING_API_KEY、OPENVIKING_ACCOUNT/USER/AGENT；服务端点 https://api.vikingdb.cn-beijing.volces.com/openviking。插件最初是 Mibayy 的 PR #3369（只读搜索端点），后重写为完整 OpenViking session lifecycle。"
+    },
+    {
+      "id": "p15",
+      "type": "recall",
+      "layer": "meso",
+      "question": "设计复查时核实的三个 Noesis 既有记忆基础设施代码事实是什么？",
+      "reference_answer": "1) ToolPart 持久化时自带 status/error/error_category/outcome/duration_ms/tool_call_id（message_builder.py:99）；2) search_memory / get_memory_source 工具已存在（search_memory 按需搜索当前用户历史记忆、先搜摘要再读来源；get_memory_source 读取条目的有限原始消息上下文核对来源）；3) MemoryDreamScheduler 是可复用的单 worker asyncio 轮询（_POLL_SECONDS=3600、_TIMEZONE=\"Asia/Shanghai\"，处理上一自然日的 L2 记忆整理，调 MemoryDreamService.run）。"
+    },
+    {
+      "id": "p16",
+      "type": "recall",
+      "layer": "detail",
+      "question": "用户在会话最开头提出的原始问题的原话是什么？",
+      "reference_answer": "\"为什么当前我跑了一轮，结果搜索了很多结果，一次引用溯源都没有呢\""
+    },
+    {
+      "id": "p17",
+      "type": "recall",
+      "layer": "detail",
+      "question": "kb_search_tool.py 中 _MAX_DOCUMENT_CHARS 和 _MAX_PARALLEL_COLLECTIONS 的值分别是多少？KbSearchInput 的 limit 字段默认值和取值范围是什么？",
+      "reference_answer": "_MAX_DOCUMENT_CHARS = 80_000；_MAX_PARALLEL_COLLECTIONS = 8；limit 默认 10，约束 ge=1 le=20（全局返回片段数量上限）。"
+    },
+    {
+      "id": "p18",
+      "type": "recall",
+      "layer": "detail",
+      "question": "usage_attribution.py 中 MAX_STEPS 的值及其注释是什么？caller 枚举的三个常量名和值分别是什么？",
+      "reference_answer": "MAX_STEPS = 200（注释：spec §5：禁止按 token delta 无界增长）。枚举：CALLER_LEAD_AGENT = \"lead_agent\"、CALLER_SUBAGENT = \"subagent\"、CALLER_MIDDLEWARE = \"middleware\"。"
+    },
+    {
+      "id": "p19",
+      "type": "recall",
+      "layer": "detail",
+      "question": "用户粘贴的执行报错中：异常类型与消息、失败的请求 URL、以及 bridge 发出 SSE error 的 WARNING 日志的位置（文件:函数:行号）和 detail 文本分别是什么？",
+      "reference_answer": "异常：openai.APIConnectionError: Connection error.（During task with name 'model'）；请求：POST https://opencode.ai/zen/v1/chat/completions；日志：WARNING | noesis.chat.event_mapping.langgraph_bridge:_handle_tw_or_business:754 - SSE bridge 发出 error session_id=9e311e86-9ab2-4f8d-94e8-0783b310b236 assistant_message_id=2c3e83d2-2a4c-4f37-b22f-bd2a930c9fed detail=连接失败，请稍后重试。"
+    },
+    {
+      "id": "p20",
+      "type": "recall",
+      "layer": "detail",
+      "question": "作为参考的 deepseek-harness StatsLine 统计条的示例格式原文是什么？",
+      "reference_answer": "`1 轮 · 1 步 | LLM 9.2s | 首 token 平均 1.9s · 103 tok/s | 缓存命中 0% | 输入 13.1K tok · 输出 755 tok`"
+    }
+  ]
+}

@@ -121,6 +121,9 @@ class ModelYamlSection(BaseModel):
     api_key: str = ""
     show_thinking_process: bool = True
     request_timeout: float = Field(default=30.0, gt=0)
+    # 流式「块间隔」超时：两块生成之间最长等待（thinking 模型大上下文
+    # 首字延迟常超 30s，不能复用 request_timeout 否则误杀长请求）
+    stream_idle_timeout: float = Field(default=120.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
     generation: ModelGenerationYamlSection = Field(
         default_factory=ModelGenerationYamlSection
@@ -173,8 +176,9 @@ class SummarizationYamlSection(BaseModel):
     trigger_fraction: float = Field(default=0.75, gt=0, le=1)
     # model profile 不可用时的消息数量 fallback
     messages_to_keep: int = Field(default=28, ge=1)
-    # model profile 不可用时的消息数量 fallback
-    messages_to_keep: int = Field(default=28, ge=1)
+    # 被压缩区用户消息原文装回预算（token，对齐 codex compact）：
+    # 压缩后投影头部按此预算从最新往最旧装回用户原话，0 = 关闭
+    user_message_tokens: int = Field(default=20_000, ge=0)
 
 
 class GovernorYamlSection(BaseModel):
@@ -370,8 +374,10 @@ class SubagentsYamlSection(BaseModel):
 
     max_concurrent_per_session: int = Field(default=3, ge=1)
     task_timeout_seconds: float = Field(default=900, gt=0)
-    # 前台等待上限：超过即自动转后台（同步转异步）
-    foreground_max_wait_seconds: float = Field(default=120, gt=0)
+    # 前台等待上限：超过即自动转后台（同步转异步）。10 分钟：默认委派
+    # 是前台的，窗口太短会让同步静默退化成异步（调用方以为在等结果，
+    # 框架单方面改后台），单回合场景只能轮询收结果、烧全量上下文
+    foreground_max_wait_seconds: float = Field(default=600, gt=0)
     # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
     auto_continue: bool = Field(default=True)
     # 续跑去抖窗口：终态到达后等待该秒数再唤醒（窗口内多个终态合并为
@@ -452,6 +458,19 @@ class MemoryYamlSection(BaseModel):
     max_message_chars: int = Field(default=120_000, ge=10_000, le=1_000_000)
 
 
+class HistorySearchYamlSection(BaseModel):
+    """Agent 会话历史检索（openspec: session-history-search）。"""
+
+    # 两个检索工具 limit 参数的服务端钳制
+    max_hits: int = Field(default=10, ge=1, le=50)
+    # 单条命中截断长度（超长 assistant 消息含嵌在 parts 里的工具轨迹）
+    max_excerpt_chars: int = Field(default=2000, ge=200, le=100_000)
+    # 单次返回总字符上限（检索不得成为读回全量历史的通道）
+    max_total_chars: int = Field(default=12_000, ge=1_000, le=200_000)
+    # 滚动深读 window 的服务端上限
+    max_window: int = Field(default=10, ge=1, le=50)
+
+
 class AppYamlConfig(BaseModel):
     config_version: int = 1
     app: AppYamlSection = Field(default_factory=AppYamlSection)
@@ -495,6 +514,9 @@ class AppYamlConfig(BaseModel):
     )
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
     memory: MemoryYamlSection = Field(default_factory=MemoryYamlSection)
+    history_search: HistorySearchYamlSection = Field(
+        default_factory=HistorySearchYamlSection
+    )
 
 
 @lru_cache

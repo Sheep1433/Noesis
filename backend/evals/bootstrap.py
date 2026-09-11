@@ -21,8 +21,8 @@ class _NoAttachments:
 async def eval_runtime(*, no_attachments: bool = False) -> AsyncIterator[MemorySaver]:
     """Use an in-memory checkpointer without importing platform services.
 
-    SuperAgent benchmarks can opt into a scoped no-attachment provider. Harbor uses
-    the bare factory and needs no platform capability bindings at all.
+    SuperAgent benchmarks can opt into a scoped no-attachment provider
+    (the bare factory path carries no platform capability bindings at all).
     """
     checkpointer = MemorySaver()
     with temporary_checkpointer(checkpointer):
@@ -94,6 +94,36 @@ async def resolve_user_model(user_id: str, model_id: str) -> "list":
             f"检查 --model-user / --model-id）"
         )
     return snapshots
+
+
+async def resolve_user_uuid(user_id: str) -> str:
+    """用户名 → t_user.id（uuid 直通）；供评测以真实归属落库测试数据。"""
+    from noesis.storage.postgres.manager import ASYNC_SQLALCHEMY_DATABASE_URL
+    from noesis.storage.postgres.models.auth import TUser
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    normalized = str(user_id).strip()
+    try:
+        import uuid as _uuid
+        _uuid.UUID(normalized)
+        return normalized
+    except ValueError:
+        pass
+    engine = create_async_engine(ASYNC_SQLALCHEMY_DATABASE_URL)
+    try:
+        async with async_sessionmaker(bind=engine, expire_on_commit=False)() as db:
+            row = (await db.execute(
+                select(TUser.id).where(TUser.username == normalized))).first()
+            if row is None:
+                raise ValueError(f"用户不存在: {normalized!r}")
+            return str(row[0])
+    finally:
+        await engine.dispose()
+
+
+def resolve_user_uuid_sync(user_id: str) -> str:
+    return asyncio.run(resolve_user_uuid(user_id))
 
 
 def bind_snapshots(snapshots: "list", *, include_summarization: bool = False) -> str:

@@ -139,6 +139,26 @@ class AgentEventCollector:
         )
 
 
+def flag_empty_completion(payload: dict[str, Any]) -> dict[str, Any]:
+    """completed 但零文本零工具输出 → 改判失败。
+
+    上游模型故障（如网关欠费 402）经 Agent 错误中间件转成空收场：
+    finish=stop、无文本流、无工具调用。评测不拦下就会当「跑通」落盘，
+    整批数据貌似合理实为无效。真实作答不可能文本与工具全空。
+    """
+    if (
+        payload.get("completed")
+        and not str(payload.get("final_text") or "").strip()
+        and not (payload.get("tool_stats") or {})
+    ):
+        payload["completed"] = False
+        payload["error"] = (
+            "empty completion: 无文本无工具输出（疑似上游模型故障，"
+            "查后端日志与网关余额）"
+        )
+    return payload
+
+
 async def collect_agent_events(
     events: AsyncIterable[dict[str, Any]],
     collector: AgentEventCollector,

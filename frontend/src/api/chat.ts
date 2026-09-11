@@ -423,10 +423,10 @@ export interface TaskCatalogEntry {
   /** kind=shell 的原始命令；subagent 任务为空 */
   command?: string | null
   kind?: 'subagent' | 'shell'
-  status: 'queued' | 'running' | 'stopping' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
+  status: 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'partial' | 'error' | 'interrupted'
   result?: string | null
   error?: string | null
-  /** 协作停止受理原因（cancelled / timed_out）；status=stopping 时非空 */
+  /** 停止/超时原因（cancelled / timed_out）；乐观终态（cancelled/timed_out）时非空 */
   stop_reason?: 'cancelled' | 'timed_out' | null
   interrupt?: {
     interrupt_id: string
