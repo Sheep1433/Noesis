@@ -30,7 +30,7 @@ def test_super_agent_prompt_keeps_delegation_criteria():
     assert "run_in_background=true" in prompt
     assert "委派即隔离" in prompt
     assert "[系统通知]" in prompt
-    assert "check_task" in prompt
+    assert "check_async_task" in prompt
 
 
 def test_start_task_defaults_to_foreground_wait():

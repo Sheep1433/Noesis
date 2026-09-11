@@ -213,6 +213,14 @@ async def test_replace_execute_tool_foreground_delegates_unchanged() -> None:
     assert "[Command succeeded with exit code 0]" in result.content
 
 
+def _bg_tool_text(result) -> str:
+    """execute 后台分支返回 Command：取其 ToolMessage 文本。"""
+    if hasattr(result, "update"):
+        msgs = result.update.get("messages") or []
+        return str(msgs[0].content) if msgs else ""
+    return result.content if hasattr(result, "content") else str(result)
+
+
 @pytest.mark.asyncio
 async def test_replace_execute_tool_background_starts_shell_task() -> None:
     """run_in_background=true：立即返回 task_id，命令进 shell 任务管线。"""
@@ -224,7 +232,7 @@ async def test_replace_execute_tool_background_starts_shell_task() -> None:
     )
     replaced = middleware.tools[0]
     result = await _call(replaced, command="make build", run_in_background=True)
-    content = result.content if hasattr(result, "content") else str(result)
+    content = _bg_tool_text(result)
     task_id = content.split("：")[1].split("\n")[0]
     assert task_id.startswith("bg-")
     task = _wait_terminal(executor, task_id)
@@ -244,10 +252,10 @@ async def test_replace_execute_tool_queues_when_concurrency_full() -> None:
     )
     replaced = middleware.tools[0]
     first = await _call(replaced, command="sleep 30", run_in_background=True)
-    first_content = first.content if hasattr(first, "content") else str(first)
+    first_content = _bg_tool_text(first)
     assert "bg-" in first_content
     second = await _call(replaced, command="echo x", run_in_background=True)
-    second_content = second.content if hasattr(second, "content") else str(second)
+    second_content = _bg_tool_text(second)
     assert "后台命令任务已启动" in second_content
     assert "bg-" in second_content
     executor.cancel(first_content.split("：")[1].split("\n")[0])

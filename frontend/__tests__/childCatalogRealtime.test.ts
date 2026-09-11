@@ -263,7 +263,7 @@ describe('子 Agent 标准会话展示', () => {
 
   it('父 Agent 中每次子 Agent 调用仍是独立卡片，并指向标准 run', async () => {
     const wrapper = mount(BackgroundSubagentCollapse, {
-      props: { toolPart: { id: 'tool-1', type: 'tool', name: 'start_task', input: { description: '检索' }, output: '', status: 'running', state: 'running' }, task: runningTask },
+      props: { toolPart: { id: 'tool-1', type: 'tool', name: 'start_async_task', input: { description: '检索' }, output: '', status: 'running', state: 'running' }, task: runningTask },
       global: {
         stubs: {
           SubagentConversationDrawer: {
@@ -283,7 +283,7 @@ describe('子 Agent 标准会话展示', () => {
   it('任务卡是静态入口：不展示目录状态、步数与耗时', () => {
     const wrapper = mount(BackgroundSubagentCollapse, {
       props: {
-        toolPart: { id: 'tool-1', type: 'tool', name: 'start_task', input: { description: '检索' }, output: '', status: 'success', state: 'succeeded' },
+        toolPart: { id: 'tool-1', type: 'tool', name: 'start_async_task', input: { description: '检索' }, output: '', status: 'success', state: 'succeeded' },
         task: { ...runningTask, status: 'queued', progress_count: 3 },
       },
       global: { stubs: { SubagentConversationDrawer: { template: '<div />' } } },
@@ -297,7 +297,7 @@ describe('子 Agent 标准会话展示', () => {
   it('下发失败的任务卡显示失败提示且不可打开', () => {
     const wrapper = mount(BackgroundSubagentCollapse, {
       props: {
-        toolPart: { id: 'tool-1', type: 'tool', name: 'start_task', input: { description: '检索' }, output: '启动失败：并发超限', status: 'error', state: 'failed' },
+        toolPart: { id: 'tool-1', type: 'tool', name: 'start_async_task', input: { description: '检索' }, output: '启动失败：并发超限', status: 'error', state: 'failed' },
       },
       global: { stubs: { SubagentConversationDrawer: { template: '<div />' } } },
     })

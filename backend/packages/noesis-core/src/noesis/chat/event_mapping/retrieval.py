@@ -6,7 +6,7 @@
 本模块还承载来源溯源的三块共享逻辑：
 - canonical URL / 来源身份归一（前后端共享规则；前端见 canonicalUrl.ts，
   测试用例集两侧对齐）；
-- 子会话投影 → 去重来源清单提取（终态通知 / check_task 携带）；
+- 子会话投影 → 去重来源清单提取（终态通知 / check_async_task 携带）；
 - 跨边界来源登记（子 Agent 清单 → 主 run 消息上带 origin 的 retrieval parts）。
 """
 
@@ -28,7 +28,7 @@ MAX_TASK_SOURCES = 200
 # 跨边界登记上界：单子 Agent 去重后来源可达百条级（design 风险节），
 # 登记携带完整清单使面板「共检索 N」反映真实检索量
 MAX_CROSS_BOUNDARY_SOURCES = 200
-# 注入文本（通知 / check_task）中来源附录的条数与总字符上界
+# 注入文本（通知 / check_async_task）中来源附录的条数与总字符上界
 SOURCES_APPENDIX_MAX_ITEMS = 30
 SOURCES_APPENDIX_MAX_CHARS = 2000
 
@@ -138,7 +138,7 @@ def extract_deduped_sources(
 
 
 def format_sources_appendix(sources: List[Dict[str, Any]]) -> str:
-    """来源清单文本段（通知注入 / check_task 返回共用）：有界；无来源返回空。"""
+    """来源清单文本段（通知注入 / check_async_task 返回共用）：有界；无来源返回空。"""
     items = [s for s in sources if isinstance(s, dict)]
     if not items:
         return ""
@@ -170,7 +170,7 @@ def register_pending_sources(
     label: str,
     sources: List[Dict[str, Any]],
 ) -> None:
-    """登记一份待写入主会话的跨边界来源（通知注入与 check_task 两条通道共用）。
+    """登记一份待写入主会话的跨边界来源（通知注入与 check_async_task 两条通道共用）。
 
     主 run 桥接层在 finish 前统一 drain（见 register_cross_boundary_sources）。
     同一 (label, 来源身份) 重复登记合并——同任务被多次 check、或通知与

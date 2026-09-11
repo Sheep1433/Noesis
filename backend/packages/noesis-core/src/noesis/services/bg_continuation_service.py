@@ -33,7 +33,7 @@ from noesis.repositories.agent_run_repository import AgentRunRepository
 from sqlalchemy import select
 
 CONTINUATION_INSTRUCTION = (
-    "以上是后台任务终态通知。用 check_task 收取结果，"
+    "以上是后台任务终态通知。用 check_async_task 收取结果，"
     "继续完成此前对用户承诺的交付（补充摘要/汇报结论）。"
 )
 

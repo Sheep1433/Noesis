@@ -9,7 +9,7 @@
   编译，直接经 agent backend 执行，易逝作业不持久化。
 
 全异步 task：``start_task`` 立即返回 task_id，任务生命周期归属 session
-而非主 run——主 run 结束后继续跑，任意后续轮次 ``check_task`` 收结果。
+而非主 run——主 run 结束后继续跑，任意后续轮次 ``check_async_task`` 收结果。
 执行器类型无关：subagent 特性（worker 工厂 / followup / 落库投影）经
 注入携带，状态机、并发上限、协作停止对两类任务一致。
 
@@ -143,7 +143,7 @@ class BackgroundTask:
     )
     progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # 子会话检索来源（来源身份 → result dict，插入序即首见序）：终态通知与
-    # check_task 携带的去重清单；完整数据以子会话落库 retrieval parts 为准
+    # check_async_task 携带的去重清单；完整数据以子会话落库 retrieval parts 为准
     retrieval_sources: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
 
     def to_dict(self, *, include_progress: bool = True) -> dict[str, Any]:
@@ -357,8 +357,8 @@ _TASKS_LOCK = threading.Lock()
 _PENDING_QUEUES: dict[str, list[_TaskEntry]] = {}
 
 
-# 任务不存在时的统一提示：模型惯用短 id，指路 list_tasks 避免盲试
-_TASK_NOT_FOUND = "后台任务不存在: {task_id}（可用 list_tasks 查看完整 task_id）"
+# 任务不存在时的统一提示：模型惯用短 id，指路 list_async_tasks 避免盲试
+_TASK_NOT_FOUND = "后台任务不存在: {task_id}（可用 list_async_tasks 查看完整 task_id）"
 
 
 def _find_entry_locked(task_id: str) -> Optional[_TaskEntry]:
@@ -890,7 +890,7 @@ class BackgroundTaskExecutor:
 
     @staticmethod
     def sources_of(task_id: str) -> list[dict[str, Any]]:
-        """任务级去重来源清单（跨边界传递用；check_task / 通知携带）。"""
+        """任务级去重来源清单（跨边界传递用；check_async_task / 通知携带）。"""
         with _TASKS_LOCK:
             entry = _find_entry_locked(task_id)
             return list(entry.task.retrieval_sources.values()) if entry else []
@@ -1353,7 +1353,7 @@ class _TurnPipelineError(Exception):
         self.model_calls = model_calls
 
 
-# 协作停止收尾标注：前缀只出现在 task.result / check_task 全文，不占通知预览预算
+# 协作停止收尾标注：前缀只出现在 task.result / check_async_task 全文，不占通知预览预算
 _PARTIAL_OUTPUT_PREFIX = "中止前部分产出"
 _PARTIAL_RESULT_MAX_CHARS = 4000
 
@@ -2192,7 +2192,7 @@ async def _arun_shell(entry: _TaskEntry) -> None:
 
 
 def _format_shell_result(response: Any) -> str:
-    """ExecuteResponse → check_task 结果文本（exit code + 有界输出尾部）。"""
+    """ExecuteResponse → check_async_task 结果文本（exit code + 有界输出尾部）。"""
     output = str(getattr(response, "output", "") or "")
     tail = output[-_SHELL_RESULT_TAIL_CHARS:]
     parts = [f"exit code: {getattr(response, 'exit_code', None)}"]
@@ -2453,7 +2453,7 @@ class _ShellKind:
 
     @staticmethod
     def reject_followup_text() -> str:
-        return "该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）"
+        return "该任务为后台命令任务，不支持追加消息（可用 check_async_task 收取输出、重新执行请新建命令）"
 
     @staticmethod
     def run(entry: "_TaskEntry") -> Any:

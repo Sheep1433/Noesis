@@ -27,7 +27,7 @@ const props = withDefaults(defineProps<{
   citationIndex?: CitationIndex
   msgMetadata?: Record<string, unknown> | null
   qaType?: string
-  /** start_task 委派卡的后台任务目录查询（主会话宿主提供） */
+  /** start_async_task 委派卡的后台任务目录查询（主会话宿主提供） */
   taskForToolPart?: (part: ToolUiPart) => TaskCatalogEntry | undefined
   /** compact 工具模式（并行组紧凑样式） */
   compactTools?: boolean
@@ -118,7 +118,7 @@ function entryKey(entry: (typeof entries.value)[number], fallback: number): stri
     />
     <template v-else-if="entry.kind === 'part' && entry.part.type === 'tool'">
       <BackgroundSubagentCollapse
-        v-if="entry.part.name === 'start_task'"
+        v-if="entry.part.name === 'start_async_task'"
         :tool-part="entry.part"
         :task="taskForToolPart ? taskForToolPart(entry.part) : undefined"
       />

@@ -1567,7 +1567,7 @@ function assistantSubagentCount(item: {
   if (Array.isArray(parts)) {
     return buildDisplayParts(parts).filter((entry) =>
       entry.kind === 'subagent'
-      || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
+      || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_async_task'),
     ).length
   }
   return (item.tool_calls ?? []).filter((call) => call.name === 'task').length

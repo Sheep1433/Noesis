@@ -3,14 +3,14 @@ import { taskNoticeMeta } from '@/utils/taskNotice'
 
 const singleNotice = [
   '[系统通知] 子 Agent「调研Agent Benchmark全景」已完成 · 1 轮 · 63 步 · 2m 30s（结果预览：我已完成了对主流 Agent Benchmark 的深度调研。…），可打开任务详情查看完整过程。',
-  '以上是后台任务终态通知。用 check_task 收取结果，继续完成此前对用户承诺的交付（补充摘要/汇报结论）。',
+  '以上是后台任务终态通知。用 check_async_task 收取结果，继续完成此前对用户承诺的交付（补充摘要/汇报结论）。',
 ].join('\n')
 
 const multiNotice = [
   '[系统通知] 子 Agent「调研Agent Benchmark全景」已完成 · 1 轮 · 63 步 · 2m 30s（结果预览：…），可打开任务详情查看完整过程。',
   '[系统通知] 子 Agent「调研Agent评测理论与Taxonomy」已完成 · 1 轮 · 58 步 · 2m 37s（结果预览：…），可打开任务详情查看完整过程。',
   '[系统通知] 子 Agent「调研Judge、Online评测与Observability」已完成 · 1 轮 · 51 步 · 3m 30s（结果预览：…），可打开任务详情查看完整过程。',
-  '以上是后台任务终态通知。用 check_task 收取结果，继续完成此前对用户承诺的交付（补充摘要/汇报结论）。',
+  '以上是后台任务终态通知。用 check_async_task 收取结果，继续完成此前对用户承诺的交付（补充摘要/汇报结论）。',
 ].join('\n')
 
 describe('taskNoticeMeta 续跑通知解析', () => {
