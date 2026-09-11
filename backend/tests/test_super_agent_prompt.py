@@ -37,19 +37,19 @@ def test_start_task_defaults_to_foreground_wait():
     """默认前台等待：后台只在超时自动转入或显式 run_in_background=true 时发生。"""
     from noesis.agents.subagents.executor import BackgroundTaskExecutor
     from noesis.agents.subagents.registry import SubagentRegistry
-    from noesis.agents.subagents.tools_middleware import (
-        NoesisSubagentMiddleware,
+    from noesis.agents.subagents.async_tools_middleware import (
+        AsyncSubagentToolsMiddleware,
         _StartTaskArgs,
     )
 
     assert _StartTaskArgs.model_fields["run_in_background"].default is False
-    middleware = NoesisSubagentMiddleware(
+    middleware = AsyncSubagentToolsMiddleware(
         registry=SubagentRegistry(),
         executor=BackgroundTaskExecutor(task_timeout_seconds=30),
         session_id="s",
         user_id="u",
     )
-    start = next(tool for tool in middleware.tools if tool.name == "start_task")
+    start = next(tool for tool in middleware.tools if tool.name == "start_async_task")
     assert "默认 false" in start.description
     assert "自动转后台" in start.description
 

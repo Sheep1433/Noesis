@@ -2,7 +2,7 @@
 
 覆盖 spec「后台命令任务」Requirement：
 - start_shell：不经 worker 编译，backend 执行，completed 带 exit code + 输出尾部
-- shell 任务不可对话：send_message 拒绝
+- shell 任务不可对话：deliver_followup 拒绝
 - 会话沙箱销毁：运行中任务转 failed（容器回收连坐）
 - execute 工具替换：同名 + run_in_background 参数；false 原样委托原工具；
   true 立即返回 task_id；超并发优雅拒绝
@@ -111,8 +111,9 @@ def test_shell_task_rejects_followup() -> None:
         command="echo hi", backend=backend, session_id="s-sh", user_id="u1",
     )
     _wait_terminal(executor, task_id)
+    import asyncio as _a
     with pytest.raises(ValueError, match="后台命令任务"):
-        BackgroundTaskExecutor.send_message(task_id, "再跑一次")
+        _a.run(BackgroundTaskExecutor.deliver_followup(task_id, "再跑一次"))
 
 
 def test_fail_session_shell_tasks_on_sandbox_destroy() -> None:

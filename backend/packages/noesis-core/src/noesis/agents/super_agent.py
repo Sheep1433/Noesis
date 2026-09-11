@@ -21,9 +21,9 @@ from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
 from noesis.agents.subagents import (
+    AsyncSubagentToolsMiddleware,
     BackgroundTaskExecutor,
     BgNotifyMiddleware,
-    NoesisSubagentMiddleware,
     SubagentRegistry,
     SubagentRole,
     assert_no_bg_task_tools,
@@ -159,7 +159,7 @@ class SuperAgent(BaseAgent):
                 file_list=file_list,
             )
 
-        # 后台子 Agent（全异步 task）：主 Agent 经 NoesisSubagentMiddleware 的
+        # 后台子 Agent（全异步 task）：主 Agent 经 AsyncSubagentToolsMiddleware 的
         # start/check 工具委派，子任务在进程内隔离 loop 跑，生命周期归属
         # session，跨 run 可收结果。worker 不携带后台任务工具自身（装配期
         # 断言，禁止递归委派）。worker 经角色工厂在隔离 loop 内惰性编译：
@@ -363,7 +363,7 @@ class SuperAgent(BaseAgent):
             middleware=[
                 # 子 Agent 工具面 + 任务身份 graph state（start_task 按
                 # subagent_type 分发；类型清单注入 system prompt）
-                NoesisSubagentMiddleware(
+                AsyncSubagentToolsMiddleware(
                     registry=subagent_registry,
                     executor=bg_executor,
                     session_id=session_id,

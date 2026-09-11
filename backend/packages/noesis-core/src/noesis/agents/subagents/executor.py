@@ -1064,98 +1064,21 @@ class BackgroundTaskExecutor:
             self._max_concurrent,
         )
 
-    @staticmethod
-    def validate_followup(task_id: str) -> None:
-        """在写入标准 user message 前校验任务仍可接受追问。"""
-        with _TASKS_LOCK:
-            entry = _find_entry_locked(task_id)
-            if entry is None:
-                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
-            task = entry.task
-            if not behavior_of(task.kind).supports_followup:
-                raise ValueError(behavior_of(task.kind).reject_followup_text())
-            if task.status.is_terminal and task.status not in _RESUMABLE_TERMINALS:
-                raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
+
 
     @staticmethod
-    def send_message(
+    async def deliver_followup(
         task_id: str,
         message: str,
         user_message_id: Optional[str] = None,
         model_id: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
-        """followup-turn：向子任务追加一个 turn。
+        """单一异步 followup 入口：校验 + 入队 / 冷恢复。
 
-        - running：入队，当前 turn 结束后链式开新 turn
-        - completed / cancelled：冷恢复——同 thread 开新 turn，任务回到
-          running（执行/意图分离：停止只终止执行，续聊意图保留）
-        - shell / failed / timed_out：拒绝
-        - model_id / reasoning_effort 非空：该 turn 起以新参数编译 worker（同 thread 续跑）
-        """
-        text = message.strip()
-        if not text:
-            raise ValueError("消息不能为空")
-        params = _TurnParams(model_id=model_id, reasoning_effort=reasoning_effort)
-        with _TASKS_LOCK:
-            entry = _find_entry_locked(task_id)
-            if entry is None:
-                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
-            task = entry.task
-            if not behavior_of(task.kind).supports_followup:
-                raise ValueError(behavior_of(task.kind).reject_followup_text())
-            status = task.status
-            # completed / cancelled → 冷恢复：同 thread 开新 turn（followup 队列一并排入）
-            if status in _RESUMABLE_TERMINALS:
-                task.status = BgTaskStatus.RUNNING
-                task.result = None
-                task.completed_at = None
-                # 复活中和（锁内）：停止信号清除（旧协程的静止边界不再触发，
-                # 消亡于 CancelledError 且不收口）；旧执行协程与在飞对账 task
-                # 一并取消（防双流竞争共享 run/result、防迟到的 _force_terminal
-                # 终态化复活任务）；terminal_published 重置（复活轮有自己的
-                # 终态事件与通知要发——COMPLETED 冷恢复的历史缺陷，CANCELLED
-                # 续聊成为一等路径后必须补上）
-                entry.cooperative_stop_signalled = False
-                if entry.future is not None and not entry.future.done():
-                    entry.future.cancel()
-                entry.future = None
-                if entry.stop_reconcile_task is not None and not entry.stop_reconcile_task.done():
-                    entry.stop_reconcile_task.cancel()
-                entry.stop_reconcile_task = None
-                entry.terminal_published = False
-                _disarm_terminal_timers(entry)
-                loop = _ensure_loop()
-                entry.future = _submit_isolated(
-                    loop, _arun_followup(entry, text, user_message_id, params),
-                )
-                _arm_watchdog(entry)
-                _publish_task_event(task, "followup")
-                return task.to_dict()
-            if status.is_terminal:
-                raise ValueError(f"任务已结束（{status.value}），无法追加消息")
-            with entry.followup_lock:
-                entry.followups.append(text)
-                entry.followup_message_ids.append(user_message_id)
-                entry.followup_turn_params.append(params)
-            _publish_task_event(task, "followup")
-            return task.to_dict()
-
-    @staticmethod
-    async def asend_message(
-        task_id: str,
-        message: str,
-        user_message_id: Optional[str] = None,
-        model_id: Optional[str] = None,
-        reasoning_effort: Optional[str] = None,
-    ) -> dict[str, Any]:
-        """异步 send_message：冷恢复分支在返回前完成新 run 创建。
-
-        同步版立即返回任务快照——新 run 在隔离 loop 异步创建，响应携带
-        旧 run_id，订阅方据此订阅旧通道、错过新 run 全部事件（前端曾以
-        轮询 active-run 绕过该竞态，属掩盖契约缺陷的补丁）。本方法在
-        调用方（主 loop）上下文先经 factory 创建 run，run_id 就绪后再
-        提交执行；运行中入队语义与同步版一致。
+        校验（能力门控 + 终态资格）在锁内前置完成；冷恢复分支在返回前
+        完成新 run 创建（run_id 权威）——响应携带旧 run_id 会让订阅方
+        错过新 run 全部事件。运行中任务入队，当前 turn 结束后链式执行。
         """
         text = message.strip()
         if not text:
@@ -2553,12 +2476,9 @@ KIND_BEHAVIORS: dict[str, Any] = {
 
 
 class _ExecutorRuntimePort:
-    validate_followup = staticmethod(BackgroundTaskExecutor.validate_followup)
-    send_message = staticmethod(BackgroundTaskExecutor.send_message)
-    # 异步版必须与同步版成对暴露：send_followup 走 asend_message（冷恢复
-    # 分支在返回前完成新 run 创建），缺失即所有用户侧 followup 请求
-    # AttributeError
-    asend_message = staticmethod(BackgroundTaskExecutor.asend_message)
+    # 单一异步 followup 入口（校验折叠在锁内前置；同步/异步双版本的
+    # 端口漂移事故见 subagent_runtime_port 同名注释）
+    deliver_followup = staticmethod(BackgroundTaskExecutor.deliver_followup)
     cancel = staticmethod(BackgroundTaskExecutor.cancel)
     subscribe_run_events = staticmethod(subscribe_run_events)
     unsubscribe_run_events = staticmethod(unsubscribe_run_events)

@@ -267,7 +267,7 @@ def test_list_scoped_by_session() -> None:
 # followup / notifications / 子会话查看
 # ---------------------------------------------------------------------------
 
-def test_send_message_rejects_terminal_task() -> None:
+def test_deliver_followup_rejects_terminal_task() -> None:
     # failed 任务拒续（completed 现在可冷恢复续话，见 followup 用例）
     def _failing_factory():
         async def _f():
@@ -281,7 +281,7 @@ def test_send_message_rejects_terminal_task() -> None:
     assert task["status"] == BgTaskStatus.FAILED.value
 
     with pytest.raises(ValueError, match="已结束"):
-        executor.send_message(task_id, "调整")
+        _followup(executor, task_id, "调整")
 
 
 
@@ -329,7 +329,7 @@ def test_followup_chains_new_turn_when_running() -> None:
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
-    snapshot = executor.send_message(task_id, "请继续深入")
+    snapshot = _followup(executor, task_id, "请继续深入")
     assert snapshot["status"] == BgTaskStatus.RUNNING.value
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
@@ -358,7 +358,7 @@ def test_followup_model_switch_recompiles_worker() -> None:
     assert entry.task.model_id == "model-a"
 
     # 冷恢复 + 换模型：factory 收到覆盖值，编译产物替换，task.model_id 更新
-    executor.send_message(task_id, "换个模型继续", model_id="model-b")
+    _followup(executor, task_id, "换个模型继续", model_id="model-b")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert factory_calls == [None, "model-b"]
@@ -366,14 +366,14 @@ def test_followup_model_switch_recompiles_worker() -> None:
     assert entry.model_override == "model-b"
 
     # 不带模型的 followup：沿用 model-b，不重编译
-    executor.send_message(task_id, "再问一句")
+    _followup(executor, task_id, "再问一句")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert factory_calls == [None, "model-b"]
     assert entry.task.model_id == "model-b"
 
     # 同模型显式传参：与当前一致，不重编译
-    executor.send_message(task_id, "同模型再问", model_id="model-b")
+    _followup(executor, task_id, "同模型再问", model_id="model-b")
     task = _wait_terminal(executor, task_id)
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert factory_calls == [None, "model-b"]
@@ -381,10 +381,16 @@ def test_followup_model_switch_recompiles_worker() -> None:
 # 前台等待（run_in_background=false）与超时转后台
 # ---------------------------------------------------------------------------
 
+def _followup(executor, task_id: str, message: str, **kwargs) -> dict:
+    """同步测试用的 followup 包装（deliver_followup 为单一异步入口）。"""
+    import asyncio as _a
+    return _a.run(executor.deliver_followup(task_id, message, **kwargs))
+
+
 def _build_tools(executor: BackgroundTaskExecutor, worker_factory, create_child_session=None):
     """以角色注册表 + 中间件构造工具面（与生产装配同构，单 general 角色）。"""
     from noesis.agents.subagents.registry import SubagentRegistry, SubagentRole
-    from noesis.agents.subagents.tools_middleware import NoesisSubagentMiddleware
+    from noesis.agents.subagents.async_tools_middleware import AsyncSubagentToolsMiddleware
 
     registry = SubagentRegistry()
     registry.register(SubagentRole(
@@ -392,7 +398,7 @@ def _build_tools(executor: BackgroundTaskExecutor, worker_factory, create_child_
         description="通用子 Agent",
         worker_factory=worker_factory,
     ))
-    middleware = NoesisSubagentMiddleware(
+    middleware = AsyncSubagentToolsMiddleware(
         registry=registry,
         executor=executor,
         session_id="s-fg",
@@ -419,7 +425,7 @@ def test_start_task_schema_keeps_only_execution_mode_parameter():
     subagent_type 必填——运行时只选角色不选模型，模型参数不出现在工具面。
     """
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    start = next(t for t in _build_tools(executor, lambda: _build_worker([])) if t.name == "start_task")
+    start = next(t for t in _build_tools(executor, lambda: _build_worker([])) if t.name == "start_async_task")
 
     schema = start.args_schema.model_json_schema()
     properties = schema["properties"]
@@ -454,7 +460,7 @@ async def test_start_task_splits_short_title_and_full_prompt() -> None:
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     start = next(
         t for t in _build_tools(executor, lambda: worker, fake_create_child_session)
-        if t.name == "start_task"
+        if t.name == "start_async_task"
     )
 
     result = await start.ainvoke({
@@ -481,7 +487,7 @@ async def test_start_task_prompt_falls_back_to_description() -> None:
     """旧调用只传 description：完整任务回退为 description，行为不变。"""
     worker = _build_worker([AIMessage(content="完成")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_async_task")
 
     await start.ainvoke({"description": "旧式单字段任务", "subagent_type": "general", "run_in_background": True})
     entry = next(iter(_TASKS.values()))
@@ -493,7 +499,7 @@ async def test_foreground_wait_returns_result() -> None:
     """前台等待：任务完成后终态文本直接作为工具返回值。"""
     worker = _build_worker([AIMessage(content="前台结果：OK")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_async_task")
 
     result = await start.ainvoke({"description": "x", "subagent_type": "general", "run_in_background": False})
     result = _tool_text(result)
@@ -507,9 +513,9 @@ async def test_foreground_wait_times_out_to_background() -> None:
 
     worker = _build_worker([_slow_call("s", "c0") for _ in range(20)], slow=True)
     executor = BackgroundTaskExecutor(task_timeout_seconds=60)
-    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_async_task")
 
-    with mock_patch("noesis.agents.subagents.tools_middleware.FOREGROUND_MAX_WAIT_SECONDS", 0.3):
+    with mock_patch("noesis.agents.subagents.async_tools_middleware.FOREGROUND_MAX_WAIT_SECONDS", 0.3):
         result = await start.ainvoke({"description": "慢任务", "subagent_type": "general", "run_in_background": False})
 
     result = _tool_text(result)
@@ -528,7 +534,7 @@ async def test_default_omitted_arg_is_foreground() -> None:
     """默认（省略 run_in_background）走前台等待路径：快任务直接收结果。"""
     worker = _build_worker([AIMessage(content="默认前台结果")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
+    start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_async_task")
 
     result = await start.ainvoke({"description": "x", "subagent_type": "general"})
     result = _tool_text(result)
@@ -547,7 +553,7 @@ async def test_start_task_uses_child_session_as_task_identity() -> None:
             executor,
             lambda: _build_worker([]),
             create_child_session=create_child_session,
-        ) if t.name == "start_task"
+        ) if t.name == "start_async_task"
     )
 
     result = await start.ainvoke({"description": "检索资料", "subagent_type": "general"})
@@ -573,7 +579,7 @@ async def test_start_task_persists_model_tool_call_reference() -> None:
             executor,
             lambda: _build_worker([]),
             create_child_session=create_child_session,
-        ) if t.name == "start_task"
+        ) if t.name == "start_async_task"
     )
 
     await start.ainvoke({
@@ -1239,7 +1245,7 @@ def test_cancel_releases_concurrency_slot_immediately() -> None:
 
 def test_check_task_pending_hint_text() -> None:
     """进行中状态（queued/running）输出状态提示，不落入终态形态。"""
-    from noesis.agents.subagents.tools_middleware import _format_task
+    from noesis.agents.subagents.async_tools_middleware import _format_task
 
     for status, hint in (
         ("queued", "排队中"),
@@ -1255,7 +1261,7 @@ def test_partial_output_consistent_across_channels() -> None:
     """部分成果三处一致（spec 2.4）：task.result / check_task(_format_task) / 通知预览。"""
     from noesis.agents.subagents import notifications as notices
     from noesis.agents.subagents.executor import _PARTIAL_OUTPUT_PREFIX
-    from noesis.agents.subagents.tools_middleware import _format_task
+    from noesis.agents.subagents.async_tools_middleware import _format_task
 
     first = AIMessage(
         content="阶段性结论：检索到 3 篇相关文献，主题集中在评测基准。",
@@ -1369,7 +1375,7 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
     executor.cancel(task_id)
 
 
-def test_send_message_after_cancel_resumes_task() -> None:
+def test_deliver_followup_after_cancel_resumes_task() -> None:
     """执行/意图分离：停止只终止执行——CANCELLED 后 send_message 冷恢复续跑。"""
     worker = _build_worker(
         [AIMessage(content="第一轮产出")] + [_slow_call("s1", "c1")], slow=True,
@@ -1381,7 +1387,7 @@ def test_send_message_after_cancel_resumes_task() -> None:
     time.sleep(0.2)
     executor.cancel(task_id)
     # 停止落终态后：追加消息触发冷恢复（同 thread 开新 turn），不再拒绝
-    snapshot = executor.send_message(task_id, "停止后的追加消息")
+    snapshot = _followup(executor, task_id, "停止后的追加消息")
     assert snapshot["status"] == BgTaskStatus.RUNNING.value
     deadline = time.time() + 15
     while time.time() < deadline:
@@ -1444,12 +1450,13 @@ def test_check_and_list_task_tools_execute_without_error() -> None:
 
     tools = _build_tools(executor, lambda: worker)
     by_name = {t.name: t for t in tools}
-    check = by_name["check_task"]
-    listing = by_name["list_tasks"]
+    check = by_name["check_async_task"]
+    listing = by_name["list_async_tasks"]
 
-    check_result = check.func(task_id) if check.func else None
+    import asyncio as _a
+    check_result = _a.run(check.ainvoke({"task_id": task_id}))
     assert check_result is not None and "completed" in check_result
-    list_result = listing.func() if listing.func else None
+    list_result = _a.run(listing.ainvoke({}))
     assert list_result is not None and "completed" in list_result
     executor.cancel(task_id)
 
@@ -1667,7 +1674,7 @@ def test_followup_cold_resume_prelude_failure_fails_task() -> None:
     entry = _TASKS[task_id]
     entry.followup_factory = _boom
 
-    executor.send_message(task_id, "继续深入")
+    _followup(executor, task_id, "继续深入")
     task = _wait_terminal(executor, task_id)
     # 收口为显式失败：状态可见、错误信息可定位（而非永远 RUNNING）
     assert task["status"] == BgTaskStatus.FAILED.value
@@ -1807,7 +1814,7 @@ async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asend_message_cold_resume_returns_new_run_id() -> None:
+async def test_deliver_followup_cold_resume_returns_new_run_id() -> None:
     """异步冷恢复契约：响应前完成新 run 创建——run_id 权威，订阅方据此
     订阅即可收到全部事件。同步版响应可携带旧 run_id（新 run 异步创建），
     前端曾被迫轮询 active-run 绕过（契约缺陷的补丁，已回归根因修复）。"""
@@ -1828,7 +1835,7 @@ async def test_asend_message_cold_resume_returns_new_run_id() -> None:
     entry = _TASKS[task_id]
     entry.followup_factory = _factory
 
-    snapshot = await BackgroundTaskExecutor.asend_message(task_id, "继续")
+    snapshot = await BackgroundTaskExecutor.deliver_followup(task_id, "继续")
     # 契约：返回时新 run_id 已就绪（不是旧值），状态 running
     assert snapshot["run_id"] == "run-new"
     assert snapshot["run_id"] != old_run_id
@@ -1841,7 +1848,7 @@ async def test_asend_message_cold_resume_returns_new_run_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asend_message_factory_failure_fails_task() -> None:
+async def test_deliver_followup_factory_failure_fails_task() -> None:
     """异步冷恢复的前置失败（factory 抛异常）：显式收口 FAILED，
     响应携带失败状态与错误信息（而非静默卡 RUNNING）。"""
     worker = _build_worker([AIMessage(content="第一轮完成")])
@@ -1859,7 +1866,7 @@ async def test_asend_message_factory_failure_fails_task() -> None:
     entry = _TASKS[task_id]
     entry.followup_factory = _boom
 
-    snapshot = await BackgroundTaskExecutor.asend_message(task_id, "继续")
+    snapshot = await BackgroundTaskExecutor.deliver_followup(task_id, "继续")
     assert snapshot["status"] == BgTaskStatus.FAILED.value
     assert "run 创建失败" in (snapshot["error"] or "")
 
@@ -1942,7 +1949,7 @@ def test_new_kind_registers_without_runtime_change() -> None:
         assert task["result"] == "fake done"
         assert task["kind"] == "fake"
         with pytest.raises(ValueError, match="fake 任务不可追问"):
-            executor.send_message(task_id, "追问")
+            _followup(executor, task_id, "追问")
         assert behavior_of("fake").reject_followup_text() == "fake 任务不可追问"
     finally:
         ex.KIND_BEHAVIORS.pop("fake", None)

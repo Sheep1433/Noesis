@@ -77,17 +77,11 @@ class SubagentSessionPort:
 
 
 class ExecutorPort:
+    # 单一异步入口（校验折叠在锁内前置）：曾因同步/异步双版本导致端口
+    # 白名单漂移（漏 asend_message → 全部 followup 500），收敛为单方法
     @staticmethod
-    def validate_followup(*args: Any, **kwargs: Any) -> Any:
-        return _executor().validate_followup(*args, **kwargs)
-
-    @staticmethod
-    def send_message(*args: Any, **kwargs: Any) -> Any:
-        return _executor().send_message(*args, **kwargs)
-
-    @staticmethod
-    async def asend_message(*args: Any, **kwargs: Any) -> Any:
-        return await _executor().asend_message(*args, **kwargs)
+    async def deliver_followup(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().deliver_followup(*args, **kwargs)
 
     @staticmethod
     def cancel(*args: Any, **kwargs: Any) -> Any:

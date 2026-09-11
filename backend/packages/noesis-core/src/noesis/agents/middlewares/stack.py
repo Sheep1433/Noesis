@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from deepagents.backends import BackendProtocol
-from deepagents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
@@ -67,7 +66,6 @@ class NoesisStackDeps:
     memory_system_prompt: str | None = None
     todo: bool = False
     subagents: Sequence[SubAgent | CompiledSubAgent] = ()
-    async_subagents: Sequence[AsyncSubAgent] = ()
     enable_snip: bool = False
     token_counter: Any = None
     request_token_counter: Any = None
@@ -137,8 +135,6 @@ def build_noesis_stack(deps: NoesisStackDeps) -> list[AgentMiddleware]:
                 private_state_keys=_PRIVATE_SUBAGENT_KEYS,
             )
         )
-    if deps.async_subagents:
-        stack.append(AsyncSubAgentMiddleware(async_subagents=list(deps.async_subagents)))
     if deps.memory_sources:
         if deps.backend is None:
             raise ValueError("memory requires backend")

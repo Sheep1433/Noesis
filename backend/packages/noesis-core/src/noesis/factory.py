@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any, Sequence
 
 from deepagents.backends import BackendProtocol
-from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgent
 from langchain.agents import create_agent
 from langchain.agents.middleware.human_in_the_loop import InterruptOnConfig
@@ -242,7 +241,6 @@ def build_noesis_middleware(
     memory_system_prompt: str | None = None,
     todo: bool = False,
     subagents: Sequence[SubAgent | CompiledSubAgent] = (),
-    async_subagents: Sequence[AsyncSubAgent] = (),
     snip: bool = False,
     middleware: Sequence[AgentMiddleware] = (),
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -278,7 +276,6 @@ def build_noesis_middleware(
             memory_system_prompt=memory_system_prompt,
             todo=todo,
             subagents=subagents,
-            async_subagents=async_subagents,
             enable_snip=snip,
             interrupt_on=interrupt_on if HitlConfig.enabled else None,
             model_call_limit=model_call_limit,
@@ -319,7 +316,6 @@ def create_noesis_agent(
     memory_system_prompt: str | None = None,
     todo: bool = False,
     subagents: Sequence[SubAgent | CompiledSubAgent] = (),
-    async_subagents: Sequence[AsyncSubAgent] = (),
     snip: bool = False,
     middleware: Sequence[AgentMiddleware] = (),
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -351,7 +347,6 @@ def create_noesis_agent(
         memory_system_prompt=memory_system_prompt,
         todo=todo,
         subagents=subagents,
-        async_subagents=async_subagents,
         snip=snip,
         middleware=middleware,
         interrupt_on=interrupt_on,

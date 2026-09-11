@@ -1,11 +1,11 @@
-"""subagent 类型分发契约：角色注册表 + NoesisSubagentMiddleware + descriptor。
+"""subagent 类型分发契约：角色注册表 + AsyncSubagentToolsMiddleware + descriptor。
 
 覆盖：
 - 注册表：重名拒绝、生效模型解析（绑定/沿用父模型）、worker 工具集防线
 - descriptor：版本化读取校验（合法/缺键/坏版本/坏结构）
 - 中间件：未知类型拒绝且无副作用、Command 写入任务身份、state 快照过期
   不误导（check 永远实时查执行器）、prompt 注入类型清单
-- 真实图：create_agent + middleware，start_task 工具调用后 bg_tasks 落
+- 真实图：create_agent + middleware，start_async_task 调用后 async_tasks 落
   graph state 并跨轮存活（checkpoint 持久化）
 """
 
@@ -34,9 +34,9 @@ from noesis.agents.subagents.registry import (
     SubagentRole,
     assert_no_bg_task_tools,
 )
-from noesis.agents.subagents.tools_middleware import (
-    NoesisSubagentMiddleware,
-    _merge_bg_tasks,
+from noesis.agents.subagents.async_tools_middleware import (
+    AsyncSubagentToolsMiddleware,
+    _merge_async_tasks,
 )
 from noesis.services.subagent_session_service import (
     SUBAGENT_DESCRIPTOR_VERSION,
@@ -89,8 +89,8 @@ def _registry(worker_factory=None) -> SubagentRegistry:
 
 
 def _middleware(executor: BackgroundTaskExecutor, registry: SubagentRegistry,
-                create_child_session=None) -> NoesisSubagentMiddleware:
-    return NoesisSubagentMiddleware(
+                create_child_session=None) -> AsyncSubagentToolsMiddleware:
+    return AsyncSubagentToolsMiddleware(
         registry=registry,
         executor=executor,
         session_id="s-dispatch",
@@ -185,7 +185,7 @@ async def test_unknown_subagent_type_rejected_without_side_effects() -> None:
         return {"child_session_id": "child-x", "run_id": "run-x"}
 
     middleware = _middleware(executor, _registry(), create_child_session)
-    start = next(t for t in middleware.tools if t.name == "start_task")
+    start = next(t for t in middleware.tools if t.name == "start_async_task")
 
     result = await start.ainvoke({
         "description": "调研", "subagent_type": "research", "run_in_background": True,
@@ -199,7 +199,7 @@ async def test_unknown_subagent_type_rejected_without_side_effects() -> None:
 
 @pytest.mark.asyncio
 async def test_background_start_returns_command_with_identity() -> None:
-    """后台启动：Command 回 ToolMessage（文本不变）+ bg_tasks 身份写入。"""
+    """后台启动：Command 回 ToolMessage（文本不变）+ async_tasks 身份写入。"""
     from langgraph.types import Command
 
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
@@ -208,7 +208,7 @@ async def test_background_start_returns_command_with_identity() -> None:
         return {"child_session_id": "child-1", "run_id": "run-1"}
 
     middleware = _middleware(executor, _registry(), create_child_session)
-    start = next(t for t in middleware.tools if t.name == "start_task")
+    start = next(t for t in middleware.tools if t.name == "start_async_task")
 
     result = await start.ainvoke({
         "description": "调研 X", "subagent_type": "general", "run_in_background": True,
@@ -218,10 +218,10 @@ async def test_background_start_returns_command_with_identity() -> None:
     (tool_message,) = result.update["messages"]
     assert tool_message.tool_call_id == ""
     assert "子 Agent 已启动：child-1" in tool_message.content
-    identity = next(iter(result.update["bg_tasks"].values()))
-    assert identity["subagent_type"] == "general"
+    identity = next(iter(result.update["async_tasks"].values()))
+    assert identity["agent_name"] == "general"
     assert identity["description"] == "调研 X"
-    assert identity["last_status"] == BgTaskStatus.RUNNING.value
+    assert identity["status"] == BgTaskStatus.RUNNING.value
     executor.cancel("child-1")
 
 
@@ -242,24 +242,24 @@ async def test_check_task_ignores_stale_state_snapshot() -> None:
     assert task["status"] == BgTaskStatus.COMPLETED.value
 
     middleware = _middleware(executor, _registry())
-    check = next(t for t in middleware.tools if t.name == "check_task")
+    check = next(t for t in middleware.tools if t.name == "check_async_task")
     # 即便 state 快照停留在 running（构造过期快照），check 输出实时终态
     text = await check.ainvoke({"task_id": task_id})
     assert "completed" in text
     assert "实时性" in task["description"]
 
 
-def test_merge_bg_tasks_keeps_terminal_entries() -> None:
+def test_merge_async_tasks_keeps_terminal_entries() -> None:
     """reducer 按 task_id 合并；终态条目保留（压缩后已收结果的任务仍可追溯）。"""
     first = {"t1": {"task_id": "t1", "child_session_id": "c1",
-                    "subagent_type": "general", "description": "a", "last_status": "completed"}}
+                    "agent_name": "general", "description": "a", "status": "completed"}}
     second = {"t2": {"task_id": "t2", "child_session_id": "c2",
-                     "subagent_type": "general", "description": "b", "last_status": "running"}}
-    merged = _merge_bg_tasks(first, second)
+                     "agent_name": "general", "description": "b", "status": "running"}}
+    merged = _merge_async_tasks(first, second)
     assert set(merged) == {"t1", "t2"}
     # 同 id 更新覆盖旧值
-    updated = _merge_bg_tasks(first, {"t1": {**first["t1"], "last_status": "running"}})
-    assert updated["t1"]["last_status"] == "running"
+    updated = _merge_async_tasks(first, {"t1": {**first["t1"], "last_updated_at": "x"}})
+    assert updated["t1"]["last_updated_at"] == "x"
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +267,8 @@ def test_merge_bg_tasks_keeps_terminal_entries() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_start_task_command_persists_bg_tasks_across_turns() -> None:
-    """主 Agent 图内调用 start_task：bg_tasks 落 checkpoint，下一轮仍在。"""
+async def test_start_async_task_command_persists_async_tasks_across_turns() -> None:
+    """主 Agent 图内调用 start_async_task：async_tasks 落 checkpoint，下一轮仍在。"""
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
 
     async def create_child_session(description, prompt, tool_call_id="", subagent_type="general", model_id=None):
@@ -276,7 +276,7 @@ async def test_start_task_command_persists_bg_tasks_across_turns() -> None:
 
     model = _ScriptedToolModel(script=[
         AIMessage(content="", tool_calls=[{
-            "name": "start_task", "id": "call-1", "type": "tool_call",
+            "name": "start_async_task", "id": "call-1", "type": "tool_call",
             "args": {"description": "委派任务", "subagent_type": "general", "run_in_background": True},
         }]),
         AIMessage(content="已委派，等结果。"),
@@ -292,20 +292,20 @@ async def test_start_task_command_persists_bg_tasks_across_turns() -> None:
 
     result = await agent.ainvoke({"messages": [HumanMessage(content="帮我调研")]}, config)
 
-    bg_tasks = result.get("bg_tasks") or {}
+    tasks_state = result.get("async_tasks") or {}
     assert any(
-        ident["subagent_type"] == "general" and ident["description"] == "委派任务"
-        for ident in bg_tasks.values()
-    ), f"bg_tasks 未写入 state: {result.keys()}"
+        ident["agent_name"] == "general" and ident["description"] == "委派任务"
+        for ident in tasks_state.values()
+    ), f"async_tasks 未写入 state: {result.keys()}"
     # prompt 注入：模型看到的 system message 含类型清单
     assert "- general: 通用子 Agent" in model._seen_systems[0]
 
     # 第二轮（同 thread）：checkpoint 内 bg_tasks 存活
     result2 = await agent.ainvoke({"messages": [HumanMessage(content="进度如何")]}, config)
-    bg_tasks2 = result2.get("bg_tasks") or {}
-    assert set(bg_tasks2) == set(bg_tasks)
+    tasks_state2 = result2.get("async_tasks") or {}
+    assert set(tasks_state2) == set(tasks_state)
 
-    for task_id in list(bg_tasks):
+    for task_id in list(tasks_state):
         executor.cancel(task_id)
 
 
@@ -313,19 +313,17 @@ async def test_start_task_command_persists_bg_tasks_across_turns() -> None:
 # 端口方法面契约：ExecutorPort 白名单与执行器公开方法同步
 # ---------------------------------------------------------------------------
 
-def test_executor_port_exposes_asend_message() -> None:
-    """回归：端口白名单漏 asend_message，用户侧 followup 全部 AttributeError。
-
-    send_followup（SubagentSessionService）走 ExecutorPort.asend_message
-    （冷恢复竞态修复后），白名单与执行器公开方法面必须同步维护。
-    """
+def test_executor_port_exposes_deliver_followup() -> None:
+    """端口面 == 运行时公开面：followup 单一异步入口（同步/异步双版本曾致
+    白名单漂移——漏 asend_message → 全部 followup 500）。"""
     import noesis.agents.subagents.executor  # noqa: F401  导入即注册端口
     from noesis.services.subagent_runtime_port import ExecutorPort
 
-    for method in ("validate_followup", "send_message", "asend_message", "cancel"):
+    for method in ("deliver_followup", "cancel"):
         assert hasattr(ExecutorPort, method), f"ExecutorPort 缺少 {method}（调用方将 AttributeError）"
-    # 审批入口已随子 Agent HITL 删除：端口面不得再暴露（防回流）
-    assert not hasattr(ExecutorPort, "submit_decisions")
+    # 双版本与审批入口均已删除：端口面不得再暴露（防回流）
+    for gone in ("submit_decisions", "send_message", "asend_message", "validate_followup"):
+        assert not hasattr(ExecutorPort, gone)
 
 
 # ---------------------------------------------------------------------------

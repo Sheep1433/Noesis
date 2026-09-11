@@ -169,19 +169,15 @@ class SubagentSessionService:
         task = await cls._owned_child(session_id, user_id)
         if task is None:
             raise NotFoundException(message="子会话不存在")
-        try:
-            BackgroundTaskExecutor.validate_followup(session_id)
-        except ValueError as exc:
-            raise ConflictException(message=str(exc)) from exc
+        # 校验折叠进 deliver_followup 锁内前置：拒绝时丢弃已写的待定消息
         pending_user_message_id = await cls.create_pending_user_message(
             session_id=session_id,
             user_id=user_id,
             message=message,
         )
         try:
-            # 异步版冷恢复：响应前完成新 run 创建（run_id 权威），
-            # 同步版响应可携带旧 run_id 导致订阅方错过新 run 全部事件
-            return await BackgroundTaskExecutor.asend_message(
+            # 冷恢复：响应前完成新 run 创建（run_id 权威）
+            return await BackgroundTaskExecutor.deliver_followup(
                 session_id,
                 message,
                 user_message_id=pending_user_message_id,
