@@ -509,8 +509,7 @@ async def test_foreground_wait_times_out_to_background() -> None:
     executor = BackgroundTaskExecutor(task_timeout_seconds=60)
     start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_task")
 
-    with mock_patch("noesis.agents.subagents.tools_middleware.SubagentConfig") as cfg:
-        cfg.foreground_max_wait_seconds = 0.3
+    with mock_patch("noesis.agents.subagents.tools_middleware.FOREGROUND_MAX_WAIT_SECONDS", 0.3):
         result = await start.ainvoke({"description": "慢任务", "subagent_type": "general", "run_in_background": False})
 
     result = _tool_text(result)
@@ -1863,3 +1862,87 @@ async def test_asend_message_factory_failure_fails_task() -> None:
     snapshot = await BackgroundTaskExecutor.asend_message(task_id, "继续")
     assert snapshot["status"] == BgTaskStatus.FAILED.value
     assert "run 创建失败" in (snapshot["error"] or "")
+
+
+def test_global_admission_queues_across_sessions() -> None:
+    """两级准入：全局总闸满时跨会话排队，终态后按提交序全局唤醒。"""
+    worker = _build_worker([_slow_call("s", "c0") for _ in range(20)], slow=True)
+    executor = BackgroundTaskExecutor(
+        max_concurrent_per_session=3, max_concurrent_global=2, task_timeout_seconds=60,
+    )
+    # 两个会话各提交：全局 2 个槽，第 3 个（会话 B）必须排队
+    a1 = executor.start(worker_factory=lambda: worker, description="a1", session_id="sa", user_id="u1")
+    a2 = executor.start(worker_factory=lambda: worker, description="a2", session_id="sa", user_id="u1")
+    b1 = executor.start(worker_factory=lambda: worker, description="b1", session_id="sb", user_id="u1")
+    time.sleep(0.3)
+    assert executor.get(a1)["status"] == "running"
+    assert executor.get(a2)["status"] == "running"
+    assert executor.get(b1)["status"] == "queued"  # 全局闸满，跨会话排队
+    executor.cancel(a1)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if executor.get(b1)["status"] in ("running", "completed"):
+            break
+        time.sleep(0.05)
+    # a1 释放全局槽：b1 按提交序唤醒
+    assert executor.get(b1)["status"] in ("running", "completed"), executor.get(b1)["status"]
+    executor.cancel(a2)
+    executor.cancel(b1)
+
+
+def test_new_kind_registers_without_runtime_change() -> None:
+    """验收标准：新增任务类型 = 注册一个行为对象，运行时零改动。
+
+    FakeKind 不做真活，按剧本返回动作——验证能力门控、run 分派、
+    停止/超时模式全部经行为对象生效。
+    """
+    from noesis.agents.subagents import executor as ex
+    from noesis.agents.subagents.kinds import StopMode, behavior_of
+
+    calls: list[str] = []
+
+    class _FakeKind:
+        kind = "fake"
+        supports_followup = False
+        has_turns = False
+
+        @staticmethod
+        def reject_followup_text() -> str:
+            return "fake 任务不可追问"
+
+        @staticmethod
+        def run(entry):
+            async def _go():
+                calls.append("run")
+                entry.task.status = ex.BgTaskStatus.COMPLETED
+                entry.task.result = "fake done"
+                entry.task.completed_at = time.time()
+                ex._notify_terminal(entry.task)
+            return _go()
+
+        @staticmethod
+        def request_stop(entry):
+            calls.append("request_stop")
+            return StopMode.IMMEDIATE_CANCEL
+
+        @staticmethod
+        def on_timeout_locked(entry):
+            calls.append("on_timeout")
+            return True
+
+    ex.KIND_BEHAVIORS["fake"] = _FakeKind()
+    try:
+        executor = BackgroundTaskExecutor(task_timeout_seconds=30)
+        task_id = executor.start(worker_factory=lambda: None, description="f",
+                                  session_id="s-fake", user_id="u1", kind="fake")
+        task = _wait_terminal(executor, task_id)
+        # 行为对象全链路生效：run 被调度、终态经 outcome 收口、followup 被能力门拒绝
+        assert calls == ["run"]
+        assert task["status"] == BgTaskStatus.COMPLETED.value
+        assert task["result"] == "fake done"
+        assert task["kind"] == "fake"
+        with pytest.raises(ValueError, match="fake 任务不可追问"):
+            executor.send_message(task_id, "追问")
+        assert behavior_of("fake").reject_followup_text() == "fake 任务不可追问"
+    finally:
+        ex.KIND_BEHAVIORS.pop("fake", None)

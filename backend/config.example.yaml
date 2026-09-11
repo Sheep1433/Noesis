@@ -252,6 +252,13 @@ checkpoint:
   database: noesis_langgraph
 
 # Web 检索工具（COMMON_QA / SUPER_AGENT_QA；TAVILY_API_KEY 见 .env）
+subagents:
+  max_concurrent_per_session: 3   # 每会话后台任务并发上限
+  max_concurrent_global: 12       # 全局总闸（跨会话）：0 = 不限
+  task_timeout_seconds: 900       # 子 Agent 任务超时
+  shell_task_timeout_seconds: 0   # 后台命令超时：0 = 不限
+  auto_continue: true             # 终态后自动续跑主 Agent（无活跃 run 时）
+
 web_tools:
   max_search_results: 8
   fetch_max_chars: 16000

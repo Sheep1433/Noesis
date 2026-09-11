@@ -18,6 +18,10 @@ from typing import Any
 
 from noesis.agents.subagents import notifications
 from noesis.config.env import SubagentConfig
+
+# 续跑去抖窗口（工程常量，不进配置）：终态到达后等待该秒数再唤醒，
+# 窗口内多个终态合并为一次 continuation run（降全量上下文重复发送成本）
+AUTO_CONTINUE_DEBOUNCE_SECONDS = 60.0
 from noesis.errors.exceptions import ConflictException
 from noesis.runtime.logging import logger
 from noesis.schemas.login_vo import CurrentUser
@@ -73,7 +77,7 @@ async def schedule_maybe_continue(session_id: str, user_id: str) -> None:
     """
     if not SubagentConfig.auto_continue or not session_id or not user_id:
         return
-    debounce = SubagentConfig.auto_continue_debounce_seconds
+    debounce = AUTO_CONTINUE_DEBOUNCE_SECONDS
     if debounce <= 0:
         await maybe_continue(session_id, user_id)
         return

@@ -231,13 +231,10 @@ class HitlSettings:
 @dataclass(frozen=True)
 class SubagentSettings:
     max_concurrent_per_session: int
+    max_concurrent_global: int
     task_timeout_seconds: float
-    foreground_max_wait_seconds: float
-    auto_continue: bool
-    auto_continue_debounce_seconds: float
     shell_task_timeout_seconds: float
-    stop_grace_seconds: float
-    stop_reconcile_seconds: float
+    auto_continue: bool
 
 
 @dataclass(frozen=True)
@@ -671,17 +668,11 @@ def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
     subagents = yaml_cfg.subagents
     return SubagentSettings(
         max_concurrent_per_session=subagents.max_concurrent_per_session,
+        max_concurrent_global=subagents.max_concurrent_global,
         task_timeout_seconds=_legacy_env_float(
             "SUBAGENT_TASK_TIMEOUT_SECONDS", subagents.task_timeout_seconds),
-        # env 覆盖：评测 CLI 子进程需要加长前台等待（单回合评测没有后台
-        # 任务通知回合），不必为此改 config.yaml
-        foreground_max_wait_seconds=_legacy_env_float(
-            "SUBAGENT_FOREGROUND_MAX_WAIT_SECONDS", subagents.foreground_max_wait_seconds),
         auto_continue=subagents.auto_continue,
-        auto_continue_debounce_seconds=subagents.auto_continue_debounce_seconds,
         shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
-        stop_grace_seconds=subagents.stop_grace_seconds,
-        stop_reconcile_seconds=subagents.stop_reconcile_seconds,
     )
 
 

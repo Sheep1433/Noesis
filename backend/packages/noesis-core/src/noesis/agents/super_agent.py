@@ -215,10 +215,9 @@ class SuperAgent(BaseAgent):
 
         bg_executor = BackgroundTaskExecutor(
             max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
+            max_concurrent_global=SubagentConfig.max_concurrent_global,
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
             shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
-            stop_grace_seconds=SubagentConfig.stop_grace_seconds,
-            stop_reconcile_seconds=SubagentConfig.stop_reconcile_seconds,
         )
 
         # 角色注册表：类型分发的唯一声明面（v1 单一 general，配方 = 既有

@@ -40,6 +40,12 @@ from noesis.chat.event_mapping.retrieval import (
     register_pending_sources,
 )
 from noesis.config.env import ModelConfig, SubagentConfig
+
+# 前台等待上限（工程常量，不进配置）：超过即自动转后台。评测 CLI 子进程
+# 经 SUBAGENT_FOREGROUND_MAX_WAIT_SECONDS env 覆盖（单回合评测无通知回合）
+FOREGROUND_MAX_WAIT_SECONDS = float(
+    __import__("os").environ.get("SUBAGENT_FOREGROUND_MAX_WAIT_SECONDS", "600")
+)
 from noesis.runtime.logging import logger
 
 
@@ -307,11 +313,11 @@ class NoesisSubagentMiddleware(
             try:
                 await asyncio.wait_for(
                     asyncio.shield(asyncio.wrap_future(future)),
-                    timeout=SubagentConfig.foreground_max_wait_seconds,
+                    timeout=FOREGROUND_MAX_WAIT_SECONDS,
                 )
             except asyncio.TimeoutError:
                 text = (
-                    f"任务运行超过 {int(SubagentConfig.foreground_max_wait_seconds)}s，已自动转为后台：{child_session_id or task_id}\n"
+                    f"任务运行超过 {int(FOREGROUND_MAX_WAIT_SECONDS)}s，已自动转为后台：{child_session_id or task_id}\n"
                     "可继续其他工作，之后用 check_task 收结果。"
                 )
                 return _command_with_identity(tool_call_id, text, {

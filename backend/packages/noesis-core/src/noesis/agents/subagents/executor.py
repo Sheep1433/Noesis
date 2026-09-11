@@ -46,6 +46,7 @@ from noesis.chat.event_mapping.usage_normalize import merge_model_calls, merge_u
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.chat.runs import RunStatus, SubscriptionLimitExceeded
 from noesis.chat.runs.delivery_bus import DeliveryCore, SequencedPayload
+from noesis.agents.subagents.kinds import StopMode, behavior_of
 from noesis.config.env import StreamConfig
 
 from noesis.agents.subagents import notifications
@@ -296,6 +297,10 @@ class _TaskEntry:
     followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None
     # 排队唤醒时按该值判断槽位（executor 实例不共享，cap 记在条目上）
     session_max_concurrent: int = 1
+    # 提交序号：全局 FIFO 唤醒的排序键（跨会话公平）
+    submit_seq: int = 0
+    # 全局总闸快照（唤醒判定用；0 = 不限）
+    max_global: int = 0
     # followup-turn 队列：send_message 入队，当前 turn 结束后链式开新 turn
     followups: "collections.deque[str]" = field(
         default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
@@ -819,7 +824,7 @@ def _notify_terminal(task: BackgroundTask) -> None:
         label=task.description,
         sources=list(task.retrieval_sources.values()),
         step_count=task.step_count,
-        turn_count=task.turn_count if task.kind == "subagent" else None,
+        turn_count=task.turn_count if behavior_of(task.kind).has_turns else None,
         duration_ms=(
             int(max(0.0, (task.completed_at or time.time()) - task.started_at) * 1000)
             if task.started_at else None
@@ -856,6 +861,7 @@ class BackgroundTaskExecutor:
         self,
         *,
         max_concurrent_per_session: int = MAX_CONCURRENT_PER_SESSION,
+        max_concurrent_global: int = 0,
         task_timeout_seconds: float = TASK_TIMEOUT_SECONDS,
         shell_task_timeout_seconds: float = SHELL_TASK_TIMEOUT_SECONDS,
         stop_grace_seconds: float = STOP_GRACE_SECONDS,
@@ -863,6 +869,9 @@ class BackgroundTaskExecutor:
         recursion_limit: int = 9999,
     ) -> None:
         self._max_concurrent = max(1, max_concurrent_per_session)
+        # 全局并发总闸（跨会话）：0 = 不限。两级准入先全局后会话，
+        # 全局按提交序 FIFO 唤醒（防单会话占满总闸饿死其他会话）
+        self._max_global = max(0, max_concurrent_global)
         self._task_timeout = task_timeout_seconds
         self._shell_timeout = max(0.0, shell_task_timeout_seconds)
         self._stop_grace = max(1.0, stop_grace_seconds)
@@ -921,6 +930,7 @@ class BackgroundTaskExecutor:
         followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None,
         model_id: Optional[str] = None,
         subagent_type: Optional[str] = None,
+        kind: str = "subagent",
     ) -> str:
         """启动后台任务，立即返回 task_id；超并发上限时按会话 FIFO 排队。
 
@@ -939,7 +949,7 @@ class BackgroundTaskExecutor:
             created_by_tool_call_id=created_by_tool_call_id,
             run_id=run_id,
             assistant_message_id=assistant_message_id,
-            kind="subagent",
+            kind=kind,
             model_id=model_id,
             subagent_type=subagent_type,
         )
@@ -1008,6 +1018,7 @@ class BackgroundTaskExecutor:
         task = entry.task
         session_id = task.session_id
         entry.session_max_concurrent = self._max_concurrent
+        entry.max_global = self._max_global
         entry.stop_grace_seconds = self._stop_grace
         entry.stop_reconcile_seconds = self._stop_reconcile
         with _TASKS_LOCK:
@@ -1017,8 +1028,16 @@ class BackgroundTaskExecutor:
                 if e.task.session_id == session_id
                 and e.task.status in _SLOT_STATUSES
             )
+            global_active = sum(
+                1
+                for e in _TASKS.values()
+                if e.task.status in _SLOT_STATUSES
+            )
             _TASKS[task.task_id] = entry
-            if active >= self._max_concurrent:
+            entry.submit_seq = _next_submit_seq()
+            if active >= self._max_concurrent or (
+                self._max_global > 0 and global_active >= self._max_global
+            ):
                 task.status = BgTaskStatus.QUEUED
                 _PENDING_QUEUES.setdefault(session_id, []).append(entry)
                 pending = len(_PENDING_QUEUES[session_id])
@@ -1053,8 +1072,8 @@ class BackgroundTaskExecutor:
             if entry is None:
                 raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
             task = entry.task
-            if task.kind == "shell":
-                raise ValueError("该任务为后台命令任务，不支持追加消息")
+            if not behavior_of(task.kind).supports_followup:
+                raise ValueError(behavior_of(task.kind).reject_followup_text())
             if task.status.is_terminal and task.status not in _RESUMABLE_TERMINALS:
                 raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
 
@@ -1083,8 +1102,8 @@ class BackgroundTaskExecutor:
             if entry is None:
                 raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
             task = entry.task
-            if task.kind == "shell":
-                raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
+            if not behavior_of(task.kind).supports_followup:
+                raise ValueError(behavior_of(task.kind).reject_followup_text())
             status = task.status
             # completed / cancelled → 冷恢复：同 thread 开新 turn（followup 队列一并排入）
             if status in _RESUMABLE_TERMINALS:
@@ -1147,8 +1166,8 @@ class BackgroundTaskExecutor:
             if entry is None:
                 raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
             task = entry.task
-            if task.kind == "shell":
-                raise ValueError("该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）")
+            if not behavior_of(task.kind).supports_followup:
+                raise ValueError(behavior_of(task.kind).reject_followup_text())
             if task.status not in _RESUMABLE_TERMINALS:
                 if task.status.is_terminal:
                     raise ValueError(f"任务已结束（{task.status.value}），无法追加消息")
@@ -1245,7 +1264,9 @@ class BackgroundTaskExecutor:
             task = entry.task
             if task.status.is_terminal:
                 return task.to_dict(include_progress=False)
-            if task.status == BgTaskStatus.RUNNING and task.kind != "shell":
+            if task.status == BgTaskStatus.RUNNING and (
+                behavior_of(task.kind).request_stop(entry) == StopMode.COOPERATIVE
+            ):
                 # 乐观终态：状态直接落 CANCELLED（快照立即对前端生效）；
                 # 执行侧经协作停止信号在静止边界干净退出，收口异步补
                 # 投影回收与通知。宽限/对账 watchdog 保持武装：异步收口
@@ -1257,12 +1278,12 @@ class BackgroundTaskExecutor:
                 _arm_stop_grace(entry)
                 snapshot = task.to_dict(include_progress=False)
             else:
-                # queued（无执行 future）/ shell（命令在 backend 不可中断，
-                # 无协作边界）：即时终态
+                # queued（无执行 future）/ IMMEDIATE_CANCEL（命令在 backend
+                # 不可中断，无协作边界）：即时终态
                 _disarm_watchdog(entry)
                 if task.status == BgTaskStatus.QUEUED:
                     _dequeue_locked(task)
-                if task.kind == "shell" and entry.future is not None:
+                if entry.future is not None:
                     entry.future.cancel()
                 task.status = BgTaskStatus.CANCELLED
                 task.stop_reason = "cancelled"
@@ -1954,9 +1975,6 @@ async def _arun(
     追加 HumanMessage），队列清空前任务保持 running。
     """
     task = entry.task
-    if entry.task.kind == "shell":
-        await _arun_shell(entry)
-        return
     if task.status.is_terminal:
         # 调度窗口内已被 cancel（乐观终态已落）：本协程按未启动处理。
         # 停止族终态直接走停止收口（落库/事件/通知立即补齐——任务未
@@ -2317,7 +2335,7 @@ def _schedule_entry_locked(entry: _TaskEntry) -> None:
     call_later 均为非阻塞提交，锁内调用安全；SSE 事件发布留待锁外。
     """
     loop = _ensure_loop()
-    entry.future = _submit_isolated(loop, _arun(entry))
+    entry.future = _submit_isolated(loop, behavior_of(entry.task.kind).run(entry))
     if entry.timeout_seconds > 0:
         _arm_watchdog(entry)
 
@@ -2325,6 +2343,15 @@ def _schedule_entry_locked(entry: _TaskEntry) -> None:
 def _publish_entry_started(entry: _TaskEntry) -> None:
     _publish_task_event(entry.task, "started")
     _publish_run_event(entry.task, "run.started")
+
+
+_SUBMIT_SEQ = 0
+
+
+def _next_submit_seq() -> int:
+    global _SUBMIT_SEQ
+    _SUBMIT_SEQ += 1
+    return _SUBMIT_SEQ
 
 
 def _dequeue_locked(task: BackgroundTask) -> None:
@@ -2340,43 +2367,61 @@ def _dequeue_locked(task: BackgroundTask) -> None:
 
 
 def _drain_session_queue(session_id: str) -> None:
-    """同会话任务落终态后，按 FIFO 唤醒排队任务直到槽位占满。
+    """任务落终态后唤醒排队任务：两级准入（先全局后会话），全局按提交序。
 
-    跳过排队期间已被取消/连坐的陈旧条目。在 _notify_terminal 统一触发，
-    覆盖完成、失败、超时、取消、沙箱销毁全部终态路径。
+    跨会话队列按 submit_seq 全局排序唤醒（防单会话占满总闸饿死其他
+    会话）；会话上限满的候选跳过留队，不阻塞其他会话。在 _notify_terminal
+    统一触发，覆盖完成、失败、超时、取消、沙箱销毁全部终态路径。
     """
+    global _PENDING_QUEUES
     while True:
         with _TASKS_LOCK:
-            queue = _PENDING_QUEUES.get(session_id)
-            if not queue:
-                return
-            entry: Optional[_TaskEntry] = None
-            while queue:
-                candidate = queue[0]
-                if candidate.task.status != BgTaskStatus.QUEUED:
+            # 各会话队首候选（会话内 FIFO），按提交序全局排序
+            candidates: list[_TaskEntry] = []
+            for queue in _PENDING_QUEUES.values():
+                while queue and queue[0].task.status != BgTaskStatus.QUEUED:
                     queue.pop(0)
-                    continue
+                if queue:
+                    candidates.append(queue[0])
+            if not candidates:
+                _PENDING_QUEUES.clear()
+                return
+            candidates.sort(key=lambda e: e.submit_seq)
+            global_active = sum(
+                1
+                for e in _TASKS.values()
+                if e.task.status in _SLOT_STATUSES
+            )
+            entry: Optional[_TaskEntry] = None
+            for candidate in candidates:
+                if candidate.max_global > 0 and global_active >= candidate.max_global:
+                    continue  # 总闸满：本候选留队，看其他会话（亦满则全部留队）
+                session_active = sum(
+                    1
+                    for e in _TASKS.values()
+                    if e.task.session_id == candidate.task.session_id
+                    and e.task.status in _SLOT_STATUSES
+                )
+                if session_active >= candidate.session_max_concurrent:
+                    continue  # 会话满：留队不阻塞其他会话
                 entry = candidate
                 break
             if entry is None:
-                _PENDING_QUEUES.pop(session_id, None)
                 return
-            active = sum(
-                1
-                for e in _TASKS.values()
-                if e.task.session_id == session_id
-                and e.task.status in _SLOT_STATUSES
-            )
-            if active >= entry.session_max_concurrent:
-                return
-            queue.pop(0)
+            for queue in _PENDING_QUEUES.values():
+                if queue and queue[0] is entry:
+                    queue.pop(0)
+                    break
+            _PENDING_QUEUES = {
+                k: v for k, v in _PENDING_QUEUES.items() if v
+            }
             entry.task.status = BgTaskStatus.RUNNING
             # 锁内调度（同 _launch：防 RUNNING 后 future 未建即被 cancel 的竞态）
             _schedule_entry_locked(entry)
         _publish_entry_started(entry)
         logger.info(
             "bg task dequeued task_id={} session_id={}",
-            entry.task.task_id, session_id,
+            entry.task.task_id, entry.task.session_id,
         )
 
 
@@ -2401,7 +2446,7 @@ def _on_task_timeout(entry: _TaskEntry) -> None:
         task = entry.task
         if task.status.is_terminal:
             return
-        if task.kind == "shell":
+        if behavior_of(task.kind).on_timeout_locked(entry):
             shell_hard = True
         else:
             task.status = BgTaskStatus.TIMED_OUT
@@ -2450,6 +2495,61 @@ def shutdown() -> None:
 
     close_isolated_checkpointer_on_loop()
     shutdown_loop()
+
+
+class _SubagentKind:
+    """子 Agent 委派：可追问、有轮次概念、协作停止、协作超时。"""
+
+    kind = "subagent"
+    supports_followup = True
+    has_turns = True
+
+    @staticmethod
+    def reject_followup_text() -> str:
+        raise AssertionError("subagent supports followup")  # pragma: no cover
+
+    @staticmethod
+    def run(entry: "_TaskEntry") -> Any:
+        return _arun(entry)
+
+    @staticmethod
+    def request_stop(entry: "_TaskEntry") -> "StopMode":
+        return StopMode.COOPERATIVE
+
+    @staticmethod
+    def on_timeout_locked(entry: "_TaskEntry") -> bool:
+        return False  # 协作 timed_out：静止边界退出 + 宽限兜底
+
+
+class _ShellKind:
+    """后台命令：不可追问、无轮次、立即取消、硬杀超时。"""
+
+    kind = "shell"
+    supports_followup = False
+    has_turns = False
+
+    @staticmethod
+    def reject_followup_text() -> str:
+        return "该任务为后台命令任务，不支持追加消息（可用 check_task 收取输出、重新执行请新建命令）"
+
+    @staticmethod
+    def run(entry: "_TaskEntry") -> Any:
+        return _arun_shell(entry)
+
+    @staticmethod
+    def request_stop(entry: "_TaskEntry") -> "StopMode":
+        return StopMode.IMMEDIATE_CANCEL
+
+    @staticmethod
+    def on_timeout_locked(entry: "_TaskEntry") -> bool:
+        return True  # 硬杀：命令在 backend 不可中断
+
+
+# kind → 行为对象注册表（新增任务类型在此注册，运行时零 kind 判断）
+KIND_BEHAVIORS: dict[str, Any] = {
+    "subagent": _SubagentKind(),
+    "shell": _ShellKind(),
+}
 
 
 class _ExecutorRuntimePort:

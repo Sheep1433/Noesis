@@ -370,26 +370,20 @@ class HitlYamlSection(BaseModel):
 
 
 class SubagentsYamlSection(BaseModel):
-    """SuperAgent 后台子 Agent（全异步 task + HITL 审批续跑）。"""
+    """后台任务运行时配置：只收真实运维旋钮（5 个）。
+
+    工程窗口值（停止宽限 30s、对账窗口 30s、前台等待 600s、续跑去抖
+    60s）是机制内部参数，调定后无人再动，降为模块常量不进配置。
+    """
 
     max_concurrent_per_session: int = Field(default=3, ge=1)
+    # 全局并发总闸（跨会话）：0 = 不限。防多会话同时各派满任务压垮进程
+    max_concurrent_global: int = Field(default=12, ge=0)
     task_timeout_seconds: float = Field(default=900, gt=0)
-    # 前台等待上限：超过即自动转后台（同步转异步）。10 分钟：默认委派
-    # 是前台的，窗口太短会让同步静默退化成异步（调用方以为在等结果，
-    # 框架单方面改后台），单回合场景只能轮询收结果、烧全量上下文
-    foreground_max_wait_seconds: float = Field(default=600, gt=0)
-    # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
-    auto_continue: bool = Field(default=True)
-    # 续跑去抖窗口：终态到达后等待该秒数再唤醒（窗口内多个终态合并为
-    # 一次 continuation run，显著降低重复发送全量上下文的 token 成本）；
-    # 0 = 立即唤醒（旧行为）
-    auto_continue_debounce_seconds: float = Field(default=60, ge=0)
     # 后台命令任务（execute run_in_background）超时：0=不限时
     shell_task_timeout_seconds: float = Field(default=0, ge=0)
-    # 协作停止宽限：停止请求发出后等待静止边界的上限，超时回退硬杀
-    stop_grace_seconds: float = Field(default=30, gt=0)
-    # 硬杀后强制终态对账延迟：硬取消协程未按约收口时的兜底窗口
-    stop_reconcile_seconds: float = Field(default=30, gt=0)
+    # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
+    auto_continue: bool = Field(default=True)
 
 
 class MessagingYamlSection(BaseModel):
