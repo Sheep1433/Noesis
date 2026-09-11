@@ -8,7 +8,7 @@
 - ``shell``：``execute`` 工具的 ``run_in_background`` 命令——不经 worker
   编译，直接经 agent backend 执行，易逝作业不持久化。
 
-全异步 task：``start_task`` 立即返回 task_id，任务生命周期归属 session
+全异步 task：``start_async_task`` 立即返回 task_id，任务生命周期归属 session
 而非主 run——主 run 结束后继续跑，任意后续轮次 ``check_async_task`` 收结果。
 执行器类型无关：subagent 特性（worker 工厂 / followup / 落库投影）经
 注入携带，状态机、并发上限、协作停止对两类任务一致。
@@ -114,9 +114,9 @@ class BackgroundTask:
     assistant_message_id: Optional[str] = None
     turn_count: int = 1
     projection_sequence: int = field(default=0, repr=False)
-    # subagent 任务均可经 send_message 追加 turn；shell 任务使用独立 kind。
+    # subagent 任务均可经 deliver_followup 追加 turn；shell 任务使用独立 kind。
     kind: str = "subagent"
-    # 任务的角色类型（start_task 的 subagent_type）；shell 任务为 None。
+    # 任务的角色类型（start_async_task 的 subagent_type）；shell 任务为 None。
     # 投影与任务卡展示用——worker 编译配方由角色注册表在启动前解析，
     # 执行器不感知类型差异。
     subagent_type: Optional[str] = None
@@ -259,7 +259,7 @@ def _submit_isolated(loop: asyncio.AbstractEventLoop, coro) -> Future:
 
     ``run_coroutine_threadsafe`` 经 ``call_soon_threadsafe`` 复制调用线程的
     contextvars；而调度点常在父 run 的 astream_events 追踪上下文内
-    （start_task / 审批 resume 等工具执行期间）。子 Agent 若继承父
+    （start_async_task 等工具执行期间）。子 Agent 若继承父
     tracer，其 LLM/工具事件会泄入父事件流——曾在父消息尾部生成幽灵
     工具 part 并触发「本轮未完成」误报。这里把真实工作放进空 Context
     的内层 Task 切断继承；取消经 await 传播，Future 语义与
@@ -301,7 +301,7 @@ class _TaskEntry:
     submit_seq: int = 0
     # 全局总闸快照（唤醒判定用；0 = 不限）
     max_global: int = 0
-    # followup-turn 队列：send_message 入队，当前 turn 结束后链式开新 turn
+    # followup-turn 队列：deliver_followup 入队，当前 turn 结束后链式开新 turn
     followups: "collections.deque[str]" = field(
         default_factory=lambda: collections.deque(maxlen=MAX_FOLLOWUPS),
     )
@@ -1104,7 +1104,7 @@ class BackgroundTaskExecutor:
             task.status = BgTaskStatus.RUNNING
             task.result = None
             task.completed_at = None
-            # 复活中和（与同步版同款）：清停止信号、取消旧协程与在飞对账
+            # 复活中和：清停止信号、取消旧协程与在飞对账
             # task、重置 terminal_published（复活轮发自己的终态事件与通知）
             entry.cooperative_stop_signalled = False
             if entry.future is not None and not entry.future.done():
@@ -1437,7 +1437,7 @@ _STOP_TERMINALS: frozenset[BgTaskStatus] = frozenset(
 
 # 可冷恢复续聊的终态：停止是乐观终态且只终止执行（执行/意图分离），
 # 排队与后续的 followup 意图保留——completed / cancelled 均可经
-# send_message 同 thread 续跑；failed / timed_out 语义上不可续
+# deliver_followup 同 thread 续跑；failed / timed_out 语义上不可续
 _RESUMABLE_TERMINALS: frozenset[BgTaskStatus] = frozenset(
     {BgTaskStatus.COMPLETED, BgTaskStatus.CANCELLED}
 )
@@ -1892,7 +1892,7 @@ async def _arun(
     """执行一轮或多轮 turn。
 
     - start：initial_source 为原始 description 的 HumanMessage state
-    - 冷恢复（send_message 对 completed 任务）：initial_source 为追加消息
+    - 冷恢复（deliver_followup 对 completed 任务）：initial_source 为追加消息
     - kind="shell"：分派到 _arun_shell（无 worker / 无 turn 概念）
     turn 正常结束后若 followup 队列非空，链式开下一个 turn（同 thread
     追加 HumanMessage），队列清空前任务保持 running。
@@ -1999,8 +1999,7 @@ async def _arun(
                     task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
                     task.turn_count += 1
                     task.projection_sequence = 0
-                    entry.turn_seed_content = None
-            task.completed_at = None
+                    task.completed_at = None
             logger.info(
                 "bg subagent followup turn task_id={} queued={}",
                 task.task_id,
@@ -2085,7 +2084,7 @@ async def _arun_followup(
     params 携带该 turn 的模型/推理档位覆盖；变化时以新参数编译 worker
     （同 thread 续跑）。新 turn 的投影由独立 builder 从零累积（统一管道）。
 
-    前置段（worker 编译 / run 创建）失败必须显式收口 FAILED：send_message
+    前置段（worker 编译 / run 创建）失败必须显式收口 FAILED：deliver_followup
     对本协程 fire-and-forget，异常会滞留在未观察的 concurrent Future 里被
     静默吞掉——任务卡 RUNNING、后续追问进队列无人消费（冷恢复静默失败
     事故：跨 loop 连接错误曾走此路径无任何日志）。
@@ -2107,7 +2106,6 @@ async def _arun_followup(
             task.run_id = str(launch.get("run_id") or "") or None
             task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
             task.projection_sequence = 0
-            entry.turn_seed_content = None
     except Exception as exc:
         await _finalize_followup_prelude_failure(entry, task, exc)
         return

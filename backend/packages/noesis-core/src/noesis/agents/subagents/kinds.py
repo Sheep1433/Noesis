@@ -9,7 +9,8 @@
 
 - ``request_stop`` / ``on_timeout_locked`` 在 ``_TASKS_LOCK`` 内被调用，
   实现不得再取锁、不得做任何 I/O 或 await；
-- ``run`` 只在隔离事件循环上被调度，绝不在持锁状态调用。
+- ``run`` 构造执行协程（调度点在锁内调用它，构造须为纯同步、无 I/O），
+  返回的协程仅在隔离事件循环上执行，绝不持锁运行。
 """
 
 from __future__ import annotations

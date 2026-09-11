@@ -234,7 +234,7 @@ class SuperAgent(BaseAgent):
         # 子图跑在父 run 同一流内、父 Agent 阻塞等结果，适合需要立即拿到
         # 结果的子任务；长任务 / 并行仍走 start_task 后台路径。工具与
         # middleware 配方对齐后台 worker，但不带 ask_user——审批中断依赖
-        # executor 转 awaiting_approval，同步子图没有这条处理链。
+        # executor 转 排队任务，同步子图没有这条处理链。
         sync_subagent_model = get_llm(model_id=model_id)
         sync_subagent_tools = [
             tool for tool in worker_tools
@@ -245,7 +245,7 @@ class SuperAgent(BaseAgent):
             "description": (
                 "同步子 Agent：在独立上下文中执行多步子任务，调用期间父 Agent "
                 "阻塞等待、结果当场返回。适合需要立即拿到结果的检索、调研类子任务；"
-                "预计耗时较长或需与其它子任务并行时改用 start_task"
+                "预计耗时较长或需与其它子任务并行时改用 start_async_task"
             ),
             "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
             "model": sync_subagent_model,

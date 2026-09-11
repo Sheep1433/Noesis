@@ -16,6 +16,7 @@ check 来源清单附录。
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Annotated, Any, Awaitable, Callable, NotRequired, TypedDict
 
@@ -47,7 +48,7 @@ from noesis.runtime.logging import logger
 # 前台等待上限（工程常量，不进配置）：超过即自动转后台。评测 CLI 子进程
 # 经 SUBAGENT_FOREGROUND_MAX_WAIT_SECONDS env 覆盖（单回合评测无通知回合）
 FOREGROUND_MAX_WAIT_SECONDS = float(
-    __import__("os").environ.get("SUBAGENT_FOREGROUND_MAX_WAIT_SECONDS", "600")
+    os.environ.get("SUBAGENT_FOREGROUND_MAX_WAIT_SECONDS", "600")
 )
 
 # 状态键归本中间件所有；不进 stack 的 subagent 隔离携带集合——worker 无
@@ -88,7 +89,8 @@ class AsyncTask(TypedDict):
     """任务身份投影（上游同构字段 + description），压缩后模型仍可恢复任务清单。
 
     与上游的对应：thread_id = 子会话公开身份（child session），agent_name =
-    角色类型。last_checked_at / last_updated_at 由 check / update 顺带刷新。
+    角色类型（后台命令为 shell）。时间戳为写入时刻值，不随后续操作刷新
+    ——权威状态实时查运行时，state 只服务压缩后的任务清单重建。
     """
 
     task_id: str
@@ -118,6 +120,26 @@ class SubagentTasksState(AgentState):
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def build_async_task_identity(task: dict[str, Any]) -> AsyncTask:
+    """从运行时任务快照构造 state 身份条目（start/update/execute 后台分支共用）。
+
+    时间戳为写入时刻值：check/update 不回写 state（权威状态实时查运行时），
+    字段保留上游 AsyncTask 形状。
+    """
+    now = _now_iso()
+    return AsyncTask(
+        task_id=str(task["task_id"]),
+        agent_name=str(task.get("subagent_type") or "shell"),
+        thread_id=str(task.get("child_session_id") or task["task_id"]),
+        run_id=str(task.get("run_id") or ""),
+        status=str(task.get("status") or ""),
+        description=str(task.get("description") or ""),
+        created_at=now,
+        last_checked_at=now,
+        last_updated_at=now,
+    )
 
 
 def _format_task(task: dict[str, Any], *, output_budget: int | None = None) -> str:
@@ -466,23 +488,10 @@ def _command_with_identity(
     task: dict[str, Any],
 ) -> Command:
     """以 Command 返回工具文本，同时把任务身份写入 ``async_tasks`` state。"""
-    task_id = str(task["task_id"])
-    public_id = str(task.get("child_session_id") or task_id)
-    now = _now_iso()
-    identity = AsyncTask(
-        task_id=task_id,
-        agent_name=str(task.get("subagent_type") or "general"),
-        thread_id=public_id,
-        run_id=str(task.get("run_id") or ""),
-        status=str(task.get("status") or ""),
-        description=str(task.get("description") or ""),
-        created_at=now,
-        last_checked_at=now,
-        last_updated_at=now,
-    )
+    identity = build_async_task_identity(task)
     return Command(update={
         "messages": [ToolMessage(text, tool_call_id=tool_call_id)],
-        "async_tasks": {task_id: identity},
+        "async_tasks": {identity["task_id"]: identity},
     })
 
 
@@ -492,5 +501,5 @@ __all__ = [
     "AsyncTask",
     "PRIVATE_STATE_KEYS",
     "SubagentTasksState",
-    "_StartTaskArgs",
+    "build_async_task_identity",
 ]

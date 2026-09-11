@@ -18,7 +18,6 @@ from typing import Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.chat.hitl import normalize_hitl_decisions
 
 from noesis.chat.runs.skeleton import (
     build_assistant_skeleton_row,
@@ -285,7 +284,7 @@ class SubagentSessionService:
         """请求协作停止：立即返回受理快照（RunSnapshot 契约），不等待终态。
 
         终态经 bg-task / run.finished 事件推送并落库；即时取消路径（queued /
-        awaiting_approval / shell）映射为 interrupted / stopped。受理态不写回
+        已取消/排队任务 / shell）映射为 interrupted / stopped。受理态不写回
         DB——终态前的 DB 行保持原状态。
         """
         from noesis.chat.runs.models import RunSnapshot

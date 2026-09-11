@@ -132,8 +132,8 @@ def test_assert_no_bg_task_tools_blocks_recursion() -> None:
     safe = [StructuredTool.from_function(func=lambda: "ok", name="safe_tool", description="安全工具")]
     assert_no_bg_task_tools(safe)  # 不抛
 
-    evil = [StructuredTool.from_function(func=lambda: "x", name="start_task", description="递归入口")]
-    with pytest.raises(ValueError, match="start_task"):
+    evil = [StructuredTool.from_function(func=lambda: "x", name="start_async_task", description="递归入口")]
+    with pytest.raises(ValueError, match="start_async_task"):
         assert_no_bg_task_tools(evil)
 
 
@@ -314,16 +314,43 @@ async def test_start_async_task_command_persists_async_tasks_across_turns() -> N
 # ---------------------------------------------------------------------------
 
 def test_executor_port_exposes_deliver_followup() -> None:
-    """端口面 == 运行时公开面：followup 单一异步入口（同步/异步双版本曾致
-    白名单漂移——漏 asend_message → 全部 followup 500）。"""
-    import noesis.agents.subagents.executor  # noqa: F401  导入即注册端口
+    """端口面 == 运行时公开面（全表面护栏）：白名单曾漏 asend_message 致全部
+    followup 500——本测试枚举端口应暴露的完整集合，并要求运行时新增公开
+    方法时必须在此显式登记（漏登记即红），删除的方法不得残留（防回流）。"""
+    import inspect
+    import noesis.agents.subagents.executor as ex_mod
     from noesis.services.subagent_runtime_port import ExecutorPort
 
-    for method in ("deliver_followup", "cancel"):
-        assert hasattr(ExecutorPort, method), f"ExecutorPort 缺少 {method}（调用方将 AttributeError）"
-    # 双版本与审批入口均已删除：端口面不得再暴露（防回流）
-    for gone in ("submit_decisions", "send_message", "asend_message", "validate_followup"):
-        assert not hasattr(ExecutorPort, gone)
+    expected = {
+        "deliver_followup", "cancel",
+        "subscribe_run_events", "unsubscribe_run_events", "get_run_event_history",
+    }
+    exposed = {
+        name for name in dir(ExecutorPort)
+        if not name.startswith("_") and callable(getattr(ExecutorPort, name, None))
+    }
+    assert exposed == expected, (
+        f"ExecutorPort 面漂移：暴露 {sorted(exposed)}，预期 {sorted(expected)}——"
+        "运行时新增/删除公开方法时必须同步本清单与端口定义"
+    )
+    # 端口面全部可在 executor 模块解析（事件族为模块级函数，其余为类方法；
+    # 漏方法即 AttributeError 的根因防御）
+    for name in expected:
+        assert hasattr(ex_mod.BackgroundTaskExecutor, name) or hasattr(ex_mod, name), \
+            f"executor 模块缺少 {name}"
+    # 运行时公开方法凡被服务消费的必须进 expected：新增公开方法时本断言提醒显式决策
+    runtime_public = {
+        name for name, member in inspect.getmembers(ex_mod.BackgroundTaskExecutor, predicate=inspect.isfunction)
+        if not name.startswith("_")
+    }
+    undeclared = runtime_public - expected - {
+        # 运行时自有面（不经端口消费）：启动族与查询族
+        "start", "start_shell", "get", "get_future", "list_for_session", "sources_of",
+        # get_memory：chat_service 直连消费（既有端口旁路，见该调用点）；
+        # pop_followups：entry 级内部辅助（入参 _TaskEntry，非对外语义）
+        "get_memory", "pop_followups",
+    }
+    assert not undeclared, f"运行时公开方法未做端口决策：{sorted(undeclared)}（进 expected 或加入自用清单）"
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from noesis.agents.subagents.async_tools_middleware import build_async_task_identity
 from noesis.runtime.logging import logger
 
 # 长命令后台化提示（工具描述与返回文本共用同一语义）
@@ -74,6 +75,26 @@ class _ExecuteWithBackgroundSchema(BaseModel):
     )
 
 
+def _bg_start_command(task_id: str, description: str, command: str, tool_call_id: str) -> "Command":
+    """后台启动成功返回：ToolMessage 文本 + 任务身份入 async_tasks（与
+    start_async_task 双入口一致，压缩免疫清单对两类任务统一）。"""
+    text = (
+        f"后台命令任务已启动：{task_id}\n"
+        "无需等待——可继续其他工作，之后用 check_async_task 收取 exit code 与输出尾部。"
+    )
+    return Command(update={
+        "messages": [ToolMessage(text, tool_call_id=tool_call_id)],
+        "async_tasks": {task_id: build_async_task_identity({
+            "task_id": task_id,
+            "subagent_type": None,
+            "child_session_id": None,
+            "description": description or command,
+            "status": "running",
+            "run_id": "",
+        })},
+    })
+
+
 def replace_execute_tool(
     filesystem_middleware: Any,
     *,
@@ -124,23 +145,7 @@ def replace_execute_tool(
                 )
             except ValueError as exc:
                 return _reject_background(str(exc), runtime.tool_call_id)
-            return Command(update={
-                "messages": [ToolMessage(
-                    f"后台命令任务已启动：{task_id}\n"
-                    "无需等待——可继续其他工作，之后用 check_async_task 收取 exit code 与输出尾部。",
-                    tool_call_id=runtime.tool_call_id,
-                )],
-                # 双入口一致性：命令任务身份同样入 async_tasks（压缩免疫清单）
-                "async_tasks": {task_id: {
-                    "task_id": task_id,
-                    "agent_name": "shell",
-                    "thread_id": task_id,
-                    "run_id": "",
-                    "status": "running",
-                    "description": description or command,
-                    "created_at": "", "last_checked_at": "", "last_updated_at": "",
-                }},
-            })
+            return _bg_start_command(task_id, description, command, runtime.tool_call_id)
         # 前台：直接调原工具协程（runtime 透传），行为与替换前完全一致
         return await original.coroutine(
             command=command, runtime=runtime, timeout=timeout,
@@ -168,23 +173,7 @@ def replace_execute_tool(
                 )
             except ValueError as exc:
                 return _reject_background(str(exc), runtime.tool_call_id)
-            return Command(update={
-                "messages": [ToolMessage(
-                    f"后台命令任务已启动：{task_id}\n"
-                    "无需等待——可继续其他工作，之后用 check_async_task 收取 exit code 与输出尾部。",
-                    tool_call_id=runtime.tool_call_id,
-                )],
-                # 双入口一致性：命令任务身份同样入 async_tasks（压缩免疫清单）
-                "async_tasks": {task_id: {
-                    "task_id": task_id,
-                    "agent_name": "shell",
-                    "thread_id": task_id,
-                    "run_id": "",
-                    "status": "running",
-                    "description": description or command,
-                    "created_at": "", "last_checked_at": "", "last_updated_at": "",
-                }},
-            })
+            return _bg_start_command(task_id, description, command, runtime.tool_call_id)
         return original.func(command=command, runtime=runtime, timeout=timeout)
 
     replacement = StructuredTool.from_function(

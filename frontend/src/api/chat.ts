@@ -446,7 +446,7 @@ export interface TaskCatalogEntry {
   progress_count?: number
 }
 
-export async function listSessionTaskCatalog(sessionId: string): Promise<{ tasks: TaskCatalogEntry[], pending_approvals: TaskCatalogEntry[] }> {
+export async function listSessionTaskCatalog(sessionId: string): Promise<{ tasks: TaskCatalogEntry[] }> {
   const req = makeRequest('GET', `${location.origin}${BASE}/sessions/${encodeURIComponent(sessionId)}/children/catalog`)
   return parseResponse(await authFetch(req))
 }
