@@ -74,10 +74,19 @@ def event_to_stream_line(event: dict[str, Any]) -> dict[str, Any] | None:
 
 
 class StreamCollector:
-    """消费 stream-json 行，产出与 evals 评测记录同形的 dict。"""
+    """消费 stream-json 行，产出与 evals 评测记录同形的 dict。
+
+    文本按「回合」分段：on_chat_model_end 标记一次 LLM 调用结束，其前
+    累积的流式文本属于该回合。final_text 取**最后一个非空回合**——
+    Agent 中间回合的叙述（「先建任务清单…」）不是交付物，报告类评测
+    只关心终稿；全量拼接会把过程叙述混进判分输入（曾污染 deepresearch
+    基线的文章）。
+    """
 
     def __init__(self) -> None:
         self.text_parts: list[str] = []
+        self.messages: list[str] = []
+        self._current_parts: list[str] = []
         self.tool_stats: dict[str, int] = {}
         self.tool_outputs: list[dict[str, Any]] = []
         self.completed: bool = False
@@ -116,9 +125,15 @@ class StreamCollector:
             })
             return
         if event_name == "on_chat_model_stream":
-            self.text_parts.append(str((line_obj.get("data") or {}).get("text") or ""))
+            text = str((line_obj.get("data") or {}).get("text") or "")
+            self.text_parts.append(text)
+            self._current_parts.append(text)
             return
         if event_name == "on_chat_model_end":
+            message = "".join(self._current_parts).strip()
+            if message:
+                self.messages.append(message)
+            self._current_parts = []
             usage = (line_obj.get("data") or {}).get("usage")
             if isinstance(usage, dict):
                 self.input_tokens += int(usage.get("input_tokens") or 0)
@@ -126,6 +141,9 @@ class StreamCollector:
 
     @property
     def final_text(self) -> str:
+        # 终稿 = 最后一个非空回合；无分段事件时退化为全量拼接（老输出兼容）
+        if self.messages:
+            return self.messages[-1]
         return "".join(self.text_parts).strip()
 
     def to_record(self) -> dict[str, Any]:
@@ -133,6 +151,7 @@ class StreamCollector:
             "completed": self.completed,
             "finish_reason": self.finish_reason,
             "final_text": self.final_text,
+            "all_text": "".join(self.text_parts).strip(),
             "tool_stats": dict(self.tool_stats),
             "tool_outputs": list(self.tool_outputs),
             "input_tokens": self.input_tokens,

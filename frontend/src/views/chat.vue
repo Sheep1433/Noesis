@@ -1292,10 +1292,15 @@ function stopCatalogStream(): void {
 let userSignalSource: EventSource | null = null
 let userSignalConnectedOnce = false
 
-function applyUserSignal(signal: { type?: string, session_id?: string, status?: string }): void {
+function applyUserSignal(signal: { type?: string, session_id?: string, status?: string, run_id?: string }): void {
   const sessionId = signal.session_id
   if (!sessionId) {
     return
+  }
+  // 兜底加入：当前正在看的会话有新 run 启动（典型：后台任务终态触发的
+  // continuation run），会话信令流丢帧时经列表通道加入，避免刷新才可见
+  if (signal.type === 'run-started' && sessionId === currentIndex.value) {
+    sseStream.joinRunIfIdle(sessionId, signal.run_id)
   }
   // 终态：清徽章 + 会话有新活动（排序位置本地先行对齐，下次全量刷新校正）；
   // 后端契约保证所有用户级信令与首帧都携带 status

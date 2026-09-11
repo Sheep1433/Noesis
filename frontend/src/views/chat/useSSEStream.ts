@@ -719,6 +719,21 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     void pumpSessionSignals(sessionId)
   }
 
+  /**
+   * user-signal 兜底加入：会话信令流丢帧时（浏览器后台标签节流 / 单帧
+   * hint 丢失），会话列表通道收到当前会话的 run-started 仍能加入 run。
+   * 守卫与 session-signal 处理器一致：同 run 已在流、本窗口正在流式中
+   * 则跳过。 */
+  function joinRunIfIdle(sessionId: string, runId: string | undefined): void {
+    if (!runId || runId === currentRunId) {
+      return
+    }
+    if (isLoading.value && activeSessionId === sessionId) {
+      return
+    }
+    void resumeActiveRun(sessionId, historyReady?.(sessionId) ?? undefined)
+  }
+
   function stopSessionSignals() {
     // 无需清理重连 timer：传输内核的退避等待可被 abort 打断
     signalAbort?.abort()
@@ -775,6 +790,7 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     stopCurrentRun,
     detachSubscription,
     resumeActiveRun,
+    joinRunIfIdle,
     watchSessionSignals,
     stopSessionSignals,
   }

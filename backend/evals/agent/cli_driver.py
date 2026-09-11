@@ -21,10 +21,14 @@ from typing import Any
 from dotenv import dotenv_values
 
 from noesis_cli.streamjson import StreamCollector, flag_empty_completion
+from noesis.config.user_data_paths import get_workspace_dir
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 EVAL_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 _STDERR_TAIL_CHARS = 2000
+# 终稿短于此长度时按契约路径收报告文件（正常报告篇幅远高于此）
+_HARVEST_MIN_CHARS = 1000
+_REPORT_FILENAME = "final-report.md"
 _MAX_STREAM_LINE_BYTES = 16 * 1024 * 1024
 
 
@@ -142,7 +146,18 @@ async def run_cli_agent(
         # 0=成功 1=运行失败（已带 error）；其他值=CLI 自身崩溃（参数错等）
         record["completed"] = False
         record["error"] = f"cli exited {exit_code}"
-    return flag_empty_completion(record)
+    record = flag_empty_completion(record)
+    # 交付契约的备选形态兜底：终稿过短时按约定路径收 /workspace/final-report.md
+    # （契约见 EVAL_MODE_SUFFIX；不猜文件——计划/笔记/多报告都会让启发式误判）
+    if not record.get("error") and len(str(record.get("final_text") or "")) < _HARVEST_MIN_CHARS:
+        report = Path(get_workspace_dir(user_id, session_id)) / _REPORT_FILENAME
+        if report.is_file() and report.stat().st_size > _HARVEST_MIN_CHARS:
+            try:
+                record["final_text"] = report.read_text(encoding="utf-8")
+                record["article_source"] = f"workspace_file:{_REPORT_FILENAME}"
+            except OSError:
+                pass
+    return record
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:

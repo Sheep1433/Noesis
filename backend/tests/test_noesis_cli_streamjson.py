@@ -86,3 +86,25 @@ def test_event_to_stream_line_serializable_tool_input():
     # 无 usage 的 model_end、无关事件不产出行
     assert event_to_stream_line({"event": "on_chat_model_end", "data": {"output": None}}) is None
     assert event_to_stream_line({"type": "unknown"}) is None
+
+
+def test_final_text_takes_last_message_not_narration():
+    """终稿只取最后一个完整回合：中间回合的过程叙述不得混进判分输入。"""
+    collector = StreamCollector()
+    _feed(
+        collector,
+        {"event": "on_chat_model_stream", "data": {"chunk": type("C", (), {"content": "先建任务清单，并行委派检索。"})()}},
+        {"event": "on_chat_model_end", "data": {
+            "output": type("O", (), {"usage_metadata": {"input_tokens": 10, "output_tokens": 2}})()}},
+        {"event": "on_tool_start", "name": "start_task", "run_id": "t1", "data": {"input": {}}},
+        {"event": "on_tool_end", "name": "start_task", "run_id": "t1", "data": {"output": "ok"}},
+        {"event": "on_chat_model_stream", "data": {"chunk": type("C", (), {"content": "# 调研报告\n\n正文…"})()}},
+        {"event": "on_chat_model_end", "data": {
+            "output": type("O", (), {"usage_metadata": {"input_tokens": 20, "output_tokens": 5}})()}},
+        {"type": "__tw_finish__", "finish_reason": "stop"},
+    )
+    record = collector.to_record()
+    assert record["final_text"].startswith("# 调研报告")
+    assert "先建任务清单" not in record["final_text"]
+    # 全量文本仍可查（过程审计用）
+    assert "先建任务清单" in record["all_text"]

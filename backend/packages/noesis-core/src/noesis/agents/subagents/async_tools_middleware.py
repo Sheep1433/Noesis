@@ -357,6 +357,22 @@ class AsyncSubagentToolsMiddleware(
                     "subagent_type": subagent_type, "description": description,
                     "status": BgTaskStatus.RUNNING.value, "run_id": run_id or "",
                 })
+            except asyncio.CancelledError:
+                # 子 Agent 任务自身被取消（硬超时/回收）会穿透 shield 炸掉
+                # 主运行——曾三次在评测中复现（Node 'tools' raised
+                # CancelledError）。内层取消降级为可收部分结果的提示；
+                # 外部取消（主运行停止）必须原样传播。
+                if future.done() and future.cancelled():
+                    text = (
+                        f"子 Agent 任务已终止（超时或取消）：{child_session_id or task_id}\n"
+                        "部分产出仍在回收中，可用 check_async_task 收取。"
+                    )
+                    return _command_with_identity(tool_call_id, text, {
+                        "task_id": task_id, "child_session_id": child_session_id or task_id,
+                        "subagent_type": subagent_type, "description": description,
+                        "status": BgTaskStatus.TIMED_OUT.value, "run_id": run_id or "",
+                    })
+                raise
             task = BackgroundTaskExecutor.get(task_id) or {"task_id": task_id, "status": "unknown"}
             public_id = str(task.get("child_session_id") or child_session_id or task_id)
             status = task.get("status")
