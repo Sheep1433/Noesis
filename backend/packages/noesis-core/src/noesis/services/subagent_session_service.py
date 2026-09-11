@@ -277,19 +277,12 @@ class SubagentSessionService:
         decisions: list,
         db: AsyncSession,
     ) -> TAgentRun:
+        """子 Agent 无待审批操作：后台任务全自主运行（危险命令经工具层
+        确定性拒绝，无人值守不挂审批）。保留入口仅为给出明确 409。"""
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
             raise NotFoundException(message="子 Agent run 不存在")
-        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundTaskExecutor
-
-        # 归一化：pydantic → 纯 dict（langchain HITL 中间件按下标取值，
-        # 对象会 TypeError 崩掉整个子 Agent）；reject 缺 message 补统一默认
-        decision_payloads = normalize_hitl_decisions(decisions)
-        try:
-            BackgroundTaskExecutor.submit_decisions(run.session_id, decision_payloads)
-        except ValueError as exc:
-            raise ConflictException(message=str(exc)) from exc
-        return await cls._wait_run(db, run_id, user_id, predicate=lambda row: row.status != RunStatus.HITL_PENDING.value)
+        raise ConflictException(message="子 Agent 任务无待审批操作")
 
     @classmethod
     async def stop_run(cls, *, run_id: str, user_id: str, db: AsyncSession) -> "RunSnapshot":
@@ -671,82 +664,7 @@ class SubagentSessionService:
                     raise
                 await asyncio.sleep(0.2)
 
-    @classmethod
-    async def mark_waiting_approval(
-        cls,
-        run_id: str,
-        interrupt: dict,
-        *,
-        content: dict,
-        sequence: int,
-        assistant_message_id: Optional[str] = None,
-        usage: Optional[dict] = None,
-    ) -> None:
-        """run 进入待审批的原子落库：run 状态 + 快照 + assistant 消息投影。
 
-        消息与快照同源（被中断工具段为 approval_pending）；消息不更新的话
-        重开抽屉时工具行仍是 running（扫光），与等待审批的事实不符。
-        usage 为中断前的管道累计（种子）：resume 后的 turn 终态与之合并，
-        该轮 extra.usage 才完整覆盖中断前后全部模型调用。
-        """
-        from noesis.storage.postgres.manager import pg_manager
-
-        now = _now_ms()
-        snapshot = dict(content)
-        snapshot["_pending_hitl"] = interrupt
-        if usage:
-            snapshot["_hitl_usage"] = dict(usage)
-        async with pg_manager.get_async_session_context() as db:
-            run_result = await db.execute(
-                update(TAgentRun)
-                .where(
-                    TAgentRun.id == run_id,
-                    TAgentRun.last_sequence <= sequence,
-                    TAgentRun.status.in_([
-                        RunStatus.QUEUED.value,
-                        RunStatus.RUNNING.value,
-                    ]),
-                )
-                .values(
-                    status=RunStatus.HITL_PENDING.value,
-                    last_sequence=sequence,
-                    snapshot=snapshot,
-                    updated_at=now,
-                )
-            )
-            if run_result.rowcount != 1:
-                await db.rollback()
-                return
-            if assistant_message_id:
-                await db.execute(
-                    update(TChatMessage)
-                    .where(TChatMessage.id == assistant_message_id)
-                    .values(content=content)
-                )
-            await db.commit()
-
-    @classmethod
-    async def mark_resumed(cls, run_id: str) -> None:
-        from noesis.storage.postgres.manager import pg_manager
-
-        now = _now_ms()
-        async with pg_manager.get_async_session_context() as db:
-            result = await db.execute(select(TAgentRun).where(TAgentRun.id == run_id))
-            run = result.scalar_one_or_none()
-            snapshot = dict(run.snapshot or {}) if run is not None else {}
-            snapshot.pop("_pending_hitl", None)
-            # _hitl_usage（中断前审计种子）保留至终态：mark_terminal 统一摘除
-            await db.execute(
-                update(TAgentRun)
-                .where(TAgentRun.id == run_id, TAgentRun.status == RunStatus.HITL_PENDING.value)
-                .values(
-                    status=RunStatus.RUNNING.value,
-                    snapshot=snapshot,
-                    last_sequence=TAgentRun.last_sequence + 1,
-                    updated_at=now,
-                )
-            )
-            await db.commit()
 
     @classmethod
     async def mark_terminal(

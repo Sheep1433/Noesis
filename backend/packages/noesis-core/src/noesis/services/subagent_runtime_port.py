@@ -31,7 +31,6 @@ def child_session_summary(task: dict, *, parent_id: str) -> dict:
         "step_count": task.get("progress_count", 0),
         "started_at": task.get("started_at"),
         "finished_at": task.get("completed_at"),
-        "interrupt": task.get("interrupt"),
     }
 
 
@@ -67,14 +66,6 @@ class SubagentSessionPort:
         return await _service().persist_projection(*args, **kwargs)
 
     @staticmethod
-    async def mark_waiting_approval(*args: Any, **kwargs: Any) -> Any:
-        return await _service().mark_waiting_approval(*args, **kwargs)
-
-    @staticmethod
-    async def mark_resumed(*args: Any, **kwargs: Any) -> Any:
-        return await _service().mark_resumed(*args, **kwargs)
-
-    @staticmethod
     async def mark_terminal(*args: Any, **kwargs: Any) -> Any:
         return await _service().mark_terminal(*args, **kwargs)
 
@@ -97,10 +88,6 @@ class ExecutorPort:
     @staticmethod
     async def asend_message(*args: Any, **kwargs: Any) -> Any:
         return await _executor().asend_message(*args, **kwargs)
-
-    @staticmethod
-    def submit_decisions(*args: Any, **kwargs: Any) -> Any:
-        return _executor().submit_decisions(*args, **kwargs)
 
     @staticmethod
     def cancel(*args: Any, **kwargs: Any) -> Any:

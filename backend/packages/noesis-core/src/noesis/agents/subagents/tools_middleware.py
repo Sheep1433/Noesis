@@ -61,7 +61,6 @@ PRIVATE_STATE_KEYS: tuple[str, ...] = ("bg_tasks",)
 _CHECK_PENDING_HINT = {
     BgTaskStatus.QUEUED: "排队中",
     BgTaskStatus.RUNNING: "仍在运行",
-    BgTaskStatus.AWAITING_APPROVAL: "等待用户审批",
 }
 
 _TYPES_PROMPT_HEADER = "可用的子 Agent 角色类型（start_task 的 subagent_type）："
@@ -327,12 +326,6 @@ class NoesisSubagentMiddleware(
                 # Keep the task id in every foreground terminal response so the
                 # client can link the inline card to its persisted conversation.
                 text = f"任务完成（{public_id}）：\n{task.get('result') or '(无结果文本)'}"
-                return _command_with_identity(tool_call_id, text, task)
-            if status == BgTaskStatus.AWAITING_APPROVAL.value:
-                text = (
-                    f"任务等待用户审批（{public_id}）。审批通过后任务继续后台运行，"
-                    "稍后用 check_task 收结果。"
-                )
                 return _command_with_identity(tool_call_id, text, task)
             if status in (BgTaskStatus.FAILED.value, BgTaskStatus.TIMED_OUT.value):
                 return f"任务{status}（{task_id}）：{task.get('error') or ''}"

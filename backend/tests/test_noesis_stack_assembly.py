@@ -125,7 +125,9 @@ def test_stack_compiles_with_langchain() -> None:
     )
 
 
-def test_raw_task_worker_has_only_one_hitl_middleware() -> None:
+def test_task_worker_has_no_hitl_middleware() -> None:
+    """worker 无审批（无人值守，危险命令经工具层拒绝）：编译可用且
+    SUBAGENT 栈内零 HumanInTheLoopMiddleware。"""
     @tool
     def dangerous(value: str) -> str:
         """A tool that requires approval."""
@@ -138,18 +140,14 @@ def test_raw_task_worker_has_only_one_hitl_middleware() -> None:
             "noesis.factory.ModelConfig",
             SimpleNamespace(summarization_enabled=False, tool_output_max_chars=24_000, max_retries=6),
         ),
-        patch("noesis.factory.HitlConfig", SimpleNamespace(enabled=True)),
     ):
-        worker = _compile_task_worker(
+        _compile_task_worker(
             _Backend(),  # type: ignore[arg-type]
             [dangerous],
             [],
             user_id="user-1",
-            interrupt_on={"dangerous": True},
         )
 
-    # 后台 worker：HITL 只挂一个 HumanInTheLoopMiddleware（来自 super_agent 侧，
-    # SUBAGENT 栈本身不含）；后台执行/审批续跑由 BackgroundTaskExecutor 负责
     stack = build_noesis_stack(
         NoesisStackDeps(
             profile="SUBAGENT",

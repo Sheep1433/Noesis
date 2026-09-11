@@ -13,11 +13,6 @@
 执行器类型无关：subagent 特性（worker 工厂 / followup / 落库投影）经
 注入携带，状态机、并发上限、协作停止对两类任务一致。
 
-HITL 工具审批：子 Agent 带 checkpointer + interrupt_on 编译，遇审批工具
-时 LangGraph 落 checkpoint 并 interrupt；executor 捕获 ``__interrupt__``
-转 ``awaiting_approval``，审批经 ``Command(resume={"decisions": [...]})``
-在同一 thread 续跑（与主 run HITL 的 resume 契约一致）。
-
 执行面（协程、future、followup 队列）完全在进程内：注册表在内存，
 进程重启即丢（接受的设计限制，启动对账收口遗留 run）。
 """
@@ -38,9 +33,7 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.types import Command
 from noesis.chat.delivery.events import (
-    HitlRequired,
     RunAborted,
     RunCompleted,
     RunError,
@@ -80,7 +73,6 @@ STOP_RECONCILE_SECONDS = 30.0
 class BgTaskStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    AWAITING_APPROVAL = "awaiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -100,7 +92,6 @@ class BgTaskStatus(str, Enum):
 # 停止是乐观终态（受理即 CANCELLED），无中间收口态占槽
 _SLOT_STATUSES = frozenset({
     BgTaskStatus.RUNNING,
-    BgTaskStatus.AWAITING_APPROVAL,
 })
 
 
@@ -137,7 +128,6 @@ class BackgroundTask:
     status: BgTaskStatus = BgTaskStatus.RUNNING
     result: Optional[str] = None
     error: Optional[str] = None
-    interrupt: Optional[dict[str, Any]] = None
     # 协作停止请求的终止原因（cancelled / timed_out）；非 None 即停止已受理
     stop_reason: Optional[str] = None
     started_at: float = field(default_factory=time.time)
@@ -172,7 +162,6 @@ class BackgroundTask:
             "status": self.status.value,
             "result": self.result,
             "error": self.error,
-            "interrupt": self.interrupt,
             "stop_reason": self.stop_reason,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
@@ -233,10 +222,10 @@ def _ensure_loop() -> asyncio.AbstractEventLoop:
 def _loop_timer_arm(entry: _TaskEntry, attr: str, delay: float, callback) -> None:
     """在隔离 loop 线程内挂定时器（先摘旧句柄，新句柄写回 entry.<attr>）。
 
-    submit_decisions / cancel / start 在主线程触发挂载：直接
+    cancel / start 在主线程触发挂载：直接
     ``loop.call_later`` 是跨线程 heappush——asyncio loop 非线程安全，
     与 loop 自身的堆操作竞态会破坏堆序（曾致新看门狗被提前 ~11 分钟
-    弹出，HITL 恢复后的 turn 3.7 分钟即被旧预算硬杀）。挂载统一调度
+    弹出）。挂载统一调度
     回 loop 线程执行；摘除保持即时 cancel（TimerHandle 置标志即生效）。
     """
     loop = _ensure_loop()
@@ -304,7 +293,6 @@ class _TaskEntry:
     recursion_limit: int
     # > 0 时 watchdog 超时取消执行 future；0 = 不限时（shell 任务默认）
     timeout_seconds: float
-    hitl_timeout_seconds: float
     followup_factory: Optional[Callable[[str, str, Optional[str]], Any]] = None
     # 排队唤醒时按该值判断槽位（executor 实例不共享，cap 记在条目上）
     session_max_concurrent: int = 1
@@ -331,8 +319,6 @@ class _TaskEntry:
     # 当前执行协程的 future（用于超时/取消）
     future: Optional[Future] = None
     watchdog_handle: Optional[asyncio.TimerHandle] = None
-    # 审批挂起时的投影种子：resume 续写同一 assistant 消息（预中断 parts 恢复）
-    turn_seed_content: Optional[dict[str, Any]] = None
     # 协作停止信号：cancel 受理时置位（线程同步可见），执行循环在静止边界
     # 观察退出。停止已是乐观终态（受理即落 CANCELLED），该信号只驱动执行侧
     # 干净退出，不构成对外状态
@@ -349,12 +335,6 @@ class _TaskEntry:
     # 已完成 turn 的 usage 累计（数值字段相加）：实时统计发布时与当前
     # turn 的 bridge.message_usage 合并，保证跨轮口径与终态 DB 重建一致
     accumulated_usage: Optional[dict[str, Any]] = None
-    # HITL 挂起时的前半段 usage 种子：resume 后续 turn 终态合并，
-    # 该轮 extra.usage 覆盖中断前后全部模型调用（DB 快照另存 _hitl_usage 审计）
-    hitl_usage_seed: Optional[dict[str, Any]] = None
-    # HITL 前半段模型调用明细种子：与 hitl_usage_seed 同生命周期，
-    # resume 后续 turn 终态拼接（extra.model_calls 覆盖中断前后全部调用）
-    hitl_model_calls_seed: Optional[list[dict[str, Any]]] = None
     # 协作停止宽限（秒）：executor 实例配置
     stop_grace_seconds: float = STOP_GRACE_SECONDS
     # 硬杀后强制终态对账延迟（秒）：executor 实例配置
@@ -580,8 +560,6 @@ def _publish_run_event(
             payload["finished_at"] = task.completed_at
         if content is not None:
             payload["content"] = content
-            if isinstance(content, dict) and isinstance(content.get("_pending_hitl"), dict):
-                payload["pending_hitl"] = content["_pending_hitl"]
         if context is not None:
             payload["context"] = context
         subscribers = list(core.subscribers)
@@ -642,7 +620,6 @@ TASK_TIMEOUT_SECONDS = 900.0
 # 后台命令任务超时：默认 0=不限时（长命令正是后台化动机，防泄漏靠
 # cancel_task + 会话容器生命周期兜底）
 SHELL_TASK_TIMEOUT_SECONDS = 0.0
-HITL_TIMEOUT_SECONDS = 86400.0
 # followup 消息上限（超出丢最旧）
 MAX_FOLLOWUPS = 10
 # 执行过程摘要上限（超出丢最旧）
@@ -881,7 +858,6 @@ class BackgroundTaskExecutor:
         max_concurrent_per_session: int = MAX_CONCURRENT_PER_SESSION,
         task_timeout_seconds: float = TASK_TIMEOUT_SECONDS,
         shell_task_timeout_seconds: float = SHELL_TASK_TIMEOUT_SECONDS,
-        hitl_timeout_seconds: float = HITL_TIMEOUT_SECONDS,
         stop_grace_seconds: float = STOP_GRACE_SECONDS,
         stop_reconcile_seconds: float = STOP_RECONCILE_SECONDS,
         recursion_limit: int = 9999,
@@ -889,7 +865,6 @@ class BackgroundTaskExecutor:
         self._max_concurrent = max(1, max_concurrent_per_session)
         self._task_timeout = task_timeout_seconds
         self._shell_timeout = max(0.0, shell_task_timeout_seconds)
-        self._hitl_timeout = hitl_timeout_seconds
         self._stop_grace = max(1.0, stop_grace_seconds)
         self._stop_reconcile = max(1.0, stop_reconcile_seconds)
         self._recursion_limit = recursion_limit
@@ -927,14 +902,6 @@ class BackgroundTaskExecutor:
                 if entry.task.session_id == session_id
             }
         return sorted(tasks.values(), key=lambda t: t["started_at"])
-
-    @staticmethod
-    def pending_approvals(session_id: str) -> list[dict[str, Any]]:
-        return [
-            t
-            for t in BackgroundTaskExecutor.list_for_session(session_id)
-            if t["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-        ]
 
     # -- 启动 ---------------------------------------------------------
 
@@ -982,7 +949,6 @@ class BackgroundTaskExecutor:
             followup_factory=followup_factory,
             recursion_limit=self._recursion_limit,
             timeout_seconds=self._task_timeout,
-            hitl_timeout_seconds=self._hitl_timeout,
             # 创建时档位继承：start 在父 run 上下文调用（ContextVar 可见）；
             # worker 在隔离 loop 编译前经 _arun 显式设置回该档位
             turn_reasoning_effort=get_request_reasoning_effort(),
@@ -1002,8 +968,7 @@ class BackgroundTaskExecutor:
     ) -> str:
         """启动后台命令任务（kind="shell"）：不经 worker 编译，直接经
         backend 执行；任务超时独立（shell_task_timeout_seconds，默认 0=不限
-        时），并发上限与状态机复用。无 awaiting_approval（审批在工具调用时
-        已发生）。
+        时），并发上限与状态机复用。
 
         ``timeout`` 为命令级超时（透传 backend）：None 用默认（1h）；
         docker runner 侧 0=不限时（local_shell 不接受 0，同前台语义）。
@@ -1023,7 +988,6 @@ class BackgroundTaskExecutor:
             agent_factory=None,
             recursion_limit=self._recursion_limit,
             timeout_seconds=self._shell_timeout,
-            hitl_timeout_seconds=self._hitl_timeout,
             shell_backend=backend,
             shell_command_timeout=(
                 timeout if timeout is not None else _SHELL_DEFAULT_COMMAND_TIMEOUT
@@ -1104,7 +1068,7 @@ class BackgroundTaskExecutor:
     ) -> dict[str, Any]:
         """followup-turn：向子任务追加一个 turn。
 
-        - running / awaiting_approval：入队，当前 turn 结束后链式开新 turn
+        - running：入队，当前 turn 结束后链式开新 turn
         - completed / cancelled：冷恢复——同 thread 开新 turn，任务回到
           running（执行/意图分离：停止只终止执行，续聊意图保留）
         - shell / failed / timed_out：拒绝
@@ -1232,7 +1196,6 @@ class BackgroundTaskExecutor:
             task.run_id = str(launch.get("run_id") or "") or None
             task.assistant_message_id = str(launch.get("assistant_message_id") or "") or None
             task.projection_sequence = 0
-            entry.turn_seed_content = None
             # 创建窗口内已受理停止：不提交执行——宽限 watchdog 对账时
             # task.run_id 已是新 run，终态化正确收口
             stopped_during_launch = entry.cooperative_stop_signalled
@@ -1263,40 +1226,7 @@ class BackgroundTaskExecutor:
             entry = _find_entry_locked(task_id)
             return entry.future if entry else None
 
-    # -- 审批 / 取消 ---------------------------------------------------
-
-    @staticmethod
-    def submit_decisions(
-        task_id: str, decisions: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """审批决策（approve / reject）→ 在同一 thread 续跑子 Agent。"""
-        with _TASKS_LOCK:
-            entry = _find_entry_locked(task_id)
-            if entry is None:
-                raise ValueError(_TASK_NOT_FOUND.format(task_id=task_id))
-            if entry.task.status != BgTaskStatus.AWAITING_APPROVAL:
-                raise ValueError(
-                    f"任务不在待审批状态（当前 {entry.task.status.value}）"
-                )
-            entry.task.status = BgTaskStatus.RUNNING
-            entry.task.interrupt = None
-        _publish_task_event(entry.task, "followup")
-        # approval.resumed 的序号由投递内核分配（durable 事件逐条占号）
-        _publish_run_event(entry.task, "approval.resumed")
-        if entry.task.run_id:
-            from noesis.runtime.main_loop import run_on_main_loop
-            from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
-
-            run_on_main_loop(
-                SubagentSessionService.mark_resumed(entry.task.run_id),
-                name=f"subagent-resume:{entry.task.run_id}",
-            )
-        loop = _ensure_loop()
-        entry.future = _submit_isolated(
-            loop, _arun(entry, resume_command=Command(resume={"decisions": decisions})),
-        )
-        _arm_watchdog(entry)
-        return entry.task.to_dict(include_progress=False)
+    # -- 取消 ---------------------------------------------------------
 
     @staticmethod
     def cancel(task_id: str) -> dict[str, Any]:
@@ -1306,7 +1236,7 @@ class BackgroundTaskExecutor:
         - 部分成果回收与终态通知在后台异步完成：投影回收（跨 loop DB 往返，
           大投影可达秒级）不挡受理路径；通知在回收完成后发送（含部分成果）
         - 已终态幂等返回；回收失败由对账 watchdog 兜底（通知降级发送）
-        - queued / awaiting_approval：无进行中的步骤，即时终态
+        - queued：无进行中的步骤，即时终态
         """
         with _TASKS_LOCK:
             entry = _find_entry_locked(task_id)
@@ -1327,8 +1257,8 @@ class BackgroundTaskExecutor:
                 _arm_stop_grace(entry)
                 snapshot = task.to_dict(include_progress=False)
             else:
-                # queued（无执行 future）/ awaiting_approval（步骤已静止）/
-                # shell（命令在 backend 不可中断，无协作边界）：即时终态
+                # queued（无执行 future）/ shell（命令在 backend 不可中断，
+                # 无协作边界）：即时终态
                 _disarm_watchdog(entry)
                 if task.status == BgTaskStatus.QUEUED:
                     _dequeue_locked(task)
@@ -1438,10 +1368,8 @@ def _pop_first_followup(entry: _TaskEntry) -> Optional[tuple[str, Optional[str],
 
 @dataclass
 class _TurnOutcome:
-    """统一管道单 turn 的结果：驱动 executor 的审批挂起 / 终态 / followup 决策。"""
+    """统一管道单 turn 的结果：驱动 executor 的终态 / followup 决策。"""
 
-    # 非 None：本 turn 挂起等待审批（stream_agent_events 的 hitl-required 事件）
-    hitl_payload: Optional[dict[str, Any]] = None
     finish_reason: str = "stop"
     usage: dict[str, Any] = field(default_factory=dict)
     # 本 turn 每次模型调用明细（RunCompleted.model_calls 捕获），
@@ -1487,8 +1415,8 @@ _PARTIAL_RESULT_MAX_CHARS = 4000
 
 
 def _try_transition(task: BackgroundTask, next_status: BgTaskStatus) -> bool:
-    """非终态状态写入收口（RUNNING / AWAITING_APPROVAL 恢复）：
-    终态不得被覆写（乐观停止受理即落 CANCELLED，执行侧的恢复/审批/
+    """非终态状态写入收口（RUNNING 恢复）：
+    终态不得被覆写（乐观停止受理即落 CANCELLED，执行侧的恢复/
     followup 写入不得复活已停任务）。
 
     执行侧恢复/审批写入经此在同一把锁下复查——互斥关闭「检查后写入」
@@ -1894,7 +1822,7 @@ async def _run_turn_via_pipeline(
 ) -> _TurnOutcome:
     """单 turn 经统一管道执行：astream_events → RuntimeEventMapper → typed RunEvent。
 
-    与主链路同一条事件映射（usage 累计 / 上下文快照 / HITL 投影语义同源）；
+    与主链路同一条事件映射（usage 累计 / 上下文快照语义同源）；
     本函数只做 executor 侧消费：进度摘要、子会话投影、快照发布与终态汇总。
     """
     session_id = task.child_session_id or task.task_id
@@ -1907,10 +1835,6 @@ async def _run_turn_via_pipeline(
         session_id=session_id,
         message_id=task.assistant_message_id or bridge.assistant_message_id,
     )
-    if entry.turn_seed_content is not None:
-        # 审批 resume：续写同一 assistant 消息（预中断 parts 由种子恢复）
-        builder.load_from_content_dict(entry.turn_seed_content)
-        entry.turn_seed_content = None
     ctx = new_stream_ctx()
     mapper = RuntimeEventMapper(bridge)
     outcome = _TurnOutcome()
@@ -1932,11 +1856,8 @@ async def _run_turn_via_pipeline(
                     transient=event.event in ("text-delta", "reasoning-delta", "stats-update"),
                 )
                 continue
-            if isinstance(event, HitlRequired):
-                outcome.hitl_payload = dict(event.payload)
-                outcome.content = builder.to_dict()
-            elif isinstance(event, RunPaused):
-                outcome.finish_reason = event.finish_reason or "hitl_pending"
+            if isinstance(event, RunPaused):
+                outcome.finish_reason = event.finish_reason or "paused"
                 if event.usage:
                     outcome.usage = dict(event.usage)
                 if event.model_calls:
@@ -2003,14 +1924,6 @@ async def _run_turn_via_pipeline(
                 if entry.cooperative_stop_signalled:
                     outcome.cooperative_stop = True
                     break
-        # 停止受理期间触发 HITL：不进入审批等待，直接按停止收尾
-        if (
-            entry.cooperative_stop_signalled
-            and outcome.hitl_payload is not None
-        ):
-            outcome.hitl_payload = None
-            outcome.cooperative_stop = True
-            break
     if outcome.cooperative_stop:
         # 静止边界退出：投影已在边界发布（含最后一步产出）；usage 取已累计值
         outcome.fallback_error = _final_model_fallback_error(last_ai_message)
@@ -2020,19 +1933,9 @@ async def _run_turn_via_pipeline(
     _consume(mapper.finalize())
     outcome.fallback_error = _final_model_fallback_error(last_ai_message)
     outcome.content = builder.to_dict()
-    # HITL 续跑轮：合并中断前种子（本 turn bridge 只累计后半段）
-    seed = entry.hitl_usage_seed
-    if seed is not None:
-        entry.hitl_usage_seed = None
-        outcome.usage = merge_usage(seed, outcome.usage or {})
-    seed_calls = entry.hitl_model_calls_seed
-    if seed_calls is not None:
-        entry.hitl_model_calls_seed = None
-        outcome.model_calls = merge_model_calls(seed_calls, outcome.model_calls)
     # 最终投影：末段文本在 finish 时才 flush 进 builder，此处发布一次完整内容
-    # （与旧 values 模式最后一个 chunk 含最终文本的可见节奏一致；
-    #  HITL 挂起走 mark_waiting_approval 专用投影，不在此重复发布）
-    if task.run_id and outcome.hitl_payload is None and outcome.content.get("parts"):
+    # （与旧 values 模式最后一个 chunk 含最终文本的可见节奏一致）
+    if task.run_id and outcome.content.get("parts"):
         await _persist_child_projection(task, outcome.content)
     return outcome
 
@@ -2041,12 +1944,10 @@ async def _arun(
     entry: _TaskEntry,
     *,
     initial_source: Any = None,
-    resume_command: Optional[Command] = None,
 ) -> None:
     """执行一轮或多轮 turn。
 
     - start：initial_source 为原始 description 的 HumanMessage state
-    - 审批 resume：resume_command 为 Command(resume=decisions)
     - 冷恢复（send_message 对 completed 任务）：initial_source 为追加消息
     - kind="shell"：分派到 _arun_shell（无 worker / 无 turn 概念）
     turn 正常结束后若 followup 队列非空，链式开下一个 turn（同 thread
@@ -2076,16 +1977,11 @@ async def _arun(
             if started_future is not None:
                 await asyncio.wrap_future(started_future)
         agent = await _ensure_agent(entry)
-        # 首轮输入：优先显式 resume command（审批续跑），
-        # 否则 initial_source（start 的 description / 冷恢复的追加消息）
+        # 首轮输入：initial_source（start 的 description / 冷恢复的追加消息）
         source = (
-            resume_command
-            if resume_command is not None
-            else (
-                initial_source
-                if initial_source is not None
-                else {"messages": [HumanMessage(content=task.prompt or task.description)]}
-            )
+            initial_source
+            if initial_source is not None
+            else {"messages": [HumanMessage(content=task.prompt or task.description)]}
         )
         while True:
             outcome = await _run_turn_via_pipeline(entry, task, agent, source)
@@ -2100,49 +1996,6 @@ async def _arun(
                 # 协作停止在静止边界退出：统一取消收尾（部分成果保留）
                 await _finalize_stop(entry, task, outcome)
                 return
-            if outcome.hitl_payload is not None:
-                payload = outcome.hitl_payload
-                # 停止在流结束与审批写入间受理：取消收尾（不进 awaiting_approval）
-                if not _try_transition(task, BgTaskStatus.AWAITING_APPROVAL):
-                    await _finalize_stop(entry, task, outcome)
-                    return
-                # HITL 的 ActionRequest 由 stream_agent_events 的 enrich_action_requests
-                # 按名回填 tool_call_id；bridge 已把被中断工具段置 approval_pending。
-                task.interrupt = payload
-                # 种子无条件保存（无 run_id 场景同样需要 resume 合并；usage 审计另走 run 快照）
-                entry.turn_seed_content = copy.deepcopy(outcome.content)
-                entry.hitl_usage_seed = dict(outcome.usage) if outcome.usage else None
-                entry.hitl_model_calls_seed = list(outcome.model_calls) if outcome.model_calls else None
-                if task.run_id:
-                    from noesis.services.subagent_runtime_port import SubagentSessionPort as SubagentSessionService
-                    from noesis.runtime.main_loop import run_on_main_loop
-
-                    db_content = copy.deepcopy(outcome.content)
-                    hitl_future = run_on_main_loop(
-                        SubagentSessionService.mark_waiting_approval(
-                            task.run_id,
-                            payload,
-                            content=db_content,
-                            sequence=task.projection_sequence,
-                            assistant_message_id=task.assistant_message_id,
-                            usage=outcome.usage or None,
-                        ),
-                        name=f"subagent-hitl:{task.run_id}",
-                    )
-                    if hitl_future is not None:
-                        await asyncio.wrap_future(hitl_future)
-                    publish_content = copy.deepcopy(outcome.content)
-                    publish_content["_pending_hitl"] = payload
-                    _publish_run_event(task, "approval.required", content=publish_content)
-                _publish_task_event(task, "awaiting_approval")
-                _disarm_watchdog(entry)
-                _arm_hitl_watchdog(entry)
-                logger.info(
-                    "bg subagent awaiting approval task_id={} actions={}",
-                    task.task_id,
-                    len(payload.get("action_requests") or []),
-                )
-                return
             if outcome.final_text:
                 task.result = outcome.final_text
             if outcome.truncated:
@@ -2153,8 +2006,7 @@ async def _arun(
                     f"输出截断（finish_reason=length）：\n{partial}"
                     if partial else "输出截断（finish_reason=length）"
                 )
-            # 实时统计的跨轮累计：本 turn usage 并入（HITL 暂停路径不经此处，
-            # 由 hitl_usage_seed 在 resume turn 的 outcome 中合并，无重复计数）
+            # 实时统计的跨轮累计：本 turn usage 并入
             if outcome.usage:
                 entry.accumulated_usage = merge_usage(
                     entry.accumulated_usage, outcome.usage,
@@ -2534,11 +2386,6 @@ def _disarm_watchdog(entry: _TaskEntry) -> None:
         entry.watchdog_handle = None
 
 
-def _arm_hitl_watchdog(entry: _TaskEntry) -> None:
-    """审批超时按拒绝续跑（对齐主 run HITL 超时语义）。"""
-    _loop_timer_arm(entry, "watchdog_handle", entry.hitl_timeout_seconds, _on_hitl_timeout)
-
-
 def _on_task_timeout(entry: _TaskEntry) -> None:
     """任务总时限：乐观终态（TIMED_OUT）+ 协作停止信号 + 宽限 watchdog。
 
@@ -2552,7 +2399,7 @@ def _on_task_timeout(entry: _TaskEntry) -> None:
     shell_hard = False
     with _TASKS_LOCK:
         task = entry.task
-        if task.status.is_terminal or task.status == BgTaskStatus.AWAITING_APPROVAL:
+        if task.status.is_terminal:
             return
         if task.kind == "shell":
             shell_hard = True
@@ -2582,22 +2429,6 @@ def _on_timeout_hard(entry: _TaskEntry) -> None:
             stop_reason="timed_out",
         ),
     )
-
-
-def _on_hitl_timeout(entry: _TaskEntry) -> None:
-    if entry.task.status != BgTaskStatus.AWAITING_APPROVAL:
-        return
-    logger.warning("bg subagent approval timeout task_id={}", entry.task.task_id)
-    try:
-        BackgroundTaskExecutor.submit_decisions(
-            entry.task.task_id,
-            [{"type": "reject", "message": "审批超时，已自动拒绝"}],
-        )
-    except Exception:
-        logger.opt(exception=True).error(
-            "bg subagent approval timeout reject failed task_id={}",
-            entry.task.task_id,
-        )
 def shutdown() -> None:
     """清空注册表并停掉隔离 loop（测试 / 进程退出用）。"""
     with _TASKS_LOCK:
@@ -2628,7 +2459,6 @@ class _ExecutorRuntimePort:
     # 分支在返回前完成新 run 创建），缺失即所有用户侧 followup 请求
     # AttributeError
     asend_message = staticmethod(BackgroundTaskExecutor.asend_message)
-    submit_decisions = staticmethod(BackgroundTaskExecutor.submit_decisions)
     cancel = staticmethod(BackgroundTaskExecutor.cancel)
     subscribe_run_events = staticmethod(subscribe_run_events)
     unsubscribe_run_events = staticmethod(unsubscribe_run_events)

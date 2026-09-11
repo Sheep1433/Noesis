@@ -63,7 +63,7 @@ def _wait_terminal(executor: BackgroundTaskExecutor, task_id: str, timeout: floa
     while time.time() < deadline:
         task = executor.get(task_id)
         assert task is not None
-        if task["status"] == BgTaskStatus.AWAITING_APPROVAL.value or task["status"] in {
+        if task["status"] in {
             BgTaskStatus.COMPLETED.value,
             BgTaskStatus.FAILED.value,
             BgTaskStatus.CANCELLED.value,
@@ -359,19 +359,16 @@ def _execute_call(command: str, call_id: str = "call_exec", **extra: Any) -> AIM
     )
 
 
-def _build_full_agent(tmp_path, *, executor, script, interrupt_on=None):
+def _build_full_agent(tmp_path, *, executor, script):
     """真实装配：LocalShellBackend + FilesystemMiddleware（execute 替换）+ 可选 HITL。"""
     from deepagents.backends.local_shell import LocalShellBackend
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain.agents import create_agent
-    from langchain.agents.middleware import HumanInTheLoopMiddleware
-
+    
     backend = LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, timeout=5)
     fm = FilesystemMiddleware(backend=backend)
     replace_execute_tool(fm, executor=executor, backend=backend, session_id="s-full", user_id="u1")
     middleware = [fm]
-    if interrupt_on:
-        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
     return create_agent(
         _ScriptedModel(script=list(script)),
         tools=[],
@@ -422,42 +419,3 @@ async def test_fullstack_background_execute_string_return(tmp_path) -> None:
     task = _wait_terminal(executor, tasks[0]["task_id"])
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert "bg-ok" in (task["result"] or "")
-
-
-@pytest.mark.asyncio
-async def test_fullstack_hitl_interrupt_before_background_start(tmp_path) -> None:
-    """HITL × 后台化：interrupt_on["execute"] 按名匹配替换后的工具，
-    审批发生在启动前——interrupt 时注册表无任务；批准后续跑才启动。"""
-    from langgraph.types import Command
-
-    executor = BackgroundTaskExecutor()
-    agent = _build_full_agent(
-        tmp_path, executor=executor,
-        script=[_execute_call("sleep 1 && echo approved-bg", run_in_background=True)],
-        interrupt_on={"execute": True},
-    )
-    config = {"configurable": {"thread_id": "t-hitl"}}
-    final_state = None
-    async for chunk in agent.astream(
-        {"messages": [HumanMessage(content="跑危险命令")]}, config, stream_mode="values",
-    ):
-        final_state = chunk
-    interrupts = final_state.get("__interrupt__") if isinstance(final_state, dict) else None
-    assert interrupts, "execute 调用应触发 HITL interrupt"
-    # 审批发生在启动前：此刻不应有任何后台任务
-    assert BackgroundTaskExecutor.list_for_session("s-full") == []
-
-    # 批准 → 续跑 → 工具真正执行（resume 契约与 executor.submit_decisions
-    # 一致：{"decisions": [...]}）
-    final_state = None
-    async for chunk in agent.astream(
-        Command(resume={"decisions": [{"type": "approve"}]}), config, stream_mode="values",
-    ):
-        final_state = chunk
-    tool_msgs = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
-    assert tool_msgs and "后台命令任务已启动" in tool_msgs[-1].content
-    tasks = BackgroundTaskExecutor.list_for_session("s-full")
-    assert len(tasks) == 1
-    task = _wait_terminal(executor, tasks[0]["task_id"])
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-    assert "approved-bg" in (task["result"] or "")

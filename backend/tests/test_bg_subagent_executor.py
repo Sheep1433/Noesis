@@ -3,7 +3,6 @@
 用真实的 create_agent 图（FakeListChatModel + 需审批工具）验证：
 - start 立即返回，任务在隔离 loop 里跑，不阻塞调用方事件循环
 - 无审批：completed 并带回最终小结
-- 遇审批工具：interrupt → awaiting_approval（不失败）
 - 审批决策：Command(resume) 同 thread 续跑至完成
 - 取消 / 并发上限 / 进程退出清理
 """
@@ -18,7 +17,6 @@ from typing import Any
 
 import pytest
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -96,14 +94,10 @@ def _slow_call(value: str, call_id: str) -> AIMessage:
     )
 
 
-def _build_worker(script: list[AIMessage], *, interrupt_on: dict | None = None, slow: bool = False) -> Any:
-    middleware = []
-    if interrupt_on:
-        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+def _build_worker(script: list[AIMessage], *, slow: bool = False) -> Any:
     return create_agent(
         _ScriptedToolModel(script=script),
         tools=[_slow_tool()] if slow else [_dangerous_tool()],
-        middleware=middleware,
         checkpointer=MemorySaver(),
         name="task-worker",
     )
@@ -114,7 +108,7 @@ def _wait_terminal(executor: BackgroundTaskExecutor, task_id: str, timeout: floa
     while time.time() < deadline:
         task = executor.get(task_id)
         assert task is not None
-        if task["status"] == BgTaskStatus.AWAITING_APPROVAL.value or _is_terminal(task):
+        if _is_terminal(task):
             return task
         time.sleep(0.05)
     raise AssertionError(f"task {task_id} 未在 {timeout}s 内到达稳定状态")
@@ -155,53 +149,6 @@ def test_start_returns_immediately_and_completes() -> None:
     assert task["user_id"] == "u1"
 
 
-def test_approval_interrupt_pauses_then_resume_completes() -> None:
-    worker = _build_worker(
-        [_call("x"), AIMessage(content="工具已批准，收尾")],
-        interrupt_on={"dangerous": True},
-    )
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="需审批的任务",
-        session_id="s1", user_id="u1",
-    )
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-    assert task["interrupt"]
-    assert task["interrupt"]["action_requests"]
-
-    snapshot = executor.submit_decisions(task_id, [{"type": "approve"}])
-    assert snapshot["status"] == BgTaskStatus.RUNNING.value
-
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-    assert "收尾" in task["result"] or task["result"]
-
-
-def test_reject_decision_resumes_and_completes() -> None:
-    worker = _build_worker(
-        [_call("y"), AIMessage(content="被拒绝，改用直接回答")],
-        interrupt_on={"dangerous": True},
-    )
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-
-    executor.submit_decisions(task_id, [{"type": "reject", "message": "不许"}])
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-
-
-def test_submit_decisions_rejects_when_not_awaiting() -> None:
-    worker = _build_worker([AIMessage(content="直接完成")])
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
-    _wait_terminal(executor, task_id)
-
-    with pytest.raises(ValueError, match="不存在|不在待审批"):
-        executor.submit_decisions(task_id, [{"type": "approve"}])
 
 
 def test_concurrency_cap_queues_and_drains() -> None:
@@ -307,14 +254,13 @@ def test_cancel_without_text_output_no_placeholder() -> None:
     assert task["result"] is None
 
 
-def test_list_and_pending_approvals_scoped_by_session() -> None:
+def test_list_scoped_by_session() -> None:
     worker = _build_worker([AIMessage(content="ok")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     executor.start(worker_factory=lambda: worker, description="a", session_id="s1", user_id="u1")
     executor.start(worker_factory=lambda: worker, description="b", session_id="s2", user_id="u1")
     ids = [t["task_id"] for t in executor.list_for_session("s1")]
     assert len(ids) == 1
-    assert executor.pending_approvals("s1") == []
 
 
 # ---------------------------------------------------------------------------
@@ -337,25 +283,6 @@ def test_send_message_rejects_terminal_task() -> None:
     with pytest.raises(ValueError, match="已结束"):
         executor.send_message(task_id, "调整")
 
-
-def test_send_message_during_awaiting_approval_delivered_on_resume() -> None:
-    """待审批期间入队：审批通过续跑后，drain（=首次模型调用）能取到指令。"""
-    worker = _build_worker(
-        [_call("y", "c1"), AIMessage(content="按调整后方向收尾")],
-        interrupt_on={"dangerous": True},
-    )
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    task_id = executor.start(worker_factory=lambda: worker, description="x", session_id="s1", user_id="u1")
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-
-    executor.send_message(task_id, "改查中文源")
-    executor.submit_decisions(task_id, [{"type": "approve"}])
-
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-    # followup 在 resume 后被链式消费（本 turn 结束后作为新 turn 执行）
-    # 脚本第二条为终答文本，followup turn 执行时脚本耗尽返回默认收尾
 
 
 def test_terminal_records_session_notification_once() -> None:
@@ -976,74 +903,6 @@ async def test_consecutive_wake_cap(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bg_event_subscription_receives_approval_lifecycle() -> None:
-    """审批全生命周期事件：started → awaiting_approval → followup(续跑) → terminal。
-
-    awaiting_approval / 审批续跑此前不发布事件，前端审批卡只在快照时
-    可见；回归断言每个状态转换都有 SSE 事件。
-    """
-    import asyncio as _asyncio
-
-    from noesis.agents.subagents.executor import (
-        subscribe_bg_events,
-        unsubscribe_bg_events,
-    )
-
-    worker = _build_worker(
-        [_call("x"), AIMessage(content="工具已批准，收尾")],
-        interrupt_on={"dangerous": True},
-    )
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    queue = subscribe_bg_events("s-sse-ap", "u1")
-    try:
-        task_id = executor.start(
-            worker_factory=lambda: worker, description="需审批的任务",
-            session_id="s-sse-ap", user_id="u1",
-        )
-        events: list[dict] = []
-        while not events or events[-1]["event"] != "awaiting_approval":
-            events.append(await _asyncio.wait_for(queue.get(), timeout=5))
-        assert events[0]["event"] == "started"
-        assert "progress" in [event["event"] for event in events]
-        assert events[-1]["task"]["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-        assert events[-1]["task"]["interrupt"]
-
-        executor.submit_decisions(task_id, [{"type": "approve"}])
-        while events[-1]["event"] != "terminal":
-            events.append(await _asyncio.wait_for(queue.get(), timeout=5))
-        event_names = [event["event"] for event in events]
-        assert event_names.index("awaiting_approval") < event_names.index("followup")
-        assert events[-1]["task"]["status"] == BgTaskStatus.COMPLETED.value
-    finally:
-        unsubscribe_bg_events("s-sse-ap", queue)
-
-
-def test_interrupt_action_requests_carry_tool_call_id() -> None:
-    """langchain HITL 的 ActionRequest 不带 tool_call_id（只有 name/args/description）。
-
-    不回填的话快照/消息投影匹配不到工具段，被中断的调用永远停在
-    running（扫光 + 「运行中」标签），与等待审批的事实不符。
-    """
-    worker = _build_worker(
-        [_call("y", "c-enrich"), AIMessage(content="收尾")],
-        interrupt_on={"dangerous": True},
-    )
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="x", session_id="s-enrich", user_id="u1",
-    )
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-
-    actions = task["interrupt"]["action_requests"]
-    assert len(actions) == 1
-    assert actions[0]["tool_call_id"] == "c-enrich"
-
-
-# 旧 values-diff 投影的单测（_pending_tool_calls / _mark_approval_pending）随实现删除：
-# 待审批 tool_call_id 回填收敛到 noesis.runtime.stream（enrich_action_requests），
-# 工具段置 approval_pending 收敛到 bridge 的 builder 路径——统一管道下由
-# 上方 HITL 集成用例与主链路 bridge 测试共同覆盖。
 
 
 def test_context_snapshot_from_worker_usage_metadata() -> None:
@@ -1196,7 +1055,6 @@ def test_task_lookup_accepts_unique_short_id_prefix() -> None:
         agent_factory=None,
         recursion_limit=10,
         timeout_seconds=0,
-        hitl_timeout_seconds=1,
     )
     try:
         # 8 位短 id（child_session_id 前缀）命中
@@ -1236,7 +1094,6 @@ def test_task_lookup_rejects_ambiguous_prefix() -> None:
             agent_factory=None,
             recursion_limit=10,
             timeout_seconds=0,
-            hitl_timeout_seconds=1,
         )
         _TASKS[task.task_id] = entry
         entries[task.task_id] = entry
@@ -1262,7 +1119,7 @@ def test_apply_turn_params_switches_effort() -> None:
     )
     entry = _TaskEntry(
         task=task, agent_factory=lambda: None,
-        recursion_limit=10, timeout_seconds=1, hitl_timeout_seconds=1,
+        recursion_limit=10, timeout_seconds=1,
     )
     entry.compiled_agent = object()
 
@@ -1309,31 +1166,6 @@ def test_start_captures_parent_reasoning_effort() -> None:
     finally:
         clear_request_reasoning_effort()
 
-
-def test_stopping_during_hitl_cancels_directly() -> None:
-    """stopping 期间触发 HITL interrupt：不进入 awaiting_approval，直接按取消收尾。"""
-    worker = _build_worker(
-        [_call("v1"), AIMessage(content="收尾")],
-        interrupt_on={"dangerous": True},
-    )
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="停止期间审批",
-        session_id="s-hitl-stop", user_id="u1",
-    )
-    time.sleep(0.15)
-    snapshot = executor.cancel(task_id)
-    # 乐观终态：无论停止在 running 还是 awaiting_approval 受理，均即时 cancelled
-    assert snapshot["status"] == BgTaskStatus.CANCELLED.value
-    # 停止受理期间触发 HITL 不得挂进 awaiting_approval
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        task = executor.get(task_id)
-        if task and task["status"] == BgTaskStatus.CANCELLED.value:
-            break
-        time.sleep(0.05)
-    task = executor.get(task_id)
-    assert task["status"] == BgTaskStatus.CANCELLED.value
 
 
 def test_stop_grace_timeout_falls_back_to_hard_cancel() -> None:
@@ -1407,13 +1239,12 @@ def test_cancel_releases_concurrency_slot_immediately() -> None:
 
 
 def test_check_task_pending_hint_text() -> None:
-    """进行中状态（queued/running/awaiting_approval）输出状态提示，不落入终态形态。"""
+    """进行中状态（queued/running）输出状态提示，不落入终态形态。"""
     from noesis.agents.subagents.tools_middleware import _format_task
 
     for status, hint in (
         ("queued", "排队中"),
         ("running", "仍在运行"),
-        ("awaiting_approval", "等待用户审批"),
     ):
         formatted = _format_task(
             {"status": status, "task_id": "t1", "child_session_id": "s1", "description": "调研任务"},
@@ -1509,42 +1340,6 @@ async def test_truncated_run_terminal_partial() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hitl_resume_merges_usage_across_interrupt() -> None:
-    """HITL usage 补齐（spec 6.2）：含审批的 turn 终态 usage 覆盖中断前后。"""
-    from noesis.agents.subagents import executor as ex_mod
-
-    worker = _build_worker(
-        [_call("v1"), AIMessage(content="审批后收尾")],
-        interrupt_on={"dangerous": True},
-    )
-    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
-    task_id = executor.start(
-        worker_factory=lambda: worker, description="审批 usage",
-        session_id="s-hitl-usage", user_id="u1",
-    )
-    task = _wait_terminal(executor, task_id)
-    assert task["status"] == BgTaskStatus.AWAITING_APPROVAL.value
-
-    with ex_mod._TASKS_LOCK:
-        entry = ex_mod._TASKS.get(task_id)
-    assert entry is not None
-    assert entry.hitl_usage_seed is not None, "挂起时应存前半段 usage 种子"
-
-    # 审批通过 → resume 续跑至完成
-    executor.submit_decisions(task_id, [{"type": "approve"}])
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        task = executor.get(task_id)
-        if task and task["status"] == BgTaskStatus.COMPLETED.value:
-            break
-        time.sleep(0.05)
-    task = executor.get(task_id)
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-    # 种子已消费
-    with ex_mod._TASKS_LOCK:
-        entry = ex_mod._TASKS.get(task_id)
-    assert entry is not None and entry.hitl_usage_seed is None
-
 
 def test_stop_during_turn_finish_window_not_overwritten() -> None:
     """竞态保护：乐观停止落下的终态不得被执行侧的非终态写入覆写。
@@ -1569,10 +1364,9 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
     task.stop_reason = "cancelled"
     assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is False
     assert task.status == ex_mod.BgTaskStatus.CANCELLED.value
-    # 非终态时写入正常
+    # 非终态时写入正常（followup 复活路径：RUNNING 写回自身）
     task.status = ex_mod.BgTaskStatus.RUNNING
-    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.AWAITING_APPROVAL) is True
-    task.status = ex_mod.BgTaskStatus.RUNNING
+    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is True
     executor.cancel(task_id)
 
 

@@ -56,7 +56,6 @@ class AgentCatalogService:
                 "status": runtime.get("status") or child["status"],
                 "result": runtime.get("result"),
                 "error": runtime.get("error"),
-                "interrupt": runtime.get("interrupt") or child.get("interrupt"),
                 "run_id": child.get("run_id"),
                 "started_at": runtime.get("started_at") or child.get("started_at"),
                 "completed_at": runtime.get("completed_at") or child.get("finished_at"),
@@ -68,12 +67,7 @@ class AgentCatalogService:
             for task in runtime_tasks
             if task.get("kind") == "shell"
         )
-        return {
-            "tasks": tasks,
-            "pending_approvals": [
-                task for task in tasks if task.get("status") == "awaiting_approval"
-            ],
-        }
+        return {"tasks": tasks}
 
     @staticmethod
     def subscribe(session_id: str, user_id: str):

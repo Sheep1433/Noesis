@@ -322,5 +322,47 @@ def test_executor_port_exposes_asend_message() -> None:
     import noesis.agents.subagents.executor  # noqa: F401  导入即注册端口
     from noesis.services.subagent_runtime_port import ExecutorPort
 
-    for method in ("validate_followup", "send_message", "asend_message", "submit_decisions", "cancel"):
+    for method in ("validate_followup", "send_message", "asend_message", "cancel"):
         assert hasattr(ExecutorPort, method), f"ExecutorPort 缺少 {method}（调用方将 AttributeError）"
+    # 审批入口已随子 Agent HITL 删除：端口面不得再暴露（防回流）
+    assert not hasattr(ExecutorPort, "submit_decisions")
+
+
+# ---------------------------------------------------------------------------
+# worker 危险命令拒绝守卫（无人值守：拒绝而非审批）
+# ---------------------------------------------------------------------------
+
+def test_guard_worker_filesystem_tools_denies_dangerous_execute() -> None:
+    """网络类命令确定性拒绝（未执行），本地方案照常执行。"""
+    from langchain_core.tools import StructuredTool
+
+    from noesis.agents.tools.fs_hints import guard_worker_filesystem_tools
+
+    calls: list[str] = []
+
+    def _execute(command: str, runtime=None, timeout=None) -> str:
+        calls.append(command)
+        return "ok"
+
+    async def _aexecute(command: str, runtime=None, timeout=None) -> str:
+        calls.append(command)
+        return "ok"
+
+    class _FakeFS:
+        tools = [StructuredTool.from_function(
+            func=_execute, coroutine=_aexecute, name="execute",
+            description="execute", infer_schema=False,
+        )]
+
+    fs = _FakeFS()
+    guard_worker_filesystem_tools(fs)
+    guarded = fs.tools[0]
+
+    # 危险（网络类）：拒绝文本，命令未执行
+    refused = guarded.func(command="curl -s https://example.com/api | head -5")
+    assert "不允许执行需审批的网络类命令" in refused
+    assert calls == []
+
+    # 安全命令：原样委托
+    assert guarded.func(command="echo hello") == "ok"
+    assert calls == ["echo hello"]

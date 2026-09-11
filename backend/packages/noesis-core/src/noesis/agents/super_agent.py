@@ -29,7 +29,7 @@ from noesis.agents.subagents import (
     assert_no_bg_task_tools,
 )
 from noesis.agents.subagents.shell_tool import replace_execute_tool
-from noesis.agents.tools.fs_hints import augment_filesystem_tool_descriptions
+from noesis.agents.tools.fs_hints import augment_filesystem_tool_descriptions, guard_worker_filesystem_tools
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import resolve_attachment_tools
@@ -61,13 +61,16 @@ def _compile_task_worker(
     *,
     user_id: str,
     model_id: str | None = None,
-    interrupt_on: dict | None = None,
     session_id: str = "",
     checkpointer=None,
 ):
-    """编译后台 task-worker：独立上下文 + 自带 HITL interrupt，供 BackgroundTaskExecutor 使用。"""
+    """编译后台 task-worker：独立上下文，供 BackgroundTaskExecutor 使用。
+
+    worker 不交互、不审批（无人值守）：工具集不含 ask_user，execute 的
+    危险命令经工具层确定性拒绝（guard_worker_filesystem_tools），拒绝
+    事实随结果回流，主 Agent 可在主 run 中升级执行。
+    """
     from langchain.agents import create_agent
-    from langchain.agents.middleware import HumanInTheLoopMiddleware
 
     model = get_llm(model_id=model_id)
     middleware = list(build_noesis_middleware(
@@ -80,13 +83,12 @@ def _compile_task_worker(
         skills_user_id=user_id,
         skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
         session_id=session_id,
-        # worker 同样享用下沉到工具描述的运行规则（仅描述增强，无后台化）
-        filesystem_middleware_hook=augment_filesystem_tool_descriptions,
+        # 描述增强 + 危险命令拒绝（worker 无审批，见 docstring）
+        filesystem_middleware_hook=lambda fm: (
+            augment_filesystem_tool_descriptions(fm),
+            guard_worker_filesystem_tools(fm),
+        ),
     ))
-    if interrupt_on:
-        # 后台任务审批：interrupt 落 checkpoint，executor 转 awaiting_approval，
-        # 审批 API 用 Command(resume) 在同一 thread 续跑
-        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
     return create_agent(
         model,
         system_prompt=build_prompt(PromptProfile.SUPER_AGENT_SUB),
@@ -167,7 +169,9 @@ class SuperAgent(BaseAgent):
         # 会话历史检索工具同样只在主 loop：worker 内调用会撞 pg_manager
         # 主 loop 绑定的连接池（cross-loop 直连报错），且 worker 场景
         # （独立子任务）不需要跨 run 的会话原文召回
-        _loop_bound_tools = {"search_memory", "search_history", "search_sessions"}
+        # ask_user 同属 loop 绑定剔除：worker 无人值守不交互，歧义在结果中
+        # 说明假设后继续（危险命令拒绝见 guard_worker_filesystem_tools）
+        _loop_bound_tools = {"search_memory", "search_history", "search_sessions", "ask_user"}
         worker_tools = [
             tool for tool in tools if getattr(tool, "name", "") not in _loop_bound_tools
         ] + build_memory_tools(user_id=user_id)
@@ -205,10 +209,6 @@ class SuperAgent(BaseAgent):
                 user_id=user_id,
                 # followup 可按 turn 切换模型：覆盖优先，否则沿用父 Agent 模型
                 model_id=model_id_override or model_id,
-                interrupt_on=(
-                    build_interrupt_on(session_id=session_id, memory_write_guard=False)
-                    if interrupt_on is not None else None
-                ),
                 session_id=session_id,
                 checkpointer=await create_isolated_checkpointer(),
             )
@@ -217,7 +217,6 @@ class SuperAgent(BaseAgent):
             max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
             shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
-            hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
             stop_grace_seconds=SubagentConfig.stop_grace_seconds,
             stop_reconcile_seconds=SubagentConfig.stop_reconcile_seconds,
         )
