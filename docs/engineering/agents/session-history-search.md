@@ -47,12 +47,12 @@ SOURCE-FIRST 规则内建在两个工具的 description 里：只证明「曾经
 
 `evals/compression` 走真实 Agent 路径：fixture 按生产行状落库（`ChatService` 建会话 + 写消息），压缩用生产 `/compact` 宿主链路触发，每题每组经 LangGraph checkpoint fork 从同一压缩产物分叉作答。三组单变量链：uncompacted（不压缩）↔ current（压缩闭卷）只差压缩；current ↔ recovery 只差 `search_history` 挂载——recovery 组的检索即线上 pg_trgm 全文检索本身（fixture 已落库），不是进程内简化版。summary 单列「检索兜底收益」（recovery recall% − current recall%）。
 
-实测（cc-0146daeb，20 题分层题库 10:5:5，作答 huoshan/glm-5.3-flash、判卷 huoshan/deepseek-v4-flash，judge 解析失败率 0%，结果目录 `evals/compression/results/newproj-20p/`；压缩含「被压缩区用户原话装回」改造）：
+实测（契约版压缩：上下文契约 + 摘要原子性 + 用户原话装回；5 fixture × 20 题分层 10:5:5 = 100 题，作答 huoshan/glm-5.3-flash、判卷 huoshan/deepseek-v4-flash，judge 解析失败率 0%、零未完成回合，结果目录 `evals/compression/results/final-100p/`）：
 
-| 组 | recall% | retained tokens |
+| 组 | recall%（5 fixture 均值） | retained tokens（中位） |
 |---|---:|---:|
-| uncompacted（不压缩） | 72.5% | 639014 |
-| current（压缩闭卷） | 77.5% | 23645 |
-| recovery（+search_history） | 77.5% | 23645 |
+| uncompacted（不压缩） | 82.0% | 437385 |
+| current（压缩闭卷） | 61.5% | 23064 |
+| recovery（+search_history） | 78.0% | 23064 |
 
-分层：macro 80/80/80，meso 70/80/90，detail 60/70/60（uncompacted/current/recovery）。用户原话装回改造后闭卷从 35% 升至 77.5%、首次反超不压缩组，检索兜底的边际收益在此题库上归零（current 已到 recovery 水平）——检索的剩余价值在跨会话发现与工具输出类细节（detail 层 current 70% 仍靠原话与保留尾）。两个跨轮次稳定观察：小上下文 + 定点召回胜过 63 万 token 大海捞针式的注意力（current detail 70% > uncompacted 60%）；不压缩组的 p1/p20 大调用偶发网关降级属环境噪声（重试 + 组序错峰缓解，完成回合口径下不压缩约 76%）。
+检索兜底收益 **+15pp，五份全部为正**（+10/+12.5/+25/+15/+20）——上下文契约（压缩后向模型声明上下文构成/盲区/恢复通道）消除了检索反降，检索定向找回被遮蔽区原文。分层看检索的价值集中在微观层（精确串/错误串，recovery detail 90% 反超不压缩 80%）；压缩净损失（闭卷 vs 不压缩 −20.5pp）经检索收窄到 −4pp。演进链：无兜底闭卷 35% → 原话装回 66%（单 fixture 口径）→ +上下文契约后检索组 78%（100 题口径）。
