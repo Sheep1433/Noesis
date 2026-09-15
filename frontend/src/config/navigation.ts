@@ -14,10 +14,13 @@ export function isChatRouteName(routeName: unknown): boolean {
   return CHAT_ROUTE_NAMES.includes(routeName as (typeof CHAT_ROUTE_NAMES)[number])
 }
 
+/** 底栏只属于非聊天的产品页（知识库、扩展、设置等）；聊天页沉浸式全屏，导航入口在历史抽屉。 */
 export function shouldShowMobileBottomNav(routeName: unknown, isMobile: boolean): boolean {
-  return isMobile && !MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES.includes(
-    routeName as (typeof MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES)[number],
-  )
+  return isMobile
+    && !isChatRouteName(routeName)
+    && !MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES.includes(
+      routeName as (typeof MOBILE_BOTTOM_NAV_HIDDEN_ROUTE_NAMES)[number],
+    )
 }
 
 export const mainNavItems: MainNavItem[] = [

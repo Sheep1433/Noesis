@@ -48,7 +48,14 @@ describe('immersive mobile chat routes', () => {
 })
 
 describe('mobile bottom navigation', () => {
-  it.each(['ChatRoot', 'ChatIndex', 'ChatNew', 'ChatSession', 'Settings', 'KnowledgeBase'])(
+  it.each(['ChatRoot', 'ChatIndex', 'ChatNew', 'ChatSession'])(
+    'keeps the %s chat page immersive without the bottom navigation',
+    (routeName) => {
+      expect(shouldShowMobileBottomNav(routeName, true)).toBe(false)
+    },
+  )
+
+  it.each(['Settings', 'KnowledgeBase'])(
     'shows the bottom navigation on the %s page',
     (routeName) => {
       expect(shouldShowMobileBottomNav(routeName, true)).toBe(true)

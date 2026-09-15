@@ -80,6 +80,16 @@ describe('mobile layout navigation', () => {
     wrapper.unmount()
   })
 
+  it.each(['ChatIndex', 'ChatSession'])('keeps the %s chat page immersive without the bottom navigation', (routeName) => {
+    testState.route.name = routeName
+    const wrapper = mount(SlotCenterPanel, { global: { stubs: globalStubs } })
+
+    expect(wrapper.find('[data-testid="mobile-bottom-nav"]').exists()).toBe(false)
+    expect(wrapper.get('.app-shell__main').classes()).toContain('app-shell__main--mobile-chat')
+    expect(wrapper.get('.app-shell__main').classes()).not.toContain('app-shell__main--mobile-no-nav')
+    wrapper.unmount()
+  })
+
   it('keeps the bottom navigation on other mobile product pages', () => {
     testState.route.name = 'Extensions'
     const wrapper = mount(SlotCenterPanel, { global: { stubs: globalStubs } })

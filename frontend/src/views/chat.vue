@@ -4729,8 +4729,18 @@ function onComposerPaste(e: ClipboardEvent) {
     margin-left: auto;
   }
 
+  /* 沉浸式聊天页无底栏：输入条背景画到物理底部，内容抬高 safe-area */
+  .chat-input-footer-bar {
+    padding-bottom: var(--noesis-safe-area-bottom);
+  }
+
   .chat-input-footer {
     padding: 8px !important;
+  }
+
+  /* 按钮锚在 chat-main-inner 底缘（已随输入条下探到物理底部），补偿 safe-area 保持与输入条间距 */
+  .scroll-to-bottom-btn {
+    bottom: calc(120px + var(--noesis-safe-area-bottom));
   }
 
   .chat-content-gutter {

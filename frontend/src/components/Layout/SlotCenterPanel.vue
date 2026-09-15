@@ -13,7 +13,8 @@ const { isMobile } = useBreakpoint()
 const route = useRoute()
 const isMobileChat = computed(() => isMobile.value && isChatRouteName(route.name))
 const showMobileBottomNav = computed(() => shouldShowMobileBottomNav(route.name, isMobile.value))
-const isMobileWithoutBottomNav = computed(() => isMobile.value && !showMobileBottomNav.value)
+// 聊天页有自己的全屏沉浸 padding（--mobile-chat），不走通用无栏留白
+const isMobileWithoutBottomNav = computed(() => isMobile.value && !showMobileBottomNav.value && !isMobileChat.value)
 
 appStore.areaLoading = true
 setTimeout(() => {
@@ -125,10 +126,11 @@ setTimeout(() => {
 }
 
 .app-shell__main--mobile-chat {
+  /* 无底栏的沉浸式聊天页：底部不留壳层 padding，safe-area 由输入条自身画满 */
   padding:
     var(--noesis-safe-area-top)
     0
-    calc(var(--noesis-mobile-nav-height) + var(--noesis-safe-area-bottom));
+    0;
 }
 
 .app-shell__content--mobile-chat {
