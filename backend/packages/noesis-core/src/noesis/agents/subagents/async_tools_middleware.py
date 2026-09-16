@@ -382,8 +382,10 @@ class AsyncSubagentToolsMiddleware(
                 text = f"任务完成（{public_id}）：\n{task.get('result') or '(无结果文本)'}"
                 return _command_with_identity(tool_call_id, text, task)
             if status in (BgTaskStatus.FAILED.value, BgTaskStatus.TIMED_OUT.value):
-                return f"任务{status}（{task_id}）：{task.get('error') or ''}"
-            return _format_task(task)
+                text = f"任务{status}（{public_id}）：{task.get('error') or ''}"
+                return _command_with_identity(tool_call_id, text, task)
+            # 前台等待内协作停止完成（cancelled 携带部分产出）
+            return _command_with_identity(tool_call_id, _format_task(task), task)
 
         async def acheck_async_task(task_id: str) -> str:
             task = executor.get(task_id)

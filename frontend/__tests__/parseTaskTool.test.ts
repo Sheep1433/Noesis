@@ -24,6 +24,29 @@ describe('parseStartTaskChildSessionId', () => {
     )
   })
 
+  it('解析前台等待内完成回执（任务完成（<uuid>）形态）', () => {
+    const output = '任务完成（c4feb144-a516-4424-9959-b6afacfc354d）：\n# 调研笔记\n正文……'
+    expect(parseStartTaskChildSessionId(output)).toBe('c4feb144-a516-4424-9959-b6afacfc354d')
+  })
+
+  it('解析前台等待内失败/超时回执', () => {
+    expect(parseStartTaskChildSessionId('任务failed（b20326f8-7a39-402b-9c1e-000000000002）：执行出错')).toBe(
+      'b20326f8-7a39-402b-9c1e-000000000002',
+    )
+    expect(parseStartTaskChildSessionId('任务timed_out（b20326f8-7a39-402b-9c1e-000000000003）：超时')).toBe(
+      'b20326f8-7a39-402b-9c1e-000000000003',
+    )
+  })
+
+  it('解析前台等待期间任务被取消回执（两种文案）', () => {
+    expect(parseStartTaskChildSessionId('子 Agent 任务已终止（超时或取消）：c4d2a48e-295d-42a0-8057-dfa37717dd75\n部分产出仍在回收中')).toBe(
+      'c4d2a48e-295d-42a0-8057-dfa37717dd75',
+    )
+    expect(parseStartTaskChildSessionId('[afd44bfb-90b1-4f14-9987-e52f761081fe] cancelled（user）\n部分产出')).toBe(
+      'afd44bfb-90b1-4f14-9987-e52f761081fe',
+    )
+  })
+
   it('无匹配回执文案或非字符串输入返回 undefined', () => {
     expect(parseStartTaskChildSessionId('任务完成：结果文本')).toBeUndefined()
     expect(parseStartTaskChildSessionId(undefined)).toBeUndefined()

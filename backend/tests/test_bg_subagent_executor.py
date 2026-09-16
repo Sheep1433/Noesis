@@ -409,7 +409,7 @@ def _build_tools(executor: BackgroundTaskExecutor, worker_factory, create_child_
 
 
 def _tool_text(result) -> str:
-    """工具返回值可能是纯文本或 Command（回 ToolMessage + 写 bg_tasks state）：
+    """工具返回值可能是纯文本或 Command（回 ToolMessage + 写 async_tasks state）：
     统一提取模型可见文本。"""
     from langgraph.types import Command
 
@@ -539,6 +539,37 @@ async def test_default_omitted_arg_is_foreground() -> None:
     result = await start.ainvoke({"description": "x", "subagent_type": "general"})
     result = _tool_text(result)
     assert "默认前台结果" in result
+
+
+@pytest.mark.asyncio
+async def test_foreground_failed_receipt_uses_child_session_id() -> None:
+    """前台等待内失败：回执携带子会话 id（前端任务卡链接的唯一锚点），
+    不暴露 bg- 内部 task_id；并以 Command 回写 async_tasks 身份。"""
+    from langgraph.types import Command
+    from unittest.mock import AsyncMock
+
+    def broken_factory():
+        raise RuntimeError("boom")
+
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
+    create_child_session = AsyncMock(return_value="b20326f8-7a39-402b-9c1e-000000000009")
+    start = next(
+        t for t in _build_tools(
+            executor, broken_factory, create_child_session=create_child_session,
+        ) if t.name == "start_async_task"
+    )
+
+    result = await start.ainvoke(
+        {"description": "x", "subagent_type": "general", "run_in_background": False},
+    )
+    text = _tool_text(result)
+
+    assert "任务failed（b20326f8-7a39-402b-9c1e-000000000009）" in text
+    assert "bg-" not in text
+    assert isinstance(result, Command)
+    (identity,) = result.update.get("async_tasks", {}).values()
+    assert identity["thread_id"] == "b20326f8-7a39-402b-9c1e-000000000009"
+    assert identity["status"] == "failed"
 
 
 @pytest.mark.asyncio
