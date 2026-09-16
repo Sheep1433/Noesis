@@ -7,7 +7,7 @@ import pytest
 
 from noesis.agents.tools.web_providers.url_safety import validate_fetch_url
 from noesis.agents.tools.web_search_tool import build_web_search_tools, web_fetch, web_search
-from noesis.errors.tool_failure import ToolNetworkError
+from noesis.errors.tool_failure import ToolInfrastructureError, ToolNetworkError, ToolValidationError
 
 
 def _configure_web_tools(*mocks, **overrides) -> None:
@@ -176,6 +176,53 @@ def test_web_fetch_failure_raises_typed_tool_error(mock_resolve):
     mock_resolve.return_value = '{"error":"页面抓取失败","url":"https://example.com"}'
     with pytest.raises(ToolNetworkError, match="页面抓取失败"):
         web_fetch("https://example.com")
+
+
+@patch("noesis.agents.tools.web_search_tool.resolve_web_fetch")
+def test_web_fetch_404_raises_validation_error_with_status(mock_resolve):
+    """404 → 参数错误（不可重试），文案携带状态码——模型应换 URL 而非重试。"""
+    mock_resolve.return_value = json.dumps({
+        "error": "页面不存在（404）：URL 路径可能有误",
+        "url": "https://example.com/missing.ts",
+        "http_status": 404,
+    }, ensure_ascii=False)
+    with pytest.raises(ToolValidationError, match="页面不存在（404）"):
+        web_fetch("https://example.com/missing.ts")
+
+
+@patch("noesis.agents.tools.web_search_tool.resolve_web_fetch")
+def test_web_fetch_server_side_status_is_retryable_infra(mock_resolve):
+    """429/5xx → 对端暂时性故障（可重试），不再伪装成连接失败。"""
+    for status, message in ((503, "服务器错误（503）"), (429, "请求过于频繁（429）")):
+        mock_resolve.return_value = json.dumps({
+            "error": message, "url": "https://example.com/x", "http_status": status,
+        }, ensure_ascii=False)
+        with pytest.raises(ToolInfrastructureError, match=message):
+            web_fetch("https://example.com/x")
+
+
+@patch("noesis.agents.tools.web_providers.local_fetch.fetch_with_local")
+@patch("noesis.agents.tools.web_providers.resolver.tavily.tavily_available", return_value=False)
+def test_resolver_passes_http_status_through(mock_available, mock_local):
+    """resolver 把 FetchStatusError 的状态码随错误 JSON 透传给工具层。"""
+    from noesis.agents.tools.web_providers.local_fetch import FetchStatusError
+    from noesis.agents.tools.web_providers.resolver import resolve_web_fetch
+
+    mock_local.side_effect = FetchStatusError(404)
+    payload = json.loads(resolve_web_fetch("https://example.com/missing.ts"))
+    assert payload["http_status"] == 404
+    assert "页面不存在（404）" in payload["error"]
+
+
+@patch("noesis.agents.tools.web_providers.local_fetch.fetch_with_local")
+@patch("noesis.agents.tools.web_providers.resolver.tavily.tavily_available", return_value=False)
+def test_resolver_lets_url_validation_error_propagate(mock_available, mock_local):
+    """URL 校验拒绝（SSRF/非法 scheme）直接穿透，不再折叠成页面抓取失败。"""
+    from noesis.agents.tools.web_providers.resolver import resolve_web_fetch
+
+    mock_local.side_effect = ToolValidationError("禁止访问私有或保留地址: 192.168.1.1")
+    with pytest.raises(ToolValidationError, match="禁止访问私有"):
+        resolve_web_fetch("https://192.168.1.1/x")
 
 
 def test_build_returns_both_tools():

@@ -6,13 +6,22 @@ export const START_TASK_TOOL_NAME = 'start_async_task'
 
 export const TASK_SUCCEEDED_PREFIX = 'Task Succeeded. Result:'
 
+const CHILD_SESSION_ID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
 /**
- * 启动回执文案（与后端 tools_middleware 的两条回执保持同一来源）：
- * - 「子 Agent 已启动：<uuid>」后台直启
+ * 启动回执文案（与后端 async_tools_middleware 的 astart_async_task 全部回执保持同一来源）：
+ * - 「子 Agent 已启动：<uuid>」后台直启 / 前台等待不可用
  * - 「任务运行超过 Ns，已自动转为后台：<uuid>」前台等待超时自动转后台
+ * - 「任务完成（<uuid>）」前台等待内完成
+ * - 「任务failed（<uuid>）/ 任务timed_out（<uuid>）」前台等待内失败/超时
+ * - 「子 Agent 任务已终止（超时或取消）：<uuid>」前台等待期间任务被硬取消
+ * - 「[<uuid>] cancelled…」前台等待内协作停止完成（_format_task 头部）
  * 输出文本历史上以 Command repr 形态落库，正则按子串匹配两种形态均覆盖。
  */
-const START_TASK_LAUNCHED_RE = /(?:子 Agent 已启动|已自动转为后台)[：:]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/
+const START_TASK_LAUNCHED_RE = new RegExp(
+  `(?:子 Agent 已启动|已自动转为后台|任务完成|任务failed|任务timed_out|子 Agent 任务已终止（超时或取消）)[：:]?\\s*[（(]?(${CHILD_SESSION_ID_PATTERN})`
+  + `|\\[(${CHILD_SESSION_ID_PATTERN})\\] cancelled`,
+)
 
 /**
  * 从 start_async_task 工具输出文本提取子会话 id。
@@ -24,7 +33,8 @@ export function parseStartTaskChildSessionId(output: unknown): string | undefine
   if (typeof output !== 'string') {
     return undefined
   }
-  return START_TASK_LAUNCHED_RE.exec(output)?.[1]
+  const matched = START_TASK_LAUNCHED_RE.exec(output)
+  return matched?.[1] ?? matched?.[2] ?? undefined
 }
 
 export type SubagentRunStatus = 'in_progress' | 'completed' | 'failed'

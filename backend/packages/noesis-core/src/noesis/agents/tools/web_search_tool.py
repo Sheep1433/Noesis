@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field
 from noesis.agents.tools.web_providers.resolver import resolve_web_fetch, resolve_web_search
 from noesis.config.env import WebToolsConfig
 from noesis.runtime.logging import logger
-from noesis.errors.tool_failure import ToolNetworkError, ToolValidationError
+from noesis.errors.tool_failure import (
+    ToolFailureError,
+    ToolInfrastructureError,
+    ToolNetworkError,
+    ToolValidationError,
+)
 
 # 超限页面的全文落盘区（agent backend 虚拟文件系统内，模型可 read_file 分段续读）
 _PAGE_STORE_PREFIX = "/web_pages"
@@ -150,6 +155,17 @@ def _truncate_page(result: str, url: str, *, char_limit: int, backend) -> str:
     )
 
 
+def _status_failure(http_status: int, detail: str) -> ToolFailureError:
+    """HTTP 状态码失败 → 语义化工具错误，模型据此选下一步：
+
+    4xx（404 换 URL、403 换来源）不可重试，文案携带状态码（invalid_arguments
+    走细节首行）；429/5xx 属对端暂时性故障，可稍后重试（infrastructure 固定文案）。
+    """
+    if http_status == 429 or http_status >= 500:
+        return ToolInfrastructureError(detail)
+    return ToolValidationError(detail)
+
+
 def _web_fetch(url: str, backend) -> str:
     """抓取已知 URL 的正文（Markdown）；超限页头尾截断 + 全文落盘。"""
     try:
@@ -160,8 +176,9 @@ def _web_fetch(url: str, backend) -> str:
             payload = None
         if isinstance(payload, dict) and payload.get("error"):
             detail = str(payload.get("error"))
-            if "不能为空" in detail or "不支持" in detail:
-                raise ToolValidationError(detail)
+            http_status = payload.get("http_status")
+            if isinstance(http_status, int):
+                raise _status_failure(http_status, detail)
             raise ToolNetworkError(detail)
         canonical_url = _canonical_url(url)
         title = next((line[2:].strip() for line in result.splitlines() if line.startswith("# ")), canonical_url)
@@ -175,7 +192,7 @@ def _web_fetch(url: str, backend) -> str:
         # 正文只存一份（results[0].snippet）；曾经的顶层 content 字段是同一份
         # 文本的完整拷贝，纯双倍占上下文，且无任何下游消费方
         return json.dumps({"url": canonical_url, "results": [row]}, ensure_ascii=False)
-    except (ToolNetworkError, ToolValidationError):
+    except ToolFailureError:
         raise
     except Exception as e:
         logger.warning("web_fetch 未预期异常: {}", e)

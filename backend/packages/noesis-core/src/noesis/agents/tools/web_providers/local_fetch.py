@@ -68,6 +68,30 @@ def _extract_html(page_html: str) -> tuple[str, str]:
     return title, body
 
 
+class FetchStatusError(RuntimeError):
+    """目标服务器返回了明确的失败状态码：URL 可达，但资源不存在或请求被拒。
+
+    状态码是模型下一步决策的关键输入（404 换 URL、403 换来源、429/5xx 稍后
+    重试），折叠成通用「页面抓取失败」会让模型对着同一个死 URL 盲目重试。
+    """
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(_status_text(status_code))
+
+
+def _status_text(status_code: int) -> str:
+    if status_code in (404, 410):
+        return f"页面不存在（{status_code}）：URL 路径可能有误"
+    if status_code in (401, 403):
+        return f"页面拒绝访问（{status_code}）：站点反爬或需登录，建议换来源"
+    if status_code == 429:
+        return "请求过于频繁（429）"
+    if status_code >= 500:
+        return f"服务器错误（{status_code}）"
+    return f"请求被拒绝（{status_code}）"
+
+
 def fetch_with_local(url: str, timeout: int) -> dict[str, Any]:
     """抓取页面转 Markdown，正文不做截断——截断（头尾窗口 + 落盘 +
     续读提示）统一由 web_fetch 工具层按 fetch_max_chars 处理。
@@ -98,7 +122,7 @@ def fetch_with_local(url: str, timeout: int) -> dict[str, Any]:
     try:
         try:
             resp = _get(use_proxy=False)
-        except httpx.HTTPError:
+        except httpx.TransportError:
             if not proxy:
                 raise
             logger.info("local_fetch 直连失败，改走代理重试 url={}", url)
@@ -111,6 +135,10 @@ def fetch_with_local(url: str, timeout: int) -> dict[str, Any]:
             raise ToolValidationError(f"重定向目标被拒绝: {err_final}")
         content_type = (resp.headers.get("content-type") or "").lower()
         raw = resp.text
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        logger.info("local_fetch 状态码失败 url={} status={}", url, status_code)
+        raise FetchStatusError(status_code) from e
     except httpx.HTTPError as e:
         logger.warning("local_fetch HTTP 失败 url={}: {}", url, e)
         raise RuntimeError("页面抓取失败") from e
