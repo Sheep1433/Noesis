@@ -7,6 +7,7 @@ from typing import Any
 
 from noesis.agents.tools.web_providers import ddg, local_fetch, tavily
 from noesis.config.env import WebToolsConfig
+from noesis.errors.tool_failure import ToolValidationError
 from noesis.runtime.logging import logger
 
 
@@ -67,8 +68,16 @@ def resolve_web_fetch(url: str) -> str:
     try:
         result = local_fetch.fetch_with_local(raw_url, timeout)
         return result["markdown"]
-    except ValueError as e:
-        return json.dumps({"error": str(e), "url": raw_url}, ensure_ascii=False)
+    except ToolValidationError:
+        # URL 校验拒绝（scheme/SSRF）：参数级错误直接穿透工具层分类，
+        # 折叠进「页面抓取失败」会让模型对非法 URL 盲目重试
+        raise
+    except local_fetch.FetchStatusError as e:
+        # 状态码与文案原样透传：工具层据此区分「换 URL」（4xx）与「稍后重试」（429/5xx）
+        return json.dumps(
+            {"error": str(e), "url": raw_url, "http_status": e.status_code},
+            ensure_ascii=False,
+        )
     except Exception as e:
         logger.warning("web_fetch 全部 provider 失败（local_fetch）url={}: {}", raw_url, e)
         return json.dumps({"error": "页面抓取失败", "url": raw_url}, ensure_ascii=False)
