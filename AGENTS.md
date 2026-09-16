@@ -13,7 +13,7 @@
 | `docs/research/` | 项目现状与外部技术调研 |
 | `docs/engineering/` | 系统组成与数据流，高难度实现与工程经验 |
 | `docs/decisions/` | 决策记录：为什么这么定、否了什么、代价是什么 |
-| `docs/bug/` | Bug 记录 |
+| `docs/bug/` | Bug 记录（**本地目录，不入版本库**：内部排障细节不随仓库公开） |
 | `docs/debugging/` | 疑难排查沉淀 |
 
 ## 仓库导航
@@ -93,7 +93,7 @@ python3 scripts/change-scope.py # 任何 diff 审查/选检查的起点（影响
 
 3. **测试账号**：统一使用 demo 账号 `test`/`123456`（Alembic 种子账号，用户确认即测试专用）——测试产生的会话、Provider、审计行等数据落在该账号下属预期行为，不额外建测试账户，也无需逐轮清理。
 4. **失败判定**：免费网关限流的降级文案（「生成失败，请稍后重试」「服务暂时不可用」）导致的 error 终态由 `gateway_skip` fixture 自动 skip，不算回归；DuckDuckGo/外网不可达属环境限制，记录但不算接口回归。
-5. **执行后记录**：把分层计数、失败明细（含测试名、断言/异常原文、复现所需环境备注）写入 `docs/bug/`（遵循既有 Bug 记录格式，状态 🆕 新增）。执行角色为测试时**只记录问题、禁止顺手修改代码**，分析定位交给后续处理者。
+5. **执行后记录**：把分层计数、失败明细（含测试名、断言/异常原文、复现所需环境备注）写入 `docs/bug/`（遵循既有 Bug 记录格式，状态 🆕 新增；该目录 gitignore 仅存本地）。执行角色为测试时**只记录问题、禁止顺手修改代码**，分析定位交给后续处理者。
 - 文档改动跑 `python3 scripts/verify-md-links.py` 与 `python3 scripts/verify-decision-format.py`（CI 同款 gate，本地先红先修）
 - 每次测试完成后必须停止由 Agent 启动的后端、前端 dev/preview server 及临时测试进程，释放占用端口，避免与用户后续执行冲突
 - 依赖链：`API → Service → Domain / Agent`；API 禁止直连数据库
@@ -156,7 +156,7 @@ feat/<name>  ──merge──▶  dev  ──merge──▶  main
 | 开发 | 审查 Bug 是否属实、实现修复 | 仅当明确要求处理 Bug 清单时 |
 | 产品 | 撰写需求、更新 PRD | 提出功能需求时 |
 
-- 测试：问题记入 `docs/bug/`
+- 测试：问题记入 `docs/bug/`（本地目录，gitignore 不入库；对外仓库只保留已沉淀的 `docs/debugging/` 与决策记录）
 - 开发：属实则修复并标「✅ 已修复」，不属实标「❌ 非 Bug」并说明原因；**默认不主动处理 Bug**
 - 产品：可验收行为写 OpenSpec；关键调研、架构和工程设计按 `docs/README.md` 分类
 

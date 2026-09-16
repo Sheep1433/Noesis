@@ -12,10 +12,12 @@ wheels/
 .cursor/
 .claude/
 .codex/
-# docs：正式 PRD / Bug / debugging / 测试设计进入版本库；仅忽略个人草稿与临时产物
+# docs：正式 PRD / debugging / 测试设计进入版本库；仅忽略个人草稿与临时产物
 docs/drafts/
 docs/.tmp/
 docs/TODO.local.md
+# bug 记录仅存本地（内部排障细节不随仓库公开；沉淀后的根因进 docs/debugging/）
+docs/bug/
 # 缓存与依赖
 *cache*/
 *logs*/
