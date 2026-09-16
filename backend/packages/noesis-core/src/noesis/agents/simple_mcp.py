@@ -99,6 +99,6 @@ if __name__ == "__main__":
     async def test():
         agent = SimpleMCPAgent()
         async for chunk in agent.run_agent("你好，列出可用的工具"):
-            print(chunk)
+            logger.info("{}", chunk)
 
     asyncio.run(test())

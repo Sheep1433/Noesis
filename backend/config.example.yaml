@@ -26,7 +26,8 @@ database:
   port: 5432
   user: noesis
   database: noesis
-  echo: true
+  # 逐条 SQL 打到 stdout，仅排障时临时开启
+  echo: false
   max_overflow: 10
   pool_size: 50
   pool_recycle: 3600

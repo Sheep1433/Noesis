@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from dotenv import load_dotenv
+# 全仓唯一绕过 noesis.runtime.logging 的例外：config 是最底层，runtime.logging 反过来
+# 依赖 config.paths，从这里导入会倒置依赖并让 sink 初始化提前到配置加载期。
+# loguru 的 logger 是进程级单例，这里拿到的与统一入口是同一个对象。
 from loguru import logger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict

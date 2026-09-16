@@ -69,7 +69,8 @@ class DatabaseYamlSection(BaseModel):
     port: int = 5432
     user: str = "noesis"
     database: str = "noesis"
-    echo: bool = True
+    # SQL 回显默认关闭：逐条 SQL 直打 stdout 会与业务日志混流，排障时经 config.yaml 或 DB_ECHO 按需开启
+    echo: bool = False
     max_overflow: int = 10
     pool_size: int = 50
     pool_recycle: int = 3600

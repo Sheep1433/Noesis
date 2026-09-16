@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 import time
 import uuid
@@ -30,13 +29,12 @@ from noesis.errors.exceptions import (
     ServiceException,
 )
 from noesis.llm.runtime_snapshot import RuntimeModelSnapshot
+from noesis.runtime.logging import logger
 from noesis.storage.postgres.models.user_llm import (
     TUserLLMModel,
     TUserLLMPreference,
     TUserLLMProvider,
 )
-
-logger = logging.getLogger(__name__)
 
 _ALLOWED_API_TYPES = {"openai", "deepseek", "qwen", "minimax", "opencode"}
 
@@ -669,7 +667,7 @@ class UserLLMService:
             except httpx.RequestError as error:
                 last_error = error
                 logger.warning(
-                    "models endpoint probe failed (attempt %d, url=%s): %s: %s",
+                    "models endpoint probe failed (attempt {}, url={}): {}: {}",
                     attempt,
                     models_url,
                     type(error).__name__,
