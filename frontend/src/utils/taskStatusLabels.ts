@@ -6,7 +6,7 @@ import type { AgentRunStatus, TaskCatalogEntry } from '@/api/chat'
  * 共用，避免三处手抄漂移。
  *
  * launching / launched 是任务卡专用的 UI 伪状态：目录未匹配时只描述
- * start_task 工具下发本身（启动中 / 已启动），不宣称子 Agent 生命周期。
+ * start_async_task 工具下发本身（启动中 / 已启动），不宣称子 Agent 生命周期。
  */
 export type TaskStatusKey =
   | AgentRunStatus

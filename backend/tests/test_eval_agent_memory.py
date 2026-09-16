@@ -11,6 +11,7 @@ from evals.agent.memory.longmemeval import (
     session_body,
 )
 from evals.agent.memory.metrics import (
+    classify_run_error,
     memory_accessed,
     parse_search_memory_slugs,
     retrieval_scores,
@@ -102,7 +103,40 @@ def test_summarize_error_records_do_not_pollute_judge():
         {"sample_id": "e1", "negative": False, "completed": False, "error": "timeout"},
     ])
     assert summary["errors"] == 1
+    assert summary["error_breakdown"] == {"timeout": 1}
     assert summary["judged"] == 0
+
+
+def test_classify_run_error_kinds():
+    assert classify_run_error({"completed": True, "error": None}) is None
+    assert classify_run_error({"completed": False, "error": "timeout after 600s"}) == "timeout"
+    assert classify_run_error({"completed": False, "error": "rate limit"}) == "agent_error"
+    assert classify_run_error({"completed": False, "error": None}) == "incomplete"
+
+
+def test_summarize_halved_rate_and_judge_invalid():
+    summary = summarize_memory_eval([
+        _positive("q1", "accepted"),
+        _positive("q2", "partial"),
+        _positive("q3", "rejected"),
+        _positive("q4", "invalid"),
+    ])
+    # invalid 不进判卷分母，单独计数——正确率不建立在静默缩水的样本上
+    assert summary["judged"] == 3
+    assert summary["judge_invalid"] == 1
+    assert summary["answer_accepted_rate"] == pytest.approx(1 / 3, abs=1e-3)
+    assert summary["answer_score_rate_half"] == pytest.approx(1.5 / 3, abs=1e-3)
+
+
+def test_summarize_error_breakdown_separates_timeout_from_agent_error():
+    summary = summarize_memory_eval([
+        _positive("q1"),
+        {"sample_id": "t1", "negative": False, "completed": False,
+         "error": "timeout after 600s"},
+        {"sample_id": "e1", "negative": False, "completed": False, "error": "boom"},
+    ])
+    assert summary["errors"] == 2
+    assert summary["error_breakdown"] == {"timeout": 1, "agent_error": 1}
 
 
 def test_session_body_formats_turns():

@@ -431,7 +431,7 @@ function normalizeToolPart(
   const step_id = typeof record.step_id === 'string' && record.step_id ? record.step_id : undefined
   const hitl = normalizeToolHitl(record.hitl)
   const output = typeof record.output === 'string' ? record.output : ''
-  // start_task 的 part→子会话关联：桥接层 tool_call_id 与子会话
+  // start_async_task 的 part→子会话关联：桥接层 tool_call_id 与子会话
   // created_by_tool_call_id 不是同一体系，落库 part 也不含该字段，
   // 只能从输出文本「子 Agent 已启动：<id>」提取（兼容存量数据）。
   const childSessionId = String(record.name ?? '') === START_TASK_TOOL_NAME
@@ -1281,7 +1281,7 @@ export function applyToolOutput(
   if (isTerminalToolState(tp.state) && tp.state !== state) {
     return next
   }
-  // start_task 输出文本含「子 Agent 已启动：<uuid>」：流式路径同样要提取
+  // start_async_task 输出文本含「子 Agent 已启动：<uuid>」：流式路径同样要提取
   // child_session_id，否则工具下发后任务卡匹配不到目录状态（只能显示
   // 「已完成」fallback）。normalizeToolPart（落库回放路径）已有同一解析。
   const streamedChildSessionId = tp.name === START_TASK_TOOL_NAME

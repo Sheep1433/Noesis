@@ -139,7 +139,7 @@ function userText(message: ChatMessageResponse): string {
 }
 
 /** run 进行中（含排队/待审批）：发送进入前端待发队列，终态后逐条自动提交 */
-const runActive = computed(() => !!run.value && ['queued', 'running', 'stopping', 'hitl_pending'].includes(run.value.status))
+const runActive = computed(() => !!run.value && ['queued', 'running', 'hitl_pending'].includes(run.value.status))
 
 /** 工具展示模式：与主 Agent 共享同一存储实例（useToolDisplayMode 模块级单例） */
 const { mode: toolDisplayMode } = useToolDisplayMode()
@@ -266,11 +266,6 @@ async function flushNextQueued(): Promise<void> {
 async function sendFollowup() {
   const message = followupInput.value.trim()
   if (!message || followupSending.value) {
-    return
-  }
-  if (run.value?.status === 'stopping') {
-    // 与按钮禁用同口径：stopping 期间不可发送（后端也拒绝），两路径不分叉
-    window.$message?.warning('任务正在停止，无法发送')
     return
   }
   if (runActive.value) {
@@ -626,8 +621,7 @@ async function decideHitl(payload: {
 }
 
 async function stopCurrentRun() {
-  if (!run.value?.run_id || run.value.status === 'stopping') {
-    // stopping 期间重复停止无意义（受理已发出，等静止边界收尾）
+  if (!run.value?.run_id) {
     return
   }
   try {
@@ -797,7 +791,6 @@ onBeforeUnmount(() => {
           <StopSendButton
             :stop-mode="composerStopMode"
             :send-disabled="sendDisabled"
-            :stopping="run?.status === 'stopping'"
             testid-prefix="subagent-"
             @action="(kind) => (kind === 'stop' ? stopCurrentRun() : sendFollowup())"
           />

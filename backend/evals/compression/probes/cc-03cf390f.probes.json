@@ -1,0 +1,154 @@
+{
+  "fixture_id": "cc-03cf390f",
+  "transcript_sha256": "4be8fe4890fe8f7b7dffa11b5f1d38c4949351e389d6be86d6d31e8f27398472",
+  "gen_prompt_version": "gen-probes/v2-stratified",
+  "layer_split": {
+    "macro": 10,
+    "meso": 5,
+    "detail": 5
+  },
+  "region_messages": 1807,
+  "region_tokens": 415361,
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话开始时，用户对前端 UI 提出的最初优化诉求是什么？",
+      "reference_answer": "用户认为现在的 todo 和提问卡片不够专业，可能是各个主题下的色块搭配不合理，要求看看怎么优化。"
+    },
+    {
+      "id": "p2",
+      "type": "recall",
+      "layer": "macro",
+      "question": "在阅读 Deep Agents 教程后，用户布置的审计任务具体是什么、聚焦哪些方面？",
+      "reference_answer": "结合 deepagents 的介绍，检查 Noesis 中有哪些用法不符合 deepagents 的最佳实践，例如磁盘挂载、记忆存储等各方面的问题。"
+    },
+    {
+      "id": "p3",
+      "type": "recall",
+      "layer": "macro",
+      "question": "用户中途打断 AI 阅读教程并对照 Noesis 结构做映射的过程，起到了什么转向作用？",
+      "reference_answer": "用户发出 Request interrupted by user 打断，并将任务从学习/映射重新定向为「结合教程介绍审计 Noesis 中不符合 deepagents 最佳实践的用法」。"
+    },
+    {
+      "id": "p4",
+      "type": "recall",
+      "layer": "macro",
+      "question": "用户询问「不落库指的是什么，会不会影响后续使用」后，AI 给出的核心解释是什么？",
+      "reference_answer": "「不落库」只针对发现这个动作本身：点「获取可用模型」是用表单里正在编辑的 base_url/api_key 做纯网络探测，不建/不改 Provider 行、不存 Key、不自动添加模型；探测结果只存前端内存、刷新即消失；探测尝试只记一条审计日志（llm.provider.discover）。不影响后续使用。"
+    },
+    {
+      "id": "p5",
+      "type": "recall",
+      "layer": "macro",
+      "question": "针对 AI 在前端下拉勾选问题上多次出错，用户提出了什么质疑？AI 复盘后认定误导源是什么？",
+      "reference_answer": "用户问「这么简单的前端问题，你为什么错了这么多次，是不是前端代码注释或者代码有问题导致误判的」。AI 复盘结论：项目代码和注释基本没有误导，误导源是自己的工作方式（凭记忆类比、拿静态检查绿灯当验收）加上 naive-ui 埋的两个真实陷阱。"
+    },
+    {
+      "id": "p6",
+      "type": "recall",
+      "layer": "macro",
+      "question": "用户在会话后段对设置界面提出了哪两个改进要求？",
+      "reference_answer": "①设置界面的模型配置在移动端展示不全、需要手动左右拖动，这不好，要修复；②自定义提供商不应该和模型列表同屏展示，而应提供一个自定义提供商按钮，点击后再出现添加入口，避免干扰用户视线。"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "layer": "macro",
+      "question": "RunSubscription.close() 的 bug 除了报错本身，还造成了什么更严重的实际影响？",
+      "reference_answer": "close() 内对 frozen dataclass 字段赋值每次抛 FrozenInstanceError，导致 closer 里真正的退订逻辑（RunManager.unsubscribe）一次都没执行——每次流正常结束、客户端断开、断线重连旧流销毁，都泄漏一个订阅队列，直到 run 终态回收时才清理。"
+    },
+    {
+      "id": "p8",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话最末尾用户提出了什么疑问？",
+      "reference_answer": "t_runtime_leader 表是干什么的；另外配置 llm 为什么用到了三张表；表内容里为什么还有一些中文。"
+    },
+    {
+      "id": "p9",
+      "type": "recall",
+      "layer": "macro",
+      "question": "deepagents 0.7.0 版本最重要的 breaking change 是什么？",
+      "reference_answer": "create_deep_agent 不再默认包含 TodoListMiddleware——write_todos 工具、todos state channel 和 todo-planning prompt 都被移除，需显式传 middleware=[TodoListMiddleware()] 恢复（主 agent 和每个 SubAgent 分别加）。"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "layer": "macro",
+      "question": "修复订阅泄漏后，全量后端测试的最终结果如何？",
+      "reference_answer": "全量 1212 passed, 8 skipped, 42 deselected（第一次全量跑出的 2 个失败是 test_local_shell_backend_env 网络用例偶发，单独跑和重跑全量都通过，与本次改动无关）。"
+    },
+    {
+      "id": "p11",
+      "type": "recall",
+      "layer": "meso",
+      "question": "设置页移动端展示不全的根因结论是什么？",
+      "reference_answer": "PlatformModelsSection.vue 的 `<style scoped>` 是纯 CSS（无 lang=\"scss\"），里面却用了 SCSS 变量 $bp-md，@media (max-width: $bp-md) 成为非法媒体查询被浏览器整块丢弃，所有移动端适配从未生效过——这是原文件就有的老 bug；$bp-md 定义为 768px（naive-variables.scss:14），vite 的 additionalData 注入只对 scss 生效。"
+    },
+    {
+      "id": "p12",
+      "type": "recall",
+      "layer": "meso",
+      "question": "ModelSelector 下拉勾选一直不显示的根因是什么？最终用什么方案解决？",
+      "reference_answer": "前两次失败：①发明的 render 属性在 naive-ui MenuOption 上根本不存在（自定义渲染是 type:'render' 顶层选项，不能进分组、不可选中），被静默忽略；②extra 类型声明支持函数但实现把函数作为 children 数组元素传入，Vue 不会调用、被序列化成文本。最终改用 n-dropdown 官方 render-label prop（函数被真正调用），勾选由 render-label 统一渲染，分组头不走该路径。"
+    },
+    {
+      "id": "p13",
+      "type": "recall",
+      "layer": "meso",
+      "question": "super-agent-async-tasks 变更第 10 节「过渡层清理（t_bg_task 退役）」删除了哪些东西？",
+      "reference_answer": "删除 t_bg_task 表及三个相关 migration（无存量数据）并修复迁移链；删除 BgTaskStore 协议、configure_task_store 注入、bg_task_repository、启动对账 reconcile_interrupted_tasks；删除 checkpoint thread 读路径（read_messages / read_thread_messages / _message_to_view_item）；文档清单回填为已删除状态。"
+    },
+    {
+      "id": "p14",
+      "type": "recall",
+      "layer": "meso",
+      "question": "为用户自定义 Provider 新增的 provider_presets 平台预设目录包含哪五个预设？",
+      "reference_answer": "opencode（OpenCode Zen，含 HTTP-Referer/X-Title 归因 header）、deepseek（DeepSeek）、qwen（通义千问兼容模式）、minimax（MiniMax）、siliconflow（硅基流动）。"
+    },
+    {
+      "id": "p15",
+      "type": "recall",
+      "layer": "meso",
+      "question": "审计时确认的 Noesis 所依赖的 deepagents 版本是多少、声明在哪个文件？",
+      "reference_answer": "deepagents==0.6.12，声明在 backend/packages/noesis-core/pyproject.toml 第 12 行。"
+    },
+    {
+      "id": "p16",
+      "type": "recall",
+      "layer": "detail",
+      "question": "TodoList 组件中，待处理（pending）和进行中（in_progress）计数的 n-badge 分别使用什么 type？",
+      "reference_answer": "pending 用 type=\"warning\"，in_progress 用 type=\"info\"（max 均为 99）。"
+    },
+    {
+      "id": "p17",
+      "type": "recall",
+      "layer": "detail",
+      "question": "用 Vue SSR 实测「函数放进 h() 的 children 数组」时，输出的 HTML 原文是什么？",
+      "reference_answer": "output: \"<span class=\\\"x\\\"> () =&gt; &#39;HELLO-FN&#39;</span>\"——函数被序列化成文本而不是被调用渲染。"
+    },
+    {
+      "id": "p18",
+      "type": "recall",
+      "layer": "detail",
+      "question": "改造草案发现功能时，user_llm_service.py 出现的语法错误原文是什么、出在哪一行？",
+      "reference_answer": "SyntaxError: 'async with' outside async function——出现在 user_llm_service.py 第 503 行的 async with httpx.AsyncClient( 处，根因是 _probe_models_endpoint 缺少 async。"
+    },
+    {
+      "id": "p19",
+      "type": "recall",
+      "layer": "detail",
+      "question": "文中实测的 LangSmith 研究 Trace 的关键数字是什么？",
+      "reference_answer": "包含 162 个 Run、0 个错误、总耗时约 472.9 秒；按类型查询全部 22 个模型 Run 后最慢的叶子 ChatOpenAI 调用约 85.9 秒；17 个工具 Run 排除 task 包装后最慢的实际工具是约 25.1 秒的 tavily_search。"
+    },
+    {
+      "id": "p20",
+      "type": "recall",
+      "layer": "detail",
+      "question": "t_bg_task 清理后，通过项目 _alembic_config 验证迁移链的结果是什么？",
+      "reference_answer": "heads: ['202608250003']，walk_revisions count: 25——迁移链验证通过（单 head 202608250003，25 个 revision）。"
+    }
+  ]
+}

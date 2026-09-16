@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from server.exception_handlers import handle_exception
 from server.middleware.csrf import CsrfMiddleware
+from server.middleware.request_log_context import RequestLogContextMiddleware
 from noesis.config.env import AppConfig, DistributedRunsConfig, MessagingConfig, StreamConfig
 from noesis.config.checkpointer import close_checkpointer, init_checkpointer
 from server.db import init_database
@@ -167,6 +168,7 @@ app = FastAPI(
 )
 
 handle_exception(app)
+app.add_middleware(RequestLogContextMiddleware)
 app.add_middleware(CsrfMiddleware)
 
 # 加载路由列表

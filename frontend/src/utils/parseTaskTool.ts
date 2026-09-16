@@ -2,7 +2,7 @@
 export const TASK_TOOL_NAME = 'task'
 
 /** 后台子 Agent 启动工具名（BackgroundSubagentCollapse 渲染入口） */
-export const START_TASK_TOOL_NAME = 'start_task'
+export const START_TASK_TOOL_NAME = 'start_async_task'
 
 export const TASK_SUCCEEDED_PREFIX = 'Task Succeeded. Result:'
 
@@ -15,7 +15,7 @@ export const TASK_SUCCEEDED_PREFIX = 'Task Succeeded. Result:'
 const START_TASK_LAUNCHED_RE = /(?:子 Agent 已启动|已自动转为后台)[：:]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/
 
 /**
- * 从 start_task 工具输出文本提取子会话 id。
+ * 从 start_async_task 工具输出文本提取子会话 id。
  * 后端把真实模型 tool_call_id 记在子会话 created_by_tool_call_id 上，
  * 与父消息 part 的 tool_call_id（桥接层生成）不是同一体系，
  * 因此 part → 子会话的关联只能从输出文本提取。

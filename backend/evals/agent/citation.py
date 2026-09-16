@@ -74,11 +74,20 @@ def citation_metrics(
     }
 
 
+# 证据池单文件上限：整篇文档内容远长于检索片段，截断过深会把真支撑判成无支撑
+_EVIDENCE_PER_FILE_CHARS = 24_000
+
+
 def _collect_excerpts(tool_outputs: Iterable[dict[str, Any]]) -> dict[str, str]:
-    """file_name → 检索片段正文（事实溯源的 evidence 池）。"""
-    excerpts: dict[str, str] = {}
+    """file_name → 证据文本（检索片段 + 整篇文档，按引用文件对齐）。
+
+    两条合法取证路径都算证据：search_knowledge_base 的 excerpt 与
+    get_knowledge_document 的 content——只收前者会把手头有整篇文档
+    支撑的事实误判成无支撑（度量低估）。
+    """
+    excerpts: dict[str, list[str]] = {}
     for item in tool_outputs:
-        if item.get("name") != "search_knowledge_base":
+        if item.get("name") not in ("search_knowledge_base", "get_knowledge_document"):
             continue
         raw = item.get("output")
         try:
@@ -87,30 +96,43 @@ def _collect_excerpts(tool_outputs: Iterable[dict[str, Any]]) -> dict[str, str]:
             continue
         if not isinstance(payload, dict):
             continue
+        if item.get("name") == "get_knowledge_document":
+            name = str(payload.get("file_name") or "").strip()
+            text = str(payload.get("content") or "").strip()
+            if name and text:
+                excerpts.setdefault(name, []).append(text)
+            continue
         for hit in payload.get("results") or []:
             if isinstance(hit, dict) and hit.get("file_name"):
                 name = str(hit["file_name"]).strip()
-                excerpts.setdefault(name, str(hit.get("excerpt") or ""))
-    return excerpts
+                text = str(hit.get("excerpt") or "")
+                if name and text:
+                    excerpts.setdefault(name, []).append(text)
+    return {
+        name: "\n\n".join(texts)[:_EVIDENCE_PER_FILE_CHARS]
+        for name, texts in excerpts.items()
+    }
 
 
 def build_fact_grounding_prompt(
     *, answer_facts: list[str], evidence: dict[str, str]
 ) -> str:
     evidence_block = "\n\n".join(
-        f"### {name}\n{text[:4000]}" for name, text in evidence.items()
+        f"### {name}\n{text[:_EVIDENCE_PER_FILE_CHARS]}" for name, text in evidence.items()
     ) or "（无检索片段）"
     facts_block = "\n".join(f"{i}. {f}" for i, f in enumerate(answer_facts, 1))
-    return f"""你是引用溯源评测裁判。判断每条事实能否在给定的检索片段中找到支撑。
+    return f"""你是引用溯源评测裁判。判断每条事实能否在给定的证据文本中找到支撑。
 
 判定标准：
-- supported：片段中存在与该事实一致的信息（数值、名称、结论可直接对上）。
-- unsupported：片段无法支撑该事实，或只有主题相关但细节对不上。
+- supported：证据中存在与该事实一致的信息（数值、名称、结论可直接对上）。
+- unsupported：证据无法支撑该事实，或只有主题相关但细节对不上。
+
+注意：证据可能来自检索片段或整篇文档，超长文档已截断；若事实可能位于截断部分，判 supported 时不降低标准，但在 notes 中注明"证据截断"。
 
 ANSWER FACTS（待判定事实）:
 {facts_block}
 
-EVIDENCE（检索片段）:
+EVIDENCE（检索片段与文档内容）:
 {evidence_block}
 
 仅输出 JSON 数组，不要其它文字：

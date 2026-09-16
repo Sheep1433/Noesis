@@ -47,7 +47,7 @@
 
 ### Requirement: Agent E2E 判卷与失败归因
 
-`evals.agent.rag` SHALL 对 ERB 正样本题提供基于 `gold_answer` 的 LLM-as-judge 任务判卷（采纳 / 部分采纳 / 不采纳三档），judge 模型与被测模型分离。runner SHALL 逐题增量落盘并支持断点续跑：启动时按逐题记录中的样本标识跳过已完成题；单题失败 SHALL 记录错误并继续整批，SHALL NOT 中断后续题。对判卷不采纳的题，系统 SHALL 自动关联该题的检索命中记录与工具轨迹，按确定性规则归因到「检索没召回」「工具行为异常」「推理错」三类并产出归因报告；无组件层数据可关联的题 SHALL 标注为待人工复核而非默认归类。通用 Agent（SUPER_AGENT_QA）场景 SHALL 复用既有 browsecomp 评测线，SHALL NOT 在本能力内新建通用 Agent 数据集。
+`evals.agent.rag` SHALL 对 ERB 正样本题提供基于 `gold_answer` 的 LLM-as-judge 任务判卷（采纳 / 部分采纳 / 不采纳三档），judge 模型与被测模型分离。runner SHALL 逐题增量落盘并支持断点续跑：启动时按逐题记录中的样本标识跳过已完成题；单题失败 SHALL 记录错误并继续整批，SHALL NOT 中断后续题。对判卷不采纳的题，系统 SHALL 自动关联该题的检索命中记录与工具轨迹，按确定性规则归因到「检索没召回」「工具行为异常」「推理错」三类并产出归因报告；无组件层数据可关联的题 SHALL 标注为待人工复核而非默认归类。通用 Agent（SUPER_AGENT_QA）场景 SHALL 复用既有 DeepResearch Bench 子集评测线（`evals.agent.deepresearch`），SHALL NOT 在本能力内新建通用 Agent 数据集。
 
 #### Scenario: 断点续跑
 
@@ -64,7 +64,7 @@
 #### Scenario: 通用 Agent 场景复用既有线
 
 - **WHEN** 需要 SUPER_AGENT_QA 场景的端到端数字
-- **THEN** SHALL 使用 browsecomp 评测线产出，指标口径为该线既有 accuracy
+- **THEN** SHALL 使用 deepresearch 评测线产出，报告原文按官方 RACE/FACT 口径判分
 
 ### Requirement: 记忆召回行为评测
 

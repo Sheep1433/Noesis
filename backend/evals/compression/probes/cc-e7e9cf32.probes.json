@@ -1,0 +1,154 @@
+{
+  "fixture_id": "cc-e7e9cf32",
+  "transcript_sha256": "98d309108b50ca8df1248381e9adf01262b35ea46bef0e6b7e8fce7dc37e788b",
+  "gen_prompt_version": "gen-probes/v2-stratified",
+  "layer_split": {
+    "macro": 10,
+    "meso": 5,
+    "detail": 5
+  },
+  "region_messages": 1854,
+  "region_tokens": 340818,
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "layer": "macro",
+      "question": "用户在本会话开始时提出的第一个实质任务是什么？",
+      "reference_answer": "梳理 Noesis 现在的 Agent 截断（truncation/compaction）机制，对比 Claude Code 是否都已实现。"
+    },
+    {
+      "id": "p2",
+      "type": "recall",
+      "layer": "macro",
+      "question": "关于多通道\"清空对话\"，会话最终确定的对齐方案是什么（Web 端和 Telegram 端分别怎么做）？",
+      "reference_answer": "对齐 hermes 的 /new 命令而非 Claude Code 的 /clear：Web 端用\"新对话\"按钮，不提供 /clear 也不提供 /new；Telegram 端提供 /new 命令（命令语义=重绑到新 session），旧 session end_session 保留不删、可追溯。用户回复\"可以，按照你说的进行实现\"确认。"
+    },
+    {
+      "id": "p3",
+      "type": "recall",
+      "layer": "macro",
+      "question": "前端工具调用展示改造中，用户对三个待确认点（reasoning、正文、双模式）给出的决策是什么？",
+      "reference_answer": "1) reasoning 保留（改成 dsh 行式 Think 行，可展开，不隐藏）；2) 正文保持现状（Markdown 全展开）；3) 保留 compact/verbose 双模式。"
+    },
+    {
+      "id": "p4",
+      "type": "recall",
+      "layer": "macro",
+      "question": "compact 模式视觉重构的核心方向是什么（相对最初\"换卡片内容\"方案的纠正）？",
+      "reference_answer": "从\"块状卡片\"改成\"无装饰一行文字\"：去掉 ToolCallCollapse 的 border/background/shadow/border-left，改成 24px 一行（图标+标题+小圆点+摘要），对齐 deepseek-harness 的 ToolRow/ReasoningRow；reasoning 也改成同样的一行；展开时才有卡片容器。"
+    },
+    {
+      "id": "p5",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话最后阶段在前端落地了哪几项改动？",
+      "reference_answer": "三项：1) 整轮回复结束收起所有工具（ToolCallCollapse 新增 collapseSignal prop，chat.vue 的 onFinish 时 runCollapseSignal 递增，忽略用户是否手动展开过）；2) 整轮回复计时（runElapsedText helper，流式中用 processingNow 实时算，完成后用 completed_at - created_at）；3) 浅色主题下块背景色改白。"
+    },
+    {
+      "id": "p6",
+      "type": "recall",
+      "layer": "macro",
+      "question": "浅色主题下用户报告了什么视觉不一致问题，最终怎么修复的？",
+      "reference_answer": "用户报告：浅色主题下背景色是灰色但文本框显示白色，不一致（纸墨和深色风格下 markdown 显示和背景是同一颜色）。修复：把 _presets.scss 中浅色主题的 --noesis-block-light-bg 从 #f3f4f6（灰）改成 #ffffff，与页面背景一致，border 保留 #e5e7eb。"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "layer": "macro",
+      "question": "关于 deepdoc 解析中 xgboost 的用途，最终结论是什么？",
+      "reference_answer": "xgboost 只在 PDF 解析时需要：pdf_parser.py 里 updown_cnt_mdl = xgb.Booster() 是 PDF 版面分析的\"上下文连接模型\"（判断相邻文本块是否连成一段，加载 updown_concat_xgb.model），.txt 解析完全不需要。代码已防护：_load_deepdoc_parser_module 按文件加载 deepdoc.parser 子模块，避免 parser/__init__ 拉取 PDF/xgboost。"
+    },
+    {
+      "id": "p8",
+      "type": "recall",
+      "layer": "macro",
+      "question": "ERB 检索评测的脚本和数据集最终如何归置？",
+      "reference_answer": "脚本从 .noesis/erb_eval/ 迁到 backend/evals/kb/erb.py（模块化入口 uv run python -m evals.kb.erb，进 git 版本化）；数据集迁到 evals/kb/erb_data/（34378 篇语料 + 500 题 + ingest_plan.json），加入 backend/.gitignore，环境变量 ERB_DATA_DIR 可重定向（对齐 browsecomp 的 BROWSECOMP_CSV_PATH 模式）。"
+    },
+    {
+      "id": "p9",
+      "type": "recall",
+      "layer": "macro",
+      "question": "为什么评测脚本不能放在 .noesis/ 目录下？",
+      "reference_answer": ".noesis/ 是 gitignored 的运行时数据目录；脚本是资产应进仓库版本化，丢了就要重写。且项目已有完整的 backend/evals/ 评测套件约定（agent/case/compression/kb/loadtest 五类 + README 索引 + OpenSpec 登记）。"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "layer": "macro",
+      "question": "RAG 阈值调优验证的最终结论是什么（关于最优工作点）？",
+      "reference_answer": "ERB 冒烟显示正样本 GT 分（0.18）和负样本最高噪音分（0.14）在 10 倍语料下仍然分离，但重叠区间在 0.10~0.15 附近——正拒和召回的最优工作点大概率在 0.15 附近而不是现在生产用的 0.05，需要全量数据确定。"
+    },
+    {
+      "id": "p11",
+      "type": "recall",
+      "layer": "meso",
+      "question": "实现 /new 命令时发现的、Noesis 相比 hermes 的关键架构约束是什么？",
+      "reference_answer": "telegram_runtime 里 dispatch_command(inbound) 在拿到 binding 之后调用，但 inbound 只塞了 user_id，没塞 session_id 或 channel 信息；命令 handler 拿不到 binding.session_id，也没法重绑 channel_bindings。Noesis 把命令隔离在 noesis.chat.commands 包，handler 拿不到通道上下文（hermes gateway 层直接有 source 和 session_store，没这个约束）。"
+    },
+    {
+      "id": "p12",
+      "type": "recall",
+      "layer": "meso",
+      "question": "web 通道与 telegram 通道在\"重绑 binding\"上的语义差异是什么？",
+      "reference_answer": "web 通道 InboundMessage 的 external_chat_id = session_id，重绑会把 session_id 当 chat_id 污染 binding，所以 web 不该重绑（web 用按钮切）；telegram 的 external_chat_id = chat_id，该重绑到新 session。handler 可通过 channel_type 字段判断区分。"
+    },
+    {
+      "id": "p13",
+      "type": "recall",
+      "layer": "meso",
+      "question": "前端工具展示改造的三档方案评估及最终建议是什么？",
+      "reference_answer": "档1：纯 CSS/header 调整（约半天）；档2：聚合渲染 + 简洁/详细开关（1-2 天，推荐，核心是 GroupedToolUseCollapse 聚合连续同类工具）；档3：后端 SSE 消息转换（3-5 天风险高，不建议——前端已有 parts 数据层，动后端影响 SSE 持久化和多通道；Claude Code 做后端转换是因为它是单进程 TUI）。"
+    },
+    {
+      "id": "p14",
+      "type": "recall",
+      "layer": "meso",
+      "question": "双模式展示开关的实现参照了项目里什么现有模式？为什么？",
+      "reference_answer": "参照 useThemePreset 的持久化模式：useLocalStorage（vueuse）+ composable 导出 getter/setter。考察过 useAppStore（只有 areaLoading 太简）、userStore（用户信息，不适合）；n-collapse 当前全用 default-expanded 非受控 API，要改受控才能实现\"跑完收起\"。"
+    },
+    {
+      "id": "p15",
+      "type": "recall",
+      "layer": "meso",
+      "question": "ERB 冒烟测试（2 题）的结果和冒烟过程中发现了什么？",
+      "reference_answer": "正样本 qst_0180（semantic 题，问 TrafficEscrow）：GT 文档 3 个 chunk 占据 top-4 中三席、排名第一；负样本 qst_0485（info_not_found）：th=0.15 剩 0 条正确拒答，th=0.05 剩 10 条误检。冒烟还修了评测脚本一个 bug：正样本最初没过滤\"GT 在语料内\"，抽到一道 gmail 题会被错误记为 miss。"
+    },
+    {
+      "id": "p16",
+      "type": "recall",
+      "layer": "detail",
+      "question": "被分析的 codex 会话记录文件的完整路径和总行数是多少？",
+      "reference_answer": "~/.codex/sessions/2026/08/17/rollout-2026-08-17T19-33-12-01a00f7f-3e80-7b30-a375-16399ad909cb.jsonl，共 442 行。"
+    },
+    {
+      "id": "p17",
+      "type": "recall",
+      "layer": "detail",
+      "question": "codex 写设计报告第一次 apply_patch 失败时的报错原文是什么？",
+      "reference_answer": "\"apply_patch verification failed: invalid hunk at line 260, 'tool_call_id        VARCHAR NULL' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}'...\""
+    },
+    {
+      "id": "p18",
+      "type": "recall",
+      "layer": "detail",
+      "question": "deepseek-harness 的 ToolRow/ReasoningRow 在 running 状态下的扫光动画具体参数是什么？",
+      "reference_answer": "300px 宽的渐变 ::after 伪元素，animation: dsh-reasoning-row-sweep 2.6s ease-out infinite，从 left: -300px 滑到 100%（仅 running 时有动画，data-state='running' 触发）。"
+    },
+    {
+      "id": "p19",
+      "type": "recall",
+      "layer": "detail",
+      "question": "LLMErrorHandlingMiddleware 的熔断参数和退避三常量的具体数值是什么？这些值可以经配置覆盖吗？",
+      "reference_answer": "circuit breaker：连续失败 5 次熔断 60s（_DEFAULT_CIRCUIT_FAILURE_THRESHOLD=5、_DEFAULT_CIRCUIT_RECOVERY_TIMEOUT_SEC=60）；退避常量 retry_base_delay_ms=1000、retry_cap_delay_ms=8000、burst_retry_base_delay_ms=5000。全部硬编码，不经 yaml/env 配置。"
+    },
+    {
+      "id": "p20",
+      "type": "recall",
+      "layer": "detail",
+      "question": "RAG 真实链路验证时，zzq-test 库查询\"测试内容\"那条日志的关键指标数值是什么？",
+      "reference_answer": "recall_hits=20, final_hits=0, score_threshold=0.3, threshold_filtered=15, rerank_applied=True, rerank_docs=15, recall_top_k=20, rerank_top_k=15, final_top_k=10, total_ms=1646.4。"
+    }
+  ]
+}

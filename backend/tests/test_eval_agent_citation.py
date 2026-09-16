@@ -70,6 +70,23 @@ def test_citation_accuracy_none_without_kb_citations():
     assert m["format_compliant"] is False
 
 
+def test_fact_grounding_accepts_full_document_evidence():
+    """get_knowledge_document 的整篇内容也进证据池（此前漏收导致可溯源率低估）。"""
+    outputs = [{
+        "name": "get_knowledge_document",
+        "output": json.dumps({
+            "file_name": "cited.md", "content": "full doc: the limit is 10 MiB per file",
+        }, ensure_ascii=False),
+    }]
+    out = judge_fact_grounding(
+        answer_facts=["per-file limit is 10 MiB"],
+        tool_outputs=outputs,
+        cited_files=["cited.md"],
+        llm=FakeLLM(json.dumps([{"fact_index": 1, "supported": True, "notes": ""}])),
+    )
+    assert out["grounding_rate"] == 1.0
+
+
 def test_fact_grounding_restricts_evidence_to_cited_files():
     outputs = [{
         "name": "search_knowledge_base",

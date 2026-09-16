@@ -217,7 +217,7 @@ async def _run_stop_scenario(pg_manager, *, hard_kill: bool) -> None:
             assistant_message_id=ids["assistant_message_id"],
         )
         await _wait_first_projection(pg_manager, ids["assistant_message_id"])
-        assert executor.cancel(task_id)["status"] == BgTaskStatus.STOPPING.value
+        assert executor.cancel(task_id)["status"] == BgTaskStatus.CANCELLED.value
 
         if hard_kill:
             # 绕过墙钟直接触发宽限超时硬杀（真实路径为 call_later 回调）；

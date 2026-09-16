@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from dotenv import load_dotenv
+# 全仓唯一绕过 noesis.runtime.logging 的例外：config 是最底层，runtime.logging 反过来
+# 依赖 config.paths，从这里导入会倒置依赖并让 sink 初始化提前到配置加载期。
+# loguru 的 logger 是进程级单例，这里拿到的与统一入口是同一个对象。
 from loguru import logger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -111,6 +114,7 @@ class ModelSettings:
     vlm_model_api_key: str
     show_thinking_process: str
     request_timeout: float
+    stream_idle_timeout: float
     max_retries: int
     max_tokens: int
     top_p: float
@@ -125,6 +129,7 @@ class ModelSettings:
     summarization_trigger_tokens: int
     summarization_trigger_fraction: float
     summarization_messages_to_keep: int
+    summarization_user_message_tokens: int
     governor_loop_enabled: bool
     governor_loop_hard_limit: int
     governor_loop_window_size: int
@@ -213,6 +218,14 @@ class MemorySettings:
 
 
 @dataclass(frozen=True)
+class HistorySearchSettings:
+    max_hits: int
+    max_excerpt_chars: int
+    max_total_chars: int
+    max_window: int
+
+
+@dataclass(frozen=True)
 class HitlSettings:
     enabled: bool
     ask_timeout_seconds: int
@@ -221,13 +234,10 @@ class HitlSettings:
 @dataclass(frozen=True)
 class SubagentSettings:
     max_concurrent_per_session: int
+    max_concurrent_global: int
     task_timeout_seconds: float
-    foreground_max_wait_seconds: float
-    auto_continue: bool
-    auto_continue_debounce_seconds: float
     shell_task_timeout_seconds: float
-    stop_grace_seconds: float
-    stop_reconcile_seconds: float
+    auto_continue: bool
 
 
 @dataclass(frozen=True)
@@ -453,6 +463,8 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
             "SHOW_THINKING_PROCESS", "true" if m.show_thinking_process else "false"
         ),
         request_timeout=_legacy_env_float("REQUEST_TIMEOUT", m.request_timeout),
+        stream_idle_timeout=_legacy_env_float(
+            "STREAM_IDLE_TIMEOUT", m.stream_idle_timeout),
         max_retries=_legacy_env_int("MAX_RETRIES", m.max_retries),
         max_tokens=_legacy_env_int("MAX_TOKENS", gen.max_tokens),
         top_p=_legacy_env_float("TOP_P", gen.top_p),
@@ -478,6 +490,9 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         ),
         summarization_messages_to_keep=_legacy_env_int(
             "SUMMARIZATION_MESSAGES_TO_KEEP", s.messages_to_keep
+        ),
+        summarization_user_message_tokens=_legacy_env_int(
+            "SUMMARIZATION_USER_MESSAGE_TOKENS", s.user_message_tokens
         ),
         governor_loop_enabled=_legacy_env_bool(
             "GOVERNOR_LOOP_ENABLED", gov.loop_enabled
@@ -642,17 +657,25 @@ def _build_hitl(yaml_cfg: AppYamlConfig) -> HitlSettings:
     )
 
 
+def _build_history_search(yaml_cfg: AppYamlConfig) -> HistorySearchSettings:
+    value = yaml_cfg.history_search
+    return HistorySearchSettings(
+        max_hits=value.max_hits,
+        max_excerpt_chars=value.max_excerpt_chars,
+        max_total_chars=value.max_total_chars,
+        max_window=value.max_window,
+    )
+
+
 def _build_subagents(yaml_cfg: AppYamlConfig) -> SubagentSettings:
     subagents = yaml_cfg.subagents
     return SubagentSettings(
         max_concurrent_per_session=subagents.max_concurrent_per_session,
-        task_timeout_seconds=subagents.task_timeout_seconds,
-        foreground_max_wait_seconds=subagents.foreground_max_wait_seconds,
+        max_concurrent_global=subagents.max_concurrent_global,
+        task_timeout_seconds=_legacy_env_float(
+            "SUBAGENT_TASK_TIMEOUT_SECONDS", subagents.task_timeout_seconds),
         auto_continue=subagents.auto_continue,
-        auto_continue_debounce_seconds=subagents.auto_continue_debounce_seconds,
         shell_task_timeout_seconds=subagents.shell_task_timeout_seconds,
-        stop_grace_seconds=subagents.stop_grace_seconds,
-        stop_reconcile_seconds=subagents.stop_reconcile_seconds,
     )
 
 
@@ -933,6 +956,10 @@ class GetConfig:
     def get_memory_config(self) -> MemorySettings:
         return _build_memory(self._yaml)
 
+    @lru_cache
+    def get_history_search_config(self) -> HistorySearchSettings:
+        return _build_history_search(self._yaml)
+
     @staticmethod
     def parse_cli_args() -> None:
         is_pytest = "pytest" in sys.modules or "pytest" in sys.argv[0]
@@ -983,3 +1010,4 @@ MessagingConfig = get_config.get_messaging_config()
 ChatAttachmentConfig = get_config.get_chat_attachment_config()
 KbConfig = get_config.get_kb_config()
 MemoryConfig = get_config.get_memory_config()
+HistorySearchConfig = get_config.get_history_search_config()

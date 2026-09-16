@@ -69,7 +69,8 @@ class DatabaseYamlSection(BaseModel):
     port: int = 5432
     user: str = "noesis"
     database: str = "noesis"
-    echo: bool = True
+    # SQL 回显默认关闭：逐条 SQL 直打 stdout 会与业务日志混流，排障时经 config.yaml 或 DB_ECHO 按需开启
+    echo: bool = False
     max_overflow: int = 10
     pool_size: int = 50
     pool_recycle: int = 3600
@@ -121,6 +122,9 @@ class ModelYamlSection(BaseModel):
     api_key: str = ""
     show_thinking_process: bool = True
     request_timeout: float = Field(default=30.0, gt=0)
+    # 流式「块间隔」超时：两块生成之间最长等待（thinking 模型大上下文
+    # 首字延迟常超 30s，不能复用 request_timeout 否则误杀长请求）
+    stream_idle_timeout: float = Field(default=120.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
     generation: ModelGenerationYamlSection = Field(
         default_factory=ModelGenerationYamlSection
@@ -173,8 +177,9 @@ class SummarizationYamlSection(BaseModel):
     trigger_fraction: float = Field(default=0.75, gt=0, le=1)
     # model profile 不可用时的消息数量 fallback
     messages_to_keep: int = Field(default=28, ge=1)
-    # model profile 不可用时的消息数量 fallback
-    messages_to_keep: int = Field(default=28, ge=1)
+    # 被压缩区用户消息原文装回预算（token，对齐 codex compact）：
+    # 压缩后投影头部按此预算从最新往最旧装回用户原话，0 = 关闭
+    user_message_tokens: int = Field(default=20_000, ge=0)
 
 
 class GovernorYamlSection(BaseModel):
@@ -366,24 +371,20 @@ class HitlYamlSection(BaseModel):
 
 
 class SubagentsYamlSection(BaseModel):
-    """SuperAgent 后台子 Agent（全异步 task + HITL 审批续跑）。"""
+    """后台任务运行时配置：只收真实运维旋钮（5 个）。
+
+    工程窗口值（停止宽限 30s、对账窗口 30s、前台等待 600s、续跑去抖
+    60s）是机制内部参数，调定后无人再动，降为模块常量不进配置。
+    """
 
     max_concurrent_per_session: int = Field(default=3, ge=1)
+    # 全局并发总闸（跨会话）：0 = 不限。防多会话同时各派满任务压垮进程
+    max_concurrent_global: int = Field(default=12, ge=0)
     task_timeout_seconds: float = Field(default=900, gt=0)
-    # 前台等待上限：超过即自动转后台（同步转异步）
-    foreground_max_wait_seconds: float = Field(default=120, gt=0)
-    # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
-    auto_continue: bool = Field(default=True)
-    # 续跑去抖窗口：终态到达后等待该秒数再唤醒（窗口内多个终态合并为
-    # 一次 continuation run，显著降低重复发送全量上下文的 token 成本）；
-    # 0 = 立即唤醒（旧行为）
-    auto_continue_debounce_seconds: float = Field(default=60, ge=0)
     # 后台命令任务（execute run_in_background）超时：0=不限时
     shell_task_timeout_seconds: float = Field(default=0, ge=0)
-    # 协作停止宽限：停止请求发出后等待静止边界的上限，超时回退硬杀
-    stop_grace_seconds: float = Field(default=30, gt=0)
-    # 硬杀后强制终态对账延迟：硬取消协程未按约收口时的兜底窗口
-    stop_reconcile_seconds: float = Field(default=30, gt=0)
+    # 后台任务终态后自动续跑主 Agent（无活跃 run 时创建 continuation run）
+    auto_continue: bool = Field(default=True)
 
 
 class MessagingYamlSection(BaseModel):
@@ -452,6 +453,19 @@ class MemoryYamlSection(BaseModel):
     max_message_chars: int = Field(default=120_000, ge=10_000, le=1_000_000)
 
 
+class HistorySearchYamlSection(BaseModel):
+    """Agent 会话历史检索（openspec: session-history-search）。"""
+
+    # 两个检索工具 limit 参数的服务端钳制
+    max_hits: int = Field(default=10, ge=1, le=50)
+    # 单条命中截断长度（超长 assistant 消息含嵌在 parts 里的工具轨迹）
+    max_excerpt_chars: int = Field(default=2000, ge=200, le=100_000)
+    # 单次返回总字符上限（检索不得成为读回全量历史的通道）
+    max_total_chars: int = Field(default=12_000, ge=1_000, le=200_000)
+    # 滚动深读 window 的服务端上限
+    max_window: int = Field(default=10, ge=1, le=50)
+
+
 class AppYamlConfig(BaseModel):
     config_version: int = 1
     app: AppYamlSection = Field(default_factory=AppYamlSection)
@@ -495,6 +509,9 @@ class AppYamlConfig(BaseModel):
     )
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
     memory: MemoryYamlSection = Field(default_factory=MemoryYamlSection)
+    history_search: HistorySearchYamlSection = Field(
+        default_factory=HistorySearchYamlSection
+    )
 
 
 @lru_cache

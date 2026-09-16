@@ -2,7 +2,7 @@
 
 覆盖 spec「后台命令任务」Requirement：
 - start_shell：不经 worker 编译，backend 执行，completed 带 exit code + 输出尾部
-- shell 任务不可对话：send_message 拒绝
+- shell 任务不可对话：deliver_followup 拒绝
 - 会话沙箱销毁：运行中任务转 failed（容器回收连坐）
 - execute 工具替换：同名 + run_in_background 参数；false 原样委托原工具；
   true 立即返回 task_id；超并发优雅拒绝
@@ -63,7 +63,7 @@ def _wait_terminal(executor: BackgroundTaskExecutor, task_id: str, timeout: floa
     while time.time() < deadline:
         task = executor.get(task_id)
         assert task is not None
-        if task["status"] == BgTaskStatus.AWAITING_APPROVAL.value or task["status"] in {
+        if task["status"] in {
             BgTaskStatus.COMPLETED.value,
             BgTaskStatus.FAILED.value,
             BgTaskStatus.CANCELLED.value,
@@ -111,8 +111,9 @@ def test_shell_task_rejects_followup() -> None:
         command="echo hi", backend=backend, session_id="s-sh", user_id="u1",
     )
     _wait_terminal(executor, task_id)
+    import asyncio as _a
     with pytest.raises(ValueError, match="后台命令任务"):
-        BackgroundTaskExecutor.send_message(task_id, "再跑一次")
+        _a.run(BackgroundTaskExecutor.deliver_followup(task_id, "再跑一次"))
 
 
 def test_fail_session_shell_tasks_on_sandbox_destroy() -> None:
@@ -212,6 +213,14 @@ async def test_replace_execute_tool_foreground_delegates_unchanged() -> None:
     assert "[Command succeeded with exit code 0]" in result.content
 
 
+def _bg_tool_text(result) -> str:
+    """execute 后台分支返回 Command：取其 ToolMessage 文本。"""
+    if hasattr(result, "update"):
+        msgs = result.update.get("messages") or []
+        return str(msgs[0].content) if msgs else ""
+    return result.content if hasattr(result, "content") else str(result)
+
+
 @pytest.mark.asyncio
 async def test_replace_execute_tool_background_starts_shell_task() -> None:
     """run_in_background=true：立即返回 task_id，命令进 shell 任务管线。"""
@@ -223,7 +232,7 @@ async def test_replace_execute_tool_background_starts_shell_task() -> None:
     )
     replaced = middleware.tools[0]
     result = await _call(replaced, command="make build", run_in_background=True)
-    content = result.content if hasattr(result, "content") else str(result)
+    content = _bg_tool_text(result)
     task_id = content.split("：")[1].split("\n")[0]
     assert task_id.startswith("bg-")
     task = _wait_terminal(executor, task_id)
@@ -243,10 +252,10 @@ async def test_replace_execute_tool_queues_when_concurrency_full() -> None:
     )
     replaced = middleware.tools[0]
     first = await _call(replaced, command="sleep 30", run_in_background=True)
-    first_content = first.content if hasattr(first, "content") else str(first)
+    first_content = _bg_tool_text(first)
     assert "bg-" in first_content
     second = await _call(replaced, command="echo x", run_in_background=True)
-    second_content = second.content if hasattr(second, "content") else str(second)
+    second_content = _bg_tool_text(second)
     assert "后台命令任务已启动" in second_content
     assert "bg-" in second_content
     executor.cancel(first_content.split("：")[1].split("\n")[0])
@@ -359,19 +368,16 @@ def _execute_call(command: str, call_id: str = "call_exec", **extra: Any) -> AIM
     )
 
 
-def _build_full_agent(tmp_path, *, executor, script, interrupt_on=None):
+def _build_full_agent(tmp_path, *, executor, script):
     """真实装配：LocalShellBackend + FilesystemMiddleware（execute 替换）+ 可选 HITL。"""
     from deepagents.backends.local_shell import LocalShellBackend
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain.agents import create_agent
-    from langchain.agents.middleware import HumanInTheLoopMiddleware
-
+    
     backend = LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, timeout=5)
     fm = FilesystemMiddleware(backend=backend)
     replace_execute_tool(fm, executor=executor, backend=backend, session_id="s-full", user_id="u1")
     middleware = [fm]
-    if interrupt_on:
-        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
     return create_agent(
         _ScriptedModel(script=list(script)),
         tools=[],
@@ -422,42 +428,3 @@ async def test_fullstack_background_execute_string_return(tmp_path) -> None:
     task = _wait_terminal(executor, tasks[0]["task_id"])
     assert task["status"] == BgTaskStatus.COMPLETED.value
     assert "bg-ok" in (task["result"] or "")
-
-
-@pytest.mark.asyncio
-async def test_fullstack_hitl_interrupt_before_background_start(tmp_path) -> None:
-    """HITL × 后台化：interrupt_on["execute"] 按名匹配替换后的工具，
-    审批发生在启动前——interrupt 时注册表无任务；批准后续跑才启动。"""
-    from langgraph.types import Command
-
-    executor = BackgroundTaskExecutor()
-    agent = _build_full_agent(
-        tmp_path, executor=executor,
-        script=[_execute_call("sleep 1 && echo approved-bg", run_in_background=True)],
-        interrupt_on={"execute": True},
-    )
-    config = {"configurable": {"thread_id": "t-hitl"}}
-    final_state = None
-    async for chunk in agent.astream(
-        {"messages": [HumanMessage(content="跑危险命令")]}, config, stream_mode="values",
-    ):
-        final_state = chunk
-    interrupts = final_state.get("__interrupt__") if isinstance(final_state, dict) else None
-    assert interrupts, "execute 调用应触发 HITL interrupt"
-    # 审批发生在启动前：此刻不应有任何后台任务
-    assert BackgroundTaskExecutor.list_for_session("s-full") == []
-
-    # 批准 → 续跑 → 工具真正执行（resume 契约与 executor.submit_decisions
-    # 一致：{"decisions": [...]}）
-    final_state = None
-    async for chunk in agent.astream(
-        Command(resume={"decisions": [{"type": "approve"}]}), config, stream_mode="values",
-    ):
-        final_state = chunk
-    tool_msgs = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
-    assert tool_msgs and "后台命令任务已启动" in tool_msgs[-1].content
-    tasks = BackgroundTaskExecutor.list_for_session("s-full")
-    assert len(tasks) == 1
-    task = _wait_terminal(executor, tasks[0]["task_id"])
-    assert task["status"] == BgTaskStatus.COMPLETED.value
-    assert "approved-bg" in (task["result"] or "")

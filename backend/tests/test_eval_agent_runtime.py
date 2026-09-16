@@ -3,7 +3,26 @@ from types import SimpleNamespace
 
 import pytest
 
-from evals.agent.runtime import AgentEventCollector, collect_agent_events
+from evals.agent.runtime import AgentEventCollector, collect_agent_events, flag_empty_completion
+
+
+def test_flag_empty_completion_marks_silent_model_failure():
+    # 网关欠费 402 等上游故障经错误中间件转成「正常空完成」：零文本零工具
+    payload = flag_empty_completion(
+        {"completed": True, "final_text": "", "tool_stats": {}, "error": None})
+    assert payload["completed"] is False
+    assert "empty completion" in payload["error"]
+    # 有文本或工具活动的正常完成不受影响
+    ok = flag_empty_completion(
+        {"completed": True, "final_text": "答案", "tool_stats": {}, "error": None})
+    assert ok["completed"] is True and ok["error"] is None
+    ok2 = flag_empty_completion(
+        {"completed": True, "final_text": "", "tool_stats": {"read_file": 1}, "error": None})
+    assert ok2["completed"] is True
+    # 未完成的记录不重复改写
+    failed = flag_empty_completion(
+        {"completed": False, "final_text": "", "tool_stats": {}, "error": "timeout after 1s"})
+    assert failed["error"] == "timeout after 1s"
 
 
 def test_agent_event_collector_builds_common_manifest():

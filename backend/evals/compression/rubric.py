@@ -18,6 +18,11 @@ DIMENSIONS: List[str] = [
     "completeness",
 ]
 
+# 判卷 prompt 版本：随 manifest 落盘，判分口径变更可追溯
+# v2: 中性化前提——不再声称「仅基于压缩后的会话上下文」（三组对比下对
+# 不压缩/检索组是假前提，可能使裁判对放弃式回答放宽判罚）
+JUDGE_PROMPT_VERSION = "recall-2-1-0+v5dims/v2"
+
 # headline 判分：2=正确 / 1=部分 / 0=错误
 RECALL_VALUES = (2, 1, 0)
 
@@ -61,7 +66,8 @@ def build_judge_prompt(
     scale_block = "\n".join(f"  {k}: {v}" for k, v in sorted(SCORE_SCALE.items()))
     dim_schema = "\n".join(f'  "{d}": <0-5 integer>,' for d in DIMENSIONS)
 
-    return f"""你是消息压缩评测裁判。助手仅基于**压缩后的会话上下文**回答了 probe 问题。
+    return f"""你是消息压缩评测裁判。助手基于其可用的会话上下文回答了 probe 问题
+（不同评测组的可用上下文不同，你无从也不需知道；判分只锚定 reference 与作答内容本身）。
 请先给 recall 判分，再按五个诊断维度打分。
 
 recall 判分（headline，三档）：

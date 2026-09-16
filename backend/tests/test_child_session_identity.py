@@ -124,127 +124,26 @@ async def test_missing_subagent_run_raises_not_found(method_name: str, extra: di
 
 
 @pytest.mark.asyncio
-async def test_resume_hitl_normalizes_pydantic_decisions(monkeypatch) -> None:
-    """API 层传入的 HitlDecisionItem 必须归一化为纯 dict。
 
-    executor 的 resume 载荷直接进 langchain HITL 中间件（按下标取值），
-    pydantic 对象会 TypeError 崩掉整个子 Agent（用户审批拒绝即失败）。
-    """
-    from unittest.mock import AsyncMock, MagicMock
 
-    from noesis.schemas.qa_vo import HitlDecisionItem
-    from noesis.services import subagent_session_service as svc
-
-    run = SimpleNamespace(id="run-1", session_id="child-1", origin="subagent")
-    run_result = MagicMock()
-    run_result.scalar_one_or_none.return_value = run
-    db = SimpleNamespace(execute=AsyncMock(), rollback=AsyncMock())
-
-    submitted: list = []
-
-    class _Port:
-        @staticmethod
-        def submit_decisions(task_id, decisions):
-            submitted.append((task_id, decisions))
-            return {"task_id": task_id}
-
-    import noesis.services.subagent_runtime_port as port
-
-    monkeypatch.setattr(port, "ExecutorPort", _Port, raising=False)
-    monkeypatch.setattr(
-        svc, "ExecutorPort", _Port, raising=False
-    )
-    # _wait_run 首轮查询即命中：状态已脱离 hitl_pending
-    terminal = SimpleNamespace(status="running")
-    terminal_result = MagicMock()
-    terminal_result.scalar_one_or_none.return_value = terminal
-    db.execute = AsyncMock(side_effect=[run_result, terminal_result])
-
-    await svc.SubagentSessionService.resume_hitl(
-        run_id="run-1",
-        user_id="user-1",
-        decisions=[HitlDecisionItem(type="reject", message="用户拒绝了该操作")],
-        db=db,
-    )
-
-    assert submitted == [("child-1", [{"type": "reject", "message": "用户拒绝了该操作"}])]
 
 
 @pytest.mark.asyncio
-async def test_mark_waiting_approval_updates_assistant_message(monkeypatch) -> None:
-    """进入待审批必须原子更新 run 与 assistant 消息投影。
+async def test_resume_hitl_rejects_with_409(monkeypatch) -> None:
+    """子 Agent 无待审批操作：后台任务全自主（危险命令工具层拒绝），resume 入口只给明确 409。"""
+    from noesis.errors.exceptions import ConflictException
+    from noesis.services.subagent_session_service import SubagentSessionService
 
-    消息不更新的话重开抽屉时被中断工具段仍是 running（扫光），
-    与等待审批的事实不符。
-    """
-    from unittest.mock import AsyncMock, MagicMock
+    class _Run:
+        origin = "subagent"
+        session_id = "s1"
 
-    from noesis.services import subagent_session_service as svc
+    async def fake_get(run_id, user_id, db):
+        return _Run()
 
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
-    db.commit = AsyncMock()
-    db.rollback = AsyncMock()
-
-    class _Ctx:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *args):
-            return False
-
-    monkeypatch.setattr(
-        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
-        lambda: _Ctx(),
-    )
-
-    content = {"version": 1, "parts": [
-        {"type": "tool", "tool_call_id": "c1", "state": "approval_pending"},
-    ]}
-    interrupt = {"interrupt_id": "iid", "action_requests": [{"name": "write_file", "tool_call_id": "c1"}]}
-
-    await svc.SubagentSessionService.mark_waiting_approval(
-        "run-1", interrupt, content=content, sequence=3, assistant_message_id="msg-1",
-    )
-
-    assert db.execute.await_count == 2
-    run_stmt, message_stmt = [call.args[0] for call in db.execute.await_args_list]
-    assert run_stmt.table.name == "t_agent_run"
-    assert message_stmt.table.name == "t_chat_message"
-    assert content in message_stmt.compile().params.values()
-    db.commit.assert_awaited_once()
-    db.rollback.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_mark_waiting_approval_skips_message_when_run_guard_misses(monkeypatch) -> None:
-    """run 守卫未命中（迟到投影）时回滚，不得再单独更新消息造成两表分叉。"""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from noesis.services import subagent_session_service as svc
-
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=0))
-    db.commit = AsyncMock()
-    db.rollback = AsyncMock()
-
-    class _Ctx:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *args):
-            return False
-
-    monkeypatch.setattr(
-        "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
-        lambda: _Ctx(),
-    )
-
-    await svc.SubagentSessionService.mark_waiting_approval(
-        "run-1", {"interrupt_id": "iid"}, content={"parts": []}, sequence=3,
-        assistant_message_id="msg-1",
-    )
-
-    db.execute.assert_awaited_once()
-    db.rollback.assert_awaited_once()
-    db.commit.assert_not_awaited()
+    monkeypatch.setattr(SubagentSessionService, "_get_owned_run", staticmethod(fake_get))
+    with pytest.raises(ConflictException) as exc_info:
+        await SubagentSessionService.resume_hitl(
+            run_id="r1", user_id="u1", decisions=[{"type": "approve"}], db=None,
+        )
+    assert "无待审批" in (exc_info.value.message or "")

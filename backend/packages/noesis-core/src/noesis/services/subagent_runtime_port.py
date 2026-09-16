@@ -31,7 +31,6 @@ def child_session_summary(task: dict, *, parent_id: str) -> dict:
         "step_count": task.get("progress_count", 0),
         "started_at": task.get("started_at"),
         "finished_at": task.get("completed_at"),
-        "interrupt": task.get("interrupt"),
     }
 
 
@@ -67,14 +66,6 @@ class SubagentSessionPort:
         return await _service().persist_projection(*args, **kwargs)
 
     @staticmethod
-    async def mark_waiting_approval(*args: Any, **kwargs: Any) -> Any:
-        return await _service().mark_waiting_approval(*args, **kwargs)
-
-    @staticmethod
-    async def mark_resumed(*args: Any, **kwargs: Any) -> Any:
-        return await _service().mark_resumed(*args, **kwargs)
-
-    @staticmethod
     async def mark_terminal(*args: Any, **kwargs: Any) -> Any:
         return await _service().mark_terminal(*args, **kwargs)
 
@@ -86,21 +77,11 @@ class SubagentSessionPort:
 
 
 class ExecutorPort:
+    # 单一异步入口（校验折叠在锁内前置）：曾因同步/异步双版本导致端口
+    # 白名单漂移（漏 asend_message → 全部 followup 500），收敛为单方法
     @staticmethod
-    def validate_followup(*args: Any, **kwargs: Any) -> Any:
-        return _executor().validate_followup(*args, **kwargs)
-
-    @staticmethod
-    def send_message(*args: Any, **kwargs: Any) -> Any:
-        return _executor().send_message(*args, **kwargs)
-
-    @staticmethod
-    async def asend_message(*args: Any, **kwargs: Any) -> Any:
-        return await _executor().asend_message(*args, **kwargs)
-
-    @staticmethod
-    def submit_decisions(*args: Any, **kwargs: Any) -> Any:
-        return _executor().submit_decisions(*args, **kwargs)
+    async def deliver_followup(*args: Any, **kwargs: Any) -> Any:
+        return await _executor().deliver_followup(*args, **kwargs)
 
     @staticmethod
     def cancel(*args: Any, **kwargs: Any) -> Any:

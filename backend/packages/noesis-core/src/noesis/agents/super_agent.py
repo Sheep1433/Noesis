@@ -21,18 +21,19 @@ from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
 from noesis.agents.subagents import (
+    AsyncSubagentToolsMiddleware,
     BackgroundTaskExecutor,
     BgNotifyMiddleware,
-    NoesisSubagentMiddleware,
     SubagentRegistry,
     SubagentRole,
     assert_no_bg_task_tools,
 )
 from noesis.agents.subagents.shell_tool import replace_execute_tool
-from noesis.agents.tools.fs_hints import augment_filesystem_tool_descriptions
+from noesis.agents.tools.fs_hints import augment_filesystem_tool_descriptions, guard_worker_filesystem_tools
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
 from noesis.agents.tools.chat_attachment_tools import resolve_attachment_tools
+from noesis.agents.tools.history_search_tool import build_history_search_tools
 from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
@@ -60,13 +61,16 @@ def _compile_task_worker(
     *,
     user_id: str,
     model_id: str | None = None,
-    interrupt_on: dict | None = None,
     session_id: str = "",
     checkpointer=None,
 ):
-    """编译后台 task-worker：独立上下文 + 自带 HITL interrupt，供 BackgroundTaskExecutor 使用。"""
+    """编译后台 task-worker：独立上下文，供 BackgroundTaskExecutor 使用。
+
+    worker 不交互、不审批（无人值守）：工具集不含 ask_user，execute 的
+    危险命令经工具层确定性拒绝（guard_worker_filesystem_tools），拒绝
+    事实随结果回流，主 Agent 可在主 run 中升级执行。
+    """
     from langchain.agents import create_agent
-    from langchain.agents.middleware import HumanInTheLoopMiddleware
 
     model = get_llm(model_id=model_id)
     middleware = list(build_noesis_middleware(
@@ -79,13 +83,12 @@ def _compile_task_worker(
         skills_user_id=user_id,
         skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
         session_id=session_id,
-        # worker 同样享用下沉到工具描述的运行规则（仅描述增强，无后台化）
-        filesystem_middleware_hook=augment_filesystem_tool_descriptions,
+        # 描述增强 + 危险命令拒绝（worker 无审批，见 docstring）
+        filesystem_middleware_hook=lambda fm: (
+            augment_filesystem_tool_descriptions(fm),
+            guard_worker_filesystem_tools(fm),
+        ),
     ))
-    if interrupt_on:
-        # 后台任务审批：interrupt 落 checkpoint，executor 转 awaiting_approval，
-        # 审批 API 用 Command(resume) 在同一 thread 续跑
-        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
     return create_agent(
         model,
         system_prompt=build_prompt(PromptProfile.SUPER_AGENT_SUB),
@@ -111,6 +114,8 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession],
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        history_search_enabled: bool = True,
+        compaction_enabled: bool = True,
         disable_hitl: bool = False,
         run_id: Optional[str] = None,
     ):
@@ -122,6 +127,11 @@ class SuperAgent(BaseAgent):
         # Agentic 召回：root run 装配检索工具（命中后合并回写 run.memory_context，
         # 作为抽取防自强化输入）；run_id/db 缺席时退化为纯只读检索
         tools.extend(build_memory_tools(user_id=user_id, run_id=run_id, db=db))
+        # 原文层召回：会话历史检索（与 search_memory 蒸馏层成对，工具内开
+        # 独立 DB 短事务，不依赖请求级 session 的存活窗口）；
+        # history_search_enabled=False 供压缩评测构造「无会话检索」对照组
+        if history_search_enabled:
+            tools.extend(build_history_search_tools(user_id=user_id, session_id=session_id))
         # KB 检索工具（用户勾选启用时挂载）
         if kb_search_enabled and kb_collections is not None:
             kb_tools = build_kb_search_tools(
@@ -149,15 +159,21 @@ class SuperAgent(BaseAgent):
                 file_list=file_list,
             )
 
-        # 后台子 Agent（全异步 task）：主 Agent 经 NoesisSubagentMiddleware 的
+        # 后台子 Agent（全异步 task）：主 Agent 经 AsyncSubagentToolsMiddleware 的
         # start/check 工具委派，子任务在进程内隔离 loop 跑，生命周期归属
         # session，跨 run 可收结果。worker 不携带后台任务工具自身（装配期
         # 断言，禁止递归委派）。worker 经角色工厂在隔离 loop 内惰性编译：
         # LLM 客户端与 checkpointer 连接池必须绑定隔离 loop（复用主 loop
         # 实例会 cross-loop 报错）。worker 的检索只读不写：召回清单只归
-        # root run（防自强化输入），子 Agent 结论经父会话终态回流
+        # root run（防自强化输入），子 Agent 结论经父会话终态回流。
+        # 会话历史检索工具同样只在主 loop：worker 内调用会撞 pg_manager
+        # 主 loop 绑定的连接池（cross-loop 直连报错），且 worker 场景
+        # （独立子任务）不需要跨 run 的会话原文召回
+        # ask_user 同属 loop 绑定剔除：worker 无人值守不交互，歧义在结果中
+        # 说明假设后继续（危险命令拒绝见 guard_worker_filesystem_tools）
+        _loop_bound_tools = {"search_memory", "search_history", "search_sessions", "ask_user"}
         worker_tools = [
-            tool for tool in tools if getattr(tool, "name", "") != "search_memory"
+            tool for tool in tools if getattr(tool, "name", "") not in _loop_bound_tools
         ] + build_memory_tools(user_id=user_id)
         assert_no_bg_task_tools(worker_tools)
 
@@ -193,21 +209,15 @@ class SuperAgent(BaseAgent):
                 user_id=user_id,
                 # followup 可按 turn 切换模型：覆盖优先，否则沿用父 Agent 模型
                 model_id=model_id_override or model_id,
-                interrupt_on=(
-                    build_interrupt_on(session_id=session_id, memory_write_guard=False)
-                    if interrupt_on is not None else None
-                ),
                 session_id=session_id,
                 checkpointer=await create_isolated_checkpointer(),
             )
 
         bg_executor = BackgroundTaskExecutor(
             max_concurrent_per_session=SubagentConfig.max_concurrent_per_session,
+            max_concurrent_global=SubagentConfig.max_concurrent_global,
             task_timeout_seconds=SubagentConfig.task_timeout_seconds,
             shell_task_timeout_seconds=SubagentConfig.shell_task_timeout_seconds,
-            hitl_timeout_seconds=HitlConfig.ask_timeout_seconds,
-            stop_grace_seconds=SubagentConfig.stop_grace_seconds,
-            stop_reconcile_seconds=SubagentConfig.stop_reconcile_seconds,
         )
 
         # 角色注册表：类型分发的唯一声明面（v1 单一 general，配方 = 既有
@@ -219,6 +229,40 @@ class SuperAgent(BaseAgent):
             description="通用子 Agent：多轮检索、调研、长命令等独立子任务",
             worker_factory=_bg_worker_factory,
         ))
+
+        # 同步子 Agent（deepagents 原生 SubAgentMiddleware → task 工具）：
+        # 子图跑在父 run 同一流内、父 Agent 阻塞等结果，适合需要立即拿到
+        # 结果的子任务；长任务 / 并行仍走 start_task 后台路径。工具与
+        # middleware 配方对齐后台 worker，但不带 ask_user——审批中断依赖
+        # executor 转 排队任务，同步子图没有这条处理链。
+        sync_subagent_model = get_llm(model_id=model_id)
+        sync_subagent_tools = [
+            tool for tool in worker_tools
+            if getattr(tool, "name", "") != "ask_user"
+        ]
+        sync_subagents = [{
+            "name": "general-purpose",
+            "description": (
+                "同步子 Agent：在独立上下文中执行多步子任务，调用期间父 Agent "
+                "阻塞等待、结果当场返回。适合需要立即拿到结果的检索、调研类子任务；"
+                "预计耗时较长或需与其它子任务并行时改用 start_async_task"
+            ),
+            "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
+            "model": sync_subagent_model,
+            "tools": sync_subagent_tools,
+            "middleware": build_noesis_middleware(
+                profile="SUBAGENT",
+                model=sync_subagent_model,
+                model_id=model_id,
+                tools=sync_subagent_tools,
+                backend=backend,
+                skills=skill_sources,
+                skills_user_id=user_id,
+                skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+                session_id=session_id,
+                filesystem_middleware_hook=augment_filesystem_tool_descriptions,
+            ),
+        }]
 
         def _filesystem_hook(fm):
             # 规则下沉（cwd/路径/读后改 → 工具描述）+ execute 后台化。
@@ -313,10 +357,13 @@ class SuperAgent(BaseAgent):
             tools=tools,
             system_prompt=resolved_context.system_prompt,
             checkpointer=self.checkpointer,
+            compaction_enabled=compaction_enabled,
+            model=sync_subagent_model,
+            subagents=sync_subagents,
             middleware=[
                 # 子 Agent 工具面 + 任务身份 graph state（start_task 按
                 # subagent_type 分发；类型清单注入 system prompt）
-                NoesisSubagentMiddleware(
+                AsyncSubagentToolsMiddleware(
                     registry=subagent_registry,
                     executor=bg_executor,
                     session_id=session_id,
@@ -361,6 +408,8 @@ class SuperAgent(BaseAgent):
         db: Optional[AsyncSession] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        history_search_enabled: bool = True,
+        compaction_enabled: bool = True,
         disable_hitl: bool = False,
         run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
@@ -398,6 +447,8 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    history_search_enabled=history_search_enabled,
+                    compaction_enabled=compaction_enabled,
                     disable_hitl=disable_hitl,
                     run_id=run_id,
                 )
@@ -473,6 +524,8 @@ class SuperAgent(BaseAgent):
         message_id: Optional[str] = None,
         kb_collections: Optional[list[str]] = None,
         kb_search_enabled: bool = True,
+        history_search_enabled: bool = True,
+        compaction_enabled: bool = True,
         disable_hitl: bool = False,
         run_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
@@ -505,6 +558,8 @@ class SuperAgent(BaseAgent):
                     db=db,
                     kb_collections=kb_collections,
                     kb_search_enabled=kb_search_enabled,
+                    history_search_enabled=history_search_enabled,
+                    compaction_enabled=compaction_enabled,
                     disable_hitl=disable_hitl,
                     run_id=run_id,
                 )

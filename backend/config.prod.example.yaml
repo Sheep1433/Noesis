@@ -78,6 +78,8 @@ model:
   # 多 provider catalog（每条目独立 type/name/base_url）已废弃，统一用顶层 model.type/name/base_url + catalog 仅 id/label/temperature/context_window。
 
   request_timeout: 120
+  # 流式块间隔超时（秒）：thinking 模型大上下文首字延迟常超 30s，独立于 request_timeout
+  stream_idle_timeout: 120
   max_retries: 2
   generation:
     max_tokens: 32000
@@ -113,6 +115,8 @@ summarization:
   trigger_fraction: 0.75
   # model profile 不可用时的消息数量 fallback
   messages_to_keep: 28
+  # 被压缩区用户消息原文装回预算（token，对齐 codex compact）；0 = 关闭
+  user_message_tokens: 20000
 
 agent_runtime:
   tool_output_max_chars: 24000

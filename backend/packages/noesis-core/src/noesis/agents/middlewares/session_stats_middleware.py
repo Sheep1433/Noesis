@@ -13,7 +13,6 @@ session_id 缺失时退回实例内累计（兼容无会话上下文的构造路
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any, Callable, Awaitable
 from typing_extensions import override
@@ -28,10 +27,9 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 
+from noesis.runtime.logging import logger
 from noesis.runtime.session_stats_registry import SessionStatsRegistry
 from noesis.chat.event_mapping.usage_normalize import USAGE_FIELDS, normalize_usage
-
-logger = logging.getLogger(__name__)
 
 class SessionStatsMiddleware(AgentMiddleware[AgentState]):
     """会话级统计：步数/LLM 耗时/token/缓存。主/子实例经 registry 共享累计。"""
@@ -157,7 +155,7 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         except GraphBubbleUp:
             raise
         except Exception:
-            logger.debug("Failed to emit noesis_stats_update", exc_info=True)
+            logger.opt(exception=True).debug("Failed to emit noesis_stats_update")
 
     async def _aemit_stats(self) -> None:
         try:
@@ -174,7 +172,7 @@ class SessionStatsMiddleware(AgentMiddleware[AgentState]):
         except GraphBubbleUp:
             raise
         except Exception:
-            logger.debug("Failed to emit async noesis_stats_update", exc_info=True)
+            logger.opt(exception=True).debug("Failed to emit async noesis_stats_update")
 
     @override
     def wrap_model_call(

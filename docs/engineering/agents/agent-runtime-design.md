@@ -56,7 +56,7 @@ noesis/
 | `ToolFailureMiddleware` | 把普通工具异常变成与原 call id 配对的 typed error `ToolMessage`；取消、HITL/Graph interrupt 继续抛出 | 工具失败仍保持合法 tool-call/result 序列，控制流异常不能被当成业务错误吞掉 |
 | `ReadBeforeWriteMiddleware` | read 前后读取 backend 并记录稳定内容 hash；write/edit 前重读校验并原子消费 hash；失败写入恢复 claim | 文件修改必须基于当前已读版本，避免使用过期上下文覆盖用户修改 |
 | `DeferredToolFilterMiddleware` | model call 只暴露基础工具与当前 catalog hash 下已发现的 schema；执行时再次检查 promotion 和权限 | 大 MCP/tool catalog 不全量占用 prompt，通过 ToolSearch 按需加载 schema |
-| `CompactionMiddleware` | 最终 request 预算、自动压缩、summary PTL retry、reactive overflow 重试一次、breaker、manual compact、raw history projection 和 archive | Claude Code 式多阶段长上下文压缩；失败摘要不能替换原历史 |
+| `CompactionMiddleware` | 最终 request 预算、自动压缩、summary PTL retry、reactive overflow 重试一次、breaker、manual compact、raw history projection、被压缩区用户原话装回、上下文契约 | Claude Code 式多阶段长上下文压缩；摘要只负责决策与状态，用户说过的话按 token 预算从原文结构性兜底（对齐 codex compact）；摘要头部携带上下文契约（构成/盲区/恢复通道，模型据此先上下文后检索），失败摘要不能替换原历史 |
 | `SnipMiddleware` | 通过显式 selector 把旧消息范围替换为 marker；记录 hash/tokens；不删除 raw transcript，不切断 tool pair、当前 turn 或 compact boundary | 定点清理 effective history，而不是整段摘要或物理删消息 |
 
 所有 Noesis private state 都通过 `state_schema + PrivateStateAttr` 声明，因此 LangChain `create_agent()` 能合并 schema，也不会把内部 ledger 当成普通 Agent 输出。此前 `SubAgentContextMiddleware` 缺少基类 hook 的报错，本质就是它没有正确继承/声明 LangChain middleware 契约；该类现已删除，子 Agent 直接使用 DeepAgents `SubAgentMiddleware(private_state_keys=...)`。

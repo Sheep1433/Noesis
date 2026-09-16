@@ -5,7 +5,7 @@ describe('parseStartTaskChildSessionId', () => {
   it('解析后台直启回执（含 Command repr 包裹的历史落库形态）', () => {
     const output = [
       'Command(update={\'messages\': [ToolMessage(content=\'子 Agent 已启动：b20326f8-7a39-402b-9c1e-000000000001',
-      '无需等待——可继续其他工作，之后用 check_task 收结果。\', tool_call_id=\'call_1\')]})',
+      '无需等待——可继续其他工作，之后用 check_async_task 收结果。\', tool_call_id=\'call_1\')]})',
     ].join('\n')
     expect(parseStartTaskChildSessionId(output)).toBe('b20326f8-7a39-402b-9c1e-000000000001')
   })
@@ -13,7 +13,7 @@ describe('parseStartTaskChildSessionId', () => {
   it('解析前台等待超时自动转后台回执', () => {
     const output = [
       '任务运行超过 120s，已自动转为后台：c4d2a48e-295d-42a0-8057-dfa37717dd75',
-      '可继续其他工作，之后用 check_task 收结果。',
+      '可继续其他工作，之后用 check_async_task 收结果。',
     ].join('\n')
     expect(parseStartTaskChildSessionId(output)).toBe('c4d2a48e-295d-42a0-8057-dfa37717dd75')
   })

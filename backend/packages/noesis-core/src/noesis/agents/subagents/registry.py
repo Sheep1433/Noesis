@@ -15,7 +15,8 @@ from typing import Any, Callable, Optional
 # 后台任务工具名集：任何角色的 worker 工具集都不得携带（禁止递归委派）。
 # 防线在装配期集中断言，而非依赖各角色配方自觉剔除。
 BG_TASK_TOOL_NAMES = frozenset({
-    "start_task", "check_task", "cancel_task", "list_tasks", "send_message",
+    "start_async_task", "check_async_task", "cancel_async_task",
+    "list_async_tasks", "update_async_task",
 })
 
 
@@ -29,8 +30,6 @@ class SubagentRole:
     # worker 编译工厂（async，隔离 loop 内惰性调用）；入参为模型覆盖，
     # 角色绑定模型时调用方应以绑定模型为基线传覆盖
     worker_factory: Callable[[Optional[str]], Any]
-    # 审批配置；缺省沿用装配层统一的 interrupt_on
-    interrupt_on: Optional[dict] = None
     # 配置层模型绑定；None = 沿用父 Agent 模型。start_task 不暴露模型
     # 参数——运行时只选角色，模型在配置层按角色解析
     model_id: Optional[str] = None

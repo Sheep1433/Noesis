@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="glassmorphism">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TestAgent Trace Viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/styles/github-dark.min.css" id="hljs-dark">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/styles/github.min.css" id="hljs-light" disabled>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/highlight.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   THEME: Glassmorphism (Apple-inspired, default)
+   ============================================================ */
+[data-theme="glassmorphism"] {
+  --bg: #000000; --bg2: rgba(255,255,255,0.04); --bg3: rgba(255,255,255,0.08);
+  --fg: #F5F5F7; --fg2: rgba(245,245,247,0.55); --fg3: rgba(245,245,247,0.3);
+  --primary: #2997FF; --primary-hover: #5EB5FF;
+  --secondary: #BF5AF2; --accent: #FFD60A;
+  --error: #FF453A; --success: #30D158; --warn: #FFD60A;
+  --border: rgba(255,255,255,0.1);
+  --user-bg: rgba(41,151,255,0.12); --user-accent: #2997FF;
+  --assistant-bg: rgba(255,255,255,0.05); --assistant-accent: rgba(255,255,255,0.15);
+  --tool-bg: rgba(48,209,88,0.08); --tool-accent: #30D158;
+  --reasoning-accent: rgba(255,255,255,0.12);
+  --code-bg: rgba(0,0,0,0.6);
+  --sidebar-bg: rgba(255,255,255,0.03);
+  --header-bg: rgba(255,255,255,0.06);
+  --header-border: rgba(255,255,255,0.08);
+  --glass-blur: blur(40px); --radius: 14px;
+  --font: 'Inter', -apple-system, system-ui, sans-serif;
+  --hljs-theme: dark;
+}
+[data-theme="glassmorphism"] .glass-panel {
+  background: var(--bg2); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* ============================================================
+   THEME: Neumorphism (Soft Clay)
+   ============================================================ */
+[data-theme="neumorphism"] {
+  --bg: #E0E5EC; --bg2: #E0E5EC; --bg3: #D1D9E6;
+  --fg: #3D4852; --fg2: #6B7B8D; --fg3: #9AABB8;
+  --primary: #6C63FF; --primary-hover: #5A52E0;
+  --secondary: #38B2AC; --accent: #F6AD55;
+  --error: #FC5C65; --success: #26DE81; --warn: #F7B731;
+  --border: #D1D9E6;
+  --user-bg: #E0E5EC; --user-accent: #6C63FF;
+  --assistant-bg: #E0E5EC; --assistant-accent: #A0AEC0;
+  --tool-bg: #E0E5EC; --tool-accent: #38B2AC;
+  --reasoning-accent: #D1D9E6;
+  --code-bg: #D1D9E6;
+  --sidebar-bg: #E0E5EC;
+  --header-bg: #E0E5EC; --header-border: #D1D9E6;
+  --glass-blur: none; --radius: 16px;
+  --font: 'Plus Jakarta Sans', -apple-system, system-ui, sans-serif;
+  --hljs-theme: light;
+}
+[data-theme="neumorphism"] .glass-panel { background: var(--bg2); backdrop-filter: none; }
+/* Neumorphic shadows */
+[data-theme="neumorphism"] .neu-raised {
+  box-shadow: 6px 6px 14px #b8bec7, -6px -6px 14px #ffffff;
+}
+[data-theme="neumorphism"] .neu-inset {
+  box-shadow: inset 4px 4px 8px #b8bec7, inset -4px -4px 8px #ffffff;
+}
+[data-theme="neumorphism"] .session-item.active {
+  box-shadow: inset 3px 3px 6px #b8bec7, inset -3px -3px 6px #ffffff;
+  background: #E0E5EC; color: var(--primary);
+}
+[data-theme="neumorphism"] #hljs-dark { display: none; }
+[data-theme="neumorphism"] #hljs-light { display: unset; }
+
+/* ============================================================
+   THEME: Aurora Mesh (Deep Dark + Subtle Aurora)
+   ============================================================ */
+[data-theme="aurora"] {
+  --bg: #09090B; --bg2: #18181B; --bg3: #27272A;
+  --fg: #FAFAFA; --fg2: #A1A1AA; --fg3: #71717A;
+  --primary: #8B5CF6; --primary-hover: #A78BFA;
+  --secondary: #2DD4BF; --accent: #EC4899;
+  --error: #FB7185; --success: #34D399; --warn: #FBBF24;
+  --border: rgba(255,255,255,0.06);
+  --user-bg: rgba(139,92,246,0.1); --user-accent: #8B5CF6;
+  --assistant-bg: rgba(255,255,255,0.03); --assistant-accent: #3F3F46;
+  --tool-bg: rgba(45,212,191,0.06); --tool-accent: #2DD4BF;
+  --reasoning-accent: #27272A;
+  --code-bg: #0F0F12;
+  --sidebar-bg: #0F0F12;
+  --header-bg: #0F0F12; --header-border: rgba(255,255,255,0.05);
+  --glass-blur: blur(30px); --radius: 12px;
+  --font: 'Inter', -apple-system, system-ui, sans-serif;
+  --hljs-theme: dark;
+}
+[data-theme="aurora"] .glass-panel {
+  background: var(--bg2); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* ============================================================
+   THEME: Enterprise (Professional Trust)
+   ============================================================ */
+[data-theme="enterprise"] {
+  --bg: #F8FAFC; --bg2: #FFFFFF; --bg3: #F1F5F9;
+  --fg: #0F172A; --fg2: #64748B; --fg3: #94A3B8;
+  --primary: #4F46E5; --primary-hover: #4338CA;
+  --secondary: #10B981; --accent: #F59E0B;
+  --error: #EF4444; --success: #10B981; --warn: #F59E0B;
+  --border: #E2E8F0;
+  --user-bg: #EEF2FF; --user-accent: #6366F1;
+  --assistant-bg: #FFFFFF; --assistant-accent: #CBD5E1;
+  --tool-bg: #ECFDF5; --tool-accent: #059669;
+  --reasoning-accent: #E2E8F0;
+  --code-bg: #F1F5F9;
+  --sidebar-bg: #FFFFFF;
+  --header-bg: #4F46E5; --header-border: #4338CA;
+  --glass-blur: none; --radius: 8px;
+  --font: 'Plus Jakarta Sans', -apple-system, system-ui, sans-serif;
+  --hljs-theme: light;
+}
+[data-theme="enterprise"] .glass-panel { background: var(--bg2); backdrop-filter: none; }
+[data-theme="enterprise"] .header { background: var(--header-bg); color: #fff; }
+[data-theme="enterprise"] .header .db-info { color: rgba(255,255,255,.7); }
+[data-theme="enterprise"] .header .theme-label { color: rgba(255,255,255,.6); }
+[data-theme="enterprise"] #hljs-dark { display: none; }
+[data-theme="enterprise"] #hljs-light { display: unset; }
+
+/* ============================================================
+   BASE
+   ============================================================ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--font); background: var(--bg); color: var(--fg);
+  height: 100vh; display: flex; flex-direction: column;
+  transition: background .35s ease, color .25s ease;
+}
+
+/* ============================================================
+   HEADER
+   ============================================================ */
+.header {
+  background: var(--header-bg); border-bottom: 1px solid var(--header-border);
+  padding: 0 20px; height: 46px;
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+  transition: background .35s, border-color .35s;
+}
+.header h1 { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
+.header .db-info { font-size: 11px; color: var(--fg2); }
+.header .spacer { flex: 1; }
+.header .theme-label { font-size: 10px; color: var(--fg3); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; margin-right: 4px; }
+
+/* Theme dots */
+.theme-switcher { display: flex; gap: 6px; align-items: center; }
+.theme-dot {
+  width: 16px; height: 16px; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; transition: all .2s; padding: 0;
+}
+.theme-dot:hover { transform: scale(1.25); }
+.theme-dot.active { border-color: var(--fg); }
+.theme-dot-glass { background: linear-gradient(135deg, #2997FF, #BF5AF2); }
+.theme-dot-neu { background: linear-gradient(135deg, #E0E5EC, #D1D9E6); }
+.theme-dot-aurora { background: linear-gradient(135deg, #8B5CF6, #2DD4BF); }
+.theme-dot-enterprise { background: linear-gradient(135deg, #4F46E5, #10B981); }
+
+/* Buttons */
+.btn {
+  padding: 5px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg3); color: var(--fg); cursor: pointer;
+  font-size: 12px; font-weight: 600; font-family: inherit;
+  transition: all .2s;
+}
+.btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+
+/* ============================================================
+   LAYOUT
+   ============================================================ */
+.main { flex: 1; display: flex; overflow: hidden; }
+
+/* ============================================================
+   SIDEBAR
+   ============================================================ */
+.sidebar {
+  width: 320px; min-width: 200px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+  transition: background .35s, border-color .35s;
+}
+.sidebar-header {
+  padding: 10px 14px; font-size: 10px; color: var(--fg3);
+  font-weight: 700; text-transform: uppercase; letter-spacing: .8px;
+}
+.session-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.session-item {
+  padding: 10px 12px; border-radius: var(--radius);
+  cursor: pointer; margin-bottom: 2px; font-size: 12px; line-height: 1.5;
+  transition: all .2s;
+}
+.session-item:hover { background: var(--bg3); }
+.session-item.active { background: var(--primary); color: #fff; }
+.session-item.active .sess-title { color: #fff; }
+.session-item.active .sess-meta { color: rgba(255,255,255,.6); }
+.session-item .sess-title { color: var(--fg); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.session-item .sess-meta { color: var(--fg3); font-size: 11px; margin-top: 2px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.session-item .sess-id { font-family: 'Cascadia Code','Fira Code',monospace; font-size: 10px; color: var(--fg3); opacity: .6; }
+.session-item .sess-indent { display: inline-block; }
+.session-item .sess-badge { font-size: 9px; padding: 1px 5px; border-radius: 99px; font-weight: 600; }
+.sess-badge-tools { background: var(--bg3); color: var(--fg2); }
+.sess-badge-errors { background: rgba(255,69,58,0.2); color: var(--error); }
+/* Child session indent with tree line */
+.session-item:not(.root-item) { margin-left: 16px; border-left: 2px solid var(--border); padding-left: 10px; }
+
+/* ---- Toast ---- */
+.toast {
+  position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--primary); color: #fff; padding: 8px 24px;
+  border-radius: 6px; font-size: 13px; font-weight: 600;
+  z-index: 9999; pointer-events: none;
+  opacity: 0; transition: opacity .3s, top .3s;
+}
+.toast.show { opacity: 1; top: 28px; }
+.session-item.root-item .sess-title { font-weight: 600; }
+
+/* ============================================================
+   CONTENT
+   ============================================================ */
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.conv-header {
+  padding: 12px 20px; background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  transition: background .35s, border-color .35s;
+}
+.conv-header .conv-title { font-weight: 700; color: var(--fg); font-size: 14px; }
+.conv-header .conv-stats { color: var(--fg3); font-size: 11px; margin-top: 3px; }
+.messages { flex: 1; overflow-y: auto; padding: 20px 24px; scroll-behavior: smooth; }
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--fg3); font-size: 13px; gap: 6px; }
+
+/* ============================================================
+   MESSAGES
+   ============================================================ */
+.msg { margin-bottom: 14px; display: flex; gap: 10px; max-width: 100%; }
+.msg-user { flex-direction: row-reverse; }
+
+.msg-avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; flex-shrink: 0; margin-top: 4px;
+}
+.msg-user .msg-avatar { background: var(--user-accent); color: #fff; }
+.msg-assistant .msg-avatar { background: var(--assistant-accent); color: var(--fg2); }
+
+.msg-body { flex: 1; min-width: 0; }
+.msg-role { font-size: 10px; font-weight: 600; margin-bottom: 3px; text-transform: uppercase; letter-spacing: .6px; }
+.msg-user .msg-role { color: var(--user-accent); text-align: right; }
+.msg-assistant .msg-role { color: var(--secondary); }
+
+.msg-inner {
+  padding: 12px 16px; border-radius: var(--radius);
+  font-size: 13.5px; line-height: 1.7; word-break: break-word;
+  transition: background .35s;
+}
+.msg-user .msg-inner { background: var(--user-bg); border-left: 3px solid var(--user-accent); }
+.msg-assistant .msg-inner { background: var(--assistant-bg); border-left: 3px solid var(--assistant-accent); }
+
+/* ============================================================
+   MARKDOWN
+   ============================================================ */
+.md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 14px 0 6px; color: var(--fg); font-weight: 700; }
+.md-content h1 { font-size: 1.3em; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.md-content h2 { font-size: 1.15em; }
+.md-content h3 { font-size: 1.05em; }
+.md-content p { margin: 5px 0; }
+.md-content ul, .md-content ol { margin: 5px 0; padding-left: 20px; }
+.md-content li { margin: 2px 0; }
+.md-content blockquote { border-left: 3px solid var(--primary); padding: 6px 14px; margin: 8px 0; background: var(--bg2); border-radius: 6px; color: var(--fg2); }
+.md-content code { background: var(--bg3); padding: 1px 5px; border-radius: 4px; font-size: 0.87em; font-family: 'Cascadia Code','Fira Code',monospace; color: var(--primary); }
+.md-content pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 8px 0; overflow-x: auto; }
+.md-content pre code { background: none; padding: 0; color: var(--fg); font-size: 12px; }
+.md-content a { color: var(--primary); text-decoration: none; font-weight: 600; }
+.md-content a:hover { text-decoration: underline; }
+.md-content strong { color: var(--fg); font-weight: 700; }
+.md-content em { color: var(--fg2); }
+.md-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.md-content table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+.md-content th, .md-content td { border: 1px solid var(--border); padding: 6px 10px; font-size: 12px; }
+.md-content th { background: var(--bg3); font-weight: 600; }
+
+/* ============================================================
+   TOOL CALLS — single collapsible line
+   ============================================================ */
+.tool-call {
+  margin: 3px 0; border-radius: 6px; overflow: hidden; font-size: 13px;
+  background: var(--tool-bg); border: 1px solid var(--border);
+  transition: background .2s, border-color .2s;
+}
+/* Row: one line, clickable to expand/collapse */
+.tool-row {
+  padding: 5px 12px; display: flex; align-items: center; gap: 8px;
+  cursor: pointer; user-select: none; transition: background .15s;
+  min-height: 30px;
+}
+.tool-row:hover { background: var(--bg3); }
+.tool-arrow {
+  font-size: 9px; color: var(--fg3); flex-shrink: 0; width: 12px; text-align: center;
+  transition: transform .15s;
+}
+.tool-call.open .tool-arrow { transform: rotate(90deg); }
+.tool-name {
+  font-weight: 700; font-family: 'Cascadia Code','Fira Code',monospace;
+  font-size: 12px; color: var(--tool-accent); flex-shrink: 0;
+}
+.tool-summary {
+  flex: 1; min-width: 0; font-family: 'Cascadia Code','Fira Code',monospace;
+  font-size: 11.5px; color: var(--fg2); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.tool-status {
+  font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight: 600;
+  flex-shrink: 0; background: var(--bg3); color: var(--fg3);
+}
+.tool-status.completed { color: var(--success); }
+.tool-status.error { color: var(--error); background: rgba(255,69,58,0.12); }
+
+/* Expandable detail panel */
+.tool-detail {
+  display: none; padding: 10px 14px; max-height: 600px; overflow-y: auto;
+  background: var(--bg2); border-top: 1px solid var(--border);
+}
+.tool-call.open .tool-detail { display: block; }
+.tool-detail pre {
+  white-space: pre-wrap; word-break: break-all; color: var(--fg2);
+  font-family: 'Cascadia Code','Fira Code',monospace; font-size: 12px; margin: 0;
+}
+.tool-label {
+  font-size: 10px; color: var(--fg3); text-transform: uppercase;
+  letter-spacing: .7px; margin-bottom: 4px; margin-top: 10px; font-weight: 700;
+}
+.tool-label:first-child { margin-top: 0; }
+
+/* ============================================================
+   REASONING
+   ============================================================ */
+.reasoning-block {
+  margin: 6px 0; border-left: 3px solid var(--reasoning-accent);
+  padding: 8px 14px; background: var(--bg2); border-radius: 8px;
+  transition: background .35s;
+}
+.reasoning-toggle {
+  font-size: 11px; font-weight: 600; color: var(--fg3); cursor: pointer;
+  display: flex; align-items: center; gap: 6px; user-select: none; transition: color .2s;
+  text-transform: uppercase; letter-spacing: .5px;
+}
+.reasoning-toggle:hover { color: var(--primary); }
+.reasoning-content { display: none; margin-top: 8px; font-size: 12px; color: var(--fg2); white-space: pre-wrap; max-height: 500px; overflow-y: auto; }
+.reasoning-content.open { display: block; }
+
+/* ============================================================
+   STATS BAR
+   ============================================================ */
+.stats-bar {
+  display: flex; gap: 20px; padding: 7px 20px;
+  background: var(--bg2); border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--fg3); font-weight: 500; flex-wrap: wrap;
+  transition: background .35s, border-color .35s;
+}
+.stat-item span { color: var(--primary); font-weight: 700; }
+
+/* ============================================================
+   STEP MARKERS
+   ============================================================ */
+.step-marker {
+  padding: 4px 8px; font-size: 10px; color: var(--fg3);
+  margin: 8px 0; display: flex; align-items: center; gap: 8px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
+}
+.step-marker::before, .step-marker::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
+
+/* ============================================================
+   SEARCH
+   ============================================================ */
+.search-box { padding: 8px; }
+.search-box input {
+  width: 100%; padding: 7px 12px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--fg); font-size: 12px; font-family: inherit; transition: all .2s;
+}
+.search-box input:focus { outline: none; border-color: var(--primary); }
+.search-box input::placeholder { color: var(--fg3); }
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg3); }
+
+
+/* ============================================================
+   GLASSMORPHISM-SPECIFIC OVERRIDES
+   ============================================================ */
+[data-theme="glassmorphism"] .header {
+  background: rgba(30,30,30,0.7); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+  color: #F5F5F7; border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+[data-theme="glassmorphism"] .sidebar { background: rgba(20,20,20,0.6); backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px); }
+[data-theme="glassmorphism"] .conv-header { background: rgba(20,20,20,0.5); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+[data-theme="glassmorphism"] .stats-bar { background: rgba(20,20,20,0.5); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+[data-theme="glassmorphism"] .msg-inner { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+[data-theme="glassmorphism"] .tool-call { border-color: rgba(255,255,255,0.06); }
+[data-theme="glassmorphism"] .tool-row:hover { background: rgba(255,255,255,0.06); }
+[data-theme="glassmorphism"] .tool-detail { background: rgba(0,0,0,0.3); }
+[data-theme="glassmorphism"] .reasoning-block { background: rgba(255,255,255,0.03); }
+[data-theme="glassmorphism"] .session-item.active { background: rgba(41,151,255,0.25); color: #5EB5FF; }
+[data-theme="glassmorphism"] .session-item:hover { background: rgba(255,255,255,0.06); }
+[data-theme="glassmorphism"] .search-box input { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.08); }
+
+/* ============================================================
+   AURORA-SPECIFIC OVERRIDES
+   ============================================================ */
+[data-theme="aurora"] .sidebar {
+  background: #0F0F12;
+  border-right: 1px solid rgba(255,255,255,0.04);
+}
+[data-theme="aurora"] .conv-header {
+  background: rgba(15,15,18,0.8);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+[data-theme="aurora"] .header {
+  background: rgba(15,15,18,0.9);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: #FAFAFA;
+}
+[data-theme="aurora"] .stats-bar { background: #0F0F12; border-top: 1px solid rgba(255,255,255,0.04); }
+[data-theme="aurora"] .session-item.active { background: rgba(139,92,246,0.2); color: #A78BFA; }
+[data-theme="aurora"] .session-item:hover { background: rgba(255,255,255,0.04); }
+[data-theme="aurora"] .search-box input { background: #0F0F12; border-color: rgba(255,255,255,0.06); }
+[data-theme="aurora"] .tool-row:hover { background: rgba(255,255,255,0.04); }
+
+/* ============================================================
+   NEUMORPHISM-SPECIFIC OVERRIDES
+   ============================================================ */
+[data-theme="neumorphism"] .header {
+  background: #E0E5EC; color: var(--fg);
+  box-shadow: 0 4px 12px #b8bec7;
+}
+[data-theme="neumorphism"] .sidebar {
+  background: #E0E5EC;
+  border-right: none;
+  box-shadow: 4px 0 12px #b8bec7;
+}
+[data-theme="neumorphism"] .conv-header {
+  background: #E0E5EC;
+  border-bottom: none;
+  box-shadow: 0 4px 10px #b8bec7;
+}
+[data-theme="neumorphism"] .stats-bar {
+  background: #E0E5EC; border-top: none;
+  box-shadow: 0 -2px 10px #b8bec7;
+}
+[data-theme="neumorphism"] .msg-inner {
+  border-left: none;
+}
+[data-theme="neumorphism"] .msg-user .msg-inner {
+  box-shadow: 5px 5px 10px #b8bec7, -5px -5px 10px #ffffff;
+}
+[data-theme="neumorphism"] .msg-assistant .msg-inner {
+  box-shadow: 5px 5px 10px #b8bec7, -5px -5px 10px #ffffff;
+}
+[data-theme="neumorphism"] .tool-call {
+  border: none;
+  box-shadow: 5px 5px 10px #b8bec7, -5px -5px 10px #ffffff;
+  border-radius: var(--radius);
+}
+[data-theme="neumorphism"] .reasoning-block {
+  border-left: none;
+  box-shadow: inset 3px 3px 6px #b8bec7, inset -3px -3px 6px #ffffff;
+  border-radius: var(--radius);
+}
+[data-theme="neumorphism"] .search-box input {
+  background: #E0E5EC; border: none;
+  box-shadow: inset 3px 3px 6px #b8bec7, inset -3px -3px 6px #ffffff;
+  border-radius: var(--radius);
+}
+[data-theme="neumorphism"] .search-box input:focus { box-shadow: inset 3px 3px 6px #b8bec7, inset -3px -3px 6px #ffffff, 0 0 0 2px var(--primary); }
+[data-theme="neumorphism"] .btn { border: none; box-shadow: 4px 4px 8px #b8bec7, -4px -4px 8px #ffffff; }
+[data-theme="neumorphism"] .btn:hover { box-shadow: 2px 2px 4px #b8bec7, -2px -2px 4px #ffffff; }
+[data-theme="neumorphism"] .step-marker::before, [data-theme="neumorphism"] .step-marker::after { border-top: 1px solid #D1D9E6; }
+
+/* ============================================================
+   ENTERPRISE-SPECIFIC OVERRIDES
+   ============================================================ */
+[data-theme="enterprise"] .header { color: #fff; }
+[data-theme="enterprise"] .header .db-info { color: rgba(255,255,255,.7); }
+[data-theme="enterprise"] .header .theme-label { color: rgba(255,255,255,.5); }
+[data-theme="enterprise"] .sidebar { border-right: 1px solid var(--border); box-shadow: 2px 0 8px rgba(0,0,0,0.04); }
+[data-theme="enterprise"] .session-item.active { color: #fff; }
+[data-theme="enterprise"] .msg-user .msg-inner { border-left: 3px solid var(--user-accent); }
+[data-theme="enterprise"] .msg-assistant .msg-inner { border-left: 3px solid var(--assistant-accent); box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+[data-theme="enterprise"] .tool-call { box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+[data-theme="enterprise"] .stats-bar { border-top: 1px solid var(--border); }
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Trace Viewer</h1>
+  <button class="btn btn-primary" onclick="openDb()">Open .db</button>
+  <input type="file" id="fileInput" accept=".db" style="display:none" onchange="handleFile(event)">
+  <span class="db-info" id="dbInfo">No file loaded</span>
+  <span class="spacer"></span>
+  <span class="theme-label">Theme</span>
+  <div class="theme-switcher">
+    <button class="theme-dot theme-dot-glass" data-t="glassmorphism" title="Glassmorphism" onclick="setTheme('glassmorphism')"></button>
+    <button class="theme-dot theme-dot-neu" data-t="neumorphism" title="Neumorphism" onclick="setTheme('neumorphism')"></button>
+    <button class="theme-dot theme-dot-aurora" data-t="aurora" title="Aurora Mesh" onclick="setTheme('aurora')"></button>
+    <button class="theme-dot theme-dot-enterprise" data-t="enterprise" title="Enterprise" onclick="setTheme('enterprise')"></button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="sidebar">
+    <div class="search-box"><input type="text" id="searchInput" placeholder="Search sessions..." oninput="filterSessions()"></div>
+    <div class="sidebar-header" id="sessionHeader">Sessions (0)</div>
+    <div class="session-list" id="sessionList">
+      <div class="empty-state">Open a .db file to start</div>
+    </div>
+  </div>
+  <div class="content">
+    <div class="conv-header" id="convHeader" style="display:none">
+      <div class="conv-title" id="convTitle"></div>
+      <div class="conv-stats" id="convStats"></div>
+    </div>
+    <div class="messages" id="messages">
+      <div class="empty-state">Select a session to view conversation</div>
+    </div>
+    <div class="stats-bar" id="statsBar" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+let db = null;
+let allSessions = [];
+let currentSessionId = null;
+
+/* ---- Theme ---- */
+function setTheme(name) {
+  document.documentElement.setAttribute('data-theme', name);
+  document.querySelectorAll('.theme-dot').forEach(d => d.classList.toggle('active', d.dataset.t === name));
+  try { localStorage.setItem('trace-viewer-theme', name); } catch {}
+}
+(function() {
+  try { const s = localStorage.getItem('trace-viewer-theme'); if (s) setTheme(s); else setTheme('glassmorphism'); } catch {}
+})();
+
+/* ---- Marked ---- */
+marked.setOptions({
+  highlight: function(code, lang) {
+    if (lang && hljs.getLanguage(lang)) { try { return hljs.highlight(code, {language: lang}).value; } catch(e) {} }
+    return hljs.highlightAuto(code).value;
+  },
+  breaks: true, gfm: true
+});
+
+async function openDb() { document.getElementById('fileInput').click(); }
+
+async function handleFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  document.getElementById('dbInfo').textContent = 'Loading...';
+  const SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` });
+  const buf = await file.arrayBuffer();
+  db = new SQL.Database(new Uint8Array(buf));
+  document.getElementById('dbInfo').textContent = `${file.name} (${(file.size/1024).toFixed(0)} KB)`;
+  loadSessions();
+}
+
+function loadSessions() {
+  const rows = db.exec(`SELECT id, title, parent_id, time_created FROM session ORDER BY time_created`);
+  if (!rows.length) { document.getElementById('sessionList').innerHTML = '<div class="empty-state">No sessions found</div>'; return; }
+  allSessions = rows[0].values.map(r => ({ id: r[0], title: r[1] || '', parentId: r[2] || '', timeCreated: r[3] }));
+  const children = {};
+  allSessions.forEach(s => { if (s.parentId && s.parentId !== s.id) { if (!children[s.parentId]) children[s.parentId] = []; children[s.parentId].push(s); } });
+  const roots = allSessions.filter(s => !s.parentId || s.parentId === s.id);
+  const list = document.getElementById('sessionList');
+  list.innerHTML = '';
+  let count = 0;
+
+  // Pre-count tools and errors per session
+  const toolCounts = {}, errorCounts = {};
+  const tcRows = db.exec(`SELECT session_id, COUNT(*) FROM part WHERE json_extract(data, '$.type') = 'tool' GROUP BY session_id`);
+  if (tcRows.length) tcRows[0].values.forEach(r => toolCounts[r[0]] = r[1]);
+  const ecRows = db.exec(`SELECT session_id, COUNT(*) FROM part WHERE json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') = 'error' GROUP BY session_id`);
+  if (ecRows.length) ecRows[0].values.forEach(r => errorCounts[r[0]] = r[1]);
+
+  function renderNode(session, depth) {
+    count++;
+    const div = document.createElement('div');
+    div.className = 'session-item' + (depth === 0 ? ' root-item' : '');
+    div.dataset.id = session.id; div.dataset.title = session.title.toLowerCase();
+    const indent = '\u00A0\u00A0'.repeat(depth);
+    const time = session.timeCreated ? new Date(session.timeCreated > 1e12 ? session.timeCreated : session.timeCreated * 1000).toLocaleString('zh-CN') : '';
+    const titleShort = session.title.length > 60 ? session.title.substring(0, 60) + '...' : session.title;
+    const tc = toolCounts[session.id] || 0;
+    const ec = errorCounts[session.id] || 0;
+    let badges = '';
+    if (tc) badges += `<span class="sess-badge sess-badge-tools">${tc}T</span>`;
+    if (ec) badges += `<span class="sess-badge sess-badge-errors">${ec}E</span>`;
+    div.innerHTML = `<span class="sess-indent">${indent}</span><span class="sess-title">${escHtml(titleShort)}</span><div class="sess-meta">${indent}<span class="sess-id">${session.id.substring(0,12)}…</span>${badges}<span>${time}</span></div>`;
+    div.onclick = () => selectSession(session.id, div);
+    div.oncontextmenu = (e) => { e.preventDefault(); navigator.clipboard.writeText(session.id).then(() => showToast('Copied: ' + session.id)); };
+    list.appendChild(div);
+    if (children[session.id]) children[session.id].forEach(child => renderNode(child, depth + 1));
+  }
+  roots.forEach(r => renderNode(r, 0));
+  document.getElementById('sessionHeader').textContent = `Sessions (${count})`;
+}
+
+function filterSessions() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  document.querySelectorAll('.session-item').forEach(el => { el.style.display = el.dataset.title.includes(q) ? '' : 'none'; });
+}
+
+function selectSession(sessionId, el) {
+  document.querySelectorAll('.session-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active'); currentSessionId = sessionId; loadConversation(sessionId);
+}
+
+function renderMd(text) { if (!text) return ''; try { return marked.parse(text); } catch { return escHtml(text); } }
+
+function toggleTool(el) {
+  el.closest('.tool-call').classList.toggle('open');
+}
+
+function loadConversation(sessionId) {
+  const session = allSessions.find(s => s.id === sessionId);
+  const convHeader = document.getElementById('convHeader');
+  const messagesEl = document.getElementById('messages');
+  const statsBar = document.getElementById('statsBar');
+  convHeader.style.display = '';
+  const titleShort = session.title.length > 120 ? session.title.substring(0, 120) + '...' : session.title;
+  document.getElementById('convTitle').textContent = titleShort;
+  document.getElementById('convTitle').title = `Session ID: ${sessionId} (right-click to copy)`;
+  document.getElementById('convTitle').onclick = () => navigator.clipboard.writeText(sessionId).then(() => showToast('Copied: ' + sessionId));
+  const msgRows = db.exec(`SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created`, [sessionId]);
+  if (!msgRows.length) { messagesEl.innerHTML = '<div class="empty-state">No messages in this session</div>'; statsBar.style.display = 'none'; return; }
+
+  let totalInput = 0, totalOutput = 0, toolCount = 0, textCount = 0;
+  messagesEl.innerHTML = '';
+
+  for (const row of msgRows[0].values) {
+    const msgId = row[0]; const msgData = parseJson(row[2]); const role = msgData?.role || 'unknown';
+    const partRows = db.exec(`SELECT data FROM part WHERE message_id = ? ORDER BY time_created`, [msgId]);
+    const parts = partRows.length ? partRows[0].values.map(r => parseJson(r[0])) : [];
+
+    for (const part of parts) { if (part?.type === 'step-finish' && part.tokens) { totalInput += part.tokens.input || 0; totalOutput += part.tokens.output || 0; } }
+
+    const items = [];
+    for (const part of parts) {
+      if (!part) continue;
+      const type = part.type;
+      if (type === 'text') { const content = part.text || part.content || ''; if (!content.trim()) continue; items.push({ kind: 'text', role, content }); }
+      else if (type === 'tool') { toolCount++; items.push({ kind: 'tool', part }); }
+      else if (type === 'reasoning') { const content = part.text || part.content || part.reasoning || ''; if (!content.trim()) continue; items.push({ kind: 'reasoning', content }); }
+      else if (type === 'step-start') { items.push({ kind: 'step-start' }); }
+      else if (type === 'step-finish') { items.push({ kind: 'step-finish', tokens: part.tokens, reason: part.reason }); }
+    }
+
+    const merged = [];
+    for (const item of items) {
+      if (item.kind === 'text' && merged.length && merged[merged.length-1].kind === 'text' && merged[merged.length-1].role === item.role)
+        merged[merged.length-1].content += '\n\n' + item.content;
+      else merged.push(item);
+    }
+
+    for (const item of merged) {
+      if (item.kind === 'text') {
+        textCount++;
+        const div = document.createElement('div'); div.className = `msg msg-${item.role}`;
+        const al = item.role === 'user' ? 'U' : 'A';
+        div.innerHTML = `<div class="msg-avatar">${al}</div><div class="msg-body"><div class="msg-role">${item.role}</div><div class="msg-inner"><div class="md-content">${renderMd(item.content)}</div></div></div>`;
+        messagesEl.appendChild(div);
+      }
+      else if (item.kind === 'tool') {
+        const part = item.part; const toolName = part.tool || 'unknown'; const state = part.state || {};
+        const status = state.status || 'unknown'; const input = state.input || {}; const output = state.output || ''; const errorMsg = state.error || '';
+        const div = document.createElement('div'); div.className = 'msg msg-assistant';
+        const summary = getToolSummary(toolName, input);
+        const fullInput = formatObj(input);
+        const fullOutput = typeof output === 'string' ? output : formatObj(output);
+        const hasDetail = (fullInput && fullInput !== summary) || fullOutput || errorMsg;
+        let html = `<div class="msg-avatar">T</div><div class="msg-body"><div class="tool-call${hasDetail ? '' : ' no-detail'}">`;
+        html += `<div class="tool-row" onclick="toggleTool(this)">`;
+        html += `<span class="tool-arrow">\u25B6</span>`;
+        html += `<span class="tool-name">${escHtml(toolName)}</span>`;
+        if (errorMsg && !summary) html += `<span class="tool-summary" style="color:var(--error)">${escHtml(truncate(errorMsg, 200))}</span>`;
+        else html += `<span class="tool-summary" title="${escHtml(summary)}">${escHtml(summary)}</span>`;
+        html += `<span class="tool-status ${status}">${status}</span>`;
+        html += `</div>`;
+        if (hasDetail) {
+          html += `<div class="tool-detail">`;
+          if (errorMsg) { html += `<div class="tool-label" style="color:var(--error)">Error</div><pre style="color:var(--error)">${escHtml(errorMsg)}</pre>`; }
+          if (fullInput && fullInput !== summary) { html += `<div class="tool-label">Input</div><pre>${escHtml(truncate(fullInput, 8000))}</pre>`; }
+          if (fullOutput) { html += `<div class="tool-label">Output</div><div class="md-content">${renderMd(truncate(fullOutput, 12000))}</div>`; }
+          html += `</div>`;
+        }
+        html += `</div></div>`;
+        div.innerHTML = html; messagesEl.appendChild(div);
+      }
+      else if (item.kind === 'reasoning') {
+        const div = document.createElement('div'); div.className = 'msg msg-assistant';
+        div.innerHTML = `<div class="msg-avatar">R</div><div class="msg-body"><div class="reasoning-block"><div class="reasoning-toggle" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.arrow').textContent=this.nextElementSibling.classList.contains('open')?'\u25BC':'\u25B6'"><span class="arrow">\u25B6</span> Reasoning (${item.content.length} chars)</div><div class="reasoning-content"><div class="md-content">${renderMd(truncate(item.content, 8000))}</div></div></div></div>`;
+        messagesEl.appendChild(div);
+      }
+      else if (item.kind === 'step-start') {
+        const div = document.createElement('div'); div.className = 'step-marker'; div.textContent = 'step start'; messagesEl.appendChild(div);
+      }
+      else if (item.kind === 'step-finish') {
+        const t = item.tokens;
+        if (t) { const div = document.createElement('div'); div.className = 'step-marker'; div.textContent = `step end \u2022 in: ${t.input||0} \u2022 out: ${t.output||0} \u2022 cache: ${t.cache?.read||0} ${item.reason||''}`; messagesEl.appendChild(div); }
+      }
+    }
+  }
+
+  const partStats = db.exec(`SELECT type, COUNT(*) FROM part WHERE session_id = ? GROUP BY type`, [sessionId]);
+  let partInfo = ''; if (partStats.length) partInfo = partStats[0].values.map(r => `${r[0]}:${r[1]}`).join(' \u00B7 ');
+  document.getElementById('convStats').textContent = `texts: ${textCount} \u00B7 tools: ${toolCount} \u00B7 parts: ${partInfo}`;
+  statsBar.style.display = '';
+  statsBar.innerHTML = `<div class="stat-item">Text: <span>${textCount}</span></div><div class="stat-item">Tools: <span>${toolCount}</span></div><div class="stat-item">Input Tokens: <span>${totalInput.toLocaleString()}</span></div><div class="stat-item">Output Tokens: <span>${totalOutput.toLocaleString()}</span></div>`;
+  messagesEl.scrollTop = 0;
+}
+
+function getToolSummary(toolName, input) {
+  if (!input || typeof input !== 'object') return '';
+  if (toolName === 'bash') { const c = input.command || ''; const d = input.description || ''; return d ? `${c}  —  ${d}` : c || formatObj(input); }
+  if (toolName === 'read') return input.filePath || formatObj(input);
+  if (toolName === 'write') { const fp = input.filePath || ''; const c = input.content || ''; return `${fp}  (${c.split('\n').length} lines)`; }
+  if (toolName === 'edit') { const fp = input.filePath || ''; return `${fp}`; }
+  if (toolName === 'glob') return `${input.pattern || ''}${input.path ? '  in ' + input.path : ''}`;
+  if (toolName === 'grep') return `${input.pattern || ''}${input.path ? '  in ' + input.path : ''}${input.include ? '  ' + input.include : ''}`;
+  if (toolName === 'skill') return `${input.name || ''}${input.args ? '  ' + input.args : ''}`;
+  if (toolName === 'Agent') return truncate(input.prompt || input.description || '', 150);
+  return truncate(formatObj(input), 200);
+}
+
+function parseJson(str) { if (!str) return {}; try { return typeof str === 'string' ? JSON.parse(str) : str; } catch { return {}; } }
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function formatObj(obj) { try { return JSON.stringify(obj, null, 2); } catch { return String(obj); } }
+function truncate(s, max) { if (!s || s.length <= max) return s; return s.substring(0, max) + `\n... [truncated, total ${s.length} chars]`; }
+
+/* ---- Keyboard shortcuts ---- */
+document.addEventListener('keydown', (e) => {
+  // Escape → close all expanded tool details
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.tool-call.open').forEach(el => el.classList.remove('open'));
+  }
+});
+
+/* ---- Toast ---- */
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1200);
+}
+</script>
+<div class="toast" id="toast"></div>
+</body>
+</html>
+

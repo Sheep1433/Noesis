@@ -36,7 +36,7 @@ async def test_compact_session_updates_checkpoint_without_creating_run(monkeypat
 
     middleware = CompactionMiddleware(
         token_counter=lambda messages: len(messages) * 10,
-        summarize=lambda messages: "host summary",
+        summarize=lambda messages: "host summary. " + "section. " * 120,
         thresholds=CompactionThresholds(1000, 10, 100),
         keep_messages=1,
     )
@@ -76,9 +76,10 @@ async def test_compact_session_updates_checkpoint_without_creating_run(monkeypat
     outcome = await service.compact_session(session_id="session-1", user_id="user-1")
 
     assert outcome.status == "completed"
-    assert factory_args == [{"model_id": "test-model", "backend": None}]
+    assert factory_args == [{"model_id": "test-model", "session_id": "session-1"}]
     assert outcome.pre_message_count == 2
-    assert outcome.post_message_count == 2
+    # post 按最终视图计：1 条用户原话 + summary + 1 条保留
+    assert outcome.post_message_count == 3
     observer = create_agent(
         model=FakeListChatModel(responses=["unused"]),
         tools=[],
@@ -98,3 +99,38 @@ def _session():
 
 async def _fake_model_id(session_id: str, user_id: str, db: object) -> str:
     return "test-model"
+
+
+def test_build_compaction_middleware_constructs_for_real() -> None:
+    """真实构造回归：/compact 宿主路径此前因 deps 键名不匹配 TypeError。
+
+    既有用例都 fake 掉 builder，构造错误藏在其后；本用例不 fake，
+    只桩 get_llm（summarization purpose 的模型实例）。
+    """
+    from unittest.mock import MagicMock, patch
+
+    from noesis.agents.middlewares.compaction_middleware import CompactionMiddleware
+    from noesis.factory import build_compaction_middleware
+
+    class _FakeModelConfig:
+        summarization_enabled = True
+        context_max_input_tokens = 100_000
+        summarization_trigger_tokens = 0
+        summarization_trigger_fraction = 0.75
+        summarization_output_reserve = 4_000
+        summarization_messages_to_keep = 2
+        summarization_user_message_tokens = 20_000
+        max_tokens = 4_096
+
+    with patch("noesis.factory.ModelConfig", _FakeModelConfig), patch(
+        "noesis.factory.get_llm", return_value=MagicMock()
+    ), patch(
+        "noesis.factory.resolve_context_max_tokens", return_value=100_000
+    ):
+        middleware = build_compaction_middleware(
+            model_id=None, session_id="session-1"
+        )
+    assert isinstance(middleware, CompactionMiddleware)
+    assert middleware._keep_messages == 2
+    assert middleware._boundary_writer is not None
+    assert middleware._user_message_budget_tokens == 20_000

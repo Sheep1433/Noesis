@@ -15,7 +15,7 @@ from noesis.agents.subagents.registry import (
     SubagentRole,
     assert_no_bg_task_tools,
 )
-from noesis.agents.subagents.tools_middleware import NoesisSubagentMiddleware
+from noesis.agents.subagents.async_tools_middleware import AsyncSubagentToolsMiddleware
 
 __all__ = [
     "BG_TASK_TOOL_NAMES",
@@ -23,7 +23,7 @@ __all__ = [
     "BackgroundTask",
     "BgNotifyMiddleware",
     "BgTaskStatus",
-    "NoesisSubagentMiddleware",
+    "AsyncSubagentToolsMiddleware",
     "SubagentRegistry",
     "SubagentRole",
     "assert_no_bg_task_tools",

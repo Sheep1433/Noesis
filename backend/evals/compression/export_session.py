@@ -35,6 +35,9 @@ _SCRUB_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 _META_USER_PREFIXES = ("<command-name>", "<command-message>", "<command-args>",
                        "<local-command", "Caveat: The messages below")
 
+# 工具调用入参单条上限（命令/检索词足够，巨型入参截断）
+_TOOL_INPUT_MAX_CHARS = 1_500
+
 
 def scrub(text: str) -> str:
     for pattern, repl in _SCRUB_PATTERNS:
@@ -113,7 +116,19 @@ def extract_messages(events: Iterator[dict[str, Any]]) -> list[dict[str, Any]]:
                     if text:
                         messages.append({"type": "ai", "content": scrub(text)})
                 elif block.get("type") == "tool_use":
-                    pending_tools[str(block.get("id") or "")] = str(block.get("name") or "tool")
+                    tool_name = str(block.get("name") or "tool")
+                    pending_tools[str(block.get("id") or "")] = tool_name
+                    # 工具调用入参也入 transcript（线上 AI 消息携 tool_calls；
+                    # 缺失会低估 token 并让压缩器看不到 agent 干了什么）
+                    try:
+                        args_text = json.dumps(
+                            block.get("input"), ensure_ascii=False, default=str)
+                    except (TypeError, ValueError):
+                        args_text = str(block.get("input"))
+                    messages.append({
+                        "type": "ai",
+                        "content": scrub(f"[调用工具 {tool_name}] {args_text}")[:_TOOL_INPUT_MAX_CHARS],
+                    })
     return messages
 
 
@@ -159,7 +174,9 @@ def main() -> int:
         return 0
 
     path = Path(args.session).expanduser()
-    out = args.out or (REAL_FIXTURES_DIR / f"{path.stem[:24]}.json")
+    out = args.out if args.out and args.out.is_absolute() else (
+        (REAL_FIXTURES_DIR / args.out.name) if args.out
+        else REAL_FIXTURES_DIR / f"{path.stem[:24]}.json")
     info = export_session(path, out, min_messages=args.min_messages)
     print(json.dumps(info, ensure_ascii=False, indent=2))
     print("注意：脱敏为规则级，产物必须人工过审后才能作为 fixture 使用")

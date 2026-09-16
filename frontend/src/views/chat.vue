@@ -1292,10 +1292,15 @@ function stopCatalogStream(): void {
 let userSignalSource: EventSource | null = null
 let userSignalConnectedOnce = false
 
-function applyUserSignal(signal: { type?: string, session_id?: string, status?: string }): void {
+function applyUserSignal(signal: { type?: string, session_id?: string, status?: string, run_id?: string }): void {
   const sessionId = signal.session_id
   if (!sessionId) {
     return
+  }
+  // 兜底加入：当前正在看的会话有新 run 启动（典型：后台任务终态触发的
+  // continuation run），会话信令流丢帧时经列表通道加入，避免刷新才可见
+  if (signal.type === 'run-started' && sessionId === currentIndex.value) {
+    sseStream.joinRunIfIdle(sessionId, signal.run_id)
   }
   // 终态：清徽章 + 会话有新活动（排序位置本地先行对齐，下次全量刷新校正）；
   // 后端契约保证所有用户级信令与首帧都携带 status
@@ -1567,7 +1572,7 @@ function assistantSubagentCount(item: {
   if (Array.isArray(parts)) {
     return buildDisplayParts(parts).filter((entry) =>
       entry.kind === 'subagent'
-      || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
+      || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_async_task'),
     ).length
   }
   return (item.tool_calls ?? []).filter((call) => call.name === 'task').length
@@ -4724,8 +4729,18 @@ function onComposerPaste(e: ClipboardEvent) {
     margin-left: auto;
   }
 
+  /* 沉浸式聊天页无底栏：输入条背景画到物理底部，内容抬高 safe-area */
+  .chat-input-footer-bar {
+    padding-bottom: var(--noesis-safe-area-bottom);
+  }
+
   .chat-input-footer {
     padding: 8px !important;
+  }
+
+  /* 按钮锚在 chat-main-inner 底缘（已随输入条下探到物理底部），补偿 safe-area 保持与输入条间距 */
+  .scroll-to-bottom-btn {
+    bottom: calc(120px + var(--noesis-safe-area-bottom));
   }
 
   .chat-content-gutter {

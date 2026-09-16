@@ -16,6 +16,7 @@ from langgraph.types import Command
 from noesis.runtime.logging import logger
 from noesis.runtime.deps import langfuse_tracing_enabled, merge_langfuse_runnable_config
 from noesis.agents.middlewares.compaction_middleware import COMPACTION_SUMMARY_TAG
+from noesis.agents.middlewares.llm_error_handling_middleware import is_model_fallback_message
 from noesis.runtime.hitl import (
     _tool_calls_from_model_end,
     build_hitl_required_event,
@@ -88,6 +89,11 @@ async def stream_agent_events(
     session_id = str(stream_args.get("langfuse_session_id") or task_id or "")
     last_tool_calls: list[dict] = []
     hitl_pending = False
+    # LLM 降级收场跟踪：最后一次模型输出是重试耗尽的失败说明（非真实
+    # 产出）时，run 不能以 stop 正常收尾——SSE 桥接层经 custom 事件已
+    # 发 error 终态（幂等跳过这里的 error）；直接消费事件流的调用方
+    # （CLI / 离线评测）只有这里能看到失败，不发就是「正常空完成」
+    fallback_text: str | None = None
 
     callbacks = agent_config.get("callbacks")
     if callbacks is None:
@@ -120,6 +126,18 @@ async def stream_agent_events(
             if model_tcs:
                 last_tool_calls = model_tcs
 
+            if event.get("event") == "on_custom_event" and event.get("name") == "noesis_model_fallback":
+                # 中间件重试耗尽/不可重试的降级信号（生产 bridge 同款来源）；
+                # 真实模型事件不会出现——调用在中间件层就被短路了
+                fallback_text = str((event.get("data") or {}).get("content") or "")
+            elif event.get("event") == "on_chat_model_end":
+                output = (event.get("data") or {}).get("output")
+                if is_model_fallback_message(output):
+                    fallback_text = str(getattr(output, "content", "") or "")
+                else:
+                    # 成功的模型输出到达 → 此前降级已被跨轮恢复
+                    fallback_text = None
+
             interrupt = extract_interrupt_payload(event)
             if interrupt is not None:
                 interrupt_id, hitl_value = interrupt
@@ -140,6 +158,10 @@ async def stream_agent_events(
             yield event
 
         if not hitl_pending:
+            if fallback_text is not None:
+                yield {"type": "__tw_error__", "content": fallback_text}
+                yield {"type": "__tw_finish__", "finish_reason": "error"}
+                return
             # astream_events 耗尽耗时（最后一个事件 → 循环退出）：图结束阶段的
             # 终态 checkpoint 写入 / middleware 收尾钩子都在这段，无事件帧可观察。
             # 慢于此阈值说明收尾被拖长（对比 SSE 尾部空转现象）。

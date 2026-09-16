@@ -28,7 +28,7 @@ from noesis.agents.subagents.executor import (
 )
 from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
 from noesis.agents.subagents.registry import SubagentRegistry, SubagentRole
-from noesis.agents.subagents.tools_middleware import NoesisSubagentMiddleware
+from noesis.agents.subagents.async_tools_middleware import AsyncSubagentToolsMiddleware
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.chat.event_mapping.retrieval import (
@@ -385,14 +385,15 @@ def test_check_task_appends_sources_and_registers_pending() -> None:
     registry.register(SubagentRole(
         name="general", description="通用子 Agent", worker_factory=worker_factory,
     ))
-    tools = NoesisSubagentMiddleware(
+    tools = AsyncSubagentToolsMiddleware(
         registry=registry,
         executor=executor,
         session_id="sess-rsp-tools",
         user_id="u1",
     ).tools
-    check = next(t for t in tools if t.name == "check_task")
-    text = check.func(task_id)
+    check = next(t for t in tools if t.name == "check_async_task")
+    import asyncio as _a
+    text = _a.run(check.ainvoke({"task_id": task_id}))
     assert text.startswith(f"[{child_id}] completed")
     assert "检索来源（去重后 1 条）" in text
     assert "https://example.com/a" in text

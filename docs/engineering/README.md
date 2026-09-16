@@ -19,6 +19,7 @@ Noesis 的系统组成与工程专题都在这里：当前长期有效的边界�
 - [Knowledge Base](knowledge-base.md)：知识库解析、检索与引用链路。
 - [Subagent Sessions](subagent-sessions.md)：子 Agent 会话模型（前台子 Agent 与后台任务）。
 - [Agent Context Runtime 重构设计](agents/agent-runtime-design.md)（proposed）：Claude Code 式上下文策略、DeepAgents 风格目录、middleware 边界、compaction 与迁移验证。
+- [Session History Search](agents/session-history-search.md)：会话历史检索（原文层召回）——两个窄工具、压缩边界列口径、pg_trgm 索引调参与 recovery 评测臂。
 - [Agent Evaluation](agents/agent-evaluation.md)：评测方法与 harness。
 - [Reliable SSE 发布 Runbook](reliable-sse-release-runbook.md)：BREAKING 发布的操作步骤与回滚。
 - [旧工作日志](legacy-worklog.md)：原 NOTES.md 未带决策日期的工程操作记录（历史素材）。

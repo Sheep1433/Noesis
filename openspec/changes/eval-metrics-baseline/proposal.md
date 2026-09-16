@@ -8,7 +8,7 @@
 
 - **RAG 检索（`evals.kb.erb`）修复与补强**：修 MRR 分母漏 miss 的虚高 bug；补 nDCG@10 与 bootstrap 置信区间；结果落盘 `results/<tag>/`（manifest + raw + summary），不再只输出 stdout；接入评测 Langfuse。
 - **新建引用溯源评测**：复用 ERB 211 题的 `answer_facts` + `gold_answer`，与 Agent E2E 共享同一次 agent run，产出引用格式遵循率、引用正确率（确定性）与事实可溯源率（LLM judge）。
-- **Agent E2E 补判卷与归因**：`evals.agent.rag` 增加 gold_answer LLM-as-judge（judge 与被评模型分离）；逐题增量落盘与断点续跑；E2E 失败题自动关联该题检索命中与工具轨迹，归到「检索没召回 / 工具选错 / 参数填错 / 推理错」四类。通用 Agent 场景复用既有 browsecomp 线，不新建数据集。
+- **Agent E2E 补判卷与归因**：`evals.agent.rag` 增加 gold_answer LLM-as-judge（judge 与被评模型分离）；逐题增量落盘与断点续跑；E2E 失败题自动关联该题检索命中与工具轨迹，归到「检索没召回 / 工具选错 / 参数填错 / 推理错」四类。通用 Agent 场景由既有 DeepResearch Bench 子集线承担，不新建数据集。
 - **压缩评测口径重定向**：headline 从五维 0–5 rubric 分改为 **recall% @ retained tokens**（judge 2/1/0 判卷），五维降级为失败诊断维度；补 uncompacted 对照组与多策略矩阵（`compress_options` 参数化），产出任务保持率 Δ；judge 与 probe continuation 模型分离；judge 解析失败重试后剔除并单列，不再记 0 分。
 - **压缩评测集重建**：放弃手搓合成 fixture 为主的路线，改为从本地 Claude Code 会话（`~/.claude/projects/`）导出脱敏 transcript + LLM 生成事实 recall 题库（题库缓存保 reproducibility）+ 保留可种植事实的合成 fixture 做零 LLM 冒烟。
 - **记忆召回评测补强**：数据集从 4 题自建场景升级为 LongMemEval（v1，S 子集）公开数据接入——会话灌入 Noesis 记忆存储、题目跑 Noesis Agent；指标分三层：答案正确性（对齐其评测协议）、条目级 recall@k / precision@k、行为级召回（是否主动调用 `search_memory`）；负例由其拒答类题目与自建配对场景构成。

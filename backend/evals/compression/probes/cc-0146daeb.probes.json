@@ -1,0 +1,154 @@
+{
+  "fixture_id": "cc-0146daeb",
+  "transcript_sha256": "39695df53181c3c0a9f5e431b06cf8af35399d9003a5cfadef89a09cfb67b184",
+  "gen_prompt_version": "gen-probes/v2-stratified",
+  "layer_split": {
+    "macro": 10,
+    "meso": 5,
+    "detail": 5
+  },
+  "region_messages": 3685,
+  "region_tokens": 607692,
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "layer": "macro",
+      "question": "本次会话开头，用户提出的原始请求是什么？",
+      "reference_answer": "review 一下当前工作区的记忆功能实现（未提交的 memory cortex / 记忆皮层代码）"
+    },
+    {
+      "id": "p2",
+      "type": "recall",
+      "layer": "macro",
+      "question": "针对该请求，AI 采用的 code-review skill 是什么结构的方法？",
+      "reference_answer": "双轴评审（two-axis）：Standards 轴（是否符合仓库编码规范 + smell 基线）和 Spec 轴（是否忠实实现 spec），两轴以并行子代理运行后汇总，不做跨轴合并排序"
+    },
+    {
+      "id": "p3",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话中用户点「允许」触发 HITL 确认时报错的 Bug，其根因结论是什么？",
+      "reference_answer": "task 9.1（run_id 全链路透传）改漏了 exec_hitl_resume 的函数签名：调用侧 run_service.py:863 加了 run_id=，函数体第 617 行也在用它，唯独签名没加该参数，导致任何 HITL 确认在调用瞬间 TypeError；测试没拦住是因为直连真实函数的测试只走超时早退分支、另一契约测试把整个函数 mock 掉了"
+    },
+    {
+      "id": "p4",
+      "type": "recall",
+      "layer": "macro",
+      "question": "导致记忆架构整体推翻重设计的动因是什么？",
+      "reference_answer": "产品定位修正为「平台级个人研究助手」（少数人自托管、ChatGPT 式个人记忆），旧记忆皮层是按已废弃的运维平台定位设计的；用户反复强调 Claude Code 等个人 Agent 都用 md 文件形态的记忆，最终经 mem0/memmy(MemOS)/MemSearch/Claude Code 调研后重设计为 md 文件唯一真相"
+    },
+    {
+      "id": "p5",
+      "type": "recall",
+      "layer": "macro",
+      "question": "用户对项目内架构文档 docs/architecture/platform/agent-memory.md 给出了什么指示？",
+      "reference_answer": "不要更新该文档；设计文档先放在 ~/Desktop/docs/knowledge-base/Interview/highlights/Agent-Memory 路径下，待用户全部验证功能正确之后再考虑放进项目（AI 随后回滚了该文档本会话的 4 处编辑，并把设计文档写入知识库路径）"
+    },
+    {
+      "id": "p6",
+      "type": "recall",
+      "layer": "macro",
+      "question": "最终定稿的 md-memory-layer 记忆方案的核心形态是什么？",
+      "reference_answer": "md 文件是唯一事实源：MEMORY.md 索引 + 五类条目文件 + 按日 journal 情景日志；数据库零新表、Qdrant 第一阶段不用；会话后蒸馏自动写入（无确认），唯一 HITL 是会话中 Agent 主动写入；零注入降级；用户直接编辑文件=最高权限，单一「记忆」开关"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "layer": "macro",
+      "question": "记忆类型最终冻结为哪五类？",
+      "reference_answer": "preference 偏好 / goal 目标 / decision 决策 / experience 经验 / gotcha 注意事项（目录即枚举，新增类型需新变更提案）"
+    },
+    {
+      "id": "p8",
+      "type": "recall",
+      "layer": "macro",
+      "question": "旧记忆皮层（Run-aware Memory Cortex）最终如何处置？保留了什么？",
+      "reference_answer": "整体删除（约 1.8 万行）：包括 services/memory、evals/memory_cortex、machine_memory_repository 等仓库、schemas/memory.py、models/memory.py、memory_bulletin_middleware、memory_runtime、memory_tools 及其测试；保留 USER.md/AGENTS.md 显式记忆、/memory/ backend、RefreshingMemoryMiddleware、HITL guardrail 和 run.memory_context 字段"
+    },
+    {
+      "id": "p9",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话结束时的分支合并与验证状态是怎样的？",
+      "reference_answer": "feat/model-discovery-unify 合入 dev（b75f9617），dev 合入 main（db901e60，3 个配置文件冲突全部取 dev 侧）；合并后 dev 与 main 各跑全量后端测试 1214 passed，前端 lint + build 通过；dev 和 main 都未推送到远端"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "layer": "macro",
+      "question": "在介绍当前记忆完整流程时，AI 列出的「当前已知未完事项」有哪几项？",
+      "reference_answer": "11.1 抽取评测门禁未跑（span recall 0.857 < 0.90，等配额跑 dev 迭代）；search_memory_items / read_artifact_summary 死方法待决策（接线或删除）；改动在工作区待提交"
+    },
+    {
+      "id": "p11",
+      "type": "recall",
+      "layer": "meso",
+      "question": "架构改造评审中发现的 P1 真回归是什么，如何修复的？",
+      "reference_answer": "memory_types 过滤在纯 RAG 路径丢失：删除 lexical 路后语义分支的 eligible_items_by_ids 不按类型过滤，深查询传 memory_types=[\"workflow\"] 会返回任意类型。修复：语义候选复查后补 Python 层类型过滤，并新增回归测试 test_memory_type_filter_applies_to_semantic_candidates"
+    },
+    {
+      "id": "p12",
+      "type": "recall",
+      "layer": "meso",
+      "question": "盘点 .noesis/ 数据目录时发现了一个什么「UUID 迁移遗留的数据失联问题」？",
+      "reference_answer": "Alembic 迁移只转了数据库行、没搬文件系统目录：admin 用户 id 已迁移为 UUID，但 .noesis/users/1/ 成了孤儿目录（87M、46 个旧会话、mcp.json、skills，含用户真实维护的 USER.md 画像），当前活跃的是 UUID 新目录，旧数据与用户失联"
+    },
+    {
+      "id": "p13",
+      "type": "recall",
+      "layer": "meso",
+      "question": "调研 memmy 等方案后，关于「记忆类型系统」的结论是什么？",
+      "reference_answer": "类型系统没有行业标准：memmy 用六种 kind（user_memory/trace/span/policy/world_model/skill），mem0 和 Claude Code 干脆没有类型系统；认知科学只稳定回答上层（情景/语义/过程），语义记忆内部细分是各产品自己的工程约定，所以必须自己立规矩冻结"
+    },
+    {
+      "id": "p14",
+      "type": "recall",
+      "layer": "meso",
+      "question": "为防止以后乱加记忆类型，设计中确定了哪些冻结机制？",
+      "reference_answer": "①目录即枚举：五个目录就是全部合法类型；②spec 级约束：新增类型必须开新变更提案（与改数据库 schema 同等待遇）；③蒸馏强制五选一：不属于任何类型的内容只进 journal 情景日志、不进语义层（fallback 是日志而不是新类型）"
+    },
+    {
+      "id": "p15",
+      "type": "recall",
+      "layer": "meso",
+      "question": "dev 合入 main 时发生了什么冲突，如何处置的？",
+      "reference_answer": "3 个配置文件冲突（deploy/config.docker.yaml、backend/config.example.yaml、backend/config.prod.example.yaml），原因是 main 还停在旧 opencode 模型目录版本；全部取 dev 侧（kilo 新配置语义全面取代），随后 YAML 校验通过（kilo-auto/free + deepseek/qwen/minimax presets）"
+    },
+    {
+      "id": "p16",
+      "type": "recall",
+      "layer": "detail",
+      "question": "HITL 确认报错的 TypeError 原文是什么？",
+      "reference_answer": "TypeError: QaService.exec_hitl_resume() got an unexpected keyword argument 'run_id'"
+    },
+    {
+      "id": "p17",
+      "type": "recall",
+      "layer": "detail",
+      "question": "排查 .noesis 数据目录时查到的 admin 用户迁移后的 id（UUID）是什么？",
+      "reference_answer": "01a03272-c005-701a-b5bb-32ed719a434b"
+    },
+    {
+      "id": "p18",
+      "type": "recall",
+      "layer": "detail",
+      "question": "用 SQL 查 t_user 表并按 created_at 排序时发生了什么错误？",
+      "reference_answer": "asyncpg.exceptions.UndefinedColumnError: column \"created_at\" does not exist（t_user 表没有 created_at 列，随后改为只查 id 和 username）"
+    },
+    {
+      "id": "p19",
+      "type": "recall",
+      "layer": "detail",
+      "question": "孤儿目录 .noesis/users/1/ 中的 USER.md 写的是什么内容？",
+      "reference_answer": "「用户是个憨憨，平时叫我老哥就行」"
+    },
+    {
+      "id": "p20",
+      "type": "recall",
+      "layer": "detail",
+      "question": "抽取评测门禁（11.1）当前的 span recall 数值和目标阈值分别是多少？",
+      "reference_answer": "span recall 0.857，阈值 0.90（未达标，等配额恢复后跑 dev 迭代）"
+    }
+  ]
+}

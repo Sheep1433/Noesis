@@ -10,6 +10,14 @@ from noesis.agents.backends.memory import UserMemoryBackend
 from noesis.agents.backends.factory import build_agent_filesystem_backend
 from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_USER_FILE
 from noesis.config import user_data_paths as user_paths
+from noesis.services.memory.store import MemoryStore
+
+
+@pytest.fixture()
+def users_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path / "users"
+    monkeypatch.setattr(user_paths, "_USERS_ROOT", root)
+    return root
 
 
 def test_user_memory_backend_agents_and_user_writable(tmp_path: Path) -> None:
@@ -87,3 +95,48 @@ async def test_composite_memory_route_isolated_from_workspace(
 
     profile = backend.read(AGENT_MEMORY_USER_FILE)
     assert profile.error is None
+
+
+def test_grep_covers_memory_entries_and_scoped_dirs(users_root: Path) -> None:
+    """grep 候选集必须覆盖五类目录条目；目录路径要展开、不掺根文件。"""
+    MemoryStore.upsert_entry(
+        "u1", memory_type="preference", label="文档格式",
+        body="文档输出一律表格化、简体中文。", sources=[])
+    MemoryStore.upsert_entry(
+        "u1", memory_type="experience", label="无关",
+        body="完全不相关的内容。", sources=[])
+    backend = build_agent_filesystem_backend(
+        user_id="u1", session_id="grep-test",
+        sandbox=None, shell_timeout=30,
+    )
+
+    # 根路径：条目正文可命中（此前只有 MEMORY.md 索引行可见）
+    g = backend.grep("表格化", path="/")
+    entry_hits = [m for m in g.matches
+                  if str(m.get("path", "")).startswith("/memory/preference/")]
+    assert entry_hits, f"条目正文未命中: {g.matches}"
+    assert any("表格化" in str(m.get("content", "")) for m in entry_hits)
+
+    # 类型目录 scoped：只搜该目录，不掺根文件
+    g2 = backend.grep("表格化", path="/memory/preference")
+    assert g2.matches and all(
+        str(m.get("path", "")).startswith("/memory/preference/") for m in g2.matches)
+
+    # journal 可经 grep 命中
+    MemoryStore.append_journal("u1", session_id="s1", text="今天试了 pnpm workspace")
+    g3 = backend.grep("pnpm", path="/")
+    assert any(str(m.get("path", "")).startswith("/memory/journal/") for m in g3.matches)
+
+
+def test_grep_supports_regex_alternation(users_root: Path) -> None:
+    MemoryStore.upsert_entry(
+        "u1", memory_type="experience", label="婚礼",
+        body="Congratulations to Rachel on her upcoming wedding!", sources=[])
+    backend = build_agent_filesystem_backend(
+        user_id="u1", session_id="grep-regex-test",
+        sandbox=None, shell_timeout=30,
+    )
+    g = backend.grep("wedding|marry|married|engaged", path="/")
+    assert any("upcoming wedding" in str(m.get("content", "")) for m in g.matches), (
+        f"正则交替模式未命中: {g.matches}"
+    )

@@ -1,0 +1,154 @@
+{
+  "fixture_id": "cc-5dc6e88c",
+  "transcript_sha256": "b81d833b9d1b6686bc2db8e47e7f8e5a0068ed115f6ddef773c4b0496cf134dd",
+  "gen_prompt_version": "gen-probes/v2-stratified",
+  "layer_split": {
+    "macro": 10,
+    "meso": 5,
+    "detail": 5
+  },
+  "region_messages": 1151,
+  "region_tokens": 201389,
+  "probes": [
+    {
+      "id": "p1",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话开头的 session-scoped Stop hook 给本会话设定的目标是什么？",
+      "reference_answer": "实现现在的 feature-discussions/2026-08-20-dsh-debate 方案（即 feature-discussions/2026-08-20-dsh-debate-room/ 目录下的设计提案）。"
+    },
+    {
+      "id": "p2",
+      "type": "recall",
+      "layer": "macro",
+      "question": "被要求实现的方案文档（README 第 1 节 Goal）总体上要构建什么？",
+      "reference_answer": "在 DeepSeek Harness 上构建类 Clowder 的长生命周期多 Agent 工作区（DSH Agent Workspace）：用户配置稳定 Agent（如 Architect、Implementer、Reviewer），通过 @mention、A2A 消息、Memory、Evidence 与 Workflows 跨 Thread 协作；Debate Room 是 Workflow 而非平台运行时，subagent Tool Call 不是平台身份。"
+    },
+    {
+      "id": "p3",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话最终交付了哪四个包，属于方案的哪个实施切片？",
+      "reference_answer": "packages/experimental/agent-hub、packages/experimental/debate-room、packages/experimental/tool-debate-room、packages/client/ui-debate-room；为方案的首个平台切片（P0–P2 + P4 部分 + P5 + P6 部分）。"
+    },
+    {
+      "id": "p4",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话结束时各仓库门禁的最终状态如何？",
+      "reference_answer": "全部通过：pnpm run test:coverage 全量 100% statements/branches/functions/lines、14,332 个测试、exit 0；typecheck、lint、hygiene、doc-sync（28/28）全绿；headless Loader 快照 16/16（含新增 Debate Room 端到端快照）；四个新包 78 个单测全过、per-file 100% 覆盖。"
+    },
+    {
+      "id": "p5",
+      "type": "recall",
+      "layer": "macro",
+      "question": "在测试策略上，本会话依据仓库测试政策做出的关键决策是什么？",
+      "reference_answer": "按仓库测试政策，debate-room 这类 model-visible 行为需要通过真实可运行 example 的 keyless snapshot，参照 agent-team 的先例补齐；最终新增了 keyless headless 快照，由真实 Loader 启动端到端驱动 debate_review 并断言持久化事件。"
+    },
+    {
+      "id": "p6",
+      "type": "recall",
+      "layer": "macro",
+      "question": "本会话在实现过程中修复了哪 3 个真实缺陷？",
+      "reference_answer": "① maxRepairAttempts: 0 被 || 1 吞掉；② 客户端 memory 事件缺 roomId，永不折叠进 Room 节点；③ tsconfig 重复引用。"
+    },
+    {
+      "id": "p7",
+      "type": "recall",
+      "layer": "macro",
+      "question": "目标宣告完成后，用户额外提出了什么请求，AI 如何响应？",
+      "reference_answer": "用户要求：汇报现在的情况，并通过 jsonl 文件反馈刚才的运行时间、token 消耗、subagent 用量；AI 将汇总写入仓库根目录的 debate-implementation-report.jsonl。"
+    },
+    {
+      "id": "p8",
+      "type": "recall",
+      "layer": "macro",
+      "question": "用户对“0 个 subagent”的汇报提出质疑后，AI 通过分析 transcript 得出了什么结论？",
+      "reference_answer": "分析 ~/.claude/projects/-Users-zzq-Desktop-code-deepseek-harness/5dc6e88c-….jsonl 后确认：sidechain（子代理）条目为 0，未发现 ≥50% 上下文骤降的压缩签名（0 次）；同时承认之前说法有误——token 消耗其实可以从会话记录测出（计费等效总计约 215,823,820 tokens）。"
+    },
+    {
+      "id": "p9",
+      "type": "recall",
+      "layer": "macro",
+      "question": "目标完成后系统提示有后台任务仍在运行，具体情况和处理结果是什么？",
+      "reference_answer": "有 5 个陈旧的轮询器（bgkj92d8o、btguyjzdf、b9ce4m6z0、b2w7tcm55、b0dnhx4ic）仍在等待早已完成的 coverage 输出；AI 逐个用 TaskStop 停止，并用 ps 确认无残留 vitest 进程。"
+    },
+    {
+      "id": "p10",
+      "type": "recall",
+      "layer": "macro",
+      "question": "会话结束时的遗留说明（未完成/与本次无关的事项）有哪些？",
+      "reference_answer": "56 个文件变更（39 个已跟踪文件 +1234/−18，另有新增文件）等待提交；built-boot.snapshot 在纯净 HEAD 上同样失败（sidebar 品牌断言），是本机既有问题、与本改动无关，建议单独排查；真实 Codex/Claude Code Provider 集成需本地凭证，属方案 P3 的后续验证项（已在 Agent Note 记录）。"
+    },
+    {
+      "id": "p11",
+      "type": "recall",
+      "layer": "meso",
+      "question": "agent-hub 包具体实现了哪些能力？",
+      "reference_answer": "Agent Profile 目录、Room/Thread、A2A 消息与投递、Artifact/Evidence/Memory、策略快照、Provider 健康、事件回放恢复。"
+    },
+    {
+      "id": "p12",
+      "type": "recall",
+      "layer": "meso",
+      "question": "debate-room 与 tool-debate-room 两个包各自实现了什么？",
+      "reference_answer": "debate-room：四阶段评审运行时（校验/修复/超时/取消/确定性报告），作为方案中第一个 Workflow，快照涉及 proposer/critic/verifier/rebuttal/judge 五个角色；tool-debate-room：面向模型的 debate_review 工具。"
+    },
+    {
+      "id": "p13",
+      "type": "recall",
+      "layer": "meso",
+      "question": "全量 coverage 门禁共跑了 4 次，前三次失败的原因分别是什么？",
+      "reference_answer": "第 1 次（16:51）：4 个 catalog-spec 失败，运行期间文档再生成造成的竞态；第 2 次（16:59）：2 failures，gen-tool-catalog.spec 期望清单缺 debate_review；第 3 次（17:28）：2 failures，cordis-catalog.spec 源码行号漂移（此时 coverage 阈值已全部通过）；第 4 次（17:38）通过。"
+    },
+    {
+      "id": "p14",
+      "type": "recall",
+      "layer": "meso",
+      "question": "lint 清理是如何完成的？自动修复后还剩哪些需要手动处理的问题？",
+      "reference_answer": "初始 406 个错误（绝大多数是 @stylistic(indent) 缩进类），先跑 pnpm run lint:fix 自动修复；剩余手动修复：删除 agent-hub/src/hub.ts 第 7 行未使用的 ContentBlock 导入（TS6133）、移除多余 String() 类型转换（no-unnecessary-type-conversion）、删除 HubRoomPanel 中未使用的 HubRoomChatData 导入、把超长的 zod Config schema 重排以符合 max-len 140。"
+    },
+    {
+      "id": "p15",
+      "type": "recall",
+      "layer": "meso",
+      "question": "文档同步（doc-sync/翻译配对）遇到了什么问题，如何解决？",
+      "reference_answer": "docs/config-catalog.zh.md 的 tool-debate-room 小节缺少 ```ts config-catalog 代码围栏，verify-translation-pairing 报 out-of-sync；补回围栏后用 pnpm run verify-translation-pairing --write --all 重录（994 对全部一致），最终 doc-sync 28/28 通过。"
+    },
+    {
+      "id": "p16",
+      "type": "recall",
+      "layer": "detail",
+      "question": "protocol.spec 中 “rejects malformed Judge records” 测试第一次失败时，期望与实际的错误信息原文是什么？",
+      "reference_answer": "期望抛出 'decision must be a non-empty string'，但实际得到 \"invalid judge output: Error: judge.verdicts must be an array\"；修复方式是给测试输入 JSON 补上 \"verdicts\":[]。"
+    },
+    {
+      "id": "p17",
+      "type": "recall",
+      "layer": "detail",
+      "question": "最终通过的 coverage summary 中四个维度的精确数字是多少？",
+      "reference_answer": "Statements 100% (45089/45089)、Branches 100% (27515/27515)、Functions 100% (9634/9634)、Lines 100% (39729/39729)。"
+    },
+    {
+      "id": "p18",
+      "type": "recall",
+      "layer": "detail",
+      "question": "SubagentStopReasonMap 中定义的停止原因有哪些（原文值）？",
+      "reference_answer": "'completed'、'aborted'、'error'、'max-tokens'、'refusal'（定义于 packages/subagent/subagent/src/types.ts 的 SubagentStopReasonMap）。"
+    },
+    {
+      "id": "p19",
+      "type": "recall",
+      "layer": "detail",
+      "question": "从 transcript jsonl 统计出的 token 数据：上下文峰值、未缓存输入、cache_read、输出、总计各是多少？",
+      "reference_answer": "上下文峰值 402,070 tokens；未缓存输入 11,429,553；cache_read 203,988,928；输出 405,339；计费等效总计 215,823,820（transcript 共 1809 行，首条时间戳 2026-08-22T07:19:47.001Z，sidechain 条目 0）。"
+    },
+    {
+      "id": "p20",
+      "type": "recall",
+      "layer": "detail",
+      "question": "四次全量 coverage 门禁各自的开始时间与耗时（Duration）分别是多少？",
+      "reference_answer": "16:51:10 起 320.42s（失败）、16:59:09 起 252.75s（失败）、17:28:55 起 279.99s（失败）、17:38:51 起 262.59s（通过，exit 0）。"
+    }
+  ]
+}

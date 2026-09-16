@@ -120,11 +120,11 @@ function mergeAdjacentParallelTools(entries: DisplayPartEntry[]): DisplayPartEnt
   let i = 0
   while (i < entries.length) {
     const entry = entries[i]
-    // 每次 start_task 委派都是独立卡片，不能折叠进通用并行工具组。
+    // 每次 start_async_task 委派都是独立卡片，不能折叠进通用并行工具组。
     if (
       entry.kind !== 'part'
       || entry.part.type !== 'tool'
-      || entry.part.name === 'start_task'
+      || entry.part.name === 'start_async_task'
       || !entry.part.step_id
     ) {
       result.push(entry)
@@ -139,7 +139,7 @@ function mergeAdjacentParallelTools(entries: DisplayPartEntry[]): DisplayPartEnt
       if (
         next.kind === 'part'
         && next.part.type === 'tool'
-        && next.part.name !== 'start_task'
+        && next.part.name !== 'start_async_task'
         && next.part.step_id === stepId
       ) {
         group.push(next.part)
@@ -175,7 +175,7 @@ export function lastTopLevelTextEntry(entries: DisplayPartEntry[]): DisplayPartE
 }
 
 /**
- * compact 工具模式的折叠条目：只保留委派卡（前台 task / 后台 start_task）
+ * compact 工具模式的折叠条目：只保留委派卡（前台 task / 后台 start_async_task）
  * 与最后一段终稿正文，其余工具与推理收起（点击气泡头部展开全量）。
  */
 export function collapseDisplayEntries(entries: DisplayPartEntry[]): DisplayPartEntry[] {
@@ -185,7 +185,7 @@ export function collapseDisplayEntries(entries: DisplayPartEntry[]): DisplayPart
   }
   const kept = entries.filter((entry) =>
     entry.kind === 'subagent'
-    || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_task'),
+    || (entry.kind === 'part' && entry.part.type === 'tool' && entry.part.name === 'start_async_task'),
   )
   return [...kept, finalText]
 }

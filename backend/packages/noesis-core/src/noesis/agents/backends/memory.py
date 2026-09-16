@@ -21,7 +21,7 @@ from deepagents.backends.protocol import (
 )
 
 from noesis.agents.backends.paths import posix_clean
-from noesis.services.memory.store import IndexEntry, MemoryStore
+from noesis.services.memory.store import IndexEntry, MemoryStore, compile_keyword_matcher
 from noesis.services.memory.types import MEMORY_TYPES
 
 _ROOT_FILES = frozenset({"AGENTS.md", "USER.md"})
@@ -222,12 +222,20 @@ class GuardedFilesystemBackend(BackendProtocol):
     def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
         matches: list[dict] = []
         base = _memory_key(path or "/")
-        candidates: list[str] = ["MEMORY.md", "AGENTS.md", "USER.md"]
-        if base == "/" or base == "/journal":
-            candidates += [f"journal/{p.name}" for p in MemoryStore.memory_root(self._user_id).joinpath("journal").glob("*.md")]
+        name = base.lstrip("/")
+        root = MemoryStore.memory_root(self._user_id)
+        if name == "":
+            candidates = ["MEMORY.md", "AGENTS.md", "USER.md"]
+            candidates += [f"journal/{p.name}" for p in (root / "journal").glob("*.md")]
+            for type_dir in _TYPE_DIRS:
+                candidates += [f"{type_dir}/{p.name}" for p in (root / type_dir).glob("*.md")]
+        elif name == "journal" or name in _TYPE_DIRS:
+            # 目录路径展开为该目录下的条目文件；根文件不掺入 scoped 检索
+            candidates = [f"{name}/{p.name}" for p in (root / name).glob("*.md")]
         else:
-            candidates.append(base.lstrip("/"))
-        needle = pattern.casefold()
+            candidates = [name]
+        # grep 契约：合法正则按正则（忽略大小写），否则字面子串
+        matches_pattern = compile_keyword_matcher(pattern)
         for rel in candidates:
             key = f"/{rel}"
             if not _readable(key):
@@ -237,7 +245,7 @@ class GuardedFilesystemBackend(BackendProtocol):
                 continue
             text = file_data_to_string(read.file_data)
             for line_no, line in enumerate(text.splitlines(), start=1):
-                if needle in line.casefold():
+                if matches_pattern(line):
                     matches.append({"path": key, "line": line_no, "content": line.strip()})
         return GrepResult(matches=matches[:50])
 
@@ -245,7 +253,6 @@ class GuardedFilesystemBackend(BackendProtocol):
         """按 FileInfo 契约返回（deepagents CompositeBackend 对路由命中路径
         做 _remap_file_info_path 字典重映射，裸字符串会 TypeError——
         /memory 上的 glob 曾因此 9ms 即败且归类 unknown）。"""
-        base = _memory_key(path)
         wanted = pattern.lstrip("/")
         matches: list[FileInfo] = [{"path": "/MEMORY.md", "type": "file"}]
         for type_dir in _TYPE_DIRS:

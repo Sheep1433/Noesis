@@ -16,6 +16,30 @@ description: >-
 
 Noesis 连接细节、API、陷阱见 [references/reference.md](references/reference.md)。
 
+## 会话轨迹可视化（两种官方用法）
+
+**用法一：本地服务直连 Postgres（实时，含 codex/opencode 多源）**
+
+```bash
+cd backend && uv run python   ../.agents/skills/noesis-run-trace-analysis/references/session_viewer.py   [--codex ~/.codex/sessions] [--opencode <db>] [--recent 100]
+```
+
+浏览器自动打开 http://127.0.0.1:8899；数据实时查库，头部下拉切换数据源。
+扩展新数据源：实现 Provider 基类（list_sessions / get_messages，契约见
+session_viewer.py 模块 docstring）并注册进 PROVIDERS。
+
+**用法二：Claude Code History Viewer 桌面 App（镜像导出）**
+
+```bash
+cd backend && uv run python   ../.agents/skills/noesis-run-trace-analysis/references/noesis_history_mirror.py   [--recent 50 | --all | --sessions <id>...]
+```
+
+导出 Claude Code 格式 JSONL 到 `~/.noesis/history-mirror/`；App（Settings →
+Custom Claude Directories，已配置）读取该目录，搜索 / token 统计 / 费用面板
+均可用。镜像有刷新延迟——评测结束后重跑上述命令同步。映射：tool part →
+tool_use/tool_result 配对，reasoning → thinking 块，extra.usage → token 统计。
+
+
 单轮指标脚本：
 
 ```bash

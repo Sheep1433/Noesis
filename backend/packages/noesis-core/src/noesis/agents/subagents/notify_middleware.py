@@ -2,7 +2,7 @@
 
 后台子 Agent 到达终态时，若主 Agent 的 run 仍在执行（模型 start 后继续
 干活），本中间件在**下一次模型调用边界**把未送达的 ``[系统通知]`` 追加
-为 HumanMessage——模型同一轮内即可 check_task 收果，无需等下一轮对话。
+为 HumanMessage——模型同一轮内即可 check_async_task 收果，无需等下一轮对话。
 run 已结束则由 ``exec_query`` 的下一轮注入兜底（同一份通知注册表，
 delivered 标记保证不重复注入）。
 """

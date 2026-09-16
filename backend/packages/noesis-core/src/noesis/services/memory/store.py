@@ -588,7 +588,7 @@ class MemoryStore:
             handle.write(block)
         return path
 
-    # ----- 检索（grep） -----
+    # ----- 检索（grep 语义，行级匹配） -----
 
     @classmethod
     def search(
@@ -597,45 +597,77 @@ class MemoryStore:
         query: str,
         *,
         memory_types: tuple[str, ...] = (),
-        limit: int = 5,
+        limit: int = 50,
     ) -> list[dict[str, object]]:
-        """关键词字面匹配（grep 语义）：索引行 + 条目/journal 原文命中。"""
+        """关键词行级匹配（grep 语义）：条目 + journal 的命中行。
+
+        返回 {memory_type, slug, rel_path, line, content}——路径 + 行号 +
+        行原文。相关性判断交给调用方（模型看行内容决定哪个文件值得
+        read_file 全读）；工具只做忠实匹配与「同行多词命中优先」排序
+        （grep 多模式匹配的自然语义），不做相关性打分——条目级打分
+        在通用词查询下会奖励长文件而非相关文件。
+        """
         query = query.strip()
         if not query:
             return []
         types = memory_types or MEMORY_TYPES
         for memory_type in types:
             validate_memory_type(memory_type)
-        results: list[dict[str, object]] = []
         root = cls.memory_root(user_id)
-        keywords = [token for token in re.split(r"\s+", query) if token]
-        for memory_type in types:
-            for path in sorted((root / memory_type).glob("*.md")):
+        keywords = [
+            (token, compile_keyword_matcher(token))
+            for token in re.split(r"\s+", query) if token
+        ]
+        scan_dirs: list[str] = list(types)
+        if not memory_types:
+            scan_dirs.append(JOURNAL_DIR)
+        matches: list[tuple[int, str, int, dict[str, object]]] = []
+        for rel_dir in scan_dirs:
+            for path in sorted((root / rel_dir).glob("*.md")):
                 text = path.read_text(encoding="utf-8") if path.is_file() else ""
                 if not text:
                     continue
-                if any(keyword.casefold() in text.casefold() for keyword in keywords):
-                    results.append(
-                        {
-                            "memory_type": memory_type,
-                            "slug": path.stem,
-                            "rel_path": f"{memory_type}/{path.stem}.md",
-                            "content": text,
-                        }
-                    )
-                    if len(results) >= limit:
-                        return results
-        return results
+                rel_path = f"{rel_dir}/{path.stem}.md"
+                fm_end = _frontmatter_end_line(text)
+                for line_no, line in enumerate(text.splitlines(), start=1):
+                    if line_no <= fm_end:
+                        # frontmatter（label/description）自带关键词密度，
+                        # 命中会常年霸榜压住正文行；索引（MEMORY.md）已承载
+                        # 元数据导航，这里只匹配正文
+                        continue
+                    hit_count = sum(1 for _, matches in keywords if matches(line))
+                    if not hit_count:
+                        continue
+                    matches.append((hit_count, rel_path, line_no, {
+                        "memory_type": rel_dir,
+                        "slug": path.stem,
+                        "rel_path": rel_path,
+                        "line": line_no,
+                        "content": line.strip()[:400],
+                    }))
+        matches.sort(key=lambda m: (-m[0], m[1], m[2]))
+        return [m[3] for m in matches[:limit]]
 
 
-def today_str() -> str:
-    return date.today().isoformat()
+def compile_keyword_matcher(keyword: str):
+    """关键词 → 行匹配器：合法正则按正则（忽略大小写），否则字面子串。
+
+    grep 契约：模型会自然使用 `a|b|c` 交替等正则语法，字面子串会让
+    整串模式永远落空（实测被模型判为「grep 不可靠」绕道全量读）。
+    """
+    try:
+        compiled = re.compile(keyword, re.IGNORECASE)
+    except re.error:
+        return lambda line: keyword.casefold() in line.casefold()
+    return lambda line: compiled.search(line) is not None
 
 
-__all__ = [
-    "FRONTMATTER_FIELDS",
-    "IndexEntry",
-    "IndexState",
-    "MemoryStore",
-    "today_str",
-]
+def _frontmatter_end_line(text: str) -> int:
+    """frontmatter 结束行号（1-based，其后为正文）；无 frontmatter 返回 0。"""
+    if not text.startswith("---"):
+        return 0
+    lines = text.splitlines()
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            return idx + 1
+    return 0

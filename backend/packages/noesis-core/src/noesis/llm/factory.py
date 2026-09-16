@@ -189,7 +189,7 @@ class ChatOpenAICompatible(ChatOpenAI):
         到达才重置计时器，ping 不算。超时抛 StreamIdleTimeoutError，
         由 LLMErrorHandlingMiddleware 走重试/降级收口。
         """
-        idle_seconds = float(ModelConfig.request_timeout or 0)
+        idle_seconds = float(ModelConfig.stream_idle_timeout or 0)
         if idle_seconds <= 0:
             async for chunk in super()._astream(*args, **kwargs):
                 yield chunk
@@ -338,6 +338,7 @@ def build_chat_model(
     model_api_key: str,
     provider_max_retries: int | None = None,
     reasoning_effort: str | None = None,
+    max_tokens: int | None = None,
 ):
     timeout = _llm_http_timeout()
     max_retries = (
@@ -450,7 +451,11 @@ def build_chat_model(
     }
 
     if model_type in model_map:
-        return model_map[model_type]()
+        model = model_map[model_type]()
+        # 输出上限（如压缩摘要防倾倒）；None = 端点默认
+        if max_tokens is not None:
+            model.max_tokens = int(max_tokens)
+        return model
     raise ValueError(
         f"Unsupported MODEL_TYPE: {model_type}. "
         f"Supported types: {', '.join(model_map.keys())}"
@@ -463,6 +468,7 @@ def get_llm(
     model_id: str | None = None,
     temperature_override: float | None = None,
     reasoning_effort: str | None = None,
+    max_tokens_override: int | None = None,
 ):
     from noesis.llm.catalog import resolve_catalog_entry_strict
     from noesis.llm.reasoning import get_request_reasoning_effort
@@ -534,4 +540,5 @@ def get_llm(
             int(ModelConfig.max_retries) if purpose == "summarization" else 0
         ),
         reasoning_effort=reasoning_effort,
+        max_tokens=max_tokens_override,
     )

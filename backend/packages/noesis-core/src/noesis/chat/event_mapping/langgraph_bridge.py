@@ -667,6 +667,11 @@ class LangGraphSseBridge:
             return
 
         if t in ("__tw_error__", "error"):
+            # 幂等：fallback custom 事件已发过 error 终态时跳过——降级收场
+            # 在事件流层还会补一条合成 __tw_error__（服务 CLI/评测等直接
+            # 消费方），SSE 侧不双发
+            if self._finish_emitted:
+                return
             self._ensure_started(out)
             self._close_reasoning(out)
             self._close_text(out)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
+from evals.agent.rag.judge import VERDICT_SCORES
+
 
 def parse_search_memory_slugs(tool_outputs: Iterable[dict[str, Any]]) -> list[str]:
     """从 search_memory 工具输出按序提取返回条目 slug。"""
@@ -57,17 +59,36 @@ def retrieval_scores(
     }
 
 
+def classify_run_error(record: dict[str, Any]) -> str | None:
+    """未完成样本的错误归类：timeout（预算耗尽）/ agent_error / incomplete。
+
+    timeout 是预算问题不是链路回归，与 agent_error 分开计数，基线对比时
+    才能区分「跑不完」和「跑坏了」。
+    """
+    if record.get("completed"):
+        return None
+    error = str(record.get("error") or "")
+    if error.startswith("timeout"):
+        return "timeout"
+    if error:
+        return "agent_error"
+    return "incomplete"
+
+
 def summarize_memory_eval(records: list[dict[str, Any]]) -> dict[str, Any]:
     """三层汇总：答案正确性（judge verdict）、检索命中、行为级召回 + 负例误召回。"""
     n = len(records)
     positives = [r for r in records if not r.get("negative")]
     negatives = [r for r in records if r.get("negative")]
     judged = [r for r in positives
-              if (r.get("judge") or {}).get("verdict") in ("accepted", "partial", "rejected")]
+              if (r.get("judge") or {}).get("verdict") in VERDICT_SCORES]
+    judge_invalid = [r for r in positives
+                     if (r.get("judge") or {}).get("verdict") == "invalid"]
     recalls = [r["retrieval"]["recall@k"] for r in positives
                if r.get("retrieval", {}).get("recall@k") is not None]
     precisions = [r["retrieval"]["precision@k"] for r in positives
                   if r.get("retrieval", {}).get("precision@k") is not None]
+    error_kinds = [k for k in (classify_run_error(r) for r in records) if k]
 
     def rate(num: float, den: int) -> float:
         return round(num / den, 4) if den else 0.0
@@ -82,11 +103,20 @@ def summarize_memory_eval(records: list[dict[str, Any]]) -> dict[str, Any]:
         "samples": n,
         "positives": len(positives),
         "negatives": len(negatives),
-        "errors": sum(1 for r in records if r.get("error") or not r.get("completed")),
-        # 层 1：答案正确性（对齐 LongMemEval 协议口径的判卷）
+        "errors": len(error_kinds),
+        "error_breakdown": {
+            kind: error_kinds.count(kind)
+            for kind in ("timeout", "agent_error", "incomplete")
+            if error_kinds.count(kind)
+        },
+        # 层 1：答案正确性（对齐 LongMemEval 协议口径的判卷）；折半口径
+        # partial 计 0.5，与 rag 评测线一致——小样本下档位摆动的缓冲读数
         "answer_accepted_rate": rate(
             sum(1 for r in judged if r["judge"]["verdict"] == "accepted"), len(judged)),
+        "answer_score_rate_half": rate(
+            sum(VERDICT_SCORES[r["judge"]["verdict"]] for r in judged), len(judged)),
         "judged": len(judged),
+        "judge_invalid": len(judge_invalid),
         # 层 2：检索命中（条目级）
         "mean_recall@k": round(sum(recalls) / len(recalls), 4) if recalls else None,
         "mean_precision@k": round(sum(precisions) / len(precisions), 4) if precisions else None,

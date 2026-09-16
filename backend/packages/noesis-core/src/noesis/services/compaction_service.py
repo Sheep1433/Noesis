@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator
 
 from langchain.agents import create_agent
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.agents.backends import agent_sandbox_session, create_agent_backend
 from noesis.config.checkpointer import get_checkpointer
 from noesis.config.code_enum import IntentEnum
 from noesis.factory import build_compaction_middleware
@@ -55,21 +52,6 @@ async def _resolve_model_id(session_id: str, user_id: str, db: AsyncSession) -> 
     )
 
 
-@asynccontextmanager
-async def _archive_backend(
-    profile: str, user_id: str, session_id: str
-) -> AsyncIterator[object | None]:
-    if profile not in {
-        IntentEnum.SUPER_AGENT_QA.value[0],
-        IntentEnum.FAULT_OPERATION_QA.value[0],
-    }:
-        yield None
-        return
-
-    async with agent_sandbox_session(user_id, session_id):
-        yield await create_agent_backend(user_id, session_id)
-
-
 async def compact_session(
     *,
     session_id: str,
@@ -98,53 +80,54 @@ async def compact_session(
                 return ManualCompactionOutcome("disabled")
             model_id = await _resolve_model_id(session_id, user_id, db)
 
-        async with _archive_backend(profile, user_id, session_id) as backend:
-            middleware = build_compaction_middleware(model_id=model_id, backend=backend)
-            if middleware is None:
-                return ManualCompactionOutcome("disabled")
+        middleware = build_compaction_middleware(
+            model_id=model_id, session_id=session_id
+        )
+        if middleware is None:
+            return ManualCompactionOutcome("disabled")
 
-            checkpointer = get_checkpointer()
-            config = {"configurable": {"thread_id": session_id}}
-            # This graph is only the checkpoint adapter. No model call or tool
-            # execution is performed; the compaction middleware is the single
-            # owner of summary, archive, boundary and policy construction.
-            graph = create_agent(
-                model=get_llm(model_id=model_id),
-                tools=[],
-                system_prompt="",
-                middleware=[middleware],
-                checkpointer=checkpointer,
-            )
-            snapshot = await graph.aget_state(config)
+        checkpointer = get_checkpointer()
+        config = {"configurable": {"thread_id": session_id}}
+        # This graph is only the checkpoint adapter. No model call or tool
+        # execution is performed; the compaction middleware is the single
+        # owner of summary, boundary and policy construction.
+        graph = create_agent(
+            model=get_llm(model_id=model_id),
+            tools=[],
+            system_prompt="",
+            middleware=[middleware],
+            checkpointer=checkpointer,
+        )
+        snapshot = await graph.aget_state(config)
 
-            async def checkpoint(update: dict[str, object]) -> None:
-                await graph.aupdate_state(config, update, as_node="model")
+        async def checkpoint(update: dict[str, object]) -> None:
+            await graph.aupdate_state(config, update, as_node="model")
 
-            compacted = await middleware.acompact_state(
-                snapshot.values,
-                session_id,
-                instructions=bounded_instructions,
-                checkpoint=checkpoint,
-            )
-            if compacted is None:
-                return ManualCompactionOutcome("no_history")
-            logger.info(
-                "manual compaction completed session_id={} user_id={} mode=manual "
-                "messages={}→{} tokens={}→{}",
-                session_id,
-                user_id,
-                compacted.pre_message_count,
-                compacted.post_message_count,
-                compacted.pre_tokens,
-                compacted.post_tokens,
-            )
-            return ManualCompactionOutcome(
-                "completed",
-                pre_message_count=compacted.pre_message_count,
-                post_message_count=compacted.post_message_count,
-                pre_tokens=compacted.pre_tokens,
-                post_tokens=compacted.post_tokens,
-            )
+        compacted = await middleware.acompact_state(
+            snapshot.values,
+            session_id,
+            instructions=bounded_instructions,
+            checkpoint=checkpoint,
+        )
+        if compacted is None:
+            return ManualCompactionOutcome("no_history")
+        logger.info(
+            "manual compaction completed session_id={} user_id={} mode=manual "
+            "messages={}→{} tokens={}→{}",
+            session_id,
+            user_id,
+            compacted.pre_message_count,
+            compacted.post_message_count,
+            compacted.pre_tokens,
+            compacted.post_tokens,
+        )
+        return ManualCompactionOutcome(
+            "completed",
+            pre_message_count=compacted.pre_message_count,
+            post_message_count=compacted.post_message_count,
+            pre_tokens=compacted.pre_tokens,
+            post_tokens=compacted.post_tokens,
+        )
 
 
 __all__ = ["ManualCompactionOutcome", "compact_session"]

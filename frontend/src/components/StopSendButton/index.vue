@@ -4,14 +4,13 @@ import { NFloatButton } from 'naive-ui'
 /**
  * 单按钮 stop/send（主/子会话共用）：运行中呈停止态（实心方块 + 主色光环），
  * 否则发送态。停止/发送的行为差异（乐观收尾 vs 等往返）由宿主的 action
- * 处理决定；`stopping` 为停止受理中的防重复禁用。
+ * 处理决定。
  */
 withDefaults(defineProps<{
   stopMode: boolean
   sendDisabled?: boolean
-  stopping?: boolean
   testidPrefix?: string
-}>(), { sendDisabled: false, stopping: false, testidPrefix: '' })
+}>(), { sendDisabled: false, testidPrefix: '' })
 
 const emit = defineEmits<{ (e: 'action', kind: 'stop' | 'send'): void }>()
 </script>
@@ -22,7 +21,7 @@ const emit = defineEmits<{ (e: 'action', kind: 'stop' | 'send'): void }>()
       position="relative"
       :width="36"
       :height="36"
-      :disabled="(!stopMode && sendDisabled) || stopping"
+      :disabled="!stopMode && sendDisabled"
       :type="stopMode ? 'primary' : 'default'"
       :data-testid="stopMode ? `${testidPrefix}stop-button` : `${testidPrefix}send-button`"
       class="stop-send-btn"

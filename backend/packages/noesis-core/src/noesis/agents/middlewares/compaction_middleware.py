@@ -25,7 +25,6 @@ from langchain_core.messages import (
     AnyMessage,
     HumanMessage,
     ToolMessage,
-    get_buffer_string,
 )
 from langgraph.types import Command
 
@@ -92,7 +91,6 @@ class CompactionThresholds:
 @dataclass(frozen=True)
 class CompactionResult:
     summary_text: str
-    archive_path: str | None
     preserved_messages: tuple[AnyMessage, ...]
     original_message_count: int
     mode: str
@@ -111,11 +109,44 @@ class ManualCompactionState:
 
 
 CheckpointWriter = Callable[[dict[str, Any]], Awaitable[None]]
+# 压缩成功后写会话遮蔽边界（session-history-search）：参数为 thread_id。
+# 仅 async 路径调用（awrap_model_call / acompact_state）；同步 wrap_model_call
+# 为离线评测路径，不接 DB。
+BoundaryWriter = Callable[[str], Awaitable[None]]
 
 
 def _summary_is_invalid(text: str) -> bool:
     normalized = (text or "").strip().lower()
-    return not normalized or any(normalized.startswith(prefix) for prefix in _SUMMARY_FAILURE_PREFIXES)
+    if not normalized or any(normalized.startswith(prefix) for prefix in _SUMMARY_FAILURE_PREFIXES):
+        return True
+    # 过短判定：进入压缩的会话至少数万 token，其检查点摘要不可能只有
+    # 几百字符——实测 766K 输入偶发产出 423 字符的原文片段复述（模型
+    # 回显指令模板头 + 倾倒尾部片段），骗过前缀/复读检测后静默替换历史
+    if len(normalized) < _MIN_SUMMARY_CHARS:
+        return True
+    return _summary_is_degenerate_repetition(normalized)
+
+
+# 摘要最小体量：8 节 checkpoint 的骨架（标题 + 每节至少一行）低于此值
+# 即为退化输出；正常摘要实测 8K+ 字符，阈值取数量级下界
+_MIN_SUMMARY_CHARS = 1_000
+
+
+def _summary_is_degenerate_repetition(text: str) -> bool:
+    """复读检测：超长上下文摘要可能退化为复读循环（745K 实证同一行重复
+    数千次仍被判"有效"入库）。宁可压缩失败走重试/熔断，不可让复读
+    摘要静默替换真实历史。"""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 20:
+        return False
+    longest = current = 1
+    for i in range(1, len(lines)):
+        current = current + 1 if lines[i] == lines[i - 1] else 1
+        longest = max(longest, current)
+    if longest >= 10:
+        return True
+    # 唯一行占比过低 = 倾倒式复读（八节 checkpoint 的行彼此不同，不会误杀）
+    return len(lines) >= 50 and len(set(lines)) / len(lines) < 0.2
 
 
 def _safe_cutoff(messages: list[AnyMessage], keep_messages: int) -> int:
@@ -160,6 +191,76 @@ def _drop_oldest_api_round(messages: list[AnyMessage]) -> list[AnyMessage]:
     return messages[index:]
 
 
+def _message_text(content: Any) -> str:
+    """提取消息的纯文本；多模态内容只取文字部分（图片不参与原话保留）。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
+def _retained_user_messages(
+    messages: list[AnyMessage], budget_tokens: int
+) -> list[HumanMessage]:
+    """被压缩区用户消息原文保留（对齐 codex compact 的 collect_user_messages）。
+
+    从最新往最旧装满预算为止，装不下的最旧一条按剩余预算截断；只收
+    HumanMessage 的文字内容。摘要只负责决策与状态，用户说过的话靠这里
+    结构性兜底，不赌摘要模型的行为。
+    """
+    retained: list[HumanMessage] = []
+    remaining = budget_tokens
+    for message in reversed(messages):
+        if remaining <= 0:
+            break
+        if not isinstance(message, HumanMessage):
+            continue
+        text = _message_text(message.content).strip()
+        if not text:
+            continue
+        tokens = max(1, len(text) // 4)
+        if tokens > remaining:
+            retained.append(
+                HumanMessage(content=text[: remaining * 4].rstrip() + "\n…[truncated]")
+            )
+            break
+        retained.append(HumanMessage(content=text))
+        remaining -= tokens
+    retained.reverse()
+    return retained
+
+
+# 上下文契约：压缩后的投影头部对 Agent 声明上下文状态——构成、盲区、
+# 恢复通道与使用原则。按内容类别声明（通用机制），不携带任何会话特定
+# 信息；恢复通道措辞与工具挂载无关（闭卷场景下模型被引导明确说明缺失
+# 而不是翻找或猜测）。症状驱动：闭卷组在答案就在上下文里时仍空转工具、
+# 检索组在可答对时被工具循环带偏，根源都是模型不知道自己有什么、缺什么。
+_CONTEXT_CONTRACT = "\n".join([
+    "[上下文状态] 本会话历史已压缩。当前上下文的构成：",
+    "1. 本消息：被压缩区的结构化摘要",
+    "2. 被压缩区内用户消息的原文（按预算装回，最旧的超出预算部分截断）",
+    "3. 最近若干轮的完整原文（含工具结果）",
+    "因此以下类别的内容可能不在你的视野内：早期的工具输出原文、AI 回复"
+    "的原文与解释细节、精确数值与命令原文。",
+    "",
+    "[使用原则] 先基于当前上下文作答——结论、决策与用户原话都在其中；"
+    "确信所需内容属于上述被遮蔽类别时，用已挂载的会话历史检索工具定向"
+    "找回；两者都没有就明确说明该内容已随压缩不可得。不要翻找文件系统，"
+    "不要猜测。",
+    "",
+    "被压缩区的摘要如下：",
+])
+
+
 class CompactionMiddleware(
     AgentMiddleware[CompactionState[ResponseT], ContextT, ResponseT]
 ):
@@ -173,13 +274,13 @@ class CompactionMiddleware(
         token_counter: Callable[[list[AnyMessage]], int],
         summarize: Callable[[list[AnyMessage]], str],
         thresholds: CompactionThresholds,
-        backend: BackendProtocol | None = None,
         async_summarize: Callable[[list[AnyMessage]], Awaitable[str]] | None = None,
         request_token_counter: Callable[[ModelRequest[Any]], int] | None = None,
         keep_messages: int = 28,
         max_ptl_retries: int = 3,
         max_consecutive_failures: int = 3,
-        archive_required: bool = True,
+        boundary_writer: BoundaryWriter | None = None,
+        user_message_budget_tokens: int = 20_000,
     ) -> None:
         super().__init__()
         self._token_counter = token_counter
@@ -187,11 +288,12 @@ class CompactionMiddleware(
         self._summarize = summarize
         self._async_summarize = async_summarize
         self._thresholds = thresholds
-        self._backend = backend
         self._keep_messages = max(1, keep_messages)
         self._max_ptl_retries = max(0, max_ptl_retries)
         self._max_failures = max(1, max_consecutive_failures)
-        self._archive_required = archive_required
+        self._boundary_writer = boundary_writer
+        # 0 = 关闭用户原话装回（仅测试/对照用）
+        self._user_message_budget_tokens = max(0, user_message_budget_tokens)
 
     @staticmethod
     def _policy_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -221,6 +323,34 @@ class CompactionMiddleware(
         if cutoff < 0 or cutoff > len(raw_messages):
             return request
         return request.override(messages=[summary, *raw_messages[cutoff:]])
+
+    def _final_request(
+        self, effective_request: ModelRequest[ContextT], raw_request: ModelRequest[Any]
+    ) -> ModelRequest[ContextT]:
+        """最终请求组装：在投影结果头部装回被压缩区用户消息原文。
+
+        注入只发生在发给模型的请求边界——压缩机制（摘要输入、cutoff
+        算术、事件结构）看到的仍是 [summary, *raw[cutoff:]]，语义不变。
+        raw 永远完整保留在 checkpoint，因此装回是从原文幂等提取，重复
+        压缩不丢内容。
+        """
+        if self._user_message_budget_tokens <= 0:
+            return effective_request
+        event = self._policy_state(effective_request.state).get("event")
+        if not isinstance(event, dict) or not isinstance(event.get("cutoff_index"), int):
+            return effective_request
+        cutoff = event["cutoff_index"]
+        raw_messages = list(raw_request.messages)
+        if cutoff <= 0 or cutoff > len(raw_messages):
+            return effective_request
+        users = _retained_user_messages(
+            raw_messages[:cutoff], self._user_message_budget_tokens
+        )
+        if not users:
+            return effective_request
+        return effective_request.override(
+            messages=[*users, *effective_request.messages]
+        )
 
     def _should_auto_compact(self, request: ModelRequest[Any]) -> bool:
         policy = self._policy_state(request.state)
@@ -261,16 +391,6 @@ class CompactionMiddleware(
                 return str(thread_id)
         return "default"
 
-    def _archive(self, messages: list[AnyMessage], thread_id: str) -> str | None:
-        if self._backend is None:
-            return None
-        digest = hashlib.sha256(get_buffer_string(messages).encode()).hexdigest()[:16]
-        path = f"/conversation_history/{thread_id}/{digest}.md"
-        result = self._backend.write(path, get_buffer_string(messages))
-        if result is None or getattr(result, "error", None):
-            raise RuntimeError("conversation archive write failed")
-        return path
-
     # ---------- compaction events ----------
 
     def _emit_compaction_event(self, payload: dict[str, Any]) -> None:
@@ -280,6 +400,15 @@ class CompactionMiddleware(
     async def _aemit_compaction_event(self, payload: dict[str, Any]) -> None:
         """异步发 noesis_compaction custom event。"""
         await aemit_noesis_event("noesis_compaction", payload)
+
+    async def _awrite_boundary(self, thread_id: str) -> None:
+        """压缩成功后写遮蔽边界；失败只记日志（边界缺失=检索降级，不阻断压缩）。"""
+        if self._boundary_writer is None:
+            return
+        try:
+            await self._boundary_writer(thread_id)
+        except Exception:
+            logger.warning("compaction boundary write failed thread_id={}", thread_id)
 
     def _build_started_payload(self, mode: str, pre_tokens: int) -> dict[str, Any]:
         return {
@@ -383,14 +512,7 @@ class CompactionMiddleware(
         if summary_result is None:
             return None
         summary, attempts = summary_result
-        try:
-            archive_path = self._archive(prefix, thread_id)
-        except Exception:
-            logger.exception("conversation archive failed thread_id={}", thread_id)
-            if self._archive_required and self._backend is not None:
-                return None
-            archive_path = None
-        return CompactionResult(summary, archive_path, tuple(preserved), len(messages), mode, attempts)
+        return CompactionResult(summary, tuple(preserved), len(messages), mode, attempts)
 
     async def _abuild(
         self,
@@ -413,14 +535,7 @@ class CompactionMiddleware(
         if summary_result is None:
             return None
         summary, attempts = summary_result
-        try:
-            archive_path = self._archive(prefix, thread_id)
-        except Exception:
-            logger.exception("conversation archive failed thread_id={}", thread_id)
-            if self._archive_required and self._backend is not None:
-                return None
-            archive_path = None
-        return CompactionResult(summary, archive_path, tuple(preserved), len(messages), mode, attempts)
+        return CompactionResult(summary, tuple(preserved), len(messages), mode, attempts)
 
     @staticmethod
     def _summary_message(result: CompactionResult) -> HumanMessage:
@@ -428,11 +543,10 @@ class CompactionMiddleware(
             f"{result.summary_text}:{result.original_message_count}".encode()
         ).hexdigest()[:16]
         return HumanMessage(
-            content=f"Here is a summary of the conversation to date:\n\n{result.summary_text}",
+            content=f"{_CONTEXT_CONTRACT}\n\n{result.summary_text}",
             additional_kwargs={
                 "lc_source": "summarization",
                 "compact_boundary": boundary,
-                "archive_path": result.archive_path,
                 "compaction_mode": result.mode,
             },
         )
@@ -457,12 +571,10 @@ class CompactionMiddleware(
             {
                 "consecutive_failures": 0,
                 "last_mode": result.mode,
-                "last_archive_path": result.archive_path,
                 "summary_attempts": result.attempts,
                 "event": {
                     "summary_message": self._summary_message(result),
                     "cutoff_index": cutoff,
-                    "archive_path": result.archive_path,
                 },
             }
         )
@@ -492,7 +604,11 @@ class CompactionMiddleware(
             messages=raw_messages,
             state=dict(state),
         )
-        effective_messages = list(self._project(request).messages)
+        projected_request = self._project(request)
+        effective_messages = list(projected_request.messages)
+        # 指标按最终视图（含被压缩区用户原话装回）报告，与压缩后下一次
+        # 模型调用实际所见一致
+        pre_view = list(self._final_request(projected_request, request).messages)
         result = await self._abuild(
             effective_messages,
             thread_id,
@@ -507,14 +623,20 @@ class CompactionMiddleware(
         )
         if checkpoint is not None:
             await checkpoint(state_update)
+        await self._awrite_boundary(thread_id)
 
-        compacted_messages = [self._summary_message(result), *result.preserved_messages]
+        compacted_request = ModelRequest(
+            model=object(),  # type: ignore[arg-type]
+            messages=[self._summary_message(result), *result.preserved_messages],
+            state={**dict(state), **state_update},
+        )
+        post_view = list(self._final_request(compacted_request, request).messages)
         return ManualCompactionState(
             result=result,
-            pre_message_count=len(effective_messages),
-            post_message_count=len(compacted_messages),
-            pre_tokens=self._token_counter(effective_messages),
-            post_tokens=self._token_counter(compacted_messages),
+            pre_message_count=len(pre_view),
+            post_message_count=len(post_view),
+            pre_tokens=self._token_counter(pre_view),
+            post_tokens=self._token_counter(post_view),
         )
 
     @staticmethod
@@ -582,10 +704,11 @@ class CompactionMiddleware(
                 effective_request = self._failure_request(effective_request)
                 self._emit_compaction_event(self._build_failed_payload(mode, "summary_invalid"))
                 failed_request = effective_request
-        if self._request_tokens(effective_request) >= self._thresholds.hard_stop_at:
+        final_request = self._final_request(effective_request, request)
+        if self._request_tokens(final_request) >= self._thresholds.hard_stop_at:
             raise ContextOverflowError("effective request exceeds the compaction hard guard")
         try:
-            response = handler(effective_request)
+            response = handler(final_request)
         except ContextOverflowError:
             pre_tokens = self._request_tokens(effective_request)
             self._emit_compaction_event(self._build_started_payload("reactive", pre_tokens))
@@ -598,7 +721,8 @@ class CompactionMiddleware(
                 "reactive", pre_tokens, self._request_tokens(effective_request),
                 reactive.original_message_count - len(reactive.preserved_messages),
             ))
-            response = handler(effective_request)
+            final_request = self._final_request(effective_request, request)
+            response = handler(final_request)
             compacted = reactive
         if compacted:
             return self._with_command(response, self._state_command(compacted, self._policy_state(request.state)))
@@ -625,14 +749,16 @@ class CompactionMiddleware(
                     mode, pre_tokens, self._request_tokens(effective_request),
                     compacted.original_message_count - len(compacted.preserved_messages),
                 ))
+                await self._awrite_boundary(self._thread_id(request))
             else:
                 effective_request = self._failure_request(effective_request)
                 await self._aemit_compaction_event(self._build_failed_payload(mode, "summary_invalid"))
                 failed_request = effective_request
-        if self._request_tokens(effective_request) >= self._thresholds.hard_stop_at:
+        final_request = self._final_request(effective_request, request)
+        if self._request_tokens(final_request) >= self._thresholds.hard_stop_at:
             raise ContextOverflowError("effective request exceeds the compaction hard guard")
         try:
-            response = await handler(effective_request)
+            response = await handler(final_request)
         except ContextOverflowError:
             pre_tokens = self._request_tokens(effective_request)
             await self._aemit_compaction_event(self._build_started_payload("reactive", pre_tokens))
@@ -645,7 +771,9 @@ class CompactionMiddleware(
                 "reactive", pre_tokens, self._request_tokens(effective_request),
                 reactive.original_message_count - len(reactive.preserved_messages),
             ))
-            response = await handler(effective_request)
+            await self._awrite_boundary(self._thread_id(request))
+            final_request = self._final_request(effective_request, request)
+            response = await handler(final_request)
             compacted = reactive
         if compacted:
             return self._with_command(response, self._state_command(compacted, self._policy_state(request.state)))
@@ -655,6 +783,7 @@ class CompactionMiddleware(
 
 
 __all__ = [
+    "BoundaryWriter",
     "CompactionMiddleware",
     "CompactionResult",
     "CompactionState",
