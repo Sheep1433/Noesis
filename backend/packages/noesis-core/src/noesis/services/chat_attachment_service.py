@@ -20,6 +20,9 @@ from noesis.config.user_data_paths import (
     ensure_session_uploads_dir,
     get_session_root,
 )
+
+# 附件列表条目的预览摘要长度（产品逻辑常量，不随部署变化）
+PREVIEW_CHARS = 500
 from noesis.errors.exceptions import NotFoundException, PermissionException, ServiceException, ServiceWarning
 from noesis.knowledge.parser import DocumentParser
 from noesis.storage.postgres.models.chat import TChatAttachment
@@ -336,7 +339,7 @@ class ChatAttachmentService:
                 markdown_rel = _rel_path(md_path, user_id, session_id)
                 char_count = len(md_text)
                 status = "parsed"
-                preview = extract_preview(md_text, ChatAttachmentConfig.preview_chars)
+                preview = extract_preview(md_text, PREVIEW_CHARS)
             else:
                 preview = f"（已上传 {safe_name}，未自动解析）"
         else:
@@ -419,7 +422,7 @@ class ChatAttachmentService:
             preview = None
             if row.kind == "document" and row.status == "parsed":
                 text, _ = cls._read_document_text(row)
-                preview = extract_preview(text, ChatAttachmentConfig.preview_chars)
+                preview = extract_preview(text, PREVIEW_CHARS)
             elif row.kind == "image":
                 preview = f"图片 {row.file_name}"
             items.append(cls._to_response(row, preview=preview))

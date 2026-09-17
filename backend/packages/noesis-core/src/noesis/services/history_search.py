@@ -24,12 +24,20 @@ from sqlalchemy import Text, cast, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.chat.runs.models import ACTIVE_RUN_STATUSES
-from noesis.config.env import HistorySearchConfig
 from noesis.storage.postgres.models.chat import (
     TAgentRun,
     TChatMessage,
     TChatSession,
 )
+
+# 检索输出预算（产品逻辑常量，不随部署变化）：
+# 两个检索工具 limit 参数的服务端钳制 / 单条命中截断（超长 assistant 消息
+# 含嵌在 parts 里的工具轨迹）/ 单次返回总字符上限（检索不得成为读回全量
+# 历史的通道）/ 滚动深读 window 的服务端上限
+MAX_HITS = 10
+MAX_EXCERPT_CHARS = 2000
+MAX_TOTAL_CHARS = 12000
+MAX_WINDOW = 10
 
 # 候选放大倍数：SQL ILIKE 命中含 JSON 结构键噪声，Python 侧按渲染文本
 # 精确过滤后会淘汰一部分，放大候选保证 top-k 仍有真命中
@@ -181,8 +189,8 @@ async def search_session_history(
     - before_compaction：只检索 message_sequence <= compaction_cutoff_seq；
       边界缺失（NULL）时降级为全历史并标注 boundary_unknown。
     """
-    limit = max(1, min(int(limit), HistorySearchConfig.max_hits))
-    window = max(1, min(int(window), HistorySearchConfig.max_window))
+    limit = max(1, min(int(limit), MAX_HITS))
+    window = max(1, min(int(window), MAX_WINDOW))
     session = await _require_owned_session(
         db, session_id=session_id, user_id=user_id
     )
@@ -215,7 +223,7 @@ async def search_session_history(
         for row in rows:
             text = render_content_text(row.content)
             excerpt, truncated = excerpt_around(
-                text, "", HistorySearchConfig.max_excerpt_chars
+                text, "", MAX_EXCERPT_CHARS
             )
             hits.append(
                 HistoryHit(
@@ -227,7 +235,7 @@ async def search_session_history(
                 )
             )
         return SessionSearchResult(
-            hits=_apply_total_budget(hits, HistorySearchConfig.max_total_chars),
+            hits=_apply_total_budget(hits, MAX_TOTAL_CHARS),
             mode="scroll",
             boundary_unknown=boundary_unknown,
             cutoff_seq=cutoff,
@@ -266,7 +274,7 @@ async def search_session_history(
         if keyword.lower() not in text.lower():
             continue
         excerpt, truncated = excerpt_around(
-            text, keyword, HistorySearchConfig.max_excerpt_chars
+            text, keyword, MAX_EXCERPT_CHARS
         )
         hits.append(
             HistoryHit(
@@ -281,7 +289,7 @@ async def search_session_history(
             break
     hits.sort(key=lambda hit: hit.sequence)
     return SessionSearchResult(
-        hits=_apply_total_budget(hits, HistorySearchConfig.max_total_chars),
+        hits=_apply_total_budget(hits, MAX_TOTAL_CHARS),
         mode="search",
         boundary_unknown=boundary_unknown,
         cutoff_seq=cutoff,
@@ -301,7 +309,7 @@ async def search_user_sessions(
     强制 user_id 归属过滤；排除当前会话（当前会话由 search_history 默认
     行为覆盖）。分组按最强命中排序（word_similarity 候选序）。
     """
-    limit = max(1, min(int(limit), HistorySearchConfig.max_hits))
+    limit = max(1, min(int(limit), MAX_HITS))
     keyword = (query or "").strip()
     if not keyword:
         raise ValueError("search_sessions 需要非空 query")
@@ -341,10 +349,10 @@ async def search_user_sessions(
         if keyword.lower() not in text.lower():
             continue
         fragment, truncated = excerpt_around(
-            text, keyword, HistorySearchConfig.max_excerpt_chars
+            text, keyword, MAX_EXCERPT_CHARS
         )
         # 总量上限与单会话检索同口径：片段总和超预算即截断结果
-        if used_chars + len(fragment) > HistorySearchConfig.max_total_chars and groups:
+        if used_chars + len(fragment) > MAX_TOTAL_CHARS and groups:
             break
         used_chars += len(fragment)
         groups[row.session_id] = SessionGroup(

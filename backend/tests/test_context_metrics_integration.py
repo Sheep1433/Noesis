@@ -36,9 +36,7 @@ async def test_agent_stream_writes_context_registry_by_thread_id(
     cfg = SimpleNamespace(
         context_display_enabled=True,
         context_max_input_tokens=128000,
-        governor_loop_enabled=False,
         summarization_enabled=False,
-        governor_tool_calls_enabled=False,
         show_thinking_process="false",
         max_retries=6,
     )

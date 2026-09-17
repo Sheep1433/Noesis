@@ -68,8 +68,6 @@ def _captured_stack(*, hitl_enabled: bool):
         context_display_enabled=False,
         summarization_enabled=False,
         max_retries=0,
-        governor_tool_calls_enabled=False,
-        governor_loop_enabled=False,
     )
     with (
         patch("noesis.factory.create_agent", side_effect=fake_create_agent),

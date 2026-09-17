@@ -22,7 +22,6 @@ from noesis.runtime.evidence import (
     RetrievalManifest,
     RetrievalManifestEntry,
 )
-from noesis.config.env import RetrievalLimitConfig
 from noesis.runtime.logging import logger
 from noesis.chat.tool_state import (
     ToolState,
@@ -30,6 +29,14 @@ from noesis.chat.tool_state import (
     derive_tool_state,
     is_terminal_tool_state,
 )
+
+# 检索证据登记上限（产品逻辑常量，不随部署变化，与消费它的登记管线同步演进）：
+# 单次登记条数 / 整个 run 累计条数、单条摘要字符与字节预算、locator 体积预算
+RETRIEVAL_MAX_RESULTS_PER_CALL = 30
+RETRIEVAL_MAX_RESULTS_PER_RUN = 500
+RETRIEVAL_MAX_EXCERPT_CHARS = 8000
+RETRIEVAL_MAX_EXCERPT_BYTES = 32768
+RETRIEVAL_MAX_LOCATOR_BYTES = 2048
 
 
 @dataclass
@@ -384,12 +391,12 @@ class AssistantMessageBuilder:
     ) -> RetrievalPart:
         """登记 retrieval tool evidence，并持久化独立 retrieval part。
 
-        ``max_results`` 覆盖单次登记条数上限（缺省 RetrievalLimitConfig.
-        max_results_per_call）：跨边界来源清单是子会话多轮检索的去重汇总，
+        ``max_results`` 覆盖单次登记条数上限（缺省 RETRIEVAL_MAX_RESULTS_PER_CALL）：
+        跨边界来源清单是子会话多轮检索的去重汇总，
         按更高上界登记（见 event_mapping/retrieval.py），不受单工具调用
         上限约束——否则面板「共检索 N」被截成调用级上限。
         """
-        per_call_limit = max_results if max_results is not None else RetrievalLimitConfig.max_results_per_call
+        per_call_limit = max_results if max_results is not None else RETRIEVAL_MAX_RESULTS_PER_CALL
         registered: List[Dict[str, Any]] = []
         capacity_truncated = len(results) > per_call_limit
         for raw in results[:per_call_limit]:
@@ -401,11 +408,11 @@ class AssistantMessageBuilder:
             try:
                 excerpt, excerpt_truncated = self._truncate_utf8(
                     str(raw.get("excerpt") or ""),
-                    max_chars=RetrievalLimitConfig.max_excerpt_chars,
-                    max_bytes=RetrievalLimitConfig.max_excerpt_bytes,
+                    max_chars=RETRIEVAL_MAX_EXCERPT_CHARS,
+                    max_bytes=RETRIEVAL_MAX_EXCERPT_BYTES,
                 )
                 locator = raw.get("locator")
-                if locator is not None and len(json.dumps(locator, ensure_ascii=False).encode("utf-8")) > RetrievalLimitConfig.max_locator_bytes:
+                if locator is not None and len(json.dumps(locator, ensure_ascii=False).encode("utf-8")) > RETRIEVAL_MAX_LOCATOR_BYTES:
                     locator = None
                     capacity_truncated = True
                 capacity_truncated = capacity_truncated or excerpt_truncated
@@ -429,7 +436,7 @@ class AssistantMessageBuilder:
                 continue
             if (
                 self._retrieval_manifest.get_by_envelope(envelope) is None
-                and len(self._retrieval_manifest.entries()) >= RetrievalLimitConfig.max_results_per_run
+                and len(self._retrieval_manifest.entries()) >= RETRIEVAL_MAX_RESULTS_PER_RUN
             ):
                 capacity_truncated = True
                 continue
