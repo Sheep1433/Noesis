@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from evals.agent.rag.judge import VERDICT_SCORES
+from evals.agent.judge import VERDICT_SCORES
 
 
 def parse_search_memory_slugs(tool_outputs: Iterable[dict[str, Any]]) -> list[str]:

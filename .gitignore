@@ -44,3 +44,6 @@ backend/.env.*
 backend/config.yaml
 backend/config.prod.yaml
 deploy/config.docker.yaml
+
+# ERB 评分器生成数据缓存（本地构建产物，不入库）
+backend/evals/agent/rag/erb_scorer/generated_data/

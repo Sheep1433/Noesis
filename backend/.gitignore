@@ -80,3 +80,7 @@ evals/kb/erb_data/
 # LongMemEval 数据（~270MB，脚本下载）
 evals/agent/memory/data/
 evals/compression/fixtures/real/
+
+# ERB 官方判分运行时产物（索引缓存与判分输出）
+evals/agent/rag/erb_scorer/generated_data/uuid_index.json
+evals/agent/rag/erb_scorer/answer_evaluation/
