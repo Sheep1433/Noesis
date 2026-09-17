@@ -11,7 +11,7 @@ import {
 } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSessionContext, getWorkspaceFile, saveWorkspaceFile } from '@/api/chat'
+import { downloadWorkspaceArchive, getSessionContext, getWorkspaceFile, saveWorkspaceFile } from '@/api/chat'
 import FilePreview from '@/components/FilePreview/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
@@ -146,9 +146,9 @@ async function downloadByKey(key: string) {
       downloadFile(await res.blob(), fileBaseName(key))
       return
     }
-    // 工作区文件：文本内容直接落盘
-    const res = await getWorkspaceFile(props.sessionId, key)
-    downloadFile(res.content, fileBaseName(key), 'text/plain;charset=utf-8')
+    // 工作区文件：走专用下载接口（服务端流式，上限 20MB）。
+    // 不能复用 getWorkspaceFile——它有 512KB 预览上限，超限文件会下载失败
+    await downloadWorkspaceArchive(props.sessionId, key)
   } catch (e: unknown) {
     const err = e as Error
     message.error(err.message || '下载失败')
@@ -232,6 +232,13 @@ async function onSelectFile(key: string) {
     const err = e as Error
     if (isUploadOrAttach) {
       openArtifact(key)
+      clearPreview()
+      selectedKey.value = ''
+      return
+    }
+    if (err.message.includes('文件过大')) {
+      // 预览通道上限 512KB；下载通道独立（20MB），引导用户右键下载
+      message.warning(`${err.message}，无法预览；可右键该文件选择「下载」`, { duration: 6000 })
       clearPreview()
       selectedKey.value = ''
       return
