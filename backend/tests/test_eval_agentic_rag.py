@@ -1,29 +1,46 @@
 import json
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
 
 import pytest
 
 from evals.agent.rag.__main__ import load_dataset
-from evals.agent.rag.scoring import retrieved_sources, score_expected_sources
 from evals.agent.rag.runner import run_agentic_rag_sample
+from evals.agent.rag.to_erb import collected_files, records_to_erb
 
 
-def test_agentic_rag_source_scoring_uses_kb_tool_outputs():
-    outputs = [
+def test_to_erb_maps_kb_files_to_dsid():
+    name_to_dsid = {"a.md": "dsid_" + "0" * 32, "b.md": "dsid_" + "1" * 32}
+    records = [
         {
-            "name": "search_knowledge_base",
-            "output": json.dumps(
-                {"results": [{"file_name": "a.md"}, {"file_name": "b.md"}]},
-                ensure_ascii=False,
-            ),
+            "question_id": "qst_0001",
+            "completed": True,
+            "final_text": "回答",
+            "tool_outputs": [
+                {
+                    "name": "search_knowledge_base",
+                    "output": json.dumps(
+                        {"results": [{"file_name": "a.md"}, {"file_name": "a.md"},
+                                     {"file_name": "unknown.md"}]},
+                        ensure_ascii=False,
+                    ),
+                },
+                {"name": "web_search", "output": '{"file_name":"ignored.md"}'},
+            ],
         },
-        {"name": "web_search", "output": '{"file_name":"ignored.md"}'},
+        {"question_id": "qst_0002", "completed": False, "final_text": "", "tool_outputs": []},
     ]
-    assert retrieved_sources(outputs) == {"a.md", "b.md"}
-    score = score_expected_sources(outputs, ["a.md", "missing.md"])
-    assert score["matched_sources"] == ["a.md"]
-    assert score["source_recall"] == 0.5
+    erb_records, unmapped = records_to_erb(records, name_to_dsid)
+    assert len(erb_records) == 1  # 未完成的题不导出
+    assert erb_records[0]["question_id"] == "qst_0001"
+    assert erb_records[0]["document_ids"] == ["dsid_" + "0" * 32]  # 去重；无映射不计入
+    assert unmapped == {"unknown.md"}
+
+
+def test_to_erb_collects_get_knowledge_document():
+    outputs = [
+        {"name": "get_knowledge_document",
+         "output": json.dumps({"file_name": "doc.md"}, ensure_ascii=False)},
+    ]
+    assert collected_files(outputs) == ["doc.md"]
 
 
 def test_agentic_rag_dataset_requires_query(tmp_path):
@@ -43,46 +60,42 @@ def test_agentic_rag_dataset_loads_scope_and_sources(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_agentic_rag_runner_uses_general_qa_harness_profile(monkeypatch):
-    calls = []
+async def test_agentic_rag_runner_drives_cli_agent(monkeypatch):
+    calls: dict = {}
 
-    class FakeAgent:
-        async def run_agent(self, query, **kwargs):
-            calls.append((query, kwargs))
-            yield {"event": "on_tool_start", "name": "search_knowledge_base", "run_id": "1"}
-            yield {
-                "event": "on_tool_end",
-                "name": "search_knowledge_base",
-                "run_id": "1",
-                "data": {
-                    "output": SimpleNamespace(
-                        content=json.dumps({"results": [{"file_name": "guide.md"}]})
-                    )
-                },
-            }
-            yield {"event": "on_chat_model_stream", "data": {"chunk": SimpleNamespace(content="回答")}}
-            yield {"type": "__tw_finish__", "finish_reason": "stop"}
-
-        async def cancel_task(self, _session_id):
-            return True
-
-    @asynccontextmanager
-    async def fake_runtime(**_kwargs):
-        yield
-
-    monkeypatch.setattr("evals.agent.rag.runner.GeneralQAAgent", FakeAgent)
-    monkeypatch.setattr("evals.agent.rag.runner.eval_runtime", fake_runtime)
-    result = await run_agentic_rag_sample(
-        {
-            "id": "one",
-            "query": "问题",
-            "collection_names": ["kb"],
-            "expected_sources": ["guide.md"],
+    async def fake_run_cli_agent(**kwargs):
+        calls.update(kwargs)
+        return {
+            "completed": True,
+            "error": None,
+            "final_text": "回答全文",
+            "tool_stats": {"search_knowledge_base": 1},
+            "tool_outputs": [
+                {"name": "search_knowledge_base", "input": {},
+                 "output": json.dumps({"results": [{"file_name": "guide.md"}]},
+                                      ensure_ascii=False)},
+            ],
+            "session_usage": {"input_tokens": 1200, "output_tokens": 300},
+            "latency_ms": 1500,
         }
+
+    monkeypatch.setattr("evals.agent.rag.runner.run_cli_agent", fake_run_cli_agent)
+    result = await run_agentic_rag_sample(
+        {"id": "one", "query": "问题", "collection_names": ["kb"]},
+        eval_user="test",
     )
 
+    # CLI 契约：common 场景限定 KB 集合、关闭联网、落在评测账号
+    assert calls["query"] == "问题"
+    assert calls["qa_type"] == "common"
+    assert calls["kb_collections"] == ["kb"]
+    assert calls["web_search"] is False
+    assert calls["user_id"] == "test"
+    assert calls["session_id"].startswith("eval-agentic-rag-one-")
+
+    # 记录映射：token 取自 session_usage，工具轨迹保留供 to_erb 导出
     assert result["completed"] is True
-    assert result["kb_tool_called"] is True
-    assert result["source_score"]["source_recall"] == 1.0
-    assert calls[0][1]["kb_collections"] == ["kb"]
-    assert calls[0][1]["web_search_enabled"] is False
+    assert result["input_tokens"] == 1200
+    assert result["output_tokens"] == 300
+    assert result["tool_outputs"][0]["name"] == "search_knowledge_base"
+    assert result["session_id"] == calls["session_id"]
