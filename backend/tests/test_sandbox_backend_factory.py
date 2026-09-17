@@ -36,7 +36,7 @@ def docker_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     _force_sandbox_backend(monkeypatch, "docker")
 
 
-def test_uses_container_sandbox_from_env(local_shell_backend: None) -> None:
+def test_uses_container_sandbox_follows_config(local_shell_backend: None) -> None:
     assert uses_container_sandbox() is False
 
 

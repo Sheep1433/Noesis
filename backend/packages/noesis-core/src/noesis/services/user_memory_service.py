@@ -13,7 +13,8 @@ from noesis.config.user_data_paths import (
 
 MemoryFileName = Literal["USER.md", "AGENTS.md"]
 _ALLOWED_FILES: frozenset[str] = frozenset({"USER.md", "AGENTS.md"})
-_MAX_BYTES = 512 * 1024
+# 与工作区/skill 文件浏览器通道同级的整文件文本上限（5MB，产品逻辑常量）
+_MAX_BYTES = 5 * 1024 * 1024
 
 
 class UserMemoryService:

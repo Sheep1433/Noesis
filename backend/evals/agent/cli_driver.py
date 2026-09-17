@@ -1,11 +1,12 @@
-"""以子进程驱动 noesis CLI：评测与被测对象之间只隔 argv + env + stream-json。
+"""以子进程驱动 noesis CLI：评测与被测对象之间只隔 argv + env + stdout 流。
 
 契约（对齐 harbor/terminal-bench 的「CLI 即被测对象」模式）：
 - 每样本一个全新 CLI 进程——跨样本无共享事件循环 / 连接池 / 全局状态；
-- 被测凭据经 evals/.env 的 NOESIS_API_KEY + NOESIS_BASE_URL 注入（env 直连），
-  不经数据库用户模型解析；
-- 输出 stream-json 流，wall-clock 超时由本 driver 持有：杀进程但保留已收到
-  的部分结果（超时题照样可判卷）。
+- CLI 走生产 headless 入口：消息/run/token 落库可查，stdout 为生产同源
+  SSE 流（raw 底账 = 可重放），终值以 CLI 的 ``__tw_result__``（DB 权威
+  组装）为准；工具事件从 SSE 载荷提取；
+- wall-clock 超时由本 driver 持有：杀进程但保留已收到的部分结果
+  （超时题照样可判卷；DB 中 run 行遗留 running 由下次 server 启动对账收口）。
 """
 
 from __future__ import annotations
@@ -18,13 +19,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from dotenv import dotenv_values
-
-from noesis_cli.streamjson import StreamCollector, flag_empty_completion
 from noesis.config.user_data_paths import get_workspace_dir
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
-EVAL_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 _STDERR_TAIL_CHARS = 2000
 # 终稿短于此长度时按契约路径收报告文件（正常报告篇幅远高于此）
 _HARVEST_MIN_CHARS = 1000
@@ -32,15 +29,35 @@ _REPORT_FILENAME = "final-report.md"
 _MAX_STREAM_LINE_BYTES = 16 * 1024 * 1024
 
 
-def eval_model_env() -> dict[str, str]:
-    """被测模型 env 直连配置：进程环境优先，其次 evals/.env。"""
-    raw = dotenv_values(EVAL_ENV_FILE) if EVAL_ENV_FILE.is_file() else {}
-    overrides: dict[str, str] = {}
-    for key in ("NOESIS_API_KEY", "NOESIS_BASE_URL", "NOESIS_MODEL_TYPE", "NOESIS_MODEL"):
-        value = os.environ.get(key) or str(raw.get(key) or "")
-        if value.strip():
-            overrides[key] = value.strip()
-    return overrides
+class SseToolCollector:
+    """从 SSE 帧 data 载荷提取工具调用与 session 级统计（与前端同源事件）。"""
+
+    def __init__(self) -> None:
+        self.tool_stats: dict[str, int] = {}
+        self.tool_outputs: list[dict[str, Any]] = []
+        self._pending: dict[str, tuple[str | None, Any]] = {}
+        # stats-update 为累计快照，取最后一帧；uncached_input_tokens 含
+        # 子 Agent 的 LLM 调用——是全 session 真实计费口径（主 run 的
+        # usage 只覆盖主 Agent）
+        self.session_usage: dict[str, Any] = {}
+
+    def consume_data(self, payload: dict[str, Any]) -> None:
+        ptype = str(payload.get("type") or "")
+        if ptype == "tool-input-available":
+            tid = str(payload.get("tool_call_id") or "")
+            self._pending[tid] = (payload.get("name"), payload.get("input"))
+        elif ptype == "tool-output-available":
+            tid = str(payload.get("tool_call_id") or "")
+            name, tool_input = self._pending.pop(tid, (payload.get("name"), None))
+            resolved = str(name or "unknown")
+            self.tool_stats[resolved] = self.tool_stats.get(resolved, 0) + 1
+            self.tool_outputs.append({
+                "name": resolved,
+                "input": tool_input,
+                "output": str(payload.get("output") or ""),
+            })
+        elif ptype == "stats-update":
+            self.session_usage = dict(payload)
 
 
 async def run_cli_agent(
@@ -49,37 +66,41 @@ async def run_cli_agent(
     session_id: str,
     user_id: str,
     model: str | None = None,
-    qa_type: str = "super",
     time_budget_seconds: int = 600,
     extra_env: dict[str, str] | None = None,
+    raw_dump: Path | None = None,
 ) -> dict[str, Any]:
-    """跑一题：spawn `noesis chat -p ... --output-format stream-json`，返回评测记录。"""
+    """跑一题（super）：spawn `noesis chat -p ... --output-format stream-json`，返回评测记录。
+
+    model 须为内置目录 id 或该账号的自定义模型复合 id（如
+    provider/model），经生产模型解析（会话 extra → 用户偏好 → 平台默认）。
+
+    raw_dump：CLI 的原始 stdout 逐行落盘（评测结果的可重放底账）——
+    driver 层采集出 bug 或结果误删时，从原始流的 ``__tw_result__`` 行
+    零成本重建（``--recollect``），不必重跑评测。
+    """
     argv = [
         "uv", "run", "noesis", "chat", "-p", query,
         "--output-format", "stream-json",
         "--session-id", session_id,
-        "--qa-type", qa_type,
+        "--qa-type", "super",
     ]
     if model:
         argv += ["--model", model]
     env = dict(os.environ)
-    env.update(eval_model_env())
     # 控制台脚本的 sys.path 不含 cwd：补 PYTHONPATH 让 CLI 进程能 import
     # backend 的 server 包（wire_langfuse 的观测绑定实现所在）
     env["PYTHONPATH"] = os.pathsep.join(
         p for p in (str(BACKEND_DIR), env.get("PYTHONPATH", "")) if p
     )
     env["NOESIS_USER_ID"] = user_id
-    # 评测环境不产生 runner 沙箱容器（用户已定）：工具在本地执行，
-    # 与 docker 沙箱生产语义存在已知偏差
-    env["SANDBOX_BACKEND"] = "local_shell"
-    # 长思考/长生成端点超时：默认 30s/120s 会让首个请求 APITimeoutError
-    # 直接空收场（deepresearch 线同款值）；已在环境里显式设置时不覆盖
-    env.setdefault("REQUEST_TIMEOUT", "600")
-    env.setdefault("STREAM_IDLE_TIMEOUT", "300")
+    # 沙箱 local_shell 与模型超时放宽不再走环境变量（配置面已收敛）：
+    # 评测子进程由 noesis.config.env._EVALS_PROCESS 识别并自动应用
+    # （2026-09-08 评测 CLI 化决策：不产生 runner 沙箱容器，存在已知偏差）
     env.update(extra_env or {})
 
-    collector = StreamCollector()
+    sse_tools = SseToolCollector()
+    db_result: dict[str, Any] | None = None
     stderr_tail = ""
     t0 = time.perf_counter()
     timeout_error: str | None = None
@@ -96,7 +117,7 @@ async def run_cli_agent(
     )
 
     async def consume_stdout() -> None:
-        nonlocal stderr_tail
+        nonlocal stderr_tail, db_result
         assert proc.stdout is not None and proc.stderr is not None
         stderr_chunks: list[bytes] = []
 
@@ -105,15 +126,36 @@ async def run_cli_agent(
                 stderr_chunks.append(chunk)
 
         stderr_task = asyncio.create_task(drain_stderr())
+
+        def consume_line(line: str) -> None:
+            nonlocal db_result
+            if line.startswith(("event:", "data:", ":")):
+                if line.startswith("data:"):
+                    try:
+                        payload = json.loads(line[len("data:"):].strip())
+                    except ValueError:
+                        return
+                    if isinstance(payload, dict):
+                        sse_tools.consume_data(payload)
+                return
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                stderr_chunks.append(f"[stdout-noise] {line}\n".encode())
+                return
+            if isinstance(obj, dict) and obj.get("type") == "__tw_result__":
+                db_result = obj
+
         try:
             async for raw_line in proc.stdout:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
-                try:
-                    collector.consume(json.loads(line))
-                except ValueError:
-                    stderr_chunks.append(f"[stdout-noise] {line}\n".encode())
+                if raw_dump is not None:
+                    raw_dump.parent.mkdir(parents=True, exist_ok=True)
+                    with raw_dump.open("a", encoding="utf-8") as rf:
+                        rf.write(raw_line.decode("utf-8", errors="replace"))
+                consume_line(line)
         finally:
             stderr_task.cancel()
             await asyncio.gather(stderr_task, return_exceptions=True)
@@ -131,7 +173,16 @@ async def run_cli_agent(
         _kill_process_group(proc)
     exit_code = await proc.wait()
 
-    record = collector.to_record()
+    # 终值以 CLI 的 __tw_result__（DB 权威组装）为准；超时/崩溃拿不到
+    # 时本 record 只报错误——权威数据仍在 DB，可后续补收
+    record: dict[str, Any] = dict(db_result or {})
+    record.setdefault("completed", False)
+    record.setdefault("final_text", "")
+    record.setdefault("error", None)
+    record["tool_stats"] = sse_tools.tool_stats
+    record["tool_outputs"] = sse_tools.tool_outputs
+    if sse_tools.session_usage:
+        record["session_usage"] = sse_tools.session_usage
     record.update(
         session_id=session_id,
         user_id=user_id,
@@ -146,7 +197,6 @@ async def run_cli_agent(
         # 0=成功 1=运行失败（已带 error）；其他值=CLI 自身崩溃（参数错等）
         record["completed"] = False
         record["error"] = f"cli exited {exit_code}"
-    record = flag_empty_completion(record)
     # 交付契约的备选形态兜底：终稿过短时按约定路径收 /workspace/final-report.md
     # （契约见 EVAL_MODE_SUFFIX；不猜文件——计划/笔记/多报告都会让启发式误判）
     if not record.get("error") and len(str(record.get("final_text") or "")) < _HARVEST_MIN_CHARS:

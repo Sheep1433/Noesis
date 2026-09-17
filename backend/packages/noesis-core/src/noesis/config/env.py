@@ -323,6 +323,22 @@ def _build_app(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> AppSettings:
     )
 
 
+def _is_evals_cli_process() -> bool:
+    """评测 CLI 子进程识别（evals/* 入口或 --tag 运行）。
+
+    评测进程有两项约定（2026-09-08 评测 CLI 化决策 + 2026-09-17 配置面收敛）：
+    沙箱强制 local_shell（不产生 runner 容器）；模型超时放宽以容忍慢网关。
+    """
+    return any(
+        marker in sys.argv[0]
+        for marker in ("evals/__main__", "evals/agent", "evals/case", "evals/compression")
+    ) or (len(sys.argv) > 1 and "--tag" in sys.argv[1:])
+
+
+# 进程级判定在导入期冻结：sys.argv 此后不变，配置单例按此构建
+_EVALS_PROCESS = _is_evals_cli_process()
+
+
 def _build_session(yaml_cfg: AppYamlConfig) -> SessionSettings:
     session = yaml_cfg.session
     return SessionSettings(
@@ -390,8 +406,9 @@ def _build_model(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> ModelSettings:
         vlm_model_base_url=vlm.base_url,
         vlm_model_api_key=vlm_api_key,
         show_thinking_process="true" if m.show_thinking_process else "false",
-        request_timeout=m.request_timeout,
-        stream_idle_timeout=m.stream_idle_timeout,
+        # 评测进程放宽超时（慢网关首个长请求可达数分钟），非评测严格用配置值
+        request_timeout=max(m.request_timeout, 600.0) if _EVALS_PROCESS else m.request_timeout,
+        stream_idle_timeout=max(m.stream_idle_timeout, 300.0) if _EVALS_PROCESS else m.stream_idle_timeout,
         max_retries=m.max_retries,
         max_tokens=gen.max_tokens,
         top_p=gen.top_p,
@@ -616,6 +633,13 @@ def _build_web_tools(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> WebToolsSe
 
 def _build_sandbox(secrets: EnvSecrets, yaml_cfg: AppYamlConfig) -> SandboxSettings:
     sb = yaml_cfg.sandbox
+    if _EVALS_PROCESS:
+        # 评测约定：不产生 runner 沙箱容器，工具本地执行（覆盖 yaml 设置）
+        return SandboxSettings(
+            backend="local_shell",
+            runner_url=sb.runner_url,
+            execute_timeout_seconds=sb.execute_timeout_seconds,
+        )
     backend = sb.backend.strip().lower() or "docker"
     if backend == "aio":
         raise ValueError("sandbox.backend=aio 已移除；请使用 docker 或 local_shell")
@@ -764,16 +788,7 @@ class GetConfig:
     @staticmethod
     def parse_cli_args() -> None:
         is_pytest = "pytest" in sys.modules or "pytest" in sys.argv[0]
-        is_evals_cli = any(
-            marker in sys.argv[0]
-            for marker in (
-                "evals/__main__",
-                "evals/agent",
-                "evals/case",
-                "evals/compression",
-            )
-        ) or (len(sys.argv) > 1 and "--tag" in sys.argv[1:])
-        if "uvicorn" not in sys.argv[0] and not is_pytest and not is_evals_cli:
+        if "uvicorn" not in sys.argv[0] and not is_pytest and not _EVALS_PROCESS:
             parser = argparse.ArgumentParser(description="命令行参数")
             parser.add_argument("--env", type=str, default="", help="运行环境")
             args, _unknown = parser.parse_known_args()
