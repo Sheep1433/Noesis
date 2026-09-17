@@ -61,6 +61,7 @@ async def test_headless_automation_run_completes_without_browser_subscription(mo
     db = MagicMock()
     db.add = MagicMock()
     db.execute = AsyncMock()
+    db.flush = AsyncMock()
     db.commit = AsyncMock()
     monkeypatch.setattr("noesis.storage.postgres.manager.pg_manager.get_async_session_context", lambda: _DbContext(db))
     monkeypatch.setattr(
@@ -123,6 +124,7 @@ async def test_channel_run_start_mark_is_cas_not_overwrite(monkeypatch) -> None:
     db = MagicMock()
     db.add = MagicMock()
     db.execute = AsyncMock()
+    db.flush = AsyncMock()
     db.commit = AsyncMock()
     monkeypatch.setattr(
         "noesis.storage.postgres.manager.pg_manager.get_async_session_context",
