@@ -21,8 +21,6 @@ from noesis.config.user_data_paths import (
     get_session_root,
 )
 
-# 附件列表条目的预览摘要长度（产品逻辑常量，不随部署变化）
-PREVIEW_CHARS = 500
 from noesis.errors.exceptions import NotFoundException, PermissionException, ServiceException, ServiceWarning
 from noesis.knowledge.parser import DocumentParser
 from noesis.storage.postgres.models.chat import TChatAttachment
@@ -31,6 +29,9 @@ from noesis.services.chat_service import ChatService
 from noesis.runtime.logging import logger
 from noesis.runtime.attachments.image_prepare import build_image_preview_base64
 from noesis.runtime.attachments.markdown import extract_preview
+
+# 附件列表条目的预览摘要长度（产品逻辑常量，不随部署变化）
+PREVIEW_CHARS = 500
 
 _DOCUMENT_EXTENSIONS = frozenset({
     ".doc", ".docx", ".pdf", ".txt", ".xlsx", ".csv", ".ppt", ".pptx", ".md",

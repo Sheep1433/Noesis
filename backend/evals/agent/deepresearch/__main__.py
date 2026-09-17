@@ -9,26 +9,16 @@
 - 产物：results/<tag>/{articles.jsonl, summary.json}；articles.jsonl 为
   {id, prompt, article} 结构，可直接喂官方 RACE/FACT 判分脚本
 - 判分（RACE 报告质量 / FACT 引用可信度）暂未接入，先产出报告原文
-- 被测对象经 noesis CLI 子进程驱动（每题一个进程，SANDBOX_BACKEND=local_shell，
-  不产生 runner 沙箱容器）；被测模型走 env 直连：evals/.env 配置
-  NOESIS_API_KEY / NOESIS_BASE_URL / NOESIS_MODEL
+- 被测对象经 noesis CLI 子进程驱动（每题一个进程，沙箱由配置层按评测进程
+  强制 local_shell，不产生 runner 沙箱容器）；CLI 走生产 headless 入口：消息/run/token 落
+  DB（--eval-user 账号下），被测模型经 --model-id 指定（须为内置目录 id
+  或该账号的自定义模型复合 id，如 huoshan/glm-5.3-flash）
 - 环境要求：--eval-user 须为真实账号（默认 test）——子 Agent 会话血缘按
   user_id 写库，假用户名会导致派发失败主 Agent 单干；NOESIS_WEB_PROXY
   为 web_fetch 的代理回退（直连失败时自动走代理重试）
 """
 
 from __future__ import annotations
-
-import os
-
-# 两个超时默认值必须在任何 noesis 导入之前注入：ModelConfig 等配置单例
-# 在 import 时实例化，晚于 import 的 setdefault 不生效。
-# - REQUEST_TIMEOUT（首字节读超时）：长报告生成前模型思考可超 30s 且
-#   网关无心跳，默认 30s 会 httpx ReadTimeout 且不触发重试
-# - STREAM_IDLE_TIMEOUT（流块间隔）：flash 长文生成中途停顿可超 120s，
-#   默认 120s 会在「最终报告撰写」处掐断（冒烟实测）
-os.environ.setdefault("REQUEST_TIMEOUT", "600")
-os.environ.setdefault("STREAM_IDLE_TIMEOUT", "300")
 
 import argparse
 import asyncio
@@ -70,6 +60,80 @@ def load_tasks(path: Path, limit: int | None = None) -> list[dict]:
     return tasks[:limit] if limit else tasks
 
 
+def recollect_from_raw(args, out: Path, articles_path: Path) -> int:
+    """从 raw/ 原始流重建 articles.jsonl：driver 层采集故障的零成本恢复。
+
+    底账逐行含 ``__tw_result__``（CLI 组装的 DB 权威终值），直接取用。
+    """
+    from evals.agent.cli_driver import _HARVEST_MIN_CHARS, _REPORT_FILENAME
+    from noesis.config.user_data_paths import get_workspace_dir
+
+    raw_dir = out / "raw"
+    if not raw_dir.is_dir():
+        print(f"无原始流可重收集: {raw_dir}", file=sys.stderr)
+        return 2
+    tasks = {t["id"]: t for t in load_tasks(args.tasks)}
+    records = []
+    for raw_file in sorted(raw_dir.glob("*.jsonl")):
+        try:
+            task_id = int(raw_file.stem)
+        except ValueError:
+            continue
+        task = tasks.get(task_id)
+        if task is None:
+            continue
+        db_result = None
+        sid = f"unknown-{task_id}"
+        uid = ""
+        for line in raw_file.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue  # SSE 帧（event:/data:）与 [DONE] 非 JSON 行
+            # 会话/用户标识在 __tw_init__ 行，终值在 __tw_result__ 行
+            if obj.get("type") == "__tw_init__":
+                sid = str(obj.get("session_id") or sid)
+                uid = str(obj.get("user_id") or "")
+            elif obj.get("type") == "__tw_result__":
+                db_result = obj
+        record = dict(db_result or {})
+        record.setdefault("final_text", "")
+        record.setdefault("error", None)
+        if not uid:
+            uid = eval_user_id_of(args)
+        if not record.get("error") and len(str(record.get("final_text") or "")) < _HARVEST_MIN_CHARS:
+            report = Path(get_workspace_dir(uid, sid)) / _REPORT_FILENAME
+            if report.is_file() and report.stat().st_size > _HARVEST_MIN_CHARS:
+                try:
+                    record["final_text"] = report.read_text(encoding="utf-8")
+                    record["article_source"] = f"workspace_file:{_REPORT_FILENAME}"
+                except OSError:
+                    pass
+        records.append({
+            "id": task_id,
+            "topic": task["topic"],
+            "language": task["language"],
+            "prompt": task["prompt"],
+            "article": record.get("final_text") or "",
+            "session_id": sid,
+            "elapsed_seconds": 0,
+            "error": record.get("error"),
+        })
+    with articles_path.open("w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"重收集完成：{len(records)} 题 -> {articles_path}")
+    return 0
+
+
+def eval_user_id_of(args) -> str:
+    from evals.bootstrap import resolve_user_uuid_sync
+
+    return resolve_user_uuid_sync(args.eval_user)
+
+
 def score_existing(args, out: Path, articles_path: Path) -> int:
     """RACE 判分：对已有 articles.jsonl 打分（不跑题）。"""
     from evals.agent.deepresearch import race
@@ -92,7 +156,7 @@ def score_existing(args, out: Path, articles_path: Path) -> int:
         judge_model = bind_user_model_sync(args.judge_model_user, args.judge_model_id)
     llm = get_llm(model_id=judge_model)
 
-    records = [json.loads(l) for l in articles_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    records = [json.loads(line) for line in articles_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     scores_path = out / "scores.jsonl"
     scored: list[dict] = []
     for i, rec in enumerate(records, 1):
@@ -159,10 +223,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="单题时间预算（秒）；子 Agent 深度调研 + 收结果，"
                         "冒烟实测 1200s 不够")
     p.add_argument("--model-id", default=None,
-                   help="被测模型（env 直连的端点真实模型名，配置见 evals/.env 的 NOESIS_*）")
+                   help="被测模型（内置目录 id 或评测账号的自定义模型复合 id，"
+                        "如 huoshan/glm-5.3-flash；缺省走会话/用户偏好/平台默认）")
     p.add_argument("--eval-user", default="test",
                    help="评测数据归属账号（用户名或 UUID）；须为真实账号——"
                         "子 Agent 会话血缘按 user_id 写库，假用户名会导致派发失败")
+    p.add_argument("--recollect", action="store_true",
+                   help="重收集模式：不跑题，从 results/<tag>/raw/ 的原始流"
+                        "重建 articles.jsonl（采集逻辑升级/结果误删后零成本恢复）")
     p.add_argument("--score", action="store_true",
                    help="判分模式：不跑题，对 results/<tag>/articles.jsonl "
                         "按 RACE 官方口径（相对分，50=与专家参考持平）打分")
@@ -190,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     articles_path = out / "articles.jsonl"
 
+    if args.recollect:
+        return recollect_from_raw(args, out, articles_path)
     if args.score:
         return score_existing(args, out, articles_path)
 
@@ -218,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
                 time_budget_seconds=args.time_budget,
                 model=args.model_id,
                 extra_env=subagent_env,
+                raw_dump=out / "raw" / f"{task['id']}.jsonl",
             )
             record = {
                 "id": task["id"],

@@ -94,9 +94,7 @@ start_mcp() {
 }
 
 _should_start_sandbox_runner() {
-  if [[ "${SANDBOX_BACKEND:-}" == "local_shell" ]]; then
-    return 1
-  fi
+  # 后端只读 config.yaml 的 sandbox.backend（env 覆盖层已删），本地栈同样按配置判定
   local config="${NOESIS_CONFIG_PATH:-$BACKEND_DIR/config.yaml}"
   if [[ -f "$config" ]] && grep -A8 '^sandbox:' "$config" | grep -qE 'backend:[[:space:]]*local_shell'; then
     return 1

@@ -161,9 +161,10 @@ async def put_memory_entry(
         raise HTTPException(status_code=400, detail=str(e)) from e
     if not path.is_file():
         raise HTTPException(status_code=404, detail="条目不存在")
-    from noesis.config.env import MemoryConfig as _Cfg
+    from noesis.services.memory.extraction import MAX_ENTRY_CHARS
 
-    if len(body.content.encode("utf-8")) > _Cfg.max_entry_chars * 2:
+    # 直接编辑放宽一倍：最高权限入口，索引同步前给用户更大书写空间
+    if len(body.content.encode("utf-8")) > MAX_ENTRY_CHARS * 2:
         raise HTTPException(status_code=400, detail="内容超出上限")
     from noesis.services.memory.store import IndexEntry
 
