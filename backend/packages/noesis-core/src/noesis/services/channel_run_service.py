@@ -371,6 +371,10 @@ async def run_channel_agent(
                 updated_at=now,
             )
         )
+        # run 行必须先于 delivery 行落库：两模型间无 relationship，单元工作区
+        # 没有依赖边，flush 按表名字母序会先发 t_agent_delivery 的 INSERT，
+        # 在有外键的库上必然 FK 违规（生产 telegram 链路首条消息即触发）
+        await db.flush()
         delivery_id = str(uuid.uuid4()) if outbound is not None else None
         if delivery_id is not None:
             db.add(
