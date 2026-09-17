@@ -22,7 +22,9 @@ from noesis.schemas.skill_vo import (
 )
 from noesis.runtime.logging import logger
 
-_MAX_READ_BYTES = 512 * 1024
+# 浏览器整文件文本通道上限（skill 文件在线读取/编辑）。约束方主要是访问者的浏览器，
+# 属产品逻辑常量，不进 config：部署环境不同该值也不应不同。
+_MAX_READ_BYTES = 5 * 1024 * 1024
 
 # 扫描 skill 目录树时跳过的噪声目录（依赖/缓存/版本控制），无论哪个场景都不应出现在 skill 浏览里。
 _NOISE_DIRS: frozenset[str] = frozenset(
@@ -281,7 +283,7 @@ class SkillFsService:
             return False, '不是文件或不存在', ''
         size = os.path.getsize(full)
         if size > _MAX_READ_BYTES:
-            return False, f'文件过大（>{_MAX_READ_BYTES // 1024}KB），请在服务器上直接编辑', ''
+            return False, f'文件过大（>{_MAX_READ_BYTES // (1024 * 1024)}MB），请在服务器上直接编辑', ''
         try:
             with open(full, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
