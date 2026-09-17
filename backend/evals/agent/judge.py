@@ -1,7 +1,8 @@
-"""Agent E2E gold_answer 判卷：LLM-as-judge 三档（采纳 / 部分采纳 / 不采纳）。
+"""gold_answer 判卷：LLM-as-judge 三档（采纳 / 部分采纳 / 不采纳）。
 
-judge 与被评模型分离（evals.manifest.require_judge_separation 在 CLI 层校验）；
-prompt 版本进 manifest，改 prompt 即换版本号。
+共享基础设施，当前使用方：memory 评测线（答案正确性）。
+RAG E2E 线不使用（质量指标由 ERB 官方脚本判分产出）。
+judge 与被评模型分离；prompt 版本进 manifest，改 prompt 即换版本号。
 """
 
 from __future__ import annotations

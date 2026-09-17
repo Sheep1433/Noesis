@@ -5,7 +5,7 @@ import json
 import pytest
 
 from evals.agent.rag.__main__ import _is_error, append_raw_record, load_raw_records
-from evals.agent.rag.judge import (
+from evals.agent.judge import (
     build_judge_prompt,
     judge_answer,
     parse_judge_response,
