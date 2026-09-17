@@ -147,7 +147,7 @@ async function downloadByKey(key: string) {
       return
     }
     // 工作区文件：走专用下载接口（服务端流式，上限 20MB）。
-    // 不能复用 getWorkspaceFile——它有 512KB 预览上限，超限文件会下载失败
+    // 不能复用 getWorkspaceFile——它有 5MB 预览上限，超限文件会下载失败
     await downloadWorkspaceArchive(props.sessionId, key)
   } catch (e: unknown) {
     const err = e as Error
@@ -237,7 +237,7 @@ async function onSelectFile(key: string) {
       return
     }
     if (err.message.includes('文件过大')) {
-      // 预览通道上限 512KB；下载通道独立（20MB），引导用户右键下载
+      // 预览通道上限 5MB；下载通道独立（20MB），引导用户右键下载
       message.warning(`${err.message}，无法预览；可右键该文件选择「下载」`, { duration: 6000 })
       clearPreview()
       selectedKey.value = ''

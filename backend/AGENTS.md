@@ -111,7 +111,7 @@ evals   ──▶  noesis
 
 ### 配置与日志
 
-- `noesis/config/env.py` 合并 env + yaml；禁止硬编码配置。
+- `noesis/config/env.py` 合并 env + yaml。**配置只收环境参数**：同一份代码部署到不同环境答案会不同的项（地址、密钥、端口、外部服务 URL、按机器规格调的池大小）。产品逻辑常量（业务上限、重试次数、队列深度等）**留在代码里**并附依据注释——它们与消费它们的代码同步演进，不随部署变化。判断技巧：想象两个不同客户的部署，若该值理应相同，它就不是配置。
 - 统一使用 `from noesis.runtime.logging import logger`，禁止 `print`。日志格式自带 `request_id` 槽位，HTTP 请求由 `server/middleware/request_log_context.py` 自动绑定（响应头 `X-Request-ID` 回传），业务代码无需手动传递。
 - 全量日志按天写入 `.noesis/logs/{日期}_noesis.log`（dev 为 DEBUG、prod 为 INFO，`NOESIS_LOG_LEVEL` 可覆盖）；文件里并非只有 error，排障时结合 `request_id` 过滤。
 - 统一 logger 的三处既定豁免：`noesis/knowledge/deepdoc/`（RagFlow vendored 代码）；`noesis-cli`（stdout 是 JSON/流式契约，标准库日志定向 stderr）；`noesis/config/env.py`（config是最底层，导入 runtime.logging 会倒置依赖，直取 loguru 单例）。

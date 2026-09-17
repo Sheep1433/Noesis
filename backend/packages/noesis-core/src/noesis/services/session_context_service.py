@@ -30,7 +30,11 @@ from noesis.services.memory.store import IndexEntry, MemoryStore
 from noesis.services.memory.types import MEMORY_TYPES
 from noesis.services.skill_fs_service import SkillFsService
 
-_MAX_READ_BYTES = 512 * 1024
+# 浏览器整文件文本通道上限（预览读 / 面板保存写）。约束方主要是访问者的浏览器
+# （textarea 编辑、markdown 一次性渲染），而非服务端内存；5MB 覆盖 Agent 产出的
+# 文本工件常态，且与下载通道（_MAX_ARCHIVE_BYTES 20MB）保持 1:4 梯度。
+# 属产品逻辑常量，不进 config：部署环境不同该值也不应不同。
+_MAX_READ_BYTES = 5 * 1024 * 1024
 _MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 _MIN_ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 _USER_ROOT_FILES = ('AGENTS.md', 'USER.md')
@@ -396,7 +400,7 @@ class SessionContextService:
             raise NotFoundException(message="不是文件或不存在")
         size = os.path.getsize(full)
         if size > _MAX_READ_BYTES:
-            raise ServiceException(message=f"文件过大（>{_MAX_READ_BYTES // 1024}KB）")
+            raise ServiceException(message=f"文件过大（>{_MAX_READ_BYTES // (1024 * 1024)}MB）")
         try:
             with open(full, 'r', encoding='utf-8', errors='replace') as handle:
                 return rel_norm, handle.read()
@@ -406,7 +410,7 @@ class SessionContextService:
     @classmethod
     def _validate_write_size(cls, content: str) -> None:
         if len(content.encode('utf-8')) > _MAX_READ_BYTES:
-            raise ServiceException(message=f"文件过大（>{_MAX_READ_BYTES // 1024}KB）")
+            raise ServiceException(message=f"文件过大（>{_MAX_READ_BYTES // (1024 * 1024)}MB）")
 
     @classmethod
     async def write_workspace_file(
