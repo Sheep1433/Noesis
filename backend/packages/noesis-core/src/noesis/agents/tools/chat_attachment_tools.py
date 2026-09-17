@@ -8,16 +8,18 @@ from typing import List, Optional
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from noesis.config.env import ChatAttachmentConfig
 from noesis.runtime.deps import require_attachment_service
 from noesis.runtime.attachments.markdown import read_line_range
+
+# 附件分页读取的单页行数（产品逻辑常量，不随部署变化）
+READ_PAGE_LINES = 2000
 
 
 class ReadAttachmentInput(BaseModel):
     path: str = Field(description="附件 virtual_path 或 file_name")
     offset: int = Field(default=0, ge=0, description="起始行号（0-based）")
     limit: int = Field(
-        default=ChatAttachmentConfig.read_page_lines,
+        default=READ_PAGE_LINES,
         ge=1,
         le=5000,
         description="读取行数上限",
@@ -67,7 +69,7 @@ def build_attachment_tools(
     """
     from noesis.storage.postgres.manager import pg_manager
 
-    async def read_attachment(path: str, offset: int = 0, limit: int = ChatAttachmentConfig.read_page_lines) -> str:
+    async def read_attachment(path: str, offset: int = 0, limit: int = READ_PAGE_LINES) -> str:
         async with pg_manager.get_async_session_context() as db:
             row = await require_attachment_service().find_document(
                 session_id=session_id,

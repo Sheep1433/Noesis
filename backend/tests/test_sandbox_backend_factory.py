@@ -1,6 +1,7 @@
 """sandbox.backend 工厂：local_shell / docker 统一 create_agent_backend。"""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,20 +11,29 @@ from noesis.config.user_data_paths import ensure_workspace_dir
 from deepagents.backends.composite import CompositeBackend
 
 
+def _force_sandbox_backend(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
+    """直接替换配置读取方法（sandbox.backend 已无环境变量开关）。"""
+    from noesis.config.env import GetConfig
+
+    monkeypatch.setattr(
+        GetConfig,
+        "get_sandbox_config",
+        lambda self: SimpleNamespace(
+            backend=backend,
+            runner_url="http://127.0.0.1:8090",
+            execute_timeout_seconds=120,
+        ),
+    )
+
+
 @pytest.fixture
 def local_shell_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from noesis.config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
+    _force_sandbox_backend(monkeypatch, "local_shell")
 
 
 @pytest.fixture
 def docker_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SANDBOX_BACKEND", "docker")
-    from noesis.config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
+    _force_sandbox_backend(monkeypatch, "docker")
 
 
 def test_uses_container_sandbox_from_env(local_shell_backend: None) -> None:
@@ -31,10 +41,7 @@ def test_uses_container_sandbox_from_env(local_shell_backend: None) -> None:
 
 
 def test_aio_backend_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SANDBOX_BACKEND", "aio")
-    from noesis.config.env import get_config
-
-    get_config.get_sandbox_config.cache_clear()
+    _force_sandbox_backend(monkeypatch, "aio")
     with pytest.raises(ValueError, match="aio"):
         sandbox_backend_kind()
 

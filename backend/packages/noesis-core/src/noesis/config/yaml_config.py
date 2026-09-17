@@ -182,29 +182,9 @@ class SummarizationYamlSection(BaseModel):
     user_message_tokens: int = Field(default=20_000, ge=0)
 
 
-class GovernorYamlSection(BaseModel):
-    # 工具调用总量与单工具上限；tool_calls_enabled=false 时两项均不生效
-    tool_calls_enabled: bool = Field(default=True)
-    tool_calls_total: int | None = Field(default=None, ge=1)
-    tool_calls_per_name: int | None = Field(default=10, ge=1)
-    # 同一 run 内的重复工具循环检测
-    loop_enabled: bool = Field(default=True)
-    loop_hard_limit: int = Field(default=5, ge=2)
-    loop_window_size: int = Field(default=20, ge=1)
-
-
 class AgentRuntimeYamlSection(BaseModel):
     tool_output_max_chars: int = Field(default=24_000, ge=1)
     read_file_max_chars: int = Field(default=20_000, ge=1)
-    governor: GovernorYamlSection = Field(default_factory=GovernorYamlSection)
-
-
-class RetrievalLimitsYamlSection(BaseModel):
-    max_results_per_call: int = Field(default=30, ge=1)
-    max_results_per_run: int = Field(default=500, ge=1)
-    max_excerpt_chars: int = Field(default=8000, ge=1)
-    max_excerpt_bytes: int = Field(default=32768, ge=1)
-    max_locator_bytes: int = Field(default=2048, ge=1)
 
 
 class StreamYamlSection(BaseModel):
@@ -416,11 +396,7 @@ class ChatAttachmentYamlSection(BaseModel):
     vision_enabled: bool = True
     reinject_session_images: bool = True
     max_files_per_message: int = Field(default=10, ge=1)
-    image_inject_max_edge: int = Field(default=1536, ge=256, le=4096)
     vlm_fallback_enabled: bool = True
-    tiny_inline_chars: int = Field(default=4096, ge=0)
-    read_page_lines: int = Field(default=2000, ge=1)
-    preview_chars: int = Field(default=500, ge=1)
 
 
 class KbDeepDocYamlSection(BaseModel):
@@ -444,26 +420,8 @@ class MemoryYamlSection(BaseModel):
     session_idle_minutes: int = Field(default=10, ge=1, le=120)
     sweep_interval_minutes: int = Field(default=30, ge=5, le=240)
     max_entries_per_extraction: int = Field(default=3, ge=1, le=10)
-    index_max_lines: int = Field(default=200, ge=50, le=1000)
-    index_max_bytes: int = Field(default=25_600, ge=10_000, le=100_000)
-    stale_warning_days: int = Field(default=2, ge=1, le=90)
-    max_entry_chars: int = Field(default=4000, ge=500, le=20_000)
     consolidation_min_interval_hours: int = Field(default=24, ge=1, le=24 * 30)
     consolidation_min_new_sessions: int = Field(default=5, ge=1, le=200)
-    max_message_chars: int = Field(default=120_000, ge=10_000, le=1_000_000)
-
-
-class HistorySearchYamlSection(BaseModel):
-    """Agent 会话历史检索（openspec: session-history-search）。"""
-
-    # 两个检索工具 limit 参数的服务端钳制
-    max_hits: int = Field(default=10, ge=1, le=50)
-    # 单条命中截断长度（超长 assistant 消息含嵌在 parts 里的工具轨迹）
-    max_excerpt_chars: int = Field(default=2000, ge=200, le=100_000)
-    # 单次返回总字符上限（检索不得成为读回全量历史的通道）
-    max_total_chars: int = Field(default=12_000, ge=1_000, le=200_000)
-    # 滚动深读 window 的服务端上限
-    max_window: int = Field(default=10, ge=1, le=50)
 
 
 class AppYamlConfig(BaseModel):
@@ -481,9 +439,6 @@ class AppYamlConfig(BaseModel):
     )
     agent_runtime: AgentRuntimeYamlSection = Field(
         default_factory=AgentRuntimeYamlSection
-    )
-    retrieval_limits: RetrievalLimitsYamlSection = Field(
-        default_factory=RetrievalLimitsYamlSection
     )
     stream: StreamYamlSection = Field(default_factory=StreamYamlSection)
     distributed_runs: DistributedRunsYamlSection = Field(
@@ -509,9 +464,6 @@ class AppYamlConfig(BaseModel):
     )
     kb: KbYamlSection = Field(default_factory=KbYamlSection)
     memory: MemoryYamlSection = Field(default_factory=MemoryYamlSection)
-    history_search: HistorySearchYamlSection = Field(
-        default_factory=HistorySearchYamlSection
-    )
 
 
 @lru_cache

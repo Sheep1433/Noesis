@@ -478,11 +478,8 @@ async def test_load_segment_head_tail_truncation_keeps_both_ends(
     import noesis.services.memory.extraction as ext
 
     rows = [_msg(i, "user", f"消息{i}" * 50) for i in range(1, 21)]
-    from types import SimpleNamespace
 
-    monkeypatch.setattr(
-        ext, "MemoryConfig", SimpleNamespace(max_message_chars=800)
-    )
+    monkeypatch.setattr(ext, "MAX_MESSAGE_CHARS", 800)
     text, new_max = await ext.MemoryExtractionService._load_segment(
         _SegmentDB(rows), "s", watermark=None
     )

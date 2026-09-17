@@ -120,21 +120,6 @@ agent_runtime:
   # 无 filesystem backend 时，单条 ToolMessage 写入 history 前的字符上限
   tool_output_max_chars: 24000
   read_file_max_chars: 20000
-  # Run Governor：统一模型/工具/子 Agent 预算与循环检测
-  governor:
-    tool_calls_enabled: true
-    tool_calls_total: null
-    tool_calls_per_name: 10
-    loop_enabled: true
-    loop_hard_limit: 5
-    loop_window_size: 20
-
-retrieval_limits:
-  max_results_per_call: 30
-  max_results_per_run: 500
-  max_excerpt_chars: 8000
-  max_excerpt_bytes: 32768
-  max_locator_bytes: 2048
 
 distributed_runs:
   # 模式（memory|redis）、REDIS_URL、NOESIS_CLUSTER_ID 属环境项，只在 .env 显式配置：
@@ -208,26 +193,15 @@ qdrant:
   case_rag_historical_requirements_enabled: false
 
 # md 文件记忆层（索引 + 五类条目 + 情景日志）；功能启停由每个用户的单一开关控制。
+# 条目字符预算等文本策略为代码常量（extraction.py / memory_tools.py）
 memory:
   extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
   enabled_by_default: false  # fail-closed：评测门禁通过后再默认开启
   session_idle_minutes: 10   # 会话 idle 判定（终态触发抽取）
   sweep_interval_minutes: 30 # 未抽取会话补扫间隔
   max_entries_per_extraction: 3
-  index_max_lines: 200       # 索引预算双保险
-  index_max_bytes: 25600
-  stale_warning_days: 2      # 超龄条目检索结果附 stale 警告
-  max_entry_chars: 4000
   consolidation_min_interval_hours: 24   # AutoDream 门控：距上次整理最小间隔
   consolidation_min_new_sessions: 5      # 且期间新抽取会话数达此值才整理
-  max_message_chars: 120000  # 抽取输入上限（会话消息截断）
-
-# Agent 会话历史检索（search_history / search_sessions，pg_trgm 确定性全文）
-history_search:
-  max_hits: 10              # 单次调用命中/会话条数上限（limit 参数的服务端钳制）
-  max_excerpt_chars: 2000   # 单条命中截断长度
-  max_total_chars: 12000    # 单次返回总字符上限
-  max_window: 10            # 滚动深读 window 服务端上限
 
 langfuse:
   tracing_enabled: false
@@ -299,8 +273,5 @@ chat_attachment:
   vision_enabled: true
   reinject_session_images: true
   max_files_per_message: 10
-  image_inject_max_edge: 1536
   vlm_fallback_enabled: true
-  tiny_inline_chars: 4096
-  read_page_lines: 2000
-  preview_chars: 500
+  # 注入/分页/预览的文本与图片参数为代码常量（input_resolver.py 等）

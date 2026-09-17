@@ -139,11 +139,10 @@ def test_inventory_has_no_legacy_loop_or_tool_call_limit_middleware() -> None:
     assert "RunGovernorMiddleware" not in types
 
 
-def test_governor_config_consolidated_under_agent_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    """loop_detection / tool_call_limit 段已收敛为 agent_runtime.governor，env 字段同步改名。"""
-    from noesis.config.yaml_config import AgentRuntimeYamlSection, AppYamlConfig, GovernorYamlSection
+def test_governor_config_removed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """governor 防打转中间件及配套配置已整体移除，yaml 面不再留段。"""
+    from noesis.config.yaml_config import AgentRuntimeYamlSection, AppYamlConfig
 
     assert "loop_detection" not in AppYamlConfig.model_fields
     assert "tool_call_limit" not in AgentRuntimeYamlSection.model_fields
-    assert "governor" in AgentRuntimeYamlSection.model_fields
-    assert hasattr(GovernorYamlSection, "model_fields")
+    assert "governor" not in AgentRuntimeYamlSection.model_fields

@@ -30,6 +30,11 @@ from noesis.services.memory.user_settings import MemoryUserSettings
 from noesis.storage.postgres.manager import pg_manager
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage, TChatSession
 
+# 抽取管线文本预算（产品逻辑常量，不随部署变化）：
+# 单条记忆落盘的字符上限 / 送抽取的会话消息整体截断预算
+MAX_ENTRY_CHARS = 4000
+MAX_MESSAGE_CHARS = 120_000
+
 _USER_LOCKS: dict[str, asyncio.Lock] = {}
 
 
@@ -281,7 +286,7 @@ class MemoryExtractionService:
         bridge = [f"[背景] [{role}] {text}" for role, text in before[-2:]]
         segment = [f"[{role}] {text}" for role, text in after]
 
-        budget = MemoryConfig.max_message_chars
+        budget = MAX_MESSAGE_CHARS
         if sum(len(line) for line in segment) > budget:
             head_budget, tail_budget = int(budget * 0.2), int(budget * 0.6)
             head: list[str] = []
@@ -440,7 +445,7 @@ class MemoryExtractionService:
                 description=candidate.description,
                 sources=[source],
                 slug=target or (candidate.slug_hint or None),
-                max_entry_chars=MemoryConfig.max_entry_chars,
+                max_entry_chars=MAX_ENTRY_CHARS,
             )
             op = "更新" if target is not None else "新建"
             decisions.append(f"- {op}：{entry.rel_path}（{reason}）")

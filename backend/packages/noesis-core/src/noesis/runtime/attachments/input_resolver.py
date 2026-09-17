@@ -19,6 +19,11 @@ from noesis.runtime.deps import require_attachment_service
 from noesis.knowledge.embedding import is_vlm_configured
 from noesis.runtime.logging import logger
 
+# 注入管线算法参数（产品逻辑常量，不随部署变化）：
+# 短文本附件直接内联进消息的字符阈值 / 注入图片压缩到的最长边像素
+TINY_INLINE_CHARS = 4096
+IMAGE_INJECT_MAX_EDGE = 1536
+
 
 def _human_text(content: Any) -> str:
     if isinstance(content, str):
@@ -107,7 +112,7 @@ class AttachmentInputResolver:
             )
             if outline:
                 lines.append(f"  outline:\n{outline}")
-            if text and len(text) <= ChatAttachmentConfig.tiny_inline_chars:
+            if text and len(text) <= TINY_INLINE_CHARS:
                 lines.append(f"  <inline>\n{text}\n  </inline>")
             has_content = True
 
@@ -148,7 +153,7 @@ class AttachmentInputResolver:
             prepared, out_mime = prepare_image_bytes_for_injection(
                 data,
                 mime,
-                max_edge=ChatAttachmentConfig.image_inject_max_edge,
+                max_edge=IMAGE_INJECT_MAX_EDGE,
             )
             selected.append((prepared, out_mime, row.file_name))
             return True

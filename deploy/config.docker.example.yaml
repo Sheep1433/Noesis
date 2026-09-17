@@ -95,14 +95,6 @@ summarization:
 agent_runtime:
   tool_output_max_chars: 24000
   read_file_max_chars: 20000
-  # Run Governor：统一模型/工具/子 Agent 预算与循环检测
-  governor:
-    tool_calls_enabled: true
-    tool_calls_total: null
-    tool_calls_per_name: 10
-    loop_enabled: true
-    loop_hard_limit: 5
-    loop_window_size: 20
 
 distributed_runs:
   # 模式（memory|redis）、REDIS_URL、NOESIS_CLUSTER_ID 属环境项，只在 .env 显式配置：
@@ -187,11 +179,7 @@ chat_attachment:
   vision_enabled: true
   reinject_session_images: true
   max_files_per_message: 10
-  image_inject_max_edge: 1536
   vlm_fallback_enabled: true
-  tiny_inline_chars: 4096
-  read_page_lines: 2000
-  preview_chars: 500
 
 # Web 检索工具（COMMON_QA / SUPER_AGENT_QA；TAVILY_API_KEY 见 deploy/.env.docker）
 web_tools:
@@ -223,19 +211,12 @@ messaging:
 # md 文件记忆层（索引 + 五类条目 + 情景日志）；功能启停由每个用户的单一开关控制。
 memory:
   extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
-  selection_model: ""        # 空 = 默认对话模型（每 Run 注入选条）
   enabled_by_default: false  # fail-closed：评测门禁未过不默认开启
   session_idle_minutes: 10
   sweep_interval_minutes: 30
   max_entries_per_extraction: 3
-  index_max_lines: 200
-  index_max_bytes: 25600
-  stale_warning_days: 2
-  inject_budget_tokens: 2000
-  max_entry_chars: 4000
   consolidation_min_interval_hours: 24
   consolidation_min_new_sessions: 5
-  max_message_chars: 120000
 
 kb:
   deepdoc:

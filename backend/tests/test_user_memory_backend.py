@@ -57,10 +57,20 @@ async def test_composite_memory_route_isolated_from_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SANDBOX_BACKEND", "local_shell")
-    from noesis.config.env import get_config
+    from types import SimpleNamespace
 
-    get_config.get_sandbox_config.cache_clear()
+    from noesis.config.env import GetConfig
+
+    # sandbox.backend 已无环境变量开关，直接替换配置读取方法强制 local_shell
+    monkeypatch.setattr(
+        GetConfig,
+        "get_sandbox_config",
+        lambda self: SimpleNamespace(
+            backend="local_shell",
+            runner_url="http://127.0.0.1:8090",
+            execute_timeout_seconds=120,
+        ),
+    )
 
     users_root = tmp_path / "users"
     platform = tmp_path / "platform-skills"

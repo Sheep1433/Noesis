@@ -16,6 +16,9 @@ from noesis.services.memory.store import MemoryStore
 from noesis.services.memory.types import MEMORY_TYPES
 from noesis.storage.postgres.models.chat import TAgentRun
 
+# 记忆条目超龄提示阈值（天）：检索结果附带「先验证是否仍成立」警告（产品逻辑常量）
+STALE_WARNING_DAYS = 2
+
 
 class MemorySearchInput(BaseModel):
     query: str = Field(description="检索词（支持正则如 a|b；多个词以空格分隔，同行命中越多越靠前）")
@@ -28,7 +31,7 @@ class MemorySearchInput(BaseModel):
 
 def _stale_warning(mtime: float) -> str:
     age_days = (time.time() - mtime) / 86_400
-    if age_days >= MemoryConfig.stale_warning_days:
+    if age_days >= STALE_WARNING_DAYS:
         return f"（该条目保存于 {int(age_days)} 天前，使用前先验证是否仍然成立）"
     return ""
 

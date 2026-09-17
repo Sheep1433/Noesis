@@ -2,8 +2,12 @@
 
 import json
 
-from noesis.chat.message_builder import AssistantMessageBuilder, ToolPart
-from noesis.config.env import RetrievalLimitConfig
+from noesis.chat.message_builder import (
+    RETRIEVAL_MAX_EXCERPT_BYTES,
+    RETRIEVAL_MAX_RESULTS_PER_CALL,
+    AssistantMessageBuilder,
+    ToolPart,
+)
 
 
 def _evidence_result(**overrides):
@@ -99,12 +103,12 @@ def test_retrieval_capacity_is_deterministic_and_utf8_safe() -> None:
         query="容量",
         results=results,
     )
-    assert len(retrieval.results) == RetrievalLimitConfig.max_results_per_call
+    assert len(retrieval.results) == RETRIEVAL_MAX_RESULTS_PER_CALL
     assert retrieval.truncated is True
-    assert len({item["evidence_id"] for item in retrieval.results}) == RetrievalLimitConfig.max_results_per_call
+    assert len({item["evidence_id"] for item in retrieval.results}) == RETRIEVAL_MAX_RESULTS_PER_CALL
     assert all(item["evidence_id"].startswith("ev_") for item in retrieval.results)
     assert all(
-        len(item["excerpt"].encode("utf-8")) <= RetrievalLimitConfig.max_excerpt_bytes
+        len(item["excerpt"].encode("utf-8")) <= RETRIEVAL_MAX_EXCERPT_BYTES
         for item in retrieval.results
     )
 
