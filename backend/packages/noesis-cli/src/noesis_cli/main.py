@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 
 # 必须在导入 noesis 链（触发配置加载）之前：CLI 进程关闭 DB echo——
 # echo 日志由 SQLAlchemy 直接打到 stdout，会污染 -p 的 json/stream-json 契约
@@ -63,7 +64,8 @@ def chat(
     ),
     model: str = typer.Option(
         None, "--model", "-m",
-        help="模型名；env 直连模式（NOESIS_API_KEY+NOESIS_BASE_URL）下为端点真实模型名",
+        help="模型 id；super -p 为内置目录 id 或账号自定义模型复合 id（如 "
+             "provider/model），common 交互/env 直连模式下为端点真实模型名",
     ),
     session_id: str = typer.Option(
         None, "--session-id", help="会话 id(默认随机;多轮复用)"
@@ -81,8 +83,15 @@ def chat(
 ) -> None:
     """流式对话,实时打印正文 + 思考 + 工具调用。"""
     wire_langfuse()
-    effective_model = apply_env_model_direct(model)
     kb_cols = [c.strip() for c in (kb_collections or "").split(",") if c.strip()]
+    if print_mode and qa_type in ("super", "super_agent"):
+        # super print 模式 = 生产 headless 入口（DB 持久化 + 生产 SSE 编码），
+        # 不经 env 直连快照——模型由会话/用户偏好/平台目录解析。
+        # common 的 headless 持久化是产品缺口（RunService typed 主路径未覆盖
+        # COMMON_QA），见评测文档；路由回退内存路径。
+        code = asyncio.run(_run_print_db(message, model, session_id, output_format))
+        raise typer.Exit(code)
+    effective_model = apply_env_model_direct(model)
     if print_mode:
         if not message:
             console.print("[red]错误:[/red] -p 模式需要位置参数作为问题")
@@ -140,6 +149,49 @@ async def _invoke_slash_command(slash_text: str) -> str:
     return result.text or "（无输出）"
 
 
+async def _run_print_db(
+    message: str, model: str | None, session_id: str | None, output_format: str,
+) -> int:
+    """-p DB 跑次（super）：复用生产 headless 入口，观测走 DB / Langfuse。"""
+    from noesis_cli.client import current_user_id
+    from noesis_cli.db_run import run_db_print, shutdown_db_run
+
+    if output_format not in ("text", "json", "stream-json"):
+        console.print(f"[red]错误:[/red] 未知 --output-format: {output_format!r}")
+        return 2
+    sid = session_id or f"cli-{uuid.uuid4().hex[:12]}"
+    emit = output_format == "stream-json"
+
+    def out(line: str) -> None:
+        print(line, flush=True)
+
+    try:
+        record = await run_db_print(
+            query=message,
+            session_id=sid,
+            user_id=current_user_id(),
+            model_id=model,
+            out=out,
+            emit_stream=emit,
+        )
+    except ValueError as exc:
+        console.print(f"[red]错误:[/red] {exc}")
+        return 2
+    finally:
+        await shutdown_db_run()
+
+    if emit:
+        out(json.dumps({"type": "__tw_result__", **record}, ensure_ascii=False))
+    elif output_format == "json":
+        out(json.dumps(record, ensure_ascii=False, indent=2))
+    else:
+        if record["final_text"]:
+            console.print(record["final_text"])
+        if record["error"]:
+            console.print(f"[red]错误:[/red] {record['error']}")
+    return 0 if record["completed"] else 1
+
+
 async def _run_print(
     message: str, qa_type: str, model: str | None, session_id: str | None, output_format: str,
     *, kb_collections: list[str] | None = None, web_search_enabled: bool = True,
@@ -147,7 +199,7 @@ async def _run_print(
     """-p 单发：跑一问，按 --output-format 输出，返回退出码。"""
     try:
         session = ChatSession(
-            qa_type=qa_type, model_id=model, thread_id=session_id, ensure_session_row=True,
+            qa_type=qa_type, model_id=model, thread_id=session_id,
             kb_collections=kb_collections, web_search_enabled=web_search_enabled,
         )
     except ValueError as exc:

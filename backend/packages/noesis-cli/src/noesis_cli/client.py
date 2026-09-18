@@ -7,6 +7,7 @@ evals/bootstrap.py:eval_runtime, but self-contained (no evals import).
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import AsyncGenerator
@@ -55,8 +56,13 @@ def wire_langfuse() -> None:
 
     Agent 流式路径（noesis/runtime/stream.py）的 Langfuse 注入按 deps 开关
     门控，CLI 进程不经过 FastAPI lifespan，必须自行做与 server/wiring.py
-    相同的绑定，否则逐 LLM/工具调用 trace 静默丢失。独立安装（无 server
-    包可导入）时静默跳过。
+    相同的绑定，否则逐 LLM/工具调用 trace 静默丢失。
+
+    console script 的 sys.path 不含仓库 backend 目录（驱动方 driver 以
+    PYTHONPATH 兜底，直接 shell 跑没有）——`import server` 会 ImportError，
+    曾被静默吞掉造成「凭据齐全却无 trace」的摄入链路误诊；此处自动补
+    backend 根目录后再导入，仍失败则大声警告。独立安装（无 server 包）
+    时静默跳过。
     """
     if not (
         os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
@@ -67,7 +73,21 @@ def wire_langfuse() -> None:
         from server.langfuse import sync_langfuse_env_from_app_config
         from server.wiring import wire_runtime_observability
     except ImportError:
-        return
+        import sys
+        from pathlib import Path
+
+        backend_root = Path(__file__).resolve().parents[4]
+        if backend_root.is_dir():
+            sys.path.insert(0, str(backend_root))
+        try:
+            from server.langfuse import sync_langfuse_env_from_app_config
+            from server.wiring import wire_runtime_observability
+        except ImportError:
+            logging.getLogger(__name__).warning(
+                "LANGFUSE_* 凭据已配置但 server 包不可导入，本进程 Langfuse "
+                "tracing 不生效（独立安装预期行为）"
+            )
+            return
     sync_langfuse_env_from_app_config()
     wire_runtime_observability()
 
@@ -109,46 +129,6 @@ def apply_env_model_direct(model_id: str | None) -> str | None:
     return wire_name
 
 
-def _is_uuid(value: str) -> bool:
-    try:
-        uuid.UUID(value)
-        return True
-    except (ValueError, AttributeError):
-        return False
-
-
-async def _ensure_session_row(session_id: str, user_id: str, title: str) -> None:
-    """补建父会话行：子 Agent 派发按 parent 会话查血缘，无行则派发失败
-    （生产由会话 API 先建行）。一次性 engine，进程退出即释放。
-
-    user_id 须为合法 UUID（t_chat_session.user_id 为 UUID 列）；
-    非法或数据库不可达时抛错——print 模式的评测宁可失败也不要静默降级。
-    """
-    if not _is_uuid(user_id):
-        raise ValueError(
-            f"NOESIS_USER_ID 须为合法 UUID 才能落会话行（当前 {user_id!r}）；"
-            f"子 Agent 派发需要会话血缘"
-        )
-    if len(session_id) > 36:
-        raise ValueError("session id 超长（t_chat_session.id VARCHAR(36)）")
-
-    from noesis.services.chat_service import ChatService
-    from noesis.storage.postgres.manager import ASYNC_SQLALCHEMY_DATABASE_URL
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-    engine = create_async_engine(ASYNC_SQLALCHEMY_DATABASE_URL)
-    try:
-        async with async_sessionmaker(bind=engine, expire_on_commit=False)() as db:
-            existing = await ChatService.get_session_by_id(
-                session_id, user_id=user_id, db=db)
-            if existing is None:
-                db.add(ChatService.build_session(
-                    user_id=user_id, title=title[:60], session_id=session_id))
-                await db.commit()
-    finally:
-        await engine.dispose()
-
-
 class ChatSession:
     """多轮会话:持有 MemorySaver + thread_id,跨 turn 复用。"""
 
@@ -158,7 +138,6 @@ class ChatSession:
         qa_type: str,
         model_id: str | None,
         thread_id: str | None = None,
-        ensure_session_row: bool = False,
         kb_collections: list[str] | None = None,
         web_search_enabled: bool = True,
     ) -> None:
@@ -166,10 +145,8 @@ class ChatSession:
         self.model_id = model_id
         self.thread_id = thread_id or f"cli-{uuid.uuid4().hex[:12]}"
         self.user_id = current_user_id()
-        self.ensure_session_row = ensure_session_row
         self.kb_collections = [c.strip() for c in kb_collections or [] if c.strip()]
         self.web_search_enabled = web_search_enabled
-        self._row_ready = False
         self._kb_ready = False
         self.checkpointer = MemorySaver()
         self.agent = resolve_agent_class(qa_type)()
@@ -185,9 +162,6 @@ class ChatSession:
         self, query: str, *, enabled_skills: list[str] | None = None
     ) -> AsyncGenerator[dict[str, Any], None]:
         """单轮对话:调 agent.run_agent,yield 事件 dict。"""
-        if self.ensure_session_row and not self._row_ready:
-            await _ensure_session_row(self.thread_id, self.user_id, title=query)
-            self._row_ready = True
         if self.kb_collections and not self._kb_ready:
             from noesis.knowledge.runtime import init_knowledge_base
 
