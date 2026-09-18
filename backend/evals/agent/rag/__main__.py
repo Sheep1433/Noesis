@@ -30,13 +30,13 @@ import argparse
 import asyncio
 import json
 import random
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from evals.agent.rag.runner import run_agentic_rag_sample
 from evals.agent.rag.to_erb import load_name_to_dsid, records_to_erb, write_erb_answers
-from evals.bootstrap import bind_user_model, resolve_user_uuid
 from evals.manifest import (
     aggregate_usage,
     build_manifest,
@@ -146,10 +146,10 @@ async def _run(args: argparse.Namespace) -> int:
     from evals.langfuse_env import eval_langfuse_run
 
     subject_model_id = args.model_id or None
-    # NOESIS_USER_ID 须为合法 UUID（t_chat_session.user_id 为 UUID 列）：
-    # 用户名先解析成 t_user.id，否则 CLI 的 DB 路径直接拒绝
-    eval_user_id = await resolve_user_uuid(args.eval_user)
-    for sample in todo:
+    total = len(todo)
+    done_before = len(done) if args.resume else 0
+    t0 = time.perf_counter()
+    for i, sample in enumerate(todo, 1):
         sample_id = str(sample["id"])
         print(f"--- {sample_id}", flush=True)
         if args.model_user:
@@ -157,12 +157,12 @@ async def _run(args: argparse.Namespace) -> int:
                 args.model_user, args.model_id, include_summarization=True)
         with eval_langfuse_run(line="agent", tag=args.tag,
                                session_id=f"agentic-rag-{sample_id}"):
-                result = await run_agentic_rag_sample(
-                    sample,
-                    time_budget_seconds=args.time_budget,
-                    model_id=subject_model_id,
-                    eval_user=eval_user_id,
-                )
+            result = await run_agentic_rag_sample(
+                sample,
+                time_budget_seconds=args.time_budget,
+                model_id=subject_model_id,
+                eval_user=args.eval_user,
+            )
         record: dict[str, Any] = {
             "sample_id": sample_id,
             "question_id": sample_id,
@@ -173,12 +173,20 @@ async def _run(args: argparse.Namespace) -> int:
             "final_text": result.get("final_text") or "",
             "tool_stats": result.get("tool_stats") or {},
             "tool_outputs": result.get("tool_outputs") or [],
+            "kb_refs": result.get("kb_refs") or [],
             "input_tokens": result.get("input_tokens") or 0,
             "output_tokens": result.get("output_tokens") or 0,
             "latency_ms": result.get("latency_ms") or 0,
         }
         append_raw_record(raw_path, record)
-        print(f"    completed={record['completed']}", flush=True)
+        progress = done_before + i
+        elapsed = time.perf_counter() - t0
+        eta_min = elapsed / progress * (total - progress) / 60 if progress else 0
+        print(f"    [{progress}/{total}] completed={record['completed']} "
+              f"（累计 {elapsed/60:.1f} 分钟，预计还需 {eta_min:.0f} 分钟）", flush=True)
+
+    from evals.agent.rag.runner import _close_http
+    await _close_http()
 
     # 汇总（last-record-wins）+ 导出 ERB 官方判分格式
     all_records = list(load_raw_records(raw_path).values())

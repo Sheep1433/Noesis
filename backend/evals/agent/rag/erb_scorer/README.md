@@ -11,9 +11,10 @@ commit `d36685e273713975ee20299bbf1ab64165575b3c`（2026-05-07 arXiv 版），MI
 2. **依赖裁剪**：只保留判分依赖闭包（21 个文件）；数据生成管线（自动对话器、Agent 工具框架、
    出题 prompt 主体）不在本仓库用途内。`src/utils/__init__.py` 的桶式 import 改为空，
    判分代码全部直接从子模块 import，不受影响。
-3. **语料与金标子集**：`generated_data/sources/`（532 篇官方 JSON 文档，本仓库评测语料的
-   官方原始格式）与 `questions.jsonl`（231 题金标：erb211 正样本 + 20 拒答负样本）取自
-   官方数据子集。扩展到官方全量 500 题 / 50 万语料时替换这两个数据目录即可。
+3. **金标子集**：`questions.jsonl`（248 题金标：erb211 正样本 + 17 冲突陷阱 + 20 拒答
+   负样本）取自官方数据子集。语料 JSON（`generated_data/sources/`，532 篇）**不入版本库**
+   （生成数据缓存，gitignore），从官方仓库 commit `d36685e` 的
+   `generated_data/sources/` 按需拷贝对应 dsid 文件即可；全量 50 万篇见官方 Releases。
 
 ## 运行
 

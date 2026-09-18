@@ -75,9 +75,14 @@ def records_to_erb(
     for record in records:
         if not record.get("completed") or not (record.get("final_text") or "").strip():
             continue
+        # 文档优先取 runner 已从引用标记解析的 KB 文件名（HTTP 路径 SSE 工具
+        # 输出是渲染摘要，不含文件名）；进程内路径回落 tool_outputs 提取。
+        names = list(record.get("kb_refs") or []) or collected_files(
+            record.get("tool_outputs"))
         doc_ids = []
-        for name in collected_files(record.get("tool_outputs")):
-            dsid = name_to_dsid.get(name)
+        for name in names:
+            short = name.split("/", 1)[1] if "/" in name else name
+            dsid = name_to_dsid.get(short) or name_to_dsid.get(name)
             if dsid:
                 doc_ids.append(dsid)
             else:

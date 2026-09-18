@@ -84,3 +84,4 @@ evals/compression/fixtures/real/
 # ERB 官方判分运行时产物（索引缓存、判分输出与语料 JSON——生成数据不入库，
 # 代码保留在 erb_scorer/src，语料可由官方仓库按 erb_scorer/README 重建）
 evals/agent/rag/erb_scorer/generated_data/
+evals/agent/rag/erb_scorer/answer_evaluation/
