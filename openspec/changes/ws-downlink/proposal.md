@@ -12,7 +12,7 @@
 
 双窗口 3+3=6 即打满；再叠加瞬态的 run SSE（对话流式期间）后，一切普通请求在浏览器排队。HTTP/1.1 的 6 连接限制是浏览器协议层约束，站点不可配置。
 
-DeepSeek Harness（dsh）在其设计记录（`.agents/notes/implemented/architecture/2026-08-04-websocket-downlink-carrier.md`）中记录了**完全相同的问题与解法**：常驻 SSE 下行改用 WebSocket——WS 完成协议升级后脱离浏览器 HTTP 连接池，长连接不再消耗 6 个名额；HTTP 上行（普通请求）不变。dsh 同时否决了「依赖 HTTP/2」（本地 dev/preview 是明文 HTTP/1.1，前置代理不是产品不变量——与 Noesis 本地验证场景一致）与「合并为单连接多路复用」（增加 channel 标签/背压/就绪语义复杂度，收益不成立）。
+DeepSeek Harness（dsh）在其设计记录（`.agents/notes/archived/architecture/2026-08-04-websocket-downlink-carrier.md`（该笔记已被现行权威 `implemented/architecture/2026-08-18-session-history-and-event-transport.md` 取代））中记录了**完全相同的问题与解法**：常驻 SSE 下行改用 WebSocket——WS 完成协议升级后脱离浏览器 HTTP 连接池，长连接不再消耗 6 个名额；HTTP 上行（普通请求）不变。dsh 同时否决了「依赖 HTTP/2」（本地 dev/preview 是明文 HTTP/1.1，前置代理不是产品不变量——与 Noesis 本地验证场景一致）与「合并为单连接多路复用」（增加 channel 标签/背压/就绪语义复杂度，收益不成立）。
 
 ## What Changes
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RetrievalUiPart } from '@/views/chat/messageParts'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 interface Props {
   /** 工具名（决定如何解析 output） */
@@ -111,6 +111,25 @@ function parseJsonFetch(text: string): { url: string, content: string } | null {
 /** grep 分组 / count / 路径列表的行内展示上限（结果列表不截断，全部展示）。 */
 const MAX_ROWS = 8
 
+/**
+ * excerpt 折叠预览阈值：excerpt 是后端 chunk 原文（最长 8000 字符），
+ * 行内只给几行预览，超过阈值的条目可展开看全文。
+ */
+const EXCERPT_CLAMP_CHARS = 160
+
+/** 已展开全文的条目下标；重赋新 Set 触发响应式。 */
+const expandedItems = ref<Set<number>>(new Set())
+
+function toggleExcerpt(i: number) {
+  const next = new Set(expandedItems.value)
+  if (next.has(i)) {
+    next.delete(i)
+  } else {
+    next.add(i)
+  }
+  expandedItems.value = next
+}
+
 /** web_fetch 正文展示上限：抓取内容可能很长，行内给预览即可。 */
 const FETCH_CONTENT_MAX = 6_000
 
@@ -205,18 +224,29 @@ const inputDisplay = computed(() => {
   <div class="search-block" :data-appearance="appearance">
     <!-- 入参 pretty JSON 置顶（对齐 bash/回退分支：入参在输出上方，无标签） -->
     <pre v-if="inputDisplay" class="search-args">{{ inputDisplay }}</pre>
-    <!-- 结构化检索结果 -->
+    <!-- 结构化检索结果（excerpt 为后端 chunk 原文，行内折叠预览、可逐条展开） -->
     <template v-if="view.kind === 'results'">
-      <div v-if="view.total !== undefined" class="result-meta">共 {{ view.total }} 条结果</div>
+      <div v-if="view.total !== undefined" class="result-meta">来源（{{ view.total }} 条）</div>
       <div v-if="!view.items.length" class="result-meta">无匹配结果</div>
       <div v-for="(item, i) in view.items" :key="i" class="result-item">
         <div class="result-item__head">
+          <span class="result-item__no">{{ i + 1 }}.</span>
           <span v-if="item.collection_name" class="result-item__src">{{ item.collection_name }}</span>
           <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="result-item__title">{{ item.title || item.url }}</a>
           <span v-else class="result-item__title">{{ item.file_name || item.title || `结果 ${i + 1}` }}</span>
           <span v-if="item.score !== null && item.score !== undefined" class="result-item__score">{{ item.score.toFixed(2) }}</span>
         </div>
-        <div v-if="item.excerpt" class="result-item__excerpt">{{ item.excerpt }}</div>
+        <template v-if="item.excerpt">
+          <div class="result-item__excerpt" :class="{ 'is-clamped': item.excerpt.length > EXCERPT_CLAMP_CHARS && !expandedItems.has(i) }">{{ item.excerpt }}</div>
+          <button
+            v-if="item.excerpt.length > EXCERPT_CLAMP_CHARS"
+            class="result-item__toggle"
+            type="button"
+            @click="toggleExcerpt(i)"
+          >
+            {{ expandedItems.has(i) ? '收起' : '展开全文' }}
+          </button>
+        </template>
       </div>
     </template>
 
@@ -305,6 +335,11 @@ const inputDisplay = computed(() => {
   gap: 8px;
   align-items: baseline;
 }
+.result-item__no {
+  color: var(--search-summary-color, #404040);
+  min-width: 1.6em;
+  flex-shrink: 0;
+}
 .result-item__src {
   color: var(--search-summary-color, #404040);
   font-size: 11px;
@@ -344,6 +379,24 @@ a.result-item__title {
   color: var(--search-summary-color, #404040);
   white-space: pre-wrap;
   word-break: break-all;
+}
+.result-item__excerpt.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.result-item__toggle {
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--search-summary-color, #404040);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .grep-group {
   margin-bottom: 8px;

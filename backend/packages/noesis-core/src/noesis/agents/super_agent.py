@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Awaitable, Callable, Optional, TypeVar
 
 from deepagents.backends.protocol import BackendProtocol
 from langgraph.types import Command
@@ -97,6 +97,29 @@ def _compile_task_worker(
         name="task-worker",
         checkpointer=checkpointer,
     )
+
+
+_T = TypeVar("_T")
+
+
+async def _db_on_main_loop(
+    factory: Callable[[], Awaitable[_T]], *, name: str
+) -> _T:
+    """DB 协程经主 loop 调度后再等待。
+
+    pg_manager 连接池绑定主 loop，而子 Agent 回调可能在 executor 隔离
+    loop 上被 await（与 ``_create_followup_run`` 同理——冷恢复曾因直连
+    静默失败）。主 loop 未注册（评测/CLI 等单 loop 进程）时退回当前
+    loop 直连：该场景下池本就绑定当前 loop，直连即正确路径。
+    工厂参数而非协程：``run_on_main_loop`` 在主 loop 不可用时会关闭
+    传入的协程，回退需要重新构造一个。
+    """
+    from noesis.runtime.main_loop import run_on_main_loop
+
+    future = run_on_main_loop(factory(), name=name)
+    if future is None:
+        return await factory()
+    return await asyncio.wrap_future(future)
 
 
 class SuperAgent(BaseAgent):
@@ -285,38 +308,49 @@ class SuperAgent(BaseAgent):
         ) -> dict[str, str]:
             # 工具可能在并行 tool-call 中同时创建多个子 Agent；不要复用请求级
             # AsyncSession，单独取连接保证每个 launch 有独立事务边界。
-            from noesis.storage.postgres.manager import pg_manager
+            async def _launch() -> dict[str, str]:
+                from noesis.storage.postgres.manager import pg_manager
 
-            async with pg_manager.get_async_session_context() as child_db:
-                from noesis.services.subagent_session_service import SubagentSessionService
+                async with pg_manager.get_async_session_context() as child_db:
+                    from noesis.services.subagent_session_service import SubagentSessionService
 
-                # The launch use case owns the child session, initial messages and
-                # standard AgentRun in one transaction.  Keep this callback small so
-                # the tool layer cannot accidentally create a second source of truth.
-                # description = 简短标题（会话标题）；prompt = 完整任务指令（首条用户消息）
-                # effective_model_id = 角色解析后的生效模型（绑定值或父模型）
-                launch = await SubagentSessionService.launch(
-                    parent_session_id=session_id,
-                    user_id=user_id,
-                    description=description,
-                    prompt=prompt,
-                    tool_call_id=tool_call_id or None,
-                    model_id=effective_model_id,
-                    subagent_type=subagent_type,
-                    db=child_db,
-                )
-                return launch.to_dict()
+                    # The launch use case owns the child session, initial messages and
+                    # standard AgentRun in one transaction.  Keep this callback small so
+                    # the tool layer cannot accidentally create a second source of truth.
+                    # description = 简短标题（会话标题）；prompt = 完整任务指令（首条用户消息）
+                    # effective_model_id = 角色解析后的生效模型（绑定值或父模型）
+                    launch = await SubagentSessionService.launch(
+                        parent_session_id=session_id,
+                        user_id=user_id,
+                        description=description,
+                        prompt=prompt,
+                        tool_call_id=tool_call_id or None,
+                        model_id=effective_model_id,
+                        subagent_type=subagent_type,
+                        db=child_db,
+                    )
+                    return launch.to_dict()
+
+            return await _db_on_main_loop(
+                _launch, name=f"subagent-child-launch:{tool_call_id or description[:32]}")
 
         async def _delete_child_session(child_session_id: str) -> None:
-            from noesis.storage.postgres.manager import pg_manager
+            async def _delete() -> None:
+                from noesis.storage.postgres.manager import pg_manager
 
-            async with pg_manager.get_async_session_context() as child_db:
-                await ChatService.delete_session(child_session_id, user_id, db=child_db)
+                async with pg_manager.get_async_session_context() as child_db:
+                    await ChatService.delete_session(child_session_id, user_id, db=child_db)
+
+            await _db_on_main_loop(
+                _delete, name=f"subagent-child-delete:{child_session_id}")
 
         async def _fail_child_run(run_id: str, error: str) -> None:
-            from noesis.services.subagent_session_service import SubagentSessionService
+            async def _reject() -> None:
+                from noesis.services.subagent_session_service import SubagentSessionService
 
-            await SubagentSessionService.mark_launch_rejected(run_id, error)
+                await SubagentSessionService.mark_launch_rejected(run_id, error)
+
+            await _db_on_main_loop(_reject, name=f"subagent-run-reject:{run_id}")
 
         async def _create_followup_run(
             child_session_id: str,

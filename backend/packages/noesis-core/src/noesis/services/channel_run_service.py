@@ -45,6 +45,8 @@ class ChannelRunResult:
     finish_reason: str
     hitl_pending: bool = False
     hitl_payload: Optional[Dict[str, Any]] = None
+    # CLI 等调用方在启动前预指定 run_id 时回显，供其定位订阅/DB 行
+    run_id: str = ""
 
 
 async def _set_delivery_result(
@@ -186,6 +188,7 @@ async def _headless_stream(
                 or "需要审批后继续。"
             )
             return ChannelRunResult(
+                run_id=run_id or "",
                 session_id=session_id,
                 assistant_message_id=bridge.assistant_message_id,
                 plain_text=plain,
@@ -208,6 +211,7 @@ async def _headless_stream(
         if not plain:
             plain = "（已完成，无文本回复）"
         return ChannelRunResult(
+            run_id=run_id or "",
             session_id=session_id,
             assistant_message_id=bridge.assistant_message_id,
             plain_text=plain,
@@ -242,10 +246,15 @@ async def run_channel_agent(
     outbound: Optional[Any] = None,
     force_enabled_skills: Optional[List[str]] = None,
     disable_hitl: bool = False,
+    run_id: Optional[str] = None,
+    model_id: Optional[str] = None,
 ) -> ChannelRunResult:
     """
     已配对入站：写 SSOT user 消息 → SuperAgent headless → 终态落库 → 返回纯文本。
     outbound：可选 TelegramOutbound，边跑边伪流式投影。
+    run_id：调用方可预指定（如 CLI 需在启动前订阅事件流）；缺省自生成。
+    model_id：请求显式模型（同 QaService.request_model_id 语义，写入会话
+    extra）；缺省走会话 extra → 用户默认偏好 → 平台默认。
     """
     text = (query or "").strip()
     if not text:
@@ -285,7 +294,7 @@ async def run_channel_agent(
         resolved_model_id = await qs._resolve_model_for_query(
             session_id=session_id,
             user_id=str(current_user.user_id),
-            request_model_id=None,
+            request_model_id=model_id,
             db=db,
         )
         resolved_model_name = qs._resolved_model_name(resolved_model_id)
@@ -341,7 +350,7 @@ async def run_channel_agent(
         ):
             ctx["_assistant_db_id"] = bridge.assistant_message_id
 
-        run_id = str(uuid.uuid4())
+        run_id = run_id or str(uuid.uuid4())
         now = int(time.time() * 1000)
         request_identity = f"{origin}:{session_id}:{external_message_id or uuid.uuid4()}"
         client_request_id = f"channel:{hashlib.sha256(request_identity.encode()).hexdigest()[:48]}"
