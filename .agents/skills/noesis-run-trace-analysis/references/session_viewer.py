@@ -2,7 +2,9 @@
 
 用法（backend/ 下）:
     # 裸命令即全量加载：noesis（Postgres 直连）必挂，
-    # 检测到 ~/.codex/sessions 自动挂 codex，浏览器自动打开
+    # 检测到默认路径自动挂 codex（~/.codex/sessions）、
+    # opencode（~/.local/share/opencode/opencode.db）与
+    # claude-code（~/.claude/projects），浏览器自动打开
     uv run python ../.agents/skills/noesis-run-trace-analysis/references/session_viewer.py
 
     # 额外源（可叠加）
@@ -11,9 +13,10 @@
         --codex /path/to/other_sessions
 
 数据源（Provider）：
-  noesis    Postgres 直连（t_chat_session / t_chat_message，usage 来自 extra.usage）
-  opencode  SQLite .db（session / message / part 表，即 trace_view.html 的库）
-  codex     rollout JSONL 目录（~/.codex/sessions，按日期子目录扫描）
+  noesis       Postgres 直连（t_chat_session / t_chat_message，usage 来自 extra.usage）
+  opencode     SQLite .db（session / message / part 表，即 trace_view.html 的库）
+  codex        rollout JSONL 目录（~/.codex/sessions，按日期子目录扫描）
+  claude-code  会话 JSONL 目录（~/.claude/projects/<project>/<session>.jsonl）
 
 扩展新源：实现 list_sessions() / get_messages(session_id) 返回统一契约，
 注册进 PROVIDERS 即可（见 Provider 基类 docstring）。
@@ -45,6 +48,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 SKILL_REF_DIR = Path(__file__).resolve().parent
@@ -153,6 +157,11 @@ body { font-family: -apple-system, 'Inter', system-ui, sans-serif; background: v
 .tool-summary { color: var(--fg2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .tool-detail { display: none; margin-top: 8px; }
 .tool-call.open .tool-detail { display: block; }
+.src-row { margin: 4px 0 10px; }
+.src-title { font-size: 12px; }
+.src-title a { color: var(--primary); text-decoration: none; }
+.src-title a:hover { text-decoration: underline; }
+.src-excerpt { font-size: 11px; color: var(--fg3); margin-top: 2px; line-height: 1.5; }
 .tool-label { font-size: 10px; color: var(--fg3); margin: 6px 0 3px; }
 pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: rgba(0,0,0,0.55); padding: 8px; border-radius: 8px; font-family: 'SF Mono', ui-monospace, monospace; }
 .reasoning-block { background: var(--bg2); border-left: 3px solid var(--border); border-radius: var(--radius); padding: 6px 12px; }
@@ -173,6 +182,25 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background:
 .md-content pre code { background: none; padding: 0; }
 .md-content table { border-collapse: collapse; margin: 6px 0; } .md-content th, .md-content td { border: 1px solid var(--border); padding: 4px 8px; font-size: 12px; }
 .tree-line { color: var(--fg3); }
+.caret { display: inline-block; transition: transform .15s; color: var(--fg3); font-size: 10px; }
+.tool-call.open .caret, .reasoning-toggle.open .caret { transform: rotate(90deg); }
+.conv-toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 0 2px; flex-wrap: wrap; }
+.conv-toolbar .chip { cursor: pointer; font-size: 11px; padding: 2px 10px; border-radius: 10px;
+  border: 1px solid var(--border); color: var(--fg3); user-select: none; }
+.conv-toolbar .chip.on { color: var(--primary); border-color: var(--primary); }
+.conv-toolbar input { background: transparent; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg1); font-size: 12px; padding: 3px 8px; width: 140px; outline: none; }
+.conv-toolbar .act { background: transparent; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg2); font-size: 11px; cursor: pointer; padding: 3px 8px; }
+.conv-toolbar .act:hover { border-color: var(--primary); color: var(--primary); }
+.content { position: relative; }
+.jump-nav { position: absolute; right: 18px; bottom: 14px; display: flex; gap: 6px; z-index: 5; }
+.jump-nav .act { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--panel-bg, rgba(20,20,28,.8)); color: var(--fg2); cursor: pointer; font-size: 13px; }
+#toast { position: fixed; left: 50%; bottom: 36px; transform: translateX(-50%); background: rgba(0,0,0,.75);
+  color: #fff; font-size: 12px; padding: 6px 14px; border-radius: 8px; opacity: 0;
+  transition: opacity .25s; pointer-events: none; z-index: 99; }
+#toast.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -201,14 +229,44 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background:
     <div class="conv-header" id="convHeader" style="display:none">
       <div class="conv-title" id="convTitle"></div>
       <div class="conv-stats" id="convStats"></div>
+      <div class="conv-toolbar">
+        <span class="chip on" data-k="all" onclick="setKindFilter('all')">全部</span>
+        <span class="chip" data-k="text" onclick="setKindFilter('text')">文本</span>
+        <span class="chip" data-k="tool" onclick="setKindFilter('tool')">工具</span>
+        <span class="chip" data-k="reasoning" onclick="setKindFilter('reasoning')">思考</span>
+        <input id="convFilter" placeholder="会话内筛选…" oninput="applyConvFilter()">
+        <span id="filterCount" style="font-size:11px;color:var(--fg3)"></span>
+        <span style="flex:1"></span>
+        <button class="act" onclick="toggleAllDetails(true)">全部展开</button>
+        <button class="act" onclick="toggleAllDetails(false)">全部折叠</button>
+        <button class="act" id="copyIdBtn" onclick="copyText(currentSid)">复制 ID</button>
+      </div>
     </div>
     <div class="messages" id="messages"><div class="empty-state">选择左侧会话查看对话过程</div></div>
     <div class="stats-bar" id="statsBar" style="display:none"></div>
+    <div class="jump-nav">
+      <button class="act" onclick="jumpMsgs(false)" title="回顶部">↑</button>
+      <button class="act" onclick="jumpMsgs(true)" title="回底部">↓</button>
+    </div>
   </div>
 </div>
+<div id="toast"></div>
 <script>
 let allSessions = [];
 let currentSource = null;
+let currentSid = null;
+let kindFilter = 'all';
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), 1500);
+}
+function copyText(s) {
+  navigator.clipboard.writeText(s).then(() => toast('已复制：' + String(s).slice(0, 40) + (String(s).length > 40 ? '…' : '')));
+}
 
 // CDN 脚本（marked/hljs）加载失败不致命：无 marked 时降级为转义文本
 if (window.marked && marked.setOptions) { try { marked.setOptions({ breaks: true, gfm: true }); } catch {} }
@@ -269,7 +327,8 @@ function renderSessionList(q) {
     el.innerHTML = `<div class="sess-title">${indent}${esc((s.title||'').slice(0,60))}</div>
       <div class="sess-meta"><span>${esc(s.id.slice(0,10))}…</span>${badges.join('')}<span>${s.n_msgs}msg</span><span>${time}</span></div>`;
     el.onclick = () => selectSession(s.id, el);
-    el.oncontextmenu = (e) => { e.preventDefault(); navigator.clipboard.writeText(s.id); };
+    el.oncontextmenu = (e) => { e.preventDefault(); copyText(s.id); };
+    el.title = '右键复制会话 id';
     list.appendChild(el);
     (byParent[s.id]||[]).forEach(c => render(c, depth+1));
   };
@@ -284,13 +343,55 @@ async function selectSession(id, el) {
   const r = await fetch('/api/messages?source=' + encodeURIComponent(currentSource) + '&session=' + encodeURIComponent(id));
   const d = await r.json();
   if (d.error) { document.getElementById('messages').innerHTML = `<div class="empty-state">${esc(d.error)}</div>`; return; }
+  currentSid = id;
+  kindFilter = 'all';
+  document.querySelectorAll('.conv-toolbar .chip').forEach(c => c.classList.toggle('on', c.dataset.k === 'all'));
+  const kw = document.getElementById('convFilter');
+  kw.value = '';
+  document.getElementById('filterCount').textContent = '';
   renderConversation(d);
+}
+
+function setKindFilter(k) {
+  kindFilter = k;
+  document.querySelectorAll('.conv-toolbar .chip').forEach(c => c.classList.toggle('on', c.dataset.k === k));
+  applyConvFilter();
+}
+
+function applyConvFilter() {
+  const box = document.getElementById('messages');
+  const kw = document.getElementById('convFilter').value.trim().toLowerCase();
+  let visible = 0, total = 0;
+  for (const el of box.children) {
+    if (!el.dataset || !el.dataset.kind) continue;
+    total++;
+    const kindOk = kindFilter === 'all' || el.dataset.kind === kindFilter;
+    const kwOk = !kw || el.textContent.toLowerCase().includes(kw);
+    const show = kindOk && kwOk;
+    el.style.display = show ? '' : 'none';
+    if (show) visible++;
+  }
+  document.getElementById('filterCount').textContent =
+    (kindFilter !== 'all' || kw) ? `${visible}/${total}` : '';
+}
+
+function toggleAllDetails(open) {
+  document.querySelectorAll('#messages .tool-call').forEach(el => el.classList.toggle('open', open));
+  document.querySelectorAll('#messages .reasoning-toggle').forEach(el => {
+    el.classList.toggle('open', open);
+    if (el.nextElementSibling) el.nextElementSibling.classList.toggle('open', open);
+  });
+}
+
+function jumpMsgs(bottom) {
+  const box = document.getElementById('messages');
+  box.scrollTo({ top: bottom ? box.scrollHeight : 0 });
 }
 
 function renderConversation(d) {
   document.getElementById('convHeader').style.display = '';
   document.getElementById('convTitle').textContent = d.title;
-  document.getElementById('convTitle').title = d.session_id + '（右键侧栏项可复制 id）';
+  document.getElementById('convTitle').title = d.session_id + '（右键侧栏项或点「复制 ID」可复制）';
   document.getElementById('convStats').textContent =
     `${d.messages.length} messages · ${d.stats.tool_count} tools · ${d.stats.reasoning_count} reasoning`;
   const box = document.getElementById('messages');
@@ -300,6 +401,7 @@ function renderConversation(d) {
       if (item.kind === 'text') {
         const div = document.createElement('div');
         div.className = 'msg msg-' + (m.role === 'user' ? 'user' : 'assistant');
+        div.dataset.kind = 'text';
         div.innerHTML = `<div class="msg-avatar">${m.role === 'user' ? 'U' : 'A'}</div>
           <div class="msg-body"><div class="msg-role">${m.role}${m.origin ? ' · ' + m.origin : ''}</div>
           <div class="msg-inner"><div class="md-content">${renderMd(item.text)}</div></div></div>`;
@@ -308,6 +410,7 @@ function renderConversation(d) {
         // 来源清单是元数据不是对话内容：折叠为单行摘要
         const div = document.createElement('div');
         div.className = 'retrieval-summary';
+        div.dataset.kind = 'retrieval';
         const n = (item.results || []).length;
         div.innerHTML = `<span style="color:var(--fg3)">📎 检索来源清单（${n} 条，run 结束时注入）</span>`;
         div.onclick = () => {
@@ -320,29 +423,46 @@ function renderConversation(d) {
       } else if (item.kind === 'tool') {
         const div = document.createElement('div');
         div.className = 'tool-call';
+        div.dataset.kind = 'tool';
         const summary = toolSummary(item.tool, item.input);
         const fullIn = item.input ? JSON.stringify(item.input, null, 2) : '';
         const statusCls = item.status === 'error' ? ' error' : '';
+        // 检索类工具：原始结果（标题/URL/摘要）内联进展开区
+        let sourcesHtml = '';
+        if (item.sources && item.sources.length) {
+          const rows = item.sources.map((s, i) => {
+            const title = esc(s.title || s.url || s.file_name || `来源 ${i+1}`);
+            const url = esc(s.url || '');
+            const ex = esc(String(s.excerpt || '').slice(0, 300));
+            return `<div class="src-row">
+              <div class="src-title">${i+1}. ${url ? `<a href="${url}" target="_blank" rel="noopener">${title}</a>` : title}</div>
+              ${ex ? `<div class="src-excerpt">${ex}</div>` : ''}</div>`;
+          }).join('');
+          sourcesHtml = `<div class="tool-label">来源（${item.sources.length} 条）</div>${rows}`;
+        }
         div.innerHTML = `<div class="tool-row" onclick="this.parentElement.classList.toggle('open')">
-            <span style="color:var(--fg3)">▶</span><span class="tool-name">${esc(item.tool)}</span>
+            <span class="caret">▶</span><span class="tool-name">${esc(item.tool)}</span>
             <span class="tool-summary" title="${esc(summary)}">${esc(summary)}</span>
             ${item.status ? `<span class="tool-status${statusCls}">${esc(item.status)}</span>` : ''}</div>
           <div class="tool-detail">
             ${item.error ? `<div class="tool-label" style="color:var(--error)">Error</div><pre style="color:var(--error)">${esc(item.error)}</pre>` : ''}
             <div class="tool-label">Input</div><pre>${esc(fullIn && fullIn !== summary ? fullIn : '')}</pre>
-            <div class="tool-label">Output</div><pre>${esc((item.output||'').slice(0,12000))}</pre>
+            ${item.output && item.output !== summary ? `<div class="tool-label">Output</div><pre>${esc(item.output.slice(0,12000))}</pre>` : ''}
+            ${sourcesHtml}
           </div>`;
         box.appendChild(div);
       } else if (item.kind === 'reasoning') {
         const div = document.createElement('div');
         div.className = 'reasoning-block';
-        div.innerHTML = `<div class="reasoning-toggle" onclick="this.nextElementSibling.classList.toggle('open')">▶ Reasoning（${item.text.length} 字）</div>
+        div.dataset.kind = 'reasoning';
+        div.innerHTML = `<div class="reasoning-toggle" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')"><span class="caret">▶</span> Reasoning（${item.text.length} 字）</div>
           <div class="reasoning-content">${renderMd(item.text.slice(0,8000))}</div>`;
         box.appendChild(div);
       } else if (item.kind === 'usage') {
         const u = item.usage;
         const div = document.createElement('div');
         div.className = 'usage-marker';
+        div.dataset.kind = 'usage';
         // ttft_ms 落库口径是各次调用求和（与前端 statsFormat.ts 一致），展示除以 steps 得平均首字延迟
         const ttftAvg = u.ttft_ms > 0 && u.steps > 0 ? (u.ttft_ms / u.steps / 1000).toFixed(1) + 's' : '-';
         div.textContent = `⚡ ${u.steps||'-'} steps · in ${fmt(u.input_tokens)} · out ${fmt(u.output_tokens)} · cache ${fmt(u.cache_read_tokens)} · llm ${((u.llm_ms||0)/1000).toFixed(0)}s · ttft(平均) ${ttftAvg}`;
@@ -350,6 +470,18 @@ function renderConversation(d) {
       }
     }
   }
+  // 右键消息正文 → 复制原文；点击链接 → 新标签页（避免把查看器本身导航走）
+  box.oncontextmenu = (e) => {
+    const msg = e.target.closest('.msg');
+    if (!msg) return;
+    e.preventDefault();
+    const t = msg.querySelector('.md-content');
+    if (t) copyText(t.textContent);
+  };
+  box.onclick = (e) => {
+    const a = e.target.closest('a');
+    if (a && a.href) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+  };
   const bar = document.getElementById('statsBar');
   bar.style.display = '';
   bar.innerHTML = `<div>Messages: <b>${d.messages.length}</b></div>
@@ -482,10 +614,14 @@ class NoesisProvider(Provider):
             "coalesce(sum((m.extra->'usage'->>'input_tokens')::float8),0) AS input_tokens, "
             "coalesce(sum((m.extra->'usage'->>'output_tokens')::float8),0) AS output_tokens "
             "FROM t_chat_message m WHERE m.deleted_at IS NULL GROUP BY 1")}
+        # jsonb + LIKE 排除：个别消息 content 含真实 \u0000 转义（抓取的原文引用），
+        # 本版 PG 的 json/jsonb 输入解析都拒绝它——毒行排除出聚合（仅影响该会话
+        # 侧栏工具计数，详情页走 Python 端解析不受影响）
         tool_counts = {r["session_id"]: r["n"] for r in await conn.fetch(
             "SELECT m.session_id, count(*) AS n FROM t_chat_message m, "
-            "json_array_elements(CAST(m.content AS json)->'parts') p "
-            "WHERE m.deleted_at IS NULL AND p->>'type' IN ('tool','retrieval') GROUP BY 1")}
+            "jsonb_array_elements(CAST(m.content AS jsonb)->'parts') p "
+            "WHERE m.deleted_at IS NULL AND m.content::text NOT LIKE '%\\u0000%' "
+            "AND p->>'type' IN ('tool','retrieval') GROUP BY 1")}
 
         sessions = []
         for r in await conn.fetch(
@@ -524,6 +660,11 @@ class NoesisProvider(Provider):
             session_id)
 
         messages, stats = [], _empty_stats()
+        # 检索类工具（web_search/web_fetch/KB）的原始结果持久化在 retrieval part，
+        # 工具 part 的 output 只留「检索到 N 条来源」摘要；这里按 tool_call_id
+        # 把结果接回对应工具块，消息尾部已内联的 retrieval part 不再重复渲染
+        retrieval_by_call: dict[str, dict] = {}
+        parsed_rows = []
         for r in rows:
             try:
                 parts = (json.loads(r["content"]) or {}).get("parts") or []
@@ -535,6 +676,12 @@ class NoesisProvider(Provider):
                 extra = {}
             if not isinstance(extra, dict):
                 extra = {}
+            parsed_rows.append((r, parts, extra))
+            for p in parts:
+                if isinstance(p, dict) and p.get("type") == "retrieval" and p.get("tool_call_id"):
+                    retrieval_by_call[str(p["tool_call_id"])] = p
+        consumed_retrievals: set[int] = set()
+        for r, parts, extra in parsed_rows:
             items = []
             for p in parts:
                 if not isinstance(p, dict):
@@ -546,14 +693,20 @@ class NoesisProvider(Provider):
                     items.append({"kind": "reasoning", "text": str(p["content"])})
                     stats["reasoning_count"] += 1
                 elif t == "tool":
-                    items.append({"kind": "tool", "tool": str(p.get("name") or "?"),
-                                  "input": p.get("input") or {},
-                                  "output": str(p.get("output") or "")})
+                    item = {"kind": "tool", "tool": str(p.get("name") or "?"),
+                            "input": p.get("input") or {},
+                            "output": str(p.get("output") or "")}
+                    ret = retrieval_by_call.get(str(p.get("tool_call_id") or ""))
+                    if ret is not None:
+                        item["sources"] = ret.get("results") or []
+                        consumed_retrievals.add(id(ret))
+                    items.append(item)
                     stats["tool_count"] += 1
                 elif t == "retrieval":
-                    # 来源清单是 run 收尾时注入的元数据：折叠渲染，不计入工具数
-                    items.append({"kind": "retrieval",
-                                  "results": p.get("results") or []})
+                    # 已内联进工具块的不重复展示；无关联（旧数据）保持折叠摘要
+                    if id(p) not in consumed_retrievals:
+                        items.append({"kind": "retrieval",
+                                      "results": p.get("results") or []})
             usage = extra.get("usage")
             if usage:
                 items.append({"kind": "usage", "usage": usage})
@@ -572,24 +725,28 @@ class OpencodeProvider(Provider):
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        # 只读连接；HTTP 服务多线程处理请求，须允许跨线程复用
+        self._conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True,
+                                     check_same_thread=False)
 
     def _row(self, sql, args=()):
         return self._conn.execute(sql, args).fetchall()
 
     def list_sessions(self) -> dict:
-        sess = self._row("SELECT id, title, parent_id, time_created FROM session ORDER BY time_created")
+        sess = self._row("SELECT id, title, parent_id, time_created FROM session ORDER BY time_created DESC")
         n_msgs = dict(self._row("SELECT session_id, count(*) FROM message GROUP BY 1"))
-        tokens = {}
-        for sid, ti, to in self._row(
-                "SELECT p.session_id, "
-                "sum(json_extract(p.data,'$.tokens.input')), "
-                "sum(json_extract(p.data,'$.tokens.output')) "
-                "FROM part p WHERE json_extract(p.data,'$.type')='step-finish' GROUP BY 1"):
+        # 一遍 part 扫描同时算出 token 与工具数（part 表大，json_extract 全扫约 1.6s/遍）
+        tokens, tool_counts = {}, {}
+        for sid, ti, to, tc in self._row(
+                "SELECT session_id, "
+                "sum(CASE WHEN json_extract(data,'$.type')='step-finish' "
+                "    THEN json_extract(data,'$.tokens.input') END), "
+                "sum(CASE WHEN json_extract(data,'$.type')='step-finish' "
+                "    THEN json_extract(data,'$.tokens.output') END), "
+                "sum(CASE WHEN json_extract(data,'$.type')='tool' THEN 1 END) "
+                "FROM part GROUP BY 1"):
             tokens[sid] = (ti or 0, to or 0)
-        tool_counts = dict(self._row(
-            "SELECT session_id, count(*) FROM part "
-            "WHERE json_extract(data,'$.type')='tool' GROUP BY 1"))
+            tool_counts[sid] = tc or 0
         sessions = [{
             "id": r[0], "parent_id": r[2], "title": r[1] or "",
             "created_at": r[3], "kind": "root",
@@ -664,6 +821,12 @@ class CodexProvider(Provider):
         for f in glob.glob(str(sessions_dir / "**" / "rollout-*.jsonl"), recursive=True):
             self._files[Path(f).stem] = Path(f)
 
+    def _rescan(self) -> None:
+        """轻量重扫：新 rollout 文件落盘后无需重启即可见于列表。"""
+        found = glob.glob(str(self.dir / "**" / "rollout-*.jsonl"), recursive=True)
+        if {Path(f).stem for f in found} != set(self._files):
+            self._files = {Path(f).stem: Path(f) for f in found}
+
     def _parse(self, path: Path) -> dict:
         meta, events = {}, []
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -680,6 +843,7 @@ class CodexProvider(Provider):
         return meta, events
 
     def list_sessions(self) -> dict:
+        self._rescan()
         sessions = []
         for sid, path in self._files.items():
             try:
@@ -747,6 +911,7 @@ class CodexProvider(Provider):
         return total
 
     def get_messages(self, session_id: str) -> dict:
+        self._rescan()
         path = self._files.get(session_id)
         if not path:
             return {"error": f"session not found: {session_id}"}
@@ -859,6 +1024,252 @@ class CodexProvider(Provider):
             self._last_usage = None
         return {"session_id": session_id, "title": str(meta.get("cwd", session_id)),
                 "messages": messages, "stats": stats}
+
+
+# ---------------------------------------------------------------- claude-code Provider（JSONL）
+
+def _cc_iso_ms(s: Any) -> int | None:
+    """Claude Code 的 ISO 时间戳（…Z）→ Unix 毫秒。"""
+    if not s:
+        return None
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+class ClaudeCodeProvider(Provider):
+    """Claude Code 的会话文件（~/.claude/projects/<project>/<session>.jsonl）。
+
+    一个 jsonl = 一个会话。user 事件：str content = 用户输入，
+    tool_result 列表 = 工具输出（按 tool_use_id 回填到对应 tool_use）；
+    assistant 事件：thinking / text / tool_use 块 → reasoning / text / tool，
+    逐 API 调用的 usage 累加后按 assistant 连续段聚成一条 usage。
+    新版 Task 子 Agent 转录在 <session>/subagents/agent-*.jsonl，挂为
+    parent_id 指向主会话的子会话；主文件内联的 isSidechain 行不进主时间线。
+    """
+
+    id = "claude-code"
+    label = "claude-code (projects)"
+
+    def __init__(self, projects_dir: Path):
+        self.dir = projects_dir
+        self._files: dict[str, Path] = {}       # 主会话：stem → path
+        self._parent_of: dict[str, str] = {}    # 子 Agent 转录：stem → 主会话 id
+        for f in glob.glob(str(projects_dir / "*" / "*.jsonl")):
+            self._files[Path(f).stem] = Path(f)
+        for f in glob.glob(str(projects_dir / "*" / "*" / "subagents" / "*.jsonl")):
+            stem = Path(f).stem
+            self._files[stem] = Path(f)
+            self._parent_of[stem] = Path(f).parent.parent.name
+        self._titles: dict[str, str] = {}   # session_id → 标题（扫描时顺带收集）
+        self._index: list[dict] | None = None  # 首次 list_sessions 后缓存
+        self._last_scan = 0.0               # 上次重扫见过的最大 mtime
+
+    def _rescan(self) -> None:
+        """轻量重扫：glob 一次文件列表，文件集或 mtime 有变才重建索引。
+
+        主会话文件被 Claude Code 追加、或出现新会话/新子 Agent 转录时，
+        下次刷新即可见，无需重启进程。
+        """
+        mains = glob.glob(str(self.dir / "*" / "*.jsonl"))
+        subs = glob.glob(str(self.dir / "*" / "*" / "subagents" / "*.jsonl"))
+        files = {Path(f).stem: Path(f) for f in mains}
+        parent_of = {}
+        for f in subs:
+            stem = Path(f).stem
+            files[stem] = Path(f)
+            parent_of[stem] = Path(f).parent.parent.name
+        max_mtime = max((p.stat().st_mtime for p in files.values()), default=0.0)
+        if set(files) != set(self._files) or max_mtime != self._last_scan:
+            self._files = files
+            self._parent_of = parent_of
+            self._index = None
+            self._last_scan = max_mtime
+
+    def _events(self, path: Path) -> list[dict]:
+        events = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                continue
+        return events
+
+    def _title_from(self, events: list[dict], sid: str) -> str:
+        for e in events:
+            if sid not in self._parent_of and e.get("isSidechain"):
+                continue
+            if e.get("type") != "user":
+                continue
+            m = e.get("message") or {}
+            cont = m.get("content")
+            if not isinstance(cont, str) or not cont.strip():
+                continue
+            if cont.lstrip().startswith(("<task-notification", "<local-command",
+                                          "<command-name", "Caveat:")):
+                continue
+            return cont.strip()[:80]
+        return sid
+
+    def list_sessions(self) -> dict:
+        self._rescan()
+        if self._index is not None:
+            return {"count": len(self._index),
+                    "total_messages": sum(s["n_msgs"] for s in self._index),
+                    "sessions": self._index}
+        sessions = []
+        for sid, path in self._files.items():
+            try:
+                events = self._events(path)
+            except OSError:
+                continue
+            is_sub = sid in self._parent_of
+            n_user = n_asst = n_tools = 0
+            usage_in = usage_out = usage_cache = 0.0
+            first_ts = last_ts = None
+            for e in events:
+                if not is_sub and e.get("isSidechain"):
+                    continue
+                if e.get("type") not in ("user", "assistant"):
+                    continue
+                ts = _cc_iso_ms(e.get("timestamp"))
+                if ts:
+                    first_ts = first_ts or ts
+                    last_ts = ts
+                if e["type"] == "assistant":
+                    n_asst += 1
+                    m = e.get("message") or {}
+                    for b in m.get("content") or []:
+                        if isinstance(b, dict) and b.get("type") == "tool_use":
+                            n_tools += 1
+                    u = m.get("usage") or {}
+                    usage_in += float(u.get("input_tokens") or 0)
+                    usage_out += float(u.get("output_tokens") or 0)
+                    usage_cache += float(u.get("cache_read_input_tokens") or 0)
+                else:
+                    if isinstance((e.get("message") or {}).get("content"), str):
+                        n_user += 1
+            title = self._title_from(events, sid)
+            self._titles[sid] = title
+            sessions.append({
+                "id": sid, "parent_id": self._parent_of.get(sid), "title": title,
+                "created_at": first_ts or int(path.stat().st_mtime * 1000),
+                "updated_at": last_ts or int(path.stat().st_mtime * 1000),
+                "kind": "subagent" if is_sub else "root", "n_msgs": n_user + n_asst,
+                "input_tokens": usage_in, "output_tokens": usage_out,
+                "tool_count": n_tools,
+            })
+            if usage_cache:
+                sessions[-1]["cache_read_tokens"] = usage_cache
+        sessions.sort(key=lambda s: s["updated_at"] or 0, reverse=True)
+        self._index = sessions
+        return {"count": len(sessions),
+                "total_messages": sum(s["n_msgs"] for s in sessions),
+                "sessions": sessions}
+
+    def get_messages(self, session_id: str) -> dict:
+        self._rescan()
+        path = self._files.get(session_id)
+        if path is None:
+            return {"error": f"session not found: {session_id}"}
+        events = self._events(path)
+        is_sub = session_id in self._parent_of
+
+        # 第一遍：tool_use_id → 输出文本（tool_result 在 tool_use 之后到达）
+        tool_outputs: dict[str, str] = {}
+        for e in events:
+            if (not is_sub and e.get("isSidechain")) or e.get("type") != "user":
+                continue
+            for b in (e.get("message") or {}).get("content") or []:
+                if not isinstance(b, dict) or b.get("type") != "tool_result":
+                    continue
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = "\n".join(str(x.get("text") or "") for x in c
+                                  if isinstance(x, dict))
+                tool_outputs[str(b.get("tool_use_id"))] = str(c or "")
+
+        stats = _empty_stats()
+        messages: list[dict] = []
+        cur_items: list[dict] = []          # 当前 assistant 连续段
+        cur_usage = {"steps": 0, "input_tokens": 0.0, "output_tokens": 0.0,
+                     "cache_read_tokens": 0.0}
+
+        def flush_assistant():
+            if not cur_items and not cur_usage["steps"]:
+                return
+            items = list(cur_items)
+            if cur_usage["steps"]:
+                items.append({"kind": "usage", "usage": {**cur_usage,
+                                                        "llm_ms": None, "ttft_ms": None}})
+                stats["input_tokens"] += cur_usage["input_tokens"]
+                stats["output_tokens"] += cur_usage["output_tokens"]
+                stats["cache_read_tokens"] += cur_usage["cache_read_tokens"]
+            messages.append({"id": f"m{len(messages)}", "role": "assistant",
+                             "origin": None, "items": items})
+            cur_items.clear()
+            for k in cur_usage:
+                cur_usage[k] = 0
+
+        for e in events:
+            if not is_sub and e.get("isSidechain"):
+                continue
+            etype = e.get("type")
+            if etype == "user":
+                m = e.get("message") or {}
+                cont = m.get("content")
+                if isinstance(cont, str):
+                    if cont.strip():
+                        flush_assistant()
+                        messages.append({"id": f"m{len(messages)}", "role": "user",
+                                         "origin": None,
+                                         "items": [{"kind": "text", "text": cont}]})
+                elif isinstance(cont, list):
+                    # tool_result 只回填；其余文本块（task 通知等）按用户消息渲染
+                    texts = [str(b.get("text") or "") for b in cont
+                             if isinstance(b, dict) and b.get("type") == "text"]
+                    if texts and any(t.strip() for t in texts):
+                        flush_assistant()
+                        messages.append({"id": f"m{len(messages)}", "role": "user",
+                                         "origin": None,
+                                         "items": [{"kind": "text",
+                                                    "text": "\n".join(texts)}]})
+            elif etype == "assistant":
+                m = e.get("message") or {}
+                for b in m.get("content") or []:
+                    if not isinstance(b, dict):
+                        continue
+                    bt = b.get("type")
+                    if bt == "thinking" and str(b.get("thinking") or "").strip():
+                        cur_items.append({"kind": "reasoning",
+                                          "text": str(b["thinking"])})
+                        stats["reasoning_count"] += 1
+                    elif bt == "text" and str(b.get("text") or "").strip():
+                        cur_items.append({"kind": "text", "text": str(b["text"])})
+                    elif bt == "tool_use":
+                        cur_items.append({
+                            "kind": "tool", "tool": str(b.get("name") or "?"),
+                            "input": b.get("input") or {},
+                            "output": tool_outputs.get(str(b.get("id")), ""),
+                        })
+                        stats["tool_count"] += 1
+                u = m.get("usage") or {}
+                if u.get("input_tokens") or u.get("output_tokens"):
+                    cur_usage["steps"] += 1
+                    cur_usage["input_tokens"] += float(u.get("input_tokens") or 0)
+                    cur_usage["output_tokens"] += float(u.get("output_tokens") or 0)
+                    cur_usage["cache_read_tokens"] += float(
+                        u.get("cache_read_input_tokens") or 0)
+        flush_assistant()
+        return {"session_id": session_id,
+                "title": self._titles.get(session_id) or self._title_from(events, session_id),
+                "messages": messages, "stats": stats}
+
+
 # ---------------------------------------------------------------- HTTP 服务
 
 PROVIDERS: dict[str, Provider] = {}
@@ -896,7 +1307,11 @@ class Handler(BaseHTTPRequestHandler):
             if not provider or not sid:
                 self._send(400, b'{"error": "source and session required"}', "application/json")
                 return
-            self._send(200, json.dumps(provider.get_messages(sid), ensure_ascii=False).encode(),
+            try:
+                payload = provider.get_messages(sid)
+            except Exception as exc:  # noqa: BLE001 坏参数/坏数据返回 JSON 错误，不让单请求 500 抛栈
+                payload = {"error": f"{type(exc).__name__}: {exc}"}
+            self._send(200, json.dumps(payload, ensure_ascii=False).encode(),
                        "application/json")
         else:
             self._send(404, b"not found", "text/plain")
@@ -905,12 +1320,14 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="多源会话轨迹查看器（裸命令即全量加载：noesis 数据库必挂，"
-                    "codex 检测到 ~/.codex/sessions 自动挂载）")
+                    "检测到默认路径自动挂 codex / opencode / claude-code）")
     ap.add_argument("--port", type=int, default=8899)
     ap.add_argument("--opencode", action="append", default=[],
                     metavar="DB_PATH", help="额外挂 opencode SQLite .db（可多次）")
     ap.add_argument("--codex", action="append", default=[],
                     metavar="SESSIONS_DIR", help="额外挂 codex 会话目录（可多次）")
+    ap.add_argument("--claude-code", action="append", default=[],
+                    metavar="PROJECTS_DIR", help="额外挂 Claude Code projects 目录（可多次）")
     args = ap.parse_args()
 
     errors = []
@@ -919,7 +1336,13 @@ def main() -> int:
         PROVIDERS[p.id] = p
     except Exception as exc:  # noqa: BLE001
         errors.append(f"noesis: {exc}")
-    for i, db_path in enumerate(args.opencode):
+    opencode_dbs = [Path(s).expanduser() for s in args.opencode]
+    default_oc = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    if default_oc.is_file() and not any(d.resolve() == default_oc.resolve() for d in opencode_dbs):
+        opencode_dbs.insert(0, default_oc)
+    for i, db_path in enumerate(opencode_dbs):
+        if not db_path.is_file():
+            continue
         try:
             p = OpencodeProvider(Path(db_path).expanduser())
             p.id = f"opencode-{i}" if i else "opencode"
@@ -941,6 +1364,20 @@ def main() -> int:
             PROVIDERS[p.id] = p
         except Exception as exc:  # noqa: BLE001
             errors.append(f"codex {sdir}: {exc}")
+    cc_dirs = [Path(s).expanduser() for s in args.claude_code]
+    default_cc = Path.home() / ".claude" / "projects"
+    if default_cc.is_dir() and not any(d.resolve() == default_cc.resolve() for d in cc_dirs):
+        cc_dirs.insert(0, default_cc)
+    for i, pdir in enumerate(cc_dirs):
+        if not pdir.is_dir():
+            continue
+        try:
+            p = ClaudeCodeProvider(Path(pdir).expanduser())
+            p.id = f"claude-code-{i}" if i else "claude-code"
+            p.label = f"claude-code ({Path(pdir).name})"
+            PROVIDERS[p.id] = p
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"claude-code {pdir}: {exc}")
 
     if not PROVIDERS:
         for e in errors:
