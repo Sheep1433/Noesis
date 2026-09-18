@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,12 @@ def _truthy(value: Optional[str]) -> bool:
 
 
 def load_eval_langfuse_settings() -> Optional[EvalLangfuseSettings]:
-    """从 evals/.env 加载；文件不存在或未配置 key 时返回 None。"""
+    """从 evals/.env 加载；文件不存在或未配置 key 时返回 None。
+
+    进程环境变量优先于 .env（与 cli_driver 的模型 env 同款语义）：
+    `LANGFUSE_TRACING_ENABLED=false` 可单次禁用（如对照跑不连 Langfuse），
+    不必改动 .env。
+    """
     if not EVAL_ENV_FILE.is_file():
         return None
     raw = dotenv_values(EVAL_ENV_FILE)
@@ -37,7 +43,10 @@ def load_eval_langfuse_settings() -> Optional[EvalLangfuseSettings]:
     base_url = str(
         raw.get("LANGFUSE_BASE_URL") or raw.get("LANGFUSE_HOST") or ""
     ).strip()
-    enabled = _truthy(raw.get("LANGFUSE_TRACING_ENABLED", "true"))
+    enabled = _truthy(
+        os.environ.get("LANGFUSE_TRACING_ENABLED")
+        or raw.get("LANGFUSE_TRACING_ENABLED", "true")
+    )
     return EvalLangfuseSettings(
         tracing_enabled=enabled,
         public_key=public_key,

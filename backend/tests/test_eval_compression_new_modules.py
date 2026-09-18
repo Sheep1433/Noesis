@@ -339,3 +339,42 @@ def test_resolve_runs_rejects_non_integer_env(monkeypatch):
     monkeypatch.setenv("NOESIS_COMPRESSION_EVAL_RUNS", "abc")
     with pytest.raises(SystemExit, match="正整数"):
         _resolve_runs(SimpleNamespace(runs=None))
+
+
+def test_fixture_grouped_summaries_no_cross_fixture_mixing():
+    """多 fixture 汇总按 fixture 分组：每行只含该 fixture 的 run，fixture
+    字段正确标注——混入一次 summarize_arm_runs 会产出跨 fixture 中位数
+    且错标（终版 100 题的教训固化）。"""
+    from evals.compression.__main__ import _fixture_grouped_summaries
+
+    def payload(fid, arm, score):
+        return {
+            "fixture_id": fid, "arm": arm, "run_index": 0,
+            "policy": {}, "eval_run_id": "t", "session_id": "s",
+            "compression": {"pre_tokens": 100, "pre_message_count": 5},
+            "probes": [
+                {"probe_id": pid, "layer": "macro", "recall": score, "completed": True,
+                 "scores": {"accuracy": 5, "artifact_trail": 5, "context_awareness": 5,
+                            "continuity": 5, "completeness": 5}}
+                for pid in ("p1", "p2")
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    payloads = {
+        "current": [payload("fx-a", "current", 2), payload("fx-b", "current", 0)],
+        "recovery": [payload("fx-a", "recovery", 2), payload("fx-b", "recovery", 2)],
+    }
+    rows = _fixture_grouped_summaries(payloads, ["fx-a", "fx-b"], ["current", "recovery"])
+    # 2 fixture × 2 arm = 4 行，各fixture各arm 一行
+    assert len(rows) == 4
+    by_key = {(r["fixture_id"], r["arm"]): r for r in rows}
+    assert set(by_key) == {("fx-a", "current"), ("fx-b", "current"),
+                           ("fx-a", "recovery"), ("fx-b", "recovery")}
+    # fx-a current = 满分 100%，fx-b current = 0——没有被彼此稀释
+    assert by_key[("fx-a", "current")]["recall_pct"] == 1.0
+    assert by_key[("fx-b", "current")]["recall_pct"] == 0.0
+    # 缺 fixture 的 arm 组合跳过而非报错
+    rows2 = _fixture_grouped_summaries({"current": [payload("fx-a", "current", 2)]},
+                                       ["fx-a", "fx-b"], ["current", "recovery"])
+    assert len(rows2) == 1 and rows2[0]["fixture_id"] == "fx-a"
