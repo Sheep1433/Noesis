@@ -4,6 +4,7 @@ import { ChevronDownOutline, GitNetworkOutline } from '@vicons/ionicons-v5'
 import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
+import { useLocalStorage, useWindowSize } from '@vueuse/core'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { wireTimestampMs } from '@/utils/formatTime'
 import { taskStatusLabel } from '@/utils/taskStatusLabels'
@@ -21,7 +22,20 @@ const emit = defineEmits<{
 }>()
 
 const show = defineModel<boolean>('show', { default: false })
-const { drawerWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.96 })
+const { drawerWidth: responsiveWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.96 })
+
+// 左边缘可拖拽调宽：与 SubagentConversationDrawer 共享同一份用户偏好
+const MIN_WIDTH = 420
+const customWidth = useLocalStorage('noesis:subagent-drawer-width', 0)
+const { width: windowWidth } = useWindowSize()
+const desktop = computed(() => windowWidth.value > 768)
+const drawerWidth = computed(() =>
+  (desktop.value && customWidth.value >= MIN_WIDTH ? customWidth.value : responsiveWidth.value),
+)
+
+function handleResize(width: number) {
+  customWidth.value = Math.round(Math.min(Math.max(width, MIN_WIDTH), windowWidth.value - 48))
+}
 const selectedTask = ref<TaskCatalogEntry | null>(null)
 const showDetail = ref(false)
 const selectedTaskResolved = computed(() => {
@@ -143,7 +157,16 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
 
 <template>
   <!-- 监控面板常开数分钟，默认黑遮罩会把主界面压暗成"换主题"的观感；透明遮罩保持主界面视觉不变 -->
-  <n-drawer v-model:show="show" placement="right" :width="drawerWidth" show-mask="transparent">
+  <n-drawer
+    v-model:show="show"
+    placement="right"
+    :width="drawerWidth"
+    :resizable="desktop"
+    :min-width="MIN_WIDTH"
+    :max-width="windowWidth - 48"
+    show-mask="transparent"
+    @update:width="handleResize"
+  >
     <n-drawer-content
       :title="showDetail && selectedTaskResolved ? selectedTaskResolved.description : '子 Agent 与后台命令'"
       closable
