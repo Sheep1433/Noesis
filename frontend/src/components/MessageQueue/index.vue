@@ -20,24 +20,24 @@ const dragIndex = ref<number | null>(null)
 </script>
 
 <template>
-  <div v-if="messages.length" class="followup-queue" data-testid="followup-queue">
+  <div v-if="messages.length" class="message-queue" data-testid="message-queue">
     <div
       v-for="(message, index) in messages"
       :key="`${index}-${message}`"
-      class="followup-queue__item"
-      :class="{ 'followup-queue__item--dragging': dragIndex === index }"
+      class="message-queue__item"
+      :class="{ 'message-queue__item--dragging': dragIndex === index }"
       draggable="true"
-      data-testid="followup-queue-item"
+      data-testid="message-queue-item"
       @dragstart="dragIndex = index"
       @dragover.prevent
       @drop.prevent="emit('reorder', dragIndex ?? index, index); dragIndex = null"
       @dragend="dragIndex = null"
     >
-      <span class="followup-queue__drag i-material-symbols:drag-indicator" aria-hidden="true"></span>
-      <span class="followup-queue__text" :title="message">{{ message }}</span>
+      <span class="message-queue__drag i-material-symbols:drag-indicator" aria-hidden="true"></span>
+      <span class="message-queue__text" :title="message">{{ message }}</span>
       <button
         type="button"
-        class="followup-queue__send"
+        class="message-queue__send"
         title="立即发送：空闲时立即开跑，运行中衔接为当前轮后的下一轮"
         @click="emit('sendNow', index)"
       >
@@ -46,7 +46,7 @@ const dragIndex = ref<number | null>(null)
       </button>
       <button
         type="button"
-        class="followup-queue__icon"
+        class="message-queue__icon"
         title="编辑后重新排队"
         @click="emit('edit', index)"
       >
@@ -54,7 +54,7 @@ const dragIndex = ref<number | null>(null)
       </button>
       <button
         type="button"
-        class="followup-queue__icon"
+        class="message-queue__icon"
         title="删除"
         @click="emit('remove', index)"
       >
@@ -65,32 +65,32 @@ const dragIndex = ref<number | null>(null)
 </template>
 
 <style scoped lang="scss">
-.followup-queue {
+.message-queue {
   display: flex;
   flex-direction: column;
   margin: -2px -4px 2px;
   border-bottom: 1px solid var(--noesis-color-border-subtle);
 }
 
-.followup-queue__item {
+.message-queue__item {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 4px;
 }
 
-.followup-queue__item--dragging {
+.message-queue__item--dragging {
   opacity: 0.5;
 }
 
-.followup-queue__drag {
+.message-queue__drag {
   flex: none;
   color: var(--noesis-color-text-hint);
   font-size: 16px;
   cursor: grab;
 }
 
-.followup-queue__text {
+.message-queue__text {
   flex: 1;
   overflow: hidden;
   min-width: 0;
@@ -100,7 +100,7 @@ const dragIndex = ref<number | null>(null)
   white-space: nowrap;
 }
 
-.followup-queue__send {
+.message-queue__send {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -115,12 +115,12 @@ const dragIndex = ref<number | null>(null)
   cursor: pointer;
 }
 
-.followup-queue__send:hover {
+.message-queue__send:hover {
   border-color: var(--noesis-color-primary-border-soft);
   color: var(--noesis-color-primary);
 }
 
-.followup-queue__icon {
+.message-queue__icon {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -136,7 +136,7 @@ const dragIndex = ref<number | null>(null)
   cursor: pointer;
 }
 
-.followup-queue__icon:hover {
+.message-queue__icon:hover {
   background: var(--noesis-color-bg-muted);
   color: var(--noesis-color-text-secondary);
 }

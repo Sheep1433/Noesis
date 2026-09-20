@@ -37,19 +37,19 @@ function persistQueue(sessionId: string, messages: string[]): void {
 
 const state = reactive(new Map<string, string[]>())
 
-export function getQueuedFollowups(sessionId: string): string[] {
+export function getQueuedMessages(sessionId: string): string[] {
   if (!state.has(sessionId)) {
     state.set(sessionId, loadQueue(sessionId))
   }
   return state.get(sessionId) ?? []
 }
 
-export function setQueuedFollowups(sessionId: string, messages: string[]): void {
+export function setQueuedMessages(sessionId: string, messages: string[]): void {
   state.set(sessionId, messages)
   persistQueue(sessionId, messages)
 }
 
-export function clearQueuedFollowups(sessionId: string): void {
+export function clearQueuedMessages(sessionId: string): void {
   state.delete(sessionId)
   persistQueue(sessionId, [])
 }

@@ -1,4 +1,4 @@
-"""骨架行构造器契约：主链路创建 / 子 Agent launch / followup 三处共用的固定字段在此钉住。"""
+"""骨架行构造器契约：主链路创建 / 子 Agent launch / 追加消息 三处共用的固定字段在此钉住。"""
 
 from noesis.chat.runs.skeleton import (
     build_assistant_skeleton_row,

@@ -224,6 +224,12 @@ DeepSeek Harness 的关键优势是：子 Agent 是独立 durable Session，有 
 Harness「子 Agent 经 `ctx.agents.create/resume` 复用同一 runtime」的形态已在本仓库落地为
 统一 run 管道（见上节）：executor 只保留生命周期差异，run 管道与主 Agent 一份实现。
 
+追加消息的受理与执行在多实例下分离（`bg-task-message-command`）：受理（写 pending
+行 + `bg_task_deliver` 命令，同一事务）任意实例可用，消费（入执行队列 / 冷恢复开新
+turn）仅 leader 命令消费者；命令即引用（payload 只带 id），拒绝翻转 dropped，认领
+租约回收崩溃遗留。followup 历史命名已全体退出代码（验收门槛 `grep -ri followup`
+零命中）。
+
 ## 过渡层清理（已删除）
 
 - `t_bg_task` 持久化及整套快照存储（`BgTaskStore` 协议、repository、启动对账接线）：执行面完全在进程内，重启即丢，与 dsh `ctx.jobs` / deer-flow 注册表同构；subagent 的产品数据由标准会话/Run/消息表承载，shell job 不持久化（**已由 bg-task-durable-facts 部分推翻**：shell job 事实行落 `bg_shell_job` 表、追加消息 write-ahead 复用 pending user message 行、内存注册表降级为执行热集并按 retention 回收，见决策记录 `2026-09-20-后台任务事实源出内存落库`）

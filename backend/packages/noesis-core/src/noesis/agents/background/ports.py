@@ -71,12 +71,12 @@ class SubagentSessionPort:
     async def create_turn_run(*args: Any, **kwargs: Any) -> Any:
         return await _service().create_turn_run(*args, **kwargs)
 
-    # -- 追加消息 write-ahead（pending user message 行 = 队列事实） ------
+    # -- 追加消息受理（pending 行 + 命令同事务；任意实例可用） -----------
 
     @staticmethod
-    async def create_pending_message(*args: Any, **kwargs: Any) -> str:
-        """写 pending user message 行（携带 turn 参数），返回消息行 id。"""
-        return await _service().create_pending_message(*args, **kwargs)
+    async def accept_message(*args: Any, **kwargs: Any) -> dict:
+        """受理追加消息：事务写 pending 行 + bg_task_deliver 命令，等待/降级。"""
+        return await _service().accept_message(*args, **kwargs)
 
     @staticmethod
     async def count_pending_messages(session_id: str) -> int:
@@ -191,7 +191,7 @@ class ContinuationPort:
 
 class ExecutorPort:
     # 单一异步入口（校验折叠在锁内前置）：曾因同步/异步双版本导致端口
-    # 白名单漂移（漏 asend_message → 全部 followup 500），收敛为单方法
+    # 白名单漂移（漏方法 → 全部追加消息请求 500），收敛为单方法
     @staticmethod
     async def deliver_message(*args: Any, **kwargs: Any) -> Any:
         return await _executor().deliver_message(*args, **kwargs)

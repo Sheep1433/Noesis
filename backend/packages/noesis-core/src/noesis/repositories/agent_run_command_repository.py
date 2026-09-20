@@ -55,8 +55,13 @@ class AgentRunCommandRepository:
         task_id: str | None = None,
         decision_digest_value: str | None = None,
         payload: dict | None = None,
+        flush: bool = False,
     ) -> TAgentRunCommand:
-        """幂等提交：同键同摘要返回既有命令，同键不同摘要抛冲突。"""
+        """幂等提交：同键同摘要返回既有命令，同键不同摘要抛冲突。
+
+        flush=True 时不提交——由调用方在同一事务内聚合多表写入（追加消息
+        受理：pending 行 + 命令行同生共死）后统一 commit。
+        """
         existing = await self._find(user_id, dedupe_key)
         if existing is not None:
             if (
@@ -79,6 +84,9 @@ class AgentRunCommandRepository:
             created_at=_now_ms(),
         )
         self.db.add(row)
+        if flush:
+            await self.db.flush()
+            return row
         try:
             await self.db.commit()
         except IntegrityError:
@@ -133,6 +141,30 @@ class AgentRunCommandRepository:
                 row.status = "claimed"
                 row.claimed_at = now
         return rows
+
+    async def reset_stale_claimed(self, *, lease_ms: int) -> int:
+        """认领租约：超时未终态的 claimed 命令重置回 pending（leader 崩溃回收）。"""
+        cutoff = _now_ms() - lease_ms
+        result = await self.db.execute(
+            update(TAgentRunCommand)
+            .where(
+                TAgentRunCommand.status == "claimed",
+                TAgentRunCommand.claimed_at < cutoff,
+            )
+            .values(status="pending", claimed_at=None)
+        )
+        await self.db.commit()
+        return int(result.rowcount or 0)
+
+    async def reset_all_claimed(self) -> int:
+        """晋升对账：全部 claimed 命令重置回 pending（旧 leader 认领必然未完成）。"""
+        result = await self.db.execute(
+            update(TAgentRunCommand)
+            .where(TAgentRunCommand.status == "claimed")
+            .values(status="pending", claimed_at=None)
+        )
+        await self.db.commit()
+        return int(result.rowcount or 0)
 
     async def mark_terminal(
         self, command_id: str, status: str, summary: str | None = None

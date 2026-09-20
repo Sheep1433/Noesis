@@ -93,7 +93,6 @@ async def lifespan(app: FastAPI):
                     scan_interval_seconds=DistributedRunsConfig.command_scan_interval_seconds,
                     retention_days=DistributedRunsConfig.command_retention_days,
                 )
-                await consumer.start()
                 leader_components["command_consumer"] = consumer
                 resources.push_async_callback(consumer.stop)
             # ---- 晋升对账（四段）：主 Run → 子代理 Run → 定时任务 → 通知装载
@@ -119,6 +118,17 @@ async def lifespan(app: FastAPI):
                 if queued_specs:
                     restored = await ExecutorPort.restore_queued(queued_specs)
                     logger.info("后台任务排队重建：{} 个 queued 任务已恢复", restored)
+                # 晋升对账：遗留 claimed 命令重置回 pending（旧 leader 认领必然
+                # 未完成），随后才启动命令消费——对账先于消费，换主窗口排队
+                # 任务的追加消息不被误翻转
+                from noesis.repositories.agent_run_command_repository import (
+                    AgentRunCommandRepository,
+                )
+
+                await AgentRunCommandRepository(recovery_db).reset_all_claimed()
+                consumer = leader_components.get("command_consumer")
+                if consumer is not None:
+                    await consumer.start()
                 from noesis.services.scheduled_task_service import ScheduledTaskService
 
                 interrupted_runs = await ScheduledTaskService.reconcile_interrupted_runs(recovery_db)

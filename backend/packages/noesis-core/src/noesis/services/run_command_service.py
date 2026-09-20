@@ -78,6 +78,40 @@ class RunCommandService:
         )
 
     @classmethod
+    async def submit_deliver(
+        cls, *, child_session_id: str, message_id: str, user_id: str, db,
+    ) -> dict[str, Any]:
+        """追加消息消费命令（与 pending 行同一事务：flush 不自提交）。"""
+        return await cls._submit(
+            db, user_id=user_id, command_type="bg_task_deliver",
+            dedupe_key=f"bg:{child_session_id}:deliver:{message_id}",
+            task_id=child_session_id, flush=True, wakeup=False,
+            payload={"child_session_id": child_session_id, "message_id": message_id},
+        )
+
+    @staticmethod
+    async def wakeup_command(command_id: str) -> None:
+        await RunCommandService._wakeup({"command_id": command_id})
+
+    @classmethod
+    async def wait_for_command(
+        cls, command_id: str, *, timeout_seconds: float = _COMMAND_ACK_WAIT_SECONDS,
+    ) -> dict[str, Any]:
+        """对已提交命令的有界等待：completed/rejected/no_op 即返，超时 accepted。"""
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+            async with pg_manager.get_async_session_context() as db:
+                row = await AgentRunCommandRepository(db).get(command_id)
+            if row is not None and row.status != "pending":
+                return {
+                    "command_id": row.id,
+                    "command_status": row.status,
+                    "result_summary": row.result_summary,
+                }
+        return {"command_id": command_id, "command_status": "accepted"}
+
+    @classmethod
     async def submit_hitl_resume(
         cls, run_id: str, user_id: str, interrupt_id: str, decision: dict, db
     ) -> dict[str, Any]:
@@ -95,7 +129,7 @@ class RunCommandService:
         )
 
     @classmethod
-    async def _submit(cls, db, *, user_id, command_type, dedupe_key, **kwargs) -> dict[str, Any]:
+    async def _submit(cls, db, *, user_id, command_type, dedupe_key, wakeup: bool = True, **kwargs) -> dict[str, Any]:
         repository = AgentRunCommandRepository(db)
         try:
             row = await repository.submit(
@@ -107,6 +141,8 @@ class RunCommandService:
                 message="该确认已有不同决策在处理，请刷新后重试",
                 data={"dedupe_key": dedupe_key},
             )
+        if not wakeup:
+            return cls._to_dict(row)
         await cls._wakeup({"command_id": row.id})
         return cls._to_dict(row)
 
@@ -159,10 +195,12 @@ class RunCommandConsumer:
         scan_interval_seconds: float = 5.0,
         retention_days: float = 7.0,
         cleanup_interval_seconds: float = 3600.0,
+        claim_lease_seconds: float = 30.0,
     ) -> None:
         self._bus = bus
         self._token_provider = token_provider
         self._scan_interval = scan_interval_seconds
+        self._claim_lease_ms = int(max(5.0, claim_lease_seconds) * 1000)
         self._retention_days = retention_days
         self._cleanup_interval = cleanup_interval_seconds
         self._task: asyncio.Task | None = None
@@ -249,6 +287,9 @@ class RunCommandConsumer:
         if token is None or not getattr(token, "valid", False):
             return 0
         async with pg_manager.get_async_session_context() as db:
+            await AgentRunCommandRepository(db).reset_stale_claimed(
+                lease_ms=self._claim_lease_ms,
+            )
             rows = await AgentRunCommandRepository(db).claim_pending()
         for row in rows:
             await self._execute(row)
@@ -257,11 +298,15 @@ class RunCommandConsumer:
     async def _execute(self, row) -> None:
         try:
             summary = await self._dispatch(row)
-            status = "completed" if summary is not None else "no_op"
+            if summary is not None and summary.startswith(("deferred:", "cancelled:")):
+                # 延后/意图保留：消费语义未发生，命令记 no_op（非 completed）
+                status = "no_op"
+            else:
+                status = "completed" if summary is not None else "no_op"
         except NotFoundException:
             status, summary = "no_op", "目标不存在或已完成"
         except ConflictException as exc:
-            status, summary = "rejected", str(exc)
+            status, summary = "rejected", getattr(exc, "message", None) or str(exc)
         except Exception as exc:  # noqa: BLE001
             logger.exception(
                 "run command execute failed command_id={} type={}", row.id, row.type
@@ -303,7 +348,65 @@ class RunCommandConsumer:
                 return "resumed"
             if row.type == "bg_task_stop":
                 return await self._stop_bg_task(row, user_id)
+            if row.type == "bg_task_deliver":
+                return await self._deliver_bg_task(row, user_id)
         raise ValueError(f"unknown command type: {row.type}")
+
+    async def _deliver_bg_task(self, row, user_id: str) -> str | None:
+        """追加消息消费：四分派——幂等空转 / 延后 / 冷恢复或入队 / 拒绝翻转。
+
+        行状态与任务状态的权威裁决都在本方法（消费端）；受理端的校验只是
+        咨询性快速失败。任务非终态但热集 miss（换主窗口）→ no_op 延后，
+        不得翻转行（排队任务的指示随任务重建保留）。
+        """
+        from noesis.agents.background.executor import BackgroundTaskExecutor
+        from noesis.agents.background.jobs.state import BgTaskStatus
+        from noesis.services.subagent_session_service import SubagentSessionService
+
+        payload = dict(row.payload or {})
+        child_session_id = str(payload.get("child_session_id") or row.task_id or "")
+        message_id = str(payload.get("message_id") or "")
+        if not child_session_id or not message_id:
+            return None
+        info = await SubagentSessionService.message_delivery_payload(message_id)
+        if info is None or not info["pending"]:
+            return None  # 已采纳（launch 事务清标记）或已翻转：幂等空转
+        current = BackgroundTaskExecutor.get(child_session_id)
+        if current is not None:
+            status = BgTaskStatus(str(current["status"]))
+        else:
+            projection = await SubagentSessionService.db_task_projection(child_session_id)
+            status = (
+                BgTaskStatus(str(projection["status"]))
+                if projection else None
+            )
+        if status is None:
+            return None  # 任务事实缺失：无从消费，命令记 no_op
+        if status in (BgTaskStatus.FAILED, BgTaskStatus.TIMED_OUT):
+            # 对账 error 已在受理前把行翻转 dropped；此处兜底消费拒绝
+            await SubagentSessionService.flip_pending_message_dropped(message_id)
+            raise ConflictException(message=f"任务已结束（{status.value}），追加消息未执行")
+        if status in (BgTaskStatus.QUEUED, BgTaskStatus.RUNNING) and current is None:
+            # 换主窗口：对账/排队重建尚未落定 → 延后（行保留 pending；
+            # 重建后随任务镜像重载消费）
+            return f"deferred:{status.value}"
+        if status == BgTaskStatus.CANCELLED:
+            completed_at = (current or {}).get("completed_at") or (
+                (await SubagentSessionService.db_task_projection(child_session_id)) or {}
+            ).get("completed_at")
+            cancelled_ms = int(completed_at * 1000) if completed_at else 0
+            if cancelled_ms and info["created_at"] < cancelled_ms:
+                # 受理先于用户停止：意图保留（行保留 pending，待续聊触发），不复活任务
+                return "cancelled:queued_intent_retained"
+        executor = BackgroundTaskExecutor.default()
+        await executor.deliver_message(
+            child_session_id,
+            info["text"],
+            user_message_id=message_id,
+            model_id=info["model_id"],
+            reasoning_effort=info["reasoning_effort"],
+        )
+        return "delivered"
 
     async def _stop_bg_task(self, row, user_id: str) -> str | None:
         """后台任务停止：leader 上 executor.cancel；不存在/已终态幂等 no_op。"""

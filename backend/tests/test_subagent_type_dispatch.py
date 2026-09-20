@@ -312,7 +312,7 @@ async def test_start_async_task_command_persists_async_tasks_across_turns() -> N
 # ---------------------------------------------------------------------------
 
 def test_bg_task_tool_name_allowlist_pinned() -> None:
-    """递归委派防线名单钉死：工具更名（update_async_task → send_message）后
+    """递归委派防线名单钉死：追加消息工具更名（update_async_task → send_message）后
     名单必须同步——漏改会让防线对改名后的工具失明（回归 2.5）。"""
     from noesis.agents.background.subagent.roles import BG_TASK_TOOL_NAMES
 
@@ -325,7 +325,7 @@ def test_bg_task_tool_name_allowlist_pinned() -> None:
 
 def test_executor_port_exposes_deliver_message() -> None:
     """端口面 == 运行时公开面（全表面护栏）：白名单曾漏 asend_message 致全部
-    followup 500——本测试枚举端口应暴露的完整集合，并要求运行时新增公开
+    漏方法 → 全部追加消息请求 500——本测试枚举端口应暴露的完整集合，并要求运行时新增公开
     方法时必须在此显式登记（漏登记即红），删除的方法不得残留（防回流）。"""
     import inspect
     import noesis.agents.background.executor as ex_mod

@@ -103,7 +103,7 @@ def test_start_shell_truncates_long_output_tail() -> None:
     assert "仅保留尾部" in task["result"]
 
 
-def test_shell_task_rejects_followup() -> None:
+def test_shell_task_rejects_message_append() -> None:
     """shell 命令不可追加对话（不是对话型任务）。"""
     backend = _FakeShellBackend()
     executor = BackgroundTaskExecutor()
@@ -113,7 +113,7 @@ def test_shell_task_rejects_followup() -> None:
     _wait_terminal(executor, task_id)
     import asyncio as _a
     with pytest.raises(ValueError, match="后台命令任务"):
-        _a.run(executor.deliver_message(task_id, "再跑一次"))
+        _a.run(executor.deliver_message(task_id, "再跑一次", user_message_id="pm-x"))
 
 
 def test_fail_session_shell_tasks_on_sandbox_destroy() -> None:

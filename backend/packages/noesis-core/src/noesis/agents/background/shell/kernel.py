@@ -1,4 +1,4 @@
-"""命令执行内核：bash 后台任务的执行与终态（无 turn / followup 概念）。
+"""命令执行内核：bash 后台任务的执行与终态（无 turn / 追加消息概念）。
 
 _arun_shell 经 agent backend 执行命令；_ShellKind 是 kinds.py 行为协议
 的 shell 实现（不可追问、立即取消、硬杀超时）。
@@ -37,7 +37,7 @@ async def _mark_shell_row_started(task_id: str) -> None:
 async def _arun_shell(entry: _TaskEntry) -> None:
     """kind="shell"：直接经 backend 执行命令，终态写结果与通知。
 
-    不经 worker 编译、无 turn / followup / 审批概念；backend 的
+    不经 worker 编译、无 turn / 追加消息 / 审批概念；backend 的
     aexecute 即 to_thread(execute)，同步 httpx 客户端线程安全。
     终态发布（SSE + 通知）只在协程自身落终态的分支做——CancelledError
     由触发方（cancel / watchdog / 沙箱销毁）负责发布，这里不重复。
@@ -146,11 +146,11 @@ class _ShellKind:
     """后台命令：不可追问、无轮次、立即取消、硬杀超时。"""
 
     kind = "shell"
-    supports_followup = False
+    supports_message_append = False
     has_turns = False
 
     @staticmethod
-    def reject_followup_text() -> str:
+    def reject_append_text() -> str:
         return "该任务为后台命令任务，不支持追加消息（可用 check_async_task 收取输出、重新执行请新建命令）"
 
     @staticmethod

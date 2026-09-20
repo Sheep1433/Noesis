@@ -30,7 +30,7 @@ from noesis.schemas.chat_vo import (
     ChildSessionCatalogResponse,
     MessageListResponse,
     SendMessageRequest,
-    SubagentFollowupRequest,
+    SubagentMessageRequest,
     SendMessageResponse,
     CreateRunRequest,
 )
@@ -654,7 +654,7 @@ async def send_message(
 )
 async def send_subagent_message(
     session_id: str,
-    request: SubagentFollowupRequest,
+    request: SubagentMessageRequest,
     http_request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ):

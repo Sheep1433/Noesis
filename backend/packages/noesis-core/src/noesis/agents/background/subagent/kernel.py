@@ -1,6 +1,6 @@
 """子代理执行内核：turn 链、投影落库、进度记录、worker 编译。
 
-_arun 承载一轮或多轮 turn：followup 队列非空则链式开下一轮，
+_arun 承载一轮或多轮 turn：追加消息队列非空则链式开下一轮，
 协作停止在静止边界退出；_SubagentKind 是 kinds.py 行为协议的 subagent 实现。
 """
 from __future__ import annotations
@@ -219,10 +219,10 @@ async def _ensure_agent(entry: _TaskEntry) -> Any:
     """惰性编译 worker：factory 在隔离 loop 内调用，其 LLM 客户端 /
     checkpointer 连接池绑定隔离 loop（避免复用主 loop 实例的 cross-loop 风险）。
 
-    entry.model_override 非 None 时以覆盖模型编译（followup 切换模型后
+    entry.model_override 非 None 时以覆盖模型编译（追加消息切换模型后
     compiled_agent 已被置空，这里按新模型重建；同 thread 续跑，历史保留）。
     编译前设置本 turn 推理档位——档位在 LLM 构造时经 ContextVar 固化为
-    请求参数，这里是所有编译路径（首轮/followup 切参/审批 resume）的唯一收口。
+    请求参数，这里是所有编译路径（首轮/追加消息切参/审批 resume）的唯一收口。
     """
     if entry.compiled_agent is None:
         with entry.compiled_lock:
@@ -250,7 +250,7 @@ def _apply_model_override(entry: _TaskEntry, model_id: Optional[str]) -> bool:
 
 @dataclass
 class _TurnParams:
-    """followup turn 的执行参数：模型与推理档位均逐 turn 覆盖。"""
+    """追加消息 turn 的执行参数：模型与推理档位均逐 turn 覆盖。"""
 
     model_id: Optional[str] = None
     reasoning_effort: Optional[str] = None
@@ -261,7 +261,7 @@ def _apply_turn_params(entry: _TaskEntry, params: Optional[_TurnParams]) -> bool
     档位在 LLM 构造时（factory 读 ContextVar）固化为请求参数，因此
     档位变化与模型变化一样需要重编译 worker（同 thread 续跑，历史保留）。
     字段缺省（None）= 沿用当前值，不视为覆盖（与 model_id 语义一致）：
-    followup 未指定档位时继承任务创建时捕获的档位。
+    追加消息未指定档位时继承任务创建时捕获的档位。
     """
     if params is None:
         return False
@@ -286,7 +286,7 @@ def _pop_next_pending(entry: _TaskEntry) -> Optional[tuple[str, Optional[str], _
 
 @dataclass
 class _TurnOutcome:
-    """统一管道单 turn 的结果：驱动 executor 的终态 / followup 决策。"""
+    """统一管道单 turn 的结果：驱动 executor 的终态 / 追加消息决策。"""
 
     finish_reason: str = "stop"
     usage: dict[str, Any] = field(default_factory=dict)
@@ -353,7 +353,7 @@ def _turn_text_parts(outcome: "_TurnOutcome") -> str:
 async def _collect_persisted_text(task: BackgroundTask) -> str:
     """从子会话全部 assistant 消息投影提取 text parts（部分成果的权威来源）。
 
-    覆盖全部轮次（followup 链早轮）与硬杀场景（最后一次边界 persist 的投影）；
+    覆盖全部轮次（追加消息链早轮）与硬杀场景（最后一次边界 persist 的投影）；
     无标准 run（测试/无 run_id）由调用方退回 turn 投影兜底。任何失败降级为空
     （spec：不阻塞终止）——包括端口缺方法的 AttributeError：该协程构造期
     同步抛出，必须整体包裹，否则会炸穿 settle_stop 使 run 永久 RUNNING。
@@ -525,7 +525,7 @@ async def _arun(
     - start：initial_source 为原始 description 的 HumanMessage state
     - 冷恢复（deliver_message 对 completed 任务）：initial_source 为追加消息
     - kind="shell"：分派到 _arun_shell（无 worker / 无 turn 概念）
-    turn 正常结束后若 followup 队列非空，链式开下一个 turn（同 thread
+    turn 正常结束后若追加消息队列非空，链式开下一个 turn（同 thread
     追加 HumanMessage），队列清空前任务保持 running。
     """
     task = entry.task
@@ -583,16 +583,16 @@ async def _arun(
                 entry.accumulated_usage = merge_usage(
                     entry.accumulated_usage, outcome.usage,
                 )
-            # followup 链：队列非空则同 thread 开下一个 turn
-            next_followup = _pop_next_pending(entry)
-            if next_followup is None:
+            # 追加消息链：队列非空则同 thread 开下一个 turn
+            next_pending = _pop_next_pending(entry)
+            if next_pending is None:
                 break
             # 恢复 RUNNING 原子化并提前到 await 链之前：停止在 turn 收尾窗口受理时
             # 此处直接取消收尾（不再新开 run）；链内再受理由下一 turn 的静止边界退出
             if not _try_transition(task, BgTaskStatus.RUNNING):
                 await settle_stop(entry, task, outcome)
                 return
-            next_message, next_user_message_id, next_params = next_followup
+            next_message, next_user_message_id, next_params = next_pending
             # 该 turn 指定了新模型/新档位 → 失效已编译 worker，下一轮以新参数续跑同 thread
             # （档位 ContextVar 在 _ensure_agent 编译前统一设置）
             if _apply_turn_params(entry, next_params):
@@ -618,9 +618,9 @@ async def _arun(
                 )
                 if current_run_future is not None:
                     await asyncio.wrap_future(current_run_future)
-                if entry.followup_factory is not None:
+                if entry.turn_factory is not None:
                     try:
-                        launch = entry.followup_factory(
+                        launch = entry.turn_factory(
                             task.child_session_id or task.task_id,
                             next_message,
                             next_user_message_id,
@@ -651,7 +651,7 @@ async def _arun(
                     task.projection_sequence = 0
                     task.completed_at = None
             logger.info(
-                "bg subagent followup turn task_id={} queued={}",
+                "bg subagent 追加消息 turn task_id={} queued={}",
                 task.task_id,
                 len(entry.pending_messages),
             )
@@ -722,7 +722,7 @@ async def _arun(
             task.task_id,
         )
 
-async def _arun_followup(
+async def _arun_appended_turn(
     entry: _TaskEntry,
     text: str,
     user_message_id: Optional[str] = None,
@@ -745,8 +745,8 @@ async def _arun_followup(
         # 预编译 worker（参数变化时失效重编）；_arun 会复用缓存结果
         await _ensure_agent(entry)
         task.turn_count += 1
-        if entry.followup_factory is not None:
-            launch = entry.followup_factory(
+        if entry.turn_factory is not None:
+            launch = entry.turn_factory(
                 task.child_session_id or task.task_id,
                 text,
                 user_message_id,
@@ -767,12 +767,12 @@ class _SubagentKind:
     """子 Agent 委派：可追问、有轮次概念、协作停止、协作超时。"""
 
     kind = "subagent"
-    supports_followup = True
+    supports_message_append = True
     has_turns = True
 
     @staticmethod
-    def reject_followup_text() -> str:
-        raise AssertionError("subagent supports followup")  # pragma: no cover
+    def reject_append_text() -> str:
+        raise AssertionError("subagent 任务支持追加消息")  # pragma: no cover
 
     @staticmethod
     def run(entry: "_TaskEntry") -> Any:

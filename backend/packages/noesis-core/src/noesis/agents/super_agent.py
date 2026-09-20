@@ -230,7 +230,7 @@ class SuperAgent(BaseAgent):
                 worker_tools,
                 skill_sources,
                 user_id=user_id,
-                # followup 可按 turn 切换模型：覆盖优先，否则沿用父 Agent 模型
+                # 追加消息 可按 turn 切换模型：覆盖优先，否则沿用父 Agent 模型
                 model_id=model_id_override or model_id,
                 session_id=session_id,
                 checkpointer=await create_isolated_checkpointer(),
@@ -239,7 +239,7 @@ class SuperAgent(BaseAgent):
         def _cold_resolver(subagent_type, model_id):
             """冷恢复配方解析：按 descriptor 的 type/model 取角色 worker 工厂。
 
-            followup 工厂由 executor 生成（user_id 来自 DB 事实，不闭包捕获
+            追加消息 工厂由 executor 生成（user_id 来自 DB 事实，不闭包捕获
             装配期会话）；类型未注册返回 None（冷恢复按可诊断错误拒绝）。
             """
             role = subagent_registry.get(subagent_type or "")
@@ -378,11 +378,11 @@ class SuperAgent(BaseAgent):
             message: str,
             user_message_id: str | None = None,
         ) -> dict[str, str]:
-            """冷恢复 / 链式 followup 的新 run 创建。
+            """冷恢复 / 链式 追加消息 的新 run 创建。
 
             经 run_on_main_loop 在主 loop 执行：pg_manager 连接池绑定主
             loop，而本工厂在 executor 隔离 loop 上被调用（send_message 冷
-            恢复与运行中 followup 链两处）——直连会触发 asyncpg 跨 loop
+            恢复与运行中 追加消息链两处）——直连会触发 asyncpg 跨 loop
             连接错误，冷恢复曾因此静默失败（任务卡 RUNNING、追问无回复）。
             """
             from noesis.runtime.main_loop import run_on_main_loop
@@ -401,10 +401,10 @@ class SuperAgent(BaseAgent):
                     return launch.to_dict()
 
             future = run_on_main_loop(
-                _launch(), name=f"subagent-followup-launch:{child_session_id}",
+                _launch(), name=f"subagent-turn-launch:{child_session_id}",
             )
             if future is None:
-                raise RuntimeError("主 loop 不可用，followup run 创建失败")
+                raise RuntimeError("主 loop 不可用，追加消息 run 创建失败")
             return await asyncio.wrap_future(future)
 
         return create_noesis_agent(

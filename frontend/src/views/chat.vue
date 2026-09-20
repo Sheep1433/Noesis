@@ -16,8 +16,8 @@ import ChatModeSelector from '@/components/Chat/ChatModeSelector.vue'
 import MentionPicker from '@/components/Chat/MentionPicker.vue'
 import ContextWindowIndicator from '@/components/ContextWindowIndicator/index.vue'
 import ConversationPartsRenderer from '@/components/ConversationPartsRenderer/index.vue'
-import FollowupQueue from '@/components/FollowupQueue/index.vue'
 import HitlComposerPanel from '@/components/HitlComposerPanel/index.vue'
+import MessageQueue from '@/components/MessageQueue/index.vue'
 import ReasoningBlock from '@/components/ReasoningBlock/index.vue'
 import ResearchSourcesPanel from '@/components/ResearchSourcesPanel/index.vue'
 import ResizeDivider from '@/components/ResizeDivider.vue'
@@ -29,7 +29,6 @@ import { composerPlaceholder, supportsAtMentions, supportsSlashSkills } from '@/
 import { cssVar, themeColors, themeCssVar } from '@/config/theme'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import { chatHistorySiderCollapsed } from '@/hooks/useChatHistorySider'
-import { useFollowupQueue } from '@/hooks/useFollowupQueue'
 import {
   candidateToMention,
   ensureMentionCatalog,
@@ -37,6 +36,7 @@ import {
   invalidateMentionContextCache,
   mentionToPayload,
 } from '@/hooks/useMentionCatalog'
+import { useMessageQueue } from '@/hooks/useMessageQueue'
 import { usePaneResize } from '@/hooks/usePaneResize'
 import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
 import { useTicker } from '@/hooks/useTicker'
@@ -2009,7 +2009,7 @@ const composerStopMode = computed(() => stylizingLoading.value && sendDisabled.v
 /* ---- 主 Agent 待发队列：运行中发送的消息排队，run 终态后逐条自动提交 ----
    CRUD 走共享 composable（与子 Agent 抽屉同一份实现）；提交/终态衔接为主链路域语义 */
 
-const composerQueue = useFollowupQueue({
+const composerQueue = useMessageQueue({
   get: () => queuedComposerMessages.value,
   set: (list) => (queuedComposerMessages.value = list),
 })
@@ -3592,7 +3592,7 @@ function onComposerPaste(e: ClipboardEvent) {
                       />
 
                       <!-- 待发队列：运行中发送的消息在此排队，当前 run 终态后逐条自动提交（与子 Agent 抽屉同构） -->
-                      <FollowupQueue
+                      <MessageQueue
                         :messages="queuedComposerMessages"
                         @remove="composerQueue.remove"
                         @edit="editQueuedComposerMessage"

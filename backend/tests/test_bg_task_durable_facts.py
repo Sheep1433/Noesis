@@ -319,15 +319,20 @@ def test_write_ahead_creates_pending_row_before_enqueue(fake_session_port) -> No
         _TASKS[task.task_id] = entry
     try:
         executor = BackgroundTaskExecutor(task_timeout_seconds=30)
+        mid = asyncio.run(fake_session_port.create_pending_message(
+            session_id="child-wa", user_id="u1", message="聚焦中文源",
+            model_id="model-b", reasoning_effort="high",
+        ))
         snapshot = asyncio.run(executor.deliver_message(
-            "bg-wa", "聚焦中文源", model_id="model-b", reasoning_effort="high",
+            "bg-wa", "聚焦中文源", user_message_id=mid,
+            model_id="model-b", reasoning_effort="high",
         ))
         assert snapshot["status"] == "running"
         with _TASKS_LOCK:
             queued = _TASKS["bg-wa"]
             assert len(queued.pending_messages) == 1
             assert queued.pending_messages[0].text == "聚焦中文源"
-            assert queued.pending_messages[0].message_id.startswith("pm-")
+            assert queued.pending_messages[0].message_id == mid
         rows = fake_session_port.pending["child-wa"]
         assert len(rows) == 1
         assert rows[0]["model_id"] == "model-b"

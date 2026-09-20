@@ -211,37 +211,26 @@ class SubagentSessionService:
         model_id: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
     ) -> dict:
-        from noesis.agents.background.ports import ExecutorPort as BackgroundTaskExecutor
-
         task = await cls._owned_child(session_id, user_id)
         if task is None:
             raise NotFoundException(message="子会话不存在")
-        # 校验折叠进 deliver_message 锁内前置：拒绝时丢弃已写的待定消息
-        pending_user_message_id = await cls.create_pending_message(
-            session_id=session_id,
-            user_id=user_id,
-            message=message,
-            model_id=model_id,
-            reasoning_effort=reasoning_effort,
-        )
         try:
-            # 冷恢复：响应前完成新 run 创建（run_id 权威）
-            return await BackgroundTaskExecutor.deliver_message(
-                session_id,
-                message,
-                user_message_id=pending_user_message_id,
+            return await cls.accept_message(
+                task_ref=session_id,
+                user_id=user_id,
+                message=message,
                 model_id=model_id,
                 reasoning_effort=reasoning_effort,
             )
         except ValueError as exc:
-            await cls._discard_pending_user_message(pending_user_message_id, user_id)
+            # 业务拒绝（队列满 / 已不可续 / 非本人 / shell 不支持）→ 409 契约
             raise ConflictException(message=str(exc)) from exc
 
     @classmethod
     async def collect_partial_output(cls, session_id: str, user_id: str) -> str:
         """从子会话全部 assistant 消息投影提取 text parts（部分成果回收的权威来源）。
 
-        覆盖全部轮次（followup 链早轮）与硬杀场景（最后一次边界 persist 的投影）；
+        覆盖全部轮次（追加消息链早轮）与硬杀场景（最后一次边界 persist 的投影）；
         按 message_sequence 顺序拼接，与消息流展示一致。
         """
         from sqlalchemy import select
@@ -271,42 +260,104 @@ class SubagentSessionService:
                         texts.append(str(part["content"]))
             return "\n".join(texts).strip()
 
-    @staticmethod
-    async def _discard_pending_user_message(message_id: str, user_id: str) -> None:
-        from noesis.storage.postgres.manager import pg_manager
-
-        async with pg_manager.get_async_session_context() as db:
-            await db.execute(
-                update(TChatMessage)
-                .where(TChatMessage.id == message_id, TChatMessage.user_id == str(user_id))
-                .values(deleted_at=_now_ms())
-            )
-            await db.commit()
-
     @classmethod
-    async def create_pending_message(
+    async def accept_message(
         cls,
         *,
-        session_id: str,
+        task_ref: str,
         user_id: str,
         message: str,
         model_id: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
-    ) -> str:
-        """写 pending user message 行（追加消息的 write-ahead 载体）。
+    ) -> dict:
+        """追加消息受理核心（任意实例可用）：同一事务写 pending 行 + 命令行。
 
-        extra.pending_run=True 为待投递标记；turn 参数随行落库——排队期间
-        参数不再只存内存（重启后冷恢复重载队列据此还原逐 turn 覆盖）。
+        受理校验是咨询性快速失败（权威裁决在 leader 消费端）；pending 行与
+        `bg_task_deliver` 命令同生共死——孤儿行结构上不可能。等待命令完成
+        返回任务投影（冷恢复含新 run_id）；rejected → 409 + 原因；超时 →
+        受理投影 + `command_status: "accepted"`。
         """
+        from noesis.agents.background.jobs.state import MAX_PENDING_MESSAGES
+        from noesis.agents.background.ports import ShellJobPort
+        from noesis.repositories.agent_run_command_repository import (
+            AgentRunCommandRepository,
+        )
+        from noesis.services.run_command_service import RunCommandService
         from noesis.storage.postgres.manager import pg_manager
 
+        text = message.strip()
+        if not text:
+            raise ValueError("消息不能为空")
+        # 咨询性校验（任意实例可答；消费端权威裁决）
+        projection = await cls.db_task_projection(task_ref)
+        if projection is None:
+            shell = await ShellJobPort.get_task(task_ref)
+            if shell is not None:
+                raise ValueError(
+                    "该任务为后台命令任务，不支持追加消息"
+                    "（可用 check_task 收取输出、重新执行请新建命令）"
+                )
+            raise ValueError(f"任务不存在: {task_ref}（可用 list_async_tasks 查看完整任务标识）")
+        if str(projection.get("user_id")) != str(user_id):
+            raise ValueError("任务不属于当前用户")
+        if projection["status"] in ("failed", "timed_out"):
+            raise ValueError(f"任务已结束（{projection['status']}），无法追加消息")
+        child_session_id, command_id = await cls._accept_write_row_and_command(
+            task_ref=task_ref, user_id=user_id, message=text,
+            model_id=model_id, reasoning_effort=reasoning_effort,
+            projection=projection,
+        )
+        await RunCommandService.wakeup_command(command_id)
+        result = await RunCommandService.wait_for_command(command_id)
+        if result["command_status"] == "rejected":
+            raise ConflictException(
+                message=result.get("result_summary") or "追加消息未被受理"
+            )
+        response = await cls.db_task_projection(child_session_id) or projection
+        response["command_status"] = result["command_status"]
+        return response
+
+    @classmethod
+    async def _accept_write_row_and_command(
+        cls,
+        *,
+        task_ref: str,
+        user_id: str,
+        message: str,
+        model_id: Optional[str],
+        reasoning_effort: Optional[str],
+        projection: dict,
+    ) -> tuple[str, str]:
+        """受理事务：pending 行 + 命令行同生共死（供测试直接调用，跳过等待）。"""
+        from noesis.agents.background.jobs.state import MAX_PENDING_MESSAGES
+        from noesis.repositories.agent_run_command_repository import (
+            AgentRunCommandRepository,
+        )
+        from noesis.storage.postgres.manager import pg_manager
+
+        child_session_id = str(projection["child_session_id"])
+
         async with pg_manager.get_async_session_context() as db:
-            session = await ChatService.get_session_by_id(session_id, user_id=user_id, db=db)
-            if session is None or session.kind != "subagent":
-                raise NotFoundException(message="子会话不存在")
+            # 容量执法（受理端权威；消费不复查）
+            pending_count = await db.execute(
+                select(func.count())
+                .select_from(TChatMessage)
+                .where(
+                    TChatMessage.session_id == child_session_id,
+                    TChatMessage.deleted_at.is_(None),
+                    cls._pending_expr(),
+                )
+            )
+            if int(pending_count.scalar_one() or 0) >= MAX_PENDING_MESSAGES:
+                raise ValueError(
+                    f"追加消息队列已满（{MAX_PENDING_MESSAGES} 条）：请等待当前轮完成后再发，"
+                    f"或将多条指示合并为一条"
+                )
             now = _now_ms()
             message_id = str(uuid.uuid4())
-            _, sequences = await ChatService.reserve_message_sequences(session_id, user_id, 1, db)
+            _, sequences = await ChatService.reserve_message_sequences(
+                child_session_id, user_id, 1, db,
+            )
             extra: dict = {"origin": "subagent", "pending_run": True}
             turn_params: dict = {}
             if model_id:
@@ -317,16 +368,49 @@ class SubagentSessionService:
                 extra["turn_params"] = turn_params
             db.add(build_user_message_row(
                 message_id=message_id,
-                session_id=session_id,
+                session_id=child_session_id,
                 user_id=str(user_id),
                 text=message,
                 extra=extra,
                 message_sequence=sequences[0],
                 created_at=now,
             ))
-            session.updated_at = now
+            command = await AgentRunCommandRepository(db).submit(
+                user_id=str(user_id),
+                command_type="bg_task_deliver",
+                dedupe_key=f"bg:{child_session_id}:deliver:{message_id}",
+                task_id=child_session_id,
+                flush=True,
+                payload={"child_session_id": child_session_id, "message_id": message_id},
+            )
+            await db.execute(
+                update(TChatSession)
+                .where(TChatSession.id == child_session_id)
+                .values(updated_at=now)
+            )
             await db.commit()
-            return message_id
+        return child_session_id, command.id
+
+    @classmethod
+    async def message_delivery_payload(cls, message_id: str) -> Optional[dict]:
+        """追加消息消费载荷：pending 状态 + 内容 + turn 参数 + 下达时间。"""
+        from noesis.storage.postgres.manager import pg_manager
+
+        async with pg_manager.get_async_session_context() as db:
+            row = (
+                await db.execute(select(TChatMessage).where(TChatMessage.id == message_id))
+            ).scalar_one_or_none()
+        if row is None:
+            return None
+        extra = row.extra if isinstance(row.extra, dict) else {}
+        params = extra.get("turn_params") if isinstance(extra.get("turn_params"), dict) else {}
+        return {
+            "pending": extra.get("pending_run") is True,
+            "text": cls._text_of(row),
+            "model_id": params.get("model_id"),
+            "reasoning_effort": params.get("reasoning_effort"),
+            "created_at": row.created_at,
+        }
 
     # -- pending 行：容量计数 / dropped 翻转 / 重载 ----------------------
 
@@ -721,7 +805,7 @@ class SubagentSessionService:
         user_message_id: Optional[str] = None,
         db: AsyncSession,
     ) -> ChildSessionLaunch:
-        """为同一 child session 创建下一轮 user/assistant/run（原 create_followup_run）。
+        """为同一 child session 创建下一轮 user/assistant/run。
 
         采纳 pending 行：同一事务内清 pending_run 标记、盖 run_id（write-ahead
         的投递确认与 run 创建原子）。注意采纳是整覆写 extra——调用方须在
