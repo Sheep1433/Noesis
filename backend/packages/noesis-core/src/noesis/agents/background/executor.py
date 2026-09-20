@@ -255,14 +255,27 @@ class BackgroundTaskExecutor:
         self._launch(entry)
         if child_session_id:
             # task_id 落 child session extra（bg_task_id）：DB 投影据此解析
-            # 已回收任务（内存 bg-* id 不入任何其他表）。fire-and-forget
+            # 已回收任务（内存 bg-* id 不入任何其他表）。fire-and-forget，
+            # 但失败必须留痕——此值缺失会让回收后的 bg-* 查询静默退化为
+            # 「任务不存在」
             from noesis.runtime.main_loop import run_on_main_loop
 
+            async def _persist_task_id() -> None:
+                try:
+                    from noesis.storage.postgres.manager import pg_manager
+
+                    async with pg_manager.get_async_session_context() as db:
+                        await SessionOpsPort.merge_session_extra(
+                            child_session_id, user_id, {"bg_task_id": task_id}, db=db,
+                        )
+                except Exception:  # noqa: BLE001
+                    logger.opt(exception=True).error(
+                        "bg task id persist failed task_id={} child={}",
+                        task_id, child_session_id,
+                    )
+
             run_on_main_loop(
-                SessionOpsPort.merge_session_extra(
-                    child_session_id, user_id, {"bg_task_id": task_id},
-                ),
-                name=f"bg-task-id-persist:{task_id}",
+                _persist_task_id(), name=f"bg-task-id-persist:{task_id}",
             )
         ensure_reclaim_timer()
         return task_id
