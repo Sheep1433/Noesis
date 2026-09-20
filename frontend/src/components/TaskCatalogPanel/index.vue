@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import type { TaskCatalogEntry } from '@/api/chat'
 import { ChevronDownOutline, GitNetworkOutline } from '@vicons/ionicons-v5'
-import { NButton, NDrawer, NDrawerContent } from 'naive-ui'
+import { NButton } from 'naive-ui'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
-import { useLocalStorage, useWindowSize } from '@vueuse/core'
-import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import SubagentSessionDrawer from '@/components/SubagentSessionDrawer/index.vue'
 import { wireTimestampMs } from '@/utils/formatTime'
 import { taskStatusLabel } from '@/utils/taskStatusLabels'
 import { formatDurationMs } from '@/views/chat/messageParts'
@@ -22,20 +21,6 @@ const emit = defineEmits<{
 }>()
 
 const show = defineModel<boolean>('show', { default: false })
-const { drawerWidth: responsiveWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.96 })
-
-// 左边缘可拖拽调宽：与 SubagentConversationDrawer 共享同一份用户偏好
-const MIN_WIDTH = 420
-const customWidth = useLocalStorage('noesis:subagent-drawer-width', 0)
-const { width: windowWidth } = useWindowSize()
-const desktop = computed(() => windowWidth.value > 768)
-const drawerWidth = computed(() =>
-  (desktop.value && customWidth.value >= MIN_WIDTH ? customWidth.value : responsiveWidth.value),
-)
-
-function handleResize(width: number) {
-  customWidth.value = Math.round(Math.min(Math.max(width, MIN_WIDTH), windowWidth.value - 48))
-}
 const selectedTask = ref<TaskCatalogEntry | null>(null)
 const showDetail = ref(false)
 const selectedTaskResolved = computed(() => {
@@ -157,130 +142,120 @@ watch([() => props.focusTaskId, () => props.tasks], ([taskId]) => {
 
 <template>
   <!-- 监控面板常开数分钟，默认黑遮罩会把主界面压暗成"换主题"的观感；透明遮罩保持主界面视觉不变 -->
-  <n-drawer
+  <SubagentSessionDrawer
     v-model:show="show"
-    placement="right"
-    :width="drawerWidth"
-    :resizable="desktop"
-    :min-width="MIN_WIDTH"
-    :max-width="windowWidth - 48"
-    show-mask="transparent"
-    @update:width="handleResize"
+    :title="showDetail && selectedTaskResolved ? selectedTaskResolved.description : '子 Agent 与后台命令'"
+    transparent-mask
+    flush-body
   >
-    <n-drawer-content
-      :title="showDetail && selectedTaskResolved ? selectedTaskResolved.description : '子 Agent 与后台命令'"
-      closable
-      body-content-style="padding: 0;"
-    >
-      <!-- 详情态：单抽屉 master-detail，点开任务在原抽屉内切换，返回回列表 -->
-      <template v-if="showDetail && selectedTaskResolved">
-        <div class="bg-task-detail">
-          <button type="button" class="bg-task-detail__back" @click="closeDetail">
-            <span class="i-hugeicons:arrow-left-01" aria-hidden="true"></span>
-            返回任务列表
-          </button>
-          <div v-if="selectedTaskResolved.kind === 'shell'" class="shell-task-detail">
-            <div class="shell-task-detail__header">
-              <strong>后台命令输出</strong>
-              <NButton
-                v-if="selectedTaskResolved.status === 'queued' || selectedTaskResolved.status === 'running'"
-                size="small"
-                type="error"
-                quaternary
-                @click="emit('cancel', selectedTaskResolved)"
-              >
-                停止命令
-              </NButton>
-            </div>
-            <code class="shell-task-detail__command">{{ selectedTaskResolved.command || selectedTaskResolved.description }}</code>
-            <pre v-if="selectedTaskResolved.result || selectedTaskResolved.error" class="shell-task-detail__output">{{ selectedTaskResolved.result || selectedTaskResolved.error }}</pre>
-            <span v-else class="shell-task-detail__empty">命令仍在运行，输出完成后会显示在这里。</span>
+    <!-- 详情态：单抽屉 master-detail，点开任务在原抽屉内切换，返回回列表 -->
+    <template v-if="showDetail && selectedTaskResolved">
+      <div class="bg-task-detail">
+        <button type="button" class="bg-task-detail__back" @click="closeDetail">
+          <span class="i-hugeicons:arrow-left-01" aria-hidden="true"></span>
+          返回任务列表
+        </button>
+        <div v-if="selectedTaskResolved.kind === 'shell'" class="shell-task-detail">
+          <div class="shell-task-detail__header">
+            <strong>后台命令输出</strong>
+            <NButton
+              v-if="selectedTaskResolved.status === 'queued' || selectedTaskResolved.status === 'running'"
+              size="small"
+              type="error"
+              quaternary
+              @click="emit('cancel', selectedTaskResolved)"
+            >
+              停止命令
+            </NButton>
           </div>
-          <SubagentConversationView
-            v-else
-            :session-id="selectedTaskResolved.child_session_id || selectedTaskResolved.task_id"
-            :run-id="selectedTaskResolved.run_id"
-            @changed="emit('changed')"
-          />
+          <code class="shell-task-detail__command">{{ selectedTaskResolved.command || selectedTaskResolved.description }}</code>
+          <pre v-if="selectedTaskResolved.result || selectedTaskResolved.error" class="shell-task-detail__output">{{ selectedTaskResolved.result || selectedTaskResolved.error }}</pre>
+          <span v-else class="shell-task-detail__empty">命令仍在运行，输出完成后会显示在这里。</span>
         </div>
-      </template>
+        <SubagentConversationView
+          v-else
+          :session-id="selectedTaskResolved.child_session_id || selectedTaskResolved.task_id"
+          :run-id="selectedTaskResolved.run_id"
+          @changed="emit('changed')"
+        />
+      </div>
+    </template>
 
-      <!-- 列表态 -->
-      <template v-else>
-        <div class="bg-task-overview">
-          <span>{{ taskSummary || '运行状态会在这里实时更新' }}</span>
-          <span v-if="ordered.length" class="bg-task-overview__count">共 {{ ordered.length }} 个</span>
+    <!-- 列表态 -->
+    <template v-else>
+      <div class="bg-task-overview">
+        <span>{{ taskSummary || '运行状态会在这里实时更新' }}</span>
+        <span v-if="ordered.length" class="bg-task-overview__count">共 {{ ordered.length }} 个</span>
+      </div>
+      <div class="bg-task-list">
+        <div v-if="!ordered.length" class="bg-task-empty">
+          <span class="bg-task-empty__icon"><n-icon size="20"><GitNetworkOutline /></n-icon></span>
+          <strong>暂无后台子任务</strong>
+          <span>Agent 创建后台任务后，进度会实时显示在这里</span>
         </div>
-        <div class="bg-task-list">
-          <div v-if="!ordered.length" class="bg-task-empty">
-            <span class="bg-task-empty__icon"><n-icon size="20"><GitNetworkOutline /></n-icon></span>
-            <strong>暂无后台子任务</strong>
-            <span>Agent 创建后台任务后，进度会实时显示在这里</span>
-          </div>
 
-          <!-- 待审批固定展开，避免高风险操作藏在折叠层级里。 -->
-          <div
-            v-for="task in pending"
-            :key="task.task_id"
-            class="bg-task-card bg-task-card--approval"
-          >
-            <div class="bg-task-card__head">
-              <span class="bg-task-status-dot bg-task-status-dot--awaiting-approval"></span>
-              <div class="bg-task-card__content">
-                <span class="bg-task-card__title">{{ task.description }}</span>
-                <span class="bg-task-card__meta">等待确认后继续</span>
-              </div>
-            </div>
-            <pre class="bg-task-card__preview">{{ actionPreview(task) }}</pre>
-            <div class="bg-task-card__actions">
-              <NButton size="small" type="primary" @click="emit('decide', { task, decisions: [{ type: 'approve' }] })">
-                批准
-              </NButton>
-              <NButton
-                size="small"
-                type="error"
-                quaternary
-                @click="emit('decide', { task, decisions: [{ type: 'reject', message: '用户拒绝了该操作' }] })"
-              >
-                拒绝
-              </NButton>
+        <!-- 待审批固定展开，避免高风险操作藏在折叠层级里。 -->
+        <div
+          v-for="task in pending"
+          :key="task.task_id"
+          class="bg-task-card bg-task-card--approval"
+        >
+          <div class="bg-task-card__head">
+            <span class="bg-task-status-dot bg-task-status-dot--awaiting-approval"></span>
+            <div class="bg-task-card__content">
+              <span class="bg-task-card__title">{{ task.description }}</span>
+              <span class="bg-task-card__meta">等待确认后继续</span>
             </div>
           </div>
+          <pre class="bg-task-card__preview">{{ actionPreview(task) }}</pre>
+          <div class="bg-task-card__actions">
+            <NButton size="small" type="primary" @click="emit('decide', { task, decisions: [{ type: 'approve' }] })">
+              批准
+            </NButton>
+            <NButton
+              size="small"
+              type="error"
+              quaternary
+              @click="emit('decide', { task, decisions: [{ type: 'reject', message: '用户拒绝了该操作' }] })"
+            >
+              拒绝
+            </NButton>
+          </div>
+        </div>
 
-          <!-- 两行任务行：主信息、状态与指标分层，展开后再显示执行内容。 -->
-          <div
-            v-for="task in [...running, ...finished]"
-            :key="task.task_id"
-            class="bg-task-card"
-            :class="{ 'bg-task-card--open': showDetail && selectedTaskResolved?.task_id === task.task_id }"
-          >
-            <button type="button" class="bg-task-card__row" @click="toggleExpand(task)">
-              <span class="bg-task-card__disclosure" :class="{ 'bg-task-card__disclosure--open': showDetail && selectedTaskResolved?.task_id === task.task_id }">
-                <n-icon size="14"><ChevronDownOutline /></n-icon>
-              </span>
-              <span class="bg-task-status-dot" :class="`bg-task-status-dot--${statusClass(task.status)}`"></span>
-              <span class="bg-task-card__content">
-                <span class="bg-task-card__title">{{ task.description }}</span>
-                <span class="bg-task-card__meta">
-                  <span v-if="task.kind === 'shell'">后台命令</span>
-                  <span v-else>子 Agent</span>
+        <!-- 两行任务行：主信息、状态与指标分层，展开后再显示执行内容。 -->
+        <div
+          v-for="task in [...running, ...finished]"
+          :key="task.task_id"
+          class="bg-task-card"
+          :class="{ 'bg-task-card--open': showDetail && selectedTaskResolved?.task_id === task.task_id }"
+        >
+          <button type="button" class="bg-task-card__row" @click="toggleExpand(task)">
+            <span class="bg-task-card__disclosure" :class="{ 'bg-task-card__disclosure--open': showDetail && selectedTaskResolved?.task_id === task.task_id }">
+              <n-icon size="14"><ChevronDownOutline /></n-icon>
+            </span>
+            <span class="bg-task-status-dot" :class="`bg-task-status-dot--${statusClass(task.status)}`"></span>
+            <span class="bg-task-card__content">
+              <span class="bg-task-card__title">{{ task.description }}</span>
+              <span class="bg-task-card__meta">
+                <span v-if="task.kind === 'shell'">后台命令</span>
+                <span v-else>子 Agent</span>
+                <span>·</span>
+                <span>{{ taskStatusLabel(task.status) }}</span>
+                <template v-if="taskElapsed(task)">
                   <span>·</span>
-                  <span>{{ taskStatusLabel(task.status) }}</span>
-                  <template v-if="taskElapsed(task)">
-                    <span>·</span>
-                    <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
-                  </template>
-                </span>
+                  <span class="bg-task-card__elapsed">{{ taskElapsed(task) }}</span>
+                </template>
               </span>
-              <span v-if="task.progress_count ?? task.progress?.length" class="bg-task-card__metric">
-                {{ task.progress_count ?? task.progress?.length }} 步
-              </span>
-            </button>
-          </div>
+            </span>
+            <span v-if="task.progress_count ?? task.progress?.length" class="bg-task-card__metric">
+              {{ task.progress_count ?? task.progress?.length }} 步
+            </span>
+          </button>
         </div>
-      </template>
-    </n-drawer-content>
-  </n-drawer>
+      </div>
+    </template>
+  </SubagentSessionDrawer>
 </template>
 
 <style scoped lang="scss">

@@ -3,7 +3,8 @@ import type { TaskCatalogEntry } from '@/api/chat'
 import type { ToolUiPart } from '@/views/chat/messageParts'
 import { GitNetworkOutline } from '@vicons/ionicons-v5'
 import { computed, ref } from 'vue'
-import SubagentConversationDrawer from '@/components/SubagentConversationDrawer/index.vue'
+import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
+import SubagentSessionDrawer from '@/components/SubagentSessionDrawer/index.vue'
 
 const props = defineProps<{
   toolPart: ToolUiPart
@@ -37,13 +38,17 @@ const dispatchFailed = computed(() => props.toolPart.status === 'error' && !prop
     <span v-if="dispatchFailed" class="subagent-card__failed">启动失败</span>
   </button>
 
-  <SubagentConversationDrawer
+  <SubagentSessionDrawer
     v-if="sessionId"
     v-model:show="show"
-    :session-id="sessionId"
-    :run-id="props.task?.run_id"
     :title="title"
-  />
+  >
+    <SubagentConversationView
+      :session-id="sessionId"
+      :run-id="props.task?.run_id"
+      :active="show"
+    />
+  </SubagentSessionDrawer>
 </template>
 
 <style scoped lang="scss">
