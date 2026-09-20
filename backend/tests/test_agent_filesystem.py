@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from noesis.agents.backends.factory import build_agent_filesystem_backend
-from noesis.agents.backends.paths import (
+from noesis.paths import (
     AGENT_MEMORY_ROUTE,
     AGENT_PERSONAL_SKILLS_ROUTE,
     AGENT_PUBLIC_SKILLS_ROUTE,

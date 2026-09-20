@@ -10,7 +10,6 @@ from enum import StrEnum
 
 from noesis.agents.prompts.common_qa import build_common_qa_prompt
 from noesis.agents.prompts.fault_operation import build_fault_operation_prompt, build_fault_operation_sub_prompt
-from noesis.agents.prompts.simple_mcp import build_simple_mcp_prompt
 from noesis.agents.prompts.super_agent import build_super_agent_prompt, build_super_agent_sub_prompt
 
 
@@ -20,7 +19,6 @@ class PromptProfile(StrEnum):
     FAULT_OPERATION_SUB = "fault_operation_sub"
     SUPER_AGENT = "super_agent"
     SUPER_AGENT_SUB = "super_agent_sub"
-    SIMPLE_MCP = "simple_mcp"
 
 
 def build_prompt(
@@ -46,7 +44,6 @@ def build_prompt(
         PromptProfile.FAULT_OPERATION_SUB.value: build_fault_operation_sub_prompt,
         PromptProfile.SUPER_AGENT.value: build_super_agent_prompt,
         PromptProfile.SUPER_AGENT_SUB.value: build_super_agent_sub_prompt,
-        PromptProfile.SIMPLE_MCP.value: build_simple_mcp_prompt,
     }
 
     builder = builders.get(key)

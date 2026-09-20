@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Optional
 
-from noesis.agents.backends.paths import (
+from noesis.paths import (
     AGENT_MEMORY_AGENTS_FILE,
     AGENT_MEMORY_USER_FILE,
     AGENT_PERSONAL_SKILLS_ROUTE,

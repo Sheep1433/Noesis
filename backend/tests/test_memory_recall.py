@@ -13,10 +13,13 @@ import pytest
 from deepagents.backends.protocol import WriteResult
 
 import noesis.config.user_data_paths as user_data_paths
-from noesis.agents.backends.memory import UserMemoryBackend
+from noesis.agents.middlewares.memory_write_middleware import (
+    MemoryWriteMiddleware,
+    MemoryWriteRejected,
+)
 from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.tools.memory_tools import build_memory_tools
-from noesis.services.memory.store import MemoryStore
+from noesis.memory.store import MemoryStore
 
 
 @pytest.fixture()
@@ -219,39 +222,48 @@ def test_memory_prompt_contains_frontmatter_template() -> None:
     assert "带时效性的内容只进 goal" in prompt
 
 
-# ----- /memory/ backend 条目扩展 -----
+# ----- /memory/ 路由 + MemoryWriteMiddleware -----
 
 
-def _backend(users_root: Path, uid: str = "u1") -> UserMemoryBackend:
-    from noesis.config.user_data_paths import (
-        ensure_user_memory_files,
-        get_user_agents_md_path,
-        get_user_profile_md_path,
-    )
+def _backend(users_root: Path, uid: str = "u1"):
+    from noesis.agents.backends.factory import build_agent_filesystem_backend
+    from noesis.memory.layout import ensure_user_memory_files
 
     ensure_user_memory_files(uid)
-    return UserMemoryBackend(
-        agents_path=get_user_agents_md_path(uid),
-        user_path=get_user_profile_md_path(uid),
-        user_id=uid,
+    return build_agent_filesystem_backend(
+        user_id=uid, session_id="recall-test", sandbox=None, shell_timeout=30,
     )
 
 
-def test_backend_entry_write_syncs_index(users_root: Path) -> None:
+def _write_request(path: str, *, tool: str = "write_file"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(tool_call={"name": tool, "args": {"file_path": path}})
+
+
+def _run_write(mw: MemoryWriteMiddleware, backend, path: str, content: str):
+    return mw.wrap_tool_call(
+        _write_request(path), lambda _req: backend.write(path, content)
+    )
+
+
+def test_middleware_entry_write_syncs_index(users_root: Path) -> None:
     backend = _backend(users_root)
-    result = backend.write("/preference/new-entry.md", "# 新条目\n\n正文内容\n")
+    mw = MemoryWriteMiddleware(user_id="u1")
+    result = _run_write(mw, backend, "/memory/preference/new-entry.md", "# 新条目\n\n正文内容\n")
     assert isinstance(result, WriteResult) and result.error is None
     state = MemoryStore.read_index("u1")
     assert any(
         e.slug == "new-entry" and e.label == "新条目" for e in state.entries
     )
-    read = backend.read("/preference/new-entry.md")
+    read = backend.read("/memory/preference/new-entry.md")
     assert read.error is None
 
 
-def test_backend_frontmatter_write_projects_description(users_root: Path) -> None:
+def test_middleware_frontmatter_write_projects_description(users_root: Path) -> None:
     """Agent 按 frontmatter 模板直写：索引行从结构化字段取得投影。"""
     backend = _backend(users_root)
+    mw = MemoryWriteMiddleware(user_id="u1")
     content = (
         "---\n"
         "type: preference\n"
@@ -262,26 +274,55 @@ def test_backend_frontmatter_write_projects_description(users_root: Path) -> Non
         "sources:\n  - 会话 abcd1234 · 2026-09-01\n"
         "---\n\n# 输出语言\n\n始终用简体中文。\n"
     )
-    assert backend.write("/preference/output-language.md", content).error is None
+    result = _run_write(mw, backend, "/memory/preference/output-language.md", content)
+    assert result.error is None
     state = MemoryStore.read_index("u1")
     entry = next(e for e in state.entries if e.slug == "output-language")
     assert entry.label == "输出语言"
     assert entry.description == "偏好简体中文回复；所有产出场景调用"
 
 
-def test_backend_memory_index_and_journal_are_read_only(users_root: Path) -> None:
+def test_middleware_failed_entry_write_skips_index_sync(users_root: Path) -> None:
+    """写入失败（裸 WriteResult 带 error）不得触发索引同步。"""
+    from deepagents.backends.protocol import WriteResult
+
+    backend = _backend(users_root)
+    mw = MemoryWriteMiddleware(user_id="u1")
+
+    def _failing(_req):
+        return WriteResult(error="write failed")
+
+    result = mw.wrap_tool_call(
+        _write_request("/memory/preference/ghost.md"), _failing
+    )
+    assert result.error == "write failed"
+    state = MemoryStore.read_index("u1")
+    assert not any(e.slug == "ghost" for e in state.entries)
+
+
+def test_middleware_memory_index_and_journal_are_read_only(users_root: Path) -> None:
     MemoryStore.append_journal("u1", session_id="sess-1", text="日志")
     backend = _backend(users_root)
-    assert backend.write("/MEMORY.md", "x").error == "permission_denied"
-    assert backend.write("/journal/2026-08-26.md", "x").error == "permission_denied"
-    assert backend.read("/MEMORY.md").error is None
+    mw = MemoryWriteMiddleware(user_id="u1")
+    with pytest.raises(MemoryWriteRejected):
+        _run_write(mw, backend, "/memory/MEMORY.md", "x")
+    with pytest.raises(MemoryWriteRejected):
+        _run_write(mw, backend, "/memory/journal/2026-08-26.md", "x")
+    assert backend.read("/memory/MEMORY.md").error is None
 
 
-def test_backend_rejects_paths_outside_memory_tree(users_root: Path) -> None:
+def test_middleware_rejects_paths_outside_whitelist(users_root: Path) -> None:
     backend = _backend(users_root)
-    assert backend.read("/channels.json").error == "file_not_found"
-    with pytest.raises(ValueError, match="Path traversal"):
-        backend.write("/../secret.md", "x")
+    mw = MemoryWriteMiddleware(user_id="u1")
+    # 白名单外的 /memory 路径：条目目录外的散文件
+    with pytest.raises(MemoryWriteRejected):
+        _run_write(mw, backend, "/memory/secret.md", "x")
+    # 条目目录内但文件名不合法（空格）
+    with pytest.raises(MemoryWriteRejected):
+        _run_write(mw, backend, "/memory/preference/bad name.md", "x")
+    # 非 /memory 路径不经门卫（workspace 正常写）
+    result = _run_write(mw, backend, "/workspace/notes.md", "x")
+    assert result.error is None
 
 
 # ----- 侧边栏记忆树（SessionContextService） -----

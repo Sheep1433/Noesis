@@ -6,7 +6,7 @@ from pathlib import Path
 
 from deepagents.middleware.skills import SkillSource
 
-from noesis.agents.backends.paths import (
+from noesis.paths import (
     AGENT_PERSONAL_SKILLS_ROUTE,
     AGENT_PUBLIC_SKILLS_ROUTE,
 )

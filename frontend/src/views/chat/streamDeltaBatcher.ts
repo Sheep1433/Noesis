@@ -23,6 +23,8 @@ export interface StreamDelta {
   kind: StreamDeltaKind
   data: string
   parentTaskCallId?: string
+  /** wire part_id（每次模型尝试铸造一次）：按 id 路由进独立 part，供 stream-rollback 点名丢弃 */
+  partId?: string
   redactedThinking?: boolean
 }
 
@@ -41,6 +43,7 @@ export interface StreamDeltaBatcher {
 interface DeltaBucket {
   kind: StreamDeltaKind
   parentTaskCallId?: string
+  partId?: string
   redactedThinking?: boolean
   chunks: string[]
 }
@@ -75,6 +78,7 @@ export function createStreamDeltaBatcher(
       kind: bucket.kind,
       data: bucket.chunks.join(''),
       parentTaskCallId: bucket.parentTaskCallId,
+      partId: bucket.partId,
       redactedThinking: bucket.redactedThinking,
     }))
     buckets = []
@@ -98,6 +102,7 @@ export function createStreamDeltaBatcher(
         tail
         && tail.kind === delta.kind
         && tail.parentTaskCallId === delta.parentTaskCallId
+        && tail.partId === delta.partId
         && tail.redactedThinking === delta.redactedThinking
       ) {
         tail.chunks.push(delta.data)
@@ -105,6 +110,7 @@ export function createStreamDeltaBatcher(
         buckets.push({
           kind: delta.kind,
           parentTaskCallId: delta.parentTaskCallId,
+          partId: delta.partId,
           redactedThinking: delta.redactedThinking,
           chunks: [delta.data],
         })

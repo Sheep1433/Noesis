@@ -74,7 +74,7 @@
 | `agent-harness` | `packages/noesis-core`（`noesis` 包）+ `backend/server`；边界测试 `backend/tests/test_core_package_boundary.py` |
 | `agent-profiles` | `noesis/agents/`（含 `case_generate/`） |
 | `agent-hitl` | `noesis/agents/guardrails/`、`noesis/chat/hitl/` |
-| `agent-memory` | `noesis/services/memory/`、`noesis/agents/tools/memory_tools.py` |
+| `agent-memory` | `noesis/memory/`、`noesis/agents/tools/memory_tools.py` |
 | `agent-background-tasks` | `noesis/agents/subagents/`（executor）、`noesis/services/bg_continuation_service.py` |
 | `agent-tool-failure-handling` | `noesis/errors/tool_failure.py`、`noesis/chat/tool_state.py`、`noesis/chat/event_mapping/failure_notice.py` |
 | `agent-delivery` | `noesis/chat/delivery/`、`noesis/chat/runs/`、`noesis/services/run_service.py`、`noesis/services/channel_run_service.py` |

@@ -360,7 +360,7 @@ def _compile_sql(stmt: Any) -> str:
 @pytest.mark.asyncio
 async def test_parent_soft_delete_cascades_to_children(monkeypatch) -> None:
     """父会话软删：child session/消息级联软删 + 运行中任务与 run 取消。"""
-    from noesis.agents.subagents import executor as executor_module
+    from noesis.agents.background import executor as executor_module
     from noesis.services import chat_service
     from noesis.services.chat_service import ChatService
     from noesis.services.scheduled_task_service import ScheduledTaskService

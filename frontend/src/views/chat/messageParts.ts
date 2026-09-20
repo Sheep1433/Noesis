@@ -998,6 +998,7 @@ export function appendTextDelta(
   parts: UiPart[],
   delta: string,
   parent_task_call_id?: string,
+  part_id?: string,
 ): UiPart[] {
   if (delta.includes(COMPACTION_BOUNDARY)) {
     const segments = delta.split(COMPACTION_BOUNDARY)
@@ -1005,7 +1006,7 @@ export function appendTextDelta(
     segments.forEach((segment, index) => {
       if (segment) {
         if (index === 0) {
-          out = appendTextDelta(out, segment, parent_task_call_id)
+          out = appendTextDelta(out, segment, parent_task_call_id, part_id)
         } else {
           out = [
             ...out,
@@ -1034,6 +1035,33 @@ export function appendTextDelta(
     return out
   }
   const parentId = parent_task_call_id?.trim() || undefined
+  // 带 part_id（wire 的 text-start 为每次模型尝试铸 id）：按 id 路由，
+  // 「一次尝试的输出 = 尝试期间铸造的 parts」，stream-rollback 才能
+  // 按 id 点名丢弃而不误伤前文
+  if (part_id) {
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i]
+      if (p.type === 'text' && p.id === part_id) {
+        const next = parts.slice()
+        next[i] = {
+          ...p,
+          content: p.content + delta,
+          status: p.status === 'completed' ? 'streaming' : (p.status || 'streaming'),
+        }
+        return next
+      }
+    }
+    return [
+      ...parts,
+      {
+        id: part_id,
+        type: 'text',
+        content: delta,
+        status: 'streaming',
+        ...(parentId ? { parent_task_call_id: parentId } : {}),
+      },
+    ]
+  }
   // 跳过其它 parent 的交错 part，避免子 Agent 正文被拆碎
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i]
@@ -1092,12 +1120,16 @@ function takeEmitAndHoldForToken(s: string, token: string): { emit: string, hold
 /**
  * 将正文流中的 `<think>…</think>` 拆成 reasoning 部件（折叠展示），其余仍走 text。
  * 标签可跨多个 SSE chunk；ctx 须在每条助手流开始时 reset，结束时 {@link flushRedactedThinkingStreamCtx}。
+ *
+ * 带 part_id 时 text 段继承服务端 part id、think 段用 `${part_id}~think` 派生 id
+ * （dropStreamPartsById 按 id 与 `~` 前缀匹配，stream-rollback 才能点名丢弃）。
  */
 export function appendTextDeltaWithRedactedThinking(
   parts: UiPart[],
   delta: string,
   ctx: RedactedThinkingStreamCtx,
   parent_task_call_id?: string,
+  part_id?: string,
 ): UiPart[] {
   let out = parts
   let s = ctx.pending + delta
@@ -1109,7 +1141,7 @@ export function appendTextDeltaWithRedactedThinking(
       if (idx !== -1) {
         const before = s.slice(0, idx)
         if (before) {
-          out = appendTextDelta(out, before, parent_task_call_id)
+          out = appendTextDelta(out, before, parent_task_call_id, part_id)
         }
         s = s.slice(idx + REDACTED_OPEN.length)
         ctx.mode = 'thinking'
@@ -1117,7 +1149,7 @@ export function appendTextDeltaWithRedactedThinking(
       }
       const { emit, hold } = takeEmitAndHoldForToken(s, REDACTED_OPEN)
       if (emit) {
-        out = appendTextDelta(out, emit, parent_task_call_id)
+        out = appendTextDelta(out, emit, parent_task_call_id, part_id)
       }
       ctx.pending = hold
       return out
@@ -1126,7 +1158,7 @@ export function appendTextDeltaWithRedactedThinking(
     if (idx !== -1) {
       const before = s.slice(0, idx)
       if (before) {
-        out = appendReasoningDelta(out, before, parent_task_call_id)
+        out = appendReasoningDelta(out, before, parent_task_call_id, part_id ? `${part_id}~think` : undefined)
       }
       out = completeReasoningPart(out, undefined, parent_task_call_id)
       s = s.slice(idx + REDACTED_CLOSE.length)
@@ -1135,7 +1167,7 @@ export function appendTextDeltaWithRedactedThinking(
     }
     const { emit, hold } = takeEmitAndHoldForToken(s, REDACTED_CLOSE)
     if (emit) {
-      out = appendReasoningDelta(out, emit, parent_task_call_id)
+      out = appendReasoningDelta(out, emit, parent_task_call_id, part_id ? `${part_id}~think` : undefined)
     }
     ctx.pending = hold
     return out
@@ -1165,8 +1197,30 @@ export function appendReasoningDelta(
   parts: UiPart[],
   delta: string,
   parent_task_call_id?: string,
+  part_id?: string,
 ): UiPart[] {
   const parentId = parent_task_call_id?.trim() || undefined
+  // 带 part_id：按 id 路由（与 appendTextDelta 同语义，供 stream-rollback 点名丢弃）
+  if (part_id) {
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i]
+      if (p.type === 'reasoning' && p.id === part_id) {
+        const next = parts.slice()
+        next[i] = { ...p, content: p.content + delta, status: 'streaming' }
+        return next
+      }
+    }
+    return [
+      ...parts,
+      {
+        id: part_id,
+        type: 'reasoning',
+        content: delta,
+        status: 'streaming',
+        ...(parentId ? { parent_task_call_id: parentId } : {}),
+      },
+    ]
+  }
   // 跳过其它 parent 的交错 part（主 Agent 与子 Agent 事件交错时），
   // 合并进「同 parent 最近一条 reasoning」；同 parent 的 text/tool 之后才新开块。
   for (let i = parts.length - 1; i >= 0; i--) {
@@ -1196,6 +1250,22 @@ export function appendReasoningDelta(
       ...(parentId ? { parent_task_call_id: parentId } : {}),
     },
   ]
+}
+
+/**
+ * stream-rollback 按 part_ids 点名丢弃失败尝试的 parts。
+ * 精确匹配 part id；redacted-thinking 拆分段的派生 id（`id~think`）按
+ * `~` 前缀一并匹配。空名单原样返回引用。
+ */
+export function dropStreamPartsById(
+  parts: UiPart[],
+  partIds: Array<string | undefined | null>,
+): UiPart[] {
+  const wanted = partIds.filter((x): x is string => Boolean(x))
+  if (!wanted.length) {
+    return parts
+  }
+  return parts.filter((p) => !wanted.some((id) => p.id === id || p.id.startsWith(`${id}~`)))
 }
 
 export function upsertToolInputPart(
@@ -1338,21 +1408,4 @@ export function applyHitlPendingParts(
     }
   }
   return next
-}
-
-/**
- * LLM 重试/降级回滚：丢弃末尾连续的 text/reasoning parts（失败尝试被断流
- * 前已流出的部分输出）。工具/检索等 part 是模型调用边界，遇到即停——与
- * 后端 builder.rollback_trailing_stream_parts 同一规则。
- */
-export function rollbackTrailingStreamParts(parts: UiPart[]): UiPart[] {
-  let end = parts.length
-  while (end > 0) {
-    const p = parts[end - 1]
-    if (p.type !== 'text' && p.type !== 'reasoning') {
-      break
-    }
-    end -= 1
-  }
-  return end === parts.length ? parts : parts.slice(0, end)
 }

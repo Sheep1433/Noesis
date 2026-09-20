@@ -23,6 +23,7 @@ from noesis.runtime.logging import logger
 from noesis.chat.event_mapping.usage_normalize import merge_model_calls, merge_usage
 from noesis.chat.message_builder import AssistantMessageBuilder
 from noesis.config.user_data_paths import delete_session_workspace
+from noesis.agents.background.ports import configure_session_ops_port
 
 # ============================================================================
 # 加载锁：服务启动完成 PostgreSQL 检查点恢复前，业务写入须等待
@@ -618,7 +619,7 @@ class ChatService:
             await cancel_session_agent_runs(target_id)
         # 子 Agent executor 的生命周期归属于父会话；父会话删除时一并取消。
         try:
-            from noesis.agents.subagents.executor import BackgroundTaskExecutor
+            from noesis.agents.background.executor import BackgroundTaskExecutor
 
             for task in BackgroundTaskExecutor.list_for_session(session_id):
                 if not str(task.get('status', '')).endswith(('completed', 'failed', 'cancelled', 'timed_out')):
@@ -760,7 +761,7 @@ class ChatService:
         for sid in all_ids:
             await cancel_session_agent_runs(sid)
         try:
-            from noesis.agents.subagents.executor import BackgroundTaskExecutor
+            from noesis.agents.background.executor import BackgroundTaskExecutor
 
             for sid in found_ids:
                 for task in BackgroundTaskExecutor.list_for_session(sid):
@@ -1284,7 +1285,7 @@ class ChatService:
     ) -> list[dict[str, Any]]:
         """返回子 Agent 目录摘要；不读取正文消息。"""
         from sqlalchemy import func
-        from noesis.agents.subagents.executor import BackgroundTaskExecutor
+        from noesis.agents.background.executor import BackgroundTaskExecutor
 
         parent = await cls.get_session_by_id(parent_id, user_id=user_id, db=db)
         if parent is None:
@@ -1332,7 +1333,7 @@ class ChatService:
         catalog: list[dict[str, Any]] = []
         for child in children:
             run = latest_runs.get(child.id)
-            task = BackgroundTaskExecutor.get_memory(child.id)
+            task = BackgroundTaskExecutor.get(child.id)
             catalog.append({
                 'session_id': child.id,
                 'parent_id': parent_id,
@@ -1372,3 +1373,5 @@ class ChatService:
             'session': session,
             'messages': messages
         }
+
+configure_session_ops_port(ChatService)

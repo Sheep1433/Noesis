@@ -89,7 +89,7 @@ run 内容流（`GET /api/chat/runs/{run_id}/stream`，主会话与子 Agent run
 
 | 分组 | 事件 |
 |---|---|
-| 消息与生命周期 | `message-start`、`run-status`（`retrying` / `hitl_pending` 等非终态）、`stream-rollback`（LLM 重试/降级：失败尝试的部分流式输出作废，消费方回滚末尾 text/reasoning parts）、`run.started`、`run.finished`、`approval.required`、`approval.resumed` |
+| 消息与生命周期 | `message-start`、`run-status`（`retrying` / `hitl_pending` 等非终态）、`stream-rollback`（LLM 重试/降级：失败尝试的部分流式输出作废。帧携带 `part_ids` 点名本尝试铸造的 parts，消费方按 id 丢弃；零输出失败不发音。每次模型尝试经 `text-start`/`reasoning-start` 铸新 part id，失败尝试的输出恰好是尝试期间铸造的 parts——前文与压缩分割线不受回滚影响）、`run.started`、`run.finished`、`approval.required`、`approval.resumed` |
 | reasoning | `reasoning-start`、`reasoning-delta`、`reasoning-end` |
 | 正文 | `text-start`、`text-delta`、`text-end` |
 | 工具 | `tool-input-start`、`tool-input-available`、`tool-output-available` |
@@ -136,7 +136,9 @@ RunManager 指标包含 active/retained Run、subscriber/event/replay bytes、ov
 
 ## 7. 部署约束
 
-lifespan 在 migration、recovery、scheduler 和 channel runtime 之前，通过专用 PostgreSQL 连接获取固定 advisory lock。第二个 worker/容器 fail-fast。lock 连接丢失后实例变为 not-ready、拒绝新 Run，并停止 live producer。
+lifespan 在 migration、recovery、scheduler 和 channel runtime 之前，通过专用 PostgreSQL 连接获取固定 advisory lock。lock 连接丢失后实例变为 not-ready、拒绝新 Run，并停止 live producer。
+
+**运行模式（enable-distributed-sse-pubsub）**：`NOESIS_RUN_BUS_BACKEND=memory|redis` 显式选择。memory 单实例（第二实例 fail-fast）；redis 模式单 execution leader + 多 Web worker——leader 由 PostgreSQL 选举（`t_runtime_leader` 全局 term），follower ready 服务 API/SSE，重竞选晋升时回调执行四段 recovery（主 Run / 子代理 Run / 定时任务 / 通知装载）后才 dispatch。Run 事件经 Redis Pub/Sub 广播（at-most-once：subscribe-first 握手 + sequence gap 检测 + 周期 checkpoint/snapshot 对账恢复，PostgreSQL 始终是权威）；stop/HITL/后台任务停止走 `t_agent_run_command` durable command（幂等去重 + leader consumer 补扫，API 返回 command_id/command_status，accepted 不伪装完成）。会话/用户信令与后台任务面板事件经信令通道跨 worker 广播（hint 语义）；子会话 RunEvent 复用 Run bus。多实例部署：`docker compose up -d --scale backend=2`（compose 含 redis 服务，nginx 经 Docker DNS 轮询）。详见 `openspec/specs/distributed-run-coordination/`（变更归档后）。
 
 SSE 注释 keepalive 不分配 sequence，也不触发 checkpoint。反向代理 read timeout 必须大于 keepalive 间隔并关闭响应缓冲。
 

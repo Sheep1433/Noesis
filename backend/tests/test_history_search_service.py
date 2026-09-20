@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from noesis.services.history_search import (
+from noesis.repositories.history_search import (
     SessionAccessDenied,
     _apply_total_budget,
     _escape_like,
@@ -80,7 +80,7 @@ def test_excerpt_around_long_text_without_keyword_takes_head() -> None:
 
 
 def test_apply_total_budget_cuts_overflow_hits() -> None:
-    from noesis.services.history_search import HistoryHit
+    from noesis.repositories.history_search import HistoryHit
 
     hits = [
         HistoryHit(1, "user", 0, "a" * 60, False),

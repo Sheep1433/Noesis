@@ -280,19 +280,20 @@ def test_unversioned_kb_evidence_rejected_by_identity_validation() -> None:
     assert all(part["type"] != "retrieval" or not part["results"] for part in builder.to_dict()["parts"])
 
 
-def test_rollback_trailing_stream_parts_stops_at_tool_boundary() -> None:
-    """LLM 重试回滚：丢弃末尾连续 text/reasoning，工具 part 是模型调用边界。"""
+def test_drop_parts_removes_only_named_ids() -> None:
+    """stream-rollback 点名丢弃：只删指定 id 的 parts，前文原样保留。"""
     b = AssistantMessageBuilder(session_id="s", message_id="m")
-    b.append_text("第一段正文", parent_task_call_id=None)
+    b.append_text("第一段正文", parent_task_call_id=None, part_id="p-keep")
     b.append_tool("web_search", {"query": "q"}, tool_call_id="c1")
-    b.append_reasoning_delta("失败尝试的思考", parent_task_call_id=None)
-    b.append_text_delta("失败尝试的正文", parent_task_call_id=None)
+    b.append_reasoning_delta("失败尝试的思考", parent_task_call_id=None, part_id="p-fail-r")
+    b.append_text_delta("失败尝试的正文", parent_task_call_id=None, part_id="p-fail-t")
 
-    dropped = b.rollback_trailing_stream_parts()
+    dropped = b.drop_parts(["p-fail-r", "p-fail-t"])
 
     assert dropped == 2
     parts = b.to_dict()["parts"]
     assert [p["type"] for p in parts] == ["text", "tool"]
     assert parts[0]["content"] == "第一段正文"
-    # 幂等：再次回滚无 text/reasoning 可丢
-    assert b.rollback_trailing_stream_parts() == 0
+    # 幂等：重复点名无 part 可删；空 id / 未知 id 为 no-op
+    assert b.drop_parts(["p-fail-t"]) == 0
+    assert b.drop_parts(["", "unknown"]) == 0

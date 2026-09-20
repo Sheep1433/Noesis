@@ -39,6 +39,10 @@ class _FakeLeaderElector:
     def token(self) -> _FakeLeadershipToken | None:
         return self._token
 
+    @property
+    def is_leader(self) -> bool:
+        return self._token is not None and getattr(self._token, "valid", True)
+
     async def acquire(self) -> _FakeLeadershipToken:
         await pg_manager_for_tests.acquire_advisory_lock()
         self._token = _FakeLeadershipToken()
@@ -112,6 +116,18 @@ def _patch_lifespan_resources(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
     reconcile_subagents = AsyncMock(return_value=0)
     monkeypatch.setattr(SubagentSessionService, "reconcile_orphaned_runs", reconcile_subagents)
     patched["reconcile_subagents"] = reconcile_subagents
+    from noesis.services.scheduled_task_service import ScheduledTaskService
+
+    reconcile_scheduled = AsyncMock(return_value=0)
+    monkeypatch.setattr(ScheduledTaskService, "reconcile_interrupted_runs", reconcile_scheduled)
+    patched["reconcile_scheduled"] = reconcile_scheduled
+    import noesis.services.bg_notification_store as bg_notification_store
+
+    restore_notices = AsyncMock(return_value=0)
+    monkeypatch.setattr(
+        bg_notification_store, "restore_undelivered_notifications", restore_notices
+    )
+    patched["restore_notices"] = restore_notices
     shutdown_run_manager = AsyncMock()
     monkeypatch.setattr(server_main.run_manager, "shutdown", shutdown_run_manager)
     patched["shutdown_run_manager"] = shutdown_run_manager

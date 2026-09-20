@@ -115,7 +115,7 @@ SandboxService 缓存仅为优化；runner 返回容器不存在时 backend SHAL
 
 ### Requirement: 用户记忆 `/memory/`
 
-`ensure_user_memory_files` SHALL seed `AGENTS.md` 与 `USER.md`。Agent 经 `/memory/` route（`memory.UserMemoryBackend`）读写；**SHALL NOT** 假设记忆文件出现在沙箱 `/workspace` 挂载中。
+`ensure_user_memory_files`（`noesis/memory/layout.py`）SHALL seed `AGENTS.md` 与 `USER.md`（位于用户 `memory/` 子树）。Agent 经 `/memory/` route（裸 `FilesystemBackend` + `MemoryWriteMiddleware` 写入门卫与索引同步）读写；**SHALL NOT** 假设记忆文件出现在沙箱 `/workspace` 挂载中。
 
 SuperAgent 装配 SHALL 注入记忆相关中间件/提示（见 `agent-profiles`）。
 

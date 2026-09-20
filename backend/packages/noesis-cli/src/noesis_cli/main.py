@@ -60,7 +60,7 @@ def chat(
         help="单发即走（Claude Code print 模式）：跑完一问即退出，非零退出码=失败。",
     ),
     qa_type: str = typer.Option(
-        "super", "--qa-type", "-t", help="super | common | simple_mcp"
+        "super", "--qa-type", "-t", help="super | common"
     ),
     model: str = typer.Option(
         None, "--model", "-m",

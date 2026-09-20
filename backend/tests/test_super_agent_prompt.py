@@ -35,9 +35,9 @@ def test_super_agent_prompt_keeps_delegation_criteria():
 
 def test_start_task_defaults_to_foreground_wait():
     """默认前台等待：后台只在超时自动转入或显式 run_in_background=true 时发生。"""
-    from noesis.agents.subagents.executor import BackgroundTaskExecutor
-    from noesis.agents.subagents.registry import SubagentRegistry
-    from noesis.agents.subagents.async_tools_middleware import (
+    from noesis.agents.background.executor import BackgroundTaskExecutor
+    from noesis.agents.background.subagent.roles import SubagentRegistry
+    from noesis.agents.background.subagent.tools import (
         AsyncSubagentToolsMiddleware,
         _StartTaskArgs,
     )

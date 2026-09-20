@@ -20,15 +20,15 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import PrivateAttr
 
-from noesis.agents.subagents import notifications
-from noesis.agents.subagents.executor import (
+from noesis.agents.background import notifications
+from noesis.agents.background.executor import (
     BackgroundTaskExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
 )
-from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
-from noesis.agents.subagents.registry import SubagentRegistry, SubagentRole
-from noesis.agents.subagents.async_tools_middleware import AsyncSubagentToolsMiddleware
+from noesis.agents.background.notify_middleware import BgNotifyMiddleware
+from noesis.agents.background.subagent.roles import SubagentRegistry, SubagentRole
+from noesis.agents.background.subagent.tools import AsyncSubagentToolsMiddleware
 from noesis.chat.event_mapping.langgraph_bridge import LangGraphSseBridge
 from noesis.chat.event_mapping.mapper import RuntimeEventMapper, new_stream_ctx
 from noesis.chat.event_mapping.retrieval import (

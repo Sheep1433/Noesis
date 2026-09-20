@@ -19,7 +19,7 @@ from evals.agent.memory.metrics import (
     parse_search_memory_slugs,
     retrieval_scores,
 )
-from noesis.services.memory.store import MemoryStore
+from noesis.memory.store import MemoryStore
 
 # 子 Agent 前台等待窗口：生产默认 600s 超时即自动转后台，单回合评测没有
 # 通知回合，主 Agent 只能轮询收结果（v3 基线实测单题轮询 46 次）；

@@ -1788,17 +1788,18 @@ def test_model_attempt_ordinal_is_per_call() -> None:
     assert [c["attempt"] for c in bridge.message_model_calls] == [1, 2, 1]
 
 
-def _stream_attempt_partial(bridge, builder, ctx) -> None:
-    """失败模型尝试的部分流式输出：一个工具 part 边界 + 尾部 text/reasoning。"""
+def _stream_attempt_partial(bridge, builder, ctx) -> str:
+    """失败模型尝试的部分流式输出（真实流径：上一成功调用的工具 part 边界
+    + 本次尝试经 wire 帧/ctx 缓冲——尝试内容不进 builder，flush 点意味着
+    调用已成功）。返回本次尝试铸造的 text part id。"""
     builder.append_tool("web_search", {"query": "q"}, tool_call_id="b1")
-    builder.append_reasoning_delta("Now Phase 6: the final report.", parent_task_call_id=None)
-    builder.append_text_delta("Phase 3-5 完成。", parent_task_call_id=None)
-    ctx["text_buffer"] = "Phase 3-5 完成。"
-    ctx["reasoning_buffer"] = "Now Phase 6: the final report."
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
+    out = bridge.process_item({"type": "text-delta", "text_delta": "Phase 3-5 完成。"}, builder, ctx)
+    return next(o["part_id"] for o in _data_json_objects("".join(out)) if o["type"] == "text-start")
 
 
 def test_model_retry_rolls_back_partial_stream_output() -> None:
-    """LLM 重试：失败尝试已流出的 text/reasoning 回滚 + 下发 stream-rollback 帧。
+    """LLM 重试：失败尝试已流出的部分输出作废 + 下发点名 part_ids 的回滚帧。
 
     回归场景：免费网关连续断流 × 重试不回滚 → 同一消息累积 N 份重复的
     正文/思考（dd43c1ad 会话 5 组重复实锤）。
@@ -1806,7 +1807,7 @@ def test_model_retry_rolls_back_partial_stream_output() -> None:
     bridge = LangGraphSseBridge("sess-retry-rollback")
     builder = AssistantMessageBuilder(session_id="sess-retry-rollback", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    _stream_attempt_partial(bridge, builder, ctx)
+    attempt_part_id = _stream_attempt_partial(bridge, builder, ctx)
 
     out = bridge.process_item(
         {
@@ -1825,12 +1826,13 @@ def test_model_retry_rolls_back_partial_stream_output() -> None:
         builder,
         ctx,
     )
-    blob = "".join(out)
+    objs = _data_json_objects("".join(out))
 
-    # 回滚信号 + 原有重试提示帧都下发
-    assert '"stream-rollback"' in blob
-    assert '"run-status"' in blob and '"retrying"' in blob
-    # builder：尾部 text/reasoning 已丢弃，工具 part（attempt 边界）保留
+    # 回滚帧点名本尝试的 part + 原有重试提示帧都下发
+    rollback = next(o for o in objs if o["type"] == "stream-rollback")
+    assert rollback["part_ids"] == [attempt_part_id]
+    assert any(o["type"] == "run-status" and o.get("status") == "retrying" for o in objs)
+    # builder：尝试内容从未进入（flush 点意味着调用已成功），工具边界保留
     types = [p["type"] for p in builder.to_dict()["parts"]]
     assert types == ["tool"]
     # 流式缓冲与开放 part 状态复位
@@ -1844,7 +1846,7 @@ def test_model_fallback_rolls_back_partial_stream_and_appends_notice() -> None:
     bridge = LangGraphSseBridge("sess-fallback-rollback")
     builder = AssistantMessageBuilder(session_id="sess-fallback-rollback", message_id=bridge.assistant_message_id)
     ctx = _ctx()
-    _stream_attempt_partial(bridge, builder, ctx)
+    attempt_part_id = _stream_attempt_partial(bridge, builder, ctx)
 
     out = bridge.process_item(
         {
@@ -1855,12 +1857,73 @@ def test_model_fallback_rolls_back_partial_stream_and_appends_notice() -> None:
         builder,
         ctx,
     )
-    blob = "".join(out)
+    objs = _data_json_objects("".join(out))
 
-    assert '"stream-rollback"' in blob
-    assert '"error"' in blob
+    rollback = next(o for o in objs if o["type"] == "stream-rollback")
+    assert rollback["part_ids"] == [attempt_part_id]
+    assert any(o["type"] == "error" for o in objs)
     parts = builder.to_dict()["parts"]
     types = [p["type"] for p in parts]
-    # 工具边界保留 + 尾部只剩降级文案（失败尝试的 text/reasoning 不在）
+    # 工具边界保留 + 尾部只剩降级文案（失败尝试的部分输出不在）
     assert types == ["tool", "text"]
     assert parts[1]["content"] == "服务暂时不可用，请稍候重试。"
+
+
+def test_retry_without_streamed_output_emits_no_rollback_and_keeps_prior_parts() -> None:
+    """零输出失败的重试不回滚——旧实现按「末尾连续文本 part」弹回，会把
+    压缩分割线与其前的正文一起吃掉（builder/projection/前端三方一致丢内容）。"""
+    bridge = LangGraphSseBridge("sess-rb-zero")
+    builder = AssistantMessageBuilder(session_id="sess-rb-zero", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    # 上一成功调用产出正文；压缩完成插入分割线（真实流径：缓冲 → flush → builder）
+    bridge.process_item({"type": "text-delta", "text_delta": "第一段结论"}, builder, ctx)
+    bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_compaction",
+         "data": {"compaction_type": "completed"}},
+        builder, ctx,
+    )
+    prior_parts = builder.to_dict()["parts"]
+    assert len(prior_parts) == 2  # 正文 + 分割线
+
+    # 新模型调用零输出失败 → 重试：无输出可回滚，不得发 stream-rollback
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
+    out = bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_model_retry",
+         "data": {"type": "noesis_model_retry", "status": "retrying", "attempt_id": 1}},
+        builder, ctx,
+    )
+    objs = _data_json_objects("".join(out))
+    assert all(o["type"] != "stream-rollback" for o in objs)
+    assert builder.to_dict()["parts"] == prior_parts
+
+
+def test_retry_rollback_frame_names_attempt_parts_and_spares_prior_parts() -> None:
+    """有部分输出的失败：stream-rollback 帧点名本尝试铸造的 part_ids，
+    builder 中更早的正文与分割线原样保留（旧实现按尾部文本 part 弹回，越界）。"""
+    bridge = LangGraphSseBridge("sess-rb-part")
+    builder = AssistantMessageBuilder(session_id="sess-rb-part", message_id=bridge.assistant_message_id)
+    ctx = _ctx()
+    bridge.process_item({"type": "text-delta", "text_delta": "旧正文"}, builder, ctx)
+    bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_compaction",
+         "data": {"compaction_type": "completed"}},
+        builder, ctx,
+    )
+    prior_parts = builder.to_dict()["parts"]
+
+    bridge.process_item({"event": "on_chat_model_start", "run_id": "model-fail", "data": {}}, builder, ctx)
+    out = bridge.process_item({"type": "text-delta", "text_delta": "失败尝试的半截"}, builder, ctx)
+    attempt_part_id = next(
+        o["part_id"] for o in _data_json_objects("".join(out)) if o["type"] == "text-start"
+    )
+
+    out = bridge.process_item(
+        {"event": "on_custom_event", "name": "noesis_model_retry",
+         "data": {"type": "noesis_model_retry", "status": "retrying", "attempt_id": 1}},
+        builder, ctx,
+    )
+    rollback = next(o for o in _data_json_objects("".join(out)) if o["type"] == "stream-rollback")
+    assert rollback["part_ids"] == [attempt_part_id]
+    assert builder.to_dict()["parts"] == prior_parts
+    # 缓冲清零：重试成功的下一次输出不会重复
+    assert ctx["text_buffer"] == ""

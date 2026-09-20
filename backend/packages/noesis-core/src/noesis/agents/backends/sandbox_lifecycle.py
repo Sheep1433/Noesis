@@ -35,6 +35,11 @@ def _cache_key(user_id: str, session_id: str) -> str:
     return f"{user_id}:{session_id}"
 
 
+def sandbox_api_path(user_id: str, session_id: str) -> str:
+    """runner 会话沙箱 REST 路径（ensure / destroy / in-flight 共用，唯一构造点）。"""
+    return f"/internal/sandboxes/{user_id}/sessions/{session_id}"
+
+
 def _session_lock(user_id: str, session_id: str) -> asyncio.Lock:
     key = _cache_key(user_id, session_id)
     lock = _ENSURE_LOCKS.get(key)
@@ -100,6 +105,36 @@ def _parse_ensure_response(
     )
 
 
+def _runner_request_sync(method: str, path: str, **kwargs) -> httpx.Response:
+    url = f"{SandboxConfig.runner_url.rstrip('/')}{path}"
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            return client.request(
+                method, url, headers=sandbox_runner_headers(), **kwargs
+            )
+    except httpx.HTTPError as exc:
+        raise ToolInfrastructureError(
+            f"[INTERNAL_ERROR] sandbox-runner 不可达 ({SandboxConfig.runner_url}): {exc}"
+        ) from exc
+
+
+def ensure_session_sandbox_sync(user_id: str, session_id: str) -> SessionSandboxHandle:
+    """同步版 ensure：docker_exec 404 重建用（execute 调用点在线程上下文）。
+
+    与异步版共用 URL / payload / 响应解析；不经 asyncio 锁——调用方
+    （DockerExecSandboxBackend.execute）已持会话级 threading mutex。
+    先清缓存再 PUT：缓存的句柄刚被 runner 判 404，强制作废。
+    """
+    key = _cache_key(user_id, session_id)
+    _HANDLE_CACHE.pop(key, None)
+    resp = _runner_request_sync(
+        "PUT", sandbox_api_path(user_id, session_id), json={"runtime": "docker"}
+    )
+    handle = _parse_ensure_response(resp, user_id=user_id, session_id=session_id)
+    _HANDLE_CACHE[key] = handle
+    return handle
+
+
 async def ensure_session_sandbox(user_id: str, session_id: str) -> SessionSandboxHandle:
     """确保会话沙箱存在，返回 runner 句柄。"""
     if SandboxConfig.backend != "docker":
@@ -126,9 +161,7 @@ async def ensure_session_sandbox(user_id: str, session_id: str) -> SessionSandbo
         ensure_user_skills_dir(user_id)
         ensure_workspace_dir(user_id, session_id)
         resp = await _runner_request(
-            "PUT",
-            f"/internal/sandboxes/{user_id}/sessions/{session_id}",
-            json={"runtime": "docker"},
+            "PUT", sandbox_api_path(user_id, session_id), json={"runtime": "docker"}
         )
         handle = _parse_ensure_response(resp, user_id=user_id, session_id=session_id)
         _HANDLE_CACHE[key] = handle
@@ -146,16 +179,13 @@ async def destroy_session_sandbox(user_id: str, session_id: str) -> None:
     invalidate_session_sandbox_cache(user_id, session_id)
     # 容器回收连坐：运行中的后台任务（shell 命令 / subagent）一并转
     # failed，避免挂死在已销毁的执行环境上
-    from noesis.agents.subagents.executor import fail_session_shell_tasks
+    from noesis.agents.background import fail_session_shell_tasks
 
     fail_session_shell_tasks(
         session_id, reason="会话沙箱已销毁，任务随容器回收终止",
     )
     try:
-        resp = await _runner_request(
-            "DELETE",
-            f"/internal/sandboxes/{user_id}/sessions/{session_id}",
-        )
+        resp = await _runner_request("DELETE", sandbox_api_path(user_id, session_id))
         if resp.status_code >= 400 and resp.status_code != 404:
             logger.warning(
                 "destroy_session_sandbox 失败 user_id={} session_id={} status={} body={}",
@@ -184,7 +214,7 @@ async def _adjust_runner_in_flight(user_id: str, session_id: str, delta: int) ->
     try:
         await _runner_request(
             "POST",
-            f"/internal/sandboxes/{user_id}/sessions/{session_id}/in-flight",
+            f"{sandbox_api_path(user_id, session_id)}/in-flight",
             json={"delta": delta},
         )
     except ToolInfrastructureError:

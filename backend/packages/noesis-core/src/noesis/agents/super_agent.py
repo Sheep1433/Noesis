@@ -12,15 +12,16 @@ from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.agents.backends import agent_sandbox_session, create_agent_backend
-from noesis.agents.backends.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE, AGENT_MEMORY_USER_FILE
+from noesis.paths import AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE, AGENT_MEMORY_USER_FILE
 from noesis.agents.base import BaseAgent, DEFAULT_RECURSION_LIMIT
 from noesis.factory import build_noesis_middleware, create_noesis_agent
 from noesis.agents.tools.ask_user import ask_user_tool, build_interrupt_on
+from noesis.agents.middlewares.memory_write_middleware import MemoryWriteMiddleware
 from noesis.agents.prompts import PromptProfile, build_prompt
 from noesis.agents.prompts.memory import NOESIS_MEMORY_SYSTEM_PROMPT
 from noesis.agents.prompts.super_agent import NOESIS_SKILLS_SYSTEM_PROMPT
 from noesis.agents.skills import resolve_skill_sources_for_session
-from noesis.agents.subagents import (
+from noesis.agents.background import (
     AsyncSubagentToolsMiddleware,
     BackgroundTaskExecutor,
     BgNotifyMiddleware,
@@ -28,7 +29,7 @@ from noesis.agents.subagents import (
     SubagentRole,
     assert_no_bg_task_tools,
 )
-from noesis.agents.subagents.shell_tool import replace_execute_tool
+from noesis.agents.background.shell.tools import replace_execute_tool
 from noesis.agents.tools.fs_hints import augment_filesystem_tool_descriptions, guard_worker_filesystem_tools
 from noesis.config.env import HitlConfig, SubagentConfig
 from noesis.agents.tools import build_web_search_tools
@@ -38,11 +39,10 @@ from noesis.agents.tools.kb_search_tool import build_kb_search_tools
 from noesis.agents.tools.memory_tools import build_memory_tools
 from noesis.runtime.logging import logger
 from noesis.config.env import ChatAttachmentConfig
-from noesis.config.user_data_paths import ensure_user_memory_files
+from noesis.memory.layout import ensure_user_memory_files
 from noesis.agents.context import ContextResolver
 from noesis.llm.factory import get_llm
 from noesis.runtime.attachments.input_resolver import AttachmentInputResolver
-from noesis.services.chat_service import ChatService
 
 _MEMORY_SOURCES = [AGENT_MEMORY_USER_FILE, AGENT_MEMORY_AGENTS_FILE, AGENT_MEMORY_INDEX_FILE]
 
@@ -273,18 +273,23 @@ class SuperAgent(BaseAgent):
             "system_prompt": build_prompt(PromptProfile.SUPER_AGENT_SUB),
             "model": sync_subagent_model,
             "tools": sync_subagent_tools,
-            "middleware": build_noesis_middleware(
-                profile="SUBAGENT",
-                model=sync_subagent_model,
-                model_id=model_id,
-                tools=sync_subagent_tools,
-                backend=backend,
-                skills=skill_sources,
-                skills_user_id=user_id,
-                skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
-                session_id=session_id,
-                filesystem_middleware_hook=augment_filesystem_tool_descriptions,
-            ),
+            "middleware": [
+                *build_noesis_middleware(
+                    profile="SUBAGENT",
+                    model=sync_subagent_model,
+                    model_id=model_id,
+                    tools=sync_subagent_tools,
+                    backend=backend,
+                    skills=skill_sources,
+                    skills_user_id=user_id,
+                    skills_system_prompt=NOESIS_SKILLS_SYSTEM_PROMPT,
+                    session_id=session_id,
+                    filesystem_middleware_hook=augment_filesystem_tool_descriptions,
+                ),
+                # 同步子 Agent 与主 Agent 共享同一可写 /memory 路由：
+                # 写入门卫 + 索引同步同样必须覆盖（见下方主栈注释）
+                MemoryWriteMiddleware(user_id=user_id),
+            ],
         }]
 
         def _filesystem_hook(fm):
@@ -312,14 +317,14 @@ class SuperAgent(BaseAgent):
                 from noesis.storage.postgres.manager import pg_manager
 
                 async with pg_manager.get_async_session_context() as child_db:
-                    from noesis.services.subagent_session_service import SubagentSessionService
+                    from noesis.agents.background.ports import SubagentSessionPort
 
                     # The launch use case owns the child session, initial messages and
                     # standard AgentRun in one transaction.  Keep this callback small so
                     # the tool layer cannot accidentally create a second source of truth.
                     # description = 简短标题（会话标题）；prompt = 完整任务指令（首条用户消息）
                     # effective_model_id = 角色解析后的生效模型（绑定值或父模型）
-                    launch = await SubagentSessionService.launch(
+                    launch = await SubagentSessionPort.launch(
                         parent_session_id=session_id,
                         user_id=user_id,
                         description=description,
@@ -339,16 +344,18 @@ class SuperAgent(BaseAgent):
                 from noesis.storage.postgres.manager import pg_manager
 
                 async with pg_manager.get_async_session_context() as child_db:
-                    await ChatService.delete_session(child_session_id, user_id, db=child_db)
+                    from noesis.agents.background.ports import SessionOpsPort
+
+                    await SessionOpsPort.delete_session(child_session_id, user_id, db=child_db)
 
             await _db_on_main_loop(
                 _delete, name=f"subagent-child-delete:{child_session_id}")
 
         async def _fail_child_run(run_id: str, error: str) -> None:
             async def _reject() -> None:
-                from noesis.services.subagent_session_service import SubagentSessionService
+                from noesis.agents.background.ports import SubagentSessionPort
 
-                await SubagentSessionService.mark_launch_rejected(run_id, error)
+                await SubagentSessionPort.mark_launch_rejected(run_id, error)
 
             await _db_on_main_loop(_reject, name=f"subagent-run-reject:{run_id}")
 
@@ -365,12 +372,12 @@ class SuperAgent(BaseAgent):
             连接错误，冷恢复曾因此静默失败（任务卡 RUNNING、追问无回复）。
             """
             from noesis.runtime.main_loop import run_on_main_loop
-            from noesis.services.subagent_session_service import SubagentSessionService
+            from noesis.agents.background.ports import SubagentSessionPort
             from noesis.storage.postgres.manager import pg_manager
 
             async def _launch() -> dict[str, str]:
                 async with pg_manager.get_async_session_context() as child_db:
-                    launch = await SubagentSessionService.create_followup_run(
+                    launch = await SubagentSessionPort.create_followup_run(
                         session_id=child_session_id,
                         user_id=user_id,
                         message=message,
@@ -410,6 +417,10 @@ class SuperAgent(BaseAgent):
                 ),
                 # run 内即时感知后台任务终态：下一次模型调用注入 [系统通知]
                 BgNotifyMiddleware(session_id=session_id),
+                # /memory 写入的引擎侧语义：白名单门卫（索引/journal 只读、
+                # 条目命名校验）+ 条目写入后同步 MEMORY.md 索引行。worker 不挂——
+                # 其 /memory 路由整体只读（见 _bg_worker_factory）
+                MemoryWriteMiddleware(user_id=user_id),
             ],
             backend=backend,
             # execute 工具后台化（run_in_background，默认 false 前台零变化）；

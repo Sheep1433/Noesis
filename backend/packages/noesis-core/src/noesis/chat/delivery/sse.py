@@ -200,13 +200,16 @@ def encode_filtered(event: RunEvent) -> list[str]:
     return encode_run_event(event)
 
 
-def encode_sequenced_event(envelope: "SequencedRunEvent") -> list[str]:
-    """编码业务事件，并把 run sequence/attempt 注入 JSON payload。"""
+def sequenced_event_payloads(envelope: "SequencedRunEvent") -> List[tuple]:
+    """(event_name, payload) 列表——SSE 编码与 Run bus 广播共用的 wire 形状。
+
+    sequence / attempt_id / run_id 注入每条 payload。StreamDone 是本地流
+    终止标记（无 wire 载荷），不产生 bus 载荷。
+    """
     if isinstance(envelope.event, StreamDone):
-        return [format_done()]
-    lines = encode_filtered(envelope.event)
-    encoded: list[str] = []
-    for line in lines:
+        return []
+    payloads: List[tuple] = []
+    for line in encode_filtered(envelope.event):
         event_name = "message"
         payload: Dict[str, Any] = {}
         for part in line.strip().split("\n"):
@@ -222,8 +225,18 @@ def encode_sequenced_event(envelope: "SequencedRunEvent") -> list[str]:
         payload["run_id"] = envelope.run_id
         payload["sequence"] = envelope.sequence
         payload["attempt_id"] = envelope.attempt_id
-        encoded.append(format_sse(event_name, payload))
-    return encoded
+        payloads.append((event_name, payload))
+    return payloads
+
+
+def encode_sequenced_event(envelope: "SequencedRunEvent") -> list[str]:
+    """编码业务事件，并把 run sequence/attempt 注入 JSON payload。"""
+    if isinstance(envelope.event, StreamDone):
+        return [format_done()]
+    return [
+        format_sse(event_name, payload)
+        for event_name, payload in sequenced_event_payloads(envelope)
+    ]
 
 
 async def iter_sse_from_bus(

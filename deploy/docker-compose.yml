@@ -70,6 +70,19 @@ services:
     networks:
       - default
 
+  # Run bus（Pub/Sub 在线广播，at-most-once）：无权威状态、无需持久化；
+  # 仅 NOESIS_RUN_BUS_BACKEND=redis 时被 backend 使用
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - default
+
   backend:
     build:
       context: ..
@@ -99,6 +112,8 @@ services:
         condition: service_started
       sandbox-runner:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       # 瘦身镜像不再安装 curl；compose 级 healthcheck 覆盖镜像内置定义，须同步用 python
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8089/health', timeout=4).status == 200 else 1)"]
@@ -107,6 +122,8 @@ services:
       retries: 5
       start_period: 90s
 
+  # redis 模式多实例：docker compose up -d --scale backend=2（一 leader 多
+  # follower，角色由 PostgreSQL 选举；nginx 经 Docker DNS 轮询各副本）
   nginx:
     build:
       context: ..

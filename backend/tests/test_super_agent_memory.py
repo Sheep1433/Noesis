@@ -8,7 +8,7 @@ import pytest
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.middleware.memory import MemoryMiddleware
 
-from noesis.agents.backends.paths import (
+from noesis.paths import (
     AGENT_MEMORY_AGENTS_FILE,
     AGENT_MEMORY_INDEX_FILE,
     AGENT_MEMORY_USER_FILE,

@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from noesis.agents.subagents import notifications
+from noesis.agents.background import notifications
 from noesis.chat.delivery.events import WireFrame
 from noesis.chat.event_mapping.retrieval import (
     MAX_CROSS_BOUNDARY_SOURCES,
@@ -33,7 +33,8 @@ def _web_result(i: int) -> dict:
 
 def test_turn_projection_merge_accumulates_across_turns():
     """多 turn 各自独立 builder：task.retrieval_sources 跨 turn 累积不丢失。"""
-    from noesis.agents.subagents.executor import BackgroundTask, _merge_task_sources
+    from noesis.agents.background.subagent.kernel import _merge_task_sources
+    from noesis.agents.background.jobs.state import BackgroundTask
 
     task = BackgroundTask(
         task_id="t1", session_id="sid", user_id="u1", description="调研", prompt="",

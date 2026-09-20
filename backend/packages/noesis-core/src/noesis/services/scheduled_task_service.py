@@ -467,7 +467,7 @@ class ScheduledTaskService:
 
     @classmethod
     async def _run_in_background(cls, task_id: str, user_id: str, run_id: str) -> None:
-        """后台执行已创建的 run：标记 running → 执行 → 标记终态。独立 db session。"""
+        """后台执行已创建的 run：加载行后委托 _execute_and_finalize。独立 db session。"""
         from noesis.storage.postgres.manager import pg_manager
 
         async with pg_manager.get_async_session_context() as db:
@@ -482,41 +482,145 @@ class ScheduledTaskService:
             if run is None:
                 return
             # 已进入终态的 run 不重复执行（幂等）。
-            if run.status in {"succeeded", "failed", "cancelled"}:
+            if run.status in {"succeeded", "failed", "cancelled", "interrupted"}:
                 return
-            run.status = "running"
-            run.started_at = _now_ms()
-            await db.commit()
-            await db.refresh(run)
-            await db.refresh(row)
-            try:
-                result_obj = await cls._execute_task(row)
-                run.status = "succeeded"
-                run.session_id = getattr(result_obj, "session_id", None)
-                run.result_summary = str(getattr(result_obj, "plain_text", "") or "")[:1000]
-                run.delivery_result = {"status": "not_requested" if row.delivery == "none" else "pending", "target": row.delivery}
-            except Exception:
-                logger.exception("scheduled task execute failed id={} run_id={}", row.id, run.id)
-                run.status = "failed"
-                run.error_category = "execution"
-                run.error_message = "任务执行失败，请根据关联记录重试或检查配置"
-                run.delivery_result = {"status": "not_attempted", "target": row.delivery}
-            if row.delivery != "none":
-                from noesis.services.notification_preference_service import NotificationPreferenceService
-                event_type = "automation.succeeded" if run.status == "succeeded" else "automation.failed"
-                surface = "web" if row.delivery == "web_notify" else "channel"
-                if not await NotificationPreferenceService.should_notify(db, row.user_id, event_type, surface):
-                    run.delivery_result = {"status": "suppressed", "target": row.delivery}
+            await cls._execute_and_finalize(db, row, run)
+
+    # 主 run 返回后会话交付链的收口等待：轮询间隔与总超时（工程常量）
+    _DELIVERY_POLL_SECONDS = 5.0
+    _DELIVERY_TIMEOUT_SECONDS = 6 * 60 * 60.0
+
+    @classmethod
+    async def _await_session_delivery(cls, user_id: str, session_id: str) -> bool:
+        """等待会话交付链完成：无活跃后台任务、无待发续跑唤醒、无活跃 run。
+
+        主 run 返回不代表交付完成——无人值守会话的真实产出在子任务与
+        continuation 链里。终态判定须等链收口，否则 scheduled run 在
+        「子任务已转后台」时就自欺为 succeeded（生产事故缺口 3）。
+        会话曾有后台任务时要求连续两次空闲观测（间隔一个轮询周期），
+        关闭「任务刚落终态、去抖唤醒尚未武装」的毫秒竞态。
+        超时返回 False（调用方按 delivery_timeout 收口，防 watcher 泄漏）。
+        """
+        from noesis.agents.background.executor import BackgroundTaskExecutor
+        from noesis.services.bg_continuation_service import has_pending_wake
+
+        idle_needed = 1
+        idle_seen = 0
+        deadline = time.time() + cls._DELIVERY_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            tasks = BackgroundTaskExecutor.list_for_session(session_id)
+            if any(t.get("status") in ("queued", "running") for t in tasks):
+                idle_seen = 0
+            elif has_pending_wake(session_id):
+                idle_seen = 0
+            else:
+                from noesis.repositories.agent_run_repository import AgentRunRepository
+                from noesis.storage.postgres.manager import pg_manager
+
+                async with pg_manager.get_async_session_context() as db:
+                    active = await AgentRunRepository(db).get_active_for_session(user_id, session_id)
+                if active is not None:
+                    idle_seen = 0
                 else:
-                    run.delivery_result = await cls._deliver_run_notification(row, run)
-            run.finished_at = _now_ms()
-            now = _now_ms()
-            row.last_status = run.status
-            row.last_error = run.error_message
-            row.last_run_at = now
-            row.updated_at = now
-            await db.commit()
-            await db.refresh(run)
+                    idle_needed = 2 if tasks else 1
+                    idle_seen += 1
+                    if idle_seen >= idle_needed:
+                        return True
+            await asyncio.sleep(cls._DELIVERY_POLL_SECONDS)
+        return False
+
+    @staticmethod
+    def _delivery_outcome(session_id: str) -> tuple[bool, str]:
+        """交付结局：会话后台任务存在 failed/timed_out 即未完成（cancelled 是模型主动行为，不计失败）。"""
+        from noesis.agents.background.executor import BackgroundTaskExecutor
+
+        failed = [
+            t for t in BackgroundTaskExecutor.list_for_session(session_id)
+            if t.get("status") in ("failed", "timed_out")
+        ]
+        if failed:
+            names = "、".join(
+                str(t.get("description") or t.get("task_id"))[:40] for t in failed[:3]
+            )
+            return False, f"子任务未交付完成（{len(failed)} 个失败/超时：{names}）"
+        return True, ""
+
+    @staticmethod
+    async def _latest_run_text(user_id: str, session_id: str) -> str:
+        """会话最新 run 的 assistant 文本（continuation 链的最终交付）；取不到返回空。"""
+        try:
+            from noesis.chat.delivery.telegram.adapter import extract_plain_text_from_parts
+            from noesis.repositories.agent_run_repository import AgentRunRepository
+            from noesis.storage.postgres.manager import pg_manager
+
+            async with pg_manager.get_async_session_context() as db:
+                run = await AgentRunRepository(db).get_latest_for_session(user_id, session_id)
+                snapshot = run.snapshot if isinstance(run.snapshot, dict) else {}
+            return extract_plain_text_from_parts(snapshot)[:1000]
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @classmethod
+    async def _execute_and_finalize(
+        cls, db: AsyncSession, row: TUserScheduledTask, run: TUserScheduledTaskRun
+    ) -> TUserScheduledTaskRun:
+        """执行主体 + 等待交付链收口 + 终态判定（手动触发 / 调度 / 重试共用）。"""
+        run.status = "running"
+        run.started_at = _now_ms()
+        await db.commit()
+        await db.refresh(run)
+        await db.refresh(row)
+        try:
+            result_obj = await cls._execute_task(row)
+            session_id = getattr(result_obj, "session_id", None)
+            delivered = (
+                await cls._await_session_delivery(str(row.user_id), session_id)
+                if session_id else True
+            )
+            if not delivered:
+                run.status = "failed"
+                run.error_category = "delivery_timeout"
+                run.error_message = "任务执行完成但会话交付链长时间未收口（后台任务或续跑未结束）"
+            elif session_id:
+                ok, reason = cls._delivery_outcome(session_id)
+                if not ok:
+                    run.status = "failed"
+                    run.error_category = "subtask_failed"
+                    run.error_message = reason
+                else:
+                    run.status = "succeeded"
+            else:
+                run.status = "succeeded"
+            run.session_id = session_id
+            summary = (
+                await cls._latest_run_text(str(row.user_id), session_id)
+                if session_id else ""
+            )
+            run.result_summary = (summary or str(getattr(result_obj, "plain_text", "") or ""))[:1000]
+            run.delivery_result = {"status": "not_requested" if row.delivery == "none" else "pending", "target": row.delivery}
+        except Exception:
+            logger.exception("scheduled task execute failed id={} run_id={}", row.id, run.id)
+            run.status = "failed"
+            run.error_category = "execution"
+            run.error_message = "任务执行失败，请根据关联记录重试或检查配置"
+            run.delivery_result = {"status": "not_attempted", "target": row.delivery}
+        if row.delivery != "none":
+            from noesis.services.notification_preference_service import NotificationPreferenceService
+            event_type = "automation.succeeded" if run.status == "succeeded" else "automation.failed"
+            surface = "web" if row.delivery == "web_notify" else "channel"
+            if not await NotificationPreferenceService.should_notify(db, row.user_id, event_type, surface):
+                run.delivery_result = {"status": "suppressed", "target": row.delivery}
+            else:
+                run.delivery_result = await cls._deliver_run_notification(row, run)
+        run.finished_at = _now_ms()
+        now = _now_ms()
+        row.last_status = run.status
+        row.last_error = run.error_message
+        row.last_run_at = now
+        row.updated_at = now
+        await db.commit()
+        await db.refresh(run)
+        return run
 
     @staticmethod
     async def _execute_task(row: TUserScheduledTask) -> None:
@@ -534,55 +638,6 @@ class ScheduledTaskService:
             qa_type=row.qa_type, origin="automation", channel_type="automation",
             disable_hitl=True,
         )
-
-    @classmethod
-    async def execute_with_record(cls, db: AsyncSession, row: TUserScheduledTask, *, trigger_source: str, idempotency_key: str, retry_of: str | None = None) -> TUserScheduledTaskRun:
-        existing_result = await db.execute(select(TUserScheduledTaskRun).where(TUserScheduledTaskRun.user_id == row.user_id, TUserScheduledTaskRun.idempotency_key == idempotency_key))
-        existing = existing_result.scalar_one_or_none()
-        if existing is not None:
-            return existing
-        now = _now_ms()
-        run = TUserScheduledTaskRun(id=str(uuid.uuid4()), task_id=row.id, user_id=row.user_id, status="queued", trigger_source=trigger_source, retry_of=retry_of, idempotency_key=idempotency_key, created_at=now)
-        db.add(run)
-        try:
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
-            raced_result = await db.execute(select(TUserScheduledTaskRun).where(TUserScheduledTaskRun.user_id == row.user_id, TUserScheduledTaskRun.idempotency_key == idempotency_key))
-            raced = raced_result.scalar_one_or_none()
-            if raced is not None:
-                return raced
-            raise
-        await db.refresh(run)
-        run.status = "running"
-        run.started_at = _now_ms()
-        await db.commit()
-        await db.refresh(run)
-        await db.refresh(row)
-        try:
-            result = await cls._execute_task(row)
-            run.status = "succeeded"
-            run.session_id = getattr(result, "session_id", None)
-            run.result_summary = str(getattr(result, "plain_text", "") or "")[:1000]
-            run.delivery_result = {"status": "not_requested" if row.delivery == "none" else "pending", "target": row.delivery}
-        except Exception:
-            logger.exception("scheduled task execute failed id={} run_id={}", row.id, run.id)
-            run.status = "failed"
-            run.error_category = "execution"
-            run.error_message = "任务执行失败，请根据关联记录重试或检查配置"
-            run.delivery_result = {"status": "not_attempted", "target": row.delivery}
-        if row.delivery != "none":
-            from noesis.services.notification_preference_service import NotificationPreferenceService
-            event_type = "automation.succeeded" if run.status == "succeeded" else "automation.failed"
-            surface = "web" if row.delivery == "web_notify" else "channel"
-            if not await NotificationPreferenceService.should_notify(db, row.user_id, event_type, surface):
-                run.delivery_result = {"status": "suppressed", "target": row.delivery}
-            else:
-                run.delivery_result = await cls._deliver_run_notification(row, run)
-        run.finished_at = _now_ms()
-        await db.commit()
-        await db.refresh(run)
-        return run
 
     @staticmethod
     async def list_runs(db: AsyncSession, user_id: str, task_id: str, page: int, page_size: int) -> dict:
@@ -607,13 +662,15 @@ class ScheduledTaskService:
         old = await cls.get_run(db, user_id, run_id)
         if old is None:
             return None
-        if old.status not in {"failed", "cancelled"}:
-            raise ValueError("只有失败或已取消的运行可以重试")
+        if old.status not in {"failed", "cancelled", "interrupted"}:
+            raise ValueError("只有失败、已取消或被中断的运行可以重试")
         result = await db.execute(select(TUserScheduledTask).where(TUserScheduledTask.id == old.task_id, TUserScheduledTask.user_id == str(user_id), TUserScheduledTask.deleted_at.is_(None)))
         task = result.scalar_one_or_none()
         if task is None:
             raise ValueError("任务已删除，无法重试")
-        run = await cls.execute_with_record(db, task, trigger_source="retry", idempotency_key=idempotency_key, retry_of=old.id)
+        # 与手动触发同款：建 queued 记录立即返回，执行后台派发（等交付链收口才落终态）
+        run = await cls._create_run_record(db, task, trigger_source="retry", idempotency_key=idempotency_key, retry_of=old.id)
+        asyncio.create_task(cls._run_in_background(task.id, str(user_id), run.id))
         return _run_to_dict(run)
 
     @staticmethod
@@ -672,6 +729,44 @@ class ScheduledTaskService:
         )
         await db.commit()
         return int(result.rowcount or 0)
+
+    @staticmethod
+    async def reconcile_interrupted_runs(db: AsyncSession) -> int:
+        """进程重启后收口遗留的 queued/running 运行记录为 interrupted。
+
+        调度器与手动触发的执行体都在进程内（_run_in_background await
+        全程，含交付链收口等待），重启即丢失；claim_due_tasks 已推进
+        next_run_at（下次触发照常），但遗留行无人收口——设置页永久显示
+        running、任务行 last_status 卡死。终态行（succeeded/failed/
+        cancelled/interrupted）不动；须在调度器启动前调用（lifespan
+        leader-only 对账块）。
+        """
+        now = _now_ms()
+        result = await db.execute(
+            update(TUserScheduledTaskRun)
+            .where(TUserScheduledTaskRun.status.in_(["queued", "running"]))
+            .values(
+                status="interrupted",
+                error_category="server_restart",
+                error_message="后端进程重启，运行已中断",
+                finished_at=now,
+            )
+        )
+        interrupted = int(result.rowcount or 0)
+        if interrupted:
+            await db.execute(
+                update(TUserScheduledTask)
+                .where(TUserScheduledTask.last_status.in_(["queued", "running"]))
+                .values(
+                    last_status="interrupted",
+                    last_error="后端进程重启，上次运行已中断",
+                    updated_at=now,
+                )
+            )
+        await db.commit()
+        if interrupted:
+            logger.warning("定时任务重启对账：{} 个遗留 run 已收口为 interrupted", interrupted)
+        return interrupted
 
     @staticmethod
     async def claim_due_tasks(db: AsyncSession, *, limit: int = 20) -> List[TUserScheduledTask]:

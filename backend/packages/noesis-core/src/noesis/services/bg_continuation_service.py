@@ -16,7 +16,7 @@ import asyncio
 import uuid
 from typing import Any
 
-from noesis.agents.subagents import notifications
+from noesis.agents.background import notifications
 from noesis.config.env import SubagentConfig
 # 续跑去抖窗口（工程常量，不进配置）：终态到达后等待该秒数再唤醒，
 # 窗口内多个终态合并为一次 continuation run（降全量上下文重复发送成本）
@@ -52,6 +52,11 @@ def note_user_activity(session_id: str) -> None:
     handle = _pending_wakes.pop(session_id, None)
     if handle is not None:
         handle.cancel()
+
+
+def has_pending_wake(session_id: str) -> bool:
+    """去抖窗口内是否有待发的续跑唤醒（会话交付链未收口判定用）。"""
+    return session_id in _pending_wakes
 
 
 def _fire_pending_wake(session_id: str, user_id: str) -> None:
@@ -159,7 +164,7 @@ async def maybe_continue(session_id: str, user_id: str) -> dict[str, Any] | None
     )
     # 通知前端附着新 run 的 SSE（页面开着即可实时看到主 Agent 自动续跑）；
     # notice 为本轮通知全文，前端据此在对话流插入系统通知条
-    from noesis.agents.subagents.executor import publish_session_event
+    from noesis.agents.background.jobs.events import publish_session_event
 
     publish_session_event(session_id, user_id, {
         "event": "continuation",
@@ -182,4 +187,14 @@ def reset_for_tests() -> None:
     _pending_wakes.clear()
 
 
-__all__ = ["maybe_continue", "note_user_activity", "reset_for_tests", "schedule_maybe_continue"]
+__all__ = [
+    "has_pending_wake",
+    "maybe_continue",
+    "note_user_activity",
+    "reset_for_tests",
+    "schedule_maybe_continue",
+]
+
+from noesis.agents.background.ports import configure_continuation_port
+
+configure_continuation_port(schedule_maybe_continue)

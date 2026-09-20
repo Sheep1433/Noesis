@@ -21,11 +21,11 @@ import { consumeRunStream } from './useRunStreamClient'
 export interface SSEStreamOptions {
   onTitleUpdate?: (title: string) => void
   onContextUpdate?: (context: ContextSnapshot) => void
-  onTextDelta?: (text: string, parent_task_call_id?: string) => void
-  /** LLM 重试/降级：丢弃失败尝试已流出的尾部 text/reasoning parts */
-  onStreamRollback?: () => void
+  onTextDelta?: (text: string, parent_task_call_id?: string, part_id?: string) => void
+  /** LLM 重试/降级：按帧点名的 part_ids 丢弃失败尝试已流出的 parts */
+  onStreamRollback?: (partIds: string[]) => void
   onRetrievalResults?: (part: Record<string, unknown>) => void
-  onReasoningDelta?: (reasoning: string, parent_task_call_id?: string) => void
+  onReasoningDelta?: (reasoning: string, parent_task_call_id?: string, part_id?: string) => void
   onReasoningStart?: (data: Record<string, unknown>) => void
   onReasoningEnd?: (data: Record<string, unknown>) => void
   onToolCall?: (
@@ -164,17 +164,22 @@ export function createFrameHandlerTable(handlers: SSEStreamOptions) {
       onRunStatus?.(String(data.status ?? 'running'), message)
     },
     'message-start': (data) => onMessageStart?.(data),
-    'stream-rollback': () => onStreamRollback?.(),
+    'stream-rollback': (data) => {
+      const raw = Array.isArray(data.part_ids) ? data.part_ids : []
+      onStreamRollback?.(raw.map(String).filter(Boolean))
+    },
     'text-delta': (data) => {
       if (typeof data.text_delta === 'string') {
-        onTextDelta?.(data.text_delta, parentTaskCallId(data))
+        const partId = typeof data.part_id === 'string' && data.part_id ? data.part_id : undefined
+        onTextDelta?.(data.text_delta, parentTaskCallId(data), partId)
       }
     },
     'retrieval-results-available': (data) => onRetrievalResults?.({ ...data, type: 'retrieval' }),
     'reasoning-start': (data) => onReasoningStart?.(data),
     'reasoning-delta': (data) => {
       if (typeof data.text_delta === 'string') {
-        onReasoningDelta?.(data.text_delta, parentTaskCallId(data))
+        const partId = typeof data.part_id === 'string' && data.part_id ? data.part_id : undefined
+        onReasoningDelta?.(data.text_delta, parentTaskCallId(data), partId)
       }
     },
     'reasoning-end': (data) => onReasoningEnd?.(data),
@@ -469,9 +474,14 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           extra: extra || {},
         })
       } catch (createErr) {
-        // 409 冲突：同 session 已有 active Run，加入它而非当失败
+        // 409 冲突：同 session 已有 active Run，加入它而非当失败。
+        // 先做代际校验再动共享状态——过期 409 若后写 currentRunId，
+        // 会把停止按钮指向别的会话的 run
         const conflictErr = createErr as Error & { conflictRunId?: string }
         if (conflictErr.conflictRunId) {
+          if (!isCurrentStream(generation)) {
+            return
+          }
           currentRunId = conflictErr.conflictRunId
           sessionStorage.setItem(`noesis:active-run:${sessionId}`, conflictErr.conflictRunId)
           // 本条消息不会进入本轮 run（服务端未落库）；排队待本轮终态后自动重发
@@ -479,9 +489,6 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
           onBusyConflict?.()
           // 从服务端获取已有 Run 的 snapshot 并 replace
           const snapshot = await getAgentRun(conflictErr.conflictRunId)
-          if (!isCurrentStream(generation)) {
-            return
-          }
           dispatchFrame(
             'run-snapshot',
             JSON.stringify({ type: 'run-snapshot', ...snapshot }),
@@ -639,12 +646,24 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
     const needsNewSubscription = !isLoading.value || activeSessionId !== sessionId
     const generation = needsNewSubscription ? beginStream(sessionId) : streamGeneration
     currentRunId = runId
-    const snapshot = await resumeAgentRunHitl(runId, body)
-    dispatchFrame(
-      'run-snapshot',
-      JSON.stringify({ type: 'run-snapshot', ...snapshot }),
-      generation,
-    )
+    try {
+      const snapshot = await resumeAgentRunHitl(runId, body)
+      dispatchFrame(
+        'run-snapshot',
+        JSON.stringify({ type: 'run-snapshot', ...snapshot }),
+        generation,
+      )
+    } catch (err) {
+      // beginStream 已置 isLoading=true——POST 失败（网络断/审批 4xx）不复位，
+      // 该会话的发送与恢复会被防重守卫静默拦截，界面永久卡在生成中
+      if (isCurrentStream(generation)) {
+        const message = err instanceof Error ? err.message : '审批请求失败'
+        error.value = message
+        onRunStatus?.('disconnected', '连接已中断，可稍后重试')
+        finalizeSubscription(sessionId, generation)
+      }
+      throw err
+    }
     // 审批时原订阅可能已因网络中断而退出。POST 只恢复 producer，不会自动
     // 恢复浏览器订阅，因此此处在没有活跃 followRun 时重新订阅。
     if (needsNewSubscription && !streamSettled) {
@@ -723,7 +742,8 @@ export function useSSEStream(options: SSEStreamOptions = {}) {
    * user-signal 兜底加入：会话信令流丢帧时（浏览器后台标签节流 / 单帧
    * hint 丢失），会话列表通道收到当前会话的 run-started 仍能加入 run。
    * 守卫与 session-signal 处理器一致：同 run 已在流、本窗口正在流式中
-   * 则跳过。 */
+   * 则跳过。
+   */
   function joinRunIfIdle(sessionId: string, runId: string | undefined): void {
     if (!runId || runId === currentRunId) {
       return

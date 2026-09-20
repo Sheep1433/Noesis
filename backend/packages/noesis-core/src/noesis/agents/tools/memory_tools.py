@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from noesis.config.env import MemoryConfig
 from noesis.runtime.logging import logger
-from noesis.services.memory.store import MemoryStore
-from noesis.services.memory.types import MEMORY_TYPES
+from noesis.memory.store import MemoryStore
+from noesis.memory.types import MEMORY_TYPES
 from noesis.storage.postgres.models.chat import TAgentRun
 
 # 记忆条目超龄提示阈值（天）：检索结果附带「先验证是否仍成立」警告（产品逻辑常量）

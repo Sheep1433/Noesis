@@ -296,6 +296,21 @@ class PostgresManager:
             hex(_NOESIS_ADVISORY_LOCK_KEY2),
         )
 
+    async def try_advisory_lock(self) -> bool:
+        """竞争执行锁：True=获得并持有；False=他人持有。
+
+        同一 manager 已持锁时返回 False——进程内只有一个 elector 持有
+        leadership，本进程其它候选者视为「他人持有」待命（真实双进程
+        语义：各进程独立连接，A 持锁时 B 的 try 必然失败）。
+        """
+        if self._advisory_lock_conn is not None:
+            return False
+        try:
+            await self.acquire_advisory_lock()
+            return True
+        except RuntimeError:
+            return False
+
     async def release_advisory_lock(self) -> None:
         """释放 advisory lock 并关闭专用连接。lifespan 退出时调用。"""
         conn = self._advisory_lock_conn

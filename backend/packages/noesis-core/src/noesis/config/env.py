@@ -184,6 +184,7 @@ class DistributedRunsSettings:
     redis_socket_timeout_seconds: float
     redis_connect_timeout_seconds: float
     redis_pool_max_connections: int
+    command_retention_days: float
 
 
 @dataclass(frozen=True)
@@ -484,6 +485,7 @@ def _build_distributed_runs(
         redis_socket_timeout_seconds=dr.redis_socket_timeout_seconds,
         redis_connect_timeout_seconds=dr.redis_connect_timeout_seconds,
         redis_pool_max_connections=dr.redis_pool_max_connections,
+        command_retention_days=dr.command_retention_days,
     )
 
 

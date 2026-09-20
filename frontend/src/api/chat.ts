@@ -155,6 +155,9 @@ export interface CommandReplyResult {
 }
 
 export interface AgentRunSnapshot {
+  /** durable command 受理状态：completed | accepted | rejected | no_op（旧响应缺省） */
+  command_status?: string
+  command_id?: string
   run_id: string
   assistant_message_id: string
   session_id: string
@@ -413,6 +416,9 @@ export async function subscribeSessionEvents(sessionId: string, signal?: AbortSi
 
 /** 后台子 Agent 任务（含待审批） */
 export interface TaskCatalogEntry {
+  /** durable command 受理状态：completed | accepted | rejected | no_op（旧响应缺省） */
+  command_status?: string
+  command_id?: string
   task_id: string
   session_id: string
   child_session_id?: string | null

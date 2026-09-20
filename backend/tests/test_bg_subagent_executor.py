@@ -24,12 +24,12 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import PrivateAttr
 
-from noesis.agents.subagents.executor import (
-    _TASKS,
+from noesis.agents.background.executor import (
     BackgroundTaskExecutor,
     BgTaskStatus,
     shutdown as bg_shutdown,
 )
+from noesis.agents.background.jobs.registry import _TASKS
 
 
 class _ScriptedToolModel(BaseChatModel):
@@ -284,9 +284,43 @@ def test_deliver_followup_rejects_terminal_task() -> None:
         _followup(executor, task_id, "调整")
 
 
+def test_deliver_followup_queue_full_rejects_explicitly() -> None:
+    """补话队列满（10 条）必须显式拒绝：静默挤掉最早的用户指示不可接受。"""
+    from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
+
+    worker = _build_worker(
+        [AIMessage(content="", tool_calls=[{"name": "slow", "args": {"value": str(i)}, "id": f"c{i}"}])
+         for i in range(5)],
+        slow=True,
+    )
+    executor = BackgroundTaskExecutor(task_timeout_seconds=30)
+    task_id = executor.start(worker_factory=lambda: worker, description="长任务", session_id="s-full", user_id="u1")
+
+    # 第一轮有多次慢工具调用（每次 0.6s），在运行窗口内灌满 10 条补话
+    for i in range(1, 11):
+        _followup(executor, task_id, f"补话-{i}")
+    with _TASKS_LOCK:
+        entry = _TASKS[task_id]
+        assert len(entry.followups) == 10
+        assert entry.followups[0] == "补话-1"
+
+    # 第 11 条：必须显式报错，且既有 10 条原封不动（不得静默挤掉最旧）
+    with pytest.raises(ValueError, match="队列已满"):
+        _followup(executor, task_id, "补话-11")
+    with _TASKS_LOCK:
+        entry = _TASKS[task_id]
+        assert len(entry.followups) == 10
+        assert entry.followups[0] == "补话-1"
+        assert entry.followups[-1] == "补话-10"
+
+    # 收尾：10 条补话被链式消费，任务正常结束
+    task = _wait_terminal(executor, task_id)
+    assert task["status"] == BgTaskStatus.COMPLETED.value
+
+
 
 def test_terminal_records_session_notification_once() -> None:
-    from noesis.agents.subagents import notifications
+    from noesis.agents.background import notifications
 
     worker = _build_worker([AIMessage(content="调研完成：三个要点…")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
@@ -303,7 +337,7 @@ def test_terminal_records_session_notification_once() -> None:
 
 
 def test_notify_agent_query_prefixes_block() -> None:
-    from noesis.agents.subagents import notifications
+    from noesis.agents.background import notifications
 
     notifications.record("s-q", "bg-1", "completed", "小结")
     notifications.record("s-q", "bg-2", "failed", "boom")
@@ -389,8 +423,8 @@ def _followup(executor, task_id: str, message: str, **kwargs) -> dict:
 
 def _build_tools(executor: BackgroundTaskExecutor, worker_factory, create_child_session=None):
     """以角色注册表 + 中间件构造工具面（与生产装配同构，单 general 角色）。"""
-    from noesis.agents.subagents.registry import SubagentRegistry, SubagentRole
-    from noesis.agents.subagents.async_tools_middleware import AsyncSubagentToolsMiddleware
+    from noesis.agents.background.subagent.roles import SubagentRegistry, SubagentRole
+    from noesis.agents.background.subagent.tools import AsyncSubagentToolsMiddleware
 
     registry = SubagentRegistry()
     registry.register(SubagentRole(
@@ -515,7 +549,7 @@ async def test_foreground_wait_times_out_to_background() -> None:
     executor = BackgroundTaskExecutor(task_timeout_seconds=60)
     start = next(t for t in _build_tools(executor, lambda: worker) if t.name == "start_async_task")
 
-    with mock_patch("noesis.agents.subagents.async_tools_middleware.FOREGROUND_MAX_WAIT_SECONDS", 0.3):
+    with mock_patch("noesis.agents.background.subagent.tools.FOREGROUND_MAX_WAIT_SECONDS", 0.3):
         result = await start.ainvoke({"description": "慢任务", "subagent_type": "general", "run_in_background": False})
 
     result = _tool_text(result)
@@ -634,7 +668,7 @@ async def test_standard_child_run_projection_collapses_tool_lifecycle() -> None:
     RuntimeEventMapper → builder）验证：帧词汇逐条转发（与主链路同源）、
     message.updated 退役、run.finished 携带权威投影结构。
     """
-    from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
+    from noesis.agents.background.jobs.events import subscribe_run_events, unsubscribe_run_events
 
     worker = _build_worker([
         _call("政策", call_id="call-1"),
@@ -696,7 +730,7 @@ async def test_bg_event_subscription_receives_lifecycle() -> None:
     """订阅者实时收到 started / progress / terminal（跨线程推送）。"""
     import asyncio as _asyncio
 
-    from noesis.agents.subagents.executor import (
+    from noesis.agents.background.jobs.events import (
         subscribe_bg_events,
         unsubscribe_bg_events,
     )
@@ -726,7 +760,7 @@ async def test_bg_event_subscription_receives_lifecycle() -> None:
 
 @pytest.mark.asyncio
 async def test_standard_run_event_subscription_starts_on_run_id() -> None:
-    from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
+    from noesis.agents.background.jobs.events import subscribe_run_events, unsubscribe_run_events
 
     queue = subscribe_run_events("run-sse", "u1")
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
@@ -757,8 +791,8 @@ def test_bg_notify_middleware_injects_once() -> None:
     """主 Agent 模型调用边界注入未送达通知；已送达不重复。"""
     from langchain.agents.middleware.types import ModelRequest
     from langchain_core.messages import HumanMessage, SystemMessage
-    from noesis.agents.subagents import notifications
-    from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
+    from noesis.agents.background import notifications
+    from noesis.agents.background.notify_middleware import BgNotifyMiddleware
 
     notifications.record("s-mw", "bg-1", "completed", "小结")
     request = ModelRequest(
@@ -784,8 +818,8 @@ def test_bg_notify_middleware_injects_once() -> None:
 
 def test_run_start_injection_marks_delivered_for_middleware() -> None:
     """exec_query 的下一轮注入与 run 内中间件共用 delivered 标记，不双发。"""
-    from noesis.agents.subagents import notifications
-    from noesis.agents.subagents.notify_middleware import BgNotifyMiddleware
+    from noesis.agents.background import notifications
+    from noesis.agents.background.notify_middleware import BgNotifyMiddleware
     from langchain.agents.middleware.types import ModelRequest
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -847,7 +881,7 @@ async def test_maybe_continue_creates_run_when_idle(monkeypatch) -> None:
         async def __aexit__(self, *a):
             return False
 
-    from noesis.agents.subagents import notifications
+    from noesis.agents.background import notifications
     notifications.record("s-cont", "bg-1", "completed", "小结")
 
     monkeypatch.setattr(svc, "_load_user", fake_load_user)
@@ -871,7 +905,7 @@ async def test_maybe_continue_creates_run_when_idle(monkeypatch) -> None:
 async def test_maybe_continue_skips_when_run_active(monkeypatch) -> None:
     """会话有活跃 run：不创建，通知保留（留给 run 内中间件）。"""
     from noesis.services import bg_continuation_service as svc
-    from noesis.agents.subagents import notifications
+    from noesis.agents.background import notifications
 
     svc.reset_for_tests()
     notifications.record("s-cont2", "bg-2", "completed", "x")
@@ -928,7 +962,7 @@ async def test_consecutive_wake_cap(monkeypatch) -> None:
         svc._wake_counts["s-cap"] = i + 1
     assert svc._wake_counts["s-cap"] >= svc._MAX_CONSECUTIVE
 
-    from noesis.agents.subagents import notifications
+    from noesis.agents.background import notifications
     notifications.record("s-cap", "bg-3", "completed", "x")
     result = await svc.maybe_continue("s-cap", "u1")
     assert result is None  # 触顶拒绝（无需 mock 创建路径，上限检查在 active 检查前）
@@ -947,7 +981,7 @@ def test_context_snapshot_from_worker_usage_metadata() -> None:
     与主对话同源（bridge _accumulate_usage → context-update 帧 → executor
     发布/落库），executor 不再自行从消息提取。
     """
-    from noesis.agents.subagents import executor as ex_mod
+    from noesis.agents.background.jobs import registry as ex_mod
 
     worker = _build_worker([
         AIMessage(
@@ -1021,11 +1055,8 @@ def test_step_count_does_not_cap_at_progress_preview_limit() -> None:
 
     口径 = 模型调用次数：每个 on_chat_model_end 边界 +1，与预览条目数解耦。
     """
-    from noesis.agents.subagents.executor import (
-        MAX_PROGRESS_ENTRIES,
-        BackgroundTask,
-        _record_progress_from_model_end,
-    )
+    from noesis.agents.background.subagent.kernel import _record_progress_from_model_end
+    from noesis.agents.background.jobs.state import MAX_PROGRESS_ENTRIES, BackgroundTask
 
     task = BackgroundTask(
         task_id="bg-steps",
@@ -1052,7 +1083,7 @@ async def test_submit_isolated_cuts_caller_contextvar_inheritance() -> None:
     """
     import contextvars as _contextvars
 
-    from noesis.agents.subagents.executor import _ensure_loop, _submit_isolated
+    from noesis.agents.background.jobs.loop import _ensure_loop, _submit_isolated
 
     marker: _contextvars.ContextVar = _contextvars.ContextVar(
         "noesis_test_leak_marker", default=None
@@ -1068,13 +1099,12 @@ async def test_submit_isolated_cuts_caller_contextvar_inheritance() -> None:
 
 def test_task_lookup_accepts_unique_short_id_prefix() -> None:
     """cancel/check 支持唯一前缀（模型惯用 8 位短 id；精确匹配曾致整批取消失败）。"""
-    from noesis.agents.subagents.executor import (
-        _TASKS,
-        _TASKS_LOCK,
+    from noesis.agents.background.executor import (
         BackgroundTaskExecutor,
         BackgroundTask,
         BgTaskStatus,
     )
+    from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
 
     task = BackgroundTask(
         task_id="bg-prefix-1",
@@ -1084,7 +1114,7 @@ def test_task_lookup_accepts_unique_short_id_prefix() -> None:
         child_session_id="733021ae-06ef-45de-aaee-9e3913ffc785",
         status=BgTaskStatus.COMPLETED,
     )
-    from noesis.agents.subagents.executor import _TaskEntry
+    from noesis.agents.background.jobs.registry import _TaskEntry
 
     _TASKS[task.task_id] = _TaskEntry(
         task=task,
@@ -1106,14 +1136,12 @@ def test_task_lookup_accepts_unique_short_id_prefix() -> None:
 
 def test_task_lookup_rejects_ambiguous_prefix() -> None:
     """歧义前缀不得猜测：命中多个时按不存在处理。"""
-    from noesis.agents.subagents.executor import (
-        _TASKS,
-        _TASKS_LOCK,
+    from noesis.agents.background.executor import (
         BackgroundTaskExecutor,
         BackgroundTask,
         BgTaskStatus,
-        _TaskEntry,
     )
+    from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK, _TaskEntry
 
     entries = {}
     for i, suffix in enumerate(("aaaa1111", "aaaa2222")):
@@ -1143,12 +1171,9 @@ def test_task_lookup_rejects_ambiguous_prefix() -> None:
 
 def test_apply_turn_params_switches_effort() -> None:
     """followup turn 参数：推理档位变化即使 worker 失效重编译（模型不变也生效）。"""
-    from noesis.agents.subagents.executor import (
-        BackgroundTask,
-        _TaskEntry,
-        _TurnParams,
-        _apply_turn_params,
-    )
+    from noesis.agents.background.executor import BackgroundTask
+    from noesis.agents.background.jobs.registry import _TaskEntry
+    from noesis.agents.background.subagent.kernel import _TurnParams, _apply_turn_params
 
     task = BackgroundTask(
         task_id="t", session_id="s", user_id="u", description="d", model_id="m1",
@@ -1184,7 +1209,7 @@ def test_apply_turn_params_switches_effort() -> None:
 
 def test_start_captures_parent_reasoning_effort() -> None:
     """创建时档位继承：start 在父 run 上下文捕获 ContextVar（隔离 loop 拿不到）。"""
-    from noesis.agents.subagents import executor as ex_mod
+    from noesis.agents.background.jobs import registry as ex_mod
     from noesis.llm.reasoning import clear_request_reasoning_effort, set_request_reasoning_effort
 
     set_request_reasoning_effort("medium")
@@ -1276,7 +1301,7 @@ def test_cancel_releases_concurrency_slot_immediately() -> None:
 
 def test_check_task_pending_hint_text() -> None:
     """进行中状态（queued/running）输出状态提示，不落入终态形态。"""
-    from noesis.agents.subagents.async_tools_middleware import _format_task
+    from noesis.agents.background.subagent.tools import _format_task
 
     for status, hint in (
         ("queued", "排队中"),
@@ -1290,9 +1315,9 @@ def test_check_task_pending_hint_text() -> None:
 
 def test_partial_output_consistent_across_channels() -> None:
     """部分成果三处一致（spec 2.4）：task.result / check_task(_format_task) / 通知预览。"""
-    from noesis.agents.subagents import notifications as notices
-    from noesis.agents.subagents.executor import _PARTIAL_OUTPUT_PREFIX
-    from noesis.agents.subagents.async_tools_middleware import _format_task
+    from noesis.agents.background import notifications as notices
+    from noesis.agents.background.jobs.state import _PARTIAL_OUTPUT_PREFIX
+    from noesis.agents.background.subagent.tools import _format_task
 
     first = AIMessage(
         content="阶段性结论：检索到 3 篇相关文献，主题集中在评测基准。",
@@ -1343,7 +1368,7 @@ def _truncated_call(call_id: str) -> AIMessage:
 @pytest.mark.asyncio
 async def test_truncated_run_terminal_partial() -> None:
     """输出截断一等终止（spec 3.3）：截断轮终态 partial/truncated 且携带部分产出。"""
-    from noesis.agents.subagents.executor import subscribe_run_events, unsubscribe_run_events
+    from noesis.agents.background.jobs.events import subscribe_run_events, unsubscribe_run_events
 
     worker = _build_worker([_truncated_call("t1")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
@@ -1383,7 +1408,7 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
     模拟：执行侧流已结束但状态写入尚未发生时 cancel 受理（已落 CANCELLED）——
     _try_transition 在锁内复查终态，RUNNING 恢复写入让位于停止语义。
     """
-    from noesis.agents.subagents import executor as ex_mod
+    from noesis.agents.background.jobs import registry as ex_mod, settle as settle_mod
 
     worker = _build_worker([AIMessage(content="产出文本")])
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
@@ -1398,11 +1423,11 @@ def test_stop_during_turn_finish_window_not_overwritten() -> None:
     # 机制验证：终态（停止受理落下）后，非终态写入被拒——任务不得复活
     task.status = ex_mod.BgTaskStatus.CANCELLED
     task.stop_reason = "cancelled"
-    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is False
+    assert settle_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is False
     assert task.status == ex_mod.BgTaskStatus.CANCELLED.value
     # 非终态时写入正常（followup 复活路径：RUNNING 写回自身）
     task.status = ex_mod.BgTaskStatus.RUNNING
-    assert ex_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is True
+    assert settle_mod._try_transition(task, ex_mod.BgTaskStatus.RUNNING) is True
     executor.cancel(task_id)
 
 
@@ -1434,8 +1459,8 @@ def test_deliver_followup_after_cancel_resumes_task() -> None:
 
 def test_cancel_notification_carries_partial_preview() -> None:
     """通知注入携带部分成果（阻塞项2）：cancelled 通知渲染 preview。"""
-    from noesis.agents.subagents import notifications as notices
-    from noesis.agents.subagents.notifications import render_block
+    from noesis.agents.background import notifications as notices
+    from noesis.agents.background.notifications import render_block
 
     first = AIMessage(
         content="通知应携带这段部分产出。",
@@ -1500,7 +1525,7 @@ def test_stop_reconcile_finalizes_when_cancel_absorbed() -> None:
     不能依赖被取消协程的配合：用吞掉 CancelledError 并永久挂起的工具
     复现该场景，断言 reconcile 兜底把任务收口为 CANCELLED。
     """
-    import noesis.agents.subagents.executor as executor_mod
+    from noesis.agents.background.jobs import registry as registry_mod, settle as settle_mod
 
     @tool
     async def stuck(value: str) -> str:
@@ -1537,9 +1562,9 @@ def test_stop_reconcile_finalizes_when_cancel_absorbed() -> None:
     assert executor.cancel(task_id)["status"] == BgTaskStatus.CANCELLED.value
 
     # 绕过墙钟：直接触发宽限超时硬杀（真实路径为 call_later 回调）
-    with executor_mod._TASKS_LOCK:
-        entry = executor_mod._TASKS[task_id]
-    executor_mod._on_stop_grace_timeout(entry)
+    with registry_mod._TASKS_LOCK:
+        entry = registry_mod._TASKS[task_id]
+    settle_mod._on_stop_grace_timeout(entry)
 
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -1554,15 +1579,15 @@ def test_stop_reconcile_finalizes_when_cancel_absorbed() -> None:
     assert task["stop_reason"] == "cancelled"
 
 
-def test_late_finalize_stop_does_not_republish_after_force_terminal() -> None:
-    """对账兜底已发布终态后，晚到的 _finalize_stop 重入只补落库、不重发事件。
+def test_late_settle_stop_does_not_republish_after_forced_settle() -> None:
+    """对账兜底已发布终态后，晚到的 settle_stop 重入只补落库、不重发事件。
 
     归属权（terminal_published）在事件实际发布时置位：硬取消被吸收、
-    _force_terminal 已收口的任务，被卡死协程事后苏醒再走 _finalize_stop，
+    settle_orphaned_task 已收口的任务，被卡死协程事后苏醒再走 settle_stop，
     run.finished / terminal 事件 / 通知 / drain 不得二次触发。
     """
-    import noesis.agents.subagents.executor as executor_mod
-    from noesis.agents.subagents import notifications
+    from noesis.agents.background.jobs import loop as loop_mod, registry as registry_mod, settle as settle_mod
+    from noesis.agents.background import notifications
 
     @tool
     async def stuck(value: str) -> str:
@@ -1596,9 +1621,9 @@ def test_late_finalize_stop_does_not_republish_after_force_terminal() -> None:
     )
     time.sleep(0.3)
     assert executor.cancel(task_id)["status"] == BgTaskStatus.CANCELLED.value
-    with executor_mod._TASKS_LOCK:
-        entry = executor_mod._TASKS[task_id]
-    executor_mod._on_stop_grace_timeout(entry)
+    with registry_mod._TASKS_LOCK:
+        entry = registry_mod._TASKS[task_id]
+    settle_mod._on_stop_grace_timeout(entry)
 
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -1616,10 +1641,10 @@ def test_late_finalize_stop_does_not_republish_after_force_terminal() -> None:
     assert len(notices) == 1, "对账兜底应恰好发布一次终态通知"
     assert notices[0]["status"] == BgTaskStatus.CANCELLED.value
 
-    # 模拟被卡死协程晚到苏醒：_finalize_stop 重入不重发事件
-    loop = executor_mod._ensure_loop()
+    # 模拟被卡死协程晚到苏醒：settle_stop 重入不重发事件
+    loop = loop_mod._ensure_loop()
     late = asyncio.run_coroutine_threadsafe(
-        executor_mod._finalize_stop(entry, entry.task, None), loop,
+        settle_mod.settle_stop(entry, entry.task, None), loop,
     )
     late.result(timeout=10)
     assert notifications.drain("s-late") == [], "晚到重入不得二次发布终态通知"
@@ -1631,18 +1656,25 @@ def test_session_port_covers_executor_call_surface() -> None:
 
     回归：collect_partial_output 曾只加在 SubagentSessionService 而漏了
     端口委托，executor 经端口调用直接 AttributeError 逃逸，炸穿
-    _finalize_stop 使 run 永久 RUNNING（测试因 run_id=None 走不到端口
+    settle_stop 使 run 永久 RUNNING（测试因 run_id=None 走不到端口
     而全绿）。从 executor 源码提取实际调用面做契约，未来新增调用自动覆盖。
     """
     import inspect
     import re
 
-    from noesis.agents.subagents import executor as executor_mod
+    from noesis.agents.background import executor as executor_mod, jobs
+    from noesis.agents.background.subagent import kernel as agent_kernel
     from noesis.services import subagent_session_service
-    from noesis.services.subagent_runtime_port import SubagentSessionPort
+    from noesis.agents.background.ports import SubagentSessionPort
 
-    # executor 内统一别名：SubagentSessionPort as SubagentSessionService
-    called = set(re.findall(r"\bSubagentSessionService\.(\w+)\(", inspect.getsource(executor_mod)))
+    # 物理拆分后端口调用分布在门面 + agent_kernel + jobs.settle：
+    # 契约扫描覆盖全部承载模块（端口调用统一以 SubagentSessionPort 本名出现）
+    _sources = (
+        inspect.getsource(executor_mod)
+        + inspect.getsource(agent_kernel)
+        + inspect.getsource(jobs.settle)
+    )
+    called = set(re.findall(r"\bSubagentSessionPort\.(\w+)\(", _sources))
     port_methods = {
         name for name, _ in inspect.getmembers(SubagentSessionPort)
         if not name.startswith("_")
@@ -1665,12 +1697,13 @@ def test_session_port_covers_executor_call_surface() -> None:
 
 
 async def test_collect_persisted_text_degrades_on_port_failure() -> None:
-    """部分成果提取失败必须降级为空，不允许炸穿 _finalize_stop。
+    """部分成果提取失败必须降级为空，不允许炸穿 settle_stop。
 
     回归：端口缺方法时 AttributeError 在协程构造期同步抛出，原 try 只包住
     await，导致异常逃逸、run 永久 RUNNING。
     """
-    from noesis.agents.subagents.executor import BackgroundTask, _collect_persisted_text
+    from noesis.agents.background.executor import BackgroundTask
+    from noesis.agents.background.subagent.kernel import _collect_persisted_text
 
     task = BackgroundTask(
         task_id="bg-x", session_id="s1", user_id="u1",
@@ -1716,7 +1749,7 @@ def test_followup_cold_resume_prelude_failure_fails_task() -> None:
 async def test_run_stream_publishes_transient_deltas_and_stats() -> None:
     """流式转发：子会话 run 流收到 text-delta / stats-update（transient），
     且瞬态事件不进 history（重连由 run-snapshot 全量恢复，不叠放旧 delta）。"""
-    from noesis.agents.subagents.executor import (
+    from noesis.agents.background.jobs.events import (
         get_run_event_history,
         subscribe_run_events,
         unsubscribe_run_events,
@@ -1776,7 +1809,7 @@ async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
     发生——子会话详情页「正在生成」与 token/s 统计行的整个数据源
     （executor 瞬态转发）此前零覆盖。流式假模型 + 订阅队列直接实证。
     """
-    import noesis.agents.subagents.executor as executor_mod
+    from noesis.agents.background.jobs.events import subscribe_run_events, unsubscribe_run_events
     from langchain_core.messages import AIMessageChunk
     from langchain_core.outputs import ChatGenerationChunk
 
@@ -1818,7 +1851,7 @@ async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
 
     executor = BackgroundTaskExecutor(task_timeout_seconds=30)
     run_id = "run-transient-test"
-    queue = executor_mod.subscribe_run_events(run_id, "u1")
+    queue = subscribe_run_events(run_id, "u1")
     try:
         executor.start(
             worker_factory=lambda: worker, description="瞬态转发",
@@ -1840,7 +1873,7 @@ async def test_transient_deltas_forwarded_to_run_subscribers() -> None:
         assert "text-delta" in seen_types, f"未收到 text-delta 瞬态事件: {seen_types[:10]}"
         assert "stats-update" in seen_types, f"未收到 stats-update 瞬态事件: {seen_types[:10]}"
     finally:
-        executor_mod.unsubscribe_run_events(run_id, queue)
+        unsubscribe_run_events(run_id, queue)
         bg_shutdown()
 
 
@@ -1934,8 +1967,9 @@ def test_new_kind_registers_without_runtime_change() -> None:
     FakeKind 不做真活，按剧本返回动作——验证能力门控、run 分派、
     停止/超时模式全部经行为对象生效。
     """
-    from noesis.agents.subagents import executor as ex
-    from noesis.agents.subagents.kinds import StopMode, behavior_of
+    from noesis.agents.background import kinds as kinds_mod
+    from noesis.agents.background.jobs import settle as settle_mod
+    from noesis.agents.background.kinds import StopMode, behavior_of
 
     calls: list[str] = []
 
@@ -1952,10 +1986,10 @@ def test_new_kind_registers_without_runtime_change() -> None:
         def run(entry):
             async def _go():
                 calls.append("run")
-                entry.task.status = ex.BgTaskStatus.COMPLETED
+                entry.task.status = BgTaskStatus.COMPLETED
                 entry.task.result = "fake done"
                 entry.task.completed_at = time.time()
-                ex._notify_terminal(entry.task)
+                settle_mod._notify_terminal(entry.task)
             return _go()
 
         @staticmethod
@@ -1968,7 +2002,7 @@ def test_new_kind_registers_without_runtime_change() -> None:
             calls.append("on_timeout")
             return True
 
-    ex.KIND_BEHAVIORS["fake"] = _FakeKind()
+    kinds_mod.KIND_BEHAVIORS["fake"] = _FakeKind()
     try:
         executor = BackgroundTaskExecutor(task_timeout_seconds=30)
         task_id = executor.start(worker_factory=lambda: None, description="f",
@@ -1983,4 +2017,130 @@ def test_new_kind_registers_without_runtime_change() -> None:
             _followup(executor, task_id, "追问")
         assert behavior_of("fake").reject_followup_text() == "fake 任务不可追问"
     finally:
-        ex.KIND_BEHAVIORS.pop("fake", None)
+        kinds_mod.KIND_BEHAVIORS.pop("fake", None)
+
+
+# ---------------------------------------------------------------------------
+# 结案认领契约（先到获胜 / 晚到降级 / 终态不可覆写）
+# ---------------------------------------------------------------------------
+
+def _race_entry(task_id: str, status: BgTaskStatus = BgTaskStatus.RUNNING):
+    from noesis.agents.background.executor import BackgroundTask
+    from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK, _TaskEntry
+
+    task = BackgroundTask(task_id=task_id, session_id="s-race", user_id="u1", description="x")
+    task.status = status
+    entry = _TaskEntry(task=task, agent_factory=None, recursion_limit=10, timeout_seconds=0)
+    with _TASKS_LOCK:
+        _TASKS[task.task_id] = entry
+    return entry
+
+
+def test_accept_terminal_first_writer_wins_late_stop_downgrades() -> None:
+    """先到者写终态；晚到的停止族规格降级为停止语义，但成果载荷保留。"""
+    from noesis.agents.background.jobs.settle import _accept_terminal, TaskTerminal
+    from noesis.chat.runs import RunStatus
+
+    entry = _race_entry("t-race-1")
+    try:
+        first = TaskTerminal(task_status=BgTaskStatus.COMPLETED, run_status=RunStatus.COMPLETED,
+                             finish_reason="done", content={"text": "先到的完整成果"})
+        got = _accept_terminal(entry, first)
+        assert got.task_status == BgTaskStatus.COMPLETED
+        assert entry.task.status == BgTaskStatus.COMPLETED
+
+        late_cancel = TaskTerminal(task_status=BgTaskStatus.CANCELLED, run_status=RunStatus.PARTIAL,
+                                   finish_reason="cancelled", content={"text": "晚到的部分成果"})
+        got2 = _accept_terminal(entry, late_cancel)
+        # 状态不被覆写；规格降级为停止语义（与先到终态一致），载荷保留
+        assert entry.task.status == BgTaskStatus.COMPLETED
+        assert got2.task_status == BgTaskStatus.CANCELLED
+        assert got2.content == {"text": "晚到的部分成果"}
+    finally:
+        from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
+        with _TASKS_LOCK:
+            _TASKS.pop("t-race-1", None)
+
+
+def test_accept_terminal_late_nonstop_spec_returns_as_is() -> None:
+    """晚到的非停止族规格（COMPLETED on COMPLETED）原样返回，状态不变。"""
+    from noesis.agents.background.jobs.settle import _accept_terminal, TaskTerminal
+    from noesis.chat.runs import RunStatus
+
+    entry = _race_entry("t-race-2", status=BgTaskStatus.COMPLETED)
+    try:
+        late = TaskTerminal(task_status=BgTaskStatus.COMPLETED, run_status=RunStatus.COMPLETED,
+                            finish_reason="done", content={"text": "晚到的相同终态"})
+        got = _accept_terminal(entry, late)
+        assert got.task_status == BgTaskStatus.COMPLETED
+        assert entry.task.status == BgTaskStatus.COMPLETED
+    finally:
+        from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
+        with _TASKS_LOCK:
+            _TASKS.pop("t-race-2", None)
+
+
+def test_try_transition_refuses_terminal_overwrite() -> None:
+    """终态不可覆写：followup 等非终态写入在终态后必须被拒。"""
+    from noesis.agents.background.jobs.settle import _try_transition
+
+    entry = _race_entry("t-race-3", status=BgTaskStatus.CANCELLED)
+    try:
+        assert _try_transition(entry.task, BgTaskStatus.RUNNING) is False
+        assert entry.task.status == BgTaskStatus.CANCELLED
+    finally:
+        from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
+        with _TASKS_LOCK:
+            _TASKS.pop("t-race-3", None)
+
+    # RUNNING 上正常放行
+    entry2 = _race_entry("t-race-4", status=BgTaskStatus.RUNNING)
+    try:
+        assert _try_transition(entry2.task, BgTaskStatus.RUNNING) is True
+    finally:
+        from noesis.agents.background.jobs.registry import _TASKS, _TASKS_LOCK
+        with _TASKS_LOCK:
+            _TASKS.pop("t-race-4", None)
+
+
+def test_revivable_end_states_whitelist() -> None:
+    """复活白名单：只有干完/被取消可续；失败、超时拒绝。"""
+    from noesis.agents.background.jobs.settle import REVIVABLE_END_STATES
+
+    assert REVIVABLE_END_STATES == frozenset({BgTaskStatus.COMPLETED, BgTaskStatus.CANCELLED})
+
+
+# ---------------------------------------------------------------------------
+# 终态唤醒门控（无人值守会话：timed_out/failed 同样必须唤醒主 Agent）
+# ---------------------------------------------------------------------------
+
+def test_schedule_continuation_fires_on_all_terminals(monkeypatch) -> None:
+    """所有终态都调度唤醒：只认 COMPLETED 的门控在无人值守会话（定时任务）
+    下意味着失败/超时的交付永不回到父 Agent——生产事故根因。空转风险由
+    continuation 服务的 60s 去抖 + 连续 5 次上限兜底，不靠此门控。"""
+    from noesis.agents.background.executor import BackgroundTask
+    from noesis.agents.background.jobs.settle import _schedule_continuation
+
+    fired: list[str] = []
+
+    async def _fake_continue(session_id: str, user_id: str) -> None:
+        fired.append(f"{session_id}:{user_id}")
+
+    def _fake_run_on_main_loop(coro, name: str = "") -> None:
+        fired.append(f"run:{name}")
+        coro.close()  # 同步测试无活循环：关闭未 await 的协程防告警
+
+    monkeypatch.setattr("noesis.runtime.main_loop.run_on_main_loop", _fake_run_on_main_loop)
+    monkeypatch.setattr(
+        "noesis.services.bg_continuation_service.schedule_maybe_continue", _fake_continue
+    )
+
+    for status in (BgTaskStatus.COMPLETED, BgTaskStatus.FAILED, BgTaskStatus.TIMED_OUT):
+        task = BackgroundTask(
+            task_id=f"t-cont-{status.value}", session_id="s-cont", user_id="u1",
+            description="x", status=status,
+        )
+        _schedule_continuation(task)
+
+    runs = [f for f in fired if f.startswith("run:")]
+    assert len(runs) == 3, f"三种终态都应调度唤醒，实际: {fired}"

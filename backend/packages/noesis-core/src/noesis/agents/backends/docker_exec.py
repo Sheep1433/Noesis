@@ -15,12 +15,13 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.sandbox import BaseSandbox
 
-from noesis.agents.backends.paths import (
+from noesis.paths import (
     WORKSPACE_CONTAINER_PREFIX,
     resolve_read_container_path,
     resolve_write_container_path,
 )
 from noesis.config.env import SandboxConfig, sandbox_runner_headers
+from noesis.errors.tool_failure import ToolInfrastructureError
 
 _MUTEX_REGISTRY: dict[tuple[str, str], threading.Lock] = {}
 _MUTEX_REGISTRY_LOCK = threading.Lock()
@@ -67,7 +68,9 @@ class DockerExecSandboxBackend(BaseSandbox):
         return f"docker-{self._user_id}-{self._session_id}"
 
     def _api_prefix(self) -> str:
-        return f"/internal/sandboxes/{self._user_id}/sessions/{self._session_id}"
+        from noesis.agents.backends.sandbox_lifecycle import sandbox_api_path
+
+        return sandbox_api_path(self._user_id, self._session_id)
 
     def _post(self, path: str, payload: dict, *, http_timeout: float | None = None) -> httpx.Response:
         headers = sandbox_runner_headers()
@@ -102,23 +105,10 @@ class DockerExecSandboxBackend(BaseSandbox):
         )
 
     def _ensure_sync(self) -> None:
-        """同步 ensure（供 execute 在 404 后重建；清缓存后强制 PUT）。"""
-        from noesis.agents.backends.sandbox_lifecycle import invalidate_session_sandbox_cache
+        """404 后重建：复用 lifecycle 的同步 ensure（URL/payload/解析单一来源）。"""
+        from noesis.agents.backends.sandbox_lifecycle import ensure_session_sandbox_sync
 
-        invalidate_session_sandbox_cache(self._user_id, self._session_id)
-        headers = sandbox_runner_headers()
-        path = f"/internal/sandboxes/{self._user_id}/sessions/{self._session_id}"
-        with httpx.Client(timeout=120.0) as client:
-            resp = client.put(
-                f"{self._runner_url}{path}",
-                headers=headers,
-                json={"runtime": "docker"},
-            )
-        if resp.status_code >= 400:
-            detail = resp.text.strip() or resp.reason_phrase
-            raise RuntimeError(
-                f"重建会话沙箱失败 HTTP {resp.status_code}: {detail}"
-            )
+        ensure_session_sandbox_sync(self._user_id, self._session_id)
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         effective_timeout = float(timeout if timeout is not None else self._default_timeout)
@@ -128,7 +118,7 @@ class DockerExecSandboxBackend(BaseSandbox):
                 if resp.status_code == 404:
                     try:
                         self._ensure_sync()
-                    except (httpx.HTTPError, RuntimeError) as exc:
+                    except (httpx.HTTPError, RuntimeError, ToolInfrastructureError) as exc:
                         return ExecuteResponse(
                             output=f"Docker sandbox recreate failed: {exc}",
                             exit_code=1,

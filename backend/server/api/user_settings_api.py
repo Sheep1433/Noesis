@@ -14,9 +14,9 @@ from noesis.schemas.login_vo import CurrentUser
 from noesis.services.messaging_channel_service import MessagingChannelService
 from noesis.services.scheduled_task_service import ScheduledTaskService
 from noesis.services.scheduled_task_service import compute_next_run_ms, cron_summary
-from noesis.services.memory.store import MemoryStore
-from noesis.services.memory.types import MEMORY_TYPES, TYPE_LABELS
-from noesis.services.memory.user_settings import MemoryUserSettings
+from noesis.memory.store import MemoryStore
+from noesis.memory.types import MEMORY_TYPES, TYPE_LABELS
+from noesis.memory.user_settings import MemoryUserSettings
 from noesis.services.user_memory_service import UserMemoryService
 from server.auth_dependencies import get_current_user, require_csrf
 from noesis.services.settings_service import SettingsService
@@ -161,12 +161,12 @@ async def put_memory_entry(
         raise HTTPException(status_code=400, detail=str(e)) from e
     if not path.is_file():
         raise HTTPException(status_code=404, detail="条目不存在")
-    from noesis.services.memory.extraction import MAX_ENTRY_CHARS
+    from noesis.memory.extraction import MAX_ENTRY_CHARS
 
     # 直接编辑放宽一倍：最高权限入口，索引同步前给用户更大书写空间
     if len(body.content.encode("utf-8")) > MAX_ENTRY_CHARS * 2:
         raise HTTPException(status_code=400, detail="内容超出上限")
-    from noesis.services.memory.store import IndexEntry
+    from noesis.memory.store import IndexEntry
 
     path.write_text(body.content, encoding="utf-8")
     front = MemoryStore.read_entry_file(path)

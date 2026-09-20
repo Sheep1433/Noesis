@@ -1,39 +1,55 @@
-"""用户记忆路径与 seed 回归。"""
+"""用户记忆路径与 seed 回归（布局：memory/ 子树，seed 见 noesis.memory.layout）。"""
 
 from __future__ import annotations
 
 import pytest
 
 from noesis.config import user_data_paths as paths
+from noesis.memory.layout import ensure_user_memory_files
 
 
 def test_get_user_agents_md_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
-    assert paths.get_user_agents_md_path("42") == tmp_path / "users" / "42" / "AGENTS.md"
+    assert (
+        paths.get_user_agents_md_path("42")
+        == tmp_path / "users" / "42" / "memory" / "AGENTS.md"
+    )
 
 
 def test_get_user_profile_md_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
-    assert paths.get_user_profile_md_path("42") == tmp_path / "users" / "42" / "USER.md"
+    assert (
+        paths.get_user_profile_md_path("42")
+        == tmp_path / "users" / "42" / "memory" / "USER.md"
+    )
 
 
-def test_ensure_user_memory_files_creates_seed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_user_memory_files_creates_seed(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
-    root = paths.ensure_user_memory_files("u1")
+    root = ensure_user_memory_files("u1")
     assert root.is_dir()
     agents = paths.get_user_agents_md_path("u1")
     profile = paths.get_user_profile_md_path("u1")
     assert agents.is_file()
     assert profile.is_file()
     assert "工作偏好" in agents.read_text(encoding="utf-8")
+    # 记忆布局（五类目录 + journal + 索引）随 seed 一并就绪
+    memory_root = root / "memory"
+    assert (memory_root / "MEMORY.md").is_file()
+    assert (memory_root / "journal").is_dir()
+    assert (memory_root / "preference").is_dir()
 
 
-def test_ensure_user_memory_files_idempotent(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_user_memory_files_idempotent(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(paths, "_USERS_ROOT", tmp_path / "users")
-    paths.ensure_user_memory_files("u1")
+    ensure_user_memory_files("u1")
     agents = paths.get_user_agents_md_path("u1")
     agents.write_text("custom", encoding="utf-8")
-    paths.ensure_user_memory_files("u1")
+    ensure_user_memory_files("u1")
     assert agents.read_text(encoding="utf-8") == "custom"
 
 

@@ -31,7 +31,7 @@ from noesis.runtime.logging import logger
 from noesis.services.chat_service import ChatService
 from noesis.services.run_recovery_service import mark_running_tools_unknown
 from noesis.storage.postgres.models.chat import TAgentRun, TChatMessage, TChatSession
-from noesis.services.subagent_runtime_port import configure_service_port
+from noesis.agents.background.ports import configure_service_port
 
 
 def _now_ms() -> int:
@@ -96,9 +96,21 @@ class SubagentSessionService:
     @classmethod
     def child_session_summary(cls, task: dict, *, parent_id: str) -> dict:
         """child 会话目录摘要（委托端口模块的单一构造点）。"""
-        from noesis.services.subagent_runtime_port import child_session_summary
+        from noesis.agents.background.ports import child_session_summary
 
         return child_session_summary(task, parent_id=parent_id)
+
+    @classmethod
+    async def subscribe_remote_run_events(cls, run_id: str, user_id: str):
+        """redis 模式：子会话 RunEvent 经 Run hub 订阅（task 4.9）。
+
+        follower 上打开子代理会话页时，进程内投递内核不存在——hub 订阅
+        bus 通道并以 DB 投影为 snapshot 对账（gap/静默丢失由 4.5 机制
+        恢复）。订阅入口已完成 (run_id, user) 鉴权。
+        """
+        from noesis.services.run_service import _hub_registry
+
+        return await _hub_registry().subscribe(run_id)
 
     @classmethod
     async def reconcile_orphaned_runs(cls, db: AsyncSession) -> int:
@@ -163,7 +175,7 @@ class SubagentSessionService:
         model_id: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
     ) -> dict:
-        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundTaskExecutor
+        from noesis.agents.background.ports import ExecutorPort as BackgroundTaskExecutor
 
         task = await cls._owned_child(session_id, user_id)
         if task is None:
@@ -293,7 +305,7 @@ class SubagentSessionService:
         run = await cls._get_owned_run(run_id, user_id, db)
         if run is None or run.origin != "subagent":
             raise NotFoundException(message="子 Agent run 不存在")
-        from noesis.services.subagent_runtime_port import ExecutorPort as BackgroundTaskExecutor
+        from noesis.agents.background.ports import ExecutorPort as BackgroundTaskExecutor
 
         try:
             accepted = BackgroundTaskExecutor.cancel(run.session_id)
@@ -335,19 +347,19 @@ class SubagentSessionService:
 
     @staticmethod
     def subscribe_run_events(run_id: str, user_id: str):
-        from noesis.services.subagent_runtime_port import ExecutorPort
+        from noesis.agents.background.ports import ExecutorPort
 
         return ExecutorPort.subscribe_run_events(run_id, user_id)
 
     @staticmethod
     def unsubscribe_run_events(run_id: str, queue) -> None:
-        from noesis.services.subagent_runtime_port import ExecutorPort
+        from noesis.agents.background.ports import ExecutorPort
 
         ExecutorPort.unsubscribe_run_events(run_id, queue)
 
     @staticmethod
     def get_run_event_history(run_id: str, after_sequence: int = 0) -> list[dict]:
-        from noesis.services.subagent_runtime_port import ExecutorPort
+        from noesis.agents.background.ports import ExecutorPort
 
         return ExecutorPort.get_run_event_history(run_id, after_sequence)
 

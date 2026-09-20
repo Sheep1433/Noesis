@@ -31,10 +31,10 @@ memory/
 
 - 条目一条一文件：正文、Why、适用条件、来源（可多条）、更新时间；条目文件是事实源，索引损坏行跳过、可从条目目录重建。
 - 索引有行数 + 字节双保险预算（`index_max_lines` / `index_max_bytes`）。
-- 类型集冻结为五类（`services/memory/types.py`）：新增类型须走新变更提案。
+- 类型集冻结为五类（`noesis/memory/types.py`）：新增类型须走新变更提案。
 - journal 与条目时间戳使用本地时区；抽取标记（水位列）不改变会话排序。
 
-## 抽取：水位增量（`services/memory/extraction.py`）
+## 抽取：水位增量（`noesis/memory/extraction.py`）
 
 ```text
 sweep（每 sweep_interval_minutes）
@@ -53,15 +53,13 @@ sweep（每 sweep_interval_minutes）
 - subagent 会话（`kind='subagent'`）不抽取：结论经父会话终态通知回流。
 - 抽取模型 `extraction_model`（空 = 默认对话模型）。
 
-## 注入：每 Run 选条（`agents/middlewares/memory_entries_middleware.py` + `services/memory/selection.py`）
+## 注入：固定三源（`agents/context.py` `render_memory_block`）
 
-- 每 Run 由小模型（`selection_model`，可用廉价模型）从索引选条或全量，注入预算 `inject_budget_tokens`。
-- 走 late-context 追加通道（不改 system prompt 稳定前缀）；**Run 级冻结**——同一 run_id（含 tool loop 与 HITL resume）注入相同快照。
-- alreadySurfaced：本 Run 注入过的条目下一 Run 不重复注入。
-- 注入清单回写 `run.memory_context`，作为下次抽取"防自强化"的输入。
-- 超过 `stale_warning_days` 的条目注入时附 stale 警告。
+- SuperAgent 每个 run 注入固定三个 source：`/memory/USER.md`、`/memory/AGENTS.md`、`/memory/MEMORY.md`（索引全量，无选条模型）。
+- 渲染格式由 deepagents `MemoryMiddleware._format_agent_memory` 单点实现（实例调用防漂移）；宿主文件从用户 `memory/` 子树直读。
+- Agentic 召回（`search_memory` 工具）承担按需检索；注入清单回写 `run.memory_context`，作为下次抽取"防自强化"的输入。
 
-## 整理：AutoDream 门控（`services/memory/consolidation.py`）
+## 整理：AutoDream 门控（`noesis/memory/consolidation.py`）
 
 门控对齐 Claude Code AutoDream，双条件**同时满足**才跑（无活动日不空转）：
 
@@ -75,20 +73,16 @@ sweep（每 sweep_interval_minutes）
 ```yaml
 memory:
   extraction_model: ""       # 空 = 默认对话模型（会话终态抽取）
-  selection_model: ""        # 空 = 默认对话模型（每 Run 注入选条，可用廉价模型）
   enabled_by_default: false  # fail-closed：评测门禁通过后再默认开启
   session_idle_minutes: 10   # 会话 idle 判定（终态触发抽取）
   sweep_interval_minutes: 30 # 未抽取会话补扫间隔
   max_entries_per_extraction: 3
-  index_max_lines: 200       # 索引预算双保险
-  index_max_bytes: 25600
-  stale_warning_days: 2      # 超龄条目注入时附 stale 警告
-  inject_budget_tokens: 2000
-  max_entry_chars: 4000
   consolidation_min_interval_hours: 24   # AutoDream 门控：距上次整理最小间隔
   consolidation_min_new_sessions: 5      # 且期间新抽取会话数达此值才整理
-  max_message_chars: 120000  # 抽取输入上限（会话消息截断）
 ```
+
+条目字符预算、索引预算（行数 + 字节双保险）、stale 警告天数等文本策略
+为代码常量（`noesis/memory/store.py`、`agents/tools/memory_tools.py`）。
 
 ## 可靠性边界
 

@@ -236,6 +236,8 @@ class DistributedRunsYamlSection(BaseModel):
     redis_socket_timeout_seconds: float = Field(default=5.0, gt=0)
     redis_connect_timeout_seconds: float = Field(default=3.0, gt=0)
     redis_pool_max_connections: int = Field(default=20, gt=0)
+    # durable command 保留天数：保留期=幂等去重窗口，超期终态命令由 leader 清理
+    command_retention_days: float = Field(default=7.0, gt=0)
 
 
 class QdrantYamlSection(BaseModel):

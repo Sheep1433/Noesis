@@ -11,6 +11,7 @@ import {
   COMPACTION_BOUNDARY,
   completeReasoningPart,
   createRedactedThinkingStreamCtx,
+  dropStreamPartsById,
   formatDurationMs,
   formatUsageSummary,
   hasValidContextWindow,
@@ -18,7 +19,6 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
-  rollbackTrailingStreamParts,
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
   TOOL_STATE_LABELS,
@@ -592,23 +592,42 @@ describe('streaming hot-path copy-on-write 与批量应用等价性', () => {
   })
 })
 
-describe('rollbackTrailingStreamParts', () => {
-  it('丢弃末尾连续 text/reasoning，遇到工具边界即停（LLM 重试回滚）', () => {
-    const parts: UiPart[] = [
-      { type: 'text', content: '第一段正文。', id: 'p1' },
-      { type: 'tool', tool_call_id: 'c1', name: 'web_search', input: {}, output: 'ok', status: 'success', duration_ms: 10 },
-      { type: 'reasoning', content: 'Now Phase 6:', id: 'p2' },
-      { type: 'text', content: 'Phase 3-5 完成。', id: 'p3' },
-    ]
-    const rolled = rollbackTrailingStreamParts(parts)
-    expect(rolled.map((p) => p.type)).toEqual(['text', 'tool'])
-    expect((rolled[0] as { content: string }).content).toBe('第一段正文。')
+describe('stream rollback by part ids', () => {
+  it('appendTextDelta 按 part_id 分段，回滚按 id 点名丢弃（失败尝试不误伤前文）', () => {
+    let parts: UiPart[] = appendTextDelta([], '旧正文。', undefined, 'p-keep')
+    parts = appendTextDelta(parts, '失败尝试的半截', undefined, 'p-drop')
+    expect(parts.length).toBe(2)
+
+    const rolled = dropStreamPartsById(parts, ['p-drop'])
+    expect(rolled.length).toBe(1)
+    expect((rolled[0] as { content: string }).content).toBe('旧正文。')
   })
 
-  it('无可回滚时原样返回引用', () => {
-    const parts: UiPart[] = [
-      { type: 'tool', tool_call_id: 'c1', name: 'web_search', input: {}, output: '', status: 'success' },
-    ]
-    expect(rollbackTrailingStreamParts(parts)).toBe(parts)
+  it('同 part_id 的连续 delta 合并进同一 part', () => {
+    let parts: UiPart[] = appendTextDelta([], 'a', undefined, 'p-1')
+    parts = appendTextDelta(parts, 'b', undefined, 'p-1')
+    expect(parts.length).toBe(1)
+    expect((parts[0] as { content: string }).content).toBe('ab')
+  })
+
+  it('reasoning 同样按 part_id 分段与丢弃', () => {
+    let parts: UiPart[] = appendReasoningDelta([], '保留的思考', undefined, 'r-keep')
+    parts = appendReasoningDelta(parts, '失败尝试的思考', undefined, 'r-drop')
+    const rolled = dropStreamPartsById(parts, ['r-drop'])
+    expect(rolled.length).toBe(1)
+    expect((rolled[0] as { content: string }).content).toBe('保留的思考')
+  })
+
+  it('无 part_id 时保持尾部合并（旧 wire 兼容）', () => {
+    let parts: UiPart[] = appendTextDelta([], 'a')
+    parts = appendTextDelta(parts, 'b')
+    expect(parts.length).toBe(1)
+    expect((parts[0] as { content: string }).content).toBe('ab')
+  })
+
+  it('dropStreamPartsById 空名单原样返回引用', () => {
+    const parts: UiPart[] = [{ type: 'text', content: 'x', id: 'p1' }]
+    expect(dropStreamPartsById(parts, [])).toBe(parts)
+    expect(dropStreamPartsById(parts, ['', undefined as unknown as string])).toBe(parts)
   })
 })

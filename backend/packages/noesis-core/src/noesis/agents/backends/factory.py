@@ -13,8 +13,8 @@ from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 from noesis.agents.backends.agent_path import AgentPathBackend
 from noesis.agents.backends.docker_exec import create_docker_exec_sandbox_backend
 from noesis.agents.backends.local_shell import create_local_shell_backend
-from noesis.agents.backends.memory import UserMemoryBackend
-from noesis.agents.backends.paths import (
+from noesis.agents.backends.memory_fs import MemoryFilesystemBackend
+from noesis.paths import (
     AGENT_MEMORY_ROUTE,
     AGENT_PERSONAL_SKILLS_ROUTE,
     AGENT_PUBLIC_SKILLS_ROUTE,
@@ -22,12 +22,11 @@ from noesis.agents.backends.paths import (
 )
 from noesis.config.env import get_config
 from noesis.config.extensions_paths import skills_root
+from noesis.memory.layout import ensure_user_memory_files
+from noesis.memory.store import MemoryStore
 from noesis.config.user_data_paths import (
-    ensure_user_memory_files,
     ensure_user_skills_dir,
     ensure_workspace_dir,
-    get_user_agents_md_path,
-    get_user_profile_md_path,
     get_user_skills_dir,
     get_workspace_dir,
 )
@@ -92,6 +91,31 @@ WORKER_MEMORY_READ_ONLY_ERROR = (
 )
 
 
+def _memory_route_backend(
+    user_id: str,
+    *,
+    memory_read_only: bool,
+) -> BackendProtocol:
+    """/memory 挂载根 = 用户 memory/ 子树（布局见 noesis.memory.layout）。
+
+    单路由 + 裸 FilesystemBackend：写入策略（索引/journal 只读、条目
+    白名单）与写后索引同步在 MemoryWriteMiddleware，此处只负责目录
+    挂载与 worker 整体只读。
+    """
+    ensure_user_memory_files(user_id)
+    memory_fs = MemoryFilesystemBackend(
+        root_dir=MemoryStore.memory_root(user_id), virtual_mode=True
+    )
+    if memory_read_only:
+        return AgentPathBackend(
+            memory_fs,
+            read_only=True,
+            canonicalize=False,
+            read_only_error=WORKER_MEMORY_READ_ONLY_ERROR,
+        )
+    return memory_fs
+
+
 def build_agent_filesystem_backend(
     *,
     user_id: str,
@@ -101,18 +125,7 @@ def build_agent_filesystem_backend(
     memory_read_only: bool = False,
 ) -> CompositeBackend:
     """docker：default=沙箱（含 skills 挂载）；local：workspace strip + skills routes。"""
-    memory = UserMemoryBackend(
-        agents_path=get_user_agents_md_path(user_id),
-        user_path=get_user_profile_md_path(user_id),
-        user_id=user_id,
-    )
-    if memory_read_only:
-        memory = AgentPathBackend(
-            memory,
-            read_only=True,
-            canonicalize=False,
-            read_only_error=WORKER_MEMORY_READ_ONLY_ERROR,
-        )
+    memory = _memory_route_backend(user_id, memory_read_only=memory_read_only)
 
     if sandbox is not None:
         default: BackendProtocol = AgentPathBackend(sandbox)

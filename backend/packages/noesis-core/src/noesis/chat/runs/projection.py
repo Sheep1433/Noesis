@@ -118,10 +118,13 @@ class RunProjection:
                 self.builder.append_reasoning_delta(
                     str(delta or ""),
                     parent_task_call_id=data.get("parent_task_call_id"),
+                    part_id=str(data.get("part_id") or "") or None,
                 )
             elif event.event == "stream-rollback":
-                # LLM 重试/降级：失败尝试的部分流式输出不进落库投影
-                self.builder.rollback_trailing_stream_parts()
+                # LLM 重试/降级：按帧点名的 part_ids 丢弃失败尝试的部分
+                # 流式输出（不按尾部弹回——会误伤同为 text 类型的前文）
+                part_ids = [str(x) for x in (data.get("part_ids") or []) if x]
+                self.builder.drop_parts(part_ids)
             elif event.event in {"tool-call-start", "tool-input-start"}:
                 if event.event == "tool-input-start":
                     return True

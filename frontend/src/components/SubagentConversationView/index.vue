@@ -42,11 +42,11 @@ import {
   appendTextDelta,
   applyToolOutput,
   assistantPartsStillStreaming,
+  dropStreamPartsById,
   extractLastTopLevelText,
   formatDurationMs,
   hasValidContextWindow,
   normalizeApiContent,
-  rollbackTrailingStreamParts,
   shouldShowAssistantToolFailureBlocker,
   upsertToolInputPart,
 } from '@/views/chat/messageParts'
@@ -425,9 +425,9 @@ function mutateStreamingParts(apply: (parts: UiPart[]) => UiPart[], createSkelet
  * 同一份映射与工具元数据富集）。内容投影与主聊天同一实现。
  */
 const frameTable = createFrameHandlerTable({
-  onStreamRollback: () => mutateStreamingParts((parts) => rollbackTrailingStreamParts(parts)),
-  onTextDelta: (text, parent) => mutateStreamingParts((parts) => appendTextDelta(parts, text, parent), true),
-  onReasoningDelta: (text, parent) => mutateStreamingParts((parts) => appendReasoningDelta(parts, text, parent), true),
+  onStreamRollback: (partIds) => mutateStreamingParts((parts) => dropStreamPartsById(parts, partIds)),
+  onTextDelta: (text, parent, partId) => mutateStreamingParts((parts) => appendTextDelta(parts, text, parent, partId), true),
+  onReasoningDelta: (text, parent, partId) => mutateStreamingParts((parts) => appendReasoningDelta(parts, text, parent, partId), true),
   onToolCall: (name, args, toolCallId, parent, stepId) =>
     mutateStreamingParts((parts) => upsertToolInputPart(parts, toolCallId, name, args, parent, stepId), true),
   onToolResult: (toolCallId, payload) =>

@@ -76,63 +76,91 @@ def test_session_events_route_has_single_signal_owner() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stop_run_preserves_service_exception(monkeypatch) -> None:
+async def test_stop_run_returns_command_envelope(monkeypatch) -> None:
+    """durable command 契约（task 5.2/5.4）：响应携带 command_id/command_status + 最新快照。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    failure = ServiceException(message="停止失败")
+    from noesis.services.run_command_service import RunCommandService
+
     monkeypatch.setattr(
         chat_api.RunService,
         "get",
-        AsyncMock(return_value=SimpleNamespace(origin="web")),
+        AsyncMock(return_value=SimpleNamespace(
+            origin="web", to_dict=lambda: {"run_id": "run-1", "status": "interrupted"},
+        )),
     )
     monkeypatch.setattr(
-        chat_api.RunService,
-        "stop",
-        AsyncMock(side_effect=failure),
+        RunCommandService,
+        "submit_stop",
+        AsyncMock(return_value={"command_id": "cmd-1", "command_status": "pending"}),
     )
-
+    monkeypatch.setattr(
+        RunCommandService,
+        "submit_and_wait",
+        AsyncMock(return_value={"command_id": "cmd-1", "command_status": "completed"}),
+    )
     monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
-    with pytest.raises(ServiceException) as exc_info:
-        await chat_api.stop_run(
-            "run-1",
-            http_request=SimpleNamespace(),
-            current_user=SimpleNamespace(user_id="user-1"),
-            db=SimpleNamespace(),
-        )
 
-    assert exc_info.value is failure
+    resp = await chat_api.stop_run(
+        "run-1",
+        http_request=SimpleNamespace(),
+        current_user=SimpleNamespace(user_id="user-1"),
+        db=SimpleNamespace(),
+    )
+    data = json.loads(resp.body.decode())["data"]
+    assert data["command_id"] == "cmd-1"
+    assert data["command_status"] == "completed"
+    assert data["status"] == "interrupted", "快照字段保留（增量兼容）"
 
 
 @pytest.mark.asyncio
-async def test_stop_subagent_run_preserves_service_exception(monkeypatch) -> None:
+async def test_stop_subagent_run_submits_bg_command(monkeypatch) -> None:
+    """子 Agent 停止走 bg_task_stop 提交（执行错误由 consumer 收为 rejected，不再直传）。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from noesis.services.subagent_session_service import SubagentSessionService
+    from noesis.services.run_command_service import RunCommandService
 
-    failure = ServiceException(message="停止子 Agent 失败")
     monkeypatch.setattr(
         chat_api.RunService,
         "get",
-        AsyncMock(return_value=SimpleNamespace(origin="subagent")),
+        AsyncMock(return_value=SimpleNamespace(
+            origin="subagent", to_dict=lambda: {"run_id": "run-1", "status": "running"},
+        )),
     )
+    from noesis.services.run_command_service import RunCommandService as Svc
+
+    async def fake_submit(cls, run_id, user_id, db):
+        return {
+            "command_id": "cmd-2", "command_status": "pending",
+            "command_type": "bg_task_stop", "run_id": run_id,
+        }
+
+    monkeypatch.setattr(Svc, "submit_subagent_stop", classmethod(fake_submit))
+    submitted = {}
+
+    async def fake_submit_and_wait(submit_coro, *, db):
+        # 传入的 submit 协程即调用证据：await 它并检查提交入口正确
+        result = await submit_coro
+        submitted.update(result)
+        return {"command_id": "cmd-2", "command_status": "accepted"}
+
     monkeypatch.setattr(
-        SubagentSessionService,
-        "stop_run",
-        AsyncMock(side_effect=failure),
+        RunCommandService, "submit_and_wait", staticmethod(fake_submit_and_wait)
     )
-
     monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
-    with pytest.raises(ServiceException) as exc_info:
-        await chat_api.stop_run(
-            "run-1",
-            http_request=SimpleNamespace(),
-            current_user=SimpleNamespace(user_id="user-1"),
-            db=SimpleNamespace(),
-        )
 
-    assert exc_info.value is failure
+    resp = await chat_api.stop_run(
+        "run-1",
+        http_request=SimpleNamespace(),
+        current_user=SimpleNamespace(user_id="user-1"),
+        db=SimpleNamespace(),
+    )
+    assert submitted.get("command_type") == "bg_task_stop", "子 Agent run 走 bg 停止命令"
+    data = json.loads(resp.body.decode())["data"]
+    assert data["command_status"] == "accepted"
+    assert data["status"] == "running", "accepted 不伪装完成：快照保持当前态"
 
 
 @pytest.mark.asyncio
@@ -1116,32 +1144,35 @@ async def test_conflict_409_response_contains_full_join_schema() -> None:
 
 @pytest.mark.asyncio
 async def test_stop_subagent_run_returns_interrupted_snapshot(monkeypatch) -> None:
-    """协作停止契约：stop 即时返回受理快照，status 覆写 stopping（不等待终态）。"""
+    """durable command 契约（task 5.2/5.4）：completed 时返回权威终态快照 + command 字段。"""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from noesis.chat.runs.models import RunSnapshot, RunStatus
-    from noesis.services.subagent_session_service import SubagentSessionService
+    from noesis.services.run_command_service import RunCommandService
 
-    db_run = SimpleNamespace(origin="subagent", status="running", id="run-1")
-    monkeypatch.setattr(chat_api.RunService, "get", AsyncMock(return_value=db_run))
+    class _Snap:
+        origin = "subagent"
 
-    stop_snapshot = RunSnapshot(
-        run_id="run-1",
-        user_id="user-1",
-        session_id="session-1",
-        assistant_message_id="msg-1",
-        qa_type="SUPER_AGENT_QA",
-        origin="subagent",
-        status=RunStatus.INTERRUPTED,
-        sequence=7,
+        def to_dict(self):
+            return {
+                "run_id": "run-1", "status": "interrupted",
+                "snapshot_sequence": 7,
+            }
+
+    async def fake_get(run_id, user_id, db):
+        return _Snap()
+
+    monkeypatch.setattr(chat_api.RunService, "get", fake_get)
+    monkeypatch.setattr(
+        RunCommandService,
+        "submit_subagent_stop",
+        AsyncMock(return_value={"command_id": "cmd-3", "command_status": "pending"}),
     )
-
-    async def fake_stop_run(*, run_id, user_id, db):
-        return stop_snapshot
-
-    monkeypatch.setattr(SubagentSessionService, "stop_run", fake_stop_run)
-
+    monkeypatch.setattr(
+        RunCommandService,
+        "submit_and_wait",
+        AsyncMock(return_value={"command_id": "cmd-3", "command_status": "completed"}),
+    )
     monkeypatch.setattr(chat_api, "require_csrf", AsyncMock())
     result = await chat_api.stop_run(
         "run-1",
@@ -1151,10 +1182,11 @@ async def test_stop_subagent_run_returns_interrupted_snapshot(monkeypatch) -> No
     )
     body = json.loads(result.body.decode()) if getattr(result, "body", None) else {}
     data = body.get("data") or {}
-    # 响应形状与 RunSnapshot 一致，status 为乐观终态 interrupted（受理即达）
     assert data.get("status") == "interrupted"
     assert data.get("run_id") == "run-1"
     assert data.get("snapshot_sequence") == 7
+    assert data.get("command_id") == "cmd-3"
+    assert data.get("command_status") == "completed"
 
 
 @pytest.mark.asyncio
@@ -1172,7 +1204,7 @@ async def test_stop_run_service_maps_cancel_to_interrupted(monkeypatch) -> None:
             # 乐观终态：无论协作还是即时路径，受理即 cancelled
             return {"status": "cancelled", "stop_reason": "cancelled"}
 
-    import noesis.services.subagent_runtime_port as port
+    import noesis.agents.background.ports as port
 
     monkeypatch.setattr(port, "ExecutorPort", _FakeExec)
 

@@ -77,21 +77,80 @@ run_manager = RunManager(
     terminal_persistence_budget_seconds=StreamConfig.run_terminal_persistence_budget_seconds,
     terminal_retry_interval_seconds=StreamConfig.run_terminal_retry_interval_seconds,
     checkpoint_retry_interval_seconds=StreamConfig.persistence_retry_interval_seconds,
+    periodic_checkpoint_interval_seconds=DistributedRunsConfig.periodic_checkpoint_interval_seconds,
 )
 
 
 def _create_run_bus(settings: DistributedRunsConfig) -> RunBus:
     if settings.backend == "redis":
-        # P4 接入 RedisRunBus；在此之前 redis 模式不提供「退化成 memory」的静默路径
-        raise NotImplementedError(
-            "redis run bus adapter 尚未接入（enable-distributed-sse-pubsub P4）"
-        )
+        from noesis.chat.runs.bus_redis import build_redis_run_bus
+
+        return build_redis_run_bus(settings)
     return InMemoryRunBus(
         envelope_payload_max_bytes=settings.envelope_payload_max_bytes
     )
 
 
 run_bus = _create_run_bus(DistributedRunsConfig)
+
+_hub_registry_instance = None
+_signal_bridge_instance = None
+
+
+def _attach_signal_bridges() -> None:
+    """redis 模式：三类本地信令总线挂跨进程桥（task 4.7）。
+
+    memory 模式不装配——进程内行为不变；桥的回声抑制保证本地发布
+    不经远端回环重复投递。
+    """
+    global _signal_bridge_instance
+    if DistributedRunsConfig.backend != "redis" or _signal_bridge_instance is not None:
+        return
+    import os
+    import socket
+    import uuid
+
+    from noesis.chat.runs.signal_bridge import SignalBridge
+
+    bridge = SignalBridge(
+        bus=run_bus,
+        origin=f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}",
+    )
+    from noesis.chat.runs.session_signals import session_signal_bus
+    from noesis.chat.runs.user_signals import user_signal_bus
+
+    session_signal_bus.attach_bridge(bridge)
+    user_signal_bus.attach_bridge(bridge)
+    from noesis.agents.background.jobs import events as bg_events
+
+    bg_events.configure_bg_signal_bridge(bridge)
+    _signal_bridge_instance = bridge
+
+
+_attach_signal_bridges()
+
+
+def _hub_registry():
+    """redis 模式的 RunHubRegistry 单例（task 4.3）：bus + DB snapshot 装载。
+
+    snapshot_loader 按 run_id 读 DB 权威行（无 user 维度——订阅入口已按
+    (run_id, user) 鉴权，hub 只做对账读取）。
+    """
+    global _hub_registry_instance
+    if _hub_registry_instance is None:
+        from noesis.chat.runs.hub import RunHubRegistry
+
+        async def _load_snapshot(run_id: str):
+            async with pg_manager.get_async_session_context() as session:
+                row = await AgentRunRepository(session).get(run_id)
+                if row is None:
+                    return None
+                return RunService._snapshot_from_row(row)
+
+        _hub_registry_instance = RunHubRegistry(
+            bus=run_bus, snapshot_loader=_load_snapshot
+        )
+    return _hub_registry_instance
 
 
 # 注入 run_manager 给命令层（/status），避免 noesis.chat 直接 import noesis.services。
@@ -824,6 +883,10 @@ class RunService:
         row = await AgentRunRepository(db).get(run_id, user_id)
         if row is None:
             raise NotFoundException(message="任务不存在")
+        # redis 模式（task 4.3）：任意 worker 经 hub 订阅 bus——leader 与
+        # follower 同路径（共享订阅 + 握手对账）；memory 模式保持本地路径
+        if DistributedRunsConfig.backend == "redis":
+            return await _hub_registry().subscribe(run_id)
         try:
             return await run_manager.subscribe(run_id, after_sequence=after_sequence)
         except KeyError:

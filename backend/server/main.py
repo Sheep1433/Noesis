@@ -27,7 +27,7 @@ from server.api import (
 )
 from noesis.knowledge.runtime import init_knowledge_base, close_knowledge_base
 from noesis.agents.backends.sandbox_lifecycle import shutdown_sandboxes
-from noesis.agents.subagents import (
+from noesis.agents.background import (
     shutdown as shutdown_bg_subagents,
 )
 from noesis.runtime.main_loop import capture_main_loop
@@ -37,11 +37,11 @@ from noesis.services.scheduled_task_scheduler import (
     stop_scheduled_task_scheduler,
 )
 from noesis.services.channels.telegram_runtime import start_telegram_runtime, stop_telegram_runtime
-from noesis.services.memory.consolidation import (
+from noesis.memory.consolidation import (
     start_memory_consolidator,
     stop_memory_consolidator,
 )
-from noesis.services.memory.extraction import start_memory_sweeper, stop_memory_sweeper
+from noesis.memory.extraction import start_memory_sweeper, stop_memory_sweeper
 from server.bootstrap.kb import sync_existing_kb_collection_configs
 from noesis.services.run_recovery_service import RunRecoveryService
 from noesis.services.run_service import run_manager, run_bus
@@ -51,6 +51,12 @@ from noesis.services.run_dispatcher import RunDispatcher
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 组合根：注册 agents.background.ports 实现（幂等），
+    # 首个请求/后台任务前端口必须就绪
+    from noesis.services.runtime_ports import register_runtime_ports
+
+    register_runtime_ports()
+
     logger.info(f'⏰️ {AppConfig.app_name}开始启动')
     capture_main_loop()
     sync_langfuse_env_from_app_config()
@@ -65,10 +71,64 @@ async def lifespan(app: FastAPI):
         finally:
             await pg_manager.release_migration_lock()
 
+        leader_components: dict = {}
+
+        async def _on_promotion(token) -> None:
+            """leader 晋升回调（含进程启动首例）：leader 面装配 + recovery。
+
+            dispatcher / command consumer / 信令与 run 事件桥 / singleton
+            runtime 都随晋升启动；重入（运行中切主后本进程晋升）时先跑
+            recovery 再起 dispatcher——旧 term 遗留已由四段对账收口。
+            """
+            from noesis.services.run_command_service import RunCommandConsumer
+
+            run_manager.attach_bus(run_bus, token_provider=lambda: elector.token)
+            from noesis.agents.background.jobs import events as bg_run_events
+
+            bg_run_events.configure_run_event_bridge(run_bus, lambda: elector.token)
+            if "command_consumer" not in leader_components:
+                consumer = RunCommandConsumer(
+                    bus=run_bus,
+                    token_provider=lambda: elector.token,
+                    scan_interval_seconds=DistributedRunsConfig.command_scan_interval_seconds,
+                    retention_days=DistributedRunsConfig.command_retention_days,
+                )
+                await consumer.start()
+                leader_components["command_consumer"] = consumer
+                resources.push_async_callback(consumer.stop)
+            # ---- 晋升对账（四段）：主 Run → 子代理 Run → 定时任务 → 通知装载
+            async with pg_manager.get_async_session_context() as recovery_db:
+                await RunRecoveryService.recover_orphaned_runs(
+                    recovery_db, current_leader_term=token.term
+                )
+                from noesis.services.subagent_session_service import SubagentSessionService
+
+                orphaned_subagents = await SubagentSessionService.reconcile_orphaned_runs(recovery_db)
+                if orphaned_subagents:
+                    logger.warning("子 Agent 对账：{} 个遗留 run 已标记为中断", orphaned_subagents)
+                from noesis.services.scheduled_task_service import ScheduledTaskService
+
+                interrupted_runs = await ScheduledTaskService.reconcile_interrupted_runs(recovery_db)
+                if interrupted_runs:
+                    logger.warning("定时任务对账：{} 个遗留 run 已收口为 interrupted", interrupted_runs)
+                from noesis.services.bg_notification_store import (
+                    restore_undelivered_notifications,
+                )
+
+                restored_notices = await restore_undelivered_notifications(recovery_db)
+                if restored_notices:
+                    logger.info("后台通知启动恢复：{} 条未送达通知已装载", restored_notices)
+
         # ---- Leader elector：竞争执行锁（key 不变，滚动升级期新旧互斥）并提交
-        # 全局 leadership term。P1 为单进程 memory 模式：第二实例获取失败 fail-fast。
+        # 全局 leadership term。memory 模式第二实例 fail-fast；redis 模式未获锁
+        # 的进程以 Web worker 待命 + 周期重竞选，晋升回调承载 leader 面装配
+        # （task 2.3/2.4）。
         elector = LeaderElector(cluster_id=DistributedRunsConfig.cluster_id)
-        leadership_token = await elector.acquire()
+        if DistributedRunsConfig.backend == "redis":
+            await elector.run_as_worker(on_promotion=_on_promotion)
+        else:
+            leadership_token = await elector.acquire()
+            await _on_promotion(leadership_token)
         # elector 放锁注册为最早的 push → 退出时最后执行（先 drain 后放锁）
         resources.push_async_callback(elector.release)
 
@@ -100,20 +160,6 @@ async def lifespan(app: FastAPI):
                     pass
         resources.push_async_callback(_cancel_lock_monitor)
 
-        # ---- leader-only：启动对账。两 pass 的 scope 显式互斥——通用
-        # recovery 只管主链路 run（origin != subagent；queued 未 claim 存活
-        # 交 dispatcher）；子 Agent run 由 executor 进程内调度、重启即不可
-        # 恢复，统一走 reconcile_orphaned_runs（ERROR/SUBAGENT_PROCESS_RESTARTED）
-        async with pg_manager.get_async_session_context() as recovery_db:
-            await RunRecoveryService.recover_orphaned_runs(
-                recovery_db, current_leader_term=leadership_token.term
-            )
-            from noesis.services.subagent_session_service import SubagentSessionService
-
-            orphaned_subagents = await SubagentSessionService.reconcile_orphaned_runs(recovery_db)
-            if orphaned_subagents:
-                logger.warning("子 Agent 对账：{} 个遗留 run 已标记为中断", orphaned_subagents)
-
         resources.push_async_callback(shutdown_sandboxes)
         await init_checkpointer()
         resources.push_async_callback(close_checkpointer)
@@ -126,37 +172,50 @@ async def lifespan(app: FastAPI):
         # 进程退出时取消运行中任务并停掉隔离 loop
         resources.callback(shutdown_bg_subagents)
 
+        async def _start_leader_runtime() -> None:
+            """leader 专属 singleton：dispatcher / 调度器 / 信令通道 / 记忆任务。
+
+            后台任务执行面（executor/隔离循环）与 shutdown_bg_subagents 也仅
+            leader 需要——follower 没有注册表可停。
+            """
+            await dispatcher.start()
+            start_scheduled_task_scheduler()
+            resources.push_async_callback(stop_scheduled_task_scheduler)
+            start_telegram_runtime()
+            resources.push_async_callback(stop_telegram_runtime)
+            if MessagingConfig.feishu_runtime_enabled:
+                try:
+                    from noesis.services.channels.feishu_runtime import (
+                        start_feishu_runtime,
+                        stop_feishu_runtime,
+                    )
+
+                    start_feishu_runtime()
+                    resources.push_async_callback(stop_feishu_runtime)
+                except ImportError as exc:
+                    logger.error(
+                        "飞书已启用但 lark-oapi 未安装（uv sync --extra feishu），通道不启动: {}",
+                        exc,
+                    )
+            else:
+                logger.info("feishu runtime disabled (messaging.feishu_runtime_enabled=false)")
+            await start_memory_sweeper()
+            resources.push_async_callback(stop_memory_sweeper)
+            await start_memory_consolidator()
+            resources.push_async_callback(stop_memory_consolidator)
+
         await sync_existing_kb_collection_configs()
-        # ---- leader-only singleton runtime ----
-        await dispatcher.start()
-        start_scheduled_task_scheduler()
-        resources.push_async_callback(stop_scheduled_task_scheduler)
-        start_telegram_runtime()
-        resources.push_async_callback(stop_telegram_runtime)
-        # 飞书按需加载：lark-oapi 是 optional extra（≈95MB），仅启用时才
-        # import——未启用/未安装时零成本跳过
-        if MessagingConfig.feishu_runtime_enabled:
-            try:
-                from noesis.services.channels.feishu_runtime import (
-                    start_feishu_runtime,
-                    stop_feishu_runtime,
-                )
-
-                start_feishu_runtime()
-                resources.push_async_callback(stop_feishu_runtime)
-            except ImportError as exc:
-                logger.error(
-                    "飞书已启用但 lark-oapi 未安装（uv sync --extra feishu），通道不启动: {}",
-                    exc,
-                )
+        # ---- leader-only singleton runtime（task 2.3）：follower 不运行 ----
+        if elector.is_leader:
+            await _start_leader_runtime()
+            role = "execution leader"
         else:
-            logger.info("feishu runtime disabled (messaging.feishu_runtime_enabled=false)")
-        await start_memory_sweeper()
-        resources.push_async_callback(stop_memory_sweeper)
-        await start_memory_consolidator()
-        resources.push_async_callback(stop_memory_consolidator)
+            role = "Web worker (follower)"
+            logger.info(
+                "本进程为 Web worker：不运行 Agent producer / 调度器 / 信令通道 / 记忆任务"
+            )
 
-        logger.info(f'🚀 {AppConfig.app_name}启动成功')
+        logger.info(f'🚀 {AppConfig.app_name}启动成功 role={role}')
         yield
 
 
@@ -192,10 +251,33 @@ for controller in controller_list:
 
 @app.get('/health', tags=['系统'])
 async def health_check():
-    """健康检查端点"""
+    """健康检查端点（task 6.1）：角色 / adapter / Redis 依赖状态显式上报。
+
+    liveness 与 readiness 不分离（本端点即 readiness）：Redis degraded 时
+    仍返回 200——Web 面可路由、仅创建 Run 的调用方按 ``redis_reachable``
+    自行拒绝，已有 Run 的查询/stop/HITL 不因降级不可用。
+    """
+    role = "follower" if DistributedRunsConfig.backend == "redis" else "leader"
+    redis_reachable = None  # memory 模式不探测
+    if DistributedRunsConfig.backend == "redis":
+        try:
+            from noesis.services.run_service import run_bus
+
+            client = getattr(run_bus, "_client", None)
+            redis_reachable = bool(await asyncio.wait_for(client.ping(), timeout=2)) if client else False
+        except Exception:  # noqa: BLE001
+            redis_reachable = False
+    body = {
+        "status": "healthy",
+        "app": AppConfig.app_name,
+        "run_bus_backend": DistributedRunsConfig.backend,
+        "multi_worker_supported": DistributedRunsConfig.backend == "redis",
+        "leader_role": role,
+        "execution_lock_ready": pg_manager.advisory_lock_ready is not False,
+        "redis_reachable": redis_reachable,
+    }
     if pg_manager.advisory_lock_ready is False:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not-ready", "app": AppConfig.app_name},
-        )
-    return {'status': 'healthy', 'app': AppConfig.app_name}
+        return JSONResponse(status_code=503, content={**body, "status": "not-ready"})
+    if redis_reachable is False:
+        body["status"] = "degraded"
+    return body

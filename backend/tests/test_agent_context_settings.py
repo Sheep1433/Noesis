@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from noesis.agents.context import ContextResolver
-from noesis.config.user_data_paths import ensure_user_memory_files, get_user_profile_md_path
+from noesis.config.user_data_paths import get_user_profile_md_path
+from noesis.memory.layout import ensure_user_memory_files
 from noesis.services.user_memory_service import UserMemoryService
 
 

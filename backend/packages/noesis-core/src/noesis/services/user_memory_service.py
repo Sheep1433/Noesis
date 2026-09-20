@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Literal
 
+from noesis.memory.layout import ensure_user_memory_files
 from noesis.config.user_data_paths import (
-    ensure_user_memory_files,
     get_user_agents_md_path,
     get_user_profile_md_path,
 )

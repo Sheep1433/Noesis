@@ -28,7 +28,7 @@ def upgrade() -> None:
         ),
     )
     # content 为 JSON 列，索引建在其文本序列化上；fastupdate=off 见
-    # services/history_search.py 模块注释（写入侧调参依据）。幂等 + 收尾
+    # repositories/history_search.py 模块注释（写入侧调参依据）。幂等 + 收尾
     # ANALYZE 让规划器立刻可用 trigram 计划。
     # 非 CONCURRENTLY 的取舍：本仓迁移在应用启动期、migration lock 串行下
     # 执行（server/main.py），迁移完成前不对外服务；CONCURRENTLY 需脱离

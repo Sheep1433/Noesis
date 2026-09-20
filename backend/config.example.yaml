@@ -138,6 +138,7 @@ distributed_runs:
   redis_socket_timeout_seconds: 5
   redis_connect_timeout_seconds: 3
   redis_pool_max_connections: 20
+  command_retention_days: 7
 
 stream:
   sse_keepalive_interval_seconds: 25

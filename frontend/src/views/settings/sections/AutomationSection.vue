@@ -310,9 +310,9 @@ onMounted(() => void refresh())
           <div class="actions"><n-switch :value="task.enabled" @update:value="value => onToggle(task, value)" /><n-button size="small" @click="onRun(task)">立即运行</n-button><n-button size="small" @click="loadHistory(task)">运行历史</n-button><n-button size="small" @click="edit(task)">编辑</n-button><n-button size="small" type="error" quaternary @click="onDelete(task)">删除</n-button></div>
           <div v-if="histories[task.id]" class="history">
             <div v-for="run in histories[task.id]" :key="run.id" class="run-row">
-              <div><n-tag size="small" :type="run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'error' : 'warning'">{{ run.status }}</n-tag> <span class="muted">{{ new Date(run.created_at).toLocaleString() }} · {{ run.trigger_source }} · {{ run.duration_ms ?? '—' }} ms</span></div>
+              <div><n-tag size="small" :type="run.status === 'succeeded' ? 'success' : run.status === 'failed' || run.status === 'interrupted' ? 'error' : 'warning'">{{ run.status }}</n-tag> <span class="muted">{{ new Date(run.created_at).toLocaleString() }} · {{ run.trigger_source }} · {{ run.duration_ms ?? '—' }} ms</span></div>
               <p v-if="run.result_summary">{{ run.result_summary }}</p><p v-if="run.error_message" class="error">{{ run.error_message }}</p>
-              <n-button v-if="run.status === 'failed' || run.status === 'cancelled'" size="tiny" @click="retry(run, task)">重试</n-button>
+              <n-button v-if="run.status === 'failed' || run.status === 'cancelled' || run.status === 'interrupted'" size="tiny" @click="retry(run, task)">重试</n-button>
             </div>
           </div>
         </div>

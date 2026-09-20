@@ -101,7 +101,7 @@ def session_body(turns: list[dict[str, Any]]) -> str:
 
 def import_question(question: dict[str, Any], *, user_id: str | None = None) -> str:
     """把一题的 haystack 会话幂等导入该题的隔离评测用户；返回 user_id。"""
-    from noesis.services.memory.store import MemoryStore
+    from noesis.memory.store import MemoryStore
 
     uid = user_id or eval_user_id(question["question_id"])
     for session in question["sessions"]:
@@ -125,7 +125,7 @@ def reset_eval_users(question_ids: list[str]) -> None:
     """清理评测用户的记忆目录（默认不清理：import 幂等，保留供复跑对账）。"""
     import shutil
 
-    from noesis.services.memory.store import MemoryStore
+    from noesis.memory.store import MemoryStore
 
     for qid in question_ids:
         root = MemoryStore.memory_root(eval_user_id(qid))

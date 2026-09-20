@@ -22,6 +22,11 @@ def capture_main_loop() -> None:
     _MAIN_LOOP = asyncio.get_running_loop()
 
 
+def current_main_loop() -> asyncio.AbstractEventLoop | None:
+    """主 loop 引用（lifespan 未捕获时为 None；调用方自行退避）。"""
+    return _MAIN_LOOP
+
+
 def run_on_main_loop(coro: Coroutine[Any, Any, Any], *, name: str = "") -> Future | None:
     """把协程投递到主 loop；返回跨线程 Future，调用方可选择等待。"""
     loop = _MAIN_LOOP

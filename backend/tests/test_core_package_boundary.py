@@ -263,7 +263,6 @@ assert callable(create_noesis_agent)
 for module in (
     "noesis.agents.common_qa",
     "noesis.agents.fault_operation",
-    "noesis.agents.simple_mcp",
     "noesis.agents.super_agent",
 ):
     assert module not in sys.modules, module
@@ -286,7 +285,6 @@ for module in (
         "noesis.factory",
         "noesis.agents.common_qa",
         "noesis.agents.fault_operation",
-        "noesis.agents.simple_mcp",
         "noesis.agents.super_agent",
     )
     violations: list[str] = []

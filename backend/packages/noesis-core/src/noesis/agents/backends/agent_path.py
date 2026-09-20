@@ -18,7 +18,7 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 
-from noesis.agents.backends.paths import (
+from noesis.paths import (
     READ_ONLY_SKILLS_ERROR,
     canonicalize_agent_path,
     join_prefix,

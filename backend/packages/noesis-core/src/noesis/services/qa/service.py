@@ -25,7 +25,7 @@ from noesis.schemas.qa_vo import QaQueryRequest
 from noesis.services.chat_attachment_service import ChatAttachmentService
 from noesis.services.chat_service import ChatService
 from noesis.services.mention_resolve_service import MentionResolveService
-from noesis.agents.subagents.notifications import notify_agent_query
+from noesis.agents.background.notifications import notify_agent_query
 from noesis.services.qa.helpers import (
     _finalize_sse_bridge_stream,
     _finalize_run_events,
@@ -101,7 +101,8 @@ class QaService:
             from noesis.services.bg_continuation_service import note_user_activity
 
             note_user_activity(session_id)
-        # 后台子 Agent 终态通知：一次性 drain 前置到 agent_query（不落库）。
+        # 后台子 Agent 终态通知：一次性 drain 前置到 agent_query（注入文本
+        # 不落库；通知本体持久化、送达即删，跨重启经启动恢复）。
         # 仅 SuperAgent 注入——check_task 等工具只存在于 SUPER_AGENT_QA。
         if req_obj.qa_type == IntentEnum.SUPER_AGENT_QA.value[0]:
             agent_query = notify_agent_query(session_id, agent_query)

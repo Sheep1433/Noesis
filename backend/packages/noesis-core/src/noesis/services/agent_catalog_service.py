@@ -10,8 +10,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from noesis.agents.subagents.executor import (
-    BackgroundTaskExecutor,
+from noesis.agents.background.executor import BackgroundTaskExecutor
+from noesis.agents.background.jobs.events import (
     subscribe_bg_events,
     unsubscribe_bg_events,
 )
@@ -79,6 +79,20 @@ class AgentCatalogService:
 
 
 class ShellJobService:
+    @staticmethod
+    def get_task_status(*, session_id: str, task_id: str, user_id: str) -> dict[str, Any] | None:
+        """只读任务快照（command 提交后的响应组装用）；不存在返回 None。"""
+        tasks = BackgroundTaskExecutor.list_for_session(session_id)
+        return next(
+            (
+                item for item in tasks
+                if item.get("task_id") == task_id
+                and item.get("kind") == "shell"
+                and str(item.get("user_id") or user_id) == str(user_id)
+            ),
+            None,
+        )
+
     @staticmethod
     def stop(*, session_id: str, task_id: str, user_id: str) -> dict[str, Any]:
         tasks = BackgroundTaskExecutor.list_for_session(session_id)

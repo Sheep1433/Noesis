@@ -73,6 +73,7 @@ import {
   assistantPartsStillStreaming,
   completeReasoningPart,
   createRedactedThinkingStreamCtx,
+  dropStreamPartsById,
   emptyMessageContent,
   extractLastTopLevelText,
   flushRedactedThinkingStreamCtx,
@@ -81,7 +82,6 @@ import {
   markStreamingPartsComplete,
   normalizeApiContent,
   resolveLoadedContextSnapshot,
-  rollbackTrailingStreamParts,
   shortenChatErrorToast,
   shouldCollapseUserMessage,
   shouldShowAssistantToolFailureBlocker,
@@ -1063,11 +1063,11 @@ function applyStreamDeltas(deltas: StreamDelta[]): void {
   }
   patchLastAssistantParts((parts) => deltas.reduce((acc, delta) => {
     if (delta.kind === 'reasoning') {
-      return appendReasoningDelta(acc, delta.data, delta.parentTaskCallId)
+      return appendReasoningDelta(acc, delta.data, delta.parentTaskCallId, delta.partId)
     }
     return delta.redactedThinking
-      ? appendTextDeltaWithRedactedThinking(acc, delta.data, redactedThinkingStreamCtx, delta.parentTaskCallId)
-      : appendTextDelta(acc, delta.data, delta.parentTaskCallId)
+      ? appendTextDeltaWithRedactedThinking(acc, delta.data, redactedThinkingStreamCtx, delta.parentTaskCallId, delta.partId)
+      : appendTextDelta(acc, delta.data, delta.parentTaskCallId, delta.partId)
   }, parts))
 }
 
@@ -1381,12 +1381,19 @@ async function onTaskDecide(payload: { task: TaskCatalogEntry, decisions: Array<
 
 async function onTaskCancel(task: TaskCatalogEntry): Promise<void> {
   try {
+    // durable command：completed 即已停止；accepted 表示已受理、执行中
+    // （leader 认领执行），终态经目录流/任务详情刷新到达
+    let commandStatus = 'completed'
     if (task.kind === 'shell') {
-      await stopShellTask(task.session_id, task.task_id)
+      commandStatus = (await stopShellTask(task.session_id, task.task_id)).command_status ?? 'completed'
     } else if (task.run_id) {
-      await stopAgentRun(task.run_id)
+      commandStatus = (await stopAgentRun(task.run_id)).command_status ?? 'completed'
     }
-    window.$message?.success(task.kind === 'shell' ? '后台命令已停止' : '子 Agent 已停止')
+    if (commandStatus === 'accepted') {
+      window.$message?.info('停止请求已受理，正在停止…')
+    } else {
+      window.$message?.success(task.kind === 'shell' ? '后台命令已停止' : '子 Agent 已停止')
+    }
   } catch (err) {
     console.warn('[bg-task] cancel failed', err)
   }
@@ -1683,13 +1690,13 @@ const sseStream = useSSEStream({
       ...(lf ? { langfuse_session_id: lf } : {}),
     }
   },
-  onStreamRollback: () => {
-    // LLM 重试/降级：失败尝试的部分流式输出整体作废——先冲刷批处理缓冲
-    // （失败增量可能还挂在批处理里），再丢弃尾部 text/reasoning parts
+  onStreamRollback: (partIds) => {
+    // LLM 重试/降级：失败尝试的部分流式输出按帧点名的 part_ids 作废——
+    // 先冲刷批处理缓冲（失败增量可能还挂在批处理里），再按 id 丢弃
     streamDeltaBatcher.flush()
-    patchLastAssistantParts((parts) => rollbackTrailingStreamParts(parts))
+    patchLastAssistantParts((parts) => dropStreamPartsById(parts, partIds))
   },
-  onTextDelta: (text, parent_task_call_id) => {
+  onTextDelta: (text, parent_task_call_id, part_id) => {
     // 重试成功后后端不发 run-status:running，只有内容到达才标志恢复——清重试标记。
     if (retryingLabel.value && !parent_task_call_id) {
       retryingLabel.value = ''
@@ -1699,6 +1706,7 @@ const sseStream = useSSEStream({
       data: text,
       // 与 reducer 同口径归一（trim / 空串 → undefined），保证同语义 delta 落进同一桶
       parentTaskCallId: parent_task_call_id?.trim() || undefined,
+      partId: part_id?.trim() || undefined,
       // push 时捕获拆分开关：reasoning-start 之后到达的 text 不再走 <think> 拆分
       redactedThinking: !nativeReasoningSeen.value,
     })
@@ -1710,7 +1718,7 @@ const sseStream = useSSEStream({
   onReasoningStart: () => {
     nativeReasoningSeen.value = true
   },
-  onReasoningDelta: (delta, parent_task_call_id) => {
+  onReasoningDelta: (delta, parent_task_call_id, part_id) => {
     nativeReasoningSeen.value = true
     // 与 onTextDelta 同理：重试成功后内容到达即清重试标记。
     if (retryingLabel.value && !parent_task_call_id) {
@@ -1720,6 +1728,7 @@ const sseStream = useSSEStream({
       kind: 'reasoning',
       data: delta,
       parentTaskCallId: parent_task_call_id?.trim() || undefined,
+      partId: part_id?.trim() || undefined,
     })
   },
   onReasoningEnd: (data) => {
@@ -1915,6 +1924,9 @@ async function submitHitlFromPanel(payload: {
       decisions: payload.decisions,
       grant_scope: payload.grant_scope,
     })
+  } catch {
+    // useSSEStream 已复位 isLoading 并上报 disconnected（重连横幅可见）；
+    // 这里只拦截 rejection，避免模板事件处理器产生未处理 Promise
   } finally {
     const current = pendingHitlBySession.value[sessionId]
     if (current?.interrupt_id === pending.interrupt_id) {

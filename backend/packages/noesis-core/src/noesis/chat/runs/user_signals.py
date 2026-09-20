@@ -27,12 +27,21 @@ class UserSignalBus:
 
     def __init__(self) -> None:
         self._subscribers: dict[str, set[asyncio.Queue[dict]]] = {}
+        # 跨进程桥（redis 模式装配）；memory 模式为 None，行为不变
+        self._bridge = None
+
+    def attach_bridge(self, bridge) -> None:
+        self._bridge = bridge
 
     def subscribe(self, user_id: str) -> asyncio.Queue[dict] | None:
         """注册一个订阅队列；超过每用户上限返回 None（调用方按 429 处理）。"""
         queues = self._subscribers.setdefault(user_id, set())
         if len(queues) >= MAX_SUBSCRIBERS_PER_USER:
             return None
+        if not queues and self._bridge is not None:
+            self._bridge.ensure_pump(
+                "user", user_id, lambda payload: self._fanout(user_id, payload)
+            )
         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_QUEUE_SIZE)
         queues.add(queue)
         return queue
@@ -44,8 +53,16 @@ class UserSignalBus:
         queues.discard(queue)
         if not queues:
             self._subscribers.pop(user_id, None)
+            if self._bridge is not None:
+                self._bridge.release_pump("user", user_id)
 
     def publish(self, user_id: str, signal: dict) -> None:
+        """本地 fan-out + 跨进程广播（桥装配时）。"""
+        self._fanout(user_id, signal)
+        if self._bridge is not None:
+            self._bridge.publish("user", user_id, signal)
+
+    def _fanout(self, user_id: str, signal: dict) -> None:
         """向该用户全部订阅者投递信令；慢订阅者丢帧，不阻塞发布方。"""
         queues = self._subscribers.get(user_id)
         if not queues:

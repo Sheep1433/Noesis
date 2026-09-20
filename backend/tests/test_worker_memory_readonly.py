@@ -4,7 +4,7 @@ from noesis.agents.backends.factory import (
     WORKER_MEMORY_READ_ONLY_ERROR,
     build_agent_filesystem_backend,
 )
-from noesis.agents.backends.paths import AGENT_MEMORY_ROUTE
+from noesis.paths import AGENT_MEMORY_ROUTE
 from noesis.agents.tools.ask_user import build_interrupt_on
 
 

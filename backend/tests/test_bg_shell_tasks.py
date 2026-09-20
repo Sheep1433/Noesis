@@ -25,13 +25,13 @@ from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, PrivateAttr
 
-from noesis.agents.subagents.executor import (
+from noesis.agents.background import fail_session_shell_tasks
+from noesis.agents.background.executor import (
     BackgroundTaskExecutor,
     BgTaskStatus,
-    fail_session_shell_tasks,
     shutdown as bg_shutdown,
 )
-from noesis.agents.subagents.shell_tool import replace_execute_tool
+from noesis.agents.background.shell.tools import replace_execute_tool
 
 
 class _FakeShellBackend:
@@ -275,7 +275,7 @@ async def test_replace_execute_tool_noop_without_execute_tool() -> None:
 
 def test_shell_cancel_notifies_exactly_once() -> None:
     """取消：终态通知只发一次（cancel 方发布，协程 CancelledError 不重复）。"""
-    from noesis.agents.subagents import notifications
+    from noesis.agents.background import notifications
 
     notifications._PENDING.pop("s-cn", None)
     backend = _FakeShellBackend(delay=30.0)
