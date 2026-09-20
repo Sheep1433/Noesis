@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { useLocalStorage, useWindowSize } from '@vueuse/core'
-import { NDrawer, NDrawerContent } from 'naive-ui'
-import { computed } from 'vue'
 import SubagentConversationView from '@/components/SubagentConversationView/index.vue'
-import { useResponsiveDrawerWidth } from '@/hooks/useResponsiveDrawerWidth'
+import SubagentSessionDrawer from '@/components/SubagentSessionDrawer/index.vue'
 
+// 单任务对话抽屉 = 共享壳 + 内嵌对话视图。
+// 任务列表入口（TaskCatalogPanel）需要列表/详情切换，直接用壳；
+// 本组合只补「视图内嵌 + 标题默认」这一层，宽度/遮罩逻辑全部在壳里。
 const props = withDefaults(defineProps<{
   sessionId: string
   runId?: string | null
@@ -16,47 +16,15 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ (event: 'changed'): void }>()
 const show = defineModel<boolean>('show', { default: false })
-const { drawerWidth: responsiveWidth } = useResponsiveDrawerWidth({ max: 760, mobileRatio: 0.96 })
-
-// 左边缘可拖拽调宽：用户拖过的宽度持久化；窄视口回到响应式宽度且不可拖
-const MIN_WIDTH = 420
-const customWidth = useLocalStorage('noesis:subagent-drawer-width', 0)
-const { width: windowWidth } = useWindowSize()
-const desktop = computed(() => windowWidth.value > 768)
-const drawerWidth = computed(() =>
-  (desktop.value && customWidth.value >= MIN_WIDTH ? customWidth.value : responsiveWidth.value),
-)
-
-function handleResize(width: number) {
-  customWidth.value = Math.round(Math.min(Math.max(width, MIN_WIDTH), windowWidth.value - 48))
-}
 </script>
 
 <template>
-  <n-drawer
-    v-model:show="show"
-    placement="right"
-    :width="drawerWidth"
-    :resizable="desktop"
-    :min-width="MIN_WIDTH"
-    :max-width="windowWidth - 48"
-    @update:width="handleResize"
-  >
-    <n-drawer-content :title="props.title" closable>
-      <SubagentConversationView
-        :session-id="props.sessionId"
-        :run-id="props.runId"
-        :active="show"
-        @changed="emit('changed')"
-      />
-    </n-drawer-content>
-  </n-drawer>
+  <SubagentSessionDrawer v-model:show="show" :title="props.title">
+    <SubagentConversationView
+      :session-id="props.sessionId"
+      :run-id="props.runId"
+      :active="show"
+      @changed="emit('changed')"
+    />
+  </SubagentSessionDrawer>
 </template>
-
-<style scoped lang="scss">
-:deep(.n-drawer-header__main) {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-</style>
